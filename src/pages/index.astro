@@ -23,8 +23,8 @@ import { IconDeviceTv, IconMovie, IconStack2 } from "@tabler/icons-svelte";
 					transition-[transform,border-color,background-color] duration-300 ease-out
 					hover:border-accent hover:bg-surface-2
 					focus-visible:border-accent focus-visible:bg-surface-2
-					hover:[transform:translateY(-2px)]
-					focus-visible:[transform:translateY(-2px)]">
+					hover:transform-[translateY(-2px)]
+					focus-visible:transform-[translateY(-2px)]">
 				<div class="flex items-start justify-between gap-4">
 					<IconDeviceTv
 						aria-hidden="true"
@@ -60,8 +60,8 @@ import { IconDeviceTv, IconMovie, IconStack2 } from "@tabler/icons-svelte";
 					transition-[transform,border-color,background-color] duration-300 ease-out
 					hover:border-accent hover:bg-surface-2
 					focus-visible:border-accent focus-visible:bg-surface-2
-					hover:[transform:translateY(-2px)]
-					focus-visible:[transform:translateY(-2px)]">
+					hover:transform-[translateY(-2px)]
+					focus-visible:transform-[translateY(-2px)]">
 				<IconMovie
 					aria-hidden="true"
 					stroke={1.25}
@@ -77,35 +77,38 @@ import { IconDeviceTv, IconMovie, IconStack2 } from "@tabler/icons-svelte";
 				</div>
 			</a>
 
-			<div
-				aria-disabled="true"
+			<a
+				href="/series"
+				aria-label="Browse Series"
 				style="animation-delay: 250ms"
-				class="tile-enter relative flex flex-col justify-between
+				class="tile-enter group flex flex-col justify-between
 					rounded-2xl border border-line bg-surface
 					p-5 sm:p-6
 					min-h-28 landscape:min-h-0 lg:min-h-0
-					opacity-60 cursor-not-allowed select-none">
+					transition-[transform,border-color,background-color] duration-300 ease-out
+					hover:border-accent hover:bg-surface-2
+					focus-visible:border-accent focus-visible:bg-surface-2
+					hover:transform-[translateY(-2px)]
+					focus-visible:transform-[translateY(-2px)]">
 				<IconStack2
 					aria-hidden="true"
 					stroke={1.25}
-					class="size-9 sm:size-10 lg:size-12 text-fg-3"
+					class="size-9 sm:size-10 lg:size-12 text-fg-3 transition-colors group-hover:text-accent group-focus-visible:text-accent"
 				/>
 				<div class="mt-auto pt-4">
 					<h2 class="text-xl sm:text-2xl font-semibold tracking-tight text-fg">
 						Series
 					</h2>
-					<p class="mt-1 text-sm text-fg-3">
-						Coming soon.
+					<p class="mt-1 text-sm text-fg-2">
+						Shows and full seasons.
 					</p>
 				</div>
-			</div>
+			</a>
 		</nav>
 	</main>
 </Layout>
 
 <style>
-	/* From-only keyframe: animation ends at the element's underlying opacity,
-	   so the disabled tile lands at its 60% naturally. */
 	@keyframes tile-enter {
 		from {
 			opacity: 0;
@@ -138,10 +141,7 @@ import { IconDeviceTv, IconMovie, IconStack2 } from "@tabler/icons-svelte";
 		update();
 		setInterval(update, 30_000);
 	}
-
-	// Override Layout's spatial-nav default focus (brand mark) so TV remote /
-	// keyboard users land on the hero tile instead of having to navigate past
-	// the header chrome. Runs after Layout's load handler via setTimeout(0).
+	
 	window.addEventListener("load", () => {
 		setTimeout(() => {
 			/** @type {HTMLAnchorElement | null} */

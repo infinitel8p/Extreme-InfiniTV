@@ -1,13 +1,15 @@
 // Per-playlist favorites + recently-played, persisted alongside creds.
 //
 // Storage shape (one JSON blob under "xt_prefs"):
-//   { [playlistId]: { favLive: number[], favVod: number[],
-//                     recLive: RecentEntry[], recVod: RecentEntry[] } }
-// RecentEntry = { id, name, ts }   // ts = ms since epoch
+//   { [playlistId]: {
+//       favLive: number[], favVod: number[], favSeries: number[],
+//       recLive: RecentEntry[], recVod: RecentEntry[], recSeries: RecentEntry[]
+//     } }
+// RecentEntry = { id, name, logo?, ts }   // ts = ms since epoch
 //
-// Live channel ids and VOD movie ids share the same numeric space per
-// provider but mean different things, so favorites/recents are namespaced
-// by kind ("live" | "vod") at the leaf, not by id.
+// Live channel ids, VOD movie ids and series ids each share a numeric space
+// per provider but mean different things, so favorites/recents are namespaced
+// by kind ("live" | "vod" | "series") at the leaf, not by id.
 //
 // Same dual-mode persistence as creds.js: Tauri plugin-store on desktop,
 // localStorage + cookie on web/SSR. Reads are served from an in-memory cache
@@ -92,8 +94,8 @@ async function writeRaw(data) {
 // ---------------------------------------------------------------------------
 /**
  * @typedef {{ id: number, name: string, logo?: string|null, ts: number }} RecentEntry
- * @typedef {{ favLive: Set<number>, favVod: Set<number>,
- *             recLive: RecentEntry[], recVod: RecentEntry[] }} PlaylistPrefs
+ * @typedef {{ favLive: Set<number>, favVod: Set<number>, favSeries: Set<number>,
+ *             recLive: RecentEntry[], recVod: RecentEntry[], recSeries: RecentEntry[] }} PlaylistPrefs
  */
 
 /** @type {Map<string, PlaylistPrefs>} */
@@ -101,7 +103,14 @@ let cache = new Map()
 let loadPromise = null
 
 function emptyEntry() {
-  return { favLive: new Set(), favVod: new Set(), recLive: [], recVod: [] }
+  return {
+    favLive: new Set(),
+    favVod: new Set(),
+    favSeries: new Set(),
+    recLive: [],
+    recVod: [],
+    recSeries: [],
+  }
 }
 
 function hydrate(raw) {
@@ -112,8 +121,12 @@ function hydrate(raw) {
     cache.set(pid, {
       favLive: new Set(Array.isArray(val.favLive) ? val.favLive : []),
       favVod: new Set(Array.isArray(val.favVod) ? val.favVod : []),
+      favSeries: new Set(Array.isArray(val.favSeries) ? val.favSeries : []),
       recLive: Array.isArray(val.recLive) ? val.recLive.slice(0, RECENT_CAP) : [],
       recVod: Array.isArray(val.recVod) ? val.recVod.slice(0, RECENT_CAP) : [],
+      recSeries: Array.isArray(val.recSeries)
+        ? val.recSeries.slice(0, RECENT_CAP)
+        : [],
     })
   }
 }
@@ -124,8 +137,10 @@ function dehydrate() {
     out[pid] = {
       favLive: [...v.favLive],
       favVod: [...v.favVod],
+      favSeries: [...v.favSeries],
       recLive: v.recLive,
       recVod: v.recVod,
+      recSeries: v.recSeries,
     }
   }
   return out
@@ -154,8 +169,6 @@ let saveScheduled = false
 function scheduleSave() {
   if (saveScheduled) return
   saveScheduled = true
-  // Coalesce rapid mutations (e.g. push recent on play() while user is also
-  // toggling a favorite). One write per microtask is plenty.
   queueMicrotask(async () => {
     saveScheduled = false
     try {
@@ -174,13 +187,17 @@ function dispatch(name, detail) {
 // Public API
 // ---------------------------------------------------------------------------
 
-/** @param {"live"|"vod"} kind */
+/** @param {"live"|"vod"|"series"} kind */
 function favKey(kind) {
-  return kind === "vod" ? "favVod" : "favLive"
+  if (kind === "vod") return "favVod"
+  if (kind === "series") return "favSeries"
+  return "favLive"
 }
-/** @param {"live"|"vod"} kind */
+/** @param {"live"|"vod"|"series"} kind */
 function recKey(kind) {
-  return kind === "vod" ? "recVod" : "recLive"
+  if (kind === "vod") return "recVod"
+  if (kind === "series") return "recSeries"
+  return "recLive"
 }
 
 /**
