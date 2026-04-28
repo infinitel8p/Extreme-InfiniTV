@@ -1,0 +1,394 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { IconArrowLeft } from "@tabler/icons-svelte";
+---
+
+<Layout pageTitle="Add playlist">
+	<main
+		class="mx-auto px-5 sm:px-6 pb-16 pt-6 sm:pt-10 max-w-xl">
+		<a
+			href="/"
+			class="inline-flex items-center gap-1.5 text-sm text-fg-3 hover:text-fg mb-8 transition-colors min-h-10">
+			<IconArrowLeft class="h-4 w-4" /> Back
+		</a>
+
+		<header class="mb-10">
+			<h1
+				id="page-title"
+				class="text-3xl sm:text-4xl font-semibold tracking-tight text-fg">
+				Add playlist
+			</h1>
+			<p
+				id="page-subtitle"
+				class="mt-2 text-base text-fg-2 leading-relaxed">
+				Connect an Xtream provider, or paste an M3U/M3U8 playlist URL.
+			</p>
+		</header>
+
+		<!-- Method picker: clean segmented control -->
+		<div
+			role="tablist"
+			aria-label="Playlist type"
+			class="grid grid-cols-2 gap-1 p-1 rounded-xl border border-line bg-surface mb-10 max-w-sm">
+			<button
+				id="tab-xtream"
+				type="button"
+				role="tab"
+				class="px-3 py-2 text-sm font-medium rounded-lg min-h-11 transition-colors disabled:cursor-not-allowed disabled:opacity-40">
+				Xtream Codes
+			</button>
+			<button
+				id="tab-m3u"
+				type="button"
+				role="tab"
+				class="px-3 py-2 text-sm font-medium rounded-lg min-h-11 transition-colors disabled:cursor-not-allowed disabled:opacity-40">
+				M3U URL
+			</button>
+		</div>
+
+		<form
+			id="playlist-form"
+			class="flex flex-col gap-6"
+			autocomplete="off">
+			<label class="flex flex-col gap-2">
+				<span
+					class="text-xs font-semibold tracking-wider uppercase text-fg-3">
+					Title
+				</span>
+				<input
+					id="title"
+					type="text"
+					placeholder="e.g. Living room TV"
+					class="h-11 rounded-lg border border-line bg-surface px-3 text-base text-fg placeholder:text-fg-3 outline-none transition-colors hover:border-line-soft focus:border-accent focus:ring-2 focus:ring-accent/30"
+				/>
+				<span class="text-xs text-fg-3 leading-relaxed"
+					>Optional name for this playlist.</span
+				>
+			</label>
+
+			<!-- Xtream fields -->
+			<div id="xtream-fields" class="flex flex-col gap-6">
+				<label class="flex flex-col gap-2">
+					<span
+						class="text-xs font-semibold tracking-wider uppercase text-fg-3">
+						Server URL
+					</span>
+					<input
+						id="serverUrl"
+						type="text"
+						placeholder="http://example.com:8080"
+						class="h-11 rounded-lg border border-line bg-surface px-3 text-base text-fg placeholder:text-fg-3 outline-none transition-colors hover:border-line-soft focus:border-accent focus:ring-2 focus:ring-accent/30"
+					/>
+					<span class="text-xs text-fg-3 leading-relaxed">
+						Paste a full <code class="font-mono text-fg-2">player_api.php?username=…&password=…</code>
+						URL to auto-fill the fields below, or enter just the
+						server URL and fill in username and password yourself.
+					</span>
+				</label>
+
+				<div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+					<label class="flex flex-col gap-2">
+						<span
+							class="text-xs font-semibold tracking-wider uppercase text-fg-3">
+							Username
+						</span>
+						<input
+							id="username"
+							type="text"
+							autocapitalize="off"
+							spellcheck="false"
+							class="h-11 rounded-lg border border-line bg-surface px-3 text-base text-fg placeholder:text-fg-3 outline-none transition-colors hover:border-line-soft focus:border-accent focus:ring-2 focus:ring-accent/30"
+						/>
+					</label>
+					<label class="flex flex-col gap-2">
+						<span
+							class="text-xs font-semibold tracking-wider uppercase text-fg-3">
+							Password
+						</span>
+						<input
+							id="password"
+							type="password"
+							class="h-11 rounded-lg border border-line bg-surface px-3 text-base text-fg placeholder:text-fg-3 outline-none transition-colors hover:border-line-soft focus:border-accent focus:ring-2 focus:ring-accent/30"
+						/>
+					</label>
+				</div>
+			</div>
+
+			<!-- M3U fields -->
+			<div id="m3u-fields" class="hidden flex-col gap-6">
+				<label class="flex flex-col gap-2">
+					<span
+						class="text-xs font-semibold tracking-wider uppercase text-fg-3">
+						Playlist URL
+					</span>
+					<input
+						id="m3uUrl"
+						type="text"
+						placeholder="https://example.com/playlist.m3u8"
+						class="h-11 rounded-lg border border-line bg-surface px-3 text-base text-fg placeholder:text-fg-3 outline-none transition-colors hover:border-line-soft focus:border-accent focus:ring-2 focus:ring-accent/30"
+					/>
+					<span class="text-xs text-fg-3 leading-relaxed">
+						Must end with <code class="font-mono text-fg-2">.m3u</code> or
+						<code class="font-mono text-fg-2">.m3u8</code>.
+					</span>
+				</label>
+			</div>
+
+			<!-- Status -->
+			<div
+				id="status"
+				class="hidden items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-sm leading-relaxed">
+			</div>
+
+			<!-- Actions -->
+			<div
+				class="flex flex-wrap gap-2 pt-2 mt-2 border-t border-line">
+				<button
+					id="testBtn"
+					type="button"
+					class="h-11 px-4 inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-surface text-sm font-medium text-fg transition-colors hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed">
+					Test connection
+				</button>
+				<button
+					id="saveBtn"
+					type="submit"
+					class="h-11 px-5 inline-flex items-center justify-center gap-2 rounded-lg bg-fg text-bg text-sm font-semibold transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed ml-auto">
+					Save and continue
+				</button>
+			</div>
+		</form>
+
+		<p class="mt-12 text-xs text-fg-3 leading-relaxed">
+			This app does not provide any content. Use any
+			Xtream-compatible IPTV subscription, or paste any M3U/M3U8 playlist
+			URL. Public test playlists are available at
+			<span class="text-fg-2">iptv-org.github.io/iptv</span>.
+		</p>
+	</main>
+</Layout>
+
+<script>
+	import {
+		addEntry,
+		updateEntry,
+		getEntries,
+		parseXtreamUrl,
+		testXtreamConnection,
+	} from "@/scripts/lib/creds.js";
+
+	const $ = (id) => /** @type {any} */ (document.getElementById(id));
+
+	const tabXtream = $("tab-xtream");
+	const tabM3u = $("tab-m3u");
+	const xFields = $("xtream-fields");
+	const mFields = $("m3u-fields");
+	const titleEl = $("title");
+	const serverEl = $("serverUrl");
+	const userEl = $("username");
+	const passEl = $("password");
+	const m3uEl = $("m3uUrl");
+	const statusEl = $("status");
+	const testBtn = $("testBtn");
+	const saveBtn = $("saveBtn");
+	const pageTitle = $("page-title");
+	const pageSubtitle = $("page-subtitle");
+
+	const editingId = new URLSearchParams(location.search).get("edit");
+	let editing = null;
+	let mode = "xtream";
+
+	const ACTIVE_TAB =
+		"bg-accent-soft text-accent ring-1 ring-accent/30";
+	const IDLE_TAB = "text-fg-2 hover:text-fg";
+
+	function setMode(next) {
+		mode = next;
+		const isX = next === "xtream";
+		xFields.classList.toggle("hidden", !isX);
+		xFields.classList.toggle("flex", isX);
+		mFields.classList.toggle("hidden", isX);
+		mFields.classList.toggle("flex", !isX);
+
+		applyTabStyles(tabXtream, isX);
+		applyTabStyles(tabM3u, !isX);
+
+		testBtn.classList.toggle("hidden", !isX);
+		clearStatus();
+	}
+
+	function applyTabStyles(btn, active) {
+		// Reset, then apply
+		btn.className =
+			"px-3 py-2 text-sm font-medium rounded-lg min-h-11 transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
+			(active ? ACTIVE_TAB : IDLE_TAB);
+	}
+
+	tabXtream.addEventListener("click", () => {
+		if (editing) return;
+		setMode("xtream");
+	});
+	tabM3u.addEventListener("click", () => {
+		if (editing) return;
+		setMode("m3u");
+	});
+
+	serverEl.addEventListener("input", () => {
+		const parsed = parseXtreamUrl(serverEl.value.trim());
+		if (parsed) {
+			serverEl.value = parsed.serverUrl;
+			if (!userEl.value) userEl.value = parsed.username;
+			if (!passEl.value) passEl.value = parsed.password;
+			showStatus("info", "Credentials extracted from URL.");
+		}
+	});
+
+	function clearStatus() {
+		statusEl.classList.add("hidden");
+		statusEl.classList.remove("flex");
+		statusEl.innerHTML = "";
+	}
+
+	function showStatus(kind, message) {
+		statusEl.classList.remove("hidden");
+		statusEl.classList.add("flex");
+		// Reset palette classes, then apply.
+		statusEl.className =
+			"flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-sm leading-relaxed ";
+		const palette = {
+			info: "border-accent/30 bg-accent-soft text-accent",
+			active: "border-ok/30 bg-ok/10 text-ok",
+			expired: "border-warn/30 bg-warn/10 text-warn",
+			inactive: "border-warn/30 bg-warn/10 text-warn",
+			unavailable: "border-bad/30 bg-bad/10 text-bad",
+			busy: "border-line bg-surface text-fg-2",
+		};
+		statusEl.className += palette[kind] || palette.info;
+		const dot = `<span aria-hidden="true" class="mt-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current shrink-0"></span>`;
+		statusEl.innerHTML = `${dot}<span>${escapeText(message)}</span>`;
+	}
+
+	function escapeText(s) {
+		const d = document.createElement("div");
+		d.textContent = s;
+		return d.innerHTML;
+	}
+
+	testBtn.addEventListener("click", async () => {
+		if (mode !== "xtream") return;
+		const serverUrl = serverEl.value.trim();
+		const username = userEl.value.trim();
+		const password = passEl.value.trim();
+		if (!serverUrl || !username || !password) {
+			showStatus(
+				"unavailable",
+				"Please fill server URL, username and password."
+			);
+			return;
+		}
+		testBtn.disabled = true;
+		showStatus("busy", "Testing connection…");
+		const r = await testXtreamConnection({
+			serverUrl,
+			username,
+			password,
+		});
+		testBtn.disabled = false;
+		const exp = r.expDate
+			? ` Expires ${new Date(r.expDate).toLocaleDateString()}.`
+			: "";
+		switch (r.status) {
+			case "active":
+				showStatus("active", `Connected. Account is active.${exp}`);
+				break;
+			case "expired":
+				showStatus("expired", `Account expired.${exp}`);
+				break;
+			case "inactive":
+				showStatus("inactive", `Account is inactive.${exp}`);
+				break;
+			default:
+				showStatus(
+					"unavailable",
+					`Couldn't reach the server${r.message ? ` — ${r.message}` : "."}`
+				);
+		}
+	});
+
+	$("playlist-form").addEventListener("submit", async (e) => {
+		e.preventDefault();
+		saveBtn.disabled = true;
+		try {
+			if (mode === "xtream") {
+				const serverUrl = serverEl.value.trim();
+				const username = userEl.value.trim();
+				const password = passEl.value.trim();
+				if (!serverUrl || !username || !password) {
+					showStatus(
+						"unavailable",
+						"Server URL, username and password are required."
+					);
+					return;
+				}
+				if (!/^https?:\/\/[^\s]+$/i.test(serverUrl)) {
+					showStatus(
+						"unavailable",
+						"Server URL must start with http:// or https://."
+					);
+					return;
+				}
+				const patch = {
+					type: "xtream",
+					title: titleEl.value.trim() || "",
+					serverUrl,
+					username,
+					password,
+				};
+				if (editing) await updateEntry(editing._id, patch);
+				else await addEntry(patch);
+			} else {
+				const url = m3uEl.value.trim();
+				if (!/^https?:\/\/[^\s]+\.m3u8?(\?.*)?$/i.test(url)) {
+					showStatus(
+						"unavailable",
+						"M3U URL must be http(s) and end with .m3u or .m3u8."
+					);
+					return;
+				}
+				const patch = {
+					type: "m3u",
+					title: titleEl.value.trim() || "",
+					url,
+				};
+				if (editing) await updateEntry(editing._id, patch);
+				else await addEntry(patch);
+			}
+			location.href = editing ? "/" : "/livetv";
+		} finally {
+			saveBtn.disabled = false;
+		}
+	});
+
+	// ---- Boot: prefill for editing, or default to "add Xtream" ----
+	if (editingId) {
+		const entries = await getEntries();
+		editing = entries.find((e) => e._id === editingId) || null;
+	}
+	if (editing) {
+		pageTitle.textContent = "Edit playlist";
+		pageSubtitle.textContent = `Update "${editing.title}".`;
+		saveBtn.textContent = "Save changes";
+		tabXtream.disabled = editing.type !== "xtream";
+		tabM3u.disabled = editing.type !== "m3u";
+		setMode(editing.type);
+		titleEl.value = editing.title || "";
+		if (editing.type === "xtream") {
+			serverEl.value = editing.serverUrl || "";
+			userEl.value = editing.username || "";
+			passEl.value = editing.password || "";
+		} else {
+			m3uEl.value = editing.url || "";
+		}
+	} else {
+		setMode("xtream");
+	}
+</script>

@@ -1,60 +1,22 @@
-// scripts/stream.js
-import { Store } from "@tauri-apps/plugin-store"
-import videojs from "video.js"
+// Live TV channel list, search, category picker, EPG and Video.js player.
+import {
+  loadCreds,
+  getActiveEntry,
+  fmtBase,
+  safeHttpUrl,
+  buildApiUrl,
+  isLikelyM3USource,
+  normalize,
+  debounce,
+} from "@/scripts/lib/creds.js"
+import { cachedFetch, getCached } from "@/scripts/lib/cache.js"
 
-const isTauri = typeof window !== "undefined" && !!window.__TAURI__
+// Channel lists rarely change within a session; refresh once a day or when
+// the user explicitly hits the refresh button (which calls invalidateEntry).
+const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 
-// Single in-memory source of truth for credentials
 /** @type {{host:string,port:string,user:string,pass:string}} */
 let creds = { host: "", port: "", user: "", pass: "" }
-
-/** Tauri store instance (only when running under Tauri). */
-let store = null
-if (isTauri) {
-  // You can change the filename; it lives in the app data dir.
-  store = await Store.load(".xtream.creds.json")
-}
-
-const getCookie = (name) => {
-  try {
-    const match = document.cookie.match(
-      new RegExp(
-        "(?:^|; )" + name.replace(/([.$?*|{}()[\]\\/+^])/g, "\\$1") + "=([^;]*)"
-      )
-    )
-    return match ? decodeURIComponent(match[1]) : ""
-  } catch {
-    return ""
-  }
-}
-
-// ----------------------------
-// Creds & URL builders
-// ----------------------------
-async function loadCreds() {
-  if (isTauri && store) {
-    return {
-      host: (await store.get("host")) || "",
-      port: (await store.get("port")) || "",
-      user: (await store.get("user")) || "",
-      pass: (await store.get("pass")) || "",
-    }
-  }
-  // Web fallback
-  return {
-    host: localStorage.getItem("xt_host") || getCookie("xt_host") || "",
-    port: localStorage.getItem("xt_port") || getCookie("xt_port") || "",
-    user: localStorage.getItem("xt_user") || getCookie("xt_user") || "",
-    pass: localStorage.getItem("xt_pass") || getCookie("xt_pass") || "",
-  }
-}
-
-const fmtBase = (host, port) => {
-  const base = /^https?:\/\//i.test(host) ? host : `http://${host}`
-  return port && !/:\d+$/.test(base)
-    ? `${base.replace(/\/+$/, "")}:${port}`
-    : base.replace(/\/+$/, "")
-}
 
 function buildDirectM3U8(id) {
   const { host, port, user, pass } = creds
@@ -69,54 +31,14 @@ function buildDirectM3U8(id) {
     ".m3u8"
   )
 }
-const safeHttpUrl = (u) => {
-  try {
-    const x = new URL(u, location.href)
-    return /^https?:$/.test(x.protocol) ? x.href : ""
-  } catch {
-    return ""
-  }
-}
-
-function buildApiUrl(action, params = {}) {
-  const { host, port, user, pass } = creds
-  const baseHost = /^https?:\/\//i.test(host) ? host : `http://${host}`
-  const url = new URL(
-    "/player_api.php",
-    baseHost.replace(/\/+$/, "") +
-      (port && !/:\d+$/.test(baseHost) ? `:${port}` : "")
-  )
-  url.search = new URLSearchParams({
-    username: user,
-    password: pass,
-    action,
-    ...params,
-  }).toString()
-  return url.toString()
-}
 
 // ----------------------------
 // M3U support
 // ----------------------------
-let directUrlById = new Map() // id -> direct HLS/stream URL
-let usingM3U = false
+let directUrlById = new Map()
 
-function isLikelyM3USource(host, user, pass) {
-  // Treat as M3U when host is an absolute http(s) URL ending with .m3u/.m3u8
-  // and no Xtream credentials are supplied.
-  try {
-    const url = new URL(host)
-    const ext = (url.pathname || "").toLowerCase()
-    const isM3U = ext.endsWith(".m3u") || ext.endsWith(".m3u8")
-    return /^https?:$/.test(url.protocol) && isM3U && !user && !pass
-  } catch {
-    return false
-  }
-}
-
-// tiny EXTINF parser (enough for iptv-org style)
 function parseM3U(text) {
-  /** @type {Array<{ id:number, name:string, category?:string, logo?:string|null, url:string }>} */
+  /** @type {Array<{ id:number, name:string, category?:string, logo?:string|null, url:string, norm:string }>} */
   const out = []
   const lines = text.split(/\r?\n/)
   let pending = null
@@ -149,161 +71,240 @@ function parseM3U(text) {
   return out
 }
 
-function resetDirectMap() {
+const indexDirectUrls = (items) => {
   directUrlById = new Map()
+  for (const ch of items) if (ch.url) directUrlById.set(ch.id, ch.url)
 }
-
-function indexDirectUrls(items) {
-  resetDirectMap()
-  for (const ch of items) {
-    if (ch.url) directUrlById.set(ch.id, ch.url)
-  }
-}
-
-function hasDirectUrl(id) {
-  return directUrlById.has(id)
-}
-
-function getDirectUrl(id) {
-  return directUrlById.get(id) || ""
-}
+const hasDirectUrl = (id) => directUrlById.has(id)
+const getDirectUrl = (id) => directUrlById.get(id) || ""
 
 // ----------------------------
 // UI refs
 // ----------------------------
 const listEl = document.getElementById("list")
+const spacer = document.getElementById("spacer")
 const viewport = document.getElementById("viewport")
 const listStatus = document.getElementById("list-status")
 
-// Custom category dropdown bits
 const categoryListEl = document.getElementById("category-list")
 const categoryListStatus = document.getElementById("category-list-status")
-const categorySearchEl = document.getElementById("category-search");
+const categorySearchEl = document.getElementById("category-search")
 
+const searchEl = document.getElementById("search")
+const currentEl = document.getElementById("current")
+const epgList = document.getElementById("epg-list")
 
 let activeCat = ""
 try {
   activeCat = localStorage.getItem("xt_active_cat") || ""
 } catch {}
 
-const searchEl = document.getElementById("search")
-const currentEl = document.getElementById("current")
-const f = document.getElementById("xtream-login")
-const saveBtn = document.getElementById("saveBtn")
-const epgList = document.getElementById("epg-list")
-const $ = (id) => document.getElementById(id)
-
-;["host", "port", "user", "pass"].forEach((id) => {
-  $(id).addEventListener("keydown", (e) => {
-    if (e.key === "Enter") e.preventDefault()
-  })
-})
-
-saveBtn.addEventListener("click", () => {
+document.addEventListener("xt:active-changed", () => {
   loadChannels()
-  const details = document.getElementById("login-details")
-  if (details) details.removeAttribute("open")
 })
 
 // ----------------------------
-// Channels + Virtualization
+// Channels (virtualised)
 // ----------------------------
-/** @type {Array<{ id: number, name: string, category?: string, logo?: string | null }>} */
+/** @type {Array<{ id: number, name: string, category?: string, logo?: string | null, norm:string }>} */
 let all = []
+/** @type {Array<typeof all[number]>} */
 let filtered = []
+const hiddenCats = new Set()
 
 /** @type {Map<string,string> | null} */
 let categoryMap = null
 
-const hiddenCats = new Set()
+// Fixed row height (matches `.channel-row` styles below). Keep in sync.
+const ROW_H = 56
+const OVERSCAN = 6
+let renderScheduled = false
 
-function mountList(items) {
+// Index of the row that should hold focus after the next render. Keeps
+// keyboard / D-pad focus pinned to a logical channel even when the underlying
+// DOM nodes are recycled.
+let pendingFocusIdx = -1
+
+function mountVirtualList(items) {
+  if (!spacer || !viewport || !listEl) return
   filtered = items || []
+  spacer.style.height = `${filtered.length * ROW_H}px`
+  // Reset scroll when the dataset shape changes (search/category) so we don't
+  // sit past the new end.
+  if (listEl.scrollTop > filtered.length * ROW_H) listEl.scrollTop = 0
+  // Drop any pending focus restore from the previous dataset; indices won't
+  // match the new filter and would snap focus to an unrelated row.
+  pendingFocusIdx = -1
+  renderVirtual()
+}
 
-  viewport.innerHTML = ""
+function renderVirtual() {
+  if (!listEl || !viewport) return
+  const scrollTop = listEl.scrollTop
+  const height = listEl.clientHeight
+  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN)
+  const endIdx = Math.min(
+    filtered.length,
+    Math.ceil((scrollTop + height) / ROW_H) + OVERSCAN
+  )
 
-  for (const ch of filtered) {
+  const frag = document.createDocumentFragment()
+  for (let i = startIdx; i < endIdx; i++) {
+    const ch = filtered[i]
     const row = document.createElement("button")
     row.type = "button"
+    row.dataset.idx = String(i)
+    row.style.height = `${ROW_H}px`
     row.className =
-      "group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left hover:bg-white/5"
-    row.onclick = () => play(ch.id, ch.name)
+      "channel-row flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left hover:bg-surface-2 focus:bg-surface-2"
     row.title = ch.name || ""
+    row.onclick = () => play(ch.id, ch.name)
 
     const logo = document.createElement("div")
     logo.className =
-      "h-7 w-7 shrink-0 rounded-md bg-gray-200 dark:bg-gray-700 overflow-hidden ring-1 ring-inset ring-black/5 dark:ring-white/10"
+      "h-9 w-9 shrink-0 rounded-md bg-surface-2 overflow-hidden ring-1 ring-inset ring-line"
     if (ch.logo) {
-      const img = document.createElement("img")
-      img.src = safeHttpUrl(ch.logo)
-      img.loading = "lazy"
-      img.referrerPolicy = "no-referrer"
-      img.className = "h-full w-full object-contain"
-      img.onerror = () => img.remove()
-      logo.appendChild(img)
+      const safeLogo = safeHttpUrl(ch.logo)
+      if (safeLogo) {
+        const img = document.createElement("img")
+        img.src = safeLogo
+        img.alt = ""
+        img.loading = "lazy"
+        img.referrerPolicy = "no-referrer"
+        img.className = "h-full w-full object-contain"
+        img.onerror = () => img.remove()
+        logo.appendChild(img)
+      }
     }
     row.appendChild(logo)
 
     const wrap = document.createElement("div")
     wrap.className = "min-w-0 flex-1"
-    wrap.innerHTML = `
-      <div class="truncate text-sm font-medium">${ch.name}</div>
-      <div class="truncate text-[0.55rem] text-gray-500 dark:text-gray-400">
-        #${ch.id} - ${ch.category ?? ""}
-      </div>
-    `
+    const nameEl = document.createElement("div")
+    nameEl.className = "truncate text-sm font-medium"
+    nameEl.textContent = ch.name
+    const meta = document.createElement("div")
+    meta.className = "truncate text-xs text-fg-3 tabular-nums"
+    meta.textContent = `#${ch.id}${ch.category ? ` · ${ch.category}` : ""}`
+    wrap.append(nameEl, meta)
     row.appendChild(wrap)
 
-    viewport.appendChild(row)
+    frag.appendChild(row)
   }
+
+  viewport.replaceChildren(frag)
+  viewport.style.transform = `translateY(${startIdx * ROW_H}px)`
+
+  // Restore focus to the row the user was on, if it just re-entered the window.
+  if (pendingFocusIdx >= startIdx && pendingFocusIdx < endIdx) {
+    const target = /** @type {HTMLElement|null} */ (
+      viewport.querySelector(`[data-idx="${pendingFocusIdx}"]`)
+    )
+    target?.focus({ preventScroll: true })
+    pendingFocusIdx = -1
+  }
+
+  // Spatial-nav re-scan for the newly mounted buttons.
+  window.SpatialNavigation?.makeFocusable?.()
 }
 
-const debounce = (fn, ms = 180) => {
-  let t
-  return (...args) => {
-    clearTimeout(t)
-    t = setTimeout(() => fn(...args), ms)
+listEl?.addEventListener(
+  "scroll",
+  () => {
+    if (renderScheduled) return
+    renderScheduled = true
+    requestAnimationFrame(() => {
+      renderScheduled = false
+      renderVirtual()
+    })
+  },
+  { passive: true }
+)
+
+// Custom D-pad / arrow handling: virtualised rows aren't all in the DOM at
+// once, so spatial-navigation can't walk past the visible window. We move
+// focus by index, scrolling the list as needed.
+function focusByIdx(idx) {
+  if (!listEl || idx < 0 || idx >= filtered.length) return
+  const top = idx * ROW_H
+  const visTop = listEl.scrollTop
+  const visBottom = visTop + listEl.clientHeight
+  if (top < visTop) {
+    listEl.scrollTop = Math.max(0, top - ROW_H * 2)
+  } else if (top + ROW_H > visBottom) {
+    listEl.scrollTop = top + ROW_H - listEl.clientHeight + ROW_H * 2
   }
+  // Always pin pendingFocusIdx. Rapid keypresses can trigger several
+  // focusByIdx calls before a scroll-triggered renderVirtual fires; any one
+  // of those rebuilds will detach the currently-focused button. Letting
+  // renderVirtual itself be the only one to clear pendingFocusIdx keeps focus
+  // pinned through DOM recycles instead of falling to <body> and being
+  // hijacked by the spatial-nav polyfill.
+  pendingFocusIdx = idx
+  // Snap focus immediately for visual feedback. preventScroll: true so the
+  // browser doesn't fight our manual scrollTop with focus-into-view.
+  const present = /** @type {HTMLElement|null} */ (
+    viewport?.querySelector(`[data-idx="${idx}"]`)
+  )
+  if (present) present.focus({ preventScroll: true })
 }
-const normalize = (s) =>
-  (s || "")
-    .toString()
-    .normalize("NFKD") // split accents
-    .replace(/[\u0300-\u036f]/g, "") // remove accent marks
-    .toLowerCase()
-    .replace(/[|_\-()[\].,:/\\]+/g, " ") // treat separators as spaces
-    .replace(/\s+/g, " ") // collapse spaces
-    .trim()
+
+listEl?.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "PageDown" && e.key !== "PageUp" && e.key !== "Home" && e.key !== "End") return
+    const target = /** @type {HTMLElement|null} */ (document.activeElement)
+    const idxStr = target?.dataset?.idx
+    if (idxStr == null) return
+    const idx = Number(idxStr)
+    if (!Number.isFinite(idx)) return
+    const pageSize = Math.max(
+      1,
+      Math.floor((listEl?.clientHeight || ROW_H) / ROW_H) - 1
+    )
+    let next = idx
+    switch (e.key) {
+      case "ArrowDown": next = idx + 1; break
+      case "ArrowUp":   next = idx - 1; break
+      case "PageDown":  next = idx + pageSize; break
+      case "PageUp":    next = idx - pageSize; break
+      case "Home":      next = 0; break
+      case "End":       next = filtered.length - 1; break
+    }
+    next = Math.max(0, Math.min(filtered.length - 1, next))
+    if (next === idx) return
+    e.preventDefault()
+    e.stopPropagation()
+    focusByIdx(next)
+  },
+  // Capture phase so spatial-nav's window-level handler doesn't beat us.
+  true
+)
 
 const applyFilter = () => {
+  if (!searchEl || !listStatus) return
   const qnorm = normalize(searchEl.value || "")
   const tokens = qnorm.length ? qnorm.split(" ") : []
 
   const out = all.filter((ch) => {
     if (activeCat && (ch.category || "") !== activeCat) return false
-    // hide by category chip
     const cat = (ch.category || "").toString()
     if (cat && hiddenCats.has(cat)) return false
-
-    if (!tokens.length) return true // no query = everything visible
-
-    // every token must be present somewhere in name/category
-    const hay = ch.norm // precomputed normalized string
+    if (!tokens.length) return true
+    const hay = ch.norm
     return tokens.every((t) => hay.includes(t))
   })
 
   listStatus.textContent = `${out.length.toLocaleString()} of ${all.length.toLocaleString()} channels`
-  mountList(out)
+  mountVirtualList(out)
 }
 
-searchEl.addEventListener("input", debounce(applyFilter, 160))
+searchEl?.addEventListener("input", debounce(applyFilter, 160))
 
 async function ensureCategoryMap() {
   if (categoryMap) return categoryMap
-  const url = buildApiUrl("get_live_categories")
-  const r = await fetch(url)
+  const r = await fetch(buildApiUrl(creds, "get_live_categories"))
   const data = await r.json().catch(() => [])
-
   const arr = Array.isArray(data)
     ? data
     : Array.isArray(data?.categories)
@@ -332,88 +333,69 @@ function renderCategoryPicker(items) {
   const names = Array.from(counts.keys()).sort((a, b) =>
     a.localeCompare(b, "en", { sensitivity: "base" })
   )
-
-  // Build items
   const frag = document.createDocumentFragment()
 
-  // "All" option
+  const highlightActiveInList = () => {
+    for (const el of categoryListEl.querySelectorAll('button[role="option"]')) {
+      el.classList.toggle("bg-surface-2", (el.dataset.val || "") === activeCat)
+    }
+  }
+
   const addRow = (val, label, count = null) => {
     const btn = document.createElement("button")
     btn.type = "button"
     btn.setAttribute("role", "option")
     btn.dataset.val = val
-    btn.className = [
-      "w-full py-2 px-2 text-sm flex items-center justify-between",
-      "hover:bg-white/10 focus:bg-white/10 outline-none",
-      "text-white",
-    ].join(" ")
+    btn.className =
+      "w-full py-2 px-2 text-sm flex items-center justify-between hover:bg-surface-2 focus:bg-surface-2 outline-none text-fg"
     const left = document.createElement("span")
     left.className = "truncate"
     left.textContent = label
     const right = document.createElement("span")
-    right.className = "ml-3 shrink-0 text-xs text-gray-400"
+    right.className = "ml-3 shrink-0 text-xs text-fg-3 tabular-nums"
     right.textContent = count != null ? String(count) : ""
-    btn.appendChild(left)
-    btn.appendChild(right)
+    btn.append(left, right)
     btn.addEventListener("click", () => {
       setActiveCat(val)
-      closeCatPopover()
-      // reflect selection visually
       highlightActiveInList()
     })
     frag.appendChild(btn)
   }
 
   addRow("", "All categories")
-
   for (const name of names) addRow(name, name, counts.get(name))
 
   categoryListEl.innerHTML = ""
-  categoryListStatus.textContent = `${names.length.toLocaleString()} categories`
+  if (categoryListStatus) {
+    categoryListStatus.textContent = `${names.length.toLocaleString()} categories`
+  }
   categoryListEl.appendChild(frag)
 
-  // set/restore current label
   setActiveCat(activeCat)
-
-  // local highlight
-  function highlightActiveInList() {
-    ;[...categoryListEl.querySelectorAll('button[role="option"]')].forEach((el) => {
-      const selected = (el.dataset.val || "") === activeCat
-      el.classList.toggle("bg-white/10", selected)
-    })
-  }
   highlightActiveInList()
 }
 
 function filterCategories() {
-  const qnorm = normalize(categorySearchEl.value || "");
-  const tokens = qnorm.length ? qnorm.split(" ") : [];
+  if (!categoryListEl || !categoryListStatus || !categorySearchEl) return
+  const qnorm = normalize(categorySearchEl.value || "")
+  const tokens = qnorm.length ? qnorm.split(" ") : []
 
-  const buttons = categoryListEl.querySelectorAll('button[role="option"]');
-  let visibleCount = 0;
-  let totalCount = 0;
+  let visibleCount = 0
+  let totalCount = 0
 
-  buttons.forEach(btn => {
-    const isAllButton = btn.dataset.val === "";
-    if (!isAllButton) totalCount++; // Count real categories (skip "All categories")
+  for (const btn of categoryListEl.querySelectorAll('button[role="option"]')) {
+    const isAllButton = btn.dataset.val === ""
+    if (!isAllButton) totalCount++
+    const label = normalize(btn.dataset.val || btn.textContent || "")
+    const matches = !tokens.length || tokens.every((t) => label.includes(t))
+    btn.style.display = matches ? "" : "none"
+    if (matches && !isAllButton) visibleCount++
+  }
 
-    const label = normalize(btn.dataset.val || btn.textContent || "");
-    const matches =
-      !tokens.length || tokens.every(t => label.includes(t));
-
-    if (matches) {
-      btn.style.display = "";
-      if (!isAllButton) visibleCount++;
-    } else {
-      btn.style.display = "none";
-    }
-  });
-
-  // Update status
-  categoryListStatus.textContent =
-    `${visibleCount.toLocaleString()} of ${totalCount.toLocaleString()} categories`;
+  categoryListStatus.textContent = `${visibleCount.toLocaleString()} of ${totalCount.toLocaleString()} categories`
 }
-categorySearchEl.addEventListener("input", debounce(filterCategories, 120));
+
+categorySearchEl?.addEventListener("input", debounce(filterCategories, 120))
 
 function setActiveCat(next) {
   activeCat = next || ""
@@ -422,162 +404,227 @@ function setActiveCat(next) {
     else localStorage.removeItem("xt_active_cat")
   } catch {}
   applyFilter()
+  document.dispatchEvent(
+    new CustomEvent("xt:cat-changed", { detail: activeCat })
+  )
+}
+
+function showEmptyState() {
+  if (categoryListStatus) {
+    categoryListStatus.innerHTML = `<a href="/login" class="text-accent underline">Add a playlist</a> to get started.`
+  }
+  if (listStatus) {
+    listStatus.innerHTML = `No playlist selected. <a href="/login" class="text-accent underline">Add one</a>.`
+  }
+  filtered = []
+  if (spacer) spacer.style.height = "0px"
+  if (viewport) viewport.innerHTML = ""
+}
+
+function fmtAge(ms) {
+  if (ms < 60_000) return "just now"
+  const m = Math.floor(ms / 60_000)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return `${d}d ago`
+}
+
+function paintChannels(data, fromCache, age) {
+  all = data
+  listStatus.textContent =
+    `${all.length.toLocaleString()} channels` +
+    (fromCache ? ` · cached, ${fmtAge(age)}` : "")
+  renderCategoryPicker(all)
+  mountVirtualList(all)
 }
 
 async function loadChannels() {
-  console.log("Loading channels...");
+  if (!listStatus || !categoryListStatus || !viewport) return
+  const active = await getActiveEntry()
+  if (!active) {
+    showEmptyState()
+    return
+  }
+
+  // Synchronous cache check - paint instantly if we have data, no loading
+  // flash, no network or Tauri-store awaits in the hot path.
+  const liveHit = getCached(active._id, "live")
+  const m3uHit = getCached(active._id, "m3u")
+  const hit = liveHit || m3uHit
+  if (hit) {
+    if (m3uHit) indexDirectUrls(hit.data)
+    else directUrlById = new Map()
+    paintChannels(hit.data, true, hit.age)
+    // No early return - keep going so we still load creds (needed for play()
+    // URL building) but no more UI churn happens unless there's a cache miss.
+  } else {
+    categoryListStatus.textContent = "Loading categories…"
+    listStatus.textContent = "Loading channels…"
+    viewport.innerHTML = ""
+  }
+
+  // Now resolve creds (only required for the network fetch path, but also for
+  // building stream URLs in play()).
   creds = await loadCreds()
-  categoryListStatus.textContent = "Loading categories…"
-  listStatus.textContent = "Loading channels…"
-  viewport.innerHTML = ""
-  usingM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
+  if (!creds.host) {
+    if (!hit) showEmptyState()
+    return
+  }
+  if (hit) return // cache already painted; nothing else to do.
 
   try {
-    if (usingM3U) {
-      console.log("Detected M3U source, loading as M3U...")
-      // --- M3U MODE ---
-      const r = await fetch(creds.host)
-      if (!r.ok) throw new Error(`M3U ${r.status}: ${await r.text()}`)
-      const text = await r.text()
-      const items = parseM3U(text)
-
-      all = items
-        .filter((x) => x.url && x.name)
-        .sort((a, b) =>
-          a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-        )
-
-      indexDirectUrls(all) // enable direct playback
-      categoryMap = null // not used in M3U mode
-
-      listStatus.textContent = `${all.length.toLocaleString()} channels (M3U)`
-      renderCategoryPicker(all)
-      mountList(all)
+    if (isLikelyM3USource(creds.host, creds.user, creds.pass)) {
+      // M3U: cache the *parsed* array so we skip both the network and the
+      // 5,000-line regex-heavy parse on subsequent loads.
+      const { data, fromCache, age } = await cachedFetch(
+        active._id,
+        "m3u",
+        CHANNELS_TTL_MS,
+        async () => {
+          const r = await fetch(creds.host)
+          if (!r.ok) throw new Error(`M3U ${r.status}: ${await r.text()}`)
+          const text = await r.text()
+          return parseM3U(text)
+            .filter((x) => x.url && x.name)
+            .sort((a, b) =>
+              a.name.localeCompare(b.name, "en", { sensitivity: "base" })
+            )
+        }
+      )
+      indexDirectUrls(data)
+      categoryMap = null
+      paintChannels(data, fromCache, age)
       return
     }
 
-    // --- XTREAM MODE (original path) ---
-    console.log("Detected Xtream source, loading as Xtream...");
-    const catMap = await ensureCategoryMap()
-    const r = await fetch(buildApiUrl("get_live_streams"))
-    const body = await r.text()
-    if (!r.ok) {
-      console.error("Upstream error body:", body)
-      throw new Error(`API ${r.status}: ${body}`)
-    }
-    const data = JSON.parse(body)
-    const arr = Array.isArray(data)
-      ? data
-      : data?.streams || data?.results || []
-    all = (arr || [])
-      .map((ch) => {
-        const name = String(ch.name || "")
-        const ids =
-          (Array.isArray(ch.category_ids) &&
-            ch.category_ids.length &&
-            ch.category_ids) ||
-          (ch.category_id != null ? [ch.category_id] : [])
-        let category = String(ch.category_name || "").trim()
-        if (!category && ids.length && catMap && catMap.size) {
-          for (const id of ids) {
-            const n = catMap.get(String(id))
-            if (n) {
-              category = n
-              break
+    // Xtream: cache the final shaped channel array (categories are merged in).
+    const { data, fromCache, age } = await cachedFetch(
+      active._id,
+      "live",
+      CHANNELS_TTL_MS,
+      async () => {
+        const catMap = await ensureCategoryMap()
+        const r = await fetch(buildApiUrl(creds, "get_live_streams"))
+        const body = await r.text()
+        if (!r.ok) {
+          console.error("Upstream error body:", body)
+          throw new Error(`API ${r.status}: ${body}`)
+        }
+        const parsed = JSON.parse(body)
+        const arr = Array.isArray(parsed)
+          ? parsed
+          : parsed?.streams || parsed?.results || []
+        return (arr || [])
+          .map((ch) => {
+            const name = String(ch.name || "")
+            const ids =
+              (Array.isArray(ch.category_ids) &&
+                ch.category_ids.length &&
+                ch.category_ids) ||
+              (ch.category_id != null ? [ch.category_id] : [])
+            let category = String(ch.category_name || "").trim()
+            if (!category && ids.length && catMap?.size) {
+              for (const id of ids) {
+                const n = catMap.get(String(id))
+                if (n) {
+                  category = n
+                  break
+                }
+              }
             }
-          }
-        }
-        return {
-          id: Number(ch.stream_id),
-          name,
-          category,
-          logo: ch.stream_icon || null,
-          norm: normalize(name + " " + category),
-        }
-      })
-      .filter((x) => x.id && x.name)
-      .sort((a, b) =>
-        a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-      )
-
-    resetDirectMap() // ensure we're not in direct-url mode
-    listStatus.textContent = `${all.length.toLocaleString()} channels`
-    console.log("Loaded channels:", all.length);
-    renderCategoryPicker(all)
-    mountList(all)
+            return {
+              id: Number(ch.stream_id),
+              name,
+              category,
+              logo: ch.stream_icon || null,
+              norm: normalize(name + " " + category),
+            }
+          })
+          .filter((x) => x.id && x.name)
+          .sort((a, b) =>
+            a.name.localeCompare(b.name, "en", { sensitivity: "base" })
+          )
+      }
+    )
+    directUrlById = new Map()
+    paintChannels(data, fromCache, age)
   } catch (e) {
     console.error(e)
-    listStatus.innerHTML =
-      "<p>Failed to load channels. Make sure you entered a valid Xtream service <em>or</em> an accessible M3U/M3U8 URL in the Host field.<br/><br/>We do not provide any streams or content ourselves.</p>"
-    mountList([]) // clears list
+    listStatus.textContent =
+      "Couldn't load channels - check your login or try Refresh."
+    mountVirtualList([])
   }
 }
 
 // ----------------------------
-// Player (lazy Video.js init)
+// Player (lazy)
 // ----------------------------
 let vjs = null
-const ensurePlayer = () => {
-  if (!vjs) {
-    vjs = videojs("player", {
-      liveui: true,
-      fluid: true,
-      preload: "auto",
-      autoplay: false,
-      aspectRatio: "16:9",
-      controlBar: {
-        volumePanel: { inline: false },
-        pictureInPictureToggle: true,
-        playbackRateMenuButton: false, // IPTV usually live
-        fullscreenToggle: true,
+const ensurePlayer = async () => {
+  if (vjs) return vjs
+  const [{ default: videojs }] = await Promise.all([
+    import("video.js"),
+    import("video.js/dist/video-js.css"),
+  ])
+  vjs = videojs("player", {
+    liveui: true,
+    fluid: true,
+    preload: "auto",
+    autoplay: false,
+    aspectRatio: "16:9",
+    controlBar: {
+      volumePanel: { inline: false },
+      pictureInPictureToggle: true,
+      playbackRateMenuButton: false,
+      fullscreenToggle: true,
+    },
+    html5: {
+      vhs: {
+        overrideNative: true,
+        limitRenditionByPlayerDimensions: true,
+        smoothQualityChange: true,
       },
-      html5: {
-        vhs: {
-          overrideNative: true,
-          limitRenditionByPlayerDimensions: true,
-          smoothQualityChange: true,
-        },
-      },
-    })
-  }
+    },
+  })
   return vjs
 }
 
-function play(streamId, name) {
+async function play(streamId, name) {
+  if (!currentEl) return
   const src = hasDirectUrl(streamId)
     ? getDirectUrl(streamId)
     : buildDirectM3U8(streamId)
 
-  currentEl.innerHTML = `
-    <div class="flex items-center gap-2 max-w-[calc(100%-4rem)]">
-      <span class="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-600 text-[10px] font-bold text-white ring-1 ring-white/10">ON</span>
-      <span class="truncate w-full">Channel ${streamId}: ${name}</span>
-    </div>`
+  currentEl.replaceChildren()
+  const wrap = document.createElement("div")
+  wrap.className = "flex items-center gap-2 max-w-[calc(100%-4rem)]"
+  wrap.innerHTML =
+    '<span class="status-badge status-badge--live">ON</span>'
+  const label = document.createElement("span")
+  label.className = "truncate w-full"
+  label.textContent = `Channel ${streamId}: ${name}`
+  wrap.appendChild(label)
+  currentEl.appendChild(wrap)
 
-  const videoEl = document.getElementById("player")
-  videoEl.removeAttribute("hidden")
-  const player = ensurePlayer()
-
+  document.getElementById("player")?.removeAttribute("hidden")
+  const player = await ensurePlayer()
   player.src({ src, type: "application/x-mpegURL" })
   player.play().catch(() => {})
 
-  // EPG is only available via Xtream
   if (hasDirectUrl(streamId)) {
-    epgList.innerHTML = `<div class="text-gray-500">No EPG available for M3U source.</div>`
+    if (epgList) epgList.innerHTML = `<div class="text-fg-3">No EPG available for M3U source.</div>`
   } else {
     loadEPG(streamId)
   }
 
-  // ensure only one PiP button
-  const oldBtn = document.getElementById("pip-btn")
-  if (oldBtn) oldBtn.remove()
-
+  document.getElementById("pip-btn")?.remove()
   const btn = document.createElement("button")
   btn.id = "pip-btn"
-  btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class=""><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M19 4a3 3 0 0 1 3 3v4a1 1 0 0 1 -2 0v-4a1 1 0 0 0 -1 -1h-14a 1 1 0 0 0 -1 1v10a1 1 0 0 0 1 1h6a1 1 0 0 1 0 2h-6a3 3 0 0 1 -3 -3v-10a3 3 0 0 1 3 -3z" /><path d="M20 13a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-5a2 2 0 0 1 -2 -2v-3a2 2 0 0 1 2 -2z" /></svg>`
-  btn.className =
-    "h-9 px-3 rounded-xl border border-white/10 bg-white/5 text-sm"
-  document.getElementById("current").appendChild(btn)
+  btn.className = "h-9 px-3 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2"
+  btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M19 4a3 3 0 0 1 3 3v4a1 1 0 0 1 -2 0v-4a1 1 0 0 0 -1 -1h-14a1 1 0 0 0 -1 1v10a1 1 0 0 0 1 1h6a1 1 0 0 1 0 2h-6a3 3 0 0 1 -3 -3v-10a3 3 0 0 1 3 -3z"/><path d="M20 13a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-5a2 2 0 0 1 -2 -2v-3a2 2 0 0 1 2 -2z"/></svg>`
+  currentEl.appendChild(btn)
   btn.addEventListener("click", async () => {
     if (window.AndroidPip?.toggle) {
       player.requestFullscreen()
@@ -587,9 +634,9 @@ function play(streamId, name) {
     const el = player.el().querySelector("video")
     if (document.pictureInPictureEnabled && !el.disablePictureInPicture) {
       try {
-        if (document.pictureInPictureElement === el)
+        if (document.pictureInPictureElement === el) {
           await document.exitPictureInPicture()
-        else {
+        } else {
           if (el.readyState < 2) await el.play().catch(() => {})
           await el.requestPictureInPicture()
         }
@@ -599,25 +646,21 @@ function play(streamId, name) {
 }
 
 // ----------------------------
-// EPG (auto base64 decode if needed)
+// EPG
 // ----------------------------
 const textDecoder = new TextDecoder("utf-8")
 
-// Heuristic: looks like base64 and decodes safely => treat as base64
 function maybeB64ToUtf8(str) {
   if (!str || typeof str !== "string") return str || ""
   const looksB64 =
     /^[A-Za-z0-9+/=\s]+$/.test(str) && str.replace(/\s+/g, "").length % 4 === 0
   if (!looksB64) return str
-
   try {
     const bin = atob(str.replace(/\s+/g, ""))
-    // convert binary string to Uint8Array
     const bytes = new Uint8Array(bin.length)
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
     const utf8 = textDecoder.decode(bytes)
-    if (utf8.replace(/\s/g, "").length === 0) return str
-    return utf8
+    return utf8.replace(/\s/g, "").length === 0 ? str : utf8
   } catch {
     return str
   }
@@ -636,74 +679,81 @@ const fmtTime = (ts) => {
   }
 }
 
-async function loadEPG(streamId) {
-  const { host, port, user, pass } = creds
-  const url = `${fmtBase(
-    host,
-    port
-  )}/player_api.php?username=${encodeURIComponent(
-    user
-  )}&password=${encodeURIComponent(
-    pass
-  )}&action=get_short_epg&stream_id=${encodeURIComponent(streamId)}&limit=10`
+const escapeHtml = (s) =>
+  String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[c])
 
-  epgList.innerHTML = `<div class="text-gray-500">Loading EPG…</div>`
+async function loadEPG(streamId) {
+  if (!epgList) return
+  const url = buildApiUrl(creds, "get_short_epg", {
+    stream_id: String(streamId),
+    limit: "10",
+  })
+
+  epgList.innerHTML = `<div class="text-fg-3">Loading EPG…</div>`
   try {
     const r = await fetch(url)
     if (!r.ok) throw new Error(await r.text())
     const data = await r.json()
 
-    // Xtream variations: sometimes items live in epg_listings; sometimes root array
     const items = Array.isArray(data?.epg_listings)
       ? data.epg_listings
       : Array.isArray(data)
       ? data
       : []
     if (!items.length) {
-      epgList.innerHTML = `<div class="text-gray-500">No EPG available.</div>`
+      epgList.innerHTML = `<div class="text-fg-3">No EPG available.</div>`
       return
     }
 
+    const nowSec = Math.floor(Date.now() / 1000)
     epgList.innerHTML = items
       .map((it) => {
-        const start = fmtTime(it.start_timestamp || it.start)
-        const end = fmtTime(it.stop_timestamp || it.end)
-
-        // decode any base64-ish fields
-        const titleRaw = it.title || it.title_raw || ""
-        const descRaw = it.description || it.description_raw || ""
-
-        const title = maybeB64ToUtf8(titleRaw)
-        const desc = maybeB64ToUtf8(descRaw)
-
+        const startTs = Number(it.start_timestamp || it.start)
+        const endTs = Number(it.stop_timestamp || it.end)
+        const isLive =
+          Number.isFinite(startTs) &&
+          Number.isFinite(endTs) &&
+          startTs <= nowSec &&
+          nowSec < endTs
+        const start = fmtTime(startTs)
+        const end = fmtTime(endTs)
+        const title = escapeHtml(maybeB64ToUtf8(it.title || it.title_raw || ""))
+        const desc = escapeHtml(
+          maybeB64ToUtf8(it.description || it.description_raw || "")
+        )
         return `
-					<div class="rounded-lg p-2 bg-gray-900/50">
-						<div class="flex items-center justify-between">
-							<div class="font-medium">${title}</div>
-							<div class="text-xs text-gray-500">${start}–${end}</div>
-						</div>
-						${
-              desc
-                ? `<div class="mt-1 text-xs text-gray-400 line-clamp-3">${desc}</div>`
-                : ""
-            }
-					</div>
-					`
+          <div class="rounded-lg p-2 ${isLive ? "bg-accent-soft ring-1 ring-accent/30" : "bg-surface-2"}">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                ${isLive ? '<span class="size-1.5 rounded-full bg-accent shrink-0" aria-label="Now playing"></span>' : ""}
+                <div class="font-medium text-fg truncate">${title}</div>
+              </div>
+              <div class="text-xs text-fg-3 tabular-nums shrink-0">${start}–${end}</div>
+            </div>
+            ${desc ? `<div class="mt-1 text-sm text-fg-2 leading-relaxed line-clamp-3">${desc}</div>` : ""}
+          </div>`
       })
       .join("")
   } catch (e) {
     console.error(e)
-    epgList.innerHTML = `<div class="text-red-600">Failed to load EPG.</div>`
+    epgList.innerHTML = `<div class="text-bad">Failed to load EPG.</div>`
   }
 }
 
 // ----------------------------
-// Boot: auto-load if creds present
+// Boot
 // ----------------------------
-if (creds.host && creds.user && creds.pass) loadChannels()
-
-// Prevent form submit reloads
-f.addEventListener("submit", (e) => {
-  e.preventDefault()
-  e.stopImmediatePropagation()
-})
+;(async () => {
+  creds = await loadCreds()
+  if (creds.host) {
+    loadChannels()
+  } else {
+    showEmptyState()
+  }
+})()

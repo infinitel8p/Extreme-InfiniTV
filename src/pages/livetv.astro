@@ -1,202 +1,251 @@
 ---
 import Layout from "@/layouts/Layout.astro";
-import CredsLoader from "../components/CredsLoader.astro";
+import SearchInput from "@/components/SearchInput.astro";
+import { IconDeviceTv, IconChevronDown } from "@tabler/icons-svelte";
 ---
 
-<Layout>
-	<div class="">
-		<!-- Decorative background accents -->
-		<div aria-hidden="true" class="pointer-events-none fixed inset-0 -z-10">
-			<div
-				class="absolute -top-24 -left-24 h-72 w-72 rounded-full bg-indigo-600/20 blur-3xl">
-			</div>
-			<div
-				class="absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-fuchsia-600/20 blur-3xl">
-			</div>
-			<div
-				class="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(99,102,241,0.08),transparent_60%),radial-gradient(ellipse_at_bottom,rgba(168,85,247,0.06),transparent_60%)]">
-			</div>
-		</div>
+<Layout pageTitle="Live TV">
+	<main
+		class="w-full max-w-[120rem] mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 md:landscape:pt-6 pb-6
+			flex flex-col gap-4 flex-1 min-h-0">
 
-		<main
-			class="mx-auto px-4 py-10 lg:pt-6 md:landscape:pt-6 md:px-6 lg:px-8 md:landscape:px-8">
+		<section
+			class="flex flex-col md:landscape:flex-row lg:flex-row gap-4 flex-1 min-h-0">
+
+			<!-- Channels (bottom on mobile, left column on desktop) -->
+			<aside
+				class="order-2 md:landscape:order-1 lg:order-1
+					md:landscape:w-96 lg:w-[28rem]
+					md:landscape:shrink-0 lg:shrink-0 min-h-0">
+				<div
+					class="rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 min-h-0">
+
+					<button
+						id="category-picker-trigger"
+						type="button"
+						aria-haspopup="dialog"
+						aria-controls="category-picker-dialog"
+						class="rounded-xl border border-line bg-bg px-3 py-2 text-sm flex items-center gap-2 text-left
+							hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+							transition-colors shrink-0">
+						<span class="text-fg-3 shrink-0">Category</span>
+						<span
+							id="category-picker-label"
+							class="text-fg truncate flex-1">All categories</span>
+						<IconChevronDown
+							aria-hidden="true"
+							stroke={2}
+							class="size-4 text-fg-3 shrink-0"
+						/>
+					</button>
+
+					<SearchInput
+						id="search"
+						label="Search channels"
+						placeholder="Search channels…"
+						clearButtonId="clear-search"
+					/>
+
+					<div
+						id="list"
+						class="relative flex-1 min-h-0 overflow-auto pr-1 custom-scroll
+							max-h-96 md:landscape:max-h-none lg:max-h-none">
+						<div id="spacer"></div>
+						<div id="viewport" class="absolute inset-x-0 top-0"></div>
+					</div>
+
+					<div
+						id="list-status"
+						class="px-2.5 text-sm text-fg-3 tabular-nums shrink-0">
+						No playlist selected.
+					</div>
+				</div>
+			</aside>
+
+			<!-- Player + EPG (top on mobile, right column on desktop/landscape) -->
 			<section
-				class="lg:grid md:landscape:grid grid-cols-1 gap-5 lg:grid-cols-4 md:landscape:grid-cols-4 h-full flex flex-col-reverse lg:flex-row md:landscape:flex-row">
-				<!-- categories -->
-				<aside class="lg:col-span-1 md:landscape:col-span-1">
+				class="order-1 md:landscape:order-2 lg:order-2
+					md:landscape:flex-1 lg:flex-1 min-w-0 min-h-0">
+				<div
+					class="rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 min-h-0">
 					<div
-						class="rounded-2xl rounded-r-none border border-white/10 bg-white/1 p-3 shadow-lg shadow-black/30 backdrop-blur lg:h-full md:landscape:h-full">
-						<div class="mb-3 flex items-center gap-2 flex-wrap">
-							<label class="sr-only" for="search"
-								>Search categories</label
-							>
-							<div class="relative w-full">
-								<svg
-									class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400"
-									xmlns="http://www.w3.org/2000/svg"
-									fill="none"
-									viewBox="0 0 24 24"
-									stroke="currentColor"
-									><path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="1.5"
-										d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"
-									></path></svg
-								>
-								<input
-									id="category-search"
-									type="search"
-									placeholder="Search categories…"
-									class="w-full rounded-xl border border-white/10 bg-white/5 pl-9 pr-3 py-2 text-sm text-white placeholder:text-gray-400 outline-none ring-0 transition focus:border-indigo-400/30 focus:bg-white/10 focus:ring-2 focus:ring-indigo-500/40"
-								/>
-							</div>
-							<button
-								id="category-clear-search"
-								title="Clear"
-								class="hidden shrink-0 rounded-lg border border-white/10 px-2 py-2 text-xs text-gray-300 hover:bg-white/10"
-								>Clear</button
-							>
-						</div>
-
+						class="aspect-video w-full overflow-hidden rounded-xl bg-black ring-1 ring-line flex items-center justify-center shrink-0 relative">
 						<div
-							id="category-list"
-							class="relative max-h-[calc(100vh-17rem)] overflow-auto pr-1 custom-scroll">
-							<div
-								id="category-viewport">
-							</div>
-						</div>
-
-						<div
-							id="category-list-status"
-							class="mt-2 px-2.5 text-sm text-gray-400">
-							Enter Xtream Codes credentials and click “Save”, <br
+							id="player-empty"
+							class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6 pointer-events-none">
+							<IconDeviceTv
+								aria-hidden="true"
+								stroke={1}
+								class="size-14 sm:size-16 text-fg-3 opacity-70"
 							/>
-							or paste an M3U/M3U8 playlist URL in the Host field (leave
-							user/pass empty).
+							<p class="text-fg-2 text-sm sm:text-base">
+								Pick a channel to start watching
+							</p>
+							<p class="text-fg-3 text-xs">
+								Press the channels list, or change category from the picker.
+							</p>
 						</div>
+						<video
+							id="player"
+							class="video-js vjs-default-skin vjs-big-play-centered h-full w-full"
+							controls
+							hidden
+							playsinline></video>
 					</div>
-				</aside>
-				<!-- channels -->
-				<aside class="lg:col-span-1 md:landscape:col-span-1">
+
 					<div
-						class="rounded-2xl rounded-l-none border border-white/10 bg-white/1 p-3 shadow-lg shadow-black/30 backdrop-blur lg:h-full md:landscape:h-full">
-						<div class="mb-3 flex items-center gap-2 flex-wrap">
-							<label class="sr-only" for="search"
-								>Search channels</label
-							>
-							<div class="relative w-full">
-								<svg
-									class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400"
-									xmlns="http://www.w3.org/2000/svg"
-									fill="none"
-									viewBox="0 0 24 24"
-									stroke="currentColor"
-									><path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="1.5"
-										d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"
-									></path></svg
-								>
-								<input
-									id="search"
-									type="search"
-									placeholder="Search channels…"
-									class="w-full rounded-xl border border-white/10 bg-white/5 pl-9 pr-3 py-2 text-sm text-white placeholder:text-gray-400 outline-none ring-0 transition focus:border-indigo-400/30 focus:bg-white/10 focus:ring-2 focus:ring-indigo-500/40"
-								/>
-							</div>
-							<button
-								id="clear-search"
-								title="Clear"
-								class="hidden shrink-0 rounded-lg border border-white/10 px-2 py-2 text-xs text-gray-300 hover:bg-white/10"
-								>Clear</button
-							>
-						</div>
-
-						<div
-							id="list"
-							class="relative max-h-[calc(100vh-17rem)] overflow-auto pr-1 custom-scroll">
-							<div id="viewport"></div>
-						</div>
-
-						<div
-							id="list-status"
-							class="mt-2 px-2.5 text-sm text-gray-400">
-							Enter Xtream Codes credentials and click “Save”, <br
-							/>
-							or paste an M3U/M3U8 playlist URL in the Host field (leave
-							user/pass empty).
+						id="current"
+						class="flex items-center justify-between gap-2 text-sm text-fg-2 shrink-0">
+						<div class="flex items-center gap-2 min-w-0">
+							<span class="status-badge status-badge--off">OFF</span>
+							<span class="truncate">—</span>
 						</div>
 					</div>
-				</aside>
 
-				<!-- Player -->
-				<section class="lg:col-span-2 md:landscape:col-span-2">
 					<div
-						class="rounded-2xl border border-white/10 bg-white/1 p-3 shadow-xl shadow-black/30 backdrop-blur">
-						<div
-							class="aspect-video w-full overflow-hidden rounded-xl bg-black ring-1 ring-white/10 flex items-center justify-center">
-							<video
-								id="player"
-								class="video-js vjs-default-skin vjs-big-play-centered h-full w-full"
-								controls
-								hidden
-								playsinline></video>
-						</div>
-
-						<div
-							id="current"
-							class="mt-3 flex items-center justify-between gap-2 text-sm text-gray-300">
-							<div class="flex items-center gap-2">
-								<span
-									class="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-600 text-[10px] font-bold text-white ring-1 ring-white/10"
-									>OFF</span
-								>
-								<span class="truncate">—</span>
-							</div>
-						</div>
-
-						<div
-							id="epg"
-							class="mt-4 rounded-xl border border-white/10 p-3">
-							<div class="mb-2 flex items-center justify-between">
-								<div class="text-sm font-medium">EPG</div>
-								<div class="text-xs text-gray-400">
-									All times local
-								</div>
-							</div>
-							<div id="epg-list" class="space-y-2 text-sm"></div>
-						</div>
+						id="epg"
+						class="border-t border-line pt-3 flex-1 min-h-0 overflow-auto custom-scroll">
+						<div class="mb-2 text-sm font-medium text-fg">EPG</div>
+						<div id="epg-list" class="space-y-2 text-sm"></div>
 					</div>
-				</section>
+				</div>
 			</section>
-			<div
-				id="app-version"
-				class="fixed bottom-2 right-3 text-[11px] text-gray-500 dark:text-gray-400 opacity-70">
-				loading…
-			</div>
-			<div
-				id="account-expiration"
-				class="fixed top-1 right-3 text-[11px] text-gray-500 dark:text-gray-400 opacity-70">
-				loading…
-			</div>
-		</main>
+		</section>
 
-		<script>
-			import "../scripts/stream/stream.js";
-			import "../scripts/updater-startup.js";
-			import { injectVersion } from "../scripts/version.js";
-			import { injectExpirationDate } from "../scripts/expiration.js";
-			injectVersion();
-			injectExpirationDate(
-				localStorage.getItem("xt_host") || "",
-				localStorage.getItem("xt_port") || "",
-				localStorage.getItem("xt_user") || "",
-				localStorage.getItem("xt_pass") || ""
-			);
-		</script>
-	</div>
+		<!-- Categories popover -->
+		<dialog
+			id="category-picker-dialog"
+			aria-labelledby="category-picker-title"
+			class="rounded-2xl border border-line bg-surface text-fg p-0
+				w-[min(34rem,calc(100vw-2rem))] h-[min(80dvh,42rem)]
+				backdrop:bg-black/60">
+			<div class="flex flex-col h-full p-4 gap-3">
+				<div class="flex items-center justify-between gap-3 shrink-0">
+					<h2
+						id="category-picker-title"
+						class="text-base font-semibold">
+						Choose a category
+					</h2>
+					<button
+						id="category-picker-close"
+						type="button"
+						class="rounded-lg border border-line px-3 py-1.5 text-xs text-fg-2
+							hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
+						Close
+					</button>
+				</div>
+
+				<SearchInput
+					id="category-search"
+					label="Search categories"
+					placeholder="Search categories…"
+					clearButtonId="category-clear-search"
+				/>
+
+				<div
+					id="category-list"
+					class="relative flex-1 min-h-0 overflow-auto custom-scroll">
+					<div id="category-viewport"></div>
+				</div>
+
+				<div
+					id="category-list-status"
+					class="px-2.5 text-sm text-fg-3 tabular-nums shrink-0">
+					No playlist selected.
+				</div>
+			</div>
+		</dialog>
+
+		<div
+			id="app-version"
+			class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
+			Loading…
+		</div>
+		<div
+			id="account-expiration"
+			class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
+			Loading…
+		</div>
+	</main>
+
+	<script>
+		import "../scripts/stream/stream.js";
+		import "../scripts/updater-startup.js";
+		import { injectVersion } from "../scripts/version.js";
+		import { injectExpirationDate } from "../scripts/expiration.js";
+		injectVersion();
+		injectExpirationDate();
+
+		const trigger = document.getElementById("category-picker-trigger");
+		const dlg = /** @type {HTMLDialogElement|null} */ (
+			document.getElementById("category-picker-dialog")
+		);
+		const closeBtn = document.getElementById("category-picker-close");
+		const labelEl = document.getElementById("category-picker-label");
+		const categoryList = document.getElementById("category-list");
+		const categorySearch = /** @type {HTMLInputElement|null} */ (
+			document.getElementById("category-search")
+		);
+
+		const readActive = () => {
+			try {
+				return localStorage.getItem("xt_active_cat") || "";
+			} catch {
+				return "";
+			}
+		};
+
+		const syncLabel = () => {
+			if (!labelEl) return;
+			const cat = readActive();
+			labelEl.textContent = cat || "All categories";
+		};
+
+		trigger?.addEventListener("click", () => {
+			if (!dlg) return;
+			if (typeof dlg.showModal === "function") dlg.showModal();
+			else dlg.setAttribute("open", "");
+			setTimeout(() => {
+				window.SpatialNavigation?.makeFocusable?.();
+				categorySearch?.focus();
+				categorySearch?.select?.();
+			}, 0);
+		});
+
+		closeBtn?.addEventListener("click", () => dlg?.close?.());
+
+		categoryList?.addEventListener("click", (e) => {
+			const t = /** @type {HTMLElement} */ (e.target);
+			if (!t.closest("button[role='option']")) return;
+			queueMicrotask(() => {
+				if (dlg?.open) dlg.close();
+			});
+		});
+
+		dlg?.addEventListener("click", (e) => {
+			if (e.target === dlg) dlg.close();
+		});
+
+		dlg?.addEventListener("close", () => {
+			syncLabel();
+			trigger?.focus();
+		});
+
+		document.addEventListener("xt:cat-changed", syncLabel);
+
+		syncLabel();
+
+		const playerEl = document.getElementById("player");
+		const playerEmpty = document.getElementById("player-empty");
+		if (playerEl && playerEmpty) {
+			const sync = () => {
+				playerEmpty.style.display = playerEl.hasAttribute("hidden") ? "" : "none";
+			};
+			sync();
+			new MutationObserver(sync).observe(playerEl, {
+				attributes: true,
+				attributeFilter: ["hidden"],
+			});
+		}
+	</script>
 </Layout>
-
-<CredsLoader />

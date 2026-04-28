@@ -12,26 +12,24 @@
     "tauri:android:build": "tauri android build"
   },
   "dependencies": {
-    "@astrojs/netlify": "^6.6.1",
-    "@astrojs/svelte": "^7.2.2",
-    "@tabler/icons-svelte": "^3.35.0",
-    "@tailwindcss/vite": "^4.1.17",
-    "@tauri-apps/api": "^2.9.0",
+    "@astrojs/netlify": "^7.0.8",
+    "@astrojs/svelte": "^8.0.5",
+    "@tabler/icons-svelte": "^3.41.1",
+    "@tailwindcss/vite": "^4.2.4",
+    "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-store": "^2.4.1",
-    "@tauri-apps/plugin-updater": "^2.9.0",
-    "astro": "^5.15.9",
-    "spatial-navigation-polyfill": "^1.3.1",
-    "svelte": "^5.43.11",
-    "tailwind-scrollbar": "^4.0.2",
-    "tailwindcss": "^4.1.17",
-    "typescript": "^5.9.3",
-    "video.js": "^8.23.4"
+    "@tauri-apps/plugin-store": "^2.4.2",
+    "@tauri-apps/plugin-updater": "^2.10.1",
+    "astro": "^6.1.9",
+    "svelte": "^5.55.5",
+    "tailwindcss": "^4.2.4",
+    "typescript": "^6.0.3",
+    "video.js": "^8.23.7"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.9.4",
+    "@tauri-apps/cli": "^2.10.1",
     "magic-string": "^0.30.21",
     "tiny-glob": "^0.2.9",
-    "vite": "^7.2.2"
+    "vite": "^7.3.2"
   }
 }

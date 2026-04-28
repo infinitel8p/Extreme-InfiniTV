@@ -1,21 +1,79 @@
 @import "tailwindcss";
-@plugin "tailwind-scrollbar";
 
+/* Theme tokens — slate foundation + soft fuchsia accent.
+ * Resolved via light-dark() so a single utility (e.g. bg-surface) covers
+ * both modes. Browsers without light-dark() support fall back to the
+ * dark-mode colour at parse time. */
+:root {
+    color-scheme: light dark;
+}
 
 @theme {
-    --color-dark: #0b0820;
-
     --breakpoint-sm: 40em;      /* 640px */
     --breakpoint-md: 48em;      /* 768px */
     --breakpoint-lg: 64em;      /* 1024px */
     --breakpoint-xl: 80em;      /* 1280px */
     --breakpoint-2xl: 96em;     /* 1536px */
+
+    /* — surfaces — */
+    --color-bg:        light-dark(oklch(0.985 0.004 250), oklch(0.165 0.013 255));
+    --color-surface:   light-dark(oklch(1     0     0  ), oklch(0.215 0.013 255));
+    --color-surface-2: light-dark(oklch(0.965 0.005 250), oklch(0.265 0.013 255));
+    --color-surface-3: light-dark(oklch(0.93  0.007 250), oklch(0.32  0.013 255));
+    --color-line:      light-dark(oklch(0.9   0.008 250), oklch(0.34  0.013 255));
+    --color-line-soft: light-dark(oklch(0.94  0.005 250), oklch(0.27  0.013 255));
+
+    /* — foreground — */
+    --color-fg:   light-dark(oklch(0.21  0.014 255), oklch(0.97  0.005 250));
+    --color-fg-2: light-dark(oklch(0.4   0.013 255), oklch(0.78  0.011 250));
+    --color-fg-3: light-dark(oklch(0.58  0.012 255), oklch(0.6   0.011 250));
+
+    /* — accent: a single soft fuchsia — */
+    --color-accent:      light-dark(oklch(0.58 0.22 330), oklch(0.78 0.15 330));
+    --color-accent-soft: light-dark(oklch(0.58 0.22 330 / 0.10), oklch(0.78 0.15 330 / 0.18));
+
+    /* — semantic states — */
+    --color-ok:   light-dark(oklch(0.5  0.12 160), oklch(0.79 0.13 160));
+    --color-warn: light-dark(oklch(0.6  0.14 75 ), oklch(0.84 0.13 80 ));
+    --color-bad:  light-dark(oklch(0.55 0.18 25 ), oklch(0.74 0.18 25 ));
+
+    /* — fonts —
+     * Geist for the UI (refined grotesk, calmer than Inter).
+     * Instrument Serif reserved for editorial moments — used sparingly
+     * on hero headings to break the all-sans monotony. */
+    --font-sans:  "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-serif: "Instrument Serif", ui-serif, Georgia, "Times New Roman", serif;
+
+    /* — type scale — */
+    --text-2xs:                       0.6875rem;
+    --text-2xs--line-height:          1.3;
+
+    --text-label:                     0.625rem;
+    --text-label--line-height:        1.2;
+    --text-label--letter-spacing:     0.06em;
+
+    --text-eyebrow:                   0.6875rem;
+    --text-eyebrow--line-height:      1.2;
+    --text-eyebrow--letter-spacing:   0.22em;
 }
 
 :root,
 html,
 body {
     height: 100%;
+}
+
+html {
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-kerning: normal;
+}
+
+/* Mobile/touch: kill the 300ms double-tap-zoom delay on interactive
+   chrome so taps feel instant. Page itself still allows pinch-zoom. */
+:is(a, button, summary, [role="button"]) {
+    touch-action: manipulation;
 }
 
 /* ────────────────────────────── */
@@ -26,15 +84,25 @@ body {
 }
 
 .custom-scroll::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg,
-            rgba(99, 102, 241, 0.6),
-            rgba(168, 85, 247, 0.6));
+    background: var(--color-line);
     border-radius: 9999px;
 }
 
+.custom-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--color-fg-3);
+}
+
 .custom-scroll::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--color-line-soft);
     border-radius: 9999px;
+}
+
+/* Reserve space at the scroll-viewport edges so D-pad / keyboard
+   navigation lands focused items with breathing room instead of flush
+   against the clipping boundary (where the focus ring would clip). */
+.custom-scroll {
+    scroll-padding-block: 0.75rem;
+    scroll-padding-inline: 0.5rem;
 }
 
 /* ────────────────────────────── */
@@ -43,28 +111,111 @@ body {
 .video-js .vjs-big-play-button {
     border-radius: 0.75rem;
     border: 1px solid rgba(255, 255, 255, 0.15);
-    background: linear-gradient(135deg,
-            rgba(99, 102, 241, 0.9),
-            rgba(168, 85, 247, 0.9));
-    box-shadow: 0 10px 30px rgba(99, 102, 241, 0.35);
+    background: var(--color-accent);
+    color: var(--color-bg);
 }
 
 .vjs-control-bar {
-    background: linear-gradient(180deg,
-            rgba(17, 17, 57, 0.8),
-            rgba(17, 17, 57, 0.6));
-    backdrop-filter: blur(8px);
+    background: rgba(0, 0, 0, 0.6);
 }
 
 .vjs-play-progress,
 .vjs-volume-level {
-    background: linear-gradient(90deg, #6366f1, #a855f7) !important;
+    background: var(--color-accent) !important;
 }
 
 .vjs-slider {
     background: rgba(255, 255, 255, 0.15) !important;
 }
 
-@view-transition {
-    navigation: auto;
+/* ────────────────────────────── */
+/* Dialog open animation                */
+/* Modern <dialog> elements pop instantly; soften with a brief fade+scale.
+   Fires on every showModal()/show(); reduced-motion guard collapses to ~0ms. */
+/* ────────────────────────────── */
+dialog[open] {
+    animation: dialog-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+dialog[open]::backdrop {
+    animation: backdrop-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes dialog-in {
+    from {
+        opacity: 0;
+        transform: scale(0.96);
+    }
+}
+@keyframes backdrop-in {
+    from {
+        opacity: 0;
+    }
+}
+
+/* ────────────────────────────── */
+/* Stroke-draw animation                */
+/* For checkmarks and other line-based icons. The path's total length
+   for the active-playlist checkmark is ~21 units; round up to 24 to be safe.
+   Animation runs once per render — fires when the active row first appears
+   (i.e. after the user picks a playlist). */
+/* ────────────────────────────── */
+.check-draw path {
+    stroke-dasharray: 24;
+    animation: check-draw 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes check-draw {
+    from {
+        stroke-dashoffset: 24;
+    }
+}
+
+/* ────────────────────────────── */
+/* Status badge (OFF/ON player chip) */
+/* ────────────────────────────── */
+@layer components {
+    .status-badge {
+        @apply inline-flex h-6 w-6 items-center justify-center rounded-lg text-label font-semibold uppercase ring-1 ring-line;
+    }
+    .status-badge--off {
+        @apply bg-surface-2 text-fg-2;
+    }
+    .status-badge--on {
+        @apply bg-accent text-bg;
+    }
+    /* Live broadcast indicator — same fill as ON, plus a slow expanding ring.
+       Used only on the live-TV player; movies/VOD stays on --on (no pulse). */
+    .status-badge--live {
+        @apply bg-accent text-bg relative;
+    }
+    .status-badge--live::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        border: 2px solid var(--color-accent);
+        animation: live-pulse 2.4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+        pointer-events: none;
+    }
+    @keyframes live-pulse {
+        from {
+            opacity: 0.55;
+            transform: scale(1);
+        }
+        to {
+            opacity: 0;
+            transform: scale(1.6);
+        }
+    }
+}
+
+/* ────────────────────────────── */
+/* Virtualised channel list       */
+/* ────────────────────────────── */
+.channel-row {
+    /* Skip layout/paint when offscreen mid-scroll - belt-and-braces alongside
+       the JS virtualisation. */
+    content-visibility: auto;
+    contain-intrinsic-size: 56px;
+    /* Pull focused row a little away from the scroll edge so D-pad navigation
+       doesn't feel clipped. */
+    scroll-margin-block: 8px;
 }
