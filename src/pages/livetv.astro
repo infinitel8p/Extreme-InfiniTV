@@ -69,7 +69,8 @@ import { IconDeviceTv, IconChevronDown } from "@tabler/icons-svelte";
 				<div
 					class="rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 min-h-0">
 					<div
-						class="aspect-video w-full overflow-hidden rounded-xl bg-black ring-1 ring-line flex items-center justify-center shrink-0 relative">
+						class="aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line flex items-center justify-center shrink-0 relative"
+						style="max-height: 60dvh; max-width: calc(60dvh * 16 / 9);">
 						<div
 							id="player-empty"
 							class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6 pointer-events-none">
@@ -116,7 +117,7 @@ import { IconDeviceTv, IconChevronDown } from "@tabler/icons-svelte";
 		<dialog
 			id="category-picker-dialog"
 			aria-labelledby="category-picker-title"
-			class="rounded-2xl border border-line bg-surface text-fg p-0
+			class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
 				w-[min(34rem,calc(100vw-2rem))] h-[min(80dvh,42rem)]
 				backdrop:bg-black/60">
 			<div class="flex flex-col h-full p-4 gap-3">

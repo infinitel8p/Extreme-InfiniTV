@@ -283,16 +283,46 @@ import { IconChevronDown, IconPlus, IconRefresh } from "@tabler/icons-svelte";
 		popover.style.bottom = "auto";
 	}
 
+	const SECTION_ID = "ps-popover-section";
+	let sectionRegistered = false;
+
 	popover?.addEventListener("toggle", (ev) => {
 		const e = /** @type {ToggleEvent} */ (ev);
 		if (e.newState === "open") {
 			renderList();
+			const SN = window.SpatialNavigation;
+			if (SN && !sectionRegistered) {
+				try {
+					SN.add({
+						id: SECTION_ID,
+						selector: "#ps-popover button, #ps-popover a",
+						restrict: "self-only",
+						enterTo: "default-element",
+						defaultElement:
+							"#ps-popover button[data-id], #ps-popover a",
+					});
+					sectionRegistered = true;
+				} catch {}
+			}
 			requestAnimationFrame(() => {
 				positionPopover();
-				window.SpatialNavigation?.makeFocusable?.();
+				SN?.makeFocusable?.();
+				const first = /** @type {HTMLElement|null} */ (
+					popover?.querySelector(
+						"button[data-id], a, button"
+					)
+				);
+				first?.focus?.();
 			});
 			trigger?.setAttribute("aria-expanded", "true");
 		} else {
+			const SN = window.SpatialNavigation;
+			if (SN && sectionRegistered) {
+				try {
+					SN.remove(SECTION_ID);
+				} catch {}
+				sectionRegistered = false;
+			}
 			trigger?.setAttribute("aria-expanded", "false");
 			trigger?.focus?.();
 		}

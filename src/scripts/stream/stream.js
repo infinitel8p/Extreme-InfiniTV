@@ -10,6 +10,14 @@ import {
   debounce,
 } from "@/scripts/lib/creds.js"
 import { cachedFetch, getCached } from "@/scripts/lib/cache.js"
+import {
+  ensureLoaded as ensurePrefsLoaded,
+  isFavorite,
+  toggleFavorite,
+  getFavorites,
+  pushRecent,
+  getRecents,
+} from "@/scripts/lib/preferences.js"
 
 // Channel lists rarely change within a session; refresh once a day or when
 // the user explicitly hits the refresh button (which calls invalidateEntry).
@@ -99,9 +107,44 @@ try {
   activeCat = localStorage.getItem("xt_active_cat") || ""
 } catch {}
 
+let activePlaylistId = ""
+
 document.addEventListener("xt:active-changed", () => {
   loadChannels()
 })
+
+// Sentinels for pseudo-categories that aren't real channel categories. Real
+// category names are user-data, so use values that can't collide.
+const CAT_FAVORITES = "__favorites__"
+const CAT_RECENTS = "__recents__"
+
+// Re-render the visible window (no scroll/focus reset) when a favorite is
+// toggled for the current playlist, so the star icon flips immediately. If
+// we're currently *viewing* favorites, also re-apply the filter so the
+// just-unstarred row leaves the list.
+document.addEventListener("xt:favorites-changed", (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "live") return
+  if (activeCat === CAT_FAVORITES) applyFilter()
+  else renderVirtual()
+  syncPseudoCategoryRows()
+})
+
+document.addEventListener("xt:recents-changed", (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "live") return
+  if (activeCat === CAT_RECENTS) applyFilter()
+  syncPseudoCategoryRows()
+})
+
+// Star icons (Tabler outline + filled), inlined to avoid pulling the Svelte
+// component into a JS-built DOM. 1em sizes so font-size on the parent rules.
+const STAR_OUTLINE =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/></svg>'
+const STAR_FILLED =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/></svg>'
 
 // ----------------------------
 // Channels (virtualised)
@@ -151,14 +194,21 @@ function renderVirtual() {
   const frag = document.createDocumentFragment()
   for (let i = startIdx; i < endIdx; i++) {
     const ch = filtered[i]
-    const row = document.createElement("button")
-    row.type = "button"
+    // Row container — div, not button — so we can nest two real <button>
+    // children (play + star). data-idx lives here; descendants resolve to it
+    // via .closest('[data-idx]') in the keydown handler.
+    const row = document.createElement("div")
     row.dataset.idx = String(i)
     row.style.height = `${ROW_H}px`
-    row.className =
-      "channel-row flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left hover:bg-surface-2 focus:bg-surface-2"
-    row.title = ch.name || ""
-    row.onclick = () => play(ch.id, ch.name)
+    row.className = "channel-row flex w-full items-center gap-1"
+
+    const playBtn = document.createElement("button")
+    playBtn.type = "button"
+    playBtn.dataset.role = "play"
+    playBtn.className =
+      "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none"
+    playBtn.title = ch.name || ""
+    playBtn.onclick = () => play(ch.id, ch.name)
 
     const logo = document.createElement("div")
     logo.className =
@@ -176,7 +226,7 @@ function renderVirtual() {
         logo.appendChild(img)
       }
     }
-    row.appendChild(logo)
+    playBtn.appendChild(logo)
 
     const wrap = document.createElement("div")
     wrap.className = "min-w-0 flex-1"
@@ -187,8 +237,34 @@ function renderVirtual() {
     meta.className = "truncate text-xs text-fg-3 tabular-nums"
     meta.textContent = `#${ch.id}${ch.category ? ` · ${ch.category}` : ""}`
     wrap.append(nameEl, meta)
-    row.appendChild(wrap)
+    playBtn.appendChild(wrap)
 
+    const fav = activePlaylistId
+      ? isFavorite(activePlaylistId, "live", ch.id)
+      : false
+    const starBtn = document.createElement("button")
+    starBtn.type = "button"
+    starBtn.dataset.role = "star"
+    starBtn.className =
+      "star-btn flex shrink-0 h-9 w-9 items-center justify-center rounded-lg text-base outline-none transition-colors " +
+      (fav
+        ? "text-accent hover:bg-surface-2 focus:bg-surface-2"
+        : "text-fg-3 hover:text-fg hover:bg-surface-2 focus:text-fg focus:bg-surface-2")
+    starBtn.setAttribute(
+      "aria-label",
+      fav
+        ? `Remove ${ch.name || "channel"} from favorites`
+        : `Add ${ch.name || "channel"} to favorites`
+    )
+    starBtn.setAttribute("aria-pressed", String(fav))
+    starBtn.innerHTML = fav ? STAR_FILLED : STAR_OUTLINE
+    starBtn.addEventListener("click", (e) => {
+      e.stopPropagation()
+      if (!activePlaylistId) return
+      toggleFavorite(activePlaylistId, "live", ch.id)
+    })
+
+    row.append(playBtn, starBtn)
     frag.appendChild(row)
   }
 
@@ -196,9 +272,12 @@ function renderVirtual() {
   viewport.style.transform = `translateY(${startIdx * ROW_H}px)`
 
   // Restore focus to the row the user was on, if it just re-entered the window.
+  // Always lands on the play button (the primary action). If the user was on
+  // the star button we accept the slight UX downgrade rather than juggle a
+  // pending "role" alongside pending idx.
   if (pendingFocusIdx >= startIdx && pendingFocusIdx < endIdx) {
     const target = /** @type {HTMLElement|null} */ (
-      viewport.querySelector(`[data-idx="${pendingFocusIdx}"]`)
+      viewport.querySelector(`[data-idx="${pendingFocusIdx}"] .play-btn`)
     )
     target?.focus({ preventScroll: true })
     pendingFocusIdx = -1
@@ -244,7 +323,7 @@ function focusByIdx(idx) {
   // Snap focus immediately for visual feedback. preventScroll: true so the
   // browser doesn't fight our manual scrollTop with focus-into-view.
   const present = /** @type {HTMLElement|null} */ (
-    viewport?.querySelector(`[data-idx="${idx}"]`)
+    viewport?.querySelector(`[data-idx="${idx}"] .play-btn`)
   )
   if (present) present.focus({ preventScroll: true })
 }
@@ -254,7 +333,9 @@ listEl?.addEventListener(
   (e) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "PageDown" && e.key !== "PageUp" && e.key !== "Home" && e.key !== "End") return
     const target = /** @type {HTMLElement|null} */ (document.activeElement)
-    const idxStr = target?.dataset?.idx
+    // Row container holds data-idx; play-btn / star-btn are descendants.
+    const row = target?.closest?.("[data-idx]")
+    const idxStr = /** @type {HTMLElement|null} */ (row)?.dataset?.idx
     if (idxStr == null) return
     const idx = Number(idxStr)
     if (!Number.isFinite(idx)) return
@@ -286,14 +367,34 @@ const applyFilter = () => {
   const qnorm = normalize(searchEl.value || "")
   const tokens = qnorm.length ? qnorm.split(" ") : []
 
-  const out = all.filter((ch) => {
-    if (activeCat && (ch.category || "") !== activeCat) return false
-    const cat = (ch.category || "").toString()
-    if (cat && hiddenCats.has(cat)) return false
-    if (!tokens.length) return true
-    const hay = ch.norm
-    return tokens.every((t) => hay.includes(t))
-  })
+  /** @type {typeof all} */
+  let out
+  if (activeCat === CAT_FAVORITES && activePlaylistId) {
+    const favs = getFavorites(activePlaylistId, "live")
+    out = all.filter((ch) => favs.has(ch.id))
+  } else if (activeCat === CAT_RECENTS && activePlaylistId) {
+    // Preserve recents order (most-recent first) — don't fall through to a
+    // category sort. If the underlying channel disappeared from the playlist
+    // (provider deletion), the entry is silently dropped here.
+    const byId = new Map(all.map((ch) => [ch.id, ch]))
+    const recs = getRecents(activePlaylistId, "live")
+    out = []
+    for (const r of recs) {
+      const ch = byId.get(r.id)
+      if (ch) out.push(ch)
+    }
+  } else {
+    out = all.filter((ch) => {
+      if (activeCat && (ch.category || "") !== activeCat) return false
+      const cat = (ch.category || "").toString()
+      if (cat && hiddenCats.has(cat)) return false
+      return true
+    })
+  }
+
+  if (tokens.length) {
+    out = out.filter((ch) => tokens.every((t) => ch.norm.includes(t)))
+  }
 
   listStatus.textContent = `${out.length.toLocaleString()} of ${all.length.toLocaleString()} channels`
   mountVirtualList(out)
@@ -341,18 +442,19 @@ function renderCategoryPicker(items) {
     }
   }
 
-  const addRow = (val, label, count = null) => {
+  const addRow = (val, label, count = null, extraClass = "") => {
     const btn = document.createElement("button")
     btn.type = "button"
     btn.setAttribute("role", "option")
     btn.dataset.val = val
     btn.className =
-      "w-full py-2 px-2 text-sm flex items-center justify-between hover:bg-surface-2 focus:bg-surface-2 outline-none text-fg"
+      "w-full py-2 px-2 text-sm flex items-center justify-between hover:bg-surface-2 focus:bg-surface-2 outline-none text-fg" +
+      (extraClass ? " " + extraClass : "")
     const left = document.createElement("span")
     left.className = "truncate"
     left.textContent = label
     const right = document.createElement("span")
-    right.className = "ml-3 shrink-0 text-xs text-fg-3 tabular-nums"
+    right.className = "category-count ml-3 shrink-0 text-xs text-fg-3 tabular-nums"
     right.textContent = count != null ? String(count) : ""
     btn.append(left, right)
     btn.addEventListener("click", () => {
@@ -360,7 +462,20 @@ function renderCategoryPicker(items) {
       highlightActiveInList()
     })
     frag.appendChild(btn)
+    return btn
   }
+
+  // Pseudo-categories: always rendered so syncPseudoCategoryRows can flip
+  // their counts/visibility cheaply later. Hidden via display:none when
+  // empty so they don't surface as "Favorites (0)".
+  const favs = activePlaylistId
+    ? getFavorites(activePlaylistId, "live")
+    : new Set()
+  const recs = activePlaylistId ? getRecents(activePlaylistId, "live") : []
+  const favRow = addRow(CAT_FAVORITES, "★ Favorites", favs.size, "text-accent")
+  if (favs.size === 0) favRow.style.display = "none"
+  const recRow = addRow(CAT_RECENTS, "🕒 Recently watched", recs.length)
+  if (recs.length === 0) recRow.style.display = "none"
 
   addRow("", "All categories")
   for (const name of names) addRow(name, name, counts.get(name))
@@ -373,6 +488,29 @@ function renderCategoryPicker(items) {
 
   setActiveCat(activeCat)
   highlightActiveInList()
+}
+
+// Update just the count + visibility of the pseudo-category rows in place,
+// without rebuilding the whole picker DOM (which would lose focus / scroll
+// position inside the popover).
+function syncPseudoCategoryRows() {
+  if (!categoryListEl || !activePlaylistId) return
+  const favs = getFavorites(activePlaylistId, "live")
+  const recs = getRecents(activePlaylistId, "live")
+  for (const [val, n] of [
+    [CAT_FAVORITES, favs.size],
+    [CAT_RECENTS, recs.length],
+  ]) {
+    const btn = /** @type {HTMLButtonElement|null} */ (
+      categoryListEl.querySelector(
+        `button[role="option"][data-val="${val}"]`
+      )
+    )
+    if (!btn) continue
+    const countEl = btn.querySelector(".category-count")
+    if (countEl) countEl.textContent = String(n)
+    btn.style.display = n > 0 ? "" : "none"
+  }
 }
 
 function filterCategories() {
@@ -444,9 +582,15 @@ async function loadChannels() {
   if (!listStatus || !categoryListStatus || !viewport) return
   const active = await getActiveEntry()
   if (!active) {
+    activePlaylistId = ""
     showEmptyState()
     return
   }
+  activePlaylistId = active._id
+  // Hydrate favorites/recents cache so getFavorites/isFavorite return real
+  // data on the very first renderVirtual after a playlist switch (rather
+  // than the empty-Set fallback).
+  await ensurePrefsLoaded()
 
   // Synchronous cache check - paint instantly if we have data, no loading
   // flash, no network or Tauri-store awaits in the hot path.
@@ -596,6 +740,16 @@ async function play(streamId, name) {
   const src = hasDirectUrl(streamId)
     ? getDirectUrl(streamId)
     : buildDirectM3U8(streamId)
+
+  // Record into recents *before* the network round-trip — pushRecent is sync
+  // (in-memory) with a coalesced async write, so it's free here. If the
+  // playback later fails, that's still a "recently watched" attempt from the
+  // user's perspective. Lookup logo from `all` so the recents rail can render
+  // even if the playlist isn't loaded next session.
+  if (activePlaylistId) {
+    const ch = all.find((c) => c.id === streamId)
+    pushRecent(activePlaylistId, "live", streamId, name, ch?.logo || null)
+  }
 
   currentEl.replaceChildren()
   const wrap = document.createElement("div")

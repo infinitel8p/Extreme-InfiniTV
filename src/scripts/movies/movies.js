@@ -1,4 +1,4 @@
-// Movies / VOD listing, virtualised list, search, category picker and player.
+// Movies / VOD listing
 import {
   loadCreds,
   getActiveEntry,
@@ -8,6 +8,14 @@ import {
   debounce,
 } from "@/scripts/lib/creds.js"
 import { cachedFetch, getCached } from "@/scripts/lib/cache.js"
+import {
+  ensureLoaded as ensurePrefsLoaded,
+  isFavorite,
+  toggleFavorite,
+  getFavorites,
+  pushRecent,
+  getRecents,
+} from "@/scripts/lib/preferences.js"
 
 const VOD_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -27,29 +35,37 @@ let creds = { host: "", port: "", user: "", pass: "" }
 // ----------------------------
 // UI refs
 // ----------------------------
-const listEl = document.getElementById("movie-list")
-const spacer = document.getElementById("movie-spacer")
-const viewport = document.getElementById("movie-viewport")
+const gridEl = document.getElementById("movie-grid")
 const listStatus = document.getElementById("movie-list-status")
 
 const categoryListEl = document.getElementById("movie-category-list")
 const categoryListStatus = document.getElementById("movie-category-list-status")
 const categorySearchEl = document.getElementById("movie-category-search")
 
-const searchEl = document.getElementById("movie-search")
+const searchEl = /** @type {HTMLInputElement|null} */ (
+  document.getElementById("movie-search")
+)
 const clearSearchBtn = document.getElementById("movie-clear-search")
 
-const currentEl = document.getElementById("movie-current")
-const metaEl = document.getElementById("movie-meta")
-const plotEl = document.getElementById("movie-plot")
-
-if (spacer) spacer.style.height = "0px"
+// Detail dialog refs (Netflix-style modal)
+const detailDlg = /** @type {HTMLDialogElement|null} */ (
+  document.getElementById("movie-detail-dialog")
+)
+const detailTitle = document.getElementById("movie-detail-title")
+const detailPoster = document.getElementById("movie-detail-poster")
+const detailMeta = document.getElementById("movie-detail-meta")
+const detailPlot = document.getElementById("movie-detail-plot")
+const detailPlay = document.getElementById("movie-detail-play")
+const detailFav = document.getElementById("movie-detail-fav")
+const detailClose = document.getElementById("movie-detail-close")
+const detailPlayerWrap = document.getElementById("movie-detail-player-wrap")
 
 // ----------------------------
 // State
 // ----------------------------
 /** @type {Array<{id:number,name:string,category?:string,logo?:string|null,year?:string,rating?:string,duration?:string,plot?:string,norm:string}>} */
 let all = []
+/** @type {typeof all} */
 let filtered = []
 
 /** @type {Map<string,string> | null} */
@@ -60,16 +76,38 @@ try {
   activeCat = localStorage.getItem("xt_vod_active_cat") || ""
 } catch {}
 
+let activePlaylistId = ""
+
 const hiddenCats = new Set()
 
-// Virtual list config
-const ROW_H = 70
-const OVERSCAN = 8
-let renderScheduled = false
-// Index of the row that should hold focus after the next render. Keeps
-// keyboard / D-pad focus pinned to a logical row even when the underlying DOM
-// nodes are recycled by the virtualiser.
-let pendingFocusIdx = -1
+// Sentinels for pseudo-categories. Values can't collide with real category
+// names because they start with "__".
+const CAT_FAVORITES = "__favorites__"
+const CAT_RECENTS = "__recents__"
+
+// Tabler star icons inlined as SVG strings (we build DOM in JS).
+const STAR_OUTLINE =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/></svg>'
+const STAR_FILLED =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/></svg>'
+
+document.addEventListener("xt:favorites-changed", (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "vod") return
+  if (activeCat === CAT_FAVORITES) applyFilter()
+  else updateGridStarFor(detail.id)
+  syncPseudoCategoryRows()
+  if (currentDetailMovie?.id === detail.id) syncDetailFavButton()
+})
+
+document.addEventListener("xt:recents-changed", (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "vod") return
+  if (activeCat === CAT_RECENTS) applyFilter()
+  syncPseudoCategoryRows()
+})
 
 // ----------------------------
 // Categories
@@ -115,18 +153,20 @@ function renderCategoryPicker(items) {
     }
   }
 
-  const addRow = (val, label, count = null) => {
+  const addRow = (val, label, count = null, extraClass = "") => {
     const btn = document.createElement("button")
     btn.type = "button"
     btn.setAttribute("role", "option")
     btn.dataset.val = val
     btn.className =
-      "w-full px-3 py-2 text-sm flex items-center justify-between hover:bg-surface-2 focus:bg-surface-2 outline-none text-fg"
+      "w-full px-3 py-2 text-sm flex items-center justify-between hover:bg-surface-2 focus:bg-surface-2 outline-none text-fg" +
+      (extraClass ? " " + extraClass : "")
     const left = document.createElement("span")
     left.className = "truncate"
     left.textContent = label
     const right = document.createElement("span")
-    right.className = "ml-3 shrink-0 text-xs text-fg-3 tabular-nums"
+    right.className =
+      "category-count ml-3 shrink-0 text-xs text-fg-3 tabular-nums"
     right.textContent = count != null ? String(count) : ""
     btn.append(left, right)
     btn.addEventListener("click", () => {
@@ -134,7 +174,17 @@ function renderCategoryPicker(items) {
       highlightActiveInList()
     })
     frag.appendChild(btn)
+    return btn
   }
+
+  const favs = activePlaylistId
+    ? getFavorites(activePlaylistId, "vod")
+    : new Set()
+  const recs = activePlaylistId ? getRecents(activePlaylistId, "vod") : []
+  const favRow = addRow(CAT_FAVORITES, "★ Favorites", favs.size, "text-accent")
+  if (favs.size === 0) favRow.style.display = "none"
+  const recRow = addRow(CAT_RECENTS, "🕒 Recently watched", recs.length)
+  if (recs.length === 0) recRow.style.display = "none"
 
   addRow("", "All categories")
   for (const name of names) addRow(name, name, counts.get(name))
@@ -145,6 +195,24 @@ function renderCategoryPicker(items) {
     categoryListStatus.textContent = `${names.length.toLocaleString()} categories`
   }
   highlightActiveInList()
+}
+
+function syncPseudoCategoryRows() {
+  if (!categoryListEl || !activePlaylistId) return
+  const favs = getFavorites(activePlaylistId, "vod")
+  const recs = getRecents(activePlaylistId, "vod")
+  for (const [val, n] of [
+    [CAT_FAVORITES, favs.size],
+    [CAT_RECENTS, recs.length],
+  ]) {
+    const btn = /** @type {HTMLButtonElement|null} */ (
+      categoryListEl.querySelector(`button[role="option"][data-val="${val}"]`)
+    )
+    if (!btn) continue
+    const countEl = btn.querySelector(".category-count")
+    if (countEl) countEl.textContent = String(n)
+    btn.style.display = n > 0 ? "" : "none"
+  }
 }
 
 function filterCategories() {
@@ -182,194 +250,283 @@ function setActiveCat(next) {
 }
 
 // ----------------------------
-// Virtual list
+// Poster grid
 // ----------------------------
-function mountVirtualList(items) {
-  if (!spacer || !viewport || !listEl) return
-  filtered = items || []
-  spacer.style.height = `${filtered.length * ROW_H}px`
-  if (listEl.scrollTop > filtered.length * ROW_H) listEl.scrollTop = 0
-  pendingFocusIdx = -1
-  renderVirtual()
-}
+const PAGE_SIZE = 200
+let renderToken = 0
+/** @type {IntersectionObserver|null} */
+let infiniteObs = null
+let renderedCount = 0
 
-function renderVirtual() {
-  if (!listEl || !viewport) return
-  const scrollTop = listEl.scrollTop
-  const height = listEl.clientHeight
+function makeCard(m, idx) {
+  const card = document.createElement("div")
+  card.dataset.idx = String(idx)
+  card.className =
+    "movie-card group relative rounded-xl overflow-hidden bg-surface-2 " +
+    "ring-1 ring-line " +
+    "transition-[transform,box-shadow] duration-150 " +
+    "hover:ring-2 hover:ring-accent hover:[transform:translateY(-2px)] " +
+    "focus-within:ring-2 focus-within:ring-accent focus-within:[transform:translateY(-2px)]"
+  card.style.contentVisibility = "auto"
+  card.style.containIntrinsicSize = "260px"
 
-  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN)
-  const endIdx = Math.min(
-    filtered.length,
-    Math.ceil((scrollTop + height) / ROW_H) + OVERSCAN
-  )
+  const playBtn = document.createElement("button")
+  playBtn.type = "button"
+  playBtn.dataset.role = "play"
+  playBtn.className =
+    "play-btn block w-full text-left outline-none cursor-pointer"
+  playBtn.title = m.name || ""
+  playBtn.addEventListener("click", () => openDetail(m))
 
-  const frag = document.createDocumentFragment()
-  for (let i = startIdx; i < endIdx; i++) {
-    const m = filtered[i]
-    const row = document.createElement("button")
-    row.type = "button"
-    row.dataset.idx = String(i)
-    row.style.height = ROW_H + "px"
-    row.className =
-      "group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left hover:bg-surface-2 focus:bg-surface-2"
-    row.onclick = () => playMovie(m.id, m.name)
-    row.title = m.name || ""
+  const posterWrap = document.createElement("div")
+  posterWrap.className = "aspect-[2/3] w-full bg-surface-2 overflow-hidden relative"
 
-    const poster = document.createElement("div")
-    poster.className =
-      "h-10 w-7 shrink-0 rounded-md bg-surface-2 overflow-hidden ring-1 ring-inset ring-line"
-    if (m.logo) {
-      const img = document.createElement("img")
-      img.src = m.logo
-      img.alt = ""
-      img.loading = "lazy"
-      img.referrerPolicy = "no-referrer"
-      img.className = "h-full w-full object-cover"
-      img.onerror = () => img.remove()
-      poster.appendChild(img)
+  if (m.logo) {
+    const img = document.createElement("img")
+    img.src = m.logo
+    img.alt = ""
+    img.loading = "lazy"
+    img.referrerPolicy = "no-referrer"
+    img.className =
+      "h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+    img.onerror = () => {
+      img.remove()
+      posterWrap.appendChild(makeFallback(m.name))
     }
-    row.appendChild(poster)
-
-    const wrap = document.createElement("div")
-    wrap.className = "min-w-0 flex-1"
-    const nameEl = document.createElement("div")
-    nameEl.className = "truncate text-sm font-medium"
-    nameEl.textContent = m.name || `Movie ${m.id}`
-    const meta = document.createElement("div")
-    meta.className = "truncate text-2xs text-fg-3 tabular-nums"
-    const parts = []
-    if (m.year) parts.push(m.year)
-    if (m.duration) parts.push(m.duration)
-    if (m.category) parts.push(m.category)
-    meta.textContent = parts.join(" • ")
-    wrap.append(nameEl, meta)
-    row.appendChild(wrap)
-
-    frag.appendChild(row)
+    posterWrap.appendChild(img)
+  } else {
+    posterWrap.appendChild(makeFallback(m.name))
   }
 
-  viewport.replaceChildren(frag)
-  viewport.style.transform = `translateY(${startIdx * ROW_H}px)`
+  playBtn.appendChild(posterWrap)
 
-  if (pendingFocusIdx >= startIdx && pendingFocusIdx < endIdx) {
-    const target = /** @type {HTMLElement|null} */ (
-      viewport.querySelector(`[data-idx="${pendingFocusIdx}"]`)
-    )
-    target?.focus({ preventScroll: true })
-    pendingFocusIdx = -1
-  }
+  const info = document.createElement("div")
+  info.className = "px-2 py-2 min-w-0"
+  const nameEl = document.createElement("div")
+  nameEl.className = "truncate text-sm font-medium text-fg"
+  nameEl.textContent = m.name || `Movie ${m.id}`
+  const meta = document.createElement("div")
+  meta.className = "truncate text-2xs text-fg-3 tabular-nums"
+  const parts = []
+  if (m.year) parts.push(m.year)
+  if (m.duration) parts.push(m.duration)
+  if (m.category) parts.push(m.category)
+  meta.textContent = parts.join(" • ")
+  info.append(nameEl, meta)
+  playBtn.appendChild(info)
 
-  window.SpatialNavigation?.makeFocusable?.()
-}
+  card.appendChild(playBtn)
 
-listEl?.addEventListener(
-  "scroll",
-  () => {
-    if (renderScheduled) return
-    renderScheduled = true
-    requestAnimationFrame(() => {
-      renderScheduled = false
-      renderVirtual()
-    })
-  },
-  { passive: true }
-)
-
-// Custom D-pad / arrow handling: virtualised rows aren't all in the DOM at
-// once, so spatial-navigation can't walk past the visible window. We move
-// focus by index, scrolling the list as needed, and pin focus across DOM
-// recycles via pendingFocusIdx.
-function focusByIdx(idx) {
-  if (!listEl || idx < 0 || idx >= filtered.length) return
-  const top = idx * ROW_H
-  const visTop = listEl.scrollTop
-  const visBottom = visTop + listEl.clientHeight
-  if (top < visTop) {
-    listEl.scrollTop = Math.max(0, top - ROW_H * 2)
-  } else if (top + ROW_H > visBottom) {
-    listEl.scrollTop = top + ROW_H - listEl.clientHeight + ROW_H * 2
-  }
-  // Always pin pendingFocusIdx — see livetv equivalent. Letting renderVirtual
-  // be the only place that clears it keeps focus pinned through DOM recycles
-  // even under rapid keyboard repeat.
-  pendingFocusIdx = idx
-  const present = /** @type {HTMLElement|null} */ (
-    viewport?.querySelector(`[data-idx="${idx}"]`)
+  // Star toggle pinned in the top-right of the poster.
+  const fav = activePlaylistId
+    ? isFavorite(activePlaylistId, "vod", m.id)
+    : false
+  const starBtn = document.createElement("button")
+  starBtn.type = "button"
+  starBtn.dataset.role = "star"
+  starBtn.className =
+    "star-btn absolute top-2 right-2 h-8 w-8 rounded-lg outline-none " +
+    "flex items-center justify-center text-base " +
+    "bg-black/45 backdrop-blur-sm ring-1 ring-white/10 " +
+    "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 " +
+    "focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent " +
+    "transition-opacity " +
+    (fav ? "text-accent" : "text-white/85")
+  if (fav) starBtn.classList.add("!opacity-100")
+  starBtn.setAttribute(
+    "aria-label",
+    fav
+      ? `Remove ${m.name || "movie"} from favorites`
+      : `Add ${m.name || "movie"} to favorites`
   )
-  if (present) present.focus({ preventScroll: true })
-}
-
-listEl?.addEventListener(
-  "keydown",
-  (e) => {
-    if (
-      e.key !== "ArrowDown" &&
-      e.key !== "ArrowUp" &&
-      e.key !== "PageDown" &&
-      e.key !== "PageUp" &&
-      e.key !== "Home" &&
-      e.key !== "End"
-    )
-      return
-    const target = /** @type {HTMLElement|null} */ (document.activeElement)
-    const idxStr = target?.dataset?.idx
-    if (idxStr == null) return
-    const idx = Number(idxStr)
-    if (!Number.isFinite(idx)) return
-    const pageSize = Math.max(
-      1,
-      Math.floor((listEl?.clientHeight || ROW_H) / ROW_H) - 1
-    )
-    let next = idx
-    switch (e.key) {
-      case "ArrowDown":
-        next = idx + 1
-        break
-      case "ArrowUp":
-        next = idx - 1
-        break
-      case "PageDown":
-        next = idx + pageSize
-        break
-      case "PageUp":
-        next = idx - pageSize
-        break
-      case "Home":
-        next = 0
-        break
-      case "End":
-        next = filtered.length - 1
-        break
-    }
-    next = Math.max(0, Math.min(filtered.length - 1, next))
-    if (next === idx) return
-    e.preventDefault()
+  starBtn.setAttribute("aria-pressed", String(fav))
+  starBtn.innerHTML = fav ? STAR_FILLED : STAR_OUTLINE
+  starBtn.addEventListener("click", (e) => {
     e.stopPropagation()
-    focusByIdx(next)
-  },
-  // Capture phase so spatial-nav's window-level handler doesn't beat us.
-  true
-)
+    e.preventDefault()
+    if (!activePlaylistId) return
+    toggleFavorite(activePlaylistId, "vod", m.id)
+  })
+  card.appendChild(starBtn)
+
+  return card
+}
+
+function makeFallback(name) {
+  const fb = document.createElement("div")
+  fb.className =
+    "h-full w-full flex items-center justify-center text-center px-3 " +
+    "text-fg-3 text-xs tracking-wide bg-gradient-to-br from-surface-2 to-surface-3"
+  fb.textContent = name || "No poster"
+  return fb
+}
+
+function teardownInfiniteObs() {
+  if (infiniteObs) {
+    infiniteObs.disconnect()
+    infiniteObs = null
+  }
+}
+
+function appendNextPage() {
+  if (!gridEl) return
+  const total = filtered.length
+  if (renderedCount >= total) {
+    teardownInfiniteObs()
+    const sentinel = gridEl.querySelector("[data-grid-sentinel]")
+    sentinel?.remove()
+    return
+  }
+  const start = renderedCount
+  const end = Math.min(start + PAGE_SIZE, total)
+  const frag = document.createDocumentFragment()
+  for (let i = start; i < end; i++) {
+    frag.appendChild(makeCard(filtered[i], i))
+  }
+
+  const sentinel = gridEl.querySelector("[data-grid-sentinel]")
+  if (sentinel) gridEl.insertBefore(frag, sentinel)
+  else gridEl.appendChild(frag)
+  renderedCount = end
+  window.SpatialNavigation?.makeFocusable?.()
+
+  if (renderedCount >= total) {
+    teardownInfiniteObs()
+    sentinel?.remove()
+  }
+}
+
+function renderGrid() {
+  if (!gridEl) return
+  ++renderToken
+  teardownInfiniteObs()
+  gridEl.replaceChildren()
+  renderedCount = 0
+
+  if (!filtered.length) {
+    const empty = document.createElement("div")
+    empty.className = "col-span-full text-fg-3 text-sm py-8 text-center"
+    empty.textContent = activeCat
+      ? "No movies in this category."
+      : "No movies."
+    gridEl.appendChild(empty)
+    return
+  }
+
+  gridEl.scrollTop = 0
+
+  const initialEnd = Math.min(PAGE_SIZE, filtered.length)
+  const frag = document.createDocumentFragment()
+  for (let i = 0; i < initialEnd; i++) {
+    frag.appendChild(makeCard(filtered[i], i))
+  }
+  gridEl.appendChild(frag)
+  renderedCount = initialEnd
+  window.SpatialNavigation?.makeFocusable?.()
+
+  if (renderedCount >= filtered.length) return
+
+  const sentinel = document.createElement("div")
+  sentinel.dataset.gridSentinel = ""
+  sentinel.className =
+    "col-span-full text-fg-3 text-xs py-3 text-center tabular-nums"
+  sentinel.textContent = `Showing ${renderedCount.toLocaleString()} of ${filtered.length.toLocaleString()}`
+  gridEl.appendChild(sentinel)
+
+  if (typeof IntersectionObserver === "function") {
+    infiniteObs = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return
+        appendNextPage()
+        const s = gridEl.querySelector("[data-grid-sentinel]")
+        if (s)
+          s.textContent = `Showing ${renderedCount.toLocaleString()} of ${filtered.length.toLocaleString()}`
+      },
+      { root: gridEl, rootMargin: "600px 0px" }
+    )
+    infiniteObs.observe(sentinel)
+  } else {
+    sentinel.textContent = ""
+    const btn = document.createElement("button")
+    btn.type = "button"
+    btn.className =
+      "rounded-xl border border-line px-4 py-2 text-sm hover:bg-surface-2 focus-visible:bg-surface-2"
+    btn.textContent = `Load more (${(filtered.length - renderedCount).toLocaleString()} left)`
+    btn.addEventListener("click", () => {
+      appendNextPage()
+      btn.textContent =
+        renderedCount < filtered.length
+          ? `Load more (${(filtered.length - renderedCount).toLocaleString()} left)`
+          : ""
+    })
+    sentinel.appendChild(btn)
+  }
+}
+
+function updateGridStarFor(movieId) {
+  if (!gridEl) return
+  const idx = filtered.findIndex((m) => m.id === movieId)
+  if (idx < 0) return
+  const card = gridEl.querySelector(`[data-idx="${idx}"]`)
+  if (!card) return // not yet rendered (drip-feed)
+  const m = filtered[idx]
+  const fav = activePlaylistId
+    ? isFavorite(activePlaylistId, "vod", m.id)
+    : false
+  const star = /** @type {HTMLButtonElement|null} */ (
+    card.querySelector(".star-btn")
+  )
+  if (!star) return
+  star.innerHTML = fav ? STAR_FILLED : STAR_OUTLINE
+  star.classList.toggle("text-accent", fav)
+  star.classList.toggle("text-white/85", !fav)
+  star.classList.toggle("!opacity-100", fav)
+  star.setAttribute("aria-pressed", String(fav))
+  star.setAttribute(
+    "aria-label",
+    fav
+      ? `Remove ${m.name || "movie"} from favorites`
+      : `Add ${m.name || "movie"} to favorites`
+  )
+}
 
 // ----------------------------
-// Search
+// Search + filter
 // ----------------------------
 function applyFilter() {
   if (!listStatus) return
   const qnorm = normalize(searchEl?.value || "")
   const tokens = qnorm.length ? qnorm.split(" ") : []
 
-  const out = all.filter((m) => {
-    if (activeCat && (m.category || "") !== activeCat) return false
-    const cat = (m.category || "").toString()
-    if (cat && hiddenCats.has(cat)) return false
-    if (!tokens.length) return true
-    return tokens.every((t) => m.norm.includes(t))
-  })
+  /** @type {typeof all} */
+  let out
+  if (activeCat === CAT_FAVORITES && activePlaylistId) {
+    const favs = getFavorites(activePlaylistId, "vod")
+    out = all.filter((m) => favs.has(m.id))
+  } else if (activeCat === CAT_RECENTS && activePlaylistId) {
+    const byId = new Map(all.map((m) => [m.id, m]))
+    const recs = getRecents(activePlaylistId, "vod")
+    out = []
+    for (const r of recs) {
+      const m = byId.get(r.id)
+      if (m) out.push(m)
+    }
+  } else {
+    out = all.filter((m) => {
+      if (activeCat && (m.category || "") !== activeCat) return false
+      const cat = (m.category || "").toString()
+      if (cat && hiddenCats.has(cat)) return false
+      return true
+    })
+  }
 
+  if (tokens.length) {
+    out = out.filter((m) => tokens.every((t) => m.norm.includes(t)))
+  }
+
+  filtered = out
   listStatus.textContent = `${out.length.toLocaleString()} of ${all.length.toLocaleString()} movies`
-  mountVirtualList(out)
+  renderGrid()
 }
 
 searchEl?.addEventListener(
@@ -397,15 +554,17 @@ function showEmptyState() {
   if (categoryListStatus) {
     categoryListStatus.innerHTML = `<a href="/login" class="text-accent underline">Add a playlist</a> first.`
   }
-  if (viewport) viewport.innerHTML = ""
-  if (spacer) spacer.style.height = "0px"
+  filtered = []
+  renderGrid()
 }
 
 function paintMovies(data, fromCache, age) {
   all = data
-  listStatus.textContent =
-    `${all.length.toLocaleString()} movies` +
-    (fromCache ? ` · cached, ${fmtAge(age)}` : "")
+  if (listStatus) {
+    listStatus.textContent =
+      `${all.length.toLocaleString()} movies` +
+      (fromCache ? ` · cached, ${fmtAge(age)}` : "")
+  }
   renderCategoryPicker(all)
   applyFilter()
 }
@@ -414,18 +573,19 @@ async function loadMovies() {
   if (!listStatus) return
   const active = await getActiveEntry()
   if (!active) {
+    activePlaylistId = ""
     showEmptyState()
     return
   }
+  activePlaylistId = active._id
+  await ensurePrefsLoaded()
 
-  // Synchronous cache check - paint instantly if available, no loading flash.
   const hit = getCached(active._id, "vod")
   if (hit) {
     paintMovies(hit.data, true, hit.age)
   } else {
     listStatus.textContent = "Loading movies…"
-    if (spacer) spacer.style.height = "0px"
-    if (viewport) viewport.innerHTML = ""
+    if (gridEl) gridEl.replaceChildren()
   }
 
   creds = await loadCreds()
@@ -438,7 +598,7 @@ async function loadMovies() {
       "Movies require an Xtream playlist. Switch playlists from the header."
     return
   }
-  if (hit) return // cache already painted; no further work.
+  if (hit) return
 
   try {
     const { data, fromCache, age } = await cachedFetch(
@@ -497,13 +657,14 @@ async function loadMovies() {
   } catch (e) {
     console.error(e)
     listStatus.textContent =
-      "Couldn't load movies - check your login or try Refresh."
-    mountVirtualList([])
+      "Couldn't load movies — check your login or try Refresh."
+    filtered = []
+    renderGrid()
   }
 }
 
 // ----------------------------
-// Player (lazy)
+// Detail dialog + playback
 // ----------------------------
 let vjs = null
 
@@ -553,29 +714,80 @@ function chooseMime(url) {
   if (lower.endsWith(".m3u8")) return "application/x-mpegURL"
   if (lower.endsWith(".mpd")) return "application/dash+xml"
   if (lower.endsWith(".webm")) return "video/webm"
+  if (lower.endsWith(".mkv")) return "video/x-matroska"
+  if (lower.endsWith(".ts")) return "video/MP2T"
+  if (lower.endsWith(".avi")) return "video/x-msvideo"
   return "video/mp4"
 }
 
-async function playMovie(vodId, name) {
+let currentDetailMovie = null
+let currentDetailSrc = ""
+
+function syncDetailFavButton() {
+  if (!detailFav || !currentDetailMovie || !activePlaylistId) return
+  const fav = isFavorite(activePlaylistId, "vod", currentDetailMovie.id)
+  // Action-clear labels: tell the user what'll happen on click, not just
+  // describe state. "Remove from favorites" beats "★ In favorites" — the
+  // latter looks like a status, not a button.
+  detailFav.textContent = fav ? "Remove from favorites" : "Add to favorites"
+  detailFav.classList.toggle("text-accent", fav)
+  detailFav.setAttribute("aria-pressed", String(fav))
+}
+
+async function openDetail(movie) {
+  if (!detailDlg || !movie) return
+  currentDetailMovie = movie
+  currentDetailSrc = ""
+
+  if (detailTitle) detailTitle.textContent = movie.name || `Movie ${movie.id}`
+  if (detailMeta) detailMeta.textContent = ""
+  if (detailPlot) detailPlot.textContent = "Loading details…"
+
+  if (detailPoster) {
+    detailPoster.replaceChildren()
+    if (movie.logo) {
+      const img = document.createElement("img")
+      img.src = movie.logo
+      img.alt = ""
+      img.loading = "eager"
+      img.referrerPolicy = "no-referrer"
+      img.className = "h-full w-full object-cover"
+      img.onerror = () => {
+        img.remove()
+        detailPoster.appendChild(makeFallback(movie.name))
+      }
+      detailPoster.appendChild(img)
+    } else {
+      detailPoster.appendChild(makeFallback(movie.name))
+    }
+  }
+
+  // Reset hero state: poster visible, player hidden until Play is pressed.
+  if (detailPoster) detailPoster.classList.remove("hidden")
+  if (detailPlayerWrap) detailPlayerWrap.classList.add("hidden")
   const videoEl = document.getElementById("movie-player")
-  if (!videoEl || !currentEl) return
-
-  currentEl.replaceChildren()
-  const wrap = document.createElement("div")
-  wrap.className = "flex items-center gap-2 max-w-[calc(100%-4rem)]"
-  wrap.innerHTML =
-    '<span class="status-badge status-badge--on">ON</span>'
-  const label = document.createElement("span")
-  label.className = "truncate w-full"
-  label.textContent = `Movie ${vodId}: ${name}`
-  wrap.appendChild(label)
-  currentEl.appendChild(wrap)
-
-  videoEl.removeAttribute("hidden")
-  const player = await ensurePlayer()
-
+  if (videoEl) videoEl.setAttribute("hidden", "")
   try {
-    const r = await fetch(buildApiUrl(creds, "get_vod_info", { vod_id: String(vodId) }))
+    vjs?.pause?.()
+    vjs?.reset?.()
+  } catch {}
+
+  syncDetailFavButton()
+
+  if (typeof detailDlg.showModal === "function") detailDlg.showModal()
+  else detailDlg.setAttribute("open", "")
+
+  // Pull focus to Play so OK on a remote starts playback immediately.
+  setTimeout(() => {
+    window.SpatialNavigation?.makeFocusable?.()
+    /** @type {HTMLButtonElement|null} */ (detailPlay)?.focus?.()
+  }, 0)
+
+  // Fetch info in the background to fill plot/meta + prepare the stream URL.
+  try {
+    const r = await fetch(
+      buildApiUrl(creds, "get_vod_info", { vod_id: String(movie.id) })
+    )
     if (!r.ok) throw new Error(await r.text())
     const data = await r.json()
     const movieData = data?.movie_data || data?.info || data || {}
@@ -588,6 +800,9 @@ async function playMovie(vodId, name) {
       const base = fmtBase(creds.host, creds.port).replace(/\/+$/, "")
       src = `${base}/${movieData.stream_url.replace(/^\/+/, "")}`
     } else {
+      const rawExt =
+        movieData.container_extension || info.container_extension || "mp4"
+      const ext = String(rawExt).replace(/^\.+/, "").toLowerCase() || "mp4"
       src =
         fmtBase(creds.host, creds.port) +
         "/movie/" +
@@ -595,12 +810,15 @@ async function playMovie(vodId, name) {
         "/" +
         encodeURIComponent(creds.pass) +
         "/" +
-        encodeURIComponent(vodId) +
-        ".mp4"
+        encodeURIComponent(movie.id) +
+        "." +
+        ext
     }
 
-    player.src({ src, type: chooseMime(src) })
-    player.play().catch(() => {})
+    // Bail if the user already closed/swapped detail while we were fetching.
+    if (currentDetailMovie?.id !== movie.id) return
+
+    currentDetailSrc = src
 
     const year = movieData.releasedate || movieData.year || info.year || ""
     const duration =
@@ -609,25 +827,95 @@ async function playMovie(vodId, name) {
       movieData.rating || info.rating || movieData.rating_5based || ""
     const genre = movieData.genre || info.genre || movieData.category || ""
     const plot =
-      movieData.plot || movieData.description || info.plot || info.description || ""
+      movieData.plot ||
+      movieData.description ||
+      info.plot ||
+      info.description ||
+      ""
 
-    if (metaEl) {
+    if (detailMeta) {
       const bits = []
       if (year) bits.push(year)
       const humanDur = fmtDuration(duration)
       if (humanDur) bits.push(humanDur)
       if (genre) bits.push(genre)
       if (rating) bits.push(`Rating: ${String(rating).slice(0, 4)}`)
-      metaEl.textContent = bits.join(" • ")
+      detailMeta.textContent = bits.join(" • ")
     }
-    if (plotEl) {
-      plotEl.textContent = plot || "No description available for this movie."
+    if (detailPlot) {
+      detailPlot.textContent = plot || "No description available."
     }
   } catch (e) {
     console.error(e)
-    if (plotEl) plotEl.textContent = "Failed to load movie info or stream URL."
+    if (detailPlot)
+      detailPlot.textContent = "Failed to load movie info. Try Play anyway."
   }
 }
+
+async function startPlayback() {
+  if (!currentDetailMovie) return
+  if (!currentDetailSrc) {
+    // get_vod_info might still be in flight — retry briefly.
+    let waited = 0
+    while (!currentDetailSrc && waited < 4000) {
+      await new Promise((r) => setTimeout(r, 100))
+      waited += 100
+    }
+  }
+  if (!currentDetailSrc) {
+    if (detailPlot)
+      detailPlot.textContent = "Couldn't get a stream URL for this movie."
+    return
+  }
+
+  if (activePlaylistId) {
+    pushRecent(
+      activePlaylistId,
+      "vod",
+      currentDetailMovie.id,
+      currentDetailMovie.name,
+      currentDetailMovie.logo || null
+    )
+  }
+
+  // Swap hero: hide poster, reveal player.
+  if (detailPoster) detailPoster.classList.add("hidden")
+  if (detailPlayerWrap) detailPlayerWrap.classList.remove("hidden")
+  const videoEl = document.getElementById("movie-player")
+  videoEl?.removeAttribute("hidden")
+
+  const player = await ensurePlayer()
+  player.src({ src: currentDetailSrc, type: chooseMime(currentDetailSrc) })
+  player.play().catch(() => {})
+}
+
+detailPlay?.addEventListener("click", startPlayback)
+
+detailFav?.addEventListener("click", () => {
+  if (!currentDetailMovie || !activePlaylistId) return
+  toggleFavorite(activePlaylistId, "vod", currentDetailMovie.id)
+})
+
+detailClose?.addEventListener("click", () => detailDlg?.close?.())
+
+detailDlg?.addEventListener("click", (e) => {
+  if (e.target === detailDlg) detailDlg.close()
+})
+
+detailDlg?.addEventListener("close", () => {
+  // Stop playback when the user backs out of the modal and reset hero
+  // back to the poster-visible state for the next open.
+  try {
+    vjs?.pause?.()
+    vjs?.reset?.()
+  } catch {}
+  if (detailPlayerWrap) detailPlayerWrap.classList.add("hidden")
+  if (detailPoster) detailPoster.classList.remove("hidden")
+  const videoEl = document.getElementById("movie-player")
+  videoEl?.setAttribute("hidden", "")
+  currentDetailMovie = null
+  currentDetailSrc = ""
+})
 
 // ----------------------------
 // Boot

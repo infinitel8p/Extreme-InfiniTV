@@ -238,6 +238,10 @@ export async function removeEntry(id) {
   // Drop any cached channel/VOD lists for this playlist.
   const { invalidateEntry } = await import("./cache.js")
   invalidateEntry(id)
+  // Drop favorites + recents for this playlist (xtream_rust pattern: per-source
+  // entries don't outlive their source).
+  const { clearForPlaylist } = await import("./preferences.js")
+  clearForPlaylist(id)
   dispatch(EVT_ENTRIES_UPDATED)
   dispatch(EVT_ACTIVE_CHANGED, await getActiveEntry())
 }
