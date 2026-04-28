@@ -12,6 +12,8 @@ import PlaylistSwitcher from "@/components/PlaylistSwitcher.astro"
 
 const path = Astro.url.pathname.replace(/\/$/, "") || "/"
 
+// Primary destinations on the desktop rail. EPG sits here too — on mobile
+// we drop it from the bottom bar (Live TV's toolbar already links to it).
 const items = [
   { href: "/",        label: "Home",    Icon: IconHome,         match: (p) => p === "/" },
   { href: "/livetv",  label: "Live TV", Icon: IconDeviceTv,     match: (p) => p === "/livetv" || p.startsWith("/livetv/") },
@@ -20,22 +22,31 @@ const items = [
   { href: "/epg",     label: "EPG",     Icon: IconCalendarTime, match: (p) => p === "/epg" || p.startsWith("/epg/") },
 ]
 
+// Bottom nav on mobile: drop EPG to keep tap targets comfortable on small
+// phones, include Settings as the 5th tab.
+const mobileItems = [
+  ...items.filter((i) => i.href !== "/epg"),
+  { href: "/settings", label: "Settings", Icon: IconSettings, match: (p) => p === "/settings" || p.startsWith("/settings/") },
+]
+
 const settingsActive = path === "/settings" || path.startsWith("/settings/")
 ---
 
+<!-- Desktop / tablet side rail (md+). Hidden on phones. -->
 <aside
-  class="shrink-0 flex flex-col gap-2 border-r border-line bg-bg
+  class="hidden md:flex md:order-first
+         shrink-0 flex-col gap-2 border-r border-line bg-bg
          w-16 lg:w-64
          p-2 lg:p-3
          pl-[max(0.5rem,env(safe-area-inset-left))]
          pb-[max(0.5rem,env(safe-area-inset-bottom))]">
 
-  <!-- Brand mark (also a Home link) -->
   <a
     href="/"
     aria-label="Extreme InfiniTV - Home"
     class="[view-transition-name:brand-mark]
            flex items-center gap-3 rounded-xl px-2 py-2
+           justify-center lg:justify-start
            hover:bg-surface-2 focus-visible:bg-surface-2
            transition-colors">
     <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-accent ring-1 ring-line">
@@ -46,7 +57,6 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     </span>
   </a>
 
-  <!-- Primary nav -->
   <nav class="flex flex-col gap-1 flex-1 mt-2" aria-label="Main">
     {items.map(({ href, label, Icon, match }) => {
       const active = match(path)
@@ -58,6 +68,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
           title={label}
           class:list={[
             "flex items-center gap-3 rounded-xl px-2.5 py-2.5 min-h-11",
+            "justify-center lg:justify-start",
             "transition-colors outline-none",
             "hover:bg-surface-2 focus-visible:bg-surface-2",
             active
@@ -80,7 +91,6 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     })}
   </nav>
 
-  <!-- Footer block: playlist switcher + settings -->
   <div class="flex flex-col gap-1 pt-2 border-t border-line">
     <PlaylistSwitcher />
     <a
@@ -90,6 +100,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
       title="Settings"
       class:list={[
         "flex items-center gap-3 rounded-xl px-2.5 py-2.5 min-h-11",
+        "justify-center lg:justify-start",
         "transition-colors outline-none",
         "hover:bg-surface-2 focus-visible:bg-surface-2",
         settingsActive
@@ -110,3 +121,46 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     </a>
   </div>
 </aside>
+
+<!-- Mobile bottom nav (< md). Sits at the bottom of the column flex thanks
+     to `order-last`, so it's in flow rather than fixed-positioned — no
+     overlap padding gymnastics needed on individual pages. -->
+<nav
+  class="md:hidden order-last
+         shrink-0 flex items-stretch border-t border-line bg-bg/95 backdrop-blur
+         pb-[max(0.25rem,env(safe-area-inset-bottom))]
+         pl-[max(0,env(safe-area-inset-left))]
+         pr-[max(0,env(safe-area-inset-right))]"
+  aria-label="Main">
+  {mobileItems.map(({ href, label, Icon, match }) => {
+    const active = match(path)
+    return (
+      <a
+        href={href}
+        aria-label={label}
+        aria-current={active ? "page" : undefined}
+        class:list={[
+          "flex flex-1 min-w-0 flex-col items-center justify-center gap-0.5",
+          "min-h-14 px-1 py-2 rounded-lg",
+          "transition-colors outline-none",
+          "focus-visible:bg-surface-2",
+          active ? "text-fg" : "text-fg-3 hover:text-fg",
+        ]}>
+        <Icon
+          aria-hidden="true"
+          stroke={active ? 2 : 1.75}
+          class:list={[
+            "size-5 shrink-0",
+            active ? "text-accent" : "text-fg-3",
+          ]}
+        />
+        <span class:list={[
+          "text-2xs leading-none truncate max-w-full",
+          active ? "font-medium" : "font-normal",
+        ]}>
+          {label}
+        </span>
+      </a>
+    )
+  })}
+</nav>
