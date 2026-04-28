@@ -1,0 +1,76 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import { IconRefresh, IconArrowLeft } from "@tabler/icons-svelte";
+---
+
+<Layout pageTitle="EPG">
+	<main
+		class="w-full max-w-480 mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 md:landscape:pt-6 pb-6
+			flex flex-col gap-3 flex-1 min-h-0">
+
+		<!-- Toolbar -->
+		<section class="flex items-center gap-3 shrink-0">
+			<a
+				href="/livetv"
+				aria-label="Back to Live TV"
+				class="rounded-xl border border-line bg-surface px-3 py-2 text-sm text-fg-2 inline-flex items-center gap-2
+					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
+				<IconArrowLeft aria-hidden="true" stroke={2} class="size-4" />
+				Live TV
+			</a>
+			<h1
+				id="epg-title"
+				class="text-base sm:text-lg font-semibold tracking-tight truncate min-w-0 flex-1">
+				EPG
+			</h1>
+			<button
+				id="epg-refresh"
+				type="button"
+				aria-label="Refresh EPG"
+				class="rounded-xl border border-line bg-surface p-2 text-fg-2
+					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
+				<IconRefresh aria-hidden="true" stroke={2} class="size-4" />
+			</button>
+		</section>
+
+		<!-- Status message (shown while loading or on error) -->
+		<div
+			id="epg-status"
+			class="rounded-2xl border border-line bg-surface px-4 py-6 text-fg-2 text-sm">
+			Loading…
+		</div>
+
+		<!-- Grid container: scrolls horizontally for time, vertically for channels.
+		     Sticky time header along the top, sticky channel column inside each row
+		     (handled in JS for now since the column lives per-row). -->
+		<section
+			id="epg-grid"
+			class="hidden flex-1 min-h-0 overflow-auto custom-scroll
+				rounded-2xl border border-line bg-bg">
+
+			<!-- Time header (sticky top). The empty leading box matches the channel
+			     column width so the time labels align with the programme tracks. -->
+			<div
+				class="sticky top-0 z-30 flex items-stretch border-b border-line bg-bg/95 backdrop-blur-sm">
+				<div
+					class="shrink-0 sticky left-0 z-30 bg-bg border-r border-line"
+					style="width: 240px; height: 40px;">
+				</div>
+				<div
+					id="epg-time-header-inner"
+					class="relative shrink-0"
+					style="height: 40px;">
+				</div>
+			</div>
+
+			<!-- Body: channel rows + the now-line indicator. position:relative so
+			     the now-line can absolute-position over the body. -->
+			<div id="epg-body" class="relative">
+			</div>
+		</section>
+	</main>
+
+	<script>
+		import "../scripts/epg/epg.js";
+	</script>
+</Layout>

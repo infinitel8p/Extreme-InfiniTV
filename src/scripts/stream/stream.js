@@ -44,32 +44,96 @@ function buildDirectM3U8(id) {
 // M3U support
 // ----------------------------
 let directUrlById = new Map()
+export let m3uEpgUrl = ""
 
+/**
+ * Parse a (possibly very large) M3U/M3U8 playlist into our normalised
+ * channel shape. Handles two real-world EXTINF variants:
+ *
+ *   #EXTINF:-1 tvg-id="x" tvg-logo="…" group-title="Sports",Channel Name
+ *   #EXTINF:-1,Channel Name tvg-id="x" tvg-logo="…" group-title="…"
+ *
+ * Attributes are always read with a regex over the whole line, so they're
+ * picked up regardless of which side of the comma they live on. The name
+ * is the substring after the first comma with any `key="…"` attribute pairs
+ * stripped out (so the alternate format doesn't bake attrs into the title).
+ *
+ * Also pulls `x-tvg-url` (or `tvg-url`) off the `#EXTM3U` header so the EPG
+ * grid view has somewhere to fetch XMLTV from.
+ *
+ * Returns the channel array directly (callers cache that). The EPG URL is
+ * exposed via the module-level `m3uEpgUrl` because it's tiny and per-load.
+ */
 function parseM3U(text) {
-  /** @type {Array<{ id:number, name:string, category?:string, logo?:string|null, url:string, norm:string }>} */
+  /** @type {Array<{ id:number, name:string, tvgId?:string, chno?:number, category?:string, logo?:string|null, url:string, norm:string }>} */
   const out = []
   const lines = text.split(/\r?\n/)
   let pending = null
+  m3uEpgUrl = ""
 
   const readAttr = (s, key) =>
-    s.match(new RegExp(`${key}="([^"]*)"`, "i"))?.[1] || ""
+    s.match(new RegExp(`\\b${key}="([^"]*)"`, "i"))?.[1] ||
+    s.match(new RegExp(`\\b${key}=([^\\s,]+)`, "i"))?.[1] ||
+    ""
+
+  const stripAttrs = (s) =>
+    s
+      .replace(/\b[\w-]+="[^"]*"/g, "")
+      .replace(/\b(tvg-[\w-]+|group-title|channel-id|channel-number)=[^\s,]+/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim()
 
   let idSeq = 1
-  for (const line of lines) {
+  for (let raw of lines) {
+    const line = raw.trim()
+    if (!line) continue
+
+    if (line.startsWith("#EXTM3U")) {
+      // Header: `#EXTM3U x-tvg-url="https://provider/epg.xml.gz"` or `tvg-url="…"`.
+      const url =
+        readAttr(line, "x-tvg-url") ||
+        readAttr(line, "tvg-url") ||
+        readAttr(line, "url-tvg")
+      if (url) m3uEpgUrl = url
+      continue
+    }
+
     if (line.startsWith("#EXTINF")) {
-      const name = line.split(",").pop()?.trim() || `Channel ${idSeq}`
+      const commaIdx = line.indexOf(",")
+      const afterComma = commaIdx >= 0 ? line.slice(commaIdx + 1) : ""
+
+      let name = stripAttrs(afterComma) || `Channel ${idSeq}`
       const logo = readAttr(line, "tvg-logo")
       const group = readAttr(line, "group-title") || "Uncategorized"
-      pending = { name, logo, category: group }
-    } else if (pending && line && !line.startsWith("#")) {
-      const url = safeHttpUrl(line.trim())
+      const tvgId = readAttr(line, "tvg-id") || readAttr(line, "channel-id")
+      const chnoStr =
+        readAttr(line, "tvg-chno") || readAttr(line, "channel-number")
+      const chno = chnoStr ? Number(chnoStr) : undefined
+      pending = {
+        name,
+        logo,
+        category: group,
+        tvgId: tvgId || "",
+        chno: Number.isFinite(chno) ? chno : undefined,
+      }
+      continue
+    }
+
+    if (line.startsWith("#")) continue
+
+    if (pending) {
+      const url = safeHttpUrl(line)
       if (url) {
         out.push({
           id: idSeq++,
           name: pending.name,
           category: pending.category,
           logo: pending.logo || null,
-          norm: normalize(`${pending.name} ${pending.category}`),
+          tvgId: pending.tvgId || undefined,
+          chno: pending.chno,
+          norm: normalize(
+            `${pending.name} ${pending.category} ${pending.tvgId || ""}`
+          ),
           url,
         })
       }
@@ -113,15 +177,9 @@ document.addEventListener("xt:active-changed", () => {
   loadChannels()
 })
 
-// Sentinels for pseudo-categories that aren't real channel categories. Real
-// category names are user-data, so use values that can't collide.
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
 
-// Re-render the visible window (no scroll/focus reset) when a favorite is
-// toggled for the current playlist, so the star icon flips immediately. If
-// we're currently *viewing* favorites, also re-apply the filter so the
-// just-unstarred row leaves the list.
 document.addEventListener("xt:favorites-changed", (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
@@ -139,8 +197,6 @@ document.addEventListener("xt:recents-changed", (e) => {
   syncPseudoCategoryRows()
 })
 
-// Star icons (Tabler outline + filled), inlined to avoid pulling the Svelte
-// component into a JS-built DOM. 1em sizes so font-size on the parent rules.
 const STAR_OUTLINE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/></svg>'
 const STAR_FILLED =
@@ -158,25 +214,19 @@ const hiddenCats = new Set()
 /** @type {Map<string,string> | null} */
 let categoryMap = null
 
-// Fixed row height (matches `.channel-row` styles below). Keep in sync.
 const ROW_H = 56
 const OVERSCAN = 6
 let renderScheduled = false
 
-// Index of the row that should hold focus after the next render. Keeps
-// keyboard / D-pad focus pinned to a logical channel even when the underlying
-// DOM nodes are recycled.
 let pendingFocusIdx = -1
 
 function mountVirtualList(items) {
   if (!spacer || !viewport || !listEl) return
   filtered = items || []
   spacer.style.height = `${filtered.length * ROW_H}px`
-  // Reset scroll when the dataset shape changes (search/category) so we don't
-  // sit past the new end.
+
   if (listEl.scrollTop > filtered.length * ROW_H) listEl.scrollTop = 0
-  // Drop any pending focus restore from the previous dataset; indices won't
-  // match the new filter and would snap focus to an unrelated row.
+
   pendingFocusIdx = -1
   renderVirtual()
 }
@@ -194,9 +244,7 @@ function renderVirtual() {
   const frag = document.createDocumentFragment()
   for (let i = startIdx; i < endIdx; i++) {
     const ch = filtered[i]
-    // Row container — div, not button — so we can nest two real <button>
-    // children (play + star). data-idx lives here; descendants resolve to it
-    // via .closest('[data-idx]') in the keydown handler.
+
     const row = document.createElement("div")
     row.dataset.idx = String(i)
     row.style.height = `${ROW_H}px`
@@ -271,10 +319,6 @@ function renderVirtual() {
   viewport.replaceChildren(frag)
   viewport.style.transform = `translateY(${startIdx * ROW_H}px)`
 
-  // Restore focus to the row the user was on, if it just re-entered the window.
-  // Always lands on the play button (the primary action). If the user was on
-  // the star button we accept the slight UX downgrade rather than juggle a
-  // pending "role" alongside pending idx.
   if (pendingFocusIdx >= startIdx && pendingFocusIdx < endIdx) {
     const target = /** @type {HTMLElement|null} */ (
       viewport.querySelector(`[data-idx="${pendingFocusIdx}"] .play-btn`)
@@ -283,7 +327,6 @@ function renderVirtual() {
     pendingFocusIdx = -1
   }
 
-  // Spatial-nav re-scan for the newly mounted buttons.
   window.SpatialNavigation?.makeFocusable?.()
 }
 
@@ -300,9 +343,6 @@ listEl?.addEventListener(
   { passive: true }
 )
 
-// Custom D-pad / arrow handling: virtualised rows aren't all in the DOM at
-// once, so spatial-navigation can't walk past the visible window. We move
-// focus by index, scrolling the list as needed.
 function focusByIdx(idx) {
   if (!listEl || idx < 0 || idx >= filtered.length) return
   const top = idx * ROW_H
@@ -313,15 +353,9 @@ function focusByIdx(idx) {
   } else if (top + ROW_H > visBottom) {
     listEl.scrollTop = top + ROW_H - listEl.clientHeight + ROW_H * 2
   }
-  // Always pin pendingFocusIdx. Rapid keypresses can trigger several
-  // focusByIdx calls before a scroll-triggered renderVirtual fires; any one
-  // of those rebuilds will detach the currently-focused button. Letting
-  // renderVirtual itself be the only one to clear pendingFocusIdx keeps focus
-  // pinned through DOM recycles instead of falling to <body> and being
-  // hijacked by the spatial-nav polyfill.
+
   pendingFocusIdx = idx
-  // Snap focus immediately for visual feedback. preventScroll: true so the
-  // browser doesn't fight our manual scrollTop with focus-into-view.
+
   const present = /** @type {HTMLElement|null} */ (
     viewport?.querySelector(`[data-idx="${idx}"] .play-btn`)
   )
@@ -333,7 +367,6 @@ listEl?.addEventListener(
   (e) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "PageDown" && e.key !== "PageUp" && e.key !== "Home" && e.key !== "End") return
     const target = /** @type {HTMLElement|null} */ (document.activeElement)
-    // Row container holds data-idx; play-btn / star-btn are descendants.
     const row = target?.closest?.("[data-idx]")
     const idxStr = /** @type {HTMLElement|null} */ (row)?.dataset?.idx
     if (idxStr == null) return
@@ -358,7 +391,6 @@ listEl?.addEventListener(
     e.stopPropagation()
     focusByIdx(next)
   },
-  // Capture phase so spatial-nav's window-level handler doesn't beat us.
   true
 )
 
@@ -373,9 +405,6 @@ const applyFilter = () => {
     const favs = getFavorites(activePlaylistId, "live")
     out = all.filter((ch) => favs.has(ch.id))
   } else if (activeCat === CAT_RECENTS && activePlaylistId) {
-    // Preserve recents order (most-recent first) — don't fall through to a
-    // category sort. If the underlying channel disappeared from the playlist
-    // (provider deletion), the entry is silently dropped here.
     const byId = new Map(all.map((ch) => [ch.id, ch]))
     const recs = getRecents(activePlaylistId, "live")
     out = []
@@ -465,9 +494,6 @@ function renderCategoryPicker(items) {
     return btn
   }
 
-  // Pseudo-categories: always rendered so syncPseudoCategoryRows can flip
-  // their counts/visibility cheaply later. Hidden via display:none when
-  // empty so they don't surface as "Favorites (0)".
   const favs = activePlaylistId
     ? getFavorites(activePlaylistId, "live")
     : new Set()
@@ -490,9 +516,6 @@ function renderCategoryPicker(items) {
   highlightActiveInList()
 }
 
-// Update just the count + visibility of the pseudo-category rows in place,
-// without rebuilding the whole picker DOM (which would lose focus / scroll
-// position inside the popover).
 function syncPseudoCategoryRows() {
   if (!categoryListEl || !activePlaylistId) return
   const favs = getFavorites(activePlaylistId, "live")
@@ -576,6 +599,31 @@ function paintChannels(data, fromCache, age) {
     (fromCache ? ` · cached, ${fmtAge(age)}` : "")
   renderCategoryPicker(all)
   mountVirtualList(all)
+  // Deep-link from /epg: ?channel=<id> auto-plays. Done after channels are
+  // mounted so we have the full list to pull the name from.
+  maybeAutoplayFromUrl()
+}
+
+let autoplayConsumed = false
+function maybeAutoplayFromUrl() {
+  if (autoplayConsumed) return
+  let id = null
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const raw = params.get("channel")
+    if (raw) id = Number(raw)
+  } catch {}
+  if (!Number.isFinite(id) || id == null) return
+  autoplayConsumed = true
+  const ch = all.find((c) => c.id === id)
+  if (!ch) return
+  // Strip the ?channel= so refresh doesn't re-trigger.
+  try {
+    const url = new URL(window.location.href)
+    url.searchParams.delete("channel")
+    window.history.replaceState({}, "", url.toString())
+  } catch {}
+  play(ch.id, ch.name)
 }
 
 async function loadChannels() {
@@ -587,13 +635,9 @@ async function loadChannels() {
     return
   }
   activePlaylistId = active._id
-  // Hydrate favorites/recents cache so getFavorites/isFavorite return real
-  // data on the very first renderVirtual after a playlist switch (rather
-  // than the empty-Set fallback).
+
   await ensurePrefsLoaded()
 
-  // Synchronous cache check - paint instantly if we have data, no loading
-  // flash, no network or Tauri-store awaits in the hot path.
   const liveHit = getCached(active._id, "live")
   const m3uHit = getCached(active._id, "m3u")
   const hit = liveHit || m3uHit
@@ -601,16 +645,12 @@ async function loadChannels() {
     if (m3uHit) indexDirectUrls(hit.data)
     else directUrlById = new Map()
     paintChannels(hit.data, true, hit.age)
-    // No early return - keep going so we still load creds (needed for play()
-    // URL building) but no more UI churn happens unless there's a cache miss.
   } else {
     categoryListStatus.textContent = "Loading categories…"
     listStatus.textContent = "Loading channels…"
     viewport.innerHTML = ""
   }
 
-  // Now resolve creds (only required for the network fetch path, but also for
-  // building stream URLs in play()).
   creds = await loadCreds()
   if (!creds.host) {
     if (!hit) showEmptyState()
@@ -639,6 +679,15 @@ async function loadChannels() {
       )
       indexDirectUrls(data)
       categoryMap = null
+      // Persist any `x-tvg-url` discovered during the M3U parse so /epg can
+      // fetch XMLTV without re-downloading the (potentially 50MB+) playlist.
+      // m3uEpgUrl is set by parseM3U on cache miss; on cache hit it stays
+      // empty and we leave the previously-persisted value alone.
+      if (m3uEpgUrl) {
+        try {
+          localStorage.setItem(`xt_m3u_epg:${active._id}`, m3uEpgUrl)
+        } catch {}
+      }
       paintChannels(data, fromCache, age)
       return
     }
@@ -683,6 +732,7 @@ async function loadChannels() {
               name,
               category,
               logo: ch.stream_icon || null,
+              tvgId: String(ch.epg_channel_id || "") || undefined,
               norm: normalize(name + " " + category),
             }
           })
@@ -741,11 +791,6 @@ async function play(streamId, name) {
     ? getDirectUrl(streamId)
     : buildDirectM3U8(streamId)
 
-  // Record into recents *before* the network round-trip — pushRecent is sync
-  // (in-memory) with a coalesced async write, so it's free here. If the
-  // playback later fails, that's still a "recently watched" attempt from the
-  // user's perspective. Lookup logo from `all` so the recents rail can render
-  // even if the playlist isn't loaded next session.
   if (activePlaylistId) {
     const ch = all.find((c) => c.id === streamId)
     pushRecent(activePlaylistId, "live", streamId, name, ch?.logo || null)

@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import SearchInput from "@/components/SearchInput.astro";
-import { IconDeviceTv, IconChevronDown } from "@tabler/icons-svelte";
+import { IconDeviceTv, IconChevronDown, IconCalendarTime } from "@tabler/icons-svelte";
 ---
 
 <Layout pageTitle="Live TV">
@@ -20,24 +20,39 @@ import { IconDeviceTv, IconChevronDown } from "@tabler/icons-svelte";
 				<div
 					class="rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 min-h-0">
 
-					<button
-						id="category-picker-trigger"
-						type="button"
-						aria-haspopup="dialog"
-						aria-controls="category-picker-dialog"
-						class="rounded-xl border border-line bg-bg px-3 py-2 text-sm flex items-center gap-2 text-left
-							hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
-							transition-colors shrink-0">
-						<span class="text-fg-3 shrink-0">Category</span>
-						<span
-							id="category-picker-label"
-							class="text-fg truncate flex-1">All categories</span>
-						<IconChevronDown
-							aria-hidden="true"
-							stroke={2}
-							class="size-4 text-fg-3 shrink-0"
-						/>
-					</button>
+					<div class="flex gap-2 shrink-0">
+						<button
+							id="category-picker-trigger"
+							type="button"
+							aria-haspopup="dialog"
+							aria-controls="category-picker-dialog"
+							class="rounded-xl border border-line bg-bg px-3 py-2 text-sm flex items-center gap-2 text-left flex-1 min-w-0
+								hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+								transition-colors">
+							<span class="text-fg-3 shrink-0">Category</span>
+							<span
+								id="category-picker-label"
+								class="text-fg truncate flex-1">All categories</span>
+							<IconChevronDown
+								aria-hidden="true"
+								stroke={2}
+								class="size-4 text-fg-3 shrink-0"
+							/>
+						</button>
+						<a
+							href="/epg"
+							aria-label="Open EPG schedule grid"
+							class="rounded-xl border border-line bg-bg px-3 py-2 text-sm text-fg-2 inline-flex items-center gap-2 shrink-0
+								hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+								transition-colors">
+							<IconCalendarTime
+								aria-hidden="true"
+								stroke={2}
+								class="size-4"
+							/>
+							<span class="hidden sm:inline">EPG</span>
+						</a>
+					</div>
 
 					<SearchInput
 						id="search"
