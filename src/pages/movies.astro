@@ -1,0 +1,277 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import SearchInput from "@/components/SearchInput.astro";
+import { IconChevronDown, IconPlayerPlay, IconX } from "@tabler/icons-svelte";
+---
+
+<Layout pageTitle="Movies">
+	<main
+		class="w-full max-w-480 mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 md:landscape:pt-6 pb-6
+			flex flex-col gap-4 flex-1 min-h-0">
+
+		<!-- Toolbar: category + search -->
+		<section class="flex flex-col sm:flex-row gap-3 shrink-0">
+			<button
+				id="movie-category-picker-trigger"
+				type="button"
+				aria-haspopup="dialog"
+				aria-controls="movie-category-picker-dialog"
+				class="rounded-xl border border-line bg-surface px-3 py-2 text-sm flex items-center gap-2 text-left
+					sm:w-72 lg:w-80 shrink-0
+					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
+				<span class="text-fg-3 shrink-0">Category</span>
+				<span
+					id="movie-category-picker-label"
+					class="text-fg truncate flex-1">All categories</span>
+				<IconChevronDown
+					aria-hidden="true"
+					stroke={2}
+					class="size-4 text-fg-3 shrink-0"
+				/>
+			</button>
+
+			<div class="flex-1 min-w-0">
+				<SearchInput
+					id="movie-search"
+					label="Search movies"
+					placeholder="Search movies…"
+				/>
+			</div>
+		</section>
+
+		<!-- Status row -->
+		<div
+			id="movie-list-status"
+			class="px-1 text-xs text-fg-3 tabular-nums shrink-0">
+			No playlist selected.
+		</div>
+
+		<!-- Poster grid. p-2 reserves room for the focus/hover ring (2px) and
+		     the translateY(-2px) lift on edge cards — overflow-auto would
+		     otherwise clip both. -->
+		<section
+			id="movie-grid"
+			class="flex-1 min-h-0 overflow-auto custom-scroll
+				grid gap-3 sm:gap-4
+				grid-cols-[repeat(auto-fill,minmax(8rem,1fr))]
+				sm:grid-cols-[repeat(auto-fill,minmax(10rem,1fr))]
+				lg:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]
+				auto-rows-min content-start
+				p-2 pb-4">
+			<!-- Cards rendered by movies.js -->
+		</section>
+
+		<!-- Detail / playback modal: single-column, hero swaps poster→video on
+		     Play. Large primary Play button so a remote OK starts playback
+		     immediately. -->
+		<dialog
+			id="movie-detail-dialog"
+			aria-labelledby="movie-detail-title"
+			class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
+				w-[min(56rem,calc(100vw-2rem))] h-[min(92dvh,52rem)]
+				backdrop:bg-black/70">
+			<div class="flex flex-col h-full">
+				<div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-line shrink-0">
+					<h2
+						id="movie-detail-title"
+						class="text-base sm:text-lg font-semibold truncate min-w-0">
+						—
+					</h2>
+					<button
+						id="movie-detail-close"
+						type="button"
+						aria-label="Close"
+						class="rounded-lg border border-line p-1.5 text-fg-2 shrink-0
+							hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
+						<IconX aria-hidden="true" stroke={2} class="size-4" />
+					</button>
+				</div>
+
+				<div class="flex-1 min-h-0 overflow-auto custom-scroll">
+					<div class="px-4 sm:px-6 py-5 mx-auto max-w-3xl flex flex-col gap-5">
+
+						<!-- Hero: poster (default) or player (after Play) -->
+						<div class="w-full mx-auto">
+							<div
+								id="movie-detail-poster"
+								class="aspect-[2/3] sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line"
+								style="max-height: 50dvh; max-width: calc(50dvh * 2 / 3);">
+							</div>
+							<div
+								id="movie-detail-player-wrap"
+								class="hidden aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line"
+								style="max-height: 60dvh; max-width: calc(60dvh * 16 / 9);">
+								<video
+									id="movie-player"
+									class="video-js vjs-default-skin vjs-big-play-centered h-full w-full"
+									controls
+									hidden
+									playsinline></video>
+							</div>
+						</div>
+
+						<!-- Action buttons (centered, big) -->
+						<div class="flex flex-col sm:flex-row gap-2 justify-center">
+							<button
+								id="movie-detail-play"
+								type="button"
+								class="flex items-center justify-center gap-2 rounded-xl bg-accent text-bg
+									px-6 py-3 text-base font-semibold min-w-44
+									hover:opacity-90 focus-visible:opacity-90
+									focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
+									transition-opacity">
+								<IconPlayerPlay
+									aria-hidden="true"
+									stroke={2}
+									class="size-5"
+								/>
+								Play
+							</button>
+							<button
+								id="movie-detail-fav"
+								type="button"
+								class="rounded-xl border border-line px-6 py-3 text-base min-w-44
+									hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
+								Add to favorites
+							</button>
+						</div>
+
+						<!-- Meta + plot -->
+						<div class="flex flex-col gap-2">
+							<div
+								id="movie-detail-meta"
+								class="text-xs text-fg-3 space-x-2 tabular-nums">
+							</div>
+							<div
+								id="movie-detail-plot"
+								class="text-sm text-fg-2 leading-relaxed">
+								Select Play to start watching.
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</dialog>
+
+		<!-- Categories popover -->
+		<dialog
+			id="movie-category-picker-dialog"
+			aria-labelledby="movie-category-picker-title"
+			class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
+				w-[min(34rem,calc(100vw-2rem))] h-[min(80dvh,42rem)]
+				backdrop:bg-black/60">
+			<div class="flex flex-col h-full p-4 gap-3">
+				<div class="flex items-center justify-between gap-3 shrink-0">
+					<h2
+						id="movie-category-picker-title"
+						class="text-base font-semibold">
+						Choose a category
+					</h2>
+					<button
+						id="movie-category-picker-close"
+						type="button"
+						class="rounded-lg border border-line px-3 py-1.5 text-xs text-fg-2
+							hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
+						Close
+					</button>
+				</div>
+
+				<SearchInput
+					id="movie-category-search"
+					label="Search categories"
+					placeholder="Search categories…"
+				/>
+
+				<div
+					id="movie-category-list"
+					class="relative flex-1 min-h-0 overflow-auto custom-scroll">
+				</div>
+
+				<div
+					id="movie-category-list-status"
+					class="px-2.5 text-sm text-fg-3 tabular-nums shrink-0">
+					No playlist selected.
+				</div>
+			</div>
+		</dialog>
+
+		<div
+			id="app-version"
+			class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
+			Loading…
+		</div>
+		<div
+			id="account-expiration"
+			class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
+			Loading…
+		</div>
+	</main>
+
+	<script>
+		import "../scripts/movies/movies.js";
+		import "../scripts/updater-startup.js";
+		import { injectVersion } from "../scripts/version.js";
+		import { injectExpirationDate } from "../scripts/expiration.js";
+		injectVersion();
+		injectExpirationDate();
+
+		const trigger = document.getElementById("movie-category-picker-trigger");
+		const dlg = /** @type {HTMLDialogElement|null} */ (
+			document.getElementById("movie-category-picker-dialog")
+		);
+		const closeBtn = document.getElementById("movie-category-picker-close");
+		const labelEl = document.getElementById("movie-category-picker-label");
+		const categoryList = document.getElementById("movie-category-list");
+		const categorySearch = /** @type {HTMLInputElement|null} */ (
+			document.getElementById("movie-category-search")
+		);
+
+		const readActive = () => {
+			try {
+				return localStorage.getItem("xt_vod_active_cat") || "";
+			} catch {
+				return "";
+			}
+		};
+
+		const syncLabel = () => {
+			if (!labelEl) return;
+			const cat = readActive();
+			labelEl.textContent = cat || "All categories";
+		};
+
+		trigger?.addEventListener("click", () => {
+			if (!dlg) return;
+			if (typeof dlg.showModal === "function") dlg.showModal();
+			else dlg.setAttribute("open", "");
+			setTimeout(() => {
+				window.SpatialNavigation?.makeFocusable?.();
+				categorySearch?.focus();
+				categorySearch?.select?.();
+			}, 0);
+		});
+
+		closeBtn?.addEventListener("click", () => dlg?.close?.());
+
+		categoryList?.addEventListener("click", (e) => {
+			const t = /** @type {HTMLElement} */ (e.target);
+			if (!t.closest("button[role='option']")) return;
+			queueMicrotask(() => {
+				if (dlg?.open) dlg.close();
+			});
+		});
+
+		dlg?.addEventListener("click", (e) => {
+			if (e.target === dlg) dlg.close();
+		});
+
+		dlg?.addEventListener("close", () => {
+			syncLabel();
+			trigger?.focus();
+		});
+
+		document.addEventListener("xt:movie-cat-changed", syncLabel);
+
+		syncLabel();
+	</script>
+</Layout>

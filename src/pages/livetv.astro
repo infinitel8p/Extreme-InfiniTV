@@ -1,0 +1,252 @@
+---
+import Layout from "@/layouts/Layout.astro";
+import SearchInput from "@/components/SearchInput.astro";
+import { IconDeviceTv, IconChevronDown } from "@tabler/icons-svelte";
+---
+
+<Layout pageTitle="Live TV">
+	<main
+		class="w-full max-w-[120rem] mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 md:landscape:pt-6 pb-6
+			flex flex-col gap-4 flex-1 min-h-0">
+
+		<section
+			class="flex flex-col md:landscape:flex-row lg:flex-row gap-4 flex-1 min-h-0">
+
+			<!-- Channels (bottom on mobile, left column on desktop) -->
+			<aside
+				class="order-2 md:landscape:order-1 lg:order-1
+					md:landscape:w-96 lg:w-[28rem]
+					md:landscape:shrink-0 lg:shrink-0 min-h-0">
+				<div
+					class="rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 min-h-0">
+
+					<button
+						id="category-picker-trigger"
+						type="button"
+						aria-haspopup="dialog"
+						aria-controls="category-picker-dialog"
+						class="rounded-xl border border-line bg-bg px-3 py-2 text-sm flex items-center gap-2 text-left
+							hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+							transition-colors shrink-0">
+						<span class="text-fg-3 shrink-0">Category</span>
+						<span
+							id="category-picker-label"
+							class="text-fg truncate flex-1">All categories</span>
+						<IconChevronDown
+							aria-hidden="true"
+							stroke={2}
+							class="size-4 text-fg-3 shrink-0"
+						/>
+					</button>
+
+					<SearchInput
+						id="search"
+						label="Search channels"
+						placeholder="Search channels…"
+						clearButtonId="clear-search"
+					/>
+
+					<div
+						id="list"
+						class="relative flex-1 min-h-0 overflow-auto pr-1 custom-scroll
+							max-h-96 md:landscape:max-h-none lg:max-h-none">
+						<div id="spacer"></div>
+						<div id="viewport" class="absolute inset-x-0 top-0"></div>
+					</div>
+
+					<div
+						id="list-status"
+						class="px-2.5 text-sm text-fg-3 tabular-nums shrink-0">
+						No playlist selected.
+					</div>
+				</div>
+			</aside>
+
+			<!-- Player + EPG (top on mobile, right column on desktop/landscape) -->
+			<section
+				class="order-1 md:landscape:order-2 lg:order-2
+					md:landscape:flex-1 lg:flex-1 min-w-0 min-h-0">
+				<div
+					class="rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 min-h-0">
+					<div
+						class="aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line flex items-center justify-center shrink-0 relative"
+						style="max-height: 60dvh; max-width: calc(60dvh * 16 / 9);">
+						<div
+							id="player-empty"
+							class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6 pointer-events-none">
+							<IconDeviceTv
+								aria-hidden="true"
+								stroke={1}
+								class="size-14 sm:size-16 text-fg-3 opacity-70"
+							/>
+							<p class="text-fg-2 text-sm sm:text-base">
+								Pick a channel to start watching
+							</p>
+							<p class="text-fg-3 text-xs">
+								Press the channels list, or change category from the picker.
+							</p>
+						</div>
+						<video
+							id="player"
+							class="video-js vjs-default-skin vjs-big-play-centered h-full w-full"
+							controls
+							hidden
+							playsinline></video>
+					</div>
+
+					<div
+						id="current"
+						class="flex items-center justify-between gap-2 text-sm text-fg-2 shrink-0">
+						<div class="flex items-center gap-2 min-w-0">
+							<span class="status-badge status-badge--off">OFF</span>
+							<span class="truncate">—</span>
+						</div>
+					</div>
+
+					<div
+						id="epg"
+						class="border-t border-line pt-3 flex-1 min-h-0 overflow-auto custom-scroll">
+						<div class="mb-2 text-sm font-medium text-fg">EPG</div>
+						<div id="epg-list" class="space-y-2 text-sm"></div>
+					</div>
+				</div>
+			</section>
+		</section>
+
+		<!-- Categories popover -->
+		<dialog
+			id="category-picker-dialog"
+			aria-labelledby="category-picker-title"
+			class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
+				w-[min(34rem,calc(100vw-2rem))] h-[min(80dvh,42rem)]
+				backdrop:bg-black/60">
+			<div class="flex flex-col h-full p-4 gap-3">
+				<div class="flex items-center justify-between gap-3 shrink-0">
+					<h2
+						id="category-picker-title"
+						class="text-base font-semibold">
+						Choose a category
+					</h2>
+					<button
+						id="category-picker-close"
+						type="button"
+						class="rounded-lg border border-line px-3 py-1.5 text-xs text-fg-2
+							hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
+						Close
+					</button>
+				</div>
+
+				<SearchInput
+					id="category-search"
+					label="Search categories"
+					placeholder="Search categories…"
+					clearButtonId="category-clear-search"
+				/>
+
+				<div
+					id="category-list"
+					class="relative flex-1 min-h-0 overflow-auto custom-scroll">
+					<div id="category-viewport"></div>
+				</div>
+
+				<div
+					id="category-list-status"
+					class="px-2.5 text-sm text-fg-3 tabular-nums shrink-0">
+					No playlist selected.
+				</div>
+			</div>
+		</dialog>
+
+		<div
+			id="app-version"
+			class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
+			Loading…
+		</div>
+		<div
+			id="account-expiration"
+			class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-[max(0.75rem,env(safe-area-inset-left))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
+			Loading…
+		</div>
+	</main>
+
+	<script>
+		import "../scripts/stream/stream.js";
+		import "../scripts/updater-startup.js";
+		import { injectVersion } from "../scripts/version.js";
+		import { injectExpirationDate } from "../scripts/expiration.js";
+		injectVersion();
+		injectExpirationDate();
+
+		const trigger = document.getElementById("category-picker-trigger");
+		const dlg = /** @type {HTMLDialogElement|null} */ (
+			document.getElementById("category-picker-dialog")
+		);
+		const closeBtn = document.getElementById("category-picker-close");
+		const labelEl = document.getElementById("category-picker-label");
+		const categoryList = document.getElementById("category-list");
+		const categorySearch = /** @type {HTMLInputElement|null} */ (
+			document.getElementById("category-search")
+		);
+
+		const readActive = () => {
+			try {
+				return localStorage.getItem("xt_active_cat") || "";
+			} catch {
+				return "";
+			}
+		};
+
+		const syncLabel = () => {
+			if (!labelEl) return;
+			const cat = readActive();
+			labelEl.textContent = cat || "All categories";
+		};
+
+		trigger?.addEventListener("click", () => {
+			if (!dlg) return;
+			if (typeof dlg.showModal === "function") dlg.showModal();
+			else dlg.setAttribute("open", "");
+			setTimeout(() => {
+				window.SpatialNavigation?.makeFocusable?.();
+				categorySearch?.focus();
+				categorySearch?.select?.();
+			}, 0);
+		});
+
+		closeBtn?.addEventListener("click", () => dlg?.close?.());
+
+		categoryList?.addEventListener("click", (e) => {
+			const t = /** @type {HTMLElement} */ (e.target);
+			if (!t.closest("button[role='option']")) return;
+			queueMicrotask(() => {
+				if (dlg?.open) dlg.close();
+			});
+		});
+
+		dlg?.addEventListener("click", (e) => {
+			if (e.target === dlg) dlg.close();
+		});
+
+		dlg?.addEventListener("close", () => {
+			syncLabel();
+			trigger?.focus();
+		});
+
+		document.addEventListener("xt:cat-changed", syncLabel);
+
+		syncLabel();
+
+		const playerEl = document.getElementById("player");
+		const playerEmpty = document.getElementById("player-empty");
+		if (playerEl && playerEmpty) {
+			const sync = () => {
+				playerEmpty.style.display = playerEl.hasAttribute("hidden") ? "" : "none";
+			};
+			sync();
+			new MutationObserver(sync).observe(playerEl, {
+				attributes: true,
+				attributeFilter: ["hidden"],
+			});
+		}
+	</script>
+</Layout>

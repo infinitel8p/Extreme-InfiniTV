@@ -1,0 +1,343 @@
+---
+import { IconChevronDown, IconPlus, IconRefresh } from "@tabler/icons-svelte";
+---
+
+<div class="[view-transition-name:playlist-switcher]">
+	<button
+		id="ps-trigger"
+		type="button"
+		popovertarget="ps-popover"
+		aria-haspopup="menu"
+		aria-controls="ps-popover"
+		class="flex w-full sm:w-auto items-center justify-between gap-3 px-3.5 py-2.5 min-h-11 rounded-xl border border-line bg-surface text-sm font-medium text-fg transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
+		<span class="flex items-center gap-2.5 min-w-0">
+			<span
+				id="ps-badge"
+				class="hidden h-5 px-1.5 items-center justify-center rounded-md text-label font-semibold uppercase text-fg-2 ring-1 ring-line">
+			</span>
+			<span
+				id="ps-title"
+				class="truncate max-w-56 tracking-tight text-fg-3">
+				No playlist
+			</span>
+		</span>
+		<IconChevronDown
+			aria-hidden="true"
+			class="h-4 w-4 text-fg-3 shrink-0 transition-transform duration-200"
+			id="ps-chevron"
+		/>
+	</button>
+
+	<div
+		id="ps-popover"
+		popover="auto"
+		role="menu"
+		aria-labelledby="ps-trigger"
+		class="ps-popover m-0 p-0 fixed
+			w-[min(22rem,calc(100vw-1rem))]
+			max-h-[min(70dvh,32rem)]
+			rounded-2xl border border-line bg-surface text-fg
+			shadow-xl shadow-black/40
+			overflow-hidden
+			data-[open=true]:flex data-[open=true]:flex-col">
+		<div
+			id="ps-list"
+			class="flex-1 min-h-0 overflow-auto custom-scroll py-2">
+			<div class="px-3.5 py-3 text-fg-3 text-xs">Loading…</div>
+		</div>
+
+		<div class="flex items-stretch border-t border-line shrink-0">
+			<button
+				id="ps-refresh"
+				type="button"
+				class="hidden flex-1 items-center justify-center gap-2 px-3.5 py-3 text-sm font-medium text-fg-2
+					hover:text-fg hover:bg-surface-2
+					focus-visible:text-fg focus-visible:bg-surface-2
+					min-h-11 transition-colors outline-none border-r border-line">
+				<IconRefresh aria-hidden="true" class="h-4 w-4" />
+				Refresh
+			</button>
+			<a
+				href="/login"
+				class="flex flex-1 items-center justify-center gap-2 px-3.5 py-3 text-sm font-medium text-fg
+					hover:bg-surface-2
+					focus-visible:bg-surface-2
+					min-h-11 transition-colors">
+				<IconPlus aria-hidden="true" class="h-4 w-4 text-accent" />
+				Add playlist
+			</a>
+		</div>
+	</div>
+</div>
+
+<style>
+	#ps-popover {
+		display: none;
+	}
+	#ps-popover:popover-open {
+		display: flex;
+		flex-direction: column;
+	}
+	#ps-trigger[aria-expanded="true"] #ps-chevron,
+	#ps-popover:popover-open ~ #ps-trigger #ps-chevron {
+		transform: rotate(180deg);
+	}
+</style>
+
+<script>
+	import {
+		getEntries,
+		getActiveEntry,
+		selectEntry,
+		removeEntry,
+		refreshActive,
+	} from "@/scripts/lib/creds.js";
+	import {
+		ICON_TRASH,
+		ICON_PENCIL,
+		ICON_CHECK,
+	} from "@/scripts/lib/icons.js";
+	import { getNewestCacheTime } from "@/scripts/lib/cache.js";
+
+	function fmtAge(ts) {
+		if (!ts) return "";
+		const ms = Date.now() - ts;
+		if (ms < 60_000) return "just now";
+		const m = Math.floor(ms / 60_000);
+		if (m < 60) return `${m}m ago`;
+		const h = Math.floor(m / 60);
+		if (h < 24) return `${h}h ago`;
+		const d = Math.floor(h / 24);
+		return `${d}d ago`;
+	}
+
+	const trigger = /** @type {HTMLButtonElement|null} */ (
+		document.getElementById("ps-trigger")
+	);
+	const popover = /** @type {HTMLElement|null} */ (
+		document.getElementById("ps-popover")
+	);
+	const chevron = document.getElementById("ps-chevron");
+	const listEl = document.getElementById("ps-list");
+	const titleEl = document.getElementById("ps-title");
+	const badgeEl = document.getElementById("ps-badge");
+	const refreshBtn = document.getElementById("ps-refresh");
+
+	const closePopover = () => popover?.hidePopover?.();
+
+	refreshBtn?.addEventListener("click", async () => {
+		await refreshActive();
+		closePopover();
+	});
+
+	async function renderHeader() {
+		const active = await getActiveEntry();
+		if (!titleEl || !badgeEl) return;
+		if (!active) {
+			titleEl.textContent = "No playlist";
+			titleEl.classList.add("text-fg-3");
+			titleEl.classList.remove("text-fg");
+			badgeEl.classList.add("hidden");
+			badgeEl.classList.remove("inline-flex");
+			refreshBtn?.classList.add("hidden");
+			refreshBtn?.classList.remove("flex");
+			return;
+		}
+		titleEl.textContent = active.title;
+		titleEl.classList.remove("text-fg-3");
+		titleEl.classList.add("text-fg");
+		badgeEl.textContent = active.type === "xtream" ? "XT" : "M3U";
+		badgeEl.classList.remove("hidden");
+		badgeEl.classList.add("inline-flex");
+		refreshBtn?.classList.remove("hidden");
+		refreshBtn?.classList.add("flex");
+	}
+
+	async function renderList() {
+		if (!listEl) return;
+		const entries = await getEntries();
+		if (!entries.length) {
+			listEl.innerHTML =
+				'<div class="px-3.5 py-4 text-fg-3 text-xs">No playlists yet.</div>';
+			return;
+		}
+		const active = await getActiveEntry();
+		const frag = document.createDocumentFragment();
+
+		for (const e of entries) {
+			const isActive = active?._id === e._id;
+			const row = document.createElement("div");
+			row.className =
+				"relative flex items-stretch gap-0.5 pl-3 pr-1 transition-colors hover:bg-surface-2 focus-within:bg-surface-2";
+
+			if (isActive) {
+				const rule = document.createElement("span");
+				rule.className =
+					"absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-accent";
+				rule.setAttribute("aria-hidden", "true");
+				row.appendChild(rule);
+			}
+
+			const cacheTs = getNewestCacheTime(e._id);
+			const ageLabel = fmtAge(cacheTs);
+
+			const pick = document.createElement("button");
+			pick.type = "button";
+			pick.className =
+				"flex flex-1 items-center gap-2.5 py-2.5 text-left min-w-0 min-h-11 outline-none";
+			pick.dataset.id = e._id;
+			pick.innerHTML = `
+				<span class="inline-flex h-5 px-1.5 items-center justify-center rounded-md text-label font-semibold uppercase ring-1 shrink-0 ${
+					e.type === "xtream"
+						? "ring-accent/40 text-accent bg-accent-soft"
+						: "ring-line text-fg-2 bg-surface-2"
+				}">${e.type === "xtream" ? "XT" : "M3U"}</span>
+				<span class="flex flex-col min-w-0 flex-1">
+					<span class="truncate text-sm ${
+						isActive ? "text-fg font-medium" : "text-fg-2"
+					}">${escapeHtml(e.title)}</span>
+					${
+						ageLabel
+							? `<span class="truncate text-2xs text-fg-3 tabular-nums">Updated ${ageLabel}</span>`
+							: `<span class="truncate text-2xs text-fg-3 italic">Not loaded yet</span>`
+					}
+				</span>
+				${
+					isActive
+						? `<span class="check-draw text-accent shrink-0 inline-flex text-sm">${ICON_CHECK}</span>`
+						: ""
+				}
+			`;
+			pick.addEventListener("click", async () => {
+				await selectEntry(e._id);
+				await renderHeader();
+				await renderList();
+				closePopover();
+			});
+
+			const edit = document.createElement("a");
+			edit.href = `/login?edit=${encodeURIComponent(e._id)}`;
+			edit.title = "Edit";
+			edit.setAttribute("aria-label", `Edit ${e.title}`);
+			edit.className =
+				"shrink-0 rounded-md px-1.5 py-2 text-fg-3 hover:text-fg hover:bg-surface focus:text-fg focus:bg-surface min-h-10 inline-flex items-center justify-center transition-colors outline-none";
+			edit.innerHTML = `<span class="inline-flex text-base">${ICON_PENCIL}</span>`;
+
+			const del = document.createElement("button");
+			del.type = "button";
+			del.title = "Remove";
+			del.setAttribute("aria-label", `Remove ${e.title}`);
+			del.className =
+				"shrink-0 rounded-md px-1.5 py-2 text-fg-3 hover:text-bad hover:bg-bad/10 focus:text-bad focus:bg-bad/10 min-h-10 inline-flex items-center justify-center transition-colors outline-none";
+			del.innerHTML = `<span class="inline-flex text-base">${ICON_TRASH}</span>`;
+			del.addEventListener("click", async (ev) => {
+				ev.stopPropagation();
+				if (!confirm(`Remove "${e.title}"?`)) return;
+				await removeEntry(e._id);
+				await renderHeader();
+				await renderList();
+			});
+
+			row.append(pick, edit, del);
+			frag.appendChild(row);
+		}
+
+		listEl.replaceChildren(frag);
+	}
+
+	function escapeHtml(s) {
+		return String(s).replace(
+			/[&<>"']/g,
+			(c) => ({
+				"&": "&amp;",
+				"<": "&lt;",
+				">": "&gt;",
+				'"': "&quot;",
+				"'": "&#39;",
+			})[c]
+		);
+	}
+
+	function positionPopover() {
+		if (!trigger || !popover) return;
+		const rect = trigger.getBoundingClientRect();
+		const gap = 8;
+		const margin = 8;
+		const vw = window.innerWidth;
+		const vh = window.innerHeight;
+		const popW = popover.offsetWidth;
+		const popH = popover.offsetHeight;
+
+		let top = rect.bottom + gap;
+		if (top + popH + margin > vh) {
+			top = Math.max(margin, rect.top - gap - popH);
+		}
+
+		let left = rect.right - popW;
+		if (left < margin) left = margin;
+		if (left + popW > vw - margin) left = vw - margin - popW;
+
+		popover.style.top = `${top}px`;
+		popover.style.left = `${left}px`;
+		popover.style.right = "auto";
+		popover.style.bottom = "auto";
+	}
+
+	const SECTION_ID = "ps-popover-section";
+	let sectionRegistered = false;
+
+	popover?.addEventListener("toggle", (ev) => {
+		const e = /** @type {ToggleEvent} */ (ev);
+		if (e.newState === "open") {
+			renderList();
+			const SN = window.SpatialNavigation;
+			if (SN && !sectionRegistered) {
+				try {
+					SN.add({
+						id: SECTION_ID,
+						selector: "#ps-popover button, #ps-popover a",
+						restrict: "self-only",
+						enterTo: "default-element",
+						defaultElement:
+							"#ps-popover button[data-id], #ps-popover a",
+					});
+					sectionRegistered = true;
+				} catch {}
+			}
+			requestAnimationFrame(() => {
+				positionPopover();
+				SN?.makeFocusable?.();
+				const first = /** @type {HTMLElement|null} */ (
+					popover?.querySelector(
+						"button[data-id], a, button"
+					)
+				);
+				first?.focus?.();
+			});
+			trigger?.setAttribute("aria-expanded", "true");
+		} else {
+			const SN = window.SpatialNavigation;
+			if (SN && sectionRegistered) {
+				try {
+					SN.remove(SECTION_ID);
+				} catch {}
+				sectionRegistered = false;
+			}
+			trigger?.setAttribute("aria-expanded", "false");
+			trigger?.focus?.();
+		}
+	});
+
+	window.addEventListener("resize", () => {
+		if (popover?.matches?.(":popover-open")) positionPopover();
+	});
+
+	document.addEventListener("xt:active-changed", () => {
+		renderHeader();
+		renderList();
+	});
+	document.addEventListener("xt:entries-updated", renderList);
+
+	await renderHeader();
+	await renderList();
+</script>

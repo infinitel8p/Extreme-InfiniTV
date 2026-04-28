@@ -1,24 +1,115 @@
 ---
-import "../styles/global.css";
+import PlaylistSwitcher from "@/components/PlaylistSwitcher.astro"
+import { IconInfinity } from "@tabler/icons-svelte"
+import "../styles/global.css"
+
+interface Props {
+  pageTitle?: string
+}
+const { pageTitle } = Astro.props
+const documentTitle = pageTitle
+  ? `${pageTitle} | Extreme InfiniTV`
+  : "Extreme InfiniTV"
 ---
 
 <!doctype html>
 <html lang="en" class="h-full">
-	<head>
-		<meta charset="utf-8" />
-		<meta
-			name="viewport"
-			content="width=device-width, initial-scale=1,viewport-fit=cover"
-		/>
-		<title>Video Player</title>
-		<meta name="theme-color" content="#4f39f6" />
-		<link
-			href="https://vjs.zencdn.net/8.23.3/video-js.css"
-			rel="stylesheet"
-		/>
-	</head>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1,viewport-fit=cover"
+    />
+    <title>{documentTitle}</title>
+    <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0e1628" media="(prefers-color-scheme: dark)" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap"
+      rel="stylesheet"
+    />
+  </head>
 
-	<body class="h-full antialiased bg-[#0b0820] text-gray-100">
-		<slot />
-	</body>
+  <body
+    class="antialiased bg-bg text-fg selection:bg-accent-soft min-h-screen flex flex-col pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
+  >
+    <header
+      class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-4 md:px-6 lg:px-8 md:landscape:px-8"
+    >
+      <div class="flex items-center gap-3">
+        <a
+          href="/"
+          aria-label="Home"
+          class="[view-transition-name:brand-mark] flex size-10 items-center justify-center rounded-xl bg-accent ring-1 ring-line"
+        >
+          <IconInfinity aria-hidden="true" class="size-6 text-bg" />
+        </a>
+        <div>
+          <h1 class="[view-transition-name:wordmark] text-lg font-semibold tracking-tight">
+            Extreme InfiniTV
+          </h1>
+        </div>
+      </div>
+
+      <PlaylistSwitcher />
+    </header>
+
+    <slot />
+  </body>
 </html>
+
+<style is:global>
+  /* Reduce-motion respect: kill the chevron rotation and other transforms
+     (dropdown opens still work, just instant). */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  :is(a, button, input, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  /* Larger viewports = TVs and large desktops viewed from further away.
+     Bump the focus ring so it reads at 10 ft. */
+  @media (min-width: 64rem) {
+    :is(a, button, input, summary, [tabindex]):focus-visible {
+      outline-width: 3px;
+      outline-offset: 3px;
+    }
+  }
+</style>
+
+<script>
+  import "@/scripts/spatial-navigation"
+  const SpatialNavigation = window.SpatialNavigation
+
+  console.log(
+    "%c∞ Extreme InfiniTV",
+    "color: oklch(0.78 0.15 330); font: italic 1.25rem/1 'Instrument Serif', serif"
+  )
+
+  window.addEventListener("load", function () {
+    // Initialize
+    SpatialNavigation.init()
+
+    // Define navigable elements (anchors and elements with "focusable" class).
+    SpatialNavigation.add({
+      selector:
+        "a, button, summary, input, textarea, [contenteditable='true'], select, [tabindex]:not([tabindex='-1'])",
+    })
+
+    // Make the *currently existing* navigable elements focusable.
+    SpatialNavigation.makeFocusable()
+
+    // Focus the first navigable element.
+    SpatialNavigation.focus()
+  })
+</script>

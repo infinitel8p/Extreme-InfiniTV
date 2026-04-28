@@ -1,12 +1,12 @@
 {
   "productName": "xtream",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "identifier": "com.infinitel8p.xtream",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:4321",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "pnpm run dev",
+    "beforeBuildCommand": "pnpm run build"
   },
   "app": {
     "windows": [

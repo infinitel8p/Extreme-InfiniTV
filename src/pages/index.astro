@@ -1,343 +1,152 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import { IconDeviceTv, IconMovie, IconStack2 } from "@tabler/icons-svelte";
 ---
 
 <Layout>
-	<body
-		class="min-h-screen bg-gradient-to-br from-[#0b0820] via-[#0d0a29] to-[#111139] text-gray-100 antialiased selection:bg-indigo-500/30">
-		<!-- Decorative background accents -->
-		<div aria-hidden="true" class="pointer-events-none fixed inset-0 -z-10">
-			<div
-				class="absolute -top-24 -left-24 h-72 w-72 rounded-full bg-indigo-600/20 blur-3xl">
-			</div>
-			<div
-				class="absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-fuchsia-600/20 blur-3xl">
-			</div>
-			<div
-				class="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(99,102,241,0.08),transparent_60%),radial-gradient(ellipse_at_bottom,rgba(168,85,247,0.06),transparent_60%)]">
-			</div>
-		</div>
-
-		<main
-			class="mx-auto px-4 py-10 lg:pt-6 md:landscape:pt-6 md:px-6 lg:px-8 md:landscape:px-8">
-			<!-- App Header -->
-			<header
-				class="mb-6 flex flex-col gap-4 sm:mb-8 sm:flex-row sm:items-center sm:justify-between">
-				<div class="flex items-center gap-3">
-					<div
-						class="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 shadow-lg shadow-indigo-500/20 ring-1 ring-white/10">
-						<!-- play icon -->
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							width="24"
-							height="24"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							class="size-6 text-white"
-							><path stroke="none" d="M0 0h24v24H0z" fill="none"
-							></path><path
-								d="M9.828 9.172a4 4 0 1 0 0 5.656a10 10 0 0 0 2.172 -2.828a10 10 0 0 1 2.172 -2.828a4 4 0 1 1 0 5.656a10 10 0 0 1 -2.172 -2.828a10 10 0 0 0 -2.172 -2.828"
-							></path></svg
-						>
-					</div>
-					<div>
-						<h1
-							class="text-lg font-semibold tracking-tight md:text-lg">
-							Extreme InfiniTV
-						</h1>
-						<p class="text-xs text-gray-400 text-wrap max-w-xs">
-							Sign in with Xtream Codes credentials <em>or</em> load
-							channels directly from an M3U/M3U8 playlist.
-						</p>
-					</div>
+	<main
+		class="flex-1 w-full mx-auto px-4 py-6 md:px-6 lg:px-8 max-w-7xl flex flex-col">
+		<nav
+			aria-label="Browse"
+			class="grid gap-3 sm:gap-4 flex-1 min-h-0
+				grid-cols-1
+				landscape:grid-cols-[2fr_1fr] landscape:grid-rows-2
+				lg:grid-cols-[2fr_1fr] lg:grid-rows-2">
+			<a
+				href="/livetv"
+				aria-label="Watch Live TV"
+				style="animation-delay: 50ms"
+				class="tile-enter lg:row-span-2 landscape:row-span-2 group relative flex flex-col justify-between
+					rounded-2xl border border-line bg-surface
+					p-6 sm:p-8 lg:p-12
+					min-h-56 landscape:min-h-0 lg:min-h-0 overflow-hidden
+					transition-[transform,border-color,background-color] duration-300 ease-out
+					hover:border-accent hover:bg-surface-2
+					focus-visible:border-accent focus-visible:bg-surface-2
+					hover:transform-[translateY(-2px)]
+					focus-visible:transform-[translateY(-2px)]">
+				<div class="flex items-start justify-between gap-4">
+					<IconDeviceTv
+						aria-hidden="true"
+						stroke={1}
+						class="size-12 sm:size-16 lg:size-24 text-accent shrink-0"
+					/>
+					<p
+						id="hero-eyebrow"
+						class="font-sans text-eyebrow font-medium uppercase text-fg-3 text-right pt-2 tabular-nums"
+						aria-hidden="true">
+					</p>
 				</div>
+				<div class="mt-auto pt-6">
+					<h2
+						class="text-fg leading-[0.95] tracking-tight"
+						style="font-size: clamp(2.25rem, 4vw + 1.5rem, 6rem);">
+						Live TV
+					</h2>
+					<p class="mt-3 text-sm sm:text-base text-fg-2 max-w-md font-sans">
+						Channels and what's on now.
+					</p>
+				</div>
+			</a>
 
-				<!-- Login on top right -->
-				<details id="login-details" class="group relative">
-					<summary
-						class="flex cursor-pointer items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-gray-200 hover:bg-white/5 rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/30 backdrop-blur">
-						<div class="flex items-center gap-2">
-							<span
-								class="inline-flex h-5 w-5 items-center justify-center rounded-md bg-gradient-to-br from-indigo-500 to-fuchsia-600 text-[10px] font-bold text-white shadow ring-1 ring-white/10"
-								>ID</span
-							>
-							<span>Login</span>
-						</div>
-						<svg
-							class="ml-2 h-4 w-4 transition-transform duration-300 group-open:rotate-180"
-							xmlns="http://www.w3.org/2000/svg"
-							fill="none"
-							viewBox="0 0 24 24"
-							stroke="currentColor"
-							><path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M19 9l-7 7-7-7"></path></svg
-						>
-					</summary>
+			<a
+				href="/movies"
+				aria-label="Browse Movies"
+				style="animation-delay: 150ms"
+				class="tile-enter group flex flex-col justify-between
+					rounded-2xl border border-line bg-surface
+					p-5 sm:p-6
+					min-h-28 landscape:min-h-0 lg:min-h-0
+					transition-[transform,border-color,background-color] duration-300 ease-out
+					hover:border-accent hover:bg-surface-2
+					focus-visible:border-accent focus-visible:bg-surface-2
+					hover:transform-[translateY(-2px)]
+					focus-visible:transform-[translateY(-2px)]">
+				<IconMovie
+					aria-hidden="true"
+					stroke={1.25}
+					class="size-9 sm:size-10 lg:size-12 text-fg-3 transition-colors group-hover:text-accent group-focus-visible:text-accent"
+				/>
+				<div class="mt-auto pt-4">
+					<h2 class="text-xl sm:text-2xl font-semibold tracking-tight text-fg">
+						Movies
+					</h2>
+					<p class="mt-1 text-sm text-fg-2">
+						Browse the library.
+					</p>
+				</div>
+			</a>
 
-					<!-- Overlay panel (removed from normal flow) -->
-					<div
-						class="absolute right-0 z-50 mt-2 w-full sm:w-80 hidden group-open:block overflow-hidden rounded-2xl border border-white/10 bg-white/5 shadow-lg shadow-black/30 backdrop-blur">
-						<div class="border-t border-white/10 px-4 py-4">
-							<form
-								id="xtream-login"
-								class="flex flex-col justify-center w-full gap-2">
-								<input
-									id="host"
-									class="h-9 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-gray-400 outline-none focus:border-indigo-400/30 focus:bg-white/10 focus:ring-2 focus:ring-indigo-500/40"
-									placeholder="Xtream host or M3U/M3U8 URL"
-								/>
-								<input
-									id="port"
-									class="h-9 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-gray-400 outline-none focus:border-indigo-400/30 focus:bg-white/10 focus:ring-2 focus:ring-indigo-500/40"
-									placeholder="port (leave empty for M3U)"
-								/>
-								<input
-									id="user"
-									class="h-9 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-gray-400 outline-none focus:border-indigo-400/30 focus:bg-white/10 focus:ring-2 focus:ring-indigo-500/40"
-									placeholder="username (leave empty for M3U)"
-								/>
-								<input
-									id="pass"
-									type="password"
-									class="h-9 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-gray-400 outline-none focus:border-indigo-400/30 focus:bg-white/10 focus:ring-2 focus:ring-indigo-500/40"
-									placeholder="password (leave empty for M3U)"
-								/>
-								<button
-									id="saveBtn"
-									type="button"
-									class="h-9 px-3 inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 text-sm font-semibold text-white shadow-lg shadow-indigo-500/20 transition hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
-									>Save</button
-								>
-								<button
-									id="fetchBtn"
-									type="button"
-									class="h-9 px-3 inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 text-sm font-medium text-white/90 shadow-sm backdrop-blur transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-									>Load Channels</button
-								>
-							</form>
-							<div
-								class="mt-8 text-xs text-gray-400 leading-relaxed max-w-3xl">
-								<p>
-									<strong>Disclaimer:</strong> This app does <em
-										>not</em
-									> provide any content. You can either:
-								</p>
-								<ul
-									class="list-disc list-inside mt-1 space-y-1">
-									<li>
-										Log in with any Xtream Codes–compatible
-										IPTV subscription (not included), or
-									</li>
-									<li>
-										Paste a valid <code>.m3u</code>/<code
-											>.m3u8</code
-										> playlist URL into the <em>Host</em> field
-										(leave username/password empty).
-									</li>
-								</ul>
-								<p class="mt-3">
-									We are <em>not responsible</em> for the accuracy
-									of login credentials, the uptime of IPTV providers,
-									or whether individual streams work. Free, publicly
-									available test playlists can be found at
-									<span class="text-indigo-400"
-										>iptv-org.github.io/iptv</span
-									>. Please note: not every stream may work,
-									and availability can change at any time.
-								</p>
-							</div>
-						</div>
-					</div>
-				</details>
-				<script>
-					const details = document.getElementById("login-details");
-
-					// Optional: default state on wide screens
-					if (window.innerWidth >= 640) {
-						// details?.setAttribute("open", "true");
-					} else {
-						details?.removeAttribute("open");
-					}
-
-					// Close when clicking outside
-					document.addEventListener("click", (e) => {
-						if (
-							details?.hasAttribute("open") &&
-							!details.contains(e.target)
-						) {
-							details.removeAttribute("open");
-						}
-					});
-
-					// Prevent summary click from bubbling to document
-					details
-						?.querySelector("summary")
-						?.addEventListener("click", (e) => {
-							e.stopPropagation();
-						});
-				</script>
-			</header>
-
-			<section
-				class="lg:grid md:landscape:grid grid-cols-1 gap-5 lg:grid-cols-3 md:landscape:grid-cols-3 h-full flex flex-col-reverse lg:flex-row md:landscape:flex-row">
-				<!-- Sidebar -->
-				<aside class="lg:col-span-1 md:landscape:col-span-1">
-					<div
-						class="rounded-2xl border border-white/10 bg-white/1 p-3 shadow-lg shadow-black/30 backdrop-blur lg:h-full md:landscape:h-full">
-						<div class="mb-3 flex items-center gap-2 flex-wrap">
-							<label class="sr-only" for="search"
-								>Search channels</label
-							>
-							<div class="relative w-full">
-								<svg
-									class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400"
-									xmlns="http://www.w3.org/2000/svg"
-									fill="none"
-									viewBox="0 0 24 24"
-									stroke="currentColor"
-									><path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="1.5"
-										d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"
-									></path></svg
-								>
-								<input
-									id="search"
-									type="search"
-									placeholder="Search channels…"
-									class="w-full rounded-xl border border-white/10 bg-white/5 pl-9 pr-3 py-2 text-sm text-white placeholder:text-gray-400 outline-none ring-0 transition focus:border-indigo-400/30 focus:bg-white/10 focus:ring-2 focus:ring-indigo-500/40"
-								/>
-							</div>
-							<button
-								id="clear-search"
-								title="Clear"
-								class="hidden shrink-0 rounded-lg border border-white/10 px-2 py-2 text-xs text-gray-300 hover:bg-white/10"
-								>Clear</button
-							>
-						</div>
-
-						<div class="mb-3 relative">
-							<div class="flex items-center gap-2 flex-wrap">
-								<button
-									id="cat-trigger"
-									type="button"
-									class="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none transition hover:bg-white/10 focus:border-indigo-400/30 focus:bg-white/10 focus:ring-2 focus:ring-indigo-500/40 flex items-center justify-between">
-									<span
-										id="cat-trigger-label"
-										class="truncate">All categories</span
-									>
-									<svg
-										id="cat-trigger-icon"
-										class="ml-2 h-4 w-4 text-gray-400 transition-transform"
-										xmlns="http://www.w3.org/2000/svg"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-										><path
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											stroke-width="2"
-											d="M19 9l-7 7-7-7"></path></svg
-									>
-								</button>
-								<button
-									id="clear-cat"
-									title="Clear category"
-									class="shrink-0 rounded-lg border border-white/10 px-2 py-2 text-xs text-gray-300 hover:bg-white/10">
-									Clear
-								</button>
-							</div>
-							<!-- Popover panel -->
-							<div
-								id="cat-popover"
-								class="hidden absolute z-50 mt-2 w-full rounded-2xl border border-white/10 bg-black/85 shadow-lg shadow-black/30 backdrop-blur">
-								<div
-									id="cat-list"
-									role="listbox"
-									class="max-h-[calc(100vh-20rem)] overflow-auto py-2 custom-scroll">
-								</div>
-							</div>
-						</div>
-
-						<div
-							id="list"
-							class="relative max-h-[calc(100vh-20rem)] overflow-auto pr-1 custom-scroll">
-							<div id="spacer"></div>
-							<div id="viewport" class="absolute inset-0"></div>
-						</div>
-
-						<div
-							id="list-status"
-							class="mt-2 px-2.5 text-sm text-gray-400">
-							Enter Xtream Codes credentials and click “Load
-							Channels”, <br />
-							or paste an M3U/M3U8 playlist URL in the Host field (leave
-							user/pass empty).
-						</div>
-					</div>
-				</aside>
-
-				<!-- Player -->
-				<section class="lg:col-span-2 md:landscape:col-span-2">
-					<div
-						class="rounded-2xl border border-white/10 bg-white/1 p-3 shadow-xl shadow-black/30 backdrop-blur">
-						<div
-							class="aspect-video w-full overflow-hidden rounded-xl bg-black ring-1 ring-white/10 flex items-center justify-center">
-							<video
-								id="player"
-								class="video-js vjs-default-skin vjs-big-play-centered h-full w-full"
-								controls
-								hidden
-								playsinline></video>
-						</div>
-
-						<div
-							id="current"
-							class="mt-3 flex items-center justify-between gap-2 text-sm text-gray-300">
-							<div class="flex items-center gap-2">
-								<span
-									class="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-fuchsia-600 text-[10px] font-bold text-white ring-1 ring-white/10"
-									>OFF</span
-								>
-								<span class="truncate">—</span>
-							</div>
-						</div>
-
-						<div
-							id="epg"
-							class="mt-4 rounded-xl border border-white/10 p-3">
-							<div class="mb-2 flex items-center justify-between">
-								<div class="text-sm font-medium">EPG</div>
-								<div class="text-xs text-gray-400">
-									All times local
-								</div>
-							</div>
-							<div id="epg-list" class="space-y-2 text-sm"></div>
-						</div>
-					</div>
-				</section>
-			</section>
-			<div
-				id="app-version"
-				class="fixed bottom-2 right-3 text-[11px] text-gray-500 dark:text-gray-400 opacity-70">
-				loading…
-			</div>
-		</main>
-
-		<script src="https://vjs.zencdn.net/8.23.3/video.min.js"></script>
-		<script>
-			import "../scripts/stream.js";
-			import "../scripts/updater-startup.js";
-			import { injectVersion } from "../scripts/version.js";
-			injectVersion();
-		</script>
-	</body>
+			<a
+				href="/series"
+				aria-label="Browse Series"
+				style="animation-delay: 250ms"
+				class="tile-enter group flex flex-col justify-between
+					rounded-2xl border border-line bg-surface
+					p-5 sm:p-6
+					min-h-28 landscape:min-h-0 lg:min-h-0
+					transition-[transform,border-color,background-color] duration-300 ease-out
+					hover:border-accent hover:bg-surface-2
+					focus-visible:border-accent focus-visible:bg-surface-2
+					hover:transform-[translateY(-2px)]
+					focus-visible:transform-[translateY(-2px)]">
+				<IconStack2
+					aria-hidden="true"
+					stroke={1.25}
+					class="size-9 sm:size-10 lg:size-12 text-fg-3 transition-colors group-hover:text-accent group-focus-visible:text-accent"
+				/>
+				<div class="mt-auto pt-4">
+					<h2 class="text-xl sm:text-2xl font-semibold tracking-tight text-fg">
+						Series
+					</h2>
+					<p class="mt-1 text-sm text-fg-2">
+						Shows and full seasons.
+					</p>
+				</div>
+			</a>
+		</nav>
+	</main>
 </Layout>
+
+<style>
+	@keyframes tile-enter {
+		from {
+			opacity: 0;
+			transform: translateY(12px);
+		}
+	}
+	.tile-enter {
+		animation: tile-enter 500ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+	}
+</style>
+
+<script>
+	import "../scripts/updater-startup.js";
+
+	const eyebrow = document.getElementById("hero-eyebrow");
+	if (eyebrow) {
+		const update = () => {
+			const now = new Date();
+			const date = new Intl.DateTimeFormat(undefined, {
+				weekday: "short",
+				day: "2-digit",
+				month: "short",
+			}).format(now);
+			const time = new Intl.DateTimeFormat(undefined, {
+				hour: "numeric",
+				minute: "2-digit",
+			}).format(now);
+			eyebrow.textContent = `${date} · ${time}`;
+		};
+		update();
+		setInterval(update, 30_000);
+	}
+	
+	window.addEventListener("load", () => {
+		setTimeout(() => {
+			/** @type {HTMLAnchorElement | null} */
+			const heroTile = document.querySelector('a[href="/livetv"]');
+			heroTile?.focus({ preventScroll: true });
+		}, 0);
+	});
+</script>

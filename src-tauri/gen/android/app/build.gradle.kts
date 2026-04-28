@@ -31,24 +31,25 @@ android {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
     }
 
-    /** Java/Kotlin 17 toolchains */
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlin {
-        jvmToolchain(17)
     }
     kotlinOptions {
         jvmTarget = "17"
     }
 
-    signingConfigs {
-        create("release") {
-            storeFile = file(required("XTREAM_KEYSTORE_FILE"))
-            storePassword = required("XTREAM_KEYSTORE_PASSWORD")
-            keyAlias = required("XTREAM_KEY_ALIAS")
-            keyPassword = required("XTREAM_KEY_PASSWORD")
+    val keystoreFile = providers.gradleProperty("XTREAM_KEYSTORE_FILE")
+        .orElse(providers.environmentVariable("XTREAM_KEYSTORE_FILE"))
+        .orNull
+    if (keystoreFile != null) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(keystoreFile)
+                storePassword = required("XTREAM_KEYSTORE_PASSWORD")
+                keyAlias = required("XTREAM_KEY_ALIAS")
+                keyPassword = required("XTREAM_KEY_PASSWORD")
+            }
         }
     }
 
@@ -67,7 +68,7 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
-            signingConfig = signingConfigs.getByName("release")
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))

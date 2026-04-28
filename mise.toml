@@ -1,0 +1,4 @@
+[tools]
+java = "21"
+pnpm = "latest"
+rust = "latest"
