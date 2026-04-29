@@ -43,6 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      models: read
     outputs:
       release_id: ${{ steps.create.outputs.result }}
     steps:
@@ -63,28 +64,101 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+          # Find the most recent tag that isn't the one we're creating, so we
+          # can summarise commits since then. Empty if this is the first tag.
+          PREV=$(git tag --sort=-creatordate \
+            | grep -v "^${TAG}$" \
+            | head -n1 || true)
+          echo "prev_tag=$PREV" >> "$GITHUB_OUTPUT"
+
+      - id: gather
+        shell: bash
+        env:
+          PREV_TAG: ${{ steps.meta.outputs.prev_tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..HEAD"
+            HEADER="Commits since ${PREV_TAG}"
+          else
+            RANGE=""
+            HEADER="All commits (no previous tag)"
+          fi
+          {
+            echo "## $HEADER"
+            echo
+            git log --no-merges --pretty=format:'- %s (%h) by %an' $RANGE
+            echo
+            echo
+            echo "## File change summary"
+            echo
+            git diff --stat $RANGE | tail -n 200
+          } > "$RUNNER_TEMP/changes.md"
+          # Cap the payload so we never blow past the model's context window.
+          head -c 16000 "$RUNNER_TEMP/changes.md" > "$RUNNER_TEMP/changes.trimmed.md"
+          {
+            echo 'log<<CHANGES_EOF'
+            cat "$RUNNER_TEMP/changes.trimmed.md"
+            echo 'CHANGES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - id: ai
+        continue-on-error: true
+        uses: actions/ai-inference@v1
+        with:
+          model: openai/gpt-4o-mini
+          max-tokens: 1200
+          system-prompt: |
+            You write user-facing release notes for "Extreme InfiniTV", an IPTV
+            player built with Astro + Svelte 5 and Tauri 2 (Windows desktop,
+            Microsoft Store, Android). Audience: end users, not contributors.
+
+            Rules:
+            - Output GitHub-flavoured markdown only. No preamble, no closing remarks.
+            - Group entries under these headings, in this order, omitting any that are empty:
+              ### New
+              ### Improved
+              ### Fixed
+              ### Under the hood
+            - One bullet per change. Rewrite each commit subject as a short
+              user-facing sentence. Drop conventional-commit prefixes
+              (feat:, fix:, chore:, refactor:, etc.).
+            - Merge duplicates. Collapse multiple dependency bumps into a single
+              "Updated dependencies" bullet under "Under the hood".
+            - Skip purely internal noise (lockfile-only changes, CI tweaks,
+              comment edits) unless they affect users.
+            - Do not invent features. If the commits don't justify a heading, omit it.
+            - Never use em dashes. Use a regular hyphen, a colon, parentheses,
+              or rewrite the sentence.
+          prompt: |
+            Write release notes for tag ${{ steps.meta.outputs.tag }}.
+
+            ${{ steps.gather.outputs.log }}
+
       - id: create
         uses: actions/github-script@v7
         env:
           TAG: ${{ steps.meta.outputs.tag }}
+          AI_NOTES: ${{ steps.ai.outputs.response }}
         with:
           script: |
             const tag = process.env.TAG
+            let changelog = (process.env.AI_NOTES || '').trim()
 
-            // Auto-generate bullet diffs from commits + merged PRs since the
-            // previous tag. Falls back gracefully if the API can't compute it
-            // (e.g. very first release, no prior tag).
-            let changelog = ''
-            try {
-              const notes = await github.rest.repos.generateReleaseNotes({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag_name: tag,
-                target_commitish: context.sha,
-              })
-              changelog = (notes.data.body || '').trim()
-            } catch (e) {
-              core.warning(`generateReleaseNotes failed: ${e.message}`)
+            // Fallback to GitHub's PR-based generator if the model step
+            // failed or returned nothing.
+            if (!changelog) {
+              try {
+                const notes = await github.rest.repos.generateReleaseNotes({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag_name: tag,
+                  target_commitish: context.sha,
+                })
+                changelog = (notes.data.body || '').trim()
+              } catch (e) {
+                core.warning(`generateReleaseNotes failed: ${e.message}`)
+              }
             }
             if (!changelog) {
               changelog = '_No changes detected. Edit this draft before publishing._'
