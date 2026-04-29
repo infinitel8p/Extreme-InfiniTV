@@ -93,20 +93,20 @@ import {
           <div class="flex flex-col gap-1">
             <h3 class="text-base font-semibold">Live TV layout</h3>
             <p class="text-xs text-fg-3 max-w-prose">
-              Affects the channel sidebar width and whether the EPG panel is open when you first open Live TV. The toggle on the page itself still works on a per-session basis.
+              Defaults for the channel sidebar and the EPG panel on Live TV. The EPG button on the page itself still toggles per session.
             </p>
           </div>
 
           <div class="flex flex-col gap-2">
             <span class="text-eyebrow font-medium uppercase text-fg-3">Show EPG by default</span>
-            <button
-              id="epg-default-toggle"
-              type="button"
-              role="switch"
-              aria-checked="true"
-              class="self-start btn aria-checked:border-accent aria-checked:bg-accent-soft aria-checked:text-fg">
-              <span id="epg-default-label">On</span>
-            </button>
+            <div
+              id="settings-epg-default"
+              class="flex flex-wrap gap-2"
+              role="radiogroup"
+              aria-label="Show EPG by default">
+              <button type="button" data-epg="on"  aria-pressed="false" class="epg-default-btn btn">On</button>
+              <button type="button" data-epg="off" aria-pressed="false" class="epg-default-btn btn">Off</button>
+            </div>
           </div>
 
           <div class="flex flex-col gap-2">
@@ -116,10 +116,10 @@ import {
               class="flex flex-wrap gap-2"
               role="radiogroup"
               aria-label="Channel column width">
-              <button type="button" data-width="22"  aria-pressed="false" class="channel-width-btn btn">Compact</button>
-              <button type="button" data-width="28"  aria-pressed="false" class="channel-width-btn btn">Default</button>
-              <button type="button" data-width="34"  aria-pressed="false" class="channel-width-btn btn">Wide</button>
-              <button type="button" data-width="42"  aria-pressed="false" class="channel-width-btn btn">Extra wide</button>
+              <button type="button" data-width="22" aria-pressed="false" class="channel-width-btn btn">Compact</button>
+              <button type="button" data-width="28" aria-pressed="false" class="channel-width-btn btn">Default</button>
+              <button type="button" data-width="34" aria-pressed="false" class="channel-width-btn btn">Wide</button>
+              <button type="button" data-width="42" aria-pressed="false" class="channel-width-btn btn">X-Wide</button>
             </div>
           </div>
         </article>
@@ -775,10 +775,7 @@ import {
     // ---------------------------------------------------------------------
     // Live TV layout: default EPG visibility + channel column width.
     // ---------------------------------------------------------------------
-    const epgDefaultBtn = /** @type {HTMLButtonElement|null} */ (
-      document.getElementById("epg-default-toggle")
-    )
-    const epgDefaultLabel = document.getElementById("epg-default-label")
+    const epgDefaultGroup = document.getElementById("settings-epg-default")
     function readEpgDefault() {
       try {
         const v = localStorage.getItem("xt_epg_open_default")
@@ -788,19 +785,29 @@ import {
       }
     }
     function applyEpgDefault(on) {
-      epgDefaultBtn?.setAttribute("aria-checked", String(on))
-      if (epgDefaultLabel) epgDefaultLabel.textContent = on ? "On" : "Off"
       try {
         localStorage.setItem("xt_epg_open_default", String(on))
         // Reset the per-session override so the new default applies on the
         // next visit to /livetv.
         localStorage.removeItem("xt_epg_visible")
       } catch {}
+      syncEpgDefaultButtons()
     }
-    applyEpgDefault(readEpgDefault())
-    epgDefaultBtn?.addEventListener("click", () => {
-      applyEpgDefault(epgDefaultBtn.getAttribute("aria-checked") !== "true")
+    function syncEpgDefaultButtons() {
+      const on = readEpgDefault()
+      for (const btn of epgDefaultGroup?.querySelectorAll(".epg-default-btn") ||
+        []) {
+        const isOn = btn.dataset.epg === "on"
+        btn.setAttribute("aria-pressed", String(isOn === on))
+      }
+    }
+    epgDefaultGroup?.addEventListener("click", (e) => {
+      const t = /** @type {HTMLElement} */ (e.target)
+      const btn = t.closest(".epg-default-btn")
+      if (!btn) return
+      applyEpgDefault(btn.dataset.epg === "on")
     })
+    syncEpgDefaultButtons()
 
     const channelWidthGroup = document.getElementById("settings-channel-width")
     const CHANNEL_WIDTH_DEFAULT = 28

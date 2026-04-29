@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import SearchInput from "@/components/SearchInput.astro";
-import { IconDeviceTv, IconChevronDown, IconCalendarTime } from "@tabler/icons-svelte";
+import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from "@tabler/icons-svelte";
 ---
 
 <Layout pageTitle="Live TV">
@@ -43,9 +43,9 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime } from "@tabler/icons-s
 							id="epg-toggle"
 							type="button"
 							aria-pressed="true"
-							aria-label="Toggle EPG panel"
-							title="Toggle EPG panel"
-							class="rounded-xl border border-line bg-bg px-3 py-2 min-h-11 min-w-11 text-sm text-fg-2 inline-flex items-center justify-center gap-2 shrink-0
+							aria-label="Show EPG for the current channel"
+							title="Show EPG"
+							class="rounded-xl border border-line bg-bg px-3.5 py-2 min-h-11 min-w-11 text-sm text-fg-2 inline-flex items-center justify-center gap-2 shrink-0
 								hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
 								aria-pressed:border-accent aria-pressed:bg-surface-2 aria-pressed:text-fg
 								transition-colors">
@@ -58,17 +58,17 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime } from "@tabler/icons-s
 						</button>
 						<a
 							href="/epg"
-							aria-label="Open EPG schedule grid"
-							title="Open full EPG"
-							class="rounded-xl border border-line bg-bg px-3 py-2 min-h-11 min-w-11 text-sm text-fg-2 inline-flex items-center justify-center shrink-0
+							aria-label="Open the full EPG schedule grid"
+							title="Open schedule grid"
+							class="rounded-xl border border-line bg-bg px-3.5 py-2 min-h-11 min-w-11 text-sm text-fg-2 inline-flex items-center justify-center shrink-0
 								hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
 								transition-colors">
-							<IconCalendarTime
+							<IconLayoutGrid
 								aria-hidden="true"
 								stroke={2}
 								class="size-4"
 							/>
-							<span class="sr-only">Full EPG</span>
+							<span class="sr-only">Schedule grid</span>
 						</a>
 					</div>
 

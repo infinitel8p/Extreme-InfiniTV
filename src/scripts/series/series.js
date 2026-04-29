@@ -18,6 +18,7 @@ import {
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
   startDownload,
+  resumeDownload,
   isDownloadable,
   inferExt,
   listDownloads,
@@ -872,7 +873,20 @@ function renderEpisodes() {
       dlBtn.addEventListener("click", async (e) => {
         e.stopPropagation()
         const existing = findDownloadByUrl(epUrl)
-        if (existing && existing.status === "downloading") return
+        if (existing?.status === "downloading") return
+        // Resume the existing entry if it's just paused / stalled / errored
+        // - starting a fresh download would orphan the partial file.
+        if (
+          existing &&
+          (existing.status === "paused" ||
+            existing.status === "stalled" ||
+            existing.status === "error")
+        ) {
+          dlBtn.setAttribute("disabled", "")
+          if (dlLabel) dlLabel.textContent = "Resuming…"
+          resumeDownload(existing.id)
+          return
+        }
         try {
           dlBtn.setAttribute("disabled", "")
           if (dlLabel) dlLabel.textContent = "Starting…"
