@@ -44,6 +44,16 @@
 
 macOS, Linux, and iOS aren't currently distributed.
 
+### macOS: "xtream.app" cannot be opened
+
+The macOS build is not yet notarized by Apple, so Gatekeeper blocks it on first launch with a message like _"Apple could not verify xtream.app is free of malware"_. After dragging the app from the `.dmg` into `/Applications`, remove the quarantine flag from a Terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/xtream.app
+```
+
+Then open the app normally. You only need to do this once per install.
+
 ## Develop
 
 Requirements: [pnpm](https://pnpm.io) (the package manager is pinned in `package.json`), Node 20+, the Rust toolchain (only for `tauri` commands), and Android Studio for `tauri:android`.

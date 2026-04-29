@@ -213,6 +213,18 @@ jobs:
               '- The `.aab` file is uploaded to Google Play and is not meant for sideloading. Use the `.apk` to install manually.',
               '',
               '</details>',
+              '',
+              '<details><summary>macOS: "xtream.app" cannot be opened / "Apple could not verify..."</summary>',
+              '',
+              'The macOS build is not yet notarized by Apple, so Gatekeeper blocks it on first launch. After dragging the app from the `.dmg` into `/Applications`, remove the quarantine flag from a Terminal:',
+              '',
+              '```bash',
+              'xattr -dr com.apple.quarantine /Applications/xtream.app',
+              '```',
+              '',
+              'Then open the app normally. You only need to do this once per install.',
+              '',
+              '</details>',
             ].join('\n')
 
             const body = [
