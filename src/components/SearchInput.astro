@@ -1,4 +1,6 @@
 ---
+import { IconSearch } from "@tabler/icons-svelte"
+
 interface Props {
 	id: string
 	label: string
@@ -12,25 +14,16 @@ const { id, label, placeholder, clearButtonId } = Astro.props
 <div class="flex items-center gap-2 flex-wrap">
 	<label class="sr-only" for={id}>{label}</label>
 	<div class="relative w-full">
-		<svg
-			class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-fg-3"
-			xmlns="http://www.w3.org/2000/svg"
-			fill="none"
-			viewBox="0 0 24 24"
-			stroke="currentColor"
-			aria-hidden="true">
-			<path
-				stroke-linecap="round"
-				stroke-linejoin="round"
-				stroke-width="1.5"
-				d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"
-			></path>
-		</svg>
+		<IconSearch
+			aria-hidden="true"
+			stroke={1.75}
+			class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 size-4 text-fg-3"
+		/>
 		<input
 			id={id}
 			type="search"
 			placeholder={placeholder}
-			class="w-full rounded-xl border border-line bg-bg pl-9 pr-3 py-2 text-base sm:text-sm text-fg placeholder:text-fg-3 outline-none ring-0 transition focus:border-accent focus:bg-surface-2 focus:ring-2 focus:ring-accent"
+			class="w-full rounded-xl border border-line bg-bg pl-9 pr-3 py-2 min-h-11 text-base sm:text-sm text-fg placeholder:text-fg-3 outline-none ring-0 transition focus:border-accent focus:bg-surface-2 focus:ring-2 focus:ring-accent"
 		/>
 	</div>
 	{
@@ -38,7 +31,7 @@ const { id, label, placeholder, clearButtonId } = Astro.props
 			<button
 				id={clearButtonId}
 				title="Clear"
-				class="hidden shrink-0 rounded-lg border border-line px-2 py-2 text-xs text-fg-2 hover:bg-surface-2">
+				class="hidden shrink-0 rounded-lg border border-line px-2 py-2 min-h-11 text-xs text-fg-2 hover:bg-surface-2">
 				Clear
 			</button>
 		)

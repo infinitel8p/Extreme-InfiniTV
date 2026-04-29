@@ -16,6 +16,14 @@ import {
   getRecents,
 } from "@/scripts/lib/preferences.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
+import {
+  startDownload,
+  isDownloadable,
+  inferExt,
+  listDownloads,
+  DOWNLOADS_LIST_EVENT,
+  DOWNLOAD_PROGRESS_EVENT,
+} from "@/scripts/lib/downloads.js"
 
 const SERIES_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -761,6 +769,37 @@ function renderSeasonTabs(seasonKeys) {
   }
 }
 
+function findDownloadByUrl(url) {
+  return listDownloads().find((d) => d.url === url) || null
+}
+
+function downloadButtonState(d) {
+  if (!d) return { label: "Download", disabled: false, title: "Save this episode to your downloads folder" }
+  switch (d.status) {
+    case "downloading": {
+      const pct = d.bytesTotal > 0 ? Math.floor((d.bytesDone / d.bytesTotal) * 100) : null
+      return { label: pct !== null ? `${pct}%` : "…", disabled: true, title: "Downloading" }
+    }
+    case "done":      return { label: "Saved", disabled: true, title: d.path ? `Saved to ${d.path}` : "Saved" }
+    case "paused":    return { label: "Resume", disabled: false, title: "Paused - tap to resume" }
+    case "stalled":   return { label: "Retry", disabled: false, title: "Stalled - tap to retry" }
+    case "error":     return { label: "Retry", disabled: false, title: d.error || "Failed - tap to retry" }
+    case "cancelled": return { label: "Download", disabled: false, title: "Re-download" }
+    default:          return { label: "Download", disabled: false }
+  }
+}
+
+function applyDownloadButtonState(btn, d) {
+  const labelEl = btn.querySelector("[data-dl-label]")
+  const s = downloadButtonState(d)
+  if (labelEl) labelEl.textContent = s.label
+  if (s.disabled) btn.setAttribute("disabled", "")
+  else btn.removeAttribute("disabled")
+  if (s.title) btn.title = s.title
+  else btn.removeAttribute("title")
+  btn.dataset.dlStatus = d?.status || "idle"
+}
+
 function renderEpisodes() {
   if (!episodeList) return
   episodeList.replaceChildren()
@@ -773,19 +812,23 @@ function renderEpisodes() {
     return
   }
   for (const ep of eps) {
-    const row = document.createElement("button")
-    row.type = "button"
+    const row = document.createElement("div")
     row.className =
       "episode-row flex items-center gap-3 p-3 rounded-xl bg-surface-2/40 " +
-      "text-left outline-none transition-colors " +
-      "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent"
-    row.addEventListener("click", () => playEpisode(ep))
+      "transition-colors hover:bg-surface-2 focus-within:bg-surface-2"
+
+    const playBtn = document.createElement("button")
+    playBtn.type = "button"
+    playBtn.className =
+      "flex flex-1 min-w-0 items-center gap-3 text-left outline-none rounded-lg " +
+      "focus-visible:ring-2 focus-visible:ring-accent"
+    playBtn.addEventListener("click", () => playEpisode(ep))
 
     const num = document.createElement("div")
     num.className =
       "shrink-0 size-10 rounded-md bg-surface-3 flex items-center justify-center text-sm font-semibold tabular-nums text-fg-2"
     num.textContent = `E${ep.episode_num || "?"}`
-    row.appendChild(num)
+    playBtn.appendChild(num)
 
     const wrap = document.createElement("div")
     wrap.className = "min-w-0 flex-1"
@@ -804,17 +847,71 @@ function renderEpisodes() {
     meta.textContent = bits.join(" • ")
     wrap.appendChild(meta)
 
-    row.appendChild(wrap)
+    playBtn.appendChild(wrap)
 
     const arrow = document.createElement("span")
     arrow.className = "shrink-0 text-fg-3 text-base"
     arrow.textContent = "▶"
-    row.appendChild(arrow)
+    playBtn.appendChild(arrow)
+
+    row.appendChild(playBtn)
+
+    if (isDownloadable()) {
+      const epUrl = buildEpisodeStreamUrl(ep)
+      const dlBtn = document.createElement("button")
+      dlBtn.type = "button"
+      dlBtn.className =
+        "shrink-0 rounded-lg border border-line min-h-11 px-3 text-xs text-fg-2 tabular-nums " +
+        "hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:border-accent " +
+        "outline-none transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+      dlBtn.dataset.dlUrl = epUrl
+      const dlLabel = document.createElement("span")
+      dlLabel.dataset.dlLabel = "1"
+      dlBtn.appendChild(dlLabel)
+      applyDownloadButtonState(dlBtn, findDownloadByUrl(epUrl))
+      dlBtn.addEventListener("click", async (e) => {
+        e.stopPropagation()
+        const existing = findDownloadByUrl(epUrl)
+        if (existing && existing.status === "downloading") return
+        try {
+          dlBtn.setAttribute("disabled", "")
+          if (dlLabel) dlLabel.textContent = "Starting…"
+          const epTitle =
+            (currentDetailSeries?.name ? `${currentDetailSeries.name} - ` : "") +
+            `S${currentSeason || "?"}E${ep.episode_num || "?"}` +
+            (ep.title ? ` - ${ep.title}` : "")
+          await startDownload({
+            url: epUrl,
+            title: epTitle,
+            ext: ep.container_extension || inferExt(epUrl, "mp4"),
+          })
+        } catch (err) {
+          console.error("Episode download failed:", err)
+          dlBtn.removeAttribute("disabled")
+          if (dlLabel) dlLabel.textContent = "Failed"
+          dlBtn.title = String(err?.message || err)
+        }
+      })
+      row.appendChild(dlBtn)
+    }
 
     episodeList.appendChild(row)
   }
   try { window.SpatialNavigation?.makeFocusable?.() } catch {}
 }
+
+function syncEpisodeDownloadButtons() {
+  if (!episodeList) return
+  const buttons = episodeList.querySelectorAll("button[data-dl-url]")
+  for (const btn of buttons) {
+    const url = btn.dataset.dlUrl
+    if (!url) continue
+    applyDownloadButtonState(btn, findDownloadByUrl(url))
+  }
+}
+
+document.addEventListener(DOWNLOAD_PROGRESS_EVENT, syncEpisodeDownloadButtons)
+document.addEventListener(DOWNLOADS_LIST_EVENT, syncEpisodeDownloadButtons)
 
 async function openDetail(series) {
   if (!detailDlg || !series) return

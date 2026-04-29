@@ -88,6 +88,42 @@ import {
           </script>
         </article>
 
+        <!-- Live TV layout: EPG default + channel column width -->
+        <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
+          <div class="flex flex-col gap-1">
+            <h3 class="text-base font-semibold">Live TV layout</h3>
+            <p class="text-xs text-fg-3 max-w-prose">
+              Affects the channel sidebar width and whether the EPG panel is open when you first open Live TV. The toggle on the page itself still works on a per-session basis.
+            </p>
+          </div>
+
+          <div class="flex flex-col gap-2">
+            <span class="text-eyebrow font-medium uppercase text-fg-3">Show EPG by default</span>
+            <button
+              id="epg-default-toggle"
+              type="button"
+              role="switch"
+              aria-checked="true"
+              class="self-start btn aria-checked:border-accent aria-checked:bg-accent-soft aria-checked:text-fg">
+              <span id="epg-default-label">On</span>
+            </button>
+          </div>
+
+          <div class="flex flex-col gap-2">
+            <span class="text-eyebrow font-medium uppercase text-fg-3">Channel column width</span>
+            <div
+              id="settings-channel-width"
+              class="flex flex-wrap gap-2"
+              role="radiogroup"
+              aria-label="Channel column width">
+              <button type="button" data-width="22"  aria-pressed="false" class="channel-width-btn btn">Compact</button>
+              <button type="button" data-width="28"  aria-pressed="false" class="channel-width-btn btn">Default</button>
+              <button type="button" data-width="34"  aria-pressed="false" class="channel-width-btn btn">Wide</button>
+              <button type="button" data-width="42"  aria-pressed="false" class="channel-width-btn btn">Extra wide</button>
+            </div>
+          </div>
+        </article>
+
         <!-- Network: User-Agent spoofing -->
         <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
           <div class="flex flex-col gap-1">
@@ -735,6 +771,70 @@ import {
       applyFontScale(v)
     })
     syncFontScaleButtons()
+
+    // ---------------------------------------------------------------------
+    // Live TV layout: default EPG visibility + channel column width.
+    // ---------------------------------------------------------------------
+    const epgDefaultBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("epg-default-toggle")
+    )
+    const epgDefaultLabel = document.getElementById("epg-default-label")
+    function readEpgDefault() {
+      try {
+        const v = localStorage.getItem("xt_epg_open_default")
+        return v === null ? true : v === "true"
+      } catch {
+        return true
+      }
+    }
+    function applyEpgDefault(on) {
+      epgDefaultBtn?.setAttribute("aria-checked", String(on))
+      if (epgDefaultLabel) epgDefaultLabel.textContent = on ? "On" : "Off"
+      try {
+        localStorage.setItem("xt_epg_open_default", String(on))
+        // Reset the per-session override so the new default applies on the
+        // next visit to /livetv.
+        localStorage.removeItem("xt_epg_visible")
+      } catch {}
+    }
+    applyEpgDefault(readEpgDefault())
+    epgDefaultBtn?.addEventListener("click", () => {
+      applyEpgDefault(epgDefaultBtn.getAttribute("aria-checked") !== "true")
+    })
+
+    const channelWidthGroup = document.getElementById("settings-channel-width")
+    const CHANNEL_WIDTH_DEFAULT = 28
+    function readChannelWidth() {
+      const raw = parseFloat(localStorage.getItem("xt_channels_w") || "")
+      return Number.isFinite(raw) && raw >= 18 && raw <= 60
+        ? raw
+        : CHANNEL_WIDTH_DEFAULT
+    }
+    function applyChannelWidth(rem) {
+      document.documentElement.style.setProperty("--xt-channels-w", `${rem}rem`)
+      try {
+        if (rem === CHANNEL_WIDTH_DEFAULT) localStorage.removeItem("xt_channels_w")
+        else localStorage.setItem("xt_channels_w", String(rem))
+      } catch {}
+      syncChannelWidthButtons()
+    }
+    function syncChannelWidthButtons() {
+      const current = readChannelWidth()
+      for (const btn of channelWidthGroup?.querySelectorAll(".channel-width-btn") ||
+        []) {
+        const v = parseFloat(btn.dataset.width || "0")
+        btn.setAttribute("aria-pressed", String(Math.abs(v - current) < 0.001))
+      }
+    }
+    channelWidthGroup?.addEventListener("click", (e) => {
+      const t = /** @type {HTMLElement} */ (e.target)
+      const btn = t.closest(".channel-width-btn")
+      if (!btn) return
+      const v = parseFloat(btn.dataset.width || "0")
+      if (!Number.isFinite(v) || v <= 0) return
+      applyChannelWidth(v)
+    })
+    syncChannelWidthButtons()
 
     // ---------------------------------------------------------------------
     // Network / User-Agent

@@ -197,7 +197,7 @@ dialog[open]::backdrop {
     }
 
     .btn {
-        @apply inline-flex items-center justify-center gap-2 min-h-10 rounded-xl border border-line px-3 py-2 text-sm text-fg transition-colors;
+        @apply inline-flex items-center justify-center gap-2 min-h-11 rounded-xl border border-line px-3.5 py-2 text-sm text-fg transition-colors;
     }
     .btn:not([disabled]):hover,
     .btn:not([disabled]):focus-visible {
@@ -212,7 +212,7 @@ dialog[open]::backdrop {
     }
 
     .btn-danger {
-        @apply inline-flex items-center justify-center gap-2 min-h-10 rounded-xl px-3 py-2 text-sm text-bad transition-colors;
+        @apply inline-flex items-center justify-center gap-2 min-h-11 rounded-xl px-3.5 py-2 text-sm text-bad transition-colors;
         border: 1px solid color-mix(in oklch, var(--color-bad) 50%, transparent);
     }
     .btn-danger:not([disabled]):hover,

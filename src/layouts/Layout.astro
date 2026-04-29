@@ -27,6 +27,10 @@ const documentTitle = pageTitle
         var s = parseFloat(localStorage.getItem("xt_font_scale") || "1");
         if (!isFinite(s) || s < 0.75 || s > 2) s = 1;
         document.documentElement.style.setProperty("--xt-font-scale", String(s));
+        var cw = parseFloat(localStorage.getItem("xt_channels_w") || "");
+        if (isFinite(cw) && cw >= 18 && cw <= 60) {
+          document.documentElement.style.setProperty("--xt-channels-w", cw + "rem");
+        }
       } catch (e) {}
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />

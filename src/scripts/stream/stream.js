@@ -295,7 +295,7 @@ function renderVirtual() {
     starBtn.type = "button"
     starBtn.dataset.role = "star"
     starBtn.className =
-      "star-btn flex shrink-0 h-9 w-9 items-center justify-center rounded-lg text-base outline-none transition-colors " +
+      "star-btn flex shrink-0 h-11 w-11 items-center justify-center rounded-lg text-base outline-none transition-colors " +
       (fav
         ? "text-accent hover:bg-surface-2 focus:bg-surface-2"
         : "text-fg-3 hover:text-fg hover:bg-surface-2 focus:text-fg focus:bg-surface-2")
@@ -813,7 +813,7 @@ async function play(streamId, name) {
   document.getElementById("pip-btn")?.remove()
   const btn = document.createElement("button")
   btn.id = "pip-btn"
-  btn.className = "h-9 px-3 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2"
+  btn.className = "min-h-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2"
   btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M19 4a3 3 0 0 1 3 3v4a1 1 0 0 1 -2 0v-4a1 1 0 0 0 -1 -1h-14a1 1 0 0 0 -1 1v10a1 1 0 0 0 1 1h6a1 1 0 0 1 0 2h-6a3 3 0 0 1 -3 -3v-10a3 3 0 0 1 3 -3z"/><path d="M20 13a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-5a2 2 0 0 1 -2 -2v-3a2 2 0 0 1 2 -2z"/></svg>`
   currentEl.appendChild(btn)
   btn.addEventListener("click", async () => {
