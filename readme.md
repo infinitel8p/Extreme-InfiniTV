@@ -10,7 +10,7 @@
     <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="80"/>
   </a>
   <a href="https://apps.microsoft.com/detail/9NN162Z0WXSR">
-    <img src="https://get.microsoft.com/images/en-us%20dark.svg" height="55"/>
+    <img src="https://get.microsoft.com/images/en-us%20dark.svg" height="58"/>
   </a>
 </div>
 
