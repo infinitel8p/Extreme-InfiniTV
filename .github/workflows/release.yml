@@ -181,8 +181,9 @@ jobs:
 
             let summary = ''
             const lines = changelog.split('\n')
-            if (lines[0] && /^\*\*.+\*\*\s*$/.test(lines[0].trim())) {
-              summary = lines[0].trim()
+            const summaryMatch = lines[0]?.trim().match(/^\*\*(.+)\*\*\s*$/)
+            if (summaryMatch) {
+              summary = `<strong>${summaryMatch[1]}</strong>`
               let i = 1
               while (i < lines.length && lines[i].trim() === '') i++
               changelog = lines.slice(i).join('\n').trim()
