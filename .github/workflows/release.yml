@@ -139,14 +139,14 @@ jobs:
         uses: actions/github-script@v7
         env:
           TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
           AI_NOTES: ${{ steps.ai.outputs.response }}
         with:
           script: |
             const tag = process.env.TAG
+            const version = process.env.VERSION
             let changelog = (process.env.AI_NOTES || '').trim()
 
-            // Fallback to GitHub's PR-based generator if the model step
-            // failed or returned nothing.
             if (!changelog) {
               try {
                 const notes = await github.rest.repos.generateReleaseNotes({
@@ -163,6 +163,33 @@ jobs:
             if (!changelog) {
               changelog = '_No changes detected. Edit this draft before publishing._'
             }
+
+            const downloads = [
+              '## Downloads',
+              '',
+              'Pick the file that matches your device. The Microsoft Store and Google Play buttons below are the easiest path on Windows and Android.',
+              '',
+              '| Platform | File |',
+              '|----------|------|',
+              `| Windows 10/11 (recommended installer) | \`xtream_${version}_x64-setup.exe\` |`,
+              `| Windows (MSI alternative) | \`xtream_${version}_x64_en-US.msi\` |`,
+              `| macOS (Apple Silicon + Intel) | \`xtream_${version}_universal.dmg\` |`,
+              `| Linux Debian / Ubuntu / Mint | \`xtream_${version}_amd64.deb\` |`,
+              `| Linux Fedora / openSUSE / RHEL | \`xtream-${version}-1.x86_64.rpm\` |`,
+              `| Linux portable (any distro) | \`xtream_${version}_amd64.AppImage\` |`,
+              `| Android sideload (APK) | \`xtream_${version}.apk\` |`,
+              '',
+              '<details><summary>What about the <code>.sig</code> files, <code>latest.json</code> and the macOS <code>.app.tar.gz</code>?</summary>',
+              '',
+              'You can ignore them.',
+              '',
+              '- `*.sig` and `latest.json` are used by the built-in auto-updater to verify each download is genuinely signed. The app downloads them on its own when checking for updates.',
+              '- `xtream_universal.app.tar.gz` is the macOS update bundle consumed by the same updater. For a fresh install on macOS, use the `.dmg` instead.',
+              '- The `.aab` file is uploaded to Google Play and is not meant for sideloading. Use the `.apk` to install manually.',
+              '',
+              '</details>',
+            ].join('\n')
+
             const body = [
               '<p align="center">',
               '  <img src="https://raw.githubusercontent.com/infinitel8p/xtream/refs/heads/main/src-tauri/icons/128x128@2x.png" alt="App Icon"/>',
@@ -171,6 +198,7 @@ jobs:
               `## Changelog ${tag}`,
               changelog,
               '',
+              downloads,
               '',
               '<a href="https://play.google.com/store/apps/details?id=com.infinitel8p.xtream">',
               '<img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="60"/>',
