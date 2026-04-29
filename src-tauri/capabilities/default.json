@@ -7,6 +7,7 @@
   ],
   "permissions": [
     "core:default",
+    "core:window:allow-set-progress-bar",
     {
       "identifier": "http:default",
       "allow": [
@@ -19,6 +20,7 @@
     "fs:allow-create",
     "fs:allow-mkdir",
     "fs:allow-exists",
+    "fs:allow-stat",
     {
       "identifier": "fs:scope",
       "allow": [

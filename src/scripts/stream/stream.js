@@ -20,6 +20,7 @@ import {
 } from "@/scripts/lib/preferences.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
+import { renderProviderError } from "@/scripts/lib/provider-error.js"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -167,6 +168,7 @@ try {
 } catch {}
 
 let activePlaylistId = ""
+let activePlaylistTitle = ""
 
 document.addEventListener("xt:active-changed", () => {
   loadChannels()
@@ -632,10 +634,12 @@ async function loadChannels() {
   const active = await getActiveEntry()
   if (!active) {
     activePlaylistId = ""
+    activePlaylistTitle = ""
     showEmptyState()
     return
   }
   activePlaylistId = active._id
+  activePlaylistTitle = active.title || ""
 
   await ensurePrefsLoaded()
 
@@ -740,9 +744,12 @@ async function loadChannels() {
     paintChannels(data, fromCache, age)
   } catch (e) {
     console.error(e)
-    listStatus.textContent =
-      "Couldn't load channels - check your login or try Refresh."
     mountVirtualList([])
+    renderProviderError(listStatus, {
+      providerName: activePlaylistTitle,
+      kind: "channels",
+      onRetry: loadChannels,
+    })
   }
 }
 

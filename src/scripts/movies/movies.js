@@ -19,13 +19,18 @@ import {
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
   startDownload,
+  resumeDownload,
+  pauseDownload,
+  listDownloads,
   isDownloadable,
   inferExt,
   cancelDownload,
+  DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
 import { morphIntoDetail, clearAmbient } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
+import { renderProviderError } from "@/scripts/lib/provider-error.js"
 
 const detailAmbient = document.getElementById("movie-detail-ambient")
 
@@ -91,6 +96,7 @@ try {
 } catch {}
 
 let activePlaylistId = ""
+let activePlaylistTitle = ""
 
 const hiddenCats = new Set()
 
@@ -586,10 +592,12 @@ async function loadMovies() {
   const active = await getActiveEntry()
   if (!active) {
     activePlaylistId = ""
+    activePlaylistTitle = ""
     showEmptyState()
     return
   }
   activePlaylistId = active._id
+  activePlaylistTitle = active.title || ""
   await ensurePrefsLoaded()
 
   const hit = getCached(active._id, "vod")
@@ -668,10 +676,13 @@ async function loadMovies() {
     paintMovies(data, fromCache, age)
   } catch (e) {
     console.error(e)
-    listStatus.textContent =
-      "Couldn't load movies - check your login or try Refresh."
     filtered = []
     renderGrid()
+    renderProviderError(listStatus, {
+      providerName: activePlaylistTitle,
+      kind: "movies",
+      onRetry: loadMovies,
+    })
   }
 }
 
@@ -801,8 +812,13 @@ function prepareAndShowDetail(movie) {
   /** @type {HTMLButtonElement|null} */ (detailPlay)?.focus?.()
 }
 
+/** @type {HTMLElement|null} - card element clicked to open the detail dialog. */
+let lastDetailTrigger = null
+
 async function openDetail(movie, fromCard) {
   if (!detailDlg || !movie) return
+
+  lastDetailTrigger = fromCard || null
 
   morphIntoDetail({
     fromCard,
@@ -846,6 +862,7 @@ async function openDetail(movie, fromCard) {
     if (currentDetailMovie?.id !== movie.id) return
 
     currentDetailSrc = src
+    applyMovieDownloadState()
 
     const year = movieData.releasedate || movieData.year || info.year || ""
     const duration =
@@ -922,45 +939,68 @@ detailFav?.addEventListener("click", () => {
   toggleFavorite(activePlaylistId, "vod", currentDetailMovie.id)
 })
 
-let activeDownloadId = null
-function detachDownloadProgress() {
-  document.removeEventListener(DOWNLOAD_PROGRESS_EVENT, onDownloadProgress)
-  activeDownloadId = null
+function findMovieDownload() {
+  if (!currentDetailSrc) return null
+  return listDownloads().find((d) => d.url === currentDetailSrc) || null
 }
-function onDownloadProgress(e) {
-  const d = /** @type {CustomEvent} */ (e).detail
-  if (!d || d.id !== activeDownloadId) return
+
+function applyMovieDownloadState() {
   if (!detailDownload) return
-  if (d.status === "downloading") {
-    const pct =
-      d.bytesTotal > 0 ? Math.floor((d.bytesDone / d.bytesTotal) * 100) : null
-    if (detailDownloadLabel) {
-      detailDownloadLabel.textContent =
-        pct !== null ? `Downloading ${pct}%` : "Downloading…"
-    }
-  } else if (d.status === "queued") {
-    if (detailDownloadLabel) detailDownloadLabel.textContent = "Queued…"
-    detailDownload.title = "Waiting for an active download to finish"
-  } else if (d.status === "done") {
-    if (detailDownloadLabel) detailDownloadLabel.textContent = "Saved"
-    detailDownload.removeAttribute("disabled")
-    detailDownload.title = d.path ? `Saved to ${d.path}` : "Saved"
-    detachDownloadProgress()
-  } else if (d.status === "error") {
-    if (detailDownloadLabel) detailDownloadLabel.textContent = "Failed"
-    detailDownload.removeAttribute("disabled")
-    detailDownload.title = d.error || "Download failed"
-    console.error("Download failed:", d.error)
-    detachDownloadProgress()
-  } else if (d.status === "cancelled") {
+  const d = findMovieDownload()
+  detailDownload.removeAttribute("disabled")
+  if (!d) {
     if (detailDownloadLabel) detailDownloadLabel.textContent = "Download"
-    detailDownload.removeAttribute("disabled")
     detailDownload.title = isDownloadable()
       ? "Download to your chosen folder"
       : "Open the source URL in a new tab (desktop app saves to disk)"
-    detachDownloadProgress()
+    return
+  }
+  switch (d.status) {
+    case "downloading": {
+      const pct =
+        d.bytesTotal > 0
+          ? Math.floor((d.bytesDone / d.bytesTotal) * 100)
+          : null
+      if (detailDownloadLabel) {
+        detailDownloadLabel.textContent = pct !== null ? `${pct}%` : "…"
+      }
+      detailDownload.title = "Tap to pause"
+      break
+    }
+    case "queued":
+      if (detailDownloadLabel) detailDownloadLabel.textContent = "Queued"
+      detailDownload.title = "Waiting for a slot - tap to cancel"
+      break
+    case "paused":
+      if (detailDownloadLabel) detailDownloadLabel.textContent = "Resume"
+      detailDownload.title = "Paused - tap to resume"
+      break
+    case "stalled":
+      if (detailDownloadLabel) detailDownloadLabel.textContent = "Retry"
+      detailDownload.title = "Stalled - tap to retry"
+      break
+    case "error":
+      if (detailDownloadLabel) detailDownloadLabel.textContent = "Retry"
+      detailDownload.title = d.error || "Failed - tap to retry"
+      break
+    case "done":
+      if (detailDownloadLabel) detailDownloadLabel.textContent = "Saved"
+      detailDownload.setAttribute("disabled", "")
+      detailDownload.title = d.path ? `Saved to ${d.path}` : "Saved"
+      break
+    default:
+      if (detailDownloadLabel) detailDownloadLabel.textContent = "Download"
+      detailDownload.title = ""
   }
 }
+
+function onAnyDownloadEvent() {
+  // Cheap re-render: covers progress ticks, status changes, queue reorderings.
+  if (detailDlg?.open) applyMovieDownloadState()
+}
+
+document.addEventListener(DOWNLOADS_LIST_EVENT, onAnyDownloadEvent)
+document.addEventListener(DOWNLOAD_PROGRESS_EVENT, onAnyDownloadEvent)
 
 detailDownload?.addEventListener("click", async () => {
   if (!currentDetailMovie) return
@@ -978,19 +1018,32 @@ detailDownload?.addEventListener("click", async () => {
     if (detailDownloadLabel) detailDownloadLabel.textContent = "Opened"
     return
   }
+
+  const existing = findMovieDownload()
+  if (existing?.status === "downloading" || existing?.status === "queued") {
+    pauseDownload(existing.id)
+    return
+  }
+  if (
+    existing &&
+    (existing.status === "paused" ||
+      existing.status === "stalled" ||
+      existing.status === "error")
+  ) {
+    resumeDownload(existing.id)
+    return
+  }
+
   try {
     if (detailDownloadLabel) detailDownloadLabel.textContent = "Starting…"
     detailDownload.setAttribute("disabled", "")
     detailDownload.title = ""
-    document.addEventListener(DOWNLOAD_PROGRESS_EVENT, onDownloadProgress)
-    activeDownloadId = await startDownload({
+    await startDownload({
       url: currentDetailSrc,
       title: currentDetailMovie.name || `Movie ${currentDetailMovie.id}`,
       ext: inferExt(currentDetailSrc, "mp4"),
     })
-    if (detailDownloadLabel) detailDownloadLabel.textContent = "Downloading…"
   } catch (e) {
-    detachDownloadProgress()
     const msg = String(e?.message || e || "Failed")
     console.error("Download failed:", e)
     if (detailDownloadLabel) detailDownloadLabel.textContent = "Failed"
@@ -1018,6 +1071,15 @@ detailDlg?.addEventListener("close", () => {
   clearAmbient(detailAmbient)
   currentDetailMovie = null
   currentDetailSrc = ""
+
+  const trigger = lastDetailTrigger
+  lastDetailTrigger = null
+  if (trigger && trigger.isConnected) {
+    const focusable =
+      /** @type {HTMLElement|null} */ (trigger.querySelector("button.play-btn")) ||
+      (trigger instanceof HTMLElement ? trigger : null)
+    queueMicrotask(() => focusable?.focus?.())
+  }
 })
 
 // ----------------------------

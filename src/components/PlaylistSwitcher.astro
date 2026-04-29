@@ -176,6 +176,10 @@ import { IconChevronDown, IconPlus, IconRefresh } from "@tabler/icons-svelte";
 
 	trigger?.addEventListener("click", (ev) => {
 		ev.stopPropagation();
+		if (!window.matchMedia("(min-width: 64rem)").matches) {
+			window.location.href = "/settings";
+			return;
+		}
 		togglePopover();
 	});
 

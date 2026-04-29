@@ -11,6 +11,7 @@ import {
 import { getCached } from "@/scripts/lib/cache.js"
 import { fetchAndMaybeGunzip } from "@/scripts/lib/network.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
+import { renderProviderError } from "@/scripts/lib/provider-error.js"
 
 const PX_PER_HOUR = 200
 const HOURS_VISIBLE = 6
@@ -43,6 +44,7 @@ const categoryDialog = /** @type {HTMLDialogElement|null} */ (
 /** @type {{host:string,port:string,user:string,pass:string}} */
 let creds = { host: "", port: "", user: "", pass: "" }
 let activePlaylistId = ""
+let activePlaylistTitle = ""
 let activeCat = ""
 /** @type {Array<{id:number,name:string,logo?:string|null,tvgId?:string,category?:string}>} */
 let channels = []
@@ -60,6 +62,19 @@ function showStatus(text) {
   if (statusEl) {
     statusEl.textContent = text
     statusEl.classList.remove("hidden")
+  }
+  if (gridEl) gridEl.classList.add("hidden")
+}
+
+function showProviderError(kind) {
+  if (statusEl) {
+    statusEl.textContent = ""
+    statusEl.classList.remove("hidden")
+    renderProviderError(statusEl, {
+      providerName: activePlaylistTitle,
+      kind,
+      onRetry: () => init(),
+    })
   }
   if (gridEl) gridEl.classList.add("hidden")
 }
@@ -411,13 +426,17 @@ async function loadEpgXml() {
 // Category picker
 // ----------------------------
 function syncCategoryUI() {
+  const display =
+    activeCat === "__favorites__"
+      ? "★ Favorites"
+      : activeCat === "__recents__"
+        ? "🕒 Recently watched"
+        : activeCat
   if (titleEl) {
-    titleEl.textContent = activeCat
-      ? `EPG · ${activeCat}`
-      : "EPG · All categories"
+    titleEl.textContent = display ? `EPG · ${display}` : "EPG · All categories"
   }
   if (categoryLabelEl) {
-    categoryLabelEl.textContent = activeCat || "All categories"
+    categoryLabelEl.textContent = display || "All categories"
   }
   if (categoryListEl) {
     for (const el of categoryListEl.querySelectorAll('button[role="option"]')) {
@@ -542,6 +561,7 @@ async function init() {
     return
   }
   activePlaylistId = active._id
+  activePlaylistTitle = active.title || ""
   try {
     activeCat = localStorage.getItem("xt_active_cat") || ""
   } catch {
@@ -568,7 +588,7 @@ async function init() {
       cached = await fetchXtreamChannels()
     } catch (e) {
       console.error("[epg] channel re-fetch failed:", e)
-      showStatus("Couldn't load channels. Check your login or try Refresh.")
+      showProviderError("channels")
       return
     }
   }
@@ -598,9 +618,7 @@ async function init() {
     parseXmlTv(xml)
   } catch (e) {
     console.error("[epg] load failed:", e)
-    showStatus(
-      "Couldn't load EPG. Refresh, or check that your provider serves XMLTV."
-    )
+    showProviderError("EPG")
     return
   }
 

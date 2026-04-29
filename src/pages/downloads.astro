@@ -1,0 +1,879 @@
+---
+import Layout from "@/layouts/Layout.astro"
+import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
+---
+
+<Layout pageTitle="Downloads">
+  <main class="flex-1 min-h-0 overflow-auto custom-scroll">
+    <div
+      class="w-full max-w-3xl mx-auto px-4 md:px-6 lg:px-8 pt-6 sm:pt-10 pb-12
+             flex flex-col gap-6 sm:gap-8">
+
+    <header class="shrink-0 flex flex-col gap-2 dl-page-enter dl-stagger-1">
+      <h1
+        class="font-semibold tracking-[-0.02em] leading-[0.95]"
+        style="font-size: clamp(2.5rem, 3vw + 1.5rem, 4.5rem);">
+        Downloads
+      </h1>
+      <p
+        id="downloads-summary"
+        aria-live="polite"
+        class="text-sm sm:text-base text-fg-3 max-w-prose tabular-nums">
+        Movies and series episodes you save will appear here.
+      </p>
+    </header>
+
+    <!-- Folder summary -->
+    <a
+      id="downloads-folder-summary"
+      href="/settings#downloads-folder-section"
+      class="rounded-xl border border-line bg-surface px-4 py-2.5 flex items-center gap-3 text-sm
+             hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+             outline-none transition-colors dl-page-enter dl-stagger-2">
+      <IconSettings aria-hidden="true" class="size-4 text-fg-3 shrink-0" />
+      <span class="flex-1 min-w-0 flex flex-wrap items-baseline gap-x-2">
+        <span class="text-fg-3 shrink-0">Saving to</span>
+        <span
+          id="downloads-folder-path"
+          class="font-mono text-xs text-fg truncate min-w-0">
+          Not set
+        </span>
+      </span>
+      <span class="text-xs text-accent shrink-0">Change in Settings</span>
+    </a>
+
+    <!-- Aggregate throughput - quiet 60s telemetry strip, hidden when idle. -->
+    <section
+      id="downloads-throughput"
+      hidden
+      class="rounded-xl border border-line bg-surface px-4 pt-3 pb-2.5 flex flex-col gap-2">
+      <div class="flex items-center justify-between gap-3 text-2xs uppercase tracking-wider font-medium">
+        <span class="text-fg-3">Throughput</span>
+        <span
+          id="downloads-throughput-now"
+          class="text-fg tabular-nums normal-case tracking-normal text-xs font-medium">0 B/s</span>
+      </div>
+      <canvas
+        id="downloads-throughput-canvas"
+        aria-hidden="true"
+        class="w-full block"
+        style="height: 40px;"></canvas>
+      <div class="flex items-center justify-between gap-3 text-2xs text-fg-3 tabular-nums">
+        <span>
+          <span class="opacity-60">min</span>
+          <span id="downloads-throughput-min" class="ml-1 text-fg-2">-</span>
+        </span>
+        <span class="opacity-50 normal-case">last 120s</span>
+        <span>
+          <span id="downloads-throughput-max" class="mr-1 text-fg-2">-</span>
+          <span class="opacity-60">max</span>
+        </span>
+      </div>
+    </section>
+
+    <!-- Queue / list -->
+    <section class="flex flex-col gap-3 dl-page-enter dl-stagger-3">
+      <div class="flex items-center justify-between gap-2">
+        <h2 class="text-eyebrow font-semibold uppercase tracking-wide text-fg-3">Queue</h2>
+        <button
+          id="downloads-clear-finished"
+          type="button"
+          class="btn text-fg-2 text-xs px-3 min-h-9"
+          disabled>
+          <IconTrash aria-hidden="true" class="btn-icon" />
+          Clear finished
+        </button>
+      </div>
+      <article
+        id="downloads-list"
+        role="status"
+        aria-live="polite"
+        aria-label="Downloads"
+        class="rounded-2xl border border-line bg-surface overflow-hidden flex flex-col divide-y divide-line/60">
+        <div class="px-5 py-10 text-sm text-fg-3 flex flex-col items-center gap-4 text-center">
+          <IconDownload aria-hidden="true" stroke={1.5} class="size-10 text-fg-3 dl-empty-icon" />
+          <div class="flex flex-col gap-1">
+            <p class="text-fg/80">Nothing in the queue.</p>
+            <p class="text-xs text-fg-3 max-w-prose">
+              Open a movie or series episode and tap Download to queue one here.
+            </p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    </div>
+    <div
+      id="app-version"
+      class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
+      Loading…
+    </div>
+  </main>
+
+  <script>
+    import {
+      listDownloads,
+      isDownloadable,
+      pauseDownload,
+      resumeDownload,
+      removeDownload,
+      clearFinishedDownloads,
+      getAggregateThroughputHistory,
+      getAggregateThroughputEwma,
+      getRowThroughputHistory,
+      getRowThroughputEwma,
+      DOWNLOADS_LIST_EVENT,
+      DOWNLOAD_PROGRESS_EVENT,
+      THROUGHPUT_EVENT,
+    } from "@/scripts/lib/downloads.js"
+    import { getDownloadDir } from "@/scripts/lib/app-settings.js"
+    import { injectVersion } from "@/scripts/version.js"
+    injectVersion()
+
+    const listEl = document.getElementById("downloads-list")
+    const summaryEl = document.getElementById("downloads-summary")
+    const clearBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("downloads-clear-finished")
+    )
+    const folderPathEl = document.getElementById("downloads-folder-path")
+    const throughputSection = document.getElementById("downloads-throughput")
+    const throughputCanvas = /** @type {HTMLCanvasElement|null} */ (
+      document.getElementById("downloads-throughput-canvas")
+    )
+    const throughputNowEl = document.getElementById("downloads-throughput-now")
+    const throughputMinEl = document.getElementById("downloads-throughput-min")
+    const throughputMaxEl = document.getElementById("downloads-throughput-max")
+
+    function syncFolderSummary() {
+      if (!folderPathEl) return
+      const v = getDownloadDir() || ""
+      folderPathEl.textContent = v || "Not set"
+      folderPathEl.classList.toggle("text-fg-3", !v)
+      folderPathEl.classList.toggle("text-fg", !!v)
+    }
+    syncFolderSummary()
+
+    window.addEventListener("storage", (e) => {
+      if (e.key === "xt_download_dir" || e.key === null) syncFolderSummary()
+    })
+
+    function fmtSize(n: number): string {
+      if (!n) return "0 B"
+      if (n < 1024) return `${n} B`
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+      if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+      return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+    }
+
+    function fmtSpeed(bytesPerSec: number): string {
+      if (!bytesPerSec || !isFinite(bytesPerSec) || bytesPerSec <= 0) return ""
+      if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`
+      if (bytesPerSec < 1024 * 1024)
+        return `${(bytesPerSec / 1024).toFixed(1)} KB/s`
+      return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`
+    }
+
+    function statusLabel(s: string): string {
+      switch (s) {
+        case "downloading": return "Downloading"
+        case "queued":      return "Queued"
+        case "done":        return "Done"
+        case "error":       return "Failed"
+        case "stalled":     return "Stalled"
+        case "paused":      return "Paused"
+        case "cancelled":   return "Cancelled"
+        default:            return s || "-"
+      }
+    }
+
+    function statusToneClass(s: string): string {
+      switch (s) {
+        case "done":      return "text-ok"
+        case "error":     return "text-bad"
+        case "stalled":   return "text-warn"
+        case "paused":    return "text-fg-2"
+        case "queued":    return "text-fg-3"
+        case "cancelled": return "text-fg-3"
+        default:          return "text-accent"
+      }
+    }
+
+    const HISTORY_MAX = 240
+
+    function resolveCssColor(varName: string): string {
+      const probe = document.createElement("span")
+      probe.style.color = `var(${varName})`
+      probe.style.position = "fixed"
+      probe.style.visibility = "hidden"
+      document.body.appendChild(probe)
+      const c = getComputedStyle(probe).color
+      probe.remove()
+      return c || "rgb(190, 73, 142)"
+    }
+
+    let cachedAccent = ""
+    let cachedFg3 = ""
+    function getAccentRgb(): string {
+      if (!cachedAccent) cachedAccent = resolveCssColor("--color-accent")
+      return cachedAccent
+    }
+    function getFg3Rgb(): string {
+      if (!cachedFg3) cachedFg3 = resolveCssColor("--color-fg-3")
+      return cachedFg3
+    }
+    const themeObserver = new MutationObserver(() => {
+      cachedAccent = ""
+      cachedFg3 = ""
+    })
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["style", "data-theme"],
+    })
+
+    function withAlpha(rgbColor: string, alpha: number): string {
+      const m = rgbColor.match(/(\d+(?:\.\d+)?)/g)
+      if (!m || m.length < 3) return rgbColor
+      return `rgba(${m[0]}, ${m[1]}, ${m[2]}, ${alpha})`
+    }
+
+    function drawSparkline(
+      canvas: HTMLCanvasElement,
+      samples: number[],
+      opts: {
+        stroke: string
+        fill?: string
+        minHeight?: number
+        references?: { value: number; color: string }[]
+      }
+    ) {
+      const ctx = canvas.getContext("2d")
+      if (!ctx) return
+      const dpr = Math.max(1, window.devicePixelRatio || 1)
+      const cw = canvas.clientWidth
+      const ch = canvas.clientHeight
+      if (cw === 0 || ch === 0) return
+      const wantW = Math.round(cw * dpr)
+      const wantH = Math.round(ch * dpr)
+      if (canvas.width !== wantW || canvas.height !== wantH) {
+        canvas.width = wantW
+        canvas.height = wantH
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.clearRect(0, 0, cw, ch)
+
+      if (samples.length < 2) return
+      const max = Math.max(...samples, opts.minHeight ?? 1)
+      const padded =
+        samples.length < HISTORY_MAX
+          ? Array(HISTORY_MAX - samples.length).fill(0).concat(samples)
+          : samples
+
+      const stepX = cw / (HISTORY_MAX - 1)
+      // Build the path once, reuse for stroke + fill.
+      const points: Array<[number, number]> = []
+      for (let i = 0; i < padded.length; i++) {
+        const x = i * stepX
+        const y = ch - 2 - (padded[i] / max) * (ch - 4)
+        points.push([x, y])
+      }
+
+      if (opts.references && opts.references.length) {
+        ctx.save()
+        ctx.setLineDash([2, 3])
+        ctx.lineWidth = 1
+        for (const ref of opts.references) {
+          if (ref.value <= 0) continue
+          const y = ch - 2 - (ref.value / max) * (ch - 4)
+          ctx.strokeStyle = ref.color
+          ctx.beginPath()
+          ctx.moveTo(0, y)
+          ctx.lineTo(cw, y)
+          ctx.stroke()
+        }
+        ctx.restore()
+      }
+
+      function tracePath(c: CanvasRenderingContext2D) {
+        c.beginPath()
+        c.moveTo(points[0][0], points[0][1])
+        if (points.length === 2) {
+          c.lineTo(points[1][0], points[1][1])
+          return
+        }
+        for (let i = 1; i < points.length - 1; i++) {
+          const cx = points[i][0]
+          const cy = points[i][1]
+          const mx = (points[i][0] + points[i + 1][0]) / 2
+          const my = (points[i][1] + points[i + 1][1]) / 2
+          c.quadraticCurveTo(cx, cy, mx, my)
+        }
+        const last = points[points.length - 1]
+        c.lineTo(last[0], last[1])
+      }
+
+      if (opts.fill) {
+        tracePath(ctx)
+        ctx.lineTo(cw, ch)
+        ctx.lineTo(0, ch)
+        ctx.closePath()
+        const grad = ctx.createLinearGradient(0, 0, 0, ch)
+        grad.addColorStop(0, opts.fill)
+        grad.addColorStop(1, "rgba(0,0,0,0)")
+        ctx.fillStyle = grad
+        ctx.fill()
+      }
+
+      tracePath(ctx)
+      ctx.lineWidth = 1.25
+      ctx.strokeStyle = opts.stroke
+      ctx.lineJoin = "round"
+      ctx.lineCap = "round"
+      ctx.stroke()
+    }
+
+    function makeAction(label: string, ariaLabel: string, onClick: () => void, tone: "neutral" | "primary" = "neutral"): HTMLButtonElement {
+      const b = document.createElement("button")
+      b.type = "button"
+      const toneClass =
+        tone === "primary"
+          ? "text-accent hover:bg-accent-soft focus-visible:bg-accent-soft"
+          : "text-fg-3 hover:text-fg hover:bg-surface-2 focus-visible:text-fg focus-visible:bg-surface-2"
+      b.className = `rounded-md px-2.5 py-1.5 text-xs min-h-9 transition-colors ${toneClass}`
+      b.textContent = label
+      b.setAttribute("aria-label", ariaLabel)
+      b.addEventListener("click", onClick)
+      return b
+    }
+
+    type RowEntry = {
+      el: HTMLDivElement
+      status: string
+      bytesTotal: number
+      titleStr: string
+      titleEl: HTMLDivElement
+      statusEl: HTMLSpanElement
+      sizesEl: HTMLSpanElement
+      speedEl: HTMLSpanElement
+      sparkCanvas: HTMLCanvasElement
+      speedTextEl: HTMLSpanElement
+      actionsEl: HTMLDivElement
+      barShellEl: HTMLDivElement
+      barFillEl: HTMLDivElement | null
+      errorEl: HTMLDivElement
+    }
+
+    const rowsById = new Map<string, RowEntry>()
+    const seenDone = new Set<string>()
+    let firstRenderComplete = false
+
+    function prefersReducedMotion(): boolean {
+      return (
+        window.matchMedia &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      )
+    }
+
+    function updateAggregateStrip() {
+      if (!throughputSection || !throughputCanvas || !throughputNowEl) return
+      const history = getAggregateThroughputHistory()
+      const ewma = getAggregateThroughputEwma()
+      const anyActive = listDownloads().some((d) => d.status === "downloading")
+
+      if (!anyActive && history.length === 0) {
+        throughputSection.setAttribute("hidden", "")
+        if (throughputMinEl) throughputMinEl.textContent = "-"
+        if (throughputMaxEl) throughputMaxEl.textContent = "-"
+        return
+      }
+
+      if (throughputSection.hasAttribute("hidden")) {
+        throughputSection.removeAttribute("hidden")
+        if (!prefersReducedMotion()) {
+          throughputSection.animate(
+            [{ opacity: 0, transform: "translateY(-4px)" }, { opacity: 1, transform: "translateY(0)" }],
+            { duration: 320, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+          )
+        }
+      }
+      throughputNowEl.textContent = fmtSpeed(ewma) || "0 B/s"
+
+      let mn = Infinity
+      let mx = 0
+      const MIN_FLOOR = 256
+      for (const v of history) {
+        if (v < MIN_FLOOR) continue
+        if (v < mn) mn = v
+        if (v > mx) mx = v
+      }
+      const haveRange = mx > 0 && mn !== Infinity
+      if (throughputMinEl) {
+        throughputMinEl.textContent = haveRange ? fmtSpeed(mn) : "-"
+      }
+      if (throughputMaxEl) {
+        throughputMaxEl.textContent = haveRange ? fmtSpeed(mx) : "-"
+      }
+
+      const refs = haveRange
+        ? [
+            { value: mx, color: withAlpha(getFg3Rgb(), 0.5) },
+            { value: mn, color: withAlpha(getFg3Rgb(), 0.35) },
+          ]
+        : undefined
+
+      drawSparkline(throughputCanvas, history, {
+        stroke: getAccentRgb(),
+        fill: withAlpha(getAccentRgb(), 0.22),
+        references: refs,
+      })
+    }
+
+    function toneClassForBar(s: string): string {
+      switch (s) {
+        case "error":   return "bg-bad"
+        case "stalled": return "bg-warn"
+        case "done":    return "bg-ok"
+        default:        return "bg-accent"
+      }
+    }
+    const ALL_BAR_TONES = ["bg-bad", "bg-warn", "bg-ok", "bg-accent"]
+
+    function buildActionsFor(d: any, container: HTMLDivElement) {
+      container.replaceChildren()
+      if (d.status === "downloading") {
+        container.append(
+          makeAction("Pause", `Pause ${d.title}`, () => pauseDownload(d.id))
+        )
+      } else if (d.status === "queued") {
+        container.append(
+          makeAction("Cancel", `Cancel queued ${d.title}`, () =>
+            pauseDownload(d.id)
+          ),
+          makeAction("Remove", `Remove ${d.title}`, () => removeDownload(d.id))
+        )
+      } else if (
+        d.status === "stalled" ||
+        d.status === "paused" ||
+        d.status === "error"
+      ) {
+        container.append(
+          makeAction(
+            "Resume",
+            `Resume ${d.title}`,
+            () => resumeDownload(d.id),
+            "primary"
+          ),
+          makeAction("Remove", `Remove ${d.title}`, () => {
+            if (
+              confirm(
+                `Remove "${d.title}"? The partial file will also be deleted.`
+              )
+            ) {
+              removeDownload(d.id)
+            }
+          })
+        )
+      } else {
+        container.append(
+          makeAction("Remove", `Remove ${d.title}`, () => removeDownload(d.id))
+        )
+      }
+    }
+
+    function buildStatusContent(statusEl: HTMLSpanElement, status: string) {
+      statusEl.replaceChildren()
+      if (status === "downloading") {
+        const dot = document.createElement("span")
+        dot.className = "dl-status-dot"
+        dot.setAttribute("aria-hidden", "true")
+        statusEl.appendChild(dot)
+      }
+      statusEl.appendChild(document.createTextNode(statusLabel(status)))
+    }
+
+    function createRow(d: any): RowEntry {
+      const row = document.createElement("div")
+      row.className = "px-4 py-3 flex flex-col gap-1.5"
+
+      const top = document.createElement("div")
+      top.className = "flex items-center gap-3"
+
+      const info = document.createElement("div")
+      info.className = "flex flex-col min-w-0 flex-1 gap-0.5"
+
+      const titleEl = document.createElement("div")
+      titleEl.className = "dl-row-title truncate text-sm text-fg font-medium"
+      titleEl.textContent = d.title
+
+      const meta = document.createElement("div")
+      meta.className =
+        "dl-row-meta text-xs tabular-nums flex flex-wrap items-center gap-x-2.5 gap-y-0.5"
+
+      const statusEl = document.createElement("span")
+      statusEl.className = `font-medium ${statusToneClass(d.status)}`
+      buildStatusContent(statusEl, d.status)
+      meta.appendChild(statusEl)
+
+      const sizesEl = document.createElement("span")
+      sizesEl.className = "text-fg-3"
+      meta.appendChild(sizesEl)
+
+      const speedEl = document.createElement("span")
+      speedEl.className = "text-fg-3 inline-flex items-center gap-1.5 min-w-0"
+      speedEl.style.display = "none"
+      const sparkCanvas = document.createElement("canvas")
+      sparkCanvas.setAttribute("aria-hidden", "true")
+      sparkCanvas.className = "block shrink-0"
+      sparkCanvas.style.width = "60px"
+      sparkCanvas.style.height = "14px"
+      const speedTextEl = document.createElement("span")
+      speedTextEl.className = "shrink-0"
+      speedEl.append(sparkCanvas, speedTextEl)
+      meta.appendChild(speedEl)
+
+      info.append(titleEl, meta)
+
+      const actionsEl = document.createElement("div")
+      actionsEl.className = "shrink-0 flex items-center gap-1"
+      buildActionsFor(d, actionsEl)
+
+      top.append(info, actionsEl)
+      row.appendChild(top)
+
+      const barShellEl = document.createElement("div")
+      barShellEl.className =
+        "dl-bar-shell h-1 rounded-full bg-bg overflow-hidden ring-1 ring-line"
+      const barFillEl = document.createElement("div")
+      barFillEl.className = "h-full dl-bar-fill"
+      barShellEl.appendChild(barFillEl)
+      row.appendChild(barShellEl)
+
+      const errorEl = document.createElement("div")
+      errorEl.className = "text-xs text-bad/80 hidden"
+      row.appendChild(errorEl)
+
+      const entry: RowEntry = {
+        el: row,
+        status: d.status,
+        bytesTotal: d.bytesTotal || 0,
+        titleStr: d.title,
+        titleEl,
+        statusEl,
+        sizesEl,
+        speedEl,
+        sparkCanvas,
+        speedTextEl,
+        actionsEl,
+        barShellEl,
+        barFillEl,
+        errorEl,
+      }
+      paintRow(entry, d)
+      return entry
+    }
+
+    function paintRow(entry: RowEntry, d: any) {
+      const prevStatus = entry.status
+
+      // Title (rare to change, but cheap to refresh).
+      if (entry.titleStr !== d.title) {
+        entry.titleEl.textContent = d.title
+        entry.titleStr = d.title
+      }
+
+      // Status word + dot + tone color.
+      if (prevStatus !== d.status) {
+        entry.statusEl.className = `font-medium ${statusToneClass(d.status)}`
+        buildStatusContent(entry.statusEl, d.status)
+        buildActionsFor(d, entry.actionsEl)
+      }
+
+      const sizeStr =
+        d.bytesTotal > 0
+          ? `${fmtSize(d.bytesDone)} / ${fmtSize(d.bytesTotal)}`
+          : fmtSize(d.bytesDone)
+      entry.sizesEl.textContent = sizeStr
+
+      if (d.status === "downloading") {
+        const speed = getRowThroughputEwma(d.id)
+        entry.speedTextEl.textContent = fmtSpeed(speed) || "0 B/s"
+        entry.speedEl.style.display = ""
+        drawSparkline(entry.sparkCanvas, getRowThroughputHistory(d.id), {
+          stroke: getAccentRgb(),
+          fill: withAlpha(getAccentRgb(), 0.18),
+        })
+      } else {
+        entry.speedTextEl.textContent = ""
+        entry.speedEl.style.display = "none"
+        if (entry.sparkCanvas.width > 0) {
+          entry.sparkCanvas.width = entry.sparkCanvas.width
+        }
+      }
+
+      const wantsDeterminate = d.bytesTotal > 0
+      const wantsIndeterminate = !wantsDeterminate && d.status === "downloading"
+      const fill = entry.barFillEl
+      if (wantsDeterminate && fill) {
+        entry.barShellEl.classList.remove(
+          "hidden",
+          "dl-bar-indeterminate"
+        )
+        const tone = toneClassForBar(d.status)
+        for (const c of ALL_BAR_TONES) fill.classList.toggle(c, c === tone)
+        fill.classList.toggle("dl-bar-active", d.status === "downloading")
+        fill.classList.remove("hidden")
+        const pctV = Math.max(
+          0,
+          Math.min(100, (d.bytesDone / d.bytesTotal) * 100)
+        )
+        const justFinished =
+          prevStatus !== "done" && d.status === "done" && firstRenderComplete
+        if (justFinished && !prefersReducedMotion()) {
+          const from = fill.style.width || `${pctV}%`
+          fill.style.width = "100%"
+          fill.animate(
+            [{ width: from }, { width: "100%" }],
+            { duration: 600, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+          )
+        } else {
+          fill.style.width = `${pctV}%`
+        }
+      } else if (wantsIndeterminate && fill) {
+        entry.barShellEl.classList.remove("hidden")
+        entry.barShellEl.classList.add("dl-bar-indeterminate")
+        for (const c of ALL_BAR_TONES) fill.classList.remove(c)
+        fill.classList.remove("dl-bar-active")
+        fill.classList.add("hidden") // indeterminate uses ::after on the shell
+      } else {
+        entry.barShellEl.classList.add("hidden")
+        entry.barShellEl.classList.remove("dl-bar-indeterminate")
+      }
+
+      // Error message.
+      if (d.status === "error" && d.error) {
+        entry.errorEl.textContent = d.error
+        entry.errorEl.classList.remove("hidden")
+      } else {
+        entry.errorEl.textContent = ""
+        entry.errorEl.classList.add("hidden")
+      }
+
+      if (d.status === "done") {
+        if (firstRenderComplete && !seenDone.has(d.id) && prevStatus !== "done") {
+          if (!prefersReducedMotion()) {
+            entry.el.animate(
+              [
+                {
+                  backgroundColor:
+                    "color-mix(in oklch, var(--color-ok) 22%, transparent)",
+                },
+                { backgroundColor: "transparent" },
+              ],
+              { duration: 1200, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+            )
+          }
+        }
+        seenDone.add(d.id)
+      } else {
+        seenDone.delete(d.id)
+      }
+
+      const recede =
+        d.status === "done" ||
+        d.status === "cancelled" ||
+        d.status === "error"
+      entry.el.classList.toggle("dl-row-done", recede)
+
+      entry.status = d.status
+      entry.bytesTotal = d.bytesTotal || 0
+    }
+
+    function exitRow(entry: RowEntry, staggerIdx: number = 0) {
+      const el = entry.el
+      el.style.setProperty("--dl-row-h", `${el.offsetHeight}px`)
+      if (staggerIdx > 0 && !prefersReducedMotion()) {
+        el.style.transitionDelay = `${staggerIdx * 60}ms`
+      }
+      // Force a reflow so --dl-row-h is committed before the leaving class lands.
+      void el.offsetHeight
+      el.classList.add("dl-row-leaving")
+      requestAnimationFrame(() => el.classList.add("is-leaving"))
+      const onEnd = () => {
+        el.removeEventListener("transitionend", onEnd)
+        el.remove()
+      }
+      el.addEventListener("transitionend", onEnd)
+      setTimeout(() => {
+        if (el.isConnected) el.remove()
+      }, 320 + staggerIdx * 60)
+    }
+
+    function captureRowPositions(): Map<string, number> {
+      const positions = new Map<string, number>()
+      for (const [id, entry] of rowsById) {
+        if (entry.el.isConnected) {
+          positions.set(id, entry.el.getBoundingClientRect().top)
+        }
+      }
+      return positions
+    }
+
+    function playFlipReorder(prevPositions: Map<string, number>) {
+      if (prefersReducedMotion()) return
+      for (const [id, oldTop] of prevPositions) {
+        const entry = rowsById.get(id)
+        if (!entry || !entry.el.isConnected) continue
+        const newTop = entry.el.getBoundingClientRect().top
+        const delta = oldTop - newTop
+        if (Math.abs(delta) < 1) continue
+        entry.el.animate(
+          [
+            { transform: `translateY(${delta}px)` },
+            { transform: "translateY(0)" },
+          ],
+          {
+            duration: 380,
+            easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+            fill: "both",
+          }
+        )
+      }
+    }
+
+    function statusOrder(s: string): number {
+      switch (s) {
+        case "downloading": return 0
+        case "stalled":     return 1
+        case "queued":      return 2
+        case "paused":      return 3
+        case "error":       return 4
+        case "done":        return 5
+        default:            return 6
+      }
+    }
+
+    /** Empty state markup builder (created once on demand). */
+    let emptyStateEl: HTMLDivElement | null = null
+    function ensureEmptyState(): HTMLDivElement {
+      if (emptyStateEl) return emptyStateEl
+      const wrap = document.createElement("div")
+      wrap.className =
+        "px-5 py-10 text-sm text-fg-3 flex flex-col items-center gap-4 text-center"
+      wrap.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="size-10 text-fg-3 dl-empty-icon"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><polyline points="7 11 12 16 17 11"/><line x1="12" y1="4" x2="12" y2="16"/></svg><div class="flex flex-col gap-1"><p class="text-fg/80">Nothing in the queue.</p><p class="text-xs text-fg-3 max-w-prose">Open a movie or series episode and tap Download to queue one here.</p></div>`
+      emptyStateEl = wrap
+      return wrap
+    }
+
+    function renderList() {
+      if (!listEl) return
+      if (!firstRenderComplete) {
+        listEl.replaceChildren()
+      }
+      const list = listDownloads().slice()
+      list.sort((a, b) => statusOrder(a.status) - statusOrder(b.status))
+
+      const counts = { active: 0, queued: 0, finished: 0 }
+      for (const d of list) {
+        if (d.status === "downloading" || d.status === "stalled" || d.status === "paused")
+          counts.active++
+        else if (d.status === "queued") counts.queued++
+        else if (d.status === "done" || d.status === "cancelled" || d.status === "error")
+          counts.finished++
+      }
+
+      if (summaryEl) {
+        if (list.length === 0) {
+          summaryEl.textContent =
+            "Movies and series episodes you save will appear here."
+        } else {
+          const bits: string[] = []
+          if (counts.active) bits.push(`${counts.active} active`)
+          if (counts.queued) bits.push(`${counts.queued} queued`)
+          if (counts.finished) bits.push(`${counts.finished} finished`)
+          summaryEl.textContent = bits.join(" · ")
+        }
+      }
+
+      const hasFinished = list.some(
+        (d) =>
+          d.status === "done" ||
+          d.status === "cancelled" ||
+          d.status === "error"
+      )
+      if (clearBtn) {
+        clearBtn.disabled = !hasFinished
+        clearBtn.classList.toggle("opacity-50", !hasFinished)
+        clearBtn.classList.toggle("cursor-not-allowed", !hasFinished)
+      }
+
+      // Empty state.
+      if (list.length === 0) {
+        let staggerIdx = 0
+        for (const entry of rowsById.values()) exitRow(entry, staggerIdx++)
+        rowsById.clear()
+        const empty = ensureEmptyState()
+        if (!empty.isConnected) {
+          listEl.replaceChildren(empty)
+        }
+        firstRenderComplete = true
+        updateAggregateStrip()
+        return
+      }
+
+      if (emptyStateEl?.isConnected) {
+        emptyStateEl.remove()
+      }
+
+      const prevPositions = captureRowPositions()
+      let structuralChange = false
+
+      const currentIds = new Set<string>()
+      for (const d of list) currentIds.add(d.id)
+      let exitStagger = 0
+      for (const [id, entry] of rowsById) {
+        if (!currentIds.has(id)) {
+          rowsById.delete(id)
+          seenDone.delete(id)
+          exitRow(entry, exitStagger++)
+          structuralChange = true
+        }
+      }
+
+      for (const d of list) {
+        let entry = rowsById.get(d.id)
+        if (!entry) {
+          entry = createRow(d)
+          rowsById.set(d.id, entry)
+          if (firstRenderComplete) {
+            entry.el.classList.add("dl-row-enter")
+          }
+          structuralChange = true
+        } else {
+          const prevStatus = entry.status
+          paintRow(entry, d)
+          if (prevStatus !== d.status) structuralChange = true
+        }
+      }
+
+      if (structuralChange) {
+        for (const d of list) {
+          const entry = rowsById.get(d.id)
+          if (entry) listEl.appendChild(entry.el)
+        }
+        playFlipReorder(prevPositions)
+      }
+
+      firstRenderComplete = true
+      updateAggregateStrip()
+    }
+
+    renderList()
+
+    document.addEventListener(DOWNLOADS_LIST_EVENT, renderList)
+    document.addEventListener(DOWNLOAD_PROGRESS_EVENT, renderList)
+    document.addEventListener(THROUGHPUT_EVENT, renderList)
+
+    clearBtn?.addEventListener("click", () => {
+      clearFinishedDownloads()
+    })
+  </script>
+</Layout>

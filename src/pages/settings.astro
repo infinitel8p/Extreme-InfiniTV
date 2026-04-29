@@ -13,9 +13,10 @@ import {
 ---
 
 <Layout pageTitle="Settings">
-  <main
-    class="w-full max-w-3xl mx-auto px-4 md:px-6 lg:px-8 pt-6 sm:pt-10 pb-12
-           flex flex-col gap-8 sm:gap-10 flex-1 min-h-0 overflow-auto custom-scroll">
+  <main class="flex-1 min-h-0 overflow-auto custom-scroll">
+    <div
+      class="w-full max-w-3xl mx-auto px-4 md:px-6 lg:px-8 pt-6 sm:pt-10 pb-12
+             flex flex-col gap-8 sm:gap-10">
 
     <header class="shrink-0 flex flex-col gap-2">
       <h1
@@ -24,7 +25,7 @@ import {
         Settings
       </h1>
       <p class="text-sm sm:text-base text-fg-3 max-w-prose">
-        Playlists, downloads, cache, and the app itself.
+        Playlists, preferences, cache, and the app itself.
       </p>
     </header>
 
@@ -108,7 +109,7 @@ import {
                   fontScaleBtns[i].setAttribute("aria-pressed", Math.abs(btnScale - savedFontScale) < 0.001 ? "true" : "false");
                 }
               }
-              var currentTheme = localStorage.getItem("xt_theme") || "system";
+              var currentTheme = localStorage.getItem("xt_theme") || "dark";
               var themeGroup = document.getElementById("settings-theme");
               if (themeGroup) {
                 var themeBtns = themeGroup.querySelectorAll(".theme-btn");
@@ -209,15 +210,21 @@ import {
       <h2 class="text-eyebrow font-semibold uppercase tracking-wide text-fg-3">Data</h2>
       <div class="flex flex-col gap-4">
 
-        <!-- Downloads -->
-        <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
+        <!-- Downloads (folder only - queue lives on /downloads) -->
+        <article id="downloads-folder-section" class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-3 scroll-mt-6">
           <div class="flex items-start justify-between gap-3">
-            <h3 class="text-base font-semibold">Downloads</h3>
+            <div class="flex flex-col gap-1 min-w-0">
+              <h3 class="text-base font-semibold">Downloads</h3>
+              <p class="text-xs text-fg-3 max-w-prose">
+                Folder where new downloads land. Manage the queue itself on the
+                <a href="/downloads" class="text-accent underline">Downloads page</a>.
+              </p>
+            </div>
             <span id="downloads-availability" class="text-xs text-fg-3 shrink-0 truncate empty:hidden"></span>
           </div>
           <div class="flex flex-col gap-1.5">
             <label class="text-eyebrow font-medium uppercase text-fg-3" for="download-dir-input">
-              Download folder
+              Save to
             </label>
             <div class="flex gap-2 flex-wrap">
               <input
@@ -238,18 +245,24 @@ import {
             </div>
           </div>
 
-          <div class="flex flex-col gap-2">
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-eyebrow font-medium uppercase text-fg-3">Active &amp; recent</span>
-              <button
-                id="downloads-clear-finished"
-                type="button"
-                class="text-xs text-fg-3 hover:text-fg focus-visible:text-fg transition-colors rounded-md px-1.5 py-0.5">
-                Clear finished
-              </button>
-            </div>
-            <div id="downloads-list" class="flex flex-col divide-y divide-line rounded-xl border border-line bg-bg overflow-hidden">
-              <div class="px-3 py-3 text-xs text-fg-3">Open a movie and tap Download to queue it here.</div>
+          <div class="flex flex-col gap-1.5">
+            <span class="text-eyebrow font-medium uppercase text-fg-3">
+              Concurrent downloads
+            </span>
+            <p class="text-xs text-fg-3 max-w-prose">
+              Most Xtream providers cap connections per account, so a second
+              parallel download fails mid-stream. Keep this at 1 unless your
+              provider explicitly allows multiple slots.
+            </p>
+            <div
+              id="settings-download-concurrency"
+              class="flex flex-wrap gap-2"
+              role="radiogroup"
+              aria-label="Concurrent downloads">
+              <button type="button" data-concurrency="1" aria-pressed="false" class="dl-concurrency-btn btn">1</button>
+              <button type="button" data-concurrency="2" aria-pressed="false" class="dl-concurrency-btn btn">2</button>
+              <button type="button" data-concurrency="3" aria-pressed="false" class="dl-concurrency-btn btn">3</button>
+              <button type="button" data-concurrency="4" aria-pressed="false" class="dl-concurrency-btn btn">4</button>
             </div>
           </div>
         </article>
@@ -339,7 +352,7 @@ import {
           </button>
           <button id="update-install" type="button" hidden class="btn">
             <IconCloudDownload aria-hidden="true" class="btn-icon" />
-            Download &amp; install
+            <span id="update-install-label">Download &amp; install</span>
           </button>
           <button id="update-relaunch" type="button" hidden class="btn">
             Restart now
@@ -393,6 +406,7 @@ import {
       </article>
     </section>
 
+    </div>
   </main>
 
   <!-- Reset confirmation dialog -->
@@ -456,22 +470,12 @@ import {
       setUserAgent,
       getDownloadDir,
       setDownloadDir,
+      getDownloadConcurrency,
+      setDownloadConcurrency,
     } from "@/scripts/lib/app-settings.js"
-    import {
-      listDownloads,
-      isDownloadable,
-      cancelDownload,
-      pauseDownload,
-      resumeDownload,
-      removeDownload,
-      clearFinishedDownloads,
-      DOWNLOADS_LIST_EVENT,
-      DOWNLOAD_PROGRESS_EVENT,
-    } from "@/scripts/lib/downloads.js"
+    import { isDownloadable } from "@/scripts/lib/downloads.js"
 
     injectVersion()
-    // injectExpirationDate is called globally from Layout.astro - the
-    // [data-account-expiration="raw"] cell on this page picks up that run.
 
     const playlistsEl = document.getElementById("settings-playlists")
     const refreshBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-refresh-active"))
@@ -657,6 +661,14 @@ import {
             toRemove.push(k)
         }
         for (const k of toRemove) localStorage.removeItem(k)
+        try {
+          const sessRemove = []
+          for (let i = 0; i < sessionStorage.length; i++) {
+            const k = sessionStorage.key(i)
+            if (k && k.startsWith("xt_cache:")) sessRemove.push(k)
+          }
+          for (const k of sessRemove) sessionStorage.removeItem(k)
+        } catch {}
         removed = toRemove.length
         ok = true
         flashMsg(
@@ -792,9 +804,9 @@ import {
     const themeGroup = document.getElementById("settings-theme")
     function readTheme() {
       try {
-        return localStorage.getItem("xt_theme") || "system"
+        return localStorage.getItem("xt_theme") || "dark"
       } catch {
-        return "system"
+        return "dark"
       }
     }
     function applyTheme(t) {
@@ -802,8 +814,7 @@ import {
       else if (t === "dark") document.documentElement.style.colorScheme = "dark"
       else document.documentElement.style.colorScheme = ""
       try {
-        if (t === "system") localStorage.removeItem("xt_theme")
-        else localStorage.setItem("xt_theme", t)
+        localStorage.setItem("xt_theme", t)
       } catch {}
       syncThemeButtons()
     }
@@ -950,7 +961,7 @@ import {
     })
 
     // ---------------------------------------------------------------------
-    // Downloads
+    // Downloads folder
     // ---------------------------------------------------------------------
     const dirInput = /** @type {HTMLInputElement|null} */ (
       document.getElementById("download-dir-input")
@@ -961,8 +972,6 @@ import {
     const dirClearBtn = /** @type {HTMLButtonElement|null} */ (
       document.getElementById("download-dir-clear")
     )
-    const downloadsListEl = document.getElementById("downloads-list")
-    const downloadsClearBtn = document.getElementById("downloads-clear-finished")
     const downloadsAvailEl = document.getElementById("downloads-availability")
 
     function syncDir() {
@@ -974,9 +983,7 @@ import {
     syncDir()
 
     if (downloadsAvailEl) {
-      downloadsAvailEl.textContent = isDownloadable()
-        ? ""
-        : "Desktop only"
+      downloadsAvailEl.textContent = isDownloadable() ? "" : "Desktop only"
     }
     if (!isDownloadable()) {
       if (dirPickBtn) dirPickBtn.disabled = true
@@ -1008,138 +1015,26 @@ import {
       syncDir()
     })
 
-    function fmtSize(n) {
-      if (!n) return "-"
-      if (n < 1024) return `${n} B`
-      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-      if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
-      return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
-    }
-
-    function statusLabel(s) {
-      switch (s) {
-        case "downloading": return "Downloading"
-        case "queued":      return "Queued"
-        case "done":        return "Done"
-        case "error":       return "Failed"
-        case "stalled":     return "Stalled"
-        case "paused":      return "Paused"
-        case "cancelled":   return "Cancelled"
-        default:            return s || "-"
+    const concurrencyGroup = document.getElementById(
+      "settings-download-concurrency"
+    )
+    function syncConcurrencyButtons() {
+      if (!concurrencyGroup) return
+      const current = getDownloadConcurrency()
+      for (const btn of concurrencyGroup.querySelectorAll(".dl-concurrency-btn")) {
+        const v = parseInt(btn.getAttribute("data-concurrency") || "1", 10)
+        btn.setAttribute("aria-pressed", v === current ? "true" : "false")
       }
     }
-
-    function statusToneClass(s) {
-      switch (s) {
-        case "done":      return "text-ok"
-        case "error":     return "text-bad"
-        case "stalled":   return "text-warn"
-        case "paused":    return "text-fg-2"
-        case "queued":    return "text-fg-3"
-        case "cancelled": return "text-fg-3"
-        default:          return "text-accent"
-      }
-    }
-
-    function renderDownloads() {
-      if (!downloadsListEl) return
-      const list = listDownloads()
-      const hasFinished = list.some(
-        (d) => d.status !== "downloading" && d.status !== "queued"
+    syncConcurrencyButtons()
+    concurrencyGroup?.addEventListener("click", (e) => {
+      const btn = /** @type {HTMLElement} */ (e.target).closest(
+        ".dl-concurrency-btn"
       )
-      if (downloadsClearBtn) {
-        /** @type {HTMLButtonElement} */ (downloadsClearBtn).disabled = !hasFinished
-        downloadsClearBtn.classList.toggle("opacity-50", !hasFinished)
-        downloadsClearBtn.classList.toggle("cursor-not-allowed", !hasFinished)
-      }
-      if (!list.length) {
-        downloadsListEl.innerHTML =
-          '<div class="px-3 py-3 text-xs text-fg-3">Open a movie and tap Download to queue it here.</div>'
-        return
-      }
-      const frag = document.createDocumentFragment()
-      for (const d of list) {
-        const row = document.createElement("div")
-        row.className = "flex items-center gap-3 px-3 py-2.5 text-sm"
-
-        const info = document.createElement("div")
-        info.className = "flex flex-col min-w-0 flex-1 gap-0.5"
-        const title = document.createElement("div")
-        title.className = "truncate text-fg"
-        title.textContent = d.title
-        const meta = document.createElement("div")
-        meta.className = "truncate text-xs tabular-nums"
-        const status = document.createElement("span")
-        status.className = `font-medium ${statusToneClass(d.status)}`
-        status.textContent = statusLabel(d.status)
-        const dot = document.createTextNode(" · ")
-        const sizeText = document.createElement("span")
-        sizeText.className = "text-fg-3"
-        const pct =
-          d.bytesTotal > 0
-            ? ` · ${Math.floor((d.bytesDone / d.bytesTotal) * 100)}%`
-            : ""
-        const sizes =
-          d.bytesTotal > 0
-            ? `${fmtSize(d.bytesDone)} / ${fmtSize(d.bytesTotal)}`
-            : fmtSize(d.bytesDone)
-        sizeText.textContent = `${sizes}${pct}`
-        meta.append(status, dot, sizeText)
-        info.append(title, meta)
-
-        const actions = document.createElement("div")
-        actions.className = "shrink-0 flex items-center gap-1"
-
-        const mkAction = (label, ariaLabel, onClick, tone = "neutral") => {
-          const b = document.createElement("button")
-          b.type = "button"
-          const toneClass =
-            tone === "primary"
-              ? "text-accent hover:text-accent hover:bg-accent-soft focus-visible:bg-accent-soft"
-              : "text-fg-3 hover:text-fg hover:bg-surface-2 focus-visible:text-fg focus-visible:bg-surface-2"
-          b.className = `rounded-md px-2 py-1.5 text-xs transition-colors ${toneClass}`
-          b.textContent = label
-          b.setAttribute("aria-label", ariaLabel)
-          b.addEventListener("click", onClick)
-          return b
-        }
-
-        if (d.status === "downloading") {
-          actions.append(
-            mkAction("Pause", `Pause ${d.title}`, () => pauseDownload(d.id))
-          )
-        } else if (d.status === "queued") {
-          actions.append(
-            mkAction("Cancel", `Cancel queued ${d.title}`, () => pauseDownload(d.id)),
-            mkAction("Remove", `Remove ${d.title}`, () => removeDownload(d.id))
-          )
-        } else if (d.status === "stalled" || d.status === "paused" || d.status === "error") {
-          actions.append(
-            mkAction("Resume", `Resume ${d.title}`, () => resumeDownload(d.id), "primary"),
-            mkAction("Remove", `Remove ${d.title}`, () => {
-              if (confirm(`Remove "${d.title}"? The partial file will also be deleted.`)) {
-                removeDownload(d.id)
-              }
-            })
-          )
-        } else {
-          actions.append(
-            mkAction("Remove", `Remove ${d.title}`, () => removeDownload(d.id))
-          )
-        }
-
-        row.append(info, actions)
-        frag.appendChild(row)
-      }
-      downloadsListEl.replaceChildren(frag)
-    }
-    renderDownloads()
-
-    document.addEventListener(DOWNLOADS_LIST_EVENT, renderDownloads)
-    document.addEventListener(DOWNLOAD_PROGRESS_EVENT, renderDownloads)
-
-    downloadsClearBtn?.addEventListener("click", () => {
-      clearFinishedDownloads()
+      if (!btn) return
+      const v = parseInt(btn.getAttribute("data-concurrency") || "1", 10)
+      setDownloadConcurrency(v)
+      syncConcurrencyButtons()
     })
 
     const updateSectionEl = document.getElementById("update-section")
@@ -1158,6 +1053,7 @@ import {
     const updateInstallBtn = /** @type {HTMLButtonElement|null} */ (
       document.getElementById("update-install")
     )
+    const updateInstallLabelEl = document.getElementById("update-install-label")
     const updateRelaunchBtn = /** @type {HTMLButtonElement|null} */ (
       document.getElementById("update-relaunch")
     )
@@ -1229,6 +1125,10 @@ import {
       return `${(n / (1024 * 1024)).toFixed(1)} MB`
     }
 
+    function setInstallLabel(text) {
+      if (updateInstallLabelEl) updateInstallLabelEl.textContent = text
+    }
+
     async function checkForUpdates() {
       if (!isWindowsDesktop) return
       if (updateMsgEl) updateMsgEl.textContent = "Checking…"
@@ -1236,6 +1136,8 @@ import {
       updateCheckBtn?.setAttribute("disabled", "")
       updateInstallBtn?.setAttribute("hidden", "")
       updateRelaunchBtn?.setAttribute("hidden", "")
+      setInstallLabel("Download & install")
+      setProgress(null)
       try {
         const { check } = await import("@tauri-apps/plugin-updater")
         const update = await check()
@@ -1314,13 +1216,17 @@ import {
         if (updateMsgEl) {
           updateMsgEl.textContent = "Update installed. Restart to apply."
         }
+        setInstallLabel("Download & install")
         updateRelaunchBtn?.removeAttribute("hidden")
       } catch (e) {
         console.error("Update install failed:", e)
         if (updateMsgEl) {
-          updateMsgEl.textContent = `Install failed - ${String(e?.message || e)}`
+          updateMsgEl.textContent =
+            `Download failed - ${String(e?.message || e)}. ` +
+            "Click Re-download to start over."
         }
         setProgress(null)
+        setInstallLabel("Re-download")
         updateInstallBtn?.removeAttribute("disabled")
       } finally {
         updateCheckBtn?.removeAttribute("disabled")

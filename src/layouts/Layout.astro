@@ -32,7 +32,7 @@ const documentTitle = pageTitle
           document.documentElement.style.setProperty("--xt-channels-w", cw + "rem");
         }
 
-        var currentTheme = localStorage.getItem("xt_theme") || "system";
+        var currentTheme = localStorage.getItem("xt_theme") || "dark";
         if (currentTheme === "light") document.documentElement.style.colorScheme = "light";
         else if (currentTheme === "dark") document.documentElement.style.colorScheme = "dark";
       } catch (e) {}
@@ -44,7 +44,7 @@ const documentTitle = pageTitle
            flex flex-col md:flex-row pr-[env(safe-area-inset-right)]"
   >
     <Sidebar />
-    <div class="flex-1 min-w-0 min-h-0 flex flex-col order-first md:order-none">
+    <div class="flex-1 min-w-0 min-h-0 flex flex-col order-first md:order-0">
       <slot />
     </div>
   </body>

@@ -6,26 +6,24 @@ import {
   IconMovie,
   IconStack2,
   IconCalendarTime,
+  IconDownload,
   IconSettings,
 } from "@tabler/icons-svelte"
 import PlaylistSwitcher from "@/components/PlaylistSwitcher.astro"
 
 const path = Astro.url.pathname.replace(/\/$/, "") || "/"
 
-// Primary destinations on the desktop rail. EPG sits here too — on mobile
-// we drop it from the bottom bar (Live TV's toolbar already links to it).
 const items = [
-  { href: "/",        label: "Home",    Icon: IconHome,         match: (p) => p === "/" },
-  { href: "/livetv",  label: "Live TV", Icon: IconDeviceTv,     match: (p) => p === "/livetv" || p.startsWith("/livetv/") },
-  { href: "/movies",  label: "Movies",  Icon: IconMovie,        match: (p) => p === "/movies" || p.startsWith("/movies/") },
-  { href: "/series",  label: "Series",  Icon: IconStack2,       match: (p) => p === "/series" || p.startsWith("/series/") },
-  { href: "/epg",     label: "EPG",     Icon: IconCalendarTime, match: (p) => p === "/epg" || p.startsWith("/epg/") },
+  { href: "/",          label: "Home",      Icon: IconHome,         match: (p) => p === "/" },
+  { href: "/livetv",    label: "Live TV",   Icon: IconDeviceTv,     match: (p) => p === "/livetv" || p.startsWith("/livetv/") },
+  { href: "/movies",    label: "Movies",    Icon: IconMovie,        match: (p) => p === "/movies" || p.startsWith("/movies/") },
+  { href: "/series",    label: "Series",    Icon: IconStack2,       match: (p) => p === "/series" || p.startsWith("/series/") },
+  { href: "/epg",       label: "EPG",       Icon: IconCalendarTime, match: (p) => p === "/epg" || p.startsWith("/epg/") },
+  { href: "/downloads", label: "Downloads", Icon: IconDownload,     match: (p) => p === "/downloads" || p.startsWith("/downloads/"), id: "nav-downloads" },
 ]
 
-// Bottom nav on mobile: drop EPG to keep tap targets comfortable on small
-// phones, include Settings as the 5th tab.
 const mobileItems = [
-  ...items.filter((i) => i.href !== "/epg"),
+  ...items.filter((i) => i.href !== "/epg" && i.href !== "/downloads"),
   { href: "/settings", label: "Settings", Icon: IconSettings, match: (p) => p === "/settings" || p.startsWith("/settings/") },
 ]
 
@@ -58,11 +56,13 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
   </a>
 
   <nav class="flex flex-col gap-1 flex-1 mt-2" aria-label="Main">
-    {items.map(({ href, label, Icon, match }) => {
+    {items.map(({ href, label, Icon, match, id }) => {
       const active = match(path)
+      const isDownloads = id === "nav-downloads"
       return (
         <a
           href={href}
+          id={id}
           aria-label={label}
           aria-current={active ? "page" : undefined}
           title={label}
@@ -75,17 +75,34 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
               ? "bg-surface-2 text-fg ring-1 ring-accent/40"
               : "text-fg-2 hover:text-fg focus-visible:text-fg",
           ]}>
-          <Icon
-            aria-hidden="true"
-            stroke={active ? 2 : 1.75}
-            class:list={[
-              "size-5 shrink-0",
-              active ? "text-accent" : "text-fg-3",
-            ]}
-          />
+          <span class:list={["relative inline-flex shrink-0"]}>
+            <Icon
+              aria-hidden="true"
+              stroke={active ? 2 : 1.75}
+              class:list={[
+                "size-5 shrink-0",
+                active ? "text-accent" : "text-fg-3",
+              ]}
+            />
+            {isDownloads && (
+              <span
+                id="sidebar-downloads-badge"
+                aria-hidden="true"
+                hidden
+                class="absolute -top-1.5 -right-2 min-w-[1.125rem] h-[1.125rem] px-1
+                       inline-flex items-center justify-center rounded-full
+                       bg-accent text-bg text-[10px] font-semibold leading-none
+                       tabular-nums ring-2 ring-bg">0</span>
+            )}
+          </span>
           <span class="hidden lg:inline truncate text-sm font-medium">
             {label}
           </span>
+          {isDownloads && (
+            <span
+              id="sidebar-downloads-sub"
+              class="hidden lg:inline ml-auto truncate text-2xs text-fg-3 tabular-nums empty:hidden"></span>
+          )}
         </a>
       )
     })}
@@ -183,3 +200,59 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     )
   })}
 </nav>
+
+<script>
+  import {
+    listDownloads,
+    DOWNLOADS_LIST_EVENT,
+    DOWNLOAD_PROGRESS_EVENT,
+  } from "@/scripts/lib/downloads.js"
+
+  const badge = document.getElementById("sidebar-downloads-badge")
+  const sub = document.getElementById("sidebar-downloads-sub")
+
+  const ACTIVE = new Set(["downloading", "queued", "stalled"])
+
+  function update() {
+    const list = listDownloads()
+    const active = list.filter((d) => ACTIVE.has(d.status))
+    const count = active.length
+
+    if (badge) {
+      if (count === 0) {
+        badge.setAttribute("hidden", "")
+        badge.textContent = ""
+      } else {
+        badge.removeAttribute("hidden")
+        badge.textContent = count > 9 ? "9+" : String(count)
+      }
+    }
+
+    if (sub) {
+      if (count === 0) {
+        sub.textContent = ""
+        return
+      }
+      let done = 0
+      let total = 0
+      let downloading = 0
+      for (const d of active) {
+        if (d.status === "downloading") downloading++
+        if (d.bytesTotal > 0) {
+          done += d.bytesDone || 0
+          total += d.bytesTotal
+        }
+      }
+      if (total > 0 && downloading > 0) {
+        const pct = Math.max(0, Math.min(100, (done / total) * 100))
+        sub.textContent = `${pct.toFixed(0)}%`
+      } else {
+        sub.textContent = `${count}`
+      }
+    }
+  }
+
+  document.addEventListener(DOWNLOADS_LIST_EVENT, update)
+  document.addEventListener(DOWNLOAD_PROGRESS_EVENT, update)
+  update()
+</script>

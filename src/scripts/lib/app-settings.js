@@ -1,6 +1,10 @@
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
+const KEY_DOWNLOAD_CONCURRENCY = "xt_download_concurrency"
 const EVT_CHANGED = "xt:settings-changed"
+
+export const DEFAULT_DOWNLOAD_CONCURRENCY = 1
+export const MAX_DOWNLOAD_CONCURRENCY = 4
 
 export const UA_PRESETS = [
   { id: "default", label: "Default (browser/WebView)", value: "" },
@@ -61,6 +65,27 @@ export function setDownloadDir(path) {
   document.dispatchEvent(
     new CustomEvent(EVT_CHANGED, {
       detail: { key: "downloadDir", value: path },
+    })
+  )
+}
+
+export function getDownloadConcurrency() {
+  const raw = readLS(KEY_DOWNLOAD_CONCURRENCY, "")
+  const n = parseInt(raw, 10)
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_DOWNLOAD_CONCURRENCY
+  if (n > MAX_DOWNLOAD_CONCURRENCY) return MAX_DOWNLOAD_CONCURRENCY
+  return n
+}
+
+export function setDownloadConcurrency(n) {
+  const clamped = Math.max(
+    1,
+    Math.min(MAX_DOWNLOAD_CONCURRENCY, Number(n) || DEFAULT_DOWNLOAD_CONCURRENCY)
+  )
+  writeLS(KEY_DOWNLOAD_CONCURRENCY, String(clamped))
+  document.dispatchEvent(
+    new CustomEvent(EVT_CHANGED, {
+      detail: { key: "downloadConcurrency", value: clamped },
     })
   )
 }

@@ -1,19 +1,26 @@
-// Tiny TTL'd JSON cache backed by localStorage.
-// Designed for the channel/VOD lists - parsing 5,000+ M3U entries or hitting
-// `get_live_streams` is expensive enough that we don't want to repeat it on
-// every page navigation.
-//
-// Layout:
-//   localStorage["xt_cache:<entryId>:<kind>"] = { data, fetchedAt, ttl }
-//   localStorage["xt_cache_meta"] = { "<full key>": <fetchedAt>, ... }
-//
-// `meta` is a write-time-ordered index used purely for LRU eviction when we
-// hit the storage quota. It's safe to lose - re-derived on next write.
-
 const PREFIX = "xt_cache:"
 const META_KEY = "xt_cache_meta"
 
 const makeKey = (entryId, kind) => `${PREFIX}${entryId}:${kind}`
+
+function readHot(key) {
+  try {
+    const raw = sessionStorage.getItem(key)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+function writeHot(key, payload) {
+  try {
+    sessionStorage.setItem(key, payload)
+  } catch {}
+}
+function dropHot(key) {
+  try {
+    sessionStorage.removeItem(key)
+  } catch {}
+}
 
 function readMeta() {
   try {
@@ -28,24 +35,55 @@ function writeMeta(meta) {
   } catch {}
 }
 
-function evictOldest() {
+function evictOldestBatch(batchSize) {
   const meta = readMeta()
-  let oldestKey = null
-  let oldestTime = Infinity
-  for (const [k, t] of Object.entries(meta)) {
-    if (t < oldestTime) {
-      oldestTime = t
-      oldestKey = k
-    }
-  }
-  if (oldestKey) {
+  const entries = Object.entries(meta)
+  if (entries.length === 0) return 0
+  entries.sort((a, b) => a[1] - b[1])
+  const drop = entries.slice(0, Math.min(batchSize, entries.length))
+  for (const [k] of drop) {
     try {
-      localStorage.removeItem(oldestKey)
+      localStorage.removeItem(k)
     } catch {}
-    delete meta[oldestKey]
-    writeMeta(meta)
+    delete meta[k]
   }
-  return Boolean(oldestKey)
+  writeMeta(meta)
+  return drop.length
+}
+
+const TRIM_TOAST_THRESHOLD_MS = 1000
+let trimToastEl = null
+
+function showTrimToast() {
+  if (typeof document === "undefined" || !document.body) return
+  if (trimToastEl) return
+  const el = document.createElement("div")
+  el.setAttribute("role", "status")
+  el.setAttribute("aria-live", "polite")
+  el.textContent = "Trimming local cache…"
+  el.style.cssText = [
+    "position:fixed",
+    "right:max(0.75rem,env(safe-area-inset-right))",
+    "bottom:max(0.75rem,env(safe-area-inset-bottom))",
+    "z-index:9999",
+    "padding:0.5rem 0.875rem",
+    "border-radius:0.75rem",
+    "background:var(--xt-surface,#1b1b22)",
+    "color:var(--xt-fg,#e7e7ea)",
+    "border:1px solid var(--xt-line,rgba(255,255,255,0.08))",
+    "font-size:0.8125rem",
+    "box-shadow:0 8px 24px rgba(0,0,0,0.32)",
+    "pointer-events:none",
+  ].join(";")
+  document.body.appendChild(el)
+  trimToastEl = el
+}
+
+function hideTrimToast() {
+  if (trimToastEl && trimToastEl.parentNode) {
+    trimToastEl.parentNode.removeChild(trimToastEl)
+  }
+  trimToastEl = null
 }
 
 /**
@@ -53,12 +91,25 @@ function evictOldest() {
  */
 export function getCached(entryId, kind) {
   if (!entryId) return null
+  const key = makeKey(entryId, kind)
+
+  // Hot tier first.
+  const hot = readHot(key)
+  if (hot) {
+    const age = Date.now() - hot.fetchedAt
+    if (age <= hot.ttl) {
+      return { data: hot.data, fetchedAt: hot.fetchedAt, age }
+    }
+    dropHot(key)
+  }
+
   try {
-    const raw = localStorage.getItem(makeKey(entryId, kind))
+    const raw = localStorage.getItem(key)
     if (!raw) return null
     const obj = JSON.parse(raw)
     const age = Date.now() - obj.fetchedAt
     if (age > obj.ttl) return null
+    writeHot(key, raw)
     return { data: obj.data, fetchedAt: obj.fetchedAt, age }
   } catch {
     return null
@@ -73,19 +124,40 @@ export function setCached(entryId, kind, data, ttlMs) {
     fetchedAt: Date.now(),
     ttl: ttlMs,
   })
-  for (let attempt = 0; attempt < 3; attempt++) {
+
+  let trimStartedAt = 0
+  let toastShown = false
+  const MAX_ATTEMPTS = 8
+  const BATCH = 32
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
       localStorage.setItem(key, payload)
       const meta = readMeta()
       meta[key] = Date.now()
       writeMeta(meta)
+      writeHot(key, payload)
+      if (toastShown) hideTrimToast()
       return
     } catch (e) {
-      if (e && e.name === "QuotaExceededError" && evictOldest()) continue
+      if (e && e.name === "QuotaExceededError") {
+        if (trimStartedAt === 0) trimStartedAt = Date.now()
+        if (
+          !toastShown &&
+          Date.now() - trimStartedAt > TRIM_TOAST_THRESHOLD_MS
+        ) {
+          showTrimToast()
+          toastShown = true
+        }
+        const removed = evictOldestBatch(BATCH)
+        if (removed > 0) continue
+      }
+      if (toastShown) hideTrimToast()
       console.warn("cache write failed:", e)
       return
     }
   }
+  if (toastShown) hideTrimToast()
 }
 
 /**
@@ -122,13 +194,16 @@ export function invalidateEntry(entryId) {
     for (const k of toRemove) delete meta[k]
     writeMeta(meta)
   } catch {}
+  try {
+    const sessRemove = []
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i)
+      if (k && k.startsWith(prefix)) sessRemove.push(k)
+    }
+    for (const k of sessRemove) sessionStorage.removeItem(k)
+  } catch {}
 }
 
-/**
- * Most recent cache fetch for any kind under this playlist, in milliseconds
- * since epoch. Returns null when nothing is cached. Cheap (reads only the
- * meta index, not the full payloads).
- */
 export function getNewestCacheTime(entryId) {
   if (!entryId) return null
   const prefix = `${PREFIX}${entryId}:`
@@ -142,10 +217,12 @@ export function getNewestCacheTime(entryId) {
 
 /** Drop one specific (entry, kind) combo. */
 export function invalidate(entryId, kind) {
+  const key = makeKey(entryId, kind)
   try {
-    localStorage.removeItem(makeKey(entryId, kind))
+    localStorage.removeItem(key)
     const meta = readMeta()
-    delete meta[makeKey(entryId, kind)]
+    delete meta[key]
     writeMeta(meta)
   } catch {}
+  dropHot(key)
 }

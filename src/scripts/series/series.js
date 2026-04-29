@@ -28,6 +28,7 @@ import {
 } from "@/scripts/lib/downloads.js"
 import { morphIntoDetail, clearAmbient } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
+import { renderProviderError } from "@/scripts/lib/provider-error.js"
 
 const detailAmbient = document.getElementById("series-detail-ambient")
 
@@ -94,6 +95,7 @@ try {
 } catch {}
 
 let activePlaylistId = ""
+let activePlaylistTitle = ""
 
 const hiddenCats = new Set()
 
@@ -574,10 +576,12 @@ async function loadSeries() {
   const active = await getActiveEntry()
   if (!active) {
     activePlaylistId = ""
+    activePlaylistTitle = ""
     showEmptyState()
     return
   }
   activePlaylistId = active._id
+  activePlaylistTitle = active.title || ""
   await ensurePrefsLoaded()
 
   const hit = getCached(active._id, "series")
@@ -655,10 +659,13 @@ async function loadSeries() {
     paintSeries(data, fromCache, age)
   } catch (e) {
     console.error(e)
-    listStatus.textContent =
-      "Couldn't load series - check your login or try Refresh."
     filtered = []
     renderGrid()
+    renderProviderError(listStatus, {
+      providerName: activePlaylistTitle,
+      kind: "series",
+      onRetry: loadSeries,
+    })
   }
 }
 
@@ -1007,8 +1014,13 @@ function prepareAndShowDetail(series) {
   /** @type {HTMLButtonElement|null} */ (detailFav)?.focus?.()
 }
 
+/** @type {HTMLElement|null} - card element clicked to open the detail dialog. */
+let lastDetailTrigger = null
+
 async function openDetail(series, fromCard) {
   if (!detailDlg || !series) return
+
+  lastDetailTrigger = fromCard || null
 
   morphIntoDetail({
     fromCard,
@@ -1145,6 +1157,15 @@ detailDlg?.addEventListener("close", () => {
   currentDetailSeries = null
   currentDetailEpisodes = null
   currentSeason = ""
+
+  const trigger = lastDetailTrigger
+  lastDetailTrigger = null
+  if (trigger && trigger.isConnected) {
+    const focusable =
+      /** @type {HTMLElement|null} */ (trigger.querySelector("button.play-btn")) ||
+      (trigger instanceof HTMLElement ? trigger : null)
+    queueMicrotask(() => focusable?.focus?.())
+  }
 })
 
 // ----------------------------

@@ -10,11 +10,12 @@
 </p>
 
 <p align="center">
-  <a href="https://play.google.com/store/apps/details?id=com.infinitel8p.xtream">
-    <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="80"/>
-  </a>
   <a href="https://apps.microsoft.com/detail/9NN162Z0WXSR">
-    <img src="https://get.microsoft.com/images/en-us%20dark.svg" height="58"/>
+    <img src="https://get.microsoft.com/images/en-us%20dark.svg" height="60" alt="Download from the Microsoft Store" style="vertical-align: middle;"/>
+  </a>
+  &nbsp;
+  <a href="https://play.google.com/store/apps/details?id=com.infinitel8p.xtream">
+    <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="60" alt="Get it on Google Play" style="vertical-align: middle;"/>
   </a>
 </p>
 

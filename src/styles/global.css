@@ -14,12 +14,6 @@
     animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-::view-transition-old(active-nav-livetv),
-::view-transition-new(active-nav-livetv),
-::view-transition-old(active-nav-movies),
-::view-transition-new(active-nav-movies),
-::view-transition-old(active-nav-series),
-::view-transition-new(active-nav-series),
 ::view-transition-old(active-poster),
 ::view-transition-new(active-poster) {
     animation-duration: 480ms;
@@ -46,13 +40,7 @@
     ::view-transition-old(root),
     ::view-transition-new(root),
     ::view-transition-old(active-poster),
-    ::view-transition-new(active-poster),
-    ::view-transition-old(active-nav-livetv),
-    ::view-transition-new(active-nav-livetv),
-    ::view-transition-old(active-nav-movies),
-    ::view-transition-new(active-nav-movies),
-    ::view-transition-old(active-nav-series),
-    ::view-transition-new(active-nav-series) {
+    ::view-transition-new(active-poster) {
         animation-duration: 0.01ms !important;
     }
 }
@@ -80,11 +68,11 @@
     /* - foreground - */
     --color-fg:   light-dark(oklch(0.21  0.014 255), oklch(0.97  0.005 250));
     --color-fg-2: light-dark(oklch(0.4   0.013 255), oklch(0.78  0.011 250));
-    --color-fg-3: light-dark(oklch(0.58  0.012 255), oklch(0.6   0.011 250));
+    --color-fg-3: light-dark(oklch(0.48  0.012 255), oklch(0.6   0.011 250));
 
     /* - accent: a single soft fuchsia - */
-    --color-accent:      light-dark(oklch(0.58 0.22 330), oklch(0.78 0.15 330));
-    --color-accent-soft: light-dark(oklch(0.58 0.22 330 / 0.10), oklch(0.78 0.15 330 / 0.18));
+    --color-accent:      light-dark(oklch(0.50 0.20 330), oklch(0.78 0.15 330));
+    --color-accent-soft: light-dark(oklch(0.50 0.20 330 / 0.12), oklch(0.78 0.15 330 / 0.18));
 
     /* - semantic states - */
     --color-ok:   light-dark(oklch(0.5  0.12 160), oklch(0.79 0.13 160));
@@ -228,18 +216,6 @@ dialog[open]::backdrop {
     }
 }
 
-aside a[aria-current="page"][href="/livetv"],
-nav a[aria-current="page"][href="/livetv"] {
-    view-transition-name: active-nav-livetv;
-}
-aside a[aria-current="page"][href="/movies"],
-nav a[aria-current="page"][href="/movies"] {
-    view-transition-name: active-nav-movies;
-}
-aside a[aria-current="page"][href="/series"],
-nav a[aria-current="page"][href="/series"] {
-    view-transition-name: active-nav-series;
-}
 @keyframes dialog-in {
     from {
         opacity: 0;
@@ -415,4 +391,154 @@ nav a[aria-current="page"][href="/series"] {
 }
 .star-pulse {
     animation: star-pulse 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+    .star-pulse {
+        animation: none;
+    }
+}
+
+/* ────────────────────────────── */
+/* Downloads page                 */
+/* ────────────────────────────── */
+.dl-bar-active {
+    position: relative;
+    overflow: hidden;
+}
+.dl-bar-active::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.18) 50%,
+        transparent 100%
+    );
+    transform: translateX(-100%);
+    animation: dl-bar-shimmer 2.4s linear infinite;
+    pointer-events: none;
+}
+@keyframes dl-bar-shimmer {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+.dl-bar-indeterminate {
+    position: relative;
+    overflow: hidden;
+}
+.dl-bar-indeterminate::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 35%;
+    border-radius: inherit;
+    background: var(--color-accent);
+    animation: dl-bar-indeterminate 1.8s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+@keyframes dl-bar-indeterminate {
+    0%   { left: -40%; }
+    100% { left: 100%; }
+}
+
+.dl-status-dot {
+    display: inline-block;
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 9999px;
+    background: var(--color-accent);
+    margin-right: 0.25rem;
+    vertical-align: 0.05em;
+    animation: dl-dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes dl-dot-pulse {
+    0%, 100% { opacity: 0.55; transform: scale(1); }
+    50%      { opacity: 1;    transform: scale(1.18); }
+}
+
+
+.dl-empty-icon {
+    animation: dl-empty-breathe 4.5s ease-in-out infinite;
+    will-change: transform, opacity;
+}
+@keyframes dl-empty-breathe {
+    0%, 100% { opacity: 0.55; transform: scale(1); }
+    50%      { opacity: 0.75; transform: scale(1.05); }
+}
+
+.dl-page-enter {
+    animation: dl-page-enter 600ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.dl-stagger-1 { animation-delay: 0ms; }
+.dl-stagger-2 { animation-delay: 80ms; }
+.dl-stagger-3 { animation-delay: 160ms; }
+@keyframes dl-page-enter {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.dl-row-enter {
+    animation: dl-row-enter 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes dl-row-enter {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.dl-row-leaving {
+    overflow: hidden;
+    max-height: var(--dl-row-h, 100px);
+    transition:
+        max-height 220ms cubic-bezier(0.25, 1, 0.5, 1),
+        opacity 180ms cubic-bezier(0.25, 1, 0.5, 1),
+        padding 220ms cubic-bezier(0.25, 1, 0.5, 1);
+}
+.dl-row-leaving.is-leaving {
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+}
+
+.dl-bar-fill {
+    transition:
+        background-color 320ms cubic-bezier(0.25, 1, 0.5, 1),
+        width 150ms linear;
+}
+.dl-row-done {
+    transition: opacity 280ms cubic-bezier(0.25, 1, 0.5, 1);
+}
+.dl-row-done .dl-row-title {
+    opacity: 0.85;
+}
+.dl-row-done .dl-row-meta,
+.dl-row-done .dl-bar-shell {
+    opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dl-bar-active::after,
+    .dl-bar-indeterminate::after,
+    .dl-status-dot,
+    .dl-empty-icon {
+        animation: none;
+    }
+    .dl-page-enter,
+    .dl-row-enter {
+        animation: none;
+    }
+    .dl-row-leaving {
+        transition: none;
+    }
+    .dl-bar-fill {
+        transition: width 150ms linear;
+    }
+    .dl-bar-indeterminate::after {
+        left: 0;
+        width: 100%;
+        opacity: 0.35;
+    }
 }

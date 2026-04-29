@@ -232,7 +232,9 @@ import { IconChevronDown, IconX } from "@tabler/icons-svelte";
 		const syncLabel = () => {
 			if (!labelEl) return;
 			const cat = readActive();
-			labelEl.textContent = cat || "All categories";
+			if (cat === "__favorites__") labelEl.textContent = "★ Favorites";
+			else if (cat === "__recents__") labelEl.textContent = "🕒 Recently watched";
+			else labelEl.textContent = cat || "All categories";
 		};
 
 		trigger?.addEventListener("click", () => {
