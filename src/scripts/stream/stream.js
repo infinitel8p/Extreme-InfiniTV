@@ -269,6 +269,7 @@ function renderVirtual() {
         img.src = safeLogo
         img.alt = ""
         img.loading = "lazy"
+        img.decoding = "async"
         img.referrerPolicy = "no-referrer"
         img.className = "h-full w-full object-contain"
         img.onerror = () => img.remove()

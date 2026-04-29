@@ -306,6 +306,7 @@ function makeCard(s, idx) {
     img.src = s.logo
     img.alt = ""
     img.loading = "lazy"
+    img.decoding = "async"
     img.referrerPolicy = "no-referrer"
     img.className =
       "h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
@@ -950,6 +951,8 @@ async function openDetail(series) {
       img.src = series.logo
       img.alt = ""
       img.loading = "eager"
+      img.decoding = "async"
+      img.fetchPriority = "high"
       img.referrerPolicy = "no-referrer"
       img.className = "h-full w-full object-cover"
       img.onerror = () => {

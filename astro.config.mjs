@@ -20,6 +20,7 @@ export default defineConfig({
         : undefined,
     },
     build: {
+      chunkSizeWarningLimit: 800,
       rollupOptions: {
         external: [
           "@tauri-apps/plugin-process",

@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+@import "@fontsource-variable/geist";
+@import "@fontsource/instrument-serif/latin-400.css";
+@import "@fontsource/instrument-serif/latin-400-italic.css";
+
 /* Theme tokens - slate foundation + soft fuchsia accent.*/
 :root {
     color-scheme: light dark;
@@ -37,8 +41,9 @@
     /* - fonts -
      * Geist for the UI (refined grotesk, calmer than Inter).
      * Instrument Serif reserved for editorial moments - used sparingly
-     * on hero headings to break the all-sans monotony. */
-    --font-sans:  "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+     * on hero headings to break the all-sans monotony.
+     * Both bundled locally via @fontsource - no Google Fonts CDN. */
+    --font-sans:  "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     --font-serif: "Instrument Serif", ui-serif, Georgia, "Times New Roman", serif;
 
     /* - type scale - */
