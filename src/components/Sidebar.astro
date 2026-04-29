@@ -183,9 +183,3 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     )
   })}
 </nav>
-
-<script>
-  import { injectExpirationDate } from "@/scripts/expiration.js"
-  injectExpirationDate()
-  document.addEventListener("xt:active-changed", () => injectExpirationDate())
-</script>

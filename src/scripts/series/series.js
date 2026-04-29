@@ -929,10 +929,19 @@ function renderEpisodes() {
 function syncEpisodeDownloadButtons() {
   if (!episodeList) return
   const buttons = episodeList.querySelectorAll("button[data-dl-url]")
+  if (!buttons.length) return
+  // Read the downloads snapshot once per sync, index by url. Without this,
+  // every progress event fires `listDownloads()` (a localStorage read +
+  // JSON.parse) once per button = O(buttons x downloads) per tick, which
+  // janks on long episode lists.
+  const byUrl = new Map()
+  for (const d of listDownloads()) {
+    if (d?.url) byUrl.set(d.url, d)
+  }
   for (const btn of buttons) {
     const url = btn.dataset.dlUrl
     if (!url) continue
-    applyDownloadButtonState(btn, findDownloadByUrl(url))
+    applyDownloadButtonState(btn, byUrl.get(url) || null)
   }
 }
 

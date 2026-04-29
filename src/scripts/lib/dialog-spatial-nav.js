@@ -33,7 +33,9 @@ export function attachDialogSpatialNav(dlg, opts = {}) {
     const register = () => {
         const SN = window.SpatialNavigation
         if (!SN || registered) return
-        suspendMainSection()
+        // Suspend the main section *only* after a successful SN.add. If add
+        // throws (duplicate id, bad selector), bail without touching the
+        // refcount so the page stays navigable.
         try {
             SN.add({
                 id: sectionId,
@@ -42,9 +44,12 @@ export function attachDialogSpatialNav(dlg, opts = {}) {
                 enterTo: "default-element",
                 defaultElement: opts.defaultElement || selector,
             })
-            registered = true
-            SN.makeFocusable?.()
-        } catch {}
+        } catch {
+            return
+        }
+        registered = true
+        suspendMainSection()
+        SN.makeFocusable?.()
 
         const active = document.activeElement
         if (!active || !dlg.contains(active)) {

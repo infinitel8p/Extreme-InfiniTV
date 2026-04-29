@@ -449,7 +449,6 @@ import {
       PLAYLIST_LIST_EMPTY_COPY,
     } from "@/scripts/lib/playlist-rows.js"
     import { injectVersion } from "@/scripts/version.js"
-    import { injectExpirationDate } from "@/scripts/expiration.js"
     import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
     import {
       UA_PRESETS,
@@ -471,7 +470,8 @@ import {
     } from "@/scripts/lib/downloads.js"
 
     injectVersion()
-    injectExpirationDate()
+    // injectExpirationDate is called globally from Layout.astro - the
+    // [data-account-expiration="raw"] cell on this page picks up that run.
 
     const playlistsEl = document.getElementById("settings-playlists")
     const refreshBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-refresh-active"))

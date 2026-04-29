@@ -18,14 +18,18 @@ function fmtDaysLeft(days) {
 }
 
 function renderTargets(targets, value, { empty = "", emptyRaw = "-", expDateMs = null } = {}) {
-    const daysLeft =
-        expDateMs == null ? null : Math.floor((expDateMs - Date.now()) / 86_400_000)
+    // "Expired" only when the timestamp has actually passed. The day-left
+    // count is rounded UP so a 12h-remaining account reads "Expires in 1 day"
+    // and stays in the warning band, not "Account expired".
+    const msLeft = expDateMs == null ? null : expDateMs - Date.now()
+    const isExpired = msLeft != null && msLeft <= 0
+    const daysLeft = msLeft == null ? null : Math.max(0, Math.ceil(msLeft / 86_400_000))
     for (const el of targets) {
         const mode = el.getAttribute("data-account-expiration")
         if (mode === "banner") {
             if (
                 daysLeft == null ||
-                daysLeft > BANNER_THRESHOLD_DAYS
+                (!isExpired && daysLeft > BANNER_THRESHOLD_DAYS)
             ) {
                 el.hidden = true
                 el.textContent = ""
@@ -33,10 +37,10 @@ function renderTargets(targets, value, { empty = "", emptyRaw = "-", expDateMs =
                 continue
             }
             el.hidden = false
-            el.textContent = fmtDaysLeft(daysLeft)
+            el.textContent = isExpired ? "Account expired" : fmtDaysLeft(daysLeft)
             el.setAttribute(
                 "data-state",
-                daysLeft <= 0 ? "expired" : daysLeft <= 2 ? "critical" : "warning"
+                isExpired ? "expired" : daysLeft <= 2 ? "critical" : "warning"
             )
             continue
         }
