@@ -11,7 +11,8 @@
     "tauri": "tauri",
     "tauri:android": "tauri android",
     "tauri:android:build": "tauri android build",
-    "screenshots": "node ./src/scripts/capture-screenshots.mjs"
+    "screenshots": "node ./src/scripts/capture-screenshots.mjs",
+    "msix": "node ./buildfiles/make-msix-template.mjs"
   },
   "dependencies": {
     "@astrojs/netlify": "^7.0.8",
