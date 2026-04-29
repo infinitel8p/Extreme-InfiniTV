@@ -1,7 +1,7 @@
 {
   "name": "xtream",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "packageManager": "pnpm@10.31.0",
   "scripts": {
     "dev": "astro dev --host",
