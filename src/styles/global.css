@@ -61,6 +61,7 @@ body {
 }
 
 html {
+    font-size: calc(clamp(16px, 0.84vw, 48px) * var(--xt-font-scale, 1));
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;

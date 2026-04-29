@@ -711,7 +711,7 @@ import {
       return Number.isFinite(s) && s >= 0.75 && s <= 2 ? s : 1
     }
     function applyFontScale(s) {
-      document.documentElement.style.fontSize = `${16 * s}px`
+      document.documentElement.style.setProperty("--xt-font-scale", String(s))
       try {
         if (s === 1) localStorage.removeItem("xt_font_scale")
         else localStorage.setItem("xt_font_scale", String(s))

@@ -29,9 +29,10 @@ const ROOT = path.resolve(__dirname, "../..")
 
 const DEVICES = {
   Desktop: { width: 1300, height: 850, deviceScaleFactor: 1, isMobile: false, hasTouch: false },
+  "Desktop-1080p": { width: 1920, height: 1080, deviceScaleFactor: 1, isMobile: false, hasTouch: false },
   Chromebook: { width: 1366, height: 768, deviceScaleFactor: 1, isMobile: false, hasTouch: true },
   "Android-TV": { width: 1920, height: 1080, deviceScaleFactor: 1, isMobile: false, hasTouch: false },
-  "Android-XR": { width: 2064, height: 2208, deviceScaleFactor: 1, isMobile: false, hasTouch: false },
+  "Android-XR": { width: 1032, height: 1104, deviceScaleFactor: 2, isMobile: false, hasTouch: false },
   "iPad-Pro": { width: 1024, height: 1366, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
   "iPad-Air": { width: 820, height: 1180, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
   "Galaxy-S20-Ultra": { width: 412, height: 915, deviceScaleFactor: 3.5, isMobile: true, hasTouch: true },

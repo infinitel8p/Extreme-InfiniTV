@@ -113,21 +113,36 @@ jobs:
             player built with Astro + Svelte 5 and Tauri 2 (Windows desktop,
             Microsoft Store, Android). Audience: end users, not contributors.
 
+            Output structure (in this exact order):
+
+            1. A single bold sentence summarising the headline change of the
+               release, written as one line of markdown wrapped in `**...**`.
+               It should answer "what's the most useful thing in this release
+               for a user". No preamble like "In this release". Skip this line
+               only if no commit is user-facing.
+            2. A blank line.
+            3. Section headings, each on its own line, in this exact order, omitting
+               any whose bullet list would be empty:
+                 ### New
+                 ### Improved
+                 ### Fixed
+                 ### Under the hood
+               Each heading is followed by one or more bullets.
+
             Rules:
-            - Output GitHub-flavoured markdown only. No preamble, no closing remarks.
-            - Group entries under these headings, in this order, omitting any that are empty:
-              ### New
-              ### Improved
-              ### Fixed
-              ### Under the hood
+            - Output GitHub-flavoured markdown only. No preamble before the
+              summary sentence, no closing remarks after the last bullet.
             - One bullet per change. Rewrite each commit subject as a short
               user-facing sentence. Drop conventional-commit prefixes
               (feat:, fix:, chore:, refactor:, etc.).
             - Merge duplicates. Collapse multiple dependency bumps into a single
               "Updated dependencies" bullet under "Under the hood".
             - Skip purely internal noise (lockfile-only changes, CI tweaks,
-              comment edits) unless they affect users.
-            - Do not invent features. If the commits don't justify a heading, omit it.
+              comment edits, tracking-file removals) unless they affect users.
+            - Do not invent features. If the commits do not justify a heading,
+              omit it.
+            - No emojis anywhere - not in the summary, not in headings, not in
+              bullets. Plain text only.
             - Never use em dashes. Use a regular hyphen, a colon, parentheses,
               or rewrite the sentence.
           prompt: |
@@ -164,6 +179,15 @@ jobs:
               changelog = '_No changes detected. Edit this draft before publishing._'
             }
 
+            let summary = ''
+            const lines = changelog.split('\n')
+            if (lines[0] && /^\*\*.+\*\*\s*$/.test(lines[0].trim())) {
+              summary = lines[0].trim()
+              let i = 1
+              while (i < lines.length && lines[i].trim() === '') i++
+              changelog = lines.slice(i).join('\n').trim()
+            }
+
             const downloads = [
               '## Downloads',
               '',
@@ -195,6 +219,7 @@ jobs:
               '  <img src="https://raw.githubusercontent.com/infinitel8p/xtream/refs/heads/main/src-tauri/icons/128x128@2x.png" alt="App Icon"/>',
               '</p>',
               '',
+              ...(summary ? [`<p align="center">${summary}</p>`, ''] : []),
               `## Changelog ${tag}`,
               changelog,
               '',
