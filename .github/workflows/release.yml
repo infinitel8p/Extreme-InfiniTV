@@ -1,8 +1,14 @@
 name: Release
 
 # Triggers:
-#  - push a tag like `v0.4.1`        -> full release build
-#  - run "Release" from the Actions tab -> dry run, draft only
+#  - push a tag like `v0.4.1`           -> full release build for that tag
+#      git tag v0.4.1 && git push origin v0.4.1
+#  - run "Release" from the Actions tab -> uses the version in package.json
+#      as the tag (e.g. v0.4.1) and creates it from the chosen branch's HEAD
+#
+# The release body is auto-generated from commits + merged PRs since the
+# previous tag (GitHub's "generate release notes" API), so you do NOT need
+# to use annotated tags or PRs for everything.
 #
 # Required repo secrets / variables (Settings -> Secrets and variables -> Actions):
 #  TAURI_SIGNING_PRIVATE_KEY            base64 of ~/.tauri/<your-key>.key
@@ -37,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # need tag annotations for changelog extraction
+          fetch-depth: 0
 
       - id: meta
         shell: bash
@@ -49,34 +55,35 @@ jobs:
           else
             TAG="v${VERSION}"
           fi
-
-          # Pull the changelog from the tag annotation. Lightweight tags
-          # (no `-a` / `-m`) come back empty; fall back to a hint.
-          CHANGELOG=$(git tag -l --format='%(contents:body)' "$TAG" 2>/dev/null || true)
-          if [ -z "$CHANGELOG" ]; then
-            CHANGELOG=$(git tag -l --format='%(contents)' "$TAG" 2>/dev/null || true)
-          fi
-          if [ -z "$CHANGELOG" ]; then
-            CHANGELOG='_No changelog provided. Use `git tag -a v0.x.y -m "- bullet"` next time, or edit this draft before publishing._'
-          fi
-
-          {
-            echo "version=$VERSION"
-            echo "tag=$TAG"
-            echo "changelog<<__EOF__"
-            echo "$CHANGELOG"
-            echo "__EOF__"
-          } >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - id: create
         uses: actions/github-script@v7
         env:
           TAG: ${{ steps.meta.outputs.tag }}
-          CHANGELOG: ${{ steps.meta.outputs.changelog }}
         with:
           script: |
             const tag = process.env.TAG
-            const changelog = (process.env.CHANGELOG || '').trim()
+
+            // Auto-generate bullet diffs from commits + merged PRs since the
+            // previous tag. Falls back gracefully if the API can't compute it
+            // (e.g. very first release, no prior tag).
+            let changelog = ''
+            try {
+              const notes = await github.rest.repos.generateReleaseNotes({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tag,
+                target_commitish: context.sha,
+              })
+              changelog = (notes.data.body || '').trim()
+            } catch (e) {
+              core.warning(`generateReleaseNotes failed: ${e.message}`)
+            }
+            if (!changelog) {
+              changelog = '_No changes detected. Edit this draft before publishing._'
+            }
             const body = [
               '<p align="center">',
               '  <img src="https://raw.githubusercontent.com/infinitel8p/xtream/refs/heads/main/src-tauri/icons/128x128@2x.png" alt="App Icon"/>',
@@ -264,16 +271,16 @@ jobs:
             "${{ steps.collect.outputs.out }}/"*.apk \
             --clobber
 
-  publish-release:
-    needs: [create-release, build-tauri, build-android]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Un-draft the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api -X PATCH \
-            repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }} \
-            -f draft=false
+  # publish-release:
+  #   needs: [create-release, build-tauri, build-android]
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: write
+  #   steps:
+  #     - name: Un-draft the release
+  #       env:
+  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       run: |
+  #         gh api -X PATCH \
+  #           repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }} \
+  #           -f draft=false
