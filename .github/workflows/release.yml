@@ -11,9 +11,14 @@ name: Release
 # to use annotated tags or PRs for everything.
 #
 # Required repo secrets / variables (Settings -> Secrets and variables -> Actions):
-#  TAURI_SIGNING_PRIVATE_KEY            base64 of ~/.tauri/<your-key>.key
-#  TAURI_SIGNING_PRIVATE_KEY_PASSWORD   the passphrase for that key
+#  TAURI_SIGNING_PRIVATE_KEY            RAW contents of ~/.tauri/<your-key>.key
+#                                       (the file is already base64-encoded by
+#                                       `tauri signer generate` -- do NOT base64 it again,
+#                                       or you get "Missing encoded key in secret key").
+#                                       On macOS: `pbcopy < ~/.tauri/<your-key>.key`
+#  TAURI_SIGNING_PRIVATE_KEY_PASSWORD   the passphrase set during keygen (empty if none)
 #  ANDROID_KEYSTORE_BASE64              base64 of upload-keystore.jks
+#                                       On macOS: `base64 -i upload-keystore.jks | pbcopy`
 #  ANDROID_KEYSTORE_PASSWORD            store password
 #  ANDROID_KEY_ALIAS                    e.g. "upload"
 #  ANDROID_KEY_PASSWORD                 key password (often same as store)
@@ -194,10 +199,7 @@ jobs:
 
       - uses: android-actions/setup-android@v3
         with:
-          packages: |
-            platforms;android-36
-            build-tools;36.0.0
-            ndk;26.1.10909125
+          packages: "platforms;android-36 build-tools;36.0.0 ndk;26.1.10909125"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
