@@ -27,7 +27,12 @@ import {
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
-import { clearAmbient } from "@/scripts/lib/morph-detail.js"
+import {
+  clearAmbient,
+  setAmbient as setAmbientOn,
+  paintPoster as paintPosterOn,
+  chooseMime,
+} from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -62,62 +67,11 @@ let episodesByKey = null
 let currentSeason = ""
 let currentPlayingEpisodeId = null
 
-function setAmbient(url) {
-  if (!ambientEl) return
-  if (url) {
-    const safe = String(url).replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-    ambientEl.style.backgroundImage = `url("${safe}")`
-    ambientEl.setAttribute("data-ready", "true")
-  } else {
-    ambientEl.removeAttribute("data-ready")
-    ambientEl.style.backgroundImage = ""
-  }
-}
-
-function makeFallback(name) {
-  const fb = document.createElement("div")
-  fb.className =
-    "h-full w-full flex items-center justify-center text-center px-3 " +
-    "text-fg-3 text-xs tracking-wide bg-gradient-to-br from-surface-2 to-surface-3"
-  fb.textContent = name || "No poster"
-  return fb
-}
-
-function paintPoster(name, logo) {
-  if (!posterEl) return
-  posterEl.replaceChildren()
-  if (logo) {
-    const img = document.createElement("img")
-    img.src = logo
-    img.alt = ""
-    img.loading = "eager"
-    img.decoding = "async"
-    img.fetchPriority = "high"
-    img.referrerPolicy = "no-referrer"
-    img.className = "h-full w-full object-cover"
-    img.onerror = () => {
-      img.remove()
-      posterEl.appendChild(makeFallback(name))
-    }
-    posterEl.appendChild(img)
-  } else {
-    posterEl.appendChild(makeFallback(name))
-  }
-}
-
-function chooseMime(url) {
-  if (!url) return "video/mp4"
-  const lower = url.split("?")[0].toLowerCase()
-  if (lower.endsWith(".m3u8")) return "application/x-mpegURL"
-  if (lower.endsWith(".mpd")) return "application/dash+xml"
-  if (lower.endsWith(".webm")) return "video/webm"
-  if (lower.endsWith(".mkv")) return "video/x-matroska"
-  if (lower.endsWith(".ts")) return "video/MP2T"
-  if (lower.endsWith(".avi")) return "video/x-msvideo"
-  return "video/mp4"
-}
+const setAmbient = (url) => setAmbientOn(ambientEl, url)
+const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
 
 function buildEpisodeStreamUrl(ep) {
+  if (ep?._directUrl) return ep._directUrl
   if (!creds.host || !creds.user || !creds.pass) return ""
   const rawExt = ep.container_extension || "mp4"
   const ext = String(rawExt).replace(/^\.+/, "").toLowerCase() || "mp4"
@@ -587,6 +541,14 @@ async function boot() {
     showError("No series ID was given.")
     return
   }
+
+  series = null
+  episodesByKey = null
+  if (metaEl) metaEl.textContent = ""
+  if (plotEl) plotEl.textContent = "Loading details…"
+  if (seasonTabs) seasonTabs.replaceChildren()
+  if (episodeList) episodeList.replaceChildren()
+
   const active = await getActiveEntry()
   if (!active) {
     showError("No playlist is selected. Add one in Settings.")
@@ -678,6 +640,7 @@ async function boot() {
               .replace(/^S\d+E\d+\s*-\s*/, "")
           : "",
         container_extension: extMatch?.[1] || "mp4",
+        _directUrl: dl.url,
       }
       autoplayPending = false
       try {

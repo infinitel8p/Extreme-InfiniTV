@@ -1,6 +1,4 @@
-// Movie detail page (route: /movies/detail?id=<vod_id>).
-// Entirely cache-driven on first paint so it works offline once the user
-// has opened the same movie at least once before.
+// Movie detail page (route: /movies/detail?id=<vod_id>)
 import {
   loadCreds,
   getActiveEntry,
@@ -27,7 +25,12 @@ import {
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
-import { clearAmbient } from "@/scripts/lib/morph-detail.js"
+import {
+  clearAmbient,
+  setAmbient as setAmbientOn,
+  paintPoster as paintPosterOn,
+  chooseMime,
+} from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -51,54 +54,14 @@ const downloadLabel = document.getElementById("movie-detail-download-label")
 // ----------------------------
 const urlParams = new URLSearchParams(location.search)
 const movieId = Number(urlParams.get("id") || "0")
-const wantsAutoplay = urlParams.get("autoplay") === "1"
+let wantsAutoplay = urlParams.get("autoplay") === "1"
 let activePlaylistId = ""
 let creds = { host: "", port: "", user: "", pass: "" }
 let movie = null
 let detailSrc = ""
 
-function setAmbient(url) {
-  if (!ambientEl) return
-  if (url) {
-    const safe = String(url).replace(/\\/g, "\\\\").replace(/"/g, '\\"')
-    ambientEl.style.backgroundImage = `url("${safe}")`
-    ambientEl.setAttribute("data-ready", "true")
-  } else {
-    ambientEl.removeAttribute("data-ready")
-    ambientEl.style.backgroundImage = ""
-  }
-}
-
-function makeFallback(name) {
-  const fb = document.createElement("div")
-  fb.className =
-    "h-full w-full flex items-center justify-center text-center px-3 " +
-    "text-fg-3 text-xs tracking-wide bg-gradient-to-br from-surface-2 to-surface-3"
-  fb.textContent = name || "No poster"
-  return fb
-}
-
-function paintPoster(name, logo) {
-  if (!posterEl) return
-  posterEl.replaceChildren()
-  if (logo) {
-    const img = document.createElement("img")
-    img.src = logo
-    img.alt = ""
-    img.loading = "eager"
-    img.decoding = "async"
-    img.fetchPriority = "high"
-    img.referrerPolicy = "no-referrer"
-    img.className = "h-full w-full object-cover"
-    img.onerror = () => {
-      img.remove()
-      posterEl.appendChild(makeFallback(name))
-    }
-    posterEl.appendChild(img)
-  } else {
-    posterEl.appendChild(makeFallback(name))
-  }
-}
+const setAmbient = (url) => setAmbientOn(ambientEl, url)
+const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
 
 function fmtDuration(minsOrStr) {
   if (!minsOrStr) return ""
@@ -109,18 +72,6 @@ function fmtDuration(minsOrStr) {
   const mm = m % 60
   if (!h) return `${mm} min`
   return `${h}h ${mm.toString().padStart(2, "0")}m`
-}
-
-function chooseMime(url) {
-  if (!url) return "video/mp4"
-  const lower = url.split("?")[0].toLowerCase()
-  if (lower.endsWith(".m3u8")) return "application/x-mpegURL"
-  if (lower.endsWith(".mpd")) return "application/dash+xml"
-  if (lower.endsWith(".webm")) return "video/webm"
-  if (lower.endsWith(".mkv")) return "video/x-matroska"
-  if (lower.endsWith(".ts")) return "video/MP2T"
-  if (lower.endsWith(".avi")) return "video/x-msvideo"
-  return "video/mp4"
 }
 
 function applyVodInfo(data) {
@@ -442,6 +393,12 @@ async function boot() {
     showError("No movie ID was given.")
     return
   }
+
+  movie = null
+  detailSrc = ""
+  if (metaEl) metaEl.textContent = ""
+  if (plotEl) plotEl.textContent = "Loading details…"
+
   const active = await getActiveEntry()
   if (!active) {
     showError("No playlist is selected. Add one in Settings.")
@@ -509,8 +466,7 @@ async function boot() {
   if (downloadBtn && isDownloadable()) downloadBtn.removeAttribute("hidden")
   applyDownloadState()
   if (wantsAutoplay) {
-    // Strip the flag so a refresh doesn't re-trigger and the back-forward
-    // cache doesn't replay it.
+    wantsAutoplay = false
     try {
       urlParams.delete("autoplay")
       const next = urlParams.toString()
