@@ -53,7 +53,10 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
          pl-[max(0.5rem,env(safe-area-inset-left))]
          pb-[max(0.5rem,env(safe-area-inset-bottom))]
          landscape-phone:sticky landscape-phone:top-0
-         landscape-phone:max-h-screen landscape-phone:overflow-y-auto custom-scroll">
+         landscape-phone:max-h-screen landscape-phone:overflow-y-auto
+         lg:custom-scroll
+         landscape-phone:[scrollbar-width:none]
+         landscape-phone:[&::-webkit-scrollbar]:hidden">
 
   <a
     href="/"
