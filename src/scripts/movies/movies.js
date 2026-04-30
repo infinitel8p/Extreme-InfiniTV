@@ -175,24 +175,25 @@ function renderCategoryPicker(items) {
     const right = document.createElement("span")
     right.className = "ml-3 shrink-0 flex items-center gap-1.5"
 
+    let rightAction = null
     if (opts.hideAction === "hide" || opts.hideAction === "unhide") {
-      const action = document.createElement("button")
-      action.type = "button"
-      action.tabIndex = 0
-      action.className =
+      rightAction = document.createElement("button")
+      rightAction.type = "button"
+      rightAction.tabIndex = 0
+      rightAction.className =
         "category-hide-btn shrink-0 size-6 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 focus-visible:text-fg outline-none opacity-0 group-hover/cat:opacity-100 group-focus-within/cat:opacity-100 focus-visible:opacity-100 transition-opacity"
-      action.setAttribute(
+      rightAction.setAttribute(
         "aria-label",
         opts.hideAction === "hide"
           ? `Hide category "${label}"`
           : `Unhide category "${label}"`
       )
-      action.title = opts.hideAction === "hide" ? "Hide category" : "Unhide category"
-      action.innerHTML =
+      rightAction.title = opts.hideAction === "hide" ? "Hide category" : "Unhide category"
+      rightAction.innerHTML =
         opts.hideAction === "hide"
           ? ICON_X
           : '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7"/><circle cx="12" cy="12" r="3"/></svg>'
-      action.addEventListener("click", (ev) => {
+      rightAction.addEventListener("click", (ev) => {
         ev.stopPropagation()
         ev.preventDefault()
         if (!activePlaylistId) return
@@ -209,13 +210,20 @@ function renderCategoryPicker(items) {
           }
         }
       })
-      right.appendChild(action)
     }
 
     const countEl = document.createElement("span")
-    countEl.className = "category-count text-xs text-fg-3 tabular-nums"
+    countEl.className = "category-count text-xs text-fg-3 tabular-nums min-w-8 text-right"
     countEl.textContent = count != null ? String(count) : ""
     right.appendChild(countEl)
+    if (rightAction) {
+      right.appendChild(rightAction)
+    } else {
+      const spacer = document.createElement("span")
+      spacer.className = "category-hide-btn shrink-0 size-6"
+      spacer.setAttribute("aria-hidden", "true")
+      right.appendChild(spacer)
+    }
 
     btn.appendChild(right)
     btn.addEventListener("click", () => {
@@ -336,12 +344,15 @@ let renderedCount = 0
 function makeCard(m, idx) {
   const card = document.createElement("div")
   card.dataset.idx = String(idx)
+  const stagger = idx < 12
   card.className =
     "movie-card group relative rounded-xl overflow-hidden bg-surface-2 " +
     "ring-1 ring-line " +
     "transition-[transform,box-shadow] duration-150 " +
     "hover:ring-2 hover:ring-accent hover:[transform:translateY(-2px)] " +
-    "focus-within:ring-2 focus-within:ring-accent focus-within:[transform:translateY(-2px)]"
+    "focus-within:ring-2 focus-within:ring-accent focus-within:[transform:translateY(-2px)]" +
+    (stagger ? " grid-card-enter" : "")
+  if (stagger) card.style.animationDelay = `${idx * 28}ms`
   card.style.contentVisibility = "auto"
   card.style.containIntrinsicSize = "260px"
 
@@ -628,6 +639,17 @@ function applyFilter() {
 
   filtered = out
   listStatus.textContent = `${out.length.toLocaleString()} of ${all.length.toLocaleString()} movies`
+  const heroCount = document.getElementById("movie-hero-count")
+  if (heroCount) heroCount.textContent = out.length.toLocaleString()
+  const heroCat = document.getElementById("movie-hero-cat")
+  if (heroCat) {
+    heroCat.textContent =
+      activeCat === CAT_FAVORITES
+        ? "Favorites"
+        : activeCat === CAT_RECENTS
+          ? "Recently watched"
+          : activeCat || "All categories"
+  }
   renderGrid()
 }
 

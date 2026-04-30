@@ -5,26 +5,28 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 
 <Layout pageTitle="Add playlist">
 	<main
-		class="mx-auto px-5 sm:px-6 pb-16 pt-6 sm:pt-10 max-w-xl">
-		<a
-			href="/"
-			class="inline-flex items-center gap-1.5 text-sm text-fg-3 hover:text-fg mb-8 transition-colors min-h-10">
-			<IconArrowLeft class="h-4 w-4" /> Back
-		</a>
+		class="mx-auto px-5 sm:px-6 lg:px-8 pb-16 pt-4 lg:pt-6 max-w-480 w-full">
 
-		<header class="mb-10 flex flex-col gap-2">
+		<div class="max-w-2xl mx-auto">
+
+		<header class="route-hero mb-10">
+			<a
+				href="/"
+				class="self-start inline-flex items-center gap-1.5 text-sm text-fg-3 hover:text-fg focus-visible:text-fg transition-colors min-h-10 -ml-1 mb-2">
+				<IconArrowLeft class="h-4 w-4" /> Back
+			</a>
 			<h1
 				id="page-title"
-				class="font-semibold tracking-[-0.02em] text-fg leading-[0.95]"
-				style="font-size: clamp(2.5rem, 3vw + 1.5rem, 4.5rem);">
-				Add playlist
+				class="route-hero__title">
+				Add a <em>playlist</em>
 			</h1>
 			<p
 				id="page-subtitle"
-				class="text-base text-fg-2 leading-relaxed max-w-prose">
+				class="route-hero__sub">
 				Connect an Xtream provider, or paste an M3U/M3U8 playlist URL.
 			</p>
 		</header>
+
 
 		<!-- Method picker: clean segmented control -->
 		<div
@@ -72,7 +74,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 					id="title"
 					type="text"
 					placeholder="e.g. Living room TV"
-					class="h-11 rounded-lg border border-line bg-surface px-3 text-base text-fg placeholder:text-fg-3 outline-none transition-colors hover:border-line-soft focus:border-accent focus:ring-2 focus:ring-accent/30"
+					class="field-input"
 				/>
 				<span class="text-xs text-fg-3 leading-relaxed"
 					>Optional name for this playlist.</span
@@ -90,7 +92,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 						id="serverUrl"
 						type="text"
 						placeholder="http://example.com:8080"
-						class="h-11 rounded-lg border border-line bg-surface px-3 text-base text-fg placeholder:text-fg-3 outline-none transition-colors hover:border-line-soft focus:border-accent focus:ring-2 focus:ring-accent/30"
+						class="field-input"
 					/>
 					<span class="text-xs text-fg-3 leading-relaxed">
 						Paste a full <code class="font-mono text-fg-2">player_api.php?username=…&password=…</code>
@@ -110,7 +112,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 							type="text"
 							autocapitalize="off"
 							spellcheck="false"
-							class="h-11 rounded-lg border border-line bg-surface px-3 text-base text-fg placeholder:text-fg-3 outline-none transition-colors hover:border-line-soft focus:border-accent focus:ring-2 focus:ring-accent/30"
+							class="field-input"
 						/>
 					</label>
 					<label class="flex flex-col gap-2">
@@ -121,7 +123,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 						<input
 							id="password"
 							type="password"
-							class="h-11 rounded-lg border border-line bg-surface px-3 text-base text-fg placeholder:text-fg-3 outline-none transition-colors hover:border-line-soft focus:border-accent focus:ring-2 focus:ring-accent/30"
+							class="field-input"
 						/>
 					</label>
 				</div>
@@ -138,7 +140,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 						id="m3uUrl"
 						type="text"
 						placeholder="https://example.com/playlist.m3u8"
-						class="h-11 rounded-lg border border-line bg-surface px-3 text-base text-fg placeholder:text-fg-3 outline-none transition-colors hover:border-line-soft focus:border-accent focus:ring-2 focus:ring-accent/30"
+						class="field-input"
 					/>
 					<span class="text-xs text-fg-3 leading-relaxed">
 						Must end with <code class="font-mono text-fg-2">.m3u</code> or
@@ -150,7 +152,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 			<!-- Status -->
 			<div
 				id="status"
-				class="hidden items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-sm leading-relaxed">
+				class="hidden items-start gap-2.5 rounded-xl border px-3.5 py-2.5 text-sm leading-relaxed">
 			</div>
 
 			<!-- Actions -->
@@ -159,13 +161,13 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 				<button
 					id="testBtn"
 					type="button"
-					class="h-11 px-4 inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-surface text-sm font-medium text-fg transition-colors hover:bg-surface-2 disabled:opacity-50 disabled:cursor-not-allowed">
+					class="btn">
 					Test connection
 				</button>
 				<button
 					id="saveBtn"
 					type="submit"
-					class="h-11 px-5 inline-flex items-center justify-center gap-2 rounded-lg bg-fg text-bg text-sm font-semibold transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed ml-auto">
+					class="btn-primary ml-auto">
 					Save and continue
 				</button>
 			</div>
@@ -177,6 +179,8 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 			URL. Public test playlists are available at
 			<span class="text-fg-2">iptv-org.github.io/iptv</span>.
 		</p>
+
+		</div>
 	</main>
 </Layout>
 
@@ -220,12 +224,20 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 	const IDLE_TAB = "text-fg-2 hover:text-fg";
 
 	function setMode(next) {
+		const prev = mode;
 		mode = next;
 		const isX = next === "xtream";
 		xFields.classList.toggle("hidden", !isX);
 		xFields.classList.toggle("flex", isX);
 		mFields.classList.toggle("hidden", isX);
 		mFields.classList.toggle("flex", !isX);
+
+		if (prev && prev !== next) {
+			const shown = isX ? xFields : mFields;
+			shown.classList.remove("fade-section");
+			void shown.offsetWidth;
+			shown.classList.add("fade-section");
+		}
 
 		applyTabStyles(tabXtream, isX);
 		applyTabStyles(tabM3u, !isX);
@@ -266,11 +278,12 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 	}
 
 	function showStatus(kind, message) {
+		const wasHidden = statusEl.classList.contains("hidden");
 		statusEl.classList.remove("hidden");
 		statusEl.classList.add("flex");
 		// Reset palette classes, then apply.
 		statusEl.className =
-			"flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 text-sm leading-relaxed ";
+			"flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 text-sm leading-relaxed ";
 		const palette = {
 			info: "border-accent/30 bg-accent-soft text-accent",
 			active: "border-ok/30 bg-ok/10 text-ok",
@@ -282,6 +295,11 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 		statusEl.className += palette[kind] || palette.info;
 		const dot = `<span aria-hidden="true" class="mt-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current shrink-0"></span>`;
 		statusEl.innerHTML = `${dot}<span>${escapeText(message)}</span>`;
+		if (wasHidden) {
+			statusEl.classList.remove("status-enter");
+			void statusEl.offsetWidth;
+			statusEl.classList.add("status-enter");
+		}
 	}
 
 	function escapeText(s) {
@@ -435,7 +453,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 		editing = entries.find((e) => e._id === editingId) || null;
 	}
 	if (editing) {
-		pageTitle.textContent = "Edit playlist";
+		pageTitle.innerHTML = "Edit <em>playlist</em>";
 		pageSubtitle.textContent = `Update "${editing.title}".`;
 		saveBtn.textContent = "Save changes";
 		tabXtream.disabled = editing.type !== "xtream";
@@ -450,7 +468,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 			m3uEl.value = editing.url || "";
 		}
 	} else if (isDemo) {
-		pageTitle.textContent = "Try a demo playlist";
+		pageTitle.innerHTML = "Try a <em>demo</em> playlist";
 		pageSubtitle.textContent =
 			"A free public playlist from iptv-org. You can remove it any time.";
 		setMode("m3u");

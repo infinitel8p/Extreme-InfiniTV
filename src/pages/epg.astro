@@ -9,6 +9,15 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 		class="w-full max-w-480 mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 md:landscape:pt-6 pb-6
 			flex flex-col gap-3 flex-1 min-h-0">
 
+		<header class="route-hero shrink-0">
+			<h1 class="route-hero__title">N<em>o</em>w &amp; next</h1>
+			<p
+				id="epg-title"
+				class="route-hero__sub truncate min-w-0">
+				EPG · All categories
+			</p>
+		</header>
+
 		<!-- Toolbar -->
 		<section class="flex items-center gap-3 shrink-0 flex-wrap">
 			<a
@@ -19,11 +28,6 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 				<IconArrowLeft aria-hidden="true" stroke={2} class="size-4" />
 				Live TV
 			</a>
-			<h1
-				id="epg-title"
-				class="text-base sm:text-lg font-semibold tracking-tight truncate min-w-0 flex-1">
-				EPG
-			</h1>
 			<button
 				id="epg-category-trigger"
 				type="button"

@@ -43,12 +43,15 @@ const documentTitle = pageTitle
   <body
     class="antialiased bg-bg text-fg selection:bg-accent-soft min-h-dvh
            flex flex-col md:flex-row landscape-phone:flex-row
+           md:h-dvh md:min-h-0 md:overflow-hidden
            landscape-phone:h-dvh landscape-phone:min-h-0 landscape-phone:overflow-hidden
            pt-[env(safe-area-inset-top)]
            pr-[env(safe-area-inset-right)]"
   >
     <Sidebar />
     <div class="flex-1 min-w-0 min-h-0 flex flex-col order-first md:order-0
+                overflow-x-clip
+                md:overflow-y-auto
                 landscape-phone:overflow-y-auto">
       <slot />
     </div>

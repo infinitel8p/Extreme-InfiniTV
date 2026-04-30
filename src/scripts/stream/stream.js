@@ -204,7 +204,7 @@ document.addEventListener("xt:favorites-changed", (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
   if (detail.kind !== "live") return
-  if (activeCat === CAT_FAVORITES) applyFilter()
+  if (activeCat === CAT_FAVORITES) scheduleApplyFilter()
   else renderVirtual()
   syncPseudoCategoryRows()
 })
@@ -213,7 +213,7 @@ document.addEventListener("xt:recents-changed", (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
   if (detail.kind !== "live") return
-  if (activeCat === CAT_RECENTS) applyFilter()
+  if (activeCat === CAT_RECENTS) scheduleApplyFilter()
   syncPseudoCategoryRows()
 })
 
@@ -222,7 +222,7 @@ document.addEventListener("xt:hidden-categories-changed", (e) => {
   if (!detail || detail.playlistId !== activePlaylistId) return
   if (detail.kind !== "live") return
   renderCategoryPicker(all)
-  applyFilter()
+  scheduleApplyFilter()
 })
 
 const STAR_OUTLINE =
@@ -336,11 +336,15 @@ function refreshNowSlots() {
 function renderVirtual() {
   if (!listEl || !viewport) return
   const scrollTop = listEl.scrollTop
-  const height = listEl.clientHeight
+  // Cap at viewport height: prevents runaway render if listEl ever loses its bounded layout.
+  const visibleH = Math.max(
+    0,
+    Math.min(listEl.clientHeight, window.innerHeight || listEl.clientHeight)
+  )
   const startIdx = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN)
   const endIdx = Math.min(
     filtered.length,
-    Math.ceil((scrollTop + height) / ROW_H) + OVERSCAN
+    Math.ceil((scrollTop + visibleH) / ROW_H) + OVERSCAN
   )
 
   const frag = document.createDocumentFragment()
@@ -511,6 +515,16 @@ listEl?.addEventListener(
   true
 )
 
+let _applyFilterScheduled = false
+function scheduleApplyFilter() {
+  if (_applyFilterScheduled) return
+  _applyFilterScheduled = true
+  queueMicrotask(() => {
+    _applyFilterScheduled = false
+    applyFilter()
+  })
+}
+
 const applyFilter = () => {
   if (!searchEl || !listStatus) return
   const qnorm = normalize(searchEl.value || "")
@@ -608,24 +622,25 @@ function renderCategoryPicker(items) {
     const right = document.createElement("span")
     right.className = "ml-3 shrink-0 flex items-center gap-1.5"
 
+    let rightAction = null
     if (opts.hideAction === "hide" || opts.hideAction === "unhide") {
-      const action = document.createElement("button")
-      action.type = "button"
-      action.tabIndex = 0
-      action.className =
+      rightAction = document.createElement("button")
+      rightAction.type = "button"
+      rightAction.tabIndex = 0
+      rightAction.className =
         "category-hide-btn shrink-0 size-6 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 focus-visible:text-fg outline-none opacity-0 group-hover/cat:opacity-100 group-focus-within/cat:opacity-100 focus-visible:opacity-100 transition-opacity"
-      action.setAttribute(
+      rightAction.setAttribute(
         "aria-label",
         opts.hideAction === "hide"
           ? `Hide category "${label}"`
           : `Unhide category "${label}"`
       )
-      action.title = opts.hideAction === "hide" ? "Hide category" : "Unhide category"
-      action.innerHTML =
+      rightAction.title = opts.hideAction === "hide" ? "Hide category" : "Unhide category"
+      rightAction.innerHTML =
         opts.hideAction === "hide"
           ? ICON_X
           : '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7"/><circle cx="12" cy="12" r="3"/></svg>'
-      action.addEventListener("click", (ev) => {
+      rightAction.addEventListener("click", (ev) => {
         ev.stopPropagation()
         ev.preventDefault()
         if (!activePlaylistId) return
@@ -642,13 +657,21 @@ function renderCategoryPicker(items) {
           }
         }
       })
-      right.appendChild(action)
     }
 
     const countEl = document.createElement("span")
-    countEl.className = "category-count text-xs text-fg-3 tabular-nums"
+    countEl.className = "category-count text-xs text-fg-3 tabular-nums min-w-8 text-right"
     countEl.textContent = count != null ? String(count) : ""
     right.appendChild(countEl)
+
+    if (rightAction) {
+      right.appendChild(rightAction)
+    } else {
+      const spacer = document.createElement("span")
+      spacer.className = "category-hide-btn shrink-0 size-6"
+      spacer.setAttribute("aria-hidden", "true")
+      right.appendChild(spacer)
+    }
 
     btn.appendChild(right)
     btn.addEventListener("click", () => {
@@ -703,7 +726,6 @@ function renderCategoryPicker(items) {
   }
   categoryListEl.appendChild(frag)
 
-  setActiveCat(activeCat)
   highlightActiveInList()
 }
 
@@ -750,15 +772,18 @@ function filterCategories() {
 categorySearchEl?.addEventListener("input", debounce(filterCategories, 120))
 
 function setActiveCat(next) {
+  const prev = activeCat
   activeCat = next || ""
   try {
     if (activeCat) localStorage.setItem("xt_active_cat", activeCat)
     else localStorage.removeItem("xt_active_cat")
   } catch {}
-  applyFilter()
-  document.dispatchEvent(
-    new CustomEvent("xt:cat-changed", { detail: activeCat })
-  )
+  scheduleApplyFilter()
+  if (prev !== activeCat) {
+    document.dispatchEvent(
+      new CustomEvent("xt:cat-changed", { detail: activeCat })
+    )
+  }
 }
 
 function showEmptyState() {

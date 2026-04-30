@@ -120,18 +120,18 @@
   <section
     aria-label="Favorites"
     class="fav-section flex flex-col gap-3 shrink-0">
-    <div class="flex items-baseline justify-between gap-2 px-1">
-      <h2 class="text-eyebrow font-semibold uppercase tracking-wide text-fg-3">
-        Favorites
-      </h2>
-      <span class="text-2xs text-fg-3 tabular-nums">
-        {entries.length} {entries.length === 1 ? "item" : "items"}
+    <div class="hub-section-head px-1">
+      <div class="hub-section-head__title">
+        <h2 class="hub-section-head__heading">Favorites</h2>
+      </div>
+      <span class="hub-section-head__count">
+        <strong>{entries.length}</strong> {entries.length === 1 ? "item" : "items"}
       </span>
     </div>
 
     <ul
       class="fav-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
-             snap-x snap-mandatory py-2 -my-1 -mx-1 px-1">
+             snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
       {#each entries as e, i (e.kind + ":" + e.id)}
         <li class="fav-item shrink-0 snap-start" data-kind={e.kind} style:--enter-delay={Math.min(i, 8) * 28 + "ms"}>
           <a
@@ -140,8 +140,8 @@
             class="fav-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150
-                   hover:ring-2 hover:ring-accent
-                   focus-visible:ring-2 focus-visible:ring-accent
+                   hover:ring-[3px] hover:ring-accent
+                   focus-visible:ring-[3px] focus-visible:ring-accent
                    hover:transform-[translateY(-2px)]
                    focus-visible:transform-[translateY(-2px)]">
             <div class="fav-thumb w-full aspect-2-3 overflow-hidden bg-surface-2 relative">
@@ -198,19 +198,15 @@
     width: 8rem;
     animation: fav-enter 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
     animation-delay: var(--enter-delay, 0ms);
-    content-visibility: auto;
-    contain-intrinsic-size: 8rem 13rem;
   }
   @media (min-width: 40em) {
     .fav-item {
       width: 9.5rem;
-      contain-intrinsic-size: 9.5rem 16rem;
     }
   }
   @media (min-width: 64em) {
     .fav-item {
       width: 11rem;
-      contain-intrinsic-size: 11rem 18rem;
     }
   }
 

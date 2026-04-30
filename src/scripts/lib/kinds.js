@@ -4,12 +4,14 @@ export const KIND_LABEL = {
   live: "Live",
   vod: "Movie",
   series: "Series",
+  epg: "EPG",
 }
 
 export const KIND_LABEL_PLURAL = {
   live: "Live TV",
   vod: "Movies",
   series: "Series",
+  epg: "EPG",
 }
 
 const wrap = (paths) =>
@@ -37,6 +39,14 @@ export const KIND_ICON_SVG = {
     '<path d="M2 8c0-1.1.9-2 2-2h2c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V8z"/>' +
       '<path d="M9 6c0-1.1.9-2 2-2h2c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2h-2c-1.1 0-2-.9-2-2V6z"/>' +
       '<path d="M16 4c0-1.1.9-2 2-2h2c1.1 0 2 .9 2 2v16c0 1.1-.9 2-2 2h-2c-1.1 0-2-.9-2-2V4z"/>'
+  ),
+  epg: wrap(
+    '<rect x="3" y="5" width="18" height="16" rx="2"/>' +
+      '<path d="M16 3v4"/>' +
+      '<path d="M8 3v4"/>' +
+      '<path d="M3 11h18"/>' +
+      '<path d="M12 14v3"/>' +
+      '<path d="M10.5 15.5h3"/>'
   ),
 }
 

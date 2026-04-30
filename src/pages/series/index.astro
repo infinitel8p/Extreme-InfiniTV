@@ -9,6 +9,15 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 		class="w-full max-w-480 mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 md:landscape:pt-6 pb-6
 			flex flex-col gap-4 flex-1 min-h-0">
 
+		<header class="route-hero shrink-0">
+			<h1 class="route-hero__title">S<em>e</em>ries</h1>
+			<div class="route-hero__meta">
+				<span><strong id="series-hero-count">-</strong> in catalogue</span>
+				<span class="route-hero__meta-divider" aria-hidden="true"></span>
+				<span id="series-hero-cat" class="truncate min-w-0">All categories</span>
+			</div>
+		</header>
+
 		<!-- Toolbar -->
 		<section class="flex flex-col sm:flex-row gap-3 shrink-0">
 			<button

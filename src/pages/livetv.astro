@@ -82,7 +82,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 					<div
 						id="list"
 						class="relative flex-1 min-h-0 overflow-auto pr-1 custom-scroll
-							max-h-96 md:landscape:max-h-none lg:max-h-none">
+							max-h-96 md:landscape:max-h-[100dvh] lg:max-h-[100dvh]">
 						<div id="spacer"></div>
 						<div id="viewport" class="absolute inset-x-0 top-0"></div>
 					</div>
@@ -106,16 +106,21 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 						style="max-height: 60dvh; max-width: calc(60dvh * 16 / 9);">
 						<div
 							id="player-empty"
-							class="absolute inset-0 flex flex-col items-center justify-center gap-5 text-center px-6 pointer-events-none">
+							class="absolute inset-0 flex flex-col items-center justify-center gap-6 text-center px-6 pointer-events-none">
+							<div class="player-empty-glow" aria-hidden="true"></div>
 							<IconDeviceTv
 								aria-hidden="true"
-								stroke={0.75}
-								class="size-20 sm:size-24 lg:size-28 text-fg-3/60"
+								stroke={0.6}
+								class="size-24 sm:size-28 lg:size-36 text-fg-3/55 relative z-10"
 							/>
-							<div class="flex flex-col gap-2">
-								<p class="text-fg leading-tight tracking-[-0.02em] font-semibold"
-									style="font-size: clamp(1.25rem, 2vw + 0.75rem, 2.25rem);">
-									Pick a channel.
+							<div class="flex flex-col gap-2.5 relative z-10">
+								<span class="inline-flex items-center gap-2 self-center text-eyebrow font-semibold uppercase tracking-[0.22em] text-fg-3">
+									<span aria-hidden="true" class="size-1.5 rounded-full bg-accent shadow-[0_0_0_4px_var(--color-accent-soft)]"></span>
+									Idle
+								</span>
+								<p class="text-fg leading-[0.95] tracking-[-0.03em] font-bold"
+									style="font-size: clamp(1.75rem, 3vw + 1rem, 3.5rem);">
+									Pick a <em class="not-italic text-accent">channel</em>.
 								</p>
 								<p class="text-fg-3 text-xs sm:text-sm">
 									Choose from the list, or change category.

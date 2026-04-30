@@ -1,10 +1,15 @@
 <script>
   // Full search experience. Mounted on /search and used as the search surface 
   import { onMount, tick } from "svelte"
-  import { getActiveEntry, normalize } from "@/scripts/lib/creds.js"
+  import { getActiveEntry, loadCreds, normalize } from "@/scripts/lib/creds.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
   import { ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js"
   import { warmupActive } from "@/scripts/lib/catalog.js"
+  import {
+    loadProgrammes,
+    getProgrammesSync,
+    EPG_LOADED_EVENT,
+  } from "@/scripts/lib/epg-data.js"
   import { KIND_LABEL } from "@/scripts/lib/kinds.js"
 
   /** @type {{ focusOnMount?: boolean }} */
@@ -21,7 +26,7 @@
   }
   const initialFromUrl = readUrlQuery()
 
-  /** @type {"all"|"live"|"vod"|"series"} */
+  /** @type {"all"|"live"|"vod"|"series"|"epg"} */
   let kindFilter = $state("all")
   let query = $state(initialFromUrl)
   let queryDebounced = $state(initialFromUrl)
@@ -35,7 +40,7 @@
   }
   let activeIndex = $state(0)
 
-  /** @type {Array<{ kind: "live"|"vod"|"series", id: number, name: string, logo: string|null, subtitle: string, href: string, norm: string }>} */
+  /** @type {Array<{ kind: "live"|"vod"|"series"|"epg", id: string|number, name: string, logo: string|null, subtitle: string, href: string, norm: string }>} */
   let allItems = $state([])
   let isWarming = $state(false)
   /** @type {HTMLInputElement|null} */
@@ -45,6 +50,19 @@
     if (kind === "live") return `/livetv?channel=${encodeURIComponent(id)}`
     if (kind === "vod") return `/movies/detail?id=${encodeURIComponent(id)}`
     return `/series/detail?id=${encodeURIComponent(id)}`
+  }
+
+  function fmtProgrammeStart(start) {
+    const startDate = new Date(start)
+    const now = new Date()
+    const startDay = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate())
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const dayDiff = Math.round((startDay - today) / 86_400_000)
+    const time = startDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    if (dayDiff === 0) return `Today ${time}`
+    if (dayDiff === 1) return `Tomorrow ${time}`
+    const wk = startDate.toLocaleDateString([], { weekday: "short" })
+    return `${wk} ${time}`
   }
 
   async function loadIndex(opts = {}) {
@@ -112,6 +130,48 @@
         norm: s.norm || normalize(`${s.name || ""} ${s.category || ""}`),
       })
     }
+
+    const epgState = getProgrammesSync(active._id)
+    const hasTvgChannels = liveData.some((channel) => channel.tvgId)
+    if (hasTvgChannels && !epgState && opts.warmEpg !== false) {
+      try {
+        const creds = await loadCreds()
+        if (creds?.host) loadProgrammes(active._id, creds).catch(() => {})
+      } catch {}
+    }
+    if (epgState?.programmes?.size) {
+      const now = Date.now()
+      const HORIZON = now + 36 * 60 * 60 * 1000
+      const HARD_CAP = 5000
+      let epgCount = 0
+      outer: for (const channel of liveData) {
+        if (!channel.tvgId) continue
+        const programmes = epgState.programmes.get(
+          String(channel.tvgId).toLowerCase()
+        )
+        if (!programmes || !programmes.length) continue
+        const channelName = channel.name || ""
+        const channelLogo = channel.logo || null
+        for (const programme of programmes) {
+          if (programme.stop <= now) continue
+          if (programme.start > HORIZON) break
+          const isLive = programme.start <= now && now < programme.stop
+          const when = isLive ? "Live now" : fmtProgrammeStart(programme.start)
+          items.push({
+            kind: "epg",
+            id: `${channel.id}:${programme.start}`,
+            name: programme.title || "Untitled",
+            logo: channelLogo,
+            subtitle: `${channelName} · ${when}`,
+            href: buildHref("live", channel.id),
+            norm: normalize(`${programme.title || ""} ${channelName}`),
+          })
+          epgCount++
+          if (epgCount >= HARD_CAP) break outer
+        }
+      }
+    }
+
     allItems = items
   }
 
@@ -125,7 +185,7 @@
   }
 
   let scoredAll = $derived.by(() => {
-    const counts = { all: 0, live: 0, vod: 0, series: 0 }
+    const counts = { all: 0, live: 0, vod: 0, series: 0, epg: 0 }
     const q = normalize(queryDebounced.trim())
     if (!q) return { items: [], counts }
     const tokens = q.split(" ").filter(Boolean)
@@ -211,7 +271,11 @@
     function onWarmed() {
       loadIndex({ warm: false })
     }
+    function onEpgLoaded() {
+      loadIndex({ warm: false, warmEpg: false })
+    }
     document.addEventListener("xt:catalog-warmed", onWarmed)
+    document.addEventListener(EPG_LOADED_EVENT, onEpgLoaded)
     document.addEventListener("xt:active-changed", () => loadIndex())
     if (focusOnMount) {
       tick().then(() => {
@@ -221,6 +285,7 @@
     }
     return () => {
       document.removeEventListener("xt:catalog-warmed", onWarmed)
+      document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
       if (_queryTimer) clearTimeout(_queryTimer)
     }
   })
@@ -265,7 +330,7 @@
     </div>
 
     <div class="flex items-center gap-1 overflow-x-auto custom-scroll -mx-1 px-1">
-      {#each /** @type {const} */ (["all", "live", "vod", "series"]) as k}
+      {#each /** @type {const} */ (["all", "live", "vod", "series", "epg"]) as k}
         <button
           type="button"
           onclick={() => (kindFilter = k)}
@@ -277,7 +342,15 @@
           class:text-fg-2={kindFilter !== k}
           class:border-line={kindFilter !== k}
           class:hover:bg-surface-2={kindFilter !== k}>
-          {k === "all" ? "All" : k === "vod" ? "Movies" : k === "live" ? "Live TV" : "Series"}
+          {k === "all"
+            ? "All"
+            : k === "vod"
+            ? "Movies"
+            : k === "live"
+            ? "Live TV"
+            : k === "epg"
+            ? "EPG"
+            : "Series"}
           {#if queryDebounced.trim()}
             <span class="ml-1.5 text-2xs tabular-nums opacity-70">{kindCounts[k]}</span>
           {/if}

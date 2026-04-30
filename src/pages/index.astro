@@ -45,8 +45,8 @@ import {
 				</p>
 				<h1
 					id="welcome-heading"
-					class="font-normal text-accent tracking-[-0.01em] leading-none"
-					style="font-size: clamp(2.25rem, 4vw + 1rem, 4.25rem);">
+					class="font-normal text-accent tracking-[-0.005em] leading-none"
+					style="font-size: clamp(2.25rem, 4vw + 1rem, 4.5rem);">
 					Pick something to watch.
 				</h1>
 				<p
@@ -60,16 +60,16 @@ import {
 					<a
 						id="welcome-add"
 						href="/login"
-						class="inline-flex items-center justify-center gap-2 h-11 px-5 rounded-lg bg-fg text-bg text-sm font-semibold transition-opacity hover:opacity-90">
-						<IconPlus aria-hidden="true" class="h-4 w-4" />
+						class="btn-primary">
+						<IconPlus aria-hidden="true" class="btn-icon" />
 						Add a playlist
 					</a>
 					<a
 						href="/login?demo=1"
-						class="inline-flex items-center justify-center gap-2 h-11 px-5 rounded-lg border border-line bg-surface text-sm font-medium text-fg transition-colors hover:bg-surface-2 hover:border-line-soft focus-visible:bg-surface-2 focus-visible:border-accent">
+						class="btn">
 						<IconSparkles
 							aria-hidden="true"
-							class="h-4 w-4 text-accent"
+							class="btn-icon text-accent"
 						/>
 						Try a demo playlist
 					</a>
@@ -221,18 +221,20 @@ import {
 
 	const eyebrow = document.getElementById("hero-eyebrow");
 	if (eyebrow) {
+		const greet = (hour) => {
+			if (hour < 5) return "Good night";
+			if (hour < 12) return "Good morning";
+			if (hour < 18) return "Good afternoon";
+			if (hour < 22) return "Good evening";
+			return "Good night";
+		};
 		const update = () => {
 			const now = new Date();
-			const date = new Intl.DateTimeFormat(undefined, {
-				weekday: "short",
-				day: "2-digit",
-				month: "short",
-			}).format(now);
 			const time = new Intl.DateTimeFormat(undefined, {
 				hour: "numeric",
 				minute: "2-digit",
 			}).format(now);
-			eyebrow.textContent = `${date} · ${time}`;
+			eyebrow.textContent = `${greet(now.getHours())} · ${time}`;
 		};
 		update();
 		setInterval(update, 30_000);

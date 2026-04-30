@@ -196,8 +196,9 @@ function renderChannelRow(channel, programmesForRow) {
     const cell = document.createElement("button")
     cell.type = "button"
     cell.className =
-      "absolute top-1 bottom-1 rounded-lg px-2 py-1 text-left outline-none " +
-      "border transition-colors overflow-hidden " +
+      "epg-cell absolute top-1 bottom-1 rounded-lg px-2 py-1 text-left outline-none " +
+      "border transition-[background-color,color,border-color,transform] duration-150 ease-out overflow-hidden " +
+      "active:scale-[0.97] " +
       (isLive
         ? "border-accent bg-accent-soft text-fg hover:bg-accent/20 focus-visible:bg-accent/20"
         : "border-line bg-surface text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg") +
@@ -240,7 +241,7 @@ function renderNowLine() {
   const line = document.createElement("div")
   line.dataset.nowLine = ""
   line.className =
-    "absolute top-0 bottom-0 w-px bg-accent pointer-events-none z-20"
+    "epg-now-line absolute top-0 bottom-0 w-px bg-accent pointer-events-none z-20"
   line.style.left = `${CHANNEL_COL_WIDTH + x}px`
   bodyEl.appendChild(line)
 }
