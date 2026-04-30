@@ -26,6 +26,7 @@ import {
   inferExt,
   cancelDownload,
   getLocalPlayableSrc,
+  tryAndroidIntentPlayback,
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
@@ -933,6 +934,10 @@ async function startPlayback() {
     )
   }
 
+  // Android: hand local-file playback off to the system "Open with..."
+  // chooser. The in-WebView path is broken on Android in current Tauri 2.
+  if (await tryAndroidIntentPlayback(currentDetailSrc)) return
+
   // Swap hero: hide poster, reveal player.
   if (detailPoster) detailPoster.classList.add("hidden")
   if (detailPlayerWrap) detailPlayerWrap.classList.remove("hidden")
@@ -942,8 +947,14 @@ async function startPlayback() {
   const player = await ensurePlayer()
   const localSrc = await getLocalPlayableSrc(currentDetailSrc)
   const playSrc = localSrc || currentDetailSrc
-  player.src({ src: playSrc, type: chooseMime(currentDetailSrc) })
-  player.play().catch(() => {})
+  const mime = chooseMime(currentDetailSrc)
+  console.log("[xt:movies] player.src", { src: playSrc, type: mime, isLocal: !!localSrc })
+  player.one("error", () => {
+    const e = player.error()
+    console.error("[xt:movies] video.js error", { code: e?.code, message: e?.message, src: playSrc })
+  })
+  player.src({ src: playSrc, type: mime })
+  player.play().catch((err) => console.warn("[xt:movies] play() rejected:", err?.message || err))
 }
 
 detailPlay?.addEventListener("click", startPlayback)

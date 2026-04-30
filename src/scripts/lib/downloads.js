@@ -101,6 +101,26 @@ export async function getLocalPlayableSrc(remoteUrl) {
   }
 }
 
+/**
+ * Android-only: if the remote URL has a completed local download, hand the
+ * file off to the system "Open with..." chooser via Intent.ACTION_VIEW.
+ * In-WebView local playback isn't viable on Android (tauri#12019, custom
+ * URL protocols not intercepted by the system WebView), so the conventional
+ * hybrid-app pattern is to defer to a real player like VLC / MX Player /
+ * the system gallery. Returns true if the chooser was launched (caller
+ * should bail out of starting in-app playback), false otherwise.
+ */
+export async function tryAndroidIntentPlayback(remoteUrl) {
+  if (!isTauri || !remoteUrl) return false
+  if (!AFs.isAndroidFsActive()) return false
+  const item = readState().find(
+    (d) => d.url === remoteUrl && d.status === "done" && d.path
+  )
+  if (!item || !AFs.isAndroidUri(item.path)) return false
+  console.log("[xt:download] handing off to system video app:", item.path)
+  return await AFs.viewFileExternally(item.path)
+}
+
 const WIN_RESERVED_NAMES = new Set([
   "CON", "PRN", "AUX", "NUL",
   "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",

@@ -24,6 +24,7 @@ import {
   inferExt,
   listDownloads,
   getLocalPlayableSrc,
+  tryAndroidIntentPlayback,
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
@@ -1129,6 +1130,10 @@ async function playEpisode(episode) {
     )
   }
 
+  // Android: hand local-file playback off to the system "Open with..."
+  // chooser. The in-WebView path is broken on Android in current Tauri 2.
+  if (await tryAndroidIntentPlayback(src)) return
+
   if (nowPlayingLabel) {
     nowPlayingLabel.textContent =
       `S${episode.season || currentSeason}E${episode.episode_num || "?"} · ${episode.title || ""}`
@@ -1142,8 +1147,14 @@ async function playEpisode(episode) {
   const player = await ensurePlayer()
   const localSrc = await getLocalPlayableSrc(src)
   const playSrc = localSrc || src
-  player.src({ src: playSrc, type: chooseMime(src) })
-  player.play().catch(() => {})
+  const mime = chooseMime(src)
+  console.log("[xt:series] player.src", { src: playSrc, type: mime, isLocal: !!localSrc })
+  player.one("error", () => {
+    const e = player.error()
+    console.error("[xt:series] video.js error", { code: e?.code, message: e?.message, src: playSrc })
+  })
+  player.src({ src: playSrc, type: mime })
+  player.play().catch((err) => console.warn("[xt:series] play() rejected:", err?.message || err))
 }
 
 detailFav?.addEventListener("click", () => {

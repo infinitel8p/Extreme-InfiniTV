@@ -168,21 +168,25 @@ export async function fileExists(uri) {
 export async function convertSrc(uri) {
   const m = await mod()
   if (!m) throw new Error("Android FS plugin not available")
-  // Prefer the real filesystem path through Tauri's asset protocol - Video.js
-  // and the WebView's media element both handle https://asset.localhost/...
-  // URLs reliably. The plugin's own convertFileSrc returns a custom-protocol
-  // URL that some WebView media pipelines reject for video playback.
-  try {
-    const fsPath = await m.AndroidFs.getFsPath(uri)
-    if (fsPath) {
-      const { convertFileSrc } = await import("@tauri-apps/api/core")
-      return convertFileSrc(fsPath)
-    }
-  } catch (e) {
-    console.warn(
-      "[xt:android-fs] getFsPath failed, falling back to plugin convertFileSrc:",
-      e
-    )
-  }
   return m.AndroidFs.convertFileSrc(uri)
+}
+
+/**
+ * Hand the URI off to Android's system "Open with..." chooser via
+ * Intent.ACTION_VIEW. The user picks VLC / MX Player / native gallery / etc.
+ * In-WebView local-file playback is broken on Android in current Tauri 2
+ * (see tauri#12019), so this is the practical playback path until a fix lands.
+ *
+ * @returns true if the intent was fired, false if the plugin isn't available.
+ */
+export async function viewFileExternally(uri) {
+  const m = await mod()
+  if (!m) return false
+  try {
+    await m.AndroidFs.showViewFileDialog(uri)
+    return true
+  } catch (e) {
+    console.error("[xt:android-fs] showViewFileDialog failed:", e)
+    return false
+  }
 }
