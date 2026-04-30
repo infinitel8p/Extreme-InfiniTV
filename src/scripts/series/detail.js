@@ -13,6 +13,11 @@ import {
   isFavorite,
   toggleFavorite,
   pushRecent,
+  getProgress,
+  setProgress,
+  markCompleted,
+  isCompleted,
+  clearProgress,
 } from "@/scripts/lib/preferences.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
@@ -179,6 +184,12 @@ function renderEpisodes() {
     if (currentPlayingEpisodeId != null && Number(ep.id) === currentPlayingEpisodeId) {
       row.dataset.nowPlaying = "true"
     }
+    if (
+      activePlaylistId &&
+      isCompleted(activePlaylistId, "episode", ep.id)
+    ) {
+      row.dataset.watched = "true"
+    }
 
     const playBtn = document.createElement("button")
     playBtn.type = "button"
@@ -189,7 +200,7 @@ function renderEpisodes() {
 
     const num = document.createElement("div")
     num.className =
-      "shrink-0 size-10 rounded-md bg-surface-3 flex items-center justify-center text-sm font-semibold tabular-nums text-fg-2"
+      "episode-num shrink-0 size-10 rounded-md bg-surface-3 flex items-center justify-center text-sm font-semibold tabular-nums text-fg-2"
     num.textContent = `E${ep.episode_num || "?"}`
     playBtn.appendChild(num)
 
@@ -212,6 +223,12 @@ function renderEpisodes() {
 
     playBtn.appendChild(wrap)
 
+    const epProgress = activePlaylistId
+      ? getProgress(activePlaylistId, "episode", ep.id)
+      : null
+    const canResume =
+      epProgress && !epProgress.completed && epProgress.position > RESUME_MIN_SECONDS
+
     const arrow = document.createElement("span")
     arrow.className = "shrink-0 text-fg-3 text-base"
     arrow.textContent = "▶"
@@ -219,13 +236,50 @@ function renderEpisodes() {
 
     row.appendChild(playBtn)
 
+    if (canResume) {
+      const restartBtn = document.createElement("button")
+      restartBtn.type = "button"
+      restartBtn.className =
+        "shrink-0 rounded-lg border border-line min-h-11 min-w-11 inline-flex items-center justify-center text-fg-3 " +
+        "hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:border-accent " +
+        "outline-none transition-colors"
+      restartBtn.title = "Start from beginning"
+      restartBtn.setAttribute(
+        "aria-label",
+        `Start ${ep.title || `episode ${ep.episode_num || ""}`} from the beginning`
+      )
+      restartBtn.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="size-4"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>'
+      restartBtn.addEventListener("click", (e) => {
+        e.stopPropagation()
+        if (!activePlaylistId) return
+        clearProgress(activePlaylistId, "episode", ep.id)
+        playEpisode(ep)
+      })
+      row.appendChild(restartBtn)
+
+      const fraction =
+        epProgress.duration > 0
+          ? Math.max(0, Math.min(1, epProgress.position / epProgress.duration))
+          : 0
+      const progressEl = document.createElement("div")
+      progressEl.className =
+        "absolute left-3 right-3 bottom-1 h-0.5 rounded-full bg-line/40 overflow-hidden pointer-events-none"
+      const progressFill = document.createElement("div")
+      progressFill.className = "h-full bg-accent"
+      progressFill.style.width = `${fraction * 100}%`
+      progressEl.appendChild(progressFill)
+      row.appendChild(progressEl)
+      row.classList.add("relative")
+    }
+
     if (isDownloadable()) {
       const epUrl = buildEpisodeStreamUrl(ep)
       if (epUrl) {
         const dlBtn = document.createElement("button")
         dlBtn.type = "button"
         dlBtn.className =
-          "shrink-0 rounded-lg border border-line min-h-11 px-3 text-xs text-fg-2 tabular-nums " +
+          "shrink-0 rounded-lg border border-line min-h-11 min-w-24 px-3 text-xs text-fg-2 tabular-nums " +
           "hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:border-accent " +
           "outline-none transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         dlBtn.dataset.dlUrl = epUrl
@@ -412,6 +466,23 @@ function applySeriesInfo(data) {
 // Playback
 // ----------------------------
 let vjs = null
+let progressListenersBound = false
+let currentEpisode = null
+const RESUME_MIN_SECONDS = 30
+const RESUME_MAX_FRACTION = 0.95
+const PROGRESS_WRITE_INTERVAL_MS = 5000
+
+function progressExtrasFor(ep) {
+  return {
+    seriesId: series?.id ?? null,
+    season: ep.season ?? currentSeason ?? null,
+    episodeNum: ep.episode_num ?? null,
+    episodeTitle: ep.title || "",
+    seriesName: series?.name || "",
+    seriesLogo: series?.logo || null,
+  }
+}
+
 async function ensurePlayer() {
   if (vjs) return vjs
   const [{ default: videojs }] = await Promise.all([
@@ -429,6 +500,8 @@ async function ensurePlayer() {
       volumePanel: { inline: false },
       pictureInPictureToggle: !hasNativePipBridge,
       playbackRateMenuButton: true,
+      subsCapsButton: true,
+      audioTrackButton: true,
       fullscreenToggle: true,
     },
     html5: {
@@ -499,7 +572,54 @@ async function playEpisode(episode) {
       src: playSrc,
     })
   })
+
+  currentEpisode = episode
+
+  const saved = activePlaylistId
+    ? getProgress(activePlaylistId, "episode", episode.id)
+    : null
+  if (saved && !saved.completed && saved.position > RESUME_MIN_SECONDS) {
+    player.one("loadedmetadata", () => {
+      const dur = player.duration() || saved.duration || 0
+      const pos = saved.position
+      if (dur === 0 || pos / dur < RESUME_MAX_FRACTION) {
+        try { player.currentTime(pos) } catch {}
+      }
+    })
+  }
+
   player.src({ src: playSrc, type: mime })
+
+  if (!progressListenersBound) {
+    progressListenersBound = true
+    let lastWriteAt = 0
+    player.on("timeupdate", () => {
+      if (!activePlaylistId || !currentEpisode) return
+      const now = Date.now()
+      if (now - lastWriteAt < PROGRESS_WRITE_INTERVAL_MS) return
+      const pos = player.currentTime() || 0
+      const dur = player.duration() || 0
+      if (pos < 1) return
+      lastWriteAt = now
+      setProgress(
+        activePlaylistId,
+        "episode",
+        currentEpisode.id,
+        pos,
+        dur,
+        progressExtrasFor(currentEpisode)
+      )
+    })
+    player.on("ended", () => {
+      if (!activePlaylistId || !currentEpisode) return
+      const dur = player.duration() || 0
+      markCompleted(activePlaylistId, "episode", currentEpisode.id, {
+        duration: dur,
+        ...progressExtrasFor(currentEpisode),
+      })
+    })
+  }
+
   player.play().catch((err) =>
     console.warn("[xt:series-detail] play() rejected:", err?.message || err)
   )
@@ -507,6 +627,20 @@ async function playEpisode(episode) {
 
 window.addEventListener("pagehide", () => {
   try {
+    if (activePlaylistId && currentEpisode && vjs) {
+      const pos = vjs.currentTime?.() || 0
+      const dur = vjs.duration?.() || 0
+      if (pos > 1) {
+        setProgress(
+          activePlaylistId,
+          "episode",
+          currentEpisode.id,
+          pos,
+          dur,
+          progressExtrasFor(currentEpisode)
+        )
+      }
+    }
     vjs?.pause?.()
     vjs?.dispose?.()
   } catch {}
@@ -526,6 +660,19 @@ document.addEventListener("xt:favorites-changed", (e) => {
   if (!detail || detail.playlistId !== activePlaylistId) return
   if (detail.kind !== "series") return
   if (series?.id === detail.id) syncFavButton()
+})
+
+document.addEventListener("xt:progress-changed", (e) => {
+  const detail = e.detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "episode") return
+  if (!episodeList) return
+  const row = episodeList.querySelector(
+    `.episode-row[data-ep-id="${CSS.escape(String(detail.id))}"]`
+  )
+  if (!row) return
+  if (detail.completed) row.dataset.watched = "true"
+  else delete row.dataset.watched
 })
 
 // ----------------------------

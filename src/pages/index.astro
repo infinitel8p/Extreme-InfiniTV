@@ -1,5 +1,6 @@
 ---
 import Layout from "@/layouts/Layout.astro";
+import ContinueWatching from "@/components/ContinueWatching.svelte";
 import {
 	IconDeviceTv,
 	IconMovie,
@@ -29,7 +30,9 @@ import {
 	</script>
 
 	<main
-		class="flex-1 w-full mx-auto px-4 py-6 md:px-6 lg:px-8 max-w-7xl flex flex-col">
+		class="flex-1 w-full mx-auto px-4 py-6 md:px-6 lg:px-8 max-w-7xl flex flex-col gap-6">
+		<ContinueWatching client:load />
+
 		<section
 			id="welcome"
 			aria-labelledby="welcome-heading"
@@ -241,16 +244,11 @@ import {
 
 	window.addEventListener("load", async () => {
 		const hasEntries = await reconcileFirstRun();
-		setTimeout(() => {
-			const target = hasEntries
-				? /** @type {HTMLAnchorElement | null} */ (
-						document.querySelector('#hub-tiles a[href="/livetv"]')
-					)
-				: /** @type {HTMLAnchorElement | null} */ (
-						document.getElementById("welcome-add")
-					);
-			target?.focus({ preventScroll: true });
-		}, 0);
+		if (!hasEntries) {
+			document
+				.getElementById("welcome-add")
+				?.focus({ preventScroll: true });
+		}
 	});
 
 	document.addEventListener("xt:entries-updated", reconcileFirstRun);

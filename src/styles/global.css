@@ -410,6 +410,25 @@ dialog[open]::backdrop {
     pointer-events: none;
 }
 
+.episode-row[data-watched="true"] .episode-num,
+.episode-row[data-watched="true"] .truncate {
+    opacity: 0.6;
+}
+.episode-row[data-watched="true"] .episode-num {
+    position: relative;
+}
+.episode-row[data-watched="true"] .episode-num::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: color-mix(in oklch, var(--color-ok) 75%, transparent);
+    -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 12 10 18 20 6'/></svg>") center / 60% no-repeat;
+            mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 12 10 18 20 6'/></svg>") center / 60% no-repeat;
+    opacity: 1;
+    pointer-events: none;
+}
+
 @keyframes star-pulse {
     0%   { transform: scale(1); }
     40%  { transform: scale(1.18); }

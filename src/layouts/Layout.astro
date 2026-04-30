@@ -68,13 +68,7 @@ const documentTitle = pageTitle
 
   :is(a, button, input, summary, [tabindex]):focus-visible {
     outline: 2px solid var(--color-accent);
-    outline-offset: 2px;
-  }
-  @media (min-width: 64rem) {
-    :is(a, button, input, summary, [tabindex]):focus-visible {
-      outline-width: 3px;
-      outline-offset: 3px;
-    }
+    outline-offset: 0;
   }
 </style>
 

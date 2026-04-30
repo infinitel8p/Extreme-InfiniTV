@@ -1,20 +1,27 @@
-// Per-playlist favorites + recently-played, persisted alongside creds.
+// Per-playlist favorites + recently-played + playback progress, persisted
+// alongside creds.
 //
 // Storage shape (one JSON blob under "xt_prefs"):
 //   { [playlistId]: {
 //       favLive: number[], favVod: number[], favSeries: number[],
-//       recLive: RecentEntry[], recVod: RecentEntry[], recSeries: RecentEntry[]
+//       recLive: RecentEntry[], recVod: RecentEntry[], recSeries: RecentEntry[],
+//       progVod: { [movieId]: ProgressEntry },
+//       progEpisode: { [episodeId]: EpisodeProgressEntry }
 //     } }
-// RecentEntry = { id, name, logo?, ts }   // ts = ms since epoch
+// RecentEntry          = { id, name, logo?, ts }   // ts = ms since epoch
+// ProgressEntry        = { position, duration, updatedAt, completed }
+// EpisodeProgressEntry = ProgressEntry & {
+//   seriesId, season, episodeNum, episodeTitle?, seriesName?, seriesLogo?
+// }
 //
 // Live channel ids, VOD movie ids and series ids each share a numeric space
-// per provider but mean different things, so favorites/recents are namespaced
-// by kind ("live" | "vod" | "series") at the leaf, not by id.
+// per provider but mean different things, so favorites/recents/progress are
+// namespaced by kind at the leaf, not by id.
 //
 // Same dual-mode persistence as creds.js: Tauri plugin-store on desktop,
 // localStorage + cookie on web/SSR. Reads are served from an in-memory cache
 // that is hydrated lazily on first use, so per-row hot paths
-// (e.g. virtualised channel render) can stay synchronous.
+// (e.g. virtualised channel render, episode list paint) can stay synchronous.
 import { Store } from "@tauri-apps/plugin-store"
 
 const isTauri =
@@ -23,8 +30,11 @@ const isTauri =
 
 const STORAGE_KEY = "xt_prefs"
 const RECENT_CAP = 30
+const PROGRESS_CAP = 200
+const COMPLETED_THRESHOLD = 0.95
 const EVT_FAV_CHANGED = "xt:favorites-changed"
 const EVT_REC_CHANGED = "xt:recents-changed"
+const EVT_PROGRESS_CHANGED = "xt:progress-changed"
 
 let storePromise = null
 function getStore() {
@@ -111,6 +121,8 @@ function emptyEntry() {
     recLive: [],
     recVod: [],
     recSeries: [],
+    progVod: Object.create(null),
+    progEpisode: Object.create(null),
   }
 }
 
@@ -128,6 +140,14 @@ function hydrate(raw) {
       recSeries: Array.isArray(val.recSeries)
         ? val.recSeries.slice(0, RECENT_CAP)
         : [],
+      progVod:
+        val.progVod && typeof val.progVod === "object"
+          ? { ...val.progVod }
+          : Object.create(null),
+      progEpisode:
+        val.progEpisode && typeof val.progEpisode === "object"
+          ? { ...val.progEpisode }
+          : Object.create(null),
     })
   }
 }
@@ -142,6 +162,8 @@ function dehydrate() {
       recLive: v.recLive,
       recVod: v.recVod,
       recSeries: v.recSeries,
+      progVod: v.progVod,
+      progEpisode: v.progEpisode,
     }
   }
   return out
@@ -287,3 +309,215 @@ export function clearForPlaylist(playlistId) {
   if (!playlistId) return
   if (cache.delete(playlistId)) scheduleSave()
 }
+
+// ---------------------------------------------------------------------------
+// Playback progress
+// ---------------------------------------------------------------------------
+/**
+ * @typedef {{ position: number, duration: number, updatedAt: number, completed: boolean }} ProgressEntry
+ * @typedef {ProgressEntry & {
+ *   seriesId: number, season: (string|number), episodeNum: (string|number|null),
+ *   episodeTitle?: string, seriesName?: string, seriesLogo?: string|null
+ * }} EpisodeProgressEntry
+ */
+
+/** @param {"vod"|"episode"} kind */
+function progKey(kind) {
+  return kind === "episode" ? "progEpisode" : "progVod"
+}
+
+/**
+ * Sync read of one item's progress.
+ * @param {string} playlistId
+ * @param {"vod"|"episode"} kind
+ * @param {number|string} id
+ * @returns {ProgressEntry|EpisodeProgressEntry|null}
+ */
+export function getProgress(playlistId, kind, id) {
+  if (!playlistId || id == null) return null
+  const e = cache.get(playlistId)
+  if (!e) return null
+  return e[progKey(kind)][String(id)] || null
+}
+
+/**
+ * @param {string} playlistId
+ * @param {"vod"|"episode"} kind
+ * @param {number|string} id
+ * @returns {boolean}
+ */
+export function isCompleted(playlistId, kind, id) {
+  const p = getProgress(playlistId, kind, id)
+  return !!p?.completed
+}
+
+/**
+ * Returns the progress fraction in [0, 1], or 0 when no progress / unknown
+ * duration. Useful for Continue Watching progress pills.
+ * @param {string} playlistId
+ * @param {"vod"|"episode"} kind
+ * @param {number|string} id
+ */
+export function getProgressFraction(playlistId, kind, id) {
+  const p = getProgress(playlistId, kind, id)
+  if (!p || !(p.duration > 0)) return 0
+  if (p.completed) return 1
+  return Math.max(0, Math.min(1, (p.position || 0) / p.duration))
+}
+
+/**
+ * Trim the kind-bucket so it doesn't grow without bound. Drops the
+ * oldest-updated entries when over PROGRESS_CAP. Keeps completed entries
+ * in eviction order with everything else - the Continue Watching strip
+ * filters them out anyway.
+ */
+function trimBucket(bucket) {
+  const keys = Object.keys(bucket)
+  if (keys.length <= PROGRESS_CAP) return
+  keys.sort((a, b) => (bucket[a].updatedAt || 0) - (bucket[b].updatedAt || 0))
+  const drop = keys.slice(0, keys.length - PROGRESS_CAP)
+  for (const k of drop) delete bucket[k]
+}
+
+/**
+ * Record progress for a movie or episode. `position` and `duration` are in
+ * seconds. When `position / duration >= COMPLETED_THRESHOLD`, the entry is
+ * marked completed; subsequent setProgress calls won't un-complete it.
+ *
+ * For episode entries, pass `extras` with seriesId / season / episodeNum
+ * (and optionally episodeTitle / seriesName / seriesLogo) so the Continue
+ * Watching strip can render without depending on a fresh series list.
+ *
+ * @param {string} playlistId
+ * @param {"vod"|"episode"} kind
+ * @param {number|string} id
+ * @param {number} position
+ * @param {number} duration
+ * @param {object} [extras]
+ */
+export function setProgress(playlistId, kind, id, position, duration, extras) {
+  if (!playlistId || id == null) return
+  const pos = Number(position) || 0
+  const dur = Number(duration) || 0
+  const e = getOrCreate(playlistId)
+  const bucket = e[progKey(kind)]
+  const prev = bucket[String(id)]
+  const wasCompleted = !!prev?.completed
+  const completed =
+    wasCompleted ||
+    (dur > 0 && pos / dur >= COMPLETED_THRESHOLD)
+
+  const next = {
+    ...(prev || {}),
+    ...(extras || {}),
+    position: pos,
+    duration: dur || prev?.duration || 0,
+    updatedAt: Date.now(),
+    completed,
+  }
+  bucket[String(id)] = next
+  trimBucket(bucket)
+  scheduleSave()
+
+  // Only fire the event when something the UI cares about flipped: a fresh
+  // entry, a completion transition, or a meaningful position jump (>=5s).
+  // Routine timeupdate ticks (1s drift) shouldn't churn subscribers.
+  const positionDelta = Math.abs(pos - (prev?.position || 0))
+  const positionChanged = positionDelta >= 5
+  const completionChanged = !wasCompleted && completed
+  const wasNew = !prev
+  if (wasNew || completionChanged || positionChanged) {
+    dispatch(EVT_PROGRESS_CHANGED, {
+      playlistId,
+      kind,
+      id,
+      completed,
+      position: pos,
+      duration: next.duration,
+    })
+  }
+}
+
+/**
+ * Force an entry to completed (e.g. on the Video.js `ended` event, or when
+ * the user manually marks an episode watched).
+ * @param {string} playlistId
+ * @param {"vod"|"episode"} kind
+ * @param {number|string} id
+ * @param {object} [extras]
+ */
+export function markCompleted(playlistId, kind, id, extras) {
+  if (!playlistId || id == null) return
+  const e = getOrCreate(playlistId)
+  const bucket = e[progKey(kind)]
+  const prev = bucket[String(id)]
+  if (prev?.completed && !extras) return
+  const next = {
+    ...(prev || {}),
+    ...(extras || {}),
+    position: prev?.duration || prev?.position || 0,
+    duration: prev?.duration || 0,
+    updatedAt: Date.now(),
+    completed: true,
+  }
+  bucket[String(id)] = next
+  trimBucket(bucket)
+  scheduleSave()
+  dispatch(EVT_PROGRESS_CHANGED, {
+    playlistId,
+    kind,
+    id,
+    completed: true,
+    position: next.position,
+    duration: next.duration,
+  })
+}
+
+/**
+ * Drop the progress entry for an item (e.g. "rewatch" / "remove from
+ * Continue Watching"). No-op if there's nothing to clear.
+ * @param {string} playlistId
+ * @param {"vod"|"episode"} kind
+ * @param {number|string} id
+ */
+export function clearProgress(playlistId, kind, id) {
+  if (!playlistId || id == null) return
+  const e = cache.get(playlistId)
+  if (!e) return
+  const bucket = e[progKey(kind)]
+  if (!(String(id) in bucket)) return
+  delete bucket[String(id)]
+  scheduleSave()
+  dispatch(EVT_PROGRESS_CHANGED, { playlistId, kind, id, removed: true })
+}
+
+/**
+ * Continue Watching entries for a playlist - in-progress (not completed)
+ * movies and episodes, sorted most-recent-first. Each entry has a `kind`
+ * and `id` plus the underlying ProgressEntry fields, so the caller can
+ * render without further lookups (episodes carry seriesId / season /
+ * episodeNum / seriesName / seriesLogo on the record itself).
+ *
+ * @param {string} playlistId
+ * @param {number} [limit]
+ * @returns {Array<{kind: "vod"|"episode", id: string} & (ProgressEntry|EpisodeProgressEntry)>}
+ */
+export function getContinueWatching(playlistId, limit = 6) {
+  const e = cache.get(playlistId)
+  if (!e) return []
+  const out = []
+  for (const [id, p] of Object.entries(e.progVod)) {
+    if (p?.completed) continue
+    if (!(p?.position > 0)) continue
+    out.push({ kind: "vod", id, ...p })
+  }
+  for (const [id, p] of Object.entries(e.progEpisode)) {
+    if (p?.completed) continue
+    if (!(p?.position > 0)) continue
+    out.push({ kind: "episode", id, ...p })
+  }
+  out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  return out.slice(0, Math.max(0, limit))
+}
+
+export const PROGRESS_COMPLETED_THRESHOLD = COMPLETED_THRESHOLD

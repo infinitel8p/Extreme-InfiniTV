@@ -11,6 +11,10 @@ import {
   isFavorite,
   toggleFavorite,
   pushRecent,
+  getProgress,
+  setProgress,
+  markCompleted,
+  clearProgress,
 } from "@/scripts/lib/preferences.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
@@ -45,6 +49,9 @@ const plotEl = document.getElementById("movie-detail-plot")
 const posterEl = document.getElementById("movie-detail-poster")
 const playerWrap = document.getElementById("movie-detail-player-wrap")
 const playBtn = document.getElementById("movie-detail-play")
+const playLabelEl = document.getElementById("movie-detail-play-label")
+const playSubEl = document.getElementById("movie-detail-play-sub")
+const restartBtn = document.getElementById("movie-detail-restart")
 const favBtn = document.getElementById("movie-detail-fav")
 const downloadBtn = document.getElementById("movie-detail-download")
 const downloadLabel = document.getElementById("movie-detail-download-label")
@@ -159,10 +166,44 @@ function syncFavButton() {
   favBtn.setAttribute("aria-pressed", String(fav))
 }
 
+function fmtClock(seconds) {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const ss = s % 60
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
+  return `${m}:${String(ss).padStart(2, "0")}`
+}
+
+function syncResumeUI() {
+  if (!playBtn || !movie) return
+  const saved = activePlaylistId
+    ? getProgress(activePlaylistId, "vod", movie.id)
+    : null
+  const canResume =
+    saved && !saved.completed && saved.position > RESUME_MIN_SECONDS
+  if (canResume) {
+    if (playLabelEl) playLabelEl.textContent = "Continue"
+    if (playSubEl) playSubEl.textContent = `from ${fmtClock(saved.position)}`
+    playBtn.setAttribute("aria-label", `Continue watching from ${fmtClock(saved.position)}`)
+    if (restartBtn) restartBtn.removeAttribute("hidden")
+  } else {
+    if (playLabelEl) playLabelEl.textContent = "Play"
+    if (playSubEl) playSubEl.textContent = ""
+    playBtn.setAttribute("aria-label", "Play")
+    if (restartBtn) restartBtn.setAttribute("hidden", "")
+  }
+}
+
 // ----------------------------
 // Playback
 // ----------------------------
 let vjs = null
+let progressListenersBound = false
+const RESUME_MIN_SECONDS = 30
+const RESUME_MAX_FRACTION = 0.95
+const PROGRESS_WRITE_INTERVAL_MS = 5000
+
 async function ensurePlayer() {
   if (vjs) return vjs
   const [{ default: videojs }] = await Promise.all([
@@ -180,6 +221,8 @@ async function ensurePlayer() {
       volumePanel: { inline: false },
       pictureInPictureToggle: !hasNativePipBridge,
       playbackRateMenuButton: true,
+      subsCapsButton: true,
+      audioTrackButton: true,
       fullscreenToggle: true,
     },
     html5: {
@@ -231,7 +274,42 @@ async function startPlayback() {
       src: playSrc,
     })
   })
+
+  const saved = activePlaylistId
+    ? getProgress(activePlaylistId, "vod", movie.id)
+    : null
+  if (saved && !saved.completed && saved.position > RESUME_MIN_SECONDS) {
+    player.one("loadedmetadata", () => {
+      const dur = player.duration() || saved.duration || 0
+      const pos = saved.position
+      if (dur === 0 || pos / dur < RESUME_MAX_FRACTION) {
+        try { player.currentTime(pos) } catch {}
+      }
+    })
+  }
+
   player.src({ src: playSrc, type: mime })
+
+  if (!progressListenersBound) {
+    progressListenersBound = true
+    let lastWriteAt = 0
+    player.on("timeupdate", () => {
+      if (!activePlaylistId || !movie) return
+      const now = Date.now()
+      if (now - lastWriteAt < PROGRESS_WRITE_INTERVAL_MS) return
+      const pos = player.currentTime() || 0
+      const dur = player.duration() || 0
+      if (pos < 1) return
+      lastWriteAt = now
+      setProgress(activePlaylistId, "vod", movie.id, pos, dur)
+    })
+    player.on("ended", () => {
+      if (!activePlaylistId || !movie) return
+      const dur = player.duration() || 0
+      markCompleted(activePlaylistId, "vod", movie.id, { duration: dur })
+    })
+  }
+
   player.play().catch((err) =>
     console.warn("[xt:movie-detail] play() rejected:", err?.message || err)
   )
@@ -239,8 +317,27 @@ async function startPlayback() {
 
 playBtn?.addEventListener("click", startPlayback)
 
+restartBtn?.addEventListener("click", () => {
+  if (!movie || !activePlaylistId) return
+  clearProgress(activePlaylistId, "vod", movie.id)
+  startPlayback()
+})
+
+document.addEventListener("xt:progress-changed", (e) => {
+  const detail = e.detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "vod") return
+  if (movie?.id !== detail.id) return
+  syncResumeUI()
+})
+
 window.addEventListener("pagehide", () => {
   try {
+    if (activePlaylistId && movie && vjs) {
+      const pos = vjs.currentTime?.() || 0
+      const dur = vjs.duration?.() || 0
+      if (pos > 1) setProgress(activePlaylistId, "vod", movie.id, pos, dur)
+    }
     vjs?.pause?.()
     vjs?.dispose?.()
   } catch {}
@@ -428,6 +525,7 @@ async function boot() {
   paintPoster(movie.name, movie.logo || null)
   setAmbient(movie.logo || null)
   syncFavButton()
+  syncResumeUI()
 
   if (dl?.url) {
     detailSrc = dl.url

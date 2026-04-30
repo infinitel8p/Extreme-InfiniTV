@@ -4,6 +4,7 @@ import {
   IconChevronLeft,
   IconPlayerPlay,
   IconDownload,
+  IconRotate,
 } from "@tabler/icons-svelte"
 ---
 
@@ -64,13 +65,29 @@ import {
           <button
             id="movie-detail-play"
             type="button"
-            class="dt-play-breath flex items-center justify-center gap-2 rounded-xl bg-accent text-bg
-                   px-6 py-3 text-base font-semibold min-w-44
+            class="dt-play-breath flex flex-col items-center justify-center gap-0 rounded-xl bg-accent text-bg
+                   px-6 py-2.5 text-base font-semibold min-w-44
                    hover:opacity-90 focus-visible:opacity-90
                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
                    transition-opacity">
-            <IconPlayerPlay aria-hidden="true" stroke={2} class="size-5" />
-            Play
+            <span class="inline-flex items-center gap-2 leading-none">
+              <IconPlayerPlay aria-hidden="true" stroke={2} class="size-5" />
+              <span id="movie-detail-play-label">Play</span>
+            </span>
+            <span
+              id="movie-detail-play-sub"
+              class="text-2xs font-normal opacity-80 tabular-nums leading-tight mt-0.5 empty:hidden"></span>
+          </button>
+          <button
+            id="movie-detail-restart"
+            type="button"
+            hidden
+            aria-label="Start from the beginning"
+            class="flex items-center justify-center gap-2 rounded-xl border border-line px-6 py-3 text-base min-w-44 text-fg-2
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   transition-colors">
+            <IconRotate aria-hidden="true" stroke={2} class="size-5" />
+            Start over
           </button>
           <button
             id="movie-detail-fav"

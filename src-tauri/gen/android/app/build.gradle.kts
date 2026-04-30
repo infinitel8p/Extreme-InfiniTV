@@ -69,6 +69,9 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             signingConfigs.findByName("release")?.let { signingConfig = it }
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))
