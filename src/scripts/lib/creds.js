@@ -24,7 +24,15 @@ const EVT_ENTRIES_UPDATED = "xt:entries-updated"
 let storePromise = null
 function getStore() {
   if (!isTauri) return Promise.resolve(null)
-  if (!storePromise) storePromise = Store.load(".xtream.creds.json")
+  if (!storePromise) {
+    storePromise = Store.load(".xtream.creds.json").catch((e) => {
+      console.error(
+        "[xt:creds] plugin-store unavailable, falling back to localStorage:",
+        e
+      )
+      return null
+    })
+  }
   return storePromise
 }
 
@@ -85,13 +93,19 @@ async function writeRaw(data) {
   const store = await getStore()
   const json = JSON.stringify(data)
   if (store) {
-    await store.set(STORAGE_KEY, data)
-    await store.save()
+    try {
+      await store.set(STORAGE_KEY, data)
+      await store.save()
+    } catch (e) {
+      console.error("[xt:creds] plugin-store write failed:", e)
+    }
   }
   try {
     localStorage.setItem(STORAGE_KEY, json)
     setCookie(STORAGE_KEY, json)
-  } catch {}
+  } catch (e) {
+    console.error("[xt:creds] localStorage/cookie write failed:", e)
+  }
   migrationPromise = Promise.resolve(data)
 }
 

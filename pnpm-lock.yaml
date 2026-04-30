@@ -56,6 +56,9 @@ importers:
       tailwindcss:
         specifier: ^4.2.4
         version: 4.2.4
+      tauri-plugin-android-fs-api:
+        specifier: 28.1.0
+        version: 28.1.0
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1875,6 +1878,10 @@ packages:
   crc32-stream@6.0.0:
     resolution: {integrity: sha512-piICUB6ei4IlTv1+653yq5+KoqfBYmj9bw6LqXoOneTMDXk5nM1qt12mFW1caG3LlJXEKW1Bp0WggEmIfQB34g==}
     engines: {node: '>= 14'}
+
+  create-web-stream@1.1.2:
+    resolution: {integrity: sha512-qtdh7eHXm5ityhyXhMGU1Jm7Wb49pLWo8OZsLGEm4Wf2sXADQXkouQxt6Pq4C8y3O0XyIVGf0Jun4ZbelxytoA==}
+    engines: {node: '>=18.9.0'}
 
   cron-parser@4.9.0:
     resolution: {integrity: sha512-p0SaNjrHOnQeR8/VnfGbmg9te2kfyYSQ7Sc/j/6DtPL3JQvKxmjO9TSjNFpujqV3vEYYBvNNvXSxzyksBWAx1Q==}
@@ -3814,6 +3821,9 @@ packages:
   tar@7.5.13:
     resolution: {integrity: sha512-tOG/7GyXpFevhXVh8jOPJrmtRpOTsYqUIkVdVooZYJS/z8WhfQUX8RJILmeuJNinGAMSu1veBr4asSHFt5/hng==}
     engines: {node: '>=18'}
+
+  tauri-plugin-android-fs-api@28.1.0:
+    resolution: {integrity: sha512-gCnO1s2PW74+5CUF1Y8m8pfSpD+UIHnFpUPBfy1RlkJLAiv8Sci76o7OftZVUH8i3kmQfZpxI1KJL7dW5ckxWw==}
 
   teex@1.0.1:
     resolution: {integrity: sha512-eYE6iEI62Ni1H8oIa7KlDU6uQBtqr4Eajni3wX7rpfXD8ysFx8z0+dri+KWEPWpBsxXfxu58x/0jvTVT1ekOSg==}
@@ -6162,6 +6172,8 @@ snapshots:
     dependencies:
       crc-32: 1.2.2
       readable-stream: 4.7.0
+
+  create-web-stream@1.1.2: {}
 
   cron-parser@4.9.0:
     dependencies:
@@ -8607,6 +8619,11 @@ snapshots:
       minipass: 7.1.3
       minizlib: 3.1.0
       yallist: 5.0.0
+
+  tauri-plugin-android-fs-api@28.1.0:
+    dependencies:
+      '@tauri-apps/api': 2.10.1
+      create-web-stream: 1.1.2
 
   teex@1.0.1:
     dependencies:

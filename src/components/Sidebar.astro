@@ -8,6 +8,7 @@ import {
   IconCalendarTime,
   IconDownload,
   IconSettings,
+  IconLayoutGrid,
 } from "@tabler/icons-svelte"
 import PlaylistSwitcher from "@/components/PlaylistSwitcher.astro"
 
@@ -22,22 +23,37 @@ const items = [
   { href: "/downloads", label: "Downloads", Icon: IconDownload,     match: (p) => p === "/downloads" || p.startsWith("/downloads/"), id: "nav-downloads" },
 ]
 
-const mobileItems = [
-  ...items.filter((i) => i.href !== "/epg" && i.href !== "/downloads"),
-  { href: "/settings", label: "Settings", Icon: IconSettings, match: (p) => p === "/settings" || p.startsWith("/settings/") },
+// Portrait phone bottom bar: 4 destinations + a center "More" trigger
+// that expands a panel containing the rest. EPG stays desktop-only on
+// portrait because the grid view doesn't fit a phone in portrait; in
+// landscape we use the side rail instead, which lists everything.
+const tabItems = [
+  items.find((i) => i.href === "/"),
+  items.find((i) => i.href === "/livetv"),
+  items.find((i) => i.href === "/movies"),
+  items.find((i) => i.href === "/series"),
 ]
 
+const moreItems = [
+  { href: "/downloads", label: "Downloads", Icon: IconDownload, match: (p) => p === "/downloads" || p.startsWith("/downloads/"), id: "mobile-more-downloads" },
+  { href: "/settings",  label: "Settings",  Icon: IconSettings, match: (p) => p === "/settings"  || p.startsWith("/settings/") },
+]
+
+const moreActive = moreItems.some((i) => i.match(path))
 const settingsActive = path === "/settings" || path.startsWith("/settings/")
 ---
 
-<!-- Desktop / tablet side rail (md+). Hidden on phones. -->
+<!-- Side rail: md+ AND landscape phones. The rail itself scrolls when
+     content overflows so the rest of the page stays anchored. -->
 <aside
-  class="hidden md:flex md:order-first
+  class="hidden md:flex landscape-phone:flex md:order-first landscape-phone:order-first
          shrink-0 flex-col gap-2 border-r border-line bg-bg
          w-16 lg:w-64
          p-2 lg:p-3
          pl-[max(0.5rem,env(safe-area-inset-left))]
-         pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+         pb-[max(0.5rem,env(safe-area-inset-bottom))]
+         landscape-phone:sticky landscape-phone:top-0
+         landscape-phone:max-h-screen landscape-phone:overflow-y-auto custom-scroll">
 
   <a
     href="/"
@@ -69,8 +85,8 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
           class:list={[
             "flex items-center gap-3 rounded-xl px-2.5 py-2.5 min-h-11",
             "justify-center lg:justify-start",
-            "transition-colors outline-none",
-            "hover:bg-surface-2 focus-visible:bg-surface-2",
+            "transition-[color,background-color,transform] duration-150 outline-none",
+            "hover:bg-surface-2 focus-visible:bg-surface-2 active:scale-[0.98]",
             active
               ? "bg-surface-2 text-fg ring-1 ring-accent/40"
               : "text-fg-2 hover:text-fg focus-visible:text-fg",
@@ -89,7 +105,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
                 id="sidebar-downloads-badge"
                 aria-hidden="true"
                 hidden
-                class="absolute -top-1.5 -right-2 min-w-[1.125rem] h-[1.125rem] px-1
+                class="absolute -top-1.5 -right-2 min-w-4.5 h-4.5 px-1
                        inline-flex items-center justify-center rounded-full
                        bg-accent text-bg text-[10px] font-semibold leading-none
                        tabular-nums ring-2 ring-bg">0</span>
@@ -128,7 +144,9 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
   </div>
 
   <div class="flex flex-col gap-1 pt-2 border-t border-line">
-    <PlaylistSwitcher />
+    <div class="hidden lg:block">
+      <PlaylistSwitcher />
+    </div>
     <a
       href="/settings"
       aria-label="Settings"
@@ -158,47 +176,184 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
   </div>
 </aside>
 
-<!-- Mobile bottom nav (< md). Sits at the bottom of the column flex thanks
-     to `order-last`, so it's in flow rather than fixed-positioned — no
-     overlap padding gymnastics needed on individual pages. -->
+<!-- Portrait phone bottom nav. -->
 <nav
-  class="md:hidden order-last
-         shrink-0 flex items-stretch border-t border-line bg-bg/95 backdrop-blur
+  data-mobile-nav
+  class="md:hidden landscape-phone:hidden order-last
+         shrink-0 flex flex-col border-t border-line bg-bg/95 backdrop-blur
          pb-[max(0.25rem,env(safe-area-inset-bottom))]
          pl-[max(0,env(safe-area-inset-left))]
          pr-[max(0,env(safe-area-inset-right))]"
   aria-label="Main">
-  {mobileItems.map(({ href, label, Icon, match }) => {
-    const active = match(path)
-    return (
-      <a
-        href={href}
-        aria-label={label}
-        aria-current={active ? "page" : undefined}
-        class:list={[
-          "flex flex-1 min-w-0 flex-col items-center justify-center gap-0.5",
-          "min-h-14 px-1 py-2 rounded-lg",
-          "transition-colors outline-none",
-          "focus-visible:bg-surface-2",
-          active ? "text-fg" : "text-fg-3 hover:text-fg",
-        ]}>
-        <Icon
-          aria-hidden="true"
-          stroke={active ? 2 : 1.75}
+
+  <!-- Expanding panel. -->
+  <div
+    id="mobile-more-panel"
+    data-open="false"
+    aria-hidden="true"
+    class="grid grid-rows-[0fr] data-[open=true]:grid-rows-[1fr]
+           transition-[grid-template-rows] duration-200 ease-out
+           border-b border-line">
+    <div class="overflow-hidden">
+      <ul class="flex flex-col gap-0.5 px-2 pt-2 pb-1">
+        {moreItems.map(({ href, label, Icon, match, id }) => {
+          const active = match(path)
+          const isDownloads = id === "mobile-more-downloads"
+          return (
+            <li>
+              <a
+                href={href}
+                id={id}
+                aria-label={label}
+                aria-current={active ? "page" : undefined}
+                class:list={[
+                  "flex items-center gap-3 rounded-xl px-3 py-2.5 min-h-11",
+                  "transition-[color,background-color,transform] duration-150 outline-none",
+                  "hover:bg-surface-2 focus-visible:bg-surface-2 active:scale-[0.98]",
+                  active
+                    ? "bg-surface-2 text-fg ring-1 ring-accent/40"
+                    : "text-fg-2 hover:text-fg focus-visible:text-fg",
+                ]}>
+                <span class="relative inline-flex shrink-0">
+                  <Icon
+                    aria-hidden="true"
+                    stroke={active ? 2 : 1.75}
+                    class:list={[
+                      "size-5 shrink-0",
+                      active ? "text-accent" : "text-fg-3",
+                    ]}
+                  />
+                  {isDownloads && (
+                    <span
+                      id="mobile-more-downloads-badge"
+                      aria-hidden="true"
+                      hidden
+                      class="absolute -top-1.5 -right-2 min-w-4.5 h-4.5 px-1
+                             inline-flex items-center justify-center rounded-full
+                             bg-accent text-bg text-[10px] font-semibold leading-none
+                             tabular-nums ring-2 ring-bg">0</span>
+                  )}
+                </span>
+                <span class="truncate text-sm font-medium">{label}</span>
+                {isDownloads && (
+                  <span
+                    id="mobile-more-downloads-sub"
+                    class="ml-auto truncate text-2xs text-fg-3 tabular-nums empty:hidden"></span>
+                )}
+              </a>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  </div>
+
+  <!-- Tab row: 2 destinations | More | 2 destinations. -->
+  <div class="flex items-stretch">
+    {tabItems.slice(0, 2).map(({ href, label, Icon, match }) => {
+      const active = match(path)
+      return (
+        <a
+          href={href}
+          aria-label={label}
+          aria-current={active ? "page" : undefined}
           class:list={[
-            "size-5 shrink-0",
-            active ? "text-accent" : "text-fg-3",
+            "flex flex-1 min-w-0 flex-col items-center justify-center gap-0.5",
+            "min-h-14 px-0.5 sm:px-1 py-2 rounded-lg",
+            "transition-[color,background-color,transform] duration-150 outline-none",
+            "focus-visible:bg-surface-2 active:scale-[0.96]",
+            active ? "text-fg" : "text-fg-3 hover:text-fg",
+          ]}>
+          <Icon
+            aria-hidden="true"
+            stroke={active ? 2 : 1.75}
+            class:list={[
+              "size-5 shrink-0",
+              active ? "text-accent" : "text-fg-3",
+            ]}
+          />
+          <span class:list={[
+            "text-2xs leading-none truncate max-w-full",
+            active ? "font-medium" : "font-normal",
+          ]}>
+            {label}
+          </span>
+        </a>
+      )
+    })}
+
+    <button
+      id="mobile-more-btn"
+      type="button"
+      aria-label="More"
+      aria-controls="mobile-more-panel"
+      aria-expanded="false"
+      class:list={[
+        "flex flex-1 min-w-0 flex-col items-center justify-center gap-0.5 relative",
+        "min-h-14 px-0.5 sm:px-1 py-2 rounded-lg",
+        "transition-[color,background-color,transform] duration-150 outline-none",
+        "focus-visible:bg-surface-2 active:scale-[0.96]",
+        "aria-expanded:bg-surface-2",
+        moreActive ? "text-fg" : "text-fg-3 hover:text-fg",
+      ]}>
+      <span class="relative inline-flex shrink-0">
+        <IconLayoutGrid
+          aria-hidden="true"
+          stroke={moreActive ? 2 : 1.75}
+          class:list={[
+            "size-5 shrink-0 transition-transform duration-200",
+            moreActive ? "text-accent" : "text-fg-3",
           ]}
         />
-        <span class:list={[
-          "text-2xs leading-none truncate max-w-full",
-          active ? "font-medium" : "font-normal",
-        ]}>
-          {label}
-        </span>
-      </a>
-    )
-  })}
+        <span
+          id="mobile-more-btn-badge"
+          aria-hidden="true"
+          hidden
+          class="absolute -top-1.5 -right-2 min-w-4.5 h-4.5 px-1
+                 inline-flex items-center justify-center rounded-full
+                 bg-accent text-bg text-[10px] font-semibold leading-none
+                 tabular-nums ring-2 ring-bg">0</span>
+      </span>
+      <span class:list={[
+        "text-2xs leading-none truncate max-w-full",
+        moreActive ? "font-medium" : "font-normal",
+      ]}>
+        More
+      </span>
+    </button>
+
+    {tabItems.slice(2).map(({ href, label, Icon, match }) => {
+      const active = match(path)
+      return (
+        <a
+          href={href}
+          aria-label={label}
+          aria-current={active ? "page" : undefined}
+          class:list={[
+            "flex flex-1 min-w-0 flex-col items-center justify-center gap-0.5",
+            "min-h-14 px-0.5 sm:px-1 py-2 rounded-lg",
+            "transition-[color,background-color,transform] duration-150 outline-none",
+            "focus-visible:bg-surface-2 active:scale-[0.96]",
+            active ? "text-fg" : "text-fg-3 hover:text-fg",
+          ]}>
+          <Icon
+            aria-hidden="true"
+            stroke={active ? 2 : 1.75}
+            class:list={[
+              "size-5 shrink-0",
+              active ? "text-accent" : "text-fg-3",
+            ]}
+          />
+          <span class:list={[
+            "text-2xs leading-none truncate max-w-full",
+            active ? "font-medium" : "font-normal",
+          ]}>
+            {label}
+          </span>
+        </a>
+      )
+    })}
+  </div>
 </nav>
 
 <script>
@@ -208,51 +363,102 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     DOWNLOAD_PROGRESS_EVENT,
   } from "@/scripts/lib/downloads.js"
 
-  const badge = document.getElementById("sidebar-downloads-badge")
-  const sub = document.getElementById("sidebar-downloads-sub")
+  const sidebarBadge = document.getElementById("sidebar-downloads-badge")
+  const sidebarSub = document.getElementById("sidebar-downloads-sub")
+  const mobileBadge = document.getElementById("mobile-more-downloads-badge")
+  const mobileSub = document.getElementById("mobile-more-downloads-sub")
+  const moreBtnBadge = document.getElementById("mobile-more-btn-badge")
 
   const ACTIVE = new Set(["downloading", "queued", "stalled"])
+
+  function setBadge(el, count) {
+    if (!el) return
+    if (count === 0) {
+      el.setAttribute("hidden", "")
+      el.textContent = ""
+    } else {
+      el.removeAttribute("hidden")
+      el.textContent = count > 9 ? "9+" : String(count)
+    }
+  }
+
+  function setSub(el, active, downloading, done, total) {
+    if (!el) return
+    if (active.length === 0) {
+      el.textContent = ""
+      return
+    }
+    if (total > 0 && downloading > 0) {
+      const pct = Math.max(0, Math.min(100, (done / total) * 100))
+      el.textContent = `${pct.toFixed(0)}%`
+    } else {
+      el.textContent = `${active.length}`
+    }
+  }
 
   function update() {
     const list = listDownloads()
     const active = list.filter((d) => ACTIVE.has(d.status))
     const count = active.length
-
-    if (badge) {
-      if (count === 0) {
-        badge.setAttribute("hidden", "")
-        badge.textContent = ""
-      } else {
-        badge.removeAttribute("hidden")
-        badge.textContent = count > 9 ? "9+" : String(count)
+    let done = 0
+    let total = 0
+    let downloading = 0
+    for (const d of active) {
+      if (d.status === "downloading") downloading++
+      if (d.bytesTotal > 0) {
+        done += d.bytesDone || 0
+        total += d.bytesTotal
       }
     }
 
-    if (sub) {
-      if (count === 0) {
-        sub.textContent = ""
-        return
-      }
-      let done = 0
-      let total = 0
-      let downloading = 0
-      for (const d of active) {
-        if (d.status === "downloading") downloading++
-        if (d.bytesTotal > 0) {
-          done += d.bytesDone || 0
-          total += d.bytesTotal
-        }
-      }
-      if (total > 0 && downloading > 0) {
-        const pct = Math.max(0, Math.min(100, (done / total) * 100))
-        sub.textContent = `${pct.toFixed(0)}%`
-      } else {
-        sub.textContent = `${count}`
-      }
-    }
+    setBadge(sidebarBadge, count)
+    setBadge(mobileBadge, count)
+    setBadge(moreBtnBadge, count)
+    setSub(sidebarSub, active, downloading, done, total)
+    setSub(mobileSub, active, downloading, done, total)
   }
 
   document.addEventListener(DOWNLOADS_LIST_EVENT, update)
   document.addEventListener(DOWNLOAD_PROGRESS_EVENT, update)
   update()
+
+  // Mobile bottom-nav "More" panel
+  const moreBtn = /** @type {HTMLButtonElement|null} */ (
+    document.getElementById("mobile-more-btn")
+  )
+  const morePanel = /** @type {HTMLElement|null} */ (
+    document.getElementById("mobile-more-panel")
+  )
+  const mobileNav = /** @type {HTMLElement|null} */ (
+    document.querySelector("[data-mobile-nav]")
+  )
+
+  function setMoreOpen(open) {
+    if (!moreBtn || !morePanel) return
+    moreBtn.setAttribute("aria-expanded", open ? "true" : "false")
+    morePanel.dataset.open = open ? "true" : "false"
+    morePanel.setAttribute("aria-hidden", open ? "false" : "true")
+  }
+
+  moreBtn?.addEventListener("click", (ev) => {
+    ev.stopPropagation()
+    const open = moreBtn.getAttribute("aria-expanded") === "true"
+    setMoreOpen(!open)
+  })
+
+  document.addEventListener("click", (ev) => {
+    if (!moreBtn || !morePanel) return
+    if (moreBtn.getAttribute("aria-expanded") !== "true") return
+    const target = /** @type {Node} */ (ev.target)
+    if (mobileNav && !mobileNav.contains(target)) setMoreOpen(false)
+  })
+
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return
+    if (moreBtn?.getAttribute("aria-expanded") === "true") {
+      ev.stopPropagation()
+      setMoreOpen(false)
+      moreBtn.focus()
+    }
+  })
 </script>

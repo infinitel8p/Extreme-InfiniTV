@@ -141,10 +141,9 @@ class MainActivity : TauriActivity() {
     )
   }
 
-  // Enter PiP automatically when the user presses Home (Android 8.0+)
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && fullscreenView != null) {
       val params = PictureInPictureParams.Builder()
         .setAspectRatio(Rational(16, 9))
         .build()

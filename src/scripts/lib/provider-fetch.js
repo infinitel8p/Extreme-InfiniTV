@@ -10,7 +10,13 @@ async function getTauriFetch() {
   if (!tauriFetchPromise) {
     tauriFetchPromise = import("@tauri-apps/plugin-http")
       .then((m) => m.fetch)
-      .catch(() => null)
+      .catch((e) => {
+        console.error(
+          "[xt:net] plugin-http unavailable, falling back to native fetch:",
+          e
+        )
+        return null
+      })
   }
   return tauriFetchPromise
 }
@@ -21,7 +27,22 @@ export async function providerFetch(url, init = {}) {
   if (tauriFetch) {
     const headers = new Headers(init.headers || {})
     if (ua) headers.set("User-Agent", ua)
-    return tauriFetch(url, { ...init, headers })
+    try {
+      return await tauriFetch(url, { ...init, headers })
+    } catch (e) {
+      const tag = init?.signal?.aborted ? "aborted" : "failed"
+      if (tag !== "aborted") {
+        console.error("[xt:net] tauri fetch failed", { url, error: e })
+      }
+      throw e
+    }
   }
-  return fetch(url, init)
+  try {
+    return await fetch(url, init)
+  } catch (e) {
+    if (!init?.signal?.aborted) {
+      console.error("[xt:net] native fetch failed", { url, error: e })
+    }
+    throw e
+  }
 }

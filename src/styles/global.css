@@ -4,6 +4,14 @@
 @import "@fontsource/instrument-serif/latin-400.css";
 @import "@fontsource/instrument-serif/latin-400-italic.css";
 
+/* Landscape phone: short viewport in landscape orientation. Gated on
+   max-height (not width) so it catches every modern phone in landscape
+   - SE through Pro Max - while leaving tablets (>=600px tall) alone.
+   Used to swap the bottom tab-bar for the narrow side rail and to keep
+   the page itself non-scrolling so only the rail scrolls when its
+   contents don't fit. */
+@custom-variant landscape-phone (@media (orientation: landscape) and (max-height: 500px));
+
 @view-transition {
     navigation: auto;
 }

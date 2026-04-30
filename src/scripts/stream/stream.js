@@ -763,6 +763,10 @@ const ensurePlayer = async () => {
     import("video.js"),
     import("video.js/dist/video-js.css"),
   ])
+  // Hide Video.js's built-in PiP toggle on Tauri Android - the WebView
+  // doesn't expose Web PiP so the button always renders disabled. Native
+  // PiP goes through the in-page button + AndroidPip bridge instead.
+  const hasNativePipBridge = !!window.AndroidPip
   vjs = videojs("player", {
     liveui: true,
     fluid: true,
@@ -771,7 +775,7 @@ const ensurePlayer = async () => {
     aspectRatio: "16:9",
     controlBar: {
       volumePanel: { inline: false },
-      pictureInPictureToggle: true,
+      pictureInPictureToggle: !hasNativePipBridge,
       playbackRateMenuButton: false,
       fullscreenToggle: true,
     },
@@ -808,7 +812,11 @@ async function play(streamId, name) {
     '<span class="status-badge status-badge--live">ON</span>'
   const label = document.createElement("span")
   label.className = "truncate w-full"
-  label.textContent = `Channel ${streamId}: ${name}`
+  label.append(`Channel ${streamId}: `)
+  const nameEl = document.createElement("span")
+  nameEl.className = "text-accent"
+  nameEl.textContent = name
+  label.appendChild(nameEl)
   wrap.appendChild(label)
   currentEl.appendChild(wrap)
 
@@ -830,19 +838,42 @@ async function play(streamId, name) {
   btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M19 4a3 3 0 0 1 3 3v4a1 1 0 0 1 -2 0v-4a1 1 0 0 0 -1 -1h-14a1 1 0 0 0 -1 1v10a1 1 0 0 0 1 1h6a1 1 0 0 1 0 2h-6a3 3 0 0 1 -3 -3v-10a3 3 0 0 1 3 -3z"/><path d="M20 13a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-5a2 2 0 0 1 -2 -2v-3a2 2 0 0 1 2 -2z"/></svg>`
   currentEl.appendChild(btn)
   btn.addEventListener("click", async () => {
+    const videoEl = /** @type {HTMLVideoElement|null} */ (
+      player.el().querySelector("video")
+    )
     if (window.AndroidPip?.toggle) {
-      player.requestFullscreen()
+      if (window.AndroidPip.isInPip?.()) {
+        window.AndroidPip.toggle()
+        return
+      }
+      // Tap = user gesture, so requestFullscreen on the actual <video> tag
+      // is allowed. Fullscreening it first means Android's WebChromeClient
+      // swaps in the immersive video surface, so when AndroidPip.toggle()
+      // captures the activity for PiP, only the video shows up - not the
+      // page navbar. If fullscreen rejects (older WebView, denied gesture),
+      // we still toggle so the click isn't dead, just degrades to page PiP.
+      if (videoEl && !document.fullscreenElement) {
+        try {
+          await videoEl.requestFullscreen()
+          await new Promise((r) =>
+            requestAnimationFrame(() => requestAnimationFrame(r))
+          )
+        } catch {}
+      }
       window.AndroidPip.toggle()
       return
     }
-    const el = player.el().querySelector("video")
-    if (document.pictureInPictureEnabled && !el.disablePictureInPicture) {
+    if (
+      videoEl &&
+      document.pictureInPictureEnabled &&
+      !videoEl.disablePictureInPicture
+    ) {
       try {
-        if (document.pictureInPictureElement === el) {
+        if (document.pictureInPictureElement === videoEl) {
           await document.exitPictureInPicture()
         } else {
-          if (el.readyState < 2) await el.play().catch(() => {})
-          await el.requestPictureInPicture()
+          if (videoEl.readyState < 2) await videoEl.play().catch(() => {})
+          await videoEl.requestPictureInPicture()
         }
       } catch {}
     }

@@ -4,6 +4,7 @@ import {
   setDownloadDir,
   getDownloadConcurrency,
 } from "@/scripts/lib/app-settings.js"
+import * as AFs from "@/scripts/lib/android-fs.js"
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -53,6 +54,51 @@ export function listDownloads() {
 
 export function isDownloadable() {
   return isTauri
+}
+
+export async function getLocalPlayableSrc(remoteUrl) {
+  if (!isTauri || !remoteUrl) return null
+  const item = readState().find(
+    (d) => d.url === remoteUrl && d.status === "done" && d.path
+  )
+  if (!item) return null
+
+  if (AFs.isAndroidUri(item.path)) {
+    if (!(await AFs.fileExists(item.path))) {
+      console.warn(
+        "[xt:download] local file missing, falling back to stream:",
+        item.path
+      )
+      return null
+    }
+    try {
+      return await AFs.convertSrc(item.path)
+    } catch (e) {
+      console.error("[xt:download] android convertSrc failed:", e)
+      return null
+    }
+  }
+
+  try {
+    const fs = await import("@tauri-apps/plugin-fs")
+    if (typeof fs.exists === "function" && !(await fs.exists(item.path))) {
+      console.warn(
+        "[xt:download] local file missing, falling back to stream:",
+        item.path
+      )
+      return null
+    }
+  } catch (e) {
+    console.error("[xt:download] exists() failed for", item.path, e)
+    return null
+  }
+  try {
+    const { convertFileSrc } = await import("@tauri-apps/api/core")
+    return convertFileSrc(item.path)
+  } catch (e) {
+    console.error("[xt:download] convertFileSrc failed:", e)
+    return null
+  }
 }
 
 const WIN_RESERVED_NAMES = new Set([
@@ -108,20 +154,33 @@ function isFileLockError(msg) {
 async function pickDir() {
   const saved = getDownloadDir()
   if (saved) return saved
-  const { open } = await import("@tauri-apps/plugin-dialog")
-  const picked = await open({ directory: true, title: "Choose download folder" })
-  if (!picked || typeof picked !== "string") return null
-  setDownloadDir(picked)
-  return picked
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog")
+    const picked = await open({ directory: true, title: "Choose download folder" })
+    if (!picked || typeof picked !== "string") return null
+    setDownloadDir(picked)
+    return picked
+  } catch (e) {
+    console.error("[xt:download] folder picker failed:", e)
+    throw e
+  }
 }
 
 async function ensureDir(path) {
-  const { mkdir, exists } = await import("@tauri-apps/plugin-fs")
-  if (await exists(path)) return
-  await mkdir(path, { recursive: true })
+  try {
+    const { mkdir, exists } = await import("@tauri-apps/plugin-fs")
+    if (await exists(path)) return
+    await mkdir(path, { recursive: true })
+  } catch (e) {
+    console.error("[xt:download] ensureDir failed for", path, e)
+    throw e
+  }
 }
 
 async function statSize(path) {
+  if (AFs.isAndroidUri(path)) {
+    return await AFs.getByteLength(path)
+  }
   const fs = await import("@tauri-apps/plugin-fs")
   let exists = false
   try {
@@ -161,12 +220,124 @@ function getItem(id) {
   return readState().find((d) => d.id === id) || null
 }
 
+async function runDownloadAndroid(id, item, controller) {
+  let lastProgressAt = Date.now()
+  let received = 0
+  let stallTimer = null
+
+  const watchStall = () => {
+    if (controller.signal.aborted) return
+    if (Date.now() - lastProgressAt > STALL_WINDOW_MS) {
+      controller.abort("stalled")
+      return
+    }
+    stallTimer = setTimeout(watchStall, STALL_CHECK_MS)
+  }
+  stallTimer = setTimeout(watchStall, STALL_CHECK_MS)
+
+  try {
+    updateItem(id, { status: "downloading", bytesDone: 0, error: "" })
+
+    const res = await providerFetch(item.url, { signal: controller.signal })
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+    const total = Number(res.headers.get("content-length") || 0)
+    updateItem(id, { bytesTotal: total, bytesDone: 0 })
+
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error("Response has no readable body.")
+
+    const writable = await AFs.openWriteStream(item.path)
+    const writer = writable.getWriter()
+
+    try {
+      let pendingFlushAt = 0
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (!value || !value.length) continue
+        await writer.write(value)
+        received += value.length
+        lastProgressAt = Date.now()
+        if (lastProgressAt - pendingFlushAt > 250) {
+          pendingFlushAt = lastProgressAt
+          updateItem(id, { bytesDone: received })
+        }
+      }
+      await writer.close()
+    } catch (e) {
+      try {
+        await writer.abort(e)
+      } catch {}
+      throw e
+    }
+
+    if (total > 0 && received !== total) {
+      throw new Error(
+        `Size mismatch: got ${received} bytes, expected ${total}.`
+      )
+    }
+
+    await AFs.publishFile(item.path)
+
+    updateItem(id, {
+      status: "done",
+      bytesDone: received,
+      bytesTotal: total || received,
+    })
+  } catch (e) {
+    if (controller.signal.aborted) {
+      const userPaused = controller.signal.reason === "paused"
+      const stalled = controller.signal.reason === "stalled"
+      try { await AFs.removeFile(item.path) } catch {}
+      if (stalled) {
+        updateItem(id, {
+          status: "stalled",
+          bytesDone: 0,
+          error: "No data received for 30s. Tap Resume to retry.",
+        })
+      } else if (userPaused) {
+        updateItem(id, {
+          status: "paused",
+          bytesDone: 0,
+          error: "",
+          userPaused: true,
+        })
+      } else {
+        updateItem(id, { status: "paused", bytesDone: 0 })
+      }
+    } else {
+      const msg = String(e?.message || e || "Failed")
+      console.error("[xt:download] runDownload (android) failed", {
+        id,
+        url: item.url,
+        path: item.path,
+        msg,
+        error: e,
+      })
+      try { await AFs.removeFile(item.path) } catch {}
+      updateItem(id, { status: "error", bytesDone: 0, error: msg })
+    }
+  } finally {
+    if (stallTimer) clearTimeout(stallTimer)
+  }
+}
+
 async function runDownload(id) {
   const item = getItem(id)
   if (!item) return
 
   const controller = new AbortController()
   activeAborts.set(id, controller)
+
+  if (AFs.isAndroidUri(item.path)) {
+    try {
+      await runDownloadAndroid(id, item, controller)
+    } finally {
+      activeAborts.delete(id)
+      tryRunNext()
+    }
+    return
+  }
 
   let lastProgressAt = Date.now()
   let received = await statSize(item.path)
@@ -268,6 +439,15 @@ async function runDownload(id) {
   } catch (e) {
     const msg = String(e?.message || e || "Failed")
     const reason = controller.signal.reason
+    if (!controller.signal.aborted) {
+      console.error("[xt:download] runDownload failed", {
+        id,
+        url: item.url,
+        path: item.path,
+        msg,
+        error: e,
+      })
+    }
     if (reason === "stalled") {
       updateItem(id, {
         status: "stalled",
@@ -327,13 +507,40 @@ export async function startDownload({ url, title, ext }) {
   if (!isTauri) {
     throw new Error("Downloads are only available in the desktop build.")
   }
-  const dir = await pickDir()
-  if (!dir) throw new Error("No download folder chosen.")
-  await ensureDir(dir)
 
-  const filename =
-    sanitizeFilename(title || "download") + "." + (ext || inferExt(url))
-  const fullPath = joinPath(dir, filename)
+  const resolvedExt = ext || inferExt(url)
+  const filename = sanitizeFilename(title || "download") + "." + resolvedExt
+
+  let fullPath
+  if (AFs.isAndroidFsActive()) {
+    const parentDir = AFs.deserializeUri(getDownloadDir())
+    try {
+      if (parentDir) {
+        fullPath = await AFs.createFileInPickedDir(parentDir, filename, resolvedExt)
+      } else {
+        fullPath = await AFs.createPublicDownloadFile(filename, resolvedExt)
+      }
+    } catch (e) {
+      console.error("[xt:download] android create file failed:", e)
+      throw new Error("Couldn't create download file: " + (e?.message || e))
+    }
+  } else {
+    let dir
+    try {
+      dir = await pickDir()
+    } catch (e) {
+      console.error("[xt:download] startDownload pickDir threw:", e)
+      throw e
+    }
+    if (!dir) throw new Error("No download folder chosen.")
+    try {
+      await ensureDir(dir)
+    } catch (e) {
+      console.error("[xt:download] startDownload ensureDir threw for", dir, e)
+      throw e
+    }
+    fullPath = joinPath(dir, filename)
+  }
 
   const id = uuid()
   const willRun = activeAborts.size < maxConcurrent()
@@ -392,13 +599,31 @@ export function cancelDownload(id) {
   pauseDownload(id)
 }
 
-export function removeDownload(id) {
+export async function removeDownload(id) {
   const ac = activeAborts.get(id)
   if (ac) ac.abort("paused")
   const qIdx = queuedIds.indexOf(id)
   if (qIdx >= 0) queuedIds.splice(qIdx, 1)
+
+  const item = getItem(id)
+
   const list = readState().filter((d) => d.id !== id)
   writeState(list)
+
+  if (isTauri && item?.path) {
+    if (AFs.isAndroidUri(item.path)) {
+      await AFs.removeFile(item.path)
+    } else {
+      try {
+        const fs = await import("@tauri-apps/plugin-fs")
+        if (typeof fs.exists === "function" && (await fs.exists(item.path))) {
+          await fs.remove(item.path)
+        }
+      } catch (e) {
+        console.error("[xt:download] could not delete file", item.path, e)
+      }
+    }
+  }
 
   tryRunNext()
 }
@@ -599,6 +824,19 @@ export function getRowThroughputEwma(id) {
 
 ;(() => {
   const list = readState()
+
+  if (AFs.isAndroidFsActive()) {
+    let dirty = false
+    for (const d of list) {
+      if (d.path && !AFs.isAndroidUri(d.path) && d.status !== "done") {
+        d.status = "error"
+        d.error = "Stale entry from a previous version. Remove and re-download."
+        dirty = true
+      }
+    }
+    if (dirty) writeState(list)
+  }
+
   const toResume = []
   for (const d of list) {
     if (d.status === "downloading" || d.status === "queued") {

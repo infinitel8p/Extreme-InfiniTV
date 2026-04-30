@@ -26,7 +26,9 @@
       "allow": [
         { "path": "$DOWNLOAD/**" },
         { "path": "$VIDEO/**" },
-        { "path": "$HOME/**" }
+        { "path": "$HOME/**" },
+        { "path": "$APPDATA/**" },
+        { "path": "$APPLOCALDATA/**" }
       ]
     },
     "dialog:default",

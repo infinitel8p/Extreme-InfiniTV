@@ -23,6 +23,7 @@ import {
   isDownloadable,
   inferExt,
   listDownloads,
+  getLocalPlayableSrc,
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
@@ -572,8 +573,13 @@ function paintSeries(data, fromCache, age) {
 }
 
 async function loadSeries() {
-  if (!listStatus) return
+  console.log("[xt:series] loadSeries enter")
+  if (!listStatus) {
+    console.warn("[xt:series] loadSeries: listStatus DOM node missing")
+    return
+  }
   const active = await getActiveEntry()
+  console.log("[xt:series] active=", active?._id || null)
   if (!active) {
     activePlaylistId = ""
     activePlaylistTitle = ""
@@ -612,12 +618,15 @@ async function loadSeries() {
       async () => {
         const catMap = await ensureSeriesCategoryMap()
         const r = await providerFetch(buildApiUrl(creds, "get_series"))
+        console.log("[xt:series] get_series resp status=", r.status, "ok=", r.ok)
         const body = await r.text()
+        console.log("[xt:series] body bytes=", body?.length ?? 0)
         if (!r.ok) {
           console.error("Upstream error body:", body)
           throw new Error(`API ${r.status}: ${body}`)
         }
         const parsed = JSON.parse(body)
+        console.log("[xt:series] parsed array length=", Array.isArray(parsed) ? parsed.length : "(not array)")
         const arr = Array.isArray(parsed)
           ? parsed
           : parsed?.series || parsed?.results || []
@@ -656,9 +665,11 @@ async function loadSeries() {
           )
       }
     )
+    console.log("[xt:series] cachedFetch returned len=", data?.length ?? 0, "fromCache=", fromCache)
     paintSeries(data, fromCache, age)
+    console.log("[xt:series] paintSeries done")
   } catch (e) {
-    console.error(e)
+    console.error("[xt:series] loadSeries threw:", e)
     filtered = []
     renderGrid()
     renderProviderError(listStatus, {
@@ -680,6 +691,7 @@ const ensurePlayer = async () => {
     import("video.js"),
     import("video.js/dist/video-js.css"),
   ])
+  const hasNativePipBridge = !!window.AndroidPip
   vjs = videojs("series-player", {
     liveui: false,
     fluid: true,
@@ -688,7 +700,7 @@ const ensurePlayer = async () => {
     aspectRatio: "16:9",
     controlBar: {
       volumePanel: { inline: false },
-      pictureInPictureToggle: true,
+      pictureInPictureToggle: !hasNativePipBridge,
       playbackRateMenuButton: true,
       fullscreenToggle: true,
     },
@@ -1128,7 +1140,9 @@ async function playEpisode(episode) {
   videoEl?.removeAttribute("hidden")
 
   const player = await ensurePlayer()
-  player.src({ src, type: chooseMime(src) })
+  const localSrc = await getLocalPlayableSrc(src)
+  const playSrc = localSrc || src
+  player.src({ src: playSrc, type: chooseMime(src) })
   player.play().catch(() => {})
 }
 
@@ -1176,6 +1190,8 @@ document.addEventListener("xt:active-changed", () => {
 })
 
 ;(async () => {
+  console.log("[xt:series] boot start")
   creds = await loadCreds()
+  console.log("[xt:series] boot creds host=", !!creds.host, "user=", !!creds.user)
   if (creds.host && creds.user && creds.pass) loadSeries()
 })()

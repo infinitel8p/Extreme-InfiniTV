@@ -9,6 +9,9 @@ pub fn run() {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
 
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_android_fs::init());
+
     builder
         .setup(|app| {
             if cfg!(debug_assertions) {

@@ -974,10 +974,40 @@ import {
     )
     const downloadsAvailEl = document.getElementById("downloads-availability")
 
+    const isAndroid = /Android/i.test(navigator.userAgent || "")
+
+    function prettifyAndroidUri(stored) {
+      if (!stored) return ""
+      let raw = stored
+      try {
+        const parsed = JSON.parse(stored)
+        if (parsed && typeof parsed.uri === "string") raw = parsed.uri
+      } catch {}
+      try {
+        const u = decodeURIComponent(raw)
+        const m = u.match(/document\/(?:tree\/)?([^/]+)$/) ||
+                  u.match(/tree\/([^/]+)$/)
+        if (m && m[1]) return m[1].replace(/^primary:/, "")
+        return u
+      } catch {
+        return raw
+      }
+    }
+
     function syncDir() {
       if (!dirInput) return
-      const v = getDownloadDir() || ""
-      dirInput.value = v
+      let v = getDownloadDir() || ""
+      if (isAndroid && v === "[object Object]") {
+        setDownloadDir("")
+        v = ""
+      }
+      if (isAndroid) {
+        dirInput.value = v
+          ? prettifyAndroidUri(v)
+          : "/Download/Extreme InfiniTV/ (default)"
+      } else {
+        dirInput.value = v
+      }
       if (dirClearBtn) dirClearBtn.disabled = !v
     }
     syncDir()
@@ -994,14 +1024,25 @@ import {
       if (!isDownloadable() || !dirPickBtn) return
       setLoading(dirPickBtn, true)
       try {
-        const { open } = await import("@tauri-apps/plugin-dialog")
-        const picked = await open({
-          directory: true,
-          title: "Choose download folder",
-        })
-        if (typeof picked === "string" && picked) {
-          setDownloadDir(picked)
-          syncDir()
+        if (isAndroid) {
+          const { pickDirectory, serializeUri } = await import(
+            "@/scripts/lib/android-fs.js"
+          )
+          const picked = await pickDirectory()
+          if (picked) {
+            setDownloadDir(serializeUri(picked))
+            syncDir()
+          }
+        } else {
+          const { open } = await import("@tauri-apps/plugin-dialog")
+          const picked = await open({
+            directory: true,
+            title: "Choose download folder",
+          })
+          if (typeof picked === "string" && picked) {
+            setDownloadDir(picked)
+            syncDir()
+          }
         }
       } catch (e) {
         console.error("Pick folder failed:", e)
@@ -1010,7 +1051,15 @@ import {
       }
     })
 
-    dirClearBtn?.addEventListener("click", () => {
+    dirClearBtn?.addEventListener("click", async () => {
+      const prev = getDownloadDir()
+      if (isAndroid && prev) {
+        const { releasePickedDir, deserializeUri } = await import(
+          "@/scripts/lib/android-fs.js"
+        )
+        const uri = deserializeUri(prev)
+        if (uri) releasePickedDir(uri).catch(() => {})
+      }
       setDownloadDir("")
       syncDir()
     })

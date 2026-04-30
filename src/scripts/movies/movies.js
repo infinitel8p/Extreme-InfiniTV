@@ -25,6 +25,7 @@ import {
   isDownloadable,
   inferExt,
   cancelDownload,
+  getLocalPlayableSrc,
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
@@ -588,8 +589,13 @@ function paintMovies(data, fromCache, age) {
 }
 
 async function loadMovies() {
-  if (!listStatus) return
+  console.log("[xt:movies] loadMovies enter")
+  if (!listStatus) {
+    console.warn("[xt:movies] loadMovies: listStatus DOM node missing")
+    return
+  }
   const active = await getActiveEntry()
+  console.log("[xt:movies] active=", active?._id || null)
   if (!active) {
     activePlaylistId = ""
     activePlaylistTitle = ""
@@ -628,12 +634,15 @@ async function loadMovies() {
       async () => {
         const catMap = await ensureVodCategoryMap()
         const r = await providerFetch(buildApiUrl(creds, "get_vod_streams"))
+        console.log("[xt:movies] get_vod_streams resp status=", r.status, "ok=", r.ok)
         const body = await r.text()
+        console.log("[xt:movies] body bytes=", body?.length ?? 0)
         if (!r.ok) {
           console.error("Upstream error body:", body)
           throw new Error(`API ${r.status}: ${body}`)
         }
         const parsed = JSON.parse(body)
+        console.log("[xt:movies] parsed array length=", Array.isArray(parsed) ? parsed.length : "(not array)")
         const arr = Array.isArray(parsed)
           ? parsed
           : parsed?.movies || parsed?.results || []
@@ -673,9 +682,11 @@ async function loadMovies() {
       }
     )
 
+    console.log("[xt:movies] cachedFetch returned len=", data?.length ?? 0, "fromCache=", fromCache)
     paintMovies(data, fromCache, age)
+    console.log("[xt:movies] paintMovies done")
   } catch (e) {
-    console.error(e)
+    console.error("[xt:movies] loadMovies threw:", e)
     filtered = []
     renderGrid()
     renderProviderError(listStatus, {
@@ -697,6 +708,7 @@ const ensurePlayer = async () => {
     import("video.js"),
     import("video.js/dist/video-js.css"),
   ])
+  const hasNativePipBridge = !!window.AndroidPip
   vjs = videojs("movie-player", {
     liveui: false,
     fluid: true,
@@ -705,7 +717,7 @@ const ensurePlayer = async () => {
     aspectRatio: "16:9",
     controlBar: {
       volumePanel: { inline: false },
-      pictureInPictureToggle: true,
+      pictureInPictureToggle: !hasNativePipBridge,
       playbackRateMenuButton: true,
       fullscreenToggle: true,
     },
@@ -928,7 +940,9 @@ async function startPlayback() {
   videoEl?.removeAttribute("hidden")
 
   const player = await ensurePlayer()
-  player.src({ src: currentDetailSrc, type: chooseMime(currentDetailSrc) })
+  const localSrc = await getLocalPlayableSrc(currentDetailSrc)
+  const playSrc = localSrc || currentDetailSrc
+  player.src({ src: playSrc, type: chooseMime(currentDetailSrc) })
   player.play().catch(() => {})
 }
 
@@ -1090,6 +1104,8 @@ document.addEventListener("xt:active-changed", () => {
 })
 
 ;(async () => {
+  console.log("[xt:movies] boot start")
   creds = await loadCreds()
+  console.log("[xt:movies] boot creds host=", !!creds.host, "user=", !!creds.user)
   if (creds.host && creds.user && creds.pass) loadMovies()
 })()

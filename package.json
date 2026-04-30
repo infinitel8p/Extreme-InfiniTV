@@ -32,6 +32,7 @@
     "astro": "^6.1.9",
     "svelte": "^5.55.5",
     "tailwindcss": "^4.2.4",
+    "tauri-plugin-android-fs-api": "28.1.0",
     "typescript": "^6.0.3",
     "video.js": "^8.23.7"
   },
