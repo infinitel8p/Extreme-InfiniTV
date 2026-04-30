@@ -57,10 +57,8 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     href="/"
     aria-label="Extreme InfiniTV - Home"
     class="brand-mark group [view-transition-name:brand-mark]
-           flex items-center gap-3 rounded-xl px-2 py-2
-           justify-center lg:justify-start
-           focus-visible:bg-surface-2
-           transition-colors outline-none">
+           flex items-center gap-3 px-2 py-2
+           justify-center lg:justify-start outline-none">
     <svg
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 24 24"
@@ -68,19 +66,46 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
       stroke-linecap="round"
       stroke-linejoin="round"
       aria-hidden="true"
-      class="brand-mark__svg shrink-0 size-10 text-accent">
+      class="brand-mark__svg shrink-0 size-11 text-accent">
       <path
+        id="brand-mark-path"
         class="brand-mark__base"
-        d="M 12 12 C 12 7, 19 7, 19 12 C 19 17, 12 17, 12 12 C 12 7, 5 7, 5 12 C 5 17, 12 17, 12 12 Z" />
-      <path
-        class="brand-mark__trail"
-        pathLength="100"
-        stroke-dasharray="22 78"
-        stroke-dashoffset="0"
-        d="M 12 12 C 12 7, 19 7, 19 12 C 19 17, 12 17, 12 12 C 12 7, 5 7, 5 12 C 5 17, 12 17, 12 12 Z" />
+        d="M18.1777 8C23.2737 8 23.2737 16 18.1777 16C13.0827 16 11.0447 8 5.43875 8C0.85375 8 0.85375 16 5.43875 16C11.0447 16 13.0828 8 18.1788 8H18.1777Z" />
+      <g class="brand-mark__trail">
+        <circle r="1.15" fill="currentColor" opacity="1">
+          <animateMotion dur="6s" repeatCount="indefinite" begin="0s">
+            <mpath href="#brand-mark-path" />
+          </animateMotion>
+        </circle>
+        <circle r="0.95" fill="currentColor" opacity="0.75">
+          <animateMotion dur="6s" repeatCount="indefinite" begin="0.08s">
+            <mpath href="#brand-mark-path" />
+          </animateMotion>
+        </circle>
+        <circle r="0.8" fill="currentColor" opacity="0.55">
+          <animateMotion dur="6s" repeatCount="indefinite" begin="0.16s">
+            <mpath href="#brand-mark-path" />
+          </animateMotion>
+        </circle>
+        <circle r="0.65" fill="currentColor" opacity="0.4">
+          <animateMotion dur="6s" repeatCount="indefinite" begin="0.24s">
+            <mpath href="#brand-mark-path" />
+          </animateMotion>
+        </circle>
+        <circle r="0.5" fill="currentColor" opacity="0.25">
+          <animateMotion dur="6s" repeatCount="indefinite" begin="0.32s">
+            <mpath href="#brand-mark-path" />
+          </animateMotion>
+        </circle>
+        <circle r="0.35" fill="currentColor" opacity="0.14">
+          <animateMotion dur="6s" repeatCount="indefinite" begin="0.4s">
+            <mpath href="#brand-mark-path" />
+          </animateMotion>
+        </circle>
+      </g>
     </svg>
-    <span class="hidden lg:inline-flex items-baseline truncate text-sm tracking-[-0.01em]">
-      <span class="font-medium text-fg-2">Extreme&nbsp;Infini</span><span class="font-bold text-accent tracking-wide">TV</span>
+    <span class="hidden lg:inline-flex items-baseline truncate text-[0.9375rem] tracking-[-0.02em]">
+      <span class="font-semibold text-fg">Extreme&nbsp;Infini</span><span class="font-extrabold text-accent tracking-[0.04em] ml-[0.05em]">TV</span>
     </span>
   </a>
 
@@ -586,44 +611,53 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
 </script>
 
 <style>
-  /* Faint base ring so the full infinity is always recognisable. */
+  /* Override the global focus-visible outline (Layout.astro paints an
+     accent rectangle around any focused <a>). The glyph's own brightening
+     handles focus indication. */
+  .brand-mark:focus-visible { outline: none !important; }
+
+  /* Let the comet's drop-shadow extend past the SVG viewBox so the glow
+     isn't clipped to a square. */
+  .brand-mark__svg { overflow: visible; }
+
+  /* Base infinity: solid enough to read at a glance, calm enough to not
+     compete with the comet for attention. */
   .brand-mark__base {
     stroke: var(--color-accent);
-    stroke-width: 1.5;
-    opacity: 0.28;
+    stroke-width: 1.6;
+    opacity: 0.5;
     vector-effect: non-scaling-stroke;
   }
 
-  /* Bright laser segment with a soft accent glow, traveling the path. */
+  /* Comet trail glow: three drop-shadow layers for a richer falloff than
+     a single shadow. Inner punch + medium halo + soft outer bloom. */
   .brand-mark__trail {
-    stroke: var(--color-accent);
-    stroke-width: 1.75;
-    vector-effect: non-scaling-stroke;
+    color: var(--color-accent);
     filter: drop-shadow(0 0 2px var(--color-accent))
-            drop-shadow(0 0 4px var(--color-accent-soft));
-    animation: brand-mark-trail 6s linear infinite;
-  }
-  @keyframes brand-mark-trail {
-    to { stroke-dashoffset: -100; }
+            drop-shadow(0 0 5px var(--color-accent))
+            drop-shadow(0 0 10px var(--color-accent-soft));
+    transition: filter 280ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  /* Hover/focus: trail speeds up, glow intensifies, base brightens. */
+  .brand-mark__trail {
+    animation: brand-mark-trail-show 240ms ease-out 500ms backwards;
+  }
+  @keyframes brand-mark-trail-show {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .brand-mark:hover .brand-mark__base,
+  .brand-mark:focus-visible .brand-mark__base { opacity: 0.75; }
   .brand-mark:hover .brand-mark__trail,
   .brand-mark:focus-visible .brand-mark__trail {
-    animation-duration: 2.4s;
     filter: drop-shadow(0 0 3px var(--color-accent))
-            drop-shadow(0 0 8px var(--color-accent));
-  }
-  .brand-mark:hover .brand-mark__base,
-  .brand-mark:focus-visible .brand-mark__base {
-    opacity: 0.55;
+            drop-shadow(0 0 8px var(--color-accent))
+            drop-shadow(0 0 16px var(--color-accent));
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .brand-mark__trail {
-      animation: none;
-      stroke-dasharray: none;
-    }
+    .brand-mark__trail { display: none; }
     .brand-mark__base { opacity: 0.7; }
   }
 </style>
