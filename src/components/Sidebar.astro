@@ -183,76 +183,84 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
 <nav
   data-mobile-nav
   class="md:hidden landscape-phone:hidden order-last
-         shrink-0 flex flex-col border-t border-line bg-bg/95 backdrop-blur
+         sticky bottom-0 z-30 mt-auto
+         shrink-0 flex flex-col bg-bg/95 backdrop-blur
          pb-[max(0.25rem,env(safe-area-inset-bottom))]
          pl-[max(0,env(safe-area-inset-left))]
          pr-[max(0,env(safe-area-inset-right))]"
   aria-label="Main">
 
-  <!-- Expanding panel. -->
+  <!-- More panel: floats above the tab row, doesn't push page content. -->
   <div
     id="mobile-more-panel"
     data-open="false"
     aria-hidden="true"
-    class="grid grid-rows-[0fr] data-[open=true]:grid-rows-[1fr]
-           transition-[grid-template-rows] duration-200 ease-out
-           border-b border-line">
-    <div class="overflow-hidden">
-      <ul class="flex flex-col gap-0.5 px-2 pt-2 pb-1">
-        {moreItems.map(({ href, label, Icon, match, id }) => {
-          const active = match(path)
-          const isDownloads = id === "mobile-more-downloads"
-          return (
-            <li>
-              <a
-                href={href}
-                id={id}
-                aria-label={label}
-                aria-current={active ? "page" : undefined}
-                class:list={[
-                  "flex items-center gap-3 rounded-xl px-3 py-2.5 min-h-11",
-                  "transition-[color,background-color,transform] duration-150 outline-none",
-                  "hover:bg-surface-2 focus-visible:bg-surface-2 active:scale-[0.98]",
-                  active
-                    ? "bg-surface-2 text-fg ring-1 ring-accent/40"
-                    : "text-fg-2 hover:text-fg focus-visible:text-fg",
-                ]}>
-                <span class="relative inline-flex shrink-0">
-                  <Icon
-                    aria-hidden="true"
-                    stroke={active ? 2 : 1.75}
-                    class:list={[
-                      "size-5 shrink-0",
-                      active ? "text-accent" : "text-fg-3",
-                    ]}
-                  />
-                  {isDownloads && (
-                    <span
-                      id="mobile-more-downloads-badge"
-                      aria-hidden="true"
-                      hidden
-                      class="absolute -top-1.5 -right-2 min-w-4.5 h-4.5 px-1
-                             inline-flex items-center justify-center rounded-full
-                             bg-accent text-bg text-[10px] font-semibold leading-none
-                             tabular-nums ring-2 ring-bg">0</span>
-                  )}
-                </span>
-                <span class="truncate text-sm font-medium">{label}</span>
+    class="absolute bottom-full inset-x-0 z-10
+           border-t border-line bg-bg/95 backdrop-blur-md
+           shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.45)]
+           translate-y-1 opacity-0 pointer-events-none
+           transition-[transform,opacity] duration-200 ease-out
+           data-[open=true]:translate-y-0 data-[open=true]:opacity-100 data-[open=true]:pointer-events-auto">
+    <ul class="flex flex-col gap-1 px-3 py-3">
+      {moreItems.map(({ href, label, Icon, match, id }) => {
+        const active = match(path)
+        const isDownloads = id === "mobile-more-downloads"
+        return (
+          <li>
+            <a
+              href={href}
+              id={id}
+              aria-label={label}
+              aria-current={active ? "page" : undefined}
+              class:list={[
+                "group flex items-center gap-3 rounded-xl px-2.5 py-2 min-h-12",
+                "transition-[color,background-color,transform] duration-150 outline-none",
+                "hover:bg-surface-2 focus-visible:bg-surface-2 active:scale-[0.99]",
+                active
+                  ? "bg-surface-2 text-fg ring-1 ring-accent/40"
+                  : "text-fg-2 hover:text-fg focus-visible:text-fg",
+              ]}>
+              <span class:list={[
+                "relative flex size-10 shrink-0 items-center justify-center rounded-lg",
+                "ring-1 transition-colors",
+                active
+                  ? "bg-accent-soft ring-accent/30"
+                  : "bg-surface ring-line group-hover:ring-line-soft",
+              ]}>
+                <Icon
+                  aria-hidden="true"
+                  stroke={active ? 2 : 1.75}
+                  class:list={[
+                    "size-5 shrink-0",
+                    active ? "text-accent" : "text-fg-2",
+                  ]}
+                />
                 {isDownloads && (
                   <span
-                    id="mobile-more-downloads-sub"
-                    class="ml-auto truncate text-2xs text-fg-3 tabular-nums empty:hidden"></span>
+                    id="mobile-more-downloads-badge"
+                    aria-hidden="true"
+                    hidden
+                    class="absolute -top-1 -right-1 min-w-4.5 h-4.5 px-1
+                           inline-flex items-center justify-center rounded-full
+                           bg-accent text-bg text-[10px] font-semibold leading-none
+                           tabular-nums ring-2 ring-bg">0</span>
                 )}
-              </a>
-            </li>
-          )
-        })}
-      </ul>
-    </div>
+              </span>
+              <span class="truncate text-sm font-medium">{label}</span>
+              {isDownloads && (
+                <span
+                  id="mobile-more-downloads-sub"
+                  class="ml-auto truncate text-2xs text-fg-3 tabular-nums empty:hidden"></span>
+              )}
+            </a>
+          </li>
+        )
+      })}
+    </ul>
   </div>
 
   <!-- Tab row: 2 destinations | More | 2 destinations. -->
-  <div class="flex items-stretch">
+  <div class="flex items-stretch border-t border-line">
     {tabItems.slice(0, 2).map(({ href, label, Icon, match }) => {
       const active = match(path)
       return (
