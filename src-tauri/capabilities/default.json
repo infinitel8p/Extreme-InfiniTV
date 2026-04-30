@@ -21,6 +21,7 @@
     "fs:allow-mkdir",
     "fs:allow-exists",
     "fs:allow-stat",
+    "fs:allow-remove",
     {
       "identifier": "fs:scope",
       "allow": [

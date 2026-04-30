@@ -1,12 +1,86 @@
 ---
 import Layout from "@/layouts/Layout.astro";
-import { IconDeviceTv, IconMovie, IconStack2 } from "@tabler/icons-svelte";
+import {
+	IconDeviceTv,
+	IconMovie,
+	IconStack2,
+	IconPlus,
+	IconSparkles,
+} from "@tabler/icons-svelte";
 ---
 
 <Layout>
+	<script is:inline>
+		try {
+			var raw = localStorage.getItem("xt_playlists") || "";
+			var hasEntries = false;
+			if (raw) {
+				var parsed = JSON.parse(raw);
+				hasEntries = !!(
+					parsed &&
+					Array.isArray(parsed.entries) &&
+					parsed.entries.length
+				);
+			}
+			if (!hasEntries) {
+				document.documentElement.setAttribute("data-first-run", "true");
+			}
+		} catch (e) {}
+	</script>
+
 	<main
 		class="flex-1 w-full mx-auto px-4 py-6 md:px-6 lg:px-8 max-w-7xl flex flex-col">
+		<section
+			id="welcome"
+			aria-labelledby="welcome-heading"
+			class="hidden flex-1 min-h-0 items-center justify-center py-6">
+			<div
+				class="welcome-enter w-full max-w-2xl rounded-2xl border border-line bg-surface p-6 sm:p-10 lg:p-14 text-center">
+				<p
+					class="font-sans text-eyebrow font-medium uppercase tracking-wider text-fg-3 mb-5">
+					Welcome
+				</p>
+				<h1
+					id="welcome-heading"
+					class="font-normal text-accent tracking-[-0.01em] leading-none"
+					style="font-size: clamp(2.25rem, 4vw + 1rem, 4.25rem);">
+					Pick something to watch.
+				</h1>
+				<p
+					class="mt-5 sm:mt-6 mx-auto max-w-md text-sm sm:text-base text-fg-2 font-sans tracking-tight leading-relaxed">
+					Connect an IPTV subscription, or paste a playlist URL.
+					Channels, movies, and series will appear here.
+				</p>
+
+				<div
+					class="mt-8 sm:mt-10 flex flex-col sm:flex-row gap-2.5 sm:gap-3 sm:justify-center">
+					<a
+						id="welcome-add"
+						href="/login"
+						class="inline-flex items-center justify-center gap-2 h-11 px-5 rounded-lg bg-fg text-bg text-sm font-semibold transition-opacity hover:opacity-90">
+						<IconPlus aria-hidden="true" class="h-4 w-4" />
+						Add a playlist
+					</a>
+					<a
+						href="/login?demo=1"
+						class="inline-flex items-center justify-center gap-2 h-11 px-5 rounded-lg border border-line bg-surface text-sm font-medium text-fg transition-colors hover:bg-surface-2 hover:border-line-soft focus-visible:bg-surface-2 focus-visible:border-accent">
+						<IconSparkles
+							aria-hidden="true"
+							class="h-4 w-4 text-accent"
+						/>
+						Try a demo playlist
+					</a>
+				</div>
+
+				<p class="mt-8 text-xs text-fg-3 leading-relaxed">
+					This app does not provide any content. The demo loads a
+					public playlist from iptv-org.
+				</p>
+			</div>
+		</section>
+
 		<nav
+			id="hub-tiles"
 			aria-label="Browse"
 			class="grid gap-3 sm:gap-4 flex-1 min-h-0
 				grid-cols-1
@@ -29,7 +103,7 @@ import { IconDeviceTv, IconMovie, IconStack2 } from "@tabler/icons-svelte";
 					<IconDeviceTv
 						aria-hidden="true"
 						stroke={1}
-						class="size-12 sm:size-16 lg:size-24 text-accent shrink-0"
+						class="size-12 sm:size-16 lg:size-24 text-fg-3 shrink-0 transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent"
 					/>
 					<p
 						id="hero-eyebrow"
@@ -67,7 +141,7 @@ import { IconDeviceTv, IconMovie, IconStack2 } from "@tabler/icons-svelte";
 				<IconMovie
 					aria-hidden="true"
 					stroke={1.25}
-					class="size-9 sm:size-10 lg:size-12 text-fg-3 transition-colors group-hover:text-accent group-focus-visible:text-accent"
+					class="size-9 sm:size-10 lg:size-12 text-fg-3 transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent"
 				/>
 				<div class="mt-auto pt-4">
 					<h2 class="text-2xl sm:text-3xl lg:text-5xl font-semibold tracking-[-0.02em] leading-[0.95]
@@ -97,7 +171,7 @@ import { IconDeviceTv, IconMovie, IconStack2 } from "@tabler/icons-svelte";
 				<IconStack2
 					aria-hidden="true"
 					stroke={1.25}
-					class="size-9 sm:size-10 lg:size-12 text-fg-3 transition-colors group-hover:text-accent group-focus-visible:text-accent"
+					class="size-9 sm:size-10 lg:size-12 text-fg-3 transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent"
 				/>
 				<div class="mt-auto pt-4">
 					<h2 class="text-2xl sm:text-3xl lg:text-5xl font-semibold tracking-[-0.02em] leading-[0.95]
@@ -124,10 +198,20 @@ import { IconDeviceTv, IconMovie, IconStack2 } from "@tabler/icons-svelte";
 	.tile-enter {
 		animation: tile-enter 500ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
 	}
+	.welcome-enter {
+		animation: tile-enter 500ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+	}
+	html[data-first-run="true"] #hub-tiles {
+		display: none;
+	}
+	html[data-first-run="true"] #welcome {
+		display: flex;
+	}
 </style>
 
 <script>
 	import "../scripts/updater-startup.js";
+	import { getEntries } from "@/scripts/lib/creds.js";
 
 	const eyebrow = document.getElementById("hero-eyebrow");
 	if (eyebrow) {
@@ -147,12 +231,28 @@ import { IconDeviceTv, IconMovie, IconStack2 } from "@tabler/icons-svelte";
 		update();
 		setInterval(update, 30_000);
 	}
-	
-	window.addEventListener("load", () => {
+
+	async function reconcileFirstRun() {
+		const entries = await getEntries();
+		const hasEntries = entries.length > 0;
+		document.documentElement.toggleAttribute("data-first-run", !hasEntries);
+		return hasEntries;
+	}
+
+	window.addEventListener("load", async () => {
+		const hasEntries = await reconcileFirstRun();
 		setTimeout(() => {
-			/** @type {HTMLAnchorElement | null} */
-			const heroTile = document.querySelector('a[href="/livetv"]');
-			heroTile?.focus({ preventScroll: true });
+			const target = hasEntries
+				? /** @type {HTMLAnchorElement | null} */ (
+						document.querySelector('#hub-tiles a[href="/livetv"]')
+					)
+				: /** @type {HTMLAnchorElement | null} */ (
+						document.getElementById("welcome-add")
+					);
+			target?.focus({ preventScroll: true });
 		}, 0);
 	});
+
+	document.addEventListener("xt:entries-updated", reconcileFirstRun);
+	document.addEventListener("xt:active-changed", reconcileFirstRun);
 </script>

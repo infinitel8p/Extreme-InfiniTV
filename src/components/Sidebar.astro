@@ -300,7 +300,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
       aria-controls="mobile-more-panel"
       aria-expanded="false"
       class:list={[
-        "flex flex-1 min-w-0 flex-col items-center justify-center gap-0.5 relative",
+        "group flex flex-1 min-w-0 flex-col items-center justify-center gap-0.5 relative",
         "min-h-14 px-0.5 sm:px-1 py-2 rounded-lg",
         "transition-[color,background-color,transform] duration-150 outline-none",
         "focus-visible:bg-surface-2 active:scale-[0.96]",
@@ -312,7 +312,8 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
           aria-hidden="true"
           stroke={moreActive ? 2 : 1.75}
           class:list={[
-            "size-5 shrink-0 transition-transform duration-200",
+            "size-5 shrink-0 transition-transform duration-200 ease-out",
+            "group-aria-expanded:scale-110 group-aria-expanded:rotate-45",
             moreActive ? "text-accent" : "text-fg-3",
           ]}
         />

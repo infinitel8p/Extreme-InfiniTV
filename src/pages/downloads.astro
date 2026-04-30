@@ -1,6 +1,9 @@
 ---
 import Layout from "@/layouts/Layout.astro"
-import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
+import {
+  IconDownload,
+  IconSettings,
+} from "@tabler/icons-svelte"
 ---
 
 <Layout pageTitle="Downloads">
@@ -42,60 +45,73 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
       <span class="text-xs text-accent shrink-0">Change in Settings</span>
     </a>
 
-    <!-- Aggregate throughput - quiet 60s telemetry strip, hidden when idle. -->
+    <!-- Active downloads (only shown when something is in flight). -->
     <section
-      id="downloads-throughput"
+      id="downloads-active-section"
       hidden
-      class="rounded-xl border border-line bg-surface px-4 pt-3 pb-2.5 flex flex-col gap-2">
-      <div class="flex items-center justify-between gap-3 text-2xs uppercase tracking-wider font-medium">
-        <span class="text-fg-3">Throughput</span>
-        <span
-          id="downloads-throughput-now"
-          class="text-fg tabular-nums normal-case tracking-normal text-xs font-medium">0 B/s</span>
-      </div>
-      <canvas
-        id="downloads-throughput-canvas"
-        aria-hidden="true"
-        class="w-full block"
-        style="height: 40px;"></canvas>
-      <div class="flex items-center justify-between gap-3 text-2xs text-fg-3 tabular-nums">
-        <span>
-          <span class="opacity-60">min</span>
-          <span id="downloads-throughput-min" class="ml-1 text-fg-2">-</span>
-        </span>
-        <span class="opacity-50 normal-case">last 120s</span>
-        <span>
-          <span id="downloads-throughput-max" class="mr-1 text-fg-2">-</span>
-          <span class="opacity-60">max</span>
-        </span>
-      </div>
-    </section>
-
-    <!-- Queue / list -->
-    <section class="flex flex-col gap-3 dl-page-enter dl-stagger-3">
+      class="flex flex-col gap-3 dl-page-enter dl-stagger-3">
       <div class="flex items-center justify-between gap-2">
-        <h2 class="text-eyebrow font-semibold uppercase tracking-wide text-fg-3">Queue</h2>
-        <button
-          id="downloads-clear-finished"
-          type="button"
-          class="btn text-fg-2 text-xs px-3 min-h-9"
-          disabled>
-          <IconTrash aria-hidden="true" class="btn-icon" />
-          Clear finished
-        </button>
+        <h2 class="text-xs font-semibold uppercase tracking-widest text-fg-2">In progress</h2>
       </div>
+
+      <!-- Aggregate throughput sparkline. -->
+      <section
+        id="downloads-throughput"
+        hidden
+        class="rounded-xl border border-line bg-surface px-4 pt-3 pb-2.5 flex flex-col gap-2">
+        <div class="flex items-center justify-between gap-3 text-2xs uppercase tracking-wider font-medium">
+          <span class="text-fg-3">Throughput</span>
+          <span
+            id="downloads-throughput-now"
+            class="text-fg tabular-nums normal-case tracking-normal text-xs font-medium">0 B/s</span>
+        </div>
+        <canvas
+          id="downloads-throughput-canvas"
+          aria-hidden="true"
+          class="w-full block"
+          style="height: 40px;"></canvas>
+        <div class="flex items-center justify-between gap-3 text-2xs text-fg-3 tabular-nums">
+          <span>
+            <span class="opacity-60">min</span>
+            <span id="downloads-throughput-min" class="ml-1 text-fg-2">-</span>
+          </span>
+          <span class="opacity-50 normal-case">last 120s</span>
+          <span>
+            <span id="downloads-throughput-max" class="mr-1 text-fg-2">-</span>
+            <span class="opacity-60">max</span>
+          </span>
+        </div>
+      </section>
+
       <article
-        id="downloads-list"
+        id="downloads-active-list"
         role="status"
         aria-live="polite"
-        aria-label="Downloads"
+        aria-label="Active downloads"
         class="rounded-2xl border border-line bg-surface overflow-hidden flex flex-col divide-y divide-line/60">
-        <div class="px-5 py-10 text-sm text-fg-3 flex flex-col items-center gap-4 text-center">
+      </article>
+    </section>
+
+    <!-- Downloaded files (always shown, with empty state). -->
+    <section class="flex flex-col gap-3 dl-page-enter dl-stagger-3">
+      <div class="flex items-center justify-between gap-2">
+        <h2 class="text-xs font-semibold uppercase tracking-widest text-fg-2">Downloaded</h2>
+        <span
+          id="downloads-done-count"
+          class="text-xs text-fg-3 tabular-nums empty:hidden"></span>
+      </div>
+      <article
+        id="downloads-done-list"
+        aria-label="Downloaded files"
+        class="rounded-2xl border border-line bg-surface overflow-hidden flex flex-col divide-y divide-line/60">
+        <div
+          data-empty
+          class="px-5 py-10 text-sm text-fg-3 flex flex-col items-center gap-4 text-center">
           <IconDownload aria-hidden="true" stroke={1.5} class="size-10 text-fg-3 dl-empty-icon" />
           <div class="flex flex-col gap-1">
-            <p class="text-fg/80">Nothing in the queue.</p>
+            <p class="text-fg/80">No downloaded files yet.</p>
             <p class="text-xs text-fg-3 max-w-prose">
-              Open a movie or series episode and tap Download to queue one here.
+              Open a movie or series episode and tap Download to save it here.
             </p>
           </div>
         </div>
@@ -110,6 +126,42 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
     </div>
   </main>
 
+  <!-- Delete confirmation. -->
+  <dialog
+    id="downloads-delete-dialog"
+    aria-labelledby="downloads-delete-title"
+    class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
+           w-[min(28rem,calc(100vw-2rem))]
+           backdrop:bg-black/70">
+    <div class="flex flex-col gap-4 p-5">
+      <div class="flex flex-col gap-1.5">
+        <h2 id="downloads-delete-title" class="text-base font-semibold">
+          Delete this download?
+        </h2>
+        <p id="downloads-delete-body" class="text-sm text-fg-2">
+          The file will be removed from disk.
+        </p>
+      </div>
+      <div class="flex gap-2 justify-end">
+        <button
+          id="downloads-delete-cancel"
+          type="button"
+          class="rounded-xl border border-line px-4 py-2 text-sm
+                 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
+          Cancel
+        </button>
+        <button
+          id="downloads-delete-confirm"
+          type="button"
+          class="rounded-xl px-4 py-2 text-sm font-semibold bg-bad text-bg
+                 hover:opacity-90 focus-visible:opacity-90
+                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bad">
+          Delete
+        </button>
+      </div>
+    </div>
+  </dialog>
+
   <script>
     import {
       listDownloads,
@@ -117,7 +169,7 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
       pauseDownload,
       resumeDownload,
       removeDownload,
-      clearFinishedDownloads,
+      tryAndroidIntentPlayback,
       getAggregateThroughputHistory,
       getAggregateThroughputEwma,
       getRowThroughputHistory,
@@ -128,14 +180,21 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
     } from "@/scripts/lib/downloads.js"
     import { getDownloadDir } from "@/scripts/lib/app-settings.js"
     import { injectVersion } from "@/scripts/version.js"
+    import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
     injectVersion()
 
-    const listEl = document.getElementById("downloads-list")
+    // ----------------------------
+    // DOM refs
+    // ----------------------------
     const summaryEl = document.getElementById("downloads-summary")
-    const clearBtn = /** @type {HTMLButtonElement|null} */ (
-      document.getElementById("downloads-clear-finished")
-    )
     const folderPathEl = document.getElementById("downloads-folder-path")
+
+    const activeSection = document.getElementById("downloads-active-section")
+    const activeListEl = document.getElementById("downloads-active-list")
+
+    const doneListEl = document.getElementById("downloads-done-list")
+    const doneCountEl = document.getElementById("downloads-done-count")
+
     const throughputSection = document.getElementById("downloads-throughput")
     const throughputCanvas = /** @type {HTMLCanvasElement|null} */ (
       document.getElementById("downloads-throughput-canvas")
@@ -144,6 +203,18 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
     const throughputMinEl = document.getElementById("downloads-throughput-min")
     const throughputMaxEl = document.getElementById("downloads-throughput-max")
 
+    const deleteDlg = /** @type {HTMLDialogElement|null} */ (
+      document.getElementById("downloads-delete-dialog")
+    )
+    const deleteCancelBtn = document.getElementById("downloads-delete-cancel")
+    const deleteConfirmBtn = document.getElementById("downloads-delete-confirm")
+    const deleteBodyEl = document.getElementById("downloads-delete-body")
+
+    if (deleteDlg) attachDialogSpatialNav(deleteDlg, { defaultElement: "#downloads-delete-cancel" })
+
+    // ----------------------------
+    // Folder summary
+    // ----------------------------
     function syncFolderSummary() {
       if (!folderPathEl) return
       const v = getDownloadDir() || ""
@@ -157,6 +228,9 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
       if (e.key === "xt_download_dir" || e.key === null) syncFolderSummary()
     })
 
+    // ----------------------------
+    // Formatters
+    // ----------------------------
     function fmtSize(n: number): string {
       if (!n) return "0 B"
       if (n < 1024) return `${n} B`
@@ -198,6 +272,21 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
       }
     }
 
+    function statusOrder(s: string): number {
+      switch (s) {
+        case "downloading": return 0
+        case "stalled":     return 1
+        case "queued":      return 2
+        case "paused":      return 3
+        case "error":       return 4
+        case "done":        return 5
+        default:            return 6
+      }
+    }
+
+    // ----------------------------
+    // Sparkline helpers
+    // ----------------------------
     const HISTORY_MAX = 240
 
     function resolveCssColor(varName: string): string {
@@ -269,7 +358,6 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
           : samples
 
       const stepX = cw / (HISTORY_MAX - 1)
-      // Build the path once, reuse for stroke + fill.
       const points: Array<[number, number]> = []
       for (let i = 0; i < padded.length; i++) {
         const x = i * stepX
@@ -331,12 +419,29 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
       ctx.stroke()
     }
 
-    function makeAction(label: string, ariaLabel: string, onClick: () => void, tone: "neutral" | "primary" = "neutral"): HTMLButtonElement {
+    function prefersReducedMotion(): boolean {
+      return (
+        window.matchMedia &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      )
+    }
+
+    // ----------------------------
+    // Active list (downloading / queued / paused / stalled / error)
+    // ----------------------------
+    function makeAction(
+      label: string,
+      ariaLabel: string,
+      onClick: () => void,
+      tone: "neutral" | "primary" | "danger" = "neutral"
+    ): HTMLButtonElement {
       const b = document.createElement("button")
       b.type = "button"
       const toneClass =
         tone === "primary"
           ? "text-accent hover:bg-accent-soft focus-visible:bg-accent-soft"
+          : tone === "danger"
+          ? "text-bad hover:bg-bad/10 focus-visible:bg-bad/10"
           : "text-fg-3 hover:text-fg hover:bg-surface-2 focus-visible:text-fg focus-visible:bg-surface-2"
       b.className = `rounded-md px-2.5 py-1.5 text-xs min-h-9 transition-colors ${toneClass}`
       b.textContent = label
@@ -345,12 +450,61 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
       return b
     }
 
-    type RowEntry = {
+    function buildActiveActions(d: any, container: HTMLDivElement) {
+      container.replaceChildren()
+      if (d.status === "downloading") {
+        container.append(
+          makeAction("Pause", `Pause ${d.title}`, () => pauseDownload(d.id))
+        )
+      } else if (d.status === "queued") {
+        container.append(
+          makeAction("Cancel", `Cancel queued ${d.title}`, () =>
+            pauseDownload(d.id)
+          ),
+          makeAction("Remove", `Remove ${d.title}`, () => removeDownload(d.id))
+        )
+      } else {
+        // paused / stalled / error
+        container.append(
+          makeAction(
+            "Resume",
+            `Resume ${d.title}`,
+            () => resumeDownload(d.id),
+            "primary"
+          ),
+          makeAction("Remove", `Remove ${d.title}`, () => {
+            confirmDelete(d, "Remove this download? The partial file will also be deleted.")
+          })
+        )
+      }
+    }
+
+    function buildStatusContent(statusEl: HTMLSpanElement, status: string) {
+      statusEl.replaceChildren()
+      if (status === "downloading") {
+        const dot = document.createElement("span")
+        dot.className = "dl-status-dot"
+        dot.setAttribute("aria-hidden", "true")
+        statusEl.appendChild(dot)
+      }
+      statusEl.appendChild(document.createTextNode(statusLabel(status)))
+    }
+
+    function toneClassForBar(s: string): string {
+      switch (s) {
+        case "error":   return "bg-bad"
+        case "stalled": return "bg-warn"
+        default:        return "bg-accent"
+      }
+    }
+    const ALL_BAR_TONES = ["bg-bad", "bg-warn", "bg-ok", "bg-accent"]
+
+    type ActiveRow = {
       el: HTMLDivElement
       status: string
       bytesTotal: number
       titleStr: string
-      titleEl: HTMLDivElement
+      titleEl: HTMLElement
       statusEl: HTMLSpanElement
       sizesEl: HTMLSpanElement
       speedEl: HTMLSpanElement
@@ -362,17 +516,328 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
       errorEl: HTMLDivElement
     }
 
-    const rowsById = new Map<string, RowEntry>()
-    const seenDone = new Set<string>()
-    let firstRenderComplete = false
+    const activeRowsById = new Map<string, ActiveRow>()
 
-    function prefersReducedMotion(): boolean {
-      return (
-        window.matchMedia &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      )
+    function createActiveRow(d: any): ActiveRow {
+      const row = document.createElement("div")
+      row.className = "px-4 py-3 flex flex-col gap-1.5"
+
+      const top = document.createElement("div")
+      top.className = "flex items-center gap-3"
+
+      const info = document.createElement("div")
+      info.className = "flex flex-col min-w-0 flex-1 gap-0.5"
+
+      const href = buildSourceHref(d.source)
+      let titleEl: HTMLElement
+      if (href) {
+        const a = document.createElement("a")
+        a.href = href
+        a.className =
+          "dl-row-title truncate text-sm text-fg font-medium " +
+          "hover:text-accent focus-visible:text-accent outline-none"
+        titleEl = a
+      } else {
+        titleEl = document.createElement("div")
+        titleEl.className = "dl-row-title truncate text-sm text-fg font-medium"
+      }
+      titleEl.textContent = d.title
+
+      const meta = document.createElement("div")
+      meta.className =
+        "dl-row-meta text-xs tabular-nums flex flex-wrap items-center gap-x-2.5 gap-y-0.5"
+
+      const statusEl = document.createElement("span")
+      statusEl.className = `font-medium ${statusToneClass(d.status)}`
+      buildStatusContent(statusEl, d.status)
+      meta.appendChild(statusEl)
+
+      const sizesEl = document.createElement("span")
+      sizesEl.className = "text-fg-3"
+      meta.appendChild(sizesEl)
+
+      const speedEl = document.createElement("span")
+      speedEl.className = "text-fg-3 inline-flex items-center gap-1.5 min-w-0"
+      speedEl.style.display = "none"
+      const sparkCanvas = document.createElement("canvas")
+      sparkCanvas.setAttribute("aria-hidden", "true")
+      sparkCanvas.className = "block shrink-0"
+      sparkCanvas.style.width = "60px"
+      sparkCanvas.style.height = "14px"
+      const speedTextEl = document.createElement("span")
+      speedTextEl.className = "shrink-0"
+      speedEl.append(sparkCanvas, speedTextEl)
+      meta.appendChild(speedEl)
+
+      info.append(titleEl, meta)
+
+      const actionsEl = document.createElement("div")
+      actionsEl.className = "shrink-0 flex items-center gap-1"
+      buildActiveActions(d, actionsEl)
+
+      top.append(info, actionsEl)
+      row.appendChild(top)
+
+      const barShellEl = document.createElement("div")
+      barShellEl.className =
+        "dl-bar-shell h-1 rounded-full bg-bg overflow-hidden ring-1 ring-line"
+      const barFillEl = document.createElement("div")
+      barFillEl.className = "h-full dl-bar-fill"
+      barShellEl.appendChild(barFillEl)
+      row.appendChild(barShellEl)
+
+      const errorEl = document.createElement("div")
+      errorEl.className = "text-xs text-bad/80 hidden"
+      row.appendChild(errorEl)
+
+      const entry: ActiveRow = {
+        el: row,
+        status: d.status,
+        bytesTotal: d.bytesTotal || 0,
+        titleStr: d.title,
+        titleEl,
+        statusEl,
+        sizesEl,
+        speedEl,
+        sparkCanvas,
+        speedTextEl,
+        actionsEl,
+        barShellEl,
+        barFillEl,
+        errorEl,
+      }
+      paintActiveRow(entry, d)
+      return entry
     }
 
+    function paintActiveRow(entry: ActiveRow, d: any) {
+      const prevStatus = entry.status
+
+      if (entry.titleStr !== d.title) {
+        entry.titleEl.textContent = d.title
+        entry.titleStr = d.title
+      }
+
+      if (prevStatus !== d.status) {
+        entry.statusEl.className = `font-medium ${statusToneClass(d.status)}`
+        buildStatusContent(entry.statusEl, d.status)
+        buildActiveActions(d, entry.actionsEl)
+      }
+
+      const sizeStr =
+        d.bytesTotal > 0
+          ? `${fmtSize(d.bytesDone)} / ${fmtSize(d.bytesTotal)}`
+          : fmtSize(d.bytesDone)
+      entry.sizesEl.textContent = sizeStr
+
+      if (d.status === "downloading") {
+        const speed = getRowThroughputEwma(d.id)
+        entry.speedTextEl.textContent = fmtSpeed(speed) || "0 B/s"
+        entry.speedEl.style.display = ""
+        drawSparkline(entry.sparkCanvas, getRowThroughputHistory(d.id), {
+          stroke: getAccentRgb(),
+          fill: withAlpha(getAccentRgb(), 0.18),
+        })
+      } else {
+        entry.speedTextEl.textContent = ""
+        entry.speedEl.style.display = "none"
+        if (entry.sparkCanvas.width > 0) {
+          entry.sparkCanvas.width = entry.sparkCanvas.width
+        }
+      }
+
+      const wantsDeterminate = d.bytesTotal > 0
+      const wantsIndeterminate = !wantsDeterminate && d.status === "downloading"
+      const fill = entry.barFillEl
+      if (wantsDeterminate && fill) {
+        entry.barShellEl.classList.remove("hidden", "dl-bar-indeterminate")
+        const tone = toneClassForBar(d.status)
+        for (const c of ALL_BAR_TONES) fill.classList.toggle(c, c === tone)
+        fill.classList.toggle("dl-bar-active", d.status === "downloading")
+        fill.classList.remove("hidden")
+        const pctV = Math.max(
+          0,
+          Math.min(100, (d.bytesDone / d.bytesTotal) * 100)
+        )
+        fill.style.width = `${pctV}%`
+      } else if (wantsIndeterminate && fill) {
+        entry.barShellEl.classList.remove("hidden")
+        entry.barShellEl.classList.add("dl-bar-indeterminate")
+        for (const c of ALL_BAR_TONES) fill.classList.remove(c)
+        fill.classList.remove("dl-bar-active")
+        fill.classList.add("hidden")
+      } else {
+        entry.barShellEl.classList.add("hidden")
+        entry.barShellEl.classList.remove("dl-bar-indeterminate")
+      }
+
+      if (d.status === "error" && d.error) {
+        entry.errorEl.textContent = d.error
+        entry.errorEl.classList.remove("hidden")
+      } else {
+        entry.errorEl.textContent = ""
+        entry.errorEl.classList.add("hidden")
+      }
+
+      entry.status = d.status
+      entry.bytesTotal = d.bytesTotal || 0
+    }
+
+    // ----------------------------
+    // Done list (completed downloads, primary view)
+    // ----------------------------
+    type DoneRow = {
+      el: HTMLDivElement
+      titleStr: string
+      titleEl: HTMLElement
+      metaEl: HTMLDivElement
+      posterImg: HTMLImageElement | null
+      bytesTotal: number
+    }
+
+    const doneRowsById = new Map<string, DoneRow>()
+
+    function buildSourceHref(source: any): string | null {
+      if (!source) return null
+      if (source.kind === "vod" && source.id != null) {
+        return `/movies/detail?id=${encodeURIComponent(String(source.id))}`
+      }
+      if (source.kind === "episode" && source.seriesId != null) {
+        return `/series/detail?id=${encodeURIComponent(String(source.seriesId))}`
+      }
+      return null
+    }
+
+    function metaForDone(d: any): string {
+      const bits: string[] = []
+      const src = d.source || {}
+      if (src.kind === "vod") bits.push("Movie")
+      else if (src.kind === "episode") {
+        const s = src.season != null ? `S${src.season}` : ""
+        const e = src.episode != null ? `E${src.episode}` : ""
+        const tag = (s + e) || ""
+        if (src.seriesName) bits.push(tag ? `${src.seriesName} · ${tag}` : src.seriesName)
+        else if (tag) bits.push(`Episode · ${tag}`)
+        else bits.push("Episode")
+      }
+      if (d.bytesTotal > 0) bits.push(fmtSize(d.bytesTotal))
+      else if (d.bytesDone > 0) bits.push(fmtSize(d.bytesDone))
+      return bits.join(" · ")
+    }
+
+    function makePosterFallback(title: string): HTMLDivElement {
+      const fb = document.createElement("div")
+      fb.className =
+        "h-full w-full flex items-center justify-center text-center px-1 text-fg-3 text-2xs leading-tight bg-surface-2"
+      fb.textContent = title || "File"
+      return fb
+    }
+
+    function createDoneRow(d: any): DoneRow {
+      const row = document.createElement("div")
+      row.className = "p-3 sm:p-4 flex items-center gap-3 sm:gap-4"
+
+      // Poster thumbnail (kind-aware, gracefully falls back).
+      const posterWrap = document.createElement("div")
+      posterWrap.className =
+        "shrink-0 w-12 h-16 sm:w-14 sm:h-20 rounded-md overflow-hidden bg-surface-2 ring-1 ring-line"
+      let posterImg: HTMLImageElement | null = null
+      const logoUrl = d.source?.logo || null
+      if (logoUrl) {
+        posterImg = document.createElement("img")
+        posterImg.src = logoUrl
+        posterImg.alt = ""
+        posterImg.loading = "lazy"
+        posterImg.decoding = "async"
+        posterImg.referrerPolicy = "no-referrer"
+        posterImg.className = "h-full w-full object-cover"
+        posterImg.onerror = () => {
+          posterImg?.remove()
+          posterWrap.appendChild(makePosterFallback(d.title))
+        }
+        posterWrap.appendChild(posterImg)
+      } else {
+        posterWrap.appendChild(makePosterFallback(d.title))
+      }
+
+      const info = document.createElement("div")
+      info.className = "flex flex-col min-w-0 flex-1 gap-0.5"
+      const href = buildSourceHref(d.source)
+      let titleEl: HTMLElement
+      if (href) {
+        const a = document.createElement("a")
+        a.href = href
+        a.className =
+          "dl-row-title truncate text-sm sm:text-base text-fg font-medium " +
+          "hover:text-accent focus-visible:text-accent outline-none"
+        titleEl = a
+      } else {
+        titleEl = document.createElement("div")
+        titleEl.className =
+          "dl-row-title truncate text-sm sm:text-base text-fg font-medium"
+      }
+      titleEl.textContent = d.title
+      const metaEl = document.createElement("div")
+      metaEl.className = "dl-row-meta truncate text-xs text-fg-3 tabular-nums"
+      metaEl.textContent = metaForDone(d)
+      info.append(titleEl, metaEl)
+
+      const actions = document.createElement("div")
+      actions.className = "shrink-0 flex items-center gap-1.5"
+
+      const playBtn = document.createElement("button")
+      playBtn.type = "button"
+      playBtn.setAttribute("aria-label", `Play ${d.title}`)
+      playBtn.title = "Play"
+      playBtn.className =
+        "inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent text-bg " +
+        "min-h-11 min-w-11 px-3 text-sm font-semibold " +
+        "hover:opacity-90 focus-visible:opacity-90 transition-opacity"
+      playBtn.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true" class="size-4"><path d="M8 5.14v13.72a1 1 0 0 0 1.5.87l11-6.86a1 1 0 0 0 0-1.74l-11-6.86a1 1 0 0 0-1.5.87z"/></svg>' +
+        '<span class="hidden sm:inline">Play</span>'
+      playBtn.addEventListener("click", () => playDoneRow(d))
+      actions.appendChild(playBtn)
+
+      const deleteBtn = document.createElement("button")
+      deleteBtn.type = "button"
+      deleteBtn.setAttribute("aria-label", `Delete ${d.title}`)
+      deleteBtn.title = "Delete"
+      deleteBtn.className =
+        "inline-flex items-center justify-center rounded-lg border border-line " +
+        "min-h-11 min-w-11 p-2 text-fg-3 " +
+        "hover:bg-bad/10 hover:text-bad hover:border-bad/40 " +
+        "focus-visible:bg-bad/10 focus-visible:text-bad focus-visible:border-bad " +
+        "transition-colors"
+      deleteBtn.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="size-4"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"/></svg>'
+      deleteBtn.addEventListener("click", () => confirmDelete(d))
+      actions.appendChild(deleteBtn)
+
+      row.append(posterWrap, info, actions)
+
+      return {
+        el: row,
+        titleStr: d.title,
+        titleEl,
+        metaEl,
+        posterImg,
+        bytesTotal: d.bytesTotal || 0,
+      }
+    }
+
+    function paintDoneRow(entry: DoneRow, d: any) {
+      if (entry.titleStr !== d.title) {
+        entry.titleEl.textContent = d.title
+        entry.titleStr = d.title
+      }
+      entry.metaEl.textContent = metaForDone(d)
+      entry.bytesTotal = d.bytesTotal || 0
+    }
+
+    // ----------------------------
+    // Throughput strip
+    // ----------------------------
     function updateAggregateStrip() {
       if (!throughputSection || !throughputCanvas || !throughputNowEl) return
       const history = getAggregateThroughputHistory()
@@ -427,357 +892,155 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
       })
     }
 
-    function toneClassForBar(s: string): string {
-      switch (s) {
-        case "error":   return "bg-bad"
-        case "stalled": return "bg-warn"
-        case "done":    return "bg-ok"
-        default:        return "bg-accent"
-      }
-    }
-    const ALL_BAR_TONES = ["bg-bad", "bg-warn", "bg-ok", "bg-accent"]
+    // ----------------------------
+    // Play handoff. Android still goes through the system chooser; on
+    // every other platform we navigate to the source's detail page with
+    // ?autoplay=1, where the inline player is wired up. Reusing the
+    // detail page keeps the layout consistent with the rest of the app
+    // (poster -> player swap, ambient backdrop, back button) and means
+    // the Video.js bundle only ships from one place.
+    async function playDoneRow(d: any) {
+      if (await tryAndroidIntentPlayback(d.url)) return
 
-    function buildActionsFor(d: any, container: HTMLDivElement) {
-      container.replaceChildren()
-      if (d.status === "downloading") {
-        container.append(
-          makeAction("Pause", `Pause ${d.title}`, () => pauseDownload(d.id))
-        )
-      } else if (d.status === "queued") {
-        container.append(
-          makeAction("Cancel", `Cancel queued ${d.title}`, () =>
-            pauseDownload(d.id)
-          ),
-          makeAction("Remove", `Remove ${d.title}`, () => removeDownload(d.id))
-        )
-      } else if (
-        d.status === "stalled" ||
-        d.status === "paused" ||
-        d.status === "error"
-      ) {
-        container.append(
-          makeAction(
-            "Resume",
-            `Resume ${d.title}`,
-            () => resumeDownload(d.id),
-            "primary"
-          ),
-          makeAction("Remove", `Remove ${d.title}`, () => {
-            if (
-              confirm(
-                `Remove "${d.title}"? The partial file will also be deleted.`
-              )
-            ) {
-              removeDownload(d.id)
-            }
-          })
-        )
-      } else {
-        container.append(
-          makeAction("Remove", `Remove ${d.title}`, () => removeDownload(d.id))
-        )
+      const src = d.source
+      if (src?.kind === "vod" && src.id != null) {
+        location.href =
+          `/movies/detail?id=${encodeURIComponent(String(src.id))}&autoplay=1`
+        return
       }
+      if (src?.kind === "episode" && src.seriesId != null) {
+        const epId = src.id != null ? `&episode=${encodeURIComponent(String(src.id))}` : ""
+        location.href =
+          `/series/detail?id=${encodeURIComponent(String(src.seriesId))}&autoplay=1${epId}`
+        return
+      }
+
+      // Older download records (pre-source-metadata) have no kind/id to
+      // route to. Fall back to opening the saved URL directly so the user
+      // still gets *something*.
+      window.open(d.url, "_blank", "noopener,noreferrer")
     }
 
-    function buildStatusContent(statusEl: HTMLSpanElement, status: string) {
-      statusEl.replaceChildren()
-      if (status === "downloading") {
-        const dot = document.createElement("span")
-        dot.className = "dl-status-dot"
-        dot.setAttribute("aria-hidden", "true")
-        statusEl.appendChild(dot)
-      }
-      statusEl.appendChild(document.createTextNode(statusLabel(status)))
-    }
+    // ----------------------------
+    // Delete confirm
+    // ----------------------------
+    let pendingDeleteId: string | null = null
 
-    function createRow(d: any): RowEntry {
-      const row = document.createElement("div")
-      row.className = "px-4 py-3 flex flex-col gap-1.5"
-
-      const top = document.createElement("div")
-      top.className = "flex items-center gap-3"
-
-      const info = document.createElement("div")
-      info.className = "flex flex-col min-w-0 flex-1 gap-0.5"
-
-      const titleEl = document.createElement("div")
-      titleEl.className = "dl-row-title truncate text-sm text-fg font-medium"
-      titleEl.textContent = d.title
-
-      const meta = document.createElement("div")
-      meta.className =
-        "dl-row-meta text-xs tabular-nums flex flex-wrap items-center gap-x-2.5 gap-y-0.5"
-
-      const statusEl = document.createElement("span")
-      statusEl.className = `font-medium ${statusToneClass(d.status)}`
-      buildStatusContent(statusEl, d.status)
-      meta.appendChild(statusEl)
-
-      const sizesEl = document.createElement("span")
-      sizesEl.className = "text-fg-3"
-      meta.appendChild(sizesEl)
-
-      const speedEl = document.createElement("span")
-      speedEl.className = "text-fg-3 inline-flex items-center gap-1.5 min-w-0"
-      speedEl.style.display = "none"
-      const sparkCanvas = document.createElement("canvas")
-      sparkCanvas.setAttribute("aria-hidden", "true")
-      sparkCanvas.className = "block shrink-0"
-      sparkCanvas.style.width = "60px"
-      sparkCanvas.style.height = "14px"
-      const speedTextEl = document.createElement("span")
-      speedTextEl.className = "shrink-0"
-      speedEl.append(sparkCanvas, speedTextEl)
-      meta.appendChild(speedEl)
-
-      info.append(titleEl, meta)
-
-      const actionsEl = document.createElement("div")
-      actionsEl.className = "shrink-0 flex items-center gap-1"
-      buildActionsFor(d, actionsEl)
-
-      top.append(info, actionsEl)
-      row.appendChild(top)
-
-      const barShellEl = document.createElement("div")
-      barShellEl.className =
-        "dl-bar-shell h-1 rounded-full bg-bg overflow-hidden ring-1 ring-line"
-      const barFillEl = document.createElement("div")
-      barFillEl.className = "h-full dl-bar-fill"
-      barShellEl.appendChild(barFillEl)
-      row.appendChild(barShellEl)
-
-      const errorEl = document.createElement("div")
-      errorEl.className = "text-xs text-bad/80 hidden"
-      row.appendChild(errorEl)
-
-      const entry: RowEntry = {
-        el: row,
-        status: d.status,
-        bytesTotal: d.bytesTotal || 0,
-        titleStr: d.title,
-        titleEl,
-        statusEl,
-        sizesEl,
-        speedEl,
-        sparkCanvas,
-        speedTextEl,
-        actionsEl,
-        barShellEl,
-        barFillEl,
-        errorEl,
-      }
-      paintRow(entry, d)
-      return entry
-    }
-
-    function paintRow(entry: RowEntry, d: any) {
-      const prevStatus = entry.status
-
-      // Title (rare to change, but cheap to refresh).
-      if (entry.titleStr !== d.title) {
-        entry.titleEl.textContent = d.title
-        entry.titleStr = d.title
-      }
-
-      // Status word + dot + tone color.
-      if (prevStatus !== d.status) {
-        entry.statusEl.className = `font-medium ${statusToneClass(d.status)}`
-        buildStatusContent(entry.statusEl, d.status)
-        buildActionsFor(d, entry.actionsEl)
-      }
-
-      const sizeStr =
-        d.bytesTotal > 0
-          ? `${fmtSize(d.bytesDone)} / ${fmtSize(d.bytesTotal)}`
-          : fmtSize(d.bytesDone)
-      entry.sizesEl.textContent = sizeStr
-
-      if (d.status === "downloading") {
-        const speed = getRowThroughputEwma(d.id)
-        entry.speedTextEl.textContent = fmtSpeed(speed) || "0 B/s"
-        entry.speedEl.style.display = ""
-        drawSparkline(entry.sparkCanvas, getRowThroughputHistory(d.id), {
-          stroke: getAccentRgb(),
-          fill: withAlpha(getAccentRgb(), 0.18),
-        })
-      } else {
-        entry.speedTextEl.textContent = ""
-        entry.speedEl.style.display = "none"
-        if (entry.sparkCanvas.width > 0) {
-          entry.sparkCanvas.width = entry.sparkCanvas.width
+    function confirmDelete(d: any, message?: string) {
+      if (!deleteDlg) {
+        if (confirm(message || `Delete "${d.title}"? The file will also be removed.`)) {
+          removeDownload(d.id)
         }
+        return
       }
-
-      const wantsDeterminate = d.bytesTotal > 0
-      const wantsIndeterminate = !wantsDeterminate && d.status === "downloading"
-      const fill = entry.barFillEl
-      if (wantsDeterminate && fill) {
-        entry.barShellEl.classList.remove(
-          "hidden",
-          "dl-bar-indeterminate"
-        )
-        const tone = toneClassForBar(d.status)
-        for (const c of ALL_BAR_TONES) fill.classList.toggle(c, c === tone)
-        fill.classList.toggle("dl-bar-active", d.status === "downloading")
-        fill.classList.remove("hidden")
-        const pctV = Math.max(
-          0,
-          Math.min(100, (d.bytesDone / d.bytesTotal) * 100)
-        )
-        const justFinished =
-          prevStatus !== "done" && d.status === "done" && firstRenderComplete
-        if (justFinished && !prefersReducedMotion()) {
-          const from = fill.style.width || `${pctV}%`
-          fill.style.width = "100%"
-          fill.animate(
-            [{ width: from }, { width: "100%" }],
-            { duration: 600, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
-          )
-        } else {
-          fill.style.width = `${pctV}%`
-        }
-      } else if (wantsIndeterminate && fill) {
-        entry.barShellEl.classList.remove("hidden")
-        entry.barShellEl.classList.add("dl-bar-indeterminate")
-        for (const c of ALL_BAR_TONES) fill.classList.remove(c)
-        fill.classList.remove("dl-bar-active")
-        fill.classList.add("hidden") // indeterminate uses ::after on the shell
-      } else {
-        entry.barShellEl.classList.add("hidden")
-        entry.barShellEl.classList.remove("dl-bar-indeterminate")
+      pendingDeleteId = d.id
+      if (deleteBodyEl) {
+        deleteBodyEl.textContent =
+          message || `"${d.title}" will be removed from disk.`
       }
-
-      // Error message.
-      if (d.status === "error" && d.error) {
-        entry.errorEl.textContent = d.error
-        entry.errorEl.classList.remove("hidden")
-      } else {
-        entry.errorEl.textContent = ""
-        entry.errorEl.classList.add("hidden")
-      }
-
-      if (d.status === "done") {
-        if (firstRenderComplete && !seenDone.has(d.id) && prevStatus !== "done") {
-          if (!prefersReducedMotion()) {
-            entry.el.animate(
-              [
-                {
-                  backgroundColor:
-                    "color-mix(in oklch, var(--color-ok) 22%, transparent)",
-                },
-                { backgroundColor: "transparent" },
-              ],
-              { duration: 1200, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
-            )
-          }
-        }
-        seenDone.add(d.id)
-      } else {
-        seenDone.delete(d.id)
-      }
-
-      const recede =
-        d.status === "done" ||
-        d.status === "cancelled" ||
-        d.status === "error"
-      entry.el.classList.toggle("dl-row-done", recede)
-
-      entry.status = d.status
-      entry.bytesTotal = d.bytesTotal || 0
+      if (typeof deleteDlg.showModal === "function") deleteDlg.showModal()
+      else deleteDlg.setAttribute("open", "")
     }
 
-    function exitRow(entry: RowEntry, staggerIdx: number = 0) {
-      const el = entry.el
-      el.style.setProperty("--dl-row-h", `${el.offsetHeight}px`)
-      if (staggerIdx > 0 && !prefersReducedMotion()) {
-        el.style.transitionDelay = `${staggerIdx * 60}ms`
-      }
-      // Force a reflow so --dl-row-h is committed before the leaving class lands.
-      void el.offsetHeight
-      el.classList.add("dl-row-leaving")
-      requestAnimationFrame(() => el.classList.add("is-leaving"))
-      const onEnd = () => {
-        el.removeEventListener("transitionend", onEnd)
-        el.remove()
-      }
-      el.addEventListener("transitionend", onEnd)
-      setTimeout(() => {
-        if (el.isConnected) el.remove()
-      }, 320 + staggerIdx * 60)
-    }
+    deleteCancelBtn?.addEventListener("click", () => deleteDlg?.close?.())
+    deleteDlg?.addEventListener("click", (e) => {
+      if (e.target === deleteDlg) deleteDlg.close()
+    })
+    deleteDlg?.addEventListener("close", () => {
+      pendingDeleteId = null
+    })
+    deleteConfirmBtn?.addEventListener("click", () => {
+      const id = pendingDeleteId
+      deleteDlg?.close?.()
+      if (id) removeDownload(id)
+    })
 
-    function captureRowPositions(): Map<string, number> {
-      const positions = new Map<string, number>()
-      for (const [id, entry] of rowsById) {
-        if (entry.el.isConnected) {
-          positions.set(id, entry.el.getBoundingClientRect().top)
-        }
-      }
-      return positions
-    }
-
-    function playFlipReorder(prevPositions: Map<string, number>) {
-      if (prefersReducedMotion()) return
-      for (const [id, oldTop] of prevPositions) {
-        const entry = rowsById.get(id)
-        if (!entry || !entry.el.isConnected) continue
-        const newTop = entry.el.getBoundingClientRect().top
-        const delta = oldTop - newTop
-        if (Math.abs(delta) < 1) continue
-        entry.el.animate(
-          [
-            { transform: `translateY(${delta}px)` },
-            { transform: "translateY(0)" },
-          ],
-          {
-            duration: 380,
-            easing: "cubic-bezier(0.16, 1, 0.3, 1)",
-            fill: "both",
-          }
-        )
-      }
-    }
-
-    function statusOrder(s: string): number {
-      switch (s) {
-        case "downloading": return 0
-        case "stalled":     return 1
-        case "queued":      return 2
-        case "paused":      return 3
-        case "error":       return 4
-        case "done":        return 5
-        default:            return 6
-      }
-    }
-
-    /** Empty state markup builder (created once on demand). */
-    let emptyStateEl: HTMLDivElement | null = null
-    function ensureEmptyState(): HTMLDivElement {
-      if (emptyStateEl) return emptyStateEl
-      const wrap = document.createElement("div")
-      wrap.className =
-        "px-5 py-10 text-sm text-fg-3 flex flex-col items-center gap-4 text-center"
-      wrap.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="size-10 text-fg-3 dl-empty-icon"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><polyline points="7 11 12 16 17 11"/><line x1="12" y1="4" x2="12" y2="16"/></svg><div class="flex flex-col gap-1"><p class="text-fg/80">Nothing in the queue.</p><p class="text-xs text-fg-3 max-w-prose">Open a movie or series episode and tap Download to queue one here.</p></div>`
-      emptyStateEl = wrap
-      return wrap
-    }
-
+    // ----------------------------
+    // Render orchestration
+    // ----------------------------
     function renderList() {
-      if (!listEl) return
-      if (!firstRenderComplete) {
-        listEl.replaceChildren()
-      }
       const list = listDownloads().slice()
-      list.sort((a, b) => statusOrder(a.status) - statusOrder(b.status))
 
-      const counts = { active: 0, queued: 0, finished: 0 }
-      for (const d of list) {
-        if (d.status === "downloading" || d.status === "stalled" || d.status === "paused")
-          counts.active++
-        else if (d.status === "queued") counts.queued++
-        else if (d.status === "done" || d.status === "cancelled" || d.status === "error")
-          counts.finished++
+      const active = list
+        .filter(
+          (d) =>
+            d.status !== "done" &&
+            d.status !== "cancelled"
+        )
+        .sort((a, b) => statusOrder(a.status) - statusOrder(b.status))
+      const done = list
+        .filter((d) => d.status === "done")
+        .sort(
+          (a, b) =>
+            (b.startedAt || 0) - (a.startedAt || 0)
+        )
+
+      // Active section
+      if (activeListEl && activeSection) {
+        const currentIds = new Set<string>()
+        for (const d of active) currentIds.add(d.id)
+        for (const [id, entry] of activeRowsById) {
+          if (!currentIds.has(id)) {
+            entry.el.remove()
+            activeRowsById.delete(id)
+          }
+        }
+        for (const d of active) {
+          let entry = activeRowsById.get(d.id)
+          if (!entry) {
+            entry = createActiveRow(d)
+            activeRowsById.set(d.id, entry)
+          } else {
+            paintActiveRow(entry, d)
+          }
+        }
+        // Re-append in sort order to keep DOM in sync.
+        for (const d of active) {
+          const entry = activeRowsById.get(d.id)
+          if (entry) activeListEl.appendChild(entry.el)
+        }
+
+        if (active.length > 0) activeSection.removeAttribute("hidden")
+        else activeSection.setAttribute("hidden", "")
+      }
+
+      // Done section
+      if (doneListEl) {
+        const emptyEl = doneListEl.querySelector("[data-empty]")
+        if (done.length === 0) {
+          for (const [id, entry] of doneRowsById) {
+            entry.el.remove()
+            doneRowsById.delete(id)
+          }
+          if (emptyEl) (emptyEl as HTMLElement).hidden = false
+        } else {
+          if (emptyEl) (emptyEl as HTMLElement).hidden = true
+          const currentIds = new Set<string>()
+          for (const d of done) currentIds.add(d.id)
+          for (const [id, entry] of doneRowsById) {
+            if (!currentIds.has(id)) {
+              entry.el.remove()
+              doneRowsById.delete(id)
+            }
+          }
+          for (const d of done) {
+            let entry = doneRowsById.get(d.id)
+            if (!entry) {
+              entry = createDoneRow(d)
+              doneRowsById.set(d.id, entry)
+            } else {
+              paintDoneRow(entry, d)
+            }
+          }
+          for (const d of done) {
+            const entry = doneRowsById.get(d.id)
+            if (entry) doneListEl.appendChild(entry.el)
+          }
+        }
+      }
+
+      if (doneCountEl) {
+        doneCountEl.textContent = done.length > 0 ? `${done.length}` : ""
       }
 
       if (summaryEl) {
@@ -786,83 +1049,22 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
             "Movies and series episodes you save will appear here."
         } else {
           const bits: string[] = []
-          if (counts.active) bits.push(`${counts.active} active`)
-          if (counts.queued) bits.push(`${counts.queued} queued`)
-          if (counts.finished) bits.push(`${counts.finished} finished`)
-          summaryEl.textContent = bits.join(" · ")
+          const downloadingN = active.filter(
+            (d) => d.status === "downloading" || d.status === "stalled"
+          ).length
+          const queuedN = active.filter((d) => d.status === "queued").length
+          const pausedN = active.filter(
+            (d) => d.status === "paused" || d.status === "error"
+          ).length
+          if (downloadingN) bits.push(`${downloadingN} active`)
+          if (queuedN) bits.push(`${queuedN} queued`)
+          if (pausedN) bits.push(`${pausedN} paused`)
+          if (done.length) bits.push(`${done.length} downloaded`)
+          summaryEl.textContent = bits.join(" · ") || "Nothing pending."
         }
       }
 
-      const hasFinished = list.some(
-        (d) =>
-          d.status === "done" ||
-          d.status === "cancelled" ||
-          d.status === "error"
-      )
-      if (clearBtn) {
-        clearBtn.disabled = !hasFinished
-        clearBtn.classList.toggle("opacity-50", !hasFinished)
-        clearBtn.classList.toggle("cursor-not-allowed", !hasFinished)
-      }
-
-      // Empty state.
-      if (list.length === 0) {
-        let staggerIdx = 0
-        for (const entry of rowsById.values()) exitRow(entry, staggerIdx++)
-        rowsById.clear()
-        const empty = ensureEmptyState()
-        if (!empty.isConnected) {
-          listEl.replaceChildren(empty)
-        }
-        firstRenderComplete = true
-        updateAggregateStrip()
-        return
-      }
-
-      if (emptyStateEl?.isConnected) {
-        emptyStateEl.remove()
-      }
-
-      const prevPositions = captureRowPositions()
-      let structuralChange = false
-
-      const currentIds = new Set<string>()
-      for (const d of list) currentIds.add(d.id)
-      let exitStagger = 0
-      for (const [id, entry] of rowsById) {
-        if (!currentIds.has(id)) {
-          rowsById.delete(id)
-          seenDone.delete(id)
-          exitRow(entry, exitStagger++)
-          structuralChange = true
-        }
-      }
-
-      for (const d of list) {
-        let entry = rowsById.get(d.id)
-        if (!entry) {
-          entry = createRow(d)
-          rowsById.set(d.id, entry)
-          if (firstRenderComplete) {
-            entry.el.classList.add("dl-row-enter")
-          }
-          structuralChange = true
-        } else {
-          const prevStatus = entry.status
-          paintRow(entry, d)
-          if (prevStatus !== d.status) structuralChange = true
-        }
-      }
-
-      if (structuralChange) {
-        for (const d of list) {
-          const entry = rowsById.get(d.id)
-          if (entry) listEl.appendChild(entry.el)
-        }
-        playFlipReorder(prevPositions)
-      }
-
-      firstRenderComplete = true
+      try { window.SpatialNavigation?.makeFocusable?.() } catch {}
       updateAggregateStrip()
     }
 
@@ -871,9 +1073,5 @@ import { IconTrash, IconDownload, IconSettings } from "@tabler/icons-svelte"
     document.addEventListener(DOWNLOADS_LIST_EVENT, renderList)
     document.addEventListener(DOWNLOAD_PROGRESS_EVENT, renderList)
     document.addEventListener(THROUGHPUT_EVENT, renderList)
-
-    clearBtn?.addEventListener("click", () => {
-      clearFinishedDownloads()
-    })
   </script>
 </Layout>

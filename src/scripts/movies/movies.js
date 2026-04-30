@@ -1,8 +1,8 @@
-// Movies / VOD listing
+// Movies / VOD listing page (route: /movies). Detail/playback lives on
+// /movies/detail?id=<id> via src/scripts/movies/detail.js.
 import {
   loadCreds,
   getActiveEntry,
-  fmtBase,
   buildApiUrl,
   normalize,
   debounce,
@@ -13,28 +13,10 @@ import {
   isFavorite,
   toggleFavorite,
   getFavorites,
-  pushRecent,
   getRecents,
 } from "@/scripts/lib/preferences.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
-import {
-  startDownload,
-  resumeDownload,
-  pauseDownload,
-  listDownloads,
-  isDownloadable,
-  inferExt,
-  cancelDownload,
-  getLocalPlayableSrc,
-  tryAndroidIntentPlayback,
-  DOWNLOADS_LIST_EVENT,
-  DOWNLOAD_PROGRESS_EVENT,
-} from "@/scripts/lib/downloads.js"
-import { morphIntoDetail, clearAmbient } from "@/scripts/lib/morph-detail.js"
-import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
-
-const detailAmbient = document.getElementById("movie-detail-ambient")
 
 const VOD_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -48,7 +30,6 @@ function fmtAge(ms) {
   return `${d}d ago`
 }
 
-/** @type {{host:string,port:string,user:string,pass:string}} */
 let creds = { host: "", port: "", user: "", pass: "" }
 
 // ----------------------------
@@ -66,27 +47,10 @@ const searchEl = /** @type {HTMLInputElement|null} */ (
 )
 const clearSearchBtn = document.getElementById("movie-clear-search")
 
-// Detail dialog refs (Netflix-style modal)
-const detailDlg = /** @type {HTMLDialogElement|null} */ (
-  document.getElementById("movie-detail-dialog")
-)
-const detailTitle = document.getElementById("movie-detail-title")
-const detailPoster = document.getElementById("movie-detail-poster")
-const detailMeta = document.getElementById("movie-detail-meta")
-const detailPlot = document.getElementById("movie-detail-plot")
-const detailPlay = document.getElementById("movie-detail-play")
-const detailFav = document.getElementById("movie-detail-fav")
-const detailClose = document.getElementById("movie-detail-close")
-const detailPlayerWrap = document.getElementById("movie-detail-player-wrap")
-const detailDownload = document.getElementById("movie-detail-download")
-const detailDownloadLabel = document.getElementById("movie-detail-download-label")
-
 // ----------------------------
 // State
 // ----------------------------
-/** @type {Array<{id:number,name:string,category?:string,logo?:string|null,year?:string,rating?:string,duration?:string,plot?:string,norm:string}>} */
 let all = []
-/** @type {typeof all} */
 let filtered = []
 
 /** @type {Map<string,string> | null} */
@@ -117,7 +81,6 @@ document.addEventListener("xt:favorites-changed", (e) => {
   if (activeCat === CAT_FAVORITES) applyFilter()
   else updateGridStarFor(detail.id)
   syncPseudoCategoryRows()
-  if (currentDetailMovie?.id === detail.id) syncDetailFavButton()
 })
 
 document.addEventListener("xt:recents-changed", (e) => {
@@ -289,13 +252,21 @@ function makeCard(m, idx) {
   card.style.contentVisibility = "auto"
   card.style.containIntrinsicSize = "260px"
 
-  const playBtn = document.createElement("button")
-  playBtn.type = "button"
-  playBtn.dataset.role = "play"
-  playBtn.className =
-    "play-btn block w-full text-left outline-none cursor-pointer"
-  playBtn.title = m.name || ""
-  playBtn.addEventListener("click", () => openDetail(m, card))
+  const link = document.createElement("a")
+  link.href = `/movies/detail?id=${encodeURIComponent(m.id)}`
+  link.dataset.role = "play"
+  link.className =
+    "play-btn block w-full text-left outline-none cursor-pointer no-underline"
+  link.title = m.name || ""
+  link.setAttribute("aria-label", `Open ${m.name || `Movie ${m.id}`}`)
+
+  // Set the cross-document VT name on the source poster image just before
+  // navigation - the browser snapshots elements with matching names on
+  // both ends and animates between them.
+  link.addEventListener("click", () => {
+    const img = link.querySelector("img")
+    if (img) /** @type {HTMLElement} */ (img).style.viewTransitionName = "active-poster"
+  })
 
   const posterWrap = document.createElement("div")
   posterWrap.className = "aspect-[2/3] w-full bg-surface-2 overflow-hidden relative"
@@ -318,7 +289,7 @@ function makeCard(m, idx) {
     posterWrap.appendChild(makeFallback(m.name))
   }
 
-  playBtn.appendChild(posterWrap)
+  link.appendChild(posterWrap)
 
   const info = document.createElement("div")
   info.className = "px-2 py-2 min-w-0"
@@ -333,11 +304,10 @@ function makeCard(m, idx) {
   if (m.category) parts.push(m.category)
   meta.textContent = parts.join(" • ")
   info.append(nameEl, meta)
-  playBtn.appendChild(info)
+  link.appendChild(info)
 
-  card.appendChild(playBtn)
+  card.appendChild(link)
 
-  // Star toggle pinned in the top-right of the poster.
   const fav = activePlaylistId
     ? isFavorite(activePlaylistId, "vod", m.id)
     : false
@@ -488,7 +458,7 @@ function updateGridStarFor(movieId) {
   const idx = filtered.findIndex((m) => m.id === movieId)
   if (idx < 0) return
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
-  if (!card) return // not yet rendered (drip-feed)
+  if (!card) return
   const m = filtered[idx]
   const fav = activePlaylistId
     ? isFavorite(activePlaylistId, "vod", m.id)
@@ -518,7 +488,6 @@ function applyFilter() {
   const qnorm = normalize(searchEl?.value || "")
   const tokens = qnorm.length ? qnorm.split(" ") : []
 
-  /** @type {typeof all} */
   let out
   if (activeCat === CAT_FAVORITES && activePlaylistId) {
     const favs = getFavorites(activePlaylistId, "vod")
@@ -590,13 +559,8 @@ function paintMovies(data, fromCache, age) {
 }
 
 async function loadMovies() {
-  console.log("[xt:movies] loadMovies enter")
-  if (!listStatus) {
-    console.warn("[xt:movies] loadMovies: listStatus DOM node missing")
-    return
-  }
+  if (!listStatus) return
   const active = await getActiveEntry()
-  console.log("[xt:movies] active=", active?._id || null)
   if (!active) {
     activePlaylistId = ""
     activePlaylistTitle = ""
@@ -635,15 +599,12 @@ async function loadMovies() {
       async () => {
         const catMap = await ensureVodCategoryMap()
         const r = await providerFetch(buildApiUrl(creds, "get_vod_streams"))
-        console.log("[xt:movies] get_vod_streams resp status=", r.status, "ok=", r.ok)
         const body = await r.text()
-        console.log("[xt:movies] body bytes=", body?.length ?? 0)
         if (!r.ok) {
           console.error("Upstream error body:", body)
           throw new Error(`API ${r.status}: ${body}`)
         }
         const parsed = JSON.parse(body)
-        console.log("[xt:movies] parsed array length=", Array.isArray(parsed) ? parsed.length : "(not array)")
         const arr = Array.isArray(parsed)
           ? parsed
           : parsed?.movies || parsed?.results || []
@@ -683,9 +644,7 @@ async function loadMovies() {
       }
     )
 
-    console.log("[xt:movies] cachedFetch returned len=", data?.length ?? 0, "fromCache=", fromCache)
     paintMovies(data, fromCache, age)
-    console.log("[xt:movies] paintMovies done")
   } catch (e) {
     console.error("[xt:movies] loadMovies threw:", e)
     filtered = []
@@ -699,424 +658,11 @@ async function loadMovies() {
 }
 
 // ----------------------------
-// Detail dialog + playback
-// ----------------------------
-let vjs = null
-
-const ensurePlayer = async () => {
-  if (vjs) return vjs
-  const [{ default: videojs }] = await Promise.all([
-    import("video.js"),
-    import("video.js/dist/video-js.css"),
-  ])
-  const hasNativePipBridge = !!window.AndroidPip
-  vjs = videojs("movie-player", {
-    liveui: false,
-    fluid: true,
-    preload: "auto",
-    autoplay: false,
-    aspectRatio: "16:9",
-    controlBar: {
-      volumePanel: { inline: false },
-      pictureInPictureToggle: !hasNativePipBridge,
-      playbackRateMenuButton: true,
-      fullscreenToggle: true,
-    },
-    html5: {
-      vhs: {
-        overrideNative: true,
-        limitRenditionByPlayerDimensions: true,
-        smoothQualityChange: true,
-      },
-    },
-  })
-  attachPlayerFocusKeeper(vjs)
-  return vjs
-}
-
-function fmtDuration(minsOrStr) {
-  if (!minsOrStr) return ""
-  const s = String(minsOrStr)
-  const m = parseInt(s, 10)
-  if (!isFinite(m) || m <= 0) return s
-  const h = Math.floor(m / 60)
-  const mm = m % 60
-  if (!h) return `${mm} min`
-  return `${h}h ${mm.toString().padStart(2, "0")}m`
-}
-
-function chooseMime(url) {
-  if (!url) return "video/mp4"
-  const lower = url.split("?")[0].toLowerCase()
-  if (lower.endsWith(".m3u8")) return "application/x-mpegURL"
-  if (lower.endsWith(".mpd")) return "application/dash+xml"
-  if (lower.endsWith(".webm")) return "video/webm"
-  if (lower.endsWith(".mkv")) return "video/x-matroska"
-  if (lower.endsWith(".ts")) return "video/MP2T"
-  if (lower.endsWith(".avi")) return "video/x-msvideo"
-  return "video/mp4"
-}
-
-let currentDetailMovie = null
-let currentDetailSrc = ""
-
-function syncDetailFavButton() {
-  if (!detailFav || !currentDetailMovie || !activePlaylistId) return
-  const fav = isFavorite(activePlaylistId, "vod", currentDetailMovie.id)
-  detailFav.textContent = fav ? "Remove from favorites" : "Add to favorites"
-  detailFav.classList.toggle("text-accent", fav)
-  detailFav.setAttribute("aria-pressed", String(fav))
-}
-
-function prepareAndShowDetail(movie) {
-  currentDetailMovie = movie
-  currentDetailSrc = ""
-
-  if (detailTitle) detailTitle.textContent = movie.name || `Movie ${movie.id}`
-  if (detailMeta) detailMeta.textContent = ""
-  if (detailPlot) detailPlot.textContent = "Loading details…"
-
-  if (detailPoster) {
-    detailPoster.replaceChildren()
-    if (movie.logo) {
-      const img = document.createElement("img")
-      img.src = movie.logo
-      img.alt = ""
-      img.loading = "eager"
-      img.decoding = "async"
-      img.fetchPriority = "high"
-      img.referrerPolicy = "no-referrer"
-      img.className = "h-full w-full object-cover"
-      img.onerror = () => {
-        img.remove()
-        detailPoster.appendChild(makeFallback(movie.name))
-      }
-      detailPoster.appendChild(img)
-    } else {
-      detailPoster.appendChild(makeFallback(movie.name))
-    }
-  }
-
-  // Reset hero state: poster visible, player hidden until Play is pressed.
-  if (detailPoster) detailPoster.classList.remove("hidden")
-  if (detailPlayerWrap) detailPlayerWrap.classList.add("hidden")
-  const videoEl = document.getElementById("movie-player")
-  if (videoEl) videoEl.setAttribute("hidden", "")
-  try {
-    vjs?.pause?.()
-    vjs?.reset?.()
-  } catch {}
-
-  syncDetailFavButton()
-
-  if (detailDownload) {
-    detailDownload.removeAttribute("hidden")
-    detailDownload.removeAttribute("disabled")
-    if (detailDownloadLabel) detailDownloadLabel.textContent = "Download"
-    detailDownload.title = isDownloadable()
-      ? "Download to your chosen folder"
-      : "Open the source URL in a new tab (desktop app saves to disk)"
-  }
-
-  if (typeof detailDlg.showModal === "function") detailDlg.showModal()
-  else detailDlg.setAttribute("open", "")
-
-  window.SpatialNavigation?.makeFocusable?.()
-  /** @type {HTMLButtonElement|null} */ (detailPlay)?.focus?.()
-}
-
-/** @type {HTMLElement|null} - card element clicked to open the detail dialog. */
-let lastDetailTrigger = null
-
-async function openDetail(movie, fromCard) {
-  if (!detailDlg || !movie) return
-
-  lastDetailTrigger = fromCard || null
-
-  morphIntoDetail({
-    fromCard,
-    toHero: detailPoster,
-    ambient: detailAmbient,
-    posterUrl: movie.logo || null,
-    openDialog: () => prepareAndShowDetail(movie),
-  })
-
-  try {
-    const r = await providerFetch(
-      buildApiUrl(creds, "get_vod_info", { vod_id: String(movie.id) })
-    )
-    if (!r.ok) throw new Error(await r.text())
-    const data = await r.json()
-    const movieData = data?.movie_data || data?.info || data || {}
-    const info = data?.info || data?.movie_data || {}
-
-    let src = ""
-    if (movieData.stream_url && /^https?:\/\//i.test(movieData.stream_url)) {
-      src = movieData.stream_url
-    } else if (movieData.stream_url) {
-      const base = fmtBase(creds.host, creds.port).replace(/\/+$/, "")
-      src = `${base}/${movieData.stream_url.replace(/^\/+/, "")}`
-    } else {
-      const rawExt =
-        movieData.container_extension || info.container_extension || "mp4"
-      const ext = String(rawExt).replace(/^\.+/, "").toLowerCase() || "mp4"
-      src =
-        fmtBase(creds.host, creds.port) +
-        "/movie/" +
-        encodeURIComponent(creds.user) +
-        "/" +
-        encodeURIComponent(creds.pass) +
-        "/" +
-        encodeURIComponent(movie.id) +
-        "." +
-        ext
-    }
-
-    if (currentDetailMovie?.id !== movie.id) return
-
-    currentDetailSrc = src
-    applyMovieDownloadState()
-
-    const year = movieData.releasedate || movieData.year || info.year || ""
-    const duration =
-      movieData.duration || info.duration || movieData.duration_secs || ""
-    const rating =
-      movieData.rating || info.rating || movieData.rating_5based || ""
-    const genre = movieData.genre || info.genre || movieData.category || ""
-    const plot =
-      movieData.plot ||
-      movieData.description ||
-      info.plot ||
-      info.description ||
-      ""
-
-    if (detailMeta) {
-      const bits = []
-      if (year) bits.push(year)
-      const humanDur = fmtDuration(duration)
-      if (humanDur) bits.push(humanDur)
-      if (genre) bits.push(genre)
-      if (rating) bits.push(`Rating: ${String(rating).slice(0, 4)}`)
-      detailMeta.textContent = bits.join(" • ")
-    }
-    if (detailPlot) {
-      detailPlot.textContent = plot || "No description available."
-    }
-  } catch (e) {
-    console.error(e)
-    if (detailPlot)
-      detailPlot.textContent = "Failed to load movie info. Try Play anyway."
-  }
-}
-
-async function startPlayback() {
-  if (!currentDetailMovie) return
-  if (!currentDetailSrc) {
-    let waited = 0
-    while (!currentDetailSrc && waited < 4000) {
-      await new Promise((r) => setTimeout(r, 100))
-      waited += 100
-    }
-  }
-  if (!currentDetailSrc) {
-    if (detailPlot)
-      detailPlot.textContent = "Couldn't get a stream URL for this movie."
-    return
-  }
-
-  if (activePlaylistId) {
-    pushRecent(
-      activePlaylistId,
-      "vod",
-      currentDetailMovie.id,
-      currentDetailMovie.name,
-      currentDetailMovie.logo || null
-    )
-  }
-
-  // Android: hand local-file playback off to the system "Open with..."
-  // chooser. The in-WebView path is broken on Android in current Tauri 2.
-  if (await tryAndroidIntentPlayback(currentDetailSrc)) return
-
-  // Swap hero: hide poster, reveal player.
-  if (detailPoster) detailPoster.classList.add("hidden")
-  if (detailPlayerWrap) detailPlayerWrap.classList.remove("hidden")
-  const videoEl = document.getElementById("movie-player")
-  videoEl?.removeAttribute("hidden")
-
-  const player = await ensurePlayer()
-  const localSrc = await getLocalPlayableSrc(currentDetailSrc)
-  const playSrc = localSrc || currentDetailSrc
-  const mime = chooseMime(currentDetailSrc)
-  console.log("[xt:movies] player.src", { src: playSrc, type: mime, isLocal: !!localSrc })
-  player.one("error", () => {
-    const e = player.error()
-    console.error("[xt:movies] video.js error", { code: e?.code, message: e?.message, src: playSrc })
-  })
-  player.src({ src: playSrc, type: mime })
-  player.play().catch((err) => console.warn("[xt:movies] play() rejected:", err?.message || err))
-}
-
-detailPlay?.addEventListener("click", startPlayback)
-
-detailFav?.addEventListener("click", () => {
-  if (!currentDetailMovie || !activePlaylistId) return
-  toggleFavorite(activePlaylistId, "vod", currentDetailMovie.id)
-})
-
-function findMovieDownload() {
-  if (!currentDetailSrc) return null
-  return listDownloads().find((d) => d.url === currentDetailSrc) || null
-}
-
-function applyMovieDownloadState() {
-  if (!detailDownload) return
-  const d = findMovieDownload()
-  detailDownload.removeAttribute("disabled")
-  if (!d) {
-    if (detailDownloadLabel) detailDownloadLabel.textContent = "Download"
-    detailDownload.title = isDownloadable()
-      ? "Download to your chosen folder"
-      : "Open the source URL in a new tab (desktop app saves to disk)"
-    return
-  }
-  switch (d.status) {
-    case "downloading": {
-      const pct =
-        d.bytesTotal > 0
-          ? Math.floor((d.bytesDone / d.bytesTotal) * 100)
-          : null
-      if (detailDownloadLabel) {
-        detailDownloadLabel.textContent = pct !== null ? `${pct}%` : "…"
-      }
-      detailDownload.title = "Tap to pause"
-      break
-    }
-    case "queued":
-      if (detailDownloadLabel) detailDownloadLabel.textContent = "Queued"
-      detailDownload.title = "Waiting for a slot - tap to cancel"
-      break
-    case "paused":
-      if (detailDownloadLabel) detailDownloadLabel.textContent = "Resume"
-      detailDownload.title = "Paused - tap to resume"
-      break
-    case "stalled":
-      if (detailDownloadLabel) detailDownloadLabel.textContent = "Retry"
-      detailDownload.title = "Stalled - tap to retry"
-      break
-    case "error":
-      if (detailDownloadLabel) detailDownloadLabel.textContent = "Retry"
-      detailDownload.title = d.error || "Failed - tap to retry"
-      break
-    case "done":
-      if (detailDownloadLabel) detailDownloadLabel.textContent = "Saved"
-      detailDownload.setAttribute("disabled", "")
-      detailDownload.title = d.path ? `Saved to ${d.path}` : "Saved"
-      break
-    default:
-      if (detailDownloadLabel) detailDownloadLabel.textContent = "Download"
-      detailDownload.title = ""
-  }
-}
-
-function onAnyDownloadEvent() {
-  // Cheap re-render: covers progress ticks, status changes, queue reorderings.
-  if (detailDlg?.open) applyMovieDownloadState()
-}
-
-document.addEventListener(DOWNLOADS_LIST_EVENT, onAnyDownloadEvent)
-document.addEventListener(DOWNLOAD_PROGRESS_EVENT, onAnyDownloadEvent)
-
-detailDownload?.addEventListener("click", async () => {
-  if (!currentDetailMovie) return
-  let waited = 0
-  while (!currentDetailSrc && waited < 4000) {
-    await new Promise((r) => setTimeout(r, 100))
-    waited += 100
-  }
-  if (!currentDetailSrc) {
-    if (detailDownloadLabel) detailDownloadLabel.textContent = "No URL"
-    return
-  }
-  if (!isDownloadable()) {
-    window.open(currentDetailSrc, "_blank", "noopener,noreferrer")
-    if (detailDownloadLabel) detailDownloadLabel.textContent = "Opened"
-    return
-  }
-
-  const existing = findMovieDownload()
-  if (existing?.status === "downloading" || existing?.status === "queued") {
-    pauseDownload(existing.id)
-    return
-  }
-  if (
-    existing &&
-    (existing.status === "paused" ||
-      existing.status === "stalled" ||
-      existing.status === "error")
-  ) {
-    resumeDownload(existing.id)
-    return
-  }
-
-  try {
-    if (detailDownloadLabel) detailDownloadLabel.textContent = "Starting…"
-    detailDownload.setAttribute("disabled", "")
-    detailDownload.title = ""
-    await startDownload({
-      url: currentDetailSrc,
-      title: currentDetailMovie.name || `Movie ${currentDetailMovie.id}`,
-      ext: inferExt(currentDetailSrc, "mp4"),
-    })
-  } catch (e) {
-    const msg = String(e?.message || e || "Failed")
-    console.error("Download failed:", e)
-    if (detailDownloadLabel) detailDownloadLabel.textContent = "Failed"
-    detailDownload.removeAttribute("disabled")
-    detailDownload.title = msg
-  }
-})
-
-detailClose?.addEventListener("click", () => detailDlg?.close?.())
-
-detailDlg?.addEventListener("click", (e) => {
-  if (e.target === detailDlg) detailDlg.close()
-})
-
-detailDlg?.addEventListener("close", () => {
-  try {
-    vjs?.pause?.()
-    vjs?.reset?.()
-  } catch {}
-  if (detailPlayerWrap) detailPlayerWrap.classList.add("hidden")
-  if (detailPoster) detailPoster.classList.remove("hidden")
-  const videoEl = document.getElementById("movie-player")
-  videoEl?.setAttribute("hidden", "")
-  detachDownloadProgress()
-  clearAmbient(detailAmbient)
-  currentDetailMovie = null
-  currentDetailSrc = ""
-
-  const trigger = lastDetailTrigger
-  lastDetailTrigger = null
-  if (trigger && trigger.isConnected) {
-    const focusable =
-      /** @type {HTMLElement|null} */ (trigger.querySelector("button.play-btn")) ||
-      (trigger instanceof HTMLElement ? trigger : null)
-    queueMicrotask(() => focusable?.focus?.())
-  }
-})
-
-// ----------------------------
 // Boot
 // ----------------------------
-document.addEventListener("xt:active-changed", () => {
-  loadMovies()
-})
+document.addEventListener("xt:active-changed", () => loadMovies())
 
 ;(async () => {
-  console.log("[xt:movies] boot start")
   creds = await loadCreds()
-  console.log("[xt:movies] boot creds host=", !!creds.host, "user=", !!creds.user)
   if (creds.host && creds.user && creds.pass) loadMovies()
 })()

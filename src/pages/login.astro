@@ -30,20 +30,32 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 		<div
 			role="tablist"
 			aria-label="Playlist type"
-			class="grid grid-cols-2 gap-1 p-1 rounded-xl border border-line bg-surface mb-10 max-w-sm">
+			class="grid grid-cols-2 gap-1 p-1 rounded-xl border border-line bg-surface mb-10 max-w-md">
 			<button
 				id="tab-xtream"
 				type="button"
 				role="tab"
-				class="px-3 py-2 text-sm font-medium rounded-lg min-h-11 transition-colors disabled:cursor-not-allowed disabled:opacity-40">
-				Xtream Codes
+				class="flex flex-col items-center justify-center text-center px-3 py-2 rounded-lg min-h-12 transition-colors disabled:cursor-not-allowed disabled:opacity-40">
+				<span class="text-sm font-medium leading-tight">
+					I have a subscription
+				</span>
+				<span
+					class="mt-0.5 text-label font-medium uppercase tracking-wider opacity-70">
+					Xtream Codes
+				</span>
 			</button>
 			<button
 				id="tab-m3u"
 				type="button"
 				role="tab"
-				class="px-3 py-2 text-sm font-medium rounded-lg min-h-11 transition-colors disabled:cursor-not-allowed disabled:opacity-40">
-				M3U URL
+				class="flex flex-col items-center justify-center text-center px-3 py-2 rounded-lg min-h-12 transition-colors disabled:cursor-not-allowed disabled:opacity-40">
+				<span class="text-sm font-medium leading-tight">
+					I have a playlist URL
+				</span>
+				<span
+					class="mt-0.5 text-label font-medium uppercase tracking-wider opacity-70">
+					M3U / M3U8
+				</span>
 			</button>
 		</div>
 
@@ -196,7 +208,10 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 	const pageTitle = $("page-title");
 	const pageSubtitle = $("page-subtitle");
 
-	const editingId = new URLSearchParams(location.search).get("edit");
+	const params = new URLSearchParams(location.search);
+	const editingId = params.get("edit");
+	const isDemo = params.get("demo") === "1";
+	const DEMO_M3U_URL = "https://iptv-org.github.io/iptv/index.m3u";
 	let editing = null;
 	let mode = "xtream";
 
@@ -220,9 +235,8 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 	}
 
 	function applyTabStyles(btn, active) {
-		// Reset, then apply
 		btn.className =
-			"px-3 py-2 text-sm font-medium rounded-lg min-h-11 transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
+			"flex flex-col items-center justify-center text-center px-3 py-2 rounded-lg min-h-12 transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
 			(active ? ACTIVE_TAB : IDLE_TAB);
 	}
 
@@ -435,6 +449,14 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 		} else {
 			m3uEl.value = editing.url || "";
 		}
+	} else if (isDemo) {
+		pageTitle.textContent = "Try a demo playlist";
+		pageSubtitle.textContent =
+			"A free public playlist from iptv-org. You can remove it any time.";
+		setMode("m3u");
+		titleEl.value = "Demo (iptv-org)";
+		m3uEl.value = DEMO_M3U_URL;
+		showStatus("info", "Demo URL prefilled. Hit Save and continue.");
 	} else {
 		setMode("xtream");
 	}

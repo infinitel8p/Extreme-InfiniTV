@@ -1,0 +1,116 @@
+---
+import Layout from "@/layouts/Layout.astro"
+import {
+  IconChevronLeft,
+  IconPlayerPlay,
+  IconDownload,
+} from "@tabler/icons-svelte"
+---
+
+<Layout pageTitle="Movie">
+  <main class="flex-1 min-w-0 min-h-0 overflow-y-auto overflow-x-hidden custom-scroll">
+    <div
+      class="relative w-full max-w-4xl mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 pb-12 flex flex-col gap-5 isolate">
+
+      <div data-modal-ambient id="movie-detail-ambient" aria-hidden="true"></div>
+
+      <div class="relative z-10 flex flex-col gap-5">
+
+        <a
+          href="/movies"
+          id="movie-detail-back"
+          aria-label="Back to Movies"
+          class="dt-enter dt-stagger-0 self-start inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 min-h-11 text-sm text-fg-2
+                 hover:bg-surface-2 focus-visible:bg-surface-2 outline-none transition-colors">
+          <IconChevronLeft aria-hidden="true" stroke={2} class="size-4" />
+          Movies
+        </a>
+
+        <div class="dt-enter dt-stagger-1 flex flex-col gap-1">
+          <h1
+            id="movie-detail-title"
+            class="font-semibold tracking-[-0.02em] leading-tight text-2xl sm:text-3xl">
+            -
+          </h1>
+          <div
+            id="movie-detail-meta"
+            class="text-xs text-fg-3 space-x-2 tabular-nums">
+          </div>
+        </div>
+
+        <!-- Hero: poster (default) or player (after Play). -->
+        <div class="w-full">
+          <div
+            id="movie-detail-poster"
+            class="dt-hero aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
+                   max-h-[50dvh] max-w-[calc(50dvh*2/3)] sm:max-w-[calc(50dvh*16/9)]"
+            style="view-transition-name: active-poster;">
+          </div>
+          <div
+            id="movie-detail-player-wrap"
+            class="hidden aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line
+                   max-h-[60dvh] max-w-[calc(60dvh*16/9)]">
+            <video
+              id="movie-player"
+              class="video-js vjs-default-skin vjs-big-play-centered h-full w-full"
+              controls
+              hidden
+              playsinline></video>
+          </div>
+        </div>
+
+        <!-- Action buttons -->
+        <div class="dt-enter dt-stagger-2 flex flex-col sm:flex-row gap-2 justify-center">
+          <button
+            id="movie-detail-play"
+            type="button"
+            class="dt-play-breath flex items-center justify-center gap-2 rounded-xl bg-accent text-bg
+                   px-6 py-3 text-base font-semibold min-w-44
+                   hover:opacity-90 focus-visible:opacity-90
+                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
+                   transition-opacity">
+            <IconPlayerPlay aria-hidden="true" stroke={2} class="size-5" />
+            Play
+          </button>
+          <button
+            id="movie-detail-fav"
+            type="button"
+            class="rounded-xl border border-line px-6 py-3 text-base min-w-44
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
+            Add to favorites
+          </button>
+          <button
+            id="movie-detail-download"
+            type="button"
+            hidden
+            class="flex items-center justify-center gap-2 rounded-xl border border-line px-6 py-3 text-base min-w-44 text-fg-2
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   transition-colors">
+            <IconDownload aria-hidden="true" stroke={2} class="size-5" />
+            <span id="movie-detail-download-label">Download</span>
+          </button>
+        </div>
+
+        <div
+          id="movie-detail-plot"
+          class="dt-enter dt-stagger-3 text-sm text-fg-2 leading-relaxed max-w-prose">
+          Loading details…
+        </div>
+
+      </div>
+    </div>
+
+    <div
+      id="app-version"
+      class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
+      Loading…
+    </div>
+  </main>
+
+  <script>
+    import "@/scripts/movies/detail.js"
+    import "@/scripts/updater-startup.js"
+    import { injectVersion } from "@/scripts/version.js"
+    injectVersion()
+  </script>
+</Layout>

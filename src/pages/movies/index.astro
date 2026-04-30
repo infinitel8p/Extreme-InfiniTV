@@ -1,7 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import SearchInput from "@/components/SearchInput.astro";
-import { IconChevronDown, IconPlayerPlay, IconX, IconDownload } from "@tabler/icons-svelte";
+import { IconChevronDown } from "@tabler/icons-svelte";
 ---
 
 <Layout pageTitle="Movies">
@@ -59,107 +59,6 @@ import { IconChevronDown, IconPlayerPlay, IconX, IconDownload } from "@tabler/ic
 			<!-- Cards rendered by movies.js -->
 		</section>
 
-		<!-- Detail / playback modal -->
-		<dialog
-			id="movie-detail-dialog"
-			aria-labelledby="movie-detail-title"
-			class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
-				w-[min(56rem,calc(100vw-2rem))] h-[min(92dvh,52rem)]
-				backdrop:bg-black/70 overflow-hidden isolate">
-			<div data-modal-ambient id="movie-detail-ambient" aria-hidden="true"></div>
-			<div class="relative z-10 flex flex-col h-full">
-				<div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-line shrink-0">
-					<h2
-						id="movie-detail-title"
-						class="text-base sm:text-lg font-semibold truncate min-w-0">
-						-
-					</h2>
-					<button
-						id="movie-detail-close"
-						type="button"
-						aria-label="Close"
-						class="rounded-lg border border-line min-h-11 min-w-11 p-1.5 text-fg-2 shrink-0 inline-flex items-center justify-center
-							hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
-						<IconX aria-hidden="true" stroke={2} class="size-5" />
-					</button>
-				</div>
-
-				<div class="flex-1 min-h-0 overflow-auto custom-scroll">
-					<div class="px-4 sm:px-6 py-5 mx-auto max-w-3xl flex flex-col gap-5">
-
-						<!-- Hero: poster (default) or player (after Play) -->
-						<div class="w-full mx-auto">
-							<div
-								id="movie-detail-poster"
-								class="aspect-[2/3] sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line"
-								style="max-height: 50dvh; max-width: calc(50dvh * 2 / 3);">
-							</div>
-							<div
-								id="movie-detail-player-wrap"
-								class="hidden aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line"
-								style="max-height: 60dvh; max-width: calc(60dvh * 16 / 9);">
-								<video
-									id="movie-player"
-									class="video-js vjs-default-skin vjs-big-play-centered h-full w-full"
-									controls
-									hidden
-									playsinline></video>
-							</div>
-						</div>
-
-						<!-- Action buttons (centered, big) -->
-						<div class="flex flex-col sm:flex-row gap-2 justify-center">
-							<button
-								id="movie-detail-play"
-								type="button"
-								class="flex items-center justify-center gap-2 rounded-xl bg-accent text-bg
-									px-6 py-3 text-base font-semibold min-w-44
-									hover:opacity-90 focus-visible:opacity-90
-									focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
-									transition-opacity">
-								<IconPlayerPlay
-									aria-hidden="true"
-									stroke={2}
-									class="size-5"
-								/>
-								Play
-							</button>
-							<button
-								id="movie-detail-fav"
-								type="button"
-								class="rounded-xl border border-line px-6 py-3 text-base min-w-44
-									hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
-								Add to favorites
-							</button>
-							<button
-								id="movie-detail-download"
-								type="button"
-								hidden
-								class="flex items-center justify-center gap-2 rounded-xl border border-line px-6 py-3 text-base min-w-44 text-fg-2
-									hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
-									transition-colors">
-								<IconDownload aria-hidden="true" stroke={2} class="size-5" />
-								<span id="movie-detail-download-label">Download</span>
-							</button>
-						</div>
-
-						<!-- Meta + plot -->
-						<div class="flex flex-col gap-2">
-							<div
-								id="movie-detail-meta"
-								class="text-xs text-fg-3 space-x-2 tabular-nums">
-							</div>
-							<div
-								id="movie-detail-plot"
-								class="text-sm text-fg-2 leading-relaxed">
-								Select Play to start watching.
-							</div>
-						</div>
-					</div>
-				</div>
-			</div>
-		</dialog>
-
 		<!-- Categories popover -->
 		<dialog
 			id="movie-category-picker-dialog"
@@ -210,10 +109,10 @@ import { IconChevronDown, IconPlayerPlay, IconX, IconDownload } from "@tabler/ic
 	</main>
 
 	<script>
-		import "../scripts/movies/movies.js";
-		import "../scripts/updater-startup.js";
-		import { injectVersion } from "../scripts/version.js";
-		import { attachDialogSpatialNav } from "../scripts/lib/dialog-spatial-nav.js";
+		import "@/scripts/movies/movies.js";
+		import "@/scripts/updater-startup.js";
+		import { injectVersion } from "@/scripts/version.js";
+		import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js";
 		injectVersion();
 
 		const trigger = document.getElementById("movie-category-picker-trigger");
@@ -221,10 +120,6 @@ import { IconChevronDown, IconPlayerPlay, IconX, IconDownload } from "@tabler/ic
 			document.getElementById("movie-category-picker-dialog")
 		);
 		if (dlg) attachDialogSpatialNav(dlg, { defaultElement: "#movie-category-search" });
-		const detailDlg = /** @type {HTMLDialogElement|null} */ (
-			document.getElementById("movie-detail-dialog")
-		);
-		if (detailDlg) attachDialogSpatialNav(detailDlg, { defaultElement: "#movie-detail-play" });
 		const closeBtn = document.getElementById("movie-category-picker-close");
 		const labelEl = document.getElementById("movie-category-picker-label");
 		const categoryList = document.getElementById("movie-category-list");

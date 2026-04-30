@@ -523,7 +523,7 @@ function tryRunNext() {
   }
 }
 
-export async function startDownload({ url, title, ext }) {
+export async function startDownload({ url, title, ext, source }) {
   if (!isTauri) {
     throw new Error("Downloads are only available in the desktop build.")
   }
@@ -574,6 +574,7 @@ export async function startDownload({ url, title, ext }) {
     status: willRun ? "downloading" : "queued",
     startedAt: Date.now(),
     error: "",
+    source: source || null,
   }
   const list = readState()
   list.unshift(item)
