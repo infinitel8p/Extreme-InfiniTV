@@ -21,15 +21,6 @@ export default defineConfig({
     },
     build: {
       chunkSizeWarningLimit: 800,
-      rollupOptions: {
-        external: [
-          "@tauri-apps/plugin-process",
-          "@tauri-apps/plugin-updater",
-          "@tauri-apps/plugin-http",
-          "@tauri-apps/plugin-fs",
-          "@tauri-apps/plugin-dialog",
-        ],
-      },
     },
     optimizeDeps: {
       include: [
@@ -39,6 +30,7 @@ export default defineConfig({
         "@tauri-apps/plugin-http",
         "@tauri-apps/plugin-fs",
         "@tauri-apps/plugin-dialog",
+        "tauri-plugin-android-fs-api",
       ],
     },
   },
