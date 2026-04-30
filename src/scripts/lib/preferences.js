@@ -5,11 +5,12 @@
 //   { [playlistId]: {
 //       favLive: number[], favVod: number[], favSeries: number[],
 //       recLive: RecentEntry[], recVod: RecentEntry[], recSeries: RecentEntry[],
-//       progVod: { [movieId]: ProgressEntry },
+//       progVod: { [movieId]: VodProgressEntry },
 //       progEpisode: { [episodeId]: EpisodeProgressEntry }
 //     } }
 // RecentEntry          = { id, name, logo?, ts }   // ts = ms since epoch
 // ProgressEntry        = { position, duration, updatedAt, completed }
+// VodProgressEntry     = ProgressEntry & { name?, logo? }
 // EpisodeProgressEntry = ProgressEntry & {
 //   seriesId, season, episodeNum, episodeTitle?, seriesName?, seriesLogo?
 // }
@@ -315,6 +316,7 @@ export function clearForPlaylist(playlistId) {
 // ---------------------------------------------------------------------------
 /**
  * @typedef {{ position: number, duration: number, updatedAt: number, completed: boolean }} ProgressEntry
+ * @typedef {ProgressEntry & { name?: string, logo?: string|null }} VodProgressEntry
  * @typedef {ProgressEntry & {
  *   seriesId: number, season: (string|number), episodeNum: (string|number|null),
  *   episodeTitle?: string, seriesName?: string, seriesLogo?: string|null
@@ -331,7 +333,7 @@ function progKey(kind) {
  * @param {string} playlistId
  * @param {"vod"|"episode"} kind
  * @param {number|string} id
- * @returns {ProgressEntry|EpisodeProgressEntry|null}
+ * @returns {VodProgressEntry|EpisodeProgressEntry|null}
  */
 export function getProgress(playlistId, kind, id) {
   if (!playlistId || id == null) return null
@@ -383,6 +385,9 @@ function trimBucket(bucket) {
  * Record progress for a movie or episode. `position` and `duration` are in
  * seconds. When `position / duration >= COMPLETED_THRESHOLD`, the entry is
  * marked completed; subsequent setProgress calls won't un-complete it.
+ *
+ * For VOD entries, pass `extras` with name / logo so the Continue Watching
+ * strip can render without depending on a fresh VOD list cache.
  *
  * For episode entries, pass `extras` with seriesId / season / episodeNum
  * (and optionally episodeTitle / seriesName / seriesLogo) so the Continue
@@ -500,7 +505,7 @@ export function clearProgress(playlistId, kind, id) {
  *
  * @param {string} playlistId
  * @param {number} [limit]
- * @returns {Array<{kind: "vod"|"episode", id: string} & (ProgressEntry|EpisodeProgressEntry)>}
+ * @returns {Array<{kind: "vod"|"episode", id: string} & (VodProgressEntry|EpisodeProgressEntry)>}
  */
 export function getContinueWatching(playlistId, limit = 6) {
   const e = cache.get(playlistId)

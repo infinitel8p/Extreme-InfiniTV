@@ -34,8 +34,8 @@
       return {
         kind: raw.kind,
         id: raw.id,
-        name: m?.name || `Movie ${raw.id}`,
-        logo: m?.logo || null,
+        name: raw.name || m?.name || `Movie ${raw.id}`,
+        logo: raw.logo || m?.logo || null,
         subtitle: "Movie",
         href: `/movies/detail?id=${encodeURIComponent(raw.id)}&autoplay=1`,
         position: raw.position,

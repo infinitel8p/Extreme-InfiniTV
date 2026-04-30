@@ -301,7 +301,10 @@ async function startPlayback() {
       const dur = player.duration() || 0
       if (pos < 1) return
       lastWriteAt = now
-      setProgress(activePlaylistId, "vod", movie.id, pos, dur)
+      setProgress(activePlaylistId, "vod", movie.id, pos, dur, {
+        name: movie.name,
+        logo: movie.logo || null,
+      })
     })
     player.on("ended", () => {
       if (!activePlaylistId || !movie) return
@@ -336,7 +339,12 @@ window.addEventListener("pagehide", () => {
     if (activePlaylistId && movie && vjs) {
       const pos = vjs.currentTime?.() || 0
       const dur = vjs.duration?.() || 0
-      if (pos > 1) setProgress(activePlaylistId, "vod", movie.id, pos, dur)
+      if (pos > 1) {
+        setProgress(activePlaylistId, "vod", movie.id, pos, dur, {
+          name: movie.name,
+          logo: movie.logo || null,
+        })
+      }
     }
     vjs?.pause?.()
     vjs?.dispose?.()
