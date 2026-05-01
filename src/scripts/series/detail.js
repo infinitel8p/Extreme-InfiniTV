@@ -12,6 +12,8 @@ import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
   toggleFavorite,
+  isOnWatchlist,
+  toggleWatchlist,
   pushRecent,
   getProgress,
   setProgress,
@@ -19,6 +21,7 @@ import {
   isCompleted,
   clearProgress,
 } from "@/scripts/lib/preferences.js"
+import { openExternal } from "@/scripts/lib/external-link.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
   startDownload,
@@ -55,6 +58,10 @@ const plotEl = document.getElementById("series-detail-plot")
 const posterEl = document.getElementById("series-detail-poster")
 const playerWrap = document.getElementById("series-detail-player-wrap")
 const favBtn = document.getElementById("series-detail-fav")
+const watchBtn = document.getElementById("series-detail-watch")
+const watchLabelEl = document.getElementById("series-detail-watch-label")
+const trailerBtn = document.getElementById("series-detail-trailer")
+let trailerUrl = ""
 const seasonTabs = document.getElementById("series-season-tabs")
 const episodeList = document.getElementById("series-episode-list")
 
@@ -101,6 +108,29 @@ function syncFavButton() {
   favBtn.textContent = fav ? "Remove from favorites" : "Add to favorites"
   favBtn.classList.toggle("text-accent", fav)
   favBtn.setAttribute("aria-pressed", String(fav))
+}
+
+function syncWatchButton() {
+  if (!watchBtn || !series || !activePlaylistId) return
+  const onWatchlist = isOnWatchlist(activePlaylistId, "series", series.id)
+  if (watchLabelEl) {
+    watchLabelEl.textContent = onWatchlist ? "On your watchlist" : "Watch later"
+  }
+  watchBtn.classList.toggle("text-accent", onWatchlist)
+  watchBtn.setAttribute("aria-pressed", String(onWatchlist))
+}
+
+// Xtream `youtube_trailer` can be either a bare 11-char video ID or a full
+// URL. Normalize to a watchable youtube.com URL or "" if unrecognised.
+function youtubeUrlFromTrailer(trailer) {
+  if (!trailer) return ""
+  const value = String(trailer).trim()
+  if (!value) return ""
+  if (/^https?:\/\//i.test(value)) return value
+  if (/^[a-zA-Z0-9_-]{11}$/.test(value)) {
+    return `https://www.youtube.com/watch?v=${value}`
+  }
+  return ""
 }
 
 // ----------------------------
@@ -461,6 +491,12 @@ function applySeriesInfo(data) {
   }
   if (plotEl) {
     plotEl.textContent = plot || (cast ? `Cast: ${cast}` : "No description available.")
+  }
+
+  trailerUrl = youtubeUrlFromTrailer(info.youtube_trailer || "")
+  if (trailerBtn) {
+    if (trailerUrl) trailerBtn.removeAttribute("hidden")
+    else trailerBtn.setAttribute("hidden", "")
   }
 
   episodesByKey = byKey
@@ -900,6 +936,32 @@ document.addEventListener("xt:favorites-changed", (e) => {
   if (series?.id === detail.id) syncFavButton()
 })
 
+// ----------------------------
+// Watchlist
+// ----------------------------
+watchBtn?.addEventListener("click", () => {
+  if (!series || !activePlaylistId) return
+  toggleWatchlist(activePlaylistId, "series", series.id, {
+    name: series.name || series.title || "",
+    logo: series.logo || series.cover || null,
+  })
+})
+
+document.addEventListener("xt:watchlist-changed", (e) => {
+  const detail = e.detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "series") return
+  if (series?.id === detail.id) syncWatchButton()
+})
+
+// ----------------------------
+// Trailer
+// ----------------------------
+trailerBtn?.addEventListener("click", () => {
+  if (!trailerUrl) return
+  openExternal(trailerUrl)
+})
+
 document.addEventListener("xt:progress-changed", (e) => {
   const detail = e.detail
   if (!detail || detail.playlistId !== activePlaylistId) return
@@ -965,6 +1027,7 @@ async function boot() {
   paintPoster(series.name, series.logo || null)
   setAmbient(series.logo || null)
   syncFavButton()
+  syncWatchButton()
 
   const cached = getCached(active._id, `series_info_${seriesId}`)
   if (cached) applySeriesInfo(cached.data)

@@ -12,6 +12,7 @@ import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
   toggleFavorite,
+  isOnWatchlist,
   getFavorites,
   getRecents,
   getHiddenCategories,
@@ -88,6 +89,8 @@ const STAR_OUTLINE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/></svg>'
 const STAR_FILLED =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/></svg>'
+const BOOKMARK_FILLED =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="0.85em" height="0.85em" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 3a2 2 0 0 0-2 2v16l8-4 8 4V5a2 2 0 0 0-2-2H6z"/></svg>'
 
 document.addEventListener("xt:favorites-changed", (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
@@ -96,6 +99,13 @@ document.addEventListener("xt:favorites-changed", (e) => {
   if (activeCat === CAT_FAVORITES) applyFilter()
   else updateGridStarFor(detail.id)
   syncPseudoCategoryRows()
+})
+
+document.addEventListener("xt:watchlist-changed", (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "series") return
+  updateGridWatchBadgeFor(detail.id)
 })
 
 document.addEventListener("xt:recents-changed", (e) => {
@@ -514,6 +524,21 @@ function makeCard(s, idx) {
   const progressBadge = makeSeriesProgressBadge(s)
   if (progressBadge) posterWrap.appendChild(progressBadge)
 
+  const onWatchlist = activePlaylistId
+    ? isOnWatchlist(activePlaylistId, "series", s.id)
+    : false
+  const watchBadge = document.createElement("span")
+  watchBadge.dataset.role = "watch-badge"
+  watchBadge.className =
+    "absolute top-1.5 left-1.5 inline-flex items-center justify-center " +
+    "size-6 rounded-md bg-black/55 backdrop-blur-sm ring-1 ring-white/10 " +
+    "text-accent transition-opacity"
+  watchBadge.setAttribute("aria-label", "On your watchlist")
+  watchBadge.title = "On your watchlist"
+  watchBadge.innerHTML = BOOKMARK_FILLED
+  if (!onWatchlist) watchBadge.hidden = true
+  posterWrap.appendChild(watchBadge)
+
   link.appendChild(posterWrap)
 
   const info = document.createElement("div")
@@ -737,6 +762,22 @@ function updateGridStarFor(seriesId) {
       ? `Remove ${s.name || "series"} from favorites`
       : `Add ${s.name || "series"} to favorites`
   )
+}
+
+function updateGridWatchBadgeFor(seriesId) {
+  if (!gridEl) return
+  const idx = filtered.findIndex((s) => s.id === seriesId)
+  if (idx < 0) return
+  const card = gridEl.querySelector(`[data-idx="${idx}"]`)
+  if (!card) return
+  const onWatchlist = activePlaylistId
+    ? isOnWatchlist(activePlaylistId, "series", seriesId)
+    : false
+  const badge = /** @type {HTMLElement|null} */ (
+    card.querySelector('[data-role="watch-badge"]')
+  )
+  if (!badge) return
+  badge.hidden = !onWatchlist
 }
 
 // ----------------------------

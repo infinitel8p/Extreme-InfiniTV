@@ -18,6 +18,7 @@ const EVT_ALLOWED_CHANGED = "xt:allowed-categories-changed"
 const EVT_CAT_MODE_CHANGED = "xt:category-mode-changed"
 const EVT_VIEW_CHANGED = "xt:view-prefs-changed"
 const EVT_FAV_ORDER_CHANGED = "xt:favorites-order-changed"
+const EVT_WATCHLIST_CHANGED = "xt:watchlist-changed"
 
 let storePromise = null
 function getStore() {
@@ -121,6 +122,14 @@ function emptyEntry() {
     favOrderLive: [],
     favOrderVod: [],
     favOrderSeries: [],
+    // Watchlist is intentionally separate from favorites: "want to watch
+    // later" is a different intent than "permanent shortcut". Live channels
+    // are excluded - they're ephemeral and don't fit the "save for later"
+    // model. Each map is { id -> { ts, name, logo } } so the cross-playlist
+    // /watchlist page can sort by added-time and render names / posters for
+    // items whose source playlist is currently switched out.
+    watchVod: Object.create(null),
+    watchSeries: Object.create(null),
     viewSort: { vod: "default", series: "default" },
   }
 }
@@ -190,6 +199,14 @@ function hydrate(raw) {
       favOrderSeries: Array.isArray(val.favOrderSeries)
         ? val.favOrderSeries.map(Number).filter(Number.isFinite)
         : [],
+      watchVod:
+        val.watchVod && typeof val.watchVod === "object"
+          ? { ...val.watchVod }
+          : Object.create(null),
+      watchSeries:
+        val.watchSeries && typeof val.watchSeries === "object"
+          ? { ...val.watchSeries }
+          : Object.create(null),
       viewSort: {
         vod: ["default", "added", "az"].includes(v.vod) ? v.vod : "default",
         series: ["default", "added", "az"].includes(v.series)
@@ -227,6 +244,8 @@ function dehydrate() {
       favOrderLive: v.favOrderLive.slice(),
       favOrderVod: v.favOrderVod.slice(),
       favOrderSeries: v.favOrderSeries.slice(),
+      watchVod: v.watchVod,
+      watchSeries: v.watchSeries,
       viewSort: { vod: v.viewSort.vod, series: v.viewSort.series },
     }
   }
@@ -359,6 +378,115 @@ export function getFavoriteMeta(playlistId, kind, id) {
   const e = cache.get(playlistId)
   if (!e) return null
   return e[favMetaKey(kind)][String(id)] || null
+}
+
+// ---------------------------------------------------------------------------
+// Watchlist - "want to watch later", separate from favorites
+// ---------------------------------------------------------------------------
+/** @param {"vod"|"series"} kind */
+function watchKey(kind) {
+  if (kind === "vod") return "watchVod"
+  if (kind === "series") return "watchSeries"
+  return null
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind */
+export function getWatchlist(playlistId, kind) {
+  const key = watchKey(kind)
+  if (!key) return {}
+  const e = cache.get(playlistId)
+  return e ? e[key] : {}
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind @param {number} id */
+export function isOnWatchlist(playlistId, kind, id) {
+  const key = watchKey(kind)
+  if (!key) return false
+  const e = cache.get(playlistId)
+  return !!e && Object.prototype.hasOwnProperty.call(e[key], String(id))
+}
+
+/**
+ * @param {string} playlistId
+ * @param {"vod"|"series"} kind
+ * @param {number} id
+ * @param {{ name?: string, logo?: string|null }} [extras]
+ * @returns {boolean} new state (true = on watchlist)
+ */
+export function toggleWatchlist(playlistId, kind, id, extras) {
+  const key = watchKey(kind)
+  if (!key || !playlistId || id == null) return false
+  const e = getOrCreate(playlistId)
+  const bag = e[key]
+  const stringId = String(id)
+  let onWatchlist
+  if (Object.prototype.hasOwnProperty.call(bag, stringId)) {
+    delete bag[stringId]
+    onWatchlist = false
+  } else {
+    bag[stringId] = {
+      ts: Date.now(),
+      name: extras?.name || "",
+      logo: extras?.logo === undefined ? null : extras.logo,
+    }
+    onWatchlist = true
+  }
+  scheduleSave()
+  dispatch(EVT_WATCHLIST_CHANGED, { playlistId, kind, id, onWatchlist })
+  return onWatchlist
+}
+
+export function setWatchlistMeta(playlistId, kind, id, meta) {
+  const key = watchKey(kind)
+  if (!key || !playlistId || id == null) return
+  const e = cache.get(playlistId)
+  if (!e) return
+  const bag = e[key]
+  const stringId = String(id)
+  const prev = bag[stringId]
+  if (!prev) return
+  const next = {
+    ts: prev.ts,
+    name: meta?.name || prev.name || "",
+    logo: meta?.logo === undefined ? prev.logo || null : meta.logo,
+  }
+  if (prev.name === next.name && prev.logo === next.logo) return
+  bag[stringId] = next
+  scheduleSave()
+}
+
+export function getWatchlistMeta(playlistId, kind, id) {
+  const key = watchKey(kind)
+  if (!key || !playlistId || id == null) return null
+  const e = cache.get(playlistId)
+  return e?.[key]?.[String(id)] || null
+}
+
+/**
+ * Cross-playlist union of watchlist entries, sorted by added-time (newest
+ * first). Each row carries its source `playlistId` so the caller can switch
+ * the active playlist before navigating to detail.
+ * @returns {Array<{ playlistId: string, kind: "vod"|"series", id: number, ts: number, name: string, logo: string|null }>}
+ */
+export function getAllGlobalWatchlist() {
+  const out = []
+  for (const [playlistId, entry] of cache) {
+    for (const kind of /** @type {const} */ (["vod", "series"])) {
+      const bag = entry[watchKey(kind)]
+      for (const [stringId, meta] of Object.entries(bag)) {
+        out.push({
+          playlistId,
+          kind,
+          id: Number(stringId),
+          ts: meta?.ts || 0,
+          name: meta?.name || "",
+          logo: meta?.logo || null,
+        })
+      }
+    }
+  }
+  out.sort((a, b) => b.ts - a.ts)
+  return out
 }
 
 /**

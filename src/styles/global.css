@@ -120,6 +120,14 @@ html {
     touch-action: manipulation;
 }
 
+:is(button, summary, [role="button"]):not([disabled]):not([aria-disabled="true"]) {
+    cursor: pointer;
+}
+:is(button, summary, [role="button"])[disabled],
+:is(button, summary, [role="button"])[aria-disabled="true"] {
+    cursor: not-allowed;
+}
+
 @media (prefers-reduced-motion: reduce) {
     *,
     *::before,

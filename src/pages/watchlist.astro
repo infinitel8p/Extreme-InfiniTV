@@ -1,0 +1,33 @@
+---
+import Layout from "@/layouts/Layout.astro"
+import AllWatchlistView from "@/components/AllWatchlistView.svelte"
+---
+
+<Layout pageTitle="Watchlist">
+  <main
+    class="w-full max-w-480 mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 md:landscape:pt-6 pb-6
+           flex flex-col gap-4 flex-1 min-h-0">
+
+    <header class="route-hero shrink-0">
+      <h1 class="route-hero__title">W<em>a</em>tchlist</h1>
+      <p class="route-hero__sub">
+        Movies and series you've saved to watch later, across all your playlists.
+        Most recently saved first. Opening one from a different playlist switches you over first.
+      </p>
+    </header>
+
+    <AllWatchlistView client:load />
+
+    <div
+      id="app-version"
+      class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
+      Loading…
+    </div>
+  </main>
+
+  <script>
+    import "@/scripts/updater-startup.js"
+    import { injectVersion } from "@/scripts/version.js"
+    injectVersion()
+  </script>
+</Layout>

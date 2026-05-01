@@ -10,12 +10,15 @@ import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
   toggleFavorite,
+  isOnWatchlist,
+  toggleWatchlist,
   pushRecent,
   getProgress,
   setProgress,
   markCompleted,
   clearProgress,
 } from "@/scripts/lib/preferences.js"
+import { openExternal } from "@/scripts/lib/external-link.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
   startDownload,
@@ -55,8 +58,12 @@ const playLabelEl = document.getElementById("movie-detail-play-label")
 const playSubEl = document.getElementById("movie-detail-play-sub")
 const restartBtn = document.getElementById("movie-detail-restart")
 const favBtn = document.getElementById("movie-detail-fav")
+const watchBtn = document.getElementById("movie-detail-watch")
+const watchLabelEl = document.getElementById("movie-detail-watch-label")
+const trailerBtn = document.getElementById("movie-detail-trailer")
 const downloadBtn = document.getElementById("movie-detail-download")
 const downloadLabel = document.getElementById("movie-detail-download-label")
+let trailerUrl = ""
 
 // ----------------------------
 // State
@@ -71,6 +78,20 @@ let detailSrc = ""
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
+
+// Xtream `youtube_trailer` can be either a bare 11-char video ID or a full
+// URL. Normalize to a watchable youtube.com URL or "" if the value isn't
+// shaped like either.
+function youtubeUrlFromTrailer(trailer) {
+  if (!trailer) return ""
+  const value = String(trailer).trim()
+  if (!value) return ""
+  if (/^https?:\/\//i.test(value)) return value
+  if (/^[a-zA-Z0-9_-]{11}$/.test(value)) {
+    return `https://www.youtube.com/watch?v=${value}`
+  }
+  return ""
+}
 
 function fmtDuration(minsOrStr) {
   if (!minsOrStr) return ""
@@ -171,6 +192,14 @@ function applyVodInfo(data) {
     metaEl.innerHTML = bits.join(' <span aria-hidden="true">·</span> ')
   }
   if (plotEl) plotEl.textContent = plot || "No description available."
+
+  trailerUrl = youtubeUrlFromTrailer(
+    movieData.youtube_trailer || info.youtube_trailer || ""
+  )
+  if (trailerBtn) {
+    if (trailerUrl) trailerBtn.removeAttribute("hidden")
+    else trailerBtn.setAttribute("hidden", "")
+  }
 }
 
 function escapeText(text) {
@@ -185,6 +214,16 @@ function syncFavButton() {
   favBtn.textContent = fav ? "Remove from favorites" : "Add to favorites"
   favBtn.classList.toggle("text-accent", fav)
   favBtn.setAttribute("aria-pressed", String(fav))
+}
+
+function syncWatchButton() {
+  if (!watchBtn || !movie || !activePlaylistId) return
+  const onWatchlist = isOnWatchlist(activePlaylistId, "vod", movie.id)
+  if (watchLabelEl) {
+    watchLabelEl.textContent = onWatchlist ? "On your watchlist" : "Watch later"
+  }
+  watchBtn.classList.toggle("text-accent", onWatchlist)
+  watchBtn.setAttribute("aria-pressed", String(onWatchlist))
 }
 
 function fmtClock(seconds) {
@@ -406,6 +445,32 @@ document.addEventListener("xt:favorites-changed", (e) => {
 })
 
 // ----------------------------
+// Watchlist
+// ----------------------------
+watchBtn?.addEventListener("click", () => {
+  if (!movie || !activePlaylistId) return
+  toggleWatchlist(activePlaylistId, "vod", movie.id, {
+    name: movie.name || movie.title || "",
+    logo: movie.logo || movie.cover || movie.stream_icon || null,
+  })
+})
+
+document.addEventListener("xt:watchlist-changed", (e) => {
+  const detail = e.detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "vod") return
+  if (movie?.id === detail.id) syncWatchButton()
+})
+
+// ----------------------------
+// Trailer
+// ----------------------------
+trailerBtn?.addEventListener("click", () => {
+  if (!trailerUrl) return
+  openExternal(trailerUrl)
+})
+
+// ----------------------------
 // Downloads
 // ----------------------------
 function findMovieDownload() {
@@ -571,6 +636,7 @@ async function boot() {
   paintPoster(movie.name, movie.logo || null)
   setAmbient(movie.logo || null)
   syncFavButton()
+  syncWatchButton()
   syncResumeUI()
 
   if (dl?.url) {

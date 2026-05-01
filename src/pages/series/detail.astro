@@ -1,6 +1,10 @@
 ---
 import Layout from "@/layouts/Layout.astro"
-import { IconChevronLeft } from "@tabler/icons-svelte"
+import {
+  IconChevronLeft,
+  IconBookmark,
+  IconBrandYoutube,
+} from "@tabler/icons-svelte"
 ---
 
 <Layout pageTitle="Series">
@@ -59,15 +63,37 @@ import { IconChevronLeft } from "@tabler/icons-svelte"
           </div>
         </div>
 
-        <button
-          id="series-detail-fav"
-          type="button"
-          aria-pressed="false"
-          class="dt-enter dt-stagger-2 self-start rounded-xl border border-line px-4 min-h-11 text-sm
-                 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
-                 transition-colors">
-          Add to favorites
-        </button>
+        <div class="dt-enter dt-stagger-2 flex flex-wrap items-center gap-2">
+          <button
+            id="series-detail-fav"
+            type="button"
+            aria-pressed="false"
+            class="self-start rounded-xl border border-line px-4 min-h-11 text-sm
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   active:scale-[0.97] transition duration-150">
+            Add to favorites
+          </button>
+          <button
+            id="series-detail-watch"
+            type="button"
+            aria-pressed="false"
+            class="self-start flex items-center gap-2 rounded-xl border border-line px-4 min-h-11 text-sm
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   active:scale-[0.97] transition duration-150">
+            <IconBookmark aria-hidden="true" stroke={2} class="size-4" />
+            <span id="series-detail-watch-label">Watch later</span>
+          </button>
+          <button
+            id="series-detail-trailer"
+            type="button"
+            hidden
+            class="self-start flex items-center gap-2 rounded-xl border border-line px-4 min-h-11 text-sm text-fg-2
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   active:scale-[0.97] transition duration-150">
+            <IconBrandYoutube aria-hidden="true" stroke={2} class="size-4" />
+            Trailer
+          </button>
+        </div>
 
         <div
           id="series-detail-plot"

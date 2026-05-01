@@ -5,6 +5,8 @@ import {
   IconPlayerPlay,
   IconDownload,
   IconRotate,
+  IconBookmark,
+  IconBrandYoutube,
 } from "@tabler/icons-svelte"
 ---
 
@@ -69,7 +71,7 @@ import {
                    px-6 py-2.5 text-base font-semibold min-w-44
                    hover:opacity-90 focus-visible:opacity-90
                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
-                   transition-opacity">
+                   active:scale-[0.97] transition duration-150">
             <span class="inline-flex items-center gap-2 leading-none">
               <IconPlayerPlay aria-hidden="true" stroke={2} class="size-5" />
               <span id="movie-detail-play-label">Play</span>
@@ -85,7 +87,7 @@ import {
             aria-label="Start from the beginning"
             class="flex items-center justify-center gap-2 rounded-xl border border-line px-6 py-3 text-base min-w-44 text-fg-2
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
-                   transition-colors">
+                   active:scale-[0.97] transition duration-150">
             <IconRotate aria-hidden="true" stroke={2} class="size-5" />
             Start over
           </button>
@@ -93,8 +95,29 @@ import {
             id="movie-detail-fav"
             type="button"
             class="rounded-xl border border-line px-6 py-3 text-base min-w-44
-                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   active:scale-[0.97] transition duration-150">
             Add to favorites
+          </button>
+          <button
+            id="movie-detail-watch"
+            type="button"
+            aria-pressed="false"
+            class="flex items-center justify-center gap-2 rounded-xl border border-line px-6 py-3 text-base min-w-44
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   active:scale-[0.97] transition duration-150">
+            <IconBookmark aria-hidden="true" stroke={2} class="size-5" />
+            <span id="movie-detail-watch-label">Watch later</span>
+          </button>
+          <button
+            id="movie-detail-trailer"
+            type="button"
+            hidden
+            class="flex items-center justify-center gap-2 rounded-xl border border-line px-6 py-3 text-base min-w-44 text-fg-2
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   active:scale-[0.97] transition duration-150">
+            <IconBrandYoutube aria-hidden="true" stroke={2} class="size-5" />
+            Trailer
           </button>
           <button
             id="movie-detail-download"
@@ -102,7 +125,7 @@ import {
             hidden
             class="flex items-center justify-center gap-2 rounded-xl border border-line px-6 py-3 text-base min-w-44 text-fg-2
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
-                   transition-colors">
+                   active:scale-[0.97] transition duration-150">
             <IconDownload aria-hidden="true" stroke={2} class="size-5" />
             <span id="movie-detail-download-label">Download</span>
           </button>
