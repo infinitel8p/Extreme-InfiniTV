@@ -14,6 +14,10 @@
   /** @type {{ live: string[], vod: string[], series: string[] }} */
   let lists = $state({ live: [], vod: [], series: [] })
   let locale = $state(0)
+  // Wrappers read the locale rune so {tr(...)} / {klp(...)} template effects
+  // track it and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
+  const klp = (kind) => (locale, kindLabelPlural(kind))
 
   async function reload() {
     const active = await getActiveEntry()
@@ -64,26 +68,22 @@
   let total = $derived(lists.live.length + lists.vod.length + lists.series.length)
 </script>
 
-<!-- {#key locale} forces every t() / kindLabelPlural() inside to re-evaluate
-     when the locale rune bumps; covers the section headings (`{kindLabelPlural(kind)}`),
-     the empty state copy, and the chip aria-labels. -->
-{#key locale}
 <div class="rounded-xl border border-line bg-surface p-4 flex flex-col gap-3">
   <div class="flex items-baseline justify-between gap-2">
-    <h2 class="text-sm font-semibold text-fg">{t("settings.hiddenCategories.title")}</h2>
+    <h2 class="text-sm font-semibold text-fg">{tr("settings.hiddenCategories.title")}</h2>
     <span class="text-2xs text-fg-3 tabular-nums">
       {total === 0
-        ? t("settings.hiddenCategories.empty")
-        : t("settings.hiddenCategories.count", { n: total })}
+        ? tr("settings.hiddenCategories.empty")
+        : tr("settings.hiddenCategories.count", { n: total })}
     </span>
   </div>
   <p class="text-xs text-fg-3">
-    {t("settings.hiddenCategories.helperLong")}
+    {tr("settings.hiddenCategories.helperLong")}
   </p>
 
   {#if total === 0}
     <div class="text-xs text-fg-3 italic">
-      {t("settings.hiddenCategories.emptyState")}
+      {tr("settings.hiddenCategories.emptyState")}
     </div>
   {:else}
     <div class="flex flex-col gap-3 max-h-[50vh] overflow-y-auto custom-scroll pr-1 -mr-1">
@@ -91,7 +91,7 @@
       {#if lists[kind].length}
         <div class="flex flex-col gap-1.5">
           <div class="sticky top-0 z-10 -mx-4 px-4 py-1.5 bg-surface/95 backdrop-blur-sm border-b border-line/60 text-eyebrow font-semibold uppercase tracking-wide text-fg-3">
-            {kindLabelPlural(kind)}
+            {klp(kind)}
           </div>
           <ul class="flex flex-wrap gap-1.5">
             {#each lists[kind] as name (name)}
@@ -100,8 +100,8 @@
                   type="button"
                   onclick={() => unhide(kind, name)}
                   class="hidden-chip inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-2 hover:bg-surface-3 focus-visible:bg-surface-3 focus-visible:border-accent text-fg px-2.5 py-1 text-xs transition-colors outline-none"
-                  aria-label={t("settings.hiddenCategories.unhideAria", { name })}
-                  title={t("settings.hiddenCategories.clickToUnhide")}>
+                  aria-label={tr("settings.hiddenCategories.unhideAria", { name })}
+                  title={tr("settings.hiddenCategories.clickToUnhide")}>
                   <span class="truncate max-w-[16rem]">{name}</span>
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -127,7 +127,6 @@
     </div>
   {/if}
 </div>
-{/key}
 
 <style>
   /* Touch / TV-remote adaptation: chip taps need to be ~44px tall. */

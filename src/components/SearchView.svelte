@@ -46,6 +46,10 @@
   let allItems = $state([])
   let isWarming = $state(false)
   let locale = $state(0)
+  // Wrappers read the locale rune so {tr(...)} / {kl(...)} template effects
+  // track it and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
+  const kl = (kind) => (locale, kindLabel(kind))
   /** @type {HTMLInputElement|null} */
   let inputEl = null
 
@@ -299,7 +303,6 @@
 
 <svelte:window onkeydown={onKey} />
 
-{#key locale}
 <section class="search-view flex flex-col gap-4 flex-1 min-h-0">
   <div class="flex flex-col gap-3 shrink-0">
     <div class="search-input-wrap flex items-center gap-2 px-3 py-2 rounded-xl border border-line bg-surface focus-within:border-accent transition-[border-color,box-shadow] duration-200 ease-out">
@@ -315,8 +318,8 @@
           setQueryDebounced(v)
         }}
         type="search"
-        placeholder={t("search.placeholderFull")}
-        aria-label={t("common.search")}
+        placeholder={tr("search.placeholderFull")}
+        aria-label={tr("common.search")}
         autocomplete="off"
         spellcheck="false"
         class="flex-1 min-w-0 bg-transparent text-fg placeholder:text-fg-3 outline-none py-2 text-base" />
@@ -329,7 +332,7 @@
             syncUrl("")
             inputEl?.focus()
           }}
-          aria-label={t("search.clear")}
+          aria-label={tr("search.clear")}
           class="search-clear size-7 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-2 outline-none focus-visible:bg-surface-2 transition-colors">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1rem" height="1rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
         </button>
@@ -350,14 +353,14 @@
           class:border-line={kindFilter !== k}
           class:hover:bg-surface-2={kindFilter !== k}>
           {k === "all"
-            ? t("common.all")
+            ? tr("common.all")
             : k === "vod"
-            ? t("nav.movies")
+            ? tr("nav.movies")
             : k === "live"
-            ? t("nav.livetv")
+            ? tr("nav.livetv")
             : k === "epg"
-            ? t("nav.epg")
-            : t("nav.series")}
+            ? tr("nav.epg")
+            : tr("nav.series")}
           {#if queryDebounced.trim()}
             <span class="ml-1.5 text-2xs tabular-nums opacity-70">{kindCounts[k]}</span>
           {/if}
@@ -371,7 +374,7 @@
       <svg viewBox="0 0 24 24" width="1rem" height="1rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" class="animate-spin">
         <path d="M21 12a9 9 0 1 1-6.2-8.55"/>
       </svg>
-      <span>{t("search.loadingCatalog")}</span>
+      <span>{tr("search.loadingCatalog")}</span>
     </div>
     <div class="text-2xs">{hint}</div>
   {/snippet}
@@ -380,24 +383,24 @@
     {#if !queryDebounced.trim()}
       <div class="px-4 py-12 text-center text-sm text-fg-3 max-w-md mx-auto">
         {#if isWarming}
-          {@render warming(t("search.warmingHint"))}
+          {@render warming(tr("search.warmingHint"))}
         {:else}
-          <p class="text-base text-fg-2 mb-1">{t("search.helpHeading")}</p>
-          <p class="text-2xs">{t("search.helpKbd")}</p>
+          <p class="text-base text-fg-2 mb-1">{tr("search.helpHeading")}</p>
+          <p class="text-2xs">{tr("search.helpKbd")}</p>
         {/if}
       </div>
     {:else if !results.length}
       <div class="px-4 py-12 text-center text-sm text-fg-3 max-w-md mx-auto">
         {#if isWarming}
-          {@render warming(t("search.warmingResultsHint"))}
+          {@render warming(tr("search.warmingResultsHint"))}
         {:else}
-          <p>{t("search.noResults", { query: queryDebounced.trim() })}</p>
+          <p>{tr("search.noResults", { query: queryDebounced.trim() })}</p>
           {#if kindFilter !== "all" && kindCounts.all > 0}
             <button
               type="button"
               onclick={() => (kindFilter = "all")}
               class="mt-4 inline-flex items-center justify-center min-h-11 px-3.5 rounded-lg border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors outline-none">
-              {t("search.showAllKinds", { n: kindCounts.all })}
+              {tr("search.showAllKinds", { n: kindCounts.all })}
             </button>
           {/if}
         {/if}
@@ -424,7 +427,7 @@
                     class:object-cover={r.kind !== "live"}
                     class:object-contain={r.kind === "live"} />
                 {:else}
-                  <span class="text-2xs text-fg-3 uppercase">{kindLabel(r.kind)[0]}</span>
+                  <span class="text-2xs text-fg-3 uppercase">{kl(r.kind)[0]}</span>
                 {/if}
               </span>
               <span class="flex-1 min-w-0">
@@ -432,21 +435,20 @@
                 <span class="block truncate text-2xs text-fg-3">{r.subtitle}</span>
               </span>
               <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
-                {kindLabel(r.kind)}
+                {kl(r.kind)}
               </span>
             </a>
           </li>
         {/each}
         {#if scoredAll.items.length >= 500}
           <li class="px-3 py-3 text-center text-2xs text-fg-3 italic">
-            {t("search.showingTop", { n: results.length })}
+            {tr("search.showingTop", { n: results.length })}
           </li>
         {/if}
       </ul>
     {/if}
   </div>
 </section>
-{/key}
 
 <style>
   .result-row {

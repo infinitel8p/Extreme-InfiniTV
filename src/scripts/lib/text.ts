@@ -1,7 +1,7 @@
 // Text-normalization helpers shared by per-page search, category filters, and
 // the cross-kind /search view.
 
-const DIACRITICS = /[̀-ͯ]/g
+const DIACRITICS = /[\u0300-\u036F]/g
 
 export const normalize = (s: unknown): string =>
   (s || "")

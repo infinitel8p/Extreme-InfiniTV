@@ -16,6 +16,10 @@
   let entries = $state([])
   let activePlaylistId = $state("")
   let locale = $state(0)
+  // Wrappers read the locale rune so {tr(...)} / {kl(...)} template effects
+  // track it and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
+  const kl = (kind) => (locale, kindLabel(kind))
   /** @type {{ live: Map<number, any>, vod: Map<number, any>, series: Map<number, any> } | null} */
   let lookups = null
   let lookupsForPlaylistId = ""
@@ -23,10 +27,9 @@
   function buildEntry(playlistId, { kind, id }, lookups) {
     const meta = getFavoriteMeta(playlistId, kind, id)
     const item = lookups[kind]?.get(Number(id))
-    // `kindLabel(kind)` runs at build time but also re-runs whenever the
-    // entries array is rebuilt; the badge in the template additionally calls
-    // kindLabel() inside the `{#key locale}` block so it stays current even
-    // without rebuilding the array.
+    // `kindLabel(kind)` here is build-time fallback for items without meta;
+    // the badge in the template uses the locale-tracking wrapper so it stays
+    // current without rebuilding the array.
     const name = meta?.name || item?.name || `${kindLabel(kind)} ${id}`
     const logo = meta?.logo ?? item?.logo ?? null
     if (!meta && (item?.name || item?.logo)) {
@@ -125,20 +128,17 @@
 </script>
 
 {#if entries.length}
-  {@const _locale = locale}
-  <!-- _locale is read inside this if-block so locale-bumping forces every
-       t() / kindLabel() in the entire fragment below to re-evaluate. -->
   <section
-    aria-label={t("nav.favorites")}
+    aria-label={tr("nav.favorites")}
     class="fav-section flex flex-col gap-3 shrink-0">
     <div class="hub-section-head px-1">
       <div class="hub-section-head__title">
-        <h2 class="hub-section-head__heading">{t("nav.favorites")}</h2>
+        <h2 class="hub-section-head__heading">{tr("nav.favorites")}</h2>
       </div>
       <a
         href="/favorites"
         class="hub-section-head__count text-fg-3 hover:text-accent focus-visible:text-accent transition-colors">
-        {t("strip.viewAll")}
+        {tr("strip.viewAll")}
         <svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="ml-0.5 inline-block align-[-1px]">
           <path d="m9 18 6-6-6-6" />
         </svg>
@@ -152,7 +152,7 @@
         <li class="fav-item shrink-0 snap-start" data-kind={e.kind} style:--enter-delay={Math.min(i, 8) * 28 + "ms"}>
           <a
             href={e.href}
-            aria-label={t("favorites.itemAriaLabel", { name: e.name })}
+            aria-label={tr("favorites.itemAriaLabel", { name: e.name })}
             class="fav-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150
@@ -201,7 +201,7 @@
               <span
                 class="absolute top-1.5 left-1.5 text-label font-medium uppercase tracking-wide
                        rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
-                {kindLabel(e.kind)}
+                {kl(e.kind)}
               </span>
             </div>
 

@@ -1,14 +1,12 @@
-// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
-let indicatorEl = null
-let lastTarget = null
+let indicatorEl: HTMLDivElement | null = null
+let lastTarget: HTMLElement | null = null
 let usingPointer = false
 let rafId = 0
-let resizeObserver = null
 
 const SIZE_LIMIT = { w: 720, h: 480 }
 const SKIP_TAGS = new Set(["BODY", "HTML", "MAIN", "ASIDE", "ARTICLE", "SECTION", "NAV", "HEADER", "FOOTER"])
 
-function ensureIndicator() {
+function ensureIndicator(): HTMLDivElement {
   if (indicatorEl) return indicatorEl
   indicatorEl = document.createElement("div")
   indicatorEl.className = "xt-focus-glide"
@@ -18,7 +16,7 @@ function ensureIndicator() {
   return indicatorEl
 }
 
-function shouldTrack(el) {
+function shouldTrack(el: EventTarget | null): el is HTMLElement {
   if (!el || !(el instanceof HTMLElement)) return false
   if (SKIP_TAGS.has(el.tagName)) return false
   if (el.dataset.focusGlide === "off") return false
@@ -28,9 +26,9 @@ function shouldTrack(el) {
   return true
 }
 
-function updatePosition(target, opts = {}) {
+function updatePosition(target: HTMLElement, opts: { skipAnimation?: boolean } = {}) {
   const indicator = ensureIndicator()
-  if (!target || !(target instanceof HTMLElement) || !target.isConnected) {
+  if (!target || !target.isConnected) {
     hideIndicator()
     return
   }
@@ -84,7 +82,7 @@ function hideIndicator() {
   lastTarget = null
 }
 
-function onFocus(ev) {
+function onFocus(ev: FocusEvent) {
   if (usingPointer) {
     hideIndicator()
     return
@@ -112,7 +110,7 @@ function onPointer() {
   hideIndicator()
 }
 
-function onKey(ev) {
+function onKey(ev: KeyboardEvent) {
   if (
     ev.key === "Tab" ||
     ev.key === "ArrowUp" ||

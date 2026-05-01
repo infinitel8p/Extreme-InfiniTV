@@ -29,6 +29,9 @@
   let entries = $state([])
   let activePlaylistId = $state("")
   let locale = $state(0)
+  // Wrapper reads the locale rune so {tr(...)} template effects track it
+  // and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
 
   function buildProgressEntry(raw, vodById) {
     const percent =
@@ -152,16 +155,15 @@
 </script>
 
 {#if entries.length}
-  {@const _locale = locale}
   <section
-    aria-label={t("strip.continueWatching")}
+    aria-label={tr("strip.continueWatching")}
     class="cw-section flex flex-col gap-3 shrink-0">
     <div class="hub-section-head px-1">
       <div class="hub-section-head__title">
-        <h2 class="hub-section-head__heading">{t("strip.continueWatching")}</h2>
+        <h2 class="hub-section-head__heading">{tr("strip.continueWatching")}</h2>
       </div>
       <span class="hub-section-head__count">
-        {t("strip.itemCount", { count: entries.length })}
+        {tr("strip.itemCount", { count: entries.length })}
       </span>
     </div>
 

@@ -1,30 +1,26 @@
-// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 // Behavior for [data-sort-menu] components: toggles a styled listbox panel
 // over a hidden native <select>, so existing code that reads/writes the
 // select's `.value` keeps working unchanged.
 
-const initialised = new WeakSet()
+const initialised = new WeakSet<Element>()
 
-function initSortMenu(wrapper) {
+function initSortMenu(wrapper: Element) {
     if (initialised.has(wrapper)) return
     initialised.add(wrapper)
 
-    const select = /** @type {HTMLSelectElement|null} */ (
-        wrapper.querySelector("[data-sort-menu-select]")
-    )
-    const button = /** @type {HTMLButtonElement|null} */ (
-        wrapper.querySelector("[data-sort-menu-button]")
-    )
-    const panel = /** @type {HTMLElement|null} */ (
-        wrapper.querySelector("[data-sort-menu-panel]")
-    )
-    const valueLabel = /** @type {HTMLElement|null} */ (
-        wrapper.querySelector("[data-sort-menu-value]")
-    )
-    if (!select || !button || !panel || !valueLabel) return
+    const selectMaybe = wrapper.querySelector<HTMLSelectElement>("[data-sort-menu-select]")
+    const buttonMaybe = wrapper.querySelector<HTMLButtonElement>("[data-sort-menu-button]")
+    const panelMaybe = wrapper.querySelector<HTMLElement>("[data-sort-menu-panel]")
+    const valueLabelMaybe = wrapper.querySelector<HTMLElement>("[data-sort-menu-value]")
+    if (!selectMaybe || !buttonMaybe || !panelMaybe || !valueLabelMaybe) return
+    // Bind to non-nullable locals so closures don't have to re-narrow.
+    const select = selectMaybe
+    const button = buttonMaybe
+    const panel = panelMaybe
+    const valueLabel = valueLabelMaybe
 
-    const options = /** @type {HTMLButtonElement[]} */ (
-        Array.from(panel.querySelectorAll("[role='option']"))
+    const options = Array.from(
+        panel.querySelectorAll<HTMLButtonElement>("[role='option']")
     )
 
     function syncFromSelect() {
@@ -62,14 +58,14 @@ function initSortMenu(wrapper) {
         })
     }
 
-    function close({ restoreFocus = true } = {}) {
+    function close({ restoreFocus = true }: { restoreFocus?: boolean } = {}) {
         if (!isOpen()) return
         button.setAttribute("aria-expanded", "false")
         panel.hidden = true
         if (restoreFocus) button.focus()
     }
 
-    function selectValue(value) {
+    function selectValue(value: string) {
         if (select.value === value) {
             syncFromSelect()
             return
@@ -103,7 +99,7 @@ function initSortMenu(wrapper) {
     panel.addEventListener("keydown", (event) => {
         const focusables = options
         const currentIndex = focusables.indexOf(
-            /** @type {HTMLButtonElement} */ (document.activeElement),
+            document.activeElement as HTMLButtonElement
         )
         const handled = () => {
             event.preventDefault()
@@ -167,13 +163,13 @@ function initSortMenu(wrapper) {
     // Click outside closes (use mousedown so we beat focus moves).
     document.addEventListener("mousedown", (event) => {
         if (!isOpen()) return
-        if (wrapper.contains(/** @type {Node} */ (event.target))) return
+        if (wrapper.contains(event.target as Node)) return
         close({ restoreFocus: false })
     })
 
     document.addEventListener("focusin", (event) => {
         if (!isOpen()) return
-        if (wrapper.contains(/** @type {Node} */ (event.target))) return
+        if (wrapper.contains(event.target as Node)) return
         close({ restoreFocus: false })
     })
 
@@ -184,13 +180,15 @@ function initSortMenu(wrapper) {
         "value",
     )
     if (valueDescriptor?.get && valueDescriptor.set) {
+        const get = valueDescriptor.get
+        const set = valueDescriptor.set
         Object.defineProperty(select, "value", {
             configurable: true,
-            get() {
-                return valueDescriptor.get.call(this)
+            get(this: HTMLSelectElement) {
+                return get.call(this)
             },
-            set(next) {
-                valueDescriptor.set.call(this, next)
+            set(this: HTMLSelectElement, next: string) {
+                set.call(this, next)
                 syncFromSelect()
             },
         })
@@ -199,12 +197,12 @@ function initSortMenu(wrapper) {
     syncFromSelect()
 }
 
-function closeAllExcept(except) {
+function closeAllExcept(except: Element) {
     const wrappers = document.querySelectorAll("[data-sort-menu]")
     for (const wrapper of wrappers) {
         if (wrapper === except) continue
-        const button = wrapper.querySelector("[data-sort-menu-button]")
-        const panel = wrapper.querySelector("[data-sort-menu-panel]")
+        const button = wrapper.querySelector<HTMLButtonElement>("[data-sort-menu-button]")
+        const panel = wrapper.querySelector<HTMLElement>("[data-sort-menu-panel]")
         if (button?.getAttribute("aria-expanded") === "true") {
             button.setAttribute("aria-expanded", "false")
             if (panel) panel.hidden = true

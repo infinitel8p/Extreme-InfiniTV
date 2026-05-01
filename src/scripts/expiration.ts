@@ -1,17 +1,26 @@
-// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 import { loadCreds, getActiveEntry } from "./lib/creds.js"
 import { ensureUserInfo, getExpirationMsSync } from "./lib/account-info.js"
 import { t, initI18n } from "./lib/i18n.js"
 
 const BANNER_THRESHOLD_DAYS = 7
 
-function fmtDaysLeft(days) {
+function fmtDaysLeft(days: number): string {
     if (days <= 0) return t("expiration.expired")
     if (days === 1) return t("expiration.daysOne")
     return t("expiration.daysOther", { n: days })
 }
 
-function renderTargets(targets, value, { empty = "", emptyRaw = "-", expDateMs = null } = {}) {
+interface RenderOpts {
+    empty?: string
+    emptyRaw?: string
+    expDateMs?: number | null
+}
+
+function renderTargets(
+    targets: NodeListOf<HTMLElement>,
+    value: string | null,
+    { empty = "", emptyRaw = "-", expDateMs = null }: RenderOpts = {}
+): void {
     const msLeft = expDateMs == null ? null : expDateMs - Date.now()
     const isExpired = msLeft != null && msLeft <= 0
     const daysLeft = msLeft == null ? null : Math.max(0, Math.ceil(msLeft / 86_400_000))
@@ -43,8 +52,8 @@ function renderTargets(targets, value, { empty = "", emptyRaw = "-", expDateMs =
     }
 }
 
-export async function injectExpirationDate() {
-    const targets = document.querySelectorAll("[data-account-expiration]")
+export async function injectExpirationDate(): Promise<void> {
+    const targets = document.querySelectorAll<HTMLElement>("[data-account-expiration]")
     if (!targets.length) return
 
     await initI18n()

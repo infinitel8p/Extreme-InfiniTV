@@ -16,6 +16,10 @@
   /** @type {"all"|"vod"|"series"} */
   let filter = $state("all")
   let locale = $state(0)
+  // Wrappers read the locale rune so {tr(...)} / {kl(...)} template effects
+  // track it and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
+  const kl = (kind) => (locale, kindLabel(kind))
   /** @type {Array<{ts:number, kind:"vod"|"series", item:any}>} */
   let merged = $state([])
   let loading = $state(true)
@@ -114,12 +118,8 @@
   })
 </script>
 
-<!-- {#key locale} wraps everything that depends on the locale rune so the
-     cards section's badge / empty-state caption re-renders too (the previous
-     `data-locale={locale}` only covered the chip row). -->
-{#key locale}
 <div class="flex flex-col gap-3 shrink-0">
-  <div class="flex flex-wrap gap-2" role="tablist" aria-label={t("recentlyAdded.heading")}>
+  <div class="flex flex-wrap gap-2" role="tablist" aria-label={tr("recentlyAdded.heading")}>
     {#each [
       { id: "all", key: "favorites.filter.all" },
       { id: "vod", key: "favorites.filter.vod" },
@@ -134,17 +134,17 @@
         class="filter-chip rounded-full border border-line bg-surface px-3.5 py-1.5 text-sm
                hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                transition-colors">
-        {t(chip.key)}
+        {tr(chip.key)}
         <span class="ml-1.5 text-fg-3 tabular-nums">{counts[chip.id]}</span>
       </button>
     {/each}
   </div>
 
   {#if loading && !merged.length}
-    <div class="text-sm text-fg-3 px-1">{t("common.loading")}</div>
+    <div class="text-sm text-fg-3 px-1">{tr("common.loading")}</div>
   {:else if !merged.length}
     <div class="rounded-2xl border border-line bg-surface px-5 py-8 text-sm text-fg-2">
-      {t("recentlyAdded.empty")}
+      {tr("recentlyAdded.empty")}
     </div>
   {:else}
     <div class="px-1 text-xs text-fg-3 tabular-nums">
@@ -186,14 +186,14 @@
             <div class="h-full w-full flex items-center justify-center text-center px-3
                         text-fg-3 text-xs tracking-wide
                         bg-linear-to-br from-surface-2 to-surface-3">
-              {row.item.name || kindLabel(row.kind)}
+              {row.item.name || kl(row.kind)}
             </div>
           {/if}
 
           <span
             class="absolute top-1.5 left-1.5 text-label font-medium uppercase tracking-wide
                    rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
-            {kindLabel(row.kind)}
+            {kl(row.kind)}
           </span>
 
           {#if ratingText}
@@ -212,7 +212,7 @@
 
         <div class="px-2 py-2 min-w-0">
           <div class="truncate text-sm font-medium text-fg">
-            {row.item.name || kindLabel(row.kind)}
+            {row.item.name || kl(row.kind)}
           </div>
           <div class="truncate text-2xs text-fg-3 tabular-nums">
             Added {fmtAdded(row.ts)}
@@ -235,7 +235,6 @@
     {/if}
   </section>
 {/if}
-{/key}
 
 <style>
   .filter-chip.active {

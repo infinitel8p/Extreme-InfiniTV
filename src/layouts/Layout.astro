@@ -94,11 +94,11 @@ const documentTitle = pageTitle
   const onLogin = () =>
     location.pathname === "/login" || location.pathname.startsWith("/login/")
   if (!onLogin()) {
-    import("@/scripts/expiration.ts").then((m) => m.injectExpirationDate?.())
+    import("@/scripts/expiration.js").then((m) => m.injectExpirationDate?.())
   }
   document.addEventListener("xt:active-changed", () => {
     if (onLogin()) return
-    import("@/scripts/expiration.ts").then((m) => m.injectExpirationDate?.())
+    import("@/scripts/expiration.js").then((m) => m.injectExpirationDate?.())
   })
 
   document.addEventListener("keydown", (ev) => {

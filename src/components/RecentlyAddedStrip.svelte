@@ -20,6 +20,9 @@
   let entries = $state([])
   let activePlaylistId = $state("")
   let locale = $state(0)
+  // Wrapper reads the locale rune so {tr(...)} template effects track it
+  // and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
 
   function buildEntry(item, kind) {
     const subtitle = kind === "vod" ? "Movie" : "Series"
@@ -86,18 +89,17 @@
 </script>
 
 {#if entries.length}
-  {@const _locale = locale}
   <section
-    aria-label={t("nav.recentlyAdded")}
+    aria-label={tr("nav.recentlyAdded")}
     class="ra-section flex flex-col gap-3 shrink-0">
     <div class="hub-section-head px-1">
       <div class="hub-section-head__title">
-        <h2 class="hub-section-head__heading">{t("nav.recentlyAdded")}</h2>
+        <h2 class="hub-section-head__heading">{tr("nav.recentlyAdded")}</h2>
       </div>
       <a
         href="/recently-added"
         class="hub-section-head__count text-fg-3 hover:text-accent focus-visible:text-accent transition-colors">
-        {t("strip.viewAll")}
+        {tr("strip.viewAll")}
         <svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="ml-0.5 inline-block align-[-1px]">
           <path d="m9 18 6-6-6-6" />
         </svg>

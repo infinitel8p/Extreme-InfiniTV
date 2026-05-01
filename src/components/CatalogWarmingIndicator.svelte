@@ -12,6 +12,10 @@
   /** @type {{ live: "pending"|"done"|"error", vod: "pending"|"done"|"error", series: "pending"|"done"|"error" }} */
   let kinds = $state({ live: "pending", vod: "pending", series: "pending" })
   let locale = $state(0)
+  // Wrappers read the locale rune so {tr(...)} / {klp(...)} template effects
+  // track it and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
+  const klp = (kind) => (locale, kindLabelPlural(kind))
 
   let _showTimer = null
   let _doneSeen = false
@@ -70,7 +74,6 @@
 </script>
 
 {#if active}
-  {#key locale}
   <div
     class="warming fixed left-0 right-0 z-10000 flex items-center gap-2.5 px-3 py-1.5
            bg-bg border-b border-line text-2xs text-fg-2 sm:bg-bg/95 sm:backdrop-blur"
@@ -80,7 +83,7 @@
     <svg viewBox="0 0 24 24" width="0.875rem" height="0.875rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" class="animate-spin shrink-0 text-fg-3">
       <path d="M21 12a9 9 0 1 1-6.2-8.55"/>
     </svg>
-    <span>{t("catalog.warming")}</span>
+    <span>{tr("catalog.warming")}</span>
     <span class="hidden sm:flex items-center gap-2.5 ml-0.5">
       {#each KIND_ORDER as k}
         <span class="flex items-center gap-1">
@@ -96,7 +99,7 @@
             class:text-fg={kinds[k] === "done"}
             class:text-fg-3={kinds[k] === "pending"}
             class:text-bad={kinds[k] === "error"}>
-            {kindLabelPlural(k)}
+            {klp(k)}
           </span>
         </span>
       {/each}
@@ -108,7 +111,6 @@
         style:width={pct + "%"}></div>
     </div>
   </div>
-  {/key}
 {/if}
 
 <style>

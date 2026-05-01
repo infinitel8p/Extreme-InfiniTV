@@ -16,6 +16,10 @@
   let entries = $state([])
   let activePlaylistId = $state("")
   let locale = $state(0)
+  // Wrappers read the locale rune so {tr(...)} / {kl(...)} template effects
+  // track it and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
+  const kl = (kind) => (locale, kindLabel(kind))
   /** @type {{ vod: Map<number, any>, series: Map<number, any> } | null} */
   let lookups = null
   let lookupsForPlaylistId = ""
@@ -121,18 +125,17 @@
 </script>
 
 {#if entries.length}
-  {@const _locale = locale}
   <section
-    aria-label={t("nav.watchlist")}
+    aria-label={tr("nav.watchlist")}
     class="watch-section flex flex-col gap-3 shrink-0">
     <div class="hub-section-head px-1">
       <div class="hub-section-head__title">
-        <h2 class="hub-section-head__heading">{t("nav.watchlist")}</h2>
+        <h2 class="hub-section-head__heading">{tr("nav.watchlist")}</h2>
       </div>
       <a
         href="/watchlist"
         class="hub-section-head__count text-fg-3 hover:text-accent focus-visible:text-accent transition-colors">
-        {t("strip.viewAll")}
+        {tr("strip.viewAll")}
         <svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="ml-0.5 inline-block align-[-1px]">
           <path d="m9 18 6-6-6-6" />
         </svg>
@@ -146,7 +149,7 @@
         <li class="watch-item shrink-0 snap-start" data-kind={entry.kind} style:--enter-delay={Math.min(idx, 8) * 28 + "ms"}>
           <a
             href={entry.href}
-            aria-label={t("watchlist.itemAriaLabel", { name: entry.name })}
+            aria-label={tr("watchlist.itemAriaLabel", { name: entry.name })}
             class="watch-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150
@@ -175,7 +178,7 @@
               <span
                 class="absolute top-1.5 left-1.5 text-label font-medium uppercase tracking-wide
                        rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
-                {kindLabel(entry.kind)}
+                {kl(entry.kind)}
               </span>
 
               <span

@@ -1,12 +1,16 @@
 // Shared "programme detail" dialog used by Live TV's EPG panel and the
 // /epg grid. The dialog is mounted lazily on first open and reused.
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
-import { t } from "@/scripts/lib/i18n.js"
+import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 
 const DIALOG_ID = "programme-dialog"
 
 /** @type {HTMLDialogElement | null} */
 let dlg = null
+/** Last opts passed to openProgrammeDialog, kept so we can re-render the
+ *  translated bits (status, "untitled", "no description") if the locale
+ *  changes while the dialog is open. */
+let lastOpts = null
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
@@ -107,8 +111,43 @@ function ensureDialog() {
   })
   node.querySelector("[data-role='close']")?.addEventListener("click", () => node.close())
 
+  document.addEventListener(LOCALE_EVENT, () => {
+    if (node.open && lastOpts) renderProgramme(node, lastOpts)
+  })
+
   dlg = node
   return dlg
+}
+
+function renderProgramme(node, opts) {
+  const now = Date.now()
+  const isLive = opts.start <= now && now < opts.stop
+  const isUpcoming = opts.start > now
+  const status = isLive ? t("programme.live") : isUpcoming ? t("programme.upcoming") : t("programme.ended")
+
+  const metaParts = []
+  if (opts.channelName) metaParts.push(opts.channelName)
+  metaParts.push(status)
+  const dateLine = fmtDateLine(opts.start)
+  if (dateLine && !isLive) metaParts.push(dateLine)
+
+  const meta = node.querySelector("[data-role='meta']")
+  const title = node.querySelector("[data-role='title']")
+  const time = node.querySelector("[data-role='time']")
+  const desc = node.querySelector("[data-role='desc']")
+
+  if (meta) meta.textContent = metaParts.join(" · ")
+  if (title) title.textContent = opts.title || t("programme.untitled")
+  if (time) {
+    const range = fmtTimeRange(opts.start, opts.stop)
+    const dur = fmtDuration(opts.start, opts.stop)
+    time.textContent = dur ? `${range} · ${dur}` : range
+  }
+  if (desc) {
+    desc.innerHTML = opts.desc
+      ? `<p>${escapeHtml(opts.desc).replace(/\n+/g, "</p><p>")}</p>`
+      : `<p class="text-fg-3 italic">${escapeHtml(t("detail.noDescription"))}</p>`
+  }
 }
 
 /**
@@ -125,38 +164,14 @@ export function openProgrammeDialog(opts) {
   const node = ensureDialog()
   if (!node) return
 
+  lastOpts = opts
+  renderProgramme(node, opts)
+
   const now = Date.now()
   const isLive = opts.start <= now && now < opts.stop
-  const isUpcoming = opts.start > now
-  const status = isLive ? t("programme.live") : isUpcoming ? t("programme.upcoming") : t("programme.ended")
-
-  const metaParts = []
-  if (opts.channelName) metaParts.push(opts.channelName)
-  metaParts.push(status)
-  const dateLine = fmtDateLine(opts.start)
-  if (dateLine && !isLive) metaParts.push(dateLine)
-
-  const meta = node.querySelector("[data-role='meta']")
-  const title = node.querySelector("[data-role='title']")
-  const time = node.querySelector("[data-role='time']")
-  const desc = node.querySelector("[data-role='desc']")
   const watch = /** @type {HTMLButtonElement | null} */ (
     node.querySelector("[data-role='watch']")
   )
-
-  if (meta) meta.textContent = metaParts.join(" · ")
-  if (title) title.textContent = opts.title || t("programme.untitled")
-  if (time) {
-    const range = fmtTimeRange(opts.start, opts.stop)
-    const dur = fmtDuration(opts.start, opts.stop)
-    time.textContent = dur ? `${range} · ${dur}` : range
-  }
-  if (desc) {
-    desc.innerHTML = opts.desc
-      ? `<p>${escapeHtml(opts.desc).replace(/\n+/g, "</p><p>")}</p>`
-      : `<p class="text-fg-3 italic">${escapeHtml(t("detail.noDescription"))}</p>`
-  }
-
   const footer = /** @type {HTMLElement | null} */ (
     node.querySelector("[data-role='footer']")
   )
@@ -182,6 +197,7 @@ export function openProgrammeDialog(opts) {
   if (!node.open) {
     if (typeof node.showModal === "function") node.showModal()
     else node.setAttribute("open", "")
+    node.addEventListener("close", () => { lastOpts = null }, { once: true })
   }
 
   requestAnimationFrame(() => {

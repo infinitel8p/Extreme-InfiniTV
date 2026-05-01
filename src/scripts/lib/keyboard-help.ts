@@ -1,11 +1,20 @@
-// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 // Keyboard-shortcut help overlay. Press `?` (Shift+/) anywhere to open it.
 
 import { t } from "@/scripts/lib/i18n.js"
 
 const DIALOG_ID = "xt-keyboard-help"
 
-function buildSections() {
+interface ShortcutItem {
+  keys: string[]
+  joiner?: string
+  desc: string
+}
+interface ShortcutSection {
+  title: string
+  items: ShortcutItem[]
+}
+
+function buildSections(): ShortcutSection[] {
   return [
     {
       title: t("keyboardHelp.section.global"),
@@ -40,16 +49,15 @@ function buildSections() {
   ]
 }
 
-function isTypingTarget(target) {
-  if (!target) return false
-  const el = /** @type {HTMLElement} */ (target)
-  if (el.isContentEditable) return true
-  const tag = el.tagName
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!target || !(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tag = target.tagName
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true
   return false
 }
 
-function renderKey(label) {
+function renderKey(label: string): string {
   return (
     '<kbd class="inline-flex items-center justify-center min-w-7 h-7 px-2 ' +
     "rounded-md border border-line bg-surface-2 text-fg text-2xs font-sans " +
@@ -59,19 +67,19 @@ function renderKey(label) {
   )
 }
 
-function renderItem(item) {
+function renderItem(item: ShortcutItem): string {
   const keys = item.keys || []
   const joiner = item.joiner || ""
   let keyHtml = ""
   if (keys.length === 1) {
-    keyHtml = renderKey(keys[0])
+    keyHtml = renderKey(keys[0]!)
   } else if (joiner) {
     keyHtml = keys
-      .map((k) => renderKey(k))
+      .map((key) => renderKey(key))
       .join(`<span class="text-fg-3 mx-1.5 text-2xs">${escapeHtml(joiner)}</span>`)
   } else {
     keyHtml = keys
-      .map((k) => renderKey(k))
+      .map((key) => renderKey(key))
       .join('<span class="text-fg-3 mx-0.5 text-2xs">+</span>')
   }
   return (
@@ -82,20 +90,20 @@ function renderItem(item) {
   )
 }
 
-function escapeHtml(text) {
+function escapeHtml(text: string): string {
   const div = document.createElement("div")
   div.textContent = String(text || "")
   return div.innerHTML
 }
 
-let dialog = null
+let dialog: HTMLDialogElement | null = null
 
-function buildDialog() {
+function buildDialog(): HTMLDialogElement {
   if (dialog) return dialog
-  dialog = document.createElement("dialog")
-  dialog.id = DIALOG_ID
-  dialog.setAttribute("aria-labelledby", DIALOG_ID + "-title")
-  dialog.className =
+  const dlg = document.createElement("dialog")
+  dlg.id = DIALOG_ID
+  dlg.setAttribute("aria-labelledby", DIALOG_ID + "-title")
+  dlg.className =
     "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0 " +
     "w-[min(34rem,calc(100vw-2rem))] max-h-[min(80dvh,38rem)] backdrop:bg-black/60"
 
@@ -107,7 +115,7 @@ function buildDialog() {
       "</section>"
   ).join("")
 
-  dialog.innerHTML =
+  dlg.innerHTML =
     '<div class="flex flex-col gap-4 p-5 overflow-y-auto custom-scroll">' +
     '<div class="flex items-start justify-between gap-3 shrink-0">' +
     `<h2 id="${DIALOG_ID}-title" class="text-base font-semibold">${escapeHtml(t("keyboardHelp.title"))}</h2>` +
@@ -117,44 +125,44 @@ function buildDialog() {
     `<div class="flex flex-col gap-4">${sectionsHtml}</div>` +
     "</div>"
 
-  document.body.appendChild(dialog)
+  document.body.appendChild(dlg)
 
-  dialog.addEventListener("click", (event) => {
-    const target = /** @type {HTMLElement} */ (event.target)
-    if (target === dialog) {
-      dialog.close()
+  dlg.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement
+    if (target === dlg) {
+      dlg.close()
       return
     }
-    if (target.closest("[data-close]")) dialog.close()
+    if (target.closest("[data-close]")) dlg.close()
   })
-  dialog.addEventListener("close", () => {
+  dlg.addEventListener("close", () => {
     if (lastTrigger && document.body.contains(lastTrigger)) {
       try { lastTrigger.focus({ preventScroll: true }) } catch {}
     }
     lastTrigger = null
   })
 
-  return dialog
+  dialog = dlg
+  return dlg
 }
 
-let lastTrigger = null
+let lastTrigger: HTMLElement | null = null
 
 function open() {
   const dlg = buildDialog()
-  lastTrigger = /** @type {HTMLElement|null} */ (document.activeElement)
+  lastTrigger = (document.activeElement as HTMLElement | null) ?? null
   if (typeof dlg.showModal === "function") dlg.showModal()
   else dlg.setAttribute("open", "")
   // Defer focus to next frame so spatial-nav re-registers the dialog content.
   requestAnimationFrame(() => {
     window.SpatialNavigation?.makeFocusable?.()
-    /** @type {HTMLElement|null} */
-    const closeBtn = dlg.querySelector("[data-close]")
+    const closeBtn = dlg.querySelector<HTMLElement>("[data-close]")
     closeBtn?.focus?.({ preventScroll: true })
   })
 }
 
 let initialised = false
-export function initKeyboardHelp() {
+export function initKeyboardHelp(): void {
   if (initialised) return
   initialised = true
   document.addEventListener("keydown", (event) => {

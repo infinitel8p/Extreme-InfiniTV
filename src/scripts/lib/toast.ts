@@ -1,8 +1,21 @@
-// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 // Self-contained toast notifications. Injects its own container + styles
 // on first use. Works from Astro islands, vanilla scripts, and anywhere
 // document is available.
 import { t } from "@/scripts/lib/i18n.js"
+
+type ToastVariant = "default" | "success" | "warn" | "error"
+
+interface ToastOptions {
+  title: string
+  description?: string
+  variant?: ToastVariant
+  /** ms; 0 = sticky (manual dismiss only). Default 4000. */
+  duration?: number
+}
+
+// We attach a cleanup hook to the toast element so dismiss() can cancel
+// timers / animations even when called from the eviction path.
+type ToastEl = HTMLElement & { _xtCleanup?: () => void }
 //
 // API:
 //   toast({ title, description?, variant?, duration? })
@@ -25,7 +38,7 @@ const CONTAINER_ID = "_xt_toast_container"
 const STYLE_ID = "_xt_toast_styles"
 const EASE = "cubic-bezier(0.16, 1, 0.3, 1)"
 
-let containerEl = null
+let containerEl: HTMLOListElement | null = null
 
 function injectStyles() {
   if (document.getElementById(STYLE_ID)) return
@@ -186,25 +199,26 @@ function injectStyles() {
   document.head.appendChild(style)
 }
 
-function getContainer() {
+function getContainer(): HTMLOListElement {
   if (containerEl && document.body.contains(containerEl)) return containerEl
   injectStyles()
   containerEl = document.createElement("ol")
   containerEl.id = CONTAINER_ID
   containerEl.setAttribute("role", "region")
   containerEl.setAttribute("aria-label", t("common.notifications"))
+  containerEl.setAttribute("data-i18n-attr", "aria-label:common.notifications")
   document.body.appendChild(containerEl)
   return containerEl
 }
 
-function updateStackDepth() {
+function updateStackDepth(): void {
   if (!containerEl) return
   const items = Array.from(
-    containerEl.querySelectorAll(".xt-toast:not(.is-leaving)")
+    containerEl.querySelectorAll<HTMLElement>(".xt-toast:not(.is-leaving)")
   )
   const n = items.length
   for (let i = 0; i < n; i++) {
-    const el = items[i]
+    const el = items[i]!
     const depth = n - 1 - i
     el.classList.remove("is-depth-1", "is-depth-2", "is-depth-3")
     if (depth >= 3) el.classList.add("is-depth-3")
@@ -213,16 +227,16 @@ function updateStackDepth() {
   }
 }
 
-function evictOverflow() {
+function evictOverflow(): void {
   if (!containerEl) return
-  const items = containerEl.querySelectorAll(".xt-toast:not(.is-leaving)")
+  const items = containerEl.querySelectorAll<HTMLElement>(".xt-toast:not(.is-leaving)")
   if (items.length <= MAX_VISIBLE) return
   for (let i = 0; i < items.length - MAX_VISIBLE; i++) {
-    dismiss(items[i])
+    dismiss(items[i]!)
   }
 }
 
-function dismiss(el) {
+function dismiss(el: ToastEl): void {
   if (!el || el.classList.contains("is-leaving")) return
   el.classList.add("is-leaving")
   el._xtCleanup?.()
@@ -237,37 +251,29 @@ function dismiss(el) {
 }
 
 // Smoothly ramp playbackRate over `ms` ms for a calm pause/resume.
-function smoothRate(anim, from, to, ms) {
+function smoothRate(anim: Animation, from: number, to: number, ms: number): void {
   const start = performance.now()
-  function tick(now) {
-    const t = Math.min((now - start) / ms, 1)
-    const eased = 1 - (1 - t) * (1 - t)
+  function tick(now: number): void {
+    const progress = Math.min((now - start) / ms, 1)
+    const eased = 1 - (1 - progress) * (1 - progress)
     anim.playbackRate = from + (to - from) * eased
-    if (t < 1) requestAnimationFrame(tick)
+    if (progress < 1) requestAnimationFrame(tick)
   }
   requestAnimationFrame(tick)
 }
 
-/**
- * @param {object} opts
- * @param {string} opts.title
- * @param {string} [opts.description]
- * @param {"default"|"success"|"warn"|"error"} [opts.variant]
- * @param {number} [opts.duration]  ms; 0 = sticky.
- * @returns {() => void} a manual dismiss function.
- */
-export function toast(opts) {
+export function toast(opts: ToastOptions): () => void {
   if (typeof document === "undefined") return () => {}
   const {
     title,
     description,
     variant = "default",
     duration = DEFAULT_DURATION,
-  } = opts || {}
+  } = opts || ({} as ToastOptions)
   if (!title) return () => {}
 
   const root = getContainer()
-  const li = document.createElement("li")
+  const li = document.createElement("li") as ToastEl
   li.className = "xt-toast" + (variant !== "default" ? ` xt-toast--${variant}` : "")
   li.setAttribute("role", variant === "error" ? "alert" : "status")
   li.setAttribute("aria-live", variant === "error" ? "assertive" : "polite")
@@ -296,10 +302,11 @@ export function toast(opts) {
   closeBtn.className = "xt-toast__close"
   closeBtn.type = "button"
   closeBtn.setAttribute("aria-label", t("common.dismissNotification"))
+  closeBtn.setAttribute("data-i18n-attr", "aria-label:common.dismissNotification")
   closeBtn.innerHTML = ICON_X
   li.appendChild(closeBtn)
 
-  let progressBar = null
+  let progressBar: HTMLDivElement | null = null
   if (duration > 0) {
     progressBar = document.createElement("div")
     progressBar.className = "xt-toast__progress"
@@ -307,14 +314,14 @@ export function toast(opts) {
   }
 
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  let timer = null
-  let progressAnim = null
-  let pausedAt = null
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let progressAnim: Animation | null = null
+  let pausedAt: number | null = null
   let remaining = duration
 
   const doDismiss = () => dismiss(li)
 
-  function startTimer(ms) {
+  function startTimer(ms: number): void {
     if (ms <= 0) return
     timer = setTimeout(doDismiss, ms)
     if (progressBar && !reduced) {
@@ -325,14 +332,14 @@ export function toast(opts) {
     }
   }
 
-  function pause() {
+  function pause(): void {
     if (timer == null || pausedAt != null) return
     clearTimeout(timer)
     pausedAt = performance.now()
     if (progressAnim) smoothRate(progressAnim, progressAnim.playbackRate, 0, 180)
   }
 
-  function resume() {
+  function resume(): void {
     if (pausedAt == null) return
     remaining = Math.max(400, remaining - (performance.now() - pausedAt))
     pausedAt = null
@@ -347,7 +354,7 @@ export function toast(opts) {
     li.addEventListener("mouseleave", resume)
     li.addEventListener("focusin", pause)
     li.addEventListener("focusout", (e) => {
-      if (!li.contains(e.relatedTarget)) resume()
+      if (!li.contains(e.relatedTarget as Node | null)) resume()
     })
   }
 
@@ -365,9 +372,11 @@ export function toast(opts) {
   return doDismiss
 }
 
-export const toastSuccess = (title, opts = {}) =>
+type ToastShortcutOpts = Omit<ToastOptions, "title" | "variant">
+
+export const toastSuccess = (title: string, opts: ToastShortcutOpts = {}) =>
   toast({ ...opts, title, variant: "success" })
-export const toastError = (title, opts = {}) =>
+export const toastError = (title: string, opts: ToastShortcutOpts = {}) =>
   toast({ ...opts, title, variant: "error" })
-export const toastWarn = (title, opts = {}) =>
+export const toastWarn = (title: string, opts: ToastShortcutOpts = {}) =>
   toast({ ...opts, title, variant: "warn" })

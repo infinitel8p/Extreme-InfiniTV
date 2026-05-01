@@ -17,6 +17,10 @@
   /** @type {"all"|"live"|"vod"|"series"} */
   let filter = $state("all")
   let locale = $state(0)
+  // Wrappers read the locale rune so {tr(...)} / {kl(...)} template effects
+  // track it and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
+  const kl = (kind) => (locale, kindLabel(kind))
   let activePlaylistId = $state("")
   /** @type {Array<{ id: string, title: string }>} */
   let playlists = $state([])
@@ -164,14 +168,8 @@
   })
 </script>
 
-<!--
-  `_locale = locale` is read at the top of the reactive scope so any t() /
-  kindLabel() call inside this fragment re-runs when the locale rune bumps.
-  Wrap any future templated text inside this same scope.
--->
-{#key locale}
 <div class="flex flex-col gap-3 shrink-0">
-  <div class="flex flex-wrap gap-2" role="tablist" aria-label={t("favorites.heading")}>
+  <div class="flex flex-wrap gap-2" role="tablist" aria-label={tr("favorites.heading")}>
     {#each [
       { id: "all", key: "favorites.filter.all" },
       { id: "live", key: "favorites.filter.live" },
@@ -187,25 +185,25 @@
         class="filter-chip rounded-full border border-line bg-surface px-3.5 py-1.5 text-sm
                hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                transition-colors">
-        {t(chip.key)}
+        {tr(chip.key)}
         <span class="ml-1.5 text-fg-3 tabular-nums">{counts[chip.id]}</span>
       </button>
     {/each}
   </div>
 
   {#if loading && !entries.length}
-    <div class="text-sm text-fg-3 px-1">{t("common.loading")}</div>
+    <div class="text-sm text-fg-3 px-1">{tr("common.loading")}</div>
   {:else if !entries.length}
     <div class="rounded-2xl border border-line bg-surface px-5 py-8 text-sm text-fg-2">
-      {t("favorites.helperEmpty")}
+      {tr("favorites.helperEmpty")}
     </div>
   {:else if !visible.length}
     <div class="rounded-2xl border border-line bg-surface px-5 py-8 text-sm text-fg-2">
-      {t("favorites.helperEmpty")}
+      {tr("favorites.helperEmpty")}
     </div>
   {:else}
     <div class="px-1 text-xs text-fg-3 tabular-nums">
-      {t("strip.itemCount", { count: visible.length })}
+      {tr("strip.itemCount", { count: visible.length })}
     </div>
   {/if}
 </div>
@@ -223,7 +221,7 @@
       <a
         href={entry.href}
         onclick={(event) => openCard(event, entry)}
-        aria-label={t("favorites.cardAriaLabel", { name: entry.name, playlist: entry.playlistTitle })}
+        aria-label={tr("favorites.cardAriaLabel", { name: entry.name, playlist: entry.playlistTitle })}
         class="fav-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line
                transition-[transform,box-shadow] duration-150
@@ -269,7 +267,7 @@
           <span
             class="absolute top-1.5 left-1.5 text-label font-medium uppercase tracking-wide
                    rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
-            {kindLabel(entry.kind)}
+            {kl(entry.kind)}
           </span>
         </div>
 
@@ -288,7 +286,6 @@
     {/each}
   </section>
 {/if}
-{/key}
 
 <style>
   .filter-chip.active {

@@ -12,7 +12,7 @@ interface SpatialNavigationApi {
   add: (config: Record<string, unknown>) => void
   remove: (sectionId: string) => void
   focus: (sectionId?: string) => boolean
-  move: (direction: string) => void
+  move: (direction: string) => boolean
   makeFocusable: (sectionId?: string) => void
   setDefaultSection: (sectionId: string) => void
   pause: () => void

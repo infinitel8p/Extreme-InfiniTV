@@ -1,4 +1,3 @@
-// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 const DEFAULT_FOCUSABLES =
     "button, a, [role='tab'], [tabindex]:not([tabindex='-1']), input, select, textarea, summary"
 
@@ -19,7 +18,16 @@ function resumeMainSection() {
     }
 }
 
-export function attachDialogSpatialNav(dlg, opts = {}) {
+interface AttachOpts {
+    id?: string
+    selector?: string
+    defaultElement?: string
+}
+
+export function attachDialogSpatialNav(
+    dlg: HTMLDialogElement | null,
+    opts: AttachOpts = {}
+): (() => void) | undefined {
     if (!dlg || !dlg.id) return
 
     const sectionId = opts.id || `${dlg.id}-section`
@@ -55,11 +63,10 @@ export function attachDialogSpatialNav(dlg, opts = {}) {
         const active = document.activeElement
         if (!active || !dlg.contains(active)) {
             const target =
-                (opts.defaultElement &&
-                    /** @type {HTMLElement|null} */ (
-                        document.querySelector(opts.defaultElement)
-                    )) ||
-                /** @type {HTMLElement|null} */ (dlg.querySelector(selector))
+                (opts.defaultElement
+                    ? document.querySelector<HTMLElement>(opts.defaultElement)
+                    : null) ||
+                dlg.querySelector<HTMLElement>(selector)
             target?.focus?.()
         }
     }

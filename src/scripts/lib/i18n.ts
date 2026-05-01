@@ -86,7 +86,7 @@ export function getActiveLocale(): string {
 }
 
 export function getAvailableLocales(): LocaleMeta[] {
-  return Object.keys(LOCALE_LOADERS).map((code) => {
+  return (Object.keys(LOCALE_LOADERS) as LocaleCode[]).map((code) => {
     const fallback = LOCALE_META_FALLBACK[code]
     return {
       code,
@@ -130,16 +130,18 @@ function detectLocale(): LocaleCode {
   return "en"
 }
 
-export async function setLocale(code: string | null): Promise<void> {
+export async function setLocale(input: string | null): Promise<void> {
   // null means "reset to auto-detect": clear the override first so detectLocale
   // picks from navigator.languages, then resolve and proceed with that.
-  if (code === null) {
+  let code: LocaleCode
+  if (input === null) {
     writePersistedLocale(null)
     code = detectLocale()
+  } else {
+    code = isLocaleCode(input) ? input : "en"
   }
-  if (!isLocaleCode(code)) code = "en"
   if (!cache.has(code)) {
-    const loader = LOCALE_LOADERS[code]!
+    const loader = LOCALE_LOADERS[code]
     cache.set(code, await loader())
   }
   activeCode = code
