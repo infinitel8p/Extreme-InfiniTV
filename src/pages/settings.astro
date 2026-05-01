@@ -16,6 +16,7 @@ import {
   IconBrandPaypal,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
+import LocalePicker from "@/components/LocalePicker.svelte"
 import FavoritesReorder from "@/components/FavoritesReorder.svelte"
 ---
 
@@ -26,32 +27,32 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
              flex flex-col gap-8 sm:gap-10">
 
     <header class="route-hero shrink-0">
-      <h1 class="route-hero__title">Sett<em>i</em>ngs</h1>
-      <p class="route-hero__sub">
+      <h1 class="route-hero__title"><span data-i18n="settings.title">Sett<em>i</em>ngs</span></h1>
+      <p data-i18n="page.settings.sub" class="route-hero__sub">
         Playlists, preferences, cache, and the app itself.
       </p>
     </header>
 
     <!-- Group: Playlists -->
     <section class="flex flex-col gap-3">
-      <h2 class="text-xs font-semibold uppercase tracking-widest text-fg-2">Playlists</h2>
+      <h2 data-i18n="settings.group.playlists" class="text-xs font-semibold uppercase tracking-widest text-fg-2">Playlists</h2>
       <div class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
         <div
           id="settings-playlists"
           class="flex flex-col divide-y divide-line/60 rounded-xl border border-line bg-bg overflow-hidden">
-          <div class="px-4 py-4 text-xs text-fg-3">No playlists yet.</div>
+          <div data-i18n="settings.playlists.empty" class="px-4 py-4 text-xs text-fg-3">No playlists yet.</div>
         </div>
         <div class="flex flex-wrap gap-2 pt-1">
           <a href="/login" class="btn">
             <IconPlus aria-hidden="true" class="btn-icon" />
-            Add playlist
+            <span data-i18n="playlist.add">Add playlist</span>
           </a>
           <button
             id="settings-refresh-active"
             type="button"
             class="btn hidden">
             <IconRefresh aria-hidden="true" class="btn-icon" />
-            Refresh active
+            <span data-i18n="playlist.refreshActive">Refresh active</span>
           </button>
         </div>
       </div>
@@ -59,45 +60,58 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
 
     <!-- Group: Preferences -->
     <section class="flex flex-col gap-3">
-      <h2 class="text-xs font-semibold uppercase tracking-widest text-fg-2">Preferences</h2>
+      <h2 data-i18n="settings.group.preferences" class="text-xs font-semibold uppercase tracking-widest text-fg-2">Preferences</h2>
       <div class="flex flex-col gap-4">
+
+        <!-- Language -->
+        <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
+          <div class="flex flex-col gap-1">
+            <h3 data-i18n="settings.section.language" class="text-base font-semibold">Language</h3>
+            <p data-i18n="settings.language.cardHelper" class="text-xs text-fg-3">
+              Pick a language for the interface. Translations are community-driven - missing strings fall back to English.
+            </p>
+          </div>
+          <LocalePicker client:load />
+        </article>
 
         <!-- Display: theme + font scale -->
         <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
           <div class="flex flex-col gap-1">
-            <h3 class="text-base font-semibold">Display</h3>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <h3 data-i18n="settings.section.display" class="text-base font-semibold">Display</h3>
+            <p data-i18n="settings.display.helper" class="text-xs text-fg-3">
               Theme and base font size. System theme follows your OS preference.
             </p>
           </div>
 
           <div class="flex flex-col gap-2">
-            <span class="text-eyebrow font-medium uppercase text-fg-3">Theme</span>
+            <span data-i18n="settings.theme.label" class="text-eyebrow font-medium uppercase text-fg-3">Theme</span>
             <div
               id="settings-theme"
               class="flex flex-wrap gap-2"
               role="radiogroup"
+              data-i18n-attr="aria-label:settings.theme.label"
               aria-label="Theme">
-              <button type="button" data-theme="system" aria-pressed="false" class="theme-btn btn">System</button>
-              <button type="button" data-theme="light"  aria-pressed="false" class="theme-btn btn">Light</button>
-              <button type="button" data-theme="dark"   aria-pressed="false" class="theme-btn btn">Dark</button>
+              <button type="button" data-theme="system" aria-pressed="false" data-i18n="settings.theme.system" class="theme-btn btn">System</button>
+              <button type="button" data-theme="light"  aria-pressed="false" data-i18n="settings.theme.light" class="theme-btn btn">Light</button>
+              <button type="button" data-theme="dark"   aria-pressed="false" data-i18n="settings.theme.dark" class="theme-btn btn">Dark</button>
             </div>
           </div>
 
           <div class="flex flex-col gap-2">
-            <span class="text-eyebrow font-medium uppercase text-fg-3">Font scale</span>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <span data-i18n="settings.fontScale.label" class="text-eyebrow font-medium uppercase text-fg-3">Font scale</span>
+            <p data-i18n="settings.fontScale.helper" class="text-xs text-fg-3">
               Bumps the base font size. Use Large or X-Large when viewing on a TV from across the room.
             </p>
             <div
               id="settings-font-scale"
               class="flex flex-wrap gap-2"
               role="radiogroup"
+              data-i18n-attr="aria-label:settings.fontScale.label"
               aria-label="Font scale">
-              <button type="button" data-scale="1"     aria-pressed="false" class="font-scale-btn btn">Default</button>
-              <button type="button" data-scale="1.125" aria-pressed="false" class="font-scale-btn btn">Medium</button>
-              <button type="button" data-scale="1.25"  aria-pressed="false" class="font-scale-btn btn">Large</button>
-              <button type="button" data-scale="1.5"   aria-pressed="false" class="font-scale-btn btn">X-Large</button>
+              <button type="button" data-scale="1"     aria-pressed="false" data-i18n="settings.fontScale.default" class="font-scale-btn btn">Default</button>
+              <button type="button" data-scale="1.125" aria-pressed="false" data-i18n="settings.fontScale.medium" class="font-scale-btn btn">Medium</button>
+              <button type="button" data-scale="1.25"  aria-pressed="false" data-i18n="settings.fontScale.large" class="font-scale-btn btn">Large</button>
+              <button type="button" data-scale="1.5"   aria-pressed="false" data-i18n="settings.fontScale.xlarge" class="font-scale-btn btn">X-Large</button>
             </div>
           </div>
           <script is:inline>
@@ -127,35 +141,35 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         <!-- Live TV layout: EPG default + channel column width -->
         <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
           <div class="flex flex-col gap-1">
-            <h3 class="text-base font-semibold">Live TV layout</h3>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <h3 data-i18n="settings.livetvLayout.title" class="text-base font-semibold">Live TV layout</h3>
+            <p data-i18n="settings.livetvLayout.helperLong" class="text-xs text-fg-3">
               Defaults for the channel sidebar and the EPG panel on Live TV. The EPG button on the page itself still toggles per session.
             </p>
           </div>
 
           <div class="flex flex-col gap-2">
-            <span class="text-eyebrow font-medium uppercase text-fg-3">Show EPG by default</span>
+            <span data-i18n="settings.livetvLayout.epgDefault" class="text-eyebrow font-medium uppercase text-fg-3">Show EPG by default</span>
             <div
               id="settings-epg-default"
               class="flex flex-wrap gap-2"
               role="radiogroup"
-              aria-label="Show EPG by default">
-              <button type="button" data-epg="on"  aria-pressed="false" class="epg-default-btn btn">On</button>
-              <button type="button" data-epg="off" aria-pressed="false" class="epg-default-btn btn">Off</button>
+              aria-label="Show EPG by default" data-i18n-attr="aria-label:aria.showEpgDefault">
+              <button type="button" data-epg="on"  aria-pressed="false" data-i18n="settings.livetvLayout.epg.on" class="epg-default-btn btn">On</button>
+              <button type="button" data-epg="off" aria-pressed="false" data-i18n="settings.livetvLayout.epg.off" class="epg-default-btn btn">Off</button>
             </div>
           </div>
 
           <div class="flex flex-col gap-2">
-            <span class="text-eyebrow font-medium uppercase text-fg-3">Channel column width</span>
+            <span data-i18n="settings.livetvLayout.columnWidth" class="text-eyebrow font-medium uppercase text-fg-3">Channel column width</span>
             <div
               id="settings-channel-width"
               class="flex flex-wrap gap-2"
               role="radiogroup"
-              aria-label="Channel column width">
-              <button type="button" data-width="22" aria-pressed="false" class="channel-width-btn btn">Compact</button>
-              <button type="button" data-width="28" aria-pressed="false" class="channel-width-btn btn">Default</button>
-              <button type="button" data-width="34" aria-pressed="false" class="channel-width-btn btn">Wide</button>
-              <button type="button" data-width="42" aria-pressed="false" class="channel-width-btn btn">X-Wide</button>
+              aria-label="Channel column width" data-i18n-attr="aria-label:aria.channelColumnWidth">
+              <button type="button" data-width="22" aria-pressed="false" data-i18n="settings.livetvLayout.width.compact" class="channel-width-btn btn">Compact</button>
+              <button type="button" data-width="28" aria-pressed="false" data-i18n="settings.livetvLayout.width.default" class="channel-width-btn btn">Default</button>
+              <button type="button" data-width="34" aria-pressed="false" data-i18n="settings.livetvLayout.width.wide" class="channel-width-btn btn">Wide</button>
+              <button type="button" data-width="42" aria-pressed="false" data-i18n="settings.livetvLayout.width.xWide" class="channel-width-btn btn">X-Wide</button>
             </div>
           </div>
         </article>
@@ -163,13 +177,13 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         <!-- EPG: time zone offset (per active playlist) -->
         <article id="epg-tz-section" class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
           <div class="flex flex-col gap-1">
-            <h3 class="text-base font-semibold">EPG time zone</h3>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <h3 data-i18n="settings.epgTimezone.title" class="text-base font-semibold">EPG time zone</h3>
+            <p data-i18n="epg.timezoneHelper" class="text-xs text-fg-3">
               Some providers ship XMLTV with timestamps already shifted to the server's local time, so EPG times look off. Auto-detect picks the offset where the most channels have a programme airing right now.
             </p>
           </div>
           <label class="flex flex-col gap-1.5">
-            <span class="text-eyebrow font-medium uppercase text-fg-3">
+            <span data-i18n="settings.epgTimezone.offsetLabel" class="text-eyebrow font-medium uppercase text-fg-3">
               Offset for active playlist
             </span>
             <select
@@ -179,7 +193,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
                      hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                      disabled:opacity-60 disabled:cursor-not-allowed
                      transition-colors">
-              <option value="auto">Auto-detect</option>
+              <option value="auto" data-i18n="epg.timezoneAutoDetect">Auto-detect</option>
             </select>
           </label>
           <div
@@ -191,14 +205,14 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         <!-- Network: User-Agent spoofing -->
         <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
           <div class="flex flex-col gap-1">
-            <h3 class="text-base font-semibold">Network</h3>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <h3 data-i18n="settings.network.title" class="text-base font-semibold">Network</h3>
+            <p data-i18n="settings.network.helperLong" class="text-xs text-fg-3">
               Some IPTV providers reject the default browser User-Agent. Pick a preset or enter a custom string. Applies to provider API, M3U, and EPG fetches. Effective in the desktop build.
             </p>
           </div>
           <div class="flex flex-col gap-3">
             <label class="flex flex-col gap-1.5">
-              <span class="text-eyebrow font-medium uppercase text-fg-3">User-Agent preset</span>
+              <span data-i18n="settings.network.uaPreset" class="text-eyebrow font-medium uppercase text-fg-3">User-Agent preset</span>
               <select
                 id="ua-preset"
                 class="rounded-xl border border-line bg-bg px-3 py-2 text-sm text-fg
@@ -207,13 +221,14 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
               </select>
             </label>
             <label class="flex flex-col gap-1.5">
-              <span class="text-eyebrow font-medium uppercase text-fg-3">Custom (overrides preset)</span>
+              <span data-i18n="settings.network.uaCustom" class="text-eyebrow font-medium uppercase text-fg-3">Custom (overrides preset)</span>
               <input
                 id="ua-custom"
                 type="text"
                 autocomplete="off"
                 spellcheck="false"
                 placeholder="e.g. VLC/3.0.20 LibVLC/3.0.20"
+                data-i18n-attr="placeholder:settings.network.uaPlaceholder"
                 class="rounded-xl border border-line bg-bg px-3 py-2 text-sm text-fg font-mono
                        placeholder:text-fg-3
                        hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
@@ -224,7 +239,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
           <div class="flex flex-wrap items-center gap-3 pt-1">
             <button id="ua-save" type="button" class="btn">
               <IconDeviceFloppy aria-hidden="true" class="btn-icon" />
-              Save
+              <span data-i18n="common.save">Save</span>
             </button>
             <span
               id="ua-msg"
@@ -236,8 +251,8 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         <!-- Discord Rich Presence -->
         <article id="discord-rpc-section" class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 hidden">
           <div class="flex flex-col gap-1">
-            <h3 class="text-base font-semibold">Discord Rich Presence</h3>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <h3 data-i18n="settings.discord.title" class="text-base font-semibold">Discord Rich Presence</h3>
+            <p data-i18n="settings.discord.helperLong" class="text-xs text-fg-3">
               Show "Watching X on Extreme InfiniTV" on your Discord profile while you use the app. On by default; uncheck a playlist below to mute presence for that account. Desktop only - requires Discord running on the same machine.
             </p>
           </div>
@@ -245,11 +260,11 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
           <input id="discord-client-id" type="hidden" />
 
           <div class="flex flex-col gap-2">
-            <span class="text-eyebrow font-medium uppercase text-fg-3">Per-playlist</span>
+            <span data-i18n="settings.discord.perPlaylist" class="text-eyebrow font-medium uppercase text-fg-3">Per-playlist</span>
             <div
               id="discord-playlists"
               class="flex flex-col divide-y divide-line/60 rounded-xl border border-line bg-bg overflow-hidden">
-              <div class="px-4 py-4 text-xs text-fg-3">No playlists yet.</div>
+              <div data-i18n="settings.playlists.empty" class="px-4 py-4 text-xs text-fg-3">No playlists yet.</div>
             </div>
           </div>
         </article>
@@ -259,15 +274,15 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
 
     <!-- Group: Data -->
     <section class="flex flex-col gap-3">
-      <h2 class="text-xs font-semibold uppercase tracking-widest text-fg-2">Data</h2>
+      <h2 data-i18n="settings.group.data" class="text-xs font-semibold uppercase tracking-widest text-fg-2">Data</h2>
       <div class="flex flex-col gap-4">
 
         <!-- Downloads (folder only - queue lives on /downloads) -->
         <article id="downloads-folder-section" class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-3 scroll-mt-6">
           <div class="flex items-start justify-between gap-3">
             <div class="flex flex-col gap-1 min-w-0">
-              <h3 class="text-base font-semibold">Downloads</h3>
-              <p class="text-xs text-fg-3 max-w-prose">
+              <h3 data-i18n="settings.downloadsSection.title" class="text-base font-semibold">Downloads</h3>
+              <p data-i18n-html="settings.downloadsFolder.intro" class="text-xs text-fg-3">
                 Folder where new downloads land. Manage the queue itself on the
                 <a href="/downloads" class="text-accent underline">Downloads page</a>.
               </p>
@@ -275,7 +290,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
             <span id="downloads-availability" class="text-xs text-fg-3 shrink-0 truncate empty:hidden"></span>
           </div>
           <div class="flex flex-col gap-1.5">
-            <label class="text-eyebrow font-medium uppercase text-fg-3" for="download-dir-input">
+            <label data-i18n="settings.downloadsFolder.savedTo" class="text-eyebrow font-medium uppercase text-fg-3" for="download-dir-input">
               Save to
             </label>
             <div class="flex gap-2 flex-wrap">
@@ -284,30 +299,31 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
                 type="text"
                 readonly
                 placeholder="Not set - picked on first download"
+                data-i18n-attr="placeholder:settings.downloadsFolder.notSetPlaceholder"
                 class="flex-1 min-w-0 rounded-xl border border-line bg-bg px-3 py-2 text-sm text-fg font-mono
                        placeholder:text-fg-3"
               />
               <button id="download-dir-pick" type="button" class="btn">
                 <IconFolderOpen aria-hidden="true" class="btn-icon" />
-                Choose…
+                <span data-i18n="settings.downloadsFolder.choose">Choose…</span>
               </button>
               <button id="download-dir-clear" type="button" class="btn text-fg-2">
-                Clear
+                <span data-i18n="common.clear">Clear</span>
               </button>
             </div>
           </div>
 
           <div class="flex flex-col gap-1.5">
-            <span class="text-eyebrow font-medium uppercase text-fg-3">
+            <span data-i18n="settings.downloadsFolder.restoreLabel" class="text-eyebrow font-medium uppercase text-fg-3">
               Restore from folder
             </span>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <p data-i18n="settings.downloadsFolder.restoreHelper" class="text-xs text-fg-3">
               After a reinstall, scan the folder above for `.xtmeta.json` sidecars and re-add the matching files to your downloads list.
             </p>
             <div class="flex flex-wrap items-center gap-2">
               <button id="downloads-scan" type="button" class="btn">
                 <IconRefresh aria-hidden="true" class="btn-icon" />
-                Scan folder
+                <span data-i18n="settings.downloadsFolder.scanFolder">Scan folder</span>
               </button>
               <span
                 id="downloads-scan-msg"
@@ -317,10 +333,10 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
           </div>
 
           <div class="flex flex-col gap-1.5">
-            <span class="text-eyebrow font-medium uppercase text-fg-3">
+            <span data-i18n="settings.downloadsFolder.concurrency" class="text-eyebrow font-medium uppercase text-fg-3">
               Concurrent downloads
             </span>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <p data-i18n="settings.downloadsFolder.concurrencyHelper" class="text-xs text-fg-3">
               Most Xtream providers cap connections per account, so a second
               parallel download fails mid-stream. Keep this at 1 unless your
               provider explicitly allows multiple slots.
@@ -329,7 +345,8 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
               id="settings-download-concurrency"
               class="flex flex-wrap gap-2"
               role="radiogroup"
-              aria-label="Concurrent downloads">
+              aria-label="Concurrent downloads"
+              data-i18n-attr="aria-label:settings.downloadsFolder.concurrency">
               <button type="button" data-concurrency="1" aria-pressed="false" class="dl-concurrency-btn btn">1</button>
               <button type="button" data-concurrency="2" aria-pressed="false" class="dl-concurrency-btn btn">2</button>
               <button type="button" data-concurrency="3" aria-pressed="false" class="dl-concurrency-btn btn">3</button>
@@ -345,8 +362,8 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         <!-- Hidden categories editor -->
         <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
           <div class="flex flex-col gap-1">
-            <h3 class="text-base font-semibold">Categories</h3>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <h3 data-i18n="settings.categories.title" class="text-base font-semibold">Categories</h3>
+            <p data-i18n="settings.categories.helperLong" class="text-xs text-fg-3">
               Per-playlist mute list. Hidden categories are hidden from
               the picker and the main grid on Live TV, Movies, and Series.
             </p>
@@ -357,8 +374,8 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         <!-- Favorites order -->
         <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
           <div class="flex flex-col gap-1">
-            <h3 class="text-base font-semibold">Favorites</h3>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <h3 data-i18n="settings.favoritesSection.title" class="text-base font-semibold">Favorites</h3>
+            <p data-i18n="settings.favoritesSection.helperLong" class="text-xs text-fg-3">
               Reorder your favorites per kind. The hub Favorites strip and
               the per-page favorites filter follow this order.
             </p>
@@ -369,19 +386,19 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         <!-- Backup / restore -->
         <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
           <div class="flex flex-col gap-1">
-            <h3 class="text-base font-semibold">Backup</h3>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <h3 data-i18n="settings.backup.title" class="text-base font-semibold">Backup</h3>
+            <p data-i18n="settings.backup.helperLong" class="text-xs text-fg-3">
               Save all playlists, favorites, recents, watched progress, hidden categories, and app settings to a file. Cache and the downloads queue are not exported.
             </p>
           </div>
           <div class="flex flex-wrap items-center gap-3 pt-1">
             <button id="settings-export" type="button" class="btn">
               <IconDownload aria-hidden="true" class="btn-icon" />
-              Export to file
+              <span data-i18n="settings.backup.export">Export to file</span>
             </button>
             <button id="settings-import" type="button" class="btn">
               <IconUpload aria-hidden="true" class="btn-icon" />
-              Import from file
+              <span data-i18n="settings.backup.import">Import from file</span>
             </button>
             <input id="settings-import-input" type="file" accept="application/json,.json" hidden />
             <span id="settings-backup-msg" aria-live="polite" class="text-xs text-fg-3 transition-opacity duration-300"></span>
@@ -391,25 +408,25 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         <!-- Storage / cache -->
         <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
           <div class="flex flex-col gap-1">
-            <h3 class="text-base font-semibold">Storage</h3>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <h3 data-i18n="settings.storage.title" class="text-base font-semibold">Storage</h3>
+            <p data-i18n="settings.storage.helperLong" class="text-xs text-fg-3">
               Clears channel, movie, and series lists. Playlists, favorites, and recents are kept.
             </p>
           </div>
           <dl class="grid grid-cols-2 gap-y-3 gap-x-6 text-sm">
             <div class="flex flex-col gap-0.5 min-w-0">
-              <dt class="text-fg-3 text-eyebrow font-medium uppercase">Cache</dt>
+              <dt data-i18n="settings.storage.size" class="text-fg-3 text-eyebrow font-medium uppercase">Cache</dt>
               <dd id="settings-cache-size" class="text-fg tabular-nums truncate">-</dd>
             </div>
             <div class="flex flex-col gap-0.5 min-w-0">
-              <dt class="text-fg-3 text-eyebrow font-medium uppercase">Last updated</dt>
+              <dt data-i18n="settings.storage.lastUpdated" class="text-fg-3 text-eyebrow font-medium uppercase">Last updated</dt>
               <dd id="settings-cache-newest" class="text-fg tabular-nums truncate">-</dd>
             </div>
           </dl>
           <div class="flex flex-wrap items-center gap-3 pt-1">
             <button id="settings-clear-cache" type="button" class="btn">
               <IconTrash aria-hidden="true" class="btn-icon" />
-              Clear cache
+              <span data-i18n="settings.storage.clear">Clear cache</span>
             </button>
             <span
               id="settings-cache-msg"
@@ -423,7 +440,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
 
     <!-- Group: About (App update + version + expiration) -->
     <section class="flex flex-col gap-3">
-      <h2 class="text-xs font-semibold uppercase tracking-widest text-fg-2">About</h2>
+      <h2 data-i18n="settings.group.about" class="text-xs font-semibold uppercase tracking-widest text-fg-2">About</h2>
       <article
         id="update-section"
         data-state="idle"
@@ -432,9 +449,10 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
                transition-colors">
         <div class="flex flex-col gap-1 min-w-0">
           <div class="flex items-center gap-2 flex-wrap">
-            <h3 class="text-base font-semibold">Extreme InfiniTV</h3>
+            <h3 data-i18n="settings.about.title" class="text-base font-semibold">Extreme InfiniTV</h3>
             <span
               id="update-pill"
+              data-i18n="settings.about.updateAvailableShort"
               class="hidden h-5 px-2 items-center justify-center rounded-full text-label font-semibold uppercase tracking-wide bg-accent text-bg shrink-0 pulse-ring">
               Update available
             </span>
@@ -444,15 +462,15 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
 
         <dl class="grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-6 text-sm">
           <div class="flex flex-col gap-0.5 min-w-0">
-            <dt class="text-fg-3 text-eyebrow font-medium uppercase">Current</dt>
+            <dt data-i18n="settings.about.current" class="text-fg-3 text-eyebrow font-medium uppercase">Current</dt>
             <dd id="update-current" class="text-fg tabular-nums truncate">-</dd>
           </div>
           <div class="flex flex-col gap-0.5 min-w-0">
-            <dt class="text-fg-3 text-eyebrow font-medium uppercase">Latest</dt>
+            <dt data-i18n="settings.about.latest" class="text-fg-3 text-eyebrow font-medium uppercase">Latest</dt>
             <dd id="update-latest" class="text-fg tabular-nums truncate">-</dd>
           </div>
           <div class="flex flex-col gap-0.5 min-w-0 col-span-2 sm:col-span-1">
-            <dt class="text-fg-3 text-eyebrow font-medium uppercase">Account expires</dt>
+            <dt data-i18n="settings.about.accountExpires" class="text-fg-3 text-eyebrow font-medium uppercase">Account expires</dt>
             <dd data-account-expiration="raw" class="text-fg tabular-nums truncate">-</dd>
           </div>
         </dl>
@@ -469,14 +487,14 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         <div class="flex flex-wrap items-center gap-2 pt-4 border-t border-line/60">
           <button id="update-check" type="button" class="btn">
             <IconRefresh aria-hidden="true" class="btn-icon" />
-            Check for updates
+            <span data-i18n="settings.about.checkUpdate">Check for updates</span>
           </button>
           <button id="update-install" type="button" hidden class="btn">
             <IconCloudDownload aria-hidden="true" class="btn-icon" />
-            <span id="update-install-label">Download &amp; install</span>
+            <span id="update-install-label" data-i18n="settings.about.installUpdate">Download &amp; install</span>
           </button>
           <button id="update-relaunch" type="button" hidden class="btn">
-            Restart now
+            <span data-i18n="settings.about.restartNow">Restart now</span>
           </button>
           <a
             id="update-github"
@@ -486,7 +504,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
             data-external
             class="btn ml-auto text-fg-2">
             <IconBrandGithub aria-hidden="true" class="btn-icon" />
-            GitHub
+            <span data-i18n="settings.support.github">GitHub</span>
           </a>
           <span
             id="update-msg"
@@ -494,7 +512,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
             class="text-xs text-fg-3 transition-opacity duration-300 basis-full"></span>
         </div>
 
-        <p id="update-notes" class="hidden text-xs text-fg-3 max-w-prose whitespace-pre-line border-t border-line/60 pt-4 -mt-1"></p>
+        <p id="update-notes" class="hidden text-xs text-fg-3 whitespace-pre-line border-t border-line/60 pt-4 -mt-1"></p>
       </article>
 
       <span id="app-version" class="hidden"></span>
@@ -502,15 +520,15 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
 
     <!-- Group: Support / donations -->
     <section class="flex flex-col gap-3">
-      <h2 class="text-xs font-semibold uppercase tracking-widest text-fg-2">Support</h2>
+      <h2 data-i18n="settings.group.support" class="text-xs font-semibold uppercase tracking-widest text-fg-2">Support</h2>
       <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
         <div class="flex items-start gap-3">
           <span class="inline-flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
             <IconHeart aria-hidden="true" stroke={2} class="size-4" />
           </span>
           <div class="flex flex-col gap-1 min-w-0">
-            <h3 class="text-base font-semibold">Like the app?</h3>
-            <p class="text-sm text-fg-2 max-w-prose">
+            <h3 data-i18n="settings.support.title" class="text-base font-semibold">Like the app?</h3>
+            <p data-i18n="settings.support.intro" class="text-sm text-fg-2">
               Extreme InfiniTV is free and open source. If it saves you time or sweetens your living-room setup, a small tip helps cover hosting, signing certs, and the next round of features.
             </p>
           </div>
@@ -523,7 +541,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
             data-external
             class="btn justify-start sm:justify-center">
             <IconBrandGithub aria-hidden="true" class="btn-icon" />
-            GitHub Sponsors
+            <span data-i18n="settings.support.githubSponsors">GitHub Sponsors</span>
           </a>
           <a
             href="https://ko-fi.com/infinitel8p"
@@ -532,7 +550,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
             data-external
             class="btn justify-start sm:justify-center">
             <IconCoffee aria-hidden="true" class="btn-icon" />
-            Ko-fi
+            <span data-i18n="settings.support.kofi">Ko-fi</span>
           </a>
           <a
             href="https://www.paypal.com/paypalme/ludovicoferrara"
@@ -541,10 +559,10 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
             data-external
             class="btn justify-start sm:justify-center">
             <IconBrandPaypal aria-hidden="true" class="btn-icon" />
-            PayPal
+            <span data-i18n="settings.support.paypal">PayPal</span>
           </a>
         </div>
-        <p class="text-2xs text-fg-3">
+        <p data-i18n="settings.support.fineprint" class="text-2xs text-fg-3">
           No tracking, no ads, no telemetry - just a thank-you button.
         </p>
       </article>
@@ -552,15 +570,15 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
 
     <!-- Group: Danger zone (always last) -->
     <section class="flex flex-col gap-3 pt-2">
-      <h2 class="text-xs font-semibold uppercase tracking-widest text-bad">Danger zone</h2>
+      <h2 data-i18n="settings.group.dangerZone" class="text-xs font-semibold uppercase tracking-widest text-bad">Danger zone</h2>
       <article class="rounded-2xl border border-bad/30 bg-bad/[0.03] p-5 sm:p-6 flex flex-col gap-4">
         <div class="flex items-start gap-3">
           <span class="inline-flex size-8 shrink-0 items-center justify-center rounded-lg bg-bad/10 ring-1 ring-bad/30">
             <IconAlertTriangle aria-hidden="true" stroke={2} class="size-4 text-bad" />
           </span>
           <div class="flex flex-col gap-1 min-w-0">
-            <h3 class="text-base font-semibold text-bad">Reset everything</h3>
-            <p class="text-sm text-fg-2 max-w-prose">
+            <h3 data-i18n="settings.danger.heading" class="text-base font-semibold text-bad">Reset everything</h3>
+            <p data-i18n-html="settings.danger.helperLong" class="text-sm text-fg-2">
               Wipes <span class="text-fg font-medium">all</span> app data: playlists, cached lists, favorites, recents, and locally stored EPG references. Next launch starts from a clean slate.
             </p>
           </div>
@@ -568,7 +586,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         <div class="flex flex-wrap items-center gap-3 pt-1">
           <button id="settings-reset-all" type="button" class="btn-danger">
             <IconTrash aria-hidden="true" class="btn-icon" />
-            Reset everything
+            <span data-i18n="settings.danger.resetAll">Reset everything</span>
           </button>
           <span
             id="settings-reset-msg"
@@ -594,10 +612,10 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
           <IconAlertTriangle aria-hidden="true" stroke={2} class="size-5 text-bad" />
         </span>
         <div class="flex flex-col gap-1 min-w-0 pt-0.5">
-          <h2 id="settings-reset-title" class="text-base font-semibold">
+          <h2 id="settings-reset-title" data-i18n="settings.danger.dialogTitle" class="text-base font-semibold">
             Reset everything?
           </h2>
-          <p id="settings-reset-desc" class="text-sm text-fg-2">
+          <p id="settings-reset-desc" data-i18n-html="settings.danger.dialogBody" class="text-sm text-fg-2">
             This wipes <span class="text-fg font-medium">all</span> playlists, favorites,
             recents, and cached lists. This can't be undone.
           </p>
@@ -608,14 +626,14 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
           id="settings-reset-cancel"
           type="button"
           class="btn">
-          Cancel
+          <span data-i18n="common.cancel">Cancel</span>
         </button>
         <button
           id="settings-reset-confirm"
           type="button"
           class="btn-danger">
           <IconTrash aria-hidden="true" class="btn-icon" />
-          Reset everything
+          <span data-i18n="settings.danger.resetAll">Reset everything</span>
         </button>
       </div>
     </div>
@@ -623,6 +641,8 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
 
   <script>
     import { Store } from "@tauri-apps/plugin-store"
+    import { log } from "@/scripts/lib/log.js"
+    import { t } from "@/scripts/lib/i18n.js"
     import {
       getActiveEntry,
       getEntries,
@@ -638,7 +658,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
     } from "@/scripts/lib/cache.js"
     import {
       renderPlaylistRow,
-      PLAYLIST_LIST_EMPTY_COPY,
+      getPlaylistListEmptyCopy,
     } from "@/scripts/lib/playlist-rows.js"
     import { injectVersion } from "@/scripts/version.js"
     import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
@@ -792,7 +812,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
       ])
 
       if (!entries.length) {
-        playlistsEl.innerHTML = `<div class="px-4 py-4 text-xs text-fg-3">${PLAYLIST_LIST_EMPTY_COPY}</div>`
+        playlistsEl.innerHTML = `<div class="px-4 py-4 text-xs text-fg-3">${getPlaylistListEmptyCopy()}</div>`
         refreshBtn?.classList.add("hidden")
         return
       }
@@ -842,8 +862,8 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         await refreshActive()
         ok = true
       } catch (e) {
-        toastError("Couldn't refresh playlist", {
-          description: (e && e.message) || "Check your connection or login.",
+        toastError(t("settings.toast.refreshFail"), {
+          description: (e && e.message) || t("settings.toast.checkConnLogin"),
           duration: 6000,
         })
       } finally {
@@ -851,7 +871,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         syncCache()
         if (ok) {
           flashSuccess(refreshBtn)
-          toastSuccess("Playlist refreshed")
+          toastSuccess(t("settings.toast.refreshOk"))
         }
       }
     })
@@ -864,7 +884,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         removed = await clearAllCache()
         ok = true
         if (removed > 0) {
-          toastSuccess("Cache cleared", {
+          toastSuccess(t("settings.toast.cacheCleared"), {
             description: `${removed} ${removed === 1 ? "entry" : "entries"} removed.`,
           })
         } else {
@@ -872,7 +892,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
           flashMsg(cacheMsgEl, "Cache was already empty.")
         }
       } catch {
-        toastError("Couldn't clear cache")
+        toastError(t("settings.toast.cacheClearFail"))
       } finally {
         setLoading(clearCacheBtn, false)
         syncCache()
@@ -921,19 +941,19 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
             const { writeTextFile } = await import("@tauri-apps/plugin-fs")
             await writeTextFile(target, json)
           } catch (e) {
-            console.error("[settings:export] tauri save failed:", e)
+            log.error("[settings:export] tauri save failed:", e)
             await downloadBlobWeb(filename, json)
           }
         } else {
           await downloadBlobWeb(filename, json)
         }
-        toastSuccess("Backup exported", {
+        toastSuccess(t("settings.toast.backupExported"), {
           description: `${snapshot.creds.entries.length} playlist(s).`,
         })
         flashMsg(backupMsgEl, "Saved.")
       } catch (e) {
-        console.error("[settings:export] failed:", e)
-        toastError("Couldn't export backup", {
+        log.error("[settings:export] failed:", e)
+        toastError(t("settings.toast.backupExportFail"), {
           description: (e && e.message) || "See console.",
         })
       } finally {
@@ -950,7 +970,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
       try {
         parsed = JSON.parse(text)
       } catch {
-        toastError("Couldn't parse backup file", {
+        toastError(t("settings.toast.backupParseFail"), {
           description: "Not valid JSON.",
         })
         return
@@ -958,7 +978,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
       try {
         const { importAll } = await import("@/scripts/lib/backup.js")
         const summary = await importAll(parsed)
-        toastSuccess("Backup restored", {
+        toastSuccess(t("settings.toast.backupRestored"), {
           description: `${summary.playlists} playlist(s), ${summary.prefsPlaylists} preference set(s).`,
           duration: 6000,
         })
@@ -967,7 +987,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         await renderPlaylists()
         syncCache()
       } catch (e) {
-        toastError("Couldn't restore backup", {
+        toastError(t("settings.toast.backupRestoreFail"), {
           description: (e && e.message) || "See console.",
         })
       }
@@ -988,7 +1008,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
           await applyImport(text)
           return
         } catch (e) {
-          console.warn("[settings:import] tauri open failed, falling back:", e)
+          log.warn("[settings:import] tauri open failed, falling back:", e)
         }
       }
       importInput?.click()
@@ -1050,7 +1070,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
             for (const k of keys) await store.delete(k)
             await store.save()
           } catch (e) {
-            console.warn("Tauri store reset failed:", e)
+            log.warn("Tauri store reset failed:", e)
           }
         }
 
@@ -1434,7 +1454,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
           }
         }
       } catch (e) {
-        console.error("Pick folder failed:", e)
+        log.error("Pick folder failed:", e)
       } finally {
         setLoading(dirPickBtn, false)
       }
@@ -1457,10 +1477,10 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
       try {
         const summary = await scanDownloadsFolder()
         if (summary.error) {
-          toastError("Couldn't scan folder", { description: summary.error })
+          toastError(t("settings.toast.scanFail"), { description: summary.error })
           flashMsg(scanMsgEl, summary.error)
         } else if (summary.imported > 0) {
-          toastSuccess(`Imported ${summary.imported} download${summary.imported === 1 ? "" : "s"}`, {
+          toastSuccess(t("settings.toast.imported", { count: summary.imported }), {
             description: `Scanned ${summary.scanned} sidecar${summary.scanned === 1 ? "" : "s"}.`,
           })
           flashMsg(scanMsgEl, `Imported ${summary.imported} item(s).`)
@@ -1474,8 +1494,8 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
           )
         }
       } catch (error) {
-        console.error("[settings:scan] failed:", error)
-        toastError("Couldn't scan folder", {
+        log.error("[settings:scan] failed:", error)
+        toastError(t("settings.toast.scanFail"), {
           description: (error && error.message) || "See console.",
         })
       } finally {
@@ -1717,7 +1737,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         updateInstallBtn?.removeAttribute("hidden")
         setUpdateState("available")
       } catch (e) {
-        console.error("Update check failed:", e)
+        log.error("Update check failed:", e)
         if (updateMsgEl) {
           updateMsgEl.textContent = `Check failed - ${String(e?.message || e)}`
         }
@@ -1758,7 +1778,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         setInstallLabel("Download & install")
         updateRelaunchBtn?.removeAttribute("hidden")
       } catch (e) {
-        console.error("Update install failed:", e)
+        log.error("Update install failed:", e)
         if (updateMsgEl) {
           updateMsgEl.textContent =
             `Download failed - ${String(e?.message || e)}. ` +
@@ -1777,7 +1797,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         const { relaunch } = await import("@tauri-apps/plugin-process")
         await relaunch()
       } catch (e) {
-        console.error("Relaunch failed:", e)
+        log.error("Relaunch failed:", e)
         if (updateMsgEl) {
           updateMsgEl.textContent = `Restart failed - ${String(e?.message || e)}`
         }

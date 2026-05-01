@@ -3,6 +3,7 @@
 
   import { onMount } from "svelte"
   import { KIND_ORDER, KIND_LABEL_PLURAL } from "@/scripts/lib/kinds.js"
+  import { t } from "@/scripts/lib/i18n.js"
 
   const SHOW_AFTER_MS = 150
   const HOLD_AFTER_DONE_MS = 350
@@ -73,7 +74,7 @@
     <svg viewBox="0 0 24 24" width="0.875rem" height="0.875rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" class="animate-spin shrink-0 text-fg-3">
       <path d="M21 12a9 9 0 1 1-6.2-8.55"/>
     </svg>
-    <span>Loading catalog</span>
+    <span>{t("catalog.warming")}</span>
     <span class="hidden sm:flex items-center gap-2.5 ml-0.5">
       {#each KIND_ORDER as k}
         <span class="flex items-center gap-1">

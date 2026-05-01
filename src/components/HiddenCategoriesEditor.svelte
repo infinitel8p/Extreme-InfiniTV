@@ -7,6 +7,7 @@
     setCategoryHidden,
   } from "@/scripts/lib/preferences.js"
   import { KIND_LABEL_PLURAL, KIND_ORDER } from "@/scripts/lib/kinds.js"
+  import { t } from "@/scripts/lib/i18n.js"
 
   /** @type {string} */
   let activePlaylistId = $state("")
@@ -62,21 +63,20 @@
 
 <div class="rounded-xl border border-line bg-surface p-4 flex flex-col gap-3">
   <div class="flex items-baseline justify-between gap-2">
-    <h2 class="text-sm font-semibold text-fg">Hidden categories</h2>
+    <h2 class="text-sm font-semibold text-fg">{t("settings.hiddenCategories.title")}</h2>
     <span class="text-2xs text-fg-3 tabular-nums">
       {total === 0
-        ? "Nothing hidden"
-        : `${total} hidden`}
+        ? t("settings.hiddenCategories.empty")
+        : t("settings.hiddenCategories.count", { n: total })}
     </span>
   </div>
   <p class="text-xs text-fg-3">
-    Hidden categories don't appear in the picker or main grid. Use the eye
-    icon on a category row to hide it; unhide here.
+    {t("settings.hiddenCategories.helperLong")}
   </p>
 
   {#if total === 0}
     <div class="text-xs text-fg-3 italic">
-      No hidden categories for this playlist.
+      {t("settings.hiddenCategories.emptyState")}
     </div>
   {:else}
     <div class="flex flex-col gap-3 max-h-[50vh] overflow-y-auto custom-scroll pr-1 -mr-1">
@@ -93,8 +93,8 @@
                   type="button"
                   onclick={() => unhide(kind, name)}
                   class="hidden-chip inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-2 hover:bg-surface-3 focus-visible:bg-surface-3 focus-visible:border-accent text-fg px-2.5 py-1 text-xs transition-colors outline-none"
-                  aria-label={`Unhide ${name}`}
-                  title="Click to unhide">
+                  aria-label={t("settings.hiddenCategories.unhideAria", { name })}
+                  title={t("settings.hiddenCategories.clickToUnhide")}>
                   <span class="truncate max-w-[16rem]">{name}</span>
                   <svg
                     xmlns="http://www.w3.org/2000/svg"

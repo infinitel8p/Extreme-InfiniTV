@@ -13,9 +13,10 @@ import {
              flex flex-col gap-6 sm:gap-8">
 
     <header class="route-hero shrink-0 dl-page-enter dl-stagger-1">
-      <h1 class="route-hero__title">D<em>o</em>wnloads</h1>
+      <h1 data-i18n="page.downloads.title" class="route-hero__title">Downloads</h1>
       <p
         id="downloads-summary"
+        data-i18n="downloads.summary.intro"
         aria-live="polite"
         class="route-hero__sub tabular-nums">
         Movies and series episodes you save will appear here.
@@ -31,14 +32,15 @@ import {
              outline-none transition-colors dl-page-enter dl-stagger-2">
       <IconSettings aria-hidden="true" class="size-4 text-fg-3 shrink-0" />
       <span class="flex-1 min-w-0 flex flex-wrap items-baseline gap-x-2">
-        <span class="text-fg-3 shrink-0">Saving to</span>
+        <span data-i18n="downloads.folder.savingTo" class="text-fg-3 shrink-0">Saving to</span>
         <span
           id="downloads-folder-path"
+          data-i18n="downloads.folder.notSet"
           class="font-mono text-xs text-fg truncate min-w-0">
           Not set
         </span>
       </span>
-      <span class="text-xs text-accent shrink-0">Change in Settings</span>
+      <span data-i18n="downloads.folder.changeInSettings" class="text-xs text-accent shrink-0">Change in Settings</span>
     </a>
 
     <!-- Active downloads (only shown when something is in flight). -->
@@ -47,7 +49,7 @@ import {
       hidden
       class="flex flex-col gap-3 dl-page-enter dl-stagger-3">
       <div class="flex items-center justify-between gap-2">
-        <h2 class="text-xs font-semibold uppercase tracking-widest text-fg-2">In progress</h2>
+        <h2 data-i18n="downloads.heading.inProgress" class="text-xs font-semibold uppercase tracking-widest text-fg-2">In progress</h2>
       </div>
 
       <!-- Aggregate throughput sparkline. -->
@@ -56,7 +58,7 @@ import {
         hidden
         class="rounded-xl border border-line bg-surface px-4 pt-3 pb-2.5 flex flex-col gap-2">
         <div class="flex items-center justify-between gap-3 text-2xs uppercase tracking-wider font-medium">
-          <span class="text-fg-3">Throughput</span>
+          <span data-i18n="downloads.throughput.heading" class="text-fg-3">Throughput</span>
           <span
             id="downloads-throughput-now"
             class="text-fg tabular-nums normal-case tracking-normal text-xs font-medium">0 B/s</span>
@@ -68,20 +70,21 @@ import {
           style="height: 40px;"></canvas>
         <div class="flex items-center justify-between gap-3 text-2xs text-fg-3 tabular-nums">
           <span>
-            <span class="opacity-60">min</span>
+            <span data-i18n="downloads.throughput.min" class="opacity-60">min</span>
             <span id="downloads-throughput-min" class="ml-1 text-fg-2">-</span>
           </span>
-          <span class="opacity-50 normal-case">last 120s</span>
+          <span data-i18n="downloads.throughput.last120s" class="opacity-50 normal-case">last 120s</span>
           <span>
             <span id="downloads-throughput-max" class="mr-1 text-fg-2">-</span>
-            <span class="opacity-60">max</span>
+            <span data-i18n="downloads.throughput.max" class="opacity-60">max</span>
           </span>
         </div>
       </section>
 
       <article
         id="downloads-active-list"
-        aria-label="Active downloads"
+        aria-label="Active downloads" data-i18n-attr="aria-label:aria.activeDownloads"
+        data-i18n-attr="aria-label:downloads.heading.active"
         class="rounded-2xl border border-line bg-surface overflow-hidden flex flex-col divide-y divide-line/60">
       </article>
     </section>
@@ -89,22 +92,23 @@ import {
     <!-- Downloaded files (always shown, with empty state). -->
     <section class="flex flex-col gap-3 dl-page-enter dl-stagger-3">
       <div class="flex items-center justify-between gap-2">
-        <h2 class="text-xs font-semibold uppercase tracking-widest text-fg-2">Downloaded</h2>
+        <h2 data-i18n="downloads.heading.downloaded" class="text-xs font-semibold uppercase tracking-widest text-fg-2">Downloaded</h2>
         <span
           id="downloads-done-count"
           class="text-xs text-fg-3 tabular-nums empty:hidden"></span>
       </div>
       <article
         id="downloads-done-list"
-        aria-label="Downloaded files"
+        aria-label="Downloaded files" data-i18n-attr="aria-label:aria.downloadedFiles"
+        data-i18n-attr="aria-label:downloads.heading.downloaded"
         class="rounded-2xl border border-line bg-surface overflow-hidden flex flex-col divide-y divide-line/60">
         <div
           data-empty
           class="px-5 py-10 text-sm text-fg-3 flex flex-col items-center gap-4 text-center">
           <IconDownload aria-hidden="true" stroke={1.5} class="size-10 text-fg-3 dl-empty-icon" />
           <div class="flex flex-col gap-1">
-            <p class="text-fg/80">No downloaded files yet.</p>
-            <p class="text-xs text-fg-3 max-w-prose">
+            <p data-i18n="downloads.empty.heading" class="text-fg/80">No downloaded files yet.</p>
+            <p data-i18n="downloads.empty.helper" class="text-xs text-fg-3">
               Open a movie or series episode and tap Download to save it here.
             </p>
           </div>
@@ -129,10 +133,10 @@ import {
            backdrop:bg-black/70">
     <div class="flex flex-col gap-4 p-5">
       <div class="flex flex-col gap-1.5">
-        <h2 id="downloads-delete-title" class="text-base font-semibold">
+        <h2 id="downloads-delete-title" data-i18n="downloads.delete.title" class="text-base font-semibold">
           Delete this download?
         </h2>
-        <p id="downloads-delete-body" class="text-sm text-fg-2">
+        <p id="downloads-delete-body" data-i18n="downloads.delete.body" class="text-sm text-fg-2">
           The file will be removed from disk.
         </p>
       </div>
@@ -140,6 +144,7 @@ import {
         <button
           id="downloads-delete-cancel"
           type="button"
+          data-i18n="common.cancel"
           class="rounded-xl border border-line px-4 py-2 text-sm
                  hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
           Cancel
@@ -147,6 +152,7 @@ import {
         <button
           id="downloads-delete-confirm"
           type="button"
+          data-i18n="common.delete"
           class="rounded-xl px-4 py-2 text-sm font-semibold bg-bad text-bg
                  hover:opacity-90 focus-visible:opacity-90
                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bad">
@@ -175,6 +181,7 @@ import {
     import { getDownloadDir } from "@/scripts/lib/app-settings.js"
     import { injectVersion } from "@/scripts/version.js"
     import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
+    import { t } from "@/scripts/lib/i18n.js"
     injectVersion()
 
     // ----------------------------
@@ -781,22 +788,22 @@ import {
 
       const playBtn = document.createElement("button")
       playBtn.type = "button"
-      playBtn.setAttribute("aria-label", `Play ${d.title}`)
-      playBtn.title = "Play"
+      playBtn.setAttribute("aria-label", t("downloads.action.playAria", { title: d.title }))
+      playBtn.title = t("downloads.action.play")
       playBtn.className =
         "inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent text-bg " +
         "min-h-11 min-w-11 px-3 text-sm font-semibold " +
         "hover:opacity-90 focus-visible:opacity-90 transition-opacity"
       playBtn.innerHTML =
         '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true" class="size-4"><path d="M8 5.14v13.72a1 1 0 0 0 1.5.87l11-6.86a1 1 0 0 0 0-1.74l-11-6.86a1 1 0 0 0-1.5.87z"/></svg>' +
-        '<span class="hidden sm:inline">Play</span>'
+        `<span class="hidden sm:inline">${t("downloads.action.play")}</span>`
       playBtn.addEventListener("click", () => playDoneRow(d))
       actions.appendChild(playBtn)
 
       const deleteBtn = document.createElement("button")
       deleteBtn.type = "button"
-      deleteBtn.setAttribute("aria-label", `Delete ${d.title}`)
-      deleteBtn.title = "Delete"
+      deleteBtn.setAttribute("aria-label", t("downloads.action.deleteAria", { title: d.title }))
+      deleteBtn.title = t("downloads.action.delete")
       deleteBtn.className =
         "inline-flex items-center justify-center rounded-lg border border-line " +
         "min-h-11 min-w-11 p-2 text-fg-3 " +
