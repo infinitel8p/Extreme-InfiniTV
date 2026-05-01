@@ -2,8 +2,8 @@
   // Thin top-of-page progress bar shown while the catalog is warming.
 
   import { onMount } from "svelte"
-  import { KIND_ORDER, KIND_LABEL_PLURAL } from "@/scripts/lib/kinds.js"
-  import { t } from "@/scripts/lib/i18n.js"
+  import { KIND_ORDER, kindLabelPlural } from "@/scripts/lib/kinds.js"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 
   const SHOW_AFTER_MS = 150
   const HOLD_AFTER_DONE_MS = 350
@@ -11,6 +11,7 @@
   let active = $state(false)
   /** @type {{ live: "pending"|"done"|"error", vod: "pending"|"done"|"error", series: "pending"|"done"|"error" }} */
   let kinds = $state({ live: "pending", vod: "pending", series: "pending" })
+  let locale = $state(0)
 
   let _showTimer = null
   let _doneSeen = false
@@ -46,14 +47,18 @@
     }, HOLD_AFTER_DONE_MS)
   }
 
+  const onLocale = () => { locale++ }
+
   onMount(() => {
     document.addEventListener("xt:catalog-warming-start", start)
     document.addEventListener("xt:catalog-warming-progress", progress)
     document.addEventListener("xt:catalog-warmed", done)
+    document.addEventListener(LOCALE_EVENT, onLocale)
     return () => {
       document.removeEventListener("xt:catalog-warming-start", start)
       document.removeEventListener("xt:catalog-warming-progress", progress)
       document.removeEventListener("xt:catalog-warmed", done)
+      document.removeEventListener(LOCALE_EVENT, onLocale)
       if (_showTimer) clearTimeout(_showTimer)
     }
   })
@@ -65,6 +70,7 @@
 </script>
 
 {#if active}
+  {#key locale}
   <div
     class="warming fixed left-0 right-0 z-10000 flex items-center gap-2.5 px-3 py-1.5
            bg-bg border-b border-line text-2xs text-fg-2 sm:bg-bg/95 sm:backdrop-blur"
@@ -90,7 +96,7 @@
             class:text-fg={kinds[k] === "done"}
             class:text-fg-3={kinds[k] === "pending"}
             class:text-bad={kinds[k] === "error"}>
-            {KIND_LABEL_PLURAL[k]}
+            {kindLabelPlural(k)}
           </span>
         </span>
       {/each}
@@ -102,6 +108,7 @@
         style:width={pct + "%"}></div>
     </div>
   </div>
+  {/key}
 {/if}
 
 <style>

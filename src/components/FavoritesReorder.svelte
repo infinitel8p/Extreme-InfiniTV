@@ -12,8 +12,8 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached } from "@/scripts/lib/cache.js"
-  import { KIND_LABEL_PLURAL, KIND_ORDER } from "@/scripts/lib/kinds.js"
-  import { t } from "@/scripts/lib/i18n.js"
+  import { kindLabelPlural, KIND_ORDER } from "@/scripts/lib/kinds.js"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 
   /** @type {string} */
   let activePlaylistId = $state("")
@@ -30,6 +30,7 @@
   let dragOver = $state(null)
   /** @type {{ kind: string, id: number } | null} */
   let justMoved = $state(null)
+  let locale = $state(0)
   let _settleTimer = null
   function flagSettle(kind, id) {
     if (_settleTimer) clearTimeout(_settleTimer)
@@ -45,7 +46,7 @@
     return ids.map((id) => {
       const meta = getFavoriteMeta(playlistId, kind, id)
       const item = lookup.get(Number(id))
-      const name = meta?.name || item?.name || `${KIND_LABEL_PLURAL[kind]} ${id}`
+      const name = meta?.name || item?.name || `${kindLabelPlural(kind)} ${id}`
       const logo = meta?.logo ?? item?.logo ?? null
       if (!meta && (item?.name || item?.logo)) {
         setFavoriteMeta(playlistId, kind, id, {
@@ -168,11 +169,13 @@
       lookupsForPlaylistId = ""
       await reload()
     }
+    const onLocale = () => { locale++ }
     const handlers = {
       "xt:active-changed": onCatalogChanged,
       "xt:catalog-warmed": onCatalogChanged,
       "xt:favorites-changed": reload,
       "xt:favorites-order-changed": reload,
+      [LOCALE_EVENT]: onLocale,
     }
     for (const [k, v] of Object.entries(handlers)) {
       document.addEventListener(k, v)
@@ -187,6 +190,7 @@
   let total = $derived(lists.live.length + lists.vod.length + lists.series.length)
 </script>
 
+{#key locale}
 <div class="rounded-xl border border-line bg-surface p-4 flex flex-col gap-4">
   <div class="flex items-baseline justify-between gap-2">
     <h2 class="text-sm font-semibold text-fg">{t("settings.favoritesReorder.title")}</h2>
@@ -208,7 +212,7 @@
       {#if lists[kind].length}
         <div class="flex flex-col gap-1.5">
           <div class="sticky top-0 z-10 -mx-4 px-4 py-1.5 bg-surface/95 backdrop-blur-sm border-b border-line/60 text-eyebrow font-semibold uppercase tracking-wide text-fg-3">
-            {KIND_LABEL_PLURAL[kind]}
+            {kindLabelPlural(kind)}
           </div>
           <ul class="flex flex-col gap-1">
             {#each lists[kind] as row, i (row.id)}
@@ -265,6 +269,7 @@
     </div>
   {/if}
 </div>
+{/key}
 
 <style>
   .reorder-row.is-dragging {

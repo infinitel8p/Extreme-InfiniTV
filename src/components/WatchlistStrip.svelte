@@ -10,9 +10,9 @@
     setWatchlistMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { KIND_LABEL, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
 
-  /** @type {Array<{ kind: "vod"|"series", id: number, name: string, logo: string|null, subtitle: string, href: string }>} */
+  /** @type {Array<{ kind: "vod"|"series", id: number, name: string, logo: string|null, href: string }>} */
   let entries = $state([])
   let activePlaylistId = $state("")
   let locale = $state(0)
@@ -22,7 +22,7 @@
 
   function buildEntry(playlistId, kind, id, meta, lookups) {
     const item = lookups[kind]?.get(Number(id))
-    const name = meta?.name || item?.name || `${KIND_LABEL[kind]} ${id}`
+    const name = meta?.name || item?.name || `${kindLabel(kind)} ${id}`
     const logo = meta?.logo ?? item?.logo ?? null
     if (!meta?.name && !meta?.logo && (item?.name || item?.logo)) {
       setWatchlistMeta(playlistId, kind, id, {
@@ -34,7 +34,7 @@
       kind === "vod"
         ? `/movies/detail?id=${encodeURIComponent(id)}`
         : `/series/detail?id=${encodeURIComponent(id)}`
-    return { kind, id, name, logo, subtitle: KIND_LABEL[kind], href }
+    return { kind, id, name, logo, href }
   }
 
   async function rebuildLookups(playlistId) {
@@ -146,7 +146,7 @@
         <li class="watch-item shrink-0 snap-start" data-kind={entry.kind} style:--enter-delay={Math.min(idx, 8) * 28 + "ms"}>
           <a
             href={entry.href}
-            aria-label={`Open ${entry.name}`}
+            aria-label={t("watchlist.itemAriaLabel", { name: entry.name })}
             class="watch-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150
@@ -175,7 +175,7 @@
               <span
                 class="absolute top-1.5 left-1.5 text-label font-medium uppercase tracking-wide
                        rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
-                {entry.subtitle}
+                {kindLabel(entry.kind)}
               </span>
 
               <span

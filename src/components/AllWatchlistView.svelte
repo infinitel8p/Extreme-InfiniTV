@@ -11,7 +11,8 @@
     setWatchlistMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { KIND_LABEL, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { IconExternalLink } from "@tabler/icons-svelte"
 
   /** @type {"all"|"vod"|"series"} */
   let filter = $state("all")
@@ -90,7 +91,7 @@
     const raw = getAllGlobalWatchlist()
     entries = raw.map((row) => {
       const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
-      const name = row.name || item?.name || `${KIND_LABEL[row.kind]} ${row.id}`
+      const name = row.name || item?.name || `${kindLabel(row.kind)} ${row.id}`
       const logo = row.logo ?? item?.logo ?? null
       // Lazily backfill stored meta so cross-playlist clicks still have name
       // and poster even when the source catalog cache later expires.
@@ -151,7 +152,13 @@
   })
 </script>
 
-<div class="flex flex-col gap-3 shrink-0" data-locale={locale}>
+<!--
+  `{#key locale}` rebuilds the entire fragment when the locale rune changes,
+  so every t() / kindLabel() inside re-runs with the new locale - including
+  the cards section that previously lived outside the data-locale wrapper.
+-->
+{#key locale}
+<div class="flex flex-col gap-3 shrink-0">
   <div class="flex flex-wrap gap-2" role="tablist" aria-label={t("watchlist.heading")}>
     {#each [
       { id: "all", key: "favorites.filter.all" },
@@ -203,7 +210,7 @@
       <a
         href={entry.href}
         onclick={(event) => openCard(event, entry)}
-        aria-label={`Open ${entry.name} from ${entry.playlistTitle}`}
+        aria-label={t("watchlist.cardAriaLabel", { name: entry.name, playlist: entry.playlistTitle })}
         class="fav-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line
                transition-[transform,box-shadow] duration-150
@@ -229,7 +236,7 @@
           <span
             class="absolute top-1.5 left-1.5 text-label font-medium uppercase tracking-wide
                    rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
-            {KIND_LABEL[entry.kind]}
+            {kindLabel(entry.kind)}
           </span>
         </div>
 
@@ -239,11 +246,7 @@
           </div>
           <div class="truncate text-2xs text-fg-3 flex items-center gap-1">
             {#if entry.isCrossPlaylist}
-              <svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="shrink-0 text-accent">
-                <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
-                <polyline points="16 6 21 6 21 11" />
-                <line x1="10" y1="14" x2="21" y2="3" />
-              </svg>
+              <IconExternalLink aria-hidden="true" class="h-3 w-3 shrink-0 text-accent" />
             {/if}
             <span class="truncate">{entry.playlistTitle}</span>
           </div>
@@ -252,6 +255,7 @@
     {/each}
   </section>
 {/if}
+{/key}
 
 <style>
   .filter-chip.active {

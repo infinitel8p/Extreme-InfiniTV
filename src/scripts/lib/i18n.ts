@@ -27,7 +27,7 @@ interface LocaleMeta {
   nativeName: string
 }
 
-const LOCALE_LOADERS: Record<string, () => Promise<LocaleMessages>> = {
+const LOCALE_LOADERS: Record<LocaleCode, () => Promise<LocaleMessages>> = {
   en: async () => enMessages as unknown as LocaleMessages,
   es: async () => (await import("@/i18n/es.json")).default as unknown as LocaleMessages,
   de: async () => (await import("@/i18n/de.json")).default as unknown as LocaleMessages,
@@ -39,7 +39,7 @@ const LOCALE_LOADERS: Record<string, () => Promise<LocaleMessages>> = {
   ja: async () => (await import("@/i18n/ja.json")).default as unknown as LocaleMessages,
 }
 
-const LOCALE_META_FALLBACK: Record<string, { name: string; nativeName: string }> = {
+const LOCALE_META_FALLBACK: Record<LocaleCode, { name: string; nativeName: string }> = {
   en: { name: "English", nativeName: "English" },
   es: { name: "Spanish", nativeName: "Español" },
   de: { name: "German", nativeName: "Deutsch" },
@@ -49,6 +49,10 @@ const LOCALE_META_FALLBACK: Record<string, { name: string; nativeName: string }>
   ru: { name: "Russian", nativeName: "Русский" },
   zh: { name: "Chinese (Simplified)", nativeName: "中文（简体）" },
   ja: { name: "Japanese", nativeName: "日本語" },
+}
+
+function isLocaleCode(code: string): code is LocaleCode {
+  return code in LOCALE_LOADERS
 }
 
 const LOCALE_STORAGE_KEY = "xt_locale"
@@ -112,33 +116,42 @@ function writePersistedLocale(code: string | null): void {
   }
 }
 
-function detectLocale(): string {
+function detectLocale(): LocaleCode {
   const persisted = readPersistedLocale()
-  if (persisted && LOCALE_LOADERS[persisted]) return persisted
+  if (persisted && isLocaleCode(persisted)) return persisted
   if (typeof navigator === "undefined") return "en"
   for (const tag of navigator.languages || [navigator.language || ""]) {
     if (!tag) continue
     const lower = tag.toLowerCase()
-    if (LOCALE_LOADERS[lower]) return lower
+    if (isLocaleCode(lower)) return lower
     const base = lower.split("-")[0]!
-    if (LOCALE_LOADERS[base]) return base
+    if (isLocaleCode(base)) return base
   }
   return "en"
 }
 
 export async function setLocale(code: string | null): Promise<void> {
+  // null means "reset to auto-detect": clear the override first so detectLocale
+  // picks from navigator.languages, then resolve and proceed with that.
   if (code === null) {
     writePersistedLocale(null)
     code = detectLocale()
   }
-  if (!LOCALE_LOADERS[code]) code = "en"
+  if (!isLocaleCode(code)) code = "en"
   if (!cache.has(code)) {
     const loader = LOCALE_LOADERS[code]!
     cache.set(code, await loader())
   }
   activeCode = code
   activeMessages = cache.get(code)!
-  writePersistedLocale(code === detectLocale() && !readPersistedLocale() ? null : code)
+  // Persistence policy: only write the key when the chosen locale differs from
+  // what auto-detect would pick *and* there isn't already a stored override.
+  // This keeps localStorage clean for users who never deviate from their
+  // browser default. NB: detectLocale() reads readPersistedLocale() internally,
+  // so the order matters - we evaluate detectLocale() with the storage in
+  // whatever state it was after the (code === null) branch above.
+  const matchesAutoDetect = code === detectLocale() && !readPersistedLocale()
+  writePersistedLocale(matchesAutoDetect ? null : code)
   if (typeof document !== "undefined") {
     document.documentElement.setAttribute("lang", code)
     applyI18nDOM()
@@ -154,6 +167,13 @@ export async function setLocale(code: string | null): Promise<void> {
  * title, placeholder). Astro pages render at build time so they ship the
  * English string baked in - this hook swaps the visible text after hydration
  * and on every locale change.
+ *
+ * Trust contract for `data-i18n-html`: locale JSON values are author-controlled
+ * (committed to this repo by maintainers / translators reviewing PRs), not
+ * end-user input, so `innerHTML =` is safe here. Translators must keep values
+ * limited to plain text plus the inline markup needed for layout (e.g. `<a>`,
+ * `<strong>`, `<br>`). Never accept locale data from a runtime source - if
+ * that ever changes, replace this with a sanitizer.
  */
 export function applyI18nDOM(root: ParentNode = document): void {
   if (typeof document === "undefined") return

@@ -1,7 +1,12 @@
 // Shared kind metadata. Adding a fourth kind is a one-file change.
 
+import { t } from "@/scripts/lib/i18n.js"
+
 export type Kind = "live" | "vod" | "series" | "epg"
 
+// English source-of-truth labels, used as the fallback when no locale is
+// loaded yet (the i18n runtime falls back to English on missing keys, but the
+// initial render before initI18n resolves still needs a sync value here).
 export const KIND_LABEL: Record<Kind, string> = {
   live: "Live",
   vod: "Movie",
@@ -14,6 +19,18 @@ export const KIND_LABEL_PLURAL: Record<Kind, string> = {
   vod: "Movies",
   series: "Series",
   epg: "EPG",
+}
+
+// Locale-aware label helpers. Use these in templates and dynamic strings so
+// the badge / placeholder / fallback name re-renders on locale change. The
+// raw `KIND_LABEL*` maps stay exported for the few sync edge cases (e.g.
+// kinds.js consumers in vanilla scripts) and as the translator's reference.
+export function kindLabel(kind: Kind): string {
+  return t(`kind.${kind}`)
+}
+
+export function kindLabelPlural(kind: Kind): string {
+  return t(`kind.${kind}.plural`)
 }
 
 const wrap = (paths: string): string =>

@@ -17,6 +17,11 @@
   const SECTION_ID = "ps-popover-section"
 
   let isOpen = $state(false)
+  // The fallback string is read on `renderHeader()` (mount + every locale
+  // change), so the initial sync value here is only visible during the
+  // ~one-frame gap before onMount fires. We still seed it with t() so that
+  // when initI18n() has already resolved by mount time, the very first paint
+  // is in the user's locale.
   let activeTitle = $state(t("playlist.none"))
   let activeBadge = $state("-")
   let hasActive = $state(false)

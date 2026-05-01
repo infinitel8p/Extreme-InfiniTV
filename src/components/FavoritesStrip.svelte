@@ -10,9 +10,9 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { KIND_LABEL, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
 
-  /** @type {Array<{ kind: "live"|"vod"|"series", id: number, name: string, logo: string|null, subtitle: string, href: string }>} */
+  /** @type {Array<{ kind: "live"|"vod"|"series", id: number, name: string, logo: string|null, href: string }>} */
   let entries = $state([])
   let activePlaylistId = $state("")
   let locale = $state(0)
@@ -23,7 +23,11 @@
   function buildEntry(playlistId, { kind, id }, lookups) {
     const meta = getFavoriteMeta(playlistId, kind, id)
     const item = lookups[kind]?.get(Number(id))
-    const name = meta?.name || item?.name || `${KIND_LABEL[kind]} ${id}`
+    // `kindLabel(kind)` runs at build time but also re-runs whenever the
+    // entries array is rebuilt; the badge in the template additionally calls
+    // kindLabel() inside the `{#key locale}` block so it stays current even
+    // without rebuilding the array.
+    const name = meta?.name || item?.name || `${kindLabel(kind)} ${id}`
     const logo = meta?.logo ?? item?.logo ?? null
     if (!meta && (item?.name || item?.logo)) {
       setFavoriteMeta(playlistId, kind, id, {
@@ -39,7 +43,7 @@
     } else if (kind === "series") {
       href = `/series/detail?id=${encodeURIComponent(id)}`
     }
-    return { kind, id, name, logo, subtitle: KIND_LABEL[kind], href }
+    return { kind, id, name, logo, href }
   }
 
   async function rebuildLookups(playlistId) {
@@ -122,6 +126,8 @@
 
 {#if entries.length}
   {@const _locale = locale}
+  <!-- _locale is read inside this if-block so locale-bumping forces every
+       t() / kindLabel() in the entire fragment below to re-evaluate. -->
   <section
     aria-label={t("nav.favorites")}
     class="fav-section flex flex-col gap-3 shrink-0">
@@ -146,7 +152,7 @@
         <li class="fav-item shrink-0 snap-start" data-kind={e.kind} style:--enter-delay={Math.min(i, 8) * 28 + "ms"}>
           <a
             href={e.href}
-            aria-label={`Open ${e.name}`}
+            aria-label={t("favorites.itemAriaLabel", { name: e.name })}
             class="fav-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150
@@ -195,7 +201,7 @@
               <span
                 class="absolute top-1.5 left-1.5 text-label font-medium uppercase tracking-wide
                        rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
-                {e.subtitle}
+                {kindLabel(e.kind)}
               </span>
             </div>
 

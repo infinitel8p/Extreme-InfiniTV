@@ -28,7 +28,10 @@ jobs:
               return
             }
 
-            const files = fs.readdirSync(i18nDir).filter((file) => file.endsWith(".json"))
+            const files = fs
+              .readdirSync(i18nDir)
+              .filter((file) => file.endsWith(".json"))
+              .sort()
             const enPath = path.join(i18nDir, "en.json")
             if (!fs.existsSync(enPath)) {
               core.setFailed("src/i18n/en.json is missing - it is the source of truth.")
@@ -65,7 +68,9 @@ jobs:
               }
             }
 
+            const marker = "<!-- xt:i18n-keys-check -->"
             const body = [
+              marker,
               "### i18n key check",
               "",
               ...lines,
@@ -76,10 +81,34 @@ jobs:
             core.summary.addRaw(body).write()
 
             if (context.payload.pull_request) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
-                body,
-              })
+              const issue_number = context.payload.pull_request.number
+              const owner = context.repo.owner
+              const repo = context.repo.repo
+              // Sticky comment: update an existing bot comment when present so
+              // the PR conversation doesn't accumulate one entry per push.
+              const existing = await github.paginate(
+                github.rest.issues.listComments,
+                { owner, repo, issue_number, per_page: 100 }
+              )
+              const prior = existing.find(
+                (comment) =>
+                  comment.user?.type === "Bot" &&
+                  typeof comment.body === "string" &&
+                  comment.body.includes(marker)
+              )
+              if (prior) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: prior.id,
+                  body,
+                })
+              } else {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number,
+                  body,
+                })
+              }
             }

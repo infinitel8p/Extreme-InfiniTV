@@ -12,7 +12,7 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { KIND_LABEL, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
 
   /** @type {"all"|"live"|"vod"|"series"} */
   let filter = $state("all")
@@ -102,7 +102,7 @@
     entries = raw.map((row) => {
       const meta = getFavoriteMeta(row.playlistId, row.kind, row.id)
       const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
-      const name = meta?.name || item?.name || `${KIND_LABEL[row.kind]} ${row.id}`
+      const name = meta?.name || item?.name || `${kindLabel(row.kind)} ${row.id}`
       const logo = meta?.logo ?? item?.logo ?? null
       // Lazily backfill meta so cross-playlist clicks still have name + logo
       // even when the source catalog cache later expires.
@@ -164,7 +164,13 @@
   })
 </script>
 
-<div class="flex flex-col gap-3 shrink-0" data-locale={locale}>
+<!--
+  `_locale = locale` is read at the top of the reactive scope so any t() /
+  kindLabel() call inside this fragment re-runs when the locale rune bumps.
+  Wrap any future templated text inside this same scope.
+-->
+{#key locale}
+<div class="flex flex-col gap-3 shrink-0">
   <div class="flex flex-wrap gap-2" role="tablist" aria-label={t("favorites.heading")}>
     {#each [
       { id: "all", key: "favorites.filter.all" },
@@ -217,7 +223,7 @@
       <a
         href={entry.href}
         onclick={(event) => openCard(event, entry)}
-        aria-label={`Open ${entry.name} from ${entry.playlistTitle}`}
+        aria-label={t("favorites.cardAriaLabel", { name: entry.name, playlist: entry.playlistTitle })}
         class="fav-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line
                transition-[transform,box-shadow] duration-150
@@ -263,7 +269,7 @@
           <span
             class="absolute top-1.5 left-1.5 text-label font-medium uppercase tracking-wide
                    rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
-            {KIND_LABEL[entry.kind]}
+            {kindLabel(entry.kind)}
           </span>
         </div>
 
@@ -282,6 +288,7 @@
     {/each}
   </section>
 {/if}
+{/key}
 
 <style>
   .filter-chip.active {

@@ -199,13 +199,16 @@ function hydrate(raw) {
       favOrderSeries: Array.isArray(val.favOrderSeries)
         ? val.favOrderSeries.map(Number).filter(Number.isFinite)
         : [],
+      // Prototype-less to match emptyEntry(); even though every read is
+      // hasOwnProperty-guarded, keep the shape consistent so future contributors
+      // don't accidentally mix `bag.toString` style accidental hits.
       watchVod:
         val.watchVod && typeof val.watchVod === "object"
-          ? { ...val.watchVod }
+          ? Object.assign(Object.create(null), val.watchVod)
           : Object.create(null),
       watchSeries:
         val.watchSeries && typeof val.watchSeries === "object"
-          ? { ...val.watchSeries }
+          ? Object.assign(Object.create(null), val.watchSeries)
           : Object.create(null),
       viewSort: {
         vod: ["default", "added", "az"].includes(v.vod) ? v.vod : "default",

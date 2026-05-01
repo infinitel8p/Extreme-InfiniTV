@@ -1,0 +1,44 @@
+# Normalize line endings on commit so Windows / macOS / Linux checkouts match.
+* text=auto eol=lf
+
+# Source files: always LF in the repo, regardless of contributor's platform.
+*.js     text eol=lf
+*.mjs    text eol=lf
+*.cjs    text eol=lf
+*.ts     text eol=lf
+*.tsx    text eol=lf
+*.jsx    text eol=lf
+*.svelte text eol=lf
+*.astro  text eol=lf
+*.json   text eol=lf
+*.md     text eol=lf
+*.css    text eol=lf
+*.html   text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.toml   text eol=lf
+*.rs     text eol=lf
+*.sh     text eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+
+# Binary assets - never touch.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.icns   binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
+*.eot    binary
+*.mp4    binary
+*.webm   binary
+*.gz     binary
+*.zip    binary

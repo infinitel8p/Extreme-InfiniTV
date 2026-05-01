@@ -11,8 +11,8 @@
     getProgrammesSync,
     EPG_LOADED_EVENT,
   } from "@/scripts/lib/epg-data.js"
-  import { KIND_LABEL } from "@/scripts/lib/kinds.js"
-  import { t } from "@/scripts/lib/i18n.js"
+  import { kindLabel } from "@/scripts/lib/kinds.js"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 
   /** @type {{ focusOnMount?: boolean }} */
   let { focusOnMount = false } = $props()
@@ -45,6 +45,7 @@
   /** @type {Array<{ kind: "live"|"vod"|"series"|"epg", id: string|number, name: string, logo: string|null, subtitle: string, href: string, norm: string }>} */
   let allItems = $state([])
   let isWarming = $state(false)
+  let locale = $state(0)
   /** @type {HTMLInputElement|null} */
   let inputEl = null
 
@@ -276,9 +277,11 @@
     function onEpgLoaded() {
       loadIndex({ warm: false, warmEpg: false })
     }
+    const onLocale = () => { locale++ }
     document.addEventListener("xt:catalog-warmed", onWarmed)
     document.addEventListener(EPG_LOADED_EVENT, onEpgLoaded)
     document.addEventListener("xt:active-changed", () => loadIndex())
+    document.addEventListener(LOCALE_EVENT, onLocale)
     if (focusOnMount) {
       tick().then(() => {
         inputEl?.focus()
@@ -288,6 +291,7 @@
     return () => {
       document.removeEventListener("xt:catalog-warmed", onWarmed)
       document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
+      document.removeEventListener(LOCALE_EVENT, onLocale)
       if (_queryTimer) clearTimeout(_queryTimer)
     }
   })
@@ -295,6 +299,7 @@
 
 <svelte:window onkeydown={onKey} />
 
+{#key locale}
 <section class="search-view flex flex-col gap-4 flex-1 min-h-0">
   <div class="flex flex-col gap-3 shrink-0">
     <div class="search-input-wrap flex items-center gap-2 px-3 py-2 rounded-xl border border-line bg-surface focus-within:border-accent transition-[border-color,box-shadow] duration-200 ease-out">
@@ -419,7 +424,7 @@
                     class:object-cover={r.kind !== "live"}
                     class:object-contain={r.kind === "live"} />
                 {:else}
-                  <span class="text-2xs text-fg-3 uppercase">{KIND_LABEL[r.kind][0]}</span>
+                  <span class="text-2xs text-fg-3 uppercase">{kindLabel(r.kind)[0]}</span>
                 {/if}
               </span>
               <span class="flex-1 min-w-0">
@@ -427,7 +432,7 @@
                 <span class="block truncate text-2xs text-fg-3">{r.subtitle}</span>
               </span>
               <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
-                {KIND_LABEL[r.kind]}
+                {kindLabel(r.kind)}
               </span>
             </a>
           </li>
@@ -441,6 +446,7 @@
     {/if}
   </div>
 </section>
+{/key}
 
 <style>
   .result-row {
