@@ -1,6 +1,7 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 import { loadCreds, getActiveEntry } from "./lib/creds.js"
 import { ensureUserInfo, getExpirationMsSync } from "./lib/account-info.js"
-import { t } from "./lib/i18n.js"
+import { t, initI18n } from "./lib/i18n.js"
 
 const BANNER_THRESHOLD_DAYS = 7
 
@@ -46,6 +47,7 @@ export async function injectExpirationDate() {
     const targets = document.querySelectorAll("[data-account-expiration]")
     if (!targets.length) return
 
+    await initI18n()
     const creds = await loadCreds()
     const active = await getActiveEntry()
     if (!active || !creds.host || !creds.user || !creds.pass) {

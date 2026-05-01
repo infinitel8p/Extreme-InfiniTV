@@ -1,3 +1,4 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 // Series detail page (route: /series/detail?id=<series_id>).
 // Cache-driven on first paint so it works offline once a series has been
 // opened at least once before.
@@ -45,7 +46,7 @@ import {
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
-import { t } from "@/scripts/lib/i18n.js"
+import { t, initI18n } from "@/scripts/lib/i18n.js"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -986,6 +987,7 @@ function showError(msg) {
 }
 
 async function boot() {
+  await initI18n()
   if (!seriesId) {
     showError(t("detail.error.noSeriesId"))
     return

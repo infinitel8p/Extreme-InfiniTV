@@ -1,3 +1,4 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 // Series listing page (route: /series).
 import { log } from "@/scripts/lib/log.js"
 import {
@@ -7,7 +8,7 @@ import {
 } from "@/scripts/lib/creds.js"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
 import { debounce } from "@/scripts/lib/debounce.js"
-import { t } from "@/scripts/lib/i18n.js"
+import { t, initI18n } from "@/scripts/lib/i18n.js"
 import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import {
   ensureLoaded as ensurePrefsLoaded,
@@ -1025,6 +1026,7 @@ if (listStatus && /no playlist selected/i.test(listStatus.textContent || "")) {
 document.addEventListener("xt:active-changed", () => loadSeries())
 
 ;(async () => {
+  await initI18n()
   creds = await loadCreds()
   if (creds.host && creds.user && creds.pass) {
     loadSeries()

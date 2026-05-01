@@ -1,3 +1,4 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 // Movie detail page (route: /movies/detail?id=<vod_id>)
 import { log } from "@/scripts/lib/log.js"
 import {
@@ -42,7 +43,7 @@ import {
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
-import { t } from "@/scripts/lib/i18n.js"
+import { t, initI18n } from "@/scripts/lib/i18n.js"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -599,6 +600,7 @@ function showError(msg) {
 }
 
 async function boot() {
+  await initI18n()
   if (!movieId) {
     showError(t("detail.error.noMovieId"))
     return
