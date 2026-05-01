@@ -626,5 +626,19 @@
   "downloads.action.deleteAria": "{title} を削除",
   "list.noPlaylistsCta": "プレイリストはまだありません。1つ追加して視聴を始めましょう。",
   "playlist.none": "プレイリストなし",
-  "common.tomorrow": "明日"
+  "common.tomorrow": "明日",
+  "epg.subtitleAll": "EPG · すべてのカテゴリー",
+  "epg.subtitleWith": "EPG · {category}",
+  "settings.update.checking": "確認中…",
+  "settings.update.upToDateMsg": "最新バージョンを使用しています。",
+  "settings.update.available": "利用可能",
+  "settings.update.releasedOn": "{date} に公開。",
+  "settings.update.updateAvailableMsg": "更新があります。",
+  "settings.update.checkFailed": "確認に失敗 - {error}",
+  "settings.update.preparing": "準備中…",
+  "settings.update.starting": "開始中…",
+  "settings.update.installed": "インストール済み。",
+  "settings.update.installedRestart": "更新がインストールされました。再起動して適用してください。",
+  "settings.update.downloadFailed": "ダウンロードに失敗 - {error}。「再ダウンロード」をクリックしてやり直してください。",
+  "settings.update.reDownload": "再ダウンロード"
 }

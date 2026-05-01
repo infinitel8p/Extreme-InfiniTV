@@ -626,5 +626,19 @@
   "downloads.action.deleteAria": "{title} löschen",
   "list.noPlaylistsCta": "Noch keine Wiedergabelisten. Füge eine hinzu, um anzufangen.",
   "playlist.none": "Keine Wiedergabeliste",
-  "common.tomorrow": "Morgen"
+  "common.tomorrow": "Morgen",
+  "epg.subtitleAll": "EPG · Alle Kategorien",
+  "epg.subtitleWith": "EPG · {category}",
+  "settings.update.checking": "Wird geprüft…",
+  "settings.update.upToDateMsg": "Du bist auf der neuesten Version.",
+  "settings.update.available": "Verfügbar",
+  "settings.update.releasedOn": "Veröffentlicht am {date}.",
+  "settings.update.updateAvailableMsg": "Update verfügbar.",
+  "settings.update.checkFailed": "Prüfung fehlgeschlagen - {error}",
+  "settings.update.preparing": "Wird vorbereitet…",
+  "settings.update.starting": "Wird gestartet…",
+  "settings.update.installed": "Installiert.",
+  "settings.update.installedRestart": "Update installiert. Neustart erforderlich.",
+  "settings.update.downloadFailed": "Download fehlgeschlagen - {error}. Klicke auf „Erneut herunterladen“, um neu zu starten.",
+  "settings.update.reDownload": "Erneut herunterladen"
 }

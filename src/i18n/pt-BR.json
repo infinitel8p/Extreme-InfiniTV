@@ -626,5 +626,19 @@
   "downloads.action.deleteAria": "Excluir {title}",
   "list.noPlaylistsCta": "Ainda não há listas. Adicione uma para começar a assistir.",
   "playlist.none": "Sem lista",
-  "common.tomorrow": "Amanhã"
+  "common.tomorrow": "Amanhã",
+  "epg.subtitleAll": "EPG · Todas as categorias",
+  "epg.subtitleWith": "EPG · {category}",
+  "settings.update.checking": "Verificando…",
+  "settings.update.upToDateMsg": "Você está na versão mais recente.",
+  "settings.update.available": "Disponível",
+  "settings.update.releasedOn": "Publicado em {date}.",
+  "settings.update.updateAvailableMsg": "Atualização disponível.",
+  "settings.update.checkFailed": "Falha na verificação - {error}",
+  "settings.update.preparing": "Preparando…",
+  "settings.update.starting": "Iniciando…",
+  "settings.update.installed": "Instalado.",
+  "settings.update.installedRestart": "Atualização instalada. Reinicie para aplicar.",
+  "settings.update.downloadFailed": "Falha no download - {error}. Clique em Baixar novamente para recomeçar.",
+  "settings.update.reDownload": "Baixar novamente"
 }

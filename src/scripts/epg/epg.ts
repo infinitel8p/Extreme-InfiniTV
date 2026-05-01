@@ -1,3 +1,4 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 // EPG schedule grid view.
 import { log } from "@/scripts/lib/log.js"
 import {
@@ -531,12 +532,14 @@ async function fetchXtreamChannels() {
 function syncCategoryUI() {
   const display =
     activeCat === "__favorites__"
-      ? "★ Favorites"
+      ? t("list.specialFavorites")
       : activeCat === "__recents__"
-        ? "🕒 Recently watched"
+        ? t("list.specialRecents")
         : activeCat
   if (titleEl) {
-    titleEl.textContent = display ? `EPG · ${display}` : "EPG · All categories"
+    titleEl.textContent = display
+      ? t("epg.subtitleWith", { category: display })
+      : t("epg.subtitleAll")
   }
   if (categoryLabelEl) {
     categoryLabelEl.textContent = display || t("list.allCategories")

@@ -1488,6 +1488,11 @@ dialog[open]::backdrop {
     font-size: clamp(2.75rem, 4vw + 1.75rem, 6.75rem);
     animation: route-hero-rise 560ms cubic-bezier(0.16, 1, 0.3, 1) 100ms both;
 }
+/* Accent the first glyph of every route title in fuchsia. */
+.route-hero__title::first-letter {
+    color: var(--color-accent);
+    font-weight: 800;
+}
 .route-hero__title em {
     font-style: normal;
     color: var(--color-accent);

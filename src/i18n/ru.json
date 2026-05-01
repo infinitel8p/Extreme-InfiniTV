@@ -626,5 +626,19 @@
   "downloads.action.deleteAria": "Удалить {title}",
   "list.noPlaylistsCta": "Пока нет плейлистов. Добавьте один, чтобы начать смотреть.",
   "playlist.none": "Нет плейлиста",
-  "common.tomorrow": "Завтра"
+  "common.tomorrow": "Завтра",
+  "epg.subtitleAll": "EPG · Все категории",
+  "epg.subtitleWith": "EPG · {category}",
+  "settings.update.checking": "Проверка…",
+  "settings.update.upToDateMsg": "У вас установлена последняя версия.",
+  "settings.update.available": "Доступно",
+  "settings.update.releasedOn": "Выпущено {date}.",
+  "settings.update.updateAvailableMsg": "Доступно обновление.",
+  "settings.update.checkFailed": "Ошибка проверки - {error}",
+  "settings.update.preparing": "Подготовка…",
+  "settings.update.starting": "Запуск…",
+  "settings.update.installed": "Установлено.",
+  "settings.update.installedRestart": "Обновление установлено. Перезапустите для применения.",
+  "settings.update.downloadFailed": "Ошибка загрузки - {error}. Нажмите «Скачать заново», чтобы начать сначала.",
+  "settings.update.reDownload": "Скачать заново"
 }

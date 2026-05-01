@@ -27,7 +27,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
              flex flex-col gap-8 sm:gap-10">
 
     <header class="route-hero shrink-0">
-      <h1 class="route-hero__title"><span data-i18n="settings.title">Sett<em>i</em>ngs</span></h1>
+      <h1 data-i18n="settings.title" class="route-hero__title">Settings</h1>
       <p data-i18n="page.settings.sub" class="route-hero__sub">
         Playlists, preferences, cache, and the app itself.
       </p>
@@ -491,7 +491,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
           </button>
           <button id="update-install" type="button" hidden class="btn">
             <IconCloudDownload aria-hidden="true" class="btn-icon" />
-            <span id="update-install-label" data-i18n="settings.about.installUpdate">Download &amp; install</span>
+            <span id="update-install-label">Download &amp; install</span>
           </button>
           <button id="update-relaunch" type="button" hidden class="btn">
             <span data-i18n="settings.about.restartNow">Restart now</span>
@@ -1690,20 +1690,20 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
 
     async function checkForUpdates() {
       if (!isWindowsDesktop) return
-      if (updateMsgEl) updateMsgEl.textContent = "Checking…"
+      if (updateMsgEl) updateMsgEl.textContent = t("settings.update.checking")
       setUpdateState("checking")
       updateCheckBtn?.setAttribute("disabled", "")
       updateInstallBtn?.setAttribute("hidden", "")
       updateRelaunchBtn?.setAttribute("hidden", "")
-      setInstallLabel("Download & install")
+      setInstallLabel(t("settings.about.installUpdate"))
       setProgress(null)
       try {
         const { check } = await import("@tauri-apps/plugin-updater")
         const update = await check()
         if (!update) {
           pendingUpdate = null
-          if (updateLatestEl) updateLatestEl.textContent = "Up to date"
-          if (updateMsgEl) updateMsgEl.textContent = "You're on the latest version."
+          if (updateLatestEl) updateLatestEl.textContent = t("settings.about.upToDate")
+          if (updateMsgEl) updateMsgEl.textContent = t("settings.update.upToDateMsg")
           if (updateNotesEl) {
             updateNotesEl.textContent = ""
             updateNotesEl.classList.add("hidden")
@@ -1718,7 +1718,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         if (updateLatestEl) {
           updateLatestEl.textContent = update.version
             ? `v${update.version}`
-            : "Available"
+            : t("settings.update.available")
         }
         if (updateNotesEl && update.body) {
           updateNotesEl.textContent = update.body
@@ -1726,8 +1726,8 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         }
         if (updateMsgEl) {
           updateMsgEl.textContent = update.date
-            ? `Released ${new Date(update.date).toLocaleDateString()}.`
-            : "Update available."
+            ? t("settings.update.releasedOn", { date: new Date(update.date).toLocaleDateString() })
+            : t("settings.update.updateAvailableMsg")
         }
         if (updateGithubLink) {
           updateGithubLink.href = update.version
@@ -1739,7 +1739,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
       } catch (e) {
         log.error("Update check failed:", e)
         if (updateMsgEl) {
-          updateMsgEl.textContent = `Check failed - ${String(e?.message || e)}`
+          updateMsgEl.textContent = t("settings.update.checkFailed", { error: String(e?.message || e) })
         }
         setUpdateState("error")
       } finally {
@@ -1753,12 +1753,12 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
       updateCheckBtn?.setAttribute("disabled", "")
       let total = 0
       let received = 0
-      setProgress(0, "Preparing…")
+      setProgress(0, t("settings.update.preparing"))
       try {
         await pendingUpdate.downloadAndInstall((event) => {
           if (event.event === "Started") {
             total = event.data?.contentLength || 0
-            setProgress(0, total ? `0 / ${fmtUpdateBytes(total)}` : "Starting…")
+            setProgress(0, total ? `0 / ${fmtUpdateBytes(total)}` : t("settings.update.starting"))
           } else if (event.event === "Progress") {
             received += event.data?.chunkLength || 0
             const pct = total ? (received / total) * 100 : 0
@@ -1769,23 +1769,21 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
                 : fmtUpdateBytes(received)
             )
           } else if (event.event === "Finished") {
-            setProgress(100, "Installed.")
+            setProgress(100, t("settings.update.installed"))
           }
         })
         if (updateMsgEl) {
-          updateMsgEl.textContent = "Update installed. Restart to apply."
+          updateMsgEl.textContent = t("settings.update.installedRestart")
         }
-        setInstallLabel("Download & install")
+        setInstallLabel(t("settings.about.installUpdate"))
         updateRelaunchBtn?.removeAttribute("hidden")
       } catch (e) {
         log.error("Update install failed:", e)
         if (updateMsgEl) {
-          updateMsgEl.textContent =
-            `Download failed - ${String(e?.message || e)}. ` +
-            "Click Re-download to start over."
+          updateMsgEl.textContent = t("settings.update.downloadFailed", { error: String(e?.message || e) })
         }
         setProgress(null)
-        setInstallLabel("Re-download")
+        setInstallLabel(t("settings.update.reDownload"))
         updateInstallBtn?.removeAttribute("disabled")
       } finally {
         updateCheckBtn?.removeAttribute("disabled")

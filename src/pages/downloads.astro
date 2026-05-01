@@ -35,7 +35,6 @@ import {
         <span data-i18n="downloads.folder.savingTo" class="text-fg-3 shrink-0">Saving to</span>
         <span
           id="downloads-folder-path"
-          data-i18n="downloads.folder.notSet"
           class="font-mono text-xs text-fg truncate min-w-0">
           Not set
         </span>
@@ -219,7 +218,7 @@ import {
     function syncFolderSummary() {
       if (!folderPathEl) return
       const v = getDownloadDir() || ""
-      folderPathEl.textContent = v || "Not set"
+      folderPathEl.textContent = v || t("downloads.folder.notSet")
       folderPathEl.classList.toggle("text-fg-3", !v)
       folderPathEl.classList.toggle("text-fg", !!v)
     }

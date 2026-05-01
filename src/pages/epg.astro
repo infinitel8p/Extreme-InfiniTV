@@ -13,7 +13,6 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 			<h1 data-i18n="page.epg.title" class="route-hero__title">Programme guide</h1>
 			<p
 				id="epg-title"
-				data-i18n="page.epg.sub"
 				class="route-hero__sub truncate min-w-0">
 				What's on right now and what's coming up across the active playlist's channels.
 			</p>
@@ -40,7 +39,6 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 				<span data-i18n="list.category" class="text-fg-3 shrink-0">Category</span>
 				<span
 					id="epg-category-label"
-					data-i18n="list.allCategories"
 					class="text-fg truncate flex-1">All categories</span>
 				<IconChevronDown
 					aria-hidden="true"
@@ -70,11 +68,10 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 			</button>
 		</section>
 
-		<!-- Status message (shown while loading or on error) -->
+		<!-- Status message (skeleton / error text) -->
 		<div
 			id="epg-status"
-			data-i18n="common.loading"
-			class="rounded-2xl border border-line bg-surface px-4 py-6 text-fg-2 text-sm">
+			class="hidden rounded-2xl border border-line bg-surface px-4 py-6 text-fg-2 text-sm">
 			Loading…
 		</div>
 
@@ -146,7 +143,7 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 	</main>
 
 	<script>
-		import "../scripts/epg/epg.js";
+		import "../scripts/epg/epg.ts";
 		import { attachDialogSpatialNav } from "../scripts/lib/dialog-spatial-nav.js";
 
 		const trigger = document.getElementById("epg-category-trigger");

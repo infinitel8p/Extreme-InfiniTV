@@ -626,5 +626,19 @@
   "downloads.action.deleteAria": "Delete {title}",
   "list.noPlaylistsCta": "No playlists yet. Add one to start watching.",
   "playlist.none": "No playlist",
-  "common.tomorrow": "Tomorrow"
+  "common.tomorrow": "Tomorrow",
+  "epg.subtitleAll": "EPG · All categories",
+  "epg.subtitleWith": "EPG · {category}",
+  "settings.update.checking": "Checking…",
+  "settings.update.upToDateMsg": "You're on the latest version.",
+  "settings.update.available": "Available",
+  "settings.update.releasedOn": "Released {date}.",
+  "settings.update.updateAvailableMsg": "Update available.",
+  "settings.update.checkFailed": "Check failed - {error}",
+  "settings.update.preparing": "Preparing…",
+  "settings.update.starting": "Starting…",
+  "settings.update.installed": "Installed.",
+  "settings.update.installedRestart": "Update installed. Restart to apply.",
+  "settings.update.downloadFailed": "Download failed - {error}. Click Re-download to start over.",
+  "settings.update.reDownload": "Re-download"
 }

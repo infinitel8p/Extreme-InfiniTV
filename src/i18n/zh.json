@@ -626,5 +626,19 @@
   "downloads.action.deleteAria": "删除 {title}",
   "list.noPlaylistsCta": "还没有播放列表。添加一个开始观看。",
   "playlist.none": "无播放列表",
-  "common.tomorrow": "明天"
+  "common.tomorrow": "明天",
+  "epg.subtitleAll": "EPG · 所有分类",
+  "epg.subtitleWith": "EPG · {category}",
+  "settings.update.checking": "检查中…",
+  "settings.update.upToDateMsg": "已是最新版本。",
+  "settings.update.available": "可用",
+  "settings.update.releasedOn": "发布于 {date}。",
+  "settings.update.updateAvailableMsg": "有可用更新。",
+  "settings.update.checkFailed": "检查失败 - {error}",
+  "settings.update.preparing": "正在准备…",
+  "settings.update.starting": "正在启动…",
+  "settings.update.installed": "已安装。",
+  "settings.update.installedRestart": "更新已安装。请重启以应用。",
+  "settings.update.downloadFailed": "下载失败 - {error}。点击重新下载以重试。",
+  "settings.update.reDownload": "重新下载"
 }
