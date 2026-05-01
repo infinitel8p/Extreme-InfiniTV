@@ -1,3 +1,6 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
+import { t } from "@/scripts/lib/i18n.js"
+
 export function setAmbient(ambientEl, url) {
     if (!ambientEl) return
     if (url) {
@@ -19,7 +22,7 @@ export function makePosterFallback(name) {
     fb.className =
         "h-full w-full flex items-center justify-center text-center px-3 " +
         "text-fg-3 text-xs tracking-wide bg-gradient-to-br from-surface-2 to-surface-3"
-    fb.textContent = name || "No poster"
+    fb.textContent = name || t("common.noPoster")
     return fb
 }
 

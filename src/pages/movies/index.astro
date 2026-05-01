@@ -11,11 +11,11 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 			flex flex-col gap-4 flex-1 min-h-0">
 
 		<header class="route-hero shrink-0">
-			<h1 class="route-hero__title">M<em>o</em>vies</h1>
+			<h1 data-i18n="page.movies.title" class="route-hero__title">Movies</h1>
 			<div class="route-hero__meta">
-				<span><strong id="movie-hero-count">-</strong> in catalogue</span>
+				<span><strong id="movie-hero-count">-</strong> <span data-i18n="list.inCatalogue">in catalogue</span></span>
 				<span class="route-hero__meta-divider" aria-hidden="true"></span>
-				<span id="movie-hero-cat" class="truncate min-w-0">All categories</span>
+				<span id="movie-hero-cat" data-i18n="list.allCategories" class="truncate min-w-0">All categories</span>
 			</div>
 		</header>
 
@@ -29,9 +29,10 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 				class="rounded-xl border border-line bg-surface px-3.5 py-2 min-h-11 text-sm flex items-center gap-2 text-left
 					sm:w-72 lg:w-80 shrink-0
 					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
-				<span class="text-fg-3 shrink-0">Category</span>
+				<span data-i18n="list.category" class="text-fg-3 shrink-0">Category</span>
 				<span
 					id="movie-category-picker-label"
+					data-i18n="list.allCategories"
 					class="text-fg truncate flex-1">All categories</span>
 				<IconChevronDown
 					aria-hidden="true"
@@ -45,6 +46,8 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 					id="movie-search"
 					label="Search movies"
 					placeholder="Search movies…"
+					labelKey="list.searchMovies"
+					placeholderKey="list.searchMoviesPlaceholder"
 				/>
 			</div>
 
@@ -52,9 +55,9 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 				id="movie-sort"
 				widthClass="sm:w-44 shrink-0"
 				options={[
-					{ value: "default", label: "Default" },
-					{ value: "added", label: "Recently added" },
-					{ value: "az", label: "A-Z" },
+					{ value: "default", label: "Default", key: "sort.default" },
+					{ value: "added", label: "Recently added", key: "sort.recentlyAdded" },
+					{ value: "az", label: "A-Z", key: "sort.az" },
 				]}
 			/>
 		</section>
@@ -62,6 +65,7 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 		<!-- Status row -->
 		<div
 			id="movie-list-status"
+			data-i18n="list.noPlaylistSelected"
 			class="px-1 text-xs text-fg-3 tabular-nums shrink-0">
 			No playlist selected.
 		</div>
@@ -90,12 +94,14 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 				<div class="flex items-center justify-between gap-3 shrink-0">
 					<h2
 						id="movie-category-picker-title"
+						data-i18n="list.chooseCategory"
 						class="text-base font-semibold">
 						Choose a category
 					</h2>
 					<button
 						id="movie-category-picker-close"
 						type="button"
+						data-i18n="common.close"
 						class="rounded-lg border border-line px-3 py-1.5 text-xs text-fg-2
 							hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
 						Close
@@ -106,6 +112,8 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 					id="movie-category-search"
 					label="Search categories"
 					placeholder="Search categories…"
+					labelKey="list.searchCategories"
+					placeholderKey="list.searchCategoriesPlaceholder"
 				/>
 
 				<div
@@ -115,6 +123,7 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 
 				<div
 					id="movie-category-list-status"
+					data-i18n="list.noPlaylistSelected"
 					class="px-2.5 text-sm text-fg-3 tabular-nums shrink-0">
 					No playlist selected.
 				</div>
@@ -133,6 +142,7 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 		import "@/scripts/updater-startup.js";
 		import { injectVersion } from "@/scripts/version.js";
 		import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js";
+		import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js";
 		injectVersion();
 
 		const trigger = document.getElementById("movie-category-picker-trigger");
@@ -158,10 +168,21 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 		const syncLabel = () => {
 			if (!labelEl) return;
 			const cat = readActive();
-			if (cat === "__favorites__") labelEl.textContent = "★ Favorites";
-			else if (cat === "__recents__") labelEl.textContent = "🕒 Recently watched";
-			else labelEl.textContent = cat || "All categories";
+			labelEl.removeAttribute("data-i18n");
+			if (cat === "__favorites__") {
+				labelEl.setAttribute("data-i18n", "list.specialFavorites");
+				labelEl.textContent = t("list.specialFavorites");
+			} else if (cat === "__recents__") {
+				labelEl.setAttribute("data-i18n", "list.specialRecents");
+				labelEl.textContent = t("list.specialRecents");
+			} else if (cat) {
+				labelEl.textContent = cat;
+			} else {
+				labelEl.setAttribute("data-i18n", "list.allCategories");
+				labelEl.textContent = t("list.allCategories");
+			}
 		};
+		document.addEventListener(LOCALE_EVENT, syncLabel);
 
 		trigger?.addEventListener("click", () => {
 			if (!dlg) return;

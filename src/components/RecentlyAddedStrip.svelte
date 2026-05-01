@@ -1,6 +1,7 @@
 <script>
   // Hub "Recently added" strip - mixes VOD + series sorted by `added` ts.
   import { onMount } from "svelte"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
   import { fmtImdbRating } from "@/scripts/lib/format.js"
@@ -18,6 +19,7 @@
    * }>} */
   let entries = $state([])
   let activePlaylistId = $state("")
+  let locale = $state(0)
 
   function buildEntry(item, kind) {
     const subtitle = kind === "vod" ? "Movie" : "Series"
@@ -66,9 +68,11 @@
 
   onMount(() => {
     reload()
+    const onLocaleChange = () => { locale++ }
     const handlers = {
       "xt:active-changed": reload,
       "xt:catalog-warmed": reload,
+      [LOCALE_EVENT]: onLocaleChange,
     }
     for (const [eventName, handler] of Object.entries(handlers)) {
       document.addEventListener(eventName, handler)
@@ -82,17 +86,18 @@
 </script>
 
 {#if entries.length}
+  {@const _locale = locale}
   <section
-    aria-label="Recently added"
+    aria-label={t("nav.recentlyAdded")}
     class="ra-section flex flex-col gap-3 shrink-0">
     <div class="hub-section-head px-1">
       <div class="hub-section-head__title">
-        <h2 class="hub-section-head__heading">Recently added</h2>
+        <h2 class="hub-section-head__heading">{t("nav.recentlyAdded")}</h2>
       </div>
       <a
         href="/recently-added"
         class="hub-section-head__count text-fg-3 hover:text-accent focus-visible:text-accent transition-colors">
-        View all
+        {t("strip.viewAll")}
         <svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="ml-0.5 inline-block align-[-1px]">
           <path d="m9 18 6-6-6-6" />
         </svg>

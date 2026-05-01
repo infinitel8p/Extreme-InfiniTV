@@ -1,6 +1,7 @@
 // Shared "programme detail" dialog used by Live TV's EPG panel and the
 // /epg grid. The dialog is mounted lazily on first open and reused.
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
+import { t } from "@/scripts/lib/i18n.js"
 
 const DIALOG_ID = "programme-dialog"
 
@@ -80,9 +81,10 @@ function ensureDialog() {
           data-role="close"
           type="button"
           aria-label="Close"
+          data-i18n-attr="aria-label:common.close"
           class="rounded-lg border border-line min-h-11 px-3 py-1.5 text-xs text-fg-2 shrink-0
                  hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
-          Close
+          <span data-i18n="common.close">Close</span>
         </button>
       </header>
       <div data-role="desc" class="text-sm text-fg-2 leading-relaxed overflow-auto custom-scroll min-h-0"></div>
@@ -90,6 +92,7 @@ function ensureDialog() {
         <button
           data-role="watch"
           type="button"
+          data-i18n="programme.watchNow"
           class="btn">
           Watch now
         </button>
@@ -125,7 +128,7 @@ export function openProgrammeDialog(opts) {
   const now = Date.now()
   const isLive = opts.start <= now && now < opts.stop
   const isUpcoming = opts.start > now
-  const status = isLive ? "Live now" : isUpcoming ? "Upcoming" : "Ended"
+  const status = isLive ? t("programme.live") : isUpcoming ? t("programme.upcoming") : t("programme.ended")
 
   const metaParts = []
   if (opts.channelName) metaParts.push(opts.channelName)
@@ -142,7 +145,7 @@ export function openProgrammeDialog(opts) {
   )
 
   if (meta) meta.textContent = metaParts.join(" · ")
-  if (title) title.textContent = opts.title || "Untitled"
+  if (title) title.textContent = opts.title || t("programme.untitled")
   if (time) {
     const range = fmtTimeRange(opts.start, opts.stop)
     const dur = fmtDuration(opts.start, opts.stop)
@@ -151,7 +154,7 @@ export function openProgrammeDialog(opts) {
   if (desc) {
     desc.innerHTML = opts.desc
       ? `<p>${escapeHtml(opts.desc).replace(/\n+/g, "</p><p>")}</p>`
-      : `<p class="text-fg-3 italic">No description available.</p>`
+      : `<p class="text-fg-3 italic">${escapeHtml(t("detail.noDescription"))}</p>`
   }
 
   const footer = /** @type {HTMLElement | null} */ (

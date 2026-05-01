@@ -1,3 +1,4 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 const DEFAULT_FOCUSABLES =
     "button, a, [role='tab'], [tabindex]:not([tabindex='-1']), input, select, textarea, summary"
 

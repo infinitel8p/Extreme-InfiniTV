@@ -29,9 +29,10 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 							class="rounded-xl border border-line bg-bg px-3.5 py-2 min-h-11 text-sm flex items-center gap-2 text-left flex-1 min-w-0
 								hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
 								transition-colors">
-							<span class="text-fg-3 shrink-0">Category</span>
+							<span data-i18n="list.category" class="text-fg-3 shrink-0">Category</span>
 							<span
 								id="category-picker-label"
+								data-i18n="list.allCategories"
 								class="text-fg truncate flex-1">All categories</span>
 							<IconChevronDown
 								aria-hidden="true"
@@ -45,6 +46,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 							aria-pressed="true"
 							aria-label="Show EPG for the current channel"
 							title="Show EPG"
+							data-i18n-attr="aria-label:livetv.epgToggle.aria;title:livetv.epgToggle.title"
 							class="rounded-xl border border-line bg-bg px-3.5 py-2 min-h-11 min-w-11 text-sm text-fg-2 inline-flex items-center justify-center gap-2 shrink-0
 								hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
 								aria-pressed:border-accent aria-pressed:bg-surface-2 aria-pressed:text-fg
@@ -54,12 +56,13 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 								stroke={2}
 								class="size-4"
 							/>
-							<span class="hidden sm:inline">EPG</span>
+							<span data-i18n="livetv.epgPanelHeading" class="hidden sm:inline">EPG</span>
 						</button>
 						<a
 							href="/epg"
 							aria-label="Open the full EPG schedule grid"
 							title="Open schedule grid"
+							data-i18n-attr="aria-label:livetv.openSchedule.aria;title:livetv.openSchedule.title"
 							class="rounded-xl border border-line bg-bg px-3.5 py-2 min-h-11 min-w-11 text-sm text-fg-2 inline-flex items-center justify-center shrink-0
 								hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
 								transition-colors">
@@ -68,7 +71,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 								stroke={2}
 								class="size-4"
 							/>
-							<span class="sr-only">Schedule grid</span>
+							<span data-i18n="livetv.openSchedule.label" class="sr-only">Schedule grid</span>
 						</a>
 					</div>
 
@@ -77,6 +80,9 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 						label="Search channels"
 						placeholder="Search channels…"
 						clearButtonId="clear-search"
+						labelKey="list.searchChannels"
+						placeholderKey="list.searchChannelsPlaceholder"
+						clearKey="common.clear"
 					/>
 
 					<div
@@ -89,6 +95,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 
 					<div
 						id="list-status"
+						data-i18n="list.noPlaylistSelected"
 						class="px-2.5 text-sm text-fg-3 tabular-nums shrink-0">
 						No playlist selected.
 					</div>
@@ -116,13 +123,13 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 							<div class="flex flex-col gap-2.5 relative z-10">
 								<span class="inline-flex items-center gap-2 self-center text-eyebrow font-semibold uppercase tracking-[0.22em] text-fg-3">
 									<span aria-hidden="true" class="size-1.5 rounded-full bg-accent shadow-[0_0_0_4px_var(--color-accent-soft)]"></span>
-									Idle
+									<span data-i18n="livetv.idle">Idle</span>
 								</span>
-								<p class="text-fg leading-[0.95] tracking-[-0.03em] font-bold"
+								<p data-i18n="livetv.pickChannel" class="text-fg leading-[0.95] tracking-[-0.03em] font-bold"
 									style="font-size: clamp(1.75rem, 3vw + 1rem, 3.5rem);">
-									Pick a <em class="not-italic text-accent">channel</em>.
+									Pick a channel.
 								</p>
-								<p class="text-fg-3 text-xs sm:text-sm">
+								<p data-i18n="livetv.pickChannelHelper" class="text-fg-3 text-xs sm:text-sm">
 									Choose from the list, or change category.
 								</p>
 							</div>
@@ -139,7 +146,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 						id="current"
 						class="flex items-center justify-between gap-2 text-sm text-fg-2 shrink-0">
 						<div class="flex items-center gap-2 min-w-0">
-							<span class="status-badge status-badge--off">OFF</span>
+							<span data-i18n="livetv.statusOff" class="status-badge status-badge--off">OFF</span>
 							<span class="truncate">-</span>
 						</div>
 					</div>
@@ -147,7 +154,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 					<div
 						id="epg"
 						class="border-t border-line pt-3 flex-1 min-h-0 overflow-auto custom-scroll">
-						<div class="mb-2 text-sm font-medium text-fg">EPG</div>
+						<div data-i18n="livetv.epgPanelHeading" class="mb-2 text-sm font-medium text-fg">EPG</div>
 						<div id="epg-list" class="space-y-2 text-sm"></div>
 					</div>
 				</div>
@@ -165,12 +172,14 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 				<div class="flex items-center justify-between gap-3 shrink-0">
 					<h2
 						id="category-picker-title"
+						data-i18n="list.chooseCategory"
 						class="text-base font-semibold">
 						Choose a category
 					</h2>
 					<button
 						id="category-picker-close"
 						type="button"
+						data-i18n="common.close"
 						class="rounded-lg border border-line px-3 py-1.5 text-xs text-fg-2
 							hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
 						Close
@@ -182,11 +191,15 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 					label="Search categories"
 					placeholder="Search categories…"
 					clearButtonId="category-clear-search"
+					labelKey="list.searchCategories"
+					placeholderKey="list.searchCategoriesPlaceholder"
+					clearKey="common.clear"
 				/>
 
 				<div
 					role="radiogroup"
 					aria-label="Category filter mode"
+					data-i18n-attr="aria-label:livetv.cat.modeAria"
 					class="cat-mode-toggle flex p-0.5 rounded-lg border border-line bg-surface-2 text-xs shrink-0">
 					<button
 						id="category-mode-hide"
@@ -194,6 +207,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 						role="radio"
 						aria-checked="true"
 						data-mode="hide"
+						data-i18n="livetv.cat.hide"
 						class="flex-1 rounded-md px-3 py-1.5 font-medium transition-colors text-fg-2
 							hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
 							aria-checked:bg-surface aria-checked:text-fg aria-checked:shadow-sm">
@@ -205,6 +219,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 						role="radio"
 						aria-checked="false"
 						data-mode="select"
+						data-i18n="livetv.cat.select"
 						class="flex-1 rounded-md px-3 py-1.5 font-medium transition-colors text-fg-2
 							hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
 							aria-checked:bg-surface aria-checked:text-fg aria-checked:shadow-sm">
@@ -226,18 +241,20 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 						<span class="cat-show-selected-box inline-flex size-3.5 items-center justify-center rounded-sm border border-fg-3 transition-colors">
 							<svg class="cat-show-selected-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="10" height="10"><polyline points="20 6 9 17 4 12"/></svg>
 						</span>
-						Show selected only
+						<span data-i18n="livetv.cat.showOnly">Show selected only</span>
 					</button>
 					<span class="ml-auto inline-flex items-center gap-3">
 						<button
 							id="category-select-all"
 							type="button"
+							data-i18n="livetv.cat.selectAllVisible"
 							class="text-accent hover:underline focus-visible:underline focus-visible:outline-none">
 							Select all visible
 						</button>
 						<button
 							id="category-select-clear"
 							type="button"
+							data-i18n="livetv.cat.clear"
 							class="text-fg-3 hover:text-fg focus-visible:text-fg focus-visible:outline-none">
 							Clear
 						</button>
@@ -252,6 +269,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 
 				<div
 					id="category-list-status"
+					data-i18n="list.noPlaylistSelected"
 					class="px-2.5 text-sm text-fg-3 tabular-nums shrink-0">
 					No playlist selected.
 				</div>
@@ -270,6 +288,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 		import "../scripts/updater-startup.js";
 		import { injectVersion } from "../scripts/version.js";
 		import { attachDialogSpatialNav } from "../scripts/lib/dialog-spatial-nav.js";
+		import { t, LOCALE_EVENT } from "../scripts/lib/i18n.js";
 		injectVersion();
 
 		const trigger = document.getElementById("category-picker-trigger");
@@ -295,10 +314,21 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 		const syncLabel = () => {
 			if (!labelEl) return;
 			const cat = readActive();
-			if (cat === "__favorites__") labelEl.textContent = "★ Favorites";
-			else if (cat === "__recents__") labelEl.textContent = "🕒 Recently watched";
-			else labelEl.textContent = cat || "All categories";
+			labelEl.removeAttribute("data-i18n");
+			if (cat === "__favorites__") {
+				labelEl.setAttribute("data-i18n", "list.specialFavorites");
+				labelEl.textContent = t("list.specialFavorites");
+			} else if (cat === "__recents__") {
+				labelEl.setAttribute("data-i18n", "list.specialRecents");
+				labelEl.textContent = t("list.specialRecents");
+			} else if (cat) {
+				labelEl.textContent = cat;
+			} else {
+				labelEl.setAttribute("data-i18n", "list.allCategories");
+				labelEl.textContent = t("list.allCategories");
+			}
 		};
+		document.addEventListener(LOCALE_EVENT, syncLabel);
 
 		trigger?.addEventListener("click", () => {
 			if (!dlg) return;

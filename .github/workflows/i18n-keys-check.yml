@@ -1,0 +1,85 @@
+name: i18n keys check
+
+on:
+  pull_request:
+    paths:
+      - "src/i18n/**"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Diff locale key sets against en.json
+        id: diff
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs")
+            const path = require("path")
+
+            const i18nDir = "src/i18n"
+            if (!fs.existsSync(i18nDir)) {
+              core.info("No src/i18n directory yet - skipping check.")
+              return
+            }
+
+            const files = fs.readdirSync(i18nDir).filter((file) => file.endsWith(".json"))
+            const enPath = path.join(i18nDir, "en.json")
+            if (!fs.existsSync(enPath)) {
+              core.setFailed("src/i18n/en.json is missing - it is the source of truth.")
+              return
+            }
+
+            const parsed = {}
+            for (const file of files) {
+              try {
+                parsed[file] = JSON.parse(fs.readFileSync(path.join(i18nDir, file), "utf8"))
+              } catch (err) {
+                core.setFailed(`${file} failed to parse: ${err.message}`)
+                return
+              }
+            }
+
+            const enKeys = new Set(
+              Object.keys(parsed["en.json"]).filter((key) => !key.startsWith("_meta"))
+            )
+            const lines = []
+            for (const file of files) {
+              if (file === "en.json") continue
+              const localeKeys = new Set(Object.keys(parsed[file]))
+              const missing = [...enKeys].filter((key) => !localeKeys.has(key))
+              const extra = [...localeKeys].filter(
+                (key) => !key.startsWith("_meta") && !enKeys.has(key)
+              )
+              if (!missing.length && !extra.length) {
+                lines.push(`- **${file}**: up to date`)
+              } else {
+                lines.push(`- **${file}**: ${missing.length} missing, ${extra.length} extra`)
+                if (missing.length) lines.push("  - Missing: " + missing.slice(0, 25).map((key) => `\`${key}\``).join(", ") + (missing.length > 25 ? `, +${missing.length - 25} more` : ""))
+                if (extra.length) lines.push("  - Extra: " + extra.slice(0, 25).map((key) => `\`${key}\``).join(", ") + (extra.length > 25 ? `, +${extra.length - 25} more` : ""))
+              }
+            }
+
+            const body = [
+              "### i18n key check",
+              "",
+              ...lines,
+              "",
+              "Missing keys fall back to English at runtime - this is informational, not a failure.",
+            ].join("\n")
+
+            core.summary.addRaw(body).write()
+
+            if (context.payload.pull_request) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body,
+              })
+            }

@@ -10,11 +10,12 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 			flex flex-col gap-3 flex-1 min-h-0">
 
 		<header class="route-hero shrink-0">
-			<h1 class="route-hero__title">N<em>o</em>w &amp; next</h1>
+			<h1 data-i18n="page.epg.title" class="route-hero__title">Programme guide</h1>
 			<p
 				id="epg-title"
+				data-i18n="page.epg.sub"
 				class="route-hero__sub truncate min-w-0">
-				EPG · All categories
+				What's on right now and what's coming up across the active playlist's channels.
 			</p>
 		</header>
 
@@ -23,10 +24,11 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 			<a
 				href="/livetv"
 				aria-label="Back to Live TV"
+				data-i18n-attr="aria-label:page.livetv.title"
 				class="rounded-xl border border-line bg-surface px-3 py-2 text-sm text-fg-2 inline-flex items-center gap-2
 					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
 				<IconArrowLeft aria-hidden="true" stroke={2} class="size-4" />
-				Live TV
+				<span data-i18n="page.livetv.title">Live TV</span>
 			</a>
 			<button
 				id="epg-category-trigger"
@@ -35,9 +37,10 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 				aria-controls="epg-category-dialog"
 				class="rounded-xl border border-line bg-surface px-3 py-2 text-sm flex items-center gap-2 text-left max-w-[18rem] min-w-0
 					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
-				<span class="text-fg-3 shrink-0">Category</span>
+				<span data-i18n="list.category" class="text-fg-3 shrink-0">Category</span>
 				<span
 					id="epg-category-label"
+					data-i18n="list.allCategories"
 					class="text-fg truncate flex-1">All categories</span>
 				<IconChevronDown
 					aria-hidden="true"
@@ -50,15 +53,17 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 				type="button"
 				aria-label="Snap timeline to now"
 				title="Snap to now"
+				data-i18n-attr="aria-label:epg.now;title:epg.now"
 				class="rounded-xl border border-line bg-surface p-2 sm:px-3 text-sm text-fg-2 inline-flex items-center gap-2 shrink-0
 					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
 				<IconClockHour3 aria-hidden="true" stroke={2} class="size-4" />
-				<span class="hidden sm:inline">Now</span>
+				<span data-i18n="epg.now" class="hidden sm:inline">Now</span>
 			</button>
 			<button
 				id="epg-refresh"
 				type="button"
 				aria-label="Refresh EPG"
+				data-i18n-attr="aria-label:downloads.refresh"
 				class="rounded-xl border border-line bg-surface p-2 text-fg-2
 					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
 				<IconRefresh aria-hidden="true" stroke={2} class="size-4" />
@@ -68,6 +73,7 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 		<!-- Status message (shown while loading or on error) -->
 		<div
 			id="epg-status"
+			data-i18n="common.loading"
 			class="rounded-2xl border border-line bg-surface px-4 py-6 text-fg-2 text-sm">
 			Loading…
 		</div>
@@ -105,12 +111,13 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 				backdrop:bg-black/60">
 			<div class="flex flex-col h-full p-4 gap-3">
 				<div class="flex items-center justify-between gap-3 shrink-0">
-					<h2 id="epg-category-title" class="text-base font-semibold">
+					<h2 id="epg-category-title" data-i18n="list.chooseCategory" class="text-base font-semibold">
 						Choose a category
 					</h2>
 					<button
 						id="epg-category-close"
 						type="button"
+						data-i18n="common.close"
 						class="rounded-lg border border-line px-3 py-1.5 text-xs text-fg-2
 							hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
 						Close
@@ -121,6 +128,8 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3 } from "@ta
 					id="epg-category-search"
 					label="Search categories"
 					placeholder="Search categories…"
+					labelKey="list.searchCategories"
+					placeholderKey="list.searchCategoriesPlaceholder"
 				/>
 
 				<div

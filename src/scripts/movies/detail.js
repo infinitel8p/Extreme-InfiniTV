@@ -1,4 +1,5 @@
 // Movie detail page (route: /movies/detail?id=<vod_id>)
+import { log } from "@/scripts/lib/log.js"
 import {
   loadCreds,
   getActiveEntry,
@@ -41,6 +42,7 @@ import {
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
+import { t } from "@/scripts/lib/i18n.js"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -178,9 +180,9 @@ function applyVodInfo(data) {
     const ratingText = fmtImdbRating(rating)
     if (ratingText) {
       bits.push(
-        '<span class="inline-flex items-center gap-1 text-fg-2" aria-label="IMDB rating ' +
-          ratingText +
-          ' out of 10">' +
+        '<span class="inline-flex items-center gap-1 text-fg-2" aria-label="' +
+          escapeText(t("detail.imdbRatingAria", { rating: ratingText })) +
+          '">' +
           '<svg viewBox="0 0 24 24" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" class="text-accent">' +
           '<path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/>' +
           "</svg>" +
@@ -191,7 +193,7 @@ function applyVodInfo(data) {
     }
     metaEl.innerHTML = bits.join(' <span aria-hidden="true">·</span> ')
   }
-  if (plotEl) plotEl.textContent = plot || "No description available."
+  if (plotEl) plotEl.textContent = plot || t("detail.noDescription")
 
   trailerUrl = youtubeUrlFromTrailer(
     movieData.youtube_trailer || info.youtube_trailer || ""
@@ -211,7 +213,7 @@ function escapeText(text) {
 function syncFavButton() {
   if (!favBtn || !movie || !activePlaylistId) return
   const fav = isFavorite(activePlaylistId, "vod", movie.id)
-  favBtn.textContent = fav ? "Remove from favorites" : "Add to favorites"
+  favBtn.textContent = fav ? t("detail.action.removeFavorite") : t("detail.action.addFavorite")
   favBtn.classList.toggle("text-accent", fav)
   favBtn.setAttribute("aria-pressed", String(fav))
 }
@@ -220,7 +222,7 @@ function syncWatchButton() {
   if (!watchBtn || !movie || !activePlaylistId) return
   const onWatchlist = isOnWatchlist(activePlaylistId, "vod", movie.id)
   if (watchLabelEl) {
-    watchLabelEl.textContent = onWatchlist ? "On your watchlist" : "Watch later"
+    watchLabelEl.textContent = onWatchlist ? t("detail.watchlist.on") : t("detail.action.watchLater")
   }
   watchBtn.classList.toggle("text-accent", onWatchlist)
   watchBtn.setAttribute("aria-pressed", String(onWatchlist))
@@ -243,14 +245,14 @@ function syncResumeUI() {
   const canResume =
     saved && !saved.completed && saved.position > RESUME_MIN_SECONDS
   if (canResume) {
-    if (playLabelEl) playLabelEl.textContent = "Continue"
-    if (playSubEl) playSubEl.textContent = `from ${fmtClock(saved.position)}`
-    playBtn.setAttribute("aria-label", `Continue watching from ${fmtClock(saved.position)}`)
+    if (playLabelEl) playLabelEl.textContent = t("detail.action.continue")
+    if (playSubEl) playSubEl.textContent = t("detail.action.continueFrom", { time: fmtClock(saved.position) })
+    playBtn.setAttribute("aria-label", t("detail.action.continueAria", { time: fmtClock(saved.position) }))
     if (restartBtn) restartBtn.removeAttribute("hidden")
   } else {
-    if (playLabelEl) playLabelEl.textContent = "Play"
+    if (playLabelEl) playLabelEl.textContent = t("detail.action.play")
     if (playSubEl) playSubEl.textContent = ""
-    playBtn.setAttribute("aria-label", "Play")
+    playBtn.setAttribute("aria-label", t("detail.action.playAria"))
     if (restartBtn) restartBtn.setAttribute("hidden", "")
   }
 }
@@ -307,7 +309,7 @@ async function startPlayback() {
     waited += 100
   }
   if (!detailSrc) {
-    if (plotEl) plotEl.textContent = "Couldn't get a stream URL for this movie."
+    if (plotEl) plotEl.textContent = t("detail.error.noStream")
     return
   }
 
@@ -328,7 +330,7 @@ async function startPlayback() {
   const mime = chooseMime(detailSrc)
   player.one("error", () => {
     const e = player.error()
-    console.error("[xt:movie-detail] video.js error", {
+    log.error("[xt:movie-detail] video.js error", {
       code: e?.code,
       message: e?.message,
       src: playSrc,
@@ -374,13 +376,13 @@ async function startPlayback() {
   }
 
   player.play().catch((err) =>
-    console.warn("[xt:movie-detail] play() rejected:", err?.message || err)
+    log.warn("[xt:movie-detail] play() rejected:", err?.message || err)
   )
 
   if (activePlaylistId && movie) {
     setRichPresence({
       playlistId: activePlaylistId,
-      details: movie.name || "Watching a movie",
+      details: movie.name || t("detail.discord.watchingMovie") || "Watching a movie",
       state: movie.year ? `Released ${movie.year}` : "Movie",
       largeImage: movie.logo || "logo",
       largeText: movie.name || "Extreme InfiniTV",
@@ -484,10 +486,10 @@ function applyDownloadState() {
   const d = findMovieDownload()
   downloadBtn.removeAttribute("disabled")
   if (!d) {
-    if (downloadLabel) downloadLabel.textContent = "Download"
+    if (downloadLabel) downloadLabel.textContent = t("detail.action.download")
     downloadBtn.title = isDownloadable()
-      ? "Download to your chosen folder"
-      : "Open the source URL in a new tab (desktop app saves to disk)"
+      ? t("detail.download.tooltip")
+      : t("detail.download.tooltipNoTauri")
     return
   }
   switch (d.status) {
@@ -499,32 +501,32 @@ function applyDownloadState() {
       if (downloadLabel) {
         downloadLabel.textContent = pct !== null ? `${pct}%` : "…"
       }
-      downloadBtn.title = "Tap to pause"
+      downloadBtn.title = t("detail.download.tapPause")
       break
     }
     case "queued":
-      if (downloadLabel) downloadLabel.textContent = "Queued"
-      downloadBtn.title = "Waiting for a slot - tap to cancel"
+      if (downloadLabel) downloadLabel.textContent = t("detail.download.queued")
+      downloadBtn.title = t("detail.download.waitingSlot")
       break
     case "paused":
-      if (downloadLabel) downloadLabel.textContent = "Resume"
-      downloadBtn.title = "Paused - tap to resume"
+      if (downloadLabel) downloadLabel.textContent = t("detail.download.resume")
+      downloadBtn.title = t("detail.download.tapResume")
       break
     case "stalled":
-      if (downloadLabel) downloadLabel.textContent = "Retry"
-      downloadBtn.title = "Stalled - tap to retry"
+      if (downloadLabel) downloadLabel.textContent = t("detail.download.retry")
+      downloadBtn.title = t("detail.download.tapRetry")
       break
     case "error":
-      if (downloadLabel) downloadLabel.textContent = "Retry"
-      downloadBtn.title = d.error || "Failed - tap to retry"
+      if (downloadLabel) downloadLabel.textContent = t("detail.download.retry")
+      downloadBtn.title = d.error || t("detail.download.failedRetry")
       break
     case "done":
-      if (downloadLabel) downloadLabel.textContent = "Saved"
+      if (downloadLabel) downloadLabel.textContent = t("detail.download.saved")
       downloadBtn.setAttribute("disabled", "")
-      downloadBtn.title = d.path ? `Saved to ${d.path}` : "Saved"
+      downloadBtn.title = d.path ? t("detail.download.savedTo", { path: d.path }) : t("detail.download.saved")
       break
     default:
-      if (downloadLabel) downloadLabel.textContent = "Download"
+      if (downloadLabel) downloadLabel.textContent = t("detail.action.download")
       downloadBtn.title = ""
   }
 }
@@ -540,12 +542,12 @@ downloadBtn?.addEventListener("click", async () => {
     waited += 100
   }
   if (!detailSrc) {
-    if (downloadLabel) downloadLabel.textContent = "No URL"
+    if (downloadLabel) downloadLabel.textContent = t("detail.download.noUrl")
     return
   }
   if (!isDownloadable()) {
     window.open(detailSrc, "_blank", "noopener,noreferrer")
-    if (downloadLabel) downloadLabel.textContent = "Opened"
+    if (downloadLabel) downloadLabel.textContent = t("detail.download.opened")
     return
   }
   const existing = findMovieDownload()
@@ -563,12 +565,12 @@ downloadBtn?.addEventListener("click", async () => {
     return
   }
   try {
-    if (downloadLabel) downloadLabel.textContent = "Starting…"
+    if (downloadLabel) downloadLabel.textContent = t("detail.download.starting")
     downloadBtn.setAttribute("disabled", "")
     downloadBtn.title = ""
     await startDownload({
       url: detailSrc,
-      title: movie.name || `Movie ${movie.id}`,
+      title: movie.name || t("list.movieFallback", { id: movie.id }),
       ext: inferExt(detailSrc, "mp4"),
       source: {
         kind: "vod",
@@ -578,9 +580,9 @@ downloadBtn?.addEventListener("click", async () => {
       },
     })
   } catch (e) {
-    const msg = String(e?.message || e || "Failed")
-    console.error("Download failed:", e)
-    if (downloadLabel) downloadLabel.textContent = "Failed"
+    const msg = String(e?.message || e || t("detail.download.failed"))
+    log.error("Download failed:", e)
+    if (downloadLabel) downloadLabel.textContent = t("detail.download.failed")
     downloadBtn.removeAttribute("disabled")
     downloadBtn.title = msg
   }
@@ -590,7 +592,7 @@ downloadBtn?.addEventListener("click", async () => {
 // Boot
 // ----------------------------
 function showError(msg) {
-  if (titleEl) titleEl.textContent = "Couldn't load this movie"
+  if (titleEl) titleEl.textContent = t("detail.error.cantLoad")
   if (plotEl) plotEl.textContent = msg
   if (downloadBtn) downloadBtn.setAttribute("hidden", "")
   if (playBtn) playBtn.setAttribute("disabled", "")
@@ -598,18 +600,18 @@ function showError(msg) {
 
 async function boot() {
   if (!movieId) {
-    showError("No movie ID was given.")
+    showError(t("detail.error.noMovieId"))
     return
   }
 
   movie = null
   detailSrc = ""
   if (metaEl) metaEl.textContent = ""
-  if (plotEl) plotEl.textContent = "Loading details…"
+  if (plotEl) plotEl.textContent = t("detail.loading")
 
   const active = await getActiveEntry()
   if (!active) {
-    showError("No playlist is selected. Add one in Settings.")
+    showError(t("detail.error.noPlaylist"))
     return
   }
   activePlaylistId = active._id
@@ -627,12 +629,12 @@ async function boot() {
   if (!movie) {
     movie = {
       id: movieId,
-      name: dl?.title || `Movie ${movieId}`,
+      name: dl?.title || t("list.movieFallback", { id: movieId }),
       logo: dl?.source?.logo || null,
     }
   }
 
-  if (titleEl) titleEl.textContent = movie.name || `Movie ${movieId}`
+  if (titleEl) titleEl.textContent = movie.name || t("list.movieFallback", { id: movieId })
   paintPoster(movie.name, movie.logo || null)
   setAmbient(movie.logo || null)
   syncFavButton()
@@ -647,7 +649,7 @@ async function boot() {
   // Per-item cache: paint immediately if available so offline opens work.
   const cached = getCached(active._id, `vod_info_${movieId}`)
   if (cached) applyVodInfo(cached.data)
-  else if (plotEl) plotEl.textContent = "Loading details…"
+  else if (plotEl) plotEl.textContent = t("detail.loading")
 
   // Refresh from network when reachable.
   if (creds.host && creds.user && creds.pass) {
@@ -660,17 +662,17 @@ async function boot() {
       setCached(active._id, `vod_info_${movieId}`, data, VOD_INFO_TTL_MS)
       applyVodInfo(data)
     } catch (e) {
-      console.error("[xt:movie-detail] info fetch failed:", e)
+      log.error("[xt:movie-detail] info fetch failed:", e)
       if (!cached && plotEl) {
         plotEl.textContent = dl
-          ? "Couldn't reach the provider. Local copy is available - tap Play."
-          : "Failed to load movie info. Try Play anyway."
+          ? t("detail.error.providerLocal")
+          : t("detail.error.failedTryPlay")
       }
     }
   } else if (!cached && plotEl) {
     plotEl.textContent = dl
-      ? "Local copy is available - tap Play."
-      : "Movie details require an Xtream playlist. Switch playlists from the sidebar."
+      ? t("detail.error.localAvailable")
+      : t("detail.error.noPlaylist")
   }
 
   if (downloadBtn && isDownloadable()) downloadBtn.removeAttribute("hidden")

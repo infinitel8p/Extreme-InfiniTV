@@ -20,10 +20,11 @@ import {
           href="/series"
           id="series-detail-back"
           aria-label="Back to Series"
+          data-i18n-attr="aria-label:page.series.title"
           class="dt-enter dt-stagger-0 self-start inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 min-h-11 text-sm text-fg-2
                  hover:bg-surface-2 focus-visible:bg-surface-2 outline-none transition-colors">
           <IconChevronLeft aria-hidden="true" stroke={2} class="size-4" />
-          Series
+          <span data-i18n="page.series.title">Series</span>
         </a>
 
         <div class="dt-enter dt-stagger-1 flex flex-col gap-1">
@@ -68,6 +69,7 @@ import {
             id="series-detail-fav"
             type="button"
             aria-pressed="false"
+            data-i18n="detail.action.addFavorite"
             class="self-start rounded-xl border border-line px-4 min-h-11 text-sm
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                    active:scale-[0.97] transition duration-150">
@@ -81,7 +83,7 @@ import {
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                    active:scale-[0.97] transition duration-150">
             <IconBookmark aria-hidden="true" stroke={2} class="size-4" />
-            <span id="series-detail-watch-label">Watch later</span>
+            <span id="series-detail-watch-label" data-i18n="detail.action.watchLater">Watch later</span>
           </button>
           <button
             id="series-detail-trailer"
@@ -91,13 +93,14 @@ import {
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                    active:scale-[0.97] transition duration-150">
             <IconBrandYoutube aria-hidden="true" stroke={2} class="size-4" />
-            Trailer
+            <span data-i18n="detail.action.trailer">Trailer</span>
           </button>
         </div>
 
         <div
           id="series-detail-plot"
-          class="dt-enter dt-stagger-3 text-sm text-fg-2 leading-relaxed max-w-prose">
+          data-i18n="detail.loading"
+          class="dt-enter dt-stagger-3 text-sm text-fg-2 leading-relaxed">
           Loading details…
         </div>
 

@@ -1,12 +1,13 @@
 import { loadCreds, getActiveEntry } from "./lib/creds.js"
 import { ensureUserInfo, getExpirationMsSync } from "./lib/account-info.js"
+import { t } from "./lib/i18n.js"
 
 const BANNER_THRESHOLD_DAYS = 7
 
 function fmtDaysLeft(days) {
-    if (days <= 0) return "Account expired"
-    if (days === 1) return "Expires in 1 day"
-    return `Expires in ${days} days`
+    if (days <= 0) return t("expiration.expired")
+    if (days === 1) return t("expiration.daysOne")
+    return t("expiration.daysOther", { n: days })
 }
 
 function renderTargets(targets, value, { empty = "", emptyRaw = "-", expDateMs = null } = {}) {
@@ -26,7 +27,7 @@ function renderTargets(targets, value, { empty = "", emptyRaw = "-", expDateMs =
                 continue
             }
             el.hidden = false
-            el.textContent = isExpired ? "Account expired" : fmtDaysLeft(daysLeft)
+            el.textContent = isExpired ? t("expiration.expired") : fmtDaysLeft(daysLeft)
             el.setAttribute(
                 "data-state",
                 isExpired ? "expired" : daysLeft <= 2 ? "critical" : "warning"
@@ -36,7 +37,7 @@ function renderTargets(targets, value, { empty = "", emptyRaw = "-", expDateMs =
         if (value == null) {
             el.textContent = mode === "raw" ? emptyRaw : empty
         } else {
-            el.textContent = mode === "raw" ? value : `Account expires: ${value}`
+            el.textContent = mode === "raw" ? value : t("settings.about.expiresOn", { date: value })
         }
     }
 }
@@ -58,7 +59,7 @@ export async function injectExpirationDate() {
         renderTargets(targets, null)
         return
     }
-    const formatted = new Date(expDateMs).toLocaleDateString("en-US", {
+    const formatted = new Date(expDateMs).toLocaleDateString(undefined, {
         year: "numeric",
         month: "short",
         day: "numeric",

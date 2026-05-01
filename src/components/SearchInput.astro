@@ -6,13 +6,24 @@ interface Props {
 	label: string
 	placeholder: string
 	clearButtonId?: string
+	labelKey?: string
+	placeholderKey?: string
+	clearKey?: string
 }
 
-const { id, label, placeholder, clearButtonId } = Astro.props
+const {
+	id,
+	label,
+	placeholder,
+	clearButtonId,
+	labelKey,
+	placeholderKey,
+	clearKey,
+} = Astro.props
 ---
 
 <div class="flex items-center gap-2 flex-wrap">
-	<label class="sr-only" for={id}>{label}</label>
+	<label class="sr-only" for={id} data-i18n={labelKey}>{label}</label>
 	<div class="relative w-full">
 		<IconSearch
 			aria-hidden="true"
@@ -23,6 +34,7 @@ const { id, label, placeholder, clearButtonId } = Astro.props
 			id={id}
 			type="search"
 			placeholder={placeholder}
+			data-i18n-attr={placeholderKey ? `placeholder:${placeholderKey}` : undefined}
 			class="w-full rounded-xl border border-line bg-bg pl-9 pr-3 py-2 min-h-11 text-base sm:text-sm text-fg placeholder:text-fg-3 outline-none ring-0 transition focus:border-accent focus:bg-surface-2 focus:ring-2 focus:ring-accent"
 		/>
 	</div>
@@ -31,8 +43,9 @@ const { id, label, placeholder, clearButtonId } = Astro.props
 			<button
 				id={clearButtonId}
 				title="Clear"
+				data-i18n-attr={clearKey ? `title:${clearKey}` : undefined}
 				class="hidden shrink-0 rounded-lg border border-line px-2 py-2 min-h-11 text-xs text-fg-2 hover:bg-surface-2">
-				Clear
+				<span data-i18n={clearKey}>Clear</span>
 			</button>
 		)
 	}

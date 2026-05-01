@@ -1,39 +1,44 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 // Keyboard-shortcut help overlay. Press `?` (Shift+/) anywhere to open it.
+
+import { t } from "@/scripts/lib/i18n.js"
 
 const DIALOG_ID = "xt-keyboard-help"
 
-const SECTIONS = [
-  {
-    title: "Global",
-    items: [
-      { keys: ["Ctrl", "K"], desc: "Open search" },
-      { keys: ["?"], desc: "Show this help" },
-      { keys: ["Esc"], desc: "Close dialogs / cancel input" },
-    ],
-  },
-  {
-    title: "Live TV channel list",
-    items: [
-      { keys: ["0", "9"], joiner: "to", desc: "Jump to channel by number (1-based)" },
-      { keys: ["Enter"], desc: "Commit a number entry immediately" },
-      { keys: ["["], desc: "Previous channel" },
-      { keys: ["]"], desc: "Next channel" },
-      { keys: ["↑", "↓"], joiner: "/", desc: "Move focus row by row" },
-      { keys: ["PgUp", "PgDn"], joiner: "/", desc: "Move a page at a time" },
-      { keys: ["Home", "End"], joiner: "/", desc: "Jump to first / last" },
-    ],
-  },
-  {
-    title: "Player",
-    items: [
-      { keys: ["Space"], desc: "Play / pause" },
-      { keys: ["M"], desc: "Mute toggle" },
-      { keys: ["F"], desc: "Fullscreen toggle" },
-      { keys: ["J"], desc: "Seek -10s" },
-      { keys: ["L"], desc: "Seek +10s" },
-    ],
-  },
-]
+function buildSections() {
+  return [
+    {
+      title: t("keyboardHelp.section.global"),
+      items: [
+        { keys: ["Ctrl", "K"], desc: t("keyboardHelp.desc.openSearch") },
+        { keys: ["?"], desc: t("keyboardHelp.desc.showHelp") },
+        { keys: ["Esc"], desc: t("keyboardHelp.desc.closeDialogs") },
+      ],
+    },
+    {
+      title: t("keyboardHelp.section.livetvList"),
+      items: [
+        { keys: ["0", "9"], joiner: t("keyboardHelp.joiner.to"), desc: t("keyboardHelp.desc.jumpChannelNumber") },
+        { keys: ["Enter"], desc: t("keyboardHelp.desc.commitNumber") },
+        { keys: ["["], desc: t("keyboardHelp.desc.previousChannel") },
+        { keys: ["]"], desc: t("keyboardHelp.desc.nextChannel") },
+        { keys: ["↑", "↓"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.moveRow") },
+        { keys: ["PgUp", "PgDn"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.movePage") },
+        { keys: ["Home", "End"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.firstLast") },
+      ],
+    },
+    {
+      title: t("keyboardHelp.section.player"),
+      items: [
+        { keys: ["Space"], desc: t("keyboardHelp.desc.playPause") },
+        { keys: ["M"], desc: t("keyboardHelp.desc.muteToggle") },
+        { keys: ["F"], desc: t("keyboardHelp.desc.fullscreenToggle") },
+        { keys: ["J"], desc: t("keyboardHelp.desc.seekBack") },
+        { keys: ["L"], desc: t("keyboardHelp.desc.seekForward") },
+      ],
+    },
+  ]
+}
 
 function isTypingTarget(target) {
   if (!target) return false
@@ -94,7 +99,7 @@ function buildDialog() {
     "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0 " +
     "w-[min(34rem,calc(100vw-2rem))] max-h-[min(80dvh,38rem)] backdrop:bg-black/60"
 
-  const sectionsHtml = SECTIONS.map(
+  const sectionsHtml = buildSections().map(
     (section) =>
       '<section class="flex flex-col gap-1.5">' +
       `<h3 class="text-eyebrow font-semibold uppercase tracking-widest text-fg-3">${escapeHtml(section.title)}</h3>` +
@@ -105,9 +110,9 @@ function buildDialog() {
   dialog.innerHTML =
     '<div class="flex flex-col gap-4 p-5 overflow-y-auto custom-scroll">' +
     '<div class="flex items-start justify-between gap-3 shrink-0">' +
-    `<h2 id="${DIALOG_ID}-title" class="text-base font-semibold">Keyboard shortcuts</h2>` +
+    `<h2 id="${DIALOG_ID}-title" class="text-base font-semibold">${escapeHtml(t("keyboardHelp.title"))}</h2>` +
     '<button type="button" data-close ' +
-    'class="rounded-lg border border-line px-3 py-1.5 text-xs text-fg-2 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">Close</button>' +
+    `class="rounded-lg border border-line px-3 py-1.5 text-xs text-fg-2 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">${escapeHtml(t("common.close"))}</button>` +
     "</div>" +
     `<div class="flex flex-col gap-4">${sectionsHtml}</div>` +
     "</div>"

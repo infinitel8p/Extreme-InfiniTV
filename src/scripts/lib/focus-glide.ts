@@ -1,3 +1,4 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 let indicatorEl = null
 let lastTarget = null
 let usingPointer = false

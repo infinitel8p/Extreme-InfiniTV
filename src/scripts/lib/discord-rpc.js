@@ -1,4 +1,5 @@
 // Discord Rich Presence wrapper
+import { log } from "@/scripts/lib/log.js"
 import {
   isDiscordEnabledForPlaylist,
   getDiscordClientId,
@@ -24,7 +25,7 @@ async function getInvoke() {
     invokePromise = import("@tauri-apps/api/core")
       .then((mod) => mod.invoke)
       .catch((error) => {
-        console.warn("[xt:discord] tauri core import failed:", error)
+        log.warn("[xt:discord] tauri core import failed:", error)
         return null
       })
   }
@@ -99,7 +100,7 @@ export async function setRichPresence(payload) {
     lastFailureLogged = false
   } catch (error) {
     if (!lastFailureLogged) {
-      console.warn("[xt:discord] set_activity failed:", error)
+      log.warn("[xt:discord] set_activity failed:", error)
       lastFailureLogged = true
     }
     lastSignature = ""
@@ -113,7 +114,7 @@ export async function clearRichPresence() {
   try {
     await invoke("discord_clear")
   } catch (error) {
-    console.debug("[xt:discord] clear failed:", error)
+    log.debug("[xt:discord] clear failed:", error)
   } finally {
     lastSignature = ""
   }
@@ -126,7 +127,7 @@ export async function disconnectRichPresence() {
   try {
     await invoke("discord_disconnect")
   } catch (error) {
-    console.debug("[xt:discord] disconnect failed:", error)
+    log.debug("[xt:discord] disconnect failed:", error)
   } finally {
     lastSignature = ""
   }
@@ -185,7 +186,7 @@ export async function setIdleRichPresence(opts) {
     lastFailureLogged = false
   } catch (error) {
     if (!lastFailureLogged) {
-      console.warn("[xt:discord] idle set_activity failed:", error)
+      log.warn("[xt:discord] idle set_activity failed:", error)
       lastFailureLogged = true
     }
     lastSignature = ""

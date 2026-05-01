@@ -1,4 +1,5 @@
 // Live TV channel list, search, category picker, EPG and Video.js player.
+import { log } from "@/scripts/lib/log.js"
 import {
   loadCreds,
   getActiveEntry,
@@ -6,10 +7,10 @@ import {
   safeHttpUrl,
   buildApiUrl,
   isLikelyM3USource,
-  normalize,
-  debounce,
-  scoreNormMatch,
 } from "@/scripts/lib/creds.js"
+import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
+import { debounce } from "@/scripts/lib/debounce.js"
+import { t } from "@/scripts/lib/i18n.js"
 import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import {
   ensureLoaded as ensurePrefsLoaded,
@@ -118,7 +119,7 @@ function parseM3U(text) {
 
       let name = stripAttrs(afterComma) || `Channel ${idSeq}`
       const logo = readAttr(line, "tvg-logo")
-      const group = readAttr(line, "group-title") || "Uncategorized"
+      const group = readAttr(line, "group-title") || t("stream.uncategorized")
       const tvgId = readAttr(line, "tvg-id") || readAttr(line, "channel-id")
       const chnoStr =
         readAttr(line, "tvg-chno") || readAttr(line, "channel-number")
@@ -616,7 +617,7 @@ function openChannelMenu(channel, anchor, point) {
   playItem.setAttribute("role", "menuitem")
   playItem.className =
     "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
-  playItem.textContent = "Play"
+  playItem.textContent = t("stream.menu.play")
   playItem.addEventListener("click", () => {
     closeChannelMenu()
     play(channel.id, channel.name)
@@ -627,7 +628,7 @@ function openChannelMenu(channel, anchor, point) {
   testItem.setAttribute("role", "menuitem")
   testItem.className =
     "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
-  testItem.textContent = "Test stream"
+  testItem.textContent = t("stream.menu.test")
   testItem.addEventListener("click", () => {
     closeChannelMenu()
     openChannelDiagnostic(channel)
@@ -638,16 +639,16 @@ function openChannelMenu(channel, anchor, point) {
   copyItem.setAttribute("role", "menuitem")
   copyItem.className =
     "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
-  copyItem.textContent = "Copy stream URL"
+  copyItem.textContent = t("stream.menu.copy")
   copyItem.addEventListener("click", async () => {
     const url = buildChannelStreamUrl(channel)
     closeChannelMenu()
     if (!url) return
     try {
       await navigator.clipboard.writeText(url)
-      toast({ title: "Stream URL copied", duration: 2200 })
+      toast({ title: t("stream.toast.copied"), duration: 2200 })
     } catch (error) {
-      console.warn("[xt:livetv] copy stream URL failed:", error)
+      log.warn("[xt:livetv] copy stream URL failed:", error)
     }
   })
 
@@ -1081,7 +1082,7 @@ function renderCategoryPicker(items) {
         if (willHide) {
           toast({
             title: `Hid "${label}"`,
-            description: "Manage hidden categories in Settings.",
+            description: t("stream.toast.hiddenInSettings"),
             duration: 4000,
           })
           if (activeCat === val) {
@@ -1152,7 +1153,7 @@ function renderCategoryPicker(items) {
   const recRow = addRow(CAT_RECENTS, "🕒 Recently watched", recs.length)
   if (recs.length === 0) recRow.style.display = "none"
 
-  addRow("", "All categories")
+  addRow("", t("list.allCategories"))
   if (mode === "select") {
     for (const name of visibleNames) {
       addRow(name, name, counts.get(name), "", {
@@ -1415,9 +1416,9 @@ function maybeAutoplayFromUrl() {
 }
 
 async function loadChannels() {
-  console.log("[xt:livetv] loadChannels enter")
+  log.log("[xt:livetv] loadChannels enter")
   if (!listStatus || !categoryListStatus || !viewport) {
-    console.warn("[xt:livetv] loadChannels: missing DOM nodes", {
+    log.warn("[xt:livetv] loadChannels: missing DOM nodes", {
       listStatus: !!listStatus,
       categoryListStatus: !!categoryListStatus,
       viewport: !!viewport,
@@ -1425,7 +1426,7 @@ async function loadChannels() {
     return
   }
   const active = await getActiveEntry()
-  console.log("[xt:livetv] loadChannels active=", active?._id || null)
+  log.log("[xt:livetv] loadChannels active=", active?._id || null)
   if (!active) {
     activePlaylistId = ""
     activePlaylistTitle = ""
@@ -1449,8 +1450,8 @@ async function loadChannels() {
     else directUrlById = new Map()
     paintChannels(hit.data, true, hit.age)
   } else {
-    categoryListStatus.textContent = "Loading categories…"
-    listStatus.textContent = "Loading channels…"
+    categoryListStatus.textContent = t("common.loading")
+    listStatus.textContent = t("stream.loading")
     if (!viewport?.querySelector("[data-skeleton]")) renderChannelSkeletons()
   }
 
@@ -1496,15 +1497,15 @@ async function loadChannels() {
       async () => {
         const catMap = await ensureCategoryMap()
         const r = await providerFetch(buildApiUrl(creds, "get_live_streams"))
-        console.log("[xt:livetv] get_live_streams resp status=", r.status, "ok=", r.ok)
+        log.log("[xt:livetv] get_live_streams resp status=", r.status, "ok=", r.ok)
         const body = await r.text()
-        console.log("[xt:livetv] body bytes=", body?.length ?? 0)
+        log.log("[xt:livetv] body bytes=", body?.length ?? 0)
         if (!r.ok) {
-          console.error("Upstream error body:", body)
+          log.error("Upstream error body:", body)
           throw new Error(`API ${r.status}: ${body}`)
         }
         const parsed = JSON.parse(body)
-        console.log("[xt:livetv] parsed array length=", Array.isArray(parsed) ? parsed.length : "(not array)")
+        log.log("[xt:livetv] parsed array length=", Array.isArray(parsed) ? parsed.length : "(not array)")
         const arr = Array.isArray(parsed)
           ? parsed
           : parsed?.streams || parsed?.results || []
@@ -1542,11 +1543,11 @@ async function loadChannels() {
       }
     )
     directUrlById = new Map()
-    console.log("[xt:livetv] cachedFetch returned len=", data?.length ?? 0, "fromCache=", fromCache)
+    log.log("[xt:livetv] cachedFetch returned len=", data?.length ?? 0, "fromCache=", fromCache)
     paintChannels(data, fromCache, age)
-    console.log("[xt:livetv] paintChannels done")
+    log.log("[xt:livetv] paintChannels done")
   } catch (e) {
-    console.error("[xt:livetv] loadChannels threw:", e)
+    log.error("[xt:livetv] loadChannels threw:", e)
     mountVirtualList([])
     renderProviderError(listStatus, {
       providerName: activePlaylistTitle,
@@ -1847,7 +1848,7 @@ async function loadEPG(streamId) {
       .map((it) => ({
         start: Number(it.start_timestamp || it.start) * 1000,
         stop: Number(it.stop_timestamp || it.end) * 1000,
-        title: maybeB64ToUtf8(it.title || it.title_raw || "Untitled"),
+        title: maybeB64ToUtf8(it.title || it.title_raw || t("programme.untitled")),
         desc: maybeB64ToUtf8(it.description || it.description_raw || ""),
       }))
       .filter((p) => Number.isFinite(p.start) && Number.isFinite(p.stop) && p.stop > p.start)
@@ -1876,7 +1877,7 @@ async function loadEPG(streamId) {
       })
       .join("")
   } catch (e) {
-    console.error(e)
+    log.error(e)
     epgList.innerHTML = `<div class="text-bad">Failed to load EPG.</div>`
   }
 }
@@ -1919,13 +1920,13 @@ if (viewport && spacer && !viewport.childElementCount) {
   renderChannelSkeletons()
 }
 if (listStatus && /no playlist selected/i.test(listStatus.textContent || "")) {
-  listStatus.textContent = "Loading channels…"
+  listStatus.textContent = t("stream.loading")
 }
 
 ;(async () => {
-  console.log("[xt:livetv] boot start")
+  log.log("[xt:livetv] boot start")
   creds = await loadCreds()
-  console.log("[xt:livetv] boot creds host=", !!creds.host)
+  log.log("[xt:livetv] boot creds host=", !!creds.host)
   if (creds.host) {
     loadChannels()
   } else {

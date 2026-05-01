@@ -1,4 +1,6 @@
 // Tauri auto-updater. Only runs once per browser session, on Windows desktop.
+import { log } from "@/scripts/lib/log.js"
+
 const SESSION_FLAG = "xt_updater_checked"
 
 let isTauri = false
@@ -23,7 +25,7 @@ async function maybeRunWindowsAutoUpdate() {
             await relaunch()
         }
     } catch (err) {
-        console.error("Updater error:", err)
+        log.error("Updater error:", err)
     }
 }
 

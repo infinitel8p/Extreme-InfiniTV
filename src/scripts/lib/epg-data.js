@@ -1,5 +1,6 @@
 // Shared EPG data layer for /livetv and /epg.
 
+import { log } from "@/scripts/lib/log.js"
 import {
   fmtBase,
   isLikelyM3USource,
@@ -292,7 +293,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
       )
       return state
     } catch (e) {
-      console.warn("[xt:epg-data] load failed:", e)
+      log.warn("[xt:epg-data] load failed:", e)
       return null
     } finally {
       inflight.delete(playlistId)

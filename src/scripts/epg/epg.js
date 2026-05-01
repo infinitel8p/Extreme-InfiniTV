@@ -1,12 +1,14 @@
 // EPG schedule grid view.
+import { log } from "@/scripts/lib/log.js"
 import {
   loadCreds,
   getActiveEntry,
   buildApiUrl,
   isLikelyM3USource,
-  normalize,
-  debounce,
 } from "@/scripts/lib/creds.js"
+import { normalize } from "@/scripts/lib/text.js"
+import { debounce } from "@/scripts/lib/debounce.js"
+import { t } from "@/scripts/lib/i18n.js"
 import { getCached } from "@/scripts/lib/cache.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
@@ -80,7 +82,7 @@ function showStatus(text) {
   if (gridEl) gridEl.classList.add("hidden")
 }
 
-function showLoadingSkeleton(label = "Loading your TV schedule") {
+function showLoadingSkeleton(label = t("epg.loadingSkeleton")) {
   if (!statusEl) return
   statusEl.classList.remove("hidden", "epg-status-text")
   statusEl.classList.add("epg-status-skeleton")
@@ -430,7 +432,7 @@ function render() {
   if (channels.length === MAX_CHANNELS) {
     const tail = document.createElement("div")
     tail.className = "p-3 text-fg-3 text-xs text-center"
-    tail.textContent = `Showing first ${MAX_CHANNELS} channels in this category. Filter to see others.`
+    tail.textContent = t("epg.showingFirst", { n: MAX_CHANNELS })
     bodyEl.appendChild(tail)
   }
 
@@ -537,7 +539,7 @@ function syncCategoryUI() {
     titleEl.textContent = display ? `EPG · ${display}` : "EPG · All categories"
   }
   if (categoryLabelEl) {
-    categoryLabelEl.textContent = display || "All categories"
+    categoryLabelEl.textContent = display || t("list.allCategories")
   }
   if (categoryListEl) {
     for (const el of categoryListEl.querySelectorAll('button[role="option"]')) {
@@ -569,17 +571,11 @@ function applyCategory() {
   channels = pickChannels(allChannels)
   if (!channels.length) {
     if (activeCat === CAT_FAVORITES) {
-      showStatus(
-        "No favorite channels with EPG ids (`tvg-id`). Star a channel on Live TV first."
-      )
+      showStatus(t("epg.noFavoritesEpg"))
     } else if (activeCat === CAT_RECENTS) {
-      showStatus(
-        "No recently watched channels with EPG ids (`tvg-id`). Play one on Live TV first."
-      )
+      showStatus(t("epg.noRecentsEpg"))
     } else {
-      showStatus(
-        "No channels in this category have EPG ids (`tvg-id`). Try a different category."
-      )
+      showStatus(t("epg.noCategoryEpg"))
     }
     return
   }
@@ -597,7 +593,7 @@ function renderCategoryPicker(items) {
   const counts = new Map()
   for (const channel of items) {
     if (!channel.tvgId) continue
-    const key = (channel.category || "").trim() || "Uncategorized"
+    const key = (channel.category || "").trim() || t("list.uncategorized")
     counts.set(key, (counts.get(key) || 0) + 1)
   }
   const names = Array.from(counts.keys()).sort((a, b) =>
@@ -650,7 +646,7 @@ function renderCategoryPicker(items) {
   const recRow = addRow(CAT_RECENTS, "🕒 Recently watched", recEpgCount)
   if (recEpgCount === 0) recRow.style.display = "none"
 
-  addRow("", "All categories")
+  addRow("", t("list.allCategories"))
   for (const name of names) addRow(name, name, counts.get(name))
 
   categoryListEl.replaceChildren(frag)
@@ -683,17 +679,17 @@ function filterCategories() {
 categorySearchEl?.addEventListener("input", debounce(filterCategories, 120))
 
 async function init() {
-  showLoadingSkeleton("Loading your TV schedule")
+  showLoadingSkeleton(t("epg.loadingSkeleton"))
 
   creds = await loadCreds()
   if (!creds.host) {
-    showStatus("No playlist selected. Add one from the header.")
+    showStatus(t("epg.noPlaylistSelected"))
     return
   }
 
   const active = await getActiveEntry()
   if (!active) {
-    showStatus("No playlist selected. Add one from the header.")
+    showStatus(t("epg.noPlaylistSelected"))
     return
   }
   activePlaylistId = active._id
@@ -713,15 +709,15 @@ async function init() {
   if (!cached?.length) {
     if (isM3U) {
       showStatus(
-        "Open Live TV first so the M3U channel list is loaded - it's too big to refetch from this page."
+        t("epg.openLivetvFirst")
       )
       return
     }
-    showLoadingSkeleton("Loading channels")
+    showLoadingSkeleton(t("epg.loadingChannels"))
     try {
       cached = await fetchXtreamChannels()
     } catch (e) {
-      console.error("[epg] channel re-fetch failed:", e)
+      log.error("[epg] channel re-fetch failed:", e)
       showProviderError("channels")
       return
     }
@@ -755,7 +751,7 @@ async function init() {
 
   viewStart = roundHalfHourFloor(Date.now() - 30 * 60 * 1000)
 
-  showLoadingSkeleton("Loading EPG · large providers can take a moment")
+  showLoadingSkeleton(t("epg.loadingFull"))
 
   programmes.clear()
   try {
@@ -763,7 +759,7 @@ async function init() {
     if (!state) throw new Error("EPG fetch failed")
     for (const [k, v] of state.programmes) programmes.set(k, v)
   } catch (e) {
-    console.error("[epg] load failed:", e)
+    log.error("[epg] load failed:", e)
     showProviderError("EPG")
     return
   }

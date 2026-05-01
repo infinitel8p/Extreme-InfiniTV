@@ -267,6 +267,8 @@ export async function diagnoseStream(url, onUpdate) {
   return report
 }
 
+import { t } from "@/scripts/lib/i18n.js"
+
 export function summarizeReport(report) {
   if (!report) return { verdict: "unknown", reason: "" }
   const head = report.head
@@ -274,30 +276,30 @@ export function summarizeReport(report) {
     return {
       verdict: "fail",
       reason: head?.error
-        ? `Couldn't reach the stream: ${head.error}`
-        : `Provider responded ${head?.status || 0}.`,
+        ? t("streamTest.summary.cantReach", { error: head.error })
+        : t("streamTest.summary.providerResponded", { status: head?.status || 0 }),
     }
   }
   if (report.playlist && !report.playlist.ok) {
     return {
       verdict: "fail",
       reason: report.playlist.error
-        ? `Couldn't fetch the HLS playlist: ${report.playlist.error}`
-        : `Playlist responded ${report.playlist.status || 0}.`,
+        ? t("streamTest.summary.cantFetch", { error: report.playlist.error })
+        : t("streamTest.summary.playlistResponded", { status: report.playlist.status || 0 }),
     }
   }
   if (report.firstSegment && report.firstSegment.ok === false) {
     return {
       verdict: "warn",
       reason: report.firstSegment.error
-        ? `First segment HEAD failed: ${report.firstSegment.error}`
-        : `First segment responded ${report.firstSegment.status || 0}.`,
+        ? t("streamTest.summary.firstSegmentFailed", { error: report.firstSegment.error })
+        : t("streamTest.summary.firstSegmentResponded", { status: report.firstSegment.status || 0 }),
     }
   }
   return {
     verdict: "ok",
     reason: report.playlist
-      ? `${report.playlist.isMaster ? "Master" : "Media"} playlist OK; first segment reachable.`
-      : "Endpoint reachable.",
+      ? (report.playlist.isMaster ? t("streamTest.summary.playlistOk.master") : t("streamTest.summary.playlistOk.media"))
+      : t("streamTest.summary.endpointReachable"),
   }
 }

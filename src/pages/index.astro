@@ -40,15 +40,20 @@ import {
 			aria-labelledby="welcome-heading"
 			class="welcome-section hidden flex-1 min-h-0 items-center justify-center py-6">
 			<div class="welcome-enter welcome-card rounded-2xl border border-line bg-surface text-center">
-				<p class="welcome-eyebrow font-sans font-medium uppercase tracking-wider text-fg-3">
+				<p
+					data-i18n="welcome.eyebrow"
+					class="welcome-eyebrow font-sans font-medium uppercase tracking-wider text-fg-3">
 					Welcome
 				</p>
 				<h1
 					id="welcome-heading"
+					data-i18n="welcome.heading"
 					class="welcome-heading font-normal text-accent tracking-[-0.005em] leading-none">
 					Pick something to watch.
 				</h1>
-				<p class="welcome-sub mx-auto text-fg-2 font-sans tracking-tight leading-relaxed">
+				<p
+					data-i18n="welcome.sub"
+					class="welcome-sub mx-auto text-fg-2 font-sans tracking-tight leading-relaxed">
 					Connect an IPTV subscription, or paste a playlist URL.
 					Channels, movies, and series will appear here.
 				</p>
@@ -59,7 +64,7 @@ import {
 						href="/login"
 						class="btn-primary">
 						<IconPlus aria-hidden="true" class="btn-icon" />
-						Add a playlist
+						<span data-i18n="playlist.addCta">Add a playlist</span>
 					</a>
 					<a
 						href="/login?demo=1"
@@ -68,11 +73,13 @@ import {
 							aria-hidden="true"
 							class="btn-icon text-accent"
 						/>
-						Try a demo playlist
+						<span data-i18n="playlist.demoCta">Try a demo playlist</span>
 					</a>
 				</div>
 
-				<p class="welcome-fineprint text-fg-3 leading-relaxed">
+				<p
+					data-i18n="welcome.fineprint"
+					class="welcome-fineprint text-fg-3 leading-relaxed">
 					This app does not provide any content. The demo loads a
 					public playlist from iptv-org.
 				</p>
@@ -81,14 +88,14 @@ import {
 
 		<nav
 			id="hub-tiles"
-			aria-label="Browse"
+			aria-label="Browse" data-i18n-attr="aria-label:aria.browse"
 			class="grid gap-3 sm:gap-4 shrink-0
 				grid-cols-1
 				landscape:grid-cols-[2fr_1fr] landscape:grid-rows-2
 				lg:grid-cols-[2fr_1fr] lg:grid-rows-2">
 			<a
 				href="/livetv"
-				aria-label="Watch Live TV"
+				aria-label="Watch Live TV" data-i18n-attr="aria-label:aria.watchLiveTv"
 				style="animation-delay: 50ms;"
 				class="tile-enter lg:row-span-2 landscape:row-span-2 group relative flex flex-col justify-between
 					rounded-2xl border border-line bg-surface
@@ -117,6 +124,7 @@ import {
 				</div>
 				<div class="relative mt-auto pt-6 z-10">
 					<h2
+						data-i18n="nav.livetv"
 						class="font-semibold tracking-[-0.02em] leading-[0.92] text-fg
 							group-hover:text-accent group-focus-visible:text-accent
 							transition-colors duration-200 ms-[-0.05em]"
@@ -125,6 +133,7 @@ import {
 					</h2>
 					<p
 						id="livetv-tile-sub"
+						data-i18n="hub.tile.livetv.sub"
 						class="mt-4 sm:mt-5 text-sm sm:text-base text-fg-2 max-w-md font-sans tracking-tight truncate">
 						Channels, and what's on right now.
 					</p>
@@ -133,7 +142,7 @@ import {
 
 			<a
 				href="/movies"
-				aria-label="Browse Movies"
+				aria-label="Browse Movies" data-i18n-attr="aria-label:aria.browseMovies"
 				style="animation-delay: 150ms;"
 				class="tile-enter group relative overflow-hidden flex flex-col justify-between
 					rounded-2xl border border-line bg-surface
@@ -154,12 +163,12 @@ import {
 					class="relative z-10 size-9 sm:size-10 lg:size-12 text-fg-3 transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent"
 				/>
 				<div class="relative z-10 mt-auto pt-4">
-					<h2 class="text-2xl sm:text-3xl lg:text-5xl font-semibold tracking-[-0.02em] leading-[0.95]
+					<h2 data-i18n="nav.movies" class="text-2xl sm:text-3xl lg:text-5xl font-semibold tracking-[-0.02em] leading-[0.95]
 						text-fg group-hover:text-accent group-focus-visible:text-accent
 						transition-colors duration-200 ms-[-0.05em]">
 						Movies
 					</h2>
-					<p class="mt-1.5 text-sm text-fg-2">
+					<p data-i18n="hub.tile.movies.sub" class="mt-1.5 text-sm text-fg-2">
 						Browse the library.
 					</p>
 				</div>
@@ -167,7 +176,7 @@ import {
 
 			<a
 				href="/series"
-				aria-label="Browse Series"
+				aria-label="Browse Series" data-i18n-attr="aria-label:aria.browseSeries"
 				style="animation-delay: 250ms;"
 				class="tile-enter group relative overflow-hidden flex flex-col justify-between
 					rounded-2xl border border-line bg-surface
@@ -188,12 +197,12 @@ import {
 					class="relative z-10 size-9 sm:size-10 lg:size-12 text-fg-3 transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent"
 				/>
 				<div class="relative z-10 mt-auto pt-4">
-					<h2 class="text-2xl sm:text-3xl lg:text-5xl font-semibold tracking-[-0.02em] leading-[0.95]
+					<h2 data-i18n="nav.series" class="text-2xl sm:text-3xl lg:text-5xl font-semibold tracking-[-0.02em] leading-[0.95]
 						text-fg group-hover:text-accent group-focus-visible:text-accent
 						transition-colors duration-200 ms-[-0.05em]">
 						Series
 					</h2>
-					<p class="mt-1.5 text-sm text-fg-2">
+					<p data-i18n="hub.tile.series.sub" class="mt-1.5 text-sm text-fg-2">
 						Shows and full seasons.
 					</p>
 				</div>
@@ -232,14 +241,12 @@ import {
 	html[data-first-run="true"] #welcome {
 		display: flex;
 	}
-
-	/* tile-art / tile-art__layer rules live in global.css because the layers
-	   are created at runtime by index.astro's script and Astro's scoped
-	   styles only apply to markup-time class names. */
 </style>
 
 <script>
 	import "../scripts/updater-startup.js";
+	import { log } from "@/scripts/lib/log.js";
+	import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js";
 	import { getEntries, getActiveEntry, loadCreds } from "@/scripts/lib/creds.js";
 	import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js";
 	import { getRecents, ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js";
@@ -257,11 +264,11 @@ import {
 	};
 	if (eyebrow) {
 		const greet = (hour) => {
-			if (hour < 5) return "Good night";
-			if (hour < 12) return "Good morning";
-			if (hour < 18) return "Good afternoon";
-			if (hour < 22) return "Good evening";
-			return "Good night";
+			if (hour < 5) return t("hub.greeting.night");
+			if (hour < 12) return t("hub.greeting.morning");
+			if (hour < 18) return t("hub.greeting.afternoon");
+			if (hour < 22) return t("hub.greeting.evening");
+			return t("hub.greeting.night");
 		};
 		const update = () => {
 			const now = new Date();
@@ -271,13 +278,14 @@ import {
 			}).format(now);
 			const parts = [greet(now.getHours()), time];
 			if (heroChannelCount > 0) {
-				parts.push(`${heroChannelCount.toLocaleString()} channels`);
+				parts.push(t("hub.channelCount", { count: heroChannelCount.toLocaleString() }));
 			}
 			eyebrow.textContent = parts.join(" · ");
 		};
 		update();
 		setInterval(update, 30_000);
 		window.__refreshHeroEyebrow = update;
+		document.addEventListener(LOCALE_EVENT, update);
 	}
 
 	async function reconcileFirstRun() {
@@ -387,7 +395,7 @@ import {
 			}
 			await setupLiveSignals(active);
 		} catch (e) {
-			console.warn("[hub] setupTileArt failed:", e);
+			log.warn("[hub] setupTileArt failed:", e);
 		}
 	}
 
@@ -411,7 +419,7 @@ import {
 		}
 		liveTileArt.replaceChildren();
 		if (!lastChannel) {
-			liveTileSub.textContent = "Channels, and what's on right now.";
+			liveTileSub.textContent = t("hub.tile.livetv.sub");
 			return;
 		}
 		if (lastChannel.logo) {
@@ -430,7 +438,7 @@ import {
 		const setOnAir = (programme) => {
 			if (!programme) return false;
 			liveTileSub.innerHTML =
-				`<span class="text-fg-3 uppercase tracking-wider text-eyebrow font-semibold mr-2">On now</span>` +
+				`<span class="text-fg-3 uppercase tracking-wider text-eyebrow font-semibold mr-2">${escapeHtml(t("hub.tile.livetv.onNow"))}</span>` +
 				`<span class="text-fg-2">${escapeHtml(lastChannel.name)}</span>` +
 				`<span class="text-fg-3 mx-1.5">·</span>` +
 				`<span class="text-fg">${escapeHtml(programme.title)}</span>`;
@@ -441,7 +449,7 @@ import {
 			? setOnAir(getNowNext(cached.programmes, tvgId).current)
 			: false;
 		if (!cachedHit) {
-			liveTileSub.textContent = `Last watched: ${lastChannel.name}`;
+			liveTileSub.textContent = t("hub.tile.livetv.lastWatched", { name: lastChannel.name });
 			if (tvgId) {
 				try {
 					const creds = await loadCreds();

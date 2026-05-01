@@ -1,6 +1,8 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 // Self-contained toast notifications. Injects its own container + styles
 // on first use. Works from Astro islands, vanilla scripts, and anywhere
 // document is available.
+import { t } from "@/scripts/lib/i18n.js"
 //
 // API:
 //   toast({ title, description?, variant?, duration? })
@@ -190,7 +192,7 @@ function getContainer() {
   containerEl = document.createElement("ol")
   containerEl.id = CONTAINER_ID
   containerEl.setAttribute("role", "region")
-  containerEl.setAttribute("aria-label", "Notifications")
+  containerEl.setAttribute("aria-label", t("common.notifications"))
   document.body.appendChild(containerEl)
   return containerEl
 }
@@ -293,7 +295,7 @@ export function toast(opts) {
   const closeBtn = document.createElement("button")
   closeBtn.className = "xt-toast__close"
   closeBtn.type = "button"
-  closeBtn.setAttribute("aria-label", "Dismiss notification")
+  closeBtn.setAttribute("aria-label", t("common.dismissNotification"))
   closeBtn.innerHTML = ICON_X
   li.appendChild(closeBtn)
 

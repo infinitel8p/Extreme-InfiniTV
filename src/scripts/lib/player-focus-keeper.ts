@@ -1,3 +1,4 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 const ARROW_DIRECTIONS = {
     ArrowUp: "up",
     ArrowDown: "down",

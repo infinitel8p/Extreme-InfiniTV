@@ -5,8 +5,8 @@ import {
   loadCreds,
   buildApiUrl,
   isLikelyM3USource,
-  normalize,
 } from "@/scripts/lib/creds.js"
+import { normalize } from "@/scripts/lib/text.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
 

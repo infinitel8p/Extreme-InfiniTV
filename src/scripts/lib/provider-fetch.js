@@ -1,3 +1,4 @@
+import { log } from "@/scripts/lib/log.js"
 import { getUserAgent } from "@/scripts/lib/app-settings.js"
 
 const isTauri =
@@ -11,7 +12,7 @@ async function getTauriFetch() {
     tauriFetchPromise = import("@tauri-apps/plugin-http")
       .then((m) => m.fetch)
       .catch((e) => {
-        console.error("[xt:net] plugin-http unavailable:", e)
+        log.error("[xt:net] plugin-http unavailable:", e)
         return null
       })
   }
@@ -21,11 +22,11 @@ async function getTauriFetch() {
 async function nativeFetch(url, init, u) {
   try {
     const r = await fetch(url, init)
-    console.log(`[xt:net] native ok ${r.status}`, u)
+    log.log(`[xt:net] native ok ${r.status}`, u)
     return r
   } catch (e) {
     if (!init?.signal?.aborted) {
-      console.error("[xt:net] native fetch failed", { url: u, error: e })
+      log.error("[xt:net] native fetch failed", { url: u, error: e })
     }
     throw e
   }
@@ -36,26 +37,26 @@ export async function providerFetch(url, init = {}) {
   const u = String(url).slice(0, 200)
 
   if (!ua || !isTauri) {
-    console.log(`[xt:net] native start`, u)
+    log.log(`[xt:net] native start`, u)
     return await nativeFetch(url, init, u)
   }
 
   const tauriFetch = await getTauriFetch()
   if (!tauriFetch) {
-    console.log(`[xt:net] native start (no plugin-http)`, u)
+    log.log(`[xt:net] native start (no plugin-http)`, u)
     return await nativeFetch(url, init, u)
   }
 
-  console.log(`[xt:net] tauri start ua=${ua}`, u)
+  log.log(`[xt:net] tauri start ua=${ua}`, u)
   const headers = new Headers(init.headers || {})
   headers.set("User-Agent", ua)
   try {
     const r = await tauriFetch(url, { ...init, headers })
-    console.log(`[xt:net] tauri ok ${r.status}`, u)
+    log.log(`[xt:net] tauri ok ${r.status}`, u)
     return r
   } catch (e) {
     if (init?.signal?.aborted) throw e
-    console.warn(
+    log.warn(
       "[xt:net] tauri fetch failed, falling back to native:",
       String(e?.message || e)
     )

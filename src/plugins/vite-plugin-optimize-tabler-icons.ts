@@ -20,7 +20,7 @@ export function optimizeTablerIconsImport(): Plugin {
       const ms = new MagicString(code, { filename: id })
 
       ms.replace(
-        /([ \t]*)import\s+\{([^;]*?)}\s+from\s+['"]@tabler\/icons-svelte['"];?/g,
+        /([ \t]*)import\s+\{([^{}]*?)}\s+from\s+['"]@tabler\/icons-svelte['"];?/g,
         (match, whitespace: string, importNames: string) => {
           const hasSemi = match.endsWith(";")
           const imports = importNames

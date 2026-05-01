@@ -1,3 +1,4 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 // Behavior for [data-sort-menu] components: toggles a styled listbox panel
 // over a hidden native <select>, so existing code that reads/writes the
 // select's `.value` keeps working unchanged.

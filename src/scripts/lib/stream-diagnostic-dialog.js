@@ -1,6 +1,8 @@
 // Lazy-mounted "Test stream" diagnostic dialog.
+import { log } from "@/scripts/lib/log.js"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { diagnoseStream, summarizeReport } from "@/scripts/lib/stream-diagnostic.js"
+import { t } from "@/scripts/lib/i18n.js"
 
 const DIALOG_ID = "stream-diagnostic-dialog"
 
@@ -45,17 +47,18 @@ function ensureDialog() {
     <div class="flex flex-col h-full p-5 sm:p-6 gap-4">
       <header class="flex items-start justify-between gap-3 shrink-0">
         <div class="flex flex-col gap-1 min-w-0">
-          <div data-role="eyebrow" class="text-eyebrow font-medium uppercase tracking-widest text-fg-3">Test stream</div>
+          <div data-role="eyebrow" data-i18n="streamTest.eyebrow" class="text-eyebrow font-medium uppercase tracking-widest text-fg-3">${escapeHtml(t("streamTest.eyebrow"))}</div>
           <h2 id="${DIALOG_ID}-title" data-role="title" class="text-xl font-semibold tracking-[-0.01em] truncate"></h2>
           <div data-role="url" class="text-2xs text-fg-3 break-all font-mono"></div>
         </div>
         <button
           data-role="close"
           type="button"
-          aria-label="Close"
+          aria-label="${escapeHtml(t("common.close"))}"
+          data-i18n-attr="aria-label:common.close"
           class="rounded-lg border border-line min-h-11 px-3 py-1.5 text-xs text-fg-2 shrink-0
                  hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent">
-          Close
+          <span data-i18n="common.close">${escapeHtml(t("common.close"))}</span>
         </button>
       </header>
 
@@ -68,13 +71,13 @@ function ensureDialog() {
           data-role="copy"
           type="button"
           class="btn">
-          Copy report
+          ${escapeHtml(t("streamTest.copy"))}
         </button>
         <button
           data-role="rerun"
           type="button"
           class="btn ml-auto">
-          Run again
+          ${escapeHtml(t("streamTest.runAgain"))}
         </button>
       </footer>
     </div>
@@ -101,7 +104,7 @@ function renderStage(label, content) {
 }
 
 function renderHead(head) {
-  if (!head) return `<span class="text-fg-3">Pending…</span>`
+  if (!head) return `<span class="text-fg-3">${escapeHtml(t("streamTest.pending"))}</span>`
   if (head.error) {
     return `<span class="text-bad">${escapeHtml(head.error)}</span>` +
       ` <span class="text-fg-3">(${escapeHtml(head.method)}, ${fmtMs(head.latencyMs)})</span>`
@@ -113,41 +116,41 @@ function renderHead(head) {
     ? `<div class="text-2xs text-fg-3 font-mono break-all">${escapeHtml(head.contentType)}</div>`
     : ""
   const len = head.contentLength
-    ? `<div class="text-2xs text-fg-3 tabular-nums">Length ${fmtBytes(head.contentLength)}</div>`
+    ? `<div class="text-2xs text-fg-3 tabular-nums">${escapeHtml(t("streamTest.length", { bytes: fmtBytes(head.contentLength) }))}</div>`
     : ""
   const meta = `<div class="text-2xs text-fg-3 tabular-nums">${escapeHtml(head.method)} · ${fmtMs(head.latencyMs)}</div>`
   const fallback = head.fallback
-    ? `<div class="text-2xs text-warn">HEAD rejected (${escapeHtml(head.fallback)}) - used range GET fallback.</div>`
+    ? `<div class="text-2xs text-warn">${escapeHtml(t("streamTest.headRejected", { reason: head.fallback }))}</div>`
     : ""
   return `${status}${ct}${len}${meta}${fallback}`
 }
 
 function renderPlaylist(pl) {
-  if (!pl) return `<span class="text-fg-3">Pending…</span>`
+  if (!pl) return `<span class="text-fg-3">${escapeHtml(t("streamTest.pending"))}</span>`
   if (pl.error) {
     return `<span class="text-bad">${escapeHtml(pl.error)}</span>`
   }
   const heading = pl.isMaster
-    ? `Master playlist · ${pl.variantCount} variant${pl.variantCount === 1 ? "" : "s"}`
-    : `Media playlist · ${pl.segmentCount} segment${pl.segmentCount === 1 ? "" : "s"}`
+    ? t("streamTest.masterPlaylist", { n: pl.variantCount })
+    : t("streamTest.mediaPlaylist", { n: pl.segmentCount })
   const top = pl.topVariant
-    ? `<div class="text-2xs text-fg-3 tabular-nums">Top variant: ${pl.topVariant.resolution || "?"} @ ${(pl.topVariant.bandwidth / 1000).toFixed(0)} kbps${pl.topVariant.codecs ? ` (${escapeHtml(pl.topVariant.codecs)})` : ""}</div>`
+    ? `<div class="text-2xs text-fg-3 tabular-nums">${escapeHtml(t("streamTest.topVariant", { res: pl.topVariant.resolution || "?", bw: (pl.topVariant.bandwidth / 1000).toFixed(0) }))}${pl.topVariant.codecs ? ` (${escapeHtml(pl.topVariant.codecs)})` : ""}</div>`
     : ""
   const td = pl.targetDuration
-    ? `<div class="text-2xs text-fg-3 tabular-nums">Target segment duration: ${pl.targetDuration}s</div>`
+    ? `<div class="text-2xs text-fg-3 tabular-nums">${escapeHtml(t("streamTest.targetDuration", { n: pl.targetDuration }))}</div>`
     : ""
   const total = pl.totalDuration
-    ? `<div class="text-2xs text-fg-3 tabular-nums">Window: ${pl.totalDuration.toFixed(1)}s</div>`
+    ? `<div class="text-2xs text-fg-3 tabular-nums">${escapeHtml(t("streamTest.window", { duration: pl.totalDuration.toFixed(1) }))}</div>`
     : ""
   const meta = `<div class="text-2xs text-fg-3 tabular-nums">${pl.bytes ? fmtBytes(pl.bytes) : ""} · ${fmtMs(pl.latencyMs)}</div>`
-  return `<div class="font-medium text-fg">${heading}</div>${top}${td}${total}${meta}`
+  return `<div class="font-medium text-fg">${escapeHtml(heading)}</div>${top}${td}${total}${meta}`
 }
 
 function renderFirstSegment(seg) {
-  if (!seg) return `<span class="text-fg-3">Skipped (not HLS or no segments).</span>`
+  if (!seg) return `<span class="text-fg-3">${escapeHtml(t("streamTest.skipped"))}</span>`
   const head = renderHead(seg)
   const dur = seg.declaredDuration
-    ? `<div class="text-2xs text-fg-3 tabular-nums">Declared duration: ${seg.declaredDuration.toFixed(2)}s</div>`
+    ? `<div class="text-2xs text-fg-3 tabular-nums">${escapeHtml(t("streamTest.declaredDuration", { n: seg.declaredDuration.toFixed(2) }))}</div>`
     : ""
   const url = `<div class="text-2xs text-fg-3 font-mono break-all">${escapeHtml(seg.url || "")}</div>`
   return `${head}${dur}${url}`
@@ -158,7 +161,7 @@ function paint(report, opts) {
   if (!node) return
 
   const titleEl = node.querySelector("[data-role='title']")
-  if (titleEl) titleEl.textContent = opts.title || "Stream test"
+  if (titleEl) titleEl.textContent = opts.title || t("streamTest.title")
   const urlEl = node.querySelector("[data-role='url']")
   if (urlEl) urlEl.textContent = report?.url || ""
 
@@ -174,13 +177,13 @@ function paint(report, opts) {
       let verdictText = ""
       if (summary.verdict === "ok") {
         verdictClass = "border-ok/40 bg-ok/5 text-ok"
-        verdictText = "Stream is reachable."
+        verdictText = t("streamTest.reachable")
       } else if (summary.verdict === "warn") {
         verdictClass = "border-warn/40 bg-warn/5 text-warn"
-        verdictText = "Reachable, with caveats."
+        verdictText = t("streamTest.warn")
       } else {
         verdictClass = "border-bad/40 bg-bad/5 text-bad"
-        verdictText = "Stream is unreachable."
+        verdictText = t("streamTest.unreachable")
       }
       verdictEl.className =
         "rounded-xl border px-3 py-2 text-sm flex items-center gap-2 " + verdictClass
@@ -188,16 +191,16 @@ function paint(report, opts) {
     } else {
       verdictEl.className =
         "rounded-xl border border-line bg-bg px-3 py-2 text-sm flex items-center gap-2 text-fg-2"
-      verdictEl.innerHTML = `<span class="inline-flex size-2 rounded-full bg-accent animate-pulse"></span> Probing the stream…`
+      verdictEl.innerHTML = `<span class="inline-flex size-2 rounded-full bg-accent animate-pulse"></span> ${escapeHtml(t("streamTest.probing"))}`
     }
   }
 
   const reportEl = node.querySelector("[data-role='report']")
   if (reportEl) {
     reportEl.innerHTML = [
-      renderStage("Endpoint", renderHead(report?.head)),
-      renderStage("HLS playlist", renderPlaylist(report?.playlist)),
-      renderStage("First segment", renderFirstSegment(report?.firstSegment)),
+      renderStage(t("streamTest.stage.endpoint"), renderHead(report?.head)),
+      renderStage(t("streamTest.stage.playlist"), renderPlaylist(report?.playlist)),
+      renderStage(t("streamTest.stage.firstSegment"), renderFirstSegment(report?.firstSegment)),
     ].join("")
   }
 }
@@ -238,12 +241,12 @@ export function openStreamDiagnostic(opts) {
       if (!lastReport) return
       try {
         await navigator.clipboard.writeText(JSON.stringify(lastReport, null, 2))
-        copyBtn.textContent = "Copied"
+        copyBtn.textContent = t("streamTest.copied")
         setTimeout(() => {
-          if (copyBtn) copyBtn.textContent = "Copy report"
+          if (copyBtn) copyBtn.textContent = t("streamTest.copy")
         }, 1400)
       } catch (error) {
-        console.warn("[xt:diagnostic] copy failed:", error)
+        log.warn("[xt:diagnostic] copy failed:", error)
       }
     }
   }

@@ -1,6 +1,7 @@
 // Series detail page (route: /series/detail?id=<series_id>).
 // Cache-driven on first paint so it works offline once a series has been
 // opened at least once before.
+import { log } from "@/scripts/lib/log.js"
 import {
   loadCreds,
   getActiveEntry,
@@ -44,6 +45,7 @@ import {
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
+import { t } from "@/scripts/lib/i18n.js"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -105,7 +107,7 @@ function buildEpisodeStreamUrl(ep) {
 function syncFavButton() {
   if (!favBtn || !series || !activePlaylistId) return
   const fav = isFavorite(activePlaylistId, "series", series.id)
-  favBtn.textContent = fav ? "Remove from favorites" : "Add to favorites"
+  favBtn.textContent = fav ? t("detail.action.removeFavorite") : t("detail.action.addFavorite")
   favBtn.classList.toggle("text-accent", fav)
   favBtn.setAttribute("aria-pressed", String(fav))
 }
@@ -114,7 +116,7 @@ function syncWatchButton() {
   if (!watchBtn || !series || !activePlaylistId) return
   const onWatchlist = isOnWatchlist(activePlaylistId, "series", series.id)
   if (watchLabelEl) {
-    watchLabelEl.textContent = onWatchlist ? "On your watchlist" : "Watch later"
+    watchLabelEl.textContent = onWatchlist ? t("detail.watchlist.on") : t("detail.action.watchLater")
   }
   watchBtn.classList.toggle("text-accent", onWatchlist)
   watchBtn.setAttribute("aria-pressed", String(onWatchlist))
@@ -141,19 +143,19 @@ function findDownloadByUrl(url) {
 }
 
 function downloadButtonState(d) {
-  if (!d) return { label: "Download", disabled: false, title: "Save this episode to your downloads folder" }
+  if (!d) return { label: t("detail.action.download"), disabled: false, title: t("series.download.tooltip") }
   switch (d.status) {
     case "downloading": {
       const pct = d.bytesTotal > 0 ? Math.floor((d.bytesDone / d.bytesTotal) * 100) : null
-      return { label: pct !== null ? `${pct}%` : "…", disabled: false, title: "Tap to pause" }
+      return { label: pct !== null ? `${pct}%` : "…", disabled: false, title: t("detail.download.tapPause") }
     }
-    case "queued":    return { label: "Queued", disabled: false, title: "Waiting for a slot - tap to cancel" }
-    case "done":      return { label: "Saved", disabled: true, title: d.path ? `Saved to ${d.path}` : "Saved" }
-    case "paused":    return { label: "Resume", disabled: false, title: "Paused - tap to resume" }
-    case "stalled":   return { label: "Retry", disabled: false, title: "Stalled - tap to retry" }
-    case "error":     return { label: "Retry", disabled: false, title: d.error || "Failed - tap to retry" }
-    case "cancelled": return { label: "Download", disabled: false, title: "Re-download" }
-    default:          return { label: "Download", disabled: false }
+    case "queued":    return { label: t("detail.download.queued"), disabled: false, title: t("detail.download.waitingSlot") }
+    case "done":      return { label: t("detail.download.saved"), disabled: true, title: d.path ? t("detail.download.savedTo", { path: d.path }) : t("detail.download.saved") }
+    case "paused":    return { label: t("detail.download.resume"), disabled: false, title: t("detail.download.tapResume") }
+    case "stalled":   return { label: t("detail.download.retry"), disabled: false, title: t("detail.download.tapRetry") }
+    case "error":     return { label: t("detail.download.retry"), disabled: false, title: d.error || t("detail.download.failedRetry") }
+    case "cancelled": return { label: t("detail.action.download"), disabled: false, title: t("series.download.reDownload") }
+    default:          return { label: t("detail.action.download"), disabled: false }
   }
 }
 
@@ -185,7 +187,7 @@ function renderSeasonTabs(seasonKeys) {
       (key === currentSeason
         ? "border-accent bg-accent-soft text-fg"
         : "border-line text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg")
-    btn.textContent = `Season ${key}`
+    btn.textContent = t("series.season", { n: key })
     btn.addEventListener("click", () => {
       if (currentSeason === key) return
       const oldKey = currentSeason
@@ -233,7 +235,7 @@ function renderEpisodes() {
   if (!eps.length) {
     const empty = document.createElement("div")
     empty.className = "text-fg-3 text-sm py-3"
-    empty.textContent = "No episodes in this season."
+    empty.textContent = t("series.episodes.empty")
     episodeList.appendChild(empty)
     return
   }
@@ -270,7 +272,7 @@ function renderEpisodes() {
     wrap.className = "min-w-0 flex-1"
     const title = document.createElement("div")
     title.className = "truncate text-sm font-medium text-fg"
-    title.textContent = ep.title || `Episode ${ep.episode_num || ""}`
+    title.textContent = ep.title || t("series.episode.fallback", { n: ep.episode_num || "" })
     wrap.appendChild(title)
 
     const meta = document.createElement("div")
@@ -305,10 +307,10 @@ function renderEpisodes() {
         "shrink-0 rounded-lg border border-line min-h-11 min-w-11 inline-flex items-center justify-center text-fg-3 " +
         "hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:border-accent " +
         "outline-none transition-colors"
-      restartBtn.title = "Start from beginning"
+      restartBtn.title = t("detail.action.startBeginning")
       restartBtn.setAttribute(
         "aria-label",
-        `Start ${ep.title || `episode ${ep.episode_num || ""}`} from the beginning`
+        t("series.episode.startBeginningAria", { title: ep.title || t("series.episode.fallback", { n: ep.episode_num || "" }) })
       )
       restartBtn.innerHTML =
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="size-4"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>'
@@ -363,13 +365,13 @@ function renderEpisodes() {
               existing.status === "error")
           ) {
             dlBtn.setAttribute("disabled", "")
-            if (dlLabel) dlLabel.textContent = "Resuming…"
+            if (dlLabel) dlLabel.textContent = t("series.download.resuming")
             resumeDownload(existing.id)
             return
           }
           try {
             dlBtn.setAttribute("disabled", "")
-            if (dlLabel) dlLabel.textContent = "Starting…"
+            if (dlLabel) dlLabel.textContent = t("detail.download.starting")
             const epTitle =
               (series?.name ? `${series.name} - ` : "") +
               `S${currentSeason || "?"}E${ep.episode_num || "?"}` +
@@ -390,9 +392,9 @@ function renderEpisodes() {
               },
             })
           } catch (err) {
-            console.error("Episode download failed:", err)
+            log.error("Episode download failed:", err)
             dlBtn.removeAttribute("disabled")
-            if (dlLabel) dlLabel.textContent = "Failed"
+            if (dlLabel) dlLabel.textContent = t("detail.download.failed")
             dlBtn.title = String(err?.message || err)
           }
         })
@@ -490,7 +492,7 @@ function applySeriesInfo(data) {
     metaEl.innerHTML = bits.join(' <span aria-hidden="true">·</span> ')
   }
   if (plotEl) {
-    plotEl.textContent = plot || (cast ? `Cast: ${cast}` : "No description available.")
+    plotEl.textContent = plot || (cast ? t("series.castPrefix", { cast }) : t("detail.noDescription"))
   }
 
   trailerUrl = youtubeUrlFromTrailer(info.youtube_trailer || "")
@@ -658,7 +660,7 @@ async function playEpisode(episode) {
   const mime = chooseMime(src)
   player.one("error", () => {
     const e = player.error()
-    console.error("[xt:series-detail] video.js error", {
+    log.error("[xt:series-detail] video.js error", {
       code: e?.code,
       message: e?.message,
       src: playSrc,
@@ -715,7 +717,7 @@ async function playEpisode(episode) {
   }
 
   player.play().catch((err) =>
-    console.warn("[xt:series-detail] play() rejected:", err?.message || err)
+    log.warn("[xt:series-detail] play() rejected:", err?.message || err)
   )
 
   if (activePlaylistId && series) {
@@ -815,7 +817,7 @@ function showUpNextOverlay(next) {
 
   const seasonLabel = next.season || next.episode.season || ""
   const epNum = next.episode.episode_num || "?"
-  const epTitle = next.episode.title || `Episode ${epNum}`
+  const epTitle = next.episode.title || t("series.episode.fallback", { n: epNum })
 
   upNextEl = document.createElement("div")
   upNextEl.className =
@@ -824,12 +826,12 @@ function showUpNextOverlay(next) {
     "p-4 flex flex-col gap-3 ring-1 ring-accent/30"
   upNextEl.setAttribute("role", "dialog")
   upNextEl.setAttribute("aria-live", "polite")
-  upNextEl.setAttribute("aria-label", "Up next")
+  upNextEl.setAttribute("aria-label", t("detail.upNext"))
 
   const eyebrow = document.createElement("div")
   eyebrow.className =
     "text-eyebrow font-semibold uppercase text-accent tracking-widest"
-  eyebrow.textContent = "Up next"
+  eyebrow.textContent = t("detail.upNext")
   upNextEl.appendChild(eyebrow)
 
   const titleRow = document.createElement("div")
@@ -838,7 +840,7 @@ function showUpNextOverlay(next) {
   seasonEl.className = "text-2xs text-fg-3 tabular-nums"
   seasonEl.textContent = seasonLabel
     ? `S${seasonLabel} · E${epNum}`
-    : `Episode ${epNum}`
+    : t("series.episode.fallback", { n: epNum })
   const epTitleEl = document.createElement("div")
   epTitleEl.className = "text-sm font-semibold text-fg truncate"
   epTitleEl.textContent = epTitle
@@ -863,7 +865,7 @@ function showUpNextOverlay(next) {
     "rounded-lg border border-line px-3 min-h-9 text-xs text-fg-2 " +
     "hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg " +
     "focus-visible:border-accent outline-none transition-colors"
-  skipBtn.textContent = "Cancel"
+  skipBtn.textContent = t("common.cancel")
   skipBtn.addEventListener("click", () => dismissUpNext())
   const playNowBtn = document.createElement("button")
   playNowBtn.type = "button"
@@ -871,7 +873,7 @@ function showUpNextOverlay(next) {
     "rounded-lg bg-accent text-bg px-3 min-h-9 text-xs font-semibold " +
     "hover:brightness-110 focus-visible:brightness-110 outline-none transition-[filter,transform] " +
     "active:scale-[0.97]"
-  playNowBtn.textContent = "Play now"
+  playNowBtn.textContent = t("detail.action.playNow")
   playNowBtn.addEventListener("click", () => {
     dismissUpNext()
     currentSeason = next.season
@@ -887,7 +889,7 @@ function showUpNextOverlay(next) {
 
   let remaining = UPNEXT_SECONDS
   const tick = () => {
-    countdownEl.textContent = `Playing in ${remaining}s`
+    countdownEl.textContent = t("series.upNext.playingIn", { seconds: remaining })
     progressFill.style.width = `${((UPNEXT_SECONDS - remaining) / UPNEXT_SECONDS) * 100}%`
   }
   tick()
@@ -979,26 +981,26 @@ document.addEventListener("xt:progress-changed", (e) => {
 // Boot
 // ----------------------------
 function showError(msg) {
-  if (titleEl) titleEl.textContent = "Couldn't load this series"
+  if (titleEl) titleEl.textContent = t("series.error.cantLoad")
   if (plotEl) plotEl.textContent = msg
 }
 
 async function boot() {
   if (!seriesId) {
-    showError("No series ID was given.")
+    showError(t("detail.error.noSeriesId"))
     return
   }
 
   series = null
   episodesByKey = null
   if (metaEl) metaEl.textContent = ""
-  if (plotEl) plotEl.textContent = "Loading details…"
+  if (plotEl) plotEl.textContent = t("detail.loading")
   if (seasonTabs) seasonTabs.replaceChildren()
   if (episodeList) episodeList.replaceChildren()
 
   const active = await getActiveEntry()
   if (!active) {
-    showError("No playlist is selected. Add one in Settings.")
+    showError(t("detail.error.noPlaylist"))
     return
   }
   activePlaylistId = active._id
@@ -1018,12 +1020,12 @@ async function boot() {
     const sample = seriesDownloads[0]
     series = {
       id: seriesId,
-      name: sample?.source?.seriesName || `Series ${seriesId}`,
+      name: sample?.source?.seriesName || t("list.seriesFallback", { id: seriesId }),
       logo: sample?.source?.logo || null,
     }
   }
 
-  if (titleEl) titleEl.textContent = series.name || `Series ${seriesId}`
+  if (titleEl) titleEl.textContent = series.name || t("list.seriesFallback", { id: seriesId })
   paintPoster(series.name, series.logo || null)
   setAmbient(series.logo || null)
   syncFavButton()
@@ -1031,7 +1033,7 @@ async function boot() {
 
   const cached = getCached(active._id, `series_info_${seriesId}`)
   if (cached) applySeriesInfo(cached.data)
-  else if (plotEl) plotEl.textContent = "Loading details…"
+  else if (plotEl) plotEl.textContent = t("detail.loading")
 
   let infoOk = !!cached
   if (creds.host && creds.user && creds.pass) {
@@ -1048,28 +1050,28 @@ async function boot() {
       applySeriesInfo(data)
       infoOk = true
     } catch (e) {
-      console.error("[xt:series-detail] info fetch failed:", e)
+      log.error("[xt:series-detail] info fetch failed:", e)
       if (!cached) {
         if (plotEl) {
           plotEl.textContent = seriesDownloads.length
-            ? "Couldn't reach the provider. Downloaded episodes are still playable."
-            : "Failed to load series details."
+            ? t("series.error.providerLocal")
+            : t("series.error.failedDetails")
         }
         if (episodeList) {
           episodeList.replaceChildren()
           const fail = document.createElement("div")
           fail.className = "text-fg-3 text-sm py-3"
           fail.textContent = seriesDownloads.length
-            ? "Episode list unavailable offline."
-            : "Couldn't load episodes."
+            ? t("series.error.episodesOffline")
+            : t("series.error.cantLoadEpisodes")
           episodeList.appendChild(fail)
         }
       }
     }
   } else if (!cached && plotEl) {
     plotEl.textContent = seriesDownloads.length
-      ? "Downloaded episodes are still playable."
-      : "Series details require an Xtream playlist. Switch playlists from the sidebar."
+      ? t("series.error.localPlayable")
+      : t("detail.error.noPlaylist")
   }
 
   if (autoplayPending && autoplayEpisodeId && !infoOk) {

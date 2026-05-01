@@ -1,6 +1,7 @@
 <script>
   // Full-page Recently Added view: VOD + series sorted by `added` ts.
   import { onMount } from "svelte"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
   import {
@@ -13,6 +14,7 @@
 
   /** @type {"all"|"vod"|"series"} */
   let filter = $state("all")
+  let locale = $state(0)
   /** @type {Array<{ts:number, kind:"vod"|"series", item:any}>} */
   let merged = $state([])
   let loading = $state(true)
@@ -94,9 +96,11 @@
 
   onMount(() => {
     reload()
+    const onLocale = () => { locale++ }
     const handlers = {
       "xt:active-changed": reload,
       [CATALOG_WARMED_EVENT]: reload,
+      [LOCALE_EVENT]: onLocale,
     }
     for (const [eventName, handler] of Object.entries(handlers)) {
       document.addEventListener(eventName, handler)
@@ -109,12 +113,12 @@
   })
 </script>
 
-<div class="flex flex-col gap-3 shrink-0">
-  <div class="flex flex-wrap gap-2" role="tablist" aria-label="Filter by kind">
+<div class="flex flex-col gap-3 shrink-0" data-locale={locale}>
+  <div class="flex flex-wrap gap-2" role="tablist" aria-label={t("recentlyAdded.heading")}>
     {#each [
-      { id: "all", label: "All" },
-      { id: "vod", label: "Movies" },
-      { id: "series", label: "Series" },
+      { id: "all", key: "favorites.filter.all" },
+      { id: "vod", key: "favorites.filter.vod" },
+      { id: "series", key: "favorites.filter.series" },
     ] as chip (chip.id)}
       <button
         type="button"
@@ -125,17 +129,17 @@
         class="filter-chip rounded-full border border-line bg-surface px-3.5 py-1.5 text-sm
                hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                transition-colors">
-        {chip.label}
+        {t(chip.key)}
         <span class="ml-1.5 text-fg-3 tabular-nums">{counts[chip.id]}</span>
       </button>
     {/each}
   </div>
 
   {#if loading && !merged.length}
-    <div class="text-sm text-fg-3 px-1">Loading recently added items…</div>
+    <div class="text-sm text-fg-3 px-1">{t("common.loading")}</div>
   {:else if !merged.length}
     <div class="rounded-2xl border border-line bg-surface px-5 py-8 text-sm text-fg-2">
-      Nothing recently added yet. Refresh your playlist or wait for the next provider update.
+      {t("recentlyAdded.empty")}
     </div>
   {:else}
     <div class="px-1 text-xs text-fg-3 tabular-nums">

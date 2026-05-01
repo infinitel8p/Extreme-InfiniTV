@@ -2,6 +2,8 @@
   // Cross-playlist watchlist view - mirror of AllFavoritesView, but only
   // movies and series and sorted by added-time (newest first).
   import { onMount } from "svelte"
+  import { log } from "@/scripts/lib/log.js"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getEntries, getActiveEntry, selectEntry } from "@/scripts/lib/creds.js"
   import {
     ensureLoaded as ensurePrefsLoaded,
@@ -14,6 +16,7 @@
   /** @type {"all"|"vod"|"series"} */
   let filter = $state("all")
   let activePlaylistId = $state("")
+  let locale = $state(0)
   /** @type {Array<{ id: string, title: string }>} */
   let playlists = $state([])
   /** @type {Array<{
@@ -118,7 +121,7 @@
     try {
       await selectEntry(entry.playlistId)
     } catch (err) {
-      console.error("[xt:watchlist] selectEntry failed:", err)
+      log.error("[xt:watchlist] selectEntry failed:", err)
     }
     window.location.href = entry.href
   }
@@ -129,11 +132,13 @@
 
   onMount(() => {
     reload()
+    const onLocale = () => { locale++ }
     const handlers = {
       "xt:active-changed": reload,
       "xt:entries-updated": reload,
       "xt:watchlist-changed": reload,
       "xt:catalog-warmed": reload,
+      [LOCALE_EVENT]: onLocale,
     }
     for (const [eventName, handler] of Object.entries(handlers)) {
       document.addEventListener(eventName, handler)
@@ -146,12 +151,12 @@
   })
 </script>
 
-<div class="flex flex-col gap-3 shrink-0">
-  <div class="flex flex-wrap gap-2" role="tablist" aria-label="Filter watchlist by kind">
+<div class="flex flex-col gap-3 shrink-0" data-locale={locale}>
+  <div class="flex flex-wrap gap-2" role="tablist" aria-label={t("watchlist.heading")}>
     {#each [
-      { id: "all", label: "All" },
-      { id: "vod", label: "Movies" },
-      { id: "series", label: "Series" },
+      { id: "all", key: "favorites.filter.all" },
+      { id: "vod", key: "favorites.filter.vod" },
+      { id: "series", key: "favorites.filter.series" },
     ] as chip (chip.id)}
       <button
         type="button"
@@ -162,29 +167,25 @@
         class="filter-chip rounded-full border border-line bg-surface px-3.5 py-1.5 text-sm
                hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                transition-colors">
-        {chip.label}
+        {t(chip.key)}
         <span class="ml-1.5 text-fg-3 tabular-nums">{counts[chip.id]}</span>
       </button>
     {/each}
   </div>
 
   {#if loading && !entries.length}
-    <div class="text-sm text-fg-3 px-1">Loading watchlist…</div>
+    <div class="text-sm text-fg-3 px-1">{t("common.loading")}</div>
   {:else if !entries.length}
     <div class="rounded-2xl border border-line bg-surface px-5 py-8 text-sm text-fg-2">
-      Your watchlist is empty. Tap "Watch later" on any movie or series to save it for later.
+      {t("watchlist.helperEmpty")}
     </div>
   {:else if !visible.length}
     <div class="rounded-2xl border border-line bg-surface px-5 py-8 text-sm text-fg-2">
-      No {filter === "vod" ? "movies" : filter} on your watchlist yet.
+      {t("watchlist.helperEmpty")}
     </div>
   {:else}
     <div class="px-1 text-xs text-fg-3 tabular-nums">
-      <strong class="text-fg-2">{visible.length}</strong>
-      {visible.length === 1 ? "item" : "items"}
-      across
-      <strong class="text-fg-2">{playlists.length}</strong>
-      {playlists.length === 1 ? "playlist" : "playlists"}
+      {t("strip.itemCount", { count: visible.length })}
     </div>
   {/if}
 </div>

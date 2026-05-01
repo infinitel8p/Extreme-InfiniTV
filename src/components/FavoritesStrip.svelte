@@ -1,6 +1,7 @@
 <script>
   // Hub "Favorites" strip - cross-kind favorites for the active playlist.
   import { onMount } from "svelte"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
   import {
     ensureLoaded as ensurePrefsLoaded,
@@ -14,6 +15,7 @@
   /** @type {Array<{ kind: "live"|"vod"|"series", id: number, name: string, logo: string|null, subtitle: string, href: string }>} */
   let entries = $state([])
   let activePlaylistId = $state("")
+  let locale = $state(0)
   /** @type {{ live: Map<number, any>, vod: Map<number, any>, series: Map<number, any> } | null} */
   let lookups = null
   let lookupsForPlaylistId = ""
@@ -99,11 +101,13 @@
       await reload()
     }
     // Favorites-only events: keep lookups, just rebuild the entries list.
+    const onLocaleChange = () => { locale++ }
     const handlers = {
       "xt:active-changed": onCatalogChanged,
       "xt:catalog-warmed": onCatalogChanged,
       "xt:favorites-changed": reload,
       "xt:favorites-order-changed": reload,
+      [LOCALE_EVENT]: onLocaleChange,
     }
     for (const [k, v] of Object.entries(handlers)) {
       document.addEventListener(k, v)
@@ -117,17 +121,18 @@
 </script>
 
 {#if entries.length}
+  {@const _locale = locale}
   <section
-    aria-label="Favorites"
+    aria-label={t("nav.favorites")}
     class="fav-section flex flex-col gap-3 shrink-0">
     <div class="hub-section-head px-1">
       <div class="hub-section-head__title">
-        <h2 class="hub-section-head__heading">Favorites</h2>
+        <h2 class="hub-section-head__heading">{t("nav.favorites")}</h2>
       </div>
       <a
         href="/favorites"
         class="hub-section-head__count text-fg-3 hover:text-accent focus-visible:text-accent transition-colors">
-        View all
+        {t("strip.viewAll")}
         <svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="ml-0.5 inline-block align-[-1px]">
           <path d="m9 18 6-6-6-6" />
         </svg>

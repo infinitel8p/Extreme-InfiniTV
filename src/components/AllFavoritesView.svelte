@@ -1,6 +1,9 @@
 <script>
   // Cross-playlist favorites view
   import { onMount } from "svelte"
+  import { IconExternalLink } from "@tabler/icons-svelte"
+  import { log } from "@/scripts/lib/log.js"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getEntries, getActiveEntry, selectEntry } from "@/scripts/lib/creds.js"
   import {
     ensureLoaded as ensurePrefsLoaded,
@@ -13,6 +16,7 @@
 
   /** @type {"all"|"live"|"vod"|"series"} */
   let filter = $state("all")
+  let locale = $state(0)
   let activePlaylistId = $state("")
   /** @type {Array<{ id: string, title: string }>} */
   let playlists = $state([])
@@ -129,7 +133,7 @@
     try {
       await selectEntry(entry.playlistId)
     } catch (err) {
-      console.error("[xt:favorites] selectEntry failed:", err)
+      log.error("[xt:favorites] selectEntry failed:", err)
     }
     window.location.href = entry.href
   }
@@ -140,12 +144,14 @@
 
   onMount(() => {
     reload()
+    const onLocale = () => { locale++ }
     const handlers = {
       "xt:active-changed": reload,
       "xt:entries-updated": reload,
       "xt:favorites-changed": reload,
       "xt:favorites-order-changed": reload,
       "xt:catalog-warmed": reload,
+      [LOCALE_EVENT]: onLocale,
     }
     for (const [eventName, handler] of Object.entries(handlers)) {
       document.addEventListener(eventName, handler)
@@ -158,13 +164,13 @@
   })
 </script>
 
-<div class="flex flex-col gap-3 shrink-0">
-  <div class="flex flex-wrap gap-2" role="tablist" aria-label="Filter favorites by kind">
+<div class="flex flex-col gap-3 shrink-0" data-locale={locale}>
+  <div class="flex flex-wrap gap-2" role="tablist" aria-label={t("favorites.heading")}>
     {#each [
-      { id: "all", label: "All" },
-      { id: "live", label: "Live TV" },
-      { id: "vod", label: "Movies" },
-      { id: "series", label: "Series" },
+      { id: "all", key: "favorites.filter.all" },
+      { id: "live", key: "favorites.filter.live" },
+      { id: "vod", key: "favorites.filter.vod" },
+      { id: "series", key: "favorites.filter.series" },
     ] as chip (chip.id)}
       <button
         type="button"
@@ -175,29 +181,25 @@
         class="filter-chip rounded-full border border-line bg-surface px-3.5 py-1.5 text-sm
                hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                transition-colors">
-        {chip.label}
+        {t(chip.key)}
         <span class="ml-1.5 text-fg-3 tabular-nums">{counts[chip.id]}</span>
       </button>
     {/each}
   </div>
 
   {#if loading && !entries.length}
-    <div class="text-sm text-fg-3 px-1">Loading favorites…</div>
+    <div class="text-sm text-fg-3 px-1">{t("common.loading")}</div>
   {:else if !entries.length}
     <div class="rounded-2xl border border-line bg-surface px-5 py-8 text-sm text-fg-2">
-      No favorites yet. Star a channel, movie, or series to see it here.
+      {t("favorites.helperEmpty")}
     </div>
   {:else if !visible.length}
     <div class="rounded-2xl border border-line bg-surface px-5 py-8 text-sm text-fg-2">
-      No {filter === "vod" ? "movies" : filter === "live" ? "live channels" : filter} in your favorites.
+      {t("favorites.helperEmpty")}
     </div>
   {:else}
     <div class="px-1 text-xs text-fg-3 tabular-nums">
-      <strong class="text-fg-2">{visible.length}</strong>
-      {visible.length === 1 ? "item" : "items"}
-      across
-      <strong class="text-fg-2">{playlists.length}</strong>
-      {playlists.length === 1 ? "playlist" : "playlists"}
+      {t("strip.itemCount", { count: visible.length })}
     </div>
   {/if}
 </div>
@@ -271,11 +273,7 @@
           </div>
           <div class="truncate text-2xs text-fg-3 flex items-center gap-1">
             {#if entry.isCrossPlaylist}
-              <svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="shrink-0 text-accent">
-                <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
-                <polyline points="16 6 21 6 21 11" />
-                <line x1="10" y1="14" x2="21" y2="3" />
-              </svg>
+              <IconExternalLink aria-hidden="true" class="h-3 w-3 shrink-0 text-accent" />
             {/if}
             <span class="truncate">{entry.playlistTitle}</span>
           </div>

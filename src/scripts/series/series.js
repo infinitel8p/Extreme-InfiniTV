@@ -1,12 +1,13 @@
 // Series listing page (route: /series).
+import { log } from "@/scripts/lib/log.js"
 import {
   loadCreds,
   getActiveEntry,
   buildApiUrl,
-  normalize,
-  debounce,
-  scoreNormMatch,
 } from "@/scripts/lib/creds.js"
+import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
+import { debounce } from "@/scripts/lib/debounce.js"
+import { t } from "@/scripts/lib/i18n.js"
 import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import {
   ensureLoaded as ensurePrefsLoaded,
@@ -176,7 +177,7 @@ async function ensureSeriesCategoryMap() {
 function computeCategoryCounts(items) {
   const map = new Map()
   for (const s of items) {
-    const k = (s.category || "").trim() || "Uncategorized"
+    const k = (s.category || "").trim() || t("list.uncategorized")
     map.set(k, (map.get(k) || 0) + 1)
   }
   return map
@@ -230,7 +231,7 @@ function renderCategoryPicker(items) {
           ? `Hide category "${label}"`
           : `Unhide category "${label}"`
       )
-      rightAction.title = opts.hideAction === "hide" ? "Hide category" : "Unhide category"
+      rightAction.title = opts.hideAction === "hide" ? t("list.hideCategory") : t("list.unhideCategory")
       rightAction.innerHTML =
         opts.hideAction === "hide"
           ? ICON_X
@@ -243,8 +244,8 @@ function renderCategoryPicker(items) {
         setCategoryHidden(activePlaylistId, "series", val, willHide)
         if (willHide) {
           toast({
-            title: `Hid "${label}"`,
-            description: "Manage hidden categories in Settings.",
+            title: t("list.toast.hidCategory", { label }),
+            description: t("stream.toast.hiddenInSettings"),
             duration: 4000,
           })
           if (activeCat === val) {
@@ -285,7 +286,7 @@ function renderCategoryPicker(items) {
   const recRow = addRow(CAT_RECENTS, "🕒 Recently watched", recs.length)
   if (recs.length === 0) recRow.style.display = "none"
 
-  addRow("", "All categories")
+  addRow("", t("list.allCategories"))
   for (const name of visibleNames) {
     addRow(name, name, counts.get(name), "", { hideAction: "hide" })
   }
@@ -388,7 +389,7 @@ function makeFallback(name) {
   fb.className =
     "h-full w-full flex items-center justify-center text-center px-3 " +
     "text-fg-3 text-xs tracking-wide bg-gradient-to-br from-surface-2 to-surface-3"
-  fb.textContent = name || "No poster"
+  fb.textContent = name || t("list.noPosterFallback")
   return fb
 }
 
@@ -442,8 +443,8 @@ function makeSeriesProgressBadge(series) {
   } else {
     badge.href = `/series/detail?id=${encodeURIComponent(series.id)}`
   }
-  badge.title = "Resume next episode"
-  badge.setAttribute("aria-label", `Resume ${series.name || "series"} - ${body}`)
+  badge.title = t("series.resumeNextEpisode")
+  badge.setAttribute("aria-label", t("series.resumeAria", { name: series.name || t("page.series.title"), body }))
   badge.innerHTML =
     '<svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="currentColor" aria-hidden="true">' +
     '<path d="M8 5v14l11-7z"/></svg>' +
@@ -475,7 +476,7 @@ function makeCard(s, idx) {
   link.className =
     "play-btn block w-full text-left outline-none cursor-pointer no-underline"
   link.title = s.name || ""
-  link.setAttribute("aria-label", `Open ${s.name || `Series ${s.id}`}`)
+  link.setAttribute("aria-label", t("list.openAria", { name: s.name || t("list.seriesFallback", { id: s.id }) }))
 
   link.addEventListener("click", () => {
     const img = link.querySelector("img")
@@ -533,8 +534,8 @@ function makeCard(s, idx) {
     "absolute top-1.5 left-1.5 inline-flex items-center justify-center " +
     "size-6 rounded-md bg-black/55 backdrop-blur-sm ring-1 ring-white/10 " +
     "text-accent transition-opacity"
-  watchBadge.setAttribute("aria-label", "On your watchlist")
-  watchBadge.title = "On your watchlist"
+  watchBadge.setAttribute("aria-label", t("list.onWatchlist"))
+  watchBadge.title = t("list.onWatchlist")
   watchBadge.innerHTML = BOOKMARK_FILLED
   if (!onWatchlist) watchBadge.hidden = true
   posterWrap.appendChild(watchBadge)
@@ -545,7 +546,7 @@ function makeCard(s, idx) {
   info.className = "px-2 py-2 min-w-0"
   const nameEl = document.createElement("div")
   nameEl.className = "truncate text-sm font-medium text-fg"
-  nameEl.textContent = s.name || `Series ${s.id}`
+  nameEl.textContent = s.name || t("list.seriesFallback", { id: s.id })
   const meta = document.createElement("div")
   meta.className = "truncate text-2xs text-fg-3 tabular-nums"
   const parts = []
@@ -681,8 +682,8 @@ function renderGrid() {
     const empty = document.createElement("div")
     empty.className = "col-span-full text-fg-3 text-sm py-8 text-center"
     empty.textContent = activeCat
-      ? "No series in this category."
-      : "No series."
+      ? t("series.noResultsCategory")
+      : t("series.empty.simple")
     gridEl.appendChild(empty)
     return
   }
@@ -704,7 +705,7 @@ function renderGrid() {
   sentinel.dataset.gridSentinel = ""
   sentinel.className =
     "col-span-full text-fg-3 text-xs py-3 text-center tabular-nums"
-  sentinel.textContent = `Showing ${renderedCount.toLocaleString()} of ${filtered.length.toLocaleString()}`
+  sentinel.textContent = t("movies.showingOf", { shown: renderedCount.toLocaleString(), total: filtered.length.toLocaleString() })
   gridEl.appendChild(sentinel)
 
   if (typeof IntersectionObserver === "function") {
@@ -714,7 +715,7 @@ function renderGrid() {
         appendNextPage()
         const s = gridEl.querySelector("[data-grid-sentinel]")
         if (s)
-          s.textContent = `Showing ${renderedCount.toLocaleString()} of ${filtered.length.toLocaleString()}`
+          s.textContent = t("movies.showingOf", { shown: renderedCount.toLocaleString(), total: filtered.length.toLocaleString() })
       },
       { root: gridEl, rootMargin: "600px 0px" }
     )
@@ -725,12 +726,12 @@ function renderGrid() {
     btn.type = "button"
     btn.className =
       "rounded-xl border border-line px-4 py-2 text-sm hover:bg-surface-2 focus-visible:bg-surface-2"
-    btn.textContent = `Load more (${(filtered.length - renderedCount).toLocaleString()} left)`
+    btn.textContent = t("movies.loadMore", { remaining: (filtered.length - renderedCount).toLocaleString() })
     btn.addEventListener("click", () => {
       appendNextPage()
       btn.textContent =
         renderedCount < filtered.length
-          ? `Load more (${(filtered.length - renderedCount).toLocaleString()} left)`
+          ? t("movies.loadMore", { remaining: (filtered.length - renderedCount).toLocaleString() })
           : ""
     })
     sentinel.appendChild(btn)
@@ -848,17 +849,17 @@ function applyFilter() {
   }
 
   filtered = out
-  listStatus.textContent = `${out.length.toLocaleString()} of ${all.length.toLocaleString()} series`
+  listStatus.textContent = t("series.ofSeries", { shown: out.length.toLocaleString(), total: all.length.toLocaleString() })
   const heroCount = document.getElementById("series-hero-count")
   if (heroCount) heroCount.textContent = out.length.toLocaleString()
   const heroCat = document.getElementById("series-hero-cat")
   if (heroCat) {
     heroCat.textContent =
       activeCat === CAT_FAVORITES
-        ? "Favorites"
+        ? t("list.heroFavorites")
         : activeCat === CAT_RECENTS
-          ? "Recently watched"
-          : activeCat || "All categories"
+          ? t("list.heroRecents")
+          : activeCat || t("list.allCategories")
   }
   renderGrid()
 }
@@ -886,7 +887,7 @@ searchEl?.addEventListener(
 // ----------------------------
 function showEmptyState() {
   if (listStatus) {
-    listStatus.innerHTML = `No playlist selected. <a href="/login" class="text-accent underline">Add one</a>.`
+    listStatus.innerHTML = `${t("list.noPlaylistAddOne")} <a href="/login" class="text-accent underline">${t("list.addOne")}</a>.`
   }
   if (categoryListStatus) {
     categoryListStatus.innerHTML = `<a href="/login" class="text-accent underline">Add a playlist</a> first.`
@@ -899,8 +900,8 @@ function paintSeries(data, fromCache, age) {
   all = data
   if (listStatus) {
     listStatus.textContent =
-      `${all.length.toLocaleString()} series` +
-      (fromCache ? ` · cached, ${fmtAge(age)}` : "")
+      t("series.totalSeries", { count: all.length.toLocaleString() }) +
+      (fromCache ? ` · ${fmtAge(age)}` : "")
   }
   renderCategoryPicker(all)
   applyFilter()
@@ -925,7 +926,7 @@ async function loadSeries() {
   if (hit) {
     paintSeries(hit.data, true, hit.age)
   } else {
-    listStatus.textContent = "Loading series…"
+    listStatus.textContent = t("common.loading")
     if (!gridEl?.querySelector("[data-skeleton]")) renderPosterSkeletons(gridEl)
   }
 
@@ -935,8 +936,7 @@ async function loadSeries() {
     return
   }
   if (!creds.user || !creds.pass) {
-    listStatus.textContent =
-      "Series require an Xtream playlist. Switch playlists from the header."
+    listStatus.textContent = t("series.requiresXtream")
     return
   }
   if (hit) return
@@ -951,7 +951,7 @@ async function loadSeries() {
         const r = await providerFetch(buildApiUrl(creds, "get_series"))
         const body = await r.text()
         if (!r.ok) {
-          console.error("Upstream error body:", body)
+          log.error("Upstream error body:", body)
           throw new Error(`API ${r.status}: ${body}`)
         }
         const parsed = JSON.parse(body)
@@ -1001,7 +1001,7 @@ async function loadSeries() {
     )
     paintSeries(data, fromCache, age)
   } catch (e) {
-    console.error("[xt:series] loadSeries threw:", e)
+    log.error("[xt:series] loadSeries threw:", e)
     filtered = []
     renderGrid()
     renderProviderError(listStatus, {
@@ -1019,7 +1019,7 @@ if (gridEl && !gridEl.childElementCount) {
   renderPosterSkeletons(gridEl, posterSkeletonCount())
 }
 if (listStatus && /no playlist selected/i.test(listStatus.textContent || "")) {
-  listStatus.textContent = "Loading series…"
+  listStatus.textContent = t("common.loading")
 }
 
 document.addEventListener("xt:active-changed", () => loadSeries())

@@ -1,4 +1,6 @@
+// @ts-nocheck - migrated to TS shell; strict typing pending follow-up
 // Route http(s) link clicks to the system default browser via `tauri-plugin-opener`
+import { log } from "@/scripts/lib/log.js"
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -11,7 +13,7 @@ async function getOpener() {
     openerPromise = import("@tauri-apps/plugin-opener")
       .then((mod) => mod.openUrl)
       .catch((error) => {
-        console.warn("[xt:external] plugin-opener import failed:", error)
+        log.warn("[xt:external] plugin-opener import failed:", error)
         return null
       })
   }
@@ -32,7 +34,7 @@ export async function openExternal(url) {
   try {
     await openUrl(url)
   } catch (error) {
-    console.warn("[xt:external] openUrl failed:", error)
+    log.warn("[xt:external] openUrl failed:", error)
     window.open(url, "_blank", "noopener,noreferrer")
   }
 }

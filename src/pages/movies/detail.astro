@@ -23,10 +23,11 @@ import {
           href="/movies"
           id="movie-detail-back"
           aria-label="Back to Movies"
+          data-i18n-attr="aria-label:page.movies.title"
           class="dt-enter dt-stagger-0 self-start inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 min-h-11 text-sm text-fg-2
                  hover:bg-surface-2 focus-visible:bg-surface-2 outline-none transition-colors">
           <IconChevronLeft aria-hidden="true" stroke={2} class="size-4" />
-          Movies
+          <span data-i18n="page.movies.title">Movies</span>
         </a>
 
         <div class="dt-enter dt-stagger-1 flex flex-col gap-1">
@@ -74,7 +75,7 @@ import {
                    active:scale-[0.97] transition duration-150">
             <span class="inline-flex items-center gap-2 leading-none">
               <IconPlayerPlay aria-hidden="true" stroke={2} class="size-5" />
-              <span id="movie-detail-play-label">Play</span>
+              <span id="movie-detail-play-label" data-i18n="detail.action.play">Play</span>
             </span>
             <span
               id="movie-detail-play-sub"
@@ -85,15 +86,17 @@ import {
             type="button"
             hidden
             aria-label="Start from the beginning"
+            data-i18n-attr="aria-label:detail.action.startOver"
             class="flex items-center justify-center gap-2 rounded-xl border border-line px-6 py-3 text-base min-w-44 text-fg-2
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                    active:scale-[0.97] transition duration-150">
             <IconRotate aria-hidden="true" stroke={2} class="size-5" />
-            Start over
+            <span data-i18n="detail.action.startOver">Start over</span>
           </button>
           <button
             id="movie-detail-fav"
             type="button"
+            data-i18n="detail.action.addFavorite"
             class="rounded-xl border border-line px-6 py-3 text-base min-w-44
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                    active:scale-[0.97] transition duration-150">
@@ -107,7 +110,7 @@ import {
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                    active:scale-[0.97] transition duration-150">
             <IconBookmark aria-hidden="true" stroke={2} class="size-5" />
-            <span id="movie-detail-watch-label">Watch later</span>
+            <span id="movie-detail-watch-label" data-i18n="detail.action.watchLater">Watch later</span>
           </button>
           <button
             id="movie-detail-trailer"
@@ -117,7 +120,7 @@ import {
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                    active:scale-[0.97] transition duration-150">
             <IconBrandYoutube aria-hidden="true" stroke={2} class="size-5" />
-            Trailer
+            <span data-i18n="detail.action.trailer">Trailer</span>
           </button>
           <button
             id="movie-detail-download"
@@ -127,13 +130,14 @@ import {
                    hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                    active:scale-[0.97] transition duration-150">
             <IconDownload aria-hidden="true" stroke={2} class="size-5" />
-            <span id="movie-detail-download-label">Download</span>
+            <span id="movie-detail-download-label" data-i18n="detail.action.download">Download</span>
           </button>
         </div>
 
         <div
           id="movie-detail-plot"
-          class="dt-enter dt-stagger-3 text-sm text-fg-2 leading-relaxed max-w-prose">
+          data-i18n="detail.loading"
+          class="dt-enter dt-stagger-3 text-sm text-fg-2 leading-relaxed">
           Loading details…
         </div>
 

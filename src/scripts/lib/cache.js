@@ -1,4 +1,5 @@
 // IndexedDB-backed catalog cache with in-memory hydration layer
+import { log } from "@/scripts/lib/log.js"
 
 const PREFIX = "xt_cache:"
 const DB_NAME = "xt_cache"
@@ -194,7 +195,7 @@ export function setCached(entryId, kind, data, ttlMs) {
   const payload = { data, fetchedAt: Date.now(), ttl: ttlMs }
   _mem.set(key, payload)
   idbPut(key, payload).catch((e) =>
-    console.warn("[xt:cache] IDB write failed:", e)
+    log.warn("[xt:cache] IDB write failed:", e)
   )
 }
 
