@@ -171,6 +171,10 @@ input[type="search"]::-webkit-search-decoration {
 /* ────────────────────────────── */
 /* Video.js overrides             */
 /* ────────────────────────────── */
+.video-js {
+    font-family: var(--font-sans);
+}
+
 .video-js .vjs-big-play-button {
     border-radius: 0.75rem;
     border: 1px solid rgba(255, 255, 255, 0.15);
@@ -189,6 +193,11 @@ input[type="search"]::-webkit-search-decoration {
 
 .vjs-slider {
     background: rgba(255, 255, 255, 0.15) !important;
+}
+
+.video-js .vjs-menu li.vjs-selected {
+    background: color-mix(in oklch, var(--color-accent) 80%, transparent);
+    color: var(--color-bg);
 }
 
 dialog[open] {

@@ -90,4 +90,69 @@ export function setDownloadConcurrency(n) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Discord Rich Presence
+// ---------------------------------------------------------------------------
+const KEY_DISCORD_CLIENT_ID = "xt_discord_client_id"
+const KEY_DISCORD_PLAYLISTS = "xt_discord_playlists"
+const DEFAULT_DISCORD_CLIENT_ID = "1499717588073058344"
+export const DISCORD_RPC_EVENT = "xt:discord-rpc-changed"
+
+export function getDiscordClientId() {
+  return readLS(KEY_DISCORD_CLIENT_ID, "") || DEFAULT_DISCORD_CLIENT_ID
+}
+
+export function setDiscordClientId(clientId) {
+  writeLS(KEY_DISCORD_CLIENT_ID, (clientId || "").trim())
+  document.dispatchEvent(
+    new CustomEvent(DISCORD_RPC_EVENT, {
+      detail: { key: "clientId", value: clientId || "" },
+    })
+  )
+}
+
+function readDiscordPlaylistSet() {
+  try {
+    const raw = localStorage.getItem(KEY_DISCORD_PLAYLISTS) || ""
+    if (!raw) return new Set()
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(parsed.map(String))
+  } catch {
+    return new Set()
+  }
+}
+
+function writeDiscordPlaylistSet(set) {
+  try {
+    if (set.size === 0) localStorage.removeItem(KEY_DISCORD_PLAYLISTS)
+    else localStorage.setItem(KEY_DISCORD_PLAYLISTS, JSON.stringify([...set]))
+  } catch {}
+}
+
+export function isDiscordEnabledForPlaylist(playlistId) {
+  if (!playlistId) return false
+  return readDiscordPlaylistSet().has(String(playlistId))
+}
+
+export function setDiscordEnabledForPlaylist(playlistId, on) {
+  if (!playlistId) return
+  const set = readDiscordPlaylistSet()
+  const id = String(playlistId)
+  const had = set.has(id)
+  if (on && !had) set.add(id)
+  else if (!on && had) set.delete(id)
+  else return
+  writeDiscordPlaylistSet(set)
+  document.dispatchEvent(
+    new CustomEvent(DISCORD_RPC_EVENT, {
+      detail: { key: "playlist", playlistId: id, value: on },
+    })
+  )
+}
+
+export function getDiscordEnabledPlaylistIds() {
+  return [...readDiscordPlaylistSet()]
+}
+
 export const SETTINGS_EVENT = EVT_CHANGED

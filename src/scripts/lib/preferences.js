@@ -610,6 +610,43 @@ export function getContinueWatching(playlistId, limit = 6) {
 
 export const PROGRESS_COMPLETED_THRESHOLD = COMPLETED_THRESHOLD
 
+/**
+ * Roll up per-episode progress for a series. Used by the series poster badge
+ * and the "next-up" autoplay handoff.
+ *
+ * @param {string} playlistId
+ * @param {number|string} seriesId
+ */
+export function getSeriesProgressSummary(playlistId, seriesId) {
+  if (!playlistId || seriesId == null) return null
+  const entry = cache.get(playlistId)
+  if (!entry) return null
+  const sid = Number(seriesId)
+  if (!Number.isFinite(sid)) return null
+
+  let watchedCount = 0
+  let lastWatched = null
+  let lastEpisodeId = null
+
+  for (const [id, prog] of Object.entries(entry.progEpisode)) {
+    if (!prog || Number(prog.seriesId) !== sid) continue
+    if (prog.completed || prog.position > 1) watchedCount++
+    if (!lastWatched || (prog.updatedAt || 0) > (lastWatched.updatedAt || 0)) {
+      lastWatched = prog
+      lastEpisodeId = id
+    }
+  }
+
+  if (!lastWatched) return null
+  return {
+    watchedCount,
+    lastWatched,
+    lastEpisodeId,
+    lastSeason: lastWatched.season ?? null,
+    lastEpisodeNum: lastWatched.episodeNum ?? null,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Hidden categories
 // ---------------------------------------------------------------------------

@@ -11,6 +11,9 @@ import {
   IconDeviceFloppy,
   IconDownload,
   IconUpload,
+  IconHeart,
+  IconCoffee,
+  IconBrandPaypal,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import FavoritesReorder from "@/components/FavoritesReorder.svelte"
@@ -230,6 +233,27 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
           </div>
         </article>
 
+        <!-- Discord Rich Presence -->
+        <article id="discord-rpc-section" class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 hidden">
+          <div class="flex flex-col gap-1">
+            <h3 class="text-base font-semibold">Discord Rich Presence</h3>
+            <p class="text-xs text-fg-3 max-w-prose">
+              Show what you're watching on your Discord profile. Off by default; enable per-playlist below. Desktop only - requires Discord running on the same machine.
+            </p>
+          </div>
+
+          <input id="discord-client-id" type="hidden" />
+
+          <div class="flex flex-col gap-2">
+            <span class="text-eyebrow font-medium uppercase text-fg-3">Per-playlist</span>
+            <div
+              id="discord-playlists"
+              class="flex flex-col divide-y divide-line/60 rounded-xl border border-line bg-bg overflow-hidden">
+              <div class="px-4 py-4 text-xs text-fg-3">No playlists yet.</div>
+            </div>
+          </div>
+        </article>
+
       </div>
     </section>
 
@@ -270,6 +294,25 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
               <button id="download-dir-clear" type="button" class="btn text-fg-2">
                 Clear
               </button>
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-1.5">
+            <span class="text-eyebrow font-medium uppercase text-fg-3">
+              Restore from folder
+            </span>
+            <p class="text-xs text-fg-3 max-w-prose">
+              After a reinstall, scan the folder above for `.xtmeta.json` sidecars and re-add the matching files to your downloads list.
+            </p>
+            <div class="flex flex-wrap items-center gap-2">
+              <button id="downloads-scan" type="button" class="btn">
+                <IconRefresh aria-hidden="true" class="btn-icon" />
+                Scan folder
+              </button>
+              <span
+                id="downloads-scan-msg"
+                aria-live="polite"
+                class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
             </div>
           </div>
 
@@ -440,6 +483,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
             href="https://github.com/infinitel8p/xtream/releases/latest"
             target="_blank"
             rel="noopener noreferrer"
+            data-external
             class="btn ml-auto text-fg-2">
             <IconBrandGithub aria-hidden="true" class="btn-icon" />
             GitHub
@@ -454,6 +498,56 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
       </article>
 
       <span id="app-version" class="hidden"></span>
+    </section>
+
+    <!-- Group: Support / donations -->
+    <section class="flex flex-col gap-3">
+      <h2 class="text-xs font-semibold uppercase tracking-widest text-fg-2">Support</h2>
+      <article class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
+        <div class="flex items-start gap-3">
+          <span class="inline-flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+            <IconHeart aria-hidden="true" stroke={2} class="size-4" />
+          </span>
+          <div class="flex flex-col gap-1 min-w-0">
+            <h3 class="text-base font-semibold">Like the app?</h3>
+            <p class="text-sm text-fg-2 max-w-prose">
+              Extreme InfiniTV is free and open source. If it saves you time or sweetens your living-room setup, a small tip helps cover hosting, signing certs, and the next round of features.
+            </p>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <a
+            href="https://github.com/sponsors/infinitel8p"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-external
+            class="btn justify-start sm:justify-center">
+            <IconBrandGithub aria-hidden="true" class="btn-icon" />
+            GitHub Sponsors
+          </a>
+          <a
+            href="https://ko-fi.com/infinitel8p"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-external
+            class="btn justify-start sm:justify-center">
+            <IconCoffee aria-hidden="true" class="btn-icon" />
+            Ko-fi
+          </a>
+          <a
+            href="https://www.paypal.com/paypalme/ludovicoferrara"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-external
+            class="btn justify-start sm:justify-center">
+            <IconBrandPaypal aria-hidden="true" class="btn-icon" />
+            PayPal
+          </a>
+        </div>
+        <p class="text-2xs text-fg-3">
+          No tracking, no ads, no telemetry - just a thank-you button.
+        </p>
+      </article>
     </section>
 
     <!-- Group: Danger zone (always last) -->
@@ -563,7 +657,18 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
       getActiveConnectionsSync,
       USER_INFO_LOADED_EVENT,
     } from "@/scripts/lib/account-info.js"
-    import { isDownloadable } from "@/scripts/lib/downloads.js"
+    import { isDownloadable, scanDownloadsFolder } from "@/scripts/lib/downloads.js"
+    import {
+      getDiscordClientId,
+      setDiscordClientId,
+      isDiscordEnabledForPlaylist,
+      setDiscordEnabledForPlaylist,
+      DISCORD_RPC_EVENT,
+    } from "@/scripts/lib/app-settings.js"
+    import { discordRpcSupported } from "@/scripts/lib/discord-rpc.js"
+    import { bindExternalLinks } from "@/scripts/lib/external-link.js"
+
+    bindExternalLinks()
     import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
     import {
       getOffsetSetting,
@@ -1335,6 +1440,49 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
       }
     })
 
+    const scanBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("downloads-scan")
+    )
+    const scanMsgEl = document.getElementById("downloads-scan-msg")
+    if (!isDownloadable() || isAndroid) {
+      scanBtn?.setAttribute("disabled", "")
+      if (scanBtn) {
+        scanBtn.classList.add("opacity-50", "cursor-not-allowed")
+        scanBtn.title = "Folder scan is desktop-only."
+      }
+    }
+    scanBtn?.addEventListener("click", async () => {
+      if (!scanBtn) return
+      setLoading(scanBtn, true)
+      try {
+        const summary = await scanDownloadsFolder()
+        if (summary.error) {
+          toastError("Couldn't scan folder", { description: summary.error })
+          flashMsg(scanMsgEl, summary.error)
+        } else if (summary.imported > 0) {
+          toastSuccess(`Imported ${summary.imported} download${summary.imported === 1 ? "" : "s"}`, {
+            description: `Scanned ${summary.scanned} sidecar${summary.scanned === 1 ? "" : "s"}.`,
+          })
+          flashMsg(scanMsgEl, `Imported ${summary.imported} item(s).`)
+          flashSuccess(scanBtn)
+        } else if (summary.scanned === 0) {
+          flashMsg(scanMsgEl, "No `.xtmeta.json` sidecars found in this folder.")
+        } else {
+          flashMsg(
+            scanMsgEl,
+            `Already up to date. ${summary.skipped} skipped, ${summary.missing} missing media.`
+          )
+        }
+      } catch (error) {
+        console.error("[settings:scan] failed:", error)
+        toastError("Couldn't scan folder", {
+          description: (error && error.message) || "See console.",
+        })
+      } finally {
+        setLoading(scanBtn, false)
+      }
+    })
+
     dirClearBtn?.addEventListener("click", async () => {
       const prev = getDownloadDir()
       if (isAndroid && prev) {
@@ -1641,5 +1789,86 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
     updateRelaunchBtn?.addEventListener("click", relaunchApp)
 
     if (isWindowsDesktop) checkForUpdates()
+
+    // -------------------------------------------------------------------
+    // Discord Rich Presence
+    // -------------------------------------------------------------------
+    const discordSection = document.getElementById("discord-rpc-section")
+    const discordClientIdInput = /** @type {HTMLInputElement|null} */ (
+      document.getElementById("discord-client-id")
+    )
+    const discordPlaylistsEl = document.getElementById("discord-playlists")
+
+    if (discordSection && discordRpcSupported) {
+      discordSection.classList.remove("hidden")
+    }
+    if (discordClientIdInput) {
+      discordClientIdInput.value = getDiscordClientId()
+      let saveTimer = null
+      discordClientIdInput.addEventListener("input", () => {
+        if (saveTimer) window.clearTimeout(saveTimer)
+        saveTimer = window.setTimeout(() => {
+          setDiscordClientId(discordClientIdInput.value)
+        }, 350)
+      })
+      discordClientIdInput.addEventListener("blur", () => {
+        if (saveTimer) {
+          window.clearTimeout(saveTimer)
+          saveTimer = null
+        }
+        setDiscordClientId(discordClientIdInput.value)
+      })
+    }
+
+    async function renderDiscordPlaylists() {
+      if (!discordPlaylistsEl) return
+      const entries = await getEntries()
+      if (!entries.length) {
+        discordPlaylistsEl.innerHTML =
+          '<div class="px-4 py-4 text-xs text-fg-3">No playlists yet.</div>'
+        return
+      }
+      const frag = document.createDocumentFragment()
+      for (const entry of entries) {
+        const row = document.createElement("label")
+        row.className =
+          "flex items-center justify-between gap-3 px-4 py-3 hover:bg-surface-2 transition-colors cursor-pointer"
+        const labelWrap = document.createElement("div")
+        labelWrap.className = "flex flex-col gap-0.5 min-w-0"
+        const title = document.createElement("span")
+        title.className = "truncate text-sm font-medium text-fg"
+        title.textContent = entry.title || "(untitled)"
+        const sub = document.createElement("span")
+        sub.className = "truncate text-2xs text-fg-3"
+        sub.textContent = entry.type === "m3u" ? "M3U source" : "Xtream"
+        labelWrap.append(title, sub)
+        row.appendChild(labelWrap)
+
+        const toggle = document.createElement("input")
+        toggle.type = "checkbox"
+        toggle.className = "size-5 accent-accent"
+        toggle.checked = isDiscordEnabledForPlaylist(entry._id)
+        toggle.setAttribute(
+          "aria-label",
+          `Show Discord presence for ${entry.title || "this playlist"}`
+        )
+        toggle.addEventListener("change", () => {
+          setDiscordEnabledForPlaylist(entry._id, toggle.checked)
+        })
+        row.appendChild(toggle)
+        frag.appendChild(row)
+      }
+      discordPlaylistsEl.replaceChildren(frag)
+    }
+
+    renderDiscordPlaylists()
+    document.addEventListener("xt:entries-updated", renderDiscordPlaylists)
+    document.addEventListener(DISCORD_RPC_EVENT, () => {
+      // Keep the input in sync if the value changed elsewhere.
+      if (discordClientIdInput) {
+        const next = getDiscordClientId()
+        if (discordClientIdInput.value !== next) discordClientIdInput.value = next
+      }
+    })
   </script>
 </Layout>

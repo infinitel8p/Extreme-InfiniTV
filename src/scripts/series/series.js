@@ -18,6 +18,7 @@ import {
   setCategoryHidden,
   getViewSort,
   setViewSort,
+  getSeriesProgressSummary,
 } from "@/scripts/lib/preferences.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { ICON_X } from "@/scripts/lib/icons.js"
@@ -112,6 +113,35 @@ document.addEventListener("xt:hidden-categories-changed", (e) => {
   renderCategoryPicker(all)
   applyFilter()
 })
+
+document.addEventListener("xt:progress-changed", (event) => {
+  const detail = /** @type {CustomEvent} */ (event).detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "episode") return
+  const seriesId = Number(detail.seriesId ?? 0)
+  if (!seriesId) {
+    refreshSeriesProgressBadges()
+    return
+  }
+  refreshSeriesProgressBadges(seriesId)
+})
+
+function refreshSeriesProgressBadges(specificSeriesId) {
+  if (!gridEl) return
+  const cards = gridEl.querySelectorAll("[data-idx]")
+  for (const card of cards) {
+    const idx = Number(card.dataset.idx)
+    const series = filtered[idx]
+    if (!series) continue
+    if (specificSeriesId && series.id !== specificSeriesId) continue
+    const wrap = card.querySelector("[data-poster-wrap]")
+    if (!wrap) continue
+    const old = wrap.querySelector(".series-progress-badge")
+    if (old) old.remove()
+    const next = makeSeriesProgressBadge(series)
+    if (next) wrap.appendChild(next)
+  }
+}
 
 // ----------------------------
 // Categories
@@ -352,6 +382,68 @@ function makeFallback(name) {
   return fb
 }
 
+function seasonEpisodeCount(seriesId, season) {
+  if (!activePlaylistId || !seriesId || season == null) return 0
+  const cached = getCached(activePlaylistId, `series_info_${seriesId}`)
+  const eps = cached?.data?.episodes
+  if (!eps || typeof eps !== "object") return 0
+  const bucket = Array.isArray(eps) ? null : eps[String(season)]
+  if (Array.isArray(bucket)) return bucket.length
+  if (Array.isArray(eps)) {
+    let n = 0
+    for (const ep of eps) if (String(ep?.season ?? "") === String(season)) n++
+    return n
+  }
+  return 0
+}
+
+function makeSeriesProgressBadge(series) {
+  if (!activePlaylistId) return null
+  const summary = getSeriesProgressSummary(activePlaylistId, series.id)
+  if (!summary) return null
+
+  const season = summary.lastSeason
+  const episodeNum = summary.lastEpisodeNum
+  const epId = summary.lastEpisodeId
+
+  const seasonLabel = season != null && season !== "" ? `S${season}` : ""
+  const total = season != null ? seasonEpisodeCount(series.id, season) : 0
+
+  let body
+  if (seasonLabel && episodeNum != null && total > 0) {
+    body = `${seasonLabel} ${episodeNum}/${total}`
+  } else if (seasonLabel && episodeNum != null) {
+    body = `${seasonLabel} E${episodeNum}`
+  } else if (seasonLabel) {
+    body = `${seasonLabel} · ${summary.watchedCount} watched`
+  } else {
+    body = `${summary.watchedCount} watched`
+  }
+
+  const badge = document.createElement("a")
+  badge.className =
+    "series-progress-badge absolute bottom-1.5 right-1.5 inline-flex items-center gap-1 " +
+    "rounded-md px-1.5 py-0.5 bg-accent text-bg text-2xs font-semibold tabular-nums " +
+    "ring-1 ring-black/10 hover:brightness-110 focus-visible:brightness-110 " +
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent " +
+    "transition-[filter,transform] duration-150 active:scale-[0.97]"
+  if (epId) {
+    badge.href = `/series/detail?id=${encodeURIComponent(series.id)}&autoplay=1&episode=${encodeURIComponent(epId)}`
+  } else {
+    badge.href = `/series/detail?id=${encodeURIComponent(series.id)}`
+  }
+  badge.title = "Resume next episode"
+  badge.setAttribute("aria-label", `Resume ${series.name || "series"} - ${body}`)
+  badge.innerHTML =
+    '<svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="currentColor" aria-hidden="true">' +
+    '<path d="M8 5v14l11-7z"/></svg>' +
+    `<span>${body}</span>`
+  badge.addEventListener("click", (event) => {
+    event.stopPropagation()
+  })
+  return badge
+}
+
 function makeCard(s, idx) {
   const card = document.createElement("div")
   card.dataset.idx = String(idx)
@@ -381,6 +473,7 @@ function makeCard(s, idx) {
   })
 
   const posterWrap = document.createElement("div")
+  posterWrap.dataset.posterWrap = "1"
   posterWrap.className =
     "aspect-[2/3] w-full bg-surface-2 overflow-hidden relative"
 
@@ -417,6 +510,9 @@ function makeCard(s, idx) {
       `<span>${ratingText}</span>`
     posterWrap.appendChild(ratingBadge)
   }
+
+  const progressBadge = makeSeriesProgressBadge(s)
+  if (progressBadge) posterWrap.appendChild(progressBadge)
 
   link.appendChild(posterWrap)
 

@@ -204,6 +204,68 @@ async function ensureDir(path) {
   }
 }
 
+const META_DIR = ".xtream-meta"
+
+function pathParts(fullPath) {
+  const sep = /\\/.test(fullPath) ? "\\" : "/"
+  const idx = Math.max(fullPath.lastIndexOf("/"), fullPath.lastIndexOf("\\"))
+  if (idx < 0) return { dir: "", name: fullPath, sep }
+  return { dir: fullPath.slice(0, idx), name: fullPath.slice(idx + 1), sep }
+}
+
+function metaSidecarPath(mediaPath) {
+  const { dir, name, sep } = pathParts(mediaPath)
+  const stem = name.replace(/\.[^.]+$/, "")
+  return dir
+    ? `${dir}${sep}${META_DIR}${sep}${stem}.json`
+    : `${META_DIR}${sep}${stem}.json`
+}
+
+/**
+ * Write `<dir>/.xtream-meta/<basename>.json` next to a finished download so a
+ * fresh install can rediscover it via scanDownloadsFolder(). Stashed in a
+ * dotfolder so the user's library isn't littered with `.xtmeta.json` files.
+ */
+async function writeMetaSidecar(item) {
+  if (!isTauri) return
+  if (!item?.path || AFs.isAndroidUri(item.path)) return
+  try {
+    const fs = await import("@tauri-apps/plugin-fs")
+    const { dir, sep } = pathParts(item.path)
+    if (dir) {
+      const metaDir = `${dir}${sep}${META_DIR}`
+      try {
+        if (typeof fs.exists === "function" && !(await fs.exists(metaDir))) {
+          await fs.mkdir(metaDir, { recursive: true })
+        }
+      } catch {}
+    }
+    const meta = {
+      schema: 1,
+      mediaFile: pathParts(item.path).name,
+      title: item.title || "",
+      url: item.url || "",
+      bytesTotal: item.bytesTotal || 0,
+      downloadedAt: Date.now(),
+      source: item.source || null,
+    }
+    await fs.writeTextFile(metaSidecarPath(item.path), JSON.stringify(meta, null, 2))
+  } catch (error) {
+    console.warn("[xt:download] sidecar write failed:", error)
+  }
+}
+
+async function removeMetaSidecar(path) {
+  if (!isTauri || !path || AFs.isAndroidUri(path)) return
+  try {
+    const fs = await import("@tauri-apps/plugin-fs")
+    const sidecarPath = metaSidecarPath(path)
+    if (typeof fs.exists === "function" && (await fs.exists(sidecarPath))) {
+      await fs.remove(sidecarPath)
+    }
+  } catch {}
+}
+
 async function statSize(path) {
   if (AFs.isAndroidUri(path)) {
     return await AFs.getByteLength(path)
@@ -311,6 +373,7 @@ async function runDownloadAndroid(id, item, controller) {
       bytesDone: received,
       bytesTotal: total || received,
     })
+    writeMetaSidecar(getItem(id))
   } catch (e) {
     if (controller.signal.aborted) {
       const userPaused = controller.signal.reason === "paused"
@@ -463,6 +526,7 @@ async function runDownload(id) {
       bytesTotal: total || received,
     })
     lockRetryCount.delete(id)
+    writeMetaSidecar(getItem(id))
   } catch (e) {
     const msg = String(e?.message || e || "Failed")
     const reason = controller.signal.reason
@@ -650,6 +714,7 @@ export async function removeDownload(id) {
       } catch (e) {
         console.error("[xt:download] could not delete file", item.path, e)
       }
+      await removeMetaSidecar(item.path)
     }
   }
 
@@ -660,6 +725,156 @@ export function clearFinishedDownloads() {
   const inFlight = new Set(["downloading", "queued"])
   const list = readState().filter((d) => inFlight.has(d.status))
   writeState(list)
+}
+
+/**
+ * Walk the configured download folder, find every `*.xtmeta.json` next to a
+ * still-present media file, and merge the matching items back into the
+ * downloads queue with status "done". Used after a fresh install to recover
+ * the user's offline library.
+ *
+ * Returns a summary of what happened. Desktop only - Android's SAF tree
+ * walking is currently outside this code path.
+ *
+ * @returns {Promise<{ scanned: number, imported: number, skipped: number, missing: number, error?: string }>}
+ */
+export async function scanDownloadsFolder() {
+  if (!isTauri || AFs.isAndroidFsActive()) {
+    return {
+      scanned: 0,
+      imported: 0,
+      skipped: 0,
+      missing: 0,
+      error: "Folder scan is desktop-only.",
+    }
+  }
+  const dir = getDownloadDir()
+  if (!dir) {
+    return {
+      scanned: 0,
+      imported: 0,
+      skipped: 0,
+      missing: 0,
+      error: "No download folder is configured.",
+    }
+  }
+
+  const fs = await import("@tauri-apps/plugin-fs")
+
+  let mediaEntries
+  try {
+    mediaEntries = await fs.readDir(dir)
+  } catch (error) {
+    console.error("[xt:download] scan readDir failed:", error)
+    return {
+      scanned: 0,
+      imported: 0,
+      skipped: 0,
+      missing: 0,
+      error: String(error?.message || error),
+    }
+  }
+
+  const metaDir = joinPath(dir, META_DIR)
+  let metaEntries = []
+  try {
+    if (typeof fs.exists === "function" && (await fs.exists(metaDir))) {
+      metaEntries = await fs.readDir(metaDir)
+    }
+  } catch (error) {
+    console.warn("[xt:download] meta dir read failed:", error)
+  }
+
+  if (!metaEntries.length) {
+    return {
+      scanned: 0,
+      imported: 0,
+      skipped: 0,
+      missing: 0,
+    }
+  }
+
+  const list = readState()
+  const byPath = new Map(list.map((item) => [item.path, item]))
+  let scanned = 0
+  let imported = 0
+  let skipped = 0
+  let missing = 0
+
+  for (const entry of metaEntries) {
+    const name = entry?.name || ""
+    if (!/\.json$/i.test(name)) continue
+    scanned++
+
+    const sidecarPath = joinPath(metaDir, name)
+    let parsed
+    try {
+      const text = await fs.readTextFile(sidecarPath)
+      parsed = JSON.parse(text)
+    } catch (error) {
+      console.warn("[xt:download] sidecar read failed:", sidecarPath, error)
+      skipped++
+      continue
+    }
+
+    let mediaPath = ""
+    if (parsed?.mediaFile) {
+      mediaPath = joinPath(dir, parsed.mediaFile)
+      if (typeof fs.exists === "function" && !(await fs.exists(mediaPath))) {
+        mediaPath = ""
+      }
+    }
+    if (!mediaPath) {
+      const stem = name.replace(/\.json$/i, "")
+      for (const sibling of mediaEntries) {
+        const sname = sibling?.name || ""
+        if (!sname.startsWith(stem + ".")) continue
+        mediaPath = joinPath(dir, sname)
+        break
+      }
+    }
+    if (!mediaPath) {
+      missing++
+      continue
+    }
+
+    const existing = byPath.get(mediaPath)
+    if (existing) {
+      if (existing.status !== "done") {
+        existing.status = "done"
+        existing.bytesTotal = parsed.bytesTotal || existing.bytesTotal || 0
+        existing.bytesDone = existing.bytesTotal
+        existing.error = ""
+        if (!existing.source && parsed.source) existing.source = parsed.source
+        imported++
+      } else {
+        skipped++
+      }
+      continue
+    }
+
+    let size = parsed.bytesTotal || 0
+    try {
+      size = await statSize(mediaPath)
+    } catch {}
+
+    list.unshift({
+      id: uuid(),
+      url: parsed.url || "",
+      title: parsed.title || name.replace(/\.json$/i, ""),
+      path: mediaPath,
+      bytesDone: size,
+      bytesTotal: size,
+      status: "done",
+      startedAt: parsed.downloadedAt || Date.now(),
+      error: "",
+      source: parsed.source || null,
+    })
+    imported++
+  }
+
+  if (imported) writeState(list)
+  return { scanned, imported, skipped, missing }
 }
 
 export const DOWNLOADS_LIST_EVENT = EVT_LIST

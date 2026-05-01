@@ -38,6 +38,7 @@ import {
   EPG_LOADED_EVENT,
   EPG_OFFSET_EVENT,
 } from "@/scripts/lib/epg-data.js"
+import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -195,6 +196,7 @@ let activePlaylistId = ""
 let activePlaylistTitle = ""
 
 document.addEventListener("xt:active-changed", () => {
+  clearRichPresence().catch(() => {})
   loadChannels()
 })
 
@@ -524,6 +526,8 @@ function renderVirtual() {
       starBtn.classList.remove("star-pulse")
     })
 
+    attachChannelContextMenu(row, ch)
+
     row.append(playBtn, starBtn)
     frag.appendChild(row)
   }
@@ -554,6 +558,174 @@ listEl?.addEventListener(
   },
   { passive: true }
 )
+
+// ---------------------------------------------------------------------------
+// Right-click / long-press: "Test stream" context menu
+// ---------------------------------------------------------------------------
+function buildChannelStreamUrl(channel) {
+  if (!channel) return ""
+  if (hasDirectUrl(channel.id)) return getDirectUrl(channel.id)
+  return buildDirectM3U8(channel.id)
+}
+
+function openChannelDiagnostic(channel) {
+  if (!channel) return
+  const url = buildChannelStreamUrl(channel)
+  if (!url) return
+  import("@/scripts/lib/stream-diagnostic-dialog.js").then(
+    ({ openStreamDiagnostic }) => {
+      openStreamDiagnostic({ url, title: channel.name || `Channel ${channel.id}` })
+    }
+  )
+}
+
+let channelMenuEl = null
+function closeChannelMenu() {
+  if (!channelMenuEl) return
+  channelMenuEl.remove()
+  channelMenuEl = null
+  document.removeEventListener("pointerdown", onChannelMenuOutside, true)
+  document.removeEventListener("keydown", onChannelMenuKey, true)
+  window.removeEventListener("blur", closeChannelMenu)
+  window.removeEventListener("resize", closeChannelMenu)
+  listEl?.removeEventListener("scroll", closeChannelMenu)
+}
+function onChannelMenuOutside(event) {
+  if (!channelMenuEl) return
+  if (channelMenuEl.contains(/** @type {Node} */ (event.target))) return
+  closeChannelMenu()
+}
+function onChannelMenuKey(event) {
+  if (event.key === "Escape") {
+    event.preventDefault()
+    closeChannelMenu()
+  }
+}
+
+function openChannelMenu(channel, anchor, point) {
+  closeChannelMenu()
+  const menu = document.createElement("div")
+  menu.className =
+    "fixed z-50 min-w-[12rem] rounded-xl border border-line bg-surface text-fg shadow-2xl " +
+    "p-1 flex flex-col gap-0.5"
+  menu.setAttribute("role", "menu")
+  menu.setAttribute("aria-label", `Actions for ${channel.name || "channel"}`)
+
+  const playItem = document.createElement("button")
+  playItem.type = "button"
+  playItem.setAttribute("role", "menuitem")
+  playItem.className =
+    "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+  playItem.textContent = "Play"
+  playItem.addEventListener("click", () => {
+    closeChannelMenu()
+    play(channel.id, channel.name)
+  })
+
+  const testItem = document.createElement("button")
+  testItem.type = "button"
+  testItem.setAttribute("role", "menuitem")
+  testItem.className =
+    "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+  testItem.textContent = "Test stream"
+  testItem.addEventListener("click", () => {
+    closeChannelMenu()
+    openChannelDiagnostic(channel)
+  })
+
+  const copyItem = document.createElement("button")
+  copyItem.type = "button"
+  copyItem.setAttribute("role", "menuitem")
+  copyItem.className =
+    "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+  copyItem.textContent = "Copy stream URL"
+  copyItem.addEventListener("click", async () => {
+    const url = buildChannelStreamUrl(channel)
+    closeChannelMenu()
+    if (!url) return
+    try {
+      await navigator.clipboard.writeText(url)
+      toast({ title: "Stream URL copied", duration: 2200 })
+    } catch (error) {
+      console.warn("[xt:livetv] copy stream URL failed:", error)
+    }
+  })
+
+  menu.append(playItem, testItem, copyItem)
+  document.body.appendChild(menu)
+
+  const margin = 8
+  const rect = menu.getBoundingClientRect()
+  let left
+  let top
+  if (point) {
+    left = Math.min(point.x, window.innerWidth - rect.width - margin)
+    top = Math.min(point.y, window.innerHeight - rect.height - margin)
+  } else if (anchor) {
+    const anchorRect = anchor.getBoundingClientRect()
+    left = Math.min(anchorRect.right + 6, window.innerWidth - rect.width - margin)
+    top = Math.min(anchorRect.top, window.innerHeight - rect.height - margin)
+  } else {
+    left = (window.innerWidth - rect.width) / 2
+    top = (window.innerHeight - rect.height) / 2
+  }
+  menu.style.left = `${Math.max(margin, left)}px`
+  menu.style.top = `${Math.max(margin, top)}px`
+
+  channelMenuEl = menu
+  document.addEventListener("pointerdown", onChannelMenuOutside, true)
+  document.addEventListener("keydown", onChannelMenuKey, true)
+  window.addEventListener("blur", closeChannelMenu)
+  window.addEventListener("resize", closeChannelMenu)
+  listEl?.addEventListener("scroll", closeChannelMenu, { passive: true })
+
+  testItem.focus({ preventScroll: true })
+}
+
+const LONG_PRESS_MS = 500
+function attachChannelContextMenu(row, channel) {
+  row.addEventListener("contextmenu", (event) => {
+    event.preventDefault()
+    openChannelMenu(channel, row, { x: event.clientX, y: event.clientY })
+  })
+
+  let pressTimer = null
+  let pressX = 0
+  let pressY = 0
+  let triggered = false
+  const cancelPress = () => {
+    if (pressTimer) {
+      clearTimeout(pressTimer)
+      pressTimer = null
+    }
+  }
+  row.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "touch") return
+    triggered = false
+    pressX = event.clientX
+    pressY = event.clientY
+    cancelPress()
+    pressTimer = setTimeout(() => {
+      triggered = true
+      openChannelMenu(channel, row, { x: pressX, y: pressY })
+    }, LONG_PRESS_MS)
+  })
+  row.addEventListener("pointermove", (event) => {
+    if (event.pointerType !== "touch") return
+    const dx = Math.abs(event.clientX - pressX)
+    const dy = Math.abs(event.clientY - pressY)
+    if (dx > 8 || dy > 8) cancelPress()
+  })
+  row.addEventListener("pointerup", () => cancelPress())
+  row.addEventListener("pointercancel", () => cancelPress())
+  row.addEventListener("click", (event) => {
+    if (triggered) {
+      event.preventDefault()
+      event.stopPropagation()
+      triggered = false
+    }
+  }, true)
+}
 
 function focusByIdx(idx) {
   if (!listEl || idx < 0 || idx >= filtered.length) return
@@ -1455,6 +1627,31 @@ function runScanLineSweep() {
   setTimeout(() => playerWrap.classList.remove("scan-line-sweep"), 720)
 }
 
+window.addEventListener("pagehide", () => {
+  clearRichPresence().catch(() => {})
+})
+
+function pushDiscordPresence(channel, kind) {
+  if (!activePlaylistId || !channel) return
+  const safeLogo = channel.logo ? safeHttpUrl(channel.logo) : null
+  let stateLine = ""
+  const state = getProgrammesSync(activePlaylistId)
+  if (state && channel.tvgId) {
+    const { current } = getNowNext(state.programmes, channel.tvgId)
+    if (current?.title) stateLine = current.title
+  }
+  setRichPresence({
+    playlistId: activePlaylistId,
+    details: `Watching ${channel.name || `Channel ${channel.id}`}`,
+    state: stateLine || (kind === "live" ? "Live TV" : ""),
+    largeImage: safeLogo || "logo",
+    largeText: activePlaylistTitle || "Extreme InfiniTV",
+    smallImage: "live",
+    smallText: "Live",
+    startTimestamp: Date.now(),
+  })
+}
+
 async function play(streamId, name) {
   if (!currentEl) return
   const src = hasDirectUrl(streamId)
@@ -1514,6 +1711,8 @@ async function play(streamId, name) {
   player.src({ src, type: "application/x-mpegURL" })
   player.play().catch(() => {})
 
+  pushDiscordPresence(channel || { id: streamId, name }, "live")
+
   if (hasDirectUrl(streamId)) {
     if (epgList) epgList.innerHTML = `<div class="text-fg-3">No EPG available for M3U source.</div>`
   } else {
@@ -1535,19 +1734,19 @@ async function play(streamId, name) {
         window.AndroidPip.toggle()
         return
       }
-      // Tap = user gesture, so requestFullscreen on the actual <video> tag
-      // is allowed. Fullscreening it first means Android's WebChromeClient
-      // swaps in the immersive video surface, so when AndroidPip.toggle()
-      // captures the activity for PiP, only the video shows up - not the
-      // page navbar. If fullscreen rejects (older WebView, denied gesture),
-      // we still toggle so the click isn't dead, just degrades to page PiP.
-      if (videoEl && !document.fullscreenElement) {
-        try {
-          await videoEl.requestFullscreen()
-          await new Promise((r) =>
-            requestAnimationFrame(() => requestAnimationFrame(r))
-          )
-        } catch {}
+      // Fullscreen the Video.js wrapper, not the bare <video> tag: only
+      // wrapper-element fullscreen reliably triggers Android WebView's
+      // WebChromeClient.onShowCustomView, which is what swaps in the
+      // immersive video surface. With that surface active, the activity
+      // PiP captures only the video instead of the whole page chrome.
+      // Fire-and-forget (no await) so the user gesture stays alive for
+      // the AndroidPip.toggle() call, and a 2-RAF wait lets the WebView
+      // install the custom view before we go to PiP.
+      if (!document.fullscreenElement) {
+        try { player.requestFullscreen() } catch {}
+        await new Promise((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(r))
+        )
       }
       window.AndroidPip.toggle()
       return

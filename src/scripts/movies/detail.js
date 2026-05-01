@@ -37,6 +37,7 @@ import {
 } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
+import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -336,6 +337,19 @@ async function startPlayback() {
   player.play().catch((err) =>
     console.warn("[xt:movie-detail] play() rejected:", err?.message || err)
   )
+
+  if (activePlaylistId && movie) {
+    setRichPresence({
+      playlistId: activePlaylistId,
+      details: movie.name || "Watching a movie",
+      state: movie.year ? `Released ${movie.year}` : "Movie",
+      largeImage: movie.logo || "logo",
+      largeText: movie.name || "Extreme InfiniTV",
+      smallImage: "movie",
+      smallText: "Movie",
+      startTimestamp: Date.now(),
+    })
+  }
 }
 
 playBtn?.addEventListener("click", startPlayback)
@@ -370,6 +384,7 @@ window.addEventListener("pagehide", () => {
     vjs?.dispose?.()
   } catch {}
   clearAmbient(ambientEl)
+  clearRichPresence().catch(() => {})
 })
 
 // ----------------------------
