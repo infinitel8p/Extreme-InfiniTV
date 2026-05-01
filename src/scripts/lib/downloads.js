@@ -8,6 +8,7 @@ import {
   getMaxConnectionsSync,
   getActivePlaylistIdSync,
 } from "@/scripts/lib/account-info.js"
+import { safeHttpUrl } from "@/scripts/lib/creds.js"
 import * as AFs from "@/scripts/lib/android-fs.js"
 
 const isTauri =
@@ -860,7 +861,7 @@ export async function scanDownloadsFolder() {
 
     list.unshift({
       id: uuid(),
-      url: parsed.url || "",
+      url: safeHttpUrl(parsed.url || ""),
       title: parsed.title || name.replace(/\.json$/i, ""),
       path: mediaPath,
       bytesDone: size,

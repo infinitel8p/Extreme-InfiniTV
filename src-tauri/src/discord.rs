@@ -22,24 +22,21 @@ pub struct ButtonInput {
 }
 
 #[derive(Default)]
-pub struct RpcState {
-    pub client: Mutex<Option<DiscordIpcClient>>,
-    pub current_id: Mutex<Option<String>>,
+pub struct RpcInner {
+    pub client: Option<DiscordIpcClient>,
+    pub current_id: Option<String>,
 }
 
-fn ensure_client(state: &State<RpcState>, app_id: &str) -> Result<(), String> {
-    let mut current = state
-        .current_id
-        .lock()
-        .map_err(|e| format!("rpc current_id lock poisoned: {e}"))?;
-    let mut client_opt = state
-        .client
-        .lock()
-        .map_err(|e| format!("rpc client lock poisoned: {e}"))?;
-    if current.as_deref() == Some(app_id) && client_opt.is_some() {
+#[derive(Default)]
+pub struct RpcState {
+    pub inner: Mutex<RpcInner>,
+}
+
+fn ensure_client(inner: &mut RpcInner, app_id: &str) -> Result<(), String> {
+    if inner.current_id.as_deref() == Some(app_id) && inner.client.is_some() {
         return Ok(());
     }
-    if let Some(mut existing) = client_opt.take() {
+    if let Some(mut existing) = inner.client.take() {
         let _ = existing.close();
     }
     let mut new_client =
@@ -47,8 +44,8 @@ fn ensure_client(state: &State<RpcState>, app_id: &str) -> Result<(), String> {
     new_client
         .connect()
         .map_err(|e| format!("Discord IPC connect failed: {e}"))?;
-    *client_opt = Some(new_client);
-    *current = Some(app_id.to_string());
+    inner.client = Some(new_client);
+    inner.current_id = Some(app_id.to_string());
     Ok(())
 }
 
@@ -68,12 +65,13 @@ pub fn discord_set_activity(
     if client_id.trim().is_empty() {
         return Err("discord client_id is empty".into());
     }
-    ensure_client(&state, &client_id)?;
-    let mut client_opt = state
-        .client
+    let mut inner = state
+        .inner
         .lock()
-        .map_err(|e| format!("rpc client lock poisoned: {e}"))?;
-    let client = client_opt
+        .map_err(|e| format!("rpc lock poisoned: {e}"))?;
+    ensure_client(&mut inner, &client_id)?;
+    let client = inner
+        .client
         .as_mut()
         .ok_or_else(|| "Discord client not initialised".to_string())?;
 
@@ -143,11 +141,11 @@ pub fn discord_set_activity(
 
 #[tauri::command]
 pub fn discord_clear(state: State<'_, RpcState>) -> Result<(), String> {
-    let mut client_opt = state
-        .client
+    let mut inner = state
+        .inner
         .lock()
-        .map_err(|e| format!("rpc client lock poisoned: {e}"))?;
-    if let Some(client) = client_opt.as_mut() {
+        .map_err(|e| format!("rpc lock poisoned: {e}"))?;
+    if let Some(client) = inner.client.as_mut() {
         client
             .clear_activity()
             .map_err(|e| format!("Discord clear_activity failed: {e}"))?;
@@ -157,17 +155,13 @@ pub fn discord_clear(state: State<'_, RpcState>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn discord_disconnect(state: State<'_, RpcState>) -> Result<(), String> {
-    let mut client_opt = state
-        .client
+    let mut inner = state
+        .inner
         .lock()
-        .map_err(|e| format!("rpc client lock poisoned: {e}"))?;
-    let mut current = state
-        .current_id
-        .lock()
-        .map_err(|e| format!("rpc current_id lock poisoned: {e}"))?;
-    if let Some(mut client) = client_opt.take() {
+        .map_err(|e| format!("rpc lock poisoned: {e}"))?;
+    if let Some(mut client) = inner.client.take() {
         let _ = client.close();
     }
-    *current = None;
+    inner.current_id = None;
     Ok(())
 }

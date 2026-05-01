@@ -23,7 +23,19 @@ import {
 } from "@/scripts/lib/app-settings.js"
 
 const FORMAT_VERSION = 1
-const FORMAT_NAME = "xtream-infinitv-backup"
+const FORMAT_NAME = "extreme-infinitv-backup"
+const LEGACY_FORMAT_NAMES = ["xtream-infinitv-backup"]
+
+function isAcceptablePath(value) {
+  if (typeof value !== "string" || !value) return false
+  if (value.length > 4096) return false
+  if (value.split(/[\\/]/).some((segment) => segment === "..")) return false
+  if (/^[a-z]:[\\/]/i.test(value)) return true // Windows absolute (C:\...)
+  if (value.startsWith("/")) return true       // POSIX absolute
+  if (value.startsWith("\\\\")) return true    // Windows UNC
+  if (/^content:\/\//i.test(value)) return true // Android SAF
+  return false
+}
 
 /**
  * Build a JSON-serialisable snapshot of all user state.
@@ -59,7 +71,7 @@ export async function importAll(blob) {
     throw new Error("Invalid backup file: not an object.")
   }
   const b = /** @type {any} */ (blob)
-  if (b.format !== FORMAT_NAME) {
+  if (b.format !== FORMAT_NAME && !LEGACY_FORMAT_NAMES.includes(b.format)) {
     throw new Error("Invalid backup file: format marker missing or wrong.")
   }
   if (typeof b.version !== "number" || b.version > FORMAT_VERSION) {
@@ -91,7 +103,11 @@ export async function importAll(blob) {
       setUserAgent(b.appSettings.userAgent)
       summary.appSettings++
     }
-    if (typeof b.appSettings.downloadDir === "string") {
+    if (
+      typeof b.appSettings.downloadDir === "string" &&
+      (b.appSettings.downloadDir === "" ||
+        isAcceptablePath(b.appSettings.downloadDir))
+    ) {
       setDownloadDir(b.appSettings.downloadDir)
       summary.appSettings++
     }
@@ -105,12 +121,12 @@ export async function importAll(blob) {
 }
 
 /**
- * Suggested filename for downloads, e.g. xtream-backup-2026-04-30.json.
+ * Suggested filename for downloads, e.g. extreme-infinitv-backup-2026-04-30.json.
  */
 export function suggestedFilename() {
   const d = new Date()
   const pad = (n) => String(n).padStart(2, "0")
-  return `xtream-backup-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`
+  return `extreme-infinitv-backup-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`
 }
 
 export const BACKUP_FORMAT_NAME = FORMAT_NAME
