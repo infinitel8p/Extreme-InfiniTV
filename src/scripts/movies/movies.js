@@ -458,6 +458,52 @@ function makeFallback(name) {
   return fb
 }
 
+function posterSkeletonGeometry() {
+  const w = typeof window !== "undefined" ? window.innerWidth || 1280 : 1280
+  const h = typeof window !== "undefined" ? window.innerHeight || 720 : 720
+  const cardW = w >= 1024 ? 176 : w >= 640 ? 160 : 128
+  const cardH = cardW * 1.7
+  const cols = Math.max(2, Math.floor((w - 48) / (cardW + 16)))
+  const rows = Math.max(2, Math.ceil(h / cardH) + 1)
+  const count = Math.min(48, cols * rows)
+  return { cols, count }
+}
+
+function posterSkeletonCount() {
+  return posterSkeletonGeometry().count
+}
+
+function renderPosterSkeletons(target, count) {
+  if (!target) return
+  const geom = posterSkeletonGeometry()
+  const total = Number.isFinite(count) && count > 0 ? count : geom.count
+  const cols = geom.cols || 4
+  const frag = document.createDocumentFragment()
+  for (let i = 0; i < total; i++) {
+    const col = i % cols
+    const row = Math.floor(i / cols)
+    // Diagonal wave
+    const waveDelay = ((col * 90) + (row * 140)) % 1600
+    // Soft entrance stagger - cap at 8 cards
+    const enterDelay = Math.min(i, 8) * 28
+
+    const card = document.createElement("div")
+    card.dataset.skeleton = "true"
+    card.className =
+      "rounded-xl overflow-hidden ring-1 ring-line bg-surface-2"
+    card.style.setProperty("--skel-delay", `${waveDelay}ms`)
+    card.style.setProperty("--skel-enter-delay", `${enterDelay}ms`)
+    card.innerHTML =
+      `<div class="aspect-2/3 w-full skel" style="--skel-delay:${waveDelay}ms;"></div>
+       <div class="px-2 py-2 flex flex-col gap-1.5">
+         <div class="h-3 rounded skel" style="width:${60 + ((i * 7) % 35)}%; --skel-delay:${waveDelay + 80}ms;"></div>
+         <div class="h-2.5 rounded skel" style="width:${30 + ((i * 5) % 30)}%; --skel-delay:${waveDelay + 160}ms;"></div>
+       </div>`
+    frag.appendChild(card)
+  }
+  target.replaceChildren(frag)
+}
+
 function teardownInfiniteObs() {
   if (infiniteObs) {
     infiniteObs.disconnect()
@@ -726,7 +772,7 @@ async function loadMovies() {
     paintMovies(hit.data, true, hit.age)
   } else {
     listStatus.textContent = "Loading movies…"
-    if (gridEl) gridEl.replaceChildren()
+    if (!gridEl?.querySelector("[data-skeleton]")) renderPosterSkeletons(gridEl)
   }
 
   creds = await loadCreds()
@@ -812,9 +858,21 @@ async function loadMovies() {
 // ----------------------------
 // Boot
 // ----------------------------
+// First-paint skeleton
+if (gridEl && !gridEl.childElementCount) {
+  renderPosterSkeletons(gridEl, posterSkeletonCount())
+}
+if (listStatus && /no playlist selected/i.test(listStatus.textContent || "")) {
+  listStatus.textContent = "Loading movies…"
+}
+
 document.addEventListener("xt:active-changed", () => loadMovies())
 
 ;(async () => {
   creds = await loadCreds()
-  if (creds.host && creds.user && creds.pass) loadMovies()
+  if (creds.host && creds.user && creds.pass) {
+    loadMovies()
+  } else {
+    showEmptyState()
+  }
 })()

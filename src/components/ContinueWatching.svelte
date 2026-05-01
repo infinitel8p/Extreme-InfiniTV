@@ -5,47 +5,50 @@
   import {
     ensureLoaded as ensurePrefsLoaded,
     getContinueWatching,
+    getRecents,
     clearProgress,
+    clearRecent,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 
+  const STRIP_LIMIT = 8
+  const LIVE_TTL_MS = 48 * 60 * 60 * 1000
+
   /** @type {Array<{
-   *   kind: "vod" | "episode",
+   *   kind: "vod" | "episode" | "live",
    *   id: string,
    *   name: string,
    *   logo: string | null,
    *   subtitle: string,
    *   href: string,
-   *   position: number,
-   *   duration: number,
    *   percent: number,
+   *   hasProgress: boolean,
    * }>}
    */
   let entries = $state([])
   let activePlaylistId = $state("")
 
-  function buildEntry(raw, vodById) {
+  function buildProgressEntry(raw, vodById) {
     const percent =
       raw.duration > 0
         ? Math.max(0, Math.min(100, (raw.position / raw.duration) * 100))
         : 0
     if (raw.kind === "vod") {
-      const m = vodById.get(Number(raw.id))
+      const movie = vodById.get(Number(raw.id))
       return {
         kind: raw.kind,
         id: raw.id,
-        name: raw.name || m?.name || `Movie ${raw.id}`,
-        logo: raw.logo || m?.logo || null,
+        name: raw.name || movie?.name || `Movie ${raw.id}`,
+        logo: raw.logo || movie?.logo || null,
         subtitle: "Movie",
         href: `/movies/detail?id=${encodeURIComponent(raw.id)}&autoplay=1`,
-        position: raw.position,
-        duration: raw.duration,
         percent,
+        hasProgress: true,
       }
     }
-    const sLabel = raw.season != null ? `S${raw.season}` : ""
-    const eLabel = raw.episodeNum != null ? `E${raw.episodeNum}` : ""
-    const tag = (sLabel + eLabel) || "Episode"
+    const seasonLabel = raw.season != null ? `S${raw.season}` : ""
+    const episodeLabel = raw.episodeNum != null ? `E${raw.episodeNum}` : ""
+    const tag = seasonLabel + episodeLabel || "Episode"
     const seriesPart = raw.seriesName ? `${raw.seriesName} · ${tag}` : tag
     const seriesIdParam = raw.seriesId != null ? encodeURIComponent(raw.seriesId) : ""
     return {
@@ -57,9 +60,22 @@
       href: seriesIdParam
         ? `/series/detail?id=${seriesIdParam}&autoplay=1&episode=${encodeURIComponent(raw.id)}`
         : "#",
-      position: raw.position,
-      duration: raw.duration,
       percent,
+      hasProgress: true,
+    }
+  }
+
+  function buildLiveEntry(recent, liveById) {
+    const channel = liveById.get(Number(recent.id))
+    return {
+      kind: "live",
+      id: String(recent.id),
+      name: recent.name || channel?.name || `Channel ${recent.id}`,
+      logo: recent.logo || channel?.logo || null,
+      subtitle: "Live TV",
+      href: `/livetv?channel=${encodeURIComponent(recent.id)}`,
+      percent: 0,
+      hasProgress: false,
     }
   }
 
@@ -72,20 +88,45 @@
     }
     activePlaylistId = active._id
     await ensurePrefsLoaded()
-    await hydrateCache(active._id, "vod")
+    await Promise.all([
+      hydrateCache(active._id, "vod"),
+      hydrateCache(active._id, "live"),
+      hydrateCache(active._id, "m3u"),
+    ])
 
     const vodList = getCached(active._id, "vod")?.data || []
-    const vodById = new Map(vodList.map((m) => [Number(m.id), m]))
+    const vodById = new Map(vodList.map((movie) => [Number(movie.id), movie]))
+    const liveList =
+      getCached(active._id, "live")?.data ||
+      getCached(active._id, "m3u")?.data ||
+      []
+    const liveById = new Map(liveList.map((channel) => [Number(channel.id), channel]))
 
-    const raw = getContinueWatching(active._id, 6)
-    entries = raw.map((r) => buildEntry(r, vodById))
+    const progress = getContinueWatching(active._id, STRIP_LIMIT).map((row) => ({
+      ts: row.updatedAt || 0,
+      built: buildProgressEntry(row, vodById),
+    }))
+    const liveCutoff = Date.now() - LIVE_TTL_MS
+    const recents = getRecents(active._id, "live")
+      .filter((row) => (row.ts || 0) >= liveCutoff)
+      .map((row) => ({
+        ts: row.ts || 0,
+        built: buildLiveEntry(row, liveById),
+      }))
+
+    const merged = [...progress, ...recents].sort((a, b) => b.ts - a.ts)
+    entries = merged.slice(0, STRIP_LIMIT).map((row) => row.built)
   }
 
-  function dismiss(e, entry) {
-    e.preventDefault()
-    e.stopPropagation()
+  function dismiss(event, entry) {
+    event.preventDefault()
+    event.stopPropagation()
     if (!activePlaylistId) return
-    clearProgress(activePlaylistId, entry.kind, entry.id)
+    if (entry.kind === "live") {
+      clearRecent(activePlaylistId, "live", Number(entry.id))
+    } else {
+      clearProgress(activePlaylistId, entry.kind, entry.id)
+    }
   }
 
   onMount(() => {
@@ -93,13 +134,14 @@
     const handlers = {
       "xt:active-changed": reload,
       "xt:progress-changed": reload,
+      "xt:recents-changed": reload,
     }
-    for (const [k, v] of Object.entries(handlers)) {
-      document.addEventListener(k, v)
+    for (const [eventName, handler] of Object.entries(handlers)) {
+      document.addEventListener(eventName, handler)
     }
     return () => {
-      for (const [k, v] of Object.entries(handlers)) {
-        document.removeEventListener(k, v)
+      for (const [eventName, handler] of Object.entries(handlers)) {
+        document.removeEventListener(eventName, handler)
       }
     }
   })
@@ -121,11 +163,16 @@
     <ul
       class="cw-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
              snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
-      {#each entries as e, i (e.kind + ":" + e.id)}
-        <li class="cw-item shrink-0 snap-start" style:--enter-delay={Math.min(i, 6) * 28 + "ms"}>
+      {#each entries as entry, i (entry.kind + ":" + entry.id)}
+        <li
+          class="cw-item shrink-0 snap-start"
+          data-kind={entry.kind}
+          style:--enter-delay={Math.min(i, 6) * 28 + "ms"}>
           <a
-            href={e.href}
-            aria-label={`Resume ${e.name}`}
+            href={entry.href}
+            aria-label={entry.kind === "live"
+              ? `Watch ${entry.name}`
+              : `Resume ${entry.name}`}
             class="cw-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150
@@ -134,37 +181,72 @@
                    hover:transform-[translateY(-2px)]
                    focus-visible:transform-[translateY(-2px)]">
             <div class="cw-poster aspect-2/3 w-full overflow-hidden bg-surface-2 relative">
-              {#if e.logo}
-                <img
-                  src={e.logo}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  referrerpolicy="no-referrer"
-                  class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />
+              {#if entry.logo}
+                {#if entry.kind === "live"}
+                  <img
+                    src={entry.logo}
+                    alt=""
+                    aria-hidden="true"
+                    loading="lazy"
+                    decoding="async"
+                    referrerpolicy="no-referrer"
+                    class="absolute inset-0 h-full w-full object-cover scale-110 saturate-150 brightness-75 opacity-60 blur-2xl pointer-events-none" />
+                  <div class="absolute inset-0 flex items-center justify-center p-3">
+                    <img
+                      src={entry.logo}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      referrerpolicy="no-referrer"
+                      class="relative max-h-full max-w-full object-contain transition-transform duration-300 group-hover:scale-[1.03]" />
+                  </div>
+                {:else}
+                  <img
+                    src={entry.logo}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    referrerpolicy="no-referrer"
+                    class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />
+                {/if}
               {:else}
                 <div
                   class="h-full w-full flex items-center justify-center text-center px-3
                          text-fg-3 text-xs tracking-wide
                          bg-linear-to-br from-surface-2 to-surface-3">
-                  {e.name}
+                  {entry.name}
                 </div>
               {/if}
 
-              <div
-                class="cw-progress absolute inset-x-0 bottom-0 h-1
-                       bg-black/55 backdrop-blur-[2px]"
-                aria-hidden="true">
+              {#if entry.kind === "live"}
+                <span
+                  class="absolute top-1.5 left-1.5 inline-flex items-center gap-1 text-label font-medium uppercase tracking-wide
+                         rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
+                  <span class="size-1.5 rounded-full bg-accent" aria-hidden="true"></span>
+                  Live
+                </span>
+              {/if}
+
+              {#if entry.hasProgress}
                 <div
-                  class="cw-progress-fill h-full bg-accent"
-                  style:width={e.percent + "%"}></div>
-              </div>
+                  class="cw-progress absolute inset-x-0 bottom-0 h-1
+                         bg-black/55 backdrop-blur-[2px]"
+                  aria-hidden="true">
+                  <div
+                    class="cw-progress-fill h-full bg-accent"
+                    style:width={entry.percent + "%"}></div>
+                </div>
+              {/if}
 
               <button
                 type="button"
-                onclick={(ev) => dismiss(ev, e)}
-                aria-label={`Remove ${e.name} from Continue watching`}
-                title="Remove from Continue watching"
+                onclick={(event) => dismiss(event, entry)}
+                aria-label={entry.kind === "live"
+                  ? `Remove ${entry.name} from recents`
+                  : `Remove ${entry.name} from Continue watching`}
+                title={entry.kind === "live"
+                  ? "Remove from recents"
+                  : "Remove from Continue watching"}
                 class="cw-dismiss absolute top-1.5 right-1.5 size-7 rounded-md
                        bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10
                        opacity-0 group-hover:opacity-100 group-focus-within:opacity-100
@@ -181,10 +263,10 @@
 
             <div class="px-2 py-2 min-w-0">
               <div class="truncate text-sm font-medium text-fg">
-                {e.name}
+                {entry.name}
               </div>
               <div class="truncate text-2xs text-fg-3 tabular-nums">
-                {e.subtitle}
+                {entry.subtitle}
               </div>
             </div>
           </a>

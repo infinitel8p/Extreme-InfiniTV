@@ -19,6 +19,11 @@ import {
   getRecents,
   getHiddenCategories,
   setCategoryHidden,
+  getAllowedCategories,
+  setCategoryAllowed,
+  setAllowedCategories,
+  getCategoryMode,
+  setCategoryMode,
 } from "@/scripts/lib/preferences.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { ICON_X } from "@/scripts/lib/icons.js"
@@ -168,6 +173,13 @@ const listStatus = document.getElementById("list-status")
 const categoryListEl = document.getElementById("category-list")
 const categoryListStatus = document.getElementById("category-list-status")
 const categorySearchEl = document.getElementById("category-search")
+const categoryModeHideBtn = document.getElementById("category-mode-hide")
+const categoryModeSelectBtn = document.getElementById("category-mode-select")
+const categorySelectActions = document.getElementById("category-select-actions")
+const categoryShowSelectedBtn = document.getElementById("category-show-selected")
+const categorySelectAllBtn = document.getElementById("category-select-all")
+const categorySelectClearBtn = document.getElementById("category-select-clear")
+let showSelectedOnly = false
 
 const searchEl = document.getElementById("search")
 const currentEl = document.getElementById("current")
@@ -225,6 +237,23 @@ document.addEventListener("xt:hidden-categories-changed", (e) => {
   scheduleApplyFilter()
 })
 
+document.addEventListener("xt:allowed-categories-changed", (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "live") return
+  renderCategoryPicker(all)
+  scheduleApplyFilter()
+})
+
+document.addEventListener("xt:category-mode-changed", (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "live") return
+  syncCategoryModeToggle()
+  renderCategoryPicker(all)
+  scheduleApplyFilter()
+})
+
 const STAR_OUTLINE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/></svg>'
 const STAR_FILLED =
@@ -242,6 +271,56 @@ function hiddenSet() {
   return activePlaylistId
     ? getHiddenCategories(activePlaylistId, "live")
     : new Set()
+}
+function allowedSet() {
+  return activePlaylistId
+    ? getAllowedCategories(activePlaylistId, "live")
+    : new Set()
+}
+function categoryMode() {
+  return activePlaylistId ? getCategoryMode(activePlaylistId, "live") : "hide"
+}
+
+function channelSkeletonCount() {
+  // Fill the channel list pane regardless of viewport size.
+  const containerH = listEl?.clientHeight || 0
+  const fallback =
+    typeof window !== "undefined" ? (window.innerHeight || 720) - 120 : 720
+  return Math.max(14, Math.ceil(Math.max(containerH, fallback) / 68) + 4)
+}
+
+function renderChannelSkeletons(count) {
+  if (!viewport || !spacer) return
+  const total = Number.isFinite(count) && count > 0 ? count : channelSkeletonCount()
+  spacer.style.height = `${total * 68}px`
+  const frag = document.createDocumentFragment()
+  // Vary widths so the placeholder looks like a list, not a striped pattern.
+  const nameWidths = [62, 78, 54, 70, 86, 60, 72, 50, 80, 64, 76, 58]
+  const metaWidths = [38, 46, 30, 52, 34, 44, 28, 48, 36, 42, 32, 50]
+  for (let i = 0; i < total; i++) {
+    // Cascade the shimmer down
+    const waveDelay = (i * 110) % 1600
+    const enterDelay = Math.min(i, 10) * 24
+
+    const row = document.createElement("div")
+    row.className = "channel-row flex w-full items-center gap-1"
+    row.style.height = "68px"
+    row.dataset.idx = String(i)
+    row.dataset.skeleton = "true"
+    row.style.setProperty("--skel-enter-delay", `${enterDelay}ms`)
+    row.innerHTML =
+      `<div class="flex flex-1 items-center gap-3 px-2.5 py-2 h-full min-w-0">
+        <div class="h-9 w-9 shrink-0 rounded-md ring-1 ring-inset ring-line skel" style="--skel-delay:${waveDelay}ms;"></div>
+        <div class="flex flex-col gap-1.5 flex-1 min-w-0">
+          <div class="h-3 rounded skel" style="width:${nameWidths[i % nameWidths.length]}%; --skel-delay:${waveDelay + 60}ms;"></div>
+          <div class="h-2.5 rounded skel" style="width:${metaWidths[i % metaWidths.length]}%; --skel-delay:${waveDelay + 140}ms;"></div>
+        </div>
+      </div>
+      <div class="size-10 shrink-0 rounded-md skel opacity-60" style="--skel-delay:${waveDelay + 220}ms;"></div>`
+    frag.appendChild(row)
+  }
+  viewport.replaceChildren(frag)
+  viewport.style.transform = "translateY(0)"
 }
 
 /** @type {Map<string,string> | null} */
@@ -367,7 +446,7 @@ function renderVirtual() {
 
     const logo = document.createElement("div")
     logo.className =
-      "h-9 w-9 shrink-0 rounded-md bg-surface-2 overflow-hidden ring-1 ring-inset ring-line"
+      "h-9 w-9 shrink-0 rounded-md overflow-hidden ring-1 ring-inset ring-line logo-skel"
     if (ch.logo) {
       const safeLogo = safeHttpUrl(ch.logo)
       if (safeLogo) {
@@ -378,9 +457,20 @@ function renderVirtual() {
         img.decoding = "async"
         img.referrerPolicy = "no-referrer"
         img.className = "h-full w-full object-contain"
-        img.onerror = () => img.remove()
+        img.onload = () => logo.setAttribute("data-loaded", "true")
+        img.onerror = () => {
+          img.remove()
+          logo.setAttribute("data-loaded", "true")
+        }
+        if (img.complete && img.naturalWidth > 0) {
+          logo.setAttribute("data-loaded", "true")
+        }
         logo.appendChild(img)
+      } else {
+        logo.setAttribute("data-loaded", "true")
       }
+    } else {
+      logo.setAttribute("data-loaded", "true")
     }
     playBtn.appendChild(logo)
 
@@ -544,11 +634,20 @@ const applyFilter = () => {
       if (ch) out.push(ch)
     }
   } else {
+    const mode = categoryMode()
+    const hidden = mode === "hide" ? hiddenSet() : null
+    const allowed = mode === "select" ? allowedSet() : null
+    const allowlistActive = mode === "select" && allowed.size > 0
     out = all.filter((ch) => {
       if (activeCat && (ch.category || "") !== activeCat) return false
       const cat = (ch.category || "").toString()
-      if (cat && hiddenSet().has(cat)) return false
-      return true
+      if (mode === "hide") {
+        if (cat && hidden.has(cat)) return false
+        return true
+      }
+      // mode === "select"
+      if (!allowlistActive) return true
+      return cat ? allowed.has(cat) : false
     })
   }
 
@@ -594,9 +693,11 @@ function renderCategoryPicker(items) {
   const names = Array.from(counts.keys()).sort((a, b) =>
     a.localeCompare(b, "en", { sensitivity: "base" })
   )
+  const mode = categoryMode()
   const hidden = hiddenSet()
-  const visibleNames = names.filter((n) => !hidden.has(n))
-  const hiddenNames = names.filter((n) => hidden.has(n))
+  const allowed = allowedSet()
+  const visibleNames = mode === "hide" ? names.filter((n) => !hidden.has(n)) : names
+  const hiddenNames = mode === "hide" ? names.filter((n) => hidden.has(n)) : []
   const frag = document.createDocumentFragment()
 
   const highlightActiveInList = () => {
@@ -657,6 +758,35 @@ function renderCategoryPicker(items) {
           }
         }
       })
+    } else if (opts.selectAction) {
+      const checked = !!opts.selectChecked
+      rightAction = document.createElement("button")
+      rightAction.type = "button"
+      rightAction.tabIndex = 0
+      rightAction.setAttribute("role", "checkbox")
+      rightAction.setAttribute("aria-checked", String(checked))
+      rightAction.setAttribute(
+        "aria-label",
+        checked
+          ? `Remove "${label}" from shown categories`
+          : `Show only checked categories - include "${label}"`
+      )
+      rightAction.title = checked ? "Showing this category" : "Show this category"
+      rightAction.className =
+        "category-select-btn shrink-0 size-6 inline-flex items-center justify-center rounded-md " +
+        "border outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent " +
+        (checked
+          ? "bg-accent border-accent text-bg"
+          : "border-line text-fg-3 hover:text-fg hover:border-fg-3 focus-visible:border-fg-3")
+      rightAction.innerHTML = checked
+        ? '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>'
+        : ""
+      rightAction.addEventListener("click", (ev) => {
+        ev.stopPropagation()
+        ev.preventDefault()
+        if (!activePlaylistId) return
+        setCategoryAllowed(activePlaylistId, "live", val, !checked)
+      })
     }
 
     const countEl = document.createElement("span")
@@ -668,7 +798,7 @@ function renderCategoryPicker(items) {
       right.appendChild(rightAction)
     } else {
       const spacer = document.createElement("span")
-      spacer.className = "category-hide-btn shrink-0 size-6"
+      spacer.className = "shrink-0 size-6"
       spacer.setAttribute("aria-hidden", "true")
       right.appendChild(spacer)
     }
@@ -692,8 +822,17 @@ function renderCategoryPicker(items) {
   if (recs.length === 0) recRow.style.display = "none"
 
   addRow("", "All categories")
-  for (const name of visibleNames) {
-    addRow(name, name, counts.get(name), "", { hideAction: "hide" })
+  if (mode === "select") {
+    for (const name of visibleNames) {
+      addRow(name, name, counts.get(name), "", {
+        selectAction: true,
+        selectChecked: allowed.has(name),
+      })
+    }
+  } else {
+    for (const name of visibleNames) {
+      addRow(name, name, counts.get(name), "", { hideAction: "hide" })
+    }
   }
 
   if (hiddenNames.length) {
@@ -721,12 +860,25 @@ function renderCategoryPicker(items) {
 
   categoryListEl.innerHTML = ""
   if (categoryListStatus) {
-    const total = visibleNames.length
-    categoryListStatus.textContent = `${total.toLocaleString()} ${total === 1 ? "category" : "categories"}${hiddenNames.length ? ` · ${hiddenNames.length} hidden` : ""}`
+    if (mode === "select") {
+      const totalCats = names.length
+      const pickedCount = names.reduce(
+        (acc, name) => (allowed.has(name) ? acc + 1 : acc),
+        0
+      )
+      categoryListStatus.textContent =
+        pickedCount === 0
+          ? `Tick categories to include - ${totalCats.toLocaleString()} total`
+          : `Showing ${pickedCount.toLocaleString()} of ${totalCats.toLocaleString()} categories`
+    } else {
+      const total = visibleNames.length
+      categoryListStatus.textContent = `${total.toLocaleString()} ${total === 1 ? "category" : "categories"}${hiddenNames.length ? ` · ${hiddenNames.length} hidden` : ""}`
+    }
   }
   categoryListEl.appendChild(frag)
 
   highlightActiveInList()
+  filterCategories()
 }
 
 function syncPseudoCategoryRows() {
@@ -753,23 +905,95 @@ function filterCategories() {
   if (!categoryListEl || !categoryListStatus || !categorySearchEl) return
   const qnorm = normalize(categorySearchEl.value || "")
   const tokens = qnorm.length ? qnorm.split(" ") : []
+  const mode = categoryMode()
+  const allowed = mode === "select" ? allowedSet() : null
+  const filterToSelected = mode === "select" && showSelectedOnly
 
   let visibleCount = 0
   let totalCount = 0
 
   for (const btn of categoryListEl.querySelectorAll('button[role="option"]')) {
-    const isAllButton = btn.dataset.val === ""
-    if (!isAllButton) totalCount++
-    const label = normalize(btn.dataset.val || btn.textContent || "")
-    const matches = !tokens.length || tokens.every((t) => label.includes(t))
-    btn.style.display = matches ? "" : "none"
-    if (matches && !isAllButton) visibleCount++
+    const val = btn.dataset.val || ""
+    const isPseudo = val.startsWith("__")
+    const isAllButton = val === ""
+    const isRegularRow = !isAllButton && !isPseudo
+    if (isRegularRow) totalCount++
+    const label = normalize(val || btn.textContent || "")
+    const searchMatches = !tokens.length || tokens.every((t) => label.includes(t))
+    let show = searchMatches
+    if (show && filterToSelected && isRegularRow) {
+      show = !!allowed && allowed.has(val)
+    }
+    btn.style.display = show ? "" : "none"
+    if (show && isRegularRow) visibleCount++
   }
 
-  categoryListStatus.textContent = `${visibleCount.toLocaleString()} of ${totalCount.toLocaleString()} categories`
+  if (mode === "select") {
+    const pickedCount = allowed ? allowed.size : 0
+    categoryListStatus.textContent = filterToSelected
+      ? `${visibleCount.toLocaleString()} of ${pickedCount.toLocaleString()} selected (filtered)`
+      : pickedCount === 0
+        ? `Tick categories to include - ${totalCount.toLocaleString()} total`
+        : `${pickedCount.toLocaleString()} of ${totalCount.toLocaleString()} selected`
+  } else {
+    categoryListStatus.textContent = `${visibleCount.toLocaleString()} of ${totalCount.toLocaleString()} categories`
+  }
 }
 
 categorySearchEl?.addEventListener("input", debounce(filterCategories, 120))
+
+function syncCategoryModeToggle() {
+  if (!categoryModeHideBtn || !categoryModeSelectBtn) return
+  const mode = categoryMode()
+  categoryModeHideBtn.setAttribute("aria-checked", String(mode === "hide"))
+  categoryModeSelectBtn.setAttribute("aria-checked", String(mode === "select"))
+  if (categorySelectActions) {
+    if (mode === "select") categorySelectActions.removeAttribute("hidden")
+    else categorySelectActions.setAttribute("hidden", "")
+  }
+  if (mode !== "select" && showSelectedOnly) {
+    showSelectedOnly = false
+    syncShowSelectedToggle()
+  }
+}
+
+function syncShowSelectedToggle() {
+  if (!categoryShowSelectedBtn) return
+  categoryShowSelectedBtn.setAttribute("aria-pressed", String(showSelectedOnly))
+}
+
+const onCategoryModeClick = (event) => {
+  const mode = /** @type {HTMLElement} */ (event.currentTarget)?.dataset?.mode
+  if (!activePlaylistId || (mode !== "hide" && mode !== "select")) return
+  setCategoryMode(activePlaylistId, "live", mode)
+}
+categoryModeHideBtn?.addEventListener("click", onCategoryModeClick)
+categoryModeSelectBtn?.addEventListener("click", onCategoryModeClick)
+
+categoryShowSelectedBtn?.addEventListener("click", () => {
+  showSelectedOnly = !showSelectedOnly
+  syncShowSelectedToggle()
+  filterCategories()
+})
+
+categorySelectAllBtn?.addEventListener("click", () => {
+  if (!activePlaylistId || !categoryListEl) return
+  const allowed = new Set(allowedSet())
+  // Only add categories currently visible in the picker (after search filter).
+  for (const btn of categoryListEl.querySelectorAll('button[role="option"]')) {
+    const val = /** @type {HTMLElement} */ (btn).dataset?.val
+    if (!val) continue
+    if (val.startsWith("__")) continue
+    if (/** @type {HTMLElement} */ (btn).style.display === "none") continue
+    allowed.add(val)
+  }
+  setAllowedCategories(activePlaylistId, "live", allowed)
+})
+
+categorySelectClearBtn?.addEventListener("click", () => {
+  if (!activePlaylistId) return
+  setAllowedCategories(activePlaylistId, "live", [])
+})
 
 function setActiveCat(next) {
   const prev = activeCat
@@ -813,6 +1037,7 @@ function paintChannels(data, fromCache, age) {
   listStatus.textContent =
     `${all.length.toLocaleString()} channels` +
     (fromCache ? ` · cached, ${fmtAge(age)}` : "")
+  syncCategoryModeToggle()
   renderCategoryPicker(all)
   applyFilter()
   maybeAutoplayFromUrl()
@@ -884,7 +1109,7 @@ async function loadChannels() {
   } else {
     categoryListStatus.textContent = "Loading categories…"
     listStatus.textContent = "Loading channels…"
-    viewport.innerHTML = ""
+    if (!viewport?.querySelector("[data-skeleton]")) renderChannelSkeletons()
   }
 
   creds = await loadCreds()
@@ -1319,6 +1544,15 @@ setInterval(() => {
 // ----------------------------
 // Boot
 // ----------------------------
+// First-paint skeleton: render placeholder channel rows synchronously so the
+// list pane has structure during the brief boot async window.
+if (viewport && spacer && !viewport.childElementCount) {
+  renderChannelSkeletons()
+}
+if (listStatus && /no playlist selected/i.test(listStatus.textContent || "")) {
+  listStatus.textContent = "Loading channels…"
+}
+
 ;(async () => {
   console.log("[xt:livetv] boot start")
   creds = await loadCreds()

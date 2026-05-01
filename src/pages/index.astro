@@ -36,27 +36,22 @@ import {
 		<section
 			id="welcome"
 			aria-labelledby="welcome-heading"
-			class="hidden flex-1 min-h-0 items-center justify-center py-6">
-			<div
-				class="welcome-enter w-full max-w-2xl rounded-2xl border border-line bg-surface p-6 sm:p-10 lg:p-14 text-center">
-				<p
-					class="font-sans text-eyebrow font-medium uppercase tracking-wider text-fg-3 mb-5">
+			class="welcome-section hidden flex-1 min-h-0 items-center justify-center py-6">
+			<div class="welcome-enter welcome-card rounded-2xl border border-line bg-surface text-center">
+				<p class="welcome-eyebrow font-sans font-medium uppercase tracking-wider text-fg-3">
 					Welcome
 				</p>
 				<h1
 					id="welcome-heading"
-					class="font-normal text-accent tracking-[-0.005em] leading-none"
-					style="font-size: clamp(2.25rem, 4vw + 1rem, 4.5rem);">
+					class="welcome-heading font-normal text-accent tracking-[-0.005em] leading-none">
 					Pick something to watch.
 				</h1>
-				<p
-					class="mt-5 sm:mt-6 mx-auto max-w-md text-sm sm:text-base text-fg-2 font-sans tracking-tight leading-relaxed">
+				<p class="welcome-sub mx-auto text-fg-2 font-sans tracking-tight leading-relaxed">
 					Connect an IPTV subscription, or paste a playlist URL.
 					Channels, movies, and series will appear here.
 				</p>
 
-				<div
-					class="mt-8 sm:mt-10 flex flex-col sm:flex-row gap-2.5 sm:gap-3 sm:justify-center">
+				<div class="welcome-actions flex flex-col sm:flex-row gap-2.5 sm:gap-3 sm:justify-center">
 					<a
 						id="welcome-add"
 						href="/login"
@@ -75,7 +70,7 @@ import {
 					</a>
 				</div>
 
-				<p class="mt-8 text-xs text-fg-3 leading-relaxed">
+				<p class="welcome-fineprint text-fg-3 leading-relaxed">
 					This app does not provide any content. The demo loads a
 					public playlist from iptv-org.
 				</p>
@@ -241,6 +236,13 @@ import {
 	import { getProgrammesSync, getNowNext, loadProgrammes } from "@/scripts/lib/epg-data.js";
 
 	const eyebrow = document.getElementById("hero-eyebrow");
+	let heroChannelCount = 0;
+	const setHeroChannelCount = (count) => {
+		const next = Number.isFinite(count) ? Math.max(0, count) : 0;
+		if (next === heroChannelCount) return;
+		heroChannelCount = next;
+		window.__refreshHeroEyebrow?.();
+	};
 	if (eyebrow) {
 		const greet = (hour) => {
 			if (hour < 5) return "Good night";
@@ -255,10 +257,15 @@ import {
 				hour: "numeric",
 				minute: "2-digit",
 			}).format(now);
-			eyebrow.textContent = `${greet(now.getHours())} · ${time}`;
+			const parts = [greet(now.getHours()), time];
+			if (heroChannelCount > 0) {
+				parts.push(`${heroChannelCount.toLocaleString()} channels`);
+			}
+			eyebrow.textContent = parts.join(" · ");
 		};
 		update();
 		setInterval(update, 30_000);
+		window.__refreshHeroEyebrow = update;
 	}
 
 	async function reconcileFirstRun() {
@@ -377,6 +384,7 @@ import {
 		await ensurePrefsLoaded();
 		const recents = getRecents(active._id, "live") || [];
 		const live = (getCached(active._id, "live")?.data || getCached(active._id, "m3u")?.data || []);
+		setHeroChannelCount(live.length);
 		const liveById = new Map(live.map((c) => [Number(c.id), c]));
 		let lastChannel = null;
 		if (recents.length) {

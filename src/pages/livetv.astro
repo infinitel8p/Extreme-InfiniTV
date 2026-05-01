@@ -185,6 +185,66 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 				/>
 
 				<div
+					role="radiogroup"
+					aria-label="Category filter mode"
+					class="cat-mode-toggle flex p-0.5 rounded-lg border border-line bg-surface-2 text-xs shrink-0">
+					<button
+						id="category-mode-hide"
+						type="button"
+						role="radio"
+						aria-checked="true"
+						data-mode="hide"
+						class="flex-1 rounded-md px-3 py-1.5 font-medium transition-colors text-fg-2
+							hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
+							aria-checked:bg-surface aria-checked:text-fg aria-checked:shadow-sm">
+						Hide selected
+					</button>
+					<button
+						id="category-mode-select"
+						type="button"
+						role="radio"
+						aria-checked="false"
+						data-mode="select"
+						class="flex-1 rounded-md px-3 py-1.5 font-medium transition-colors text-fg-2
+							hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
+							aria-checked:bg-surface aria-checked:text-fg aria-checked:shadow-sm">
+						Show only selected
+					</button>
+				</div>
+
+				<div
+					id="category-select-actions"
+					hidden
+					class="flex flex-wrap items-center gap-2 text-xs shrink-0">
+					<button
+						id="category-show-selected"
+						type="button"
+						aria-pressed="false"
+						class="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1 text-fg-2
+							hover:text-fg hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
+							aria-pressed:bg-accent-soft aria-pressed:text-fg aria-pressed:border-accent">
+						<span class="cat-show-selected-box inline-flex size-3.5 items-center justify-center rounded-sm border border-fg-3 transition-colors">
+							<svg class="cat-show-selected-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="10" height="10"><polyline points="20 6 9 17 4 12"/></svg>
+						</span>
+						Show selected only
+					</button>
+					<span class="ml-auto inline-flex items-center gap-3">
+						<button
+							id="category-select-all"
+							type="button"
+							class="text-accent hover:underline focus-visible:underline focus-visible:outline-none">
+							Select all visible
+						</button>
+						<button
+							id="category-select-clear"
+							type="button"
+							class="text-fg-3 hover:text-fg focus-visible:text-fg focus-visible:outline-none">
+							Clear
+						</button>
+					</span>
+				</div>
+
+				<div
 					id="category-list"
 					class="relative flex-1 min-h-0 overflow-auto custom-scroll">
 					<div id="category-viewport"></div>

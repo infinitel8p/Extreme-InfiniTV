@@ -290,13 +290,22 @@ export async function restoreState(state) {
   dispatch(EVT_ACTIVE_CHANGED, safe.entries.find((e) => e._id === safe.selectedId) || null)
 }
 
-/** Force a re-fetch of the active playlist's data. */
+/** Force a re-fetch of the active playlist's data.
+ *  Keeps the existing cache as a fallback */
 export async function refreshActive() {
   const active = await getActiveEntry()
   if (!active) return
-  const { invalidateEntry } = await import("./cache.js")
-  invalidateEntry(active._id)
+  const { warmupActive } = await import("./catalog.js")
+  let result = null
+  try {
+    result = await warmupActive(active._id, { force: true })
+  } catch (err) {
+    console.warn("[xt:creds] refreshActive: warmupActive threw", err)
+  }
   dispatch(EVT_ACTIVE_CHANGED, active)
+  if (result?.errors && Object.keys(result.errors).length >= 3) {
+    throw new Error("Refresh failed for all kinds")
+  }
 }
 
 function dispatch(name, detail) {

@@ -1,6 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import SearchInput from "@/components/SearchInput.astro";
+import SortMenu from "@/components/SortMenu.astro";
 import { IconChevronDown } from "@tabler/icons-svelte";
 ---
 
@@ -47,17 +48,15 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 				/>
 			</div>
 
-			<label class="rounded-xl border border-line bg-surface px-3.5 py-2 min-h-11 text-sm flex items-center gap-2 text-left
-				sm:w-44 shrink-0 hover:bg-surface-2 focus-within:bg-surface-2 focus-within:border-accent transition-colors">
-				<span class="text-fg-3 shrink-0">Sort</span>
-				<select
-					id="movie-sort"
-					class="bg-transparent text-fg flex-1 min-w-0 outline-none cursor-pointer">
-					<option value="default">Default</option>
-					<option value="added">Recently added</option>
-					<option value="az">A-Z</option>
-				</select>
-			</label>
+			<SortMenu
+				id="movie-sort"
+				widthClass="sm:w-44 shrink-0"
+				options={[
+					{ value: "default", label: "Default" },
+					{ value: "added", label: "Recently added" },
+					{ value: "az", label: "A-Z" },
+				]}
+			/>
 		</section>
 
 		<!-- Status row -->

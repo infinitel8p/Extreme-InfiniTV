@@ -14,8 +14,14 @@
 //   XT_USERNAME=...
 //   XT_PASSWORD=...
 //   XT_M3U_URL=https://example.com/playlist.m3u8
+//   XT_DISPLAY_NAME=Demo provider        # shown as the playlist title in the sidebar
+//   XT_REDACT=false                      # opt out of the in-page redaction pass
+//   XT_STATE_FILE=path/to/snapshot.json  # localStorage snapshot to seed (defaults to .screenshot-state.json)
 //
 // Output: docs/screenshots/<Device>/<route>.png
+// When credentials are present, additional welcome-state captures are saved
+// alongside the populated ones (e.g. home-welcome.png next to home.png) so
+// the empty-state hub can be showcased too.
 
 import { chromium } from "playwright"
 import { existsSync, readFileSync } from "node:fs"
@@ -38,7 +44,8 @@ const DEVICES = {
   "Galaxy-S20-Ultra": { width: 412, height: 915, deviceScaleFactor: 3.5, isMobile: true, hasTouch: true },
 }
 
-const ROUTES = ["/", "/livetv", "/movies", "/series", "/epg", "/settings"]
+const ROUTES = ["/", "/livetv", "/movies", "/series", "/epg", "/search", "/downloads", "/settings"]
+const WELCOME_ROUTES = ["/"]
 
 function loadDotEnv() {
   const file = path.join(ROOT, ".env.screenshots")
@@ -71,11 +78,12 @@ function parseArgs(argv) {
 function buildSeed() {
   const type = (process.env.XT_TYPE || "").toLowerCase()
   const id = "screenshot-seed-" + Date.now()
+  const displayName = process.env.XT_DISPLAY_NAME || "Demo provider"
   if (type === "m3u") {
     const url = process.env.XT_M3U_URL || ""
     if (!url) return null
     return {
-      entries: [{ _id: id, title: hostnameOf(url) || "Demo M3U", type: "m3u", url, addedAt: Date.now() }],
+      entries: [{ _id: id, title: displayName, type: "m3u", url, addedAt: Date.now() }],
       selectedId: id,
     }
   }
@@ -87,7 +95,7 @@ function buildSeed() {
     entries: [
       {
         _id: id,
-        title: hostnameOf(serverUrl) || "Demo provider",
+        title: displayName,
         type: "xtream",
         serverUrl: serverUrl.replace(/\/+$/, ""),
         username,
@@ -97,6 +105,83 @@ function buildSeed() {
     ],
     selectedId: id,
   }
+}
+
+function loadStateSnapshot() {
+  const file = process.env.XT_STATE_FILE
+    ? path.resolve(ROOT, process.env.XT_STATE_FILE)
+    : path.join(ROOT, ".screenshot-state.json")
+  if (!existsSync(file)) return { snapshot: null, file }
+  try {
+    const text = readFileSync(file, "utf8")
+    const parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      console.warn(`State snapshot at ${file} is not a JSON object - ignoring.`)
+      return { snapshot: null, file }
+    }
+    const snapshot = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "string") snapshot[key] = value
+    }
+    return { snapshot, file }
+  } catch (err) {
+    console.warn(`Couldn't parse state snapshot at ${file}: ${err.message}`)
+    return { snapshot: null, file }
+  }
+}
+
+function buildRedactions() {
+  const replacements = []
+  const add = (raw, replacement) => {
+    if (!raw || String(raw).length < 4) return
+    replacements.push({ raw: String(raw), replacement })
+  }
+  const serverUrl = process.env.XT_SERVER_URL || ""
+  const m3uUrl = process.env.XT_M3U_URL || ""
+  const host = hostnameOf(serverUrl || m3uUrl)
+  add(serverUrl.replace(/\/+$/, ""), "https://provider.example")
+  add(m3uUrl, "https://provider.example/playlist.m3u8")
+  add(host, "provider.example")
+  add(process.env.XT_USERNAME, "demo_user")
+  add(process.env.XT_PASSWORD, "demo_pass")
+  return replacements
+}
+
+async function redactPage(page, redactions) {
+  if (!redactions || redactions.length === 0) return
+  await page.evaluate((items) => {
+    const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const patterns = items.map((item) => ({
+      regex: new RegExp(escapeRegex(item.raw), "gi"),
+      replacement: item.replacement,
+    }))
+    const redactString = (text) => {
+      if (!text) return text
+      let out = text
+      for (const { regex, replacement } of patterns) out = out.replace(regex, replacement)
+      return out
+    }
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    let node
+    while ((node = walker.nextNode())) {
+      const before = node.nodeValue
+      const after = redactString(before)
+      if (before !== after) node.nodeValue = after
+    }
+    document.querySelectorAll("input, textarea").forEach((field) => {
+      if (field.value) field.value = redactString(field.value)
+      if (field.placeholder) field.placeholder = redactString(field.placeholder)
+    })
+    const attrs = ["title", "aria-label", "alt", "href", "data-href", "data-url"]
+    for (const attr of attrs) {
+      document.querySelectorAll(`[${attr}]`).forEach((el) => {
+        const value = el.getAttribute(attr)
+        if (!value) return
+        const next = redactString(value)
+        if (next !== value) el.setAttribute(attr, next)
+      })
+    }
+  }, redactions)
 }
 
 function hostnameOf(u) {
@@ -121,7 +206,7 @@ async function reachable(url) {
   }
 }
 
-async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, seed, theme) {
+async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, seed, theme, slugSuffix = "", redactions = [], snapshot = null, displayName = "Demo provider") {
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: viewport.deviceScaleFactor,
@@ -130,14 +215,30 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
     colorScheme: theme === "light" ? "light" : "dark",
   })
 
-  await context.addInitScript(({ seed, theme }) => {
+  await context.addInitScript(({ seed, theme, snapshot, displayName }) => {
     try {
-      if (seed) {
+      if (snapshot) {
+        for (const [key, value] of Object.entries(snapshot)) {
+          try { localStorage.setItem(key, value) } catch {}
+        }
+        try {
+          const raw = localStorage.getItem("xt_playlists")
+          if (raw) {
+            const parsed = JSON.parse(raw)
+            if (parsed && Array.isArray(parsed.entries)) {
+              for (const entry of parsed.entries) {
+                if (entry && typeof entry === "object") entry.title = displayName
+              }
+              localStorage.setItem("xt_playlists", JSON.stringify(parsed))
+            }
+          }
+        } catch {}
+      } else if (seed) {
         localStorage.setItem("xt_playlists", JSON.stringify(seed))
       }
       localStorage.setItem("xt_theme", theme)
     } catch {}
-  }, { seed, theme })
+  }, { seed, theme, snapshot, displayName })
 
   const page = await context.newPage()
 
@@ -157,10 +258,15 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
     try {
       await page.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur())
     } catch {}
+    try {
+      await redactPage(page, redactions)
+    } catch (err) {
+      console.warn(`  ! ${deviceName}${route} - redaction pass failed: ${err.message}`)
+    }
 
     const outDir = path.join(ROOT, "docs", "screenshots", deviceName)
     await mkdir(outDir, { recursive: true })
-    const file = path.join(outDir, `${slugRoute(route)}.png`)
+    const file = path.join(outDir, `${slugRoute(route)}${slugSuffix}.png`)
     await page.screenshot({ path: file, fullPage: false })
     console.log(`  ok ${path.relative(ROOT, file)}`)
   }
@@ -193,16 +299,49 @@ async function main() {
   }
 
   const seed = buildSeed()
-  if (!seed) {
-    console.warn("No XT_* credentials in env or .env.screenshots - screenshots will show the empty/login state.")
+  const { snapshot, file: stateFile } = loadStateSnapshot()
+  const displayName = process.env.XT_DISPLAY_NAME || "Demo provider"
+
+  if (snapshot) {
+    console.log(`Loaded localStorage snapshot from ${path.relative(ROOT, stateFile)} (${Object.keys(snapshot).length} keys). Playlist title forced to "${displayName}".`)
+    if (snapshot.xt_playlists) {
+      try {
+        const parsed = JSON.parse(snapshot.xt_playlists)
+        const entries = Array.isArray(parsed?.entries) ? parsed.entries : []
+        for (const entry of entries) {
+          if (entry?.serverUrl && !process.env.XT_SERVER_URL) process.env.XT_SERVER_URL = entry.serverUrl
+          if (entry?.url && !process.env.XT_M3U_URL) process.env.XT_M3U_URL = entry.url
+          if (entry?.username && !process.env.XT_USERNAME) process.env.XT_USERNAME = entry.username
+          if (entry?.password && !process.env.XT_PASSWORD) process.env.XT_PASSWORD = entry.password
+        }
+      } catch {}
+    }
+  } else if (!seed) {
+    console.warn("No XT_* credentials, no .screenshot-state.json - screenshots will show the empty/login state.")
   }
 
+  const hasState = Boolean(snapshot || seed)
+  const welcomeRoutes = hasState ? WELCOME_ROUTES.filter((route) => !routeFilter || route === routeFilter) : []
+  const redactionsEnabled = args.redact !== "false" && process.env.XT_REDACT !== "false"
+  const redactions = redactionsEnabled ? buildRedactions() : []
+
   console.log(`Capturing ${devices.length} device(s) x ${routes.length} route(s) at ${baseUrl} (theme: ${theme})`)
+  if (welcomeRoutes.length > 0) {
+    console.log(`Plus welcome state for: ${welcomeRoutes.join(", ")} (saved with -welcome suffix)`)
+  }
+  if (redactions.length > 0) {
+    console.log(`Redacting ${redactions.length} secret(s) from each screenshot (host / username / password / playlist URL).`)
+  } else if (!redactionsEnabled) {
+    console.log("Redaction disabled (--redact=false or XT_REDACT=false).")
+  }
   const browser = await chromium.launch()
   try {
     for (const [name, viewport] of devices) {
       console.log(`> ${name} (${viewport.width}x${viewport.height})`)
-      await captureForDevice(browser, name, viewport, routes, baseUrl, seed, theme)
+      await captureForDevice(browser, name, viewport, routes, baseUrl, seed, theme, "", redactions, snapshot, displayName)
+      if (welcomeRoutes.length > 0) {
+        await captureForDevice(browser, name, viewport, welcomeRoutes, baseUrl, null, theme, "-welcome", redactions, null, displayName)
+      }
     }
   } finally {
     await browser.close()

@@ -1,25 +1,50 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/infinitel8p/xtream/refs/heads/main/src-tauri/icons/128x128@2x.png" alt="App Icon"/>
+  <img src="https://raw.githubusercontent.com/infinitel8p/xtream/refs/heads/main/src-tauri/icons/128x128@2x.png" alt="Extreme InfiniTV app icon - cross-platform IPTV player"/>
 </p>
 
 <h1 align="center">Extreme InfiniTV</h1>
 
+<p align="center"><strong>A cross-platform IPTV player for Xtream Codes and M3U / M3U8 playlists.</strong></p>
+
 <p align="center">
-  A IPTV player for Xtream Codes providers and plain M3U playlists.<br/>
-  Built once, ships as a Windows desktop app, a Microsoft Store package, and an Android phone / tablet / TV APK.
+  Live TV with EPG, movies, series, offline downloads, and TV-remote (D-pad) navigation.<br/>
+  Ships on Windows (Microsoft Store + installer), Android phone / tablet / TV (Google Play), macOS, Linux, and the web.
 </p>
 
 <p align="center">
   <a href="https://apps.microsoft.com/detail/9NN162Z0WXSR">
-    <img src="https://img.shields.io/badge/Microsoft%20Store-Download-0078D6?logo=microsoft&logoColor=white" height="50"/>
+    <img src="https://img.shields.io/badge/Microsoft%20Store-Download-0078D6?logo=microsoft&logoColor=white" height="50" alt="Get Extreme InfiniTV on the Microsoft Store"/>
   </a>
   <a href="https://play.google.com/store/apps/details?id=com.infinitel8p.xtream">
-    <img src="https://img.shields.io/badge/Google%20Play-Download-34A853?logo=google-play&logoColor=white" height="50"/>
+    <img src="https://img.shields.io/badge/Google%20Play-Download-34A853?logo=google-play&logoColor=white" height="50" alt="Get Extreme InfiniTV on Google Play"/>
   </a>
   <a href="https://github.com/infinitel8p/xtream/releases/latest">
-    <img src="https://img.shields.io/badge/GitHub-Releases-181717?logo=github&logoColor=white" height="50"/>
+    <img src="https://img.shields.io/badge/GitHub-Releases-181717?logo=github&logoColor=white" height="50" alt="Download Extreme InfiniTV from GitHub Releases"/>
   </a>
 </p>
+
+<p align="center">
+  <a href="https://github.com/infinitel8p/xtream/releases/latest"><img src="https://img.shields.io/github/v/release/infinitel8p/xtream?label=latest&color=a855f7" alt="Latest release"/></a>
+  <a href="https://github.com/infinitel8p/xtream/releases"><img src="https://img.shields.io/github/downloads/infinitel8p/xtream/total?color=a855f7" alt="GitHub downloads"/></a>
+  <a href="https://github.com/infinitel8p/xtream/stargazers"><img src="https://img.shields.io/github/stars/infinitel8p/xtream?color=a855f7" alt="GitHub stars"/></a>
+  <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-64748b" alt="Supported platforms: Windows, macOS, Linux, Android"/>
+</p>
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/Desktop/home.png" alt="Extreme InfiniTV home screen showing Live TV, Movies, and Series tiles with Continue Watching strip" width="780"/>
+</p>
+
+<details>
+<summary>More screenshots (Live TV, EPG, Movies, Series, Android TV, mobile)</summary>
+
+| | | |
+|---|---|---|
+| <img src="docs/screenshots/Desktop/livetv.png" alt="Live TV channel list with inline EPG showing now/next programmes"/> | <img src="docs/screenshots/Desktop/movies.png" alt="Movies poster grid with category filtering"/> | <img src="docs/screenshots/Desktop/series.png" alt="Series detail view with seasons and episodes"/> |
+| <img src="docs/screenshots/Desktop/epg.png" alt="Full XMLTV schedule grid for the EPG page"/> | <img src="docs/screenshots/Desktop/settings.png" alt="Settings page with playlists, display, network, and downloads"/> | <img src="docs/screenshots/Android-TV/home.png" alt="Extreme InfiniTV running on Android TV with D-pad focus"/> |
+
+</details>
 
 ## Features
 

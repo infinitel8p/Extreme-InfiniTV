@@ -1,0 +1,126 @@
+---
+interface SortOption {
+    value: string;
+    label: string;
+}
+
+interface Props {
+    id: string;
+    label?: string;
+    options: SortOption[];
+    defaultValue?: string;
+    widthClass?: string;
+}
+
+const {
+    id,
+    label = "Sort",
+    options,
+    defaultValue = options[0]?.value,
+    widthClass = "sm:w-44 w-full",
+} = Astro.props;
+
+const buttonId = `${id}-button`;
+const menuId = `${id}-menu`;
+const valueId = `${id}-value`;
+const initialLabel =
+    options.find((opt) => opt.value === defaultValue)?.label ??
+    options[0]?.label ??
+    "";
+---
+
+<div class:list={["sort-menu relative", widthClass]} data-sort-menu>
+    <select
+        id={id}
+        class="sr-only"
+        tabindex="-1"
+        aria-hidden="true"
+        data-sort-menu-select>
+        {
+            options.map((opt) => (
+                <option value={opt.value} selected={opt.value === defaultValue}>
+                    {opt.label}
+                </option>
+            ))
+        }
+    </select>
+
+    <button
+        id={buttonId}
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded="false"
+        aria-controls={menuId}
+        data-sort-menu-button
+        class="rounded-xl border border-line bg-surface px-3.5 py-2 min-h-11 text-sm w-full
+            flex items-center gap-2 text-left
+            hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+            aria-expanded:bg-surface-2 aria-expanded:border-accent
+            transition-colors">
+        <span class="text-fg-3 shrink-0">{label}</span>
+        <span
+            id={valueId}
+            class="text-fg truncate flex-1"
+            data-sort-menu-value>{initialLabel}</span>
+        <svg
+            aria-hidden="true"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="text-fg-3 shrink-0 sort-menu__chevron">
+            <path d="M6 9l6 6 6-6"></path>
+        </svg>
+    </button>
+
+    <div
+        id={menuId}
+        role="listbox"
+        aria-labelledby={buttonId}
+        data-sort-menu-panel
+        hidden
+        class="sort-menu__panel absolute right-0 left-0 top-full mt-2 z-40
+            rounded-xl border border-line bg-surface
+            p-1 origin-top">
+        {
+            options.map((opt) => (
+                <button
+                    type="button"
+                    role="option"
+                    data-value={opt.value}
+                    aria-selected={
+                        opt.value === defaultValue ? "true" : "false"
+                    }
+                    class="sort-menu__option w-full text-left rounded-lg px-3 py-2 text-sm
+                        flex items-center justify-between gap-3
+                        text-fg-2 hover:text-fg hover:bg-surface-2
+                        focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:outline-none
+                        aria-selected:text-fg aria-selected:bg-accent-soft
+                        transition-colors">
+                        <span class="truncate">{opt.label}</span>
+                        <svg
+                            aria-hidden="true"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="text-accent shrink-0 sort-menu__check">
+                            <path d="M5 12l5 5L20 7" />
+                        </svg>
+                </button>
+            ))
+        }
+    </div>
+</div>
+
+<script>
+    import "@/scripts/lib/sort-menu.js";
+</script>

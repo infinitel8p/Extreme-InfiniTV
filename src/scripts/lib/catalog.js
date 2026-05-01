@@ -94,7 +94,7 @@ function parseM3U(text) {
   return out
 }
 
-export async function ensureLive(creds, playlistId) {
+export async function ensureLive(creds, playlistId, opts = {}) {
   const isM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
   const kind = isM3U ? "m3u" : "live"
   const { data } = await cachedFetch(playlistId, kind, CHANNELS_TTL_MS, async () => {
@@ -147,7 +147,7 @@ export async function ensureLive(creds, playlistId) {
       .sort((a, b) =>
         a.name.localeCompare(b.name, "en", { sensitivity: "base" })
       )
-  })
+  }, { force: !!opts.force })
   return data || []
 }
 
@@ -169,7 +169,7 @@ async function fetchVodCategoryMap(creds) {
   )
 }
 
-export async function ensureVod(creds, playlistId) {
+export async function ensureVod(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
   const { data } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, async () => {
     const catMap = await fetchVodCategoryMap(creds)
@@ -215,7 +215,7 @@ export async function ensureVod(creds, playlistId) {
       .sort((a, b) =>
         a.name.localeCompare(b.name, "en", { sensitivity: "base" })
       )
-  })
+  }, { force: !!opts.force })
   return data || []
 }
 
@@ -237,7 +237,7 @@ async function fetchSeriesCategoryMap(creds) {
   )
 }
 
-export async function ensureSeries(creds, playlistId) {
+export async function ensureSeries(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
   const { data } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, async () => {
     const catMap = await fetchSeriesCategoryMap(creds)
@@ -287,13 +287,13 @@ export async function ensureSeries(creds, playlistId) {
       .sort((a, b) =>
         a.name.localeCompare(b.name, "en", { sensitivity: "base" })
       )
-  })
+  }, { force: !!opts.force })
   return data || []
 }
 
 const inflight = new Map()
 
-export async function warmupActive(playlistId) {
+export async function warmupActive(playlistId, opts = {}) {
   let creds
   let pid = playlistId
   try {
@@ -313,7 +313,9 @@ export async function warmupActive(playlistId) {
     return { live: [], vod: [], series: [], errors: { playlist: "no active" } }
   }
 
-  if (inflight.has(pid)) return inflight.get(pid)
+  // Don't dedupe forced refreshes; the user just hit "refresh" expecting
+  // a fresh round-trip even if a background warmup is mid-flight.
+  if (!opts.force && inflight.has(pid)) return inflight.get(pid)
 
   const run = (async () => {
     const errors = {}
@@ -339,10 +341,11 @@ export async function warmupActive(playlistId) {
           })
           return []
         })
+    const force = !!opts.force
     const [live, vod, series] = await Promise.all([
-      wrap("live", () => ensureLive(creds, pid)),
-      wrap("vod", () => ensureVod(creds, pid)),
-      wrap("series", () => ensureSeries(creds, pid)),
+      wrap("live", () => ensureLive(creds, pid, { force })),
+      wrap("vod", () => ensureVod(creds, pid, { force })),
+      wrap("series", () => ensureSeries(creds, pid, { force })),
     ])
     dispatch(EVT_WARMED, { playlistId: pid, errors })
     return { live, vod, series, errors }

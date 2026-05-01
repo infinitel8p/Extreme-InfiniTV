@@ -14,6 +14,8 @@ const EVT_FAV_CHANGED = "xt:favorites-changed"
 const EVT_REC_CHANGED = "xt:recents-changed"
 const EVT_PROGRESS_CHANGED = "xt:progress-changed"
 const EVT_HIDDEN_CHANGED = "xt:hidden-categories-changed"
+const EVT_ALLOWED_CHANGED = "xt:allowed-categories-changed"
+const EVT_CAT_MODE_CHANGED = "xt:category-mode-changed"
 const EVT_VIEW_CHANGED = "xt:view-prefs-changed"
 const EVT_FAV_ORDER_CHANGED = "xt:favorites-order-changed"
 
@@ -110,6 +112,12 @@ function emptyEntry() {
     hiddenLive: new Set(),
     hiddenVod: new Set(),
     hiddenSeries: new Set(),
+    allowedLive: new Set(),
+    allowedVod: new Set(),
+    allowedSeries: new Set(),
+    catModeLive: "hide",
+    catModeVod: "hide",
+    catModeSeries: "hide",
     favOrderLive: [],
     favOrderVod: [],
     favOrderSeries: [],
@@ -161,6 +169,18 @@ function hydrate(raw) {
       hiddenSeries: new Set(
         Array.isArray(val.hiddenSeries) ? val.hiddenSeries.map(String) : []
       ),
+      allowedLive: new Set(
+        Array.isArray(val.allowedLive) ? val.allowedLive.map(String) : []
+      ),
+      allowedVod: new Set(
+        Array.isArray(val.allowedVod) ? val.allowedVod.map(String) : []
+      ),
+      allowedSeries: new Set(
+        Array.isArray(val.allowedSeries) ? val.allowedSeries.map(String) : []
+      ),
+      catModeLive: val.catModeLive === "select" ? "select" : "hide",
+      catModeVod: val.catModeVod === "select" ? "select" : "hide",
+      catModeSeries: val.catModeSeries === "select" ? "select" : "hide",
       favOrderLive: Array.isArray(val.favOrderLive)
         ? val.favOrderLive.map(Number).filter(Number.isFinite)
         : [],
@@ -198,6 +218,12 @@ function dehydrate() {
       hiddenLive: [...v.hiddenLive],
       hiddenVod: [...v.hiddenVod],
       hiddenSeries: [...v.hiddenSeries],
+      allowedLive: [...v.allowedLive],
+      allowedVod: [...v.allowedVod],
+      allowedSeries: [...v.allowedSeries],
+      catModeLive: v.catModeLive,
+      catModeVod: v.catModeVod,
+      catModeSeries: v.catModeSeries,
       favOrderLive: v.favOrderLive.slice(),
       favOrderVod: v.favOrderVod.slice(),
       favOrderSeries: v.favOrderSeries.slice(),
@@ -364,6 +390,23 @@ export function pushRecent(playlistId, kind, id, name, logo = null) {
     list.unshift({ id, name: name || "", logo: logo || null, ts: Date.now() })
     if (list.length > RECENT_CAP) list.length = RECENT_CAP
   }
+  scheduleSave()
+  dispatch(EVT_REC_CHANGED, { playlistId, kind })
+}
+
+/**
+ * Remove one entry from the recents list (e.g. dismissing a live channel from
+ * the hub strip). No-op if there's nothing to clear.
+ * @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {number} id
+ */
+export function clearRecent(playlistId, kind, id) {
+  if (!playlistId || id == null) return
+  const entry = cache.get(playlistId)
+  if (!entry) return
+  const list = entry[recKey(kind)]
+  const idx = list.findIndex((row) => row.id === id)
+  if (idx === -1) return
+  list.splice(idx, 1)
   scheduleSave()
   dispatch(EVT_REC_CHANGED, { playlistId, kind })
 }
@@ -618,6 +661,93 @@ export function filterVisibleCategories(playlistId, kind, categories) {
   return categories.filter(
     (c) => !set.has(String(c.category_id ?? c.id ?? ""))
   )
+}
+
+// ---------------------------------------------------------------------------
+// Allowed categories (allowlist mode) + category filter mode
+// ---------------------------------------------------------------------------
+/** @param {"live"|"vod"|"series"} kind */
+function allowedKey(kind) {
+  if (kind === "vod") return "allowedVod"
+  if (kind === "series") return "allowedSeries"
+  return "allowedLive"
+}
+
+/** @param {"live"|"vod"|"series"} kind */
+function catModeKey(kind) {
+  if (kind === "vod") return "catModeVod"
+  if (kind === "series") return "catModeSeries"
+  return "catModeLive"
+}
+
+/** @param {string} playlistId @param {"live"|"vod"|"series"} kind */
+export function getAllowedCategories(playlistId, kind) {
+  const entry = cache.get(playlistId)
+  return entry ? entry[allowedKey(kind)] : new Set()
+}
+
+/** @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {string|number} categoryId */
+export function isCategoryAllowed(playlistId, kind, categoryId) {
+  if (categoryId == null) return false
+  const entry = cache.get(playlistId)
+  return !!entry && entry[allowedKey(kind)].has(String(categoryId))
+}
+
+/**
+ * @param {string} playlistId
+ * @param {"live"|"vod"|"series"} kind
+ * @param {string|number} categoryId
+ * @param {boolean} allowed
+ */
+export function setCategoryAllowed(playlistId, kind, categoryId, allowed) {
+  if (!playlistId || categoryId == null) return
+  const entry = getOrCreate(playlistId)
+  const set = entry[allowedKey(kind)]
+  const id = String(categoryId)
+  const had = set.has(id)
+  if (allowed && !had) set.add(id)
+  else if (!allowed && had) set.delete(id)
+  else return
+  scheduleSave()
+  dispatch(EVT_ALLOWED_CHANGED, { playlistId, kind, categoryId: id, allowed })
+}
+
+/**
+ * Replace the entire allowed set for a kind. Useful for "select all visible"
+ * in the picker.
+ * @param {string} playlistId
+ * @param {"live"|"vod"|"series"} kind
+ * @param {Iterable<string|number>} categoryIds
+ */
+export function setAllowedCategories(playlistId, kind, categoryIds) {
+  if (!playlistId) return
+  const entry = getOrCreate(playlistId)
+  const next = new Set()
+  for (const id of categoryIds || []) {
+    if (id == null) continue
+    next.add(String(id))
+  }
+  entry[allowedKey(kind)] = next
+  scheduleSave()
+  dispatch(EVT_ALLOWED_CHANGED, { playlistId, kind })
+}
+
+/** @param {string} playlistId @param {"live"|"vod"|"series"} kind */
+export function getCategoryMode(playlistId, kind) {
+  const entry = cache.get(playlistId)
+  if (!entry) return "hide"
+  return entry[catModeKey(kind)] === "select" ? "select" : "hide"
+}
+
+/** @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {"hide"|"select"} mode */
+export function setCategoryMode(playlistId, kind, mode) {
+  if (!playlistId) return
+  const next = mode === "select" ? "select" : "hide"
+  const entry = getOrCreate(playlistId)
+  if (entry[catModeKey(kind)] === next) return
+  entry[catModeKey(kind)] = next
+  scheduleSave()
+  dispatch(EVT_CAT_MODE_CHANGED, { playlistId, kind, mode: next })
 }
 
 // ---------------------------------------------------------------------------
