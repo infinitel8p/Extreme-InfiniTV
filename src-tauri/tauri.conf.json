@@ -19,7 +19,8 @@
         "resizable": true,
         "fullscreen": false,
         "center": true,
-        "focus": true
+        "focus": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {
