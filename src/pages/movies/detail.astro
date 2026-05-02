@@ -7,6 +7,7 @@ import {
   IconRotate,
   IconBookmark,
   IconBrandYoutube,
+  IconPictureInPicture,
 } from "@tabler/icons-svelte"
 ---
 
@@ -110,6 +111,18 @@ import {
                    active:scale-[0.97] transition duration-150">
             <IconBookmark aria-hidden="true" stroke={2} class="size-5" />
             <span id="movie-detail-watch-label">Watch later</span>
+          </button>
+          <button
+            id="movie-detail-pip"
+            type="button"
+            hidden
+            aria-label="Picture-in-Picture"
+            data-i18n-attr="aria-label:detail.action.pip"
+            class="flex items-center justify-center gap-2 rounded-xl border border-line px-6 py-3 text-base min-w-44 text-fg-2
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   active:scale-[0.97] transition duration-150">
+            <IconPictureInPicture aria-hidden="true" stroke={2} class="size-5" />
+            <span data-i18n="detail.action.pip">Picture-in-Picture</span>
           </button>
           <button
             id="movie-detail-trailer"

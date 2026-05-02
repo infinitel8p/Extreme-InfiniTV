@@ -248,6 +248,7 @@
   "detail.action.watchLater": "Watch later",
   "detail.action.removeWatchlist": "Remove from watch later",
   "detail.action.trailer": "Trailer",
+  "detail.action.pip": "Picture-in-Picture",
   "detail.action.download": "Download",
   "detail.action.downloading": "Downloading…",
   "detail.action.downloaded": "Downloaded",

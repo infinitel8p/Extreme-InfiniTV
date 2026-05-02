@@ -32,6 +32,7 @@ import { toast } from "@/scripts/lib/toast.js"
 import { ICON_X } from "@/scripts/lib/icons.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
+import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import {
   loadProgrammes,
@@ -1727,47 +1728,7 @@ async function play(streamId, name) {
   btn.className = "min-h-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2"
   btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M19 4a3 3 0 0 1 3 3v4a1 1 0 0 1 -2 0v-4a1 1 0 0 0 -1 -1h-14a1 1 0 0 0 -1 1v10a1 1 0 0 0 1 1h6a1 1 0 0 1 0 2h-6a3 3 0 0 1 -3 -3v-10a3 3 0 0 1 3 -3z"/><path d="M20 13a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-5a2 2 0 0 1 -2 -2v-3a2 2 0 0 1 2 -2z"/></svg>`
   currentEl.appendChild(btn)
-  btn.addEventListener("click", async () => {
-    const videoEl = /** @type {HTMLVideoElement|null} */ (
-      player.el().querySelector("video")
-    )
-    if (window.AndroidPip?.toggle) {
-      if (window.AndroidPip.isInPip?.()) {
-        window.AndroidPip.toggle()
-        return
-      }
-      // Fullscreen the Video.js wrapper, not the bare <video> tag: only
-      // wrapper-element fullscreen reliably triggers Android WebView's
-      // WebChromeClient.onShowCustomView, which is what swaps in the
-      // immersive video surface. With that surface active, the activity
-      // PiP captures only the video instead of the whole page chrome.
-      // Fire-and-forget (no await) so the user gesture stays alive for
-      // the AndroidPip.toggle() call, and a 2-RAF wait lets the WebView
-      // install the custom view before we go to PiP.
-      if (!document.fullscreenElement) {
-        try { player.requestFullscreen() } catch {}
-        await new Promise((r) =>
-          requestAnimationFrame(() => requestAnimationFrame(r))
-        )
-      }
-      window.AndroidPip.toggle()
-      return
-    }
-    if (
-      videoEl &&
-      document.pictureInPictureEnabled &&
-      !videoEl.disablePictureInPicture
-    ) {
-      try {
-        if (document.pictureInPictureElement === videoEl) {
-          await document.exitPictureInPicture()
-        } else {
-          if (videoEl.readyState < 2) await videoEl.play().catch(() => {})
-          await videoEl.requestPictureInPicture()
-        }
-      } catch {}
-    }
-  })
+  btn.addEventListener("click", () => togglePip(player))
 }
 
 // ----------------------------

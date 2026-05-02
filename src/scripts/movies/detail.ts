@@ -41,6 +41,7 @@ import {
   chooseMime,
 } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
+import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
@@ -264,9 +265,23 @@ function syncResumeUI() {
 // ----------------------------
 let vjs = null
 let progressListenersBound = false
+let pipBtnBound = false
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
+
+function setupPipButton(player) {
+  const pipBtn = document.getElementById("movie-detail-pip")
+  if (!pipBtn) return
+  const supported =
+    !!window.AndroidPip ||
+    (document.pictureInPictureEnabled === true)
+  if (!supported) return
+  pipBtn.removeAttribute("hidden")
+  if (pipBtnBound) return
+  pipBtnBound = true
+  pipBtn.addEventListener("click", () => togglePip(player))
+}
 
 async function ensurePlayer() {
   if (vjs) return vjs
@@ -327,6 +342,7 @@ async function startPlayback() {
   videoEl?.removeAttribute("hidden")
 
   const player = await ensurePlayer()
+  setupPipButton(player)
   const localSrc = await getLocalPlayableSrc(detailSrc)
   const playSrc = localSrc || detailSrc
   const mime = chooseMime(detailSrc)

@@ -44,6 +44,7 @@ import {
   chooseMime,
 } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
+import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
@@ -562,9 +563,23 @@ function escapeRatingText(text) {
 let vjs = null
 let progressListenersBound = false
 let currentEpisode = null
+let pipBtnBound = false
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
+
+function setupPipButton(player) {
+  const pipBtn = document.getElementById("series-detail-pip")
+  if (!pipBtn) return
+  const supported =
+    !!window.AndroidPip ||
+    (document.pictureInPictureEnabled === true)
+  if (!supported) return
+  pipBtn.removeAttribute("hidden")
+  if (pipBtnBound) return
+  pipBtnBound = true
+  pipBtn.addEventListener("click", () => togglePip(player))
+}
 
 function progressExtrasFor(ep) {
   return {
@@ -656,6 +671,7 @@ async function playEpisode(episode) {
   videoEl?.removeAttribute("hidden")
 
   const player = await ensurePlayer()
+  setupPipButton(player)
   const localSrc = await getLocalPlayableSrc(src)
   const playSrc = localSrc || src
   const mime = chooseMime(src)
