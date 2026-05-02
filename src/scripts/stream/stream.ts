@@ -33,6 +33,8 @@ import { ICON_X } from "@/scripts/lib/icons.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
+import { parseM3U as parseSharedM3U } from "@/scripts/lib/m3u-parser.ts"
+import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import {
   loadProgrammes,
@@ -79,90 +81,49 @@ function buildDirectM3U8(id) {
 // M3U support
 // ----------------------------
 let directUrlById = new Map()
+let streamHeadersById = new Map()
 export let m3uEpgUrl = ""
 
 function parseM3U(text) {
-  /** @type {Array<{ id:number, name:string, tvgId?:string, chno?:number, category?:string, logo?:string|null, url:string, norm:string }>} */
+  /** @type {Array<{ id:number, name:string, tvgId?:string, chno?:number, category?:string, logo?:string|null, url:string, norm:string, userAgent?:string|null, referer?:string|null }>} */
   const out = []
-  const lines = text.split(/\r?\n/)
-  let pending = null
-  m3uEpgUrl = ""
-
-  const readAttr = (s, key) =>
-    s.match(new RegExp(`\\b${key}="([^"]*)"`, "i"))?.[1] ||
-    s.match(new RegExp(`\\b${key}=([^\\s,]+)`, "i"))?.[1] ||
-    ""
-
-  const stripAttrs = (s) =>
-    s
-      .replace(/\b[\w-]+="[^"]*"/g, "")
-      .replace(/\b(tvg-[\w-]+|group-title|channel-id|channel-number)=[^\s,]+/gi, "")
-      .replace(/\s{2,}/g, " ")
-      .trim()
-
+  const { entries, epgUrl } = parseSharedM3U(text)
+  m3uEpgUrl = epgUrl || ""
+  const fallbackCategory = t("stream.uncategorized") || "Uncategorized"
   let idSeq = 1
-  for (let raw of lines) {
-    const line = raw.trim()
-    if (!line) continue
-
-    if (line.startsWith("#EXTM3U")) {
-      // Header: `#EXTM3U x-tvg-url="https://provider/epg.xml.gz"` or `tvg-url="…"`.
-      const url =
-        readAttr(line, "x-tvg-url") ||
-        readAttr(line, "tvg-url") ||
-        readAttr(line, "url-tvg")
-      if (url) m3uEpgUrl = url
-      continue
-    }
-
-    if (line.startsWith("#EXTINF")) {
-      const commaIdx = line.indexOf(",")
-      const afterComma = commaIdx >= 0 ? line.slice(commaIdx + 1) : ""
-
-      let name = stripAttrs(afterComma) || `Channel ${idSeq}`
-      const logo = readAttr(line, "tvg-logo")
-      const group = readAttr(line, "group-title") || t("stream.uncategorized")
-      const tvgId = readAttr(line, "tvg-id") || readAttr(line, "channel-id")
-      const chnoStr =
-        readAttr(line, "tvg-chno") || readAttr(line, "channel-number")
-      const chno = chnoStr ? Number(chnoStr) : undefined
-      pending = {
-        name,
-        logo,
-        category: group,
-        tvgId: tvgId || "",
-        chno: Number.isFinite(chno) ? chno : undefined,
-      }
-      continue
-    }
-
-    if (line.startsWith("#")) continue
-
-    if (pending) {
-      const url = safeHttpUrl(line)
-      if (url) {
-        out.push({
-          id: idSeq++,
-          name: pending.name,
-          category: pending.category,
-          logo: pending.logo || null,
-          tvgId: pending.tvgId || undefined,
-          chno: pending.chno,
-          norm: normalize(
-            `${pending.name} ${pending.category} ${pending.tvgId || ""}`
-          ),
-          url,
-        })
-      }
-      pending = null
-    }
+  for (const entry of entries) {
+    const url = safeHttpUrl(entry.url)
+    if (!url) continue
+    if (!entry.name) continue
+    const category = entry.category || fallbackCategory
+    out.push({
+      id: idSeq++,
+      name: entry.name,
+      category,
+      logo: entry.logo,
+      tvgId: entry.tvgId || undefined,
+      chno: entry.chno ?? undefined,
+      norm: normalize(`${entry.name} ${category} ${entry.tvgId || ""}`),
+      url,
+      userAgent: entry.userAgent,
+      referer: entry.referer,
+    })
   }
   return out
 }
 
 const indexDirectUrls = (items) => {
   directUrlById = new Map()
-  for (const ch of items) if (ch.url) directUrlById.set(ch.id, ch.url)
+  streamHeadersById = new Map()
+  for (const channel of items) {
+    if (channel.url) directUrlById.set(channel.id, channel.url)
+    if (channel.userAgent || channel.referer) {
+      streamHeadersById.set(channel.id, {
+        userAgent: channel.userAgent || null,
+        referer: channel.referer || null,
+      })
+    }
+  }
 }
 const hasDirectUrl = (id) => directUrlById.has(id)
 const getDirectUrl = (id) => directUrlById.get(id) || ""
@@ -1711,6 +1672,7 @@ async function play(streamId, name) {
 
   document.getElementById("player")?.removeAttribute("hidden")
   const player = await ensurePlayer()
+  await applyStreamHeaders(streamHeadersById.get(streamId) || null)
   player.src({ src, type: "application/x-mpegURL" })
   player.play().catch(() => {})
 

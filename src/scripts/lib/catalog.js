@@ -9,6 +9,8 @@ import {
 import { normalize } from "@/scripts/lib/text.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
+import { parseM3U } from "@/scripts/lib/m3u-parser.ts"
+import { t } from "@/scripts/lib/i18n.js"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 const VOD_TTL_MS = 24 * 60 * 60 * 1000
@@ -42,55 +44,23 @@ async function fetchLiveCategoryMap(creds) {
   )
 }
 
-function parseM3U(text) {
+function m3uToChannelList(text) {
+  const { entries } = parseM3U(text)
+  const fallbackCategory = t("stream.uncategorized") || "Uncategorized"
   const out = []
-  const lines = text.split(/\r?\n/)
-  let pending = null
-  const readAttr = (s, key) =>
-    s.match(new RegExp(`\\b${key}="([^"]*)"`, "i"))?.[1] ||
-    s.match(new RegExp(`\\b${key}=([^\\s,]+)`, "i"))?.[1] ||
-    ""
-  const stripAttrs = (s) =>
-    s
-      .replace(/\b[\w-]+="[^"]*"/g, "")
-      .replace(/\b(tvg-[\w-]+|group-title|channel-id|channel-number)=[^\s,]+/gi, "")
-      .replace(/\s{2,}/g, " ")
-      .trim()
   let idSeq = 1
-  for (const raw of lines) {
-    const line = raw.trim()
-    if (!line) continue
-    if (line.startsWith("#EXTM3U")) continue
-    if (line.startsWith("#EXTINF")) {
-      const commaIdx = line.indexOf(",")
-      const afterComma = commaIdx >= 0 ? line.slice(commaIdx + 1) : ""
-      const name = stripAttrs(afterComma) || `Channel ${idSeq}`
-      const logo = readAttr(line, "tvg-logo")
-      const group = readAttr(line, "group-title") || "Uncategorized"
-      const tvgId = readAttr(line, "tvg-id") || readAttr(line, "channel-id")
-      pending = {
-        name,
-        logo,
-        category: group,
-        tvgId: tvgId || "",
-      }
-      continue
-    }
-    if (line.startsWith("#")) continue
-    if (pending) {
-      out.push({
-        id: idSeq++,
-        name: pending.name,
-        category: pending.category,
-        logo: pending.logo || null,
-        tvgId: pending.tvgId || undefined,
-        norm: normalize(
-          `${pending.name} ${pending.category} ${pending.tvgId || ""}`
-        ),
-        url: line,
-      })
-      pending = null
-    }
+  for (const entry of entries) {
+    if (!entry.url || !entry.name) continue
+    const category = entry.category || fallbackCategory
+    out.push({
+      id: idSeq++,
+      name: entry.name,
+      category,
+      logo: entry.logo,
+      tvgId: entry.tvgId || undefined,
+      norm: normalize(`${entry.name} ${category} ${entry.tvgId || ""}`),
+      url: entry.url,
+    })
   }
   return out
 }
@@ -103,11 +73,9 @@ export async function ensureLive(creds, playlistId, opts = {}) {
       const r = await providerFetch(creds.host)
       if (!r.ok) throw new Error(`M3U ${r.status}`)
       const text = await r.text()
-      return parseM3U(text)
-        .filter((x) => x.url && x.name)
-        .sort((a, b) =>
-          a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-        )
+      return m3uToChannelList(text).sort((a, b) =>
+        a.name.localeCompare(b.name, "en", { sensitivity: "base" })
+      )
     }
     const catMap = await fetchLiveCategoryMap(creds)
     const r = await providerFetch(buildApiUrl(creds, "get_live_streams"))

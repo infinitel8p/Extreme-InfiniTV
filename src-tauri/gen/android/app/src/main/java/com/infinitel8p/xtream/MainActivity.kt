@@ -28,6 +28,20 @@ class StatusBarBridge(private val activity: TauriActivity) {
   }
 }
 
+class WebSettingsBridge(
+  private val activity: TauriActivity,
+  private val webViewRef: () -> WebView?,
+  private val defaultUa: String,
+) {
+  @JavascriptInterface
+  fun setUserAgent(ua: String?) {
+    val target = if (ua.isNullOrEmpty()) defaultUa else ua
+    activity.runOnUiThread {
+      webViewRef()?.settings?.userAgentString = target
+    }
+  }
+}
+
 class PipBridge(private val activity: TauriActivity) {
   @JavascriptInterface
   fun isSupported(): Boolean =
@@ -103,6 +117,10 @@ class MainActivity : TauriActivity() {
 
     webView.addJavascriptInterface(PipBridge(this), "AndroidPip")
     webView.addJavascriptInterface(StatusBarBridge(this), "AndroidStatusBar")
+    webView.addJavascriptInterface(
+      WebSettingsBridge(this, { hostedWebView }, webView.settings.userAgentString),
+      "AndroidWebSettings"
+    )
     WebView.setWebContentsDebuggingEnabled(true)
 
     webView.settings.javaScriptEnabled = true

@@ -1,0 +1,5 @@
+#EXTM3U
+#EXTINF:0,tvg-id="alt.one" tvg-logo="https://example.com/a.png",Alt Order Channel
+http://example.com/a.m3u8
+#EXTINF:-1 tvg-id="alt.two" group-title="Mixed",Standard Order
+http://example.com/b.m3u8

@@ -11,6 +11,8 @@
     "tauri": "tauri",
     "tauri:android": "tauri android",
     "tauri:android:build": "tauri android build",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "screenshots": "node ./src/scripts/capture-screenshots.mjs",
     "msix": "node ./buildfiles/make-msix-template.mjs",
     "sync-version": "node ./buildfiles/sync-version.mjs"
@@ -39,9 +41,11 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.1",
+    "@vitest/expect": "^4.1.5",
     "magic-string": "^0.30.21",
     "playwright": "^1.59.1",
     "tiny-glob": "^0.2.9",
-    "vite": "^7.3.2"
+    "vite": "^7.3.2",
+    "vitest": "^4.1.5"
   }
 }

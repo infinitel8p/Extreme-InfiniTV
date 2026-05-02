@@ -1,0 +1,8 @@
+#EXTM3U
+#EXT-X-VERSION:3
+#EXTINF:-1 tvg-id="mix" group-title="Mix",HLS-flavored
+#EXT-X-STREAM-INF:BANDWIDTH=2560000,RESOLUTION=1280x720
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="English",DEFAULT=YES
+http://example.com/master.m3u8
+#EXTINF:-1 tvg-id="next" group-title="Mix",Plain Channel
+http://example.com/plain.m3u8
