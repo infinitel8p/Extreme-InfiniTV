@@ -1856,3 +1856,121 @@ dialog[open]::backdrop {
         transform: translateY(0) scaleY(1);
     }
 }
+
+details[open] > summary .changelog-chevron {
+    transform: rotate(180deg);
+}
+
+.changelog-md {
+    overflow-wrap: break-word;
+    word-break: break-word;
+}
+.changelog-md h1,
+.changelog-md h2,
+.changelog-md h3,
+.changelog-md h4,
+.changelog-md h5,
+.changelog-md h6 {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--color-fg);
+    margin-top: 1rem;
+    line-height: 1.35;
+}
+.changelog-md h1 { font-size: 1.0625rem; }
+.changelog-md > :first-child {
+    margin-top: 0;
+}
+.changelog-md p {
+    margin: 0.5rem 0;
+    line-height: 1.55;
+}
+.changelog-md p[align="center"] {
+    text-align: center;
+}
+.changelog-md ul,
+.changelog-md ol {
+    margin: 0.4rem 0 0.6rem 1.1rem;
+    display: block;
+}
+.changelog-md ul { list-style: disc; }
+.changelog-md ol { list-style: decimal; }
+.changelog-md li {
+    margin: 0.2rem 0;
+    display: list-item;
+    line-height: 1.5;
+}
+.changelog-md li > p { margin: 0.2rem 0; }
+.changelog-md strong { color: var(--color-fg); font-weight: 600; }
+.changelog-md em { font-style: italic; }
+.changelog-md code {
+    background: var(--color-surface-2);
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.25rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.8125rem;
+}
+.changelog-md pre {
+    background: var(--color-surface-2);
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+}
+.changelog-md pre code {
+    background: transparent;
+    padding: 0;
+}
+.changelog-md a {
+    color: var(--color-accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.changelog-md a:hover { text-decoration-thickness: 2px; }
+.changelog-md img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 0.5rem;
+}
+.changelog-md p[align="center"] img {
+    display: inline-block;
+    max-height: 6rem;
+    margin: 0 auto;
+}
+.changelog-md blockquote {
+    border-left: 2px solid var(--color-line);
+    padding-left: 0.75rem;
+    color: var(--color-fg-2);
+    margin: 0.5rem 0;
+}
+.changelog-md table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.5rem 0;
+    font-size: 0.8125rem;
+}
+.changelog-md th,
+.changelog-md td {
+    border: 1px solid var(--color-line);
+    padding: 0.3rem 0.5rem;
+    text-align: left;
+}
+.changelog-md hr {
+    border: 0;
+    border-top: 1px solid var(--color-line);
+    margin: 0.75rem 0;
+}
+.changelog-md details {
+    margin: 0.5rem 0;
+    border: 1px solid var(--color-line);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--color-bg);
+}
+.changelog-md summary {
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--color-fg);
+}

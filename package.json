@@ -33,6 +33,7 @@
     "@tauri-apps/plugin-store": "^2.4.2",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "astro": "^6.2.0",
+    "marked": "^18.0.3",
     "svelte": "^5.55.5",
     "tailwindcss": "^4.2.4",
     "tauri-plugin-android-fs-api": "28.1.0",

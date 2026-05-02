@@ -16,6 +16,7 @@ import {
   IconBrandPaypal,
   IconBug,
   IconMail,
+  IconChevronDown,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -515,7 +516,34 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
         </div>
 
         <p id="update-notes" class="hidden text-xs text-fg-3 whitespace-pre-line border-t border-line/60 pt-4 -mt-1"></p>
+
+        <p
+          id="linux-appimage-notice"
+          hidden
+          data-i18n="settings.about.linuxAppImageNotice"
+          class="text-xs text-fg-3 leading-relaxed border-t border-line/60 pt-3 -mt-1">
+          Auto-updates on Linux are only delivered to the AppImage build. For deb / rpm installs, grab new versions from the GitHub releases page above.
+        </p>
       </article>
+
+      <details
+        id="changelog-section"
+        class="changelog-outer rounded-2xl border border-line bg-surface overflow-hidden">
+        <summary class="px-5 sm:px-6 py-4 cursor-pointer flex items-center justify-between gap-3 hover:bg-surface-2 transition-colors list-none">
+          <div class="flex items-center gap-3 min-w-0">
+            <h3 data-i18n="settings.about.whatsNew" class="text-base font-semibold">What's new</h3>
+            <span
+              id="changelog-status"
+              data-i18n="settings.about.whatsNewLoading"
+              class="text-xs text-fg-3 empty:hidden">Loading…</span>
+          </div>
+          <IconChevronDown
+            aria-hidden="true"
+            stroke={1.75}
+            class="size-4 text-fg-3 shrink-0 changelog-chevron transition-transform duration-200" />
+        </summary>
+        <div id="changelog-body" class="flex flex-col gap-2 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60 empty:hidden"></div>
+      </details>
 
       <span id="app-version" class="hidden"></span>
     </section>
@@ -698,6 +726,7 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
       getPlaylistListEmptyCopy,
     } from "@/scripts/lib/playlist-rows.js"
     import { injectVersion } from "@/scripts/version.js"
+    import { fetchReleases, renderMarkdown } from "@/scripts/lib/changelog.ts"
     import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
     import {
       UA_PRESETS,
@@ -734,6 +763,103 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
     } from "@/scripts/lib/epg-data.js"
 
     injectVersion()
+
+    // Linux notice: surface that auto-updates only land on the AppImage
+    // build. Shown on any Tauri Linux session - AppImage users will see
+    // the line as a confirmation, deb / rpm users as guidance.
+    try {
+      const ua = navigator.userAgent || ""
+      const isTauriRuntime =
+        !!window.__TAURI_INTERNALS__ || !!window.__TAURI__
+      const isLinux = ua.includes("Linux") && !ua.includes("Android")
+      if (isTauriRuntime && isLinux) {
+        document.getElementById("linux-appimage-notice")?.removeAttribute("hidden")
+      }
+    } catch {}
+
+    // -------------------------------------------------------------------
+    // What's new: lazy-fetch GitHub releases, render the latest 10 with
+    // tag + date, latest expanded by default, others collapsed.
+    // -------------------------------------------------------------------
+    function loadChangelog() {
+      const body = document.getElementById("changelog-body")
+      const status = document.getElementById("changelog-status")
+      if (!body) return
+      fetchReleases(undefined, 3)
+        .then((releases) => {
+          if (!releases.length) {
+            if (status) {
+              status.textContent = t("settings.about.whatsNewEmpty")
+              status.removeAttribute("data-i18n")
+            }
+            return
+          }
+          if (status) {
+            status.textContent = ""
+            status.removeAttribute("data-i18n")
+          }
+          body.replaceChildren()
+          const chevronSvg =
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="size-4 shrink-0 changelog-chevron transition-transform duration-200"><path d="M6 9l6 6 6-6"/></svg>'
+          for (const release of releases) {
+            const details = document.createElement("details")
+            details.className =
+              "changelog-entry border border-line/60 rounded-xl bg-bg overflow-hidden"
+
+            const summary = document.createElement("summary")
+            summary.className =
+              "px-4 py-3 cursor-pointer flex items-center gap-3 hover:bg-surface-2 transition-colors list-none"
+
+            const left = document.createElement("div")
+            left.className = "flex items-center gap-3 flex-1 min-w-0"
+
+            const tag = document.createElement("span")
+            tag.className = "font-medium text-sm tabular-nums truncate"
+            tag.textContent = release.name || release.tagName
+            left.appendChild(tag)
+
+            if (release.publishedAt) {
+              const date = document.createElement("time")
+              date.className = "text-xs text-fg-3 shrink-0 tabular-nums"
+              date.dateTime = release.publishedAt
+              const parsed = new Date(release.publishedAt)
+              date.textContent = parsed.toLocaleDateString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+              })
+              left.appendChild(date)
+            }
+
+            summary.appendChild(left)
+            const chevronWrap = document.createElement("span")
+            chevronWrap.className = "text-fg-3 shrink-0"
+            chevronWrap.innerHTML = chevronSvg
+            summary.appendChild(chevronWrap)
+
+            details.appendChild(summary)
+
+            const content = document.createElement("div")
+            content.className =
+              "changelog-md px-4 py-3 border-t border-line/60 text-sm text-fg-2"
+            content.innerHTML = renderMarkdown(release.body || "")
+            details.appendChild(content)
+
+            body.appendChild(details)
+          }
+        })
+        .catch(() => {
+          if (status) {
+            status.textContent = t("settings.about.whatsNewError")
+            status.removeAttribute("data-i18n")
+          }
+        })
+    }
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(loadChangelog, { timeout: 2000 })
+    } else {
+      setTimeout(loadChangelog, 500)
+    }
 
     const playlistsEl = document.getElementById("settings-playlists")
     const refreshBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-refresh-active"))

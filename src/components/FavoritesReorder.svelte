@@ -194,7 +194,7 @@
   let total = $derived(lists.live.length + lists.vod.length + lists.series.length)
 </script>
 
-<div class="rounded-xl border border-line bg-surface p-4 flex flex-col gap-4">
+<div class="rounded-xl border border-line bg-surface p-4 flex flex-col gap-4 overflow-x-clip">
   <div class="flex items-baseline justify-between gap-2">
     <h2 class="text-sm font-semibold text-fg">{tr("settings.favoritesReorder.title")}</h2>
     <span class="text-2xs text-fg-3 tabular-nums">
@@ -210,7 +210,7 @@
       {tr("settings.favoritesReorder.emptyState")}
     </div>
   {:else}
-    <div class="flex flex-col gap-3 max-h-[60vh] overflow-y-auto custom-scroll pr-1 -mr-1">
+    <div class="flex flex-col gap-3 max-h-[60vh] overflow-y-auto overflow-x-hidden custom-scroll pr-1 -mr-1">
     {#each KIND_ORDER as kind}
       {#if lists[kind].length}
         <div class="flex flex-col gap-1.5">
