@@ -137,6 +137,7 @@ jobs:
           {
             echo 'log<<CHANGES_EOF'
             cat "$RUNNER_TEMP/changes.trimmed.md"
+            echo
             echo 'CHANGES_EOF'
           } >> "$GITHUB_OUTPUT"
 
