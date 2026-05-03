@@ -47,7 +47,6 @@ jobs:
     outputs:
       release_id: ${{ steps.create.outputs.result }}
       tag: ${{ steps.meta.outputs.tag }}
-      updater_notes: ${{ steps.create.outputs.updater_notes }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -238,6 +237,25 @@ jobs:
           script: |
             const tag = process.env.TAG
             const version = process.env.VERSION
+
+            // Re-runs of this workflow on the same tag should reuse the
+            // existing draft (preserving any manual body edits) instead of
+            // piling up duplicate drafts. Look up by tag name across drafts
+            // and published releases.
+            try {
+              const releases = await github.paginate(
+                github.rest.repos.listReleases,
+                { owner: context.repo.owner, repo: context.repo.repo, per_page: 100 }
+              )
+              const existing = releases.find(release => release.tag_name === tag)
+              if (existing) {
+                core.info(`Reusing existing release id=${existing.id} for tag ${tag}; body left intact.`)
+                return existing.id
+              }
+            } catch (e) {
+              core.warning(`listReleases failed, will attempt createRelease: ${e.message}`)
+            }
+
             let changelog = (process.env.AI_NOTES || '').trim()
 
             if (!changelog) {
@@ -262,7 +280,6 @@ jobs:
             // header or blank lines before the summary, so tolerate up to a few
             // ATX headings / empty lines and pick the first bold-only line.
             let summary = ''
-            let updaterNotes = ''
             const lines = changelog.split('\n')
             let summaryMatch = null
             let summaryEndIdx = 0
@@ -279,17 +296,10 @@ jobs:
             }
             if (summaryMatch) {
               summary = `<strong>${summaryMatch[1]}</strong>`
-              updaterNotes = summaryMatch[1].trim()
               let scanIdx = summaryEndIdx
               while (scanIdx < lines.length && lines[scanIdx].trim() === '') scanIdx++
               changelog = lines.slice(scanIdx).join('\n').trim()
             }
-            // Fall back to the tag if the AI step skipped or failed - the
-            // in-app updater dialog should never show an empty notes field.
-            if (!updaterNotes) {
-              updaterNotes = `${tag} - see the GitHub release for details.`
-            }
-            core.setOutput('updater_notes', updaterNotes)
 
             // GitHub asset URLs replace spaces in the original filename with
             // dots when serving the file. Wrap each row's filename in a
@@ -415,6 +425,12 @@ jobs:
         with:
           workspaces: "src-tauri -> target"
           key: ${{ matrix.os }}
+          # Only save the cache from main builds, not tag-triggered release
+          # builds. The post-step zstd save has been racy on Windows runners
+          # (failing the job after a successful build) and tag pushes are
+          # infrequent enough that they can ride on whatever cache main has
+          # already produced.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: pnpm install --frozen-lockfile
 
@@ -460,6 +476,7 @@ jobs:
         with:
           workspaces: "src-tauri -> target"
           key: android
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: pnpm install --frozen-lockfile
 
@@ -526,9 +543,9 @@ jobs:
 
   # Patch the in-app auto-updater dialog text in `latest.json`. tauri-action
   # generates this file with `notes: ""` by default, so the in-app updater
-  # prompt would otherwise show an empty changelog. We download the file the
-  # build job uploaded, set `notes` to the AI-generated summary line, and
-  # re-upload it with --clobber.
+  # prompt would otherwise show an empty changelog. The notes are derived
+  # from the current release body (the first standalone **bold** line),
+  # which means manual body edits are reflected on subsequent re-runs.
   patch-updater-notes:
     needs: [create-release, build-tauri]
     runs-on: ubuntu-latest
@@ -538,7 +555,6 @@ jobs:
       - name: Patch latest.json notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NOTES: ${{ needs.create-release.outputs.updater_notes }}
           TAG: ${{ needs.create-release.outputs.tag }}
         run: |
           set -euo pipefail
@@ -548,10 +564,21 @@ jobs:
             echo "::warning::latest.json missing on release $TAG - skipping notes patch"
             exit 0
           fi
-          node -e "
+          BODY=$(gh release view "$TAG" --repo "${{ github.repository }}" --json body --jq .body)
+          BODY="$BODY" TAG="$TAG" node -e "
             const fs = require('fs');
+            const body = process.env.BODY || '';
+            let notes = '';
+            for (const line of body.split(/\r?\n/)) {
+              const trimmed = line.trim();
+              const match = trimmed.match(/^\*\*(.+)\*\*$/);
+              if (match) { notes = match[1].trim(); break; }
+            }
+            if (!notes) {
+              notes = process.env.TAG + ' - see the GitHub release for details.';
+            }
             const j = JSON.parse(fs.readFileSync('latest.json', 'utf8'));
-            j.notes = process.env.NOTES;
+            j.notes = notes;
             fs.writeFileSync('latest.json', JSON.stringify(j, null, 2));
           "
           gh release upload "$TAG" latest.json --clobber --repo "${{ github.repository }}"
