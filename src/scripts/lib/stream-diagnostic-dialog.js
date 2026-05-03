@@ -119,7 +119,19 @@ function renderHead(head) {
   const fallback = head.fallback
     ? `<div class="text-2xs text-warn">HEAD rejected (${escapeHtml(head.fallback)}) - used range GET fallback.</div>`
     : ""
-  return `${status}${ct}${len}${meta}${fallback}`
+  const cors = renderCorsHeaders(head.headers)
+  return `${status}${ct}${len}${meta}${fallback}${cors}`
+}
+
+function renderCorsHeaders(headers) {
+  if (!headers || typeof headers !== "object") return ""
+  const corsKeys = ["access-control-allow-origin", "access-control-allow-credentials", "access-control-allow-methods", "access-control-allow-headers"]
+  const corsEntries = Object.entries(headers).filter(([k]) => corsKeys.includes(k.toLowerCase()))
+  if (!corsEntries.length) return ""
+  const rows = corsEntries.map(([k, v]) =>
+    `<div class="text-2xs text-fg-3 font-mono"><span class="text-fg-2">${escapeHtml(k)}:</span> ${escapeHtml(String(v))}</div>`
+  ).join("")
+  return `<details class="mt-1"><summary class="text-2xs text-fg-3 cursor-pointer hover:text-fg-2">CORS headers (${corsEntries.length})</summary><div class="mt-1">${rows}</details>`
 }
 
 function renderPlaylist(pl) {
@@ -140,7 +152,14 @@ function renderPlaylist(pl) {
     ? `<div class="text-2xs text-fg-3 tabular-nums">Window: ${pl.totalDuration.toFixed(1)}s</div>`
     : ""
   const meta = `<div class="text-2xs text-fg-3 tabular-nums">${pl.bytes ? fmtBytes(pl.bytes) : ""} · ${fmtMs(pl.latencyMs)}</div>`
-  return `<div class="font-medium text-fg">${heading}</div>${top}${td}${total}${meta}`
+  const cors = renderCorsHeaders(pl.headers)
+  const raw = pl.raw ? `
+    <details class="mt-1">
+      <summary class="text-2xs text-fg-3 cursor-pointer hover:text-fg-2">View raw playlist (${pl.raw.length} chars)</summary>
+      <pre class="mt-1 text-2xs text-fg-3 font-mono break-all whitespace-pre-wrap max-h-48 overflow-auto custom-scroll">${escapeHtml(pl.raw)}</pre>
+    </details>
+  ` : ""
+  return `<div class="font-medium text-fg">${heading}</div>${top}${td}${total}${meta}${cors}${raw}`
 }
 
 function renderFirstSegment(seg) {

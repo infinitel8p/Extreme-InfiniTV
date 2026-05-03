@@ -101,6 +101,7 @@ async function headOrGet(url) {
       contentLength: Number(response.headers.get("content-length") || 0),
       latencyMs: Math.round(performance.now() - start),
       method: "HEAD",
+      headers: Object.fromEntries(response.headers.entries()),
     }
   } catch (headError) {
     // Some HLS servers reject HEAD outright. Fall back to a tiny ranged GET
@@ -128,6 +129,7 @@ async function headOrGet(url) {
         latencyMs: Math.round(performance.now() - start),
         method: "GET (range)",
         fallback: String(headError?.message || headError),
+        headers: Object.fromEntries(response.headers.entries()),
       }
     } catch (getError) {
       return {
@@ -139,6 +141,7 @@ async function headOrGet(url) {
         latencyMs: Math.round(performance.now() - start),
         method: "HEAD",
         error: String(getError?.message || getError),
+        headers: {},
       }
     }
   }
@@ -204,6 +207,8 @@ export async function diagnoseStream(url, onUpdate) {
               codecs: parsed.variants[0].codecs,
             }
           : null,
+        headers: Object.fromEntries(response.headers.entries()),
+        raw: text.slice(0, 4096),
       }
       emit()
 
@@ -227,6 +232,8 @@ export async function diagnoseStream(url, onUpdate) {
             url: variantUrl,
             segmentCount: variantParsed.segments.length,
             targetDuration: variantParsed.targetDuration,
+            headers: Object.fromEntries(variantResp.headers.entries()),
+            raw: variantText.slice(0, 4096),
           }
           emit()
         } catch (variantErr) {
