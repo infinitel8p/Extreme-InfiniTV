@@ -1,7 +1,7 @@
 {
   "name": "xtream",
   "type": "module",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "packageManager": "pnpm@10.31.0",
   "scripts": {
     "dev": "astro dev --host",
@@ -11,6 +11,8 @@
     "tauri": "tauri",
     "tauri:android": "tauri android",
     "tauri:android:build": "tauri android build",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "screenshots": "node ./src/scripts/capture-screenshots.mjs",
     "msix": "node ./buildfiles/make-msix-template.mjs",
     "sync-version": "node ./buildfiles/sync-version.mjs"
@@ -31,6 +33,8 @@
     "@tauri-apps/plugin-store": "^2.4.2",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "astro": "^6.2.0",
+    "dompurify": "^3.4.2",
+    "marked": "^18.0.3",
     "svelte": "^5.55.5",
     "tailwindcss": "^4.2.4",
     "tauri-plugin-android-fs-api": "28.1.0",
@@ -39,9 +43,11 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.1",
+    "@vitest/expect": "^4.1.5",
     "magic-string": "^0.30.21",
     "playwright": "^1.59.1",
     "tiny-glob": "^0.2.9",
-    "vite": "^7.3.2"
+    "vite": "^7.3.2",
+    "vitest": "^4.1.5"
   }
 }

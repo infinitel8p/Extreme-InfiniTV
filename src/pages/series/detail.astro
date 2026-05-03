@@ -1,6 +1,11 @@
 ---
 import Layout from "@/layouts/Layout.astro"
-import { IconChevronLeft } from "@tabler/icons-svelte"
+import {
+  IconChevronLeft,
+  IconBookmark,
+  IconBrandYoutube,
+  IconPictureInPicture,
+} from "@tabler/icons-svelte"
 ---
 
 <Layout pageTitle="Series">
@@ -16,10 +21,11 @@ import { IconChevronLeft } from "@tabler/icons-svelte"
           href="/series"
           id="series-detail-back"
           aria-label="Back to Series"
+          data-i18n-attr="aria-label:page.series.title"
           class="dt-enter dt-stagger-0 self-start inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 min-h-11 text-sm text-fg-2
                  hover:bg-surface-2 focus-visible:bg-surface-2 outline-none transition-colors">
           <IconChevronLeft aria-hidden="true" stroke={2} class="size-4" />
-          Series
+          <span data-i18n="page.series.title">Series</span>
         </a>
 
         <div class="dt-enter dt-stagger-1 flex flex-col gap-1">
@@ -59,19 +65,54 @@ import { IconChevronLeft } from "@tabler/icons-svelte"
           </div>
         </div>
 
-        <button
-          id="series-detail-fav"
-          type="button"
-          aria-pressed="false"
-          class="dt-enter dt-stagger-2 self-start rounded-xl border border-line px-4 min-h-11 text-sm
-                 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
-                 transition-colors">
-          Add to favorites
-        </button>
+        <div class="dt-enter dt-stagger-2 flex flex-wrap items-center gap-2">
+          <button
+            id="series-detail-fav"
+            type="button"
+            aria-pressed="false"
+            class="self-start rounded-xl border border-line px-4 min-h-11 text-sm
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   active:scale-[0.97] transition duration-150">
+            Add to favorites
+          </button>
+          <button
+            id="series-detail-watch"
+            type="button"
+            aria-pressed="false"
+            class="self-start flex items-center gap-2 rounded-xl border border-line px-4 min-h-11 text-sm
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   active:scale-[0.97] transition duration-150">
+            <IconBookmark aria-hidden="true" stroke={2} class="size-4" />
+            <span id="series-detail-watch-label">Watch later</span>
+          </button>
+          <button
+            id="series-detail-pip"
+            type="button"
+            hidden
+            aria-label="Picture-in-Picture"
+            data-i18n-attr="aria-label:detail.action.pip"
+            class="self-start flex items-center gap-2 rounded-xl border border-line px-4 min-h-11 text-sm text-fg-2
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   active:scale-[0.97] transition duration-150">
+            <IconPictureInPicture aria-hidden="true" stroke={2} class="size-4" />
+            <span data-i18n="detail.action.pip">Picture-in-Picture</span>
+          </button>
+          <button
+            id="series-detail-trailer"
+            type="button"
+            hidden
+            class="self-start flex items-center gap-2 rounded-xl border border-line px-4 min-h-11 text-sm text-fg-2
+                   hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+                   active:scale-[0.97] transition duration-150">
+            <IconBrandYoutube aria-hidden="true" stroke={2} class="size-4" />
+            <span data-i18n="detail.action.trailer">Trailer</span>
+          </button>
+        </div>
 
         <div
           id="series-detail-plot"
-          class="dt-enter dt-stagger-3 text-sm text-fg-2 leading-relaxed max-w-prose">
+          data-i18n="detail.loading"
+          class="dt-enter dt-stagger-3 text-sm text-fg-2 leading-relaxed">
           Loading details…
         </div>
 
@@ -99,7 +140,7 @@ import { IconChevronLeft } from "@tabler/icons-svelte"
   </main>
 
   <script>
-    import "@/scripts/series/detail.js"
+    import "@/scripts/series/detail.ts"
     import "@/scripts/updater-startup.js"
     import { injectVersion } from "@/scripts/version.js"
     injectVersion()

@@ -13,15 +13,17 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 			<a
 				href="/"
 				class="self-start inline-flex items-center gap-1.5 text-sm text-fg-3 hover:text-fg focus-visible:text-fg transition-colors min-h-10 -ml-1 mb-2">
-				<IconArrowLeft class="h-4 w-4" /> Back
+				<IconArrowLeft class="h-4 w-4" /> <span data-i18n="common.back">Back</span>
 			</a>
 			<h1
 				id="page-title"
+				data-i18n="login.title.add"
 				class="route-hero__title">
-				Add a <em>playlist</em>
+				Add a playlist
 			</h1>
 			<p
 				id="page-subtitle"
+				data-i18n="login.subtitle"
 				class="route-hero__sub">
 				Connect an Xtream provider, or paste an M3U/M3U8 playlist URL.
 			</p>
@@ -31,17 +33,18 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 		<!-- Method picker: clean segmented control -->
 		<div
 			role="tablist"
-			aria-label="Playlist type"
+			aria-label="Playlist type" data-i18n-attr="aria-label:aria.playlistType"
 			class="grid grid-cols-2 gap-1 p-1 rounded-xl border border-line bg-surface mb-10 max-w-md">
 			<button
 				id="tab-xtream"
 				type="button"
 				role="tab"
 				class="flex flex-col items-center justify-center text-center px-3 py-2 rounded-lg min-h-12 transition-colors disabled:cursor-not-allowed disabled:opacity-40">
-				<span class="text-sm font-medium leading-tight">
+				<span data-i18n="login.tab.subscription" class="text-sm font-medium leading-tight">
 					I have a subscription
 				</span>
 				<span
+					data-i18n="login.tab.subscription.sub"
 					class="mt-0.5 text-label font-medium uppercase tracking-wider opacity-70">
 					Xtream Codes
 				</span>
@@ -51,10 +54,11 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 				type="button"
 				role="tab"
 				class="flex flex-col items-center justify-center text-center px-3 py-2 rounded-lg min-h-12 transition-colors disabled:cursor-not-allowed disabled:opacity-40">
-				<span class="text-sm font-medium leading-tight">
+				<span data-i18n="login.tab.url" class="text-sm font-medium leading-tight">
 					I have a playlist URL
 				</span>
 				<span
+					data-i18n="login.tab.url.sub"
 					class="mt-0.5 text-label font-medium uppercase tracking-wider opacity-70">
 					M3U / M3U8
 				</span>
@@ -67,6 +71,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 			autocomplete="off">
 			<label class="flex flex-col gap-2">
 				<span
+					data-i18n="login.field.title"
 					class="text-xs font-semibold tracking-wider uppercase text-fg-3">
 					Title
 				</span>
@@ -74,9 +79,10 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 					id="title"
 					type="text"
 					placeholder="e.g. Living room TV"
+					data-i18n-attr="placeholder:login.field.title.placeholder"
 					class="field-input"
 				/>
-				<span class="text-xs text-fg-3 leading-relaxed"
+				<span data-i18n="login.field.title.helper" class="text-xs text-fg-3 leading-relaxed"
 					>Optional name for this playlist.</span
 				>
 			</label>
@@ -85,6 +91,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 			<div id="xtream-fields" class="flex flex-col gap-6">
 				<label class="flex flex-col gap-2">
 					<span
+						data-i18n="login.field.serverUrl"
 						class="text-xs font-semibold tracking-wider uppercase text-fg-3">
 						Server URL
 					</span>
@@ -94,9 +101,8 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 						placeholder="http://example.com:8080"
 						class="field-input"
 					/>
-					<span class="text-xs text-fg-3 leading-relaxed">
-						Paste a full <code class="font-mono text-fg-2">player_api.php?username=…&password=…</code>
-						URL to auto-fill the fields below, or enter just the
+					<span data-i18n="login.field.serverUrl.helper" class="text-xs text-fg-3 leading-relaxed">
+						Paste a full player_api.php URL to auto-fill the fields below, or enter just the
 						server URL and fill in username and password yourself.
 					</span>
 				</label>
@@ -104,6 +110,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 				<div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
 					<label class="flex flex-col gap-2">
 						<span
+							data-i18n="login.field.username"
 							class="text-xs font-semibold tracking-wider uppercase text-fg-3">
 							Username
 						</span>
@@ -117,6 +124,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 					</label>
 					<label class="flex flex-col gap-2">
 						<span
+							data-i18n="login.field.password"
 							class="text-xs font-semibold tracking-wider uppercase text-fg-3">
 							Password
 						</span>
@@ -133,6 +141,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 			<div id="m3u-fields" class="hidden flex-col gap-6">
 				<label class="flex flex-col gap-2">
 					<span
+						data-i18n="login.field.playlistUrl"
 						class="text-xs font-semibold tracking-wider uppercase text-fg-3">
 						Playlist URL
 					</span>
@@ -142,9 +151,8 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 						placeholder="https://example.com/playlist.m3u8"
 						class="field-input"
 					/>
-					<span class="text-xs text-fg-3 leading-relaxed">
-						Must end with <code class="font-mono text-fg-2">.m3u</code> or
-						<code class="font-mono text-fg-2">.m3u8</code>.
+					<span data-i18n="login.field.playlistUrl.helper" class="text-xs text-fg-3 leading-relaxed">
+						Must end with .m3u or .m3u8.
 					</span>
 				</label>
 			</div>
@@ -161,23 +169,24 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 				<button
 					id="testBtn"
 					type="button"
+					data-i18n="login.action.test"
 					class="btn">
 					Test connection
 				</button>
 				<button
 					id="saveBtn"
 					type="submit"
+					data-i18n="login.action.save"
 					class="btn-primary ml-auto">
 					Save and continue
 				</button>
 			</div>
 		</form>
 
-		<p class="mt-12 text-xs text-fg-3 leading-relaxed">
+		<p data-i18n="login.fineprint" class="mt-12 text-xs text-fg-3 leading-relaxed">
 			This app does not provide any content. Use any
 			Xtream-compatible IPTV subscription, or paste any M3U/M3U8 playlist
-			URL. Public test playlists are available at
-			<span class="text-fg-2">iptv-org.github.io/iptv</span>.
+			URL. Public test playlists are available at iptv-org.github.io/iptv.
 		</p>
 
 		</div>
@@ -194,6 +203,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 		testM3UUrl,
 		isTauri,
 	} from "@/scripts/lib/creds.js";
+	import { t } from "@/scripts/lib/i18n.js";
 
 	const $ = (id) => /** @type {any} */ (document.getElementById(id));
 
@@ -267,7 +277,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 			serverEl.value = parsed.serverUrl;
 			if (!userEl.value) userEl.value = parsed.username;
 			if (!passEl.value) passEl.value = parsed.password;
-			showStatus("info", "Credentials extracted from URL.");
+			showStatus("info", t("login.status.credentialsExtracted"));
 		}
 	});
 
@@ -322,7 +332,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 		try {
 			const u = new URL(rawUrl);
 			if (!isTauri && isPrivateHost(u.hostname)) {
-				return " The browser may block private-network requests - try the desktop app.";
+				return " " + t("login.status.privateHostHint");
 			}
 		} catch {}
 		return "";
@@ -338,53 +348,53 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 				if (!serverUrl || !username || !password) {
 					showStatus(
 						"unavailable",
-						"Please fill server URL, username and password."
+						t("login.status.fillFields")
 					);
 					return;
 				}
-				showStatus("busy", "Testing connection…");
+				showStatus("busy", t("login.status.testing"));
 				const r = await testXtreamConnection({
 					serverUrl,
 					username,
 					password,
 				});
 				const exp = r.expDate
-					? ` Expires ${new Date(r.expDate).toLocaleDateString()}.`
+					? t("login.status.expiresOn", { date: new Date(r.expDate).toLocaleDateString() })
 					: "";
 				switch (r.status) {
 					case "active":
-						showStatus("active", `Connected. Account is active.${exp}`);
+						showStatus("active", t("login.status.connected") + exp);
 						break;
 					case "expired":
-						showStatus("expired", `Account expired.${exp}`);
+						showStatus("expired", t("login.status.expired") + exp);
 						break;
 					case "inactive":
-						showStatus("inactive", `Account is inactive.${exp}`);
+						showStatus("inactive", t("login.status.inactive") + exp);
 						break;
 					default:
 						showStatus(
 							"unavailable",
-							`Couldn't reach the server${r.message ? ` - ${r.message}` : "."}${privateHostHint(serverUrl)}`
+							t("login.status.serverUnreachable") + (r.message ? ` - ${r.message}` : ".") + privateHostHint(serverUrl)
 						);
 				}
 			} else {
 				const url = m3uEl.value.trim();
 				if (!url) {
-					showStatus("unavailable", "Please enter an M3U URL.");
+					showStatus("unavailable", t("login.status.enterM3uUrl"));
 					return;
 				}
-				showStatus("busy", "Fetching playlist…");
+				showStatus("busy", t("login.status.fetching"));
 				const r = await testM3UUrl(url);
 				if (r.status === "active") {
 					const n = r.count || 0;
 					showStatus(
 						"active",
-						`Playlist looks good${n ? ` - ${n.toLocaleString()} entries.` : "."}`
+						t("login.status.playlistOk") + (n ? t("login.status.playlistEntries", { count: n.toLocaleString() }) : ".")
 					);
 				} else {
 					showStatus(
 						"unavailable",
-						`Couldn't fetch the playlist${r.message ? ` - ${r.message}` : "."}${privateHostHint(url)}`
+						t("login.status.playlistFetchFailed") + (r.message ? ` - ${r.message}` : ".") + privateHostHint(url)
 					);
 				}
 			}
@@ -404,14 +414,14 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 				if (!serverUrl || !username || !password) {
 					showStatus(
 						"unavailable",
-						"Server URL, username and password are required."
+						t("login.status.allRequired")
 					);
 					return;
 				}
 				if (!/^https?:\/\/[^\s]+$/i.test(serverUrl)) {
 					showStatus(
 						"unavailable",
-						"Server URL must start with http:// or https://."
+						t("login.status.serverUrlScheme")
 					);
 					return;
 				}
@@ -429,7 +439,7 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 				if (!/^https?:\/\/[^\s]+\.m3u8?(\?.*)?$/i.test(url)) {
 					showStatus(
 						"unavailable",
-						"M3U URL must be http(s) and end with .m3u or .m3u8."
+						t("login.status.m3uScheme")
 					);
 					return;
 				}
@@ -453,9 +463,12 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 		editing = entries.find((e) => e._id === editingId) || null;
 	}
 	if (editing) {
-		pageTitle.innerHTML = "Edit <em>playlist</em>";
-		pageSubtitle.textContent = `Update "${editing.title}".`;
-		saveBtn.textContent = "Save changes";
+		pageTitle.removeAttribute("data-i18n");
+		pageTitle.textContent = t("login.title.edit");
+		pageSubtitle.removeAttribute("data-i18n");
+		pageSubtitle.textContent = t("login.subtitle.edit", { title: editing.title });
+		saveBtn.removeAttribute("data-i18n");
+		saveBtn.textContent = t("login.action.saveEdit");
 		tabXtream.disabled = editing.type !== "xtream";
 		tabM3u.disabled = editing.type !== "m3u";
 		setMode(editing.type);
@@ -468,13 +481,14 @@ import { IconArrowLeft } from "@tabler/icons-svelte";
 			m3uEl.value = editing.url || "";
 		}
 	} else if (isDemo) {
-		pageTitle.innerHTML = "Try a <em>demo</em> playlist";
-		pageSubtitle.textContent =
-			"A free public playlist from iptv-org. You can remove it any time.";
+		pageTitle.setAttribute("data-i18n", "login.title.demo");
+		pageTitle.textContent = t("login.title.demo");
+		pageSubtitle.setAttribute("data-i18n", "login.subtitle.demo");
+		pageSubtitle.textContent = t("login.subtitle.demo");
 		setMode("m3u");
-		titleEl.value = "Demo (iptv-org)";
+		titleEl.value = t("login.demo.title");
 		m3uEl.value = DEMO_M3U_URL;
-		showStatus("info", "Demo URL prefilled. Hit Save and continue.");
+		showStatus("info", t("login.status.demoPrefilled"));
 	} else {
 		setMode("xtream");
 	}

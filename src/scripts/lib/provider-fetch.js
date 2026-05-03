@@ -1,3 +1,4 @@
+import { log } from "@/scripts/lib/log.js"
 import { getUserAgent } from "@/scripts/lib/app-settings.js"
 
 const isTauri =
@@ -11,7 +12,7 @@ async function getTauriFetch() {
     tauriFetchPromise = import("@tauri-apps/plugin-http")
       .then((m) => m.fetch)
       .catch((e) => {
-        console.error("[xt:net] plugin-http unavailable:", e)
+        log.error("[xt:net] plugin-http unavailable:", e)
         return null
       })
   }
@@ -21,14 +22,58 @@ async function getTauriFetch() {
 async function nativeFetch(url, init, u) {
   try {
     const r = await fetch(url, init)
-    console.log(`[xt:net] native ok ${r.status}`, u)
+    log.log(`[xt:net] native ok ${r.status}`, u)
     return r
   } catch (e) {
     if (!init?.signal?.aborted) {
-      console.error("[xt:net] native fetch failed", { url: u, error: e })
+      log.error("[xt:net] native fetch failed", { url: u, error: e })
     }
     throw e
   }
+}
+
+/**
+ * Drain a Response body to text, calling onProgress(received, total) as
+ * bytes accumulate. `total` comes from the Content-Length header (0 if
+ * the server didn't send one - chunked encoding etc.). If the body isn't
+ * a readable stream (some Tauri http plugin builds buffer eagerly), we
+ * fall back to response.text() with a single final progress callback.
+ *
+ * @param {Response} response
+ * @param {(received: number, total: number) => void} [onProgress]
+ * @returns {Promise<string>}
+ */
+export async function streamingText(response, onProgress) {
+  const total = Number(response.headers?.get?.("content-length")) || 0
+  const body = response.body
+  if (!body || typeof body.getReader !== "function") {
+    const text = await response.text()
+    if (onProgress) {
+      try { onProgress(text.length, total) } catch {}
+    }
+    return text
+  }
+  const reader = body.getReader()
+  const decoder = new TextDecoder("utf-8")
+  let received = 0
+  let result = ""
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && value.byteLength) {
+        received += value.byteLength
+        result += decoder.decode(value, { stream: true })
+        if (onProgress) {
+          try { onProgress(received, total) } catch {}
+        }
+      }
+    }
+    result += decoder.decode()
+  } finally {
+    try { reader.releaseLock() } catch {}
+  }
+  return result
 }
 
 export async function providerFetch(url, init = {}) {
@@ -36,26 +81,26 @@ export async function providerFetch(url, init = {}) {
   const u = String(url).slice(0, 200)
 
   if (!ua || !isTauri) {
-    console.log(`[xt:net] native start`, u)
+    log.log(`[xt:net] native start`, u)
     return await nativeFetch(url, init, u)
   }
 
   const tauriFetch = await getTauriFetch()
   if (!tauriFetch) {
-    console.log(`[xt:net] native start (no plugin-http)`, u)
+    log.log(`[xt:net] native start (no plugin-http)`, u)
     return await nativeFetch(url, init, u)
   }
 
-  console.log(`[xt:net] tauri start ua=${ua}`, u)
+  log.log(`[xt:net] tauri start ua=${ua}`, u)
   const headers = new Headers(init.headers || {})
   headers.set("User-Agent", ua)
   try {
     const r = await tauriFetch(url, { ...init, headers })
-    console.log(`[xt:net] tauri ok ${r.status}`, u)
+    log.log(`[xt:net] tauri ok ${r.status}`, u)
     return r
   } catch (e) {
     if (init?.signal?.aborted) throw e
-    console.warn(
+    log.warn(
       "[xt:net] tauri fetch failed, falling back to native:",
       String(e?.message || e)
     )

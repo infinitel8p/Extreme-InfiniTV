@@ -1,14 +1,16 @@
 // Shared catalog fetch + parse + cache
 
-import { cachedFetch } from "@/scripts/lib/cache.js"
+import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import {
   loadCreds,
   buildApiUrl,
   isLikelyM3USource,
-  normalize,
 } from "@/scripts/lib/creds.js"
-import { providerFetch } from "@/scripts/lib/provider-fetch.js"
+import { normalize } from "@/scripts/lib/text.js"
+import { providerFetch, streamingText } from "@/scripts/lib/provider-fetch.js"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
+import { parseM3U } from "@/scripts/lib/m3u-parser.ts"
+import { t } from "@/scripts/lib/i18n.js"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 const VOD_TTL_MS = 24 * 60 * 60 * 1000
@@ -17,11 +19,37 @@ const SERIES_TTL_MS = 24 * 60 * 60 * 1000
 const EVT_WARMED = "xt:catalog-warmed"
 const EVT_WARMING_START = "xt:catalog-warming-start"
 const EVT_WARMING_PROGRESS = "xt:catalog-warming-progress"
+const EVT_WARMING_BYTES = "xt:catalog-warming-bytes"
 
 function dispatch(name, detail) {
   try {
     document.dispatchEvent(new CustomEvent(name, { detail }))
   } catch {}
+}
+
+/** Build an onProgress callback that throttles to ~one event per animation
+ *  frame and dispatches xt:catalog-warming-bytes for the warming indicator. */
+function makeBytesEmitter(playlistId, kind) {
+  let raf = 0
+  let lastBytes = 0
+  let lastTotal = 0
+  let pending = false
+  return (received, total) => {
+    lastBytes = received
+    lastTotal = total
+    if (pending) return
+    pending = true
+    raf = requestAnimationFrame(() => {
+      pending = false
+      raf = 0
+      dispatch(EVT_WARMING_BYTES, {
+        playlistId,
+        kind,
+        bytes: lastBytes,
+        total: lastTotal,
+      })
+    })
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -42,55 +70,23 @@ async function fetchLiveCategoryMap(creds) {
   )
 }
 
-function parseM3U(text) {
+function m3uToChannelList(text) {
+  const { entries } = parseM3U(text)
+  const fallbackCategory = t("stream.uncategorized") || "Uncategorized"
   const out = []
-  const lines = text.split(/\r?\n/)
-  let pending = null
-  const readAttr = (s, key) =>
-    s.match(new RegExp(`\\b${key}="([^"]*)"`, "i"))?.[1] ||
-    s.match(new RegExp(`\\b${key}=([^\\s,]+)`, "i"))?.[1] ||
-    ""
-  const stripAttrs = (s) =>
-    s
-      .replace(/\b[\w-]+="[^"]*"/g, "")
-      .replace(/\b(tvg-[\w-]+|group-title|channel-id|channel-number)=[^\s,]+/gi, "")
-      .replace(/\s{2,}/g, " ")
-      .trim()
   let idSeq = 1
-  for (const raw of lines) {
-    const line = raw.trim()
-    if (!line) continue
-    if (line.startsWith("#EXTM3U")) continue
-    if (line.startsWith("#EXTINF")) {
-      const commaIdx = line.indexOf(",")
-      const afterComma = commaIdx >= 0 ? line.slice(commaIdx + 1) : ""
-      const name = stripAttrs(afterComma) || `Channel ${idSeq}`
-      const logo = readAttr(line, "tvg-logo")
-      const group = readAttr(line, "group-title") || "Uncategorized"
-      const tvgId = readAttr(line, "tvg-id") || readAttr(line, "channel-id")
-      pending = {
-        name,
-        logo,
-        category: group,
-        tvgId: tvgId || "",
-      }
-      continue
-    }
-    if (line.startsWith("#")) continue
-    if (pending) {
-      out.push({
-        id: idSeq++,
-        name: pending.name,
-        category: pending.category,
-        logo: pending.logo || null,
-        tvgId: pending.tvgId || undefined,
-        norm: normalize(
-          `${pending.name} ${pending.category} ${pending.tvgId || ""}`
-        ),
-        url: line,
-      })
-      pending = null
-    }
+  for (const entry of entries) {
+    if (!entry.url || !entry.name) continue
+    const category = entry.category || fallbackCategory
+    out.push({
+      id: idSeq++,
+      name: entry.name,
+      category,
+      logo: entry.logo,
+      tvgId: entry.tvgId || undefined,
+      norm: normalize(`${entry.name} ${category} ${entry.tvgId || ""}`),
+      url: entry.url,
+    })
   }
   return out
 }
@@ -98,20 +94,19 @@ function parseM3U(text) {
 export async function ensureLive(creds, playlistId, opts = {}) {
   const isM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
   const kind = isM3U ? "m3u" : "live"
+  const onBytes = makeBytesEmitter(playlistId, "live")
   const { data } = await cachedFetch(playlistId, kind, CHANNELS_TTL_MS, async () => {
     if (isM3U) {
       const r = await providerFetch(creds.host)
       if (!r.ok) throw new Error(`M3U ${r.status}`)
-      const text = await r.text()
-      return parseM3U(text)
-        .filter((x) => x.url && x.name)
-        .sort((a, b) =>
-          a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-        )
+      const text = await streamingText(r, onBytes)
+      return m3uToChannelList(text).sort((a, b) =>
+        a.name.localeCompare(b.name, "en", { sensitivity: "base" })
+      )
     }
     const catMap = await fetchLiveCategoryMap(creds)
     const r = await providerFetch(buildApiUrl(creds, "get_live_streams"))
-    const body = await r.text()
+    const body = await streamingText(r, onBytes)
     if (!r.ok) throw new Error(`API ${r.status}`)
     const parsed = JSON.parse(body)
     const arr = Array.isArray(parsed)
@@ -172,10 +167,11 @@ async function fetchVodCategoryMap(creds) {
 
 export async function ensureVod(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
+  const onBytes = makeBytesEmitter(playlistId, "vod")
   const { data } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, async () => {
     const catMap = await fetchVodCategoryMap(creds)
     const r = await providerFetch(buildApiUrl(creds, "get_vod_streams"))
-    const body = await r.text()
+    const body = await streamingText(r, onBytes)
     if (!r.ok) throw new Error(`API ${r.status}`)
     const parsed = JSON.parse(body)
     const arr = Array.isArray(parsed)
@@ -240,10 +236,11 @@ async function fetchSeriesCategoryMap(creds) {
 
 export async function ensureSeries(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
+  const onBytes = makeBytesEmitter(playlistId, "series")
   const { data } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, async () => {
     const catMap = await fetchSeriesCategoryMap(creds)
     const r = await providerFetch(buildApiUrl(creds, "get_series"))
-    const body = await r.text()
+    const body = await streamingText(r, onBytes)
     if (!r.ok) throw new Error(`API ${r.status}`)
     const parsed = JSON.parse(body)
     const arr = Array.isArray(parsed) ? parsed : parsed?.series || parsed?.results || []
@@ -320,29 +317,49 @@ export async function warmupActive(playlistId, opts = {}) {
 
   const run = (async () => {
     const errors = {}
-    dispatch(EVT_WARMING_START, { playlistId: pid, kinds: ["live", "vod", "series"] })
+    const force = !!opts.force
+    const isM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
+    const liveKey = isM3U ? "m3u" : "live"
+
+    await Promise.all([
+      hydrateCache(pid, liveKey),
+      hydrateCache(pid, "vod"),
+      hydrateCache(pid, "series"),
+    ])
+    const allHot =
+      !force &&
+      !!getCached(pid, liveKey) &&
+      !!getCached(pid, "vod") &&
+      !!getCached(pid, "series")
+
+    if (!allHot) {
+      dispatch(EVT_WARMING_START, { playlistId: pid, kinds: ["live", "vod", "series"] })
+    }
     const wrap = (kind, fn) =>
       fn()
         .then((data) => {
-          dispatch(EVT_WARMING_PROGRESS, {
-            playlistId: pid,
-            kind,
-            status: "done",
-            count: Array.isArray(data) ? data.length : 0,
-          })
+          if (!allHot) {
+            dispatch(EVT_WARMING_PROGRESS, {
+              playlistId: pid,
+              kind,
+              status: "done",
+              count: Array.isArray(data) ? data.length : 0,
+            })
+          }
           return data
         })
         .catch((e) => {
           errors[kind] = String(e?.message || e)
-          dispatch(EVT_WARMING_PROGRESS, {
-            playlistId: pid,
-            kind,
-            status: "error",
-            error: errors[kind],
-          })
+          if (!allHot) {
+            dispatch(EVT_WARMING_PROGRESS, {
+              playlistId: pid,
+              kind,
+              status: "error",
+              error: errors[kind],
+            })
+          }
           return []
         })
-    const force = !!opts.force
     const [live, vod, series] = await Promise.all([
       wrap("live", () => ensureLive(creds, pid, { force })),
       wrap("vod", () => ensureVod(creds, pid, { force })),
@@ -367,3 +384,4 @@ export async function warmupActive(playlistId, opts = {}) {
 export const CATALOG_WARMED_EVENT = EVT_WARMED
 export const CATALOG_WARMING_START_EVENT = EVT_WARMING_START
 export const CATALOG_WARMING_PROGRESS_EVENT = EVT_WARMING_PROGRESS
+export const CATALOG_WARMING_BYTES_EVENT = EVT_WARMING_BYTES

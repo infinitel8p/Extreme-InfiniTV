@@ -1,6 +1,7 @@
 <script>
   // Hub "Recently added" strip - mixes VOD + series sorted by `added` ts.
   import { onMount } from "svelte"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
   import { fmtImdbRating } from "@/scripts/lib/format.js"
@@ -18,6 +19,10 @@
    * }>} */
   let entries = $state([])
   let activePlaylistId = $state("")
+  let locale = $state(0)
+  // Wrapper reads the locale rune so {tr(...)} template effects track it
+  // and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
 
   function buildEntry(item, kind) {
     const subtitle = kind === "vod" ? "Movie" : "Series"
@@ -66,9 +71,22 @@
 
   onMount(() => {
     reload()
+    // `xt:catalog-warmed` fires once per kind, so up to 4 events arrive in
+    // rapid succession; rAF dedupe collapses them into a single reload.
+    let pendingReload = false
+    function scheduleReload() {
+      if (pendingReload) return
+      pendingReload = true
+      requestAnimationFrame(async () => {
+        pendingReload = false
+        await reload()
+      })
+    }
+    const onLocaleChange = () => { locale++ }
     const handlers = {
-      "xt:active-changed": reload,
-      "xt:catalog-warmed": reload,
+      "xt:active-changed": scheduleReload,
+      "xt:catalog-warmed": scheduleReload,
+      [LOCALE_EVENT]: onLocaleChange,
     }
     for (const [eventName, handler] of Object.entries(handlers)) {
       document.addEventListener(eventName, handler)
@@ -83,16 +101,16 @@
 
 {#if entries.length}
   <section
-    aria-label="Recently added"
+    aria-label={tr("nav.recentlyAdded")}
     class="ra-section flex flex-col gap-3 shrink-0">
     <div class="hub-section-head px-1">
       <div class="hub-section-head__title">
-        <h2 class="hub-section-head__heading">Recently added</h2>
+        <h2 class="hub-section-head__heading">{tr("nav.recentlyAdded")}</h2>
       </div>
       <a
         href="/recently-added"
         class="hub-section-head__count text-fg-3 hover:text-accent focus-visible:text-accent transition-colors">
-        View all
+        {tr("strip.viewAll")}
         <svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="ml-0.5 inline-block align-[-1px]">
           <path d="m9 18 6-6-6-6" />
         </svg>

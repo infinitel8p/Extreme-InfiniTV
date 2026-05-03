@@ -1,0 +1,7 @@
+#EXTM3U x-tvg-url="https://example.com/epg.xml.gz"
+#EXTINF:-1 tvg-id="bbcone.uk" tvg-logo="https://example.com/bbc1.png" group-title="UK News",BBC One HD
+http://example.com/live/u/p/1.m3u8
+#EXTINF:-1 tvg-id="bbctwo.uk" tvg-logo="https://example.com/bbc2.png" group-title="UK News",BBC Two HD
+http://example.com/live/u/p/2.m3u8
+#EXTINF:-1 tvg-id="cnn.us" group-title="US News",CNN
+http://example.com/live/u/p/3.m3u8

@@ -1,0 +1,7 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="picky.tv" group-title="Picky",Picky Channel
+#EXTVLCOPT:http-user-agent=VLC/3.0.18 LibVLC/3.0.18
+#EXTVLCOPT:http-referrer=https://picky.example.com/
+http://picky.example.com/stream.m3u8
+#EXTINF:-1 tvg-id="open.tv" group-title="Open",Open Channel
+http://open.example.com/stream.m3u8

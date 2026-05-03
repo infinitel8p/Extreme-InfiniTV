@@ -1,35 +1,32 @@
-// Empty state for upstream connection failures.
+import { t } from "@/scripts/lib/i18n.js"
 
 const SIGNAL_ART = `
 <svg viewBox="0 0 96 96" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-  <g class="provider-error__waves">
-    <path d="M22 56 a 26 26 0 0 1 52 0" class="provider-error__arc provider-error__arc--3"/>
-    <path d="M30 56 a 18 18 0 0 1 36 0" class="provider-error__arc provider-error__arc--2"/>
-    <path d="M38 56 a 10 10 0 0 1 20 0" class="provider-error__arc provider-error__arc--1"/>
-    <circle cx="48" cy="56" r="2.4" fill="currentColor" stroke="none" class="provider-error__dot"/>
-  </g>
-  <line x1="20" y1="76" x2="76" y2="20" class="provider-error__slash"/>
-  <line x1="22" y1="78" x2="78" y2="22" class="provider-error__slash provider-error__slash--accent"/>
+  <path d="M48 64v8" />
+  <path d="M40 78l8 -6 8 6" opacity=".55" />
+  <path d="M40 50a12 12 0 0 1 16 0" opacity=".7" />
+  <path d="M32 42a24 24 0 0 1 32 0" opacity=".5" />
+  <path d="M24 34a36 36 0 0 1 48 0" opacity=".3" />
 </svg>
 `
 
-const fmtTime = () => {
+function fmtTime(d = new Date()) {
   try {
     return new Intl.DateTimeFormat(undefined, {
       hour: "numeric",
       minute: "2-digit",
-    }).format(new Date())
+    }).format(d)
   } catch {
     return ""
   }
 }
 
-const KIND_NOUN = {
-  channels: "channel list",
-  movies: "movie library",
-  series: "series library",
-  EPG: "TV schedule",
-  content: "library",
+const KIND_KEY = {
+  channels: "providerError.kind.channels",
+  movies: "providerError.kind.movies",
+  series: "providerError.kind.series",
+  EPG: "providerError.kind.epg",
+  content: "providerError.kind.content",
 }
 
 /**
@@ -42,9 +39,9 @@ const KIND_NOUN = {
  */
 export function renderProviderError(statusEl, opts) {
   if (!statusEl) return
-  const provider = (opts?.providerName || "").trim() || "this provider"
+  const provider = (opts?.providerName || "").trim() || t("providerError.fallback")
   const kind = opts?.kind || "content"
-  const noun = KIND_NOUN[kind] || KIND_NOUN.content
+  const noun = t(KIND_KEY[kind] || KIND_KEY.content)
   const onRetry = typeof opts?.onRetry === "function" ? opts.onRetry : () => {}
 
   statusEl.replaceChildren()
@@ -65,11 +62,11 @@ export function renderProviderError(statusEl, opts) {
 
   const title = document.createElement("h2")
   title.className = "provider-error__title"
-  title.textContent = `Can't reach ${provider}`
+  title.textContent = t("providerError.title", { provider })
 
   const sub = document.createElement("p")
   sub.className = "provider-error__sub"
-  sub.textContent = `We couldn't load the ${noun}. Your connection, the provider, or your login may be the cause.`
+  sub.textContent = t("providerError.sub", { noun })
 
   copy.append(title, sub)
   wrap.appendChild(copy)
@@ -85,7 +82,7 @@ export function renderProviderError(statusEl, opts) {
   meta.className = "provider-error__meta"
   const lastTime = fmtTime()
   meta.innerHTML = lastTime
-    ? `<span class="provider-error__meta-dot" aria-hidden="true"></span>Last tried at <time>${lastTime}</time>`
+    ? `<span class="provider-error__meta-dot" aria-hidden="true"></span>${t("providerError.lastTried")} <time>${lastTime}</time>`
     : ""
   wrap.appendChild(meta)
 
@@ -97,32 +94,32 @@ export function renderProviderError(statusEl, opts) {
   retryBtn.className = "provider-error__retry"
   retryBtn.innerHTML =
     `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>` +
-    `<span class="provider-error__retry-label">Try again</span>`
+    `<span class="provider-error__retry-label">${t("providerError.tryAgain")}</span>`
   retryBtn.addEventListener("click", () => {
     if (retryBtn.disabled) return
     retryBtn.disabled = true
     wrap.classList.add("provider-error--retrying")
     const label = retryBtn.querySelector(".provider-error__retry-label")
-    if (label) label.textContent = "Retrying"
+    if (label) label.textContent = t("providerError.retrying")
     try {
       Promise.resolve(onRetry()).finally(() => {
         if (retryBtn.isConnected) {
           retryBtn.disabled = false
           wrap.classList.remove("provider-error--retrying")
-          if (label) label.textContent = "Try again"
+          if (label) label.textContent = t("providerError.tryAgain")
         }
       })
     } catch {
       retryBtn.disabled = false
       wrap.classList.remove("provider-error--retrying")
-      if (label) label.textContent = "Try again"
+      if (label) label.textContent = t("providerError.tryAgain")
     }
   })
 
   const settingsLink = document.createElement("a")
   settingsLink.href = "/settings"
   settingsLink.className = "provider-error__settings"
-  settingsLink.textContent = "Check playlist settings"
+  settingsLink.textContent = t("providerError.checkSettings")
 
   actions.append(retryBtn, settingsLink)
   wrap.appendChild(actions)

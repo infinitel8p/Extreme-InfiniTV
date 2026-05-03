@@ -9,12 +9,38 @@ import android.webkit.WebSettings
 import android.widget.FrameLayout
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.OnBackPressedCallback
+import androidx.core.view.WindowCompat
 import android.app.PictureInPictureParams
 import android.util.Rational
 import android.os.Build
 import android.webkit.JavascriptInterface
 import android.content.Intent
 import android.content.pm.PackageManager
+
+class StatusBarBridge(private val activity: TauriActivity) {
+  @JavascriptInterface
+  fun setAppearance(isLight: Boolean) {
+    activity.runOnUiThread {
+      val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+      controller.isAppearanceLightStatusBars = isLight
+      controller.isAppearanceLightNavigationBars = isLight
+    }
+  }
+}
+
+class WebSettingsBridge(
+  private val activity: TauriActivity,
+  private val webViewRef: () -> WebView?,
+  private val defaultUa: String,
+) {
+  @JavascriptInterface
+  fun setUserAgent(ua: String?) {
+    val target = if (ua.isNullOrEmpty()) defaultUa else ua
+    activity.runOnUiThread {
+      webViewRef()?.settings?.userAgentString = target
+    }
+  }
+}
 
 class PipBridge(private val activity: TauriActivity) {
   @JavascriptInterface
@@ -90,6 +116,11 @@ class MainActivity : TauriActivity() {
     hostedWebView = webView
 
     webView.addJavascriptInterface(PipBridge(this), "AndroidPip")
+    webView.addJavascriptInterface(StatusBarBridge(this), "AndroidStatusBar")
+    webView.addJavascriptInterface(
+      WebSettingsBridge(this, { hostedWebView }, webView.settings.userAgentString),
+      "AndroidWebSettings"
+    )
     WebView.setWebContentsDebuggingEnabled(true)
 
     webView.settings.javaScriptEnabled = true

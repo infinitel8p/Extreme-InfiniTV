@@ -10,6 +10,7 @@
 // Tauri builds persist via @tauri-apps/plugin-store; web/SSR via localStorage
 // + cookies. Old "xt_host" / "xt_port" / "xt_user" / "xt_pass" keys are
 // auto-migrated into one entry on first read.
+import { log } from "@/scripts/lib/log.js"
 import { Store } from "@tauri-apps/plugin-store"
 
 export const isTauri =
@@ -26,7 +27,7 @@ function getStore() {
   if (!isTauri) return Promise.resolve(null)
   if (!storePromise) {
     storePromise = Store.load(".xtream.creds.json").catch((e) => {
-      console.error(
+      log.error(
         "[xt:creds] plugin-store unavailable, falling back to localStorage:",
         e
       )
@@ -97,14 +98,14 @@ async function writeRaw(data) {
       await store.set(STORAGE_KEY, data)
       await store.save()
     } catch (e) {
-      console.error("[xt:creds] plugin-store write failed:", e)
+      log.error("[xt:creds] plugin-store write failed:", e)
     }
   }
   try {
     localStorage.setItem(STORAGE_KEY, json)
     setCookie(STORAGE_KEY, json)
   } catch (e) {
-    console.error("[xt:creds] localStorage/cookie write failed:", e)
+    log.error("[xt:creds] localStorage/cookie write failed:", e)
   }
   migrationPromise = Promise.resolve(data)
 }
@@ -300,7 +301,7 @@ export async function refreshActive() {
   try {
     result = await warmupActive(active._id, { force: true })
   } catch (err) {
-    console.warn("[xt:creds] refreshActive: warmupActive threw", err)
+    log.warn("[xt:creds] refreshActive: warmupActive threw", err)
   }
   dispatch(EVT_ACTIVE_CHANGED, active)
   if (result?.errors && Object.keys(result.errors).length >= 3) {
@@ -489,49 +490,7 @@ export async function testM3UUrl(url) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Misc helpers
-// ---------------------------------------------------------------------------
-const DIACRITICS = /[\u0300-\u036F]/g
-
-export const normalize = (s) =>
-  (s || "")
-    .toString()
-    .normalize("NFKD")
-    .replace(DIACRITICS, "")
-    .toLowerCase()
-    .replace(/[|_\-()[\].,:/\\]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-
-export const debounce = (fn, ms = 180) => {
-  let t
-  return (...args) => {
-    clearTimeout(t)
-    t = setTimeout(() => fn(...args), ms)
-  }
-}
-
-/**
- * Score a normalized string against query tokens. Returns 0 when any token
- * fails to match. Higher score = better match. Mirrors the scoring used by
- * `SearchView.svelte` so per-page search results rank consistently with
- * the global Cmd+K search.
- *
- * Per token: `100 - matchPosition` (capped) + `25` if `norm` starts with the
- * token. Summed across tokens.
- *
- * @param {string} norm Already normalized via `normalize()`.
- * @param {string[]} tokens Already normalized + split.
- * @returns {number}
- */
-export function scoreNormMatch(norm, tokens) {
-  if (!norm || !tokens || !tokens.length) return 0
-  let score = 0
-  for (const token of tokens) {
-    const idx = norm.indexOf(token)
-    if (idx === -1) return 0
-    score += 100 - (idx > 99 ? 99 : idx) + (norm.startsWith(token) ? 25 : 0)
-  }
-  return score
-}
+// Text and timing helpers used to live here. They moved to dedicated files
+// so creds.js doesn't double as the catch-all utility module.
+//   normalize, scoreNormMatch -> @/scripts/lib/text.js
+//   debounce                   -> @/scripts/lib/debounce.js

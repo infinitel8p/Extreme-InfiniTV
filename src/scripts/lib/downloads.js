@@ -1,3 +1,4 @@
+import { log } from "@/scripts/lib/log.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
   getDownloadDir,
@@ -73,7 +74,7 @@ export async function getLocalPlayableSrc(remoteUrl) {
 
   if (AFs.isAndroidUri(item.path)) {
     if (!(await AFs.fileExists(item.path))) {
-      console.warn(
+      log.warn(
         "[xt:download] local file missing, falling back to stream:",
         item.path
       )
@@ -82,7 +83,7 @@ export async function getLocalPlayableSrc(remoteUrl) {
     try {
       return await AFs.convertSrc(item.path)
     } catch (e) {
-      console.error("[xt:download] android convertSrc failed:", e)
+      log.error("[xt:download] android convertSrc failed:", e)
       return null
     }
   }
@@ -90,21 +91,21 @@ export async function getLocalPlayableSrc(remoteUrl) {
   try {
     const fs = await import("@tauri-apps/plugin-fs")
     if (typeof fs.exists === "function" && !(await fs.exists(item.path))) {
-      console.warn(
+      log.warn(
         "[xt:download] local file missing, falling back to stream:",
         item.path
       )
       return null
     }
   } catch (e) {
-    console.error("[xt:download] exists() failed for", item.path, e)
+    log.error("[xt:download] exists() failed for", item.path, e)
     return null
   }
   try {
     const { convertFileSrc } = await import("@tauri-apps/api/core")
     return convertFileSrc(item.path)
   } catch (e) {
-    console.error("[xt:download] convertFileSrc failed:", e)
+    log.error("[xt:download] convertFileSrc failed:", e)
     return null
   }
 }
@@ -125,7 +126,7 @@ export async function tryAndroidIntentPlayback(remoteUrl) {
     (d) => d.url === remoteUrl && d.status === "done" && d.path
   )
   if (!item || !AFs.isAndroidUri(item.path)) return false
-  console.log("[xt:download] handing off to system video app:", item.path)
+  log.log("[xt:download] handing off to system video app:", item.path)
   return await AFs.viewFileExternally(item.path)
 }
 
@@ -189,7 +190,7 @@ async function pickDir() {
     setDownloadDir(picked)
     return picked
   } catch (e) {
-    console.error("[xt:download] folder picker failed:", e)
+    log.error("[xt:download] folder picker failed:", e)
     throw e
   }
 }
@@ -200,7 +201,7 @@ async function ensureDir(path) {
     if (await exists(path)) return
     await mkdir(path, { recursive: true })
   } catch (e) {
-    console.error("[xt:download] ensureDir failed for", path, e)
+    log.error("[xt:download] ensureDir failed for", path, e)
     throw e
   }
 }
@@ -252,7 +253,7 @@ async function writeMetaSidecar(item) {
     }
     await fs.writeTextFile(metaSidecarPath(item.path), JSON.stringify(meta, null, 2))
   } catch (error) {
-    console.warn("[xt:download] sidecar write failed:", error)
+    log.warn("[xt:download] sidecar write failed:", error)
   }
 }
 
@@ -398,7 +399,7 @@ async function runDownloadAndroid(id, item, controller) {
       }
     } else {
       const msg = String(e?.message || e || "Failed")
-      console.error("[xt:download] runDownload (android) failed", {
+      log.error("[xt:download] runDownload (android) failed", {
         id,
         url: item.url,
         path: item.path,
@@ -532,7 +533,7 @@ async function runDownload(id) {
     const msg = String(e?.message || e || "Failed")
     const reason = controller.signal.reason
     if (!controller.signal.aborted) {
-      console.error("[xt:download] runDownload failed", {
+      log.error("[xt:download] runDownload failed", {
         id,
         url: item.url,
         path: item.path,
@@ -613,7 +614,7 @@ export async function startDownload({ url, title, ext, source }) {
         fullPath = await AFs.createPublicDownloadFile(filename, resolvedExt)
       }
     } catch (e) {
-      console.error("[xt:download] android create file failed:", e)
+      log.error("[xt:download] android create file failed:", e)
       throw new Error("Couldn't create download file: " + (e?.message || e))
     }
   } else {
@@ -621,14 +622,14 @@ export async function startDownload({ url, title, ext, source }) {
     try {
       dir = await pickDir()
     } catch (e) {
-      console.error("[xt:download] startDownload pickDir threw:", e)
+      log.error("[xt:download] startDownload pickDir threw:", e)
       throw e
     }
     if (!dir) throw new Error("No download folder chosen.")
     try {
       await ensureDir(dir)
     } catch (e) {
-      console.error("[xt:download] startDownload ensureDir threw for", dir, e)
+      log.error("[xt:download] startDownload ensureDir threw for", dir, e)
       throw e
     }
     fullPath = joinPath(dir, filename)
@@ -713,7 +714,7 @@ export async function removeDownload(id) {
           await fs.remove(item.path)
         }
       } catch (e) {
-        console.error("[xt:download] could not delete file", item.path, e)
+        log.error("[xt:download] could not delete file", item.path, e)
       }
       await removeMetaSidecar(item.path)
     }
@@ -766,7 +767,7 @@ export async function scanDownloadsFolder() {
   try {
     mediaEntries = await fs.readDir(dir)
   } catch (error) {
-    console.error("[xt:download] scan readDir failed:", error)
+    log.error("[xt:download] scan readDir failed:", error)
     return {
       scanned: 0,
       imported: 0,
@@ -783,7 +784,7 @@ export async function scanDownloadsFolder() {
       metaEntries = await fs.readDir(metaDir)
     }
   } catch (error) {
-    console.warn("[xt:download] meta dir read failed:", error)
+    log.warn("[xt:download] meta dir read failed:", error)
   }
 
   if (!metaEntries.length) {
@@ -813,7 +814,7 @@ export async function scanDownloadsFolder() {
       const text = await fs.readTextFile(sidecarPath)
       parsed = JSON.parse(text)
     } catch (error) {
-      console.warn("[xt:download] sidecar read failed:", sidecarPath, error)
+      log.warn("[xt:download] sidecar read failed:", sidecarPath, error)
       skipped++
       continue
     }
@@ -1156,7 +1157,7 @@ export function getRowThroughputEwma(id) {
         progress: status === "normal" ? progress : 0,
       })
     } catch (e) {
-      console.debug("taskbar progress not available:", e)
+      log.debug("taskbar progress not available:", e)
     } finally {
       inFlight = false
     }

@@ -32,27 +32,109 @@ const documentTitle = pageTitle
         if (isFinite(cw) && cw >= 18 && cw <= 60) {
           document.documentElement.style.setProperty("--xt-channels-w", cw + "rem");
         }
+        if (localStorage.getItem("xt_perf_mode") === "1") {
+          document.documentElement.setAttribute("data-perf-mode", "on");
+        }
+
+        var KNOWN_LOCALES = ["en","es","de","fr","pt-BR","it","ru","zh","ja"];
+        var storedLocale = localStorage.getItem("xt_locale") || "";
+        if (storedLocale && KNOWN_LOCALES.indexOf(storedLocale) !== -1) {
+          document.documentElement.setAttribute("lang", storedLocale);
+        }
+
+        // Translate [data-i18n*] elements before first paint
+        if (storedLocale && storedLocale !== "en") {
+          var rawMessages = localStorage.getItem("xt_locale_messages_v1");
+          if (rawMessages) {
+            var cached = JSON.parse(rawMessages);
+            if (cached && cached.code === storedLocale && cached.messages) {
+              var msgs = cached.messages;
+              var translateEl = function (el) {
+                if (!el || el.nodeType !== 1) return;
+                var textKey = el.getAttribute("data-i18n");
+                if (textKey && msgs[textKey] != null) el.textContent = msgs[textKey];
+                var htmlKey = el.getAttribute("data-i18n-html");
+                if (htmlKey && msgs[htmlKey] != null) el.innerHTML = msgs[htmlKey];
+                var attrSpec = el.getAttribute("data-i18n-attr");
+                if (attrSpec) {
+                  var pairs = attrSpec.split(";");
+                  for (var pi = 0; pi < pairs.length; pi++) {
+                    var parts = pairs[pi].split(":");
+                    var attrName = (parts[0] || "").trim();
+                    var attrKey = (parts[1] || "").trim();
+                    if (attrName && attrKey && msgs[attrKey] != null) {
+                      el.setAttribute(attrName, msgs[attrKey]);
+                    }
+                  }
+                }
+              };
+              var i18nObserver = new MutationObserver(function (mutations) {
+                for (var mi = 0; mi < mutations.length; mi++) {
+                  var added = mutations[mi].addedNodes;
+                  for (var ai = 0; ai < added.length; ai++) {
+                    var node = added[ai];
+                    if (node.nodeType !== 1) continue;
+                    if (
+                      node.hasAttribute("data-i18n") ||
+                      node.hasAttribute("data-i18n-html") ||
+                      node.hasAttribute("data-i18n-attr")
+                    ) {
+                      translateEl(node);
+                    }
+                    var matches = node.querySelectorAll
+                      ? node.querySelectorAll("[data-i18n], [data-i18n-html], [data-i18n-attr]")
+                      : null;
+                    if (matches) {
+                      for (var qi = 0; qi < matches.length; qi++) translateEl(matches[qi]);
+                    }
+                  }
+                }
+              });
+              i18nObserver.observe(document.documentElement, { childList: true, subtree: true });
+              document.addEventListener("DOMContentLoaded", function () {
+                i18nObserver.disconnect();
+              });
+            }
+          }
+        }
 
         var currentTheme = localStorage.getItem("xt_theme") || "dark";
         if (currentTheme === "light") document.documentElement.style.colorScheme = "light";
         else if (currentTheme === "dark") document.documentElement.style.colorScheme = "dark";
+
+        function applyAndroidStatusBar(theme) {
+          try {
+            if (!window.AndroidStatusBar) return;
+            var isLight;
+            if (theme === "light") isLight = true;
+            else if (theme === "dark") isLight = false;
+            else isLight = !window.matchMedia("(prefers-color-scheme: dark)").matches;
+            window.AndroidStatusBar.setAppearance(isLight);
+          } catch (e) {}
+        }
+        applyAndroidStatusBar(currentTheme);
+        var systemThemeMql = window.matchMedia("(prefers-color-scheme: dark)");
+        if (systemThemeMql.addEventListener) {
+          systemThemeMql.addEventListener("change", function () {
+            var t = localStorage.getItem("xt_theme") || "dark";
+            if (t !== "light" && t !== "dark") applyAndroidStatusBar(t);
+          });
+        }
+        window.__applyAndroidStatusBar = applyAndroidStatusBar;
       } catch (e) {}
     </script>
   </head>
 
   <body
-    class="antialiased bg-bg text-fg selection:bg-accent-soft min-h-dvh
+    class="antialiased bg-bg text-fg selection:bg-accent-soft
+           h-dvh min-h-0 overflow-hidden
            flex flex-col md:flex-row landscape-phone:flex-row
-           md:h-dvh md:min-h-0 md:overflow-hidden
-           landscape-phone:h-dvh landscape-phone:min-h-0 landscape-phone:overflow-hidden
            pt-[env(safe-area-inset-top)]
            pr-[env(safe-area-inset-right)]"
   >
     <Sidebar />
     <div class="flex-1 min-w-0 min-h-0 flex flex-col order-first md:order-0
-                overflow-x-clip
-                md:overflow-y-auto
-                landscape-phone:overflow-y-auto">
+                overflow-x-clip overflow-y-auto">
       <slot />
     </div>
     <CatalogWarmingIndicator client:load />
@@ -81,6 +163,8 @@ const documentTitle = pageTitle
   import "@/scripts/spatial-navigation"
   import { initFocusGlide } from "@/scripts/lib/focus-glide.js"
   import { initKeyboardHelp } from "@/scripts/lib/keyboard-help.js"
+  import { initI18n } from "@/scripts/lib/i18n.js"
+  initI18n()
   const SpatialNavigation = window.SpatialNavigation
 
   console.log(

@@ -12,7 +12,8 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached } from "@/scripts/lib/cache.js"
-  import { KIND_LABEL_PLURAL, KIND_ORDER } from "@/scripts/lib/kinds.js"
+  import { kindLabelPlural, KIND_ORDER } from "@/scripts/lib/kinds.js"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 
   /** @type {string} */
   let activePlaylistId = $state("")
@@ -29,6 +30,11 @@
   let dragOver = $state(null)
   /** @type {{ kind: string, id: number } | null} */
   let justMoved = $state(null)
+  let locale = $state(0)
+  // Wrappers read the locale rune so {tr(...)} / {klp(...)} template effects
+  // track it and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
+  const klp = (kind) => (locale, kindLabelPlural(kind))
   let _settleTimer = null
   function flagSettle(kind, id) {
     if (_settleTimer) clearTimeout(_settleTimer)
@@ -44,7 +50,7 @@
     return ids.map((id) => {
       const meta = getFavoriteMeta(playlistId, kind, id)
       const item = lookup.get(Number(id))
-      const name = meta?.name || item?.name || `${KIND_LABEL_PLURAL[kind]} ${id}`
+      const name = meta?.name || item?.name || `${kindLabelPlural(kind)} ${id}`
       const logo = meta?.logo ?? item?.logo ?? null
       if (!meta && (item?.name || item?.logo)) {
         setFavoriteMeta(playlistId, kind, id, {
@@ -167,11 +173,13 @@
       lookupsForPlaylistId = ""
       await reload()
     }
+    const onLocale = () => { locale++ }
     const handlers = {
       "xt:active-changed": onCatalogChanged,
       "xt:catalog-warmed": onCatalogChanged,
       "xt:favorites-changed": reload,
       "xt:favorites-order-changed": reload,
+      [LOCALE_EVENT]: onLocale,
     }
     for (const [k, v] of Object.entries(handlers)) {
       document.addEventListener(k, v)
@@ -186,28 +194,28 @@
   let total = $derived(lists.live.length + lists.vod.length + lists.series.length)
 </script>
 
-<div class="rounded-xl border border-line bg-surface p-4 flex flex-col gap-4">
+<div class="rounded-xl border border-line bg-surface p-4 flex flex-col gap-4 overflow-x-clip">
   <div class="flex items-baseline justify-between gap-2">
-    <h2 class="text-sm font-semibold text-fg">Favorites order</h2>
+    <h2 class="text-sm font-semibold text-fg">{tr("settings.favoritesReorder.title")}</h2>
     <span class="text-2xs text-fg-3 tabular-nums">
-      {total === 0 ? "No favorites yet" : `${total} favorites`}
+      {total === 0 ? tr("settings.favoritesReorder.empty") : tr("settings.favoritesReorder.count", { n: total })}
     </span>
   </div>
   <p class="text-xs text-fg-3">
-    Drag a row, or use the up/down buttons. The hub Favorites strip and per-page lists follow this order.
+    {tr("settings.favoritesReorder.helperLong")}
   </p>
 
   {#if total === 0}
     <div class="text-xs text-fg-3 italic">
-      Star a channel, movie, or series to add it here.
+      {tr("settings.favoritesReorder.emptyState")}
     </div>
   {:else}
-    <div class="flex flex-col gap-3 max-h-[60vh] overflow-y-auto custom-scroll pr-1 -mr-1">
+    <div class="flex flex-col gap-3 max-h-[60vh] overflow-y-auto overflow-x-hidden custom-scroll pr-1 -mr-1">
     {#each KIND_ORDER as kind}
       {#if lists[kind].length}
         <div class="flex flex-col gap-1.5">
           <div class="sticky top-0 z-10 -mx-4 px-4 py-1.5 bg-surface/95 backdrop-blur-sm border-b border-line/60 text-eyebrow font-semibold uppercase tracking-wide text-fg-3">
-            {KIND_LABEL_PLURAL[kind]}
+            {klp(kind)}
           </div>
           <ul class="flex flex-col gap-1">
             {#each lists[kind] as row, i (row.id)}
@@ -224,7 +232,7 @@
                 class:is-settling={justMoved?.kind === kind && justMoved?.id === row.id}
                 class:border-line={!(dragOver?.kind === kind && dragOver?.idx === i && dragState?.fromIdx !== i)}
                 class:hover:border-line-soft={!dragState}>
-                <span aria-hidden="true" class="reorder-handle text-fg-3 cursor-grab active:cursor-grabbing px-1 select-none" title="Drag to reorder">
+                <span aria-hidden="true" class="reorder-handle text-fg-3 cursor-grab active:cursor-grabbing px-1 select-none" title={tr("settings.favoritesReorder.dragToReorder")}>
                   <svg xmlns="http://www.w3.org/2000/svg" width="0.875rem" height="0.875rem" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
                 </span>
                 <span class="size-7 shrink-0 rounded-md bg-surface ring-1 ring-line overflow-hidden flex items-center justify-center">
@@ -239,8 +247,8 @@
                   <button
                     type="button"
                     class="reorder-arrow size-7 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
-                    aria-label={`Move "${row.name}" up`}
-                    title="Move up"
+                    aria-label={tr("settings.favoritesReorder.moveUpAria", { name: row.name })}
+                    title={tr("settings.favoritesReorder.moveUp")}
                     disabled={i === 0}
                     onclick={() => move(kind, i, -1)}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="1rem" height="1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>
@@ -248,8 +256,8 @@
                   <button
                     type="button"
                     class="reorder-arrow size-7 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
-                    aria-label={`Move "${row.name}" down`}
-                    title="Move down"
+                    aria-label={tr("settings.favoritesReorder.moveDownAria", { name: row.name })}
+                    title={tr("settings.favoritesReorder.moveDown")}
                     disabled={i === lists[kind].length - 1}
                     onclick={() => move(kind, i, 1)}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="1rem" height="1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>

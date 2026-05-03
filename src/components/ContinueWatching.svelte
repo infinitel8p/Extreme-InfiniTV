@@ -1,6 +1,7 @@
 <script>
   // Hub-only "Continue watching" strip.
   import { onMount } from "svelte"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
   import {
     ensureLoaded as ensurePrefsLoaded,
@@ -27,6 +28,10 @@
    */
   let entries = $state([])
   let activePlaylistId = $state("")
+  let locale = $state(0)
+  // Wrapper reads the locale rune so {tr(...)} template effects track it
+  // and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
 
   function buildProgressEntry(raw, vodById) {
     const percent =
@@ -131,10 +136,12 @@
 
   onMount(() => {
     reload()
+    const onLocaleChange = () => { locale++ }
     const handlers = {
       "xt:active-changed": reload,
       "xt:progress-changed": reload,
       "xt:recents-changed": reload,
+      [LOCALE_EVENT]: onLocaleChange,
     }
     for (const [eventName, handler] of Object.entries(handlers)) {
       document.addEventListener(eventName, handler)
@@ -149,14 +156,14 @@
 
 {#if entries.length}
   <section
-    aria-label="Continue watching"
+    aria-label={tr("strip.continueWatching")}
     class="cw-section flex flex-col gap-3 shrink-0">
     <div class="hub-section-head px-1">
       <div class="hub-section-head__title">
-        <h2 class="hub-section-head__heading">Continue watching</h2>
+        <h2 class="hub-section-head__heading">{tr("strip.continueWatching")}</h2>
       </div>
       <span class="hub-section-head__count">
-        <strong>{entries.length}</strong> {entries.length === 1 ? "item" : "items"}
+        {tr("strip.itemCount", { count: entries.length })}
       </span>
     </div>
 

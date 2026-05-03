@@ -2,6 +2,7 @@ import { selectEntry, removeEntry } from "./creds.js"
 import { getNewestCacheTime } from "./cache.js"
 import { ICON_TRASH, ICON_PENCIL, ICON_CHECK } from "./icons.js"
 import { escapeHtml, fmtAge } from "./format.js"
+import { t } from "./i18n.js"
 
 /**
  * @param {{
@@ -86,7 +87,7 @@ export function renderPlaylistRow({
   const edit = document.createElement("a")
   edit.href = `/login?edit=${encodeURIComponent(entry._id)}`
   edit.title = "Edit"
-  edit.setAttribute("aria-label", `Edit ${entry.title}`)
+  edit.setAttribute("aria-label", t("playlist.editAria", { title: entry.title }))
   edit.className =
     "shrink-0 rounded-md px-1.5 py-2 text-fg-3 hover:text-fg hover:bg-surface focus:text-fg focus:bg-surface min-h-10 inline-flex items-center justify-center transition-colors outline-none"
   edit.innerHTML = `<span class="inline-flex text-base">${ICON_PENCIL}</span>`
@@ -94,13 +95,13 @@ export function renderPlaylistRow({
   const del = document.createElement("button")
   del.type = "button"
   del.title = "Remove"
-  del.setAttribute("aria-label", `Remove ${entry.title}`)
+  del.setAttribute("aria-label", t("playlist.removeAria", { title: entry.title }))
   del.className =
     "shrink-0 rounded-md px-1.5 py-2 text-fg-3 hover:text-bad hover:bg-bad/10 focus:text-bad focus:bg-bad/10 min-h-10 inline-flex items-center justify-center transition-colors outline-none"
   del.innerHTML = `<span class="inline-flex text-base">${ICON_TRASH}</span>`
   del.addEventListener("click", async (ev) => {
     ev.stopPropagation()
-    if (!confirm(`Remove "${entry.title}"?`)) return
+    if (!confirm(t("playlist.removeConfirm", { title: entry.title }))) return
     await removeEntry(entry._id)
     if (onAfterRemove) await onAfterRemove()
   })
@@ -109,5 +110,10 @@ export function renderPlaylistRow({
   return row
 }
 
-export const PLAYLIST_LIST_EMPTY_COPY =
-  "No playlists yet. Add one to start watching."
+/**
+ * Returns the empty-state copy for a playlist list, translated to the active
+ * locale. Keep as a function so the value re-evaluates on locale change.
+ */
+export function getPlaylistListEmptyCopy() {
+  return t("list.noPlaylistsCta")
+}

@@ -11,20 +11,22 @@ import {
   IconSearch,
   IconSparkles,
   IconStar,
+  IconBookmark,
 } from "@tabler/icons-svelte"
-import PlaylistSwitcher from "@/components/PlaylistSwitcher.astro"
+import PlaylistSwitcher from "@/components/PlaylistSwitcher.svelte"
 
 const path = Astro.url.pathname.replace(/\/$/, "") || "/"
 
 const items = [
-  { href: "/",                label: "Home",            Icon: IconHome,         match: (p) => p === "/" },
-  { href: "/livetv",          label: "Live TV",         Icon: IconDeviceTv,     match: (p) => p === "/livetv" || p.startsWith("/livetv/") },
-  { href: "/movies",          label: "Movies",          Icon: IconMovie,        match: (p) => p === "/movies" || p.startsWith("/movies/") },
-  { href: "/series",          label: "Series",          Icon: IconStack2,       match: (p) => p === "/series" || p.startsWith("/series/") },
-  { href: "/favorites",       label: "Favorites",       Icon: IconStar,         match: (p) => p === "/favorites" || p.startsWith("/favorites/") },
-  { href: "/recently-added",  label: "Recently added",  Icon: IconSparkles,     match: (p) => p === "/recently-added" || p.startsWith("/recently-added/") },
-  { href: "/epg",             label: "EPG",             Icon: IconCalendarTime, match: (p) => p === "/epg" || p.startsWith("/epg/") },
-  { href: "/downloads",       label: "Downloads",       Icon: IconDownload,     match: (p) => p === "/downloads" || p.startsWith("/downloads/"), id: "nav-downloads" },
+  { href: "/",                key: "nav.home",          label: "Home",            Icon: IconHome,         match: (p) => p === "/" },
+  { href: "/livetv",          key: "nav.livetv",        label: "Live TV",         Icon: IconDeviceTv,     match: (p) => p === "/livetv" || p.startsWith("/livetv/") },
+  { href: "/movies",          key: "nav.movies",        label: "Movies",          Icon: IconMovie,        match: (p) => p === "/movies" || p.startsWith("/movies/") },
+  { href: "/series",          key: "nav.series",        label: "Series",          Icon: IconStack2,       match: (p) => p === "/series" || p.startsWith("/series/") },
+  { href: "/favorites",       key: "nav.favorites",     label: "Favorites",       Icon: IconStar,         match: (p) => p === "/favorites" || p.startsWith("/favorites/") },
+  { href: "/watchlist",       key: "nav.watchlist",     label: "Watchlist",       Icon: IconBookmark,     match: (p) => p === "/watchlist" || p.startsWith("/watchlist/") },
+  { href: "/recently-added",  key: "nav.recentlyAdded", label: "Recently added",  Icon: IconSparkles,     match: (p) => p === "/recently-added" || p.startsWith("/recently-added/") },
+  { href: "/epg",             key: "nav.epg",           label: "EPG",             Icon: IconCalendarTime, match: (p) => p === "/epg" || p.startsWith("/epg/") },
+  { href: "/downloads",       key: "nav.downloads",     label: "Downloads",       Icon: IconDownload,     match: (p) => p === "/downloads" || p.startsWith("/downloads/"), id: "nav-downloads" },
 ]
 
 const tabItems = [
@@ -35,10 +37,11 @@ const tabItems = [
 ]
 
 const moreItems = [
-  { href: "/favorites",      label: "Favorites",      Icon: IconStar,     match: (p) => p === "/favorites" || p.startsWith("/favorites/") },
-  { href: "/recently-added", label: "Recently added", Icon: IconSparkles, match: (p) => p === "/recently-added" || p.startsWith("/recently-added/") },
-  { href: "/downloads",      label: "Downloads",      Icon: IconDownload, match: (p) => p === "/downloads" || p.startsWith("/downloads/"), id: "mobile-more-downloads" },
-  { href: "/settings",       label: "Settings",       Icon: IconSettings, match: (p) => p === "/settings"  || p.startsWith("/settings/") },
+  { href: "/favorites",      key: "nav.favorites",     label: "Favorites",      Icon: IconStar,     match: (p) => p === "/favorites" || p.startsWith("/favorites/") },
+  { href: "/watchlist",      key: "nav.watchlist",     label: "Watchlist",      Icon: IconBookmark, match: (p) => p === "/watchlist" || p.startsWith("/watchlist/") },
+  { href: "/recently-added", key: "nav.recentlyAdded", label: "Recently added", Icon: IconSparkles, match: (p) => p === "/recently-added" || p.startsWith("/recently-added/") },
+  { href: "/downloads",      key: "nav.downloads",     label: "Downloads",      Icon: IconDownload, match: (p) => p === "/downloads" || p.startsWith("/downloads/"), id: "mobile-more-downloads" },
+  { href: "/settings",       key: "nav.settings",      label: "Settings",       Icon: IconSettings, match: (p) => p === "/settings"  || p.startsWith("/settings/") },
 ]
 
 const moreActive = moreItems.some((i) => i.match(path))
@@ -62,6 +65,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
   <a
     href="/"
     aria-label="Extreme InfiniTV - Home"
+    data-i18n-attr="aria-label:sidebar.brandHome"
     class="brand-mark group [view-transition-name:brand-mark]
            flex items-center gap-3 px-2 py-2
            justify-center lg:justify-start outline-none">
@@ -122,6 +126,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
         href="/search"
         aria-label="Search (Ctrl+K)"
         title="Search (Ctrl+K)"
+        data-i18n-attr="aria-label:sidebar.searchWithShortcut;title:sidebar.searchWithShortcut"
         aria-current={searchActive ? "page" : undefined}
         class:list={[
           "mt-2 flex items-center gap-3 rounded-xl px-2.5 py-2.5 min-h-11",
@@ -133,7 +138,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
             : "text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:border-accent",
         ]}>
         <IconSearch aria-hidden="true" stroke={searchActive ? 2 : 1.75} class:list={["size-5 shrink-0", searchActive ? "text-accent" : "text-fg-3"]} />
-        <span class="hidden lg:inline truncate text-sm flex-1 text-left">Search</span>
+        <span data-i18n="nav.search" class="hidden lg:inline truncate text-sm flex-1 text-left">Search</span>
         <kbd class="hidden lg:inline-block text-2xs text-fg-3 border border-line rounded px-1.5 py-0.5 font-sans">
           Ctrl K
         </kbd>
@@ -141,8 +146,8 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     )
   })()}
 
-  <nav class="flex flex-col gap-1 flex-1 mt-1" aria-label="Main">
-    {items.map(({ href, label, Icon, match, id }) => {
+  <nav class="flex flex-col gap-1 flex-1 mt-1" aria-label="Main" data-i18n-attr="aria-label:sidebar.mainLabel">
+    {items.map(({ href, key, label, Icon, match, id }) => {
       const active = match(path)
       const isDownloads = id === "nav-downloads"
       return (
@@ -152,6 +157,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
           aria-label={label}
           aria-current={active ? "page" : undefined}
           title={label}
+          data-i18n-attr={`aria-label:${key};title:${key}`}
           class:list={[
             "flex items-center gap-3 rounded-xl px-2.5 py-2.5 min-h-11",
             "justify-center lg:justify-start",
@@ -181,7 +187,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
                        tabular-nums ring-2 ring-bg">0</span>
             )}
           </span>
-          <span class="hidden lg:inline truncate text-sm font-medium">
+          <span data-i18n={key} class="hidden lg:inline truncate text-sm font-medium">
             {label}
           </span>
           {isDownloads && (
@@ -200,6 +206,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     hidden
     aria-label="Account expiration warning"
     title="Account expiration"
+    data-i18n-attr="aria-label:sidebar.expirationAria;title:sidebar.expirationTitle"
     class="hidden lg:flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium tabular-nums
            border border-warn/30 bg-warn/10 text-warn
            data-[state=critical]:border-bad/40 data-[state=critical]:bg-bad/10 data-[state=critical]:text-bad
@@ -215,13 +222,14 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
 
   <div class="flex flex-col gap-1 pt-2 border-t border-line">
     <div class="hidden lg:block">
-      <PlaylistSwitcher />
+      <PlaylistSwitcher client:load />
     </div>
     <a
       href="/settings"
       aria-label="Settings"
       aria-current={settingsActive ? "page" : undefined}
       title="Settings"
+      data-i18n-attr="aria-label:nav.settings;title:nav.settings"
       class:list={[
         "flex items-center gap-3 rounded-xl px-2.5 py-2.5 min-h-11",
         "justify-center lg:justify-start",
@@ -239,7 +247,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
           settingsActive ? "text-accent" : "text-fg-3",
         ]}
       />
-      <span class="hidden lg:inline truncate text-sm font-medium">
+      <span data-i18n="nav.settings" class="hidden lg:inline truncate text-sm font-medium">
         Settings
       </span>
     </a>
@@ -250,12 +258,13 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
 <nav
   data-mobile-nav
   class="md:hidden landscape-phone:hidden order-last
-         sticky bottom-0 z-30 mt-auto
+         relative z-30
          shrink-0 flex flex-col bg-bg/95 backdrop-blur
          pb-[max(0.25rem,env(safe-area-inset-bottom))]
          pl-[max(0,env(safe-area-inset-left))]
          pr-[max(0,env(safe-area-inset-right))]"
-  aria-label="Main">
+  aria-label="Main"
+  data-i18n-attr="aria-label:sidebar.mainLabel">
 
   <!-- More panel: floats above the tab row, doesn't push page content. -->
   <div
@@ -273,6 +282,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
         <a
           href="/search"
           aria-label="Search"
+          data-i18n-attr="aria-label:common.search"
           class="group w-full flex items-center gap-3 rounded-xl px-2.5 py-2 min-h-12
                  transition-[color,background-color,transform] duration-150 outline-none
                  hover:bg-surface-2 focus-visible:bg-surface-2 active:scale-[0.99]
@@ -280,10 +290,10 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
           <span class="relative flex size-10 shrink-0 items-center justify-center rounded-lg ring-1 transition-colors bg-surface ring-line group-hover:ring-line-soft">
             <IconSearch aria-hidden="true" stroke={1.75} class="size-5 shrink-0 text-fg-2" />
           </span>
-          <span class="truncate text-sm font-medium">Search</span>
+          <span data-i18n="nav.search" class="truncate text-sm font-medium">Search</span>
         </a>
       </li>
-      {moreItems.map(({ href, label, Icon, match, id }) => {
+      {moreItems.map(({ href, key, label, Icon, match, id }) => {
         const active = match(path)
         const isDownloads = id === "mobile-more-downloads"
         return (
@@ -293,6 +303,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
               id={id}
               aria-label={label}
               aria-current={active ? "page" : undefined}
+              data-i18n-attr={`aria-label:${key}`}
               class:list={[
                 "group flex items-center gap-3 rounded-xl px-2.5 py-2 min-h-12",
                 "transition-[color,background-color,transform] duration-150 outline-none",
@@ -327,7 +338,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
                            tabular-nums ring-2 ring-bg">0</span>
                 )}
               </span>
-              <span class="truncate text-sm font-medium">{label}</span>
+              <span data-i18n={key} class="truncate text-sm font-medium">{label}</span>
               {isDownloads && (
                 <span
                   id="mobile-more-downloads-sub"
@@ -342,13 +353,14 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
 
   <!-- Tab row: 2 destinations | More | 2 destinations. -->
   <div class="flex items-stretch border-t border-line">
-    {tabItems.slice(0, 2).map(({ href, label, Icon, match }) => {
+    {tabItems.slice(0, 2).map(({ href, key, label, Icon, match }) => {
       const active = match(path)
       return (
         <a
           href={href}
           aria-label={label}
           aria-current={active ? "page" : undefined}
+          data-i18n-attr={`aria-label:${key}`}
           class:list={[
             "flex flex-1 min-w-0 flex-col items-center justify-center gap-0.5",
             "min-h-14 px-0.5 sm:px-1 py-2 rounded-lg",
@@ -364,7 +376,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
               active ? "text-accent" : "text-fg-3",
             ]}
           />
-          <span class:list={[
+          <span data-i18n={key} class:list={[
             "text-2xs leading-none truncate max-w-full",
             active ? "font-medium" : "font-normal",
           ]}>
@@ -380,6 +392,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
       aria-label="More"
       aria-controls="mobile-more-panel"
       aria-expanded="false"
+      data-i18n-attr="aria-label:sidebar.more"
       class:list={[
         "group flex flex-1 min-w-0 flex-col items-center justify-center gap-0.5 relative",
         "min-h-14 px-0.5 sm:px-1 py-2 rounded-lg",
@@ -407,7 +420,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
                  bg-accent text-bg text-[10px] font-semibold leading-none
                  tabular-nums ring-2 ring-bg">0</span>
       </span>
-      <span class:list={[
+      <span data-i18n="sidebar.more" class:list={[
         "text-2xs leading-none truncate max-w-full",
         moreActive ? "font-medium" : "font-normal",
       ]}>
@@ -415,13 +428,14 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
       </span>
     </button>
 
-    {tabItems.slice(2).map(({ href, label, Icon, match }) => {
+    {tabItems.slice(2).map(({ href, key, label, Icon, match }) => {
       const active = match(path)
       return (
         <a
           href={href}
           aria-label={label}
           aria-current={active ? "page" : undefined}
+          data-i18n-attr={`aria-label:${key}`}
           class:list={[
             "flex flex-1 min-w-0 flex-col items-center justify-center gap-0.5",
             "min-h-14 px-0.5 sm:px-1 py-2 rounded-lg",
@@ -437,7 +451,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
               active ? "text-accent" : "text-fg-3",
             ]}
           />
-          <span class:list={[
+          <span data-i18n={key} class:list={[
             "text-2xs leading-none truncate max-w-full",
             active ? "font-medium" : "font-normal",
           ]}>
@@ -456,6 +470,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     DOWNLOAD_PROGRESS_EVENT,
   } from "@/scripts/lib/downloads.js"
   import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
+  import { t } from "@/scripts/lib/i18n.js"
 
   function onLoginPage() {
     return (
@@ -550,11 +565,11 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
       lastStatusById.set(d.id, d.status)
       if (prev === d.status) continue
       if (d.status === "done" && prev !== "done") {
-        toastSuccess("Download complete", {
+        toastSuccess(t("downloads.toast.complete"), {
           description: d.title || d.filename || "",
         })
       } else if (d.status === "error" && prev !== "error") {
-        toastError("Download failed", {
+        toastError(t("downloads.toast.failed"), {
           description: [d.title || d.filename || "", d.error || ""]
             .filter(Boolean)
             .join("\n"),

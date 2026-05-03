@@ -1,6 +1,7 @@
 <script>
   // Full-page Recently Added view: VOD + series sorted by `added` ts.
   import { onMount } from "svelte"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
   import {
@@ -8,11 +9,17 @@
     CATALOG_WARMED_EVENT,
   } from "@/scripts/lib/catalog.js"
   import { fmtImdbRating } from "@/scripts/lib/format.js"
+  import { kindLabel } from "@/scripts/lib/kinds.js"
 
   const PAGE_SIZE = 200
 
   /** @type {"all"|"vod"|"series"} */
   let filter = $state("all")
+  let locale = $state(0)
+  // Wrappers read the locale rune so {tr(...)} / {kl(...)} template effects
+  // track it and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
+  const kl = (kind) => (locale, kindLabel(kind))
   /** @type {Array<{ts:number, kind:"vod"|"series", item:any}>} */
   let merged = $state([])
   let loading = $state(true)
@@ -94,9 +101,11 @@
 
   onMount(() => {
     reload()
+    const onLocale = () => { locale++ }
     const handlers = {
       "xt:active-changed": reload,
       [CATALOG_WARMED_EVENT]: reload,
+      [LOCALE_EVENT]: onLocale,
     }
     for (const [eventName, handler] of Object.entries(handlers)) {
       document.addEventListener(eventName, handler)
@@ -110,11 +119,11 @@
 </script>
 
 <div class="flex flex-col gap-3 shrink-0">
-  <div class="flex flex-wrap gap-2" role="tablist" aria-label="Filter by kind">
+  <div class="flex flex-wrap gap-2" role="tablist" aria-label={tr("recentlyAdded.heading")}>
     {#each [
-      { id: "all", label: "All" },
-      { id: "vod", label: "Movies" },
-      { id: "series", label: "Series" },
+      { id: "all", key: "favorites.filter.all" },
+      { id: "vod", key: "favorites.filter.vod" },
+      { id: "series", key: "favorites.filter.series" },
     ] as chip (chip.id)}
       <button
         type="button"
@@ -125,22 +134,21 @@
         class="filter-chip rounded-full border border-line bg-surface px-3.5 py-1.5 text-sm
                hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                transition-colors">
-        {chip.label}
+        {tr(chip.key)}
         <span class="ml-1.5 text-fg-3 tabular-nums">{counts[chip.id]}</span>
       </button>
     {/each}
   </div>
 
   {#if loading && !merged.length}
-    <div class="text-sm text-fg-3 px-1">Loading recently added items…</div>
+    <div class="text-sm text-fg-3 px-1">{tr("common.loading")}</div>
   {:else if !merged.length}
     <div class="rounded-2xl border border-line bg-surface px-5 py-8 text-sm text-fg-2">
-      Nothing recently added yet. Refresh your playlist or wait for the next provider update.
+      {tr("recentlyAdded.empty")}
     </div>
   {:else}
     <div class="px-1 text-xs text-fg-3 tabular-nums">
-      Showing <strong class="text-fg-2">{visible.length}</strong> of
-      <strong class="text-fg-2">{counts[filter]}</strong>
+      {tr("recentlyAdded.showingOfTotal", { visible: visible.length, total: counts[filter] })}
     </div>
   {/if}
 </div>
@@ -177,14 +185,14 @@
             <div class="h-full w-full flex items-center justify-center text-center px-3
                         text-fg-3 text-xs tracking-wide
                         bg-linear-to-br from-surface-2 to-surface-3">
-              {row.item.name || (row.kind === "vod" ? "Movie" : "Series")}
+              {row.item.name || kl(row.kind)}
             </div>
           {/if}
 
           <span
             class="absolute top-1.5 left-1.5 text-label font-medium uppercase tracking-wide
                    rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
-            {row.kind === "vod" ? "Movie" : "Series"}
+            {kl(row.kind)}
           </span>
 
           {#if ratingText}
@@ -203,7 +211,7 @@
 
         <div class="px-2 py-2 min-w-0">
           <div class="truncate text-sm font-medium text-fg">
-            {row.item.name || (row.kind === "vod" ? "Movie" : "Series")}
+            {row.item.name || kl(row.kind)}
           </div>
           <div class="truncate text-2xs text-fg-3 tabular-nums">
             Added {fmtAdded(row.ts)}
@@ -214,13 +222,8 @@
 
     {#if visible.length < (filter === "all" ? merged.length : counts[filter])}
       <div class="col-span-full flex justify-center py-3">
-        <button
-          type="button"
-          onclick={loadMore}
-          class="rounded-xl border border-line bg-surface px-4 py-2 text-sm
-                 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
-                 transition-colors">
-          Load more
+        <button type="button" onclick={loadMore} class="btn">
+          {tr("recentlyAdded.loadMore")}
         </button>
       </div>
     {/if}
@@ -234,4 +237,12 @@
     color: var(--color-fg);
   }
   .aspect-2-3 { aspect-ratio: 2 / 3; }
+  /* Touch / TV-remote: bump chip to 44px tap target. */
+  @media (pointer: coarse) {
+    .filter-chip {
+      padding-top: 0.5rem;
+      padding-bottom: 0.5rem;
+      min-height: 2.75rem;
+    }
+  }
 </style>

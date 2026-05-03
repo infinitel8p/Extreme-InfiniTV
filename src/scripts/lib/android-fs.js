@@ -1,3 +1,5 @@
+import { log } from "@/scripts/lib/log.js"
+
 const isAndroid =
   typeof navigator !== "undefined" &&
   /Android/i.test(navigator.userAgent || "")
@@ -9,7 +11,7 @@ async function mod() {
   if (!isAndroid) return null
   if (!modPromise) {
     modPromise = import("tauri-plugin-android-fs-api").catch((e) => {
-      console.error(
+      log.error(
         "[xt:android-fs] plugin module unavailable, downloads will fall back:",
         e
       )
@@ -92,7 +94,7 @@ export async function pickDirectory() {
   try {
     await m.AndroidFs.persistPickerUriPermission(uri)
   } catch (e) {
-    console.error("[xt:android-fs] persistPickerUriPermission failed:", e)
+    log.error("[xt:android-fs] persistPickerUriPermission failed:", e)
   }
   return uri
 }
@@ -109,7 +111,7 @@ export async function releasePickedDir(uri) {
   try {
     await m.AndroidFs.releasePersistedPickerUriPermission(uri)
   } catch (e) {
-    console.error("[xt:android-fs] releasePersistedPickerUriPermission failed:", e)
+    log.error("[xt:android-fs] releasePersistedPickerUriPermission failed:", e)
   }
 }
 
@@ -125,12 +127,12 @@ export async function publishFile(uri) {
   try {
     await m.AndroidFs.setPublicFilePending(uri, false)
   } catch (e) {
-    console.error("[xt:android-fs] setPublicFilePending failed:", e)
+    log.error("[xt:android-fs] setPublicFilePending failed:", e)
   }
   try {
     await m.AndroidFs.scanPublicFile(uri)
   } catch (e) {
-    console.error("[xt:android-fs] scanPublicFile failed:", e)
+    log.error("[xt:android-fs] scanPublicFile failed:", e)
   }
 }
 
@@ -140,7 +142,7 @@ export async function removeFile(uri) {
   try {
     await m.AndroidFs.removeFile(uri)
   } catch (e) {
-    console.error("[xt:android-fs] removeFile failed:", uri, e)
+    log.error("[xt:android-fs] removeFile failed:", uri, e)
   }
 }
 
@@ -186,7 +188,7 @@ export async function viewFileExternally(uri) {
     await m.AndroidFs.showViewFileDialog(uri)
     return true
   } catch (e) {
-    console.error("[xt:android-fs] showViewFileDialog failed:", e)
+    log.error("[xt:android-fs] showViewFileDialog failed:", e)
     return false
   }
 }

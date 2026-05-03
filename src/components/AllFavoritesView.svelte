@@ -1,6 +1,9 @@
 <script>
   // Cross-playlist favorites view
   import { onMount } from "svelte"
+  import { IconExternalLink } from "@tabler/icons-svelte"
+  import { log } from "@/scripts/lib/log.js"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getEntries, getActiveEntry, selectEntry } from "@/scripts/lib/creds.js"
   import {
     ensureLoaded as ensurePrefsLoaded,
@@ -9,10 +12,15 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { KIND_LABEL, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
 
   /** @type {"all"|"live"|"vod"|"series"} */
   let filter = $state("all")
+  let locale = $state(0)
+  // Wrappers read the locale rune so {tr(...)} / {kl(...)} template effects
+  // track it and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
+  const kl = (kind) => (locale, kindLabel(kind))
   let activePlaylistId = $state("")
   /** @type {Array<{ id: string, title: string }>} */
   let playlists = $state([])
@@ -56,36 +64,39 @@
       title: entry.title || "Untitled playlist",
     }))
 
-    // Hydrate every playlist's catalogs in parallel so logo / name lookups
-    // resolve for items that have no favMeta on record yet (older saves).
+    const raw = getAllGlobalFavorites()
+    const needed = new Map()
+    for (const row of raw) {
+      const kinds = needed.get(row.playlistId) || new Set()
+      kinds.add(row.kind)
+      if (row.kind === "live") kinds.add("m3u")
+      needed.set(row.playlistId, kinds)
+    }
     await Promise.all(
-      allEntries.flatMap((entry) => [
-        hydrateCache(entry._id, "live"),
-        hydrateCache(entry._id, "m3u"),
-        hydrateCache(entry._id, "vod"),
-        hydrateCache(entry._id, "series"),
-      ])
+      [...needed].flatMap(([playlistId, kinds]) =>
+        [...kinds].map((kind) => hydrateCache(playlistId, kind))
+      )
     )
 
     /** @type {Map<string, { live: Map<number, any>, vod: Map<number, any>, series: Map<number, any> }>} */
     const lookups = new Map()
-    for (const entry of allEntries) {
-      lookups.set(entry._id, {
+    for (const playlistId of needed.keys()) {
+      lookups.set(playlistId, {
         live: new Map(
           (
-            getCached(entry._id, "live")?.data ||
-            getCached(entry._id, "m3u")?.data ||
+            getCached(playlistId, "live")?.data ||
+            getCached(playlistId, "m3u")?.data ||
             []
           ).map((item) => [Number(item.id), item])
         ),
         vod: new Map(
-          (getCached(entry._id, "vod")?.data || []).map((item) => [
+          (getCached(playlistId, "vod")?.data || []).map((item) => [
             Number(item.id),
             item,
           ])
         ),
         series: new Map(
-          (getCached(entry._id, "series")?.data || []).map((item) => [
+          (getCached(playlistId, "series")?.data || []).map((item) => [
             Number(item.id),
             item,
           ])
@@ -94,11 +105,10 @@
     }
 
     const titleById = new Map(playlists.map((entry) => [entry.id, entry.title]))
-    const raw = getAllGlobalFavorites()
     entries = raw.map((row) => {
       const meta = getFavoriteMeta(row.playlistId, row.kind, row.id)
       const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
-      const name = meta?.name || item?.name || `${KIND_LABEL[row.kind]} ${row.id}`
+      const name = meta?.name || item?.name || `${kindLabel(row.kind)} ${row.id}`
       const logo = meta?.logo ?? item?.logo ?? null
       // Lazily backfill meta so cross-playlist clicks still have name + logo
       // even when the source catalog cache later expires.
@@ -129,7 +139,7 @@
     try {
       await selectEntry(entry.playlistId)
     } catch (err) {
-      console.error("[xt:favorites] selectEntry failed:", err)
+      log.error("[xt:favorites] selectEntry failed:", err)
     }
     window.location.href = entry.href
   }
@@ -140,12 +150,22 @@
 
   onMount(() => {
     reload()
+    const onLocale = () => { locale++ }
+    let warmedRaf = 0
+    const onCatalogWarmed = () => {
+      if (warmedRaf) return
+      warmedRaf = requestAnimationFrame(() => {
+        warmedRaf = 0
+        reload()
+      })
+    }
     const handlers = {
       "xt:active-changed": reload,
       "xt:entries-updated": reload,
       "xt:favorites-changed": reload,
       "xt:favorites-order-changed": reload,
-      "xt:catalog-warmed": reload,
+      "xt:catalog-warmed": onCatalogWarmed,
+      [LOCALE_EVENT]: onLocale,
     }
     for (const [eventName, handler] of Object.entries(handlers)) {
       document.addEventListener(eventName, handler)
@@ -154,17 +174,18 @@
       for (const [eventName, handler] of Object.entries(handlers)) {
         document.removeEventListener(eventName, handler)
       }
+      if (warmedRaf) cancelAnimationFrame(warmedRaf)
     }
   })
 </script>
 
 <div class="flex flex-col gap-3 shrink-0">
-  <div class="flex flex-wrap gap-2" role="tablist" aria-label="Filter favorites by kind">
+  <div class="flex flex-wrap gap-2" role="tablist" aria-label={tr("favorites.heading")}>
     {#each [
-      { id: "all", label: "All" },
-      { id: "live", label: "Live TV" },
-      { id: "vod", label: "Movies" },
-      { id: "series", label: "Series" },
+      { id: "all", key: "favorites.filter.all" },
+      { id: "live", key: "favorites.filter.live" },
+      { id: "vod", key: "favorites.filter.vod" },
+      { id: "series", key: "favorites.filter.series" },
     ] as chip (chip.id)}
       <button
         type="button"
@@ -175,29 +196,25 @@
         class="filter-chip rounded-full border border-line bg-surface px-3.5 py-1.5 text-sm
                hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
                transition-colors">
-        {chip.label}
+        {tr(chip.key)}
         <span class="ml-1.5 text-fg-3 tabular-nums">{counts[chip.id]}</span>
       </button>
     {/each}
   </div>
 
   {#if loading && !entries.length}
-    <div class="text-sm text-fg-3 px-1">Loading favorites…</div>
+    <div class="text-sm text-fg-3 px-1">{tr("common.loading")}</div>
   {:else if !entries.length}
     <div class="rounded-2xl border border-line bg-surface px-5 py-8 text-sm text-fg-2">
-      No favorites yet. Star a channel, movie, or series to see it here.
+      {tr("favorites.helperEmpty")}
     </div>
   {:else if !visible.length}
     <div class="rounded-2xl border border-line bg-surface px-5 py-8 text-sm text-fg-2">
-      No {filter === "vod" ? "movies" : filter === "live" ? "live channels" : filter} in your favorites.
+      {tr("favorites.helperFiltered")}
     </div>
   {:else}
     <div class="px-1 text-xs text-fg-3 tabular-nums">
-      <strong class="text-fg-2">{visible.length}</strong>
-      {visible.length === 1 ? "item" : "items"}
-      across
-      <strong class="text-fg-2">{playlists.length}</strong>
-      {playlists.length === 1 ? "playlist" : "playlists"}
+      {tr("strip.itemCount", { count: visible.length })}
     </div>
   {/if}
 </div>
@@ -215,7 +232,7 @@
       <a
         href={entry.href}
         onclick={(event) => openCard(event, entry)}
-        aria-label={`Open ${entry.name} from ${entry.playlistTitle}`}
+        aria-label={tr("favorites.cardAriaLabel", { name: entry.name, playlist: entry.playlistTitle })}
         class="fav-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line
                transition-[transform,box-shadow] duration-150
@@ -261,7 +278,7 @@
           <span
             class="absolute top-1.5 left-1.5 text-label font-medium uppercase tracking-wide
                    rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
-            {KIND_LABEL[entry.kind]}
+            {kl(entry.kind)}
           </span>
         </div>
 
@@ -271,11 +288,7 @@
           </div>
           <div class="truncate text-2xs text-fg-3 flex items-center gap-1">
             {#if entry.isCrossPlaylist}
-              <svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="shrink-0 text-accent">
-                <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
-                <polyline points="16 6 21 6 21 11" />
-                <line x1="10" y1="14" x2="21" y2="3" />
-              </svg>
+              <IconExternalLink aria-hidden="true" class="h-3 w-3 shrink-0 text-accent" />
             {/if}
             <span class="truncate">{entry.playlistTitle}</span>
           </div>
@@ -290,5 +303,13 @@
     background: var(--color-surface-2);
     border-color: var(--color-accent);
     color: var(--color-fg);
+  }
+  /* Touch / TV-remote: bump chip to 44px tap target. */
+  @media (pointer: coarse) {
+    .filter-chip {
+      padding-top: 0.5rem;
+      padding-bottom: 0.5rem;
+      min-height: 2.75rem;
+    }
   }
 </style>

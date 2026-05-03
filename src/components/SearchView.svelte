@@ -1,7 +1,8 @@
 <script>
   // Full search experience. Mounted on /search and used as the search surface 
   import { onMount, tick } from "svelte"
-  import { getActiveEntry, loadCreds, normalize } from "@/scripts/lib/creds.js"
+  import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
+  import { normalize } from "@/scripts/lib/text.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
   import { ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js"
   import { warmupActive } from "@/scripts/lib/catalog.js"
@@ -10,7 +11,8 @@
     getProgrammesSync,
     EPG_LOADED_EVENT,
   } from "@/scripts/lib/epg-data.js"
-  import { KIND_LABEL } from "@/scripts/lib/kinds.js"
+  import { kindLabel } from "@/scripts/lib/kinds.js"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 
   /** @type {{ focusOnMount?: boolean }} */
   let { focusOnMount = false } = $props()
@@ -43,6 +45,11 @@
   /** @type {Array<{ kind: "live"|"vod"|"series"|"epg", id: string|number, name: string, logo: string|null, subtitle: string, href: string, norm: string }>} */
   let allItems = $state([])
   let isWarming = $state(false)
+  let locale = $state(0)
+  // Wrappers read the locale rune so {tr(...)} / {kl(...)} template effects
+  // track it and re-evaluate on LOCALE_EVENT.
+  const tr = (key, params) => (locale, t(key, params))
+  const kl = (kind) => (locale, kindLabel(kind))
   /** @type {HTMLInputElement|null} */
   let inputEl = null
 
@@ -59,8 +66,8 @@
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const dayDiff = Math.round((startDay - today) / 86_400_000)
     const time = startDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    if (dayDiff === 0) return `Today ${time}`
-    if (dayDiff === 1) return `Tomorrow ${time}`
+    if (dayDiff === 0) return `${t("epg.today")} ${time}`
+    if (dayDiff === 1) return `${t("common.tomorrow")} ${time}`
     const wk = startDate.toLocaleDateString([], { weekday: "short" })
     return `${wk} ${time}`
   }
@@ -274,9 +281,11 @@
     function onEpgLoaded() {
       loadIndex({ warm: false, warmEpg: false })
     }
+    const onLocale = () => { locale++ }
     document.addEventListener("xt:catalog-warmed", onWarmed)
     document.addEventListener(EPG_LOADED_EVENT, onEpgLoaded)
     document.addEventListener("xt:active-changed", () => loadIndex())
+    document.addEventListener(LOCALE_EVENT, onLocale)
     if (focusOnMount) {
       tick().then(() => {
         inputEl?.focus()
@@ -286,6 +295,7 @@
     return () => {
       document.removeEventListener("xt:catalog-warmed", onWarmed)
       document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
+      document.removeEventListener(LOCALE_EVENT, onLocale)
       if (_queryTimer) clearTimeout(_queryTimer)
     }
   })
@@ -308,8 +318,8 @@
           setQueryDebounced(v)
         }}
         type="search"
-        placeholder="Search channels, movies, series…"
-        aria-label="Search"
+        placeholder={tr("search.placeholderFull")}
+        aria-label={tr("common.search")}
         autocomplete="off"
         spellcheck="false"
         class="flex-1 min-w-0 bg-transparent text-fg placeholder:text-fg-3 outline-none py-2 text-base" />
@@ -322,7 +332,7 @@
             syncUrl("")
             inputEl?.focus()
           }}
-          aria-label="Clear search"
+          aria-label={tr("search.clear")}
           class="search-clear size-7 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-2 outline-none focus-visible:bg-surface-2 transition-colors">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1rem" height="1rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
         </button>
@@ -343,14 +353,14 @@
           class:border-line={kindFilter !== k}
           class:hover:bg-surface-2={kindFilter !== k}>
           {k === "all"
-            ? "All"
+            ? tr("common.all")
             : k === "vod"
-            ? "Movies"
+            ? tr("nav.movies")
             : k === "live"
-            ? "Live TV"
+            ? tr("nav.livetv")
             : k === "epg"
-            ? "EPG"
-            : "Series"}
+            ? tr("nav.epg")
+            : tr("nav.series")}
           {#if queryDebounced.trim()}
             <span class="ml-1.5 text-2xs tabular-nums opacity-70">{kindCounts[k]}</span>
           {/if}
@@ -364,7 +374,7 @@
       <svg viewBox="0 0 24 24" width="1rem" height="1rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" class="animate-spin">
         <path d="M21 12a9 9 0 1 1-6.2-8.55"/>
       </svg>
-      <span>Loading catalog…</span>
+      <span>{tr("search.loadingCatalog")}</span>
     </div>
     <div class="text-2xs">{hint}</div>
   {/snippet}
@@ -373,24 +383,24 @@
     {#if !queryDebounced.trim()}
       <div class="px-4 py-12 text-center text-sm text-fg-3 max-w-md mx-auto">
         {#if isWarming}
-          {@render warming("Search will fill in as data arrives.")}
+          {@render warming(tr("search.warmingHint"))}
         {:else}
-          <p class="text-base text-fg-2 mb-1">Search the active playlist.</p>
-          <p class="text-2xs">Enter to open the top result · ↑↓ to move · Esc to clear</p>
+          <p class="text-base text-fg-2 mb-1">{tr("search.helpHeading")}</p>
+          <p class="text-2xs">{tr("search.helpKbd")}</p>
         {/if}
       </div>
     {:else if !results.length}
       <div class="px-4 py-12 text-center text-sm text-fg-3 max-w-md mx-auto">
         {#if isWarming}
-          {@render warming("Results will fill in as data arrives.")}
+          {@render warming(tr("search.warmingResultsHint"))}
         {:else}
-          <p>Nothing matches "{queryDebounced.trim()}".</p>
+          <p>{tr("search.noResults", { query: queryDebounced.trim() })}</p>
           {#if kindFilter !== "all" && kindCounts.all > 0}
             <button
               type="button"
               onclick={() => (kindFilter = "all")}
               class="mt-4 inline-flex items-center justify-center min-h-11 px-3.5 rounded-lg border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors outline-none">
-              Show all {kindCounts.all} across kinds
+              {tr("search.showAllKinds", { n: kindCounts.all })}
             </button>
           {/if}
         {/if}
@@ -417,7 +427,7 @@
                     class:object-cover={r.kind !== "live"}
                     class:object-contain={r.kind === "live"} />
                 {:else}
-                  <span class="text-2xs text-fg-3 uppercase">{KIND_LABEL[r.kind][0]}</span>
+                  <span class="text-2xs text-fg-3 uppercase">{kl(r.kind)[0]}</span>
                 {/if}
               </span>
               <span class="flex-1 min-w-0">
@@ -425,14 +435,14 @@
                 <span class="block truncate text-2xs text-fg-3">{r.subtitle}</span>
               </span>
               <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
-                {KIND_LABEL[r.kind]}
+                {kl(r.kind)}
               </span>
             </a>
           </li>
         {/each}
         {#if scoredAll.items.length >= 500}
           <li class="px-3 py-3 text-center text-2xs text-fg-3 italic">
-            Showing the top {results.length}. Refine your query to narrow further.
+            {tr("search.showingTop", { n: results.length })}
           </li>
         {/if}
       </ul>

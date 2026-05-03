@@ -1,0 +1,5 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="time.shift" group-title="Catchup" catchup="append" catchup-days="7" tvg-chno="42",Time Shift
+http://example.com/timeshift.m3u8
+#EXTINF:-1 tvg-id="default.shift" group-title="Catchup" catchup="default",Default Shift
+http://example.com/default.m3u8

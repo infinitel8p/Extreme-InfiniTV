@@ -2,11 +2,13 @@
 interface SortOption {
     value: string;
     label: string;
+    key?: string;
 }
 
 interface Props {
     id: string;
     label?: string;
+    labelKey?: string;
     options: SortOption[];
     defaultValue?: string;
     widthClass?: string;
@@ -15,6 +17,7 @@ interface Props {
 const {
     id,
     label = "Sort",
+    labelKey = "sort.label",
     options,
     defaultValue = options[0]?.value,
     widthClass = "sm:w-44 w-full",
@@ -38,7 +41,7 @@ const initialLabel =
         data-sort-menu-select>
         {
             options.map((opt) => (
-                <option value={opt.value} selected={opt.value === defaultValue}>
+                <option value={opt.value} selected={opt.value === defaultValue} data-i18n-key={opt.key}>
                     {opt.label}
                 </option>
             ))
@@ -57,10 +60,11 @@ const initialLabel =
             hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
             aria-expanded:bg-surface-2 aria-expanded:border-accent
             transition-colors">
-        <span class="text-fg-3 shrink-0">{label}</span>
+        <span data-i18n={labelKey} class="text-fg-3 shrink-0">{label}</span>
         <span
             id={valueId}
             class="text-fg truncate flex-1"
+            data-i18n={options.find((opt) => opt.value === defaultValue)?.key}
             data-sort-menu-value>{initialLabel}</span>
         <svg
             aria-hidden="true"
@@ -92,6 +96,7 @@ const initialLabel =
                     type="button"
                     role="option"
                     data-value={opt.value}
+                    data-i18n-key={opt.key}
                     aria-selected={
                         opt.value === defaultValue ? "true" : "false"
                     }
@@ -101,7 +106,7 @@ const initialLabel =
                         focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:outline-none
                         aria-selected:text-fg aria-selected:bg-accent-soft
                         transition-colors">
-                        <span class="truncate">{opt.label}</span>
+                        <span data-i18n={opt.key} class="truncate">{opt.label}</span>
                         <svg
                             aria-hidden="true"
                             width="14"

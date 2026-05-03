@@ -1,3 +1,4 @@
+import { log } from "@/scripts/lib/log.js"
 import { cachedFetch, getCached } from "@/scripts/lib/cache.js"
 import { buildApiUrl, safeHttpUrl } from "@/scripts/lib/creds.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
@@ -40,7 +41,7 @@ export async function ensureUserInfo(creds, playlistId, opts = {}) {
     } catch {}
     return data || null
   } catch (e) {
-    console.warn("[xt:account-info] fetch failed:", e?.message || e)
+    log.warn("[xt:account-info] fetch failed:", e?.message || e)
     return null
   }
 }
