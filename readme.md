@@ -27,7 +27,7 @@
   <a href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest"><img src="https://img.shields.io/github/v/release/infinitel8p/Extreme-InfiniTV?label=latest&color=a855f7" alt="Latest release"/></a>
   <a href="https://github.com/infinitel8p/Extreme-InfiniTV/releases"><img src="https://img.shields.io/github/downloads/infinitel8p/Extreme-InfiniTV/total?color=a855f7" alt="GitHub downloads"/></a>
   <a href="https://github.com/infinitel8p/Extreme-InfiniTV/stargazers"><img src="https://img.shields.io/github/stars/infinitel8p/Extreme-InfiniTV?color=a855f7" alt="GitHub stars"/></a>
-  <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-64748b" alt="Supported platforms: Windows, macOS, Linux, Android"/>
+  <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-64748b?color=a855f7" alt="Supported platforms: Windows, macOS, Linux, Android"/>
 </p>
 
 ## Screenshots

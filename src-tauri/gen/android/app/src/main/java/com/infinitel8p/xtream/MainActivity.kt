@@ -11,11 +11,48 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.OnBackPressedCallback
 import androidx.core.view.WindowCompat
 import android.app.PictureInPictureParams
+import android.util.Log
 import android.util.Rational
 import android.os.Build
 import android.webkit.JavascriptInterface
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebViewClient
+import androidx.annotation.RequiresApi
+
+@RequiresApi(Build.VERSION_CODES.O)
+private class RenderGoneGuardingClient(
+  private val delegate: WebViewClient,
+  private val onRenderGone: (RenderProcessGoneDetail) -> Unit,
+) : WebViewClient() {
+  override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
+    delegate.shouldInterceptRequest(view, request)
+
+  override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+    delegate.shouldOverrideUrlLoading(view, request)
+
+  override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+    delegate.onPageStarted(view, url, favicon)
+  }
+
+  override fun onPageFinished(view: WebView, url: String) {
+    delegate.onPageFinished(view, url)
+  }
+
+  override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+    delegate.onReceivedError(view, request, error)
+  }
+
+  override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+    onRenderGone(detail)
+    return true
+  }
+}
 
 class StatusBarBridge(private val activity: TauriActivity) {
   @JavascriptInterface
@@ -127,6 +164,19 @@ class MainActivity : TauriActivity() {
     webView.settings.setSupportMultipleWindows(true)
     webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
     webView.settings.mediaPlaybackRequiresUserGesture = false
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      val tauriClient = webView.webViewClient
+      webView.webViewClient = RenderGoneGuardingClient(tauriClient) { detail ->
+        Log.w(
+          "xtream-rs",
+          "WebView render process gone (didCrash=${detail.didCrash()}, priority=${detail.rendererPriorityAtExit()}); recreating activity"
+        )
+        if (!isFinishing && !isDestroyed) {
+          recreate()
+        }
+      }
+    }
 
     webView.webChromeClient = object : WebChromeClient() {
       override fun onShowCustomView(view: View, callback: CustomViewCallback) {
