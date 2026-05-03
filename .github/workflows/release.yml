@@ -176,6 +176,12 @@ jobs:
                It should answer "what's the most useful thing in this release
                for a user". No preamble like "In this release". Skip this line
                only if no commit is user-facing.
+               CRITICAL: this bold line MUST be the very first line of your
+               output. Do NOT precede it with any heading like
+               "## Release Notes" or "## Changelog vX.Y.Z" - the body template
+               adds its own changelog heading downstream, and the in-app
+               updater dialog extracts this bold line as the release summary
+               by reading the first line of your output.
             2. If the release contains a breaking change, rename, or anything
                existing users need to know about *before* updating, add a
                `## Heads up` section directly after the summary explaining what
@@ -251,16 +257,32 @@ jobs:
               changelog = '_No changes detected. Edit this draft before publishing._'
             }
 
+            // Find the headline summary: the first standalone **bold** line.
+            // The model occasionally emits a leading "## Release Notes for vX"
+            // header or blank lines before the summary, so tolerate up to a few
+            // ATX headings / empty lines and pick the first bold-only line.
             let summary = ''
             let updaterNotes = ''
             const lines = changelog.split('\n')
-            const summaryMatch = lines[0]?.trim().match(/^\*\*(.+)\*\*\s*$/)
+            let summaryMatch = null
+            let summaryEndIdx = 0
+            for (let scanIdx = 0; scanIdx < Math.min(lines.length, 6); scanIdx++) {
+              const text = lines[scanIdx].trim()
+              if (!text) continue
+              const match = text.match(/^\*\*(.+)\*\*\s*$/)
+              if (match) {
+                summaryMatch = match
+                summaryEndIdx = scanIdx + 1
+                break
+              }
+              if (!/^#{1,6}\s/.test(text)) break
+            }
             if (summaryMatch) {
               summary = `<strong>${summaryMatch[1]}</strong>`
               updaterNotes = summaryMatch[1].trim()
-              let i = 1
-              while (i < lines.length && lines[i].trim() === '') i++
-              changelog = lines.slice(i).join('\n').trim()
+              let scanIdx = summaryEndIdx
+              while (scanIdx < lines.length && lines[scanIdx].trim() === '') scanIdx++
+              changelog = lines.slice(scanIdx).join('\n').trim()
             }
             // Fall back to the tag if the AI step skipped or failed - the
             // in-app updater dialog should never show an empty notes field.
