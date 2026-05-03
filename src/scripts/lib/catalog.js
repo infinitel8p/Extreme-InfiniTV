@@ -339,6 +339,7 @@ export async function warmupActive(playlistId, opts = {}) {
             kind,
             status: "error",
             error: errors[kind],
+            response: e?.response || null,
           })
           return []
         })

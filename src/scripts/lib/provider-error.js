@@ -1,5 +1,59 @@
 // Empty state for upstream connection failures.
 
+/**
+ * Classify an error response into a structured type with a user-friendly
+ * message. Works with HTTP responses, fetch errors, and generic errors.
+ *
+ * @param {Response|null} [response]
+ * @param {Error|string|null} [error]
+ * @returns {{ type: string, message: string, hint?: string }}
+ */
+export function classifyError(response, error) {
+  if (response) {
+    const status = response.status
+    if (status === 0) return { type: "network", message: "Network error — server unreachable." }
+    if (status === 401) return { type: "auth", message: "Authentication failed — check your credentials." }
+    if (status === 403) return { type: "forbidden", message: "Access denied — your account may be suspended." }
+    if (status === 404) return { type: "not_found", message: "Endpoint not found — the provider API may have changed." }
+    if (status === 429) return { type: "rate_limited", message: "Too many requests — try again later." }
+    if (status >= 500) return { type: "server", message: "Server error — the provider is experiencing issues." }
+    return { type: "http", message: `HTTP ${status}: ${response.statusText || "Unknown error"}` }
+  }
+  if (!error) return { type: "unknown", message: "An unknown error occurred." }
+  const msg = String(error)
+  // Parse "API 401" or "API 403" style error messages from catalog.js
+  const apiMatch = msg.match(/API\s+(\d+)/)
+  if (apiMatch) {
+    const status = parseInt(apiMatch[1], 10)
+    if (status === 401) return { type: "auth", message: "Authentication failed — check your credentials." }
+    if (status === 403) return { type: "forbidden", message: "Access denied — your account may be suspended." }
+    if (status === 404) return { type: "not_found", message: "Endpoint not found — the provider API may have changed." }
+    if (status === 429) return { type: "rate_limited", message: "Too many requests — try again later." }
+    if (status >= 500) return { type: "server", message: "Server error — the provider is experiencing issues." }
+    return { type: "http", message: `HTTP ${status} — provider returned an unexpected response.` }
+  }
+  const lower = msg.toLowerCase()
+  if (lower.includes("cors") || lower.includes("fetch") || lower.includes("network")) {
+    return { type: "cors", message: "CORS blocked — the provider doesn't allow browser requests. Use the desktop app.", hint: "This is a browser security limitation, not a provider issue." }
+  }
+  if (lower.includes("timeout") || lower.includes("timed out")) {
+    return { type: "timeout", message: "Request timed out — the server is slow or unreachable." }
+  }
+  if (lower.includes("abort")) {
+    return { type: "aborted", message: "Request was cancelled." }
+  }
+  return { type: "network", message: `Network error: ${msg}` }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    c === "&" ? "&amp;" :
+    c === "<" ? "&lt;" :
+    c === ">" ? "&gt;" :
+    c === '"' ? "&quot;" : "&#39;"
+  )
+}
+
 const SIGNAL_ART = `
 <svg viewBox="0 0 96 96" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
   <g class="provider-error__waves">
@@ -39,6 +93,8 @@ const KIND_NOUN = {
  * @param {string}  [opts.kind="content"]   "channels" | "movies" | "series" | "EPG" | "content"
  * @param {() => any} opts.onRetry          Re-runs the loader.
  * @param {string}  [opts.detail]           Optional secondary line (e.g. error.message).
+ * @param {Response|null} [opts.response]  HTTP response for error classification.
+ * @param {Error|string|null} [opts.error]  The caught error object.
  */
 export function renderProviderError(statusEl, opts) {
   if (!statusEl) return
@@ -46,6 +102,10 @@ export function renderProviderError(statusEl, opts) {
   const kind = opts?.kind || "content"
   const noun = KIND_NOUN[kind] || KIND_NOUN.content
   const onRetry = typeof opts?.onRetry === "function" ? opts.onRetry : () => {}
+
+  // Classify the error for a more specific message
+  const classified = classifyError(opts?.response, opts?.error)
+  const detailText = opts?.detail || classified.message
 
   statusEl.replaceChildren()
   statusEl.classList.add("provider-error-host")
@@ -69,16 +129,29 @@ export function renderProviderError(statusEl, opts) {
 
   const sub = document.createElement("p")
   sub.className = "provider-error__sub"
-  sub.textContent = `We couldn't load the ${noun}. Your connection, the provider, or your login may be the cause.`
+  sub.textContent = classified.type === "cors"
+    ? `We couldn't load the ${noun}. This looks like a CORS issue — the browser is blocking requests to the provider. Try the desktop app.`
+    : classified.type === "auth"
+    ? `We couldn't load the ${noun}. Your credentials may be invalid or your account may have expired.`
+    : classified.type === "server"
+    ? `We couldn't load the ${noun}. The provider's server is experiencing issues — this is likely on their end.`
+    : `We couldn't load the ${noun}. Your connection, the provider, or your login may be the cause.`
 
   copy.append(title, sub)
   wrap.appendChild(copy)
 
-  if (opts?.detail) {
+  if (detailText) {
     const detail = document.createElement("p")
     detail.className = "provider-error__detail"
-    detail.textContent = String(opts.detail)
+    detail.textContent = detailText
     wrap.appendChild(detail)
+  }
+
+  if (classified.hint) {
+    const hint = document.createElement("p")
+    hint.className = "provider-error__meta"
+    hint.innerHTML = `<span class="provider-error__meta-dot" style="background: var(--color-accent); opacity: 0.4;" aria-hidden="true"></span>${escapeHtml(classified.hint)}`
+    wrap.appendChild(hint)
   }
 
   const meta = document.createElement("p")
