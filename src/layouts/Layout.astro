@@ -36,10 +36,15 @@ const documentTitle = pageTitle
           document.documentElement.setAttribute("data-perf-mode", "on");
         }
 
-        var KNOWN_LOCALES = ["en","es","de","fr","pt-BR","it","ru","zh","ja"];
+        var KNOWN_LOCALES = ["en","es","de","fr","pt-BR","it","ru","zh","ja","tr","ar","ur","nl","hi","id","pl"];
+        var RTL_LOCALES = ["ar","ur"];
         var storedLocale = localStorage.getItem("xt_locale") || "";
         if (storedLocale && KNOWN_LOCALES.indexOf(storedLocale) !== -1) {
           document.documentElement.setAttribute("lang", storedLocale);
+          document.documentElement.setAttribute(
+            "dir",
+            RTL_LOCALES.indexOf(storedLocale) !== -1 ? "rtl" : "ltr"
+          );
         }
 
         // Translate [data-i18n*] elements before first paint
