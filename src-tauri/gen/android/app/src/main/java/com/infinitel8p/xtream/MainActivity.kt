@@ -50,6 +50,8 @@ private class RenderGoneGuardingClient(
   }
 
   override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+    (view.parent as? ViewGroup)?.removeView(view)
+    view.destroy()
     onRenderGone(detail)
     return true
   }
