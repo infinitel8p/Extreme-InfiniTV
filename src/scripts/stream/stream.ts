@@ -294,7 +294,12 @@ function renderChannelSkeletons(count) {
 let categoryMap = null
 
 const ROW_H = 68
-const OVERSCAN = 6
+const OVERSCAN_DEFAULT = 6
+const OVERSCAN_PERF = 2
+const isPerfMode = () =>
+  typeof document !== "undefined" &&
+  document.documentElement.getAttribute("data-perf-mode") === "on"
+const getOverscan = () => (isPerfMode() ? OVERSCAN_PERF : OVERSCAN_DEFAULT)
 let renderScheduled = false
 
 let pendingFocusIdx = -1
@@ -387,10 +392,11 @@ function renderVirtual() {
     0,
     Math.min(listEl.clientHeight, window.innerHeight || listEl.clientHeight)
   )
-  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN)
+  const overscan = getOverscan()
+  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_H) - overscan)
   const endIdx = Math.min(
     filtered.length,
-    Math.ceil((scrollTop + visibleH) / ROW_H) + OVERSCAN
+    Math.ceil((scrollTop + visibleH) / ROW_H) + overscan
   )
 
   const frag = document.createDocumentFragment()
@@ -422,6 +428,7 @@ function renderVirtual() {
         img.alt = ""
         img.loading = "lazy"
         img.decoding = "async"
+        ;(img as any).fetchPriority = "low"
         img.referrerPolicy = "no-referrer"
         img.className = "h-full w-full object-contain"
         img.onload = () => logo.setAttribute("data-loaded", "true")

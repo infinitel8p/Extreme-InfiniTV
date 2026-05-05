@@ -303,6 +303,7 @@ function renderChannelRow(channel, programmesForRow) {
     img.alt = ""
     img.loading = "lazy"
     img.decoding = "async"
+    ;(img as any).fetchPriority = "low"
     img.referrerPolicy = "no-referrer"
     img.className = "h-full w-full object-contain"
     img.onload = () => logo.setAttribute("data-loaded", "true")

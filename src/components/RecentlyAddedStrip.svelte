@@ -140,7 +140,7 @@
                 <img
                   src={entry.logo}
                   alt=""
-                  loading="lazy"
+                  loading="lazy" fetchpriority="low"
                   decoding="async"
                   referrerpolicy="no-referrer"
                   class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />

@@ -2172,3 +2172,20 @@ html[data-perf-mode="on"] .tile-art__layer { transition: none !important; }
 html[data-perf-mode="on"] .cw-progress-fill { transition: none !important; }
 html[data-perf-mode="on"] *::view-transition-old(root),
 html[data-perf-mode="on"] *::view-transition-new(root) { animation: none !important; }
+
+html[data-perf-mode="on"] *,
+html[data-perf-mode="on"] *::before,
+html[data-perf-mode="on"] *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+html[data-perf-mode="on"] * {
+    will-change: auto !important;
+}
+
+html[data-perf-mode="on"] [data-modal-ambient] {
+    filter: none !important;
+    background-image: none !important;
+    background-color: color-mix(in oklch, var(--color-bg) 80%, black) !important;
+}

@@ -237,7 +237,7 @@
                 </span>
                 <span class="size-7 shrink-0 rounded-md bg-surface ring-1 ring-line overflow-hidden flex items-center justify-center">
                   {#if row.logo}
-                    <img src={row.logo} alt="" loading="lazy" class="h-full w-full object-cover" />
+                    <img src={row.logo} alt="" loading="lazy" fetchpriority="low" class="h-full w-full object-cover" />
                   {/if}
                 </span>
                 <span class="flex-1 min-w-0 truncate text-sm text-fg">

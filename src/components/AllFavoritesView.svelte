@@ -245,7 +245,7 @@
                 src={entry.logo}
                 alt=""
                 aria-hidden="true"
-                loading="lazy"
+                loading="lazy" fetchpriority="low"
                 decoding="async"
                 referrerpolicy="no-referrer"
                 class="absolute inset-0 h-full w-full object-cover scale-110 saturate-150 brightness-75 opacity-60 blur-2xl pointer-events-none" />
@@ -253,7 +253,7 @@
                 <img
                   src={entry.logo}
                   alt=""
-                  loading="lazy"
+                  loading="lazy" fetchpriority="low"
                   decoding="async"
                   referrerpolicy="no-referrer"
                   class="relative max-h-full max-w-full object-contain transition-transform duration-300 group-hover:scale-[1.03]" />
@@ -262,7 +262,7 @@
               <img
                 src={entry.logo}
                 alt=""
-                loading="lazy"
+                loading="lazy" fetchpriority="low"
                 decoding="async"
                 referrerpolicy="no-referrer"
                 class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />

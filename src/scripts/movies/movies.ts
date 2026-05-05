@@ -350,6 +350,7 @@ function setActiveCat(next) {
 // Poster grid
 // ----------------------------
 const PAGE_SIZE = 200
+const AUTO_LOAD_CAP = 1500
 let renderToken = 0
 /** @type {IntersectionObserver|null} */
 let infiniteObs = null
@@ -395,6 +396,7 @@ function makeCard(m, idx) {
     img.alt = ""
     img.loading = "lazy"
     img.decoding = "async"
+    ;(img as any).fetchPriority = "low"
     img.referrerPolicy = "no-referrer"
     img.className =
       "h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
@@ -556,6 +558,26 @@ function teardownInfiniteObs() {
   }
 }
 
+function swapSentinelToButton(sentinel: HTMLElement) {
+  sentinel.replaceChildren()
+  const btn = document.createElement("button")
+  btn.type = "button"
+  btn.className =
+    "rounded-xl border border-line px-4 py-2 text-sm hover:bg-surface-2 focus-visible:bg-surface-2"
+  const updateLabel = () => {
+    btn.textContent = t("movies.loadMore", {
+      remaining: (filtered.length - renderedCount).toLocaleString(),
+    })
+  }
+  updateLabel()
+  btn.addEventListener("click", () => {
+    appendNextPage()
+    if (renderedCount < filtered.length) updateLabel()
+  })
+  sentinel.appendChild(btn)
+  window.SpatialNavigation?.makeFocusable?.()
+}
+
 function appendNextPage() {
   if (!gridEl) return
   const total = filtered.length
@@ -647,28 +669,23 @@ function renderGridInner() {
       (entries) => {
         if (!entries.some((e) => e.isIntersecting)) return
         appendNextPage()
-        const s = gridEl.querySelector("[data-grid-sentinel]")
-        if (s)
-          s.textContent = t("movies.showingOf", { shown: renderedCount.toLocaleString(), total: filtered.length.toLocaleString() })
+        const s = gridEl.querySelector("[data-grid-sentinel]") as HTMLElement | null
+        if (!s) return
+        if (renderedCount >= AUTO_LOAD_CAP && renderedCount < filtered.length) {
+          teardownInfiniteObs()
+          swapSentinelToButton(s)
+        } else {
+          s.textContent = t("movies.showingOf", {
+            shown: renderedCount.toLocaleString(),
+            total: filtered.length.toLocaleString(),
+          })
+        }
       },
       { root: gridEl, rootMargin: "600px 0px" }
     )
     infiniteObs.observe(sentinel)
   } else {
-    sentinel.textContent = ""
-    const btn = document.createElement("button")
-    btn.type = "button"
-    btn.className =
-      "rounded-xl border border-line px-4 py-2 text-sm hover:bg-surface-2 focus-visible:bg-surface-2"
-    btn.textContent = t("movies.loadMore", { remaining: (filtered.length - renderedCount).toLocaleString() })
-    btn.addEventListener("click", () => {
-      appendNextPage()
-      btn.textContent =
-        renderedCount < filtered.length
-          ? t("movies.loadMore", { remaining: (filtered.length - renderedCount).toLocaleString() })
-          : ""
-    })
-    sentinel.appendChild(btn)
+    swapSentinelToButton(sentinel)
   }
 }
 

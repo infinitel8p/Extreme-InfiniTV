@@ -420,7 +420,7 @@
                   <img
                     src={r.logo}
                     alt=""
-                    loading="lazy"
+                    loading="lazy" fetchpriority="low"
                     decoding="async"
                     referrerpolicy="no-referrer"
                     class="h-full w-full"

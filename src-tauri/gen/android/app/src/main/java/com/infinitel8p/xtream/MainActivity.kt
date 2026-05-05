@@ -17,6 +17,7 @@ import android.os.Build
 import android.webkit.JavascriptInterface
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
@@ -77,6 +78,22 @@ class WebSettingsBridge(
       webViewRef()?.settings?.userAgentString = target
     }
   }
+}
+
+class DeviceInfoBridge(private val activity: TauriActivity) {
+  @JavascriptInterface
+  fun isLeanback(): Boolean =
+    activity.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+
+  @JavascriptInterface
+  fun isTelevisionUiMode(): Boolean {
+    val uiMode = activity.resources.configuration.uiMode and
+      Configuration.UI_MODE_TYPE_MASK
+    return uiMode == Configuration.UI_MODE_TYPE_TELEVISION
+  }
+
+  @JavascriptInterface
+  fun isTv(): Boolean = isLeanback() || isTelevisionUiMode()
 }
 
 class PipBridge(private val activity: TauriActivity) {
@@ -154,11 +171,19 @@ class MainActivity : TauriActivity() {
 
     webView.addJavascriptInterface(PipBridge(this), "AndroidPip")
     webView.addJavascriptInterface(StatusBarBridge(this), "AndroidStatusBar")
+    webView.addJavascriptInterface(DeviceInfoBridge(this), "AndroidDeviceInfo")
     webView.addJavascriptInterface(
       WebSettingsBridge(this, { hostedWebView }, webView.settings.userAgentString),
       "AndroidWebSettings"
     )
     WebView.setWebContentsDebuggingEnabled(true)
+
+    // Keep the renderer process from being reclaimed under TV / low-RAM
+    // pressure. Default WAIVED is what triggers most renderer-gone crashes
+    // on cheap Android TV boxes.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+    }
 
     webView.settings.javaScriptEnabled = true
     webView.settings.setSupportMultipleWindows(true)

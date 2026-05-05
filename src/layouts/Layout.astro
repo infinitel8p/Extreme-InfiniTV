@@ -32,7 +32,43 @@ const documentTitle = pageTitle
         if (isFinite(cw) && cw >= 18 && cw <= 60) {
           document.documentElement.style.setProperty("--xt-channels-w", cw + "rem");
         }
-        if (localStorage.getItem("xt_perf_mode") === "1") {
+        // Auto-enable perf mode on TV / Leanback devices
+        var perfStored = localStorage.getItem("xt_perf_mode");
+        if (perfStored === null) {
+          var isTvDevice = false;
+          try {
+            if (window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function") {
+              isTvDevice = !!window.AndroidDeviceInfo.isTv();
+            }
+          } catch (e) {}
+          if (!isTvDevice) {
+            try {
+              var ua = (navigator.userAgent || "").toLowerCase();
+              if (
+                ua.indexOf(" tv ") !== -1 ||
+                ua.indexOf("smart-tv") !== -1 ||
+                ua.indexOf("smarttv") !== -1 ||
+                ua.indexOf("googletv") !== -1 ||
+                ua.indexOf("appletv") !== -1 ||
+                ua.indexOf("hbbtv") !== -1 ||
+                ua.indexOf("netcast") !== -1 ||
+                ua.indexOf("nettv") !== -1 ||
+                ua.indexOf("aft") !== -1 ||
+                ua.indexOf("crkey") !== -1 ||
+                ua.indexOf("philipstv") !== -1 ||
+                ua.indexOf("bravia") !== -1
+              ) {
+                isTvDevice = true;
+              }
+            } catch (e) {}
+          }
+          if (isTvDevice) {
+            localStorage.setItem("xt_perf_mode", "1");
+            localStorage.setItem("xt_perf_mode_auto", "1");
+            perfStored = "1";
+          }
+        }
+        if (perfStored === "1") {
           document.documentElement.setAttribute("data-perf-mode", "on");
         }
 

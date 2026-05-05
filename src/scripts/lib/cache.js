@@ -325,9 +325,12 @@ export async function clearAll() {
 
 // ---------------------------------------------------------------------------
 // One-time cleanup of legacy localStorage entries.
-// Old versions wrote here; new code uses IDB. Free up the space.
 // ---------------------------------------------------------------------------
-;(() => {
+const LEGACY_CLEANUP_SENTINEL = "xt_cache_legacy_cleaned_v1"
+function runLegacyCleanup() {
+  try {
+    if (sessionStorage.getItem(LEGACY_CLEANUP_SENTINEL) === "1") return
+  } catch {}
   try {
     const toRemove = []
     for (let i = 0; i < localStorage.length; i++) {
@@ -336,4 +339,14 @@ export async function clearAll() {
     }
     for (const k of toRemove) localStorage.removeItem(k)
   } catch {}
-})()
+  try {
+    sessionStorage.setItem(LEGACY_CLEANUP_SENTINEL, "1")
+  } catch {}
+}
+if (typeof window !== "undefined") {
+  const ric =
+    typeof window.requestIdleCallback === "function"
+      ? window.requestIdleCallback
+      : (callback) => setTimeout(callback, 1)
+  ric(runLegacyCleanup, { timeout: 5000 })
+}
