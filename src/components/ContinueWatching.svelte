@@ -197,6 +197,7 @@
                     loading="lazy" fetchpriority="low"
                     decoding="async"
                     referrerpolicy="no-referrer"
+                    width="200" height="300"
                     class="absolute inset-0 h-full w-full object-cover scale-110 saturate-150 brightness-75 opacity-60 blur-2xl pointer-events-none" />
                   <div class="absolute inset-0 flex items-center justify-center p-3">
                     <img
@@ -205,6 +206,7 @@
                       loading="lazy" fetchpriority="low"
                       decoding="async"
                       referrerpolicy="no-referrer"
+                      width="200" height="200"
                       class="relative max-h-full max-w-full object-contain transition-transform duration-300 group-hover:scale-[1.03]" />
                   </div>
                 {:else}
@@ -214,6 +216,7 @@
                     loading="lazy" fetchpriority="low"
                     decoding="async"
                     referrerpolicy="no-referrer"
+                    width="200" height="300"
                     class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />
                 {/if}
               {:else}

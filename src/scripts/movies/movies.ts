@@ -398,6 +398,8 @@ function makeCard(m, idx) {
     img.decoding = "async"
     ;(img as any).fetchPriority = "low"
     img.referrerPolicy = "no-referrer"
+    img.width = 200
+    img.height = 300
     img.className =
       "h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
     img.onerror = () => {

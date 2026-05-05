@@ -2189,3 +2189,10 @@ html[data-perf-mode="on"] [data-modal-ambient] {
     background-image: none !important;
     background-color: color-mix(in oklch, var(--color-bg) 80%, black) !important;
 }
+
+/* Android WebView GPU is too weak to composite a viewport-sized 56px blur at
+   60fps without dropping the dialog enter animation to a stutter. Skip the
+   ambient layer entirely on Android - the dialog still has its own backdrop. */
+html[data-platform="android"] [data-modal-ambient] {
+    display: none !important;
+}

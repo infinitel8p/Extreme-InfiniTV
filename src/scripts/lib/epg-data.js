@@ -28,6 +28,68 @@ const memCache = new Map()
 const inflight = new Map()
 
 // ---------------------------------------------------------------------------
+// Worker-backed XMLTV parsing. Falls back to main-thread parseXmlTv when
+// Worker construction fails (web build SSR snapshot, sandboxed contexts) or
+// when the worker reports it can't access DOMParser.
+// ---------------------------------------------------------------------------
+/** @type {Worker | null} */
+let xmlWorker = null
+let xmlWorkerBroken = false
+let xmlWorkerSeq = 0
+/** @type {Map<number, { resolve: (v: any) => void, reject: (e: any) => void }>} */
+const xmlWorkerPending = new Map()
+
+function getXmlWorker() {
+  if (xmlWorkerBroken) return null
+  if (xmlWorker) return xmlWorker
+  if (typeof Worker === "undefined") {
+    xmlWorkerBroken = true
+    return null
+  }
+  try {
+    xmlWorker = new Worker(
+      new URL("./epg-worker.ts", import.meta.url),
+      { type: "module" }
+    )
+    xmlWorker.addEventListener("message", (event) => {
+      const data = event.data || {}
+      const pending = xmlWorkerPending.get(data.id)
+      if (!pending) return
+      xmlWorkerPending.delete(data.id)
+      pending.resolve(data)
+    })
+    xmlWorker.addEventListener("error", (event) => {
+      log.warn("[xt:epg-worker] error:", event?.message || event)
+      xmlWorkerBroken = true
+      xmlWorker?.terminate()
+      xmlWorker = null
+      for (const pending of xmlWorkerPending.values()) {
+        pending.reject(new Error("epg worker error"))
+      }
+      xmlWorkerPending.clear()
+    })
+    return xmlWorker
+  } catch (error) {
+    log.warn("[xt:epg-worker] construct failed:", error)
+    xmlWorkerBroken = true
+    return null
+  }
+}
+
+async function parseXmlTvOffMain(xml) {
+  const worker = getXmlWorker()
+  if (!worker) return parseXmlTv(xml)
+  const id = ++xmlWorkerSeq
+  const reply = await new Promise((resolve, reject) => {
+    xmlWorkerPending.set(id, { resolve, reject })
+    worker.postMessage({ id, xml })
+  }).catch(() => null)
+  if (!reply || reply.fallback) return parseXmlTv(xml)
+  if (reply.error) throw new Error(reply.error)
+  return new Map(reply.programmes)
+}
+
+// ---------------------------------------------------------------------------
 // XMLTV parsing
 // ---------------------------------------------------------------------------
 export function parseXmlTvDate(s) {
@@ -272,7 +334,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
   const promise = (async () => {
     try {
       const xml = await fetchXml(creds, playlistId)
-      const programmes = parseXmlTv(xml)
+      const programmes = await parseXmlTvOffMain(xml)
       const setting = getOffsetSetting(playlistId)
       let offsetMin = 0
       let offsetIsAuto = setting === "auto"
