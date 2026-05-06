@@ -36,6 +36,7 @@ import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { parseM3U as parseSharedM3U } from "@/scripts/lib/m3u-parser.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
+import { toastError } from "@/scripts/lib/toast.js"
 import {
   loadProgrammes,
   getProgrammesSync,
@@ -161,6 +162,13 @@ let activePlaylistTitle = ""
 
 document.addEventListener("xt:active-changed", () => {
   clearRichPresence().catch(() => {})
+  loadChannels()
+})
+
+document.addEventListener("xt:cache-revalidated", (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.entryId !== activePlaylistId) return
+  if (detail.kind !== "live" && detail.kind !== "m3u") return
   loadChannels()
 })
 
@@ -1531,6 +1539,17 @@ async function loadChannels() {
 // Player (lazy)
 // ----------------------------
 let vjs = null
+let playSeq = 0
+let lastPlayContext = null
+let tuningOverlaySentinel = null
+let stallSentinel = null
+let bufferingShownAt = 0
+let bufferingHideTimer = null
+const TUNING_MAX_MS = 8000
+const STALL_AUTO_TUNE_MS = 30_000
+const BUFFERING_GRACE_MS = 350
+const ERROR_AUTO_RETRY_MS = 1500
+
 const ensurePlayer = async () => {
   if (vjs) return vjs
   const [{ default: videojs }] = await Promise.all([
@@ -1563,6 +1582,50 @@ const ensurePlayer = async () => {
   })
 
   attachPlayerFocusKeeper(vjs)
+
+  vjs.on("playing", () => {
+    hideTuningOverlay()
+    hideBufferingChip()
+    clearStallSentinel()
+  })
+  vjs.on("waiting", () => {
+    showBufferingChip()
+    armStallSentinel()
+  })
+  vjs.on("stalled", () => {
+    showBufferingChip()
+    armStallSentinel()
+  })
+  vjs.on("error", () => {
+    const ctx = lastPlayContext
+    if (!ctx) return
+    const err = vjs.error?.()
+    log.error("[xt:livetv] player error", {
+      code: err?.code,
+      message: err?.message,
+      streamId: ctx.streamId,
+    })
+    if (!ctx.retried) {
+      ctx.retried = true
+      const seqAtRetry = ctx.seq
+      setTimeout(() => {
+        if (seqAtRetry !== playSeq) return
+        try {
+          vjs.reset?.()
+          vjs.src({ src: ctx.src, type: "application/x-mpegURL" })
+          vjs.play().catch(() => {})
+        } catch {}
+      }, ERROR_AUTO_RETRY_MS)
+      return
+    }
+    hideTuningOverlay()
+    hideBufferingChip()
+    clearStallSentinel()
+    toastError(t("stream.error.cantPlay", { channel: ctx.name || `#${ctx.streamId}` }), {
+      description: t("stream.error.checkConnection"),
+    })
+  })
+
   return vjs
 }
 
@@ -1583,10 +1646,77 @@ function showTuningOverlay(logoUrl) {
     overlay.appendChild(img)
   }
   playerWrap.appendChild(overlay)
-  setTimeout(() => {
-    overlay.classList.add("tuning-overlay--leaving")
-    setTimeout(() => overlay.remove(), 380)
-  }, 480)
+  // Cap visibility so we never get stuck on the overlay if `playing` never
+  // fires (dead provider, codec issue, render-process crash on Android).
+  if (tuningOverlaySentinel) clearTimeout(tuningOverlaySentinel)
+  tuningOverlaySentinel = setTimeout(hideTuningOverlay, TUNING_MAX_MS)
+}
+
+function hideTuningOverlay() {
+  if (tuningOverlaySentinel) {
+    clearTimeout(tuningOverlaySentinel)
+    tuningOverlaySentinel = null
+  }
+  const playerWrap = document.getElementById("player")?.parentElement
+  const overlay = playerWrap?.querySelector("[data-tuning-overlay]")
+  if (!overlay) return
+  overlay.classList.add("tuning-overlay--leaving")
+  setTimeout(() => overlay.remove(), 380)
+}
+
+function showBufferingChip() {
+  const playerWrap = document.getElementById("player")?.parentElement
+  if (!playerWrap) return
+  if (bufferingHideTimer) {
+    clearTimeout(bufferingHideTimer)
+    bufferingHideTimer = null
+  }
+  let chip = playerWrap.querySelector("[data-buffering-chip]")
+  if (!chip) {
+    chip = document.createElement("div")
+    chip.dataset.bufferingChip = ""
+    chip.className = "buffering-chip"
+    chip.setAttribute("role", "status")
+    chip.setAttribute("aria-live", "polite")
+    chip.textContent = t("stream.buffering")
+    playerWrap.appendChild(chip)
+  }
+  bufferingShownAt = Date.now()
+}
+
+function hideBufferingChip() {
+  const playerWrap = document.getElementById("player")?.parentElement
+  const chip = playerWrap?.querySelector("[data-buffering-chip]")
+  if (!chip) return
+  // Avoid flicker on transient waiting -> playing toggles.
+  const elapsed = Date.now() - bufferingShownAt
+  const wait = Math.max(0, BUFFERING_GRACE_MS - elapsed)
+  if (bufferingHideTimer) clearTimeout(bufferingHideTimer)
+  bufferingHideTimer = setTimeout(() => {
+    chip.remove()
+    bufferingHideTimer = null
+  }, wait)
+}
+
+function armStallSentinel() {
+  if (stallSentinel) clearTimeout(stallSentinel)
+  stallSentinel = setTimeout(() => {
+    const ctx = lastPlayContext
+    if (!ctx || !vjs) return
+    log.warn("[xt:livetv] stall sentinel re-tuning", { streamId: ctx.streamId })
+    try {
+      vjs.reset?.()
+      vjs.src({ src: ctx.src, type: "application/x-mpegURL" })
+      vjs.play().catch(() => {})
+    } catch {}
+  }, STALL_AUTO_TUNE_MS)
+}
+
+function clearStallSentinel() {
+  if (stallSentinel) {
+    clearTimeout(stallSentinel)
+    stallSentinel = null
+  }
 }
 
 function runScanLineSweep() {
@@ -1680,6 +1810,11 @@ async function play(streamId, name) {
   document.getElementById("player")?.removeAttribute("hidden")
   const player = await ensurePlayer()
   await applyStreamHeaders(streamHeadersById.get(streamId) || null)
+  const seq = ++playSeq
+  lastPlayContext = { streamId, name, src, seq, retried: false }
+  hideBufferingChip()
+  clearStallSentinel()
+  try { player.reset?.() } catch {}
   player.src({ src, type: "application/x-mpegURL" })
   player.play().catch(() => {})
 

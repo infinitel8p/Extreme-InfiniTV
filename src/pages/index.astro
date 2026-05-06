@@ -35,6 +35,19 @@ import {
 	<main
 		class="flex-1 w-full mx-auto px-4 py-6 md:px-6 lg:px-8 max-w-480 flex flex-col gap-6">
 
+		<a
+			id="hub-expiration-banner"
+			href="/settings"
+			data-account-expiration="hub-banner"
+			hidden
+			class="rounded-xl px-4 py-3 text-sm font-medium
+				border border-warn/35 bg-warn/10 text-warn
+				data-[state=critical]:border-bad/45 data-[state=critical]:bg-bad/12 data-[state=critical]:text-bad
+				data-[state=expired]:border-bad/55 data-[state=expired]:bg-bad/14 data-[state=expired]:text-bad
+				hover:border-current focus-visible:border-current
+				outline-none transition-colors no-underline">
+		</a>
+
 		<section
 			id="welcome"
 			aria-labelledby="welcome-heading"

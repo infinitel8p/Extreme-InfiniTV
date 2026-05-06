@@ -100,9 +100,36 @@
       _stripTimer = null
       return
     }
+    const hasError = KIND_ORDER.some((kind) => kinds[kind] === "error")
+    if (hasError) {
+      stripActive = true
+      return
+    }
     setTimeout(() => {
       stripActive = false
     }, HOLD_AFTER_DONE_MS)
+  }
+
+  async function retryKind(kind) {
+    if (kinds[kind] !== "error") return
+    kinds[kind] = "pending"
+    kinds = kinds
+    bytes[kind] = 0
+    totalBytes[kind] = 0
+    try {
+      const { retryWarmupKind } = await import("@/scripts/lib/catalog.js")
+      await retryWarmupKind(undefined, kind)
+    } catch {
+      kinds[kind] = "error"
+      kinds = kinds
+    }
+    if (KIND_ORDER.every((kind2) => kinds[kind2] !== "error" && kinds[kind2] !== "pending")) {
+      setTimeout(() => { stripActive = false }, HOLD_AFTER_DONE_MS)
+    }
+  }
+
+  function dismissStrip() {
+    stripActive = false
   }
 
   const onLocale = () => { locale++ }
@@ -127,6 +154,7 @@
     KIND_ORDER.reduce((n, k) => (kinds[k] !== "pending" ? n + 1 : n), 0)
   )
   let allDone = $derived(doneCount === KIND_ORDER.length)
+  let hasError = $derived(KIND_ORDER.some((kind) => kinds[kind] === "error"))
 
   /** Aggregated 0..1 progress across all three kinds. Done kinds contribute
    *  a full 1/3; in-flight kinds with a known Content-Length contribute a
@@ -188,7 +216,15 @@
             </svg>
           </span>
           <span class="warming-kind__label">{klp(kind)}</span>
-          {#if readout(kind)}
+          {#if kinds[kind] === "error"}
+            <button
+              type="button"
+              class="warming-kind__retry"
+              onclick={() => retryKind(kind)}
+              aria-label={tr("catalog.retry")}>
+              {tr("catalog.retry")}
+            </button>
+          {:else if readout(kind)}
             <span class="warming-kind__readout tabular-nums" data-state={kinds[kind]}>{readout(kind)}</span>
           {/if}
         </span>
@@ -197,16 +233,26 @@
 
     <span class="sm:hidden text-fg-3 tabular-nums ml-0.5">{doneCount}/{KIND_ORDER.length}</span>
 
-    <div
-      class="ml-auto warming-comet"
-      data-state={allDone ? "done" : "pending"}
-      style="--progress: {aggregateProgress}"
-      role="progressbar"
-      aria-valuemin="0"
-      aria-valuemax="100"
-      aria-valuenow={Math.round(aggregateProgress * 100)}>
-      <div class="warming-comet__fill"></div>
-    </div>
+    {#if hasError && allDone}
+      <button
+        type="button"
+        class="warming-strip__dismiss"
+        onclick={dismissStrip}
+        aria-label={tr("catalog.dismiss")}>
+        ×
+      </button>
+    {:else}
+      <div
+        class="ml-auto warming-comet"
+        data-state={allDone ? "done" : "pending"}
+        style="--progress: {aggregateProgress}"
+        role="progressbar"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={Math.round(aggregateProgress * 100)}>
+        <div class="warming-comet__fill"></div>
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -273,6 +319,47 @@
   }
   .warming-kind__readout[data-state="error"] {
     color: var(--color-bad);
+  }
+  .warming-kind__retry {
+    margin-inline-start: 0.1rem;
+    padding: 0.05rem 0.5rem;
+    border-radius: 9999px;
+    border: 1px solid color-mix(in oklch, var(--color-bad) 45%, transparent);
+    background: color-mix(in oklch, var(--color-bad) 14%, transparent);
+    color: var(--color-bad);
+    font-size: 0.7rem;
+    font-weight: 600;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: background-color 160ms ease, border-color 160ms ease;
+  }
+  .warming-kind__retry:hover,
+  .warming-kind__retry:focus-visible {
+    background: color-mix(in oklch, var(--color-bad) 24%, transparent);
+    border-color: var(--color-bad);
+    outline: none;
+  }
+  .warming-strip__dismiss {
+    margin-left: auto;
+    width: 1.5rem;
+    height: 1.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    border: 1px solid var(--color-line);
+    background: transparent;
+    color: var(--color-fg-2);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 160ms ease, color 160ms ease;
+  }
+  .warming-strip__dismiss:hover,
+  .warming-strip__dismiss:focus-visible {
+    background: var(--color-surface-2);
+    color: var(--color-fg);
+    outline: none;
   }
 
   /* Donut: 14px ring. While pending, an indeterminate arc rotates around it.

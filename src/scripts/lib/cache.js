@@ -6,6 +6,7 @@ const DB_NAME = "xt_cache"
 const DB_VERSION = 1
 const STORE = "entries"
 const META_LS_KEY = "xt_cache_meta" // legacy; kept only for clean-up.
+const EVT_REVALIDATED = "xt:cache-revalidated"
 
 const makeKey = (entryId, kind) => `${PREFIX}${entryId}:${kind}`
 
@@ -149,12 +150,7 @@ export async function hydrate(entryId, kind) {
   const p = (async () => {
     const obj = await idbGet(key)
     if (obj && typeof obj === "object" && "data" in obj) {
-      const age = Date.now() - obj.fetchedAt
-      if (age <= obj.ttl) {
-        _mem.set(key, obj)
-      } else {
-        idbDelete(key)
-      }
+      _mem.set(key, obj)
     }
   })()
   _hydrating.set(key, p)
@@ -181,12 +177,7 @@ export function getCached(entryId, kind) {
   const e = _mem.get(key)
   if (!e) return null
   const age = Date.now() - e.fetchedAt
-  if (age > e.ttl) {
-    _mem.delete(key)
-    idbDelete(key)
-    return null
-  }
-  return { data: e.data, fetchedAt: e.fetchedAt, age }
+  return { data: e.data, fetchedAt: e.fetchedAt, age, stale: age > e.ttl }
 }
 
 export function setCached(entryId, kind, data, ttlMs) {
@@ -213,12 +204,44 @@ export async function cachedFetch(entryId, kind, ttlMs, fetcher, opts = {}) {
   if (!opts.force) {
     await hydrate(entryId, kind)
     const hit = getCached(entryId, kind)
-    if (hit) return { data: hit.data, fromCache: true, age: hit.age }
+    if (hit && !hit.stale) {
+      return { data: hit.data, fromCache: true, age: hit.age, stale: false }
+    }
+    if (hit && hit.stale) {
+      revalidateInBackground(entryId, kind, ttlMs, fetcher)
+      return { data: hit.data, fromCache: true, age: hit.age, stale: true }
+    }
   }
   const data = await fetcher()
   setCached(entryId, kind, data, ttlMs)
-  return { data, fromCache: false, age: 0 }
+  return { data, fromCache: false, age: 0, stale: false }
 }
+
+const _revalidating = new Map()
+
+function revalidateInBackground(entryId, kind, ttlMs, fetcher) {
+  const key = makeKey(entryId, kind)
+  if (_revalidating.has(key)) return _revalidating.get(key)
+  const promise = (async () => {
+    try {
+      const data = await fetcher()
+      setCached(entryId, kind, data, ttlMs)
+      try {
+        document.dispatchEvent(
+          new CustomEvent(EVT_REVALIDATED, { detail: { entryId, kind } })
+        )
+      } catch {}
+    } catch (e) {
+      log.warn("[xt:cache] revalidate failed:", kind, e?.message || e)
+    } finally {
+      _revalidating.delete(key)
+    }
+  })()
+  _revalidating.set(key, promise)
+  return promise
+}
+
+export const CACHE_REVALIDATED_EVENT = EVT_REVALIDATED
 
 /** Drop every cache entry for one playlist (e.g. on edit/remove). */
 export function invalidateEntry(entryId) {

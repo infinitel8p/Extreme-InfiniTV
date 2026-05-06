@@ -402,13 +402,13 @@ export function parseXtreamUrl(input) {
   if (!input) return null
   let url
   try {
-    url = new URL(input)
+    url = new URL(String(input).trim())
   } catch {
     return null
   }
   if (!/^https?:$/.test(url.protocol)) return null
-  const username = url.searchParams.get("username") || ""
-  const password = url.searchParams.get("password") || ""
+  const username = (url.searchParams.get("username") || "").trim()
+  const password = (url.searchParams.get("password") || "").trim()
   if (!username || !password) return null
   // Server URL = origin only (drop player_api.php / get.php / etc.)
   return {

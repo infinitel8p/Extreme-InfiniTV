@@ -211,7 +211,9 @@ const documentTitle = pageTitle
   import { initFocusGlide } from "@/scripts/lib/focus-glide.js"
   import { initKeyboardHelp } from "@/scripts/lib/keyboard-help.js"
   import { initI18n } from "@/scripts/lib/i18n.js"
+  import { initConnectivity } from "@/scripts/lib/connectivity.js"
   initI18n()
+  initConnectivity()
   const SpatialNavigation = window.SpatialNavigation
 
   console.log(

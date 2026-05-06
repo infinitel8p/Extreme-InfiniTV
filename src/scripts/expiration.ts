@@ -26,7 +26,7 @@ function renderTargets(
     const daysLeft = msLeft == null ? null : Math.max(0, Math.ceil(msLeft / 86_400_000))
     for (const el of targets) {
         const mode = el.getAttribute("data-account-expiration")
-        if (mode === "banner") {
+        if (mode === "banner" || mode === "hub-banner") {
             if (
                 daysLeft == null ||
                 (!isExpired && daysLeft > BANNER_THRESHOLD_DAYS)
@@ -37,11 +37,19 @@ function renderTargets(
                 continue
             }
             el.hidden = false
-            el.textContent = isExpired ? t("expiration.expired") : fmtDaysLeft(daysLeft)
-            el.setAttribute(
-                "data-state",
-                isExpired ? "expired" : daysLeft <= 2 ? "critical" : "warning"
-            )
+            const state = isExpired ? "expired" : daysLeft <= 2 ? "critical" : "warning"
+            el.setAttribute("data-state", state)
+            if (mode === "hub-banner") {
+                if (isExpired && value) {
+                    el.textContent = t("expiration.expiredOn", { date: value })
+                } else if (isExpired) {
+                    el.textContent = t("expiration.expired")
+                } else {
+                    el.textContent = fmtDaysLeft(daysLeft)
+                }
+            } else {
+                el.textContent = isExpired ? t("expiration.expired") : fmtDaysLeft(daysLeft)
+            }
             continue
         }
         if (value == null) {

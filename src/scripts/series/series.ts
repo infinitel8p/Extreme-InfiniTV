@@ -1063,6 +1063,13 @@ if (listStatus && /no playlist selected/i.test(listStatus.textContent || "")) {
 
 document.addEventListener("xt:active-changed", () => loadSeries())
 
+document.addEventListener("xt:cache-revalidated", (e) => {
+  const detail = (e as CustomEvent).detail
+  if (!detail || detail.entryId !== activePlaylistId) return
+  if (detail.kind !== "series") return
+  loadSeries()
+})
+
 // Re-paint the skeleton wave when a manual catalog re-warm starts. Only
 // when the grid currently has no real cards.
 document.addEventListener("xt:catalog-warming-start", () => {

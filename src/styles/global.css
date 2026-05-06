@@ -1911,6 +1911,54 @@ dialog[open]::backdrop {
     z-index: 50;
 }
 
+.buffering-chip {
+    position: absolute;
+    top: 0.75rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 35;
+    padding: 0.4rem 0.85rem;
+    border-radius: 9999px;
+    background: color-mix(in oklch, var(--color-bg) 70%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-line) 90%, transparent);
+    color: var(--color-fg);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    backdrop-filter: blur(12px);
+    pointer-events: none;
+    animation: buffering-chip-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.buffering-chip::before {
+    content: "";
+    display: inline-block;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 9999px;
+    margin-inline-end: 0.45rem;
+    background: var(--color-accent);
+    vertical-align: 0;
+    animation: buffering-chip-dot 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes buffering-chip-in {
+    from { transform: translate(-50%, -8px); opacity: 0; }
+    to   { transform: translate(-50%, 0);    opacity: 1; }
+}
+@keyframes buffering-chip-dot {
+    0%, 100% { opacity: 0.3; transform: scale(0.85); }
+    50%      { opacity: 1;   transform: scale(1.05); }
+}
+[data-perf-mode="on"] .buffering-chip,
+[data-perf-mode="on"] .buffering-chip::before {
+    animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .buffering-chip,
+    .buffering-chip::before {
+        animation: none;
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .tuning-overlay,
     .tuning-overlay--leaving {

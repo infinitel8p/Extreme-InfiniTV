@@ -985,6 +985,13 @@ if (listStatus && /no playlist selected/i.test(listStatus.textContent || "")) {
 
 document.addEventListener("xt:active-changed", () => loadMovies())
 
+document.addEventListener("xt:cache-revalidated", (e) => {
+  const detail = (e as CustomEvent).detail
+  if (!detail || detail.entryId !== activePlaylistId) return
+  if (detail.kind !== "vod") return
+  loadMovies()
+})
+
 // Re-paint the skeleton wave when the user kicks off a manual catalog
 // re-warm (Refresh active in /settings). Only when the grid is currently
 // empty or already showing skeletons - never wipe real content.
