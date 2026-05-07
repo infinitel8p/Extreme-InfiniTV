@@ -1781,11 +1781,11 @@ async function play(streamId, name) {
 
     currentEl.replaceChildren()
     const wrap = document.createElement("div")
-    wrap.className = "flex items-center gap-2 max-w-[calc(100%-4rem)]"
+    wrap.className = "flex items-center gap-2 min-w-0 flex-1"
     wrap.innerHTML =
-      '<span class="status-badge status-badge--live">ON</span>'
+      '<span class="status-badge status-badge--live shrink-0">ON</span>'
     const label = document.createElement("span")
-    label.className = "truncate w-full"
+    label.className = "truncate min-w-0 flex-1"
     label.append(`Channel ${streamId}: `)
     const nameEl = document.createElement("span")
     nameEl.className = "text-accent"
@@ -1794,6 +1794,17 @@ async function play(streamId, name) {
     wrap.appendChild(label)
     currentEl.appendChild(wrap)
 
+    const btn = document.createElement("button")
+    btn.id = "pip-btn"
+    btn.type = "button"
+    btn.title = "Picture-in-Picture"
+    btn.setAttribute("aria-label", "Picture-in-Picture")
+    btn.className = "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M19 4a3 3 0 0 1 3 3v4a1 1 0 0 1 -2 0v-4a1 1 0 0 0 -1 -1h-14a1 1 0 0 0 -1 1v10a1 1 0 0 0 1 1h6a1 1 0 0 1 0 2h-6a3 3 0 0 1 -3 -3v-10a3 3 0 0 1 3 -3z"/><path d="M20 13a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-5a2 2 0 0 1 -2 -2v-3a2 2 0 0 1 2 -2z"/></svg>`
+    btn.addEventListener("click", () => { if (vjs) togglePip(vjs) })
+    currentEl.appendChild(btn)
+
+    if (sourceLogo instanceof HTMLElement) sourceLogo.style.viewTransitionName = ""
     showTuningOverlay(channelLogo)
     runScanLineSweep()
   }
@@ -1825,14 +1836,6 @@ async function play(streamId, name) {
   } else {
     loadEPG(streamId)
   }
-
-  document.getElementById("pip-btn")?.remove()
-  const btn = document.createElement("button")
-  btn.id = "pip-btn"
-  btn.className = "min-h-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2"
-  btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M19 4a3 3 0 0 1 3 3v4a1 1 0 0 1 -2 0v-4a1 1 0 0 0 -1 -1h-14a1 1 0 0 0 -1 1v10a1 1 0 0 0 1 1h6a1 1 0 0 1 0 2h-6a3 3 0 0 1 -3 -3v-10a3 3 0 0 1 3 -3z"/><path d="M20 13a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-5a2 2 0 0 1 -2 -2v-3a2 2 0 0 1 2 -2z"/></svg>`
-  currentEl.appendChild(btn)
-  btn.addEventListener("click", () => togglePip(player))
 }
 
 // ----------------------------

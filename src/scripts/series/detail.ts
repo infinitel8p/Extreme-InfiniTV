@@ -427,6 +427,42 @@ function syncEpisodeDownloadButtons() {
 document.addEventListener(DOWNLOAD_PROGRESS_EVENT, syncEpisodeDownloadButtons)
 document.addEventListener(DOWNLOADS_LIST_EVENT, syncEpisodeDownloadButtons)
 
+function renderDownloadedEpisodes(downloads) {
+  const byKey = {}
+  for (const dl of downloads) {
+    const src = dl.source || {}
+    const seasonKey = String(src.season ?? "1")
+    const seriesName = src.seriesName || ""
+    const cleanedTitle = seriesName
+      ? String(dl.title || "")
+          .replace(`${seriesName} - `, "")
+          .replace(/^S\d+E\d+\s*-\s*/, "")
+      : (dl.title || "")
+    const extMatch = String(dl.url || "").match(/\.([a-z0-9]{2,5})(?:\?|$)/i)
+    const ep = {
+      id: src.id ?? null,
+      season: src.season ?? "1",
+      episode_num: src.episode ?? null,
+      title: cleanedTitle,
+      container_extension: extMatch?.[1] || "mp4",
+      _directUrl: dl.url,
+    }
+    ;(byKey[seasonKey] = byKey[seasonKey] || []).push(ep)
+  }
+  for (const k of Object.keys(byKey)) {
+    byKey[k].sort(
+      (a, b) => (Number(a.episode_num) || 0) - (Number(b.episode_num) || 0)
+    )
+  }
+  episodesByKey = byKey
+  const seasonKeys = Object.keys(byKey).sort((a, b) => Number(a) - Number(b))
+  if (!seasonKeys.includes(currentSeason)) {
+    currentSeason = seasonKeys[0] || ""
+  }
+  renderSeasonTabs(seasonKeys)
+  renderEpisodes()
+}
+
 function applySeriesInfo(data) {
   const info = data?.info || {}
   const seasons = Array.isArray(data?.seasons) ? data.seasons : []
@@ -1076,21 +1112,26 @@ async function boot() {
             ? t("series.error.providerLocal")
             : t("series.error.failedDetails")
         }
-        if (episodeList) {
+        if (seriesDownloads.length) {
+          renderDownloadedEpisodes(seriesDownloads)
+        } else if (episodeList) {
           episodeList.replaceChildren()
           const fail = document.createElement("div")
           fail.className = "text-fg-3 text-sm py-3"
-          fail.textContent = seriesDownloads.length
-            ? t("series.error.episodesOffline")
-            : t("series.error.cantLoadEpisodes")
+          fail.textContent = t("series.error.cantLoadEpisodes")
           episodeList.appendChild(fail)
         }
       }
     }
-  } else if (!cached && plotEl) {
-    plotEl.textContent = seriesDownloads.length
-      ? t("series.error.localPlayable")
-      : t("detail.error.noPlaylist")
+  } else if (!cached) {
+    if (plotEl) {
+      plotEl.textContent = seriesDownloads.length
+        ? t("series.error.localPlayable")
+        : t("detail.error.noPlaylist")
+    }
+    if (seriesDownloads.length) {
+      renderDownloadedEpisodes(seriesDownloads)
+    }
   }
 
   if (autoplayPending && autoplayEpisodeId && !infoOk) {
