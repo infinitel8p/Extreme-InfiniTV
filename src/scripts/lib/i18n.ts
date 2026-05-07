@@ -18,6 +18,13 @@ export type LocaleCode =
   | "ru"
   | "zh"
   | "ja"
+  | "tr"
+  | "ar"
+  | "ur"
+  | "nl"
+  | "hi"
+  | "id"
+  | "pl"
 
 export type LocaleMessages = Record<string, string>
 
@@ -37,7 +44,16 @@ const LOCALE_LOADERS: Record<LocaleCode, () => Promise<LocaleMessages>> = {
   ru: async () => (await import("@/i18n/ru.json")).default as unknown as LocaleMessages,
   zh: async () => (await import("@/i18n/zh.json")).default as unknown as LocaleMessages,
   ja: async () => (await import("@/i18n/ja.json")).default as unknown as LocaleMessages,
+  tr: async () => (await import("@/i18n/tr.json")).default as unknown as LocaleMessages,
+  ar: async () => (await import("@/i18n/ar.json")).default as unknown as LocaleMessages,
+  ur: async () => (await import("@/i18n/ur.json")).default as unknown as LocaleMessages,
+  nl: async () => (await import("@/i18n/nl.json")).default as unknown as LocaleMessages,
+  hi: async () => (await import("@/i18n/hi.json")).default as unknown as LocaleMessages,
+  id: async () => (await import("@/i18n/id.json")).default as unknown as LocaleMessages,
+  pl: async () => (await import("@/i18n/pl.json")).default as unknown as LocaleMessages,
 }
+
+const RTL_LOCALES: ReadonlySet<LocaleCode> = new Set(["ar", "ur"])
 
 const LOCALE_META_FALLBACK: Record<LocaleCode, { name: string; nativeName: string }> = {
   en: { name: "English", nativeName: "English" },
@@ -49,6 +65,13 @@ const LOCALE_META_FALLBACK: Record<LocaleCode, { name: string; nativeName: strin
   ru: { name: "Russian", nativeName: "Русский" },
   zh: { name: "Chinese (Simplified)", nativeName: "中文（简体）" },
   ja: { name: "Japanese", nativeName: "日本語" },
+  tr: { name: "Turkish", nativeName: "Türkçe" },
+  ar: { name: "Arabic", nativeName: "العربية" },
+  ur: { name: "Urdu", nativeName: "اردو" },
+  nl: { name: "Dutch", nativeName: "Nederlands" },
+  hi: { name: "Hindi", nativeName: "हिन्दी" },
+  id: { name: "Indonesian", nativeName: "Bahasa Indonesia" },
+  pl: { name: "Polish", nativeName: "Polski" },
 }
 
 function isLocaleCode(code: string): code is LocaleCode {
@@ -189,6 +212,7 @@ export async function setLocale(input: string | null): Promise<void> {
   writePersistedLocale(matchesAutoDetect ? null : code)
   if (typeof document !== "undefined") {
     document.documentElement.setAttribute("lang", code)
+    document.documentElement.setAttribute("dir", RTL_LOCALES.has(code) ? "rtl" : "ltr")
     applyI18nDOM()
     document.dispatchEvent(new CustomEvent(LOCALE_CHANGED_EVENT, { detail: { code } }))
   }

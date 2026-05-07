@@ -420,9 +420,10 @@
                   <img
                     src={r.logo}
                     alt=""
-                    loading="lazy"
+                    loading="lazy" fetchpriority="low"
                     decoding="async"
                     referrerpolicy="no-referrer"
+                    width="48" height="48"
                     class="h-full w-full"
                     class:object-cover={r.kind !== "live"}
                     class:object-contain={r.kind === "live"} />

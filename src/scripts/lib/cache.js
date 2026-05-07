@@ -6,6 +6,7 @@ const DB_NAME = "xt_cache"
 const DB_VERSION = 1
 const STORE = "entries"
 const META_LS_KEY = "xt_cache_meta" // legacy; kept only for clean-up.
+const EVT_REVALIDATED = "xt:cache-revalidated"
 
 const makeKey = (entryId, kind) => `${PREFIX}${entryId}:${kind}`
 
@@ -63,10 +64,17 @@ async function idbPut(key, value) {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).put(value, key)
       tx.oncomplete = () => resolve(true)
-      tx.onerror = () => resolve(false)
-      tx.onabort = () => resolve(false)
+      tx.onerror = () => {
+        log.warn("[xt:cache] idbPut tx error for", key, tx.error)
+        resolve(false)
+      }
+      tx.onabort = () => {
+        log.warn("[xt:cache] idbPut tx aborted for", key, tx.error)
+        resolve(false)
+      }
     })
-  } catch {
+  } catch (e) {
+    log.warn("[xt:cache] idbPut threw for", key, e)
     return false
   }
 }
@@ -78,9 +86,13 @@ async function idbDelete(key) {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).delete(key)
       tx.oncomplete = () => resolve(true)
-      tx.onerror = () => resolve(false)
+      tx.onerror = () => {
+        log.warn("[xt:cache] idbDelete tx error for", key, tx.error)
+        resolve(false)
+      }
     })
-  } catch {
+  } catch (e) {
+    log.warn("[xt:cache] idbDelete threw for", key, e)
     return false
   }
 }
@@ -114,9 +126,13 @@ async function idbDeleteWhere(prefix) {
         }
       }
       tx.oncomplete = () => resolve(removed)
-      tx.onerror = () => resolve(removed)
+      tx.onerror = () => {
+        log.warn("[xt:cache] idbDeleteWhere tx error for prefix", prefix, tx.error)
+        resolve(removed)
+      }
     })
-  } catch {
+  } catch (e) {
+    log.warn("[xt:cache] idbDeleteWhere threw for prefix", prefix, e)
     return 0
   }
 }
@@ -128,9 +144,13 @@ async function idbClearAll() {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).clear()
       tx.oncomplete = () => resolve(true)
-      tx.onerror = () => resolve(false)
+      tx.onerror = () => {
+        log.warn("[xt:cache] idbClearAll tx error", tx.error)
+        resolve(false)
+      }
     })
-  } catch {
+  } catch (e) {
+    log.warn("[xt:cache] idbClearAll threw", e)
     return false
   }
 }
@@ -149,12 +169,7 @@ export async function hydrate(entryId, kind) {
   const p = (async () => {
     const obj = await idbGet(key)
     if (obj && typeof obj === "object" && "data" in obj) {
-      const age = Date.now() - obj.fetchedAt
-      if (age <= obj.ttl) {
-        _mem.set(key, obj)
-      } else {
-        idbDelete(key)
-      }
+      _mem.set(key, obj)
     }
   })()
   _hydrating.set(key, p)
@@ -181,12 +196,7 @@ export function getCached(entryId, kind) {
   const e = _mem.get(key)
   if (!e) return null
   const age = Date.now() - e.fetchedAt
-  if (age > e.ttl) {
-    _mem.delete(key)
-    idbDelete(key)
-    return null
-  }
-  return { data: e.data, fetchedAt: e.fetchedAt, age }
+  return { data: e.data, fetchedAt: e.fetchedAt, age, stale: age > e.ttl }
 }
 
 export function setCached(entryId, kind, data, ttlMs) {
@@ -213,12 +223,44 @@ export async function cachedFetch(entryId, kind, ttlMs, fetcher, opts = {}) {
   if (!opts.force) {
     await hydrate(entryId, kind)
     const hit = getCached(entryId, kind)
-    if (hit) return { data: hit.data, fromCache: true, age: hit.age }
+    if (hit && !hit.stale) {
+      return { data: hit.data, fromCache: true, age: hit.age, stale: false }
+    }
+    if (hit && hit.stale) {
+      revalidateInBackground(entryId, kind, ttlMs, fetcher)
+      return { data: hit.data, fromCache: true, age: hit.age, stale: true }
+    }
   }
   const data = await fetcher()
   setCached(entryId, kind, data, ttlMs)
-  return { data, fromCache: false, age: 0 }
+  return { data, fromCache: false, age: 0, stale: false }
 }
+
+const _revalidating = new Map()
+
+function revalidateInBackground(entryId, kind, ttlMs, fetcher) {
+  const key = makeKey(entryId, kind)
+  if (_revalidating.has(key)) return _revalidating.get(key)
+  const promise = (async () => {
+    try {
+      const data = await fetcher()
+      setCached(entryId, kind, data, ttlMs)
+      try {
+        document.dispatchEvent(
+          new CustomEvent(EVT_REVALIDATED, { detail: { entryId, kind } })
+        )
+      } catch {}
+    } catch (e) {
+      log.warn("[xt:cache] revalidate failed:", kind, e?.message || e)
+    } finally {
+      _revalidating.delete(key)
+    }
+  })()
+  _revalidating.set(key, promise)
+  return promise
+}
+
+export const CACHE_REVALIDATED_EVENT = EVT_REVALIDATED
 
 /** Drop every cache entry for one playlist (e.g. on edit/remove). */
 export function invalidateEntry(entryId) {
@@ -325,9 +367,12 @@ export async function clearAll() {
 
 // ---------------------------------------------------------------------------
 // One-time cleanup of legacy localStorage entries.
-// Old versions wrote here; new code uses IDB. Free up the space.
 // ---------------------------------------------------------------------------
-;(() => {
+const LEGACY_CLEANUP_SENTINEL = "xt_cache_legacy_cleaned_v1"
+function runLegacyCleanup() {
+  try {
+    if (sessionStorage.getItem(LEGACY_CLEANUP_SENTINEL) === "1") return
+  } catch {}
   try {
     const toRemove = []
     for (let i = 0; i < localStorage.length; i++) {
@@ -336,4 +381,14 @@ export async function clearAll() {
     }
     for (const k of toRemove) localStorage.removeItem(k)
   } catch {}
-})()
+  try {
+    sessionStorage.setItem(LEGACY_CLEANUP_SENTINEL, "1")
+  } catch {}
+}
+if (typeof window !== "undefined") {
+  const ric =
+    typeof window.requestIdleCallback === "function"
+      ? window.requestIdleCallback
+      : (callback) => setTimeout(callback, 1)
+  ric(runLegacyCleanup, { timeout: 5000 })
+}

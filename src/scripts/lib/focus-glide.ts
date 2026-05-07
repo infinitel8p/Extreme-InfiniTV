@@ -6,6 +6,15 @@ let rafId = 0
 const SIZE_LIMIT = { w: 720, h: 480 }
 const SKIP_TAGS = new Set(["BODY", "HTML", "MAIN", "ASIDE", "ARTICLE", "SECTION", "NAV", "HEADER", "FOOTER"])
 
+const radiusCache = new WeakMap<HTMLElement, number>()
+function getRadius(el: HTMLElement): number {
+  const cached = radiusCache.get(el)
+  if (cached !== undefined) return cached
+  const parsed = parseFloat(getComputedStyle(el).borderRadius) || 12
+  radiusCache.set(el, parsed)
+  return parsed
+}
+
 function ensureIndicator(): HTMLDivElement {
   if (indicatorEl) return indicatorEl
   indicatorEl = document.createElement("div")
@@ -41,7 +50,7 @@ function updatePosition(target: HTMLElement, opts: { skipAnimation?: boolean } =
     hideIndicator()
     return
   }
-  const radius = parseFloat(getComputedStyle(target).borderRadius) || 12
+  const radius = getRadius(target)
   const next = {
     transform: `translate3d(${rect.left}px, ${rect.top}px, 0)`,
     width: `${rect.width}px`,

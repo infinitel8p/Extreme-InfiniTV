@@ -5,12 +5,22 @@ import {
   fmtBase,
   isLikelyM3USource,
 } from "@/scripts/lib/creds.js"
-import { fetchAndMaybeGunzip } from "@/scripts/lib/network.js"
+import { providerFetch } from "@/scripts/lib/provider-fetch.js"
+import {
+  setCached as cacheSet,
+  getCached as cacheGet,
+  hydrate as cacheHydrate,
+} from "@/scripts/lib/cache.js"
+import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
 
 const FRESH_MS = 60 * 60 * 1000
 const TZ_KEY_PREFIX = "xt_epg_offset:"
+const EPG_HTTP_META_PREFIX = "xt_epg_http:"
+const EPG_CACHE_KIND = "epg_parsed"
+const EPG_CACHE_TTL = 4 * 60 * 60 * 1000
 const EVT_LOADED = "xt:epg-loaded"
 const EVT_OFFSET_CHANGED = "xt:epg-offset-changed"
+const GZIP_CT_RX = /application\/(x-)?gzip|application\/x-gunzip/i
 
 /** @typedef {{ start:number, stop:number, title:string, desc:string }} Programme */
 
@@ -26,6 +36,68 @@ const EVT_OFFSET_CHANGED = "xt:epg-offset-changed"
 const memCache = new Map()
 /** @type {Map<string, Promise<EpgState | null>>} */
 const inflight = new Map()
+
+// ---------------------------------------------------------------------------
+// Worker-backed XMLTV parsing. Falls back to main-thread parseXmlTv when
+// Worker construction fails (web build SSR snapshot, sandboxed contexts) or
+// when the worker reports it can't access DOMParser.
+// ---------------------------------------------------------------------------
+/** @type {Worker | null} */
+let xmlWorker = null
+let xmlWorkerBroken = false
+let xmlWorkerSeq = 0
+/** @type {Map<number, { resolve: (v: any) => void, reject: (e: any) => void }>} */
+const xmlWorkerPending = new Map()
+
+function getXmlWorker() {
+  if (xmlWorkerBroken) return null
+  if (xmlWorker) return xmlWorker
+  if (typeof Worker === "undefined") {
+    xmlWorkerBroken = true
+    return null
+  }
+  try {
+    xmlWorker = new Worker(
+      new URL("./epg-worker.ts", import.meta.url),
+      { type: "module" }
+    )
+    xmlWorker.addEventListener("message", (event) => {
+      const data = event.data || {}
+      const pending = xmlWorkerPending.get(data.id)
+      if (!pending) return
+      xmlWorkerPending.delete(data.id)
+      pending.resolve(data)
+    })
+    xmlWorker.addEventListener("error", (event) => {
+      log.warn("[xt:epg-worker] error:", event?.message || event)
+      xmlWorkerBroken = true
+      xmlWorker?.terminate()
+      xmlWorker = null
+      for (const pending of xmlWorkerPending.values()) {
+        pending.reject(new Error("epg worker error"))
+      }
+      xmlWorkerPending.clear()
+    })
+    return xmlWorker
+  } catch (error) {
+    log.warn("[xt:epg-worker] construct failed:", error)
+    xmlWorkerBroken = true
+    return null
+  }
+}
+
+async function parseXmlTvOffMain(xml) {
+  const worker = getXmlWorker()
+  if (!worker) return parseXmlTv(xml)
+  const id = ++xmlWorkerSeq
+  const reply = await new Promise((resolve, reject) => {
+    xmlWorkerPending.set(id, { resolve, reject })
+    worker.postMessage({ id, xml })
+  }).catch(() => null)
+  if (!reply || reply.fallback) return parseXmlTv(xml)
+  if (reply.error) throw new Error(reply.error)
+  return new Map(reply.programmes)
+}
 
 // ---------------------------------------------------------------------------
 // XMLTV parsing
@@ -234,22 +306,87 @@ export function setOffsetSetting(playlistId, value) {
 // ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
-function fetchXml(creds, playlistId) {
+function readEpgHttpMeta(playlistId) {
+  if (!playlistId) return null
+  try {
+    const raw = localStorage.getItem(EPG_HTTP_META_PREFIX + playlistId)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function writeEpgHttpMeta(playlistId, meta) {
+  if (!playlistId) return
+  try {
+    if (!meta) localStorage.removeItem(EPG_HTTP_META_PREFIX + playlistId)
+    else localStorage.setItem(EPG_HTTP_META_PREFIX + playlistId, JSON.stringify(meta))
+  } catch {}
+}
+
+function buildEpgUrl(creds, playlistId) {
   if (isLikelyM3USource(creds.host, creds.user, creds.pass)) {
     let url = ""
     try {
       url = localStorage.getItem(`xt_m3u_epg:${playlistId}`) || ""
     } catch {}
-    if (!url) {
-      throw new Error("This M3U playlist has no x-tvg-url EPG.")
-    }
-    return fetchAndMaybeGunzip(url)
+    if (!url) throw new Error("This M3U playlist has no x-tvg-url EPG.")
+    return url
   }
   const base = fmtBase(creds.host, creds.port).replace(/\/+$/, "")
-  const url =
+  return (
     `${base}/xmltv.php?username=${encodeURIComponent(creds.user)}` +
     `&password=${encodeURIComponent(creds.pass)}`
-  return fetchAndMaybeGunzip(url)
+  )
+}
+
+async function readResponseAsXml(url, response) {
+  const ct = response.headers?.get?.("content-type") || ""
+  const cd = response.headers?.get?.("content-disposition") || ""
+  const lower = String(url).toLowerCase().split("?")[0] ?? ""
+  const looksGzipped =
+    lower.endsWith(".gz") ||
+    lower.endsWith(".gzip") ||
+    GZIP_CT_RX.test(ct) ||
+    /\.gz["']?(\s|$|;)/i.test(cd)
+  if (!looksGzipped) return response.text()
+  if (typeof DecompressionStream !== "function" || !response.body) {
+    throw new Error(
+      "This browser/WebView can't decompress gzipped EPG payloads. Try a provider that serves plain XML."
+    )
+  }
+  const stream = response.body.pipeThrough(new DecompressionStream("gzip"))
+  return new Response(stream).text()
+}
+
+/**
+ * Conditional EPG fetch. Returns either { notModified: true } or
+ * { notModified: false, xml, lastModified, etag }.
+ */
+async function fetchEpgConditional(creds, playlistId) {
+  const url = buildEpgUrl(creds, playlistId)
+  const meta = readEpgHttpMeta(playlistId)
+  const headers = {}
+  if (meta?.lastModified) headers["If-Modified-Since"] = meta.lastModified
+  if (meta?.etag) headers["If-None-Match"] = meta.etag
+  const init = Object.keys(headers).length ? { headers } : {}
+  const response = await providerFetch(url, init)
+  if (response.status === 304) {
+    return { notModified: true, url }
+  }
+  if (!response.ok) {
+    throw new HttpRetryError(
+      response.status,
+      `EPG ${response.status} ${response.statusText}`
+    )
+  }
+  const xml = await readResponseAsXml(url, response)
+  return {
+    notModified: false,
+    xml,
+    lastModified: response.headers?.get?.("last-modified") || null,
+    etag: response.headers?.get?.("etag") || null,
+  }
 }
 
 /**
@@ -271,8 +408,51 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
 
   const promise = (async () => {
     try {
-      const xml = await fetchXml(creds, playlistId)
-      const programmes = parseXmlTv(xml)
+      const result = await retryWithBackoff(() =>
+        fetchEpgConditional(creds, playlistId)
+      )
+      let programmes
+      if (result.notModified) {
+        await cacheHydrate(playlistId, EPG_CACHE_KIND)
+        const hit = cacheGet(playlistId, EPG_CACHE_KIND)
+        if (hit?.data?.entries) {
+          programmes = new Map(hit.data.entries)
+        } else {
+          // 304 but no cached parsed payload survived
+          writeEpgHttpMeta(playlistId, null)
+          const fresh = await retryWithBackoff(() =>
+            fetchEpgConditional(creds, playlistId)
+          )
+          if (fresh.notModified || !fresh.xml) return null
+          programmes = await parseXmlTvOffMain(fresh.xml)
+          try {
+            cacheSet(
+              playlistId,
+              EPG_CACHE_KIND,
+              { entries: Array.from(programmes.entries()) },
+              EPG_CACHE_TTL
+            )
+          } catch {}
+          writeEpgHttpMeta(playlistId, {
+            lastModified: fresh.lastModified || null,
+            etag: fresh.etag || null,
+          })
+        }
+      } else {
+        programmes = await parseXmlTvOffMain(result.xml)
+        try {
+          cacheSet(
+            playlistId,
+            EPG_CACHE_KIND,
+            { entries: Array.from(programmes.entries()) },
+            EPG_CACHE_TTL
+          )
+        } catch {}
+        writeEpgHttpMeta(playlistId, {
+          lastModified: result.lastModified || null,
+          etag: result.etag || null,
+        })
+      }
       const setting = getOffsetSetting(playlistId)
       let offsetMin = 0
       let offsetIsAuto = setting === "auto"
@@ -313,6 +493,7 @@ export function invalidateEpgPlaylist(playlistId) {
   if (!playlistId) return
   memCache.delete(playlistId)
   inflight.delete(playlistId)
+  writeEpgHttpMeta(playlistId, null)
 }
 
 export const EPG_LOADED_EVENT = EVT_LOADED

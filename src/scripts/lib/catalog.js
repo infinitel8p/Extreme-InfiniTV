@@ -11,6 +11,7 @@ import { providerFetch, streamingText } from "@/scripts/lib/provider-fetch.js"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
 import { parseM3U } from "@/scripts/lib/m3u-parser.ts"
 import { t } from "@/scripts/lib/i18n.js"
+import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 const VOD_TTL_MS = 24 * 60 * 60 * 1000
@@ -57,6 +58,7 @@ function makeBytesEmitter(playlistId, kind) {
 // ---------------------------------------------------------------------------
 async function fetchLiveCategoryMap(creds) {
   const r = await providerFetch(buildApiUrl(creds, "get_live_categories"))
+  if (!r.ok) throw new HttpRetryError(r.status, `live_categories ${r.status}`)
   const data = await r.json().catch(() => [])
   const arr = Array.isArray(data)
     ? data
@@ -95,10 +97,10 @@ export async function ensureLive(creds, playlistId, opts = {}) {
   const isM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
   const kind = isM3U ? "m3u" : "live"
   const onBytes = makeBytesEmitter(playlistId, "live")
-  const { data } = await cachedFetch(playlistId, kind, CHANNELS_TTL_MS, async () => {
+  const { data } = await cachedFetch(playlistId, kind, CHANNELS_TTL_MS, () => retryWithBackoff(async () => {
     if (isM3U) {
       const r = await providerFetch(creds.host)
-      if (!r.ok) throw new Error(`M3U ${r.status}`)
+      if (!r.ok) throw new HttpRetryError(r.status, `M3U ${r.status}`)
       const text = await streamingText(r, onBytes)
       return m3uToChannelList(text).sort((a, b) =>
         a.name.localeCompare(b.name, "en", { sensitivity: "base" })
@@ -107,7 +109,7 @@ export async function ensureLive(creds, playlistId, opts = {}) {
     const catMap = await fetchLiveCategoryMap(creds)
     const r = await providerFetch(buildApiUrl(creds, "get_live_streams"))
     const body = await streamingText(r, onBytes)
-    if (!r.ok) throw new Error(`API ${r.status}`)
+    if (!r.ok) throw new HttpRetryError(r.status, `live_streams ${r.status}`)
     const parsed = JSON.parse(body)
     const arr = Array.isArray(parsed)
       ? parsed
@@ -143,7 +145,7 @@ export async function ensureLive(creds, playlistId, opts = {}) {
       .sort((a, b) =>
         a.name.localeCompare(b.name, "en", { sensitivity: "base" })
       )
-  }, { force: !!opts.force })
+  }), { force: !!opts.force })
   return data || []
 }
 
@@ -152,6 +154,7 @@ export async function ensureLive(creds, playlistId, opts = {}) {
 // ---------------------------------------------------------------------------
 async function fetchVodCategoryMap(creds) {
   const r = await providerFetch(buildApiUrl(creds, "get_vod_categories"))
+  if (!r.ok) throw new HttpRetryError(r.status, `vod_categories ${r.status}`)
   const data = await r.json().catch(() => [])
   const arr = Array.isArray(data)
     ? data
@@ -168,11 +171,11 @@ async function fetchVodCategoryMap(creds) {
 export async function ensureVod(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
   const onBytes = makeBytesEmitter(playlistId, "vod")
-  const { data } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, async () => {
+  const { data } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, () => retryWithBackoff(async () => {
     const catMap = await fetchVodCategoryMap(creds)
     const r = await providerFetch(buildApiUrl(creds, "get_vod_streams"))
     const body = await streamingText(r, onBytes)
-    if (!r.ok) throw new Error(`API ${r.status}`)
+    if (!r.ok) throw new HttpRetryError(r.status, `vod_streams ${r.status}`)
     const parsed = JSON.parse(body)
     const arr = Array.isArray(parsed)
       ? parsed
@@ -212,7 +215,7 @@ export async function ensureVod(creds, playlistId, opts = {}) {
       .sort((a, b) =>
         a.name.localeCompare(b.name, "en", { sensitivity: "base" })
       )
-  }, { force: !!opts.force })
+  }), { force: !!opts.force })
   return data || []
 }
 
@@ -221,6 +224,7 @@ export async function ensureVod(creds, playlistId, opts = {}) {
 // ---------------------------------------------------------------------------
 async function fetchSeriesCategoryMap(creds) {
   const r = await providerFetch(buildApiUrl(creds, "get_series_categories"))
+  if (!r.ok) throw new HttpRetryError(r.status, `series_categories ${r.status}`)
   const data = await r.json().catch(() => [])
   const arr = Array.isArray(data)
     ? data
@@ -237,11 +241,11 @@ async function fetchSeriesCategoryMap(creds) {
 export async function ensureSeries(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
   const onBytes = makeBytesEmitter(playlistId, "series")
-  const { data } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, async () => {
+  const { data } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, () => retryWithBackoff(async () => {
     const catMap = await fetchSeriesCategoryMap(creds)
     const r = await providerFetch(buildApiUrl(creds, "get_series"))
     const body = await streamingText(r, onBytes)
-    if (!r.ok) throw new Error(`API ${r.status}`)
+    if (!r.ok) throw new HttpRetryError(r.status, `series ${r.status}`)
     const parsed = JSON.parse(body)
     const arr = Array.isArray(parsed) ? parsed : parsed?.series || parsed?.results || []
     return (arr || [])
@@ -285,7 +289,7 @@ export async function ensureSeries(creds, playlistId, opts = {}) {
       .sort((a, b) =>
         a.name.localeCompare(b.name, "en", { sensitivity: "base" })
       )
-  }, { force: !!opts.force })
+  }), { force: !!opts.force })
   return data || []
 }
 
@@ -385,3 +389,47 @@ export const CATALOG_WARMED_EVENT = EVT_WARMED
 export const CATALOG_WARMING_START_EVENT = EVT_WARMING_START
 export const CATALOG_WARMING_PROGRESS_EVENT = EVT_WARMING_PROGRESS
 export const CATALOG_WARMING_BYTES_EVENT = EVT_WARMING_BYTES
+
+const ENSURE_BY_KIND = {
+  live: ensureLive,
+  vod: ensureVod,
+  series: ensureSeries,
+}
+
+/** Force a re-fetch of one kind. Used by the warming indicator's retry chip
+ *  so a transient failure on (say) vod doesn't require re-warming all three. */
+export async function retryWarmupKind(playlistId, kind) {
+  const fetcher = ENSURE_BY_KIND[kind]
+  if (!fetcher) return
+  let creds
+  try {
+    creds = await loadCreds()
+  } catch {
+    return
+  }
+  if (!creds?.host) return
+  let pid = playlistId
+  if (!pid) {
+    const { getActiveEntry } = await import("@/scripts/lib/creds.js")
+    const e = await getActiveEntry()
+    pid = e?._id
+  }
+  if (!pid) return
+  dispatch(EVT_WARMING_PROGRESS, { playlistId: pid, kind, status: "pending" })
+  try {
+    const data = await fetcher(creds, pid, { force: true })
+    dispatch(EVT_WARMING_PROGRESS, {
+      playlistId: pid,
+      kind,
+      status: "done",
+      count: Array.isArray(data) ? data.length : 0,
+    })
+  } catch (e) {
+    dispatch(EVT_WARMING_PROGRESS, {
+      playlistId: pid,
+      kind,
+      status: "error",
+      error: String(e?.message || e),
+    })
+  }
+}

@@ -1,6 +1,38 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod discord;
 
+#[cfg(target_os = "android")]
+mod android_diagnostics {
+    use std::sync::Once;
+
+    static LOGGER_INIT: Once = Once::new();
+
+    pub fn install() {
+        LOGGER_INIT.call_once(|| {
+            android_logger::init_once(
+                android_logger::Config::default()
+                    .with_max_level(log::LevelFilter::Warn)
+                    .with_tag("xtream-rs"),
+            );
+        });
+
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let location = info
+                .location()
+                .map(|loc| format!(" at {}:{}:{}", loc.file(), loc.line(), loc.column()))
+                .unwrap_or_default();
+            log::error!("rust panic{}: {}", location, info);
+            prev(info);
+        }));
+    }
+
+    #[ctor::ctor]
+    fn install_at_library_load() {
+        install();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()

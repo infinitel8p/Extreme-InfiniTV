@@ -303,6 +303,7 @@ function renderChannelRow(channel, programmesForRow) {
     img.alt = ""
     img.loading = "lazy"
     img.decoding = "async"
+    ;(img as any).fetchPriority = "low"
     img.referrerPolicy = "no-referrer"
     img.className = "h-full w-full object-contain"
     img.onload = () => logo.setAttribute("data-loaded", "true")
@@ -409,6 +410,88 @@ function renderNowLine() {
   bodyEl.appendChild(line)
 }
 
+// ----------------------------
+// Row virtualization
+// ----------------------------
+const OVERSCAN_ROWS = 4
+/** @type {Map<number, HTMLElement>} */
+const renderedRows = new Map()
+let virtualizedRangeStart = -1
+let virtualizedRangeEnd = -1
+let virtualScrollAttached = false
+let virtualScrollPending = false
+
+function renderVirtualWindow() {
+  if (!gridEl || !bodyEl) return
+  const total = channels.length
+  if (!total) return
+
+  const scrollTop = gridEl.scrollTop || 0
+  const viewportH = gridEl.clientHeight || 0
+  const startIdx = Math.max(
+    0,
+    Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN_ROWS
+  )
+  const endIdx = Math.min(
+    total,
+    Math.ceil((scrollTop + viewportH) / ROW_HEIGHT) + OVERSCAN_ROWS
+  )
+
+  if (
+    startIdx === virtualizedRangeStart &&
+    endIdx === virtualizedRangeEnd
+  ) {
+    return
+  }
+
+  for (const [idx, row] of renderedRows) {
+    if (idx < startIdx || idx >= endIdx) {
+      row.remove()
+      renderedRows.delete(idx)
+    }
+  }
+
+  let added = false
+  for (let idx = startIdx; idx < endIdx; idx++) {
+    if (renderedRows.has(idx)) continue
+    const channel = channels[idx]
+    const key = (channel.tvgId || "").toLowerCase()
+    const list = key ? programmes.get(key) || [] : []
+    const row = renderChannelRow(channel, list)
+    row.style.position = "absolute"
+    row.style.top = `${idx * ROW_HEIGHT}px`
+    row.style.left = "0"
+    row.style.right = "0"
+    bodyEl.appendChild(row)
+    renderedRows.set(idx, row)
+    added = true
+  }
+
+  virtualizedRangeStart = startIdx
+  virtualizedRangeEnd = endIdx
+
+  if (added) {
+    try {
+      window.SpatialNavigation?.makeFocusable?.()
+    } catch {}
+  }
+}
+
+function onVirtualScroll() {
+  if (virtualScrollPending) return
+  virtualScrollPending = true
+  requestAnimationFrame(() => {
+    virtualScrollPending = false
+    renderVirtualWindow()
+  })
+}
+
+function attachVirtualScrollListener() {
+  if (virtualScrollAttached || !gridEl) return
+  gridEl.addEventListener("scroll", onVirtualScroll, { passive: true })
+  virtualScrollAttached = true
+}
+
 function render() {
   if (!gridEl || !bodyEl || !headerInner) return
   hideStatus()
@@ -421,21 +504,28 @@ function render() {
 
   renderTimeHeader()
 
-  const frag = document.createDocumentFragment()
-  for (const ch of channels) {
-    const key = (ch.tvgId || "").toLowerCase()
-    const list = key ? programmes.get(key) || [] : []
-    frag.appendChild(renderChannelRow(ch, list))
-  }
-  bodyEl.replaceChildren(frag)
+  // Reset windowed render state
+  bodyEl.replaceChildren()
+  renderedRows.clear()
+  virtualizedRangeStart = -1
+  virtualizedRangeEnd = -1
+
+  const tailH = channels.length === MAX_CHANNELS ? 32 : 0
+  bodyEl.style.height = `${channels.length * ROW_HEIGHT + tailH}px`
+
+  renderVirtualWindow()
   renderNowLine()
 
   if (channels.length === MAX_CHANNELS) {
     const tail = document.createElement("div")
-    tail.className = "p-3 text-fg-3 text-xs text-center"
+    tail.className =
+      "p-3 text-fg-3 text-xs text-center absolute left-0 right-0"
+    tail.style.top = `${channels.length * ROW_HEIGHT}px`
     tail.textContent = t("epg.showingFirst", { n: MAX_CHANNELS })
     bodyEl.appendChild(tail)
   }
+
+  attachVirtualScrollListener()
 
   try {
     window.SpatialNavigation?.makeFocusable?.()

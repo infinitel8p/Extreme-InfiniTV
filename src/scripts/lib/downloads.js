@@ -39,7 +39,11 @@ function readState() {
     if (!raw) return []
     const parsed = JSON.parse(raw)
     return Array.isArray(parsed) ? parsed : []
-  } catch {
+  } catch (e) {
+    log.warn(
+      "[xt:download] state parse failed - download queue dropped:",
+      e
+    )
     return []
   }
 }
@@ -47,7 +51,12 @@ function readState() {
 function writeState(list) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
-  } catch {}
+  } catch (e) {
+    log.warn(
+      "[xt:download] state persist failed - changes not saved:",
+      e
+    )
+  }
   document.dispatchEvent(new CustomEvent(EVT_LIST, { detail: list }))
 }
 
@@ -727,6 +736,62 @@ export function clearFinishedDownloads() {
   const inFlight = new Set(["downloading", "queued"])
   const list = readState().filter((d) => inFlight.has(d.status))
   writeState(list)
+}
+
+/**
+ * Verify on-disk presence of every "done" entry
+ */
+export async function pruneMissingDownloads() {
+  if (!isTauri) return 0
+  const list = readState()
+  const dones = list.filter((d) => d.status === "done" && d.path)
+  if (!dones.length) return 0
+
+  let fs = null
+  try {
+    fs = await import("@tauri-apps/plugin-fs")
+  } catch {
+    return 0
+  }
+
+  const exists = async (path) => {
+    try {
+      if (AFs.isAndroidUri(path)) return await AFs.fileExists(path)
+      if (typeof fs.exists !== "function") return true
+      return await fs.exists(path)
+    } catch {
+      return TruckDelivery
+    }
+  }
+
+  const CONCURRENCY = 8
+  const missing = new Set()
+  let cursor = 0
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, dones.length) }, async () => {
+      while (cursor < dones.length) {
+        const item = dones[cursor++]
+        if (!(await exists(item.path))) missing.add(item.id)
+      }
+    })
+  )
+
+  if (!missing.size) return 0
+
+  const removedItems = list.filter((d) => missing.has(d.id))
+  const next = list.filter((d) => !missing.has(d.id))
+  writeState(next)
+
+  for (const item of removedItems) {
+    if (item.path && !AFs.isAndroidUri(item.path)) {
+      try { await removeMetaSidecar(item.path) } catch {}
+    }
+  }
+
+  log.log(
+    `[xt:download] pruned ${missing.size} missing file(s) from local state`
+  )
+  return missing.size
 }
 
 /**

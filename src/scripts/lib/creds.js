@@ -81,7 +81,12 @@ async function readRaw() {
       const parsed = JSON.parse(raw)
       if (parsed && typeof parsed === "object") return parsed
     }
-  } catch {}
+  } catch (e) {
+    // Corrupted JSON in localStorage/cookie. We continue to the store
+    // fallback below, but warn so a "my login disappeared" report has
+    // a console grep target.
+    log.warn("[xt:creds] stored entries blob is unparseable:", e)
+  }
   const store = await getStore()
   if (store) {
     const v = await store.get(STORAGE_KEY)
@@ -157,7 +162,11 @@ function legacyToEntry({ host, port, user, pass }) {
         addedAt: Date.now(),
       }
     }
-  } catch { }
+  } catch (e) {
+    // legacy `host` wasn't a parseable URL - we fall through to the
+    // composeServerUrl path. Warn so a stuck migration is greppable.
+    log.warn("[xt:creds] legacy host migration: URL parse failed:", e)
+  }
 
   const serverUrl = composeServerUrl(host, port)
   return {
@@ -402,13 +411,13 @@ export function parseXtreamUrl(input) {
   if (!input) return null
   let url
   try {
-    url = new URL(input)
+    url = new URL(String(input).trim())
   } catch {
     return null
   }
   if (!/^https?:$/.test(url.protocol)) return null
-  const username = url.searchParams.get("username") || ""
-  const password = url.searchParams.get("password") || ""
+  const username = (url.searchParams.get("username") || "").trim()
+  const password = (url.searchParams.get("password") || "").trim()
   if (!username || !password) return null
   // Server URL = origin only (drop player_api.php / get.php / etc.)
   return {

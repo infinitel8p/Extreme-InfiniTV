@@ -28,18 +28,65 @@ const documentTitle = pageTitle
         var fontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1");
         if (!isFinite(fontScale) || fontScale < 0.75 || fontScale > 2) fontScale = 1;
         document.documentElement.style.setProperty("--xt-font-scale", String(fontScale));
+        try {
+          var uaPlatform = (navigator.userAgent || "").toLowerCase();
+          if (uaPlatform.indexOf("android") !== -1) {
+            document.documentElement.setAttribute("data-platform", "android");
+          }
+        } catch (e) {}
         var cw = parseFloat(localStorage.getItem("xt_channels_w") || "");
         if (isFinite(cw) && cw >= 18 && cw <= 60) {
           document.documentElement.style.setProperty("--xt-channels-w", cw + "rem");
         }
-        if (localStorage.getItem("xt_perf_mode") === "1") {
+        // Auto-enable perf mode on TV / Leanback devices
+        var perfStored = localStorage.getItem("xt_perf_mode");
+        if (perfStored === null) {
+          var isTvDevice = false;
+          try {
+            if (window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function") {
+              isTvDevice = !!window.AndroidDeviceInfo.isTv();
+            }
+          } catch (e) {}
+          if (!isTvDevice) {
+            try {
+              var ua = (navigator.userAgent || "").toLowerCase();
+              if (
+                ua.indexOf(" tv ") !== -1 ||
+                ua.indexOf("smart-tv") !== -1 ||
+                ua.indexOf("smarttv") !== -1 ||
+                ua.indexOf("googletv") !== -1 ||
+                ua.indexOf("appletv") !== -1 ||
+                ua.indexOf("hbbtv") !== -1 ||
+                ua.indexOf("netcast") !== -1 ||
+                ua.indexOf("nettv") !== -1 ||
+                ua.indexOf("aft") !== -1 ||
+                ua.indexOf("crkey") !== -1 ||
+                ua.indexOf("philipstv") !== -1 ||
+                ua.indexOf("bravia") !== -1
+              ) {
+                isTvDevice = true;
+              }
+            } catch (e) {}
+          }
+          if (isTvDevice) {
+            localStorage.setItem("xt_perf_mode", "1");
+            localStorage.setItem("xt_perf_mode_auto", "1");
+            perfStored = "1";
+          }
+        }
+        if (perfStored === "1") {
           document.documentElement.setAttribute("data-perf-mode", "on");
         }
 
-        var KNOWN_LOCALES = ["en","es","de","fr","pt-BR","it","ru","zh","ja"];
+        var KNOWN_LOCALES = ["en","es","de","fr","pt-BR","it","ru","zh","ja","tr","ar","ur","nl","hi","id","pl"];
+        var RTL_LOCALES = ["ar","ur"];
         var storedLocale = localStorage.getItem("xt_locale") || "";
         if (storedLocale && KNOWN_LOCALES.indexOf(storedLocale) !== -1) {
           document.documentElement.setAttribute("lang", storedLocale);
+          document.documentElement.setAttribute(
+            "dir",
+            RTL_LOCALES.indexOf(storedLocale) !== -1 ? "rtl" : "ltr"
+          );
         }
 
         // Translate [data-i18n*] elements before first paint
@@ -164,7 +211,9 @@ const documentTitle = pageTitle
   import { initFocusGlide } from "@/scripts/lib/focus-glide.js"
   import { initKeyboardHelp } from "@/scripts/lib/keyboard-help.js"
   import { initI18n } from "@/scripts/lib/i18n.js"
+  import { initConnectivity } from "@/scripts/lib/connectivity.js"
   initI18n()
+  initConnectivity()
   const SpatialNavigation = window.SpatialNavigation
 
   console.log(
@@ -237,6 +286,25 @@ const documentTitle = pageTitle
   }
   pushIdlePresence()
   document.addEventListener("xt:active-changed", pushIdlePresence)
+
+  let lastPruneAt = 0
+  const PRUNE_THROTTLE_MS = 5_000
+  async function pruneDownloadsIfStale() {
+    if (onLogin()) return
+    if (Date.now() - lastPruneAt < PRUNE_THROTTLE_MS) return
+    lastPruneAt = Date.now()
+    try {
+      const { pruneMissingDownloads } = await import(
+        "@/scripts/lib/downloads.js"
+      )
+      await pruneMissingDownloads()
+    } catch {}
+  }
+  pruneDownloadsIfStale()
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") pruneDownloadsIfStale()
+  })
+  window.addEventListener("focus", pruneDownloadsIfStale)
 
   window.addEventListener("load", function () {
     SpatialNavigation.init()

@@ -2,6 +2,7 @@ import { log } from "@/scripts/lib/log.js"
 import { cachedFetch, getCached } from "@/scripts/lib/cache.js"
 import { buildApiUrl, safeHttpUrl } from "@/scripts/lib/creds.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
+import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
 
 const USER_INFO_TTL_MS = 60 * 60 * 1000 // 1 hour
 const CACHE_KIND = "user_info"
@@ -25,13 +26,17 @@ export async function ensureUserInfo(creds, playlistId, opts = {}) {
       playlistId,
       CACHE_KIND,
       USER_INFO_TTL_MS,
-      async () => {
-        const response = await providerFetch(apiUrl)
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status} ${response.statusText}`)
-        }
-        return response.json()
-      },
+      () =>
+        retryWithBackoff(async () => {
+          const response = await providerFetch(apiUrl)
+          if (!response.ok) {
+            throw new HttpRetryError(
+              response.status,
+              `HTTP ${response.status} ${response.statusText}`
+            )
+          }
+          return response.json()
+        }),
       opts
     )
     try {

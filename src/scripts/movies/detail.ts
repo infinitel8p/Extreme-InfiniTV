@@ -670,6 +670,21 @@ async function boot() {
   if (cached) applyVodInfo(cached.data)
   else if (plotEl) plotEl.textContent = t("detail.loading")
 
+  // Early autoplay handoff for downloaded movies
+  if (wantsAutoplay && dl?.url) {
+    wantsAutoplay = false
+    try {
+      urlParams.delete("autoplay")
+      const next = urlParams.toString()
+      history.replaceState(
+        null,
+        "",
+        location.pathname + (next ? `?${next}` : "")
+      )
+    } catch {}
+    startPlayback()
+  }
+
   // Refresh from network when reachable.
   if (creds.host && creds.user && creds.pass) {
     try {

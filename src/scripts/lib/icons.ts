@@ -31,3 +31,11 @@ export const ICON_CHECK = wrap('<path d="M5 12l5 5l10 -10" />')
 export const ICON_X = wrap(
   '<path d="M18 6l-12 12" />' + '<path d="M6 6l12 12" />'
 )
+
+export const ICON_INFO = wrap(
+  '<path d="M12 9h.01" />' +
+    '<path d="M11 12h1v4h1" />' +
+    '<path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0" />'
+)
+
+export const ICON_CHEVRON_DOWN = wrap('<path d="M6 9l6 6l6 -6" />')

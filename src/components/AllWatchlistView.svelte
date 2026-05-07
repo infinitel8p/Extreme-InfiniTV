@@ -231,9 +231,10 @@
             <img
               src={entry.logo}
               alt=""
-              loading="lazy"
+              loading="lazy" fetchpriority="low"
               decoding="async"
               referrerpolicy="no-referrer"
+              width="200" height="300"
               class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />
           {:else}
             <div class="h-full w-full flex flex-col items-center justify-center gap-2 px-3

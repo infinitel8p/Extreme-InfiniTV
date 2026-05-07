@@ -6,7 +6,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 
 <Layout pageTitle="Live TV">
 	<main
-		class="w-full max-w-[120rem] mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 md:landscape:pt-6 pb-6
+		class="w-full max-w-480 mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 md:landscape:pt-6 pb-6
 			flex flex-col gap-4 flex-1 min-h-0">
 
 		<section
@@ -15,10 +15,10 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 			<!-- Channels (bottom on mobile, left column on desktop) -->
 			<aside
 				class="order-2 md:landscape:order-1 lg:order-1
-					md:landscape:w-[var(--xt-channels-w,24rem)] lg:w-[var(--xt-channels-w,28rem)]
-					md:landscape:shrink-0 lg:shrink-0 min-h-0">
+					md:landscape:w-(--xt-channels-w,24rem) lg:w-(--xt-channels-w,28rem)
+					md:landscape:shrink-0 lg:shrink-0 md:landscape:min-h-0 lg:min-h-0">
 				<div
-					class="rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 min-h-0">
+					class="rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 md:landscape:min-h-0 lg:min-h-0">
 
 					<div class="flex gap-2 shrink-0">
 						<button
@@ -105,9 +105,9 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 			<!-- Player + EPG (top on mobile, right column on desktop/landscape) -->
 			<section
 				class="order-1 md:landscape:order-2 lg:order-2
-					md:landscape:flex-1 lg:flex-1 min-w-0 min-h-0">
+					md:landscape:flex-1 lg:flex-1 min-w-0 md:landscape:min-h-0 lg:min-h-0">
 				<div
-					class="rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 min-h-0">
+					class="rounded-2xl border border-line bg-surface p-3 h-full flex flex-col gap-3 md:landscape:min-h-0 lg:min-h-0">
 					<div
 						class="aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line flex items-center justify-center shrink-0 relative"
 						style="max-height: 60dvh; max-width: calc(60dvh * 16 / 9);">
@@ -144,18 +144,18 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 
 					<div
 						id="current"
-						class="flex items-center justify-between gap-2 text-sm text-fg-2 shrink-0">
+						class="flex items-center justify-between gap-2 px-1 text-sm text-fg-2 shrink-0">
 						<div class="flex items-center gap-2 min-w-0">
-							<span data-i18n="livetv.statusOff" class="status-badge status-badge--off">OFF</span>
+							<span data-i18n="livetv.statusOff" class="status-badge status-badge--off shrink-0">OFF</span>
 							<span class="truncate">-</span>
 						</div>
 					</div>
 
 					<div
 						id="epg"
-						class="border-t border-line pt-3 flex-1 min-h-0 overflow-auto custom-scroll">
-						<div data-i18n="livetv.epgPanelHeading" class="mb-2 text-sm font-medium text-fg">EPG</div>
-						<div id="epg-list" class="space-y-2 text-sm"></div>
+						class="border-t border-line overflow-auto custom-scroll md:landscape:flex-1 md:landscape:min-h-0 lg:flex-1 lg:min-h-0">
+						<div data-i18n="livetv.epgPanelHeading" class="text-sm font-medium text-fg sticky top-0 bg-surface pt-3 pb-2 z-10">EPG</div>
+						<div id="epg-list" class="space-y-2 text-sm pb-3"></div>
 					</div>
 				</div>
 			</section>

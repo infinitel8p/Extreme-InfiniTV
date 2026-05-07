@@ -980,7 +980,11 @@ import FavoritesReorder from "@/components/FavoritesReorder.svelte"
             const content = document.createElement("div")
             content.className =
               "changelog-md px-4 py-3 border-t border-line/60 text-sm text-fg-2"
-            content.innerHTML = renderMarkdown(release.body || "")
+            // marked + DOMPurify are dynamically imported the first time
+            // this runs; resolves to the sanitized HTML.
+            renderMarkdown(release.body || "").then((html) => {
+              content.innerHTML = html
+            })
             details.appendChild(content)
 
             body.appendChild(details)
