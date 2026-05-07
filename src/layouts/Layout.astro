@@ -287,6 +287,25 @@ const documentTitle = pageTitle
   pushIdlePresence()
   document.addEventListener("xt:active-changed", pushIdlePresence)
 
+  let lastPruneAt = 0
+  const PRUNE_THROTTLE_MS = 5_000
+  async function pruneDownloadsIfStale() {
+    if (onLogin()) return
+    if (Date.now() - lastPruneAt < PRUNE_THROTTLE_MS) return
+    lastPruneAt = Date.now()
+    try {
+      const { pruneMissingDownloads } = await import(
+        "@/scripts/lib/downloads.js"
+      )
+      await pruneMissingDownloads()
+    } catch {}
+  }
+  pruneDownloadsIfStale()
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") pruneDownloadsIfStale()
+  })
+  window.addEventListener("focus", pruneDownloadsIfStale)
+
   window.addEventListener("load", function () {
     SpatialNavigation.init()
 

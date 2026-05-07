@@ -1039,6 +1039,17 @@ function showError(msg) {
   if (plotEl) plotEl.textContent = msg
 }
 
+function showPlotLoading() {
+  if (!plotEl) return
+  plotEl.innerHTML =
+    '<span class="inline-flex items-center gap-2 text-fg-3">' +
+      '<svg viewBox="0 0 24 24" width="1rem" height="1rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" class="animate-spin">' +
+        '<path d="M21 12a9 9 0 1 1-6.2-8.55"/>' +
+      '</svg>' +
+      `<span>${escapeRatingText(t("detail.loading"))}</span>` +
+    '</span>'
+}
+
 async function boot() {
   await initI18n()
   if (!seriesId) {
@@ -1049,7 +1060,7 @@ async function boot() {
   series = null
   episodesByKey = null
   if (metaEl) metaEl.textContent = ""
-  if (plotEl) plotEl.textContent = t("detail.loading")
+  showPlotLoading()
   if (seasonTabs) seasonTabs.replaceChildren()
   if (episodeList) episodeList.replaceChildren()
 
@@ -1087,8 +1098,52 @@ async function boot() {
   syncWatchButton()
 
   const cached = getCached(active._id, `series_info_${seriesId}`)
-  if (cached) applySeriesInfo(cached.data)
-  else if (plotEl) plotEl.textContent = t("detail.loading")
+  if (cached) {
+    applySeriesInfo(cached.data)
+  } else {
+    // Optimistic render
+    if (seriesDownloads.length) renderDownloadedEpisodes(seriesDownloads)
+    showPlotLoading()
+  }
+
+  // Early autoplay handoff for downloaded episodes
+  if (
+    autoplayPending &&
+    autoplayEpisodeId &&
+    !cached &&
+    seriesDownloads.length
+  ) {
+    const dl = seriesDownloads.find(
+      (d) => Number(d.source?.id) === autoplayEpisodeId
+    )
+    if (dl) {
+      autoplayPending = false
+      try {
+        urlParams.delete("autoplay")
+        urlParams.delete("episode")
+        const next = urlParams.toString()
+        history.replaceState(
+          null,
+          "",
+          location.pathname + (next ? `?${next}` : "")
+        )
+      } catch {}
+      const extMatch = String(dl.url || "").match(/\.([a-z0-9]{2,5})(?:\?|$)/i)
+      const synthEp = {
+        id: autoplayEpisodeId,
+        season: dl.source.season ?? "1",
+        episode_num: dl.source.episode ?? null,
+        title: dl.source.seriesName
+          ? String(dl.title || "")
+              .replace(`${dl.source.seriesName} - `, "")
+              .replace(/^S\d+E\d+\s*-\s*/, "")
+          : "",
+        container_extension: extMatch?.[1] || "mp4",
+        _directUrl: dl.url,
+      }
+      playEpisode(synthEp)
+    }
+  }
 
   let infoOk = !!cached
   if (creds.host && creds.user && creds.pass) {
@@ -1112,9 +1167,7 @@ async function boot() {
             ? t("series.error.providerLocal")
             : t("series.error.failedDetails")
         }
-        if (seriesDownloads.length) {
-          renderDownloadedEpisodes(seriesDownloads)
-        } else if (episodeList) {
+        if (!seriesDownloads.length && episodeList) {
           episodeList.replaceChildren()
           const fail = document.createElement("div")
           fail.className = "text-fg-3 text-sm py-3"
@@ -1128,9 +1181,6 @@ async function boot() {
       plotEl.textContent = seriesDownloads.length
         ? t("series.error.localPlayable")
         : t("detail.error.noPlaylist")
-    }
-    if (seriesDownloads.length) {
-      renderDownloadedEpisodes(seriesDownloads)
     }
   }
 
