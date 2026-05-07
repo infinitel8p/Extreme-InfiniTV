@@ -64,10 +64,17 @@ async function idbPut(key, value) {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).put(value, key)
       tx.oncomplete = () => resolve(true)
-      tx.onerror = () => resolve(false)
-      tx.onabort = () => resolve(false)
+      tx.onerror = () => {
+        log.warn("[xt:cache] idbPut tx error for", key, tx.error)
+        resolve(false)
+      }
+      tx.onabort = () => {
+        log.warn("[xt:cache] idbPut tx aborted for", key, tx.error)
+        resolve(false)
+      }
     })
-  } catch {
+  } catch (e) {
+    log.warn("[xt:cache] idbPut threw for", key, e)
     return false
   }
 }
@@ -79,9 +86,13 @@ async function idbDelete(key) {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).delete(key)
       tx.oncomplete = () => resolve(true)
-      tx.onerror = () => resolve(false)
+      tx.onerror = () => {
+        log.warn("[xt:cache] idbDelete tx error for", key, tx.error)
+        resolve(false)
+      }
     })
-  } catch {
+  } catch (e) {
+    log.warn("[xt:cache] idbDelete threw for", key, e)
     return false
   }
 }
@@ -115,9 +126,13 @@ async function idbDeleteWhere(prefix) {
         }
       }
       tx.oncomplete = () => resolve(removed)
-      tx.onerror = () => resolve(removed)
+      tx.onerror = () => {
+        log.warn("[xt:cache] idbDeleteWhere tx error for prefix", prefix, tx.error)
+        resolve(removed)
+      }
     })
-  } catch {
+  } catch (e) {
+    log.warn("[xt:cache] idbDeleteWhere threw for prefix", prefix, e)
     return 0
   }
 }
@@ -129,9 +144,13 @@ async function idbClearAll() {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).clear()
       tx.oncomplete = () => resolve(true)
-      tx.onerror = () => resolve(false)
+      tx.onerror = () => {
+        log.warn("[xt:cache] idbClearAll tx error", tx.error)
+        resolve(false)
+      }
     })
-  } catch {
+  } catch (e) {
+    log.warn("[xt:cache] idbClearAll threw", e)
     return false
   }
 }

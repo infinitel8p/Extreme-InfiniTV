@@ -39,7 +39,11 @@ function readState() {
     if (!raw) return []
     const parsed = JSON.parse(raw)
     return Array.isArray(parsed) ? parsed : []
-  } catch {
+  } catch (e) {
+    log.warn(
+      "[xt:download] state parse failed - download queue dropped:",
+      e
+    )
     return []
   }
 }
@@ -47,7 +51,12 @@ function readState() {
 function writeState(list) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
-  } catch {}
+  } catch (e) {
+    log.warn(
+      "[xt:download] state persist failed - changes not saved:",
+      e
+    )
+  }
   document.dispatchEvent(new CustomEvent(EVT_LIST, { detail: list }))
 }
 

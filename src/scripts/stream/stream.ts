@@ -45,6 +45,7 @@ import {
   EPG_OFFSET_EVENT,
 } from "@/scripts/lib/epg-data.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
+import { maybeB64ToUtf8, escapeHtml } from "@/scripts/lib/b64-utf8.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -1841,23 +1842,7 @@ async function play(streamId, name) {
 // ----------------------------
 // EPG
 // ----------------------------
-const textDecoder = new TextDecoder("utf-8")
-
-function maybeB64ToUtf8(str) {
-  if (!str || typeof str !== "string") return str || ""
-  const looksB64 =
-    /^[A-Za-z0-9+/=\s]+$/.test(str) && str.replace(/\s+/g, "").length % 4 === 0
-  if (!looksB64) return str
-  try {
-    const bin = atob(str.replace(/\s+/g, ""))
-    const bytes = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-    const utf8 = textDecoder.decode(bytes)
-    return utf8.replace(/\s/g, "").length === 0 ? str : utf8
-  } catch {
-    return str
-  }
-}
+// maybeB64ToUtf8 + escapeHtml live in @/scripts/lib/b64-utf8.ts.
 
 const fmtTime = (ts) => {
   const n = Number(ts)
@@ -1871,15 +1856,6 @@ const fmtTime = (ts) => {
     return ""
   }
 }
-
-const escapeHtml = (s) =>
-  String(s).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  })[c])
 
 /** @type {Array<{ start:number, stop:number, title:string, desc:string }>} */
 let epgListData = []

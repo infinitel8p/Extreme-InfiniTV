@@ -2,9 +2,11 @@
 // release-note bodies. Uses `marked` so embedded HTML in release bodies
 // (centered images, `<details>` blocks, badges, etc.) renders the same way
 // it does on the GitHub release page rather than appearing as raw text.
-
-import { marked } from "marked"
-import DOMPurify from "dompurify"
+//
+// `marked` + `dompurify` together weigh ~80 KB minified+gzipped. They are
+// only ever used by the Settings "What's new" dialog, so they are pulled
+// in lazily via dynamic import the first time renderMarkdown() is called.
+// Until then no page bundle that imports this module pays for them.
 
 const CACHE_KEY = "xt_changelog_cache"
 const CACHE_TTL_MS = 60 * 60 * 1000
@@ -75,17 +77,6 @@ export async function fetchReleases(
   return releases
 }
 
-marked.setOptions({
-  gfm: true,
-  breaks: false,
-})
-
-DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-  if (node instanceof Element && node.tagName === "A" && node.getAttribute("target") === "_blank") {
-    node.setAttribute("rel", "noopener noreferrer")
-  }
-})
-
 const ALLOWED_TAGS = [
   "a", "abbr", "b", "blockquote", "br", "code", "del", "details", "div",
   "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "ins", "kbd",
@@ -98,8 +89,41 @@ const ALLOWED_ATTR = [
   "title", "type", "width",
 ]
 
-export function renderMarkdown(source: string): string {
+// Lazy singleton: first call to renderMarkdown() triggers the dynamic
+// imports + one-time configuration; later calls reuse the same modules.
+let markdownPipeline:
+  | Promise<{
+      marked: typeof import("marked").marked
+      DOMPurify: typeof import("dompurify").default
+    }>
+  | null = null
+
+function loadMarkdownPipeline() {
+  if (markdownPipeline) return markdownPipeline
+  markdownPipeline = Promise.all([
+    import("marked"),
+    import("dompurify"),
+  ]).then(([markedMod, purifyMod]) => {
+    const marked = markedMod.marked
+    const DOMPurify = purifyMod.default
+    marked.setOptions({ gfm: true, breaks: false })
+    DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+      if (
+        node instanceof Element &&
+        node.tagName === "A" &&
+        node.getAttribute("target") === "_blank"
+      ) {
+        node.setAttribute("rel", "noopener noreferrer")
+      }
+    })
+    return { marked, DOMPurify }
+  })
+  return markdownPipeline
+}
+
+export async function renderMarkdown(source: string): Promise<string> {
   if (!source) return ""
+  const { marked, DOMPurify } = await loadMarkdownPipeline()
   const rendered = marked.parse(source, { async: false }) as string
   return DOMPurify.sanitize(rendered, {
     ALLOWED_TAGS,

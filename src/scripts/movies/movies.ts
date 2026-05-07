@@ -14,7 +14,6 @@ import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/c
 import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
-  toggleFavorite,
   isOnWatchlist,
   getFavorites,
   getRecents,
@@ -28,6 +27,11 @@ import { ICON_X } from "@/scripts/lib/icons.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
+import {
+  buildEntryCard,
+  STAR_OUTLINE,
+  STAR_FILLED,
+} from "@/scripts/lib/entry-card.js"
 
 const VOD_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -86,12 +90,7 @@ function hiddenSet() {
     : new Set()
 }
 
-const STAR_OUTLINE =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/></svg>'
-const STAR_FILLED =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/></svg>'
-const BOOKMARK_FILLED =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="0.85em" height="0.85em" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 3a2 2 0 0 0-2 2v16l8-4 8 4V5a2 2 0 0 0-2-2H6z"/></svg>'
+// STAR_OUTLINE / STAR_FILLED / BOOKMARK_FILLED are imported from entry-card.
 
 document.addEventListener("xt:favorites-changed", (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
@@ -357,154 +356,26 @@ let infiniteObs = null
 let renderedCount = 0
 
 function makeCard(m, idx) {
-  const card = document.createElement("div")
-  card.dataset.idx = String(idx)
-  const stagger = idx < 12
-  card.className =
-    "movie-card group relative rounded-xl overflow-hidden bg-surface-2 " +
-    "ring-1 ring-line " +
-    "transition-[transform,box-shadow] duration-150 " +
-    "hover:ring-2 hover:ring-accent hover:[transform:translateY(-2px)] " +
-    "focus-within:ring-2 focus-within:ring-accent focus-within:[transform:translateY(-2px)]" +
-    (stagger ? " grid-card-enter" : "")
-  if (stagger) card.style.animationDelay = `${idx * 28}ms`
-  card.style.contentVisibility = "auto"
-  card.style.containIntrinsicSize = "260px"
-
-  const link = document.createElement("a")
-  link.href = `/movies/detail?id=${encodeURIComponent(m.id)}`
-  link.dataset.role = "play"
-  link.className =
-    "play-btn block w-full text-left outline-none cursor-pointer no-underline"
-  link.title = m.name || ""
-  link.setAttribute("aria-label", t("list.openAria", { name: m.name || t("list.movieFallback", { id: m.id }) }))
-
-  // Set the cross-document VT name on the source poster image just before
-  // navigation - the browser snapshots elements with matching names on
-  // both ends and animates between them.
-  link.addEventListener("click", () => {
-    const img = link.querySelector("img")
-    if (img) /** @type {HTMLElement} */ (img).style.viewTransitionName = "active-poster"
+  return buildEntryCard({
+    entry: m,
+    idx,
+    kind: "vod",
+    activePlaylistId,
+    detailHref: (entry) =>
+      `/movies/detail?id=${encodeURIComponent(entry.id)}`,
+    fallbackTitle: (entry) => t("list.movieFallback", { id: entry.id }),
+    metaText: (entry) => {
+      const parts = []
+      if (entry.year) parts.push(entry.year)
+      if ((entry as any).duration) parts.push((entry as any).duration)
+      if (entry.category) parts.push(entry.category)
+      return parts.join(" \u2022 ")
+    },
+    starLabel: (entry, fav) =>
+      fav
+        ? `Remove ${entry.name || "movie"} from favorites`
+        : `Add ${entry.name || "movie"} to favorites`,
   })
-
-  const posterWrap = document.createElement("div")
-  posterWrap.className = "aspect-[2/3] w-full bg-surface-2 overflow-hidden relative"
-
-  if (m.logo) {
-    const img = document.createElement("img")
-    img.src = m.logo
-    img.alt = ""
-    img.loading = "lazy"
-    img.decoding = "async"
-    ;(img as any).fetchPriority = "low"
-    img.referrerPolicy = "no-referrer"
-    img.width = 200
-    img.height = 300
-    img.className =
-      "h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
-    img.onerror = () => {
-      img.remove()
-      posterWrap.appendChild(makeFallback(m.name))
-    }
-    posterWrap.appendChild(img)
-  } else {
-    posterWrap.appendChild(makeFallback(m.name))
-  }
-
-  const ratingText = fmtImdbRating(m.rating)
-  if (ratingText) {
-    const ratingBadge = document.createElement("span")
-    ratingBadge.className =
-      "absolute bottom-1.5 left-1.5 inline-flex items-center gap-1 " +
-      "rounded-md px-1.5 py-0.5 bg-black/55 backdrop-blur-sm " +
-      "ring-1 ring-white/10 text-white/90 text-2xs font-semibold tabular-nums"
-    ratingBadge.setAttribute("aria-label", t("list.ratingAria", { rating: ratingText }))
-    ratingBadge.innerHTML =
-      '<svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true" class="text-accent">' +
-      '<path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/>' +
-      "</svg>" +
-      `<span>${ratingText}</span>`
-    posterWrap.appendChild(ratingBadge)
-  }
-
-  const onWatchlist = activePlaylistId
-    ? isOnWatchlist(activePlaylistId, "vod", m.id)
-    : false
-  const watchBadge = document.createElement("span")
-  watchBadge.dataset.role = "watch-badge"
-  watchBadge.className =
-    "absolute top-1.5 left-1.5 inline-flex items-center justify-center " +
-    "size-6 rounded-md bg-black/55 backdrop-blur-sm ring-1 ring-white/10 " +
-    "text-accent transition-opacity"
-  watchBadge.setAttribute("aria-label", t("list.onWatchlist"))
-  watchBadge.title = t("list.onWatchlist")
-  watchBadge.innerHTML = BOOKMARK_FILLED
-  if (!onWatchlist) watchBadge.hidden = true
-  posterWrap.appendChild(watchBadge)
-
-  link.appendChild(posterWrap)
-
-  const info = document.createElement("div")
-  info.className = "px-2 py-2 min-w-0"
-  const nameEl = document.createElement("div")
-  nameEl.className = "truncate text-sm font-medium text-fg"
-  nameEl.textContent = m.name || t("list.movieFallback", { id: m.id })
-  const meta = document.createElement("div")
-  meta.className = "truncate text-2xs text-fg-3 tabular-nums"
-  const parts = []
-  if (m.year) parts.push(m.year)
-  if (m.duration) parts.push(m.duration)
-  if (m.category) parts.push(m.category)
-  meta.textContent = parts.join(" • ")
-  info.append(nameEl, meta)
-  link.appendChild(info)
-
-  card.appendChild(link)
-
-  const fav = activePlaylistId
-    ? isFavorite(activePlaylistId, "vod", m.id)
-    : false
-  const starBtn = document.createElement("button")
-  starBtn.type = "button"
-  starBtn.dataset.role = "star"
-  starBtn.className =
-    "star-btn absolute top-2 right-2 h-8 w-8 rounded-lg outline-none " +
-    "flex items-center justify-center text-base " +
-    "bg-black/45 backdrop-blur-sm ring-1 ring-white/10 " +
-    "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 " +
-    "focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent " +
-    "transition-opacity " +
-    (fav ? "text-accent" : "text-white/85")
-  if (fav) starBtn.classList.add("!opacity-100")
-  starBtn.setAttribute(
-    "aria-label",
-    fav
-      ? `Remove ${m.name || "movie"} from favorites`
-      : `Add ${m.name || "movie"} to favorites`
-  )
-  starBtn.setAttribute("aria-pressed", String(fav))
-  starBtn.innerHTML = fav ? STAR_FILLED : STAR_OUTLINE
-  starBtn.addEventListener("click", (e) => {
-    e.stopPropagation()
-    e.preventDefault()
-    if (!activePlaylistId) return
-    toggleFavorite(activePlaylistId, "vod", m.id, {
-      name: m.name || "",
-      logo: m.logo || null,
-    })
-  })
-  card.appendChild(starBtn)
-
-  return card
-}
-
-function makeFallback(name) {
-  const fb = document.createElement("div")
-  fb.className =
-    "h-full w-full flex items-center justify-center text-center px-3 " +
-    "text-fg-3 text-xs tracking-wide bg-gradient-to-br from-surface-2 to-surface-3"
-  fb.textContent = name || t("list.noPosterFallback")
-  return fb
 }
 
 function posterSkeletonGeometry() {
