@@ -78,6 +78,32 @@ export async function streamingText(response, onProgress) {
 
 const DEFAULT_TIMEOUT_MS = 20_000
 
+// Lightweight provider-fetch statistics
+const _stats = {
+  lastSuccessAt: 0,
+  lastFailureAt: 0,
+  lastError: "",
+  successes: 0,
+  failures: 0,
+  lastStatus: 0,
+}
+
+function noteSuccess(status) {
+  _stats.lastSuccessAt = Date.now()
+  _stats.lastStatus = status || 0
+  _stats.successes++
+}
+
+function noteFailure(error) {
+  _stats.lastFailureAt = Date.now()
+  _stats.lastError = String(error?.message || error || "").slice(0, 200)
+  _stats.failures++
+}
+
+export function getProviderStats() {
+  return { ..._stats }
+}
+
 export async function providerFetch(url, init = {}) {
   const ua = getUserAgent()
   const u = String(url).slice(0, 200)
@@ -89,13 +115,27 @@ export async function providerFetch(url, init = {}) {
 
   if (!ua || !isTauri) {
     log.log(`[xt:net] native start`, u)
-    return await nativeFetch(url, callInit, u, callerSignal)
+    try {
+      const r = await nativeFetch(url, callInit, u, callerSignal)
+      noteSuccess(r.status)
+      return r
+    } catch (e) {
+      if (!callerSignal?.aborted) noteFailure(e)
+      throw e
+    }
   }
 
   const tauriFetch = await getTauriFetch()
   if (!tauriFetch) {
     log.log(`[xt:net] native start (no plugin-http)`, u)
-    return await nativeFetch(url, callInit, u, callerSignal)
+    try {
+      const r = await nativeFetch(url, callInit, u, callerSignal)
+      noteSuccess(r.status)
+      return r
+    } catch (e) {
+      if (!callerSignal?.aborted) noteFailure(e)
+      throw e
+    }
   }
 
   log.log(`[xt:net] tauri start ua=${ua}`, u)
@@ -104,6 +144,7 @@ export async function providerFetch(url, init = {}) {
   try {
     const r = await tauriFetch(url, { ...callInit, headers })
     log.log(`[xt:net] tauri ok ${r.status}`, u)
+    noteSuccess(r.status)
     return r
   } catch (e) {
     if (callerSignal?.aborted) throw e
@@ -111,6 +152,13 @@ export async function providerFetch(url, init = {}) {
       "[xt:net] tauri fetch failed, falling back to native:",
       String(e?.message || e)
     )
-    return await nativeFetch(url, callInit, u, callerSignal)
+    try {
+      const r = await nativeFetch(url, callInit, u, callerSignal)
+      noteSuccess(r.status)
+      return r
+    } catch (e2) {
+      if (!callerSignal?.aborted) noteFailure(e2)
+      throw e2
+    }
   }
 }

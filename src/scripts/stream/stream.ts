@@ -1551,6 +1551,43 @@ const STALL_AUTO_TUNE_MS = 30_000
 const BUFFERING_GRACE_MS = 350
 const ERROR_AUTO_RETRY_MS = 1500
 
+// Per-stream diagnostic cooldown
+const AUTO_DIAGNOSTIC_COOLDOWN_MS = 30_000
+const lastAutoDiagnosticAt = new Map()
+
+async function runAutoDiagnostic(ctx, dismissGenericToast) {
+  if (!ctx?.streamId || !ctx.src) return
+
+  const now = Date.now()
+  const last = lastAutoDiagnosticAt.get(ctx.streamId) || 0
+  if (now - last < AUTO_DIAGNOSTIC_COOLDOWN_MS) return
+  lastAutoDiagnosticAt.set(ctx.streamId, now)
+
+  log.log("[xt:livetv] auto-diagnostic starting for", ctx.streamId)
+  const seqAtStart = ctx.seq
+  try {
+    const { diagnoseStream, summarizeReport } = await import(
+      "@/scripts/lib/stream-diagnostic.js"
+    )
+    const report = await diagnoseStream(ctx.src)
+
+    if (seqAtStart !== playSeq) {
+      log.log("[xt:livetv] auto-diagnostic dropped (stream changed)")
+      return
+    }
+    const { verdict, reason } = summarizeReport(report)
+    log.log("[xt:livetv] auto-diagnostic verdict:", verdict, reason)
+    if (!reason) return
+    try { dismissGenericToast?.() } catch {}
+    toastError(
+      t("stream.error.cantPlay", { channel: ctx.name || `#${ctx.streamId}` }),
+      { description: reason, duration: 8000 }
+    )
+  } catch (e) {
+    log.warn("[xt:livetv] auto-diagnostic failed:", e)
+  }
+}
+
 const ensurePlayer = async () => {
   if (vjs) return vjs
   const [{ default: videojs }] = await Promise.all([
@@ -1622,9 +1659,15 @@ const ensurePlayer = async () => {
     hideTuningOverlay()
     hideBufferingChip()
     clearStallSentinel()
-    toastError(t("stream.error.cantPlay", { channel: ctx.name || `#${ctx.streamId}` }), {
-      description: t("stream.error.checkConnection"),
-    })
+    const dismissGeneric = toastError(
+      t("stream.error.cantPlay", { channel: ctx.name || `#${ctx.streamId}` }),
+      { description: t("stream.error.checkConnection") }
+    )
+    // Background diagnostic: turn the generic "couldn't play" toast into an
+    // actionable one ("HLS playlist returned 403", "Server unreachable",
+    // "Top variant manifest empty", etc.) once we have a verdict. Cooldown
+    // per stream-id so a flapping channel doesn't fire repeated probes.
+    runAutoDiagnostic(ctx, dismissGeneric)
   })
 
   return vjs
