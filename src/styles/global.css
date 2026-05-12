@@ -1586,7 +1586,7 @@ dialog[open]::backdrop {
     margin-left: -0.05em;
     color: var(--color-fg);
     /* Dramatic clamp - jumps from ~2.75rem on phones to ~6.75rem on TV. */
-    font-size: clamp(2.75rem, 4vw + 1.75rem, 6.75rem);
+    font-size: clamp(0.8rem, 1.2vw + 0.6rem, 1.8rem);
     animation: route-hero-rise 560ms cubic-bezier(0.16, 1, 0.3, 1) 100ms both;
 }
 /* Accent the first glyph of every route title in fuchsia. */
