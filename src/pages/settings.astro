@@ -2322,7 +2322,6 @@ const navStructure: NavSection[] = [
       }
     }
     syncConcurrencyButtons()
-    syncConnectionLimitBanner()
     concurrencyGroup?.addEventListener("click", (e) => {
       const btn = /** @type {HTMLElement} */ (e.target).closest(
         ".dl-concurrency-btn"
