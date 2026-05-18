@@ -2,8 +2,33 @@
 // internals, the spatial-navigation polyfill, and Android intent bridges.
 
 interface AndroidPipBridge {
+  isSupported?: () => boolean
+  isInPip?: () => boolean
   enter?: () => void
-  exit?: () => void
+  expand?: () => void
+  toggle?: () => void
+  setAutoEnter?: (enabled: boolean) => void
+}
+
+interface AndroidVideoBridge {
+  isSupported?: () => boolean
+  launchVod?: (
+    contentKey: string,
+    url: string,
+    ua: string,
+    referer: string,
+    title: string,
+    posterUrl: string,
+    startMs: number,
+  ) => boolean
+  launchLive?: (
+    contentKey: string,
+    channelsJson: string,
+    initialChannelId: string,
+    ua: string,
+    referer: string,
+  ) => boolean
+  drainEvents?: () => string
 }
 
 interface AndroidIntentBridge {
@@ -60,6 +85,7 @@ declare global {
     SpatialNavigation?: SpatialNavigationApi
     AndroidPip?: AndroidPipBridge
     AndroidIntent?: AndroidIntentBridge
+    AndroidVideo?: AndroidVideoBridge
   }
 }
 

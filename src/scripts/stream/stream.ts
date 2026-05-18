@@ -29,6 +29,13 @@ import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { attachPopoverSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
+import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
+import {
+  androidNativePlayerAvailable,
+  launchAndroidNativeLive,
+  subscribeAndroidNativeEvents,
+} from "@/scripts/lib/android-video-launcher.js"
+import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
 import { parseM3U as parseSharedM3U } from "@/scripts/lib/m3u-parser.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
@@ -1318,6 +1325,9 @@ const ensureEmbeddedPlayer = async (backend) => {
   if (mounted.backend === "videojs") {
     attachPlayerFocusKeeper(vjs)
   }
+  if (videoEl instanceof HTMLVideoElement) {
+    bindAutoPip(videoEl)
+  }
   attachAudioOnlyDetection(vjs)
 
   vjs.on("playing", () => {
@@ -1596,8 +1606,77 @@ function pickConfiguredExternal() {
   return null
 }
 
+// Native ExoPlayer Activity intercept for Live TV
+let _nativeLiveSubscribed = false
+function ensureNativeLiveSubscription() {
+  if (_nativeLiveSubscribed) return
+  _nativeLiveSubscribed = true
+  subscribeAndroidNativeEvents((event) => {
+    if (event.type !== "xt:android-native-channel-changed") return
+    const channelId = event.payload?.channelId
+    if (!channelId) return
+    const channel = all.find((entry) => String(entry.id) === String(channelId))
+    if (!channel) return
+    if (activePlaylistId) {
+      pushRecent(activePlaylistId, "live", channel.id, channel.name, channel.logo || null)
+    }
+    setNowPlaying(channel.id)
+  })
+}
+
+async function tryLaunchNativeLive(initialStreamId, initialName) {
+  if (!androidNativePlayerAvailable) return false
+  if (!getAndroidNativePlayerEnabled()) return false
+  if (!all.length) return false
+  ensureNativeLiveSubscription()
+
+  const channelInputs = []
+  for (const channel of all) {
+    let streamUrl = ""
+    if (hasDirectUrl(channel.id)) {
+      streamUrl = getDirectUrl(channel.id)
+    } else {
+      const built = buildDirectLiveUrl(channel.id, creds)
+      if (built) streamUrl = built
+    }
+    if (!streamUrl) continue
+    const headers = streamHeadersById.get(channel.id) || null
+    channelInputs.push({
+      id: String(channel.id),
+      name: channel.name || "",
+      logo: channel.logo || "",
+      streamUrl,
+      ua: headers?.userAgent || "",
+      referer: headers?.referer || "",
+      tvgId: channel.tvgId || null,
+    })
+  }
+  if (!channelInputs.length) return false
+
+  const programmes = activePlaylistId
+    ? getProgrammesSync(activePlaylistId)?.programmes ?? null
+    : null
+  const launched = launchAndroidNativeLive({
+    contentKey: `live:${initialStreamId}`,
+    channels: channelInputs,
+    initialChannelId: String(initialStreamId),
+    defaultUa: getUserAgent() || "",
+    programmes,
+  })
+  if (launched && activePlaylistId) {
+    pushRecent(activePlaylistId, "live", initialStreamId, initialName,
+      all.find((entry) => entry.id === initialStreamId)?.logo || null)
+    setNowPlaying(initialStreamId)
+  }
+  return launched
+}
+
 async function play(streamId, name) {
   if (!currentEl) return
+  // Native ExoPlayer Activity path (opt-in via Settings). Hands off the full
+  // playback session including channel switching. Returns early if successful.
+  if (await tryLaunchNativeLive(streamId, name)) return
+
   const src = hasDirectUrl(streamId)
     ? getDirectUrl(streamId)
     : await resolveStreamUrl((c) => buildDirectLiveUrl(streamId, c))

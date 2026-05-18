@@ -42,6 +42,13 @@ import {
 } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
+import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
+import {
+  androidNativePlayerAvailable,
+  launchAndroidNativeVod,
+  subscribeAndroidNativeEvents,
+} from "@/scripts/lib/android-video-launcher.js"
+import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
@@ -327,6 +334,9 @@ async function ensureEmbeddedPlayer(backend) {
   if (mounted.backend === "videojs") {
     attachPlayerFocusKeeper(vjs)
   }
+  if (videoEl instanceof HTMLVideoElement) {
+    bindAutoPip(videoEl)
+  }
   return vjs
 }
 
@@ -369,6 +379,47 @@ async function startPlayback() {
           return saved.position / dur < RESUME_MAX_FRACTION ? saved.position : 0
         })()
       : 0
+
+  // Native ExoPlayer Activity path
+  if (
+    androidNativePlayerAvailable &&
+    getAndroidNativePlayerEnabled() &&
+    activePlaylistId
+  ) {
+    const contentKey = `vod:${movie.id}`
+    const subscribed = subscribeAndroidNativeEvents((event) => {
+      if (event.payload?.contentKey !== contentKey) return
+      if (event.type === "xt:android-native-progress") {
+        const pos = Math.max(0, Math.floor((event.payload.positionMs || 0) / 1000))
+        const dur = Math.max(0, Math.floor((event.payload.durationMs || 0) / 1000))
+        if (pos > 0) {
+          setProgress(activePlaylistId!, "vod", movie!.id, pos, dur, {
+            title: movie!.name,
+            logo: movie!.logo || null,
+          })
+        }
+      } else if (event.type === "xt:android-native-finished") {
+        if (event.payload.completed) {
+          markCompleted(activePlaylistId!, "vod", movie!.id, {
+            duration: Math.max(
+              0,
+              Math.floor((event.payload.finalPosMs || 0) / 1000),
+            ),
+          })
+        }
+        subscribed()
+      }
+    })
+    const launched = launchAndroidNativeVod({
+      contentKey,
+      url: playSrc,
+      title: movie.name,
+      posterUrl: movie.logo || "",
+      startMs: Math.max(0, resumePos) * 1000,
+    })
+    if (launched) return
+    subscribed()
+  }
 
   const backend = getPlayerBackend()
 

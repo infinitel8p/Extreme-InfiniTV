@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Single channel row in the VideoActivity channel-list overlay. -->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/channel_row_root"
+    android:layout_width="match_parent"
+    android:layout_height="56dp"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:padding="8dp"
+    android:focusable="true"
+    android:clickable="true"
+    android:background="?android:attr/selectableItemBackground">
+
+    <ImageView
+        android:id="@+id/channel_logo"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginEnd="12dp"
+        android:contentDescription="@null"
+        android:scaleType="fitCenter" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/channel_name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/xt_row_text"
+            android:textSize="14sp"
+            android:singleLine="true"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/channel_now"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/xt_row_text_dim"
+            android:textSize="12sp"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:visibility="gone" />
+    </LinearLayout>
+</LinearLayout>

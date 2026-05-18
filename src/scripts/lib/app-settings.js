@@ -13,6 +13,7 @@ const KEY_PLAYER_REUSE_VLC = "xt_player_reuse_vlc"
 const KEY_CLOSE_TO_TRAY = "xt_close_to_tray"
 const KEY_HUB_STRIPS = "xt_hub_strips"
 const KEY_TV_OVERSCAN = "xt_tv_overscan"
+const KEY_ANDROID_NATIVE_PLAYER = "xt_android_native_player"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -21,6 +22,7 @@ export const PLAYER_BACKEND_EVENT = "xt:player-backend-changed"
 export const CLOSE_TO_TRAY_EVENT = "xt:close-to-tray-changed"
 export const HUB_STRIPS_EVENT = "xt:hub-strips-changed"
 export const TV_OVERSCAN_EVENT = "xt:tv-overscan-changed"
+export const ANDROID_NATIVE_PLAYER_EVENT = "xt:android-native-player-changed"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
 export const DEFAULT_TV_OVERSCAN = 0
 
@@ -230,6 +232,24 @@ export function setCloseToTray(on) {
     new CustomEvent(CLOSE_TO_TRAY_EVENT, { detail: { value: !!on } })
   )
   pushCloseToTrayToBackend(!!on)
+}
+
+// Android: opt-in toggle for the native ExoPlayer Activity. When on, plays
+// movies / series / live TV through the native VideoActivity instead of the
+// in-WebView Video.js player. Enables proper PiP, MediaSession lock-screen controls
+// and hardened HLS via ExoPlayer. Default off until on-device validation completes.
+//
+// Storage: "1" for opt-in. Default ("" / missing) keeps the existing
+// in-WebView path unchanged.
+export function getAndroidNativePlayerEnabled() {
+  return readLS(KEY_ANDROID_NATIVE_PLAYER, "") === "1"
+}
+
+export function setAndroidNativePlayerEnabled(on) {
+  writeLS(KEY_ANDROID_NATIVE_PLAYER, on ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(ANDROID_NATIVE_PLAYER_EVENT, { detail: { value: !!on } })
+  )
 }
 
 export function syncCloseToTrayToBackend() {

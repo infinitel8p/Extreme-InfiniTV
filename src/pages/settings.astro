@@ -43,6 +43,7 @@ import PlayerPicker from "@/components/PlayerPicker.svelte"
 import TvOverscanCard from "@/components/TvOverscanCard.svelte"
 import CloseToTrayCard from "@/components/CloseToTrayCard.svelte"
 import ConnectionLimitBanner from "@/components/ConnectionLimitBanner.svelte"
+import AndroidNativePlayerCard from "@/components/AndroidNativePlayerCard.svelte"
 
 interface NavCard { id: string; labelKey: string; label: string }
 interface NavSection { id: string; labelKey: string; label: string; cards: NavCard[]; danger?: boolean }
@@ -50,12 +51,13 @@ interface NavSection { id: string; labelKey: string; label: string; cards: NavCa
 const navStructure: NavSection[] = [
   { id: "settings-playlists", labelKey: "settings.group.playlists", label: "Playlists", cards: [] },
   { id: "settings-appearance", labelKey: "settings.group.appearance", label: "Appearance", cards: [
-    { id: "card-language",          labelKey: "settings.section.language",     label: "Language" },
-    { id: "card-display",           labelKey: "settings.section.display",      label: "Display" },
-    { id: "card-perf-mode",         labelKey: "settings.perfMode.title",       label: "Performance mode" },
-    { id: "card-tv-overscan",       labelKey: "settings.tvOverscan.title",     label: "TV safe area" },
-    { id: "card-hub-strips",        labelKey: "settings.hubStrips.title",      label: "Home page sections" },
-    { id: "close-behavior-section", labelKey: "settings.closeBehavior.title",  label: "Close button behavior" },
+    { id: "card-language",                 labelKey: "settings.section.language",          label: "Language" },
+    { id: "card-display",                  labelKey: "settings.section.display",           label: "Display" },
+    { id: "card-perf-mode",                labelKey: "settings.perfMode.title",            label: "Performance mode" },
+    { id: "card-tv-overscan",              labelKey: "settings.tvOverscan.title",          label: "TV safe area" },
+    { id: "card-hub-strips",               labelKey: "settings.hubStrips.title",           label: "Home page sections" },
+    { id: "close-behavior-section",        labelKey: "settings.closeBehavior.title",       label: "Close button behavior" },
+    { id: "android-native-player-section", labelKey: "settings.androidNativePlayer.navLabel", label: "Native Android player" },
   ]},
   { id: "settings-watching", labelKey: "settings.group.watching", label: "Watching", cards: [
     { id: "card-livetv-layout",       labelKey: "settings.livetvLayout.title",       label: "Live TV layout" },
@@ -315,6 +317,8 @@ const navStructure: NavSection[] = [
         </article>
 
         <CloseToTrayCard client:load />
+
+        <AndroidNativePlayerCard client:load />
 
       </div>
     </section>
