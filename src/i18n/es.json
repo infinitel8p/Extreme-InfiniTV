@@ -874,7 +874,7 @@
   "settings.androidNativePlayer.title": "Reproductor de vídeo nativo de Android",
   "settings.androidNativePlayer.navLabel": "Reproductor nativo de Android",
   "settings.androidNativePlayer.experimental": "Experimental",
-  "settings.androidNativePlayer.helper": "Reproduce películas, series y canales en directo a través del ExoPlayer integrado de Android en lugar del reproductor interno de la app. Habilita Imagen en imagen real (solo el vídeo, no toda la interfaz), controles desde la pantalla de bloqueo y Bluetooth. El cambio de canal en TV en directo funciona dentro del reproductor con izquierda/derecha del D-pad o los botones de canal. Desactivado por defecto.",
+  "settings.androidNativePlayer.helper": "Reproduce películas, series y canales en directo a través del ExoPlayer integrado de Android en lugar del reproductor interno de la app. Habilita Imagen en imagen real, controles desde la pantalla de bloqueo y Bluetooth. Desactivado por defecto.",
   "settings.androidNativePlayer.label": "ExoPlayer nativo",
   "settings.androidNativePlayer.on": "Activado",
   "settings.androidNativePlayer.off": "Desactivado",

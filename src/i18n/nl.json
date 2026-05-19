@@ -874,7 +874,7 @@
   "settings.androidNativePlayer.title": "Native Android-videospeler",
   "settings.androidNativePlayer.navLabel": "Native Android-speler",
   "settings.androidNativePlayer.experimental": "Experimenteel",
-  "settings.androidNativePlayer.helper": "Speelt films, series en livekanalen af via Androids ingebouwde ExoPlayer in plaats van de speler in de app. Schakelt echte Beeld-in-beeld in (alleen de video, niet de hele interface), bediening vanaf het vergrendelscherm en Bluetooth. Het wisselen van zenders in Live TV werkt in de speler via D-pad links/rechts of de zenderknoppen. Standaard uit.",
+  "settings.androidNativePlayer.helper": "Speelt films, series en livekanalen af via Androids ingebouwde ExoPlayer in plaats van de speler in de app. Schakelt echte Beeld-in-beeld in, bediening vanaf het vergrendelscherm en Bluetooth. Standaard uit.",
   "settings.androidNativePlayer.label": "Native ExoPlayer",
   "settings.androidNativePlayer.on": "Aan",
   "settings.androidNativePlayer.off": "Uit",

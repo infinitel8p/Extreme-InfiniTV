@@ -73,7 +73,7 @@
   "settings.androidNativePlayer.title": "Native Android video player",
   "settings.androidNativePlayer.navLabel": "Native Android player",
   "settings.androidNativePlayer.experimental": "Experimental",
-  "settings.androidNativePlayer.helper": "Plays movies, series, and live channels through Android's built-in ExoPlayer instead of the in-app player. Enables proper Picture-in-Picture (just the video, not the whole UI), lock-screen and Bluetooth controls. Live TV channel switching works inside the player via D-pad left/right or channel buttons. Off by default.",
+  "settings.androidNativePlayer.helper": "Plays movies, series, and live channels through Android's built-in ExoPlayer instead of the in-app player. Enables proper Picture-in-Picture, lock-screen and Bluetooth controls. Off by default.",
   "settings.androidNativePlayer.label": "Native ExoPlayer",
   "settings.androidNativePlayer.on": "On",
   "settings.androidNativePlayer.off": "Off",

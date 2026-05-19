@@ -1325,9 +1325,7 @@ const ensureEmbeddedPlayer = async (backend) => {
   if (mounted.backend === "videojs") {
     attachPlayerFocusKeeper(vjs)
   }
-  if (videoEl instanceof HTMLVideoElement) {
-    bindAutoPip(videoEl)
-  }
+  bindAutoPip(vjs)
   attachAudioOnlyDetection(vjs)
 
   vjs.on("playing", () => {

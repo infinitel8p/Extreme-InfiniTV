@@ -874,7 +874,7 @@
   "settings.androidNativePlayer.title": "Yerel Android video oynatıcı",
   "settings.androidNativePlayer.navLabel": "Yerel Android oynatıcı",
   "settings.androidNativePlayer.experimental": "Deneysel",
-  "settings.androidNativePlayer.helper": "Film, dizi ve canlı kanalları uygulama içi oynatıcı yerine Android'in dahili ExoPlayer'ı üzerinden oynatır. Gerçek Resim İçinde Resim (tüm arayüz değil, yalnızca video), kilit ekranı ve Bluetooth denetimlerini etkinleştirir. Canlı TV'de kanal değiştirme, oynatıcı içinde D-pad sol/sağ veya kanal düğmeleriyle çalışır. Varsayılan olarak kapalıdır.",
+  "settings.androidNativePlayer.helper": "Film, dizi ve canlı kanalları uygulama içi oynatıcı yerine Android'in dahili ExoPlayer'ı üzerinden oynatır. Gerçek Resim İçinde Resim, kilit ekranı ve Bluetooth denetimlerini etkinleştirir. Varsayılan olarak kapalıdır.",
   "settings.androidNativePlayer.label": "Yerel ExoPlayer",
   "settings.androidNativePlayer.on": "Açık",
   "settings.androidNativePlayer.off": "Kapalı",

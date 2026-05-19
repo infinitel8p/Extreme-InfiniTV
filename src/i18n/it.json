@@ -874,7 +874,7 @@
   "settings.androidNativePlayer.title": "Lettore video Android nativo",
   "settings.androidNativePlayer.navLabel": "Lettore Android nativo",
   "settings.androidNativePlayer.experimental": "Sperimentale",
-  "settings.androidNativePlayer.helper": "Riproduce film, serie e canali in diretta tramite l'ExoPlayer integrato di Android invece del lettore interno dell'app. Abilita una vera Picture-in-Picture (solo il video, non l'intera interfaccia), i comandi dalla schermata di blocco e via Bluetooth. Il cambio canale nella TV in diretta funziona all'interno del lettore tramite D-pad sinistra/destra o i tasti canale. Disattivato per impostazione predefinita.",
+  "settings.androidNativePlayer.helper": "Riproduce film, serie e canali in diretta tramite l'ExoPlayer integrato di Android invece del lettore interno dell'app. Abilita una vera Picture-in-Picture, i comandi dalla schermata di blocco e via Bluetooth. Disattivato per impostazione predefinita.",
   "settings.androidNativePlayer.label": "ExoPlayer nativo",
   "settings.androidNativePlayer.on": "Attivo",
   "settings.androidNativePlayer.off": "Disattivo",

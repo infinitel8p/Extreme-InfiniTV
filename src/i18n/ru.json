@@ -874,7 +874,7 @@
   "settings.androidNativePlayer.title": "Нативный видеоплеер Android",
   "settings.androidNativePlayer.navLabel": "Нативный плеер Android",
   "settings.androidNativePlayer.experimental": "Экспериментально",
-  "settings.androidNativePlayer.helper": "Воспроизводит фильмы, сериалы и прямые трансляции через встроенный в Android ExoPlayer вместо плеера приложения. Включает полноценный режим «Картинка в картинке» (только видео, без интерфейса), управление с экрана блокировки и через Bluetooth. Переключение каналов в прямом эфире работает прямо в плеере с помощью D-pad влево/вправо или кнопок переключения каналов. По умолчанию отключено.",
+  "settings.androidNativePlayer.helper": "Воспроизводит фильмы, сериалы и прямые трансляции через встроенный в Android ExoPlayer вместо плеера приложения. Включает полноценный режим «Картинка в картинке», управление с экрана блокировки и через Bluetooth. По умолчанию отключено.",
   "settings.androidNativePlayer.label": "Нативный ExoPlayer",
   "settings.androidNativePlayer.on": "Вкл.",
   "settings.androidNativePlayer.off": "Выкл.",

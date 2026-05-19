@@ -874,7 +874,7 @@
   "settings.androidNativePlayer.title": "Pemutar video Android bawaan",
   "settings.androidNativePlayer.navLabel": "Pemutar Android bawaan",
   "settings.androidNativePlayer.experimental": "Eksperimental",
-  "settings.androidNativePlayer.helper": "Memutar film, serial, dan saluran langsung melalui ExoPlayer bawaan Android, bukan pemutar di dalam aplikasi. Mengaktifkan Picture-in-Picture sungguhan (hanya video, bukan seluruh antarmuka), kontrol dari layar kunci, dan Bluetooth. Pergantian saluran di Live TV bekerja di dalam pemutar lewat D-pad kiri/kanan atau tombol saluran. Nonaktif secara default.",
+  "settings.androidNativePlayer.helper": "Memutar film, serial, dan saluran langsung melalui ExoPlayer bawaan Android, bukan pemutar di dalam aplikasi. Mengaktifkan Picture-in-Picture sungguhan, kontrol dari layar kunci, dan Bluetooth. Nonaktif secara default.",
   "settings.androidNativePlayer.label": "ExoPlayer bawaan",
   "settings.androidNativePlayer.on": "Aktif",
   "settings.androidNativePlayer.off": "Nonaktif",

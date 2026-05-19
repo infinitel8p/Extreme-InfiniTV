@@ -658,9 +658,7 @@ async function ensureEmbeddedPlayer(backend) {
   if (mounted.backend === "videojs") {
     attachPlayerFocusKeeper(vjs)
   }
-  if (videoEl instanceof HTMLVideoElement) {
-    bindAutoPip(videoEl)
-  }
+  bindAutoPip(vjs)
   return vjs
 }
 

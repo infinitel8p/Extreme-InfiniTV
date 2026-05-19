@@ -489,6 +489,7 @@ class PipBridge(private val activity: TauriActivity) {
   @JavascriptInterface
   fun setAutoEnter(enabled: Boolean) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    Log.d("xtream-pip", "setAutoEnter($enabled) bridge call, sdk=${Build.VERSION.SDK_INT}")
     activity.runOnUiThread {
       (activity as? MainActivity)?.autoEnterPipEnabled = enabled
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -498,7 +499,10 @@ class PipBridge(private val activity: TauriActivity) {
             .setAutoEnterEnabled(enabled)
             .build()
           activity.setPictureInPictureParams(params)
-        } catch (_: Throwable) {}
+          Log.d("xtream-pip", "setPictureInPictureParams(autoEnter=$enabled) applied")
+        } catch (e: Throwable) {
+          Log.w("xtream-pip", "setPictureInPictureParams failed", e)
+        }
       }
     }
   }
@@ -801,6 +805,7 @@ class MainActivity : TauriActivity() {
 
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
+    Log.d("xtream-pip", "onUserLeaveHint autoEnter=$autoEnterPipEnabled fullscreen=${fullscreenView != null} sdk=${Build.VERSION.SDK_INT}")
     // PiP on home-button press
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
         (autoEnterPipEnabled || fullscreenView != null)) {
@@ -808,8 +813,11 @@ class MainActivity : TauriActivity() {
         val params = PictureInPictureParams.Builder()
           .setAspectRatio(Rational(16, 9))
           .build()
-        enterPictureInPictureMode(params)
-      } catch (_: Throwable) {}
+        val entered = enterPictureInPictureMode(params)
+        Log.d("xtream-pip", "enterPictureInPictureMode returned $entered")
+      } catch (e: Throwable) {
+        Log.w("xtream-pip", "enterPictureInPictureMode failed", e)
+      }
     }
   }
 
@@ -821,6 +829,11 @@ class MainActivity : TauriActivity() {
     // renderer stays frozen and the overlay renders black.
     if (isInPictureInPictureMode) {
       hostedWebView?.onResume()
+      // PiP captures the whole Activity; promote the <video> into HTML5
+      // fullscreen so the PiP window contains only the video, not the page chrome.
+      hostedWebView?.evaluateJavascript("window.__xtPipFullscreen?.()", null)
+    } else {
+      hostedWebView?.evaluateJavascript("window.__xtPipExitFullscreen?.()", null)
     }
   }
 

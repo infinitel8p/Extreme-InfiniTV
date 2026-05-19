@@ -874,7 +874,7 @@
   "settings.androidNativePlayer.title": "Lecteur vidéo Android natif",
   "settings.androidNativePlayer.navLabel": "Lecteur Android natif",
   "settings.androidNativePlayer.experimental": "Expérimental",
-  "settings.androidNativePlayer.helper": "Lit les films, séries et chaînes en direct via l'ExoPlayer intégré d'Android au lieu du lecteur interne de l'app. Active une vraie Picture-in-Picture (uniquement la vidéo, pas toute l'interface), les commandes depuis l'écran de verrouillage et Bluetooth. Le changement de chaîne en direct fonctionne dans le lecteur via gauche/droite du D-pad ou les boutons de chaîne. Désactivé par défaut.",
+  "settings.androidNativePlayer.helper": "Lit les films, séries et chaînes en direct via l'ExoPlayer intégré d'Android au lieu du lecteur interne de l'app. Active une vraie Picture-in-Picture, les commandes depuis l'écran de verrouillage et Bluetooth. Désactivé par défaut.",
   "settings.androidNativePlayer.label": "ExoPlayer natif",
   "settings.androidNativePlayer.on": "Activé",
   "settings.androidNativePlayer.off": "Désactivé",

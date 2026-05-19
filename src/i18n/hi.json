@@ -874,7 +874,7 @@
   "settings.androidNativePlayer.title": "मूल Android वीडियो प्लेयर",
   "settings.androidNativePlayer.navLabel": "मूल Android प्लेयर",
   "settings.androidNativePlayer.experimental": "प्रायोगिक",
-  "settings.androidNativePlayer.helper": "ऐप के अंदर के प्लेयर के बजाय Android के बिल्ट-इन ExoPlayer के ज़रिए फिल्में, सीरीज़ और लाइव चैनल चलाता है। असली पिक्चर-इन-पिक्चर (पूरी UI नहीं, सिर्फ वीडियो), लॉक स्क्रीन और ब्लूटूथ कंट्रोल चालू करता है। Live TV में चैनल बदलना प्लेयर के अंदर ही D-pad बाएं/दाएं या चैनल बटन से काम करता है। डिफ़ॉल्ट रूप से बंद।",
+  "settings.androidNativePlayer.helper": "ऐप के अंदर के प्लेयर के बजाय Android के बिल्ट-इन ExoPlayer के ज़रिए फिल्में, सीरीज़ और लाइव चैनल चलाता है। असली पिक्चर-इन-पिक्चर, लॉक स्क्रीन और ब्लूटूथ कंट्रोल चालू करता है। डिफ़ॉल्ट रूप से बंद।",
   "settings.androidNativePlayer.label": "मूल ExoPlayer",
   "settings.androidNativePlayer.on": "चालू",
   "settings.androidNativePlayer.off": "बंद",

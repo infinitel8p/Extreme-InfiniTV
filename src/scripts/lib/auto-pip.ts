@@ -2,14 +2,20 @@
 // video is playing. Android-only - the bridge is provided by MainActivity.kt
 // (PipBridge.setAutoEnter). On desktop / web / iOS this is a no-op.
 //
-// Used by /livetv, /movies/detail, and /series/detail. Each player binds its
-// underlying <video> element after mountPlayer resolves; this helper listens
-// for play / pause / ended / emptied and toggles the Android flag.
+// Used by /livetv, /movies/detail, and /series/detail. Each player binds the
+// VjsLikeHandle (returned by mountPlayer) once it resolves. We listen at the
+// player level because video.js reset()/loadTs() destroys and recreates the
+// underlying <video> element on every channel switch, so any listener
+// attached directly to the raw element goes dead. The handle's on()
+// re-proxies events from whatever <video> tech is current.
 //
 // Cleanup is automatic on pagehide so the activity doesn't keep auto-PiP
 // enabled after the user navigates away from a playback page.
 
+import type { VjsLikeHandle } from "@/scripts/lib/player-runtime"
+
 let activeCleanup: (() => void) | null = null
+let activeHandle: VjsLikeHandle | null = null
 
 function setBridge(enabled: boolean): void {
   try {
@@ -17,15 +23,77 @@ function setBridge(enabled: boolean): void {
   } catch {}
 }
 
+function currentVideoEl(): HTMLVideoElement | null {
+  const host = activeHandle?.el?.()
+  if (!host) return null
+  const video = host.querySelector("video")
+  return video instanceof HTMLVideoElement ? video : null
+}
+
+// Called from MainActivity.onPictureInPictureModeChanged. PiP captures the
+// whole Activity window, so without intervention the user sees the page
+// chrome shrunk into the PiP rectangle. We can't use video.requestFullscreen()
+// here - the Fullscreen API requires user activation, which a system-driven
+// auto-PiP transition doesn't carry. CSS-promoting the <video> to cover the
+// viewport has the same end result and works without activation.
+let pipResizeHandler: (() => void) | null = null
+
+// CSS `width: 100vw / 100vh` on replaced elements (`<video>`) in Android
+// WebView occasionally caches the value from when the class was first
+// applied and doesn't re-evaluate on Activity window resize during a PiP
+// drag. Pinning the box with explicit inline pixel dimensions sidesteps
+// that path entirely - the resize event itself fires reliably, and reading
+// window.innerWidth/innerHeight inside the handler gives the live size.
+function applyPipBoxSize(video: HTMLVideoElement): void {
+  const width = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 0)
+  const height = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 0)
+  video.style.setProperty("width", `${width}px`, "important")
+  video.style.setProperty("height", `${height}px`, "important")
+}
+
+function clearPipBoxSize(video: HTMLVideoElement | null): void {
+  if (!video) return
+  video.style.removeProperty("width")
+  video.style.removeProperty("height")
+}
+
+if (typeof window !== "undefined") {
+  window.__xtPipFullscreen = () => {
+    const video = currentVideoEl()
+    if (!video) return
+    video.setAttribute("data-xt-pip-fill", "")
+    document.documentElement.classList.add("xt-pip-active")
+    applyPipBoxSize(video)
+    pipResizeHandler = () => {
+      if (!document.documentElement.classList.contains("xt-pip-active")) return
+      const live = currentVideoEl()
+      if (live) applyPipBoxSize(live)
+    }
+    window.addEventListener("resize", pipResizeHandler)
+  }
+  window.__xtPipExitFullscreen = () => {
+    document.documentElement.classList.remove("xt-pip-active")
+    const filled = document.querySelector("[data-xt-pip-fill]")
+    if (filled instanceof HTMLVideoElement) {
+      clearPipBoxSize(filled)
+      filled.removeAttribute("data-xt-pip-fill")
+    }
+    if (pipResizeHandler) {
+      window.removeEventListener("resize", pipResizeHandler)
+      pipResizeHandler = null
+    }
+  }
+}
+
 /**
- * Bind auto-PiP to a video element. Returns a cleanup function; the helper
+ * Bind auto-PiP to a player handle. Returns a cleanup function; the helper
  * also calls cleanup automatically on the next pagehide. Calling bindAutoPip
  * a second time tears down the previous binding first.
  *
  * No-op when window.AndroidPip.setAutoEnter is missing (older app version,
  * desktop, web, iOS).
  */
-export function bindAutoPip(videoEl: HTMLVideoElement): () => void {
+export function bindAutoPip(handle: VjsLikeHandle): () => void {
   if (typeof window === "undefined") return () => {}
   if (!window.AndroidPip?.setAutoEnter) return () => {}
 
@@ -33,6 +101,7 @@ export function bindAutoPip(videoEl: HTMLVideoElement): () => void {
     activeCleanup()
     activeCleanup = null
   }
+  activeHandle = handle
 
   let enabled = false
   const set = (next: boolean) => {
@@ -46,24 +115,25 @@ export function bindAutoPip(videoEl: HTMLVideoElement): () => void {
   const onEnded = () => set(false)
   const onEmptied = () => set(false)
 
-  videoEl.addEventListener("play", onPlaying)
-  videoEl.addEventListener("playing", onPlaying)
-  videoEl.addEventListener("pause", onPause)
-  videoEl.addEventListener("ended", onEnded)
-  videoEl.addEventListener("emptied", onEmptied)
+  handle.on("play", onPlaying)
+  handle.on("playing", onPlaying)
+  handle.on("pause", onPause)
+  handle.on("ended", onEnded)
+  handle.on("emptied", onEmptied)
 
   // Sync once for the case where bindAutoPip is called after the video has
   // already started (e.g. resume from saved position).
-  if (!videoEl.paused && !videoEl.ended) set(true)
+  if (handle.paused && !handle.paused()) set(true)
 
   const cleanup = () => {
     set(false)
-    videoEl.removeEventListener("play", onPlaying)
-    videoEl.removeEventListener("playing", onPlaying)
-    videoEl.removeEventListener("pause", onPause)
-    videoEl.removeEventListener("ended", onEnded)
-    videoEl.removeEventListener("emptied", onEmptied)
+    handle.off?.("play", onPlaying)
+    handle.off?.("playing", onPlaying)
+    handle.off?.("pause", onPause)
+    handle.off?.("ended", onEnded)
+    handle.off?.("emptied", onEmptied)
     window.removeEventListener("pagehide", cleanup)
+    if (activeHandle === handle) activeHandle = null
     if (activeCleanup === cleanup) activeCleanup = null
   }
   window.addEventListener("pagehide", cleanup)

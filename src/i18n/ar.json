@@ -874,7 +874,7 @@
   "settings.androidNativePlayer.title": "مشغل فيديو Android الأصلي",
   "settings.androidNativePlayer.navLabel": "مشغل Android الأصلي",
   "settings.androidNativePlayer.experimental": "تجريبي",
-  "settings.androidNativePlayer.helper": "يشغّل الأفلام والمسلسلات والقنوات المباشرة عبر مشغل ExoPlayer المدمج في Android بدلاً من المشغل داخل التطبيق. يفعّل وضع «صورة داخل صورة» الحقيقي (الفيديو فقط، وليس الواجهة كاملة)، والتحكم من شاشة القفل وعبر البلوتوث. يعمل تبديل القنوات في البث المباشر داخل المشغل عبر يسار/يمين الـ D-pad أو أزرار القنوات. مُعطَّل افتراضيًا.",
+  "settings.androidNativePlayer.helper": "يشغّل الأفلام والمسلسلات والقنوات المباشرة عبر مشغل ExoPlayer المدمج في Android بدلاً من المشغل داخل التطبيق. يفعّل وضع «صورة داخل صورة» الحقيقي، والتحكم من شاشة القفل وعبر البلوتوث. مُعطَّل افتراضيًا.",
   "settings.androidNativePlayer.label": "ExoPlayer الأصلي",
   "settings.androidNativePlayer.on": "تشغيل",
   "settings.androidNativePlayer.off": "إيقاف",

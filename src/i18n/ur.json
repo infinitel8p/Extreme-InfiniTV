@@ -874,7 +874,7 @@
   "settings.androidNativePlayer.title": "Android کا اصل ویڈیو پلیئر",
   "settings.androidNativePlayer.navLabel": "اصل Android پلیئر",
   "settings.androidNativePlayer.experimental": "تجرباتی",
-  "settings.androidNativePlayer.helper": "ایپ کے اندرونی پلیئر کے بجائے Android کے بلٹ ان ExoPlayer کے ذریعے فلمیں، سیریز اور لائیو چینل چلاتا ہے۔ مکمل پکچر اِن پکچر (پوری انٹرفیس نہیں، صرف ویڈیو)، لاک اسکرین اور بلوٹوتھ کنٹرولز کو فعال کرتا ہے۔ لائیو ٹی وی پر چینل بدلنا پلیئر کے اندر ہی D-pad کے بائیں/دائیں یا چینل بٹن سے کام کرتا ہے۔ بطورِ ڈیفالٹ بند ہے۔",
+  "settings.androidNativePlayer.helper": "ایپ کے اندرونی پلیئر کے بجائے Android کے بلٹ ان ExoPlayer کے ذریعے فلمیں، سیریز اور لائیو چینل چلاتا ہے۔ مکمل پکچر اِن پکچر، لاک اسکرین اور بلوٹوتھ کنٹرولز کو فعال کرتا ہے۔ بطورِ ڈیفالٹ بند ہے۔",
   "settings.androidNativePlayer.label": "اصل ExoPlayer",
   "settings.androidNativePlayer.on": "آن",
   "settings.androidNativePlayer.off": "آف",

@@ -874,7 +874,7 @@
   "settings.androidNativePlayer.title": "Nativer Android-Videoplayer",
   "settings.androidNativePlayer.navLabel": "Nativer Android-Player",
   "settings.androidNativePlayer.experimental": "Experimentell",
-  "settings.androidNativePlayer.helper": "Spielt Filme, Serien und Live-Kanäle über Androids integrierten ExoPlayer statt über den App-internen Player ab. Ermöglicht echtes Bild-in-Bild (nur das Video, nicht die ganze Oberfläche), Sperrbildschirm- und Bluetooth-Steuerung. Der Senderwechsel im Live-TV funktioniert direkt im Player über D-pad links/rechts oder die Kanaltasten. Standardmäßig deaktiviert.",
+  "settings.androidNativePlayer.helper": "Spielt Filme, Serien und Live-Kanäle über Androids integrierten ExoPlayer statt über den App-internen Player ab. Ermöglicht echtes Bild-in-Bild, Sperrbildschirm- und Bluetooth-Steuerung. Standardmäßig deaktiviert.",
   "settings.androidNativePlayer.label": "Nativer ExoPlayer",
   "settings.androidNativePlayer.on": "An",
   "settings.androidNativePlayer.off": "Aus",
