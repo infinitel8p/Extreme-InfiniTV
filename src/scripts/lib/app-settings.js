@@ -3,6 +3,7 @@ const KEY_DOWNLOAD_DIR = "xt_download_dir"
 const KEY_DOWNLOAD_CONCURRENCY = "xt_download_concurrency"
 const KEY_PERF_MODE = "xt_perf_mode"
 const KEY_PROGRESS_RETENTION = "xt_progress_retention_days"
+const KEY_NETWORK_TIMEOUT_S = "xt_network_timeout_s"
 const KEY_PLAYER_BACKEND = "xt_player_backend"
 const KEY_PLAYER_PATH_MPV = "xt_player_path_mpv"
 const KEY_PLAYER_PATH_VLC = "xt_player_path_vlc"
@@ -60,6 +61,9 @@ export const DEFAULT_HUB_STRIPS = Object.freeze([
 ])
 export const PROGRESS_RETENTION_VALUES = [30, 90, 180, 0]
 export const DEFAULT_PROGRESS_RETENTION_DAYS = 90
+export const NETWORK_TIMEOUT_VALUES = [20, 45, 90, 180]
+export const DEFAULT_NETWORK_TIMEOUT_SECONDS = 20
+export const NETWORK_TIMEOUT_EVENT = "xt:network-timeout-changed"
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 1
 export const MAX_DOWNLOAD_CONCURRENCY = 4
 export const PLAYER_BACKENDS = ["artplayer", "videojs", "mpv", "vlc"]
@@ -424,6 +428,35 @@ export function setProgressRetentionDays(days) {
   if (typeof document !== "undefined") {
     document.dispatchEvent(
       new CustomEvent(PROGRESS_RETENTION_EVENT, { detail: { value: normalised } })
+    )
+  }
+}
+
+// Provider fetch timeout (seconds). Applied as the default AbortSignal
+// deadline in providerFetch and as the per-mirror failover budget in
+// xtreamApiFetch. Stored only when non-default so legacy installs keep the
+// historical 20s behavior on first read.
+export function getNetworkTimeoutSeconds() {
+  const raw = readLS(KEY_NETWORK_TIMEOUT_S, "")
+  const parsed = parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || !NETWORK_TIMEOUT_VALUES.includes(parsed)) {
+    return DEFAULT_NETWORK_TIMEOUT_SECONDS
+  }
+  return parsed
+}
+
+export function setNetworkTimeoutSeconds(seconds) {
+  const normalised = NETWORK_TIMEOUT_VALUES.includes(Number(seconds))
+    ? Number(seconds)
+    : DEFAULT_NETWORK_TIMEOUT_SECONDS
+  if (normalised === DEFAULT_NETWORK_TIMEOUT_SECONDS) {
+    writeLS(KEY_NETWORK_TIMEOUT_S, "")
+  } else {
+    writeLS(KEY_NETWORK_TIMEOUT_S, String(normalised))
+  }
+  if (typeof document !== "undefined") {
+    document.dispatchEvent(
+      new CustomEvent(NETWORK_TIMEOUT_EVENT, { detail: { value: normalised } })
     )
   }
 }

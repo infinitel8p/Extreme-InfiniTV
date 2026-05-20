@@ -1,5 +1,8 @@
 import { log, redactUrl } from "@/scripts/lib/log.js"
-import { getUserAgent } from "@/scripts/lib/app-settings.js"
+import {
+  getUserAgent,
+  getNetworkTimeoutSeconds,
+} from "@/scripts/lib/app-settings.js"
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -76,7 +79,9 @@ export async function streamingText(response, onProgress) {
   return result
 }
 
-const DEFAULT_TIMEOUT_MS = 20_000
+function defaultTimeoutMs() {
+  return getNetworkTimeoutSeconds() * 1000
+}
 
 // Lightweight provider-fetch statistics
 const _stats = {
@@ -113,11 +118,12 @@ export async function providerFetch(url, init = {}) {
   const callInit = { ...init }
   delete callInit.forceTauri
   if (!callerSignal) {
+    const timeoutMs = defaultTimeoutMs()
     if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
-      callInit.signal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
+      callInit.signal = AbortSignal.timeout(timeoutMs)
     } else if (typeof AbortController !== "undefined") {
       const controller = new AbortController()
-      setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS)
+      setTimeout(() => controller.abort(), timeoutMs)
       callInit.signal = controller.signal
     }
   }

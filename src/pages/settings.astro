@@ -494,6 +494,24 @@ const navStructure: NavSection[] = [
             id="ua-msg"
             aria-live="polite"
             class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+
+          <div class="flex flex-col gap-2 pt-4 border-t border-line/60">
+            <span data-i18n="settings.network.timeoutLabel" class="text-eyebrow font-medium uppercase text-fg-3">Request timeout</span>
+            <p data-i18n="settings.network.timeoutHelper" class="text-xs text-fg-3">
+              How long to wait for a provider response before giving up. Bump this when a large catalog (tens of thousands of movies / series) times out before it finishes loading.
+            </p>
+            <div
+              id="settings-network-timeout"
+              class="grid grid-cols-2 sm:grid-cols-4 gap-2"
+              role="radiogroup"
+              aria-label="Request timeout"
+              data-i18n-attr="aria-label:settings.network.timeoutLabel">
+              <button type="button" data-timeout="20"  aria-pressed="false" data-i18n="settings.network.timeout.20s"  class="net-timeout-btn btn">20s</button>
+              <button type="button" data-timeout="45"  aria-pressed="false" data-i18n="settings.network.timeout.45s"  class="net-timeout-btn btn">45s</button>
+              <button type="button" data-timeout="90"  aria-pressed="false" data-i18n="settings.network.timeout.90s"  class="net-timeout-btn btn">90s</button>
+              <button type="button" data-timeout="180" aria-pressed="false" data-i18n="settings.network.timeout.180s" class="net-timeout-btn btn">3 min</button>
+            </div>
+          </div>
         </article>
 
         <!-- Discord Rich Presence -->
@@ -1100,6 +1118,8 @@ const navStructure: NavSection[] = [
       setPerfMode,
       getProgressRetentionDays,
       setProgressRetentionDays,
+      getNetworkTimeoutSeconds,
+      setNetworkTimeoutSeconds,
     } from "@/scripts/lib/app-settings.js"
     import {
       ensureUserInfo,
@@ -2128,6 +2148,30 @@ const navStructure: NavSection[] = [
       )
       flashSuccess(uaSaveBtn)
     })
+
+    // ---------------------------------------------------------------------
+    // Network timeout: how long providerFetch waits before aborting. The
+    // setting is read on every fetch, so the change takes effect on the
+    // next catalog refresh without a reload.
+    // ---------------------------------------------------------------------
+    const netTimeoutGroup = document.getElementById("settings-network-timeout")
+    function syncNetTimeoutButtons() {
+      const current = String(getNetworkTimeoutSeconds())
+      for (const btn of netTimeoutGroup?.querySelectorAll(".net-timeout-btn") || []) {
+        btn.setAttribute(
+          "aria-pressed",
+          String(btn.dataset.timeout === current)
+        )
+      }
+    }
+    netTimeoutGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".net-timeout-btn")
+      if (!btn) return
+      setNetworkTimeoutSeconds(Number(btn.dataset.timeout))
+      syncNetTimeoutButtons()
+    })
+    syncNetTimeoutButtons()
 
     // ---------------------------------------------------------------------
     // Downloads folder
