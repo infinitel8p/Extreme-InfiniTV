@@ -14,6 +14,7 @@ const KEY_CLOSE_TO_TRAY = "xt_close_to_tray"
 const KEY_HUB_STRIPS = "xt_hub_strips"
 const KEY_TV_OVERSCAN = "xt_tv_overscan"
 const KEY_ANDROID_NATIVE_PLAYER = "xt_android_native_player"
+const KEY_ANDROID_REMEMBERED_PLAYER = "xt_android_remembered_player"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -23,6 +24,7 @@ export const CLOSE_TO_TRAY_EVENT = "xt:close-to-tray-changed"
 export const HUB_STRIPS_EVENT = "xt:hub-strips-changed"
 export const TV_OVERSCAN_EVENT = "xt:tv-overscan-changed"
 export const ANDROID_NATIVE_PLAYER_EVENT = "xt:android-native-player-changed"
+export const ANDROID_REMEMBERED_PLAYER_EVENT = "xt:android-remembered-player-changed"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
 export const DEFAULT_TV_OVERSCAN = 0
 
@@ -250,6 +252,54 @@ export function setAndroidNativePlayerEnabled(on) {
   document.dispatchEvent(
     new CustomEvent(ANDROID_NATIVE_PLAYER_EVENT, { detail: { value: !!on } })
   )
+}
+
+// Android: when the user ticks "Always use this app" in the external-player
+// picker, we remember their pick and skip the picker on subsequent launches
+/**
+ * @typedef {{ pkg: string, activity: string, label: string, icon: string }} RememberedAndroidPlayer
+ */
+
+/** @returns {RememberedAndroidPlayer | null} */
+export function getRememberedAndroidPlayer() {
+  const raw = readLS(KEY_ANDROID_REMEMBERED_PLAYER, "")
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed.pkg !== "string" || !parsed.pkg) return null
+    return {
+      pkg: parsed.pkg,
+      activity: typeof parsed.activity === "string" ? parsed.activity : "",
+      label: typeof parsed.label === "string" ? parsed.label : parsed.pkg,
+      icon: typeof parsed.icon === "string" ? parsed.icon : "",
+    }
+  } catch {
+    return null
+  }
+}
+
+/** @param {RememberedAndroidPlayer | null} entry */
+export function setRememberedAndroidPlayer(entry) {
+  if (!entry || !entry.pkg) {
+    writeLS(KEY_ANDROID_REMEMBERED_PLAYER, "")
+  } else {
+    const normalized = {
+      pkg: String(entry.pkg),
+      activity: String(entry.activity || ""),
+      label: String(entry.label || entry.pkg),
+      icon: String(entry.icon || ""),
+    }
+    writeLS(KEY_ANDROID_REMEMBERED_PLAYER, JSON.stringify(normalized))
+  }
+  document.dispatchEvent(
+    new CustomEvent(ANDROID_REMEMBERED_PLAYER_EVENT, {
+      detail: { value: entry || null },
+    })
+  )
+}
+
+export function clearRememberedAndroidPlayer() {
+  setRememberedAndroidPlayer(null)
 }
 
 export function syncCloseToTrayToBackend() {

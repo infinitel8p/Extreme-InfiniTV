@@ -55,15 +55,21 @@ export interface OpenPickerOpts {
   apps: AndroidVideoApp[]
   /** Optional content title shown as the dialog subtitle. */
   contentTitle?: string | null
+  rememberDefault?: boolean
+}
+
+export interface PickerResult {
+  app: AndroidVideoApp
+  remember: boolean
 }
 
 /**
- * Show the picker. Resolves with the user's chosen app, or null if they
- * cancelled (Escape, backdrop click, or the Cancel button).
+ * Show the picker. Resolves with the user's chosen app + remember flag, or
+ * null if they cancelled (Escape, backdrop click, or the Cancel button).
  */
 export function openAndroidPlayerPicker(
   opts: OpenPickerOpts,
-): Promise<AndroidVideoApp | null> {
+): Promise<PickerResult | null> {
   const dialog = ensureDialog()
   if (!dialog) return Promise.resolve(null)
 
@@ -85,7 +91,12 @@ export function openAndroidPlayerPicker(
       t("settings.playback.androidNoHandler") ||
       "No app on this device can play this stream."
 
+    const rememberLabel =
+      t("settings.playback.androidPickerRemember") ||
+      "Always use this app"
+
     const apps = Array.isArray(opts.apps) ? opts.apps : []
+    const rememberDefault = !!opts.rememberDefault
 
     const appButtons = apps
       .map((entry, idx) => {
@@ -131,6 +142,22 @@ export function openAndroidPlayerPicker(
       ? `<div data-role="list" class="flex flex-col gap-2.5 overflow-y-auto min-h-0">${appButtons}</div>`
       : `<div class="text-sm text-fg-3 text-center py-8 px-4">${escapeHtml(emptyLabel)}</div>`
 
+    const rememberCheckboxHtml = apps.length
+      ? `
+        <label
+          data-role="remember-label"
+          class="flex items-center gap-2.5 text-sm text-fg-2 px-3 py-2 rounded-lg cursor-pointer select-none hover:text-fg focus-within:text-fg focus-within:bg-surface-2 has-[:checked]:text-fg has-[:checked]:bg-accent-soft/30 transition-colors">
+          <input
+            type="checkbox"
+            data-role="remember"
+            class="size-4 accent-accent shrink-0"
+            ${rememberDefault ? "checked" : ""}
+          />
+          <span>${escapeHtml(rememberLabel)}</span>
+        </label>
+      `
+      : ""
+
     dialog.innerHTML = `
       <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
         <header class="flex items-start gap-3.5 shrink-0 px-3">
@@ -141,18 +168,23 @@ export function openAndroidPlayerPicker(
           </div>
         </header>
         ${bodyHtml}
-        <footer class="flex justify-end shrink-0">
+        <footer class="flex items-center justify-between gap-3 shrink-0 flex-wrap">
+          ${rememberCheckboxHtml}
           <button
             type="button"
             data-role="cancel"
-            class="btn"
+            class="btn ms-auto"
           >${escapeHtml(cancelLabel)}</button>
         </footer>
       </div>
     `
 
+    const rememberCheckbox = dialog.querySelector<HTMLInputElement>(
+      '[data-role="remember"]',
+    )
+
     let resolved = false
-    const settle = (choice: AndroidVideoApp | null) => {
+    const settle = (choice: PickerResult | null) => {
       if (resolved) return
       resolved = true
       detach()
@@ -165,6 +197,10 @@ export function openAndroidPlayerPicker(
     const onClick = (event: Event) => {
       const target = event.target as HTMLElement | null
       if (!target) return
+      // Clicks inside the remember checkbox row toggle the box; never settle.
+      if (target.closest('[data-role="remember-label"]')) {
+        return
+      }
       if (target.closest('[data-role="cancel"]')) {
         settle(null)
         return
@@ -173,7 +209,12 @@ export function openAndroidPlayerPicker(
       if (btn) {
         const idx = Number(btn.dataset.idx ?? "-1")
         const picked = apps[idx]
-        if (picked) settle(picked)
+        if (picked) {
+          settle({
+            app: picked,
+            remember: !!rememberCheckbox?.checked,
+          })
+        }
         return
       }
       // Click on backdrop (outside the inner content) closes.

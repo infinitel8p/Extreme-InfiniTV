@@ -44,6 +44,7 @@ import TvOverscanCard from "@/components/TvOverscanCard.svelte"
 import CloseToTrayCard from "@/components/CloseToTrayCard.svelte"
 import ConnectionLimitBanner from "@/components/ConnectionLimitBanner.svelte"
 import AndroidNativePlayerCard from "@/components/AndroidNativePlayerCard.svelte"
+import RememberedAndroidPlayerCard from "@/components/RememberedAndroidPlayerCard.svelte"
 
 interface NavCard { id: string; labelKey: string; label: string }
 interface NavSection { id: string; labelKey: string; label: string; cards: NavCard[]; danger?: boolean }
@@ -64,6 +65,7 @@ const navStructure: NavSection[] = [
     { id: "card-progress-retention",  labelKey: "settings.progressRetention.title",  label: "Continue watching" },
     { id: "epg-tz-section",           labelKey: "settings.epgTimezone.title",        label: "EPG time zone" },
     { id: "playback-section",         labelKey: "settings.playback.title",           label: "Playback" },
+    { id: "android-default-player-section", labelKey: "settings.androidDefaultPlayer.navLabel", label: "Default external player" },
   ]},
   { id: "settings-network", labelKey: "settings.group.network", label: "Network", cards: [
     { id: "card-network",          labelKey: "settings.network.title", label: "Network" },
@@ -440,6 +442,8 @@ const navStructure: NavSection[] = [
           </div>
           <PlayerPicker client:load />
         </article>
+
+        <RememberedAndroidPlayerCard client:load />
 
       </div>
     </section>
