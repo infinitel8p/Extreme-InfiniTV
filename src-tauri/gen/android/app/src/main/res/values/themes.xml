@@ -13,8 +13,7 @@
         <item name="postSplashScreenTheme">@style/Theme.app</item>
     </style>
 
-    <!-- Fullscreen immersive theme for the native VideoActivity. No action bar,
-         no title, dark background so letterboxing reads as black. -->
+    <!-- Fullscreen immersive theme for the native VideoActivity. -->
     <style name="Theme.App.VideoFullscreen" parent="Theme.MaterialComponents.NoActionBar">
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowNoTitle">true</item>

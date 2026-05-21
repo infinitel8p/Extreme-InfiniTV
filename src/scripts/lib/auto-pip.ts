@@ -37,6 +37,9 @@ function currentVideoEl(): HTMLVideoElement | null {
 // auto-PiP transition doesn't carry. CSS-promoting the <video> to cover the
 // viewport has the same end result and works without activation.
 let pipResizeHandler: (() => void) | null = null
+let pipResizeRaf = 0
+let lastAppliedPipWidth = 0
+let lastAppliedPipHeight = 0
 
 // CSS `width: 100vw / 100vh` on replaced elements (`<video>`) in Android
 // WebView occasionally caches the value from when the class was first
@@ -47,11 +50,16 @@ let pipResizeHandler: (() => void) | null = null
 function applyPipBoxSize(video: HTMLVideoElement): void {
   const width = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 0)
   const height = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 0)
+  if (width === lastAppliedPipWidth && height === lastAppliedPipHeight) return
+  lastAppliedPipWidth = width
+  lastAppliedPipHeight = height
   video.style.setProperty("width", `${width}px`, "important")
   video.style.setProperty("height", `${height}px`, "important")
 }
 
 function clearPipBoxSize(video: HTMLVideoElement | null): void {
+  lastAppliedPipWidth = 0
+  lastAppliedPipHeight = 0
   if (!video) return
   video.style.removeProperty("width")
   video.style.removeProperty("height")
@@ -65,9 +73,13 @@ if (typeof window !== "undefined") {
     document.documentElement.classList.add("xt-pip-active")
     applyPipBoxSize(video)
     pipResizeHandler = () => {
-      if (!document.documentElement.classList.contains("xt-pip-active")) return
-      const live = currentVideoEl()
-      if (live) applyPipBoxSize(live)
+      if (pipResizeRaf) return
+      pipResizeRaf = requestAnimationFrame(() => {
+        pipResizeRaf = 0
+        if (!document.documentElement.classList.contains("xt-pip-active")) return
+        const live = currentVideoEl()
+        if (live) applyPipBoxSize(live)
+      })
     }
     window.addEventListener("resize", pipResizeHandler)
   }
@@ -77,6 +89,12 @@ if (typeof window !== "undefined") {
     if (filled instanceof HTMLVideoElement) {
       clearPipBoxSize(filled)
       filled.removeAttribute("data-xt-pip-fill")
+    } else {
+      clearPipBoxSize(null)
+    }
+    if (pipResizeRaf) {
+      cancelAnimationFrame(pipResizeRaf)
+      pipResizeRaf = 0
     }
     if (pipResizeHandler) {
       window.removeEventListener("resize", pipResizeHandler)

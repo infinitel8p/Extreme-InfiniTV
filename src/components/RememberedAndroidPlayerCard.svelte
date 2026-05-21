@@ -41,7 +41,7 @@
 {#if available && remembered}
   <article
     id="android-default-player-section"
-    class="default-player-card icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
+    class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
     <div class="flex items-start gap-3">
       <span class="icon-mark">
         <IconExternalLink aria-hidden="true" stroke={2} />
@@ -51,7 +51,7 @@
         <p class="text-xs text-fg-3">{tr("settings.androidDefaultPlayer.helper")}</p>
       </div>
     </div>
-    <div class="default-player-row flex items-center gap-3 px-3 py-2.5 rounded-xl border border-line bg-bg">
+    <div class="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-line bg-bg">
       {#if remembered.icon}
         <img
           src={remembered.icon}
@@ -83,30 +83,3 @@
     </div>
   </article>
 {/if}
-
-<style>
-  .default-player-card {
-    animation: default-player-card-enter 420ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
-  }
-  .default-player-row {
-    animation: default-player-row-enter 520ms cubic-bezier(0.16, 1, 0.3, 1) 80ms backwards;
-  }
-  @keyframes default-player-card-enter {
-    from {
-      opacity: 0;
-      transform: translateY(8px);
-    }
-  }
-  @keyframes default-player-row-enter {
-    from {
-      opacity: 0;
-      transform: translateY(4px) scale(0.985);
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .default-player-card,
-    .default-player-row { animation: none; }
-  }
-  :global(html[data-perf-mode="on"]) .default-player-card,
-  :global(html[data-perf-mode="on"]) .default-player-row { animation: none; }
-</style>

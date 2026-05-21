@@ -54,11 +54,11 @@
       <div class="flex flex-col gap-1 min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
           <h3 class="text-base font-semibold">{tr("settings.androidNativePlayer.title")}</h3>
-          <span class="inline-flex shrink-0 items-center px-2 py-0.5 rounded-full border border-line bg-surface-2 text-fg-3 text-2xs font-medium uppercase tracking-wide">
+          <span class="inline-flex shrink-0 items-center px-2 py-0.5 rounded-full border border-line bg-surface-2 text-fg-3 text-2xs font-medium">
             {tr("settings.androidNativePlayer.experimental")}
           </span>
         </div>
-        <p class="text-xs text-fg-3">{tr("settings.androidNativePlayer.helper")}</p>
+        <p id="android-native-player-helper" class="text-xs text-fg-3">{tr("settings.androidNativePlayer.helper")}</p>
       </div>
     </div>
     <div class="flex flex-col gap-2">
@@ -66,18 +66,21 @@
       <div
         class="grid grid-cols-2 gap-2"
         role="radiogroup"
-        aria-label={tr("settings.androidNativePlayer.label")}>
+        aria-label={tr("settings.androidNativePlayer.label")}
+        aria-describedby="android-native-player-helper">
         <button
           type="button"
+          role="radio"
           class="btn"
-          aria-pressed={enabled ? "true" : "false"}
+          aria-checked={enabled ? "true" : "false"}
           onclick={() => pick(true)}>
           {tr("settings.androidNativePlayer.on")}
         </button>
         <button
           type="button"
+          role="radio"
           class="btn"
-          aria-pressed={!enabled ? "true" : "false"}
+          aria-checked={!enabled ? "true" : "false"}
           onclick={() => pick(false)}>
           {tr("settings.androidNativePlayer.off")}
         </button>

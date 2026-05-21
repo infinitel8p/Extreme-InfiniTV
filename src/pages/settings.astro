@@ -497,7 +497,7 @@ const navStructure: NavSection[] = [
 
           <div class="flex flex-col gap-2 pt-4 border-t border-line/60">
             <span data-i18n="settings.network.timeoutLabel" class="text-eyebrow font-medium uppercase text-fg-3">Request timeout</span>
-            <p data-i18n="settings.network.timeoutHelper" class="text-xs text-fg-3">
+            <p id="settings-network-timeout-helper" data-i18n="settings.network.timeoutHelper" class="text-xs text-fg-3">
               How long to wait for a provider response before giving up. Bump this when a large catalog (tens of thousands of movies / series) times out before it finishes loading.
             </p>
             <div
@@ -505,11 +505,12 @@ const navStructure: NavSection[] = [
               class="grid grid-cols-2 sm:grid-cols-4 gap-2"
               role="radiogroup"
               aria-label="Request timeout"
+              aria-describedby="settings-network-timeout-helper"
               data-i18n-attr="aria-label:settings.network.timeoutLabel">
-              <button type="button" data-timeout="20"  aria-pressed="false" data-i18n="settings.network.timeout.20s"  class="net-timeout-btn btn">20s</button>
-              <button type="button" data-timeout="45"  aria-pressed="false" data-i18n="settings.network.timeout.45s"  class="net-timeout-btn btn">45s</button>
-              <button type="button" data-timeout="90"  aria-pressed="false" data-i18n="settings.network.timeout.90s"  class="net-timeout-btn btn">90s</button>
-              <button type="button" data-timeout="180" aria-pressed="false" data-i18n="settings.network.timeout.180s" class="net-timeout-btn btn">3 min</button>
+              <button type="button" role="radio" data-timeout="20"  aria-checked="false" data-i18n="settings.network.timeout.20s"  class="net-timeout-btn btn">20s</button>
+              <button type="button" role="radio" data-timeout="45"  aria-checked="false" data-i18n="settings.network.timeout.45s"  class="net-timeout-btn btn">45s</button>
+              <button type="button" role="radio" data-timeout="90"  aria-checked="false" data-i18n="settings.network.timeout.90s"  class="net-timeout-btn btn">90s</button>
+              <button type="button" role="radio" data-timeout="180" aria-checked="false" data-i18n="settings.network.timeout.180s" class="net-timeout-btn btn">3 min</button>
             </div>
           </div>
         </article>
@@ -2159,7 +2160,7 @@ const navStructure: NavSection[] = [
       const current = String(getNetworkTimeoutSeconds())
       for (const btn of netTimeoutGroup?.querySelectorAll(".net-timeout-btn") || []) {
         btn.setAttribute(
-          "aria-pressed",
+          "aria-checked",
           String(btn.dataset.timeout === current)
         )
       }

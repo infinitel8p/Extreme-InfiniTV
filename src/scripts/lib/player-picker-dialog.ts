@@ -146,7 +146,7 @@ export function openAndroidPlayerPicker(
       ? `
         <label
           data-role="remember-label"
-          class="flex items-center gap-2.5 text-sm text-fg-2 px-3 py-2 rounded-lg cursor-pointer select-none hover:text-fg focus-within:text-fg focus-within:bg-surface-2 has-[:checked]:text-fg has-[:checked]:bg-accent-soft/30 transition-colors">
+          class="flex items-center gap-2.5 min-h-11 text-sm text-fg-2 px-3 py-2.5 rounded-lg cursor-pointer select-none hover:text-fg focus-within:text-fg focus-within:bg-surface-2 has-checked:text-fg has-checked:bg-accent-soft/30 transition-colors">
           <input
             type="checkbox"
             data-role="remember"
@@ -168,12 +168,12 @@ export function openAndroidPlayerPicker(
           </div>
         </header>
         ${bodyHtml}
-        <footer class="flex items-center justify-between gap-3 shrink-0 flex-wrap">
+        <footer class="flex flex-col gap-3 shrink-0 sm:flex-row sm:items-center">
           ${rememberCheckboxHtml}
           <button
             type="button"
             data-role="cancel"
-            class="btn ms-auto"
+            class="btn shrink-0 sm:ms-auto"
           >${escapeHtml(cancelLabel)}</button>
         </footer>
       </div>

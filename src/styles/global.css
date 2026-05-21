@@ -348,7 +348,8 @@ dialog[open]::backdrop {
     .btn:not([disabled]):active {
         transform: scale(0.97);
     }
-    .btn[aria-pressed="true"] {
+    .btn[aria-pressed="true"],
+    .btn[aria-checked="true"] {
         @apply bg-surface-2 border-accent text-fg;
     }
     .btn[disabled],

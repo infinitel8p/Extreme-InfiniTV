@@ -9,6 +9,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
+import coil.dispose
 import coil.load
 
 /**
@@ -36,13 +37,23 @@ class ChannelListAdapter(
     holder.itemView.setOnClickListener { onPick(position) }
   }
 
+  // Payload-aware rebind: selection-only updates avoid re-loading the logo
+  // when the user flips between channels with the D-pad
+  override fun onBindViewHolder(holder: VH, position: Int, payloads: MutableList<Any>) {
+    if (payloads.contains(PAYLOAD_SELECTION)) {
+      holder.bindSelection(position == currentIndex)
+      return
+    }
+    super.onBindViewHolder(holder, position, payloads)
+  }
+
   override fun getItemCount(): Int = items.size
 
   fun updateCurrentIndex(next: Int) {
     val prev = currentIndex
     currentIndex = next
-    if (prev >= 0) notifyItemChanged(prev)
-    if (next >= 0) notifyItemChanged(next)
+    if (prev >= 0) notifyItemChanged(prev, PAYLOAD_SELECTION)
+    if (next >= 0) notifyItemChanged(next, PAYLOAD_SELECTION)
   }
 
   inner class VH(view: View) : RecyclerView.ViewHolder(view) {
@@ -61,16 +72,42 @@ class ChannelListAdapter(
       }
 
       if (item.logo.isNotBlank()) {
-        // Coil handles HTTP loading + caching. Errors silently fall through.
-        logo.load(item.logo) { crossfade(true) }
+        logo.load(item.logo) {
+          size(logoSizePx(logo))
+          crossfade(true)
+        }
       } else {
+        logo.dispose()
         logo.setImageDrawable(null)
       }
 
+      itemView.contentDescription = buildString {
+        append(item.name)
+        if (item.nowProgramme.isNotBlank()) {
+          append(". ")
+          append(item.nowProgramme)
+        }
+      }
+      logo.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+      nameView.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+      nowView.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+
+      bindSelection(isCurrent)
+    }
+
+    fun bindSelection(isCurrent: Boolean) {
       val bgColor =
         if (isCurrent) ContextCompat.getColor(itemView.context, R.color.xt_row_bg_selected)
         else Color.TRANSPARENT
       root.setBackgroundColor(bgColor)
+    }
+  }
+
+  companion object {
+    private const val PAYLOAD_SELECTION = "selection"
+
+    private fun logoSizePx(view: View): Int {
+      return (40 * view.resources.displayMetrics.density).toInt().coerceAtLeast(1)
     }
   }
 }

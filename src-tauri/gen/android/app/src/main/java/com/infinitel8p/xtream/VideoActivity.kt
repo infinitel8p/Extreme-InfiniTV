@@ -314,6 +314,22 @@ class VideoActivity : AppCompatActivity() {
     channelAdapter = adapter
     list.layoutManager = LinearLayoutManager(this)
     list.adapter = adapter
+    applyOverlayHeight()
+  }
+
+  private fun applyOverlayHeight() {
+    val overlay = channelOverlay ?: return
+    val target = (resources.displayMetrics.heightPixels * 0.4f).toInt().coerceAtLeast(1)
+    val lp = overlay.layoutParams ?: return
+    if (lp.height != target) {
+      lp.height = target
+      overlay.layoutParams = lp
+    }
+  }
+
+  override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+    super.onConfigurationChanged(newConfig)
+    if (mode == MODE_LIVE) applyOverlayHeight()
   }
 
   private fun showChannelOverlay() {
@@ -517,6 +533,7 @@ object NativePlayerPayload {
 object EventQueue {
   private const val PREF_NAME = "xt_native_events"
   private const val KEY_QUEUE = "queue"
+  private const val MAX_ENTRIES = 200
 
   @Synchronized
   fun append(activity: android.content.Context, type: String, payload: JSONObject) {
@@ -528,26 +545,29 @@ object EventQueue {
         .put("type", type)
         .put("ts", System.currentTimeMillis())
         .put("payload", payload)
-      // Progress events only carry the latest position; older ones for the
-      // same content are redundant. Collapse against the last entry so the
-      // queue stays bounded across long playback sessions - it isn't drained
-      // until the user returns to the WebView (MainActivity.onResume).
       val lastIndex = arr.length() - 1
-      if (type == "xt:android-native-progress" && lastIndex >= 0) {
-        val last = arr.optJSONObject(lastIndex)
-        val sameType = last?.optString("type") == type
-        val sameKey = last?.optJSONObject("payload")?.optString("contentKey") ==
-          payload.optString("contentKey")
-        if (sameType && sameKey) {
-          arr.put(lastIndex, entry)
-          prefs.edit().putString(KEY_QUEUE, arr.toString()).apply()
-          return
-        }
+      if (lastIndex >= 0 && shouldCoalesce(type, payload, arr.optJSONObject(lastIndex))) {
+        arr.put(lastIndex, entry)
+        prefs.edit().putString(KEY_QUEUE, arr.toString()).apply()
+        return
       }
       arr.put(entry)
+      while (arr.length() > MAX_ENTRIES) arr.remove(0)
       prefs.edit().putString(KEY_QUEUE, arr.toString()).apply()
     } catch (error: Throwable) {
       Log.w("EventQueue", "append failed: $error")
+    }
+  }
+
+  private fun shouldCoalesce(type: String, payload: JSONObject, last: JSONObject?): Boolean {
+    if (last == null || last.optString("type") != type) return false
+    val lastPayload = last.optJSONObject("payload") ?: return false
+    return when (type) {
+      "xt:android-native-progress" ->
+        lastPayload.optString("contentKey") == payload.optString("contentKey")
+      "xt:android-native-channel-changed" ->
+        lastPayload.optString("channelId") == payload.optString("channelId")
+      else -> false
     }
   }
 
