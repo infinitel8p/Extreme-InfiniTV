@@ -1628,10 +1628,23 @@ async function tryLaunchNativeLive(initialStreamId, initialName) {
   if (!all.length) return false
   ensureNativeLiveSubscription()
 
+  let initialUrl
+  if (hasDirectUrl(initialStreamId)) {
+    initialUrl = getDirectUrl(initialStreamId)
+  } else {
+    initialUrl = await resolveStreamUrl((candidate) =>
+      buildDirectLiveUrl(initialStreamId, candidate),
+    )
+    creds = await loadCreds()
+  }
+  if (!initialUrl) return false
+
   const channelInputs = []
   for (const channel of all) {
     let streamUrl = ""
-    if (hasDirectUrl(channel.id)) {
+    if (channel.id === initialStreamId) {
+      streamUrl = initialUrl
+    } else if (hasDirectUrl(channel.id)) {
       streamUrl = getDirectUrl(channel.id)
     } else {
       const built = buildDirectLiveUrl(channel.id, creds)

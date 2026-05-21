@@ -52,19 +52,19 @@ interface NavSection { id: string; labelKey: string; label: string; cards: NavCa
 const navStructure: NavSection[] = [
   { id: "settings-playlists", labelKey: "settings.group.playlists", label: "Playlists", cards: [] },
   { id: "settings-appearance", labelKey: "settings.group.appearance", label: "Appearance", cards: [
-    { id: "card-language",                 labelKey: "settings.section.language",          label: "Language" },
-    { id: "card-display",                  labelKey: "settings.section.display",           label: "Display" },
-    { id: "card-perf-mode",                labelKey: "settings.perfMode.title",            label: "Performance mode" },
-    { id: "card-tv-overscan",              labelKey: "settings.tvOverscan.title",          label: "TV safe area" },
-    { id: "card-hub-strips",               labelKey: "settings.hubStrips.title",           label: "Home page sections" },
-    { id: "close-behavior-section",        labelKey: "settings.closeBehavior.title",       label: "Close button behavior" },
-    { id: "android-native-player-section", labelKey: "settings.androidNativePlayer.navLabel", label: "Native Android player" },
+    { id: "card-language",          labelKey: "settings.section.language",     label: "Language" },
+    { id: "card-display",           labelKey: "settings.section.display",      label: "Display" },
+    { id: "card-perf-mode",         labelKey: "settings.perfMode.title",       label: "Performance mode" },
+    { id: "card-tv-overscan",       labelKey: "settings.tvOverscan.title",     label: "TV safe area" },
+    { id: "card-hub-strips",        labelKey: "settings.hubStrips.title",      label: "Home page sections" },
+    { id: "close-behavior-section", labelKey: "settings.closeBehavior.title",  label: "Close button behavior" },
   ]},
   { id: "settings-watching", labelKey: "settings.group.watching", label: "Watching", cards: [
-    { id: "card-livetv-layout",       labelKey: "settings.livetvLayout.title",       label: "Live TV layout" },
-    { id: "card-progress-retention",  labelKey: "settings.progressRetention.title",  label: "Continue watching" },
-    { id: "epg-tz-section",           labelKey: "settings.epgTimezone.title",        label: "EPG time zone" },
-    { id: "playback-section",         labelKey: "settings.playback.title",           label: "Playback" },
+    { id: "card-livetv-layout",             labelKey: "settings.livetvLayout.title",           label: "Live TV layout" },
+    { id: "card-progress-retention",        labelKey: "settings.progressRetention.title",      label: "Continue watching" },
+    { id: "epg-tz-section",                 labelKey: "settings.epgTimezone.title",            label: "EPG time zone" },
+    { id: "playback-section",               labelKey: "settings.playback.title",               label: "Playback" },
+    { id: "android-native-player-section",  labelKey: "settings.androidNativePlayer.navLabel", label: "Native Android player" },
     { id: "android-default-player-section", labelKey: "settings.androidDefaultPlayer.navLabel", label: "Default external player" },
   ]},
   { id: "settings-network", labelKey: "settings.group.network", label: "Network", cards: [
@@ -320,8 +320,6 @@ const navStructure: NavSection[] = [
 
         <CloseToTrayCard client:load />
 
-        <AndroidNativePlayerCard client:load />
-
       </div>
     </section>
 
@@ -442,6 +440,8 @@ const navStructure: NavSection[] = [
           </div>
           <PlayerPicker client:load />
         </article>
+
+        <AndroidNativePlayerCard client:load />
 
         <RememberedAndroidPlayerCard client:load />
 
