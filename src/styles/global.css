@@ -1640,6 +1640,9 @@ summary.list-none::-webkit-details-marker {
 .welcome-actions {
     margin-top: clamp(1.75rem, 1.25rem + 1.5vw, 3rem);
 }
+.welcome-restore-row {
+    margin-top: clamp(1rem, 0.75rem + 0.7vw, 1.75rem);
+}
 .welcome-fineprint {
     margin-top: clamp(1.5rem, 1.25rem + 0.6vw, 2.5rem);
     font-size: clamp(0.6875rem, 0.625rem + 0.2vw, 0.9375rem);

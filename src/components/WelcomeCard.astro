@@ -1,5 +1,5 @@
 ---
-import { IconPlus, IconSparkles } from "@tabler/icons-svelte";
+import { IconPlus, IconSparkles, IconUpload } from "@tabler/icons-svelte";
 ---
 
 <div class="welcome-enter welcome-card rounded-2xl border border-line bg-surface text-center">
@@ -32,6 +32,29 @@ import { IconPlus, IconSparkles } from "@tabler/icons-svelte";
 		</a>
 	</div>
 
+	<div class="welcome-restore-row">
+		<button
+			id="welcome-restore-btn"
+			type="button"
+			class="welcome-restore-btn inline-flex items-center gap-1.5
+				py-2 px-2.5 -mx-2.5
+				text-sm text-fg-3 hover:text-fg focus-visible:text-fg
+				underline decoration-line decoration-1 underline-offset-4
+				hover:decoration-fg-2 focus-visible:decoration-fg-2
+				transition-colors outline-none rounded-md
+				focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2
+				disabled:opacity-60 disabled:cursor-not-allowed">
+			<IconUpload aria-hidden="true" class="size-3.5" stroke={2} />
+			<span data-i18n="welcome.restoreCta">Restore from backup</span>
+		</button>
+		<input
+			id="welcome-restore-input"
+			type="file"
+			accept="application/json,text/json,text/plain,.json"
+			hidden
+		/>
+	</div>
+
 	<p
 		data-i18n="welcome.fineprint"
 		class="welcome-fineprint text-fg-3 leading-relaxed">
@@ -55,3 +78,130 @@ import { IconPlus, IconSparkles } from "@tabler/icons-svelte";
 	}
 	:global(html[data-perf-mode="on"]) .welcome-enter { animation: none; }
 </style>
+
+<script>
+	import { log } from "@/scripts/lib/log.js";
+	import { toastSuccess, toastError } from "@/scripts/lib/toast.js";
+	import { t } from "@/scripts/lib/i18n.js";
+
+	const isTauri =
+		typeof window !== "undefined" &&
+		(!!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__);
+	const isAndroid =
+		typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
+
+	const btn = document.getElementById(
+		"welcome-restore-btn"
+	) as HTMLButtonElement | null;
+	const fileInput = document.getElementById(
+		"welcome-restore-input"
+	) as HTMLInputElement | null;
+
+	async function applyRestore(text: string) {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(text);
+		} catch {
+			toastError(t("settings.toast.backupParseFail"), {
+				description: "Not valid JSON.",
+			});
+			return;
+		}
+		try {
+			const { importAll } = await import("@/scripts/lib/backup.js");
+			const summary = await importAll(parsed);
+			toastSuccess(t("settings.toast.backupRestored"), {
+				description: `${summary.playlists} playlist(s), ${summary.prefsPlaylists} preference set(s).`,
+				duration: 4000,
+			});
+			setTimeout(() => {
+				window.location.reload();
+			}, 600);
+		} catch (error: unknown) {
+			const message =
+				error && typeof error === "object" && "message" in error
+					? String((error as { message: unknown }).message)
+					: "See console.";
+			toastError(t("settings.toast.backupRestoreFail"), {
+				description: message,
+			});
+		}
+	}
+
+	let restoreBusy = false;
+	const setBusy = (busy: boolean) => {
+		restoreBusy = busy;
+		if (btn) btn.disabled = busy;
+	};
+
+	btn?.addEventListener("click", async () => {
+		if (restoreBusy) return;
+		if (isTauri && isAndroid) {
+			try {
+				setBusy(true);
+				const { pickJsonFile } = await import(
+					"@/scripts/lib/android-fs.js"
+				);
+				const picked = await pickJsonFile();
+				if (!picked) {
+					setBusy(false);
+					return;
+				}
+				await applyRestore(picked.text);
+				setBusy(false);
+				return;
+			} catch (error) {
+				log.warn("[welcome:restore] android-fs picker failed, falling back:", error);
+				setBusy(false);
+			}
+		} else if (isTauri) {
+			try {
+				setBusy(true);
+				const { open } = await import("@tauri-apps/plugin-dialog");
+				const picked = await open({
+					multiple: false,
+					directory: false,
+					filters: [{ name: "JSON", extensions: ["json"] }],
+				});
+				if (!picked || typeof picked !== "string") {
+					setBusy(false);
+					return;
+				}
+				const { readTextFile } = await import("@tauri-apps/plugin-fs");
+				const text = await readTextFile(picked);
+				await applyRestore(text);
+				setBusy(false);
+				return;
+			} catch (error) {
+				log.warn("[welcome:restore] tauri open failed, falling back:", error);
+				setBusy(false);
+			}
+		}
+		setBusy(true);
+		fileInput?.click();
+	});
+
+	fileInput?.addEventListener("change", async () => {
+		const file = fileInput?.files?.[0];
+		if (!file) {
+			setBusy(false);
+			return;
+		}
+		try {
+			const text = await file.text();
+			await applyRestore(text);
+		} finally {
+			if (fileInput) fileInput.value = "";
+			setBusy(false);
+		}
+	});
+	if (!isTauri) {
+		window.addEventListener("focus", () => {
+			if (restoreBusy && fileInput && !fileInput.files?.length) {
+				setTimeout(() => {
+					if (restoreBusy && !fileInput.files?.length) setBusy(false);
+				}, 200);
+			}
+		});
+	}
+</script>

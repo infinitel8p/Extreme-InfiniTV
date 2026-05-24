@@ -34,6 +34,8 @@ import {
   IconBook,
   IconRocket,
   IconLayoutDashboard,
+  IconSearch,
+  IconX,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -144,6 +146,50 @@ const navStructure: NavSection[] = [
     </div>
 
     <div class="settings-stack flex-1 min-w-0">
+
+    <div class="lg:sticky lg:top-2 lg:z-10 -mt-2 pt-2 pb-3">
+      <div class="relative">
+        <span class="absolute left-3 top-1/2 -translate-y-1/2 text-fg-3 pointer-events-none inline-flex">
+          <IconSearch aria-hidden="true" stroke={2} size={16} />
+        </span>
+        <input
+          id="settings-search-input"
+          type="search"
+          autocomplete="off"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          enterkeyhint="search"
+          data-i18n-attr="placeholder:settings.search.placeholder;aria-label:settings.search.placeholder"
+          placeholder="Search settings"
+          class="w-full h-11 rounded-xl border border-line bg-surface text-fg
+            pl-10 pr-11 text-sm placeholder:text-fg-3
+            focus-visible:border-accent outline-none
+            transition-colors"
+        />
+        <button
+          id="settings-search-clear"
+          type="button"
+          data-i18n-attr="aria-label:settings.search.clear"
+          aria-label="Clear search"
+          class="absolute right-1 top-1/2 -translate-y-1/2 size-9 rounded-md
+            text-fg-3 hover:text-fg hover:bg-surface-2
+            focus-visible:text-fg focus-visible:bg-surface-2
+            inline-flex items-center justify-center transition-colors"
+          hidden>
+          <IconX aria-hidden="true" stroke={2} size={16} />
+        </button>
+      </div>
+      <p
+        id="settings-search-empty"
+        data-i18n="settings.search.noMatches"
+        class="mt-3 text-sm text-fg-3 px-1"
+        role="status"
+        aria-live="polite"
+        hidden>
+        No settings match your search.
+      </p>
+    </div>
 
     <!-- Group: Playlists -->
     <section id="settings-playlists" class="settings-group scroll-mt-8">
@@ -2788,6 +2834,15 @@ const navStructure: NavSection[] = [
       background: color-mix(in oklch, var(--color-bad) 10%, transparent);
     }
 
+    .settings-stack[data-search-active] section[data-search="miss"],
+    .settings-stack[data-search-active] article[data-search="miss"] {
+      display: none;
+    }
+    .settings-nav-link[data-search-miss],
+    .settings-subnav-link[data-search-miss] {
+      display: none;
+    }
+
     /* Card-level subnav (lg+ rail only). Each section's cards are listed
        directly after its nav link in the DOM (no wrapper, so the mobile
        horizontal chip rail keeps scrolling cleanly). Visible only when
@@ -2983,6 +3038,7 @@ const navStructure: NavSection[] = [
         let bestDistance = Infinity
         for (const section of sections) {
           const rect = section.getBoundingClientRect()
+          if (rect.width === 0 && rect.height === 0) continue
           if (rect.bottom < containerRect.top) continue
           if (rect.top > containerRect.bottom) break
           const distance = Math.abs(rect.top - anchorY)
@@ -3104,5 +3160,9 @@ const navStructure: NavSection[] = [
 
   <script>
     import "@/scripts/settings/settings_effects.ts"
+  </script>
+
+  <script>
+    import "@/scripts/settings/settings_search.ts"
   </script>
 </Layout>

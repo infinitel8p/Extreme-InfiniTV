@@ -68,6 +68,7 @@ import {
 } from "@/scripts/lib/epg-data.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { maybeB64ToUtf8, escapeHtml } from "@/scripts/lib/b64-utf8.ts"
+import { attachRadioVisualizer, type RadioVisualizerHandle } from "@/scripts/lib/radio-visualizer.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -1382,9 +1383,24 @@ const ensureEmbeddedPlayer = async (backend) => {
 
 /** Channel ID currently rendered in radio mode (-1 = none). */
 let radioModeChannelId: number | null = null
+let radioVisualizer: RadioVisualizerHandle | null = null
 
 function getPlayerWrap(): HTMLElement | null {
   return document.getElementById("player-wrap")
+}
+
+function mountRadioVisualizer(wrap: HTMLElement) {
+  if (radioVisualizer) return
+  const host = wrap.querySelector<HTMLElement>("[data-radio-visualizer-host]")
+  const videoEl = wrap.querySelector<HTMLVideoElement>("video")
+  if (!host || !videoEl) return
+  radioVisualizer = attachRadioVisualizer(host, videoEl)
+}
+
+function unmountRadioVisualizer() {
+  if (!radioVisualizer) return
+  try { radioVisualizer.detach() } catch {}
+  radioVisualizer = null
 }
 
 function setRadioMode(channel: { id: number; name?: string; logo?: string | null }) {
@@ -1408,6 +1424,7 @@ function setRadioMode(channel: { id: number; name?: string; logo?: string | null
   radioModeChannelId = channel.id
   paintRadioNowPlaying(channel.id)
   wrap.setAttribute("aria-label", t("livetv.radioAriaLabel", { name: channel.name || "" }) || `Radio: ${channel.name || ""}`)
+  mountRadioVisualizer(wrap)
 }
 
 function clearRadioMode() {
@@ -1421,6 +1438,7 @@ function clearRadioMode() {
     nowEl.hidden = true
   }
   radioModeChannelId = null
+  unmountRadioVisualizer()
 }
 
 function paintRadioNowPlaying(channelId: number) {
