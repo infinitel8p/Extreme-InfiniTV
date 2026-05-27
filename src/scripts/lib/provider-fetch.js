@@ -128,7 +128,7 @@ export async function providerFetch(url, init = {}) {
     }
   }
 
-  const useTauri = isTauri && (ua || forceTauri)
+  const useTauri = isTauri
 
   if (!useTauri) {
     log.log(`[xt:net] native start`, u)
