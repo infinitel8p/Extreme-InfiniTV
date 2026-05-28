@@ -1473,6 +1473,30 @@ function paintRadioNowPlaying(channelId: number) {
  * audio-only stream, so promote the wrap to radio mode even when the M3U
  * didn't carry a `tvg-type` hint. Hook this once after the player mounts. */
 function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unknown[]) => void): void }) {
+  const isMacOSPlatform =
+    typeof navigator !== "undefined" &&
+    (/Mac/i.test((navigator as any).platform || "") ||
+      /Macintosh|Mac OS X/i.test(navigator.userAgent || ""))
+  if (!isMacOSPlatform) {
+    const detect = () => {
+      const ctx = lastPlayContext
+      if (!ctx) return
+      const wrap = getPlayerWrap()
+      if (!wrap) return
+      if (wrap.dataset.radioMode === "on") return
+      const videoEl = wrap.querySelector("video") as HTMLVideoElement | null
+      if (!videoEl) return
+      if (videoEl.videoWidth === 0 && videoEl.videoHeight === 0) {
+        const channel = all.find((entry) => entry.id === ctx.streamId)
+        if (channel) setRadioMode(channel)
+      }
+    }
+    handle.on("loadedmetadata", detect)
+    handle.on("playing", detect)
+    return
+  }
+  const RADIO_GRACE_MS = 2500
+  let pending: ReturnType<typeof setTimeout> | null = null
   const detect = () => {
     const ctx = lastPlayContext
     if (!ctx) return
@@ -1481,13 +1505,24 @@ function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unkn
     if (wrap.dataset.radioMode === "on") return
     const videoEl = wrap.querySelector("video") as HTMLVideoElement | null
     if (!videoEl) return
-    if (videoEl.videoWidth === 0 && videoEl.videoHeight === 0) {
+    if (videoEl.videoWidth > 0 || videoEl.videoHeight > 0) {
+      if (pending) { clearTimeout(pending); pending = null }
+      return
+    }
+    if (pending) return
+    pending = setTimeout(() => {
+      pending = null
+      if (wrap.dataset.radioMode === "on") return
+      if (videoEl.videoWidth > 0 || videoEl.videoHeight > 0) return
+      const tracks = (videoEl as any).videoTracks
+      if (tracks && typeof tracks.length === "number" && tracks.length > 0) return
       const channel = all.find((entry) => entry.id === ctx.streamId)
       if (channel) setRadioMode(channel)
-    }
+    }, RADIO_GRACE_MS)
   }
   handle.on("loadedmetadata", detect)
   handle.on("playing", detect)
+  handle.on("resize", detect)
 }
 
 function showTuningOverlay(logoUrl) {

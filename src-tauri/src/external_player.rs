@@ -114,6 +114,62 @@ fn classify_io_error(err: &std::io::Error) -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn resolve_app_bundle(path: &str) -> String {
+    let p = Path::new(path);
+    if p.extension().and_then(|s| s.to_str()) != Some("app") {
+        return path.to_string();
+    }
+    let macos_dir = p.join("Contents/MacOS");
+    if let Ok(entries) = std::fs::read_dir(&macos_dir) {
+        let files: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+            .collect();
+        if files.len() == 1 {
+            return files[0].path().to_string_lossy().into_owned();
+        }
+    }
+    let info_plist = p.join("Contents/Info.plist");
+    if let Ok(contents) = std::fs::read_to_string(&info_plist) {
+        if let Some(name) = parse_cf_bundle_executable(&contents) {
+            let bin = macos_dir.join(&name);
+            if bin.exists() {
+                return bin.to_string_lossy().into_owned();
+            }
+        }
+    }
+    path.to_string()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_app_bundle(path: &str) -> String {
+    path.to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn is_macos_app_running(bundle_path: &str) -> bool {
+    let needle = format!("{}/Contents/MacOS/", bundle_path);
+    let output = Command::new("/usr/bin/pgrep")
+        .arg("-f")
+        .arg(&needle)
+        .output();
+    match output {
+        Ok(out) => !out.stdout.is_empty(),
+        Err(_) => false,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn parse_cf_bundle_executable(xml: &str) -> Option<String> {
+    let mut iter = xml.split("<key>CFBundleExecutable</key>");
+    iter.next()?;
+    let rest = iter.next()?;
+    let start = rest.find("<string>")? + "<string>".len();
+    let end = rest[start..].find("</string>")?;
+    Some(rest[start..start + end].trim().to_string())
+}
+
 fn build_command(path: &str, args: &[String]) -> Command {
     let mut cmd = Command::new(path);
     cmd.args(args)
@@ -158,7 +214,29 @@ fn spawn_launch_inner(path: &str, args: &[String]) -> Result<u32, String> {
     if !Path::new(path).exists() {
         return Err(format!("NOT_FOUND:no file at {path}"));
     }
-    let mut cmd = build_command(path, args);
+    #[cfg(target_os = "macos")]
+    {
+        if Path::new(path).extension().and_then(|s| s.to_str()) == Some("app") {
+            let mut cmd = Command::new("/usr/bin/open");
+            if is_macos_app_running(path) {
+                cmd.arg("-a").arg(path);
+                if let Some(url) = args.last() {
+                    cmd.arg(url);
+                }
+            } else {
+                cmd.arg("-a").arg(path).arg("--args").args(args);
+            }
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            return match cmd.spawn() {
+                Ok(child) => Ok(child.id()),
+                Err(e) => Err(classify_io_error(&e)),
+            };
+        }
+    }
+    let resolved = resolve_app_bundle(path);
+    let mut cmd = build_command(&resolved, args);
     match cmd.spawn() {
         Ok(child) => Ok(child.id()),
         Err(e) => Err(classify_io_error(&e)),
@@ -173,7 +251,8 @@ fn spawn_detect(path: String, mut args: Vec<String>) -> Result<String, String> {
     if !args.iter().any(|a| a == "--version") {
         args.push("--version".to_string());
     }
-    let mut cmd = Command::new(&path);
+    let resolved = resolve_app_bundle(&path);
+    let mut cmd = Command::new(&resolved);
     cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -314,8 +393,11 @@ fn augment_mpv_args(mut args: Vec<String>, endpoint: &str) -> Vec<String> {
 fn augment_vlc_args(mut args: Vec<String>) -> Vec<String> {
     args.retain(|arg| arg != "--play-and-exit");
     let src = args.pop();
-    args.push("--one-instance".to_string());
-    args.push("--no-playlist-enqueue".to_string());
+    #[cfg(not(target_os = "macos"))]
+    {
+        args.push("--one-instance".to_string());
+        args.push("--no-playlist-enqueue".to_string());
+    }
     if let Some(src) = src {
         args.push(src);
     }

@@ -41,7 +41,7 @@ function ensureDialog() {
   node.setAttribute("aria-labelledby", `${DIALOG_ID}-title`)
   node.className = [
     "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
-    "w-[min(40rem,calc(100vw-2rem))] max-h-[min(85dvh,46rem)]",
+    "w-[min(40rem,calc(100vw-2rem))] h-[min(85dvh,46rem)]",
     "backdrop:bg-black/60",
   ].join(" ")
   node.innerHTML = `

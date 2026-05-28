@@ -91,6 +91,19 @@ const isAndroid = (() => {
   return /Android/i.test(navigator.userAgent || "")
 })()
 
+const isMacOS = (() => {
+  if (typeof navigator === "undefined") return false
+  const platform = (navigator as any).platform || ""
+  return /Mac/i.test(platform) || /Macintosh|Mac OS X/i.test(navigator.userAgent || "")
+})()
+
+async function tauriWindowSetFullscreen(state: boolean): Promise<void> {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window")
+    await getCurrentWindow().setFullscreen(state)
+  } catch {}
+}
+
 export const externalPlayersAvailable = isTauri && !isAndroid
 
 export const androidExternalAvailable =
@@ -147,12 +160,10 @@ export function buildMpvArgs(input: ArgvInput): string[] {
 
 export function buildVlcArgs(input: ArgvInput): string[] {
   const minResume = input.resumeMinSeconds ?? RESUME_MIN_SECONDS_DEFAULT
-  const out: string[] = [
-    "--no-qt-minimal-view",
-    "--no-fullscreen",
-    "--no-qt-error-dialogs",
-    "--play-and-exit",
-  ]
+
+  const out: string[] = isMacOS
+    ? ["--no-fullscreen", "--play-and-exit"]
+    : ["--no-qt-minimal-view", "--no-fullscreen", "--no-qt-error-dialogs", "--play-and-exit"]
   if (input.userAgent) out.push(`--http-user-agent=${input.userAgent}`)
   if (input.referer) out.push(`--http-referrer=${input.referer}`)
   const resume = Number(input.resumeSeconds || 0)
@@ -662,12 +673,28 @@ async function mountVideoJs(
     },
     html5: options.html5 ?? {
       vhs: {
-        overrideNative: true,
+        overrideNative: !isMacOS,
         limitRenditionByPlayerDimensions: true,
         smoothQualityChange: true,
       },
     },
   }) as any
+
+  if (isTauri && isMacOS) {
+    player.requestFullscreen = async function () {
+      try { player.addClass("vjs-fullscreen") } catch {}
+      try { player.trigger("fullscreenchange") } catch {}
+      await tauriWindowSetFullscreen(true)
+    }
+    player.exitFullscreen = async function () {
+      try { player.removeClass("vjs-fullscreen") } catch {}
+      try { player.trigger("fullscreenchange") } catch {}
+      await tauriWindowSetFullscreen(false)
+    }
+    player.isFullscreen = function () {
+      try { return player.hasClass?.("vjs-fullscreen") } catch { return false }
+    }
+  }
 
   let activeMpegts: MpegtsHandle | null = null
   let pendingSrc: string | null = null
@@ -863,7 +890,11 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
           try { activeMpegts.destroy() } catch {}
           activeMpegts = null
         }
-        if ((Hls as any).isSupported()) {
+        const preferNative =
+          isMacOS && video.canPlayType("application/vnd.apple.mpegurl")
+        if (preferNative) {
+          video.src = url
+        } else if ((Hls as any).isSupported()) {
           const hls = new (Hls as any)({ enableWorker: true })
           hls.loadSource(url)
           hls.attachMedia(video)
@@ -897,6 +928,22 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
       },
     },
   })
+
+  if (isTauri && isMacOS) {
+    art.on("ready", () => {
+      const btn = container.querySelector(".art-control-fullscreen") as HTMLElement | null
+      if (!btn) return
+      const replacement = btn.cloneNode(true) as HTMLElement
+      btn.replaceWith(replacement)
+      replacement.addEventListener("click", async (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        const next = !art.fullscreenWeb
+        art.fullscreenWeb = next
+        await tauriWindowSetFullscreen(next)
+      })
+    })
+  }
 
   art.on("destroy", () => {
     if (activeHls) {
