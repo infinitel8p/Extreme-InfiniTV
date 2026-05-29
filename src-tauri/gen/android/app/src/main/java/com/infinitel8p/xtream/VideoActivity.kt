@@ -86,6 +86,7 @@ class VideoActivity : AppCompatActivity() {
 
   private var overlayVisible = false
   private var releaseSuppressed = false
+  private var finishedEmitted = false
 
   private val progressHandler = Handler(Looper.getMainLooper())
   private val progressTick = object : Runnable {
@@ -178,18 +179,20 @@ class VideoActivity : AppCompatActivity() {
   override fun onDestroy() {
     progressHandler.removeCallbacks(progressTick)
     releasePlayer()
-    EventQueue.append(
-      this,
-      "xt:android-native-finished",
-      JSONObject().apply {
-        put("contentKey", contentKey)
-        put("mode", mode)
-        if (mode == MODE_LIVE) {
-          val finalChannel = channels.getOrNull(currentChannelIndex)
-          if (finalChannel != null) put("finalChannelId", finalChannel.id)
+    if (!finishedEmitted) {
+      EventQueue.append(
+        this,
+        "xt:android-native-finished",
+        JSONObject().apply {
+          put("contentKey", contentKey)
+          put("mode", mode)
+          if (mode == MODE_LIVE) {
+            val finalChannel = channels.getOrNull(currentChannelIndex)
+            if (finalChannel != null) put("finalChannelId", finalChannel.id)
+          }
         }
-      }
-    )
+      )
+    }
     super.onDestroy()
   }
 
@@ -229,6 +232,7 @@ class VideoActivity : AppCompatActivity() {
 
       override fun onPlaybackStateChanged(state: Int) {
         if (state == Player.STATE_ENDED && mode == MODE_VOD) {
+          finishedEmitted = true
           EventQueue.append(
             this@VideoActivity,
             "xt:android-native-finished",

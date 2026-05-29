@@ -113,6 +113,31 @@ export function attachRadioVisualizer(
   }
   resize()
 
+  let currentAccent = resolveAccent(canvas)
+  const refreshAccent = () => {
+    if (disposed) return
+    currentAccent = resolveAccent(canvas)
+  }
+
+  let themeObserver: MutationObserver | null = null
+  try {
+    themeObserver = new MutationObserver(refreshAccent)
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["style", "class"],
+    })
+  } catch {}
+
+  let schemeMql: MediaQueryList | null = null
+  if (typeof matchMedia === "function") {
+    try {
+      schemeMql = matchMedia("(prefers-color-scheme: dark)")
+      schemeMql.addEventListener("change", refreshAccent)
+    } catch {
+      schemeMql = null
+    }
+  }
+
   const staticLine = reducedMotion() || perfMode() || !graph
 
   const allowBreath = !reducedMotion() && !perfMode()
@@ -143,7 +168,7 @@ export function attachRadioVisualizer(
       return
     }
     ctx2d.clearRect(0, 0, width, height)
-    const accent = resolveAccent(canvas)
+    const accent = currentAccent
     const midY = height / 2
 
     ctx2d.lineCap = "round"
@@ -243,6 +268,12 @@ export function attachRadioVisualizer(
         try { resizeObserver.disconnect() } catch {}
       } else {
         window.removeEventListener("resize", resize)
+      }
+      if (themeObserver) {
+        try { themeObserver.disconnect() } catch {}
+      }
+      if (schemeMql) {
+        try { schemeMql.removeEventListener("change", refreshAccent) } catch {}
       }
       try { canvas.remove() } catch {}
       // Leave the AudioContext + source live: re-creating

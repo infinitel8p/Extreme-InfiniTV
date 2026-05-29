@@ -137,8 +137,21 @@
 							}
 						} catch {}
 					};
+					const syncFullscreenState = async () => {
+						try {
+							const fs = await win.isFullscreen();
+							document.documentElement.toggleAttribute(
+								"data-fullscreen",
+								fs,
+							);
+						} catch {}
+					};
 					syncMaximizeState();
-					win.onResized(syncMaximizeState);
+					syncFullscreenState();
+					win.onResized(() => {
+						syncMaximizeState();
+						syncFullscreenState();
+					});
 
 					titlebar.addEventListener("click", async (event) => {
 						const btn = (

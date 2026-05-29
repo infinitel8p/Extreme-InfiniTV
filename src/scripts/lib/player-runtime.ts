@@ -91,6 +91,33 @@ const isAndroid = (() => {
   return /Android/i.test(navigator.userAgent || "")
 })()
 
+const isMacOS = (() => {
+  if (typeof navigator === "undefined") return false
+  const platform = (navigator as any).platform || ""
+  return /Mac/i.test(platform) || /Macintosh|Mac OS X/i.test(navigator.userAgent || "")
+})()
+
+async function tauriWindowSetFullscreen(state: boolean): Promise<void> {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window")
+    await getCurrentWindow().setFullscreen(state)
+  } catch {}
+}
+
+async function subscribeTauriFullscreen(
+  handler: (isFullscreen: boolean) => void,
+): Promise<() => void> {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window")
+    const appWindow = getCurrentWindow()
+    return await appWindow.onResized(async () => {
+      try { handler(await appWindow.isFullscreen()) } catch {}
+    })
+  } catch {
+    return () => {}
+  }
+}
+
 export const externalPlayersAvailable = isTauri && !isAndroid
 
 export const androidExternalAvailable =
@@ -147,12 +174,10 @@ export function buildMpvArgs(input: ArgvInput): string[] {
 
 export function buildVlcArgs(input: ArgvInput): string[] {
   const minResume = input.resumeMinSeconds ?? RESUME_MIN_SECONDS_DEFAULT
-  const out: string[] = [
-    "--no-qt-minimal-view",
-    "--no-fullscreen",
-    "--no-qt-error-dialogs",
-    "--play-and-exit",
-  ]
+
+  const out: string[] = isMacOS
+    ? ["--no-fullscreen", "--play-and-exit"]
+    : ["--no-qt-minimal-view", "--no-fullscreen", "--no-qt-error-dialogs", "--play-and-exit"]
   if (input.userAgent) out.push(`--http-user-agent=${input.userAgent}`)
   if (input.referer) out.push(`--http-referrer=${input.referer}`)
   const resume = Number(input.resumeSeconds || 0)
@@ -662,12 +687,41 @@ async function mountVideoJs(
     },
     html5: options.html5 ?? {
       vhs: {
-        overrideNative: true,
+        overrideNative: !isMacOS,
         limitRenditionByPlayerDimensions: true,
         smoothQualityChange: true,
       },
     },
   }) as any
+
+  let fullscreenUnlisten: (() => void) | null = null
+  if (isTauri && isMacOS) {
+    player.requestFullscreen = async function () {
+      try { player.addClass("vjs-fullscreen") } catch {}
+      try { player.trigger("fullscreenchange") } catch {}
+      await tauriWindowSetFullscreen(true)
+    }
+    player.exitFullscreen = async function () {
+      try { player.removeClass("vjs-fullscreen") } catch {}
+      try { player.trigger("fullscreenchange") } catch {}
+      await tauriWindowSetFullscreen(false)
+    }
+    player.isFullscreen = function () {
+      try { return player.hasClass?.("vjs-fullscreen") } catch { return false }
+    }
+    // Resync the vjs-fullscreen class when the window leaves/enters fullscreen
+    // outside our overrides, so isFullscreen() stays truthful.
+    subscribeTauriFullscreen((isFs) => {
+      try {
+        if (isFs === !!player.hasClass?.("vjs-fullscreen")) return
+        if (isFs) player.addClass("vjs-fullscreen")
+        else player.removeClass("vjs-fullscreen")
+        player.trigger("fullscreenchange")
+      } catch {}
+    }).then((unlisten) => {
+      fullscreenUnlisten = unlisten
+    })
+  }
 
   let activeMpegts: MpegtsHandle | null = null
   let pendingSrc: string | null = null
@@ -775,6 +829,7 @@ async function mountVideoJs(
     dispose() {
       pendingSrc = null
       destroyMpegts()
+      try { fullscreenUnlisten?.() } catch {}
       try { player.dispose() } catch {}
     },
     duration() {
@@ -863,7 +918,11 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
           try { activeMpegts.destroy() } catch {}
           activeMpegts = null
         }
-        if ((Hls as any).isSupported()) {
+        const preferNative =
+          isMacOS && video.canPlayType("application/vnd.apple.mpegurl")
+        if (preferNative) {
+          video.src = url
+        } else if ((Hls as any).isSupported()) {
           const hls = new (Hls as any)({ enableWorker: true })
           hls.loadSource(url)
           hls.attachMedia(video)
@@ -897,6 +956,32 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
       },
     },
   })
+
+  let fullscreenUnlisten: (() => void) | null = null
+  if (isTauri && isMacOS) {
+    art.on("ready", () => {
+      const btn = container.querySelector(".art-control-fullscreen") as HTMLElement | null
+      if (!btn) return
+      const replacement = btn.cloneNode(true) as HTMLElement
+      btn.replaceWith(replacement)
+      replacement.addEventListener("click", async (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        const next = !art.fullscreenWeb
+        art.fullscreenWeb = next
+        await tauriWindowSetFullscreen(next)
+      })
+    })
+    // Resync art.fullscreenWeb when the window leaves fullscreen out-of-band
+    // (green button / Esc / gesture), so the next toggle goes the right way.
+    subscribeTauriFullscreen((isFs) => {
+      try {
+        if (art.fullscreenWeb !== isFs) art.fullscreenWeb = isFs
+      } catch {}
+    }).then((unlisten) => {
+      fullscreenUnlisten = unlisten
+    })
+  }
 
   art.on("destroy", () => {
     if (activeHls) {
@@ -983,6 +1068,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
         try { activeMpegts.destroy() } catch {}
         activeMpegts = null
       }
+      try { fullscreenUnlisten?.() } catch {}
       try { art.destroy(false) } catch {}
     },
     duration() {

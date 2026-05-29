@@ -15,6 +15,7 @@
 //   }
 
 import { getNowNext } from "@/scripts/lib/epg-data.js"
+import { t } from "@/scripts/lib/i18n.js"
 
 export interface ChannelInput {
   id: string | number
@@ -70,7 +71,7 @@ function programmeLabel(
     // getNowNext is plain JS (epg-data.js) and doesn't enforce the full
     // Programme type at runtime; pass through unchecked.
     const { current } = getNowNext(programmes as unknown as never, tvgId, atMs)
-    return current?.title ? `Now: ${current.title}` : ""
+    return current?.title ? `${t("livetv.now")}: ${current.title}` : ""
   } catch {
     return ""
   }

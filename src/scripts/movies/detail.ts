@@ -45,8 +45,7 @@ import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
 import {
   androidNativePlayerAvailable,
-  launchAndroidNativeVod,
-  subscribeAndroidNativeEvents,
+  launchAndroidNativeVodWithProgress,
 } from "@/scripts/lib/android-video-launcher.js"
 import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
@@ -384,39 +383,18 @@ async function startPlayback() {
     getAndroidNativePlayerEnabled() &&
     activePlaylistId
   ) {
-    const contentKey = `vod:${movie.id}`
-    const subscribed = subscribeAndroidNativeEvents((event) => {
-      if (event.payload?.contentKey !== contentKey) return
-      if (event.type === "xt:android-native-progress") {
-        const pos = Math.max(0, Math.floor((event.payload.positionMs || 0) / 1000))
-        const dur = Math.max(0, Math.floor((event.payload.durationMs || 0) / 1000))
-        if (pos > 0) {
-          setProgress(activePlaylistId!, "vod", movie!.id, pos, dur, {
-            title: movie!.name,
-            logo: movie!.logo || null,
-          })
-        }
-      } else if (event.type === "xt:android-native-finished") {
-        if (event.payload.completed) {
-          markCompleted(activePlaylistId!, "vod", movie!.id, {
-            duration: Math.max(
-              0,
-              Math.floor((event.payload.finalPosMs || 0) / 1000),
-            ),
-          })
-        }
-        subscribed()
-      }
-    })
-    const launched = launchAndroidNativeVod({
-      contentKey,
+    const launched = launchAndroidNativeVodWithProgress({
+      playlistId: activePlaylistId,
+      contentKey: `vod:${movie.id}`,
+      kind: "vod",
+      id: movie.id,
       url: playSrc,
       title: movie.name,
       posterUrl: movie.logo || "",
       startMs: Math.max(0, resumePos) * 1000,
+      progressExtras: { title: movie.name, logo: movie.logo || null },
     })
     if (launched) return
-    subscribed()
   }
 
   const backend = getPlayerBackend()

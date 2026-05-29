@@ -8,6 +8,9 @@ const isTauri =
   typeof window !== "undefined" &&
   (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__)
 
+const DEFAULT_BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
 let tauriFetchPromise = null
 async function getTauriFetch() {
   if (!isTauri) return null
@@ -112,10 +115,11 @@ export function getProviderStats() {
 export async function providerFetch(url, init = {}) {
   const ua = getUserAgent()
   const u = redactUrl(String(url)).slice(0, 200)
-  const forceTauri = !!init.forceTauri
 
   const callerSignal = init.signal
   const callInit = { ...init }
+  // Still accepted for back-compat (callers pass it); no longer changes
+  // routing now that Tauri requests always send a browser UA by default.
   delete callInit.forceTauri
   if (!callerSignal) {
     const timeoutMs = defaultTimeoutMs()
@@ -155,16 +159,11 @@ export async function providerFetch(url, init = {}) {
     }
   }
 
-  log.log(`[xt:net] tauri start ua=${ua || "(default)"}`, u)
+  log.log(`[xt:net] tauri start ua=${ua || "(default browser)"}`, u)
   const headers = new Headers(callInit.headers || {})
-  if (ua) {
-    headers.set("User-Agent", ua)
-  } else if (forceTauri) {
-    headers.set(
-      "User-Agent",
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    )
-  }
+  // Always send a UA: the custom one if set, otherwise a browser UA so the
+  // reqwest default ("reqwest/x.y") never reaches providers that block it.
+  headers.set("User-Agent", ua || DEFAULT_BROWSER_UA)
   try {
     const r = await tauriFetch(url, { ...callInit, headers })
     log.log(`[xt:net] tauri ok ${r.status}`, u)
