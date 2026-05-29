@@ -178,14 +178,29 @@ function init(): void {
   buildStructure(stack)
   buildIndex()
 
-  // Svelte islands (LocalePicker, HiddenCategoriesEditor, FavoritesReorder,
-  // HubStripsEditor, etc.) hydrate after first paint. Re-index once their
-  // text content is in the DOM so a search for their labels actually hits.
-  window.setTimeout(buildIndex, 600)
-
   const apply = (): void => applyFilter(input.value, stack, emptyEl)
   const syncClearVisibility = (): void => {
     if (clearBtn) clearBtn.hidden = input.value.length === 0
+  }
+
+  let reindexQueued = false
+  const scheduleReindex = (): void => {
+    if (reindexQueued) return
+    reindexQueued = true
+    requestAnimationFrame(() => {
+      reindexQueued = false
+      buildIndex()
+      if (input.value) apply()
+    })
+  }
+  try {
+    const hydrationObserver = new MutationObserver(scheduleReindex)
+    hydrationObserver.observe(stack, { childList: true, subtree: true })
+    window.setTimeout(() => {
+      try { hydrationObserver.disconnect() } catch {}
+    }, 3000)
+  } catch {
+    window.setTimeout(buildIndex, 600)
   }
 
   input.addEventListener("input", () => {

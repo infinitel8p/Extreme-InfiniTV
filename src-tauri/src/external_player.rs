@@ -206,7 +206,9 @@ fn validate_invocation(path: &str, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn spawn_launch_inner(path: &str, args: &[String]) -> Result<u32, String> {
+/// Spawn a player.
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<u32, String> {
     if path.is_empty() {
         return Err("NOT_FOUND:player path is empty".to_string());
     }
@@ -216,7 +218,7 @@ fn spawn_launch_inner(path: &str, args: &[String]) -> Result<u32, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        if Path::new(path).extension().and_then(|s| s.to_str()) == Some("app") {
+        if !direct_exec && Path::new(path).extension().and_then(|s| s.to_str()) == Some("app") {
             let mut cmd = Command::new("/usr/bin/open");
             if is_macos_app_running(path) {
                 cmd.arg("-a").arg(path);
@@ -393,11 +395,8 @@ fn augment_mpv_args(mut args: Vec<String>, endpoint: &str) -> Vec<String> {
 fn augment_vlc_args(mut args: Vec<String>) -> Vec<String> {
     args.retain(|arg| arg != "--play-and-exit");
     let src = args.pop();
-    #[cfg(not(target_os = "macos"))]
-    {
-        args.push("--one-instance".to_string());
-        args.push("--no-playlist-enqueue".to_string());
-    }
+    args.push("--one-instance".to_string());
+    args.push("--no-playlist-enqueue".to_string());
     if let Some(src) = src {
         args.push(src);
     }
@@ -661,7 +660,7 @@ async fn launch_mode(
         let augmented = augment_mpv_args(args.clone(), &endpoint);
         let path_for_spawn = path.clone();
         let pid = tauri::async_runtime::spawn_blocking(move || {
-            spawn_launch_inner(&path_for_spawn, &augmented)
+            spawn_launch_inner(&path_for_spawn, &augmented, true)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
@@ -684,7 +683,7 @@ async fn launch_mode(
         let augmented = augment_vlc_args(args.clone());
         let path_for_spawn = path.clone();
         let pid = tauri::async_runtime::spawn_blocking(move || {
-            spawn_launch_inner(&path_for_spawn, &augmented)
+            spawn_launch_inner(&path_for_spawn, &augmented, true)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
@@ -698,8 +697,7 @@ async fn launch_mode(
         return Ok(json!({ "pid": pid, "reused": prior_alive }));
     }
 
-    // Plain spawn-and-forget fallthrough.
-    let pid = tauri::async_runtime::spawn_blocking(move || spawn_launch_inner(&path, &args))
+    let pid = tauri::async_runtime::spawn_blocking(move || spawn_launch_inner(&path, &args, false))
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
     Ok(json!({ "pid": pid, "reused": false }))
@@ -897,7 +895,7 @@ mod tests {
 
     #[test]
     fn spawn_launch_inner_rejects_path_with_null_byte() {
-        let err = spawn_launch_inner("/bin/sh\0evil", &[]).unwrap_err();
+        let err = spawn_launch_inner("/bin/sh\0evil", &[], false).unwrap_err();
         assert!(
             err.starts_with("OTHER:") || err.starts_with("NOT_FOUND:"),
             "got {err}"
@@ -908,8 +906,9 @@ mod tests {
     fn spawn_launch_inner_rejects_arg_with_newline() {
         // file!() is a real file path, so we get past the NotFound guard
         // and exercise the validation path on a non-empty argv.
-        let err = spawn_launch_inner(file!(), &["safe".to_string(), "with\nnewline".to_string()])
-            .unwrap_err();
+        let err =
+            spawn_launch_inner(file!(), &["safe".to_string(), "with\nnewline".to_string()], false)
+                .unwrap_err();
         assert!(err.starts_with("OTHER:"), "got {err}");
     }
 

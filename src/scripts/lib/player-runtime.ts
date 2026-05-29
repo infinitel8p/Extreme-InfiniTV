@@ -104,6 +104,20 @@ async function tauriWindowSetFullscreen(state: boolean): Promise<void> {
   } catch {}
 }
 
+async function subscribeTauriFullscreen(
+  handler: (isFullscreen: boolean) => void,
+): Promise<() => void> {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window")
+    const appWindow = getCurrentWindow()
+    return await appWindow.onResized(async () => {
+      try { handler(await appWindow.isFullscreen()) } catch {}
+    })
+  } catch {
+    return () => {}
+  }
+}
+
 export const externalPlayersAvailable = isTauri && !isAndroid
 
 export const androidExternalAvailable =
@@ -680,6 +694,7 @@ async function mountVideoJs(
     },
   }) as any
 
+  let fullscreenUnlisten: (() => void) | null = null
   if (isTauri && isMacOS) {
     player.requestFullscreen = async function () {
       try { player.addClass("vjs-fullscreen") } catch {}
@@ -694,6 +709,18 @@ async function mountVideoJs(
     player.isFullscreen = function () {
       try { return player.hasClass?.("vjs-fullscreen") } catch { return false }
     }
+    // Resync the vjs-fullscreen class when the window leaves/enters fullscreen
+    // outside our overrides, so isFullscreen() stays truthful.
+    subscribeTauriFullscreen((isFs) => {
+      try {
+        if (isFs === !!player.hasClass?.("vjs-fullscreen")) return
+        if (isFs) player.addClass("vjs-fullscreen")
+        else player.removeClass("vjs-fullscreen")
+        player.trigger("fullscreenchange")
+      } catch {}
+    }).then((unlisten) => {
+      fullscreenUnlisten = unlisten
+    })
   }
 
   let activeMpegts: MpegtsHandle | null = null
@@ -802,6 +829,7 @@ async function mountVideoJs(
     dispose() {
       pendingSrc = null
       destroyMpegts()
+      try { fullscreenUnlisten?.() } catch {}
       try { player.dispose() } catch {}
     },
     duration() {
@@ -929,6 +957,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
     },
   })
 
+  let fullscreenUnlisten: (() => void) | null = null
   if (isTauri && isMacOS) {
     art.on("ready", () => {
       const btn = container.querySelector(".art-control-fullscreen") as HTMLElement | null
@@ -942,6 +971,15 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
         art.fullscreenWeb = next
         await tauriWindowSetFullscreen(next)
       })
+    })
+    // Resync art.fullscreenWeb when the window leaves fullscreen out-of-band
+    // (green button / Esc / gesture), so the next toggle goes the right way.
+    subscribeTauriFullscreen((isFs) => {
+      try {
+        if (art.fullscreenWeb !== isFs) art.fullscreenWeb = isFs
+      } catch {}
+    }).then((unlisten) => {
+      fullscreenUnlisten = unlisten
     })
   }
 
@@ -1030,6 +1068,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
         try { activeMpegts.destroy() } catch {}
         activeMpegts = null
       }
+      try { fullscreenUnlisten?.() } catch {}
       try { art.destroy(false) } catch {}
     },
     duration() {

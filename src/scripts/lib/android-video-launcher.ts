@@ -16,6 +16,7 @@
 
 import type { ChannelInput } from "@/scripts/lib/channel-lite.js"
 import { serializeChannelsJson } from "@/scripts/lib/channel-lite.js"
+import { setProgress, markCompleted } from "@/scripts/lib/preferences.js"
 
 export type AndroidNativeEventType =
   | "xt:android-native-progress"
@@ -185,4 +186,51 @@ export function subscribeAndroidNativeEvents(callback: Subscriber): () => void {
   return () => {
     subscribers.delete(callback)
   }
+}
+
+export interface NativeVodProgressOptions {
+  playlistId: string
+  contentKey: string
+  kind: "vod" | "episode"
+  id: string | number
+  url: string
+  title?: string
+  posterUrl?: string
+  startMs?: number
+  progressExtras?: Record<string, unknown>
+  onCompleted?: () => void
+}
+
+export function launchAndroidNativeVodWithProgress(
+  opts: NativeVodProgressOptions,
+): boolean {
+  const { playlistId, contentKey, kind, id, progressExtras } = opts
+  const unsubscribe = subscribeAndroidNativeEvents((event) => {
+    if (event.payload?.contentKey !== contentKey) return
+    if (event.type === "xt:android-native-progress") {
+      const pos = Math.max(0, Math.floor((event.payload.positionMs || 0) / 1000))
+      const dur = Math.max(0, Math.floor((event.payload.durationMs || 0) / 1000))
+      if (pos > 0) setProgress(playlistId, kind, id, pos, dur, progressExtras)
+    } else if (event.type === "xt:android-native-finished") {
+      if (event.payload.completed) {
+        markCompleted(playlistId, kind, id, {
+          duration: Math.max(0, Math.floor((event.payload.finalPosMs || 0) / 1000)),
+          ...progressExtras,
+        })
+        try { opts.onCompleted?.() } catch {}
+      }
+      unsubscribe()
+    } else if (event.type === "xt:android-native-error") {
+      unsubscribe()
+    }
+  })
+  const launched = launchAndroidNativeVod({
+    contentKey,
+    url: opts.url,
+    title: opts.title,
+    posterUrl: opts.posterUrl,
+    startMs: opts.startMs,
+  })
+  if (!launched) unsubscribe()
+  return launched
 }

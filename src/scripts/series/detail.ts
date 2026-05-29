@@ -48,8 +48,7 @@ import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
 import {
   androidNativePlayerAvailable,
-  launchAndroidNativeVod,
-  subscribeAndroidNativeEvents,
+  launchAndroidNativeVodWithProgress,
 } from "@/scripts/lib/android-video-launcher.js"
 import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
@@ -727,43 +726,24 @@ async function playEpisode(episode) {
     getAndroidNativePlayerEnabled() &&
     activePlaylistId
   ) {
-    const contentKey = `ep:${episode.id}`
-    const subscribed = subscribeAndroidNativeEvents((event) => {
-      if (event.payload?.contentKey !== contentKey) return
-      if (event.type === "xt:android-native-progress") {
-        const pos = Math.max(0, Math.floor((event.payload.positionMs || 0) / 1000))
-        const dur = Math.max(0, Math.floor((event.payload.durationMs || 0) / 1000))
-        if (pos > 0) {
-          setProgress(activePlaylistId!, "episode", episode.id, pos, dur, progressExtrasFor(episode))
-        }
-      } else if (event.type === "xt:android-native-finished") {
-        if (event.payload.completed) {
-          markCompleted(activePlaylistId!, "episode", episode.id, {
-            duration: Math.max(
-              0,
-              Math.floor((event.payload.finalPosMs || 0) / 1000),
-            ),
-            ...progressExtrasFor(episode),
-          })
-          // Trigger the same Up Next overlay the WebView player path uses.
-          try {
-            document.dispatchEvent(new CustomEvent("xt:series-episode-ended", {
-              detail: { episodeId: episode.id },
-            }))
-          } catch {}
-        }
-        subscribed()
-      }
-    })
-    const launched = launchAndroidNativeVod({
-      contentKey,
+    const launched = launchAndroidNativeVodWithProgress({
+      playlistId: activePlaylistId,
+      contentKey: `ep:${episode.id}`,
+      kind: "episode",
+      id: episode.id,
       url: playSrc,
       title: `${series?.name || ""} - S${episode.season || currentSeason}E${episode.episode_num || "?"}`,
       posterUrl: series?.logo || "",
       startMs: Math.max(0, resumePos) * 1000,
+      progressExtras: progressExtrasFor(episode),
+      onCompleted: () => {
+        // Trigger the same Up Next overlay the WebView player path uses.
+        document.dispatchEvent(new CustomEvent("xt:series-episode-ended", {
+          detail: { episodeId: episode.id },
+        }))
+      },
     })
     if (launched) return
-    subscribed()
   }
 
   const backend = getPlayerBackend()
