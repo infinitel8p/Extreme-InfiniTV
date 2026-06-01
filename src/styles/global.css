@@ -2499,11 +2499,7 @@ html.xt-pip-active body {
 html.xt-pip-active body * {
     visibility: hidden !important;
 }
-/* Higher specificity than `html.xt-pip-active body *` so visibility:visible wins.
-   Note: deliberately NO width/height. Letting the browser compute size from
-   the four-side `inset: 0` makes the box auto-restretch on PiP resize, where
-   `100vw` / `100vh` would otherwise stay frozen at PiP-enter dimensions in
-   Android WebView. */
+
 html.xt-pip-active body [data-xt-pip-fill] {
     position: fixed !important;
     top: 0 !important;

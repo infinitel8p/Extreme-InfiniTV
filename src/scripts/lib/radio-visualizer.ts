@@ -10,6 +10,24 @@ interface VideoGraph {
 
 const graphs = new WeakMap<HTMLVideoElement, VideoGraph>()
 
+let sharedCtx: AudioContext | null = null
+
+function getSharedContext(): AudioContext | null {
+  if (sharedCtx && sharedCtx.state !== "closed") return sharedCtx
+  const Ctor =
+    typeof window !== "undefined"
+      ? (window.AudioContext || (window as any).webkitAudioContext)
+      : null
+  if (!Ctor) return null
+  try {
+    sharedCtx = new Ctor() as AudioContext
+    return sharedCtx
+  } catch (err) {
+    log.warn("[xt:radio-viz] AudioContext init failed:", err)
+    return null
+  }
+}
+
 function reducedMotion(): boolean {
   if (typeof matchMedia !== "function") return false
   try {
@@ -36,13 +54,9 @@ function resolveAccent(canvas: HTMLCanvasElement): string {
 function buildGraph(videoEl: HTMLVideoElement): VideoGraph | null {
   const cached = graphs.get(videoEl)
   if (cached) return cached
-  const Ctor =
-    typeof window !== "undefined"
-      ? (window.AudioContext || (window as any).webkitAudioContext)
-      : null
-  if (!Ctor) return null
+  const ctx = getSharedContext()
+  if (!ctx) return null
   try {
-    const ctx = new Ctor() as AudioContext
     const source = ctx.createMediaElementSource(videoEl)
     const analyser = ctx.createAnalyser()
     analyser.fftSize = 1024
@@ -74,12 +88,18 @@ export function attachRadioVisualizer(
 
   const ctx2d = canvas.getContext("2d")
   let raf = 0
+  let started = false
   let disposed = false
   let lastDraw = 0
   const targetFps = 30
   let smoothedEnergy = 0
   const MOUNT_FADE_MS = 400
   let mountStart = 0
+
+  function kick() {
+    if (disposed || !started || raf !== 0) return
+    raf = requestAnimationFrame(draw)
+  }
 
   const graph = buildGraph(videoEl)
   const dataArray = graph
@@ -102,6 +122,7 @@ export function attachRadioVisualizer(
     canvas.width = Math.max(1, Math.floor(rect.width * dpr))
     canvas.height = Math.max(1, Math.floor(rect.height * dpr))
     if (ctx2d) ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0)
+    kick()
   }
 
   let resizeObserver: ResizeObserver | null = null
@@ -117,6 +138,7 @@ export function attachRadioVisualizer(
   const refreshAccent = () => {
     if (disposed) return
     currentAccent = resolveAccent(canvas)
+    kick()
   }
 
   let themeObserver: MutationObserver | null = null
@@ -177,7 +199,10 @@ export function attachRadioVisualizer(
     ctx2d.fillStyle = accent
 
     if (mountStart === 0) mountStart = timestamp
-    const mountFade = Math.min(1, (timestamp - mountStart) / MOUNT_FADE_MS)
+
+    const mountFade = allowBreath
+      ? Math.min(1, (timestamp - mountStart) / MOUNT_FADE_MS)
+      : 1
 
     const isIdle = staticLine || videoEl.paused || videoEl.muted
 
@@ -202,6 +227,11 @@ export function attachRadioVisualizer(
       ctx2d.fill()
 
       ctx2d.globalAlpha = 1
+
+      if (staticLine && !allowBreath) {
+        raf = 0
+        return
+      }
       raf = requestAnimationFrame(draw)
       return
     }
@@ -255,6 +285,7 @@ export function attachRadioVisualizer(
     ctx2d.globalAlpha = 1
     raf = requestAnimationFrame(draw)
   }
+  started = true
   raf = requestAnimationFrame(draw)
 
   return {
@@ -276,9 +307,8 @@ export function attachRadioVisualizer(
         try { schemeMql.removeEventListener("change", refreshAccent) } catch {}
       }
       try { canvas.remove() } catch {}
-      // Leave the AudioContext + source live: re-creating
-      // createMediaElementSource on the same element throws, and the audio
-      // is still routed to ctx.destination so playback keeps working.
+
+      try { container.style.removeProperty("--radio-viz-energy") } catch {}
     },
   }
 }
