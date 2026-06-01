@@ -1184,6 +1184,7 @@ const navStructure: NavSection[] = [
     } from "@/scripts/lib/app-settings.js"
     import { discordRpcSupported } from "@/scripts/lib/discord-rpc.js"
     import { bindExternalLinks } from "@/scripts/lib/external-link.js"
+    import { bindBackupRestore } from "@/scripts/lib/restore-backup.js"
 
     bindExternalLinks()
     import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
@@ -1692,76 +1693,17 @@ const navStructure: NavSection[] = [
       })
     }
 
-    async function applyImport(text) {
-      const ok = await askImportConfirm()
-      if (!ok) return
-      let parsed
-      try {
-        parsed = JSON.parse(text)
-      } catch {
-        toastError(t("settings.toast.backupParseFail"), {
-          description: "Not valid JSON.",
-        })
-        return
-      }
-      try {
-        const { importAll } = await import("@/scripts/lib/backup.js")
-        const summary = await importAll(parsed)
-        toastSuccess(t("settings.toast.backupRestored"), {
-          description: `${summary.playlists} playlist(s), ${summary.prefsPlaylists} preference set(s).`,
-          duration: 6000,
-        })
+    bindBackupRestore(importBtn, {
+      fileInput: importInput,
+      logTag: "settings:import",
+      confirm: askImportConfirm,
+      successDuration: 6000,
+      onRestored: async () => {
         flashMsg(backupMsgEl, "Imported.")
         // Force a hub/sidebar refresh by re-rendering playlists.
         await renderPlaylists()
         syncCache()
-      } catch (e) {
-        toastError(t("settings.toast.backupRestoreFail"), {
-          description: (e && e.message) || "See console.",
-        })
-      }
-    }
-
-    importBtn?.addEventListener("click", async () => {
-      if (isTauri && isAndroid) {
-        try {
-          const { pickJsonFile } = await import("@/scripts/lib/android-fs.js")
-          const picked = await pickJsonFile()
-          if (!picked) return
-          await applyImport(picked.text)
-          return
-        } catch (e) {
-          log.warn("[settings:import] android-fs picker failed, falling back:", e)
-        }
-      } else if (isTauri) {
-        try {
-          const { open } = await import("@tauri-apps/plugin-dialog")
-          const picked = await open({
-            multiple: false,
-            directory: false,
-            filters: [{ name: "JSON", extensions: ["json"] }],
-          })
-          if (!picked || typeof picked !== "string") return
-          const { readTextFile } = await import("@tauri-apps/plugin-fs")
-          const text = await readTextFile(picked)
-          await applyImport(text)
-          return
-        } catch (e) {
-          log.warn("[settings:import] tauri open failed, falling back:", e)
-        }
-      }
-      importInput?.click()
-    })
-
-    importInput?.addEventListener("change", async () => {
-      const file = importInput?.files?.[0]
-      if (!file) return
-      try {
-        const text = await file.text()
-        await applyImport(text)
-      } finally {
-        if (importInput) importInput.value = ""
-      }
+      },
     })
 
     function openResetDialog() {

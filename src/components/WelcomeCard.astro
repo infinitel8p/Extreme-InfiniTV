@@ -80,15 +80,7 @@ import { IconPlus, IconSparkles, IconUpload } from "@tabler/icons-svelte";
 </style>
 
 <script>
-	import { log } from "@/scripts/lib/log.js";
-	import { toastSuccess, toastError } from "@/scripts/lib/toast.js";
-	import { t } from "@/scripts/lib/i18n.js";
-
-	const isTauri =
-		typeof window !== "undefined" &&
-		(!!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__);
-	const isAndroid =
-		typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
+	import { bindBackupRestore } from "@/scripts/lib/restore-backup.js";
 
 	const btn = document.getElementById(
 		"welcome-restore-btn"
@@ -97,111 +89,14 @@ import { IconPlus, IconSparkles, IconUpload } from "@tabler/icons-svelte";
 		"welcome-restore-input"
 	) as HTMLInputElement | null;
 
-	async function applyRestore(text: string) {
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(text);
-		} catch {
-			toastError(t("settings.toast.backupParseFail"), {
-				description: "Not valid JSON.",
-			});
-			return;
-		}
-		try {
-			const { importAll } = await import("@/scripts/lib/backup.js");
-			const summary = await importAll(parsed);
-			toastSuccess(t("settings.toast.backupRestored"), {
-				description: `${summary.playlists} playlist(s), ${summary.prefsPlaylists} preference set(s).`,
-				duration: 4000,
-			});
-			setTimeout(() => {
-				window.location.reload();
-			}, 600);
-		} catch (error: unknown) {
-			const message =
-				error && typeof error === "object" && "message" in error
-					? String((error as { message: unknown }).message)
-					: "See console.";
-			toastError(t("settings.toast.backupRestoreFail"), {
-				description: message,
-			});
-		}
-	}
-
-	let restoreBusy = false;
-	const setBusy = (busy: boolean) => {
-		restoreBusy = busy;
-		if (btn) btn.disabled = busy;
-	};
-
-	btn?.addEventListener("click", async () => {
-		if (restoreBusy) return;
-		if (isTauri && isAndroid) {
-			try {
-				setBusy(true);
-				const { pickJsonFile } = await import(
-					"@/scripts/lib/android-fs.js"
-				);
-				const picked = await pickJsonFile();
-				if (!picked) {
-					setBusy(false);
-					return;
-				}
-				await applyRestore(picked.text);
-				setBusy(false);
-				return;
-			} catch (error) {
-				log.warn("[welcome:restore] android-fs picker failed, falling back:", error);
-				setBusy(false);
-			}
-		} else if (isTauri) {
-			try {
-				setBusy(true);
-				const { open } = await import("@tauri-apps/plugin-dialog");
-				const picked = await open({
-					multiple: false,
-					directory: false,
-					filters: [{ name: "JSON", extensions: ["json"] }],
-				});
-				if (!picked || typeof picked !== "string") {
-					setBusy(false);
-					return;
-				}
-				const { readTextFile } = await import("@tauri-apps/plugin-fs");
-				const text = await readTextFile(picked);
-				await applyRestore(text);
-				setBusy(false);
-				return;
-			} catch (error) {
-				log.warn("[welcome:restore] tauri open failed, falling back:", error);
-				setBusy(false);
-			}
-		}
-		setBusy(true);
-		fileInput?.click();
+	bindBackupRestore(btn, {
+		fileInput,
+		logTag: "welcome:restore",
+		onBusyChange: (busy) => {
+			if (btn) btn.disabled = busy;
+		},
+		onRestored: () => {
+			setTimeout(() => window.location.reload(), 600);
+		},
 	});
-
-	fileInput?.addEventListener("change", async () => {
-		const file = fileInput?.files?.[0];
-		if (!file) {
-			setBusy(false);
-			return;
-		}
-		try {
-			const text = await file.text();
-			await applyRestore(text);
-		} finally {
-			if (fileInput) fileInput.value = "";
-			setBusy(false);
-		}
-	});
-	if (!isTauri) {
-		window.addEventListener("focus", () => {
-			if (restoreBusy && fileInput && !fileInput.files?.length) {
-				setTimeout(() => {
-					if (restoreBusy && !fileInput.files?.length) setBusy(false);
-				}, 200);
-			}
-		});
-	}
 </script>

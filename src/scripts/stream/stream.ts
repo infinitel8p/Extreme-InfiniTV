@@ -45,6 +45,7 @@ import {
   externalPlayersAvailable,
   androidExternalAvailable,
   getExternalLauncher,
+  isMacOS,
 } from "@/scripts/lib/player-runtime.ts"
 import {
   getPlayerBackend,
@@ -1473,38 +1474,39 @@ function paintRadioNowPlaying(channelId: number) {
  * audio-only stream, so promote the wrap to radio mode even when the M3U
  * didn't carry a `tvg-type` hint. Hook this once after the player mounts. */
 function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unknown[]) => void): void }) {
-  const isMacOSPlatform =
-    typeof navigator !== "undefined" &&
-    (/Mac/i.test((navigator as any).platform || "") ||
-      /Macintosh|Mac OS X/i.test(navigator.userAgent || ""))
-  if (!isMacOSPlatform) {
+  const resolveTarget = () => {
+    const ctx = lastPlayContext
+    if (!ctx) return null
+    const wrap = getPlayerWrap()
+    if (!wrap || wrap.dataset.radioMode === "on") return null
+    const videoEl = wrap.querySelector("video") as HTMLVideoElement | null
+    if (!videoEl) return null
+    return { ctx, wrap, videoEl }
+  }
+  const promote = (ctx: NonNullable<typeof lastPlayContext>) => {
+    const channel = all.find((entry) => entry.id === ctx.streamId)
+    if (channel) setRadioMode(channel)
+  }
+
+  if (!isMacOS) {
     const detect = () => {
-      const ctx = lastPlayContext
-      if (!ctx) return
-      const wrap = getPlayerWrap()
-      if (!wrap) return
-      if (wrap.dataset.radioMode === "on") return
-      const videoEl = wrap.querySelector("video") as HTMLVideoElement | null
-      if (!videoEl) return
-      if (videoEl.videoWidth === 0 && videoEl.videoHeight === 0) {
-        const channel = all.find((entry) => entry.id === ctx.streamId)
-        if (channel) setRadioMode(channel)
+      const target = resolveTarget()
+      if (!target) return
+      if (target.videoEl.videoWidth === 0 && target.videoEl.videoHeight === 0) {
+        promote(target.ctx)
       }
     }
     handle.on("loadedmetadata", detect)
     handle.on("playing", detect)
     return
   }
+
   const RADIO_GRACE_MS = 2500
   let pending: ReturnType<typeof setTimeout> | null = null
   const detect = () => {
-    const ctx = lastPlayContext
-    if (!ctx) return
-    const wrap = getPlayerWrap()
-    if (!wrap) return
-    if (wrap.dataset.radioMode === "on") return
-    const videoEl = wrap.querySelector("video") as HTMLVideoElement | null
-    if (!videoEl) return
+    const target = resolveTarget()
+    if (!target) return
+    const { ctx, wrap, videoEl } = target
     if (videoEl.videoWidth > 0 || videoEl.videoHeight > 0) {
       if (pending) { clearTimeout(pending); pending = null }
       return
@@ -1516,8 +1518,7 @@ function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unkn
       if (videoEl.videoWidth > 0 || videoEl.videoHeight > 0) return
       const tracks = (videoEl as any).videoTracks
       if (tracks && typeof tracks.length === "number" && tracks.length > 0) return
-      const channel = all.find((entry) => entry.id === ctx.streamId)
-      if (channel) setRadioMode(channel)
+      promote(ctx)
     }, RADIO_GRACE_MS)
   }
   handle.on("loadedmetadata", detect)
