@@ -270,6 +270,13 @@ const documentTitle = pageTitle
     padding-top: var(--xt-titlebar-h);
   }
 
+  html[data-tauri-desktop][data-fullscreen] {
+    --xt-titlebar-h: 0px;
+  }
+  html[data-tauri-desktop][data-fullscreen] #xt-titlebar {
+    display: none !important;
+  }
+
   /* TV overscan: shrink the layout in from each viewport edge so
      content stays inside the TV's safe area. Sidebar uses `sticky`
      (not fixed), so body padding cascades through the whole flex

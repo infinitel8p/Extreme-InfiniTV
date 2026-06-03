@@ -33,9 +33,27 @@ If something goes wrong, the toast tells you what failed:
 
 ## Android
 
-Tap **Open in player...** on any movie, episode, or Live TV channel. A picker shows every installed app that can play the stream, for example: [VLC](https://play.google.com/store/apps/details?id=org.videolan.vlc), Samsung Video Player, MX Player, [Just Player](https://play.google.com/store/apps/details?id=com.brouken.player). Pick one and it starts playing.
+Tap **Open in player...** on any movie, episode, or Live TV channel. A picker shows every installed app that can play the stream. Pick one and it starts playing.
 
 If your provider needs a specific User-Agent or Referer per channel, the app passes those to the target player. Players that read these (VLC, MX Player, Just Player) will use them; others fall back to their own defaults.
+
+### Tested players
+
+Snapshot as of 2026-05-19. Not an endorsement or a maintained compatibility matrix - players change, streams differ. Use it as a starting point.
+
+**Known to work:**
+
+- [VLC](https://play.google.com/store/apps/details?id=org.videolan.vlc)
+- [Kodi](https://play.google.com/store/apps/details?id=org.xbmc.kodi)
+- [MX Player](https://play.google.com/store/apps/details?id=com.mxtech.videoplayer.ad)
+- [Just Player](https://play.google.com/store/apps/details?id=com.brouken.player)
+- [Nova Video Player](https://play.google.com/store/apps/details?id=org.courville.nova)
+- [Next Player (Base)](https://play.google.com/store/apps/details?id=dev.anilbeesetti.nextplayer)
+- Samsung Video Player (preinstalled on Samsung devices)
+
+<Callout type="tip">
+  If a player you tried isn't in either list, give it a go - the picker shows whatever Android reports as a video handler.
+</Callout>
 
 ## Downloaded content
 

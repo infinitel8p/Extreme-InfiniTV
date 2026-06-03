@@ -184,7 +184,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 									decoding="async"
 									referrerpolicy="no-referrer"
 									data-radio-cover
-									class="absolute inset-0 w-full h-full object-contain p-3 opacity-0 data-[loaded=true]:opacity-100 transition-opacity duration-[240ms]" />
+									class="absolute inset-0 w-full h-full object-contain p-3 opacity-0 data-[loaded=true]:opacity-100 transition-opacity duration-[240ms] ease-[cubic-bezier(0.16,1,0.3,1)]" />
 							</div>
 							<div class="radio-display__meta flex flex-col gap-2 min-w-0 flex-1 pb-14 max-[480px]:items-center max-[480px]:pb-16">
 								<span
@@ -198,6 +198,10 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 									class="radio-display__nowplaying text-fg-2 text-sm m-0 min-w-0 line-clamp-2"
 									data-radio-nowplaying
 									hidden></p>
+								<div
+									class="radio-display__viz max-[480px]:w-full"
+									data-radio-visualizer-host
+									aria-hidden="true"></div>
 							</div>
 						</div>
 					</div>
@@ -293,7 +297,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 			box-shadow:
 				0 0 0 1px var(--color-line),
 				0 20px 40px -12px color-mix(in oklch, var(--color-accent) 38%, transparent),
-				0 8px 20px -6px rgb(0 0 0 / 0.55);
+				0 8px 20px -6px oklch(0.13 0.02 265 / 0.5);
 		}
 		.radio-display__art-fallback {
 			color: color-mix(in oklch, var(--color-fg-3) 80%, transparent);
@@ -304,7 +308,54 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 			height: 0.375rem;
 			border-radius: 999px;
 			background: var(--color-accent);
+			animation: radio-onair-pulse 2.4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+		}
+		@keyframes radio-onair-pulse {
+			0%        { box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent) 45%, transparent); }
+			70%, 100% { box-shadow: 0 0 0 0.5rem transparent; }
+		}
+		@media (prefers-reduced-motion: reduce) {
+			.radio-display__eyebrow::before {
+				animation: none;
+				box-shadow: 0 0 0 4px var(--color-accent-soft);
+			}
+		}
+		:global(html[data-perf-mode="on"]) .radio-display__eyebrow::before {
+			animation: none;
 			box-shadow: 0 0 0 4px var(--color-accent-soft);
+		}
+		.radio-display__viz {
+			--radio-viz-energy: 0;
+			width: min(100%, 22rem);
+			height: 2.5rem;
+			margin-top: 0.25rem;
+			position: relative;
+			border-radius: 999px;
+			box-shadow:
+				0 0 calc(6px + 14px * var(--radio-viz-energy))
+					calc(0px + 2px * var(--radio-viz-energy))
+					color-mix(in oklch, var(--color-accent)
+						calc(8% + 22% * var(--radio-viz-energy)), transparent),
+				0 0 calc(14px + 36px * var(--radio-viz-energy))
+					calc(0px + 4px * var(--radio-viz-energy))
+					color-mix(in oklch, var(--color-accent)
+						calc(0% + 14% * var(--radio-viz-energy)), transparent);
+			transition: box-shadow 120ms cubic-bezier(0.16, 1, 0.3, 1);
+		}
+		.radio-display__viz canvas {
+			display: block;
+			width: 100%;
+			height: 100%;
+		}
+		@media (prefers-reduced-motion: reduce) {
+			.radio-display__viz {
+				--radio-viz-energy: 0;
+				box-shadow: none;
+			}
+		}
+		:global(html[data-perf-mode="on"]) .radio-display__viz {
+			--radio-viz-energy: 0;
+			box-shadow: none;
 		}
 
 		@media (max-width: 480px) {

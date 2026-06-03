@@ -70,6 +70,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Native ExoPlayer Activity -->
+        <activity
+            android:name=".VideoActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:hardwareAccelerated="true"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboard|keyboardHidden|uiMode"
+            android:theme="@style/Theme.App.VideoFullscreen" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

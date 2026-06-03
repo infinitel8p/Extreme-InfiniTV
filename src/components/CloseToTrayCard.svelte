@@ -49,7 +49,7 @@
       </span>
       <div class="flex flex-col gap-1 min-w-0">
         <h3 class="text-base font-semibold">{tr("settings.closeBehavior.title")}</h3>
-        <p class="text-xs text-fg-3">{tr("settings.closeBehavior.helper")}</p>
+        <p id="close-behavior-helper" class="text-xs text-fg-3">{tr("settings.closeBehavior.helper")}</p>
       </div>
     </div>
     <div class="flex flex-col gap-2">
@@ -57,18 +57,21 @@
       <div
         class="grid grid-cols-2 gap-2"
         role="radiogroup"
-        aria-label={tr("settings.closeBehavior.label")}>
+        aria-label={tr("settings.closeBehavior.label")}
+        aria-describedby="close-behavior-helper">
         <button
           type="button"
+          role="radio"
           class="btn"
-          aria-pressed={closeToTray ? "true" : "false"}
+          aria-checked={closeToTray ? "true" : "false"}
           onclick={() => pick(true)}>
           {tr("settings.closeBehavior.tray")}
         </button>
         <button
           type="button"
+          role="radio"
           class="btn"
-          aria-pressed={!closeToTray ? "true" : "false"}
+          aria-checked={!closeToTray ? "true" : "false"}
           onclick={() => pick(false)}>
           {tr("settings.closeBehavior.quit")}
         </button>

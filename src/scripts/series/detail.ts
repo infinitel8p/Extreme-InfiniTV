@@ -45,6 +45,12 @@ import {
 } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
+import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
+import {
+  androidNativePlayerAvailable,
+  launchAndroidNativeVodWithProgress,
+} from "@/scripts/lib/android-video-launcher.js"
+import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
@@ -651,6 +657,7 @@ async function ensureEmbeddedPlayer(backend) {
   if (mounted.backend === "videojs") {
     attachPlayerFocusKeeper(vjs)
   }
+  bindAutoPip(vjs)
   return vjs
 }
 
@@ -712,6 +719,32 @@ async function playEpisode(episode) {
           return saved.position / dur < RESUME_MAX_FRACTION ? saved.position : 0
         })()
       : 0
+
+  // Native ExoPlayer Activity path
+  if (
+    androidNativePlayerAvailable &&
+    getAndroidNativePlayerEnabled() &&
+    activePlaylistId
+  ) {
+    const launched = launchAndroidNativeVodWithProgress({
+      playlistId: activePlaylistId,
+      contentKey: `ep:${episode.id}`,
+      kind: "episode",
+      id: episode.id,
+      url: playSrc,
+      title: `${series?.name || ""} - S${episode.season || currentSeason}E${episode.episode_num || "?"}`,
+      posterUrl: series?.logo || "",
+      startMs: Math.max(0, resumePos) * 1000,
+      progressExtras: progressExtrasFor(episode),
+      onCompleted: () => {
+        // Trigger the same Up Next overlay the WebView player path uses.
+        document.dispatchEvent(new CustomEvent("xt:series-episode-ended", {
+          detail: { episodeId: episode.id },
+        }))
+      },
+    })
+    if (launched) return
+  }
 
   const backend = getPlayerBackend()
 

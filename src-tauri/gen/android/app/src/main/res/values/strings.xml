@@ -4,4 +4,5 @@
     <string name="render_gone_oom">Display restarted to free memory</string>
     <string name="render_gone_crash">Display crashed, reloading</string>
     <string name="render_gone_repeat">Display keeps crashing. Restart the app if this continues.</string>
+    <string name="xt_channels_title">Channels</string>
 </resources>

@@ -18,10 +18,13 @@ import {
   setMirrorPin,
 } from "@/scripts/lib/creds.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
+import { getNetworkTimeoutSeconds } from "@/scripts/lib/app-settings.js"
 import { log } from "@/scripts/lib/log.js"
 
 const failoverNoticed = new Set()
-const CANDIDATE_TIMEOUT_MS = 8_000
+function candidateTimeoutMs() {
+  return Math.max(8_000, getNetworkTimeoutSeconds() * 1000)
+}
 const allFailedAt = new Map()
 const ALL_FAILED_TTL_MS = 15_000
 
@@ -43,7 +46,7 @@ async function fetchCandidate(url, opts) {
     return providerFetch(url, opts)
   }
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), CANDIDATE_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), candidateTimeoutMs())
   if (userSignal) {
     if (userSignal.aborted) controller.abort()
     else userSignal.addEventListener("abort", () => controller.abort(), { once: true })

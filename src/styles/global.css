@@ -348,7 +348,8 @@ dialog[open]::backdrop {
     .btn:not([disabled]):active {
         transform: scale(0.97);
     }
-    .btn[aria-pressed="true"] {
+    .btn[aria-pressed="true"],
+    .btn[aria-checked="true"] {
         @apply bg-surface-2 border-accent text-fg;
     }
     .btn[disabled],
@@ -1639,6 +1640,9 @@ summary.list-none::-webkit-details-marker {
 .welcome-actions {
     margin-top: clamp(1.75rem, 1.25rem + 1.5vw, 3rem);
 }
+.welcome-restore-row {
+    margin-top: clamp(1rem, 0.75rem + 0.7vw, 1.75rem);
+}
 .welcome-fineprint {
     margin-top: clamp(1.5rem, 1.25rem + 0.6vw, 2.5rem);
     font-size: clamp(0.6875rem, 0.625rem + 0.2vw, 0.9375rem);
@@ -2465,5 +2469,58 @@ html[data-perf-mode="on"] [data-modal-ambient] {
    ambient layer entirely on Android - the dialog still has its own backdrop. */
 html[data-platform="android"] [data-modal-ambient] {
     display: none !important;
+}
+
+/* Android auto-PiP: the system captures the entire Activity window, so without
+   intervention the PiP overlay shows the whole page chrome. HTML5 fullscreen
+   would solve it but requires user activation, which we don't have on a
+   system-triggered swipe-home auto-PiP. Instead, when MainActivity reports the
+   PiP transition we promote the current <video> to fill the viewport and hide
+   everything else; the PiP window then captures just the video.
+
+   Visibility-cascade approach: hide every descendant of <body>, then re-show
+   only the video. The layout root is a single wrapper that contains the
+   sidebar AND the player, so a `body > *:not(.host)` selector would keep the
+   sidebar visible. Hiding every descendant is uniform. position:fixed escapes
+   the hidden ancestor chain's layout, and the explicit visibility:visible on
+   the video element wins because visibility inheritance is overridden by an
+   own-element rule. */
+html.xt-pip-active {
+    background: #000 !important;
+}
+html.xt-pip-active body {
+    background: #000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    width: 100vw !important;
+    height: 100vh !important;
+}
+html.xt-pip-active body * {
+    visibility: hidden !important;
+}
+
+html.xt-pip-active body [data-xt-pip-fill] {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: auto !important;
+    height: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    transform: none !important;
+    z-index: 2147483647 !important;
+    object-fit: contain !important;
+    object-position: 50% 50% !important;
+    background: #000 !important;
+    visibility: visible !important;
+    display: block !important;
 }
 
