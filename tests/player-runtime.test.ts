@@ -114,13 +114,24 @@ describe("buildVlcArgs", () => {
     expect(args.at(-1)).toBe(SRC)
   })
 
-  it("includes --play-and-exit, --no-qt-error-dialogs, --no-fullscreen, --no-qt-minimal-view by default", () => {
+  it("includes core flags by default and skips Qt-only flags on macOS", () => {
     const args = buildVlcArgs({ src: SRC })
     expect(args).toContain("--play-and-exit")
-    expect(args).toContain("--no-qt-error-dialogs")
     expect(args).toContain("--no-fullscreen")
-    expect(args).toContain("--no-qt-minimal-view")
     expect(args).not.toContain("--no-video-title-show")
+
+    const isMac = /Mac/i.test(
+      (typeof navigator !== "undefined" && (navigator as any).platform) || "",
+    ) || /Macintosh|Mac OS X/i.test(
+      (typeof navigator !== "undefined" && navigator.userAgent) || "",
+    )
+    if (isMac) {
+      expect(args).not.toContain("--no-qt-error-dialogs")
+      expect(args).not.toContain("--no-qt-minimal-view")
+    } else {
+      expect(args).toContain("--no-qt-error-dialogs")
+      expect(args).toContain("--no-qt-minimal-view")
+    }
   })
 
   it("omits --start-time when resume below threshold", () => {

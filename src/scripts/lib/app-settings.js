@@ -3,6 +3,7 @@ const KEY_DOWNLOAD_DIR = "xt_download_dir"
 const KEY_DOWNLOAD_CONCURRENCY = "xt_download_concurrency"
 const KEY_PERF_MODE = "xt_perf_mode"
 const KEY_PROGRESS_RETENTION = "xt_progress_retention_days"
+const KEY_NETWORK_TIMEOUT_S = "xt_network_timeout_s"
 const KEY_PLAYER_BACKEND = "xt_player_backend"
 const KEY_PLAYER_PATH_MPV = "xt_player_path_mpv"
 const KEY_PLAYER_PATH_VLC = "xt_player_path_vlc"
@@ -13,6 +14,8 @@ const KEY_PLAYER_REUSE_VLC = "xt_player_reuse_vlc"
 const KEY_CLOSE_TO_TRAY = "xt_close_to_tray"
 const KEY_HUB_STRIPS = "xt_hub_strips"
 const KEY_TV_OVERSCAN = "xt_tv_overscan"
+const KEY_ANDROID_NATIVE_PLAYER = "xt_android_native_player"
+const KEY_ANDROID_REMEMBERED_PLAYER = "xt_android_remembered_player"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -21,6 +24,8 @@ export const PLAYER_BACKEND_EVENT = "xt:player-backend-changed"
 export const CLOSE_TO_TRAY_EVENT = "xt:close-to-tray-changed"
 export const HUB_STRIPS_EVENT = "xt:hub-strips-changed"
 export const TV_OVERSCAN_EVENT = "xt:tv-overscan-changed"
+export const ANDROID_NATIVE_PLAYER_EVENT = "xt:android-native-player-changed"
+export const ANDROID_REMEMBERED_PLAYER_EVENT = "xt:android-remembered-player-changed"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
 export const DEFAULT_TV_OVERSCAN = 0
 
@@ -56,6 +61,9 @@ export const DEFAULT_HUB_STRIPS = Object.freeze([
 ])
 export const PROGRESS_RETENTION_VALUES = [30, 90, 180, 0]
 export const DEFAULT_PROGRESS_RETENTION_DAYS = 90
+export const NETWORK_TIMEOUT_VALUES = [20, 45, 90, 180]
+export const DEFAULT_NETWORK_TIMEOUT_SECONDS = 20
+export const NETWORK_TIMEOUT_EVENT = "xt:network-timeout-changed"
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 1
 export const MAX_DOWNLOAD_CONCURRENCY = 4
 export const PLAYER_BACKENDS = ["artplayer", "videojs", "mpv", "vlc"]
@@ -232,6 +240,72 @@ export function setCloseToTray(on) {
   pushCloseToTrayToBackend(!!on)
 }
 
+// Android: opt-in toggle for the native ExoPlayer Activity. When on, plays
+// movies / series / live TV through the native VideoActivity instead of the
+// in-WebView Video.js player. Enables proper PiP, MediaSession lock-screen controls
+// and hardened HLS via ExoPlayer. Default off until on-device validation completes.
+//
+// Storage: "1" for opt-in. Default ("" / missing) keeps the existing
+// in-WebView path unchanged.
+export function getAndroidNativePlayerEnabled() {
+  return readLS(KEY_ANDROID_NATIVE_PLAYER, "") === "1"
+}
+
+export function setAndroidNativePlayerEnabled(on) {
+  writeLS(KEY_ANDROID_NATIVE_PLAYER, on ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(ANDROID_NATIVE_PLAYER_EVENT, { detail: { value: !!on } })
+  )
+}
+
+// Android: when the user ticks "Always use this app" in the external-player
+// picker, we remember their pick and skip the picker on subsequent launches
+/**
+ * @typedef {{ pkg: string, activity: string, label: string, icon: string }} RememberedAndroidPlayer
+ */
+
+/** @returns {RememberedAndroidPlayer | null} */
+export function getRememberedAndroidPlayer() {
+  const raw = readLS(KEY_ANDROID_REMEMBERED_PLAYER, "")
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed.pkg !== "string" || !parsed.pkg) return null
+    return {
+      pkg: parsed.pkg,
+      activity: typeof parsed.activity === "string" ? parsed.activity : "",
+      label: typeof parsed.label === "string" ? parsed.label : parsed.pkg,
+      icon: typeof parsed.icon === "string" ? parsed.icon : "",
+    }
+  } catch {
+    return null
+  }
+}
+
+/** @param {RememberedAndroidPlayer | null} entry */
+export function setRememberedAndroidPlayer(entry) {
+  if (!entry || !entry.pkg) {
+    writeLS(KEY_ANDROID_REMEMBERED_PLAYER, "")
+  } else {
+    const normalized = {
+      pkg: String(entry.pkg),
+      activity: String(entry.activity || ""),
+      label: String(entry.label || entry.pkg),
+      icon: String(entry.icon || ""),
+    }
+    writeLS(KEY_ANDROID_REMEMBERED_PLAYER, JSON.stringify(normalized))
+  }
+  document.dispatchEvent(
+    new CustomEvent(ANDROID_REMEMBERED_PLAYER_EVENT, {
+      detail: { value: entry || null },
+    })
+  )
+}
+
+export function clearRememberedAndroidPlayer() {
+  setRememberedAndroidPlayer(null)
+}
+
 export function syncCloseToTrayToBackend() {
   pushCloseToTrayToBackend(getCloseToTray())
 }
@@ -354,6 +428,35 @@ export function setProgressRetentionDays(days) {
   if (typeof document !== "undefined") {
     document.dispatchEvent(
       new CustomEvent(PROGRESS_RETENTION_EVENT, { detail: { value: normalised } })
+    )
+  }
+}
+
+// Provider fetch timeout (seconds). Applied as the default AbortSignal
+// deadline in providerFetch and as the per-mirror failover budget in
+// xtreamApiFetch. Stored only when non-default so legacy installs keep the
+// historical 20s behavior on first read.
+export function getNetworkTimeoutSeconds() {
+  const raw = readLS(KEY_NETWORK_TIMEOUT_S, "")
+  const parsed = parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || !NETWORK_TIMEOUT_VALUES.includes(parsed)) {
+    return DEFAULT_NETWORK_TIMEOUT_SECONDS
+  }
+  return parsed
+}
+
+export function setNetworkTimeoutSeconds(seconds) {
+  const normalised = NETWORK_TIMEOUT_VALUES.includes(Number(seconds))
+    ? Number(seconds)
+    : DEFAULT_NETWORK_TIMEOUT_SECONDS
+  if (normalised === DEFAULT_NETWORK_TIMEOUT_SECONDS) {
+    writeLS(KEY_NETWORK_TIMEOUT_S, "")
+  } else {
+    writeLS(KEY_NETWORK_TIMEOUT_S, String(normalised))
+  }
+  if (typeof document !== "undefined") {
+    document.dispatchEvent(
+      new CustomEvent(NETWORK_TIMEOUT_EVENT, { detail: { value: normalised } })
     )
   }
 }

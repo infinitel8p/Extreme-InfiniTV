@@ -42,6 +42,12 @@ import {
 } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
+import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
+import {
+  androidNativePlayerAvailable,
+  launchAndroidNativeVodWithProgress,
+} from "@/scripts/lib/android-video-launcher.js"
+import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
@@ -327,6 +333,7 @@ async function ensureEmbeddedPlayer(backend) {
   if (mounted.backend === "videojs") {
     attachPlayerFocusKeeper(vjs)
   }
+  bindAutoPip(vjs)
   return vjs
 }
 
@@ -369,6 +376,26 @@ async function startPlayback() {
           return saved.position / dur < RESUME_MAX_FRACTION ? saved.position : 0
         })()
       : 0
+
+  // Native ExoPlayer Activity path
+  if (
+    androidNativePlayerAvailable &&
+    getAndroidNativePlayerEnabled() &&
+    activePlaylistId
+  ) {
+    const launched = launchAndroidNativeVodWithProgress({
+      playlistId: activePlaylistId,
+      contentKey: `vod:${movie.id}`,
+      kind: "vod",
+      id: movie.id,
+      url: playSrc,
+      title: movie.name,
+      posterUrl: movie.logo || "",
+      startMs: Math.max(0, resumePos) * 1000,
+      progressExtras: { title: movie.name, logo: movie.logo || null },
+    })
+    if (launched) return
+  }
 
   const backend = getPlayerBackend()
 

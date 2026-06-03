@@ -16,6 +16,9 @@ import {
   getPlayerPath,
   PLAYER_BACKEND_EVENT,
   EXTERNAL_PLAYER_BACKENDS,
+  getRememberedAndroidPlayer,
+  setRememberedAndroidPlayer,
+  clearRememberedAndroidPlayer,
 } from "@/scripts/lib/app-settings.js"
 import {
   getExternalLauncher,
@@ -171,20 +174,57 @@ export function setupExternalPlayerButton(
         )
         return
       }
+      // If the user previously ticked "Always use this app" and that app is
+      // still installed, skip the picker and launch directly
+      const remembered = getRememberedAndroidPlayer()
+      if (remembered) {
+        const stillInstalled = apps.find((app) => app.pkg === remembered.pkg)
+        if (stillInstalled) {
+          toast({
+            title:
+              t("settings.playback.launching", {
+                player: stillInstalled.label || stillInstalled.pkg,
+              }) || `Launching ${stillInstalled.label || stillInstalled.pkg}…`,
+            duration: 2000,
+          })
+          try {
+            await openStreamInAndroidPackage(stillInstalled.pkg, src, {
+              activity: stillInstalled.activity || remembered.activity || null,
+              userAgent: headers?.userAgent ?? null,
+              referer: headers?.referer ?? null,
+              title,
+              mime,
+            })
+          } catch (err) {
+            surfaceAndroidHandoffError(err, "system")
+          }
+          return
+        }
+        clearRememberedAndroidPlayer()
+      }
       const choice = await openAndroidPlayerPicker({
         apps,
         contentTitle: title,
       })
       if (!choice) return
+      const { app: pickedApp, remember } = choice
+      if (remember) {
+        setRememberedAndroidPlayer({
+          pkg: pickedApp.pkg,
+          activity: pickedApp.activity,
+          label: pickedApp.label || pickedApp.pkg,
+          icon: pickedApp.icon,
+        })
+      }
       toast({
         title:
-          t("settings.playback.launching", { player: choice.label || choice.pkg }) ||
-          `Launching ${choice.label || choice.pkg}…`,
+          t("settings.playback.launching", { player: pickedApp.label || pickedApp.pkg }) ||
+          `Launching ${pickedApp.label || pickedApp.pkg}…`,
         duration: 2000,
       })
       try {
-        await openStreamInAndroidPackage(choice.pkg, src, {
-          activity: choice.activity || null,
+        await openStreamInAndroidPackage(pickedApp.pkg, src, {
+          activity: pickedApp.activity || null,
           userAgent: headers?.userAgent ?? null,
           referer: headers?.referer ?? null,
           title,

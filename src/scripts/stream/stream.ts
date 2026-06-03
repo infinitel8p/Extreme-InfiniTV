@@ -29,6 +29,13 @@ import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { attachPopoverSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
+import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
+import {
+  androidNativePlayerAvailable,
+  launchAndroidNativeLive,
+  subscribeAndroidNativeEvents,
+} from "@/scripts/lib/android-video-launcher.js"
+import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
 import { parseM3U as parseSharedM3U } from "@/scripts/lib/m3u-parser.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
@@ -38,6 +45,7 @@ import {
   externalPlayersAvailable,
   androidExternalAvailable,
   getExternalLauncher,
+  isMacOS,
 } from "@/scripts/lib/player-runtime.ts"
 import {
   getPlayerBackend,
@@ -61,6 +69,7 @@ import {
 } from "@/scripts/lib/epg-data.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { maybeB64ToUtf8, escapeHtml } from "@/scripts/lib/b64-utf8.ts"
+import { attachRadioVisualizer, type RadioVisualizerHandle } from "@/scripts/lib/radio-visualizer.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -1318,6 +1327,7 @@ const ensureEmbeddedPlayer = async (backend) => {
   if (mounted.backend === "videojs") {
     attachPlayerFocusKeeper(vjs)
   }
+  bindAutoPip(vjs)
   attachAudioOnlyDetection(vjs)
 
   vjs.on("playing", () => {
@@ -1374,9 +1384,24 @@ const ensureEmbeddedPlayer = async (backend) => {
 
 /** Channel ID currently rendered in radio mode (-1 = none). */
 let radioModeChannelId: number | null = null
+let radioVisualizer: RadioVisualizerHandle | null = null
 
 function getPlayerWrap(): HTMLElement | null {
   return document.getElementById("player-wrap")
+}
+
+function mountRadioVisualizer(wrap: HTMLElement) {
+  if (radioVisualizer) return
+  const host = wrap.querySelector<HTMLElement>("[data-radio-visualizer-host]")
+  const videoEl = wrap.querySelector<HTMLVideoElement>("video")
+  if (!host || !videoEl) return
+  radioVisualizer = attachRadioVisualizer(host, videoEl)
+}
+
+function unmountRadioVisualizer() {
+  if (!radioVisualizer) return
+  try { radioVisualizer.detach() } catch {}
+  radioVisualizer = null
 }
 
 function setRadioMode(channel: { id: number; name?: string; logo?: string | null }) {
@@ -1400,6 +1425,7 @@ function setRadioMode(channel: { id: number; name?: string; logo?: string | null
   radioModeChannelId = channel.id
   paintRadioNowPlaying(channel.id)
   wrap.setAttribute("aria-label", t("livetv.radioAriaLabel", { name: channel.name || "" }) || `Radio: ${channel.name || ""}`)
+  mountRadioVisualizer(wrap)
 }
 
 function clearRadioMode() {
@@ -1413,6 +1439,7 @@ function clearRadioMode() {
     nowEl.hidden = true
   }
   radioModeChannelId = null
+  unmountRadioVisualizer()
 }
 
 function paintRadioNowPlaying(channelId: number) {
@@ -1447,21 +1474,56 @@ function paintRadioNowPlaying(channelId: number) {
  * audio-only stream, so promote the wrap to radio mode even when the M3U
  * didn't carry a `tvg-type` hint. Hook this once after the player mounts. */
 function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unknown[]) => void): void }) {
-  const detect = () => {
+  const resolveTarget = () => {
     const ctx = lastPlayContext
-    if (!ctx) return
+    if (!ctx) return null
     const wrap = getPlayerWrap()
-    if (!wrap) return
-    if (wrap.dataset.radioMode === "on") return
+    if (!wrap || wrap.dataset.radioMode === "on") return null
     const videoEl = wrap.querySelector("video") as HTMLVideoElement | null
-    if (!videoEl) return
-    if (videoEl.videoWidth === 0 && videoEl.videoHeight === 0) {
-      const channel = all.find((entry) => entry.id === ctx.streamId)
-      if (channel) setRadioMode(channel)
+    if (!videoEl) return null
+    return { ctx, wrap, videoEl }
+  }
+  const promote = (ctx: NonNullable<typeof lastPlayContext>) => {
+    const channel = all.find((entry) => entry.id === ctx.streamId)
+    if (channel) setRadioMode(channel)
+  }
+
+  if (!isMacOS) {
+    const detect = () => {
+      const target = resolveTarget()
+      if (!target) return
+      if (target.videoEl.videoWidth === 0 && target.videoEl.videoHeight === 0) {
+        promote(target.ctx)
+      }
     }
+    handle.on("loadedmetadata", detect)
+    handle.on("playing", detect)
+    return
+  }
+
+  const RADIO_GRACE_MS = 2500
+  let pending: ReturnType<typeof setTimeout> | null = null
+  const detect = () => {
+    const target = resolveTarget()
+    if (!target) return
+    const { ctx, wrap, videoEl } = target
+    if (videoEl.videoWidth > 0 || videoEl.videoHeight > 0) {
+      if (pending) { clearTimeout(pending); pending = null }
+      return
+    }
+    if (pending) return
+    pending = setTimeout(() => {
+      pending = null
+      if (wrap.dataset.radioMode === "on") return
+      if (videoEl.videoWidth > 0 || videoEl.videoHeight > 0) return
+      const tracks = (videoEl as any).videoTracks
+      if (tracks && typeof tracks.length === "number" && tracks.length > 0) return
+      promote(ctx)
+    }, RADIO_GRACE_MS)
   }
   handle.on("loadedmetadata", detect)
   handle.on("playing", detect)
+  handle.on("resize", detect)
 }
 
 function showTuningOverlay(logoUrl) {
@@ -1596,8 +1658,90 @@ function pickConfiguredExternal() {
   return null
 }
 
+// Native ExoPlayer Activity intercept for Live TV
+let _nativeLiveSubscribed = false
+function ensureNativeLiveSubscription() {
+  if (_nativeLiveSubscribed) return
+  _nativeLiveSubscribed = true
+  subscribeAndroidNativeEvents((event) => {
+    if (event.type !== "xt:android-native-channel-changed") return
+    const channelId = event.payload?.channelId
+    if (!channelId) return
+    const channel = all.find((entry) => String(entry.id) === String(channelId))
+    if (!channel) return
+    if (activePlaylistId) {
+      pushRecent(activePlaylistId, "live", channel.id, channel.name, channel.logo || null)
+    }
+    setNowPlaying(channel.id)
+  })
+}
+
+async function tryLaunchNativeLive(initialStreamId, initialName) {
+  if (!androidNativePlayerAvailable) return false
+  if (!getAndroidNativePlayerEnabled()) return false
+  if (!all.length) return false
+  ensureNativeLiveSubscription()
+
+  let initialUrl
+  if (hasDirectUrl(initialStreamId)) {
+    initialUrl = getDirectUrl(initialStreamId)
+  } else {
+    initialUrl = await resolveStreamUrl((candidate) =>
+      buildDirectLiveUrl(initialStreamId, candidate),
+    )
+    creds = await loadCreds()
+  }
+  if (!initialUrl) return false
+
+  const channelInputs = []
+  for (const channel of all) {
+    let streamUrl = ""
+    if (channel.id === initialStreamId) {
+      streamUrl = initialUrl
+    } else if (hasDirectUrl(channel.id)) {
+      streamUrl = getDirectUrl(channel.id)
+    } else {
+      const built = buildDirectLiveUrl(channel.id, creds)
+      if (built) streamUrl = built
+    }
+    if (!streamUrl) continue
+    const headers = streamHeadersById.get(channel.id) || null
+    channelInputs.push({
+      id: String(channel.id),
+      name: channel.name || "",
+      logo: channel.logo || "",
+      streamUrl,
+      ua: headers?.userAgent || "",
+      referer: headers?.referer || "",
+      tvgId: channel.tvgId || null,
+    })
+  }
+  if (!channelInputs.length) return false
+
+  const programmes = activePlaylistId
+    ? getProgrammesSync(activePlaylistId)?.programmes ?? null
+    : null
+  const launched = launchAndroidNativeLive({
+    contentKey: `live:${initialStreamId}`,
+    channels: channelInputs,
+    initialChannelId: String(initialStreamId),
+    defaultUa: getUserAgent() || "",
+    programmes,
+  })
+  if (launched && activePlaylistId) {
+    pushRecent(activePlaylistId, "live", initialStreamId, initialName,
+      all.find((entry) => entry.id === initialStreamId)?.logo || null)
+    setNowPlaying(initialStreamId)
+  }
+  return launched
+}
+
 async function play(streamId, name) {
   if (!currentEl) return
+  // Native ExoPlayer Activity path (opt-in via Settings). Hands off the full
+  // playback session including channel switching. Returns early if successful.
+  if (await tryLaunchNativeLive(streamId, name)) return
+
   const src = hasDirectUrl(streamId)
     ? getDirectUrl(streamId)
     : await resolveStreamUrl((c) => buildDirectLiveUrl(streamId, c))

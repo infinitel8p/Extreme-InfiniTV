@@ -479,6 +479,108 @@ class PipBridge(private val activity: TauriActivity) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     if (activity.isInPictureInPictureMode) expand() else enter()
   }
+
+  // Called by the JS auto-pip helper whenever a <video> starts/stops playing.
+  // Two effects: persist the flag onto MainActivity so onUserLeaveHint can
+  // auto-enter PiP on the home-button path (API 26-30), and on API 31+ push
+  // setAutoEnterEnabled into PictureInPictureParams so Android handles the
+  // gesture-home path itself (onUserLeaveHint isn't reliably fired for the
+  // gesture nav).
+  @JavascriptInterface
+  fun setAutoEnter(enabled: Boolean) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    Log.d("xtream-pip", "setAutoEnter($enabled) bridge call, sdk=${Build.VERSION.SDK_INT}")
+    activity.runOnUiThread {
+      (activity as? MainActivity)?.autoEnterPipEnabled = enabled
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        try {
+          val params = PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(16, 9))
+            .setAutoEnterEnabled(enabled)
+            .build()
+          activity.setPictureInPictureParams(params)
+          Log.d("xtream-pip", "setPictureInPictureParams(autoEnter=$enabled) applied")
+        } catch (e: Throwable) {
+          Log.w("xtream-pip", "setPictureInPictureParams failed", e)
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Bridge for the native ExoPlayer-backed VideoActivity. Opt-in path (Settings:
+ * "Use native Android video player"). JS calls one of launchVod / launchLive
+ * to start playback in the native Activity. drainEvents() pulls queued
+ * progress / channel-changed / finished events written by VideoActivity into
+ * SharedPreferences; MainActivity.onResume also drains and dispatches them as
+ * DOM CustomEvents on the WebView automatically.
+ */
+class AndroidVideoBridge(private val activity: android.app.Activity) {
+  @JavascriptInterface
+  fun isSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+
+  @JavascriptInterface
+  fun launchVod(
+    contentKey: String,
+    url: String,
+    ua: String,
+    referer: String,
+    title: String,
+    posterUrl: String,
+    startMs: Long,
+  ): Boolean {
+    return tryLaunch(VideoActivity.MODE_VOD) { intent ->
+      intent.putExtra(VideoActivity.EXTRA_URL, url)
+      intent.putExtra(VideoActivity.EXTRA_START_MS, startMs)
+      intent.putExtra(VideoActivity.EXTRA_CONTENT_KEY, contentKey)
+      intent.putExtra(VideoActivity.EXTRA_UA, ua)
+      intent.putExtra(VideoActivity.EXTRA_REFERER, referer)
+      intent.putExtra(VideoActivity.EXTRA_TITLE, title)
+      intent.putExtra(VideoActivity.EXTRA_POSTER, posterUrl)
+    }
+  }
+
+  @JavascriptInterface
+  fun launchLive(
+    contentKey: String,
+    channelsJson: String,
+    initialChannelId: String,
+    ua: String,
+    referer: String,
+  ): Boolean {
+    NativePlayerPayload.setChannels(channelsJson)
+    return tryLaunch(VideoActivity.MODE_LIVE) { intent ->
+      intent.putExtra(VideoActivity.EXTRA_INITIAL_CHANNEL_ID, initialChannelId)
+      intent.putExtra(VideoActivity.EXTRA_CONTENT_KEY, contentKey)
+      intent.putExtra(VideoActivity.EXTRA_UA, ua)
+      intent.putExtra(VideoActivity.EXTRA_REFERER, referer)
+    }
+  }
+
+  @JavascriptInterface
+  fun drainEvents(): String {
+    return EventQueue.drain(activity)
+  }
+
+  private fun tryLaunch(mode: String, configure: (android.content.Intent) -> Unit): Boolean {
+    return try {
+      val intent = android.content.Intent(activity, VideoActivity::class.java)
+      intent.putExtra(VideoActivity.EXTRA_MODE, mode)
+      configure(intent)
+      activity.runOnUiThread {
+        try {
+          activity.startActivity(intent)
+        } catch (error: Throwable) {
+          Log.w("AndroidVideoBridge", "launch $mode startActivity failed", error)
+        }
+      }
+      true
+    } catch (error: Throwable) {
+      Log.w("AndroidVideoBridge", "launch $mode dispatch failed", error)
+      false
+    }
+  }
 }
 
 class MainActivity : TauriActivity() {
@@ -489,6 +591,10 @@ class MainActivity : TauriActivity() {
 
   // Cached so the back-press handler can call onHideCustomView without re-walking the view tree.
   private var hostedWebView: WebView? = null
+
+  // Set by PipBridge.setAutoEnter() whenever a <video> starts/stops playing
+  @Volatile
+  var autoEnterPipEnabled: Boolean = false
 
   private val rendererRecreating = AtomicBoolean(false)
 
@@ -606,6 +712,7 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(StatusBarBridge(this), "AndroidStatusBar")
     webView.addJavascriptInterface(DeviceInfoBridge(this), "AndroidDeviceInfo")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
+    webView.addJavascriptInterface(AndroidVideoBridge(this), "AndroidVideo")
     webView.addJavascriptInterface(
       WebSettingsBridge(this, { hostedWebView }, webView.settings.userAgentString),
       "AndroidWebSettings"
@@ -698,11 +805,19 @@ class MainActivity : TauriActivity() {
 
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && fullscreenView != null) {
-      val params = PictureInPictureParams.Builder()
-        .setAspectRatio(Rational(16, 9))
-        .build()
-      enterPictureInPictureMode(params)
+    Log.d("xtream-pip", "onUserLeaveHint autoEnter=$autoEnterPipEnabled fullscreen=${fullscreenView != null} sdk=${Build.VERSION.SDK_INT}")
+    // PiP on home-button press
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+        (autoEnterPipEnabled || fullscreenView != null)) {
+      try {
+        val params = PictureInPictureParams.Builder()
+          .setAspectRatio(Rational(16, 9))
+          .build()
+        val entered = enterPictureInPictureMode(params)
+        Log.d("xtream-pip", "enterPictureInPictureMode returned $entered")
+      } catch (e: Throwable) {
+        Log.w("xtream-pip", "enterPictureInPictureMode failed", e)
+      }
     }
   }
 
@@ -714,6 +829,36 @@ class MainActivity : TauriActivity() {
     // renderer stays frozen and the overlay renders black.
     if (isInPictureInPictureMode) {
       hostedWebView?.onResume()
+      // PiP captures the whole Activity; promote the <video> into HTML5
+      // fullscreen so the PiP window contains only the video, not the page chrome.
+      hostedWebView?.evaluateJavascript("window.__xtPipFullscreen?.()", null)
+    } else {
+      hostedWebView?.evaluateJavascript("window.__xtPipExitFullscreen?.()", null)
     }
+  }
+
+  override fun onResume() {
+    super.onResume()
+    drainAndDispatchVideoEvents()
+  }
+
+  private fun drainAndDispatchVideoEvents() {
+    val webView = hostedWebView ?: return
+    val raw = EventQueue.drain(this)
+    if (raw == "[]" || raw.isBlank()) return
+    val script = """
+      (function(){
+        try {
+          var batch = $raw;
+          for (var i = 0; i < batch.length; i++) {
+            var evt = batch[i];
+            try {
+              document.dispatchEvent(new CustomEvent(evt.type, { detail: evt.payload }));
+            } catch (_) {}
+          }
+        } catch (_) {}
+      })();
+    """.trimIndent()
+    webView.post { webView.evaluateJavascript(script, null) }
   }
 }

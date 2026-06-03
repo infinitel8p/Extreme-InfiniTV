@@ -114,6 +114,62 @@ fn classify_io_error(err: &std::io::Error) -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn resolve_app_bundle(path: &str) -> String {
+    let p = Path::new(path);
+    if p.extension().and_then(|s| s.to_str()) != Some("app") {
+        return path.to_string();
+    }
+    let macos_dir = p.join("Contents/MacOS");
+    if let Ok(entries) = std::fs::read_dir(&macos_dir) {
+        let files: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+            .collect();
+        if files.len() == 1 {
+            return files[0].path().to_string_lossy().into_owned();
+        }
+    }
+    let info_plist = p.join("Contents/Info.plist");
+    if let Ok(contents) = std::fs::read_to_string(&info_plist) {
+        if let Some(name) = parse_cf_bundle_executable(&contents) {
+            let bin = macos_dir.join(&name);
+            if bin.exists() {
+                return bin.to_string_lossy().into_owned();
+            }
+        }
+    }
+    path.to_string()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_app_bundle(path: &str) -> String {
+    path.to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn is_macos_app_running(bundle_path: &str) -> bool {
+    let needle = format!("{}/Contents/MacOS/", bundle_path);
+    let output = Command::new("/usr/bin/pgrep")
+        .arg("-f")
+        .arg(&needle)
+        .output();
+    match output {
+        Ok(out) => !out.stdout.is_empty(),
+        Err(_) => false,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn parse_cf_bundle_executable(xml: &str) -> Option<String> {
+    let mut iter = xml.split("<key>CFBundleExecutable</key>");
+    iter.next()?;
+    let rest = iter.next()?;
+    let start = rest.find("<string>")? + "<string>".len();
+    let end = rest[start..].find("</string>")?;
+    Some(rest[start..start + end].trim().to_string())
+}
+
 fn build_command(path: &str, args: &[String]) -> Command {
     let mut cmd = Command::new(path);
     cmd.args(args)
@@ -150,7 +206,9 @@ fn validate_invocation(path: &str, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn spawn_launch_inner(path: &str, args: &[String]) -> Result<u32, String> {
+/// Spawn a player.
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<u32, String> {
     if path.is_empty() {
         return Err("NOT_FOUND:player path is empty".to_string());
     }
@@ -158,7 +216,29 @@ fn spawn_launch_inner(path: &str, args: &[String]) -> Result<u32, String> {
     if !Path::new(path).exists() {
         return Err(format!("NOT_FOUND:no file at {path}"));
     }
-    let mut cmd = build_command(path, args);
+    #[cfg(target_os = "macos")]
+    {
+        if !direct_exec && Path::new(path).extension().and_then(|s| s.to_str()) == Some("app") {
+            let mut cmd = Command::new("/usr/bin/open");
+            if is_macos_app_running(path) {
+                cmd.arg("-a").arg(path);
+                if let Some(url) = args.last() {
+                    cmd.arg(url);
+                }
+            } else {
+                cmd.arg("-a").arg(path).arg("--args").args(args);
+            }
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            return match cmd.spawn() {
+                Ok(child) => Ok(child.id()),
+                Err(e) => Err(classify_io_error(&e)),
+            };
+        }
+    }
+    let resolved = resolve_app_bundle(path);
+    let mut cmd = build_command(&resolved, args);
     match cmd.spawn() {
         Ok(child) => Ok(child.id()),
         Err(e) => Err(classify_io_error(&e)),
@@ -173,7 +253,8 @@ fn spawn_detect(path: String, mut args: Vec<String>) -> Result<String, String> {
     if !args.iter().any(|a| a == "--version") {
         args.push("--version".to_string());
     }
-    let mut cmd = Command::new(&path);
+    let resolved = resolve_app_bundle(&path);
+    let mut cmd = Command::new(&resolved);
     cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -579,7 +660,7 @@ async fn launch_mode(
         let augmented = augment_mpv_args(args.clone(), &endpoint);
         let path_for_spawn = path.clone();
         let pid = tauri::async_runtime::spawn_blocking(move || {
-            spawn_launch_inner(&path_for_spawn, &augmented)
+            spawn_launch_inner(&path_for_spawn, &augmented, true)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
@@ -602,7 +683,7 @@ async fn launch_mode(
         let augmented = augment_vlc_args(args.clone());
         let path_for_spawn = path.clone();
         let pid = tauri::async_runtime::spawn_blocking(move || {
-            spawn_launch_inner(&path_for_spawn, &augmented)
+            spawn_launch_inner(&path_for_spawn, &augmented, true)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
@@ -616,8 +697,7 @@ async fn launch_mode(
         return Ok(json!({ "pid": pid, "reused": prior_alive }));
     }
 
-    // Plain spawn-and-forget fallthrough.
-    let pid = tauri::async_runtime::spawn_blocking(move || spawn_launch_inner(&path, &args))
+    let pid = tauri::async_runtime::spawn_blocking(move || spawn_launch_inner(&path, &args, false))
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
     Ok(json!({ "pid": pid, "reused": false }))
@@ -815,7 +895,7 @@ mod tests {
 
     #[test]
     fn spawn_launch_inner_rejects_path_with_null_byte() {
-        let err = spawn_launch_inner("/bin/sh\0evil", &[]).unwrap_err();
+        let err = spawn_launch_inner("/bin/sh\0evil", &[], false).unwrap_err();
         assert!(
             err.starts_with("OTHER:") || err.starts_with("NOT_FOUND:"),
             "got {err}"
@@ -826,8 +906,9 @@ mod tests {
     fn spawn_launch_inner_rejects_arg_with_newline() {
         // file!() is a real file path, so we get past the NotFound guard
         // and exercise the validation path on a non-empty argv.
-        let err = spawn_launch_inner(file!(), &["safe".to_string(), "with\nnewline".to_string()])
-            .unwrap_err();
+        let err =
+            spawn_launch_inner(file!(), &["safe".to_string(), "with\nnewline".to_string()], false)
+                .unwrap_err();
         assert!(err.starts_with("OTHER:"), "got {err}");
     }
 
