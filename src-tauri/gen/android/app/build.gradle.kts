@@ -1,3 +1,4 @@
+import java.util.Locale
 import java.util.Properties
 import com.android.build.gradle.internal.cxx.configure.gradleLocalProperties
 
@@ -29,6 +30,14 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
         manifestPlaceholders["usesCleartextTraffic"] = "false"
+
+        // TV build (XTREAM_TV_BUILD): leanback required + versionCode offset
+        val isTvBuild = (System.getenv("XTREAM_TV_BUILD") ?: "").lowercase(Locale.ROOT) in listOf("1", "true", "yes")
+        manifestPlaceholders["leanbackRequired"] = if (isTvBuild) "true" else "false"
+        if (isTvBuild) {
+            val tvVersionCodeOffset = 500
+            versionCode = (versionCode ?: 0) + tvVersionCodeOffset
+        }
     }
 
     compileOptions {
