@@ -333,6 +333,23 @@ function getItem(id) {
   return readState().find((item) => item.id === id) || null
 }
 
+// A paused/errored Android download deletes its partial (no range-resume),
+// leaving item.path a dead SAF URI that throws on open. Recreate the
+// destination when the file is gone; returns the existing path otherwise.
+async function ensureAndroidDestFile(id, item) {
+  let exists = false
+  try { exists = await AFs.fileExists(item.path) } catch {}
+  if (exists) return item.path
+  const resolvedExt = item.ext || inferExt(item.url)
+  const filename = sanitizeFilename(item.title || "download") + "." + resolvedExt
+  const parentDir = AFs.deserializeUri(getDownloadDir())
+  const fresh = parentDir
+    ? await AFs.createFileInPickedDir(parentDir, filename, resolvedExt)
+    : await AFs.createPublicDownloadFile(filename, resolvedExt)
+  updateItem(id, { path: fresh })
+  return fresh
+}
+
 async function runDownloadAndroid(id, item, controller) {
   let lastProgressAt = Date.now()
   let received = 0
@@ -359,6 +376,8 @@ async function runDownloadAndroid(id, item, controller) {
     const reader = res.body?.getReader()
     if (!reader) throw new Error("Response has no readable body.")
 
+    // item.path may be a dead SAF URI after a resume - recreate before opening.
+    item.path = await ensureAndroidDestFile(id, item)
     const writable = await AFs.openWriteStream(item.path)
     const writer = writable.getWriter()
 
@@ -666,6 +685,7 @@ export async function startDownload({ url, title, ext, source }) {
     url,
     title: title || filename,
     path: fullPath,
+    ext: resolvedExt,
     bytesDone: 0,
     bytesTotal: 0,
     status: willRun ? "downloading" : "queued",

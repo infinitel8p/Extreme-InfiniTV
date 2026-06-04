@@ -208,9 +208,9 @@ function applyVodInfo(data) {
 
   if (metaEl) {
     const bits = []
-    if (year) bits.push(`<span>${String(year)}</span>`)
+    if (year) bits.push(`<span>${escapeText(String(year))}</span>`)
     const humanDur = fmtDuration(duration)
-    if (humanDur) bits.push(`<span>${humanDur}</span>`)
+    if (humanDur) bits.push(`<span>${escapeText(humanDur)}</span>`)
     if (genre) bits.push(`<span>${escapeText(genre)}</span>`)
     const ratingText = fmtImdbRating(rating)
     if (ratingText) {
@@ -422,7 +422,6 @@ async function startPlayback() {
     log.error("[xt:movie-detail] player error", {
       code: e?.code,
       message: e?.message,
-      src: playSrc,
     })
   })
 
@@ -729,6 +728,12 @@ async function boot() {
     showError(t("detail.error.noMovieId"))
     return
   }
+
+  // A playlist switch re-boots: dispose any player from the previous playlist
+  // so its stream stops and its progress listeners stop writing.
+  try { vjs?.pause?.(); vjs?.dispose?.() } catch {}
+  vjs = null
+  progressListenersBound = false
 
   movie = null
   detailSrc = ""

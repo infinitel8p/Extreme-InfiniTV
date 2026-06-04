@@ -2446,6 +2446,13 @@ html[data-perf-mode="on"] .tile-art__layer { transition: none !important; }
 html[data-perf-mode="on"] .cw-progress-fill { transition: none !important; }
 html[data-perf-mode="on"] *::view-transition-old(root),
 html[data-perf-mode="on"] *::view-transition-new(root) { animation: none !important; }
+html[data-perf-mode="on"] *,
+html[data-perf-mode="on"] *::before,
+html[data-perf-mode="on"] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+}
 
 html[data-perf-mode="on"] *,
 html[data-perf-mode="on"] *::before,

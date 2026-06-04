@@ -655,7 +655,15 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
     await cacheHydrate(playlistId, kind)
     const hit = cacheGet(playlistId, kind)
     if (hit?.data?.entries) {
-      const programmes = new Map(hit.data.entries)
+      // Clone cached programmes: applyOffset mutates start/stop in place and the
+      // cache hands out entries by reference, so a shared object would re-shift
+      // (drift by offsetMin) on every 304-served load.
+      const programmes = new Map(
+        hit.data.entries.map(([tvgId, arr]) => [
+          tvgId,
+          Array.isArray(arr) ? arr.map((programme) => ({ ...programme })) : arr,
+        ])
+      )
       const channelNames = new Map(hit.data.channelNames || [])
       return {
         programmes,

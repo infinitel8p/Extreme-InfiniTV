@@ -5,6 +5,7 @@ import {
   loadCreds,
   getActiveEntry,
   isLikelyM3USource,
+  safeHttpUrl,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
@@ -304,9 +305,10 @@ function renderChannelRow(channel, programmesForRow) {
   const logo = document.createElement("div")
   logo.className =
     "h-9 w-9 shrink-0 rounded-md overflow-hidden ring-1 ring-inset ring-line logo-skel"
-  if (channel.logo) {
+  const safeLogo = channel.logo ? safeHttpUrl(channel.logo) : null
+  if (safeLogo) {
     const img = document.createElement("img")
-    img.src = channel.logo
+    img.src = safeLogo
     img.alt = ""
     img.loading = "lazy"
     img.decoding = "async"

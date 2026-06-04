@@ -32,6 +32,11 @@ import {
   PLAYER_BACKENDS,
   EXTERNAL_PLAYER_BACKENDS,
 } from "@/scripts/lib/app-settings.js"
+import {
+  getLocalContent,
+  setLocalContent,
+  LOCAL_CONTENT_MAX_BYTES,
+} from "@/scripts/lib/local-content.js"
 
 const FORMAT_VERSION = 1
 const FORMAT_NAME = "extreme-infinitv-backup"
@@ -55,14 +60,23 @@ function isAcceptablePath(value) {
 export async function exportAll() {
   await ensurePrefsLoaded()
   const credsState = await getCredsState()
+  const entries = Array.isArray(credsState.entries) ? credsState.entries : []
+  const localContent = {}
+  for (const entry of entries) {
+    if (entry?.type === "local-m3u" && entry._id) {
+      const text = await getLocalContent(entry._id)
+      if (typeof text === "string" && text) localContent[entry._id] = text
+    }
+  }
   return {
     format: FORMAT_NAME,
     version: FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
     creds: {
-      entries: Array.isArray(credsState.entries) ? credsState.entries : [],
+      entries,
       selectedId: credsState.selectedId || "",
     },
+    localContent,
     prefs: snapshotPrefs(),
     appSettings: {
       userAgent: getUserAgent(),
@@ -104,7 +118,7 @@ export async function importAll(blob) {
     )
   }
 
-  const summary = { playlists: 0, prefsPlaylists: 0, appSettings: 0 }
+  const summary = { playlists: 0, prefsPlaylists: 0, appSettings: 0, localContent: 0 }
 
   if (b.creds && typeof b.creds === "object") {
     await restoreCredsState({
@@ -115,6 +129,20 @@ export async function importAll(blob) {
     summary.playlists = Array.isArray(b.creds.entries)
       ? b.creds.entries.length
       : 0
+  }
+
+  // Restore local-m3u text saved by exportAll; setLocalContent re-enforces the cap.
+  if (b.localContent && typeof b.localContent === "object") {
+    for (const [entryId, text] of Object.entries(b.localContent)) {
+      if (
+        typeof entryId === "string" &&
+        entryId &&
+        typeof text === "string" &&
+        text.length <= LOCAL_CONTENT_MAX_BYTES
+      ) {
+        if (await setLocalContent(entryId, text)) summary.localContent++
+      }
+    }
   }
 
   if (b.prefs && typeof b.prefs === "object") {

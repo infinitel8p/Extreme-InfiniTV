@@ -61,6 +61,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(discord::RpcState::default())
         .manage(external_player::ExternalPlayerState::default())
         .invoke_handler(tauri::generate_handler![

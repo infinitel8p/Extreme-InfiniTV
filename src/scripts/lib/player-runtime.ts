@@ -939,6 +939,29 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
           video.src = url
         } else if ((Hls as any).isSupported()) {
           const hls = new (Hls as any)({ enableWorker: true })
+          // hls.js does not auto-recover from fatal errors and rarely sets
+          // video.error, so a dead stream freezes silently. Mirror its
+          // documented recovery, then dispatch a synthetic error so our
+          // retry/diagnostic/logging handlers engage.
+          let netRecover = 0
+          let mediaRecover = 0
+          hls.on((Hls as any).Events.ERROR, (_event: unknown, data: any) => {
+            if (!data?.fatal || activeHls !== hls) return
+            const ErrorTypes = (Hls as any).ErrorTypes
+            if (data.type === ErrorTypes.NETWORK_ERROR && netRecover < 2) {
+              netRecover++
+              try { hls.startLoad() } catch {}
+              return
+            }
+            if (data.type === ErrorTypes.MEDIA_ERROR && mediaRecover < 2) {
+              mediaRecover++
+              try { hls.recoverMediaError() } catch {}
+              return
+            }
+            try { hls.destroy() } catch {}
+            if (activeHls === hls) activeHls = null
+            try { video.dispatchEvent(new Event("error")) } catch {}
+          })
           hls.loadSource(url)
           hls.attachMedia(video)
           activeHls = hls

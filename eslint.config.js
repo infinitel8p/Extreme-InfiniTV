@@ -16,6 +16,7 @@ export default [
       "buildfiles/**",
       "dump/**",
       ".netlify/**",
+      "docs/dist/**",
       "src/scripts/spatial-navigation.js",
     ],
   },
