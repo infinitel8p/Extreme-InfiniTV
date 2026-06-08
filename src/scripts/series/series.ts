@@ -29,6 +29,11 @@ import {
   STAR_OUTLINE,
   STAR_FILLED,
 } from "@/scripts/lib/entry-card.js"
+import {
+  getCachedSeasonCount,
+  observeSeasonCount,
+  seasonsLabel,
+} from "@/scripts/lib/series-seasons.ts"
 
 const SERIES_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -238,8 +243,16 @@ function makeSeriesProgressBadge(series) {
   return badge
 }
 
+function seriesMetaText(entry, seasonCount) {
+  const parts = []
+  if (entry.year) parts.push(entry.year)
+  if (seasonCount) parts.push(seasonsLabel(seasonCount))
+  if (entry.category) parts.push(entry.category)
+  return parts.join(" \u2022 ")
+}
+
 function makeCard(s, idx) {
-  return buildEntryCard({
+  const card = buildEntryCard({
     entry: s,
     idx,
     kind: "series",
@@ -247,12 +260,8 @@ function makeCard(s, idx) {
     detailHref: (entry) =>
       `/series/detail?id=${encodeURIComponent(entry.id)}`,
     fallbackTitle: (entry) => t("list.seriesFallback", { id: entry.id }),
-    metaText: (entry) => {
-      const parts = []
-      if (entry.year) parts.push(entry.year)
-      if (entry.category) parts.push(entry.category)
-      return parts.join(" \u2022 ")
-    },
+    metaText: (entry) =>
+      seriesMetaText(entry, getCachedSeasonCount(activePlaylistId, entry.id)),
     decoratePoster: (posterWrap, entry) => {
       const progressBadge = makeSeriesProgressBadge(entry)
       if (progressBadge) posterWrap.appendChild(progressBadge)
@@ -277,6 +286,17 @@ function makeCard(s, idx) {
       })
     },
   })
+
+  if (activePlaylistId) {
+    const metaEl = card.querySelector('[data-role="meta"]')
+    if (metaEl) {
+      observeSeasonCount(card, activePlaylistId, s.id, (count) => {
+        metaEl.textContent = seriesMetaText(s, count)
+      })
+    }
+  }
+
+  return card
 }
 
 function posterSkeletonGeometry() {

@@ -216,6 +216,7 @@ export function buildEntryCard<T extends EntryLike>(
   nameEl.className = "truncate text-sm font-medium text-fg"
   nameEl.textContent = entry.name || fallbackTitle(entry)
   const meta = document.createElement("div")
+  meta.dataset.role = "meta"
   meta.className = "truncate text-2xs text-fg-3 tabular-nums"
   meta.textContent = metaText(entry)
   info.append(nameEl, meta)

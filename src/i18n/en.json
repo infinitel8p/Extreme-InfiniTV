@@ -804,6 +804,8 @@
   "list.noPlaylistAddOne": "No playlist selected.",
   "list.addOne": "Add one",
   "series.season": "Season {n}",
+  "series.seasonsCount": "{count} seasons",
+  "series.seasonsCountOne": "{count} season",
   "series.episode.fallback": "Episode {n}",
   "series.episode.startBeginningAria": "Start {title} from the beginning",
   "series.upNext.playingIn": "Playing in {seconds}s",
