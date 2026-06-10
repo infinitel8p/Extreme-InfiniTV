@@ -734,6 +734,8 @@
   "list.noPlaylistAddOne": "プレイリストが選択されていません。",
   "list.addOne": "追加",
   "series.season": "シーズン {n}",
+  "series.seasonsCount": "{count} シーズン",
+  "series.seasonsCountOne": "{count} シーズン",
   "series.episode.fallback": "エピソード {n}",
   "series.episode.startBeginningAria": "{title} を最初から再生",
   "series.upNext.playingIn": "{seconds} 秒後に再生",

@@ -734,6 +734,8 @@
   "list.noPlaylistAddOne": "कोई प्लेलिस्ट चयनित नहीं।",
   "list.addOne": "एक जोड़ें",
   "series.season": "सीज़न {n}",
+  "series.seasonsCount": "{count} सीज़न",
+  "series.seasonsCountOne": "{count} सीज़न",
   "series.episode.fallback": "एपिसोड {n}",
   "series.episode.startBeginningAria": "{title} को शुरू से शुरू करें",
   "series.upNext.playingIn": "{seconds}s में चल रहा है",

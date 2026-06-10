@@ -734,6 +734,8 @@
   "list.noPlaylistAddOne": "Geen afspeellijst geselecteerd.",
   "list.addOne": "Voeg er een toe",
   "series.season": "Seizoen {n}",
+  "series.seasonsCount": "{count} seizoenen",
+  "series.seasonsCountOne": "{count} seizoen",
   "series.episode.fallback": "Aflevering {n}",
   "series.episode.startBeginningAria": "{title} vanaf het begin starten",
   "series.upNext.playingIn": "Speelt over {seconds}s",

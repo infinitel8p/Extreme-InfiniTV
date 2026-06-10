@@ -734,6 +734,8 @@
   "list.noPlaylistAddOne": "Nenhuma lista selecionada.",
   "list.addOne": "Adicione uma",
   "series.season": "Temporada {n}",
+  "series.seasonsCount": "{count} temporadas",
+  "series.seasonsCountOne": "{count} temporada",
   "series.episode.fallback": "Episódio {n}",
   "series.episode.startBeginningAria": "Começar {title} do início",
   "series.upNext.playingIn": "Reprodução em {seconds} s",

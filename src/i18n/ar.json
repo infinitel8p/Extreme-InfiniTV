@@ -734,6 +734,8 @@
   "list.noPlaylistAddOne": "لم يتم اختيار قائمة تشغيل.",
   "list.addOne": "أضف واحدة",
   "series.season": "الموسم {n}",
+  "series.seasonsCount": "{count} مواسم",
+  "series.seasonsCountOne": "{count} موسم",
   "series.episode.fallback": "الحلقة {n}",
   "series.episode.startBeginningAria": "ابدأ {title} من البداية",
   "series.upNext.playingIn": "يبدأ خلال {seconds} ث",

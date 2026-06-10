@@ -734,6 +734,8 @@
   "list.noPlaylistAddOne": "Плейлист не выбран.",
   "list.addOne": "Добавьте",
   "series.season": "Сезон {n}",
+  "series.seasonsCount": "{count} сезонов",
+  "series.seasonsCountOne": "{count} сезон",
   "series.episode.fallback": "Эпизод {n}",
   "series.episode.startBeginningAria": "Запустить {title} с начала",
   "series.upNext.playingIn": "Воспроизведение через {seconds} с",

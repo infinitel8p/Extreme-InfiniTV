@@ -734,6 +734,8 @@
   "list.noPlaylistAddOne": "未选择播放列表。",
   "list.addOne": "添加一个",
   "series.season": "第 {n} 季",
+  "series.seasonsCount": "{count} 季",
+  "series.seasonsCountOne": "{count} 季",
   "series.episode.fallback": "第 {n} 集",
   "series.episode.startBeginningAria": "从头开始播放 {title}",
   "series.upNext.playingIn": "{seconds} 秒后播放",

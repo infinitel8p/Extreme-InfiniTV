@@ -734,6 +734,8 @@
   "list.noPlaylistAddOne": "Tidak ada playlist dipilih.",
   "list.addOne": "Tambahkan satu",
   "series.season": "Musim {n}",
+  "series.seasonsCount": "{count} musim",
+  "series.seasonsCountOne": "{count} musim",
   "series.episode.fallback": "Episode {n}",
   "series.episode.startBeginningAria": "Mulai {title} dari awal",
   "series.upNext.playingIn": "Diputar dalam {seconds} detik",

@@ -734,6 +734,8 @@
   "list.noPlaylistAddOne": "Keine Wiedergabeliste ausgewählt.",
   "list.addOne": "Eine hinzufügen",
   "series.season": "Staffel {n}",
+  "series.seasonsCount": "{count} Staffeln",
+  "series.seasonsCountOne": "{count} Staffel",
   "series.episode.fallback": "Folge {n}",
   "series.episode.startBeginningAria": "{title} von vorn starten",
   "series.upNext.playingIn": "Wird in {seconds} s abgespielt",

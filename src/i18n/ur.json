@@ -734,6 +734,8 @@
   "list.noPlaylistAddOne": "کوئی پلے لسٹ منتخب نہیں۔",
   "list.addOne": "ایک شامل کریں",
   "series.season": "سیزن {n}",
+  "series.seasonsCount": "{count} سیزن",
+  "series.seasonsCountOne": "{count} سیزن",
   "series.episode.fallback": "قسط {n}",
   "series.episode.startBeginningAria": "{title} کو شروع سے شروع کریں",
   "series.upNext.playingIn": "{seconds}s میں چل رہا ہے",

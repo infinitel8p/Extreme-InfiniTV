@@ -734,6 +734,8 @@
   "list.noPlaylistAddOne": "Seçili oynatma listesi yok.",
   "list.addOne": "Bir tane ekle",
   "series.season": "{n}. Sezon",
+  "series.seasonsCount": "{count} sezon",
+  "series.seasonsCountOne": "{count} sezon",
   "series.episode.fallback": "{n}. Bölüm",
   "series.episode.startBeginningAria": "{title} öğesini baştan başlat",
   "series.upNext.playingIn": "{seconds} sn içinde oynatılıyor",
