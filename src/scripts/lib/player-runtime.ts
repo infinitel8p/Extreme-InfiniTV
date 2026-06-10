@@ -647,9 +647,116 @@ interface MpegtsHandle {
   destroy: () => void
 }
 
+// Custom mpegts.js loader that streams via tauri-plugin-http instead of the
+// WebView's fetch. The plugin runs the request on the Rust side, so CORS
+// doesn't apply - some providers (and their redirect targets) don't send
+// Access-Control-Allow-Origin and would otherwise feed zero bytes to MSE.
+// Used as a one-shot fallback after a network error on the default loader.
+function createTauriStreamLoaderClass(mpegts: any) {
+  const { BaseLoader, LoaderStatus, LoaderErrors } = mpegts
+
+  return class TauriStreamLoader extends BaseLoader {
+    private _seekHandler: any
+    private _abortController: AbortController | null = null
+    private _requestAbort = false
+    private _receivedLength = 0
+    private _rangeFrom = 0
+
+    static isSupported() {
+      return isTauri
+    }
+
+    constructor(seekHandler: any) {
+      super("tauri-stream-loader")
+      this._seekHandler = seekHandler
+      this._needStash = true
+    }
+
+    destroy() {
+      if (this.isWorking()) this.abort()
+      super.destroy()
+    }
+
+    open(dataSource: any, range: { from: number; to: number }) {
+      this._status = LoaderStatus.kConnecting
+      this._requestAbort = false
+      this._receivedLength = 0
+      this._rangeFrom = range?.from > 0 ? range.from : 0
+      this._abortController = new AbortController()
+      const sourceURL = dataSource?.redirectedURL || dataSource?.url
+      const seekConfig = this._seekHandler.getConfig(sourceURL, range)
+      void this._openStream(seekConfig)
+    }
+
+    private async _openStream(seekConfig: { url: string; headers: any }) {
+      try {
+        const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http")
+        const headers = new Headers(seekConfig.headers || undefined)
+        const customUa = getUserAgent()
+        if (customUa && !headers.has("User-Agent")) headers.set("User-Agent", customUa)
+        const response = await tauriFetch(seekConfig.url, {
+          method: "GET",
+          headers,
+          signal: this._abortController?.signal,
+        })
+        if (this._requestAbort) {
+          try { await response.body?.cancel() } catch {}
+          return
+        }
+        if (!response.ok || !response.body) {
+          this._status = LoaderStatus.kError
+          this.onError?.(LoaderErrors.HTTP_STATUS_CODE_INVALID, {
+            code: response.status,
+            msg: response.statusText || `HTTP ${response.status}`,
+          })
+          return
+        }
+        const contentLength = parseInt(response.headers.get("content-length") || "", 10)
+        if (Number.isFinite(contentLength) && contentLength > 0) {
+          this.onContentLengthKnown?.(contentLength)
+        }
+        this._status = LoaderStatus.kBuffering
+        const reader = response.body.getReader()
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (this._requestAbort) {
+            try { await reader.cancel() } catch {}
+            return
+          }
+          if (done) {
+            this._status = LoaderStatus.kComplete
+            this.onComplete?.(this._rangeFrom, this._rangeFrom + this._receivedLength - 1)
+            return
+          }
+          const byteStart = this._rangeFrom + this._receivedLength
+          this._receivedLength += value.byteLength
+          const chunk =
+            value.byteOffset === 0 && value.byteLength === value.buffer.byteLength
+              ? value.buffer
+              : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
+          this.onDataArrival?.(chunk, byteStart, this._receivedLength)
+        }
+      } catch (fetchError: any) {
+        if (this._requestAbort) return
+        this._status = LoaderStatus.kError
+        this.onError?.(LoaderErrors.EXCEPTION, {
+          code: -1,
+          msg: String(fetchError?.message || fetchError),
+        })
+      }
+    }
+
+    abort() {
+      this._requestAbort = true
+      try { this._abortController?.abort() } catch {}
+    }
+  }
+}
+
 async function attachMpegts(
   videoEl: HTMLVideoElement,
   url: string,
+  onFatalError?: (detail: string) => void,
 ): Promise<MpegtsHandle | null> {
   const mpegtsMod = await import("mpegts.js")
   const mpegts = (mpegtsMod as any).default || mpegtsMod
@@ -657,24 +764,67 @@ async function attachMpegts(
     log.warn("[xt:player] mpegts.js unsupported in this WebView")
     return null
   }
-  const player = mpegts.createPlayer({
-    type: "mpegts",
-    isLive: true,
-    url,
-  })
-  player.attachMediaElement(videoEl)
-  player.load()
-  try {
-    const playPromise = player.play?.()
-    if (playPromise && typeof (playPromise as Promise<void>).catch === "function") {
-      (playPromise as Promise<void>).catch(() => {})
-    }
-  } catch {}
+
+  let disposed = false
+  let player: any = null
+  let triedTauriLoader = false
+
+  const teardown = () => {
+    if (!player) return
+    try { player.unload() } catch {}
+    try { player.detachMediaElement() } catch {}
+    try { player.destroy() } catch {}
+    player = null
+  }
+
+  const start = (useTauriLoader: boolean) => {
+    const config = useTauriLoader
+      ? { customLoader: createTauriStreamLoaderClass(mpegts) }
+      : undefined
+    player = mpegts.createPlayer({ type: "mpegts", isLive: true, url }, config)
+    player.on(
+      mpegts.Events.ERROR,
+      (errorType: string, errorDetail: string, errorInfo: any) => {
+        if (disposed) return
+        // CORS-blocked or otherwise WebView-unreachable stream: retry once
+        // through the Rust-side HTTP loader before declaring failure.
+        if (
+          errorType === mpegts.ErrorTypes.NETWORK_ERROR &&
+          isTauri &&
+          !triedTauriLoader
+        ) {
+          triedTauriLoader = true
+          log.warn(
+            "[xt:player] mpegts network error - retrying via Tauri HTTP loader:",
+            errorDetail
+          )
+          teardown()
+          start(true)
+          return
+        }
+        const detail = errorInfo?.msg
+          ? `${errorDetail}: ${errorInfo.msg}`
+          : String(errorDetail || errorType)
+        log.error("[xt:player] mpegts fatal error:", errorType, detail)
+        teardown()
+        onFatalError?.(detail)
+      }
+    )
+    player.attachMediaElement(videoEl)
+    player.load()
+    try {
+      const playPromise = player.play?.()
+      if (playPromise && typeof (playPromise as Promise<void>).catch === "function") {
+        (playPromise as Promise<void>).catch(() => {})
+      }
+    } catch {}
+  }
+
+  start(false)
   return {
     destroy() {
-      try { player.unload() } catch {}
-      try { player.detachMediaElement() } catch {}
-      try { player.destroy() } catch {}
+      disposed = true
+      teardown()
     },
   }
 }
@@ -778,7 +928,13 @@ async function mountVideoJs(
       loadHls(src)
       return
     }
-    const handle = await attachMpegts(videoElement, src)
+    const handle = await attachMpegts(videoElement, src, (detail) => {
+      if (pendingSrc !== src) return
+      activeMpegts = null
+      // Surface through Video.js so the page-level "error" listener runs
+      // (retry, toast, auto-diagnostic) instead of buffering forever.
+      try { player.error?.({ code: 2, message: detail }) } catch {}
+    })
     if (!handle) {
       loadHls(src)
       return

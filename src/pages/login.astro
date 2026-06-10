@@ -529,6 +529,21 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 	const mirrorsAddBtn = $("mirrorsAddBtn");
 	const xtreamAdvancedDetails = $("xtream-advanced");
 	const liveContainerEl = /** @type {HTMLSelectElement} */ ($("liveContainer"));
+	let liveContainerTouched = false;
+	liveContainerEl?.addEventListener("change", () => {
+		liveContainerTouched = true;
+	});
+
+	function applyLiveContainerAutoDefault(test) {
+		if (liveContainerTouched || !liveContainerEl) return false;
+		const formats = test?.allowedOutputFormats;
+		if (!Array.isArray(formats) || formats.length === 0) return false;
+		if (formats.includes("m3u8") || !formats.includes("ts")) return false;
+		if (liveContainerEl.value === "ts") return false;
+		liveContainerEl.value = "ts";
+		xtreamAdvancedDetails?.setAttribute("open", "");
+		return true;
+	}
 	const epgTestBtn = $("epgTestBtn");
 	const epgTestStatus = $("epgTestStatus");
 	const epgDisableProviderRow = $("epgDisableProviderRow");
@@ -1310,6 +1325,10 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				);
 				reflectResolvedUrls(resolveds[0], resolveds.slice(1));
 				const results = resolveds.map((resolved) => resolved.test);
+				const containerAutoSwitched = applyLiveContainerAutoDefault(resolveds[0].test);
+				const containerNote = containerAutoSwitched
+					? "\n" + t("login.status.liveContainerAuto")
+					: "";
 
 				// Single-candidate path keeps the old single-line message.
 				if (candidates.length === 1) {
@@ -1319,7 +1338,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 							: result.status === "expired" ? "expired"
 							: result.status === "inactive" ? "inactive"
 							: "unavailable",
-						describeResolvedCandidate(resolveds[0])
+						describeResolvedCandidate(resolveds[0]) + containerNote
 					);
 				} else {
 					// Aggregate verdict = best candidate. Body lists each.
@@ -1335,7 +1354,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 					const lines = candidates.map((cand, idx) =>
 						`${cand.label}: ${describeResolvedCandidate(resolveds[idx])}`
 					);
-					showStatus(bestStatus, lines.join("\n"));
+					showStatus(bestStatus, lines.join("\n") + containerNote);
 				}
 			} else {
 				const rawUrl = m3uEl.value.trim();
@@ -1498,6 +1517,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 					username: mirror.username,
 					password: mirror.password,
 				}));
+				applyLiveContainerAutoDefault(primaryResolved.test);
 				const liveContainer = liveContainerEl?.value === "ts" ? "ts" : "m3u8";
 				const patch = {
 					type: "xtream",

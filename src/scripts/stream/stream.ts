@@ -23,8 +23,12 @@ import {
   getFavorites,
   pushRecent,
   getRecents,
+  getViewSort,
+  setViewSort,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
+import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
+import { fmtChannelIdentity } from "@/scripts/lib/format.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { attachPopoverSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
@@ -37,6 +41,7 @@ import {
 } from "@/scripts/lib/android-video-launcher.js"
 import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
 import { parseM3U as parseSharedM3U } from "@/scripts/lib/m3u-parser.ts"
+import { hasHevcNameHint, deviceSupportsHevc } from "@/scripts/lib/codec-hints.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { toast, toastError } from "@/scripts/lib/toast.js"
@@ -439,6 +444,21 @@ function refreshNowSlots() {
   }
 }
 
+function shouldWarnHevc(name) {
+  return hasHevcNameHint(name) && !deviceSupportsHevc()
+}
+
+function buildHevcBadge() {
+  const badge = document.createElement("span")
+  badge.className =
+    "hevc-badge inline-flex shrink-0 items-center rounded-md border border-line bg-surface-2 px-1.5 text-2xs font-medium text-fg-3"
+  badge.textContent = "HEVC"
+  const hint = t("livetv.hevcBadge.tooltip")
+  badge.title = hint
+  badge.setAttribute("aria-label", hint)
+  return badge
+}
+
 function renderVirtual() {
   if (!listEl || !viewport) return
   const scrollTop = listEl.scrollTop
@@ -505,13 +525,17 @@ function renderVirtual() {
 
     const wrap = document.createElement("div")
     wrap.className = "min-w-0 flex-1"
+    const nameRow = document.createElement("div")
+    nameRow.className = "flex min-w-0 items-center gap-1.5"
     const nameEl = document.createElement("div")
     nameEl.className = "truncate text-sm font-medium"
     nameEl.textContent = ch.name
+    nameRow.appendChild(nameEl)
+    if (shouldWarnHevc(ch.name)) nameRow.appendChild(buildHevcBadge())
     const meta = document.createElement("div")
     meta.className = "truncate text-xs text-fg-3 tabular-nums"
-    meta.textContent = `#${ch.id}${ch.category ? ` · ${ch.category}` : ""}`
-    wrap.append(nameEl, meta)
+    meta.textContent = `${fmtChannelIdentity(ch.chno, ch.id)}${ch.category ? ` · ${ch.category}` : ""}`
+    wrap.append(nameRow, meta)
     const nowSlot = document.createElement("div")
     nowSlot.className = "channel-now-slot"
     wrap.appendChild(nowSlot)
@@ -1001,21 +1025,44 @@ const applyFilter = () => {
     })
   }
 
+  /** @type {Map<number, number> | null} */
+  let scoreById = null
   if (tokens.length) {
+    scoreById = new Map()
     const scored = []
     for (const channel of out) {
       const score = scoreNormMatch(channel.norm, tokens)
-      if (score > 0) scored.push({ channel, score })
+      if (score > 0) {
+        scored.push(channel)
+        scoreById.set(channel.id, score)
+      }
     }
-    scored.sort((first, second) => second.score - first.score)
-    out = scored.map((row) => row.channel)
+    out = scored
   }
+
+  const sortMode = activePlaylistId
+    ? getViewSort(activePlaylistId, "live")
+    : "default"
+  out = sortChannelsForView(out, sortMode, scoreById)
 
   listStatus.textContent = `${out.length.toLocaleString()} of ${all.length.toLocaleString()} channels`
   mountVirtualList(out)
 }
 
 searchEl?.addEventListener("input", debounce(applyFilter, 160))
+
+const sortEl = /** @type {HTMLSelectElement|null} */ (
+  document.getElementById("channel-sort")
+)
+function syncSortControl() {
+  if (!sortEl || !activePlaylistId) return
+  sortEl.value = getViewSort(activePlaylistId, "live")
+}
+sortEl?.addEventListener("change", () => {
+  if (!activePlaylistId || !sortEl) return
+  setViewSort(activePlaylistId, "live", sortEl.value)
+  applyFilter()
+})
 
 async function ensureCategoryMap() {
   if (categoryMap) return categoryMap
@@ -1123,6 +1170,7 @@ async function loadChannels() {
   activePlaylistTitle = active.title || ""
 
   await ensurePrefsLoaded()
+  syncSortControl()
   await Promise.all([
     hydrateCache(active._id, "live"),
     hydrateCache(active._id, "m3u"),
@@ -1162,11 +1210,7 @@ async function loadChannels() {
             if (!r.ok) throw new Error(`M3U ${r.status}: ${await r.text()}`)
             text = await r.text()
           }
-          return parseM3U(text)
-            .filter((x) => x.url && x.name)
-            .sort((a, b) =>
-              a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-            )
+          return parseM3U(text).filter((x) => x.url && x.name)
         }
       )
       indexDirectUrls(data)
@@ -1223,13 +1267,11 @@ async function loadChannels() {
               category,
               logo: ch.stream_icon || null,
               tvgId: String(ch.epg_channel_id || "") || undefined,
+              chno: Number(ch.num) || undefined,
               norm: normalize(name + " " + category),
             }
           })
           .filter((x) => x.id && x.name)
-          .sort((a, b) =>
-            a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-          )
       }
     )
     directUrlById = new Map()
@@ -1370,7 +1412,11 @@ const ensureEmbeddedPlayer = async (backend) => {
     clearStallSentinel()
     const dismissGeneric = toastError(
       t("stream.error.cantPlay", { channel: ctx.name || `#${ctx.streamId}` }),
-      { description: t("stream.error.checkConnection") }
+      {
+        description: shouldWarnHevc(ctx.name)
+          ? t("stream.error.hevcHint")
+          : t("stream.error.checkConnection"),
+      }
     )
     // Background diagnostic: turn the generic "couldn't play" toast into an
     // actionable one ("HLS playlist returned 403", "Server unreachable",
@@ -1817,12 +1863,13 @@ async function play(streamId, name) {
       '<span class="status-badge status-badge--live shrink-0">ON</span>'
     const label = document.createElement("span")
     label.className = "truncate min-w-0 flex-1"
-    label.append(`Channel ${streamId}: `)
+    label.append(`${fmtChannelIdentity(channel?.chno, streamId)}: `)
     const nameEl = document.createElement("span")
     nameEl.className = "text-accent"
     nameEl.textContent = name
     label.appendChild(nameEl)
     wrap.appendChild(label)
+    if (shouldWarnHevc(name)) wrap.appendChild(buildHevcBadge())
     currentEl.appendChild(wrap)
 
     const btn = document.createElement("button")

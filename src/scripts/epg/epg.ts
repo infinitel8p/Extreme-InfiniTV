@@ -27,8 +27,10 @@ import {
   getChannelEpgOverride,
   setChannelEpgOverride,
   clearChannelEpgOverride,
+  getViewSort,
   CHANNEL_EPG_CHANGED_EVENT,
 } from "@/scripts/lib/preferences.js"
+import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 
 const CAT_FAVORITES = "__favorites__"
@@ -692,7 +694,11 @@ function pickChannels(cachedChannels) {
   const withEpg = filtered.filter((channel) =>
     !!effectiveTvgId(channel, activePlaylistId)
   )
-  return withEpg.slice(0, MAX_CHANNELS)
+  // Mirror Live TV's saved sort
+  const sortMode = activePlaylistId
+    ? getViewSort(activePlaylistId, "live")
+    : "default"
+  return sortChannelsForView(withEpg, sortMode).slice(0, MAX_CHANNELS)
 }
 
 async function fetchXtreamChannels() {
@@ -745,12 +751,10 @@ async function fetchXtreamChannels() {
         category,
         logo: ch.stream_icon || null,
         tvgId: String(ch.epg_channel_id || "") || undefined,
+        chno: Number(ch.num) || undefined,
       }
     })
     .filter((x) => x.id && x.name)
-    .sort((a, b) =>
-      a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-    )
 }
 
 // ----------------------------

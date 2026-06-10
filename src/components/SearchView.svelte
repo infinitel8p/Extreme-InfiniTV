@@ -12,6 +12,7 @@
     EPG_LOADED_EVENT,
   } from "@/scripts/lib/epg-data.js"
   import { kindLabel } from "@/scripts/lib/kinds.js"
+  import { fmtChannelIdentity } from "@/scripts/lib/format.ts"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import {
     observeSeasonCount,
@@ -138,7 +139,7 @@
         id: Number(c.id),
         name: c.name || "",
         logo: c.logo || null,
-        subtitle: c.category || "Live",
+        subtitle: `${fmtChannelIdentity(c.chno, c.id)} · ${c.category || "Live"}`,
         href: buildHref("live", c.id),
         norm: c.norm || normalize(`${c.name || ""} ${c.category || ""}`),
       })

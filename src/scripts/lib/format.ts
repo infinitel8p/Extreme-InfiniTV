@@ -1,3 +1,5 @@
+import { t } from "@/scripts/lib/i18n.ts"
+
 const HTML_ESCAPES: Record<string, string> = {
   "&": "&amp;",
   "<": "&lt;",
@@ -8,6 +10,16 @@ const HTML_ESCAPES: Record<string, string> = {
 
 export function escapeHtml(s: unknown): string {
   return String(s).replace(/[&<>"']/g, (c) => HTML_ESCAPES[c] ?? c)
+}
+
+// channel identity
+export function fmtChannelIdentity(
+  chno: number | null | undefined,
+  id: number | string,
+): string {
+  return typeof chno === "number" && Number.isFinite(chno)
+    ? t("channel.identityNumbered", { number: chno, id })
+    : t("channel.identityId", { id })
 }
 
 export function fmtAge(ts: number | null | undefined): string | null {
