@@ -643,6 +643,46 @@ async function probeContainer(src: string): Promise<StreamKind> {
   }
 }
 
+// Origins whose .ts live URLs actually serve an HLS playlist
+const tsServesHlsOrigins = new Set<string>()
+
+function originOf(src: string): string | null {
+  try {
+    return new URL(src).origin
+  } catch {
+    return null
+  }
+}
+
+// Confirm a .ts source is really an HLS playlist before flipping a failed
+// mpegts load over to hls.js
+async function tsSourceIsActuallyHls(src: string): Promise<boolean> {
+  try {
+    const { providerFetch } = await import("@/scripts/lib/provider-fetch.js")
+    const controller =
+      typeof AbortController !== "undefined" ? new AbortController() : null
+    const timer = controller ? setTimeout(() => controller.abort(), 4000) : null
+    try {
+      const response = await providerFetch(src, {
+        method: "GET",
+        headers: { Range: "bytes=0-511" },
+        signal: controller?.signal,
+      })
+      const contentType = (response.headers.get("content-type") || "").toLowerCase()
+      if (contentType.includes("mpegurl")) {
+        try { response.body?.cancel?.() } catch {}
+        return true
+      }
+      const head = await response.text()
+      return /^\uFEFF?\s*#EXTM3U/.test(head)
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  } catch {
+    return false
+  }
+}
+
 interface MpegtsHandle {
   destroy: () => void
 }
@@ -919,6 +959,23 @@ async function mountVideoJs(
     player.src({ src, type: type || "video/mp4" })
   }
 
+  async function recoverFailedTs(src: string, detail: string) {
+    if (pendingSrc !== src) return
+    const actuallyHls = await tsSourceIsActuallyHls(src)
+    if (pendingSrc !== src) return
+    if (actuallyHls) {
+      const origin = originOf(src)
+      if (origin) tsServesHlsOrigins.add(origin)
+      log.warn(
+        "[xt:player] .ts source served an HLS playlist - falling back to hls.js:",
+        src
+      )
+      loadHls(src)
+      return
+    }
+    try { player.error?.({ code: 2, message: detail }) } catch {}
+  }
+
   async function loadTs(src: string) {
     destroyMpegts()
     try { player.pause?.() } catch {}
@@ -931,9 +988,7 @@ async function mountVideoJs(
     const handle = await attachMpegts(videoElement, src, (detail) => {
       if (pendingSrc !== src) return
       activeMpegts = null
-      // Surface through Video.js so the page-level "error" listener runs
-      // (retry, toast, auto-diagnostic) instead of buffering forever.
-      try { player.error?.({ code: 2, message: detail }) } catch {}
+      void recoverFailedTs(src, detail)
     })
     if (!handle) {
       loadHls(src)
@@ -952,7 +1007,9 @@ async function mountVideoJs(
       pendingSrc = src
       const hint = streamKindHint(src, type)
       if (hint === "ts") {
-        loadTs(src)
+        const origin = originOf(src)
+        if (origin && tsServesHlsOrigins.has(origin)) loadHls(src)
+        else loadTs(src)
         return
       }
       if (hint === "hls") {
