@@ -85,61 +85,93 @@ function parseHlsPlaylist(text) {
   }
 }
 
+function readMeta(response, method, startTs) {
+  return {
+    ok: response.ok || response.status === 206,
+    status: response.status,
+    statusText: response.statusText || "",
+    contentType: response.headers.get("content-type") || "",
+    contentLength:
+      Number(response.headers.get("content-length") || 0) ||
+      Number(
+        (response.headers.get("content-range") || "").match(/\/(\d+)\s*$/)?.[1] ||
+          0
+      ),
+    acao: response.headers.get("access-control-allow-origin"),
+    // Final URL after redirects
+    finalUrl: response.url || "",
+    latencyMs: Math.round(performance.now() - startTs),
+    method,
+  }
+}
+
 async function headOrGet(url) {
   const start = performance.now()
+  let headInfo = null
   try {
     const response = await withTimeout(
       providerFetch(url, { method: "HEAD" }),
       FETCH_TIMEOUT_MS,
       "HEAD"
     )
-    return {
-      ok: response.ok,
-      status: response.status,
-      statusText: response.statusText || "",
-      contentType: response.headers.get("content-type") || "",
-      contentLength: Number(response.headers.get("content-length") || 0),
-      latencyMs: Math.round(performance.now() - start),
-      method: "HEAD",
-    }
+    headInfo = readMeta(response, "HEAD", start)
+    if (headInfo.ok) return headInfo
   } catch (headError) {
-    // Some HLS servers reject HEAD outright. Fall back to a tiny ranged GET
-    // so the diagnostic still produces something useful.
+    headInfo = { error: String(headError?.message || headError) }
+  }
+  try {
+    const response = await withTimeout(
+      providerFetch(url, {
+        method: "GET",
+        headers: { Range: "bytes=0-0" },
+      }),
+      FETCH_TIMEOUT_MS,
+      "GET"
+    )
+    const meta = readMeta(response, "GET (range)", start)
+    if (headInfo?.error) meta.fallback = headInfo.error
+    else if (headInfo?.status) meta.headStatus = headInfo.status
+    return meta
+  } catch (getError) {
+    return {
+      ok: false,
+      status: headInfo?.status || 0,
+      statusText: headInfo?.statusText || "",
+      contentType: headInfo?.contentType || "",
+      contentLength: 0,
+      latencyMs: Math.round(performance.now() - start),
+      method: headInfo?.status ? "HEAD+GET" : "HEAD",
+      error: String(getError?.message || getError),
+    }
+  }
+}
+
+// Plain WebView fetch
+async function probeWebViewFetch(url) {
+  const start = performance.now()
+  try {
+    const response = await withTimeout(
+      fetch(url, { method: "GET", mode: "cors" }),
+      FETCH_TIMEOUT_MS,
+      "WebView GET"
+    )
     try {
-      const response = await withTimeout(
-        providerFetch(url, {
-          method: "GET",
-          headers: { Range: "bytes=0-0" },
-        }),
-        FETCH_TIMEOUT_MS,
-        "GET"
-      )
-      return {
-        ok: response.ok || response.status === 206,
-        status: response.status,
-        statusText: response.statusText || "",
-        contentType: response.headers.get("content-type") || "",
-        contentLength:
-          Number(response.headers.get("content-length") || 0) ||
-          Number(
-            (response.headers.get("content-range") || "").match(/\/(\d+)\s*$/)?.[1] ||
-              0
-          ),
-        latencyMs: Math.round(performance.now() - start),
-        method: "GET (range)",
-        fallback: String(headError?.message || headError),
-      }
-    } catch (getError) {
-      return {
-        ok: false,
-        status: 0,
-        statusText: "",
-        contentType: "",
-        contentLength: 0,
-        latencyMs: Math.round(performance.now() - start),
-        method: "HEAD",
-        error: String(getError?.message || getError),
-      }
+      response.body?.cancel?.()
+    } catch {}
+    return {
+      ok: response.ok || response.status === 206,
+      status: response.status,
+      acao: response.headers.get("access-control-allow-origin"),
+      finalUrl: response.url || "",
+      latencyMs: Math.round(performance.now() - start),
+    }
+  } catch (error) {
+    // A thrown fetch here is the telltale CORS / mixed-content / network block.
+    return {
+      ok: false,
+      blocked: true,
+      latencyMs: Math.round(performance.now() - start),
+      error: String(error?.message || error),
     }
   }
 }
@@ -153,12 +185,21 @@ async function headOrGet(url) {
  * @returns {Promise<object>}
  */
 export async function diagnoseStream(url, onUpdate) {
+  const appOrigin = typeof location !== "undefined" ? location.origin : ""
+  const secureContext =
+    typeof isSecureContext !== "undefined"
+      ? isSecureContext
+      : /^https:/i.test(appOrigin)
   const report = {
     url,
     startedAt: Date.now(),
+    appOrigin,
+    secureContext,
+    mixedContent: secureContext && /^http:\/\//i.test(url),
     head: null,
     playlist: null,
     firstSegment: null,
+    webviewProbe: null,
     nonHttp: false,
     error: "",
   }
@@ -272,6 +313,12 @@ export async function diagnoseStream(url, onUpdate) {
     }
   }
 
+  // probe through the WebView's own fetch
+  const probeTarget = report.firstSegment?.url || url
+  report.webviewProbe = await probeWebViewFetch(probeTarget)
+  report.webviewProbe.target = probeTarget
+  emit()
+
   report.finishedAt = Date.now()
   emit()
   return report
@@ -312,6 +359,23 @@ export function summarizeReport(report) {
       reason: report.firstSegment.error
         ? t("streamTest.summary.firstSegmentFailed", { error: report.firstSegment.error })
         : t("streamTest.summary.firstSegmentResponded", { status: report.firstSegment.status || 0 }),
+    }
+  }
+
+  if (report.mixedContent) {
+    return {
+      verdict: "warn",
+      reason:
+        t("streamTest.summary.mixedContent") ||
+        "Stream is http:// but the app runs in a secure context, so the embedded player blocks it as mixed content. Use an external player (MPV/VLC).",
+    }
+  }
+  if (report.webviewProbe && report.webviewProbe.blocked) {
+    return {
+      verdict: "warn",
+      reason:
+        t("streamTest.summary.webviewBlocked") ||
+        "Stream is reachable, but the embedded player is blocked by browser security (CORS / mixed content). On desktop it now routes around this; otherwise use an external player (MPV/VLC).",
     }
   }
   return {
