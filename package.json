@@ -39,7 +39,7 @@
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@tauri-apps/plugin-window-state": "~2.4.1",
     "artplayer": "^5.4.0",
-    "astro": "^6.4.2",
+    "astro": "^6.4.6",
     "dompurify": "^3.4.7",
     "hls.js": "^1.6.16",
     "marked": "^18.0.4",
