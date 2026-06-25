@@ -81,6 +81,10 @@ function jobKey(playlistId: string, seriesId: string | number): string {
   return `${playlistId}::${seriesId}`
 }
 
+if (typeof document !== "undefined") {
+  document.addEventListener("xt:active-changed", () => _failed.clear())
+}
+
 function pump(): void {
   while (_active < MAX_CONCURRENT && _queue.length) {
     const job = _queue.shift()!

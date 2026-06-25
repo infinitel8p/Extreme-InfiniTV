@@ -35,7 +35,6 @@ import {
 import {
   getLocalContent,
   setLocalContent,
-  LOCAL_CONTENT_MAX_BYTES,
 } from "@/scripts/lib/local-content.js"
 
 const FORMAT_VERSION = 1
@@ -131,15 +130,11 @@ export async function importAll(blob) {
       : 0
   }
 
-  // Restore local-m3u text saved by exportAll; setLocalContent re-enforces the cap.
+  // Restore local-m3u text saved by exportAll; setLocalContent enforces the
+  // byte cap and returns false when the payload is rejected.
   if (b.localContent && typeof b.localContent === "object") {
     for (const [entryId, text] of Object.entries(b.localContent)) {
-      if (
-        typeof entryId === "string" &&
-        entryId &&
-        typeof text === "string" &&
-        text.length <= LOCAL_CONTENT_MAX_BYTES
-      ) {
+      if (typeof entryId === "string" && entryId && typeof text === "string") {
         if (await setLocalContent(entryId, text)) summary.localContent++
       }
     }

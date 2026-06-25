@@ -32,5 +32,8 @@ docs/preview.log
 buildfiles/
 dump/
 
+# local dev tools / scratch scripts
+tools/
+
 cmds.md
 store-listings.md

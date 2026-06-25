@@ -48,9 +48,12 @@ export function sortChannelsForView<T extends SortableChannel>(
   scoreById?: Map<number, number> | null,
 ): T[] {
   if (mode === "number") {
-    return list
-      .slice()
-      .sort((first, second) => channelNumber(first) - channelNumber(second))
+    return list.slice().sort((first, second) => {
+      const firstNumber = channelNumber(first)
+      const secondNumber = channelNumber(second)
+      if (firstNumber === secondNumber) return 0
+      return firstNumber - secondNumber
+    })
   }
   if (mode === "az" || mode === "za") {
     const direction = mode === "za" ? -1 : 1
