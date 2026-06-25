@@ -14,6 +14,64 @@ const HEVC_TEST_CODECS = [
   'video/mp4; codecs="hev1.1.6.L123.B0"',
 ]
 
+// RFC 6381 codec strings as reported by hls.js (BUFFER_CODECS), mpegts.js
+// (MEDIA_INFO) or an HLS manifest CODECS attribute: "hvc1.1.6.L120.B0",
+// "hev1.2.4.L153", occasionally a bare "hevc"/"h265" label.
+const HEVC_CODEC_STRING_RX = /^(?:hev1|hvc1|hevc|h265)\b|^(?:hev1|hvc1)\./i
+
+export function isHevcCodecString(codec: string | null | undefined): boolean {
+  if (!codec) return false
+  return HEVC_CODEC_STRING_RX.test(codec.trim())
+}
+
+/** Pick the first HEVC entry out of a CODECS attribute list ("hvc1...,mp4a..."). */
+export function findHevcInCodecList(codecs: string | null | undefined): string | null {
+  if (!codecs) return null
+  for (const part of codecs.split(",")) {
+    const codec = part.trim()
+    if (isHevcCodecString(codec)) return codec
+  }
+  return null
+}
+
+export type StartFailureKind = "hevc" | "codec" | "unknown"
+
+export interface StartFailureVerdict {
+  kind: StartFailureKind
+  /** Actual codec string when the engine reported one; null when inferred. */
+  codec: string | null
+}
+
+// Engine error details that point at a codec/format problem rather than a
+// network one: hls.js bufferAddCodecError / bufferIncompatibleCodecsError,
+// mpegts.js CodecUnsupported / FormatUnsupported, and the synthetic
+// "videoDecodeFailure" from the dead-video watchdog (track present, audio
+// playing, zero frames ever decoded).
+const CODEC_ERROR_DETAIL_RX = /codec|decode|format.?unsupported|incompatible/i
+
+export function classifyStartFailure(input: {
+  videoCodec?: string | null
+  errorDetail?: string | null
+  nameHint?: boolean
+  deviceHevc: boolean
+}): StartFailureVerdict {
+  const videoCodec = input.videoCodec?.trim() || null
+  const codecError = CODEC_ERROR_DETAIL_RX.test(input.errorDetail || "")
+
+  if (videoCodec && isHevcCodecString(videoCodec)) {
+    if (!input.deviceHevc || codecError) return { kind: "hevc", codec: videoCodec }
+    return { kind: "unknown", codec: videoCodec }
+  }
+
+  const nameSaysHevc = input.nameHint && !input.deviceHevc && !videoCodec
+  if (codecError) {
+    if (nameSaysHevc) return { kind: "hevc", codec: null }
+    return { kind: "codec", codec: videoCodec }
+  }
+  if (nameSaysHevc) return { kind: "hevc", codec: null }
+  return { kind: "unknown", codec: videoCodec }
+}
+
 let cachedHevcSupport: boolean | null = null
 
 // MSE first (mpegts.js / hls.js remux HEVC into fMP4), then native canPlayType

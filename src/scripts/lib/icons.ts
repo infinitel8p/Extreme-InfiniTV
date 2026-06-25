@@ -40,6 +40,12 @@ export const ICON_INFO = wrap(
 
 export const ICON_CHEVRON_DOWN = wrap('<path d="M6 9l6 6l6 -6" />')
 
+export const ICON_ALERT_TRIANGLE = wrap(
+  '<path d="M12 9v4" />' +
+    '<path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.871l-8.106 -13.534a1.914 1.914 0 0 0 -3.274 0z" />' +
+    '<path d="M12 16h.01" />'
+)
+
 export const ICON_EXTERNAL_LINK = wrap(
   '<path d="M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6" />' +
     '<path d="M11 13l9 -9" />' +

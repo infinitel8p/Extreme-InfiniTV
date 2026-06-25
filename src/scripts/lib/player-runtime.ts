@@ -29,6 +29,11 @@ export type ExternalPlayerKind = "mpv" | "vlc"
 
 export const RESUME_MIN_SECONDS_DEFAULT = 5
 
+export interface PlaybackCodecInfo {
+  videoCodec: string | null
+  errorDetail: string | null
+}
+
 export interface VjsLikeHandle {
   src(opts: { src: string; type: string }): void
   play(): Promise<unknown> | void
@@ -46,6 +51,8 @@ export interface VjsLikeHandle {
   error?(): unknown
   requestFullscreen?(): Promise<void> | void
   userActive?(active: boolean): void
+  /** What we learned about the current stream - feeds failure classification. */
+  codecInfo?(): PlaybackCodecInfo
 }
 
 export interface ExternalLaunchOptions {
@@ -936,6 +943,7 @@ async function attachMpegts(
   videoEl: HTMLVideoElement,
   url: string,
   onFatalError?: (detail: string) => void,
+  onMediaInfo?: (info: { videoCodec?: string }) => void,
 ): Promise<MpegtsHandle | null> {
   const mpegtsMod = await import("mpegts.js")
   const mpegts = (mpegtsMod as any).default || mpegtsMod
@@ -961,6 +969,10 @@ async function attachMpegts(
       ? { customLoader: createTauriStreamLoaderClass(mpegts) }
       : undefined
     player = mpegts.createPlayer({ type: "mpegts", isLive: true, url }, config)
+    player.on(mpegts.Events.MEDIA_INFO, (info: any) => {
+      if (disposed) return
+      if (info?.videoCodec) onMediaInfo?.({ videoCodec: String(info.videoCodec) })
+    })
     player.on(
       mpegts.Events.ERROR,
       (errorType: string, errorDetail: string, errorInfo: any) => {
@@ -1069,6 +1081,7 @@ async function mountVideoJs(
 
   let activeMpegts: MpegtsHandle | null = null
   let pendingSrc: string | null = null
+  const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
 
   function getUnderlyingVideo(): HTMLVideoElement | null {
     try {
@@ -1124,11 +1137,20 @@ async function mountVideoJs(
       loadHls(src)
       return
     }
-    const handle = await attachMpegts(videoElement, src, (detail) => {
-      if (pendingSrc !== src) return
-      activeMpegts = null
-      void recoverFailedTs(src, detail)
-    })
+    const handle = await attachMpegts(
+      videoElement,
+      src,
+      (detail) => {
+        if (pendingSrc !== src) return
+        activeMpegts = null
+        codecState.errorDetail = detail
+        void recoverFailedTs(src, detail)
+      },
+      (info) => {
+        if (pendingSrc !== src) return
+        if (info.videoCodec) codecState.videoCodec = info.videoCodec
+      },
+    )
     if (!handle) {
       loadHls(src)
       return
@@ -1144,6 +1166,8 @@ async function mountVideoJs(
   const wrapped: VjsLikeHandle = {
     src({ src, type }) {
       pendingSrc = src
+      codecState.videoCodec = null
+      codecState.errorDetail = null
       const hint = streamKindHint(src, type)
       if (hint === "ts") {
         const origin = originOf(src)
@@ -1229,6 +1253,9 @@ async function mountVideoJs(
     userActive(active) {
       try { player.userActive?.(active) } catch {}
     },
+    codecInfo() {
+      return { ...codecState }
+    },
   }
   return wrapped
 }
@@ -1257,6 +1284,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
   let activeHls: { destroy: () => void } | null = null
   let activeMpegts: MpegtsHandle | null = null
   let pendingSrc: string | null = null
+  const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
 
   // hls.js attach, shared by the m3u8 customType and the .ts -> HLS recovery
   // path below (some providers' .ts URLs redirect to / serve an HLS playlist,
@@ -1280,8 +1308,24 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
       const hls = new (Hls as any)(hlsConfig)
       let netRecover = 0
       let mediaRecover = 0
+      hls.on((Hls as any).Events.BUFFER_CODECS, (_event: unknown, data: any) => {
+        if (activeHls !== hls) return
+        const codec = data?.video?.levelCodec || data?.video?.codec
+        if (codec) codecState.videoCodec = String(codec)
+      })
       hls.on((Hls as any).Events.ERROR, (_event: unknown, data: any) => {
-        if (!data?.fatal || activeHls !== hls) return
+        if (activeHls !== hls) return
+        if (/codec/i.test(String(data?.details || ""))) {
+          codecState.errorDetail = String(data.details)
+          if (!codecState.videoCodec && typeof data?.mimeType === "string") {
+            const fromMime = /codecs="?([^",]+)/i.exec(data.mimeType)?.[1]
+            if (fromMime) codecState.videoCodec = fromMime
+          }
+        }
+        if (!data?.fatal) return
+        if (!codecState.errorDetail && data?.details) {
+          codecState.errorDetail = String(data.details)
+        }
         const ErrorTypes = (Hls as any).ErrorTypes
         if (data.type === ErrorTypes.NETWORK_ERROR && netRecover < 2) {
           netRecover++
@@ -1364,11 +1408,20 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
           try { activeMpegts.destroy() } catch {}
           activeMpegts = null
         }
-        const handle = await attachMpegts(video, url, (detail) => {
-          if (pendingSrc !== url) return
-          activeMpegts = null
-          void recoverFailedArtTs(video, url, detail)
-        })
+        const handle = await attachMpegts(
+          video,
+          url,
+          (detail) => {
+            if (pendingSrc !== url) return
+            activeMpegts = null
+            codecState.errorDetail = detail
+            void recoverFailedArtTs(video, url, detail)
+          },
+          (info) => {
+            if (pendingSrc !== url) return
+            if (info.videoCodec) codecState.videoCodec = info.videoCodec
+          },
+        )
         if (!handle) {
           video.src = url
           return
@@ -1418,6 +1471,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
   const handle: VjsLikeHandle = {
     src({ src, type }) {
       pendingSrc = src
+      codecState.videoCodec = null
+      codecState.errorDetail = null
       if (activeHls) {
         try { activeHls.destroy() } catch {}
         activeHls = null
@@ -1519,6 +1574,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
     },
     requestFullscreen() {
       art.fullscreen = true
+    },
+    codecInfo() {
+      return { ...codecState }
     },
   }
   return handle

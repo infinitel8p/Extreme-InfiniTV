@@ -325,6 +325,7 @@ export async function diagnoseStream(url, onUpdate) {
 }
 
 import { t } from "@/scripts/lib/i18n.js"
+import { findHevcInCodecList, deviceSupportsHevc } from "@/scripts/lib/codec-hints.ts"
 
 export function summarizeReport(report) {
   if (!report) return { verdict: "unknown", reason: "" }
@@ -351,6 +352,14 @@ export function summarizeReport(report) {
       reason: report.playlist.error
         ? t("streamTest.summary.cantFetch", { error: report.playlist.error })
         : t("streamTest.summary.playlistResponded", { status: report.playlist.status || 0 }),
+    }
+  }
+
+  const hevcCodec = findHevcInCodecList(report.playlist?.topVariant?.codecs)
+  if (hevcCodec && !deviceSupportsHevc()) {
+    return {
+      verdict: "fail",
+      reason: t("streamTest.summary.hevcUnsupported"),
     }
   }
   if (report.firstSegment && report.firstSegment.ok === false) {
