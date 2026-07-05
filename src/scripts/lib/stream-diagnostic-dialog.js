@@ -157,6 +157,24 @@ function renderFirstSegment(seg) {
   return `${head}${dur}${url}`
 }
 
+function renderWebView(probe) {
+  if (!probe) return `<span class="text-fg-3">${escapeHtml(t("streamTest.skipped"))}</span>`
+  const status = probe.blocked
+    ? `<span class="text-bad font-semibold">${escapeHtml(t("streamTest.webview.blocked"))}</span>`
+    : probe.ok
+      ? `<span class="text-ok font-semibold tabular-nums">${probe.status} ${escapeHtml(t("streamTest.webview.allowed"))}</span>`
+      : `<span class="text-warn font-semibold tabular-nums">${probe.status}</span>`
+  const err = probe.error
+    ? `<div class="text-2xs text-fg-3 break-all">${escapeHtml(probe.error)}</div>`
+    : ""
+  const acao =
+    probe.acao != null
+      ? `<div class="text-2xs text-fg-3 font-mono break-all">ACAO: ${escapeHtml(String(probe.acao))}</div>`
+      : ""
+  const meta = `<div class="text-2xs text-fg-3 tabular-nums">${fmtMs(probe.latencyMs)}</div>`
+  return `${status}${err}${acao}${meta}`
+}
+
 function paint(report, opts) {
   const node = ensureDialog()
   if (!node) return
@@ -211,6 +229,7 @@ function paint(report, opts) {
         renderStage(t("streamTest.stage.endpoint"), renderHead(report?.head)),
         renderStage(t("streamTest.stage.playlist"), renderPlaylist(report?.playlist)),
         renderStage(t("streamTest.stage.firstSegment"), renderFirstSegment(report?.firstSegment)),
+        renderStage(t("streamTest.stage.webview"), renderWebView(report?.webviewProbe)),
       ].join("")
     }
   }

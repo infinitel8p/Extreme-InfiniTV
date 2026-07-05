@@ -23,8 +23,12 @@ import {
   getFavorites,
   pushRecent,
   getRecents,
+  getViewSort,
+  setViewSort,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
+import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
+import { fmtChannelIdentity } from "@/scripts/lib/format.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { attachPopoverSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
@@ -37,6 +41,11 @@ import {
 } from "@/scripts/lib/android-video-launcher.js"
 import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
 import { parseM3U as parseSharedM3U } from "@/scripts/lib/m3u-parser.ts"
+import {
+  hasHevcNameHint,
+  deviceSupportsHevc,
+  classifyStartFailure,
+} from "@/scripts/lib/codec-hints.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { toast, toastError } from "@/scripts/lib/toast.js"
@@ -58,7 +67,7 @@ import {
   surfaceLaunchError,
   type ExternalPlayerButtonHandle,
 } from "@/scripts/lib/external-player-button.js"
-import { ICON_EXTERNAL_LINK } from "@/scripts/lib/icons.js"
+import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE } from "@/scripts/lib/icons.js"
 import {
   loadProgrammes,
   getProgrammesSync,
@@ -439,6 +448,21 @@ function refreshNowSlots() {
   }
 }
 
+function shouldWarnHevc(name) {
+  return hasHevcNameHint(name) && !deviceSupportsHevc()
+}
+
+function buildHevcBadge() {
+  const badge = document.createElement("span")
+  badge.className =
+    "hevc-badge inline-flex shrink-0 items-center rounded-md border border-line bg-surface-2 px-1.5 text-2xs font-medium text-fg-3"
+  badge.textContent = "HEVC"
+  const hint = t("livetv.hevcBadge.tooltip")
+  badge.title = hint
+  badge.setAttribute("aria-label", hint)
+  return badge
+}
+
 function renderVirtual() {
   if (!listEl || !viewport) return
   const scrollTop = listEl.scrollTop
@@ -505,13 +529,17 @@ function renderVirtual() {
 
     const wrap = document.createElement("div")
     wrap.className = "min-w-0 flex-1"
+    const nameRow = document.createElement("div")
+    nameRow.className = "flex min-w-0 items-center gap-1.5"
     const nameEl = document.createElement("div")
     nameEl.className = "truncate text-sm font-medium"
     nameEl.textContent = ch.name
+    nameRow.appendChild(nameEl)
+    if (shouldWarnHevc(ch.name)) nameRow.appendChild(buildHevcBadge())
     const meta = document.createElement("div")
     meta.className = "truncate text-xs text-fg-3 tabular-nums"
-    meta.textContent = `#${ch.id}${ch.category ? ` · ${ch.category}` : ""}`
-    wrap.append(nameEl, meta)
+    meta.textContent = `${fmtChannelIdentity(ch.chno, ch.id)}${ch.category ? ` · ${ch.category}` : ""}`
+    wrap.append(nameRow, meta)
     const nowSlot = document.createElement("div")
     nowSlot.className = "channel-now-slot"
     wrap.appendChild(nowSlot)
@@ -1001,21 +1029,44 @@ const applyFilter = () => {
     })
   }
 
+  /** @type {Map<number, number> | null} */
+  let scoreById = null
   if (tokens.length) {
+    scoreById = new Map()
     const scored = []
     for (const channel of out) {
       const score = scoreNormMatch(channel.norm, tokens)
-      if (score > 0) scored.push({ channel, score })
+      if (score > 0) {
+        scored.push(channel)
+        scoreById.set(channel.id, score)
+      }
     }
-    scored.sort((first, second) => second.score - first.score)
-    out = scored.map((row) => row.channel)
+    out = scored
   }
+
+  const sortMode = activePlaylistId
+    ? getViewSort(activePlaylistId, "live")
+    : "default"
+  out = sortChannelsForView(out, sortMode, scoreById)
 
   listStatus.textContent = `${out.length.toLocaleString()} of ${all.length.toLocaleString()} channels`
   mountVirtualList(out)
 }
 
 searchEl?.addEventListener("input", debounce(applyFilter, 160))
+
+const sortEl = /** @type {HTMLSelectElement|null} */ (
+  document.getElementById("channel-sort")
+)
+function syncSortControl() {
+  if (!sortEl || !activePlaylistId) return
+  sortEl.value = getViewSort(activePlaylistId, "live")
+}
+sortEl?.addEventListener("change", () => {
+  if (!activePlaylistId || !sortEl) return
+  setViewSort(activePlaylistId, "live", sortEl.value)
+  applyFilter()
+})
 
 async function ensureCategoryMap() {
   if (categoryMap) return categoryMap
@@ -1123,6 +1174,7 @@ async function loadChannels() {
   activePlaylistTitle = active.title || ""
 
   await ensurePrefsLoaded()
+  syncSortControl()
   await Promise.all([
     hydrateCache(active._id, "live"),
     hydrateCache(active._id, "m3u"),
@@ -1162,11 +1214,7 @@ async function loadChannels() {
             if (!r.ok) throw new Error(`M3U ${r.status}: ${await r.text()}`)
             text = await r.text()
           }
-          return parseM3U(text)
-            .filter((x) => x.url && x.name)
-            .sort((a, b) =>
-              a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-            )
+          return parseM3U(text).filter((x) => x.url && x.name)
         }
       )
       indexDirectUrls(data)
@@ -1223,13 +1271,11 @@ async function loadChannels() {
               category,
               logo: ch.stream_icon || null,
               tvgId: String(ch.epg_channel_id || "") || undefined,
+              chno: Number(ch.num) || undefined,
               norm: normalize(name + " " + category),
             }
           })
           .filter((x) => x.id && x.name)
-          .sort((a, b) =>
-            a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-          )
       }
     )
     directUrlById = new Map()
@@ -1289,6 +1335,7 @@ async function runAutoDiagnostic(ctx, dismissGenericToast) {
     const { verdict, reason } = summarizeReport(report)
     log.log("[xt:livetv] auto-diagnostic verdict:", verdict, reason)
     if (!reason) return
+    if (applyDiagnosticToFailurePanel(ctx.seq, verdict, reason)) return
     try { dismissGenericToast?.() } catch {}
     toastError(
       t("stream.error.cantPlay", { channel: ctx.name || `#${ctx.streamId}` }),
@@ -1331,9 +1378,12 @@ const ensureEmbeddedPlayer = async (backend) => {
   attachAudioOnlyDetection(vjs)
 
   vjs.on("playing", () => {
+    if (lastPlayContext) lastPlayContext.started = true
     hideTuningOverlay()
     hideBufferingChip()
     clearStallSentinel()
+    hidePlaybackFailurePanel()
+    armDeadVideoWatchdog()
   })
   vjs.on("waiting", () => {
     showBufferingChip()
@@ -1368,9 +1418,19 @@ const ensureEmbeddedPlayer = async (backend) => {
     hideTuningOverlay()
     hideBufferingChip()
     clearStallSentinel()
+    clearDeadVideoWatchdog()
+    if (!ctx.started) {
+      showPlaybackFailurePanel(ctx)
+      runAutoDiagnostic(ctx, null)
+      return
+    }
     const dismissGeneric = toastError(
       t("stream.error.cantPlay", { channel: ctx.name || `#${ctx.streamId}` }),
-      { description: t("stream.error.checkConnection") }
+      {
+        description: shouldWarnHevc(ctx.name)
+          ? t("stream.error.hevcHint")
+          : t("stream.error.checkConnection"),
+      }
     )
     // Background diagnostic: turn the generic "couldn't play" toast into an
     // actionable one ("HLS playlist returned 403", "Server unreachable",
@@ -1616,6 +1676,226 @@ function clearStallSentinel() {
   }
 }
 
+// ----------------------------
+// Dead-video watchdog
+// ----------------------------
+// WebView2 sometimes accepts an HEVC stream. `playing` fires, so the
+// error path never engages. Catch it by counting decoded frames a few
+// seconds into playback. Radio / audio-only channels (videoWidth 0) are
+// the audio-only detector's territory and are skipped here.
+const DEAD_VIDEO_CHECK_MS = 4000
+const DEAD_VIDEO_MAX_CHECKS = 3
+const DEAD_VIDEO_MIN_PLAYED_S = 2
+let deadVideoTimer = null
+
+function clearDeadVideoWatchdog() {
+  if (deadVideoTimer) {
+    clearTimeout(deadVideoTimer)
+    deadVideoTimer = null
+  }
+}
+
+function decodedFrameCount(videoEl) {
+  try {
+    const quality = videoEl.getVideoPlaybackQuality?.()
+    if (quality && typeof quality.totalVideoFrames === "number") {
+      return quality.totalVideoFrames
+    }
+  } catch {}
+  const legacy = videoEl.webkitDecodedFrameCount
+  return typeof legacy === "number" ? legacy : null
+}
+
+function armDeadVideoWatchdog() {
+  clearDeadVideoWatchdog()
+  const ctx = lastPlayContext
+  if (!ctx) return
+  const seqAtArm = ctx.seq
+  const wrap = getPlayerWrap()
+  const videoAtArm = wrap?.querySelector("video")
+  if (!videoAtArm) return
+  const baselineTime = videoAtArm.currentTime || 0
+  let attempts = 0
+  const schedule = () => {
+    deadVideoTimer = setTimeout(check, DEAD_VIDEO_CHECK_MS)
+  }
+  const check = () => {
+    deadVideoTimer = null
+    if (seqAtArm !== playSeq) return
+    const currentWrap = getPlayerWrap()
+    if (!currentWrap || currentWrap.dataset.radioMode === "on") return
+    const video = currentWrap.querySelector("video")
+    if (!video || video.paused) return
+    const frames = decodedFrameCount(video)
+    if (frames === null || frames > 0) return
+    if (video.videoWidth === 0 && video.videoHeight === 0) return
+    attempts++
+    const playedEnough =
+      (video.currentTime || 0) - baselineTime >= DEAD_VIDEO_MIN_PLAYED_S
+    if (!playedEnough) {
+      if (attempts < DEAD_VIDEO_MAX_CHECKS) schedule()
+      return
+    }
+    log.warn("[xt:livetv] video track decoded zero frames - treating as start failure", {
+      streamId: ctx.streamId,
+      videoWidth: video.videoWidth,
+      videoHeight: video.videoHeight,
+    })
+    try { vjs?.pause?.() } catch {}
+    hideTuningOverlay()
+    hideBufferingChip()
+    clearStallSentinel()
+    showPlaybackFailurePanel(ctx, { decodeFailure: true })
+  }
+  schedule()
+}
+
+// ----------------------------
+// Playback failure panel
+// ----------------------------
+// In-player explanation for streams that never reached `playing`
+// Only shown after the auto-retry failed, removed on the next tune
+// or when playback recovers.
+let failurePanelSeq = -1
+let failurePanelReasonKind = "unknown"
+let failurePanelExternalHandle: ExternalPlayerButtonHandle | null = null
+
+function hidePlaybackFailurePanel() {
+  failurePanelSeq = -1
+  failurePanelReasonKind = "unknown"
+  failurePanelExternalHandle?.dispose()
+  failurePanelExternalHandle = null
+  const playerWrap = document.getElementById("player")?.parentElement
+  playerWrap?.querySelector("[data-playback-failure]")?.remove()
+}
+
+/**
+ * Returns true when the panel owns messaging for this tune attempt, so the
+ * auto-diagnostic must not toast on top of it. Generic and name-guessed
+ * reasons get upgraded in place; codec verdicts backed by engine evidence
+ * are more specific than anything the network probe can find, and stay.
+ */
+function applyDiagnosticToFailurePanel(seq, verdict, reason) {
+  if (failurePanelSeq !== seq) return false
+  if (failurePanelReasonKind !== "unknown" && failurePanelReasonKind !== "hevc-likely") {
+    return true
+  }
+  if (verdict !== "fail" && verdict !== "warn") return true
+  const playerWrap = document.getElementById("player")?.parentElement
+  const reasonEl = playerWrap?.querySelector(
+    "[data-playback-failure] [data-failure-reason]"
+  )
+  if (reasonEl) reasonEl.textContent = reason
+  return true
+}
+
+function showPlaybackFailurePanel(ctx, opts = {}) {
+  if (failurePanelSeq === ctx.seq) return
+  hidePlaybackFailurePanel()
+  const playerWrap = document.getElementById("player")?.parentElement
+  if (!playerWrap) return
+
+  const info = vjs?.codecInfo?.() || { videoCodec: null, errorDetail: null }
+  const failure = classifyStartFailure({
+    videoCodec: info.videoCodec,
+    errorDetail:
+      info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
+    nameHint: hasHevcNameHint(ctx.name),
+    deviceHevc: deviceSupportsHevc(),
+  })
+  log.log("[xt:livetv] start failure classified:", failure.kind, {
+    videoCodec: info.videoCodec,
+    errorDetail: info.errorDetail,
+  })
+  let reason
+  if (failure.kind === "hevc") {
+    reason = failure.codec
+      ? t("stream.failure.hevcConfirmed")
+      : t("stream.error.hevcHint")
+  } else if (failure.kind === "codec") {
+    reason = t("stream.failure.codecUnsupported", {
+      codec: failure.codec || info.errorDetail || "?",
+    })
+  } else {
+    reason = t("stream.error.checkConnection")
+  }
+  failurePanelSeq = ctx.seq
+  failurePanelReasonKind =
+    failure.kind === "hevc" && !failure.codec ? "hevc-likely" : failure.kind
+
+  const panel = document.createElement("div")
+  panel.dataset.playbackFailure = ""
+  panel.setAttribute("role", "alert")
+  panel.className =
+    "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/85 px-6 text-center"
+
+  const icon = document.createElement("span")
+  icon.className = "inline-flex text-3xl leading-none text-fg-3"
+  icon.setAttribute("aria-hidden", "true")
+  icon.innerHTML = ICON_ALERT_TRIANGLE
+  panel.appendChild(icon)
+
+  const title = document.createElement("p")
+  title.className = "m-0 text-fg font-semibold text-base sm:text-lg"
+  title.textContent = t("stream.error.cantPlay", {
+    channel: ctx.name || `#${ctx.streamId}`,
+  })
+  panel.appendChild(title)
+
+  const reasonEl = document.createElement("p")
+  reasonEl.dataset.failureReason = ""
+  reasonEl.className = "m-0 max-w-md text-fg-2 text-xs sm:text-sm"
+  reasonEl.textContent = reason
+  panel.appendChild(reasonEl)
+
+  const actions = document.createElement("div")
+  actions.className = "mt-1 flex flex-wrap items-center justify-center gap-2"
+
+  const retryBtn = document.createElement("button")
+  retryBtn.type = "button"
+  retryBtn.className =
+    "shrink-0 inline-flex items-center justify-center min-h-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+  retryBtn.textContent = t("common.retry")
+  retryBtn.addEventListener("click", () => {
+    hidePlaybackFailurePanel()
+    play(ctx.streamId, ctx.name)
+  })
+  actions.appendChild(retryBtn)
+
+  if (externalPlayersAvailable || androidExternalAvailable) {
+    const extBtn = document.createElement("button")
+    extBtn.type = "button"
+    extBtn.hidden = true
+    extBtn.className =
+      "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+    const extIcon = document.createElement("span")
+    extIcon.className = "shrink-0 inline-flex text-xl leading-none"
+    extIcon.setAttribute("aria-hidden", "true")
+    extIcon.innerHTML = ICON_EXTERNAL_LINK
+    const extLabel = document.createElement("span")
+    extLabel.dataset.label = ""
+    extBtn.append(extIcon, extLabel)
+    failurePanelExternalHandle = setupExternalPlayerButton(extBtn, {
+      getSrc: () => ctx.src,
+      getHeaders: () => {
+        const channelHeaders = streamHeadersById.get(ctx.streamId) || null
+        return {
+          userAgent: channelHeaders?.userAgent || getUserAgent() || null,
+          referer: channelHeaders?.referer || null,
+        }
+      },
+      getTitle: () => ctx.name || null,
+      beforeLaunch: () => {
+        hidePlaybackFailurePanel()
+      },
+    })
+    actions.appendChild(extBtn)
+  }
+
+  panel.appendChild(actions)
+  playerWrap.appendChild(panel)
+}
+
 function runScanLineSweep() {
   const playerWrap = document.getElementById("player")?.parentElement
   if (!playerWrap) return
@@ -1737,6 +2017,8 @@ async function tryLaunchNativeLive(initialStreamId, initialName) {
 }
 
 async function play(streamId, name) {
+  hidePlaybackFailurePanel()
+  clearDeadVideoWatchdog()
   if (!currentEl) return
   // Native ExoPlayer Activity path (opt-in via Settings). Hands off the full
   // playback session including channel switching. Returns early if successful.
@@ -1817,12 +2099,13 @@ async function play(streamId, name) {
       '<span class="status-badge status-badge--live shrink-0">ON</span>'
     const label = document.createElement("span")
     label.className = "truncate min-w-0 flex-1"
-    label.append(`Channel ${streamId}: `)
+    label.append(`${fmtChannelIdentity(channel?.chno, streamId)}: `)
     const nameEl = document.createElement("span")
     nameEl.className = "text-accent"
     nameEl.textContent = name
     label.appendChild(nameEl)
     wrap.appendChild(label)
+    if (shouldWarnHevc(name)) wrap.appendChild(buildHevcBadge())
     currentEl.appendChild(wrap)
 
     const btn = document.createElement("button")
@@ -1885,7 +2168,7 @@ async function play(streamId, name) {
   if (!player) return
   await applyStreamHeaders(channelHeaders)
   const seq = ++playSeq
-  lastPlayContext = { streamId, name, src, seq, retried: false }
+  lastPlayContext = { streamId, name, src, seq, retried: false, started: false }
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}

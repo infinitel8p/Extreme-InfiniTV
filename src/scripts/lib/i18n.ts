@@ -178,16 +178,32 @@ function readCachedMessages(): { code: LocaleCode; messages: LocaleMessages } | 
   return null
 }
 
+// Lowercased BCP-47 tag -> canonical locale key, so mixed-case keys like
+// "pt-BR" match a lowercased navigator tag ("pt-br") instead of falling
+// through to English. Region-suffixed tags resolve via the base segment.
+const LOWER_TO_LOCALE: Record<string, LocaleCode> = (() => {
+  const map: Record<string, LocaleCode> = {}
+  for (const code of Object.keys(LOCALE_LOADERS) as LocaleCode[]) {
+    map[code.toLowerCase()] = code
+  }
+  return map
+})()
+
+function resolveNavigatorTag(tag: string): LocaleCode | null {
+  if (!tag) return null
+  const lower = tag.toLowerCase()
+  if (LOWER_TO_LOCALE[lower]) return LOWER_TO_LOCALE[lower]
+  const base = lower.split("-")[0]!
+  return LOWER_TO_LOCALE[base] || null
+}
+
 function detectLocale(): LocaleCode {
   const persisted = readPersistedLocale()
   if (persisted && isLocaleCode(persisted)) return persisted
   if (typeof navigator === "undefined") return "en"
   for (const tag of navigator.languages || [navigator.language || ""]) {
-    if (!tag) continue
-    const lower = tag.toLowerCase()
-    if (isLocaleCode(lower)) return lower
-    const base = lower.split("-")[0]!
-    if (isLocaleCode(base)) return base
+    const resolved = resolveNavigatorTag(tag)
+    if (resolved) return resolved
   }
   return "en"
 }

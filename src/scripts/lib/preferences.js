@@ -139,7 +139,7 @@ function emptyEntry() {
     // items whose source playlist is currently switched out.
     watchVod: Object.create(null),
     watchSeries: Object.create(null),
-    viewSort: { vod: "default", series: "default" },
+    viewSort: { vod: "default", series: "default", live: "default" },
   }
 }
 
@@ -236,6 +236,9 @@ function hydrate(raw) {
         series: ["default", "added", "az"].includes(v.series)
           ? v.series
           : "default",
+        live: ["default", "number", "az", "za", "cataz"].includes(v.live)
+          ? v.live
+          : "default",
       },
     })
   }
@@ -275,7 +278,11 @@ function dehydrate() {
       favOrderSeries: v.favOrderSeries.slice(),
       watchVod: v.watchVod,
       watchSeries: v.watchSeries,
-      viewSort: { vod: v.viewSort.vod, series: v.viewSort.series },
+      viewSort: {
+        vod: v.viewSort.vod,
+        series: v.viewSort.series,
+        live: v.viewSort.live,
+      },
     }
   }
   return out
@@ -1155,19 +1162,23 @@ export function getAllGlobalFavorites() {
 // ---------------------------------------------------------------------------
 // View sort preferences (recently-added etc.)
 // ---------------------------------------------------------------------------
-const VALID_SORTS = new Set(["default", "added", "az"])
+const VALID_SORTS_BY_KIND = {
+  vod: new Set(["default", "added", "az"]),
+  series: new Set(["default", "added", "az"]),
+  live: new Set(["default", "number", "az", "za", "cataz"]),
+}
 
-/** @param {string} playlistId @param {"vod"|"series"} kind */
+/** @param {string} playlistId @param {"vod"|"series"|"live"} kind */
 export function getViewSort(playlistId, kind) {
   const e = cache.get(playlistId)
   const v = e?.viewSort?.[kind]
-  return VALID_SORTS.has(v) ? v : "default"
+  return VALID_SORTS_BY_KIND[kind]?.has(v) ? v : "default"
 }
 
-/** @param {string} playlistId @param {"vod"|"series"} kind @param {string} mode */
+/** @param {string} playlistId @param {"vod"|"series"|"live"} kind @param {string} mode */
 export function setViewSort(playlistId, kind, mode) {
   if (!playlistId) return
-  const m = VALID_SORTS.has(mode) ? mode : "default"
+  const m = VALID_SORTS_BY_KIND[kind]?.has(mode) ? mode : "default"
   const e = getOrCreate(playlistId)
   if (e.viewSort[kind] === m) return
   e.viewSort[kind] = m

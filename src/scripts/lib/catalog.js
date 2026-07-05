@@ -88,6 +88,7 @@ function m3uToChannelList(text) {
       category,
       logo: entry.logo,
       tvgId: entry.tvgId || undefined,
+      chno: entry.chno ?? undefined,
       norm: normalize(`${entry.name} ${category} ${entry.tvgId || ""}`),
       url: entry.url,
       isRadio: !!entry.isRadio,
@@ -117,9 +118,7 @@ export async function ensureLive(creds, playlistId, opts = {}) {
           localStorage.setItem(`xt_m3u_epg:${playlistId}`, epgUrl)
         }
       } catch {}
-      return m3uToChannelList(text).sort((a, b) =>
-        a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-      )
+      return m3uToChannelList(text)
     }
     const catMap = await fetchLiveCategoryMap()
     const r = await xtreamApiFetch("get_live_streams")
@@ -153,13 +152,11 @@ export async function ensureLive(creds, playlistId, opts = {}) {
           category,
           logo: ch.stream_icon || null,
           tvgId: String(ch.epg_channel_id || "") || undefined,
+          chno: Number(ch.num) || undefined,
           norm: normalize(name + " " + category),
         }
       })
       .filter((x) => x.id && x.name)
-      .sort((a, b) =>
-        a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-      )
   }), { force: !!opts.force })
   return data || []
 }

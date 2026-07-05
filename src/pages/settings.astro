@@ -2320,19 +2320,23 @@ const navStructure: NavSection[] = [
       "settings-download-concurrency-cap"
     )
 
+    function readSelectedPlaylistId() {
+      try {
+        const active = JSON.parse(
+          localStorage.getItem("xt_playlists") || '{"selectedId":""}'
+        )
+        return active?.selectedId || ""
+      } catch {
+        return ""
+      }
+    }
     function readProviderCap() {
       // 0 means "unknown" (M3U source or cache cold). UI falls back to the
       // previous behaviour: all four buttons enabled, no cap message.
-      const active = JSON.parse(
-        localStorage.getItem("xt_playlists") || '{"selectedId":""}'
-      )
-      return getMaxConnectionsSync(active?.selectedId || "")
+      return getMaxConnectionsSync(readSelectedPlaylistId())
     }
     function readActiveCons() {
-      const active = JSON.parse(
-        localStorage.getItem("xt_playlists") || '{"selectedId":""}'
-      )
-      return getActiveConnectionsSync(active?.selectedId || "")
+      return getActiveConnectionsSync(readSelectedPlaylistId())
     }
 
     function syncConcurrencyButtons() {

@@ -15,6 +15,7 @@
 // off on Android/iOS at the Rust side.
 
 import { log } from "@/scripts/lib/log.js"
+import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
 import {
   getPlayerBackend,
   getPlayerPath,
@@ -28,6 +29,11 @@ export type PlayerBackend = "videojs" | "artplayer" | "mpv" | "vlc"
 export type ExternalPlayerKind = "mpv" | "vlc"
 
 export const RESUME_MIN_SECONDS_DEFAULT = 5
+
+export interface PlaybackCodecInfo {
+  videoCodec: string | null
+  errorDetail: string | null
+}
 
 export interface VjsLikeHandle {
   src(opts: { src: string; type: string }): void
@@ -46,6 +52,8 @@ export interface VjsLikeHandle {
   error?(): unknown
   requestFullscreen?(): Promise<void> | void
   userActive?(active: boolean): void
+  /** What we learned about the current stream - feeds failure classification. */
+  codecInfo?(): PlaybackCodecInfo
 }
 
 export interface ExternalLaunchOptions {
@@ -643,13 +651,429 @@ async function probeContainer(src: string): Promise<StreamKind> {
   }
 }
 
+const tsSourcesServingHls = new Set<string>()
+const tsSourcesNotHls = new Set<string>()
+
+async function readBodyStart(response: Response, maxBytes: number): Promise<string> {
+  const body = response.body
+  if (!body || typeof body.getReader !== "function") {
+    const text = await response.text()
+    return text.slice(0, maxBytes)
+  }
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && value.byteLength) {
+        chunks.push(value)
+        total += value.byteLength
+      }
+    }
+  } finally {
+    try { await reader.cancel() } catch {}
+  }
+  if (!total) return ""
+  const merged = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder().decode(merged.subarray(0, maxBytes))
+}
+
+// Confirm whether a .ts source is really an HLS playlist before flipping a
+// failed mpegts load over to hls.js. Tri-state: "inconclusive" (empty read,
+// timeout, or network error) must NOT be memoized as a negative, or a slow but
+// valid HLS-over-.ts channel gets permanently locked out of recovery.
+async function tsSourceIsActuallyHls(
+  src: string,
+): Promise<"hls" | "not-hls" | "inconclusive"> {
+  try {
+    const { providerFetch } = await import("@/scripts/lib/provider-fetch.js")
+    const controller =
+      typeof AbortController !== "undefined" ? new AbortController() : null
+    const timer = controller ? setTimeout(() => controller.abort(), 4000) : null
+    try {
+      const response = await providerFetch(src, {
+        method: "GET",
+        headers: { Range: "bytes=0-511" },
+        signal: controller?.signal,
+      })
+      const contentType = (response.headers.get("content-type") || "").toLowerCase()
+      if (contentType.includes("mpegurl")) {
+        try { response.body?.cancel?.() } catch {}
+        return "hls"
+      }
+      const head = await readBodyStart(response, 64)
+      if (!head) return "inconclusive"
+      return /^\uFEFF?\s*#EXTM3U/.test(head) ? "hls" : "not-hls"
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  } catch {
+    return "inconclusive"
+  }
+}
+
+async function resolveTsRecovery(
+  src: string,
+  isCurrent: () => boolean,
+): Promise<"hls" | "error"> {
+  if (!isCurrent()) return "error"
+  if (tsSourcesServingHls.has(src)) return "hls"
+  if (tsSourcesNotHls.has(src)) return "error"
+  const verdict = await tsSourceIsActuallyHls(src)
+  if (!isCurrent()) return "error"
+  if (verdict === "hls") {
+    tsSourcesServingHls.add(src)
+    return "hls"
+  }
+
+  if (verdict === "not-hls") tsSourcesNotHls.add(src)
+  return "error"
+}
+
 interface MpegtsHandle {
   destroy: () => void
+}
+
+// Custom mpegts.js loader that streams via tauri-plugin-http instead of the
+// WebView's fetch. The plugin runs the request on the Rust side, so CORS
+// doesn't apply - some providers (and their redirect targets) don't send
+// Access-Control-Allow-Origin and would otherwise feed zero bytes to MSE.
+// Used as a one-shot fallback after a network error on the default loader.
+function createTauriStreamLoaderClass(mpegts: any) {
+  const { BaseLoader, LoaderStatus, LoaderErrors } = mpegts
+
+  return class TauriStreamLoader extends BaseLoader {
+    private _seekHandler: any
+    private _abortController: AbortController | null = null
+    private _requestAbort = false
+    private _receivedLength = 0
+    private _rangeFrom = 0
+
+    static isSupported() {
+      return isTauri
+    }
+
+    constructor(seekHandler: any) {
+      super("tauri-stream-loader")
+      this._seekHandler = seekHandler
+      this._needStash = true
+    }
+
+    destroy() {
+      if (this.isWorking()) this.abort()
+      super.destroy()
+    }
+
+    open(dataSource: any, range: { from: number; to: number }) {
+      this._status = LoaderStatus.kConnecting
+      this._requestAbort = false
+      this._receivedLength = 0
+      this._rangeFrom = range?.from > 0 ? range.from : 0
+      this._abortController = new AbortController()
+      const sourceURL = dataSource?.redirectedURL || dataSource?.url
+      const seekConfig = this._seekHandler.getConfig(sourceURL, range)
+      void this._openStream(seekConfig)
+    }
+
+    private async _openStream(seekConfig: { url: string; headers: any }) {
+      try {
+        const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http")
+        const headers = new Headers(seekConfig.headers || undefined)
+
+        if (!headers.has("User-Agent")) {
+          headers.set("User-Agent", getUserAgent() || DEFAULT_BROWSER_UA)
+        }
+        const response = await tauriFetch(seekConfig.url, {
+          method: "GET",
+          headers,
+          signal: this._abortController?.signal,
+        })
+        if (this._requestAbort) {
+          try { await response.body?.cancel() } catch {}
+          return
+        }
+        if (!response.ok || !response.body) {
+          try { await response.body?.cancel() } catch {}
+          this._status = LoaderStatus.kError
+          this.onError?.(LoaderErrors.HTTP_STATUS_CODE_INVALID, {
+            code: response.status,
+            msg: response.statusText || `HTTP ${response.status}`,
+          })
+          return
+        }
+        const contentLength = parseInt(response.headers.get("content-length") || "", 10)
+        if (Number.isFinite(contentLength) && contentLength > 0) {
+          this.onContentLengthKnown?.(contentLength)
+        }
+        this._status = LoaderStatus.kBuffering
+        const reader = response.body.getReader()
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (this._requestAbort) {
+            try { await reader.cancel() } catch {}
+            return
+          }
+          if (done) {
+            this._status = LoaderStatus.kComplete
+            this.onComplete?.(this._rangeFrom, this._rangeFrom + this._receivedLength - 1)
+            return
+          }
+          const byteStart = this._rangeFrom + this._receivedLength
+          this._receivedLength += value.byteLength
+          const chunk =
+            value.byteOffset === 0 && value.byteLength === value.buffer.byteLength
+              ? value.buffer
+              : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
+          this.onDataArrival?.(chunk, byteStart, this._receivedLength)
+        }
+      } catch (fetchError: any) {
+        if (this._requestAbort) return
+        this._status = LoaderStatus.kError
+        this.onError?.(LoaderErrors.EXCEPTION, {
+          code: -1,
+          msg: String(fetchError?.message || fetchError),
+        })
+      }
+    }
+
+    abort() {
+      this._requestAbort = true
+      try { this._abortController?.abort() } catch {}
+    }
+  }
+}
+
+// Custom hls.js loader
+function createTauriHlsLoaderClass() {
+  return class TauriHlsLoader {
+    context: any = null
+    stats: any
+    private callbacks: any = null
+    private abortController: AbortController | null = null
+    private timeoutTimer: ReturnType<typeof setTimeout> | null = null
+    private aborted = false
+    private timedOut = false
+
+    constructor() {
+      this.stats = {
+        aborted: false,
+        loaded: 0,
+        retry: 0,
+        total: 0,
+        chunkCount: 0,
+        bwEstimate: 0,
+        loading: { start: 0, first: 0, end: 0 },
+        parsing: { start: 0, end: 0 },
+        buffering: { start: 0, first: 0, end: 0 },
+      }
+    }
+
+    private clearTimer() {
+      if (this.timeoutTimer) {
+        clearTimeout(this.timeoutTimer)
+        this.timeoutTimer = null
+      }
+    }
+
+    destroy() {
+      this.callbacks = null
+      this.abortInternal()
+      this.context = null
+    }
+
+    private abortInternal() {
+      this.stats.aborted = true
+      this.clearTimer()
+      try { this.abortController?.abort() } catch {}
+    }
+
+    abort() {
+      this.aborted = true
+      this.abortInternal()
+      this.callbacks?.onAbort?.(this.stats, this.context, null)
+    }
+
+    load(context: any, config: any, callbacks: any) {
+      if (this.stats.loading.start) return
+      this.context = context
+      this.callbacks = callbacks
+      this.stats.loading.start = performance.now()
+      this.abortController =
+        typeof AbortController !== "undefined" ? new AbortController() : null
+      const timeoutMs =
+        config?.loadPolicy?.maxLoadTimeMs || config?.timeout || 20_000
+      this.timeoutTimer = setTimeout(() => {
+        if (this.aborted || this.timedOut) return
+        this.timedOut = true
+        this.abortInternal()
+        this.callbacks?.onTimeout?.(this.stats, this.context, null)
+      }, timeoutMs)
+      void this.run(context)
+    }
+
+    private async run(context: any) {
+      try {
+        const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http")
+        const headers = new Headers()
+        headers.set("User-Agent", getUserAgent() || DEFAULT_BROWSER_UA)
+        const { rangeStart, rangeEnd } = context
+        if (
+          Number.isFinite(rangeStart) &&
+          Number.isFinite(rangeEnd) &&
+          rangeEnd > rangeStart
+        ) {
+          // hls.js byte ranges are [start, end); the Range header end is inclusive.
+          headers.set("Range", `bytes=${rangeStart}-${rangeEnd - 1}`)
+        }
+        const response = await tauriFetch(context.url, {
+          method: "GET",
+          headers,
+          signal: this.abortController?.signal,
+        })
+        if (this.aborted || this.timedOut) {
+          try { response.body?.cancel?.() } catch {}
+          return
+        }
+        this.stats.loading.first = performance.now()
+        if (!response.ok && response.status !== 206) {
+          this.clearTimer()
+          try { response.body?.cancel?.() } catch {}
+          this.callbacks?.onError?.(
+            {
+              code: response.status,
+              text: response.statusText || `HTTP ${response.status}`,
+            },
+            this.context,
+            null,
+            this.stats
+          )
+          return
+        }
+        const wantsBuffer = context.responseType === "arraybuffer"
+        const data: string | ArrayBuffer = wantsBuffer
+          ? await response.arrayBuffer()
+          : await response.text()
+        if (this.aborted || this.timedOut) return
+        this.clearTimer()
+        const length =
+          typeof data === "string" ? data.length : data.byteLength
+        this.stats.loaded = length
+        this.stats.total = length
+        this.stats.loading.end = performance.now()
+        this.callbacks?.onSuccess?.(
+          { url: response.url || context.url, data, code: response.status },
+          this.stats,
+          this.context,
+          null
+        )
+      } catch (error: any) {
+        if (this.aborted || this.timedOut) return
+        this.clearTimer()
+        this.callbacks?.onError?.(
+          { code: 0, text: String(error?.message || error) },
+          this.context,
+          null,
+          this.stats
+        )
+      }
+    }
+
+    getCacheAge() {
+      return null
+    }
+
+    getResponseHeader() {
+      return null
+    }
+  }
+}
+
+interface ActiveHlsRef {
+  get: () => { destroy: () => void } | null
+  set: (handle: { destroy: () => void } | null) => void
+}
+
+function attachHlsToVideo(
+  Hls: any,
+  video: HTMLVideoElement,
+  url: string,
+  codecState: PlaybackCodecInfo,
+  active: ActiveHlsRef,
+  onGiveUp: () => void,
+): void {
+  const existing = active.get()
+  if (existing) {
+    try { existing.destroy() } catch {}
+    active.set(null)
+  }
+  const preferNative =
+    isMacOS && video.canPlayType("application/vnd.apple.mpegurl")
+  if (preferNative) {
+    video.src = url
+    return
+  }
+  if (!Hls.isSupported()) {
+    if (!video.canPlayType("application/vnd.apple.mpegurl")) {
+      log.warn("[xt:player] hls.js unsupported and no native HLS; fallback to <video src>")
+    }
+    video.src = url
+    return
+  }
+  const hlsConfig: Record<string, unknown> = { enableWorker: true }
+  if (isTauri) hlsConfig.loader = createTauriHlsLoaderClass()
+  const hls = new Hls(hlsConfig)
+  let netRecover = 0
+  let mediaRecover = 0
+  hls.on(Hls.Events.BUFFER_CODECS, (_event: unknown, data: any) => {
+    if (active.get() !== hls) return
+    const codec = data?.video?.levelCodec || data?.video?.codec
+    if (codec) codecState.videoCodec = String(codec)
+  })
+  hls.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
+    if (active.get() !== hls) return
+    if (/codec/i.test(String(data?.details || ""))) {
+      codecState.errorDetail = String(data.details)
+      if (!codecState.videoCodec && typeof data?.mimeType === "string") {
+        const fromMime = /codecs="?([^",]+)/i.exec(data.mimeType)?.[1]
+        if (fromMime) codecState.videoCodec = fromMime
+      }
+    }
+    if (!data?.fatal) return
+    if (!codecState.errorDetail && data?.details) {
+      codecState.errorDetail = String(data.details)
+    }
+    const ErrorTypes = Hls.ErrorTypes
+    if (data.type === ErrorTypes.NETWORK_ERROR && netRecover < 2) {
+      netRecover++
+      try { hls.startLoad() } catch {}
+      return
+    }
+    if (data.type === ErrorTypes.MEDIA_ERROR && mediaRecover < 2) {
+      mediaRecover++
+      try { hls.recoverMediaError() } catch {}
+      return
+    }
+    try { hls.destroy() } catch {}
+    if (active.get() === hls) active.set(null)
+    onGiveUp()
+  })
+  hls.loadSource(url)
+  hls.attachMedia(video)
+  active.set(hls)
 }
 
 async function attachMpegts(
   videoEl: HTMLVideoElement,
   url: string,
+  onFatalError?: (detail: string) => void,
+  onMediaInfo?: (info: { videoCodec?: string }) => void,
 ): Promise<MpegtsHandle | null> {
   const mpegtsMod = await import("mpegts.js")
   const mpegts = (mpegtsMod as any).default || mpegtsMod
@@ -657,24 +1081,71 @@ async function attachMpegts(
     log.warn("[xt:player] mpegts.js unsupported in this WebView")
     return null
   }
-  const player = mpegts.createPlayer({
-    type: "mpegts",
-    isLive: true,
-    url,
-  })
-  player.attachMediaElement(videoEl)
-  player.load()
-  try {
-    const playPromise = player.play?.()
-    if (playPromise && typeof (playPromise as Promise<void>).catch === "function") {
-      (playPromise as Promise<void>).catch(() => {})
-    }
-  } catch {}
+
+  let disposed = false
+  let player: any = null
+  let triedTauriLoader = false
+
+  const teardown = () => {
+    if (!player) return
+    try { player.unload() } catch {}
+    try { player.detachMediaElement() } catch {}
+    try { player.destroy() } catch {}
+    player = null
+  }
+
+  const start = (useTauriLoader: boolean) => {
+    const config = useTauriLoader
+      ? { customLoader: createTauriStreamLoaderClass(mpegts) }
+      : undefined
+    player = mpegts.createPlayer({ type: "mpegts", isLive: true, url }, config)
+    player.on(mpegts.Events.MEDIA_INFO, (info: any) => {
+      if (disposed) return
+      if (info?.videoCodec) onMediaInfo?.({ videoCodec: String(info.videoCodec) })
+    })
+    player.on(
+      mpegts.Events.ERROR,
+      (errorType: string, errorDetail: string, errorInfo: any) => {
+        if (disposed) return
+        // CORS-blocked or otherwise WebView-unreachable stream: retry once
+        // through the Rust-side HTTP loader before declaring failure.
+        if (
+          errorType === mpegts.ErrorTypes.NETWORK_ERROR &&
+          isTauri &&
+          !triedTauriLoader
+        ) {
+          triedTauriLoader = true
+          log.warn(
+            "[xt:player] mpegts network error - retrying via Tauri HTTP loader:",
+            errorDetail
+          )
+          teardown()
+          start(true)
+          return
+        }
+        const detail = errorInfo?.msg
+          ? `${errorDetail}: ${errorInfo.msg}`
+          : String(errorDetail || errorType)
+        log.error("[xt:player] mpegts fatal error:", errorType, detail)
+        teardown()
+        onFatalError?.(detail)
+      }
+    )
+    player.attachMediaElement(videoEl)
+    player.load()
+    try {
+      const playPromise = player.play?.()
+      if (playPromise && typeof (playPromise as Promise<void>).catch === "function") {
+        (playPromise as Promise<void>).catch(() => {})
+      }
+    } catch {}
+  }
+
+  start(false)
   return {
     destroy() {
-      try { player.unload() } catch {}
-      try { player.detachMediaElement() } catch {}
-      try { player.destroy() } catch {}
+      disposed = true
+      teardown()
     },
   }
 }
@@ -739,7 +1210,10 @@ async function mountVideoJs(
   }
 
   let activeMpegts: MpegtsHandle | null = null
+  let activeHls: { destroy: () => void } | null = null
+  let hlsModPromise: Promise<any> | null = null
   let pendingSrc: string | null = null
+  const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
 
   function getUnderlyingVideo(): HTMLVideoElement | null {
     try {
@@ -759,18 +1233,87 @@ async function mountVideoJs(
     }
   }
 
+  function destroyHls() {
+    if (activeHls) {
+      try { activeHls.destroy() } catch {}
+      activeHls = null
+    }
+  }
+
   function loadHls(src: string) {
     destroyMpegts()
+    if (isTauri) {
+      void loadHlsViaHlsJs(src)
+      return
+    }
+    destroyHls()
     player.src({ src, type: "application/x-mpegURL" })
+  }
+
+  async function loadHlsViaHlsJs(src: string) {
+    destroyHls()
+    if (!getUnderlyingVideo()) {
+      player.src({ src, type: "application/x-mpegURL" })
+      return
+    }
+    try {
+      if (!hlsModPromise) {
+        hlsModPromise = import("hls.js").then((mod) => (mod as any).default || mod)
+      }
+      const Hls = await hlsModPromise
+      if (pendingSrc !== src) return
+      try { player.pause?.() } catch {}
+      try { player.reset() } catch {}
+      const video = getUnderlyingVideo()
+      if (!video) {
+        player.src({ src, type: "application/x-mpegURL" })
+        return
+      }
+      attachHlsToVideo(
+        Hls,
+        video,
+        src,
+        codecState,
+        { get: () => activeHls, set: (handle) => { activeHls = handle } },
+        () => {
+          try {
+            player.error?.({
+              code: 2,
+              message: codecState.errorDetail || "HLS playback failed",
+            })
+          } catch {}
+        },
+      )
+      try { player.hasStarted?.(true) } catch {}
+    } catch (err) {
+      log.warn("[xt:player] hls.js attach failed, falling back to VHS:", err)
+      player.src({ src, type: "application/x-mpegURL" })
+    }
   }
 
   function loadNative(src: string, type?: string) {
     destroyMpegts()
+    destroyHls()
     player.src({ src, type: type || "video/mp4" })
+  }
+
+  async function recoverFailedTs(src: string, detail: string) {
+    const outcome = await resolveTsRecovery(src, () => pendingSrc === src)
+    if (outcome === "hls") {
+      log.warn(
+        "[xt:player] .ts source served an HLS playlist - falling back to hls.js:",
+        src
+      )
+      loadHls(src)
+      return
+    }
+    if (pendingSrc !== src) return
+    try { player.error?.({ code: 2, message: detail }) } catch {}
   }
 
   async function loadTs(src: string) {
     destroyMpegts()
+    destroyHls()
     try { player.pause?.() } catch {}
     try { player.reset() } catch {}
     const videoElement = getUnderlyingVideo()
@@ -778,7 +1321,20 @@ async function mountVideoJs(
       loadHls(src)
       return
     }
-    const handle = await attachMpegts(videoElement, src)
+    const handle = await attachMpegts(
+      videoElement,
+      src,
+      (detail) => {
+        if (pendingSrc !== src) return
+        activeMpegts = null
+        codecState.errorDetail = detail
+        void recoverFailedTs(src, detail)
+      },
+      (info) => {
+        if (pendingSrc !== src) return
+        if (info.videoCodec) codecState.videoCodec = info.videoCodec
+      },
+    )
     if (!handle) {
       loadHls(src)
       return
@@ -794,9 +1350,12 @@ async function mountVideoJs(
   const wrapped: VjsLikeHandle = {
     src({ src, type }) {
       pendingSrc = src
+      codecState.videoCodec = null
+      codecState.errorDetail = null
       const hint = streamKindHint(src, type)
       if (hint === "ts") {
-        loadTs(src)
+        if (tsSourcesServingHls.has(src)) loadHls(src)
+        else loadTs(src)
         return
       }
       if (hint === "hls") {
@@ -839,11 +1398,13 @@ async function mountVideoJs(
     reset() {
       pendingSrc = null
       destroyMpegts()
+      destroyHls()
       try { player.reset() } catch {}
     },
     dispose() {
       pendingSrc = null
       destroyMpegts()
+      destroyHls()
       disposeFullscreenSync()
       try { player.dispose() } catch {}
     },
@@ -877,6 +1438,9 @@ async function mountVideoJs(
     userActive(active) {
       try { player.userActive?.(active) } catch {}
     },
+    codecInfo() {
+      return { ...codecState }
+    },
   }
   return wrapped
 }
@@ -905,6 +1469,48 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
   let activeHls: { destroy: () => void } | null = null
   let activeMpegts: MpegtsHandle | null = null
   let pendingSrc: string | null = null
+  const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
+
+  // hls.js attach, shared by the m3u8 customType and the .ts -> HLS recovery
+  // path below (some providers' .ts URLs redirect to / serve an HLS playlist,
+  // which mpegts.js can't demux).
+  function loadHlsIntoVideo(video: HTMLVideoElement, url: string) {
+    if (activeMpegts) {
+      try { activeMpegts.destroy() } catch {}
+      activeMpegts = null
+    }
+    attachHlsToVideo(
+      Hls,
+      video,
+      url,
+      codecState,
+      { get: () => activeHls, set: (handle) => { activeHls = handle } },
+      () => { try { video.dispatchEvent(new Event("error")) } catch {} },
+    )
+  }
+
+  // On a fatal mpegts error, a .ts URL may actually serve (or redirect to) an
+  // HLS playlist. Confirm and switch to hls.js, remembering the URL so a later
+  // tune of the same channel skips mpegts. Otherwise surface the error.
+  async function recoverFailedArtTs(
+    video: HTMLVideoElement,
+    url: string,
+    detail: string,
+  ) {
+    const outcome = await resolveTsRecovery(url, () => pendingSrc === url)
+    if (outcome === "hls") {
+      log.warn(
+        "[xt:player] .ts source served an HLS playlist - switching to hls.js:",
+        url
+      )
+      loadHlsIntoVideo(video, url)
+      return
+    }
+    if (pendingSrc !== url) return
+    log.error("[xt:player] mpegts fatal error (artplayer):", detail)
+    try { video.dispatchEvent(new Event("error")) } catch {}
+  }
+
   const art = new Artplayer({
     container,
     url: "",
@@ -925,29 +1531,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
     playsInline: true,
     customType: {
       m3u8(video, url) {
-        if (activeHls) {
-          try { activeHls.destroy() } catch {}
-          activeHls = null
-        }
-        if (activeMpegts) {
-          try { activeMpegts.destroy() } catch {}
-          activeMpegts = null
-        }
-        const preferNative =
-          isMacOS && video.canPlayType("application/vnd.apple.mpegurl")
-        if (preferNative) {
-          video.src = url
-        } else if ((Hls as any).isSupported()) {
-          const hls = new (Hls as any)({ enableWorker: true })
-          hls.loadSource(url)
-          hls.attachMedia(video)
-          activeHls = hls
-        } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-          video.src = url
-        } else {
-          log.warn("[xt:player] hls.js unsupported and no native HLS; fallback to <video src>")
-          video.src = url
-        }
+        loadHlsIntoVideo(video, url)
       },
       async ts(video, url) {
         if (activeHls) {
@@ -958,7 +1542,20 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
           try { activeMpegts.destroy() } catch {}
           activeMpegts = null
         }
-        const handle = await attachMpegts(video, url)
+        const handle = await attachMpegts(
+          video,
+          url,
+          (detail) => {
+            if (pendingSrc !== url) return
+            activeMpegts = null
+            codecState.errorDetail = detail
+            void recoverFailedArtTs(video, url, detail)
+          },
+          (info) => {
+            if (pendingSrc !== url) return
+            if (info.videoCodec) codecState.videoCodec = info.videoCodec
+          },
+        )
         if (!handle) {
           video.src = url
           return
@@ -1008,6 +1605,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
   const handle: VjsLikeHandle = {
     src({ src, type }) {
       pendingSrc = src
+      codecState.videoCodec = null
+      codecState.errorDetail = null
       if (activeHls) {
         try { activeHls.destroy() } catch {}
         activeHls = null
@@ -1023,7 +1622,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
         return
       }
       if (hint === "ts") {
-        art.type = "ts"
+        art.type = tsSourcesServingHls.has(src) ? "m3u8" : "ts"
         art.url = src
         return
       }
@@ -1108,6 +1707,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
     },
     requestFullscreen() {
       art.fullscreen = true
+    },
+    codecInfo() {
+      return { ...codecState }
     },
   }
   return handle

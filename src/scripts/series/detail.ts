@@ -771,7 +771,6 @@ async function playEpisode(episode) {
     log.error("[xt:series-detail] player error", {
       code: e?.code,
       message: e?.message,
-      src: playSrc,
     })
   })
 
@@ -1145,6 +1144,16 @@ async function boot() {
     showError(t("detail.error.noSeriesId"))
     return
   }
+
+  // A playlist switch re-boots: dispose any player from the previous playlist
+  // and clear episode/season/up-next state so nothing leaks across.
+  try { vjs?.pause?.(); vjs?.dispose?.() } catch {}
+  vjs = null
+  progressListenersBound = false
+  currentEpisode = null
+  currentPlayingEpisodeId = null
+  currentSeason = ""
+  dismissUpNext()
 
   series = null
   episodesByKey = null

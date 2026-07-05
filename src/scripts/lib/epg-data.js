@@ -655,7 +655,10 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
     await cacheHydrate(playlistId, kind)
     const hit = cacheGet(playlistId, kind)
     if (hit?.data?.entries) {
-      const programmes = new Map(hit.data.entries)
+      // Clone cached programmes: applyOffset mutates start/stop in place and the
+      // cache hands out entries by reference, so a shared object would re-shift
+      // (drift by offsetMin) on every 304-served load.
+      const programmes = cloneProgrammeEntries(hit.data.entries)
       const channelNames = new Map(hit.data.channelNames || [])
       return {
         programmes,
@@ -674,12 +677,13 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
       throw new Error("304 with no cached body and no fresh payload")
     }
     const parsed = await parseXmlTvOffMain(fresh.xml)
+    const entries = Array.from(parsed.programmes.entries())
     try {
       cacheSet(
         playlistId,
         kind,
         {
-          entries: Array.from(parsed.programmes.entries()),
+          entries,
           channelNames: Array.from(parsed.channelNames.entries()),
         },
         EPG_CACHE_TTL
@@ -689,21 +693,24 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
       lastModified: fresh.lastModified || null,
       etag: fresh.etag || null,
     }
+
+    const programmes = cloneProgrammeEntries(entries)
     return {
-      programmes: parsed.programmes,
+      programmes,
       channelNames: parsed.channelNames,
-      count: countProgrammes(parsed.programmes),
+      count: countProgrammes(programmes),
       cached: false,
     }
   }
 
   const parsed = await parseXmlTvOffMain(result.xml)
+  const entries = Array.from(parsed.programmes.entries())
   try {
     cacheSet(
       playlistId,
       kind,
       {
-        entries: Array.from(parsed.programmes.entries()),
+        entries,
         channelNames: Array.from(parsed.channelNames.entries()),
       },
       EPG_CACHE_TTL
@@ -713,12 +720,23 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
     lastModified: result.lastModified || null,
     etag: result.etag || null,
   }
+
+  const programmes = cloneProgrammeEntries(entries)
   return {
-    programmes: parsed.programmes,
+    programmes,
     channelNames: parsed.channelNames,
-    count: countProgrammes(parsed.programmes),
+    count: countProgrammes(programmes),
     cached: false,
   }
+}
+
+function cloneProgrammeEntries(entries) {
+  return new Map(
+    entries.map(([tvgId, arr]) => [
+      tvgId,
+      Array.isArray(arr) ? arr.map((programme) => ({ ...programme })) : arr,
+    ])
+  )
 }
 
 function countProgrammes(map) {

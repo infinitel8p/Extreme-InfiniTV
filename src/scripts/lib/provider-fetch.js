@@ -8,7 +8,7 @@ const isTauri =
   typeof window !== "undefined" &&
   (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__)
 
-const DEFAULT_BROWSER_UA =
+export const DEFAULT_BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 let tauriFetchPromise = null

@@ -1,6 +1,7 @@
 ---
 import Layout from "@/layouts/Layout.astro";
 import SearchInput from "@/components/SearchInput.astro";
+import SortMenu from "@/components/SortMenu.astro";
 import CategoryPickerDialog from "@/components/CategoryPickerDialog.astro";
 import WelcomeCard from "@/components/WelcomeCard.astro";
 import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from "@tabler/icons-svelte";
@@ -104,15 +105,30 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 						</a>
 					</div>
 
-					<SearchInput
-						id="search"
-						label="Search channels"
-						placeholder="Search channels…"
-						clearButtonId="clear-search"
-						labelKey="list.searchChannels"
-						placeholderKey="list.searchChannelsPlaceholder"
-						clearKey="common.clear"
-					/>
+					<div class="flex gap-2 shrink-0">
+						<div class="flex-1 min-w-0">
+							<SearchInput
+								id="search"
+								label="Search channels"
+								placeholder="Search channels…"
+								clearButtonId="clear-search"
+								labelKey="list.searchChannels"
+								placeholderKey="list.searchChannelsPlaceholder"
+								clearKey="common.clear"
+							/>
+						</div>
+						<SortMenu
+							id="channel-sort"
+							widthClass="w-40 shrink-0"
+							options={[
+								{ value: "default", label: "Source order", key: "sort.sourceOrder" },
+								{ value: "number", label: "Channel number", key: "sort.channelNumber" },
+								{ value: "az", label: "A-Z", key: "sort.az" },
+								{ value: "za", label: "Z-A", key: "sort.za" },
+								{ value: "cataz", label: "Category, A-Z", key: "sort.categoryAz" },
+							]}
+						/>
+					</div>
 
 					<div
 						id="list"

@@ -12,7 +12,12 @@
     EPG_LOADED_EVENT,
   } from "@/scripts/lib/epg-data.js"
   import { kindLabel } from "@/scripts/lib/kinds.js"
+  import { fmtChannelIdentity } from "@/scripts/lib/format.ts"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
+  import {
+    observeSeasonCount,
+    seasonsLabel,
+  } from "@/scripts/lib/series-seasons.ts"
 
   /** @type {{ focusOnMount?: boolean }} */
   let { focusOnMount = false } = $props()
@@ -46,10 +51,30 @@
   let allItems = $state([])
   let isWarming = $state(false)
   let locale = $state(0)
+  let activePlaylistId = $state("")
+  let seasonCounts = $state({})
   // Wrappers read the locale rune so {tr(...)} / {kl(...)} template effects
   // track it and re-evaluate on LOCALE_EVENT.
   const tr = (key, params) => (locale, t(key, params))
   const kl = (kind) => (locale, kindLabel(kind))
+
+  function displaySubtitle(item) {
+    if (item.kind !== "series") return item.subtitle
+    void locale
+    const parts = ["Series"]
+    if (item.year) parts.push(item.year)
+    const count = seasonCounts[item.id]
+    if (count) parts.push(seasonsLabel(count))
+    if (item.genre) parts.push(item.genre)
+    return parts.join(" · ")
+  }
+
+  function lazySeasons(node, item) {
+    if (!item || item.kind !== "series" || !activePlaylistId) return
+    observeSeasonCount(node, activePlaylistId, item.id, (count) => {
+      seasonCounts = { ...seasonCounts, [item.id]: count }
+    })
+  }
   /** @type {HTMLInputElement|null} */
   let inputEl = null
 
@@ -76,8 +101,12 @@
     const active = await getActiveEntry()
     if (!active) {
       allItems = []
+      activePlaylistId = ""
+      seasonCounts = {}
       return
     }
+    if (active._id !== activePlaylistId) seasonCounts = {}
+    activePlaylistId = active._id
     await ensurePrefsLoaded()
     await Promise.all([
       hydrateCache(active._id, "live"),
@@ -110,7 +139,7 @@
         id: Number(c.id),
         name: c.name || "",
         logo: c.logo || null,
-        subtitle: c.category || "Live",
+        subtitle: `${fmtChannelIdentity(c.chno, c.id)} · ${c.category || "Live"}`,
         href: buildHref("live", c.id),
         norm: c.norm || normalize(`${c.name || ""} ${c.category || ""}`),
       })
@@ -132,6 +161,8 @@
         id: Number(s.id),
         name: s.name || "",
         logo: s.logo || null,
+        year: s.year || "",
+        genre: s.category || "",
         subtitle: s.year ? `Series · ${s.year}` : "Series",
         href: buildHref("series", s.id),
         norm: s.norm || normalize(`${s.name || ""} ${s.category || ""}`),
@@ -414,6 +445,7 @@
           <li class="result-row" style:--enter-delay={Math.min(i, 12) * 18 + "ms"}>
             <a
               href={r.href}
+              use:lazySeasons={r}
               onmouseenter={() => (activeIndex = i)}
               onfocus={() => (activeIndex = i)}
               class="w-full text-left rounded-lg px-2.5 py-2 flex items-center gap-3 outline-none transition-colors focus-visible:bg-surface-2"
@@ -436,7 +468,7 @@
               </span>
               <span class="flex-1 min-w-0">
                 <span class="block truncate text-sm text-fg">{r.name}</span>
-                <span class="block truncate text-2xs text-fg-3">{r.subtitle}</span>
+                <span class="block truncate text-2xs text-fg-3">{displaySubtitle(r)}</span>
               </span>
               <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
                 {kl(r.kind)}

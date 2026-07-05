@@ -5,6 +5,7 @@ import {
   loadCreds,
   getActiveEntry,
   isLikelyM3USource,
+  safeHttpUrl,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
@@ -26,8 +27,10 @@ import {
   getChannelEpgOverride,
   setChannelEpgOverride,
   clearChannelEpgOverride,
+  getViewSort,
   CHANNEL_EPG_CHANGED_EVENT,
 } from "@/scripts/lib/preferences.js"
+import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 
 const CAT_FAVORITES = "__favorites__"
@@ -304,9 +307,10 @@ function renderChannelRow(channel, programmesForRow) {
   const logo = document.createElement("div")
   logo.className =
     "h-9 w-9 shrink-0 rounded-md overflow-hidden ring-1 ring-inset ring-line logo-skel"
-  if (channel.logo) {
+  const safeLogo = channel.logo ? safeHttpUrl(channel.logo) : null
+  if (safeLogo) {
     const img = document.createElement("img")
-    img.src = channel.logo
+    img.src = safeLogo
     img.alt = ""
     img.loading = "lazy"
     img.decoding = "async"
@@ -690,7 +694,11 @@ function pickChannels(cachedChannels) {
   const withEpg = filtered.filter((channel) =>
     !!effectiveTvgId(channel, activePlaylistId)
   )
-  return withEpg.slice(0, MAX_CHANNELS)
+  // Mirror Live TV's saved sort
+  const sortMode = activePlaylistId
+    ? getViewSort(activePlaylistId, "live")
+    : "default"
+  return sortChannelsForView(withEpg, sortMode).slice(0, MAX_CHANNELS)
 }
 
 async function fetchXtreamChannels() {
@@ -743,12 +751,10 @@ async function fetchXtreamChannels() {
         category,
         logo: ch.stream_icon || null,
         tvgId: String(ch.epg_channel_id || "") || undefined,
+        chno: Number(ch.num) || undefined,
       }
     })
     .filter((x) => x.id && x.name)
-    .sort((a, b) =>
-      a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-    )
 }
 
 // ----------------------------

@@ -13,6 +13,19 @@ const DB_VERSION = 1
 const STORE = "entries"
 export const LOCAL_CONTENT_MAX_BYTES = 25 * 1024 * 1024 // 25 MiB
 
+/** UTF-8 byte size of a string; the cap is a byte budget, not a char count. */
+export function utf8ByteLength(text) {
+  const value = text || ""
+  if (typeof TextEncoder !== "undefined") return new TextEncoder().encode(value).length
+  // Fallback for environments without TextEncoder: count surrogate-aware bytes.
+  let bytes = 0
+  for (const codePointStr of value) {
+    const codePoint = codePointStr.codePointAt(0)
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4
+  }
+  return bytes
+}
+
 /** @type {Promise<IDBDatabase>|null} */
 let dbPromise = null
 
@@ -49,10 +62,11 @@ function openDB() {
 export async function setLocalContent(entryId, text) {
   if (!entryId) return false
   const value = text || ""
-  if (value.length > LOCAL_CONTENT_MAX_BYTES) {
+  const byteSize = utf8ByteLength(value)
+  if (byteSize > LOCAL_CONTENT_MAX_BYTES) {
     log.warn(
       "[xt:local-content] setLocalContent rejected oversize payload:",
-      value.length,
+      byteSize,
       ">",
       LOCAL_CONTENT_MAX_BYTES
     )
