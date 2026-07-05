@@ -661,19 +661,37 @@ async function readBodyStart(response: Response, maxBytes: number): Promise<stri
     return text.slice(0, maxBytes)
   }
   const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
   try {
-    const { value } = await reader.read()
-    if (!value) return ""
-    const slice = value.subarray(0, maxBytes)
-    return new TextDecoder().decode(slice)
+    while (total < maxBytes) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && value.byteLength) {
+        chunks.push(value)
+        total += value.byteLength
+      }
+    }
   } finally {
     try { await reader.cancel() } catch {}
   }
+  if (!total) return ""
+  const merged = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder().decode(merged.subarray(0, maxBytes))
 }
 
-// Confirm a .ts source is really an HLS playlist before flipping a failed
-// mpegts load over to hls.js.
-async function tsSourceIsActuallyHls(src: string): Promise<boolean> {
+// Confirm whether a .ts source is really an HLS playlist before flipping a
+// failed mpegts load over to hls.js. Tri-state: "inconclusive" (empty read,
+// timeout, or network error) must NOT be memoized as a negative, or a slow but
+// valid HLS-over-.ts channel gets permanently locked out of recovery.
+async function tsSourceIsActuallyHls(
+  src: string,
+): Promise<"hls" | "not-hls" | "inconclusive"> {
   try {
     const { providerFetch } = await import("@/scripts/lib/provider-fetch.js")
     const controller =
@@ -688,15 +706,16 @@ async function tsSourceIsActuallyHls(src: string): Promise<boolean> {
       const contentType = (response.headers.get("content-type") || "").toLowerCase()
       if (contentType.includes("mpegurl")) {
         try { response.body?.cancel?.() } catch {}
-        return true
+        return "hls"
       }
       const head = await readBodyStart(response, 64)
-      return /^\uFEFF?\s*#EXTM3U/.test(head)
+      if (!head) return "inconclusive"
+      return /^\uFEFF?\s*#EXTM3U/.test(head) ? "hls" : "not-hls"
     } finally {
       if (timer) clearTimeout(timer)
     }
   } catch {
-    return false
+    return "inconclusive"
   }
 }
 
@@ -707,13 +726,14 @@ async function resolveTsRecovery(
   if (!isCurrent()) return "error"
   if (tsSourcesServingHls.has(src)) return "hls"
   if (tsSourcesNotHls.has(src)) return "error"
-  const actuallyHls = await tsSourceIsActuallyHls(src)
+  const verdict = await tsSourceIsActuallyHls(src)
   if (!isCurrent()) return "error"
-  if (actuallyHls) {
+  if (verdict === "hls") {
     tsSourcesServingHls.add(src)
     return "hls"
   }
-  tsSourcesNotHls.add(src)
+
+  if (verdict === "not-hls") tsSourcesNotHls.add(src)
   return "error"
 }
 
@@ -917,7 +937,10 @@ function createTauriHlsLoaderClass() {
           headers,
           signal: this.abortController?.signal,
         })
-        if (this.aborted || this.timedOut) return
+        if (this.aborted || this.timedOut) {
+          try { response.body?.cancel?.() } catch {}
+          return
+        }
         this.stats.loading.first = performance.now()
         if (!response.ok && response.status !== 206) {
           this.clearTimer()
@@ -1228,6 +1251,7 @@ async function mountVideoJs(
   }
 
   async function loadHlsViaHlsJs(src: string) {
+    destroyHls()
     if (!getUnderlyingVideo()) {
       player.src({ src, type: "application/x-mpegURL" })
       return
