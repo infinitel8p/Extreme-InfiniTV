@@ -3,6 +3,7 @@ import Sidebar from "@/components/Sidebar.astro"
 import TitleBar from "@/components/TitleBar.astro"
 import WindowResizeEdges from "@/components/WindowResizeEdges.astro"
 import CatalogWarmingIndicator from "@/components/CatalogWarmingIndicator.svelte"
+import pkg from "../../package.json"
 import "../styles/global.css"
 
 interface Props {
@@ -23,6 +24,7 @@ const documentTitle = pageTitle
       content="width=device-width, initial-scale=1,viewport-fit=cover"
     />
     <title>{documentTitle}</title>
+    <meta name="x-app-version" content={pkg.version} />
     <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0e1628" media="(prefers-color-scheme: dark)" />
     <script is:inline>
@@ -466,6 +468,7 @@ const documentTitle = pageTitle
   import { initTrayHandler } from "@/scripts/lib/tray-handler"
   import { setupSplashBackdrop } from "@/scripts/lib/splash-backdrop"
   import { setupSplashComet } from "@/scripts/lib/splash-comet"
+  import { initWhatsNew } from "@/scripts/lib/whats-new"
   initI18n()
   initConnectivity()
 
@@ -576,6 +579,7 @@ const documentTitle = pageTitle
   initFocusGlide()
   initKeyboardHelp()
   initTrayHandler()
+  initWhatsNew()
 
   // -----------------------------------------------------------------------
   // Discord idle presence: push "Browsing the catalog" on every page load

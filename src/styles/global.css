@@ -290,6 +290,33 @@ dialog[open]::backdrop {
     }
 }
 
+dialog[open] .icon-mark--sparkle > svg {
+    animation: sparkle-twinkle 1100ms cubic-bezier(0.16, 1, 0.3, 1) 220ms;
+    transform-origin: center;
+}
+@keyframes sparkle-twinkle {
+    0% { transform: scale(1) rotate(0deg); }
+    30% { transform: scale(1.22) rotate(9deg); }
+    62% { transform: scale(0.94) rotate(-5deg); }
+    100% { transform: scale(1) rotate(0deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+    dialog[open] .icon-mark--sparkle > svg { animation: none; }
+}
+
+dialog[open] .xt-wn-section {
+    animation: whats-new-section-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes whats-new-section-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    dialog[open] .xt-wn-section { animation: none; }
+}
+
 .check-draw path {
     stroke-dasharray: 24;
     animation: check-draw 320ms cubic-bezier(0.16, 1, 0.3, 1);
