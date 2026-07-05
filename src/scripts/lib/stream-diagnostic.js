@@ -24,6 +24,21 @@ function withTimeout(promise, ms, label) {
   })
 }
 
+async function providerFetchWithTimeout(url, init, ms, label) {
+  const controller =
+    typeof AbortController !== "undefined" ? new AbortController() : null
+  const timer = controller ? setTimeout(() => controller.abort(), ms) : null
+  try {
+    return await withTimeout(
+      providerFetch(url, { ...init, signal: controller?.signal }),
+      ms,
+      label
+    )
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 function resolveUrl(base, ref) {
   try {
     return new URL(ref, base).toString()
@@ -109,26 +124,30 @@ async function headOrGet(url) {
   const start = performance.now()
   let headInfo = null
   try {
-    const response = await withTimeout(
-      providerFetch(url, { method: "HEAD" }),
+    const response = await providerFetchWithTimeout(
+      url,
+      { method: "HEAD" },
       FETCH_TIMEOUT_MS,
       "HEAD"
     )
     headInfo = readMeta(response, "HEAD", start)
+    try { response.body?.cancel?.() } catch {}
     if (headInfo.ok) return headInfo
   } catch (headError) {
     headInfo = { error: String(headError?.message || headError) }
   }
+
+  const getStart = performance.now()
   try {
-    const response = await withTimeout(
-      providerFetch(url, {
-        method: "GET",
-        headers: { Range: "bytes=0-0" },
-      }),
+    const response = await providerFetchWithTimeout(
+      url,
+      { method: "GET", headers: { Range: "bytes=0-0" } },
       FETCH_TIMEOUT_MS,
       "GET"
     )
-    const meta = readMeta(response, "GET (range)", start)
+    const meta = readMeta(response, "GET (range)", getStart)
+
+    try { response.body?.cancel?.() } catch {}
     if (headInfo?.error) meta.fallback = headInfo.error
     else if (headInfo?.status) meta.headStatus = headInfo.status
     return meta
@@ -139,7 +158,7 @@ async function headOrGet(url) {
       statusText: headInfo?.statusText || "",
       contentType: headInfo?.contentType || "",
       contentLength: 0,
-      latencyMs: Math.round(performance.now() - start),
+      latencyMs: Math.round(performance.now() - getStart),
       method: headInfo?.status ? "HEAD+GET" : "HEAD",
       error: String(getError?.message || getError),
     }
@@ -149,9 +168,16 @@ async function headOrGet(url) {
 // Plain WebView fetch
 async function probeWebViewFetch(url) {
   const start = performance.now()
+  const controller =
+    typeof AbortController !== "undefined" ? new AbortController() : null
+  const timer = controller
+    ? setTimeout(() => {
+        try { controller.abort() } catch {}
+      }, FETCH_TIMEOUT_MS)
+    : null
   try {
     const response = await withTimeout(
-      fetch(url, { method: "GET", mode: "cors" }),
+      fetch(url, { method: "GET", mode: "cors", signal: controller?.signal }),
       FETCH_TIMEOUT_MS,
       "WebView GET"
     )
@@ -173,6 +199,8 @@ async function probeWebViewFetch(url) {
       latencyMs: Math.round(performance.now() - start),
       error: String(error?.message || error),
     }
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }
 
@@ -231,8 +259,9 @@ export async function diagnoseStream(url, onUpdate) {
   if (looksLikeHls) {
     try {
       const start = performance.now()
-      const response = await withTimeout(
-        providerFetch(url),
+      const response = await providerFetchWithTimeout(
+        url,
+        {},
         FETCH_TIMEOUT_MS,
         "Playlist GET"
       )
@@ -265,8 +294,9 @@ export async function diagnoseStream(url, onUpdate) {
       if (parsed.isMaster && parsed.variants[0]?.uri) {
         const variantUrl = resolveUrl(url, parsed.variants[0].uri)
         try {
-          const variantResp = await withTimeout(
-            providerFetch(variantUrl),
+          const variantResp = await providerFetchWithTimeout(
+            variantUrl,
+            {},
             FETCH_TIMEOUT_MS,
             "Variant GET"
           )

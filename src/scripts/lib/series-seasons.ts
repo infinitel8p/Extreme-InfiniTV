@@ -11,6 +11,7 @@
 
 import { getCached, setCached, hydrate } from "@/scripts/lib/cache.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
+import { getActiveEntry } from "@/scripts/lib/creds.js"
 import { t } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
 
@@ -53,6 +54,23 @@ export function countSeasons(info: any): number {
 }
 
 /**
+ * Synchronous read of the cached series-info state. `cached` is true whenever a
+ * (non-expired) payload is in memory, even when it contains zero seasons - so
+ * callers can tell "no data yet" apart from "confirmed to have no seasons" and
+ * avoid re-fetching a series the provider genuinely lists with no episodes.
+ */
+function getCachedSeasonState(
+  playlistId: string,
+  seriesId: string | number
+): { cached: boolean; count: number | null } {
+  if (!playlistId || seriesId == null) return { cached: false, count: null }
+  const hit = getCached(playlistId, seriesInfoKind(seriesId))
+  if (!hit) return { cached: false, count: null }
+  const count = countSeasons(hit.data)
+  return { cached: true, count: count > 0 ? count : null }
+}
+
+/**
  * Synchronous read: season count from already-cached series info, or null
  * when nothing is in memory yet. Callers that want IDB-backed reads should go
  * through requestSeasonCount / observeSeasonCount.
@@ -61,11 +79,7 @@ export function getCachedSeasonCount(
   playlistId: string,
   seriesId: string | number
 ): number | null {
-  if (!playlistId || seriesId == null) return null
-  const hit = getCached(playlistId, seriesInfoKind(seriesId))
-  if (!hit) return null
-  const count = countSeasons(hit.data)
-  return count > 0 ? count : null
+  return getCachedSeasonState(playlistId, seriesId).count
 }
 
 // ---------------------------------------------------------------------------
@@ -96,6 +110,15 @@ function pump(): void {
   }
 }
 
+async function isActivePlaylist(playlistId: string): Promise<boolean> {
+  try {
+    const entry = await getActiveEntry()
+    return !!entry && entry._id === playlistId
+  } catch {
+    return false
+  }
+}
+
 async function fetchSeasonCount(
   playlistId: string,
   seriesId: string | number
@@ -107,6 +130,7 @@ async function fetchSeasonCount(
     })
     if (!response.ok) throw new Error(`get_series_info ${response.status}`)
     const data = await response.json()
+    if (!(await isActivePlaylist(playlistId))) return null
     setCached(playlistId, seriesInfoKind(seriesId), data, SERIES_INFO_TTL_MS)
     const count = countSeasons(data)
     return count > 0 ? count : null
@@ -127,8 +151,9 @@ export function requestSeasonCount(
   seriesId: string | number
 ): Promise<number | null> {
   if (!playlistId || seriesId == null) return Promise.resolve(null)
-  const cached = getCachedSeasonCount(playlistId, seriesId)
-  if (cached != null) return Promise.resolve(cached)
+
+  const cached = getCachedSeasonState(playlistId, seriesId)
+  if (cached.cached) return Promise.resolve(cached.count)
   const key = jobKey(playlistId, seriesId)
   if (_failed.has(key)) return Promise.resolve(null)
   const existing = _pending.get(key)
@@ -136,12 +161,16 @@ export function requestSeasonCount(
 
   const promise = new Promise<number | null>((resolve) => {
     _queue.push(async () => {
-      // The detail page may have cached this on a prior visit; hydrate from
-      // IDB before paying for a network round-trip.
+
+      if (!(await isActivePlaylist(playlistId))) {
+        resolve(null)
+        return
+      }
+
       await hydrate(playlistId, seriesInfoKind(seriesId)).catch(() => {})
-      const fromCache = getCachedSeasonCount(playlistId, seriesId)
-      if (fromCache != null) {
-        resolve(fromCache)
+      const fromCache = getCachedSeasonState(playlistId, seriesId)
+      if (fromCache.cached) {
+        resolve(fromCache.count)
         return
       }
       resolve(await fetchSeasonCount(playlistId, seriesId))
