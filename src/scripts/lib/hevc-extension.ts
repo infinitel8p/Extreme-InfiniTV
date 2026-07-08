@@ -19,6 +19,8 @@ const APPX_URL =
 const APPX_SHA256 = "fbcfbc9ed5c1777946b0dad7a5813377960a134e9907d3e0669804d273defe90"
 const APPX_FILENAME = "Microsoft.HEVCVideoExtension.appxbundle"
 const STORE_URL = "ms-windows-store://pdp/?productid=9N4WGH0Z6VHQ"
+const GITHUB_RELEASES_URL =
+  "https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest"
 
 let inFlight = false
 
@@ -37,8 +39,14 @@ export async function ensureHevcDecodable(): Promise<boolean> {
         title: t("hevc.title") || "Enable HEVC playback",
         message:
           t("hevc.storeBody") ||
-          "This channel needs Microsoft's HEVC Video Extensions. Open the Microsoft Store to install it, then restart the app. Prefer not to use the Store? You can also download the desktop version from GitHub, which installs the HEVC component for you.",
+          "This channel needs Microsoft's HEVC Video Extensions. Open the Microsoft Store to install it, then restart the app.",
         confirmLabel: t("hevc.openStore") || "Open Store",
+        link: {
+          label: t("hevc.githubLink") || "Or download the desktop version from GitHub",
+          onClick: () => {
+            void openExternal(GITHUB_RELEASES_URL)
+          },
+        },
       })
       if (ok) await openExternal(STORE_URL)
       return false
