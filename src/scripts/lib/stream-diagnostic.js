@@ -256,6 +256,35 @@ export async function diagnoseStream(url, onUpdate) {
     /\.m3u8($|\?)/i.test(url) ||
     /mpegurl/i.test(report.head.contentType || "")
 
+  const looksLikeDash =
+    !looksLikeHls &&
+    (/\.mpd($|\?)/i.test(url) ||
+      /dash\+xml/i.test(report.head.contentType || "") ||
+      /\.mpd($|\?)/i.test(report.head.finalUrl || ""))
+
+  if (looksLikeDash) {
+    try {
+      const start = performance.now()
+      const response = await providerFetchWithTimeout(url, {}, FETCH_TIMEOUT_MS, "Manifest GET")
+      const text = await response.text()
+      const codecs = [...text.matchAll(/codecs="([^"]+)"/gi)].map((match) => match[1])
+      report.dash = {
+        ok: response.ok,
+        status: response.status,
+        latencyMs: Math.round(performance.now() - start),
+        bytes: text.length,
+        videoCodecs: codecs,
+        hevc: codecs.some((codec) => findHevcInCodecList(codec)),
+        encrypted: /<ContentProtection/i.test(text),
+        clearKey: /clearkey|1077efec-c0b2-4d02-ace3-3c1e52e2fb4b/i.test(text),
+      }
+      emit()
+    } catch (manifestErr) {
+      report.dash = { ok: false, error: String(manifestErr?.message || manifestErr) }
+      emit()
+    }
+  }
+
   if (looksLikeHls) {
     try {
       const start = performance.now()
@@ -382,6 +411,32 @@ export function summarizeReport(report) {
       reason: report.playlist.error
         ? t("streamTest.summary.cantFetch", { error: report.playlist.error })
         : t("streamTest.summary.playlistResponded", { status: report.playlist.status || 0 }),
+    }
+  }
+
+  if (report.dash) {
+    if (report.dash.ok === false) {
+      return {
+        verdict: "fail",
+        reason: report.dash.error
+          ? t("streamTest.summary.cantFetch", { error: report.dash.error })
+          : t("streamTest.summary.playlistResponded", { status: report.dash.status || 0 }),
+      }
+    }
+    if (report.dash.hevc && !deviceSupportsHevc()) {
+      return {
+        verdict: "warn",
+        reason:
+          t("streamTest.summary.dashHevc") ||
+          "MPEG-DASH stream is HEVC-encoded and this device can't decode HEVC in-app. On Windows, install the HEVC extension; otherwise use an external player.",
+      }
+    }
+    return {
+      verdict: report.dash.clearKey ? "info" : "ok",
+      reason: report.dash.clearKey
+        ? t("streamTest.summary.dashClearKey") ||
+          "MPEG-DASH with ClearKey encryption - plays in the built-in player."
+        : t("streamTest.summary.dashOk") || "MPEG-DASH stream reachable.",
     }
   }
 

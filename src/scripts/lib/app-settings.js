@@ -1,3 +1,5 @@
+import { log } from "@/scripts/lib/log.js"
+
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
 const KEY_DOWNLOAD_CONCURRENCY = "xt_download_concurrency"
@@ -105,7 +107,9 @@ function writeLS(key, value) {
   try {
     if (value) localStorage.setItem(key, value)
     else localStorage.removeItem(key)
-  } catch {}
+  } catch (writeError) {
+    log.error("[xt:settings] localStorage write failed for", key, writeError)
+  }
 }
 
 export function getUserAgent() {
@@ -189,7 +193,9 @@ export function setTvOverscan(percent) {
   if (next > 8) next = 8
   try {
     localStorage.setItem(KEY_TV_OVERSCAN, String(next))
-  } catch {}
+  } catch (writeError) {
+    log.error("[xt:settings] localStorage write failed for", KEY_TV_OVERSCAN, writeError)
+  }
   if (typeof document !== "undefined") {
     const root = document.documentElement
     if (next > 0) {
@@ -498,7 +504,9 @@ function writeDiscordMutedSet(set) {
   try {
     if (set.size === 0) localStorage.removeItem(KEY_DISCORD_MUTED)
     else localStorage.setItem(KEY_DISCORD_MUTED, JSON.stringify([...set]))
-  } catch {}
+  } catch (writeError) {
+    log.error("[xt:settings] localStorage write failed for", KEY_DISCORD_MUTED, writeError)
+  }
 }
 
 export function isDiscordEnabledForPlaylist(playlistId) {

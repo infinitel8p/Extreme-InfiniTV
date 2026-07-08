@@ -17,6 +17,7 @@
 import type { ChannelInput } from "@/scripts/lib/channel-lite.js"
 import { serializeChannelsJson } from "@/scripts/lib/channel-lite.js"
 import { setProgress, markCompleted } from "@/scripts/lib/preferences.js"
+import { log, redactUrl } from "@/scripts/lib/log.js"
 
 export type AndroidNativeEventType =
   | "xt:android-native-progress"
@@ -82,7 +83,8 @@ export function launchAndroidNativeVod(opts: VodLaunchOptions): boolean {
       opts.posterUrl || "",
       Math.max(0, Math.floor(opts.startMs || 0)),
     )
-  } catch {
+  } catch (err) {
+    log.error("[xt:android-video] native VOD launch failed:", redactUrl(opts.url), err)
     return false
   }
 }
@@ -108,7 +110,8 @@ export function launchAndroidNativeLive(opts: LiveLaunchOptions): boolean {
       opts.defaultUa || "",
       opts.defaultReferer || "",
     )
-  } catch {
+  } catch (err) {
+    log.error("[xt:android-video] native live launch failed:", err)
     return false
   }
 }

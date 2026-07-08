@@ -1,6 +1,8 @@
 // Exponential-backoff retry helper. Used by catalog / EPG / account-info
 // fetchers so a single transient 5xx doesn't kill a whole warmup.
 
+import { log } from "@/scripts/lib/log.js"
+
 export interface RetryOptions {
   tries?: number
   baseMs?: number
@@ -65,6 +67,10 @@ export async function retryWithBackoff<T>(
     } catch (error) {
       lastError = error
       if (shouldGiveUp(error) || attempt === tries) throw error
+      log.warn(
+        `[xt:retry] attempt ${attempt}/${tries} failed, retrying:`,
+        error instanceof Error ? error.message : String(error)
+      )
       const delay = Math.min(maxMs, baseMs * 2 ** (attempt - 1))
       const jitter = Math.floor(Math.random() * Math.min(250, delay / 2))
       await sleep(delay + jitter, signal)

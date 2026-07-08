@@ -65,7 +65,8 @@ async function ensurePermission(): Promise<boolean> {
     const result = await Notification.requestPermission()
     permissionState = result === "granted" ? "granted" : "denied"
     return permissionState === "granted"
-  } catch {
+  } catch (err) {
+    log.warn("[xt:notify] web permission request failed:", err)
     return false
   }
 }

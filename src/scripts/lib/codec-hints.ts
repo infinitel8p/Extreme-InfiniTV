@@ -95,3 +95,29 @@ export function deviceSupportsHevc(): boolean {
   cachedHevcSupport = supported
   return supported
 }
+
+let cachedClearKey: Promise<boolean> | null = null
+
+// EME ClearKey (org.w3.clearkey) is present in Chromium WebViews (Android /
+// WebView2 / WKWebView) but absent in WebKitGTK, where DASH+ClearKey can't
+// play in-app and must fall back to an external player.
+export function clearKeyAvailable(): Promise<boolean> {
+  if (cachedClearKey) return cachedClearKey
+  cachedClearKey = (async () => {
+    try {
+      if (typeof navigator === "undefined" || !navigator.requestMediaKeySystemAccess) {
+        return false
+      }
+      await navigator.requestMediaKeySystemAccess("org.w3.clearkey", [
+        {
+          initDataTypes: ["cenc"],
+          videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }],
+        },
+      ])
+      return true
+    } catch {
+      return false
+    }
+  })()
+  return cachedClearKey
+}

@@ -17,6 +17,32 @@ const isDev = Boolean(import.meta.env?.DEV)
 type LogFn = (...args: unknown[]) => void
 const noop: LogFn = () => {}
 
+const isTauri =
+    typeof window !== "undefined" &&
+    (!!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__)
+
+// Mirror warn/error/info into the persistent log file (tauri-plugin-log) so
+// users can attach it to a bug report. Redacted first - the file may be shared.
+type PluginLog = typeof import("@tauri-apps/plugin-log")
+let pluginLogPromise: Promise<PluginLog> | null = null
+function toFile(level: "error" | "warn" | "info", args: unknown[]): void {
+    if (!isTauri) return
+    try {
+        if (!pluginLogPromise) pluginLogPromise = import("@tauri-apps/plugin-log")
+        void pluginLogPromise.then((mod) => mod[level](redactUrl(stringifyArgs(args)))).catch(() => {})
+    } catch {}
+}
+
+function stringifyArgs(args: unknown[]): string {
+    return args
+        .map((arg) => {
+            if (typeof arg === "string") return arg
+            if (arg instanceof Error) return arg.stack || arg.message
+            try { return JSON.stringify(arg) } catch { return String(arg) }
+        })
+        .join(" ")
+}
+
 export const log: {
     error: LogFn
     warn: LogFn
@@ -24,23 +50,22 @@ export const log: {
     debug: LogFn
     log: LogFn
 } = {
-    error: console.error.bind(console),
-    warn: console.warn.bind(console),
-    info: isDev ? console.info.bind(console) : noop,
+    error: (...args) => { console.error(...args); toFile("error", args) },
+    warn: (...args) => { console.warn(...args); toFile("warn", args) },
+    info: (...args) => { if (isDev) console.info(...args); toFile("info", args) },
     debug: isDev ? console.debug.bind(console) : noop,
     log: isDev ? console.log.bind(console) : noop,
 }
 
 const SENSITIVE_PARAMS = /(\b(?:username|user|password|pass|token|auth|key|api_key|apikey)=)([^&#\s]*)/gi
 
-/**
- * Strip credential-looking query params from any URL or URL-bearing string
- * before it goes to log.error / log.warn. `log.error` is unconditional in
- * production builds (see `error` above) and Xtream URLs typically embed
- * username + password.
- */
+const SENSITIVE_PATH =
+    /(\/(?:live|movie|series|timeshift|hls|hlsr)\/)([^/\s?#]+)\/([^/\s?#]+)(\/)/gi
+
 export function redactUrl(input: unknown): string {
     if (input == null) return ""
     const text = typeof input === "string" ? input : String(input)
-    return text.replace(SENSITIVE_PARAMS, (_match, prefix) => `${prefix}***`)
+    return text
+        .replace(SENSITIVE_PARAMS, (_match, prefix) => `${prefix}***`)
+        .replace(SENSITIVE_PATH, (_match, prefix) => `${prefix}***/***/`)
 }

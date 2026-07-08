@@ -1,4 +1,5 @@
 import { getCached } from "@/scripts/lib/cache.js"
+import { log } from "@/scripts/lib/log.js"
 import {
   ensureUserInfo,
   getCachedUserInfoSync,
@@ -142,7 +143,9 @@ export async function refreshPlaylistHealth(
   if (creds?.host && creds?.user && creds?.pass) {
     try {
       await ensureUserInfo(creds, playlistId, { force: true })
-    } catch {}
+    } catch (refreshError) {
+      log.warn("[xt:playlist-health] account info refresh failed:", refreshError)
+    }
   }
   return getPlaylistHealth(playlistId)
 }

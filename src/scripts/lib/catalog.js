@@ -14,6 +14,7 @@ import { ensureUserInfo } from "@/scripts/lib/account-info.js"
 import { parseM3U } from "@/scripts/lib/m3u-parser.ts"
 import { t } from "@/scripts/lib/i18n.js"
 import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
+import { log } from "@/scripts/lib/log.js"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 const VOD_TTL_MS = 24 * 60 * 60 * 1000
@@ -61,7 +62,10 @@ function makeBytesEmitter(playlistId, kind) {
 async function fetchLiveCategoryMap() {
   const r = await xtreamApiFetch("get_live_categories")
   if (!r.ok) throw new HttpRetryError(r.status, `live_categories ${r.status}`)
-  const data = await r.json().catch(() => [])
+  const data = await r.json().catch((err) => {
+    log.warn("[xt:catalog] live categories parse failed:", err?.message || err)
+    return []
+  })
   const arr = Array.isArray(data)
     ? data
     : Array.isArray(data?.categories)
@@ -167,7 +171,10 @@ export async function ensureLive(creds, playlistId, opts = {}) {
 async function fetchVodCategoryMap() {
   const r = await xtreamApiFetch("get_vod_categories")
   if (!r.ok) throw new HttpRetryError(r.status, `vod_categories ${r.status}`)
-  const data = await r.json().catch(() => [])
+  const data = await r.json().catch((err) => {
+    log.warn("[xt:catalog] vod categories parse failed:", err?.message || err)
+    return []
+  })
   const arr = Array.isArray(data)
     ? data
     : Array.isArray(data?.categories)
@@ -237,7 +244,10 @@ export async function ensureVod(creds, playlistId, opts = {}) {
 async function fetchSeriesCategoryMap() {
   const r = await xtreamApiFetch("get_series_categories")
   if (!r.ok) throw new HttpRetryError(r.status, `series_categories ${r.status}`)
-  const data = await r.json().catch(() => [])
+  const data = await r.json().catch((err) => {
+    log.warn("[xt:catalog] series categories parse failed:", err?.message || err)
+    return []
+  })
   const arr = Array.isArray(data)
     ? data
     : Array.isArray(data?.categories)
@@ -312,7 +322,8 @@ export async function warmupActive(playlistId, opts = {}) {
   let pid = playlistId
   try {
     creds = await loadCreds()
-  } catch {
+  } catch (err) {
+    log.warn("[xt:catalog] warmup loadCreds failed:", err?.message || err)
     return { live: [], vod: [], series: [], errors: { creds: "no creds" } }
   }
   if (!creds?.host) {
@@ -366,6 +377,7 @@ export async function warmupActive(playlistId, opts = {}) {
         })
         .catch((e) => {
           errors[kind] = String(e?.message || e)
+          log.warn(`[xt:catalog] ${kind} warmup failed:`, errors[kind])
           if (!allHot) {
             dispatch(EVT_WARMING_PROGRESS, {
               playlistId: pid,
@@ -416,7 +428,8 @@ export async function retryWarmupKind(playlistId, kind) {
   let creds
   try {
     creds = await loadCreds()
-  } catch {
+  } catch (err) {
+    log.warn("[xt:catalog] retryWarmupKind loadCreds failed:", err?.message || err)
     return
   }
   if (!creds?.host) return
@@ -437,6 +450,7 @@ export async function retryWarmupKind(playlistId, kind) {
       count: Array.isArray(data) ? data.length : 0,
     })
   } catch (e) {
+    log.warn(`[xt:catalog] retry ${kind} failed:`, String(e?.message || e))
     dispatch(EVT_WARMING_PROGRESS, {
       playlistId: pid,
       kind,

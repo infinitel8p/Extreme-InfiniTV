@@ -2,6 +2,7 @@
 // preferences (hidden categories, sort order), persisted alongside creds.
 import { Store } from "@tauri-apps/plugin-store"
 import { getProgressRetentionDays } from "@/scripts/lib/app-settings.js"
+import { log } from "@/scripts/lib/log.js"
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -85,7 +86,9 @@ async function writeRaw(data) {
   try {
     localStorage.setItem(STORAGE_KEY, json)
     setCookie(STORAGE_KEY, json)
-  } catch {}
+  } catch (writeError) {
+    log.error("[xt:prefs] localStorage/cookie write failed:", writeError)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +318,9 @@ function scheduleSave() {
     saveScheduled = false
     try {
       await writeRaw(dehydrate())
-    } catch {}
+    } catch (saveError) {
+      log.error("[xt:prefs] failed to persist preferences:", saveError)
+    }
   })
 }
 

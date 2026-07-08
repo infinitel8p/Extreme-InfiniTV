@@ -147,6 +147,23 @@ function renderPlaylist(pl) {
   return `<div class="font-medium text-fg">${escapeHtml(heading)}</div>${top}${td}${total}${meta}`
 }
 
+function renderDash(dash) {
+  if (dash.error) return `<span class="text-bad">${escapeHtml(dash.error)}</span>`
+  const heading = `<div class="font-medium text-fg">${escapeHtml(t("streamTest.dash.manifest") || "MPEG-DASH manifest")}</div>`
+  const codecs = dash.videoCodecs?.length
+    ? `<div class="text-2xs text-fg-3 font-mono break-all">${escapeHtml(dash.videoCodecs.join(", "))}</div>`
+    : ""
+  const flags = []
+  if (dash.hevc) flags.push("HEVC")
+  if (dash.clearKey) flags.push("ClearKey")
+  else if (dash.encrypted) flags.push(t("streamTest.dash.encrypted") || "encrypted")
+  const flagsRow = flags.length
+    ? `<div class="text-2xs text-warn tabular-nums">${escapeHtml(flags.join(" · "))}</div>`
+    : ""
+  const meta = `<div class="text-2xs text-fg-3 tabular-nums">${dash.bytes ? fmtBytes(dash.bytes) : ""} · ${fmtMs(dash.latencyMs)}</div>`
+  return `${heading}${codecs}${flagsRow}${meta}`
+}
+
 function renderFirstSegment(seg) {
   if (!seg) return `<span class="text-fg-3">${escapeHtml(t("streamTest.skipped"))}</span>`
   const head = renderHead(seg)
@@ -227,7 +244,9 @@ function paint(report, opts) {
     } else {
       reportEl.innerHTML = [
         renderStage(t("streamTest.stage.endpoint"), renderHead(report?.head)),
-        renderStage(t("streamTest.stage.playlist"), renderPlaylist(report?.playlist)),
+        report?.dash
+          ? renderStage(t("streamTest.stage.dash") || "DASH", renderDash(report.dash))
+          : renderStage(t("streamTest.stage.playlist"), renderPlaylist(report?.playlist)),
         renderStage(t("streamTest.stage.firstSegment"), renderFirstSegment(report?.firstSegment)),
         renderStage(t("streamTest.stage.webview"), renderWebView(report?.webviewProbe)),
       ].join("")

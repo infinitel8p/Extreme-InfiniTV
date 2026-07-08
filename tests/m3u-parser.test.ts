@@ -220,6 +220,45 @@ describe("parseM3U: per-channel #EXTVLCOPT headers", () => {
   })
 })
 
+describe("parseM3U: KODIPROP manifest / ClearKey DRM", () => {
+  const dash =
+    "#EXTM3U\n" +
+    '#EXTINF:-1 tvg-id="jade",翡翠台\n' +
+    "#KODIPROP:inputstream.adaptive.manifest_type=mpd\n" +
+    "#KODIPROP:inputstream.adaptive.license_type=clearkey\n" +
+    "#KODIPROP:inputstream.adaptive.license_key=0958b9c657622c465a6205eb2252b8ed:2d2fd7b1661b1e28de38268872b48480\n" +
+    "https://example.com/myTV/genyg5?token=abc\n" +
+    '#EXTINF:-1 tvg-id="plain",Plain Channel\n' +
+    "https://example.com/plain.m3u8\n"
+  const result = parseM3U(dash)
+
+  it("captures manifest_type, license_type and the raw KID:KEY", () => {
+    const [jade] = result.entries
+    expect(jade.manifestType).toBe("mpd")
+    expect(jade.drmScheme).toBe("clearkey")
+    expect(jade.licenseKey).toBe(
+      "0958b9c657622c465a6205eb2252b8ed:2d2fd7b1661b1e28de38268872b48480",
+    )
+  })
+
+  it("does not leak DRM onto the next entry", () => {
+    const plain = result.entries[1]
+    expect(plain.manifestType).toBeNull()
+    expect(plain.drmScheme).toBeNull()
+    expect(plain.licenseKey).toBeNull()
+  })
+
+  it("ignores KODIPROP appearing before its EXTINF", () => {
+    const text =
+      "#EXTM3U\n" +
+      "#KODIPROP:inputstream.adaptive.manifest_type=mpd\n" +
+      '#EXTINF:-1 tvg-id="x",Orphan Prop\n' +
+      "http://example.com/x.m3u8\n"
+    const orphan = parseM3U(text).entries[0]
+    expect(orphan.manifestType).toBeNull()
+  })
+})
+
 describe("parseM3U: HLS sub-playlist tags", () => {
   it("does not crash on interleaved #EXT-X-* tags", () => {
     const result = parseM3U(fixture("hls-master.m3u"))

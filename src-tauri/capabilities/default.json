@@ -50,11 +50,31 @@
     "store:default",
     "clipboard-manager:allow-write-text",
     "notification:default",
+    "log:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$APPLOCALDATA" },
+        { "path": "$APPLOCALDATA/**" },
+        { "path": "$APPLOG" },
+        { "path": "$APPLOG/**" }
+      ]
+    },
+    {
+      "identifier": "opener:allow-reveal-item-in-dir",
+      "allow": [
+        { "path": "$APPLOCALDATA" },
+        { "path": "$APPLOCALDATA/**" },
+        { "path": "$APPLOG" },
+        { "path": "$APPLOG/**" }
+      ]
+    },
     {
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://**/*" },
-        { "url": "http://**/*" }
+        { "url": "http://**/*" },
+        { "url": "ms-windows-store://**" }
       ]
     }
   ]

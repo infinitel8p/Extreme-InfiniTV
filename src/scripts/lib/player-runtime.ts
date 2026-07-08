@@ -35,8 +35,14 @@ export interface PlaybackCodecInfo {
   errorDetail: string | null
 }
 
+export interface DrmOptions {
+  manifestType?: string | null
+  drmScheme?: string | null
+  licenseKey?: string | null
+}
+
 export interface VjsLikeHandle {
-  src(opts: { src: string; type: string }): void
+  src(opts: { src: string; type: string; drm?: DrmOptions | null }): void
   play(): Promise<unknown> | void
   pause(): void
   paused?(): boolean
@@ -586,20 +592,28 @@ export async function detectPlayer(
 // Dispatcharr's `/proxy/ts/stream/<uuid>` or Xtream's bare `/live/<u>/<p>/<id>`
 // which the server can serve as either HLS or raw TS).
 
-type StreamKind = "hls" | "ts" | "native"
+type StreamKind = "hls" | "ts" | "native" | "dash"
 
 function streamKindHint(src: string, type?: string): StreamKind | "unknown" {
   // URL extension wins: Live TV callers pass a stock
   // "application/x-mpegURL" MIME regardless of the real container, so
   // a contradicting extension overrides the MIME.
   if (/\.m3u8(\?|$)/i.test(src)) return "hls"
+  if (/\.mpd(\?|$)/i.test(src)) return "dash"
   if (/\.ts(\?|$)/i.test(src)) return "ts"
   if (/\.(mp4|m4v|mkv|webm|mov|avi|m4a|mp3|aac|flac|ogg)(\?|$)/i.test(src)) return "native"
 
   const mime = (type || "").toLowerCase()
+  if (mime.includes("dash+xml")) return "dash"
   if (mime === "video/mp2t" || mime === "video/mpeg") return "ts"
   if (mime.startsWith("video/") || mime.startsWith("audio/")) return "native"
   return "unknown"
+}
+
+function isDashSource(drm: DrmOptions | null | undefined, src: string, type?: string): boolean {
+  const manifest = (drm?.manifestType || "").toLowerCase()
+  if (manifest === "mpd" || manifest === "dash") return true
+  return streamKindHint(src, type) === "dash"
 }
 
 const containerProbeCache = new Map<string, StreamKind>()
@@ -626,7 +640,9 @@ async function probeContainer(src: string): Promise<StreamKind> {
         signal: controller?.signal,
       })
       const contentType = (response.headers.get("content-type") || "").toLowerCase()
-      if (
+      if (contentType.includes("dash+xml") || /\.mpd(\?|$)/i.test(response.url || "")) {
+        kind = "dash"
+      } else if (
         contentType.includes("mp2t") ||
         contentType.includes("mpeg-ts") ||
         contentType.includes("mpegts")
@@ -1069,6 +1085,78 @@ function attachHlsToVideo(
   active.set(hls)
 }
 
+function isClearKeyScheme(drmScheme: string | null | undefined): boolean {
+  if (!drmScheme) return true
+  return /clearkey/i.test(drmScheme)
+}
+
+function parseClearKeys(licenseKey: string | null | undefined): Record<string, string> | null {
+  if (!licenseKey) return null
+  if (/^https?:\/\//i.test(licenseKey.trim())) return null
+  const keys: Record<string, string> = {}
+  for (const pair of licenseKey.split(/\s+/)) {
+    const [kid, key] = pair.split(":")
+    if (kid && key) keys[kid.trim()] = key.trim()
+  }
+  return Object.keys(keys).length ? keys : null
+}
+
+async function attachShaka(
+  video: HTMLVideoElement,
+  url: string,
+  drm: DrmOptions | null | undefined,
+  codecState: PlaybackCodecInfo,
+  active: ActiveHlsRef,
+  onGiveUp: (detail: string) => void,
+): Promise<void> {
+  const existing = active.get()
+  if (existing) {
+    try { existing.destroy() } catch {}
+    active.set(null)
+  }
+  const mod = await import("shaka-player")
+  const shaka = (mod as any).default || mod
+  shaka.polyfill.installAll()
+  if (!shaka.Player.isBrowserSupported()) {
+    onGiveUp("shaka: browser unsupported")
+    return
+  }
+  const player = new shaka.Player()
+  const handle = { destroy: () => { void player.destroy() } }
+  active.set(handle)
+  const clearKeys = isClearKeyScheme(drm?.drmScheme) ? parseClearKeys(drm?.licenseKey) : null
+  if (clearKeys) player.configure({ drm: { clearKeys } })
+  const fail = (raw: any) => {
+    if (active.get() !== handle) return
+    const detail = describeShakaError(raw)
+    log.warn("[xt:player] shaka/DASH error:", detail)
+    codecState.errorDetail = detail
+    if (!codecState.videoCodec) {
+      const codecMatch = /codecs=\\?"?([^"\\,]+)/i.exec(detail)
+      if (codecMatch) codecState.videoCodec = codecMatch[1]
+    }
+    onGiveUp(detail)
+  }
+  player.addEventListener("error", (event: any) => fail(event?.detail))
+  try {
+    await player.attach(video)
+    await player.load(url)
+    if (active.get() !== handle) return
+    const track = player.getVariantTracks?.().find((variant: any) => variant.active)
+    if (track?.videoCodec) codecState.videoCodec = String(track.videoCodec)
+    try { await video.play() } catch {}
+  } catch (err: any) {
+    fail(err)
+  }
+}
+
+function describeShakaError(detail: any): string {
+  if (!detail) return "shaka: unknown error"
+  const code = detail.code ?? detail.detail?.code
+  const data = detail.data ?? detail.detail?.data
+  return `shaka:${code}${data ? " " + JSON.stringify(data) : ""}`
+}
+
 async function attachMpegts(
   videoEl: HTMLVideoElement,
   url: string,
@@ -1211,6 +1299,7 @@ async function mountVideoJs(
 
   let activeMpegts: MpegtsHandle | null = null
   let activeHls: { destroy: () => void } | null = null
+  let activeShaka: { destroy: () => void } | null = null
   let hlsModPromise: Promise<any> | null = null
   let pendingSrc: string | null = null
   const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
@@ -1240,8 +1329,40 @@ async function mountVideoJs(
     }
   }
 
+  function destroyShaka() {
+    if (activeShaka) {
+      try { activeShaka.destroy() } catch {}
+      activeShaka = null
+    }
+  }
+
+  async function loadDash(src: string, drm: DrmOptions | null | undefined) {
+    destroyMpegts()
+    destroyHls()
+    try { player.pause?.() } catch {}
+    try { player.reset() } catch {}
+    const video = getUnderlyingVideo()
+    if (!video) {
+      try { player.error?.({ code: 4, message: "DASH needs a media element" }) } catch {}
+      return
+    }
+    await attachShaka(
+      video,
+      src,
+      drm,
+      codecState,
+      { get: () => activeShaka, set: (handle) => { activeShaka = handle } },
+      (detail) => {
+        if (pendingSrc !== src) return
+        try { player.error?.({ code: 3, message: detail }) } catch {}
+      },
+    )
+    try { player.hasStarted?.(true) } catch {}
+  }
+
   function loadHls(src: string) {
     destroyMpegts()
+    destroyShaka()
     if (isTauri) {
       void loadHlsViaHlsJs(src)
       return
@@ -1294,6 +1415,7 @@ async function mountVideoJs(
   function loadNative(src: string, type?: string) {
     destroyMpegts()
     destroyHls()
+    destroyShaka()
     player.src({ src, type: type || "video/mp4" })
   }
 
@@ -1314,6 +1436,7 @@ async function mountVideoJs(
   async function loadTs(src: string) {
     destroyMpegts()
     destroyHls()
+    destroyShaka()
     try { player.pause?.() } catch {}
     try { player.reset() } catch {}
     const videoElement = getUnderlyingVideo()
@@ -1348,10 +1471,14 @@ async function mountVideoJs(
   }
 
   const wrapped: VjsLikeHandle = {
-    src({ src, type }) {
+    src({ src, type, drm }) {
       pendingSrc = src
       codecState.videoCodec = null
       codecState.errorDetail = null
+      if (isDashSource(drm, src, type)) {
+        void loadDash(src, drm)
+        return
+      }
       const hint = streamKindHint(src, type)
       if (hint === "ts") {
         if (tsSourcesServingHls.has(src)) loadHls(src)
@@ -1368,11 +1495,13 @@ async function mountVideoJs(
       }
       // Unknown extension - probe and only load once we know the container
       destroyMpegts()
+      destroyShaka()
       try { player.reset() } catch {}
       probeContainer(src)
         .then((kind) => {
           if (pendingSrc !== src) return
-          if (kind === "ts") loadTs(src)
+          if (kind === "dash") void loadDash(src, drm)
+          else if (kind === "ts") loadTs(src)
           else if (kind === "native") loadNative(src, type)
           else loadHls(src)
         })
@@ -1399,12 +1528,14 @@ async function mountVideoJs(
       pendingSrc = null
       destroyMpegts()
       destroyHls()
+      destroyShaka()
       try { player.reset() } catch {}
     },
     dispose() {
       pendingSrc = null
       destroyMpegts()
       destroyHls()
+      destroyShaka()
       disposeFullscreenSync()
       try { player.dispose() } catch {}
     },
@@ -1445,7 +1576,7 @@ async function mountVideoJs(
   return wrapped
 }
 
-async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle> {
+async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions = {}): Promise<VjsLikeHandle> {
   const [{ default: Artplayer }, { default: Hls }] = await Promise.all([
     import("artplayer"),
     import("hls.js"),
@@ -1468,8 +1599,40 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
 
   let activeHls: { destroy: () => void } | null = null
   let activeMpegts: MpegtsHandle | null = null
+  let activeShaka: { destroy: () => void } | null = null
   let pendingSrc: string | null = null
+  let pendingDrm: DrmOptions | null = null
   const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
+
+  function destroyArtEngines(includeHls = true) {
+    if (includeHls && activeHls) {
+      try { activeHls.destroy() } catch {}
+      activeHls = null
+    }
+    if (activeMpegts) {
+      try { activeMpegts.destroy() } catch {}
+      activeMpegts = null
+    }
+    if (activeShaka) {
+      try { activeShaka.destroy() } catch {}
+      activeShaka = null
+    }
+  }
+
+  function loadDashIntoVideo(video: HTMLVideoElement, url: string, drm: DrmOptions | null) {
+    destroyArtEngines()
+    void attachShaka(
+      video,
+      url,
+      drm,
+      codecState,
+      { get: () => activeShaka, set: (handle) => { activeShaka = handle } },
+      () => {
+        if (pendingSrc !== url) return
+        try { video.dispatchEvent(new Event("error")) } catch {}
+      },
+    )
+  }
 
   // hls.js attach, shared by the m3u8 customType and the .ts -> HLS recovery
   // path below (some providers' .ts URLs redirect to / serve an HLS playlist,
@@ -1478,6 +1641,10 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
     if (activeMpegts) {
       try { activeMpegts.destroy() } catch {}
       activeMpegts = null
+    }
+    if (activeShaka) {
+      try { activeShaka.destroy() } catch {}
+      activeShaka = null
     }
     attachHlsToVideo(
       Hls,
@@ -1514,6 +1681,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
   const art = new Artplayer({
     container,
     url: "",
+    isLive: !!options.liveui,
     volume: 1,
     autoplay: false,
     autoSize: false,
@@ -1532,6 +1700,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
     customType: {
       m3u8(video, url) {
         loadHlsIntoVideo(video, url)
+      },
+      mpd(video, url) {
+        loadDashIntoVideo(video, url, pendingDrm)
       },
       async ts(video, url) {
         if (activeHls) {
@@ -1592,28 +1763,20 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
   }
 
   art.on("destroy", () => {
-    if (activeHls) {
-      try { activeHls.destroy() } catch {}
-      activeHls = null
-    }
-    if (activeMpegts) {
-      try { activeMpegts.destroy() } catch {}
-      activeMpegts = null
-    }
+    destroyArtEngines()
   })
 
   const handle: VjsLikeHandle = {
-    src({ src, type }) {
+    src({ src, type, drm }) {
       pendingSrc = src
+      pendingDrm = drm ?? null
       codecState.videoCodec = null
       codecState.errorDetail = null
-      if (activeHls) {
-        try { activeHls.destroy() } catch {}
-        activeHls = null
-      }
-      if (activeMpegts) {
-        try { activeMpegts.destroy() } catch {}
-        activeMpegts = null
+      destroyArtEngines()
+      if (isDashSource(drm, src, type)) {
+        art.type = "mpd"
+        art.url = src
+        return
       }
       const hint = streamKindHint(src, type)
       if (hint === "hls") {
@@ -1637,7 +1800,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
       probeContainer(src)
         .then((kind) => {
           if (pendingSrc !== src) return
-          art.type = kind === "ts" ? "ts" : kind === "native" ? "" : "m3u8"
+          art.type = kind === "dash" ? "mpd" : kind === "ts" ? "ts" : kind === "native" ? "" : "m3u8"
           art.url = src
         })
         .catch(() => {
@@ -1662,22 +1825,12 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
     },
     reset() {
       pendingSrc = null
-      if (activeHls) {
-        try { activeHls.destroy() } catch {}
-        activeHls = null
-      }
-      if (activeMpegts) {
-        try { activeMpegts.destroy() } catch {}
-        activeMpegts = null
-      }
+      destroyArtEngines()
       art.url = ""
     },
     dispose() {
       pendingSrc = null
-      if (activeMpegts) {
-        try { activeMpegts.destroy() } catch {}
-        activeMpegts = null
-      }
+      destroyArtEngines()
       disposeFullscreenSync()
       try { art.destroy(false) } catch {}
     },
@@ -1751,7 +1904,7 @@ export async function mountPlayer(
     }
   }
   // artplayer (default)
-  const handle = await mountArtPlayer(videoEl)
+  const handle = await mountArtPlayer(videoEl, options)
   return {
     kind: "embedded",
     backend: "artplayer",
