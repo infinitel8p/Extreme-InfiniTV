@@ -1,4 +1,4 @@
-// Unified mount surface for the four playback backends.
+// Unified mount surface for the five playback backends.
 //
 // Returns a tagged union so call sites can branch cleanly between
 // embedded (Video.js / HTML5) and external (MPV / VLC) playback. The
@@ -27,7 +27,7 @@ import {
   EXTERNAL_PLAYER_BACKENDS,
 } from "@/scripts/lib/app-settings.js"
 
-export type PlayerBackend = "videojs" | "artplayer" | "mpv" | "vlc"
+export type PlayerBackend = "videojs" | "artplayer" | "shaka" | "mpv" | "vlc"
 export type ExternalPlayerKind = "mpv" | "vlc"
 
 export const RESUME_MIN_SECONDS_DEFAULT = 5
@@ -83,7 +83,7 @@ export interface ExternalLauncher {
 }
 
 export type Mounted =
-  | { kind: "embedded"; backend: "videojs" | "artplayer"; handle: VjsLikeHandle }
+  | { kind: "embedded"; backend: "videojs" | "artplayer" | "shaka"; handle: VjsLikeHandle }
   | { kind: "external"; backend: ExternalPlayerKind; launcher: ExternalLauncher }
 
 export interface MountOptions {
@@ -1156,6 +1156,25 @@ const SHAKA_CATEGORY_NETWORK = 1
 const SHAKA_CATEGORY_MEDIA = 3
 const SHAKA_CATEGORY_DRM = 6
 
+// Shaka has no per-loader hook, so the Authorization header rides the WebView's fetch via a request filter.
+function configureShakaDrmAndAuth(
+  player: any,
+  clearKeys: Record<string, string> | null,
+  authorization: string | null,
+  cleanUrl: string,
+): void {
+  player.configure({ drm: { clearKeys: clearKeys ?? {} } })
+  if (!authorization) return
+  let authorizedOrigin: string | null = null
+  try { authorizedOrigin = new URL(cleanUrl).origin } catch {}
+  player.getNetworkingEngine()?.registerRequestFilter((_type: unknown, request: any) => {
+    const requestUrl = request?.uris?.[0]
+    if (!requestUrl || !matchesAuthorizedOrigin(requestUrl, authorizedOrigin)) return
+    request.headers = request.headers || {}
+    request.headers["Authorization"] = authorization
+  })
+}
+
 async function attachShaka(
   video: HTMLVideoElement,
   url: string,
@@ -1190,19 +1209,7 @@ async function attachShaka(
   }
   const player = new shaka.Player()
   const handle = { destroy: () => { void player.destroy() } }
-  if (clearKeys) player.configure({ drm: { clearKeys } })
-  if (authorization) {
-    // Shaka has no per-loader hook like the hls.js/mpegts Tauri loaders; the
-    // Authorization header rides the WebView's own fetch via a request filter.
-    let authorizedOrigin: string | null = null
-    try { authorizedOrigin = new URL(cleanUrl).origin } catch {}
-    player.getNetworkingEngine()?.registerRequestFilter((_type: unknown, request: any) => {
-      const requestUrl = request?.uris?.[0]
-      if (!requestUrl || !matchesAuthorizedOrigin(requestUrl, authorizedOrigin)) return
-      request.headers = request.headers || {}
-      request.headers["Authorization"] = authorization
-    })
-  }
+  configureShakaDrmAndAuth(player, clearKeys, authorization, cleanUrl)
   const fail = (raw: any) => {
     if (!isCurrent()) return
     const detail = describeShakaError(raw)
@@ -1972,6 +1979,243 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   return handle
 }
 
+async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {}): Promise<VjsLikeHandle> {
+  const [shakaModule] = await Promise.all([
+    import("shaka-player/dist/shaka-player.ui.js"),
+    import("shaka-player/dist/controls.css"),
+  ])
+  const shaka = (shakaModule as any).default || shakaModule
+  shaka.polyfill.installAll()
+
+  const parent = videoEl.parentElement
+  if (!parent) {
+    throw new Error("[xt:player] Shaka mount: videoEl has no parent")
+  }
+  const container = document.createElement("div")
+  container.id = videoEl.id
+  container.className = videoEl.className
+  for (const attr of Array.from(videoEl.attributes)) {
+    if (attr.name === "id" || attr.name === "class") continue
+    container.setAttribute(attr.name, attr.value)
+  }
+  container.style.width = "100%"
+  container.style.height = "100%"
+  container.style.position = "relative"
+  const video = document.createElement("video")
+  video.playsInline = true
+  video.autoplay = options.autoplay ?? false
+  video.style.width = "100%"
+  video.style.height = "100%"
+  container.appendChild(video)
+  parent.replaceChild(container, videoEl)
+
+  const player = new shaka.Player()
+  await player.attach(video)
+  const ui = new shaka.ui.Overlay(player, container, video)
+  const controls = ui.getControls()
+
+  const accentColor = getComputedStyle(document.documentElement).getPropertyValue("--color-accent").trim()
+    || "oklch(0.78 0.15 330)"
+  ui.configure({
+    seekBarColors: { played: accentColor },
+    volumeBarColors: { level: accentColor },
+  })
+
+  let activeMpegts: MpegtsHandle | null = null
+  let pendingSrc: string | null = null
+  let pendingDrm: DrmOptions | null = null
+  const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
+
+  function destroyMpegts() {
+    if (activeMpegts) {
+      try { activeMpegts.destroy() } catch {}
+      activeMpegts = null
+    }
+  }
+
+  function fail(src: string, detail: string) {
+    if (pendingSrc !== src) return
+    codecState.errorDetail = detail
+    try { video.dispatchEvent(new Event("error")) } catch {}
+  }
+
+  player.addEventListener("error", (event: any) => {
+    if (!pendingSrc) return
+    fail(pendingSrc, describeShakaError(event?.detail))
+  })
+
+  async function loadIntoShaka(src: string, drm: DrmOptions | null | undefined, mimeTypeHint?: string) {
+    destroyMpegts()
+    const { url: cleanUrl, authorization } = splitUrlAuth(src)
+    const clearKeys = isClearKeyScheme(drm?.drmScheme) ? parseClearKeys(drm?.licenseKey) : null
+    if (clearKeys) {
+      const supported = await clearKeyAvailable()
+      if (pendingSrc !== src) return
+      if (!supported) {
+        fail(src, "shaka:drm ClearKey (EME org.w3.clearkey) unsupported in this WebView")
+        return
+      }
+    }
+    try {
+      await player.attach(video)
+      if (pendingSrc !== src) return
+      player.getNetworkingEngine()?.clearAllRequestFilters()
+      configureShakaDrmAndAuth(player, clearKeys, authorization, cleanUrl)
+      await player.load(cleanUrl, null, mimeTypeHint || undefined)
+      if (pendingSrc !== src) return
+      const track = player.getVariantTracks?.().find((variant: any) => variant.active)
+      if (track?.videoCodec) codecState.videoCodec = String(track.videoCodec)
+    } catch (err: any) {
+      if (pendingSrc !== src) return
+      fail(src, describeShakaError(err))
+    }
+  }
+
+  // A .ts URL that fails may actually be serving an HLS playlist - confirm and switch to shaka.
+  async function recoverFailedTs(src: string, detail: string) {
+    const outcome = await resolveTsRecovery(src, () => pendingSrc === src)
+    if (outcome === "hls") {
+      log.warn(
+        "[xt:player] .ts source served an HLS playlist - switching to shaka:",
+        redactUrl(src)
+      )
+      void loadIntoShaka(src, pendingDrm, "application/x-mpegURL")
+      return
+    }
+    if (pendingSrc !== src) return
+    fail(src, detail)
+  }
+
+  async function loadTs(src: string) {
+    destroyMpegts()
+    try { await player.detach() } catch {}
+    if (pendingSrc !== src) return
+    const mpegtsHandle = await attachMpegts(
+      video,
+      src,
+      (detail) => {
+        if (pendingSrc !== src) return
+        activeMpegts = null
+        codecState.errorDetail = detail
+        void recoverFailedTs(src, detail)
+      },
+      (info) => {
+        if (pendingSrc !== src) return
+        if (info.videoCodec) codecState.videoCodec = info.videoCodec
+      },
+    )
+    if (!mpegtsHandle) {
+      void loadIntoShaka(src, pendingDrm, "application/x-mpegURL")
+      return
+    }
+    if (pendingSrc !== src) {
+      try { mpegtsHandle.destroy() } catch {}
+      return
+    }
+    activeMpegts = mpegtsHandle
+  }
+
+  const handle: VjsLikeHandle = {
+    src({ src, type, drm }) {
+      pendingSrc = src
+      pendingDrm = drm ?? null
+      codecState.videoCodec = null
+      codecState.errorDetail = null
+      if (isDashSource(drm, src, type)) {
+        void loadIntoShaka(src, drm, "application/dash+xml")
+        return
+      }
+      const hint = streamKindHint(src, type)
+      // Shaka can't demux raw MPEG-TS; route it through mpegts.js instead.
+      if (hint === "ts") {
+        if (tsSourcesServingHls.has(src)) void loadIntoShaka(src, drm, "application/x-mpegURL")
+        else void loadTs(src)
+        return
+      }
+      if (hint === "hls") {
+        void loadIntoShaka(src, drm, "application/x-mpegURL")
+        return
+      }
+      if (hint === "native") {
+        void loadIntoShaka(src, drm, type || undefined)
+        return
+      }
+      destroyMpegts()
+      probeContainer(src)
+        .then((kind) => {
+          if (pendingSrc !== src) return
+          if (kind === "ts") void loadTs(src)
+          else if (kind === "dash") void loadIntoShaka(src, drm, "application/dash+xml")
+          else if (kind === "native") void loadIntoShaka(src, drm, type || undefined)
+          else void loadIntoShaka(src, drm, "application/x-mpegURL")
+        })
+        .catch(() => {
+          if (pendingSrc !== src) return
+          void loadIntoShaka(src, drm, "application/x-mpegURL")
+        })
+    },
+    play() {
+      return video.play()
+    },
+    pause() {
+      video.pause()
+    },
+    paused() {
+      return video.paused ?? true
+    },
+    muted(value) {
+      if (value === undefined) return video.muted
+      video.muted = !!value
+      return undefined
+    },
+    reset() {
+      pendingSrc = null
+      destroyMpegts()
+      void player.unload().catch(() => {})
+    },
+    dispose() {
+      pendingSrc = null
+      destroyMpegts()
+      const restoreOriginalVideoElement = () => {
+        if (container.parentElement) container.parentElement.replaceChild(videoEl, container)
+      }
+      void ui.destroy().then(restoreOriginalVideoElement).catch(restoreOriginalVideoElement)
+    },
+    duration() {
+      return Number.isFinite(video.duration) ? video.duration : 0
+    },
+    currentTime(value) {
+      if (value === undefined) return video.currentTime || 0
+      video.currentTime = value
+      return value
+    },
+    on(event, fn) {
+      video.addEventListener(event, fn as EventListener)
+    },
+    off(event, fn) {
+      video.removeEventListener(event, fn as EventListener)
+    },
+    one(event, fn) {
+      video.addEventListener(event, fn as EventListener, { once: true })
+    },
+    el() {
+      return container
+    },
+    error() {
+      return video.error ?? null
+    },
+    requestFullscreen() {
+      try {
+        if (!controls?.isFullScreenEnabled?.()) return controls?.toggleFullScreen?.()
+      } catch {}
+    },
+    codecInfo() {
+      return { ...codecState }
+    },
+  }
+  return handle
+}
+
 // ---------------------------------------------------------------------------
 // Mount entry point
 // ---------------------------------------------------------------------------
@@ -2004,6 +2248,14 @@ export async function mountPlayer(
     return {
       kind: "embedded",
       backend: "videojs",
+      handle,
+    }
+  }
+  if (backend === "shaka") {
+    const handle = await mountShaka(videoEl, options)
+    return {
+      kind: "embedded",
+      backend: "shaka",
       handle,
     }
   }

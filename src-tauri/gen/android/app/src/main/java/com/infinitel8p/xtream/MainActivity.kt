@@ -29,7 +29,9 @@ import android.graphics.drawable.Drawable
 import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Base64
+import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
+import java.io.File
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -125,6 +127,50 @@ class DeviceInfoBridge(private val activity: TauriActivity) {
 
   @JavascriptInterface
   fun isTv(): Boolean = isLeanback() || isTelevisionUiMode()
+}
+
+// {dataDir}/logs isn't a declared FileProvider root, so the newest log file is copied to the cache dir first and shared from there.
+class LogShareBridge(private val activity: TauriActivity) {
+  @JavascriptInterface
+  fun shareNewestLog(logDirPath: String?): Boolean {
+    if (logDirPath.isNullOrBlank()) return false
+    val logDir = File(logDirPath)
+    val newestLogFile = logDir.listFiles { file -> file.isFile && file.name.endsWith(".log") }
+      ?.maxByOrNull { it.lastModified() }
+      ?: return false
+    val shareDir = File(activity.cacheDir, "logshare").apply { mkdirs() }
+    val shareCopy = File(shareDir, newestLogFile.name)
+    try {
+      newestLogFile.copyTo(shareCopy, overwrite = true)
+    } catch (e: Throwable) {
+      Log.w("xtream-rs", "shareNewestLog copyTo failed: $e")
+      return false
+    }
+    val logUri = try {
+      FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", shareCopy)
+    } catch (e: Throwable) {
+      Log.w("xtream-rs", "shareNewestLog getUriForFile failed: $e")
+      return false
+    }
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+      type = "text/plain"
+      putExtra(Intent.EXTRA_STREAM, logUri)
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    val chooser = Intent.createChooser(sendIntent, newestLogFile.name).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    activity.runOnUiThread {
+      try {
+        activity.startActivity(chooser)
+      } catch (e: ActivityNotFoundException) {
+        Log.w("xtream-rs", "shareNewestLog startActivity threw: $e")
+      } catch (e: Throwable) {
+        Log.w("xtream-rs", "shareNewestLog launch threw: $e")
+      }
+    }
+    return true
+  }
 }
 
 // External-video-app handoff:
@@ -711,6 +757,7 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(PipBridge(this), "AndroidPip")
     webView.addJavascriptInterface(StatusBarBridge(this), "AndroidStatusBar")
     webView.addJavascriptInterface(DeviceInfoBridge(this), "AndroidDeviceInfo")
+    webView.addJavascriptInterface(LogShareBridge(this), "AndroidLog")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
     webView.addJavascriptInterface(AndroidVideoBridge(this), "AndroidVideo")
     webView.addJavascriptInterface(

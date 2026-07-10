@@ -240,6 +240,18 @@ input[type="search"]::-webkit-search-decoration {
     color: var(--color-bg);
 }
 
+.shaka-video-container {
+    --shaka-font-family: var(--font-sans);
+    /* Only enlarges the invisible touch hit-area on sliders, not the visible track, to hit the 44px minimum. */
+    --shaka-touch-size: 44px;
+}
+
+.shaka-video-container button:focus-visible,
+.shaka-video-container input:focus-visible {
+    outline: none !important;
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent) 40%, transparent) !important;
+}
+
 dialog[open] {
     animation: dialog-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
 }

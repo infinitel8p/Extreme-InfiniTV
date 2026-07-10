@@ -36,6 +36,7 @@ import {
   IconLayoutDashboard,
   IconSearch,
   IconX,
+  IconShare,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -471,8 +472,8 @@ const navStructure: NavSection[] = [
             class="text-xs text-fg-3"></div>
         </article>
 
-        <!-- Playback: in-app player + external launcher (desktop only) -->
-        <article id="playback-section" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 hidden">
+        <!-- Playback: embedded player backend on every platform, plus the desktop-only external launcher -->
+        <article id="playback-section" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
           <div class="flex items-start gap-3">
             <span class="icon-mark">
               <IconPlayerPlay aria-hidden="true" stroke={2} />
@@ -781,6 +782,10 @@ const navStructure: NavSection[] = [
             <button id="settings-open-logs" type="button" class="btn justify-start sm:justify-center hidden">
               <IconFolderOpen aria-hidden="true" class="btn-icon" />
               <span data-i18n="settings.storage.openLogs">Open log folder</span>
+            </button>
+            <button id="settings-share-logs" type="button" class="btn justify-start sm:justify-center hidden">
+              <IconShare aria-hidden="true" class="btn-icon" />
+              <span data-i18n="settings.storage.shareLogs">Share logs</span>
             </button>
           </div>
           <span
@@ -1555,9 +1560,11 @@ const navStructure: NavSection[] = [
     })
 
     const openLogsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-open-logs"))
+    const shareLogsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-share-logs"))
     const isTauriEnv =
       typeof window !== "undefined" && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__)
-    if (openLogsBtn && isTauriEnv) {
+    const isAndroidEnv = /Android/i.test(navigator.userAgent || "")
+    if (openLogsBtn && isTauriEnv && !isAndroidEnv) {
       openLogsBtn.classList.remove("hidden")
       openLogsBtn.addEventListener("click", async () => {
         let dir = ""
@@ -1577,6 +1584,25 @@ const navStructure: NavSection[] = [
             } catch {}
           }
           toastError(t("settings.storage.openLogsFail") || "Couldn't open the log folder.")
+        }
+      })
+    }
+
+    if (shareLogsBtn && isTauriEnv && isAndroidEnv) {
+      shareLogsBtn.classList.remove("hidden")
+      shareLogsBtn.addEventListener("click", async () => {
+        try {
+          const { appLogDir } = await import("@tauri-apps/api/path")
+          const dir = await appLogDir()
+          const bridge = /** @type {any} */ (window).AndroidLog
+          const shared =
+            typeof bridge?.shareNewestLog === "function" ? bridge.shareNewestLog(dir) : false
+          if (!shared) {
+            flashMsg(cacheMsgEl, t("settings.storage.noLogs") || "No log file yet.")
+          }
+        } catch (err) {
+          log.warn("[settings] share logs failed:", err)
+          toastError(t("settings.storage.shareLogsFail") || "Couldn't share the log file.")
         }
       })
     }
@@ -2657,20 +2683,6 @@ const navStructure: NavSection[] = [
       discordSection.classList.remove("hidden")
     }
 
-    // -------------------------------------------------------------------
-    // Playback (desktop-only): reveal the section if external launches are
-    // possible. The PlayerPicker component renders nothing on web/Android,
-    // so we only show the article wrapper there to avoid an empty card.
-    // -------------------------------------------------------------------
-    {
-      const playbackSection = document.getElementById("playback-section")
-      const externalAvailable =
-        !!(window.__TAURI_INTERNALS__ || window.__TAURI__) &&
-        !/Android/i.test(navigator.userAgent || "")
-      if (playbackSection && externalAvailable) {
-        playbackSection.classList.remove("hidden")
-      }
-    }
     if (discordClientIdInput) {
       discordClientIdInput.value = getDiscordClientId()
       let saveTimer = null

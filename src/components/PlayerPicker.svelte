@@ -25,7 +25,7 @@
   const DETECT_CACHE_PREFIX = "xt_player_detected_"
   const DETECT_STATUS_PREFIX = "xt_player_detect_status_"
 
-  let visible = $state(externalPlayersAvailable)
+  const isAndroidEnv = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent || "")
 
   let backend = $state(getPlayerBackend())
   let pathMpv = $state(getPlayerPath("mpv"))
@@ -43,9 +43,12 @@
   let videojsLabel = $state(label("backend.videojs", "Video.js"))
   let videojsHelper = $state(label("backend.videojsHelper", "Mature HTML5 player with broad codec support."))
   let artplayerLabel = $state(label("backend.artplayer", "ArtPlayer (default)"))
+  let shakaLabel = $state(label("backend.shaka", "Shaka Player"))
+  let shakaHelper = $state(label("backend.shakaHelper", "Google's streaming player with strong DASH and DRM support."))
   let mpvLabel = $state(label("backend.mpv", "MPV (external)"))
   let vlcLabel = $state(label("backend.vlc", "VLC (external)"))
   let artplayerHelper = $state(label("backend.artplayerHelper", "Lightweight HTML5 player powered by ArtPlayer + hls.js."))
+  let artplayerAndroidHelper = $state(label("backend.artplayerAndroidHelper", "Not supported on Android - Video.js is used instead."))
   let mpvHelper = $state(label("backend.mpvHelper", "Best for 4K and HDR."))
   let vlcHelper = $state(label("backend.vlcHelper", "Plays almost any format."))
   let pathLabel = $state(label("pathLabel", "Path"))
@@ -101,9 +104,12 @@
     videojsLabel = label("backend.videojs", "Video.js")
     videojsHelper = label("backend.videojsHelper", "Mature HTML5 player with broad codec support.")
     artplayerLabel = label("backend.artplayer", "ArtPlayer (default)")
+    shakaLabel = label("backend.shaka", "Shaka Player")
+    shakaHelper = label("backend.shakaHelper", "Google's streaming player with strong DASH and DRM support.")
     mpvLabel = label("backend.mpv", "MPV (external)")
     vlcLabel = label("backend.vlc", "VLC (external)")
     artplayerHelper = label("backend.artplayerHelper", "Lightweight HTML5 player powered by ArtPlayer + hls.js.")
+    artplayerAndroidHelper = label("backend.artplayerAndroidHelper", "Not supported on Android - Video.js is used instead.")
     mpvHelper = label("backend.mpvHelper", "Best for 4K and HDR.")
     vlcHelper = label("backend.vlcHelper", "Plays almost any format.")
     pathLabel = label("pathLabel", "Path")
@@ -205,7 +211,6 @@
   })
 </script>
 
-{#if visible}
 <div class="flex flex-col gap-4">
   <fieldset class="flex flex-col gap-2">
     <legend class="sr-only">{titleLabel}</legend>
@@ -223,7 +228,7 @@
       />
       <span class="flex flex-col gap-0.5 min-w-0 flex-1">
         <span id="playback-artplayer-title" class="player-row__title">{artplayerLabel}</span>
-        <span id="playback-artplayer-helper" class="text-xs text-fg-3">{artplayerHelper}</span>
+        <span id="playback-artplayer-helper" class="text-xs text-fg-3">{isAndroidEnv ? artplayerAndroidHelper : artplayerHelper}</span>
       </span>
       {#if backend === "artplayer"}
         <span class="active-pill" aria-hidden="true">{activeLabel}</span>
@@ -250,6 +255,27 @@
       {/if}
     </label>
 
+    <label class="player-row">
+      <input
+        type="radio"
+        name="player-backend"
+        value="shaka"
+        checked={backend === "shaka"}
+        onchange={onBackendChange}
+        aria-labelledby="playback-shaka-title"
+        aria-describedby="playback-shaka-helper"
+        class="mt-0.5"
+      />
+      <span class="flex flex-col gap-0.5 min-w-0 flex-1">
+        <span id="playback-shaka-title" class="player-row__title">{shakaLabel}</span>
+        <span id="playback-shaka-helper" class="text-xs text-fg-3">{shakaHelper}</span>
+      </span>
+      {#if backend === "shaka"}
+        <span class="active-pill" aria-hidden="true">{activeLabel}</span>
+      {/if}
+    </label>
+
+    {#if externalPlayersAvailable}
     <label class="player-row">
       <input
         type="radio"
@@ -317,6 +343,7 @@
         </span>
       {/if}
     </label>
+    {/if}
   </fieldset>
 
   {#if backend === "mpv"}
@@ -425,7 +452,6 @@
     </div>
   {/if}
 </div>
-{/if}
 
 <style>
   .player-row {
