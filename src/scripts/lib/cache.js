@@ -3,7 +3,7 @@ import { log } from "@/scripts/lib/log.js"
 
 const PREFIX = "xt_cache:"
 const DB_NAME = "xt_cache"
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE = "entries"
 const META_LS_KEY = "xt_cache_meta" // legacy; kept only for clean-up.
 const EVT_REVALIDATED = "xt:cache-revalidated"
@@ -32,10 +32,12 @@ function openDB() {
   }
   _dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE)
+      } else if (event.oldVersion < 2) {
+        req.transaction.objectStore(STORE).clear()
       }
     }
     req.onsuccess = () => resolve(req.result)

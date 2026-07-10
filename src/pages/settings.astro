@@ -778,6 +778,10 @@ const navStructure: NavSection[] = [
               <IconTrash aria-hidden="true" class="btn-icon" />
               <span data-i18n="settings.storage.clear">Clear cache</span>
             </button>
+            <button id="settings-open-logs" type="button" class="btn justify-start sm:justify-center hidden">
+              <IconFolderOpen aria-hidden="true" class="btn-icon" />
+              <span data-i18n="settings.storage.openLogs">Open log folder</span>
+            </button>
           </div>
           <span
             id="settings-cache-msg"
@@ -1549,6 +1553,33 @@ const navStructure: NavSection[] = [
         if (ok && removed > 0) flashSuccess(clearCacheBtn)
       }
     })
+
+    const openLogsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-open-logs"))
+    const isTauriEnv =
+      typeof window !== "undefined" && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__)
+    if (openLogsBtn && isTauriEnv) {
+      openLogsBtn.classList.remove("hidden")
+      openLogsBtn.addEventListener("click", async () => {
+        let dir = ""
+        try {
+          const { appLogDir } = await import("@tauri-apps/api/path")
+          dir = await appLogDir()
+          const { openPath } = await import("@tauri-apps/plugin-opener")
+          await openPath(dir)
+        } catch (err) {
+          log.warn("[settings] open log folder failed:", err)
+          if (dir) {
+            try {
+              const { writeClipboardText } = await import("@/scripts/lib/clipboard.ts")
+              await writeClipboardText(dir)
+              flashMsg(cacheMsgEl, t("settings.storage.logPathCopied", { dir }))
+              return
+            } catch {}
+          }
+          toastError(t("settings.storage.openLogsFail") || "Couldn't open the log folder.")
+        }
+      })
+    }
 
     // -------------------------
     // Backup: export / import

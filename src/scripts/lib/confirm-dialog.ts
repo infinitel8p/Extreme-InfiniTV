@@ -15,14 +15,15 @@ const DIALOG_ID = "xt-confirm-dialog"
 
 let dlg: HTMLDialogElement | null = null
 let resolveFn: ((value: boolean) => void) | null = null
+let linkFn: (() => void) | null = null
 
 export interface ConfirmDialogOptions {
   message: string
   title?: string
   confirmLabel?: string
   cancelLabel?: string
-  /** Style the confirm button with the destructive (bad) accent. */
   destructive?: boolean
+  link?: { label: string; onClick: () => void }
 }
 
 const BUTTON_CLASS_DEFAULT =
@@ -50,6 +51,10 @@ function ensureDialog(): HTMLDialogElement {
       <div class="flex flex-col gap-1.5">
         <h2 id="${DIALOG_ID}-title" data-role="title" class="text-base font-semibold"></h2>
         <p data-role="body" class="text-sm text-fg-2"></p>
+        <button
+          data-role="link"
+          type="button"
+          class="hidden self-start text-sm font-medium text-accent hover:underline focus-visible:underline focus-visible:outline-none"></button>
       </div>
       <div class="flex gap-2 justify-end">
         <button
@@ -75,10 +80,19 @@ function ensureDialog(): HTMLDialogElement {
     '[data-role="confirm"]'
   ) as HTMLButtonElement
 
+  const linkBtn = node.querySelector(
+    '[data-role="link"]'
+  ) as HTMLButtonElement
+
   cancelBtn.addEventListener("click", () => node.close())
   confirmBtn.addEventListener("click", () => {
     settle(true)
     node.close()
+  })
+  linkBtn.addEventListener("click", () => {
+    const fn = linkFn
+    node.close()
+    fn?.()
   })
   // Backdrop click closes (= cancel).
   node.addEventListener("click", (event) => {
@@ -121,6 +135,9 @@ export function confirmDialog(
     const confirmBtn = node.querySelector(
       '[data-role="confirm"]'
     ) as HTMLButtonElement
+    const linkBtn = node.querySelector(
+      '[data-role="link"]'
+    ) as HTMLButtonElement
 
     titleEl.textContent = opts.title || t("common.confirmTitle")
     bodyEl.textContent = opts.message
@@ -129,6 +146,16 @@ export function confirmDialog(
     confirmBtn.className = opts.destructive
       ? BUTTON_CLASS_DESTRUCTIVE
       : BUTTON_CLASS_DEFAULT
+
+    if (opts.link) {
+      linkFn = opts.link.onClick
+      linkBtn.textContent = opts.link.label
+      linkBtn.classList.remove("hidden")
+    } else {
+      linkFn = null
+      linkBtn.textContent = ""
+      linkBtn.classList.add("hidden")
+    }
 
     if (typeof node.showModal === "function") node.showModal()
     else node.setAttribute("open", "")

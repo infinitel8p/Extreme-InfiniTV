@@ -46,6 +46,7 @@ import {
   deviceSupportsHevc,
   classifyStartFailure,
 } from "@/scripts/lib/codec-hints.ts"
+import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { toast, toastError } from "@/scripts/lib/toast.js"
@@ -118,6 +119,7 @@ function buildDirectLiveUrl(id, c = creds) {
 // ----------------------------
 let directUrlById = new Map()
 let streamHeadersById = new Map()
+let streamDrmById = new Map()
 export let m3uEpgUrl = ""
 
 function parseM3U(text) {
@@ -143,6 +145,9 @@ function parseM3U(text) {
       url,
       userAgent: entry.userAgent,
       referer: entry.referer,
+      manifestType: entry.manifestType,
+      drmScheme: entry.drmScheme,
+      licenseKey: entry.licenseKey,
     })
   }
   return out
@@ -151,12 +156,20 @@ function parseM3U(text) {
 const indexDirectUrls = (items) => {
   directUrlById = new Map()
   streamHeadersById = new Map()
+  streamDrmById = new Map()
   for (const channel of items) {
     if (channel.url) directUrlById.set(channel.id, channel.url)
     if (channel.userAgent || channel.referer) {
       streamHeadersById.set(channel.id, {
         userAgent: channel.userAgent || null,
         referer: channel.referer || null,
+      })
+    }
+    if (channel.manifestType || channel.licenseKey) {
+      streamDrmById.set(channel.id, {
+        manifestType: channel.manifestType || null,
+        drmScheme: channel.drmScheme || null,
+        licenseKey: channel.licenseKey || null,
       })
     }
   }
@@ -1420,6 +1433,27 @@ const ensureEmbeddedPlayer = async (backend) => {
     clearStallSentinel()
     clearDeadVideoWatchdog()
     if (!ctx.started) {
+      // Bypasses getAndroidNativePlayerEnabled() on purpose: this is a one-shot-per-tune
+      // recovery so an unsupported channel still plays, independent of that opt-in setting.
+      if (!ctx.nativeFallbackTried && androidNativePlayerAvailable) {
+        ctx.nativeFallbackTried = true
+        const info = vjs?.codecInfo?.() || { videoCodec: null, errorDetail: null }
+        const failure = classifyStartFailure({
+          videoCodec: info.videoCodec,
+          errorDetail: info.errorDetail,
+          nameHint: hasHevcNameHint(ctx.name),
+          deviceHevc: deviceSupportsHevc(),
+        })
+        if (failure.kind === "hevc" || failure.kind === "codec") {
+          toast({ title: t("stream.failure.nativeFallback") })
+          launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
+            if (launched) return
+            showPlaybackFailurePanel(ctx)
+            runAutoDiagnostic(ctx, null)
+          })
+          return
+        }
+      }
       showPlaybackFailurePanel(ctx)
       runAutoDiagnostic(ctx, null)
       return
@@ -1862,6 +1896,20 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   })
   actions.appendChild(retryBtn)
 
+  if (failure.kind === "hevc" && isWindowsDesktop()) {
+    const hevcBtn = document.createElement("button")
+    hevcBtn.type = "button"
+    hevcBtn.className = retryBtn.className
+    hevcBtn.textContent = t("hevc.enable") || "Enable HEVC playback"
+    hevcBtn.addEventListener("click", async () => {
+      if (await ensureHevcDecodable()) {
+        hidePlaybackFailurePanel()
+        play(ctx.streamId, ctx.name)
+      }
+    })
+    actions.appendChild(hevcBtn)
+  }
+
   if (externalPlayersAvailable || androidExternalAvailable) {
     const extBtn = document.createElement("button")
     extBtn.type = "button"
@@ -1957,8 +2005,12 @@ function ensureNativeLiveSubscription() {
 }
 
 async function tryLaunchNativeLive(initialStreamId, initialName) {
-  if (!androidNativePlayerAvailable) return false
   if (!getAndroidNativePlayerEnabled()) return false
+  return launchNativeLiveSession(initialStreamId, initialName)
+}
+
+async function launchNativeLiveSession(initialStreamId, initialName) {
+  if (!androidNativePlayerAvailable) return false
   if (!all.length) return false
   ensureNativeLiveSubscription()
 
@@ -2141,6 +2193,7 @@ async function play(streamId, name) {
 
   const backend = getPlayerBackend()
   const channelHeaders = streamHeadersById.get(streamId) || null
+  const channelDrm = streamDrmById.get(streamId) || null
 
   if (backend === "mpv" || backend === "vlc") {
     try {
@@ -2168,11 +2221,19 @@ async function play(streamId, name) {
   if (!player) return
   await applyStreamHeaders(channelHeaders)
   const seq = ++playSeq
-  lastPlayContext = { streamId, name, src, seq, retried: false, started: false }
+  lastPlayContext = {
+    streamId,
+    name,
+    src,
+    seq,
+    retried: false,
+    started: false,
+    nativeFallbackTried: false,
+  }
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
-  player.src({ src, type: "application/x-mpegURL" })
+  player.src({ src, type: "application/x-mpegURL", drm: channelDrm })
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch(() => {})

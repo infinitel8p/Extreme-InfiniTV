@@ -688,7 +688,9 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
         },
         EPG_CACHE_TTL
       )
-    } catch {}
+    } catch (err) {
+      log.warn("[xt:epg-data] EPG cache write failed:", err?.message || err)
+    }
     httpMeta[hash] = {
       lastModified: fresh.lastModified || null,
       etag: fresh.etag || null,
@@ -715,7 +717,9 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
       },
       EPG_CACHE_TTL
     )
-  } catch {}
+  } catch (err) {
+    log.warn("[xt:epg-data] EPG cache write failed:", err?.message || err)
+  }
   httpMeta[hash] = {
     lastModified: result.lastModified || null,
     etag: result.etag || null,

@@ -1,5 +1,5 @@
 // Lazy-mounted "Test stream" diagnostic dialog.
-import { log } from "@/scripts/lib/log.js"
+import { log, redactUrl } from "@/scripts/lib/log.js"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { diagnoseStream, summarizeReport } from "@/scripts/lib/stream-diagnostic.js"
 import { t } from "@/scripts/lib/i18n.js"
@@ -95,6 +95,18 @@ function ensureDialog() {
   return dlg
 }
 
+// Deep-redact every string field before the report leaves the app
+function redactReportDeep(value) {
+  if (typeof value === "string") return redactUrl(value)
+  if (Array.isArray(value)) return value.map(redactReportDeep)
+  if (value && typeof value === "object") {
+    const redacted = {}
+    for (const [key, fieldValue] of Object.entries(value)) redacted[key] = redactReportDeep(fieldValue)
+    return redacted
+  }
+  return value
+}
+
 function renderStage(label, content) {
   return `
     <section class="rounded-xl border border-line bg-bg p-3 flex flex-col gap-1.5">
@@ -107,7 +119,7 @@ function renderStage(label, content) {
 function renderHead(head) {
   if (!head) return `<span class="text-fg-3">${escapeHtml(t("streamTest.pending"))}</span>`
   if (head.error) {
-    return `<span class="text-bad">${escapeHtml(head.error)}</span>` +
+    return `<span class="text-bad">${escapeHtml(redactUrl(head.error))}</span>` +
       ` <span class="text-fg-3">(${escapeHtml(head.method)}, ${fmtMs(head.latencyMs)})</span>`
   }
   const status = head.ok
@@ -129,7 +141,7 @@ function renderHead(head) {
 function renderPlaylist(pl) {
   if (!pl) return `<span class="text-fg-3">${escapeHtml(t("streamTest.pending"))}</span>`
   if (pl.error) {
-    return `<span class="text-bad">${escapeHtml(pl.error)}</span>`
+    return `<span class="text-bad">${escapeHtml(redactUrl(pl.error))}</span>`
   }
   const heading = pl.isMaster
     ? t("streamTest.masterPlaylist", { n: pl.variantCount })
@@ -147,13 +159,30 @@ function renderPlaylist(pl) {
   return `<div class="font-medium text-fg">${escapeHtml(heading)}</div>${top}${td}${total}${meta}`
 }
 
+function renderDash(dash) {
+  if (dash.error) return `<span class="text-bad">${escapeHtml(redactUrl(dash.error))}</span>`
+  const heading = `<div class="font-medium text-fg">${escapeHtml(t("streamTest.dash.manifest") || "MPEG-DASH manifest")}</div>`
+  const codecs = dash.videoCodecs?.length
+    ? `<div class="text-2xs text-fg-3 font-mono break-all">${escapeHtml(dash.videoCodecs.join(", "))}</div>`
+    : ""
+  const flags = []
+  if (dash.hevc) flags.push("HEVC")
+  if (dash.clearKey) flags.push("ClearKey")
+  else if (dash.encrypted) flags.push(t("streamTest.dash.encrypted") || "encrypted")
+  const flagsRow = flags.length
+    ? `<div class="text-2xs text-warn tabular-nums">${escapeHtml(flags.join(" · "))}</div>`
+    : ""
+  const meta = `<div class="text-2xs text-fg-3 tabular-nums">${dash.bytes ? fmtBytes(dash.bytes) : ""} · ${fmtMs(dash.latencyMs)}</div>`
+  return `${heading}${codecs}${flagsRow}${meta}`
+}
+
 function renderFirstSegment(seg) {
   if (!seg) return `<span class="text-fg-3">${escapeHtml(t("streamTest.skipped"))}</span>`
   const head = renderHead(seg)
   const dur = seg.declaredDuration
     ? `<div class="text-2xs text-fg-3 tabular-nums">${escapeHtml(t("streamTest.declaredDuration", { n: seg.declaredDuration.toFixed(2) }))}</div>`
     : ""
-  const url = `<div class="text-2xs text-fg-3 font-mono break-all">${escapeHtml(seg.url || "")}</div>`
+  const url = `<div class="text-2xs text-fg-3 font-mono break-all">${escapeHtml(redactUrl(seg.url || ""))}</div>`
   return `${head}${dur}${url}`
 }
 
@@ -165,7 +194,7 @@ function renderWebView(probe) {
       ? `<span class="text-ok font-semibold tabular-nums">${probe.status} ${escapeHtml(t("streamTest.webview.allowed"))}</span>`
       : `<span class="text-warn font-semibold tabular-nums">${probe.status}</span>`
   const err = probe.error
-    ? `<div class="text-2xs text-fg-3 break-all">${escapeHtml(probe.error)}</div>`
+    ? `<div class="text-2xs text-fg-3 break-all">${escapeHtml(redactUrl(probe.error))}</div>`
     : ""
   const acao =
     probe.acao != null
@@ -182,7 +211,7 @@ function paint(report, opts) {
   const titleEl = node.querySelector("[data-role='title']")
   if (titleEl) titleEl.textContent = opts.title || t("streamTest.title")
   const urlEl = node.querySelector("[data-role='url']")
-  if (urlEl) urlEl.textContent = report?.url || ""
+  if (urlEl) urlEl.textContent = redactUrl(report?.url || "")
 
   const verdictEl = /** @type {HTMLElement | null} */ (
     node.querySelector("[data-role='verdict']")
@@ -209,7 +238,7 @@ function paint(report, opts) {
       }
       verdictEl.className =
         "rounded-xl border px-3 py-2 text-sm flex items-center gap-2 " + verdictClass
-      verdictEl.innerHTML = `<span class="font-semibold">${verdictText}</span> <span class="text-fg-2">${escapeHtml(summary.reason || "")}</span>`
+      verdictEl.innerHTML = `<span class="font-semibold">${verdictText}</span> <span class="text-fg-2">${escapeHtml(redactUrl(summary.reason || ""))}</span>`
     } else {
       verdictEl.className =
         "rounded-xl border border-line bg-bg px-3 py-2 text-sm flex items-center gap-2 text-fg-2"
@@ -227,7 +256,9 @@ function paint(report, opts) {
     } else {
       reportEl.innerHTML = [
         renderStage(t("streamTest.stage.endpoint"), renderHead(report?.head)),
-        renderStage(t("streamTest.stage.playlist"), renderPlaylist(report?.playlist)),
+        report?.dash
+          ? renderStage(t("streamTest.stage.dash") || "DASH", renderDash(report.dash))
+          : renderStage(t("streamTest.stage.playlist"), renderPlaylist(report?.playlist)),
         renderStage(t("streamTest.stage.firstSegment"), renderFirstSegment(report?.firstSegment)),
         renderStage(t("streamTest.stage.webview"), renderWebView(report?.webviewProbe)),
       ].join("")
@@ -270,7 +301,7 @@ export function openStreamDiagnostic(opts) {
     copyBtn.onclick = async () => {
       if (!lastReport) return
       try {
-        await writeClipboardText(JSON.stringify(lastReport, null, 2))
+        await writeClipboardText(JSON.stringify(redactReportDeep(lastReport), null, 2))
         copyBtn.textContent = t("streamTest.copied")
         setTimeout(() => {
           if (copyBtn) copyBtn.textContent = t("streamTest.copy")

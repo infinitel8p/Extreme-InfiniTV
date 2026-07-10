@@ -4,6 +4,8 @@
 // fullscreen, which triggers the WebChromeClient custom view so PiP
 // captures just the video surface. On desktop, falls back to the standard
 // Web Picture-in-Picture API on the underlying <video>.
+import { log } from "@/scripts/lib/log.js"
+
 export async function togglePip(player: any): Promise<void> {
   const videoEl = player?.el()?.querySelector("video") as HTMLVideoElement | null
   if (!videoEl) return
@@ -33,6 +35,8 @@ export async function togglePip(player: any): Promise<void> {
         if (videoEl.readyState < 2) await videoEl.play().catch(() => {})
         await videoEl.requestPictureInPicture()
       }
-    } catch {}
+    } catch (err) {
+      log.warn("[xt:pip] picture-in-picture toggle failed:", err)
+    }
   }
 }

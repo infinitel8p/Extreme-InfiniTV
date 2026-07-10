@@ -30,6 +30,10 @@ export interface M3UEntry {
   referer: string | null
   tvgType: string | null
   isRadio: boolean
+  // From `#KODIPROP:inputstream.adaptive.*`. licenseKey is raw `KID:KEY`.
+  manifestType: string | null
+  drmScheme: string | null
+  licenseKey: string | null
 }
 
 export interface M3UParseResult {
@@ -174,6 +178,9 @@ function parseExtinf(line: string): Omit<M3UEntry, "url"> {
     referer: null,
     tvgType,
     isRadio,
+    manifestType: null,
+    drmScheme: null,
+    licenseKey: null,
   }
 }
 
@@ -222,7 +229,19 @@ export function parseM3U(text: string): M3UParseResult {
       continue
     }
 
-    if (line.startsWith("#KODIPROP:")) continue
+    if (line.startsWith("#KODIPROP:")) {
+      if (!pending) continue
+      const tail = line.slice("#KODIPROP:".length)
+      const eqIdx = tail.indexOf("=")
+      if (eqIdx <= 0) continue
+      const key = tail.slice(0, eqIdx).trim().toLowerCase()
+      const value = tail.slice(eqIdx + 1).trim()
+      if (!value) continue
+      if (key === "inputstream.adaptive.manifest_type") pending.manifestType = value
+      else if (key === "inputstream.adaptive.license_type") pending.drmScheme = value
+      else if (key === "inputstream.adaptive.license_key") pending.licenseKey = value
+      continue
+    }
     if (isHlsTag(line)) continue
     if (line.startsWith("#")) continue
 

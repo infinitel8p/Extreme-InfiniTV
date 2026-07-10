@@ -4,6 +4,7 @@ import {
   isHevcCodecString,
   findHevcInCodecList,
   classifyStartFailure,
+  clearKeyAvailable,
 } from "../src/scripts/lib/codec-hints"
 
 describe("hasHevcNameHint", () => {
@@ -181,5 +182,49 @@ describe("classifyStartFailure", () => {
         deviceHevc: true,
       })
     ).toEqual({ kind: "unknown", codec: null })
+  })
+
+  it("reports codec for shaka DRM/EME/ClearKey error details on MPEG-DASH", () => {
+    expect(
+      classifyStartFailure({
+        videoCodec: null,
+        errorDetail: "shaka:drm:6001 requested key system is not supported",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "codec", codec: null })
+    expect(
+      classifyStartFailure({
+        videoCodec: null,
+        errorDetail: "shaka:drm ClearKey (EME org.w3.clearkey) unsupported in this WebView",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "codec", codec: null })
+    expect(
+      classifyStartFailure({
+        videoCodec: null,
+        errorDetail: "shaka:codec browser unsupported (no MediaSource/EME)",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "codec", codec: null })
+  })
+
+  it("returns unknown for a shaka network error detail on MPEG-DASH", () => {
+    expect(
+      classifyStartFailure({
+        videoCodec: null,
+        errorDetail: "shaka:network:1002 HTTP error",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "unknown", codec: null })
+  })
+})
+
+describe("clearKeyAvailable", () => {
+  it("resolves false when the runtime has no EME ClearKey support", async () => {
+    expect(await clearKeyAvailable()).toBe(false)
   })
 })

@@ -14,8 +14,10 @@
 // Desktop only - external backends invoke a Tauri command that's gated
 // off on Android/iOS at the Rust side.
 
-import { log } from "@/scripts/lib/log.js"
+import { log, redactUrl } from "@/scripts/lib/log.js"
 import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
+import { splitUrlAuth } from "@/scripts/lib/url-auth.js"
+import { clearKeyAvailable } from "@/scripts/lib/codec-hints"
 import {
   getPlayerBackend,
   getPlayerPath,
@@ -35,8 +37,14 @@ export interface PlaybackCodecInfo {
   errorDetail: string | null
 }
 
+export interface DrmOptions {
+  manifestType?: string | null
+  drmScheme?: string | null
+  licenseKey?: string | null
+}
+
 export interface VjsLikeHandle {
-  src(opts: { src: string; type: string }): void
+  src(opts: { src: string; type: string; drm?: DrmOptions | null }): void
   play(): Promise<unknown> | void
   pause(): void
   paused?(): boolean
@@ -586,20 +594,28 @@ export async function detectPlayer(
 // Dispatcharr's `/proxy/ts/stream/<uuid>` or Xtream's bare `/live/<u>/<p>/<id>`
 // which the server can serve as either HLS or raw TS).
 
-type StreamKind = "hls" | "ts" | "native"
+type StreamKind = "hls" | "ts" | "native" | "dash"
 
 function streamKindHint(src: string, type?: string): StreamKind | "unknown" {
   // URL extension wins: Live TV callers pass a stock
   // "application/x-mpegURL" MIME regardless of the real container, so
   // a contradicting extension overrides the MIME.
   if (/\.m3u8(\?|$)/i.test(src)) return "hls"
+  if (/\.mpd(\?|$)/i.test(src)) return "dash"
   if (/\.ts(\?|$)/i.test(src)) return "ts"
   if (/\.(mp4|m4v|mkv|webm|mov|avi|m4a|mp3|aac|flac|ogg)(\?|$)/i.test(src)) return "native"
 
   const mime = (type || "").toLowerCase()
+  if (mime.includes("dash+xml")) return "dash"
   if (mime === "video/mp2t" || mime === "video/mpeg") return "ts"
   if (mime.startsWith("video/") || mime.startsWith("audio/")) return "native"
   return "unknown"
+}
+
+function isDashSource(drm: DrmOptions | null | undefined, src: string, type?: string): boolean {
+  const manifest = (drm?.manifestType || "").toLowerCase()
+  if (manifest === "mpd" || manifest === "dash") return true
+  return streamKindHint(src, type) === "dash"
 }
 
 const containerProbeCache = new Map<string, StreamKind>()
@@ -626,7 +642,9 @@ async function probeContainer(src: string): Promise<StreamKind> {
         signal: controller?.signal,
       })
       const contentType = (response.headers.get("content-type") || "").toLowerCase()
-      if (
+      if (contentType.includes("dash+xml") || /\.mpd(\?|$)/i.test(response.url || "")) {
+        kind = "dash"
+      } else if (
         contentType.includes("mp2t") ||
         contentType.includes("mpeg-ts") ||
         contentType.includes("mpegts")
@@ -751,6 +769,7 @@ function createTauriStreamLoaderClass(mpegts: any) {
 
   return class TauriStreamLoader extends BaseLoader {
     private _seekHandler: any
+    private _config: any
     private _abortController: AbortController | null = null
     private _requestAbort = false
     private _receivedLength = 0
@@ -760,9 +779,10 @@ function createTauriStreamLoaderClass(mpegts: any) {
       return isTauri
     }
 
-    constructor(seekHandler: any) {
+    constructor(seekHandler: any, config: any) {
       super("tauri-stream-loader")
       this._seekHandler = seekHandler
+      this._config = config
       this._needStash = true
     }
 
@@ -786,7 +806,14 @@ function createTauriStreamLoaderClass(mpegts: any) {
       try {
         const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http")
         const headers = new Headers(seekConfig.headers || undefined)
-
+        // Config headers (e.g. Authorization from a userinfo URL) only reach
+        // built-in mpegts loaders; seekConfig.headers never includes them.
+        const configHeaders = this._config?.headers
+        if (configHeaders && typeof configHeaders === "object") {
+          for (const [headerName, headerValue] of Object.entries(configHeaders)) {
+            headers.set(headerName, String(headerValue))
+          }
+        }
         if (!headers.has("User-Agent")) {
           headers.set("User-Agent", getUserAgent() || DEFAULT_BROWSER_UA)
         }
@@ -850,8 +877,20 @@ function createTauriStreamLoaderClass(mpegts: any) {
   }
 }
 
+function matchesAuthorizedOrigin(requestUrl: string, authorizedOrigin: string | null): boolean {
+  if (!authorizedOrigin) return false
+  try {
+    return new URL(requestUrl).origin === authorizedOrigin
+  } catch {
+    return false
+  }
+}
+
 // Custom hls.js loader
-function createTauriHlsLoaderClass() {
+function createTauriHlsLoaderClass(
+  authorization: string | null = null,
+  authorizedOrigin: string | null = null,
+) {
   return class TauriHlsLoader {
     context: any = null
     stats: any
@@ -921,8 +960,15 @@ function createTauriHlsLoaderClass() {
     private async run(context: any) {
       try {
         const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http")
+        const { url: requestUrl, authorization: urlAuthorization } = splitUrlAuth(context.url)
         const headers = new Headers()
         headers.set("User-Agent", getUserAgent() || DEFAULT_BROWSER_UA)
+        // Playlist credentials stay scoped to their origin so they never
+        // leak to cross-origin segment/key hosts; per-URL userinfo always wins.
+        const effectiveAuthorization =
+          urlAuthorization ||
+          (matchesAuthorizedOrigin(requestUrl, authorizedOrigin) ? authorization : null)
+        if (effectiveAuthorization) headers.set("Authorization", effectiveAuthorization)
         const { rangeStart, rangeEnd } = context
         if (
           Number.isFinite(rangeStart) &&
@@ -932,7 +978,7 @@ function createTauriHlsLoaderClass() {
           // hls.js byte ranges are [start, end); the Range header end is inclusive.
           headers.set("Range", `bytes=${rangeStart}-${rangeEnd - 1}`)
         }
-        const response = await tauriFetch(context.url, {
+        const response = await tauriFetch(requestUrl, {
           method: "GET",
           headers,
           signal: this.abortController?.signal,
@@ -1013,6 +1059,13 @@ function attachHlsToVideo(
     try { existing.destroy() } catch {}
     active.set(null)
   }
+  // Native <video src> cannot carry a header, so those paths pass the
+  // original url through as best-effort; the hls.js paths get the split form.
+  const { url: cleanUrl, authorization } = splitUrlAuth(url)
+  let authorizedOrigin: string | null = null
+  if (authorization) {
+    try { authorizedOrigin = new URL(cleanUrl).origin } catch {}
+  }
   const preferNative =
     isMacOS && video.canPlayType("application/vnd.apple.mpegurl")
   if (preferNative) {
@@ -1027,7 +1080,18 @@ function attachHlsToVideo(
     return
   }
   const hlsConfig: Record<string, unknown> = { enableWorker: true }
-  if (isTauri) hlsConfig.loader = createTauriHlsLoaderClass()
+  if (isTauri) {
+    hlsConfig.loader = createTauriHlsLoaderClass(authorization, authorizedOrigin)
+  } else if (authorization) {
+    // hls.js calls xhrSetup before its own open(); opening here lets us set
+    // the Authorization header, and hls.js skips its open when already OPENED.
+    // Skip cross-origin requests entirely so credentials stay on their host.
+    hlsConfig.xhrSetup = (xhr: XMLHttpRequest, requestUrl: string) => {
+      if (!matchesAuthorizedOrigin(requestUrl, authorizedOrigin)) return
+      xhr.open("GET", requestUrl, true)
+      xhr.setRequestHeader("Authorization", authorization)
+    }
+  }
   const hls = new Hls(hlsConfig)
   let netRecover = 0
   let mediaRecover = 0
@@ -1064,9 +1128,128 @@ function attachHlsToVideo(
     if (active.get() === hls) active.set(null)
     onGiveUp()
   })
-  hls.loadSource(url)
+  hls.loadSource(cleanUrl)
   hls.attachMedia(video)
   active.set(hls)
+}
+
+function isClearKeyScheme(drmScheme: string | null | undefined): boolean {
+  if (!drmScheme) return true
+  return /clearkey/i.test(drmScheme)
+}
+
+function parseClearKeys(licenseKey: string | null | undefined): Record<string, string> | null {
+  if (!licenseKey) return null
+  if (/^https?:\/\//i.test(licenseKey.trim())) return null
+  const keys: Record<string, string> = {}
+  for (const pair of licenseKey.split(/\s+/)) {
+    const [kid, key] = pair.split(":")
+    if (kid && key) keys[kid.trim()] = key.trim()
+  }
+  return Object.keys(keys).length ? keys : null
+}
+
+// shaka.util.Error.Category values (stable across releases per shaka's own
+// externs) - used to tell a genuine network failure apart from a
+// decode/DRM one so classifyStartFailure() doesn't lump them together.
+const SHAKA_CATEGORY_NETWORK = 1
+const SHAKA_CATEGORY_MEDIA = 3
+const SHAKA_CATEGORY_DRM = 6
+
+async function attachShaka(
+  video: HTMLVideoElement,
+  url: string,
+  drm: DrmOptions | null | undefined,
+  codecState: PlaybackCodecInfo,
+  active: ActiveHlsRef,
+  onGiveUp: (detail: string) => void,
+  isCurrent: () => boolean,
+): Promise<void> {
+  const existing = active.get()
+  if (existing) {
+    try { existing.destroy() } catch {}
+    active.set(null)
+  }
+  const { url: cleanUrl, authorization } = splitUrlAuth(url)
+  const mod = await import("shaka-player")
+  if (!isCurrent()) return
+  const shaka = (mod as any).default || mod
+  shaka.polyfill.installAll()
+  if (!shaka.Player.isBrowserSupported()) {
+    onGiveUp("shaka:codec browser unsupported (no MediaSource/EME)")
+    return
+  }
+  const clearKeys = isClearKeyScheme(drm?.drmScheme) ? parseClearKeys(drm?.licenseKey) : null
+  if (clearKeys) {
+    const supported = await clearKeyAvailable()
+    if (!isCurrent()) return
+    if (!supported) {
+      onGiveUp("shaka:drm ClearKey (EME org.w3.clearkey) unsupported in this WebView")
+      return
+    }
+  }
+  const player = new shaka.Player()
+  const handle = { destroy: () => { void player.destroy() } }
+  if (clearKeys) player.configure({ drm: { clearKeys } })
+  if (authorization) {
+    // Shaka has no per-loader hook like the hls.js/mpegts Tauri loaders; the
+    // Authorization header rides the WebView's own fetch via a request filter.
+    let authorizedOrigin: string | null = null
+    try { authorizedOrigin = new URL(cleanUrl).origin } catch {}
+    player.getNetworkingEngine()?.registerRequestFilter((_type: unknown, request: any) => {
+      const requestUrl = request?.uris?.[0]
+      if (!requestUrl || !matchesAuthorizedOrigin(requestUrl, authorizedOrigin)) return
+      request.headers = request.headers || {}
+      request.headers["Authorization"] = authorization
+    })
+  }
+  const fail = (raw: any) => {
+    if (!isCurrent()) return
+    const detail = describeShakaError(raw)
+    log.warn("[xt:player] shaka/DASH error:", detail)
+    codecState.errorDetail = detail
+    if (!codecState.videoCodec) {
+      const codecMatch = /codecs=\\?"?([^"\\,]+)/i.exec(detail)
+      if (codecMatch) codecState.videoCodec = codecMatch[1]
+    }
+    onGiveUp(detail)
+  }
+  player.addEventListener("error", (event: any) => fail(event?.detail))
+  try {
+    await player.attach(video)
+    if (!isCurrent()) {
+      try { player.destroy() } catch {}
+      return
+    }
+    await player.load(cleanUrl)
+    if (!isCurrent()) {
+      try { player.destroy() } catch {}
+      return
+    }
+    active.set(handle)
+    const track = player.getVariantTracks?.().find((variant: any) => variant.active)
+    if (track?.videoCodec) codecState.videoCodec = String(track.videoCodec)
+    try { await video.play() } catch {}
+  } catch (err: any) {
+    if (!isCurrent()) return
+    fail(err)
+  }
+}
+
+function describeShakaError(detail: any): string {
+  if (!detail) return "shaka: unknown error"
+  const code = detail.code ?? detail.detail?.code
+  const category = detail.category ?? detail.detail?.category
+  const data = detail.data ?? detail.detail?.data
+  const label =
+    category === SHAKA_CATEGORY_DRM
+      ? "drm"
+      : category === SHAKA_CATEGORY_MEDIA
+        ? "codec"
+        : category === SHAKA_CATEGORY_NETWORK
+          ? "network"
+          : String(category ?? "unknown")
+  return `shaka:${label}:${code}${data ? " " + JSON.stringify(data) : ""}`
 }
 
 async function attachMpegts(
@@ -1086,6 +1269,8 @@ async function attachMpegts(
   let player: any = null
   let triedTauriLoader = false
 
+  const { url: cleanUrl, authorization } = splitUrlAuth(url)
+
   const teardown = () => {
     if (!player) return
     try { player.unload() } catch {}
@@ -1095,10 +1280,13 @@ async function attachMpegts(
   }
 
   const start = (useTauriLoader: boolean) => {
-    const config = useTauriLoader
-      ? { customLoader: createTauriStreamLoaderClass(mpegts) }
-      : undefined
-    player = mpegts.createPlayer({ type: "mpegts", isLive: true, url }, config)
+    const config: Record<string, unknown> = {}
+    if (useTauriLoader) config.customLoader = createTauriStreamLoaderClass(mpegts)
+    if (authorization) config.headers = { Authorization: authorization }
+    player = mpegts.createPlayer(
+      { type: "mpegts", isLive: true, url: cleanUrl },
+      Object.keys(config).length ? config : undefined,
+    )
     player.on(mpegts.Events.MEDIA_INFO, (info: any) => {
       if (disposed) return
       if (info?.videoCodec) onMediaInfo?.({ videoCodec: String(info.videoCodec) })
@@ -1211,6 +1399,7 @@ async function mountVideoJs(
 
   let activeMpegts: MpegtsHandle | null = null
   let activeHls: { destroy: () => void } | null = null
+  let activeShaka: { destroy: () => void } | null = null
   let hlsModPromise: Promise<any> | null = null
   let pendingSrc: string | null = null
   const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
@@ -1240,9 +1429,44 @@ async function mountVideoJs(
     }
   }
 
+  function destroyShaka() {
+    if (activeShaka) {
+      try { activeShaka.destroy() } catch {}
+      activeShaka = null
+    }
+  }
+
+  async function loadDash(src: string, drm: DrmOptions | null | undefined) {
+    destroyMpegts()
+    destroyHls()
+    try { player.pause?.() } catch {}
+    try { player.reset() } catch {}
+    const video = getUnderlyingVideo()
+    if (!video) {
+      try { player.error?.({ code: 4, message: "DASH needs a media element" }) } catch {}
+      return
+    }
+    await attachShaka(
+      video,
+      src,
+      drm,
+      codecState,
+      { get: () => activeShaka, set: (handle) => { activeShaka = handle } },
+      (detail) => {
+        if (pendingSrc !== src) return
+        try { player.error?.({ code: 3, message: detail }) } catch {}
+      },
+      () => pendingSrc === src,
+    )
+    try { player.hasStarted?.(true) } catch {}
+  }
+
   function loadHls(src: string) {
     destroyMpegts()
-    if (isTauri) {
+    destroyShaka()
+    // Credentialed URLs need hls.js too: VHS hands them to fetch/XHR, which
+    // Chromium blocks for embedded credentials.
+    if (isTauri || splitUrlAuth(src).authorization) {
       void loadHlsViaHlsJs(src)
       return
     }
@@ -1294,6 +1518,7 @@ async function mountVideoJs(
   function loadNative(src: string, type?: string) {
     destroyMpegts()
     destroyHls()
+    destroyShaka()
     player.src({ src, type: type || "video/mp4" })
   }
 
@@ -1302,7 +1527,7 @@ async function mountVideoJs(
     if (outcome === "hls") {
       log.warn(
         "[xt:player] .ts source served an HLS playlist - falling back to hls.js:",
-        src
+        redactUrl(src)
       )
       loadHls(src)
       return
@@ -1314,6 +1539,7 @@ async function mountVideoJs(
   async function loadTs(src: string) {
     destroyMpegts()
     destroyHls()
+    destroyShaka()
     try { player.pause?.() } catch {}
     try { player.reset() } catch {}
     const videoElement = getUnderlyingVideo()
@@ -1348,10 +1574,14 @@ async function mountVideoJs(
   }
 
   const wrapped: VjsLikeHandle = {
-    src({ src, type }) {
+    src({ src, type, drm }) {
       pendingSrc = src
       codecState.videoCodec = null
       codecState.errorDetail = null
+      if (isDashSource(drm, src, type)) {
+        void loadDash(src, drm)
+        return
+      }
       const hint = streamKindHint(src, type)
       if (hint === "ts") {
         if (tsSourcesServingHls.has(src)) loadHls(src)
@@ -1368,11 +1598,13 @@ async function mountVideoJs(
       }
       // Unknown extension - probe and only load once we know the container
       destroyMpegts()
+      destroyShaka()
       try { player.reset() } catch {}
       probeContainer(src)
         .then((kind) => {
           if (pendingSrc !== src) return
-          if (kind === "ts") loadTs(src)
+          if (kind === "dash") void loadDash(src, drm)
+          else if (kind === "ts") loadTs(src)
           else if (kind === "native") loadNative(src, type)
           else loadHls(src)
         })
@@ -1399,12 +1631,14 @@ async function mountVideoJs(
       pendingSrc = null
       destroyMpegts()
       destroyHls()
+      destroyShaka()
       try { player.reset() } catch {}
     },
     dispose() {
       pendingSrc = null
       destroyMpegts()
       destroyHls()
+      destroyShaka()
       disposeFullscreenSync()
       try { player.dispose() } catch {}
     },
@@ -1445,7 +1679,7 @@ async function mountVideoJs(
   return wrapped
 }
 
-async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle> {
+async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions = {}): Promise<VjsLikeHandle> {
   const [{ default: Artplayer }, { default: Hls }] = await Promise.all([
     import("artplayer"),
     import("hls.js"),
@@ -1468,8 +1702,41 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
 
   let activeHls: { destroy: () => void } | null = null
   let activeMpegts: MpegtsHandle | null = null
+  let activeShaka: { destroy: () => void } | null = null
   let pendingSrc: string | null = null
+  let pendingDrm: DrmOptions | null = null
   const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
+
+  function destroyArtEngines(includeHls = true) {
+    if (includeHls && activeHls) {
+      try { activeHls.destroy() } catch {}
+      activeHls = null
+    }
+    if (activeMpegts) {
+      try { activeMpegts.destroy() } catch {}
+      activeMpegts = null
+    }
+    if (activeShaka) {
+      try { activeShaka.destroy() } catch {}
+      activeShaka = null
+    }
+  }
+
+  function loadDashIntoVideo(video: HTMLVideoElement, url: string, drm: DrmOptions | null) {
+    destroyArtEngines()
+    void attachShaka(
+      video,
+      url,
+      drm,
+      codecState,
+      { get: () => activeShaka, set: (handle) => { activeShaka = handle } },
+      () => {
+        if (pendingSrc !== url) return
+        try { video.dispatchEvent(new Event("error")) } catch {}
+      },
+      () => pendingSrc === url,
+    )
+  }
 
   // hls.js attach, shared by the m3u8 customType and the .ts -> HLS recovery
   // path below (some providers' .ts URLs redirect to / serve an HLS playlist,
@@ -1478,6 +1745,10 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
     if (activeMpegts) {
       try { activeMpegts.destroy() } catch {}
       activeMpegts = null
+    }
+    if (activeShaka) {
+      try { activeShaka.destroy() } catch {}
+      activeShaka = null
     }
     attachHlsToVideo(
       Hls,
@@ -1501,7 +1772,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
     if (outcome === "hls") {
       log.warn(
         "[xt:player] .ts source served an HLS playlist - switching to hls.js:",
-        url
+        redactUrl(url)
       )
       loadHlsIntoVideo(video, url)
       return
@@ -1514,6 +1785,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
   const art = new Artplayer({
     container,
     url: "",
+    isLive: !!options.liveui,
     volume: 1,
     autoplay: false,
     autoSize: false,
@@ -1532,6 +1804,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
     customType: {
       m3u8(video, url) {
         loadHlsIntoVideo(video, url)
+      },
+      mpd(video, url) {
+        loadDashIntoVideo(video, url, pendingDrm)
       },
       async ts(video, url) {
         if (activeHls) {
@@ -1592,28 +1867,20 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
   }
 
   art.on("destroy", () => {
-    if (activeHls) {
-      try { activeHls.destroy() } catch {}
-      activeHls = null
-    }
-    if (activeMpegts) {
-      try { activeMpegts.destroy() } catch {}
-      activeMpegts = null
-    }
+    destroyArtEngines()
   })
 
   const handle: VjsLikeHandle = {
-    src({ src, type }) {
+    src({ src, type, drm }) {
       pendingSrc = src
+      pendingDrm = drm ?? null
       codecState.videoCodec = null
       codecState.errorDetail = null
-      if (activeHls) {
-        try { activeHls.destroy() } catch {}
-        activeHls = null
-      }
-      if (activeMpegts) {
-        try { activeMpegts.destroy() } catch {}
-        activeMpegts = null
+      destroyArtEngines()
+      if (isDashSource(drm, src, type)) {
+        art.type = "mpd"
+        art.url = src
+        return
       }
       const hint = streamKindHint(src, type)
       if (hint === "hls") {
@@ -1637,7 +1904,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
       probeContainer(src)
         .then((kind) => {
           if (pendingSrc !== src) return
-          art.type = kind === "ts" ? "ts" : kind === "native" ? "" : "m3u8"
+          art.type = kind === "dash" ? "mpd" : kind === "ts" ? "ts" : kind === "native" ? "" : "m3u8"
           art.url = src
         })
         .catch(() => {
@@ -1662,22 +1929,12 @@ async function mountArtPlayer(videoEl: HTMLVideoElement): Promise<VjsLikeHandle>
     },
     reset() {
       pendingSrc = null
-      if (activeHls) {
-        try { activeHls.destroy() } catch {}
-        activeHls = null
-      }
-      if (activeMpegts) {
-        try { activeMpegts.destroy() } catch {}
-        activeMpegts = null
-      }
+      destroyArtEngines()
       art.url = ""
     },
     dispose() {
       pendingSrc = null
-      if (activeMpegts) {
-        try { activeMpegts.destroy() } catch {}
-        activeMpegts = null
-      }
+      destroyArtEngines()
       disposeFullscreenSync()
       try { art.destroy(false) } catch {}
     },
@@ -1751,7 +2008,7 @@ export async function mountPlayer(
     }
   }
   // artplayer (default)
-  const handle = await mountArtPlayer(videoEl)
+  const handle = await mountArtPlayer(videoEl, options)
   return {
     kind: "embedded",
     backend: "artplayer",

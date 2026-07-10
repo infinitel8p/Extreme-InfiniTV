@@ -466,7 +466,7 @@ jobs:
 
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
         with:
-          packages: "platforms;android-36 build-tools;36.0.0 ndk;26.1.10909125"
+          packages: "platforms;android-36 build-tools;36.0.0 ndk;29.0.13846066"
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
@@ -497,7 +497,7 @@ jobs:
           XTREAM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.13846066
         run: pnpm tauri android build --aab
 
       - name: Build signed APK (universal)
@@ -505,7 +505,7 @@ jobs:
           XTREAM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.13846066
         run: pnpm tauri android build --apk
 
       - name: Collect mobile artifacts
@@ -537,7 +537,7 @@ jobs:
           XTREAM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.13846066
         run: pnpm tauri android build --aab
 
       - name: Collect TV artifact

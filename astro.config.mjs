@@ -27,6 +27,7 @@ export default defineConfig({
         "@tauri-apps/plugin-http",
         "@tauri-apps/plugin-fs",
         "@tauri-apps/plugin-dialog",
+        "@tauri-apps/plugin-log",
         "tauri-plugin-android-fs-api",
       ],
     },

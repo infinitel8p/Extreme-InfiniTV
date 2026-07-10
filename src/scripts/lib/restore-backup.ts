@@ -33,7 +33,8 @@ async function applyBackupText(text: string, options: RestoreBackupOptions) {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
-  } catch {
+  } catch (parseError) {
+    log.warn(`[${options.logTag}] backup JSON parse failed:`, parseError)
     toastError(t("settings.toast.backupParseFail"), { description: "Not valid JSON." })
     return
   }
@@ -46,6 +47,7 @@ async function applyBackupText(text: string, options: RestoreBackupOptions) {
     })
     await options.onRestored?.(summary)
   } catch (error: unknown) {
+    log.error(`[${options.logTag}] backup import failed:`, error)
     const message =
       error && typeof error === "object" && "message" in error
         ? String((error as { message: unknown }).message)

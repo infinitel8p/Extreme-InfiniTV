@@ -5,6 +5,9 @@ mod discord;
 mod external_player;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod hevc_extension;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod tray;
 
 #[cfg(target_os = "android")]
@@ -51,40 +54,54 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init());
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let builder = builder
-        .plugin(
-            tauri_plugin_window_state::Builder::default()
-                .with_state_flags(
-                    tauri_plugin_window_state::StateFlags::all()
-                        - tauri_plugin_window_state::StateFlags::VISIBLE,
-                )
-                .build(),
-        )
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .manage(discord::RpcState::default())
-        .manage(external_player::ExternalPlayerState::default())
-        .invoke_handler(tauri::generate_handler![
-            discord::discord_set_activity,
-            discord::discord_clear,
-            discord::discord_disconnect,
-            external_player::launch_external_player,
-            tray::set_close_to_tray,
-        ]);
+    let builder = {
+        // One file per day (named by local date) so logs stay small and users
+        // can attach or delete a specific day's file.
+        let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let mut log_builder = tauri_plugin_log::Builder::new()
+            .level(log::LevelFilter::Info)
+            .max_file_size(50_000_000)
+            .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+            .target(tauri_plugin_log::Target::new(
+                tauri_plugin_log::TargetKind::LogDir {
+                    file_name: Some(format!("app-{day}")),
+                },
+            ));
+        if cfg!(debug_assertions) {
+            log_builder = log_builder.target(tauri_plugin_log::Target::new(
+                tauri_plugin_log::TargetKind::Stdout,
+            ));
+        }
+        builder
+            .plugin(log_builder.build())
+            .plugin(
+                tauri_plugin_window_state::Builder::default()
+                    .with_state_flags(
+                        tauri_plugin_window_state::StateFlags::all()
+                            - tauri_plugin_window_state::StateFlags::VISIBLE,
+                    )
+                    .build(),
+            )
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init())
+            .manage(discord::RpcState::default())
+            .manage(external_player::ExternalPlayerState::default())
+            .invoke_handler(tauri::generate_handler![
+                discord::discord_set_activity,
+                discord::discord_clear,
+                discord::discord_disconnect,
+                external_player::launch_external_player,
+                hevc_extension::install_appx_package,
+                hevc_extension::is_store_build,
+                tray::set_close_to_tray,
+            ])
+    };
 
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_android_fs::init());
 
     builder
         .setup(|_app| {
-            #[cfg(not(target_os = "android"))]
-            if cfg!(debug_assertions) {
-                _app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             external_player::sweep_orphan_mpv_sockets();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

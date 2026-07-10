@@ -17,6 +17,8 @@
 // - Web build: browsers reject scripted UA / Referer overrides by design.
 //   No-op.
 
+import { log } from "@/scripts/lib/log.js"
+
 interface AndroidWebSettingsBridge {
   setUserAgent(ua: string | null): void
 }
@@ -42,5 +44,7 @@ export async function applyStreamHeaders(
   lastAppliedUa = ua
   try {
     window.AndroidWebSettings?.setUserAgent(ua)
-  } catch {}
+  } catch (err) {
+    log.warn("[xt:stream-headers] setUserAgent bridge call failed:", err)
+  }
 }

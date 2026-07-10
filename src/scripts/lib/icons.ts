@@ -28,6 +28,12 @@ export const ICON_PENCIL = wrap(
 
 export const ICON_CHECK = wrap('<path d="M5 12l5 5l10 -10" />')
 
+export const ICON_SPARKLES = wrap(
+  '<path d="M16 18a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2z" />' +
+    '<path d="M16 6a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2z" />' +
+    '<path d="M9 18a6 6 0 0 1 6 -6a6 6 0 0 1 -6 -6a6 6 0 0 1 -6 6a6 6 0 0 1 6 6z" />'
+)
+
 export const ICON_X = wrap(
   '<path d="M18 6l-12 12" />' + '<path d="M6 6l12 12" />'
 )

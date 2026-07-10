@@ -305,6 +305,7 @@ export function surfaceAndroidHandoffError(err: unknown, kind: AndroidHandoffKin
 export function surfaceLaunchError(err: unknown, kind: ExternalPlayerKind): void {
   const playerName = kind.toUpperCase()
   if (err instanceof PlayerNotConfiguredError) {
+    log.warn(`[xt:external-btn] ${playerName} not configured`)
     toastError(
       t("settings.playback.notConfigured", { player: playerName }) ||
         `${playerName} isn't configured. Set its path in Settings → Playback.`,
@@ -312,6 +313,7 @@ export function surfaceLaunchError(err: unknown, kind: ExternalPlayerKind): void
     return
   }
   if (err instanceof PlayerLaunchError) {
+    log.warn(`[xt:external-btn] ${playerName} launch failed:`, err.message)
     const key = `settings.playback.error.${err.code.toLowerCase()}`
     const localized = t(key, { player: playerName, path: err.path })
     toastError(
@@ -321,6 +323,6 @@ export function surfaceLaunchError(err: unknown, kind: ExternalPlayerKind): void
     )
     return
   }
-  log.error("[xt:external-btn] launch threw:", err)
+  log.error(`[xt:external-btn] ${playerName} launch threw:`, err)
   toastError(`Couldn't launch ${playerName}.`)
 }

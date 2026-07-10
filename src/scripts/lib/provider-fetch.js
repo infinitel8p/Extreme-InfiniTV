@@ -3,6 +3,7 @@ import {
   getUserAgent,
   getNetworkTimeoutSeconds,
 } from "@/scripts/lib/app-settings.js"
+import { splitUrlAuth } from "@/scripts/lib/url-auth"
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -113,14 +114,23 @@ export function getProviderStats() {
 }
 
 export async function providerFetch(url, init = {}) {
+  // fetch() rejects URLs with embedded credentials; move them to a header.
+  const { url: requestUrl, authorization } = splitUrlAuth(String(url))
   const ua = getUserAgent()
-  const u = redactUrl(String(url)).slice(0, 200)
+  const u = redactUrl(requestUrl).slice(0, 200)
 
   const callerSignal = init.signal
   const callInit = { ...init }
   // Still accepted for back-compat (callers pass it); no longer changes
   // routing now that Tauri requests always send a browser UA by default.
   delete callInit.forceTauri
+  if (authorization) {
+    const mergedHeaders = new Headers(callInit.headers || {})
+    if (!mergedHeaders.has("Authorization")) {
+      mergedHeaders.set("Authorization", authorization)
+    }
+    callInit.headers = mergedHeaders
+  }
   if (!callerSignal) {
     const timeoutMs = defaultTimeoutMs()
     if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
@@ -137,7 +147,7 @@ export async function providerFetch(url, init = {}) {
   if (!useTauri) {
     log.log(`[xt:net] native start`, u)
     try {
-      const r = await nativeFetch(url, callInit, u, callerSignal)
+      const r = await nativeFetch(requestUrl, callInit, u, callerSignal)
       noteSuccess(r.status)
       return r
     } catch (e) {
@@ -150,7 +160,7 @@ export async function providerFetch(url, init = {}) {
   if (!tauriFetch) {
     log.log(`[xt:net] native start (no plugin-http)`, u)
     try {
-      const r = await nativeFetch(url, callInit, u, callerSignal)
+      const r = await nativeFetch(requestUrl, callInit, u, callerSignal)
       noteSuccess(r.status)
       return r
     } catch (e) {
@@ -165,7 +175,7 @@ export async function providerFetch(url, init = {}) {
   // reqwest default ("reqwest/x.y") never reaches providers that block it.
   headers.set("User-Agent", ua || DEFAULT_BROWSER_UA)
   try {
-    const r = await tauriFetch(url, { ...callInit, headers })
+    const r = await tauriFetch(requestUrl, { ...callInit, headers })
     log.log(`[xt:net] tauri ok ${r.status}`, u)
     noteSuccess(r.status)
     return r
@@ -176,7 +186,7 @@ export async function providerFetch(url, init = {}) {
       String(e?.message || e)
     )
     try {
-      const r = await nativeFetch(url, callInit, u, callerSignal)
+      const r = await nativeFetch(requestUrl, callInit, u, callerSignal)
       noteSuccess(r.status)
       return r
     } catch (e2) {
