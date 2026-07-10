@@ -1433,6 +1433,25 @@ const ensureEmbeddedPlayer = async (backend) => {
     clearStallSentinel()
     clearDeadVideoWatchdog()
     if (!ctx.started) {
+      if (!ctx.nativeFallbackTried && androidNativePlayerAvailable) {
+        ctx.nativeFallbackTried = true
+        const info = vjs?.codecInfo?.() || { videoCodec: null, errorDetail: null }
+        const failure = classifyStartFailure({
+          videoCodec: info.videoCodec,
+          errorDetail: info.errorDetail,
+          nameHint: hasHevcNameHint(ctx.name),
+          deviceHevc: deviceSupportsHevc(),
+        })
+        if (failure.kind === "hevc" || failure.kind === "codec") {
+          toast({ title: t("stream.failure.nativeFallback") })
+          launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
+            if (launched) return
+            showPlaybackFailurePanel(ctx)
+            runAutoDiagnostic(ctx, null)
+          })
+          return
+        }
+      }
       showPlaybackFailurePanel(ctx)
       runAutoDiagnostic(ctx, null)
       return
@@ -1984,8 +2003,12 @@ function ensureNativeLiveSubscription() {
 }
 
 async function tryLaunchNativeLive(initialStreamId, initialName) {
-  if (!androidNativePlayerAvailable) return false
   if (!getAndroidNativePlayerEnabled()) return false
+  return launchNativeLiveSession(initialStreamId, initialName)
+}
+
+async function launchNativeLiveSession(initialStreamId, initialName) {
+  if (!androidNativePlayerAvailable) return false
   if (!all.length) return false
   ensureNativeLiveSubscription()
 
@@ -2196,7 +2219,15 @@ async function play(streamId, name) {
   if (!player) return
   await applyStreamHeaders(channelHeaders)
   const seq = ++playSeq
-  lastPlayContext = { streamId, name, src, seq, retried: false, started: false }
+  lastPlayContext = {
+    streamId,
+    name,
+    src,
+    seq,
+    retried: false,
+    started: false,
+    nativeFallbackTried: false,
+  }
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
