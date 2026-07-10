@@ -1433,6 +1433,8 @@ const ensureEmbeddedPlayer = async (backend) => {
     clearStallSentinel()
     clearDeadVideoWatchdog()
     if (!ctx.started) {
+      // Bypasses getAndroidNativePlayerEnabled() on purpose: this is a one-shot-per-tune
+      // recovery so an unsupported channel still plays, independent of that opt-in setting.
       if (!ctx.nativeFallbackTried && androidNativePlayerAvailable) {
         ctx.nativeFallbackTried = true
         const info = vjs?.codecInfo?.() || { videoCodec: null, errorDetail: null }

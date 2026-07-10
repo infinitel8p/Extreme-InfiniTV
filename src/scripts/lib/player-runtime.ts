@@ -17,6 +17,7 @@
 import { log, redactUrl } from "@/scripts/lib/log.js"
 import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
 import { splitUrlAuth } from "@/scripts/lib/url-auth.js"
+import { clearKeyAvailable } from "@/scripts/lib/codec-hints"
 import {
   getPlayerBackend,
   getPlayerPath,
@@ -1148,6 +1149,13 @@ function parseClearKeys(licenseKey: string | null | undefined): Record<string, s
   return Object.keys(keys).length ? keys : null
 }
 
+// shaka.util.Error.Category values (stable across releases per shaka's own
+// externs) - used to tell a genuine network failure apart from a
+// decode/DRM one so classifyStartFailure() doesn't lump them together.
+const SHAKA_CATEGORY_NETWORK = 1
+const SHAKA_CATEGORY_MEDIA = 3
+const SHAKA_CATEGORY_DRM = 6
+
 async function attachShaka(
   video: HTMLVideoElement,
   url: string,
@@ -1155,26 +1163,48 @@ async function attachShaka(
   codecState: PlaybackCodecInfo,
   active: ActiveHlsRef,
   onGiveUp: (detail: string) => void,
+  isCurrent: () => boolean,
 ): Promise<void> {
   const existing = active.get()
   if (existing) {
     try { existing.destroy() } catch {}
     active.set(null)
   }
+  const { url: cleanUrl, authorization } = splitUrlAuth(url)
   const mod = await import("shaka-player")
+  if (!isCurrent()) return
   const shaka = (mod as any).default || mod
   shaka.polyfill.installAll()
   if (!shaka.Player.isBrowserSupported()) {
-    onGiveUp("shaka: browser unsupported")
+    onGiveUp("shaka:codec browser unsupported (no MediaSource/EME)")
     return
+  }
+  const clearKeys = isClearKeyScheme(drm?.drmScheme) ? parseClearKeys(drm?.licenseKey) : null
+  if (clearKeys) {
+    const supported = await clearKeyAvailable()
+    if (!isCurrent()) return
+    if (!supported) {
+      onGiveUp("shaka:drm ClearKey (EME org.w3.clearkey) unsupported in this WebView")
+      return
+    }
   }
   const player = new shaka.Player()
   const handle = { destroy: () => { void player.destroy() } }
-  active.set(handle)
-  const clearKeys = isClearKeyScheme(drm?.drmScheme) ? parseClearKeys(drm?.licenseKey) : null
   if (clearKeys) player.configure({ drm: { clearKeys } })
+  if (authorization) {
+    // Shaka has no per-loader hook like the hls.js/mpegts Tauri loaders; the
+    // Authorization header rides the WebView's own fetch via a request filter.
+    let authorizedOrigin: string | null = null
+    try { authorizedOrigin = new URL(cleanUrl).origin } catch {}
+    player.getNetworkingEngine()?.registerRequestFilter((_type: unknown, request: any) => {
+      const requestUrl = request?.uris?.[0]
+      if (!requestUrl || !matchesAuthorizedOrigin(requestUrl, authorizedOrigin)) return
+      request.headers = request.headers || {}
+      request.headers["Authorization"] = authorization
+    })
+  }
   const fail = (raw: any) => {
-    if (active.get() !== handle) return
+    if (!isCurrent()) return
     const detail = describeShakaError(raw)
     log.warn("[xt:player] shaka/DASH error:", detail)
     codecState.errorDetail = detail
@@ -1187,12 +1217,21 @@ async function attachShaka(
   player.addEventListener("error", (event: any) => fail(event?.detail))
   try {
     await player.attach(video)
-    await player.load(url)
-    if (active.get() !== handle) return
+    if (!isCurrent()) {
+      try { player.destroy() } catch {}
+      return
+    }
+    await player.load(cleanUrl)
+    if (!isCurrent()) {
+      try { player.destroy() } catch {}
+      return
+    }
+    active.set(handle)
     const track = player.getVariantTracks?.().find((variant: any) => variant.active)
     if (track?.videoCodec) codecState.videoCodec = String(track.videoCodec)
     try { await video.play() } catch {}
   } catch (err: any) {
+    if (!isCurrent()) return
     fail(err)
   }
 }
@@ -1200,8 +1239,17 @@ async function attachShaka(
 function describeShakaError(detail: any): string {
   if (!detail) return "shaka: unknown error"
   const code = detail.code ?? detail.detail?.code
+  const category = detail.category ?? detail.detail?.category
   const data = detail.data ?? detail.detail?.data
-  return `shaka:${code}${data ? " " + JSON.stringify(data) : ""}`
+  const label =
+    category === SHAKA_CATEGORY_DRM
+      ? "drm"
+      : category === SHAKA_CATEGORY_MEDIA
+        ? "codec"
+        : category === SHAKA_CATEGORY_NETWORK
+          ? "network"
+          : String(category ?? "unknown")
+  return `shaka:${label}:${code}${data ? " " + JSON.stringify(data) : ""}`
 }
 
 async function attachMpegts(
@@ -1408,6 +1456,7 @@ async function mountVideoJs(
         if (pendingSrc !== src) return
         try { player.error?.({ code: 3, message: detail }) } catch {}
       },
+      () => pendingSrc === src,
     )
     try { player.hasStarted?.(true) } catch {}
   }
@@ -1685,6 +1734,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         if (pendingSrc !== url) return
         try { video.dispatchEvent(new Event("error")) } catch {}
       },
+      () => pendingSrc === url,
     )
   }
 

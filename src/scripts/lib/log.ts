@@ -43,6 +43,14 @@ function stringifyArgs(args: unknown[]): string {
         .join(" ")
 }
 
+// Redact string/Error args before they hit the console, so DevTools output
+// matches the redacted file mirror.
+function redactArg(arg: unknown): unknown {
+    if (typeof arg === "string") return redactUrl(arg)
+    if (arg instanceof Error) return redactUrl(arg.stack || arg.message)
+    return arg
+}
+
 export const log: {
     error: LogFn
     warn: LogFn
@@ -50,9 +58,9 @@ export const log: {
     debug: LogFn
     log: LogFn
 } = {
-    error: (...args) => { console.error(...args); toFile("error", args) },
-    warn: (...args) => { console.warn(...args); toFile("warn", args) },
-    info: (...args) => { if (isDev) console.info(...args); toFile("info", args) },
+    error: (...args) => { console.error(...args.map(redactArg)); toFile("error", args) },
+    warn: (...args) => { console.warn(...args.map(redactArg)); toFile("warn", args) },
+    info: (...args) => { if (isDev) console.info(...args.map(redactArg)); toFile("info", args) },
     debug: isDev ? console.debug.bind(console) : noop,
     log: isDev ? console.log.bind(console) : noop,
 }

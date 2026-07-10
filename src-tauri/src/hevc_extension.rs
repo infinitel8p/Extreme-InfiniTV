@@ -32,7 +32,7 @@ fn validate_path(value: &str) -> Result<(), String> {
     if value.is_empty() {
         return Err("NOT_FOUND:appx path is empty".to_string());
     }
-    if value.contains('\0') || value.contains('\n') || value.contains('\r') {
+    if value.contains(['\0', '\n', '\r', '$', '`', '"']) {
         return Err("OTHER:appx path contains illegal characters".to_string());
     }
     Ok(())
@@ -63,13 +63,13 @@ fn install_blocking(path: String) -> Result<Value, String> {
     if !Path::new(&path).exists() {
         return Err(format!("NOT_FOUND:no file at {path}"));
     }
-    let script = format!(
-        "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Add-AppxPackage -Path \"{}\"",
-        path.replace('`', "``").replace('"', "`\"")
-    );
+    // The path travels via an env var, not string interpolation into the script,
+    // so a value like `foo$(Start-Process calc)` can't get re-parsed as code.
+    const SCRIPT: &str = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Add-AppxPackage -Path $env:XT_APPX_PATH";
     let mut command = Command::new("powershell");
     command
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("XT_APPX_PATH", &path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -139,4 +139,57 @@ fn install_blocking(path: String) -> Result<Value, String> {
 #[cfg(not(windows))]
 fn install_blocking(_path: String) -> Result<Value, String> {
     Err("OTHER:HEVC extension install is Windows-only".to_string())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_path_rejects_empty() {
+        let err = validate_path("").unwrap_err();
+        assert!(err.starts_with("NOT_FOUND:"), "got {err}");
+    }
+
+    #[test]
+    fn validate_path_rejects_null_byte() {
+        let err = validate_path("C:\\appx\0junk.AppxBundle").unwrap_err();
+        assert!(err.starts_with("OTHER:"), "got {err}");
+    }
+
+    #[test]
+    fn validate_path_rejects_newline() {
+        let err = validate_path("C:\\appx\nbundle.AppxBundle").unwrap_err();
+        assert!(err.starts_with("OTHER:"), "got {err}");
+    }
+
+    #[test]
+    fn validate_path_rejects_carriage_return() {
+        let err = validate_path("C:\\appx\rbundle.AppxBundle").unwrap_err();
+        assert!(err.starts_with("OTHER:"), "got {err}");
+    }
+
+    #[test]
+    fn validate_path_rejects_command_substitution() {
+        let err = validate_path("C:\\appx$(Start-Process calc).AppxBundle").unwrap_err();
+        assert!(err.starts_with("OTHER:"), "got {err}");
+    }
+
+    #[test]
+    fn validate_path_rejects_backtick() {
+        let err = validate_path("C:\\appx`nbundle.AppxBundle").unwrap_err();
+        assert!(err.starts_with("OTHER:"), "got {err}");
+    }
+
+    #[test]
+    fn validate_path_rejects_double_quote() {
+        let err = validate_path("C:\\appx\"bundle.AppxBundle").unwrap_err();
+        assert!(err.starts_with("OTHER:"), "got {err}");
+    }
+
+    #[test]
+    fn validate_path_accepts_normal_windows_path() {
+        validate_path("C:\\Users\\test\\Downloads\\Microsoft.HEVCVideoExtension.AppxBundle")
+            .unwrap();
+    }
 }

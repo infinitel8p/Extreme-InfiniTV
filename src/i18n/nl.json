@@ -630,6 +630,7 @@
   "stream.error.schemeUnsupported": "Kan \"{scheme}://\"-streams niet afspelen in de ingebouwde speler. Stel MPV of VLC in via Instellingen → Afspelen.",
   "stream.failure.hevcConfirmed": "Dit kanaal gebruikt HEVC (H.265) en dit apparaat kan dat niet decoderen in de ingebouwde speler. Open het in een externe speler.",
   "stream.failure.codecUnsupported": "Het videoformaat van dit kanaal ({codec}) wordt niet ondersteund door de ingebouwde speler op dit apparaat. Open het in een externe speler.",
+  "stream.failure.nativeFallback": "Het formaat van dit kanaal wordt niet ondersteund door de ingebouwde speler. Wordt geopend in de native speler…",
   "stream.offline.title": "Je bent offline",
   "stream.offline.body": "Maak weer verbinding om verder te kijken.",
   "stream.offline.reconnectFailedTitle": "Nog steeds problemen",

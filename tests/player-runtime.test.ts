@@ -6,6 +6,7 @@ import {
   classifyError,
   PlayerLaunchError,
   externalPlayersAvailable,
+  androidMimeForUrl,
 } from "../src/scripts/lib/player-runtime"
 
 const SRC = "https://example.com/live/u/p/1.m3u8"
@@ -196,5 +197,41 @@ describe("classifyError", () => {
 describe("externalPlayersAvailable gate", () => {
   it("is false in the vitest node runtime, so mountPlayer falls back to videojs", () => {
     expect(externalPlayersAvailable).toBe(false)
+  })
+})
+
+// streamKindHint / isDashSource are module-private (no `export`), so the
+// embedded-player MPEG-DASH container sniffing can't be reached from a test
+// file without a source change. androidMimeForUrl is the exported hint
+// function with its own .mpd/dash+xml case, so DASH coverage below goes
+// through that instead.
+describe("androidMimeForUrl", () => {
+  it("maps a .mpd URL to the DASH manifest MIME", () => {
+    expect(androidMimeForUrl("https://provider.tld/dash/stream.mpd")).toBe(
+      "application/dash+xml",
+    )
+    expect(androidMimeForUrl("https://provider.tld/dash/stream.mpd?token=abc")).toBe(
+      "application/dash+xml",
+    )
+  })
+
+  it("still maps a plain .m3u8 URL to HLS, not DASH", () => {
+    expect(androidMimeForUrl("https://provider.tld/live/stream.m3u8")).toBe(
+      "application/vnd.apple.mpegurl",
+    )
+  })
+
+  it("assumes HLS for a bare Xtream live path with no extension", () => {
+    expect(androidMimeForUrl("https://provider.tld/live/user/pass/1234")).toBe(
+      "application/vnd.apple.mpegurl",
+    )
+  })
+
+  it("falls back to video/* for opaque or missing URLs", () => {
+    expect(androidMimeForUrl("https://provider.tld/proxy/ts/stream/uuid-1234")).toBe(
+      "video/*",
+    )
+    expect(androidMimeForUrl(null)).toBe("video/*")
+    expect(androidMimeForUrl(undefined)).toBe("video/*")
   })
 })

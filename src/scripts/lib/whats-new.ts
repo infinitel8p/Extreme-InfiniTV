@@ -20,11 +20,16 @@ import { log } from "@/scripts/lib/log.js"
 const STORAGE_KEY = "xt_last_seen_version"
 const DIALOG_ID = "xt-whats-new-dialog"
 
-function getCurrentVersion(): string | null {
-  const meta = document
-    .querySelector('meta[name="x-app-version"]')
-    ?.getAttribute("content")
-  return meta || null
+async function getCurrentVersion(): Promise<string | null> {
+  try {
+    const { getVersion } = await import("@tauri-apps/api/app")
+    return await getVersion()
+  } catch {
+    const meta = document
+      .querySelector('meta[name="x-app-version"]')
+      ?.getAttribute("content")
+    return meta || null
+  }
 }
 
 function readLastSeen(): string | null {
@@ -93,7 +98,7 @@ function buildDialog(
   `
 
   const titleEl = header.querySelector("h2") as HTMLElement
-  const VERSION_SLOT = ""
+  const VERSION_SLOT = "\uE000"
   const [beforeVersion, afterVersion = ""] = t("whatsNew.title", {
     version: VERSION_SLOT,
   }).split(VERSION_SLOT)
@@ -193,7 +198,7 @@ async function maybeShowWhatsNew(): Promise<void> {
   if (pathname === "/login" || pathname.startsWith("/login/")) return
   if (document.getElementById(DIALOG_ID)) return
 
-  const current = getCurrentVersion()
+  const current = await getCurrentVersion()
   if (!current) return
 
   const lastSeen = readLastSeen() || "1.0.0"
@@ -206,7 +211,7 @@ async function maybeShowWhatsNew(): Promise<void> {
 
   let releases: ReleaseSummary[]
   try {
-    releases = await fetchReleases(undefined, 10)
+    releases = await fetchReleases(undefined, 30)
   } catch (error) {
     log.error("[whats-new] release fetch failed:", error)
     return
@@ -220,9 +225,9 @@ async function maybeShowWhatsNew(): Promise<void> {
     )
   })
 
-  writeLastSeen(current)
-
   if (!fresh.length) return
+
+  writeLastSeen(current)
 
   const dialog = buildDialog(current, fresh, renderMarkdown)
   if (typeof dialog.showModal === "function") dialog.showModal()

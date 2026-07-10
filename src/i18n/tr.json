@@ -630,6 +630,7 @@
   "stream.error.schemeUnsupported": "\"{scheme}://\" akışları yerleşik oynatıcıda oynatılamaz. Ayarlar → Oynatma bölümünde MPV veya VLC ayarlayın.",
   "stream.failure.hevcConfirmed": "Bu kanal HEVC (H.265) kullanıyor ve bu cihaz yerleşik oynatıcıda bunu çözemiyor. Harici bir oynatıcıda açın.",
   "stream.failure.codecUnsupported": "Bu kanalın video formatı ({codec}) bu cihazdaki yerleşik oynatıcı tarafından desteklenmiyor. Harici bir oynatıcıda açın.",
+  "stream.failure.nativeFallback": "Bu kanalın biçimi yerleşik oynatıcı tarafından desteklenmiyor. Yerel oynatıcıda açılıyor…",
   "stream.offline.title": "Çevrimdışısınız",
   "stream.offline.body": "İzlemeye devam etmek için yeniden bağlanın.",
   "stream.offline.reconnectFailedTitle": "Hâlâ sorun var",

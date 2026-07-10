@@ -22,13 +22,35 @@ describe("redactUrl", () => {
     expect(out).toContain("action=get_live_categories")
   })
 
-  it("redacts auth-bearing params on the live stream URL", () => {
+  it("redacts auth-bearing params and path-segment creds on the live stream URL", () => {
     const out = redactUrl(
       "https://provider.tld:8080/live/alice/hunter2/1234.m3u8?token=abcdef",
     )
-    // Path-segment creds aren't query params; only the token gets stripped.
-    expect(out).toContain("token=***")
+    // The /live/<user>/<pass>/ path segments are masked alongside query params.
+    expect(out).toBe(
+      "https://provider.tld:8080/live/***/***/1234.m3u8?token=***",
+    )
+    expect(out).not.toContain("alice")
+    expect(out).not.toContain("hunter2")
     expect(out).not.toContain("abcdef")
+  })
+
+  it("redacts credentials from other Xtream path kinds (movie/series/timeshift/hls/hlsr)", () => {
+    expect(redactUrl("https://x.test/movie/alice/hunter2/9.mp4")).toBe(
+      "https://x.test/movie/***/***/9.mp4",
+    )
+    expect(redactUrl("https://x.test/series/alice/hunter2/9.mp4")).toBe(
+      "https://x.test/series/***/***/9.mp4",
+    )
+    expect(redactUrl("https://x.test/timeshift/alice/hunter2/60/2024-01-01:00-00/1.ts")).toBe(
+      "https://x.test/timeshift/***/***/60/2024-01-01:00-00/1.ts",
+    )
+    expect(redactUrl("https://x.test/hls/alice/hunter2/index.m3u8")).toBe(
+      "https://x.test/hls/***/***/index.m3u8",
+    )
+    expect(redactUrl("https://x.test/hlsr/alice/hunter2/token/index.m3u8")).toBe(
+      "https://x.test/hlsr/***/***/token/index.m3u8",
+    )
   })
 
   it("redacts common credential param names", () => {

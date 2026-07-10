@@ -630,6 +630,7 @@
   "stream.error.schemeUnsupported": "Não é possível reproduzir streams \"{scheme}://\" no player integrado. Configure MPV ou VLC em Configurações → Reprodução.",
   "stream.failure.hevcConfirmed": "Este canal usa HEVC (H.265) e este dispositivo não consegue decodificá-lo no player integrado. Abra-o em um player externo.",
   "stream.failure.codecUnsupported": "O formato de vídeo deste canal ({codec}) não é suportado pelo player integrado neste dispositivo. Abra-o em um player externo.",
+  "stream.failure.nativeFallback": "O formato deste canal não é compatível com o player integrado. Abrindo no player nativo…",
   "stream.offline.title": "Você está offline",
   "stream.offline.body": "Reconecte-se para continuar assistindo.",
   "stream.offline.reconnectFailedTitle": "Ainda com problemas",

@@ -20,16 +20,36 @@ function base64Utf8(text: string): string {
     return btoa(String.fromCharCode(...new TextEncoder().encode(text)))
 }
 
+function findAuthorityEnd(rawUrl: string, schemeEnd: number): number {
+    const terminatorMatch = /[/?#]/.exec(rawUrl.slice(schemeEnd))
+    return terminatorMatch ? schemeEnd + terminatorMatch.index : rawUrl.length
+}
+
+// Distinguishes a genuinely broken `host:port` (the URL is invalid for a
+// reason unrelated to userinfo) from a `user:pass` pair that merely contains
+// a raw `/`, `?`, or `#` needing the rescue below
+function looksLikeBrokenHostPort(authority: string): boolean {
+    const colonIndex = authority.indexOf(":")
+    if (colonIndex === -1) return false
+    const hostCandidate = authority.slice(0, colonIndex)
+    const portCandidate = authority.slice(colonIndex + 1)
+    if (portCandidate === "") return false
+    const isNumericPort = /^\d+$/.test(portCandidate)
+    if (isNumericPort && Number(portCandidate) <= 65535) return false
+    return isNumericPort || hostCandidate.includes(".")
+}
+
 // Raw `/`, `?`, or `#` inside userinfo makes `new URL()` throw because the
 // parser cannot tell where the authority ends. Percent-encode the segment
-// before the last `@` and retry; the original string was invalid anyway, so
-// this cannot break a previously-working URL.
+// before the last `@` and retry.
 function rescueCredentialedUrl(rawUrl: string): URL | null {
     const schemeMatch = /^https?:\/\//i.exec(rawUrl)
     if (!schemeMatch) return null
     const lastAtIndex = rawUrl.lastIndexOf("@")
     if (lastAtIndex === -1) return null
     const schemeEnd = schemeMatch[0].length
+    const authorityEnd = findAuthorityEnd(rawUrl, schemeEnd)
+    if (looksLikeBrokenHostPort(rawUrl.slice(schemeEnd, authorityEnd))) return null
     const userinfo = rawUrl.slice(schemeEnd, lastAtIndex)
     const rest = rawUrl.slice(lastAtIndex + 1)
     const colonIndex = userinfo.indexOf(":")

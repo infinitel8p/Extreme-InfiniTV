@@ -44,10 +44,12 @@ export interface StartFailureVerdict {
 
 // Engine error details that point at a codec/format problem rather than a
 // network one: hls.js bufferAddCodecError / bufferIncompatibleCodecsError,
-// mpegts.js CodecUnsupported / FormatUnsupported, and the synthetic
+// mpegts.js CodecUnsupported / FormatUnsupported, the synthetic
 // "videoDecodeFailure" from the dead-video watchdog (track present, audio
-// playing, zero frames ever decoded).
-const CODEC_ERROR_DETAIL_RX = /codec|decode|format.?unsupported|incompatible/i
+// playing, zero frames ever decoded), and shaka.util.Error MEDIA/DRM category
+// failures (decode, ClearKey/EME license errors) for MPEG-DASH.
+const CODEC_ERROR_DETAIL_RX =
+  /codec|decode|format.?unsupported|incompatible|drm|decrypt|eme|clearkey|license/i
 
 export function classifyStartFailure(input: {
   videoCodec?: string | null

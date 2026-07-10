@@ -138,4 +138,21 @@ describe("splitUrlAuth", () => {
     const invalid = "https://host.com:notaport/x.m3u"
     expect(splitUrlAuth(invalid)).toEqual({ url: invalid, authorization: null })
   })
+
+  it("does not misroute an invalid port URL with an @ in an unrelated query value", () => {
+    const invalid =
+      "https://host.com:notaport/x.m3u?email=test@example.com"
+    expect(splitUrlAuth(invalid)).toEqual({ url: invalid, authorization: null })
+  })
+
+  it("does not misroute an out-of-range port URL with an @ in an unrelated query value", () => {
+    const invalid = "https://host.com:99999/x.m3u?cb=a@b.com"
+    expect(splitUrlAuth(invalid)).toEqual({ url: invalid, authorization: null })
+  })
+
+  it("leaves a valid URL with @ only in the query untouched", () => {
+    const plain =
+      "https://provider.tld:8080/live/stream.m3u8?token=abc@def.com"
+    expect(splitUrlAuth(plain)).toEqual({ url: plain, authorization: null })
+  })
 })

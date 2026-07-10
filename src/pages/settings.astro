@@ -1572,7 +1572,7 @@ const navStructure: NavSection[] = [
             try {
               const { writeClipboardText } = await import("@/scripts/lib/clipboard.ts")
               await writeClipboardText(dir)
-              flashMsg(cacheMsgEl, `Log folder path copied: ${dir}`)
+              flashMsg(cacheMsgEl, t("settings.storage.logPathCopied", { dir }))
               return
             } catch {}
           }

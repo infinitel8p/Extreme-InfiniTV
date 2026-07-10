@@ -8,6 +8,7 @@ import {
 } from "./icons.js"
 import { escapeHtml, fmtAge } from "./format.js"
 import { t } from "./i18n.js"
+import { redactUrl } from "./log.js"
 import { confirmDialog } from "./confirm-dialog.ts"
 import {
   getPlaylistHealth,
@@ -346,7 +347,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
   if (h.provider.lastError && h.provider.failures > 0) {
     const errEl = document.createElement("span")
     errEl.className = "text-bad break-all"
-    errEl.textContent = h.provider.lastError
+    errEl.textContent = redactUrl(h.provider.lastError)
     list.appendChild(healthRow(t("settings.health.lastError"), errEl, "bad"))
   }
 
@@ -426,7 +427,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
         }
         renderDiagnosticInto(diagnosticResultEl, result)
       } catch (error) {
-        diagnosticResultEl.textContent = String(error?.message || error)
+        diagnosticResultEl.textContent = redactUrl(error?.message || error)
       } finally {
         diagnostic.removeAttribute("disabled")
         diagnostic.classList.remove("opacity-60")
