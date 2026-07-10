@@ -57,6 +57,8 @@ export const log: {
     log: isDev ? console.log.bind(console) : noop,
 }
 
+const SENSITIVE_USERINFO = /(\/\/)[^/@\s?#]+@/g
+
 const SENSITIVE_PARAMS = /(\b(?:username|user|password|pass|token|auth|key|api_key|apikey)=)([^&#\s]*)/gi
 
 const SENSITIVE_PATH =
@@ -66,6 +68,7 @@ export function redactUrl(input: unknown): string {
     if (input == null) return ""
     const text = typeof input === "string" ? input : String(input)
     return text
+        .replace(SENSITIVE_USERINFO, "$1***@")
         .replace(SENSITIVE_PARAMS, (_match, prefix) => `${prefix}***`)
         .replace(SENSITIVE_PATH, (_match, prefix) => `${prefix}***/***/`)
 }

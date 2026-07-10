@@ -14,8 +14,9 @@
 // Desktop only - external backends invoke a Tauri command that's gated
 // off on Android/iOS at the Rust side.
 
-import { log } from "@/scripts/lib/log.js"
+import { log, redactUrl } from "@/scripts/lib/log.js"
 import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
+import { splitUrlAuth } from "@/scripts/lib/url-auth.js"
 import {
   getPlayerBackend,
   getPlayerPath,
@@ -767,6 +768,7 @@ function createTauriStreamLoaderClass(mpegts: any) {
 
   return class TauriStreamLoader extends BaseLoader {
     private _seekHandler: any
+    private _config: any
     private _abortController: AbortController | null = null
     private _requestAbort = false
     private _receivedLength = 0
@@ -776,9 +778,10 @@ function createTauriStreamLoaderClass(mpegts: any) {
       return isTauri
     }
 
-    constructor(seekHandler: any) {
+    constructor(seekHandler: any, config: any) {
       super("tauri-stream-loader")
       this._seekHandler = seekHandler
+      this._config = config
       this._needStash = true
     }
 
@@ -802,7 +805,14 @@ function createTauriStreamLoaderClass(mpegts: any) {
       try {
         const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http")
         const headers = new Headers(seekConfig.headers || undefined)
-
+        // Config headers (e.g. Authorization from a userinfo URL) only reach
+        // built-in mpegts loaders; seekConfig.headers never includes them.
+        const configHeaders = this._config?.headers
+        if (configHeaders && typeof configHeaders === "object") {
+          for (const [headerName, headerValue] of Object.entries(configHeaders)) {
+            headers.set(headerName, String(headerValue))
+          }
+        }
         if (!headers.has("User-Agent")) {
           headers.set("User-Agent", getUserAgent() || DEFAULT_BROWSER_UA)
         }
@@ -866,8 +876,20 @@ function createTauriStreamLoaderClass(mpegts: any) {
   }
 }
 
+function matchesAuthorizedOrigin(requestUrl: string, authorizedOrigin: string | null): boolean {
+  if (!authorizedOrigin) return false
+  try {
+    return new URL(requestUrl).origin === authorizedOrigin
+  } catch {
+    return false
+  }
+}
+
 // Custom hls.js loader
-function createTauriHlsLoaderClass() {
+function createTauriHlsLoaderClass(
+  authorization: string | null = null,
+  authorizedOrigin: string | null = null,
+) {
   return class TauriHlsLoader {
     context: any = null
     stats: any
@@ -937,8 +959,15 @@ function createTauriHlsLoaderClass() {
     private async run(context: any) {
       try {
         const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http")
+        const { url: requestUrl, authorization: urlAuthorization } = splitUrlAuth(context.url)
         const headers = new Headers()
         headers.set("User-Agent", getUserAgent() || DEFAULT_BROWSER_UA)
+        // Playlist credentials stay scoped to their origin so they never
+        // leak to cross-origin segment/key hosts; per-URL userinfo always wins.
+        const effectiveAuthorization =
+          urlAuthorization ||
+          (matchesAuthorizedOrigin(requestUrl, authorizedOrigin) ? authorization : null)
+        if (effectiveAuthorization) headers.set("Authorization", effectiveAuthorization)
         const { rangeStart, rangeEnd } = context
         if (
           Number.isFinite(rangeStart) &&
@@ -948,7 +977,7 @@ function createTauriHlsLoaderClass() {
           // hls.js byte ranges are [start, end); the Range header end is inclusive.
           headers.set("Range", `bytes=${rangeStart}-${rangeEnd - 1}`)
         }
-        const response = await tauriFetch(context.url, {
+        const response = await tauriFetch(requestUrl, {
           method: "GET",
           headers,
           signal: this.abortController?.signal,
@@ -1029,6 +1058,13 @@ function attachHlsToVideo(
     try { existing.destroy() } catch {}
     active.set(null)
   }
+  // Native <video src> cannot carry a header, so those paths pass the
+  // original url through as best-effort; the hls.js paths get the split form.
+  const { url: cleanUrl, authorization } = splitUrlAuth(url)
+  let authorizedOrigin: string | null = null
+  if (authorization) {
+    try { authorizedOrigin = new URL(cleanUrl).origin } catch {}
+  }
   const preferNative =
     isMacOS && video.canPlayType("application/vnd.apple.mpegurl")
   if (preferNative) {
@@ -1043,7 +1079,18 @@ function attachHlsToVideo(
     return
   }
   const hlsConfig: Record<string, unknown> = { enableWorker: true }
-  if (isTauri) hlsConfig.loader = createTauriHlsLoaderClass()
+  if (isTauri) {
+    hlsConfig.loader = createTauriHlsLoaderClass(authorization, authorizedOrigin)
+  } else if (authorization) {
+    // hls.js calls xhrSetup before its own open(); opening here lets us set
+    // the Authorization header, and hls.js skips its open when already OPENED.
+    // Skip cross-origin requests entirely so credentials stay on their host.
+    hlsConfig.xhrSetup = (xhr: XMLHttpRequest, requestUrl: string) => {
+      if (!matchesAuthorizedOrigin(requestUrl, authorizedOrigin)) return
+      xhr.open("GET", requestUrl, true)
+      xhr.setRequestHeader("Authorization", authorization)
+    }
+  }
   const hls = new Hls(hlsConfig)
   let netRecover = 0
   let mediaRecover = 0
@@ -1080,7 +1127,7 @@ function attachHlsToVideo(
     if (active.get() === hls) active.set(null)
     onGiveUp()
   })
-  hls.loadSource(url)
+  hls.loadSource(cleanUrl)
   hls.attachMedia(video)
   active.set(hls)
 }
@@ -1174,6 +1221,8 @@ async function attachMpegts(
   let player: any = null
   let triedTauriLoader = false
 
+  const { url: cleanUrl, authorization } = splitUrlAuth(url)
+
   const teardown = () => {
     if (!player) return
     try { player.unload() } catch {}
@@ -1183,10 +1232,13 @@ async function attachMpegts(
   }
 
   const start = (useTauriLoader: boolean) => {
-    const config = useTauriLoader
-      ? { customLoader: createTauriStreamLoaderClass(mpegts) }
-      : undefined
-    player = mpegts.createPlayer({ type: "mpegts", isLive: true, url }, config)
+    const config: Record<string, unknown> = {}
+    if (useTauriLoader) config.customLoader = createTauriStreamLoaderClass(mpegts)
+    if (authorization) config.headers = { Authorization: authorization }
+    player = mpegts.createPlayer(
+      { type: "mpegts", isLive: true, url: cleanUrl },
+      Object.keys(config).length ? config : undefined,
+    )
     player.on(mpegts.Events.MEDIA_INFO, (info: any) => {
       if (disposed) return
       if (info?.videoCodec) onMediaInfo?.({ videoCodec: String(info.videoCodec) })
@@ -1363,7 +1415,9 @@ async function mountVideoJs(
   function loadHls(src: string) {
     destroyMpegts()
     destroyShaka()
-    if (isTauri) {
+    // Credentialed URLs need hls.js too: VHS hands them to fetch/XHR, which
+    // Chromium blocks for embedded credentials.
+    if (isTauri || splitUrlAuth(src).authorization) {
       void loadHlsViaHlsJs(src)
       return
     }
@@ -1424,7 +1478,7 @@ async function mountVideoJs(
     if (outcome === "hls") {
       log.warn(
         "[xt:player] .ts source served an HLS playlist - falling back to hls.js:",
-        src
+        redactUrl(src)
       )
       loadHls(src)
       return
@@ -1668,7 +1722,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     if (outcome === "hls") {
       log.warn(
         "[xt:player] .ts source served an HLS playlist - switching to hls.js:",
-        url
+        redactUrl(url)
       )
       loadHlsIntoVideo(video, url)
       return

@@ -12,7 +12,7 @@ import Callout from "../components/Callout.astro"
 Right-click the channel (or movie / episode) and pick **Test stream**. The dialog tells you whether the stream is reachable.
 
 - **Reachable but won't play** - the in-app player can't decode the codec. Open it in MPV or VLC instead. See [External players](./external-players/).
-- **403 or 401 response** - your provider is blocking you based on your User-Agent. Open **Settings > Network** and pick a different UA preset (VLC, ExoPlayer, and MX Player cover the common cases).
+- **403 or 401 response** - your provider is blocking you based on your User-Agent. Open **Settings > Network** and pick a different UA preset (VLC, ExoPlayer, and MX Player cover the common cases). A 401 can also mean the stream needs HTTP Basic auth - if your provider gave you a `user:pass@` URL, make sure you pasted it intact, credentials included.
 - **Connection failed entirely** - the server is down, your network is blocking it, or the URL has changed. Check the provider's status page or contact support.
 
 ## "Couldn't load channels - check your login"
@@ -23,6 +23,8 @@ The Xtream sign-in failed. Most common causes:
 - **Wrong port.** Check your provider's URL for a number after the colon (`:8080`, `:25461`) and include it.
 - **Expired account.** Some providers return a generic error for expired accounts. Check with your provider.
 - **Region-locked.** The provider sees your IP from a region they don't serve.
+- **Wrong embedded credentials.** For `user:pass@` M3U URLs, the embedded credentials must be correct. Special characters are handled automatically (percent-encoded forms also work).
+- **CORS (web version only).** For `user:pass@` M3U URLs in the browser, the server must also allow cross-origin requests with an Authorization header. The desktop and Android apps are not affected.
 
 <Callout type="tip">
   Not sure if your provider gave you an Xtream login or an M3U URL? Paste whatever you have into the Server URL field. The app figures out the format automatically.

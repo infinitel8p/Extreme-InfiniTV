@@ -72,4 +72,34 @@ describe("redactUrl", () => {
     )
     expect(out).toBe("https://x.test/?username=***&action=get_series")
   })
+
+  it("redacts user:pass userinfo embedded in the URL", () => {
+    const out = redactUrl("https://user:password@host/path")
+    expect(out).toBe("https://***@host/path")
+    expect(out).not.toContain("password")
+  })
+
+  it("redacts bare username userinfo", () => {
+    expect(redactUrl("https://user@host/path")).toBe("https://***@host/path")
+  })
+
+  it("redacts userinfo and sensitive query params together", () => {
+    const out = redactUrl(
+      "https://alice:hunter2@provider.tld:8080/get.php?token=abcdef",
+    )
+    expect(out).toBe("https://***@provider.tld:8080/get.php?token=***")
+    expect(out).not.toContain("alice")
+    expect(out).not.toContain("hunter2")
+    expect(out).not.toContain("abcdef")
+  })
+
+  it("does not treat an email-like @ in a query value as userinfo", () => {
+    const safe = "https://x.test/subscribe?email=alice@example.com"
+    expect(redactUrl(safe)).toBe(safe)
+  })
+
+  it("leaves non-URL strings with an @ unchanged", () => {
+    const plain = "contact alice@example.com for support"
+    expect(redactUrl(plain)).toBe(plain)
+  })
 })

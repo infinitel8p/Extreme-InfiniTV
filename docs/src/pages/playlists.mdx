@@ -26,6 +26,10 @@ If your provider sent you a host, a port, a username, and a password, fill in:
 
 If your provider only gave you a single playlist URL (anything ending in `.m3u` or `.m3u8`, or a `get.php?...` link), paste the **whole URL** into **Server URL** and leave Username and Password blank. The app detects the M3U format and switches modes.
 
+<Callout type="tip">
+  URLs with credentials baked in, like `https://user:password@example.com/playlist.m3u`, work too. The app sends the credentials as HTTP Basic authentication when loading the playlist and its streams.
+</Callout>
+
 ## Multiple playlists
 
 You can add as many Xtream accounts and M3U URLs as you want. Open **Settings > Playlists** to add, rename, or remove them. Switch the active one from the sidebar.
