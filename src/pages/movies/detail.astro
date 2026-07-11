@@ -9,6 +9,7 @@ import {
   IconBrandYoutube,
   IconPictureInPicture,
   IconExternalLink,
+  IconAspectRatio,
 } from "@tabler/icons-svelte"
 ---
 
@@ -116,6 +117,16 @@ import {
             class="btn">
             <IconPictureInPicture aria-hidden="true" stroke={2} class="btn-icon" />
             <span data-i18n="detail.action.pip">Picture-in-Picture</span>
+          </button>
+          <button
+            id="movie-detail-scale"
+            type="button"
+            hidden
+            aria-label="Display mode"
+            data-i18n-attr="aria-label:stream.scale.button"
+            class="btn">
+            <IconAspectRatio aria-hidden="true" stroke={2} class="btn-icon" />
+            <span data-i18n="stream.scale.button">Display mode</span>
           </button>
           <button
             id="movie-detail-open-external"

@@ -19,6 +19,10 @@ import {
   setProgress,
   markCompleted,
   clearProgress,
+  getVideoScaleOverride,
+  setVideoScaleOverride,
+  clearAllVideoScaleOverrides,
+  CHANNEL_VIDEO_SCALE_CHANGED_EVENT,
 } from "@/scripts/lib/preferences.js"
 import { openExternal } from "@/scripts/lib/external-link.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
@@ -47,14 +51,21 @@ import {
   androidNativePlayerAvailable,
   launchAndroidNativeVodWithProgress,
 } from "@/scripts/lib/android-video-launcher.js"
-import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
+import {
+  getAndroidNativePlayerEnabled,
+  getPlayerBackend,
+  getVideoScale,
+  setVideoScale,
+  VIDEO_SCALE_EVENT,
+} from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
 import { mountPlayer, getExternalLauncher } from "@/scripts/lib/player-runtime.ts"
-import { getPlayerBackend } from "@/scripts/lib/app-settings.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
+import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
+import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -298,6 +309,7 @@ function syncResumeUI() {
 let vjs = null
 let progressListenersBound = false
 let pipBtnBound = false
+let scaleBtnBound = false
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
@@ -313,6 +325,62 @@ function setupPipButton(player) {
   if (pipBtnBound) return
   pipBtnBound = true
   pipBtn.addEventListener("click", () => togglePip(player))
+}
+
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+
+function resolveVideoScaleMode() {
+  if (activePlaylistId && movie) {
+    const override = getVideoScaleOverride(activePlaylistId, "vod", movie.id)
+    if (override) return override
+  }
+  return getVideoScale()
+}
+
+function applyVideoScale() {
+  videoScaleController.apply(resolveVideoScaleMode())
+}
+
+document.addEventListener(VIDEO_SCALE_EVENT, () => {
+  if (movie) applyVideoScale()
+})
+
+document.addEventListener(CHANNEL_VIDEO_SCALE_CHANGED_EVENT, (e) => {
+  const detail = e.detail
+  if (!detail || detail.playlistId !== activePlaylistId || detail.kind !== "vod") return
+  if (!movie) return
+  if (detail.itemId === null || detail.itemId === movie.id) applyVideoScale()
+})
+
+function setupScaleButton() {
+  const scaleBtn = document.getElementById("movie-detail-scale")
+  if (!scaleBtn) return
+  scaleBtn.removeAttribute("hidden")
+  if (scaleBtnBound) return
+  scaleBtnBound = true
+  scaleBtn.addEventListener("click", () => openDisplayModeDialog())
+}
+
+async function openDisplayModeDialog() {
+  if (!movie) return
+  const currentMode = resolveVideoScaleMode()
+  const result = await openVideoScaleDialog({
+    currentMode,
+    applyAllLabelKey: "stream.scale.applyAllDefault",
+    onPreview: (mode) => videoScaleController.apply(mode),
+  })
+  applyVideoScale()
+  if (!result) return
+  if (result.applyToAll) {
+    if (activePlaylistId) clearAllVideoScaleOverrides(activePlaylistId, "vod")
+    setVideoScale(result.mode)
+    toast({
+      title: t("stream.scale.toastDefault", { mode: t(videoScaleModeLabelKey(result.mode)) }),
+      duration: 2200,
+    })
+  } else if (activePlaylistId) {
+    setVideoScaleOverride(activePlaylistId, "vod", movie.id, result.mode)
+  }
 }
 
 async function ensureEmbeddedPlayer(backend) {
@@ -416,6 +484,7 @@ async function startPlayback() {
   const player = await ensureEmbeddedPlayer(backend)
   if (!player) return
   setupPipButton(player)
+  setupScaleButton()
   const mime = chooseMime(detailSrc)
   player.one("error", () => {
     const e = player.error()
@@ -435,6 +504,7 @@ async function startPlayback() {
   }
 
   player.src({ src: playSrc, type: mime })
+  applyVideoScale()
 
   if (!progressListenersBound) {
     progressListenersBound = true

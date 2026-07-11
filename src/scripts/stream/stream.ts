@@ -25,6 +25,10 @@ import {
   getRecents,
   getViewSort,
   setViewSort,
+  getVideoScaleOverride,
+  setVideoScaleOverride,
+  clearAllVideoScaleOverrides,
+  CHANNEL_VIDEO_SCALE_CHANGED_EVENT,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
@@ -62,13 +66,18 @@ import {
   getPlayerPath,
   getUserAgent,
   EXTERNAL_PLAYER_BACKENDS,
+  getVideoScale,
+  setVideoScale,
+  VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
+import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
+import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 import {
   setupExternalPlayerButton,
   surfaceLaunchError,
   type ExternalPlayerButtonHandle,
 } from "@/scripts/lib/external-player-button.js"
-import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE } from "@/scripts/lib/icons.js"
+import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE, ICON_ASPECT_RATIO } from "@/scripts/lib/icons.js"
 import {
   loadProgrammes,
   getProgrammesSync,
@@ -259,6 +268,32 @@ document.addEventListener(EPG_OFFSET_EVENT, (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
   ensureEpgLoaded()
+})
+
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+
+function resolveVideoScaleMode() {
+  if (activePlaylistId && currentlyPlayingId != null) {
+    const override = getVideoScaleOverride(activePlaylistId, "live", currentlyPlayingId)
+    if (override) return override
+  }
+  return getVideoScale()
+}
+
+function applyVideoScale() {
+  videoScaleController.apply(resolveVideoScaleMode())
+}
+
+document.addEventListener(VIDEO_SCALE_EVENT, () => {
+  if (currentlyPlayingId != null) applyVideoScale()
+})
+
+document.addEventListener(CHANNEL_VIDEO_SCALE_CHANGED_EVENT, (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.playlistId !== activePlaylistId || detail.kind !== "live") return
+  if (currentlyPlayingId == null) return
+  // itemId is null for a bulk clear (e.g. "apply to all channels").
+  if (detail.itemId === null || detail.itemId === currentlyPlayingId) applyVideoScale()
 })
 
 const CAT_FAVORITES = "__favorites__"
@@ -2170,6 +2205,16 @@ async function play(streamId, name) {
     btn.addEventListener("click", () => { if (vjs) togglePip(vjs) })
     currentEl.appendChild(btn)
 
+    const scaleBtn = document.createElement("button")
+    scaleBtn.id = "display-mode-btn"
+    scaleBtn.type = "button"
+    scaleBtn.title = t("stream.scale.button")
+    scaleBtn.setAttribute("aria-label", t("stream.scale.button"))
+    scaleBtn.className = "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+    scaleBtn.innerHTML = ICON_ASPECT_RATIO
+    scaleBtn.addEventListener("click", () => openDisplayModeDialog(streamId))
+    currentEl.appendChild(scaleBtn)
+
     appendExternalLaunchButton(currentEl, streamId, src, name)
 
     if (sourceLogo instanceof HTMLElement) sourceLogo.style.viewTransitionName = ""
@@ -2238,6 +2283,7 @@ async function play(streamId, name) {
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch(() => {})
   }
+  applyVideoScale()
 
   pushDiscordPresence(channel || { id: streamId, name }, "live")
 
@@ -2245,6 +2291,26 @@ async function play(streamId, name) {
     paintSidePanelFromXmltv(streamId)
   } else {
     loadEPG(streamId)
+  }
+}
+
+async function openDisplayModeDialog(streamId) {
+  const currentMode = resolveVideoScaleMode()
+  const result = await openVideoScaleDialog({
+    currentMode,
+    onPreview: (mode) => videoScaleController.apply(mode),
+  })
+  applyVideoScale()
+  if (!result) return
+  if (result.applyToAll) {
+    if (activePlaylistId) clearAllVideoScaleOverrides(activePlaylistId, "live")
+    setVideoScale(result.mode)
+    toast({
+      title: t("stream.scale.toastAllChannels", { mode: t(videoScaleModeLabelKey(result.mode)) }),
+      duration: 2200,
+    })
+  } else if (activePlaylistId) {
+    setVideoScaleOverride(activePlaylistId, "live", streamId, result.mode)
   }
 }
 

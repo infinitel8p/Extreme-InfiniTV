@@ -1,4 +1,5 @@
 import { log } from "@/scripts/lib/log.js"
+import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
@@ -19,6 +20,7 @@ const KEY_HUB_STRIPS = "xt_hub_strips"
 const KEY_TV_OVERSCAN = "xt_tv_overscan"
 const KEY_ANDROID_NATIVE_PLAYER = "xt_android_native_player"
 const KEY_ANDROID_REMEMBERED_PLAYER = "xt_android_remembered_player"
+const KEY_VIDEO_SCALE = "xt_video_scale"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -31,6 +33,7 @@ export const HUB_STRIPS_EVENT = "xt:hub-strips-changed"
 export const TV_OVERSCAN_EVENT = "xt:tv-overscan-changed"
 export const ANDROID_NATIVE_PLAYER_EVENT = "xt:android-native-player-changed"
 export const ANDROID_REMEMBERED_PLAYER_EVENT = "xt:android-remembered-player-changed"
+export const VIDEO_SCALE_EVENT = "xt:video-scale-changed"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
 export const DEFAULT_TV_OVERSCAN = 0
 
@@ -650,5 +653,19 @@ export function setPlayerReuseInstance(kind, on) {
   writeLS(key, on ? "1" : "")
   document.dispatchEvent(
     new CustomEvent(EVT_CHANGED, { detail: { key: `playerReuse:${kind}`, value: !!on } })
+  )
+}
+
+// Global default display mode (fit/fill/zoom/16:9/4:3) for the embedded
+// player, applied when a channel / movie / series has no per-item override.
+export function getVideoScale() {
+  return normalizeVideoScale(readLS(KEY_VIDEO_SCALE, ""))
+}
+
+export function setVideoScale(mode) {
+  const next = normalizeVideoScale(mode)
+  writeLS(KEY_VIDEO_SCALE, next === "fit" ? "" : next)
+  document.dispatchEvent(
+    new CustomEvent(VIDEO_SCALE_EVENT, { detail: { value: next } })
   )
 }

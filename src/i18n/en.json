@@ -1052,5 +1052,16 @@
   "settings.update.installed": "Installed.",
   "settings.update.installedRestart": "Update installed. Restart to apply.",
   "settings.update.downloadFailed": "Download failed - {error}. Click Re-download to start over.",
-  "settings.update.reDownload": "Re-download"
+  "settings.update.reDownload": "Re-download",
+  "stream.scale.button": "Display mode",
+  "stream.scale.title": "Display mode",
+  "stream.scale.fit": "Fit (original)",
+  "stream.scale.fill": "Stretch",
+  "stream.scale.zoom": "Zoom",
+  "stream.scale.ratio169": "16:9",
+  "stream.scale.ratio43": "4:3",
+  "stream.scale.applyAll": "Apply to all channels",
+  "stream.scale.applyAllDefault": "Set as default for all playback",
+  "stream.scale.toastAllChannels": "{mode} applied to all channels",
+  "stream.scale.toastDefault": "{mode} is now the playback default"
 }
