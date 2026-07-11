@@ -67,6 +67,12 @@ export function getMaxConnectionsSync(playlistId) {
   return Number.isFinite(n) && n > 0 ? n : 0
 }
 
+/** Cached Xtream server_info block (server time/timezone), or null. */
+export function getServerInfoSync(playlistId) {
+  const info = getCachedUserInfoSync(playlistId)
+  return info?.server_info || null
+}
+
 /** Provider-declared active connections at the time of last cache write. */
 export function getActiveConnectionsSync(playlistId) {
   const info = getCachedUserInfoSync(playlistId)

@@ -41,6 +41,7 @@ describe("parseM3U: standard fixture", () => {
     expect(cnn.referer).toBeNull()
     expect(cnn.chno).toBeNull()
     expect(cnn.catchup).toBeNull()
+    expect(cnn.catchupSource).toBeNull()
   })
 })
 
@@ -200,6 +201,37 @@ describe("parseM3U: catchup attributes", () => {
     expect(first.catchupDays).toBe(7)
     expect(second.catchup).toBe("default")
     expect(second.catchupDays).toBeNull()
+  })
+
+  it("captures catchup-source at the entry level", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" catchup="append" catchup-source="?utc={utc}&lutc={lutc}",Source Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchupSource).toBe("?utc={utc}&lutc={lutc}")
+  })
+
+  it("falls back to header-level catchup defaults when an entry sets none", () => {
+    const text =
+      '#EXTM3U catchup="xc" catchup-days="3" catchup-source="/timeshift"\n' +
+      '#EXTINF:-1 tvg-id="x",No Own Catchup\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("xc")
+    expect(result.entries[0].catchupDays).toBe(3)
+    expect(result.entries[0].catchupSource).toBe("/timeshift")
+  })
+
+  it("lets an entry's own catchup attributes override the header defaults", () => {
+    const text =
+      '#EXTM3U catchup="xc" catchup-days="3" catchup-source="/timeshift"\n' +
+      '#EXTINF:-1 tvg-id="x" catchup="append" catchup-days="14" catchup-source="/own",Overrides Header\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("append")
+    expect(result.entries[0].catchupDays).toBe(14)
+    expect(result.entries[0].catchupSource).toBe("/own")
   })
 })
 

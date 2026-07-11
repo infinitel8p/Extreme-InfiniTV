@@ -96,6 +96,9 @@ function m3uToChannelList(text) {
       norm: normalize(`${entry.name} ${category} ${entry.tvgId || ""}`),
       url: entry.url,
       isRadio: !!entry.isRadio,
+      catchup: entry.catchup ?? null,
+      catchupDays: entry.catchupDays ?? null,
+      catchupSource: entry.catchupSource ?? null,
     })
   }
   return out
@@ -158,6 +161,8 @@ export async function ensureLive(creds, playlistId, opts = {}) {
           tvgId: String(ch.epg_channel_id || "") || undefined,
           chno: Number(ch.num) || undefined,
           norm: normalize(name + " " + category),
+          tvArchive: Number(ch.tv_archive) || 0,
+          tvArchiveDuration: Number(ch.tv_archive_duration) || 0,
         }
       })
       .filter((x) => x.id && x.name)

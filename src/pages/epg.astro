@@ -2,7 +2,7 @@
 import Layout from "@/layouts/Layout.astro";
 import CategoryPickerDialog from "@/components/CategoryPickerDialog.astro";
 import SearchInput from "@/components/SearchInput.astro";
-import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3, IconLink } from "@tabler/icons-svelte";
+import { IconRefresh, IconArrowLeft, IconChevronDown, IconChevronLeft, IconChevronRight, IconClockHour3, IconLink } from "@tabler/icons-svelte";
 ---
 
 <Layout pageTitle="EPG">
@@ -47,6 +47,32 @@ import { IconRefresh, IconArrowLeft, IconChevronDown, IconClockHour3, IconLink }
 					stroke={2}
 					class="size-4 text-fg-3 shrink-0"
 				/>
+			</button>
+			<button
+				id="epg-prev-day"
+				type="button"
+				aria-label="Previous day"
+				title="Previous day"
+				data-i18n-attr="aria-label:epg.previousDay;title:epg.previousDay"
+				class="rounded-xl border border-line bg-surface p-2 text-fg-2 shrink-0
+					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
+				<IconChevronLeft aria-hidden="true" stroke={2} class="size-4" />
+			</button>
+			<span
+				id="epg-day-label"
+				aria-live="polite"
+				class="text-xs text-fg-3 tabular-nums whitespace-nowrap px-1 shrink-0">
+				Today
+			</span>
+			<button
+				id="epg-next-day"
+				type="button"
+				aria-label="Next day"
+				title="Next day"
+				data-i18n-attr="aria-label:epg.nextDay;title:epg.nextDay"
+				class="rounded-xl border border-line bg-surface p-2 text-fg-2 shrink-0
+					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
+				<IconChevronRight aria-hidden="true" stroke={2} class="size-4" />
 			</button>
 			<button
 				id="epg-now"

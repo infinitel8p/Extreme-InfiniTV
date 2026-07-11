@@ -60,7 +60,7 @@ function parseXmlTv(xml: string): {
     if (name) channelNames.set(id, name)
   }
 
-  const lo = Date.now() - 6 * 60 * 60 * 1000
+  const lo = Date.now() - 7 * 24 * 60 * 60 * 1000
   const hi = Date.now() + 36 * 60 * 60 * 1000
 
   const list = doc.querySelectorAll("programme")

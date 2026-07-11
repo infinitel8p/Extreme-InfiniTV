@@ -391,6 +391,9 @@ dialog[open] .xt-wn-section {
     .status-badge--live {
         @apply bg-accent text-bg relative;
     }
+    .status-badge--catchup {
+        @apply h-6 w-auto px-2 gap-1 bg-accent-soft text-accent ring-accent/30;
+    }
     .status-badge--live::after {
         content: "";
         position: absolute;
@@ -1518,6 +1521,34 @@ summary.list-none::-webkit-details-marker {
     .epg-now-line::before {
         animation: none;
     }
+}
+
+/* ────────────────────────────── */
+/* EPG catch-up cells             */
+/* ────────────────────────────── */
+.epg-cell-past {
+    opacity: 0.55;
+}
+.epg-cell-past:hover,
+.epg-cell-past:focus-visible {
+    opacity: 0.85;
+}
+.epg-cell-replay {
+    opacity: 0.85;
+}
+.epg-cell-replay:hover,
+.epg-cell-replay:focus-visible {
+    opacity: 1;
+}
+.epg-cell-replay-dot {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-inline-end: 5px;
+    margin-bottom: 1px;
+    border-radius: 9999px;
+    background: var(--color-accent);
+    vertical-align: middle;
 }
 
 @media (prefers-reduced-motion: reduce) {

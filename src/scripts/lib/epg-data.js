@@ -25,6 +25,7 @@ const EVT_LOADED = "xt:epg-loaded"
 const EVT_OFFSET_CHANGED = "xt:epg-offset-changed"
 const EVT_SOURCE_STATUS = "xt:epg-source-status"
 const GZIP_CT_RX = /application\/(x-)?gzip|application\/x-gunzip/i
+export const EPG_PAST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 
 // FNV-1a 32-bit hash. Deterministic, short, no crypto needed - just used to
 // derive a per-URL cache key suffix.
@@ -304,7 +305,7 @@ export function parseXmlTv(xml) {
     if (name) channelNames.set(id, name)
   }
 
-  const lo = Date.now() - 6 * 60 * 60 * 1000
+  const lo = Date.now() - EPG_PAST_WINDOW_MS
   const hi = Date.now() + 36 * 60 * 60 * 1000
 
   const list = doc.querySelectorAll("programme")
@@ -893,6 +894,22 @@ function dispatchSourceStatus(playlistId, sources) {
 export function getProgrammesSync(playlistId) {
   if (!playlistId) return null
   return memCache.get(playlistId) || null
+}
+
+/**
+ * Reverse the display-offset shift applied by applyOffset(): programmes in
+ * EpgState carry display-shifted start/stop times, but catch-up URLs need
+ * the original XMLTV UTC time. Returns displayedMs unchanged when no
+ * offset-carrying state is cached for the playlist.
+ *
+ * @param {string} playlistId
+ * @param {number} displayedMs
+ * @returns {number}
+ */
+export function displayedToUtcMs(playlistId, displayedMs) {
+  const state = playlistId ? memCache.get(playlistId) : null
+  if (!state || !state.offsetMin) return displayedMs
+  return displayedMs - state.offsetMin * 60 * 1000
 }
 
 export function invalidateEpgPlaylist(playlistId) {

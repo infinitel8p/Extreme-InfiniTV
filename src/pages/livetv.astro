@@ -200,7 +200,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 									decoding="async"
 									referrerpolicy="no-referrer"
 									data-radio-cover
-									class="absolute inset-0 w-full h-full object-contain p-3 opacity-0 data-[loaded=true]:opacity-100 transition-opacity duration-[240ms] ease-[cubic-bezier(0.16,1,0.3,1)]" />
+									class="absolute inset-0 w-full h-full object-contain p-3 opacity-0 data-[loaded=true]:opacity-100 transition-opacity duration-240 ease-[cubic-bezier(0.16,1,0.3,1)]" />
 							</div>
 							<div class="radio-display__meta flex flex-col gap-2 min-w-0 flex-1 pb-14 max-[480px]:items-center max-[480px]:pb-16">
 								<span
@@ -229,6 +229,26 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 							<span data-i18n="livetv.statusOff" class="status-badge status-badge--off shrink-0">OFF</span>
 							<span class="truncate">-</span>
 						</div>
+					</div>
+
+					<div id="current-progress" class="px-1" hidden>
+						<button
+							type="button"
+							id="current-progress-track"
+							role="slider"
+							aria-valuemin="0"
+							aria-orientation="horizontal"
+							aria-label="Current programme position"
+							data-i18n-attr="aria-label:catchup.progressAriaLabel"
+							class="group block w-full py-3 border-0 bg-transparent p-0 cursor-pointer outline-none">
+							<div
+								class="pointer-events-none block h-1.25 w-full rounded-full bg-line
+									group-focus-visible:ring-2 group-focus-visible:ring-accent">
+								<span
+									class="block h-full rounded-full bg-accent transition-[width] duration-200 ease-out motion-reduce:transition-none"
+									style="width: 0%"></span>
+							</div>
+						</button>
 					</div>
 
 					<div

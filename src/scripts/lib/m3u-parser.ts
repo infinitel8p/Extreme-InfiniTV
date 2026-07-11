@@ -26,6 +26,7 @@ export interface M3UEntry {
   chno: number | null
   catchup: string | null
   catchupDays: number | null
+  catchupSource: string | null
   userAgent: string | null
   referer: string | null
   tvgType: string | null
@@ -174,6 +175,7 @@ function parseExtinf(line: string): Omit<M3UEntry, "url"> {
     chno: Number.isFinite(chno) ? chno : null,
     catchup: readAttr(attrs, "catchup") || null,
     catchupDays: Number.isFinite(catchupDays) ? catchupDays : null,
+    catchupSource: readAttr(attrs, "catchup-source") || null,
     userAgent: null,
     referer: null,
     tvgType,
@@ -192,6 +194,11 @@ export function parseM3U(text: string): M3UParseResult {
   let epgUrl = ""
   let pending: Omit<M3UEntry, "url"> | null = null
   let extgrpFallback: string | null = null
+  // pvr.iptvsimple convention: #EXTM3U can carry catchup defaults for every
+  // channel that doesn't set its own.
+  let headerCatchup: string | null = null
+  let headerCatchupDays: number | null = null
+  let headerCatchupSource: string | null = null
 
   for (const raw of payload.split(/\r?\n/)) {
     const line = raw.trim()
@@ -203,6 +210,13 @@ export function parseM3U(text: string): M3UParseResult {
         readAttr(line, "tvg-url") ||
         readAttr(line, "url-tvg") ||
         epgUrl
+      headerCatchup = readAttr(line, "catchup") || headerCatchup
+      const headerCatchupDaysRaw = readAttr(line, "catchup-days")
+      if (headerCatchupDaysRaw) {
+        const parsedDays = Number(headerCatchupDaysRaw)
+        if (Number.isFinite(parsedDays)) headerCatchupDays = parsedDays
+      }
+      headerCatchupSource = readAttr(line, "catchup-source") || headerCatchupSource
       continue
     }
 
@@ -250,6 +264,9 @@ export function parseM3U(text: string): M3UParseResult {
     entries.push({
       ...pending,
       category,
+      catchup: pending.catchup ?? headerCatchup,
+      catchupDays: pending.catchupDays ?? headerCatchupDays,
+      catchupSource: pending.catchupSource ?? headerCatchupSource,
       url: line,
     })
     pending = null

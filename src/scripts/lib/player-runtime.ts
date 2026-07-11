@@ -44,7 +44,8 @@ export interface DrmOptions {
 }
 
 export interface VjsLikeHandle {
-  src(opts: { src: string; type: string; drm?: DrmOptions | null }): void
+  /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. */
+  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean }): void
   play(): Promise<unknown> | void
   pause(): void
   paused?(): boolean
@@ -1262,6 +1263,7 @@ function describeShakaError(detail: any): string {
 async function attachMpegts(
   videoEl: HTMLVideoElement,
   url: string,
+  isLive: boolean,
   onFatalError?: (detail: string) => void,
   onMediaInfo?: (info: { videoCodec?: string }) => void,
 ): Promise<MpegtsHandle | null> {
@@ -1291,7 +1293,7 @@ async function attachMpegts(
     if (useTauriLoader) config.customLoader = createTauriStreamLoaderClass(mpegts)
     if (authorization) config.headers = { Authorization: authorization }
     player = mpegts.createPlayer(
-      { type: "mpegts", isLive: true, url: cleanUrl },
+      { type: "mpegts", isLive, url: cleanUrl },
       Object.keys(config).length ? config : undefined,
     )
     player.on(mpegts.Events.MEDIA_INFO, (info: any) => {
@@ -1409,6 +1411,7 @@ async function mountVideoJs(
   let activeShaka: { destroy: () => void } | null = null
   let hlsModPromise: Promise<any> | null = null
   let pendingSrc: string | null = null
+  let pendingIsLive = true
   const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
 
   function getUnderlyingVideo(): HTMLVideoElement | null {
@@ -1557,6 +1560,7 @@ async function mountVideoJs(
     const handle = await attachMpegts(
       videoElement,
       src,
+      pendingIsLive,
       (detail) => {
         if (pendingSrc !== src) return
         activeMpegts = null
@@ -1581,8 +1585,9 @@ async function mountVideoJs(
   }
 
   const wrapped: VjsLikeHandle = {
-    src({ src, type, drm }) {
+    src({ src, type, drm, isLive }) {
       pendingSrc = src
+      pendingIsLive = isLive ?? true
       codecState.videoCodec = null
       codecState.errorDetail = null
       if (isDashSource(drm, src, type)) {
@@ -1712,6 +1717,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   let activeShaka: { destroy: () => void } | null = null
   let pendingSrc: string | null = null
   let pendingDrm: DrmOptions | null = null
+  let pendingIsLive = true
   const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
 
   function destroyArtEngines(includeHls = true) {
@@ -1827,6 +1833,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         const handle = await attachMpegts(
           video,
           url,
+          pendingIsLive,
           (detail) => {
             if (pendingSrc !== url) return
             activeMpegts = null
@@ -1878,9 +1885,10 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   })
 
   const handle: VjsLikeHandle = {
-    src({ src, type, drm }) {
+    src({ src, type, drm, isLive }) {
       pendingSrc = src
       pendingDrm = drm ?? null
+      pendingIsLive = isLive ?? true
       codecState.videoCodec = null
       codecState.errorDetail = null
       destroyArtEngines()
@@ -2024,6 +2032,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   let activeMpegts: MpegtsHandle | null = null
   let pendingSrc: string | null = null
   let pendingDrm: DrmOptions | null = null
+  let pendingIsLive = true
   const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
 
   function destroyMpegts() {
@@ -2093,6 +2102,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     const mpegtsHandle = await attachMpegts(
       video,
       src,
+      pendingIsLive,
       (detail) => {
         if (pendingSrc !== src) return
         activeMpegts = null
@@ -2116,9 +2126,10 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   }
 
   const handle: VjsLikeHandle = {
-    src({ src, type, drm }) {
+    src({ src, type, drm, isLive }) {
       pendingSrc = src
       pendingDrm = drm ?? null
+      pendingIsLive = isLive ?? true
       codecState.videoCodec = null
       codecState.errorDetail = null
       if (isDashSource(drm, src, type)) {

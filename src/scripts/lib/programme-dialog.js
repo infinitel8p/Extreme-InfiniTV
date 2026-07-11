@@ -97,8 +97,22 @@ function ensureDialog() {
           data-role="watch"
           type="button"
           data-i18n="programme.watchNow"
-          class="btn">
+          class="btn hidden">
           Watch now
+        </button>
+        <button
+          data-role="watch-from-start"
+          type="button"
+          data-i18n="programme.watchFromStart"
+          class="btn hidden">
+          Watch from start
+        </button>
+        <button
+          data-role="catchup"
+          type="button"
+          data-i18n="programme.watchCatchup"
+          class="btn hidden">
+          Watch replay
         </button>
       </footer>
     </div>
@@ -159,6 +173,8 @@ function renderProgramme(node, opts) {
  * @param {string} [opts.channelName]
  * @param {number|string} [opts.channelId]
  * @param {() => void} [opts.onWatch] - if omitted and channelId is set, navigates to /livetv?channel=<id>
+ * @param {() => void} [opts.onCatchup] - shown when the programme has ended
+ * @param {() => void} [opts.onWatchFromStart] - shown when the programme is live now
  */
 export function openProgrammeDialog(opts) {
   const node = ensureDialog()
@@ -169,30 +185,59 @@ export function openProgrammeDialog(opts) {
 
   const now = Date.now()
   const isLive = opts.start <= now && now < opts.stop
+  const isEnded = opts.stop <= now
   const watch = /** @type {HTMLButtonElement | null} */ (
     node.querySelector("[data-role='watch']")
+  )
+  const watchFromStart = /** @type {HTMLButtonElement | null} */ (
+    node.querySelector("[data-role='watch-from-start']")
+  )
+  const catchupBtn = /** @type {HTMLButtonElement | null} */ (
+    node.querySelector("[data-role='catchup']")
   )
   const footer = /** @type {HTMLElement | null} */ (
     node.querySelector("[data-role='footer']")
   )
-  let showWatch = false
+
+  const showWatch = isLive && (opts.onWatch != null || opts.channelId != null)
   if (watch) {
-    showWatch = isLive && (opts.onWatch != null || opts.channelId != null)
-    if (showWatch) {
-      watch.onclick = () => {
-        node.close()
-        if (opts.onWatch) opts.onWatch()
-        else if (opts.channelId != null) {
-          window.location.href = `/livetv?channel=${encodeURIComponent(
-            String(opts.channelId)
-          )}`
+    watch.classList.toggle("hidden", !showWatch)
+    watch.onclick = showWatch
+      ? () => {
+          node.close()
+          if (opts.onWatch) opts.onWatch()
+          else if (opts.channelId != null) {
+            window.location.href = `/livetv?channel=${encodeURIComponent(
+              String(opts.channelId)
+            )}`
+          }
         }
-      }
-    } else {
-      watch.onclick = null
-    }
+      : null
   }
-  footer?.classList.toggle("hidden", !showWatch)
+
+  const showWatchFromStart = isLive && opts.onWatchFromStart != null
+  if (watchFromStart) {
+    watchFromStart.classList.toggle("hidden", !showWatchFromStart)
+    watchFromStart.onclick = showWatchFromStart
+      ? () => {
+          node.close()
+          opts.onWatchFromStart()
+        }
+      : null
+  }
+
+  const showCatchup = isEnded && opts.onCatchup != null
+  if (catchupBtn) {
+    catchupBtn.classList.toggle("hidden", !showCatchup)
+    catchupBtn.onclick = showCatchup
+      ? () => {
+          node.close()
+          opts.onCatchup()
+        }
+      : null
+  }
+
+  footer?.classList.toggle("hidden", !showWatch && !showWatchFromStart && !showCatchup)
 
   if (!node.open) {
     if (typeof node.showModal === "function") node.showModal()
@@ -202,9 +247,10 @@ export function openProgrammeDialog(opts) {
 
   requestAnimationFrame(() => {
     const target = /** @type {HTMLElement | null} */ (
-      showWatch
-        ? node.querySelector("[data-role='watch']")
-        : node.querySelector("[data-role='close']")
+      (showWatch && watch) ||
+      (showWatchFromStart && watchFromStart) ||
+      (showCatchup && catchupBtn) ||
+      node.querySelector("[data-role='close']")
     )
     target?.focus?.({ preventScroll: true })
   })
