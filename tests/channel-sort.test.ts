@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest"
-import { sortChannelsForView } from "../src/scripts/lib/channel-sort"
+import {
+  sortChannelsForView,
+  sortCategoryNames,
+} from "../src/scripts/lib/channel-sort"
 
 const channels = [
   { id: 1, name: "Zeta News", category: "News", chno: 3 },
@@ -79,5 +82,32 @@ describe("sortChannelsForView", () => {
     sortChannelsForView(channels, "az")
     sortChannelsForView(channels, "number")
     expect(channels).toEqual(copy)
+  })
+})
+
+describe("sortCategoryNames", () => {
+  const categoryNames = ["Zeta", "alpha", "Mid", "Beta"]
+
+  it("keeps source order in default mode", () => {
+    const out = sortCategoryNames(categoryNames, "default")
+    expect(out).toEqual(["Zeta", "alpha", "Mid", "Beta"])
+  })
+
+  it("sorts A-Z case-insensitively", () => {
+    const out = sortCategoryNames(categoryNames, "az")
+    expect(out).toEqual(["alpha", "Beta", "Mid", "Zeta"])
+  })
+
+  it("sorts Z-A as the reverse of A-Z", () => {
+    const out = sortCategoryNames(categoryNames, "za")
+    expect(out).toEqual(["Zeta", "Mid", "Beta", "alpha"])
+  })
+
+  it("never mutates the input list", () => {
+    const copy = categoryNames.slice()
+    sortCategoryNames(categoryNames, "default")
+    sortCategoryNames(categoryNames, "az")
+    sortCategoryNames(categoryNames, "za")
+    expect(categoryNames).toEqual(copy)
   })
 })

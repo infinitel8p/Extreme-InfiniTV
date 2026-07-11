@@ -2,6 +2,7 @@
 // source (provider) order; during a search, relevance wins instead.
 
 export type ChannelSortMode = "default" | "number" | "az" | "za" | "cataz"
+export type CategorySortMode = "default" | "az" | "za"
 
 export interface SortableChannel {
   id: number
@@ -79,4 +80,16 @@ export function sortChannelsForView<T extends SortableChannel>(
       )
   }
   return list
+}
+
+/** Sort category / group names for display; "default" keeps source order. Never mutates the input. */
+export function sortCategoryNames(
+  names: string[],
+  mode: CategorySortMode | string,
+): string[] {
+  if (mode === "az" || mode === "za") {
+    const direction = mode === "za" ? -1 : 1
+    return names.slice().sort((first, second) => direction * compareText(first, second))
+  }
+  return names.slice()
 }

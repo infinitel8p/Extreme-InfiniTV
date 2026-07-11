@@ -9,6 +9,7 @@ const isTauri =
   (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__)
 
 const STORAGE_KEY = "xt_prefs"
+const VALID_CATEGORY_SORTS = new Set(["default", "az", "za"])
 const RECENT_CAP = 30
 const PROGRESS_CAP = 200
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -19,6 +20,7 @@ const EVT_PROGRESS_CHANGED = "xt:progress-changed"
 const EVT_HIDDEN_CHANGED = "xt:hidden-categories-changed"
 const EVT_ALLOWED_CHANGED = "xt:allowed-categories-changed"
 const EVT_CAT_MODE_CHANGED = "xt:category-mode-changed"
+const EVT_CAT_SORT_CHANGED = "xt:category-sort-changed"
 const EVT_EPG_SYNC_CHANGED = "xt:epg-sync-changed"
 const EVT_CHANNEL_EPG_CHANGED = "xt:channel-epg-changed"
 const EVT_VIEW_CHANGED = "xt:view-prefs-changed"
@@ -129,6 +131,10 @@ function emptyEntry() {
     catModeVod: "hide",
     catModeSeries: "hide",
     catModeEpg: "hide",
+    catSortLive: "default",
+    catSortVod: "default",
+    catSortSeries: "default",
+    catSortEpg: "default",
     syncEpgWithLive: true,
     channelEpgMap: Object.create(null),
     favOrderLive: [],
@@ -209,6 +215,18 @@ function hydrate(raw) {
       catModeVod: val.catModeVod === "select" ? "select" : "hide",
       catModeSeries: val.catModeSeries === "select" ? "select" : "hide",
       catModeEpg: val.catModeEpg === "select" ? "select" : "hide",
+      catSortLive: VALID_CATEGORY_SORTS.has(val.catSortLive)
+        ? val.catSortLive
+        : "default",
+      catSortVod: VALID_CATEGORY_SORTS.has(val.catSortVod)
+        ? val.catSortVod
+        : "default",
+      catSortSeries: VALID_CATEGORY_SORTS.has(val.catSortSeries)
+        ? val.catSortSeries
+        : "default",
+      catSortEpg: VALID_CATEGORY_SORTS.has(val.catSortEpg)
+        ? val.catSortEpg
+        : "default",
       syncEpgWithLive: val.syncEpgWithLive !== false,
       channelEpgMap:
         val.channelEpgMap && typeof val.channelEpgMap === "object"
@@ -274,6 +292,10 @@ function dehydrate() {
       catModeVod: v.catModeVod,
       catModeSeries: v.catModeSeries,
       catModeEpg: v.catModeEpg,
+      catSortLive: v.catSortLive,
+      catSortVod: v.catSortVod,
+      catSortSeries: v.catSortSeries,
+      catSortEpg: v.catSortEpg,
       syncEpgWithLive: v.syncEpgWithLive,
       channelEpgMap: { ...v.channelEpgMap },
       favOrderLive: v.favOrderLive.slice(),
@@ -897,6 +919,14 @@ function catModeKey(kind) {
   return "catModeLive"
 }
 
+/** @param {"live"|"vod"|"series"|"epg"} kind */
+function catSortKey(kind) {
+  if (kind === "vod") return "catSortVod"
+  if (kind === "series") return "catSortSeries"
+  if (kind === "epg") return "catSortEpg"
+  return "catSortLive"
+}
+
 /** @param {string} playlistId @param {"live"|"vod"|"series"|"epg"} kind */
 export function getAllowedCategories(playlistId, kind) {
   const entry = cache.get(playlistId)
@@ -965,6 +995,24 @@ export function setCategoryMode(playlistId, kind, mode) {
   entry[catModeKey(kind)] = next
   scheduleSave()
   dispatch(EVT_CAT_MODE_CHANGED, { playlistId, kind, mode: next })
+}
+
+/** @param {string} playlistId @param {"live"|"vod"|"series"|"epg"} kind @returns {"default"|"az"|"za"} */
+export function getCategorySort(playlistId, kind) {
+  const entry = cache.get(playlistId)
+  const value = entry?.[catSortKey(kind)]
+  return VALID_CATEGORY_SORTS.has(value) ? value : "default"
+}
+
+/** @param {string} playlistId @param {"live"|"vod"|"series"|"epg"} kind @param {"default"|"az"|"za"} mode */
+export function setCategorySort(playlistId, kind, mode) {
+  if (!playlistId) return
+  const next = VALID_CATEGORY_SORTS.has(mode) ? mode : "default"
+  const entry = getOrCreate(playlistId)
+  if (entry[catSortKey(kind)] === next) return
+  entry[catSortKey(kind)] = next
+  scheduleSave()
+  dispatch(EVT_CAT_SORT_CHANGED, { playlistId, kind, mode: next })
 }
 
 /**

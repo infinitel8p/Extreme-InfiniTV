@@ -65,6 +65,49 @@ const { idPrefix, showSyncToggle = false } = Astro.props;
 
 		<div
 			role="radiogroup"
+			aria-label="Sort categories"
+			data-i18n-attr="aria-label:list.sortCategories"
+			class="cat-sort-toggle flex p-0.5 rounded-lg border border-line bg-surface-2 text-xs shrink-0">
+			<button
+				id={`${idPrefix}-sort-default`}
+				type="button"
+				role="radio"
+				aria-checked="true"
+				data-sort="default"
+				data-i18n="sort.sourceOrder"
+				class="flex-1 rounded-md px-3 py-1.5 font-medium transition-colors text-fg-2
+					hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
+					aria-checked:bg-surface aria-checked:text-fg aria-checked:shadow-sm">
+				Source order
+			</button>
+			<button
+				id={`${idPrefix}-sort-az`}
+				type="button"
+				role="radio"
+				aria-checked="false"
+				data-sort="az"
+				data-i18n="sort.az"
+				class="flex-1 rounded-md px-3 py-1.5 font-medium transition-colors text-fg-2
+					hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
+					aria-checked:bg-surface aria-checked:text-fg aria-checked:shadow-sm">
+				A-Z
+			</button>
+			<button
+				id={`${idPrefix}-sort-za`}
+				type="button"
+				role="radio"
+				aria-checked="false"
+				data-sort="za"
+				data-i18n="sort.za"
+				class="flex-1 rounded-md px-3 py-1.5 font-medium transition-colors text-fg-2
+					hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent
+					aria-checked:bg-surface aria-checked:text-fg aria-checked:shadow-sm">
+				Z-A
+			</button>
+		</div>
+
+		<div
+			role="radiogroup"
 			aria-label="Category filter mode"
 			data-i18n-attr="aria-label:livetv.cat.modeAria"
 			class="cat-mode-toggle flex p-0.5 rounded-lg border border-line bg-surface-2 text-xs shrink-0">

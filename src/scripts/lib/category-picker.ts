@@ -18,6 +18,8 @@ import {
   setAllowedCategories,
   getCategoryMode,
   setCategoryMode,
+  getCategorySort,
+  setCategorySort,
   getFavorites,
   getRecents,
   getSyncEpgWithLive,
@@ -25,6 +27,10 @@ import {
   resolveEpgKind,
 } from "@/scripts/lib/preferences.js"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
+import {
+  sortCategoryNames,
+  type CategorySortMode,
+} from "@/scripts/lib/channel-sort.ts"
 
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
@@ -109,6 +115,9 @@ export function mountCategoryPicker(
   ) as HTMLInputElement | null
   const modeHideBtn = document.getElementById(`${opts.idPrefix}-mode-hide`)
   const modeSelectBtn = document.getElementById(`${opts.idPrefix}-mode-select`)
+  const sortDefaultBtn = document.getElementById(`${opts.idPrefix}-sort-default`)
+  const sortAzBtn = document.getElementById(`${opts.idPrefix}-sort-az`)
+  const sortZaBtn = document.getElementById(`${opts.idPrefix}-sort-za`)
   const selectActions = document.getElementById(`${opts.idPrefix}-select-actions`)
   const showSelectedBtn = document.getElementById(`${opts.idPrefix}-show-selected`)
   const selectAllBtn = document.getElementById(`${opts.idPrefix}-select-all`)
@@ -157,6 +166,11 @@ export function mountCategoryPicker(
   const categoryMode = (): "hide" | "select" => {
     const pid = opts.getActivePlaylistId()
     return pid ? getCategoryMode(pid, resolvedKind()) : "hide"
+  }
+
+  const categorySortMode = (): CategorySortMode => {
+    const pid = opts.getActivePlaylistId()
+    return pid ? getCategorySort(pid, resolvedKind()) : "default"
   }
 
   const categoryPassesFilter = (name: string): boolean => {
@@ -361,9 +375,7 @@ export function mountCategoryPicker(
     if (!listEl) return
     const items = opts.getItems()
     const counts = computeCategoryCounts(items)
-    const names = Array.from(counts.keys()).sort((a, b) =>
-      a.localeCompare(b, "en", { sensitivity: "base" })
-    )
+    const names = sortCategoryNames(Array.from(counts.keys()), categorySortMode())
     const mode = categoryMode()
     const hidden = hiddenSet()
     const allowed = allowedSet()
@@ -577,6 +589,13 @@ export function mountCategoryPicker(
     }
   }
 
+  const syncSortToggle = (): void => {
+    const mode = categorySortMode()
+    sortDefaultBtn?.setAttribute("aria-checked", String(mode === "default"))
+    sortAzBtn?.setAttribute("aria-checked", String(mode === "az"))
+    sortZaBtn?.setAttribute("aria-checked", String(mode === "za"))
+  }
+
   const refreshPseudoRows = (): void => {
     if (!listEl) return
     const pid = opts.getActivePlaylistId()
@@ -607,6 +626,17 @@ export function mountCategoryPicker(
   }
   modeHideBtn?.addEventListener("click", onModeClick)
   modeSelectBtn?.addEventListener("click", onModeClick)
+
+  const onSortClick = (event: Event): void => {
+    const target = event.currentTarget as HTMLElement
+    const mode = target?.dataset?.sort
+    const pid = opts.getActivePlaylistId()
+    if (!pid || (mode !== "default" && mode !== "az" && mode !== "za")) return
+    setCategorySort(pid, resolvedKind(), mode)
+  }
+  sortDefaultBtn?.addEventListener("click", onSortClick)
+  sortAzBtn?.addEventListener("click", onSortClick)
+  sortZaBtn?.addEventListener("click", onSortClick)
 
   showSelectedBtn?.addEventListener("click", () => {
     showSelectedOnly = !showSelectedOnly
@@ -658,11 +688,13 @@ export function mountCategoryPicker(
       if (!detail || detail.playlistId !== opts.getActivePlaylistId()) return
       syncInput.checked = !!detail.on
       syncModeToggle()
+      syncSortToggle()
       renderList()
     })
     onDoc("xt:active-changed", () => {
       reflectSync()
       syncModeToggle()
+      syncSortToggle()
       renderList()
     })
   }
@@ -713,11 +745,13 @@ export function mountCategoryPicker(
     }
 
     syncModeToggle()
+    syncSortToggle()
     renderList()
   }
   onDoc("xt:hidden-categories-changed", onAnyPrefChange)
   onDoc("xt:allowed-categories-changed", onAnyPrefChange)
   onDoc("xt:category-mode-changed", onAnyPrefChange)
+  onDoc("xt:category-sort-changed", onAnyPrefChange)
 
   triggerEl?.addEventListener("click", () => {
     if (!dialog) return
@@ -765,11 +799,13 @@ export function mountCategoryPicker(
 
   // Initial paint
   syncModeToggle()
+  syncSortToggle()
   syncLabel()
 
   return {
     rerender: () => {
       syncModeToggle()
+      syncSortToggle()
       renderList()
     },
     refreshPseudoRows,
