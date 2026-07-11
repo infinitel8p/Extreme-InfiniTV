@@ -542,8 +542,8 @@
   }
   .status-chip--ready {
     color: var(--color-fg-2);
-    border-color: color-mix(in oklch, var(--color-ok) 35%, var(--color-line));
-    background: color-mix(in oklch, var(--color-ok) 8%, var(--color-surface-2));
+    border-color: color-mix(in oklab, var(--color-ok) 35%, var(--color-line));
+    background: color-mix(in oklab, var(--color-ok) 8%, var(--color-surface-2));
   }
   .status-chip--ready .status-chip__dot {
     background: var(--color-ok);
@@ -552,8 +552,8 @@
   }
   .status-chip--fail {
     color: var(--color-bad);
-    border-color: color-mix(in oklch, var(--color-bad) 40%, var(--color-line));
-    background: color-mix(in oklch, var(--color-bad) 8%, var(--color-surface-2));
+    border-color: color-mix(in oklab, var(--color-bad) 40%, var(--color-line));
+    background: color-mix(in oklab, var(--color-bad) 8%, var(--color-surface-2));
   }
   .status-chip--fail .status-chip__dot {
     background: var(--color-bad);
@@ -567,7 +567,7 @@
     padding: 0.875rem 1rem;
     border-radius: 0.75rem;
     border: 1px solid var(--color-line);
-    background: color-mix(in oklch, var(--color-surface-2) 60%, var(--color-surface));
+    background: color-mix(in oklab, var(--color-surface-2) 60%, var(--color-surface));
   }
   .player-config__advanced {
     border-top: 1px solid var(--color-line-soft);

@@ -124,6 +124,42 @@ html.xt-theme-switching::view-transition-new(root) {
     --text-eyebrow--letter-spacing:   0.22em;
 }
 
+/* Accent presets */
+:root {
+    --accent-swatch-fuchsia: light-dark(oklch(0.50 0.20 330), oklch(0.78 0.15 330));
+    --accent-swatch-rose:    light-dark(oklch(0.50 0.20 20 ), oklch(0.78 0.15 20 ));
+    --accent-swatch-ember:   light-dark(oklch(0.50 0.20 55 ), oklch(0.78 0.15 55 ));
+    --accent-swatch-emerald: light-dark(oklch(0.50 0.20 160), oklch(0.78 0.15 160));
+    --accent-swatch-cyan:    light-dark(oklch(0.50 0.20 210), oklch(0.78 0.15 210));
+    --accent-swatch-blue:    light-dark(oklch(0.50 0.20 250), oklch(0.78 0.15 250));
+    --accent-swatch-violet:  light-dark(oklch(0.50 0.20 295), oklch(0.78 0.15 295));
+}
+
+:root[data-accent="rose"] {
+    --color-accent:      var(--accent-swatch-rose);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 20 / 0.12), oklch(0.78 0.15 20 / 0.18));
+}
+:root[data-accent="ember"] {
+    --color-accent:      var(--accent-swatch-ember);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 55 / 0.12), oklch(0.78 0.15 55 / 0.18));
+}
+:root[data-accent="emerald"] {
+    --color-accent:      var(--accent-swatch-emerald);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 160 / 0.12), oklch(0.78 0.15 160 / 0.18));
+}
+:root[data-accent="cyan"] {
+    --color-accent:      var(--accent-swatch-cyan);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 210 / 0.12), oklch(0.78 0.15 210 / 0.18));
+}
+:root[data-accent="blue"] {
+    --color-accent:      var(--accent-swatch-blue);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 250 / 0.12), oklch(0.78 0.15 250 / 0.18));
+}
+:root[data-accent="violet"] {
+    --color-accent:      var(--accent-swatch-violet);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 295 / 0.12), oklch(0.78 0.15 295 / 0.18));
+}
+
 :root,
 html {
     height: 100%;
@@ -849,14 +885,14 @@ summary.list-none::-webkit-details-marker {
     font-size: 0.8125rem;
     font-weight: 600;
     letter-spacing: 0.005em;
-    border: 1px solid color-mix(in oklch, var(--color-accent) 88%, var(--color-bg));
+    border: 1px solid color-mix(in oklab, var(--color-accent) 88%, var(--color-bg));
     box-shadow: 0 1px 0 color-mix(in oklch, var(--color-fg) 6%, transparent);
     transition: transform 120ms ease-out-expo, background-color 160ms ease, box-shadow 160ms ease;
     cursor: pointer;
 }
 .provider-error__retry:hover,
 .provider-error__retry:focus-visible {
-    background: color-mix(in oklch, var(--color-accent) 92%, var(--color-fg));
+    background: color-mix(in oklab, var(--color-accent) 92%, var(--color-fg));
 }
 .provider-error__retry:active {
     transform: scale(0.97);
@@ -904,7 +940,7 @@ summary.list-none::-webkit-details-marker {
 
 .provider-error--retrying .provider-error__art {
     box-shadow:
-        inset 0 0 0 1px color-mix(in oklch, var(--color-accent) 65%, var(--color-line)),
+        inset 0 0 0 1px color-mix(in oklab, var(--color-accent) 65%, var(--color-line)),
         0 0 0 6px var(--color-surface),
         0 0 0 7px color-mix(in oklch, var(--color-accent) 30%, transparent);
 }
@@ -1560,7 +1596,7 @@ summary.list-none::-webkit-details-marker {
     z-index: 1;
     background:
         linear-gradient(90deg, color-mix(in oklch, var(--color-accent) 35%, transparent) 0, transparent 5%),
-        linear-gradient(270deg, color-mix(in oklch, oklch(0.78 0.17 230) 25%, transparent) 0, transparent 5%);
+        linear-gradient(270deg, color-mix(in oklch, var(--color-fg-3) 25%, transparent) 0, transparent 5%);
     mix-blend-mode: screen;
     opacity: 0.45;
 }

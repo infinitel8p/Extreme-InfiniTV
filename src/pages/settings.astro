@@ -247,7 +247,7 @@ const navStructure: NavSection[] = [
             <div class="flex flex-col gap-1 min-w-0">
               <h3 data-i18n="settings.section.display" class="text-base font-semibold">Display</h3>
               <p data-i18n="settings.display.helper" class="text-xs text-fg-3">
-                Theme and base font size. System theme follows your OS preference.
+                Theme, accent color and base font size. System theme follows your OS preference.
               </p>
             </div>
           </div>
@@ -263,6 +263,38 @@ const navStructure: NavSection[] = [
               <button type="button" data-theme="system" aria-pressed="false" data-i18n="settings.theme.system" class="theme-btn btn">System</button>
               <button type="button" data-theme="light"  aria-pressed="false" data-i18n="settings.theme.light" class="theme-btn btn">Light</button>
               <button type="button" data-theme="dark"   aria-pressed="false" data-i18n="settings.theme.dark" class="theme-btn btn">Dark</button>
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-2">
+            <span data-i18n="settings.accent.label" class="text-eyebrow font-medium uppercase text-fg-3">Accent color</span>
+            <div
+              id="settings-accent"
+              class="flex flex-wrap gap-2"
+              role="radiogroup"
+              data-i18n-attr="aria-label:settings.accent.label"
+              aria-label="Accent color">
+              <button type="button" data-accent-value="fuchsia" aria-pressed="false" data-i18n-attr="title:settings.accent.fuchsia;aria-label:settings.accent.fuchsia" title="Fuchsia" aria-label="Fuchsia" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-fuchsia)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-pressed:ring-2 group-aria-pressed:ring-(--swatch) group-aria-pressed:ring-offset-2 group-aria-pressed:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" data-accent-value="rose" aria-pressed="false" data-i18n-attr="title:settings.accent.rose;aria-label:settings.accent.rose" title="Rose" aria-label="Rose" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-rose)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-pressed:ring-2 group-aria-pressed:ring-(--swatch) group-aria-pressed:ring-offset-2 group-aria-pressed:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" data-accent-value="ember" aria-pressed="false" data-i18n-attr="title:settings.accent.ember;aria-label:settings.accent.ember" title="Ember" aria-label="Ember" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-ember)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-pressed:ring-2 group-aria-pressed:ring-(--swatch) group-aria-pressed:ring-offset-2 group-aria-pressed:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" data-accent-value="emerald" aria-pressed="false" data-i18n-attr="title:settings.accent.emerald;aria-label:settings.accent.emerald" title="Emerald" aria-label="Emerald" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-emerald)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-pressed:ring-2 group-aria-pressed:ring-(--swatch) group-aria-pressed:ring-offset-2 group-aria-pressed:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" data-accent-value="cyan" aria-pressed="false" data-i18n-attr="title:settings.accent.cyan;aria-label:settings.accent.cyan" title="Cyan" aria-label="Cyan" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-cyan)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-pressed:ring-2 group-aria-pressed:ring-(--swatch) group-aria-pressed:ring-offset-2 group-aria-pressed:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" data-accent-value="blue" aria-pressed="false" data-i18n-attr="title:settings.accent.blue;aria-label:settings.accent.blue" title="Blue" aria-label="Blue" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-blue)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-pressed:ring-2 group-aria-pressed:ring-(--swatch) group-aria-pressed:ring-offset-2 group-aria-pressed:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" data-accent-value="violet" aria-pressed="false" data-i18n-attr="title:settings.accent.violet;aria-label:settings.accent.violet" title="Violet" aria-label="Violet" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-violet)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-pressed:ring-2 group-aria-pressed:ring-(--swatch) group-aria-pressed:ring-offset-2 group-aria-pressed:ring-offset-surface" aria-hidden="true"></span>
+              </button>
             </div>
           </div>
 
@@ -301,6 +333,14 @@ const navStructure: NavSection[] = [
                 var themeBtns = themeGroup.querySelectorAll(".theme-btn");
                 for (var j = 0; j < themeBtns.length; j++) {
                   themeBtns[j].setAttribute("aria-pressed", themeBtns[j].getAttribute("data-theme") === currentTheme ? "true" : "false");
+                }
+              }
+              var currentAccent = localStorage.getItem("xt_accent") || "fuchsia";
+              var accentGroup = document.getElementById("settings-accent");
+              if (accentGroup) {
+                var accentBtns = accentGroup.querySelectorAll(".accent-btn");
+                for (var k = 0; k < accentBtns.length; k++) {
+                  accentBtns[k].setAttribute("aria-pressed", accentBtns[k].getAttribute("data-accent-value") === currentAccent ? "true" : "false");
                 }
               }
             } catch (e) {}
@@ -1172,6 +1212,8 @@ const navStructure: NavSection[] = [
       setDownloadConcurrency,
       getPerfMode,
       setPerfMode,
+      getAccent,
+      setAccent,
       getProgressRetentionDays,
       setProgressRetentionDays,
       getNetworkTimeoutSeconds,
@@ -1953,6 +1995,25 @@ const navStructure: NavSection[] = [
       applyTheme(btn.dataset.theme || "system", event.clientX, event.clientY)
     })
     syncThemeButtons()
+
+    // ---------------------------------------------------------------------
+    // Accent color: persisted to xt_accent, applied via `data-accent` on <html>.
+    // ---------------------------------------------------------------------
+    const accentGroup = document.getElementById("settings-accent")
+    function syncAccentButtons() {
+      const current = getAccent()
+      for (const btn of accentGroup?.querySelectorAll(".accent-btn") || []) {
+        btn.setAttribute("aria-pressed", String(btn.dataset.accentValue === current))
+      }
+    }
+    accentGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".accent-btn")
+      if (!btn) return
+      setAccent(btn.dataset.accentValue || "fuchsia")
+      syncAccentButtons()
+    })
+    syncAccentButtons()
 
     // ---------------------------------------------------------------------
     // Performance mode: persisted to xt_perf_mode; the inline script in
@@ -2812,7 +2873,7 @@ const navStructure: NavSection[] = [
 
     /* Danger-zone entry uses the bad token so it reads as destructive. */
     .settings-nav-link[data-danger="true"] {
-      color: color-mix(in oklch, var(--color-bad) 65%, var(--color-fg-3));
+      color: color-mix(in oklab, var(--color-bad) 65%, var(--color-fg-3));
     }
     .settings-nav-link[data-danger="true"]:hover,
     .settings-nav-link[data-danger="true"]:focus-visible {

@@ -1,6 +1,7 @@
 // Single-line oscilloscope for radio (audio-only) streams.
 
 import { log } from "@/scripts/lib/log.js"
+import { ACCENT_EVENT } from "@/scripts/lib/app-settings.js"
 
 interface VideoGraph {
   ctx: AudioContext
@@ -160,6 +161,8 @@ export function attachRadioVisualizer(
     }
   }
 
+  document.addEventListener(ACCENT_EVENT, refreshAccent)
+
   const staticLine = reducedMotion() || perfMode() || !graph
 
   const allowBreath = !reducedMotion() && !perfMode()
@@ -306,6 +309,7 @@ export function attachRadioVisualizer(
       if (schemeMql) {
         try { schemeMql.removeEventListener("change", refreshAccent) } catch {}
       }
+      document.removeEventListener(ACCENT_EVENT, refreshAccent)
       try { canvas.remove() } catch {}
 
       try { container.style.removeProperty("--radio-viz-energy") } catch {}

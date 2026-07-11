@@ -4,6 +4,7 @@ const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
 const KEY_DOWNLOAD_CONCURRENCY = "xt_download_concurrency"
 const KEY_PERF_MODE = "xt_perf_mode"
+const KEY_ACCENT = "xt_accent"
 const KEY_PROGRESS_RETENTION = "xt_progress_retention_days"
 const KEY_NETWORK_TIMEOUT_S = "xt_network_timeout_s"
 const KEY_PLAYER_BACKEND = "xt_player_backend"
@@ -21,6 +22,8 @@ const KEY_ANDROID_REMEMBERED_PLAYER = "xt_android_remembered_player"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
+export const ACCENT_EVENT = "xt:accent-changed"
+export const ACCENT_PRESETS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"]
 export const PROGRESS_RETENTION_EVENT = "xt:progress-retention-changed"
 export const PLAYER_BACKEND_EVENT = "xt:player-backend-changed"
 export const CLOSE_TO_TRAY_EVENT = "xt:close-to-tray-changed"
@@ -173,6 +176,24 @@ export function setPerfMode(on) {
     else document.documentElement.removeAttribute("data-perf-mode")
     document.dispatchEvent(
       new CustomEvent(PERF_MODE_EVENT, { detail: { value: !!on } })
+    )
+  }
+}
+
+// Accent color
+export function getAccent() {
+  const stored = readLS(KEY_ACCENT, "")
+  return ACCENT_PRESETS.includes(stored) ? stored : "fuchsia"
+}
+
+export function setAccent(accentId) {
+  const normalized = ACCENT_PRESETS.includes(accentId) ? accentId : "fuchsia"
+  writeLS(KEY_ACCENT, normalized === "fuchsia" ? "" : normalized)
+  if (typeof document !== "undefined") {
+    if (normalized === "fuchsia") document.documentElement.removeAttribute("data-accent")
+    else document.documentElement.setAttribute("data-accent", normalized)
+    document.dispatchEvent(
+      new CustomEvent(ACCENT_EVENT, { detail: { value: normalized } })
     )
   }
 }
