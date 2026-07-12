@@ -2,18 +2,27 @@
 // where the updater plugin can actually replace the binary: Windows (NSIS)
 // and Linux (AppImage). On Linux the plugin gates internally on the
 // `APPIMAGE` env var, so a deb / rpm install will throw a clear error and
-// the catch below logs it without disrupting the page. macOS is excluded
-// until signing + notarization are set up.
+// the catch below logs it without disrupting the page. MS Store builds are
+// excluded too - an NSIS installer must not be applied over an MSIX install.
+// macOS is excluded until signing + notarization are set up.
+//
+// Everywhere else (web, Android, macOS, MS Store), a GitHub-release check
+// runs instead and surfaces a one-toast-per-version notification pointing
+// people at Settings > About.
 import { log } from "@/scripts/lib/log.js"
+import { checkForUpdate, isStoreBuild } from "@/scripts/lib/update-check.js"
+import { toast } from "@/scripts/lib/toast.js"
+import { t } from "@/scripts/lib/i18n.js"
 
 const SESSION_FLAG = "xt_updater_checked"
+const NOTIFIED_VERSION_KEY = "xt_update_notified"
 
 let isTauri = false
 try {
     isTauri = !!window.__TAURI_INTERNALS__ || !!window.__TAURI__
 } catch {}
 
-function shouldAttemptUpdate() {
+function isAutoUpdatePlatform() {
     if (!isTauri) return false
     const ua = navigator.userAgent || ""
     if (ua.includes("Windows")) return true
@@ -23,23 +32,68 @@ function shouldAttemptUpdate() {
     return false
 }
 
-async function maybeRunAutoUpdate() {
-    if (!shouldAttemptUpdate()) return
+function markSessionChecked() {
     try {
-        if (sessionStorage.getItem(SESSION_FLAG)) return
+        if (sessionStorage.getItem(SESSION_FLAG)) return false
         sessionStorage.setItem(SESSION_FLAG, "1")
+        return true
+    } catch {
+        return true
+    }
+}
+
+function readNotifiedVersion() {
+    try {
+        return localStorage.getItem(NOTIFIED_VERSION_KEY)
+    } catch {
+        return null
+    }
+}
+
+function writeNotifiedVersion(version) {
+    try {
+        localStorage.setItem(NOTIFIED_VERSION_KEY, version)
     } catch {}
+}
+
+async function runAutoUpdate() {
+    const { check } = await import("@tauri-apps/plugin-updater")
+    const { relaunch } = await import("@tauri-apps/plugin-process")
+    const update = await check()
+    if (update !== null) {
+        await update.downloadAndInstall()
+        await relaunch()
+    }
+}
+
+async function notifyIfUpdateAvailable() {
+    const status = await checkForUpdate()
+    if (!status?.updateAvailable) return
+    if (readNotifiedVersion() === status.latest) return
+    writeNotifiedVersion(status.latest)
+    toast({
+        title: t("settings.about.updateAvailable", { version: status.latestTag }),
+        description: t("update.openAboutHint"),
+        duration: 8000,
+    })
+}
+
+async function maybeRunAutoUpdate() {
+    if (!markSessionChecked()) return
+
+    if (isAutoUpdatePlatform() && !(await isStoreBuild())) {
+        try {
+            await runAutoUpdate()
+            return
+        } catch (err) {
+            log.error("Updater error, falling back to notify check:", err)
+        }
+    }
 
     try {
-        const { check } = await import("@tauri-apps/plugin-updater")
-        const { relaunch } = await import("@tauri-apps/plugin-process")
-        const update = await check()
-        if (update !== null) {
-            await update.downloadAndInstall()
-            await relaunch()
-        }
+        await notifyIfUpdateAvailable()
     } catch (err) {
-        log.error("Updater error:", err)
+        log.error("Update notify check failed:", err)
     }
 }
 

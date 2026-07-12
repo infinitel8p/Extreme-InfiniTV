@@ -37,6 +37,7 @@ import {
   IconSearch,
   IconX,
   IconShare,
+  IconExternalLink,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -925,7 +926,6 @@ const navStructure: NavSection[] = [
                 Update available
               </span>
             </div>
-            <span id="update-availability" class="text-xs text-fg-3 truncate empty:hidden"></span>
           </div>
         </div>
 
@@ -966,6 +966,10 @@ const navStructure: NavSection[] = [
             <button id="update-relaunch" type="button" hidden class="btn justify-start sm:justify-center">
               <span data-i18n="settings.about.restartNow">Restart now</span>
             </button>
+            <button id="update-get" type="button" hidden class="btn justify-start sm:justify-center">
+              <IconExternalLink aria-hidden="true" class="btn-icon" />
+              <span id="update-get-label" data-i18n="settings.update.getFromGithub">Get it on GitHub</span>
+            </button>
             <a
               id="update-github"
               href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest"
@@ -984,6 +988,14 @@ const navStructure: NavSection[] = [
         </div>
 
         <p id="update-notes" class="hidden text-xs text-fg-3 whitespace-pre-line border-t border-line/60 pt-4"></p>
+
+        <p
+          id="update-manual-only"
+          hidden
+          data-i18n="settings.update.manualOnly"
+          class="text-xs text-fg-3 leading-relaxed border-t border-line/60 pt-4">
+          Auto-update isn't available on this build.
+        </p>
 
         <p
           id="linux-appimage-notice"
@@ -1201,6 +1213,14 @@ const navStructure: NavSection[] = [
     } from "@/scripts/lib/playlist-rows.js"
     import { injectVersion } from "@/scripts/version.js"
     import { fetchReleases, renderMarkdown } from "@/scripts/lib/changelog.ts"
+    import {
+      checkForUpdate,
+      isStoreBuild,
+      isPlayStoreInstall,
+      getPlayStoreUrl,
+      MS_STORE_UPDATES_URL,
+    } from "@/scripts/lib/update-check.js"
+    import { openExternal } from "@/scripts/lib/external-link.js"
     import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
     import {
       UA_PRESETS,
@@ -2521,7 +2541,6 @@ const navStructure: NavSection[] = [
 
     const updateSectionEl = document.getElementById("update-section")
     const updatePillEl = document.getElementById("update-pill")
-    const updateAvailEl = document.getElementById("update-availability")
     const updateCurrentEl = document.getElementById("update-current")
     const updateLatestEl = document.getElementById("update-latest")
     const updateNotesEl = document.getElementById("update-notes")
@@ -2539,6 +2558,11 @@ const navStructure: NavSection[] = [
     const updateRelaunchBtn = /** @type {HTMLButtonElement|null} */ (
       document.getElementById("update-relaunch")
     )
+    const updateGetBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("update-get")
+    )
+    const updateGetLabelEl = document.getElementById("update-get-label")
+    const updateManualOnlyEl = document.getElementById("update-manual-only")
     const updateProgressWrap = document.getElementById("update-progress-wrap")
     const updateProgressBar = document.getElementById("update-progress-bar")
     const updateProgressText = document.getElementById("update-progress-text")
@@ -2561,6 +2585,14 @@ const navStructure: NavSection[] = [
 
     const isWindowsDesktop =
       isTauri && /Windows/i.test(navigator.userAgent || "")
+    const isLinuxDesktop =
+      isTauri &&
+      /Linux/i.test(navigator.userAgent || "") &&
+      !/Android/i.test(navigator.userAgent || "")
+    const storeBuild = await isStoreBuild()
+    const playStoreInstall = isPlayStoreInstall()
+    // Linux falls back to the GitHub check below if `check()` throws (non-AppImage installs).
+    const canUseTauriUpdater = (isWindowsDesktop && !storeBuild) || isLinuxDesktop
 
     if (updateCurrentEl) {
       try {
@@ -2574,14 +2606,16 @@ const navStructure: NavSection[] = [
       }
     }
 
-    if (!isTauri && updateAvailEl) {
-      updateAvailEl.textContent = "Web build - auto-update is desktop-only."
-      updateCheckBtn?.setAttribute("disabled", "")
-      updateCheckBtn?.classList.add("opacity-50", "cursor-not-allowed")
-    } else if (isTauri && !isWindowsDesktop && updateAvailEl) {
-      updateAvailEl.textContent = "Updater is configured for Windows only."
-      updateCheckBtn?.setAttribute("disabled", "")
-      updateCheckBtn?.classList.add("opacity-50", "cursor-not-allowed")
+    if (!canUseTauriUpdater) {
+      updateManualOnlyEl?.removeAttribute("hidden")
+      // data-i18n stays in sync with locale changes; textContent updates it immediately.
+      if (updateGetLabelEl && storeBuild) {
+        updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromStore")
+        updateGetLabelEl.textContent = t("settings.update.getFromStore")
+      } else if (updateGetLabelEl && playStoreInstall) {
+        updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromPlay")
+        updateGetLabelEl.textContent = t("settings.update.getFromPlay")
+      }
     }
 
     let pendingUpdate = null
@@ -2611,54 +2645,101 @@ const navStructure: NavSection[] = [
       if (updateInstallLabelEl) updateInstallLabelEl.textContent = text
     }
 
+    let updateGetTarget = GITHUB_RELEASES_URL
+
+    async function checkViaTauriUpdater() {
+      const { check } = await import("@tauri-apps/plugin-updater")
+      const update = await check()
+      if (!update) {
+        pendingUpdate = null
+        if (updateLatestEl) updateLatestEl.textContent = t("settings.about.upToDate")
+        if (updateMsgEl) updateMsgEl.textContent = t("settings.update.upToDateMsg")
+        if (updateGithubLink) {
+          updateGithubLink.href = `${GITHUB_RELEASES_URL}/latest`
+        }
+        setUpdateState("up-to-date")
+        return
+      }
+      pendingUpdate = update
+      if (updateLatestEl) {
+        updateLatestEl.textContent = update.version
+          ? `v${update.version}`
+          : t("settings.update.available")
+      }
+      if (updateNotesEl && update.body) {
+        updateNotesEl.textContent = update.body
+        updateNotesEl.classList.remove("hidden")
+      }
+      if (updateMsgEl) {
+        updateMsgEl.textContent = update.date
+          ? t("settings.update.releasedOn", { date: new Date(update.date).toLocaleDateString() })
+          : t("settings.update.updateAvailableMsg")
+      }
+      if (updateGithubLink) {
+        updateGithubLink.href = update.version
+          ? `${GITHUB_RELEASES_URL}/tag/v${update.version}`
+          : `${GITHUB_RELEASES_URL}/latest`
+      }
+      updateInstallBtn?.removeAttribute("hidden")
+      setUpdateState("available")
+    }
+
+    async function checkViaGithub() {
+      const status = await checkForUpdate()
+      if (!status) throw new Error("couldn't reach GitHub")
+      if (updateGithubLink) updateGithubLink.href = status.latestUrl
+      if (!status.updateAvailable) {
+        if (updateLatestEl) updateLatestEl.textContent = t("settings.about.upToDate")
+        if (updateMsgEl) updateMsgEl.textContent = t("settings.update.upToDateMsg")
+        updateGetBtn?.setAttribute("hidden", "")
+        setUpdateState("up-to-date")
+        return
+      }
+      updateGetTarget = storeBuild
+        ? MS_STORE_UPDATES_URL
+        : playStoreInstall
+          ? getPlayStoreUrl()
+          : status.latestUrl
+      if (updateLatestEl) updateLatestEl.textContent = `v${status.latest}`
+      if (updateMsgEl) {
+        updateMsgEl.textContent = status.publishedAt
+          ? t("settings.update.releasedOn", { date: new Date(status.publishedAt).toLocaleDateString() })
+          : t("settings.update.updateAvailableMsg")
+      }
+      if (updateNotesEl && status.notes) {
+        updateNotesEl.textContent = status.notes
+        updateNotesEl.classList.remove("hidden")
+      }
+      updateGetBtn?.removeAttribute("hidden")
+      setUpdateState("available")
+    }
+
     async function checkForUpdates() {
-      if (!isWindowsDesktop) return
       if (updateMsgEl) updateMsgEl.textContent = t("settings.update.checking")
       setUpdateState("checking")
       updateCheckBtn?.setAttribute("disabled", "")
       updateInstallBtn?.setAttribute("hidden", "")
       updateRelaunchBtn?.setAttribute("hidden", "")
+      updateGetBtn?.setAttribute("hidden", "")
       setInstallLabel(t("settings.about.installUpdate"))
       setProgress(null)
-      try {
-        const { check } = await import("@tauri-apps/plugin-updater")
-        const update = await check()
-        if (!update) {
-          pendingUpdate = null
-          if (updateLatestEl) updateLatestEl.textContent = t("settings.about.upToDate")
-          if (updateMsgEl) updateMsgEl.textContent = t("settings.update.upToDateMsg")
-          if (updateNotesEl) {
-            updateNotesEl.textContent = ""
-            updateNotesEl.classList.add("hidden")
-          }
-          if (updateGithubLink) {
-            updateGithubLink.href = `${GITHUB_RELEASES_URL}/latest`
-          }
-          setUpdateState("up-to-date")
+      if (updateNotesEl) {
+        updateNotesEl.textContent = ""
+        updateNotesEl.classList.add("hidden")
+      }
+
+      if (canUseTauriUpdater) {
+        try {
+          await checkViaTauriUpdater()
+          updateCheckBtn?.removeAttribute("disabled")
           return
+        } catch (e) {
+          log.warn("Tauri update check failed, falling back to GitHub check:", e)
         }
-        pendingUpdate = update
-        if (updateLatestEl) {
-          updateLatestEl.textContent = update.version
-            ? `v${update.version}`
-            : t("settings.update.available")
-        }
-        if (updateNotesEl && update.body) {
-          updateNotesEl.textContent = update.body
-          updateNotesEl.classList.remove("hidden")
-        }
-        if (updateMsgEl) {
-          updateMsgEl.textContent = update.date
-            ? t("settings.update.releasedOn", { date: new Date(update.date).toLocaleDateString() })
-            : t("settings.update.updateAvailableMsg")
-        }
-        if (updateGithubLink) {
-          updateGithubLink.href = update.version
-            ? `${GITHUB_RELEASES_URL}/tag/v${update.version}`
-            : `${GITHUB_RELEASES_URL}/latest`
-        }
-        updateInstallBtn?.removeAttribute("hidden")
-        setUpdateState("available")
+      }
+
+      try {
+        await checkViaGithub()
       } catch (e) {
         log.error("Update check failed:", e)
         if (updateMsgEl) {
@@ -2728,8 +2809,11 @@ const navStructure: NavSection[] = [
     updateCheckBtn?.addEventListener("click", checkForUpdates)
     updateInstallBtn?.addEventListener("click", installUpdate)
     updateRelaunchBtn?.addEventListener("click", relaunchApp)
+    updateGetBtn?.addEventListener("click", () => {
+      openExternal(updateGetTarget)
+    })
 
-    if (isWindowsDesktop) checkForUpdates()
+    checkForUpdates()
 
     // -------------------------------------------------------------------
     // Discord Rich Presence

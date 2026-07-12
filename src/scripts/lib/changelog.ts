@@ -17,6 +17,7 @@ export interface ReleaseSummary {
   publishedAt?: string
   body?: string
   htmlUrl?: string
+  prerelease?: boolean
 }
 
 interface CacheShape {
@@ -65,6 +66,7 @@ export async function fetchReleases(
       publishedAt: release.published_at,
       body: release.body,
       htmlUrl: release.html_url,
+      prerelease: release.prerelease,
     }))
 
   try {

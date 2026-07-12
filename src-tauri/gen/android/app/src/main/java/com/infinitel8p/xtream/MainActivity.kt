@@ -127,6 +127,23 @@ class DeviceInfoBridge(private val activity: TauriActivity) {
 
   @JavascriptInterface
   fun isTv(): Boolean = isLeanback() || isTelevisionUiMode()
+
+  @JavascriptInterface
+  fun getInstallSource(): String {
+    return try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        activity.packageManager.getInstallSourceInfo(activity.packageName).installingPackageName ?: ""
+      } else {
+        @Suppress("DEPRECATION")
+        activity.packageManager.getInstallerPackageName(activity.packageName) ?: ""
+      }
+    } catch (e: Throwable) {
+      ""
+    }
+  }
+
+  @JavascriptInterface
+  fun getPackageName(): String = activity.packageName
 }
 
 // {dataDir}/logs isn't a declared FileProvider root, so the newest log file is copied to the cache dir first and shared from there.
