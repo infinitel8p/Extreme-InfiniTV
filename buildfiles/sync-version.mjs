@@ -16,7 +16,7 @@
 // builds match what CI produces from a clean checkout:
 //   versionCode = major * 1_000_000 + minor * 1_000 + patch
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -39,13 +39,19 @@ patchJsonVersion(tauriConfPath, "src-tauri/tauri.conf.json")
 const [major, minor, patch] = version.split("-")[0].split(".").map(Number)
 const versionCode = major * 1_000_000 + minor * 1_000 + patch
 
-if (existsSync(androidPath)) {
-  const raw = readFileSync(androidPath, "utf8")
-  if (!/tauri\.android\.versionCode=\d+/.test(raw) || !/tauri\.android\.versionName=/.test(raw)) {
+let androidRaw = null
+try {
+  androidRaw = readFileSync(androidPath, "utf8")
+} catch (err) {
+  if (err?.code !== "ENOENT") throw err
+}
+
+if (androidRaw !== null) {
+  if (!/tauri\.android\.versionCode=\d+/.test(androidRaw) || !/tauri\.android\.versionName=/.test(androidRaw)) {
     console.error(`Could not find versionName/versionCode in ${androidPath}`)
     process.exit(1)
   }
-  const patched = raw
+  const patched = androidRaw
     .replace(/tauri\.android\.versionName=[^\r\n]*/, `tauri.android.versionName=${version}`)
     .replace(/tauri\.android\.versionCode=\d+/, `tauri.android.versionCode=${versionCode}`)
   writeFileSync(androidPath, patched)
