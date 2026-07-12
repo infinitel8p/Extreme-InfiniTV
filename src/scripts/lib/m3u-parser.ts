@@ -27,6 +27,7 @@ export interface M3UEntry {
   catchup: string | null
   catchupDays: number | null
   catchupSource: string | null
+  catchupCorrection: number | null
   userAgent: string | null
   referer: string | null
   tvgType: string | null
@@ -122,13 +123,33 @@ function lastCommaOutsideQuotes(text: string): number {
   return last
 }
 
+/** Parse a decimal hour string (e.g. `catchup-correction`) into a number, or null when unset/non-finite. No clamping. */
+function readHoursAttr(source: string, key: string): number | null {
+  const raw = readAttr(source, key)
+  if (!raw) return null
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+/**
+ * SIPTV legacy days-in-past hint: `timeshift="N"`, falling back to `tvg-rec="N"`
+ * only when `timeshift` is absent or non-positive. Either becomes a `catchup="shift"`
+ * default when the entry/header has no explicit catchup mode.
+ */
+function readSiptvDays(source: string): number {
+  const timeshift = Number(readAttr(source, "timeshift"))
+  if (Number.isFinite(timeshift) && timeshift > 0) return timeshift
+  const tvgRec = Number(readAttr(source, "tvg-rec"))
+  return Number.isFinite(tvgRec) && tvgRec > 0 ? tvgRec : 0
+}
+
 /**
  * Parse a `#EXTINF:...` directive into the structured M3UEntry shell. URL
  * is filled in by the caller from the next non-comment line. Detects the
  * alt-order `EXTINF:0,attrs,Name` form by checking whether the comma-tail
  * starts with a `key=` pattern; otherwise treats the standard `attrs,Name`.
  */
-function parseExtinf(line: string): Omit<M3UEntry, "url"> {
+function parseExtinf(line: string): Omit<M3UEntry, "url"> & { siptvDays: number } {
   const directive = line.replace(/^#EXTINF\s*:?/i, "")
   const commaIdx = directive.indexOf(",")
   let attrs = ""
@@ -173,9 +194,11 @@ function parseExtinf(line: string): Omit<M3UEntry, "url"> {
       readAttr(attrs, "tvg-id") || readAttr(attrs, "channel-id") || null,
     tvgName,
     chno: Number.isFinite(chno) ? chno : null,
-    catchup: readAttr(attrs, "catchup") || null,
+    catchup: readAttr(attrs, "catchup") || readAttr(attrs, "catchup-type") || null,
     catchupDays: Number.isFinite(catchupDays) ? catchupDays : null,
     catchupSource: readAttr(attrs, "catchup-source") || null,
+    catchupCorrection: readHoursAttr(attrs, "catchup-correction"),
+    siptvDays: readSiptvDays(attrs),
     userAgent: null,
     referer: null,
     tvgType,
@@ -192,13 +215,15 @@ export function parseM3U(text: string): M3UParseResult {
 
   const entries: M3UEntry[] = []
   let epgUrl = ""
-  let pending: Omit<M3UEntry, "url"> | null = null
+  let pending: (Omit<M3UEntry, "url"> & { siptvDays: number }) | null = null
   let extgrpFallback: string | null = null
   // pvr.iptvsimple convention: #EXTM3U can carry catchup defaults for every
   // channel that doesn't set its own.
   let headerCatchup: string | null = null
   let headerCatchupDays: number | null = null
   let headerCatchupSource: string | null = null
+  let headerCatchupCorrection: number | null = null
+  let headerSiptvDays = 0
 
   for (const raw of payload.split(/\r?\n/)) {
     const line = raw.trim()
@@ -210,13 +235,15 @@ export function parseM3U(text: string): M3UParseResult {
         readAttr(line, "tvg-url") ||
         readAttr(line, "url-tvg") ||
         epgUrl
-      headerCatchup = readAttr(line, "catchup") || headerCatchup
+      headerCatchup = readAttr(line, "catchup") || readAttr(line, "catchup-type") || headerCatchup
       const headerCatchupDaysRaw = readAttr(line, "catchup-days")
       if (headerCatchupDaysRaw) {
         const parsedDays = Number(headerCatchupDaysRaw)
         if (Number.isFinite(parsedDays)) headerCatchupDays = parsedDays
       }
       headerCatchupSource = readAttr(line, "catchup-source") || headerCatchupSource
+      headerCatchupCorrection = readHoursAttr(line, "catchup-correction") ?? headerCatchupCorrection
+      headerSiptvDays = readSiptvDays(line) || headerSiptvDays
       continue
     }
 
@@ -261,12 +288,21 @@ export function parseM3U(text: string): M3UParseResult {
 
     if (!pending) continue
     const category = pending.category ?? extgrpFallback
+    const { siptvDays, ...pendingEntry } = pending
+    let catchup = pendingEntry.catchup ?? headerCatchup
+    let catchupDays = pendingEntry.catchupDays ?? headerCatchupDays
+    const effectiveSiptvDays = siptvDays || headerSiptvDays
+    if (!catchup && effectiveSiptvDays > 0) {
+      catchup = "shift"
+      catchupDays = effectiveSiptvDays
+    }
     entries.push({
-      ...pending,
+      ...pendingEntry,
       category,
-      catchup: pending.catchup ?? headerCatchup,
-      catchupDays: pending.catchupDays ?? headerCatchupDays,
-      catchupSource: pending.catchupSource ?? headerCatchupSource,
+      catchup,
+      catchupDays,
+      catchupSource: pendingEntry.catchupSource ?? headerCatchupSource,
+      catchupCorrection: pendingEntry.catchupCorrection ?? headerCatchupCorrection,
       url: line,
     })
     pending = null

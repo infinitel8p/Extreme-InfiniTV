@@ -170,18 +170,43 @@ export interface CatchupTemplateContext {
   startUtcMs: number
   stopUtcMs: number
   nowUtcMs: number
+  /** Hours (decimal, may be negative); positive shifts every generated timestamp earlier. Doesn't affect window/playability checks. */
+  catchupCorrectionHours?: number | null
+  /** Programme-specific `catchup-id` from XMLTV; substituted into `{catchup-id}` last, everywhere it appears. */
+  catchupId?: string | null
+}
+
+/** Render `date`'s local-time components into an rtp2httpd/Kodi-style colon-format string; only Y/m/d/H/M/S are special, everything else passes through. */
+function formatColonPattern(date: Date, pattern: string): string {
+  return pattern.replace(/[YmdHMS]/g, (token) => {
+    switch (token) {
+      case "Y": return String(date.getFullYear())
+      case "m": return pad2(date.getMonth() + 1)
+      case "d": return pad2(date.getDate())
+      case "H": return pad2(date.getHours())
+      case "M": return pad2(date.getMinutes())
+      case "S": return pad2(date.getSeconds())
+      default: return token
+    }
+  })
 }
 
 /** Expand pvr.iptvsimple-style and TiviMate/diyp-style (`${(b)pattern}`/`${(e)pattern}`) catchup placeholders; unrecognized ones pass through untouched. */
 export function expandCatchupTemplate(template: string, ctx: CatchupTemplateContext): string {
-  const endMs = Math.min(ctx.stopUtcMs, ctx.nowUtcMs)
-  const startSec = Math.floor(ctx.startUtcMs / 1000)
-  const endSec = Math.floor(endMs / 1000)
-  const nowSec = Math.floor(ctx.nowUtcMs / 1000)
-  const durationSec = Math.floor((endMs - ctx.startUtcMs) / 1000)
-  const offsetSec = Math.floor((ctx.nowUtcMs - ctx.startUtcMs) / 1000)
-  const startDate = new Date(ctx.startUtcMs)
-  const endDate = new Date(endMs)
+  const correctionMs = (ctx.catchupCorrectionHours || 0) * 3600_000
+  const rawEndMs = Math.min(ctx.stopUtcMs, ctx.nowUtcMs)
+  // duration is a raw end-start delta (both operands would shift equally, so correction is a no-op here).
+  const durationSec = Math.floor((rawEndMs - ctx.startUtcMs) / 1000)
+  // Kodi parity: only start/end get corrected; "now" stays the real wall clock, so a positive
+  // correction grows the offset (now - correctedStart), reaching further back into the archive.
+  const offsetSec = Math.floor((ctx.nowUtcMs - (ctx.startUtcMs - correctionMs)) / 1000)
+
+  const startDate = new Date(ctx.startUtcMs - correctionMs)
+  const endDate = new Date(rawEndMs - correctionMs)
+  const nowDate = new Date(ctx.nowUtcMs)
+  const startSec = Math.floor(startDate.getTime() / 1000)
+  const endSec = Math.floor(endDate.getTime() / 1000)
+  const nowSec = Math.floor(nowDate.getTime() / 1000)
 
   let result = template
     .replace(/\$\{\((b|e)\)([^}]+)\}/g, (_match, marker, pattern) =>
@@ -189,7 +214,15 @@ export function expandCatchupTemplate(template: string, ctx: CatchupTemplateCont
     )
     .replace(/\{duration:(\d+)\}/g, (_match, divisor) => String(Math.floor(durationSec / Number(divisor))))
     .replace(/\{offset:(\d+)\}/g, (_match, divisor) => String(Math.floor(offsetSec / Number(divisor))))
+    .replace(/(?<!\$)\{utc:([^}]*)\}/g, (_match, fmt) => formatColonPattern(startDate, fmt))
+    .replace(/\$\{start:([^}]*)\}/g, (_match, fmt) => formatColonPattern(startDate, fmt))
+    .replace(/(?<!\$)\{utcend:([^}]*)\}/g, (_match, fmt) => formatColonPattern(endDate, fmt))
+    .replace(/\$\{end:([^}]*)\}/g, (_match, fmt) => formatColonPattern(endDate, fmt))
+    .replace(/(?<!\$)\{lutc:([^}]*)\}/g, (_match, fmt) => formatColonPattern(nowDate, fmt))
+    .replace(/\$\{now:([^}]*)\}/g, (_match, fmt) => formatColonPattern(nowDate, fmt))
+    .replace(/\$\{timestamp:([^}]*)\}/g, (_match, fmt) => formatColonPattern(nowDate, fmt))
 
+  // Deliberate superset of Kodi's first-occurrence-only substitution: every occurrence gets replaced, not just the first.
   const replacements: [string, string][] = [
     ["{utc}", String(startSec)],
     ["${start}", String(startSec)],
@@ -202,41 +235,63 @@ export function expandCatchupTemplate(template: string, ctx: CatchupTemplateCont
     ["${duration}", String(durationSec)],
     ["{duration}", String(durationSec)],
     ["${offset}", String(offsetSec)],
-    ["{Y}", String(startDate.getUTCFullYear())],
-    ["{m}", pad2(startDate.getUTCMonth() + 1)],
-    ["{d}", pad2(startDate.getUTCDate())],
-    ["{H}", pad2(startDate.getUTCHours())],
-    ["{M}", pad2(startDate.getUTCMinutes())],
-    ["{S}", pad2(startDate.getUTCSeconds())],
+    ["{Y}", String(startDate.getFullYear())],
+    ["{m}", pad2(startDate.getMonth() + 1)],
+    ["{d}", pad2(startDate.getDate())],
+    ["{H}", pad2(startDate.getHours())],
+    ["{M}", pad2(startDate.getMinutes())],
+    ["{S}", pad2(startDate.getSeconds())],
   ]
   for (const [placeholder, value] of replacements) {
     result = result.split(placeholder).join(value)
   }
+
+  if (ctx.catchupId) {
+    result = result.split("{catchup-id}").join(ctx.catchupId)
+  }
   return result
 }
 
-const FLUSSONIC_URL_PATTERN = /^(https?:\/\/[^/]+)\/([^/]+)\/([^/?]+)(\?.*)?$/
+// Stage 1: well-formed Flussonic naming (`.../<id>/<listName><mpegts|.m3u8>`); the literal extension decides ts vs. hls, not the requested mode.
+const FLUSSONIC_URL_PATTERN = /^(https?:\/\/[^/]+)\/(.*)\/([^/]*)(mpegts|\.m3u8)(\?.+=.+)?$/
+// Stage 2: any other Flussonic-shaped URL (server hands back an arbitrary directory name) - here the mode tag decides.
+const FLUSSONIC_GENERIC_URL_PATTERN = /^(https?:\/\/[^/]+)\/(.*)\/([^?]*)(\?.+=.+)?$/
 
 function buildFlussonicCatchupUrl(
   url: string,
   mode: string,
   ctx: CatchupTemplateContext,
 ): string | null {
-  const match = FLUSSONIC_URL_PATTERN.exec(url)
-  if (!match) return null
-  const [, host, chanId, listName, query] = match
-  const queryTail = query ?? ""
-  const startEpochSec = Math.floor(ctx.startUtcMs / 1000)
-  const offsetSec = Math.floor((ctx.nowUtcMs - ctx.startUtcMs) / 1000)
+  const correctionMs = (ctx.catchupCorrectionHours || 0) * 3600_000
+  const startEpochSec = Math.floor((ctx.startUtcMs - correctionMs) / 1000)
+  // Kodi parity: "now" stays raw, so a positive correction grows the offset, reaching further back.
+  const offsetSec = Math.max(0, Math.floor((ctx.nowUtcMs - (ctx.startUtcMs - correctionMs)) / 1000))
 
-  if (mode === "fs" || mode === "flussonic-ts" || listName === "mpegts") {
-    return `${host}/${chanId}/timeshift_abs-${startEpochSec}.ts${queryTail}`
+  const wellFormedMatch = FLUSSONIC_URL_PATTERN.exec(url)
+  if (wellFormedMatch) {
+    const [, host, chanId, listName, streamTypeTag, query] = wellFormedMatch
+    const queryTail = query ?? ""
+    if (streamTypeTag === "mpegts") {
+      return `${host}/${chanId}/timeshift_abs-${startEpochSec}.ts${queryTail}`
+    }
+    if (listName === "index") {
+      return `${host}/${chanId}/timeshift_rel-${offsetSec}.m3u8${queryTail}`
+    }
+    return `${host}/${chanId}/${listName}-timeshift_rel-${offsetSec}.m3u8${queryTail}`
   }
-  if (listName === "index.m3u8") {
-    return `${host}/${chanId}/timeshift_rel-${offsetSec}.m3u8${queryTail}`
+
+  const genericMatch = FLUSSONIC_GENERIC_URL_PATTERN.exec(url)
+  if (genericMatch) {
+    const [, host, chanId, , query] = genericMatch
+    const queryTail = query ?? ""
+    if (mode === "flussonic-ts" || mode === "fs") {
+      return `${host}/${chanId}/timeshift_abs-${startEpochSec}.ts${queryTail}`
+    }
+    if (mode === "flussonic" || mode === "flussonic-hls") {
+      return `${host}/${chanId}/timeshift_rel-${offsetSec}.m3u8${queryTail}`
+    }
   }
-  const listNameWithoutExt = listName.replace(/\.m3u8$/, "")
-  return `${host}/${chanId}/${listNameWithoutExt}-timeshift_rel-${offsetSec}.m3u8${queryTail}`
+  return null
 }
 
 function appendShiftUrl(url: string, ctx: CatchupTemplateContext): string {
@@ -271,7 +326,9 @@ export function buildM3uCatchupUrl(
     return null
   }
   if (mode === "vod") {
-    return source ? expandCatchupTemplate(source, ctx) : null
+    if (source) return expandCatchupTemplate(source, ctx)
+    // Kodi parity: an empty catchup-source in VOD mode defaults to the bare `{catchup-id}` template.
+    return ctx.catchupId ? expandCatchupTemplate("{catchup-id}", ctx) : null
   }
   return source ? expandCatchupTemplate(source, ctx) : null
 }

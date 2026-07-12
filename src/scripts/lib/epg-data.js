@@ -166,7 +166,7 @@ export function mergeChannelNameMaps(maps) {
   return out
 }
 
-/** @typedef {{ start:number, stop:number, title:string, desc:string }} Programme */
+/** @typedef {{ start:number, stop:number, title:string, desc:string, catchupId?:string }} Programme */
 
 /**
  * @typedef {Object} EpgState
@@ -319,13 +319,15 @@ export function parseXmlTv(xml) {
 
     const title = programme.querySelector("title")?.textContent?.trim() || "Untitled"
     const desc = programme.querySelector("desc")?.textContent?.trim() || ""
+    // Non-standard, some catchup providers require a programme-specific id in the catchup URL.
+    const catchupId = programme.getAttribute("catchup-id") || undefined
 
     let arr = programmes.get(channel)
     if (!arr) {
       arr = []
       programmes.set(channel, arr)
     }
-    arr.push({ start, stop, title, desc })
+    arr.push({ start, stop, title, desc, catchupId })
   }
 
   for (const arr of programmes.values()) {

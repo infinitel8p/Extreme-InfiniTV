@@ -23,12 +23,14 @@ export interface CatchupRequestChannel {
   catchup?: string | null
   catchupDays?: number | null
   catchupSource?: string | null
+  catchupCorrection?: number | null
 }
 
 export interface CatchupRequest {
   channel: CatchupRequestChannel
   startUtcMs: number
   stopUtcMs: number
+  catchupId?: string | null
 }
 
 export interface CatchupResolution {
@@ -178,11 +180,17 @@ export async function resolveCatchupSrc(
   creds: CatchupCreds,
   request: CatchupRequest,
 ): Promise<CatchupResolution | null> {
-  const { channel, startUtcMs, stopUtcMs } = request
+  const { channel, startUtcMs, stopUtcMs, catchupId } = request
   const mode = (channel.catchup ?? "").trim().toLowerCase()
 
   if (channel.url && mode !== "xc") {
-    const url = buildM3uCatchupUrl(channel, { startUtcMs, stopUtcMs, nowUtcMs: Date.now() })
+    const url = buildM3uCatchupUrl(channel, {
+      startUtcMs,
+      stopUtcMs,
+      nowUtcMs: Date.now(),
+      catchupCorrectionHours: channel.catchupCorrection,
+      catchupId,
+    })
     if (!url) return null
     const path = url.split("?")[0] || ""
     const kindHint: "hls" | "ts" = /\.m3u8$/i.test(path) ? "hls" : "ts"

@@ -171,6 +171,7 @@ function parseM3U(text) {
       catchup: entry.catchup ?? null,
       catchupDays: entry.catchupDays ?? null,
       catchupSource: entry.catchupSource ?? null,
+      catchupCorrection: entry.catchupCorrection ?? null,
     })
   }
   return out
@@ -1215,6 +1216,7 @@ function maybeAutoplayFromUrl() {
   let catchupStartUtcMs = null
   let catchupStopUtcMs = null
   let catchupTitle = ""
+  let catchupId = null
   try {
     const params = new URLSearchParams(window.location.search)
     const raw = params.get("channel")
@@ -1230,6 +1232,7 @@ function maybeAutoplayFromUrl() {
       }
     }
     catchupTitle = params.get("ctitle") || ""
+    catchupId = params.get("cid") || null
   } catch {}
   if (!Number.isFinite(id) || id == null) return
   autoplayConsumed = true
@@ -1242,6 +1245,7 @@ function maybeAutoplayFromUrl() {
     url.searchParams.delete("cstart")
     url.searchParams.delete("cstop")
     url.searchParams.delete("ctitle")
+    url.searchParams.delete("cid")
     window.history.replaceState({}, "", url.toString())
   } catch {}
 
@@ -1260,6 +1264,7 @@ function maybeAutoplayFromUrl() {
       startUtcMs: catchupStartUtcMs,
       stopUtcMs: catchupStopUtcMs,
       title: catchupTitle,
+      catchupId,
     })
   } else {
     play(ch.id, ch.name)
@@ -1436,6 +1441,8 @@ let catchupSession: {
   mountedStartUtcMs: number
   /** Media-timeline zero. For programme replays this stays at the programme start across mid-programme remounts, so position N seconds = timelineStartUtcMs + N*1000. */
   timelineStartUtcMs: number
+  /** Programme-specific `catchup-id` from XMLTV, when the provider needs one. */
+  catchupId: string | null
 } | null = null
 /** Bumped by every play()/playCatchup() call so a slow-resolving catch-up probe can detect it's been superseded and bail without clobbering whatever the user tuned to since. */
 let catchupRequestSeq = 0
@@ -2082,6 +2089,7 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
         timelineStartUtcMs: session.timelineStartUtcMs,
         title: session.title,
         kind: session.kind,
+        catchupId: session.catchupId,
       })
       return
     }
@@ -2514,6 +2522,17 @@ function resolveProgrammeTitleAt(channel, atUtcMs) {
   return current?.title || ""
 }
 
+/** Programme `catchup-id` under the playhead at `atUtcMs`, or null when EPG data or the field is missing. */
+function resolveProgrammeCatchupIdAt(channel, atUtcMs) {
+  if (!channel || !activePlaylistId) return null
+  const tvgId = effectiveTvgId(channel, activePlaylistId)
+  if (!tvgId) return null
+  const state = getProgrammesSync(activePlaylistId)
+  const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
+  const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
+  return current?.catchupId || null
+}
+
 /** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
 async function playCatchup(channel, opts) {
   if (!currentEl || !channel || !activePlaylistId) return false
@@ -2525,6 +2544,7 @@ async function playCatchup(channel, opts) {
   }
   const { startUtcMs, stopUtcMs, seekSeconds = 0, kind = "programme" } = opts || {}
   const timelineStartUtcMs = opts?.timelineStartUtcMs ?? startUtcMs
+  const catchupId = opts?.catchupId || resolveProgrammeCatchupIdAt(channel, startUtcMs)
   let title = opts?.title || ""
   if (!Number.isFinite(startUtcMs) || !Number.isFinite(stopUtcMs) || stopUtcMs <= startUtcMs) return false
 
@@ -2547,6 +2567,7 @@ async function playCatchup(channel, opts) {
     channel,
     startUtcMs,
     stopUtcMs,
+    catchupId,
   })
   // A newer play()/playCatchup() call has since taken over - bail without
   // touching whatever it's already showing.
@@ -2586,6 +2607,7 @@ async function playCatchup(channel, opts) {
     stopUtcMs,
     mountedStartUtcMs,
     timelineStartUtcMs,
+    catchupId,
   }
   renderCatchupCurrentRow(channel, title)
 
@@ -2735,6 +2757,7 @@ async function seekToAbsolute(targetUtcMs) {
       timelineStartUtcMs: catchupSession.timelineStartUtcMs,
       title: catchupSession.title,
       kind: "programme",
+      catchupId: catchupSession.catchupId,
     })
     return
   }
@@ -3100,12 +3123,12 @@ epgList?.addEventListener("click", async (e) => {
   if (channel && channelSupportsCatchup(channel)) {
     if (isEnded && isCatchupPlayable(channel, startUtcMs, now)) {
       onCatchup = () => {
-        void playCatchup(channel, { startUtcMs, stopUtcMs, title: entry.title })
+        void playCatchup(channel, { startUtcMs, stopUtcMs, title: entry.title, catchupId: entry.catchupId })
       }
     }
     if (isLive && isCatchupPlayable(channel, startUtcMs, now)) {
       onWatchFromStart = () => {
-        void playCatchup(channel, { startUtcMs, stopUtcMs, title: entry.title, seekSeconds: 0 })
+        void playCatchup(channel, { startUtcMs, stopUtcMs, title: entry.title, seekSeconds: 0, catchupId: entry.catchupId })
       }
     }
   }

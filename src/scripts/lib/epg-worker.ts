@@ -2,7 +2,7 @@
 // the main thread. Mirrors parseXmlTv in epg-data.js. If DOMParser is missing
 // (rare on very old Android WebView), we ask the caller to fall back.
 
-type Programme = { start: number; stop: number; title: string; desc: string }
+type Programme = { start: number; stop: number; title: string; desc: string; catchupId?: string }
 
 interface ParseRequest {
   id: number
@@ -75,13 +75,15 @@ function parseXmlTv(xml: string): {
     const title =
       programme.querySelector("title")?.textContent?.trim() || "Untitled"
     const desc = programme.querySelector("desc")?.textContent?.trim() || ""
+    // Non-standard, some catchup providers require a programme-specific id in the catchup URL.
+    const catchupId = programme.getAttribute("catchup-id") || undefined
 
     let arr = programmes.get(channelId)
     if (!arr) {
       arr = []
       programmes.set(channelId, arr)
     }
-    arr.push({ start, stop, title, desc })
+    arr.push({ start, stop, title, desc, catchupId })
   }
 
   for (const arr of programmes.values()) {

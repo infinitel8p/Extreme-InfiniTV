@@ -303,14 +303,15 @@ function updateDayLabel() {
       }).format(new Date(viewStart))
 }
 
-function navigateToCatchup(channelId, startDisplayMs, stopDisplayMs, title) {
+function navigateToCatchup(channelId, startDisplayMs, stopDisplayMs, title, catchupId) {
   const startUtc = displayedToUtcMs(activePlaylistId, startDisplayMs)
   const stopUtc = displayedToUtcMs(activePlaylistId, stopDisplayMs)
   window.location.href =
     `/livetv?channel=${encodeURIComponent(String(channelId))}` +
     `&cstart=${startUtc}` +
     `&cstop=${stopUtc}` +
-    `&ctitle=${encodeURIComponent(title || "")}`
+    `&ctitle=${encodeURIComponent(title || "")}` +
+    (catchupId ? `&cid=${encodeURIComponent(catchupId)}` : "")
 }
 
 function fmtTime(ts) {
@@ -463,10 +464,10 @@ function renderChannelRow(channel, programmesForRow) {
       }
       if (canReplay) {
         dialogOpts.onCatchup = () =>
-          navigateToCatchup(channel.id, p.start, p.stop, p.title)
+          navigateToCatchup(channel.id, p.start, p.stop, p.title, p.catchupId)
       } else if (isLive && canChannelCatchup && isCatchupPlayable(channel, p.start, nowMs)) {
         dialogOpts.onWatchFromStart = () =>
-          navigateToCatchup(channel.id, p.start, p.stop, p.title)
+          navigateToCatchup(channel.id, p.start, p.stop, p.title, p.catchupId)
       }
       openProgrammeDialog(dialogOpts)
     })

@@ -142,15 +142,27 @@ describe("expandCatchupTemplate", () => {
   const ctx = { startUtcMs, stopUtcMs, nowUtcMs }
 
   it("expands every placeholder from the table", () => {
+    // {Y}/{m}/{d}/{H}/{M}/{S} render the LOCAL time of the start instant (Kodi parity), so the
+    // expected value is computed via local Date getters to stay timezone-independent.
+    const startDate = new Date(startUtcMs)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    const localStart =
+      `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())} ` +
+      `${pad(startDate.getHours())}:${pad(startDate.getMinutes())}:${pad(startDate.getSeconds())}`
     const template =
       "{utc}|${start}|{utcend}|${end}|{lutc}|${now}|${timestamp}|" +
       "{duration}|${duration}|{duration:1800}|${offset}|{offset:3600}|" +
       "{Y}-{m}-{d} {H}:{M}:{S}"
     const expected =
       "1704067200|1704067200|1704070800|1704070800|1704074400|1704074400|1704074400|" +
-      "3600|3600|2|7200|2|" +
-      "2024-01-01 00:00:00"
+      `3600|3600|2|7200|2|${localStart}`
     expect(expandCatchupTemplate(template, ctx)).toBe(expected)
+  })
+
+  // Kodi only replaces the first occurrence of each token; we deliberately replace every
+  // occurrence, which is the more useful behavior for templates that repeat a placeholder.
+  it("replaces every occurrence of a repeated epoch token, not just the first", () => {
+    expect(expandCatchupTemplate("{utc}-{utc}", ctx)).toBe("1704067200-1704067200")
   })
 
   it("leaves unrecognized placeholders untouched", () => {
@@ -188,6 +200,228 @@ describe("expandCatchupTemplate ${(b)}/${(e)} device-local tokens", () => {
     const nowUtcMs = stopUtcMs
     const ctx = { startUtcMs, stopUtcMs, nowUtcMs }
     expect(expandCatchupTemplate("${(x)yyyyMMdd}-{bogus}", ctx)).toBe("${(x)yyyyMMdd}-{bogus}")
+  })
+})
+
+// Kodi-derived vector setup shared by the colon-format, correction and catchup-id suites below.
+describe("expandCatchupTemplate: colon-format tokens (rtp2httpd/Kodi parity)", () => {
+  const startUtcMs = 1699999200 * 1000
+  const stopUtcMs = 1700002800 * 1000
+  const nowUtcMs = 1700006400 * 1000
+  const ctx = { startUtcMs, stopUtcMs, nowUtcMs }
+
+  function local14(ms: number): string {
+    const date = new Date(ms)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    return (
+      `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
+      `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+    )
+  }
+
+  it("expands {utc:YmdHMS}-{utcend:YmdHMS} using local-time components", () => {
+    expect(expandCatchupTemplate("{utc:YmdHMS}-{utcend:YmdHMS}", ctx)).toBe(
+      `${local14(startUtcMs)}-${local14(stopUtcMs)}`,
+    )
+  })
+
+  it("passes non-YmdHMS characters through literally in a mixed pattern", () => {
+    const startDate = new Date(startUtcMs)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    const expected =
+      `${startDate.getFullYear()}${pad(startDate.getMonth() + 1)}${pad(startDate.getDate())}` +
+      `-${pad(startDate.getHours())}-${pad(startDate.getMinutes())}`
+    expect(expandCatchupTemplate("{utc:Ymd-H-M}", ctx)).toBe(expected)
+  })
+
+  it("supports the ${start:}/${end:} and {lutc:}/${now:}/${timestamp:} forms", () => {
+    expect(expandCatchupTemplate("${start:YmdHMS}", ctx)).toBe(local14(startUtcMs))
+    expect(expandCatchupTemplate("${end:YmdHMS}", ctx)).toBe(local14(stopUtcMs))
+    expect(expandCatchupTemplate("{lutc:YmdHMS}", ctx)).toBe(local14(nowUtcMs))
+    expect(expandCatchupTemplate("${now:YmdHMS}", ctx)).toBe(local14(nowUtcMs))
+    expect(expandCatchupTemplate("${timestamp:YmdHMS}", ctx)).toBe(local14(nowUtcMs))
+  })
+
+  it("leaves the un-dollared {start:...} and dollared ${utc:...} forms unrecognized", () => {
+    expect(expandCatchupTemplate("{start:YmdHMS}", ctx)).toBe("{start:YmdHMS}")
+    expect(expandCatchupTemplate("${utc:YmdHMS}", ctx)).toBe("${utc:YmdHMS}")
+  })
+
+  it("bare {Y}{m}{d}{H}{M}{S} render in local time of the start instant", () => {
+    expect(expandCatchupTemplate("{Y}{m}{d}{H}{M}{S}", ctx)).toBe(local14(startUtcMs))
+  })
+})
+
+describe("expandCatchupTemplate: catchup-correction", () => {
+  const startUtcMs = 1699999200 * 1000
+  const stopUtcMs = 1700002800 * 1000
+  const nowUtcMs = 1700006400 * 1000
+
+  it("a positive correction shifts start/end earlier but leaves now/lutc raw", () => {
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs, catchupCorrectionHours: 2 }
+    expect(expandCatchupTemplate("start={utc}&end={utcend}&lutc={lutc}&now=${now}", ctx)).toBe(
+      "start=1699992000&end=1699995600&lutc=1700006400&now=1700006400",
+    )
+  })
+
+  it("a negative correction shifts start/end later but leaves now/lutc raw", () => {
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs, catchupCorrectionHours: -0.5 }
+    expect(expandCatchupTemplate("start={utc}&end={utcend}&lutc={lutc}", ctx)).toBe(
+      "start=1700001000&end=1700004600&lutc=1700006400",
+    )
+  })
+
+  // Kodi parity: FormatDateTime corrects the start/end operand but takes "now" straight from the
+  // wall clock, so {offset} = rawNow - correctedStart grows with a positive correction (it reaches
+  // further back into the archive) instead of cancelling out against a "corrected now".
+  it("a positive correction grows ${offset} (and its divided form) rather than leaving it unchanged", () => {
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs, catchupCorrectionHours: 2 }
+    expect(expandCatchupTemplate("${offset}/{offset:60}", ctx)).toBe("14400/240")
+  })
+
+  it("a negative correction shrinks ${offset} (and its divided form)", () => {
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs, catchupCorrectionHours: -0.5 }
+    expect(expandCatchupTemplate("${offset}/{offset:60}", ctx)).toBe("5400/90")
+  })
+
+  it("leaves {duration} unaffected, since start and end shift by the same amount", () => {
+    const withoutCorrection = { startUtcMs, stopUtcMs, nowUtcMs }
+    const withCorrection = { startUtcMs, stopUtcMs, nowUtcMs, catchupCorrectionHours: 3 }
+    expect(expandCatchupTemplate("{duration}", withCorrection)).toBe(
+      expandCatchupTemplate("{duration}", withoutCorrection),
+    )
+  })
+
+  it("shifts the {Y}-family and {utc:...} colon-format local tokens the same way as {utc}", () => {
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs, catchupCorrectionHours: 2 }
+    const correctedStart = new Date(startUtcMs - 2 * 3600000)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    const expected =
+      `${correctedStart.getFullYear()}${pad(correctedStart.getMonth() + 1)}${pad(correctedStart.getDate())}` +
+      `${pad(correctedStart.getHours())}${pad(correctedStart.getMinutes())}${pad(correctedStart.getSeconds())}`
+    expect(expandCatchupTemplate("{utc:YmdHMS}", ctx)).toBe(expected)
+    expect(expandCatchupTemplate("{Y}{m}{d}{H}{M}{S}", ctx)).toBe(expected)
+  })
+
+  it("leaves {lutc:...} local-time colon-format raw (unaffected by correction)", () => {
+    const withoutCorrection = { startUtcMs, stopUtcMs, nowUtcMs }
+    const withCorrection = { startUtcMs, stopUtcMs, nowUtcMs, catchupCorrectionHours: 2 }
+    expect(expandCatchupTemplate("{lutc:YmdHMS}", withCorrection)).toBe(
+      expandCatchupTemplate("{lutc:YmdHMS}", withoutCorrection),
+    )
+  })
+})
+
+describe("buildM3uCatchupUrl: catchup-correction asymmetry (offset grows, abs-start shrinks)", () => {
+  const startUtcMs = 1699999200 * 1000
+  const stopUtcMs = 1700002800 * 1000
+  const nowUtcMs = 1700006400 * 1000
+  const baseCtx = { startUtcMs, stopUtcMs, nowUtcMs }
+
+  it("shift mode: a positive correction moves utc earlier and leaves lutc unchanged", () => {
+    const channel: CatchupCapableChannel = { url: "http://host/live.m3u8", catchup: "shift" }
+    expect(buildM3uCatchupUrl(channel, { ...baseCtx, catchupCorrectionHours: 2 })).toBe(
+      "http://host/live.m3u8?utc=1699992000&lutc=1700006400",
+    )
+  })
+
+  it("flussonic relative (index.m3u8): a positive correction grows the offset, reaching further back", () => {
+    const channel: CatchupCapableChannel = {
+      url: "http://host.example/12345/index.m3u8",
+      catchup: "flussonic-hls",
+    }
+    expect(buildM3uCatchupUrl(channel, baseCtx)).toBe(
+      "http://host.example/12345/timeshift_rel-7200.m3u8",
+    )
+    expect(buildM3uCatchupUrl(channel, { ...baseCtx, catchupCorrectionHours: 2 })).toBe(
+      "http://host.example/12345/timeshift_rel-14400.m3u8",
+    )
+  })
+
+  it("flussonic absolute (mpegts): a positive correction shrinks the absolute start timestamp", () => {
+    const channel: CatchupCapableChannel = {
+      url: "http://host.example/12345/mpegts",
+      catchup: "flussonic-ts",
+    }
+    expect(buildM3uCatchupUrl(channel, baseCtx)).toBe(
+      "http://host.example/12345/timeshift_abs-1699999200.ts",
+    )
+    expect(buildM3uCatchupUrl(channel, { ...baseCtx, catchupCorrectionHours: 2 })).toBe(
+      "http://host.example/12345/timeshift_abs-1699992000.ts",
+    )
+  })
+})
+
+describe("expandCatchupTemplate: {catchup-id}", () => {
+  const startUtcMs = Date.UTC(2024, 0, 1, 0, 0, 0)
+  const stopUtcMs = startUtcMs + 3600000
+  const nowUtcMs = startUtcMs + 7200000
+
+  it("replaces every occurrence when ctx has a catchupId", () => {
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs, catchupId: "vod-42" }
+    expect(expandCatchupTemplate("{catchup-id}/{catchup-id}", ctx)).toBe("vod-42/vod-42")
+  })
+
+  it("leaves the token untouched when catchupId is absent", () => {
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs }
+    expect(expandCatchupTemplate("{catchup-id}", ctx)).toBe("{catchup-id}")
+  })
+})
+
+describe("buildM3uCatchupUrl: flussonic stage-1/stage-2 parity (Kodi vectors)", () => {
+  const startUtcMs = 1699999200 * 1000
+  const stopUtcMs = 1700002800 * 1000
+  const nowUtcMs = 1700006400 * 1000
+  const ctx = { startUtcMs, stopUtcMs, nowUtcMs }
+
+  it("stage 1: index.m3u8 with a query -> timeshift_rel", () => {
+    const channel: CatchupCapableChannel = {
+      url: "http://list.tv:8888/325/index.m3u8?token=secret",
+      catchup: "flussonic",
+    }
+    expect(buildM3uCatchupUrl(channel, ctx)).toBe(
+      "http://list.tv:8888/325/timeshift_rel-7200.m3u8?token=secret",
+    )
+  })
+
+  it("stage 1: a named list (mono.m3u8) with a query -> <list>-timeshift_rel", () => {
+    const channel: CatchupCapableChannel = {
+      url: "http://list.tv:8888/325/mono.m3u8?token=secret",
+      catchup: "flussonic",
+    }
+    expect(buildM3uCatchupUrl(channel, ctx)).toBe(
+      "http://list.tv:8888/325/mono-timeshift_rel-7200.m3u8?token=secret",
+    )
+  })
+
+  it("stage 1: literal mpegts overrides the tag's hls flavor -> timeshift_abs", () => {
+    const channel: CatchupCapableChannel = {
+      url: "http://ch01.spr24.net/151/mpegts?token=my_token",
+      catchup: "flussonic-ts",
+    }
+    expect(buildM3uCatchupUrl(channel, ctx)).toBe(
+      "http://ch01.spr24.net/151/timeshift_abs-1699999200.ts?token=my_token",
+    )
+  })
+
+  it("stage 2: a generic URL with no recognizable extension falls back to the fs tag -> timeshift_abs", () => {
+    const channel: CatchupCapableChannel = {
+      url: "http://list.tv:8888/325/live?token=x",
+      catchup: "fs",
+    }
+    expect(buildM3uCatchupUrl(channel, ctx)).toBe(
+      "http://list.tv:8888/325/timeshift_abs-1699999200.ts?token=x",
+    )
+  })
+
+  it("stage 2: the same generic URL under the flussonic tag -> timeshift_rel", () => {
+    const channel: CatchupCapableChannel = {
+      url: "http://list.tv:8888/325/live?token=x",
+      catchup: "flussonic",
+    }
+    expect(buildM3uCatchupUrl(channel, ctx)).toBe(
+      "http://list.tv:8888/325/timeshift_rel-7200.m3u8?token=x",
+    )
   })
 })
 
@@ -293,19 +527,22 @@ describe("buildM3uCatchupUrl", () => {
     )
   })
 
-  it("forces the TS form for the fs alias regardless of list name", () => {
+  // Stage 1 is decided purely by the URL's literal extension - the fs/flussonic-ts tag
+  // only takes over at stage 2 (the generic fallback), so a well-formed .m3u8 URL still
+  // produces the HLS relative form even under the "fs" tag.
+  it("stage 1 ignores the tag and follows the URL's own extension, even for the fs alias", () => {
     const channel: CatchupCapableChannel = {
       url: "http://host.example/12345/index.m3u8",
       catchup: "fs",
     }
     expect(buildM3uCatchupUrl(channel, ctx)).toBe(
-      "http://host.example/12345/timeshift_abs-1704067200.ts",
+      "http://host.example/12345/timeshift_rel-7200.m3u8",
     )
   })
 
-  it("returns null for a flussonic URL that doesn't match the expected shape", () => {
+  it("returns null for a flussonic URL with no second path segment to split", () => {
     const channel: CatchupCapableChannel = {
-      url: "http://host.example/a/b/c/mpegts",
+      url: "http://host.example/onlyonesegment",
       catchup: "flussonic",
     }
     expect(buildM3uCatchupUrl(channel, ctx)).toBeNull()
@@ -320,14 +557,41 @@ describe("buildM3uCatchupUrl", () => {
     expect(buildM3uCatchupUrl(channel, ctx)).toBe("http://vod.example/archive/1704067200.mp4")
   })
 
-  it("returns null in vod mode without a source", () => {
+  it("returns null in vod mode without a source or a catchupId", () => {
     const channel: CatchupCapableChannel = { url: "http://host/live.m3u8", catchup: "vod" }
     expect(buildM3uCatchupUrl(channel, ctx)).toBeNull()
+  })
+
+  it("falls back to the bare {catchup-id} template in vod mode without a source", () => {
+    const channel: CatchupCapableChannel = { url: "http://host/live.m3u8", catchup: "vod" }
+    expect(buildM3uCatchupUrl(channel, { ...ctx, catchupId: "plugin://vod/episode1" })).toBe(
+      "plugin://vod/episode1",
+    )
+  })
+
+  it("substitutes {catchup-id} wherever it appears in an explicit catchup-source", () => {
+    const channel: CatchupCapableChannel = {
+      url: "http://host/live.m3u8",
+      catchup: "append",
+      catchupSource: "?id={catchup-id}&again={catchup-id}",
+    }
+    expect(buildM3uCatchupUrl(channel, { ...ctx, catchupId: "42" })).toBe(
+      "http://host/live.m3u8?id=42&again=42",
+    )
   })
 
   it("returns null for xc mode (caller builds the Xtream URL)", () => {
     const channel: CatchupCapableChannel = { url: "http://host/live.m3u8", catchup: "xc" }
     expect(buildM3uCatchupUrl(channel, ctx)).toBeNull()
+  })
+
+  it("concatenates literally when the append source starts with & and the URL has no query (no smart '?' substitution)", () => {
+    const channel: CatchupCapableChannel = {
+      url: "http://host/live.m3u8",
+      catchup: "append",
+      catchupSource: "&utc={utc}",
+    }
+    expect(buildM3uCatchupUrl(channel, ctx)).toBe("http://host/live.m3u8&utc=1704067200")
   })
 
   it("returns null when the channel has no url", () => {

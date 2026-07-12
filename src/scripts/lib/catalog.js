@@ -99,6 +99,7 @@ function m3uToChannelList(text) {
       catchup: entry.catchup ?? null,
       catchupDays: entry.catchupDays ?? null,
       catchupSource: entry.catchupSource ?? null,
+      catchupCorrection: entry.catchupCorrection ?? null,
     })
   }
   return out

@@ -1,3 +1,6 @@
+/**
+ * @vitest-environment jsdom
+ */
 import { describe, it, expect } from "vitest"
 import {
   buildEpgUrlsFromEntry,
@@ -9,6 +12,7 @@ import {
   buildChannelNameIndex,
   findInChannelNameIndex,
   normaliseChannelName,
+  parseXmlTv,
 } from "../src/scripts/lib/epg-data.js"
 
 const xtreamCreds = {
@@ -499,6 +503,43 @@ describe("findBestEpgChannelByName: fuzzy display-name match", () => {
     expect(findBestEpgChannelByName("", channelNames)).toBe("")
     expect(findBestEpgChannelByName("BBC One", null as never)).toBe("")
     expect(findBestEpgChannelByName("BBC One", new Map())).toBe("")
+  })
+})
+
+describe("parseXmlTv: non-standard catchup-id attribute", () => {
+  function formatXmlTvDate(ms: number): string {
+    const date = new Date(ms)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    return (
+      `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
+      `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`
+    )
+  }
+
+  it("captures catchup-id onto the programme when present", () => {
+    const start = Date.now() - 60 * 60 * 1000
+    const stop = Date.now() + 60 * 60 * 1000
+    const xml =
+      `<?xml version="1.0"?><tv>` +
+      `<channel id="channel-x"><display-name>Channel X</display-name></channel>` +
+      `<programme start="${formatXmlTvDate(start)}" stop="${formatXmlTvDate(stop)}" channel="channel-x" catchup-id="plugin://vod/episode1">` +
+      `<title>My Show</title></programme>` +
+      `</tv>`
+    const { programmes } = parseXmlTv(xml)
+    expect(programmes.get("channel-x")?.[0].catchupId).toBe("plugin://vod/episode1")
+  })
+
+  it("leaves catchupId undefined when the attribute is absent", () => {
+    const start = Date.now() - 60 * 60 * 1000
+    const stop = Date.now() + 60 * 60 * 1000
+    const xml =
+      `<?xml version="1.0"?><tv>` +
+      `<channel id="channel-x"><display-name>Channel X</display-name></channel>` +
+      `<programme start="${formatXmlTvDate(start)}" stop="${formatXmlTvDate(stop)}" channel="channel-x">` +
+      `<title>My Show</title></programme>` +
+      `</tv>`
+    const { programmes } = parseXmlTv(xml)
+    expect(programmes.get("channel-x")?.[0].catchupId).toBeUndefined()
   })
 })
 
