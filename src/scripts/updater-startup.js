@@ -10,7 +10,8 @@
 // runs instead and surfaces a one-toast-per-version notification pointing
 // people at Settings > About.
 import { log } from "@/scripts/lib/log.js"
-import { checkForUpdate, isStoreBuild } from "@/scripts/lib/update-check.js"
+import { checkForUpdate, isStoreBuild, resolveUpdateFeedUrl } from "@/scripts/lib/update-check.js"
+import { getUpdateChannel } from "@/scripts/lib/app-settings.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { t } from "@/scripts/lib/i18n.js"
 
@@ -56,7 +57,27 @@ function writeNotifiedVersion(version) {
     } catch {}
 }
 
+async function runBetaAutoUpdate() {
+    const { invoke } = await import("@tauri-apps/api/core")
+    const { relaunch } = await import("@tauri-apps/plugin-process")
+    const url = await resolveUpdateFeedUrl()
+    const update = await invoke("updater_check_from", { url })
+    if (update === null) return
+    await invoke("updater_install")
+    // Windows exits the process mid-install (NSIS restarts it); relaunch() only matters on Linux AppImage.
+    await relaunch()
+}
+
 async function runAutoUpdate() {
+    if (getUpdateChannel() === "beta") {
+        try {
+            await runBetaAutoUpdate()
+            return
+        } catch (err) {
+            log.error("Beta updater error, falling back to stable auto-update:", err)
+        }
+    }
+
     const { check } = await import("@tauri-apps/plugin-updater")
     const { relaunch } = await import("@tauri-apps/plugin-process")
     const update = await check()

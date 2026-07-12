@@ -954,6 +954,19 @@ const navStructure: NavSection[] = [
           <div id="update-progress-text" class="text-xs text-fg-3 tabular-nums">0%</div>
         </div>
 
+        <div id="update-channel-row" class="flex flex-col gap-2 pt-4 border-t border-line/60">
+          <label class="flex flex-col gap-1.5">
+            <span data-i18n="settings.update.channel" class="text-eyebrow font-medium uppercase text-fg-3">Update channel</span>
+            <select id="update-channel-select" class="field-input" aria-describedby="update-channel-hint">
+              <option value="stable" data-i18n="settings.update.channelStable">Stable</option>
+              <option value="beta" data-i18n="settings.update.channelBeta">Beta</option>
+            </select>
+          </label>
+          <p id="update-channel-hint" data-i18n="settings.update.channelHint" class="text-xs text-fg-3">
+            Beta versions are early test builds and may be unstable.
+          </p>
+        </div>
+
         <div class="flex flex-col gap-2 pt-4 border-t border-line/60">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button id="update-check" type="button" class="btn justify-start sm:justify-center">
@@ -1220,12 +1233,14 @@ const navStructure: NavSection[] = [
       getPlaylistListEmptyCopy,
     } from "@/scripts/lib/playlist-rows.js"
     import { injectVersion } from "@/scripts/version.js"
-    import { fetchReleases, renderMarkdown } from "@/scripts/lib/changelog.ts"
+    import { fetchReleases, renderMarkdown, filterReleasesForDisplay } from "@/scripts/lib/changelog.ts"
     import {
       checkForUpdate,
       isStoreBuild,
       isPlayStoreInstall,
       getPlayStoreUrl,
+      getCurrentAppVersion,
+      resolveUpdateFeedUrl,
       MS_STORE_UPDATES_URL,
     } from "@/scripts/lib/update-check.js"
     import { openExternal } from "@/scripts/lib/external-link.js"
@@ -1246,6 +1261,8 @@ const navStructure: NavSection[] = [
       setProgressRetentionDays,
       getNetworkTimeoutSeconds,
       setNetworkTimeoutSeconds,
+      getUpdateChannel,
+      setUpdateChannel,
     } from "@/scripts/lib/app-settings.js"
     import {
       ensureUserInfo,
@@ -1319,8 +1336,9 @@ const navStructure: NavSection[] = [
       const body = document.getElementById("changelog-body")
       const status = document.getElementById("changelog-status")
       if (!body) return
-      fetchReleases(undefined, 3)
-        .then((releases) => {
+      Promise.all([fetchReleases(undefined, 10), getCurrentAppVersion()])
+        .then(([allReleases, currentVersion]) => {
+          const releases = filterReleasesForDisplay(allReleases, currentVersion || "").slice(0, 3)
           if (!releases.length) {
             if (status) {
               status.textContent = t("settings.about.whatsNewEmpty")
@@ -2634,6 +2652,10 @@ const navStructure: NavSection[] = [
     const updateProgressWrap = document.getElementById("update-progress-wrap")
     const updateProgressBar = document.getElementById("update-progress-bar")
     const updateProgressText = document.getElementById("update-progress-text")
+    const updateChannelRowEl = document.getElementById("update-channel-row")
+    const updateChannelSelectEl = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("update-channel-select")
+    )
 
     const GITHUB_RELEASES_URL =
       "https://github.com/infinitel8p/Extreme-InfiniTV/releases"
@@ -2662,6 +2684,9 @@ const navStructure: NavSection[] = [
     // Linux falls back to the GitHub check below if `check()` throws (non-AppImage installs).
     const canUseTauriUpdater = (isWindowsDesktop && !storeBuild) || isLinuxDesktop
 
+    if (updateChannelSelectEl) updateChannelSelectEl.value = getUpdateChannel()
+    if (storeBuild) updateChannelRowEl?.setAttribute("hidden", "")
+
     if (updateCurrentEl) {
       try {
         const { getVersion } = await import("@tauri-apps/api/app")
@@ -2687,6 +2712,9 @@ const navStructure: NavSection[] = [
     }
 
     let pendingUpdate = null
+    // "plugin": pendingUpdate is a @tauri-apps/plugin-updater Update object.
+    // "invoke": pendingUpdate is the {version, notes, pubDate} payload from updater_check_from (beta channel).
+    let updateInstallMode = "plugin"
 
     function setProgress(pct, text) {
       if (!updateProgressWrap || !updateProgressBar || !updateProgressText) return
@@ -2715,7 +2743,51 @@ const navStructure: NavSection[] = [
 
     let updateGetTarget = GITHUB_RELEASES_URL
 
+    async function checkViaBetaInvoke() {
+      const { invoke } = await import("@tauri-apps/api/core")
+      const url = await resolveUpdateFeedUrl()
+      const update = await invoke("updater_check_from", { url })
+      updateInstallMode = "invoke"
+      if (!update) {
+        pendingUpdate = null
+        if (updateLatestEl) updateLatestEl.textContent = t("settings.about.upToDate")
+        if (updateMsgEl) updateMsgEl.textContent = t("settings.update.upToDateMsg")
+        if (updateGithubLink) {
+          updateGithubLink.href = `${GITHUB_RELEASES_URL}/latest`
+        }
+        setUpdateState("up-to-date")
+        return
+      }
+      pendingUpdate = update
+      if (updateLatestEl) {
+        updateLatestEl.textContent = update.version
+          ? `v${update.version}`
+          : t("settings.update.available")
+      }
+      if (updateNotesEl && update.notes) {
+        updateNotesEl.textContent = update.notes
+        updateNotesEl.classList.remove("hidden")
+      }
+      if (updateMsgEl) {
+        updateMsgEl.textContent = update.pubDate
+          ? t("settings.update.releasedOn", { date: new Date(update.pubDate).toLocaleDateString() })
+          : t("settings.update.updateAvailableMsg")
+      }
+      if (updateGithubLink) {
+        updateGithubLink.href = update.version
+          ? `${GITHUB_RELEASES_URL}/tag/v${update.version}`
+          : `${GITHUB_RELEASES_URL}/latest`
+      }
+      updateInstallBtn?.removeAttribute("hidden")
+      setUpdateState("available")
+    }
+
     async function checkViaTauriUpdater() {
+      if (getUpdateChannel() === "beta") {
+        await checkViaBetaInvoke()
+        return
+      }
+      updateInstallMode = "plugin"
       const { check } = await import("@tauri-apps/plugin-updater")
       const update = await check()
       if (!update) {
@@ -2819,8 +2891,60 @@ const navStructure: NavSection[] = [
       }
     }
 
+    async function installUpdateViaInvoke() {
+      updateInstallBtn?.setAttribute("disabled", "")
+      updateCheckBtn?.setAttribute("disabled", "")
+      let total = 0
+      let received = 0
+      let unlisten = null
+      setProgress(0, t("settings.update.preparing"))
+      try {
+        const { listen } = await import("@tauri-apps/api/event")
+        const { invoke } = await import("@tauri-apps/api/core")
+        unlisten = await listen("xt:updater-progress", (event) => {
+          const payload = event.payload
+          if (payload.event === "Started") {
+            total = payload.data?.contentLength || 0
+            setProgress(0, total ? `0 / ${fmtUpdateBytes(total)}` : t("settings.update.starting"))
+          } else if (payload.event === "Progress") {
+            received += payload.data?.chunkLength || 0
+            const pct = total ? (received / total) * 100 : 0
+            setProgress(
+              pct,
+              total
+                ? `${fmtUpdateBytes(received)} / ${fmtUpdateBytes(total)}`
+                : fmtUpdateBytes(received)
+            )
+          } else if (payload.event === "Finished") {
+            setProgress(100, t("settings.update.installed"))
+            if (updateMsgEl) updateMsgEl.textContent = t("settings.update.installedRestart")
+            setInstallLabel(t("settings.about.installUpdate"))
+            updateRelaunchBtn?.removeAttribute("hidden")
+          }
+        })
+        await invoke("updater_install")
+        // Windows exits the process here; the "Finished" event above is the terminal UI state.
+      } catch (e) {
+        log.error("Update install failed:", e)
+        if (updateMsgEl) {
+          const message = String(e?.message || e || "").replace(/^OTHER:/, "")
+          updateMsgEl.textContent = t("settings.update.downloadFailed", { error: message })
+        }
+        setProgress(null)
+        setInstallLabel(t("settings.update.reDownload"))
+        updateInstallBtn?.removeAttribute("disabled")
+      } finally {
+        if (unlisten) unlisten()
+        updateCheckBtn?.removeAttribute("disabled")
+      }
+    }
+
     async function installUpdate() {
       if (!pendingUpdate) return
+      if (updateInstallMode === "invoke") {
+        await installUpdateViaInvoke()
+        return
+      }
       updateInstallBtn?.setAttribute("disabled", "")
       updateCheckBtn?.setAttribute("disabled", "")
       let total = 0
@@ -2879,6 +3003,10 @@ const navStructure: NavSection[] = [
     updateRelaunchBtn?.addEventListener("click", relaunchApp)
     updateGetBtn?.addEventListener("click", () => {
       openExternal(updateGetTarget)
+    })
+    updateChannelSelectEl?.addEventListener("change", () => {
+      setUpdateChannel(updateChannelSelectEl.value)
+      checkForUpdates()
     })
 
     checkForUpdates()

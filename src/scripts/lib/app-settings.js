@@ -21,6 +21,7 @@ const KEY_TV_OVERSCAN = "xt_tv_overscan"
 const KEY_ANDROID_NATIVE_PLAYER = "xt_android_native_player"
 const KEY_ANDROID_REMEMBERED_PLAYER = "xt_android_remembered_player"
 const KEY_VIDEO_SCALE = "xt_video_scale"
+const KEY_UPDATE_CHANNEL = "xt_update_channel"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -34,6 +35,9 @@ export const TV_OVERSCAN_EVENT = "xt:tv-overscan-changed"
 export const ANDROID_NATIVE_PLAYER_EVENT = "xt:android-native-player-changed"
 export const ANDROID_REMEMBERED_PLAYER_EVENT = "xt:android-remembered-player-changed"
 export const VIDEO_SCALE_EVENT = "xt:video-scale-changed"
+export const UPDATE_CHANNEL_EVENT = "xt:update-channel-changed"
+export const UPDATE_CHANNELS = ["stable", "beta"]
+export const DEFAULT_UPDATE_CHANNEL = "stable"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
 export const DEFAULT_TV_OVERSCAN = 0
 
@@ -667,5 +671,20 @@ export function setVideoScale(mode) {
   writeLS(KEY_VIDEO_SCALE, next === "fit" ? "" : next)
   document.dispatchEvent(
     new CustomEvent(VIDEO_SCALE_EVENT, { detail: { value: next } })
+  )
+}
+
+// Update channel (desktop only - the picker UI hides on Microsoft Store builds)
+export function getUpdateChannel() {
+  const raw = readLS(KEY_UPDATE_CHANNEL, "")
+  return UPDATE_CHANNELS.includes(raw) ? raw : DEFAULT_UPDATE_CHANNEL
+}
+
+export function setUpdateChannel(channel) {
+  const next = UPDATE_CHANNELS.includes(channel) ? channel : DEFAULT_UPDATE_CHANNEL
+  if (next === DEFAULT_UPDATE_CHANNEL) writeLS(KEY_UPDATE_CHANNEL, "")
+  else writeLS(KEY_UPDATE_CHANNEL, next)
+  document.dispatchEvent(
+    new CustomEvent(UPDATE_CHANNEL_EVENT, { detail: { value: next } })
   )
 }

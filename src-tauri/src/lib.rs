@@ -10,6 +10,9 @@ mod hevc_extension;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod tray;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod updater;
+
 // The Stdout target also covers Android release builds; tauri-plugin-log routes it to logcat there, not just the debug-only terminal.
 #[cfg(not(target_os = "ios"))]
 fn build_log_plugin() -> tauri_plugin_log::Builder {
@@ -79,6 +82,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(discord::RpcState::default())
         .manage(external_player::ExternalPlayerState::default())
+        .manage(updater::PendingUpdateState::default())
         .invoke_handler(tauri::generate_handler![
             discord::discord_set_activity,
             discord::discord_clear,
@@ -87,6 +91,8 @@ pub fn run() {
             hevc_extension::install_appx_package,
             hevc_extension::is_store_build,
             tray::set_close_to_tray,
+            updater::updater_check_from,
+            updater::updater_install,
         ]);
 
     #[cfg(target_os = "android")]

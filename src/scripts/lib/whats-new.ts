@@ -10,6 +10,7 @@
 
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import type { ReleaseSummary } from "@/scripts/lib/changelog.js"
+import { filterReleasesForDisplay } from "@/scripts/lib/changelog.js"
 import { compareVersions } from "@/scripts/lib/version-compare.js"
 
 type RenderMarkdown = (source: string) => Promise<string>
@@ -217,7 +218,7 @@ async function maybeShowWhatsNew(): Promise<void> {
     return
   }
 
-  const fresh = releases.filter((release) => {
+  const fresh = filterReleasesForDisplay(releases, current).filter((release) => {
     const version = release.tagName
     return (
       compareVersions(version, lastSeen) > 0 &&

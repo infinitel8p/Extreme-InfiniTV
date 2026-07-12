@@ -4,11 +4,15 @@
 
 import { compareVersions } from "@/scripts/lib/version-compare.js"
 import { log } from "@/scripts/lib/log.js"
+import { getUpdateChannel, UPDATE_CHANNEL_EVENT } from "@/scripts/lib/app-settings.js"
 
 export const GITHUB_RELEASES_URL =
   "https://github.com/infinitel8p/Extreme-InfiniTV/releases"
 export const MS_STORE_UPDATES_URL = "ms-windows-store://downloadsandupdates"
+export const STABLE_UPDATE_FEED_URL =
+  "https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest/download/latest.json"
 
+const REPO_SLUG = "infinitel8p/Extreme-InfiniTV"
 const PLAY_STORE_PACKAGE = "com.android.vending"
 
 interface AndroidDeviceInfoBridge {
@@ -51,6 +55,13 @@ export interface UpdateStatus {
 let lastStatus: UpdateStatus | null = null
 let updateCheckPromise: Promise<UpdateStatus | null> | null = null
 
+if (typeof document !== "undefined") {
+  document.addEventListener(UPDATE_CHANNEL_EVENT, () => {
+    lastStatus = null
+    updateCheckPromise = null
+  })
+}
+
 export async function getCurrentAppVersion(): Promise<string | null> {
   try {
     const { getVersion } = await import("@tauri-apps/api/app")
@@ -69,13 +80,16 @@ async function performCheck(): Promise<UpdateStatus | null> {
     if (!current) return null
 
     const { fetchReleases } = await import("@/scripts/lib/changelog.js")
-    const stableReleases = (await fetchReleases()).filter(
-      (release) => !release.prerelease
-    )
-    if (!stableReleases.length) return null
+    const channel = getUpdateChannel()
+    const allReleases = await fetchReleases()
+    const eligibleReleases =
+      channel === "beta"
+        ? allReleases
+        : allReleases.filter((release) => !release.prerelease)
+    if (!eligibleReleases.length) return null
 
-    let newestRelease = stableReleases[0]
-    for (const release of stableReleases) {
+    let newestRelease = eligibleReleases[0]
+    for (const release of eligibleReleases) {
       if (compareVersions(release.tagName, newestRelease.tagName) > 0) {
         newestRelease = release
       }
@@ -112,6 +126,29 @@ export async function checkForUpdate(): Promise<UpdateStatus | null> {
 
 export function getUpdateStatusSync(): UpdateStatus | null {
   return lastStatus
+}
+
+// Beta channel has no static feed - the newest prerelease-or-stable tag wins,
+// so beta users converge back to stable once a stable release overtakes it.
+export async function resolveUpdateFeedUrl(): Promise<string> {
+  if (getUpdateChannel() !== "beta") return STABLE_UPDATE_FEED_URL
+
+  try {
+    const { fetchReleases } = await import("@/scripts/lib/changelog.js")
+    const releases = await fetchReleases()
+    if (!releases.length) return STABLE_UPDATE_FEED_URL
+
+    let newestRelease = releases[0]
+    for (const release of releases) {
+      if (compareVersions(release.tagName, newestRelease.tagName) > 0) {
+        newestRelease = release
+      }
+    }
+    return `https://github.com/${REPO_SLUG}/releases/download/${newestRelease.tagName}/latest.json`
+  } catch (error) {
+    log.warn("[xt:update-check] beta feed resolution failed:", error)
+    return STABLE_UPDATE_FEED_URL
+  }
 }
 
 let storeBuildCache: boolean | null = null

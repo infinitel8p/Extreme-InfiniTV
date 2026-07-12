@@ -35,7 +35,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
 
 jobs:
@@ -373,7 +373,7 @@ jobs:
               name: `Extreme InfiniTV ${tag}`,
               body,
               draft: true,
-              prerelease: false,
+              prerelease: tag.includes("-"),
               target_commitish: context.sha,
             })
             return data.id

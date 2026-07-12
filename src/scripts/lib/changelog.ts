@@ -84,6 +84,15 @@ export async function fetchReleases(
   return releases
 }
 
+// Hides prerelease notes from users on stable, unless they're already running one.
+export function filterReleasesForDisplay(
+  releases: ReleaseSummary[],
+  currentVersion: string
+): ReleaseSummary[] {
+  if (currentVersion.includes("-")) return releases
+  return releases.filter((release) => !release.prerelease)
+}
+
 const ALLOWED_TAGS = [
   "a", "abbr", "b", "blockquote", "br", "code", "del", "details", "div",
   "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "ins", "kbd",
