@@ -78,6 +78,7 @@
 - **Adjustable font scale** (Default / Medium / Large / X-Large) plus a responsive root size that scales the whole UI on 4K and 8K displays.
 - **Self-updating Windows desktop build** via the Tauri updater (signed with minisign, served from GitHub Releases).
 - **Offline-friendly persistence.** Credentials and preferences live in the OS app-data dir on Tauri builds, with a localStorage / cookie fallback on the web build.
+- **No tracking, no ads, no telemetry.** The app collects nothing about you or your viewing habits.
 
 ## Install
 

@@ -1358,20 +1358,24 @@ async function mountVideoJs(
     import("video.js"),
     import("video.js/dist/video-js.css"),
   ])
+  const controlBar = options.controlBar ?? {
+    volumePanel: { inline: false },
+    pictureInPictureToggle: options.pictureInPictureToggle ?? true,
+    playbackRateMenuButton: true,
+    subsCapsButton: true,
+    audioTrackButton: true,
+    fullscreenToggle: true,
+  }
+  // A non-empty playbackRates array surfaces its own rate control, so gate it like the menu button.
+  const playbackRatesEnabled = controlBar.playbackRateMenuButton !== false
   const player = videojs(videoEl, {
     liveui: options.liveui ?? false,
     fluid: options.fluid ?? true,
     preload: options.preload ?? "auto",
     autoplay: options.autoplay ?? false,
     aspectRatio: options.aspectRatio ?? "16:9",
-    controlBar: options.controlBar ?? {
-      volumePanel: { inline: false },
-      pictureInPictureToggle: options.pictureInPictureToggle ?? true,
-      playbackRateMenuButton: true,
-      subsCapsButton: true,
-      audioTrackButton: true,
-      fullscreenToggle: true,
-    },
+    controlBar,
+    ...(playbackRatesEnabled ? { playbackRates: [0.75, 1, 1.25, 1.5, 2] } : {}),
     html5: options.html5 ?? {
       vhs: {
         overrideNative: !isMacOS,

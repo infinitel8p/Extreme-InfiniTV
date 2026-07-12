@@ -99,8 +99,11 @@ const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 const EPG_SIDE_PANEL_PAST_WINDOW_MS = 24 * 60 * 60 * 1000
 
 let currentlyPlayingId = null
+// Tracks the channel that was playing before the current one, so `\` can flip back to it.
+let previousPlayingId = null
 
 function setNowPlaying(id) {
+  if (id !== currentlyPlayingId) previousPlayingId = currentlyPlayingId
   currentlyPlayingId = id
   if (!viewport) return
   for (const row of viewport.querySelectorAll(".channel-row")) {
@@ -967,7 +970,9 @@ function isTypingTarget(target) {
 }
 
 document.addEventListener("keydown", (e) => {
-  if (e.ctrlKey || e.altKey || e.metaKey) return
+  // AltGr reports as Ctrl+Alt on Windows; `\` needs AltGr on many layouts (e.g. German AltGr+ß).
+  const isAltGrBackslash = e.ctrlKey && e.altKey && !e.metaKey && e.key === "\\"
+  if ((e.ctrlKey || e.altKey || e.metaKey) && !isAltGrBackslash) return
   if (isTypingTarget(e.target)) return
 
   if (/^\d$/.test(e.key)) {
@@ -1011,6 +1016,17 @@ document.addEventListener("keydown", (e) => {
     if (!channel) return
     e.preventDefault()
     focusByIdx(nextIdx)
+    play(channel.id, channel.name)
+    return
+  }
+
+  if (e.key === "\\") {
+    if (!filtered.length || previousPlayingId == null) return
+    const lastIdx = filtered.findIndex((channel) => channel.id === previousPlayingId)
+    if (lastIdx === -1) return
+    const channel = filtered[lastIdx]
+    e.preventDefault()
+    focusByIdx(lastIdx)
     play(channel.id, channel.name)
     return
   }

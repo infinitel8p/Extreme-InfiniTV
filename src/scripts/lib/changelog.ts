@@ -8,6 +8,8 @@
 // in lazily via dynamic import the first time renderMarkdown() is called.
 // Until then no page bundle that imports this module pays for them.
 
+import { compareVersions } from "@/scripts/lib/version-compare.js"
+
 const CACHE_KEY = "xt_changelog_cache"
 const CACHE_TTL_MS = 60 * 60 * 1000
 
@@ -68,6 +70,9 @@ export async function fetchReleases(
       htmlUrl: release.html_url,
       prerelease: release.prerelease,
     }))
+
+  // GitHub's releases API occasionally returns a stuck release out of order.
+  releases.sort((a, b) => compareVersions(b.tagName, a.tagName))
 
   try {
     sessionStorage.setItem(

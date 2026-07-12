@@ -38,6 +38,7 @@ import {
   IconX,
   IconShare,
   IconExternalLink,
+  IconRestore,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -1096,12 +1097,19 @@ const navStructure: NavSection[] = [
             </p>
           </div>
         </div>
-        <div class="grid grid-cols-1 gap-2 pt-1">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
           <button id="settings-reset-all" type="button" class="btn-danger justify-start sm:justify-center">
             <IconTrash aria-hidden="true" class="btn-icon" />
             <span data-i18n="settings.danger.resetAll">Reset everything</span>
           </button>
+          <button id="settings-restore-last" type="button" class="btn justify-start sm:justify-center" hidden>
+            <IconRestore aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.danger.restoreLast">Restore last backup</span>
+          </button>
         </div>
+        <p id="settings-restore-last-helper" data-i18n="settings.danger.restoreLastHelper" class="text-2xs text-fg-3" hidden>
+          Restores the snapshot saved automatically at your last export or right before your last reset.
+        </p>
         <span
           id="settings-reset-msg"
           aria-live="polite"
@@ -1256,6 +1264,11 @@ const navStructure: NavSection[] = [
     import { discordRpcSupported } from "@/scripts/lib/discord-rpc.js"
     import { bindExternalLinks } from "@/scripts/lib/external-link.js"
     import { bindBackupRestore } from "@/scripts/lib/restore-backup.js"
+    import {
+      saveBackupSnapshot,
+      loadBackupSnapshot,
+      hasBackupSnapshot,
+    } from "@/scripts/lib/backup-snapshot.ts"
 
     bindExternalLinks()
     import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
@@ -1398,6 +1411,8 @@ const navStructure: NavSection[] = [
     if (resetDialog) attachDialogSpatialNav(resetDialog, { defaultElement: "#settings-reset-cancel" })
     const resetCancelBtn = document.getElementById("settings-reset-cancel")
     const resetConfirmBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-reset-confirm"))
+    const restoreLastBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-restore-last"))
+    const restoreLastHelperEl = document.getElementById("settings-restore-last-helper")
 
     function fmtAge(ts) {
       if (!ts) return "Never"
@@ -1752,6 +1767,9 @@ const navStructure: NavSection[] = [
           duration: 6000,
         })
         flashMsg(backupMsgEl, "Saved.")
+        saveBackupSnapshot()
+          .then(refreshRestoreLastVisibility)
+          .catch((err) => log.warn("[settings:export] backup snapshot refresh failed:", err))
       } catch (e) {
         log.error("[settings:export] failed:", e)
         toastError(t("settings.toast.backupExportFail"), {
@@ -1850,6 +1868,11 @@ const navStructure: NavSection[] = [
       if (!resetConfirmBtn) return
       setLoading(resetConfirmBtn, true)
       try {
+        try {
+          await saveBackupSnapshot()
+        } catch (err) {
+          log.warn("[settings:reset] backup snapshot failed:", err)
+        }
         try { await clearAllCache() } catch {}
         try { localStorage.clear() } catch {}
         try { sessionStorage.clear() } catch {}
@@ -1886,6 +1909,51 @@ const navStructure: NavSection[] = [
         }, 400)
       } finally {
         setLoading(resetConfirmBtn, false)
+      }
+    })
+
+    async function refreshRestoreLastVisibility() {
+      const available = await hasBackupSnapshot()
+      if (restoreLastBtn) restoreLastBtn.hidden = !available
+      if (restoreLastHelperEl) restoreLastHelperEl.hidden = !available
+    }
+    refreshRestoreLastVisibility()
+
+    restoreLastBtn?.addEventListener("click", async () => {
+      if (!(await askImportConfirm())) return
+      setLoading(restoreLastBtn, true)
+      try {
+        const text = await loadBackupSnapshot()
+        if (!text) {
+          toastError(t("settings.toast.backupRestoreFail"), {
+            description: t("settings.danger.restoreLastMissing"),
+          })
+          return
+        }
+        let parsed
+        try {
+          parsed = JSON.parse(text)
+        } catch (parseError) {
+          log.warn("[settings:restore-last] backup JSON parse failed:", parseError)
+          toastError(t("settings.toast.backupParseFail"), { description: "Not valid JSON." })
+          return
+        }
+        const { importAll } = await import("@/scripts/lib/backup.js")
+        const summary = await importAll(parsed)
+        toastSuccess(t("settings.toast.backupRestored"), {
+          description: `${summary.playlists} playlist(s), ${summary.prefsPlaylists} preference set(s).`,
+          duration: 6000,
+        })
+        flashMsg(backupMsgEl, "Imported.")
+        await renderPlaylists()
+        syncCache()
+      } catch (error) {
+        log.error("[settings:restore-last] backup import failed:", error)
+        toastError(t("settings.toast.backupRestoreFail"), {
+          description: (error && error.message) || "See console.",
+        })
+      } finally {
+        setLoading(restoreLastBtn, false)
       }
     })
 
