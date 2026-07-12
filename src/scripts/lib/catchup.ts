@@ -38,6 +38,25 @@ function pad2(value: number): string {
   return String(value).padStart(2, "0")
 }
 
+/** Format `date` with SimpleDateFormat-style tokens (yyyy, MM, dd, HH, mm, ss, and unpadded variants). */
+function formatLocalDatePattern(date: Date, pattern: string): string {
+  const tokens: Record<string, string> = {
+    yyyy: String(date.getFullYear()),
+    yy: String(date.getFullYear()).slice(-2),
+    MM: pad2(date.getMonth() + 1),
+    M: String(date.getMonth() + 1),
+    dd: pad2(date.getDate()),
+    d: String(date.getDate()),
+    HH: pad2(date.getHours()),
+    H: String(date.getHours()),
+    mm: pad2(date.getMinutes()),
+    m: String(date.getMinutes()),
+    ss: pad2(date.getSeconds()),
+    s: String(date.getSeconds()),
+  }
+  return pattern.replace(/yyyy|yy|MM|M|dd|d|HH|H|mm|m|ss|s/g, (match) => tokens[match])
+}
+
 /** Format a UTC instant, shifted to the provider's local clock, as `YYYY-MM-DD:HH-MM`. */
 export function formatTimeshiftStart(startUtcMs: number, serverOffsetMs: number): string {
   const shifted = new Date(startUtcMs + serverOffsetMs)
@@ -153,7 +172,7 @@ export interface CatchupTemplateContext {
   nowUtcMs: number
 }
 
-/** Expand pvr.iptvsimple-style catchup placeholders. Unrecognized placeholders pass through untouched. */
+/** Expand pvr.iptvsimple-style and TiviMate/diyp-style (`${(b)pattern}`/`${(e)pattern}`) catchup placeholders; unrecognized ones pass through untouched. */
 export function expandCatchupTemplate(template: string, ctx: CatchupTemplateContext): string {
   const endMs = Math.min(ctx.stopUtcMs, ctx.nowUtcMs)
   const startSec = Math.floor(ctx.startUtcMs / 1000)
@@ -162,8 +181,12 @@ export function expandCatchupTemplate(template: string, ctx: CatchupTemplateCont
   const durationSec = Math.floor((endMs - ctx.startUtcMs) / 1000)
   const offsetSec = Math.floor((ctx.nowUtcMs - ctx.startUtcMs) / 1000)
   const startDate = new Date(ctx.startUtcMs)
+  const endDate = new Date(endMs)
 
   let result = template
+    .replace(/\$\{\((b|e)\)([^}]+)\}/g, (_match, marker, pattern) =>
+      formatLocalDatePattern(marker === "b" ? startDate : endDate, pattern),
+    )
     .replace(/\{duration:(\d+)\}/g, (_match, divisor) => String(Math.floor(durationSec / Number(divisor))))
     .replace(/\{offset:(\d+)\}/g, (_match, divisor) => String(Math.floor(offsetSec / Number(divisor))))
 

@@ -84,19 +84,21 @@ import {
   getNowNext,
   effectiveTvgId,
   displayedToUtcMs,
+  utcToDisplayedMs,
   EPG_LOADED_EVENT,
   EPG_OFFSET_EVENT,
 } from "@/scripts/lib/epg-data.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { maybeB64ToUtf8, escapeHtml } from "@/scripts/lib/b64-utf8.ts"
 import { attachRadioVisualizer, type RadioVisualizerHandle } from "@/scripts/lib/radio-visualizer.ts"
-import { channelSupportsCatchup, isCatchupPlayable } from "@/scripts/lib/catchup.ts"
+import { channelSupportsCatchup, catchupWindowDays, isCatchupPlayable } from "@/scripts/lib/catchup.ts"
 import { resolveCatchupSrc } from "@/scripts/lib/catchup-resolve.ts"
+import { clampSeekTarget, shouldReturnToLive } from "@/scripts/lib/timeshift-math.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
-// Bounds how far back the side EPG panel looks for replayable programmes,
-// independent of the channel's actual archive window (kept short so the list stays scannable).
+// One "page" of the side EPG panel's past window; scrolling to the top loads another, up to a 7-day cap.
 const EPG_SIDE_PANEL_PAST_WINDOW_MS = 24 * 60 * 60 * 1000
+const EPG_SIDE_PANEL_MAX_PAST_DAYS = 7
 
 let currentlyPlayingId = null
 // Tracks the channel that was playing before the current one, so `\` can flip back to it.
@@ -209,6 +211,7 @@ const listStatus = document.getElementById("list-status")
 const searchEl = document.getElementById("search")
 const currentEl = document.getElementById("current")
 const epgList = document.getElementById("epg-list")
+const epgPanel = document.getElementById("epg")
 
 let activePlaylistId = ""
 let activePlaylistTitle = ""
@@ -253,7 +256,6 @@ document.addEventListener("xt:channel-epg-changed", (e) => {
   if (!detail || detail.playlistId !== activePlaylistId) return
   ensureEpgLoaded()
   refreshNowSlots()
-  updateCurrentProgressBar()
   if (
     currentlyPlayingId &&
     detail.channelId != null &&
@@ -269,7 +271,6 @@ document.addEventListener(EPG_LOADED_EVENT, (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
   refreshNowSlots()
-  updateCurrentProgressBar()
   // For M3U sources the side panel can't use get_short_epg; it pulls from
   // the just-loaded XMLTV state. Refresh it now that data is available.
   if (currentlyPlayingId && hasDirectUrl(currentlyPlayingId)) {
@@ -554,7 +555,7 @@ function renderVirtual() {
     playBtn.type = "button"
     playBtn.dataset.role = "play"
     playBtn.className =
-      "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none"
+      "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
     playBtn.title = ch.name || ""
     playBtn.onclick = () => play(ch.id, ch.name)
 
@@ -615,7 +616,7 @@ function renderVirtual() {
     starBtn.type = "button"
     starBtn.dataset.role = "star"
     starBtn.className =
-      "star-btn flex shrink-0 h-11 w-11 items-center justify-center rounded-lg text-base outline-none transition-colors " +
+      "star-btn flex shrink-0 h-11 w-11 items-center justify-center rounded-lg text-base outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent " +
       (fav
         ? "text-accent hover:bg-surface-2 focus:bg-surface-2"
         : "text-fg-3 hover:text-fg hover:bg-surface-2 focus:text-fg focus:bg-surface-2")
@@ -1056,6 +1057,17 @@ document.addEventListener("keydown", (e) => {
     case "j":
     case "l": {
       e.preventDefault()
+      const deltaMs = lower === "j" ? -10_000 : 10_000
+      const channel = all.find((entry) => entry.id === currentlyPlayingId)
+      const isArchiveChannel = channel ? channelSupportsCatchup(channel) : false
+      if (catchupSession || isArchiveChannel) {
+        // No-Range timeshift server: route hops through the same buffered-fast-path/remount logic as bar seeks.
+        const currentAbsoluteMs = catchupSession
+          ? catchupSession.timelineStartUtcMs + (vjs.currentTime() || 0) * 1000
+          : Date.now()
+        void seekToAbsolute(currentAbsoluteMs + deltaMs)
+        return
+      }
       const delta = lower === "j" ? -10 : 10
       const dur = vjs.duration()
       const next = (vjs.currentTime() || 0) + delta
@@ -1412,20 +1424,33 @@ let bufferingShownAt = 0
 let bufferingHideTimer = null
 let embeddedPlayerLiveUi = true
 let focusKeeperCleanup: (() => void) | null = null
-/** Active catch-up (replay) session, or null when tuned to live. */
+/** Active catch-up/timeshift (replay) session, or null when tuned to live. */
 let catchupSession: {
+  kind: "programme" | "timeshift"
   channelId: number
   channelName: string
   title: string
   startUtcMs: number
   stopUtcMs: number
+  /** resolution.effectiveStartUtcMs - where the mounted stream actually begins. */
+  mountedStartUtcMs: number
+  /** Media-timeline zero. For programme replays this stays at the programme start across mid-programme remounts, so position N seconds = timelineStartUtcMs + N*1000. */
+  timelineStartUtcMs: number
 } | null = null
 /** Bumped by every play()/playCatchup() call so a slow-resolving catch-up probe can detect it's been superseded and bail without clobbering whatever the user tuned to since. */
 let catchupRequestSeq = 0
-/** Pending keyboard-nudged seek offset (ms into the current programme) for the live progress bar. */
-let currentProgressPendingOffsetMs: number | null = null
-let currentProgressBarProgramme: { start: number; stop: number; title: string } | null = null
-let currentProgressBarChannel: (typeof all)[number] | null = null
+// The embedded player handle is reused across catchup->catchup remounts, so one-shot listeners from a superseded mount are tracked and cleared.
+let catchupLoadedMetadataHandler: (() => void) | null = null
+let catchupEndedHandler: (() => void) | null = null
+// Consecutive segments shorter than CATCHUP_AUTO_ADVANCE_RESET_SECONDS trip a no-Range-server remount loop back to live.
+let catchupConsecutiveShortAdvances = 0
+// Native-bar seeks outside the buffer re-request the stream; these track the interceptor.
+let catchupSeekingEl: HTMLVideoElement | null = null
+let catchupSeekingHandler: (() => void) | null = null
+let catchupProgrammaticSeekUntilMs = 0
+const CATCHUP_MIN_SEGMENT_SECONDS = 5
+const CATCHUP_AUTO_ADVANCE_RESET_SECONDS = 30
+const CATCHUP_MAX_CONSECUTIVE_SHORT_ADVANCES = 3
 const TUNING_MAX_MS = 8000
 // Catch-up resolve can probe several timeshift URL variants in sequence; give it room to finish before the overlay gives up.
 const CATCHUP_TUNING_MAX_MS = 22_000
@@ -1494,9 +1519,9 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
   const wantLiveUi = opts.liveui ?? true
   if (vjs) {
     if (embeddedPlayerLiveUi === wantLiveUi) return vjs
-    // Mode changed (live <-> catch-up, a finite/seekable source needs a
-    // different control bar) - dispose and remount fresh below.
-    try { vjs.dispose?.() } catch {}
+    // Mode changed (live <-> catch-up needs a different control bar) - dispose and remount fresh below;
+    // awaited because Shaka restores the original #player element asynchronously.
+    try { await vjs.dispose?.() } catch {}
     vjs = null
     if (focusKeeperCleanup) {
       focusKeeperCleanup()
@@ -1526,6 +1551,12 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
   embeddedPlayerLiveUi = wantLiveUi
+
+  if (radioModeChannelId != null) {
+    unmountRadioVisualizer()
+    const wrap = getPlayerWrap()
+    if (wrap) mountRadioVisualizer(wrap)
+  }
 
   if (mounted.backend === "videojs") {
     focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
@@ -1630,7 +1661,7 @@ function getPlayerWrap(): HTMLElement | null {
 function mountRadioVisualizer(wrap: HTMLElement) {
   if (radioVisualizer) return
   const host = wrap.querySelector<HTMLElement>("[data-radio-visualizer-host]")
-  const videoEl = wrap.querySelector<HTMLVideoElement>("video")
+  const videoEl = vjs?.getMediaElement?.() ?? wrap.querySelector<HTMLVideoElement>("video")
   if (!host || !videoEl) return
   radioVisualizer = attachRadioVisualizer(host, videoEl)
 }
@@ -2048,7 +2079,9 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
       void playCatchup(channel, {
         startUtcMs: session.startUtcMs,
         stopUtcMs: session.stopUtcMs,
+        timelineStartUtcMs: session.timelineStartUtcMs,
         title: session.title,
+        kind: session.kind,
       })
       return
     }
@@ -2233,11 +2266,12 @@ async function play(streamId, name) {
   clearDeadVideoWatchdog()
   catchupSession = null
   catchupRequestSeq++
-  currentProgressPendingOffsetMs = null
   if (!currentEl) return
   // Native ExoPlayer Activity path (opt-in via Settings). Hands off the full
   // playback session including channel switching. Returns early if successful.
-  if (await tryLaunchNativeLive(streamId, name)) return
+  if (await tryLaunchNativeLive(streamId, name)) {
+    return
+  }
 
   const src = hasDirectUrl(streamId)
     ? getDirectUrl(streamId)
@@ -2348,7 +2382,6 @@ async function play(streamId, name) {
     if (sourceLogo instanceof HTMLElement) sourceLogo.style.viewTransitionName = ""
     showTuningOverlay(channelLogo)
     runScanLineSweep()
-    updateCurrentProgressBar()
   }
 
   if (wantTransition) {
@@ -2392,7 +2425,9 @@ async function play(streamId, name) {
     clearRadioMode()
   }
   const player = await ensureEmbeddedPlayer(backend)
-  if (!player) return
+  if (!player) {
+    return
+  }
   await applyStreamHeaders(channelHeaders)
   const seq = ++playSeq
   lastPlayContext = {
@@ -2415,7 +2450,6 @@ async function play(streamId, name) {
     playResult.catch(() => {})
   }
   applyVideoScale()
-
   pushDiscordPresence(channel || { id: streamId, name }, "live")
 
   if (hasDirectUrl(streamId)) {
@@ -2459,108 +2493,28 @@ function renderCatchupCurrentRow(channel, title) {
   backBtn.className =
     "shrink-0 inline-flex items-center justify-center min-h-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
   backBtn.textContent = t("catchup.backToLive")
-  backBtn.addEventListener("click", () => play(channel.id, channel.name))
+  backBtn.addEventListener("click", () => backToLive(channel))
   currentEl.appendChild(backBtn)
-
-  const progressBar = document.getElementById("current-progress")
-  if (progressBar) progressBar.hidden = true
 }
 
-/** Repaints the slim "current programme" seek bar under `#current` for live playback. Hidden during catch-up or when the tuned channel has no archive-capable programme data. */
-function updateCurrentProgressBar() {
-  const bar = document.getElementById("current-progress")
-  const track = /** @type {HTMLButtonElement|null} */ (
-    document.getElementById("current-progress-track")
-  )
-  const fill = /** @type {HTMLElement|null} */ (
-    track?.querySelector("span")
-  )
-  if (!bar || !track || !fill) return
+function backToLive(channel) {
+  // Already tuned live on this channel (no shifted session) - avoid a pointless remount.
+  if (!catchupSession && currentlyPlayingId === channel.id) return
+  play(channel.id, channel.name || "")
+}
 
-  const hide = () => {
-    bar.hidden = true
-    currentProgressBarProgramme = null
-    currentProgressBarChannel = null
-  }
-
-  if (catchupSession || !activePlaylistId || currentlyPlayingId == null) return hide()
-  const channel = all.find((entry) => entry.id === currentlyPlayingId)
-  if (!channel || !channelSupportsCatchup(channel)) return hide()
-
+/** Programme title under the playhead at `atUtcMs`, or "" when EPG data is missing. */
+function resolveProgrammeTitleAt(channel, atUtcMs) {
+  if (!channel || !activePlaylistId) return ""
   const tvgId = effectiveTvgId(channel, activePlaylistId)
+  if (!tvgId) return ""
   const state = getProgrammesSync(activePlaylistId)
-  const { current } = tvgId ? getNowNext(state?.programmes, tvgId) : { current: null }
-  if (!current) return hide()
-
-  currentProgressBarProgramme = current
-  currentProgressBarChannel = channel
-  bar.hidden = false
-
-  const span = current.stop - current.start
-  const liveOffsetMs = span > 0 ? Math.max(0, Math.min(span, Date.now() - current.start)) : 0
-  const displayOffsetMs = currentProgressPendingOffsetMs ?? liveOffsetMs
-  const fraction = span > 0 ? displayOffsetMs / span : 0
-  fill.style.width = `${Math.round(fraction * 100)}%`
-  track.setAttribute("aria-valuemax", String(Math.round(span / 1000)))
-  track.setAttribute("aria-valuenow", String(Math.round(displayOffsetMs / 1000)))
-  track.title = current.title || ""
+  const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
+  const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
+  return current?.title || ""
 }
 
-function startCatchupFromCurrentProgramme(offsetMs) {
-  const programme = currentProgressBarProgramme
-  const channel = currentProgressBarChannel
-  if (!programme || !channel || !activePlaylistId) return
-  const span = programme.stop - programme.start
-  const startUtcMs = displayedToUtcMs(activePlaylistId, programme.start)
-  const stopUtcMs = displayedToUtcMs(activePlaylistId, programme.stop)
-  currentProgressPendingOffsetMs = null
-  void playCatchup(channel, {
-    startUtcMs,
-    stopUtcMs,
-    title: programme.title,
-    seekSeconds: Math.floor(Math.max(0, Math.min(span, offsetMs)) / 1000),
-  })
-}
-
-const CURRENT_PROGRESS_NUDGE_MS = 30_000
-
-function attachCurrentProgressBarControls() {
-  const track = document.getElementById("current-progress-track")
-  if (!track) return
-  track.addEventListener("click", (e) => {
-    const programme = currentProgressBarProgramme
-    if (!programme) return
-    const span = programme.stop - programme.start
-    let offsetMs
-    if (e.detail === 0) {
-      // Keyboard-triggered (Enter/Space fire a synthetic click with detail=0)
-      offsetMs = currentProgressPendingOffsetMs ?? span
-    } else {
-      const rect = track.getBoundingClientRect()
-      const fraction = rect.width > 0 ? Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) : 0
-      offsetMs = fraction * span
-    }
-    startCatchupFromCurrentProgramme(offsetMs)
-  })
-  track.addEventListener("keydown", (e) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
-    const programme = currentProgressBarProgramme
-    if (!programme) return
-    e.preventDefault()
-    e.stopPropagation()
-    const span = programme.stop - programme.start
-    const base = currentProgressPendingOffsetMs ?? Math.max(0, Math.min(span, Date.now() - programme.start))
-    const nudge = e.key === "ArrowLeft" ? -CURRENT_PROGRESS_NUDGE_MS : CURRENT_PROGRESS_NUDGE_MS
-    currentProgressPendingOffsetMs = Math.max(0, Math.min(span, base + nudge))
-    updateCurrentProgressBar()
-  })
-  track.addEventListener("blur", () => {
-    currentProgressPendingOffsetMs = null
-    updateCurrentProgressBar()
-  })
-}
-
-/** Resolve + mount a catch-up (archive) source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
+/** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
 async function playCatchup(channel, opts) {
   if (!currentEl || !channel || !activePlaylistId) return false
   // Reachable via a stale/hand-crafted deep link - the channel itself may no longer offer catch-up.
@@ -2569,19 +2523,20 @@ async function playCatchup(channel, opts) {
     void play(channel.id, channel.name)
     return false
   }
-  const { startUtcMs, stopUtcMs, title = "", seekSeconds = 0 } = opts || {}
+  const { startUtcMs, stopUtcMs, seekSeconds = 0, kind = "programme" } = opts || {}
+  const timelineStartUtcMs = opts?.timelineStartUtcMs ?? startUtcMs
+  let title = opts?.title || ""
   if (!Number.isFinite(startUtcMs) || !Number.isFinite(stopUtcMs) || stopUtcMs <= startUtcMs) return false
 
   const backend = getPlayerBackend()
   if (backend === "mpv" || backend === "vlc") {
-    toastError(t("catchup.failed"))
+    toastError(kind === "timeshift" ? t("timeshift.seekFailed") : t("catchup.failed"))
     return false
   }
 
   hidePlaybackFailurePanel()
   clearDeadVideoWatchdog()
   clearRadioMode()
-  currentProgressPendingOffsetMs = null
 
   // Resolving the archive URL can take several seconds (probing candidate
   // wire formats) - give the same tuning feedback the live path shows.
@@ -2595,33 +2550,44 @@ async function playCatchup(channel, opts) {
   })
   // A newer play()/playCatchup() call has since taken over - bail without
   // touching whatever it's already showing.
-  if (myRequest !== catchupRequestSeq) return false
+  if (myRequest !== catchupRequestSeq) {
+    return false
+  }
   if (!resolution) {
     hideTuningOverlay()
-    toastError(t("catchup.failed"))
+    toastError(kind === "timeshift" ? t("timeshift.seekFailed") : t("catchup.failed"))
+    return false
+  }
+
+  if (!title && kind === "timeshift") title = resolveProgrammeTitleAt(channel, startUtcMs)
+  const mountedStartUtcMs = resolution.effectiveStartUtcMs
+
+  resetEmptyState()
+  document.getElementById("player")?.removeAttribute("hidden")
+
+  const player = await ensureEmbeddedPlayer(backend, { liveui: false })
+  // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
+  if (myRequest !== catchupRequestSeq) {
+    return false
+  }
+  if (!player) {
+    hideTuningOverlay()
     return false
   }
 
   pushRecent(activePlaylistId, "live", channel.id, channel.name, channel.logo || null)
   setNowPlaying(channel.id)
   catchupSession = {
+    kind,
     channelId: channel.id,
     channelName: channel.name || "",
     title,
     startUtcMs,
     stopUtcMs,
+    mountedStartUtcMs,
+    timelineStartUtcMs,
   }
   renderCatchupCurrentRow(channel, title)
-
-  resetEmptyState()
-  document.getElementById("player")?.removeAttribute("hidden")
-
-  const player = await ensureEmbeddedPlayer(backend, { liveui: false })
-  if (myRequest !== catchupRequestSeq) return false
-  if (!player) {
-    hideTuningOverlay()
-    return false
-  }
 
   const seq = ++playSeq
   const mime = resolution.kindHint === "hls" ? "application/x-mpegURL" : "video/mp2t"
@@ -2640,18 +2606,145 @@ async function playCatchup(channel, opts) {
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
-  if (seekSeconds > 0) {
-    player.one?.("loadedmetadata", () => {
-      try { player.currentTime?.(seekSeconds) } catch {}
-    })
+
+  // Drop one-shot listeners from a superseded mount before adding new ones (handle is reused across remounts).
+  if (catchupLoadedMetadataHandler) {
+    try { player.off?.("loadedmetadata", catchupLoadedMetadataHandler) } catch {}
+    catchupLoadedMetadataHandler = null
   }
-  player.src({ src: resolution.src, type: mime, isLive: false })
+  if (catchupEndedHandler) {
+    try { player.off?.("ended", catchupEndedHandler) } catch {}
+    catchupEndedHandler = null
+  }
+
+  // Mounted stream lands at [offset, span] on the [timelineStart, stop] timeline so position/duration stay 1:1 across remounts.
+  const timelineOffsetSeconds = Math.max(0, (mountedStartUtcMs - timelineStartUtcMs) / 1000)
+  const timelineSpanSeconds = Math.max(1, Math.round((Math.min(stopUtcMs, Date.now()) - timelineStartUtcMs) / 1000))
+  const initialPositionSeconds = Math.max(0, (startUtcMs - timelineStartUtcMs) / 1000 + seekSeconds)
+  if (initialPositionSeconds > 0.05) {
+    catchupLoadedMetadataHandler = () => {
+      markProgrammaticCatchupSeek()
+      try { player.currentTime?.(initialPositionSeconds) } catch {}
+    }
+    player.one?.("loadedmetadata", catchupLoadedMetadataHandler)
+  }
+  catchupEndedHandler = () => {
+    if (seq !== playSeq || !catchupSession) return
+    const timelineDurationSeconds = player.duration?.() || 0
+    const segmentSeconds = timelineDurationSeconds - timelineOffsetSeconds
+    const degenerateSegment = !Number.isFinite(segmentSeconds) || segmentSeconds < CATCHUP_MIN_SEGMENT_SECONDS
+    if (segmentSeconds >= CATCHUP_AUTO_ADVANCE_RESET_SECONDS) {
+      catchupConsecutiveShortAdvances = 0
+    } else {
+      catchupConsecutiveShortAdvances++
+    }
+    if (degenerateSegment || catchupConsecutiveShortAdvances > CATCHUP_MAX_CONSECUTIVE_SHORT_ADVANCES) {
+      catchupConsecutiveShortAdvances = 0
+      backToLive(channel)
+      return
+    }
+    const absoluteMs = catchupSession.timelineStartUtcMs + timelineDurationSeconds * 1000
+    if (shouldReturnToLive(absoluteMs, Date.now())) backToLive(channel)
+    else void seekToAbsolute(absoluteMs)
+  }
+  player.one?.("ended", catchupEndedHandler)
+  player.src({
+    src: resolution.src,
+    type: mime,
+    isLive: false,
+    durationSeconds: timelineSpanSeconds,
+    timelineOffsetSeconds,
+  })
+  attachCatchupSeekInterceptor(player, seq)
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch(() => {})
   }
   applyVideoScale()
   return true
+}
+
+/** Suppresses the seek interceptor while our own code moves the playhead. */
+function markProgrammaticCatchupSeek() {
+  catchupProgrammaticSeekUntilMs = Date.now() + 1500
+}
+
+/** No-Range realtime archive server: intercept native-bar seeks outside the buffer and re-request the stream at the target instant. */
+function attachCatchupSeekInterceptor(player, seq) {
+  if (catchupSeekingEl && catchupSeekingHandler) {
+    try { catchupSeekingEl.removeEventListener("seeking", catchupSeekingHandler) } catch {}
+    catchupSeekingEl = null
+    catchupSeekingHandler = null
+  }
+  const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+  if (!mediaEl) return
+  catchupSeekingHandler = () => {
+    if (seq !== playSeq || !catchupSession) return
+    if (Date.now() < catchupProgrammaticSeekUntilMs) return
+    const targetSeconds = mediaEl.currentTime
+    const buffered = mediaEl.buffered
+    for (let i = 0; i < buffered.length; i++) {
+      if (targetSeconds >= buffered.start(i) - 1 && targetSeconds <= buffered.end(i) + 2) return
+    }
+    markProgrammaticCatchupSeek()
+    void seekToAbsolute(catchupSession.timelineStartUtcMs + targetSeconds * 1000)
+  }
+  catchupSeekingEl = mediaEl
+  mediaEl.addEventListener("seeking", catchupSeekingHandler)
+}
+
+/** Committed timeshift seek: clamp against the archive window, take the buffered fast-path when possible, otherwise remount via playCatchup. */
+async function seekToAbsolute(targetUtcMs) {
+  const channelId = catchupSession?.channelId ?? currentlyPlayingId
+  const channel = all.find((entry) => entry.id === channelId)
+  if (!channel) return
+
+  const nowUtcMs = Date.now()
+  const catchupWindowMs = catchupWindowDays(channel) * 24 * 60 * 60 * 1000
+  const clamped = clampSeekTarget(targetUtcMs, { nowUtcMs, catchupWindowMs })
+  if (clamped.kind === "live") {
+    backToLive(channel)
+    return
+  }
+
+  if (catchupSession && catchupSession.channelId === channel.id && vjs) {
+    const videoEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const buffered = videoEl?.buffered
+    if (buffered) {
+      const relSeconds = (clamped.targetUtcMs - catchupSession.timelineStartUtcMs) / 1000
+      for (let i = 0; i < buffered.length; i++) {
+        if (relSeconds >= buffered.start(i) - 1 && relSeconds <= buffered.end(i) + 1) {
+          markProgrammaticCatchupSeek()
+          try { vjs.currentTime(Math.max(0, relSeconds)) } catch {}
+          return
+        }
+      }
+    }
+  }
+
+  // A jump within a programme replay stays bounded to the programme window, so the native bar keeps its episode-like span.
+  const withinProgrammeReplay =
+    catchupSession &&
+    catchupSession.kind === "programme" &&
+    catchupSession.channelId === channel.id &&
+    clamped.targetUtcMs < catchupSession.stopUtcMs
+  if (withinProgrammeReplay) {
+    void playCatchup(channel, {
+      startUtcMs: clamped.targetUtcMs,
+      stopUtcMs: catchupSession.stopUtcMs,
+      timelineStartUtcMs: catchupSession.timelineStartUtcMs,
+      title: catchupSession.title,
+      kind: "programme",
+    })
+    return
+  }
+
+  void playCatchup(channel, {
+    startUtcMs: clamped.targetUtcMs,
+    stopUtcMs: nowUtcMs,
+    title: resolveProgrammeTitleAt(channel, clamped.targetUtcMs),
+    kind: "timeshift",
+  })
 }
 
 async function openDisplayModeDialog(streamId) {
@@ -2803,6 +2896,9 @@ const fmtTime = (ts) => {
 let epgListData = []
 let epgListChannelId = 0
 let epgListChannelName = ""
+// Number of EPG_SIDE_PANEL_PAST_WINDOW_MS pages currently shown; grows as the user scrolls the side panel to the top.
+let epgSidePanelPastPages = 1
+let epgSidePanelExtending = false
 
 async function loadEPG(streamId) {
   if (!epgList) return
@@ -2880,6 +2976,8 @@ function paintSidePanelFromXmltv(streamId) {
     epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
     return
   }
+  const isNewChannelPaint = streamId !== epgListChannelId
+  if (isNewChannelPaint) epgSidePanelPastPages = 1
   epgListChannelId = streamId
   epgListChannelName = channel.name || ""
 
@@ -2900,14 +2998,12 @@ function paintSidePanelFromXmltv(streamId) {
 
   const now = Date.now()
   const upcoming = programmes.filter((programme) => programme.stop >= now).slice(0, 10)
-  // Past programmes only show up for archive-capable channels, most recent first,
-  // ahead of the upcoming/live list.
-  const past = channelSupportsCatchup(channel)
-    ? programmes
-        .filter((programme) => programme.stop < now && now - programme.stop <= EPG_SIDE_PANEL_PAST_WINDOW_MS)
-        .slice(-8)
-        .reverse()
+  // Past programmes: archive-capable channels only, capped to the 8 most recent until scrolled to the top.
+  const pastWindowMs = epgSidePanelPastPages * EPG_SIDE_PANEL_PAST_WINDOW_MS
+  const pastWithinWindow = channelSupportsCatchup(channel)
+    ? programmes.filter((programme) => programme.stop < now && now - programme.stop <= pastWindowMs)
     : []
+  const past = epgSidePanelPastPages > 1 ? pastWithinWindow : pastWithinWindow.slice(-8)
   const combined = [...past, ...upcoming]
   if (!combined.length) {
     epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
@@ -2944,7 +3040,42 @@ function paintSidePanelFromXmltv(streamId) {
         </button>`
     })
     .join("")
+
+  // Fresh channel tune lands the panel on the live/upcoming entry; same-channel repaints keep position.
+  if (isNewChannelPaint && epgPanel) {
+    const liveIndex = combined.findIndex((programme) => programme.start <= now && now < programme.stop)
+    const scrollIndex = liveIndex >= 0 ? liveIndex : past.length
+    const targetEntry = epgList.querySelector(`[data-epg-idx="${scrollIndex}"]`)
+    if (targetEntry instanceof HTMLElement) {
+      const panelRect = epgPanel.getBoundingClientRect()
+      const targetRect = targetEntry.getBoundingClientRect()
+      epgPanel.scrollTop = Math.max(0, targetRect.top - panelRect.top - 8)
+    }
+  }
 }
+
+/** Loads one more day of past programmes into the M3U side panel, re-rendering while preserving scroll position. */
+function extendSidePanelPastWindow() {
+  if (epgSidePanelExtending) return
+  const streamId = epgListChannelId
+  if (!hasDirectUrl(streamId)) return
+  const channel = all.find((entry) => entry.id === streamId)
+  if (!channel || !channelSupportsCatchup(channel)) return
+  const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
+  if (epgSidePanelPastPages >= maxPastPages) return
+
+  epgSidePanelExtending = true
+  epgSidePanelPastPages = Math.min(epgSidePanelPastPages + 1, maxPastPages)
+  const previousScrollHeight = epgPanel?.scrollHeight ?? 0
+  const previousScrollTop = epgPanel?.scrollTop ?? 0
+  paintSidePanelFromXmltv(streamId)
+  if (epgPanel) epgPanel.scrollTop = previousScrollTop + (epgPanel.scrollHeight - previousScrollHeight)
+  epgSidePanelExtending = false
+}
+
+epgPanel?.addEventListener("scroll", () => {
+  if (epgPanel.scrollTop <= 40) extendSidePanelPastWindow()
+})
 
 epgList?.addEventListener("click", async (e) => {
   const target = /** @type {HTMLElement | null} */ (e.target)
@@ -2997,13 +3128,10 @@ epgList?.addEventListener("click", async (e) => {
   })
 })
 
-attachCurrentProgressBarControls()
-
 setInterval(() => {
   if (!activePlaylistId) return
   if (!getProgrammesSync(activePlaylistId)) return
   refreshNowSlots()
-  updateCurrentProgressBar()
 }, 60 * 1000)
 
 // Window resize (incl. maximize) changes the 0.84vw root font-size and

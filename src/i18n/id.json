@@ -605,7 +605,7 @@
   "catchup.watchingLabel": "Tayangan ulang",
   "catchup.failed": "Tidak dapat memulai tayangan ulang - penyedia mungkin tidak mendukung catch-up",
   "catchup.notAvailable": "Saluran ini tidak menyediakan tayangan ulang",
-  "catchup.progressAriaLabel": "Posisi acara saat ini",
+  "timeshift.seekFailed": "Tidak dapat melompat ke titik itu - kembali ke siaran langsung",
   "stream.menu.play": "Putar",
   "stream.menu.test": "Uji streaming",
   "stream.menu.copy": "Salin URL streaming",

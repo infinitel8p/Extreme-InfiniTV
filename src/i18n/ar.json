@@ -605,7 +605,7 @@
   "catchup.watchingLabel": "إعادة",
   "catchup.failed": "تعذر بدء الإعادة - قد لا يدعم المزوّد ميزة إعادة المشاهدة",
   "catchup.notAvailable": "هذه القناة لا توفر إعادة المشاهدة",
-  "catchup.progressAriaLabel": "الموضع الحالي للبرنامج",
+  "timeshift.seekFailed": "تعذر الانتقال إلى هناك - تمت العودة إلى البث المباشر",
   "stream.menu.play": "تشغيل",
   "stream.menu.test": "اختبار البث",
   "stream.menu.copy": "نسخ رابط البث",

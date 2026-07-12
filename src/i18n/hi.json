@@ -605,7 +605,7 @@
   "catchup.watchingLabel": "रीप्ले",
   "catchup.failed": "रीप्ले शुरू नहीं हो सका - हो सकता है प्रदाता कैच-अप सुविधा समर्थित न करे",
   "catchup.notAvailable": "यह चैनल रीप्ले की सुविधा नहीं देता",
-  "catchup.progressAriaLabel": "मौजूदा प्रोग्राम स्थिति",
+  "timeshift.seekFailed": "उस बिंदु पर नहीं जा सके - लाइव पर वापस आ गए",
   "stream.menu.play": "चलाएं",
   "stream.menu.test": "स्ट्रीम जाँचें",
   "stream.menu.copy": "स्ट्रीम URL कॉपी करें",

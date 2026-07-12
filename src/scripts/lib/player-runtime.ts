@@ -44,14 +44,14 @@ export interface DrmOptions {
 }
 
 export interface VjsLikeHandle {
-  /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. */
-  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean }): void
+  /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. `durationSeconds` seeds duration when the container reports none (raw TS); `timelineOffsetSeconds` places a mid-programme remount on its timeline. */
+  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number }): void
   play(): Promise<unknown> | void
   pause(): void
   paused?(): boolean
   muted?(value?: boolean): boolean | void
   reset?(): void
-  dispose?(): void
+  dispose?(): void | Promise<void>
   duration?(): number
   currentTime?(value?: number): number
   on(event: string, fn: (...args: unknown[]) => void): void
@@ -63,6 +63,8 @@ export interface VjsLikeHandle {
   userActive?(active: boolean): void
   /** What we learned about the current stream - feeds failure classification. */
   codecInfo?(): PlaybackCodecInfo
+  /** The actual <video> element rendering playback - artplayer/shaka mount their own, distinct from the element passed to mountPlayer(). */
+  getMediaElement?(): HTMLVideoElement | null
 }
 
 export interface ExternalLaunchOptions {
@@ -1266,6 +1268,8 @@ async function attachMpegts(
   isLive: boolean,
   onFatalError?: (detail: string) => void,
   onMediaInfo?: (info: { videoCodec?: string }) => void,
+  durationSeconds?: number,
+  timelineOffsetSeconds?: number,
 ): Promise<MpegtsHandle | null> {
   const mpegtsMod = await import("mpegts.js")
   const mpegts = (mpegtsMod as any).default || mpegtsMod
@@ -1277,10 +1281,20 @@ async function attachMpegts(
   let disposed = false
   let player: any = null
   let triedTauriLoader = false
+  let durationRetryTimer: ReturnType<typeof setInterval> | null = null
+  let offsetWrapTimer: ReturnType<typeof setInterval> | null = null
 
   const { url: cleanUrl, authorization } = splitUrlAuth(url)
 
   const teardown = () => {
+    if (durationRetryTimer) {
+      clearInterval(durationRetryTimer)
+      durationRetryTimer = null
+    }
+    if (offsetWrapTimer) {
+      clearInterval(offsetWrapTimer)
+      offsetWrapTimer = null
+    }
     if (!player) return
     try { player.unload() } catch {}
     try { player.detachMediaElement() } catch {}
@@ -1288,17 +1302,93 @@ async function attachMpegts(
     player = null
   }
 
+  const resolveMediaSource = () =>
+    (player?._player_engine?._mse_controller ?? player?._mse_controller ?? player?._msectl)?._mediaSource
+
+  // timestampOffset assignments are rebased via a wrapped setter because mpegts.js re-manages it for audio drift.
+  const armTimelineOffsetWrap = () => {
+    const baseSeconds = timelineOffsetSeconds
+    if (isLive || !Number.isFinite(baseSeconds) || (baseSeconds as number) <= 0) return
+    if (offsetWrapTimer) clearInterval(offsetWrapTimer)
+    let attempts = 0
+    offsetWrapTimer = setInterval(() => {
+      attempts++
+      if (disposed || !player || attempts > 200) {
+        if (offsetWrapTimer) {
+          clearInterval(offsetWrapTimer)
+          offsetWrapTimer = null
+        }
+        return
+      }
+      const mediaSource = resolveMediaSource()
+      if (!mediaSource) return
+      clearInterval(offsetWrapTimer!)
+      offsetWrapTimer = null
+      try {
+        const originalAdd = mediaSource.addSourceBuffer.bind(mediaSource)
+        const nativeDescriptor = Object.getOwnPropertyDescriptor(SourceBuffer.prototype, "timestampOffset")
+        if (!nativeDescriptor?.get || !nativeDescriptor?.set) return
+        mediaSource.addSourceBuffer = (mime: string) => {
+          const sourceBuffer = originalAdd(mime)
+          try {
+            Object.defineProperty(sourceBuffer, "timestampOffset", {
+              get() { return nativeDescriptor.get!.call(sourceBuffer) },
+              set(value: number) { nativeDescriptor.set!.call(sourceBuffer, value + (baseSeconds as number)) },
+            })
+            nativeDescriptor.set!.call(sourceBuffer, baseSeconds as number)
+          } catch {}
+          return sourceBuffer
+        }
+      } catch {}
+    }, 25)
+  }
+
+  // mpegts.js never sets MediaSource.duration on the raw-TS path, so assign the known span directly (retried until source buffers are idle).
+  const armDurationOverride = () => {
+    if (isLive || !Number.isFinite(durationSeconds) || (durationSeconds as number) <= 0) return
+    if (durationRetryTimer) clearInterval(durationRetryTimer)
+    const spanSeconds = durationSeconds as number
+    let attempts = 0
+    durationRetryTimer = setInterval(() => {
+      attempts++
+      const stop = () => {
+        if (durationRetryTimer) {
+          clearInterval(durationRetryTimer)
+          durationRetryTimer = null
+        }
+      }
+      if (disposed || !player || attempts > 20) return stop()
+      try {
+        const mseController =
+          player._player_engine?._mse_controller ?? player._mse_controller ?? player._msectl
+        const mediaSource = mseController?._mediaSource
+        if (!mediaSource) return
+        if (Number.isFinite(mediaSource.duration) && mediaSource.duration >= spanSeconds - 1) return stop()
+        if (mediaSource.readyState !== "open") return
+        const buffers: SourceBuffer[] = Array.from(mediaSource.sourceBuffers || [])
+        if (buffers.some((buffer) => buffer.updating)) return
+        mediaSource.duration = spanSeconds
+        stop()
+      } catch {}
+    }, 300)
+  }
+
   const start = (useTauriLoader: boolean) => {
     const config: Record<string, unknown> = {}
     if (useTauriLoader) config.customLoader = createTauriStreamLoaderClass(mpegts)
     if (authorization) config.headers = { Authorization: authorization }
+    const mediaDataSource: Record<string, unknown> = { type: "mpegts", isLive, url: cleanUrl }
+    if (!isLive && Number.isFinite(durationSeconds) && (durationSeconds as number) > 0) {
+      mediaDataSource.duration = Math.round((durationSeconds as number) * 1000)
+    }
     player = mpegts.createPlayer(
-      { type: "mpegts", isLive, url: cleanUrl },
+      mediaDataSource,
       Object.keys(config).length ? config : undefined,
     )
     player.on(mpegts.Events.MEDIA_INFO, (info: any) => {
       if (disposed) return
       if (info?.videoCodec) onMediaInfo?.({ videoCodec: String(info.videoCodec) })
+      armDurationOverride()
     })
     player.on(
       mpegts.Events.ERROR,
@@ -1329,6 +1419,7 @@ async function attachMpegts(
       }
     )
     player.attachMediaElement(videoEl)
+    armTimelineOffsetWrap()
     player.load()
     try {
       const playPromise = player.play?.()
@@ -1338,7 +1429,10 @@ async function attachMpegts(
     } catch {}
   }
 
-  start(false)
+  // Browser fetch rejects userinfo URLs, so credentialed streams start straight on the Tauri HTTP loader.
+  const startsWithTauriLoader = isTauri && Boolean(authorization)
+  if (startsWithTauriLoader) triedTauriLoader = true
+  start(startsWithTauriLoader)
   return {
     destroy() {
       disposed = true
@@ -1416,6 +1510,8 @@ async function mountVideoJs(
   let hlsModPromise: Promise<any> | null = null
   let pendingSrc: string | null = null
   let pendingIsLive = true
+  let pendingDurationSeconds: number | undefined
+  let pendingTimelineOffsetSeconds: number | undefined
   const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
 
   function getUnderlyingVideo(): HTMLVideoElement | null {
@@ -1575,6 +1671,8 @@ async function mountVideoJs(
         if (pendingSrc !== src) return
         if (info.videoCodec) codecState.videoCodec = info.videoCodec
       },
+      pendingDurationSeconds,
+      pendingTimelineOffsetSeconds,
     )
     if (!handle) {
       loadHls(src)
@@ -1589,9 +1687,11 @@ async function mountVideoJs(
   }
 
   const wrapped: VjsLikeHandle = {
-    src({ src, type, drm, isLive }) {
+    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds }) {
       pendingSrc = src
       pendingIsLive = isLive ?? true
+      pendingDurationSeconds = durationSeconds
+      pendingTimelineOffsetSeconds = timelineOffsetSeconds
       codecState.videoCodec = null
       codecState.errorDetail = null
       if (isDashSource(drm, src, type)) {
@@ -1691,6 +1791,9 @@ async function mountVideoJs(
     codecInfo() {
       return { ...codecState }
     },
+    getMediaElement() {
+      return getUnderlyingVideo() ?? videoEl
+    },
   }
   return wrapped
 }
@@ -1722,6 +1825,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   let pendingSrc: string | null = null
   let pendingDrm: DrmOptions | null = null
   let pendingIsLive = true
+  let pendingDurationSeconds: number | undefined
+  let pendingTimelineOffsetSeconds: number | undefined
   const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
 
   function destroyArtEngines(includeHls = true) {
@@ -1848,6 +1953,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
             if (pendingSrc !== url) return
             if (info.videoCodec) codecState.videoCodec = info.videoCodec
           },
+          pendingDurationSeconds,
+          pendingTimelineOffsetSeconds,
         )
         if (!handle) {
           video.src = url
@@ -1889,10 +1996,12 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   })
 
   const handle: VjsLikeHandle = {
-    src({ src, type, drm, isLive }) {
+    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds }) {
       pendingSrc = src
       pendingDrm = drm ?? null
       pendingIsLive = isLive ?? true
+      pendingDurationSeconds = durationSeconds
+      pendingTimelineOffsetSeconds = timelineOffsetSeconds
       codecState.videoCodec = null
       codecState.errorDetail = null
       destroyArtEngines()
@@ -1987,6 +2096,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     codecInfo() {
       return { ...codecState }
     },
+    getMediaElement() {
+      return art.video ?? null
+    },
   }
   return handle
 }
@@ -2037,6 +2149,8 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   let pendingSrc: string | null = null
   let pendingDrm: DrmOptions | null = null
   let pendingIsLive = true
+  let pendingDurationSeconds: number | undefined
+  let pendingTimelineOffsetSeconds: number | undefined
   const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
 
   function destroyMpegts() {
@@ -2072,6 +2186,8 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     try {
       await player.attach(video)
       if (pendingSrc !== src) return
+      setNativeControls(false)
+      setShakaSeekBar(true)
       player.getNetworkingEngine()?.clearAllRequestFilters()
       configureShakaDrmAndAuth(player, clearKeys, authorization, cleanUrl)
       await player.load(cleanUrl, null, mimeTypeHint || undefined)
@@ -2117,6 +2233,8 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
         if (pendingSrc !== src) return
         if (info.videoCodec) codecState.videoCodec = info.videoCodec
       },
+      pendingDurationSeconds,
+      pendingTimelineOffsetSeconds,
     )
     if (!mpegtsHandle) {
       void loadIntoShaka(src, pendingDrm, "application/x-mpegURL")
@@ -2127,13 +2245,27 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       return
     }
     activeMpegts = mpegtsHandle
+    // Shaka's seek bar reads its own (unloaded) player during raw TS, so finite mounts use native controls instead.
+    setNativeControls(!pendingIsLive)
+    setShakaSeekBar(false)
+  }
+
+  function setNativeControls(useNative: boolean) {
+    try { controls?.setEnabledShakaControls?.(!useNative) } catch {}
+    try { video.controls = useNative } catch {}
+  }
+
+  function setShakaSeekBar(enabled: boolean) {
+    try { ui.configure({ addSeekBar: enabled }) } catch {}
   }
 
   const handle: VjsLikeHandle = {
-    src({ src, type, drm, isLive }) {
+    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds }) {
       pendingSrc = src
       pendingDrm = drm ?? null
       pendingIsLive = isLive ?? true
+      pendingDurationSeconds = durationSeconds
+      pendingTimelineOffsetSeconds = timelineOffsetSeconds
       codecState.videoCodec = null
       codecState.errorDetail = null
       if (isDashSource(drm, src, type)) {
@@ -2194,7 +2326,8 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       const restoreOriginalVideoElement = () => {
         if (container.parentElement) container.parentElement.replaceChild(videoEl, container)
       }
-      void ui.destroy().then(restoreOriginalVideoElement).catch(restoreOriginalVideoElement)
+      // Awaitable: a live<->catchup remount must not race the DOM restore.
+      return ui.destroy().then(restoreOriginalVideoElement, restoreOriginalVideoElement)
     },
     duration() {
       return Number.isFinite(video.duration) ? video.duration : 0
@@ -2226,6 +2359,9 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     },
     codecInfo() {
       return { ...codecState }
+    },
+    getMediaElement() {
+      return video
     },
   }
   return handle

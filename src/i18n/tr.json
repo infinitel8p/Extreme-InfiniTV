@@ -605,7 +605,7 @@
   "catchup.watchingLabel": "Tekrar",
   "catchup.failed": "Tekrar oynatma başlatılamadı - sağlayıcı catchup özelliğini desteklemiyor olabilir",
   "catchup.notAvailable": "Bu kanal tekrar izleme sunmuyor",
-  "catchup.progressAriaLabel": "Geçerli program konumu",
+  "timeshift.seekFailed": "O noktaya atlanamadı - canlıya dönüldü",
   "stream.menu.play": "Oynat",
   "stream.menu.test": "Yayını test et",
   "stream.menu.copy": "Yayın URL'sini kopyala",

@@ -659,7 +659,7 @@
   "catchup.watchingLabel": "Replay",
   "catchup.failed": "Couldn't start replay - the provider may not support catch-up",
   "catchup.notAvailable": "This channel doesn't offer replay",
-  "catchup.progressAriaLabel": "Current programme position",
+  "timeshift.seekFailed": "Couldn't jump there - returned to live",
   "stream.menu.play": "Play",
   "stream.menu.test": "Test stream",
   "stream.menu.copy": "Copy stream URL",

@@ -605,7 +605,7 @@
   "catchup.watchingLabel": "Powtórka",
   "catchup.failed": "Nie udało się uruchomić powtórki - dostawca może nie obsługiwać funkcji catch-up",
   "catchup.notAvailable": "Ten kanał nie oferuje powtórek",
-  "catchup.progressAriaLabel": "Aktualna pozycja programu",
+  "timeshift.seekFailed": "Nie udało się przejść do tego miejsca - powrócono do transmisji na żywo",
   "stream.menu.play": "Odtwórz",
   "stream.menu.test": "Testuj stream",
   "stream.menu.copy": "Kopiuj adres URL streamu",

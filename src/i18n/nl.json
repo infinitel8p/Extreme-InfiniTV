@@ -605,7 +605,7 @@
   "catchup.watchingLabel": "Herhaling",
   "catchup.failed": "Kon herhaling niet starten - de provider ondersteunt mogelijk geen terugkijken",
   "catchup.notAvailable": "Dit kanaal biedt geen terugkijkfunctie",
-  "catchup.progressAriaLabel": "Huidige positie in het programma",
+  "timeshift.seekFailed": "Kon niet naar dat punt springen - terug naar live",
   "stream.menu.play": "Afspelen",
   "stream.menu.test": "Stream testen",
   "stream.menu.copy": "Stream-URL kopiëren",

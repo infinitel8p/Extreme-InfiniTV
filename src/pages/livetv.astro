@@ -193,7 +193,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 								class="radio-display__art relative shrink-0 aspect-square rounded-2xl bg-surface-2 overflow-hidden"
 								data-radio-art>
 								<div class="radio-display__art-fallback absolute inset-0 grid place-items-center" aria-hidden="true">
-									<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 4l-9 1.5v12"/><path d="M16 18a2 2 0 1 0 -4 0a2 2 0 0 0 4 0z"/><path d="M9 17a2 2 0 1 0 -4 0a2 2 0 0 0 4 0z"/><path d="M14 17v-12"/></svg>
+									<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 17a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"/><path d="M13 17a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"/><path d="M9 17v-13h10v13"/><path d="M9 8h10"/></svg>
 								</div>
 								<img
 									alt=""
@@ -220,6 +220,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 									aria-hidden="true"></div>
 							</div>
 						</div>
+
 					</div>
 
 					<div
@@ -229,26 +230,6 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 							<span data-i18n="livetv.statusOff" class="status-badge status-badge--off shrink-0">OFF</span>
 							<span class="truncate">-</span>
 						</div>
-					</div>
-
-					<div id="current-progress" class="px-1" hidden>
-						<button
-							type="button"
-							id="current-progress-track"
-							role="slider"
-							aria-valuemin="0"
-							aria-orientation="horizontal"
-							aria-label="Current programme position"
-							data-i18n-attr="aria-label:catchup.progressAriaLabel"
-							class="group block w-full py-3 border-0 bg-transparent p-0 cursor-pointer outline-none">
-							<div
-								class="pointer-events-none block h-1.25 w-full rounded-full bg-line
-									group-focus-visible:ring-2 group-focus-visible:ring-accent">
-								<span
-									class="block h-full rounded-full bg-accent transition-[width] duration-200 ease-out motion-reduce:transition-none"
-									style="width: 0%"></span>
-							</div>
-						</button>
 					</div>
 
 					<div
@@ -341,7 +322,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 			width: clamp(7rem, 16vw, 11rem);
 			box-shadow:
 				0 0 0 1px var(--color-line),
-				0 20px 40px -12px color-mix(in oklch, var(--color-accent) 38%, transparent),
+				0 0 40px 8px color-mix(in oklch, var(--color-accent) 38%, transparent),
 				0 8px 20px -6px oklch(0.13 0.02 265 / 0.5);
 		}
 		.radio-display__art-fallback {

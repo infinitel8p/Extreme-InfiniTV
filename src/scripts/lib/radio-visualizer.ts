@@ -213,11 +213,11 @@ export function attachRadioVisualizer(
       setEnergy(smoothedEnergy * 0.85)
 
       const breath = allowBreath
-        ? 0.32 + 0.13 * Math.sin(timestamp / BREATH_DIVISOR)
-        : 0.32
+        ? 0.55 + 0.18 * Math.abs(Math.sin(timestamp / BREATH_DIVISOR))
+        : 0.55
 
       ctx2d.globalAlpha = breath * mountFade
-      ctx2d.lineWidth = 1.25
+      ctx2d.lineWidth = 2
       ctx2d.beginPath()
       ctx2d.moveTo(2, midY)
       ctx2d.lineTo(width - 2, midY)

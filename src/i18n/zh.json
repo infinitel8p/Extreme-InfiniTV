@@ -605,7 +605,7 @@
   "catchup.watchingLabel": "回看",
   "catchup.failed": "无法开始回看 - 提供商可能不支持回看功能",
   "catchup.notAvailable": "此频道不提供回看",
-  "catchup.progressAriaLabel": "当前节目位置",
+  "timeshift.seekFailed": "无法跳转到该位置 - 已返回直播",
   "stream.menu.play": "播放",
   "stream.menu.test": "测试流媒体",
   "stream.menu.copy": "复制流媒体 URL",

@@ -912,6 +912,19 @@ export function displayedToUtcMs(playlistId, displayedMs) {
   return displayedMs - state.offsetMin * 60 * 1000
 }
 
+/**
+ * Inverse of displayedToUtcMs(): shifts a UTC instant into the display-shifted space programmes are stored in.
+ *
+ * @param {string} playlistId
+ * @param {number} utcMs
+ * @returns {number}
+ */
+export function utcToDisplayedMs(playlistId, utcMs) {
+  const state = playlistId ? memCache.get(playlistId) : null
+  if (!state || !state.offsetMin) return utcMs
+  return utcMs + state.offsetMin * 60 * 1000
+}
+
 export function invalidateEpgPlaylist(playlistId) {
   if (!playlistId) return
   memCache.delete(playlistId)

@@ -605,7 +605,7 @@
   "catchup.watchingLabel": "Replay",
   "catchup.failed": "Impossibile avviare il replay - il provider potrebbe non supportare il replay",
   "catchup.notAvailable": "Questo canale non offre il replay",
-  "catchup.progressAriaLabel": "Posizione attuale del programma",
+  "timeshift.seekFailed": "Impossibile saltare a quel punto - tornato alla diretta",
   "stream.menu.play": "Riproduci",
   "stream.menu.test": "Testa lo stream",
   "stream.menu.copy": "Copia URL stream",

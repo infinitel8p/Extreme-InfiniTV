@@ -158,6 +158,39 @@ describe("expandCatchupTemplate", () => {
   })
 })
 
+describe("expandCatchupTemplate ${(b)}/${(e)} device-local tokens", () => {
+  const startUtcMs = new Date(2026, 5, 10, 12, 30, 0).getTime()
+  const stopUtcMs = new Date(2026, 5, 10, 13, 30, 0).getTime()
+
+  it("expands the TiviMate/diyp playseek template with begin and end instants", () => {
+    const nowUtcMs = stopUtcMs
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs }
+    expect(expandCatchupTemplate("?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}", ctx)).toBe(
+      "?playseek=20260610123000-20260610133000",
+    )
+  })
+
+  it("clamps the (e) end instant to now when the programme is still in progress", () => {
+    const nowUtcMs = new Date(2026, 5, 10, 13, 0, 0).getTime()
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs }
+    expect(expandCatchupTemplate("${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}", ctx)).toBe(
+      "20260610123000-20260610130000",
+    )
+  })
+
+  it("formats a mixed/unpadded pattern correctly", () => {
+    const nowUtcMs = stopUtcMs
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs }
+    expect(expandCatchupTemplate("${(b)yyyy-MM-dd H:m:s}", ctx)).toBe("2026-06-10 12:30:0")
+  })
+
+  it("leaves unrecognized ${(x)...} placeholders untouched", () => {
+    const nowUtcMs = stopUtcMs
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs }
+    expect(expandCatchupTemplate("${(x)yyyyMMdd}-{bogus}", ctx)).toBe("${(x)yyyyMMdd}-{bogus}")
+  })
+})
+
 describe("buildM3uCatchupUrl", () => {
   const startUtcMs = Date.UTC(2024, 0, 1, 0, 0, 0)
   const stopUtcMs = startUtcMs + 3600000
@@ -188,6 +221,20 @@ describe("buildM3uCatchupUrl", () => {
     }
     expect(buildM3uCatchupUrl(channel, ctx)).toBe(
       "http://host/live.m3u8?utc=1704067200&lutc=1704074400",
+    )
+  })
+
+  it("appends an expanded ${(b)}/${(e)} playseek template in append mode", () => {
+    const channel: CatchupCapableChannel = {
+      url: "https://user:pass@host:33333/rtsp/1.2.3.4/PLTV/x/y/z/abc_0.smil",
+      catchup: "append",
+      catchupSource: "?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}",
+    }
+    const startUtcMs = new Date(2026, 5, 10, 12, 30, 0).getTime()
+    const stopUtcMs = new Date(2026, 5, 10, 13, 30, 0).getTime()
+    const playseekCtx = { startUtcMs, stopUtcMs, nowUtcMs: stopUtcMs }
+    expect(buildM3uCatchupUrl(channel, playseekCtx)).toBe(
+      "https://user:pass@host:33333/rtsp/1.2.3.4/PLTV/x/y/z/abc_0.smil?playseek=20260610123000-20260610133000",
     )
   })
 

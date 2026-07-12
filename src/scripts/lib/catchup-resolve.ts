@@ -12,6 +12,7 @@ import {
   parseXtreamStyleLiveUrl,
   type XtreamTimeshiftForm,
 } from "@/scripts/lib/catchup.ts"
+import { splitMountStart } from "@/scripts/lib/timeshift-math.ts"
 
 export interface CatchupRequestChannel {
   id: number | string
@@ -33,6 +34,8 @@ export interface CatchupRequest {
 export interface CatchupResolution {
   src: string
   kindHint: "hls" | "ts"
+  /** Actual start instant of the mounted segment; the virtual-timeline zero for player.currentTime(). */
+  effectiveStartUtcMs: number
 }
 
 export interface CatchupCreds {
@@ -79,12 +82,16 @@ async function probeVariantUrl(url: string): Promise<boolean> {
       headers: { Range: "bytes=0-1" },
       signal: controller.signal,
     })
-    return response.ok || response.status === 206
+    const reachable = response.ok || response.status === 206
+    // Timeshift streams are endless; cancel so the probe doesn't hold a provider connection slot.
+    try { response.body?.cancel?.() } catch {}
+    return reachable
   } catch (err) {
     log.warn("[xt:catchup] variant probe failed:", url, String((err as Error)?.message || err))
     return false
   } finally {
     clearTimeout(timer)
+    try { controller.abort() } catch {}
   }
 }
 
@@ -154,7 +161,11 @@ async function resolveXtreamCatchup(
     })
     if (await probeVariantUrl(url)) {
       writeCachedVariant(playlistId, variant)
-      return { src: url, kindHint: extensionToKindHint(variant.extension) }
+      return {
+        src: url,
+        kindHint: extensionToKindHint(variant.extension),
+        effectiveStartUtcMs: splitMountStart(startUtcMs, "minute").mountStartUtcMs,
+      }
     }
   }
   log.warn("[xt:catchup] all timeshift variants failed", { playlistId, streamId: base.streamId })
@@ -175,7 +186,7 @@ export async function resolveCatchupSrc(
     if (!url) return null
     const path = url.split("?")[0] || ""
     const kindHint: "hls" | "ts" = /\.m3u8$/i.test(path) ? "hls" : "ts"
-    return { src: url, kindHint }
+    return { src: url, kindHint, effectiveStartUtcMs: splitMountStart(startUtcMs, "second").mountStartUtcMs }
   }
 
   if (mode === "xc") {

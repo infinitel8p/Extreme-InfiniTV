@@ -605,7 +605,7 @@
   "catchup.watchingLabel": "Repetición",
   "catchup.failed": "No se pudo iniciar la repetición - puede que el proveedor no admita la repetición",
   "catchup.notAvailable": "Este canal no ofrece repetición",
-  "catchup.progressAriaLabel": "Posición actual del programa",
+  "timeshift.seekFailed": "No se pudo saltar a ese punto - se volvió al directo",
   "stream.menu.play": "Reproducir",
   "stream.menu.test": "Probar transmisión",
   "stream.menu.copy": "Copiar URL del stream",

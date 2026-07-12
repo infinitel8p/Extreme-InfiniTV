@@ -29,14 +29,24 @@ async function providerFetchWithTimeout(url, init, ms, label) {
     typeof AbortController !== "undefined" ? new AbortController() : null
   const timer = controller ? setTimeout(() => controller.abort(), ms) : null
   try {
-    return await withTimeout(
+    const response = await withTimeout(
       providerFetch(url, { ...init, signal: controller?.signal }),
       ms,
       label
     )
+    response._probeAbort = () => {
+      try { response.body?.cancel?.() } catch {}
+      try { controller?.abort() } catch {}
+    }
+    return response
   } finally {
     if (timer) clearTimeout(timer)
   }
+}
+
+/** Live streams are endless; aborting right after the needed data is read keeps probes from holding a provider connection slot. */
+function releaseProbeResponse(response) {
+  try { response?._probeAbort?.() } catch {}
 }
 
 function resolveUrl(base, ref) {
@@ -44,6 +54,15 @@ function resolveUrl(base, ref) {
     return new URL(ref, base).toString()
   } catch {
     return ref
+  }
+}
+
+function hasUrlCredentials(url) {
+  try {
+    const parsed = new URL(url)
+    return Boolean(parsed.username || parsed.password)
+  } catch {
+    return false
   }
 }
 
@@ -131,7 +150,7 @@ async function headOrGet(url) {
       "HEAD"
     )
     headInfo = readMeta(response, "HEAD", start)
-    try { response.body?.cancel?.() } catch {}
+    releaseProbeResponse(response)
     if (headInfo.ok) return headInfo
   } catch (headError) {
     headInfo = { error: String(headError?.message || headError) }
@@ -147,7 +166,7 @@ async function headOrGet(url) {
     )
     const meta = readMeta(response, "GET (range)", getStart)
 
-    try { response.body?.cancel?.() } catch {}
+    releaseProbeResponse(response)
     if (headInfo?.error) meta.fallback = headInfo.error
     else if (headInfo?.status) meta.headStatus = headInfo.status
     return meta
@@ -184,6 +203,7 @@ async function probeWebViewFetch(url) {
     try {
       response.body?.cancel?.()
     } catch {}
+    try { controller?.abort() } catch {}
     return {
       ok: response.ok || response.status === 206,
       status: response.status,
@@ -374,8 +394,13 @@ export async function diagnoseStream(url, onUpdate) {
 
   // probe through the WebView's own fetch
   const probeTarget = report.firstSegment?.url || url
-  report.webviewProbe = await probeWebViewFetch(probeTarget)
-  report.webviewProbe.target = probeTarget
+  if (hasUrlCredentials(probeTarget)) {
+    // WebView fetch always rejects credentialed URLs; probing would misreport CORS.
+    report.webviewProbe = { skipped: true, target: probeTarget }
+  } else {
+    report.webviewProbe = await probeWebViewFetch(probeTarget)
+    report.webviewProbe.target = probeTarget
+  }
   emit()
 
   report.finishedAt = Date.now()
