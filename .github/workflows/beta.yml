@@ -40,7 +40,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -68,17 +68,19 @@ jobs:
           set -euo pipefail
           SHORT_SHA=$(git rev-parse --short HEAD)
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          REPO_URL="https://github.com/${GITHUB_REPOSITORY}"
+          COMMIT_FORMAT="- %s ([\`%h\`](${REPO_URL}/commit/%H))"
           {
-            echo "Automated beta build from \`${BRANCH_NAME}\` @ \`${SHORT_SHA}\`."
+            echo "Automated beta build from [\`${BRANCH_NAME}\`](${REPO_URL}/tree/${BRANCH_NAME}) @ [\`${SHORT_SHA}\`](${REPO_URL}/commit/${GITHUB_SHA})."
             echo
             if [ -n "$PREV_TAG" ]; then
-              echo "### Commits since ${PREV_TAG}"
+              echo "### Commits since [\`${PREV_TAG}\`](${REPO_URL}/releases/tag/${PREV_TAG})"
               echo
-              git log --no-merges --pretty=format:'- %s (%h)' "${PREV_TAG}..HEAD"
+              git log --no-merges --pretty=format:"$COMMIT_FORMAT" "${PREV_TAG}..HEAD"
             else
               echo "### Commits"
               echo
-              git log --no-merges --pretty=format:'- %s (%h)'
+              git log --no-merges --pretty=format:"$COMMIT_FORMAT"
             fi
           } > "$RUNNER_TEMP/body.md"
           BODY=$(cat "$RUNNER_TEMP/body.md")
@@ -106,11 +108,11 @@ jobs:
             args: "--bundles appimage"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -154,16 +156,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
