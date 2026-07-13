@@ -235,8 +235,11 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 					<div
 						id="epg"
 						class="border-t border-line overflow-auto custom-scroll md:landscape:flex-1 md:landscape:min-h-0 lg:flex-1 lg:min-h-0">
-						<div data-i18n="livetv.epgPanelHeading" class="text-sm font-medium text-fg sticky top-0 bg-surface pt-3 pb-2 z-10">EPG</div>
-						<div id="epg-list" class="space-y-2 text-sm pb-3"></div>
+						<div class="flex items-baseline justify-between gap-2 text-sm font-medium text-fg sticky top-0 bg-surface pt-3 pb-2 z-10">
+							<span data-i18n="livetv.epgPanelHeading" class="ps-1">EPG</span>
+							<span id="epg-day-indicator" class="pe-1 text-2xs font-semibold uppercase tracking-wide text-fg-3"></span>
+						</div>
+						<div id="epg-list" class="space-y-2 text-sm px-1 pb-3"></div>
 					</div>
 				</div>
 			</section>

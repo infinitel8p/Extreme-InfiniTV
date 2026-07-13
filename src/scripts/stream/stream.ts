@@ -14,7 +14,7 @@ import {
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
 import { debounce } from "@/scripts/lib/debounce.js"
-import { t, initI18n } from "@/scripts/lib/i18n.js"
+import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
 import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import {
   ensureLoaded as ensurePrefsLoaded,
@@ -96,7 +96,7 @@ import { resolveCatchupSrc } from "@/scripts/lib/catchup-resolve.ts"
 import { clampSeekTarget, shouldReturnToLive } from "@/scripts/lib/timeshift-math.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
-// One "page" of the side EPG panel's past window; scrolling to the top loads another, up to a 7-day cap.
+// One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
 const EPG_SIDE_PANEL_PAST_WINDOW_MS = 24 * 60 * 60 * 1000
 const EPG_SIDE_PANEL_MAX_PAST_DAYS = 7
 
@@ -213,6 +213,7 @@ const searchEl = document.getElementById("search")
 const currentEl = document.getElementById("current")
 const epgList = document.getElementById("epg-list")
 const epgPanel = document.getElementById("epg")
+const epgDayIndicator = document.getElementById("epg-day-indicator")
 
 let activePlaylistId = ""
 let activePlaylistTitle = ""
@@ -2610,6 +2611,8 @@ async function playCatchup(channel, opts) {
     catchupId,
   }
   renderCatchupCurrentRow(channel, title)
+  // Xtream's side panel only lists upcoming entries, so the currently-airing one already carries the same-channel-live highlight; no repaint needed there.
+  if (hasDirectUrl(channel.id)) paintSidePanelFromXmltv(channel.id)
 
   const seq = ++playSeq
   const mime = resolution.kindHint === "hls" ? "application/x-mpegURL" : "video/mp2t"
@@ -2919,14 +2922,78 @@ const fmtTime = (ts) => {
 let epgListData = []
 let epgListChannelId = 0
 let epgListChannelName = ""
-// Number of EPG_SIDE_PANEL_PAST_WINDOW_MS pages currently shown; grows as the user scrolls the side panel to the top.
+// Number of EPG_SIDE_PANEL_PAST_WINDOW_MS pages currently shown; grows via the "Load earlier" button.
 let epgSidePanelPastPages = 1
 let epgSidePanelExtending = false
+
+const epgDayKey = (ms) => new Date(ms).toDateString()
+
+function epgDayLabel(ms) {
+  const date = new Date(ms)
+  const startOfDay = (value) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime()
+  const diffDays = Math.round((startOfDay(date) - startOfDay(new Date())) / (24 * 60 * 60 * 1000))
+  if (diffDays === 0) return t("epg.today")
+  if (diffDays === -1) return t("epg.yesterday")
+  if (diffDays === 1) return t("epg.tomorrow")
+  return new Intl.DateTimeFormat(getActiveLocale(), {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(date)
+}
+
+function renderEpgDaySeparator(ms) {
+  return `<div class="epg-day-sep flex items-center gap-2 pt-2 pb-0.5 px-1 text-2xs font-semibold uppercase tracking-wide text-fg-3">${escapeHtml(epgDayLabel(ms))}</div>`
+}
+
+/** Reflects the day whose entries are scrolled under the sticky heading, since separators no longer pin there themselves. */
+function updateEpgDayIndicator() {
+  if (!epgDayIndicator || !epgPanel) return
+  if (!epgListData.length) {
+    if (epgDayIndicator.textContent) epgDayIndicator.textContent = ""
+    return
+  }
+  const heading = epgPanel.querySelector(".sticky")
+  const stickyHeadingHeight = heading instanceof HTMLElement ? heading.offsetHeight : 0
+  const boundary = epgPanel.getBoundingClientRect().top + stickyHeadingHeight
+  const separators = epgList ? Array.from(epgList.querySelectorAll(".epg-day-sep")) : []
+  let currentLabel = ""
+  for (const separator of separators) {
+    if (separator.getBoundingClientRect().top <= boundary + 2) currentLabel = separator.textContent || ""
+  }
+  if (!currentLabel) currentLabel = epgDayLabel(epgListData[0].start)
+  if (epgDayIndicator.textContent !== currentLabel) epgDayIndicator.textContent = currentLabel
+}
+
+let epgDayIndicatorScrollPending = false
+epgPanel?.addEventListener(
+  "scroll",
+  () => {
+    if (epgDayIndicatorScrollPending) return
+    epgDayIndicatorScrollPending = true
+    requestAnimationFrame(() => {
+      epgDayIndicatorScrollPending = false
+      updateEpgDayIndicator()
+    })
+  },
+  { passive: true },
+)
+
+/** Whether the entry starting at `entryStartMs` is the one actually mounted right now, accounting for an active catch-up/timeshift session. */
+function isEpgEntryPlaying(entryStartMs, isLive, isM3uSource) {
+  if (catchupSession) {
+    if (catchupSession.kind !== "programme" || catchupSession.channelId !== epgListChannelId) return false
+    const entryStartUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entryStartMs) : entryStartMs
+    return Math.abs(entryStartUtcMs - catchupSession.startUtcMs) <= 1000
+  }
+  return isLive && currentlyPlayingId === epgListChannelId
+}
 
 async function loadEPG(streamId) {
   if (!epgList) return
   epgList.innerHTML = `<div class="text-fg-3">Loading EPG…</div>`
   epgListData = []
+  if (epgDayIndicator) epgDayIndicator.textContent = ""
   epgListChannelId = streamId
   epgListChannelName = all.find((c) => c.id === streamId)?.name || ""
   try {
@@ -2944,6 +3011,7 @@ async function loadEPG(streamId) {
       : []
     if (!items.length) {
       epgList.innerHTML = `<div class="text-fg-3">No EPG available.</div>`
+      if (epgDayIndicator) epgDayIndicator.textContent = ""
       return
     }
 
@@ -2957,21 +3025,35 @@ async function loadEPG(streamId) {
       }))
       .filter((p) => Number.isFinite(p.start) && Number.isFinite(p.stop) && p.stop > p.start)
 
+    let previousDayKey = epgDayKey(now)
     epgList.innerHTML = epgListData
       .map((p, idx) => {
         const isLive = p.start <= now && now < p.stop
+        const isPlaying = isEpgEntryPlaying(p.start, isLive, false)
         const start = fmtTime(p.start / 1000)
         const end = fmtTime(p.stop / 1000)
         const title = escapeHtml(p.title)
         const desc = escapeHtml(p.desc)
+        const dayKey = epgDayKey(p.start)
+        const daySeparator = dayKey !== previousDayKey ? renderEpgDaySeparator(p.start) : ""
+        previousDayKey = dayKey
+        const rowClass = isPlaying
+          ? "bg-accent-soft ring-1 ring-accent/30 hover:bg-accent/20"
+          : isLive
+          ? "bg-surface-2 hover:bg-surface-3 ring-1 ring-accent/30"
+          : "bg-surface-2 hover:bg-surface-3"
+        const dot = isLive
+          ? '<span class="size-1.5 rounded-full bg-accent shrink-0" aria-hidden="true"></span>'
+          : ""
         return `
-          <button type="button" data-epg-idx="${idx}"
+          ${daySeparator}
+          <button type="button" data-epg-idx="${idx}"${isPlaying ? ' data-now-playing="true" aria-current="true"' : ""}
             class="epg-entry block w-full min-h-11 text-left rounded-lg px-3 py-2 outline-none transition-colors
-                   ${isLive ? "bg-accent-soft ring-1 ring-accent/30 hover:bg-accent/20" : "bg-surface-2 hover:bg-surface-3"}
+                   ${rowClass}
                    focus-visible:ring-2 focus-visible:ring-accent">
             <div class="flex items-center justify-between gap-2">
               <div class="flex items-center gap-2 min-w-0">
-                ${isLive ? '<span class="size-1.5 rounded-full bg-accent shrink-0" aria-label="Now playing"></span>' : ""}
+                ${dot}
                 <div class="font-medium text-fg truncate">${title}</div>
               </div>
               <div class="text-xs text-fg-3 tabular-nums shrink-0">${start}–${end}</div>
@@ -2980,9 +3062,11 @@ async function loadEPG(streamId) {
           </button>`
       })
       .join("")
+    updateEpgDayIndicator()
   } catch (e) {
     log.error(e)
     epgList.innerHTML = `<div class="text-bad">Failed to load EPG.</div>`
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
   }
 }
 
@@ -2997,6 +3081,7 @@ function paintSidePanelFromXmltv(streamId) {
   const channel = all.find((entry) => entry.id === streamId)
   if (!channel) {
     epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
     return
   }
   const isNewChannelPaint = streamId !== epgListChannelId
@@ -3008,6 +3093,7 @@ function paintSidePanelFromXmltv(streamId) {
   if (!tvgId) {
     epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.sidePanelNoMapping"))}</div>`
     epgListData = []
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
     return
   }
 
@@ -3016,14 +3102,16 @@ function paintSidePanelFromXmltv(streamId) {
   if (!programmes.length) {
     epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
     epgListData = []
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
     return
   }
 
   const now = Date.now()
   const upcoming = programmes.filter((programme) => programme.stop >= now).slice(0, 10)
-  // Past programmes: archive-capable channels only, capped to the 8 most recent until scrolled to the top.
+  const supportsCatchup = channelSupportsCatchup(channel)
+  // Past programmes: archive-capable channels only, capped to the 8 most recent until "Load earlier" is pressed.
   const pastWindowMs = epgSidePanelPastPages * EPG_SIDE_PANEL_PAST_WINDOW_MS
-  const pastWithinWindow = channelSupportsCatchup(channel)
+  const pastWithinWindow = supportsCatchup
     ? programmes.filter((programme) => programme.stop < now && now - programme.stop <= pastWindowMs)
     : []
   const past = epgSidePanelPastPages > 1 ? pastWithinWindow : pastWithinWindow.slice(-8)
@@ -3031,13 +3119,27 @@ function paintSidePanelFromXmltv(streamId) {
   if (!combined.length) {
     epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
     epgListData = []
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
     return
   }
 
   epgListData = combined
-  epgList.innerHTML = combined
+  const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
+  const canLoadEarlier = supportsCatchup && epgSidePanelPastPages < maxPastPages
+  const loadEarlierHtml = canLoadEarlier
+    ? `<button type="button" data-epg-load-earlier
+         class="block w-full min-h-11 rounded-lg bg-surface-2 hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-accent text-sm text-fg-2 transition-colors">${escapeHtml(t("livetv.epgLoadEarlier"))}</button>`
+    : ""
+
+  let previousDayKey = epgDayKey(now)
+  let playingIndex = -1
+  let liveIndex = -1
+  const rowsHtml = combined
     .map((programme, idx) => {
       const isLive = programme.start <= now && now < programme.stop
+      const isPlaying = isEpgEntryPlaying(programme.start, isLive, true)
+      if (isPlaying) playingIndex = idx
+      if (isLive) liveIndex = idx
       const isPast = programme.stop <= now
       const start = fmtTime(programme.start / 1000)
       const end = fmtTime(programme.stop / 1000)
@@ -3046,14 +3148,26 @@ function paintSidePanelFromXmltv(streamId) {
       const replayBadge = isPast
         ? `<span class="inline-flex shrink-0 items-center rounded-md border border-line bg-surface-2 px-1.5 text-2xs font-medium text-fg-3">${escapeHtml(t("catchup.badge"))}</span>`
         : ""
+      const dayKey = epgDayKey(programme.start)
+      const daySeparator = dayKey !== previousDayKey ? renderEpgDaySeparator(programme.start) : ""
+      previousDayKey = dayKey
+      const rowClass = isPlaying
+        ? "bg-accent-soft ring-1 ring-accent/30 hover:bg-accent/20"
+        : isLive
+        ? "bg-surface-2 hover:bg-surface-3 ring-1 ring-accent/30"
+        : "bg-surface-2 hover:bg-surface-3"
+      const dot = isLive
+        ? '<span class="size-1.5 rounded-full bg-accent shrink-0" aria-hidden="true"></span>'
+        : ""
       return `
-        <button type="button" data-epg-idx="${idx}"
+        ${daySeparator}
+        <button type="button" data-epg-idx="${idx}"${isPlaying ? ' data-now-playing="true" aria-current="true"' : ""}
           class="epg-entry block w-full min-h-11 text-left rounded-lg px-3 py-2 outline-none transition-colors
-                 ${isLive ? "bg-accent-soft ring-1 ring-accent/30 hover:bg-accent/20" : "bg-surface-2 hover:bg-surface-3"}
+                 ${rowClass}
                  focus-visible:ring-2 focus-visible:ring-accent">
           <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0">
-              ${isLive ? '<span class="size-1.5 rounded-full bg-accent shrink-0" aria-label="Now playing"></span>' : ""}
+              ${dot}
               <div class="font-medium text-fg truncate">${title}</div>
               ${replayBadge}
             </div>
@@ -3063,18 +3177,21 @@ function paintSidePanelFromXmltv(streamId) {
         </button>`
     })
     .join("")
+  epgList.innerHTML = loadEarlierHtml + rowsHtml
 
-  // Fresh channel tune lands the panel on the live/upcoming entry; same-channel repaints keep position.
+  // Fresh channel tune lands the panel on the playing/live/upcoming entry; same-channel repaints keep position.
   if (isNewChannelPaint && epgPanel) {
-    const liveIndex = combined.findIndex((programme) => programme.start <= now && now < programme.stop)
-    const scrollIndex = liveIndex >= 0 ? liveIndex : past.length
+    const scrollIndex = playingIndex >= 0 ? playingIndex : liveIndex >= 0 ? liveIndex : past.length
     const targetEntry = epgList.querySelector(`[data-epg-idx="${scrollIndex}"]`)
     if (targetEntry instanceof HTMLElement) {
       const panelRect = epgPanel.getBoundingClientRect()
       const targetRect = targetEntry.getBoundingClientRect()
-      epgPanel.scrollTop = Math.max(0, targetRect.top - panelRect.top - 8)
+      const heading = epgPanel.querySelector(".sticky")
+      const stickyHeadingHeight = heading instanceof HTMLElement ? heading.offsetHeight : 0
+      epgPanel.scrollTop = Math.max(0, epgPanel.scrollTop + (targetRect.top - panelRect.top) - stickyHeadingHeight - 8)
     }
   }
+  updateEpgDayIndicator()
 }
 
 /** Loads one more day of past programmes into the M3U side panel, re-rendering while preserving scroll position. */
@@ -3088,20 +3205,25 @@ function extendSidePanelPastWindow() {
   if (epgSidePanelPastPages >= maxPastPages) return
 
   epgSidePanelExtending = true
+  const focusWasInList = !!epgList && epgList.contains(document.activeElement)
   epgSidePanelPastPages = Math.min(epgSidePanelPastPages + 1, maxPastPages)
   const previousScrollHeight = epgPanel?.scrollHeight ?? 0
   const previousScrollTop = epgPanel?.scrollTop ?? 0
   paintSidePanelFromXmltv(streamId)
   if (epgPanel) epgPanel.scrollTop = previousScrollTop + (epgPanel.scrollHeight - previousScrollHeight)
+  if (focusWasInList) {
+    const nextFocusTarget = epgList?.querySelector("[data-epg-load-earlier]") ?? epgList?.querySelector("[data-epg-idx]")
+    if (nextFocusTarget instanceof HTMLElement) nextFocusTarget.focus({ preventScroll: true })
+  }
   epgSidePanelExtending = false
 }
 
-epgPanel?.addEventListener("scroll", () => {
-  if (epgPanel.scrollTop <= 40) extendSidePanelPastWindow()
-})
-
 epgList?.addEventListener("click", async (e) => {
   const target = /** @type {HTMLElement | null} */ (e.target)
+  if (target?.closest("[data-epg-load-earlier]")) {
+    extendSidePanelPastWindow()
+    return
+  }
   const btn = target?.closest("[data-epg-idx]")
   if (!btn) return
   const idx = Number(/** @type {HTMLElement} */ (btn).dataset.epgIdx)
