@@ -609,6 +609,8 @@
   "catchup.failed": "Tidak dapat memulai tayangan ulang - penyedia mungkin tidak mendukung catch-up",
   "catchup.notAvailable": "Saluran ini tidak menyediakan tayangan ulang",
   "timeshift.seekFailed": "Tidak dapat melompat ke titik itu - kembali ke siaran langsung",
+  "timeshift.behindLive": "{time} di belakang siaran langsung",
+  "timeshift.seekingTo": "Beralih ke {time}",
   "stream.menu.play": "Putar",
   "stream.menu.test": "Uji streaming",
   "stream.menu.copy": "Salin URL streaming",

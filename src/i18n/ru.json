@@ -609,6 +609,8 @@
   "catchup.failed": "Не удалось запустить архив - возможно, провайдер не поддерживает архивное воспроизведение",
   "catchup.notAvailable": "Для этого канала архив недоступен",
   "timeshift.seekFailed": "Не удалось перейти к этому моменту - возврат в эфир",
+  "timeshift.behindLive": "{time} позади эфира",
+  "timeshift.seekingTo": "Переход к {time}",
   "stream.menu.play": "Смотреть",
   "stream.menu.test": "Проверить поток",
   "stream.menu.copy": "Копировать URL потока",

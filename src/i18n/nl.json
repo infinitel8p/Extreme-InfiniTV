@@ -609,6 +609,8 @@
   "catchup.failed": "Kon herhaling niet starten - de provider ondersteunt mogelijk geen terugkijken",
   "catchup.notAvailable": "Dit kanaal biedt geen terugkijkfunctie",
   "timeshift.seekFailed": "Kon niet naar dat punt springen - terug naar live",
+  "timeshift.behindLive": "{time} achter live",
+  "timeshift.seekingTo": "Naar {time} springen",
   "stream.menu.play": "Afspelen",
   "stream.menu.test": "Stream testen",
   "stream.menu.copy": "Stream-URL kopiëren",

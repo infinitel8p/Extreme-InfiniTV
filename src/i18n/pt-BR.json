@@ -609,6 +609,8 @@
   "catchup.failed": "Não foi possível iniciar a repetição - o provedor pode não oferecer suporte a catchup",
   "catchup.notAvailable": "Este canal não oferece repetição",
   "timeshift.seekFailed": "Não foi possível pular para esse ponto - voltou ao vivo",
+  "timeshift.behindLive": "{time} atrás do ao vivo",
+  "timeshift.seekingTo": "Indo para {time}",
   "stream.menu.play": "Reproduzir",
   "stream.menu.test": "Testar transmissão",
   "stream.menu.copy": "Copiar URL do stream",

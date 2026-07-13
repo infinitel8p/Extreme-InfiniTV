@@ -609,6 +609,8 @@
   "catchup.failed": "Tekrar oynatma başlatılamadı - sağlayıcı catchup özelliğini desteklemiyor olabilir",
   "catchup.notAvailable": "Bu kanal tekrar izleme sunmuyor",
   "timeshift.seekFailed": "O noktaya atlanamadı - canlıya dönüldü",
+  "timeshift.behindLive": "Canlının {time} gerisinde",
+  "timeshift.seekingTo": "{time} konumuna atlanıyor",
   "stream.menu.play": "Oynat",
   "stream.menu.test": "Yayını test et",
   "stream.menu.copy": "Yayın URL'sini kopyala",

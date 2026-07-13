@@ -609,6 +609,8 @@
   "catchup.failed": "دوبارہ نشر شروع نہیں ہو سکی - ممکن ہے فراہم کنندہ یہ سہولت فراہم نہ کرتا ہو",
   "catchup.notAvailable": "یہ چینل دوبارہ نشر کی سہولت فراہم نہیں کرتا",
   "timeshift.seekFailed": "اس مقام پر نہیں جا سکے - لائیو پر واپس آ گئے",
+  "timeshift.behindLive": "لائیو سے {time} پیچھے",
+  "timeshift.seekingTo": "{time} پر جا رہے ہیں",
   "stream.menu.play": "چلائیں",
   "stream.menu.test": "اسٹریم آزمائیں",
   "stream.menu.copy": "اسٹریم URL کاپی کریں",

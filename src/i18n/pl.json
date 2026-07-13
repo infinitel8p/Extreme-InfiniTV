@@ -609,6 +609,8 @@
   "catchup.failed": "Nie udało się uruchomić powtórki - dostawca może nie obsługiwać funkcji catch-up",
   "catchup.notAvailable": "Ten kanał nie oferuje powtórek",
   "timeshift.seekFailed": "Nie udało się przejść do tego miejsca - powrócono do transmisji na żywo",
+  "timeshift.behindLive": "{time} za transmisją na żywo",
+  "timeshift.seekingTo": "Przechodzenie do {time}",
   "stream.menu.play": "Odtwórz",
   "stream.menu.test": "Testuj stream",
   "stream.menu.copy": "Kopiuj adres URL streamu",

@@ -609,6 +609,8 @@
   "catchup.failed": "Impossibile avviare il replay - il provider potrebbe non supportare il replay",
   "catchup.notAvailable": "Questo canale non offre il replay",
   "timeshift.seekFailed": "Impossibile saltare a quel punto - tornato alla diretta",
+  "timeshift.behindLive": "{time} dietro la diretta",
+  "timeshift.seekingTo": "Passaggio a {time}",
   "stream.menu.play": "Riproduci",
   "stream.menu.test": "Testa lo stream",
   "stream.menu.copy": "Copia URL stream",

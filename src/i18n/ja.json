@@ -609,6 +609,8 @@
   "catchup.failed": "リプレイを開始できませんでした - プロバイダーが見逃し配信に対応していない可能性があります",
   "catchup.notAvailable": "このチャンネルは見逃し配信に対応していません",
   "timeshift.seekFailed": "そこへジャンプできませんでした - ライブに戻りました",
+  "timeshift.behindLive": "ライブから{time}遅れ",
+  "timeshift.seekingTo": "{time}へ移動中",
   "stream.menu.play": "再生",
   "stream.menu.test": "ストリームをテスト",
   "stream.menu.copy": "ストリーム URL をコピー",
