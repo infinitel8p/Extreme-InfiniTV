@@ -3131,9 +3131,13 @@ async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
     return
   }
 
+  // Non-terminating profiles (e.g. playseek-dialect) follow live through the current programme's end instead of stopping at "now".
+  const windowAtTarget = !profile.terminates ? resolveProgrammeWindowAt(channel, remountTargetUtcMs) : null
+  const remountStopUtcMs = windowAtTarget && windowAtTarget.stopUtcMs > nowUtcMs ? windowAtTarget.stopUtcMs : nowUtcMs
+
   void playCatchup(channel, {
     startUtcMs: remountTargetUtcMs,
-    stopUtcMs: nowUtcMs,
+    stopUtcMs: remountStopUtcMs,
     title: resolveProgrammeTitleAt(channel, remountTargetUtcMs),
     kind: "timeshift",
   })

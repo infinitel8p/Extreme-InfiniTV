@@ -196,10 +196,15 @@ function formatColonPattern(date: Date, pattern: string): string {
   })
 }
 
+/** True for playseek/tvdr-dialect templates (rtp2httpd contract): the server accepts a future end instant and keeps streaming toward it. */
+export function templateUsesPlayseek(template: string): boolean {
+  return /(?:^|[?&])(?:playseek|tvdr)=/i.test(template)
+}
+
 /** Expand pvr.iptvsimple-style and TiviMate/diyp-style (`${(b)pattern}`/`${(e)pattern}`) catchup placeholders; unrecognized ones pass through untouched. */
 export function expandCatchupTemplate(template: string, ctx: CatchupTemplateContext): string {
   const correctionMs = (ctx.catchupCorrectionHours || 0) * 3600_000
-  const rawEndMs = Math.min(ctx.stopUtcMs, ctx.nowUtcMs)
+  const rawEndMs = templateUsesPlayseek(template) ? ctx.stopUtcMs : Math.min(ctx.stopUtcMs, ctx.nowUtcMs)
   // duration is a raw end-start delta (both operands would shift equally, so correction is a no-op here).
   const durationSec = Math.floor((rawEndMs - ctx.startUtcMs) / 1000)
   // Kodi parity: only start/end get corrected; "now" stays the real wall clock, so a positive
@@ -357,6 +362,8 @@ export function streamProfileFor(channel: CatchupCapableChannel): StreamProfile 
   if (mode === "vod") return { granularitySeconds: 1, terminates: true }
 
   const source = channel.catchupSource || null
+  // playseek ends expand unclamped, so the stream follows live rather than terminating.
+  if (source && templateUsesPlayseek(source)) return { granularitySeconds: 1, terminates: false }
   if (source) return { granularitySeconds: 1, terminates: templateHasEndToken(source) }
   return { granularitySeconds: 1, terminates: false }
 }

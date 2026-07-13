@@ -12,6 +12,7 @@ import {
   buildM3uCatchupUrl,
   parseXtreamStyleLiveUrl,
   templateHasEndToken,
+  templateUsesPlayseek,
   streamProfileFor,
   XTREAM_STREAM_PROFILE,
   type CatchupCapableChannel,
@@ -251,11 +252,30 @@ describe("expandCatchupTemplate ${(b)}/${(e)} device-local tokens", () => {
     )
   })
 
-  it("clamps the (e) end instant to now when the programme is still in progress", () => {
+  it("clamps the (e) end instant to now when the programme is still in progress (non-playseek template)", () => {
     const nowUtcMs = new Date(2026, 5, 10, 13, 0, 0).getTime()
     const ctx = { startUtcMs, stopUtcMs, nowUtcMs }
     expect(expandCatchupTemplate("${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}", ctx)).toBe(
       "20260610123000-20260610130000",
+    )
+  })
+
+  it("leaves the (e) end instant unclamped for a playseek template on a still-airing programme", () => {
+    const nowUtcMs = new Date(2026, 5, 10, 13, 0, 0).getTime()
+    const ctx = { startUtcMs, stopUtcMs, nowUtcMs }
+    expect(
+      expandCatchupTemplate("?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}", ctx),
+    ).toBe("?playseek=20260610123000-20260610133000")
+  })
+
+  it("expands {utcend} and {duration} to the real (unclamped) programme end for a playseek template still in progress", () => {
+    const nowUtcMs = new Date(2026, 5, 10, 13, 10, 0).getTime()
+    const stillAiringStopUtcMs = new Date(2026, 5, 10, 13, 30, 0).getTime()
+    const ctx = { startUtcMs, stopUtcMs: stillAiringStopUtcMs, nowUtcMs }
+    const expectedEndSec = Math.floor(stillAiringStopUtcMs / 1000)
+    const expectedDurationSec = Math.floor((stillAiringStopUtcMs - startUtcMs) / 1000)
+    expect(expandCatchupTemplate("?playseek={utc}-{utcend}&d={duration}", ctx)).toBe(
+      `?playseek=${Math.floor(startUtcMs / 1000)}-${expectedEndSec}&d=${expectedDurationSec}`,
     )
   })
 
@@ -752,6 +772,28 @@ describe("templateHasEndToken", () => {
   })
 })
 
+describe("templateUsesPlayseek", () => {
+  it("recognizes a ?playseek= query parameter", () => {
+    expect(templateUsesPlayseek("?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}")).toBe(true)
+  })
+
+  it("recognizes a &tvdr= query parameter, case-insensitively", () => {
+    expect(templateUsesPlayseek("http://host/live?token=abc&TVDR=${(b)yyyyMMddHHmmss}")).toBe(true)
+  })
+
+  it("recognizes playseek as the sole query parameter with no leading separator", () => {
+    expect(templateUsesPlayseek("playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}")).toBe(true)
+  })
+
+  it("returns false for a plain ${(b)}/${(e)} template with no playseek/tvdr parameter", () => {
+    expect(templateUsesPlayseek("${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}")).toBe(false)
+  })
+
+  it("returns false for a {utc}-only template", () => {
+    expect(templateUsesPlayseek("http://host/archive?utc={utc}&lutc={lutc}")).toBe(false)
+  })
+})
+
 describe("streamProfileFor", () => {
   it("classifies xc mode as a terminating minute-granularity Xtream mount", () => {
     expect(streamProfileFor({ catchup: "xc" })).toEqual({ granularitySeconds: 60, terminates: true })
@@ -768,9 +810,15 @@ describe("streamProfileFor", () => {
     expect(streamProfileFor({ catchup: "vod" })).toEqual({ granularitySeconds: 1, terminates: true })
   })
 
-  it("classifies shift mode with a ${(e)} playseek source as terminating", () => {
+  it("classifies shift mode with a ${(e)} playseek source as non-terminating (server follows live)", () => {
     expect(
       streamProfileFor({ catchup: "shift", catchupSource: "?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}" }),
+    ).toEqual({ granularitySeconds: 1, terminates: false })
+  })
+
+  it("classifies the same ${(e)} end-token source as terminating once tvdr/playseek is absent", () => {
+    expect(
+      streamProfileFor({ catchup: "shift", catchupSource: "?seek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}" }),
     ).toEqual({ granularitySeconds: 1, terminates: true })
   })
 
