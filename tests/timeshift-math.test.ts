@@ -8,7 +8,6 @@ import {
   CATCHUP_MAX_CONSECUTIVE_SHORT_ADVANCES,
   clampSeekTarget,
   splitMountStart,
-  shouldReturnToLive,
   minDistanceFromLiveMs,
   adjustTargetForGranularity,
   shouldIgnoreSeek,
@@ -17,6 +16,10 @@ import {
   autoAdvanceDecision,
   type StreamProfile,
 } from "../src/scripts/lib/timeshift-math"
+
+const terminatingMinuteProfile: StreamProfile = { granularitySeconds: 60, terminates: true }
+const terminatingSecondProfile: StreamProfile = { granularitySeconds: 1, terminates: true }
+const nonTerminatingProfile: StreamProfile = { granularitySeconds: 1, terminates: false }
 
 describe("clampSeekTarget", () => {
   const nowUtcMs = Date.UTC(2024, 0, 2, 12, 0, 0)
@@ -31,20 +34,58 @@ describe("clampSeekTarget", () => {
     })
   })
 
-  it("resolves a future target to live", () => {
+  it("pins a future target behind live at the default threshold", () => {
     const result = clampSeekTarget(nowUtcMs + 60_000, { nowUtcMs, catchupWindowMs })
-    expect(result).toEqual({ kind: "live" })
+    expect(result).toEqual({ kind: "shifted", targetUtcMs: nowUtcMs - LIVE_RETURN_THRESHOLD_MS })
   })
 
-  it("resolves a target within the live threshold to live", () => {
+  it("pins a target within the live threshold to the closest allowed position behind live", () => {
     const result = clampSeekTarget(nowUtcMs - 30_000, { nowUtcMs, catchupWindowMs })
-    expect(result).toEqual({ kind: "live" })
+    expect(result).toEqual({ kind: "shifted", targetUtcMs: nowUtcMs - LIVE_RETURN_THRESHOLD_MS })
   })
 
-  it("resolves a target just beyond the live threshold to shifted", () => {
+  it("resolves a target just beyond the live threshold to shifted at the requested position", () => {
     const targetUtcMs = nowUtcMs - (LIVE_RETURN_THRESHOLD_MS + 1000)
     const result = clampSeekTarget(targetUtcMs, { nowUtcMs, catchupWindowMs })
     expect(result).toEqual({ kind: "shifted", targetUtcMs })
+  })
+
+  it("pins to 10s behind live for a non-terminating profile", () => {
+    const result = clampSeekTarget(nowUtcMs - 5000, { nowUtcMs, catchupWindowMs, profile: nonTerminatingProfile })
+    expect(result).toEqual({ kind: "shifted", targetUtcMs: nowUtcMs - VIDEO_PLAYER_BUFFER_MS })
+  })
+
+  it("pins to 55s behind live for a terminating second-granularity profile", () => {
+    const result = clampSeekTarget(nowUtcMs - 10_000, {
+      nowUtcMs,
+      catchupWindowMs,
+      profile: terminatingSecondProfile,
+    })
+    expect(result).toEqual({ kind: "shifted", targetUtcMs: nowUtcMs - 55_000 })
+  })
+
+  it("pins to 115s behind live for a terminating minute-granularity profile", () => {
+    const result = clampSeekTarget(nowUtcMs - 10_000, {
+      nowUtcMs,
+      catchupWindowMs,
+      profile: terminatingMinuteProfile,
+    })
+    expect(result).toEqual({ kind: "shifted", targetUtcMs: nowUtcMs - 115_000 })
+  })
+
+  it("resolves a degenerate too-small catchup window to live", () => {
+    const result = clampSeekTarget(nowUtcMs - 20_000, {
+      nowUtcMs,
+      catchupWindowMs: WINDOW_START_MARGIN_MS,
+      profile: nonTerminatingProfile,
+    })
+    expect(result).toEqual({ kind: "live" })
+  })
+
+  it("still applies the floor clamp when the target is far behind the archive window start", () => {
+    const targetUtcMs = nowUtcMs - catchupWindowMs - 3600_000
+    const result = clampSeekTarget(targetUtcMs, { nowUtcMs, catchupWindowMs, profile: terminatingMinuteProfile })
+    expect(result).toEqual({ kind: "shifted", targetUtcMs: nowUtcMs - catchupWindowMs + WINDOW_START_MARGIN_MS })
   })
 })
 
@@ -70,26 +111,6 @@ describe("splitMountStart", () => {
   })
 })
 
-describe("shouldReturnToLive", () => {
-  const nowUtcMs = 1_000_000
-
-  it("returns true exactly at the threshold", () => {
-    expect(shouldReturnToLive(nowUtcMs - LIVE_RETURN_THRESHOLD_MS, nowUtcMs)).toBe(true)
-  })
-
-  it("returns true when ahead of the live edge", () => {
-    expect(shouldReturnToLive(nowUtcMs + 5000, nowUtcMs)).toBe(true)
-  })
-
-  it("returns false just beyond the threshold", () => {
-    expect(shouldReturnToLive(nowUtcMs - LIVE_RETURN_THRESHOLD_MS - 1000, nowUtcMs)).toBe(false)
-  })
-})
-
-const terminatingMinuteProfile: StreamProfile = { granularitySeconds: 60, terminates: true }
-const terminatingSecondProfile: StreamProfile = { granularitySeconds: 1, terminates: true }
-const nonTerminatingProfile: StreamProfile = { granularitySeconds: 1, terminates: false }
-
 describe("minDistanceFromLiveMs", () => {
   it("falls back to the legacy 45s threshold with no profile", () => {
     expect(minDistanceFromLiveMs()).toBe(LIVE_RETURN_THRESHOLD_MS)
@@ -114,35 +135,24 @@ describe("clampSeekTarget with a stream profile", () => {
   const nowUtcMs = Date.UTC(2024, 0, 2, 12, 0, 0)
   const catchupWindowMs = 7 * 86_400_000
 
-  it("resolves a target 60s behind now to live for a terminating minute stream", () => {
+  it("pins a target 60s behind now to 115s behind live for a terminating minute stream", () => {
     const result = clampSeekTarget(nowUtcMs - 60_000, {
       nowUtcMs,
       catchupWindowMs,
       profile: terminatingMinuteProfile,
     })
-    expect(result).toEqual({ kind: "live" })
+    expect(result).toEqual({ kind: "shifted", targetUtcMs: nowUtcMs - 115_000 })
   })
 
-  it("resolves a target 120s behind now to shifted for a terminating minute stream", () => {
+  it("resolves a target 120s behind now to shifted at the requested position for a terminating minute stream", () => {
     const targetUtcMs = nowUtcMs - 120_000
     const result = clampSeekTarget(targetUtcMs, { nowUtcMs, catchupWindowMs, profile: terminatingMinuteProfile })
     expect(result).toEqual({ kind: "shifted", targetUtcMs })
   })
 
-  it("resolves a target 30s behind now to shifted for a non-terminating stream", () => {
+  it("resolves a target 30s behind now to shifted at the requested position for a non-terminating stream", () => {
     const targetUtcMs = nowUtcMs - 30_000
     const result = clampSeekTarget(targetUtcMs, { nowUtcMs, catchupWindowMs, profile: nonTerminatingProfile })
-    expect(result).toEqual({ kind: "shifted", targetUtcMs })
-  })
-
-  it("lets an explicit liveThresholdMs win over the profile-derived default", () => {
-    const targetUtcMs = nowUtcMs - 60_000
-    const result = clampSeekTarget(targetUtcMs, {
-      nowUtcMs,
-      catchupWindowMs,
-      profile: terminatingMinuteProfile,
-      liveThresholdMs: 5000,
-    })
     expect(result).toEqual({ kind: "shifted", targetUtcMs })
   })
 })
@@ -242,9 +252,18 @@ describe("applySeekStep", () => {
     expect(secondUtcMs).toBe(firstUtcMs - 10_000)
   })
 
-  it("clamps forward at now", () => {
+  it("pins a forward step behind live at the default threshold, not at now", () => {
     const targetUtcMs = applySeekStep(nowUtcMs - 5000, nowUtcMs, 60_000, { nowUtcMs, catchupWindowMs })
-    expect(targetUtcMs).toBe(nowUtcMs)
+    expect(targetUtcMs).toBe(nowUtcMs - LIVE_RETURN_THRESHOLD_MS - 1000)
+  })
+
+  it("pins a forward step behind live using the profile-derived threshold", () => {
+    const targetUtcMs = applySeekStep(nowUtcMs - 200_000, nowUtcMs, 190_000, {
+      nowUtcMs,
+      catchupWindowMs,
+      profile: nonTerminatingProfile,
+    })
+    expect(targetUtcMs).toBe(nowUtcMs - VIDEO_PLAYER_BUFFER_MS - 1000)
   })
 
   it("clamps at the catchup window floor plus the start margin", () => {

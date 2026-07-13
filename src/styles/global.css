@@ -2335,6 +2335,36 @@ summary.list-none::-webkit-details-marker {
     }
 }
 
+/* ────────────────────────────── */
+/* Full-programme timeshift seekbar (live-edge marker) */
+/* ────────────────────────────── */
+.player-wrap[data-timeshift-full-span] .vjs-progress-holder::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--xt-live-edge, 1) * 100%);
+    right: 0;
+    /* Cinematic surface: dim with black, not --color-bg, or light mode paints a bright "future" region. */
+    background: rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+    z-index: 1;
+}
+.player-wrap[data-timeshift-full-span] .vjs-progress-holder::before {
+    content: "";
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    left: calc(var(--xt-live-edge, 1) * 100%);
+    width: 2px;
+    /* Physical offset to match the physical `left`; video.js seekbars stay LTR under RTL locales. */
+    margin-left: -1px;
+    border-radius: 1px;
+    background: var(--color-accent);
+    pointer-events: none;
+    z-index: 2;
+}
+
 @media (prefers-reduced-motion: reduce) {
     .tuning-overlay,
     .tuning-overlay--leaving {

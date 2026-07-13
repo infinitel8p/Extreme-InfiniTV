@@ -1480,6 +1480,8 @@ let catchupSession: {
   mountedStartUtcMs: number
   /** Media-timeline zero. For programme replays this stays at the programme start across mid-programme remounts, so position N seconds = timelineStartUtcMs + N*1000. */
   timelineStartUtcMs: number
+  /** Full-programme-span timeline end (non-terminating streams on a still-airing window only); null keeps the elapsed-so-far bar. */
+  timelineStopUtcMs: number | null
   /** Programme-specific `catchup-id` from XMLTV, when the provider needs one. */
   catchupId: string | null
   /** Terminates/granularity shape for this session's stream; gates seek/resume/auto-advance thresholds. */
@@ -1496,6 +1498,10 @@ let catchupConsecutiveShortAdvances = 0
 let catchupLastEndedAbsUtcMs: number | null = null
 // Archive files often stop a few seconds short of the EPG stop time.
 const CATCHUP_PROGRAMME_END_SLACK_MS = 10_000
+// Drives the ghost-region CSS var + programme rollover for a full-span session; cleared/recreated with the session.
+let liveEdgeTickTimer: ReturnType<typeof setInterval> | null = null
+// How far past a full-span timeline's stop the live playhead can drift before rolling over to the next programme.
+const TIMELINE_ROLLOVER_SLACK_MS = 2000
 // Caps automatic (error/stall) session re-mounts so a persistently failing archive URL still escalates to the failure panel.
 let catchupAutoRetryCount = 0
 const CATCHUP_MAX_AUTO_RETRIES = 2
@@ -2440,6 +2446,7 @@ async function play(streamId, name) {
   suppressPauseTrackingUntilMs = Date.now() + 500
   catchupRequestSeq++
   hideTimeshiftChip()
+  clearLiveEdgeTracking()
   if (!currentEl) return
   // Native ExoPlayer Activity path (opt-in via Settings). Hands off the full
   // playback session including channel switching. Returns early if successful.
@@ -2701,6 +2708,7 @@ function retryCatchupSession(ctx, opts = {}) {
     startUtcMs: resumeUtcMs,
     stopUtcMs: session.stopUtcMs,
     timelineStartUtcMs: session.timelineStartUtcMs,
+    timelineStopUtcMs: session.timelineStopUtcMs,
     title: session.title,
     kind: session.kind,
     catchupId: session.catchupId,
@@ -2764,7 +2772,7 @@ async function playCatchup(channel, opts) {
     return false
   }
   const { startUtcMs, stopUtcMs, seekSeconds = 0, kind = "programme" } = opts || {}
-  const timelineStartUtcMs = opts?.timelineStartUtcMs ?? startUtcMs
+  let timelineStartUtcMs = opts?.timelineStartUtcMs ?? startUtcMs
   const catchupId = opts?.catchupId || resolveProgrammeCatchupIdAt(channel, startUtcMs)
   let title = opts?.title || ""
   if (!Number.isFinite(startUtcMs) || !Number.isFinite(stopUtcMs) || stopUtcMs <= startUtcMs) return false
@@ -2804,6 +2812,16 @@ async function playCatchup(channel, opts) {
   if (!title && kind === "timeshift") title = resolveProgrammeTitleAt(channel, startUtcMs)
   const mountedStartUtcMs = resolution.effectiveStartUtcMs
 
+  // Full-programme span (TiviMate-style bar) only for non-terminating streams still mid-broadcast; terminating archives end exactly at the requested stop, so they keep the elapsed-so-far span.
+  let timelineStopUtcMs = opts?.timelineStopUtcMs ?? null
+  if (timelineStopUtcMs == null && !resolution.profile.terminates) {
+    const anchorWindow = kind === "programme" ? { startUtcMs, stopUtcMs } : resolveProgrammeWindowAt(channel, startUtcMs)
+    if (anchorWindow && anchorWindow.stopUtcMs > Date.now()) {
+      if (opts?.timelineStartUtcMs == null) timelineStartUtcMs = anchorWindow.startUtcMs
+      timelineStopUtcMs = anchorWindow.stopUtcMs
+    }
+  }
+
   resetEmptyState()
   document.getElementById("player")?.removeAttribute("hidden")
 
@@ -2833,6 +2851,7 @@ async function playCatchup(channel, opts) {
     stopUtcMs,
     mountedStartUtcMs,
     timelineStartUtcMs,
+    timelineStopUtcMs,
     catchupId,
     profile: resolution.profile,
   }
@@ -2870,7 +2889,9 @@ async function playCatchup(channel, opts) {
 
   // Mounted stream lands at [offset, span] on the [timelineStart, stop] timeline so position/duration stay 1:1 across remounts.
   const timelineOffsetSeconds = Math.max(0, (mountedStartUtcMs - timelineStartUtcMs) / 1000)
-  const timelineSpanSeconds = Math.max(1, Math.round((Math.min(stopUtcMs, Date.now()) - timelineStartUtcMs) / 1000))
+  const timelineSpanSeconds = timelineStopUtcMs != null
+    ? Math.max(1, Math.round((timelineStopUtcMs - timelineStartUtcMs) / 1000))
+    : Math.max(1, Math.round((Math.min(stopUtcMs, Date.now()) - timelineStartUtcMs) / 1000))
   const initialPositionSeconds = Math.max(0, (startUtcMs - timelineStartUtcMs) / 1000 + seekSeconds)
   if (initialPositionSeconds > 0.05) {
     catchupLoadedMetadataHandler = () => {
@@ -2930,6 +2951,7 @@ async function playCatchup(channel, opts) {
         startUtcMs: absoluteMs,
         stopUtcMs: catchupSession.stopUtcMs,
         timelineStartUtcMs: catchupSession.timelineStartUtcMs,
+        timelineStopUtcMs: catchupSession.timelineStopUtcMs,
         title: catchupSession.title,
         kind: "programme",
         catchupId: catchupSession.catchupId,
@@ -2953,6 +2975,7 @@ async function playCatchup(channel, opts) {
     timelineOffsetSeconds,
   })
   attachCatchupSeekInterceptor(player, seq)
+  armLiveEdgeTracking(channel)
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch(() => {})
@@ -2988,6 +3011,60 @@ function attachCatchupSeekInterceptor(player, seq) {
   }
   catchupSeekingEl = mediaEl
   mediaEl.addEventListener("seeking", catchupSeekingHandler)
+}
+
+/** Clears the ghost-region CSS state and its tick interval; called whenever the active session ends or is superseded. */
+function clearLiveEdgeTracking() {
+  if (liveEdgeTickTimer != null) {
+    clearInterval(liveEdgeTickTimer)
+    liveEdgeTickTimer = null
+  }
+  const wrap = getPlayerWrap()
+  if (!wrap) return
+  wrap.style.removeProperty("--xt-live-edge")
+  delete wrap.dataset.timeshiftFullSpan
+}
+
+/** Drives the live-edge marker CSS var and programme rollover for a full-programme-span session; no-op for an elapsed-capped one. */
+function armLiveEdgeTracking(channel) {
+  clearLiveEdgeTracking()
+  const session = catchupSession
+  if (!session || session.timelineStopUtcMs == null) return
+  const wrap = getPlayerWrap()
+  if (!wrap) return
+  wrap.dataset.timeshiftFullSpan = "true"
+
+  const tick = async () => {
+    const activeSession = catchupSession
+    if (!activeSession || activeSession.timelineStopUtcMs == null || !vjs) return
+    const spanMs = activeSession.timelineStopUtcMs - activeSession.timelineStartUtcMs
+    const liveEdgeFraction = spanMs > 0
+      ? Math.min(1, Math.max(0, (Date.now() - activeSession.timelineStartUtcMs) / spanMs))
+      : 1
+    wrap.style.setProperty("--xt-live-edge", String(liveEdgeFraction))
+
+    const playheadAbsUtcMs = activeSession.timelineStartUtcMs + (vjs.currentTime() || 0) * 1000
+    if (playheadAbsUtcMs < activeSession.timelineStopUtcMs - TIMELINE_ROLLOVER_SLACK_MS) return
+    const nextProgramme = resolveProgrammeWindowAt(channel, activeSession.timelineStopUtcMs + 1000)
+    // No EPG for the next slot - the stream's own duration keeps extending, leave it alone.
+    if (!nextProgramme) return
+    // A stale/short next slot already behind live must not force full span - let playCatchup's own derivation decide.
+    const nextIsStillAiring = nextProgramme.stopUtcMs > Date.now() + TIMELINE_ROLLOVER_SLACK_MS
+    clearLiveEdgeTracking()
+    const remounted = await playCatchup(channel, {
+      startUtcMs: playheadAbsUtcMs,
+      stopUtcMs: Date.now(),
+      ...(nextIsStillAiring
+        ? { timelineStartUtcMs: nextProgramme.startUtcMs, timelineStopUtcMs: nextProgramme.stopUtcMs }
+        : {}),
+      title: resolveProgrammeTitleAt(channel, playheadAbsUtcMs),
+      kind: "timeshift",
+    })
+    // A failed rollover remount leaves the old session stranded past its stop with no tracking left to retry it.
+    if (!remounted) backToLive(channel)
+  }
+  void tick()
+  liveEdgeTickTimer = setInterval(() => void tick(), 1000)
 }
 
 /** Best-guess stream profile before a session exists yet (e.g. tapping rewind on a live channel). */
@@ -3046,6 +3123,7 @@ async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
       startUtcMs: remountTargetUtcMs,
       stopUtcMs: catchupSession.stopUtcMs,
       timelineStartUtcMs: catchupSession.timelineStartUtcMs,
+      timelineStopUtcMs: catchupSession.timelineStopUtcMs,
       title: catchupSession.title,
       kind: "programme",
       catchupId: catchupSession.catchupId,

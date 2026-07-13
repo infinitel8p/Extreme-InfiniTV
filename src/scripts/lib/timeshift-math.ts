@@ -18,16 +18,15 @@ export function minDistanceFromLiveMs(profile?: StreamProfile): number {
   return VIDEO_PLAYER_BUFFER_MS
 }
 
-/** Clamp a requested seek target; classifies the outcome. */
+/** Clamp a requested seek target to the closest allowed position behind live; "live" is only the degenerate too-small-window case. */
 export function clampSeekTarget(
   targetUtcMs: number,
-  opts: { nowUtcMs: number; catchupWindowMs: number; liveThresholdMs?: number; profile?: StreamProfile },
+  opts: { nowUtcMs: number; catchupWindowMs: number; profile?: StreamProfile },
 ): { kind: "live" } | { kind: "shifted"; targetUtcMs: number } {
-  const liveThresholdMs = opts.liveThresholdMs ?? minDistanceFromLiveMs(opts.profile)
-  if (opts.nowUtcMs - targetUtcMs <= liveThresholdMs) return { kind: "live" }
+  const latestUtcMs = opts.nowUtcMs - minDistanceFromLiveMs(opts.profile)
   const earliestUtcMs = opts.nowUtcMs - opts.catchupWindowMs + WINDOW_START_MARGIN_MS
-  const clampedUtcMs = Math.max(earliestUtcMs, Math.min(targetUtcMs, opts.nowUtcMs))
-  return { kind: "shifted", targetUtcMs: clampedUtcMs }
+  if (latestUtcMs <= earliestUtcMs) return { kind: "live" }
+  return { kind: "shifted", targetUtcMs: Math.max(earliestUtcMs, Math.min(targetUtcMs, latestUtcMs)) }
 }
 
 /** Xtream timeshift mounts start on whole minutes; split target into mount start + residual seek. */
@@ -39,15 +38,6 @@ export function splitMountStart(
   const mountStartUtcMs = Math.floor(targetUtcMs / granularityMs) * granularityMs
   const seekSeconds = (targetUtcMs - mountStartUtcMs) / 1000
   return { mountStartUtcMs, seekSeconds }
-}
-
-/** true when playback of a finite shifted segment should snap back to live. */
-export function shouldReturnToLive(
-  absolutePositionUtcMs: number,
-  nowUtcMs: number,
-  thresholdMs: number = LIVE_RETURN_THRESHOLD_MS,
-): boolean {
-  return nowUtcMs - absolutePositionUtcMs <= thresholdMs
 }
 
 /** Port of GetGranularityCorrectionFromLive: pulls a minute-floored mount window back so it never reaches past live. */
@@ -74,7 +64,7 @@ export function shouldIgnoreSeek(
   return absoluteDistanceMs < thresholdMs
 }
 
-/** Accumulating seek-step (mytv-android pattern); a backward step can leave the live edge, forward/floor stay clamped. */
+/** Accumulating seek-step (mytv-android pattern); forward and backward steps both pin behind live, floor stays clamped. */
 export function applySeekStep(
   pendingTargetUtcMs: number | null,
   currentAbsUtcMs: number,
@@ -83,11 +73,7 @@ export function applySeekStep(
 ): number {
   const baseUtcMs = pendingTargetUtcMs ?? currentAbsUtcMs
   let targetUtcMs = baseUtcMs + deltaMs
-  if (deltaMs < 0) {
-    // 1s past the live threshold, not exactly on it - clampSeekTarget treats the boundary itself as still live.
-    targetUtcMs = Math.min(targetUtcMs, opts.nowUtcMs - minDistanceFromLiveMs(opts.profile) - 1000)
-  }
-  targetUtcMs = Math.min(targetUtcMs, opts.nowUtcMs)
+  targetUtcMs = Math.min(targetUtcMs, opts.nowUtcMs - minDistanceFromLiveMs(opts.profile) - 1000)
   targetUtcMs = Math.max(targetUtcMs, opts.nowUtcMs - opts.catchupWindowMs + WINDOW_START_MARGIN_MS)
   return targetUtcMs
 }

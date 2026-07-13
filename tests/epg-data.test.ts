@@ -13,7 +13,9 @@ import {
   findInChannelNameIndex,
   normaliseChannelName,
   parseXmlTv,
+  inferTimezoneOffsetMin,
 } from "../src/scripts/lib/epg-data.js"
+import { parseXmlTv as parseXmlTvWorker } from "../src/scripts/lib/epg-worker.ts"
 
 const xtreamCreds = {
   host: "iptv.example.com",
@@ -579,5 +581,142 @@ describe("buildChannelNameIndex + findInChannelNameIndex: O(1) lookup", () => {
         findBestEpgChannelByName(candidate, channelNames)
       )
     }
+  })
+})
+
+describe("parseXmlTv: hasExplicitTimezones detection", () => {
+  function formatXmlTvDate(ms: number, withOffset: boolean): string {
+    const date = new Date(ms)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    const base =
+      `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
+      `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`
+    return withOffset ? `${base} +0000` : base
+  }
+
+  function buildXml(programmeCount: number, withOffsetCount: number): string {
+    let body = `<?xml version="1.0"?><tv><channel id="ch"><display-name>Ch</display-name></channel>`
+    for (let i = 0; i < programmeCount; i++) {
+      const start = Date.now() - (i + 1) * 60 * 60 * 1000
+      const stop = start + 30 * 60 * 1000
+      const withOffset = i < withOffsetCount
+      body +=
+        `<programme start="${formatXmlTvDate(start, withOffset)}" stop="${formatXmlTvDate(stop, withOffset)}" channel="ch">` +
+        `<title>Show ${i}</title></programme>`
+    }
+    return body + `</tv>`
+  }
+
+  it("reports true when every timestamp carries an explicit offset", () => {
+    expect(parseXmlTv(buildXml(4, 4)).hasExplicitTimezones).toBe(true)
+  })
+
+  it("reports false when no timestamp carries an explicit offset (floating local time)", () => {
+    expect(parseXmlTv(buildXml(4, 0)).hasExplicitTimezones).toBe(false)
+  })
+
+  it("reports true when a majority of timestamps carry an explicit offset", () => {
+    expect(parseXmlTv(buildXml(4, 3)).hasExplicitTimezones).toBe(true)
+  })
+
+  it("reports false when only a minority of timestamps carry an explicit offset", () => {
+    expect(parseXmlTv(buildXml(4, 1)).hasExplicitTimezones).toBe(false)
+  })
+
+  it("reports false for a feed with no programmes at all", () => {
+    expect(parseXmlTv(`<?xml version="1.0"?><tv></tv>`).hasExplicitTimezones).toBe(false)
+  })
+})
+
+describe("parseXmlTv vs epg-worker parseXmlTv: parser parity", () => {
+  function formatXmlTvDate(ms: number): string {
+    const date = new Date(ms)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    return (
+      `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
+      `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())} +0200`
+    )
+  }
+
+  it("agrees on programmes, channel names, and hasExplicitTimezones", () => {
+    const start1 = Date.now() - 60 * 60 * 1000
+    const stop1 = start1 + 30 * 60 * 1000
+    const start2 = Date.now() - 30 * 60 * 1000
+    const stop2 = start2 + 30 * 60 * 1000
+    const xml =
+      `<?xml version="1.0"?><tv>` +
+      `<channel id="ch1"><display-name>Channel One</display-name></channel>` +
+      `<programme start="${formatXmlTvDate(start1)}" stop="${formatXmlTvDate(stop1)}" channel="ch1"><title>A</title></programme>` +
+      `<programme start="${formatXmlTvDate(start2)}" stop="${formatXmlTvDate(stop2)}" channel="ch1"><title>B</title></programme>` +
+      `</tv>`
+
+    const main = parseXmlTv(xml)
+    const worker = parseXmlTvWorker(xml)
+
+    expect(worker.hasExplicitTimezones).toBe(main.hasExplicitTimezones)
+    expect(Array.from(worker.programmes.entries())).toEqual(
+      Array.from(main.programmes.entries())
+    )
+    expect(Array.from(worker.channelNames.entries())).toEqual(
+      Array.from(main.channelNames.entries())
+    )
+  })
+})
+
+describe("inferTimezoneOffsetMin: sticky preferred offset (hysteresis)", () => {
+  // Each channel airs live for exactly one second under exactly one candidate
+  // offset, so the score for an offset equals the number of channels tuned to it.
+  function programmeLiveAtOffset(offsetMin: number) {
+    const shiftMs = offsetMin * 60 * 1000
+    const start = Date.now() - shiftMs
+    return { start, stop: start + 1000, title: "x", desc: "" }
+  }
+
+  function buildProgrammesForOffsetCounts(counts: Array<[number, number]>) {
+    const programmes = new Map<string, Array<ReturnType<typeof programmeLiveAtOffset>>>()
+    let index = 0
+    for (const [offsetMin, count] of counts) {
+      for (let i = 0; i < count; i++) {
+        programmes.set(`ch${index++}`, [programmeLiveAtOffset(offsetMin)])
+      }
+    }
+    return programmes
+  }
+
+  it("prefers the sticky offset on a score tie, even over a smaller-magnitude challenger", () => {
+    const programmes = buildProgrammesForOffsetCounts([
+      [60, 3],
+      [90, 3],
+    ])
+    expect(inferTimezoneOffsetMin(programmes, 90)).toBe(90)
+  })
+
+  it("keeps the sticky offset when a challenger leads by less than the switch margin", () => {
+    const programmes = buildProgrammesForOffsetCounts([
+      [60, 4],
+      [90, 3],
+    ])
+    expect(inferTimezoneOffsetMin(programmes, 90)).toBe(90)
+  })
+
+  it("switches away from the sticky offset when a challenger leads by the switch margin", () => {
+    const programmes = buildProgrammesForOffsetCounts([
+      [60, 5],
+      [90, 3],
+    ])
+    expect(inferTimezoneOffsetMin(programmes, 90)).toBe(60)
+  })
+
+  it("falls back to the smallest-absolute-value tie-break with no preferred offset", () => {
+    const programmes = buildProgrammesForOffsetCounts([
+      [60, 3],
+      [90, 3],
+      [-30, 3],
+    ])
+    expect(inferTimezoneOffsetMin(programmes)).toBe(-30)
+  })
+
+  it("returns 0 for an empty programmes map", () => {
+    expect(inferTimezoneOffsetMin(new Map())).toBe(0)
   })
 })
