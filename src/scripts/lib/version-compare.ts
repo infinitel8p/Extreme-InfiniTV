@@ -28,7 +28,13 @@ function parseForCompare(raw: string): ParsedForCompare {
     const numeric = parseInt(segment, 10)
     return Number.isFinite(numeric) ? numeric : 0
   })
-  const prerelease = prereleaseString === "" ? [] : prereleaseString.split(".")
+  const prerelease =
+    prereleaseString === ""
+      ? []
+      : prereleaseString.split(".").flatMap((identifier) => {
+          const alphaNumericMatch = /^([a-zA-Z]+)(\d+)$/.exec(identifier)
+          return alphaNumericMatch ? [alphaNumericMatch[1], alphaNumericMatch[2]] : [identifier]
+        })
   return { core, prerelease }
 }
 

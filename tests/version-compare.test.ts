@@ -70,4 +70,11 @@ describe("compareVersions", () => {
   it("treats a shorter prerelease identifier list as lower", () => {
     expect(compareVersions("1.6.4-beta", "1.6.4-beta.1")).toBeLessThan(0)
   })
+
+  it("normalizes a dotless prerelease identifier like the dotted format", () => {
+    expect(compareVersions("1.6.4-beta.3", "1.6.4-beta2")).toBeGreaterThan(0)
+    expect(compareVersions("1.6.4-beta2", "1.6.4-beta.2")).toBe(0)
+    expect(compareVersions("1.6.4-beta10", "1.6.4-beta.3")).toBeGreaterThan(0)
+    expect(compareVersions("1.6.4", "1.6.4-beta2")).toBeGreaterThan(0)
+  })
 })

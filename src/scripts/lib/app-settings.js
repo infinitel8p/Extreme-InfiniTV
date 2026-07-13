@@ -674,16 +674,33 @@ export function setVideoScale(mode) {
   )
 }
 
-// Update channel (desktop only - the picker UI hides on Microsoft Store builds)
+// Update channel (desktop only)
+let cachedIsPrereleaseBuild = null
+
+function isPrereleaseBuild() {
+  if (cachedIsPrereleaseBuild !== null) return cachedIsPrereleaseBuild
+  try {
+    const version =
+      typeof document !== "undefined"
+        ? document.querySelector('meta[name="x-app-version"]')?.getAttribute("content")
+        : null
+    cachedIsPrereleaseBuild = typeof version === "string" && version.includes("-")
+  } catch {
+    cachedIsPrereleaseBuild = false
+  }
+  return cachedIsPrereleaseBuild
+}
+
 export function getUpdateChannel() {
   const raw = readLS(KEY_UPDATE_CHANNEL, "")
-  return UPDATE_CHANNELS.includes(raw) ? raw : DEFAULT_UPDATE_CHANNEL
+  if (UPDATE_CHANNELS.includes(raw)) return raw
+  // Beta builds default to the beta channel so prerelease testers keep getting prereleases.
+  return isPrereleaseBuild() ? "beta" : DEFAULT_UPDATE_CHANNEL
 }
 
 export function setUpdateChannel(channel) {
   const next = UPDATE_CHANNELS.includes(channel) ? channel : DEFAULT_UPDATE_CHANNEL
-  if (next === DEFAULT_UPDATE_CHANNEL) writeLS(KEY_UPDATE_CHANNEL, "")
-  else writeLS(KEY_UPDATE_CHANNEL, next)
+  writeLS(KEY_UPDATE_CHANNEL, next)
   document.dispatchEvent(
     new CustomEvent(UPDATE_CHANNEL_EVENT, { detail: { value: next } })
   )

@@ -63,3 +63,7 @@ export const ICON_ASPECT_RATIO = wrap(
     '<path d="M7 12v-3h3" />' +
     '<path d="M17 12v3h-3" />'
 )
+
+export const ICON_ARROW_UP = wrap(
+  '<path d="M12 5l0 14" />' + '<path d="M18 11l-6 -6" />' + '<path d="M6 11l6 -6" />'
+)
