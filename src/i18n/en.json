@@ -663,6 +663,8 @@
   "catchup.failed": "Couldn't start replay - the provider may not support catch-up",
   "catchup.notAvailable": "This channel doesn't offer replay",
   "timeshift.seekFailed": "Couldn't jump there - returned to live",
+  "timeshift.behindLive": "{time} behind live",
+  "timeshift.seekingTo": "Seeking to {time}",
   "stream.menu.play": "Play",
   "stream.menu.test": "Test stream",
   "stream.menu.copy": "Copy stream URL",

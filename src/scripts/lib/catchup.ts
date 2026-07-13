@@ -1,5 +1,7 @@
 // Pure helpers for IPTV catch-up (archive) playback: availability gating, Xtream timeshift URLs, clock drift, M3U catchup templates.
 
+import type { StreamProfile } from "@/scripts/lib/timeshift-math.ts"
+
 export interface CatchupCapableChannel {
   tvArchive?: number
   tvArchiveDuration?: number
@@ -85,12 +87,15 @@ export function buildXtreamTimeshiftUrl(opts: {
   serverOffsetMs: number
   extension: string
   form: XtreamTimeshiftForm
+  /** Provider-facing start shift, hours-to-ms; duration stays computed from the uncorrected window (Kodi parity). */
+  catchupCorrectionMs?: number
 }): string {
   const base = opts.baseUrl.replace(/\/+$/, "")
   const encodedUsername = encodeURIComponent(opts.username)
   const encodedPassword = encodeURIComponent(opts.password)
   const encodedStreamId = encodeURIComponent(String(opts.streamId))
-  const start = formatTimeshiftStart(opts.startUtcMs, opts.serverOffsetMs)
+  const correctedStartUtcMs = opts.startUtcMs - (opts.catchupCorrectionMs ?? 0)
+  const start = formatTimeshiftStart(correctedStartUtcMs, opts.serverOffsetMs)
   const ext = opts.extension.replace(/^\.+/, "")
 
   if (opts.form === "rest") {
@@ -332,6 +337,32 @@ export function buildM3uCatchupUrl(
   }
   return source ? expandCatchupTemplate(source, ctx) : null
 }
+
+const END_TOKEN_PATTERN = /\{utcend(:[^}]*)?\}|\$\{end(:[^}]*)?\}|\{duration(:\d+)?\}|\$\{duration\}|\$\{\(e\)[^}]+\}/
+
+/** true when a catchup-source template carries an end/duration token, meaning the resulting stream terminates at the requested window end. */
+export function templateHasEndToken(template: string): boolean {
+  return END_TOKEN_PATTERN.test(template)
+}
+
+/** Classify a channel's catch-up mode into the terminates/granularity shape ffmpegdirect uses to gate seek/resume/auto-advance. */
+export function streamProfileFor(channel: CatchupCapableChannel): StreamProfile {
+  const rawMode = (channel.catchup ?? "").trim().toLowerCase()
+  const mode = rawMode === "timeshift" ? "shift" : rawMode
+
+  if (mode === "xc") return { granularitySeconds: 60, terminates: true }
+  if (mode === "flussonic" || mode === "flussonic-hls" || mode === "flussonic-ts" || mode === "fs") {
+    return { granularitySeconds: 1, terminates: false }
+  }
+  if (mode === "vod") return { granularitySeconds: 1, terminates: true }
+
+  const source = channel.catchupSource || null
+  if (source) return { granularitySeconds: 1, terminates: templateHasEndToken(source) }
+  return { granularitySeconds: 1, terminates: false }
+}
+
+/** Xtream credentials-path mounts carry an explicit duration, so they always terminate on a minute-floored window. */
+export const XTREAM_STREAM_PROFILE: StreamProfile = { granularitySeconds: 60, terminates: true }
 
 const XTREAM_STYLE_LIVE_URL_PATTERN =
   /^(https?:\/\/[^/]+)\/(?:live\/)?([^/]+)\/([^/]+)\/([^/.?]+)(\.m3u8|\.ts)?(?:\?.*)?$/

@@ -10,9 +10,11 @@ import {
   clampedDurationMinutes,
   computeServerOffsetMs,
   parseXtreamStyleLiveUrl,
+  streamProfileFor,
+  XTREAM_STREAM_PROFILE,
   type XtreamTimeshiftForm,
 } from "@/scripts/lib/catchup.ts"
-import { splitMountStart } from "@/scripts/lib/timeshift-math.ts"
+import { splitMountStart, type StreamProfile } from "@/scripts/lib/timeshift-math.ts"
 
 export interface CatchupRequestChannel {
   id: number | string
@@ -38,6 +40,7 @@ export interface CatchupResolution {
   kindHint: "hls" | "ts"
   /** Actual start instant of the mounted segment; the virtual-timeline zero for player.currentTime(). */
   effectiveStartUtcMs: number
+  profile: StreamProfile
 }
 
 export interface CatchupCreds {
@@ -124,6 +127,7 @@ async function resolveXtreamCatchup(
   base: { baseUrl: string; username: string; password: string; streamId: string | number },
   startUtcMs: number,
   stopUtcMs: number,
+  catchupCorrectionMs: number,
 ): Promise<CatchupResolution | null> {
   const durationMinutes = clampedDurationMinutes(startUtcMs, stopUtcMs, Date.now())
   const serverInfo = getServerInfoSync(playlistId) ?? (await warmServerInfo(creds, playlistId))
@@ -160,6 +164,7 @@ async function resolveXtreamCatchup(
       serverOffsetMs,
       extension: variant.extension,
       form: variant.form,
+      catchupCorrectionMs,
     })
     if (await probeVariantUrl(url)) {
       writeCachedVariant(playlistId, variant)
@@ -167,6 +172,7 @@ async function resolveXtreamCatchup(
         src: url,
         kindHint: extensionToKindHint(variant.extension),
         effectiveStartUtcMs: splitMountStart(startUtcMs, "minute").mountStartUtcMs,
+        profile: XTREAM_STREAM_PROFILE,
       }
     }
   }
@@ -194,8 +200,15 @@ export async function resolveCatchupSrc(
     if (!url) return null
     const path = url.split("?")[0] || ""
     const kindHint: "hls" | "ts" = /\.m3u8$/i.test(path) ? "hls" : "ts"
-    return { src: url, kindHint, effectiveStartUtcMs: splitMountStart(startUtcMs, "second").mountStartUtcMs }
+    return {
+      src: url,
+      kindHint,
+      effectiveStartUtcMs: splitMountStart(startUtcMs, "second").mountStartUtcMs,
+      profile: streamProfileFor(channel),
+    }
   }
+
+  const catchupCorrectionMs = (channel.catchupCorrection ?? 0) * 3_600_000
 
   if (mode === "xc") {
     const parsed = parseXtreamStyleLiveUrl(channel.url || "")
@@ -206,6 +219,7 @@ export async function resolveCatchupSrc(
       { baseUrl: parsed.baseUrl, username: parsed.username, password: parsed.password, streamId: parsed.streamId },
       startUtcMs,
       stopUtcMs,
+      catchupCorrectionMs,
     )
   }
 
@@ -217,5 +231,6 @@ export async function resolveCatchupSrc(
     { baseUrl, username: creds.user, password: creds.pass, streamId: channel.id },
     startUtcMs,
     stopUtcMs,
+    catchupCorrectionMs,
   )
 }

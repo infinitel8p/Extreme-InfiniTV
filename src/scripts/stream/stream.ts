@@ -32,7 +32,7 @@ import {
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
-import { fmtChannelIdentity } from "@/scripts/lib/format.ts"
+import { fmtChannelIdentity, formatBehindLive } from "@/scripts/lib/format.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { attachPopoverSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
@@ -91,9 +91,24 @@ import {
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { maybeB64ToUtf8, escapeHtml } from "@/scripts/lib/b64-utf8.ts"
 import { attachRadioVisualizer, type RadioVisualizerHandle } from "@/scripts/lib/radio-visualizer.ts"
-import { channelSupportsCatchup, catchupWindowDays, isCatchupPlayable } from "@/scripts/lib/catchup.ts"
+import {
+  channelSupportsCatchup,
+  catchupWindowDays,
+  isCatchupPlayable,
+  streamProfileFor,
+  XTREAM_STREAM_PROFILE,
+} from "@/scripts/lib/catchup.ts"
 import { resolveCatchupSrc } from "@/scripts/lib/catchup-resolve.ts"
-import { clampSeekTarget, shouldReturnToLive } from "@/scripts/lib/timeshift-math.ts"
+import {
+  clampSeekTarget,
+  adjustTargetForGranularity,
+  shouldIgnoreSeek,
+  applySeekStep,
+  resumeAction,
+  autoAdvanceDecision,
+  minDistanceFromLiveMs,
+  type StreamProfile,
+} from "@/scripts/lib/timeshift-math.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 // One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
@@ -1057,20 +1072,33 @@ document.addEventListener("keydown", (e) => {
       return
     }
     case "j":
-    case "l": {
+    case "l":
+    case "MediaRewind":
+    case "MediaFastForward": {
       e.preventDefault()
-      const deltaMs = lower === "j" ? -10_000 : 10_000
+      const isRewind = lower === "j" || lower === "MediaRewind"
+      const deltaMs = isRewind ? -10_000 : 10_000
       const channel = all.find((entry) => entry.id === currentlyPlayingId)
       const isArchiveChannel = channel ? channelSupportsCatchup(channel) : false
       if (catchupSession || isArchiveChannel) {
-        // No-Range timeshift server: route hops through the same buffered-fast-path/remount logic as bar seeks.
+        // Fast-forward at the live edge with nothing pending must not start a session.
+        if (!catchupSession && deltaMs > 0 && pendingSeekTargetUtcMs == null) return
+        const nowUtcMs = Date.now()
         const currentAbsoluteMs = catchupSession
           ? catchupSession.timelineStartUtcMs + (vjs.currentTime() || 0) * 1000
-          : Date.now()
-        void seekToAbsolute(currentAbsoluteMs + deltaMs)
+          : nowUtcMs
+        const profile = catchupSession?.profile ?? provisionalStreamProfile(channel)
+        const catchupWindowMs = catchupWindowDays(channel) * 24 * 60 * 60 * 1000
+        pendingSeekTargetUtcMs = applySeekStep(pendingSeekTargetUtcMs, currentAbsoluteMs, deltaMs, {
+          nowUtcMs,
+          catchupWindowMs,
+          profile,
+        })
+        renderPendingSeekHint(pendingSeekTargetUtcMs)
+        commitPendingSeek()
         return
       }
-      const delta = lower === "j" ? -10 : 10
+      const delta = isRewind ? -10 : 10
       const dur = vjs.duration()
       const next = (vjs.currentTime() || 0) + delta
       const clamped = Number.isFinite(dur) && dur > 0
@@ -1081,6 +1109,15 @@ document.addEventListener("keydown", (e) => {
     }
   }
 })
+
+/** Shows the D-pad rewind/forward target while presses accumulate before the debounced commit; falls back to the session readout once cleared. */
+function renderPendingSeekHint(targetUtcMs: number | null): void {
+  if (targetUtcMs != null) {
+    showTimeshiftChip([t("timeshift.seekingTo", { time: formatWallClock(targetUtcMs) })])
+    return
+  }
+  renderTimeshiftChip()
+}
 
 let _applyFilterScheduled = false
 function scheduleApplyFilter() {
@@ -1428,6 +1465,7 @@ let tuningOverlaySentinel = null
 let stallSentinel = null
 let bufferingShownAt = 0
 let bufferingHideTimer = null
+let timeshiftChipLastUpdateAt = 0
 let embeddedPlayerLiveUi = true
 let focusKeeperCleanup: (() => void) | null = null
 /** Active catch-up/timeshift (replay) session, or null when tuned to live. */
@@ -1444,27 +1482,52 @@ let catchupSession: {
   timelineStartUtcMs: number
   /** Programme-specific `catchup-id` from XMLTV, when the provider needs one. */
   catchupId: string | null
+  /** Terminates/granularity shape for this session's stream; gates seek/resume/auto-advance thresholds. */
+  profile: StreamProfile
 } | null = null
 /** Bumped by every play()/playCatchup() call so a slow-resolving catch-up probe can detect it's been superseded and bail without clobbering whatever the user tuned to since. */
 let catchupRequestSeq = 0
 // The embedded player handle is reused across catchup->catchup remounts, so one-shot listeners from a superseded mount are tracked and cleared.
 let catchupLoadedMetadataHandler: (() => void) | null = null
 let catchupEndedHandler: (() => void) | null = null
-// Consecutive segments shorter than CATCHUP_AUTO_ADVANCE_RESET_SECONDS trip a no-Range-server remount loop back to live.
+// Consecutive short auto-advanced segments trip a no-Range-server remount loop back to live.
 let catchupConsecutiveShortAdvances = 0
+// Where the previous catch-up mount ended; a repeat at the same instant means the archive is exhausted there.
+let catchupLastEndedAbsUtcMs: number | null = null
+// Archive files often stop a few seconds short of the EPG stop time.
+const CATCHUP_PROGRAMME_END_SLACK_MS = 10_000
+// Caps automatic (error/stall) session re-mounts so a persistently failing archive URL still escalates to the failure panel.
+let catchupAutoRetryCount = 0
+const CATCHUP_MAX_AUTO_RETRIES = 2
+// Retry budget refills only after sustained playback; an instant reset on "playing" lets a plays-briefly-then-dies source loop forever.
+let catchupRetryResetTimer: ReturnType<typeof setTimeout> | null = null
+const CATCHUP_RETRY_RESET_AFTER_MS = 30_000
 // Native-bar seeks outside the buffer re-request the stream; these track the interceptor.
 let catchupSeekingEl: HTMLVideoElement | null = null
 let catchupSeekingHandler: (() => void) | null = null
 let catchupProgrammaticSeekUntilMs = 0
-const CATCHUP_MIN_SEGMENT_SECONDS = 5
-const CATCHUP_AUTO_ADVANCE_RESET_SECONDS = 30
-const CATCHUP_MAX_CONSECUTIVE_SHORT_ADVANCES = 3
+// Accumulated J/L archive rewind/forward taps; committed to a seek after a short pause.
+let pendingSeekTargetUtcMs: number | null = null
+const commitPendingSeek = debounce(() => {
+  const target = pendingSeekTargetUtcMs
+  pendingSeekTargetUtcMs = null
+  // Clear the readout even when the committed seek gets swallowed, or it sticks on live.
+  renderPendingSeekHint(null)
+  if (target != null) void seekToAbsolute(target)
+}, 800)
+// Recorded on pause so resume can decide whether to re-seek or retune.
+let pausedAtAbsUtcMs: number | null = null
+let pausedWasLive = false
+// HTMLMediaElement pause() queues its event as a task, so a boolean flag would already be reset when the listener runs.
+let suppressPauseTrackingUntilMs = 0
 const TUNING_MAX_MS = 8000
 // Catch-up resolve can probe several timeshift URL variants in sequence; give it room to finish before the overlay gives up.
 const CATCHUP_TUNING_MAX_MS = 22_000
 const STALL_AUTO_TUNE_MS = 30_000
 const BUFFERING_GRACE_MS = 350
 const ERROR_AUTO_RETRY_MS = 1500
+const TIMESHIFT_CHIP_UPDATE_MS = 1000
+const TIMESHIFT_CHIP_LIVE_THRESHOLD_MS = 15_000
 
 // Per-stream diagnostic cooldown
 const AUTO_DIAGNOSTIC_COOLDOWN_MS = 30_000
@@ -1574,6 +1637,8 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
 
   vjs.on("playing", () => {
     if (lastPlayContext) lastPlayContext.started = true
+    if (catchupRetryResetTimer) clearTimeout(catchupRetryResetTimer)
+    catchupRetryResetTimer = setTimeout(() => { catchupAutoRetryCount = 0 }, CATCHUP_RETRY_RESET_AFTER_MS)
     hideTuningOverlay()
     hideBufferingChip()
     clearStallSentinel()
@@ -1584,13 +1649,67 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
     showBufferingChip()
     armStallSentinel()
   })
+  vjs.on("timeupdate", () => {
+    if (!catchupSession || pendingSeekTargetUtcMs != null) return
+    const now = Date.now()
+    if (now - timeshiftChipLastUpdateAt < TIMESHIFT_CHIP_UPDATE_MS) return
+    timeshiftChipLastUpdateAt = now
+    renderTimeshiftChip()
+  })
   vjs.on("stalled", () => {
     showBufferingChip()
     armStallSentinel()
   })
+  vjs.on("pause", () => {
+    if (Date.now() < suppressPauseTrackingUntilMs) return
+    if (!lastPlayContext?.started) return
+    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    // The browser fires pause right before ended - don't record that as a user pause.
+    if (mediaEl?.ended) return
+    pausedWasLive = !catchupSession
+    pausedAtAbsUtcMs = catchupSession
+      ? catchupSession.timelineStartUtcMs + (vjs.currentTime() || 0) * 1000
+      : Date.now()
+  })
+  vjs.on("play", () => {
+    if (pausedAtAbsUtcMs == null) return
+    const pausedAbsUtcMs = pausedAtAbsUtcMs
+    pausedAtAbsUtcMs = null
+    const channel = all.find((entry) => entry.id === (catchupSession?.channelId ?? currentlyPlayingId))
+    if (!channel) return
+    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const currentTimeSeconds = vjs.currentTime?.() || 0
+    let bufferedAheadMs = 0
+    const buffered = mediaEl?.buffered
+    if (buffered) {
+      for (let i = 0; i < buffered.length; i++) {
+        if (currentTimeSeconds >= buffered.start(i) - 1 && currentTimeSeconds <= buffered.end(i) + 1) {
+          bufferedAheadMs = Math.max(0, (buffered.end(i) - currentTimeSeconds) * 1000)
+          break
+        }
+      }
+    }
+    const action = resumeAction({
+      pausedAbsUtcMs,
+      nowUtcMs: Date.now(),
+      bufferedEndAbsUtcMs: pausedAbsUtcMs + bufferedAheadMs,
+      wasLive: pausedWasLive,
+      archiveCapable: channelSupportsCatchup(channel),
+      profile: catchupSession?.profile ?? provisionalStreamProfile(channel),
+    })
+    if (action === "reseek") {
+      void seekToAbsolute(pausedAbsUtcMs, { forceRemount: true })
+    } else if (action === "live") {
+      void play(channel.id, channel.name)
+    }
+  })
   vjs.on("error", () => {
     const ctx = lastPlayContext
     if (!ctx) return
+    if (catchupRetryResetTimer) {
+      clearTimeout(catchupRetryResetTimer)
+      catchupRetryResetTimer = null
+    }
     const err = vjs.error?.()
     log.error("[xt:livetv] player error", {
       code: err?.code,
@@ -1602,6 +1721,7 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
       const seqAtRetry = ctx.seq
       setTimeout(() => {
         if (seqAtRetry !== playSeq) return
+        if (retryCatchupSession(ctx, { automatic: true })) return
         try {
           vjs.reset?.()
           vjs.src({ src: ctx.src, type: ctx.mime || "application/x-mpegURL", isLive: ctx.isLive ?? true })
@@ -1871,12 +1991,61 @@ function hideBufferingChip() {
   }, wait)
 }
 
+function formatWallClock(utcMs: number): string {
+  return fmtTime(utcMs / 1000)
+}
+
+function showTimeshiftChip(lines: string[]) {
+  const playerWrap = document.getElementById("player")?.parentElement
+  if (!playerWrap) return
+  let chip = playerWrap.querySelector("[data-timeshift-chip]")
+  if (!chip) {
+    chip = document.createElement("div")
+    chip.dataset.timeshiftChip = ""
+    chip.className = "timeshift-chip"
+    chip.setAttribute("role", "status")
+    chip.setAttribute("aria-live", "polite")
+    playerWrap.appendChild(chip)
+  }
+  chip.replaceChildren()
+  for (const line of lines) {
+    const lineEl = document.createElement("div")
+    lineEl.className = "timeshift-chip-line"
+    lineEl.textContent = line
+    chip.appendChild(lineEl)
+  }
+}
+
+function hideTimeshiftChip() {
+  const playerWrap = document.getElementById("player")?.parentElement
+  playerWrap?.querySelector("[data-timeshift-chip]")?.remove()
+}
+
+/** Wall-clock playhead + behind-live readout for the active catch-up/timeshift session. */
+function renderTimeshiftChip() {
+  if (!catchupSession || !vjs) {
+    hideTimeshiftChip()
+    return
+  }
+  const playheadAbsUtcMs = catchupSession.timelineStartUtcMs + (vjs.currentTime() || 0) * 1000
+  const behindMs = Date.now() - playheadAbsUtcMs
+  if (behindMs < TIMESHIFT_CHIP_LIVE_THRESHOLD_MS) {
+    hideTimeshiftChip()
+    return
+  }
+  showTimeshiftChip([
+    formatWallClock(playheadAbsUtcMs),
+    t("timeshift.behindLive", { time: formatBehindLive(behindMs) }),
+  ])
+}
+
 function armStallSentinel() {
   if (stallSentinel) clearTimeout(stallSentinel)
   stallSentinel = setTimeout(() => {
     const ctx = lastPlayContext
     if (!ctx || !vjs) return
     log.warn("[xt:livetv] stall sentinel re-tuning", { streamId: ctx.streamId })
+    if (retryCatchupSession(ctx, { automatic: true })) return
     try {
       // Catch-up sources are finite - preserve position across the auto-retune instead of rewinding to 0.
       const resumeSeconds = ctx.isLive === false ? vjs.currentTime?.() : null
@@ -1964,6 +2133,7 @@ function armDeadVideoWatchdog() {
       videoWidth: video.videoWidth,
       videoHeight: video.videoHeight,
     })
+    suppressPauseTrackingUntilMs = Date.now() + 500
     try { vjs?.pause?.() } catch {}
     hideTuningOverlay()
     hideBufferingChip()
@@ -2081,19 +2251,7 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   retryBtn.textContent = t("common.retry")
   retryBtn.addEventListener("click", () => {
     hidePlaybackFailurePanel()
-    const session = catchupSession
-    const channel = session ? all.find((entry) => entry.id === ctx.streamId) : null
-    if (session && channel && session.channelId === ctx.streamId) {
-      void playCatchup(channel, {
-        startUtcMs: session.startUtcMs,
-        stopUtcMs: session.stopUtcMs,
-        timelineStartUtcMs: session.timelineStartUtcMs,
-        title: session.title,
-        kind: session.kind,
-        catchupId: session.catchupId,
-      })
-      return
-    }
+    if (retryCatchupSession(ctx)) return
     play(ctx.streamId, ctx.name)
   })
   actions.appendChild(retryBtn)
@@ -2274,7 +2432,14 @@ async function play(streamId, name) {
   hidePlaybackFailurePanel()
   clearDeadVideoWatchdog()
   catchupSession = null
+  catchupAutoRetryCount = 0
+  catchupLastEndedAbsUtcMs = null
+  pendingSeekTargetUtcMs = null
+  pausedAtAbsUtcMs = null
+  // The old mount's teardown fires an async pause event; without this window it would re-arm the tracker mid-retune.
+  suppressPauseTrackingUntilMs = Date.now() + 500
   catchupRequestSeq++
+  hideTimeshiftChip()
   if (!currentEl) return
   // Native ExoPlayer Activity path (opt-in via Settings). Hands off the full
   // playback session including channel switching. Returns early if successful.
@@ -2418,11 +2583,7 @@ async function play(streamId, name) {
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
-    if (hasDirectUrl(streamId)) {
-      paintSidePanelFromXmltv(streamId)
-    } else {
-      loadEPG(streamId)
-    }
+    paintEpgSidePanel(streamId)
     return
   }
 
@@ -2461,11 +2622,7 @@ async function play(streamId, name) {
   applyVideoScale()
   pushDiscordPresence(channel || { id: streamId, name }, "live")
 
-  if (hasDirectUrl(streamId)) {
-    paintSidePanelFromXmltv(streamId)
-  } else {
-    loadEPG(streamId)
-  }
+  paintEpgSidePanel(streamId)
 }
 
 // ----------------------------
@@ -2494,6 +2651,16 @@ function renderCatchupCurrentRow(channel, title) {
     channelEl.textContent = ` · ${channel.name}`
     label.appendChild(channelEl)
   }
+  if (catchupSession) {
+    const timeEl = document.createElement("span")
+    timeEl.className = "text-fg-3"
+    timeEl.textContent = ` · ${
+      catchupSession.kind === "programme"
+        ? `${formatWallClock(catchupSession.startUtcMs)}-${formatWallClock(catchupSession.stopUtcMs)}`
+        : formatWallClock(catchupSession.startUtcMs)
+    }`
+    label.appendChild(timeEl)
+  }
   wrap.appendChild(label)
   currentEl.appendChild(wrap)
 
@@ -2507,20 +2674,53 @@ function renderCatchupCurrentRow(channel, title) {
 }
 
 function backToLive(channel) {
+  hideTimeshiftChip()
   // Already tuned live on this channel (no shifted session) - avoid a pointless remount.
   if (!catchupSession && currentlyPlayingId === channel.id) return
   play(channel.id, channel.name || "")
 }
 
-/** Programme title under the playhead at `atUtcMs`, or "" when EPG data is missing. */
+/** Re-mounts the active session at the current playhead (archive URLs embed timestamps, so a stale src must not be replayed); automatic callers are capped, manual retry resets the budget. */
+function retryCatchupSession(ctx, opts = {}) {
+  const session = catchupSession
+  if (!session || session.channelId !== ctx.streamId) return false
+  const channel = all.find((entry) => entry.id === session.channelId)
+  if (!channel) return false
+  if (opts.automatic) {
+    if (catchupAutoRetryCount >= CATCHUP_MAX_AUTO_RETRIES) return false
+    catchupAutoRetryCount++
+  } else {
+    catchupAutoRetryCount = 0
+  }
+  const currentSeconds = vjs?.currentTime?.() || 0
+  const resumeUtcMs = Math.min(
+    Math.max(session.timelineStartUtcMs + currentSeconds * 1000, session.startUtcMs),
+    session.stopUtcMs - 1000
+  )
+  void playCatchup(channel, {
+    startUtcMs: resumeUtcMs,
+    stopUtcMs: session.stopUtcMs,
+    timelineStartUtcMs: session.timelineStartUtcMs,
+    title: session.title,
+    kind: session.kind,
+    catchupId: session.catchupId,
+  })
+  return true
+}
+
+/** Programme title under the playhead at `atUtcMs`, from XMLTV or the cached Xtream full table; "" when EPG data is missing. */
 function resolveProgrammeTitleAt(channel, atUtcMs) {
   if (!channel || !activePlaylistId) return ""
   const tvgId = effectiveTvgId(channel, activePlaylistId)
-  if (!tvgId) return ""
-  const state = getProgrammesSync(activePlaylistId)
-  const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
-  const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
-  return current?.title || ""
+  if (tvgId) {
+    const state = getProgrammesSync(activePlaylistId)
+    const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
+    const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
+    if (current?.title) return current.title
+  }
+  const xtreamEntries = peekXtreamFullEpgCache(channel)
+  const listing = xtreamEntries?.find((entry) => entry.startUtcMs <= atUtcMs && atUtcMs < entry.stopUtcMs)
+  return listing?.title || ""
 }
 
 /** Programme `catchup-id` under the playhead at `atUtcMs`, or null when EPG data or the field is missing. */
@@ -2532,6 +2732,26 @@ function resolveProgrammeCatchupIdAt(channel, atUtcMs) {
   const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
   const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
   return current?.catchupId || null
+}
+
+/** Programme window under the playhead at `atUtcMs`, from XMLTV or the cached Xtream full table; null when EPG data is missing. */
+function resolveProgrammeWindowAt(channel, atUtcMs) {
+  if (!channel || !activePlaylistId) return null
+  const tvgId = effectiveTvgId(channel, activePlaylistId)
+  if (tvgId) {
+    const state = getProgrammesSync(activePlaylistId)
+    const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
+    const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
+    if (current) {
+      return {
+        startUtcMs: displayedToUtcMs(activePlaylistId, current.start),
+        stopUtcMs: displayedToUtcMs(activePlaylistId, current.stop),
+      }
+    }
+  }
+  const xtreamEntries = peekXtreamFullEpgCache(channel)
+  const listing = xtreamEntries?.find((entry) => entry.startUtcMs <= atUtcMs && atUtcMs < entry.stopUtcMs)
+  return listing ? { startUtcMs: listing.startUtcMs, stopUtcMs: listing.stopUtcMs } : null
 }
 
 /** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
@@ -2597,6 +2817,11 @@ async function playCatchup(channel, opts) {
     return false
   }
 
+  pendingSeekTargetUtcMs = null
+  pausedAtAbsUtcMs = null
+  hideTimeshiftChip()
+  timeshiftChipLastUpdateAt = 0
+
   pushRecent(activePlaylistId, "live", channel.id, channel.name, channel.logo || null)
   setNowPlaying(channel.id)
   catchupSession = {
@@ -2609,10 +2834,10 @@ async function playCatchup(channel, opts) {
     mountedStartUtcMs,
     timelineStartUtcMs,
     catchupId,
+    profile: resolution.profile,
   }
   renderCatchupCurrentRow(channel, title)
-  // Xtream's side panel only lists upcoming entries, so the currently-airing one already carries the same-channel-live highlight; no repaint needed there.
-  if (hasDirectUrl(channel.id)) paintSidePanelFromXmltv(channel.id)
+  paintEpgSidePanel(channel.id)
 
   const seq = ++playSeq
   const mime = resolution.kindHint === "hls" ? "application/x-mpegURL" : "video/mp2t"
@@ -2630,6 +2855,7 @@ async function playCatchup(channel, opts) {
   }
   hideBufferingChip()
   clearStallSentinel()
+  suppressPauseTrackingUntilMs = Date.now() + 500
   try { player.reset?.() } catch {}
 
   // Drop one-shot listeners from a superseded mount before adding new ones (handle is reused across remounts).
@@ -2656,21 +2882,67 @@ async function playCatchup(channel, opts) {
   catchupEndedHandler = () => {
     if (seq !== playSeq || !catchupSession) return
     const timelineDurationSeconds = player.duration?.() || 0
-    const segmentSeconds = timelineDurationSeconds - timelineOffsetSeconds
-    const degenerateSegment = !Number.isFinite(segmentSeconds) || segmentSeconds < CATCHUP_MIN_SEGMENT_SECONDS
-    if (segmentSeconds >= CATCHUP_AUTO_ADVANCE_RESET_SECONDS) {
-      catchupConsecutiveShortAdvances = 0
-    } else {
-      catchupConsecutiveShortAdvances++
-    }
-    if (degenerateSegment || catchupConsecutiveShortAdvances > CATCHUP_MAX_CONSECUTIVE_SHORT_ADVANCES) {
-      catchupConsecutiveShortAdvances = 0
+    const rawSegmentSeconds = timelineDurationSeconds - timelineOffsetSeconds
+    const segmentSeconds = Number.isFinite(rawSegmentSeconds) ? rawSegmentSeconds : 0
+    const absoluteMs = catchupSession.timelineStartUtcMs + timelineDurationSeconds * 1000
+    // Two consecutive endings at the same instant mean the archive has nothing more there; remounting again would just churn.
+    if (catchupLastEndedAbsUtcMs != null && Math.abs(absoluteMs - catchupLastEndedAbsUtcMs) < 1500) {
+      catchupLastEndedAbsUtcMs = null
       backToLive(channel)
       return
     }
-    const absoluteMs = catchupSession.timelineStartUtcMs + timelineDurationSeconds * 1000
-    if (shouldReturnToLive(absoluteMs, Date.now())) backToLive(channel)
-    else void seekToAbsolute(absoluteMs)
+    catchupLastEndedAbsUtcMs = absoluteMs
+    // Archives routinely stop a few seconds short of the EPG stop; a replay that got this far is finished, not dropped.
+    if (catchupSession.kind === "programme" && absoluteMs >= catchupSession.stopUtcMs - CATCHUP_PROGRAMME_END_SLACK_MS) {
+      const nextProgramme = resolveProgrammeWindowAt(channel, catchupSession.stopUtcMs + 1000)
+      const nextIsReplayable =
+        nextProgramme &&
+        Date.now() - nextProgramme.startUtcMs > minDistanceFromLiveMs(catchupSession.profile) &&
+        isCatchupPlayable(channel, nextProgramme.startUtcMs, Date.now())
+      if (nextIsReplayable) {
+        void playCatchup(channel, {
+          startUtcMs: nextProgramme.startUtcMs,
+          stopUtcMs: nextProgramme.stopUtcMs,
+          title: resolveProgrammeTitleAt(channel, nextProgramme.startUtcMs + 1000),
+          kind: "programme",
+        })
+        return
+      }
+      backToLive(channel)
+      return
+    }
+    const decision = autoAdvanceDecision({
+      segmentSeconds,
+      currentAbsUtcMs: absoluteMs,
+      nowUtcMs: Date.now(),
+      programme: resolveProgrammeWindowAt(channel, absoluteMs),
+      strikes: catchupConsecutiveShortAdvances,
+      profile: catchupSession.profile,
+    })
+    catchupConsecutiveShortAdvances = decision.action === "live" ? 0 : decision.strikes
+    if (decision.action === "live") {
+      backToLive(channel)
+      return
+    }
+    // A programme replay whose stream dropped mid-programme keeps its session shape, so the episode-length bar and timeline zero survive the remount.
+    if (catchupSession.kind === "programme" && absoluteMs < catchupSession.stopUtcMs - CATCHUP_PROGRAMME_END_SLACK_MS) {
+      void playCatchup(channel, {
+        startUtcMs: absoluteMs,
+        stopUtcMs: catchupSession.stopUtcMs,
+        timelineStartUtcMs: catchupSession.timelineStartUtcMs,
+        title: catchupSession.title,
+        kind: "programme",
+        catchupId: catchupSession.catchupId,
+      })
+      return
+    }
+    // Bypasses seekToAbsolute deliberately: the EPG-bounded stopUtcMs must survive the remount.
+    void playCatchup(channel, {
+      startUtcMs: absoluteMs,
+      stopUtcMs: decision.nextStopUtcMs ?? Date.now(),
+      title: resolveProgrammeTitleAt(channel, absoluteMs),
+      kind: "timeshift",
+    })
   }
   player.one?.("ended", catchupEndedHandler)
   player.src({
@@ -2718,21 +2990,33 @@ function attachCatchupSeekInterceptor(player, seq) {
   mediaEl.addEventListener("seeking", catchupSeekingHandler)
 }
 
+/** Best-guess stream profile before a session exists yet (e.g. tapping rewind on a live channel). */
+function provisionalStreamProfile(channel): StreamProfile {
+  return channel?.url ? streamProfileFor(channel) : XTREAM_STREAM_PROFILE
+}
+
 /** Committed timeshift seek: clamp against the archive window, take the buffered fast-path when possible, otherwise remount via playCatchup. */
-async function seekToAbsolute(targetUtcMs) {
+async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
   const channelId = catchupSession?.channelId ?? currentlyPlayingId
   const channel = all.find((entry) => entry.id === channelId)
   if (!channel) return
 
+  const profile = catchupSession?.profile ?? provisionalStreamProfile(channel)
   const nowUtcMs = Date.now()
+  const currentAbsoluteMs = catchupSession
+    ? catchupSession.timelineStartUtcMs + (vjs?.currentTime?.() || 0) * 1000
+    : nowUtcMs
+  if (shouldIgnoreSeek(targetUtcMs - currentAbsoluteMs, { lastSeekWasLive: !catchupSession, profile })) return
+
   const catchupWindowMs = catchupWindowDays(channel) * 24 * 60 * 60 * 1000
-  const clamped = clampSeekTarget(targetUtcMs, { nowUtcMs, catchupWindowMs })
+  const clamped = clampSeekTarget(targetUtcMs, { nowUtcMs, catchupWindowMs, profile })
   if (clamped.kind === "live") {
     backToLive(channel)
     return
   }
 
-  if (catchupSession && catchupSession.channelId === channel.id && vjs) {
+  // forceRemount: resume-after-long-pause must rebuild the connection even when the paused position still sits at a buffered edge.
+  if (!seekOpts.forceRemount && catchupSession && catchupSession.channelId === channel.id && vjs) {
     const videoEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
     const buffered = videoEl?.buffered
     if (buffered) {
@@ -2747,15 +3031,19 @@ async function seekToAbsolute(targetUtcMs) {
     }
   }
 
+  const remountTargetUtcMs = profile.granularitySeconds === 60
+    ? adjustTargetForGranularity(clamped.targetUtcMs, nowUtcMs, 60_000)
+    : clamped.targetUtcMs
+
   // A jump within a programme replay stays bounded to the programme window, so the native bar keeps its episode-like span.
   const withinProgrammeReplay =
     catchupSession &&
     catchupSession.kind === "programme" &&
     catchupSession.channelId === channel.id &&
-    clamped.targetUtcMs < catchupSession.stopUtcMs
+    remountTargetUtcMs < catchupSession.stopUtcMs
   if (withinProgrammeReplay) {
     void playCatchup(channel, {
-      startUtcMs: clamped.targetUtcMs,
+      startUtcMs: remountTargetUtcMs,
       stopUtcMs: catchupSession.stopUtcMs,
       timelineStartUtcMs: catchupSession.timelineStartUtcMs,
       title: catchupSession.title,
@@ -2766,9 +3054,9 @@ async function seekToAbsolute(targetUtcMs) {
   }
 
   void playCatchup(channel, {
-    startUtcMs: clamped.targetUtcMs,
+    startUtcMs: remountTargetUtcMs,
     stopUtcMs: nowUtcMs,
-    title: resolveProgrammeTitleAt(channel, clamped.targetUtcMs),
+    title: resolveProgrammeTitleAt(channel, remountTargetUtcMs),
     kind: "timeshift",
   })
 }
@@ -2830,6 +3118,7 @@ function appendExternalLaunchButton(parent, streamId, src, name) {
     },
     getTitle: () => name || null,
     beforeLaunch: () => {
+      suppressPauseTrackingUntilMs = Date.now() + 500
       try { vjs?.pause?.() } catch {}
     },
   })
@@ -2980,11 +3269,12 @@ epgPanel?.addEventListener(
 )
 
 /** Whether the entry starting at `entryStartMs` is the one actually mounted right now, accounting for an active catch-up/timeshift session. */
-function isEpgEntryPlaying(entryStartMs, isLive, isM3uSource) {
+function isEpgEntryPlaying(entryStartMs, entryStopMs, isLive, isM3uSource) {
   if (catchupSession) {
-    if (catchupSession.kind !== "programme" || catchupSession.channelId !== epgListChannelId) return false
+    if (catchupSession.channelId !== epgListChannelId) return false
     const entryStartUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entryStartMs) : entryStartMs
-    return Math.abs(entryStartUtcMs - catchupSession.startUtcMs) <= 1000
+    const entryStopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entryStopMs) : entryStopMs
+    return entryStartUtcMs <= catchupSession.startUtcMs && catchupSession.startUtcMs < entryStopUtcMs
   }
   return isLive && currentlyPlayingId === epgListChannelId
 }
@@ -3029,7 +3319,7 @@ async function loadEPG(streamId) {
     epgList.innerHTML = epgListData
       .map((p, idx) => {
         const isLive = p.start <= now && now < p.stop
-        const isPlaying = isEpgEntryPlaying(p.start, isLive, false)
+        const isPlaying = isEpgEntryPlaying(p.start, p.stop, isLive, false)
         const start = fmtTime(p.start / 1000)
         const end = fmtTime(p.stop / 1000)
         const title = escapeHtml(p.title)
@@ -3070,62 +3360,23 @@ async function loadEPG(streamId) {
   }
 }
 
-/**
- * M3U variant of loadEPG: there's no provider `get_short_epg` endpoint, but
- * we may have programmes loaded from the user's XMLTV sources. Resolve the
- * channel's effective tvg-id (auto or override), look up the matching
- * programmes, and render them in the same shape the Xtream path produces.
- */
-function paintSidePanelFromXmltv(streamId) {
-  if (!epgList) return
-  const channel = all.find((entry) => entry.id === streamId)
-  if (!channel) {
-    epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
-    if (epgDayIndicator) epgDayIndicator.textContent = ""
-    return
-  }
-  const isNewChannelPaint = streamId !== epgListChannelId
-  if (isNewChannelPaint) epgSidePanelPastPages = 1
-  epgListChannelId = streamId
-  epgListChannelName = channel.name || ""
-
-  const tvgId = effectiveTvgId(channel, activePlaylistId)
-  if (!tvgId) {
-    epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.sidePanelNoMapping"))}</div>`
-    epgListData = []
-    if (epgDayIndicator) epgDayIndicator.textContent = ""
-    return
-  }
-
-  const state = getProgrammesSync(activePlaylistId)
-  const programmes = state?.programmes?.get(tvgId) || []
-  if (!programmes.length) {
-    epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
-    epgListData = []
-    if (epgDayIndicator) epgDayIndicator.textContent = ""
-    return
-  }
-
+/** Splits a sorted programme array into the upcoming slice (next 10) and a past slice sized by `pastPages` (page 1 shows the 8 most recent, "Load earlier" pages grow the window). */
+function computeEpgSidePanelWindow(programmes, pastPages, supportsCatchup) {
   const now = Date.now()
   const upcoming = programmes.filter((programme) => programme.stop >= now).slice(0, 10)
-  const supportsCatchup = channelSupportsCatchup(channel)
-  // Past programmes: archive-capable channels only, capped to the 8 most recent until "Load earlier" is pressed.
-  const pastWindowMs = epgSidePanelPastPages * EPG_SIDE_PANEL_PAST_WINDOW_MS
+  const pastWindowMs = pastPages * EPG_SIDE_PANEL_PAST_WINDOW_MS
   const pastWithinWindow = supportsCatchup
     ? programmes.filter((programme) => programme.stop < now && now - programme.stop <= pastWindowMs)
     : []
-  const past = epgSidePanelPastPages > 1 ? pastWithinWindow : pastWithinWindow.slice(-8)
-  const combined = [...past, ...upcoming]
-  if (!combined.length) {
-    epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
-    epgListData = []
-    if (epgDayIndicator) epgDayIndicator.textContent = ""
-    return
-  }
+  const past = pastPages > 1 ? pastWithinWindow : pastWithinWindow.slice(-8)
+  return { past, upcoming }
+}
 
+/** Shared side-panel renderer for past + upcoming rows; isM3uSource marks entry times as display-shifted XMLTV rather than true UTC. */
+function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, isNewChannelPaint }) {
+  const combined = [...past, ...upcoming]
   epgListData = combined
-  const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
-  const canLoadEarlier = supportsCatchup && epgSidePanelPastPages < maxPastPages
+  const now = Date.now()
   const loadEarlierHtml = canLoadEarlier
     ? `<button type="button" data-epg-load-earlier
          class="block w-full min-h-11 rounded-lg bg-surface-2 hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-accent text-sm text-fg-2 transition-colors">${escapeHtml(t("livetv.epgLoadEarlier"))}</button>`
@@ -3137,7 +3388,7 @@ function paintSidePanelFromXmltv(streamId) {
   const rowsHtml = combined
     .map((programme, idx) => {
       const isLive = programme.start <= now && now < programme.stop
-      const isPlaying = isEpgEntryPlaying(programme.start, isLive, true)
+      const isPlaying = isEpgEntryPlaying(programme.start, programme.stop, isLive, isM3uSource)
       if (isPlaying) playingIndex = idx
       if (isLive) liveIndex = idx
       const isPast = programme.stop <= now
@@ -3145,7 +3396,9 @@ function paintSidePanelFromXmltv(streamId) {
       const end = fmtTime(programme.stop / 1000)
       const title = escapeHtml(programme.title)
       const desc = escapeHtml(programme.desc)
-      const replayBadge = isPast
+      // has_archive narrows the badge/playability when the provider sends it; missing/null means "trust the channel-level catch-up window".
+      const archiveKnownPlayable = programme.hasArchive == null ? true : programme.hasArchive
+      const replayBadge = isPast && archiveKnownPlayable
         ? `<span class="inline-flex shrink-0 items-center rounded-md border border-line bg-surface-2 px-1.5 text-2xs font-medium text-fg-3">${escapeHtml(t("catchup.badge"))}</span>`
         : ""
       const dayKey = epgDayKey(programme.start)
@@ -3194,22 +3447,208 @@ function paintSidePanelFromXmltv(streamId) {
   updateEpgDayIndicator()
 }
 
-/** Loads one more day of past programmes into the M3U side panel, re-rendering while preserving scroll position. */
+/** M3U variant of loadEPG: renders the channel's XMLTV programmes (via effective tvg-id) through the shared renderer. */
+function paintSidePanelFromXmltv(streamId) {
+  if (!epgList) return
+  const channel = all.find((entry) => entry.id === streamId)
+  if (!channel) {
+    epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
+    return
+  }
+  const isNewChannelPaint = streamId !== epgListChannelId
+  if (isNewChannelPaint) epgSidePanelPastPages = 1
+  epgListChannelId = streamId
+  epgListChannelName = channel.name || ""
+
+  const tvgId = effectiveTvgId(channel, activePlaylistId)
+  if (!tvgId) {
+    epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.sidePanelNoMapping"))}</div>`
+    epgListData = []
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
+    return
+  }
+
+  const state = getProgrammesSync(activePlaylistId)
+  const programmes = state?.programmes?.get(tvgId) || []
+  if (!programmes.length) {
+    epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
+    epgListData = []
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
+    return
+  }
+
+  const supportsCatchup = channelSupportsCatchup(channel)
+  const { past, upcoming } = computeEpgSidePanelWindow(programmes, epgSidePanelPastPages, supportsCatchup)
+  if (!past.length && !upcoming.length) {
+    epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
+    epgListData = []
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
+    return
+  }
+
+  const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
+  const canLoadEarlier = supportsCatchup && epgSidePanelPastPages < maxPastPages
+  renderEpgSidePanelRows(past, upcoming, { isM3uSource: true, canLoadEarlier, isNewChannelPaint })
+}
+
+// ----------------------------
+// Xtream full-table EPG (past programmes for catch-up-capable channels)
+// ----------------------------
+const XTREAM_FULL_EPG_CACHE_TTL_MS = 15 * 60 * 1000
+// "playlistId:streamId" -> { at, entries }. The full table can span several days, so this stays in memory rather than IndexedDB.
+const xtreamFullEpgCache = new Map()
+
+function normalizeXtreamFullEpgListings(listings) {
+  return listings
+    .map((listing) => {
+      const startUtcMs = Number(listing.start_timestamp ?? listing.start) * 1000
+      const stopUtcMs = Number(listing.stop_timestamp ?? listing.end) * 1000
+      if (!Number.isFinite(startUtcMs) || !Number.isFinite(stopUtcMs) || stopUtcMs <= startUtcMs) return null
+      const archiveFlag = listing.has_archive
+      const hasArchive = archiveFlag === undefined || archiveFlag === null ? null : Number(archiveFlag) === 1
+      return {
+        startUtcMs,
+        stopUtcMs,
+        title: maybeB64ToUtf8(listing.title || listing.title_raw || t("programme.untitled")),
+        description: maybeB64ToUtf8(listing.description || listing.description_raw || ""),
+        hasArchive,
+      }
+    })
+    .filter((entry) => entry !== null)
+    .sort((a, b) => a.startUtcMs - b.startUtcMs)
+}
+
+async function fetchXtreamFullEpgAction(action, streamId) {
+  // Never throw: a 2xx non-JSON body for the first action spelling must still let the fallback spelling run.
+  try {
+    const response = await xtreamApiFetch(action, { stream_id: String(streamId) })
+    if (!response.ok) return null
+    const data = await response.json()
+    const listings = Array.isArray(data?.epg_listings) ? data.epg_listings : []
+    return listings.length ? listings : null
+  } catch {
+    return null
+  }
+}
+
+/** Fresh cached full-table entries, or null (used to skip the loading placeholder on remount repaints). */
+function peekXtreamFullEpgCache(channel) {
+  const cached = xtreamFullEpgCache.get(`${activePlaylistId}:${channel.id}`)
+  return cached && Date.now() - cached.at < XTREAM_FULL_EPG_CACHE_TTL_MS ? cached.entries : null
+}
+
+/** Full-table Xtream EPG (`get_simple_date_table`, falling back to the `get_simple_data_table` spelling), windowed and cached per playlist+channel. */
+async function fetchXtreamFullEpg(channel) {
+  const cacheKey = `${activePlaylistId}:${channel.id}`
+  const cached = xtreamFullEpgCache.get(cacheKey)
+  if (cached && Date.now() - cached.at < XTREAM_FULL_EPG_CACHE_TTL_MS) return cached.entries
+  try {
+    const listings =
+      (await fetchXtreamFullEpgAction("get_simple_date_table", channel.id)) ||
+      (await fetchXtreamFullEpgAction("get_simple_data_table", channel.id))
+    if (!listings) return null
+    const normalized = normalizeXtreamFullEpgListings(listings)
+    const now = Date.now()
+    const windowStartMs = now - catchupWindowDays(channel) * 24 * 60 * 60 * 1000
+    const windowEndMs = now + 36 * 60 * 60 * 1000
+    const windowed = normalized.filter(
+      (entry) => entry.startUtcMs >= windowStartMs && entry.startUtcMs <= windowEndMs
+    )
+    for (const [existingKey, existingEntry] of xtreamFullEpgCache) {
+      if (now - existingEntry.at >= XTREAM_FULL_EPG_CACHE_TTL_MS) xtreamFullEpgCache.delete(existingKey)
+    }
+    xtreamFullEpgCache.set(cacheKey, { at: now, entries: windowed })
+    return windowed
+  } catch (err) {
+    log.warn("[xt:livetv] fetchXtreamFullEpg failed:", err)
+    return null
+  }
+}
+
+/** Maps cached full-table listings to the {start, stop, title, desc, hasArchive} shape renderEpgSidePanelRows expects. */
+function xtreamListingsToProgrammes(listings) {
+  return listings.map((listing) => ({
+    start: listing.startUtcMs,
+    stop: listing.stopUtcMs,
+    title: listing.title,
+    desc: listing.description,
+    hasArchive: listing.hasArchive,
+  }))
+}
+
+function renderXtreamEpgEntries(channel, programmes, isNewChannelPaint) {
+  const { past, upcoming } = computeEpgSidePanelWindow(programmes, epgSidePanelPastPages, true)
+  const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
+  const canLoadEarlier = epgSidePanelPastPages < maxPastPages
+  renderEpgSidePanelRows(past, upcoming, { isM3uSource: false, canLoadEarlier, isNewChannelPaint })
+}
+
+/** Xtream variant of paintSidePanelFromXmltv: fetches the full EPG table for catch-up-capable channels; falls back to loadEPG's short list when the table is unavailable. */
+async function paintSidePanelFromXtreamEpg(streamId, channel) {
+  if (!epgList) return
+  const isNewChannelPaint = streamId !== epgListChannelId
+  if (isNewChannelPaint) epgSidePanelPastPages = 1
+  epgListChannelId = streamId
+  epgListChannelName = channel.name || ""
+  epgListData = []
+  // Remount repaints (seek, auto-advance) hit the cache; blanking to a placeholder there just flashes the panel.
+  if (!peekXtreamFullEpgCache(channel)) {
+    epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.loading"))}</div>`
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
+  }
+
+  const listings = await fetchXtreamFullEpg(channel)
+  // A different channel has since taken over the panel while the fetch was in flight.
+  if (epgListChannelId !== streamId) return
+  if (!listings || !listings.length) {
+    loadEPG(streamId)
+    return
+  }
+  renderXtreamEpgEntries(channel, xtreamListingsToProgrammes(listings), isNewChannelPaint)
+}
+
+/** Side-panel EPG router: XMLTV for M3U channels, full table for catch-up-capable Xtream channels, short EPG otherwise. */
+function paintEpgSidePanel(streamId) {
+  if (hasDirectUrl(streamId)) {
+    paintSidePanelFromXmltv(streamId)
+    return
+  }
+  const channel = all.find((entry) => entry.id === streamId)
+  if (channel && channelSupportsCatchup(channel)) {
+    void paintSidePanelFromXtreamEpg(streamId, channel)
+    return
+  }
+  loadEPG(streamId)
+}
+
+/** Loads one more day of past programmes into the side panel, re-rendering while preserving scroll position. */
 function extendSidePanelPastWindow() {
   if (epgSidePanelExtending) return
   const streamId = epgListChannelId
-  if (!hasDirectUrl(streamId)) return
   const channel = all.find((entry) => entry.id === streamId)
   if (!channel || !channelSupportsCatchup(channel)) return
   const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
   if (epgSidePanelPastPages >= maxPastPages) return
+
+  const isM3uPanel = hasDirectUrl(streamId)
+  const cachedXtreamEntries = isM3uPanel ? null : peekXtreamFullEpgCache(channel)
+  // No fresh cache to extend from: refetch instead of consuming a page on a no-op.
+  if (!isM3uPanel && !cachedXtreamEntries) {
+    void paintSidePanelFromXtreamEpg(streamId, channel)
+    return
+  }
 
   epgSidePanelExtending = true
   const focusWasInList = !!epgList && epgList.contains(document.activeElement)
   epgSidePanelPastPages = Math.min(epgSidePanelPastPages + 1, maxPastPages)
   const previousScrollHeight = epgPanel?.scrollHeight ?? 0
   const previousScrollTop = epgPanel?.scrollTop ?? 0
-  paintSidePanelFromXmltv(streamId)
+  if (isM3uPanel) {
+    paintSidePanelFromXmltv(streamId)
+  } else {
+    renderXtreamEpgEntries(channel, xtreamListingsToProgrammes(cachedXtreamEntries), false)
+  }
   if (epgPanel) epgPanel.scrollTop = previousScrollTop + (epgPanel.scrollHeight - previousScrollHeight)
   if (focusWasInList) {
     const nextFocusTarget = epgList?.querySelector("[data-epg-load-earlier]") ?? epgList?.querySelector("[data-epg-idx]")
@@ -3234,20 +3673,22 @@ epgList?.addEventListener("click", async (e) => {
   const now = Date.now()
   const isLive = entry.start <= now && now < entry.stop
   const isEnded = entry.stop <= now
-  // Side-panel entries from paintSidePanelFromXmltv carry display-shifted XMLTV
-  // times; loadEPG's get_short_epg entries are already true UTC.
+  // XMLTV panel entries carry display-shifted times; short-EPG and full-table entries are already UTC.
   const isM3uSource = hasDirectUrl(epgListChannelId)
   const startUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.start) : entry.start
   const stopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.stop) : entry.stop
+  // has_archive narrows catch-up eligibility when sent; it never widens past the channel-level window check.
+  const archiveKnownPlayable = entry.hasArchive == null ? true : entry.hasArchive
 
   let onCatchup
   let onWatchFromStart
   if (channel && channelSupportsCatchup(channel)) {
-    if (isEnded && isCatchupPlayable(channel, startUtcMs, now)) {
+    if (isEnded && archiveKnownPlayable && isCatchupPlayable(channel, startUtcMs, now)) {
       onCatchup = () => {
         void playCatchup(channel, { startUtcMs, stopUtcMs, title: entry.title, catchupId: entry.catchupId })
       }
     }
+    // has_archive is 0 while a programme is still airing, so it must not gate "Watch from start".
     if (isLive && isCatchupPlayable(channel, startUtcMs, now)) {
       onWatchFromStart = () => {
         void playCatchup(channel, { startUtcMs, stopUtcMs, title: entry.title, seekSeconds: 0, catchupId: entry.catchupId })

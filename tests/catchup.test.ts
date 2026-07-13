@@ -11,6 +11,9 @@ import {
   expandCatchupTemplate,
   buildM3uCatchupUrl,
   parseXtreamStyleLiveUrl,
+  templateHasEndToken,
+  streamProfileFor,
+  XTREAM_STREAM_PROFILE,
   type CatchupCapableChannel,
 } from "../src/scripts/lib/catchup"
 
@@ -80,6 +83,72 @@ describe("buildXtreamTimeshiftUrl", () => {
     expect(url).toBe(
       "http://host.example:8080/streaming/timeshift.php?username=user%20one&password=pa%3Ass&stream=501&start=2024-06-15%3A20-30&duration=90",
     )
+  })
+
+  it("shifts the REST-form start earlier for a positive catchupCorrectionMs, duration unchanged", () => {
+    const url = buildXtreamTimeshiftUrl({
+      baseUrl: "http://host.example:8080",
+      username: "user",
+      password: "pass",
+      streamId: 501,
+      startUtcMs,
+      durationMinutes: 90,
+      serverOffsetMs: 0,
+      extension: "ts",
+      form: "rest",
+      catchupCorrectionMs: 2 * 3600000,
+    })
+    expect(url).toBe("http://host.example:8080/timeshift/user/pass/90/2024-06-15:18-30/501.ts")
+  })
+
+  it("shifts the legacy-form start earlier for a positive catchupCorrectionMs, duration unchanged", () => {
+    const url = buildXtreamTimeshiftUrl({
+      baseUrl: "http://host.example:8080",
+      username: "user",
+      password: "pass",
+      streamId: 501,
+      startUtcMs,
+      durationMinutes: 90,
+      serverOffsetMs: 0,
+      extension: "m3u8",
+      form: "legacy",
+      catchupCorrectionMs: 2 * 3600000,
+    })
+    expect(url).toBe(
+      "http://host.example:8080/streaming/timeshift.php?username=user&password=pass&stream=501&start=2024-06-15%3A18-30&duration=90",
+    )
+  })
+
+  it("shifts the start later for a negative catchupCorrectionMs", () => {
+    const url = buildXtreamTimeshiftUrl({
+      baseUrl: "http://host.example:8080",
+      username: "user",
+      password: "pass",
+      streamId: 501,
+      startUtcMs,
+      durationMinutes: 90,
+      serverOffsetMs: 0,
+      extension: "ts",
+      form: "rest",
+      catchupCorrectionMs: -1800000,
+    })
+    expect(url).toBe("http://host.example:8080/timeshift/user/pass/90/2024-06-15:21-00/501.ts")
+  })
+
+  it("composes a catchupCorrectionMs shift with a serverOffsetMs shift", () => {
+    const url = buildXtreamTimeshiftUrl({
+      baseUrl: "http://host.example:8080",
+      username: "user",
+      password: "pass",
+      streamId: 501,
+      startUtcMs,
+      durationMinutes: 90,
+      serverOffsetMs: 3600000,
+      extension: "ts",
+      form: "rest",
+      catchupCorrectionMs: 2 * 3600000,
+    })
+    expect(url).toBe("http://host.example:8080/timeshift/user/pass/90/2024-06-15:19-30/501.ts")
   })
 })
 
@@ -653,6 +722,80 @@ describe("parseXtreamStyleLiveUrl", () => {
       streamId: "12345",
       extension: "ts",
     })
+  })
+})
+
+describe("templateHasEndToken", () => {
+  it("recognizes the {utcend} family", () => {
+    expect(templateHasEndToken("{utcend}")).toBe(true)
+    expect(templateHasEndToken("{utcend:Y-m-d}")).toBe(true)
+  })
+
+  it("recognizes the ${end} family", () => {
+    expect(templateHasEndToken("${end}")).toBe(true)
+  })
+
+  it("recognizes the {duration} family", () => {
+    expect(templateHasEndToken("{duration}")).toBe(true)
+    expect(templateHasEndToken("{duration:60}")).toBe(true)
+  })
+
+  it("recognizes the TiviMate/diyp ${(e)...} end marker", () => {
+    expect(templateHasEndToken("${(e)yyyyMMddHHmmss}")).toBe(true)
+  })
+
+  it("returns false for start/now-only templates and an empty string", () => {
+    expect(templateHasEndToken("{utc}")).toBe(false)
+    expect(templateHasEndToken("${start}")).toBe(false)
+    expect(templateHasEndToken("{lutc}")).toBe(false)
+    expect(templateHasEndToken("")).toBe(false)
+  })
+})
+
+describe("streamProfileFor", () => {
+  it("classifies xc mode as a terminating minute-granularity Xtream mount", () => {
+    expect(streamProfileFor({ catchup: "xc" })).toEqual({ granularitySeconds: 60, terminates: true })
+  })
+
+  it("classifies the flussonic family as non-terminating second-granularity", () => {
+    expect(streamProfileFor({ catchup: "flussonic" })).toEqual({ granularitySeconds: 1, terminates: false })
+    expect(streamProfileFor({ catchup: "flussonic-hls" })).toEqual({ granularitySeconds: 1, terminates: false })
+    expect(streamProfileFor({ catchup: "flussonic-ts" })).toEqual({ granularitySeconds: 1, terminates: false })
+    expect(streamProfileFor({ catchup: "fs" })).toEqual({ granularitySeconds: 1, terminates: false })
+  })
+
+  it("classifies vod mode as a terminating second-granularity stream", () => {
+    expect(streamProfileFor({ catchup: "vod" })).toEqual({ granularitySeconds: 1, terminates: true })
+  })
+
+  it("classifies shift mode with a ${(e)} playseek source as terminating", () => {
+    expect(
+      streamProfileFor({ catchup: "shift", catchupSource: "?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}" }),
+    ).toEqual({ granularitySeconds: 1, terminates: true })
+  })
+
+  it("classifies append mode with no source as non-terminating", () => {
+    expect(streamProfileFor({ catchup: "append" })).toEqual({ granularitySeconds: 1, terminates: false })
+  })
+
+  it("classifies a default-mode channel with a utc-only source as non-terminating", () => {
+    expect(streamProfileFor({ catchup: "default", catchupSource: "http://host/archive?utc={utc}" })).toEqual({
+      granularitySeconds: 1,
+      terminates: false,
+    })
+  })
+
+  it("classifies the same shift channel with an end-token source as terminating", () => {
+    expect(streamProfileFor({ catchup: "shift", catchupSource: "http://host/archive?utc={utc}&end={utcend}" })).toEqual({
+      granularitySeconds: 1,
+      terminates: true,
+    })
+  })
+})
+
+describe("XTREAM_STREAM_PROFILE", () => {
+  it("is a terminating minute-granularity profile", () => {
+    expect(XTREAM_STREAM_PROFILE).toEqual({ granularitySeconds: 60, terminates: true })
   })
 })
 

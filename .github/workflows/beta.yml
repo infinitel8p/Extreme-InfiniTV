@@ -243,7 +243,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Patch latest.json notes
+      - name: Patch latest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.create-beta-release.outputs.version }}
@@ -259,10 +259,15 @@ jobs:
           fi
           BRANCH_NAME="${GITHUB_REF#refs/heads/}"
           NOTES="Beta v${VERSION} - built from ${BRANCH_NAME}"
-          NOTES="$NOTES" node -e "
+          NOTES="$NOTES" TAG="$TAG" node -e "
             const fs = require('fs');
             const j = JSON.parse(fs.readFileSync('latest.json', 'utf8'));
             j.notes = process.env.NOTES;
+            // Prereleases never resolve as releases/latest, so point each platform at its own tag.
+            for (const platformKey of Object.keys(j.platforms)) {
+              const platform = j.platforms[platformKey];
+              platform.url = platform.url.replace('releases/latest/download/', \`releases/download/\${process.env.TAG}/\`);
+            }
             fs.writeFileSync('latest.json', JSON.stringify(j, null, 2));
           "
           gh release upload "$TAG" latest.json --clobber --repo "${{ github.repository }}"
