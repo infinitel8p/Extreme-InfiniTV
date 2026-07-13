@@ -114,11 +114,6 @@ import {
     </section>
 
     </div>
-    <div
-      id="app-version"
-      class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
-      Loading…
-    </div>
   </main>
 
   <!-- Delete confirmation. -->
@@ -177,10 +172,8 @@ import {
     } from "@/scripts/lib/downloads.js"
     import { getDownloadDir } from "@/scripts/lib/app-settings.js"
     import { prettifyAndroidUri } from "@/scripts/lib/android-fs.js"
-    import { injectVersion } from "@/scripts/version.js"
     import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
     import { t } from "@/scripts/lib/i18n.js"
-    injectVersion()
 
     const isAndroid = /Android/i.test(navigator.userAgent || "")
 

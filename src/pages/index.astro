@@ -175,12 +175,6 @@ import {
 		</nav>
 
 		<HubStrips client:load />
-
-		<div
-			id="app-version"
-			class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
-			Loading…
-		</div>
 	</main>
 </Layout>
 
@@ -210,8 +204,6 @@ import {
 	import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js";
 	import { getRecents, ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js";
 	import { getProgrammesSync, getNowNext, loadProgrammes } from "@/scripts/lib/epg-data.js";
-	import { injectVersion } from "@/scripts/version.js";
-	injectVersion();
 
 	const eyebrow = document.getElementById("hero-eyebrow");
 	let heroChannelCount = 0;

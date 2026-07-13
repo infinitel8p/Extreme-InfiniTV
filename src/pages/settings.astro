@@ -98,7 +98,7 @@ const navStructure: NavSection[] = [
 ]
 ---
 
-<Layout pageTitle="Settings">
+<Layout pageTitle="Settings" showVersion={false}>
   <main class="flex-1 min-h-0 overflow-y-auto overflow-x-clip custom-scroll">
     <div
       class="w-full max-w-480 mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 pb-12 flex flex-col gap-6 lg:gap-8">
@@ -1041,8 +1041,6 @@ const navStructure: NavSection[] = [
         </summary>
         <div id="changelog-body" class="flex flex-col gap-2 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60 empty:hidden"></div>
       </details>
-
-      <span id="app-version" class="hidden"></span>
     </section>
 
     <!-- Group: Support / donations -->
@@ -1232,7 +1230,6 @@ const navStructure: NavSection[] = [
       renderPlaylistRow,
       getPlaylistListEmptyCopy,
     } from "@/scripts/lib/playlist-rows.js"
-    import { injectVersion } from "@/scripts/version.js"
     import { fetchReleases, renderMarkdown, filterReleasesForDisplay } from "@/scripts/lib/changelog.ts"
     import {
       checkForUpdate,
@@ -1294,8 +1291,6 @@ const navStructure: NavSection[] = [
       setOffsetSetting,
       getProgrammesSync,
     } from "@/scripts/lib/epg-data.js"
-
-    injectVersion()
 
     // Linux notice: surface that auto-updates only land on the AppImage
     // build. Shown on any Tauri Linux session - AppImage users will see

@@ -247,12 +247,6 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 
 		<!-- Categories popover -->
 		<CategoryPickerDialog idPrefix="category-picker" />
-
-		<div
-			id="app-version"
-			class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
-			Loading…
-		</div>
 	</main>
 
 	<style>
@@ -398,8 +392,6 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 	<script>
 		import "../scripts/stream/stream.ts";
 		import "../scripts/updater-startup.js";
-		import { injectVersion } from "../scripts/version.js";
-		injectVersion();
 
 		const playerEl = document.getElementById("player");
 		const playerEmpty = document.getElementById("player-empty");

@@ -162,18 +162,10 @@ import {
 
       </div>
     </div>
-
-    <div
-      id="app-version"
-      class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
-      Loading…
-    </div>
   </main>
 
   <script>
     import "@/scripts/movies/detail.ts"
     import "@/scripts/updater-startup.js"
-    import { injectVersion } from "@/scripts/version.js"
-    injectVersion()
   </script>
 </Layout>
