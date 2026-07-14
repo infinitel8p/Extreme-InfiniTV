@@ -1466,6 +1466,9 @@ let stallSentinel = null
 let bufferingShownAt = 0
 let bufferingHideTimer = null
 let timeshiftChipLastUpdateAt = 0
+let timeshiftChipControlsActive = true
+let timeshiftChipIdleTimer: ReturnType<typeof setTimeout> | null = null
+let timeshiftActivityTrackingArmed = false
 let embeddedPlayerLiveUi = true
 let focusKeeperCleanup: (() => void) | null = null
 /** Active catch-up/timeshift (replay) session, or null when tuned to live. */
@@ -1534,6 +1537,7 @@ const BUFFERING_GRACE_MS = 350
 const ERROR_AUTO_RETRY_MS = 1500
 const TIMESHIFT_CHIP_UPDATE_MS = 1000
 const TIMESHIFT_CHIP_LIVE_THRESHOLD_MS = 15_000
+const TIMESHIFT_CHIP_IDLE_MS = 3000
 
 // Per-stream diagnostic cooldown
 const AUTO_DIAGNOSTIC_COOLDOWN_MS = 30_000
@@ -1662,6 +1666,7 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
     timeshiftChipLastUpdateAt = now
     renderTimeshiftChip()
   })
+  ensureTimeshiftActivityTracking()
   vjs.on("stalled", () => {
     showBufferingChip()
     armStallSentinel()
@@ -2005,6 +2010,7 @@ function showTimeshiftChip(lines: string[]) {
   const playerWrap = document.getElementById("player")?.parentElement
   if (!playerWrap) return
   let chip = playerWrap.querySelector("[data-timeshift-chip]")
+  const created = !chip
   if (!chip) {
     chip = document.createElement("div")
     chip.dataset.timeshiftChip = ""
@@ -2020,11 +2026,44 @@ function showTimeshiftChip(lines: string[]) {
     lineEl.textContent = line
     chip.appendChild(lineEl)
   }
+  if (created) bumpTimeshiftChipActivity()
+  else applyTimeshiftChipVisibility()
 }
 
 function hideTimeshiftChip() {
   const playerWrap = document.getElementById("player")?.parentElement
   playerWrap?.querySelector("[data-timeshift-chip]")?.remove()
+}
+
+function applyTimeshiftChipVisibility() {
+  const playerWrap = document.getElementById("player")?.parentElement
+  const chip = playerWrap?.querySelector("[data-timeshift-chip]")
+  if (!chip) return
+  const visible = timeshiftChipControlsActive || pendingSeekTargetUtcMs != null
+  chip.classList.toggle("is-hidden", !visible)
+}
+
+function bumpTimeshiftChipActivity() {
+  timeshiftChipControlsActive = true
+  applyTimeshiftChipVisibility()
+  if (timeshiftChipIdleTimer) clearTimeout(timeshiftChipIdleTimer)
+  timeshiftChipIdleTimer = setTimeout(() => {
+    timeshiftChipControlsActive = false
+    applyTimeshiftChipVisibility()
+  }, TIMESHIFT_CHIP_IDLE_MS)
+}
+
+function ensureTimeshiftActivityTracking() {
+  if (timeshiftActivityTrackingArmed) return
+  const playerWrap = document.getElementById("player")?.parentElement
+  if (!playerWrap) return
+  timeshiftActivityTrackingArmed = true
+  const onActivity = () => bumpTimeshiftChipActivity()
+  playerWrap.addEventListener("pointermove", onActivity)
+  playerWrap.addEventListener("pointerdown", onActivity)
+  playerWrap.addEventListener("wheel", onActivity, { passive: true })
+  document.addEventListener("keydown", onActivity)
+  bumpTimeshiftChipActivity()
 }
 
 /** Wall-clock playhead + behind-live readout for the active catch-up/timeshift session. */

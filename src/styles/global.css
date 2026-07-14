@@ -2321,7 +2321,11 @@ summary.list-none::-webkit-details-marker {
     letter-spacing: 0.01em;
     backdrop-filter: blur(12px);
     pointer-events: none;
-    animation: buffering-chip-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    animation: timeshift-chip-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.timeshift-chip.is-hidden {
+    opacity: 0;
 }
 .timeshift-chip-line:first-child {
     color: var(--color-fg);
@@ -2333,6 +2337,10 @@ summary.list-none::-webkit-details-marker {
     .timeshift-chip {
         animation: none;
     }
+}
+@keyframes timeshift-chip-in {
+    from { transform: translateY(-8px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
 }
 
 /* ────────────────────────────── */
