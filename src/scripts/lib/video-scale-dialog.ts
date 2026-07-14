@@ -104,7 +104,7 @@ function ensureDialog(): HTMLDialogElement {
         <button
           type="button"
           data-role="close"
-          class="rounded-xl border border-line px-4 py-2 text-sm hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent"
+          class="inline-flex items-center justify-center min-h-11 rounded-xl border border-line px-4 text-sm transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent"
         ></button>
       </div>
     </div>

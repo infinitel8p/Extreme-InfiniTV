@@ -66,6 +66,7 @@ import {
   getPlayerBackend,
   getPlayerPath,
   getUserAgent,
+  getExternalPlayerPref,
   EXTERNAL_PLAYER_BACKENDS,
   getVideoScale,
   setVideoScale,
@@ -1942,15 +1943,18 @@ function showTuningOverlay(logoUrl, maxMs = TUNING_MAX_MS) {
   const overlay = document.createElement("div")
   overlay.dataset.tuningOverlay = ""
   overlay.className = "tuning-overlay"
-  overlay.style.viewTransitionName = "tuning-logo"
+  const plate = document.createElement("div")
+  plate.className = "tuning-overlay__plate"
+  plate.style.viewTransitionName = "tuning-logo"
   if (logoUrl) {
     const img = document.createElement("img")
     img.src = logoUrl
     img.alt = ""
     img.referrerPolicy = "no-referrer"
     img.decoding = "async"
-    overlay.appendChild(img)
+    plate.appendChild(img)
   }
+  overlay.appendChild(plate)
   playerWrap.appendChild(overlay)
   // Cap visibility so we never get stuck on the overlay if `playing` never
   // fires (dead provider, codec issue, render-process crash on Android).
@@ -2271,47 +2275,70 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   const panel = document.createElement("div")
   panel.dataset.playbackFailure = ""
   panel.setAttribute("role", "alert")
+  // gap/size scale down on a short mobile player (overflow-hidden), overflow-y-auto is the safety valve when it still doesn't fit.
   panel.className =
-    "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/85 px-6 text-center"
+    "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 sm:gap-5 bg-black/85 px-6 py-4 text-center overflow-y-auto"
 
+  // The panel sits on an always-dark bg-black/85 surface, so its chrome is styled light-on-dark in both themes (not theme-flipping tokens).
   const icon = document.createElement("span")
-  icon.className = "inline-flex text-3xl leading-none text-fg-3"
+  icon.className = "inline-flex text-4xl sm:text-5xl leading-none text-white/40"
   icon.setAttribute("aria-hidden", "true")
   icon.innerHTML = ICON_ALERT_TRIANGLE
   panel.appendChild(icon)
 
+  const headGroup = document.createElement("div")
+  headGroup.className = "flex flex-col items-center gap-1.5"
+
   const title = document.createElement("p")
-  title.className = "m-0 text-fg font-semibold text-base sm:text-lg"
-  title.textContent = t("stream.error.cantPlay", {
-    channel: ctx.name || `#${ctx.streamId}`,
-  })
-  panel.appendChild(title)
+  title.className = "m-0 text-white font-semibold text-lg sm:text-2xl tracking-tight"
+  title.textContent = t("stream.error.cantPlayTitle")
+  headGroup.appendChild(title)
+
+  const channelLine = document.createElement("p")
+  channelLine.className = "m-0 text-white/70 text-sm sm:text-base font-medium"
+  channelLine.textContent = ctx.name || `#${ctx.streamId}`
+  headGroup.appendChild(channelLine)
+  panel.appendChild(headGroup)
 
   const reasonEl = document.createElement("p")
   reasonEl.dataset.failureReason = ""
-  reasonEl.className = "m-0 max-w-md text-fg-2 text-xs sm:text-sm"
+  reasonEl.className = "m-0 max-w-sm text-white/70 text-xs sm:text-sm leading-relaxed"
   reasonEl.textContent = reason
   panel.appendChild(reasonEl)
 
   const actions = document.createElement("div")
-  actions.className = "mt-1 flex flex-wrap items-center justify-center gap-2"
+  actions.className = "mt-1 flex flex-wrap items-center justify-center gap-3"
+
+  // Promote the action that actually recovers this failure kind to primary;
+  // a decode failure needs the external player, a network blip needs retry.
+  const builtinCantDecode =
+    failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio"
+  const hevcInstall = failure.kind === "hevc" && isWindowsDesktop()
+  const externalAvailable = externalPlayersAvailable || androidExternalAvailable
+  let primaryKind = "retry"
+  if (hevcInstall) primaryKind = "hevc"
+  else if (builtinCantDecode && externalAvailable) primaryKind = "external"
+
+  const primaryClass =
+    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-xl bg-white text-black text-sm font-semibold transition duration-150 hover:bg-white/90 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+  const secondaryClass =
+    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-4 rounded-xl border border-white/25 text-white text-sm transition duration-150 hover:bg-white/10 hover:border-white/40 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
 
   const retryBtn = document.createElement("button")
   retryBtn.type = "button"
-  retryBtn.className =
-    "shrink-0 inline-flex items-center justify-center min-h-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+  retryBtn.className = primaryKind === "retry" ? primaryClass : secondaryClass
   retryBtn.textContent = t("common.retry")
   retryBtn.addEventListener("click", () => {
     hidePlaybackFailurePanel()
     if (retryCatchupSession(ctx)) return
     play(ctx.streamId, ctx.name)
   })
-  actions.appendChild(retryBtn)
 
-  if (failure.kind === "hevc" && isWindowsDesktop()) {
-    const hevcBtn = document.createElement("button")
+  let hevcBtn = null
+  if (hevcInstall) {
+    hevcBtn = document.createElement("button")
     hevcBtn.type = "button"
-    hevcBtn.className = retryBtn.className
+    hevcBtn.className = primaryKind === "hevc" ? primaryClass : secondaryClass
     hevcBtn.textContent = t("hevc.enable") || "Enable HEVC playback"
     hevcBtn.addEventListener("click", async () => {
       if (await ensureHevcDecodable()) {
@@ -2319,15 +2346,14 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
         play(ctx.streamId, ctx.name)
       }
     })
-    actions.appendChild(hevcBtn)
   }
 
-  if (externalPlayersAvailable || androidExternalAvailable) {
-    const extBtn = document.createElement("button")
+  let extBtn = null
+  if (externalAvailable) {
+    extBtn = document.createElement("button")
     extBtn.type = "button"
     extBtn.hidden = true
-    extBtn.className =
-      "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+    extBtn.className = primaryKind === "external" ? primaryClass : secondaryClass
     const extIcon = document.createElement("span")
     extIcon.className = "shrink-0 inline-flex text-xl leading-none"
     extIcon.setAttribute("aria-hidden", "true")
@@ -2349,8 +2375,17 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
         hidePlaybackFailurePanel()
       },
     })
-    actions.appendChild(extBtn)
   }
+
+  // Primary leads; retry is always offered as the fallback.
+  const orderedButtons = []
+  if (primaryKind === "hevc" && hevcBtn) orderedButtons.push(hevcBtn)
+  else if (primaryKind === "external" && extBtn) orderedButtons.push(extBtn)
+  else orderedButtons.push(retryBtn)
+  for (const btn of [hevcBtn, extBtn, retryBtn]) {
+    if (btn && !orderedButtons.includes(btn)) orderedButtons.push(btn)
+  }
+  for (const btn of orderedButtons) actions.appendChild(btn)
 
   panel.appendChild(actions)
   playerWrap.appendChild(panel)
@@ -2392,6 +2427,8 @@ function pushDiscordPresence(channel, kind) {
 }
 
 function pickConfiguredExternal() {
+  const pref = getExternalPlayerPref()
+  if ((pref === "mpv" || pref === "vlc") && getPlayerPath(pref)) return pref
   for (const kind of EXTERNAL_PLAYER_BACKENDS) {
     if (getPlayerPath(kind)) return kind
   }

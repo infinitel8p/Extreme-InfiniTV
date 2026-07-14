@@ -14,6 +14,7 @@ import { log } from "@/scripts/lib/log.js"
 import {
   getPlayerBackend,
   getPlayerPath,
+  getExternalPlayerPref,
   PLAYER_BACKEND_EVENT,
   EXTERNAL_PLAYER_BACKENDS,
   getRememberedAndroidPlayer,
@@ -36,6 +37,7 @@ import {
   type ExternalLaunchOptions,
 } from "@/scripts/lib/player-runtime.ts"
 import { openAndroidPlayerPicker } from "@/scripts/lib/player-picker-dialog.ts"
+import { pickExternalPlayer } from "@/scripts/lib/external-player-choice-dialog.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 
@@ -49,11 +51,14 @@ export interface EscapeHatchHooks {
   beforeLaunch?(kind: ButtonKind): void
 }
 
+function configuredExternalKinds(): ExternalPlayerKind[] {
+  return (EXTERNAL_PLAYER_BACKENDS as ExternalPlayerKind[]).filter((kind) => getPlayerPath(kind))
+}
+
 function pickPreferredExternal(): ExternalPlayerKind | null {
-  for (const kind of EXTERNAL_PLAYER_BACKENDS as ExternalPlayerKind[]) {
-    if (getPlayerPath(kind)) return kind
-  }
-  return null
+  const pref = getExternalPlayerPref()
+  if ((pref === "mpv" || pref === "vlc") && getPlayerPath(pref)) return pref
+  return configuredExternalKinds()[0] || null
 }
 
 function pickPreferredAndroidHandoff(): AndroidHandoffKind {
@@ -123,7 +128,11 @@ export function setupExternalPlayerButton(
     btn.hidden = false
     btn.dataset.kind = preferred
     btn.dataset.platform = "desktop"
-    labelEl.textContent = labelFor(preferred)
+    const configured = configuredExternalKinds()
+    labelEl.textContent =
+      getExternalPlayerPref() === "ask" && configured.length > 1
+        ? labelFor("system")
+        : labelFor(preferred)
   }
 
   const onClick = async () => {
@@ -235,7 +244,13 @@ export function setupExternalPlayerButton(
       }
       return
     }
-    const desktopKind = kind as ExternalPlayerKind
+    let desktopKind = kind as ExternalPlayerKind
+    const configured = configuredExternalKinds()
+    if (getExternalPlayerPref() === "ask" && configured.length > 1) {
+      const chosen = await pickExternalPlayer(configured, { subtitle: title || undefined })
+      if (!chosen) return
+      desktopKind = chosen
+    }
     const launcher = getExternalLauncher(desktopKind)
     const opts: ExternalLaunchOptions = {
       userAgent: headers?.userAgent ?? null,

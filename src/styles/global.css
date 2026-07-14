@@ -2175,29 +2175,39 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
 .tuning-overlay {
     position: absolute;
     inset: 0;
-    margin: auto;
-    width: clamp(5rem, 18%, 10rem);
-    height: clamp(5rem, 18%, 10rem);
+    display: grid;
+    place-items: center;
+    z-index: 30;
+    pointer-events: none;
+}
+/* Plate shrink-wraps the logo so it takes the logo's aspect (wide, tall, or square) and never clips, capped so it stays a badge. */
+.tuning-overlay__plate {
+    display: grid;
+    place-items: center;
+    padding: clamp(0.75rem, 2.4%, 1.25rem);
+    min-width: 5rem;
+    min-height: 4.5rem;
+    max-width: min(62%, 22rem);
+    max-height: min(55%, 12rem);
     border-radius: 1.25rem;
     background: var(--color-surface-2);
     box-shadow:
         0 0 0 1px color-mix(in oklch, var(--color-accent) 50%, transparent),
         0 0 48px -8px color-mix(in oklch, var(--color-accent) 60%, transparent),
         0 8px 24px -8px rgb(0 0 0 / 0.5);
-    display: grid;
-    place-items: center;
     overflow: hidden;
-    z-index: 30;
-    pointer-events: none;
     animation: tuning-overlay-pulse 880ms cubic-bezier(0.16, 1, 0.3, 1);
     will-change: transform, opacity;
 }
-.tuning-overlay img {
-    width: 76%;
-    height: 76%;
+.tuning-overlay__plate img {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
     object-fit: contain;
 }
-.tuning-overlay--leaving {
+.tuning-overlay--leaving .tuning-overlay__plate {
     animation: tuning-overlay-leave 360ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 @keyframes tuning-overlay-pulse {
@@ -2381,10 +2391,11 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .tuning-overlay,
-    .tuning-overlay--leaving {
-        animation: none;
+    .tuning-overlay {
         opacity: 0;
+    }
+    .tuning-overlay__plate {
+        animation: none;
     }
     .scan-line-sweep::before,
     .scan-line-sweep::after {

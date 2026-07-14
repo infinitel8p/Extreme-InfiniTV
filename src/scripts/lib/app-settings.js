@@ -15,6 +15,7 @@ const KEY_PLAYER_ARGS_MPV = "xt_player_args_mpv"
 const KEY_PLAYER_ARGS_VLC = "xt_player_args_vlc"
 const KEY_PLAYER_REUSE_MPV = "xt_player_reuse_mpv"
 const KEY_PLAYER_REUSE_VLC = "xt_player_reuse_vlc"
+const KEY_EXTERNAL_PLAYER_PREF = "xt_external_player_pref"
 const KEY_CLOSE_TO_TRAY = "xt_close_to_tray"
 const KEY_HUB_STRIPS = "xt_hub_strips"
 const KEY_TV_OVERSCAN = "xt_tv_overscan"
@@ -81,6 +82,7 @@ export const MAX_DOWNLOAD_CONCURRENCY = 4
 export const PLAYER_BACKENDS = ["artplayer", "videojs", "shaka", "mpv", "vlc"]
 export const DEFAULT_PLAYER_BACKEND = "artplayer"
 export const EXTERNAL_PLAYER_BACKENDS = ["mpv", "vlc"]
+export const EXTERNAL_PLAYER_PREF_VALUES = ["mpv", "vlc", "ask"]
 export const UA_PRESETS = [
   { id: "default", label: "Default (browser/WebView)", value: "" },
   {
@@ -657,6 +659,22 @@ export function setPlayerReuseInstance(kind, on) {
   writeLS(key, on ? "1" : "")
   document.dispatchEvent(
     new CustomEvent(EVT_CHANGED, { detail: { key: `playerReuse:${kind}`, value: !!on } })
+  )
+}
+
+// Which external player the "Open in…" escape hatch prefers when both MPV
+// and VLC are configured. "ask" prompts every time; default "mpv" preserves
+// the historical mpv-first behavior for existing installs.
+export function getExternalPlayerPref() {
+  const raw = readLS(KEY_EXTERNAL_PLAYER_PREF, "")
+  return EXTERNAL_PLAYER_PREF_VALUES.includes(raw) ? raw : "mpv"
+}
+
+export function setExternalPlayerPref(pref) {
+  const next = EXTERNAL_PLAYER_PREF_VALUES.includes(pref) ? pref : "mpv"
+  writeLS(KEY_EXTERNAL_PLAYER_PREF, next === "mpv" ? "" : next)
+  document.dispatchEvent(
+    new CustomEvent(EVT_CHANGED, { detail: { key: "externalPlayerPref" } })
   )
 }
 

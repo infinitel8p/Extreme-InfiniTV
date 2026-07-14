@@ -9,9 +9,11 @@
     setPlayerExtraArgs,
     getPlayerReuseInstance,
     setPlayerReuseInstance,
+    getExternalPlayerPref,
+    setExternalPlayerPref,
     PLAYER_BACKENDS,
     PLAYER_BACKEND_EVENT,
-    EXTERNAL_PLAYER_BACKENDS,
+    EXTERNAL_PLAYER_PREF_VALUES,
   } from "@/scripts/lib/app-settings.js"
   import {
     detectPlayer,
@@ -38,6 +40,7 @@
   let detectedVlc = $state(readDetectCache("vlc"))
   let statusMpv = $state(readDetectStatus("mpv"))
   let statusVlc = $state(readDetectStatus("vlc"))
+  let externalPref = $state(getExternalPlayerPref())
 
   let titleLabel = $state(label("title", "Playback"))
   let videojsLabel = $state(label("backend.videojs", "Video.js"))
@@ -60,6 +63,9 @@
   let detectLabel = $state(label("detect", "Detect"))
   let advancedLabel = $state(label("advanced", "Advanced"))
   let extraArgsLabel = $state(label("extraArgs", "Extra arguments (one per line)"))
+  let externalPrefLabel = $state(label("externalPref.label", "Preferred external player"))
+  let externalPrefHelper = $state(label("externalPref.helper", "Which player the 'Open in…' button uses when both MPV and VLC are set."))
+  let externalPrefAskLabel = $state(label("externalPref.ask", "Ask each time"))
 
   function label(suffix, fallback, params) {
     const key = `settings.playback.${suffix}`
@@ -121,6 +127,9 @@
     detectLabel = label("detect", "Detect")
     advancedLabel = label("advanced", "Advanced")
     extraArgsLabel = label("extraArgs", "Extra arguments (one per line)")
+    externalPrefLabel = label("externalPref.label", "Preferred external player")
+    externalPrefHelper = label("externalPref.helper", "Which player the 'Open in…' button uses when both MPV and VLC are set.")
+    externalPrefAskLabel = label("externalPref.ask", "Ask each time")
   }
 
   function onBackendChange(event) {
@@ -151,6 +160,12 @@
     if (kind === "mpv") reuseMpv = value
     else reuseVlc = value
     setPlayerReuseInstance(kind, value)
+  }
+
+  function onExternalPrefChange(value) {
+    if (!EXTERNAL_PLAYER_PREF_VALUES.includes(value)) return
+    externalPref = value
+    setExternalPlayerPref(value)
   }
 
   async function browseFor(kind) {
@@ -346,6 +361,45 @@
     {/if}
   </fieldset>
 
+  {#if externalPlayersAvailable && pathMpv && pathVlc}
+    <fieldset class="flex flex-col gap-2 player-config">
+      <legend class="text-eyebrow font-medium uppercase text-fg-3">{externalPrefLabel}</legend>
+      <p class="text-xs text-fg-3">{externalPrefHelper}</p>
+      <div class="flex flex-wrap gap-2">
+        <label class="pref-option">
+          <input
+            type="radio"
+            name="external-player-pref"
+            value="mpv"
+            checked={externalPref === "mpv"}
+            onchange={() => onExternalPrefChange("mpv")}
+          />
+          <span>MPV</span>
+        </label>
+        <label class="pref-option">
+          <input
+            type="radio"
+            name="external-player-pref"
+            value="vlc"
+            checked={externalPref === "vlc"}
+            onchange={() => onExternalPrefChange("vlc")}
+          />
+          <span>VLC</span>
+        </label>
+        <label class="pref-option">
+          <input
+            type="radio"
+            name="external-player-pref"
+            value="ask"
+            checked={externalPref === "ask"}
+            onchange={() => onExternalPrefChange("ask")}
+          />
+          <span>{externalPrefAskLabel}</span>
+        </label>
+      </div>
+    </fieldset>
+  {/if}
+
   {#if backend === "mpv"}
     <div class="player-config">
       <label class="flex flex-col gap-1.5">
@@ -479,6 +533,34 @@
     font-size: 0.875rem;
     font-weight: 500;
     line-height: 1.25rem;
+  }
+
+  .pref-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2.75rem;
+    padding-inline: 0.75rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--color-line);
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background-color 150ms, border-color 150ms, box-shadow 150ms,
+                transform 100ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .pref-option:hover {
+    background: var(--color-surface-2);
+  }
+  .pref-option:active {
+    transform: scale(0.97);
+  }
+  .pref-option:focus-within {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent) 18%, transparent);
+  }
+  .pref-option:has(input:checked) {
+    border-color: var(--color-accent);
+    background: var(--color-accent-soft);
   }
 
   .active-pill {

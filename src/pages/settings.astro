@@ -51,7 +51,7 @@ import ConnectionLimitBanner from "@/components/ConnectionLimitBanner.svelte"
 import AndroidNativePlayerCard from "@/components/AndroidNativePlayerCard.svelte"
 import RememberedAndroidPlayerCard from "@/components/RememberedAndroidPlayerCard.svelte"
 
-interface NavCard { id: string; labelKey: string; label: string }
+interface NavCard { id: string; labelKey: string; label: string; conditional?: boolean }
 interface NavSection { id: string; labelKey: string; label: string; cards: NavCard[]; danger?: boolean }
 
 const navStructure: NavSection[] = [
@@ -69,12 +69,12 @@ const navStructure: NavSection[] = [
     { id: "card-progress-retention",        labelKey: "settings.progressRetention.title",      label: "Continue watching" },
     { id: "epg-tz-section",                 labelKey: "settings.epgTimezone.title",            label: "EPG time zone" },
     { id: "playback-section",               labelKey: "settings.playback.title",               label: "Playback" },
-    { id: "android-native-player-section",  labelKey: "settings.androidNativePlayer.navLabel", label: "Native Android player" },
-    { id: "android-default-player-section", labelKey: "settings.androidDefaultPlayer.navLabel", label: "Default external player" },
+    { id: "android-native-player-section",  labelKey: "settings.androidNativePlayer.navLabel", label: "Native Android player", conditional: true },
+    { id: "android-default-player-section", labelKey: "settings.androidDefaultPlayer.navLabel", label: "Default external player", conditional: true },
   ]},
   { id: "settings-network", labelKey: "settings.group.network", label: "Network", cards: [
     { id: "card-network",          labelKey: "settings.network.title", label: "Network" },
-    { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence" },
+    { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
   ]},
   { id: "settings-library", labelKey: "settings.group.library", label: "Library", cards: [
     { id: "card-categories", labelKey: "settings.categories.title",        label: "Categories" },
@@ -132,7 +132,7 @@ const navStructure: NavSection[] = [
           {section.cards.length > 1 && (
             <ul class="settings-subnav hidden lg:flex flex-col list-none m-0 p-0">
               {section.cards.map((card) => (
-                <li class="m-0">
+                <li class="m-0" {...(card.conditional ? { "data-conditional": "true", hidden: true } : {})}>
                   <a
                     href={`#${card.id}`}
                     data-i18n={card.labelKey}
@@ -3273,6 +3273,39 @@ const navStructure: NavSection[] = [
         } else {
           cardsBySectionId.set(ownerSection.id, [cardEl])
         }
+      }
+
+      // Platform-gated cards (Android native/default player, desktop-only
+      // Discord) are conditionally rendered or hidden, so their subnav links
+      // start hidden; reveal each only while its target card is actually shown.
+      const conditionalItems = Array.from(
+        document.querySelectorAll<HTMLLIElement>("li[data-conditional]")
+      )
+      const syncConditionalNav = () => {
+        for (const item of conditionalItems) {
+          const cardId = item.querySelector("a")?.getAttribute("href")?.replace("#", "")
+          const target = cardId ? document.getElementById(cardId) : null
+          item.hidden = !target || target.offsetParent === null
+        }
+      }
+      syncConditionalNav()
+      if (conditionalItems.length) {
+        const settingsRoot = document.querySelector(".settings-stack") ?? document.body
+        let syncQueued = false
+        const observer = new MutationObserver(() => {
+          if (syncQueued) return
+          syncQueued = true
+          requestAnimationFrame(() => {
+            syncQueued = false
+            syncConditionalNav()
+          })
+        })
+        observer.observe(settingsRoot, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["class", "hidden", "style"],
+        })
       }
 
       const scrollEl =
