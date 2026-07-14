@@ -659,6 +659,7 @@
   "stream.error.schemeUnsupported": "Impossible de lire les flux \"{scheme}://\" dans le lecteur intégré. Configurez MPV ou VLC dans Paramètres → Lecture.",
   "stream.failure.hevcConfirmed": "Cette chaîne utilise le HEVC (H.265) et cet appareil ne peut pas le décoder dans le lecteur intégré. Ouvrez-la dans un lecteur externe.",
   "stream.failure.codecUnsupported": "Le format vidéo de cette chaîne ({codec}) n'est pas pris en charge par le lecteur intégré sur cet appareil. Ouvrez-la dans un lecteur externe.",
+  "stream.failure.audioUnsupported": "Cette chaîne utilise l'audio {codec}, que le lecteur intégré ne peut pas décoder sur cet appareil. Ouvrez-la dans un lecteur externe (MPV/VLC).",
   "stream.failure.nativeFallback": "Le format de cette chaîne n'est pas pris en charge par le lecteur intégré. Ouverture dans le lecteur natif…",
   "stream.offline.title": "Vous êtes hors ligne",
   "stream.offline.body": "Reconnectez-vous pour continuer à regarder.",

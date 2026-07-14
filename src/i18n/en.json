@@ -713,6 +713,7 @@
   "stream.error.schemeUnsupported": "Can't play \"{scheme}://\" streams in the embedded player. Set up MPV or VLC in Settings → Playback.",
   "stream.failure.hevcConfirmed": "This channel uses HEVC (H.265) and this device can't decode it in the built-in player. Open it in an external player.",
   "stream.failure.codecUnsupported": "This channel's video format ({codec}) isn't supported by the built-in player on this device. Open it in an external player.",
+  "stream.failure.audioUnsupported": "This channel uses {codec} audio, which the built-in player can't decode on this device. Open it in an external player (MPV/VLC).",
   "stream.failure.nativeFallback": "This channel's format isn't supported by the built-in player. Opening in the native player…",
   "stream.offline.title": "You are offline",
   "stream.offline.body": "Reconnect to keep watching.",

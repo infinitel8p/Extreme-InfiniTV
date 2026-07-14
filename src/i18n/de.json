@@ -659,6 +659,7 @@
   "stream.error.schemeUnsupported": "\"{scheme}://\"-Streams können nicht im eingebetteten Player wiedergegeben werden. Richte MPV oder VLC in Einstellungen → Wiedergabe ein.",
   "stream.failure.hevcConfirmed": "Dieser Sender verwendet HEVC (H.265), das dieses Gerät im integrierten Player nicht dekodieren kann. Öffne ihn in einem externen Player.",
   "stream.failure.codecUnsupported": "Das Videoformat dieses Senders ({codec}) wird vom integrierten Player auf diesem Gerät nicht unterstützt. Öffne ihn in einem externen Player.",
+  "stream.failure.audioUnsupported": "Dieser Sender verwendet {codec}-Audio, das der integrierte Player auf diesem Gerät nicht dekodieren kann. Öffne ihn in einem externen Player (MPV/VLC).",
   "stream.failure.nativeFallback": "Das Format dieses Senders wird vom integrierten Player nicht unterstützt. Wird im nativen Player geöffnet…",
   "stream.offline.title": "Du bist offline",
   "stream.offline.body": "Stelle die Verbindung wieder her, um weiterzusehen.",

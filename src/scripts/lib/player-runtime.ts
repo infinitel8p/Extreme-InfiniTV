@@ -34,6 +34,7 @@ export const RESUME_MIN_SECONDS_DEFAULT = 5
 
 export interface PlaybackCodecInfo {
   videoCodec: string | null
+  audioCodec: string | null
   errorDetail: string | null
 }
 
@@ -1267,7 +1268,7 @@ async function attachMpegts(
   url: string,
   isLive: boolean,
   onFatalError?: (detail: string) => void,
-  onMediaInfo?: (info: { videoCodec?: string }) => void,
+  onMediaInfo?: (info: { videoCodec?: string; audioCodec?: string }) => void,
   durationSeconds?: number,
   timelineOffsetSeconds?: number,
 ): Promise<MpegtsHandle | null> {
@@ -1398,7 +1399,12 @@ async function attachMpegts(
     )
     player.on(mpegts.Events.MEDIA_INFO, (info: any) => {
       if (disposed) return
-      if (info?.videoCodec) onMediaInfo?.({ videoCodec: String(info.videoCodec) })
+      if (info?.videoCodec || info?.audioCodec) {
+        onMediaInfo?.({
+          videoCodec: info.videoCodec ? String(info.videoCodec) : undefined,
+          audioCodec: info.audioCodec ? String(info.audioCodec) : undefined,
+        })
+      }
       armDurationOverride()
     })
     player.on(
@@ -1523,7 +1529,7 @@ async function mountVideoJs(
   let pendingIsLive = true
   let pendingDurationSeconds: number | undefined
   let pendingTimelineOffsetSeconds: number | undefined
-  const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
+  const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
 
   function getUnderlyingVideo(): HTMLVideoElement | null {
     try {
@@ -1681,6 +1687,7 @@ async function mountVideoJs(
       (info) => {
         if (pendingSrc !== src) return
         if (info.videoCodec) codecState.videoCodec = info.videoCodec
+        if (info.audioCodec) codecState.audioCodec = info.audioCodec
       },
       pendingDurationSeconds,
       pendingTimelineOffsetSeconds,
@@ -1704,6 +1711,7 @@ async function mountVideoJs(
       pendingDurationSeconds = durationSeconds
       pendingTimelineOffsetSeconds = timelineOffsetSeconds
       codecState.videoCodec = null
+      codecState.audioCodec = null
       codecState.errorDetail = null
       if (isDashSource(drm, src, type)) {
         void loadDash(src, drm)
@@ -1838,7 +1846,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   let pendingIsLive = true
   let pendingDurationSeconds: number | undefined
   let pendingTimelineOffsetSeconds: number | undefined
-  const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
+  const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
 
   function destroyArtEngines(includeHls = true) {
     if (includeHls && activeHls) {
@@ -1963,6 +1971,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
           (info) => {
             if (pendingSrc !== url) return
             if (info.videoCodec) codecState.videoCodec = info.videoCodec
+            if (info.audioCodec) codecState.audioCodec = info.audioCodec
           },
           pendingDurationSeconds,
           pendingTimelineOffsetSeconds,
@@ -2014,6 +2023,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       pendingDurationSeconds = durationSeconds
       pendingTimelineOffsetSeconds = timelineOffsetSeconds
       codecState.videoCodec = null
+      codecState.audioCodec = null
       codecState.errorDetail = null
       destroyArtEngines()
       if (isDashSource(drm, src, type)) {
@@ -2162,7 +2172,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   let pendingIsLive = true
   let pendingDurationSeconds: number | undefined
   let pendingTimelineOffsetSeconds: number | undefined
-  const codecState: PlaybackCodecInfo = { videoCodec: null, errorDetail: null }
+  const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
 
   function destroyMpegts() {
     if (activeMpegts) {
@@ -2243,6 +2253,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       (info) => {
         if (pendingSrc !== src) return
         if (info.videoCodec) codecState.videoCodec = info.videoCodec
+        if (info.audioCodec) codecState.audioCodec = info.audioCodec
       },
       pendingDurationSeconds,
       pendingTimelineOffsetSeconds,
@@ -2278,6 +2289,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       pendingDurationSeconds = durationSeconds
       pendingTimelineOffsetSeconds = timelineOffsetSeconds
       codecState.videoCodec = null
+      codecState.audioCodec = null
       codecState.errorDetail = null
       if (isDashSource(drm, src, type)) {
         void loadIntoShaka(src, drm, "application/dash+xml")

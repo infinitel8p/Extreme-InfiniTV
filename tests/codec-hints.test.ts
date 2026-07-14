@@ -5,6 +5,8 @@ import {
   findHevcInCodecList,
   classifyStartFailure,
   clearKeyAvailable,
+  isUnsupportedAudioCodec,
+  describeAudioCodec,
 } from "../src/scripts/lib/codec-hints"
 
 describe("hasHevcNameHint", () => {
@@ -220,6 +222,90 @@ describe("classifyStartFailure", () => {
         deviceHevc: true,
       })
     ).toEqual({ kind: "unknown", codec: null })
+  })
+
+  it("blames unsupported AC-3/E-AC-3 audio instead of a decodable video codec", () => {
+    expect(
+      classifyStartFailure({
+        videoCodec: "avc1.640028",
+        audioCodec: "ac-3",
+        errorDetail: "PIPELINE_ERROR_DECODE",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "audio", codec: "ac-3" })
+    expect(
+      classifyStartFailure({
+        videoCodec: "avc1.640028",
+        audioCodec: "mp4a.a5",
+        errorDetail: "PIPELINE_ERROR_DECODE",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "audio", codec: "mp4a.a5" })
+    expect(
+      classifyStartFailure({
+        videoCodec: "avc1.640028",
+        audioCodec: "ec-3",
+        errorDetail: "PIPELINE_ERROR_DECODE",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "audio", codec: "ec-3" })
+  })
+
+  it("still reports hevc when the video codec is HEVC, even with an unsupported audio codec present", () => {
+    expect(
+      classifyStartFailure({
+        videoCodec: "hvc1.1.6.L120.B0",
+        audioCodec: "ac-3",
+        errorDetail: "PIPELINE_ERROR_DECODE",
+        nameHint: false,
+        deviceHevc: false,
+      })
+    ).toEqual({ kind: "hevc", codec: "hvc1.1.6.L120.B0" })
+  })
+})
+
+describe("isUnsupportedAudioCodec", () => {
+  it("matches AC-3 / E-AC-3 / MP2 / DTS codec strings", () => {
+    expect(isUnsupportedAudioCodec("ac-3")).toBe(true)
+    expect(isUnsupportedAudioCodec("ac3")).toBe(true)
+    expect(isUnsupportedAudioCodec("mp4a.a5")).toBe(true)
+    expect(isUnsupportedAudioCodec("ec-3")).toBe(true)
+    expect(isUnsupportedAudioCodec("eac3")).toBe(true)
+    expect(isUnsupportedAudioCodec("mp4a.a6")).toBe(true)
+    expect(isUnsupportedAudioCodec("mp2")).toBe(true)
+    expect(isUnsupportedAudioCodec("mp2a")).toBe(true)
+    expect(isUnsupportedAudioCodec("mp4a.69")).toBe(true)
+    expect(isUnsupportedAudioCodec("mp4a.6b")).toBe(true)
+    expect(isUnsupportedAudioCodec("DTS")).toBe(true)
+    expect(isUnsupportedAudioCodec(" ac-3 ")).toBe(true)
+  })
+
+  it("ignores decodable audio codecs", () => {
+    expect(isUnsupportedAudioCodec("mp4a.40.2")).toBe(false)
+    expect(isUnsupportedAudioCodec("opus")).toBe(false)
+    expect(isUnsupportedAudioCodec("")).toBe(false)
+    expect(isUnsupportedAudioCodec(null)).toBe(false)
+    expect(isUnsupportedAudioCodec(undefined)).toBe(false)
+  })
+})
+
+describe("describeAudioCodec", () => {
+  it("returns friendly labels for known unsupported codecs", () => {
+    expect(describeAudioCodec("ac-3")).toBe("Dolby Digital (AC-3)")
+    expect(describeAudioCodec("mp4a.a5")).toBe("Dolby Digital (AC-3)")
+    expect(describeAudioCodec("ec-3")).toBe("Dolby Digital Plus (E-AC-3)")
+    expect(describeAudioCodec("eac3")).toBe("Dolby Digital Plus (E-AC-3)")
+    expect(describeAudioCodec("mp2")).toBe("MPEG audio (MP2)")
+    expect(describeAudioCodec("dts")).toBe("DTS")
+  })
+
+  it("falls back to the raw codec string or a placeholder", () => {
+    expect(describeAudioCodec("mp4a.40.2")).toBe("mp4a.40.2")
+    expect(describeAudioCodec(null)).toBe("?")
+    expect(describeAudioCodec("")).toBe("?")
   })
 })
 

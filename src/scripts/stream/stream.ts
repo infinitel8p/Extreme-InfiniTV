@@ -49,6 +49,7 @@ import {
   hasHevcNameHint,
   deviceSupportsHevc,
   classifyStartFailure,
+  describeAudioCodec,
 } from "@/scripts/lib/codec-hints.ts"
 import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
@@ -1750,9 +1751,10 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
       // recovery so an unsupported channel still plays, independent of that opt-in setting.
       if (!ctx.nativeFallbackTried && androidNativePlayerAvailable) {
         ctx.nativeFallbackTried = true
-        const info = vjs?.codecInfo?.() || { videoCodec: null, errorDetail: null }
+        const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
         const failure = classifyStartFailure({
           videoCodec: info.videoCodec,
+          audioCodec: info.audioCodec,
           errorDetail: info.errorDetail,
           nameHint: hasHevcNameHint(ctx.name),
           deviceHevc: deviceSupportsHevc(),
@@ -2233,9 +2235,10 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   const playerWrap = document.getElementById("player")?.parentElement
   if (!playerWrap) return
 
-  const info = vjs?.codecInfo?.() || { videoCodec: null, errorDetail: null }
+  const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
   const failure = classifyStartFailure({
     videoCodec: info.videoCodec,
+    audioCodec: info.audioCodec,
     errorDetail:
       info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
     nameHint: hasHevcNameHint(ctx.name),
@@ -2253,6 +2256,10 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   } else if (failure.kind === "codec") {
     reason = t("stream.failure.codecUnsupported", {
       codec: failure.codec || info.errorDetail || "?",
+    })
+  } else if (failure.kind === "audio") {
+    reason = t("stream.failure.audioUnsupported", {
+      codec: describeAudioCodec(failure.codec),
     })
   } else {
     reason = t("stream.error.checkConnection")

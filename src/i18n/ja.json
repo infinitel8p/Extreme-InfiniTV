@@ -659,6 +659,7 @@
   "stream.error.schemeUnsupported": "\"{scheme}://\" ストリームは内蔵プレーヤーで再生できません。設定 → 再生で MPV または VLC を設定してください。",
   "stream.failure.hevcConfirmed": "このチャンネルはHEVC (H.265)を使用しており、このデバイスの内蔵プレイヤーではデコードできません。外部プレイヤーで開いてください。",
   "stream.failure.codecUnsupported": "このチャンネルの映像形式（{codec}）は、このデバイスの内蔵プレイヤーではサポートされていません。外部プレイヤーで開いてください。",
+  "stream.failure.audioUnsupported": "このチャンネルは{codec}音声を使用していますが、このデバイスの内蔵プレイヤーではデコードできません。外部プレイヤー（MPV/VLC）で開いてください。",
   "stream.failure.nativeFallback": "このチャンネルの形式は内蔵プレイヤーでサポートされていません。ネイティブプレイヤーで開いています…",
   "stream.offline.title": "オフラインです",
   "stream.offline.body": "視聴を続けるには再接続してください。",
