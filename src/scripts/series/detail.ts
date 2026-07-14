@@ -105,6 +105,8 @@ let series = null
 let episodesByKey = null
 let currentSeason = ""
 let currentPlayingEpisodeId = null
+let tabsStaggered = false
+let episodesStaggered = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
@@ -201,7 +203,7 @@ function renderSeasonTabs(seasonKeys) {
     return
   }
   seasonTabs.style.display = ""
-  for (const key of seasonKeys) {
+  for (const [tabIndex, key] of seasonKeys.entries()) {
     const btn = document.createElement("button")
     btn.type = "button"
     btn.dataset.season = key
@@ -210,6 +212,10 @@ function renderSeasonTabs(seasonKeys) {
       (key === currentSeason
         ? "border-accent bg-accent-soft text-fg"
         : "border-line text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg")
+    if (!tabsStaggered) {
+      btn.classList.add("dt-child-enter")
+      btn.style.animationDelay = `${340 + tabIndex * 50}ms`
+    }
     btn.textContent = t("series.season", { n: key })
     btn.addEventListener("click", () => {
       if (currentSeason === key) return
@@ -221,6 +227,7 @@ function renderSeasonTabs(seasonKeys) {
     })
     seasonTabs.appendChild(btn)
   }
+  if (seasonKeys.length) tabsStaggered = true
 }
 
 function slotMachineEpisodes(direction) {
@@ -262,12 +269,16 @@ function renderEpisodes() {
     episodeList.appendChild(empty)
     return
   }
-  for (const ep of eps) {
+  for (const [rowIndex, ep] of eps.entries()) {
     const row = document.createElement("div")
     row.className =
       "episode-row flex items-center gap-3 p-3 rounded-xl bg-surface-2/40 " +
       "transition-colors hover:bg-surface-2 focus-within:bg-surface-2"
     row.dataset.epId = String(ep.id)
+    if (!episodesStaggered) {
+      row.classList.add("dt-child-enter")
+      row.style.animationDelay = `${400 + Math.min(rowIndex, 9) * 40}ms`
+    }
     if (currentPlayingEpisodeId != null && Number(ep.id) === currentPlayingEpisodeId) {
       row.dataset.nowPlaying = "true"
     }
@@ -427,6 +438,7 @@ function renderEpisodes() {
 
     episodeList.appendChild(row)
   }
+  if (eps.length) episodesStaggered = true
   try { window.SpatialNavigation?.makeFocusable?.() } catch {}
 }
 
