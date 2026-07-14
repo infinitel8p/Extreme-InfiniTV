@@ -2,7 +2,7 @@
  * Settings page "living instrument panel" enhancements.
  *
  * 1. Morphing pill across every [role="radiogroup"] - one accent pill
- *    springs between [aria-pressed="true"] buttons via WAAPI + FLIP.
+ *    springs between [aria-pressed="true"] / [aria-checked="true"] buttons via WAAPI + FLIP.
  * 2. Scroll-spy rail behind the sidebar nav - tracks aria-current and
  *    morphs height + position to fit the active link with calm easing.
  * 3. Per-card commit pulse - whenever a radiogroup commits a new value,
@@ -92,7 +92,7 @@ function setupRadioGroupPill(group: HTMLElement) {
   let hasShown = false
 
   const findPressed = (): HTMLElement | null => {
-    return group.querySelector<HTMLElement>('[aria-pressed="true"]')
+    return group.querySelector<HTMLElement>('[aria-pressed="true"], [aria-checked="true"]')
   }
 
   const moveTo = (target: HTMLElement | null, animate: boolean) => {
@@ -151,11 +151,10 @@ function setupRadioGroupPill(group: HTMLElement) {
     group.dataset.pillGroup = "ready"
   })
 
-  // React to aria-pressed mutations within the group.
   const pressedObserver = new MutationObserver((mutations) => {
     let changed = false
     for (const mut of mutations) {
-      if (mut.attributeName === "aria-pressed") {
+      if (mut.attributeName === "aria-pressed" || mut.attributeName === "aria-checked") {
         changed = true
         break
       }
@@ -166,7 +165,7 @@ function setupRadioGroupPill(group: HTMLElement) {
   })
   pressedObserver.observe(group, {
     attributes: true,
-    attributeFilter: ["aria-pressed"],
+    attributeFilter: ["aria-pressed", "aria-checked"],
     subtree: true,
   })
 

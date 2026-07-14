@@ -2031,13 +2031,16 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     will-change: transform, width, height;
     transition: opacity 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-[data-pill-group="ready"] .btn[aria-pressed="true"] {
+[data-pill-group="ready"] .btn[aria-pressed="true"],
+[data-pill-group="ready"] .btn[aria-checked="true"] {
     background: transparent;
     border-color: transparent;
     color: var(--color-accent);
 }
 [data-pill-group="ready"] .btn[aria-pressed="true"]:hover,
-[data-pill-group="ready"] .btn[aria-pressed="true"]:focus-visible {
+[data-pill-group="ready"] .btn[aria-pressed="true"]:focus-visible,
+[data-pill-group="ready"] .btn[aria-checked="true"]:hover,
+[data-pill-group="ready"] .btn[aria-checked="true"]:focus-visible {
     background: transparent;
     border-color: transparent;
 }

@@ -1548,6 +1548,13 @@ const lastAutoDiagnosticAt = new Map()
 async function runAutoDiagnostic(ctx, dismissGenericToast) {
   if (!ctx?.streamId || !ctx.src) return
 
+  // Media info arrived, so the stream was reachable - a decode failure isn't a network problem.
+  const info = vjs?.codecInfo?.()
+  if (info?.videoCodec || info?.audioCodec) {
+    try { dismissGenericToast?.() } catch {}
+    return
+  }
+
   const now = Date.now()
   const last = lastAutoDiagnosticAt.get(ctx.streamId) || 0
   if (now - last < AUTO_DIAGNOSTIC_COOLDOWN_MS) return
@@ -1977,6 +1984,9 @@ function hideTuningOverlay() {
 function showBufferingChip() {
   const playerWrap = document.getElementById("player")?.parentElement
   if (!playerWrap) return
+  // Timeshift chip already communicates state; on a narrow player the two pills overlap.
+  const timeshiftChip = playerWrap.querySelector("[data-timeshift-chip]")
+  if (timeshiftChip && !timeshiftChip.classList.contains("is-hidden")) return
   if (bufferingHideTimer) {
     clearTimeout(bufferingHideTimer)
     bufferingHideTimer = null

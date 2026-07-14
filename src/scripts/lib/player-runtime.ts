@@ -1522,6 +1522,7 @@ async function mountVideoJs(
   }
 
   let activeMpegts: MpegtsHandle | null = null
+  let pendingMpegtsAttach: Promise<MpegtsHandle | null> | null = null
   let activeHls: { destroy: () => void } | null = null
   let activeShaka: { destroy: () => void } | null = null
   let hlsModPromise: Promise<any> | null = null
@@ -1546,6 +1547,11 @@ async function mountVideoJs(
     if (activeMpegts) {
       try { activeMpegts.destroy() } catch {}
       activeMpegts = null
+    }
+    if (pendingMpegtsAttach) {
+      const stale = pendingMpegtsAttach
+      pendingMpegtsAttach = null
+      void stale.then((handle) => { try { handle?.destroy() } catch {} }, () => {})
     }
   }
 
@@ -1664,6 +1670,7 @@ async function mountVideoJs(
   }
 
   async function loadTs(src: string) {
+    const previousAttach = pendingMpegtsAttach
     destroyMpegts()
     destroyHls()
     destroyShaka()
@@ -1674,7 +1681,12 @@ async function mountVideoJs(
       loadHls(src)
       return
     }
-    const handle = await attachMpegts(
+    if (previousAttach) {
+      const staleHandle = await previousAttach.catch(() => null)
+      try { staleHandle?.destroy() } catch {}
+      if (pendingSrc !== src) return
+    }
+    const attachPromise = attachMpegts(
       videoElement,
       src,
       pendingIsLive,
@@ -1692,6 +1704,9 @@ async function mountVideoJs(
       pendingDurationSeconds,
       pendingTimelineOffsetSeconds,
     )
+    pendingMpegtsAttach = attachPromise
+    const handle = await attachPromise
+    if (pendingMpegtsAttach === attachPromise) pendingMpegtsAttach = null
     if (!handle) {
       loadHls(src)
       return
@@ -1840,6 +1855,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
 
   let activeHls: { destroy: () => void } | null = null
   let activeMpegts: MpegtsHandle | null = null
+  let pendingMpegtsAttach: Promise<MpegtsHandle | null> | null = null
   let activeShaka: { destroy: () => void } | null = null
   let pendingSrc: string | null = null
   let pendingDrm: DrmOptions | null = null
@@ -1848,15 +1864,24 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   let pendingTimelineOffsetSeconds: number | undefined
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
 
+  function destroyMpegts() {
+    if (activeMpegts) {
+      try { activeMpegts.destroy() } catch {}
+      activeMpegts = null
+    }
+    if (pendingMpegtsAttach) {
+      const stale = pendingMpegtsAttach
+      pendingMpegtsAttach = null
+      void stale.then((handle) => { try { handle?.destroy() } catch {} }, () => {})
+    }
+  }
+
   function destroyArtEngines(includeHls = true) {
     if (includeHls && activeHls) {
       try { activeHls.destroy() } catch {}
       activeHls = null
     }
-    if (activeMpegts) {
-      try { activeMpegts.destroy() } catch {}
-      activeMpegts = null
-    }
+    destroyMpegts()
     if (activeShaka) {
       try { activeShaka.destroy() } catch {}
       activeShaka = null
@@ -1883,10 +1908,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   // path below (some providers' .ts URLs redirect to / serve an HLS playlist,
   // which mpegts.js can't demux).
   function loadHlsIntoVideo(video: HTMLVideoElement, url: string) {
-    if (activeMpegts) {
-      try { activeMpegts.destroy() } catch {}
-      activeMpegts = null
-    }
+    destroyMpegts()
     if (activeShaka) {
       try { activeShaka.destroy() } catch {}
       activeShaka = null
@@ -1950,15 +1972,18 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         loadDashIntoVideo(video, url, pendingDrm)
       },
       async ts(video, url) {
+        const previousAttach = pendingMpegtsAttach
         if (activeHls) {
           try { activeHls.destroy() } catch {}
           activeHls = null
         }
-        if (activeMpegts) {
-          try { activeMpegts.destroy() } catch {}
-          activeMpegts = null
+        destroyMpegts()
+        if (previousAttach) {
+          const staleHandle = await previousAttach.catch(() => null)
+          try { staleHandle?.destroy() } catch {}
+          if (pendingSrc !== url) return
         }
-        const handle = await attachMpegts(
+        const attachPromise = attachMpegts(
           video,
           url,
           pendingIsLive,
@@ -1976,6 +2001,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
           pendingDurationSeconds,
           pendingTimelineOffsetSeconds,
         )
+        pendingMpegtsAttach = attachPromise
+        const handle = await attachPromise
+        if (pendingMpegtsAttach === attachPromise) pendingMpegtsAttach = null
         if (!handle) {
           video.src = url
           return
@@ -2167,6 +2195,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   })
 
   let activeMpegts: MpegtsHandle | null = null
+  let pendingMpegtsAttach: Promise<MpegtsHandle | null> | null = null
   let pendingSrc: string | null = null
   let pendingDrm: DrmOptions | null = null
   let pendingIsLive = true
@@ -2178,6 +2207,11 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     if (activeMpegts) {
       try { activeMpegts.destroy() } catch {}
       activeMpegts = null
+    }
+    if (pendingMpegtsAttach) {
+      const stale = pendingMpegtsAttach
+      pendingMpegtsAttach = null
+      void stale.then((handle) => { try { handle?.destroy() } catch {} }, () => {})
     }
   }
 
@@ -2237,10 +2271,16 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   }
 
   async function loadTs(src: string) {
+    const previousAttach = pendingMpegtsAttach
     destroyMpegts()
     try { await player.detach() } catch {}
     if (pendingSrc !== src) return
-    const mpegtsHandle = await attachMpegts(
+    if (previousAttach) {
+      const staleHandle = await previousAttach.catch(() => null)
+      try { staleHandle?.destroy() } catch {}
+      if (pendingSrc !== src) return
+    }
+    const attachPromise = attachMpegts(
       video,
       src,
       pendingIsLive,
@@ -2258,6 +2298,9 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       pendingDurationSeconds,
       pendingTimelineOffsetSeconds,
     )
+    pendingMpegtsAttach = attachPromise
+    const mpegtsHandle = await attachPromise
+    if (pendingMpegtsAttach === attachPromise) pendingMpegtsAttach = null
     if (!mpegtsHandle) {
       void loadIntoShaka(src, pendingDrm, "application/x-mpegURL")
       return
