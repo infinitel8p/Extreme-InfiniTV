@@ -263,9 +263,9 @@ export function expandCatchupTemplate(template: string, ctx: CatchupTemplateCont
 }
 
 // Stage 1: well-formed Flussonic naming (`.../<id>/<listName><mpegts|.m3u8>`); the literal extension decides ts vs. hls, not the requested mode.
-const FLUSSONIC_URL_PATTERN = /^(https?:\/\/[^/]+)\/(.*)\/([^/]*)(mpegts|\.m3u8)(\?.+=.+)?$/
+const FLUSSONIC_URL_PATTERN = /^(https?:\/\/[^/]+)\/(.*)\/([^/]*)(mpegts|\.m3u8)(\?.*)?$/
 // Stage 2: any other Flussonic-shaped URL (server hands back an arbitrary directory name) - here the mode tag decides.
-const FLUSSONIC_GENERIC_URL_PATTERN = /^(https?:\/\/[^/]+)\/(.*)\/([^?]*)(\?.+=.+)?$/
+const FLUSSONIC_GENERIC_URL_PATTERN = /^(https?:\/\/[^/]+)\/(.*)\/([^?]*)(\?.*)?$/
 
 function buildFlussonicCatchupUrl(
   url: string,
@@ -360,6 +360,8 @@ export function streamProfileFor(channel: CatchupCapableChannel): StreamProfile 
     return { granularitySeconds: 1, terminates: false }
   }
   if (mode === "vod") return { granularitySeconds: 1, terminates: true }
+  // buildM3uCatchupUrl always appends a raw utc/lutc pair for shift mode, ignoring catchupSource.
+  if (mode === "shift") return { granularitySeconds: 1, terminates: false }
 
   const source = channel.catchupSource || null
   // playseek ends expand unclamped, so the stream follows live rather than terminating.

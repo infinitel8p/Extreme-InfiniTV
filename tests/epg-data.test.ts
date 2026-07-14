@@ -14,6 +14,7 @@ import {
   normaliseChannelName,
   parseXmlTv,
   inferTimezoneOffsetMin,
+  resolveAutoOffsetMin,
 } from "../src/scripts/lib/epg-data.js"
 import { parseXmlTv as parseXmlTvWorker } from "../src/scripts/lib/epg-worker.ts"
 
@@ -718,5 +719,24 @@ describe("inferTimezoneOffsetMin: sticky preferred offset (hysteresis)", () => {
 
   it("returns 0 for an empty programmes map", () => {
     expect(inferTimezoneOffsetMin(new Map())).toBe(0)
+  })
+})
+
+describe("resolveAutoOffsetMin: mixed-source timezone gate", () => {
+  function programmeLiveAtOffset(offsetMin: number) {
+    const shiftMs = offsetMin * 60 * 1000
+    const start = Date.now() - shiftMs
+    return { start, stop: start + 1000, title: "x", desc: "" }
+  }
+
+  it("skips inference when any loaded source has explicit timezones, even if a floating-time source would otherwise infer a shift", () => {
+    // A floating-time source whose programmes only line up as "live now" under a 90min shift.
+    const programmes = new Map([["ch0", [programmeLiveAtOffset(90)]]])
+    expect(resolveAutoOffsetMin(true, programmes)).toBe(0)
+  })
+
+  it("infers normally when no loaded source has explicit timezones", () => {
+    const programmes = new Map([["ch0", [programmeLiveAtOffset(90)]]])
+    expect(resolveAutoOffsetMin(false, programmes)).toBe(90)
   })
 })

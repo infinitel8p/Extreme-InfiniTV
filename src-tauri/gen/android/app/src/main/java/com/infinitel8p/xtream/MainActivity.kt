@@ -148,10 +148,30 @@ class DeviceInfoBridge(private val activity: TauriActivity) {
 
 // {dataDir}/logs isn't a declared FileProvider root, so the newest log file is copied to the cache dir first and shared from there.
 class LogShareBridge(private val activity: TauriActivity) {
+  // Mirrors PathPlugin.kt's getConfigDir(): tauri-plugin-log writes to app_log_dir() = configDir/logs.
+  private fun expectedLogDir(): File {
+    val configDir = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      activity.dataDir
+    } else {
+      File(activity.applicationInfo.dataDir)
+    }
+    return File(configDir, "logs")
+  }
+
   @JavascriptInterface
   fun shareNewestLog(logDirPath: String?): Boolean {
     if (logDirPath.isNullOrBlank()) return false
     val logDir = File(logDirPath)
+    val matchesExpectedDir = try {
+      logDir.canonicalFile == expectedLogDir().canonicalFile
+    } catch (e: Throwable) {
+      Log.w("xtream-rs", "shareNewestLog canonicalFile failed: $e")
+      false
+    }
+    if (!matchesExpectedDir) {
+      Log.w("xtream-rs", "shareNewestLog rejected untrusted path: $logDirPath")
+      return false
+    }
     val newestLogFile = logDir.listFiles { file -> file.isFile && file.name.endsWith(".log") }
       ?.maxByOrNull { it.lastModified() }
       ?: return false

@@ -2479,11 +2479,17 @@ async function play(streamId, name) {
   catchupSession = null
   catchupAutoRetryCount = 0
   catchupLastEndedAbsUtcMs = null
+  // Leaving catch-up without a remount (e.g. "Back to live") would otherwise strand this on a disposed <video>.
+  if (catchupSeekingEl && catchupSeekingHandler) {
+    try { catchupSeekingEl.removeEventListener("seeking", catchupSeekingHandler) } catch {}
+    catchupSeekingEl = null
+    catchupSeekingHandler = null
+  }
   pendingSeekTargetUtcMs = null
   pausedAtAbsUtcMs = null
   // The old mount's teardown fires an async pause event; without this window it would re-arm the tracker mid-retune.
   suppressPauseTrackingUntilMs = Date.now() + 500
-  catchupRequestSeq++
+  const myRequest = ++catchupRequestSeq
   hideTimeshiftChip()
   clearLiveEdgeTracking()
   if (!currentEl) return
@@ -2641,6 +2647,10 @@ async function play(streamId, name) {
     clearRadioMode()
   }
   const player = await ensureEmbeddedPlayer(backend)
+  // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
+  if (myRequest !== catchupRequestSeq) {
+    return
+  }
   if (!player) {
     return
   }
@@ -2660,7 +2670,7 @@ async function play(streamId, name) {
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
-  player.src({ src, type: "application/x-mpegURL", drm: channelDrm })
+  try { player.src({ src, type: "application/x-mpegURL", drm: channelDrm }) } catch {}
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch(() => {})
@@ -2825,6 +2835,12 @@ async function playCatchup(channel, opts) {
   hidePlaybackFailurePanel()
   clearDeadVideoWatchdog()
   clearRadioMode()
+
+  // A different channel (or no active session) is a fresh pick, not a same-session remount/auto-advance - don't let stale strikes leak in.
+  if (!catchupSession || catchupSession.channelId !== channel.id) {
+    catchupLastEndedAbsUtcMs = null
+    catchupConsecutiveShortAdvances = 0
+  }
 
   // Resolving the archive URL can take several seconds (probing candidate
   // wire formats) - give the same tuning feedback the live path shows.

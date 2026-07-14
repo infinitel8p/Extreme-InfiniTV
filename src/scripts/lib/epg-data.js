@@ -477,6 +477,22 @@ export function inferTimezoneOffsetMin(programmes, preferredOffsetMin) {
     : preferredOffsetMin
 }
 
+// Any explicit-tz source disables inference: applyOffset shifts all merged programmes and would double-shift the already-correct ones.
+/**
+ * @param {boolean} anySourceHasExplicitTimezones
+ * @param {Map<string, Programme[]>} programmes
+ * @param {number} [preferredOffsetMin]
+ * @returns {number}
+ */
+export function resolveAutoOffsetMin(
+  anySourceHasExplicitTimezones,
+  programmes,
+  preferredOffsetMin
+) {
+  if (anySourceHasExplicitTimezones) return 0
+  return inferTimezoneOffsetMin(programmes, preferredOffsetMin)
+}
+
 function applyOffset(programmes, offsetMin) {
   if (!offsetMin) return
   const shift = offsetMin * 60 * 1000
@@ -871,9 +887,8 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
       const programmeMaps = []
       /** @type {Map<string, string>[]} */
       const channelNameMaps = []
-      // Only trust "auto = no shift" when every loaded source carries explicit
-      // per-timestamp offsets; a single floating-time source still needs inference.
-      let allSourcesHaveExplicitTimezones = true
+      // See resolveAutoOffsetMin: any explicit-tz source skips inference to avoid double-shifting correct-UTC programmes.
+      let anySourceHasExplicitTimezones = false
 
       const fetchResults = await Promise.allSettled(
         sources.map((src) => fetchAndParseSource(playlistId, src, httpMeta))
@@ -887,7 +902,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
             result.value
           programmeMaps.push(programmes)
           channelNameMaps.push(channelNames)
-          if (!hasExplicitTimezones) allSourcesHaveExplicitTimezones = false
+          if (hasExplicitTimezones) anySourceHasExplicitTimezones = true
           statuses.push({
             url: src.url,
             source: src.source,
@@ -929,12 +944,13 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
       let offsetMin = 0
       const offsetIsAuto = setting === "auto"
       if (offsetIsAuto) {
-        if (allSourcesHaveExplicitTimezones) {
-          // Explicit offsets already put the parsed times in true UTC.
-          offsetMin = 0
-        } else {
-          const preferredOffset = readInferredOffsetSetting(playlistId)
-          offsetMin = inferTimezoneOffsetMin(programmes, preferredOffset)
+        const preferredOffset = readInferredOffsetSetting(playlistId)
+        offsetMin = resolveAutoOffsetMin(
+          anySourceHasExplicitTimezones,
+          programmes,
+          preferredOffset
+        )
+        if (!anySourceHasExplicitTimezones) {
           writeInferredOffsetSetting(playlistId, offsetMin)
         }
       } else {

@@ -1313,11 +1313,17 @@ async function attachMpegts(
     let attempts = 0
     offsetWrapTimer = setInterval(() => {
       attempts++
-      if (disposed || !player || attempts > 200) {
+      if (disposed || !player) {
         if (offsetWrapTimer) {
           clearInterval(offsetWrapTimer)
           offsetWrapTimer = null
         }
+        return
+      }
+      if (attempts > 200) {
+        clearInterval(offsetWrapTimer!)
+        offsetWrapTimer = null
+        log.warn("[xt:player] timeline offset wrap gave up: mpegts.js internals not found after retry budget", { attempts })
         return
       }
       const mediaSource = resolveMediaSource()
@@ -1357,7 +1363,12 @@ async function attachMpegts(
           durationRetryTimer = null
         }
       }
-      if (disposed || !player || attempts > 20) return stop()
+      if (disposed || !player) return stop()
+      if (attempts > 20) {
+        stop()
+        log.warn("[xt:player] duration override gave up: mpegts.js internals not found after retry budget", { attempts, spanSeconds })
+        return
+      }
       try {
         const mseController =
           player._player_engine?._mse_controller ?? player._mse_controller ?? player._msectl

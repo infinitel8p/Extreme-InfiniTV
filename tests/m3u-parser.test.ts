@@ -331,6 +331,16 @@ describe("parseM3U: catchup attributes", () => {
     expect(result.entries[0].catchup).toBe("shift")
     expect(result.entries[0].catchupDays).toBe(4)
   })
+
+  it("keeps an explicit catchup-days over the SIPTV timeshift hint's day count", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" catchup-days="14" timeshift="2",Explicit Days Wins\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("shift")
+    expect(result.entries[0].catchupDays).toBe(14)
+  })
 })
 
 describe("parseM3U: per-channel #EXTVLCOPT headers", () => {

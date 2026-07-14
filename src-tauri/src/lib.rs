@@ -34,6 +34,58 @@ fn build_log_plugin() -> tauri_plugin_log::Builder {
     log_builder
 }
 
+// KeepSome only prunes the active day-stamped file's prefix, never prior days, and Android lacks desktop's manual "Open log folder" cleanup.
+#[cfg(target_os = "android")]
+const LOG_RETENTION_DAYS: u64 = 14;
+
+#[cfg(target_os = "android")]
+fn prune_old_android_logs(app: &tauri::App) {
+    use tauri::Manager;
+
+    let log_dir = match app.path().app_log_dir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            log::warn!("[log-prune] app_log_dir unavailable: {error}");
+            return;
+        }
+    };
+    let entries = match std::fs::read_dir(&log_dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            log::warn!("[log-prune] read_dir failed for {}: {error}", log_dir.display());
+            return;
+        }
+    };
+    let Some(cutoff) = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(LOG_RETENTION_DAYS * 24 * 60 * 60))
+    else {
+        return;
+    };
+
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let is_app_log = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("app-") && name.ends_with(".log"));
+        if !is_app_log {
+            continue;
+        }
+        let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
+            Ok(modified) => modified,
+            Err(error) => {
+                log::warn!("[log-prune] metadata failed for {}: {error}", path.display());
+                continue;
+            }
+        };
+        if modified < cutoff {
+            if let Err(error) = std::fs::remove_file(&path) {
+                log::warn!("[log-prune] remove_file failed for {}: {error}", path.display());
+            }
+        }
+    }
+}
+
 fn install_panic_hook() {
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
@@ -101,6 +153,8 @@ pub fn run() {
     builder
         .setup(|_app| {
             install_panic_hook();
+            #[cfg(target_os = "android")]
+            prune_old_android_logs(_app);
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             external_player::sweep_orphan_mpv_sockets();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

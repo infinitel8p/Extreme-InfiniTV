@@ -18,6 +18,10 @@ import {
   type CatchupCapableChannel,
 } from "../src/scripts/lib/catchup"
 
+function padTwo(value: number): string {
+  return String(value).padStart(2, "0")
+}
+
 describe("formatTimeshiftStart", () => {
   it("zero-pads month, day, hour, and minute", () => {
     const startUtcMs = Date.UTC(2024, 3, 5, 7, 5, 0)
@@ -215,10 +219,9 @@ describe("expandCatchupTemplate", () => {
     // {Y}/{m}/{d}/{H}/{M}/{S} render the LOCAL time of the start instant (Kodi parity), so the
     // expected value is computed via local Date getters to stay timezone-independent.
     const startDate = new Date(startUtcMs)
-    const pad = (n: number) => String(n).padStart(2, "0")
     const localStart =
-      `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())} ` +
-      `${pad(startDate.getHours())}:${pad(startDate.getMinutes())}:${pad(startDate.getSeconds())}`
+      `${startDate.getFullYear()}-${padTwo(startDate.getMonth() + 1)}-${padTwo(startDate.getDate())} ` +
+      `${padTwo(startDate.getHours())}:${padTwo(startDate.getMinutes())}:${padTwo(startDate.getSeconds())}`
     const template =
       "{utc}|${start}|{utcend}|${end}|{lutc}|${now}|${timestamp}|" +
       "{duration}|${duration}|{duration:1800}|${offset}|{offset:3600}|" +
@@ -301,10 +304,9 @@ describe("expandCatchupTemplate: colon-format tokens (rtp2httpd/Kodi parity)", (
 
   function local14(ms: number): string {
     const date = new Date(ms)
-    const pad = (n: number) => String(n).padStart(2, "0")
     return (
-      `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
-      `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+      `${date.getFullYear()}${padTwo(date.getMonth() + 1)}${padTwo(date.getDate())}` +
+      `${padTwo(date.getHours())}${padTwo(date.getMinutes())}${padTwo(date.getSeconds())}`
     )
   }
 
@@ -316,10 +318,9 @@ describe("expandCatchupTemplate: colon-format tokens (rtp2httpd/Kodi parity)", (
 
   it("passes non-YmdHMS characters through literally in a mixed pattern", () => {
     const startDate = new Date(startUtcMs)
-    const pad = (n: number) => String(n).padStart(2, "0")
     const expected =
-      `${startDate.getFullYear()}${pad(startDate.getMonth() + 1)}${pad(startDate.getDate())}` +
-      `-${pad(startDate.getHours())}-${pad(startDate.getMinutes())}`
+      `${startDate.getFullYear()}${padTwo(startDate.getMonth() + 1)}${padTwo(startDate.getDate())}` +
+      `-${padTwo(startDate.getHours())}-${padTwo(startDate.getMinutes())}`
     expect(expandCatchupTemplate("{utc:Ymd-H-M}", ctx)).toBe(expected)
   })
 
@@ -384,10 +385,9 @@ describe("expandCatchupTemplate: catchup-correction", () => {
   it("shifts the {Y}-family and {utc:...} colon-format local tokens the same way as {utc}", () => {
     const ctx = { startUtcMs, stopUtcMs, nowUtcMs, catchupCorrectionHours: 2 }
     const correctedStart = new Date(startUtcMs - 2 * 3600000)
-    const pad = (n: number) => String(n).padStart(2, "0")
     const expected =
-      `${correctedStart.getFullYear()}${pad(correctedStart.getMonth() + 1)}${pad(correctedStart.getDate())}` +
-      `${pad(correctedStart.getHours())}${pad(correctedStart.getMinutes())}${pad(correctedStart.getSeconds())}`
+      `${correctedStart.getFullYear()}${padTwo(correctedStart.getMonth() + 1)}${padTwo(correctedStart.getDate())}` +
+      `${padTwo(correctedStart.getHours())}${padTwo(correctedStart.getMinutes())}${padTwo(correctedStart.getSeconds())}`
     expect(expandCatchupTemplate("{utc:YmdHMS}", ctx)).toBe(expected)
     expect(expandCatchupTemplate("{Y}{m}{d}{H}{M}{S}", ctx)).toBe(expected)
   })
@@ -629,6 +629,16 @@ describe("buildM3uCatchupUrl", () => {
     )
   })
 
+  it("builds a flussonic URL when the query string carries no '=' (valueless query)", () => {
+    const channel: CatchupCapableChannel = {
+      url: "http://host.example/12345/index.m3u8?debug",
+      catchup: "flussonic-hls",
+    }
+    expect(buildM3uCatchupUrl(channel, ctx)).toBe(
+      "http://host.example/12345/timeshift_rel-7200.m3u8?debug",
+    )
+  })
+
   it("returns null for a flussonic URL with no second path segment to split", () => {
     const channel: CatchupCapableChannel = {
       url: "http://host.example/onlyonesegment",
@@ -810,15 +820,15 @@ describe("streamProfileFor", () => {
     expect(streamProfileFor({ catchup: "vod" })).toEqual({ granularitySeconds: 1, terminates: true })
   })
 
-  it("classifies shift mode with a ${(e)} playseek source as non-terminating (server follows live)", () => {
+  it("classifies append mode with a ${(e)} playseek source as non-terminating (server follows live)", () => {
     expect(
-      streamProfileFor({ catchup: "shift", catchupSource: "?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}" }),
+      streamProfileFor({ catchup: "append", catchupSource: "?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}" }),
     ).toEqual({ granularitySeconds: 1, terminates: false })
   })
 
   it("classifies the same ${(e)} end-token source as terminating once tvdr/playseek is absent", () => {
     expect(
-      streamProfileFor({ catchup: "shift", catchupSource: "?seek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}" }),
+      streamProfileFor({ catchup: "append", catchupSource: "?seek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}" }),
     ).toEqual({ granularitySeconds: 1, terminates: true })
   })
 
@@ -833,11 +843,22 @@ describe("streamProfileFor", () => {
     })
   })
 
-  it("classifies the same shift channel with an end-token source as terminating", () => {
-    expect(streamProfileFor({ catchup: "shift", catchupSource: "http://host/archive?utc={utc}&end={utcend}" })).toEqual({
-      granularitySeconds: 1,
-      terminates: true,
-    })
+  it("classifies a shift channel as non-terminating even with an end-token catchupSource, since buildM3uCatchupUrl ignores catchupSource for shift mode", () => {
+    const channel: CatchupCapableChannel = {
+      url: "http://host/live.m3u8",
+      catchup: "shift",
+      catchupSource: "http://host/archive?utc={utc}&end={utcend}",
+    }
+    expect(streamProfileFor(channel)).toEqual({ granularitySeconds: 1, terminates: false })
+
+    const ctx = {
+      startUtcMs: Date.UTC(2024, 0, 1, 0, 0, 0),
+      stopUtcMs: Date.UTC(2024, 0, 1, 1, 0, 0),
+      nowUtcMs: Date.UTC(2024, 0, 1, 2, 0, 0),
+    }
+    const url = buildM3uCatchupUrl(channel, ctx)
+    expect(url).not.toBeNull()
+    expect(url).not.toMatch(/end=/)
   })
 })
 

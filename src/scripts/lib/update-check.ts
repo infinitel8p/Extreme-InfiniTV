@@ -54,9 +54,11 @@ export interface UpdateStatus {
 
 let lastStatus: UpdateStatus | null = null
 let updateCheckPromise: Promise<UpdateStatus | null> | null = null
+let updateChannelToken = 0
 
 if (typeof document !== "undefined") {
   document.addEventListener(UPDATE_CHANNEL_EVENT, () => {
+    updateChannelToken++
     lastStatus = null
     updateCheckPromise = null
   })
@@ -75,6 +77,7 @@ export async function getCurrentAppVersion(): Promise<string | null> {
 }
 
 async function performCheck(): Promise<UpdateStatus | null> {
+  const tokenAtStart = updateChannelToken
   try {
     const current = await getCurrentAppVersion()
     if (!current) return null
@@ -105,6 +108,9 @@ async function performCheck(): Promise<UpdateStatus | null> {
       notes: newestRelease.body,
       updateAvailable: compareVersions(latest, current) > 0,
     }
+
+    // Channel switched while this check was in flight; the new channel already started its own check.
+    if (updateChannelToken !== tokenAtStart) return null
 
     lastStatus = status
     return status

@@ -294,7 +294,7 @@ export function parseM3U(text: string): M3UParseResult {
     const effectiveSiptvDays = siptvDays || headerSiptvDays
     if (!catchup && effectiveSiptvDays > 0) {
       catchup = "shift"
-      catchupDays = effectiveSiptvDays
+      if (catchupDays == null) catchupDays = effectiveSiptvDays
     }
     entries.push({
       ...pendingEntry,
