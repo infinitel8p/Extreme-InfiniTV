@@ -86,18 +86,10 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 
 		<!-- Categories popover -->
 		<CategoryPickerDialog idPrefix="movie-category-picker" />
-
-		<div
-			id="app-version"
-			class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
-			Loading…
-		</div>
 	</main>
 
 	<script>
 		import "@/scripts/movies/movies.ts";
 		import "@/scripts/updater-startup.js";
-		import { injectVersion } from "@/scripts/version.js";
-		injectVersion();
 	</script>
 </Layout>

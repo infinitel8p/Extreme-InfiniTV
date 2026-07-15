@@ -24,15 +24,28 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest"><img src="https://img.shields.io/github/v/release/infinitel8p/Extreme-InfiniTV?label=latest&color=a855f7" alt="Latest release"/></a>
-  <a href="https://github.com/infinitel8p/Extreme-InfiniTV/releases"><img src="https://img.shields.io/github/downloads/infinitel8p/Extreme-InfiniTV/total?color=a855f7&cacheSeconds=300" alt="GitHub downloads"/></a>
-  <a href="https://github.com/infinitel8p/Extreme-InfiniTV/stargazers"><img src="https://img.shields.io/github/stars/infinitel8p/Extreme-InfiniTV?color=a855f7" alt="GitHub stars"/></a>
+  <a href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest">
+    <img src="https://img.shields.io/github/v/release/infinitel8p/Extreme-InfiniTV?label=stable&color=a855f7" alt="Latest stable release"/>
+  </a>
+  <a href="https://github.com/infinitel8p/Extreme-InfiniTV/releases">
+    <img src="https://img.shields.io/github/v/release/infinitel8p/Extreme-InfiniTV?include_prereleases&label=beta&color=a855f7" alt="Latest beta release"/>
+  </a>
+  <a href="https://github.com/infinitel8p/Extreme-InfiniTV/releases">
+    <img src="https://img.shields.io/github/downloads/infinitel8p/Extreme-InfiniTV/total?color=a855f7&cacheSeconds=300" alt="GitHub downloads"/>
+    </a>
+  <a href="https://github.com/infinitel8p/Extreme-InfiniTV/stargazers">
+    <img src="https://img.shields.io/github/stars/infinitel8p/Extreme-InfiniTV?color=a855f7" alt="GitHub stars"/>
+  </a>
   <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-64748b?color=a855f7" alt="Supported platforms: Windows, macOS, Linux, Android"/>
 </p>
 
 <p align="center">
-  <a href="https://github.com/infinitel8p/Extreme-InfiniTV/issues"><img src="https://img.shields.io/github/issues/infinitel8p/Extreme-InfiniTV?logo=github&color=a855f7" alt="Issues"/></a>
-  <a href="https://github.com/infinitel8p/Extreme-InfiniTV/discussions"><img src="https://img.shields.io/github/discussions/infinitel8p/Extreme-InfiniTV?logo=github&color=a855f7" alt="Discussions"/></a>
+  <a href="https://github.com/infinitel8p/Extreme-InfiniTV/issues">
+    <img src="https://img.shields.io/github/issues/infinitel8p/Extreme-InfiniTV?logo=github&color=a855f7" alt="Issues"/>
+  </a>
+  <a href="https://github.com/infinitel8p/Extreme-InfiniTV/discussions">
+    <img src="https://img.shields.io/github/discussions/infinitel8p/Extreme-InfiniTV?logo=github&color=a855f7" alt="Discussions"/>
+  </a>
 </p>
 
 ## Screenshots
@@ -78,6 +91,7 @@
 - **Adjustable font scale** (Default / Medium / Large / X-Large) plus a responsive root size that scales the whole UI on 4K and 8K displays.
 - **Self-updating Windows desktop build** via the Tauri updater (signed with minisign, served from GitHub Releases).
 - **Offline-friendly persistence.** Credentials and preferences live in the OS app-data dir on Tauri builds, with a localStorage / cookie fallback on the web build.
+- **No tracking, no ads, no telemetry.** The app collects nothing about you or your viewing habits.
 
 ## Install
 

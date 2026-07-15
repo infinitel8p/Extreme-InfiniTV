@@ -29,7 +29,9 @@ docs/preview.log
 # Local Netlify folder
 .netlify
 
-buildfiles/
+# keep buildfiles/ private (signing key, MSIX artifacts) except the version script CI needs
+buildfiles/*
+!buildfiles/sync-version.mjs
 dump/
 
 # local dev tools / scratch scripts

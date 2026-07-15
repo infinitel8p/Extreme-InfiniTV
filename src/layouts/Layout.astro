@@ -8,8 +8,9 @@ import "../styles/global.css"
 
 interface Props {
   pageTitle?: string
+  showVersion?: boolean
 }
-const { pageTitle } = Astro.props
+const { pageTitle, showVersion = true } = Astro.props
 const documentTitle = pageTitle
   ? `${pageTitle} | Extreme InfiniTV`
   : "Extreme InfiniTV"
@@ -191,6 +192,12 @@ const documentTitle = pageTitle
         if (currentTheme === "light") document.documentElement.style.colorScheme = "light";
         else if (currentTheme === "dark") document.documentElement.style.colorScheme = "dark";
 
+        var KNOWN_ACCENTS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"];
+        var storedAccent = localStorage.getItem("xt_accent") || "";
+        if (storedAccent && storedAccent !== "fuchsia" && KNOWN_ACCENTS.indexOf(storedAccent) !== -1) {
+          document.documentElement.setAttribute("data-accent", storedAccent);
+        }
+
         function applyAndroidStatusBar(theme) {
           try {
             if (!window.AndroidStatusBar) return;
@@ -260,6 +267,20 @@ const documentTitle = pageTitle
         <slot />
       </div>
     </div>
+    {
+      showVersion && (
+        <div
+          id="app-version"
+          class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(1.25rem,env(safe-area-inset-right))] rounded-full bg-bg/75 backdrop-blur-sm px-2 py-0.5 text-2xs text-fg-3 tabular-nums pointer-events-none"
+        >
+          Extreme InfiniTV v{pkg.version}
+        </div>
+      )
+    }
+    <script>
+      import { injectVersion } from "@/scripts/version.js"
+      injectVersion()
+    </script>
     <CatalogWarmingIndicator client:idle />
   </body>
 </html>
@@ -329,7 +350,7 @@ const documentTitle = pageTitle
     background:
       radial-gradient(
         ellipse 92vmin 64vmin at 50% 48%,
-        color-mix(in oklch, var(--color-accent) 5%, var(--color-bg)),
+        color-mix(in oklab, var(--color-accent) 5%, var(--color-bg)),
         var(--color-bg) 78%
       ),
       var(--color-bg);

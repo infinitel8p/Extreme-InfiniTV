@@ -8,7 +8,7 @@ import {
   safeHttpUrl,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
-import { t, initI18n } from "@/scripts/lib/i18n.js"
+import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
 import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
@@ -17,9 +17,11 @@ import {
   invalidateEpgPlaylist,
   effectiveTvgId,
   getAvailableEpgChannels,
+  displayedToUtcMs,
   EPG_OFFSET_EVENT,
 } from "@/scripts/lib/epg-data.js"
 import { openProgrammeDialog } from "@/scripts/lib/programme-dialog.js"
+import { channelSupportsCatchup, isCatchupPlayable } from "@/scripts/lib/catchup.ts"
 import {
   ensureLoaded as ensurePrefsLoaded,
   getFavorites,
@@ -41,6 +43,8 @@ const HOURS_VISIBLE = 6
 const ROW_HEIGHT = 64
 const CHANNEL_COL_WIDTH = 240
 const MAX_CHANNELS = 150
+const DAY_MS = 24 * 60 * 60 * 1000
+const CATCHUP_LOOKBACK_DAYS = 7
 
 // ----------------------------
 // UI refs
@@ -52,6 +56,9 @@ const bodyEl = document.getElementById("epg-body")
 const titleEl = document.getElementById("epg-title")
 const refreshBtn = document.getElementById("epg-refresh")
 const nowBtn = document.getElementById("epg-now")
+const prevDayBtn = document.getElementById("epg-prev-day")
+const nextDayBtn = document.getElementById("epg-next-day")
+const dayLabelEl = document.getElementById("epg-day-label")
 
 // ----------------------------
 // State
@@ -261,6 +268,52 @@ function roundHalfHourFloor(ts) {
   return Math.floor(ts / half) * half
 }
 
+function startOfHour(ts) {
+  const hour = 60 * 60 * 1000
+  return Math.floor(ts / hour) * hour
+}
+
+// Bounds match the catch-up window: up to 7 days back, up to 12h of upcoming
+// schedule ahead of now.
+function clampViewStart(ts) {
+  const now = Date.now()
+  const min = startOfHour(now - CATCHUP_LOOKBACK_DAYS * DAY_MS)
+  const max = now + 12 * 60 * 60 * 1000
+  return Math.max(min, Math.min(max, ts))
+}
+
+function isViewingToday() {
+  const now = new Date()
+  const viewed = new Date(viewStart)
+  return (
+    now.getFullYear() === viewed.getFullYear() &&
+    now.getMonth() === viewed.getMonth() &&
+    now.getDate() === viewed.getDate()
+  )
+}
+
+function updateDayLabel() {
+  if (!dayLabelEl) return
+  dayLabelEl.textContent = isViewingToday()
+    ? t("epg.today")
+    : new Intl.DateTimeFormat(getActiveLocale(), {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      }).format(new Date(viewStart))
+}
+
+function navigateToCatchup(channelId, startDisplayMs, stopDisplayMs, title, catchupId) {
+  const startUtc = displayedToUtcMs(activePlaylistId, startDisplayMs)
+  const stopUtc = displayedToUtcMs(activePlaylistId, stopDisplayMs)
+  window.location.href =
+    `/livetv?channel=${encodeURIComponent(String(channelId))}` +
+    `&cstart=${startUtc}` +
+    `&cstop=${stopUtc}` +
+    `&ctitle=${encodeURIComponent(title || "")}` +
+    (catchupId ? `&cid=${encodeURIComponent(catchupId)}` : "")
+}
+
 function fmtTime(ts) {
   return new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
@@ -371,12 +424,17 @@ function renderChannelRow(channel, programmesForRow) {
 
   const visEnd = viewStart + HOURS_VISIBLE * 60 * 60 * 1000
 
+  const nowMs = Date.now()
+  const canChannelCatchup = channelSupportsCatchup(channel)
+
   for (const p of programmesForRow) {
     if (p.stop <= viewStart || p.start >= visEnd) continue
     const left = Math.max(0, timeToX(p.start))
     const right = Math.min(timeToX(p.stop), HOURS_VISIBLE * PX_PER_HOUR)
     const width = Math.max(2, right - left)
-    const isLive = p.start <= Date.now() && p.stop > Date.now()
+    const isLive = p.start <= nowMs && p.stop > nowMs
+    const isPast = p.stop <= nowMs
+    const canReplay = isPast && canChannelCatchup && isCatchupPlayable(channel, p.start, nowMs)
 
     const cell = document.createElement("button")
     cell.type = "button"
@@ -386,25 +444,45 @@ function renderChannelRow(channel, programmesForRow) {
       "active:scale-[0.97] " +
       (isLive
         ? "border-accent bg-accent-soft text-fg hover:bg-accent/20 focus-visible:bg-accent/20"
+        : canReplay
+        ? "epg-cell-replay border-line bg-surface text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg"
+        : isPast
+        ? "epg-cell-past border-line bg-surface text-fg-3 hover:bg-surface-2 hover:text-fg-2 focus-visible:bg-surface-2 focus-visible:text-fg-2"
         : "border-line bg-surface text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg") +
       " focus-visible:ring-2 focus-visible:ring-accent"
     cell.style.left = `${left}px`
     cell.style.width = `${width}px`
     cell.title = `${fmtTime(p.start)}–${fmtTime(p.stop)} · ${p.title}${p.desc ? "\n\n" + p.desc : ""}`
     cell.addEventListener("click", () => {
-      openProgrammeDialog({
+      const dialogOpts = {
         title: p.title,
         desc: p.desc,
         start: p.start,
         stop: p.stop,
         channelName: channel.name,
         channelId: channel.id,
-      })
+      }
+      if (canReplay) {
+        dialogOpts.onCatchup = () =>
+          navigateToCatchup(channel.id, p.start, p.stop, p.title, p.catchupId)
+      } else if (isLive && canChannelCatchup && isCatchupPlayable(channel, p.start, nowMs)) {
+        dialogOpts.onWatchFromStart = () =>
+          navigateToCatchup(channel.id, p.start, p.stop, p.title, p.catchupId)
+      }
+      openProgrammeDialog(dialogOpts)
     })
 
     const titleLine = document.createElement("div")
     titleLine.className = "truncate text-xs font-medium"
-    titleLine.textContent = p.title
+    if (canReplay) {
+      const replayDot = document.createElement("span")
+      replayDot.className = "epg-cell-replay-dot"
+      replayDot.title = t("catchup.badge")
+      titleLine.appendChild(replayDot)
+      titleLine.appendChild(document.createTextNode(p.title))
+    } else {
+      titleLine.textContent = p.title
+    }
     const timeLine = document.createElement("div")
     timeLine.className = "truncate text-2xs text-fg-3 tabular-nums"
     timeLine.textContent = `${fmtTime(p.start)}–${fmtTime(p.stop)}`
@@ -752,6 +830,8 @@ async function fetchXtreamChannels() {
         logo: ch.stream_icon || null,
         tvgId: String(ch.epg_channel_id || "") || undefined,
         chno: Number(ch.num) || undefined,
+        tvArchive: Number(ch.tv_archive) || 0,
+        tvArchiveDuration: Number(ch.tv_archive_duration) || 0,
       }
     })
     .filter((x) => x.id && x.name)
@@ -865,6 +945,7 @@ async function init() {
   picker.rerender()
 
   viewStart = roundHalfHourFloor(Date.now() - 30 * 60 * 1000)
+  updateDayLabel()
   showLoadingSkeleton(t("epg.loadingFull"))
   programmes.clear()
   try {
@@ -907,6 +988,7 @@ refreshBtn?.addEventListener("click", () => {
 nowBtn?.addEventListener("click", () => {
   if (!gridEl) return
   viewStart = roundHalfHourFloor(Date.now() - 30 * 60 * 1000)
+  updateDayLabel()
   if (programmes.size && channels.length) render()
   // Centre the now-line about a third in from the left of the visible width.
   const visible = gridEl.clientWidth || 0
@@ -919,6 +1001,18 @@ nowBtn?.addEventListener("click", () => {
   } catch {
     gridEl.scrollLeft = target
   }
+})
+
+prevDayBtn?.addEventListener("click", () => {
+  viewStart = clampViewStart(viewStart - DAY_MS)
+  updateDayLabel()
+  if (programmes.size && channels.length) render()
+})
+
+nextDayBtn?.addEventListener("click", () => {
+  viewStart = clampViewStart(viewStart + DAY_MS)
+  updateDayLabel()
+  if (programmes.size && channels.length) render()
 })
 
 document.addEventListener(EPG_OFFSET_EVENT, (e) => {

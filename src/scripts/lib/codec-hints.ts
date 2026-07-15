@@ -34,12 +34,61 @@ export function findHevcInCodecList(codecs: string | null | undefined): string |
   return null
 }
 
-export type StartFailureKind = "hevc" | "codec" | "unknown"
+export type StartFailureKind = "hevc" | "codec" | "audio" | "unknown"
 
 export interface StartFailureVerdict {
   kind: StartFailureKind
   /** Actual codec string when the engine reported one; null when inferred. */
   codec: string | null
+}
+
+// Chromium/WebView2 MSE never ships AC-3, E-AC-3, MP2, or DTS audio decoders
+// (licensing), so these fail the same way regardless of the video codec.
+function classifyAudioCodec(
+  codec: string | null | undefined
+): "ac3" | "eac3" | "mp2" | "dts" | null {
+  const normalized = codec?.trim().toLowerCase()
+  if (!normalized) return null
+  if (/^(?:ec-3|eac3|mp4a\.a6)$/.test(normalized)) return "eac3"
+  if (/^(?:ac-3|ac3|mp4a\.a5)$/.test(normalized)) return "ac3"
+  // mp4a.69/mp4a.6b are RFC 6381 MP3 object types, natively decodable - not mp2.
+  if (/^(?:mp2|mp2a)$/.test(normalized)) return "mp2"
+  if (/^dts$/.test(normalized)) return "dts"
+  return null
+}
+
+export function isUnsupportedAudioCodec(codec: string | null | undefined): boolean {
+  return classifyAudioCodec(codec) !== null
+}
+
+export function describeAudioCodec(codec: string | null | undefined): string {
+  switch (classifyAudioCodec(codec)) {
+    case "ac3":
+      return "Dolby Digital (AC-3)"
+    case "eac3":
+      return "Dolby Digital Plus (E-AC-3)"
+    case "mp2":
+      return "MPEG audio (MP2)"
+    case "dts":
+      return "DTS"
+    default:
+      return codec?.trim() || "?"
+  }
+}
+
+// Proves a video codec is actually decodable rather than inferring it from
+// the HEVC name check; used to avoid blaming a fine video codec for an
+// unrelated (usually audio) decode failure.
+export function videoCodecDecodable(codec: string | null | undefined): boolean {
+  const trimmed = codec?.trim()
+  if (!trimmed) return false
+  try {
+    const mediaSource = (globalThis as any).MediaSource || (globalThis as any).ManagedMediaSource
+    if (!mediaSource?.isTypeSupported) return false
+    return mediaSource.isTypeSupported(`video/mp4; codecs="${trimmed}"`) === true
+  } catch {
+    return false
+  }
 }
 
 // Engine error details that point at a codec/format problem rather than a
@@ -53,6 +102,7 @@ const CODEC_ERROR_DETAIL_RX =
 
 export function classifyStartFailure(input: {
   videoCodec?: string | null
+  audioCodec?: string | null
   errorDetail?: string | null
   nameHint?: boolean
   deviceHevc: boolean
@@ -66,11 +116,16 @@ export function classifyStartFailure(input: {
   }
 
   const nameSaysHevc = input.nameHint && !input.deviceHevc && !videoCodec
+  const audioUnsupported = isUnsupportedAudioCodec(input.audioCodec)
+
   if (codecError) {
     if (nameSaysHevc) return { kind: "hevc", codec: null }
+    if (audioUnsupported) return { kind: "audio", codec: input.audioCodec ?? null }
+    if (videoCodec && videoCodecDecodable(videoCodec)) return { kind: "unknown", codec: videoCodec }
     return { kind: "codec", codec: videoCodec }
   }
   if (nameSaysHevc) return { kind: "hevc", codec: null }
+  if (audioUnsupported) return { kind: "audio", codec: input.audioCodec ?? null }
   return { kind: "unknown", codec: videoCodec }
 }
 

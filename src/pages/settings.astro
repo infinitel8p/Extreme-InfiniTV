@@ -36,6 +36,9 @@ import {
   IconLayoutDashboard,
   IconSearch,
   IconX,
+  IconShare,
+  IconExternalLink,
+  IconRestore,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -48,7 +51,7 @@ import ConnectionLimitBanner from "@/components/ConnectionLimitBanner.svelte"
 import AndroidNativePlayerCard from "@/components/AndroidNativePlayerCard.svelte"
 import RememberedAndroidPlayerCard from "@/components/RememberedAndroidPlayerCard.svelte"
 
-interface NavCard { id: string; labelKey: string; label: string }
+interface NavCard { id: string; labelKey: string; label: string; conditional?: boolean }
 interface NavSection { id: string; labelKey: string; label: string; cards: NavCard[]; danger?: boolean }
 
 const navStructure: NavSection[] = [
@@ -66,12 +69,12 @@ const navStructure: NavSection[] = [
     { id: "card-progress-retention",        labelKey: "settings.progressRetention.title",      label: "Continue watching" },
     { id: "epg-tz-section",                 labelKey: "settings.epgTimezone.title",            label: "EPG time zone" },
     { id: "playback-section",               labelKey: "settings.playback.title",               label: "Playback" },
-    { id: "android-native-player-section",  labelKey: "settings.androidNativePlayer.navLabel", label: "Native Android player" },
-    { id: "android-default-player-section", labelKey: "settings.androidDefaultPlayer.navLabel", label: "Default external player" },
+    { id: "android-native-player-section",  labelKey: "settings.androidNativePlayer.navLabel", label: "Native Android player", conditional: true },
+    { id: "android-default-player-section", labelKey: "settings.androidDefaultPlayer.navLabel", label: "Default external player", conditional: true },
   ]},
   { id: "settings-network", labelKey: "settings.group.network", label: "Network", cards: [
     { id: "card-network",          labelKey: "settings.network.title", label: "Network" },
-    { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence" },
+    { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
   ]},
   { id: "settings-library", labelKey: "settings.group.library", label: "Library", cards: [
     { id: "card-categories", labelKey: "settings.categories.title",        label: "Categories" },
@@ -95,7 +98,7 @@ const navStructure: NavSection[] = [
 ]
 ---
 
-<Layout pageTitle="Settings">
+<Layout pageTitle="Settings" showVersion={false}>
   <main class="flex-1 min-h-0 overflow-y-auto overflow-x-clip custom-scroll">
     <div
       class="w-full max-w-480 mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 pb-12 flex flex-col gap-6 lg:gap-8">
@@ -129,7 +132,7 @@ const navStructure: NavSection[] = [
           {section.cards.length > 1 && (
             <ul class="settings-subnav hidden lg:flex flex-col list-none m-0 p-0">
               {section.cards.map((card) => (
-                <li class="m-0">
+                <li class="m-0" {...(card.conditional ? { "data-conditional": "true", hidden: true } : {})}>
                   <a
                     href={`#${card.id}`}
                     data-i18n={card.labelKey}
@@ -246,7 +249,7 @@ const navStructure: NavSection[] = [
             <div class="flex flex-col gap-1 min-w-0">
               <h3 data-i18n="settings.section.display" class="text-base font-semibold">Display</h3>
               <p data-i18n="settings.display.helper" class="text-xs text-fg-3">
-                Theme and base font size. System theme follows your OS preference.
+                Theme, accent color and base font size. System theme follows your OS preference.
               </p>
             </div>
           </div>
@@ -259,9 +262,41 @@ const navStructure: NavSection[] = [
               role="radiogroup"
               data-i18n-attr="aria-label:settings.theme.label"
               aria-label="Theme">
-              <button type="button" data-theme="system" aria-pressed="false" data-i18n="settings.theme.system" class="theme-btn btn">System</button>
-              <button type="button" data-theme="light"  aria-pressed="false" data-i18n="settings.theme.light" class="theme-btn btn">Light</button>
-              <button type="button" data-theme="dark"   aria-pressed="false" data-i18n="settings.theme.dark" class="theme-btn btn">Dark</button>
+              <button type="button" role="radio" data-theme="system" aria-checked="false" data-i18n="settings.theme.system" class="theme-btn btn">System</button>
+              <button type="button" role="radio" data-theme="light"  aria-checked="false" data-i18n="settings.theme.light" class="theme-btn btn">Light</button>
+              <button type="button" role="radio" data-theme="dark"   aria-checked="false" data-i18n="settings.theme.dark" class="theme-btn btn">Dark</button>
+            </div>
+          </div>
+
+          <div class="flex flex-col gap-2">
+            <span data-i18n="settings.accent.label" class="text-eyebrow font-medium uppercase text-fg-3">Accent color</span>
+            <div
+              id="settings-accent"
+              class="flex flex-wrap gap-2"
+              role="radiogroup"
+              data-i18n-attr="aria-label:settings.accent.label"
+              aria-label="Accent color">
+              <button type="button" role="radio" data-accent-value="fuchsia" aria-checked="false" data-i18n-attr="title:settings.accent.fuchsia;aria-label:settings.accent.fuchsia" title="Fuchsia" aria-label="Fuchsia" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-fuchsia)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" role="radio" data-accent-value="rose" aria-checked="false" data-i18n-attr="title:settings.accent.rose;aria-label:settings.accent.rose" title="Rose" aria-label="Rose" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-rose)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" role="radio" data-accent-value="ember" aria-checked="false" data-i18n-attr="title:settings.accent.ember;aria-label:settings.accent.ember" title="Ember" aria-label="Ember" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-ember)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" role="radio" data-accent-value="emerald" aria-checked="false" data-i18n-attr="title:settings.accent.emerald;aria-label:settings.accent.emerald" title="Emerald" aria-label="Emerald" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-emerald)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" role="radio" data-accent-value="cyan" aria-checked="false" data-i18n-attr="title:settings.accent.cyan;aria-label:settings.accent.cyan" title="Cyan" aria-label="Cyan" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-cyan)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" role="radio" data-accent-value="blue" aria-checked="false" data-i18n-attr="title:settings.accent.blue;aria-label:settings.accent.blue" title="Blue" aria-label="Blue" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-blue)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+              </button>
+              <button type="button" role="radio" data-accent-value="violet" aria-checked="false" data-i18n-attr="title:settings.accent.violet;aria-label:settings.accent.violet" title="Violet" aria-label="Violet" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-violet)">
+                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+              </button>
             </div>
           </div>
 
@@ -299,7 +334,15 @@ const navStructure: NavSection[] = [
               if (themeGroup) {
                 var themeBtns = themeGroup.querySelectorAll(".theme-btn");
                 for (var j = 0; j < themeBtns.length; j++) {
-                  themeBtns[j].setAttribute("aria-pressed", themeBtns[j].getAttribute("data-theme") === currentTheme ? "true" : "false");
+                  themeBtns[j].setAttribute("aria-checked", themeBtns[j].getAttribute("data-theme") === currentTheme ? "true" : "false");
+                }
+              }
+              var currentAccent = localStorage.getItem("xt_accent") || "fuchsia";
+              var accentGroup = document.getElementById("settings-accent");
+              if (accentGroup) {
+                var accentBtns = accentGroup.querySelectorAll(".accent-btn");
+                for (var k = 0; k < accentBtns.length; k++) {
+                  accentBtns[k].setAttribute("aria-checked", accentBtns[k].getAttribute("data-accent-value") === currentAccent ? "true" : "false");
                 }
               }
             } catch (e) {}
@@ -471,8 +514,8 @@ const navStructure: NavSection[] = [
             class="text-xs text-fg-3"></div>
         </article>
 
-        <!-- Playback: in-app player + external launcher (desktop only) -->
-        <article id="playback-section" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 hidden">
+        <!-- Playback: embedded player backend on every platform, plus the desktop-only external launcher -->
+        <article id="playback-section" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
           <div class="flex items-start gap-3">
             <span class="icon-mark">
               <IconPlayerPlay aria-hidden="true" stroke={2} />
@@ -782,6 +825,10 @@ const navStructure: NavSection[] = [
               <IconFolderOpen aria-hidden="true" class="btn-icon" />
               <span data-i18n="settings.storage.openLogs">Open log folder</span>
             </button>
+            <button id="settings-share-logs" type="button" class="btn justify-start sm:justify-center hidden">
+              <IconShare aria-hidden="true" class="btn-icon" />
+              <span data-i18n="settings.storage.shareLogs">Share logs</span>
+            </button>
           </div>
           <span
             id="settings-cache-msg"
@@ -880,7 +927,6 @@ const navStructure: NavSection[] = [
                 Update available
               </span>
             </div>
-            <span id="update-availability" class="text-xs text-fg-3 truncate empty:hidden"></span>
           </div>
         </div>
 
@@ -908,6 +954,19 @@ const navStructure: NavSection[] = [
           <div id="update-progress-text" class="text-xs text-fg-3 tabular-nums">0%</div>
         </div>
 
+        <div id="update-channel-row" class="flex flex-col gap-2 pt-4 border-t border-line/60">
+          <label class="flex flex-col gap-1.5">
+            <span data-i18n="settings.update.channel" class="text-eyebrow font-medium uppercase text-fg-3">Update channel</span>
+            <select id="update-channel-select" class="field-input" aria-describedby="update-channel-hint">
+              <option value="stable" data-i18n="settings.update.channelStable">Stable</option>
+              <option value="beta" data-i18n="settings.update.channelBeta">Beta</option>
+            </select>
+          </label>
+          <p id="update-channel-hint" data-i18n="settings.update.channelHint" class="text-xs text-fg-3">
+            Beta versions are early test builds and may be unstable.
+          </p>
+        </div>
+
         <div class="flex flex-col gap-2 pt-4 border-t border-line/60">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <button id="update-check" type="button" class="btn justify-start sm:justify-center">
@@ -920,6 +979,10 @@ const navStructure: NavSection[] = [
             </button>
             <button id="update-relaunch" type="button" hidden class="btn justify-start sm:justify-center">
               <span data-i18n="settings.about.restartNow">Restart now</span>
+            </button>
+            <button id="update-get" type="button" hidden class="btn justify-start sm:justify-center">
+              <IconExternalLink aria-hidden="true" class="btn-icon" />
+              <span id="update-get-label" data-i18n="settings.update.getFromGithub">Get it on GitHub</span>
             </button>
             <a
               id="update-github"
@@ -939,6 +1002,14 @@ const navStructure: NavSection[] = [
         </div>
 
         <p id="update-notes" class="hidden text-xs text-fg-3 whitespace-pre-line border-t border-line/60 pt-4"></p>
+
+        <p
+          id="update-manual-only"
+          hidden
+          data-i18n="settings.update.manualOnly"
+          class="text-xs text-fg-3 leading-relaxed border-t border-line/60 pt-4">
+          Auto-update isn't available on this build.
+        </p>
 
         <p
           id="linux-appimage-notice"
@@ -970,8 +1041,6 @@ const navStructure: NavSection[] = [
         </summary>
         <div id="changelog-body" class="flex flex-col gap-2 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60 empty:hidden"></div>
       </details>
-
-      <span id="app-version" class="hidden"></span>
     </section>
 
     <!-- Group: Support / donations -->
@@ -1039,12 +1108,19 @@ const navStructure: NavSection[] = [
             </p>
           </div>
         </div>
-        <div class="grid grid-cols-1 gap-2 pt-1">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
           <button id="settings-reset-all" type="button" class="btn-danger justify-start sm:justify-center">
             <IconTrash aria-hidden="true" class="btn-icon" />
             <span data-i18n="settings.danger.resetAll">Reset everything</span>
           </button>
+          <button id="settings-restore-last" type="button" class="btn justify-start sm:justify-center" hidden>
+            <IconRestore aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.danger.restoreLast">Restore last backup</span>
+          </button>
         </div>
+        <p id="settings-restore-last-helper" data-i18n="settings.danger.restoreLastHelper" class="text-2xs text-fg-3" hidden>
+          Restores the snapshot saved automatically at your last export or right before your last reset.
+        </p>
         <span
           id="settings-reset-msg"
           aria-live="polite"
@@ -1154,8 +1230,17 @@ const navStructure: NavSection[] = [
       renderPlaylistRow,
       getPlaylistListEmptyCopy,
     } from "@/scripts/lib/playlist-rows.js"
-    import { injectVersion } from "@/scripts/version.js"
-    import { fetchReleases, renderMarkdown } from "@/scripts/lib/changelog.ts"
+    import { fetchReleases, renderMarkdown, filterReleasesForDisplay } from "@/scripts/lib/changelog.ts"
+    import {
+      checkForUpdate,
+      isStoreBuild,
+      isPlayStoreInstall,
+      getPlayStoreUrl,
+      getCurrentAppVersion,
+      resolveUpdateFeedUrl,
+      MS_STORE_UPDATES_URL,
+    } from "@/scripts/lib/update-check.js"
+    import { openExternal } from "@/scripts/lib/external-link.js"
     import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
     import {
       UA_PRESETS,
@@ -1167,10 +1252,14 @@ const navStructure: NavSection[] = [
       setDownloadConcurrency,
       getPerfMode,
       setPerfMode,
+      getAccent,
+      setAccent,
       getProgressRetentionDays,
       setProgressRetentionDays,
       getNetworkTimeoutSeconds,
       setNetworkTimeoutSeconds,
+      getUpdateChannel,
+      setUpdateChannel,
     } from "@/scripts/lib/app-settings.js"
     import {
       ensureUserInfo,
@@ -1189,6 +1278,11 @@ const navStructure: NavSection[] = [
     import { discordRpcSupported } from "@/scripts/lib/discord-rpc.js"
     import { bindExternalLinks } from "@/scripts/lib/external-link.js"
     import { bindBackupRestore } from "@/scripts/lib/restore-backup.js"
+    import {
+      saveBackupSnapshot,
+      loadBackupSnapshot,
+      hasBackupSnapshot,
+    } from "@/scripts/lib/backup-snapshot.ts"
 
     bindExternalLinks()
     import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
@@ -1197,8 +1291,6 @@ const navStructure: NavSection[] = [
       setOffsetSetting,
       getProgrammesSync,
     } from "@/scripts/lib/epg-data.js"
-
-    injectVersion()
 
     // Linux notice: surface that auto-updates only land on the AppImage
     // build. Shown on any Tauri Linux session - AppImage users will see
@@ -1239,8 +1331,9 @@ const navStructure: NavSection[] = [
       const body = document.getElementById("changelog-body")
       const status = document.getElementById("changelog-status")
       if (!body) return
-      fetchReleases(undefined, 3)
-        .then((releases) => {
+      Promise.all([fetchReleases(undefined, 10), getCurrentAppVersion()])
+        .then(([allReleases, currentVersion]) => {
+          const releases = filterReleasesForDisplay(allReleases, currentVersion || "").slice(0, 3)
           if (!releases.length) {
             if (status) {
               status.textContent = t("settings.about.whatsNewEmpty")
@@ -1331,6 +1424,8 @@ const navStructure: NavSection[] = [
     if (resetDialog) attachDialogSpatialNav(resetDialog, { defaultElement: "#settings-reset-cancel" })
     const resetCancelBtn = document.getElementById("settings-reset-cancel")
     const resetConfirmBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-reset-confirm"))
+    const restoreLastBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-restore-last"))
+    const restoreLastHelperEl = document.getElementById("settings-restore-last-helper")
 
     function fmtAge(ts) {
       if (!ts) return "Never"
@@ -1555,9 +1650,11 @@ const navStructure: NavSection[] = [
     })
 
     const openLogsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-open-logs"))
+    const shareLogsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-share-logs"))
     const isTauriEnv =
       typeof window !== "undefined" && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__)
-    if (openLogsBtn && isTauriEnv) {
+    const isAndroidEnv = /Android/i.test(navigator.userAgent || "")
+    if (openLogsBtn && isTauriEnv && !isAndroidEnv) {
       openLogsBtn.classList.remove("hidden")
       openLogsBtn.addEventListener("click", async () => {
         let dir = ""
@@ -1577,6 +1674,25 @@ const navStructure: NavSection[] = [
             } catch {}
           }
           toastError(t("settings.storage.openLogsFail") || "Couldn't open the log folder.")
+        }
+      })
+    }
+
+    if (shareLogsBtn && isTauriEnv && isAndroidEnv) {
+      shareLogsBtn.classList.remove("hidden")
+      shareLogsBtn.addEventListener("click", async () => {
+        try {
+          const { appLogDir } = await import("@tauri-apps/api/path")
+          const dir = await appLogDir()
+          const bridge = /** @type {any} */ (window).AndroidLog
+          const shared =
+            typeof bridge?.shareNewestLog === "function" ? bridge.shareNewestLog(dir) : false
+          if (!shared) {
+            flashMsg(cacheMsgEl, t("settings.storage.noLogs") || "No log file yet.")
+          }
+        } catch (err) {
+          log.warn("[settings] share logs failed:", err)
+          toastError(t("settings.storage.shareLogsFail") || "Couldn't share the log file.")
         }
       })
     }
@@ -1664,6 +1780,9 @@ const navStructure: NavSection[] = [
           duration: 6000,
         })
         flashMsg(backupMsgEl, "Saved.")
+        saveBackupSnapshot()
+          .then(refreshRestoreLastVisibility)
+          .catch((err) => log.warn("[settings:export] backup snapshot refresh failed:", err))
       } catch (e) {
         log.error("[settings:export] failed:", e)
         toastError(t("settings.toast.backupExportFail"), {
@@ -1762,6 +1881,11 @@ const navStructure: NavSection[] = [
       if (!resetConfirmBtn) return
       setLoading(resetConfirmBtn, true)
       try {
+        try {
+          await saveBackupSnapshot()
+        } catch (err) {
+          log.warn("[settings:reset] backup snapshot failed:", err)
+        }
         try { await clearAllCache() } catch {}
         try { localStorage.clear() } catch {}
         try { sessionStorage.clear() } catch {}
@@ -1798,6 +1922,51 @@ const navStructure: NavSection[] = [
         }, 400)
       } finally {
         setLoading(resetConfirmBtn, false)
+      }
+    })
+
+    async function refreshRestoreLastVisibility() {
+      const available = await hasBackupSnapshot()
+      if (restoreLastBtn) restoreLastBtn.hidden = !available
+      if (restoreLastHelperEl) restoreLastHelperEl.hidden = !available
+    }
+    refreshRestoreLastVisibility()
+
+    restoreLastBtn?.addEventListener("click", async () => {
+      if (!(await askImportConfirm())) return
+      setLoading(restoreLastBtn, true)
+      try {
+        const text = await loadBackupSnapshot()
+        if (!text) {
+          toastError(t("settings.toast.backupRestoreFail"), {
+            description: t("settings.danger.restoreLastMissing"),
+          })
+          return
+        }
+        let parsed
+        try {
+          parsed = JSON.parse(text)
+        } catch (parseError) {
+          log.warn("[settings:restore-last] backup JSON parse failed:", parseError)
+          toastError(t("settings.toast.backupParseFail"), { description: "Not valid JSON." })
+          return
+        }
+        const { importAll } = await import("@/scripts/lib/backup.js")
+        const summary = await importAll(parsed)
+        toastSuccess(t("settings.toast.backupRestored"), {
+          description: `${summary.playlists} playlist(s), ${summary.prefsPlaylists} preference set(s).`,
+          duration: 6000,
+        })
+        flashMsg(backupMsgEl, "Imported.")
+        await renderPlaylists()
+        syncCache()
+      } catch (error) {
+        log.error("[settings:restore-last] backup import failed:", error)
+        toastError(t("settings.toast.backupRestoreFail"), {
+          description: (error && error.message) || "See console.",
+        })
+      } finally {
+        setLoading(restoreLastBtn, false)
       }
     })
 
@@ -1917,7 +2086,7 @@ const navStructure: NavSection[] = [
     function syncThemeButtons() {
       const current = readTheme()
       for (const btn of themeGroup?.querySelectorAll(".theme-btn") || []) {
-        btn.setAttribute("aria-pressed", String(btn.dataset.theme === current))
+        btn.setAttribute("aria-checked", String(btn.dataset.theme === current))
       }
     }
     themeGroup?.addEventListener("click", (event) => {
@@ -1927,6 +2096,25 @@ const navStructure: NavSection[] = [
       applyTheme(btn.dataset.theme || "system", event.clientX, event.clientY)
     })
     syncThemeButtons()
+
+    // ---------------------------------------------------------------------
+    // Accent color: persisted to xt_accent, applied via `data-accent` on <html>.
+    // ---------------------------------------------------------------------
+    const accentGroup = document.getElementById("settings-accent")
+    function syncAccentButtons() {
+      const current = getAccent()
+      for (const btn of accentGroup?.querySelectorAll(".accent-btn") || []) {
+        btn.setAttribute("aria-checked", String(btn.dataset.accentValue === current))
+      }
+    }
+    accentGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".accent-btn")
+      if (!btn) return
+      setAccent(btn.dataset.accentValue || "fuchsia")
+      syncAccentButtons()
+    })
+    syncAccentButtons()
 
     // ---------------------------------------------------------------------
     // Performance mode: persisted to xt_perf_mode; the inline script in
@@ -2434,7 +2622,6 @@ const navStructure: NavSection[] = [
 
     const updateSectionEl = document.getElementById("update-section")
     const updatePillEl = document.getElementById("update-pill")
-    const updateAvailEl = document.getElementById("update-availability")
     const updateCurrentEl = document.getElementById("update-current")
     const updateLatestEl = document.getElementById("update-latest")
     const updateNotesEl = document.getElementById("update-notes")
@@ -2452,9 +2639,18 @@ const navStructure: NavSection[] = [
     const updateRelaunchBtn = /** @type {HTMLButtonElement|null} */ (
       document.getElementById("update-relaunch")
     )
+    const updateGetBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("update-get")
+    )
+    const updateGetLabelEl = document.getElementById("update-get-label")
+    const updateManualOnlyEl = document.getElementById("update-manual-only")
     const updateProgressWrap = document.getElementById("update-progress-wrap")
     const updateProgressBar = document.getElementById("update-progress-bar")
     const updateProgressText = document.getElementById("update-progress-text")
+    const updateChannelRowEl = document.getElementById("update-channel-row")
+    const updateChannelSelectEl = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("update-channel-select")
+    )
 
     const GITHUB_RELEASES_URL =
       "https://github.com/infinitel8p/Extreme-InfiniTV/releases"
@@ -2474,6 +2670,17 @@ const navStructure: NavSection[] = [
 
     const isWindowsDesktop =
       isTauri && /Windows/i.test(navigator.userAgent || "")
+    const isLinuxDesktop =
+      isTauri &&
+      /Linux/i.test(navigator.userAgent || "") &&
+      !/Android/i.test(navigator.userAgent || "")
+    const storeBuild = await isStoreBuild()
+    const playStoreInstall = isPlayStoreInstall()
+    // Linux falls back to the GitHub check below if `check()` throws (non-AppImage installs).
+    const canUseTauriUpdater = (isWindowsDesktop && !storeBuild) || isLinuxDesktop
+
+    if (updateChannelSelectEl) updateChannelSelectEl.value = getUpdateChannel()
+    if (storeBuild) updateChannelRowEl?.setAttribute("hidden", "")
 
     if (updateCurrentEl) {
       try {
@@ -2487,17 +2694,22 @@ const navStructure: NavSection[] = [
       }
     }
 
-    if (!isTauri && updateAvailEl) {
-      updateAvailEl.textContent = "Web build - auto-update is desktop-only."
-      updateCheckBtn?.setAttribute("disabled", "")
-      updateCheckBtn?.classList.add("opacity-50", "cursor-not-allowed")
-    } else if (isTauri && !isWindowsDesktop && updateAvailEl) {
-      updateAvailEl.textContent = "Updater is configured for Windows only."
-      updateCheckBtn?.setAttribute("disabled", "")
-      updateCheckBtn?.classList.add("opacity-50", "cursor-not-allowed")
+    if (!canUseTauriUpdater) {
+      updateManualOnlyEl?.removeAttribute("hidden")
+      // data-i18n stays in sync with locale changes; textContent updates it immediately.
+      if (updateGetLabelEl && storeBuild) {
+        updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromStore")
+        updateGetLabelEl.textContent = t("settings.update.getFromStore")
+      } else if (updateGetLabelEl && playStoreInstall) {
+        updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromPlay")
+        updateGetLabelEl.textContent = t("settings.update.getFromPlay")
+      }
     }
 
     let pendingUpdate = null
+    // "plugin": pendingUpdate is a @tauri-apps/plugin-updater Update object.
+    // "invoke": pendingUpdate is the {version, notes, pubDate} payload from updater_check_from (beta channel).
+    let updateInstallMode = "plugin"
 
     function setProgress(pct, text) {
       if (!updateProgressWrap || !updateProgressBar || !updateProgressText) return
@@ -2524,54 +2736,145 @@ const navStructure: NavSection[] = [
       if (updateInstallLabelEl) updateInstallLabelEl.textContent = text
     }
 
+    let updateGetTarget = GITHUB_RELEASES_URL
+
+    async function checkViaBetaInvoke() {
+      const { invoke } = await import("@tauri-apps/api/core")
+      const url = await resolveUpdateFeedUrl()
+      const update = await invoke("updater_check_from", { url })
+      updateInstallMode = "invoke"
+      if (!update) {
+        pendingUpdate = null
+        if (updateLatestEl) updateLatestEl.textContent = t("settings.about.upToDate")
+        if (updateMsgEl) updateMsgEl.textContent = t("settings.update.upToDateMsg")
+        if (updateGithubLink) {
+          updateGithubLink.href = `${GITHUB_RELEASES_URL}/latest`
+        }
+        setUpdateState("up-to-date")
+        return
+      }
+      pendingUpdate = update
+      if (updateLatestEl) {
+        updateLatestEl.textContent = update.version
+          ? `v${update.version}`
+          : t("settings.update.available")
+      }
+      if (updateNotesEl && update.notes) {
+        updateNotesEl.textContent = update.notes
+        updateNotesEl.classList.remove("hidden")
+      }
+      if (updateMsgEl) {
+        updateMsgEl.textContent = update.pubDate
+          ? t("settings.update.releasedOn", { date: new Date(update.pubDate).toLocaleDateString() })
+          : t("settings.update.updateAvailableMsg")
+      }
+      if (updateGithubLink) {
+        updateGithubLink.href = update.version
+          ? `${GITHUB_RELEASES_URL}/tag/v${update.version}`
+          : `${GITHUB_RELEASES_URL}/latest`
+      }
+      updateInstallBtn?.removeAttribute("hidden")
+      setUpdateState("available")
+    }
+
+    async function checkViaTauriUpdater() {
+      if (getUpdateChannel() === "beta") {
+        await checkViaBetaInvoke()
+        return
+      }
+      updateInstallMode = "plugin"
+      const { check } = await import("@tauri-apps/plugin-updater")
+      const update = await check()
+      if (!update) {
+        pendingUpdate = null
+        if (updateLatestEl) updateLatestEl.textContent = t("settings.about.upToDate")
+        if (updateMsgEl) updateMsgEl.textContent = t("settings.update.upToDateMsg")
+        if (updateGithubLink) {
+          updateGithubLink.href = `${GITHUB_RELEASES_URL}/latest`
+        }
+        setUpdateState("up-to-date")
+        return
+      }
+      pendingUpdate = update
+      if (updateLatestEl) {
+        updateLatestEl.textContent = update.version
+          ? `v${update.version}`
+          : t("settings.update.available")
+      }
+      if (updateNotesEl && update.body) {
+        updateNotesEl.textContent = update.body
+        updateNotesEl.classList.remove("hidden")
+      }
+      if (updateMsgEl) {
+        updateMsgEl.textContent = update.date
+          ? t("settings.update.releasedOn", { date: new Date(update.date).toLocaleDateString() })
+          : t("settings.update.updateAvailableMsg")
+      }
+      if (updateGithubLink) {
+        updateGithubLink.href = update.version
+          ? `${GITHUB_RELEASES_URL}/tag/v${update.version}`
+          : `${GITHUB_RELEASES_URL}/latest`
+      }
+      updateInstallBtn?.removeAttribute("hidden")
+      setUpdateState("available")
+    }
+
+    async function checkViaGithub() {
+      const status = await checkForUpdate()
+      if (!status) throw new Error("couldn't reach GitHub")
+      if (updateGithubLink) updateGithubLink.href = status.latestUrl
+      if (!status.updateAvailable) {
+        if (updateLatestEl) updateLatestEl.textContent = t("settings.about.upToDate")
+        if (updateMsgEl) updateMsgEl.textContent = t("settings.update.upToDateMsg")
+        updateGetBtn?.setAttribute("hidden", "")
+        setUpdateState("up-to-date")
+        return
+      }
+      updateGetTarget = storeBuild
+        ? MS_STORE_UPDATES_URL
+        : playStoreInstall
+          ? getPlayStoreUrl()
+          : status.latestUrl
+      if (updateLatestEl) updateLatestEl.textContent = `v${status.latest}`
+      if (updateMsgEl) {
+        updateMsgEl.textContent = status.publishedAt
+          ? t("settings.update.releasedOn", { date: new Date(status.publishedAt).toLocaleDateString() })
+          : t("settings.update.updateAvailableMsg")
+      }
+      if (updateNotesEl && status.notes) {
+        updateNotesEl.textContent = status.notes
+        updateNotesEl.classList.remove("hidden")
+      }
+      updateGetBtn?.removeAttribute("hidden")
+      setUpdateState("available")
+    }
+
     async function checkForUpdates() {
-      if (!isWindowsDesktop) return
       if (updateMsgEl) updateMsgEl.textContent = t("settings.update.checking")
       setUpdateState("checking")
       updateCheckBtn?.setAttribute("disabled", "")
       updateInstallBtn?.setAttribute("hidden", "")
       updateRelaunchBtn?.setAttribute("hidden", "")
+      updateGetBtn?.setAttribute("hidden", "")
       setInstallLabel(t("settings.about.installUpdate"))
       setProgress(null)
-      try {
-        const { check } = await import("@tauri-apps/plugin-updater")
-        const update = await check()
-        if (!update) {
-          pendingUpdate = null
-          if (updateLatestEl) updateLatestEl.textContent = t("settings.about.upToDate")
-          if (updateMsgEl) updateMsgEl.textContent = t("settings.update.upToDateMsg")
-          if (updateNotesEl) {
-            updateNotesEl.textContent = ""
-            updateNotesEl.classList.add("hidden")
-          }
-          if (updateGithubLink) {
-            updateGithubLink.href = `${GITHUB_RELEASES_URL}/latest`
-          }
-          setUpdateState("up-to-date")
+      if (updateNotesEl) {
+        updateNotesEl.textContent = ""
+        updateNotesEl.classList.add("hidden")
+      }
+
+      if (canUseTauriUpdater) {
+        try {
+          await checkViaTauriUpdater()
+          updateCheckBtn?.removeAttribute("disabled")
           return
+        } catch (e) {
+          log.warn("Tauri update check failed, falling back to GitHub check:", e)
         }
-        pendingUpdate = update
-        if (updateLatestEl) {
-          updateLatestEl.textContent = update.version
-            ? `v${update.version}`
-            : t("settings.update.available")
-        }
-        if (updateNotesEl && update.body) {
-          updateNotesEl.textContent = update.body
-          updateNotesEl.classList.remove("hidden")
-        }
-        if (updateMsgEl) {
-          updateMsgEl.textContent = update.date
-            ? t("settings.update.releasedOn", { date: new Date(update.date).toLocaleDateString() })
-            : t("settings.update.updateAvailableMsg")
-        }
-        if (updateGithubLink) {
-          updateGithubLink.href = update.version
-            ? `${GITHUB_RELEASES_URL}/tag/v${update.version}`
-            : `${GITHUB_RELEASES_URL}/latest`
-        }
-        updateInstallBtn?.removeAttribute("hidden")
-        setUpdateState("available")
+      }
+
+      try {
+        await checkViaGithub()
       } catch (e) {
         log.error("Update check failed:", e)
         if (updateMsgEl) {
@@ -2583,8 +2886,60 @@ const navStructure: NavSection[] = [
       }
     }
 
+    async function installUpdateViaInvoke() {
+      updateInstallBtn?.setAttribute("disabled", "")
+      updateCheckBtn?.setAttribute("disabled", "")
+      let total = 0
+      let received = 0
+      let unlisten = null
+      setProgress(0, t("settings.update.preparing"))
+      try {
+        const { listen } = await import("@tauri-apps/api/event")
+        const { invoke } = await import("@tauri-apps/api/core")
+        unlisten = await listen("xt:updater-progress", (event) => {
+          const payload = event.payload
+          if (payload.event === "Started") {
+            total = payload.data?.contentLength || 0
+            setProgress(0, total ? `0 / ${fmtUpdateBytes(total)}` : t("settings.update.starting"))
+          } else if (payload.event === "Progress") {
+            received += payload.data?.chunkLength || 0
+            const pct = total ? (received / total) * 100 : 0
+            setProgress(
+              pct,
+              total
+                ? `${fmtUpdateBytes(received)} / ${fmtUpdateBytes(total)}`
+                : fmtUpdateBytes(received)
+            )
+          } else if (payload.event === "Finished") {
+            setProgress(100, t("settings.update.installed"))
+            if (updateMsgEl) updateMsgEl.textContent = t("settings.update.installedRestart")
+            setInstallLabel(t("settings.about.installUpdate"))
+            updateRelaunchBtn?.removeAttribute("hidden")
+          }
+        })
+        await invoke("updater_install")
+        // Windows exits the process here; the "Finished" event above is the terminal UI state.
+      } catch (e) {
+        log.error("Update install failed:", e)
+        if (updateMsgEl) {
+          const message = String(e?.message || e || "").replace(/^OTHER:/, "")
+          updateMsgEl.textContent = t("settings.update.downloadFailed", { error: message })
+        }
+        setProgress(null)
+        setInstallLabel(t("settings.update.reDownload"))
+        updateInstallBtn?.removeAttribute("disabled")
+      } finally {
+        if (unlisten) unlisten()
+        updateCheckBtn?.removeAttribute("disabled")
+      }
+    }
+
     async function installUpdate() {
       if (!pendingUpdate) return
+      if (updateInstallMode === "invoke") {
+        await installUpdateViaInvoke()
+        return
+      }
       updateInstallBtn?.setAttribute("disabled", "")
       updateCheckBtn?.setAttribute("disabled", "")
       let total = 0
@@ -2641,8 +2996,15 @@ const navStructure: NavSection[] = [
     updateCheckBtn?.addEventListener("click", checkForUpdates)
     updateInstallBtn?.addEventListener("click", installUpdate)
     updateRelaunchBtn?.addEventListener("click", relaunchApp)
+    updateGetBtn?.addEventListener("click", () => {
+      openExternal(updateGetTarget)
+    })
+    updateChannelSelectEl?.addEventListener("change", () => {
+      setUpdateChannel(updateChannelSelectEl.value)
+      checkForUpdates()
+    })
 
-    if (isWindowsDesktop) checkForUpdates()
+    checkForUpdates()
 
     // -------------------------------------------------------------------
     // Discord Rich Presence
@@ -2657,20 +3019,6 @@ const navStructure: NavSection[] = [
       discordSection.classList.remove("hidden")
     }
 
-    // -------------------------------------------------------------------
-    // Playback (desktop-only): reveal the section if external launches are
-    // possible. The PlayerPicker component renders nothing on web/Android,
-    // so we only show the article wrapper there to avoid an empty card.
-    // -------------------------------------------------------------------
-    {
-      const playbackSection = document.getElementById("playback-section")
-      const externalAvailable =
-        !!(window.__TAURI_INTERNALS__ || window.__TAURI__) &&
-        !/Android/i.test(navigator.userAgent || "")
-      if (playbackSection && externalAvailable) {
-        playbackSection.classList.remove("hidden")
-      }
-    }
     if (discordClientIdInput) {
       discordClientIdInput.value = getDiscordClientId()
       let saveTimer = null
@@ -2800,7 +3148,7 @@ const navStructure: NavSection[] = [
 
     /* Danger-zone entry uses the bad token so it reads as destructive. */
     .settings-nav-link[data-danger="true"] {
-      color: color-mix(in oklch, var(--color-bad) 65%, var(--color-fg-3));
+      color: color-mix(in oklab, var(--color-bad) 65%, var(--color-fg-3));
     }
     .settings-nav-link[data-danger="true"]:hover,
     .settings-nav-link[data-danger="true"]:focus-visible {
@@ -2925,6 +3273,39 @@ const navStructure: NavSection[] = [
         } else {
           cardsBySectionId.set(ownerSection.id, [cardEl])
         }
+      }
+
+      // Platform-gated cards (Android native/default player, desktop-only
+      // Discord) are conditionally rendered or hidden, so their subnav links
+      // start hidden; reveal each only while its target card is actually shown.
+      const conditionalItems = Array.from(
+        document.querySelectorAll<HTMLLIElement>("li[data-conditional]")
+      )
+      const syncConditionalNav = () => {
+        for (const item of conditionalItems) {
+          const cardId = item.querySelector("a")?.getAttribute("href")?.replace("#", "")
+          const target = cardId ? document.getElementById(cardId) : null
+          item.hidden = !target || target.offsetParent === null
+        }
+      }
+      syncConditionalNav()
+      if (conditionalItems.length) {
+        const settingsRoot = document.querySelector(".settings-stack") ?? document.body
+        let syncQueued = false
+        const observer = new MutationObserver(() => {
+          if (syncQueued) return
+          syncQueued = true
+          requestAnimationFrame(() => {
+            syncQueued = false
+            syncConditionalNav()
+          })
+        })
+        observer.observe(settingsRoot, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["class", "hidden", "style"],
+        })
       }
 
       const scrollEl =

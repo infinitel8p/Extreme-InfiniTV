@@ -8,6 +8,8 @@
 // in lazily via dynamic import the first time renderMarkdown() is called.
 // Until then no page bundle that imports this module pays for them.
 
+import { compareVersions } from "@/scripts/lib/version-compare.js"
+
 const CACHE_KEY = "xt_changelog_cache"
 const CACHE_TTL_MS = 60 * 60 * 1000
 
@@ -17,6 +19,7 @@ export interface ReleaseSummary {
   publishedAt?: string
   body?: string
   htmlUrl?: string
+  prerelease?: boolean
 }
 
 interface CacheShape {
@@ -65,7 +68,11 @@ export async function fetchReleases(
       publishedAt: release.published_at,
       body: release.body,
       htmlUrl: release.html_url,
+      prerelease: release.prerelease,
     }))
+
+  // GitHub's releases API occasionally returns a stuck release out of order.
+  releases.sort((a, b) => compareVersions(b.tagName, a.tagName))
 
   try {
     sessionStorage.setItem(
@@ -75,6 +82,15 @@ export async function fetchReleases(
   } catch {}
 
   return releases
+}
+
+// Hides prerelease notes from users on stable, unless they're already running one.
+export function filterReleasesForDisplay(
+  releases: ReleaseSummary[],
+  currentVersion: string
+): ReleaseSummary[] {
+  if (currentVersion.includes("-")) return releases
+  return releases.filter((release) => !release.prerelease)
 }
 
 const ALLOWED_TAGS = [

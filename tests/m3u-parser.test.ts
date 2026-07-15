@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
-import { parseM3U } from "../src/scripts/lib/m3u-parser"
+import { parseM3U, isHlsStreamManifest } from "../src/scripts/lib/m3u-parser"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -41,6 +41,7 @@ describe("parseM3U: standard fixture", () => {
     expect(cnn.referer).toBeNull()
     expect(cnn.chno).toBeNull()
     expect(cnn.catchup).toBeNull()
+    expect(cnn.catchupSource).toBeNull()
   })
 })
 
@@ -200,6 +201,145 @@ describe("parseM3U: catchup attributes", () => {
     expect(first.catchupDays).toBe(7)
     expect(second.catchup).toBe("default")
     expect(second.catchupDays).toBeNull()
+  })
+
+  it("captures catchup-source at the entry level", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" catchup="append" catchup-source="?utc={utc}&lutc={lutc}",Source Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchupSource).toBe("?utc={utc}&lutc={lutc}")
+  })
+
+  it("falls back to header-level catchup defaults when an entry sets none", () => {
+    const text =
+      '#EXTM3U catchup="xc" catchup-days="3" catchup-source="/timeshift"\n' +
+      '#EXTINF:-1 tvg-id="x",No Own Catchup\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("xc")
+    expect(result.entries[0].catchupDays).toBe(3)
+    expect(result.entries[0].catchupSource).toBe("/timeshift")
+  })
+
+  it("lets an entry's own catchup attributes override the header defaults", () => {
+    const text =
+      '#EXTM3U catchup="xc" catchup-days="3" catchup-source="/timeshift"\n' +
+      '#EXTINF:-1 tvg-id="x" catchup="append" catchup-days="14" catchup-source="/own",Overrides Header\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("append")
+    expect(result.entries[0].catchupDays).toBe(14)
+    expect(result.entries[0].catchupSource).toBe("/own")
+  })
+
+  it("captures catchup-correction at the entry level", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" catchup="append" catchup-correction="-2.5",Correction Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchupCorrection).toBe(-2.5)
+  })
+
+  it("falls back to the header catchup-correction when the entry sets none", () => {
+    const text =
+      '#EXTM3U catchup-correction="1.5"\n' +
+      '#EXTINF:-1 tvg-id="x" catchup="append",No Own Correction\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchupCorrection).toBe(1.5)
+  })
+
+  it("leaves catchupCorrection null when neither entry nor header sets it", () => {
+    const result = parseM3U(fixture("catchup.m3u"))
+    expect(result.entries[0].catchupCorrection).toBeNull()
+  })
+
+  it("accepts catchup-type as an alias for catchup", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" catchup-type="shift",Type Alias\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("shift")
+  })
+
+  it("ignores catchup-type when catchup is already set", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" catchup="vod" catchup-type="shift",Explicit Wins\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("vod")
+  })
+
+  it("supports the header-level catchup-type alias too", () => {
+    const text =
+      '#EXTM3U catchup-type="append"\n' +
+      '#EXTINF:-1 tvg-id="x",Header Alias\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("append")
+  })
+
+  it("derives catchup=shift + catchupDays from a SIPTV timeshift= attribute", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" timeshift="3",Timeshift Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("shift")
+    expect(result.entries[0].catchupDays).toBe(3)
+  })
+
+  it("falls back to tvg-rec when timeshift is absent", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" tvg-rec="5",Rec Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("shift")
+    expect(result.entries[0].catchupDays).toBe(5)
+  })
+
+  it("ignores tvg-rec when timeshift is already positive", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" timeshift="2" tvg-rec="9",Both Set\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchupDays).toBe(2)
+  })
+
+  it("does not override an explicit catchup mode with the SIPTV timeshift hint", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" catchup="vod" timeshift="3",Explicit Catchup Wins\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("vod")
+  })
+
+  it("supports a header-level timeshift as the default SIPTV hint", () => {
+    const text =
+      '#EXTM3U timeshift="4"\n' +
+      '#EXTINF:-1 tvg-id="x",Header Timeshift Default\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("shift")
+    expect(result.entries[0].catchupDays).toBe(4)
+  })
+
+  it("keeps an explicit catchup-days over the SIPTV timeshift hint's day count", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" catchup-days="14" timeshift="2",Explicit Days Wins\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].catchup).toBe("shift")
+    expect(result.entries[0].catchupDays).toBe(14)
   })
 })
 
@@ -365,5 +505,35 @@ describe("parseM3U: malformed input resilience", () => {
 
   it("returns an empty result for whitespace-only input", () => {
     expect(parseM3U("\n\n  \n\r\n")).toEqual({ entries: [], epgUrl: "" })
+  })
+})
+
+describe("isHlsStreamManifest", () => {
+  it("returns true for a media playlist", () => {
+    const text =
+      "#EXTM3U\n" +
+      "#EXT-X-TARGETDURATION:10\n" +
+      "#EXT-X-MEDIA-SEQUENCE:0\n" +
+      "#EXTINF:10.0,\n" +
+      "chunklist_b3192000_00001.ts\n"
+    expect(isHlsStreamManifest(text)).toBe(true)
+  })
+
+  it("returns true for a master playlist", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXT-X-STREAM-INF:BANDWIDTH=3192000,RESOLUTION=1920x1080\n' +
+      "chunklist_b3192000.m3u8\n"
+    expect(isHlsStreamManifest(text)).toBe(true)
+  })
+
+  it("returns false for a normal channel-list M3U", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="bbcone.uk" group-title="News",BBC One HD\n' +
+      "http://example.com/live/u/p/1.m3u8\n" +
+      '#EXTINF:-1 tvg-id="cnn.us" group-title="News",CNN\n' +
+      "http://example.com/live/u/p/2.m3u8\n"
+    expect(isHlsStreamManifest(text)).toBe(false)
   })
 })

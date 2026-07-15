@@ -3,7 +3,7 @@ import { log } from "@/scripts/lib/log.js"
 
 const PREFIX = "xt_cache:"
 const DB_NAME = "xt_cache"
-const DB_VERSION = 2
+const DB_VERSION = 3
 const STORE = "entries"
 const META_LS_KEY = "xt_cache_meta" // legacy; kept only for clean-up.
 const EVT_REVALIDATED = "xt:cache-revalidated"
@@ -36,7 +36,7 @@ function openDB() {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE)
-      } else if (event.oldVersion < 2) {
+      } else if (event.oldVersion < 3) {
         req.transaction.objectStore(STORE).clear()
       }
     }

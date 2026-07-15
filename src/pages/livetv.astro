@@ -193,14 +193,14 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 								class="radio-display__art relative shrink-0 aspect-square rounded-2xl bg-surface-2 overflow-hidden"
 								data-radio-art>
 								<div class="radio-display__art-fallback absolute inset-0 grid place-items-center" aria-hidden="true">
-									<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 4l-9 1.5v12"/><path d="M16 18a2 2 0 1 0 -4 0a2 2 0 0 0 4 0z"/><path d="M9 17a2 2 0 1 0 -4 0a2 2 0 0 0 4 0z"/><path d="M14 17v-12"/></svg>
+									<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M3 17a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"/><path d="M13 17a3 3 0 1 0 6 0a3 3 0 0 0 -6 0"/><path d="M9 17v-13h10v13"/><path d="M9 8h10"/></svg>
 								</div>
 								<img
 									alt=""
 									decoding="async"
 									referrerpolicy="no-referrer"
 									data-radio-cover
-									class="absolute inset-0 w-full h-full object-contain p-3 opacity-0 data-[loaded=true]:opacity-100 transition-opacity duration-[240ms] ease-[cubic-bezier(0.16,1,0.3,1)]" />
+									class="absolute inset-0 w-full h-full object-contain p-3 opacity-0 data-[loaded=true]:opacity-100 transition-opacity duration-240 ease-[cubic-bezier(0.16,1,0.3,1)]" />
 							</div>
 							<div class="radio-display__meta flex flex-col gap-2 min-w-0 flex-1 pb-14 max-[480px]:items-center max-[480px]:pb-16">
 								<span
@@ -220,6 +220,7 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 									aria-hidden="true"></div>
 							</div>
 						</div>
+
 					</div>
 
 					<div
@@ -234,8 +235,11 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 					<div
 						id="epg"
 						class="border-t border-line overflow-auto custom-scroll md:landscape:flex-1 md:landscape:min-h-0 lg:flex-1 lg:min-h-0">
-						<div data-i18n="livetv.epgPanelHeading" class="text-sm font-medium text-fg sticky top-0 bg-surface pt-3 pb-2 z-10">EPG</div>
-						<div id="epg-list" class="space-y-2 text-sm pb-3"></div>
+						<div class="flex items-baseline justify-between gap-2 text-sm font-medium text-fg sticky top-0 bg-surface pt-3 pb-2 z-10">
+							<span data-i18n="livetv.epgPanelHeading" class="ps-1">EPG</span>
+							<span id="epg-day-indicator" class="pe-1 text-2xs font-semibold uppercase tracking-wide text-fg-3"></span>
+						</div>
+						<div id="epg-list" class="space-y-2 text-sm px-1 pb-3"></div>
 					</div>
 				</div>
 			</section>
@@ -243,12 +247,6 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 
 		<!-- Categories popover -->
 		<CategoryPickerDialog idPrefix="category-picker" />
-
-		<div
-			id="app-version"
-			class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
-			Loading…
-		</div>
 	</main>
 
 	<style>
@@ -307,12 +305,21 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 			border-top: 1px solid var(--color-line);
 			border-radius: 0 0 0.75rem 0.75rem;
 		}
+		/* Shaka sets the container height inline, so this needs !important to win. */
+		.player-wrap[data-radio-mode="on"] .shaka-video-container {
+			height: 3.25rem !important;
+		}
+		.player-wrap[data-radio-mode="on"] .shaka-bottom-controls {
+			background: color-mix(in oklch, var(--color-bg) 70%, transparent);
+			border-top: 1px solid var(--color-line);
+			border-radius: 0 0 0.75rem 0.75rem;
+		}
 
 		.radio-display__art {
 			width: clamp(7rem, 16vw, 11rem);
 			box-shadow:
 				0 0 0 1px var(--color-line),
-				0 20px 40px -12px color-mix(in oklch, var(--color-accent) 38%, transparent),
+				0 0 40px 8px color-mix(in oklch, var(--color-accent) 38%, transparent),
 				0 8px 20px -6px oklch(0.13 0.02 265 / 0.5);
 		}
 		.radio-display__art-fallback {
@@ -385,8 +392,6 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 	<script>
 		import "../scripts/stream/stream.ts";
 		import "../scripts/updater-startup.js";
-		import { injectVersion } from "../scripts/version.js";
-		injectVersion();
 
 		const playerEl = document.getElementById("player");
 		const playerEmpty = document.getElementById("player-empty");

@@ -2,6 +2,7 @@
 // preferences (hidden categories, sort order), persisted alongside creds.
 import { Store } from "@tauri-apps/plugin-store"
 import { getProgressRetentionDays } from "@/scripts/lib/app-settings.js"
+import { normalizeVideoScale, VIDEO_SCALE_MODES } from "@/scripts/lib/video-scale.ts"
 import { log } from "@/scripts/lib/log.js"
 
 const isTauri =
@@ -9,6 +10,7 @@ const isTauri =
   (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__)
 
 const STORAGE_KEY = "xt_prefs"
+const VALID_CATEGORY_SORTS = new Set(["default", "az", "za"])
 const RECENT_CAP = 30
 const PROGRESS_CAP = 200
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -19,11 +21,13 @@ const EVT_PROGRESS_CHANGED = "xt:progress-changed"
 const EVT_HIDDEN_CHANGED = "xt:hidden-categories-changed"
 const EVT_ALLOWED_CHANGED = "xt:allowed-categories-changed"
 const EVT_CAT_MODE_CHANGED = "xt:category-mode-changed"
+const EVT_CAT_SORT_CHANGED = "xt:category-sort-changed"
 const EVT_EPG_SYNC_CHANGED = "xt:epg-sync-changed"
 const EVT_CHANNEL_EPG_CHANGED = "xt:channel-epg-changed"
 const EVT_VIEW_CHANGED = "xt:view-prefs-changed"
 const EVT_FAV_ORDER_CHANGED = "xt:favorites-order-changed"
 const EVT_WATCHLIST_CHANGED = "xt:watchlist-changed"
+const EVT_CHANNEL_VIDEO_SCALE_CHANGED = "xt:channel-video-scale-changed"
 
 let storePromise = null
 function getStore() {
@@ -129,6 +133,10 @@ function emptyEntry() {
     catModeVod: "hide",
     catModeSeries: "hide",
     catModeEpg: "hide",
+    catSortLive: "default",
+    catSortVod: "default",
+    catSortSeries: "default",
+    catSortEpg: "default",
     syncEpgWithLive: true,
     channelEpgMap: Object.create(null),
     favOrderLive: [],
@@ -143,6 +151,9 @@ function emptyEntry() {
     watchVod: Object.create(null),
     watchSeries: Object.create(null),
     viewSort: { vod: "default", series: "default", live: "default" },
+    videoScaleLive: Object.create(null),
+    videoScaleVod: Object.create(null),
+    videoScaleSeries: Object.create(null),
   }
 }
 
@@ -209,6 +220,18 @@ function hydrate(raw) {
       catModeVod: val.catModeVod === "select" ? "select" : "hide",
       catModeSeries: val.catModeSeries === "select" ? "select" : "hide",
       catModeEpg: val.catModeEpg === "select" ? "select" : "hide",
+      catSortLive: VALID_CATEGORY_SORTS.has(val.catSortLive)
+        ? val.catSortLive
+        : "default",
+      catSortVod: VALID_CATEGORY_SORTS.has(val.catSortVod)
+        ? val.catSortVod
+        : "default",
+      catSortSeries: VALID_CATEGORY_SORTS.has(val.catSortSeries)
+        ? val.catSortSeries
+        : "default",
+      catSortEpg: VALID_CATEGORY_SORTS.has(val.catSortEpg)
+        ? val.catSortEpg
+        : "default",
       syncEpgWithLive: val.syncEpgWithLive !== false,
       channelEpgMap:
         val.channelEpgMap && typeof val.channelEpgMap === "object"
@@ -243,6 +266,18 @@ function hydrate(raw) {
           ? v.live
           : "default",
       },
+      videoScaleLive:
+        val.videoScaleLive && typeof val.videoScaleLive === "object"
+          ? Object.assign(Object.create(null), val.videoScaleLive)
+          : Object.create(null),
+      videoScaleVod:
+        val.videoScaleVod && typeof val.videoScaleVod === "object"
+          ? Object.assign(Object.create(null), val.videoScaleVod)
+          : Object.create(null),
+      videoScaleSeries:
+        val.videoScaleSeries && typeof val.videoScaleSeries === "object"
+          ? Object.assign(Object.create(null), val.videoScaleSeries)
+          : Object.create(null),
     })
   }
 }
@@ -274,6 +309,10 @@ function dehydrate() {
       catModeVod: v.catModeVod,
       catModeSeries: v.catModeSeries,
       catModeEpg: v.catModeEpg,
+      catSortLive: v.catSortLive,
+      catSortVod: v.catSortVod,
+      catSortSeries: v.catSortSeries,
+      catSortEpg: v.catSortEpg,
       syncEpgWithLive: v.syncEpgWithLive,
       channelEpgMap: { ...v.channelEpgMap },
       favOrderLive: v.favOrderLive.slice(),
@@ -286,6 +325,9 @@ function dehydrate() {
         series: v.viewSort.series,
         live: v.viewSort.live,
       },
+      videoScaleLive: { ...v.videoScaleLive },
+      videoScaleVod: { ...v.videoScaleVod },
+      videoScaleSeries: { ...v.videoScaleSeries },
     }
   }
   return out
@@ -897,6 +939,14 @@ function catModeKey(kind) {
   return "catModeLive"
 }
 
+/** @param {"live"|"vod"|"series"|"epg"} kind */
+function catSortKey(kind) {
+  if (kind === "vod") return "catSortVod"
+  if (kind === "series") return "catSortSeries"
+  if (kind === "epg") return "catSortEpg"
+  return "catSortLive"
+}
+
 /** @param {string} playlistId @param {"live"|"vod"|"series"|"epg"} kind */
 export function getAllowedCategories(playlistId, kind) {
   const entry = cache.get(playlistId)
@@ -965,6 +1015,24 @@ export function setCategoryMode(playlistId, kind, mode) {
   entry[catModeKey(kind)] = next
   scheduleSave()
   dispatch(EVT_CAT_MODE_CHANGED, { playlistId, kind, mode: next })
+}
+
+/** @param {string} playlistId @param {"live"|"vod"|"series"|"epg"} kind @returns {"default"|"az"|"za"} */
+export function getCategorySort(playlistId, kind) {
+  const entry = cache.get(playlistId)
+  const value = entry?.[catSortKey(kind)]
+  return VALID_CATEGORY_SORTS.has(value) ? value : "default"
+}
+
+/** @param {string} playlistId @param {"live"|"vod"|"series"|"epg"} kind @param {"default"|"az"|"za"} mode */
+export function setCategorySort(playlistId, kind, mode) {
+  if (!playlistId) return
+  const next = VALID_CATEGORY_SORTS.has(mode) ? mode : "default"
+  const entry = getOrCreate(playlistId)
+  if (entry[catSortKey(kind)] === next) return
+  entry[catSortKey(kind)] = next
+  scheduleSave()
+  dispatch(EVT_CAT_SORT_CHANGED, { playlistId, kind, mode: next })
 }
 
 /**
@@ -1057,6 +1125,74 @@ export function clearAllChannelEpgOverrides(playlistId) {
 }
 
 export const CHANNEL_EPG_CHANGED_EVENT = EVT_CHANNEL_EPG_CHANGED
+
+// ---------------------------------------------------------------------------
+// Per-item video display mode override (Live TV channel / movie / series)
+// ---------------------------------------------------------------------------
+/** @param {"live"|"vod"|"series"} kind */
+function videoScaleKey(kind) {
+  if (kind === "vod") return "videoScaleVod"
+  if (kind === "series") return "videoScaleSeries"
+  return "videoScaleLive"
+}
+
+/**
+ * @param {string} playlistId @param {"live"|"vod"|"series"} kind
+ * @param {number|string} id @returns {string|null}
+ */
+export function getVideoScaleOverride(playlistId, kind, id) {
+  if (!playlistId || id == null) return null
+  const entry = cache.get(playlistId)
+  return entry?.[videoScaleKey(kind)][String(id)] || null
+}
+
+/**
+ * @param {string} playlistId @param {"live"|"vod"|"series"} kind
+ * @param {number|string} id
+ * @param {string|null} mode - null/invalid clears the override
+ */
+export function setVideoScaleOverride(playlistId, kind, id, mode) {
+  if (!playlistId || id == null) return
+  const entry = getOrCreate(playlistId)
+  const map = entry[videoScaleKey(kind)]
+  const key = String(id)
+  const isValidMode = mode != null && VIDEO_SCALE_MODES.includes(mode)
+  if (!isValidMode) {
+    if (!(key in map)) return
+    delete map[key]
+    scheduleSave()
+    dispatch(EVT_CHANNEL_VIDEO_SCALE_CHANGED, {
+      playlistId,
+      kind,
+      itemId: Number(id),
+      mode: null,
+    })
+    return
+  }
+  const next = normalizeVideoScale(mode)
+  if (map[key] === next) return
+  map[key] = next
+  scheduleSave()
+  dispatch(EVT_CHANNEL_VIDEO_SCALE_CHANGED, {
+    playlistId,
+    kind,
+    itemId: Number(id),
+    mode: next,
+  })
+}
+
+/** Drop every per-item display-mode override for a playlist + kind. */
+export function clearAllVideoScaleOverrides(playlistId, kind) {
+  if (!playlistId) return
+  const entry = cache.get(playlistId)
+  const mapKey = videoScaleKey(kind)
+  if (!entry || !Object.keys(entry[mapKey]).length) return
+  entry[mapKey] = Object.create(null)
+  scheduleSave()
+  dispatch(EVT_CHANNEL_VIDEO_SCALE_CHANGED, { playlistId, kind, itemId: null, mode: null })
+}
+
+export const CHANNEL_VIDEO_SCALE_CHANGED_EVENT = EVT_CHANNEL_VIDEO_SCALE_CHANGED
 
 // ---------------------------------------------------------------------------
 // Favorites ordering

@@ -15,9 +15,11 @@ import {
 } from "@/scripts/lib/cache.js"
 import { getChannelEpgOverride } from "@/scripts/lib/preferences.js"
 import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
+import { EPG_PAST_WINDOW_MS } from "@/scripts/lib/epg-constants.ts"
 
 const FRESH_MS = 60 * 60 * 1000
 const TZ_KEY_PREFIX = "xt_epg_offset:"
+const TZ_INFERRED_KEY_PREFIX = "xt_epg_offset_inferred:"
 const EPG_HTTP_META_PREFIX = "xt_epg_http:"
 const EPG_CACHE_KIND_PREFIX = "epg_parsed"
 const EPG_CACHE_TTL = 4 * 60 * 60 * 1000
@@ -25,6 +27,7 @@ const EVT_LOADED = "xt:epg-loaded"
 const EVT_OFFSET_CHANGED = "xt:epg-offset-changed"
 const EVT_SOURCE_STATUS = "xt:epg-source-status"
 const GZIP_CT_RX = /application\/(x-)?gzip|application\/x-gunzip/i
+export { EPG_PAST_WINDOW_MS }
 
 // FNV-1a 32-bit hash. Deterministic, short, no crypto needed - just used to
 // derive a per-URL cache key suffix.
@@ -165,7 +168,7 @@ export function mergeChannelNameMaps(maps) {
   return out
 }
 
-/** @typedef {{ start:number, stop:number, title:string, desc:string }} Programme */
+/** @typedef {{ start:number, stop:number, title:string, desc:string, catchupId?:string }} Programme */
 
 /**
  * @typedef {Object} EpgState
@@ -255,6 +258,7 @@ async function parseXmlTvOffMain(xml) {
   return {
     programmes: new Map(reply.programmes),
     channelNames: new Map(reply.channelNames || []),
+    hasExplicitTimezones: !!reply.hasExplicitTimezones,
   }
 }
 
@@ -276,9 +280,16 @@ export function parseXmlTvDate(s) {
   return sign === "+" ? utc - offsetMs : utc + offsetMs
 }
 
+// Same shape as the sign group in parseXmlTvDate's regex - detects whether a raw
+// XMLTV timestamp carried an explicit offset rather than a floating local time.
+const TZ_SUFFIX_RX = /^\d{14}\s*[+-]\d{4}$/
+function hasTzSuffix(raw) {
+  return TZ_SUFFIX_RX.test(String(raw || "").trim())
+}
+
 /**
  * @param {string} xml
- * @returns {{ programmes: Map<string, Programme[]>, channelNames: Map<string, string> }}
+ * @returns {{ programmes: Map<string, Programme[]>, channelNames: Map<string, string>, hasExplicitTimezones: boolean }}
  */
 export function parseXmlTv(xml) {
   /** @type {Map<string, Programme[]>} */
@@ -304,27 +315,42 @@ export function parseXmlTv(xml) {
     if (name) channelNames.set(id, name)
   }
 
-  const lo = Date.now() - 6 * 60 * 60 * 1000
+  const lo = Date.now() - EPG_PAST_WINDOW_MS
   const hi = Date.now() + 36 * 60 * 60 * 1000
+
+  let timezoneTimestampCount = 0
+  let timezoneSuffixCount = 0
 
   const list = doc.querySelectorAll("programme")
   for (const programme of list) {
     const channel = (programme.getAttribute("channel") || "").toLowerCase()
     if (!channel) continue
-    const start = parseXmlTvDate(programme.getAttribute("start") || "")
-    const stop = parseXmlTvDate(programme.getAttribute("stop") || "")
+    const startRaw = programme.getAttribute("start") || ""
+    const stopRaw = programme.getAttribute("stop") || ""
+    if (startRaw) {
+      timezoneTimestampCount++
+      if (hasTzSuffix(startRaw)) timezoneSuffixCount++
+    }
+    if (stopRaw) {
+      timezoneTimestampCount++
+      if (hasTzSuffix(stopRaw)) timezoneSuffixCount++
+    }
+    const start = parseXmlTvDate(startRaw)
+    const stop = parseXmlTvDate(stopRaw)
     if (!start || !stop || stop <= start) continue
     if (stop < lo || start > hi) continue
 
     const title = programme.querySelector("title")?.textContent?.trim() || "Untitled"
     const desc = programme.querySelector("desc")?.textContent?.trim() || ""
+    // Non-standard, some catchup providers require a programme-specific id in the catchup URL.
+    const catchupId = programme.getAttribute("catchup-id") || undefined
 
     let arr = programmes.get(channel)
     if (!arr) {
       arr = []
       programmes.set(channel, arr)
     }
-    arr.push({ start, stop, title, desc })
+    arr.push({ start, stop, title, desc, catchupId })
   }
 
   for (const arr of programmes.values()) {
@@ -339,7 +365,9 @@ export function parseXmlTv(xml) {
     }
     arr.length = writeIdx
   }
-  return { programmes, channelNames }
+  const hasExplicitTimezones =
+    timezoneTimestampCount > 0 && timezoneSuffixCount > timezoneTimestampCount / 2
+  return { programmes, channelNames, hasExplicitTimezones }
 }
 
 // ---------------------------------------------------------------------------
@@ -383,11 +411,17 @@ const TZ_CANDIDATE_MIN = -12 * 60
 const TZ_CANDIDATE_MAX = 14 * 60
 const TZ_CANDIDATE_STEP = 30
 
+// Minimum score lead a challenger needs over the sticky preferred offset
+// before we let it take over - keeps the result from flipping between two
+// near-tied candidates across otherwise-identical loads.
+const TZ_PREFERRED_SWITCH_MARGIN = 2
+
 /**
  * @param {Map<string, Programme[]>} programmes
+ * @param {number} [preferredOffsetMin] - last inferred offset for this playlist, if any
  * @returns {number}
  */
-export function inferTimezoneOffsetMin(programmes) {
+export function inferTimezoneOffsetMin(programmes, preferredOffsetMin) {
   if (!programmes || !programmes.size) return 0
   const now = Date.now()
   /** @type {Programme[][]} */
@@ -398,8 +432,10 @@ export function inferTimezoneOffsetMin(programmes) {
   }
   if (!channels.length) return 0
 
+  const hasPreferred = Number.isFinite(preferredOffsetMin)
   let bestOffset = 0
   let bestScore = -1
+  let preferredScore = -1
   for (
     let off = TZ_CANDIDATE_MIN;
     off <= TZ_CANDIDATE_MAX;
@@ -425,6 +461,8 @@ export function inferTimezoneOffsetMin(programmes) {
       if (foundLive) score++
     }
 
+    if (hasPreferred && off === preferredOffsetMin) preferredScore = score
+
     if (
       score > bestScore ||
       (score === bestScore && Math.abs(off) < Math.abs(bestOffset))
@@ -433,7 +471,27 @@ export function inferTimezoneOffsetMin(programmes) {
       bestOffset = off
     }
   }
-  return bestOffset
+
+  if (!hasPreferred || bestOffset === preferredOffsetMin) return bestOffset
+  return bestScore >= preferredScore + TZ_PREFERRED_SWITCH_MARGIN
+    ? bestOffset
+    : preferredOffsetMin
+}
+
+// Any explicit-tz source disables inference: applyOffset shifts all merged programmes and would double-shift the already-correct ones.
+/**
+ * @param {boolean} anySourceHasExplicitTimezones
+ * @param {Map<string, Programme[]>} programmes
+ * @param {number} [preferredOffsetMin]
+ * @returns {number}
+ */
+export function resolveAutoOffsetMin(
+  anySourceHasExplicitTimezones,
+  programmes,
+  preferredOffsetMin
+) {
+  if (anySourceHasExplicitTimezones) return 0
+  return inferTimezoneOffsetMin(programmes, preferredOffsetMin)
 }
 
 function applyOffset(programmes, offsetMin) {
@@ -477,6 +535,37 @@ export function setOffsetSetting(playlistId, value) {
   document.dispatchEvent(
     new CustomEvent(EVT_OFFSET_CHANGED, { detail: { playlistId, value } })
   )
+}
+
+/**
+ * Last auto-inferred offset for a playlist, persisted so re-inference on
+ * every fresh EPG load prefers the previous result instead of flip-flopping
+ * between near-tied candidates.
+ *
+ * @param {string} playlistId
+ * @returns {number|undefined}
+ */
+function readInferredOffsetSetting(playlistId) {
+  if (!playlistId) return undefined
+  try {
+    const raw = localStorage.getItem(TZ_INFERRED_KEY_PREFIX + playlistId)
+    if (raw == null) return undefined
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * @param {string} playlistId
+ * @param {number} offsetMin
+ */
+function writeInferredOffsetSetting(playlistId, offsetMin) {
+  if (!playlistId) return
+  try {
+    localStorage.setItem(TZ_INFERRED_KEY_PREFIX + playlistId, String(offsetMin))
+  } catch {}
 }
 
 // ---------------------------------------------------------------------------
@@ -641,7 +730,7 @@ function isLikelyCorsError(err) {
  * @param {string} playlistId
  * @param {EpgSource} src
  * @param {Object} httpMeta - mutated in place with the latest validators
- * @returns {Promise<{ programmes: Map<string, any[]>, channelNames: Map<string, string>, count: number, cached: boolean }>}
+ * @returns {Promise<{ programmes: Map<string, any[]>, channelNames: Map<string, string>, count: number, cached: boolean, hasExplicitTimezones: boolean }>}
  */
 async function fetchAndParseSource(playlistId, src, httpMeta) {
   const hash = urlHash(src.url)
@@ -665,6 +754,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
         channelNames,
         count: countProgrammes(programmes),
         cached: true,
+        hasExplicitTimezones: !!hit.data.hasExplicitTimezones,
       }
     }
     // 304 but no cached parsed payload survived (TTL expired, IDB pruned).
@@ -685,6 +775,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
         {
           entries,
           channelNames: Array.from(parsed.channelNames.entries()),
+          hasExplicitTimezones: parsed.hasExplicitTimezones,
         },
         EPG_CACHE_TTL
       )
@@ -702,6 +793,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
       channelNames: parsed.channelNames,
       count: countProgrammes(programmes),
       cached: false,
+      hasExplicitTimezones: parsed.hasExplicitTimezones,
     }
   }
 
@@ -714,6 +806,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
       {
         entries,
         channelNames: Array.from(parsed.channelNames.entries()),
+        hasExplicitTimezones: parsed.hasExplicitTimezones,
       },
       EPG_CACHE_TTL
     )
@@ -731,6 +824,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta) {
     channelNames: parsed.channelNames,
     count: countProgrammes(programmes),
     cached: false,
+    hasExplicitTimezones: parsed.hasExplicitTimezones,
   }
 }
 
@@ -794,6 +888,8 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
       const programmeMaps = []
       /** @type {Map<string, string>[]} */
       const channelNameMaps = []
+      // See resolveAutoOffsetMin: any explicit-tz source skips inference to avoid double-shifting correct-UTC programmes.
+      let anySourceHasExplicitTimezones = false
 
       const fetchResults = await Promise.allSettled(
         sources.map((src) => fetchAndParseSource(playlistId, src, httpMeta))
@@ -803,9 +899,11 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
         const src = sources[i]
         const result = fetchResults[i]
         if (result.status === "fulfilled") {
-          const { programmes, channelNames, count, cached } = result.value
+          const { programmes, channelNames, count, cached, hasExplicitTimezones } =
+            result.value
           programmeMaps.push(programmes)
           channelNameMaps.push(channelNames)
+          if (hasExplicitTimezones) anySourceHasExplicitTimezones = true
           statuses.push({
             url: src.url,
             source: src.source,
@@ -846,8 +944,19 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
       const setting = getOffsetSetting(playlistId)
       let offsetMin = 0
       const offsetIsAuto = setting === "auto"
-      if (offsetIsAuto) offsetMin = inferTimezoneOffsetMin(programmes)
-      else offsetMin = Number(setting) || 0
+      if (offsetIsAuto) {
+        const preferredOffset = readInferredOffsetSetting(playlistId)
+        offsetMin = resolveAutoOffsetMin(
+          anySourceHasExplicitTimezones,
+          programmes,
+          preferredOffset
+        )
+        if (!anySourceHasExplicitTimezones) {
+          writeInferredOffsetSetting(playlistId, offsetMin)
+        }
+      } else {
+        offsetMin = Number(setting) || 0
+      }
       applyOffset(programmes, offsetMin)
 
       const state = {
@@ -893,6 +1002,35 @@ function dispatchSourceStatus(playlistId, sources) {
 export function getProgrammesSync(playlistId) {
   if (!playlistId) return null
   return memCache.get(playlistId) || null
+}
+
+/**
+ * Reverse the display-offset shift applied by applyOffset(): programmes in
+ * EpgState carry display-shifted start/stop times, but catch-up URLs need
+ * the original XMLTV UTC time. Returns displayedMs unchanged when no
+ * offset-carrying state is cached for the playlist.
+ *
+ * @param {string} playlistId
+ * @param {number} displayedMs
+ * @returns {number}
+ */
+export function displayedToUtcMs(playlistId, displayedMs) {
+  const state = playlistId ? memCache.get(playlistId) : null
+  if (!state || !state.offsetMin) return displayedMs
+  return displayedMs - state.offsetMin * 60 * 1000
+}
+
+/**
+ * Inverse of displayedToUtcMs(): shifts a UTC instant into the display-shifted space programmes are stored in.
+ *
+ * @param {string} playlistId
+ * @param {number} utcMs
+ * @returns {number}
+ */
+export function utcToDisplayedMs(playlistId, utcMs) {
+  const state = playlistId ? memCache.get(playlistId) : null
+  if (!state || !state.offsetMin) return utcMs
+  return utcMs + state.offsetMin * 60 * 1000
 }
 
 export function invalidateEpgPlaylist(playlistId) {

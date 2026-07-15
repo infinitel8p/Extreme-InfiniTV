@@ -5,6 +5,7 @@
   import { onMount } from "svelte"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
+  import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
   import {
     ensureLoaded as ensurePrefsLoaded,
     getWatchlist,
@@ -165,6 +166,7 @@
     </div>
 
     <ul
+      use:dragScroll
       class="watch-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
              snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
       {#each entries as entry, idx (entry.kind + ":" + entry.id)}

@@ -14,7 +14,7 @@ import {
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
 import { debounce } from "@/scripts/lib/debounce.js"
-import { t, initI18n } from "@/scripts/lib/i18n.js"
+import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
 import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import {
   ensureLoaded as ensurePrefsLoaded,
@@ -25,10 +25,14 @@ import {
   getRecents,
   getViewSort,
   setViewSort,
+  getVideoScaleOverride,
+  setVideoScaleOverride,
+  clearAllVideoScaleOverrides,
+  CHANNEL_VIDEO_SCALE_CHANGED_EVENT,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
-import { fmtChannelIdentity } from "@/scripts/lib/format.ts"
+import { fmtChannelIdentity, formatBehindLive } from "@/scripts/lib/format.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { attachPopoverSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
@@ -45,6 +49,7 @@ import {
   hasHevcNameHint,
   deviceSupportsHevc,
   classifyStartFailure,
+  describeAudioCodec,
 } from "@/scripts/lib/codec-hints.ts"
 import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
@@ -61,31 +66,63 @@ import {
   getPlayerBackend,
   getPlayerPath,
   getUserAgent,
+  getExternalPlayerPref,
   EXTERNAL_PLAYER_BACKENDS,
+  getVideoScale,
+  setVideoScale,
+  VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
+import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
+import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 import {
   setupExternalPlayerButton,
   surfaceLaunchError,
   type ExternalPlayerButtonHandle,
 } from "@/scripts/lib/external-player-button.js"
-import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE } from "@/scripts/lib/icons.js"
+import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE, ICON_ASPECT_RATIO } from "@/scripts/lib/icons.js"
 import {
   loadProgrammes,
   getProgrammesSync,
   getNowNext,
   effectiveTvgId,
+  displayedToUtcMs,
+  utcToDisplayedMs,
   EPG_LOADED_EVENT,
   EPG_OFFSET_EVENT,
 } from "@/scripts/lib/epg-data.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { maybeB64ToUtf8, escapeHtml } from "@/scripts/lib/b64-utf8.ts"
 import { attachRadioVisualizer, type RadioVisualizerHandle } from "@/scripts/lib/radio-visualizer.ts"
+import {
+  channelSupportsCatchup,
+  catchupWindowDays,
+  isCatchupPlayable,
+  streamProfileFor,
+  XTREAM_STREAM_PROFILE,
+} from "@/scripts/lib/catchup.ts"
+import { resolveCatchupSrc } from "@/scripts/lib/catchup-resolve.ts"
+import {
+  clampSeekTarget,
+  adjustTargetForGranularity,
+  shouldIgnoreSeek,
+  applySeekStep,
+  resumeAction,
+  autoAdvanceDecision,
+  minDistanceFromLiveMs,
+  type StreamProfile,
+} from "@/scripts/lib/timeshift-math.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
+// One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
+const EPG_SIDE_PANEL_PAST_WINDOW_MS = 24 * 60 * 60 * 1000
+const EPG_SIDE_PANEL_MAX_PAST_DAYS = 7
 
 let currentlyPlayingId = null
+// Tracks the channel that was playing before the current one, so `\` can flip back to it.
+let previousPlayingId = null
 
 function setNowPlaying(id) {
+  if (id !== currentlyPlayingId) previousPlayingId = currentlyPlayingId
   currentlyPlayingId = id
   if (!viewport) return
   for (const row of viewport.querySelectorAll(".channel-row")) {
@@ -148,6 +185,10 @@ function parseM3U(text) {
       manifestType: entry.manifestType,
       drmScheme: entry.drmScheme,
       licenseKey: entry.licenseKey,
+      catchup: entry.catchup ?? null,
+      catchupDays: entry.catchupDays ?? null,
+      catchupSource: entry.catchupSource ?? null,
+      catchupCorrection: entry.catchupCorrection ?? null,
     })
   }
   return out
@@ -188,6 +229,8 @@ const listStatus = document.getElementById("list-status")
 const searchEl = document.getElementById("search")
 const currentEl = document.getElementById("current")
 const epgList = document.getElementById("epg-list")
+const epgPanel = document.getElementById("epg")
+const epgDayIndicator = document.getElementById("epg-day-indicator")
 
 let activePlaylistId = ""
 let activePlaylistTitle = ""
@@ -259,6 +302,32 @@ document.addEventListener(EPG_OFFSET_EVENT, (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
   ensureEpgLoaded()
+})
+
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+
+function resolveVideoScaleMode() {
+  if (activePlaylistId && currentlyPlayingId != null) {
+    const override = getVideoScaleOverride(activePlaylistId, "live", currentlyPlayingId)
+    if (override) return override
+  }
+  return getVideoScale()
+}
+
+function applyVideoScale() {
+  videoScaleController.apply(resolveVideoScaleMode())
+}
+
+document.addEventListener(VIDEO_SCALE_EVENT, () => {
+  if (currentlyPlayingId != null) applyVideoScale()
+})
+
+document.addEventListener(CHANNEL_VIDEO_SCALE_CHANGED_EVENT, (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.playlistId !== activePlaylistId || detail.kind !== "live") return
+  if (currentlyPlayingId == null) return
+  // itemId is null for a bulk clear (e.g. "apply to all channels").
+  if (detail.itemId === null || detail.itemId === currentlyPlayingId) applyVideoScale()
 })
 
 const CAT_FAVORITES = "__favorites__"
@@ -505,7 +574,7 @@ function renderVirtual() {
     playBtn.type = "button"
     playBtn.dataset.role = "play"
     playBtn.className =
-      "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none"
+      "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
     playBtn.title = ch.name || ""
     playBtn.onclick = () => play(ch.id, ch.name)
 
@@ -566,7 +635,7 @@ function renderVirtual() {
     starBtn.type = "button"
     starBtn.dataset.role = "star"
     starBtn.className =
-      "star-btn flex shrink-0 h-11 w-11 items-center justify-center rounded-lg text-base outline-none transition-colors " +
+      "star-btn flex shrink-0 h-11 w-11 items-center justify-center rounded-lg text-base outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent " +
       (fav
         ? "text-accent hover:bg-surface-2 focus:bg-surface-2"
         : "text-fg-3 hover:text-fg hover:bg-surface-2 focus:text-fg focus:bg-surface-2")
@@ -921,7 +990,9 @@ function isTypingTarget(target) {
 }
 
 document.addEventListener("keydown", (e) => {
-  if (e.ctrlKey || e.altKey || e.metaKey) return
+  // AltGr reports as Ctrl+Alt on Windows; `\` needs AltGr on many layouts (e.g. German AltGr+ß).
+  const isAltGrBackslash = e.ctrlKey && e.altKey && !e.metaKey && e.key === "\\"
+  if ((e.ctrlKey || e.altKey || e.metaKey) && !isAltGrBackslash) return
   if (isTypingTarget(e.target)) return
 
   if (/^\d$/.test(e.key)) {
@@ -969,6 +1040,17 @@ document.addEventListener("keydown", (e) => {
     return
   }
 
+  if (e.key === "\\") {
+    if (!filtered.length || previousPlayingId == null) return
+    const lastIdx = filtered.findIndex((channel) => channel.id === previousPlayingId)
+    if (lastIdx === -1) return
+    const channel = filtered[lastIdx]
+    e.preventDefault()
+    focusByIdx(lastIdx)
+    play(channel.id, channel.name)
+    return
+  }
+
   // Player shortcuts
   if (!vjs) return
   const lower = e.key.length === 1 ? e.key.toLowerCase() : e.key
@@ -992,9 +1074,33 @@ document.addEventListener("keydown", (e) => {
       return
     }
     case "j":
-    case "l": {
+    case "l":
+    case "MediaRewind":
+    case "MediaFastForward": {
       e.preventDefault()
-      const delta = lower === "j" ? -10 : 10
+      const isRewind = lower === "j" || lower === "MediaRewind"
+      const deltaMs = isRewind ? -10_000 : 10_000
+      const channel = all.find((entry) => entry.id === currentlyPlayingId)
+      const isArchiveChannel = channel ? channelSupportsCatchup(channel) : false
+      if (catchupSession || isArchiveChannel) {
+        // Fast-forward at the live edge with nothing pending must not start a session.
+        if (!catchupSession && deltaMs > 0 && pendingSeekTargetUtcMs == null) return
+        const nowUtcMs = Date.now()
+        const currentAbsoluteMs = catchupSession
+          ? catchupSession.timelineStartUtcMs + (vjs.currentTime() || 0) * 1000
+          : nowUtcMs
+        const profile = catchupSession?.profile ?? provisionalStreamProfile(channel)
+        const catchupWindowMs = catchupWindowDays(channel) * 24 * 60 * 60 * 1000
+        pendingSeekTargetUtcMs = applySeekStep(pendingSeekTargetUtcMs, currentAbsoluteMs, deltaMs, {
+          nowUtcMs,
+          catchupWindowMs,
+          profile,
+        })
+        renderPendingSeekHint(pendingSeekTargetUtcMs)
+        commitPendingSeek()
+        return
+      }
+      const delta = isRewind ? -10 : 10
       const dur = vjs.duration()
       const next = (vjs.currentTime() || 0) + delta
       const clamped = Number.isFinite(dur) && dur > 0
@@ -1005,6 +1111,15 @@ document.addEventListener("keydown", (e) => {
     }
   }
 })
+
+/** Shows the D-pad rewind/forward target while presses accumulate before the debounced commit; falls back to the session readout once cleared. */
+function renderPendingSeekHint(targetUtcMs: number | null): void {
+  if (targetUtcMs != null) {
+    showTimeshiftChip([t("timeshift.seekingTo", { time: formatWallClock(targetUtcMs) })])
+    return
+  }
+  renderTimeshiftChip()
+}
 
 let _applyFilterScheduled = false
 function scheduleApplyFilter() {
@@ -1138,19 +1253,39 @@ let autoplayConsumed = false
 function maybeAutoplayFromUrl() {
   if (autoplayConsumed) return
   let id = null
+  let catchupStartUtcMs = null
+  let catchupStopUtcMs = null
+  let catchupTitle = ""
+  let catchupId = null
   try {
     const params = new URLSearchParams(window.location.search)
     const raw = params.get("channel")
     if (raw) id = Number(raw)
+    const rawStart = params.get("cstart")
+    const rawStop = params.get("cstop")
+    if (rawStart && rawStop) {
+      const start = Number(rawStart)
+      const stop = Number(rawStop)
+      if (Number.isFinite(start) && Number.isFinite(stop) && stop > start) {
+        catchupStartUtcMs = start
+        catchupStopUtcMs = stop
+      }
+    }
+    catchupTitle = params.get("ctitle") || ""
+    catchupId = params.get("cid") || null
   } catch {}
   if (!Number.isFinite(id) || id == null) return
   autoplayConsumed = true
   const ch = all.find((c) => c.id === id)
   if (!ch) return
-  // Strip the ?channel= so refresh doesn't re-trigger.
+  // Strip the deep-link params so refresh doesn't re-trigger.
   try {
     const url = new URL(window.location.href)
     url.searchParams.delete("channel")
+    url.searchParams.delete("cstart")
+    url.searchParams.delete("cstop")
+    url.searchParams.delete("ctitle")
+    url.searchParams.delete("cid")
     window.history.replaceState({}, "", url.toString())
   } catch {}
 
@@ -1159,7 +1294,21 @@ function maybeAutoplayFromUrl() {
     if (searchEl && searchEl.value) searchEl.value = ""
     applyFilter()
   }
-  play(ch.id, ch.name)
+
+  if (
+    catchupStartUtcMs != null &&
+    catchupStopUtcMs != null &&
+    isCatchupPlayable(ch, catchupStartUtcMs, Date.now())
+  ) {
+    void playCatchup(ch, {
+      startUtcMs: catchupStartUtcMs,
+      stopUtcMs: catchupStopUtcMs,
+      title: catchupTitle,
+      catchupId,
+    })
+  } else {
+    play(ch.id, ch.name)
+  }
   requestAnimationFrame(() => {
     const idx = filtered.findIndex((channel) => channel.id === id)
     if (idx >= 0) scrollIntoViewByIdx(idx)
@@ -1286,6 +1435,8 @@ async function loadChannels() {
               tvgId: String(ch.epg_channel_id || "") || undefined,
               chno: Number(ch.num) || undefined,
               norm: normalize(name + " " + category),
+              tvArchive: Number(ch.tv_archive) || 0,
+              tvArchiveDuration: Number(ch.tv_archive_duration) || 0,
             }
           })
           .filter((x) => x.id && x.name)
@@ -1316,10 +1467,82 @@ let tuningOverlaySentinel = null
 let stallSentinel = null
 let bufferingShownAt = 0
 let bufferingHideTimer = null
+let timeshiftChipLastUpdateAt = 0
+let timeshiftChipControlsActive = true
+let timeshiftChipIdleTimer: ReturnType<typeof setTimeout> | null = null
+let timeshiftActivityTrackingArmed = false
+let embeddedPlayerLiveUi = true
+let focusKeeperCleanup: (() => void) | null = null
+/** Active catch-up/timeshift (replay) session, or null when tuned to live. */
+let catchupSession: {
+  kind: "programme" | "timeshift"
+  channelId: number
+  channelName: string
+  title: string
+  startUtcMs: number
+  stopUtcMs: number
+  /** resolution.effectiveStartUtcMs - where the mounted stream actually begins. */
+  mountedStartUtcMs: number
+  /** Media-timeline zero. For programme replays this stays at the programme start across mid-programme remounts, so position N seconds = timelineStartUtcMs + N*1000. */
+  timelineStartUtcMs: number
+  /** Full-programme-span timeline end (non-terminating streams on a still-airing window only); null keeps the elapsed-so-far bar. */
+  timelineStopUtcMs: number | null
+  /** Programme-specific `catchup-id` from XMLTV, when the provider needs one. */
+  catchupId: string | null
+  /** Terminates/granularity shape for this session's stream; gates seek/resume/auto-advance thresholds. */
+  profile: StreamProfile
+} | null = null
+/** Bumped by every play()/playCatchup() call so a slow-resolving catch-up probe can detect it's been superseded and bail without clobbering whatever the user tuned to since. */
+let catchupRequestSeq = 0
+// The embedded player handle is reused across catchup->catchup remounts, so one-shot listeners from a superseded mount are tracked and cleared.
+let catchupLoadedMetadataHandler: (() => void) | null = null
+let catchupEndedHandler: (() => void) | null = null
+// Consecutive short auto-advanced segments trip a no-Range-server remount loop back to live.
+let catchupConsecutiveShortAdvances = 0
+// Where the previous catch-up mount ended; a repeat at the same instant means the archive is exhausted there.
+let catchupLastEndedAbsUtcMs: number | null = null
+// Archive files often stop a few seconds short of the EPG stop time.
+const CATCHUP_PROGRAMME_END_SLACK_MS = 10_000
+// Drives the ghost-region CSS var + programme rollover for a full-span session; cleared/recreated with the session.
+let liveEdgeTickTimer: ReturnType<typeof setInterval> | null = null
+// How far past a full-span timeline's stop the live playhead can drift before rolling over to the next programme.
+const TIMELINE_ROLLOVER_SLACK_MS = 2000
+// Caps automatic (error/stall) session re-mounts so a persistently failing archive URL still escalates to the failure panel.
+let catchupAutoRetryCount = 0
+const CATCHUP_MAX_AUTO_RETRIES = 2
+// Retry budget refills only after sustained playback; an instant reset on "playing" lets a plays-briefly-then-dies source loop forever.
+let catchupRetryResetTimer: ReturnType<typeof setTimeout> | null = null
+const CATCHUP_RETRY_RESET_AFTER_MS = 30_000
+// Native-bar seeks outside the buffer re-request the stream; these track the interceptor.
+let catchupSeekingEl: HTMLVideoElement | null = null
+let catchupSeekingHandler: (() => void) | null = null
+let catchupProgrammaticSeekUntilMs = 0
+// Caps seek-triggered remounts so a seek landing outside the buffer on every attempt can't loop forever.
+let catchupSeekRemountCount = 0
+const CATCHUP_MAX_SEEK_REMOUNTS = 3
+// Accumulated J/L archive rewind/forward taps; committed to a seek after a short pause.
+let pendingSeekTargetUtcMs: number | null = null
+const commitPendingSeek = debounce(() => {
+  const target = pendingSeekTargetUtcMs
+  pendingSeekTargetUtcMs = null
+  // Clear the readout even when the committed seek gets swallowed, or it sticks on live.
+  renderPendingSeekHint(null)
+  if (target != null) void seekToAbsolute(target)
+}, 800)
+// Recorded on pause so resume can decide whether to re-seek or retune.
+let pausedAtAbsUtcMs: number | null = null
+let pausedWasLive = false
+// HTMLMediaElement pause() queues its event as a task, so a boolean flag would already be reset when the listener runs.
+let suppressPauseTrackingUntilMs = 0
 const TUNING_MAX_MS = 8000
+// Catch-up resolve can probe several timeshift URL variants in sequence; give it room to finish before the overlay gives up.
+const CATCHUP_TUNING_MAX_MS = 22_000
 const STALL_AUTO_TUNE_MS = 30_000
 const BUFFERING_GRACE_MS = 350
 const ERROR_AUTO_RETRY_MS = 1500
+const TIMESHIFT_CHIP_UPDATE_MS = 1000
+const TIMESHIFT_CHIP_LIVE_THRESHOLD_MS = 15_000
+const TIMESHIFT_CHIP_IDLE_MS = 3000
 
 // Per-stream diagnostic cooldown
 const AUTO_DIAGNOSTIC_COOLDOWN_MS = 30_000
@@ -1327,6 +1550,13 @@ const lastAutoDiagnosticAt = new Map()
 
 async function runAutoDiagnostic(ctx, dismissGenericToast) {
   if (!ctx?.streamId || !ctx.src) return
+
+  // Media info arrived, so the stream was reachable - a decode failure isn't a network problem.
+  const info = vjs?.codecInfo?.()
+  if (info?.videoCodec || info?.audioCodec) {
+    try { dismissGenericToast?.() } catch {}
+    return
+  }
 
   const now = Date.now()
   const last = lastAutoDiagnosticAt.get(ctx.streamId) || 0
@@ -1359,16 +1589,115 @@ async function runAutoDiagnostic(ctx, dismissGenericToast) {
   }
 }
 
-const ensureEmbeddedPlayer = async (backend) => {
-  if (vjs) return vjs
-  const videoEl = document.getElementById("player")
+// Video.js's dispose() removes the whole `#player` element rather than restoring it; keep a pristine clone to reinsert on remount.
+let playerElementTemplate: HTMLElement | null = null
+
+function ensurePlayerElement(): HTMLElement | null {
+  const existing = document.getElementById("player")
+  if (existing) {
+    if (!playerElementTemplate) playerElementTemplate = existing.cloneNode(true) as HTMLElement
+    return existing
+  }
+  if (!playerElementTemplate) return null
+  const wrap = document.getElementById("player-wrap")
+  if (!wrap) return null
+  const fresh = playerElementTemplate.cloneNode(true) as HTMLElement
+  const radioDisplay = document.getElementById("radio-display")
+  if (radioDisplay) wrap.insertBefore(fresh, radioDisplay)
+  else wrap.appendChild(fresh)
+  return fresh
+}
+
+// Serializes ensureEmbeddedPlayer() calls so a superseded caller can't dispose+remount over a mount a newer caller already started.
+let ensureEmbeddedPlayerInFlight = null
+
+const ensureEmbeddedPlayer = async (backend, opts = {}) => {
+  for (;;) {
+    const inFlight = ensureEmbeddedPlayerInFlight
+    if (!inFlight) break
+    await inFlight.catch(() => {})
+  }
+  const attempt = (async () => {
+    const wantLiveUi = opts.liveui ?? true
+    if (vjs) {
+      if (embeddedPlayerLiveUi === wantLiveUi) return vjs
+      // Mode changed (live <-> catch-up needs a different control bar) - dispose and remount fresh below;
+      // awaited because Shaka restores the original #player element asynchronously.
+      try { await vjs.dispose?.() } catch {}
+      vjs = null
+      if (focusKeeperCleanup) {
+        focusKeeperCleanup()
+        focusKeeperCleanup = null
+      }
+    }
+    return mountEmbeddedPlayer(backend, opts)
+  })()
+  ensureEmbeddedPlayerInFlight = attempt
+  try {
+    return await attempt
+  } finally {
+    if (ensureEmbeddedPlayerInFlight === attempt) ensureEmbeddedPlayerInFlight = null
+  }
+}
+
+/** Shared "nothing left to try" path for a play attempt: native handoff, failure panel, or a generic toast, depending on how far playback got. */
+function giveUpOnPlayback(ctx) {
+  hideTuningOverlay()
+  hideBufferingChip()
+  clearStallSentinel()
+  clearDeadVideoWatchdog()
+  if (!ctx.started) {
+    // Bypasses getAndroidNativePlayerEnabled() on purpose: this is a one-shot-per-tune
+    // recovery so an unsupported channel still plays, independent of that opt-in setting.
+    if (!ctx.nativeFallbackTried && androidNativePlayerAvailable) {
+      ctx.nativeFallbackTried = true
+      const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
+      const failure = classifyStartFailure({
+        videoCodec: info.videoCodec,
+        audioCodec: info.audioCodec,
+        errorDetail: info.errorDetail,
+        nameHint: hasHevcNameHint(ctx.name),
+        deviceHevc: deviceSupportsHevc(),
+      })
+      if (failure.kind === "hevc" || failure.kind === "codec") {
+        toast({ title: t("stream.failure.nativeFallback") })
+        launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
+          if (launched) return
+          showPlaybackFailurePanel(ctx)
+          runAutoDiagnostic(ctx, null)
+        })
+        return
+      }
+    }
+    showPlaybackFailurePanel(ctx)
+    runAutoDiagnostic(ctx, null)
+    return
+  }
+  const dismissGeneric = toastError(
+    t("stream.error.cantPlay", { channel: ctx.name || `#${ctx.streamId}` }),
+    {
+      description: shouldWarnHevc(ctx.name)
+        ? t("stream.error.hevcHint")
+        : t("stream.error.checkConnection"),
+    }
+  )
+  // Background diagnostic: turn the generic "couldn't play" toast into an
+  // actionable one ("HLS playlist returned 403", "Server unreachable",
+  // "Top variant manifest empty", etc.) once we have a verdict. Cooldown
+  // per stream-id so a flapping channel doesn't fire repeated probes.
+  runAutoDiagnostic(ctx, dismissGeneric)
+}
+
+async function mountEmbeddedPlayer(backend, opts) {
+  const wantLiveUi = opts.liveui ?? true
+  const videoEl = ensurePlayerElement()
   if (!videoEl) return null
   // Hide Video.js's built-in PiP toggle on Tauri Android - the WebView
   // doesn't expose Web PiP so the button always renders disabled. Native
   // PiP goes through the in-page button + AndroidPip bridge instead.
   const hasNativePipBridge = !!window.AndroidPip
   const mounted = await mountPlayer(videoEl, backend, {
-    liveui: true,
+    liveui: wantLiveUi,
     fluid: true,
     preload: "auto",
     autoplay: false,
@@ -1377,21 +1706,33 @@ const ensureEmbeddedPlayer = async (backend) => {
     controlBar: {
       volumePanel: { inline: false },
       pictureInPictureToggle: !hasNativePipBridge,
-      playbackRateMenuButton: false,
+      playbackRateMenuButton: !wantLiveUi,
       fullscreenToggle: true,
     },
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
+  embeddedPlayerLiveUi = wantLiveUi
+
+  if (radioModeChannelId != null) {
+    unmountRadioVisualizer()
+    const wrap = getPlayerWrap()
+    if (wrap) mountRadioVisualizer(wrap)
+  }
 
   if (mounted.backend === "videojs") {
-    attachPlayerFocusKeeper(vjs)
+    focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
   attachAudioOnlyDetection(vjs)
 
   vjs.on("playing", () => {
     if (lastPlayContext) lastPlayContext.started = true
+    if (catchupRetryResetTimer) clearTimeout(catchupRetryResetTimer)
+    catchupRetryResetTimer = setTimeout(() => {
+      catchupAutoRetryCount = 0
+      catchupSeekRemountCount = 0
+    }, CATCHUP_RETRY_RESET_AFTER_MS)
     hideTuningOverlay()
     hideBufferingChip()
     clearStallSentinel()
@@ -1402,13 +1743,68 @@ const ensureEmbeddedPlayer = async (backend) => {
     showBufferingChip()
     armStallSentinel()
   })
+  vjs.on("timeupdate", () => {
+    if (!catchupSession || pendingSeekTargetUtcMs != null) return
+    const now = Date.now()
+    if (now - timeshiftChipLastUpdateAt < TIMESHIFT_CHIP_UPDATE_MS) return
+    timeshiftChipLastUpdateAt = now
+    renderTimeshiftChip()
+  })
+  ensureTimeshiftActivityTracking()
   vjs.on("stalled", () => {
     showBufferingChip()
     armStallSentinel()
   })
+  vjs.on("pause", () => {
+    if (Date.now() < suppressPauseTrackingUntilMs) return
+    if (!lastPlayContext?.started) return
+    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    // The browser fires pause right before ended - don't record that as a user pause.
+    if (mediaEl?.ended) return
+    pausedWasLive = !catchupSession
+    pausedAtAbsUtcMs = catchupSession
+      ? catchupSession.timelineStartUtcMs + (vjs.currentTime() || 0) * 1000
+      : Date.now()
+  })
+  vjs.on("play", () => {
+    if (pausedAtAbsUtcMs == null) return
+    const pausedAbsUtcMs = pausedAtAbsUtcMs
+    pausedAtAbsUtcMs = null
+    const channel = all.find((entry) => entry.id === (catchupSession?.channelId ?? currentlyPlayingId))
+    if (!channel) return
+    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const currentTimeSeconds = vjs.currentTime?.() || 0
+    let bufferedAheadMs = 0
+    const buffered = mediaEl?.buffered
+    if (buffered) {
+      for (let i = 0; i < buffered.length; i++) {
+        if (currentTimeSeconds >= buffered.start(i) - 1 && currentTimeSeconds <= buffered.end(i) + 1) {
+          bufferedAheadMs = Math.max(0, (buffered.end(i) - currentTimeSeconds) * 1000)
+          break
+        }
+      }
+    }
+    const action = resumeAction({
+      pausedAbsUtcMs,
+      nowUtcMs: Date.now(),
+      bufferedEndAbsUtcMs: pausedAbsUtcMs + bufferedAheadMs,
+      wasLive: pausedWasLive,
+      archiveCapable: channelSupportsCatchup(channel),
+      profile: catchupSession?.profile ?? provisionalStreamProfile(channel),
+    })
+    if (action === "reseek") {
+      void seekToAbsolute(pausedAbsUtcMs, { forceRemount: true })
+    } else if (action === "live") {
+      void play(channel.id, channel.name)
+    }
+  })
   vjs.on("error", () => {
     const ctx = lastPlayContext
     if (!ctx) return
+    if (catchupRetryResetTimer) {
+      clearTimeout(catchupRetryResetTimer)
+      catchupRetryResetTimer = null
+    }
     const err = vjs.error?.()
     log.error("[xt:livetv] player error", {
       code: err?.code,
@@ -1420,57 +1816,21 @@ const ensureEmbeddedPlayer = async (backend) => {
       const seqAtRetry = ctx.seq
       setTimeout(() => {
         if (seqAtRetry !== playSeq) return
+        if (retryCatchupSession(ctx, { automatic: true })) return
+        if (!ctx.isLive) {
+          // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
+          giveUpOnPlayback(ctx)
+          return
+        }
         try {
           vjs.reset?.()
-          vjs.src({ src: ctx.src, type: "application/x-mpegURL" })
+          vjs.src({ src: ctx.src, type: ctx.mime || "application/x-mpegURL", isLive: ctx.isLive ?? true })
           vjs.play().catch(() => {})
         } catch {}
       }, ERROR_AUTO_RETRY_MS)
       return
     }
-    hideTuningOverlay()
-    hideBufferingChip()
-    clearStallSentinel()
-    clearDeadVideoWatchdog()
-    if (!ctx.started) {
-      // Bypasses getAndroidNativePlayerEnabled() on purpose: this is a one-shot-per-tune
-      // recovery so an unsupported channel still plays, independent of that opt-in setting.
-      if (!ctx.nativeFallbackTried && androidNativePlayerAvailable) {
-        ctx.nativeFallbackTried = true
-        const info = vjs?.codecInfo?.() || { videoCodec: null, errorDetail: null }
-        const failure = classifyStartFailure({
-          videoCodec: info.videoCodec,
-          errorDetail: info.errorDetail,
-          nameHint: hasHevcNameHint(ctx.name),
-          deviceHevc: deviceSupportsHevc(),
-        })
-        if (failure.kind === "hevc" || failure.kind === "codec") {
-          toast({ title: t("stream.failure.nativeFallback") })
-          launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
-            if (launched) return
-            showPlaybackFailurePanel(ctx)
-            runAutoDiagnostic(ctx, null)
-          })
-          return
-        }
-      }
-      showPlaybackFailurePanel(ctx)
-      runAutoDiagnostic(ctx, null)
-      return
-    }
-    const dismissGeneric = toastError(
-      t("stream.error.cantPlay", { channel: ctx.name || `#${ctx.streamId}` }),
-      {
-        description: shouldWarnHevc(ctx.name)
-          ? t("stream.error.hevcHint")
-          : t("stream.error.checkConnection"),
-      }
-    )
-    // Background diagnostic: turn the generic "couldn't play" toast into an
-    // actionable one ("HLS playlist returned 403", "Server unreachable",
-    // "Top variant manifest empty", etc.) once we have a verdict. Cooldown
-    // per stream-id so a flapping channel doesn't fire repeated probes.
-    runAutoDiagnostic(ctx, dismissGeneric)
+    giveUpOnPlayback(ctx)
   })
 
   return vjs
@@ -1487,7 +1847,7 @@ function getPlayerWrap(): HTMLElement | null {
 function mountRadioVisualizer(wrap: HTMLElement) {
   if (radioVisualizer) return
   const host = wrap.querySelector<HTMLElement>("[data-radio-visualizer-host]")
-  const videoEl = wrap.querySelector<HTMLVideoElement>("video")
+  const videoEl = vjs?.getMediaElement?.() ?? wrap.querySelector<HTMLVideoElement>("video")
   if (!host || !videoEl) return
   radioVisualizer = attachRadioVisualizer(host, videoEl)
 }
@@ -1620,27 +1980,30 @@ function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unkn
   handle.on("resize", detect)
 }
 
-function showTuningOverlay(logoUrl) {
+function showTuningOverlay(logoUrl, maxMs = TUNING_MAX_MS) {
   const playerWrap = document.getElementById("player")?.parentElement
   if (!playerWrap) return
   playerWrap.querySelector("[data-tuning-overlay]")?.remove()
   const overlay = document.createElement("div")
   overlay.dataset.tuningOverlay = ""
   overlay.className = "tuning-overlay"
-  overlay.style.viewTransitionName = "tuning-logo"
+  const plate = document.createElement("div")
+  plate.className = "tuning-overlay__plate"
+  plate.style.viewTransitionName = "tuning-logo"
   if (logoUrl) {
     const img = document.createElement("img")
     img.src = logoUrl
     img.alt = ""
     img.referrerPolicy = "no-referrer"
     img.decoding = "async"
-    overlay.appendChild(img)
+    plate.appendChild(img)
   }
+  overlay.appendChild(plate)
   playerWrap.appendChild(overlay)
   // Cap visibility so we never get stuck on the overlay if `playing` never
   // fires (dead provider, codec issue, render-process crash on Android).
   if (tuningOverlaySentinel) clearTimeout(tuningOverlaySentinel)
-  tuningOverlaySentinel = setTimeout(hideTuningOverlay, TUNING_MAX_MS)
+  tuningOverlaySentinel = setTimeout(hideTuningOverlay, maxMs)
 }
 
 function hideTuningOverlay() {
@@ -1658,6 +2021,9 @@ function hideTuningOverlay() {
 function showBufferingChip() {
   const playerWrap = document.getElementById("player")?.parentElement
   if (!playerWrap) return
+  // Timeshift chip already communicates state; on a narrow player the two pills overlap.
+  const timeshiftChip = playerWrap.querySelector("[data-timeshift-chip]")
+  if (timeshiftChip && !timeshiftChip.classList.contains("is-hidden")) return
   if (bufferingHideTimer) {
     clearTimeout(bufferingHideTimer)
     bufferingHideTimer = null
@@ -1689,15 +2055,103 @@ function hideBufferingChip() {
   }, wait)
 }
 
+function formatWallClock(utcMs: number): string {
+  return fmtTime(utcMs / 1000)
+}
+
+function showTimeshiftChip(lines: string[]) {
+  const playerWrap = document.getElementById("player")?.parentElement
+  if (!playerWrap) return
+  let chip = playerWrap.querySelector("[data-timeshift-chip]")
+  const created = !chip
+  if (!chip) {
+    chip = document.createElement("div")
+    chip.dataset.timeshiftChip = ""
+    chip.className = "timeshift-chip"
+    chip.setAttribute("role", "status")
+    chip.setAttribute("aria-live", "polite")
+    playerWrap.appendChild(chip)
+  }
+  chip.replaceChildren()
+  for (const line of lines) {
+    const lineEl = document.createElement("div")
+    lineEl.className = "timeshift-chip-line"
+    lineEl.textContent = line
+    chip.appendChild(lineEl)
+  }
+  if (created) bumpTimeshiftChipActivity()
+  else applyTimeshiftChipVisibility()
+}
+
+function hideTimeshiftChip() {
+  const playerWrap = document.getElementById("player")?.parentElement
+  playerWrap?.querySelector("[data-timeshift-chip]")?.remove()
+}
+
+function applyTimeshiftChipVisibility() {
+  const playerWrap = document.getElementById("player")?.parentElement
+  const chip = playerWrap?.querySelector("[data-timeshift-chip]")
+  if (!chip) return
+  const visible = timeshiftChipControlsActive || pendingSeekTargetUtcMs != null
+  chip.classList.toggle("is-hidden", !visible)
+}
+
+function bumpTimeshiftChipActivity() {
+  timeshiftChipControlsActive = true
+  applyTimeshiftChipVisibility()
+  if (timeshiftChipIdleTimer) clearTimeout(timeshiftChipIdleTimer)
+  timeshiftChipIdleTimer = setTimeout(() => {
+    timeshiftChipControlsActive = false
+    applyTimeshiftChipVisibility()
+  }, TIMESHIFT_CHIP_IDLE_MS)
+}
+
+function ensureTimeshiftActivityTracking() {
+  if (timeshiftActivityTrackingArmed) return
+  const playerWrap = document.getElementById("player")?.parentElement
+  if (!playerWrap) return
+  timeshiftActivityTrackingArmed = true
+  const onActivity = () => bumpTimeshiftChipActivity()
+  playerWrap.addEventListener("pointermove", onActivity)
+  playerWrap.addEventListener("pointerdown", onActivity)
+  playerWrap.addEventListener("wheel", onActivity, { passive: true })
+  document.addEventListener("keydown", onActivity)
+  bumpTimeshiftChipActivity()
+}
+
+/** Wall-clock playhead + behind-live readout for the active catch-up/timeshift session. */
+function renderTimeshiftChip() {
+  if (!catchupSession || !vjs) {
+    hideTimeshiftChip()
+    return
+  }
+  const playheadAbsUtcMs = catchupSession.timelineStartUtcMs + (vjs.currentTime() || 0) * 1000
+  const behindMs = Date.now() - playheadAbsUtcMs
+  if (behindMs < TIMESHIFT_CHIP_LIVE_THRESHOLD_MS) {
+    hideTimeshiftChip()
+    return
+  }
+  showTimeshiftChip([
+    formatWallClock(playheadAbsUtcMs),
+    t("timeshift.behindLive", { time: formatBehindLive(behindMs) }),
+  ])
+}
+
 function armStallSentinel() {
   if (stallSentinel) clearTimeout(stallSentinel)
   stallSentinel = setTimeout(() => {
     const ctx = lastPlayContext
     if (!ctx || !vjs) return
     log.warn("[xt:livetv] stall sentinel re-tuning", { streamId: ctx.streamId })
+    if (retryCatchupSession(ctx, { automatic: true })) return
+    if (!ctx.isLive) {
+      // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
+      giveUpOnPlayback(ctx)
+      return
+    }
     try {
       vjs.reset?.()
-      vjs.src({ src: ctx.src, type: "application/x-mpegURL" })
+      vjs.src({ src: ctx.src, type: ctx.mime || "application/x-mpegURL", isLive: ctx.isLive ?? true })
       vjs.play().catch(() => {})
     } catch {}
   }, STALL_AUTO_TUNE_MS)
@@ -1775,6 +2229,7 @@ function armDeadVideoWatchdog() {
       videoWidth: video.videoWidth,
       videoHeight: video.videoHeight,
     })
+    suppressPauseTrackingUntilMs = Date.now() + 500
     try { vjs?.pause?.() } catch {}
     hideTuningOverlay()
     hideBufferingChip()
@@ -1829,9 +2284,10 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   const playerWrap = document.getElementById("player")?.parentElement
   if (!playerWrap) return
 
-  const info = vjs?.codecInfo?.() || { videoCodec: null, errorDetail: null }
+  const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
   const failure = classifyStartFailure({
     videoCodec: info.videoCodec,
+    audioCodec: info.audioCodec,
     errorDetail:
       info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
     nameHint: hasHevcNameHint(ctx.name),
@@ -1850,6 +2306,10 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
     reason = t("stream.failure.codecUnsupported", {
       codec: failure.codec || info.errorDetail || "?",
     })
+  } else if (failure.kind === "audio") {
+    reason = t("stream.failure.audioUnsupported", {
+      codec: describeAudioCodec(failure.codec),
+    })
   } else {
     reason = t("stream.error.checkConnection")
   }
@@ -1860,46 +2320,70 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   const panel = document.createElement("div")
   panel.dataset.playbackFailure = ""
   panel.setAttribute("role", "alert")
+  // gap/size scale down on a short mobile player (overflow-hidden), overflow-y-auto is the safety valve when it still doesn't fit.
   panel.className =
-    "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/85 px-6 text-center"
+    "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 sm:gap-5 bg-black/85 px-6 py-4 text-center overflow-y-auto"
 
+  // The panel sits on an always-dark bg-black/85 surface, so its chrome is styled light-on-dark in both themes (not theme-flipping tokens).
   const icon = document.createElement("span")
-  icon.className = "inline-flex text-3xl leading-none text-fg-3"
+  icon.className = "inline-flex text-4xl sm:text-5xl leading-none text-white/40"
   icon.setAttribute("aria-hidden", "true")
   icon.innerHTML = ICON_ALERT_TRIANGLE
   panel.appendChild(icon)
 
+  const headGroup = document.createElement("div")
+  headGroup.className = "flex flex-col items-center gap-1.5"
+
   const title = document.createElement("p")
-  title.className = "m-0 text-fg font-semibold text-base sm:text-lg"
-  title.textContent = t("stream.error.cantPlay", {
-    channel: ctx.name || `#${ctx.streamId}`,
-  })
-  panel.appendChild(title)
+  title.className = "m-0 text-white font-semibold text-lg sm:text-2xl tracking-tight"
+  title.textContent = t("stream.error.cantPlayTitle")
+  headGroup.appendChild(title)
+
+  const channelLine = document.createElement("p")
+  channelLine.className = "m-0 text-white/70 text-sm sm:text-base font-medium"
+  channelLine.textContent = ctx.name || `#${ctx.streamId}`
+  headGroup.appendChild(channelLine)
+  panel.appendChild(headGroup)
 
   const reasonEl = document.createElement("p")
   reasonEl.dataset.failureReason = ""
-  reasonEl.className = "m-0 max-w-md text-fg-2 text-xs sm:text-sm"
+  reasonEl.className = "m-0 max-w-sm text-white/70 text-xs sm:text-sm leading-relaxed"
   reasonEl.textContent = reason
   panel.appendChild(reasonEl)
 
   const actions = document.createElement("div")
-  actions.className = "mt-1 flex flex-wrap items-center justify-center gap-2"
+  actions.className = "mt-1 flex flex-wrap items-center justify-center gap-3"
+
+  // Promote the action that actually recovers this failure kind to primary;
+  // a decode failure needs the external player, a network blip needs retry.
+  const builtinCantDecode =
+    failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio"
+  const hevcInstall = failure.kind === "hevc" && isWindowsDesktop()
+  const externalAvailable = externalPlayersAvailable || androidExternalAvailable
+  let primaryKind = "retry"
+  if (hevcInstall) primaryKind = "hevc"
+  else if (builtinCantDecode && externalAvailable) primaryKind = "external"
+
+  const primaryClass =
+    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-xl bg-white text-black text-sm font-semibold transition duration-150 hover:bg-white/90 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+  const secondaryClass =
+    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-4 rounded-xl border border-white/25 text-white text-sm transition duration-150 hover:bg-white/10 hover:border-white/40 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
 
   const retryBtn = document.createElement("button")
   retryBtn.type = "button"
-  retryBtn.className =
-    "shrink-0 inline-flex items-center justify-center min-h-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+  retryBtn.className = primaryKind === "retry" ? primaryClass : secondaryClass
   retryBtn.textContent = t("common.retry")
   retryBtn.addEventListener("click", () => {
     hidePlaybackFailurePanel()
+    if (retryCatchupSession(ctx)) return
     play(ctx.streamId, ctx.name)
   })
-  actions.appendChild(retryBtn)
 
-  if (failure.kind === "hevc" && isWindowsDesktop()) {
-    const hevcBtn = document.createElement("button")
+  let hevcBtn = null
+  if (hevcInstall) {
+    hevcBtn = document.createElement("button")
     hevcBtn.type = "button"
-    hevcBtn.className = retryBtn.className
+    hevcBtn.className = primaryKind === "hevc" ? primaryClass : secondaryClass
     hevcBtn.textContent = t("hevc.enable") || "Enable HEVC playback"
     hevcBtn.addEventListener("click", async () => {
       if (await ensureHevcDecodable()) {
@@ -1907,15 +2391,14 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
         play(ctx.streamId, ctx.name)
       }
     })
-    actions.appendChild(hevcBtn)
   }
 
-  if (externalPlayersAvailable || androidExternalAvailable) {
-    const extBtn = document.createElement("button")
+  let extBtn = null
+  if (externalAvailable) {
+    extBtn = document.createElement("button")
     extBtn.type = "button"
     extBtn.hidden = true
-    extBtn.className =
-      "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+    extBtn.className = primaryKind === "external" ? primaryClass : secondaryClass
     const extIcon = document.createElement("span")
     extIcon.className = "shrink-0 inline-flex text-xl leading-none"
     extIcon.setAttribute("aria-hidden", "true")
@@ -1937,8 +2420,17 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
         hidePlaybackFailurePanel()
       },
     })
-    actions.appendChild(extBtn)
   }
+
+  // Primary leads; retry is always offered as the fallback.
+  const orderedButtons = []
+  if (primaryKind === "hevc" && hevcBtn) orderedButtons.push(hevcBtn)
+  else if (primaryKind === "external" && extBtn) orderedButtons.push(extBtn)
+  else orderedButtons.push(retryBtn)
+  for (const btn of [hevcBtn, extBtn, retryBtn]) {
+    if (btn && !orderedButtons.includes(btn)) orderedButtons.push(btn)
+  }
+  for (const btn of orderedButtons) actions.appendChild(btn)
 
   panel.appendChild(actions)
   playerWrap.appendChild(panel)
@@ -1980,6 +2472,8 @@ function pushDiscordPresence(channel, kind) {
 }
 
 function pickConfiguredExternal() {
+  const pref = getExternalPlayerPref()
+  if ((pref === "mpv" || pref === "vlc") && getPlayerPath(pref)) return pref
   for (const kind of EXTERNAL_PLAYER_BACKENDS) {
     if (getPlayerPath(kind)) return kind
   }
@@ -2071,10 +2565,29 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
 async function play(streamId, name) {
   hidePlaybackFailurePanel()
   clearDeadVideoWatchdog()
+  catchupSession = null
+  catchupAutoRetryCount = 0
+  catchupSeekRemountCount = 0
+  catchupLastEndedAbsUtcMs = null
+  // Leaving catch-up without a remount (e.g. "Back to live") would otherwise strand this on a disposed <video>.
+  if (catchupSeekingEl && catchupSeekingHandler) {
+    try { catchupSeekingEl.removeEventListener("seeking", catchupSeekingHandler) } catch {}
+    catchupSeekingEl = null
+    catchupSeekingHandler = null
+  }
+  pendingSeekTargetUtcMs = null
+  pausedAtAbsUtcMs = null
+  // The old mount's teardown fires an async pause event; without this window it would re-arm the tracker mid-retune.
+  suppressPauseTrackingUntilMs = Date.now() + 500
+  const myRequest = ++catchupRequestSeq
+  hideTimeshiftChip()
+  clearLiveEdgeTracking()
   if (!currentEl) return
   // Native ExoPlayer Activity path (opt-in via Settings). Hands off the full
   // playback session including channel switching. Returns early if successful.
-  if (await tryLaunchNativeLive(streamId, name)) return
+  if (await tryLaunchNativeLive(streamId, name)) {
+    return
+  }
 
   const src = hasDirectUrl(streamId)
     ? getDirectUrl(streamId)
@@ -2170,6 +2683,16 @@ async function play(streamId, name) {
     btn.addEventListener("click", () => { if (vjs) togglePip(vjs) })
     currentEl.appendChild(btn)
 
+    const scaleBtn = document.createElement("button")
+    scaleBtn.id = "display-mode-btn"
+    scaleBtn.type = "button"
+    scaleBtn.title = t("stream.scale.button")
+    scaleBtn.setAttribute("aria-label", t("stream.scale.button"))
+    scaleBtn.className = "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+    scaleBtn.innerHTML = ICON_ASPECT_RATIO
+    scaleBtn.addEventListener("click", () => openDisplayModeDialog(streamId))
+    currentEl.appendChild(scaleBtn)
+
     appendExternalLaunchButton(currentEl, streamId, src, name)
 
     if (sourceLogo instanceof HTMLElement) sourceLogo.style.viewTransitionName = ""
@@ -2202,11 +2725,7 @@ async function play(streamId, name) {
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
-    if (hasDirectUrl(streamId)) {
-      paintSidePanelFromXmltv(streamId)
-    } else {
-      loadEPG(streamId)
-    }
+    paintEpgSidePanel(streamId)
     return
   }
 
@@ -2218,7 +2737,13 @@ async function play(streamId, name) {
     clearRadioMode()
   }
   const player = await ensureEmbeddedPlayer(backend)
-  if (!player) return
+  // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
+  if (myRequest !== catchupRequestSeq) {
+    return
+  }
+  if (!player) {
+    return
+  }
   await applyStreamHeaders(channelHeaders)
   const seq = ++playSeq
   lastPlayContext = {
@@ -2229,22 +2754,574 @@ async function play(streamId, name) {
     retried: false,
     started: false,
     nativeFallbackTried: false,
+    mime: "application/x-mpegURL",
+    isLive: true,
   }
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
-  player.src({ src, type: "application/x-mpegURL", drm: channelDrm })
+  try { player.src({ src, type: "application/x-mpegURL", drm: channelDrm }) } catch {}
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch(() => {})
   }
-
+  applyVideoScale()
   pushDiscordPresence(channel || { id: streamId, name }, "live")
 
-  if (hasDirectUrl(streamId)) {
-    paintSidePanelFromXmltv(streamId)
+  paintEpgSidePanel(streamId)
+}
+
+// ----------------------------
+// Catch-up (archive) playback
+// ----------------------------
+function renderCatchupCurrentRow(channel, title) {
+  if (!currentEl) return
+  currentEl.replaceChildren()
+
+  const wrap = document.createElement("div")
+  wrap.className = "flex items-center gap-2 min-w-0 flex-1"
+  const badge = document.createElement("span")
+  badge.className = "status-badge status-badge--catchup shrink-0"
+  badge.textContent = t("catchup.watchingLabel")
+  wrap.appendChild(badge)
+
+  const label = document.createElement("span")
+  label.className = "truncate min-w-0 flex-1"
+  const titleEl = document.createElement("span")
+  titleEl.className = "text-accent"
+  titleEl.textContent = title || channel.name || ""
+  label.appendChild(titleEl)
+  if (channel.name && title) {
+    const channelEl = document.createElement("span")
+    channelEl.className = "text-fg-3"
+    channelEl.textContent = ` · ${channel.name}`
+    label.appendChild(channelEl)
+  }
+  if (catchupSession) {
+    const timeEl = document.createElement("span")
+    timeEl.className = "text-fg-3"
+    timeEl.textContent = ` · ${
+      catchupSession.kind === "programme"
+        ? `${formatWallClock(catchupSession.startUtcMs)}-${formatWallClock(catchupSession.stopUtcMs)}`
+        : formatWallClock(catchupSession.startUtcMs)
+    }`
+    label.appendChild(timeEl)
+  }
+  wrap.appendChild(label)
+  currentEl.appendChild(wrap)
+
+  const backBtn = document.createElement("button")
+  backBtn.type = "button"
+  backBtn.className =
+    "shrink-0 inline-flex items-center justify-center min-h-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+  backBtn.textContent = t("catchup.backToLive")
+  backBtn.addEventListener("click", () => backToLive(channel))
+  currentEl.appendChild(backBtn)
+}
+
+function backToLive(channel) {
+  hideTimeshiftChip()
+  // Already tuned live on this channel (no shifted session) - avoid a pointless remount.
+  if (!catchupSession && currentlyPlayingId === channel.id) return
+  play(channel.id, channel.name || "")
+}
+
+/** Re-mounts the active session at the current playhead (archive URLs embed timestamps, so a stale src must not be replayed); automatic callers are capped, manual retry resets the budget. */
+function retryCatchupSession(ctx, opts = {}) {
+  const session = catchupSession
+  if (!session || session.channelId !== ctx.streamId) return false
+  const channel = all.find((entry) => entry.id === session.channelId)
+  if (!channel) return false
+  if (opts.automatic) {
+    if (catchupAutoRetryCount >= CATCHUP_MAX_AUTO_RETRIES) return false
+    catchupAutoRetryCount++
   } else {
-    loadEPG(streamId)
+    catchupAutoRetryCount = 0
+  }
+  const currentSeconds = vjs?.currentTime?.() || 0
+  const resumeUtcMs = Math.min(
+    Math.max(session.timelineStartUtcMs + currentSeconds * 1000, session.startUtcMs),
+    session.stopUtcMs - 1000
+  )
+  void playCatchup(channel, {
+    startUtcMs: resumeUtcMs,
+    stopUtcMs: session.stopUtcMs,
+    timelineStartUtcMs: session.timelineStartUtcMs,
+    timelineStopUtcMs: session.timelineStopUtcMs,
+    title: session.title,
+    kind: session.kind,
+    catchupId: session.catchupId,
+    isRetryContinuation: true,
+  })
+  return true
+}
+
+/** Programme title under the playhead at `atUtcMs`, from XMLTV or the cached Xtream full table; "" when EPG data is missing. */
+function resolveProgrammeTitleAt(channel, atUtcMs) {
+  if (!channel || !activePlaylistId) return ""
+  const tvgId = effectiveTvgId(channel, activePlaylistId)
+  if (tvgId) {
+    const state = getProgrammesSync(activePlaylistId)
+    const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
+    const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
+    if (current?.title) return current.title
+  }
+  const xtreamEntries = peekXtreamFullEpgCache(channel)
+  const listing = xtreamEntries?.find((entry) => entry.startUtcMs <= atUtcMs && atUtcMs < entry.stopUtcMs)
+  return listing?.title || ""
+}
+
+/** Programme `catchup-id` under the playhead at `atUtcMs`, or null when EPG data or the field is missing. */
+function resolveProgrammeCatchupIdAt(channel, atUtcMs) {
+  if (!channel || !activePlaylistId) return null
+  const tvgId = effectiveTvgId(channel, activePlaylistId)
+  if (!tvgId) return null
+  const state = getProgrammesSync(activePlaylistId)
+  const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
+  const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
+  return current?.catchupId || null
+}
+
+/** Programme window under the playhead at `atUtcMs`, from XMLTV or the cached Xtream full table; null when EPG data is missing. */
+function resolveProgrammeWindowAt(channel, atUtcMs) {
+  if (!channel || !activePlaylistId) return null
+  const tvgId = effectiveTvgId(channel, activePlaylistId)
+  if (tvgId) {
+    const state = getProgrammesSync(activePlaylistId)
+    const displayedAtMs = utcToDisplayedMs(activePlaylistId, atUtcMs)
+    const { current } = getNowNext(state?.programmes, tvgId, displayedAtMs)
+    if (current) {
+      return {
+        startUtcMs: displayedToUtcMs(activePlaylistId, current.start),
+        stopUtcMs: displayedToUtcMs(activePlaylistId, current.stop),
+      }
+    }
+  }
+  const xtreamEntries = peekXtreamFullEpgCache(channel)
+  const listing = xtreamEntries?.find((entry) => entry.startUtcMs <= atUtcMs && atUtcMs < entry.stopUtcMs)
+  return listing ? { startUtcMs: listing.startUtcMs, stopUtcMs: listing.stopUtcMs } : null
+}
+
+/** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
+async function playCatchup(channel, opts) {
+  if (!currentEl || !channel || !activePlaylistId) return false
+  // Reachable via a stale/hand-crafted deep link - the channel itself may no longer offer catch-up.
+  if (!channelSupportsCatchup(channel)) {
+    toastError(t("catchup.notAvailable"))
+    void play(channel.id, channel.name)
+    return false
+  }
+  const { startUtcMs, stopUtcMs, seekSeconds = 0, kind = "programme" } = opts || {}
+  let timelineStartUtcMs = opts?.timelineStartUtcMs ?? startUtcMs
+  const catchupId = opts?.catchupId || resolveProgrammeCatchupIdAt(channel, startUtcMs)
+  let title = opts?.title || ""
+  if (!Number.isFinite(startUtcMs) || !Number.isFinite(stopUtcMs) || stopUtcMs <= startUtcMs) return false
+
+  const backend = getPlayerBackend()
+  if (backend === "mpv" || backend === "vlc") {
+    toastError(kind === "timeshift" ? t("timeshift.seekFailed") : t("catchup.failed"))
+    return false
+  }
+
+  hidePlaybackFailurePanel()
+  clearDeadVideoWatchdog()
+  clearRadioMode()
+
+  // A different channel (or no active session) is a fresh pick, not a same-session remount/auto-advance - don't let stale strikes leak in.
+  if (!catchupSession || catchupSession.channelId !== channel.id) {
+    catchupLastEndedAbsUtcMs = null
+    catchupConsecutiveShortAdvances = 0
+  }
+  // Any session start gets its own error-retry budget; only retryCatchupSession's continuation call must keep the count it just set.
+  if (!opts?.isRetryContinuation) catchupAutoRetryCount = 0
+  // Same rule for the seek-remount circuit breaker: preserve the count only across the seek interceptor's own remount.
+  if (!opts?.preserveSeekRemountBudget) catchupSeekRemountCount = 0
+
+  // Resolving the archive URL can take several seconds (probing candidate
+  // wire formats) - give the same tuning feedback the live path shows.
+  const myRequest = ++catchupRequestSeq
+  showTuningOverlay(channel.logo ? safeHttpUrl(channel.logo) : null, CATCHUP_TUNING_MAX_MS)
+
+  const resolution = await resolveCatchupSrc(activePlaylistId, creds, {
+    channel,
+    startUtcMs,
+    stopUtcMs,
+    catchupId,
+  })
+  // A newer play()/playCatchup() call has since taken over - bail without
+  // touching whatever it's already showing.
+  if (myRequest !== catchupRequestSeq) {
+    return false
+  }
+  if (!resolution) {
+    hideTuningOverlay()
+    toastError(kind === "timeshift" ? t("timeshift.seekFailed") : t("catchup.failed"))
+    return false
+  }
+
+  if (!title && kind === "timeshift") title = resolveProgrammeTitleAt(channel, startUtcMs)
+  const mountedStartUtcMs = resolution.effectiveStartUtcMs
+
+  // Full-programme span (TiviMate-style bar) only for non-terminating streams still mid-broadcast; terminating archives end exactly at the requested stop, so they keep the elapsed-so-far span.
+  let timelineStopUtcMs = opts?.timelineStopUtcMs ?? null
+  if (timelineStopUtcMs == null && !resolution.profile.terminates) {
+    const anchorWindow = kind === "programme" ? { startUtcMs, stopUtcMs } : resolveProgrammeWindowAt(channel, startUtcMs)
+    if (anchorWindow && anchorWindow.stopUtcMs > Date.now()) {
+      if (opts?.timelineStartUtcMs == null) timelineStartUtcMs = anchorWindow.startUtcMs
+      timelineStopUtcMs = anchorWindow.stopUtcMs
+    }
+  }
+
+  resetEmptyState()
+  document.getElementById("player")?.removeAttribute("hidden")
+
+  const player = await ensureEmbeddedPlayer(backend, { liveui: false })
+  // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
+  if (myRequest !== catchupRequestSeq) {
+    return false
+  }
+  if (!player) {
+    hideTuningOverlay()
+    return false
+  }
+
+  pendingSeekTargetUtcMs = null
+  pausedAtAbsUtcMs = null
+  hideTimeshiftChip()
+  timeshiftChipLastUpdateAt = 0
+
+  pushRecent(activePlaylistId, "live", channel.id, channel.name, channel.logo || null)
+  setNowPlaying(channel.id)
+  catchupSession = {
+    kind,
+    channelId: channel.id,
+    channelName: channel.name || "",
+    title,
+    startUtcMs,
+    stopUtcMs,
+    mountedStartUtcMs,
+    timelineStartUtcMs,
+    timelineStopUtcMs,
+    catchupId,
+    profile: resolution.profile,
+  }
+  renderCatchupCurrentRow(channel, title)
+  paintEpgSidePanel(channel.id)
+
+  const seq = ++playSeq
+  const mime = resolution.kindHint === "hls" ? "application/x-mpegURL" : "video/mp2t"
+  lastPlayContext = {
+    streamId: channel.id,
+    name: channel.name,
+    src: resolution.src,
+    seq,
+    retried: false,
+    started: false,
+    // Skip the Android native-handoff escape hatch for catch-up sessions.
+    nativeFallbackTried: true,
+    mime,
+    isLive: false,
+  }
+  hideBufferingChip()
+  clearStallSentinel()
+  suppressPauseTrackingUntilMs = Date.now() + 500
+  try { player.reset?.() } catch {}
+
+  // Drop one-shot listeners from a superseded mount before adding new ones (handle is reused across remounts).
+  if (catchupLoadedMetadataHandler) {
+    try { player.off?.("loadedmetadata", catchupLoadedMetadataHandler) } catch {}
+    catchupLoadedMetadataHandler = null
+  }
+  if (catchupEndedHandler) {
+    try { player.off?.("ended", catchupEndedHandler) } catch {}
+    catchupEndedHandler = null
+  }
+
+  // Mounted stream lands at [offset, span] on the [timelineStart, stop] timeline so position/duration stay 1:1 across remounts.
+  const timelineOffsetSeconds = Math.max(0, (mountedStartUtcMs - timelineStartUtcMs) / 1000)
+  const timelineSpanSeconds = timelineStopUtcMs != null
+    ? Math.max(1, Math.round((timelineStopUtcMs - timelineStartUtcMs) / 1000))
+    : Math.max(1, Math.round((Math.min(stopUtcMs, Date.now()) - timelineStartUtcMs) / 1000))
+  const initialPositionSeconds = Math.max(0, (startUtcMs - timelineStartUtcMs) / 1000 + seekSeconds)
+  if (initialPositionSeconds > 0.05) {
+    catchupLoadedMetadataHandler = () => {
+      markProgrammaticCatchupSeek()
+      try { player.currentTime?.(initialPositionSeconds) } catch {}
+    }
+    player.one?.("loadedmetadata", catchupLoadedMetadataHandler)
+  }
+  catchupEndedHandler = () => {
+    if (seq !== playSeq || !catchupSession) return
+    const timelineDurationSeconds = player.duration?.() || 0
+    const rawSegmentSeconds = timelineDurationSeconds - timelineOffsetSeconds
+    const segmentSeconds = Number.isFinite(rawSegmentSeconds) ? rawSegmentSeconds : 0
+    const absoluteMs = catchupSession.timelineStartUtcMs + timelineDurationSeconds * 1000
+    // Two consecutive endings at the same instant mean the archive has nothing more there; remounting again would just churn.
+    if (catchupLastEndedAbsUtcMs != null && Math.abs(absoluteMs - catchupLastEndedAbsUtcMs) < 1500) {
+      catchupLastEndedAbsUtcMs = null
+      backToLive(channel)
+      return
+    }
+    catchupLastEndedAbsUtcMs = absoluteMs
+    // Archives routinely stop a few seconds short of the EPG stop; a replay that got this far is finished, not dropped.
+    if (catchupSession.kind === "programme" && absoluteMs >= catchupSession.stopUtcMs - CATCHUP_PROGRAMME_END_SLACK_MS) {
+      const nextProgramme = resolveProgrammeWindowAt(channel, catchupSession.stopUtcMs + 1000)
+      const nextIsReplayable =
+        nextProgramme &&
+        Date.now() - nextProgramme.startUtcMs > minDistanceFromLiveMs(catchupSession.profile) &&
+        isCatchupPlayable(channel, nextProgramme.startUtcMs, Date.now())
+      if (nextIsReplayable) {
+        void playCatchup(channel, {
+          startUtcMs: nextProgramme.startUtcMs,
+          stopUtcMs: nextProgramme.stopUtcMs,
+          title: resolveProgrammeTitleAt(channel, nextProgramme.startUtcMs + 1000),
+          kind: "programme",
+        })
+        return
+      }
+      backToLive(channel)
+      return
+    }
+    const decision = autoAdvanceDecision({
+      segmentSeconds,
+      currentAbsUtcMs: absoluteMs,
+      nowUtcMs: Date.now(),
+      programme: resolveProgrammeWindowAt(channel, absoluteMs),
+      strikes: catchupConsecutiveShortAdvances,
+      profile: catchupSession.profile,
+    })
+    catchupConsecutiveShortAdvances = decision.action === "live" ? 0 : decision.strikes
+    if (decision.action === "live") {
+      backToLive(channel)
+      return
+    }
+    // A programme replay whose stream dropped mid-programme keeps its session shape, so the episode-length bar and timeline zero survive the remount.
+    if (catchupSession.kind === "programme" && absoluteMs < catchupSession.stopUtcMs - CATCHUP_PROGRAMME_END_SLACK_MS) {
+      void playCatchup(channel, {
+        startUtcMs: absoluteMs,
+        stopUtcMs: catchupSession.stopUtcMs,
+        timelineStartUtcMs: catchupSession.timelineStartUtcMs,
+        timelineStopUtcMs: catchupSession.timelineStopUtcMs,
+        title: catchupSession.title,
+        kind: "programme",
+        catchupId: catchupSession.catchupId,
+      })
+      return
+    }
+    // Bypasses seekToAbsolute deliberately: the EPG-bounded stopUtcMs must survive the remount.
+    void playCatchup(channel, {
+      startUtcMs: absoluteMs,
+      stopUtcMs: decision.nextStopUtcMs ?? Date.now(),
+      title: resolveProgrammeTitleAt(channel, absoluteMs),
+      kind: "timeshift",
+    })
+  }
+  player.one?.("ended", catchupEndedHandler)
+  player.src({
+    src: resolution.src,
+    type: mime,
+    isLive: false,
+    durationSeconds: timelineSpanSeconds,
+    timelineOffsetSeconds,
+  })
+  attachCatchupSeekInterceptor(player, seq)
+  armLiveEdgeTracking(channel)
+  const playResult = player.play?.()
+  if (playResult && typeof playResult.catch === "function") {
+    playResult.catch(() => {})
+  }
+  applyVideoScale()
+  return true
+}
+
+/** Suppresses the seek interceptor while our own code moves the playhead. */
+function markProgrammaticCatchupSeek() {
+  catchupProgrammaticSeekUntilMs = Date.now() + 1500
+}
+
+/** No-Range realtime archive server: intercept native-bar seeks outside the buffer and re-request the stream at the target instant. */
+function attachCatchupSeekInterceptor(player, seq) {
+  if (catchupSeekingEl && catchupSeekingHandler) {
+    try { catchupSeekingEl.removeEventListener("seeking", catchupSeekingHandler) } catch {}
+    catchupSeekingEl = null
+    catchupSeekingHandler = null
+  }
+  const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+  if (!mediaEl) return
+  catchupSeekingHandler = () => {
+    if (seq !== playSeq || !catchupSession) return
+    if (Date.now() < catchupProgrammaticSeekUntilMs) return
+    const targetSeconds = mediaEl.currentTime
+    const buffered = mediaEl.buffered
+    for (let i = 0; i < buffered.length; i++) {
+      if (targetSeconds >= buffered.start(i) - 1 && targetSeconds <= buffered.end(i) + 2) return
+    }
+    if (catchupSeekRemountCount >= CATCHUP_MAX_SEEK_REMOUNTS) {
+      // Circuit breaker: a remount can take up to CATCHUP_TUNING_MAX_MS, so pin the playhead back instead of chasing another one.
+      markProgrammaticCatchupSeek()
+      if (buffered.length) {
+        try { mediaEl.currentTime = Math.max(0, buffered.end(buffered.length - 1) - 1) } catch {}
+      }
+      if (lastPlayContext) showPlaybackFailurePanel(lastPlayContext)
+      return
+    }
+    catchupSeekRemountCount++
+    markProgrammaticCatchupSeek()
+    void seekToAbsolute(catchupSession.timelineStartUtcMs + targetSeconds * 1000, { viaSeekInterceptor: true })
+  }
+  catchupSeekingEl = mediaEl
+  mediaEl.addEventListener("seeking", catchupSeekingHandler)
+}
+
+/** Clears the ghost-region CSS state and its tick interval; called whenever the active session ends or is superseded. */
+function clearLiveEdgeTracking() {
+  if (liveEdgeTickTimer != null) {
+    clearInterval(liveEdgeTickTimer)
+    liveEdgeTickTimer = null
+  }
+  const wrap = getPlayerWrap()
+  if (!wrap) return
+  wrap.style.removeProperty("--xt-live-edge")
+  delete wrap.dataset.timeshiftFullSpan
+}
+
+/** Drives the live-edge marker CSS var and programme rollover for a full-programme-span session; no-op for an elapsed-capped one. */
+function armLiveEdgeTracking(channel) {
+  clearLiveEdgeTracking()
+  const session = catchupSession
+  if (!session || session.timelineStopUtcMs == null) return
+  const wrap = getPlayerWrap()
+  if (!wrap) return
+  wrap.dataset.timeshiftFullSpan = "true"
+
+  const tick = async () => {
+    const activeSession = catchupSession
+    if (!activeSession || activeSession.timelineStopUtcMs == null || !vjs) return
+    const spanMs = activeSession.timelineStopUtcMs - activeSession.timelineStartUtcMs
+    const liveEdgeFraction = spanMs > 0
+      ? Math.min(1, Math.max(0, (Date.now() - activeSession.timelineStartUtcMs) / spanMs))
+      : 1
+    wrap.style.setProperty("--xt-live-edge", String(liveEdgeFraction))
+
+    const playheadAbsUtcMs = activeSession.timelineStartUtcMs + (vjs.currentTime() || 0) * 1000
+    if (playheadAbsUtcMs < activeSession.timelineStopUtcMs - TIMELINE_ROLLOVER_SLACK_MS) return
+    const nextProgramme = resolveProgrammeWindowAt(channel, activeSession.timelineStopUtcMs + 1000)
+    // No EPG for the next slot - the stream's own duration keeps extending, leave it alone.
+    if (!nextProgramme) return
+    // A stale/short next slot already behind live must not force full span - let playCatchup's own derivation decide.
+    const nextIsStillAiring = nextProgramme.stopUtcMs > Date.now() + TIMELINE_ROLLOVER_SLACK_MS
+    clearLiveEdgeTracking()
+    const remounted = await playCatchup(channel, {
+      startUtcMs: playheadAbsUtcMs,
+      stopUtcMs: Date.now(),
+      ...(nextIsStillAiring
+        ? { timelineStartUtcMs: nextProgramme.startUtcMs, timelineStopUtcMs: nextProgramme.stopUtcMs }
+        : {}),
+      title: resolveProgrammeTitleAt(channel, playheadAbsUtcMs),
+      kind: "timeshift",
+    })
+    // A failed rollover remount leaves the old session stranded past its stop with no tracking left to retry it.
+    if (!remounted) backToLive(channel)
+  }
+  void tick()
+  liveEdgeTickTimer = setInterval(() => void tick(), 1000)
+}
+
+/** Best-guess stream profile before a session exists yet (e.g. tapping rewind on a live channel). */
+function provisionalStreamProfile(channel): StreamProfile {
+  return channel?.url ? streamProfileFor(channel) : XTREAM_STREAM_PROFILE
+}
+
+/** Committed timeshift seek: clamp against the archive window, take the buffered fast-path when possible, otherwise remount via playCatchup. */
+async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
+  const channelId = catchupSession?.channelId ?? currentlyPlayingId
+  const channel = all.find((entry) => entry.id === channelId)
+  if (!channel) return
+
+  const profile = catchupSession?.profile ?? provisionalStreamProfile(channel)
+  const nowUtcMs = Date.now()
+  const currentAbsoluteMs = catchupSession
+    ? catchupSession.timelineStartUtcMs + (vjs?.currentTime?.() || 0) * 1000
+    : nowUtcMs
+  if (shouldIgnoreSeek(targetUtcMs - currentAbsoluteMs, { lastSeekWasLive: !catchupSession, profile })) return
+
+  const catchupWindowMs = catchupWindowDays(channel) * 24 * 60 * 60 * 1000
+  const clamped = clampSeekTarget(targetUtcMs, { nowUtcMs, catchupWindowMs, profile })
+  if (clamped.kind === "live") {
+    backToLive(channel)
+    return
+  }
+
+  // forceRemount: resume-after-long-pause must rebuild the connection even when the paused position still sits at a buffered edge.
+  if (!seekOpts.forceRemount && catchupSession && catchupSession.channelId === channel.id && vjs) {
+    const videoEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const buffered = videoEl?.buffered
+    if (buffered) {
+      const relSeconds = (clamped.targetUtcMs - catchupSession.timelineStartUtcMs) / 1000
+      for (let i = 0; i < buffered.length; i++) {
+        if (relSeconds >= buffered.start(i) - 1 && relSeconds <= buffered.end(i) + 1) {
+          markProgrammaticCatchupSeek()
+          try { vjs.currentTime(Math.max(0, relSeconds)) } catch {}
+          return
+        }
+      }
+    }
+  }
+
+  const remountTargetUtcMs = profile.granularitySeconds === 60
+    ? adjustTargetForGranularity(clamped.targetUtcMs, nowUtcMs, 60_000)
+    : clamped.targetUtcMs
+
+  // A jump within a programme replay stays bounded to the programme window, so the native bar keeps its episode-like span.
+  const withinProgrammeReplay =
+    catchupSession &&
+    catchupSession.kind === "programme" &&
+    catchupSession.channelId === channel.id &&
+    remountTargetUtcMs < catchupSession.stopUtcMs
+  if (withinProgrammeReplay) {
+    void playCatchup(channel, {
+      startUtcMs: remountTargetUtcMs,
+      stopUtcMs: catchupSession.stopUtcMs,
+      timelineStartUtcMs: catchupSession.timelineStartUtcMs,
+      timelineStopUtcMs: catchupSession.timelineStopUtcMs,
+      title: catchupSession.title,
+      kind: "programme",
+      catchupId: catchupSession.catchupId,
+      preserveSeekRemountBudget: seekOpts.viaSeekInterceptor === true,
+    })
+    return
+  }
+
+  // Non-terminating profiles (e.g. playseek-dialect) follow live through the current programme's end instead of stopping at "now".
+  const windowAtTarget = !profile.terminates ? resolveProgrammeWindowAt(channel, remountTargetUtcMs) : null
+  const remountStopUtcMs = windowAtTarget && windowAtTarget.stopUtcMs > nowUtcMs ? windowAtTarget.stopUtcMs : nowUtcMs
+
+  void playCatchup(channel, {
+    startUtcMs: remountTargetUtcMs,
+    stopUtcMs: remountStopUtcMs,
+    title: resolveProgrammeTitleAt(channel, remountTargetUtcMs),
+    kind: "timeshift",
+    preserveSeekRemountBudget: seekOpts.viaSeekInterceptor === true,
+  })
+}
+
+async function openDisplayModeDialog(streamId) {
+  const currentMode = resolveVideoScaleMode()
+  const result = await openVideoScaleDialog({
+    currentMode,
+    onPreview: (mode) => videoScaleController.apply(mode),
+  })
+  applyVideoScale()
+  if (!result) return
+  if (result.applyToAll) {
+    if (activePlaylistId) clearAllVideoScaleOverrides(activePlaylistId, "live")
+    setVideoScale(result.mode)
+    toast({
+      title: t("stream.scale.toastAllChannels", { mode: t(videoScaleModeLabelKey(result.mode)) }),
+      duration: 2200,
+    })
+  } else if (activePlaylistId) {
+    setVideoScaleOverride(activePlaylistId, "live", streamId, result.mode)
   }
 }
 
@@ -2285,6 +3362,7 @@ function appendExternalLaunchButton(parent, streamId, src, name) {
     },
     getTitle: () => name || null,
     beforeLaunch: () => {
+      suppressPauseTrackingUntilMs = Date.now() + 500
       try { vjs?.pause?.() } catch {}
     },
   })
@@ -2377,11 +3455,79 @@ const fmtTime = (ts) => {
 let epgListData = []
 let epgListChannelId = 0
 let epgListChannelName = ""
+// Number of EPG_SIDE_PANEL_PAST_WINDOW_MS pages currently shown; grows via the "Load earlier" button.
+let epgSidePanelPastPages = 1
+let epgSidePanelExtending = false
+
+const epgDayKey = (ms) => new Date(ms).toDateString()
+
+function epgDayLabel(ms) {
+  const date = new Date(ms)
+  const startOfDay = (value) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime()
+  const diffDays = Math.round((startOfDay(date) - startOfDay(new Date())) / (24 * 60 * 60 * 1000))
+  if (diffDays === 0) return t("epg.today")
+  if (diffDays === -1) return t("epg.yesterday")
+  if (diffDays === 1) return t("epg.tomorrow")
+  return new Intl.DateTimeFormat(getActiveLocale(), {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(date)
+}
+
+function renderEpgDaySeparator(ms) {
+  return `<div class="epg-day-sep flex items-center gap-2 pt-2 pb-0.5 px-1 text-2xs font-semibold uppercase tracking-wide text-fg-3">${escapeHtml(epgDayLabel(ms))}</div>`
+}
+
+/** Reflects the day whose entries are scrolled under the sticky heading, since separators no longer pin there themselves. */
+function updateEpgDayIndicator() {
+  if (!epgDayIndicator || !epgPanel) return
+  if (!epgListData.length) {
+    if (epgDayIndicator.textContent) epgDayIndicator.textContent = ""
+    return
+  }
+  const heading = epgPanel.querySelector(".sticky")
+  const stickyHeadingHeight = heading instanceof HTMLElement ? heading.offsetHeight : 0
+  const boundary = epgPanel.getBoundingClientRect().top + stickyHeadingHeight
+  const separators = epgList ? Array.from(epgList.querySelectorAll(".epg-day-sep")) : []
+  let currentLabel = ""
+  for (const separator of separators) {
+    if (separator.getBoundingClientRect().top <= boundary + 2) currentLabel = separator.textContent || ""
+  }
+  if (!currentLabel) currentLabel = epgDayLabel(epgListData[0].start)
+  if (epgDayIndicator.textContent !== currentLabel) epgDayIndicator.textContent = currentLabel
+}
+
+let epgDayIndicatorScrollPending = false
+epgPanel?.addEventListener(
+  "scroll",
+  () => {
+    if (epgDayIndicatorScrollPending) return
+    epgDayIndicatorScrollPending = true
+    requestAnimationFrame(() => {
+      epgDayIndicatorScrollPending = false
+      updateEpgDayIndicator()
+    })
+  },
+  { passive: true },
+)
+
+/** Whether the entry starting at `entryStartMs` is the one actually mounted right now, accounting for an active catch-up/timeshift session. */
+function isEpgEntryPlaying(entryStartMs, entryStopMs, isLive, isM3uSource) {
+  if (catchupSession) {
+    if (catchupSession.channelId !== epgListChannelId) return false
+    const entryStartUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entryStartMs) : entryStartMs
+    const entryStopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entryStopMs) : entryStopMs
+    return entryStartUtcMs <= catchupSession.startUtcMs && catchupSession.startUtcMs < entryStopUtcMs
+  }
+  return isLive && currentlyPlayingId === epgListChannelId
+}
 
 async function loadEPG(streamId) {
   if (!epgList) return
   epgList.innerHTML = `<div class="text-fg-3">Loading EPG…</div>`
   epgListData = []
+  if (epgDayIndicator) epgDayIndicator.textContent = ""
   epgListChannelId = streamId
   epgListChannelName = all.find((c) => c.id === streamId)?.name || ""
   try {
@@ -2399,6 +3545,7 @@ async function loadEPG(streamId) {
       : []
     if (!items.length) {
       epgList.innerHTML = `<div class="text-fg-3">No EPG available.</div>`
+      if (epgDayIndicator) epgDayIndicator.textContent = ""
       return
     }
 
@@ -2412,21 +3559,35 @@ async function loadEPG(streamId) {
       }))
       .filter((p) => Number.isFinite(p.start) && Number.isFinite(p.stop) && p.stop > p.start)
 
+    let previousDayKey = epgDayKey(now)
     epgList.innerHTML = epgListData
       .map((p, idx) => {
         const isLive = p.start <= now && now < p.stop
+        const isPlaying = isEpgEntryPlaying(p.start, p.stop, isLive, false)
         const start = fmtTime(p.start / 1000)
         const end = fmtTime(p.stop / 1000)
         const title = escapeHtml(p.title)
         const desc = escapeHtml(p.desc)
+        const dayKey = epgDayKey(p.start)
+        const daySeparator = dayKey !== previousDayKey ? renderEpgDaySeparator(p.start) : ""
+        previousDayKey = dayKey
+        const rowClass = isPlaying
+          ? "bg-accent-soft ring-1 ring-accent/30 hover:bg-accent/20"
+          : isLive
+          ? "bg-surface-2 hover:bg-surface-3 ring-1 ring-accent/30"
+          : "bg-surface-2 hover:bg-surface-3"
+        const dot = isLive
+          ? '<span class="size-1.5 rounded-full bg-accent shrink-0" aria-hidden="true"></span>'
+          : ""
         return `
-          <button type="button" data-epg-idx="${idx}"
+          ${daySeparator}
+          <button type="button" data-epg-idx="${idx}"${isPlaying ? ' data-now-playing="true" aria-current="true"' : ""}
             class="epg-entry block w-full min-h-11 text-left rounded-lg px-3 py-2 outline-none transition-colors
-                   ${isLive ? "bg-accent-soft ring-1 ring-accent/30 hover:bg-accent/20" : "bg-surface-2 hover:bg-surface-3"}
+                   ${rowClass}
                    focus-visible:ring-2 focus-visible:ring-accent">
             <div class="flex items-center justify-between gap-2">
               <div class="flex items-center gap-2 min-w-0">
-                ${isLive ? '<span class="size-1.5 rounded-full bg-accent shrink-0" aria-label="Now playing"></span>' : ""}
+                ${dot}
                 <div class="font-medium text-fg truncate">${title}</div>
               </div>
               <div class="text-xs text-fg-3 tabular-nums shrink-0">${start}–${end}</div>
@@ -2435,25 +3596,112 @@ async function loadEPG(streamId) {
           </button>`
       })
       .join("")
+    updateEpgDayIndicator()
   } catch (e) {
     log.error(e)
     epgList.innerHTML = `<div class="text-bad">Failed to load EPG.</div>`
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
   }
 }
 
-/**
- * M3U variant of loadEPG: there's no provider `get_short_epg` endpoint, but
- * we may have programmes loaded from the user's XMLTV sources. Resolve the
- * channel's effective tvg-id (auto or override), look up the matching
- * programmes, and render them in the same shape the Xtream path produces.
- */
+/** Splits a sorted programme array into the upcoming slice (next 10) and a past slice sized by `pastPages` (page 1 shows the 8 most recent, "Load earlier" pages grow the window). */
+function computeEpgSidePanelWindow(programmes, pastPages, supportsCatchup) {
+  const now = Date.now()
+  const upcoming = programmes.filter((programme) => programme.stop >= now).slice(0, 10)
+  const pastWindowMs = pastPages * EPG_SIDE_PANEL_PAST_WINDOW_MS
+  const pastWithinWindow = supportsCatchup
+    ? programmes.filter((programme) => programme.stop < now && now - programme.stop <= pastWindowMs)
+    : []
+  const past = pastPages > 1 ? pastWithinWindow : pastWithinWindow.slice(-8)
+  return { past, upcoming }
+}
+
+/** Shared side-panel renderer for past + upcoming rows; isM3uSource marks entry times as display-shifted XMLTV rather than true UTC. */
+function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, isNewChannelPaint }) {
+  const combined = [...past, ...upcoming]
+  epgListData = combined
+  const now = Date.now()
+  const loadEarlierHtml = canLoadEarlier
+    ? `<button type="button" data-epg-load-earlier
+         class="block w-full min-h-11 rounded-lg bg-surface-2 hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-accent text-sm text-fg-2 transition-colors">${escapeHtml(t("livetv.epgLoadEarlier"))}</button>`
+    : ""
+
+  let previousDayKey = epgDayKey(now)
+  let playingIndex = -1
+  let liveIndex = -1
+  const rowsHtml = combined
+    .map((programme, idx) => {
+      const isLive = programme.start <= now && now < programme.stop
+      const isPlaying = isEpgEntryPlaying(programme.start, programme.stop, isLive, isM3uSource)
+      if (isPlaying) playingIndex = idx
+      if (isLive) liveIndex = idx
+      const isPast = programme.stop <= now
+      const start = fmtTime(programme.start / 1000)
+      const end = fmtTime(programme.stop / 1000)
+      const title = escapeHtml(programme.title)
+      const desc = escapeHtml(programme.desc)
+      // has_archive narrows the badge/playability when the provider sends it; missing/null means "trust the channel-level catch-up window".
+      const archiveKnownPlayable = programme.hasArchive == null ? true : programme.hasArchive
+      const replayBadge = isPast && archiveKnownPlayable
+        ? `<span class="inline-flex shrink-0 items-center rounded-md border border-line bg-surface-2 px-1.5 text-2xs font-medium text-fg-3">${escapeHtml(t("catchup.badge"))}</span>`
+        : ""
+      const dayKey = epgDayKey(programme.start)
+      const daySeparator = dayKey !== previousDayKey ? renderEpgDaySeparator(programme.start) : ""
+      previousDayKey = dayKey
+      const rowClass = isPlaying
+        ? "bg-accent-soft ring-1 ring-accent/30 hover:bg-accent/20"
+        : isLive
+        ? "bg-surface-2 hover:bg-surface-3 ring-1 ring-accent/30"
+        : "bg-surface-2 hover:bg-surface-3"
+      const dot = isLive
+        ? '<span class="size-1.5 rounded-full bg-accent shrink-0" aria-hidden="true"></span>'
+        : ""
+      return `
+        ${daySeparator}
+        <button type="button" data-epg-idx="${idx}"${isPlaying ? ' data-now-playing="true" aria-current="true"' : ""}
+          class="epg-entry block w-full min-h-11 text-left rounded-lg px-3 py-2 outline-none transition-colors
+                 ${rowClass}
+                 focus-visible:ring-2 focus-visible:ring-accent">
+          <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2 min-w-0">
+              ${dot}
+              <div class="font-medium text-fg truncate">${title}</div>
+              ${replayBadge}
+            </div>
+            <div class="text-xs text-fg-3 tabular-nums shrink-0">${start}–${end}</div>
+          </div>
+          ${desc ? `<div class="mt-1 text-sm text-fg-2 leading-relaxed line-clamp-3">${desc}</div>` : ""}
+        </button>`
+    })
+    .join("")
+  epgList.innerHTML = loadEarlierHtml + rowsHtml
+
+  // Fresh channel tune lands the panel on the playing/live/upcoming entry; same-channel repaints keep position.
+  if (isNewChannelPaint && epgPanel) {
+    const scrollIndex = playingIndex >= 0 ? playingIndex : liveIndex >= 0 ? liveIndex : past.length
+    const targetEntry = epgList.querySelector(`[data-epg-idx="${scrollIndex}"]`)
+    if (targetEntry instanceof HTMLElement) {
+      const panelRect = epgPanel.getBoundingClientRect()
+      const targetRect = targetEntry.getBoundingClientRect()
+      const heading = epgPanel.querySelector(".sticky")
+      const stickyHeadingHeight = heading instanceof HTMLElement ? heading.offsetHeight : 0
+      epgPanel.scrollTop = Math.max(0, epgPanel.scrollTop + (targetRect.top - panelRect.top) - stickyHeadingHeight - 8)
+    }
+  }
+  updateEpgDayIndicator()
+}
+
+/** M3U variant of loadEPG: renders the channel's XMLTV programmes (via effective tvg-id) through the shared renderer. */
 function paintSidePanelFromXmltv(streamId) {
   if (!epgList) return
   const channel = all.find((entry) => entry.id === streamId)
   if (!channel) {
     epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
     return
   }
+  const isNewChannelPaint = streamId !== epgListChannelId
+  if (isNewChannelPaint) epgSidePanelPastPages = 1
   epgListChannelId = streamId
   epgListChannelName = channel.name || ""
 
@@ -2461,6 +3709,7 @@ function paintSidePanelFromXmltv(streamId) {
   if (!tvgId) {
     epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.sidePanelNoMapping"))}</div>`
     epgListData = []
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
     return
   }
 
@@ -2469,50 +3718,228 @@ function paintSidePanelFromXmltv(streamId) {
   if (!programmes.length) {
     epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
     epgListData = []
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
     return
   }
 
-  const now = Date.now()
-  const upcoming = programmes.filter((programme) => programme.stop >= now).slice(0, 10)
-  if (!upcoming.length) {
+  const supportsCatchup = channelSupportsCatchup(channel)
+  const { past, upcoming } = computeEpgSidePanelWindow(programmes, epgSidePanelPastPages, supportsCatchup)
+  if (!past.length && !upcoming.length) {
     epgList.innerHTML = `<div class="text-fg-3" data-i18n="epg.sidePanelEmpty">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
     epgListData = []
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
     return
   }
 
-  epgListData = upcoming
-  epgList.innerHTML = upcoming
-    .map((programme, idx) => {
-      const isLive = programme.start <= now && now < programme.stop
-      const start = fmtTime(programme.start / 1000)
-      const end = fmtTime(programme.stop / 1000)
-      const title = escapeHtml(programme.title)
-      const desc = escapeHtml(programme.desc)
-      return `
-        <button type="button" data-epg-idx="${idx}"
-          class="epg-entry block w-full min-h-11 text-left rounded-lg px-3 py-2 outline-none transition-colors
-                 ${isLive ? "bg-accent-soft ring-1 ring-accent/30 hover:bg-accent/20" : "bg-surface-2 hover:bg-surface-3"}
-                 focus-visible:ring-2 focus-visible:ring-accent">
-          <div class="flex items-center justify-between gap-2">
-            <div class="flex items-center gap-2 min-w-0">
-              ${isLive ? '<span class="size-1.5 rounded-full bg-accent shrink-0" aria-label="Now playing"></span>' : ""}
-              <div class="font-medium text-fg truncate">${title}</div>
-            </div>
-            <div class="text-xs text-fg-3 tabular-nums shrink-0">${start}–${end}</div>
-          </div>
-          ${desc ? `<div class="mt-1 text-sm text-fg-2 leading-relaxed line-clamp-3">${desc}</div>` : ""}
-        </button>`
+  const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
+  const canLoadEarlier = supportsCatchup && epgSidePanelPastPages < maxPastPages
+  renderEpgSidePanelRows(past, upcoming, { isM3uSource: true, canLoadEarlier, isNewChannelPaint })
+}
+
+// ----------------------------
+// Xtream full-table EPG (past programmes for catch-up-capable channels)
+// ----------------------------
+const XTREAM_FULL_EPG_CACHE_TTL_MS = 15 * 60 * 1000
+// "playlistId:streamId" -> { at, entries }. The full table can span several days, so this stays in memory rather than IndexedDB.
+const xtreamFullEpgCache = new Map()
+
+function normalizeXtreamFullEpgListings(listings) {
+  return listings
+    .map((listing) => {
+      const startUtcMs = Number(listing.start_timestamp ?? listing.start) * 1000
+      const stopUtcMs = Number(listing.stop_timestamp ?? listing.end) * 1000
+      if (!Number.isFinite(startUtcMs) || !Number.isFinite(stopUtcMs) || stopUtcMs <= startUtcMs) return null
+      const archiveFlag = listing.has_archive
+      const hasArchive = archiveFlag === undefined || archiveFlag === null ? null : Number(archiveFlag) === 1
+      return {
+        startUtcMs,
+        stopUtcMs,
+        title: maybeB64ToUtf8(listing.title || listing.title_raw || t("programme.untitled")),
+        description: maybeB64ToUtf8(listing.description || listing.description_raw || ""),
+        hasArchive,
+      }
     })
-    .join("")
+    .filter((entry) => entry !== null)
+    .sort((a, b) => a.startUtcMs - b.startUtcMs)
+}
+
+async function fetchXtreamFullEpgAction(action, streamId) {
+  // Never throw: a 2xx non-JSON body for the first action spelling must still let the fallback spelling run.
+  try {
+    const response = await xtreamApiFetch(action, { stream_id: String(streamId) })
+    if (!response.ok) return null
+    const data = await response.json()
+    const listings = Array.isArray(data?.epg_listings) ? data.epg_listings : []
+    return listings.length ? listings : null
+  } catch {
+    return null
+  }
+}
+
+/** Fresh cached full-table entries, or null (used to skip the loading placeholder on remount repaints). */
+function peekXtreamFullEpgCache(channel) {
+  const cached = xtreamFullEpgCache.get(`${activePlaylistId}:${channel.id}`)
+  return cached && Date.now() - cached.at < XTREAM_FULL_EPG_CACHE_TTL_MS ? cached.entries : null
+}
+
+/** Full-table Xtream EPG (`get_simple_date_table`, falling back to the `get_simple_data_table` spelling), windowed and cached per playlist+channel. */
+async function fetchXtreamFullEpg(channel) {
+  const cacheKey = `${activePlaylistId}:${channel.id}`
+  const cached = xtreamFullEpgCache.get(cacheKey)
+  if (cached && Date.now() - cached.at < XTREAM_FULL_EPG_CACHE_TTL_MS) return cached.entries
+  try {
+    const listings =
+      (await fetchXtreamFullEpgAction("get_simple_date_table", channel.id)) ||
+      (await fetchXtreamFullEpgAction("get_simple_data_table", channel.id))
+    if (!listings) return null
+    const normalized = normalizeXtreamFullEpgListings(listings)
+    const now = Date.now()
+    const windowStartMs = now - catchupWindowDays(channel) * 24 * 60 * 60 * 1000
+    const windowEndMs = now + 36 * 60 * 60 * 1000
+    const windowed = normalized.filter(
+      (entry) => entry.startUtcMs >= windowStartMs && entry.startUtcMs <= windowEndMs
+    )
+    for (const [existingKey, existingEntry] of xtreamFullEpgCache) {
+      if (now - existingEntry.at >= XTREAM_FULL_EPG_CACHE_TTL_MS) xtreamFullEpgCache.delete(existingKey)
+    }
+    xtreamFullEpgCache.set(cacheKey, { at: now, entries: windowed })
+    return windowed
+  } catch (err) {
+    log.warn("[xt:livetv] fetchXtreamFullEpg failed:", err)
+    return null
+  }
+}
+
+/** Maps cached full-table listings to the {start, stop, title, desc, hasArchive} shape renderEpgSidePanelRows expects. */
+function xtreamListingsToProgrammes(listings) {
+  return listings.map((listing) => ({
+    start: listing.startUtcMs,
+    stop: listing.stopUtcMs,
+    title: listing.title,
+    desc: listing.description,
+    hasArchive: listing.hasArchive,
+  }))
+}
+
+function renderXtreamEpgEntries(channel, programmes, isNewChannelPaint) {
+  const { past, upcoming } = computeEpgSidePanelWindow(programmes, epgSidePanelPastPages, true)
+  const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
+  const canLoadEarlier = epgSidePanelPastPages < maxPastPages
+  renderEpgSidePanelRows(past, upcoming, { isM3uSource: false, canLoadEarlier, isNewChannelPaint })
+}
+
+/** Xtream variant of paintSidePanelFromXmltv: fetches the full EPG table for catch-up-capable channels; falls back to loadEPG's short list when the table is unavailable. */
+async function paintSidePanelFromXtreamEpg(streamId, channel) {
+  if (!epgList) return
+  const isNewChannelPaint = streamId !== epgListChannelId
+  if (isNewChannelPaint) epgSidePanelPastPages = 1
+  epgListChannelId = streamId
+  epgListChannelName = channel.name || ""
+  epgListData = []
+  // Remount repaints (seek, auto-advance) hit the cache; blanking to a placeholder there just flashes the panel.
+  if (!peekXtreamFullEpgCache(channel)) {
+    epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.loading"))}</div>`
+    if (epgDayIndicator) epgDayIndicator.textContent = ""
+  }
+
+  const listings = await fetchXtreamFullEpg(channel)
+  // A different channel has since taken over the panel while the fetch was in flight.
+  if (epgListChannelId !== streamId) return
+  if (!listings || !listings.length) {
+    loadEPG(streamId)
+    return
+  }
+  renderXtreamEpgEntries(channel, xtreamListingsToProgrammes(listings), isNewChannelPaint)
+}
+
+/** Side-panel EPG router: XMLTV for M3U channels, full table for catch-up-capable Xtream channels, short EPG otherwise. */
+function paintEpgSidePanel(streamId) {
+  if (hasDirectUrl(streamId)) {
+    paintSidePanelFromXmltv(streamId)
+    return
+  }
+  const channel = all.find((entry) => entry.id === streamId)
+  if (channel && channelSupportsCatchup(channel)) {
+    void paintSidePanelFromXtreamEpg(streamId, channel)
+    return
+  }
+  loadEPG(streamId)
+}
+
+/** Loads one more day of past programmes into the side panel, re-rendering while preserving scroll position. */
+function extendSidePanelPastWindow() {
+  if (epgSidePanelExtending) return
+  const streamId = epgListChannelId
+  const channel = all.find((entry) => entry.id === streamId)
+  if (!channel || !channelSupportsCatchup(channel)) return
+  const maxPastPages = Math.min(catchupWindowDays(channel), EPG_SIDE_PANEL_MAX_PAST_DAYS)
+  if (epgSidePanelPastPages >= maxPastPages) return
+
+  const isM3uPanel = hasDirectUrl(streamId)
+  const cachedXtreamEntries = isM3uPanel ? null : peekXtreamFullEpgCache(channel)
+  // No fresh cache to extend from: refetch instead of consuming a page on a no-op.
+  if (!isM3uPanel && !cachedXtreamEntries) {
+    void paintSidePanelFromXtreamEpg(streamId, channel)
+    return
+  }
+
+  epgSidePanelExtending = true
+  const focusWasInList = !!epgList && epgList.contains(document.activeElement)
+  epgSidePanelPastPages = Math.min(epgSidePanelPastPages + 1, maxPastPages)
+  const previousScrollHeight = epgPanel?.scrollHeight ?? 0
+  const previousScrollTop = epgPanel?.scrollTop ?? 0
+  if (isM3uPanel) {
+    paintSidePanelFromXmltv(streamId)
+  } else {
+    renderXtreamEpgEntries(channel, xtreamListingsToProgrammes(cachedXtreamEntries), false)
+  }
+  if (epgPanel) epgPanel.scrollTop = previousScrollTop + (epgPanel.scrollHeight - previousScrollHeight)
+  if (focusWasInList) {
+    const nextFocusTarget = epgList?.querySelector("[data-epg-load-earlier]") ?? epgList?.querySelector("[data-epg-idx]")
+    if (nextFocusTarget instanceof HTMLElement) nextFocusTarget.focus({ preventScroll: true })
+  }
+  epgSidePanelExtending = false
 }
 
 epgList?.addEventListener("click", async (e) => {
   const target = /** @type {HTMLElement | null} */ (e.target)
+  if (target?.closest("[data-epg-load-earlier]")) {
+    extendSidePanelPastWindow()
+    return
+  }
   const btn = target?.closest("[data-epg-idx]")
   if (!btn) return
   const idx = Number(/** @type {HTMLElement} */ (btn).dataset.epgIdx)
   const entry = epgListData[idx]
   if (!entry) return
+
+  const channel = all.find((candidate) => candidate.id === epgListChannelId)
+  const now = Date.now()
+  const isLive = entry.start <= now && now < entry.stop
+  const isEnded = entry.stop <= now
+  // XMLTV panel entries carry display-shifted times; short-EPG and full-table entries are already UTC.
+  const isM3uSource = hasDirectUrl(epgListChannelId)
+  const startUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.start) : entry.start
+  const stopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.stop) : entry.stop
+  // has_archive narrows catch-up eligibility when sent; it never widens past the channel-level window check.
+  const archiveKnownPlayable = entry.hasArchive == null ? true : entry.hasArchive
+
+  let onCatchup
+  let onWatchFromStart
+  if (channel && channelSupportsCatchup(channel)) {
+    if (isEnded && archiveKnownPlayable && isCatchupPlayable(channel, startUtcMs, now)) {
+      onCatchup = () => {
+        void playCatchup(channel, { startUtcMs, stopUtcMs, title: entry.title, catchupId: entry.catchupId })
+      }
+    }
+    // has_archive is 0 while a programme is still airing, so it must not gate "Watch from start".
+    if (isLive && isCatchupPlayable(channel, startUtcMs, now)) {
+      onWatchFromStart = () => {
+        void playCatchup(channel, { startUtcMs, stopUtcMs, title: entry.title, seekSeconds: 0, catchupId: entry.catchupId })
+      }
+    }
+  }
+
   const { openProgrammeDialog } = await import("@/scripts/lib/programme-dialog.js")
   openProgrammeDialog({
     title: entry.title,
@@ -2526,6 +3953,8 @@ epgList?.addEventListener("click", async (e) => {
         play(epgListChannelId, epgListChannelName)
       }
     },
+    onCatchup,
+    onWatchFromStart,
   })
 })
 

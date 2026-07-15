@@ -124,6 +124,42 @@ html.xt-theme-switching::view-transition-new(root) {
     --text-eyebrow--letter-spacing:   0.22em;
 }
 
+/* Accent presets */
+:root {
+    --accent-swatch-fuchsia: light-dark(oklch(0.50 0.20 330), oklch(0.78 0.15 330));
+    --accent-swatch-rose:    light-dark(oklch(0.50 0.20 20 ), oklch(0.78 0.15 20 ));
+    --accent-swatch-ember:   light-dark(oklch(0.50 0.20 55 ), oklch(0.78 0.15 55 ));
+    --accent-swatch-emerald: light-dark(oklch(0.50 0.20 160), oklch(0.78 0.15 160));
+    --accent-swatch-cyan:    light-dark(oklch(0.50 0.20 210), oklch(0.78 0.15 210));
+    --accent-swatch-blue:    light-dark(oklch(0.50 0.20 250), oklch(0.78 0.15 250));
+    --accent-swatch-violet:  light-dark(oklch(0.50 0.20 295), oklch(0.78 0.15 295));
+}
+
+:root[data-accent="rose"] {
+    --color-accent:      var(--accent-swatch-rose);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 20 / 0.12), oklch(0.78 0.15 20 / 0.18));
+}
+:root[data-accent="ember"] {
+    --color-accent:      var(--accent-swatch-ember);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 55 / 0.12), oklch(0.78 0.15 55 / 0.18));
+}
+:root[data-accent="emerald"] {
+    --color-accent:      var(--accent-swatch-emerald);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 160 / 0.12), oklch(0.78 0.15 160 / 0.18));
+}
+:root[data-accent="cyan"] {
+    --color-accent:      var(--accent-swatch-cyan);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 210 / 0.12), oklch(0.78 0.15 210 / 0.18));
+}
+:root[data-accent="blue"] {
+    --color-accent:      var(--accent-swatch-blue);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 250 / 0.12), oklch(0.78 0.15 250 / 0.18));
+}
+:root[data-accent="violet"] {
+    --color-accent:      var(--accent-swatch-violet);
+    --color-accent-soft: light-dark(oklch(0.50 0.20 295 / 0.12), oklch(0.78 0.15 295 / 0.18));
+}
+
 :root,
 html {
     height: 100%;
@@ -209,6 +245,13 @@ input[type="search"]::-webkit-search-decoration {
 }
 
 /* ────────────────────────────── */
+/* Mouse drag-to-scroll (drag-scroll.ts) */
+/* ────────────────────────────── */
+[data-drag-scrolling="true"] {
+    cursor: grabbing;
+}
+
+/* ────────────────────────────── */
 /* Video.js overrides             */
 /* ────────────────────────────── */
 .video-js {
@@ -238,6 +281,18 @@ input[type="search"]::-webkit-search-decoration {
 .video-js .vjs-menu li.vjs-selected {
     background: color-mix(in oklch, var(--color-accent) 80%, transparent);
     color: var(--color-bg);
+}
+
+.shaka-video-container {
+    --shaka-font-family: var(--font-sans);
+    /* Only enlarges the invisible touch hit-area on sliders, not the visible track, to hit the 44px minimum. */
+    --shaka-touch-size: 44px;
+}
+
+.shaka-video-container button:focus-visible,
+.shaka-video-container input:focus-visible {
+    outline: none !important;
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent) 40%, transparent) !important;
 }
 
 dialog[open] {
@@ -342,6 +397,9 @@ dialog[open] .xt-wn-section {
     }
     .status-badge--live {
         @apply bg-accent text-bg relative;
+    }
+    .status-badge--catchup {
+        @apply h-6 w-auto px-2 gap-1 bg-accent-soft text-accent ring-accent/30;
     }
     .status-badge--live::after {
         content: "";
@@ -837,14 +895,14 @@ summary.list-none::-webkit-details-marker {
     font-size: 0.8125rem;
     font-weight: 600;
     letter-spacing: 0.005em;
-    border: 1px solid color-mix(in oklch, var(--color-accent) 88%, var(--color-bg));
+    border: 1px solid color-mix(in oklab, var(--color-accent) 88%, var(--color-bg));
     box-shadow: 0 1px 0 color-mix(in oklch, var(--color-fg) 6%, transparent);
     transition: transform 120ms ease-out-expo, background-color 160ms ease, box-shadow 160ms ease;
     cursor: pointer;
 }
 .provider-error__retry:hover,
 .provider-error__retry:focus-visible {
-    background: color-mix(in oklch, var(--color-accent) 92%, var(--color-fg));
+    background: color-mix(in oklab, var(--color-accent) 92%, var(--color-fg));
 }
 .provider-error__retry:active {
     transform: scale(0.97);
@@ -892,7 +950,7 @@ summary.list-none::-webkit-details-marker {
 
 .provider-error--retrying .provider-error__art {
     box-shadow:
-        inset 0 0 0 1px color-mix(in oklch, var(--color-accent) 65%, var(--color-line)),
+        inset 0 0 0 1px color-mix(in oklab, var(--color-accent) 65%, var(--color-line)),
         0 0 0 6px var(--color-surface),
         0 0 0 7px color-mix(in oklch, var(--color-accent) 30%, transparent);
 }
@@ -1472,6 +1530,34 @@ summary.list-none::-webkit-details-marker {
     }
 }
 
+/* ────────────────────────────── */
+/* EPG catch-up cells             */
+/* ────────────────────────────── */
+.epg-cell-past {
+    opacity: 0.55;
+}
+.epg-cell-past:hover,
+.epg-cell-past:focus-visible {
+    opacity: 0.85;
+}
+.epg-cell-replay {
+    opacity: 0.85;
+}
+.epg-cell-replay:hover,
+.epg-cell-replay:focus-visible {
+    opacity: 1;
+}
+.epg-cell-replay-dot {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-inline-end: 5px;
+    margin-bottom: 1px;
+    border-radius: 9999px;
+    background: var(--color-accent);
+    vertical-align: middle;
+}
+
 @media (prefers-reduced-motion: reduce) {
     .dl-bar-active::after,
     .dl-bar-indeterminate::after,
@@ -1513,6 +1599,13 @@ summary.list-none::-webkit-details-marker {
     from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: translateY(0); }
 }
+.dt-child-enter {
+    animation: dt-enter-up 460ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+    .dt-child-enter { animation: none !important; }
+}
+html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
 
 .dt-play-breath {
     position: relative;
@@ -1548,7 +1641,7 @@ summary.list-none::-webkit-details-marker {
     z-index: 1;
     background:
         linear-gradient(90deg, color-mix(in oklch, var(--color-accent) 35%, transparent) 0, transparent 5%),
-        linear-gradient(270deg, color-mix(in oklch, oklch(0.78 0.17 230) 25%, transparent) 0, transparent 5%);
+        linear-gradient(270deg, color-mix(in oklch, var(--color-fg-3) 25%, transparent) 0, transparent 5%);
     mix-blend-mode: screen;
     opacity: 0.45;
 }
@@ -1840,6 +1933,14 @@ summary.list-none::-webkit-details-marker {
     }
 }
 
+.xt-update-blink {
+    animation: xt-update-blink 1.5s ease-in-out infinite;
+}
+@keyframes xt-update-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
 /* ────────────────────────────── */
 /* Settings page rhythm           */
 /* ────────────────────────────── */
@@ -1930,13 +2031,16 @@ summary.list-none::-webkit-details-marker {
     will-change: transform, width, height;
     transition: opacity 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-[data-pill-group="ready"] .btn[aria-pressed="true"] {
+[data-pill-group="ready"] .btn[aria-pressed="true"],
+[data-pill-group="ready"] .btn[aria-checked="true"] {
     background: transparent;
     border-color: transparent;
     color: var(--color-accent);
 }
 [data-pill-group="ready"] .btn[aria-pressed="true"]:hover,
-[data-pill-group="ready"] .btn[aria-pressed="true"]:focus-visible {
+[data-pill-group="ready"] .btn[aria-pressed="true"]:focus-visible,
+[data-pill-group="ready"] .btn[aria-checked="true"]:hover,
+[data-pill-group="ready"] .btn[aria-checked="true"]:focus-visible {
     background: transparent;
     border-color: transparent;
 }
@@ -2074,29 +2178,39 @@ summary.list-none::-webkit-details-marker {
 .tuning-overlay {
     position: absolute;
     inset: 0;
-    margin: auto;
-    width: clamp(5rem, 18%, 10rem);
-    height: clamp(5rem, 18%, 10rem);
+    display: grid;
+    place-items: center;
+    z-index: 30;
+    pointer-events: none;
+}
+/* Plate shrink-wraps the logo so it takes the logo's aspect (wide, tall, or square) and never clips, capped so it stays a badge. */
+.tuning-overlay__plate {
+    display: grid;
+    place-items: center;
+    padding: clamp(0.75rem, 2.4%, 1.25rem);
+    min-width: 5rem;
+    min-height: 4.5rem;
+    max-width: min(62%, 22rem);
+    max-height: min(55%, 12rem);
     border-radius: 1.25rem;
     background: var(--color-surface-2);
     box-shadow:
         0 0 0 1px color-mix(in oklch, var(--color-accent) 50%, transparent),
-        0 24px 48px -16px color-mix(in oklch, var(--color-accent) 60%, transparent),
+        0 0 48px -8px color-mix(in oklch, var(--color-accent) 60%, transparent),
         0 8px 24px -8px rgb(0 0 0 / 0.5);
-    display: grid;
-    place-items: center;
     overflow: hidden;
-    z-index: 30;
-    pointer-events: none;
     animation: tuning-overlay-pulse 880ms cubic-bezier(0.16, 1, 0.3, 1);
     will-change: transform, opacity;
 }
-.tuning-overlay img {
-    width: 76%;
-    height: 76%;
+.tuning-overlay__plate img {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
     object-fit: contain;
 }
-.tuning-overlay--leaving {
+.tuning-overlay--leaving .tuning-overlay__plate {
     animation: tuning-overlay-leave 360ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 @keyframes tuning-overlay-pulse {
@@ -2212,11 +2326,79 @@ summary.list-none::-webkit-details-marker {
     }
 }
 
+.timeshift-chip {
+    position: absolute;
+    top: 0.75rem;
+    left: 0.75rem;
+    z-index: 34;
+    padding: 0.35rem 0.7rem;
+    border-radius: 0.75rem;
+    background: color-mix(in oklch, var(--color-bg) 70%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-line) 90%, transparent);
+    color: var(--color-fg-3);
+    font-size: 0.7rem;
+    line-height: 1.35;
+    letter-spacing: 0.01em;
+    backdrop-filter: blur(12px);
+    pointer-events: none;
+    animation: timeshift-chip-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.timeshift-chip.is-hidden {
+    opacity: 0;
+}
+.timeshift-chip-line:first-child {
+    color: var(--color-fg);
+}
+[data-perf-mode="on"] .timeshift-chip {
+    animation: none;
+}
 @media (prefers-reduced-motion: reduce) {
-    .tuning-overlay,
-    .tuning-overlay--leaving {
+    .timeshift-chip {
         animation: none;
+    }
+}
+@keyframes timeshift-chip-in {
+    from { transform: translateY(-8px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ────────────────────────────── */
+/* Full-programme timeshift seekbar (live-edge marker) */
+/* ────────────────────────────── */
+.player-wrap[data-timeshift-full-span] .vjs-progress-holder::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--xt-live-edge, 1) * 100%);
+    right: 0;
+    /* Cinematic surface: dim with black, not --color-bg, or light mode paints a bright "future" region. */
+    background: rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+    z-index: 1;
+}
+.player-wrap[data-timeshift-full-span] .vjs-progress-holder::before {
+    content: "";
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    left: calc(var(--xt-live-edge, 1) * 100%);
+    width: 2px;
+    /* Physical offset to match the physical `left`; video.js seekbars stay LTR under RTL locales. */
+    margin-left: -1px;
+    border-radius: 1px;
+    background: var(--color-accent);
+    pointer-events: none;
+    z-index: 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tuning-overlay {
         opacity: 0;
+    }
+    .tuning-overlay__plate {
+        animation: none;
     }
     .scan-line-sweep::before,
     .scan-line-sweep::after {
@@ -2236,7 +2418,7 @@ summary.list-none::-webkit-details-marker {
     box-shadow:
         0 0 0 2px var(--color-accent),
         0 0 0 6px color-mix(in oklch, var(--color-accent) 22%, transparent),
-        0 16px 36px -18px color-mix(in oklch, var(--color-accent) 70%, transparent);
+        0 0 36px -18px color-mix(in oklch, var(--color-accent) 70%, transparent);
     border-radius: 12px;
     opacity: 0;
     transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);

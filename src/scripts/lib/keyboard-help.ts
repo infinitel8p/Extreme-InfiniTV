@@ -31,6 +31,7 @@ function buildSections(): ShortcutSection[] {
         { keys: ["Enter"], desc: t("keyboardHelp.desc.commitNumber") },
         { keys: ["["], desc: t("keyboardHelp.desc.previousChannel") },
         { keys: ["]"], desc: t("keyboardHelp.desc.nextChannel") },
+        { keys: ["\\"], desc: t("keyboardHelp.desc.lastChannel") },
         { keys: ["↑", "↓"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.moveRow") },
         { keys: ["PgUp", "PgDn"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.movePage") },
         { keys: ["Home", "End"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.firstLast") },

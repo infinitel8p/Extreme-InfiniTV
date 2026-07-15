@@ -22,6 +22,10 @@ import {
   markCompleted,
   isCompleted,
   clearProgress,
+  getVideoScaleOverride,
+  setVideoScaleOverride,
+  clearAllVideoScaleOverrides,
+  CHANNEL_VIDEO_SCALE_CHANGED_EVENT,
 } from "@/scripts/lib/preferences.js"
 import { openExternal } from "@/scripts/lib/external-link.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
@@ -50,14 +54,21 @@ import {
   androidNativePlayerAvailable,
   launchAndroidNativeVodWithProgress,
 } from "@/scripts/lib/android-video-launcher.js"
-import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
+import {
+  getAndroidNativePlayerEnabled,
+  getPlayerBackend,
+  getVideoScale,
+  setVideoScale,
+  VIDEO_SCALE_EVENT,
+} from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
 import { mountPlayer, getExternalLauncher } from "@/scripts/lib/player-runtime.ts"
-import { getPlayerBackend } from "@/scripts/lib/app-settings.js"
-import { toast } from "@/scripts/lib/toast.js"
+import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
+import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
+import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -94,6 +105,8 @@ let series = null
 let episodesByKey = null
 let currentSeason = ""
 let currentPlayingEpisodeId = null
+let tabsStaggered = false
+let episodesStaggered = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
@@ -190,7 +203,7 @@ function renderSeasonTabs(seasonKeys) {
     return
   }
   seasonTabs.style.display = ""
-  for (const key of seasonKeys) {
+  for (const [tabIndex, key] of seasonKeys.entries()) {
     const btn = document.createElement("button")
     btn.type = "button"
     btn.dataset.season = key
@@ -199,6 +212,10 @@ function renderSeasonTabs(seasonKeys) {
       (key === currentSeason
         ? "border-accent bg-accent-soft text-fg"
         : "border-line text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg")
+    if (!tabsStaggered) {
+      btn.classList.add("dt-child-enter")
+      btn.style.animationDelay = `${340 + tabIndex * 50}ms`
+    }
     btn.textContent = t("series.season", { n: key })
     btn.addEventListener("click", () => {
       if (currentSeason === key) return
@@ -210,6 +227,7 @@ function renderSeasonTabs(seasonKeys) {
     })
     seasonTabs.appendChild(btn)
   }
+  if (seasonKeys.length) tabsStaggered = true
 }
 
 function slotMachineEpisodes(direction) {
@@ -251,12 +269,16 @@ function renderEpisodes() {
     episodeList.appendChild(empty)
     return
   }
-  for (const ep of eps) {
+  for (const [rowIndex, ep] of eps.entries()) {
     const row = document.createElement("div")
     row.className =
       "episode-row flex items-center gap-3 p-3 rounded-xl bg-surface-2/40 " +
       "transition-colors hover:bg-surface-2 focus-within:bg-surface-2"
     row.dataset.epId = String(ep.id)
+    if (!episodesStaggered) {
+      row.classList.add("dt-child-enter")
+      row.style.animationDelay = `${400 + Math.min(rowIndex, 9) * 40}ms`
+    }
     if (currentPlayingEpisodeId != null && Number(ep.id) === currentPlayingEpisodeId) {
       row.dataset.nowPlaying = "true"
     }
@@ -416,6 +438,7 @@ function renderEpisodes() {
 
     episodeList.appendChild(row)
   }
+  if (eps.length) episodesStaggered = true
   try { window.SpatialNavigation?.makeFocusable?.() } catch {}
 }
 
@@ -611,6 +634,7 @@ let vjs = null
 let progressListenersBound = false
 let currentEpisode = null
 let pipBtnBound = false
+let scaleBtnBound = false
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
@@ -626,6 +650,64 @@ function setupPipButton(player) {
   if (pipBtnBound) return
   pipBtnBound = true
   pipBtn.addEventListener("click", () => togglePip(player))
+}
+
+// One display-mode override per series (not per episode) - same mounted
+// player and container across episode changes.
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+
+function resolveVideoScaleMode() {
+  if (activePlaylistId && series) {
+    const override = getVideoScaleOverride(activePlaylistId, "series", series.id)
+    if (override) return override
+  }
+  return getVideoScale()
+}
+
+function applyVideoScale() {
+  videoScaleController.apply(resolveVideoScaleMode())
+}
+
+document.addEventListener(VIDEO_SCALE_EVENT, () => {
+  if (series) applyVideoScale()
+})
+
+document.addEventListener(CHANNEL_VIDEO_SCALE_CHANGED_EVENT, (e) => {
+  const detail = e.detail
+  if (!detail || detail.playlistId !== activePlaylistId || detail.kind !== "series") return
+  if (!series) return
+  if (detail.itemId === null || detail.itemId === series.id) applyVideoScale()
+})
+
+function setupScaleButton() {
+  const scaleBtn = document.getElementById("series-detail-scale")
+  if (!scaleBtn) return
+  scaleBtn.removeAttribute("hidden")
+  if (scaleBtnBound) return
+  scaleBtnBound = true
+  scaleBtn.addEventListener("click", () => openDisplayModeDialog())
+}
+
+async function openDisplayModeDialog() {
+  if (!series) return
+  const currentMode = resolveVideoScaleMode()
+  const result = await openVideoScaleDialog({
+    currentMode,
+    applyAllLabelKey: "stream.scale.applyAllDefault",
+    onPreview: (mode) => videoScaleController.apply(mode),
+  })
+  applyVideoScale()
+  if (!result) return
+  if (result.applyToAll) {
+    if (activePlaylistId) clearAllVideoScaleOverrides(activePlaylistId, "series")
+    setVideoScale(result.mode)
+    toast({
+      title: t("stream.scale.toastDefault", { mode: t(videoScaleModeLabelKey(result.mode)) }),
+      duration: 2200,
+    })
+  } else if (activePlaylistId) {
+    setVideoScaleOverride(activePlaylistId, "series", series.id, result.mode)
+  }
 }
 
 function progressExtrasFor(ep) {
@@ -762,9 +844,19 @@ async function playEpisode(episode) {
   const videoEl = document.getElementById("series-player")
   videoEl?.removeAttribute("hidden")
 
-  const player = await ensureEmbeddedPlayer(backend)
+  let player
+  try {
+    player = await ensureEmbeddedPlayer(backend)
+  } catch (err) {
+    log.error("[xt:series-detail] failed to mount player:", err)
+    toastError("Couldn't start playback.")
+    if (posterEl) posterEl.classList.remove("hidden")
+    if (playerWrap) playerWrap.classList.add("hidden")
+    return
+  }
   if (!player) return
   setupPipButton(player)
+  setupScaleButton()
   const mime = chooseMime(src)
   player.one("error", () => {
     const e = player.error()
@@ -784,6 +876,7 @@ async function playEpisode(episode) {
   }
 
   player.src({ src: playSrc, type: mime })
+  applyVideoScale()
 
   if (!progressListenersBound) {
     progressListenersBound = true
@@ -1147,7 +1240,10 @@ async function boot() {
 
   // A playlist switch re-boots: dispose any player from the previous playlist
   // and clear episode/season/up-next state so nothing leaks across.
-  try { vjs?.pause?.(); vjs?.dispose?.() } catch {}
+  try {
+    vjs?.pause?.()
+    await vjs?.dispose?.()
+  } catch {}
   vjs = null
   progressListenersBound = false
   currentEpisode = null

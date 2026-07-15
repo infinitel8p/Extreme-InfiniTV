@@ -6,6 +6,7 @@ import {
   IconBrandYoutube,
   IconPictureInPicture,
   IconExternalLink,
+  IconAspectRatio,
 } from "@tabler/icons-svelte"
 ---
 
@@ -93,6 +94,16 @@ import {
             <span data-i18n="detail.action.pip">Picture-in-Picture</span>
           </button>
           <button
+            id="series-detail-scale"
+            type="button"
+            hidden
+            aria-label="Display mode"
+            data-i18n-attr="aria-label:stream.scale.button"
+            class="btn">
+            <IconAspectRatio aria-hidden="true" stroke={2} class="btn-icon" />
+            <span data-i18n="stream.scale.button">Display mode</span>
+          </button>
+          <button
             id="series-detail-open-external"
             type="button"
             hidden
@@ -120,7 +131,7 @@ import {
         <!-- Season tabs -->
         <div
           id="series-season-tabs"
-          class="dt-enter dt-stagger-4 flex flex-wrap gap-2 border-b border-line pb-3"
+          class="flex flex-wrap gap-2 border-b border-line pb-3"
           role="tablist">
         </div>
 
@@ -132,18 +143,10 @@ import {
 
       </div>
     </div>
-
-    <div
-      id="app-version"
-      class="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] right-[max(0.75rem,env(safe-area-inset-right))] text-2xs text-fg-3 opacity-70 tabular-nums pointer-events-none">
-      Loading…
-    </div>
   </main>
 
   <script>
     import "@/scripts/series/detail.ts"
     import "@/scripts/updater-startup.js"
-    import { injectVersion } from "@/scripts/version.js"
-    injectVersion()
   </script>
 </Layout>

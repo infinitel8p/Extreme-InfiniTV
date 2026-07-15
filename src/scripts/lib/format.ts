@@ -42,6 +42,18 @@ export function fmtBytes(n: number | null | undefined): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+export function formatBehindLive(behindMs: number): string {
+  const totalSeconds = Math.floor(Math.max(0, behindMs) / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  const paddedSeconds = String(seconds).padStart(2, "0")
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${paddedSeconds}`
+  }
+  return `${minutes}:${paddedSeconds}`
+}
+
 export function fmtImdbRating(raw: unknown): string {
   if (raw == null || raw === "") return ""
   const value = parseFloat(String(raw).trim())

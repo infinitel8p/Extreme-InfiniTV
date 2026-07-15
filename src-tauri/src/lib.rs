@@ -10,36 +10,100 @@ mod hevc_extension;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod tray;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod updater;
+
+// The Stdout target also covers Android release builds; tauri-plugin-log routes it to logcat there, not just the debug-only terminal.
+#[cfg(not(target_os = "ios"))]
+fn build_log_plugin() -> tauri_plugin_log::Builder {
+    let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let mut log_builder = tauri_plugin_log::Builder::new()
+        .level(log::LevelFilter::Info)
+        .max_file_size(50_000_000)
+        .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+        .target(tauri_plugin_log::Target::new(
+            tauri_plugin_log::TargetKind::LogDir {
+                file_name: Some(format!("app-{day}")),
+            },
+        ));
+    if cfg!(debug_assertions) || cfg!(target_os = "android") {
+        log_builder = log_builder.target(tauri_plugin_log::Target::new(
+            tauri_plugin_log::TargetKind::Stdout,
+        ));
+    }
+    log_builder
+}
+
+// KeepSome only prunes the active day-stamped file's prefix, never prior days, and Android lacks desktop's manual "Open log folder" cleanup.
 #[cfg(target_os = "android")]
-mod android_diagnostics {
-    use std::sync::Once;
+const LOG_RETENTION_DAYS: u64 = 14;
 
-    static LOGGER_INIT: Once = Once::new();
+#[cfg(target_os = "android")]
+fn prune_old_android_logs(app: &tauri::App) {
+    use tauri::Manager;
 
-    pub fn install() {
-        LOGGER_INIT.call_once(|| {
-            android_logger::init_once(
-                android_logger::Config::default()
-                    .with_max_level(log::LevelFilter::Warn)
-                    .with_tag("xtream-rs"),
-            );
-        });
+    let log_dir = match app.path().app_log_dir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            log::warn!("[log-prune] app_log_dir unavailable: {error}");
+            return;
+        }
+    };
+    let entries = match std::fs::read_dir(&log_dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            log::warn!("[log-prune] read_dir failed for {}: {error}", log_dir.display());
+            return;
+        }
+    };
+    let Some(cutoff) = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(LOG_RETENTION_DAYS * 24 * 60 * 60))
+    else {
+        return;
+    };
 
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let location = info
-                .location()
-                .map(|loc| format!(" at {}:{}:{}", loc.file(), loc.line(), loc.column()))
-                .unwrap_or_default();
-            log::error!("rust panic{}: {}", location, info);
-            prev(info);
-        }));
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let is_app_log = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("app-") && name.ends_with(".log"));
+        if !is_app_log {
+            continue;
+        }
+        let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
+            Ok(modified) => modified,
+            Err(error) => {
+                log::warn!("[log-prune] metadata failed for {}: {error}", path.display());
+                continue;
+            }
+        };
+        if modified < cutoff {
+            if let Err(error) = std::fs::remove_file(&path) {
+                log::warn!("[log-prune] remove_file failed for {}: {error}", path.display());
+            }
+        }
     }
+}
 
-    #[ctor::ctor]
-    fn install_at_library_load() {
-        install();
-    }
+fn install_panic_hook() {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let payload = panic_info.payload();
+        let message = if let Some(text) = payload.downcast_ref::<&str>() {
+            text.to_string()
+        } else if let Some(text) = payload.downcast_ref::<String>() {
+            text.clone()
+        } else {
+            "non-string panic payload".to_string()
+        };
+        let location = panic_info
+            .location()
+            .map(|loc| format!("{}:{}", loc.file(), loc.line()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        log::error!("[panic] {message} at {location}");
+        previous_hook(panic_info);
+    }));
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -53,55 +117,44 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init());
 
+    #[cfg(not(target_os = "ios"))]
+    let builder = builder.plugin(build_log_plugin().build());
+
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let builder = {
-        // One file per day (named by local date) so logs stay small and users
-        // can attach or delete a specific day's file.
-        let day = chrono::Local::now().format("%Y-%m-%d").to_string();
-        let mut log_builder = tauri_plugin_log::Builder::new()
-            .level(log::LevelFilter::Info)
-            .max_file_size(50_000_000)
-            .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
-            .target(tauri_plugin_log::Target::new(
-                tauri_plugin_log::TargetKind::LogDir {
-                    file_name: Some(format!("app-{day}")),
-                },
-            ));
-        if cfg!(debug_assertions) {
-            log_builder = log_builder.target(tauri_plugin_log::Target::new(
-                tauri_plugin_log::TargetKind::Stdout,
-            ));
-        }
-        builder
-            .plugin(log_builder.build())
-            .plugin(
-                tauri_plugin_window_state::Builder::default()
-                    .with_state_flags(
-                        tauri_plugin_window_state::StateFlags::all()
-                            - tauri_plugin_window_state::StateFlags::VISIBLE,
-                    )
-                    .build(),
-            )
-            .plugin(tauri_plugin_updater::Builder::new().build())
-            .plugin(tauri_plugin_process::init())
-            .manage(discord::RpcState::default())
-            .manage(external_player::ExternalPlayerState::default())
-            .invoke_handler(tauri::generate_handler![
-                discord::discord_set_activity,
-                discord::discord_clear,
-                discord::discord_disconnect,
-                external_player::launch_external_player,
-                hevc_extension::install_appx_package,
-                hevc_extension::is_store_build,
-                tray::set_close_to_tray,
-            ])
-    };
+    let builder = builder
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        - tauri_plugin_window_state::StateFlags::VISIBLE,
+                )
+                .build(),
+        )
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .manage(discord::RpcState::default())
+        .manage(external_player::ExternalPlayerState::default())
+        .manage(updater::PendingUpdateState::default())
+        .invoke_handler(tauri::generate_handler![
+            discord::discord_set_activity,
+            discord::discord_clear,
+            discord::discord_disconnect,
+            external_player::launch_external_player,
+            hevc_extension::install_appx_package,
+            hevc_extension::is_store_build,
+            tray::set_close_to_tray,
+            updater::updater_check_from,
+            updater::updater_install,
+        ]);
 
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_android_fs::init());
 
     builder
         .setup(|_app| {
+            install_panic_hook();
+            #[cfg(target_os = "android")]
+            prune_old_android_logs(_app);
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             external_player::sweep_orphan_mpv_sockets();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]

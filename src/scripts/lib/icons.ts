@@ -57,3 +57,13 @@ export const ICON_EXTERNAL_LINK = wrap(
     '<path d="M11 13l9 -9" />' +
     '<path d="M15 4h5v5" />'
 )
+
+export const ICON_ASPECT_RATIO = wrap(
+  '<path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10" />' +
+    '<path d="M7 12v-3h3" />' +
+    '<path d="M17 12v3h-3" />'
+)
+
+export const ICON_ARROW_UP = wrap(
+  '<path d="M12 5l0 14" />' + '<path d="M18 11l-6 -6" />' + '<path d="M6 11l6 -6" />'
+)

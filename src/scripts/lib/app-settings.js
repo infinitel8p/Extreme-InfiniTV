@@ -1,9 +1,11 @@
 import { log } from "@/scripts/lib/log.js"
+import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
 const KEY_DOWNLOAD_CONCURRENCY = "xt_download_concurrency"
 const KEY_PERF_MODE = "xt_perf_mode"
+const KEY_ACCENT = "xt_accent"
 const KEY_PROGRESS_RETENTION = "xt_progress_retention_days"
 const KEY_NETWORK_TIMEOUT_S = "xt_network_timeout_s"
 const KEY_PLAYER_BACKEND = "xt_player_backend"
@@ -13,14 +15,19 @@ const KEY_PLAYER_ARGS_MPV = "xt_player_args_mpv"
 const KEY_PLAYER_ARGS_VLC = "xt_player_args_vlc"
 const KEY_PLAYER_REUSE_MPV = "xt_player_reuse_mpv"
 const KEY_PLAYER_REUSE_VLC = "xt_player_reuse_vlc"
+const KEY_EXTERNAL_PLAYER_PREF = "xt_external_player_pref"
 const KEY_CLOSE_TO_TRAY = "xt_close_to_tray"
 const KEY_HUB_STRIPS = "xt_hub_strips"
 const KEY_TV_OVERSCAN = "xt_tv_overscan"
 const KEY_ANDROID_NATIVE_PLAYER = "xt_android_native_player"
 const KEY_ANDROID_REMEMBERED_PLAYER = "xt_android_remembered_player"
+const KEY_VIDEO_SCALE = "xt_video_scale"
+const KEY_UPDATE_CHANNEL = "xt_update_channel"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
+export const ACCENT_EVENT = "xt:accent-changed"
+export const ACCENT_PRESETS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"]
 export const PROGRESS_RETENTION_EVENT = "xt:progress-retention-changed"
 export const PLAYER_BACKEND_EVENT = "xt:player-backend-changed"
 export const CLOSE_TO_TRAY_EVENT = "xt:close-to-tray-changed"
@@ -28,6 +35,10 @@ export const HUB_STRIPS_EVENT = "xt:hub-strips-changed"
 export const TV_OVERSCAN_EVENT = "xt:tv-overscan-changed"
 export const ANDROID_NATIVE_PLAYER_EVENT = "xt:android-native-player-changed"
 export const ANDROID_REMEMBERED_PLAYER_EVENT = "xt:android-remembered-player-changed"
+export const VIDEO_SCALE_EVENT = "xt:video-scale-changed"
+export const UPDATE_CHANNEL_EVENT = "xt:update-channel-changed"
+export const UPDATE_CHANNELS = ["stable", "beta"]
+export const DEFAULT_UPDATE_CHANNEL = "stable"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
 export const DEFAULT_TV_OVERSCAN = 0
 
@@ -68,9 +79,10 @@ export const DEFAULT_NETWORK_TIMEOUT_SECONDS = 20
 export const NETWORK_TIMEOUT_EVENT = "xt:network-timeout-changed"
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 1
 export const MAX_DOWNLOAD_CONCURRENCY = 4
-export const PLAYER_BACKENDS = ["artplayer", "videojs", "mpv", "vlc"]
+export const PLAYER_BACKENDS = ["artplayer", "videojs", "shaka", "mpv", "vlc"]
 export const DEFAULT_PLAYER_BACKEND = "artplayer"
 export const EXTERNAL_PLAYER_BACKENDS = ["mpv", "vlc"]
+export const EXTERNAL_PLAYER_PREF_VALUES = ["mpv", "vlc", "ask"]
 export const UA_PRESETS = [
   { id: "default", label: "Default (browser/WebView)", value: "" },
   {
@@ -173,6 +185,24 @@ export function setPerfMode(on) {
     else document.documentElement.removeAttribute("data-perf-mode")
     document.dispatchEvent(
       new CustomEvent(PERF_MODE_EVENT, { detail: { value: !!on } })
+    )
+  }
+}
+
+// Accent color
+export function getAccent() {
+  const stored = readLS(KEY_ACCENT, "")
+  return ACCENT_PRESETS.includes(stored) ? stored : "fuchsia"
+}
+
+export function setAccent(accentId) {
+  const normalized = ACCENT_PRESETS.includes(accentId) ? accentId : "fuchsia"
+  writeLS(KEY_ACCENT, normalized === "fuchsia" ? "" : normalized)
+  if (typeof document !== "undefined") {
+    if (normalized === "fuchsia") document.documentElement.removeAttribute("data-accent")
+    else document.documentElement.setAttribute("data-accent", normalized)
+    document.dispatchEvent(
+      new CustomEvent(ACCENT_EVENT, { detail: { value: normalized } })
     )
   }
 }
@@ -629,5 +659,67 @@ export function setPlayerReuseInstance(kind, on) {
   writeLS(key, on ? "1" : "")
   document.dispatchEvent(
     new CustomEvent(EVT_CHANGED, { detail: { key: `playerReuse:${kind}`, value: !!on } })
+  )
+}
+
+// Which external player the "Open in…" escape hatch prefers when both MPV
+// and VLC are configured. "ask" prompts every time; default "mpv" preserves
+// the historical mpv-first behavior for existing installs.
+export function getExternalPlayerPref() {
+  const raw = readLS(KEY_EXTERNAL_PLAYER_PREF, "")
+  return EXTERNAL_PLAYER_PREF_VALUES.includes(raw) ? raw : "mpv"
+}
+
+export function setExternalPlayerPref(pref) {
+  const next = EXTERNAL_PLAYER_PREF_VALUES.includes(pref) ? pref : "mpv"
+  writeLS(KEY_EXTERNAL_PLAYER_PREF, next === "mpv" ? "" : next)
+  document.dispatchEvent(
+    new CustomEvent(EVT_CHANGED, { detail: { key: "externalPlayerPref" } })
+  )
+}
+
+// Global default display mode (fit/fill/zoom/16:9/4:3) for the embedded
+// player, applied when a channel / movie / series has no per-item override.
+export function getVideoScale() {
+  return normalizeVideoScale(readLS(KEY_VIDEO_SCALE, ""))
+}
+
+export function setVideoScale(mode) {
+  const next = normalizeVideoScale(mode)
+  writeLS(KEY_VIDEO_SCALE, next === "fit" ? "" : next)
+  document.dispatchEvent(
+    new CustomEvent(VIDEO_SCALE_EVENT, { detail: { value: next } })
+  )
+}
+
+// Update channel (desktop only)
+let cachedIsPrereleaseBuild = null
+
+function isPrereleaseBuild() {
+  if (cachedIsPrereleaseBuild !== null) return cachedIsPrereleaseBuild
+  try {
+    const version =
+      typeof document !== "undefined"
+        ? document.querySelector('meta[name="x-app-version"]')?.getAttribute("content")
+        : null
+    cachedIsPrereleaseBuild = typeof version === "string" && version.includes("-")
+  } catch {
+    cachedIsPrereleaseBuild = false
+  }
+  return cachedIsPrereleaseBuild
+}
+
+export function getUpdateChannel() {
+  const raw = readLS(KEY_UPDATE_CHANNEL, "")
+  if (UPDATE_CHANNELS.includes(raw)) return raw
+  // Beta builds default to the beta channel so prerelease testers keep getting prereleases.
+  return isPrereleaseBuild() ? "beta" : DEFAULT_UPDATE_CHANNEL
+}
+
+export function setUpdateChannel(channel) {
+  const next = UPDATE_CHANNELS.includes(channel) ? channel : DEFAULT_UPDATE_CHANNEL
+  writeLS(KEY_UPDATE_CHANNEL, next)
+  document.dispatchEvent(
+    new CustomEvent(UPDATE_CHANNEL_EVENT, { detail: { value: next } })
   )
 }

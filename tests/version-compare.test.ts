@@ -43,4 +43,38 @@ describe("compareVersions", () => {
     expect(compareVersions("1.6", "1.6.0")).toBe(0)
     expect(compareVersions("1.6.1", "1.6")).toBe(1)
   })
+
+  it("ranks a prerelease below its release version", () => {
+    expect(compareVersions("1.6.4-beta.3", "1.6.4")).toBeLessThan(0)
+    expect(compareVersions("1.6.4-beta2", "1.6.4")).toBeLessThan(0)
+  })
+
+  it("orders prerelease identifiers numerically, not lexically", () => {
+    expect(compareVersions("1.6.4-beta.2", "1.6.4-beta.3")).toBeLessThan(0)
+    expect(compareVersions("1.6.4-beta.9", "1.6.4-beta.10")).toBeLessThan(0)
+  })
+
+  it("compares the numeric core before the prerelease tag", () => {
+    expect(compareVersions("1.6.3", "1.6.4-beta.1")).toBeLessThan(0)
+    expect(compareVersions("1.6.4-beta.1", "1.6.5")).toBeLessThan(0)
+  })
+
+  it("treats a leading v the same as no prefix", () => {
+    expect(compareVersions("v1.6.4-beta.3", "1.6.4-beta.3")).toBe(0)
+  })
+
+  it("compares alphanumeric prerelease identifiers lexically", () => {
+    expect(compareVersions("1.6.4-alpha", "1.6.4-beta")).toBeLessThan(0)
+  })
+
+  it("treats a shorter prerelease identifier list as lower", () => {
+    expect(compareVersions("1.6.4-beta", "1.6.4-beta.1")).toBeLessThan(0)
+  })
+
+  it("normalizes a dotless prerelease identifier like the dotted format", () => {
+    expect(compareVersions("1.6.4-beta.3", "1.6.4-beta2")).toBeGreaterThan(0)
+    expect(compareVersions("1.6.4-beta2", "1.6.4-beta.2")).toBe(0)
+    expect(compareVersions("1.6.4-beta10", "1.6.4-beta.3")).toBeGreaterThan(0)
+    expect(compareVersions("1.6.4", "1.6.4-beta2")).toBeGreaterThan(0)
+  })
 })
