@@ -621,6 +621,7 @@
   "stream.toast.copied": "Yayın URL'si kopyalandı",
   "stream.loading": "Kanallar yükleniyor…",
   "stream.uncategorized": "Kategorisiz",
+  "stream.directStream": "Canlı yayın",
   "stream.untitledChannel": "Adsız",
   "stream.discord.live": "Canlı",
   "stream.toast.hiddenInSettings": "Gizlenmiş kategorileri Ayarlar'dan yönetin.",

@@ -621,6 +621,7 @@
   "stream.toast.copied": "ストリーム URL をコピーしました",
   "stream.loading": "チャンネルを読み込み中…",
   "stream.uncategorized": "未分類",
+  "stream.directStream": "ライブ配信",
   "stream.untitledChannel": "タイトルなし",
   "stream.discord.live": "放送中",
   "stream.toast.hiddenInSettings": "非表示のカテゴリは設定で管理できます。",

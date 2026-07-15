@@ -621,6 +621,7 @@
   "stream.toast.copied": "URL потока скопирован",
   "stream.loading": "Загрузка каналов…",
   "stream.uncategorized": "Без категории",
+  "stream.directStream": "Прямой эфир",
   "stream.untitledChannel": "Без названия",
   "stream.discord.live": "В эфире",
   "stream.toast.hiddenInSettings": "Скрытые категории можно настроить в Настройках.",

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
-import { parseM3U } from "../src/scripts/lib/m3u-parser"
+import { parseM3U, isHlsStreamManifest } from "../src/scripts/lib/m3u-parser"
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -505,5 +505,35 @@ describe("parseM3U: malformed input resilience", () => {
 
   it("returns an empty result for whitespace-only input", () => {
     expect(parseM3U("\n\n  \n\r\n")).toEqual({ entries: [], epgUrl: "" })
+  })
+})
+
+describe("isHlsStreamManifest", () => {
+  it("returns true for a media playlist", () => {
+    const text =
+      "#EXTM3U\n" +
+      "#EXT-X-TARGETDURATION:10\n" +
+      "#EXT-X-MEDIA-SEQUENCE:0\n" +
+      "#EXTINF:10.0,\n" +
+      "chunklist_b3192000_00001.ts\n"
+    expect(isHlsStreamManifest(text)).toBe(true)
+  })
+
+  it("returns true for a master playlist", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXT-X-STREAM-INF:BANDWIDTH=3192000,RESOLUTION=1920x1080\n' +
+      "chunklist_b3192000.m3u8\n"
+    expect(isHlsStreamManifest(text)).toBe(true)
+  })
+
+  it("returns false for a normal channel-list M3U", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="bbcone.uk" group-title="News",BBC One HD\n' +
+      "http://example.com/live/u/p/1.m3u8\n" +
+      '#EXTINF:-1 tvg-id="cnn.us" group-title="News",CNN\n' +
+      "http://example.com/live/u/p/2.m3u8\n"
+    expect(isHlsStreamManifest(text)).toBe(false)
   })
 })

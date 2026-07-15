@@ -621,6 +621,7 @@
   "stream.toast.copied": "已复制流媒体 URL",
   "stream.loading": "正在加载频道…",
   "stream.uncategorized": "未分类",
+  "stream.directStream": "直播",
   "stream.untitledChannel": "未命名",
   "stream.discord.live": "直播",
   "stream.toast.hiddenInSettings": "在设置中管理隐藏的分类。",

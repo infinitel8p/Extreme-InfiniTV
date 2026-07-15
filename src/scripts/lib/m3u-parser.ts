@@ -112,6 +112,25 @@ function isHlsTag(line: string): boolean {
   return false
 }
 
+const HLS_MANIFEST_ONLY_PREFIXES = [
+  "#EXT-X-STREAM-INF",
+  "#EXT-X-TARGETDURATION",
+  "#EXT-X-MEDIA-SEQUENCE",
+]
+
+/** These markers only occur in real HLS stream manifests, never in a channel-list M3U. */
+export function isHlsStreamManifest(text: string): boolean {
+  let payload = text
+  if (payload.charCodeAt(0) === 0xfeff) payload = payload.slice(1)
+  for (const raw of payload.split(/\r?\n/)) {
+    const line = raw.trim().toUpperCase()
+    for (const prefix of HLS_MANIFEST_ONLY_PREFIXES) {
+      if (line.startsWith(prefix)) return true
+    }
+  }
+  return false
+}
+
 function lastCommaOutsideQuotes(text: string): number {
   let inQuote = false
   let last = -1

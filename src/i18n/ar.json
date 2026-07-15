@@ -621,6 +621,7 @@
   "stream.toast.copied": "تم نسخ رابط البث",
   "stream.loading": "جارٍ تحميل القنوات…",
   "stream.uncategorized": "غير مصنف",
+  "stream.directStream": "بث مباشر",
   "stream.untitledChannel": "بدون عنوان",
   "stream.discord.live": "مباشر",
   "stream.toast.hiddenInSettings": "أدر الفئات المخفية من الإعدادات.",

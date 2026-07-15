@@ -675,6 +675,7 @@
   "stream.toast.copied": "Stream URL copied",
   "stream.loading": "Loading channels…",
   "stream.uncategorized": "Uncategorized",
+  "stream.directStream": "Live stream",
   "stream.untitledChannel": "Untitled",
   "stream.discord.live": "Live",
   "stream.toast.hiddenInSettings": "Manage hidden categories in Settings.",

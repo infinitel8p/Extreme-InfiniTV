@@ -621,6 +621,7 @@
   "stream.toast.copied": "स्ट्रीम URL कॉपी हो गया",
   "stream.loading": "चैनल लोड हो रहे हैं…",
   "stream.uncategorized": "अवर्गीकृत",
+  "stream.directStream": "लाइव स्ट्रीम",
   "stream.untitledChannel": "बिना नाम",
   "stream.discord.live": "लाइव",
   "stream.toast.hiddenInSettings": "छिपी हुई श्रेणियों को सेटिंग्स में प्रबंधित करें।",

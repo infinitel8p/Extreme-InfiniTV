@@ -621,6 +621,7 @@
   "stream.toast.copied": "Stream-URL gekopieerd",
   "stream.loading": "Kanalen laden…",
   "stream.uncategorized": "Geen categorie",
+  "stream.directStream": "Livestream",
   "stream.untitledChannel": "Naamloos",
   "stream.discord.live": "Live",
   "stream.toast.hiddenInSettings": "Beheer verborgen categorieën in Instellingen.",

@@ -11,7 +11,7 @@ import { normalize } from "@/scripts/lib/text.js"
 import { providerFetch, streamingText } from "@/scripts/lib/provider-fetch.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
-import { parseM3U } from "@/scripts/lib/m3u-parser.ts"
+import { parseM3U, isHlsStreamManifest } from "@/scripts/lib/m3u-parser.ts"
 import { t } from "@/scripts/lib/i18n.js"
 import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
 import { log } from "@/scripts/lib/log.js"
@@ -78,9 +78,27 @@ async function fetchLiveCategoryMap() {
   )
 }
 
-function m3uToChannelList(text) {
-  const { entries } = parseM3U(text)
+function m3uToChannelList(text, sourceUrl) {
   const fallbackCategory = t("stream.uncategorized") || "Uncategorized"
+  if (isHlsStreamManifest(text) && typeof sourceUrl === "string" && /^https?:\/\//i.test(sourceUrl)) {
+    const name = t("stream.directStream") || "Live stream"
+    return [{
+      id: 1,
+      name,
+      category: fallbackCategory,
+      logo: null,
+      tvgId: undefined,
+      chno: undefined,
+      norm: normalize(`${name} ${fallbackCategory}`),
+      url: sourceUrl,
+      isRadio: false,
+      catchup: null,
+      catchupDays: null,
+      catchupSource: null,
+      catchupCorrection: null,
+    }]
+  }
+  const { entries } = parseM3U(text)
   const out = []
   let idSeq = 1
   for (const entry of entries) {
@@ -126,7 +144,7 @@ export async function ensureLive(creds, playlistId, opts = {}) {
           localStorage.setItem(`xt_m3u_epg:${playlistId}`, epgUrl)
         }
       } catch {}
-      return m3uToChannelList(text)
+      return m3uToChannelList(text, creds.host)
     }
     const catMap = await fetchLiveCategoryMap()
     const r = await xtreamApiFetch("get_live_streams")

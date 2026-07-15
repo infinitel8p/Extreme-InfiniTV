@@ -621,6 +621,7 @@
   "stream.toast.copied": "URL streaming disalin",
   "stream.loading": "Memuat saluran…",
   "stream.uncategorized": "Tanpa kategori",
+  "stream.directStream": "Siaran langsung",
   "stream.untitledChannel": "Tanpa judul",
   "stream.discord.live": "Langsung",
   "stream.toast.hiddenInSettings": "Kelola kategori tersembunyi di Pengaturan.",
