@@ -277,14 +277,14 @@ describe("isUnsupportedAudioCodec", () => {
     expect(isUnsupportedAudioCodec("mp4a.a6")).toBe(true)
     expect(isUnsupportedAudioCodec("mp2")).toBe(true)
     expect(isUnsupportedAudioCodec("mp2a")).toBe(true)
-    expect(isUnsupportedAudioCodec("mp4a.69")).toBe(true)
-    expect(isUnsupportedAudioCodec("mp4a.6b")).toBe(true)
     expect(isUnsupportedAudioCodec("DTS")).toBe(true)
     expect(isUnsupportedAudioCodec(" ac-3 ")).toBe(true)
   })
 
   it("ignores decodable audio codecs", () => {
     expect(isUnsupportedAudioCodec("mp4a.40.2")).toBe(false)
+    expect(isUnsupportedAudioCodec("mp4a.69")).toBe(false)
+    expect(isUnsupportedAudioCodec("mp4a.6b")).toBe(false)
     expect(isUnsupportedAudioCodec("opus")).toBe(false)
     expect(isUnsupportedAudioCodec("")).toBe(false)
     expect(isUnsupportedAudioCodec(null)).toBe(false)

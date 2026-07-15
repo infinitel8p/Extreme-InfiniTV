@@ -2,6 +2,8 @@
 // the main thread. Mirrors parseXmlTv in epg-data.js. If DOMParser is missing
 // (rare on very old Android WebView), we ask the caller to fall back.
 
+import { EPG_PAST_WINDOW_MS } from "@/scripts/lib/epg-constants.ts"
+
 type Programme = { start: number; stop: number; title: string; desc: string; catchupId?: string }
 
 interface ParseRequest {
@@ -70,7 +72,7 @@ export function parseXmlTv(xml: string): {
     if (name) channelNames.set(id, name)
   }
 
-  const lo = Date.now() - 7 * 24 * 60 * 60 * 1000
+  const lo = Date.now() - EPG_PAST_WINDOW_MS
   const hi = Date.now() + 36 * 60 * 60 * 1000
 
   let timezoneTimestampCount = 0

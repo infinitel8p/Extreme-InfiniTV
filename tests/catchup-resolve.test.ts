@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 
 const providerFetchMock = vi.fn()
 vi.mock("@/scripts/lib/provider-fetch.js", () => ({
@@ -27,9 +27,34 @@ function okResponse(): { ok: boolean; status: number; body: null } {
   return { ok: true, status: 200, body: null }
 }
 
+// Node 24+ ships an experimental native `localStorage` (undefined without
+// --localstorage-file) that shadows jsdom's; stub it with a real in-memory Storage.
+const localStorageStore = new Map<string, string>()
+const localStorageMock: Storage = {
+  getItem: (key) => (localStorageStore.has(key) ? localStorageStore.get(key)! : null),
+  setItem: (key, value) => {
+    localStorageStore.set(key, String(value))
+  },
+  removeItem: (key) => {
+    localStorageStore.delete(key)
+  },
+  clear: () => {
+    localStorageStore.clear()
+  },
+  key: (index) => Array.from(localStorageStore.keys())[index] ?? null,
+  get length() {
+    return localStorageStore.size
+  },
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
-  localStorage.clear()
+  vi.stubGlobal("localStorage", localStorageMock)
+  localStorageStore.clear()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe("resolveCatchupSrc: M3U branch (mode !== xc, channel.url present)", () => {

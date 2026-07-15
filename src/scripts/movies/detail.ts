@@ -62,7 +62,7 @@ import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
 import { mountPlayer, getExternalLauncher } from "@/scripts/lib/player-runtime.ts"
-import { toast } from "@/scripts/lib/toast.js"
+import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
@@ -481,7 +481,16 @@ async function startPlayback() {
   const videoEl = document.getElementById("movie-player")
   videoEl?.removeAttribute("hidden")
 
-  const player = await ensureEmbeddedPlayer(backend)
+  let player
+  try {
+    player = await ensureEmbeddedPlayer(backend)
+  } catch (err) {
+    log.error("[xt:movie-detail] failed to mount player:", err)
+    toastError("Couldn't start playback.")
+    if (posterEl) posterEl.classList.remove("hidden")
+    if (playerWrap) playerWrap.classList.add("hidden")
+    return
+  }
   if (!player) return
   setupPipButton(player)
   setupScaleButton()
@@ -801,7 +810,10 @@ async function boot() {
 
   // A playlist switch re-boots: dispose any player from the previous playlist
   // so its stream stops and its progress listeners stop writing.
-  try { vjs?.pause?.(); vjs?.dispose?.() } catch {}
+  try {
+    vjs?.pause?.()
+    await vjs?.dispose?.()
+  } catch {}
   vjs = null
   progressListenersBound = false
 

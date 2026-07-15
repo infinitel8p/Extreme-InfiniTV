@@ -141,8 +141,7 @@ async function resolveXtreamCatchup(
   const extensions = allowsM3u8 ? ["m3u8", "ts"] : ["ts"]
   const forms: XtreamTimeshiftForm[] = ["rest", "legacy"]
 
-  // Try the last-known-good wire format first, then the rest in the fixed
-  // rest+m3u8 -> legacy+m3u8 -> rest+ts -> legacy+ts order.
+  // Last-known-good wire format first, then rest+m3u8 -> legacy+m3u8 -> rest+ts -> legacy+ts.
   const candidates: CachedVariant[] = []
   const cached = readCachedVariant(playlistId)
   if (cached && extensions.includes(cached.extension)) candidates.push(cached)

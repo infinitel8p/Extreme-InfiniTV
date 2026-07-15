@@ -1517,6 +1517,9 @@ const CATCHUP_RETRY_RESET_AFTER_MS = 30_000
 let catchupSeekingEl: HTMLVideoElement | null = null
 let catchupSeekingHandler: (() => void) | null = null
 let catchupProgrammaticSeekUntilMs = 0
+// Caps seek-triggered remounts so a seek landing outside the buffer on every attempt can't loop forever.
+let catchupSeekRemountCount = 0
+const CATCHUP_MAX_SEEK_REMOUNTS = 3
 // Accumulated J/L archive rewind/forward taps; committed to a seek after a short pause.
 let pendingSeekTargetUtcMs: number | null = null
 const commitPendingSeek = debounce(() => {
@@ -1605,19 +1608,88 @@ function ensurePlayerElement(): HTMLElement | null {
   return fresh
 }
 
+// Serializes ensureEmbeddedPlayer() calls so a superseded caller can't dispose+remount over a mount a newer caller already started.
+let ensureEmbeddedPlayerInFlight = null
+
 const ensureEmbeddedPlayer = async (backend, opts = {}) => {
-  const wantLiveUi = opts.liveui ?? true
-  if (vjs) {
-    if (embeddedPlayerLiveUi === wantLiveUi) return vjs
-    // Mode changed (live <-> catch-up needs a different control bar) - dispose and remount fresh below;
-    // awaited because Shaka restores the original #player element asynchronously.
-    try { await vjs.dispose?.() } catch {}
-    vjs = null
-    if (focusKeeperCleanup) {
-      focusKeeperCleanup()
-      focusKeeperCleanup = null
-    }
+  for (;;) {
+    const inFlight = ensureEmbeddedPlayerInFlight
+    if (!inFlight) break
+    await inFlight.catch(() => {})
   }
+  const attempt = (async () => {
+    const wantLiveUi = opts.liveui ?? true
+    if (vjs) {
+      if (embeddedPlayerLiveUi === wantLiveUi) return vjs
+      // Mode changed (live <-> catch-up needs a different control bar) - dispose and remount fresh below;
+      // awaited because Shaka restores the original #player element asynchronously.
+      try { await vjs.dispose?.() } catch {}
+      vjs = null
+      if (focusKeeperCleanup) {
+        focusKeeperCleanup()
+        focusKeeperCleanup = null
+      }
+    }
+    return mountEmbeddedPlayer(backend, opts)
+  })()
+  ensureEmbeddedPlayerInFlight = attempt
+  try {
+    return await attempt
+  } finally {
+    if (ensureEmbeddedPlayerInFlight === attempt) ensureEmbeddedPlayerInFlight = null
+  }
+}
+
+/** Shared "nothing left to try" path for a play attempt: native handoff, failure panel, or a generic toast, depending on how far playback got. */
+function giveUpOnPlayback(ctx) {
+  hideTuningOverlay()
+  hideBufferingChip()
+  clearStallSentinel()
+  clearDeadVideoWatchdog()
+  if (!ctx.started) {
+    // Bypasses getAndroidNativePlayerEnabled() on purpose: this is a one-shot-per-tune
+    // recovery so an unsupported channel still plays, independent of that opt-in setting.
+    if (!ctx.nativeFallbackTried && androidNativePlayerAvailable) {
+      ctx.nativeFallbackTried = true
+      const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
+      const failure = classifyStartFailure({
+        videoCodec: info.videoCodec,
+        audioCodec: info.audioCodec,
+        errorDetail: info.errorDetail,
+        nameHint: hasHevcNameHint(ctx.name),
+        deviceHevc: deviceSupportsHevc(),
+      })
+      if (failure.kind === "hevc" || failure.kind === "codec") {
+        toast({ title: t("stream.failure.nativeFallback") })
+        launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
+          if (launched) return
+          showPlaybackFailurePanel(ctx)
+          runAutoDiagnostic(ctx, null)
+        })
+        return
+      }
+    }
+    showPlaybackFailurePanel(ctx)
+    runAutoDiagnostic(ctx, null)
+    return
+  }
+  const dismissGeneric = toastError(
+    t("stream.error.cantPlay", { channel: ctx.name || `#${ctx.streamId}` }),
+    {
+      description: shouldWarnHevc(ctx.name)
+        ? t("stream.error.hevcHint")
+        : t("stream.error.checkConnection"),
+    }
+  )
+  // Background diagnostic: turn the generic "couldn't play" toast into an
+  // actionable one ("HLS playlist returned 403", "Server unreachable",
+  // "Top variant manifest empty", etc.) once we have a verdict. Cooldown
+  // per stream-id so a flapping channel doesn't fire repeated probes.
+  runAutoDiagnostic(ctx, dismissGeneric)
+}
+
+async function mountEmbeddedPlayer(backend, opts) {
+  const wantLiveUi = opts.liveui ?? true
   const videoEl = ensurePlayerElement()
   if (!videoEl) return null
   // Hide Video.js's built-in PiP toggle on Tauri Android - the WebView
@@ -1657,7 +1729,10 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
   vjs.on("playing", () => {
     if (lastPlayContext) lastPlayContext.started = true
     if (catchupRetryResetTimer) clearTimeout(catchupRetryResetTimer)
-    catchupRetryResetTimer = setTimeout(() => { catchupAutoRetryCount = 0 }, CATCHUP_RETRY_RESET_AFTER_MS)
+    catchupRetryResetTimer = setTimeout(() => {
+      catchupAutoRetryCount = 0
+      catchupSeekRemountCount = 0
+    }, CATCHUP_RETRY_RESET_AFTER_MS)
     hideTuningOverlay()
     hideBufferingChip()
     clearStallSentinel()
@@ -1742,6 +1817,11 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
       setTimeout(() => {
         if (seqAtRetry !== playSeq) return
         if (retryCatchupSession(ctx, { automatic: true })) return
+        if (!ctx.isLive) {
+          // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
+          giveUpOnPlayback(ctx)
+          return
+        }
         try {
           vjs.reset?.()
           vjs.src({ src: ctx.src, type: ctx.mime || "application/x-mpegURL", isLive: ctx.isLive ?? true })
@@ -1750,50 +1830,7 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
       }, ERROR_AUTO_RETRY_MS)
       return
     }
-    hideTuningOverlay()
-    hideBufferingChip()
-    clearStallSentinel()
-    clearDeadVideoWatchdog()
-    if (!ctx.started) {
-      // Bypasses getAndroidNativePlayerEnabled() on purpose: this is a one-shot-per-tune
-      // recovery so an unsupported channel still plays, independent of that opt-in setting.
-      if (!ctx.nativeFallbackTried && androidNativePlayerAvailable) {
-        ctx.nativeFallbackTried = true
-        const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
-        const failure = classifyStartFailure({
-          videoCodec: info.videoCodec,
-          audioCodec: info.audioCodec,
-          errorDetail: info.errorDetail,
-          nameHint: hasHevcNameHint(ctx.name),
-          deviceHevc: deviceSupportsHevc(),
-        })
-        if (failure.kind === "hevc" || failure.kind === "codec") {
-          toast({ title: t("stream.failure.nativeFallback") })
-          launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
-            if (launched) return
-            showPlaybackFailurePanel(ctx)
-            runAutoDiagnostic(ctx, null)
-          })
-          return
-        }
-      }
-      showPlaybackFailurePanel(ctx)
-      runAutoDiagnostic(ctx, null)
-      return
-    }
-    const dismissGeneric = toastError(
-      t("stream.error.cantPlay", { channel: ctx.name || `#${ctx.streamId}` }),
-      {
-        description: shouldWarnHevc(ctx.name)
-          ? t("stream.error.hevcHint")
-          : t("stream.error.checkConnection"),
-      }
-    )
-    // Background diagnostic: turn the generic "couldn't play" toast into an
-    // actionable one ("HLS playlist returned 403", "Server unreachable",
-    // "Top variant manifest empty", etc.) once we have a verdict. Cooldown
-    // per stream-id so a flapping channel doesn't fire repeated probes.
-    runAutoDiagnostic(ctx, dismissGeneric)
+    giveUpOnPlayback(ctx)
   })
 
   return vjs
@@ -2107,15 +2144,13 @@ function armStallSentinel() {
     if (!ctx || !vjs) return
     log.warn("[xt:livetv] stall sentinel re-tuning", { streamId: ctx.streamId })
     if (retryCatchupSession(ctx, { automatic: true })) return
+    if (!ctx.isLive) {
+      // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
+      giveUpOnPlayback(ctx)
+      return
+    }
     try {
-      // Catch-up sources are finite - preserve position across the auto-retune instead of rewinding to 0.
-      const resumeSeconds = ctx.isLive === false ? vjs.currentTime?.() : null
       vjs.reset?.()
-      if (typeof resumeSeconds === "number" && resumeSeconds > 0) {
-        vjs.one?.("loadedmetadata", () => {
-          try { vjs.currentTime?.(resumeSeconds) } catch {}
-        })
-      }
       vjs.src({ src: ctx.src, type: ctx.mime || "application/x-mpegURL", isLive: ctx.isLive ?? true })
       vjs.play().catch(() => {})
     } catch {}
@@ -2532,6 +2567,7 @@ async function play(streamId, name) {
   clearDeadVideoWatchdog()
   catchupSession = null
   catchupAutoRetryCount = 0
+  catchupSeekRemountCount = 0
   catchupLastEndedAbsUtcMs = null
   // Leaving catch-up without a remount (e.g. "Back to live") would otherwise strand this on a disposed <video>.
   if (catchupSeekingEl && catchupSeekingHandler) {
@@ -2815,6 +2851,7 @@ function retryCatchupSession(ctx, opts = {}) {
     title: session.title,
     kind: session.kind,
     catchupId: session.catchupId,
+    isRetryContinuation: true,
   })
   return true
 }
@@ -2895,6 +2932,10 @@ async function playCatchup(channel, opts) {
     catchupLastEndedAbsUtcMs = null
     catchupConsecutiveShortAdvances = 0
   }
+  // Any session start gets its own error-retry budget; only retryCatchupSession's continuation call must keep the count it just set.
+  if (!opts?.isRetryContinuation) catchupAutoRetryCount = 0
+  // Same rule for the seek-remount circuit breaker: preserve the count only across the seek interceptor's own remount.
+  if (!opts?.preserveSeekRemountBudget) catchupSeekRemountCount = 0
 
   // Resolving the archive URL can take several seconds (probing candidate
   // wire formats) - give the same tuning feedback the live path shows.
@@ -3115,8 +3156,18 @@ function attachCatchupSeekInterceptor(player, seq) {
     for (let i = 0; i < buffered.length; i++) {
       if (targetSeconds >= buffered.start(i) - 1 && targetSeconds <= buffered.end(i) + 2) return
     }
+    if (catchupSeekRemountCount >= CATCHUP_MAX_SEEK_REMOUNTS) {
+      // Circuit breaker: a remount can take up to CATCHUP_TUNING_MAX_MS, so pin the playhead back instead of chasing another one.
+      markProgrammaticCatchupSeek()
+      if (buffered.length) {
+        try { mediaEl.currentTime = Math.max(0, buffered.end(buffered.length - 1) - 1) } catch {}
+      }
+      if (lastPlayContext) showPlaybackFailurePanel(lastPlayContext)
+      return
+    }
+    catchupSeekRemountCount++
     markProgrammaticCatchupSeek()
-    void seekToAbsolute(catchupSession.timelineStartUtcMs + targetSeconds * 1000)
+    void seekToAbsolute(catchupSession.timelineStartUtcMs + targetSeconds * 1000, { viaSeekInterceptor: true })
   }
   catchupSeekingEl = mediaEl
   mediaEl.addEventListener("seeking", catchupSeekingHandler)
@@ -3236,6 +3287,7 @@ async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
       title: catchupSession.title,
       kind: "programme",
       catchupId: catchupSession.catchupId,
+      preserveSeekRemountBudget: seekOpts.viaSeekInterceptor === true,
     })
     return
   }
@@ -3249,6 +3301,7 @@ async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
     stopUtcMs: remountStopUtcMs,
     title: resolveProgrammeTitleAt(channel, remountTargetUtcMs),
     kind: "timeshift",
+    preserveSeekRemountBudget: seekOpts.viaSeekInterceptor === true,
   })
 }
 
@@ -3860,7 +3913,7 @@ epgList?.addEventListener("click", async (e) => {
   const entry = epgListData[idx]
   if (!entry) return
 
-  const channel = all.find((c) => c.id === epgListChannelId)
+  const channel = all.find((candidate) => candidate.id === epgListChannelId)
   const now = Date.now()
   const isLive = entry.start <= now && now < entry.stop
   const isEnded = entry.stop <= now

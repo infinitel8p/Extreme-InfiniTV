@@ -51,7 +51,8 @@ function classifyAudioCodec(
   if (!normalized) return null
   if (/^(?:ec-3|eac3|mp4a\.a6)$/.test(normalized)) return "eac3"
   if (/^(?:ac-3|ac3|mp4a\.a5)$/.test(normalized)) return "ac3"
-  if (/^(?:mp2|mp2a|mp4a\.6[9b])$/.test(normalized)) return "mp2"
+  // mp4a.69/mp4a.6b are RFC 6381 MP3 object types, natively decodable - not mp2.
+  if (/^(?:mp2|mp2a)$/.test(normalized)) return "mp2"
   if (/^dts$/.test(normalized)) return "dts"
   return null
 }

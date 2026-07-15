@@ -15,6 +15,7 @@ import {
 } from "@/scripts/lib/cache.js"
 import { getChannelEpgOverride } from "@/scripts/lib/preferences.js"
 import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
+import { EPG_PAST_WINDOW_MS } from "@/scripts/lib/epg-constants.ts"
 
 const FRESH_MS = 60 * 60 * 1000
 const TZ_KEY_PREFIX = "xt_epg_offset:"
@@ -26,7 +27,7 @@ const EVT_LOADED = "xt:epg-loaded"
 const EVT_OFFSET_CHANGED = "xt:epg-offset-changed"
 const EVT_SOURCE_STATUS = "xt:epg-source-status"
 const GZIP_CT_RX = /application\/(x-)?gzip|application\/x-gunzip/i
-export const EPG_PAST_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+export { EPG_PAST_WINDOW_MS }
 
 // FNV-1a 32-bit hash. Deterministic, short, no crypto needed - just used to
 // derive a per-URL cache key suffix.
@@ -549,8 +550,8 @@ function readInferredOffsetSetting(playlistId) {
   try {
     const raw = localStorage.getItem(TZ_INFERRED_KEY_PREFIX + playlistId)
     if (raw == null) return undefined
-    const n = Number(raw)
-    return Number.isFinite(n) ? n : undefined
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) ? parsed : undefined
   } catch {
     return undefined
   }

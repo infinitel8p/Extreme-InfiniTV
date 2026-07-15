@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 use tauri::Emitter;
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-const ALLOWED_URL_PREFIX: &str =
-    "https://github.com/infinitel8p/Extreme-InfiniTV/releases/download/";
+const ALLOWED_HOST: &str = "github.com";
+const ALLOWED_PATH_PREFIX: &str = "/infinitel8p/Extreme-InfiniTV/releases/download/";
 
 pub const PROGRESS_EVENT: &str = "xt:updater-progress";
 
@@ -27,10 +27,13 @@ pub async fn updater_check_from(
     state: tauri::State<'_, PendingUpdateState>,
     url: String,
 ) -> Result<Option<Value>, String> {
-    if !url.starts_with(ALLOWED_URL_PREFIX) {
+    let endpoint = tauri::Url::parse(&url).map_err(|e| format!("OTHER:{e}"))?;
+    let is_allowed = endpoint.scheme() == "https"
+        && endpoint.host_str() == Some(ALLOWED_HOST)
+        && endpoint.path().starts_with(ALLOWED_PATH_PREFIX);
+    if !is_allowed {
         return Err(format!("OTHER:endpoint not allowed: {url}"));
     }
-    let endpoint = tauri::Url::parse(&url).map_err(|e| format!("OTHER:{e}"))?;
     let update = app
         .updater_builder()
         .endpoints(vec![endpoint])

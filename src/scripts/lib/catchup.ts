@@ -207,8 +207,7 @@ export function expandCatchupTemplate(template: string, ctx: CatchupTemplateCont
   const rawEndMs = templateUsesPlayseek(template) ? ctx.stopUtcMs : Math.min(ctx.stopUtcMs, ctx.nowUtcMs)
   // duration is a raw end-start delta (both operands would shift equally, so correction is a no-op here).
   const durationSec = Math.floor((rawEndMs - ctx.startUtcMs) / 1000)
-  // Kodi parity: only start/end get corrected; "now" stays the real wall clock, so a positive
-  // correction grows the offset (now - correctedStart), reaching further back into the archive.
+  // Kodi parity: only start/end get corrected, so a positive correction grows the offset (now - correctedStart), reaching further back into the archive.
   const offsetSec = Math.floor((ctx.nowUtcMs - (ctx.startUtcMs - correctionMs)) / 1000)
 
   const startDate = new Date(ctx.startUtcMs - correctionMs)
