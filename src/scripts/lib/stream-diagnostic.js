@@ -35,7 +35,7 @@ async function providerFetchWithTimeout(url, init, ms, label) {
       label
     )
     response._probeAbort = () => {
-      try { response.body?.cancel?.() } catch {}
+      try { void response.body?.cancel?.()?.catch?.(() => {}) } catch {}
       try { controller?.abort() } catch {}
     }
     return response
@@ -184,6 +184,16 @@ async function headOrGet(url) {
   }
 }
 
+/** Thin HEAD/GET reachability probe reused by the playlist editor's "Check links" action. */
+export async function probeStreamHead(url) {
+  try {
+    const result = await headOrGet(url)
+    return { ok: !!result?.ok, status: result?.status ?? null }
+  } catch {
+    return { ok: false, status: null }
+  }
+}
+
 // Plain WebView fetch
 async function probeWebViewFetch(url) {
   const start = performance.now()
@@ -201,7 +211,7 @@ async function probeWebViewFetch(url) {
       "WebView GET"
     )
     try {
-      response.body?.cancel?.()
+      void response.body?.cancel?.()?.catch?.(() => {})
     } catch {}
     try { controller?.abort() } catch {}
     return {

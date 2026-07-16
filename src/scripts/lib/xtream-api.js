@@ -12,6 +12,7 @@
 
 import {
   getActiveEntry,
+  getEntries,
   buildApiUrl,
   xtreamCandidatesFor,
   getMirrorPin,
@@ -58,18 +59,27 @@ async function fetchCandidate(url, opts) {
   }
 }
 
+async function resolveTargetEntry(entryId) {
+  if (!entryId) return getActiveEntry()
+  const entries = await getEntries()
+  return entries.find((entry) => entry._id === entryId) || null
+}
+
 /**
  * Fetch an Xtream player_api.php action with automatic mirror failover.
  *
  * @param {string} action - e.g. "get_live_categories"
  * @param {Record<string, string|number>} [params]
- * @param {RequestInit & { forceTauri?: boolean }} [opts]
+ * @param {RequestInit & { forceTauri?: boolean, entryId?: string }} [opts] -
+ *   `entryId` targets a specific playlist entry instead of the active one
+ *   (used to hydrate a custom playlist's non-active source entries).
  * @returns {Promise<Response>} The first 2xx response, or the last 4xx/5xx
  *   response when every candidate failed with HTTP errors. Throws when every
  *   candidate threw network/timeout errors.
  */
 export async function xtreamApiFetch(action, params = {}, opts = {}) {
-  const entry = await getActiveEntry()
+  const { entryId, ...fetchOpts } = opts
+  const entry = await resolveTargetEntry(entryId)
   const candidates = xtreamCandidatesFor(entry)
   if (!entry || !candidates.length) {
     throw new Error("xtreamApiFetch: no active Xtream playlist")
@@ -81,7 +91,7 @@ export async function xtreamApiFetch(action, params = {}, opts = {}) {
   if (lastAllFailed && Date.now() - lastAllFailed < ALL_FAILED_TTL_MS) {
     const creds = candidates[startIndex]
     const url = buildApiUrl(creds, action, params)
-    const response = await fetchCandidate(url, opts)
+    const response = await fetchCandidate(url, fetchOpts)
     if (response.ok) allFailedAt.delete(entry._id)
     return response
   }
@@ -94,7 +104,7 @@ export async function xtreamApiFetch(action, params = {}, opts = {}) {
     const creds = candidates[index]
     const url = buildApiUrl(creds, action, params)
     try {
-      const response = await fetchCandidate(url, opts)
+      const response = await fetchCandidate(url, fetchOpts)
       if (response.ok) {
         if (index !== startIndex) {
           log.warn(

@@ -67,3 +67,38 @@ export const ICON_ASPECT_RATIO = wrap(
 export const ICON_ARROW_UP = wrap(
   '<path d="M12 5l0 14" />' + '<path d="M18 11l-6 -6" />' + '<path d="M6 11l6 -6" />'
 )
+
+export const ICON_ARROW_DOWN = wrap(
+  '<path d="M12 5l0 14" />' + '<path d="M18 13l-6 6" />' + '<path d="M6 13l6 6" />'
+)
+
+export const ICON_GRIP_VERTICAL = wrap(
+  '<path d="M8 5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M8 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M8 19a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M14 5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M14 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M14 19a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />'
+)
+
+export const ICON_DOWNLOAD = wrap(
+  '<path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2" />' +
+    '<path d="M7 11l5 5l5 -5" />' +
+    '<path d="M12 4l0 12" />'
+)
+
+export const ICON_WORLD = wrap(
+  '<path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0" />' +
+    '<path d="M3.6 9h16.8" />' +
+    '<path d="M3.6 15h16.8" />' +
+    '<path d="M11.5 3a17 17 0 0 0 0 18" />' +
+    '<path d="M12.5 3a17 17 0 0 1 0 18" />'
+)
+
+export const ICON_PLAYLIST_ADD = wrap(
+  '<path d="M19 8h-14" />' +
+    '<path d="M5 12h9" />' +
+    '<path d="M11 16h-6" />' +
+    '<path d="M15 16h6" />' +
+    '<path d="M18 13v6" />'
+)

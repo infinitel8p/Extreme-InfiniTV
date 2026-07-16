@@ -5,7 +5,9 @@ import {
   fmtBase,
   isLikelyM3USource,
   getEntries,
+  entryToCreds,
 } from "@/scripts/lib/creds.js"
+import { loadCustomDoc } from "@/scripts/lib/custom-playlist.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
   setCached as cacheSet,
@@ -58,7 +60,7 @@ async function findEntry(playlistId) {
 /**
  * @typedef {Object} EpgSource
  * @property {string} url
- * @property {"override"|"m3u-header"|"xtream-default"|"additional"} source
+ * @property {"override"|"m3u-header"|"xtream-default"|"custom-sources"|"additional"} source
  * @property {"primary"|"additional"} kind
  */
 
@@ -74,12 +76,14 @@ async function findEntry(playlistId) {
  *
  * Returns an empty list when no usable source is available.
  *
- * @param {{ epgUrl?: string, additionalEpgUrls?: string[], disableProviderEpg?: boolean } | null} entry
+ * @param {{ type?: string, epgUrl?: string, additionalEpgUrls?: string[], disableProviderEpg?: boolean } | null} entry
  * @param {{host:string,port:string,user:string,pass:string}} creds
  * @param {string} m3uHeaderUrl - value of `x-tvg-url` for M3U playlists, or ""
+ * @param {string[]} [customSourceUrls] - custom playlist only: provider EPG URLs
+ *   unioned from every source entry (already resolved by the async wrapper)
  * @returns {EpgSource[]}
  */
-export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl) {
+export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl, customSourceUrls = []) {
   const out = []
   const seen = new Set()
   const skipAuto = !!entry?.disableProviderEpg
@@ -93,6 +97,8 @@ export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl) {
 
   if (entry?.epgUrl) {
     push(entry.epgUrl, "override", "primary")
+  } else if (!skipAuto && entry?.type === "custom") {
+    for (const url of customSourceUrls) push(url, "custom-sources", "primary")
   } else if (!skipAuto && isLikelyM3USource(creds?.host, creds?.user, creds?.pass)) {
     if (m3uHeaderUrl) push(m3uHeaderUrl, "m3u-header", "primary")
   } else if (!skipAuto && creds?.host) {
@@ -113,6 +119,43 @@ export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl) {
 }
 
 /**
+ * Custom playlist only: union of every source entry's provider default EPG
+ * URL (Xtream `xmltv.php`, or the M3U `x-tvg-url` stored for that source).
+ *
+ * @param {string} playlistId - the custom entry's own id
+ * @returns {Promise<string[]>}
+ */
+async function collectCustomSourceEpgUrls(playlistId) {
+  const doc = await loadCustomDoc(playlistId)
+  const sourceEntryIds = new Set()
+  for (const channel of doc.channels) {
+    for (const source of channel.sources) {
+      if (source.kind === "xtream" || source.kind === "m3u") sourceEntryIds.add(source.entryId)
+    }
+  }
+  if (!sourceEntryIds.size) return []
+  const entries = await getEntries()
+  const urls = []
+  for (const sourceEntryId of sourceEntryIds) {
+    const sourceEntry = entries.find((candidate) => candidate._id === sourceEntryId)
+    if (!sourceEntry) continue
+    if (sourceEntry.type === "xtream") {
+      const sourceCreds = entryToCreds(sourceEntry)
+      const base = fmtBase(sourceCreds.host, sourceCreds.port).replace(/\/+$/, "")
+      urls.push(
+        `${base}/xmltv.php?username=${encodeURIComponent(sourceCreds.user || "")}` +
+        `&password=${encodeURIComponent(sourceCreds.pass || "")}`
+      )
+    } else {
+      let stored = ""
+      try { stored = localStorage.getItem(`xt_m3u_epg:${sourceEntryId}`) || "" } catch {}
+      if (stored) urls.push(stored)
+    }
+  }
+  return urls
+}
+
+/**
  * Storage-aware wrapper: loads the active entry and the M3U `x-tvg-url`
  * header (if any) then delegates to `buildEpgUrlsFromEntry`.
  *
@@ -126,7 +169,11 @@ export async function buildEpgUrls(creds, playlistId) {
   try {
     m3uHeaderUrl = localStorage.getItem(`xt_m3u_epg:${playlistId}`) || ""
   } catch {}
-  return buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl)
+  let customSourceUrls = []
+  if (entry?.type === "custom" && !entry.epgUrl && !entry.disableProviderEpg) {
+    customSourceUrls = await collectCustomSourceEpgUrls(playlistId)
+  }
+  return buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl, customSourceUrls)
 }
 
 /**

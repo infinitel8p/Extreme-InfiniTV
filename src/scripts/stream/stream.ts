@@ -5,10 +5,10 @@ import {
   loadCreds,
   getActiveEntry,
   getEntries,
-  fmtBase,
   safeHttpUrl,
   isLikelyM3USource,
   isLocalM3UHost,
+  isCustomHost,
   readLocalM3UContent,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
@@ -34,6 +34,7 @@ import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
 import { fmtChannelIdentity, formatBehindLive } from "@/scripts/lib/format.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
+import { buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { attachPopoverSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
@@ -80,6 +81,7 @@ import {
   type ExternalPlayerButtonHandle,
 } from "@/scripts/lib/external-player-button.js"
 import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE, ICON_ASPECT_RATIO } from "@/scripts/lib/icons.js"
+import { openAddToCustomDialog } from "@/scripts/lib/add-to-custom-dialog.ts"
 import {
   loadProgrammes,
   getProgrammesSync,
@@ -136,18 +138,7 @@ function setNowPlaying(id) {
 let creds = { host: "", port: "", user: "", pass: "" }
 
 function buildDirectLiveUrl(id, c = creds) {
-  const { host, port, user, pass } = c
-  const ext = c?.liveContainer === "ts" ? ".ts" : ".m3u8"
-  return (
-    fmtBase(host, port) +
-    "/live/" +
-    encodeURIComponent(user) +
-    "/" +
-    encodeURIComponent(pass) +
-    "/" +
-    encodeURIComponent(id) +
-    ext
-  )
+  return buildLiveStreamUrl(c, id, c?.liveContainer)
 }
 
 // ----------------------------
@@ -703,6 +694,18 @@ function buildChannelStreamUrl(channel) {
   return buildDirectLiveUrl(channel.id)
 }
 
+/** Builds the CustomSource reference for "Add to custom playlist", or null
+ *  when the active entry itself is a custom playlist or the channel has no
+ *  usable URL (m3u/local-m3u without one). */
+function buildCustomSourceForChannel(channel) {
+  if (!activePlaylistId || isCustomHost(creds.host)) return null
+  if (isLikelyM3USource(creds.host, creds.user, creds.pass)) {
+    if (!channel.url) return null
+    return { kind: "m3u", entryId: activePlaylistId, url: channel.url, name: channel.name || "" }
+  }
+  return { kind: "xtream", entryId: activePlaylistId, streamId: channel.id }
+}
+
 function openChannelDiagnostic(channel) {
   if (!channel) return
   const url = buildChannelStreamUrl(channel)
@@ -794,7 +797,27 @@ function openChannelMenu(channel, anchor, point) {
     }
   })
 
-  menu.append(playItem, testItem, copyItem)
+  const customSource = buildCustomSourceForChannel(channel)
+  let addToCustomItem = null
+  if (customSource) {
+    addToCustomItem = document.createElement("button")
+    addToCustomItem.type = "button"
+    addToCustomItem.setAttribute("role", "menuitem")
+    addToCustomItem.className =
+      "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+    addToCustomItem.textContent = t("stream.menu.addToCustom")
+    addToCustomItem.addEventListener("click", () => {
+      closeChannelMenu()
+      void openAddToCustomDialog(customSource, {
+        name: channel.name || "",
+        logo: channel.logo ?? null,
+        group: channel.category ?? null,
+        tvgId: channel.tvgId ?? null,
+      })
+    })
+  }
+
+  menu.append(playItem, testItem, copyItem, ...(addToCustomItem ? [addToCustomItem] : []))
   document.body.appendChild(menu)
 
   const margin = 8
@@ -1362,6 +1385,14 @@ async function loadChannels() {
 
   try {
     if (isLikelyM3USource(creds.host, creds.user, creds.pass)) {
+      if (isCustomHost(creds.host)) {
+        const { ensureLive } = await import("@/scripts/lib/catalog.js")
+        const data = await ensureLive(creds, active._id)
+        indexDirectUrls(data)
+        categoryMap = null
+        paintChannels(data, false, 0)
+        return
+      }
       const { data, fromCache, age } = await cachedFetch(
         active._id,
         "m3u",
@@ -2647,6 +2678,13 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
 }
 
 async function play(streamId, name) {
+  const targetChannel = all.find((channel) => channel.id === streamId)
+  if (targetChannel?.unresolved) {
+    toastError(t("stream.error.cantPlay", { channel: name || targetChannel.name || `#${streamId}` }), {
+      description: t("stream.error.checkConnection"),
+    })
+    return
+  }
   hidePlaybackFailurePanel()
   clearDeadVideoWatchdog()
   catchupSession = null

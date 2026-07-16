@@ -19,6 +19,29 @@ interface Creds {
  * Username, password and movieId are URL-encoded so providers with `/` or
  * spaces in any of those fields don't break the path.
  */
+/**
+ * Build the canonical Xtream live-stream URL for a channel. Mirrors the path
+ * `stream.ts`'s `buildDirectLiveUrl` constructs (kept byte-identical so the
+ * two never drift): `<host>:<port>/live/<user>/<pass>/<id>.<m3u8|ts>`.
+ */
+export function buildLiveStreamUrl(
+  creds: Creds,
+  streamId: string | number,
+  containerExt: string | null | undefined
+): string {
+  const ext = containerExt === "ts" ? ".ts" : ".m3u8"
+  return (
+    fmtBase(creds.host, creds.port) +
+    "/live/" +
+    encodeURIComponent(creds.user) +
+    "/" +
+    encodeURIComponent(creds.pass) +
+    "/" +
+    encodeURIComponent(streamId) +
+    ext
+  )
+}
+
 export function buildMovieStreamUrl(
   creds: Creds,
   movieId: string | number,
