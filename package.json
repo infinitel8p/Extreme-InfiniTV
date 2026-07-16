@@ -72,6 +72,9 @@
   "pnpm": {
     "overrides": {
       "tmp": ">=0.2.6"
+    },
+    "patchedDependencies": {
+      "mpegts.js": "patches/mpegts.js.patch"
     }
   }
 }

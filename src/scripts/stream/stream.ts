@@ -51,6 +51,7 @@ import {
   deviceSupportsHevc,
   classifyStartFailure,
   describeAudioCodec,
+  isUnsupportedAudioCodec,
 } from "@/scripts/lib/codec-hints.ts"
 import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
@@ -1674,6 +1675,7 @@ function giveUpOnPlayback(ctx) {
   hideBufferingChip()
   clearStallSentinel()
   clearDeadVideoWatchdog()
+  clearDeadAudioWatchdog()
   if (!ctx.started) {
     // Bypasses getAndroidNativePlayerEnabled() on purpose: this is a one-shot-per-tune
     // recovery so an unsupported channel still plays, independent of that opt-in setting.
@@ -1687,7 +1689,7 @@ function giveUpOnPlayback(ctx) {
         nameHint: hasHevcNameHint(ctx.name),
         deviceHevc: deviceSupportsHevc(),
       })
-      if (failure.kind === "hevc" || failure.kind === "codec") {
+      if (failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio") {
         toast({ title: t("stream.failure.nativeFallback") })
         launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
           if (launched) return
@@ -1760,6 +1762,7 @@ async function mountEmbeddedPlayer(backend, opts) {
     clearStallSentinel()
     hidePlaybackFailurePanel()
     armDeadVideoWatchdog()
+    armDeadAudioWatchdog()
   })
   vjs.on("waiting", () => {
     showBufferingChip()
@@ -2353,6 +2356,87 @@ function armDeadVideoWatchdog() {
 }
 
 // ----------------------------
+// Dead-audio watchdog
+// ----------------------------
+// AC-3/E-AC-3 can get accepted into a SourceBuffer without error yet never
+// actually decode. `playing` fires, so nothing else catches it. Advisory
+// only: playback keeps going, we just warn that there's likely no sound.
+const DEAD_AUDIO_CHECK_MS = 5000
+const DEAD_AUDIO_MAX_CHECKS = 6
+const DEAD_AUDIO_MIN_PLAYED_S = 3
+const DEAD_AUDIO_MIN_FRAMES = 25
+let deadAudioTimer = null
+let deadAudioNotifiedSeq = -1
+
+function clearDeadAudioWatchdog() {
+  if (deadAudioTimer) {
+    clearTimeout(deadAudioTimer)
+    deadAudioTimer = null
+  }
+}
+
+function audioDecodedByteCount(videoEl) {
+  const bytes = videoEl.webkitAudioDecodedByteCount
+  return typeof bytes === "number" ? bytes : null
+}
+
+function armDeadAudioWatchdog() {
+  clearDeadAudioWatchdog()
+  const ctx = lastPlayContext
+  if (!ctx) return
+  if (deadAudioNotifiedSeq === ctx.seq) return
+  const seqAtArm = ctx.seq
+  const wrap = getPlayerWrap()
+  const videoAtArm = wrap?.querySelector("video")
+  if (!videoAtArm) return
+  const baselineTime = videoAtArm.currentTime || 0
+  let attempts = 0
+  const schedule = () => {
+    deadAudioTimer = setTimeout(check, DEAD_AUDIO_CHECK_MS)
+  }
+  const check = () => {
+    deadAudioTimer = null
+    if (seqAtArm !== playSeq) return
+    const currentWrap = getPlayerWrap()
+    if (!currentWrap || currentWrap.dataset.radioMode === "on") return
+    const video = currentWrap.querySelector("video")
+    if (!video || video.paused) return
+    if (video.muted || video.volume === 0) return
+    const audioBytes = audioDecodedByteCount(video)
+    log.log("[xt:livetv] dead-audio check", {
+      audioBytes,
+      frames: decodedFrameCount(video),
+      videoWidth: video.videoWidth,
+      played: (video.currentTime || 0) - baselineTime,
+    })
+    if (audioBytes === null || audioBytes > 0) return
+    const frames = decodedFrameCount(video)
+    if (frames === null || frames === 0) return
+    if (video.videoWidth === 0) return
+    attempts++
+    // Frame count also qualifies so a stuttering stream (slow currentTime) still gets verdicts.
+    const playedEnough =
+      (video.currentTime || 0) - baselineTime >= DEAD_AUDIO_MIN_PLAYED_S ||
+      frames >= DEAD_AUDIO_MIN_FRAMES
+    if (!playedEnough) {
+      if (attempts < DEAD_AUDIO_MAX_CHECKS) schedule()
+      return
+    }
+    deadAudioNotifiedSeq = seqAtArm
+    const info = vjs?.codecInfo?.()
+    log.warn("[xt:livetv] video decoding but zero audio bytes decoded - audio codec likely undecodable", {
+      streamId: ctx.streamId,
+      audioCodec: info?.audioCodec,
+    })
+    const title = isUnsupportedAudioCodec(info?.audioCodec)
+      ? t("stream.failure.audioUnsupported", { codec: describeAudioCodec(info.audioCodec) })
+      : t("stream.failure.audioSilent")
+    toast({ title, duration: 7000 })
+  }
+  schedule()
+}
+
+// ----------------------------
 // Playback failure panel
 // ----------------------------
 // In-player explanation for streams that never reached `playing`
@@ -2685,6 +2769,7 @@ async function play(streamId, name) {
   }
   hidePlaybackFailurePanel()
   clearDeadVideoWatchdog()
+  clearDeadAudioWatchdog()
   catchupSession = null
   catchupAutoRetryCount = 0
   catchupSeekRemountCount = 0
@@ -3045,6 +3130,7 @@ async function playCatchup(channel, opts) {
 
   hidePlaybackFailurePanel()
   clearDeadVideoWatchdog()
+  clearDeadAudioWatchdog()
   clearRadioMode()
 
   // A different channel (or no active session) is a fresh pick, not a same-session remount/auto-advance - don't let stale strikes leak in.

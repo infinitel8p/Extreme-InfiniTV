@@ -666,6 +666,7 @@
   "stream.failure.hevcConfirmed": "Dit kanaal gebruikt HEVC (H.265) en dit apparaat kan dat niet decoderen in de ingebouwde speler. Open het in een externe speler.",
   "stream.failure.codecUnsupported": "Het videoformaat van dit kanaal ({codec}) wordt niet ondersteund door de ingebouwde speler op dit apparaat. Open het in een externe speler.",
   "stream.failure.audioUnsupported": "Dit kanaal gebruikt {codec}-audio, die de ingebouwde speler op dit apparaat niet kan decoderen. Open het in een externe speler (MPV/VLC).",
+  "stream.failure.audioSilent": "De audio van dit kanaal kon niet worden gedecodeerd, dus het wordt zonder geluid afgespeeld. Als het in andere apps wel geluid heeft, open het dan in een externe speler (MPV/VLC).",
   "stream.failure.nativeFallback": "Het formaat van dit kanaal wordt niet ondersteund door de ingebouwde speler. Wordt geopend in de native speler…",
   "stream.offline.title": "Je bent offline",
   "stream.offline.body": "Maak weer verbinding om verder te kijken.",

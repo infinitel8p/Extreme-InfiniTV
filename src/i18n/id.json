@@ -666,6 +666,7 @@
   "stream.failure.hevcConfirmed": "Saluran ini menggunakan HEVC (H.265) dan perangkat ini tidak dapat mendekodekannya di pemutar bawaan. Buka di pemutar eksternal.",
   "stream.failure.codecUnsupported": "Format video saluran ini ({codec}) tidak didukung oleh pemutar bawaan di perangkat ini. Buka di pemutar eksternal.",
   "stream.failure.audioUnsupported": "Saluran ini menggunakan audio {codec}, yang tidak dapat didekode oleh pemutar bawaan di perangkat ini. Buka di pemutar eksternal (MPV/VLC).",
+  "stream.failure.audioSilent": "Audio saluran ini tidak dapat didekode, jadi diputar tanpa suara. Jika memiliki suara di aplikasi lain, buka di pemutar eksternal (MPV/VLC).",
   "stream.failure.nativeFallback": "Format saluran ini tidak didukung oleh pemutar bawaan. Membuka di pemutar native…",
   "stream.offline.title": "Anda sedang offline",
   "stream.offline.body": "Sambungkan kembali untuk terus menonton.",

@@ -666,6 +666,7 @@
   "stream.failure.hevcConfirmed": "此频道使用 HEVC (H.265)，此设备的内置播放器无法解码。请在外部播放器中打开。",
   "stream.failure.codecUnsupported": "此频道的视频格式（{codec}）不受此设备内置播放器支持。请在外部播放器中打开。",
   "stream.failure.audioUnsupported": "此频道使用 {codec} 音频，此设备的内置播放器无法解码。请在外部播放器（MPV/VLC）中打开。",
+  "stream.failure.audioSilent": "此频道的音频无法解码，因此正在静音播放。如果它在其他应用中有声音，请在外部播放器（MPV/VLC）中打开。",
   "stream.failure.nativeFallback": "此频道的格式不受内置播放器支持，正在使用原生播放器打开…",
   "stream.offline.title": "您当前离线",
   "stream.offline.body": "请重新连接以继续观看。",
