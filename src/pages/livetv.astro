@@ -313,7 +313,12 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 			height: 3.25rem !important;
 			padding-top: 0 !important;
 			background: transparent !important;
-			overflow: hidden !important;
+			overflow: visible !important;
+		}
+		/* Let control-bar tooltips overflow the one-control-tall strip upward. */
+		.player-wrap[data-radio-mode="on"] :global(.art-bottom),
+		.player-wrap[data-radio-mode="on"] :global(.art-controls) {
+			overflow: visible !important;
 		}
 		.player-wrap[data-radio-mode="on"] :global(.vjs-tech),
 		.player-wrap[data-radio-mode="on"] :global(#player video),
@@ -334,10 +339,19 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 		   several black layers - force every surface transparent so the collapsed
 		   strip blends into the panel gradient and only the control icons reveal. */
 		.player-wrap[data-radio-mode="on"] :global(.art-video-player),
-		.player-wrap[data-radio-mode="on"] :global(.art-video-player *) {
+		.player-wrap[data-radio-mode="on"] :global(.art-video-player *:not(.art-volume-panel):not(.art-volume-panel *)) {
 			background: transparent !important;
 			border: 0 !important;
 			box-shadow: none !important;
+		}
+		/* The strip has no dark video behind it, so give the volume panel its own legible surface in both themes. */
+		.player-wrap[data-radio-mode="on"] :global(.art-volume-panel .art-volume-inner) {
+			background: rgba(15, 18, 25, 0.94);
+			border: 1px solid rgba(255, 255, 255, 0.14);
+			border-radius: 0.625rem;
+			box-shadow: 0 10px 28px -10px rgba(0, 0, 0, 0.7);
+			-webkit-backdrop-filter: blur(8px);
+			backdrop-filter: blur(8px);
 		}
 		/* Shaka sets the container height inline, so this needs !important to win. */
 		.player-wrap[data-radio-mode="on"] :global(.shaka-video-container) {

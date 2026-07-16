@@ -661,7 +661,7 @@ async function probeContainer(src: string): Promise<StreamKind> {
         kind = "native"
       }
       try {
-        response.body?.cancel?.()
+        void response.body?.cancel?.()?.catch?.(() => {})
       } catch {}
     } finally {
       if (timer) clearTimeout(timer)
@@ -727,7 +727,7 @@ async function tsSourceIsActuallyHls(
       })
       const contentType = (response.headers.get("content-type") || "").toLowerCase()
       if (contentType.includes("mpegurl")) {
-        try { response.body?.cancel?.() } catch {}
+        try { void response.body?.cancel?.()?.catch?.(() => {}) } catch {}
         return "hls"
       }
       const head = await readBodyStart(response, 64)
@@ -988,13 +988,13 @@ function createTauriHlsLoaderClass(
           signal: this.abortController?.signal,
         })
         if (this.aborted || this.timedOut) {
-          try { response.body?.cancel?.() } catch {}
+          try { void response.body?.cancel?.()?.catch?.(() => {}) } catch {}
           return
         }
         this.stats.loading.first = performance.now()
         if (!response.ok && response.status !== 206) {
           this.clearTimer()
-          try { response.body?.cancel?.() } catch {}
+          try { void response.body?.cancel?.()?.catch?.(() => {}) } catch {}
           this.callbacks?.onError?.(
             {
               code: response.status,
