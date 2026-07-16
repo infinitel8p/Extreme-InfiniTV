@@ -73,8 +73,8 @@ function readAttr(source: string, key: string): string {
       let value = ""
       while (cursor < source.length) {
         const charAt = source[cursor]
-        if (charAt === "\\" && source[cursor + 1] === '"') {
-          value += '"'
+        if (charAt === "\\" && (source[cursor + 1] === '"' || source[cursor + 1] === "\\")) {
+          value += source[cursor + 1]
           cursor += 2
           continue
         }

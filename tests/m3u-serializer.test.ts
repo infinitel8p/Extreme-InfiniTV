@@ -107,6 +107,19 @@ describe("serializeM3U: quote escaping", () => {
     const reparsed = parseM3U(serialized)
     expect(reparsed.entries[0].tvgName).toBe('Inner "quote" here')
   })
+
+  it("round-trips backslashes without letting a trailing one escape the attribute", () => {
+    const entry: M3UEntry = {
+      ...minimalEntry,
+      tvgId: "x",
+      tvgName: 'ends with backslash\\',
+      category: 'a\\b "c"',
+    }
+    const reparsed = parseM3U(serializeM3U([entry]))
+    expect(reparsed.entries[0].tvgName).toBe('ends with backslash\\')
+    expect(reparsed.entries[0].category).toBe('a\\b "c"')
+    expect(reparsed.entries[0].name).toBe("Minimal")
+  })
 })
 
 describe("serializeM3U: radio flag, chno, tvg-type", () => {

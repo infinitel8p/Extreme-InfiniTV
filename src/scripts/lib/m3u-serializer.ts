@@ -12,7 +12,7 @@ export interface M3UHeaderOptions {
 }
 
 function escapeAttrValue(value: string): string {
-  return value.replace(/"/g, '\\"')
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
 }
 
 function buildHeaderLine(header?: M3UHeaderOptions): string {
