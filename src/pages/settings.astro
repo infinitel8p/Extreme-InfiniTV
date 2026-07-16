@@ -85,13 +85,13 @@ const navStructure: NavSection[] = [
     { id: "card-backup",              labelKey: "settings.backup.title",           label: "Backup" },
     { id: "card-storage",             labelKey: "settings.storage.title",          label: "Storage" },
   ]},
-  { id: "settings-help", labelKey: "settings.group.help", label: "Help & feedback", cards: [
-    { id: "card-docs",     labelKey: "settings.help.docsTitle", label: "Read the docs" },
-    { id: "card-feedback", labelKey: "settings.nav.feedback",   label: "Send feedback" },
-  ]},
   { id: "settings-about", labelKey: "settings.group.about", label: "About", cards: [
     { id: "update-section",    labelKey: "settings.nav.appUpdate",  label: "App update" },
     { id: "changelog-section", labelKey: "settings.about.whatsNew", label: "What's new" },
+  ]},
+  { id: "settings-help", labelKey: "settings.group.help", label: "Help & feedback", cards: [
+    { id: "card-docs",     labelKey: "settings.help.docsTitle", label: "Read the docs" },
+    { id: "card-feedback", labelKey: "settings.nav.feedback",   label: "Send feedback" },
   ]},
   { id: "settings-support", labelKey: "settings.group.support", label: "Support", cards: [] },
   { id: "settings-danger",  labelKey: "settings.group.dangerZone", label: "Danger zone", cards: [], danger: true },
@@ -886,71 +886,6 @@ const navStructure: NavSection[] = [
       </div>
     </section>
 
-    <!-- Group: Help & feedback -->
-    <section id="settings-help" class="settings-group scroll-mt-8">
-      <h2 data-i18n="settings.group.help" class="settings-group__title">Help & feedback</h2>
-      <article id="card-docs" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-        <div class="flex items-start gap-3">
-          <span class="icon-mark">
-            <IconBook aria-hidden="true" stroke={2} />
-          </span>
-          <div class="flex flex-col gap-1 min-w-0">
-            <h3 data-i18n="settings.help.docsTitle" class="text-base font-semibold">Read the docs</h3>
-            <p data-i18n="settings.help.docsIntro" class="text-sm text-fg-2">
-              Step-by-step guides for sign-in, external players, the keyboard and D-pad bindings, and the most common things people get stuck on.
-            </p>
-          </div>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <a
-            href="/docs"
-            class="btn justify-start sm:justify-center">
-            <IconBook aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.openDocs">Open documentation</span>
-          </a>
-          <a
-            href="/docs?p=getting-started"
-            class="btn justify-start sm:justify-center">
-            <IconRocket aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.openQuickStart">Quick start</span>
-          </a>
-        </div>
-      </article>
-      <article id="card-feedback" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-        <div class="flex items-start gap-3">
-          <span class="icon-mark">
-            <IconMail aria-hidden="true" stroke={2} />
-          </span>
-          <div class="flex flex-col gap-1 min-w-0">
-            <h3 data-i18n="settings.help.title" class="text-base font-semibold">Found a bug or have a suggestion?</h3>
-            <p data-i18n="settings.help.intro" class="text-sm text-fg-2">
-              Bug reports, feature requests, questions, and general feedback all go to GitHub - search existing issues first, or pick a template and open a new one.
-            </p>
-          </div>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <a
-            href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
-            target="_blank"
-            rel="noopener noreferrer"
-            data-external
-            class="btn justify-start sm:justify-center">
-            <IconBug aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.reportIssue">Report a bug</span>
-          </a>
-          <a
-            href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
-            target="_blank"
-            rel="noopener noreferrer"
-            data-external
-            class="btn justify-start sm:justify-center">
-            <IconMail aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.sendFeedback">Send feedback</span>
-          </a>
-        </div>
-      </article>
-    </section>
-
     <!-- Group: About (App update + version + expiration) -->
     <section id="settings-about" class="settings-group scroll-mt-8">
       <h2 data-i18n="settings.group.about" class="settings-group__title">About</h2>
@@ -1088,6 +1023,71 @@ const navStructure: NavSection[] = [
         </summary>
         <div id="changelog-body" class="flex flex-col gap-2 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60 empty:hidden"></div>
       </details>
+    </section>
+
+    <!-- Group: Help & feedback -->
+    <section id="settings-help" class="settings-group scroll-mt-8">
+      <h2 data-i18n="settings.group.help" class="settings-group__title">Help & feedback</h2>
+      <article id="card-docs" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
+        <div class="flex items-start gap-3">
+          <span class="icon-mark">
+            <IconBook aria-hidden="true" stroke={2} />
+          </span>
+          <div class="flex flex-col gap-1 min-w-0">
+            <h3 data-i18n="settings.help.docsTitle" class="text-base font-semibold">Read the docs</h3>
+            <p data-i18n="settings.help.docsIntro" class="text-sm text-fg-2">
+              Step-by-step guides for sign-in, external players, the keyboard and D-pad bindings, and the most common things people get stuck on.
+            </p>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <a
+            href="/docs"
+            class="btn justify-start sm:justify-center">
+            <IconBook aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.help.openDocs">Open documentation</span>
+          </a>
+          <a
+            href="/docs?p=getting-started"
+            class="btn justify-start sm:justify-center">
+            <IconRocket aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.help.openQuickStart">Quick start</span>
+          </a>
+        </div>
+      </article>
+      <article id="card-feedback" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
+        <div class="flex items-start gap-3">
+          <span class="icon-mark">
+            <IconMail aria-hidden="true" stroke={2} />
+          </span>
+          <div class="flex flex-col gap-1 min-w-0">
+            <h3 data-i18n="settings.help.title" class="text-base font-semibold">Found a bug or have a suggestion?</h3>
+            <p data-i18n="settings.help.intro" class="text-sm text-fg-2">
+              Bug reports, feature requests, questions, and general feedback all go to GitHub - search existing issues first, or pick a template and open a new one.
+            </p>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <a
+            href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-external
+            class="btn justify-start sm:justify-center">
+            <IconBug aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.help.reportIssue">Report a bug</span>
+          </a>
+          <a
+            href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-external
+            class="btn justify-start sm:justify-center">
+            <IconMail aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.help.sendFeedback">Send feedback</span>
+          </a>
+        </div>
+      </article>
     </section>
 
     <!-- Group: Support / donations -->
