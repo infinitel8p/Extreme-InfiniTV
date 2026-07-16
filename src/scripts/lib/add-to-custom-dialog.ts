@@ -144,22 +144,28 @@ async function runAddToCustomDialog(items: AddToCustomItem[], subtitle: string):
       focusTarget?.focus()
     }
 
+    // Unguarded: callers (addToEntry, createAndAdd) own the busy flag so this
+    // can run after a playlist was just created without tripping its own guard.
+    const doAdd = async (entryId: string): Promise<void> => {
+      let doc = await loadCustomDoc(entryId)
+      for (const item of items) {
+        doc = addChannel(doc, item.source, item.init).doc
+      }
+      const saved = await saveCustomDoc(entryId, doc)
+      if (!saved) throw new Error("saveCustomDoc returned false")
+      invalidateEntry(entryId)
+      document.dispatchEvent(new CustomEvent("xt:entries-updated"))
+      toastSuccess(
+        items.length > 1 ? t("addToCustom.toastAddedMany", { count: items.length }) : t("addToCustom.toastAdded")
+      )
+      settle(true)
+    }
+
     const addToEntry = async (entryId: string) => {
       if (busy) return
       busy = true
       try {
-        let doc = await loadCustomDoc(entryId)
-        for (const item of items) {
-          doc = addChannel(doc, item.source, item.init).doc
-        }
-        const saved = await saveCustomDoc(entryId, doc)
-        if (!saved) throw new Error("saveCustomDoc returned false")
-        invalidateEntry(entryId)
-        document.dispatchEvent(new CustomEvent("xt:entries-updated"))
-        toastSuccess(
-          items.length > 1 ? t("addToCustom.toastAddedMany", { count: items.length }) : t("addToCustom.toastAdded")
-        )
-        settle(true)
+        await doAdd(entryId)
       } catch (err) {
         log.warn("[xt:add-to-custom] add failed:", err)
         toastError(t("addToCustom.toastFailed"))
@@ -173,7 +179,7 @@ async function runAddToCustomDialog(items: AddToCustomItem[], subtitle: string):
       const title = (nameInput?.value || "").trim()
       try {
         const entry = await addEntry(title ? { type: "custom", title } : { type: "custom" })
-        await addToEntry(entry._id)
+        await doAdd(entry._id)
       } catch (err) {
         log.warn("[xt:add-to-custom] create playlist failed:", err)
         toastError(t("addToCustom.toastFailed"))

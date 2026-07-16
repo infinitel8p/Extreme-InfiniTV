@@ -9,7 +9,13 @@ import { ICON_WORLD } from "@/scripts/lib/icons.ts"
 import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
 import { log } from "@/scripts/lib/log.js"
 import { sniffPage, cancelSniff, saveSniffedStream } from "@/scripts/lib/stream-sniffer.ts"
-import { describeHlsQuality, summarizeHlsMaster, type SniffCandidate } from "@/scripts/lib/sniff-classify.ts"
+import {
+  describeHlsQuality,
+  summarizeHlsMaster,
+  type HlsMasterSummary,
+  type HlsMediaRendition,
+  type SniffCandidate,
+} from "@/scripts/lib/sniff-classify.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { openAddToCustomDialog, openAddManyToCustomDialog } from "@/scripts/lib/add-to-custom-dialog.ts"
 import type { CustomSource } from "@/scripts/lib/custom-playlist.ts"
@@ -66,8 +72,8 @@ function timeoutSignal(parentSignal: AbortSignal, ms: number): AbortSignal {
   return controller.signal
 }
 
-/** Fetches an HLS candidate's manifest and returns a short quality label, or null on failure/DASH/no data. */
-async function probeCandidateQuality(candidate: SniffCandidate, parentSignal: AbortSignal): Promise<string | null> {
+/** Fetches an HLS candidate's manifest and parses it, or null on failure/DASH/no data. */
+async function fetchManifestSummary(candidate: SniffCandidate, parentSignal: AbortSignal): Promise<HlsMasterSummary | null> {
   if (candidate.kind !== "hls") return null
   const headers: Record<string, string> = {}
   if (candidate.userAgent) headers["User-Agent"] = candidate.userAgent
@@ -75,12 +81,52 @@ async function probeCandidateQuality(candidate: SniffCandidate, parentSignal: Ab
   try {
     const response = await providerFetch(candidate.url, { headers, signal: timeoutSignal(parentSignal, QUALITY_PROBE_TIMEOUT_MS) })
     if (!response.ok) return null
-    const text = await response.text()
-    const summary = summarizeHlsMaster(text)
-    return describeHlsQuality(summary, t("sniffer.results.audio"))
+    return summarizeHlsMaster(await response.text())
   } catch {
     return null
   }
+}
+
+function resolveAgainst(baseUrl: string, uri: string): string | null {
+  try {
+    return new URL(uri, baseUrl).href
+  } catch {
+    return null
+  }
+}
+
+function hrefIgnoringQuery(url: string): string {
+  try {
+    const parsed = new URL(url)
+    parsed.search = ""
+    parsed.hash = ""
+    return parsed.href
+  } catch {
+    return url
+  }
+}
+
+/** Exact href match first, then match ignoring query string/fragment; never matches excludeIdx itself. */
+function findCandidateIndexByUrl(targetUrl: string, candidates: SniffCandidate[], excludeIdx: number): number {
+  const exactIdx = candidates.findIndex((candidate, idx) => idx !== excludeIdx && candidate.url === targetUrl)
+  if (exactIdx !== -1) return exactIdx
+  const targetNoQuery = hrefIgnoringQuery(targetUrl)
+  return candidates.findIndex((candidate, idx) => idx !== excludeIdx && hrefIgnoringQuery(candidate.url) === targetNoQuery)
+}
+
+function audioRenditionLabel(rendition: HlsMediaRendition): string {
+  const base = t("sniffer.results.audio")
+  const language = rendition.language && rendition.language.toLowerCase() !== "und" ? rendition.language : null
+  if (language) return `${base} · ${language.toUpperCase()}`
+  if (rendition.name) return `${base} · ${rendition.name}`
+  return base
+}
+
+/** Prefixes a cross-referenced variant's own chip with "Video" to contrast with "Audio · EN" rows. */
+function videoVariantLabel(quality: string | null): string | null {
+  const audioLabel = t("sniffer.results.audio")
+  if (!quality || quality === audioLabel) return quality
+  return `${t("sniffer.results.video")} · ${quality}`
 }
 
 type Phase =
@@ -102,11 +148,10 @@ function headerHtml(): string {
   `
 }
 
-function candidateRowHtml(candidate: SniffCandidate, idx: number, checked: boolean, quality: string | null): string {
+function candidateRowHtml(candidate: SniffCandidate, idx: number, checked: boolean, quality: string | null, masterConfirmed: boolean): string {
   const kindLabel = candidate.kind === "hls" ? t("sniffer.results.hls") : t("sniffer.results.dash")
-  const masterBadge = candidate.isMaster
-    ? `<span class="text-2xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent-soft text-accent shrink-0">${escapeHtml(t("sniffer.results.master"))}</span>`
-    : ""
+  const showMasterBadge = candidate.isMaster || masterConfirmed
+  const masterBadge = `<span data-role="master-badge" data-idx="${idx}" class="text-2xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent-soft text-accent shrink-0${showMasterBadge ? "" : " hidden"}">${escapeHtml(t("sniffer.results.master"))}</span>`
   const qualityBadge = `<span data-role="quality-chip" data-idx="${idx}" class="text-2xs font-medium px-1.5 py-0.5 rounded bg-surface-2 text-fg-2 shrink-0${quality ? "" : " hidden"}">${quality ? escapeHtml(quality) : ""}</span>`
   return `
     <div
@@ -142,7 +187,12 @@ function candidateRowHtml(candidate: SniffCandidate, idx: number, checked: boole
   `
 }
 
-function renderPhase(phase: Phase, checkedIdx: Set<number>, qualityByIdx: Map<number, string | null>): string {
+function renderPhase(
+  phase: Phase,
+  checkedIdx: Set<number>,
+  qualityByIdx: Map<number, string | null>,
+  masterConfirmedIdx: Set<number>
+): string {
   if (phase.kind === "input") {
     return `
       <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
@@ -187,7 +237,9 @@ function renderPhase(phase: Phase, checkedIdx: Set<number>, qualityByIdx: Map<nu
 
   if (phase.kind === "results") {
     const rows = phase.candidates
-      .map((candidate, idx) => candidateRowHtml(candidate, idx, checkedIdx.has(idx), qualityByIdx.get(idx) ?? null))
+      .map((candidate, idx) =>
+        candidateRowHtml(candidate, idx, checkedIdx.has(idx), qualityByIdx.get(idx) ?? null, masterConfirmedIdx.has(idx))
+      )
       .join("")
     const checkedCount = checkedIdx.size
     return `
@@ -226,6 +278,7 @@ function renderPhase(phase: Phase, checkedIdx: Set<number>, qualityByIdx: Map<nu
               class="field-input flex-1"
             />
           </div>
+          <span class="text-xs text-fg-3">${escapeHtml(t("sniffer.name.hint"))}</span>
         </label>
         <footer class="flex items-center gap-3 shrink-0 mt-auto flex-wrap">
           <button type="button" data-role="back" class="btn">${escapeHtml(t("sniffer.backBtn"))}</button>
@@ -278,6 +331,8 @@ export function openAddFromWebsiteDialog(): Promise<void> {
     const checkedIdx = new Set<number>()
     const qualityByIdx = new Map<number, string | null>()
     const pendingQualityIdx = new Set<number>()
+    const masterDerivedIdx = new Set<number>()
+    const masterConfirmedIdx = new Set<number>()
     let qualityAbortController: AbortController | null = null
     let resultsGeneration = 0
 
@@ -296,7 +351,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
     }
 
     const render = () => {
-      dialog.innerHTML = renderPhase(phase, checkedIdx, qualityByIdx)
+      dialog.innerHTML = renderPhase(phase, checkedIdx, qualityByIdx, masterConfirmedIdx)
       const focusTarget = dialog.querySelector<HTMLElement>('[data-role="url-input"], [data-role="name-input"], button')
       focusTarget?.focus()
     }
@@ -315,6 +370,41 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       chip.classList.toggle("hidden", !quality)
     }
 
+    const confirmMasterBadge = (idx: number) => {
+      masterConfirmedIdx.add(idx)
+      const badge = dialog.querySelector<HTMLElement>(`[data-role="master-badge"][data-idx="${idx}"]`)
+      badge?.classList.remove("hidden")
+    }
+
+    // Master-derived chips win: a media playlist's own probe carries no resolution info,
+    // so once its master has told us what it is, ignore the (empty) own-probe result.
+    const applyQuality = (idx: number, quality: string | null, fromMaster: boolean) => {
+      if (!fromMaster && masterDerivedIdx.has(idx)) return
+      if (fromMaster) masterDerivedIdx.add(idx)
+      qualityByIdx.set(idx, quality)
+      updateQualityChip(idx, quality)
+    }
+
+    const crossReferenceMaster = (masterIdx: number, masterUrl: string, summary: HlsMasterSummary, candidates: SniffCandidate[]) => {
+      for (const variant of summary.variants) {
+        if (!variant.uri) continue
+        const resolvedUrl = resolveAgainst(masterUrl, variant.uri)
+        if (!resolvedUrl) continue
+        const matchIdx = findCandidateIndexByUrl(resolvedUrl, candidates, masterIdx)
+        if (matchIdx === -1) continue
+        const label = describeHlsQuality({ isMaster: true, variants: [variant], media: [] }, t("sniffer.results.audio"))
+        applyQuality(matchIdx, videoVariantLabel(label), true)
+      }
+      for (const rendition of summary.media) {
+        if (!rendition.uri) continue
+        const resolvedUrl = resolveAgainst(masterUrl, rendition.uri)
+        if (!resolvedUrl) continue
+        const matchIdx = findCandidateIndexByUrl(resolvedUrl, candidates, masterIdx)
+        if (matchIdx === -1) continue
+        applyQuality(matchIdx, audioRenditionLabel(rendition), true)
+      }
+    }
+
     const kickoffQualityEnrichment = (candidates: SniffCandidate[]) => {
       if (!qualityAbortController) qualityAbortController = new AbortController()
       const controller = qualityAbortController
@@ -322,11 +412,15 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       candidates.forEach((candidate, idx) => {
         if (candidate.kind !== "hls" || qualityByIdx.has(idx) || pendingQualityIdx.has(idx)) return
         pendingQualityIdx.add(idx)
-        void probeCandidateQuality(candidate, controller.signal).then((quality) => {
+        void fetchManifestSummary(candidate, controller.signal).then((summary) => {
           pendingQualityIdx.delete(idx)
           if (controller.signal.aborted || generation !== resultsGeneration) return
-          qualityByIdx.set(idx, quality)
-          updateQualityChip(idx, quality)
+          const ownLabel = summary ? describeHlsQuality(summary, t("sniffer.results.audio")) : null
+          applyQuality(idx, ownLabel, false)
+          if (summary?.isMaster) {
+            confirmMasterBadge(idx)
+            crossReferenceMaster(idx, candidate.url, summary, candidates)
+          }
         })
       })
     }
@@ -348,6 +442,8 @@ export function openAddFromWebsiteDialog(): Promise<void> {
           checkedIdx.clear()
           qualityByIdx.clear()
           pendingQualityIdx.clear()
+          masterDerivedIdx.clear()
+          masterConfirmedIdx.clear()
           qualityAbortController?.abort()
           qualityAbortController = null
           resultsGeneration++
@@ -531,7 +627,7 @@ function ensureDialog(): HTMLDialogElement | null {
   node.setAttribute("aria-labelledby", `${DIALOG_ID}-title`)
   node.className = [
     "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
-    "w-[min(32rem,calc(100vw-2rem))] max-h-[min(80dvh,36rem)]",
+    "w-[min(36rem,calc(100vw-2rem))] max-h-[min(80dvh,36rem)]",
     "backdrop:bg-black/60",
   ].join(" ")
   document.body.appendChild(node)

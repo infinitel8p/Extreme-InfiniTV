@@ -166,10 +166,11 @@ describe("summarizeHlsMaster", () => {
     expect(summarizeHlsMaster(text)).toEqual({
       isMaster: true,
       variants: [
-        { width: 1920, height: 1080, bandwidth: 5200000 },
-        { width: 1280, height: 720, bandwidth: 2800000 },
-        { width: 640, height: 360, bandwidth: 800000 },
+        { width: 1920, height: 1080, bandwidth: 5200000, uri: "1080p/index.m3u8" },
+        { width: 1280, height: 720, bandwidth: 2800000, uri: "720p/index.m3u8" },
+        { width: 640, height: 360, bandwidth: 800000, uri: "360p/index.m3u8" },
       ],
+      media: [],
     })
   })
 
@@ -183,7 +184,7 @@ describe("summarizeHlsMaster", () => {
       "#EXTINF:6.0,",
       "segment1.ts",
     ].join("\n")
-    expect(summarizeHlsMaster(text)).toEqual({ isMaster: false, variants: [] })
+    expect(summarizeHlsMaster(text)).toEqual({ isMaster: false, variants: [], media: [] })
   })
 
   it("flags an audio-only master (no RESOLUTION on any variant)", () => {
@@ -195,18 +196,55 @@ describe("summarizeHlsMaster", () => {
     ].join("\n")
     expect(summarizeHlsMaster(text)).toEqual({
       isMaster: true,
-      variants: [{ width: null, height: null, bandwidth: 128000 }],
+      variants: [{ width: null, height: null, bandwidth: 128000, uri: "audio/index.m3u8" }],
+      media: [{ type: "AUDIO", uri: "audio/index.m3u8", language: null, name: "main" }],
     })
   })
 
   it("returns an empty, non-master summary for malformed or empty input", () => {
-    expect(summarizeHlsMaster("")).toEqual({ isMaster: false, variants: [] })
+    expect(summarizeHlsMaster("")).toEqual({ isMaster: false, variants: [], media: [] })
     expect(summarizeHlsMaster("not an m3u8 at all\njust some garbage text")).toEqual({
       isMaster: false,
       variants: [],
+      media: [],
     })
-    expect(summarizeHlsMaster(null as unknown as string)).toEqual({ isMaster: false, variants: [] })
-    expect(summarizeHlsMaster(undefined as unknown as string)).toEqual({ isMaster: false, variants: [] })
+    expect(summarizeHlsMaster(null as unknown as string)).toEqual({ isMaster: false, variants: [], media: [] })
+    expect(summarizeHlsMaster(undefined as unknown as string)).toEqual({ isMaster: false, variants: [], media: [] })
+  })
+
+  it("captures relative and absolute variant URIs", () => {
+    const text = [
+      "#EXT-X-STREAM-INF:BANDWIDTH=5200000,RESOLUTION=1920x1080",
+      "1080p/index.m3u8",
+      "#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360",
+      "https://cdn.example.com/abc123/360p/index.m3u8?token=xyz",
+    ].join("\n")
+    const summary = summarizeHlsMaster(text)
+    expect(summary.variants[0].uri).toBe("1080p/index.m3u8")
+    expect(summary.variants[1].uri).toBe("https://cdn.example.com/abc123/360p/index.m3u8?token=xyz")
+  })
+
+  it("captures an EXT-X-MEDIA audio rendition with language", () => {
+    const text = [
+      "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",LANGUAGE=\"en\",URI=\"audio_en/index.m3u8\"",
+      "#EXT-X-STREAM-INF:BANDWIDTH=5200000,RESOLUTION=1920x1080",
+      "1080p/index.m3u8",
+    ].join("\n")
+    const summary = summarizeHlsMaster(text)
+    expect(summary.media).toEqual([
+      { type: "AUDIO", uri: "audio_en/index.m3u8", language: "en", name: "English" },
+    ])
+  })
+
+  it("captures an EXT-X-MEDIA entry without a URI (muxed audio) without crashing", () => {
+    const text = [
+      "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"main\",DEFAULT=YES",
+      "#EXT-X-STREAM-INF:BANDWIDTH=5200000,RESOLUTION=1920x1080,AUDIO=\"aud\"",
+      "1080p/index.m3u8",
+    ].join("\n")
+    expect(() => summarizeHlsMaster(text)).not.toThrow()
+    const summary = summarizeHlsMaster(text)
+    expect(summary.media).toEqual([{ type: "AUDIO", uri: null, language: null, name: "main" }])
   })
 })
 
@@ -226,7 +264,8 @@ describe("describeHlsQuality", () => {
   it("omits the bitrate when bandwidth is missing", () => {
     const summary: ReturnType<typeof summarizeHlsMaster> = {
       isMaster: true,
-      variants: [{ width: 1280, height: 720, bandwidth: null }],
+      variants: [{ width: 1280, height: 720, bandwidth: null, uri: null }],
+      media: [],
     }
     expect(describeHlsQuality(summary, "audio")).toBe("720p")
   })
@@ -239,6 +278,6 @@ describe("describeHlsQuality", () => {
   })
 
   it("returns null when there are no variants at all", () => {
-    expect(describeHlsQuality({ isMaster: false, variants: [] }, "audio")).toBe(null)
+    expect(describeHlsQuality({ isMaster: false, variants: [], media: [] }, "audio")).toBe(null)
   })
 })
