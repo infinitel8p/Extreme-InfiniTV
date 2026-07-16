@@ -227,4 +227,26 @@ describe("buildTrackLabels", () => {
     const labels = buildTrackLabels([{ trackId: 1, language: "zzzzz not a code", sampleCount: 1 }], "en")
     expect(labels[0].label).toBe("zzzzz not a code")
   })
+
+  it("appends the track name in parentheses, keeping it distinct from a plain same-language track", () => {
+    const labels = buildTrackLabels(
+      [
+        { trackId: 1, language: "eng", sampleCount: 10, name: "SDH" },
+        { trackId: 2, language: "eng", sampleCount: 8 },
+      ],
+      "en",
+    )
+    expect(labels.map((track) => track.label)).toEqual(["English (SDH)", "English"])
+  })
+
+  it("suffixes a duplicate language+name pair with an incrementing number", () => {
+    const labels = buildTrackLabels(
+      [
+        { trackId: 1, language: "eng", sampleCount: 10, name: "SDH" },
+        { trackId: 2, language: "eng", sampleCount: 8, name: "SDH" },
+      ],
+      "en",
+    )
+    expect(labels.map((track) => track.label)).toEqual(["English (SDH)", "English (SDH) 2"])
+  })
 })

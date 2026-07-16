@@ -39,6 +39,7 @@ interface RawTextTrack {
   trackId: number
   language: string
   sampleCount: number
+  name?: string | null
 }
 
 const MP4_URL_PATTERN = /\.(mp4|m4v|mov)$/i
@@ -235,7 +236,9 @@ export function buildTrackLabels(rawTracks: RawTextTrack[], locale: string): Mp4
   const seenLabelCounts = new Map<string, number>()
   return rawTracks.map((rawTrack) => {
     const languageCode = (rawTrack.language || "").trim().toLowerCase()
-    const baseLabel = languageLabelFor(languageCode, displayNames)
+    const languageLabel = languageLabelFor(languageCode, displayNames)
+    const trackName = rawTrack.name?.trim()
+    const baseLabel = trackName ? `${languageLabel} (${trackName})` : languageLabel
     const occurrence = (seenLabelCounts.get(baseLabel) || 0) + 1
     seenLabelCounts.set(baseLabel, occurrence)
     return {

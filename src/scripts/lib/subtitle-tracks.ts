@@ -1,13 +1,15 @@
 // Per-player subtitle manager: lazy per-track MP4 cue extraction, subtitles off by default.
 import { log } from "@/scripts/lib/log.js"
-import { t } from "@/scripts/lib/i18n.js"
+import { t, getActiveLocale } from "@/scripts/lib/i18n.js"
 import { toastError } from "@/scripts/lib/toast.js"
 import {
   isMp4SubtitleCapableUrl,
   openMp4SubtitleSession,
+  buildTrackLabels,
   type Mp4SubtitleSession,
   type SubtitleCue,
 } from "@/scripts/lib/mp4-subtitles.js"
+import type { MkvSubtitleSession, MkvCue } from "@/scripts/lib/vod-proxy.js"
 
 export interface SubtitleRegistrar {
   addTrack(label: string, language: string): TextTrack | null
@@ -22,16 +24,25 @@ export interface SubtitleManagerOptions {
 }
 
 export interface SubtitleManager {
-  setSource(sourceUrl: string | null, mimeType?: string | null): void
+  setSource(sourceUrl: string | null, mimeType?: string | null, mkvSession?: MkvSubtitleSession | null): void
   select(index: number): void
   detach(): void
 }
 
+interface PushCueState {
+  trackNumber: number
+  pending: SubtitleCue[]
+  flushedCount: number
+  seen: Set<string>
+}
+
 interface ManagedTrack {
+  kind: "mp4" | "push"
   trackId: number
   textTrack: TextTrack
   loaded: boolean
   loading: boolean
+  pushState?: PushCueState
 }
 
 // TextTrack.cues is null while mode is "disabled" per spec, so draining needs a live mode first.
@@ -48,6 +59,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
 
   let managedTracks: ManagedTrack[] = []
   let session: Mp4SubtitleSession | null = null
+  let activeMkvSession: MkvSubtitleSession | null = null
   let sourceController: AbortController | null = null
   let extractionController: AbortController | null = null
   let activeExtractionIndex: number | null = null
@@ -69,7 +81,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
 
   function startExtraction(index: number): void {
     const managed = managedTracks[index]
-    if (!managed || !session) return
+    if (!managed || managed.kind !== "mp4" || !session) return
     if (managed.loaded || (managed.loading && activeExtractionIndex === index)) return
     if (typeof (window as any).VTTCue === "undefined") {
       log.warn("[xt:subtitles] VTTCue unsupported, skipping subtitle extraction")
@@ -106,9 +118,43 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
       })
   }
 
+  function flushPushCues(managed: ManagedTrack): void {
+    const pushState = managed.pushState
+    if (!pushState || pushState.flushedCount >= pushState.pending.length) return
+    addCues(managed.textTrack, pushState.pending.slice(pushState.flushedCount))
+    pushState.flushedCount = pushState.pending.length
+  }
+
+  function handlePushCues(managed: ManagedTrack, trackNumber: number, cues: MkvCue[]): void {
+    const pushState = managed.pushState
+    if (!pushState || pushState.trackNumber !== trackNumber) return
+    const freshEntries: SubtitleCue[] = []
+    for (const cue of cues) {
+      const cueKey = `${cue.startMs}:${cue.text}`
+      if (pushState.seen.has(cueKey)) continue
+      pushState.seen.add(cueKey)
+      const entry: SubtitleCue = {
+        startSeconds: cue.startMs / 1000,
+        endSeconds: cue.endMs / 1000,
+        text: cue.text,
+      }
+      pushState.pending.push(entry)
+      freshEntries.push(entry)
+    }
+    if (!freshEntries.length) return
+    if (managed.textTrack.mode !== "disabled") {
+      addCues(managed.textTrack, freshEntries)
+      pushState.flushedCount = pushState.pending.length
+    }
+  }
+
   function onTrackListChange(): void {
     managedTracks.forEach((managed, index) => {
       if (managed.textTrack.mode === "disabled") return
+      if (managed.kind === "push") {
+        flushPushCues(managed)
+        return
+      }
       startExtraction(index)
     })
   }
@@ -122,7 +168,59 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     managedTracks = []
   }
 
-  function setSource(sourceUrl: string | null, mimeType?: string | null): void {
+  function attachMkvSession(sourceUrl: string | null, mkvSession: MkvSubtitleSession, signal: AbortSignal): void {
+    mkvSession
+      .tracks()
+      .then((tracks) => {
+        if (currentSourceUrl !== sourceUrl || signal.aborted || !tracks.length) return
+
+        trackListTarget = registrar.trackListTarget()
+        trackListTarget?.addEventListener("change", onTrackListChange)
+
+        const rawTracks = tracks.map((track) => ({
+          trackId: track.number,
+          language: track.language ?? "",
+          sampleCount: 0,
+          name: track.name,
+        }))
+        const labeledTracks = buildTrackLabels(rawTracks, getActiveLocale())
+
+        const readyTracks: { index: number; label: string; language: string }[] = []
+        labeledTracks.forEach((labeledTrack, position) => {
+          const textTrack = registrar.addTrack(labeledTrack.label, labeledTrack.language)
+          if (!textTrack) return
+          textTrack.mode = "disabled"
+          const index = managedTracks.length
+          managedTracks.push({
+            kind: "push",
+            trackId: labeledTrack.trackId,
+            textTrack,
+            loaded: true,
+            loading: false,
+            pushState: { trackNumber: tracks[position].number, pending: [], flushedCount: 0, seen: new Set() },
+          })
+          readyTracks.push({ index, label: labeledTrack.label, language: labeledTrack.language })
+        })
+        if (readyTracks.length) onTracksReady?.(readyTracks)
+
+        mkvSession.onCues((trackNumber, cues) => {
+          if (currentSourceUrl !== sourceUrl || signal.aborted) return
+          const managed = managedTracks.find(
+            (track) => track.kind === "push" && track.pushState?.trackNumber === trackNumber,
+          )
+          if (managed) handlePushCues(managed, trackNumber, cues)
+        })
+      })
+      .catch((err) => {
+        log.warn("[xt:subtitles] mkv session tracks() failed:", err)
+      })
+  }
+
+  function setSource(
+    sourceUrl: string | null,
+    mimeType?: string | null,
+    mkvSession?: MkvSubtitleSession | null,
+  ): void {
     sourceController?.abort()
     extractionController?.abort()
     sourceController = null
@@ -132,6 +230,18 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     currentSourceUrl = sourceUrl
     toastShownForSource = false
     teardownTracks()
+    if (activeMkvSession) {
+      try { activeMkvSession.stop() } catch (err) { log.warn("[xt:subtitles] mkv session stop() failed:", err) }
+      activeMkvSession = null
+    }
+
+    if (mkvSession) {
+      activeMkvSession = mkvSession
+      const controller = new AbortController()
+      sourceController = controller
+      attachMkvSession(sourceUrl, mkvSession, controller.signal)
+      return
+    }
 
     if (!sourceUrl || !isMp4SubtitleCapableUrl(sourceUrl, mimeType ?? null)) return
 
@@ -149,7 +259,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
           if (!textTrack) continue
           textTrack.mode = "disabled"
           const index = managedTracks.length
-          managedTracks.push({ trackId: trackInfo.trackId, textTrack, loaded: false, loading: false })
+          managedTracks.push({ kind: "mp4", trackId: trackInfo.trackId, textTrack, loaded: false, loading: false })
           readyTracks.push({ index, label: trackInfo.label, language: trackInfo.language })
         }
         if (readyTracks.length) onTracksReady?.(readyTracks)
@@ -170,7 +280,10 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
       if (stale) stale.loading = false
       activeExtractionIndex = null
     }
-    if (index >= 0) startExtraction(index)
+    if (index < 0) return
+    const managed = managedTracks[index]
+    if (managed?.kind === "push") flushPushCues(managed)
+    else startExtraction(index)
   }
 
   function detach(): void {
@@ -181,6 +294,10 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     activeExtractionIndex = null
     session = null
     currentSourceUrl = null
+    if (activeMkvSession) {
+      try { activeMkvSession.stop() } catch (err) { log.warn("[xt:subtitles] mkv session stop() failed:", err) }
+      activeMkvSession = null
+    }
     teardownTracks()
   }
 

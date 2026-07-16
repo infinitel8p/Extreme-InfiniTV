@@ -8,6 +8,9 @@ mod external_player;
 mod hevc_extension;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod matroska;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod sniffer;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -15,6 +18,9 @@ mod tray;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod updater;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod vod_proxy;
 
 // The Stdout target also covers Android release builds; tauri-plugin-log routes it to logcat there, not just the debug-only terminal.
 #[cfg(not(target_os = "ios"))]
@@ -139,6 +145,7 @@ pub fn run() {
         .manage(external_player::ExternalPlayerState::default())
         .manage(updater::PendingUpdateState::default())
         .manage(sniffer::SnifferState::default())
+        .manage(vod_proxy::VodProxyState::default())
         .invoke_handler(tauri::generate_handler![
             discord::discord_set_activity,
             discord::discord_clear,
@@ -153,6 +160,8 @@ pub fn run() {
             tray::set_close_to_tray,
             updater::updater_check_from,
             updater::updater_install,
+            vod_proxy::register_vod_proxy,
+            vod_proxy::unregister_vod_proxy,
         ]);
 
     #[cfg(target_os = "android")]

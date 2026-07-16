@@ -53,8 +53,8 @@ export interface DrmOptions {
 }
 
 export interface VjsLikeHandle {
-  /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. `durationSeconds` seeds duration when the container reports none (raw TS); `timelineOffsetSeconds` places a mid-programme remount on its timeline. `subtitles` opts a progressive MP4 source into embedded tx3g-subtitle extraction. */
-  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string } | null }): void
+  /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. `durationSeconds` seeds duration when the container reports none (raw TS); `timelineOffsetSeconds` places a mid-programme remount on its timeline. `subtitles` opts a progressive MP4 source into embedded tx3g-subtitle extraction, or a `mkvSession` into push-mode subtitles from the MKV tee-proxy. */
+  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string; mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null } | null }): void
   play(): Promise<unknown> | void
   pause(): void
   paused?(): boolean
@@ -1744,7 +1744,11 @@ async function mountVideoJs(
         return
       }
       const hint = streamKindHint(src, type)
-      subtitleManager.setSource(hint === "native" && subtitles ? subtitles.sourceUrl : null, type)
+      subtitleManager.setSource(
+        hint === "native" && subtitles ? subtitles.sourceUrl : null,
+        type,
+        hint === "native" ? subtitles?.mkvSession ?? null : null,
+      )
       if (hint === "ts") {
         if (tsSourcesServingHls.has(src)) loadHls(src)
         else loadTs(src)
@@ -1769,7 +1773,7 @@ async function mountVideoJs(
           else if (kind === "ts") loadTs(src)
           else if (kind === "native") {
             loadNative(src, type)
-            if (subtitles) subtitleManager.setSource(subtitles.sourceUrl, type)
+            if (subtitles) subtitleManager.setSource(subtitles.sourceUrl, type, subtitles?.mkvSession ?? null)
           } else loadHls(src)
         })
         .catch(() => {
@@ -2102,9 +2106,13 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     else art.on("ready", add)
   }
 
-  function setSubtitleSource(sourceUrl: string | null, mimeType?: string | null): void {
+  function setSubtitleSource(
+    sourceUrl: string | null,
+    mimeType?: string | null,
+    mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null,
+  ): void {
     removeSubtitleControl()
-    subtitleManager.setSource(sourceUrl, mimeType)
+    subtitleManager.setSource(sourceUrl, mimeType, mkvSession ?? null)
   }
 
   const handle: VjsLikeHandle = {
@@ -2125,7 +2133,11 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         return
       }
       const hint = streamKindHint(src, type)
-      setSubtitleSource(hint === "native" && subtitles ? subtitles.sourceUrl : null, type)
+      setSubtitleSource(
+        hint === "native" && subtitles ? subtitles.sourceUrl : null,
+        type,
+        hint === "native" ? subtitles?.mkvSession ?? null : null,
+      )
       if (hint === "hls") {
         art.type = "m3u8"
         art.url = src
@@ -2149,7 +2161,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
           if (pendingSrc !== src) return
           art.type = kind === "dash" ? "mpd" : kind === "ts" ? "ts" : kind === "native" ? "" : "m3u8"
           art.url = src
-          if (kind === "native" && subtitles) setSubtitleSource(subtitles.sourceUrl, type)
+          if (kind === "native" && subtitles) setSubtitleSource(subtitles.sourceUrl, type, subtitles?.mkvSession ?? null)
         })
         .catch(() => {
           if (pendingSrc !== src) return
@@ -2423,7 +2435,11 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
         return
       }
       const hint = streamKindHint(src, type)
-      subtitleManager.setSource(hint === "native" && subtitles ? subtitles.sourceUrl : null, type)
+      subtitleManager.setSource(
+        hint === "native" && subtitles ? subtitles.sourceUrl : null,
+        type,
+        hint === "native" ? subtitles?.mkvSession ?? null : null,
+      )
       // Shaka can't demux raw MPEG-TS; route it through mpegts.js instead.
       if (hint === "ts") {
         if (tsSourcesServingHls.has(src)) void loadIntoShaka(src, drm, "application/x-mpegURL")
@@ -2446,7 +2462,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
           else if (kind === "dash") void loadIntoShaka(src, drm, "application/dash+xml")
           else if (kind === "native") {
             void loadIntoShaka(src, drm, type || undefined)
-            if (subtitles) subtitleManager.setSource(subtitles.sourceUrl, type)
+            if (subtitles) subtitleManager.setSource(subtitles.sourceUrl, type, subtitles?.mkvSession ?? null)
           } else void loadIntoShaka(src, drm, "application/x-mpegURL")
         })
         .catch(() => {

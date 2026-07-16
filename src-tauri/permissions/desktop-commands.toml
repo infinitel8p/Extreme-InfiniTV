@@ -19,4 +19,6 @@ commands.allow = [
     "updater_install",
     "sniff_page",
     "cancel_sniff",
+    "register_vod_proxy",
+    "unregister_vod_proxy",
 ]

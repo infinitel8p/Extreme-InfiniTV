@@ -65,6 +65,7 @@ import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
 import { mountPlayer, getExternalLauncher } from "@/scripts/lib/player-runtime.ts"
+import { prepareVodPlayback } from "@/scripts/lib/vod-proxy.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
@@ -875,7 +876,12 @@ async function playEpisode(episode) {
     })
   }
 
-  player.src({ src: playSrc, type: mime, subtitles: { sourceUrl: playSrc } })
+  const prepared = await prepareVodPlayback(playSrc)
+  player.src({
+    src: prepared.playbackUrl,
+    type: mime,
+    subtitles: { sourceUrl: playSrc, mkvSession: prepared.mkvSession },
+  })
   applyVideoScale()
 
   if (!progressListenersBound) {
