@@ -1,52 +1,86 @@
 // "Add from website" flow: paste a page URL, sniff it via stream-sniffer.ts,
-// pick a candidate stream, name it, and save as a new m3u playlist entry.
+// pick one candidate stream (or check several) and either save it as a new
+// m3u playlist entry or add it/them to a custom playlist.
 
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { t } from "@/scripts/lib/i18n.js"
+import { escapeHtml } from "@/scripts/lib/format.ts"
 import { ICON_WORLD } from "@/scripts/lib/icons.ts"
 import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
 import { log } from "@/scripts/lib/log.js"
 import { sniffPage, cancelSniff, saveSniffedStream } from "@/scripts/lib/stream-sniffer.ts"
-import type { SniffCandidate } from "@/scripts/lib/sniff-classify.ts"
-import { openAddToCustomDialog } from "@/scripts/lib/add-to-custom-dialog.ts"
+import { describeHlsQuality, summarizeHlsMaster, type SniffCandidate } from "@/scripts/lib/sniff-classify.ts"
+import { providerFetch } from "@/scripts/lib/provider-fetch.js"
+import { openAddToCustomDialog, openAddManyToCustomDialog } from "@/scripts/lib/add-to-custom-dialog.ts"
 import type { CustomSource } from "@/scripts/lib/custom-playlist.ts"
 
 const DIALOG_ID = "add-from-website-dialog"
+const QUALITY_PROBE_TIMEOUT_MS = 4000
 
 let dlg: HTMLDialogElement | null = null
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (ch) =>
-    ch === "&" ? "&amp;" :
-    ch === "<" ? "&lt;" :
-    ch === ">" ? "&gt;" :
-    ch === '"' ? "&quot;" : "&#39;"
-  )
-}
 
 function hostnameOf(url: string): string {
   try { return new URL(url).hostname } catch { return url }
 }
 
-function ensureDialog(): HTMLDialogElement | null {
-  if (typeof document === "undefined") return null
-  if (dlg && document.body.contains(dlg)) return dlg
-  const existing = document.getElementById(DIALOG_ID)
-  if (existing instanceof HTMLDialogElement) {
-    dlg = existing
-    return dlg
+function middleTruncate(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value
+  const headLength = Math.ceil((maxLength - 1) / 2)
+  const tailLength = Math.floor((maxLength - 1) / 2)
+  return `${value.slice(0, headLength)}…${value.slice(value.length - tailLength)}`
+}
+
+/** Last one or two path segments, so "master.m3u8" shows its parent segment too. */
+function primaryPathLabel(url: string): string {
+  try {
+    const parsed = new URL(url)
+    const segments = parsed.pathname.split("/").filter(Boolean)
+    if (!segments.length) return parsed.hostname
+    return segments.length > 1 ? segments.slice(-2).join("/") : segments[0]
+  } catch {
+    return url
   }
-  const node = document.createElement("dialog")
-  node.id = DIALOG_ID
-  node.setAttribute("aria-labelledby", `${DIALOG_ID}-title`)
-  node.className = [
-    "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
-    "w-[min(32rem,calc(100vw-2rem))] max-h-[min(80dvh,36rem)]",
-    "backdrop:bg-black/60",
-  ].join(" ")
-  document.body.appendChild(node)
-  dlg = node
-  return dlg
+}
+
+function secondaryLineLabel(url: string): string {
+  try {
+    const parsed = new URL(url)
+    return `${parsed.hostname}${middleTruncate(`${parsed.pathname}${parsed.search}`, 44)}`
+  } catch {
+    return url
+  }
+}
+
+function timeoutSignal(parentSignal: AbortSignal, ms: number): AbortSignal {
+  if (typeof (AbortSignal as any).any === "function") {
+    return (AbortSignal as any).any([parentSignal, AbortSignal.timeout(ms)])
+  }
+  const controller = new AbortController()
+  const onParentAbort = () => controller.abort()
+  parentSignal.addEventListener("abort", onParentAbort)
+  const timer = setTimeout(() => controller.abort(), ms)
+  controller.signal.addEventListener("abort", () => {
+    clearTimeout(timer)
+    parentSignal.removeEventListener("abort", onParentAbort)
+  })
+  return controller.signal
+}
+
+/** Fetches an HLS candidate's manifest and returns a short quality label, or null on failure/DASH/no data. */
+async function probeCandidateQuality(candidate: SniffCandidate, parentSignal: AbortSignal): Promise<string | null> {
+  if (candidate.kind !== "hls") return null
+  const headers: Record<string, string> = {}
+  if (candidate.userAgent) headers["User-Agent"] = candidate.userAgent
+  if (candidate.referer) headers["Referer"] = candidate.referer
+  try {
+    const response = await providerFetch(candidate.url, { headers, signal: timeoutSignal(parentSignal, QUALITY_PROBE_TIMEOUT_MS) })
+    if (!response.ok) return null
+    const text = await response.text()
+    const summary = summarizeHlsMaster(text)
+    return describeHlsQuality(summary, t("sniffer.results.audio"))
+  } catch {
+    return null
+  }
 }
 
 type Phase =
@@ -68,7 +102,47 @@ function headerHtml(): string {
   `
 }
 
-function renderPhase(phase: Phase): string {
+function candidateRowHtml(candidate: SniffCandidate, idx: number, checked: boolean, quality: string | null): string {
+  const kindLabel = candidate.kind === "hls" ? t("sniffer.results.hls") : t("sniffer.results.dash")
+  const masterBadge = candidate.isMaster
+    ? `<span class="text-2xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent-soft text-accent shrink-0">${escapeHtml(t("sniffer.results.master"))}</span>`
+    : ""
+  const qualityBadge = `<span data-role="quality-chip" data-idx="${idx}" class="text-2xs font-medium px-1.5 py-0.5 rounded bg-surface-2 text-fg-2 shrink-0${quality ? "" : " hidden"}">${quality ? escapeHtml(quality) : ""}</span>`
+  return `
+    <div
+      data-role="candidate-row"
+      data-idx="${idx}"
+      class="xt-picker-row flex items-center gap-3 px-3 py-2.5 rounded-xl border border-line bg-surface hover:bg-surface-2 focus-within:bg-surface-2 focus-within:border-accent has-checked:border-accent/60 has-checked:bg-accent-soft/15"
+    >
+      <label class="shrink-0 -m-3 p-3 inline-flex items-center justify-center rounded-lg cursor-pointer">
+        <input
+          type="checkbox"
+          data-role="candidate-check"
+          data-idx="${idx}"
+          class="size-4 accent-accent"
+          aria-label="${escapeHtml(t("sniffer.results.selectAria", { name: primaryPathLabel(candidate.url) }))}"
+          ${checked ? "checked" : ""}
+        />
+      </label>
+      <button
+        type="button"
+        data-role="candidate-btn"
+        data-idx="${idx}"
+        class="flex flex-col items-start flex-1 min-w-0 text-left gap-0.5 outline-none active:scale-[0.98]"
+      >
+        <span class="flex items-center gap-2 w-full min-w-0">
+          <span class="text-2xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-surface-2 text-fg-3 shrink-0">${escapeHtml(kindLabel)}</span>
+          ${masterBadge}
+          ${qualityBadge}
+          <span class="text-sm font-medium truncate">${escapeHtml(primaryPathLabel(candidate.url))}</span>
+        </span>
+        <span class="text-xs text-fg-3 truncate w-full">${escapeHtml(secondaryLineLabel(candidate.url))}</span>
+      </button>
+    </div>
+  `
+}
+
+function renderPhase(phase: Phase, checkedIdx: Set<number>, qualityByIdx: Map<number, string | null>): string {
   if (phase.kind === "input") {
     return `
       <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
@@ -113,32 +187,21 @@ function renderPhase(phase: Phase): string {
 
   if (phase.kind === "results") {
     const rows = phase.candidates
-      .map((candidate, idx) => {
-        const kindLabel = candidate.kind === "hls" ? t("sniffer.results.hls") : t("sniffer.results.dash")
-        const masterBadge = candidate.isMaster
-          ? `<span class="text-2xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent-soft text-accent">${escapeHtml(t("sniffer.results.master"))}</span>`
-          : ""
-        return `
-          <button
-            type="button"
-            data-role="candidate-btn"
-            data-idx="${idx}"
-            class="xt-picker-row flex items-center w-full text-left gap-3 px-3 py-2.5 rounded-xl border border-line bg-surface hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent active:scale-[0.98]"
-          >
-            <span class="text-2xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-surface-2 text-fg-3 shrink-0">${escapeHtml(kindLabel)}</span>
-            ${masterBadge}
-            <span class="text-sm truncate">${escapeHtml(hostnameOf(candidate.url))}</span>
-          </button>
-        `
-      })
+      .map((candidate, idx) => candidateRowHtml(candidate, idx, checkedIdx.has(idx), qualityByIdx.get(idx) ?? null))
       .join("")
+    const checkedCount = checkedIdx.size
     return `
       <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
         ${headerHtml()}
         <h3 class="text-sm font-semibold text-fg-2">${escapeHtml(t("sniffer.results.title"))}</h3>
         <div data-role="list" class="flex flex-col gap-2.5 overflow-y-auto min-h-0">${rows}</div>
         <footer class="flex items-center gap-3 shrink-0 mt-auto">
-          <button type="button" data-role="cancel" class="btn ms-auto">${escapeHtml(t("common.cancel"))}</button>
+          <button type="button" data-role="cancel" class="btn">${escapeHtml(t("common.cancel"))}</button>
+          <button
+            type="button"
+            data-role="add-selected"
+            class="btn btn-primary ms-auto${checkedCount ? "" : " hidden"}"
+          >${escapeHtml(t("sniffer.results.addSelected", { count: checkedCount }))}</button>
         </footer>
       </div>
     `
@@ -186,6 +249,18 @@ function renderPhase(phase: Phase): string {
   `
 }
 
+function candidateToSource(candidate: SniffCandidate): CustomSource {
+  return {
+    kind: "direct",
+    url: candidate.url,
+    userAgent: candidate.userAgent ?? null,
+    referer: candidate.referer ?? null,
+    manifestType: candidate.kind === "dash" ? "mpd" : null,
+    drmScheme: null,
+    licenseKey: null,
+  }
+}
+
 /**
  * Open the "Add from website" dialog. Resolves once the dialog closes,
  * whether the user saved a stream, cancelled, or hit a dead end.
@@ -200,6 +275,11 @@ export function openAddFromWebsiteDialog(): Promise<void> {
     let pageUrl = ""
     let lastCandidates: SniffCandidate[] = []
     let favicon: string | null = null
+    const checkedIdx = new Set<number>()
+    const qualityByIdx = new Map<number, string | null>()
+    const pendingQualityIdx = new Set<number>()
+    let qualityAbortController: AbortController | null = null
+    let resultsGeneration = 0
 
     const settle = () => {
       if (resolved) return
@@ -207,6 +287,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       dialog.removeEventListener("click", onClick)
       dialog.removeEventListener("cancel", onCancel)
       dialog.removeEventListener("close", onClose)
+      qualityAbortController?.abort()
       cancelSniff()
       try {
         if (dialog.open) dialog.close()
@@ -215,9 +296,39 @@ export function openAddFromWebsiteDialog(): Promise<void> {
     }
 
     const render = () => {
-      dialog.innerHTML = renderPhase(phase)
+      dialog.innerHTML = renderPhase(phase, checkedIdx, qualityByIdx)
       const focusTarget = dialog.querySelector<HTMLElement>('[data-role="url-input"], [data-role="name-input"], button')
       focusTarget?.focus()
+    }
+
+    const updateAddSelectedFooter = () => {
+      const addSelectedBtn = dialog.querySelector<HTMLButtonElement>('[data-role="add-selected"]')
+      if (!addSelectedBtn) return
+      addSelectedBtn.textContent = t("sniffer.results.addSelected", { count: checkedIdx.size })
+      addSelectedBtn.classList.toggle("hidden", checkedIdx.size === 0)
+    }
+
+    const updateQualityChip = (idx: number, quality: string | null) => {
+      const chip = dialog.querySelector<HTMLElement>(`[data-role="quality-chip"][data-idx="${idx}"]`)
+      if (!chip) return
+      chip.textContent = quality ?? ""
+      chip.classList.toggle("hidden", !quality)
+    }
+
+    const kickoffQualityEnrichment = (candidates: SniffCandidate[]) => {
+      if (!qualityAbortController) qualityAbortController = new AbortController()
+      const controller = qualityAbortController
+      const generation = resultsGeneration
+      candidates.forEach((candidate, idx) => {
+        if (candidate.kind !== "hls" || qualityByIdx.has(idx) || pendingQualityIdx.has(idx)) return
+        pendingQualityIdx.add(idx)
+        void probeCandidateQuality(candidate, controller.signal).then((quality) => {
+          pendingQualityIdx.delete(idx)
+          if (controller.signal.aborted || generation !== resultsGeneration) return
+          qualityByIdx.set(idx, quality)
+          updateQualityChip(idx, quality)
+        })
+      })
     }
 
     const runSniff = async () => {
@@ -234,6 +345,12 @@ export function openAddFromWebsiteDialog(): Promise<void> {
         favicon = result.favicon
         if (result.candidates.length) {
           lastCandidates = result.candidates
+          checkedIdx.clear()
+          qualityByIdx.clear()
+          pendingQualityIdx.clear()
+          qualityAbortController?.abort()
+          qualityAbortController = null
+          resultsGeneration++
           phase = { kind: "results", candidates: result.candidates }
         } else {
           phase = { kind: "failure", reason: result.drmSeen ? "drm" : "empty" }
@@ -243,6 +360,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
         phase = { kind: "failure", reason: "empty" }
       }
       render()
+      if (phase.kind === "results") kickoffQualityEnrichment(phase.candidates)
     }
 
     const startFromInput = (): void => {
@@ -286,18 +404,26 @@ export function openAddFromWebsiteDialog(): Promise<void> {
     const saveToCustomFromNamePhase = async (namePhase: Extract<Phase, { kind: "name" }>, saveCustomBtn: HTMLButtonElement | null): Promise<void> => {
       const input = dialog.querySelector<HTMLInputElement>('[data-role="name-input"]')
       const name = (input?.value || "").trim() || hostnameOf(namePhase.candidate.url)
-      const source: CustomSource = {
-        kind: "direct",
-        url: namePhase.candidate.url,
-        userAgent: namePhase.candidate.userAgent ?? null,
-        referer: namePhase.candidate.referer ?? null,
-        manifestType: namePhase.candidate.kind === "dash" ? "mpd" : null,
-        drmScheme: null,
-        licenseKey: null,
-      }
+      const source = candidateToSource(namePhase.candidate)
       if (saveCustomBtn) saveCustomBtn.disabled = true
       const added = await openAddToCustomDialog(source, { name, logo: namePhase.favicon })
       if (saveCustomBtn) saveCustomBtn.disabled = false
+      if (added) settle()
+    }
+
+    const addSelectedToCustom = async (resultsPhase: Extract<Phase, { kind: "results" }>, addSelectedBtn: HTMLButtonElement): Promise<void> => {
+      const items = [...checkedIdx]
+        .sort((a, b) => a - b)
+        .map((idx) => resultsPhase.candidates[idx])
+        .filter((candidate): candidate is SniffCandidate => !!candidate)
+        .map((candidate) => ({
+          source: candidateToSource(candidate),
+          init: { name: primaryPathLabel(candidate.url), logo: favicon },
+        }))
+      if (!items.length) return
+      addSelectedBtn.disabled = true
+      const added = await openAddManyToCustomDialog(items)
+      addSelectedBtn.disabled = false
       if (added) settle()
     }
 
@@ -312,6 +438,15 @@ export function openAddFromWebsiteDialog(): Promise<void> {
 
       if (target.closest('[data-role="start"]')) {
         startFromInput()
+        return
+      }
+
+      const checkboxEl = target.closest<HTMLInputElement>('[data-role="candidate-check"]')
+      if (checkboxEl && phase.kind === "results") {
+        const idx = Number(checkboxEl.dataset.idx ?? "-1")
+        if (checkboxEl.checked) checkedIdx.add(idx)
+        else checkedIdx.delete(idx)
+        updateAddSelectedFooter()
         return
       }
 
@@ -331,6 +466,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
           ? { kind: "results", candidates: lastCandidates }
           : { kind: "input", url: pageUrl, error: null }
         render()
+        if (phase.kind === "results") kickoffQualityEnrichment(phase.candidates)
         return
       }
 
@@ -343,6 +479,12 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       const saveCustomBtn = target.closest<HTMLButtonElement>('[data-role="save-custom"]')
       if (saveCustomBtn && phase.kind === "name") {
         void saveToCustomFromNamePhase(phase, saveCustomBtn)
+        return
+      }
+
+      const addSelectedBtn = target.closest<HTMLButtonElement>('[data-role="add-selected"]')
+      if (addSelectedBtn && phase.kind === "results") {
+        void addSelectedToCustom(phase, addSelectedBtn)
         return
       }
 
@@ -374,4 +516,25 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       defaultElement: `#${DIALOG_ID} [data-role="url-input"], #${DIALOG_ID} [data-role="cancel"]`,
     })
   })
+}
+
+function ensureDialog(): HTMLDialogElement | null {
+  if (typeof document === "undefined") return null
+  if (dlg && document.body.contains(dlg)) return dlg
+  const existing = document.getElementById(DIALOG_ID)
+  if (existing instanceof HTMLDialogElement) {
+    dlg = existing
+    return dlg
+  }
+  const node = document.createElement("dialog")
+  node.id = DIALOG_ID
+  node.setAttribute("aria-labelledby", `${DIALOG_ID}-title`)
+  node.className = [
+    "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
+    "w-[min(32rem,calc(100vw-2rem))] max-h-[min(80dvh,36rem)]",
+    "backdrop:bg-black/60",
+  ].join(" ")
+  document.body.appendChild(node)
+  dlg = node
+  return dlg
 }

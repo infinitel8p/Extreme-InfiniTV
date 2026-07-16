@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 import {
   classifySniffedUrl,
+  describeHlsQuality,
   rankSniffCandidates,
+  summarizeHlsMaster,
   type SniffCandidate,
 } from "../src/scripts/lib/sniff-classify"
 
@@ -147,5 +149,96 @@ describe("rankSniffCandidates", () => {
     const second = candidate({ url: "https://host.example/2.m3u8", kind: "hls", isMaster: false })
     const third = candidate({ url: "https://host.example/3.m3u8", kind: "hls", isMaster: false })
     expect(rankSniffCandidates([first, second, third])).toEqual([first, second, third])
+  })
+})
+
+describe("summarizeHlsMaster", () => {
+  it("parses a master playlist with several variants", () => {
+    const text = [
+      "#EXTM3U",
+      "#EXT-X-STREAM-INF:BANDWIDTH=5200000,RESOLUTION=1920x1080,CODECS=\"avc1.640028,mp4a.40.2\"",
+      "1080p/index.m3u8",
+      "#EXT-X-STREAM-INF:BANDWIDTH=2800000,RESOLUTION=1280x720",
+      "720p/index.m3u8",
+      "#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360",
+      "360p/index.m3u8",
+    ].join("\n")
+    expect(summarizeHlsMaster(text)).toEqual({
+      isMaster: true,
+      variants: [
+        { width: 1920, height: 1080, bandwidth: 5200000 },
+        { width: 1280, height: 720, bandwidth: 2800000 },
+        { width: 640, height: 360, bandwidth: 800000 },
+      ],
+    })
+  })
+
+  it("reports isMaster false for a plain media playlist", () => {
+    const text = [
+      "#EXTM3U",
+      "#EXT-X-VERSION:3",
+      "#EXT-X-TARGETDURATION:6",
+      "#EXTINF:6.0,",
+      "segment0.ts",
+      "#EXTINF:6.0,",
+      "segment1.ts",
+    ].join("\n")
+    expect(summarizeHlsMaster(text)).toEqual({ isMaster: false, variants: [] })
+  })
+
+  it("flags an audio-only master (no RESOLUTION on any variant)", () => {
+    const text = [
+      "#EXTM3U",
+      "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"main\",DEFAULT=YES,URI=\"audio/index.m3u8\"",
+      "#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS=\"mp4a.40.2\",AUDIO=\"aud\"",
+      "audio/index.m3u8",
+    ].join("\n")
+    expect(summarizeHlsMaster(text)).toEqual({
+      isMaster: true,
+      variants: [{ width: null, height: null, bandwidth: 128000 }],
+    })
+  })
+
+  it("returns an empty, non-master summary for malformed or empty input", () => {
+    expect(summarizeHlsMaster("")).toEqual({ isMaster: false, variants: [] })
+    expect(summarizeHlsMaster("not an m3u8 at all\njust some garbage text")).toEqual({
+      isMaster: false,
+      variants: [],
+    })
+    expect(summarizeHlsMaster(null as unknown as string)).toEqual({ isMaster: false, variants: [] })
+    expect(summarizeHlsMaster(undefined as unknown as string)).toEqual({ isMaster: false, variants: [] })
+  })
+})
+
+describe("describeHlsQuality", () => {
+  it("picks the highest-resolution variant with bandwidth", () => {
+    const summary = summarizeHlsMaster(
+      [
+        "#EXT-X-STREAM-INF:BANDWIDTH=5200000,RESOLUTION=1920x1080",
+        "1080p/index.m3u8",
+        "#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360",
+        "360p/index.m3u8",
+      ].join("\n")
+    )
+    expect(describeHlsQuality(summary, "audio")).toBe("1080p · 5.2 Mbps")
+  })
+
+  it("omits the bitrate when bandwidth is missing", () => {
+    const summary: ReturnType<typeof summarizeHlsMaster> = {
+      isMaster: true,
+      variants: [{ width: 1280, height: 720, bandwidth: null }],
+    }
+    expect(describeHlsQuality(summary, "audio")).toBe("720p")
+  })
+
+  it("returns the audio label when no variant has a resolution", () => {
+    const summary = summarizeHlsMaster(
+      "#EXT-X-STREAM-INF:BANDWIDTH=128000\naudio/index.m3u8"
+    )
+    expect(describeHlsQuality(summary, "audio")).toBe("audio")
+  })
+
+  it("returns null when there are no variants at all", () => {
+    expect(describeHlsQuality({ isMaster: false, variants: [] }, "audio")).toBe(null)
   })
 })

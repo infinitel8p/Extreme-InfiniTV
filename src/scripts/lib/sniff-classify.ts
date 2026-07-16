@@ -90,3 +90,51 @@ export function rankSniffCandidates(candidates: SniffCandidate[]): SniffCandidat
   }
   return [...deduped].sort((a, b) => candidateRank(a) - candidateRank(b))
 }
+
+export interface HlsVariant {
+  width: number | null
+  height: number | null
+  bandwidth: number | null
+}
+
+export interface HlsMasterSummary {
+  isMaster: boolean
+  variants: HlsVariant[]
+}
+
+const STREAM_INF_RX = /^#EXT-X-STREAM-INF:(.*)$/i
+const RESOLUTION_RX = /RESOLUTION=(\d+)x(\d+)/i
+const BANDWIDTH_RX = /(?:^|,)\s*BANDWIDTH=(\d+)/i
+
+/** Parses an HLS playlist text and reports whether it's a master with variant streams. */
+export function summarizeHlsMaster(text: string): HlsMasterSummary {
+  if (!text || typeof text !== "string") return { isMaster: false, variants: [] }
+  const variants: HlsVariant[] = []
+  for (const line of text.split(/\r?\n/)) {
+    const match = STREAM_INF_RX.exec(line.trim())
+    if (!match) continue
+    const attrs = match[1]
+    const resolutionMatch = RESOLUTION_RX.exec(attrs)
+    const bandwidthMatch = BANDWIDTH_RX.exec(attrs)
+    variants.push({
+      width: resolutionMatch ? Number(resolutionMatch[1]) : null,
+      height: resolutionMatch ? Number(resolutionMatch[2]) : null,
+      bandwidth: bandwidthMatch ? Number(bandwidthMatch[1]) : null,
+    })
+  }
+  return { isMaster: variants.length > 0, variants }
+}
+
+/** Picks a short quality label ("1080p", "1080p · 5.2 Mbps", "audio") from a master summary, or null when there's nothing to show. */
+export function describeHlsQuality(summary: HlsMasterSummary, audioLabel: string): string | null {
+  if (!summary.variants.length) return null
+  const videoVariants = summary.variants.filter((variant) => variant.height)
+  if (!videoVariants.length) return audioLabel
+  const best = videoVariants.reduce((tallest, variant) =>
+    (variant.height ?? 0) > (tallest.height ?? 0) ? variant : tallest
+  )
+  const heightLabel = `${best.height}p`
+  if (!best.bandwidth) return heightLabel
+  const megabitsPerSecond = (best.bandwidth / 1_000_000).toFixed(1)
+  return `${heightLabel} · ${megabitsPerSecond} Mbps`
+}

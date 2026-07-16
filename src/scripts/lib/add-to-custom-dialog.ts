@@ -43,19 +43,19 @@ function ensureDialog(): HTMLDialogElement | null {
   return dlg
 }
 
-function headerHtml(channelName: string): string {
+function headerHtml(subtitle: string): string {
   return `
     <header class="flex items-start gap-3.5 shrink-0 px-3">
       <span class="icon-mark icon-mark--lg" aria-hidden="true">${ICON_PLAYLIST_ADD}</span>
       <div class="flex flex-col gap-1 min-w-0 pt-0.5">
         <h2 id="${DIALOG_ID}-title" class="text-lg font-semibold leading-tight tracking-tight">${escapeHtml(t("addToCustom.dialogTitle"))}</h2>
-        ${channelName ? `<p class="text-sm text-fg-3 leading-relaxed truncate">${escapeHtml(channelName)}</p>` : ""}
+        ${subtitle ? `<p class="text-sm text-fg-3 leading-relaxed truncate">${escapeHtml(subtitle)}</p>` : ""}
       </div>
     </header>
   `
 }
 
-function renderList(channelName: string, entries: CustomEntryLite[]): string {
+function renderList(subtitle: string, entries: CustomEntryLite[]): string {
   const rows = entries
     .map(
       (entry) => `
@@ -72,7 +72,7 @@ function renderList(channelName: string, entries: CustomEntryLite[]): string {
     .join("")
   return `
     <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
-      ${headerHtml(channelName)}
+      ${headerHtml(subtitle)}
       <div data-role="list" class="flex flex-col gap-2.5 overflow-y-auto min-h-0">
         ${rows}
         <button
@@ -90,10 +90,10 @@ function renderList(channelName: string, entries: CustomEntryLite[]): string {
   `
 }
 
-function renderCreate(channelName: string): string {
+function renderCreate(subtitle: string): string {
   return `
     <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
-      ${headerHtml(channelName)}
+      ${headerHtml(subtitle)}
       <label class="flex flex-col gap-2">
         <span class="text-xs font-semibold tracking-wider uppercase text-fg-3">${escapeHtml(t("addToCustom.newPlaylistRow"))}</span>
         <input
@@ -111,17 +111,14 @@ function renderCreate(channelName: string): string {
   `
 }
 
-/**
- * Open the "Add to custom playlist" picker. Resolves true once the channel
- * has been added to a (possibly newly created) custom playlist entry, false
- * on cancel/escape or an unrecoverable failure.
- */
-export async function openAddToCustomDialog(
-  source: CustomSource,
+export interface AddToCustomItem {
+  source: CustomSource
   init: AddChannelInit & { name: string }
-): Promise<boolean> {
+}
+
+async function runAddToCustomDialog(items: AddToCustomItem[], subtitle: string): Promise<boolean> {
   const dialog = ensureDialog()
-  if (!dialog) return Promise.resolve(false)
+  if (!dialog || !items.length) return Promise.resolve(false)
 
   return new Promise((resolve) => {
     let resolved = false
@@ -142,7 +139,7 @@ export async function openAddToCustomDialog(
     }
 
     const render = () => {
-      dialog.innerHTML = phase === "create" ? renderCreate(init.name) : renderList(init.name, customEntries)
+      dialog.innerHTML = phase === "create" ? renderCreate(subtitle) : renderList(subtitle, customEntries)
       const focusTarget = dialog.querySelector<HTMLElement>('[data-role="new-name-input"], [data-role="entry-btn"], button')
       focusTarget?.focus()
     }
@@ -151,13 +148,17 @@ export async function openAddToCustomDialog(
       if (busy) return
       busy = true
       try {
-        const doc = await loadCustomDoc(entryId)
-        const { doc: updatedDoc } = addChannel(doc, source, init)
-        const saved = await saveCustomDoc(entryId, updatedDoc)
+        let doc = await loadCustomDoc(entryId)
+        for (const item of items) {
+          doc = addChannel(doc, item.source, item.init).doc
+        }
+        const saved = await saveCustomDoc(entryId, doc)
         if (!saved) throw new Error("saveCustomDoc returned false")
         invalidateEntry(entryId)
         document.dispatchEvent(new CustomEvent("xt:entries-updated"))
-        toastSuccess(t("addToCustom.toastAdded"))
+        toastSuccess(
+          items.length > 1 ? t("addToCustom.toastAddedMany", { count: items.length }) : t("addToCustom.toastAdded")
+        )
         settle(true)
       } catch (err) {
         log.warn("[xt:add-to-custom] add failed:", err)
@@ -252,4 +253,24 @@ export async function openAddToCustomDialog(
       })
     })()
   })
+}
+
+/**
+ * Open the "Add to custom playlist" picker for a single channel. Resolves
+ * true once it has been added to a (possibly newly created) custom playlist
+ * entry, false on cancel/escape or an unrecoverable failure.
+ */
+export async function openAddToCustomDialog(
+  source: CustomSource,
+  init: AddChannelInit & { name: string }
+): Promise<boolean> {
+  return runAddToCustomDialog([{ source, init }], init.name)
+}
+
+/**
+ * Same as openAddToCustomDialog but adds every item to the chosen playlist
+ * in a single load -> add each -> save pass.
+ */
+export async function openAddManyToCustomDialog(items: AddToCustomItem[]): Promise<boolean> {
+  return runAddToCustomDialog(items, t("addToCustom.itemsSelected", { count: items.length }))
 }
