@@ -433,6 +433,7 @@
   "livetv.pickChannel": "Pick a channel.",
   "livetv.pickChannelHelper": "Choose from the list, or change category.",
   "livetv.radioEyebrow": "On air · Radio",
+  "livetv.radioListening": "Listening",
   "livetv.radioAriaLabel": "Radio: {name}",
   "livetv.hevcBadge.tooltip": "HEVC (H.265) video. If the built-in player can't play it, use the external player option (MPV/VLC).",
   "livetv.cat.modeAria": "Category filter mode",

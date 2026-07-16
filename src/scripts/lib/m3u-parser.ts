@@ -228,6 +228,37 @@ function parseExtinf(line: string): Omit<M3UEntry, "url"> & { siptvDays: number 
   }
 }
 
+function nameFromBareUrl(url: string): string {
+  try {
+    return new URL(url).hostname || url
+  } catch {
+    return url
+  }
+}
+
+function bareUrlPending(url: string): Omit<M3UEntry, "url"> & { siptvDays: number } {
+  return {
+    name: nameFromBareUrl(url),
+    logo: null,
+    category: null,
+    tvgId: null,
+    tvgName: null,
+    chno: null,
+    catchup: null,
+    catchupDays: null,
+    catchupSource: null,
+    catchupCorrection: null,
+    siptvDays: 0,
+    userAgent: null,
+    referer: null,
+    tvgType: null,
+    isRadio: false,
+    manifestType: null,
+    drmScheme: null,
+    licenseKey: null,
+  }
+}
+
 export function parseM3U(text: string): M3UParseResult {
   let payload = text
   if (payload.charCodeAt(0) === 0xfeff) payload = payload.slice(1)
@@ -305,7 +336,12 @@ export function parseM3U(text: string): M3UParseResult {
     if (isHlsTag(line)) continue
     if (line.startsWith("#")) continue
 
-    if (!pending) continue
+    // A bare http(s) URL with no preceding #EXTINF is still a valid M3U entry
+    // (common for radio pointer .m3u files); synthesize a minimal channel.
+    if (!pending) {
+      if (/^https?:\/\//i.test(line)) pending = bareUrlPending(line)
+      else continue
+    }
     const category = pending.category ?? extgrpFallback
     const { siptvDays, ...pendingEntry } = pending
     let catchup = pendingEntry.catchup ?? headerCatchup

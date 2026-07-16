@@ -68,6 +68,43 @@ describe("parseM3U: BOM and CRLF", () => {
   })
 })
 
+describe("parseM3U: bare-URL pointer files (no #EXTINF)", () => {
+  it("treats a single bare URL as one channel named after the host", () => {
+    const result = parseM3U("http://icecast.ndr.de/ndr/ndr1niedersachsen/hannover/mp3/128/stream.mp3\n")
+    expect(result.entries).toHaveLength(1)
+    expect(result.entries[0].url).toBe("http://icecast.ndr.de/ndr/ndr1niedersachsen/hannover/mp3/128/stream.mp3")
+    expect(result.entries[0].name).toBe("icecast.ndr.de")
+  })
+
+  it("treats multiple bare URLs as multiple channels", () => {
+    const text =
+      "http://stream.radioaktual.si/Aktual\n" +
+      "https://icecast.vrtcdn.be/klara-high.mp3\n"
+    const result = parseM3U(text)
+    expect(result.entries).toHaveLength(2)
+    expect(result.entries[0].url).toBe("http://stream.radioaktual.si/Aktual")
+    expect(result.entries[1].url).toBe("https://icecast.vrtcdn.be/klara-high.mp3")
+  })
+
+  it("ignores non-URL stray lines but keeps bare URLs", () => {
+    const text = "#EXTM3U\nsome junk line\nhttp://example.com/stream\n"
+    const result = parseM3U(text)
+    expect(result.entries).toHaveLength(1)
+    expect(result.entries[0].url).toBe("http://example.com/stream")
+  })
+
+  it("still parses EXTINF entries normally when both are present", () => {
+    const text =
+      "#EXTM3U\n" +
+      "#EXTINF:-1,Named\nhttp://example.com/a\n" +
+      "http://example.com/b\n"
+    const result = parseM3U(text)
+    expect(result.entries).toHaveLength(2)
+    expect(result.entries[0].name).toBe("Named")
+    expect(result.entries[1].name).toBe("example.com")
+  })
+})
+
 describe("parseM3U: EXTINF format variants", () => {
   it("handles attrs-after-comma alt order", () => {
     const result = parseM3U(fixture("alt-order.m3u"))
@@ -466,15 +503,17 @@ describe("parseM3U: radio detection", () => {
 })
 
 describe("parseM3U: malformed input resilience", () => {
-  it("ignores a bare URL with no preceding #EXTINF", () => {
+  it("keeps a bare URL with no preceding #EXTINF as its own channel", () => {
     const text =
       "#EXTM3U\n" +
       "http://orphan.example.com/stream.m3u8\n" +
       '#EXTINF:-1 tvg-id="x" group-title="G",Real\n' +
       "http://example.com/x.m3u8\n"
     const result = parseM3U(text)
-    expect(result.entries).toHaveLength(1)
-    expect(result.entries[0].name).toBe("Real")
+    expect(result.entries).toHaveLength(2)
+    expect(result.entries[0].name).toBe("orphan.example.com")
+    expect(result.entries[0].url).toBe("http://orphan.example.com/stream.m3u8")
+    expect(result.entries[1].name).toBe("Real")
   })
 
   it("skips blank lines and unrelated comments", () => {

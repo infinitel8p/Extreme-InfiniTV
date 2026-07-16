@@ -92,7 +92,6 @@ import {
 } from "@/scripts/lib/epg-data.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { maybeB64ToUtf8, escapeHtml } from "@/scripts/lib/b64-utf8.ts"
-import { attachRadioVisualizer, type RadioVisualizerHandle } from "@/scripts/lib/radio-visualizer.ts"
 import {
   channelSupportsCatchup,
   catchupWindowDays,
@@ -1714,12 +1713,6 @@ async function mountEmbeddedPlayer(backend, opts) {
   vjs = mounted.handle
   embeddedPlayerLiveUi = wantLiveUi
 
-  if (radioModeChannelId != null) {
-    unmountRadioVisualizer()
-    const wrap = getPlayerWrap()
-    if (wrap) mountRadioVisualizer(wrap)
-  }
-
   if (mounted.backend === "videojs") {
     focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
@@ -1838,27 +1831,103 @@ async function mountEmbeddedPlayer(backend, opts) {
 
 /** Channel ID currently rendered in radio mode (-1 = none). */
 let radioModeChannelId: number | null = null
-let radioVisualizer: RadioVisualizerHandle | null = null
+let radioElapsedTimer: ReturnType<typeof setInterval> | null = null
+let radioIcyAbort: AbortController | null = null
 
 function getPlayerWrap(): HTMLElement | null {
   return document.getElementById("player-wrap")
 }
 
-function mountRadioVisualizer(wrap: HTMLElement) {
-  if (radioVisualizer) return
-  const host = wrap.querySelector<HTMLElement>("[data-radio-visualizer-host]")
-  const videoEl = vjs?.getMediaElement?.() ?? wrap.querySelector<HTMLVideoElement>("video")
-  if (!host || !videoEl) return
-  radioVisualizer = attachRadioVisualizer(host, videoEl)
+function fmtElapsed(totalSeconds: number): string {
+  const whole = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(whole / 3600)
+  const minutes = Math.floor((whole % 3600) / 60)
+  const seconds = whole % 60
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`
 }
 
-function unmountRadioVisualizer() {
-  if (!radioVisualizer) return
-  try { radioVisualizer.detach() } catch {}
-  radioVisualizer = null
+const RADIO_CHIP_CLASS =
+  "inline-flex items-center rounded-md bg-surface-2 ring-1 ring-line px-2 py-0.5 text-2xs font-medium uppercase tracking-wide text-fg-2"
+
+function radioCodecFromUrl(url: string): string | null {
+  const lower = url.toLowerCase()
+  if (/\b(aac|m4a)\b/.test(lower)) return "AAC"
+  if (/\bopus\b/.test(lower)) return "Opus"
+  if (/\b(ogg|vorbis)\b/.test(lower)) return "OGG"
+  if (/\bflac\b/.test(lower)) return "FLAC"
+  if (/\b(mp3|mpeg)\b/.test(lower)) return "MP3"
+  return null
 }
 
-function setRadioMode(channel: { id: number; name?: string; logo?: string | null }) {
+function renderRadioTags(wrap: HTMLElement, genre: string | null, quality: string | null) {
+  const tags = wrap.querySelector<HTMLElement>("[data-radio-tags]")
+  const row = wrap.querySelector<HTMLElement>("[data-radio-metarow]")
+  if (!tags || !row) return
+  const chips: string[] = []
+  if (genre) chips.push(`<span class="${RADIO_CHIP_CLASS}">${escapeHtml(genre)}</span>`)
+  if (quality) chips.push(`<span class="${RADIO_CHIP_CLASS}">${escapeHtml(quality)}</span>`)
+  tags.innerHTML = chips.join("")
+  row.hidden = false
+}
+
+function startRadioElapsed(wrap: HTMLElement) {
+  if (radioElapsedTimer) clearInterval(radioElapsedTimer)
+  const elapsedWrap = wrap.querySelector<HTMLElement>("[data-radio-elapsed]")
+  const timeEl = wrap.querySelector<HTMLElement>("[data-radio-elapsed-time]")
+  if (!elapsedWrap || !timeEl) return
+  const startedAt = Date.now()
+  const tick = () => { timeEl.textContent = fmtElapsed((Date.now() - startedAt) / 1000) }
+  tick()
+  elapsedWrap.hidden = false
+  wrap.querySelector<HTMLElement>("[data-radio-metarow]")?.removeAttribute("hidden")
+  radioElapsedTimer = setInterval(tick, 1000)
+}
+
+// ICY (SHOUTcast/Icecast) response headers carry the real station genre,
+// bitrate and tagline; browser fetch hides them, tauri-plugin-http does not.
+async function fetchRadioIcy(wrap: HTMLElement, channelId: number, url: string, genreFallback: string | null) {
+  if (!/^https?:\/\//i.test(url)) return
+  radioIcyAbort?.abort()
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null
+  radioIcyAbort = controller
+  const timer = controller ? setTimeout(() => controller.abort(), 5000) : null
+  try {
+    const response = await providerFetch(url, {
+      method: "GET",
+      headers: { Range: "bytes=0-1" },
+      signal: controller?.signal,
+    })
+    if (radioModeChannelId !== channelId) return
+    const header = (name: string) => (response.headers.get(name) || "").trim() || null
+    const contentType = (response.headers.get("content-type") || "").toLowerCase()
+    const codec = contentType.includes("aac")
+      ? "AAC"
+      : contentType.includes("opus")
+      ? "Opus"
+      : contentType.includes("ogg")
+      ? "OGG"
+      : contentType.includes("mpeg")
+      ? "MP3"
+      : radioCodecFromUrl(url)
+    const bitrate = header("icy-br")
+    const quality = codec ? (bitrate ? `${codec} · ${bitrate}k` : codec) : bitrate ? `${bitrate}k` : null
+    renderRadioTags(wrap, header("icy-genre") || genreFallback, quality)
+    const description = header("icy-description")
+    const descEl = wrap.querySelector<HTMLElement>("[data-radio-desc]")
+    if (descEl && description && description.toLowerCase() !== (header("icy-name") || "").toLowerCase()) {
+      descEl.textContent = description
+      descEl.hidden = false
+    }
+    try { await response.body?.cancel() } catch {}
+  } catch {
+    // Offline / probe rejected: keep the client-derived tags.
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+function setRadioMode(channel: { id: number; name?: string; logo?: string | null; category?: string | null; url?: string | null }) {
   const wrap = getPlayerWrap()
   if (!wrap) return
   wrap.dataset.radioMode = "on"
@@ -1878,8 +1947,15 @@ function setRadioMode(channel: { id: number; name?: string; logo?: string | null
   }
   radioModeChannelId = channel.id
   paintRadioNowPlaying(channel.id)
+
+  const genre = channel.category && channel.category !== t("stream.uncategorized") ? channel.category : null
+  const descEl = wrap.querySelector<HTMLElement>("[data-radio-desc]")
+  if (descEl) { descEl.textContent = ""; descEl.hidden = true }
+  renderRadioTags(wrap, genre, channel.url ? radioCodecFromUrl(channel.url) : null)
+  startRadioElapsed(wrap)
+  if (channel.url) fetchRadioIcy(wrap, channel.id, channel.url, genre)
+
   wrap.setAttribute("aria-label", t("livetv.radioAriaLabel", { name: channel.name || "" }) || `Radio: ${channel.name || ""}`)
-  mountRadioVisualizer(wrap)
 }
 
 function clearRadioMode() {
@@ -1892,8 +1968,16 @@ function clearRadioMode() {
     nowEl.textContent = ""
     nowEl.hidden = true
   }
+  if (radioElapsedTimer) { clearInterval(radioElapsedTimer); radioElapsedTimer = null }
+  radioIcyAbort?.abort()
+  radioIcyAbort = null
+  const tags = wrap.querySelector<HTMLElement>("[data-radio-tags]")
+  if (tags) tags.innerHTML = ""
+  wrap.querySelector<HTMLElement>("[data-radio-metarow]")?.setAttribute("hidden", "")
+  wrap.querySelector<HTMLElement>("[data-radio-elapsed]")?.setAttribute("hidden", "")
+  const descEl = wrap.querySelector<HTMLElement>("[data-radio-desc]")
+  if (descEl) { descEl.textContent = ""; descEl.hidden = true }
   radioModeChannelId = null
-  unmountRadioVisualizer()
 }
 
 function paintRadioNowPlaying(channelId: number) {
@@ -2732,7 +2816,7 @@ async function play(streamId, name) {
   resetEmptyState()
   document.getElementById("player")?.removeAttribute("hidden")
   if (channel?.isRadio) {
-    setRadioMode({ id: streamId, name, logo: channel.logo ?? null })
+    setRadioMode({ id: streamId, name, logo: channel.logo ?? null, category: channel.category ?? null, url: src })
   } else {
     clearRadioMode()
   }
