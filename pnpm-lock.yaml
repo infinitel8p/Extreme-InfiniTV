@@ -77,6 +77,9 @@ importers:
       marked:
         specifier: ^18.0.6
         version: 18.0.6
+      mp4box:
+        specifier: ^2.4.1
+        version: 2.4.1
       mpegts.js:
         specifier: ^1.8.0
         version: 1.8.0
@@ -2330,6 +2333,10 @@ packages:
   module-details-from-path@1.0.4:
     resolution: {integrity: sha512-EGWKgxALGMgzvxYF1UyGTy0HXX/2vHLkw6+NvDKW2jypWbHpjQuj4UMcqQWXHERJhVGKikolT06G3bcKe4fi7w==}
 
+  mp4box@2.4.1:
+    resolution: {integrity: sha512-0HGX7nXoDIX6FKLVl4a3wtYjBlwqsN3xuQC3GXzNtKp98FXUOhDSq623azsz8DG5ptd9ZXcXodDkgbdMZOjWvw==}
+    engines: {node: '>=20.8.1'}
+
   mpd-parser@1.4.0:
     resolution: {integrity: sha512-blbA7XpAaOdC/PR0Tu8GiUxlx6CpBuRowQPYV7lhi9Yr9G9+dkPXIUjqjzc/NCn/uZZPopluaJlIYntIEI/VLw==}
     hasBin: true
@@ -2592,7 +2599,6 @@ packages:
 
   shaka-player@5.2.1:
     resolution: {integrity: sha512-Sj8Kg94Ws8hUxzjHnC570o1jQcZwB7OxIwi25vLI3mOVmL8xpso3HyIqM7hjbgAhsOgdFojpJYwtcvR/t0a9vA==}
-    engines: {node: '>=18'}
 
   sharp@0.35.3:
     resolution: {integrity: sha512-ej0zVHuZGHCiABXcNxeYhpRnPNPAcvbG8RMdBAhDAxLKkCRVSpK3Iyu7qbqw3JMzoj0REeM6f3tJLtVwl0023Q==}
@@ -5181,6 +5187,8 @@ snapshots:
 
   module-details-from-path@1.0.4:
     optional: true
+
+  mp4box@2.4.1: {}
 
   mpd-parser@1.4.0:
     dependencies:

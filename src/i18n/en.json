@@ -1227,5 +1227,8 @@
   "editor.catchupModeFlussonic": "Flussonic",
   "editor.catchupModeXc": "Xtream Codes",
   "editor.catchupDaysLabel": "Days",
-  "editor.catchupSourceLabel": "Source URL template"
+  "editor.catchupSourceLabel": "Source URL template",
+  "player.subtitles": "Subtitles",
+  "player.subtitles.off": "Off",
+  "player.subtitles.error": "Couldn't load subtitles"
 }

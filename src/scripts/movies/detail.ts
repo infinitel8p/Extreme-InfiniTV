@@ -512,7 +512,7 @@ async function startPlayback() {
     })
   }
 
-  player.src({ src: playSrc, type: mime })
+  player.src({ src: playSrc, type: mime, subtitles: { sourceUrl: playSrc } })
   applyVideoScale()
 
   if (!progressListenersBound) {

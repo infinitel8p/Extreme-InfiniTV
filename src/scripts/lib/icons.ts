@@ -102,3 +102,9 @@ export const ICON_PLAYLIST_ADD = wrap(
     '<path d="M15 16h6" />' +
     '<path d="M18 13v6" />'
 )
+
+export const ICON_BADGE_CC = wrap(
+  '<path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-10" />' +
+    '<path d="M10 10.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0" />' +
+    '<path d="M17 10.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0" />'
+)

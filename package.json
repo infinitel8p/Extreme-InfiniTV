@@ -43,6 +43,7 @@
     "dompurify": "^3.4.12",
     "hls.js": "^1.6.16",
     "marked": "^18.0.6",
+    "mp4box": "^2.4.1",
     "mpegts.js": "^1.8.0",
     "shaka-player": "^5.2.1",
     "svelte": "^5.56.5",
