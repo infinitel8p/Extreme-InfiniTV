@@ -32,6 +32,8 @@ import android.util.Base64
 import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
 import java.io.File
+import android.os.Handler
+import android.os.Looper
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -40,6 +42,7 @@ import android.webkit.WebViewClient
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import app.tauri.plugin.PluginManager
+import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -666,6 +669,177 @@ class AndroidVideoBridge(private val activity: android.app.Activity) {
   }
 }
 
+/**
+ * "Add from website" stream sniffer: loads a page in a throwaway offscreen
+ * WebView, watches every request for something that looks like an HLS/DASH
+ * manifest, and reports hits to the hosted WebView as DOM CustomEvents (same
+ * evaluateJavascript + document.dispatchEvent mechanism `drainAndDispatchVideoEvents`
+ * uses, minus the SharedPreferences queue - this bridge and the hosted WebView
+ * live in the same activity, so events go out immediately instead of waiting
+ * for onResume). Classification of hits (kind / master / ranking) happens
+ * JS-side in sniff-classify.ts; this only does a dumb extension/substring
+ * prefilter so we don't intercept every image/script request on the page.
+ */
+class SnifferBridge(
+  private val activity: TauriActivity,
+  private val hostedWebViewRef: () -> WebView?,
+) {
+  companion object {
+    private const val TAG = "AndroidSniffer"
+    private val MANIFEST_EXTENSION_RX = Regex("\\.(m3u8|mpd)(?:[?#]|$)", RegexOption.IGNORE_CASE)
+    private val MANIFEST_HINT_RX = Regex("mpegurl|dash", RegexOption.IGNORE_CASE)
+    private const val NUDGE_DELAY_MS = 900L
+    private const val THROWAWAY_SIZE_PX = 1
+  }
+
+  private val handler = Handler(Looper.getMainLooper())
+  private var throwawayWebView: WebView? = null
+  private var timeoutRunnable: Runnable? = null
+  private var lastFavicon: String? = null
+
+  @JavascriptInterface
+  fun startSniff(pageUrl: String?, timeoutMs: Int) {
+    val url = pageUrl?.trim().orEmpty()
+    if (url.isEmpty()) return
+    activity.runOnUiThread {
+      // Silent teardown: firing xt:sniff-done here would race the listeners
+      // the caller just attached for this very startSniff() call.
+      teardown(fireDone = false)
+      lastFavicon = null
+      try {
+        val webView = WebView(activity)
+        throwawayWebView = webView
+        webView.settings.javaScriptEnabled = true
+        webView.settings.mediaPlaybackRequiresUserGesture = false
+        webView.settings.domStorageEnabled = true
+        webView.addJavascriptInterface(this, "AndroidSnifferInternal")
+        webView.webViewClient = object : WebViewClient() {
+          override fun shouldInterceptRequest(
+            view: WebView,
+            request: WebResourceRequest,
+          ): WebResourceResponse? {
+            maybeEmitCandidate(request)
+            return null
+          }
+
+          override fun onPageFinished(view: WebView, finishedUrl: String) {
+            nudgePlayback(view)
+          }
+        }
+        val decor = activity.window.decorView as? ViewGroup
+        decor?.addView(webView, FrameLayout.LayoutParams(THROWAWAY_SIZE_PX, THROWAWAY_SIZE_PX))
+        timeoutRunnable = Runnable { teardown(fireDone = true) }
+        handler.postDelayed(timeoutRunnable!!, timeoutMs.coerceAtLeast(1000).toLong())
+        webView.loadUrl(url)
+      } catch (error: Throwable) {
+        Log.w(TAG, "startSniff failed: $error")
+        teardown(fireDone = true)
+      }
+    }
+  }
+
+  @JavascriptInterface
+  fun cancelSniff() {
+    activity.runOnUiThread { teardown(fireDone = true) }
+  }
+
+  // Called by the injected nudge script the moment the page attempts an EME
+  // handshake - the URL prefilter alone can't tell a DRM-guarded manifest
+  // from a plain one.
+  @JavascriptInterface
+  fun reportDrm() {
+    dispatchEvent("xt:sniff-drm", JSONObject())
+  }
+
+  @JavascriptInterface
+  fun reportFavicon(favicon: String?) {
+    lastFavicon = favicon
+  }
+
+  private fun maybeEmitCandidate(request: WebResourceRequest) {
+    val url = request.url?.toString() ?: return
+    if (!looksLikeManifest(url)) return
+    val headers = request.requestHeaders ?: emptyMap()
+    dispatchEvent(
+      "xt:sniff-candidate",
+      JSONObject().apply {
+        put("url", url)
+        put("userAgent", headerValue(headers, "User-Agent") ?: JSONObject.NULL)
+        put("referer", headerValue(headers, "Referer") ?: JSONObject.NULL)
+      }
+    )
+  }
+
+  private fun looksLikeManifest(url: String): Boolean =
+    MANIFEST_EXTENSION_RX.containsMatchIn(url) || MANIFEST_HINT_RX.containsMatchIn(url)
+
+  private fun headerValue(headers: Map<String, String>, name: String): String? =
+    headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+
+  private fun nudgePlayback(view: WebView) {
+    val script = """
+      (function(){
+        try {
+          var originalRequestMediaKeySystemAccess = navigator.requestMediaKeySystemAccess;
+          if (originalRequestMediaKeySystemAccess && !navigator.__xtSniffDrmWrapped) {
+            navigator.__xtSniffDrmWrapped = true;
+            navigator.requestMediaKeySystemAccess = function() {
+              try { window.AndroidSnifferInternal && window.AndroidSnifferInternal.reportDrm(); } catch (_) {}
+              return originalRequestMediaKeySystemAccess.apply(navigator, arguments);
+            };
+          }
+        } catch (_) {}
+        try {
+          ['button[class*="play" i]', '[class*="play-button" i]', '[aria-label*="play" i]', '.vjs-big-play-button', '.jw-icon-playback']
+            .forEach(function(selector) {
+              document.querySelectorAll(selector).forEach(function(el){ try { el.click(); } catch (_) {} });
+            });
+        } catch (_) {}
+        try {
+          document.querySelectorAll('video').forEach(function(v){ try { v.play(); } catch (_) {} });
+        } catch (_) {}
+        try {
+          if (!navigator.__xtSniffFaviconReported) {
+            navigator.__xtSniffFaviconReported = true;
+            var link = document.querySelector("link[rel~='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']");
+            var iconHref = (link && link.href) || (location.origin + "/favicon.ico");
+            window.AndroidSnifferInternal && window.AndroidSnifferInternal.reportFavicon(iconHref);
+          }
+        } catch (_) {}
+      })();
+    """.trimIndent()
+    view.postDelayed({ view.evaluateJavascript(script, null) }, NUDGE_DELAY_MS)
+  }
+
+  private fun dispatchEvent(type: String, payload: JSONObject) {
+    val webView = hostedWebViewRef() ?: return
+    val script = """
+      (function(){
+        try {
+          document.dispatchEvent(new CustomEvent(${JSONObject.quote(type)}, { detail: $payload }));
+        } catch (_) {}
+      })();
+    """.trimIndent()
+    webView.post { webView.evaluateJavascript(script, null) }
+  }
+
+  private fun teardown(fireDone: Boolean) {
+    timeoutRunnable?.let { handler.removeCallbacks(it) }
+    timeoutRunnable = null
+    throwawayWebView?.let { webView ->
+      val parent = webView.parent as? ViewGroup
+      webView.stopLoading()
+      webView.webViewClient = WebViewClient()
+      parent?.removeView(webView)
+      webView.destroy()
+    }
+    throwawayWebView = null
+    if (fireDone) {
+      dispatchEvent("xt:sniff-done", JSONObject().apply { put("favicon", lastFavicon ?: JSONObject.NULL) })
+    }
+  }
+}
+
 class MainActivity : TauriActivity() {
 
   private var fullscreenView: View? = null
@@ -797,6 +971,7 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(LogShareBridge(this), "AndroidLog")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
     webView.addJavascriptInterface(AndroidVideoBridge(this), "AndroidVideo")
+    webView.addJavascriptInterface(SnifferBridge(this, { hostedWebView }), "AndroidSniffer")
     webView.addJavascriptInterface(
       WebSettingsBridge(this, { hostedWebView }, webView.settings.userAgentString),
       "AndroidWebSettings"

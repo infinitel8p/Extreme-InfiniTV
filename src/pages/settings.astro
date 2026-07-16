@@ -216,6 +216,13 @@ const navStructure: NavSection[] = [
             <span data-i18n="playlist.refreshActive">Refresh active</span>
           </button>
           <button
+            id="settings-add-from-website"
+            type="button"
+            class="btn justify-start sm:justify-center hidden">
+            <IconWorld aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.playlists.addFromWebsite">Add from website</span>
+          </button>
+          <button
             id="settings-new-custom-playlist"
             type="button"
             class="btn justify-start sm:justify-center">
@@ -1271,6 +1278,7 @@ const navStructure: NavSection[] = [
       renderPlaylistRow,
       getPlaylistListEmptyCopy,
     } from "@/scripts/lib/playlist-rows.js"
+    import { snifferAvailable } from "@/scripts/lib/stream-sniffer.ts"
     import { fetchReleases, renderMarkdown, filterReleasesForDisplay } from "@/scripts/lib/changelog.ts"
     import {
       checkForUpdate,
@@ -1455,6 +1463,13 @@ const navStructure: NavSection[] = [
 
     const playlistsEl = document.getElementById("settings-playlists-list")
     const refreshBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-refresh-active"))
+    const addFromWebsiteBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-add-from-website"))
+    if (snifferAvailable) addFromWebsiteBtn?.classList.remove("hidden")
+    addFromWebsiteBtn?.addEventListener("click", async () => {
+      const { openAddFromWebsiteDialog } = await import("@/scripts/lib/add-from-website-dialog.ts")
+      await openAddFromWebsiteDialog()
+    })
+
     const newCustomPlaylistBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-new-custom-playlist"))
     const newCustomPlaylistDialog = /** @type {HTMLDialogElement|null} */ (document.getElementById("settings-new-custom-playlist-dialog"))
     const newCustomPlaylistNameInput = /** @type {HTMLInputElement|null} */ (document.getElementById("settings-new-custom-playlist-name"))

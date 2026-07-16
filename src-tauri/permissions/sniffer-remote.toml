@@ -1,0 +1,8 @@
+# Granted only to the "sniffer" window's remote origin (see capabilities/sniffer.json).
+# Keep this to the two report commands - nothing else should be reachable
+# from a page the sniffer window didn't choose to load itself.
+
+[[permission]]
+identifier = "allow-sniff-report"
+description = "Allows the sniffed page to report a candidate stream URL or a DRM signal."
+commands.allow = ["sniff_report", "sniff_report_drm"]

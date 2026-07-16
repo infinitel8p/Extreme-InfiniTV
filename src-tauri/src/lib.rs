@@ -8,6 +8,9 @@ mod external_player;
 mod hevc_extension;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod sniffer;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod tray;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -135,6 +138,7 @@ pub fn run() {
         .manage(discord::RpcState::default())
         .manage(external_player::ExternalPlayerState::default())
         .manage(updater::PendingUpdateState::default())
+        .manage(sniffer::SnifferState::default())
         .invoke_handler(tauri::generate_handler![
             discord::discord_set_activity,
             discord::discord_clear,
@@ -142,6 +146,10 @@ pub fn run() {
             external_player::launch_external_player,
             hevc_extension::install_appx_package,
             hevc_extension::is_store_build,
+            sniffer::sniff_page,
+            sniffer::cancel_sniff,
+            sniffer::sniff_report,
+            sniffer::sniff_report_drm,
             tray::set_close_to_tray,
             updater::updater_check_from,
             updater::updater_install,

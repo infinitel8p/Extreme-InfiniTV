@@ -254,6 +254,13 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 						Any URL that serves an M3U playlist. Extension and scheme optional.
 					</span>
 				</label>
+				<button
+					id="addFromWebsiteBtn"
+					type="button"
+					data-i18n="login.action.addFromWebsite"
+					class="hidden self-start text-sm font-medium text-accent hover:underline focus-visible:underline focus-visible:outline-none">
+					Add from website
+				</button>
 			</div>
 
 			<!-- Local-file fields -->
@@ -488,6 +495,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 		testEpgSource,
 	} from "@/scripts/lib/epg-data.js";
 	import { ICON_X } from "@/scripts/lib/icons.ts";
+	import { snifferAvailable } from "@/scripts/lib/stream-sniffer.ts";
 
 	const EPG_URL_RX = /^https?:\/\/[^\s]+$/i;
 
@@ -506,6 +514,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 	const userEl = $("username");
 	const passEl = $("password");
 	const m3uEl = $("m3uUrl");
+	const addFromWebsiteBtn = $("addFromWebsiteBtn");
 	const localPickBtn = $("localPickBtn");
 	const localFileInput = $("localFileInput");
 	const localFileNameEl = $("localFileName");
@@ -1082,6 +1091,12 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 		const text = await file.text();
 		return { name: file.name, text };
 	}
+
+	if (snifferAvailable) addFromWebsiteBtn.classList.remove("hidden");
+	addFromWebsiteBtn.addEventListener("click", async () => {
+		const { openAddFromWebsiteDialog } = await import("@/scripts/lib/add-from-website-dialog.ts");
+		await openAddFromWebsiteDialog();
+	});
 
 	localPickBtn.addEventListener("click", async () => {
 		clearStatus();
