@@ -694,9 +694,7 @@ function buildChannelStreamUrl(channel) {
   return buildDirectLiveUrl(channel.id)
 }
 
-/** Builds the CustomSource reference for "Add to custom playlist", or null
- *  when the active entry itself is a custom playlist or the channel has no
- *  usable URL (m3u/local-m3u without one). */
+/** CustomSource for "Add to custom playlist"; null when the active entry is itself custom or the channel has no usable URL. */
 function buildCustomSourceForChannel(channel) {
   if (!activePlaylistId || isCustomHost(creds.host)) return null
   if (isLikelyM3USource(creds.host, creds.user, creds.pass)) {

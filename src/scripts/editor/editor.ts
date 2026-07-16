@@ -637,25 +637,24 @@ function buildChannelRow(
   grip.title = t("editor.dragHandleLabel")
 
   const statusDot = document.createElement("span")
-  statusDot.className = "size-2 rounded-full shrink-0"
+  statusDot.className = "size-2 rounded-full shrink-0 bg-transparent"
   statusDot.setAttribute("aria-hidden", "true")
   const status = linkCheckStatus.get(channel.key)
-  if (!status) {
-    statusDot.classList.add("hidden")
-  } else if (status === "pending") {
+  if (status === "pending") {
     statusDot.classList.add("bg-fg-3", "animate-pulse")
   } else if (status === "ok") {
     statusDot.classList.add("bg-ok")
-  } else {
+  } else if (status === "fail") {
     statusDot.classList.add("bg-bad")
   }
 
   const logo = document.createElement("div")
   logo.className =
     "h-8 w-8 shrink-0 rounded overflow-hidden ring-1 ring-inset ring-line bg-surface-2 flex items-center justify-center"
-  if (resolved?.logo) {
+  const logoUrl = resolved?.logo || channel.overrides.logo
+  if (logoUrl) {
     const img = document.createElement("img")
-    img.src = resolved.logo
+    img.src = logoUrl
     img.alt = ""
     img.loading = "lazy"
     img.referrerPolicy = "no-referrer"
@@ -878,14 +877,14 @@ function wireEditDialog(): void {
     const patch: Partial<CustomChannelOverrides> = {
       name: editNameInput?.value.trim() || null,
       logo: editLogoInput?.value.trim() || null,
-      chno: editChnoInput?.value.trim() ? Number(editChnoInput.value) : null,
+      chno: editChnoInput?.value.trim() ? Math.max(0, Number(editChnoInput.value)) : null,
       tvgId: editTvgIdInput?.value.trim() || null,
     }
     const catchupMode = editCatchupModeSelect?.value || ""
     const catchup: CustomChannelCatchup | null = catchupMode
       ? {
           catchup: catchupMode,
-          catchupDays: editCatchupDaysInput?.value.trim() ? Number(editCatchupDaysInput.value) : null,
+          catchupDays: editCatchupDaysInput?.value.trim() ? Math.max(0, Number(editCatchupDaysInput.value)) : null,
           catchupSource: editCatchupSourceInput?.value.trim() || null,
           catchupCorrection: null,
         }
@@ -1070,6 +1069,7 @@ async function init(): Promise<void> {
     const target = event.target as HTMLElement | null
     const tagName = target?.tagName
     if (tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT" || target?.isContentEditable) return
+    if (document.querySelector("dialog[open]")) return
     event.preventDefault()
     undo()
   })

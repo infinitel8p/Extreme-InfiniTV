@@ -71,8 +71,7 @@ async function resolveTargetEntry(entryId) {
  * @param {string} action - e.g. "get_live_categories"
  * @param {Record<string, string|number>} [params]
  * @param {RequestInit & { forceTauri?: boolean, entryId?: string }} [opts] -
- *   `entryId` targets a specific playlist entry instead of the active one
- *   (used to hydrate a custom playlist's non-active source entries).
+ *   `entryId` targets a specific playlist entry instead of the active one.
  * @returns {Promise<Response>} The first 2xx response, or the last 4xx/5xx
  *   response when every candidate failed with HTTP errors. Throws when every
  *   candidate threw network/timeout errors.

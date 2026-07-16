@@ -25,12 +25,12 @@ function editHrefFor(entry) {
     : `/login?edit=${encodeURIComponent(entry._id)}`
 }
 
-/** Resolve `entry`'s live catalog and save it as an .m3u file. Works for every
- *  entry type - xtream/m3u/local-m3u hydrate directly, custom playlists
- *  resolve through their own source pools via the same catalog pipeline. */
 const COMPACT_ICON_ACTION_CLASS =
   "inline-flex items-center justify-center rounded-lg border border-line bg-bg h-8 w-8 text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:border-accent transition-colors outline-none"
 
+/** Resolve `entry`'s live catalog and save it as an .m3u file. Works for every
+ *  entry type - xtream/m3u/local-m3u hydrate directly, custom playlists
+ *  resolve through their own source pools via the same catalog pipeline. */
 async function exportEntryM3U(entry) {
   try {
     const [{ buildM3UEntriesForEntry, saveM3UText, sanitizeFilename }, { serializeM3U }] = await Promise.all([
