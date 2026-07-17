@@ -1,0 +1,289 @@
+name: ffmpeg Sidecar
+
+# Triggers:
+#  - run "ffmpeg Sidecar" from the Actions tab -> rebuilds and republishes the
+#      sidecar binaries
+#  - push to main that touches this file       -> same build, for iterating
+#      on the workflow itself
+#
+# Builds a trimmed, LGPL-only static ffmpeg for the audio-transcode sidecar
+# (see ffmpeg.md, "Binary strategy"). This runs rarely - only when the
+# trimmed build itself needs to change - and publishes the result to a
+# rolling prerelease tag `ffmpeg-sidecar-v1`. `release.yml` and `beta.yml`
+# just download the matching asset from that tag, so a normal app release
+# never rebuilds ffmpeg.
+#
+# Binary naming matches the Tauri externalBin convention consumed by
+# tauri.windows.conf.json / tauri.linux.conf.json:
+#   src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
+#   src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu
+#
+# No GPL, no nonfree, no external libraries: LGPL configure only. See
+# ffmpeg.md for the full rationale.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ffmpeg-sidecar.yml"
+  workflow_dispatch:
+
+# Build jobs only read; the publish job re-grants contents: write for the release upload.
+permissions:
+  contents: read
+
+env:
+  FFMPEG_VERSION: "7.1.5"
+  # sha256 of the official https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz
+  # tarball, pinned by hand since upstream does not publish a checksum file
+  # for recent releases (only PGP .asc signatures).
+  FFMPEG_SHA256: "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-yasm
+            mingw-w64-x86_64-nasm
+            make
+            diffutils
+
+      - name: Download ffmpeg source
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          curl -fLo ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          echo "${FFMPEG_SHA256}  ffmpeg.tar.xz" | sha256sum -c -
+          tar -xf ffmpeg.tar.xz
+          mv "ffmpeg-${FFMPEG_VERSION}" ffmpeg-src
+
+      - name: Configure and build (LGPL, trimmed)
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          ./configure \
+            --target-os=mingw32 --arch=x86_64 \
+            --disable-everything --disable-autodetect --disable-network \
+            --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+            --disable-avdevice --disable-postproc \
+            --enable-protocol=pipe \
+            --enable-demuxer=mpegts \
+            --enable-muxer=mpegts \
+            --enable-decoder=aac \
+            --enable-decoder=aac_latm \
+            --enable-decoder=ac3 \
+            --enable-decoder=eac3 \
+            --enable-decoder=mp2 \
+            --enable-decoder=mp3 \
+            --enable-decoder=dca \
+            --enable-encoder=aac \
+            --enable-parser=h264 \
+            --enable-parser=hevc \
+            --enable-parser=mpegvideo \
+            --enable-parser=mpegaudio \
+            --enable-parser=aac \
+            --enable-parser=aac_latm \
+            --enable-parser=ac3 \
+            --enable-parser=dca \
+            --enable-filter=aresample \
+            --enable-filter=aformat \
+            --enable-filter=anull \
+            --enable-bsf=extract_extradata \
+            --extra-ldflags=-static \
+            --pkg-config-flags=--static
+          make -j$(nproc)
+
+      - name: Sanity checks
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          ./ffmpeg.exe -version
+          if ./ffmpeg.exe -version | grep -q -- '--enable-gpl'; then
+            echo "::error::Build unexpectedly enabled GPL"
+            exit 1
+          fi
+          if ./ffmpeg.exe -version | grep -q -- '--enable-nonfree'; then
+            echo "::error::Build unexpectedly enabled nonfree"
+            exit 1
+          fi
+          ./ffmpeg.exe -decoders | grep -i eac3
+          ./ffmpeg.exe -encoders | grep -w aac
+          ls -lh ffmpeg.exe
+
+      - name: Stage artifact
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          cp ffmpeg-src/ffmpeg.exe stage/ffmpeg-x86_64-pc-windows-msvc.exe
+          cp ffmpeg-src/COPYING.LGPLv2.1 stage/
+          {
+            echo "ffmpeg version: ${FFMPEG_VERSION}"
+            echo "source: https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+            echo "source sha256: ${FFMPEG_SHA256}"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "workflow commit: ${GITHUB_SHA}"
+            echo
+            echo "configure line:"
+            echo "./configure --target-os=mingw32 --arch=x86_64 --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe --enable-demuxer=mpegts --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --extra-ldflags=-static --pkg-config-flags=--static"
+          } > stage/BUILD-INFO-windows.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-windows
+          path: stage/*
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential yasm nasm pkg-config
+
+      - name: Download ffmpeg source
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fLo ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          echo "${FFMPEG_SHA256}  ffmpeg.tar.xz" | sha256sum -c -
+          tar -xf ffmpeg.tar.xz
+          mv "ffmpeg-${FFMPEG_VERSION}" ffmpeg-src
+
+      - name: Configure and build (LGPL, trimmed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          ./configure \
+            --disable-everything --disable-autodetect --disable-network \
+            --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+            --disable-avdevice --disable-postproc \
+            --enable-protocol=pipe \
+            --enable-demuxer=mpegts \
+            --enable-muxer=mpegts \
+            --enable-decoder=aac \
+            --enable-decoder=aac_latm \
+            --enable-decoder=ac3 \
+            --enable-decoder=eac3 \
+            --enable-decoder=mp2 \
+            --enable-decoder=mp3 \
+            --enable-decoder=dca \
+            --enable-encoder=aac \
+            --enable-parser=h264 \
+            --enable-parser=hevc \
+            --enable-parser=mpegvideo \
+            --enable-parser=mpegaudio \
+            --enable-parser=aac \
+            --enable-parser=aac_latm \
+            --enable-parser=ac3 \
+            --enable-parser=dca \
+            --enable-filter=aresample \
+            --enable-filter=aformat \
+            --enable-filter=anull \
+            --enable-bsf=extract_extradata \
+            --pkg-config-flags=--static
+          make -j$(nproc)
+
+      - name: Sanity checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          ./ffmpeg -version
+          if ./ffmpeg -version | grep -q -- '--enable-gpl'; then
+            echo "::error::Build unexpectedly enabled GPL"
+            exit 1
+          fi
+          if ./ffmpeg -version | grep -q -- '--enable-nonfree'; then
+            echo "::error::Build unexpectedly enabled nonfree"
+            exit 1
+          fi
+          ./ffmpeg -decoders | grep -i eac3
+          ./ffmpeg -encoders | grep -w aac
+          ls -lh ffmpeg
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          cp ffmpeg-src/ffmpeg stage/ffmpeg-x86_64-unknown-linux-gnu
+          chmod +x stage/ffmpeg-x86_64-unknown-linux-gnu
+          cp ffmpeg-src/COPYING.LGPLv2.1 stage/
+          {
+            echo "ffmpeg version: ${FFMPEG_VERSION}"
+            echo "source: https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+            echo "source sha256: ${FFMPEG_SHA256}"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "workflow commit: ${GITHUB_SHA}"
+            echo
+            echo "configure line:"
+            echo "./configure --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe --enable-demuxer=mpegts --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --pkg-config-flags=--static"
+          } > stage/BUILD-INFO-linux.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-linux
+          path: stage/*
+
+  publish:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp artifacts/ffmpeg-windows/* release-assets/
+          cp artifacts/ffmpeg-linux/* release-assets/
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          ls -la
+
+      - name: Create or update rolling prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="ffmpeg-sidecar-v1"
+          BODY_FILE="$RUNNER_TEMP/body.md"
+          {
+            echo "Trimmed, LGPL-only ffmpeg sidecar binaries consumed by the desktop release and beta build pipelines (see ffmpeg.md, \"Binary strategy\")."
+            echo
+            echo "This is a rolling prerelease: pushing a new build to the \"ffmpeg Sidecar\" workflow replaces the assets in place, it does not create a new tag."
+            echo
+            echo "Configure line:"
+            echo '```'
+            echo "./configure --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe --enable-demuxer=mpegts --enable-muxer=mpegts --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3,dca --enable-encoder=aac --enable-parser=h264,hevc,mpegvideo,mpegaudio,aac,aac_latm,ac3,dca --enable-filter=aresample,aformat,anull --enable-bsf=extract_extradata"
+            echo '```'
+            echo "(each comma-separated group above is repeated once per value in the actual build - see BUILD-INFO-windows.txt / BUILD-INFO-linux.txt attached below for the exact per-platform command.)"
+            echo
+            echo "Source for this exact build: the official ffmpeg ${FFMPEG_VERSION} release tarball, https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz (sha256 ${FFMPEG_SHA256}). This note is the LGPL source offer for the binaries attached to this release."
+          } > "$BODY_FILE"
+
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "${{ github.repository }}" --prerelease --notes-file "$BODY_FILE"
+          else
+            gh release create "$TAG" --repo "${{ github.repository }}" --prerelease --title "ffmpeg sidecar v1" --notes-file "$BODY_FILE"
+          fi
+
+          gh release upload "$TAG" release-assets/* --repo "${{ github.repository }}" --clobber
