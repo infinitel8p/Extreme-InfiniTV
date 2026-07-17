@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:4321",
-    "beforeDevCommand": "pnpm run dev",
-    "beforeBuildCommand": "pnpm run build"
+    "beforeDevCommand": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs && pnpm run dev",
+    "beforeBuildCommand": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs && pnpm run build"
   },
   "app": {
     "windows": [

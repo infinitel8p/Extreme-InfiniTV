@@ -29,10 +29,6 @@ on:
       - ".github/workflows/ffmpeg-sidecar.yml"
   workflow_dispatch:
 
-# Build jobs only read; the publish job re-grants contents: write for the release upload.
-permissions:
-  contents: read
-
 env:
   FFMPEG_VERSION: "7.1.5"
   # sha256 of the official https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz
@@ -44,7 +40,7 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
+      - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true

@@ -17,7 +17,9 @@ Right-click the channel (or movie / episode) and pick **Test stream**. The dialo
 
 ## No sound, or "unsupported audio format"
 
-Some channels use audio formats the built-in player can't decode: AC-3 / E-AC-3 is common on TV streams. The app detects this and offers to open the stream in an external player, where it plays with sound - see [External players](./external-players/).
+Some channels use audio formats the built-in player can't decode: AC-3 / E-AC-3, MP2, and DTS are common on TV streams. On Windows and Linux desktop, the app fixes this on the fly - either automatically or via a **Fix audio** button on the toast or failure panel.
+
+If that doesn't happen, check **Settings > Playback** for the FFmpeg status - it needs FFmpeg to do the fix, and will tell you if it can't find one. See [Audio formats & silent channels](./audio-formats/) for the full picture. If the *video* itself won't play (not just the audio), the fix is an external player instead - see [External players](./external-players/).
 
 ## Subtitles button missing
 

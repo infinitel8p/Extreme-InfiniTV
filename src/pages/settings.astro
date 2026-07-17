@@ -39,6 +39,7 @@ import {
   IconShare,
   IconExternalLink,
   IconRestore,
+  IconLicense,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -88,6 +89,7 @@ const navStructure: NavSection[] = [
   { id: "settings-about", labelKey: "settings.group.about", label: "About", cards: [
     { id: "update-section",    labelKey: "settings.nav.appUpdate",  label: "App update" },
     { id: "changelog-section", labelKey: "settings.about.whatsNew", label: "What's new" },
+    { id: "licenses-section",  labelKey: "settings.licenses.title", label: "Open-source licenses" },
   ]},
   { id: "settings-help", labelKey: "settings.group.help", label: "Help & feedback", cards: [
     { id: "card-docs",     labelKey: "settings.help.docsTitle", label: "Read the docs" },
@@ -576,7 +578,28 @@ const navStructure: NavSection[] = [
           </div>
           <PlayerPicker client:load />
 
-          <div id="audio-transcode-section" class="flex flex-col gap-2 pt-4 border-t border-line/60 hidden">
+          <div id="audio-transcode-section" class="flex flex-col gap-3 pt-4 border-t border-line/60 hidden">
+            <div class="flex flex-col gap-1">
+              <label for="ffmpeg-path-input" data-i18n="settings.playback.ffmpegPathLabel" class="text-eyebrow font-medium uppercase text-fg-3">FFmpeg path</label>
+              <p id="ffmpeg-status" class="text-xs text-fg-3" aria-live="polite"></p>
+            </div>
+
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                type="text"
+                id="ffmpeg-path-input"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="C:\ffmpeg\bin\ffmpeg.exe"
+                class="field-input font-mono flex-1"
+                aria-describedby="ffmpeg-path-helper" />
+              <button type="button" id="ffmpeg-browse-btn" class="btn" data-i18n="settings.playback.browse">Browse…</button>
+              <button type="button" id="ffmpeg-test-btn" class="btn" data-i18n="settings.playback.ffmpegTest">Test</button>
+            </div>
+            <p id="ffmpeg-path-helper" data-i18n="settings.playback.ffmpegPathHelper" class="text-xs text-fg-3">
+              Point to your own FFmpeg if the bundled one is missing or you prefer a specific build.
+            </p>
+
             <span data-i18n="settings.playback.audioTranscodeAuto" class="text-eyebrow font-medium uppercase text-fg-3">Fix unsupported audio automatically</span>
             <p id="audio-transcode-helper" data-i18n="settings.playback.audioTranscodeAutoHelper" class="text-xs text-fg-3">
               When a live channel plays video with no sound (AC-3, E-AC-3, MP2, or DTS audio), fix it automatically instead of asking each time.
@@ -1040,6 +1063,57 @@ const navStructure: NavSection[] = [
         </summary>
         <div id="changelog-body" class="flex flex-col gap-2 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60 empty:hidden"></div>
       </details>
+
+      <details
+        id="licenses-section"
+        class="changelog-outer icon-mark-host rounded-2xl border border-line bg-surface overflow-hidden">
+        <summary class="px-5 sm:px-6 py-4 cursor-pointer flex items-center justify-between gap-3 hover:bg-surface-2 transition-colors list-none">
+          <div class="flex items-center gap-3 min-w-0">
+            <span class="icon-mark">
+              <IconLicense aria-hidden="true" stroke={2} />
+            </span>
+            <h3 data-i18n="settings.licenses.title" class="text-base font-semibold">Open-source licenses</h3>
+          </div>
+          <IconChevronDown
+            aria-hidden="true"
+            stroke={1.75}
+            class="size-4 text-fg-3 shrink-0 changelog-chevron transition-transform duration-200" />
+        </summary>
+        <div class="flex flex-col gap-3 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60">
+          <p data-i18n="settings.licenses.ffmpegNotice" class="text-sm text-fg-2">
+            The Windows and Linux desktop builds bundle a trimmed FFmpeg build (LGPL v2.1 or later), used only to convert live TV audio the app can't otherwise play.
+          </p>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <a
+              href="https://ffmpeg.org"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-external
+              class="btn justify-start sm:justify-center">
+              <IconExternalLink aria-hidden="true" class="btn-icon" />
+              <span data-i18n="settings.licenses.ffmpegSite">FFmpeg project</span>
+            </a>
+            <a
+              href="https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-external
+              class="btn justify-start sm:justify-center">
+              <IconExternalLink aria-hidden="true" class="btn-icon" />
+              <span data-i18n="settings.licenses.lgplText">LGPL v2.1 license text</span>
+            </a>
+            <a
+              href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/tag/ffmpeg-sidecar-v1"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-external
+              class="btn justify-start sm:justify-center">
+              <IconBrandGithub aria-hidden="true" class="btn-icon" />
+              <span data-i18n="settings.licenses.sourceRecipe">Source & build recipe</span>
+            </a>
+          </div>
+        </div>
+      </details>
     </section>
 
     <!-- Group: Help & feedback -->
@@ -1328,8 +1402,10 @@ const navStructure: NavSection[] = [
       setUpdateChannel,
       getAudioTranscodeAuto,
       setAudioTranscodeAuto,
+      getFfmpegPath,
+      setFfmpegPath,
     } from "@/scripts/lib/app-settings.js"
-    import { audioTranscodeAvailable } from "@/scripts/lib/audio-proxy.ts"
+    import { audioTranscodeStatus } from "@/scripts/lib/audio-proxy.ts"
     import {
       ensureUserInfo,
       getMaxConnectionsSync,
@@ -2244,11 +2320,17 @@ const navStructure: NavSection[] = [
     syncPerfModeButtons()
 
     // ---------------------------------------------------------------------
-    // Audio transcode auto-fix: desktop-only row, hidden until the ffmpeg
-    // proxy binary is confirmed present.
+    // Audio transcode auto-fix: desktop-only section (visible whether or not
+    // ffmpeg is currently resolvable - it's the recovery UI for a missing
+    // or broken ffmpeg, so it can't gate on the probe result).
     // ---------------------------------------------------------------------
     const audioTranscodeSection = document.getElementById("audio-transcode-section")
     const audioTranscodeGroup = document.getElementById("settings-audio-transcode-auto")
+    const ffmpegStatusEl = document.getElementById("ffmpeg-status")
+    const ffmpegPathInput = /** @type {HTMLInputElement|null} */ (document.getElementById("ffmpeg-path-input"))
+    const ffmpegBrowseBtn = document.getElementById("ffmpeg-browse-btn")
+    const ffmpegTestBtn = document.getElementById("ffmpeg-test-btn")
+
     function syncAudioTranscodeButtons() {
       const current = getAudioTranscodeAuto()
       for (const btn of audioTranscodeGroup?.querySelectorAll(".audio-transcode-btn") || []) {
@@ -2264,9 +2346,92 @@ const navStructure: NavSection[] = [
       syncAudioTranscodeButtons()
     })
     syncAudioTranscodeButtons()
-    audioTranscodeAvailable().then((available) => {
-      if (available) audioTranscodeSection?.classList.remove("hidden")
-    })
+
+    function ffmpegSourceLabel(source) {
+      if (source === "custom") return t("settings.playback.ffmpegSourceCustom") || "custom"
+      if (source === "system") return t("settings.playback.ffmpegSourceSystem") || "system"
+      return t("settings.playback.ffmpegSourceBundled") || "bundled"
+    }
+
+    function stripErrorPrefix(raw) {
+      const idx = raw.indexOf(":")
+      return idx > 0 ? raw.slice(idx + 1) : raw
+    }
+
+    function renderFfmpegStatus(status) {
+      const available = !!status?.available
+      for (const btn of audioTranscodeGroup?.querySelectorAll(".audio-transcode-btn") || []) {
+        btn.disabled = !available
+      }
+      if (!ffmpegStatusEl) return
+      if (available) {
+        ffmpegStatusEl.textContent =
+          t("settings.playback.ffmpegStatusReady", {
+            version: status.version || "",
+            source: ffmpegSourceLabel(status.source),
+          }) || `Ready (${status.version || "unknown"}, ${ffmpegSourceLabel(status.source)})`
+        ffmpegStatusEl.classList.remove("text-bad")
+        ffmpegStatusEl.classList.add("text-ok")
+      } else {
+        const missing = t("settings.playback.ffmpegStatusMissing") || "FFmpeg not found. Install ffmpeg or set a custom path below."
+        const detail = status?.customError ? stripErrorPrefix(status.customError) : ""
+        ffmpegStatusEl.textContent = detail ? `${missing} (${detail})` : missing
+        ffmpegStatusEl.classList.remove("text-ok")
+        ffmpegStatusEl.classList.add("text-bad")
+      }
+    }
+
+    async function refreshFfmpegStatus() {
+      renderFfmpegStatus(await audioTranscodeStatus())
+    }
+
+    if (isTauriEnv && !isAndroidEnv) {
+      audioTranscodeSection?.classList.remove("hidden")
+      if (ffmpegPathInput) ffmpegPathInput.value = getFfmpegPath()
+      refreshFfmpegStatus()
+
+      let ffmpegPathSaveTimer = null
+      function flushFfmpegPath() {
+        if (ffmpegPathSaveTimer) {
+          window.clearTimeout(ffmpegPathSaveTimer)
+          ffmpegPathSaveTimer = null
+        }
+        if (ffmpegPathInput) setFfmpegPath(ffmpegPathInput.value)
+      }
+
+      ffmpegPathInput?.addEventListener("input", () => {
+        if (ffmpegPathSaveTimer) window.clearTimeout(ffmpegPathSaveTimer)
+        ffmpegPathSaveTimer = window.setTimeout(() => {
+          ffmpegPathSaveTimer = null
+          if (ffmpegPathInput) setFfmpegPath(ffmpegPathInput.value)
+        }, 350)
+      })
+      ffmpegPathInput?.addEventListener("blur", flushFfmpegPath)
+
+      ffmpegBrowseBtn?.addEventListener("click", async () => {
+        try {
+          const { open } = await import("@tauri-apps/plugin-dialog")
+          const filters = /Win/i.test(navigator.userAgent || "")
+            ? [{ name: "Executable", extensions: ["exe"] }]
+            : undefined
+          const picked = await open({ multiple: false, directory: false, filters })
+          if (typeof picked !== "string" || !picked) return
+          if (ffmpegPathInput) ffmpegPathInput.value = picked
+          flushFfmpegPath()
+          await refreshFfmpegStatus()
+        } catch (err) {
+          log.warn("[settings] ffmpeg browse failed:", err)
+          toastError(t("settings.toast.pickFileFail"), {
+            description: (err && err.message) || String(err) || "See console.",
+          })
+        }
+      })
+
+      ffmpegTestBtn?.addEventListener("click", async () => {
+        flushFfmpegPath()
+        await refreshFfmpegStatus()
+      })
+    }
 
     // ---------------------------------------------------------------------
     // Continue Watching retention: 30 / 90 / 180 days or Never. Read by

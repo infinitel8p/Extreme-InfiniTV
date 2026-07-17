@@ -5,6 +5,7 @@
 
 import { log } from "@/scripts/lib/log.js"
 import { splitUrlAuth } from "@/scripts/lib/url-auth.ts"
+import { getFfmpegPath, SETTINGS_EVENT } from "@/scripts/lib/app-settings.js"
 
 export interface AudioTranscodeSession {
   sessionId: string
@@ -14,6 +15,14 @@ export interface AudioTranscodeSession {
 export interface AudioProxyErrorPayload {
   sessionId: string
   detail: string
+}
+
+export interface AudioTranscodeStatus {
+  available: boolean
+  version: string | null
+  path: string | null
+  source: "custom" | "bundled" | "system" | null
+  customError: string | null
 }
 
 const isAndroid =
@@ -28,24 +37,64 @@ const audioProxyPlatformAvailable = isTauri && !isAndroid
 let cachedAvailability: Promise<boolean> | null = null
 let activeSessionId: string | null = null
 
+function normalizeStatus(result: any): AudioTranscodeStatus {
+  return {
+    available: !!result?.available,
+    version: result?.version ?? null,
+    path: result?.path ?? null,
+    source: result?.source ?? null,
+    customError: result?.customError ?? null,
+  }
+}
+
+async function probeAvailability(force: boolean): Promise<boolean> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    const result = await invoke("audio_transcode_available", {
+      customPath: getFfmpegPath() || null,
+      force,
+    })
+    return normalizeStatus(result).available
+  } catch (err) {
+    log.warn("[xt:audio-proxy] availability check failed:", err)
+    return false
+  }
+}
+
 export async function audioTranscodeAvailable(): Promise<boolean> {
   if (!audioProxyPlatformAvailable) return false
-  if (!cachedAvailability) {
-    cachedAvailability = (async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core")
-        const result = (await invoke("audio_transcode_available")) as {
-          available?: boolean
-          version?: string | null
-        }
-        return !!result?.available
-      } catch (err) {
-        log.warn("[xt:audio-proxy] availability check failed:", err)
-        return false
-      }
-    })()
-  }
+  if (!cachedAvailability) cachedAvailability = probeAvailability(false)
   return cachedAvailability
+}
+
+/** Forces a fresh Rust-side probe (bypassing its resolution cache) after a settings change. */
+export function refreshAudioTranscodeAvailability(): Promise<boolean> {
+  if (!audioProxyPlatformAvailable) return Promise.resolve(false)
+  cachedAvailability = probeAvailability(true)
+  return cachedAvailability
+}
+
+/** Uncached probe with full detail, for the Settings status line and Test button. */
+export async function audioTranscodeStatus(): Promise<AudioTranscodeStatus | null> {
+  if (!audioProxyPlatformAvailable) return null
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    const result = await invoke("audio_transcode_available", {
+      customPath: getFfmpegPath() || null,
+      force: true,
+    })
+    return normalizeStatus(result)
+  } catch (err) {
+    log.warn("[xt:audio-proxy] status check failed:", err)
+    return null
+  }
+}
+
+if (audioProxyPlatformAvailable && typeof document !== "undefined") {
+  document.addEventListener(SETTINGS_EVENT, (event: Event) => {
+    const detail = (event as CustomEvent)?.detail
+    if (detail?.key === "ffmpegPath") cachedAvailability = null
+  })
 }
 
 export async function startAudioTranscode(
@@ -66,6 +115,7 @@ export async function startAudioTranscode(
       url,
       userAgent: effectiveUserAgent,
       authorization,
+      ffmpegPath: getFfmpegPath() || null,
     })) as { sessionId?: string; localUrl?: string }
     if (!result?.sessionId || !result?.localUrl) {
       throw new Error("register_audio_transcode returned an unexpected shape")

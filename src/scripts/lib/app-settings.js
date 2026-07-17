@@ -15,6 +15,7 @@ const KEY_PLAYER_ARGS_MPV = "xt_player_args_mpv"
 const KEY_PLAYER_ARGS_VLC = "xt_player_args_vlc"
 const KEY_PLAYER_REUSE_MPV = "xt_player_reuse_mpv"
 const KEY_PLAYER_REUSE_VLC = "xt_player_reuse_vlc"
+const KEY_FFMPEG_PATH = "xt_ffmpeg_path"
 const KEY_EXTERNAL_PLAYER_PREF = "xt_external_player_pref"
 const KEY_CLOSE_TO_TRAY = "xt_close_to_tray"
 const KEY_HUB_STRIPS = "xt_hub_strips"
@@ -700,6 +701,20 @@ export const AUDIO_TRANSCODE_AUTO_EVENT = "xt:audio-transcode-auto-changed"
 
 export function getAudioTranscodeAuto() {
   return readLS(KEY_AUDIO_TRANSCODE_AUTO, "") === "1"
+}
+
+// Custom ffmpeg path for the audio-transcode proxy. Empty falls through to
+// the bundled sidecar, then PATH `ffmpeg` (same resolution order as
+// getPlayerPath/setPlayerPath for MPV/VLC).
+export function getFfmpegPath() {
+  return readLS(KEY_FFMPEG_PATH, "")
+}
+
+export function setFfmpegPath(path) {
+  writeLS(KEY_FFMPEG_PATH, (path || "").trim())
+  document.dispatchEvent(
+    new CustomEvent(EVT_CHANGED, { detail: { key: "ffmpegPath" } })
+  )
 }
 
 export function setAudioTranscodeAuto(on) {

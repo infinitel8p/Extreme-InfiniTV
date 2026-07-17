@@ -138,6 +138,34 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # ffmpeg sidecar binaries come from the "ffmpeg Sidecar" workflow's
+      # rolling ffmpeg-sidecar-v1 prerelease, not built here. This job's
+      # matrix has no macOS entry, so both legs fetch a binary.
+      - name: Fetch ffmpeg sidecar
+        if: matrix.os != 'macos-latest'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/binaries
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            ASSET="ffmpeg-x86_64-pc-windows-msvc.exe"
+          else
+            ASSET="ffmpeg-x86_64-unknown-linux-gnu"
+          fi
+          if ! gh release download ffmpeg-sidecar-v1 \
+            --repo "${{ github.repository }}" \
+            --pattern "$ASSET" \
+            --dir src-tauri/binaries \
+            --clobber; then
+            echo "::error::Could not download $ASSET from the ffmpeg-sidecar-v1 release. Run the 'ffmpeg Sidecar' workflow first."
+            exit 1
+          fi
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            chmod +x "src-tauri/binaries/$ASSET"
+          fi
+
       - run: pnpm sync-version ${{ needs.create-beta-release.outputs.version }}
 
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
@@ -206,6 +234,7 @@ jobs:
           XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.13846066
+          XT_SKIP_FFMPEG_SIDECAR: "1"
         run: pnpm tauri android build --apk
 
       - name: Collect APK

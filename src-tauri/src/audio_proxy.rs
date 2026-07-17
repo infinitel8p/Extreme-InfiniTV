@@ -22,6 +22,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command as TokioCommand};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::external_player;
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -44,10 +46,36 @@ const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 type ActiveSlot = Arc<Mutex<Option<Arc<AudioSession>>>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FfmpegSource {
+    Custom,
+    Bundled,
+    System,
+}
+
+impl FfmpegSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            FfmpegSource::Custom => "custom",
+            FfmpegSource::Bundled => "bundled",
+            FfmpegSource::System => "system",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedFfmpeg {
     path: String,
     version: String,
+    source: FfmpegSource,
+}
+
+// Keyed by the custom_path that produced it, so a changed (including
+// cleared) custom path always re-resolves instead of returning a stale hit.
+struct CachedResolution {
+    custom_path: Option<String>,
+    resolved: ResolvedFfmpeg,
+    custom_error: Option<String>,
 }
 
 struct ServerHandle {
@@ -61,7 +89,7 @@ struct ServerHandle {
 pub struct AudioProxyState {
     server: Mutex<Option<ServerHandle>>,
     active: ActiveSlot,
-    resolved_ffmpeg: Mutex<Option<ResolvedFfmpeg>>,
+    resolved_ffmpeg: Mutex<Option<CachedResolution>>,
 }
 
 struct AudioSession {
@@ -88,28 +116,26 @@ struct AudioSession {
 #[tauri::command]
 pub async fn audio_transcode_available(
     state: tauri::State<'_, AudioProxyState>,
+    custom_path: Option<String>,
+    force: Option<bool>,
 ) -> Result<Value, String> {
-    {
-        let cached = state
-            .resolved_ffmpeg
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        if let Some(resolved) = cached.as_ref() {
-            return Ok(json!({ "available": true, "version": resolved.version }));
-        }
-    }
-
-    match resolve_ffmpeg().await {
-        Some(resolved) => {
-            let version = resolved.version.clone();
-            let mut cached = state
-                .resolved_ffmpeg
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            *cached = Some(resolved);
-            Ok(json!({ "available": true, "version": version }))
-        }
-        None => Ok(json!({ "available": false, "version": Value::Null })),
+    let (resolved, custom_error) =
+        resolve_with_cache(&state, custom_path, force.unwrap_or(false)).await;
+    match resolved {
+        Some(resolved) => Ok(json!({
+            "available": true,
+            "version": resolved.version,
+            "path": resolved.path,
+            "source": resolved.source.as_str(),
+            "customError": custom_error,
+        })),
+        None => Ok(json!({
+            "available": false,
+            "version": Value::Null,
+            "path": Value::Null,
+            "source": Value::Null,
+            "customError": custom_error,
+        })),
     }
 }
 
@@ -127,6 +153,7 @@ pub async fn register_audio_transcode(
     url: String,
     user_agent: Option<String>,
     authorization: Option<String>,
+    ffmpeg_path: Option<String>,
 ) -> Result<RegisterAudioTranscodeResponse, String> {
     let parsed = tauri::Url::parse(&url).map_err(|e| format!("OTHER:{e}"))?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
@@ -136,10 +163,10 @@ pub async fn register_audio_transcode(
     // One live session at a time: tear down whatever was there before starting the next.
     teardown_active_session(&state).await;
 
-    let ffmpeg_path = resolve_and_cache_ffmpeg(&state).await?;
+    let resolved_ffmpeg_path = resolve_and_cache_ffmpeg(&state, ffmpeg_path).await?;
     let port = ensure_server_started(&state).await?;
 
-    let mut command = TokioCommand::new(&ffmpeg_path);
+    let mut command = TokioCommand::new(&resolved_ffmpeg_path);
     command
         .args(build_ffmpeg_args())
         .stdin(Stdio::piped())
@@ -332,28 +359,61 @@ fn classify_io_error(err: &std::io::Error) -> String {
     }
 }
 
-fn ffmpeg_candidates() -> Vec<String> {
+fn ffmpeg_candidates() -> Vec<(String, FfmpegSource)> {
     let mut candidates = Vec::new();
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
             let sidecar_name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
-            candidates.push(parent.join(sidecar_name).to_string_lossy().into_owned());
+            candidates.push((
+                parent.join(sidecar_name).to_string_lossy().into_owned(),
+                FfmpegSource::Bundled,
+            ));
         }
     }
-    candidates.push("ffmpeg".to_string());
+    candidates.push(("ffmpeg".to_string(), FfmpegSource::System));
     candidates
 }
 
-async fn resolve_ffmpeg() -> Option<ResolvedFfmpeg> {
-    for candidate in ffmpeg_candidates() {
-        if let Ok(version) = probe_ffmpeg(candidate.clone()).await {
-            return Some(ResolvedFfmpeg {
-                path: candidate,
-                version,
-            });
+fn normalize_custom_path(path: Option<String>) -> Option<String> {
+    path.map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+// Resolution order: custom path (if set) -> bundled sidecar -> PATH `ffmpeg`. A failing custom
+// path is reported via the returned error but never blocks the bundled/system fallback.
+async fn resolve_ffmpeg(custom_path: Option<&str>) -> (Option<ResolvedFfmpeg>, Option<String>) {
+    let mut custom_error = None;
+    if let Some(custom) = custom_path {
+        match external_player::validate_arg(custom, "ffmpeg path") {
+            Ok(()) => match probe_ffmpeg(custom.to_string()).await {
+                Ok(version) => {
+                    return (
+                        Some(ResolvedFfmpeg {
+                            path: custom.to_string(),
+                            version,
+                            source: FfmpegSource::Custom,
+                        }),
+                        None,
+                    );
+                }
+                Err(err) => custom_error = Some(err),
+            },
+            Err(err) => custom_error = Some(err),
         }
     }
-    None
+    for (candidate, source) in ffmpeg_candidates() {
+        if let Ok(version) = probe_ffmpeg(candidate.clone()).await {
+            return (
+                Some(ResolvedFfmpeg {
+                    path: candidate,
+                    version,
+                    source,
+                }),
+                custom_error,
+            );
+        }
+    }
+    (None, custom_error)
 }
 
 async fn probe_ffmpeg(path: String) -> Result<String, String> {
@@ -409,27 +469,65 @@ fn probe_ffmpeg_blocking(path: &str) -> Result<String, String> {
     }
 }
 
-async fn resolve_and_cache_ffmpeg(state: &AudioProxyState) -> Result<String, String> {
+// Pure cache-lookup decision: a hit requires both an unforced call and a matching custom_path.
+fn cached_hit(
+    cached: &Option<CachedResolution>,
+    normalized_custom: &Option<String>,
+    force: bool,
+) -> Option<(ResolvedFfmpeg, Option<String>)> {
+    if force {
+        return None;
+    }
+    let cache = cached.as_ref()?;
+    if cache.custom_path == *normalized_custom {
+        Some((cache.resolved.clone(), cache.custom_error.clone()))
+    } else {
+        None
+    }
+}
+
+// Shared by the availability probe and register_audio_transcode. Cached on the custom_path that
+// produced the resolution, so a changed custom path (set, cleared, or edited) always re-resolves.
+// `force` skips the cache read (a broken/replaced binary at the same path needs a fresh probe)
+// but the fresh result is still written back so playback keeps benefiting from the cache.
+async fn resolve_with_cache(
+    state: &AudioProxyState,
+    custom_path: Option<String>,
+    force: bool,
+) -> (Option<ResolvedFfmpeg>, Option<String>) {
+    let normalized_custom = normalize_custom_path(custom_path);
     {
         let cached = state
             .resolved_ffmpeg
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if let Some(resolved) = cached.as_ref() {
-            return Ok(resolved.path.clone());
+        if let Some((resolved, custom_error)) = cached_hit(&cached, &normalized_custom, force) {
+            return (Some(resolved), custom_error);
         }
     }
-    match resolve_ffmpeg().await {
-        Some(resolved) => {
-            let path = resolved.path.clone();
-            let mut cached = state
-                .resolved_ffmpeg
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            *cached = Some(resolved);
-            Ok(path)
-        }
-        None => Err("NOT_FOUND:ffmpeg binary not found".to_string()),
+    let (resolved, custom_error) = resolve_ffmpeg(normalized_custom.as_deref()).await;
+    if let Some(resolved) = resolved.clone() {
+        let mut cached = state
+            .resolved_ffmpeg
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *cached = Some(CachedResolution {
+            custom_path: normalized_custom,
+            resolved,
+            custom_error: custom_error.clone(),
+        });
+    }
+    (resolved, custom_error)
+}
+
+async fn resolve_and_cache_ffmpeg(
+    state: &AudioProxyState,
+    custom_path: Option<String>,
+) -> Result<String, String> {
+    let (resolved, custom_error) = resolve_with_cache(state, custom_path, false).await;
+    match resolved {
+        Some(resolved) => Ok(resolved.path),
+        None => Err(custom_error.unwrap_or_else(|| "NOT_FOUND:ffmpeg binary not found".to_string())),
     }
 }
 
@@ -1037,7 +1135,58 @@ mod tests {
     #[test]
     fn ffmpeg_candidates_falls_back_to_bare_binary_name() {
         let candidates = ffmpeg_candidates();
-        assert_eq!(candidates.last().map(String::as_str), Some("ffmpeg"));
+        let (path, source) = candidates.last().expect("at least one candidate");
+        assert_eq!(path, "ffmpeg");
+        assert_eq!(*source, FfmpegSource::System);
+    }
+
+    #[test]
+    fn normalize_custom_path_trims_and_drops_blank() {
+        assert_eq!(normalize_custom_path(None), None);
+        assert_eq!(normalize_custom_path(Some("".to_string())), None);
+        assert_eq!(normalize_custom_path(Some("   ".to_string())), None);
+        assert_eq!(
+            normalize_custom_path(Some("  /usr/bin/ffmpeg  ".to_string())),
+            Some("/usr/bin/ffmpeg".to_string())
+        );
+    }
+
+    fn fake_cached_resolution(custom_path: Option<&str>) -> CachedResolution {
+        CachedResolution {
+            custom_path: custom_path.map(str::to_string),
+            resolved: ResolvedFfmpeg {
+                path: "/usr/bin/ffmpeg".to_string(),
+                version: "ffmpeg version 6.0".to_string(),
+                source: FfmpegSource::Custom,
+            },
+            custom_error: None,
+        }
+    }
+
+    #[test]
+    fn cached_hit_returns_none_without_a_cache_entry() {
+        assert!(cached_hit(&None, &None, false).is_none());
+    }
+
+    #[test]
+    fn cached_hit_returns_the_cached_result_when_the_path_matches() {
+        let cached = Some(fake_cached_resolution(Some("/usr/bin/ffmpeg")));
+        let hit = cached_hit(&cached, &Some("/usr/bin/ffmpeg".to_string()), false);
+        assert!(hit.is_some());
+    }
+
+    #[test]
+    fn cached_hit_returns_none_when_the_path_changed() {
+        let cached = Some(fake_cached_resolution(Some("/usr/bin/ffmpeg")));
+        let hit = cached_hit(&cached, &Some("/opt/ffmpeg/ffmpeg".to_string()), false);
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn cached_hit_returns_none_when_forced_even_with_a_matching_path() {
+        let cached = Some(fake_cached_resolution(Some("/usr/bin/ffmpeg")));
+        let hit = cached_hit(&cached, &Some("/usr/bin/ffmpeg".to_string()), true);
+        assert!(hit.is_none());
     }
 
     #[test]

@@ -18,7 +18,8 @@
     "lint:fix": "eslint . --fix",
     "screenshots": "node ./src/scripts/capture-screenshots.mjs",
     "msix": "node ./buildfiles/make-msix-template.mjs",
-    "sync-version": "node ./buildfiles/sync-version.mjs"
+    "sync-version": "node ./buildfiles/sync-version.mjs",
+    "fetch-ffmpeg": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs"
   },
   "dependencies": {
     "@astrojs/svelte": "^9.0.1",

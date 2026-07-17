@@ -47,6 +47,7 @@ import {
 import { getAndroidNativePlayerEnabled, getAudioTranscodeAuto } from "@/scripts/lib/app-settings.js"
 import {
   audioTranscodeAvailable,
+  refreshAudioTranscodeAvailability,
   startAudioTranscode,
   stopAudioTranscode,
   onAudioTranscodeError,
@@ -82,6 +83,7 @@ import {
   getVideoScale,
   setVideoScale,
   VIDEO_SCALE_EVENT,
+  SETTINGS_EVENT,
 } from "@/scripts/lib/app-settings.js"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
@@ -1521,6 +1523,17 @@ audioTranscodeAvailable()
   })
   .catch(() => {})
 onAudioTranscodeError((payload) => handleAudioProxyError(payload))
+// A custom ffmpeg path saved in Settings should take effect on Live TV without a restart.
+document.addEventListener(SETTINGS_EVENT, (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.key !== "ffmpegPath") return
+  refreshAudioTranscodeAvailability()
+    .then((available) => {
+      audioProxyAvailable = available
+      log.log("[xt:livetv] audio transcode proxy availability refreshed:", available)
+    })
+    .catch(() => {})
+})
 let tuningOverlaySentinel = null
 let stallSentinel = null
 let bufferingShownAt = 0

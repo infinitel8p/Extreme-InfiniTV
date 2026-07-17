@@ -188,7 +188,7 @@ fn build_command(path: &str, args: &[String]) -> Command {
 /// shell-free, but a NUL terminates strings at the OS layer and a newline in
 /// a log line can forge fake structured-log entries. Belt-and-braces only;
 /// callers also enforce the picker UI on the frontend.
-fn validate_arg(value: &str, label: &str) -> Result<(), String> {
+pub(crate) fn validate_arg(value: &str, label: &str) -> Result<(), String> {
     if value.contains('\0') {
         return Err(format!("OTHER:{label} contains NUL byte"));
     }
