@@ -575,6 +575,23 @@ const navStructure: NavSection[] = [
             </div>
           </div>
           <PlayerPicker client:load />
+
+          <div id="audio-transcode-section" class="flex flex-col gap-2 pt-4 border-t border-line/60 hidden">
+            <span data-i18n="settings.playback.audioTranscodeAuto" class="text-eyebrow font-medium uppercase text-fg-3">Fix unsupported audio automatically</span>
+            <p id="audio-transcode-helper" data-i18n="settings.playback.audioTranscodeAutoHelper" class="text-xs text-fg-3">
+              When a live channel plays video with no sound (AC-3, E-AC-3, MP2, or DTS audio), fix it automatically instead of asking each time.
+            </p>
+            <div
+              id="settings-audio-transcode-auto"
+              class="grid grid-cols-2 gap-2"
+              role="radiogroup"
+              aria-label="Fix unsupported audio automatically"
+              data-i18n-attr="aria-label:settings.playback.audioTranscodeAuto"
+              aria-describedby="audio-transcode-helper">
+              <button type="button" data-audio-transcode="on" aria-pressed="false" data-i18n="settings.playback.audioTranscodeOn" class="audio-transcode-btn btn">On</button>
+              <button type="button" data-audio-transcode="off" aria-pressed="false" data-i18n="settings.playback.audioTranscodeOff" class="audio-transcode-btn btn">Off</button>
+            </div>
+          </div>
         </article>
 
         <AndroidNativePlayerCard client:load />
@@ -1309,7 +1326,10 @@ const navStructure: NavSection[] = [
       setNetworkTimeoutSeconds,
       getUpdateChannel,
       setUpdateChannel,
+      getAudioTranscodeAuto,
+      setAudioTranscodeAuto,
     } from "@/scripts/lib/app-settings.js"
+    import { audioTranscodeAvailable } from "@/scripts/lib/audio-proxy.ts"
     import {
       ensureUserInfo,
       getMaxConnectionsSync,
@@ -2222,6 +2242,31 @@ const navStructure: NavSection[] = [
       syncPerfModeButtons()
     })
     syncPerfModeButtons()
+
+    // ---------------------------------------------------------------------
+    // Audio transcode auto-fix: desktop-only row, hidden until the ffmpeg
+    // proxy binary is confirmed present.
+    // ---------------------------------------------------------------------
+    const audioTranscodeSection = document.getElementById("audio-transcode-section")
+    const audioTranscodeGroup = document.getElementById("settings-audio-transcode-auto")
+    function syncAudioTranscodeButtons() {
+      const current = getAudioTranscodeAuto()
+      for (const btn of audioTranscodeGroup?.querySelectorAll(".audio-transcode-btn") || []) {
+        const isOn = btn.dataset.audioTranscode === "on"
+        btn.setAttribute("aria-pressed", String(isOn === current))
+      }
+    }
+    audioTranscodeGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".audio-transcode-btn")
+      if (!btn) return
+      setAudioTranscodeAuto(btn.dataset.audioTranscode === "on")
+      syncAudioTranscodeButtons()
+    })
+    syncAudioTranscodeButtons()
+    audioTranscodeAvailable().then((available) => {
+      if (available) audioTranscodeSection?.classList.remove("hidden")
+    })
 
     // ---------------------------------------------------------------------
     // Continue Watching retention: 30 / 90 / 180 days or Never. Read by

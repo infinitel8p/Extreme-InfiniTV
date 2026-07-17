@@ -1,4 +1,7 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod audio_proxy;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod discord;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -141,12 +144,16 @@ pub fn run() {
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .manage(audio_proxy::AudioProxyState::default())
         .manage(discord::RpcState::default())
         .manage(external_player::ExternalPlayerState::default())
         .manage(updater::PendingUpdateState::default())
         .manage(sniffer::SnifferState::default())
         .manage(vod_proxy::VodProxyState::default())
         .invoke_handler(tauri::generate_handler![
+            audio_proxy::audio_transcode_available,
+            audio_proxy::register_audio_transcode,
+            audio_proxy::unregister_audio_transcode,
             discord::discord_set_activity,
             discord::discord_clear,
             discord::discord_disconnect,
@@ -167,7 +174,7 @@ pub fn run() {
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_android_fs::init());
 
-    builder
+    let app = builder
         .setup(|_app| {
             install_panic_hook();
             #[cfg(target_os = "android")]
@@ -194,6 +201,15 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    app.run(|_app_handle, _event| {
+        // Tauri exit paths (e.g. tray Quit) may not run Drop for state behind Arcs, so kill any active ffmpeg session here.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let tauri::RunEvent::Exit = _event {
+            use tauri::Manager;
+            audio_proxy::shutdown(&_app_handle.state::<audio_proxy::AudioProxyState>());
+        }
+    });
 }

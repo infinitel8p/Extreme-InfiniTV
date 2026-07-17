@@ -9,7 +9,7 @@ overrides:
 
 patchedDependencies:
   mpegts.js:
-    hash: 04f7f363c1a5472d96fc4640d3bba57a875f803719fa0aebc6b5f1cf12be90a4
+    hash: 2ea2f6966ba08084f38602edaf3dd8b7735c3bdd68a02e8674b737077463c026
     path: patches/mpegts.js.patch
 
 importers:
@@ -87,7 +87,7 @@ importers:
         version: 2.4.1
       mpegts.js:
         specifier: ^1.8.0
-        version: 1.8.0(patch_hash=04f7f363c1a5472d96fc4640d3bba57a875f803719fa0aebc6b5f1cf12be90a4)
+        version: 1.8.0(patch_hash=2ea2f6966ba08084f38602edaf3dd8b7735c3bdd68a02e8674b737077463c026)
       shaka-player:
         specifier: ^5.2.1
         version: 5.2.1
@@ -5202,7 +5202,7 @@ snapshots:
       '@xmldom/xmldom': 0.8.13
       global: 4.4.0
 
-  mpegts.js@1.8.0(patch_hash=04f7f363c1a5472d96fc4640d3bba57a875f803719fa0aebc6b5f1cf12be90a4):
+  mpegts.js@1.8.0(patch_hash=2ea2f6966ba08084f38602edaf3dd8b7735c3bdd68a02e8674b737077463c026):
     dependencies:
       es6-promise: 4.2.8
       webworkify-webpack: https://codeload.github.com/xqq/webworkify-webpack/tar.gz/24d1e719b4a6cac37a518b2bb10fe124527ef4ef

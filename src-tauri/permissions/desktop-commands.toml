@@ -21,4 +21,7 @@ commands.allow = [
     "cancel_sniff",
     "register_vod_proxy",
     "unregister_vod_proxy",
+    "audio_transcode_available",
+    "register_audio_transcode",
+    "unregister_audio_transcode",
 ]

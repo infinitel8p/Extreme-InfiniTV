@@ -692,6 +692,23 @@ export function setVideoScale(mode) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Audio transcode auto-fix (desktop only - row gated by audioTranscodeAvailable())
+// ---------------------------------------------------------------------------
+const KEY_AUDIO_TRANSCODE_AUTO = "xt_audio_transcode_auto"
+export const AUDIO_TRANSCODE_AUTO_EVENT = "xt:audio-transcode-auto-changed"
+
+export function getAudioTranscodeAuto() {
+  return readLS(KEY_AUDIO_TRANSCODE_AUTO, "") === "1"
+}
+
+export function setAudioTranscodeAuto(on) {
+  writeLS(KEY_AUDIO_TRANSCODE_AUTO, on ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(AUDIO_TRANSCODE_AUTO_EVENT, { detail: { value: !!on } })
+  )
+}
+
 // Update channel (desktop only)
 let cachedIsPrereleaseBuild = null
 

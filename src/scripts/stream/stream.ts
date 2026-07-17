@@ -44,7 +44,16 @@ import {
   launchAndroidNativeLive,
   subscribeAndroidNativeEvents,
 } from "@/scripts/lib/android-video-launcher.js"
-import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
+import { getAndroidNativePlayerEnabled, getAudioTranscodeAuto } from "@/scripts/lib/app-settings.js"
+import {
+  audioTranscodeAvailable,
+  startAudioTranscode,
+  stopAudioTranscode,
+  onAudioTranscodeError,
+  rememberAudioTranscodeChannel,
+  forgetAudioTranscodeChannel,
+  isAudioTranscodeChannel,
+} from "@/scripts/lib/audio-proxy.ts"
 import { parseM3U as parseSharedM3U } from "@/scripts/lib/m3u-parser.ts"
 import {
   hasHevcNameHint,
@@ -1492,6 +1501,26 @@ async function loadChannels() {
 let vjs = null
 let playSeq = 0
 let lastPlayContext = null
+// ffmpeg audio-transcode proxy state - desktop only, cached at boot.
+let audioProxyAvailable = false
+// Streams queued to remount through the proxy once (watchdog / failure-panel fix), consumed on the next play().
+const audioProxyOneShotFixSet = new Set()
+// Streams that hit a mid-play proxy error this session - never retried through the proxy again, to avoid a fallback loop.
+const audioProxyBypassSet = new Set()
+// Streams already auto-attempted through the proxy on a start failure this session - a start failure is a one-shot try, not a retry loop.
+const audioProxyAutoAttemptedSet = new Set()
+// A proxied mount is single-consumer server-side (reconnecting the same local URL 409s), so stalls/errors must retune through
+// a fresh play() instead of resetting the same src. Counts per streamId; reset on sustained playback, capped so a channel that
+// keeps stalling right after retune eventually bypasses the proxy instead of retuning forever.
+const audioProxyStallRetuneCounts = new Map()
+const AUDIO_PROXY_MAX_STALL_RETUNES = 2
+audioTranscodeAvailable()
+  .then((available) => {
+    audioProxyAvailable = available
+    log.log("[xt:livetv] audio transcode proxy available:", available)
+  })
+  .catch(() => {})
+onAudioTranscodeError((payload) => handleAudioProxyError(payload))
 let tuningOverlaySentinel = null
 let stallSentinel = null
 let bufferingShownAt = 0
@@ -1676,29 +1705,50 @@ function giveUpOnPlayback(ctx) {
   clearStallSentinel()
   clearDeadVideoWatchdog()
   clearDeadAudioWatchdog()
-  if (!ctx.started) {
-    // Bypasses getAndroidNativePlayerEnabled() on purpose: this is a one-shot-per-tune
-    // recovery so an unsupported channel still plays, independent of that opt-in setting.
-    if (!ctx.nativeFallbackTried && androidNativePlayerAvailable) {
-      ctx.nativeFallbackTried = true
-      const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
-      const failure = classifyStartFailure({
-        videoCodec: info.videoCodec,
-        audioCodec: info.audioCodec,
-        errorDetail: info.errorDetail,
-        nameHint: hasHevcNameHint(ctx.name),
-        deviceHevc: deviceSupportsHevc(),
+  // A fatal, unrecovered error means the stream is dead whether or not "playing" fired
+  // (video-only buffers can start before an undecodable audio track kills the mount), so
+  // classify and try the audio fix on every terminal path, not just the never-started one.
+  const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
+  const failure = classifyStartFailure({
+    videoCodec: info.videoCodec,
+    audioCodec: info.audioCodec,
+    errorDetail: info.errorDetail,
+    nameHint: hasHevcNameHint(ctx.name),
+    deviceHevc: deviceSupportsHevc(),
+  })
+  log.log("[xt:livetv] start-failure verdict:", failure.kind, failure.codec)
+  // Bypasses getAndroidNativePlayerEnabled() on purpose: this is a one-shot-per-tune
+  // recovery so an unsupported channel still plays, independent of that opt-in setting.
+  if (!ctx.started && !ctx.nativeFallbackTried && androidNativePlayerAvailable) {
+    ctx.nativeFallbackTried = true
+    if (failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio") {
+      toast({ title: t("stream.failure.nativeFallback") })
+      launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
+        if (launched) return
+        showPlaybackFailurePanel(ctx)
+        runAutoDiagnostic(ctx, null)
       })
-      if (failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio") {
-        toast({ title: t("stream.failure.nativeFallback") })
-        launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
-          if (launched) return
-          showPlaybackFailurePanel(ctx)
-          runAutoDiagnostic(ctx, null)
-        })
-        return
-      }
+      return
     }
+  }
+  // Try the proxy automatically, independent of getAudioTranscodeAuto() (which only gates
+  // the mid-play watchdog). One attempt per streamId per session.
+  if (
+    failure.kind === "audio" &&
+    canUseAudioProxy(ctx) &&
+    !ctx.audioProxied &&
+    !audioProxyAutoAttemptedSet.has(ctx.streamId)
+  ) {
+    audioProxyAutoAttemptedSet.add(ctx.streamId)
+    toast({ title: t("stream.audioFix.fixing"), duration: 4000 })
+    fixAudioNow(ctx)
+    return
+  }
+  // Proxied mount itself failed - bypass it so the panel/diagnostic doesn't offer Fix audio again.
+  if (failure.kind === "audio" && ctx.audioProxied) {
+    audioProxyBypassSet.add(ctx.streamId)
+  }
+  if (!ctx.started) {
     showPlaybackFailurePanel(ctx)
     runAutoDiagnostic(ctx, null)
     return
@@ -1751,11 +1801,18 @@ async function mountEmbeddedPlayer(backend, opts) {
   attachAudioOnlyDetection(vjs)
 
   vjs.on("playing", () => {
-    if (lastPlayContext) lastPlayContext.started = true
+    if (lastPlayContext) {
+      lastPlayContext.started = true
+      if (lastPlayContext.audioProxied) {
+        rememberAudioTranscodeChannel(activePlaylistId, String(lastPlayContext.streamId))
+      }
+    }
     if (catchupRetryResetTimer) clearTimeout(catchupRetryResetTimer)
+    const streamIdAtPlaying = lastPlayContext?.streamId
     catchupRetryResetTimer = setTimeout(() => {
       catchupAutoRetryCount = 0
       catchupSeekRemountCount = 0
+      if (streamIdAtPlaying != null) audioProxyStallRetuneCounts.delete(streamIdAtPlaying)
     }, CATCHUP_RETRY_RESET_AFTER_MS)
     hideTuningOverlay()
     hideBufferingChip()
@@ -1836,6 +1893,10 @@ async function mountEmbeddedPlayer(backend, opts) {
       message: err?.message,
       streamId: ctx.streamId,
     })
+    // Both watchdogs re-arm on the next "playing"; clearing them here stops a timer armed by an
+    // earlier "playing" from firing against the mount we're about to reset (retry) or tear down.
+    clearDeadVideoWatchdog()
+    clearDeadAudioWatchdog()
     if (!ctx.retried) {
       ctx.retried = true
       const seqAtRetry = ctx.seq
@@ -1845,6 +1906,10 @@ async function mountEmbeddedPlayer(backend, opts) {
         if (!ctx.isLive) {
           // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
           giveUpOnPlayback(ctx)
+          return
+        }
+        if (ctx.audioProxied) {
+          retuneProxiedAudioMount(ctx)
           return
         }
         try {
@@ -2265,6 +2330,10 @@ function armStallSentinel() {
       giveUpOnPlayback(ctx)
       return
     }
+    if (ctx.audioProxied) {
+      retuneProxiedAudioMount(ctx)
+      return
+    }
     try {
       vjs.reset?.()
       vjs.src({ src: ctx.src, type: ctx.mime || "application/x-mpegURL", isLive: ctx.isLive ?? true })
@@ -2380,10 +2449,57 @@ function audioDecodedByteCount(videoEl) {
   return typeof bytes === "number" ? bytes : null
 }
 
+// Proxy is available, source is a plain live tune, and this channel hasn't already
+// fallen back to direct play this session - safe to (re)route it through ffmpeg.
+function canUseAudioProxy(ctx) {
+  return (
+    audioProxyAvailable &&
+    !!ctx?.isLive &&
+    !catchupSession &&
+    !audioProxyBypassSet.has(ctx.streamId)
+  )
+}
+
+function fixAudioNow(ctx) {
+  audioProxyOneShotFixSet.add(ctx.streamId)
+  void play(ctx.streamId, ctx.name)
+}
+
+// A proxied mount's local URL is single-consumer, so a same-src reconnect (stall sentinel, error retry) would 409 and
+// leave a dead player. Retune through a fresh play() instead, which registers a new session and tears the old one down.
+function retuneProxiedAudioMount(ctx) {
+  const attempts = (audioProxyStallRetuneCounts.get(ctx.streamId) || 0) + 1
+  audioProxyStallRetuneCounts.set(ctx.streamId, attempts)
+  if (attempts > AUDIO_PROXY_MAX_STALL_RETUNES) {
+    audioProxyBypassSet.add(ctx.streamId)
+  } else if (!isAudioTranscodeChannel(activePlaylistId, String(ctx.streamId))) {
+    audioProxyOneShotFixSet.add(ctx.streamId)
+  }
+  void play(ctx.streamId, ctx.name)
+}
+
+// The ffmpeg process/upstream fetch died mid-play; the Rust side has already
+// torn the session down. Bypass the proxy for this channel this session (no
+// retry loop) and fall back to a plain direct tune.
+function handleAudioProxyError(payload) {
+  const ctx = lastPlayContext
+  if (!ctx || !ctx.audioProxied) return
+  if (!payload || payload.sessionId !== ctx.audioProxySessionId) return
+  audioProxyBypassSet.add(ctx.streamId)
+  // Never reached playing state - this channel's proxy path is broken, not a transient blip. Don't keep re-attempting it every session.
+  if (!ctx.started) {
+    forgetAudioTranscodeChannel(activePlaylistId, String(ctx.streamId))
+  }
+  log.warn("[xt:livetv] audio transcode proxy failed mid-play, falling back to direct:", payload.detail)
+  toast({ title: t("stream.audioFix.fallback"), duration: 7000 })
+  void play(ctx.streamId, ctx.name)
+}
+
 function armDeadAudioWatchdog() {
   clearDeadAudioWatchdog()
   const ctx = lastPlayContext
   if (!ctx) return
+  if (ctx.audioProxied) return
   if (deadAudioNotifiedSeq === ctx.seq) return
   const seqAtArm = ctx.seq
   const wrap = getPlayerWrap()
@@ -2431,7 +2547,20 @@ function armDeadAudioWatchdog() {
     const title = isUnsupportedAudioCodec(info?.audioCodec)
       ? t("stream.failure.audioUnsupported", { codec: describeAudioCodec(info.audioCodec) })
       : t("stream.failure.audioSilent")
-    toast({ title, duration: 7000 })
+    if (canUseAudioProxy(ctx)) {
+      if (getAudioTranscodeAuto()) {
+        toast({ title: t("stream.audioFix.fixing"), duration: 4000 })
+        fixAudioNow(ctx)
+      } else {
+        toast({
+          title,
+          duration: 12000,
+          action: { label: t("stream.audioFix.action"), onClick: () => fixAudioNow(ctx) },
+        })
+      }
+    } else {
+      toast({ title, duration: 7000 })
+    }
   }
   schedule()
 }
@@ -2556,9 +2685,11 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   const builtinCantDecode =
     failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio"
   const hevcInstall = failure.kind === "hevc" && isWindowsDesktop()
+  const audioProxyEligible = failure.kind === "audio" && canUseAudioProxy(ctx)
   const externalAvailable = externalPlayersAvailable || androidExternalAvailable
   let primaryKind = "retry"
   if (hevcInstall) primaryKind = "hevc"
+  else if (audioProxyEligible) primaryKind = "audioFix"
   else if (builtinCantDecode && externalAvailable) primaryKind = "external"
 
   const primaryClass =
@@ -2587,6 +2718,18 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
         hidePlaybackFailurePanel()
         play(ctx.streamId, ctx.name)
       }
+    })
+  }
+
+  let audioFixBtn = null
+  if (audioProxyEligible) {
+    audioFixBtn = document.createElement("button")
+    audioFixBtn.type = "button"
+    audioFixBtn.className = primaryKind === "audioFix" ? primaryClass : secondaryClass
+    audioFixBtn.textContent = t("stream.audioFix.action")
+    audioFixBtn.addEventListener("click", () => {
+      hidePlaybackFailurePanel()
+      fixAudioNow(ctx)
     })
   }
 
@@ -2622,9 +2765,10 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   // Primary leads; retry is always offered as the fallback.
   const orderedButtons = []
   if (primaryKind === "hevc" && hevcBtn) orderedButtons.push(hevcBtn)
+  else if (primaryKind === "audioFix" && audioFixBtn) orderedButtons.push(audioFixBtn)
   else if (primaryKind === "external" && extBtn) orderedButtons.push(extBtn)
   else orderedButtons.push(retryBtn)
-  for (const btn of [hevcBtn, extBtn, retryBtn]) {
+  for (const btn of [hevcBtn, audioFixBtn, extBtn, retryBtn]) {
     if (btn && !orderedButtons.includes(btn)) orderedButtons.push(btn)
   }
   for (const btn of orderedButtons) actions.appendChild(btn)
@@ -2644,6 +2788,7 @@ function runScanLineSweep() {
 
 window.addEventListener("pagehide", () => {
   clearRichPresence().catch(() => {})
+  void stopAudioTranscode()
 })
 
 function pushDiscordPresence(channel, kind) {
@@ -2762,6 +2907,7 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
 async function play(streamId, name) {
   const targetChannel = all.find((channel) => channel.id === streamId)
   if (targetChannel?.unresolved) {
+    void stopAudioTranscode()
     toastError(t("stream.error.cantPlay", { channel: name || targetChannel.name || `#${streamId}` }), {
       description: t("stream.error.checkConnection"),
     })
@@ -2806,6 +2952,7 @@ async function play(streamId, name) {
     const backendIsExternal =
       selectedBackend === "mpv" || selectedBackend === "vlc"
     if (!backendIsExternal) {
+      void stopAudioTranscode()
       const externalKind =
         externalPlayersAvailable ? pickConfiguredExternal() : null
       const channelHeaders = streamHeadersById.get(streamId) || null
@@ -2924,6 +3071,7 @@ async function play(streamId, name) {
   const channelDrm = streamDrmById.get(streamId) || null
 
   if (backend === "mpv" || backend === "vlc") {
+    void stopAudioTranscode()
     try {
       await launchExternalLive(backend, src, channelHeaders)
       showExternalPlayerEmptyState(backend, name)
@@ -2941,6 +3089,40 @@ async function play(streamId, name) {
   } else {
     clearRadioMode()
   }
+
+  const wantsAudioProxyFix = audioProxyOneShotFixSet.has(streamId)
+  const useAudioProxy =
+    audioProxyAvailable &&
+    !audioProxyBypassSet.has(streamId) &&
+    (wantsAudioProxyFix || isAudioTranscodeChannel(activePlaylistId, String(streamId)))
+
+  let mountSrc = src
+  let mountMime = "application/x-mpegURL"
+  let audioProxied = false
+  let audioProxySessionId = null
+
+  if (useAudioProxy) {
+    const proxyUserAgent = channelHeaders?.userAgent || getUserAgent() || null
+    const proxySession = await startAudioTranscode(src, proxyUserAgent)
+    audioProxyOneShotFixSet.delete(streamId)
+    if (myRequest !== catchupRequestSeq) {
+      if (proxySession) void stopAudioTranscode(proxySession.sessionId)
+      return
+    }
+    if (proxySession) {
+      mountSrc = proxySession.localUrl
+      mountMime = "video/mp2t"
+      audioProxied = true
+      audioProxySessionId = proxySession.sessionId
+    } else {
+      // Registration itself failed - retrying would just loop the watchdog forever. Bypass the proxy for this channel this session.
+      audioProxyBypassSet.add(streamId)
+      void stopAudioTranscode()
+    }
+  } else {
+    void stopAudioTranscode()
+  }
+
   const player = await ensureEmbeddedPlayer(backend)
   // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
   if (myRequest !== catchupRequestSeq) {
@@ -2954,18 +3136,20 @@ async function play(streamId, name) {
   lastPlayContext = {
     streamId,
     name,
-    src,
+    src: mountSrc,
     seq,
     retried: false,
     started: false,
     nativeFallbackTried: false,
-    mime: "application/x-mpegURL",
+    mime: mountMime,
     isLive: true,
+    audioProxied,
+    audioProxySessionId,
   }
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
-  try { player.src({ src, type: "application/x-mpegURL", drm: channelDrm }) } catch {}
+  try { player.src({ src: mountSrc, type: mountMime, drm: audioProxied ? null : channelDrm }) } catch {}
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch(() => {})

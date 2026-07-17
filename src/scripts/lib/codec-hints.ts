@@ -100,6 +100,17 @@ export function videoCodecDecodable(codec: string | null | undefined): boolean {
 const CODEC_ERROR_DETAIL_RX =
   /codec|decode|format.?unsupported|incompatible|drm|decrypt|eme|clearkey|license/i
 
+// Chromium/WebView2 reports a second addSourceBuffer() with an undecodable
+// codec as "reached the limit of SourceBuffer objects" rather than a codec
+// error. Our mpegts path adds the video buffer first, so this signature means
+// the audio track's codec was rejected.
+const AUDIO_BUFFER_ERROR_RX = /addsourcebuffer|limit of sourcebuffer/i
+
+// The "limit of SourceBuffer objects" message only ever fires for the second
+// buffer, and the mpegts path adds video first - so it convicts the audio track
+// even when recovery remounts wiped the codec strings.
+const AUDIO_BUFFER_LIMIT_RX = /limit of sourcebuffer/i
+
 export function classifyStartFailure(input: {
   videoCodec?: string | null
   audioCodec?: string | null
@@ -108,17 +119,29 @@ export function classifyStartFailure(input: {
   deviceHevc: boolean
 }): StartFailureVerdict {
   const videoCodec = input.videoCodec?.trim() || null
-  const codecError = CODEC_ERROR_DETAIL_RX.test(input.errorDetail || "")
+  const errorDetail = input.errorDetail || ""
+  const codecError = CODEC_ERROR_DETAIL_RX.test(errorDetail)
+  const audioBufferError = AUDIO_BUFFER_ERROR_RX.test(errorDetail)
+  const audioUnsupported = isUnsupportedAudioCodec(input.audioCodec)
+  const videoIsHevc = !!videoCodec && isHevcCodecString(videoCodec)
 
-  if (videoCodec && isHevcCodecString(videoCodec)) {
+  // When the video track is known-decodable (HEVC on a capable device, or a
+  // codec MSE accepts), the failure is the audio track's fault - an unsupported
+  // audio codec or a rejected audio SourceBuffer - not the video.
+  const videoPlayable = videoIsHevc ? input.deviceHevc : videoCodecDecodable(videoCodec)
+  if (videoPlayable && (audioUnsupported || audioBufferError)) {
+    return { kind: "audio", codec: input.audioCodec ?? null }
+  }
+
+  if (videoIsHevc) {
     if (!input.deviceHevc || codecError) return { kind: "hevc", codec: videoCodec }
     return { kind: "unknown", codec: videoCodec }
   }
 
   const nameSaysHevc = input.nameHint && !input.deviceHevc && !videoCodec
-  const audioUnsupported = isUnsupportedAudioCodec(input.audioCodec)
 
-  if (codecError) {
+  if (codecError || audioBufferError) {
+    if (AUDIO_BUFFER_LIMIT_RX.test(errorDetail)) return { kind: "audio", codec: input.audioCodec ?? null }
     if (nameSaysHevc) return { kind: "hevc", codec: null }
     if (audioUnsupported) return { kind: "audio", codec: input.audioCodec ?? null }
     if (videoCodec && videoCodecDecodable(videoCodec)) return { kind: "unknown", codec: videoCodec }

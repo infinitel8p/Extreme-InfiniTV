@@ -40,6 +40,9 @@
 </p>
 
 <p align="center">
+  <a href="https://dev.infinitel8p.com/Extreme-InfiniTV/">
+    <img src="https://img.shields.io/badge/Docs-dev.infinitel8p.com-a855f7?logo=gitbook&logoColor=white" alt="Documentation"/>
+  </a>
   <a href="https://github.com/infinitel8p/Extreme-InfiniTV/issues">
     <img src="https://img.shields.io/github/issues/infinitel8p/Extreme-InfiniTV?logo=github&color=a855f7" alt="Issues"/>
   </a>
