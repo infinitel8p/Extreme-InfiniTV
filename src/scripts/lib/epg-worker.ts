@@ -35,9 +35,13 @@ function parseXmlTvDate(value: string): number {
 }
 
 function assertNoEntities(xml: string): void {
-  if (/<!DOCTYPE\b/i.test(xml) || /<!ENTITY\b/i.test(xml)) {
-    throw new Error("XMLTV contains forbidden DOCTYPE/ENTITY declaration")
+  if (/<!ENTITY\b/i.test(xml)) {
+    throw new Error("XMLTV contains forbidden ENTITY declaration")
   }
+}
+
+function stripDoctype(xml: string): string {
+  return xml.replace(/<!DOCTYPE[^>[]*(?:\[[\s\S]*?\])?\s*>/i, "")
 }
 
 // Same shape as the sign group in parseXmlTvDate's regex - detects whether a raw
@@ -56,7 +60,7 @@ export function parseXmlTv(xml: string): {
   assertNoEntities(xml)
   const programmes = new Map<string, Programme[]>()
   const channelNames = new Map<string, string>()
-  const doc = new DOMParser().parseFromString(xml, "text/xml")
+  const doc = new DOMParser().parseFromString(stripDoctype(xml), "text/xml")
   const err = doc.querySelector("parsererror")
   if (err) {
     throw new Error(

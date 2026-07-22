@@ -546,6 +546,40 @@ describe("parseXmlTv: non-standard catchup-id attribute", () => {
   })
 })
 
+describe("parseXmlTv: DOCTYPE handling", () => {
+  const body =
+    `<tv>` +
+    `<channel id="channel-x"><display-name>Channel X</display-name></channel>` +
+    `</tv>`
+
+  it("parses XMLTV that opens with a plain DOCTYPE", () => {
+    const xml =
+      `<?xml version="1.0" encoding="UTF-8"?>` +
+      `<!DOCTYPE tv SYSTEM "xmltv.dtd">` +
+      body
+    const { channelNames } = parseXmlTv(xml)
+    expect(channelNames.get("channel-x")).toBe("Channel X")
+  })
+
+  it("worker parser parses XMLTV that opens with a plain DOCTYPE", () => {
+    const xml =
+      `<?xml version="1.0" encoding="UTF-8"?>` +
+      `<!DOCTYPE tv SYSTEM "xmltv.dtd">` +
+      body
+    const { channelNames } = parseXmlTvWorker(xml)
+    expect(channelNames.get("channel-x")).toBe("Channel X")
+  })
+
+  it("still rejects an ENTITY declaration (billion-laughs guard)", () => {
+    const xml =
+      `<?xml version="1.0"?>` +
+      `<!DOCTYPE tv [<!ENTITY lol "lol">]>` +
+      body
+    expect(() => parseXmlTv(xml)).toThrow(/ENTITY/)
+    expect(() => parseXmlTvWorker(xml)).toThrow(/ENTITY/)
+  })
+})
+
 describe("buildChannelNameIndex + findInChannelNameIndex: O(1) lookup", () => {
   const channelNames = new Map([
     ["bbc1.uk", "BBC One"],
