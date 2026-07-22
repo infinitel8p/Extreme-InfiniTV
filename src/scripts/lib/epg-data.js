@@ -334,10 +334,6 @@ function hasTzSuffix(raw) {
   return TZ_SUFFIX_RX.test(String(raw || "").trim())
 }
 
-function stripDoctype(xml) {
-  return xml.replace(/<!DOCTYPE[^>[]*(?:\[[\s\S]*?\])?\s*>/i, "")
-}
-
 /**
  * @param {string} xml
  * @returns {{ programmes: Map<string, Programme[]>, channelNames: Map<string, string>, hasExplicitTimezones: boolean }}
@@ -347,10 +343,11 @@ export function parseXmlTv(xml) {
   const programmes = new Map()
   /** @type {Map<string, string>} */
   const channelNames = new Map()
-  if (/<!ENTITY\b/i.test(xml)) {
-    throw new Error("XMLTV contains forbidden ENTITY declaration")
+  const sanitized = xml.replace(/<!DOCTYPE[^>[]*>/i, "")
+  if (/<!DOCTYPE\b/i.test(sanitized) || /<!ENTITY\b/i.test(sanitized)) {
+    throw new Error("XMLTV contains forbidden DOCTYPE/ENTITY declaration")
   }
-  const doc = new DOMParser().parseFromString(stripDoctype(xml), "text/xml")
+  const doc = new DOMParser().parseFromString(sanitized, "text/xml")
   const err = doc.querySelector("parsererror")
   if (err) throw new Error("XMLTV parse error: " + err.textContent.slice(0, 200))
 

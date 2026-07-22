@@ -34,16 +34,6 @@ function parseXmlTvDate(value: string): number {
   return sign === "+" ? utc - offsetMs : utc + offsetMs
 }
 
-function assertNoEntities(xml: string): void {
-  if (/<!ENTITY\b/i.test(xml)) {
-    throw new Error("XMLTV contains forbidden ENTITY declaration")
-  }
-}
-
-function stripDoctype(xml: string): string {
-  return xml.replace(/<!DOCTYPE[^>[]*(?:\[[\s\S]*?\])?\s*>/i, "")
-}
-
 // Same shape as the sign group in parseXmlTvDate's regex - detects whether a raw
 // XMLTV timestamp carried an explicit offset rather than a floating local time.
 const TZ_SUFFIX_RX = /^\d{14}\s*[+-]\d{4}$/
@@ -57,10 +47,13 @@ export function parseXmlTv(xml: string): {
   channelNames: Map<string, string>
   hasExplicitTimezones: boolean
 } {
-  assertNoEntities(xml)
   const programmes = new Map<string, Programme[]>()
   const channelNames = new Map<string, string>()
-  const doc = new DOMParser().parseFromString(stripDoctype(xml), "text/xml")
+  const sanitized = xml.replace(/<!DOCTYPE[^>[]*>/i, "")
+  if (/<!DOCTYPE\b/i.test(sanitized) || /<!ENTITY\b/i.test(sanitized)) {
+    throw new Error("XMLTV contains forbidden DOCTYPE/ENTITY declaration")
+  }
+  const doc = new DOMParser().parseFromString(sanitized, "text/xml")
   const err = doc.querySelector("parsererror")
   if (err) {
     throw new Error(
