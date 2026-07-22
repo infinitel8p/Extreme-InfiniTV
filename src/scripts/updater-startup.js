@@ -11,7 +11,7 @@
 // people at Settings > About.
 import { log } from "@/scripts/lib/log.js"
 import { checkForUpdate, isStoreBuild, resolveUpdateFeedUrl } from "@/scripts/lib/update-check.js"
-import { getUpdateChannel } from "@/scripts/lib/app-settings.js"
+import { getUpdateChannel, getAutoUpdateEnabled } from "@/scripts/lib/app-settings.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { t } from "@/scripts/lib/i18n.js"
 
@@ -103,6 +103,7 @@ async function maybeRunAutoUpdate() {
     if (!markSessionChecked()) return
 
     if (isAutoUpdatePlatform() && !(await isStoreBuild())) {
+        if (!getAutoUpdateEnabled()) return
         try {
             await runAutoUpdate()
             return

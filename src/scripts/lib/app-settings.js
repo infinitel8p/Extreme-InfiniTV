@@ -24,6 +24,7 @@ const KEY_ANDROID_NATIVE_PLAYER = "xt_android_native_player"
 const KEY_ANDROID_REMEMBERED_PLAYER = "xt_android_remembered_player"
 const KEY_VIDEO_SCALE = "xt_video_scale"
 const KEY_UPDATE_CHANNEL = "xt_update_channel"
+const KEY_AUTO_UPDATE = "xt_auto_update"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -38,6 +39,7 @@ export const ANDROID_NATIVE_PLAYER_EVENT = "xt:android-native-player-changed"
 export const ANDROID_REMEMBERED_PLAYER_EVENT = "xt:android-remembered-player-changed"
 export const VIDEO_SCALE_EVENT = "xt:video-scale-changed"
 export const UPDATE_CHANNEL_EVENT = "xt:update-channel-changed"
+export const AUTO_UPDATE_EVENT = "xt:auto-update-changed"
 export const UPDATE_CHANNELS = ["stable", "beta"]
 export const DEFAULT_UPDATE_CHANNEL = "stable"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
@@ -753,5 +755,16 @@ export function setUpdateChannel(channel) {
   writeLS(KEY_UPDATE_CHANNEL, next)
   document.dispatchEvent(
     new CustomEvent(UPDATE_CHANNEL_EVENT, { detail: { value: next } })
+  )
+}
+
+export function getAutoUpdateEnabled() {
+  return readLS(KEY_AUTO_UPDATE, "") !== "0"
+}
+
+export function setAutoUpdateEnabled(enabled) {
+  writeLS(KEY_AUTO_UPDATE, enabled ? "" : "0")
+  document.dispatchEvent(
+    new CustomEvent(AUTO_UPDATE_EVENT, { detail: { value: !!enabled } })
   )
 }

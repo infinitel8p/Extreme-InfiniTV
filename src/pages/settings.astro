@@ -976,6 +976,19 @@ const navStructure: NavSection[] = [
           <div id="update-progress-text" class="text-xs text-fg-3 tabular-nums">0%</div>
         </div>
 
+        <div id="auto-update-row" class="flex flex-col gap-2 pt-4 border-t border-line/60">
+          <label class="flex flex-col gap-1.5">
+            <span data-i18n="settings.update.autoUpdate" class="text-eyebrow font-medium uppercase text-fg-3">Automatic updates</span>
+            <select id="auto-update-select" class="field-input" aria-describedby="auto-update-hint">
+              <option value="on" data-i18n="settings.update.autoUpdateOn">Enabled</option>
+              <option value="off" data-i18n="settings.update.autoUpdateOff">Disabled</option>
+            </select>
+          </label>
+          <p id="auto-update-hint" data-i18n="settings.update.autoUpdateHint" class="text-xs text-fg-3">
+            When disabled, updates will not install automatically. You will still see when one is available.
+          </p>
+        </div>
+
         <div id="update-channel-row" class="flex flex-col gap-2 pt-4 border-t border-line/60">
           <label class="flex flex-col gap-1.5">
             <span data-i18n="settings.update.channel" class="text-eyebrow font-medium uppercase text-fg-3">Update channel</span>
@@ -1400,6 +1413,8 @@ const navStructure: NavSection[] = [
       setNetworkTimeoutSeconds,
       getUpdateChannel,
       setUpdateChannel,
+      getAutoUpdateEnabled,
+      setAutoUpdateEnabled,
       getAudioTranscodeAuto,
       setAudioTranscodeAuto,
       getFfmpegPath,
@@ -2944,6 +2959,10 @@ const navStructure: NavSection[] = [
     const updateChannelSelectEl = /** @type {HTMLSelectElement|null} */ (
       document.getElementById("update-channel-select")
     )
+    const autoUpdateRowEl = document.getElementById("auto-update-row")
+    const autoUpdateSelectEl = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("auto-update-select")
+    )
 
     const GITHUB_RELEASES_URL =
       "https://github.com/infinitel8p/Extreme-InfiniTV/releases"
@@ -2974,6 +2993,9 @@ const navStructure: NavSection[] = [
 
     if (updateChannelSelectEl) updateChannelSelectEl.value = getUpdateChannel()
     if (storeBuild) updateChannelRowEl?.setAttribute("hidden", "")
+
+    if (autoUpdateSelectEl) autoUpdateSelectEl.value = getAutoUpdateEnabled() ? "on" : "off"
+    if (!canUseTauriUpdater) autoUpdateRowEl?.setAttribute("hidden", "")
 
     if (updateCurrentEl) {
       try {
@@ -3295,6 +3317,10 @@ const navStructure: NavSection[] = [
     updateChannelSelectEl?.addEventListener("change", () => {
       setUpdateChannel(updateChannelSelectEl.value)
       checkForUpdates()
+    })
+
+    autoUpdateSelectEl?.addEventListener("change", () => {
+      setAutoUpdateEnabled(autoUpdateSelectEl.value === "on")
     })
 
     checkForUpdates()
