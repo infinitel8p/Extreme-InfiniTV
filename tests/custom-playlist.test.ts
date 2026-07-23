@@ -11,6 +11,7 @@ vi.mock("@/scripts/lib/local-content.js", () => ({
   }),
 }))
 
+import { getLocalContent } from "@/scripts/lib/local-content.js"
 import {
   emptyCustomDoc,
   loadCustomDoc,
@@ -319,6 +320,14 @@ describe("reorderGroups", () => {
     expect(() => reorderGroups(doc, [])).toThrow()
   })
 
+  it("throws when orderedGroups contains a duplicate that masks a missing group", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" }).doc
+    doc = addChannel(doc, xtreamSource("p1", 2), { name: "B", group: "Sport" }).doc
+
+    expect(() => reorderGroups(doc, ["News", "News"])).toThrow()
+  })
+
   it("does not mutate the input doc", () => {
     let doc = emptyCustomDoc()
     doc = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" }).doc
@@ -353,6 +362,11 @@ describe("loadCustomDoc", () => {
     await saveCustomDoc("entry-1", doc)
     const loaded = await loadCustomDoc("entry-1")
     expect(loaded).toEqual(doc)
+  })
+
+  it("throws instead of returning an empty doc when the storage read fails (null, not empty)", async () => {
+    vi.mocked(getLocalContent).mockResolvedValueOnce(null)
+    await expect(loadCustomDoc("entry-1")).rejects.toThrow(/storage read failed/)
   })
 })
 
@@ -649,6 +663,69 @@ describe("resolveCustomChannels", () => {
     const resolved = resolveCustomChannels(doc, pools)
     expect(resolved[0].tvArchive).toBe(1)
     expect(resolved[0].tvArchiveDuration).toBe(168)
+  })
+
+  it("maps an archive-capable xtream source to catchup 'xc' with catchupDays from tvArchiveDuration", () => {
+    const pools = new Map<string, SourcePool>([
+      [
+        "p1",
+        {
+          kind: "xtream",
+          channels: [{ id: 10, name: "BBC One", tvArchive: 1, tvArchiveDuration: 168 }],
+          buildUrl: (streamId: number) => `http://host/${streamId}.m3u8`,
+        },
+      ],
+    ])
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 10), { group: "News" }).doc
+
+    const resolved = resolveCustomChannels(doc, pools)
+    expect(resolved[0].catchup).toBe("xc")
+    expect(resolved[0].catchupDays).toBe(168)
+    expect(resolved[0].catchupSource).toBeNull()
+    expect(resolved[0].catchupCorrection).toBeNull()
+  })
+
+  it("leaves catchup null for an xtream source without archive support", () => {
+    const pools = new Map<string, SourcePool>([
+      [
+        "p1",
+        {
+          kind: "xtream",
+          channels: [{ id: 10, name: "BBC One", tvArchive: 0 }],
+          buildUrl: (streamId: number) => `http://host/${streamId}.m3u8`,
+        },
+      ],
+    ])
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 10), { group: "News" }).doc
+
+    const resolved = resolveCustomChannels(doc, pools)
+    expect(resolved[0].catchup).toBeNull()
+  })
+
+  it("keeps a manual catchup override over the archive-derived 'xc' mapping", () => {
+    const pools = new Map<string, SourcePool>([
+      [
+        "p1",
+        {
+          kind: "xtream",
+          channels: [{ id: 10, name: "BBC One", tvArchive: 1, tvArchiveDuration: 168 }],
+          buildUrl: (streamId: number) => `http://host/${streamId}.m3u8`,
+        },
+      ],
+    ])
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 10), {
+      group: "News",
+      catchup: { catchup: "append", catchupDays: 3, catchupSource: "http://override", catchupCorrection: 1 },
+    }).doc
+
+    const resolved = resolveCustomChannels(doc, pools)
+    expect(resolved[0].catchup).toBe("append")
+    expect(resolved[0].catchupDays).toBe(3)
+    expect(resolved[0].catchupSource).toBe("http://override")
+    expect(resolved[0].catchupCorrection).toBe(1)
   })
 
   it("orders output by doc.groups order, then array order within a group", () => {

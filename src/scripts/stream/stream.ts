@@ -3322,6 +3322,12 @@ function resolveProgrammeWindowAt(channel, atUtcMs) {
 /** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
 async function playCatchup(channel, opts) {
   if (!currentEl || !channel || !activePlaylistId) return false
+  if (channel.unresolved) {
+    toastError(t("stream.error.cantPlay", { channel: channel.name || `#${channel.id}` }), {
+      description: t("stream.error.checkConnection"),
+    })
+    return false
+  }
   // Reachable via a stale/hand-crafted deep link - the channel itself may no longer offer catch-up.
   if (!channelSupportsCatchup(channel)) {
     toastError(t("catchup.notAvailable"))

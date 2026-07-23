@@ -144,6 +144,7 @@ function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestType, dr
 export async function buildCustomSourcePools(doc, opts = {}) {
   const sourceEntryIds = new Set()
   for (const channel of doc.channels) {
+    if (!Array.isArray(channel.sources)) continue
     for (const source of channel.sources) {
       if (source.kind === "xtream" || source.kind === "m3u") sourceEntryIds.add(source.entryId)
     }

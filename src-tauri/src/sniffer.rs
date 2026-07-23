@@ -30,6 +30,7 @@ const INJECT_JS: &str = r#"
     if (window.__xtSnifferInstalled) return;
     window.__xtSnifferInstalled = true;
 
+    var sniffGeneration = %%GENERATION%%;
     var reported = new Set();
     var userAgent = navigator.userAgent;
     var faviconReported = false;
@@ -40,7 +41,7 @@ const INJECT_JS: &str = r#"
         var link = document.querySelector("link[rel~='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']");
         var iconHref = (link && link.href) || (location.origin + "/favicon.ico");
         faviconReported = true;
-        window.__TAURI_INTERNALS__.invoke("sniff_report", { candidatesJson: "[]", favicon: iconHref });
+        window.__TAURI_INTERNALS__.invoke("sniff_report", { candidatesJson: "[]", favicon: iconHref, generation: sniffGeneration });
       } catch (_) {}
     }
     if (document.readyState === "loading") {
@@ -59,6 +60,7 @@ const INJECT_JS: &str = r#"
       try {
         window.__TAURI_INTERNALS__.invoke("sniff_report", {
           candidatesJson: JSON.stringify([{ url: url, userAgent: userAgent, referer: location.href }]),
+          generation: sniffGeneration,
         });
       } catch (_) {}
     }
@@ -95,7 +97,7 @@ const INJECT_JS: &str = r#"
     if (originalRequestMediaKeySystemAccess) {
       navigator.requestMediaKeySystemAccess = function () {
         try {
-          window.__TAURI_INTERNALS__.invoke("sniff_report_drm", {});
+          window.__TAURI_INTERNALS__.invoke("sniff_report_drm", { generation: sniffGeneration });
         } catch (_) {}
         return originalRequestMediaKeySystemAccess.apply(navigator, arguments);
       };
@@ -202,10 +204,12 @@ pub async fn sniff_page(
     let generation = state.next_generation();
     state.set_favicon(None);
 
+    // Bakes the generation into the injected script so a straggling report from a torn-down window is identifiable.
+    let init_script = INJECT_JS.replace("%%GENERATION%%", &generation.to_string());
     WebviewWindowBuilder::new(&app, WINDOW_LABEL, WebviewUrl::External(parsed))
         .visible(false)
         .inner_size(1.0, 1.0)
-        .initialization_script(INJECT_JS)
+        .initialization_script(&init_script)
         .build()
         .map_err(|e| format!("OTHER:{e}"))?;
 
@@ -256,7 +260,11 @@ pub fn sniff_report(
     state: tauri::State<'_, SnifferState>,
     candidates_json: String,
     favicon: Option<String>,
+    generation: u64,
 ) -> Result<(), String> {
+    if generation != state.current_generation() {
+        return Ok(());
+    }
     if candidates_json.len() > MAX_CANDIDATES_JSON_BYTES {
         return Err("OTHER:candidates payload too large".to_string());
     }
@@ -299,7 +307,14 @@ pub fn sniff_report(
 }
 
 #[tauri::command]
-pub fn sniff_report_drm(app: AppHandle) -> Result<(), String> {
+pub fn sniff_report_drm(
+    app: AppHandle,
+    state: tauri::State<'_, SnifferState>,
+    generation: u64,
+) -> Result<(), String> {
+    if generation != state.current_generation() {
+        return Ok(());
+    }
     let _ = app.emit(DRM_EVENT, ());
     Ok(())
 }

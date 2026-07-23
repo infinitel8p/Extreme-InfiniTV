@@ -55,7 +55,7 @@ describe("buildM3UEntriesForEntry: xtream entries", () => {
     expect(result.skippedCount).toBe(0)
     expect(result.entries).toHaveLength(1)
     expect(result.entries[0].url).toBe("http://iptv.example.com/live/alice/secret/101.m3u8")
-    expect(result.entries[0].catchup).toBe("default")
+    expect(result.entries[0].catchup).toBe("xc")
     expect(result.entries[0].catchupDays).toBe(7)
   })
 

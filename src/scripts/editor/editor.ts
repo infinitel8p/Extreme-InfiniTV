@@ -33,7 +33,7 @@ import { probeStreamHead } from "@/scripts/lib/stream-diagnostic.js"
 import { normalize } from "@/scripts/lib/text.ts"
 import { debounce } from "@/scripts/lib/debounce.ts"
 import { t } from "@/scripts/lib/i18n.ts"
-import { toastSuccess, toastError } from "@/scripts/lib/toast.ts"
+import { toastSuccess, toastError, toastWarn } from "@/scripts/lib/toast.ts"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog.ts"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.ts"
 import { ICON_GRIP_VERTICAL, ICON_ARROW_UP, ICON_ARROW_DOWN, ICON_TRASH, ICON_PENCIL } from "@/scripts/lib/icons.ts"
@@ -63,6 +63,8 @@ const undoStack: CustomPlaylistDoc[] = []
 type LinkCheckStatus = "pending" | "ok" | "fail"
 const linkCheckStatus = new Map<string, LinkCheckStatus>()
 let checkLinksRunning = false
+let checkLinksAbort: AbortController | null = null
+let checkLinksProgress = { done: 0, total: 0 }
 
 // ---------------------------------------------------------------------------
 // DOM refs
@@ -828,6 +830,12 @@ async function exportPlaylist(): Promise<void> {
   }
 }
 
+function focusGroupSection(groupName: string): void {
+  const section = groupsContainer?.querySelector<HTMLElement>(`.editor-group-section[data-group="${CSS.escape(groupName)}"]`)
+  section?.scrollIntoView({ behavior: "smooth", block: "center" })
+  section?.querySelector<HTMLInputElement>("input")?.focus()
+}
+
 // ---------------------------------------------------------------------------
 // Dialog wiring
 // ---------------------------------------------------------------------------
@@ -844,6 +852,11 @@ function wireNewGroupDialog(): void {
     const name = newGroupNameInput.value.trim()
     newGroupDialog.close()
     if (!name) return
+    if (doc.groups.includes(name)) {
+      toastWarn(t("editor.toastGroupExists", { name }))
+      focusGroupSection(name)
+      return
+    }
     applyDoc(withNewGroup(doc, name))
     toastSuccess(t("editor.toastGroupCreated", { name }))
   })
@@ -1004,10 +1017,12 @@ function wireBulkRenameDialog(): void {
 // ---------------------------------------------------------------------------
 function updateCheckLinksButton(): void {
   if (!checkLinksBtn) return
-  checkLinksBtn.disabled = checkLinksRunning
   if (checkLinksLabelEl) {
-    checkLinksLabelEl.textContent = checkLinksRunning ? t("editor.checkLinksRunning") : t("editor.checkLinksBtn")
+    checkLinksLabelEl.textContent = checkLinksRunning
+      ? t("editor.checkLinksProgress", checkLinksProgress)
+      : t("editor.checkLinksBtn")
   }
+  checkLinksBtn.title = checkLinksRunning ? t("common.cancel") : ""
 }
 
 async function runCheckLinks(): Promise<void> {
@@ -1023,6 +1038,8 @@ async function runCheckLinks(): Promise<void> {
   }
 
   checkLinksRunning = true
+  checkLinksAbort = new AbortController()
+  checkLinksProgress = { done: 0, total: targets.length }
   updateCheckLinksButton()
   renderGroups()
 
@@ -1038,25 +1055,47 @@ async function runCheckLinks(): Promise<void> {
     })
   }
 
+  const signal = checkLinksAbort.signal
   const queue = [...targets]
   const worker = async (): Promise<void> => {
-    while (queue.length) {
+    while (queue.length && !signal.aborted) {
       const target = queue.shift()
       if (!target) break
-      const result = await probeStreamHead(target.url)
+      const result = await probeStreamHead(target.url, signal)
+      if (result.aborted) {
+        linkCheckStatus.delete(target.key)
+        break
+      }
       linkCheckStatus.set(target.key, result.ok ? "ok" : "fail")
       if (result.ok) okCount++
       else failCount++
+      checkLinksProgress = { done: checkLinksProgress.done + 1, total: checkLinksProgress.total }
+      updateCheckLinksButton()
       scheduleRerender()
     }
   }
   const concurrency = Math.min(4, targets.length)
   await Promise.all(Array.from({ length: concurrency }, () => worker()))
 
+  // Any target never reached (queue drained by abort) reverts from "pending" to no dot.
+  if (signal.aborted) {
+    for (const target of queue) linkCheckStatus.delete(target.key)
+  }
+
+  const wasCancelled = signal.aborted
   checkLinksRunning = false
+  checkLinksAbort = null
   updateCheckLinksButton()
   renderGroups()
-  toastSuccess(t("editor.toastCheckLinksDone", { ok: okCount, fail: failCount }))
+  if (wasCancelled) {
+    toastWarn(t("editor.toastCheckLinksCancelled", { ok: okCount, fail: failCount }))
+  } else {
+    toastSuccess(t("editor.toastCheckLinksDone", { ok: okCount, fail: failCount }))
+  }
+}
+
+function cancelCheckLinks(): void {
+  checkLinksAbort?.abort()
 }
 
 // ---------------------------------------------------------------------------
@@ -1089,10 +1128,18 @@ async function init(): Promise<void> {
     return
   }
 
+  try {
+    doc = await loadCustomDoc(entryId)
+  } catch (err) {
+    log.warn("[xt:editor] loadCustomDoc failed:", err)
+    toastError(t("editor.toastLoadFailed"))
+    showNotFound(t("editor.loadErrorTitle"), t("editor.loadErrorBody"))
+    return
+  }
+
   byId("editor-main")?.classList.remove("hidden")
   byId("editor-main")?.classList.add("flex")
 
-  doc = await loadCustomDoc(entryId)
   invalidateEntry(entryId)
   if (titleInput) titleInput.value = customEntry.title || ""
   renderChannelCount()
@@ -1111,7 +1158,10 @@ async function init(): Promise<void> {
   addSelectedBtn?.addEventListener("click", () => void addSelectedChannels())
   exportBtn?.addEventListener("click", () => void exportPlaylist())
   undoBtn?.addEventListener("click", () => undo())
-  checkLinksBtn?.addEventListener("click", () => void runCheckLinks())
+  checkLinksBtn?.addEventListener("click", () => {
+    if (checkLinksRunning) cancelCheckLinks()
+    else void runCheckLinks()
+  })
   document.addEventListener("keydown", (event) => {
     if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return
     const target = event.target as HTMLElement | null
@@ -1131,12 +1181,18 @@ async function init(): Promise<void> {
 
 void init()
 
-window.addEventListener("pagehide", () => {
+function flushOnTeardown(): void {
   if (!customEntry) return
   try {
     saveTitleNow()
     void flushSave()
   } catch (err) {
-    log.warn("[xt:editor] pagehide flush failed:", err)
+    log.warn("[xt:editor] teardown flush failed:", err)
   }
+}
+
+window.addEventListener("pagehide", flushOnTeardown)
+// visibilitychange fires earlier and more reliably than pagehide on mobile/Android WebView; best-effort since IndexedDB has no synchronous flush.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushOnTeardown()
 })

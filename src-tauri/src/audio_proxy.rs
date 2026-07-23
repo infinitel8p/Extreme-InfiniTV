@@ -4,7 +4,7 @@
 // cannot decode. Mirrors vod_proxy.rs (local 127.0.0.1 server, kill-on-drop child) and
 // external_player.rs (NOT_FOUND:/TIMEOUT:/OTHER: prefixed errors, `-version` probe pattern).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -45,6 +45,9 @@ const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 // ---------------------------------------------------------------------------
 
 type ActiveSlot = Arc<Mutex<Option<Arc<AudioSession>>>>;
+// Keyed independently of `active` so a registration that lost the "one live transcode" race
+// can still be reaped by its own id instead of orphaning its ffmpeg child forever.
+type SessionMap = Arc<Mutex<HashMap<String, Arc<AudioSession>>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FfmpegSource {
@@ -89,6 +92,7 @@ struct ServerHandle {
 pub struct AudioProxyState {
     server: Mutex<Option<ServerHandle>>,
     active: ActiveSlot,
+    sessions: SessionMap,
     resolved_ffmpeg: Mutex<Option<CachedResolution>>,
 }
 
@@ -247,6 +251,13 @@ pub async fn register_audio_transcode(
     }
 
     {
+        let mut sessions = state
+            .sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        sessions.insert(token.clone(), session.clone());
+    }
+    {
         let mut active = state
             .active
             .lock()
@@ -266,16 +277,22 @@ pub async fn unregister_audio_transcode(
     session_id: String,
 ) -> Result<(), String> {
     let matched = {
-        let mut active = state
-            .active
+        let mut sessions = state
+            .sessions
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        match active.as_ref() {
-            Some(session) if session.session_id == session_id => active.take(),
-            _ => None,
-        }
+        sessions.remove(&session_id)
     };
     if let Some(session) = matched {
+        {
+            let mut active = state
+                .active
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if active.as_ref().is_some_and(|current| current.session_id == session_id) {
+                *active = None;
+            }
+        }
         teardown_session(&session).await;
     }
     Ok(())
@@ -290,6 +307,13 @@ async fn teardown_active_session(state: &AudioProxyState) {
         active.take()
     };
     if let Some(session) = previous {
+        {
+            let mut sessions = state
+                .sessions
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            sessions.remove(&session.session_id);
+        }
         teardown_session(&session).await;
     }
 }
@@ -1041,46 +1065,53 @@ async fn teardown_session(session: &Arc<AudioSession>) {
 }
 
 /// Best-effort synchronous teardown for app-exit paths that can't await (e.g. tray Quit
-/// -> `RunEvent::Exit`). No-op if no session is active; uses `try_lock` so it never blocks.
+/// -> `RunEvent::Exit`). No-op if no session is tracked; uses `try_lock` so it never blocks.
 pub fn shutdown(state: &AudioProxyState) {
-    let session = {
+    {
         let mut active = state
             .active
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        active.take()
+        *active = None;
+    }
+    let sessions: Vec<Arc<AudioSession>> = {
+        let mut sessions = state
+            .sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        sessions.drain().map(|(_, session)| session).collect()
     };
-    let Some(session) = session else {
-        return;
-    };
-    session.torn_down.store(true, Ordering::SeqCst);
 
-    if let Ok(mut child_guard) = session.child.try_lock() {
-        if let Some(child) = child_guard.as_mut() {
-            let _ = child.start_kill();
+    for session in sessions {
+        session.torn_down.store(true, Ordering::SeqCst);
+
+        if let Ok(mut child_guard) = session.child.try_lock() {
+            if let Some(child) = child_guard.as_mut() {
+                let _ = child.start_kill();
+            }
         }
-    }
 
-    let tasks: Vec<_> = {
-        let mut guard = session
-            .io_tasks
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        guard.drain(..).collect()
-    };
-    for task in tasks {
-        task.abort();
-    }
+        let tasks: Vec<_> = {
+            let mut guard = session
+                .io_tasks
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            guard.drain(..).collect()
+        };
+        for task in tasks {
+            task.abort();
+        }
 
-    let watchdog = {
-        let mut guard = session
-            .watchdog_task
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        guard.take()
-    };
-    if let Some(task) = watchdog {
-        task.abort();
+        let watchdog = {
+            let mut guard = session
+                .watchdog_task
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            guard.take()
+        };
+        if let Some(task) = watchdog {
+            task.abort();
+        }
     }
 }
 

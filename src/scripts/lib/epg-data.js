@@ -129,24 +129,25 @@ async function collectCustomSourceEpgUrls(playlistId) {
   const doc = await loadCustomDoc(playlistId)
   const sourceEntryIds = new Set()
   for (const channel of doc.channels) {
+    if (!Array.isArray(channel.sources)) continue
     for (const source of channel.sources) {
       if (source.kind === "xtream" || source.kind === "m3u") sourceEntryIds.add(source.entryId)
     }
   }
   if (!sourceEntryIds.size) return []
   const entries = await getEntries()
-  const urls = []
-  for (const sourceEntryId of sourceEntryIds) {
-    const sourceEntry = entries.find((candidate) => candidate._id === sourceEntryId)
-    if (!sourceEntry) continue
-    if (sourceEntry.type === "xtream") {
-      const sourceCreds = entryToCreds(sourceEntry)
-      const base = fmtBase(sourceCreds.host, sourceCreds.port).replace(/\/+$/, "")
-      urls.push(
-        `${base}/xmltv.php?username=${encodeURIComponent(sourceCreds.user || "")}` +
-        `&password=${encodeURIComponent(sourceCreds.pass || "")}`
-      )
-    } else {
+  const resolvedUrls = await Promise.all(
+    [...sourceEntryIds].map(async (sourceEntryId) => {
+      const sourceEntry = entries.find((candidate) => candidate._id === sourceEntryId)
+      if (!sourceEntry) return null
+      if (sourceEntry.type === "xtream") {
+        const sourceCreds = entryToCreds(sourceEntry)
+        const base = fmtBase(sourceCreds.host, sourceCreds.port).replace(/\/+$/, "")
+        return (
+          `${base}/xmltv.php?username=${encodeURIComponent(sourceCreds.user || "")}` +
+          `&password=${encodeURIComponent(sourceCreds.pass || "")}`
+        )
+      }
       let stored = ""
       try { stored = localStorage.getItem(`xt_m3u_epg:${sourceEntryId}`) || "" } catch {}
       if (!stored) {
@@ -157,10 +158,10 @@ async function collectCustomSourceEpgUrls(playlistId) {
           stored = localStorage.getItem(`xt_m3u_epg:${sourceEntryId}`) || ""
         } catch {}
       }
-      if (stored) urls.push(stored)
-    }
-  }
-  return urls
+      return stored || null
+    })
+  )
+  return resolvedUrls.filter(Boolean)
 }
 
 /**

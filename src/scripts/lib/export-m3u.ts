@@ -44,7 +44,7 @@ export async function buildM3UEntriesForEntry(entry: any): Promise<BuildM3UResul
       skippedCount++
       continue
     }
-    const catchup = channel.catchup ?? (isXtream && channel.tvArchive ? "default" : null)
+    const catchup = channel.catchup ?? (isXtream && channel.tvArchive ? "xc" : null)
     const catchupDays = channel.catchupDays ?? (isXtream && channel.tvArchive ? channel.tvArchiveDuration || null : null)
     entries.push({
       name: channel.name || "",

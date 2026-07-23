@@ -13,8 +13,8 @@
   "local": false,
   "remote": {
     "urls": [
-      "http://*/*",
-      "https://*/*"
+      "http://*:*/*",
+      "https://*:*/*"
     ]
   },
   "permissions": [

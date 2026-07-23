@@ -24,6 +24,7 @@ import type { CustomSource } from "@/scripts/lib/custom-playlist.ts"
 const DIALOG_ID = "add-from-website-dialog"
 const QUALITY_PROBE_TIMEOUT_MS = 4000
 const MAX_MANIFEST_PROBE_BYTES = 2 * 1024 * 1024
+const MAX_EAGER_PROBES = 3
 const ALLOWED_MANIFEST_CONTENT_TYPES = new Set([
   "application/vnd.apple.mpegurl",
   "application/x-mpegurl",
@@ -89,9 +90,52 @@ function looksLikePlaylistContentType(contentType: string | null): boolean {
   return !withoutParameters || ALLOWED_MANIFEST_CONTENT_TYPES.has(withoutParameters)
 }
 
-/** Fetches an HLS candidate's manifest and parses it, or null on failure/DASH/no data. */
+const IPV4_RX = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
+
+/**
+ * True when the candidate's hostname is a literal loopback/private/link-local
+ * address, so enrichment shouldn't fetch it (SSRF guard against a hostile page
+ * pointing candidates at the user's own network). We can't resolve DNS
+ * client-side, so a hostname that merely *resolves* to a private address
+ * still slips through - an accepted limitation.
+ */
+function isPrivateOrLoopbackHost(urlString: string): boolean {
+  let hostname: string
+  try {
+    hostname = new URL(urlString).hostname.toLowerCase()
+  } catch {
+    return true
+  }
+  if (hostname === "localhost") return true
+  const bareHost = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname
+
+  const ipv4Match = IPV4_RX.exec(bareHost)
+  if (ipv4Match) {
+    const octets = ipv4Match.slice(1, 5).map(Number)
+    if (octets.some((octet) => octet > 255)) return true
+    const [first, second] = octets
+    if (first === 127) return true
+    if (first === 10) return true
+    if (first === 172 && second >= 16 && second <= 31) return true
+    if (first === 192 && second === 168) return true
+    if (first === 169 && second === 254) return true
+    if (octets.every((octet) => octet === 0)) return true
+    return false
+  }
+
+  if (bareHost.includes(":")) {
+    if (bareHost === "::1") return true
+    if (bareHost.startsWith("fe80:")) return true
+    if (/^f[cd][0-9a-f]{2}:/.test(bareHost)) return true
+  }
+
+  return false
+}
+
+/** Fetches an HLS candidate's manifest and parses it, or null on failure/DASH/no data/private host. */
 async function fetchManifestSummary(candidate: SniffCandidate, parentSignal: AbortSignal): Promise<HlsMasterSummary | null> {
   if (candidate.kind !== "hls") return null
+  if (isPrivateOrLoopbackHost(candidate.url)) return null
   const headers: Record<string, string> = {}
   if (candidate.userAgent) headers["User-Agent"] = candidate.userAgent
   if (candidate.referer) headers["Referer"] = candidate.referer
@@ -358,12 +402,15 @@ export function openAddFromWebsiteDialog(): Promise<void> {
     const masterConfirmedIdx = new Set<number>()
     let qualityAbortController: AbortController | null = null
     let resultsGeneration = 0
+    let eagerProbeCount = 0
 
     const settle = () => {
       if (resolved) return
       resolved = true
       dialogSessionOpen = false
       dialog.removeEventListener("click", onClick)
+      dialog.removeEventListener("mouseover", onRowInteract)
+      dialog.removeEventListener("focusin", onRowInteract)
       dialog.removeEventListener("cancel", onCancel)
       dialog.removeEventListener("close", onClose)
       qualityAbortController?.abort()
@@ -429,24 +476,39 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       }
     }
 
-    const kickoffQualityEnrichment = (candidates: SniffCandidate[]) => {
+    const probeCandidateQuality = (idx: number, candidate: SniffCandidate, candidates: SniffCandidate[]): void => {
       if (!qualityAbortController) qualityAbortController = new AbortController()
       const controller = qualityAbortController
       const generation = resultsGeneration
-      candidates.forEach((candidate, idx) => {
-        if (candidate.kind !== "hls" || qualityByIdx.has(idx) || pendingQualityIdx.has(idx)) return
-        pendingQualityIdx.add(idx)
-        void fetchManifestSummary(candidate, controller.signal).then((summary) => {
-          pendingQualityIdx.delete(idx)
-          if (controller.signal.aborted || generation !== resultsGeneration) return
-          const ownLabel = summary ? describeHlsQuality(summary, t("sniffer.results.audio")) : null
-          applyQuality(idx, ownLabel, false)
-          if (summary?.isMaster) {
-            confirmMasterBadge(idx)
-            crossReferenceMaster(idx, candidate.url, summary, candidates)
-          }
-        })
+      pendingQualityIdx.add(idx)
+      void fetchManifestSummary(candidate, controller.signal).then((summary) => {
+        pendingQualityIdx.delete(idx)
+        if (controller.signal.aborted || generation !== resultsGeneration) return
+        const ownLabel = summary ? describeHlsQuality(summary, t("sniffer.results.audio")) : null
+        applyQuality(idx, ownLabel, false)
+        if (summary?.isMaster) {
+          confirmMasterBadge(idx)
+          crossReferenceMaster(idx, candidate.url, summary, candidates)
+        }
       })
+    }
+
+    /** Eagerly probes only the top-ranked handful of candidates; the rest wait for onRowInteract. */
+    const kickoffQualityEnrichment = (candidates: SniffCandidate[]) => {
+      for (const [idx, candidate] of candidates.entries()) {
+        if (eagerProbeCount >= MAX_EAGER_PROBES) break
+        if (candidate.kind !== "hls" || qualityByIdx.has(idx) || pendingQualityIdx.has(idx)) continue
+        eagerProbeCount++
+        probeCandidateQuality(idx, candidate, candidates)
+      }
+    }
+
+    /** Probes a single candidate on hover/focus/select, unbounded by the eager cap. */
+    const enrichCandidateOnDemand = (idx: number): void => {
+      if (phase.kind !== "results") return
+      const candidate = phase.candidates[idx]
+      if (!candidate || candidate.kind !== "hls" || qualityByIdx.has(idx) || pendingQualityIdx.has(idx)) return
+      probeCandidateQuality(idx, candidate, phase.candidates)
     }
 
     const runSniff = async () => {
@@ -549,6 +611,13 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       if (added) settle()
     }
 
+    const onRowInteract = (event: Event) => {
+      const target = event.target as HTMLElement | null
+      const row = target?.closest<HTMLElement>('[data-role="candidate-row"]')
+      if (!row) return
+      enrichCandidateOnDemand(Number(row.dataset.idx ?? "-1"))
+    }
+
     const onClick = (event: Event) => {
       const target = event.target as HTMLElement | null
       if (!target) return
@@ -568,6 +637,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
         const idx = Number(checkboxEl.dataset.idx ?? "-1")
         if (checkboxEl.checked) checkedIdx.add(idx)
         else checkedIdx.delete(idx)
+        enrichCandidateOnDemand(idx)
         updateAddSelectedFooter()
         return
       }
@@ -575,6 +645,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       const candidateBtn = target.closest<HTMLElement>('[data-role="candidate-btn"]')
       if (candidateBtn && phase.kind === "results") {
         const idx = Number(candidateBtn.dataset.idx ?? "-1")
+        enrichCandidateOnDemand(idx)
         const candidate = phase.candidates[idx]
         if (candidate) {
           phase = { kind: "name", candidate, name: hostnameOf(candidate.url), favicon }
@@ -621,6 +692,8 @@ export function openAddFromWebsiteDialog(): Promise<void> {
     const onClose = () => settle()
 
     dialog.addEventListener("click", onClick)
+    dialog.addEventListener("mouseover", onRowInteract)
+    dialog.addEventListener("focusin", onRowInteract)
     dialog.addEventListener("cancel", onCancel)
     dialog.addEventListener("close", onClose)
 

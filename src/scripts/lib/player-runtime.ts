@@ -20,6 +20,7 @@ import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
 import { splitUrlAuth } from "@/scripts/lib/url-auth.js"
 import { clearKeyAvailable } from "@/scripts/lib/codec-hints"
 import { t } from "@/scripts/lib/i18n.js"
+import { escapeHtml } from "@/scripts/lib/format.js"
 import { ICON_BADGE_CC } from "@/scripts/lib/icons.js"
 import {
   createSubtitleManager,
@@ -2090,8 +2091,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
           index: 5,
           html: subtitleControlIcon,
           selector: [
-            { html: t("player.subtitles.off"), default: true, value: -1 },
-            ...tracks.map((track) => ({ html: track.label, value: track.index })),
+            { html: escapeHtml(t("player.subtitles.off")), default: true, value: -1 },
+            ...tracks.map((track) => ({ html: escapeHtml(track.label), value: track.index })),
           ],
           onSelect(item) {
             subtitleManager.select(typeof item.value === "number" ? item.value : -1)

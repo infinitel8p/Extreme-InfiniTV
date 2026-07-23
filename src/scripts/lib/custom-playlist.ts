@@ -89,6 +89,7 @@ function isValidDoc(value: unknown): value is CustomPlaylistDoc {
 
 export async function loadCustomDoc(entryId: string): Promise<CustomPlaylistDoc> {
   const text = await getLocalContent(entryId)
+  if (text === null) throw new Error("loadCustomDoc: storage read failed")
   if (!text) return emptyCustomDoc()
   try {
     const parsed = JSON.parse(text)
@@ -216,9 +217,10 @@ export function renameGroup(doc: CustomPlaylistDoc, from: string, to: string): C
 export function reorderGroups(doc: CustomPlaylistDoc, orderedGroups: string[]): CustomPlaylistDoc {
   const currentSet = new Set(doc.groups)
   const orderedSet = new Set(orderedGroups)
+  const noDuplicates = orderedGroups.length === orderedSet.size
   const sameSize = currentSet.size === orderedSet.size
   const sameMembers = sameSize && [...currentSet].every((group) => orderedSet.has(group))
-  if (!sameMembers) {
+  if (!noDuplicates || !sameMembers) {
     throw new Error("reorderGroups: orderedGroups must contain the same set of groups")
   }
   return { ...doc, groups: [...orderedGroups] }
@@ -275,6 +277,20 @@ function resolveCatchupFields(channel: CustomChannel, sourceChannel: any): Custo
   }
 }
 
+/** Xtream live channels carry tvArchive/tvArchiveDuration, not a `.catchup` field; map that to the "xc" mode catchup-resolve.ts expects for Xtream-style URLs. */
+function resolveXtreamCatchupFields(channel: CustomChannel, sourceChannel: any): CustomChannelCatchup {
+  if (channel.catchup) return { ...channel.catchup }
+  if (Number(sourceChannel?.tvArchive) === 1) {
+    return {
+      catchup: "xc",
+      catchupDays: sourceChannel?.tvArchiveDuration ?? null,
+      catchupSource: null,
+      catchupCorrection: null,
+    }
+  }
+  return resolveCatchupFields(channel, sourceChannel)
+}
+
 function unresolvedChannel(channel: CustomChannel, fallbackName: string): ResolvedCustomChannel {
   const name = fallbackName || ""
   return {
@@ -316,7 +332,7 @@ function resolveXtreamSource(
     norm: normalize(`${name} ${channel.group}`),
     url: pool.buildUrl(source.streamId),
     isRadio: false,
-    ...resolveCatchupFields(channel, sourceChannel),
+    ...resolveXtreamCatchupFields(channel, sourceChannel),
     tvArchive: sourceChannel.tvArchive,
     tvArchiveDuration: sourceChannel.tvArchiveDuration,
     userAgent: sourceChannel.userAgent ?? null,

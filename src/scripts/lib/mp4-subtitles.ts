@@ -48,6 +48,9 @@ const HEAD_PROBE_BYTES = 65536
 const MOOV_SIZE_CAP_BYTES = 64 * 1024 * 1024
 const RANGE_COALESCE_MAX_GAP_BYTES = 262144
 const EXTRACT_FETCH_CONCURRENCY = 3
+const MAX_SUBTITLE_SAMPLE_BYTES = 512 * 1024
+const MAX_EXTRACTION_TOTAL_BYTES = 8 * 1024 * 1024
+const UTF16_DECODE_CHUNK_UNITS = 8192
 
 export function isMp4SubtitleCapableUrl(url: string, mimeType?: string | null): boolean {
   const mime = mimeType?.toLowerCase()
@@ -294,7 +297,11 @@ function decodeUtf16BE(bytes: Uint8Array): string {
   for (let i = 0; i + 1 < bytes.length; i += 2) {
     codeUnits.push((bytes[i] << 8) | bytes[i + 1])
   }
-  return String.fromCharCode(...codeUnits)
+  let result = ""
+  for (let i = 0; i < codeUnits.length; i += UTF16_DECODE_CHUNK_UNITS) {
+    result += String.fromCharCode(...codeUnits.slice(i, i + UTF16_DECODE_CHUNK_UNITS))
+  }
+  return result
 }
 
 /** uint16 BE length + text (UTF-8 or BOM UTF-16); trailing style boxes ignored; empty -> null. */
@@ -326,18 +333,32 @@ async function extractTrackCues(
     onCues: (cues: SubtitleCue[]) => void
   },
 ): Promise<void> {
-  const samples = mp4boxFile.getTrackSamplesInfo(trackId)
-  if (!samples || samples.length === 0) return
+  const rawSamples = mp4boxFile.getTrackSamplesInfo(trackId)
+  if (!rawSamples || rawSamples.length === 0) return
+  const samples = rawSamples.filter((sample) => sample.size <= MAX_SUBTITLE_SAMPLE_BYTES)
+  if (samples.length < rawSamples.length) {
+    log.warn("[xt:mp4-subtitles] skipping oversized subtitle samples", { skipped: rawSamples.length - samples.length })
+  }
+  if (samples.length === 0) return
   const ranges = coalesceSampleRanges(samples, RANGE_COALESCE_MAX_GAP_BYTES)
   const orderedRanges = orderRangesFromTime(ranges, samples, opts.startAtSeconds ?? 0)
   const signal = opts.signal
 
   let rangeCursor = 0
+  let totalBytesFetched = 0
+  let budgetExceeded = false
   const workerCount = Math.min(EXTRACT_FETCH_CONCURRENCY, orderedRanges.length)
   const workers = Array.from({ length: workerCount }, () =>
     (async () => {
       while (rangeCursor < orderedRanges.length) {
         if (signal?.aborted) return
+        if (totalBytesFetched >= MAX_EXTRACTION_TOTAL_BYTES) {
+          if (!budgetExceeded) {
+            budgetExceeded = true
+            log.warn("[xt:mp4-subtitles] extraction byte budget exceeded, stopping early")
+          }
+          return
+        }
         const range = orderedRanges[rangeCursor++]
         let response: Response
         try {
@@ -353,6 +374,7 @@ async function extractTrackCues(
           return
         }
         const rangeBytes = new Uint8Array(await response.arrayBuffer())
+        totalBytesFetched += rangeBytes.byteLength
         const cues: SubtitleCue[] = []
         for (const sample of samples) {
           if (sample.offset < range.start || sample.offset + sample.size > range.end) continue

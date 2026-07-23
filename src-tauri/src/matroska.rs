@@ -101,7 +101,11 @@ const TRACK_TYPE_SUBTITLE: u8 = 0x11;
 const CLUSTER_ID_BYTES: [u8; 4] = [0x1F, 0x43, 0xB6, 0x75];
 const MAX_CLUSTER_SIZE: u64 = 256 * 1024 * 1024;
 const MAX_BLOCK_GROUP_SIZE: u64 = 256 * 1024;
+const MAX_SIMPLE_BLOCK_SIZE: u64 = 256 * 1024;
+// A real Matroska timestamp is a 1-8 byte uint; this only guards against a malformed/hostile size.
+const MAX_TIMESTAMP_SIZE: u64 = 16;
 const BLOCK_GROUP_PROBE_CAP: usize = 32;
+const MAX_TRACK_TEXT_LEN: usize = 200;
 const DEFAULT_CUE_DURATION_MS: u64 = 3000;
 
 fn ticks_to_ms(ticks: u64, timestamp_scale_ns: u64) -> u64 {
@@ -127,10 +131,20 @@ pub struct HeadInfo {
     pub tracks: Vec<MkvTrack>,
 }
 
+/// File-controlled track metadata (Name, CodecID, Language) flows to the frontend as-is;
+/// strip control chars and truncate before it ever leaves the parser.
+fn sanitize_track_text(text: String) -> String {
+    text.chars()
+        .filter(|ch| !ch.is_control())
+        .take(MAX_TRACK_TEXT_LEN)
+        .collect()
+}
+
 fn latin1_string(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
+    let text = String::from_utf8_lossy(bytes)
         .trim_end_matches('\0')
-        .to_string()
+        .to_string();
+    sanitize_track_text(text)
 }
 
 fn parse_info(bytes: &[u8]) -> Option<u64> {
@@ -178,7 +192,7 @@ fn parse_track_entry(bytes: &[u8]) -> Option<MkvTrack> {
             ID_CODEC_ID => codec = Some(latin1_string(field)),
             ID_LANGUAGE => language = Some(latin1_string(field)),
             ID_LANGUAGE_BCP47 => language_bcp47 = Some(latin1_string(field)),
-            ID_NAME => name = Some(String::from_utf8_lossy(field).into_owned()),
+            ID_NAME => name = Some(sanitize_track_text(String::from_utf8_lossy(field).into_owned())),
             _ => {}
         }
         pos = end;
@@ -737,6 +751,11 @@ impl ClusterScanner {
 
             match child_id {
                 ID_CLUSTER_TIMESTAMP => {
+                    if child_size > MAX_TIMESTAMP_SIZE {
+                        self.drain_consumed(header_len);
+                        self.begin_skip(child_size);
+                        continue;
+                    }
                     if self.buf.len() < header_len + child_size as usize {
                         return;
                     }
@@ -756,7 +775,7 @@ impl ClusterScanner {
                                 (child_size as usize).saturating_sub(sub_header_len) as u64;
                             let laced = flags & 0x06 != 0;
                             match self.subtitle_tracks.get(&track).copied() {
-                                Some(codec) if !laced => {
+                                Some(codec) if !laced && payload_len <= MAX_SIMPLE_BLOCK_SIZE => {
                                     let start_ticks =
                                         (self.cluster_timestamp as i64 + rel as i64).max(0) as u64;
                                     self.collect = Some(Collect::SimpleBlockPayload {

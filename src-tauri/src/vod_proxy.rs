@@ -301,7 +301,7 @@ async fn handle_stream(
     let upstream_response = match upstream_request.send().await {
         Ok(response) => response,
         Err(error) => {
-            log::warn!("[vod-proxy] upstream request failed: {error}");
+            log::warn!("[vod-proxy] upstream request failed: {}", error.without_url());
             return (StatusCode::BAD_GATEWAY, "upstream request failed").into_response();
         }
     };
