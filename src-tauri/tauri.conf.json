@@ -58,7 +58,7 @@
 
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE2NERBRENFQzczNDZENjQKUldSa2JUVEh6cTFOcHJzVi9PYTB0TWZFYUZEV3RrdW5LRk56cmhDcjdxQlJ1QldjbXAwNEVxWHQK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI3NzBDNkVCNzg5OUY0NjkKUldScDlKbDQ2OFp3dDZDTDd3NzVmc0lHREtmRE5RdVlhVkl0b25lV2tuZ2tRR3dVOGZIemZvSisK",
       "endpoints": [
         "https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest/download/latest.json"
       ]
