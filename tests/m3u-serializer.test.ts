@@ -266,3 +266,64 @@ describe("serializeM3U: fixture round-trip", () => {
     })
   }
 })
+
+describe("serializeM3U: embedded commas round-trip", () => {
+  it("round-trips a category value containing a literal comma", () => {
+    const entry: M3UEntry = {
+      ...minimalEntry,
+      category: "News, Sports",
+    }
+    const reparsed = parseM3U(serializeM3U([entry]))
+    expect(reparsed.entries[0].category).toBe("News, Sports")
+  })
+
+  it("round-trips a display name containing a literal comma", () => {
+    const entry: M3UEntry = {
+      ...minimalEntry,
+      tvgId: "x",
+      name: "Breaking News, Live Update",
+    }
+    const reparsed = parseM3U(serializeM3U([entry]))
+    expect(reparsed.entries[0].name).toBe("Breaking News, Live Update")
+    expect(reparsed.entries[0].tvgId).toBe("x")
+  })
+})
+
+describe("serializeM3U: control-char injection", () => {
+  it("strips embedded newlines from an attribute value instead of fabricating a new entry", () => {
+    const malicious: M3UEntry = {
+      ...minimalEntry,
+      tvgName: 'Injected\n#EXTINF:-1,Fake Channel\nhttp://evil.example.com/fake.m3u8',
+    }
+    const normal: M3UEntry = { ...minimalEntry, name: "Trailing Channel" }
+    const reparsed = parseM3U(serializeM3U([malicious, normal]))
+    expect(reparsed.entries).toHaveLength(2)
+    expect(reparsed.entries[0].tvgName).not.toContain("\n")
+    expect(reparsed.entries[0].tvgName).toBe("Injected#EXTINF:-1,Fake Channelhttp://evil.example.com/fake.m3u8")
+    expect(reparsed.entries[0].url).toBe(minimalEntry.url)
+    expect(reparsed.entries[1].name).toBe("Trailing Channel")
+    expect(reparsed.entries[1].url).toBe(minimalEntry.url)
+  })
+
+  it("strips carriage returns and other control chars from the display name", () => {
+    const entry: M3UEntry = {
+      ...minimalEntry,
+      name: "Bad\r\nName\x07Here",
+    }
+    const reparsed = parseM3U(serializeM3U([entry]))
+    expect(reparsed.entries).toHaveLength(1)
+    expect(reparsed.entries[0].name).toBe("BadNameHere")
+  })
+
+  it("strips control chars from the URL line so it cannot inject a new entry", () => {
+    const entry: M3UEntry = {
+      ...minimalEntry,
+      url: "http://example.com/min.m3u8\n#EXTINF:-1,Injected\nhttp://evil.example.com/x.m3u8",
+    }
+    const normal: M3UEntry = { ...minimalEntry, name: "Trailing Channel" }
+    const reparsed = parseM3U(serializeM3U([entry, normal]))
+    expect(reparsed.entries).toHaveLength(2)
+    expect(reparsed.entries[0].url).not.toContain("\n")
+    expect(reparsed.entries[1].name).toBe("Trailing Channel")
+  })
+})

@@ -128,7 +128,7 @@ function injectStyles() {
       white-space: pre-line;
     }
     .xt-toast__action {
-      align-self: flex-start;
+      align-self: flex-end;
       margin-top: 0.25rem;
       display: inline-flex;
       align-items: center;

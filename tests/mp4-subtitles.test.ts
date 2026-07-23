@@ -5,7 +5,9 @@ import {
   coalesceSampleRanges,
   orderRangesFromTime,
   buildTrackLabels,
+  isMp4SubtitleCapableUrl,
 } from "../src/scripts/lib/mp4-subtitles"
+import { isMkvProxyCandidate } from "../src/scripts/lib/vod-proxy"
 
 function makeBoxHeaderBuffer(type: string, size32: number, largesize?: bigint): DataView {
   const buffer = new ArrayBuffer(largesize != null ? 16 : 8)
@@ -183,6 +185,56 @@ describe("orderRangesFromTime", () => {
   it("wraps to the start when startAtSeconds is beyond the last sample", () => {
     const result = orderRangesFromTime(ranges, samples, 500)
     expect(result).toEqual(ranges)
+  })
+})
+
+describe("isMp4SubtitleCapableUrl", () => {
+  it("matches mp4/m4v/mov extensions", () => {
+    expect(isMp4SubtitleCapableUrl("https://host.example/movie.mp4")).toBe(true)
+    expect(isMp4SubtitleCapableUrl("https://host.example/movie.m4v")).toBe(true)
+    expect(isMp4SubtitleCapableUrl("https://host.example/movie.mov")).toBe(true)
+  })
+
+  it("ignores other extensions", () => {
+    expect(isMp4SubtitleCapableUrl("https://host.example/movie.mkv")).toBe(false)
+    expect(isMp4SubtitleCapableUrl("https://host.example/movie.ts")).toBe(false)
+    expect(isMp4SubtitleCapableUrl("https://host.example/movie")).toBe(false)
+  })
+
+  it("strips the query string and fragment before matching the extension", () => {
+    expect(isMp4SubtitleCapableUrl("https://host.example/movie.mp4?token=abc")).toBe(true)
+    expect(isMp4SubtitleCapableUrl("https://host.example/movie.mp4#t=10")).toBe(true)
+    expect(isMp4SubtitleCapableUrl("https://host.example/movie.mkv?ext=mp4")).toBe(false)
+  })
+
+  it("matches on MIME type regardless of extension", () => {
+    expect(isMp4SubtitleCapableUrl("https://host.example/get.php", "video/mp4")).toBe(true)
+    expect(isMp4SubtitleCapableUrl("https://host.example/get.php", "video/quicktime")).toBe(true)
+    expect(isMp4SubtitleCapableUrl("https://host.example/get.php", "VIDEO/MP4")).toBe(true)
+    expect(isMp4SubtitleCapableUrl("https://host.example/get.php", "video/x-matroska")).toBe(false)
+  })
+})
+
+describe("isMkvProxyCandidate", () => {
+  it("matches .mkv and .webm URLs", () => {
+    expect(isMkvProxyCandidate("https://host.example/movie.mkv")).toBe(true)
+    expect(isMkvProxyCandidate("https://host.example/movie.webm")).toBe(true)
+    expect(isMkvProxyCandidate("https://host.example/movie.MKV")).toBe(true)
+  })
+
+  it("ignores non-mkv/webm extensions", () => {
+    expect(isMkvProxyCandidate("https://host.example/movie.mp4")).toBe(false)
+    expect(isMkvProxyCandidate("https://host.example/movie")).toBe(false)
+  })
+
+  it("rejects non-http(s) schemes", () => {
+    expect(isMkvProxyCandidate("file:///movie.mkv")).toBe(false)
+    expect(isMkvProxyCandidate("blob:https://host.example/1234")).toBe(false)
+  })
+
+  it("returns false for a malformed URL instead of throwing", () => {
+    expect(() => isMkvProxyCandidate("not a url")).not.toThrow()
+    expect(isMkvProxyCandidate("not a url")).toBe(false)
   })
 })
 

@@ -42,6 +42,13 @@ describe("classifySniffedUrl", () => {
     })
   })
 
+  it("does not flag mastermind.m3u8 as a master playlist", () => {
+    expect(classifySniffedUrl("https://host.example/mastermind.m3u8")).toEqual({
+      kind: "hls",
+      isMaster: false,
+    })
+  })
+
   it("matches a plain .mpd URL and never marks it as master", () => {
     expect(classifySniffedUrl("https://host.example/manifest.mpd")).toEqual({
       kind: "dash",

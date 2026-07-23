@@ -149,6 +149,14 @@ async function collectCustomSourceEpgUrls(playlistId) {
     } else {
       let stored = ""
       try { stored = localStorage.getItem(`xt_m3u_epg:${sourceEntryId}`) || "" } catch {}
+      if (!stored) {
+        // A never-opened m3u source has no cached x-tvg-url yet; warm it once so its default EPG isn't silently dropped.
+        try {
+          const { ensureLive } = await import("@/scripts/lib/catalog.js")
+          await ensureLive(entryToCreds(sourceEntry), sourceEntryId)
+          stored = localStorage.getItem(`xt_m3u_epg:${sourceEntryId}`) || ""
+        } catch {}
+      }
       if (stored) urls.push(stored)
     }
   }

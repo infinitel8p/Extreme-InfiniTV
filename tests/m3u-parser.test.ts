@@ -175,6 +175,16 @@ describe("parseM3U: attribute parsing edge cases", () => {
     expect(result.entries).toHaveLength(1)
     expect(result.entries[0].url).toBe("http://example.com/x.m3u8")
   })
+
+  it("does not truncate a quoted attribute value at an embedded comma", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" group-title="News, Sports",Full Name\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].category).toBe("News, Sports")
+    expect(result.entries[0].name).toBe("Full Name")
+  })
 })
 
 describe("parseM3U: EPG header variants", () => {

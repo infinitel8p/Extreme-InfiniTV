@@ -16,6 +16,7 @@ import { log } from "@/scripts/lib/log.js"
 const DIALOG_ID = "add-to-custom-dialog"
 
 let dlg: HTMLDialogElement | null = null
+let dialogOpen = false
 
 interface CustomEntryLite {
   _id: string
@@ -118,13 +119,15 @@ export interface AddToCustomItem {
 
 async function runAddToCustomDialog(items: AddToCustomItem[], subtitle: string): Promise<boolean> {
   const dialog = ensureDialog()
-  if (!dialog || !items.length) return Promise.resolve(false)
+  if (!dialog || !items.length || dialogOpen) return Promise.resolve(false)
+  dialogOpen = true
 
   return new Promise((resolve) => {
     let resolved = false
     let phase: "list" | "create" = "list"
     let customEntries: CustomEntryLite[] = []
     let busy = false
+    let spatialNavCleanup: (() => void) | undefined
 
     const settle = (added: boolean) => {
       if (resolved) return
@@ -132,9 +135,11 @@ async function runAddToCustomDialog(items: AddToCustomItem[], subtitle: string):
       dialog.removeEventListener("click", onClick)
       dialog.removeEventListener("cancel", onCancel)
       dialog.removeEventListener("close", onClose)
+      spatialNavCleanup?.()
       try {
         if (dialog.open) dialog.close()
       } catch {}
+      dialogOpen = false
       resolve(added)
     }
 
@@ -254,7 +259,7 @@ async function runAddToCustomDialog(items: AddToCustomItem[], subtitle: string):
         return
       }
 
-      attachDialogSpatialNav(dialog, {
+      spatialNavCleanup = attachDialogSpatialNav(dialog, {
         defaultElement: `#${DIALOG_ID} [data-role="entry-btn"], #${DIALOG_ID} [data-role="new-playlist-btn"]`,
       })
     })()

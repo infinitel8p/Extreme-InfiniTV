@@ -243,6 +243,14 @@ describe("setChannelGroup", () => {
     expect(result.channels.every((channel) => channel.group === "Archive")).toBe(true)
     expect(result.groups).toContain("Archive")
   })
+
+  it("does not mutate the input doc", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" }).doc
+    const snapshot = JSON.parse(JSON.stringify(doc))
+    setChannelGroup(doc, [doc.channels[0].key], "Archive")
+    expect(doc).toEqual(snapshot)
+  })
 })
 
 describe("renameGroup", () => {
@@ -255,6 +263,41 @@ describe("renameGroup", () => {
     expect(result.groups).toEqual(["World News", "Sport"])
     expect(result.channels.find((channel) => channel.overrides.name === "A")?.group).toBe("World News")
     expect(result.channels.find((channel) => channel.overrides.name === "B")?.group).toBe("Sport")
+  })
+
+  it("merges into an existing group instead of creating a duplicate", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" }).doc
+    doc = addChannel(doc, xtreamSource("p1", 2), { name: "B", group: "Sport" }).doc
+    doc = addChannel(doc, xtreamSource("p1", 3), { name: "C", group: "Sport" }).doc
+
+    const result = renameGroup(doc, "News", "Sport")
+    expect(result.groups).toEqual(["Sport"])
+    expect(result.channels.every((channel) => channel.group === "Sport")).toBe(true)
+    expect(result.channels).toHaveLength(3)
+
+    const pools = new Map<string, SourcePool>([
+      [
+        "p1",
+        {
+          kind: "xtream",
+          channels: [1, 2, 3].map((id) => ({ id, name: `x${id}` })),
+          buildUrl: (id: number) => `http://x/${id}`,
+        },
+      ],
+    ])
+    const resolved = resolveCustomChannels(result, pools)
+    expect(resolved).toHaveLength(3)
+    expect(resolved.every((channel) => channel.category === "Sport")).toBe(true)
+  })
+
+  it("does not mutate the input doc", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" }).doc
+    doc = addChannel(doc, xtreamSource("p1", 2), { name: "B", group: "Sport" }).doc
+    const snapshot = JSON.parse(JSON.stringify(doc))
+    renameGroup(doc, "News", "World News")
+    expect(doc).toEqual(snapshot)
   })
 })
 
@@ -274,6 +317,15 @@ describe("reorderGroups", () => {
 
     expect(() => reorderGroups(doc, ["News", "Movies"])).toThrow()
     expect(() => reorderGroups(doc, [])).toThrow()
+  })
+
+  it("does not mutate the input doc", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A", group: "News" }).doc
+    doc = addChannel(doc, xtreamSource("p1", 2), { name: "B", group: "Sport" }).doc
+    const snapshot = JSON.parse(JSON.stringify(doc))
+    reorderGroups(doc, ["Sport", "News"])
+    expect(doc).toEqual(snapshot)
   })
 })
 
@@ -471,6 +523,71 @@ describe("resolveCustomChannels", () => {
     expect(resolved[0].drmScheme).toBe("clearkey")
     expect(resolved[0].licenseKey).toBe("kid:key")
     expect(resolved[0].unresolved).toBeUndefined()
+  })
+
+  it("carries manifestType/drmScheme/licenseKey/userAgent/referer for an m3u-sourced channel", () => {
+    const pools = new Map<string, SourcePool>([
+      [
+        "p2",
+        {
+          kind: "m3u",
+          channels: [
+            {
+              name: "CNN",
+              url: "http://host/cnn.mpd",
+              logo: null,
+              isRadio: false,
+              userAgent: "MyPlayer/1.0",
+              referer: "http://example.com",
+              manifestType: "mpd",
+              drmScheme: "clearkey",
+              licenseKey: "kid:key",
+            },
+          ],
+        },
+      ],
+    ])
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, m3uSource("p2", "http://host/cnn.mpd", "CNN"), { group: "News" }).doc
+
+    const resolved = resolveCustomChannels(doc, pools)
+    expect(resolved[0].userAgent).toBe("MyPlayer/1.0")
+    expect(resolved[0].referer).toBe("http://example.com")
+    expect(resolved[0].manifestType).toBe("mpd")
+    expect(resolved[0].drmScheme).toBe("clearkey")
+    expect(resolved[0].licenseKey).toBe("kid:key")
+  })
+
+  it("carries manifestType/drmScheme/licenseKey/userAgent/referer for an xtream-sourced channel", () => {
+    const pools = new Map<string, SourcePool>([
+      [
+        "p1",
+        {
+          kind: "xtream",
+          channels: [
+            {
+              id: 10,
+              name: "BBC One",
+              userAgent: "MyPlayer/1.0",
+              referer: "http://example.com",
+              manifestType: "mpd",
+              drmScheme: "clearkey",
+              licenseKey: "kid:key",
+            },
+          ],
+          buildUrl: (streamId: number) => `http://host/${streamId}.mpd`,
+        },
+      ],
+    ])
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 10), { group: "News" }).doc
+
+    const resolved = resolveCustomChannels(doc, pools)
+    expect(resolved[0].userAgent).toBe("MyPlayer/1.0")
+    expect(resolved[0].referer).toBe("http://example.com")
+    expect(resolved[0].manifestType).toBe("mpd")
+    expect(resolved[0].drmScheme).toBe("clearkey")
+    expect(resolved[0].licenseKey).toBe("kid:key")
   })
 
   it("marks a channel unresolved when its source pool is missing", () => {

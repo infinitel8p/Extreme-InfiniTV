@@ -91,24 +91,14 @@ export function videoCodecDecodable(codec: string | null | undefined): boolean {
   }
 }
 
-// Engine error details that point at a codec/format problem rather than a
-// network one: hls.js bufferAddCodecError / bufferIncompatibleCodecsError,
-// mpegts.js CodecUnsupported / FormatUnsupported, the synthetic
-// "videoDecodeFailure" from the dead-video watchdog (track present, audio
-// playing, zero frames ever decoded), and shaka.util.Error MEDIA/DRM category
-// failures (decode, ClearKey/EME license errors) for MPEG-DASH.
+// Covers hls.js/mpegts.js codec errors, the dead-video watchdog signal, and shaka MEDIA/DRM failures.
 const CODEC_ERROR_DETAIL_RX =
   /codec|decode|format.?unsupported|incompatible|drm|decrypt|eme|clearkey|license/i
 
-// Chromium/WebView2 reports a second addSourceBuffer() with an undecodable
-// codec as "reached the limit of SourceBuffer objects" rather than a codec
-// error. Our mpegts path adds the video buffer first, so this signature means
-// the audio track's codec was rejected.
+// Chromium/WebView2 reports a rejected second addSourceBuffer() as a "limit of SourceBuffer objects" error, not a codec error.
 const AUDIO_BUFFER_ERROR_RX = /addsourcebuffer|limit of sourcebuffer/i
 
-// The "limit of SourceBuffer objects" message only ever fires for the second
-// buffer, and the mpegts path adds video first - so it convicts the audio track
-// even when recovery remounts wiped the codec strings.
+// Our mpegts path adds the video buffer first, so this message always convicts the audio track.
 const AUDIO_BUFFER_LIMIT_RX = /limit of sourcebuffer/i
 
 export function classifyStartFailure(input: {
@@ -125,9 +115,7 @@ export function classifyStartFailure(input: {
   const audioUnsupported = isUnsupportedAudioCodec(input.audioCodec)
   const videoIsHevc = !!videoCodec && isHevcCodecString(videoCodec)
 
-  // When the video track is known-decodable (HEVC on a capable device, or a
-  // codec MSE accepts), the failure is the audio track's fault - an unsupported
-  // audio codec or a rejected audio SourceBuffer - not the video.
+  // A known-decodable video track shifts blame to the audio track instead.
   const videoPlayable = videoIsHevc ? input.deviceHevc : videoCodecDecodable(videoCodec)
   if (videoPlayable && (audioUnsupported || audioBufferError)) {
     return { kind: "audio", codec: input.audioCodec ?? null }

@@ -6,6 +6,9 @@ import { entryToCreds } from "@/scripts/lib/creds.js"
 import { ensureLive } from "@/scripts/lib/catalog.js"
 import type { M3UEntry } from "@/scripts/lib/m3u-parser.ts"
 import { log } from "@/scripts/lib/log.ts"
+import { sanitizeFilename } from "@/scripts/lib/downloads.js"
+
+export { sanitizeFilename }
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -15,11 +18,6 @@ const isAndroid =
   typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent || "")
 
 const M3U_MIME = "audio/x-mpegurl"
-
-export function sanitizeFilename(name: string): string {
-  const trimmed = (name || "playlist").trim() || "playlist"
-  return trimmed.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 120)
-}
 
 export interface BuildM3UResult {
   entries: M3UEntry[]

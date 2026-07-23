@@ -311,6 +311,7 @@ let vjs = null
 let progressListenersBound = false
 let pipBtnBound = false
 let scaleBtnBound = false
+let playRequestId = 0
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
@@ -408,6 +409,7 @@ async function ensureEmbeddedPlayer(backend) {
 
 async function startPlayback() {
   if (!movie) return
+  const requestId = ++playRequestId
 
   // detailSrc may not be ready yet if the network fetch is in flight.
   let waited = 0
@@ -514,6 +516,10 @@ async function startPlayback() {
   }
 
   const prepared = await prepareVodPlayback(playSrc)
+  if (requestId !== playRequestId) {
+    prepared.mkvSession?.stop()
+    return
+  }
   player.src({
     src: prepared.playbackUrl,
     type: mime,

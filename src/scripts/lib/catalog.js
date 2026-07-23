@@ -83,9 +83,11 @@ async function fetchLiveCategoryMap(playlistId) {
   )
 }
 
-function m3uToChannelList(text, sourceUrl, streamHeaders, logo) {
+function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestType, drmScheme, licenseKey) {
   const fallbackCategory = t("stream.uncategorized") || "Uncategorized"
-  if (isHlsStreamManifest(text) && typeof sourceUrl === "string" && /^https?:\/\//i.test(sourceUrl)) {
+  const isDirectStream = typeof sourceUrl === "string" && /^https?:\/\//i.test(sourceUrl)
+  const isDashSource = isDirectStream && manifestType === "mpd"
+  if (isDirectStream && (isHlsStreamManifest(text) || isDashSource)) {
     const name = t("stream.directStream") || "Live stream"
     return [{
       id: 1,
@@ -103,6 +105,9 @@ function m3uToChannelList(text, sourceUrl, streamHeaders, logo) {
       catchupCorrection: null,
       userAgent: streamHeaders?.userAgent || null,
       referer: streamHeaders?.referer || null,
+      manifestType: isDashSource ? "mpd" : null,
+      drmScheme: drmScheme || null,
+      licenseKey: licenseKey || null,
     }]
   }
   const { entries } = parseM3U(text)
@@ -125,13 +130,18 @@ function m3uToChannelList(text, sourceUrl, streamHeaders, logo) {
       catchupDays: entry.catchupDays ?? null,
       catchupSource: entry.catchupSource ?? null,
       catchupCorrection: entry.catchupCorrection ?? null,
+      userAgent: entry.userAgent ?? null,
+      referer: entry.referer ?? null,
+      manifestType: entry.manifestType ?? null,
+      drmScheme: entry.drmScheme ?? null,
+      licenseKey: entry.licenseKey ?? null,
     })
   }
   return out
 }
 
 /** Build the source pools a custom playlist's channels resolve against, hydrating each referenced entry's own live catalog through the normal cached path. */
-export async function buildCustomSourcePools(doc) {
+export async function buildCustomSourcePools(doc, opts = {}) {
   const sourceEntryIds = new Set()
   for (const channel of doc.channels) {
     for (const source of channel.sources) {
@@ -140,33 +150,35 @@ export async function buildCustomSourcePools(doc) {
   }
   const entries = await getEntries()
   const pools = new Map()
-  for (const sourceEntryId of sourceEntryIds) {
-    const sourceEntry = entries.find((entry) => entry._id === sourceEntryId)
-    if (!sourceEntry) continue
-    const sourceCreds = entryToCreds(sourceEntry)
-    let channels
-    try {
-      channels = await ensureLive(sourceCreds, sourceEntryId)
-    } catch (err) {
-      log.warn("[xt:catalog] custom playlist source hydration failed:", sourceEntryId, err?.message || err)
-      continue
-    }
-    if (sourceEntry.type === "xtream") {
-      pools.set(sourceEntryId, {
-        kind: "xtream",
-        channels,
-        buildUrl: (streamId) => buildLiveStreamUrl(sourceCreds, streamId, sourceCreds.liveContainer),
-      })
-    } else {
-      pools.set(sourceEntryId, { kind: "m3u", channels })
-    }
-  }
+  await Promise.all(
+    [...sourceEntryIds].map(async (sourceEntryId) => {
+      const sourceEntry = entries.find((entry) => entry._id === sourceEntryId)
+      if (!sourceEntry) return
+      const sourceCreds = entryToCreds(sourceEntry)
+      let channels
+      try {
+        channels = await ensureLive(sourceCreds, sourceEntryId, opts)
+      } catch (err) {
+        log.warn("[xt:catalog] custom playlist source hydration failed:", sourceEntryId, err?.message || err)
+        return
+      }
+      if (sourceEntry.type === "xtream") {
+        pools.set(sourceEntryId, {
+          kind: "xtream",
+          channels,
+          buildUrl: (streamId) => buildLiveStreamUrl(sourceCreds, streamId, sourceCreds.liveContainer),
+        })
+      } else {
+        pools.set(sourceEntryId, { kind: "m3u", channels })
+      }
+    })
+  )
   return pools
 }
 
-async function fetchCustomLiveChannels(playlistId) {
+async function fetchCustomLiveChannels(playlistId, opts = {}) {
   const doc = await loadCustomDoc(playlistId)
-  const pools = await buildCustomSourcePools(doc)
+  const pools = await buildCustomSourcePools(doc, opts)
   return resolveCustomChannels(doc, pools)
 }
 
@@ -177,7 +189,7 @@ export async function ensureLive(creds, playlistId, opts = {}) {
   const { data } = await cachedFetch(playlistId, kind, CHANNELS_TTL_MS, () => retryWithBackoff(async () => {
     if (isM3U) {
       if (isCustomHost(creds.host)) {
-        return fetchCustomLiveChannels(playlistId)
+        return fetchCustomLiveChannels(playlistId, opts)
       }
       let text
       if (isLocalM3UHost(creds.host)) {
@@ -195,7 +207,15 @@ export async function ensureLive(creds, playlistId, opts = {}) {
         }
       } catch {}
       const activeEntry = (await getEntries()).find((entry) => entry._id === playlistId)
-      return m3uToChannelList(text, creds.host, activeEntry?.streamHeaders, activeEntry?.logo)
+      return m3uToChannelList(
+        text,
+        creds.host,
+        activeEntry?.streamHeaders,
+        activeEntry?.logo,
+        activeEntry?.manifestType,
+        activeEntry?.drmScheme,
+        activeEntry?.licenseKey
+      )
     }
     const catMap = await fetchLiveCategoryMap(playlistId)
     const r = await xtreamApiFetch("get_live_streams", {}, { entryId: playlistId })

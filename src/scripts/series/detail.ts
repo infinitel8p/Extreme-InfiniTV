@@ -636,6 +636,7 @@ let progressListenersBound = false
 let currentEpisode = null
 let pipBtnBound = false
 let scaleBtnBound = false
+let playRequestId = 0
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
@@ -759,6 +760,7 @@ function markNowPlayingEpisode(epId) {
 
 async function playEpisode(episode) {
   if (!series || !episode) return
+  const requestId = ++playRequestId
   const src = episode?._directUrl
     ? buildEpisodeStreamUrl(episode)
     : await resolveStreamUrl((c) => buildEpisodeStreamUrl(episode, c))
@@ -877,6 +879,10 @@ async function playEpisode(episode) {
   }
 
   const prepared = await prepareVodPlayback(playSrc)
+  if (requestId !== playRequestId) {
+    prepared.mkvSession?.stop()
+    return
+  }
   player.src({
     src: prepared.playbackUrl,
     type: mime,

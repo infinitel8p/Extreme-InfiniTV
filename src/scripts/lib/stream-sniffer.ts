@@ -248,14 +248,17 @@ export interface SniffedPlaylistEntry {
   logo?: string
   streamHeaders?: { userAgent?: string; referer?: string }
   sourcePageUrl?: string
+  manifestType?: string | null
   [key: string]: unknown
 }
 
 /**
  * Save a picked candidate as a new m3u playlist entry. `streamHeaders`,
- * `sourcePageUrl`, and `logo` are new optional fields on m3u entries -
- * addEntry spreads unknown keys onto the stored entry verbatim, so no
- * creds.js change is needed for them to persist.
+ * `sourcePageUrl`, `logo`, and `manifestType` are new optional fields on m3u
+ * entries - addEntry spreads unknown keys onto the stored entry verbatim, so
+ * no creds.js change is needed for them to persist. `manifestType` is "mpd"
+ * for a DASH candidate so catalog.js's direct-stream synthesis can tell it
+ * apart from HLS without needing the manifest body.
  */
 export async function saveSniffedStream(
   candidate: SniffCandidate,
@@ -265,11 +268,13 @@ export async function saveSniffedStream(
   if (candidate.userAgent) streamHeaders.userAgent = candidate.userAgent
   if (candidate.referer) streamHeaders.referer = candidate.referer
   const logo = opts.logo ?? opts.favicon ?? null
+  const manifestType = candidate.kind === "dash" ? "mpd" : null
 
   return addEntry({
     type: "m3u",
     url: candidate.url,
     title: opts.title,
+    manifestType,
     ...(logo ? { logo } : {}),
     ...(Object.keys(streamHeaders).length ? { streamHeaders } : {}),
     ...(opts.sourcePageUrl ? { sourcePageUrl: opts.sourcePageUrl } : {}),

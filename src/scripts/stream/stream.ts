@@ -2557,14 +2557,15 @@ function armDeadAudioWatchdog() {
       streamId: ctx.streamId,
       audioCodec: info?.audioCodec,
     })
-    const title = isUnsupportedAudioCodec(info?.audioCodec)
-      ? t("stream.failure.audioUnsupported", { codec: describeAudioCodec(info.audioCodec) })
-      : t("stream.failure.audioSilent")
+    const audioUnsupported = isUnsupportedAudioCodec(info?.audioCodec)
     if (canUseAudioProxy(ctx)) {
       if (getAudioTranscodeAuto()) {
         toast({ title: t("stream.audioFix.fixing"), duration: 4000 })
         fixAudioNow(ctx)
       } else {
+        const title = audioUnsupported
+          ? t("stream.failure.audioUnsupportedFixable", { codec: describeAudioCodec(info.audioCodec) })
+          : t("stream.failure.audioSilentFixable")
         toast({
           title,
           duration: 12000,
@@ -2572,6 +2573,9 @@ function armDeadAudioWatchdog() {
         })
       }
     } else {
+      const title = audioUnsupported
+        ? t("stream.failure.audioUnsupported", { codec: describeAudioCodec(info.audioCodec) })
+        : t("stream.failure.audioSilent")
       toast({ title, duration: 7000 })
     }
   }

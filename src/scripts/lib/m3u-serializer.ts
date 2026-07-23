@@ -11,8 +11,13 @@ export interface M3UHeaderOptions {
   catchupCorrection?: number | null
 }
 
+/** Drop embedded CR/LF and other control chars so a field value can never fabricate a new line. */
+function stripControlChars(value: string): string {
+  return value.replace(/[\x00-\x1f]/g, "")
+}
+
 function escapeAttrValue(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+  return stripControlChars(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')
 }
 
 function buildHeaderLine(header?: M3UHeaderOptions): string {
@@ -43,13 +48,13 @@ function buildExtinfAttrs(entry: M3UEntry): string {
 }
 
 function serializeEntry(entry: M3UEntry): string[] {
-  const lines = [`#EXTINF:-1${buildExtinfAttrs(entry)},${entry.name}`]
-  if (entry.userAgent != null) lines.push(`#EXTVLCOPT:http-user-agent=${entry.userAgent}`)
-  if (entry.referer != null) lines.push(`#EXTVLCOPT:http-referrer=${entry.referer}`)
-  if (entry.manifestType != null) lines.push(`#KODIPROP:inputstream.adaptive.manifest_type=${entry.manifestType}`)
-  if (entry.drmScheme != null) lines.push(`#KODIPROP:inputstream.adaptive.license_type=${entry.drmScheme}`)
-  if (entry.licenseKey != null) lines.push(`#KODIPROP:inputstream.adaptive.license_key=${entry.licenseKey}`)
-  lines.push(entry.url)
+  const lines = [`#EXTINF:-1${buildExtinfAttrs(entry)},${stripControlChars(entry.name)}`]
+  if (entry.userAgent != null) lines.push(`#EXTVLCOPT:http-user-agent=${stripControlChars(entry.userAgent)}`)
+  if (entry.referer != null) lines.push(`#EXTVLCOPT:http-referrer=${stripControlChars(entry.referer)}`)
+  if (entry.manifestType != null) lines.push(`#KODIPROP:inputstream.adaptive.manifest_type=${stripControlChars(entry.manifestType)}`)
+  if (entry.drmScheme != null) lines.push(`#KODIPROP:inputstream.adaptive.license_type=${stripControlChars(entry.drmScheme)}`)
+  if (entry.licenseKey != null) lines.push(`#KODIPROP:inputstream.adaptive.license_key=${stripControlChars(entry.licenseKey)}`)
+  lines.push(stripControlChars(entry.url))
   return lines
 }
 

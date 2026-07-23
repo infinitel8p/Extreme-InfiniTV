@@ -43,10 +43,12 @@ function resolveUrl(url: string): URL | null {
   }
 }
 
+const MASTER_FILENAME_RX = /(?:^|[_.-])master(?:[_.-]|\.m3u8$)/i
+
 function isMasterPlaylist(pathname: string): boolean {
   const lowerPathname = pathname.toLowerCase()
   const filename = lowerPathname.slice(lowerPathname.lastIndexOf("/") + 1)
-  return filename.includes("master") || lowerPathname.includes("/master")
+  return MASTER_FILENAME_RX.test(filename) || lowerPathname.includes("/master/")
 }
 
 export function classifySniffedUrl(

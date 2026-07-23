@@ -142,6 +142,16 @@ function lastCommaOutsideQuotes(text: string): number {
   return last
 }
 
+function firstCommaOutsideQuotes(text: string): number {
+  let inQuote = false
+  for (let idx = 0; idx < text.length; idx++) {
+    const charAt = text[idx]
+    if (charAt === '"' && text[idx - 1] !== "\\") inQuote = !inQuote
+    else if (charAt === "," && !inQuote) return idx
+  }
+  return -1
+}
+
 /** Parse a decimal hour string (e.g. `catchup-correction`) into a number, or null when unset/non-finite. No clamping. */
 function readHoursAttr(source: string, key: string): number | null {
   const raw = readAttr(source, key)
@@ -170,7 +180,10 @@ function readSiptvDays(source: string): number {
  */
 function parseExtinf(line: string): Omit<M3UEntry, "url"> & { siptvDays: number } {
   const directive = line.replace(/^#EXTINF\s*:?/i, "")
-  const commaIdx = directive.indexOf(",")
+  // Quote-aware so a quoted attr value containing a comma (e.g. group-title="News, Sports")
+  // isn't mistaken for the attrs/name separator; falls back to a naive split on malformed quotes.
+  const quoteAwareCommaIdx = firstCommaOutsideQuotes(directive)
+  const commaIdx = quoteAwareCommaIdx >= 0 ? quoteAwareCommaIdx : directive.indexOf(",")
   let attrs = ""
   let name = ""
   if (commaIdx < 0) {

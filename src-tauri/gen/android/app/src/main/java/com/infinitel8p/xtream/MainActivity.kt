@@ -697,10 +697,29 @@ class SnifferBridge(
   private var timeoutRunnable: Runnable? = null
   private var lastFavicon: String? = null
 
+  // addJavascriptInterface reflects every @JavascriptInterface method regardless of name, so the throwaway WebView gets this report-only object, never SnifferBridge itself.
+  inner class SnifferReportBridge {
+    @JavascriptInterface
+    fun reportDrm() {
+      this@SnifferBridge.reportDrm()
+    }
+
+    @JavascriptInterface
+    fun reportFavicon(favicon: String?) {
+      this@SnifferBridge.reportFavicon(favicon)
+    }
+  }
+
   @JavascriptInterface
   fun startSniff(pageUrl: String?, timeoutMs: Int) {
     val url = pageUrl?.trim().orEmpty()
     if (url.isEmpty()) return
+    val scheme = Uri.parse(url).scheme
+    if (!scheme.equals("http", ignoreCase = true) && !scheme.equals("https", ignoreCase = true)) {
+      Log.w(TAG, "startSniff rejected non-http(s) url")
+      activity.runOnUiThread { teardown(fireDone = true) }
+      return
+    }
     activity.runOnUiThread {
       // Silent teardown: firing xt:sniff-done here would race the listeners
       // the caller just attached for this very startSniff() call.
@@ -712,7 +731,7 @@ class SnifferBridge(
         webView.settings.javaScriptEnabled = true
         webView.settings.mediaPlaybackRequiresUserGesture = false
         webView.settings.domStorageEnabled = true
-        webView.addJavascriptInterface(this, "AndroidSnifferInternal")
+        webView.addJavascriptInterface(SnifferReportBridge(), "AndroidSnifferInternal")
         webView.webViewClient = object : WebViewClient() {
           override fun shouldInterceptRequest(
             view: WebView,

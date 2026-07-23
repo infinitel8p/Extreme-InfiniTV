@@ -201,10 +201,15 @@ export function setChannelGroup(doc: CustomPlaylistDoc, keys: string[], group: s
 }
 
 export function renameGroup(doc: CustomPlaylistDoc, from: string, to: string): CustomPlaylistDoc {
-  const groups = doc.groups.map((group) => (group === from ? to : group))
   const channels = doc.channels.map((channel) =>
     channel.group === from ? { ...channel, group: to } : channel
   )
+  // Merge into an existing `to` group instead of the naive rename: drop the
+  // now-duplicate `from` entry rather than adding a second `to`.
+  const groups =
+    to !== from && doc.groups.includes(to)
+      ? doc.groups.filter((group) => group !== from)
+      : doc.groups.map((group) => (group === from ? to : group))
   return { ...doc, groups, channels }
 }
 
@@ -314,6 +319,11 @@ function resolveXtreamSource(
     ...resolveCatchupFields(channel, sourceChannel),
     tvArchive: sourceChannel.tvArchive,
     tvArchiveDuration: sourceChannel.tvArchiveDuration,
+    userAgent: sourceChannel.userAgent ?? null,
+    referer: sourceChannel.referer ?? null,
+    manifestType: sourceChannel.manifestType ?? null,
+    drmScheme: sourceChannel.drmScheme ?? null,
+    licenseKey: sourceChannel.licenseKey ?? null,
   }
 }
 
@@ -343,6 +353,11 @@ function resolveM3USource(
     url: sourceChannel.url,
     isRadio: !!sourceChannel.isRadio,
     ...resolveCatchupFields(channel, sourceChannel),
+    userAgent: sourceChannel.userAgent ?? null,
+    referer: sourceChannel.referer ?? null,
+    manifestType: sourceChannel.manifestType ?? null,
+    drmScheme: sourceChannel.drmScheme ?? null,
+    licenseKey: sourceChannel.licenseKey ?? null,
   }
 }
 

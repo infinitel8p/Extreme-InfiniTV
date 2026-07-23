@@ -187,11 +187,16 @@ function withNewGroup(source: CustomPlaylistDoc, name: string): CustomPlaylistDo
 // ---------------------------------------------------------------------------
 async function flushSave(): Promise<void> {
   try {
-    await saveCustomDoc(entryId, doc)
+    const saved = await saveCustomDoc(entryId, doc)
+    if (!saved) {
+      toastError(t("editor.toastSaveFailed"))
+      return
+    }
     invalidateEntry(entryId)
     document.dispatchEvent(new CustomEvent("xt:entries-updated"))
   } catch (err) {
     log.warn("[xt:editor] save failed:", err)
+    toastError(t("editor.toastSaveFailed"))
   }
 }
 
@@ -205,6 +210,7 @@ const scheduleResolvedRefresh = debounce(() => {
 
 function commitDoc(nextDoc: CustomPlaylistDoc): void {
   doc = nextDoc
+  orderedChannels = orderedChannelsByGroup(nextDoc)
   renderChannelCount()
   renderGroups()
   updateUndoButton()
@@ -239,13 +245,15 @@ function renderChannelCount(): void {
   if (channelCountEl) channelCountEl.textContent = t("editor.channelCount", { count: doc.channels.length })
 }
 
-const scheduleTitleSave = debounce(() => {
+function saveTitleNow(): void {
   if (!titleInput || !customEntry) return
   const value = titleInput.value.trim()
   if (!value) return
   customEntry.title = value
   void updateEntry(entryId, { title: value })
-}, 400)
+}
+
+const scheduleTitleSave = debounce(saveTitleNow, 400)
 
 // ---------------------------------------------------------------------------
 // Source browser (left pane)
@@ -531,7 +539,7 @@ function renderGroups(): void {
   for (const resolved of resolvedChannels) resolvedById.set(resolved.id, resolved)
 
   const byGroup = new Map<string, Array<{ channel: CustomChannel; resolved: ResolvedCustomChannel | undefined }>>()
-  for (const channel of orderedChannels.length ? orderedChannels : orderedChannelsByGroup(doc)) {
+  for (const channel of orderedChannels) {
     const list = byGroup.get(channel.group) || []
     list.push({ channel, resolved: resolvedById.get(channel.id) })
     byGroup.set(channel.group, list)
@@ -1082,3 +1090,13 @@ async function init(): Promise<void> {
 }
 
 void init()
+
+window.addEventListener("pagehide", () => {
+  if (!customEntry) return
+  try {
+    saveTitleNow()
+    void flushSave()
+  } catch (err) {
+    log.warn("[xt:editor] pagehide flush failed:", err)
+  }
+})
