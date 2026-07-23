@@ -4,9 +4,10 @@
 
 import { entryToCreds } from "@/scripts/lib/creds.js"
 import { ensureLive } from "@/scripts/lib/catalog.js"
+import { buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import type { M3UEntry } from "@/scripts/lib/m3u-parser.ts"
 import { log } from "@/scripts/lib/log.ts"
-import { sanitizeFilename } from "@/scripts/lib/downloads.js"
+import { sanitizeFilename } from "@/scripts/lib/format.ts"
 
 export { sanitizeFilename }
 
@@ -30,28 +31,43 @@ export async function buildM3UEntriesForEntry(entry: any): Promise<BuildM3UResul
   const creds = entryToCreds(entry)
   const channels = await ensureLive(creds, entry._id, { force: true })
   const list = Array.isArray(channels) ? channels : []
-  const usable = list.filter((channel: any) => channel && channel.url && !channel.unresolved)
-  const entries: M3UEntry[] = usable.map((channel: any) => ({
-    name: channel.name || "",
-    url: channel.url,
-    logo: channel.logo ?? null,
-    category: channel.category ?? null,
-    tvgId: channel.tvgId ?? null,
-    tvgName: null,
-    chno: channel.chno ?? null,
-    catchup: channel.catchup ?? null,
-    catchupDays: channel.catchupDays ?? null,
-    catchupSource: channel.catchupSource ?? null,
-    catchupCorrection: channel.catchupCorrection ?? null,
-    userAgent: channel.userAgent ?? null,
-    referer: channel.referer ?? null,
-    tvgType: null,
-    isRadio: !!channel.isRadio,
-    manifestType: channel.manifestType ?? null,
-    drmScheme: channel.drmScheme ?? null,
-    licenseKey: channel.licenseKey ?? null,
-  }))
-  return { entries, skippedCount: list.length - usable.length }
+  const isXtream = entry?.type === "xtream"
+  const entries: M3UEntry[] = []
+  let skippedCount = 0
+  for (const channel of list) {
+    if (!channel || channel.unresolved) {
+      skippedCount++
+      continue
+    }
+    const url = channel.url || (isXtream ? buildLiveStreamUrl(creds, channel.id, creds.liveContainer) : null)
+    if (!url) {
+      skippedCount++
+      continue
+    }
+    const catchup = channel.catchup ?? (isXtream && channel.tvArchive ? "default" : null)
+    const catchupDays = channel.catchupDays ?? (isXtream && channel.tvArchive ? channel.tvArchiveDuration || null : null)
+    entries.push({
+      name: channel.name || "",
+      url,
+      logo: channel.logo ?? null,
+      category: channel.category ?? null,
+      tvgId: channel.tvgId ?? null,
+      tvgName: null,
+      chno: channel.chno ?? null,
+      catchup,
+      catchupDays,
+      catchupSource: channel.catchupSource ?? null,
+      catchupCorrection: channel.catchupCorrection ?? null,
+      userAgent: channel.userAgent ?? null,
+      referer: channel.referer ?? null,
+      tvgType: null,
+      isRadio: !!channel.isRadio,
+      manifestType: channel.manifestType ?? null,
+      drmScheme: channel.drmScheme ?? null,
+      licenseKey: channel.licenseKey ?? null,
+    })
+  }
+  return { entries, skippedCount }
 }
 
 async function downloadBlobWeb(name: string, content: string): Promise<void> {

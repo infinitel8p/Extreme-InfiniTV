@@ -458,6 +458,25 @@ jobs:
             echo "::error::Could not download $ASSET from the ffmpeg-sidecar-v1 release. Run the 'ffmpeg Sidecar' workflow first."
             exit 1
           fi
+          if ! gh release download ffmpeg-sidecar-v1 \
+            --repo "${{ github.repository }}" \
+            --pattern "SHA256SUMS.txt" \
+            --dir src-tauri/binaries \
+            --clobber; then
+            echo "::error::Could not download SHA256SUMS.txt from the ffmpeg-sidecar-v1 release."
+            exit 1
+          fi
+          cd src-tauri/binaries
+          if ! grep -F "$ASSET" SHA256SUMS.txt > asset.sha256; then
+            echo "::error::$ASSET is not listed in SHA256SUMS.txt"
+            exit 1
+          fi
+          if ! sha256sum -c asset.sha256; then
+            echo "::error::Checksum verification failed for $ASSET"
+            exit 1
+          fi
+          rm -f asset.sha256 SHA256SUMS.txt
+          cd - >/dev/null
           if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
             chmod +x "src-tauri/binaries/$ASSET"
           fi

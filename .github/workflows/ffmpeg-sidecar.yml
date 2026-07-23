@@ -138,6 +138,15 @@ jobs:
             echo "./configure --target-os=mingw32 --arch=x86_64 --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe --enable-demuxer=mpegts --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --extra-ldflags=-static --pkg-config-flags=--static"
           } > stage/BUILD-INFO-windows.txt
 
+      - name: Verify standalone binary outside MSYS2
+        shell: pwsh
+        run: |
+          & "$PWD\stage\ffmpeg-x86_64-pc-windows-msvc.exe" -version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::ffmpeg.exe -version failed when run outside MSYS2 (binary likely isn't fully static)"
+            exit 1
+          }
+
       - uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-windows

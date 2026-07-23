@@ -687,6 +687,13 @@ dialog[open] .xt-wn-section {
     overflow: hidden;
 }
 
+.channel-row[data-unresolved="true"] .play-btn {
+    cursor: not-allowed;
+}
+.channel-row[data-unresolved="true"] .play-btn > div {
+    opacity: 0.55;
+}
+
 .map-row,
 .pick-row {
     content-visibility: auto;

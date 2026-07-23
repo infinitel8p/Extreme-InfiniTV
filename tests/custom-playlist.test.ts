@@ -415,6 +415,26 @@ describe("resolveCustomChannels", () => {
     expect(resolved[0].url).toBe("http://host/cnn-new-url.m3u8")
   })
 
+  it("marks a channel unresolved when the name fallback is ambiguous in the pool", () => {
+    const pools = new Map<string, SourcePool>([
+      [
+        "p2",
+        {
+          kind: "m3u",
+          channels: [
+            { name: "CNN", url: "http://host/cnn-region-a.m3u8", logo: null, isRadio: false },
+            { name: "CNN", url: "http://host/cnn-region-b.m3u8", logo: null, isRadio: false },
+          ],
+        },
+      ],
+    ])
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, m3uSource("p2", "http://host/cnn-old-url.m3u8", "CNN"), { group: "News" }).doc
+
+    const resolved = resolveCustomChannels(doc, pools)
+    expect(resolved[0].unresolved).toBe(true)
+  })
+
   it("lets overrides win over the resolved source fields", () => {
     const pools = new Map<string, SourcePool>([
       [
@@ -679,5 +699,42 @@ describe("resolveCustomChannels", () => {
     const resolvedS1 = resolved.find((channel) => channel.name === "S1")
     expect(resolvedN1?.id).toBe(second.channel.id)
     expect(resolvedS1?.id).toBe(first.channel.id)
+  })
+
+  it("degrades a malformed channel record (missing sources) to unresolved without throwing, leaving siblings intact", () => {
+    const pools = new Map<string, SourcePool>([
+      [
+        "p1",
+        {
+          kind: "xtream",
+          channels: [{ id: 10, name: "BBC One" }],
+          buildUrl: (streamId: number) => `http://host/${streamId}.m3u8`,
+        },
+      ],
+    ])
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 10), { group: "News", name: "Healthy" }).doc
+    const malformed = { ...doc.channels[0], key: "malformed-key", id: 999, sources: [] as CustomSource[] }
+    const malformedNoSources = {
+      ...doc.channels[0],
+      key: "malformed-key-2",
+      id: 998,
+      sources: undefined as unknown as CustomSource[],
+    }
+    doc = { ...doc, channels: [...doc.channels, malformed, malformedNoSources] }
+
+    let resolved: ReturnType<typeof resolveCustomChannels> = []
+    expect(() => {
+      resolved = resolveCustomChannels(doc, pools)
+    }).not.toThrow()
+
+    expect(resolved).toHaveLength(3)
+    const healthy = resolved.find((channel) => channel.name === "Healthy")
+    expect(healthy?.unresolved).toBeUndefined()
+    expect(healthy?.url).toBe("http://host/10.m3u8")
+    const malformedResolved = resolved.find((channel) => channel.id === 999)
+    const malformedNoSourcesResolved = resolved.find((channel) => channel.id === 998)
+    expect(malformedResolved?.unresolved).toBe(true)
+    expect(malformedNoSourcesResolved?.unresolved).toBe(true)
   })
 })

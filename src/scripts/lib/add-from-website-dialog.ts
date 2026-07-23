@@ -5,6 +5,7 @@
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { t } from "@/scripts/lib/i18n.js"
 import { escapeHtml } from "@/scripts/lib/format.ts"
+import { safeHttpUrl } from "@/scripts/lib/creds.js"
 import { ICON_WORLD } from "@/scripts/lib/icons.ts"
 import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
 import { log } from "@/scripts/lib/log.js"
@@ -22,8 +23,18 @@ import type { CustomSource } from "@/scripts/lib/custom-playlist.ts"
 
 const DIALOG_ID = "add-from-website-dialog"
 const QUALITY_PROBE_TIMEOUT_MS = 4000
+const MAX_MANIFEST_PROBE_BYTES = 2 * 1024 * 1024
+const ALLOWED_MANIFEST_CONTENT_TYPES = new Set([
+  "application/vnd.apple.mpegurl",
+  "application/x-mpegurl",
+  "audio/x-mpegurl",
+  "audio/mpegurl",
+  "text/plain",
+  "application/octet-stream",
+])
 
 let dlg: HTMLDialogElement | null = null
+let dialogSessionOpen = false
 
 function hostnameOf(url: string): string {
   try { return new URL(url).hostname } catch { return url }
@@ -72,6 +83,12 @@ function timeoutSignal(parentSignal: AbortSignal, ms: number): AbortSignal {
   return controller.signal
 }
 
+/** True when the manifest's own Content-Type doesn't rule out an HLS playlist. */
+function looksLikePlaylistContentType(contentType: string | null): boolean {
+  const withoutParameters = contentType?.split(";")[0]?.trim().toLowerCase()
+  return !withoutParameters || ALLOWED_MANIFEST_CONTENT_TYPES.has(withoutParameters)
+}
+
 /** Fetches an HLS candidate's manifest and parses it, or null on failure/DASH/no data. */
 async function fetchManifestSummary(candidate: SniffCandidate, parentSignal: AbortSignal): Promise<HlsMasterSummary | null> {
   if (candidate.kind !== "hls") return null
@@ -81,6 +98,9 @@ async function fetchManifestSummary(candidate: SniffCandidate, parentSignal: Abo
   try {
     const response = await providerFetch(candidate.url, { headers, signal: timeoutSignal(parentSignal, QUALITY_PROBE_TIMEOUT_MS) })
     if (!response.ok) return null
+    if (!looksLikePlaylistContentType(response.headers.get("content-type"))) return null
+    const contentLength = Number(response.headers.get("content-length"))
+    if (Number.isFinite(contentLength) && contentLength > MAX_MANIFEST_PROBE_BYTES) return null
     return summarizeHlsMaster(await response.text())
   } catch {
     return null
@@ -260,8 +280,9 @@ function renderPhase(
   }
 
   if (phase.kind === "name") {
-    const faviconPreview = phase.favicon
-      ? `<img src="${escapeHtml(phase.favicon)}" alt="${escapeHtml(t("sniffer.name.logoAlt"))}" onerror="this.remove()" class="size-9 rounded-lg border border-line object-contain bg-surface-2 shrink-0" />`
+    const safeFavicon = phase.favicon ? safeHttpUrl(phase.favicon) : null
+    const faviconPreview = safeFavicon
+      ? `<img src="${escapeHtml(safeFavicon)}" alt="${escapeHtml(t("sniffer.name.logoAlt"))}" onerror="this.remove()" class="size-9 rounded-lg border border-line object-contain bg-surface-2 shrink-0" />`
       : ""
     return `
       <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
@@ -319,9 +340,11 @@ function candidateToSource(candidate: SniffCandidate): CustomSource {
  * whether the user saved a stream, cancelled, or hit a dead end.
  */
 export function openAddFromWebsiteDialog(): Promise<void> {
+  if (dialogSessionOpen) return Promise.resolve()
   const dialog = ensureDialog()
   if (!dialog) return Promise.resolve()
 
+  dialogSessionOpen = true
   return new Promise((resolve) => {
     let resolved = false
     let phase: Phase = { kind: "input", url: "", error: null }
@@ -339,6 +362,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
     const settle = () => {
       if (resolved) return
       resolved = true
+      dialogSessionOpen = false
       dialog.removeEventListener("click", onClick)
       dialog.removeEventListener("cancel", onCancel)
       dialog.removeEventListener("close", onClose)
@@ -431,11 +455,12 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       try {
         const result = await sniffPage(pageUrl, {
           onProgress: (progress) => {
-            if (phase.kind !== "progress") return
+            if (resolved || phase.kind !== "progress") return
             phase = { kind: "progress", stage: progress.stage }
             render()
           },
         })
+        if (resolved) return
         favicon = result.favicon
         if (result.candidates.length) {
           lastCandidates = result.candidates
@@ -452,6 +477,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
           phase = { kind: "failure", reason: result.drmSeen ? "drm" : "empty" }
         }
       } catch (err) {
+        if (resolved) return
         log.warn("[xt:sniffer] sniffPage threw:", err)
         phase = { kind: "failure", reason: "empty" }
       }

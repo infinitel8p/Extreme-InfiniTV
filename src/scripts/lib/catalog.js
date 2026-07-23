@@ -153,7 +153,8 @@ export async function buildCustomSourcePools(doc, opts = {}) {
   await Promise.all(
     [...sourceEntryIds].map(async (sourceEntryId) => {
       const sourceEntry = entries.find((entry) => entry._id === sourceEntryId)
-      if (!sourceEntry) return
+      // Custom sources would recurse into ensureLive and deadlock on cachedFetch's in-flight dedup.
+      if (!sourceEntry || sourceEntry.type === "custom") return
       const sourceCreds = entryToCreds(sourceEntry)
       let channels
       try {

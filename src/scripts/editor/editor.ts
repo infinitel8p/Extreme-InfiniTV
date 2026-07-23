@@ -127,8 +127,7 @@ const editCatchupSourceInput = byId<HTMLInputElement>("editor-edit-catchup-sourc
 const exportBtn = byId<HTMLButtonElement>("editor-export-btn")
 
 // ---------------------------------------------------------------------------
-// Local ordering / pool helpers (mirrors the store's own bucketing so the
-// raw CustomChannel list and its resolved display data stay index-aligned)
+// Ordering / pool helpers (mirrors the store's own bucketing)
 // ---------------------------------------------------------------------------
 function orderedChannelsByGroup(source: CustomPlaylistDoc): CustomChannel[] {
   const buckets = new Map<string, CustomChannel[]>(source.groups.map((group) => [group, []]))
@@ -218,9 +217,7 @@ function commitDoc(nextDoc: CustomPlaylistDoc): void {
   scheduleResolvedRefresh()
 }
 
-/** Single chokepoint for every doc mutation: snapshot the previous doc for
- *  undo, persist (debounced), re-render immediately, then refresh resolved
- *  display data. */
+// Single chokepoint for every doc mutation: snapshots for undo, persists (debounced), re-renders.
 function applyDoc(nextDoc: CustomPlaylistDoc): void {
   if (nextDoc === doc) return
   undoStack.push(doc)
@@ -250,7 +247,10 @@ function saveTitleNow(): void {
   const value = titleInput.value.trim()
   if (!value) return
   customEntry.title = value
-  void updateEntry(entryId, { title: value })
+  updateEntry(entryId, { title: value }).catch((err) => {
+    log.warn("[xt:editor] title save failed:", err)
+    toastError(t("editor.toastSaveFailed"))
+  })
 }
 
 const scheduleTitleSave = debounce(saveTitleNow, 400)
@@ -327,29 +327,42 @@ function updateSelectedCount(): void {
 }
 
 async function onSourceChange(): Promise<void> {
-  selectedSourceEntryId = sourceSelect?.value || ""
+  const requestedSourceEntryId = sourceSelect?.value || ""
+  selectedSourceEntryId = requestedSourceEntryId
   selectedIds.clear()
   lastClickedIndex = -1
   updateSelectedCount()
   allSourceChannels = []
   filteredSourceChannels = []
-  if (!selectedSourceEntryId) {
+  if (!requestedSourceEntryId) {
     mountSourceEmpty(t("editor.selectSourcePrompt"))
     if (sourceCategorySelect) sourceCategorySelect.replaceChildren()
     return
   }
   mountSourceEmpty(t("common.loading"))
-  const entries = await getEntries()
-  const sourceEntry = entries.find((entry: any) => entry._id === selectedSourceEntryId)
+  let entries: any[]
+  try {
+    entries = await getEntries()
+  } catch (err) {
+    log.warn("[xt:editor] getEntries failed:", err)
+    if (selectedSourceEntryId !== requestedSourceEntryId) return
+    toastError(t("editor.toastLoadFailed"))
+    mountSourceEmpty(t("editor.sourceEmpty"))
+    return
+  }
+  if (selectedSourceEntryId !== requestedSourceEntryId) return
+  const sourceEntry = entries.find((entry: any) => entry._id === requestedSourceEntryId)
   if (!sourceEntry) {
     mountSourceEmpty(t("editor.sourceEmpty"))
     return
   }
   try {
     const channels = await ensureLive(entryToCreds(sourceEntry), sourceEntry._id)
+    if (selectedSourceEntryId !== requestedSourceEntryId) return
     allSourceChannels = channels || []
   } catch (err) {
     log.warn("[xt:editor] source load failed:", err)
+    if (selectedSourceEntryId !== requestedSourceEntryId) return
     allSourceChannels = []
   }
   populateCategoryFilter()
@@ -357,6 +370,7 @@ async function onSourceChange(): Promise<void> {
 }
 
 function applySourceFilter(): void {
+  lastClickedIndex = -1
   const tokens = normalize(sourceSearchInput?.value || "").split(" ").filter(Boolean)
   const category = sourceCategorySelect?.value || ""
   filteredSourceChannels = allSourceChannels.filter((channel) => {
@@ -473,13 +487,23 @@ function buildSourceForChannel(sourceEntry: any, channel: any): CustomSource | n
 
 async function addSelectedChannels(): Promise<void> {
   if (!selectedIds.size || !selectedSourceEntryId) return
-  const entries = await getEntries()
-  const sourceEntry = entries.find((entry: any) => entry._id === selectedSourceEntryId)
+  const requestedSourceEntryId = selectedSourceEntryId
+  const channelsSnapshot = allSourceChannels
+  let entries: any[]
+  try {
+    entries = await getEntries()
+  } catch (err) {
+    log.warn("[xt:editor] getEntries failed:", err)
+    toastError(t("editor.toastLoadFailed"))
+    return
+  }
+  if (selectedSourceEntryId !== requestedSourceEntryId || allSourceChannels !== channelsSnapshot) return
+  const sourceEntry = entries.find((entry: any) => entry._id === requestedSourceEntryId)
   if (!sourceEntry) return
   const overrideGroup = sourceTargetGroupInput?.value.trim() || ""
   let nextDoc = doc
   let addedCount = 0
-  for (const channel of allSourceChannels) {
+  for (const channel of channelsSnapshot) {
     if (!selectedIds.has(channel.id)) continue
     const source = buildSourceForChannel(sourceEntry, channel)
     if (!source) continue
@@ -1038,14 +1062,30 @@ async function runCheckLinks(): Promise<void> {
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
+function showNotFound(title: string, body: string): void {
+  const section = byId("editor-not-found")
+  const titleEl = section?.querySelector<HTMLElement>("h1")
+  const bodyEl = section?.querySelector<HTMLElement>("p")
+  if (titleEl) titleEl.textContent = title
+  if (bodyEl) bodyEl.textContent = body
+  section?.classList.remove("hidden")
+  section?.classList.add("flex")
+}
+
 async function init(): Promise<void> {
   entryId = new URLSearchParams(location.search).get("id") || ""
-  const entries = await getEntries()
+  let entries: any[]
+  try {
+    entries = await getEntries()
+  } catch (err) {
+    log.warn("[xt:editor] getEntries failed:", err)
+    showNotFound(t("editor.loadErrorTitle"), t("editor.loadErrorBody"))
+    return
+  }
   customEntry = entries.find((entry: any) => entry._id === entryId && entry.type === "custom") || null
 
   if (!customEntry) {
-    byId("editor-not-found")?.classList.remove("hidden")
-    byId("editor-not-found")?.classList.add("flex")
+    showNotFound(t("editor.notFoundTitle"), t("editor.notFoundBody"))
     return
   }
 

@@ -158,6 +158,86 @@ describe("buildEpgUrlsFromEntry: M3U playlist", () => {
   })
 })
 
+describe("buildEpgUrlsFromEntry: custom playlist", () => {
+  it("unions the resolved source EPG URLs as the primary source", () => {
+    const sources = buildEpgUrlsFromEntry(
+      { type: "custom" },
+      xtreamCreds,
+      "",
+      ["https://source-a.example/xmltv.php", "https://source-b.example/xmltv.php"]
+    )
+    expect(sources).toHaveLength(2)
+    expect(sources.map((source) => source.url)).toEqual([
+      "https://source-a.example/xmltv.php",
+      "https://source-b.example/xmltv.php",
+    ])
+    expect(sources.every((source) => source.source === "custom-sources" && source.kind === "primary")).toBe(true)
+  })
+
+  it("dedupes duplicate source EPG URLs", () => {
+    const sources = buildEpgUrlsFromEntry(
+      { type: "custom" },
+      xtreamCreds,
+      "",
+      ["https://same.example/xmltv.php", "https://same.example/xmltv.php"]
+    )
+    expect(sources).toHaveLength(1)
+  })
+
+  it("user-supplied epgUrl overrides the union of source EPG URLs", () => {
+    const sources = buildEpgUrlsFromEntry(
+      { type: "custom", epgUrl: "https://manual.example/g.xml" },
+      xtreamCreds,
+      "",
+      ["https://source-a.example/xmltv.php"]
+    )
+    expect(sources).toHaveLength(1)
+    expect(sources[0]).toEqual({
+      url: "https://manual.example/g.xml",
+      source: "override",
+      kind: "primary",
+    })
+  })
+
+  it("disableProviderEpg suppresses the source-union but keeps additional URLs", () => {
+    const sources = buildEpgUrlsFromEntry(
+      {
+        type: "custom",
+        disableProviderEpg: true,
+        additionalEpgUrls: ["https://extra.example/a.xml"],
+      },
+      xtreamCreds,
+      "",
+      ["https://source-a.example/xmltv.php"]
+    )
+    expect(sources).toHaveLength(1)
+    expect(sources[0].source).toBe("additional")
+  })
+
+  it("appends additionalEpgUrls after the source union, deduping overlaps", () => {
+    const sources = buildEpgUrlsFromEntry(
+      {
+        type: "custom",
+        additionalEpgUrls: ["https://source-a.example/xmltv.php", "https://extra.example/a.xml"],
+      },
+      xtreamCreds,
+      "",
+      ["https://source-a.example/xmltv.php"]
+    )
+    expect(sources.map((source) => source.url)).toEqual([
+      "https://source-a.example/xmltv.php",
+      "https://extra.example/a.xml",
+    ])
+    expect(sources[0].source).toBe("custom-sources")
+    expect(sources[1].source).toBe("additional")
+  })
+
+  it("returns an empty list when there are no source URLs and no overrides", () => {
+    const sources = buildEpgUrlsFromEntry({ type: "custom" }, xtreamCreds, "", [])
+    expect(sources).toEqual([])
+  })
+})
+
 describe("buildEpgUrlsFromEntry: edge cases", () => {
   it("returns an empty list when creds and entry are both empty", () => {
     const sources = buildEpgUrlsFromEntry(

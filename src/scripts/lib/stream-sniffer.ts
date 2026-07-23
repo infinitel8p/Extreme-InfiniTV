@@ -8,7 +8,7 @@
 
 import { classifySniffedUrl, rankSniffCandidates } from "@/scripts/lib/sniff-classify.ts"
 import type { SniffCandidate } from "@/scripts/lib/sniff-classify.ts"
-import { addEntry } from "@/scripts/lib/creds.js"
+import { addEntry, safeHttpUrl } from "@/scripts/lib/creds.js"
 import { log, redactUrl } from "@/scripts/lib/log.js"
 
 const isAndroid =
@@ -35,6 +35,13 @@ export interface SniffResult {
 }
 
 const DEFAULT_TIMEOUT_MS = 25000
+
+interface SniffSession {
+  settle: () => void
+}
+
+/** The in-flight sniffPage() session, if any, so cancelSniff() can settle its promise immediately. */
+let activeSniffSession: SniffSession | null = null
 
 interface RawCandidateDetail {
   url?: string
@@ -131,8 +138,12 @@ function sniffPageAndroid(
       if (settled) return
       settled = true
       cleanup()
+      if (activeSniffSession === session) activeSniffSession = null
       resolve(accumulator.resolveResult())
     }
+
+    const session: SniffSession = { settle }
+    activeSniffSession = session
 
     document.addEventListener("xt:sniff-candidate", onCandidate)
     document.addEventListener("xt:sniff-done", onDone)
@@ -141,7 +152,6 @@ function sniffPageAndroid(
     timeoutHandle = setTimeout(() => {
       log.warn("[xt:sniffer] timed out sniffing", redactUrl(pageUrl))
       cancelSniff()
-      settle()
     }, timeoutMs)
 
     opts.onProgress?.({ stage: "loading" })
@@ -175,13 +185,18 @@ async function sniffPageDesktop(
       if (settled) return
       settled = true
       cleanup()
+      if (activeSniffSession === session) activeSniffSession = null
       resolve(accumulator.resolveResult())
     }
+
+    const session: SniffSession = { settle }
+    activeSniffSession = session
 
     ;(async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core")
         const { listen } = await import("@tauri-apps/api/event")
+        if (settled) return
 
         unlistenFns.push(
           await listen<RawCandidateDetail>("xt:sniff-candidate", (event) => {
@@ -189,18 +204,20 @@ async function sniffPageDesktop(
             opts.onProgress?.({ stage: "waiting" })
           }),
         )
+        if (settled) return cleanup()
         unlistenFns.push(
           await listen<RawDoneDetail>("xt:sniff-done", (event) => {
             accumulator.setFavicon(event.payload)
             settle()
           }),
         )
+        if (settled) return cleanup()
         unlistenFns.push(await listen("xt:sniff-drm", () => accumulator.markDrmSeen()))
+        if (settled) return cleanup()
 
         timeoutHandle = setTimeout(() => {
           log.warn("[xt:sniffer] timed out sniffing", redactUrl(pageUrl))
           cancelSniff()
-          settle()
         }, timeoutMs)
 
         opts.onProgress?.({ stage: "loading" })
@@ -213,8 +230,11 @@ async function sniffPageDesktop(
   })
 }
 
-/** Cancel an in-flight sniff. Safe to call when nothing is running. */
+/** Cancel an in-flight sniff. Settles the pending sniffPage() promise immediately, so a late native done event is ignored. Safe to call when nothing is running. */
 export function cancelSniff(): void {
+  const session = activeSniffSession
+  activeSniffSession = null
+  session?.settle()
   if (desktopSnifferAvailable) {
     void (async () => {
       try {
@@ -267,7 +287,8 @@ export async function saveSniffedStream(
   const streamHeaders: { userAgent?: string; referer?: string } = {}
   if (candidate.userAgent) streamHeaders.userAgent = candidate.userAgent
   if (candidate.referer) streamHeaders.referer = candidate.referer
-  const logo = opts.logo ?? opts.favicon ?? null
+  const rawLogo = opts.logo ?? opts.favicon ?? null
+  const logo = rawLogo ? safeHttpUrl(rawLogo) || null : null
   const manifestType = candidate.kind === "dash" ? "mpd" : null
 
   return addEntry({

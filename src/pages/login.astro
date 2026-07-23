@@ -486,7 +486,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 		isTauri,
 	} from "@/scripts/lib/creds.js";
 	import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js";
-	import { parseM3U } from "@/scripts/lib/m3u-parser.ts";
+	import { parseM3U, isHlsStreamManifest } from "@/scripts/lib/m3u-parser.ts";
 	import { isAndroidFsActive, pickM3UFile } from "@/scripts/lib/android-fs.js";
 	import { log } from "@/scripts/lib/log.js";
 	import {
@@ -1150,7 +1150,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 			setPickedLocal(null);
 			return;
 		}
-		if (!looksLikeM3U(picked.text)) {
+		if (!looksLikeM3U(picked.text) || isHlsStreamManifest(picked.text)) {
 			showStatus("unavailable", t("login.status.localNotM3u"));
 			setPickedLocal(null);
 			return;

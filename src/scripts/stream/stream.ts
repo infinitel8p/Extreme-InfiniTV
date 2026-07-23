@@ -571,13 +571,21 @@ function renderVirtual() {
     row.style.height = `${ROW_H}px`
     row.className = "channel-row flex w-full items-center gap-1"
     if (ch.id === currentlyPlayingId) row.dataset.nowPlaying = "true"
+    if (ch.unresolved) {
+      row.dataset.unresolved = "true"
+    }
 
     const playBtn = document.createElement("button")
     playBtn.type = "button"
     playBtn.dataset.role = "play"
     playBtn.className =
       "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
-    playBtn.title = ch.name || ""
+    playBtn.title = ch.unresolved
+      ? `${ch.name || ""} (${t("editor.unresolvedBadge")})`
+      : ch.name || ""
+    if (ch.unresolved) {
+      playBtn.setAttribute("aria-disabled", "true")
+    }
     playBtn.onclick = () => play(ch.id, ch.name)
 
     const logo = document.createElement("div")
@@ -2008,7 +2016,10 @@ async function fetchRadioIcy(wrap: HTMLElement, channelId: number, url: string, 
       headers: { Range: "bytes=0-1" },
       signal: controller?.signal,
     })
-    if (radioModeChannelId !== channelId) return
+    if (radioModeChannelId !== channelId) {
+      void response.body?.cancel?.()?.catch?.(() => {})
+      return
+    }
     const header = (name: string) => (response.headers.get(name) || "").trim() || null
     const contentType = (response.headers.get("content-type") || "").toLowerCase()
     const codec = contentType.includes("aac")
@@ -2029,7 +2040,7 @@ async function fetchRadioIcy(wrap: HTMLElement, channelId: number, url: string, 
       descEl.textContent = description
       descEl.hidden = false
     }
-    try { await response.body?.cancel() } catch {}
+    void response.body?.cancel?.()?.catch?.(() => {})
   } catch {
     // Offline / probe rejected: keep the client-derived tags.
   } finally {

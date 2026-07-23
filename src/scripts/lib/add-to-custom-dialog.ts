@@ -2,7 +2,7 @@
 // create a new one) and add a channel reference to it. Shared by the
 // stream-sniffer "name" phase and the Live TV channel context menu.
 
-import { getEntries, addEntry } from "@/scripts/lib/creds.js"
+import { getEntries, addEntry, removeEntry } from "@/scripts/lib/creds.js"
 import { addChannel, loadCustomDoc, saveCustomDoc } from "@/scripts/lib/custom-playlist.ts"
 import type { AddChannelInit, CustomSource } from "@/scripts/lib/custom-playlist.ts"
 import { invalidateEntry } from "@/scripts/lib/cache.js"
@@ -182,11 +182,20 @@ async function runAddToCustomDialog(items: AddToCustomItem[], subtitle: string):
       if (busy) return
       busy = true
       const title = (nameInput?.value || "").trim()
+      let createdEntryId: string | null = null
       try {
         const entry = await addEntry(title ? { type: "custom", title } : { type: "custom" })
+        createdEntryId = entry._id
         await doAdd(entry._id)
       } catch (err) {
         log.warn("[xt:add-to-custom] create playlist failed:", err)
+        if (createdEntryId) {
+          try {
+            await removeEntry(createdEntryId)
+          } catch (rollbackErr) {
+            log.warn("[xt:add-to-custom] rollback of empty playlist failed:", rollbackErr)
+          }
+        }
         toastError(t("addToCustom.toastFailed"))
         busy = false
       }

@@ -69,13 +69,5 @@
     "typescript-eslint": "^8.65.0",
     "vite": "^8.1.5",
     "vitest": "^4.1.10"
-  },
-  "pnpm": {
-    "overrides": {
-      "tmp": ">=0.2.6"
-    },
-    "patchedDependencies": {
-      "mpegts.js": "patches/mpegts.js.patch"
-    }
   }
 }

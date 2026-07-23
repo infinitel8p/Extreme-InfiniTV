@@ -19,6 +19,11 @@ const CANDIDATE_EVENT: &str = "xt:sniff-candidate";
 const DONE_EVENT: &str = "xt:sniff-done";
 const DRM_EVENT: &str = "xt:sniff-drm";
 
+// The sniffed page is hostile by assumption - bound how much of its self-reported traffic we accept per call.
+const MAX_CANDIDATES_JSON_BYTES: usize = 256 * 1024;
+const MAX_CANDIDATES_PER_REPORT: usize = 100;
+const MAX_FIELD_LEN: usize = 8 * 1024;
+
 const INJECT_JS: &str = r#"
 (function () {
   try {
@@ -136,6 +141,8 @@ const INJECT_JS: &str = r#"
 pub struct SnifferState {
     generation: Mutex<u64>,
     favicon: Mutex<Option<String>>,
+    // Serializes the close-existing/build-new window sequence across concurrent sniff_page/cancel_sniff calls.
+    lifecycle: tokio::sync::Mutex<()>,
 }
 
 impl SnifferState {
@@ -188,6 +195,8 @@ pub async fn sniff_page(
         return Err("OTHER:url must be http or https".to_string());
     }
 
+    let lifecycle_guard = state.lifecycle.lock().await;
+
     // Silent teardown: this call already owns the sniff, no need to emit sniff-done.
     close_sniffer_window(&app);
     let generation = state.next_generation();
@@ -200,10 +209,13 @@ pub async fn sniff_page(
         .build()
         .map_err(|e| format!("OTHER:{e}"))?;
 
+    drop(lifecycle_guard);
+
     let timeout_app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        std::thread::sleep(Duration::from_millis(timeout_ms.max(1000)));
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(timeout_ms.max(1000))).await;
         let sniffer_state = timeout_app.state::<SnifferState>();
+        let _lifecycle_guard = sniffer_state.lifecycle.lock().await;
         if sniffer_state.current_generation() != generation {
             return;
         }
@@ -216,7 +228,11 @@ pub async fn sniff_page(
 }
 
 #[tauri::command]
-pub fn cancel_sniff(app: AppHandle, state: tauri::State<'_, SnifferState>) -> Result<(), String> {
+pub async fn cancel_sniff(
+    app: AppHandle,
+    state: tauri::State<'_, SnifferState>,
+) -> Result<(), String> {
+    let _lifecycle_guard = state.lifecycle.lock().await;
     state.next_generation();
     close_sniffer_window(&app);
     let favicon = state.take_favicon();
@@ -241,16 +257,33 @@ pub fn sniff_report(
     candidates_json: String,
     favicon: Option<String>,
 ) -> Result<(), String> {
+    if candidates_json.len() > MAX_CANDIDATES_JSON_BYTES {
+        return Err("OTHER:candidates payload too large".to_string());
+    }
     if let Some(value) = favicon {
         let trimmed = value.trim();
-        if !trimmed.is_empty() {
+        if !trimmed.is_empty() && trimmed.len() <= MAX_FIELD_LEN {
             state.set_favicon(Some(trimmed.to_string()));
         }
     }
     let candidates: Vec<SniffedCandidate> =
         serde_json::from_str(&candidates_json).map_err(|e| format!("OTHER:{e}"))?;
-    for candidate in candidates {
-        if candidate.url.trim().is_empty() {
+    for candidate in candidates.into_iter().take(MAX_CANDIDATES_PER_REPORT) {
+        if candidate.url.trim().is_empty() || candidate.url.len() > MAX_FIELD_LEN {
+            continue;
+        }
+        if candidate
+            .user_agent
+            .as_deref()
+            .is_some_and(|value| value.len() > MAX_FIELD_LEN)
+        {
+            continue;
+        }
+        if candidate
+            .referer
+            .as_deref()
+            .is_some_and(|value| value.len() > MAX_FIELD_LEN)
+        {
             continue;
         }
         let _ = app.emit(

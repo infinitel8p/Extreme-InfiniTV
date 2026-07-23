@@ -8,7 +8,7 @@ overrides:
   tmp: '>=0.2.6'
 
 patchedDependencies:
-  mpegts.js:
+  mpegts.js@1.8.0:
     hash: 2ea2f6966ba08084f38602edaf3dd8b7735c3bdd68a02e8674b737077463c026
     path: patches/mpegts.js.patch
 
@@ -2678,7 +2678,6 @@ packages:
 
   shaka-player@5.2.2:
     resolution: {integrity: sha512-1Z5Sxqz7nEAtvp4zlZKAHQSEq6cUlw5CKAdUxqmuMNeZgu23090VXMcEDdiSLU5qtMn1skFOzq+KKCVX71bHqw==}
-    engines: {node: '>=18'}
 
   sharp@0.35.3:
     resolution: {integrity: sha512-ej0zVHuZGHCiABXcNxeYhpRnPNPAcvbG8RMdBAhDAxLKkCRVSpK3Iyu7qbqw3JMzoj0REeM6f3tJLtVwl0023Q==}

@@ -690,12 +690,20 @@ class SnifferBridge(
     private val MANIFEST_HINT_RX = Regex("mpegurl|dash", RegexOption.IGNORE_CASE)
     private const val NUDGE_DELAY_MS = 900L
     private const val THROWAWAY_SIZE_PX = 1
+    private const val MAX_CANDIDATE_DISPATCHES = 100
   }
 
   private val handler = Handler(Looper.getMainLooper())
   private var throwawayWebView: WebView? = null
   private var timeoutRunnable: Runnable? = null
   private var lastFavicon: String? = null
+
+  // shouldInterceptRequest can run off the UI thread, so this page-controlled bookkeeping needs thread-safe primitives.
+  private val reportedCandidateUrls: MutableSet<String> =
+    java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+  private val candidateDispatchCount = java.util.concurrent.atomic.AtomicInteger(0)
+  private val drmReported = java.util.concurrent.atomic.AtomicBoolean(false)
+  private val faviconReported = java.util.concurrent.atomic.AtomicBoolean(false)
 
   // addJavascriptInterface reflects every @JavascriptInterface method regardless of name, so the throwaway WebView gets this report-only object, never SnifferBridge itself.
   inner class SnifferReportBridge {
@@ -725,12 +733,18 @@ class SnifferBridge(
       // the caller just attached for this very startSniff() call.
       teardown(fireDone = false)
       lastFavicon = null
+      reportedCandidateUrls.clear()
+      candidateDispatchCount.set(0)
+      drmReported.set(false)
+      faviconReported.set(false)
       try {
         val webView = WebView(activity)
         throwawayWebView = webView
         webView.settings.javaScriptEnabled = true
         webView.settings.mediaPlaybackRequiresUserGesture = false
         webView.settings.domStorageEnabled = true
+        webView.settings.allowFileAccess = false
+        webView.settings.allowContentAccess = false
         webView.addJavascriptInterface(SnifferReportBridge(), "AndroidSnifferInternal")
         webView.webViewClient = object : WebViewClient() {
           override fun shouldInterceptRequest(
@@ -767,17 +781,22 @@ class SnifferBridge(
   // from a plain one.
   @JavascriptInterface
   fun reportDrm() {
+    if (!drmReported.compareAndSet(false, true)) return
     dispatchEvent("xt:sniff-drm", JSONObject())
   }
 
   @JavascriptInterface
   fun reportFavicon(favicon: String?) {
+    if (!faviconReported.compareAndSet(false, true)) return
     lastFavicon = favicon
   }
 
   private fun maybeEmitCandidate(request: WebResourceRequest) {
     val url = request.url?.toString() ?: return
     if (!looksLikeManifest(url)) return
+    if (candidateDispatchCount.get() >= MAX_CANDIDATE_DISPATCHES) return
+    if (!reportedCandidateUrls.add(url)) return
+    if (candidateDispatchCount.incrementAndGet() > MAX_CANDIDATE_DISPATCHES) return
     val headers = request.requestHeaders ?: emptyMap()
     dispatchEvent(
       "xt:sniff-candidate",
@@ -857,6 +876,11 @@ class SnifferBridge(
       dispatchEvent("xt:sniff-done", JSONObject().apply { put("favicon", lastFavicon ?: JSONObject.NULL) })
     }
   }
+
+  // No xt:sniff-done: the WebView is going away with the activity.
+  fun activityDestroyed() {
+    teardown(fireDone = false)
+  }
 }
 
 class MainActivity : TauriActivity() {
@@ -867,6 +891,9 @@ class MainActivity : TauriActivity() {
 
   // Cached so the back-press handler can call onHideCustomView without re-walking the view tree.
   private var hostedWebView: WebView? = null
+
+  // Cached so onDestroy() can tear down the throwaway sniffer WebView if it's still running.
+  private var snifferBridge: SnifferBridge? = null
 
   // Set by PipBridge.setAutoEnter() whenever a <video> starts/stops playing
   @Volatile
@@ -990,7 +1017,9 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(LogShareBridge(this), "AndroidLog")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
     webView.addJavascriptInterface(AndroidVideoBridge(this), "AndroidVideo")
-    webView.addJavascriptInterface(SnifferBridge(this, { hostedWebView }), "AndroidSniffer")
+    val sniffer = SnifferBridge(this, { hostedWebView })
+    snifferBridge = sniffer
+    webView.addJavascriptInterface(sniffer, "AndroidSniffer")
     webView.addJavascriptInterface(
       WebSettingsBridge(this, { hostedWebView }, webView.settings.userAgentString),
       "AndroidWebSettings"
@@ -1118,6 +1147,12 @@ class MainActivity : TauriActivity() {
   override fun onResume() {
     super.onResume()
     drainAndDispatchVideoEvents()
+  }
+
+  // Tear down the throwaway sniffer WebView instead of leaving the remote page running until its timeout.
+  override fun onDestroy() {
+    snifferBridge?.activityDestroyed()
+    super.onDestroy()
   }
 
   private fun drainAndDispatchVideoEvents() {

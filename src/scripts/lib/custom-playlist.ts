@@ -281,9 +281,9 @@ function unresolvedChannel(channel: CustomChannel, fallbackName: string): Resolv
     id: channel.id,
     name,
     category: channel.group,
-    logo: channel.overrides.logo ?? null,
-    tvgId: channel.overrides.tvgId ?? undefined,
-    chno: channel.overrides.chno ?? undefined,
+    logo: channel.overrides?.logo ?? null,
+    tvgId: channel.overrides?.tvgId ?? undefined,
+    chno: channel.overrides?.chno ?? undefined,
     norm: normalize(`${name} ${channel.group}`),
     url: "",
     isRadio: false,
@@ -327,6 +327,12 @@ function resolveXtreamSource(
   }
 }
 
+/** Name-match fallback (M3U URLs rotate session tokens), but only when the name is unique in the pool. */
+function findByUniqueName(channels: Array<any>, name: string): any | undefined {
+  const matches = channels.filter((poolChannel) => poolChannel.name === name)
+  return matches.length === 1 ? matches[0] : undefined
+}
+
 function resolveM3USource(
   channel: CustomChannel,
   source: CustomSourceM3U,
@@ -336,7 +342,7 @@ function resolveM3USource(
   const sourceChannel =
     pool && pool.kind === "m3u"
       ? pool.channels.find((poolChannel) => poolChannel.url === source.url) ??
-        pool.channels.find((poolChannel) => poolChannel.name === source.name)
+        findByUniqueName(pool.channels, source.name)
       : undefined
   if (!pool || !sourceChannel) {
     return unresolvedChannel(channel, channel.overrides.name ?? source.name ?? "")
@@ -383,11 +389,14 @@ function resolveDirectSource(channel: CustomChannel, source: CustomSourceDirect)
 }
 
 function resolveChannel(channel: CustomChannel, pools: Map<string, SourcePool>): ResolvedCustomChannel {
-  const source = channel.sources[0]
-  if (!source) return unresolvedChannel(channel, channel.overrides.name ?? "")
+  const source = Array.isArray(channel.sources) ? channel.sources[0] : undefined
+  if (!source || typeof source !== "object") {
+    return unresolvedChannel(channel, channel.overrides?.name ?? "")
+  }
   if (source.kind === "xtream") return resolveXtreamSource(channel, source, pools)
   if (source.kind === "m3u") return resolveM3USource(channel, source, pools)
-  return resolveDirectSource(channel, source)
+  if (source.kind === "direct") return resolveDirectSource(channel, source)
+  return unresolvedChannel(channel, channel.overrides?.name ?? "")
 }
 
 function orderChannelsByGroup(doc: CustomPlaylistDoc): CustomChannel[] {

@@ -92,6 +92,18 @@ describe("classifySniffedUrl", () => {
     ).toEqual({ kind: "dash", isMaster: false })
   })
 
+  it("classifies a .mpd-suffixed URL as HLS when the reported content type is an HLS MIME", () => {
+    expect(
+      classifySniffedUrl("https://host.example/manifest.mpd", "application/vnd.apple.mpegurl"),
+    ).toEqual({ kind: "hls", isMaster: false })
+  })
+
+  it("classifies a .m3u8 URL as DASH when the reported content type is application/dash+xml", () => {
+    expect(
+      classifySniffedUrl("https://host.example/master.m3u8", "application/dash+xml"),
+    ).toEqual({ kind: "dash", isMaster: false })
+  })
+
   it("matches the real-world boc-live master.m3u8 vector", () => {
     expect(
       classifySniffedUrl(
@@ -241,6 +253,15 @@ describe("summarizeHlsMaster", () => {
     expect(summary.media).toEqual([
       { type: "AUDIO", uri: "audio_en/index.m3u8", language: "en", name: "English" },
     ])
+  })
+
+  it("prefers BANDWIDTH over AVERAGE-BANDWIDTH when both are present", () => {
+    const text = [
+      "#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=800000,BANDWIDTH=1000000,RESOLUTION=1920x1080",
+      "1080p/index.m3u8",
+    ].join("\n")
+    const summary = summarizeHlsMaster(text)
+    expect(summary.variants[0].bandwidth).toBe(1000000)
   })
 
   it("captures an EXT-X-MEDIA entry without a URI (muxed audio) without crashing", () => {
