@@ -833,6 +833,7 @@ async function playEpisode(episode) {
   if (backend === "mpv" || backend === "vlc") {
     try {
       await launchExternalPlayback(backend, playSrc, resumePos)
+      pushEpisodePresence(episode)
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
@@ -917,18 +918,21 @@ async function playEpisode(episode) {
     )
   }
 
-  if (activePlaylistId && series) {
-    setRichPresence({
-      playlistId: activePlaylistId,
-      details: series.name || "Watching a series",
-      state: `S${episode.season || currentSeason || "?"}E${episode.episode_num || "?"} · ${episode.title || ""}`.trim(),
-      largeImage: series.logo || "logo",
-      largeText: series.name || "Extreme InfiniTV",
-      smallImage: "series",
-      smallText: "Series",
-      startTimestamp: Date.now(),
-    })
-  }
+  pushEpisodePresence(episode)
+}
+
+function pushEpisodePresence(episode) {
+  if (!activePlaylistId || !series || !episode) return
+  setRichPresence({
+    playlistId: activePlaylistId,
+    details: series.name || "Watching a series",
+    state: `S${episode.season || currentSeason || "?"}E${episode.episode_num || "?"} · ${episode.title || ""}`.trim(),
+    largeImage: series.logo || "logo",
+    largeText: series.name || "Extreme InfiniTV",
+    smallImage: "series",
+    smallText: "Series",
+    startTimestamp: Date.now(),
+  })
 }
 
 async function launchExternalPlayback(backend, src, resumeSeconds) {
@@ -965,6 +969,9 @@ const externalBtnHandle = setupExternalPlayerButton(
     },
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}
+    },
+    afterLaunch() {
+      pushEpisodePresence(currentEpisode)
     },
   }
 )
