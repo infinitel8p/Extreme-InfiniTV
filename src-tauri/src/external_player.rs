@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::async_runtime::Mutex as AsyncMutex;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -36,6 +36,8 @@ const DETECT_TIMEOUT_MS: u64 = 2000;
 const DETECT_POLL_INTERVAL_MS: u64 = 25;
 #[cfg(unix)]
 const IPC_WRITE_TIMEOUT_MS: u64 = 1500;
+const EXTERNAL_PLAYER_EXITED_EVENT: &str = "xt:external-player-exited";
+const EXIT_WATCH_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 // ---------------------------------------------------------------------------
 // Reuse-slot state
@@ -56,6 +58,9 @@ pub struct ExternalPlayerState {
     /// critical section so two concurrent launches for the same kind can't
     /// race and orphan a spawned player.
     locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    /// Bumping a kind's generation supersedes its older exit-watchers.
+    watch_generations: Mutex<HashMap<String, u64>>,
+    watched_pids: Mutex<HashMap<String, u32>>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -100,6 +105,49 @@ impl ExternalPlayerState {
             .entry(kind.to_string())
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
             .clone()
+    }
+
+    fn bump_watch_generation(&self, kind: &str) -> u64 {
+        let mut guard = self
+            .watch_generations
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let generation = guard.entry(kind.to_string()).or_insert(0);
+        *generation += 1;
+        *generation
+    }
+
+    fn watch_generation_is_current(&self, kind: &str, generation: u64) -> bool {
+        let guard = self
+            .watch_generations
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard.get(kind).copied() == Some(generation)
+    }
+
+    /// False when `pid` is already the watched pid for `kind`.
+    fn mark_watched_pid(&self, kind: &str, pid: u32) -> bool {
+        let mut guard = self
+            .watched_pids
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if guard.get(kind).copied() == Some(pid) {
+            false
+        } else {
+            guard.insert(kind.to_string(), pid);
+            true
+        }
+    }
+
+    /// Equality-guarded so a stale watcher can't clear a newer watcher's pid.
+    fn clear_watched_pid(&self, kind: &str, pid: u32) {
+        let mut guard = self
+            .watched_pids
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if guard.get(kind).copied() == Some(pid) {
+            guard.remove(kind);
+        }
     }
 }
 
@@ -206,9 +254,9 @@ fn validate_invocation(path: &str, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Spawn a player.
+/// Returned bool is false for the macOS `open -a` handoff, whose pid is not the player's.
 #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
-fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<u32, String> {
+fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<(u32, bool), String> {
     if path.is_empty() {
         return Err("NOT_FOUND:player path is empty".to_string());
     }
@@ -232,7 +280,7 @@ fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             return match cmd.spawn() {
-                Ok(child) => Ok(child.id()),
+                Ok(child) => Ok((child.id(), false)),
                 Err(e) => Err(classify_io_error(&e)),
             };
         }
@@ -240,7 +288,7 @@ fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<
     let resolved = resolve_app_bundle(path);
     let mut cmd = build_command(&resolved, args);
     match cmd.spawn() {
-        Ok(child) => Ok(child.id()),
+        Ok(child) => Ok((child.id(), true)),
         Err(e) => Err(classify_io_error(&e)),
     }
 }
@@ -444,6 +492,48 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Exit watcher
+// ---------------------------------------------------------------------------
+/// Polls `pid` and emits `xt:external-player-exited` when the player dies.
+fn watch_for_exit(app: AppHandle, state: &ExternalPlayerState, kind: &str, pid: u32) {
+    if pid == 0 || (kind != "mpv" && kind != "vlc") {
+        return;
+    }
+    if !state.mark_watched_pid(kind, pid) {
+        return;
+    }
+    let generation = state.bump_watch_generation(kind);
+    let kind = kind.to_string();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(EXIT_WATCH_POLL_INTERVAL).await;
+            let state = app.state::<ExternalPlayerState>();
+            if !state.watch_generation_is_current(&kind, generation) {
+                return;
+            }
+            if pid_alive(pid) {
+                continue;
+            }
+            // A newer launch may have superseded us since the alive-check.
+            if !state.watch_generation_is_current(&kind, generation)
+                || state.get(&kind).is_some_and(|slot| slot.pid != pid)
+            {
+                return;
+            }
+            if let Some(dropped) = state.drop_slot(&kind) {
+                #[cfg(unix)]
+                unlink_unix_socket(&dropped.endpoint);
+                #[cfg(not(unix))]
+                let _ = dropped;
+            }
+            state.clear_watched_pid(&kind, pid);
+            let _ = app.emit(EXTERNAL_PLAYER_EXITED_EVENT, json!({ "kind": kind }));
+            return;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // IPC senders
 // ---------------------------------------------------------------------------
 #[cfg(unix)]
@@ -576,6 +666,7 @@ fn send_mpv_loadfile(
 // ---------------------------------------------------------------------------
 #[tauri::command]
 pub async fn launch_external_player(
+    app: AppHandle,
     state: State<'_, ExternalPlayerState>,
     path: String,
     args: Vec<String>,
@@ -590,12 +681,13 @@ pub async fn launch_external_player(
             Ok(json!({ "version": version }))
         }
         "exists" => check_path_exists(&path),
-        "launch" => launch_mode(state, path, args, reuse).await,
+        "launch" => launch_mode(app, state, path, args, reuse).await,
         other => Err(format!("OTHER:unknown mode '{other}'")),
     }
 }
 
 async fn launch_mode(
+    app: AppHandle,
     state: State<'_, ExternalPlayerState>,
     path: String,
     args: Vec<String>,
@@ -642,7 +734,10 @@ async fn launch_mode(
                     ua.as_deref(),
                     referer.as_deref(),
                 ) {
-                    Ok(()) => return Ok(json!({ "pid": slot.pid, "reused": true })),
+                    Ok(()) => {
+                        watch_for_exit(app.clone(), &state, &kind, slot.pid);
+                        return Ok(json!({ "pid": slot.pid, "reused": true }));
+                    }
                     Err(err) => {
                         log::warn!("[external-player] mpv reuse send failed: {err}");
                         if let Some(dropped) = state.drop_slot(&kind) {
@@ -659,12 +754,15 @@ async fn launch_mode(
         let endpoint = pick_mpv_endpoint();
         let augmented = augment_mpv_args(args.clone(), &endpoint);
         let path_for_spawn = path.clone();
-        let pid = tauri::async_runtime::spawn_blocking(move || {
+        let (pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
             spawn_launch_inner(&path_for_spawn, &augmented, true)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
         state.set(&kind, Slot { pid, endpoint });
+        if is_real_process {
+            watch_for_exit(app.clone(), &state, &kind, pid);
+        }
         return Ok(json!({ "pid": pid, "reused": false }));
     }
 
@@ -672,34 +770,48 @@ async fn launch_mode(
         // Probe the cached pid so a manually-killed VLC doesn't get reported
         // as reused. The slot is otherwise opaque (endpoint stays empty) and
         // would otherwise live until the app restarts.
-        let prior_alive = match state.get(&kind) {
-            Some(slot) if pid_alive(slot.pid) => true,
+        let prior_slot_pid = match state.get(&kind) {
+            Some(slot) if pid_alive(slot.pid) => Some(slot.pid),
             Some(_) => {
                 state.drop_slot(&kind);
-                false
+                None
             }
-            None => false,
+            None => None,
         };
         let augmented = augment_vlc_args(args.clone());
         let path_for_spawn = path.clone();
-        let pid = tauri::async_runtime::spawn_blocking(move || {
+        let (spawned_pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
             spawn_launch_inner(&path_for_spawn, &augmented, true)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
+
+        // --one-instance: the fresh spawn just forwards to the existing instance and exits.
+        if let Some(existing_pid) = prior_slot_pid {
+            watch_for_exit(app.clone(), &state, &kind, existing_pid);
+            return Ok(json!({ "pid": existing_pid, "reused": true }));
+        }
+
         state.set(
             &kind,
             Slot {
-                pid,
+                pid: spawned_pid,
                 endpoint: String::new(),
             },
         );
-        return Ok(json!({ "pid": pid, "reused": prior_alive }));
+        if is_real_process {
+            watch_for_exit(app.clone(), &state, &kind, spawned_pid);
+        }
+        return Ok(json!({ "pid": spawned_pid, "reused": false }));
     }
 
-    let pid = tauri::async_runtime::spawn_blocking(move || spawn_launch_inner(&path, &args, false))
-        .await
-        .map_err(|e| format!("OTHER:join: {e}"))??;
+    let (pid, is_real_process) =
+        tauri::async_runtime::spawn_blocking(move || spawn_launch_inner(&path, &args, false))
+            .await
+            .map_err(|e| format!("OTHER:join: {e}"))??;
+    if is_real_process {
+        watch_for_exit(app.clone(), &state, &kind, pid);
+    }
     Ok(json!({ "pid": pid, "reused": false }))
 }
 
@@ -941,5 +1053,51 @@ mod tests {
     #[test]
     fn pid_alive_returns_false_for_pid_zero() {
         assert!(!pid_alive(0));
+    }
+
+    #[test]
+    fn bump_watch_generation_increments_and_invalidates_old_generation() {
+        let state = ExternalPlayerState::default();
+        let first = state.bump_watch_generation("mpv");
+        assert!(state.watch_generation_is_current("mpv", first));
+        let second = state.bump_watch_generation("mpv");
+        assert_ne!(first, second);
+        assert!(!state.watch_generation_is_current("mpv", first));
+        assert!(state.watch_generation_is_current("mpv", second));
+    }
+
+    #[test]
+    fn watch_generation_is_current_is_per_kind() {
+        let state = ExternalPlayerState::default();
+        state.bump_watch_generation("mpv");
+        let mpv_generation = state.bump_watch_generation("mpv");
+        let vlc_generation = state.bump_watch_generation("vlc");
+        assert!(state.watch_generation_is_current("mpv", mpv_generation));
+        assert!(state.watch_generation_is_current("vlc", vlc_generation));
+        assert!(!state.watch_generation_is_current("mpv", vlc_generation));
+    }
+
+    #[test]
+    fn mark_watched_pid_skips_unchanged_pid_but_allows_new_one() {
+        let state = ExternalPlayerState::default();
+        assert!(state.mark_watched_pid("mpv", 111));
+        assert!(!state.mark_watched_pid("mpv", 111));
+        assert!(state.mark_watched_pid("mpv", 222));
+    }
+
+    #[test]
+    fn clear_watched_pid_allows_the_same_pid_to_be_rewatched() {
+        let state = ExternalPlayerState::default();
+        assert!(state.mark_watched_pid("mpv", 111));
+        state.clear_watched_pid("mpv", 111);
+        assert!(state.mark_watched_pid("mpv", 111));
+    }
+
+    #[test]
+    fn clear_watched_pid_leaves_entry_intact_for_non_matching_pid() {
+        let state = ExternalPlayerState::default();
+        assert!(state.mark_watched_pid("mpv", 111));
+        state.clear_watched_pid("mpv", 222);
+        assert!(!state.mark_watched_pid("mpv", 111));
     }
 }

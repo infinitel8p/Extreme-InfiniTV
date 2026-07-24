@@ -12,6 +12,9 @@ export default defineConfig({
     server: {
       host: "0.0.0.0",
       port: 4321,
+      watch: {
+        ignored: ["**/src-tauri/**"],
+      },
       hmr: hmrHost
         ? { host: hmrHost, protocol: "ws", port: 4321 }
         : undefined,

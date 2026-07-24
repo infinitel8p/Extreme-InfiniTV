@@ -73,6 +73,7 @@ import {
   androidExternalAvailable,
   getExternalLauncher,
   isMacOS,
+  subscribeExternalPlayerExit,
 } from "@/scripts/lib/player-runtime.ts"
 import {
   getPlayerBackend,
@@ -237,6 +238,7 @@ const epgDayIndicator = document.getElementById("epg-day-indicator")
 let activePlaylistId = ""
 let activePlaylistTitle = ""
 let activeTuningTransition: any = null
+let externalPresenceActive = false
 
 // The inline script in livetv.astro sets data-first-run optimistically from
 // localStorage["xt_playlists"]. On Tauri builds the real entry list lives in
@@ -261,6 +263,7 @@ document.addEventListener("xt:entries-updated", () => {
 
 document.addEventListener("xt:active-changed", () => {
   clearRichPresence().catch(() => {})
+  externalPresenceActive = false
   reconcileFirstRun()
   loadChannels()
 })
@@ -270,6 +273,12 @@ document.addEventListener("xt:cache-revalidated", (e) => {
   if (!detail || detail.entryId !== activePlaylistId) return
   if (detail.kind !== "live" && detail.kind !== "m3u") return
   loadChannels()
+})
+
+subscribeExternalPlayerExit(() => {
+  if (!externalPresenceActive) return
+  externalPresenceActive = false
+  clearRichPresence().catch(() => {})
 })
 
 document.addEventListener("xt:channel-epg-changed", (e) => {
@@ -2790,6 +2799,7 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
       afterLaunch: () => {
         const channel = all.find((entry) => entry.id === ctx.streamId)
         pushDiscordPresence(channel || { id: ctx.streamId, name: ctx.name }, "live")
+        externalPresenceActive = true
       },
     })
   }
@@ -2820,6 +2830,7 @@ function runScanLineSweep() {
 
 window.addEventListener("pagehide", () => {
   clearRichPresence().catch(() => {})
+  externalPresenceActive = false
   void stopAudioTranscode()
 })
 
@@ -2994,6 +3005,7 @@ async function play(streamId, name) {
           await launchExternalLive(externalKind, src, channelHeaders)
           showExternalPlayerEmptyState(externalKind, name)
           pushDiscordPresence(channel || { id: streamId, name }, "live")
+          externalPresenceActive = true
         } catch (err) {
           surfaceLaunchError(err, externalKind)
         }
@@ -3109,6 +3121,7 @@ async function play(streamId, name) {
       await launchExternalLive(backend, src, channelHeaders)
       showExternalPlayerEmptyState(backend, name)
       pushDiscordPresence(channel || { id: streamId, name }, "live")
+      externalPresenceActive = true
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
@@ -3190,6 +3203,7 @@ async function play(streamId, name) {
   }
   applyVideoScale()
   pushDiscordPresence(channel || { id: streamId, name }, "live")
+  externalPresenceActive = false
 
   paintEpgSidePanel(streamId)
 }
@@ -3798,6 +3812,7 @@ function appendExternalLaunchButton(parent, streamId, src, name) {
     afterLaunch: () => {
       const channel = all.find((entry) => entry.id === streamId)
       pushDiscordPresence(channel || { id: streamId, name }, "live")
+      externalPresenceActive = true
     },
   })
 }

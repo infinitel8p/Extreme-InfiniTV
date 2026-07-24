@@ -64,7 +64,11 @@ import {
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
-import { mountPlayer, getExternalLauncher } from "@/scripts/lib/player-runtime.ts"
+import {
+  mountPlayer,
+  getExternalLauncher,
+  subscribeExternalPlayerExit,
+} from "@/scripts/lib/player-runtime.ts"
 import { prepareVodPlayback } from "@/scripts/lib/vod-proxy.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
@@ -108,6 +112,7 @@ let currentSeason = ""
 let currentPlayingEpisodeId = null
 let tabsStaggered = false
 let episodesStaggered = false
+let externalPresenceActive = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
@@ -837,6 +842,7 @@ async function playEpisode(episode) {
     try {
       await launchExternalPlayback(backend, playSrc, resumePos)
       pushEpisodePresence(episode)
+      externalPresenceActive = true
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
@@ -931,6 +937,7 @@ async function playEpisode(episode) {
   }
 
   pushEpisodePresence(episode)
+  externalPresenceActive = false
 }
 
 function pushEpisodePresence(episode) {
@@ -984,9 +991,16 @@ const externalBtnHandle = setupExternalPlayerButton(
     },
     afterLaunch() {
       pushEpisodePresence(currentEpisode)
+      externalPresenceActive = true
     },
   }
 )
+
+subscribeExternalPlayerExit(() => {
+  if (!externalPresenceActive) return
+  externalPresenceActive = false
+  clearRichPresence().catch(() => {})
+})
 
 window.addEventListener("pagehide", () => {
   try {
@@ -1008,6 +1022,7 @@ window.addEventListener("pagehide", () => {
     vjs?.dispose?.()
   } catch {}
   clearAmbient(ambientEl)
+  externalPresenceActive = false
   clearRichPresence().catch(() => {})
 })
 

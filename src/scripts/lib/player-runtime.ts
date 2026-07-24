@@ -318,6 +318,40 @@ export function getExternalLauncher(kind: ExternalPlayerKind): ExternalLauncher 
   }
 }
 
+export const EXTERNAL_PLAYER_EXITED_EVENT = "xt:external-player-exited"
+
+export interface ExternalPlayerExitPayload {
+  kind: ExternalPlayerKind
+}
+
+/** Fires when a launched MPV/VLC process dies. No-op on web/Android. */
+export function subscribeExternalPlayerExit(
+  handler: (kind: ExternalPlayerKind) => void,
+): () => void {
+  if (!externalPlayersAvailable) return () => {}
+  let unlisten: (() => void) | null = null
+  let disposed = false
+  void (async () => {
+    try {
+      const { listen } = await import("@tauri-apps/api/event")
+      const stopListening = await listen<ExternalPlayerExitPayload>(
+        EXTERNAL_PLAYER_EXITED_EVENT,
+        (event) => {
+          if (event.payload?.kind) handler(event.payload.kind)
+        },
+      )
+      if (disposed) stopListening()
+      else unlisten = stopListening
+    } catch (err) {
+      log.warn("[xt:player] failed to subscribe to external-player-exit events:", err)
+    }
+  })()
+  return () => {
+    disposed = true
+    try { unlisten?.() } catch (err) { log.warn("[xt:player] unlisten failed:", err) }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Android external handoff (parallel API to getExternalLauncher)
 // ---------------------------------------------------------------------------

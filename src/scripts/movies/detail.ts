@@ -61,7 +61,11 @@ import {
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
-import { mountPlayer, getExternalLauncher } from "@/scripts/lib/player-runtime.ts"
+import {
+  mountPlayer,
+  getExternalLauncher,
+  subscribeExternalPlayerExit,
+} from "@/scripts/lib/player-runtime.ts"
 import { prepareVodPlayback } from "@/scripts/lib/vod-proxy.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
@@ -102,6 +106,7 @@ let creds = { host: "", port: "", user: "", pass: "" }
 let movie = null
 let detailSrc = ""
 let detailSrcBuilder = null
+let externalPresenceActive = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
@@ -474,6 +479,7 @@ async function startPlayback() {
     try {
       await launchExternalPlayback(backend, playSrc, resumePos)
       pushMoviePresence()
+      externalPresenceActive = true
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
@@ -559,6 +565,7 @@ async function startPlayback() {
   }
 
   pushMoviePresence()
+  externalPresenceActive = false
 }
 
 function pushMoviePresence() {
@@ -613,9 +620,16 @@ const externalBtnHandle = setupExternalPlayerButton(
     },
     afterLaunch() {
       pushMoviePresence()
+      externalPresenceActive = true
     },
   }
 )
+
+subscribeExternalPlayerExit(() => {
+  if (!externalPresenceActive) return
+  externalPresenceActive = false
+  clearRichPresence().catch(() => {})
+})
 
 document.addEventListener("xt:progress-changed", (e) => {
   const detail = e.detail
@@ -641,6 +655,7 @@ window.addEventListener("pagehide", () => {
     vjs?.dispose?.()
   } catch {}
   clearAmbient(ambientEl)
+  externalPresenceActive = false
   clearRichPresence().catch(() => {})
 })
 
