@@ -57,7 +57,7 @@
     "@eslint/js": "^10.0.1",
     "@tauri-apps/cli": "^2.11.4",
     "@vitest/expect": "^4.1.10",
-    "eslint": "^10.7.0",
+    "eslint": "^10.8.0",
     "eslint-plugin-astro": "^2.1.1",
     "eslint-plugin-svelte": "^3.22.0",
     "globals": "^17.7.0",
