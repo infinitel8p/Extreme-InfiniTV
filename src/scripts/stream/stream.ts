@@ -2787,6 +2787,10 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
       beforeLaunch: () => {
         hidePlaybackFailurePanel()
       },
+      afterLaunch: () => {
+        const channel = all.find((entry) => entry.id === ctx.streamId)
+        pushDiscordPresence(channel || { id: ctx.streamId, name: ctx.name }, "live")
+      },
     })
   }
 
@@ -2985,14 +2989,15 @@ async function play(streamId, name) {
         externalPlayersAvailable ? pickConfiguredExternal() : null
       const channelHeaders = streamHeadersById.get(streamId) || null
       if (externalKind) {
+        const channel = all.find((entry) => entry.id === streamId)
         try {
           await launchExternalLive(externalKind, src, channelHeaders)
           showExternalPlayerEmptyState(externalKind, name)
+          pushDiscordPresence(channel || { id: streamId, name }, "live")
         } catch (err) {
           surfaceLaunchError(err, externalKind)
         }
         if (activePlaylistId) {
-          const channel = all.find((channel) => channel.id === streamId)
           pushRecent(activePlaylistId, "live", streamId, name, channel?.logo || null)
         }
         setNowPlaying(streamId)
@@ -3103,6 +3108,7 @@ async function play(streamId, name) {
     try {
       await launchExternalLive(backend, src, channelHeaders)
       showExternalPlayerEmptyState(backend, name)
+      pushDiscordPresence(channel || { id: streamId, name }, "live")
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
@@ -3788,6 +3794,10 @@ function appendExternalLaunchButton(parent, streamId, src, name) {
     beforeLaunch: () => {
       suppressPauseTrackingUntilMs = Date.now() + 500
       try { vjs?.pause?.() } catch {}
+    },
+    afterLaunch: () => {
+      const channel = all.find((entry) => entry.id === streamId)
+      pushDiscordPresence(channel || { id: streamId, name }, "live")
     },
   })
 }

@@ -473,6 +473,7 @@ async function startPlayback() {
   if (backend === "mpv" || backend === "vlc") {
     try {
       await launchExternalPlayback(backend, playSrc, resumePos)
+      pushMoviePresence()
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
@@ -557,18 +558,21 @@ async function startPlayback() {
     )
   }
 
-  if (activePlaylistId && movie) {
-    setRichPresence({
-      playlistId: activePlaylistId,
-      details: movie.name || t("detail.discord.watchingMovie") || "Watching a movie",
-      state: movie.year ? `Released ${movie.year}` : "Movie",
-      largeImage: movie.logo || "logo",
-      largeText: movie.name || "Extreme InfiniTV",
-      smallImage: "movie",
-      smallText: "Movie",
-      startTimestamp: Date.now(),
-    })
-  }
+  pushMoviePresence()
+}
+
+function pushMoviePresence() {
+  if (!activePlaylistId || !movie) return
+  setRichPresence({
+    playlistId: activePlaylistId,
+    details: movie.name || t("detail.discord.watchingMovie") || "Watching a movie",
+    state: movie.year ? `Released ${movie.year}` : "Movie",
+    largeImage: movie.logo || "logo",
+    largeText: movie.name || "Extreme InfiniTV",
+    smallImage: "movie",
+    smallText: "Movie",
+    startTimestamp: Date.now(),
+  })
 }
 
 async function launchExternalPlayback(backend, src, resumeSeconds) {
@@ -606,6 +610,9 @@ const externalBtnHandle = setupExternalPlayerButton(
     },
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}
+    },
+    afterLaunch() {
+      pushMoviePresence()
     },
   }
 )

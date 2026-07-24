@@ -49,6 +49,7 @@ export interface EscapeHatchHooks {
   getResumeSeconds?(): number
   getTitle?(): string | null | undefined
   beforeLaunch?(kind: ButtonKind): void
+  afterLaunch?(kind: ButtonKind): void
 }
 
 function configuredExternalKinds(): ExternalPlayerKind[] {
@@ -145,6 +146,13 @@ export function setupExternalPlayerButton(
     const kind = (btn.dataset.kind as ButtonKind) ||
       (isAndroid ? pickPreferredAndroidHandoff() : pickPreferredExternal())
     if (!kind) return
+    const notifyLaunched = (launchedKind: ButtonKind) => {
+      try {
+        hooks.afterLaunch?.(launchedKind)
+      } catch (err) {
+        log.warn("[xt:external-btn] afterLaunch threw:", err)
+      }
+    }
     try {
       hooks.beforeLaunch?.(kind)
     } catch (err) {
@@ -165,6 +173,7 @@ export function setupExternalPlayerButton(
             referer: headers?.referer ?? null,
             title,
           })
+          notifyLaunched(kind)
         } catch (err) {
           surfaceAndroidHandoffError(err, kind)
         }
@@ -204,6 +213,7 @@ export function setupExternalPlayerButton(
               title,
               mime,
             })
+            notifyLaunched("system")
           } catch (err) {
             surfaceAndroidHandoffError(err, "system")
           }
@@ -239,6 +249,7 @@ export function setupExternalPlayerButton(
           title,
           mime,
         })
+        notifyLaunched("system")
       } catch (err) {
         surfaceAndroidHandoffError(err, "system")
       }
@@ -265,6 +276,7 @@ export function setupExternalPlayerButton(
     })
     try {
       await launcher.launch(src, opts)
+      notifyLaunched(desktopKind)
     } catch (err) {
       surfaceLaunchError(err, desktopKind)
     }
