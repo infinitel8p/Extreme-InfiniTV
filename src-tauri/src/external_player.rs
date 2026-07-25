@@ -602,7 +602,8 @@ fn first_mpv_error(buf: &[u8]) -> Option<String> {
     None
 }
 
-fn build_mpv_loadfile(url: &str, ua: Option<&str>, referer: Option<&str>) -> Vec<u8> {
+// mpv 0.38 moved loadfile options behind a new index arg
+fn build_mpv_loadfile(url: &str, ua: Option<&str>, referer: Option<&str>, use_index_form: bool) -> Vec<u8> {
     let mut opts: Vec<String> = Vec::new();
     if let Some(ua) = ua.filter(|s| !s.is_empty()) {
         opts.push(format!("user-agent=%{}%{}", ua.len(), ua));
@@ -612,6 +613,8 @@ fn build_mpv_loadfile(url: &str, ua: Option<&str>, referer: Option<&str>) -> Vec
     }
     let cmd = if opts.is_empty() {
         json!({ "command": ["loadfile", url, "replace"] })
+    } else if use_index_form {
+        json!({ "command": ["loadfile", url, "replace", -1, opts.join(",")] })
     } else {
         json!({ "command": ["loadfile", url, "replace", opts.join(",")] })
     };
@@ -627,55 +630,82 @@ fn build_mpv_unpause() -> Vec<u8> {
     bytes
 }
 
+#[cfg(unix)]
+fn write_and_read_reply(
+    stream: &mut std::os::unix::net::UnixStream,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    stream.write_all(payload).map_err(|e| format!("IPC:{e}"))?;
+    let mut sink = [0u8; 1024];
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    let read = stream.read(&mut sink).unwrap_or(0);
+    Ok(sink[..read].to_vec())
+}
+
+#[cfg(windows)]
+fn write_and_read_reply(pipe: &mut std::fs::File, payload: &[u8]) -> Result<Vec<u8>, String> {
+    pipe.write_all(payload).map_err(|e| format!("IPC:{e}"))?;
+    // File has no read timeout on Windows; a leaked reader unblocks on pipe close
+    let mut reader = pipe.try_clone().map_err(|e| format!("IPC:{e}"))?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut sink = [0u8; 1024];
+        let read = reader.read(&mut sink).unwrap_or(0);
+        let _ = tx.send(sink[..read].to_vec());
+    });
+    match rx.recv_timeout(Duration::from_millis(IPC_REPLY_TIMEOUT_MS)) {
+        Ok(bytes) if bytes.is_empty() => Err("IPC:empty reply from mpv".to_string()),
+        Ok(bytes) => Ok(bytes),
+        Err(_) => Err("IPC:no reply from mpv".to_string()),
+    }
+}
+
 fn send_mpv_loadfile(
     endpoint: &str,
     url: &str,
     ua: Option<&str>,
     referer: Option<&str>,
 ) -> Result<(), String> {
-    let payload = build_mpv_loadfile(url, ua, referer);
+    let has_options = ua.filter(|s| !s.is_empty()).is_some() || referer.filter(|s| !s.is_empty()).is_some();
+    let new_form_payload = build_mpv_loadfile(url, ua, referer, true);
     let unpause = build_mpv_unpause();
 
     #[cfg(unix)]
     {
         let mut stream = open_mpv_socket(endpoint).map_err(|e| format!("IPC:{e}"))?;
-        stream.write_all(&payload).map_err(|e| format!("IPC:{e}"))?;
-        stream.write_all(&unpause).map_err(|e| format!("IPC:{e}"))?;
-        let mut sink = [0u8; 1024];
-        let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
-        let read = stream.read(&mut sink).unwrap_or(0);
-        if let Some(err) = first_mpv_error(&sink[..read]) {
-            return Err(format!("IPC:mpv replied {err}"));
+        let reply = write_and_read_reply(&mut stream, &new_form_payload)?;
+        if let Some(err) = first_mpv_error(&reply) {
+            if has_options && err == "invalid parameter" {
+                let old_form_payload = build_mpv_loadfile(url, ua, referer, false);
+                let retry_reply = write_and_read_reply(&mut stream, &old_form_payload)?;
+                if let Some(retry_err) = first_mpv_error(&retry_reply) {
+                    return Err(format!("IPC:mpv replied {retry_err}"));
+                }
+            } else {
+                return Err(format!("IPC:mpv replied {err}"));
+            }
         }
+        stream.write_all(&unpause).map_err(|e| format!("IPC:{e}"))?;
         Ok(())
     }
 
     #[cfg(windows)]
     {
         let mut pipe = open_mpv_pipe(endpoint).map_err(|e| format!("IPC:{e}"))?;
-        pipe.write_all(&payload).map_err(|e| format!("IPC:{e}"))?;
-        pipe.write_all(&unpause).map_err(|e| format!("IPC:{e}"))?;
-
-        // File has no read timeout on Windows; a leaked reader unblocks on pipe close
-        let mut reader = pipe.try_clone().map_err(|e| format!("IPC:{e}"))?;
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut sink = [0u8; 1024];
-            let read = reader.read(&mut sink).unwrap_or(0);
-            let _ = tx.send(sink[..read].to_vec());
-        });
-        match rx.recv_timeout(Duration::from_millis(IPC_REPLY_TIMEOUT_MS)) {
-            Ok(bytes) => {
-                if bytes.is_empty() {
-                    return Err("IPC:empty reply from mpv".to_string());
+        let reply = write_and_read_reply(&mut pipe, &new_form_payload)?;
+        if let Some(err) = first_mpv_error(&reply) {
+            if has_options && err == "invalid parameter" {
+                let old_form_payload = build_mpv_loadfile(url, ua, referer, false);
+                let retry_reply = write_and_read_reply(&mut pipe, &old_form_payload)?;
+                if let Some(retry_err) = first_mpv_error(&retry_reply) {
+                    return Err(format!("IPC:mpv replied {retry_err}"));
                 }
-                if let Some(err) = first_mpv_error(&bytes) {
-                    return Err(format!("IPC:mpv replied {err}"));
-                }
-                Ok(())
+            } else {
+                return Err(format!("IPC:mpv replied {err}"));
             }
-            Err(_) => Err("IPC:no reply from mpv".to_string()),
         }
+        pipe.write_all(&unpause).map_err(|e| format!("IPC:{e}"))?;
+        Ok(())
     }
 }
 
@@ -897,6 +927,7 @@ mod tests {
             "https://e.test/x.m3u8",
             Some("AgentX"),
             Some("https://r.test/"),
+            true,
         );
         let s = String::from_utf8(bytes).unwrap();
         assert!(s.contains("loadfile"));
@@ -910,7 +941,7 @@ mod tests {
     fn build_mpv_loadfile_preserves_comma_in_user_agent() {
         let ua = "Mozilla/5.0 (X11; Linux x86_64), Gecko/2010";
         let referer = "https://r.test/, with comma";
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some(ua), Some(referer));
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some(ua), Some(referer), false);
         let line = String::from_utf8(bytes).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
@@ -927,6 +958,27 @@ mod tests {
             "opts string must percent-length-encode the UA so commas in the value don't terminate it; got {opts:?}"
         );
         assert!(opts.contains(&format!("referrer=%{}%{}", referer.len(), referer)));
+    }
+
+    #[test]
+    fn build_mpv_loadfile_uses_index_form_when_requested() {
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, true);
+        let parsed: serde_json::Value =
+            serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
+        let cmd = parsed["command"].as_array().unwrap();
+        assert_eq!(cmd.len(), 5);
+        assert_eq!(cmd[3], -1);
+        assert!(cmd[4].as_str().unwrap().contains("user-agent="));
+    }
+
+    #[test]
+    fn build_mpv_loadfile_uses_legacy_form_when_not_requested() {
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, false);
+        let parsed: serde_json::Value =
+            serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
+        let cmd = parsed["command"].as_array().unwrap();
+        assert_eq!(cmd.len(), 4);
+        assert!(cmd[3].as_str().unwrap().contains("user-agent="));
     }
 
     #[test]
@@ -988,7 +1040,7 @@ mod tests {
 
     #[test]
     fn build_mpv_loadfile_uses_three_arg_form_when_no_options() {
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", None, None);
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", None, None, true);
         let parsed: serde_json::Value =
             serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
         let cmd = parsed["command"].as_array().unwrap();
