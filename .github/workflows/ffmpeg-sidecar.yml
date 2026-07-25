@@ -3,7 +3,7 @@ name: ffmpeg Sidecar
 # Triggers:
 #  - run "ffmpeg Sidecar" from the Actions tab -> rebuilds and republishes the
 #      sidecar binaries
-#  - push to main that touches this file       -> same build, for iterating
+#  - push to main or release/** touching this file -> same build, for iterating
 #      on the workflow itself
 #
 # Builds a trimmed, LGPL-only static ffmpeg for the audio-transcode sidecar
@@ -25,6 +25,7 @@ on:
   push:
     branches:
       - main
+      - "release/**"
     paths:
       - ".github/workflows/ffmpeg-sidecar.yml"
   workflow_dispatch:
