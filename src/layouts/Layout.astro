@@ -28,6 +28,9 @@ const documentTitle = pageTitle
     <meta name="x-app-version" content={pkg.version} />
     <meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0e1628" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta property="og:title" content="Extreme InfiniTV" />
+    <meta property="og:image" content="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/logos/icon-1024.png" />
     <script is:inline>
       try {
         if (sessionStorage.getItem("xt_splash_done") === "1") {
@@ -234,8 +237,7 @@ const documentTitle = pageTitle
         <div class="xt-app-splash__mark-wrap">
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
+            viewBox="8 58 224 124"
             stroke-linecap="round"
             stroke-linejoin="round"
             class="xt-app-splash__svg"
@@ -243,9 +245,23 @@ const documentTitle = pageTitle
           >
             <path
               id="xt-app-splash-path"
-              class="xt-app-splash__base"
-              d="M18.1777 8C23.2737 8 23.2737 16 18.1777 16C13.0827 16 11.0447 8 5.43875 8C0.85375 8 0.85375 16 5.43875 16C11.0447 16 13.0828 8 18.1788 8H18.1777Z"
+              fill="none"
+              stroke="none"
+              aria-hidden="true"
+              d="M120,120 A50 50 0 1 1 20 120 A50 50 0 1 1 120 120 A50 50 0 1 0 220 120 A50 50 0 1 0 120 120 Z"
             />
+            <g class="xt-app-splash__mark">
+              <path
+                id="xt-app-splash-arc"
+                class="xt-app-splash__base xt-app-splash__base--arc"
+                d="M65.6 70.2 A50 50 0 1 1 20.2 115.6"
+              />
+              <circle class="xt-app-splash__base xt-app-splash__base--fill" cx="34.6" cy="84.6" r="9" />
+              <circle class="xt-app-splash__base xt-app-splash__base--ring" cx="170" cy="120" r="50" />
+              <rect class="xt-app-splash__base xt-app-splash__base--fill" x="146.5" y="94" width="13" height="52" rx="6.5" />
+              <rect class="xt-app-splash__base xt-app-splash__base--fill" x="164.5" y="102" width="13" height="36" rx="6.5" />
+              <rect class="xt-app-splash__base xt-app-splash__base--fill" x="182.5" y="110" width="13" height="20" rx="6.5" />
+            </g>
           </svg>
           <canvas class="xt-app-splash__comet" aria-hidden="true"></canvas>
         </div>
@@ -399,8 +415,8 @@ const documentTitle = pageTitle
     place-items: center;
     box-sizing: content-box;
     padding: 0 1.5rem;
-    width: clamp(6.5rem, 18vmin, 9rem);
-    aspect-ratio: 1 / 1;
+    width: clamp(11.75rem, 32.5vmin, 16.25rem);
+    aspect-ratio: 56 / 31;
   }
 
   .xt-app-splash__svg {
@@ -411,15 +427,29 @@ const documentTitle = pageTitle
     overflow: visible;
     animation: xt-app-splash-mark-in 640ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
-  .xt-app-splash__base {
-    stroke: var(--color-accent);
-    stroke-width: 0.27;
+  .xt-app-splash__mark {
     opacity: 0.55;
+  }
+  .xt-app-splash__base {
+    opacity: 1;
+  }
+  .xt-app-splash__base--arc {
+    fill: none;
+    stroke: var(--color-accent);
+    stroke-width: 20;
     stroke-dasharray: 100;
     stroke-dashoffset: 100;
   }
+  .xt-app-splash__base--ring {
+    fill: none;
+    stroke: var(--color-accent);
+    stroke-width: 20;
+  }
+  .xt-app-splash__base--fill {
+    fill: var(--color-accent);
+  }
   @media (prefers-reduced-motion: reduce) {
-    .xt-app-splash__base {
+    .xt-app-splash__base--arc {
       stroke-dasharray: none;
       stroke-dashoffset: 0;
     }
@@ -473,7 +503,7 @@ const documentTitle = pageTitle
   :root[data-perf-mode="on"] .xt-app-splash__wordmark {
     animation: none;
   }
-  :root[data-perf-mode="on"] .xt-app-splash__base {
+  :root[data-perf-mode="on"] .xt-app-splash__base--arc {
     stroke-dasharray: none;
     stroke-dashoffset: 0;
   }
@@ -494,6 +524,9 @@ const documentTitle = pageTitle
   initConnectivity()
 
   ;(function dismissSplash() {
+    // ?splash-hold forces the splash and keeps it up for visual review
+    const holdSplash = new URLSearchParams(window.location.search).has("splash-hold")
+    if (holdSplash) document.documentElement.removeAttribute("data-splash-done")
     if (document.documentElement.hasAttribute("data-splash-done")) return
     const splash = document.getElementById("xt-app-splash")
     if (!splash) return
@@ -502,7 +535,7 @@ const documentTitle = pageTitle
     const cometCleanup = setupSplashComet(splash)
 
     const infinityPath = splash.querySelector(
-      "#xt-app-splash-path"
+      "#xt-app-splash-arc"
     ) as SVGPathElement | null
     let pathLen = 0
     if (infinityPath) {
@@ -529,6 +562,8 @@ const documentTitle = pageTitle
         )
       }
     }
+
+    if (holdSplash) return
 
     const MIN_DISPLAY_MS = 3000
     const start = performance.now()
@@ -637,6 +672,15 @@ const documentTitle = pageTitle
   }
   pushIdlePresence()
   document.addEventListener("xt:active-changed", pushIdlePresence)
+
+  if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
+    ;(async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event")
+        await listen("xt:external-player-exited", () => pushIdlePresence())
+      } catch {}
+    })()
+  }
 
   let lastPruneAt = 0
   const PRUNE_THROTTLE_MS = 5_000

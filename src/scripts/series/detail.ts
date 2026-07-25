@@ -37,6 +37,7 @@ import {
   inferExt,
   listDownloads,
   getLocalPlayableSrc,
+  getLocalDownloadPath,
   tryAndroidIntentPlayback,
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
@@ -64,7 +65,14 @@ import {
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
-import { mountPlayer, getExternalLauncher } from "@/scripts/lib/player-runtime.ts"
+import {
+  mountPlayer,
+  getExternalLauncher,
+  subscribeExternalPlayerExit,
+} from "@/scripts/lib/player-runtime.ts"
+import { prepareVodPlayback } from "@/scripts/lib/vod-proxy.ts"
+import { vodAudioRemuxAvailable } from "@/scripts/lib/vod-audio-proxy.ts"
+import { createVodAudioSwitcher, discoverVodAudioTracks } from "@/scripts/lib/vod-audio-switch.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
@@ -107,6 +115,7 @@ let currentSeason = ""
 let currentPlayingEpisodeId = null
 let tabsStaggered = false
 let episodesStaggered = false
+let externalPresenceActive = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
@@ -635,6 +644,9 @@ let progressListenersBound = false
 let currentEpisode = null
 let pipBtnBound = false
 let scaleBtnBound = false
+let playRequestId = 0
+let audioSwitcher = null
+let audioDiscoveryController = null
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
@@ -758,10 +770,12 @@ function markNowPlayingEpisode(epId) {
 
 async function playEpisode(episode) {
   if (!series || !episode) return
+  const requestId = ++playRequestId
   const src = episode?._directUrl
     ? buildEpisodeStreamUrl(episode)
     : await resolveStreamUrl((c) => buildEpisodeStreamUrl(episode, c))
   if (!src) return
+  if (requestId !== playRequestId) return
   dismissUpNext()
 
   if (activePlaylistId) {
@@ -779,6 +793,7 @@ async function playEpisode(episode) {
   markNowPlayingEpisode(episode.id)
 
   if (await tryAndroidIntentPlayback(src)) return
+  if (requestId !== playRequestId) return
 
   if (nowPlayingEl) {
     nowPlayingEl.textContent =
@@ -790,6 +805,7 @@ async function playEpisode(episode) {
 
   const localSrc = await getLocalPlayableSrc(src)
   const playSrc = localSrc || src
+  if (requestId !== playRequestId) return
   const saved = activePlaylistId
     ? getProgress(activePlaylistId, "episode", episode.id)
     : null
@@ -832,7 +848,10 @@ async function playEpisode(episode) {
 
   if (backend === "mpv" || backend === "vlc") {
     try {
-      await launchExternalPlayback(backend, playSrc, resumePos)
+      const externalSrc = (await getLocalDownloadPath(src)) || playSrc
+      await launchExternalPlayback(backend, externalSrc, resumePos)
+      pushEpisodePresence(episode)
+      externalPresenceActive = true
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
@@ -855,6 +874,7 @@ async function playEpisode(episode) {
     return
   }
   if (!player) return
+  if (requestId !== playRequestId) return
   setupPipButton(player)
   setupScaleButton()
   const mime = chooseMime(src)
@@ -875,7 +895,49 @@ async function playEpisode(episode) {
     })
   }
 
-  player.src({ src: playSrc, type: mime })
+  const prepared = await prepareVodPlayback(playSrc)
+  if (requestId !== playRequestId) {
+    prepared.mkvSession?.stop()
+    return
+  }
+
+  audioSwitcher?.dispose()
+  audioSwitcher = null
+  audioDiscoveryController?.abort()
+  audioDiscoveryController = new AbortController()
+  let initialAudioSource = null
+  if (await vodAudioRemuxAvailable()) {
+    const audioTracks = await discoverVodAudioTracks(prepared.mkvSession, playSrc, audioDiscoveryController.signal)
+    if (requestId !== playRequestId) {
+      prepared.mkvSession?.stop()
+      return
+    }
+    if (audioTracks.length >= 2) {
+      audioSwitcher = createVodAudioSwitcher({
+        handle: player,
+        originalSrc: prepared.playbackUrl,
+        originalMime: mime,
+        originalSubtitles: { sourceUrl: playSrc, mkvSession: prepared.mkvSession },
+        sourceUrl: playSrc,
+        remuxInputUrl: prepared.mkvSession ? prepared.playbackUrl : null,
+        getKnownDurationSeconds: () => player.duration?.() || saved?.duration || 0,
+        tracks: audioTracks,
+      })
+      initialAudioSource = audioSwitcher.source
+    }
+  }
+
+  if (requestId !== playRequestId) {
+    prepared.mkvSession?.stop()
+    return
+  }
+
+  player.src({
+    src: prepared.playbackUrl,
+    type: mime,
+    subtitles: { sourceUrl: playSrc, mkvSession: prepared.mkvSession },
+    audio: initialAudioSource,
+  })
   applyVideoScale()
 
   if (!progressListenersBound) {
@@ -917,18 +979,22 @@ async function playEpisode(episode) {
     )
   }
 
-  if (activePlaylistId && series) {
-    setRichPresence({
-      playlistId: activePlaylistId,
-      details: series.name || "Watching a series",
-      state: `S${episode.season || currentSeason || "?"}E${episode.episode_num || "?"} · ${episode.title || ""}`.trim(),
-      largeImage: series.logo || "logo",
-      largeText: series.name || "Extreme InfiniTV",
-      smallImage: "series",
-      smallText: "Series",
-      startTimestamp: Date.now(),
-    })
-  }
+  pushEpisodePresence(episode)
+  externalPresenceActive = false
+}
+
+function pushEpisodePresence(episode) {
+  if (!activePlaylistId || !series || !episode) return
+  setRichPresence({
+    playlistId: activePlaylistId,
+    details: series.name || "Watching a series",
+    state: `S${episode.season || currentSeason || "?"}E${episode.episode_num || "?"} · ${episode.title || ""}`.trim(),
+    largeImage: series.logo || "logo",
+    largeText: series.name || "Extreme InfiniTV",
+    smallImage: "series",
+    smallText: "Series",
+    startTimestamp: Date.now(),
+  })
 }
 
 async function launchExternalPlayback(backend, src, resumeSeconds) {
@@ -966,8 +1032,17 @@ const externalBtnHandle = setupExternalPlayerButton(
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}
     },
+    afterLaunch() {
+      pushEpisodePresence(currentEpisode)
+      externalPresenceActive = true
+    },
   }
 )
+
+subscribeExternalPlayerExit(() => {
+  if (!externalPresenceActive) return
+  externalPresenceActive = false
+})
 
 window.addEventListener("pagehide", () => {
   try {
@@ -987,8 +1062,12 @@ window.addEventListener("pagehide", () => {
     }
     vjs?.pause?.()
     vjs?.dispose?.()
+    audioSwitcher?.dispose()
+    audioSwitcher = null
+    audioDiscoveryController?.abort()
   } catch {}
   clearAmbient(ambientEl)
+  externalPresenceActive = false
   clearRichPresence().catch(() => {})
 })
 
@@ -1240,11 +1319,15 @@ async function boot() {
 
   // A playlist switch re-boots: dispose any player from the previous playlist
   // and clear episode/season/up-next state so nothing leaks across.
+  playRequestId++
   try {
     vjs?.pause?.()
     await vjs?.dispose?.()
   } catch {}
   vjs = null
+  audioSwitcher?.dispose()
+  audioSwitcher = null
+  audioDiscoveryController?.abort()
   progressListenersBound = false
   currentEpisode = null
   currentPlayingEpisodeId = null

@@ -1,0 +1,51 @@
+---
+layout: ../layouts/DocsLayout.astro
+title: "Catch-up TV & replay"
+description: "Replay programmes from your provider's archive, pause and rewind live TV."
+lede: "If your provider keeps an archive for a channel, you can rewind live TV and replay past programmes - no recording involved."
+---
+
+import Callout from "../components/Callout.astro"
+
+## What you need
+
+Replay only works on channels where your provider actually keeps an archive. For Xtream accounts that means the provider's catch-up / archive feature; for M3U playlists it means the playlist file carries catchup attributes for that channel. The app detects this automatically per channel - there is nothing to turn on.
+
+Channels without archive support simply don't show replay options. If you land on one through a shared link, you'll see "This channel doesn't offer replay" instead.
+
+Up to 7 days of past programmes are available. The real limit is how much archive your provider keeps - if a channel only keeps a few hours, that's all the app can offer.
+
+## Watching a replay
+
+| Where | What to do |
+|---|---|
+| Live TV programme guide | Scroll the side panel up to see past programmes; scrolling further loads another day of history. |
+| A past programme | Open it and hit **Watch replay**. |
+| The programme airing right now | Open it and hit **Watch from start** to restart it from the beginning. |
+| **EPG** page | Browse day by day; replayable programmes are marked here too. |
+
+While a replay is playing, a **Replay** badge shows on the channel and a **Back to live** row takes you straight back to the live broadcast.
+
+## Pause and rewind live TV
+
+On an archive-capable channel, pressing rewind while watching live jumps you behind the broadcast. Nothing is being recorded locally - the app just fetches that moment from your provider's archive on the fly.
+
+A small chip on the player shows the wall-clock time you're watching and how far behind live you are. While you tap rewind or forward repeatedly, it previews where you're about to land before the jump happens.
+
+<Callout type="tip">
+  Pausing works the same way: a long pause on an archive-capable channel resumes exactly where you left off, served from the archive. Channels without archive support retune to live after about a minute instead.
+</Callout>
+
+## Seeking
+
+Replays scrub like a normal video: the seek bar spans the whole programme, and dragging jumps straight to that moment.
+
+For a programme that's still airing, the part that hasn't aired yet shows as a ghost region with a live-edge marker - you can't seek past what's actually been broadcast. Once a replay finishes, it rolls into the next programme automatically, all the way up until you catch up with live.
+
+On keyboard or remote, **J** and **L** (or the media rewind / fast-forward keys) skip backward and forward. Pressing them quickly several times in a row adds up into a single larger jump instead of several small ones.
+
+## Troubleshooting
+
+**No replay options at all on a channel**: your provider doesn't advertise an archive for it. There's nothing the app can do here - it's a provider-side limit.
+
+**Replays start at the wrong time**: this is almost always an EPG offset problem, not a replay problem. Open **Settings > Live TV** and adjust the **EPG offset** for the active playlist - see [Playlists (Xtream + M3U)](./playlists/) for the same fix applied to the programme guide.

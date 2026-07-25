@@ -98,6 +98,8 @@ jobs:
     needs: create-beta-release
     permissions:
       contents: write
+      # Lets the sidecar fetch step read the "ffmpeg Sidecar" run status while polling.
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -137,6 +139,81 @@ jobs:
           save-if: false
 
       - run: pnpm install --frozen-lockfile
+
+      # ffmpeg sidecar binaries come from the "ffmpeg Sidecar" workflow's
+      # rolling ffmpeg-sidecar-v2 prerelease, not built here. This job's
+      # matrix has no macOS entry, so both legs fetch a binary.
+      # The fetch retries so a same-push sidecar rebuild can finish publishing.
+      # Integrity comes from the committed pins, not the release's own sums.
+      - name: Fetch ffmpeg sidecar
+        if: matrix.os != 'macos-latest'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/binaries
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            ASSET="ffmpeg-x86_64-pc-windows-msvc.exe"
+          else
+            ASSET="ffmpeg-x86_64-unknown-linux-gnu"
+          fi
+          sidecar_run_for_commit() {
+            gh run list \
+              --repo "${{ github.repository }}" \
+              --workflow ffmpeg-sidecar.yml \
+              --limit 10 \
+              --json headSha,status,conclusion,url \
+              --jq "[.[] | select(.headSha == \"$GITHUB_SHA\")][0] // empty | [.status, (.conclusion // \"\"), .url] | @tsv" \
+              2>/dev/null || true
+          }
+          DOWNLOADED=0
+          for attempt in $(seq 1 15); do
+            if gh release download ffmpeg-sidecar-v2 \
+              --repo "${{ github.repository }}" \
+              --pattern "$ASSET" \
+              --dir src-tauri/binaries \
+              --clobber; then
+              DOWNLOADED=1
+              break
+            fi
+            RUN_LINE="$(sidecar_run_for_commit)"
+            if [ -n "$RUN_LINE" ]; then
+              RUN_STATUS="$(printf '%s' "$RUN_LINE" | cut -f1)"
+              RUN_CONCLUSION="$(printf '%s' "$RUN_LINE" | cut -f2)"
+              RUN_URL="$(printf '%s' "$RUN_LINE" | cut -f3)"
+              if [ "$RUN_STATUS" = "completed" ] && [ "$RUN_CONCLUSION" != "success" ]; then
+                echo "::error::The 'ffmpeg Sidecar' workflow run for this commit finished as '$RUN_CONCLUSION' ($RUN_URL), so $ASSET will never appear. Fix and re-run 'ffmpeg Sidecar', then re-run this beta build."
+                exit 1
+              fi
+              echo "'ffmpeg Sidecar' run for this commit is '$RUN_STATUS' ($RUN_URL)"
+            elif [ "$attempt" -eq 1 ]; then
+              echo "No 'ffmpeg Sidecar' run found for $GITHUB_SHA, so the assets are expected to already exist on the ffmpeg-sidecar-v2 release."
+            fi
+            if [ "$attempt" -lt 15 ]; then
+              echo "$ASSET not available yet (attempt $attempt/15), retrying in 60s..."
+              sleep 60
+            fi
+          done
+          if [ "$DOWNLOADED" -ne 1 ]; then
+            echo "::error::Gave up waiting for $ASSET on the ffmpeg-sidecar-v2 release after 15 attempts (~15 min). The 'ffmpeg Sidecar' workflow publishes it: check that its latest run succeeded, then re-run this beta build once the assets are published."
+            exit 1
+          fi
+          if ! EXPECTED_SHA=$(node src/scripts/ensure-ffmpeg-sidecar.mjs --print-pin "$ASSET"); then
+            echo "::error::$ASSET has no pinned sha256 in src/scripts/ffmpeg-sidecar-checksums.json. Run 'node src/scripts/ensure-ffmpeg-sidecar.mjs --update-pins' and commit the result."
+            exit 1
+          fi
+          cd src-tauri/binaries
+          echo "$EXPECTED_SHA  $ASSET" > asset.sha256
+          if ! sha256sum -c asset.sha256; then
+            echo "::error::$ASSET does not match its pinned sha256 in src/scripts/ffmpeg-sidecar-checksums.json. Either the sidecar was republished (refresh the pins with --update-pins) or the asset was tampered with."
+            exit 1
+          fi
+          rm -f asset.sha256
+          cd - >/dev/null
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            chmod +x "src-tauri/binaries/$ASSET"
+          fi
 
       - run: pnpm sync-version ${{ needs.create-beta-release.outputs.version }}
 
@@ -206,6 +283,7 @@ jobs:
           XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.13846066
+          XT_SKIP_FFMPEG_SIDECAR: "1"
         run: pnpm tauri android build --apk
 
       - name: Collect APK

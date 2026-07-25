@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/128x128@2x.png" alt="Extreme InfiniTV app icon - cross-platform IPTV player"/>
+  <img src="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/logos/readme-lockup-2x.png" alt="Extreme InfiniTV logo" width="400"/>
 </p>
 
 <h1 align="center">Extreme InfiniTV</h1>
@@ -40,6 +40,9 @@
 </p>
 
 <p align="center">
+  <a href="https://dev.infinitel8p.com/Extreme-InfiniTV/">
+    <img src="https://img.shields.io/badge/Docs-dev.infinitel8p.com-a855f7?logo=gitbook&logoColor=white" alt="Documentation"/>
+  </a>
   <a href="https://github.com/infinitel8p/Extreme-InfiniTV/issues">
     <img src="https://img.shields.io/github/issues/infinitel8p/Extreme-InfiniTV?logo=github&color=a855f7" alt="Issues"/>
   </a>

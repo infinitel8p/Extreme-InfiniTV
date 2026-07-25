@@ -1,0 +1,62 @@
+---
+layout: ../layouts/DocsLayout.astro
+title: "Custom playlists"
+description: "Build your own channel list from channels across your playlists, and pull streams straight from web pages."
+lede: "Pick your favorite channels out of every playlist you own, mix in direct stream links, and keep them all in one list you control."
+---
+
+import Callout from "../components/Callout.astro"
+
+## What a custom playlist is
+
+A custom playlist is a channel list you build yourself. You pull channels in from any of your existing [Xtream or M3U playlists](./playlists/), or add a direct stream URL, and arrange them however you like.
+
+Your edits are stored separately from the source playlists, so refreshing or re-adding a source playlist never wipes your work. If you remove a source playlist entirely, the channels you pulled from it stay visible in the editor, marked as unavailable, instead of disappearing. Re-add the source and they play again.
+
+Once it exists, a custom playlist behaves like any other playlist: switch to it from the sidebar, and favorites and watch progress work the same as anywhere else. Its TV guide defaults to the combined guides of the playlists you pulled channels from, and you can override the guide URL for it if you want a different one.
+
+## Create one
+
+Open **Settings > Playlists** and pick **New custom playlist** to open the editor. Once it exists, the **Edit** action on its row reopens the editor any time you want to keep working on it.
+
+<Callout type="note">
+  The editor is built for desktop and tablet first. A custom playlist plays fine on a TV like any other playlist, but building one is much easier with a mouse or touch than with a remote.
+</Callout>
+
+## Build it in the editor
+
+The editor has two panes. The left pane browses your existing playlists: a playlist picker, search, a category filter, and multi-select so you can grab several channels at once. The right pane is the playlist you're building.
+
+To organize it:
+
+- Create groups to sort channels into.
+- Drag channels to reorder them, or use the up/down buttons if you're working from a keyboard.
+- Rename groups.
+- Edit any channel: its name, logo, channel number, EPG id, and a per-channel catch-up override.
+
+The toolbar covers the rest:
+
+- **New group** - add another group.
+- **Add by URL** - add a direct stream link, with optional User-Agent, Referer, and ClearKey fields for streams that need them.
+- **Undo** - Ctrl/Cmd+Z, up to 20 steps back.
+- **Find & replace** - rename channels in bulk, with a live match count as you type.
+- **Check links** - probes every channel in the playlist and marks each row reachable or not.
+- **Export .m3u** - saves the playlist you're building as a standard file.
+
+## Add channels while watching
+
+You don't have to open the editor to add a channel. On Live TV, right-click (or long-press) any channel and pick **Add to custom playlist**. This works on multi-selected channels too, so you can grab several at once. If you don't have a custom playlist yet, you can create one straight from that dialog.
+
+## Add streams from a web page
+
+Some channels only exist as a livestream embedded in a web page, with no Xtream or M3U link behind them. **Add from website** finds the stream on a page and saves it as a playable entry, and its picker can add several streams to a custom playlist at once. See [Add from website](./add-from-website/) for the full guide.
+
+## Export
+
+**Settings > Playlists** has an **Export M3U** action on every playlist row, custom or not, that writes a standard `.m3u` file you can use in other apps. While you're working in the editor, the **Export .m3u** button does the same thing for the playlist you're currently building.
+
+## Current limits
+
+- Live channels only - movies and series can't be added to a custom playlist yet.
+- [Catch-up and replay](./catch-up/) works for channels that came from an M3U playlist. Channels pulled in from an Xtream playlist don't offer replay inside a custom playlist yet.
+- On desktop, a stream that needs a custom User-Agent or Referer may not play in the built-in player, since the browser engine controls those headers. Hand it off to MPV or VLC instead - see [External players](./external-players/). On Android the built-in player applies the headers itself.

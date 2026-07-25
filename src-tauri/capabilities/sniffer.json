@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "sniffer-capability",
+  "description": "Lets the hidden sniffer window's remote page report a candidate stream URL, nothing else.",
+  "platforms": [
+    "macOS",
+    "windows",
+    "linux"
+  ],
+  "windows": [
+    "sniffer"
+  ],
+  "local": false,
+  "remote": {
+    "urls": [
+      "http://*:*/*",
+      "https://*:*/*"
+    ]
+  },
+  "permissions": [
+    "allow-sniff-report"
+  ]
+}

@@ -50,12 +50,20 @@ import Layout from "@/layouts/Layout.astro"
         return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
       }
 
+      const ACCENT_PRESETS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"]
+      const resolveAccent = () => {
+        const stored = localStorage.getItem("xt_accent") || "fuchsia"
+        return ACCENT_PRESETS.includes(stored) ? stored : "fuchsia"
+      }
+
       const buildSrc = () => {
         const params = new URLSearchParams(window.location.search)
         const path = sanitizePath(params.get("p") || "")
         const url = new URL(`${DOCS_BASE}/${path}`)
         url.searchParams.set("embed", "1")
         url.searchParams.set("theme", resolveTheme())
+        const accent = resolveAccent()
+        if (accent !== "fuchsia") url.searchParams.set("accent", accent)
         return url.toString()
       }
 
@@ -74,8 +82,17 @@ import Layout from "@/layouts/Layout.astro"
           )
         } catch {}
       }
+      const pushAccent = () => {
+        try {
+          iframe.contentWindow?.postMessage(
+            { type: "xt-docs:accent", accent: resolveAccent() },
+            DOCS_ORIGIN
+          )
+        } catch {}
+      }
       window.addEventListener("storage", (event) => {
         if (event.key === "xt_theme") pushTheme()
+        if (event.key === "xt_accent") pushAccent()
       })
       const systemMql = window.matchMedia("(prefers-color-scheme: dark)")
       systemMql.addEventListener?.("change", pushTheme)

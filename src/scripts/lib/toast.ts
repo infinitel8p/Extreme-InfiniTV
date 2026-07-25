@@ -11,6 +11,8 @@ interface ToastOptions {
   variant?: ToastVariant
   /** ms; 0 = sticky (manual dismiss only). Default 4000. */
   duration?: number
+  /** Optional action button rendered inside the toast; dismisses on click. */
+  action?: { label: string; onClick: () => void }
 }
 
 // We attach a cleanup hook to the toast element so dismiss() can cancel
@@ -124,6 +126,39 @@ function injectStyles() {
       line-height: 1.4;
       color: var(--color-fg-2);
       white-space: pre-line;
+    }
+    .xt-toast__action {
+      align-self: flex-end;
+      margin-top: 0.25rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 1.75rem;
+      padding: 0 0.75rem;
+      border-radius: 0.5rem;
+      border: 1px solid var(--color-line);
+      background: var(--color-surface-2);
+      color: var(--color-fg);
+      font-size: var(--text-2xs, 0.6875rem);
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 150ms ${EASE}, border-color 150ms ${EASE};
+      -webkit-tap-highlight-color: transparent;
+    }
+    .xt-toast__action:hover,
+    .xt-toast__action:focus-visible {
+      background: var(--color-surface);
+      border-color: var(--color-accent);
+    }
+    .xt-toast__action:focus-visible {
+      outline: 2px solid var(--color-accent);
+      outline-offset: -1px;
+    }
+    @media (pointer: coarse) {
+      .xt-toast__action {
+        min-height: 2.75rem;
+        padding: 0 1rem;
+      }
     }
 
     .xt-toast__close {
@@ -269,6 +304,7 @@ export function toast(opts: ToastOptions): () => void {
     description,
     variant = "default",
     duration = DEFAULT_DURATION,
+    action,
   } = opts || ({} as ToastOptions)
   if (!title) return () => {}
 
@@ -295,6 +331,17 @@ export function toast(opts: ToastOptions): () => void {
     descEl.className = "xt-toast__desc"
     descEl.textContent = description
     body.appendChild(descEl)
+  }
+  if (action?.label && typeof action.onClick === "function") {
+    const actionBtn = document.createElement("button")
+    actionBtn.type = "button"
+    actionBtn.className = "xt-toast__action"
+    actionBtn.textContent = action.label
+    actionBtn.addEventListener("click", () => {
+      action.onClick()
+      dismiss(li)
+    })
+    body.appendChild(actionBtn)
   }
   li.appendChild(body)
 

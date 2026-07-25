@@ -5,17 +5,75 @@ import {
   ICON_PENCIL,
   ICON_CHECK,
   ICON_INFO,
+  ICON_DOWNLOAD,
 } from "./icons.js"
 import { escapeHtml, fmtAge } from "./format.js"
 import { t } from "./i18n.js"
-import { redactUrl } from "./log.js"
+import { redactUrl, log } from "./log.js"
 import { confirmDialog } from "./confirm-dialog.ts"
+import { toastSuccess, toastError } from "./toast.ts"
 import {
   getPlaylistHealth,
   refreshPlaylistHealth,
   fmtAgo,
   fmtAbsDate,
 } from "./playlist-health.ts"
+
+function editHrefFor(entry) {
+  return entry.type === "custom"
+    ? `/playlist-editor?id=${encodeURIComponent(entry._id)}`
+    : `/login?edit=${encodeURIComponent(entry._id)}`
+}
+
+const COMPACT_ICON_ACTION_CLASS =
+  "inline-flex items-center justify-center rounded-lg border border-line bg-bg h-8 w-8 text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:border-accent transition-colors outline-none"
+
+/** Resolve `entry`'s live catalog and save it as an .m3u file. */
+async function exportEntryM3U(entry) {
+  try {
+    const [{ buildM3UEntriesForEntry, saveM3UText, sanitizeFilename }, { serializeM3U }] = await Promise.all([
+      import("./export-m3u.ts"),
+      import("./m3u-serializer.ts"),
+    ])
+    const { entries, skippedCount } = await buildM3UEntriesForEntry(entry)
+    if (!entries.length) {
+      toastError(t("editor.toastExportEmpty"))
+      return
+    }
+    const text = serializeM3U(entries, { epgUrl: entry.epgUrl || null })
+    const filename = `${sanitizeFilename(entry.title || "playlist")}.m3u`
+    const outcome = await saveM3UText(filename, text)
+    if (outcome.cancelled) return
+    toastSuccess(t("editor.toastExportDone"), {
+      description: outcome.savedTo || undefined,
+    })
+    if (skippedCount > 0) {
+      toastError(t("editor.toastExportSkipped", { count: skippedCount }))
+    }
+  } catch (e) {
+    log.error("[xt:playlist-rows] export failed:", e)
+    toastError(t("editor.toastExportFail"), { description: (e && e.message) || undefined })
+  }
+}
+
+function buildExportButton(entry, isCompact) {
+  const btn = document.createElement("button")
+  btn.type = "button"
+  btn.title = t("editor.exportM3uAction")
+  btn.setAttribute("aria-label", t("editor.exportM3uAria", { title: entry.title }))
+  btn.className = isCompact
+    ? COMPACT_ICON_ACTION_CLASS
+    : "shrink-0 self-center rounded-md size-10 p-0 text-fg-3 hover:text-fg hover:bg-surface focus:text-fg focus:bg-surface inline-flex items-center justify-center transition-colors outline-none"
+  btn.innerHTML = `<span class="inline-flex text-sm">${ICON_DOWNLOAD}</span>`
+  btn.addEventListener("click", async (ev) => {
+    ev.stopPropagation()
+    if (btn.disabled) return
+    btn.disabled = true
+    await exportEntryM3U(entry)
+    btn.disabled = false
+  })
+  return btn
+}
 
 /**
  * @param {{
@@ -68,7 +126,13 @@ export function renderPlaylistRow({
     : "h-6 min-w-12 px-2 tracking-wide"
 
   const badgeLabel =
-    entry.type === "xtream" ? "XT" : entry.type === "local-m3u" ? "FILE" : "M3U"
+    entry.type === "xtream"
+      ? "XT"
+      : entry.type === "local-m3u"
+      ? "FILE"
+      : entry.type === "custom"
+      ? "CUST"
+      : "M3U"
 
   const pick = document.createElement("button")
   pick.type = "button"
@@ -122,7 +186,7 @@ export function renderPlaylistRow({
   info.setAttribute("aria-expanded", "false")
   info.setAttribute("aria-controls", panel.id)
   info.className =
-    "shrink-0 rounded-md px-1.5 py-2 text-fg-3 hover:text-fg hover:bg-surface focus:text-fg focus:bg-surface min-h-10 inline-flex items-center justify-center transition-colors outline-none aria-expanded:text-fg"
+    "shrink-0 self-center rounded-md size-10 p-0 text-fg-3 hover:text-fg hover:bg-surface focus:text-fg focus:bg-surface inline-flex items-center justify-center transition-colors outline-none aria-expanded:text-fg"
   info.innerHTML = `<span class="inline-flex text-base">${ICON_INFO}</span>`
   info.addEventListener("click", async (ev) => {
     ev.stopPropagation()
@@ -142,19 +206,21 @@ export function renderPlaylistRow({
 
   if (!isCompact) {
     const edit = document.createElement("a")
-    edit.href = `/login?edit=${encodeURIComponent(entry._id)}`
+    edit.href = editHrefFor(entry)
     edit.title = "Edit"
     edit.setAttribute("aria-label", t("playlist.editAria", { title: entry.title }))
     edit.className =
-      "shrink-0 rounded-md px-1.5 py-2 text-fg-3 hover:text-fg hover:bg-surface focus:text-fg focus:bg-surface min-h-10 inline-flex items-center justify-center transition-colors outline-none"
+      "shrink-0 self-center rounded-md size-10 p-0 text-fg-3 hover:text-fg hover:bg-surface focus:text-fg focus:bg-surface inline-flex items-center justify-center transition-colors outline-none"
     edit.innerHTML = `<span class="inline-flex text-base">${ICON_PENCIL}</span>`
+
+    const exportBtn = buildExportButton(entry, false)
 
     const del = document.createElement("button")
     del.type = "button"
     del.title = "Remove"
     del.setAttribute("aria-label", t("playlist.removeAria", { title: entry.title }))
     del.className =
-      "shrink-0 rounded-md px-1.5 py-2 text-fg-3 hover:text-bad hover:bg-bad/10 focus:text-bad focus:bg-bad/10 min-h-10 inline-flex items-center justify-center transition-colors outline-none"
+      "shrink-0 self-center rounded-md size-10 p-0 text-fg-3 hover:text-bad hover:bg-bad/10 focus:text-bad focus:bg-bad/10 inline-flex items-center justify-center transition-colors outline-none"
     del.innerHTML = `<span class="inline-flex text-base">${ICON_TRASH}</span>`
     del.addEventListener("click", async (ev) => {
       ev.stopPropagation()
@@ -168,7 +234,7 @@ export function renderPlaylistRow({
       await removeEntry(entry._id)
       if (onAfterRemove) await onAfterRemove()
     })
-    row.append(pick, info, edit, del)
+    row.append(pick, info, edit, exportBtn, del)
   } else {
     row.append(pick, info)
   }
@@ -448,24 +514,21 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
     actions.className = "inline-flex items-center gap-1"
 
     const edit = document.createElement("a")
-    edit.href = `/login?edit=${encodeURIComponent(entry._id)}`
+    edit.href = editHrefFor(entry)
     edit.title = t("playlist.editAria", { title: entry.title })
     edit.setAttribute("aria-label", t("playlist.editAria", { title: entry.title }))
-    edit.className =
-      "inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg px-2.5 py-1 text-2xs text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
-    edit.innerHTML =
-      `<span class="inline-flex text-sm">${ICON_PENCIL}</span>` +
-      `<span>${escapeHtml(t("playlist.edit") || "Edit")}</span>`
+    edit.className = COMPACT_ICON_ACTION_CLASS
+    edit.innerHTML = `<span class="inline-flex text-sm">${ICON_PENCIL}</span>`
+
+    const exportBtn = buildExportButton(entry, true)
 
     const del = document.createElement("button")
     del.type = "button"
     del.title = t("playlist.removeAria", { title: entry.title })
     del.setAttribute("aria-label", t("playlist.removeAria", { title: entry.title }))
     del.className =
-      "inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg px-2.5 py-1 text-2xs text-fg-2 hover:bg-bad/10 hover:text-bad hover:border-bad/40 focus-visible:bg-bad/10 focus-visible:text-bad focus-visible:border-bad/40 transition-colors"
-    del.innerHTML =
-      `<span class="inline-flex text-sm">${ICON_TRASH}</span>` +
-      `<span>${escapeHtml(t("playlist.remove") || "Remove")}</span>`
+      "inline-flex items-center justify-center rounded-lg border border-line bg-bg h-8 w-8 text-fg-2 hover:bg-bad/10 hover:text-bad hover:border-bad/40 focus-visible:bg-bad/10 focus-visible:text-bad focus-visible:border-bad/40 transition-colors outline-none"
+    del.innerHTML = `<span class="inline-flex text-sm">${ICON_TRASH}</span>`
     del.addEventListener("click", async (ev) => {
       ev.stopPropagation()
       const ok = await confirmDialog({
@@ -479,7 +542,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
       if (onAfterRemove) await onAfterRemove()
     })
 
-    actions.append(edit, del)
+    actions.append(edit, exportBtn, del)
     footer.appendChild(actions)
   }
 

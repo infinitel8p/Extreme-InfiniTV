@@ -687,6 +687,13 @@ dialog[open] .xt-wn-section {
     overflow: hidden;
 }
 
+.channel-row[data-unresolved="true"] .play-btn {
+    cursor: not-allowed;
+}
+.channel-row[data-unresolved="true"] .play-btn > div {
+    opacity: 0.55;
+}
+
 .map-row,
 .pick-row {
     content-visibility: auto;
@@ -2642,7 +2649,7 @@ details[open] > summary .changelog-chevron {
  * D-pad usability.
  * -------------------------------------------------------------------------*/
 html[data-perf-mode="on"] .brand-mark__trail { display: none; }
-html[data-perf-mode="on"] .brand-mark__base { opacity: 0.7; }
+html[data-perf-mode="on"] .brand-mark__mark { opacity: 0.7; }
 html[data-perf-mode="on"] .xt-focus-glide { display: none !important; }
 html[data-perf-mode="on"] .tile-enter,
 html[data-perf-mode="on"] .welcome-enter,

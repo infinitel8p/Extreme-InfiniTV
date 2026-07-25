@@ -37,5 +37,11 @@ dump/
 # local dev tools / scratch scripts
 tools/
 
+# downloaded ffmpeg sidecar binaries (fetched by ensure-ffmpeg-sidecar.mjs)
+src-tauri/binaries/
+
 cmds.md
 store-listings.md
+
+.ds*
+.de*

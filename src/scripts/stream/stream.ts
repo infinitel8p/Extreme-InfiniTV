@@ -5,10 +5,10 @@ import {
   loadCreds,
   getActiveEntry,
   getEntries,
-  fmtBase,
   safeHttpUrl,
   isLikelyM3USource,
   isLocalM3UHost,
+  isCustomHost,
   readLocalM3UContent,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
@@ -34,6 +34,7 @@ import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
 import { fmtChannelIdentity, formatBehindLive } from "@/scripts/lib/format.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
+import { buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { attachPopoverSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
@@ -43,13 +44,24 @@ import {
   launchAndroidNativeLive,
   subscribeAndroidNativeEvents,
 } from "@/scripts/lib/android-video-launcher.js"
-import { getAndroidNativePlayerEnabled } from "@/scripts/lib/app-settings.js"
+import { getAndroidNativePlayerEnabled, getAudioTranscodeAuto } from "@/scripts/lib/app-settings.js"
+import {
+  audioTranscodeAvailable,
+  refreshAudioTranscodeAvailability,
+  startAudioTranscode,
+  stopAudioTranscode,
+  onAudioTranscodeError,
+  rememberAudioTranscodeChannel,
+  forgetAudioTranscodeChannel,
+  isAudioTranscodeChannel,
+} from "@/scripts/lib/audio-proxy.ts"
 import { parseM3U as parseSharedM3U } from "@/scripts/lib/m3u-parser.ts"
 import {
   hasHevcNameHint,
   deviceSupportsHevc,
   classifyStartFailure,
   describeAudioCodec,
+  isUnsupportedAudioCodec,
 } from "@/scripts/lib/codec-hints.ts"
 import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
@@ -61,6 +73,7 @@ import {
   androidExternalAvailable,
   getExternalLauncher,
   isMacOS,
+  subscribeExternalPlayerExit,
 } from "@/scripts/lib/player-runtime.ts"
 import {
   getPlayerBackend,
@@ -71,6 +84,7 @@ import {
   getVideoScale,
   setVideoScale,
   VIDEO_SCALE_EVENT,
+  SETTINGS_EVENT,
 } from "@/scripts/lib/app-settings.js"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
@@ -80,6 +94,7 @@ import {
   type ExternalPlayerButtonHandle,
 } from "@/scripts/lib/external-player-button.js"
 import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE, ICON_ASPECT_RATIO } from "@/scripts/lib/icons.js"
+import { openAddToCustomDialog } from "@/scripts/lib/add-to-custom-dialog.ts"
 import {
   loadProgrammes,
   getProgrammesSync,
@@ -92,7 +107,6 @@ import {
 } from "@/scripts/lib/epg-data.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { maybeB64ToUtf8, escapeHtml } from "@/scripts/lib/b64-utf8.ts"
-import { attachRadioVisualizer, type RadioVisualizerHandle } from "@/scripts/lib/radio-visualizer.ts"
 import {
   channelSupportsCatchup,
   catchupWindowDays,
@@ -137,18 +151,7 @@ function setNowPlaying(id) {
 let creds = { host: "", port: "", user: "", pass: "" }
 
 function buildDirectLiveUrl(id, c = creds) {
-  const { host, port, user, pass } = c
-  const ext = c?.liveContainer === "ts" ? ".ts" : ".m3u8"
-  return (
-    fmtBase(host, port) +
-    "/live/" +
-    encodeURIComponent(user) +
-    "/" +
-    encodeURIComponent(pass) +
-    "/" +
-    encodeURIComponent(id) +
-    ext
-  )
+  return buildLiveStreamUrl(c, id, c?.liveContainer)
 }
 
 // ----------------------------
@@ -235,6 +238,7 @@ const epgDayIndicator = document.getElementById("epg-day-indicator")
 let activePlaylistId = ""
 let activePlaylistTitle = ""
 let activeTuningTransition: any = null
+let externalPresenceActive = false
 
 // The inline script in livetv.astro sets data-first-run optimistically from
 // localStorage["xt_playlists"]. On Tauri builds the real entry list lives in
@@ -259,6 +263,7 @@ document.addEventListener("xt:entries-updated", () => {
 
 document.addEventListener("xt:active-changed", () => {
   clearRichPresence().catch(() => {})
+  externalPresenceActive = false
   reconcileFirstRun()
   loadChannels()
 })
@@ -268,6 +273,11 @@ document.addEventListener("xt:cache-revalidated", (e) => {
   if (!detail || detail.entryId !== activePlaylistId) return
   if (detail.kind !== "live" && detail.kind !== "m3u") return
   loadChannels()
+})
+
+subscribeExternalPlayerExit(() => {
+  if (!externalPresenceActive) return
+  externalPresenceActive = false
 })
 
 document.addEventListener("xt:channel-epg-changed", (e) => {
@@ -569,13 +579,21 @@ function renderVirtual() {
     row.style.height = `${ROW_H}px`
     row.className = "channel-row flex w-full items-center gap-1"
     if (ch.id === currentlyPlayingId) row.dataset.nowPlaying = "true"
+    if (ch.unresolved) {
+      row.dataset.unresolved = "true"
+    }
 
     const playBtn = document.createElement("button")
     playBtn.type = "button"
     playBtn.dataset.role = "play"
     playBtn.className =
       "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
-    playBtn.title = ch.name || ""
+    playBtn.title = ch.unresolved
+      ? `${ch.name || ""} (${t("editor.unresolvedBadge")})`
+      : ch.name || ""
+    if (ch.unresolved) {
+      playBtn.setAttribute("aria-disabled", "true")
+    }
     playBtn.onclick = () => play(ch.id, ch.name)
 
     const logo = document.createElement("div")
@@ -704,6 +722,16 @@ function buildChannelStreamUrl(channel) {
   return buildDirectLiveUrl(channel.id)
 }
 
+/** CustomSource for "Add to custom playlist"; null when the active entry is itself custom or the channel has no usable URL. */
+function buildCustomSourceForChannel(channel) {
+  if (!activePlaylistId || isCustomHost(creds.host)) return null
+  if (isLikelyM3USource(creds.host, creds.user, creds.pass)) {
+    if (!channel.url) return null
+    return { kind: "m3u", entryId: activePlaylistId, url: channel.url, name: channel.name || "" }
+  }
+  return { kind: "xtream", entryId: activePlaylistId, streamId: channel.id }
+}
+
 function openChannelDiagnostic(channel) {
   if (!channel) return
   const url = buildChannelStreamUrl(channel)
@@ -795,7 +823,27 @@ function openChannelMenu(channel, anchor, point) {
     }
   })
 
-  menu.append(playItem, testItem, copyItem)
+  const customSource = buildCustomSourceForChannel(channel)
+  let addToCustomItem = null
+  if (customSource) {
+    addToCustomItem = document.createElement("button")
+    addToCustomItem.type = "button"
+    addToCustomItem.setAttribute("role", "menuitem")
+    addToCustomItem.className =
+      "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+    addToCustomItem.textContent = t("stream.menu.addToCustom")
+    addToCustomItem.addEventListener("click", () => {
+      closeChannelMenu()
+      void openAddToCustomDialog(customSource, {
+        name: channel.name || "",
+        logo: channel.logo ?? null,
+        group: channel.category ?? null,
+        tvgId: channel.tvgId ?? null,
+      })
+    })
+  }
+
+  menu.append(playItem, testItem, copyItem, ...(addToCustomItem ? [addToCustomItem] : []))
   document.body.appendChild(menu)
 
   const margin = 8
@@ -1363,6 +1411,14 @@ async function loadChannels() {
 
   try {
     if (isLikelyM3USource(creds.host, creds.user, creds.pass)) {
+      if (isCustomHost(creds.host)) {
+        const { ensureLive } = await import("@/scripts/lib/catalog.js")
+        const data = await ensureLive(creds, active._id)
+        indexDirectUrls(data)
+        categoryMap = null
+        paintChannels(data, false, 0)
+        return
+      }
       const { data, fromCache, age } = await cachedFetch(
         active._id,
         "m3u",
@@ -1463,6 +1519,35 @@ async function loadChannels() {
 let vjs = null
 let playSeq = 0
 let lastPlayContext = null
+// ffmpeg audio-transcode proxy state - desktop only, cached at boot.
+let audioProxyAvailable = false
+// Streams queued to remount through the proxy once (watchdog / failure-panel fix), consumed on the next play().
+const audioProxyOneShotFixSet = new Set()
+// Streams that hit a mid-play proxy error this session - never retried through the proxy again, to avoid a fallback loop.
+const audioProxyBypassSet = new Set()
+// Streams already auto-attempted through the proxy on a start failure this session - a start failure is a one-shot try, not a retry loop.
+const audioProxyAutoAttemptedSet = new Set()
+// Capped so a channel that keeps stalling right after retune bypasses the proxy instead of retuning forever.
+const audioProxyStallRetuneCounts = new Map()
+const AUDIO_PROXY_MAX_STALL_RETUNES = 2
+audioTranscodeAvailable()
+  .then((available) => {
+    audioProxyAvailable = available
+    log.log("[xt:livetv] audio transcode proxy available:", available)
+  })
+  .catch(() => {})
+onAudioTranscodeError((payload) => handleAudioProxyError(payload))
+// A custom ffmpeg path saved in Settings should take effect on Live TV without a restart.
+document.addEventListener(SETTINGS_EVENT, (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.key !== "ffmpegPath") return
+  refreshAudioTranscodeAvailability()
+    .then((available) => {
+      audioProxyAvailable = available
+      log.log("[xt:livetv] audio transcode proxy availability refreshed:", available)
+    })
+    .catch(() => {})
+})
 let tuningOverlaySentinel = null
 let stallSentinel = null
 let bufferingShownAt = 0
@@ -1646,29 +1731,47 @@ function giveUpOnPlayback(ctx) {
   hideBufferingChip()
   clearStallSentinel()
   clearDeadVideoWatchdog()
-  if (!ctx.started) {
-    // Bypasses getAndroidNativePlayerEnabled() on purpose: this is a one-shot-per-tune
-    // recovery so an unsupported channel still plays, independent of that opt-in setting.
-    if (!ctx.nativeFallbackTried && androidNativePlayerAvailable) {
-      ctx.nativeFallbackTried = true
-      const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
-      const failure = classifyStartFailure({
-        videoCodec: info.videoCodec,
-        audioCodec: info.audioCodec,
-        errorDetail: info.errorDetail,
-        nameHint: hasHevcNameHint(ctx.name),
-        deviceHevc: deviceSupportsHevc(),
+  clearDeadAudioWatchdog()
+  // "playing" can fire before an undecodable audio track kills the mount, so classify every terminal path.
+  const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
+  const failure = classifyStartFailure({
+    videoCodec: info.videoCodec,
+    audioCodec: info.audioCodec,
+    errorDetail: info.errorDetail,
+    nameHint: hasHevcNameHint(ctx.name),
+    deviceHevc: deviceSupportsHevc(),
+  })
+  log.log("[xt:livetv] start-failure verdict:", failure.kind, failure.codec)
+  // Bypasses getAndroidNativePlayerEnabled() on purpose: one-shot recovery, not the opt-in setting.
+  if (!ctx.started && !ctx.nativeFallbackTried && androidNativePlayerAvailable) {
+    ctx.nativeFallbackTried = true
+    if (failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio") {
+      toast({ title: t("stream.failure.nativeFallback") })
+      launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
+        if (launched) return
+        showPlaybackFailurePanel(ctx)
+        runAutoDiagnostic(ctx, null)
       })
-      if (failure.kind === "hevc" || failure.kind === "codec") {
-        toast({ title: t("stream.failure.nativeFallback") })
-        launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
-          if (launched) return
-          showPlaybackFailurePanel(ctx)
-          runAutoDiagnostic(ctx, null)
-        })
-        return
-      }
+      return
     }
+  }
+  // Independent of getAudioTranscodeAuto(), which only gates the mid-play watchdog.
+  if (
+    failure.kind === "audio" &&
+    canUseAudioProxy(ctx) &&
+    !ctx.audioProxied &&
+    !audioProxyAutoAttemptedSet.has(ctx.streamId)
+  ) {
+    audioProxyAutoAttemptedSet.add(ctx.streamId)
+    toast({ title: t("stream.audioFix.fixing"), duration: 4000 })
+    fixAudioNow(ctx)
+    return
+  }
+  // Proxied mount itself failed - bypass it so the panel/diagnostic doesn't offer Fix audio again.
+  if (failure.kind === "audio" && ctx.audioProxied) {
+    audioProxyBypassSet.add(ctx.streamId)
+  }
+  if (!ctx.started) {
     showPlaybackFailurePanel(ctx)
     runAutoDiagnostic(ctx, null)
     return
@@ -1714,12 +1817,6 @@ async function mountEmbeddedPlayer(backend, opts) {
   vjs = mounted.handle
   embeddedPlayerLiveUi = wantLiveUi
 
-  if (radioModeChannelId != null) {
-    unmountRadioVisualizer()
-    const wrap = getPlayerWrap()
-    if (wrap) mountRadioVisualizer(wrap)
-  }
-
   if (mounted.backend === "videojs") {
     focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
@@ -1727,17 +1824,25 @@ async function mountEmbeddedPlayer(backend, opts) {
   attachAudioOnlyDetection(vjs)
 
   vjs.on("playing", () => {
-    if (lastPlayContext) lastPlayContext.started = true
+    if (lastPlayContext) {
+      lastPlayContext.started = true
+      if (lastPlayContext.audioProxied) {
+        rememberAudioTranscodeChannel(activePlaylistId, String(lastPlayContext.streamId))
+      }
+    }
     if (catchupRetryResetTimer) clearTimeout(catchupRetryResetTimer)
+    const streamIdAtPlaying = lastPlayContext?.streamId
     catchupRetryResetTimer = setTimeout(() => {
       catchupAutoRetryCount = 0
       catchupSeekRemountCount = 0
+      if (streamIdAtPlaying != null) audioProxyStallRetuneCounts.delete(streamIdAtPlaying)
     }, CATCHUP_RETRY_RESET_AFTER_MS)
     hideTuningOverlay()
     hideBufferingChip()
     clearStallSentinel()
     hidePlaybackFailurePanel()
     armDeadVideoWatchdog()
+    armDeadAudioWatchdog()
   })
   vjs.on("waiting", () => {
     showBufferingChip()
@@ -1811,6 +1916,9 @@ async function mountEmbeddedPlayer(backend, opts) {
       message: err?.message,
       streamId: ctx.streamId,
     })
+    // Stops a timer armed by an earlier "playing" from firing against the mount we're replacing.
+    clearDeadVideoWatchdog()
+    clearDeadAudioWatchdog()
     if (!ctx.retried) {
       ctx.retried = true
       const seqAtRetry = ctx.seq
@@ -1820,6 +1928,10 @@ async function mountEmbeddedPlayer(backend, opts) {
         if (!ctx.isLive) {
           // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
           giveUpOnPlayback(ctx)
+          return
+        }
+        if (ctx.audioProxied) {
+          retuneProxiedAudioMount(ctx)
           return
         }
         try {
@@ -1838,27 +1950,105 @@ async function mountEmbeddedPlayer(backend, opts) {
 
 /** Channel ID currently rendered in radio mode (-1 = none). */
 let radioModeChannelId: number | null = null
-let radioVisualizer: RadioVisualizerHandle | null = null
+let radioElapsedTimer: ReturnType<typeof setInterval> | null = null
+let radioIcyAbort: AbortController | null = null
 
 function getPlayerWrap(): HTMLElement | null {
   return document.getElementById("player-wrap")
 }
 
-function mountRadioVisualizer(wrap: HTMLElement) {
-  if (radioVisualizer) return
-  const host = wrap.querySelector<HTMLElement>("[data-radio-visualizer-host]")
-  const videoEl = vjs?.getMediaElement?.() ?? wrap.querySelector<HTMLVideoElement>("video")
-  if (!host || !videoEl) return
-  radioVisualizer = attachRadioVisualizer(host, videoEl)
+function fmtElapsed(totalSeconds: number): string {
+  const whole = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(whole / 3600)
+  const minutes = Math.floor((whole % 3600) / 60)
+  const seconds = whole % 60
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`
 }
 
-function unmountRadioVisualizer() {
-  if (!radioVisualizer) return
-  try { radioVisualizer.detach() } catch {}
-  radioVisualizer = null
+const RADIO_CHIP_CLASS =
+  "inline-flex items-center rounded-md bg-surface-2 ring-1 ring-line px-2 py-0.5 text-2xs font-medium uppercase tracking-wide text-fg-2"
+
+function radioCodecFromUrl(url: string): string | null {
+  const lower = url.toLowerCase()
+  if (/\b(aac|m4a)\b/.test(lower)) return "AAC"
+  if (/\bopus\b/.test(lower)) return "Opus"
+  if (/\b(ogg|vorbis)\b/.test(lower)) return "OGG"
+  if (/\bflac\b/.test(lower)) return "FLAC"
+  if (/\b(mp3|mpeg)\b/.test(lower)) return "MP3"
+  return null
 }
 
-function setRadioMode(channel: { id: number; name?: string; logo?: string | null }) {
+function renderRadioTags(wrap: HTMLElement, genre: string | null, quality: string | null) {
+  const tags = wrap.querySelector<HTMLElement>("[data-radio-tags]")
+  const row = wrap.querySelector<HTMLElement>("[data-radio-metarow]")
+  if (!tags || !row) return
+  const chips: string[] = []
+  if (genre) chips.push(`<span class="${RADIO_CHIP_CLASS}">${escapeHtml(genre)}</span>`)
+  if (quality) chips.push(`<span class="${RADIO_CHIP_CLASS}">${escapeHtml(quality)}</span>`)
+  tags.innerHTML = chips.join("")
+  row.hidden = false
+}
+
+function startRadioElapsed(wrap: HTMLElement) {
+  if (radioElapsedTimer) clearInterval(radioElapsedTimer)
+  const elapsedWrap = wrap.querySelector<HTMLElement>("[data-radio-elapsed]")
+  const timeEl = wrap.querySelector<HTMLElement>("[data-radio-elapsed-time]")
+  if (!elapsedWrap || !timeEl) return
+  const startedAt = Date.now()
+  const tick = () => { timeEl.textContent = fmtElapsed((Date.now() - startedAt) / 1000) }
+  tick()
+  elapsedWrap.hidden = false
+  wrap.querySelector<HTMLElement>("[data-radio-metarow]")?.removeAttribute("hidden")
+  radioElapsedTimer = setInterval(tick, 1000)
+}
+
+// ICY response headers carry the real station metadata; browser fetch hides them, tauri-plugin-http does not.
+async function fetchRadioIcy(wrap: HTMLElement, channelId: number, url: string, genreFallback: string | null) {
+  if (!/^https?:\/\//i.test(url)) return
+  radioIcyAbort?.abort()
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null
+  radioIcyAbort = controller
+  const timer = controller ? setTimeout(() => controller.abort(), 5000) : null
+  try {
+    const response = await providerFetch(url, {
+      method: "GET",
+      headers: { Range: "bytes=0-1" },
+      signal: controller?.signal,
+    })
+    if (radioModeChannelId !== channelId) {
+      void response.body?.cancel?.()?.catch?.(() => {})
+      return
+    }
+    const header = (name: string) => (response.headers.get(name) || "").trim() || null
+    const contentType = (response.headers.get("content-type") || "").toLowerCase()
+    const codec = contentType.includes("aac")
+      ? "AAC"
+      : contentType.includes("opus")
+      ? "Opus"
+      : contentType.includes("ogg")
+      ? "OGG"
+      : contentType.includes("mpeg")
+      ? "MP3"
+      : radioCodecFromUrl(url)
+    const bitrate = header("icy-br")
+    const quality = codec ? (bitrate ? `${codec} · ${bitrate}k` : codec) : bitrate ? `${bitrate}k` : null
+    renderRadioTags(wrap, header("icy-genre") || genreFallback, quality)
+    const description = header("icy-description")
+    const descEl = wrap.querySelector<HTMLElement>("[data-radio-desc]")
+    if (descEl && description && description.toLowerCase() !== (header("icy-name") || "").toLowerCase()) {
+      descEl.textContent = description
+      descEl.hidden = false
+    }
+    void response.body?.cancel?.()?.catch?.(() => {})
+  } catch {
+    // Offline / probe rejected: keep the client-derived tags.
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+function setRadioMode(channel: { id: number; name?: string; logo?: string | null; category?: string | null; url?: string | null }) {
   const wrap = getPlayerWrap()
   if (!wrap) return
   wrap.dataset.radioMode = "on"
@@ -1878,8 +2068,15 @@ function setRadioMode(channel: { id: number; name?: string; logo?: string | null
   }
   radioModeChannelId = channel.id
   paintRadioNowPlaying(channel.id)
+
+  const genre = channel.category && channel.category !== t("stream.uncategorized") ? channel.category : null
+  const descEl = wrap.querySelector<HTMLElement>("[data-radio-desc]")
+  if (descEl) { descEl.textContent = ""; descEl.hidden = true }
+  renderRadioTags(wrap, genre, channel.url ? radioCodecFromUrl(channel.url) : null)
+  startRadioElapsed(wrap)
+  if (channel.url) fetchRadioIcy(wrap, channel.id, channel.url, genre)
+
   wrap.setAttribute("aria-label", t("livetv.radioAriaLabel", { name: channel.name || "" }) || `Radio: ${channel.name || ""}`)
-  mountRadioVisualizer(wrap)
 }
 
 function clearRadioMode() {
@@ -1892,8 +2089,16 @@ function clearRadioMode() {
     nowEl.textContent = ""
     nowEl.hidden = true
   }
+  if (radioElapsedTimer) { clearInterval(radioElapsedTimer); radioElapsedTimer = null }
+  radioIcyAbort?.abort()
+  radioIcyAbort = null
+  const tags = wrap.querySelector<HTMLElement>("[data-radio-tags]")
+  if (tags) tags.innerHTML = ""
+  wrap.querySelector<HTMLElement>("[data-radio-metarow]")?.setAttribute("hidden", "")
+  wrap.querySelector<HTMLElement>("[data-radio-elapsed]")?.setAttribute("hidden", "")
+  const descEl = wrap.querySelector<HTMLElement>("[data-radio-desc]")
+  if (descEl) { descEl.textContent = ""; descEl.hidden = true }
   radioModeChannelId = null
-  unmountRadioVisualizer()
 }
 
 function paintRadioNowPlaying(channelId: number) {
@@ -2149,6 +2354,10 @@ function armStallSentinel() {
       giveUpOnPlayback(ctx)
       return
     }
+    if (ctx.audioProxied) {
+      retuneProxiedAudioMount(ctx)
+      return
+    }
     try {
       vjs.reset?.()
       vjs.src({ src: ctx.src, type: ctx.mime || "application/x-mpegURL", isLive: ctx.isLive ?? true })
@@ -2235,6 +2444,145 @@ function armDeadVideoWatchdog() {
     hideBufferingChip()
     clearStallSentinel()
     showPlaybackFailurePanel(ctx, { decodeFailure: true })
+  }
+  schedule()
+}
+
+// ----------------------------
+// Dead-audio watchdog
+// ----------------------------
+// AC-3/E-AC-3 can enter a SourceBuffer and fire `playing` yet never decode; advisory only.
+const DEAD_AUDIO_CHECK_MS = 5000
+const DEAD_AUDIO_MAX_CHECKS = 6
+const DEAD_AUDIO_MIN_PLAYED_S = 3
+const DEAD_AUDIO_MIN_FRAMES = 25
+let deadAudioTimer = null
+let deadAudioNotifiedSeq = -1
+
+function clearDeadAudioWatchdog() {
+  if (deadAudioTimer) {
+    clearTimeout(deadAudioTimer)
+    deadAudioTimer = null
+  }
+}
+
+function audioDecodedByteCount(videoEl) {
+  const bytes = videoEl.webkitAudioDecodedByteCount
+  return typeof bytes === "number" ? bytes : null
+}
+
+// A channel that already fell back to direct play this session must not be re-routed.
+function canUseAudioProxy(ctx) {
+  return (
+    audioProxyAvailable &&
+    !!ctx?.isLive &&
+    !catchupSession &&
+    !audioProxyBypassSet.has(ctx.streamId)
+  )
+}
+
+function fixAudioNow(ctx) {
+  audioProxyOneShotFixSet.add(ctx.streamId)
+  void play(ctx.streamId, ctx.name)
+}
+
+// A proxied mount's local URL is single-consumer: a same-src reconnect 409s and leaves a dead player.
+function retuneProxiedAudioMount(ctx) {
+  const attempts = (audioProxyStallRetuneCounts.get(ctx.streamId) || 0) + 1
+  audioProxyStallRetuneCounts.set(ctx.streamId, attempts)
+  if (attempts > AUDIO_PROXY_MAX_STALL_RETUNES) {
+    audioProxyBypassSet.add(ctx.streamId)
+  } else if (!isAudioTranscodeChannel(activePlaylistId, String(ctx.streamId))) {
+    audioProxyOneShotFixSet.add(ctx.streamId)
+  }
+  void play(ctx.streamId, ctx.name)
+}
+
+// The Rust side has already torn the session down by the time this fires.
+function handleAudioProxyError(payload) {
+  const ctx = lastPlayContext
+  if (!ctx || !ctx.audioProxied) return
+  if (!payload || payload.sessionId !== ctx.audioProxySessionId) return
+  audioProxyBypassSet.add(ctx.streamId)
+  // Never reached playing state - this channel's proxy path is broken, not a transient blip. Don't keep re-attempting it every session.
+  if (!ctx.started) {
+    forgetAudioTranscodeChannel(activePlaylistId, String(ctx.streamId))
+  }
+  log.warn("[xt:livetv] audio transcode proxy failed mid-play, falling back to direct:", payload.detail)
+  toast({ title: t("stream.audioFix.fallback"), duration: 7000 })
+  void play(ctx.streamId, ctx.name)
+}
+
+function armDeadAudioWatchdog() {
+  clearDeadAudioWatchdog()
+  const ctx = lastPlayContext
+  if (!ctx) return
+  if (ctx.audioProxied) return
+  if (deadAudioNotifiedSeq === ctx.seq) return
+  const seqAtArm = ctx.seq
+  const wrap = getPlayerWrap()
+  const videoAtArm = wrap?.querySelector("video")
+  if (!videoAtArm) return
+  const baselineTime = videoAtArm.currentTime || 0
+  let attempts = 0
+  const schedule = () => {
+    deadAudioTimer = setTimeout(check, DEAD_AUDIO_CHECK_MS)
+  }
+  const check = () => {
+    deadAudioTimer = null
+    if (seqAtArm !== playSeq) return
+    const currentWrap = getPlayerWrap()
+    if (!currentWrap || currentWrap.dataset.radioMode === "on") return
+    const video = currentWrap.querySelector("video")
+    if (!video || video.paused) return
+    if (video.muted || video.volume === 0) return
+    const audioBytes = audioDecodedByteCount(video)
+    log.log("[xt:livetv] dead-audio check", {
+      audioBytes,
+      frames: decodedFrameCount(video),
+      videoWidth: video.videoWidth,
+      played: (video.currentTime || 0) - baselineTime,
+    })
+    if (audioBytes === null || audioBytes > 0) return
+    const frames = decodedFrameCount(video)
+    if (frames === null || frames === 0) return
+    if (video.videoWidth === 0) return
+    attempts++
+    // Frame count also qualifies so a stuttering stream (slow currentTime) still gets verdicts.
+    const playedEnough =
+      (video.currentTime || 0) - baselineTime >= DEAD_AUDIO_MIN_PLAYED_S ||
+      frames >= DEAD_AUDIO_MIN_FRAMES
+    if (!playedEnough) {
+      if (attempts < DEAD_AUDIO_MAX_CHECKS) schedule()
+      return
+    }
+    deadAudioNotifiedSeq = seqAtArm
+    const info = vjs?.codecInfo?.()
+    log.warn("[xt:livetv] video decoding but zero audio bytes decoded - audio codec likely undecodable", {
+      streamId: ctx.streamId,
+      audioCodec: info?.audioCodec,
+    })
+    const audioUnsupported = isUnsupportedAudioCodec(info?.audioCodec)
+    if (canUseAudioProxy(ctx)) {
+      if (getAudioTranscodeAuto()) {
+        toast({ title: t("stream.audioFix.fixing"), duration: 4000 })
+        fixAudioNow(ctx)
+      } else {
+        const title = audioUnsupported
+          ? t("stream.failure.audioUnsupportedFixable", { codec: describeAudioCodec(info.audioCodec) })
+          : t("stream.failure.audioSilentFixable")
+        toast({
+          title,
+          duration: 12000,
+          action: { label: t("stream.audioFix.action"), onClick: () => fixAudioNow(ctx) },
+        })
+      }
+    } else {
+      const title = audioUnsupported
+        ? t("stream.failure.audioUnsupported", { codec: describeAudioCodec(info.audioCodec) })
+        : t("stream.failure.audioSilent")
+      toast({ title, duration: 7000 })
+    }
   }
   schedule()
 }
@@ -2359,9 +2707,11 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   const builtinCantDecode =
     failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio"
   const hevcInstall = failure.kind === "hevc" && isWindowsDesktop()
+  const audioProxyEligible = failure.kind === "audio" && canUseAudioProxy(ctx)
   const externalAvailable = externalPlayersAvailable || androidExternalAvailable
   let primaryKind = "retry"
   if (hevcInstall) primaryKind = "hevc"
+  else if (audioProxyEligible) primaryKind = "audioFix"
   else if (builtinCantDecode && externalAvailable) primaryKind = "external"
 
   const primaryClass =
@@ -2393,6 +2743,18 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
     })
   }
 
+  let audioFixBtn = null
+  if (audioProxyEligible) {
+    audioFixBtn = document.createElement("button")
+    audioFixBtn.type = "button"
+    audioFixBtn.className = primaryKind === "audioFix" ? primaryClass : secondaryClass
+    audioFixBtn.textContent = t("stream.audioFix.action")
+    audioFixBtn.addEventListener("click", () => {
+      hidePlaybackFailurePanel()
+      fixAudioNow(ctx)
+    })
+  }
+
   let extBtn = null
   if (externalAvailable) {
     extBtn = document.createElement("button")
@@ -2419,15 +2781,21 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
       beforeLaunch: () => {
         hidePlaybackFailurePanel()
       },
+      afterLaunch: () => {
+        const channel = all.find((entry) => entry.id === ctx.streamId)
+        pushDiscordPresence(channel || { id: ctx.streamId, name: ctx.name }, "live")
+        externalPresenceActive = true
+      },
     })
   }
 
   // Primary leads; retry is always offered as the fallback.
   const orderedButtons = []
   if (primaryKind === "hevc" && hevcBtn) orderedButtons.push(hevcBtn)
+  else if (primaryKind === "audioFix" && audioFixBtn) orderedButtons.push(audioFixBtn)
   else if (primaryKind === "external" && extBtn) orderedButtons.push(extBtn)
   else orderedButtons.push(retryBtn)
-  for (const btn of [hevcBtn, extBtn, retryBtn]) {
+  for (const btn of [hevcBtn, audioFixBtn, extBtn, retryBtn]) {
     if (btn && !orderedButtons.includes(btn)) orderedButtons.push(btn)
   }
   for (const btn of orderedButtons) actions.appendChild(btn)
@@ -2447,6 +2815,8 @@ function runScanLineSweep() {
 
 window.addEventListener("pagehide", () => {
   clearRichPresence().catch(() => {})
+  externalPresenceActive = false
+  void stopAudioTranscode()
 })
 
 function pushDiscordPresence(channel, kind) {
@@ -2563,8 +2933,17 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
 }
 
 async function play(streamId, name) {
+  const targetChannel = all.find((channel) => channel.id === streamId)
+  if (targetChannel?.unresolved) {
+    void stopAudioTranscode()
+    toastError(t("stream.error.cantPlay", { channel: name || targetChannel.name || `#${streamId}` }), {
+      description: t("stream.error.checkConnection"),
+    })
+    return
+  }
   hidePlaybackFailurePanel()
   clearDeadVideoWatchdog()
+  clearDeadAudioWatchdog()
   catchupSession = null
   catchupAutoRetryCount = 0
   catchupSeekRemountCount = 0
@@ -2601,18 +2980,21 @@ async function play(streamId, name) {
     const backendIsExternal =
       selectedBackend === "mpv" || selectedBackend === "vlc"
     if (!backendIsExternal) {
+      void stopAudioTranscode()
       const externalKind =
         externalPlayersAvailable ? pickConfiguredExternal() : null
       const channelHeaders = streamHeadersById.get(streamId) || null
       if (externalKind) {
+        const channel = all.find((entry) => entry.id === streamId)
         try {
           await launchExternalLive(externalKind, src, channelHeaders)
           showExternalPlayerEmptyState(externalKind, name)
+          pushDiscordPresence(channel || { id: streamId, name }, "live")
+          externalPresenceActive = true
         } catch (err) {
           surfaceLaunchError(err, externalKind)
         }
         if (activePlaylistId) {
-          const channel = all.find((channel) => channel.id === streamId)
           pushRecent(activePlaylistId, "live", streamId, name, channel?.logo || null)
         }
         setNowPlaying(streamId)
@@ -2719,9 +3101,12 @@ async function play(streamId, name) {
   const channelDrm = streamDrmById.get(streamId) || null
 
   if (backend === "mpv" || backend === "vlc") {
+    void stopAudioTranscode()
     try {
       await launchExternalLive(backend, src, channelHeaders)
       showExternalPlayerEmptyState(backend, name)
+      pushDiscordPresence(channel || { id: streamId, name }, "live")
+      externalPresenceActive = true
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
@@ -2732,10 +3117,44 @@ async function play(streamId, name) {
   resetEmptyState()
   document.getElementById("player")?.removeAttribute("hidden")
   if (channel?.isRadio) {
-    setRadioMode({ id: streamId, name, logo: channel.logo ?? null })
+    setRadioMode({ id: streamId, name, logo: channel.logo ?? null, category: channel.category ?? null, url: src })
   } else {
     clearRadioMode()
   }
+
+  const wantsAudioProxyFix = audioProxyOneShotFixSet.has(streamId)
+  const useAudioProxy =
+    audioProxyAvailable &&
+    !audioProxyBypassSet.has(streamId) &&
+    (wantsAudioProxyFix || isAudioTranscodeChannel(activePlaylistId, String(streamId)))
+
+  let mountSrc = src
+  let mountMime = "application/x-mpegURL"
+  let audioProxied = false
+  let audioProxySessionId = null
+
+  if (useAudioProxy) {
+    const proxyUserAgent = channelHeaders?.userAgent || getUserAgent() || null
+    const proxySession = await startAudioTranscode(src, proxyUserAgent)
+    audioProxyOneShotFixSet.delete(streamId)
+    if (myRequest !== catchupRequestSeq) {
+      if (proxySession) void stopAudioTranscode(proxySession.sessionId)
+      return
+    }
+    if (proxySession) {
+      mountSrc = proxySession.localUrl
+      mountMime = "video/mp2t"
+      audioProxied = true
+      audioProxySessionId = proxySession.sessionId
+    } else {
+      // Registration itself failed - retrying would just loop the watchdog forever. Bypass the proxy for this channel this session.
+      audioProxyBypassSet.add(streamId)
+      void stopAudioTranscode()
+    }
+  } else {
+    void stopAudioTranscode()
+  }
+
   const player = await ensureEmbeddedPlayer(backend)
   // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
   if (myRequest !== catchupRequestSeq) {
@@ -2749,24 +3168,27 @@ async function play(streamId, name) {
   lastPlayContext = {
     streamId,
     name,
-    src,
+    src: mountSrc,
     seq,
     retried: false,
     started: false,
     nativeFallbackTried: false,
-    mime: "application/x-mpegURL",
+    mime: mountMime,
     isLive: true,
+    audioProxied,
+    audioProxySessionId,
   }
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
-  try { player.src({ src, type: "application/x-mpegURL", drm: channelDrm }) } catch {}
+  try { player.src({ src: mountSrc, type: mountMime, drm: audioProxied ? null : channelDrm }) } catch {}
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch(() => {})
   }
   applyVideoScale()
   pushDiscordPresence(channel || { id: streamId, name }, "live")
+  externalPresenceActive = false
 
   paintEpgSidePanel(streamId)
 }
@@ -2905,6 +3327,12 @@ function resolveProgrammeWindowAt(channel, atUtcMs) {
 /** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
 async function playCatchup(channel, opts) {
   if (!currentEl || !channel || !activePlaylistId) return false
+  if (channel.unresolved) {
+    toastError(t("stream.error.cantPlay", { channel: channel.name || `#${channel.id}` }), {
+      description: t("stream.error.checkConnection"),
+    })
+    return false
+  }
   // Reachable via a stale/hand-crafted deep link - the channel itself may no longer offer catch-up.
   if (!channelSupportsCatchup(channel)) {
     toastError(t("catchup.notAvailable"))
@@ -2925,6 +3353,7 @@ async function playCatchup(channel, opts) {
 
   hidePlaybackFailurePanel()
   clearDeadVideoWatchdog()
+  clearDeadAudioWatchdog()
   clearRadioMode()
 
   // A different channel (or no active session) is a fresh pick, not a same-session remount/auto-advance - don't let stale strikes leak in.
@@ -3364,6 +3793,11 @@ function appendExternalLaunchButton(parent, streamId, src, name) {
     beforeLaunch: () => {
       suppressPauseTrackingUntilMs = Date.now() + 500
       try { vjs?.pause?.() } catch {}
+    },
+    afterLaunch: () => {
+      const channel = all.find((entry) => entry.id === streamId)
+      pushDiscordPresence(channel || { id: streamId, name }, "live")
+      externalPresenceActive = true
     },
   })
 }

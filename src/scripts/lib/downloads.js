@@ -13,6 +13,9 @@ import { safeHttpUrl } from "@/scripts/lib/creds.js"
 import * as AFs from "@/scripts/lib/android-fs.js"
 import { notify } from "@/scripts/lib/notify"
 import { t } from "@/scripts/lib/i18n.js"
+import { sanitizeFilename } from "@/scripts/lib/format.ts"
+
+export { sanitizeFilename }
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -76,7 +79,7 @@ export function isDownloadable() {
   return isTauri
 }
 
-export async function getLocalPlayableSrc(remoteUrl) {
+async function findCompletedDownloadPath(remoteUrl) {
   if (!isTauri || !remoteUrl) return null
   const item = readState().find(
     (d) => d.url === remoteUrl && d.status === "done" && d.path
@@ -91,12 +94,7 @@ export async function getLocalPlayableSrc(remoteUrl) {
       )
       return null
     }
-    try {
-      return await AFs.convertSrc(item.path)
-    } catch (e) {
-      log.error("[xt:download] android convertSrc failed:", e)
-      return null
-    }
+    return item.path
   }
 
   try {
@@ -112,13 +110,35 @@ export async function getLocalPlayableSrc(remoteUrl) {
     log.error("[xt:download] exists() failed for", item.path, e)
     return null
   }
+  return item.path
+}
+
+export async function getLocalPlayableSrc(remoteUrl) {
+  const path = await findCompletedDownloadPath(remoteUrl)
+  if (!path) return null
+
+  if (AFs.isAndroidUri(path)) {
+    try {
+      return await AFs.convertSrc(path)
+    } catch (e) {
+      log.error("[xt:download] android convertSrc failed:", e)
+      return null
+    }
+  }
+
   try {
     const { convertFileSrc } = await import("@tauri-apps/api/core")
-    return convertFileSrc(item.path)
+    return convertFileSrc(path)
   } catch (e) {
     log.error("[xt:download] convertFileSrc failed:", e)
     return null
   }
+}
+
+/** Raw download path for external players; null on Android. */
+export async function getLocalDownloadPath(remoteUrl) {
+  if (AFs.isAndroidFsActive()) return null
+  return findCompletedDownloadPath(remoteUrl)
 }
 
 /**
@@ -139,30 +159,6 @@ export async function tryAndroidIntentPlayback(remoteUrl) {
   if (!item || !AFs.isAndroidUri(item.path)) return false
   log.log("[xt:download] handing off to system video app:", item.path)
   return await AFs.viewFileExternally(item.path)
-}
-
-const WIN_RESERVED_NAMES = new Set([
-  "CON", "PRN", "AUX", "NUL",
-  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-])
-
-export function sanitizeFilename(name) {
-  let s = String(name || "download")
-    .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[. ]+$/g, "")
-    .replace(/^\.+/, "")
-    .slice(0, 200)
-    .replace(/[. ]+$/g, "")
-
-  if (!s) return "download"
-
-  const stem = s.split(".")[0].toUpperCase()
-  if (WIN_RESERVED_NAMES.has(stem)) s = "_" + s
-
-  return s
 }
 
 export function inferExt(url, fallback = "mp4") {

@@ -32,6 +32,8 @@ import android.util.Base64
 import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
 import java.io.File
+import android.os.Handler
+import android.os.Looper
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -40,6 +42,7 @@ import android.webkit.WebViewClient
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import app.tauri.plugin.PluginManager
+import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 
 @RequiresApi(Build.VERSION_CODES.O)
@@ -666,6 +669,253 @@ class AndroidVideoBridge(private val activity: android.app.Activity) {
   }
 }
 
+// "Add from website" sniffer: throwaway offscreen WebView, URL prefilter only; sniff-classify.ts classifies.
+class SnifferBridge(
+  private val activity: TauriActivity,
+  private val hostedWebViewRef: () -> WebView?,
+) {
+  companion object {
+    private const val TAG = "AndroidSniffer"
+    private val MANIFEST_EXTENSION_RX = Regex("\\.(m3u8|mpd)(?:[?#]|$)", RegexOption.IGNORE_CASE)
+    private val MANIFEST_HINT_RX = Regex("mpegurl|dash", RegexOption.IGNORE_CASE)
+    private const val NUDGE_DELAY_MS = 900L
+    private const val THROWAWAY_SIZE_PX = 1
+    private const val MAX_CANDIDATE_DISPATCHES = 100
+
+    // Mirrors MAX_FIELD_LEN in sniffer.rs.
+    private const val MAX_FIELD_BYTES = 8 * 1024
+  }
+
+  private val handler = Handler(Looper.getMainLooper())
+  private var throwawayWebView: WebView? = null
+  private var timeoutRunnable: Runnable? = null
+
+  @Volatile
+  private var lastFavicon: String? = null
+
+  // shouldInterceptRequest can run off the UI thread, so this page-controlled bookkeeping needs thread-safe primitives.
+  private val reportedCandidateUrls: MutableSet<String> =
+    java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+  private val candidateDispatchCount = java.util.concurrent.atomic.AtomicInteger(0)
+  private val drmReported = java.util.concurrent.atomic.AtomicBoolean(false)
+  private val faviconReported = java.util.concurrent.atomic.AtomicBoolean(false)
+
+  // Bumped on start/teardown so in-flight work from an old session is dropped.
+  private val sniffGeneration = java.util.concurrent.atomic.AtomicLong(0L)
+
+  // addJavascriptInterface reflects every @JavascriptInterface method regardless of name, so the throwaway WebView gets this report-only object, never SnifferBridge itself.
+  inner class SnifferReportBridge {
+    @JavascriptInterface
+    fun reportDrm(generation: String?) {
+      this@SnifferBridge.reportDrm(generation)
+    }
+
+    @JavascriptInterface
+    fun reportFavicon(favicon: String?, generation: String?) {
+      this@SnifferBridge.reportFavicon(favicon, generation)
+    }
+  }
+
+  @JavascriptInterface
+  fun startSniff(pageUrl: String?, timeoutMs: Int) {
+    val url = pageUrl?.trim().orEmpty()
+    if (url.isEmpty()) return
+    val scheme = Uri.parse(url).scheme
+    if (!scheme.equals("http", ignoreCase = true) && !scheme.equals("https", ignoreCase = true)) {
+      Log.w(TAG, "startSniff rejected non-http(s) url")
+      activity.runOnUiThread { teardown(fireDone = true) }
+      return
+    }
+    activity.runOnUiThread {
+      // Firing xt:sniff-done here would race the listeners this very call just attached.
+      teardown(fireDone = false)
+      val generation = sniffGeneration.incrementAndGet()
+      lastFavicon = null
+      reportedCandidateUrls.clear()
+      candidateDispatchCount.set(0)
+      drmReported.set(false)
+      faviconReported.set(false)
+      try {
+        val webView = WebView(activity)
+        throwawayWebView = webView
+        webView.settings.javaScriptEnabled = true
+        webView.settings.mediaPlaybackRequiresUserGesture = false
+        webView.settings.domStorageEnabled = true
+        webView.settings.allowFileAccess = false
+        webView.settings.allowContentAccess = false
+        webView.addJavascriptInterface(SnifferReportBridge(), "AndroidSnifferInternal")
+        webView.webViewClient = object : WebViewClient() {
+          override fun shouldInterceptRequest(
+            view: WebView,
+            request: WebResourceRequest,
+          ): WebResourceResponse? {
+            maybeEmitCandidate(request, generation)
+            return null
+          }
+
+          override fun onPageFinished(view: WebView, finishedUrl: String) {
+            nudgePlayback(view, generation)
+          }
+        }
+        val decor = activity.window.decorView as? ViewGroup
+        decor?.addView(webView, FrameLayout.LayoutParams(THROWAWAY_SIZE_PX, THROWAWAY_SIZE_PX))
+        timeoutRunnable = Runnable {
+          if (!isCurrentSniff(generation)) return@Runnable
+          teardown(fireDone = true)
+        }
+        handler.postDelayed(timeoutRunnable!!, timeoutMs.coerceAtLeast(1000).toLong())
+        webView.loadUrl(url)
+      } catch (error: Throwable) {
+        Log.w(TAG, "startSniff failed: $error")
+        teardown(fireDone = true)
+      }
+    }
+  }
+
+  @JavascriptInterface
+  fun cancelSniff() {
+    activity.runOnUiThread { teardown(fireDone = true) }
+  }
+
+  // Called from the injected script on the page's first EME handshake; URLs alone can't reveal DRM.
+  @JavascriptInterface
+  fun reportDrm(generation: String?) {
+    val reported = parseGeneration(generation) ?: return
+    if (!isCurrentSniff(reported)) return
+    if (!drmReported.compareAndSet(false, true)) return
+    dispatchEvent("xt:sniff-drm", JSONObject(), reported)
+  }
+
+  @JavascriptInterface
+  fun reportFavicon(favicon: String?, generation: String?) {
+    val reported = parseGeneration(generation) ?: return
+    if (!isCurrentSniff(reported)) return
+    val trimmed = favicon?.trim().orEmpty()
+    if (trimmed.isEmpty() || !withinFieldLimit(trimmed)) return
+    if (!faviconReported.compareAndSet(false, true)) return
+    lastFavicon = trimmed
+  }
+
+  private fun maybeEmitCandidate(request: WebResourceRequest, generation: Long) {
+    if (!isCurrentSniff(generation)) return
+    val url = request.url?.toString() ?: return
+    if (!looksLikeManifest(url) || !withinFieldLimit(url)) return
+    val headers = request.requestHeaders ?: emptyMap()
+    val userAgent = headerValue(headers, "User-Agent")
+    val referer = headerValue(headers, "Referer")
+    if (userAgent != null && !withinFieldLimit(userAgent)) return
+    if (referer != null && !withinFieldLimit(referer)) return
+    if (candidateDispatchCount.get() >= MAX_CANDIDATE_DISPATCHES) return
+    if (!reportedCandidateUrls.add(url)) return
+    if (candidateDispatchCount.incrementAndGet() > MAX_CANDIDATE_DISPATCHES) return
+    dispatchEvent(
+      "xt:sniff-candidate",
+      JSONObject().apply {
+        put("url", url)
+        put("userAgent", userAgent ?: JSONObject.NULL)
+        put("referer", referer ?: JSONObject.NULL)
+      },
+      generation
+    )
+  }
+
+  private fun isCurrentSniff(generation: Long): Boolean = sniffGeneration.get() == generation
+
+  private fun parseGeneration(raw: String?): Long? = raw?.trim()?.toLongOrNull()
+
+  // UTF-8 bytes to match sniffer.rs; the UTF-16 check avoids encoding huge values.
+  private fun withinFieldLimit(value: String): Boolean =
+    value.length <= MAX_FIELD_BYTES && value.toByteArray(Charsets.UTF_8).size <= MAX_FIELD_BYTES
+
+  private fun looksLikeManifest(url: String): Boolean =
+    MANIFEST_EXTENSION_RX.containsMatchIn(url) || MANIFEST_HINT_RX.containsMatchIn(url)
+
+  private fun headerValue(headers: Map<String, String>, name: String): String? =
+    headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+
+  private fun nudgePlayback(view: WebView, generation: Long) {
+    val generationLiteral = JSONObject.quote(generation.toString())
+    val script = """
+      (function(){
+        var sniffGeneration = $generationLiteral;
+        try {
+          var originalRequestMediaKeySystemAccess = navigator.requestMediaKeySystemAccess;
+          if (originalRequestMediaKeySystemAccess && !navigator.__xtSniffDrmWrapped) {
+            navigator.__xtSniffDrmWrapped = true;
+            navigator.requestMediaKeySystemAccess = function() {
+              try { window.AndroidSnifferInternal && window.AndroidSnifferInternal.reportDrm(sniffGeneration); } catch (_) {}
+              return originalRequestMediaKeySystemAccess.apply(navigator, arguments);
+            };
+          }
+        } catch (_) {}
+        try {
+          ['button[class*="play" i]', '[class*="play-button" i]', '[aria-label*="play" i]', '.vjs-big-play-button', '.jw-icon-playback']
+            .forEach(function(selector) {
+              document.querySelectorAll(selector).forEach(function(el){ try { el.click(); } catch (_) {} });
+            });
+        } catch (_) {}
+        try {
+          document.querySelectorAll('video').forEach(function(v){ try { v.play(); } catch (_) {} });
+        } catch (_) {}
+        try {
+          if (!navigator.__xtSniffFaviconReported) {
+            navigator.__xtSniffFaviconReported = true;
+            var link = document.querySelector("link[rel~='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']");
+            var iconHref = (link && link.href) || (location.origin + "/favicon.ico");
+            window.AndroidSnifferInternal && window.AndroidSnifferInternal.reportFavicon(iconHref, sniffGeneration);
+          }
+        } catch (_) {}
+      })();
+    """.trimIndent()
+    view.postDelayed({
+      if (!isCurrentSniff(generation)) return@postDelayed
+      view.evaluateJavascript(script, null)
+    }, NUDGE_DELAY_MS)
+  }
+
+  private fun dispatchEvent(type: String, payload: JSONObject, generation: Long) {
+    if (!isCurrentSniff(generation)) return
+    val webView = hostedWebViewRef() ?: return
+    val script = """
+      (function(){
+        try {
+          document.dispatchEvent(new CustomEvent(${JSONObject.quote(type)}, { detail: $payload }));
+        } catch (_) {}
+      })();
+    """.trimIndent()
+    webView.post {
+      if (!isCurrentSniff(generation)) return@post
+      webView.evaluateJavascript(script, null)
+    }
+  }
+
+  private fun teardown(fireDone: Boolean) {
+    timeoutRunnable?.let { handler.removeCallbacks(it) }
+    timeoutRunnable = null
+    val endedGeneration = sniffGeneration.incrementAndGet()
+    throwawayWebView?.let { webView ->
+      val parent = webView.parent as? ViewGroup
+      webView.stopLoading()
+      webView.webViewClient = WebViewClient()
+      parent?.removeView(webView)
+      webView.destroy()
+    }
+    throwawayWebView = null
+    if (fireDone) {
+      dispatchEvent(
+        "xt:sniff-done",
+        JSONObject().apply { put("favicon", lastFavicon ?: JSONObject.NULL) },
+        endedGeneration
+      )
+    }
+  }
+
+  // No xt:sniff-done: the WebView is going away with the activity.
+  fun activityDestroyed() {
+    teardown(fireDone = false)
+  }
+}
+
 class MainActivity : TauriActivity() {
 
   private var fullscreenView: View? = null
@@ -674,6 +924,9 @@ class MainActivity : TauriActivity() {
 
   // Cached so the back-press handler can call onHideCustomView without re-walking the view tree.
   private var hostedWebView: WebView? = null
+
+  // Cached so onDestroy() can tear down the throwaway sniffer WebView if it's still running.
+  private var snifferBridge: SnifferBridge? = null
 
   // Set by PipBridge.setAutoEnter() whenever a <video> starts/stops playing
   @Volatile
@@ -797,6 +1050,9 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(LogShareBridge(this), "AndroidLog")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
     webView.addJavascriptInterface(AndroidVideoBridge(this), "AndroidVideo")
+    val sniffer = SnifferBridge(this, { hostedWebView })
+    snifferBridge = sniffer
+    webView.addJavascriptInterface(sniffer, "AndroidSniffer")
     webView.addJavascriptInterface(
       WebSettingsBridge(this, { hostedWebView }, webView.settings.userAgentString),
       "AndroidWebSettings"
@@ -924,6 +1180,12 @@ class MainActivity : TauriActivity() {
   override fun onResume() {
     super.onResume()
     drainAndDispatchVideoEvents()
+  }
+
+  // Tear down the throwaway sniffer WebView instead of leaving the remote page running until its timeout.
+  override fun onDestroy() {
+    snifferBridge?.activityDestroyed()
+    super.onDestroy()
   }
 
   private fun drainAndDispatchVideoEvents() {

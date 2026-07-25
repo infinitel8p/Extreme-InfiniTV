@@ -73,8 +73,8 @@ function readAttr(source: string, key: string): string {
       let value = ""
       while (cursor < source.length) {
         const charAt = source[cursor]
-        if (charAt === "\\" && source[cursor + 1] === '"') {
-          value += '"'
+        if (charAt === "\\" && (source[cursor + 1] === '"' || source[cursor + 1] === "\\")) {
+          value += source[cursor + 1]
           cursor += 2
           continue
         }
@@ -142,6 +142,16 @@ function lastCommaOutsideQuotes(text: string): number {
   return last
 }
 
+function firstCommaOutsideQuotes(text: string): number {
+  let inQuote = false
+  for (let idx = 0; idx < text.length; idx++) {
+    const charAt = text[idx]
+    if (charAt === '"' && text[idx - 1] !== "\\") inQuote = !inQuote
+    else if (charAt === "," && !inQuote) return idx
+  }
+  return -1
+}
+
 /** Parse a decimal hour string (e.g. `catchup-correction`) into a number, or null when unset/non-finite. No clamping. */
 function readHoursAttr(source: string, key: string): number | null {
   const raw = readAttr(source, key)
@@ -170,7 +180,9 @@ function readSiptvDays(source: string): number {
  */
 function parseExtinf(line: string): Omit<M3UEntry, "url"> & { siptvDays: number } {
   const directive = line.replace(/^#EXTINF\s*:?/i, "")
-  const commaIdx = directive.indexOf(",")
+  // Quote-aware so a comma inside a quoted attr value isn't read as the attrs/name separator.
+  const quoteAwareCommaIdx = firstCommaOutsideQuotes(directive)
+  const commaIdx = quoteAwareCommaIdx >= 0 ? quoteAwareCommaIdx : directive.indexOf(",")
   let attrs = ""
   let name = ""
   if (commaIdx < 0) {
@@ -222,6 +234,37 @@ function parseExtinf(line: string): Omit<M3UEntry, "url"> & { siptvDays: number 
     referer: null,
     tvgType,
     isRadio,
+    manifestType: null,
+    drmScheme: null,
+    licenseKey: null,
+  }
+}
+
+function nameFromBareUrl(url: string): string {
+  try {
+    return new URL(url).hostname || url
+  } catch {
+    return url
+  }
+}
+
+function bareUrlPending(url: string): Omit<M3UEntry, "url"> & { siptvDays: number } {
+  return {
+    name: nameFromBareUrl(url),
+    logo: null,
+    category: null,
+    tvgId: null,
+    tvgName: null,
+    chno: null,
+    catchup: null,
+    catchupDays: null,
+    catchupSource: null,
+    catchupCorrection: null,
+    siptvDays: 0,
+    userAgent: null,
+    referer: null,
+    tvgType: null,
+    isRadio: false,
     manifestType: null,
     drmScheme: null,
     licenseKey: null,
@@ -305,7 +348,11 @@ export function parseM3U(text: string): M3UParseResult {
     if (isHlsTag(line)) continue
     if (line.startsWith("#")) continue
 
-    if (!pending) continue
+    // A bare URL with no preceding #EXTINF is still valid (common in radio pointer .m3u files).
+    if (!pending) {
+      if (/^https?:\/\//i.test(line)) pending = bareUrlPending(line)
+      else continue
+    }
     const category = pending.category ?? extgrpFallback
     const { siptvDays, ...pendingEntry } = pending
     let catchup = pendingEntry.catchup ?? headerCatchup

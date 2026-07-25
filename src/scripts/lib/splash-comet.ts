@@ -1,5 +1,5 @@
 // Canvas2D overlay that renders the splash comet as a streak of light along
-// the infinity path. The head is a hot white core with an accent-colored
+// the mark's figure-8 orbit. The head is a hot white core with an accent-colored
 // radial halo; behind it ~50 sampled points trail off via exponential alpha
 // falloff and shrinking radius. All samples draw with additive blending
 // (globalCompositeOperation = "lighter") so overlapping points sum into a
@@ -19,6 +19,9 @@ const CYCLE_MS = 6000
 const TRAIL_SAMPLES = 32
 const TRAIL_LENGTH_FRAC = 0.2
 const PATH_CACHE_SAMPLES = 256
+const VIEWBOX_MIN_X = 8
+const VIEWBOX_MIN_Y = 58
+const VIEWBOX_WIDTH = 224
 
 const ACCENT_FALLBACK: [number, number, number] = [0.91, 0.5, 0.78]
 
@@ -130,9 +133,9 @@ export function setupSplashComet(splash: HTMLElement): () => void {
     [0.45, "rgba(255, 255, 255, 0.7)"],
     [1, `rgba(${accentStr}, 0)`],
   ])
-  // SVG user units (viewBox 0-24) -> canvas pixels, plus an offset for the
-  // SVG's position inside the (larger) canvas. The mark-wrap pads the canvas
-  // out past the SVG so the comet's halo can bloom freely.
+  // SVG user units (viewBox 8 58 224 124) -> canvas pixels, plus an offset
+  // for the SVG's position inside the (larger) canvas. The mark-wrap pads
+  // the canvas out past the SVG so the comet's halo can bloom freely.
   let userToPx = 1
   let offsetX = 0
   let offsetY = 0
@@ -150,16 +153,14 @@ export function setupSplashComet(splash: HTMLElement): () => void {
       const padLeft = parseFloat(style.paddingLeft) || 0
       const padTop = parseFloat(style.paddingTop) || 0
       const padRight = parseFloat(style.paddingRight) || 0
-      const padBottom = parseFloat(style.paddingBottom) || 0
       const contentW = Math.max(1, wrapRect.width - padLeft - padRight)
-      const contentH = Math.max(1, wrapRect.height - padTop - padBottom)
       offsetX = (wrapRect.left + padLeft - canvasRect.left) * dpr
       offsetY = (wrapRect.top + padTop - canvasRect.top) * dpr
-      userToPx = (Math.min(contentW, contentH) / 24) * dpr
+      userToPx = (contentW / VIEWBOX_WIDTH) * dpr
     } else {
       offsetX = 0
       offsetY = 0
-      userToPx = (cssW / 24) * dpr
+      userToPx = (cssW / VIEWBOX_WIDTH) * dpr
     }
   }
   resize()
@@ -188,7 +189,8 @@ export function setupSplashComet(splash: HTMLElement): () => void {
     }
     lastDrawTime = now
     const elapsed = (now - startTime) % CYCLE_MS
-    const headDist = (elapsed / CYCLE_MS) * pathLen
+    // Reverse travel direction: head runs the path backwards over time.
+    const headDist = pathLen - (elapsed / CYCLE_MS) * pathLen
 
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.globalCompositeOperation = "lighter"
@@ -196,10 +198,10 @@ export function setupSplashComet(splash: HTMLElement): () => void {
     // Trail (drawn tail-first so the head sample is the last/topmost layer).
     for (let trailIdx = TRAIL_SAMPLES; trailIdx >= 1; trailIdx--) {
       const tailT = trailIdx / TRAIL_SAMPLES // 0 at head, 1 at tail
-      const dist = headDist - tailT * TRAIL_LENGTH_FRAC * pathLen
+      const dist = headDist + tailT * TRAIL_LENGTH_FRAC * pathLen
       const pt = samplePath(dist)
-      const x = offsetX + pt.x * userToPx
-      const y = offsetY + pt.y * userToPx
+      const x = offsetX + (pt.x - VIEWBOX_MIN_X) * userToPx
+      const y = offsetY + (pt.y - VIEWBOX_MIN_Y) * userToPx
 
       const alpha = Math.pow(1 - tailT, 2.2) * 0.55
       const radius = (2.4 - tailT * 2.0) * dpr
@@ -213,8 +215,8 @@ export function setupSplashComet(splash: HTMLElement): () => void {
 
     // Head: accent halo + hot white core, blitted from pre-rendered sprites.
     const headPt = samplePath(headDist)
-    const hx = offsetX + headPt.x * userToPx
-    const hy = offsetY + headPt.y * userToPx
+    const hx = offsetX + (headPt.x - VIEWBOX_MIN_X) * userToPx
+    const hy = offsetY + (headPt.y - VIEWBOX_MIN_Y) * userToPx
     ctx.drawImage(haloSprite, hx - haloR, hy - haloR)
     ctx.drawImage(coreSprite, hx - coreR, hy - coreR)
 

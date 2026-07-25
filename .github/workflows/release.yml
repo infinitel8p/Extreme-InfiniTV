@@ -434,6 +434,47 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # ffmpeg sidecar binaries come from the "ffmpeg Sidecar" workflow's
+      # rolling ffmpeg-sidecar-v2 prerelease, not built here. macOS has no
+      # externalBin entry yet, so it's skipped.
+      # Integrity comes from the committed pins, not the release's own sums.
+      - name: Fetch ffmpeg sidecar
+        if: matrix.os != 'macos-latest'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri/binaries
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            ASSET="ffmpeg-x86_64-pc-windows-msvc.exe"
+          else
+            ASSET="ffmpeg-x86_64-unknown-linux-gnu"
+          fi
+          if ! gh release download ffmpeg-sidecar-v2 \
+            --repo "${{ github.repository }}" \
+            --pattern "$ASSET" \
+            --dir src-tauri/binaries \
+            --clobber; then
+            echo "::error::Could not download $ASSET from the ffmpeg-sidecar-v2 release. Run the 'ffmpeg Sidecar' workflow first."
+            exit 1
+          fi
+          if ! EXPECTED_SHA=$(node src/scripts/ensure-ffmpeg-sidecar.mjs --print-pin "$ASSET"); then
+            echo "::error::$ASSET has no pinned sha256 in src/scripts/ffmpeg-sidecar-checksums.json. Run 'node src/scripts/ensure-ffmpeg-sidecar.mjs --update-pins' and commit the result."
+            exit 1
+          fi
+          cd src-tauri/binaries
+          echo "$EXPECTED_SHA  $ASSET" > asset.sha256
+          if ! sha256sum -c asset.sha256; then
+            echo "::error::$ASSET does not match its pinned sha256 in src/scripts/ffmpeg-sidecar-checksums.json. Either the sidecar was republished (refresh the pins with --update-pins) or the asset was tampered with."
+            exit 1
+          fi
+          rm -f asset.sha256
+          cd - >/dev/null
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            chmod +x "src-tauri/binaries/$ASSET"
+          fi
+
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -498,6 +539,7 @@ jobs:
           XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.13846066
+          XT_SKIP_FFMPEG_SIDECAR: "1"
         run: pnpm tauri android build --aab
 
       - name: Build signed APK (universal)
@@ -506,6 +548,7 @@ jobs:
           XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.13846066
+          XT_SKIP_FFMPEG_SIDECAR: "1"
         run: pnpm tauri android build --apk
 
       - name: Collect mobile artifacts
@@ -538,6 +581,7 @@ jobs:
           XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.13846066
+          XT_SKIP_FFMPEG_SIDECAR: "1"
         run: pnpm tauri android build --aab
 
       - name: Collect TV artifact

@@ -38,3 +38,22 @@ export function buildMovieStreamUrl(
     ext
   )
 }
+
+/** Canonical Xtream live-stream URL; mirrors stream.ts's buildDirectLiveUrl byte-for-byte so the two don't drift. */
+export function buildLiveStreamUrl(
+  creds: Creds,
+  streamId: string | number,
+  containerExt: string | null | undefined
+): string {
+  const ext = containerExt === "ts" ? ".ts" : ".m3u8"
+  return (
+    fmtBase(creds.host, creds.port) +
+    "/live/" +
+    encodeURIComponent(creds.user) +
+    "/" +
+    encodeURIComponent(creds.pass) +
+    "/" +
+    encodeURIComponent(streamId) +
+    ext
+  )
+}

@@ -12,19 +12,19 @@
 //   "OTHER:..."       - anything else
 
 use std::collections::HashMap;
-#[cfg(unix)]
-use std::io::Read;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::async_runtime::Mutex as AsyncMutex;
-use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -36,6 +36,10 @@ const DETECT_TIMEOUT_MS: u64 = 2000;
 const DETECT_POLL_INTERVAL_MS: u64 = 25;
 #[cfg(unix)]
 const IPC_WRITE_TIMEOUT_MS: u64 = 1500;
+#[cfg(windows)]
+const IPC_REPLY_TIMEOUT_MS: u64 = 500;
+const EXTERNAL_PLAYER_EXITED_EVENT: &str = "xt:external-player-exited";
+const EXIT_WATCH_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 // ---------------------------------------------------------------------------
 // Reuse-slot state
@@ -56,6 +60,9 @@ pub struct ExternalPlayerState {
     /// critical section so two concurrent launches for the same kind can't
     /// race and orphan a spawned player.
     locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    /// Bumping a kind's generation supersedes its older exit-watchers.
+    watch_generations: Mutex<HashMap<String, u64>>,
+    watched_pids: Mutex<HashMap<String, u32>>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -100,6 +107,49 @@ impl ExternalPlayerState {
             .entry(kind.to_string())
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
             .clone()
+    }
+
+    fn bump_watch_generation(&self, kind: &str) -> u64 {
+        let mut guard = self
+            .watch_generations
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let generation = guard.entry(kind.to_string()).or_insert(0);
+        *generation += 1;
+        *generation
+    }
+
+    fn watch_generation_is_current(&self, kind: &str, generation: u64) -> bool {
+        let guard = self
+            .watch_generations
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard.get(kind).copied() == Some(generation)
+    }
+
+    /// False when `pid` is already the watched pid for `kind`.
+    fn mark_watched_pid(&self, kind: &str, pid: u32) -> bool {
+        let mut guard = self
+            .watched_pids
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if guard.get(kind).copied() == Some(pid) {
+            false
+        } else {
+            guard.insert(kind.to_string(), pid);
+            true
+        }
+    }
+
+    /// Equality-guarded so a stale watcher can't clear a newer watcher's pid.
+    fn clear_watched_pid(&self, kind: &str, pid: u32) {
+        let mut guard = self
+            .watched_pids
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if guard.get(kind).copied() == Some(pid) {
+            guard.remove(kind);
+        }
     }
 }
 
@@ -188,7 +238,7 @@ fn build_command(path: &str, args: &[String]) -> Command {
 /// shell-free, but a NUL terminates strings at the OS layer and a newline in
 /// a log line can forge fake structured-log entries. Belt-and-braces only;
 /// callers also enforce the picker UI on the frontend.
-fn validate_arg(value: &str, label: &str) -> Result<(), String> {
+pub(crate) fn validate_arg(value: &str, label: &str) -> Result<(), String> {
     if value.contains('\0') {
         return Err(format!("OTHER:{label} contains NUL byte"));
     }
@@ -206,9 +256,9 @@ fn validate_invocation(path: &str, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Spawn a player.
+/// Returned bool is false for the macOS `open -a` handoff, whose pid is not the player's.
 #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
-fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<u32, String> {
+fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<(u32, bool), String> {
     if path.is_empty() {
         return Err("NOT_FOUND:player path is empty".to_string());
     }
@@ -232,7 +282,7 @@ fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             return match cmd.spawn() {
-                Ok(child) => Ok(child.id()),
+                Ok(child) => Ok((child.id(), false)),
                 Err(e) => Err(classify_io_error(&e)),
             };
         }
@@ -240,7 +290,7 @@ fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<
     let resolved = resolve_app_bundle(path);
     let mut cmd = build_command(&resolved, args);
     match cmd.spawn() {
-        Ok(child) => Ok(child.id()),
+        Ok(child) => Ok((child.id(), true)),
         Err(e) => Err(classify_io_error(&e)),
     }
 }
@@ -444,6 +494,48 @@ fn pid_alive(pid: u32) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Exit watcher
+// ---------------------------------------------------------------------------
+/// Polls `pid` and emits `xt:external-player-exited` when the player dies.
+fn watch_for_exit(app: AppHandle, state: &ExternalPlayerState, kind: &str, pid: u32) {
+    if pid == 0 || (kind != "mpv" && kind != "vlc") {
+        return;
+    }
+    if !state.mark_watched_pid(kind, pid) {
+        return;
+    }
+    let generation = state.bump_watch_generation(kind);
+    let kind = kind.to_string();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(EXIT_WATCH_POLL_INTERVAL).await;
+            let state = app.state::<ExternalPlayerState>();
+            if !state.watch_generation_is_current(&kind, generation) {
+                return;
+            }
+            if pid_alive(pid) {
+                continue;
+            }
+            // A newer launch may have superseded us since the alive-check.
+            if !state.watch_generation_is_current(&kind, generation)
+                || state.get(&kind).is_some_and(|slot| slot.pid != pid)
+            {
+                return;
+            }
+            if let Some(dropped) = state.drop_slot(&kind) {
+                #[cfg(unix)]
+                unlink_unix_socket(&dropped.endpoint);
+                #[cfg(not(unix))]
+                let _ = dropped;
+            }
+            state.clear_watched_pid(&kind, pid);
+            let _ = app.emit(EXTERNAL_PLAYER_EXITED_EVENT, json!({ "kind": kind }));
+            return;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // IPC senders
 // ---------------------------------------------------------------------------
 #[cfg(unix)]
@@ -488,7 +580,7 @@ fn open_mpv_pipe(endpoint: &str) -> std::io::Result<std::fs::File> {
 }
 
 /// Inspect bytes read back from mpv's JSON-IPC socket
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn first_mpv_error(buf: &[u8]) -> Option<String> {
     for line in buf.split(|byte| *byte == b'\n') {
         if line.is_empty() {
@@ -510,7 +602,8 @@ fn first_mpv_error(buf: &[u8]) -> Option<String> {
     None
 }
 
-fn build_mpv_loadfile(url: &str, ua: Option<&str>, referer: Option<&str>) -> Vec<u8> {
+// mpv 0.38 moved loadfile options behind a new index arg
+fn build_mpv_loadfile(url: &str, ua: Option<&str>, referer: Option<&str>, use_index_form: bool) -> Vec<u8> {
     let mut opts: Vec<String> = Vec::new();
     if let Some(ua) = ua.filter(|s| !s.is_empty()) {
         opts.push(format!("user-agent=%{}%{}", ua.len(), ua));
@@ -520,6 +613,8 @@ fn build_mpv_loadfile(url: &str, ua: Option<&str>, referer: Option<&str>) -> Vec
     }
     let cmd = if opts.is_empty() {
         json!({ "command": ["loadfile", url, "replace"] })
+    } else if use_index_form {
+        json!({ "command": ["loadfile", url, "replace", -1, opts.join(",")] })
     } else {
         json!({ "command": ["loadfile", url, "replace", opts.join(",")] })
     };
@@ -535,37 +630,80 @@ fn build_mpv_unpause() -> Vec<u8> {
     bytes
 }
 
+#[cfg(unix)]
+fn write_and_read_reply(
+    stream: &mut std::os::unix::net::UnixStream,
+    payload: &[u8],
+) -> Result<Vec<u8>, String> {
+    stream.write_all(payload).map_err(|e| format!("IPC:{e}"))?;
+    let mut sink = [0u8; 1024];
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+    let read = stream.read(&mut sink).unwrap_or(0);
+    Ok(sink[..read].to_vec())
+}
+
+#[cfg(windows)]
+fn write_and_read_reply(pipe: &mut std::fs::File, payload: &[u8]) -> Result<Vec<u8>, String> {
+    pipe.write_all(payload).map_err(|e| format!("IPC:{e}"))?;
+    // File has no read timeout on Windows; a leaked reader unblocks on pipe close
+    let mut reader = pipe.try_clone().map_err(|e| format!("IPC:{e}"))?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut sink = [0u8; 1024];
+        let read = reader.read(&mut sink).unwrap_or(0);
+        let _ = tx.send(sink[..read].to_vec());
+    });
+    match rx.recv_timeout(Duration::from_millis(IPC_REPLY_TIMEOUT_MS)) {
+        Ok(bytes) if bytes.is_empty() => Err("IPC:empty reply from mpv".to_string()),
+        Ok(bytes) => Ok(bytes),
+        Err(_) => Err("IPC:no reply from mpv".to_string()),
+    }
+}
+
 fn send_mpv_loadfile(
     endpoint: &str,
     url: &str,
     ua: Option<&str>,
     referer: Option<&str>,
 ) -> Result<(), String> {
-    let payload = build_mpv_loadfile(url, ua, referer);
+    let has_options = ua.filter(|s| !s.is_empty()).is_some() || referer.filter(|s| !s.is_empty()).is_some();
+    let new_form_payload = build_mpv_loadfile(url, ua, referer, true);
     let unpause = build_mpv_unpause();
 
     #[cfg(unix)]
     {
         let mut stream = open_mpv_socket(endpoint).map_err(|e| format!("IPC:{e}"))?;
-        stream.write_all(&payload).map_err(|e| format!("IPC:{e}"))?;
-        stream.write_all(&unpause).map_err(|e| format!("IPC:{e}"))?;
-        let mut sink = [0u8; 1024];
-        let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
-        let read = stream.read(&mut sink).unwrap_or(0);
-        if let Some(err) = first_mpv_error(&sink[..read]) {
-            return Err(format!("IPC:mpv replied {err}"));
+        let reply = write_and_read_reply(&mut stream, &new_form_payload)?;
+        if let Some(err) = first_mpv_error(&reply) {
+            if has_options && err == "invalid parameter" {
+                let old_form_payload = build_mpv_loadfile(url, ua, referer, false);
+                let retry_reply = write_and_read_reply(&mut stream, &old_form_payload)?;
+                if let Some(retry_err) = first_mpv_error(&retry_reply) {
+                    return Err(format!("IPC:mpv replied {retry_err}"));
+                }
+            } else {
+                return Err(format!("IPC:mpv replied {err}"));
+            }
         }
+        stream.write_all(&unpause).map_err(|e| format!("IPC:{e}"))?;
         Ok(())
     }
 
     #[cfg(windows)]
     {
-        // std::fs::File on Windows has no set_read_timeout; reading the
-        // response would need OVERLAPPED I/O. Skip parsing here - the slot
-        // will get cleaned up the next time the client surfaces a failure
-        // (e.g. connect refused on a dead pipe).
         let mut pipe = open_mpv_pipe(endpoint).map_err(|e| format!("IPC:{e}"))?;
-        pipe.write_all(&payload).map_err(|e| format!("IPC:{e}"))?;
+        let reply = write_and_read_reply(&mut pipe, &new_form_payload)?;
+        if let Some(err) = first_mpv_error(&reply) {
+            if has_options && err == "invalid parameter" {
+                let old_form_payload = build_mpv_loadfile(url, ua, referer, false);
+                let retry_reply = write_and_read_reply(&mut pipe, &old_form_payload)?;
+                if let Some(retry_err) = first_mpv_error(&retry_reply) {
+                    return Err(format!("IPC:mpv replied {retry_err}"));
+                }
+            } else {
+                return Err(format!("IPC:mpv replied {err}"));
+            }
+        }
         pipe.write_all(&unpause).map_err(|e| format!("IPC:{e}"))?;
         Ok(())
     }
@@ -576,6 +714,7 @@ fn send_mpv_loadfile(
 // ---------------------------------------------------------------------------
 #[tauri::command]
 pub async fn launch_external_player(
+    app: AppHandle,
     state: State<'_, ExternalPlayerState>,
     path: String,
     args: Vec<String>,
@@ -590,12 +729,13 @@ pub async fn launch_external_player(
             Ok(json!({ "version": version }))
         }
         "exists" => check_path_exists(&path),
-        "launch" => launch_mode(state, path, args, reuse).await,
+        "launch" => launch_mode(app, state, path, args, reuse).await,
         other => Err(format!("OTHER:unknown mode '{other}'")),
     }
 }
 
 async fn launch_mode(
+    app: AppHandle,
     state: State<'_, ExternalPlayerState>,
     path: String,
     args: Vec<String>,
@@ -642,7 +782,10 @@ async fn launch_mode(
                     ua.as_deref(),
                     referer.as_deref(),
                 ) {
-                    Ok(()) => return Ok(json!({ "pid": slot.pid, "reused": true })),
+                    Ok(()) => {
+                        watch_for_exit(app.clone(), &state, &kind, slot.pid);
+                        return Ok(json!({ "pid": slot.pid, "reused": true }));
+                    }
                     Err(err) => {
                         log::warn!("[external-player] mpv reuse send failed: {err}");
                         if let Some(dropped) = state.drop_slot(&kind) {
@@ -659,12 +802,15 @@ async fn launch_mode(
         let endpoint = pick_mpv_endpoint();
         let augmented = augment_mpv_args(args.clone(), &endpoint);
         let path_for_spawn = path.clone();
-        let pid = tauri::async_runtime::spawn_blocking(move || {
+        let (pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
             spawn_launch_inner(&path_for_spawn, &augmented, true)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
         state.set(&kind, Slot { pid, endpoint });
+        if is_real_process {
+            watch_for_exit(app.clone(), &state, &kind, pid);
+        }
         return Ok(json!({ "pid": pid, "reused": false }));
     }
 
@@ -672,34 +818,48 @@ async fn launch_mode(
         // Probe the cached pid so a manually-killed VLC doesn't get reported
         // as reused. The slot is otherwise opaque (endpoint stays empty) and
         // would otherwise live until the app restarts.
-        let prior_alive = match state.get(&kind) {
-            Some(slot) if pid_alive(slot.pid) => true,
+        let prior_slot_pid = match state.get(&kind) {
+            Some(slot) if pid_alive(slot.pid) => Some(slot.pid),
             Some(_) => {
                 state.drop_slot(&kind);
-                false
+                None
             }
-            None => false,
+            None => None,
         };
         let augmented = augment_vlc_args(args.clone());
         let path_for_spawn = path.clone();
-        let pid = tauri::async_runtime::spawn_blocking(move || {
+        let (spawned_pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
             spawn_launch_inner(&path_for_spawn, &augmented, true)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
+
+        // --one-instance: the fresh spawn just forwards to the existing instance and exits.
+        if let Some(existing_pid) = prior_slot_pid {
+            watch_for_exit(app.clone(), &state, &kind, existing_pid);
+            return Ok(json!({ "pid": existing_pid, "reused": true }));
+        }
+
         state.set(
             &kind,
             Slot {
-                pid,
+                pid: spawned_pid,
                 endpoint: String::new(),
             },
         );
-        return Ok(json!({ "pid": pid, "reused": prior_alive }));
+        if is_real_process {
+            watch_for_exit(app.clone(), &state, &kind, spawned_pid);
+        }
+        return Ok(json!({ "pid": spawned_pid, "reused": false }));
     }
 
-    let pid = tauri::async_runtime::spawn_blocking(move || spawn_launch_inner(&path, &args, false))
-        .await
-        .map_err(|e| format!("OTHER:join: {e}"))??;
+    let (pid, is_real_process) =
+        tauri::async_runtime::spawn_blocking(move || spawn_launch_inner(&path, &args, false))
+            .await
+            .map_err(|e| format!("OTHER:join: {e}"))??;
+    if is_real_process {
+        watch_for_exit(app.clone(), &state, &kind, pid);
+    }
     Ok(json!({ "pid": pid, "reused": false }))
 }
 
@@ -767,6 +927,7 @@ mod tests {
             "https://e.test/x.m3u8",
             Some("AgentX"),
             Some("https://r.test/"),
+            true,
         );
         let s = String::from_utf8(bytes).unwrap();
         assert!(s.contains("loadfile"));
@@ -780,7 +941,7 @@ mod tests {
     fn build_mpv_loadfile_preserves_comma_in_user_agent() {
         let ua = "Mozilla/5.0 (X11; Linux x86_64), Gecko/2010";
         let referer = "https://r.test/, with comma";
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some(ua), Some(referer));
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some(ua), Some(referer), false);
         let line = String::from_utf8(bytes).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
@@ -797,6 +958,27 @@ mod tests {
             "opts string must percent-length-encode the UA so commas in the value don't terminate it; got {opts:?}"
         );
         assert!(opts.contains(&format!("referrer=%{}%{}", referer.len(), referer)));
+    }
+
+    #[test]
+    fn build_mpv_loadfile_uses_index_form_when_requested() {
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, true);
+        let parsed: serde_json::Value =
+            serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
+        let cmd = parsed["command"].as_array().unwrap();
+        assert_eq!(cmd.len(), 5);
+        assert_eq!(cmd[3], -1);
+        assert!(cmd[4].as_str().unwrap().contains("user-agent="));
+    }
+
+    #[test]
+    fn build_mpv_loadfile_uses_legacy_form_when_not_requested() {
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", Some("AgentX"), None, false);
+        let parsed: serde_json::Value =
+            serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
+        let cmd = parsed["command"].as_array().unwrap();
+        assert_eq!(cmd.len(), 4);
+        assert!(cmd[3].as_str().unwrap().contains("user-agent="));
     }
 
     #[test]
@@ -858,7 +1040,7 @@ mod tests {
 
     #[test]
     fn build_mpv_loadfile_uses_three_arg_form_when_no_options() {
-        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", None, None);
+        let bytes = build_mpv_loadfile("https://e.test/x.m3u8", None, None, true);
         let parsed: serde_json::Value =
             serde_json::from_str(String::from_utf8(bytes).unwrap().trim()).unwrap();
         let cmd = parsed["command"].as_array().unwrap();
@@ -941,5 +1123,51 @@ mod tests {
     #[test]
     fn pid_alive_returns_false_for_pid_zero() {
         assert!(!pid_alive(0));
+    }
+
+    #[test]
+    fn bump_watch_generation_increments_and_invalidates_old_generation() {
+        let state = ExternalPlayerState::default();
+        let first = state.bump_watch_generation("mpv");
+        assert!(state.watch_generation_is_current("mpv", first));
+        let second = state.bump_watch_generation("mpv");
+        assert_ne!(first, second);
+        assert!(!state.watch_generation_is_current("mpv", first));
+        assert!(state.watch_generation_is_current("mpv", second));
+    }
+
+    #[test]
+    fn watch_generation_is_current_is_per_kind() {
+        let state = ExternalPlayerState::default();
+        state.bump_watch_generation("mpv");
+        let mpv_generation = state.bump_watch_generation("mpv");
+        let vlc_generation = state.bump_watch_generation("vlc");
+        assert!(state.watch_generation_is_current("mpv", mpv_generation));
+        assert!(state.watch_generation_is_current("vlc", vlc_generation));
+        assert!(!state.watch_generation_is_current("mpv", vlc_generation));
+    }
+
+    #[test]
+    fn mark_watched_pid_skips_unchanged_pid_but_allows_new_one() {
+        let state = ExternalPlayerState::default();
+        assert!(state.mark_watched_pid("mpv", 111));
+        assert!(!state.mark_watched_pid("mpv", 111));
+        assert!(state.mark_watched_pid("mpv", 222));
+    }
+
+    #[test]
+    fn clear_watched_pid_allows_the_same_pid_to_be_rewatched() {
+        let state = ExternalPlayerState::default();
+        assert!(state.mark_watched_pid("mpv", 111));
+        state.clear_watched_pid("mpv", 111);
+        assert!(state.mark_watched_pid("mpv", 111));
+    }
+
+    #[test]
+    fn clear_watched_pid_leaves_entry_intact_for_non_matching_pid() {
+        let state = ExternalPlayerState::default();
+        assert!(state.mark_watched_pid("mpv", 111));
+        state.clear_watched_pid("mpv", 222);
+        assert!(!state.mark_watched_pid("mpv", 111));
     }
 }

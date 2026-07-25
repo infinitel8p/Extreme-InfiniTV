@@ -12,6 +12,9 @@ export default defineConfig({
     server: {
       host: "0.0.0.0",
       port: 4321,
+      watch: {
+        ignored: ["**/src-tauri/**"],
+      },
       hmr: hmrHost
         ? { host: hmrHost, protocol: "ws", port: 4321 }
         : undefined,
@@ -29,6 +32,15 @@ export default defineConfig({
         "@tauri-apps/plugin-dialog",
         "@tauri-apps/plugin-log",
         "tauri-plugin-android-fs-api",
+        // lazily imported player engines: pre-bundle so first playback never triggers a mid-session re-optimize
+        "hls.js",
+        "mpegts.js",
+        "shaka-player",
+        "shaka-player/dist/shaka-player.ui.js",
+        "video.js",
+        "artplayer",
+        "marked",
+        "dompurify",
       ],
     },
   },

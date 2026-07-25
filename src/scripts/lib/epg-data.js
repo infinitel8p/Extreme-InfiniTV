@@ -5,7 +5,9 @@ import {
   fmtBase,
   isLikelyM3USource,
   getEntries,
+  entryToCreds,
 } from "@/scripts/lib/creds.js"
+import { loadCustomDoc } from "@/scripts/lib/custom-playlist.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
   setCached as cacheSet,
@@ -58,7 +60,7 @@ async function findEntry(playlistId) {
 /**
  * @typedef {Object} EpgSource
  * @property {string} url
- * @property {"override"|"m3u-header"|"xtream-default"|"additional"} source
+ * @property {"override"|"m3u-header"|"xtream-default"|"custom-sources"|"additional"} source
  * @property {"primary"|"additional"} kind
  */
 
@@ -74,12 +76,14 @@ async function findEntry(playlistId) {
  *
  * Returns an empty list when no usable source is available.
  *
- * @param {{ epgUrl?: string, additionalEpgUrls?: string[], disableProviderEpg?: boolean } | null} entry
+ * @param {{ type?: string, epgUrl?: string, additionalEpgUrls?: string[], disableProviderEpg?: boolean } | null} entry
  * @param {{host:string,port:string,user:string,pass:string}} creds
  * @param {string} m3uHeaderUrl - value of `x-tvg-url` for M3U playlists, or ""
+ * @param {string[]} [customSourceUrls] - custom playlist only: provider EPG URLs
+ *   unioned from every source entry (already resolved by the async wrapper)
  * @returns {EpgSource[]}
  */
-export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl) {
+export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl, customSourceUrls = []) {
   const out = []
   const seen = new Set()
   const skipAuto = !!entry?.disableProviderEpg
@@ -93,6 +97,8 @@ export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl) {
 
   if (entry?.epgUrl) {
     push(entry.epgUrl, "override", "primary")
+  } else if (!skipAuto && entry?.type === "custom") {
+    for (const url of customSourceUrls) push(url, "custom-sources", "primary")
   } else if (!skipAuto && isLikelyM3USource(creds?.host, creds?.user, creds?.pass)) {
     if (m3uHeaderUrl) push(m3uHeaderUrl, "m3u-header", "primary")
   } else if (!skipAuto && creds?.host) {
@@ -112,6 +118,46 @@ export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl) {
   return out
 }
 
+/** Custom playlist only: union of every source entry's provider default EPG URL. */
+async function collectCustomSourceEpgUrls(playlistId) {
+  const doc = await loadCustomDoc(playlistId)
+  const sourceEntryIds = new Set()
+  for (const channel of doc.channels) {
+    if (!Array.isArray(channel.sources)) continue
+    for (const source of channel.sources) {
+      if (source.kind === "xtream" || source.kind === "m3u") sourceEntryIds.add(source.entryId)
+    }
+  }
+  if (!sourceEntryIds.size) return []
+  const entries = await getEntries()
+  const resolvedUrls = await Promise.all(
+    [...sourceEntryIds].map(async (sourceEntryId) => {
+      const sourceEntry = entries.find((candidate) => candidate._id === sourceEntryId)
+      if (!sourceEntry) return null
+      if (sourceEntry.type === "xtream") {
+        const sourceCreds = entryToCreds(sourceEntry)
+        const base = fmtBase(sourceCreds.host, sourceCreds.port).replace(/\/+$/, "")
+        return (
+          `${base}/xmltv.php?username=${encodeURIComponent(sourceCreds.user || "")}` +
+          `&password=${encodeURIComponent(sourceCreds.pass || "")}`
+        )
+      }
+      let stored = ""
+      try { stored = localStorage.getItem(`xt_m3u_epg:${sourceEntryId}`) || "" } catch {}
+      if (!stored) {
+        // A never-opened m3u source has no cached x-tvg-url yet; warm it once so its default EPG isn't silently dropped.
+        try {
+          const { ensureLive } = await import("@/scripts/lib/catalog.js")
+          await ensureLive(entryToCreds(sourceEntry), sourceEntryId)
+          stored = localStorage.getItem(`xt_m3u_epg:${sourceEntryId}`) || ""
+        } catch {}
+      }
+      return stored || null
+    })
+  )
+  return resolvedUrls.filter(Boolean)
+}
+
 /**
  * Storage-aware wrapper: loads the active entry and the M3U `x-tvg-url`
  * header (if any) then delegates to `buildEpgUrlsFromEntry`.
@@ -126,7 +172,11 @@ export async function buildEpgUrls(creds, playlistId) {
   try {
     m3uHeaderUrl = localStorage.getItem(`xt_m3u_epg:${playlistId}`) || ""
   } catch {}
-  return buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl)
+  let customSourceUrls = []
+  if (entry?.type === "custom" && !entry.epgUrl && !entry.disableProviderEpg) {
+    customSourceUrls = await collectCustomSourceEpgUrls(playlistId)
+  }
+  return buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl, customSourceUrls)
 }
 
 /**
@@ -296,10 +346,11 @@ export function parseXmlTv(xml) {
   const programmes = new Map()
   /** @type {Map<string, string>} */
   const channelNames = new Map()
-  if (/<!DOCTYPE\b/i.test(xml) || /<!ENTITY\b/i.test(xml)) {
+  const sanitized = xml.replace(/<!DOCTYPE[^>[]*>/i, "")
+  if (/<!DOCTYPE\b/i.test(sanitized) || /<!ENTITY\b/i.test(sanitized)) {
     throw new Error("XMLTV contains forbidden DOCTYPE/ENTITY declaration")
   }
-  const doc = new DOMParser().parseFromString(xml, "text/xml")
+  const doc = new DOMParser().parseFromString(sanitized, "text/xml")
   const err = doc.querySelector("parsererror")
   if (err) throw new Error("XMLTV parse error: " + err.textContent.slice(0, 200))
 

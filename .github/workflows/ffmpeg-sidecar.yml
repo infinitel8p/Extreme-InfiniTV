@@ -3,13 +3,13 @@ name: ffmpeg Sidecar
 # Triggers:
 #  - run "ffmpeg Sidecar" from the Actions tab -> rebuilds and republishes the
 #      sidecar binaries
-#  - push to main that touches this file       -> same build, for iterating
+#  - push to main or release/** touching this file -> same build, for iterating
 #      on the workflow itself
 #
 # Builds a trimmed, LGPL-only static ffmpeg for the audio-transcode sidecar
 # (see ffmpeg.md, "Binary strategy"). This runs rarely - only when the
 # trimmed build itself needs to change - and publishes the result to a
-# rolling prerelease tag `ffmpeg-sidecar-v1`. `release.yml` and `beta.yml`
+# rolling prerelease tag `ffmpeg-sidecar-v2`. `release.yml` and `beta.yml`
 # just download the matching asset from that tag, so a normal app release
 # never rebuilds ffmpeg.
 #
@@ -25,6 +25,7 @@ on:
   push:
     branches:
       - main
+      - "release/**"
     paths:
       - ".github/workflows/ffmpeg-sidecar.yml"
   workflow_dispatch:
@@ -53,6 +54,7 @@ jobs:
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-yasm
             mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-zlib
             make
             diffutils
 
@@ -72,11 +74,11 @@ jobs:
           cd ffmpeg-src
           ./configure \
             --target-os=mingw32 --arch=x86_64 \
-            --disable-everything --disable-autodetect --disable-network \
+            --disable-everything --disable-autodetect --enable-network \
             --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
             --disable-avdevice --disable-postproc \
-            --enable-protocol=pipe \
-            --enable-demuxer=mpegts \
+            --enable-protocol=pipe,http,tcp \
+            --enable-demuxer=mpegts,matroska,mov \
             --enable-muxer=mpegts \
             --enable-decoder=aac \
             --enable-decoder=aac_latm \
@@ -85,6 +87,11 @@ jobs:
             --enable-decoder=mp2 \
             --enable-decoder=mp3 \
             --enable-decoder=dca \
+            --enable-decoder=opus \
+            --enable-decoder=vorbis \
+            --enable-decoder=flac \
+            --enable-decoder=truehd \
+            --enable-decoder=pcm_s16le \
             --enable-encoder=aac \
             --enable-parser=h264 \
             --enable-parser=hevc \
@@ -98,6 +105,10 @@ jobs:
             --enable-filter=aformat \
             --enable-filter=anull \
             --enable-bsf=extract_extradata \
+            --enable-bsf=h264_mp4toannexb \
+            --enable-bsf=hevc_mp4toannexb \
+            --enable-bsf=aac_adtstoasc \
+            --enable-zlib \
             --extra-ldflags=-static \
             --pkg-config-flags=--static
           make -j$(nproc)
@@ -135,8 +146,17 @@ jobs:
             echo "workflow commit: ${GITHUB_SHA}"
             echo
             echo "configure line:"
-            echo "./configure --target-os=mingw32 --arch=x86_64 --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe --enable-demuxer=mpegts --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --extra-ldflags=-static --pkg-config-flags=--static"
+            echo "./configure --target-os=mingw32 --arch=x86_64 --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-decoder=opus --enable-decoder=vorbis --enable-decoder=flac --enable-decoder=truehd --enable-decoder=pcm_s16le --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --enable-bsf=h264_mp4toannexb --enable-bsf=hevc_mp4toannexb --enable-bsf=aac_adtstoasc --enable-zlib --extra-ldflags=-static --pkg-config-flags=--static"
           } > stage/BUILD-INFO-windows.txt
+
+      - name: Verify standalone binary outside MSYS2
+        shell: pwsh
+        run: |
+          & "$PWD\stage\ffmpeg-x86_64-pc-windows-msvc.exe" -version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::ffmpeg.exe -version failed when run outside MSYS2 (binary likely isn't fully static)"
+            exit 1
+          }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -149,7 +169,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential yasm nasm pkg-config
+          sudo apt-get install -y build-essential yasm nasm pkg-config zlib1g-dev
 
       - name: Download ffmpeg source
         shell: bash
@@ -166,11 +186,11 @@ jobs:
           set -euo pipefail
           cd ffmpeg-src
           ./configure \
-            --disable-everything --disable-autodetect --disable-network \
+            --disable-everything --disable-autodetect --enable-network \
             --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
             --disable-avdevice --disable-postproc \
-            --enable-protocol=pipe \
-            --enable-demuxer=mpegts \
+            --enable-protocol=pipe,http,tcp \
+            --enable-demuxer=mpegts,matroska,mov \
             --enable-muxer=mpegts \
             --enable-decoder=aac \
             --enable-decoder=aac_latm \
@@ -179,6 +199,11 @@ jobs:
             --enable-decoder=mp2 \
             --enable-decoder=mp3 \
             --enable-decoder=dca \
+            --enable-decoder=opus \
+            --enable-decoder=vorbis \
+            --enable-decoder=flac \
+            --enable-decoder=truehd \
+            --enable-decoder=pcm_s16le \
             --enable-encoder=aac \
             --enable-parser=h264 \
             --enable-parser=hevc \
@@ -192,6 +217,10 @@ jobs:
             --enable-filter=aformat \
             --enable-filter=anull \
             --enable-bsf=extract_extradata \
+            --enable-bsf=h264_mp4toannexb \
+            --enable-bsf=hevc_mp4toannexb \
+            --enable-bsf=aac_adtstoasc \
+            --enable-zlib \
             --pkg-config-flags=--static
           make -j$(nproc)
 
@@ -229,7 +258,7 @@ jobs:
             echo "workflow commit: ${GITHUB_SHA}"
             echo
             echo "configure line:"
-            echo "./configure --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe --enable-demuxer=mpegts --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --pkg-config-flags=--static"
+            echo "./configure --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-decoder=opus --enable-decoder=vorbis --enable-decoder=flac --enable-decoder=truehd --enable-decoder=pcm_s16le --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --enable-bsf=h264_mp4toannexb --enable-bsf=hevc_mp4toannexb --enable-bsf=aac_adtstoasc --enable-zlib --pkg-config-flags=--static"
           } > stage/BUILD-INFO-linux.txt
 
       - uses: actions/upload-artifact@v4
@@ -258,13 +287,29 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           ls -la
 
+      # The app and pipelines verify against the committed pins; SHA256SUMS.txt is informational.
+      - name: Surface checksums for the committed pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### ffmpeg sidecar checksums"
+            echo
+            echo "Pin these in \`src/scripts/ffmpeg-sidecar-checksums.json\` (\`node src/scripts/ensure-ffmpeg-sidecar.mjs --update-pins\`, then review and commit) or release.yml and beta.yml will reject the new binaries."
+            echo
+            echo '```'
+            cat release-assets/SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat release-assets/SHA256SUMS.txt
+
       - name: Create or update rolling prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          TAG="ffmpeg-sidecar-v1"
+          TAG="ffmpeg-sidecar-v2"
           BODY_FILE="$RUNNER_TEMP/body.md"
           {
             echo "Trimmed, LGPL-only ffmpeg sidecar binaries consumed by the desktop release and beta build pipelines (see ffmpeg.md, \"Binary strategy\")."
@@ -273,7 +318,7 @@ jobs:
             echo
             echo "Configure line:"
             echo '```'
-            echo "./configure --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe --enable-demuxer=mpegts --enable-muxer=mpegts --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3,dca --enable-encoder=aac --enable-parser=h264,hevc,mpegvideo,mpegaudio,aac,aac_latm,ac3,dca --enable-filter=aresample,aformat,anull --enable-bsf=extract_extradata"
+            echo "./configure --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3,dca,opus,vorbis,flac,truehd,pcm_s16le --enable-encoder=aac --enable-parser=h264,hevc,mpegvideo,mpegaudio,aac,aac_latm,ac3,dca --enable-filter=aresample,aformat,anull --enable-bsf=extract_extradata,h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc --enable-zlib"
             echo '```'
             echo "(each comma-separated group above is repeated once per value in the actual build - see BUILD-INFO-windows.txt / BUILD-INFO-linux.txt attached below for the exact per-platform command.)"
             echo
@@ -283,7 +328,7 @@ jobs:
           if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release edit "$TAG" --repo "${{ github.repository }}" --prerelease --notes-file "$BODY_FILE"
           else
-            gh release create "$TAG" --repo "${{ github.repository }}" --prerelease --title "ffmpeg sidecar v1" --notes-file "$BODY_FILE"
+            gh release create "$TAG" --repo "${{ github.repository }}" --prerelease --title "ffmpeg sidecar v2" --notes-file "$BODY_FILE"
           fi
 
           gh release upload "$TAG" release-assets/* --repo "${{ github.repository }}" --clobber

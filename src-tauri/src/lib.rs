@@ -1,4 +1,7 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod audio_proxy;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod discord;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -8,10 +11,22 @@ mod external_player;
 mod hevc_extension;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod matroska;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod sniffer;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod tray;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod updater;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod vod_audio_proxy;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod vod_proxy;
 
 // The Stdout target also covers Android release builds; tauri-plugin-log routes it to logcat there, not just the debug-only terminal.
 #[cfg(not(target_os = "ios"))]
@@ -132,25 +147,41 @@ pub fn run() {
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .manage(audio_proxy::AudioProxyState::default())
         .manage(discord::RpcState::default())
         .manage(external_player::ExternalPlayerState::default())
         .manage(updater::PendingUpdateState::default())
+        .manage(sniffer::SnifferState::default())
+        .manage(vod_audio_proxy::VodAudioProxyState::default())
+        .manage(vod_proxy::VodProxyState::default())
         .invoke_handler(tauri::generate_handler![
+            audio_proxy::audio_transcode_available,
+            audio_proxy::register_audio_transcode,
+            audio_proxy::unregister_audio_transcode,
             discord::discord_set_activity,
             discord::discord_clear,
             discord::discord_disconnect,
             external_player::launch_external_player,
             hevc_extension::install_appx_package,
             hevc_extension::is_store_build,
+            sniffer::sniff_page,
+            sniffer::cancel_sniff,
+            sniffer::sniff_report,
+            sniffer::sniff_report_drm,
             tray::set_close_to_tray,
             updater::updater_check_from,
             updater::updater_install,
+            vod_audio_proxy::vod_audio_remux_available,
+            vod_audio_proxy::register_vod_audio_remux,
+            vod_audio_proxy::unregister_vod_audio_remux,
+            vod_proxy::register_vod_proxy,
+            vod_proxy::unregister_vod_proxy,
         ]);
 
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_android_fs::init());
 
-    builder
+    let app = builder
         .setup(|_app| {
             install_panic_hook();
             #[cfg(target_os = "android")]
@@ -177,6 +208,16 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    app.run(|_app_handle, _event| {
+        // Tauri exit paths (e.g. tray Quit) may not run Drop for state behind Arcs, so kill any active ffmpeg session here.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let tauri::RunEvent::Exit = _event {
+            use tauri::Manager;
+            audio_proxy::shutdown(&_app_handle.state::<audio_proxy::AudioProxyState>());
+            vod_audio_proxy::shutdown(&_app_handle.state::<vod_audio_proxy::VodAudioProxyState>());
+        }
+    });
 }

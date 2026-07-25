@@ -1,0 +1,431 @@
+---
+import Layout from "@/layouts/Layout.astro"
+import {
+  IconFolderPlus,
+  IconLink,
+  IconDownload,
+  IconArrowRight,
+  IconAlertTriangle,
+  IconArrowBackUp,
+  IconReplace,
+  IconPlugConnected,
+} from "@tabler/icons-svelte"
+---
+
+<Layout pageTitle="Playlist editor">
+  <main
+    id="editor-page-main"
+    class="w-full max-w-560 mx-auto px-4 md:px-6 lg:px-8 pt-4 lg:pt-6 pb-6
+      flex flex-col gap-4 flex-1 min-h-0">
+
+    <!-- Not-found state: shown when ?id= doesn't resolve to a custom entry -->
+    <section
+      id="editor-not-found"
+      class="icon-mark-host hidden flex-1 min-h-0 items-center justify-center py-10">
+      <div class="flex flex-col items-center gap-3 text-center max-w-sm">
+        <span class="icon-mark icon-mark--bad icon-mark--lg">
+          <IconAlertTriangle aria-hidden="true" stroke={2} />
+        </span>
+        <h1 data-i18n="editor.notFoundTitle" class="text-base font-semibold">Playlist not found</h1>
+        <p data-i18n="editor.notFoundBody" class="text-sm text-fg-3">
+          This custom playlist doesn't exist or was removed.
+        </p>
+        <a href="/settings#settings-playlists" class="btn">
+          <span data-i18n="editor.backToSettings">Back to Settings</span>
+        </a>
+      </div>
+    </section>
+
+    <div id="editor-main" class="hidden flex-1 min-h-0 flex-col gap-4">
+      <!-- Header -->
+      <header class="flex flex-wrap items-center gap-3">
+        <div class="flex items-center gap-3 min-w-0 flex-1">
+          <input
+            id="editor-title-input"
+            type="text"
+            class="field-input flex-1 min-w-0 max-w-md font-semibold text-lg h-auto py-2"
+            data-i18n-attr="placeholder:editor.titlePlaceholder"
+            placeholder="Playlist name"
+          />
+          <span id="editor-channel-count" class="text-xs text-fg-3 tabular-nums shrink-0"></span>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <button
+            id="editor-undo-btn"
+            type="button"
+            class="btn h-9 w-9 p-0"
+            disabled
+            data-i18n-attr="aria-label:editor.undo;title:editor.undo"
+            aria-label="Undo"
+            title="Undo">
+            <IconArrowBackUp aria-hidden="true" stroke={2} />
+          </button>
+          <button id="editor-new-group-btn" type="button" class="btn">
+            <IconFolderPlus aria-hidden="true" class="btn-icon" />
+            <span data-i18n="editor.newGroup">New group</span>
+          </button>
+          <button id="editor-add-url-btn" type="button" class="btn">
+            <IconLink aria-hidden="true" class="btn-icon" />
+            <span data-i18n="editor.addByUrl">Add by URL</span>
+          </button>
+          <button id="editor-bulk-rename-btn" type="button" class="btn">
+            <IconReplace aria-hidden="true" class="btn-icon" />
+            <span data-i18n="editor.bulkRenameBtn">Find &amp; replace</span>
+          </button>
+          <button id="editor-check-links-btn" type="button" class="btn">
+            <IconPlugConnected aria-hidden="true" class="btn-icon" />
+            <span id="editor-check-links-label" data-i18n="editor.checkLinksBtn">Check links</span>
+          </button>
+          <button id="editor-export-btn" type="button" class="btn">
+            <IconDownload aria-hidden="true" class="btn-icon" />
+            <span data-i18n="editor.export">Export .m3u</span>
+          </button>
+          <a href="/settings#settings-playlists" class="btn">
+            <span data-i18n="editor.done">Done</span>
+          </a>
+        </div>
+      </header>
+
+      <datalist id="editor-groups-datalist"></datalist>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-0">
+        <!-- LEFT: source browser -->
+        <section
+          id="editor-source-pane"
+          class="rounded-2xl border border-line bg-surface p-4 flex flex-col gap-3 min-h-0">
+          <h2 data-i18n="editor.sourceBrowser" class="text-sm font-semibold">Add channels from</h2>
+
+          <label class="flex flex-col gap-1.5">
+            <span class="sr-only" data-i18n="editor.sourceSelectLabel">Source playlist</span>
+            <select id="editor-source-select" class="field-input"></select>
+          </label>
+
+          <div class="flex gap-2">
+            <label class="flex-1 min-w-0">
+              <span class="sr-only" data-i18n="list.searchChannels">Search channels</span>
+              <input
+                id="editor-source-search"
+                type="search"
+                class="field-input"
+                data-i18n-attr="placeholder:editor.searchPlaceholder"
+                placeholder="Search channels…"
+              />
+            </label>
+            <label class="w-36 shrink-0">
+              <span class="sr-only" data-i18n="editor.categoryFilterLabel">Category</span>
+              <select id="editor-source-category" class="field-input"></select>
+            </label>
+          </div>
+
+          <div
+            id="editor-source-list"
+            class="relative flex-1 min-h-64 overflow-y-auto rounded-xl border border-line bg-bg">
+            <div id="editor-source-spacer" class="relative w-full"></div>
+            <div id="editor-source-viewport" class="absolute inset-x-0 top-0"></div>
+            <p id="editor-source-empty" class="hidden p-6 text-center text-sm text-fg-3"></p>
+          </div>
+
+          <div class="flex items-center gap-2 flex-wrap">
+            <span id="editor-source-selected-count" class="text-xs text-fg-3 tabular-nums shrink-0"></span>
+            <label class="flex-1 min-w-32">
+              <span class="sr-only" data-i18n="editor.targetGroupPlaceholder">Target group (optional)</span>
+              <input
+                id="editor-source-target-group"
+                type="text"
+                class="field-input"
+                list="editor-groups-datalist"
+                data-i18n-attr="placeholder:editor.targetGroupPlaceholder"
+                placeholder="Target group (optional)"
+              />
+            </label>
+            <button id="editor-add-selected-btn" type="button" class="btn-primary shrink-0" disabled>
+              <IconArrowRight aria-hidden="true" class="btn-icon" />
+              <span data-i18n="editor.addSelected">Add selected</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- RIGHT: playlist -->
+        <section
+          id="editor-playlist-pane"
+          class="rounded-2xl border border-line bg-surface p-4 flex flex-col gap-3 min-h-0">
+          <h2 data-i18n="editor.yourPlaylist" class="text-sm font-semibold">Your playlist</h2>
+          <div id="editor-groups" class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4 pr-1"></div>
+          <p
+            id="editor-empty-state"
+            class="hidden text-sm text-fg-3 text-center py-10"
+            data-i18n="editor.emptyState">
+            No channels yet. Add some from the panel on the left.
+          </p>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- New group dialog -->
+  <dialog
+    id="editor-new-group-dialog"
+    aria-labelledby="editor-new-group-title"
+    class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
+      w-[min(24rem,calc(100vw-2rem))] backdrop:bg-black/60">
+    <form method="dialog" class="flex flex-col gap-4 p-5">
+      <h2 id="editor-new-group-title" data-i18n="editor.newGroupDialogTitle" class="text-base font-semibold">
+        New group
+      </h2>
+      <label class="flex flex-col gap-1.5">
+        <span data-i18n="editor.newGroupNameLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+          Group name
+        </span>
+        <input
+          id="editor-new-group-name"
+          type="text"
+          class="field-input"
+          data-i18n-attr="placeholder:editor.groupNamePlaceholder"
+          placeholder="Group name"
+        />
+      </label>
+      <div class="flex gap-2 justify-end">
+        <button type="button" data-role="cancel" class="btn">
+          <span data-i18n="common.cancel">Cancel</span>
+        </button>
+        <button type="submit" data-role="create" class="btn-primary">
+          <span data-i18n="editor.newPlaylistCreate">Create</span>
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Add by URL dialog -->
+  <dialog
+    id="editor-add-url-dialog"
+    aria-labelledby="editor-add-url-title"
+    class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
+      w-[min(30rem,calc(100vw-2rem))] max-h-[min(85dvh,42rem)] backdrop:bg-black/60">
+    <form method="dialog" class="flex flex-col h-full p-5 gap-4 overflow-y-auto">
+      <div class="flex flex-col gap-1">
+        <h2 id="editor-add-url-title" data-i18n="editor.addUrlDialogTitle" class="text-base font-semibold">
+          Add by URL
+        </h2>
+        <p data-i18n="editor.addUrlDialogSubtitle" class="text-xs text-fg-3">
+          Add a direct stream URL as a channel in this playlist.
+        </p>
+      </div>
+
+      <label class="flex flex-col gap-1.5">
+        <span data-i18n="editor.urlLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+          Stream URL
+        </span>
+        <input
+          id="editor-url-url"
+          type="text"
+          inputmode="url"
+          autocapitalize="off"
+          spellcheck="false"
+          class="field-input"
+          data-i18n-attr="placeholder:editor.urlPlaceholder"
+          placeholder="https://example.com/stream.m3u8"
+        />
+        <span id="editor-url-error" class="hidden text-xs text-bad"></span>
+      </label>
+
+      <div class="grid grid-cols-2 gap-3">
+        <label class="flex flex-col gap-1.5">
+          <span data-i18n="editor.nameLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">Name</span>
+          <input id="editor-url-name" type="text" class="field-input" />
+        </label>
+        <label class="flex flex-col gap-1.5">
+          <span data-i18n="editor.groupLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">Group</span>
+          <input id="editor-url-group" type="text" class="field-input" list="editor-groups-datalist" />
+        </label>
+      </div>
+
+      <label class="flex flex-col gap-1.5">
+        <span data-i18n="editor.logoLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">Logo URL</span>
+        <input id="editor-url-logo" type="text" class="field-input" />
+      </label>
+
+      <div class="grid grid-cols-2 gap-3">
+        <label class="flex flex-col gap-1.5">
+          <span data-i18n="editor.userAgentLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+            User-Agent (optional)
+          </span>
+          <input id="editor-url-ua" type="text" class="field-input" />
+        </label>
+        <label class="flex flex-col gap-1.5">
+          <span data-i18n="editor.refererLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+            Referer (optional)
+          </span>
+          <input id="editor-url-referer" type="text" class="field-input" />
+        </label>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <label class="flex flex-col gap-1.5">
+          <span data-i18n="editor.manifestTypeLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+            Manifest type
+          </span>
+          <select id="editor-url-manifest" class="field-input">
+            <option value="" data-i18n="editor.manifestTypeAuto">Auto</option>
+            <option value="hls" data-i18n="editor.manifestTypeHls">HLS</option>
+            <option value="mpd" data-i18n="editor.manifestTypeDash">MPEG-DASH</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-1.5">
+          <span data-i18n="editor.licenseKeyLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+            ClearKey license (KID:KEY, optional)
+          </span>
+          <input id="editor-url-license" type="text" class="field-input" />
+        </label>
+      </div>
+
+      <div class="flex gap-2 justify-end mt-auto pt-2">
+        <button type="button" data-role="cancel" class="btn">
+          <span data-i18n="common.cancel">Cancel</span>
+        </button>
+        <button type="submit" data-role="add" class="btn-primary">
+          <span data-i18n="editor.addUrlSubmit">Add channel</span>
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Edit channel details dialog -->
+  <dialog
+    id="editor-channel-edit-dialog"
+    aria-labelledby="editor-channel-edit-title"
+    class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
+      w-[min(26rem,calc(100vw-2rem))] max-h-[min(85dvh,44rem)] backdrop:bg-black/60">
+    <form method="dialog" class="flex flex-col h-full gap-4 p-5 overflow-y-auto">
+      <h2 id="editor-channel-edit-title" data-i18n="editor.editDetailsTitle" class="text-base font-semibold">
+        Channel details
+      </h2>
+      <label class="flex flex-col gap-1.5">
+        <span data-i18n="editor.nameLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">Name</span>
+        <input id="editor-edit-name" type="text" class="field-input" />
+      </label>
+      <label class="flex flex-col gap-1.5">
+        <span data-i18n="editor.logoLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">Logo URL</span>
+        <input id="editor-edit-logo" type="text" class="field-input" />
+      </label>
+      <div class="grid grid-cols-2 gap-3">
+        <label class="flex flex-col gap-1.5">
+          <span data-i18n="editor.channelNumberLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+            Channel number
+          </span>
+          <input id="editor-edit-chno" type="number" min="0" class="field-input" />
+        </label>
+        <label class="flex flex-col gap-1.5">
+          <span data-i18n="editor.tvgIdLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+            EPG ID (tvg-id)
+          </span>
+          <input id="editor-edit-tvgid" type="text" class="field-input" />
+        </label>
+      </div>
+      <fieldset class="flex flex-col gap-3">
+        <legend data-i18n="editor.catchupFieldsetLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+          Catch-up
+        </legend>
+        <label class="flex flex-col gap-1.5">
+          <span data-i18n="editor.catchupModeLabel" class="sr-only">Catch-up mode</span>
+          <select id="editor-edit-catchup-mode" class="field-input">
+            <option value="" data-i18n="editor.catchupModeInherit">Inherit from source</option>
+            <option value="default" data-i18n="editor.catchupModeDefault">Default</option>
+            <option value="append" data-i18n="editor.catchupModeAppend">Append</option>
+            <option value="shift" data-i18n="editor.catchupModeShift">Shift</option>
+            <option value="flussonic" data-i18n="editor.catchupModeFlussonic">Flussonic</option>
+            <option value="xc" data-i18n="editor.catchupModeXc">Xtream Codes</option>
+          </select>
+        </label>
+        <div class="grid grid-cols-2 gap-3">
+          <label class="flex flex-col gap-1.5">
+            <span data-i18n="editor.catchupDaysLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+              Days
+            </span>
+            <input id="editor-edit-catchup-days" type="number" min="0" class="field-input" />
+          </label>
+          <label class="flex flex-col gap-1.5">
+            <span data-i18n="editor.catchupSourceLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+              Source URL template
+            </span>
+            <input id="editor-edit-catchup-source" type="text" class="field-input" />
+          </label>
+        </div>
+      </fieldset>
+      <div class="flex gap-2 justify-end mt-auto pt-2">
+        <button type="button" data-role="cancel" class="btn">
+          <span data-i18n="common.cancel">Cancel</span>
+        </button>
+        <button type="submit" data-role="save" class="btn-primary">
+          <span data-i18n="common.save">Save</span>
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Bulk rename (find & replace) dialog -->
+  <dialog
+    id="editor-bulk-rename-dialog"
+    aria-labelledby="editor-bulk-rename-title"
+    class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
+      w-[min(26rem,calc(100vw-2rem))] backdrop:bg-black/60">
+    <form method="dialog" class="flex flex-col gap-4 p-5">
+      <div class="flex flex-col gap-1">
+        <h2 id="editor-bulk-rename-title" data-i18n="editor.bulkRenameDialogTitle" class="text-base font-semibold">
+          Find &amp; replace
+        </h2>
+        <p data-i18n="editor.bulkRenameDialogSubtitle" class="text-xs text-fg-3">
+          Replace text in channel names across the whole playlist.
+        </p>
+      </div>
+      <label class="flex flex-col gap-1.5">
+        <span data-i18n="editor.bulkRenameFindLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+          Find
+        </span>
+        <input id="editor-bulk-rename-find" type="text" class="field-input" />
+      </label>
+      <label class="flex flex-col gap-1.5">
+        <span data-i18n="editor.bulkRenameReplaceLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+          Replace with
+        </span>
+        <input id="editor-bulk-rename-replace" type="text" class="field-input" />
+      </label>
+      <p id="editor-bulk-rename-preview" class="text-xs text-fg-3"></p>
+      <div class="flex gap-2 justify-end">
+        <button type="button" data-role="cancel" class="btn">
+          <span data-i18n="common.cancel">Cancel</span>
+        </button>
+        <button type="submit" data-role="submit" class="btn-primary" disabled>
+          <span data-i18n="editor.bulkRenameSubmit">Replace all</span>
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    import "@/scripts/editor/editor.ts"
+  </script>
+</Layout>
+
+<style>
+  #editor-main.flex {
+    display: flex;
+  }
+
+  .editor-channel-row {
+    content-visibility: auto;
+    contain-intrinsic-size: 56px;
+  }
+
+  .editor-channel-row[draggable="true"] {
+    cursor: grab;
+  }
+  .editor-channel-row[data-dragging="true"] {
+    opacity: 0.4;
+  }
+  .editor-group[data-drop-target="true"],
+  .editor-group-header[data-drop-target="true"],
+  .editor-channel-row[data-drop-target="true"] {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+  }
+</style>

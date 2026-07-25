@@ -89,7 +89,7 @@ async function probeVariantUrl(url: string): Promise<boolean> {
     })
     const reachable = response.ok || response.status === 206
     // Timeshift streams are endless; cancel so the probe doesn't hold a provider connection slot.
-    try { response.body?.cancel?.() } catch {}
+    try { void response.body?.cancel?.()?.catch?.(() => {}) } catch {}
     return reachable
   } catch (err) {
     log.warn("[xt:catchup] variant probe failed:", url, String((err as Error)?.message || err))

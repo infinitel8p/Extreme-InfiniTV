@@ -61,6 +61,11 @@ interface AndroidIntentBridge {
   ) => boolean
 }
 
+interface AndroidSnifferBridge {
+  startSniff?: (pageUrl: string, timeoutMs: number) => void
+  cancelSniff?: () => void
+}
+
 interface SpatialNavigationApi {
   init: () => void
   uninit: () => void
@@ -86,6 +91,7 @@ declare global {
     AndroidPip?: AndroidPipBridge
     AndroidIntent?: AndroidIntentBridge
     AndroidVideo?: AndroidVideoBridge
+    AndroidSniffer?: AndroidSnifferBridge
     /** Called from MainActivity on PiP enter to promote the playing video into HTML5 fullscreen. */
     __xtPipFullscreen?: () => void
     /** Called from MainActivity on PiP exit; undoes __xtPipFullscreen if it succeeded. */

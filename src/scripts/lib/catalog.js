@@ -1,17 +1,31 @@
 // Shared catalog fetch + parse + cache
 
-import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+import {
+  cachedFetch,
+  getCached,
+  hydrate as hydrateCache,
+  invalidateCustomDependents,
+} from "@/scripts/lib/cache.js"
 import {
   loadCreds,
   isLikelyM3USource,
   isLocalM3UHost,
+  isCustomHost,
   readLocalM3UContent,
+  getEntries,
+  entryToCreds,
 } from "@/scripts/lib/creds.js"
 import { normalize } from "@/scripts/lib/text.js"
 import { providerFetch, streamingText } from "@/scripts/lib/provider-fetch.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
 import { parseM3U, isHlsStreamManifest } from "@/scripts/lib/m3u-parser.ts"
+import {
+  loadCustomDoc,
+  resolveCustomChannels,
+  collectSourceEntryIds,
+} from "@/scripts/lib/custom-playlist.ts"
+import { buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { t } from "@/scripts/lib/i18n.js"
 import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
 import { log } from "@/scripts/lib/log.js"
@@ -59,8 +73,8 @@ function makeBytesEmitter(playlistId, kind) {
 // ---------------------------------------------------------------------------
 // Live (Xtream + M3U)
 // ---------------------------------------------------------------------------
-async function fetchLiveCategoryMap() {
-  const r = await xtreamApiFetch("get_live_categories")
+async function fetchLiveCategoryMap(playlistId) {
+  const r = await xtreamApiFetch("get_live_categories", {}, { entryId: playlistId })
   if (!r.ok) throw new HttpRetryError(r.status, `live_categories ${r.status}`)
   const data = await r.json().catch((err) => {
     log.warn("[xt:catalog] live categories parse failed:", err?.message || err)
@@ -78,15 +92,17 @@ async function fetchLiveCategoryMap() {
   )
 }
 
-function m3uToChannelList(text, sourceUrl) {
+function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestType, drmScheme, licenseKey) {
   const fallbackCategory = t("stream.uncategorized") || "Uncategorized"
-  if (isHlsStreamManifest(text) && typeof sourceUrl === "string" && /^https?:\/\//i.test(sourceUrl)) {
+  const isDirectStream = typeof sourceUrl === "string" && /^https?:\/\//i.test(sourceUrl)
+  const isDashSource = isDirectStream && manifestType === "mpd"
+  if (isDirectStream && (isHlsStreamManifest(text) || isDashSource)) {
     const name = t("stream.directStream") || "Live stream"
     return [{
       id: 1,
       name,
       category: fallbackCategory,
-      logo: null,
+      logo: logo || null,
       tvgId: undefined,
       chno: undefined,
       norm: normalize(`${name} ${fallbackCategory}`),
@@ -96,6 +112,11 @@ function m3uToChannelList(text, sourceUrl) {
       catchupDays: null,
       catchupSource: null,
       catchupCorrection: null,
+      userAgent: streamHeaders?.userAgent || null,
+      referer: streamHeaders?.referer || null,
+      manifestType: isDashSource ? "mpd" : null,
+      drmScheme: drmScheme || null,
+      licenseKey: licenseKey || null,
     }]
   }
   const { entries } = parseM3U(text)
@@ -118,9 +139,55 @@ function m3uToChannelList(text, sourceUrl) {
       catchupDays: entry.catchupDays ?? null,
       catchupSource: entry.catchupSource ?? null,
       catchupCorrection: entry.catchupCorrection ?? null,
+      userAgent: entry.userAgent ?? null,
+      referer: entry.referer ?? null,
+      manifestType: entry.manifestType ?? null,
+      drmScheme: entry.drmScheme ?? null,
+      licenseKey: entry.licenseKey ?? null,
     })
   }
   return out
+}
+
+/** Build the source pools a custom playlist's channels resolve against, hydrating each referenced entry's own live catalog through the normal cached path. */
+export async function buildCustomSourcePools(doc, opts = {}) {
+  const sourceEntryIds = collectSourceEntryIds(doc)
+  const entries = await getEntries()
+  const pools = new Map()
+  await Promise.all(
+    sourceEntryIds.map(async (sourceEntryId) => {
+      const sourceEntry = entries.find((entry) => entry._id === sourceEntryId)
+      // Custom sources would recurse into ensureLive and deadlock on cachedFetch's in-flight dedup.
+      if (!sourceEntry || sourceEntry.type === "custom") return
+      let channels
+      try {
+        channels = await ensureLive(entryToCreds(sourceEntry), sourceEntryId, opts)
+      } catch (err) {
+        log.warn("[xt:catalog] custom playlist source hydration failed:", sourceEntryId, err?.message || err)
+        return
+      }
+      if (sourceEntry.type === "xtream") {
+        pools.set(sourceEntryId, {
+          kind: "xtream",
+          channels,
+          // Re-derived per call so a mirror failover is reflected in the stream URL.
+          buildUrl: (streamId) => {
+            const sourceCreds = entryToCreds(sourceEntry)
+            return buildLiveStreamUrl(sourceCreds, streamId, sourceCreds.liveContainer)
+          },
+        })
+      } else {
+        pools.set(sourceEntryId, { kind: "m3u", channels })
+      }
+    })
+  )
+  return pools
+}
+
+async function fetchCustomLiveChannels(playlistId, opts = {}) {
+  const doc = await loadCustomDoc(playlistId)
+  const pools = await buildCustomSourcePools(doc, opts)
+  return resolveCustomChannels(doc, pools)
 }
 
 export async function ensureLive(creds, playlistId, opts = {}) {
@@ -129,6 +196,9 @@ export async function ensureLive(creds, playlistId, opts = {}) {
   const onBytes = makeBytesEmitter(playlistId, "live")
   const { data } = await cachedFetch(playlistId, kind, CHANNELS_TTL_MS, () => retryWithBackoff(async () => {
     if (isM3U) {
+      if (isCustomHost(creds.host)) {
+        return fetchCustomLiveChannels(playlistId, opts)
+      }
       let text
       if (isLocalM3UHost(creds.host)) {
         text = await readLocalM3UContent(creds.host)
@@ -144,10 +214,19 @@ export async function ensureLive(creds, playlistId, opts = {}) {
           localStorage.setItem(`xt_m3u_epg:${playlistId}`, epgUrl)
         }
       } catch {}
-      return m3uToChannelList(text, creds.host)
+      const activeEntry = (await getEntries()).find((entry) => entry._id === playlistId)
+      return m3uToChannelList(
+        text,
+        creds.host,
+        activeEntry?.streamHeaders,
+        activeEntry?.logo,
+        activeEntry?.manifestType,
+        activeEntry?.drmScheme,
+        activeEntry?.licenseKey
+      )
     }
-    const catMap = await fetchLiveCategoryMap()
-    const r = await xtreamApiFetch("get_live_streams")
+    const catMap = await fetchLiveCategoryMap(playlistId)
+    const r = await xtreamApiFetch("get_live_streams", {}, { entryId: playlistId })
     const body = await streamingText(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `live_streams ${r.status}`)
     const parsed = JSON.parse(body)
@@ -421,6 +500,7 @@ export async function warmupActive(playlistId, opts = {}) {
       // Failure is ignored - M3U sources won't have a player_api endpoint.
       ensureUserInfo(creds, pid, { force }).catch(() => null),
     ])
+    if (force) await invalidateCustomDependents(pid)
     dispatch(EVT_WARMED, { playlistId: pid, errors })
     return { live, vod, series, errors }
   })()
@@ -467,6 +547,7 @@ export async function retryWarmupKind(playlistId, kind) {
   dispatch(EVT_WARMING_PROGRESS, { playlistId: pid, kind, status: "pending" })
   try {
     const data = await fetcher(creds, pid, { force: true })
+    if (kind === "live") await invalidateCustomDependents(pid)
     dispatch(EVT_WARMING_PROGRESS, {
       playlistId: pid,
       kind,

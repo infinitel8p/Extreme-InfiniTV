@@ -91,14 +91,15 @@ export function videoCodecDecodable(codec: string | null | undefined): boolean {
   }
 }
 
-// Engine error details that point at a codec/format problem rather than a
-// network one: hls.js bufferAddCodecError / bufferIncompatibleCodecsError,
-// mpegts.js CodecUnsupported / FormatUnsupported, the synthetic
-// "videoDecodeFailure" from the dead-video watchdog (track present, audio
-// playing, zero frames ever decoded), and shaka.util.Error MEDIA/DRM category
-// failures (decode, ClearKey/EME license errors) for MPEG-DASH.
+// Covers hls.js/mpegts.js codec errors, the dead-video watchdog signal, and shaka MEDIA/DRM failures.
 const CODEC_ERROR_DETAIL_RX =
   /codec|decode|format.?unsupported|incompatible|drm|decrypt|eme|clearkey|license/i
+
+// Chromium/WebView2 reports a rejected second addSourceBuffer() as a "limit of SourceBuffer objects" error, not a codec error.
+const AUDIO_BUFFER_ERROR_RX = /addsourcebuffer|limit of sourcebuffer/i
+
+// Our mpegts path adds the video buffer first, so this message always convicts the audio track.
+const AUDIO_BUFFER_LIMIT_RX = /limit of sourcebuffer/i
 
 export function classifyStartFailure(input: {
   videoCodec?: string | null
@@ -108,17 +109,27 @@ export function classifyStartFailure(input: {
   deviceHevc: boolean
 }): StartFailureVerdict {
   const videoCodec = input.videoCodec?.trim() || null
-  const codecError = CODEC_ERROR_DETAIL_RX.test(input.errorDetail || "")
+  const errorDetail = input.errorDetail || ""
+  const codecError = CODEC_ERROR_DETAIL_RX.test(errorDetail)
+  const audioBufferError = AUDIO_BUFFER_ERROR_RX.test(errorDetail)
+  const audioUnsupported = isUnsupportedAudioCodec(input.audioCodec)
+  const videoIsHevc = !!videoCodec && isHevcCodecString(videoCodec)
 
-  if (videoCodec && isHevcCodecString(videoCodec)) {
+  // A known-decodable video track shifts blame to the audio track instead.
+  const videoPlayable = videoIsHevc ? input.deviceHevc : videoCodecDecodable(videoCodec)
+  if (videoPlayable && (audioUnsupported || audioBufferError)) {
+    return { kind: "audio", codec: input.audioCodec ?? null }
+  }
+
+  if (videoIsHevc) {
     if (!input.deviceHevc || codecError) return { kind: "hevc", codec: videoCodec }
     return { kind: "unknown", codec: videoCodec }
   }
 
   const nameSaysHevc = input.nameHint && !input.deviceHevc && !videoCodec
-  const audioUnsupported = isUnsupportedAudioCodec(input.audioCodec)
 
-  if (codecError) {
+  if (codecError || audioBufferError) {
+    if (AUDIO_BUFFER_LIMIT_RX.test(errorDetail)) return { kind: "audio", codec: input.audioCodec ?? null }
     if (nameSaysHevc) return { kind: "hevc", codec: null }
     if (audioUnsupported) return { kind: "audio", codec: input.audioCodec ?? null }
     if (videoCodec && videoCodecDecodable(videoCodec)) return { kind: "unknown", codec: videoCodec }

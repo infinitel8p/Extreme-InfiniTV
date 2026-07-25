@@ -7,16 +7,20 @@ lede: "When the built-in player can't handle a stream, send it to MPV, VLC, or a
 
 import Callout from "../components/Callout.astro"
 
-The built-in player works for most streams. If a channel won't play, or you'd rather watch in MPV or VLC, hand the stream off to an external player.
+The built-in player works for most streams. If a channel won't play, or you'd rather watch in MPV or VLC, hand the stream off to an external player. When a stream's audio format can't be decoded in-app (AC-3 / Dolby Digital is the usual case), the app says so and offers the external-player handoff right in the error message.
+
+Everything playback-related lives in **Settings > Playback**: the built-in player engine (Video.js, ArtPlayer, or Shaka Player), the external player paths, and the option to make MPV or VLC the default way every stream opens.
 
 ## Desktop (Windows / macOS / Linux)
 
-Open **Settings > External players** and point the app at the player you want to use:
+Open **Settings > Playback** and point the app at the player you want to use:
 
 - **MPV** - paste the path to your `mpv` executable.
 - **VLC** - paste the path to your `vlc` executable.
 
 After you set a path, an **Open in MPV** or **Open in VLC** button appears on movies, series episodes, and next to the currently-tuned channel on Live TV. Click it and the stream opens in that player. Tuning to a new channel reuses the same window instead of opening a new one.
+
+If you configure both MPV and VLC, the **Preferred external player** setting picks which one the button uses: **MPV**, **VLC**, or **Ask each time** for a per-stream picker.
 
 <Callout type="note">
   You can also right-click any channel and pick **Copy stream URL**, then paste it into any player you like.

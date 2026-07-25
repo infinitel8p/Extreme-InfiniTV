@@ -34,6 +34,7 @@ import {
   isDownloadable,
   inferExt,
   getLocalPlayableSrc,
+  getLocalDownloadPath,
   tryAndroidIntentPlayback,
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
@@ -61,7 +62,14 @@ import {
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
-import { mountPlayer, getExternalLauncher } from "@/scripts/lib/player-runtime.ts"
+import {
+  mountPlayer,
+  getExternalLauncher,
+  subscribeExternalPlayerExit,
+} from "@/scripts/lib/player-runtime.ts"
+import { prepareVodPlayback } from "@/scripts/lib/vod-proxy.ts"
+import { vodAudioRemuxAvailable } from "@/scripts/lib/vod-audio-proxy.ts"
+import { createVodAudioSwitcher, discoverVodAudioTracks } from "@/scripts/lib/vod-audio-switch.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
@@ -101,6 +109,7 @@ let creds = { host: "", port: "", user: "", pass: "" }
 let movie = null
 let detailSrc = ""
 let detailSrcBuilder = null
+let externalPresenceActive = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
@@ -310,6 +319,9 @@ let vjs = null
 let progressListenersBound = false
 let pipBtnBound = false
 let scaleBtnBound = false
+let playRequestId = 0
+let audioSwitcher = null
+let audioDiscoveryController = null
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
@@ -407,6 +419,7 @@ async function ensureEmbeddedPlayer(backend) {
 
 async function startPlayback() {
   if (!movie) return
+  const requestId = ++playRequestId
 
   // detailSrc may not be ready yet if the network fetch is in flight.
   let waited = 0
@@ -425,6 +438,8 @@ async function startPlayback() {
     if (resolved) detailSrc = resolved
   }
 
+  if (requestId !== playRequestId) return
+
   if (activePlaylistId) {
     pushRecent(activePlaylistId, "vod", movie.id, movie.name, movie.logo || null)
   }
@@ -433,6 +448,7 @@ async function startPlayback() {
 
   const localSrc = await getLocalPlayableSrc(detailSrc)
   const playSrc = localSrc || detailSrc
+  if (requestId !== playRequestId) return
   const saved = activePlaylistId
     ? getProgress(activePlaylistId, "vod", movie.id)
     : null
@@ -469,7 +485,10 @@ async function startPlayback() {
 
   if (backend === "mpv" || backend === "vlc") {
     try {
-      await launchExternalPlayback(backend, playSrc, resumePos)
+      const externalSrc = (await getLocalDownloadPath(detailSrc)) || playSrc
+      await launchExternalPlayback(backend, externalSrc, resumePos)
+      pushMoviePresence()
+      externalPresenceActive = true
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
@@ -492,6 +511,7 @@ async function startPlayback() {
     return
   }
   if (!player) return
+  if (requestId !== playRequestId) return
   setupPipButton(player)
   setupScaleButton()
   const mime = chooseMime(detailSrc)
@@ -512,7 +532,49 @@ async function startPlayback() {
     })
   }
 
-  player.src({ src: playSrc, type: mime })
+  const prepared = await prepareVodPlayback(playSrc)
+  if (requestId !== playRequestId) {
+    prepared.mkvSession?.stop()
+    return
+  }
+
+  audioSwitcher?.dispose()
+  audioSwitcher = null
+  audioDiscoveryController?.abort()
+  audioDiscoveryController = new AbortController()
+  let initialAudioSource = null
+  if (await vodAudioRemuxAvailable()) {
+    const audioTracks = await discoverVodAudioTracks(prepared.mkvSession, playSrc, audioDiscoveryController.signal)
+    if (requestId !== playRequestId) {
+      prepared.mkvSession?.stop()
+      return
+    }
+    if (audioTracks.length >= 2) {
+      audioSwitcher = createVodAudioSwitcher({
+        handle: player,
+        originalSrc: prepared.playbackUrl,
+        originalMime: mime,
+        originalSubtitles: { sourceUrl: playSrc, mkvSession: prepared.mkvSession },
+        sourceUrl: playSrc,
+        remuxInputUrl: prepared.mkvSession ? prepared.playbackUrl : null,
+        getKnownDurationSeconds: () => player.duration?.() || saved?.duration || 0,
+        tracks: audioTracks,
+      })
+      initialAudioSource = audioSwitcher.source
+    }
+  }
+
+  if (requestId !== playRequestId) {
+    prepared.mkvSession?.stop()
+    return
+  }
+
+  player.src({
+    src: prepared.playbackUrl,
+    type: mime,
+    subtitles: { sourceUrl: playSrc, mkvSession: prepared.mkvSession },
+    audio: initialAudioSource,
+  })
   applyVideoScale()
 
   if (!progressListenersBound) {
@@ -545,18 +607,22 @@ async function startPlayback() {
     )
   }
 
-  if (activePlaylistId && movie) {
-    setRichPresence({
-      playlistId: activePlaylistId,
-      details: movie.name || t("detail.discord.watchingMovie") || "Watching a movie",
-      state: movie.year ? `Released ${movie.year}` : "Movie",
-      largeImage: movie.logo || "logo",
-      largeText: movie.name || "Extreme InfiniTV",
-      smallImage: "movie",
-      smallText: "Movie",
-      startTimestamp: Date.now(),
-    })
-  }
+  pushMoviePresence()
+  externalPresenceActive = false
+}
+
+function pushMoviePresence() {
+  if (!activePlaylistId || !movie) return
+  setRichPresence({
+    playlistId: activePlaylistId,
+    details: movie.name || t("detail.discord.watchingMovie") || "Watching a movie",
+    state: movie.year ? `Released ${movie.year}` : "Movie",
+    largeImage: movie.logo || "logo",
+    largeText: movie.name || "Extreme InfiniTV",
+    smallImage: "movie",
+    smallText: "Movie",
+    startTimestamp: Date.now(),
+  })
 }
 
 async function launchExternalPlayback(backend, src, resumeSeconds) {
@@ -595,8 +661,17 @@ const externalBtnHandle = setupExternalPlayerButton(
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}
     },
+    afterLaunch() {
+      pushMoviePresence()
+      externalPresenceActive = true
+    },
   }
 )
+
+subscribeExternalPlayerExit(() => {
+  if (!externalPresenceActive) return
+  externalPresenceActive = false
+})
 
 document.addEventListener("xt:progress-changed", (e) => {
   const detail = e.detail
@@ -620,8 +695,12 @@ window.addEventListener("pagehide", () => {
     }
     vjs?.pause?.()
     vjs?.dispose?.()
+    audioSwitcher?.dispose()
+    audioSwitcher = null
+    audioDiscoveryController?.abort()
   } catch {}
   clearAmbient(ambientEl)
+  externalPresenceActive = false
   clearRichPresence().catch(() => {})
 })
 
@@ -810,11 +889,15 @@ async function boot() {
 
   // A playlist switch re-boots: dispose any player from the previous playlist
   // so its stream stops and its progress listeners stop writing.
+  playRequestId++
   try {
     vjs?.pause?.()
     await vjs?.dispose?.()
   } catch {}
   vjs = null
+  audioSwitcher?.dispose()
+  audioSwitcher = null
+  audioDiscoveryController?.abort()
   progressListenersBound = false
 
   movie = null

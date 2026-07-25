@@ -1,0 +1,55 @@
+---
+layout: ../layouts/DocsLayout.astro
+title: "Audio formats & silent channels"
+description: "Why some live channels play with no sound, and how the desktop app fixes it automatically."
+lede: "Some live channels use audio the built-in player can't decode. On desktop, the app can fix that on the fly without touching the video."
+---
+
+import Callout from "../components/Callout.astro"
+
+## Why some channels have no sound
+
+Some providers encode live channels with AC-3, E-AC-3, MP2, or DTS audio. Video plays fine, but the built-in player can't decode these audio formats, so the stream is silent.
+
+On Windows and Linux, the app can fix this: it re-encodes just the audio to a format the player can decode, through a bundled FFmpeg, while the video passes through untouched. There's no quality loss on the video side and no re-encoding delay worth noticing.
+
+## The automatic fix
+
+The first time you tune a channel like this, video starts playing silently. Within a moment, one of two things happens:
+
+- If **Fix unsupported audio automatically** is on, the app fixes it for you - sound comes in a beat later, no action needed.
+- If it's off (the default), a toast and the failure panel offer a **Fix audio** button. Click it to restore sound.
+
+Once a channel has been fixed this way, the app remembers it per playlist - the next time you tune that channel, it goes straight through the fix with sound from the start.
+
+<Callout type="note">
+  If the fix fails or the process stops mid-stream, playback falls back to the original silent stream instead of stopping - you'll never end up with a dead player.
+</Callout>
+
+## Settings > Playback
+
+Open **Settings > Playback** to control this:
+
+- **Fix unsupported audio automatically** - On or Off. Off by default, so you decide per channel via the **Fix audio** button.
+- **FFmpeg status** - shows **Ready** with the version and where it came from (bundled, system, or custom), or **FFmpeg not found** if none is available.
+- **FFmpeg path** - point the app at your own FFmpeg build with **Browse**, then **Test** to confirm it works. Leave it blank to use the bundled copy.
+
+The app looks for FFmpeg in this order: your custom path first, then the bundled copy, then whatever `ffmpeg` is on your system PATH.
+
+## Platform support
+
+| Platform | What happens |
+|---|---|
+| Windows desktop | Bundled FFmpeg fixes audio automatically or on request. |
+| Linux desktop | Bundled FFmpeg fixes audio automatically or on request. |
+| macOS desktop | Usually not needed - the system already decodes these formats. The custom FFmpeg path is still available if you hit a channel that needs it. |
+| Android | Not available - the app hands off to your native video player instead. See [External players](./external-players/). |
+| Web | Not available. |
+
+## When it's not the audio
+
+If a channel's *video* won't decode at all (not just the audio), fixing the audio won't help - the answer is still an external player. See [External players](./external-players/).
+
+<Callout type="note">
+  The bundled FFmpeg is a trimmed build licensed under LGPL. See **Settings > About > Open-source licenses** for the full notice.
+</Callout>

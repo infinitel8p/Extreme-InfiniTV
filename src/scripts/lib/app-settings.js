@@ -15,6 +15,7 @@ const KEY_PLAYER_ARGS_MPV = "xt_player_args_mpv"
 const KEY_PLAYER_ARGS_VLC = "xt_player_args_vlc"
 const KEY_PLAYER_REUSE_MPV = "xt_player_reuse_mpv"
 const KEY_PLAYER_REUSE_VLC = "xt_player_reuse_vlc"
+const KEY_FFMPEG_PATH = "xt_ffmpeg_path"
 const KEY_EXTERNAL_PLAYER_PREF = "xt_external_player_pref"
 const KEY_CLOSE_TO_TRAY = "xt_close_to_tray"
 const KEY_HUB_STRIPS = "xt_hub_strips"
@@ -23,6 +24,7 @@ const KEY_ANDROID_NATIVE_PLAYER = "xt_android_native_player"
 const KEY_ANDROID_REMEMBERED_PLAYER = "xt_android_remembered_player"
 const KEY_VIDEO_SCALE = "xt_video_scale"
 const KEY_UPDATE_CHANNEL = "xt_update_channel"
+const KEY_AUTO_UPDATE = "xt_auto_update"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -37,6 +39,7 @@ export const ANDROID_NATIVE_PLAYER_EVENT = "xt:android-native-player-changed"
 export const ANDROID_REMEMBERED_PLAYER_EVENT = "xt:android-remembered-player-changed"
 export const VIDEO_SCALE_EVENT = "xt:video-scale-changed"
 export const UPDATE_CHANNEL_EVENT = "xt:update-channel-changed"
+export const AUTO_UPDATE_EVENT = "xt:auto-update-changed"
 export const UPDATE_CHANNELS = ["stable", "beta"]
 export const DEFAULT_UPDATE_CHANNEL = "stable"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
@@ -692,6 +695,35 @@ export function setVideoScale(mode) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Audio transcode auto-fix (desktop only - row gated by audioTranscodeAvailable())
+// ---------------------------------------------------------------------------
+const KEY_AUDIO_TRANSCODE_AUTO = "xt_audio_transcode_auto"
+export const AUDIO_TRANSCODE_AUTO_EVENT = "xt:audio-transcode-auto-changed"
+
+export function getAudioTranscodeAuto() {
+  return readLS(KEY_AUDIO_TRANSCODE_AUTO, "") === "1"
+}
+
+// Empty falls through to the bundled sidecar, then PATH `ffmpeg`.
+export function getFfmpegPath() {
+  return readLS(KEY_FFMPEG_PATH, "")
+}
+
+export function setFfmpegPath(path) {
+  writeLS(KEY_FFMPEG_PATH, (path || "").trim())
+  document.dispatchEvent(
+    new CustomEvent(EVT_CHANGED, { detail: { key: "ffmpegPath" } })
+  )
+}
+
+export function setAudioTranscodeAuto(on) {
+  writeLS(KEY_AUDIO_TRANSCODE_AUTO, on ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(AUDIO_TRANSCODE_AUTO_EVENT, { detail: { value: !!on } })
+  )
+}
+
 // Update channel (desktop only)
 let cachedIsPrereleaseBuild = null
 
@@ -721,5 +753,16 @@ export function setUpdateChannel(channel) {
   writeLS(KEY_UPDATE_CHANNEL, next)
   document.dispatchEvent(
     new CustomEvent(UPDATE_CHANNEL_EVENT, { detail: { value: next } })
+  )
+}
+
+export function getAutoUpdateEnabled() {
+  return readLS(KEY_AUTO_UPDATE, "") !== "0"
+}
+
+export function setAutoUpdateEnabled(enabled) {
+  writeLS(KEY_AUTO_UPDATE, enabled ? "" : "0")
+  document.dispatchEvent(
+    new CustomEvent(AUTO_UPDATE_EVENT, { detail: { value: !!enabled } })
   )
 }

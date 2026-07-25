@@ -1,0 +1,36 @@
+---
+layout: ../layouts/DocsLayout.astro
+title: "Add from website"
+description: "Turn a web page that plays a livestream into a playable playlist entry."
+lede: "Some channels only exist as a livestream embedded in a web page, with no Xtream or M3U link behind them. Paste the page's address and the app finds the stream and saves it as a channel."
+---
+
+import Callout from "../components/Callout.astro"
+
+## How it works
+
+Paste the address of a web page that plays a livestream. The app opens the page invisibly in the background and watches its network traffic for the actual video stream, then saves that stream as a playable playlist entry. It also captures the page's User-Agent and Referer so playback keeps working, and uses the site's icon as the channel logo.
+
+## Where to find it
+
+- The **Add from website** button on the login screen.
+- **Settings > Playlists > Add from website**.
+
+## Picking the right stream
+
+When a page exposes several streams, the picker labels each one with its quality (for example `720p · 2.5 Mbps`), names individual video and audio streams separately, and badges the stream that switches quality automatically as **Recommended** - that's usually the one you want.
+
+You can tick several and pick **Add to custom playlist** to save them all into a [custom playlist](./custom-playlists/) at once. A single stream can also be saved as its own playlist entry.
+
+## Availability and limits
+
+- Works on Android and Windows / macOS / Linux desktop. Not available in the web version - a browser tab has no way to watch another page's network traffic.
+- Some sites hand out short-lived stream links. If a stream you saved this way stops playing later, run **Add from website** again on the same page to grab a fresh link.
+- On desktop, streams that require the captured User-Agent or Referer may not play in the built-in player, since the browser engine controls those headers. Hand them off to MPV or VLC instead - see [External players](./external-players/). On Android the built-in player applies the headers itself.
+- If no stream is found, the page may need a click to start playing, may be DRM-protected, or may not contain a video stream at all. Try again, or try the page in a normal browser first.
+
+<Callout type="warning">
+  Pages protected by DRM (Widevine and similar) are detected and reported as not extractable. The stream is encrypted and can't be played outside the site's own player.
+</Callout>
+
+Keep in mind this only captures a stream the page already plays for you in a normal browser. Whether you're allowed to use a given stream still depends on that site's own terms.

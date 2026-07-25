@@ -265,6 +265,69 @@ describe("classifyStartFailure", () => {
       })
     ).toEqual({ kind: "hevc", codec: "hvc1.1.6.L120.B0" })
   })
+
+  it("blames unsupported audio (not the video) when the device decodes the HEVC video track", () => {
+    // rtp2httpd MPEG-TS: HEVC video accepted, E-AC-3 audio SourceBuffer rejected.
+    expect(
+      classifyStartFailure({
+        videoCodec: "hvc1.2.1.L180.B0",
+        audioCodec: "ec-3",
+        errorDetail:
+          "MediaMSEError: Failed to execute 'addSourceBuffer' on 'MediaSource': This MediaSource has reached the limit of SourceBuffer objects it can handle.",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "audio", codec: "ec-3" })
+    // Same, but no engine error string reached classification (only media info survived).
+    expect(
+      classifyStartFailure({
+        videoCodec: "hvc1.2.1.L180.B0",
+        audioCodec: "ec-3",
+        errorDetail: null,
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "audio", codec: "ec-3" })
+  })
+
+  it("treats an audio SourceBuffer rejection as audio even without an audio codec string, when the video decodes", () => {
+    expect(
+      classifyStartFailure({
+        videoCodec: "hvc1.2.1.L180.B0",
+        audioCodec: null,
+        errorDetail:
+          "MediaMSEError: Failed to execute 'addSourceBuffer' on 'MediaSource': This MediaSource has reached the limit of SourceBuffer objects it can handle.",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "audio", codec: null })
+  })
+
+  it("treats the SourceBuffer-limit error as audio even when recovery remounts wiped both codec strings", () => {
+    // Observed at give-up time: teardown churn cleared codecInfo, only the error string survived.
+    // The limit message only fires for the second buffer and the mpegts path adds video first.
+    expect(
+      classifyStartFailure({
+        videoCodec: null,
+        audioCodec: null,
+        errorDetail:
+          "Failed to execute 'addSourceBuffer' on 'MediaSource': This MediaSource has reached the limit of SourceBuffer objects it can handle. No additional SourceBuffer objects may be added.",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "audio", codec: null })
+    // Even a name-based HEVC hint must not override it: the accepted first (video) buffer proves video decodes.
+    expect(
+      classifyStartFailure({
+        videoCodec: null,
+        audioCodec: null,
+        errorDetail:
+          "Failed to execute 'addSourceBuffer' on 'MediaSource': This MediaSource has reached the limit of SourceBuffer objects it can handle.",
+        nameHint: true,
+        deviceHevc: false,
+      })
+    ).toEqual({ kind: "audio", codec: null })
+  })
 })
 
 describe("isUnsupportedAudioCodec", () => {

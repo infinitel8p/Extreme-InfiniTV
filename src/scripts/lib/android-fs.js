@@ -268,34 +268,35 @@ export async function pickJsonFile() {
  * @returns true if the file was written, false if the user cancelled or
  *          the plugin isn't available.
  */
-export async function saveJsonFile(defaultFileName, text) {
+export async function saveTextFile(defaultFileName, text, mime = "text/plain") {
   const m = await mod()
   if (!m) return false
-  const uri = await m.AndroidFs.showSaveFilePicker(
-    defaultFileName,
-    "application/json"
-  )
+  const uri = await m.AndroidFs.showSaveFilePicker(defaultFileName, mime)
   if (!uri) return false
   const bytes = new TextEncoder().encode(text)
   await m.AndroidFs.writeFile(uri, bytes)
   return true
 }
 
+export async function saveJsonFile(defaultFileName, text) {
+  return saveTextFile(defaultFileName, text, "application/json")
+}
+
 /**
- * Drop a JSON file directly into the public Downloads/Extreme InfiniTV/
+ * Drop a text file directly into the public Downloads/Extreme InfiniTV/
  * folder via MediaStore. No picker UI - used as a fallback when the SAF
  * "Save As" picker is unavailable on the device.
  *
  * @returns the on-device path (best effort) or the URI string of the
  *          written file, or null if the plugin isn't available.
  */
-export async function savePublicJsonFile(filename, text) {
+export async function savePublicTextFile(filename, text, mime = "text/plain") {
   const m = await mod()
   if (!m) return null
   const uri = await m.AndroidFs.createNewPublicFile(
     m.AndroidPublicGeneralPurposeDir.Download,
     `${PUBLIC_SUBDIR}/${filename}`,
-    "application/json",
+    mime,
     { isPending: true }
   )
   if (!uri) return null
@@ -319,6 +320,10 @@ export async function savePublicJsonFile(filename, text) {
     log.warn("[xt:android-fs] scanPublicFile failed:", e)
   }
   return `Download/${PUBLIC_SUBDIR}/${filename}`
+}
+
+export async function savePublicJsonFile(filename, text) {
+  return savePublicTextFile(filename, text, "application/json")
 }
 
 /**

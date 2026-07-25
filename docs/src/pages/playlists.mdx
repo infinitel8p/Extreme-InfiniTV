@@ -30,11 +30,17 @@ If your provider only gave you a single playlist URL (anything ending in `.m3u` 
   URLs with credentials baked in, like `https://user:password@example.com/playlist.m3u`, work too. The app sends the credentials as HTTP Basic authentication when loading the playlist and its streams.
 </Callout>
 
+A bare direct stream link works too: paste a single `.m3u8` URL that isn't a playlist, just the stream itself, and the app adds it as a playlist with that one playable channel.
+
 ## Multiple playlists
 
 You can add as many Xtream accounts and M3U URLs as you want. Open **Settings > Playlists** to add, rename, or remove them. Switch the active one from the sidebar.
 
 Favorites, watchlist, recents, and watch progress are tracked **per playlist** so different accounts stay separate. Favorites, Watchlist, and Continue watching also offer a combined view across all your playlists.
+
+## Custom playlists
+
+You can also build a channel list of your own: open **Settings > Playlists > New custom playlist** and pull channels in from any of your existing playlists, or grab a stream straight from a web page with [Add from website](./add-from-website/). See [Custom playlists](./custom-playlists/) for the full guide.
 
 ## Hide unwanted categories
 
@@ -51,3 +57,7 @@ If the EPG (now / next, full schedule) looks off by a few hours, your provider i
 <Callout type="warning">
   The export includes your credentials in plain JSON. Treat the file like a password manager export: don't email it, don't drop it in a shared folder, and delete it from any temporary location once you've restored on the target device.
 </Callout>
+
+## Export a playlist
+
+Every playlist row in **Settings > Playlists** has an **Export M3U** action that writes a standard `.m3u` file you can use in other apps.

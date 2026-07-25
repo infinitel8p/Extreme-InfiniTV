@@ -39,6 +39,7 @@ import {
   IconShare,
   IconExternalLink,
   IconRestore,
+  IconLicense,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -85,13 +86,14 @@ const navStructure: NavSection[] = [
     { id: "card-backup",              labelKey: "settings.backup.title",           label: "Backup" },
     { id: "card-storage",             labelKey: "settings.storage.title",          label: "Storage" },
   ]},
-  { id: "settings-help", labelKey: "settings.group.help", label: "Help & feedback", cards: [
-    { id: "card-docs",     labelKey: "settings.help.docsTitle", label: "Read the docs" },
-    { id: "card-feedback", labelKey: "settings.nav.feedback",   label: "Send feedback" },
-  ]},
   { id: "settings-about", labelKey: "settings.group.about", label: "About", cards: [
     { id: "update-section",    labelKey: "settings.nav.appUpdate",  label: "App update" },
     { id: "changelog-section", labelKey: "settings.about.whatsNew", label: "What's new" },
+    { id: "licenses-section",  labelKey: "settings.licenses.title", label: "Open-source licenses" },
+  ]},
+  { id: "settings-help", labelKey: "settings.group.help", label: "Help & feedback", cards: [
+    { id: "card-docs",     labelKey: "settings.help.docsTitle", label: "Read the docs" },
+    { id: "card-feedback", labelKey: "settings.nav.feedback",   label: "Send feedback" },
   ]},
   { id: "settings-support", labelKey: "settings.group.support", label: "Support", cards: [] },
   { id: "settings-danger",  labelKey: "settings.group.dangerZone", label: "Danger zone", cards: [], danger: true },
@@ -215,9 +217,56 @@ const navStructure: NavSection[] = [
             <IconRefresh aria-hidden="true" class="btn-icon" />
             <span data-i18n="playlist.refreshActive">Refresh active</span>
           </button>
+          <button
+            id="settings-add-from-website"
+            type="button"
+            class="btn justify-start sm:justify-center hidden">
+            <IconWorld aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.playlists.addFromWebsite">Add from website</span>
+          </button>
+          <button
+            id="settings-new-custom-playlist"
+            type="button"
+            class="btn justify-start sm:justify-center">
+            <IconPlus aria-hidden="true" class="btn-icon" />
+            <span data-i18n="editor.newCustomPlaylistBtn">New custom playlist</span>
+          </button>
         </div>
       </div>
     </section>
+
+    <!-- New custom playlist dialog -->
+    <dialog
+      id="settings-new-custom-playlist-dialog"
+      aria-labelledby="settings-new-custom-playlist-title"
+      class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
+             w-[min(24rem,calc(100vw-2rem))] backdrop:bg-black/60">
+      <form method="dialog" class="flex flex-col gap-4 p-5">
+        <h2 id="settings-new-custom-playlist-title" data-i18n="editor.newPlaylistDialogTitle" class="text-base font-semibold">
+          New custom playlist
+        </h2>
+        <label class="flex flex-col gap-1.5">
+          <span data-i18n="editor.newPlaylistNameLabel" class="text-xs font-semibold uppercase tracking-wider text-fg-3">
+            Playlist name
+          </span>
+          <input
+            id="settings-new-custom-playlist-name"
+            type="text"
+            class="field-input"
+            data-i18n-attr="placeholder:editor.newPlaylistNamePlaceholder"
+            placeholder="My playlist"
+          />
+        </label>
+        <div class="flex gap-2 justify-end">
+          <button type="button" data-role="cancel" class="btn">
+            <span data-i18n="common.cancel">Cancel</span>
+          </button>
+          <button type="submit" data-role="create" class="btn-primary">
+            <span data-i18n="editor.newPlaylistCreate">Create</span>
+          </button>
+        </div>
+      </form>
+    </dialog>
 
     <!-- Group: Appearance (language, theme/font, perf mode, home page sections, close behavior) -->
     <section id="settings-appearance" class="settings-group scroll-mt-8">
@@ -528,6 +577,44 @@ const navStructure: NavSection[] = [
             </div>
           </div>
           <PlayerPicker client:load />
+
+          <div id="audio-transcode-section" class="flex flex-col gap-3 pt-4 border-t border-line/60 hidden">
+            <div class="flex flex-col gap-1">
+              <label for="ffmpeg-path-input" data-i18n="settings.playback.ffmpegPathLabel" class="text-eyebrow font-medium uppercase text-fg-3">FFmpeg path</label>
+              <p id="ffmpeg-status" class="text-xs text-fg-3" aria-live="polite"></p>
+            </div>
+
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                type="text"
+                id="ffmpeg-path-input"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="C:\ffmpeg\bin\ffmpeg.exe"
+                class="field-input font-mono flex-1"
+                aria-describedby="ffmpeg-path-helper" />
+              <button type="button" id="ffmpeg-browse-btn" class="btn" data-i18n="settings.playback.browse">Browse…</button>
+              <button type="button" id="ffmpeg-test-btn" class="btn" data-i18n="settings.playback.ffmpegTest">Test</button>
+            </div>
+            <p id="ffmpeg-path-helper" data-i18n="settings.playback.ffmpegPathHelper" class="text-xs text-fg-3">
+              Point to your own FFmpeg if the bundled one is missing or you prefer a specific build.
+            </p>
+
+            <span data-i18n="settings.playback.audioTranscodeAuto" class="text-eyebrow font-medium uppercase text-fg-3">Fix unsupported audio automatically</span>
+            <p id="audio-transcode-helper" data-i18n="settings.playback.audioTranscodeAutoHelper" class="text-xs text-fg-3">
+              When a live channel plays video with no sound (AC-3, E-AC-3, MP2, or DTS audio), fix it automatically instead of asking each time.
+            </p>
+            <div
+              id="settings-audio-transcode-auto"
+              class="grid grid-cols-2 gap-2"
+              role="radiogroup"
+              aria-label="Fix unsupported audio automatically"
+              data-i18n-attr="aria-label:settings.playback.audioTranscodeAuto"
+              aria-describedby="audio-transcode-helper">
+              <button type="button" data-audio-transcode="on" aria-pressed="false" data-i18n="settings.playback.audioTranscodeOn" class="audio-transcode-btn btn">On</button>
+              <button type="button" data-audio-transcode="off" aria-pressed="false" data-i18n="settings.playback.audioTranscodeOff" class="audio-transcode-btn btn">Off</button>
+            </div>
+          </div>
         </article>
 
         <AndroidNativePlayerCard client:load />
@@ -839,71 +926,6 @@ const navStructure: NavSection[] = [
       </div>
     </section>
 
-    <!-- Group: Help & feedback -->
-    <section id="settings-help" class="settings-group scroll-mt-8">
-      <h2 data-i18n="settings.group.help" class="settings-group__title">Help & feedback</h2>
-      <article id="card-docs" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-        <div class="flex items-start gap-3">
-          <span class="icon-mark">
-            <IconBook aria-hidden="true" stroke={2} />
-          </span>
-          <div class="flex flex-col gap-1 min-w-0">
-            <h3 data-i18n="settings.help.docsTitle" class="text-base font-semibold">Read the docs</h3>
-            <p data-i18n="settings.help.docsIntro" class="text-sm text-fg-2">
-              Step-by-step guides for sign-in, external players, the keyboard and D-pad bindings, and the most common things people get stuck on.
-            </p>
-          </div>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <a
-            href="/docs"
-            class="btn justify-start sm:justify-center">
-            <IconBook aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.openDocs">Open documentation</span>
-          </a>
-          <a
-            href="/docs?p=getting-started"
-            class="btn justify-start sm:justify-center">
-            <IconRocket aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.openQuickStart">Quick start</span>
-          </a>
-        </div>
-      </article>
-      <article id="card-feedback" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-        <div class="flex items-start gap-3">
-          <span class="icon-mark">
-            <IconMail aria-hidden="true" stroke={2} />
-          </span>
-          <div class="flex flex-col gap-1 min-w-0">
-            <h3 data-i18n="settings.help.title" class="text-base font-semibold">Found a bug or have a suggestion?</h3>
-            <p data-i18n="settings.help.intro" class="text-sm text-fg-2">
-              Bug reports, feature requests, questions, and general feedback all go to GitHub - search existing issues first, or pick a template and open a new one.
-            </p>
-          </div>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <a
-            href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
-            target="_blank"
-            rel="noopener noreferrer"
-            data-external
-            class="btn justify-start sm:justify-center">
-            <IconBug aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.reportIssue">Report a bug</span>
-          </a>
-          <a
-            href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
-            target="_blank"
-            rel="noopener noreferrer"
-            data-external
-            class="btn justify-start sm:justify-center">
-            <IconMail aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.sendFeedback">Send feedback</span>
-          </a>
-        </div>
-      </article>
-    </section>
-
     <!-- Group: About (App update + version + expiration) -->
     <section id="settings-about" class="settings-group scroll-mt-8">
       <h2 data-i18n="settings.group.about" class="settings-group__title">About</h2>
@@ -952,6 +974,19 @@ const navStructure: NavSection[] = [
             <div id="update-progress-bar" class="update-progress-fill h-full transition-[width] duration-150" style="width: 0%"></div>
           </div>
           <div id="update-progress-text" class="text-xs text-fg-3 tabular-nums">0%</div>
+        </div>
+
+        <div id="auto-update-row" class="flex flex-col gap-2 pt-4 border-t border-line/60">
+          <label class="flex flex-col gap-1.5">
+            <span data-i18n="settings.update.autoUpdate" class="text-eyebrow font-medium uppercase text-fg-3">Automatic updates</span>
+            <select id="auto-update-select" class="field-input" aria-describedby="auto-update-hint">
+              <option value="on" data-i18n="settings.update.autoUpdateOn">Enabled</option>
+              <option value="off" data-i18n="settings.update.autoUpdateOff">Disabled</option>
+            </select>
+          </label>
+          <p id="auto-update-hint" data-i18n="settings.update.autoUpdateHint" class="text-xs text-fg-3">
+            When disabled, updates will not install automatically. You will still see when one is available.
+          </p>
         </div>
 
         <div id="update-channel-row" class="flex flex-col gap-2 pt-4 border-t border-line/60">
@@ -1041,6 +1076,122 @@ const navStructure: NavSection[] = [
         </summary>
         <div id="changelog-body" class="flex flex-col gap-2 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60 empty:hidden"></div>
       </details>
+
+      <details
+        id="licenses-section"
+        class="changelog-outer icon-mark-host rounded-2xl border border-line bg-surface overflow-hidden">
+        <summary class="px-5 sm:px-6 py-4 cursor-pointer flex items-center justify-between gap-3 hover:bg-surface-2 transition-colors list-none">
+          <div class="flex items-center gap-3 min-w-0">
+            <span class="icon-mark">
+              <IconLicense aria-hidden="true" stroke={2} />
+            </span>
+            <h3 data-i18n="settings.licenses.title" class="text-base font-semibold">Open-source licenses</h3>
+          </div>
+          <IconChevronDown
+            aria-hidden="true"
+            stroke={1.75}
+            class="size-4 text-fg-3 shrink-0 changelog-chevron transition-transform duration-200" />
+        </summary>
+        <div class="flex flex-col gap-3 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60">
+          <p data-i18n="settings.licenses.ffmpegNotice" class="text-sm text-fg-2">
+            The Windows and Linux desktop builds bundle a trimmed FFmpeg build (LGPL v2.1 or later), used only to convert live TV audio the app can't otherwise play.
+          </p>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <a
+              href="https://ffmpeg.org"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-external
+              class="btn justify-start sm:justify-center">
+              <IconExternalLink aria-hidden="true" class="btn-icon" />
+              <span data-i18n="settings.licenses.ffmpegSite">FFmpeg project</span>
+            </a>
+            <a
+              href="https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-external
+              class="btn justify-start sm:justify-center">
+              <IconExternalLink aria-hidden="true" class="btn-icon" />
+              <span data-i18n="settings.licenses.lgplText">LGPL v2.1 license text</span>
+            </a>
+            <a
+              href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/tag/ffmpeg-sidecar-v2"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-external
+              class="btn justify-start sm:justify-center">
+              <IconBrandGithub aria-hidden="true" class="btn-icon" />
+              <span data-i18n="settings.licenses.sourceRecipe">Source & build recipe</span>
+            </a>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- Group: Help & feedback -->
+    <section id="settings-help" class="settings-group scroll-mt-8">
+      <h2 data-i18n="settings.group.help" class="settings-group__title">Help & feedback</h2>
+      <article id="card-docs" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
+        <div class="flex items-start gap-3">
+          <span class="icon-mark">
+            <IconBook aria-hidden="true" stroke={2} />
+          </span>
+          <div class="flex flex-col gap-1 min-w-0">
+            <h3 data-i18n="settings.help.docsTitle" class="text-base font-semibold">Read the docs</h3>
+            <p data-i18n="settings.help.docsIntro" class="text-sm text-fg-2">
+              Step-by-step guides for sign-in, external players, the keyboard and D-pad bindings, and the most common things people get stuck on.
+            </p>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <a
+            href="/docs"
+            class="btn justify-start sm:justify-center">
+            <IconBook aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.help.openDocs">Open documentation</span>
+          </a>
+          <a
+            href="/docs?p=getting-started"
+            class="btn justify-start sm:justify-center">
+            <IconRocket aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.help.openQuickStart">Quick start</span>
+          </a>
+        </div>
+      </article>
+      <article id="card-feedback" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
+        <div class="flex items-start gap-3">
+          <span class="icon-mark">
+            <IconMail aria-hidden="true" stroke={2} />
+          </span>
+          <div class="flex flex-col gap-1 min-w-0">
+            <h3 data-i18n="settings.help.title" class="text-base font-semibold">Found a bug or have a suggestion?</h3>
+            <p data-i18n="settings.help.intro" class="text-sm text-fg-2">
+              Bug reports, feature requests, questions, and general feedback all go to GitHub - search existing issues first, or pick a template and open a new one.
+            </p>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <a
+            href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-external
+            class="btn justify-start sm:justify-center">
+            <IconBug aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.help.reportIssue">Report a bug</span>
+          </a>
+          <a
+            href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-external
+            class="btn justify-start sm:justify-center">
+            <IconMail aria-hidden="true" class="btn-icon" />
+            <span data-i18n="settings.help.sendFeedback">Send feedback</span>
+          </a>
+        </div>
+      </article>
     </section>
 
     <!-- Group: Support / donations -->
@@ -1219,6 +1370,7 @@ const navStructure: NavSection[] = [
       refreshActive,
       isTauri,
       loadCreds,
+      addEntry,
     } from "@/scripts/lib/creds.js"
     import {
       getNewestCacheTimeAsync,
@@ -1230,6 +1382,7 @@ const navStructure: NavSection[] = [
       renderPlaylistRow,
       getPlaylistListEmptyCopy,
     } from "@/scripts/lib/playlist-rows.js"
+    import { snifferAvailable } from "@/scripts/lib/stream-sniffer.ts"
     import { fetchReleases, renderMarkdown, filterReleasesForDisplay } from "@/scripts/lib/changelog.ts"
     import {
       checkForUpdate,
@@ -1260,7 +1413,14 @@ const navStructure: NavSection[] = [
       setNetworkTimeoutSeconds,
       getUpdateChannel,
       setUpdateChannel,
+      getAutoUpdateEnabled,
+      setAutoUpdateEnabled,
+      getAudioTranscodeAuto,
+      setAudioTranscodeAuto,
+      getFfmpegPath,
+      setFfmpegPath,
     } from "@/scripts/lib/app-settings.js"
+    import { audioTranscodeStatus } from "@/scripts/lib/audio-proxy.ts"
     import {
       ensureUserInfo,
       getMaxConnectionsSync,
@@ -1414,6 +1574,40 @@ const navStructure: NavSection[] = [
 
     const playlistsEl = document.getElementById("settings-playlists-list")
     const refreshBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-refresh-active"))
+    const addFromWebsiteBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-add-from-website"))
+    if (snifferAvailable) addFromWebsiteBtn?.classList.remove("hidden")
+    addFromWebsiteBtn?.addEventListener("click", async () => {
+      const { openAddFromWebsiteDialog } = await import("@/scripts/lib/add-from-website-dialog.ts")
+      await openAddFromWebsiteDialog()
+    })
+
+    const newCustomPlaylistBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-new-custom-playlist"))
+    const newCustomPlaylistDialog = /** @type {HTMLDialogElement|null} */ (document.getElementById("settings-new-custom-playlist-dialog"))
+    const newCustomPlaylistNameInput = /** @type {HTMLInputElement|null} */ (document.getElementById("settings-new-custom-playlist-name"))
+    if (newCustomPlaylistDialog) {
+      attachDialogSpatialNav(newCustomPlaylistDialog, { defaultElement: "#settings-new-custom-playlist-name" })
+    }
+    newCustomPlaylistBtn?.addEventListener("click", () => {
+      if (!newCustomPlaylistDialog || !newCustomPlaylistNameInput) return
+      newCustomPlaylistNameInput.value = ""
+      newCustomPlaylistDialog.showModal()
+    })
+    newCustomPlaylistDialog
+      ?.querySelector('[data-role="cancel"]')
+      ?.addEventListener("click", () => newCustomPlaylistDialog.close())
+    newCustomPlaylistDialog?.querySelector("form")?.addEventListener("submit", async (ev) => {
+      ev.preventDefault()
+      const title = newCustomPlaylistNameInput?.value.trim() || ""
+      newCustomPlaylistDialog?.close()
+      try {
+        const entry = await addEntry(title ? { type: "custom", title } : { type: "custom" })
+        location.href = `/playlist-editor?id=${encodeURIComponent(entry._id)}`
+      } catch (e) {
+        log.error("[settings:new-custom-playlist] failed:", e)
+        toastError(t("editor.newPlaylistCreateFail"))
+      }
+    })
+
     const cacheSizeEl = document.getElementById("settings-cache-size")
     const cacheNewestEl = document.getElementById("settings-cache-newest")
     const cacheMsgEl = document.getElementById("settings-cache-msg")
@@ -2141,6 +2335,120 @@ const navStructure: NavSection[] = [
     syncPerfModeButtons()
 
     // ---------------------------------------------------------------------
+    // Audio transcode auto-fix: desktop-only section (visible whether or not
+    // ffmpeg is currently resolvable - it's the recovery UI for a missing
+    // or broken ffmpeg, so it can't gate on the probe result).
+    // ---------------------------------------------------------------------
+    const audioTranscodeSection = document.getElementById("audio-transcode-section")
+    const audioTranscodeGroup = document.getElementById("settings-audio-transcode-auto")
+    const ffmpegStatusEl = document.getElementById("ffmpeg-status")
+    const ffmpegPathInput = /** @type {HTMLInputElement|null} */ (document.getElementById("ffmpeg-path-input"))
+    const ffmpegBrowseBtn = document.getElementById("ffmpeg-browse-btn")
+    const ffmpegTestBtn = document.getElementById("ffmpeg-test-btn")
+
+    function syncAudioTranscodeButtons() {
+      const current = getAudioTranscodeAuto()
+      for (const btn of audioTranscodeGroup?.querySelectorAll(".audio-transcode-btn") || []) {
+        const isOn = btn.dataset.audioTranscode === "on"
+        btn.setAttribute("aria-pressed", String(isOn === current))
+      }
+    }
+    audioTranscodeGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".audio-transcode-btn")
+      if (!btn) return
+      setAudioTranscodeAuto(btn.dataset.audioTranscode === "on")
+      syncAudioTranscodeButtons()
+    })
+    syncAudioTranscodeButtons()
+
+    function ffmpegSourceLabel(source) {
+      if (source === "custom") return t("settings.playback.ffmpegSourceCustom") || "custom"
+      if (source === "system") return t("settings.playback.ffmpegSourceSystem") || "system"
+      return t("settings.playback.ffmpegSourceBundled") || "bundled"
+    }
+
+    function stripErrorPrefix(raw) {
+      const idx = raw.indexOf(":")
+      return idx > 0 ? raw.slice(idx + 1) : raw
+    }
+
+    function renderFfmpegStatus(status) {
+      const available = !!status?.available
+      for (const btn of audioTranscodeGroup?.querySelectorAll(".audio-transcode-btn") || []) {
+        btn.disabled = !available
+      }
+      if (!ffmpegStatusEl) return
+      if (available) {
+        ffmpegStatusEl.textContent =
+          t("settings.playback.ffmpegStatusReady", {
+            version: status.version || "",
+            source: ffmpegSourceLabel(status.source),
+          }) || `Ready (${status.version || "unknown"}, ${ffmpegSourceLabel(status.source)})`
+        ffmpegStatusEl.classList.remove("text-bad")
+        ffmpegStatusEl.classList.add("text-ok")
+      } else {
+        const missing = t("settings.playback.ffmpegStatusMissing") || "FFmpeg not found. Install ffmpeg or set a custom path below."
+        const detail = status?.customError ? stripErrorPrefix(status.customError) : ""
+        ffmpegStatusEl.textContent = detail ? `${missing} (${detail})` : missing
+        ffmpegStatusEl.classList.remove("text-ok")
+        ffmpegStatusEl.classList.add("text-bad")
+      }
+    }
+
+    async function refreshFfmpegStatus() {
+      renderFfmpegStatus(await audioTranscodeStatus())
+    }
+
+    if (isTauriEnv && !isAndroidEnv) {
+      audioTranscodeSection?.classList.remove("hidden")
+      if (ffmpegPathInput) ffmpegPathInput.value = getFfmpegPath()
+      refreshFfmpegStatus()
+
+      let ffmpegPathSaveTimer = null
+      function flushFfmpegPath() {
+        if (ffmpegPathSaveTimer) {
+          window.clearTimeout(ffmpegPathSaveTimer)
+          ffmpegPathSaveTimer = null
+        }
+        if (ffmpegPathInput) setFfmpegPath(ffmpegPathInput.value)
+      }
+
+      ffmpegPathInput?.addEventListener("input", () => {
+        if (ffmpegPathSaveTimer) window.clearTimeout(ffmpegPathSaveTimer)
+        ffmpegPathSaveTimer = window.setTimeout(() => {
+          ffmpegPathSaveTimer = null
+          if (ffmpegPathInput) setFfmpegPath(ffmpegPathInput.value)
+        }, 350)
+      })
+      ffmpegPathInput?.addEventListener("blur", flushFfmpegPath)
+
+      ffmpegBrowseBtn?.addEventListener("click", async () => {
+        try {
+          const { open } = await import("@tauri-apps/plugin-dialog")
+          const filters = /Win/i.test(navigator.userAgent || "")
+            ? [{ name: "Executable", extensions: ["exe"] }]
+            : undefined
+          const picked = await open({ multiple: false, directory: false, filters })
+          if (typeof picked !== "string" || !picked) return
+          if (ffmpegPathInput) ffmpegPathInput.value = picked
+          flushFfmpegPath()
+          await refreshFfmpegStatus()
+        } catch (err) {
+          log.warn("[settings] ffmpeg browse failed:", err)
+          toastError(t("settings.toast.pickFileFail"), {
+            description: (err && err.message) || String(err) || "See console.",
+          })
+        }
+      })
+
+      ffmpegTestBtn?.addEventListener("click", async () => {
+        flushFfmpegPath()
+        await refreshFfmpegStatus()
+      })
+    }
+
+    // ---------------------------------------------------------------------
     // Continue Watching retention: 30 / 90 / 180 days or Never. Read by
     // trimBucket() in preferences.js on every progress save, so flipping
     // here takes effect on the next playback tick - no reload required.
@@ -2651,6 +2959,10 @@ const navStructure: NavSection[] = [
     const updateChannelSelectEl = /** @type {HTMLSelectElement|null} */ (
       document.getElementById("update-channel-select")
     )
+    const autoUpdateRowEl = document.getElementById("auto-update-row")
+    const autoUpdateSelectEl = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("auto-update-select")
+    )
 
     const GITHUB_RELEASES_URL =
       "https://github.com/infinitel8p/Extreme-InfiniTV/releases"
@@ -2681,6 +2993,9 @@ const navStructure: NavSection[] = [
 
     if (updateChannelSelectEl) updateChannelSelectEl.value = getUpdateChannel()
     if (storeBuild) updateChannelRowEl?.setAttribute("hidden", "")
+
+    if (autoUpdateSelectEl) autoUpdateSelectEl.value = getAutoUpdateEnabled() ? "on" : "off"
+    if (!canUseTauriUpdater) autoUpdateRowEl?.setAttribute("hidden", "")
 
     if (updateCurrentEl) {
       try {
@@ -3002,6 +3317,10 @@ const navStructure: NavSection[] = [
     updateChannelSelectEl?.addEventListener("change", () => {
       setUpdateChannel(updateChannelSelectEl.value)
       checkForUpdates()
+    })
+
+    autoUpdateSelectEl?.addEventListener("change", () => {
+      setAutoUpdateEnabled(autoUpdateSelectEl.value === "on")
     })
 
     checkForUpdates()

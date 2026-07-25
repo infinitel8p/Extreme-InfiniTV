@@ -60,3 +60,27 @@ export function fmtImdbRating(raw: unknown): string {
   if (!Number.isFinite(value) || value <= 0) return ""
   return value > 10 ? "10.0" : value.toFixed(1)
 }
+
+const WIN_RESERVED_NAMES = new Set([
+  "CON", "PRN", "AUX", "NUL",
+  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+])
+
+export function sanitizeFilename(name: unknown): string {
+  let s = String(name || "download")
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "")
+    .replace(/^\.+/, "")
+    .slice(0, 200)
+    .replace(/[. ]+$/g, "")
+
+  if (!s) return "download"
+
+  const stem = s.split(".")[0].toUpperCase()
+  if (WIN_RESERVED_NAMES.has(stem)) s = "_" + s
+
+  return s
+}

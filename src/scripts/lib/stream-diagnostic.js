@@ -24,10 +24,15 @@ function withTimeout(promise, ms, label) {
   })
 }
 
-async function providerFetchWithTimeout(url, init, ms, label) {
+async function providerFetchWithTimeout(url, init, ms, label, externalSignal) {
   const controller =
     typeof AbortController !== "undefined" ? new AbortController() : null
   const timer = controller ? setTimeout(() => controller.abort(), ms) : null
+  const onExternalAbort = () => controller?.abort()
+  if (externalSignal) {
+    if (externalSignal.aborted) onExternalAbort()
+    else externalSignal.addEventListener("abort", onExternalAbort)
+  }
   try {
     const response = await withTimeout(
       providerFetch(url, { ...init, signal: controller?.signal }),
@@ -35,12 +40,13 @@ async function providerFetchWithTimeout(url, init, ms, label) {
       label
     )
     response._probeAbort = () => {
-      try { response.body?.cancel?.() } catch {}
+      try { void response.body?.cancel?.()?.catch?.(() => {}) } catch {}
       try { controller?.abort() } catch {}
     }
     return response
   } finally {
     if (timer) clearTimeout(timer)
+    externalSignal?.removeEventListener("abort", onExternalAbort)
   }
 }
 
@@ -139,7 +145,7 @@ function readMeta(response, method, startTs) {
   }
 }
 
-async function headOrGet(url) {
+async function headOrGet(url, signal) {
   const start = performance.now()
   let headInfo = null
   try {
@@ -147,7 +153,8 @@ async function headOrGet(url) {
       url,
       { method: "HEAD" },
       FETCH_TIMEOUT_MS,
-      "HEAD"
+      "HEAD",
+      signal
     )
     headInfo = readMeta(response, "HEAD", start)
     releaseProbeResponse(response)
@@ -156,13 +163,16 @@ async function headOrGet(url) {
     headInfo = { error: String(headError?.message || headError) }
   }
 
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError")
+
   const getStart = performance.now()
   try {
     const response = await providerFetchWithTimeout(
       url,
       { method: "GET", headers: { Range: "bytes=0-0" } },
       FETCH_TIMEOUT_MS,
-      "GET"
+      "GET",
+      signal
     )
     const meta = readMeta(response, "GET (range)", getStart)
 
@@ -184,6 +194,17 @@ async function headOrGet(url) {
   }
 }
 
+/** Thin HEAD/GET reachability probe reused by the playlist editor's "Check links" action; optional AbortSignal cancels the in-flight request. */
+export async function probeStreamHead(url, signal) {
+  if (signal?.aborted) return { ok: false, status: null, aborted: true }
+  try {
+    const result = await headOrGet(url, signal)
+    return { ok: !!result?.ok, status: result?.status ?? null }
+  } catch (err) {
+    return { ok: false, status: null, aborted: !!signal?.aborted || err?.name === "AbortError" }
+  }
+}
+
 // Plain WebView fetch
 async function probeWebViewFetch(url) {
   const start = performance.now()
@@ -201,7 +222,7 @@ async function probeWebViewFetch(url) {
       "WebView GET"
     )
     try {
-      response.body?.cancel?.()
+      void response.body?.cancel?.()?.catch?.(() => {})
     } catch {}
     try { controller?.abort() } catch {}
     return {
