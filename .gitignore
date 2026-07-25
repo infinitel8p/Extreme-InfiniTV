@@ -42,3 +42,6 @@ src-tauri/binaries/
 
 cmds.md
 store-listings.md
+
+.ds*
+.de*
