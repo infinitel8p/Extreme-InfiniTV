@@ -1,10 +1,4 @@
-// Playlist editor bundle for /playlist-editor. Builds/edits a custom
-// playlist (`lib/custom-playlist.ts` is the store) by pulling channels from
-// other stored playlists, direct URLs, grouping, reordering, and exporting.
-//
-// Every mutation flows through `applyDoc()` - the single chokepoint that
-// persists (debounced), re-resolves display data, re-renders, and pushes the
-// previous doc onto the undo stack.
+// Playlist editor bundle for /playlist-editor; every mutation goes through `applyDoc()`.
 
 import { invalidateEntry } from "@/scripts/lib/cache.js"
 import {
@@ -670,16 +664,30 @@ function buildChannelRow(
   grip.setAttribute("aria-hidden", "true")
   grip.title = t("editor.dragHandleLabel")
 
+  // Shape differs per status so it never reads by hue alone.
   const statusDot = document.createElement("span")
-  statusDot.className = "size-2 rounded-full shrink-0 bg-transparent"
-  statusDot.setAttribute("aria-hidden", "true")
+  statusDot.className = "size-2 shrink-0 bg-transparent"
   const status = linkCheckStatus.get(channel.key)
   if (status === "pending") {
-    statusDot.classList.add("bg-fg-3", "animate-pulse")
+    statusDot.classList.add("rounded-full", "border", "border-fg-3", "animate-pulse")
   } else if (status === "ok") {
-    statusDot.classList.add("bg-ok")
+    statusDot.classList.add("rounded-full", "bg-ok")
   } else if (status === "fail") {
-    statusDot.classList.add("bg-bad")
+    statusDot.classList.add("rotate-45", "rounded-xs", "bg-bad")
+  }
+  if (status) {
+    const statusLabel = t(
+      status === "pending"
+        ? "editor.linkStatusChecking"
+        : status === "ok"
+          ? "editor.linkStatusOk"
+          : "editor.linkStatusFail"
+    )
+    statusDot.setAttribute("role", "img")
+    statusDot.setAttribute("aria-label", statusLabel)
+    statusDot.title = statusLabel
+  } else {
+    statusDot.setAttribute("aria-hidden", "true")
   }
 
   const logo = document.createElement("div")

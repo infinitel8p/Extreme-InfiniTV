@@ -180,8 +180,7 @@ function readSiptvDays(source: string): number {
  */
 function parseExtinf(line: string): Omit<M3UEntry, "url"> & { siptvDays: number } {
   const directive = line.replace(/^#EXTINF\s*:?/i, "")
-  // Quote-aware so a quoted attr value containing a comma (e.g. group-title="News, Sports")
-  // isn't mistaken for the attrs/name separator; falls back to a naive split on malformed quotes.
+  // Quote-aware so a comma inside a quoted attr value isn't read as the attrs/name separator.
   const quoteAwareCommaIdx = firstCommaOutsideQuotes(directive)
   const commaIdx = quoteAwareCommaIdx >= 0 ? quoteAwareCommaIdx : directive.indexOf(",")
   let attrs = ""
@@ -349,8 +348,7 @@ export function parseM3U(text: string): M3UParseResult {
     if (isHlsTag(line)) continue
     if (line.startsWith("#")) continue
 
-    // A bare http(s) URL with no preceding #EXTINF is still a valid M3U entry
-    // (common for radio pointer .m3u files); synthesize a minimal channel.
+    // A bare URL with no preceding #EXTINF is still valid (common in radio pointer .m3u files).
     if (!pending) {
       if (/^https?:\/\//i.test(line)) pending = bareUrlPending(line)
       else continue

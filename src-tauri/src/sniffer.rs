@@ -1,11 +1,5 @@
-// "Add from website" stream sniffer (desktop only).
-//
-// Loads an arbitrary page in a hidden webview window, injects a script that
-// watches fetch/XHR/PerformanceObserver traffic and periodically nudges
-// play buttons + <video> elements, and reports anything that looks like an
-// HLS/DASH manifest back to the main window as `xt:sniff-candidate` events.
-// Mirrors the Android `SnifferBridge` in MainActivity.kt so both platforms
-// feed the same facade in stream-sniffer.ts.
+// "Add from website" stream sniffer (desktop only): hidden webview window with an injected hook.
+// The sniffed remote page can only reach `sniff_report`(+drm), never any other app command.
 
 use std::sync::Mutex;
 use std::time::Duration;

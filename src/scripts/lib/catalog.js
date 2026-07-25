@@ -1,6 +1,11 @@
 // Shared catalog fetch + parse + cache
 
-import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+import {
+  cachedFetch,
+  getCached,
+  hydrate as hydrateCache,
+  invalidateCustomDependents,
+} from "@/scripts/lib/cache.js"
 import {
   loadCreds,
   isLikelyM3USource,
@@ -15,7 +20,11 @@ import { providerFetch, streamingText } from "@/scripts/lib/provider-fetch.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
 import { parseM3U, isHlsStreamManifest } from "@/scripts/lib/m3u-parser.ts"
-import { loadCustomDoc, resolveCustomChannels } from "@/scripts/lib/custom-playlist.ts"
+import {
+  loadCustomDoc,
+  resolveCustomChannels,
+  collectSourceEntryIds,
+} from "@/scripts/lib/custom-playlist.ts"
 import { buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { t } from "@/scripts/lib/i18n.js"
 import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
@@ -142,24 +151,17 @@ function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestType, dr
 
 /** Build the source pools a custom playlist's channels resolve against, hydrating each referenced entry's own live catalog through the normal cached path. */
 export async function buildCustomSourcePools(doc, opts = {}) {
-  const sourceEntryIds = new Set()
-  for (const channel of doc.channels) {
-    if (!Array.isArray(channel.sources)) continue
-    for (const source of channel.sources) {
-      if (source.kind === "xtream" || source.kind === "m3u") sourceEntryIds.add(source.entryId)
-    }
-  }
+  const sourceEntryIds = collectSourceEntryIds(doc)
   const entries = await getEntries()
   const pools = new Map()
   await Promise.all(
-    [...sourceEntryIds].map(async (sourceEntryId) => {
+    sourceEntryIds.map(async (sourceEntryId) => {
       const sourceEntry = entries.find((entry) => entry._id === sourceEntryId)
       // Custom sources would recurse into ensureLive and deadlock on cachedFetch's in-flight dedup.
       if (!sourceEntry || sourceEntry.type === "custom") return
-      const sourceCreds = entryToCreds(sourceEntry)
       let channels
       try {
-        channels = await ensureLive(sourceCreds, sourceEntryId, opts)
+        channels = await ensureLive(entryToCreds(sourceEntry), sourceEntryId, opts)
       } catch (err) {
         log.warn("[xt:catalog] custom playlist source hydration failed:", sourceEntryId, err?.message || err)
         return
@@ -168,7 +170,11 @@ export async function buildCustomSourcePools(doc, opts = {}) {
         pools.set(sourceEntryId, {
           kind: "xtream",
           channels,
-          buildUrl: (streamId) => buildLiveStreamUrl(sourceCreds, streamId, sourceCreds.liveContainer),
+          // Re-derived per call so a mirror failover is reflected in the stream URL.
+          buildUrl: (streamId) => {
+            const sourceCreds = entryToCreds(sourceEntry)
+            return buildLiveStreamUrl(sourceCreds, streamId, sourceCreds.liveContainer)
+          },
         })
       } else {
         pools.set(sourceEntryId, { kind: "m3u", channels })
@@ -494,6 +500,7 @@ export async function warmupActive(playlistId, opts = {}) {
       // Failure is ignored - M3U sources won't have a player_api endpoint.
       ensureUserInfo(creds, pid, { force }).catch(() => null),
     ])
+    if (force) await invalidateCustomDependents(pid)
     dispatch(EVT_WARMED, { playlistId: pid, errors })
     return { live, vod, series, errors }
   })()
@@ -540,6 +547,7 @@ export async function retryWarmupKind(playlistId, kind) {
   dispatch(EVT_WARMING_PROGRESS, { playlistId: pid, kind, status: "pending" })
   try {
     const data = await fetcher(creds, pid, { force: true })
+    if (kind === "live") await invalidateCustomDependents(pid)
     dispatch(EVT_WARMING_PROGRESS, {
       playlistId: pid,
       kind,

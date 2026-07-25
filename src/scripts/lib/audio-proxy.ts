@@ -1,7 +1,4 @@
-// Desktop client for the Rust ffmpeg audio-transcode proxy: registers a
-// 127.0.0.1 MPEG-TS playback URL that copies video and transcodes unsupported
-// audio (AC-3/E-AC-3/MP2/DTS) to AAC. One live session at a time; direct-play
-// fallback on any failure.
+// Desktop ffmpeg live audio-transcode proxy client: one session at a time.
 
 import { log } from "@/scripts/lib/log.js"
 import { splitUrlAuth } from "@/scripts/lib/url-auth.ts"
@@ -105,8 +102,7 @@ export async function startAudioTranscode(
   try {
     const { invoke } = await import("@tauri-apps/api/core")
     const { url, authorization } = splitUrlAuth(streamUrl)
-    // Fall back to the WebView UA so the proxy's upstream request matches the direct-play fetch;
-    // a per-channel/custom override passed by the caller always wins.
+    // Fall back to the WebView UA so the proxy's upstream request matches the direct-play fetch.
     const effectiveUserAgent =
       userAgent ||
       (typeof navigator !== "undefined" ? navigator.userAgent : null) ||
@@ -171,10 +167,7 @@ export function onAudioTranscodeError(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Per-channel memory: once a channel has been fixed via the proxy, tune it
-// straight through the proxy next time instead of waiting for the watchdog.
-// ---------------------------------------------------------------------------
+// Per-channel memory: a fixed channel tunes through the proxy immediately next time.
 const MEMORY_KEY_PREFIX = "xt_audio_transcode:"
 
 function readRememberedChannels(playlistId: string): string[] {

@@ -1,5 +1,4 @@
 // Pure inverse of `m3u-parser.ts`: turns parsed entries back into M3U text.
-// No DOM, no fetch, no i18n - callers own where the resulting text goes.
 
 import type { M3UEntry } from "@/scripts/lib/m3u-parser"
 

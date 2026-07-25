@@ -329,6 +329,63 @@ function revalidateInBackground(entryId, kind, ttlMs, fetcher) {
 
 export const CACHE_REVALIDATED_EVENT = EVT_REVALIDATED
 
+// ---------------------------------------------------------------------------
+// Custom-playlist dependents
+// ---------------------------------------------------------------------------
+/** @type {Promise<Array<{entryId: string, sourceEntryIds: string[]}>>|null} */
+let _customDepsInflight = null
+
+async function readCustomDependencies() {
+  if (_customDepsInflight) return _customDepsInflight
+  _customDepsInflight = (async () => {
+    const { getEntries } = await import("./creds.js")
+    const { loadCustomDoc, collectSourceEntryIds } = await import("./custom-playlist.ts")
+    const entries = await getEntries()
+    const dependencies = []
+    for (const entry of entries) {
+      if (entry?.type !== "custom" || !entry._id) continue
+      try {
+        const doc = await loadCustomDoc(entry._id)
+        dependencies.push({ entryId: entry._id, sourceEntryIds: collectSourceEntryIds(doc) })
+      } catch (err) {
+        log.warn("[xt:cache] custom doc read failed for", entry._id, err?.message || err)
+      }
+    }
+    return dependencies
+  })()
+  try {
+    return await _customDepsInflight
+  } finally {
+    _customDepsInflight = null
+  }
+}
+
+/**
+ * Drop the cached overlay of every custom playlist referencing `sourceEntryId`.
+ * Without this a source edit / refresh stays invisible until that TTL expires.
+ */
+export async function invalidateCustomDependents(sourceEntryId) {
+  if (!sourceEntryId) return []
+  try {
+    const dependencies = await readCustomDependencies()
+    if (!dependencies.length) return []
+    const { collectDependentCustomEntryIds } = await import("./custom-playlist.ts")
+    const dependents = collectDependentCustomEntryIds(sourceEntryId, dependencies)
+    for (const entryId of dependents) {
+      invalidate(entryId, "m3u")
+      try {
+        document.dispatchEvent(
+          new CustomEvent(EVT_REVALIDATED, { detail: { entryId, kind: "m3u" } })
+        )
+      } catch {}
+    }
+    return dependents
+  } catch (err) {
+    log.warn("[xt:cache] custom dependent invalidation failed:", err?.message || err)
+    return []
+  }
+}
+
 /** Drop every cache entry for one playlist (e.g. on edit/remove). */
 export function invalidateEntry(entryId) {
   if (!entryId) return
@@ -337,6 +394,7 @@ export function invalidateEntry(entryId) {
     if (k.startsWith(prefix)) _mem.delete(k)
   }
   idbDeleteWhere(prefix).catch(() => {})
+  invalidateCustomDependents(entryId).catch(() => {})
 }
 
 /**

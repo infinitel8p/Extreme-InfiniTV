@@ -313,6 +313,7 @@ export function attachArtplayerAudioControl(
 ): { setSource(source: AudioTrackSource | null): void; dispose(): void } {
   let activeSource: AudioTrackSource | null = null
   let unsubscribe: (() => void) | null = null
+  let readyHandlerBound = false
 
   const controlIcon = ICON_LANGUAGE.replace(
     "<svg ",
@@ -323,31 +324,39 @@ export function attachArtplayerAudioControl(
     try { art.controls.remove("xtAudio") } catch {}
   }
 
+  function addControl(): void {
+    const tracks = activeSource?.list() ?? []
+    if (tracks.length < 2) return
+    try {
+      art.controls.add({
+        name: "xtAudio",
+        position: "right",
+        index: 6,
+        html: controlIcon,
+        selector: tracks.map((track) => ({
+          html: escapeHtml(track.label),
+          value: track.id,
+          default: track.active,
+        })),
+        onSelect(item: { html: string; value: unknown }) {
+          activeSource?.select(String(item.value))
+          return item.html
+        },
+      })
+    } catch {}
+  }
+
   function rebuild(): void {
     removeControl()
     const tracks = activeSource?.list() ?? []
     if (tracks.length < 2) return
-    const add = () => {
-      try {
-        art.controls.add({
-          name: "xtAudio",
-          position: "right",
-          index: 6,
-          html: controlIcon,
-          selector: tracks.map((track) => ({
-            html: escapeHtml(track.label),
-            value: track.id,
-            default: track.active,
-          })),
-          onSelect(item: { html: string; value: unknown }) {
-            activeSource?.select(String(item.value))
-            return item.html
-          },
-        })
-      } catch {}
+    if (art.isReady) {
+      addControl()
+      return
     }
-    if (art.isReady) add()
-    else art.on("ready", add)
+    if (readyHandlerBound) return
+    readyHandlerBound = true
+    art.on("ready", addControl)
   }
 
   return {

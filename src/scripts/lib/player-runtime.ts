@@ -1,20 +1,4 @@
-// Unified mount surface for the five playback backends.
-//
-// Returns a tagged union so call sites can branch cleanly between
-// embedded (Video.js / HTML5) and external (MPV / VLC) playback. The
-// embedded handle exposes a Video.js-shaped subset; the external launch
-// is a fire-and-forget spawn with no progress / pause feedback.
-//
-// Reused utilities:
-//   - getPlayerBackend    src/scripts/lib/app-settings.js
-//   - getPlayerPath       src/scripts/lib/app-settings.js
-//   - getPlayerExtraArgs  src/scripts/lib/app-settings.js
-//   - log                 src/scripts/lib/log.js
-//   - createSubtitleManager src/scripts/lib/subtitle-tracks.ts
-//   - attachVideoJsAudioMenu / attachArtplayerAudioControl src/scripts/lib/audio-tracks.ts
-//
-// Desktop only - external backends invoke a Tauri command that's gated
-// off on Android/iOS at the Rust side.
+// Unified mount surface for the playback backends; the external MPV/VLC ones are desktop only.
 
 import { log, redactUrl } from "@/scripts/lib/log.js"
 import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
@@ -1696,6 +1680,7 @@ async function mountVideoJs(
         codecState,
         { get: () => activeHls, set: (handle) => { activeHls = handle } },
         () => {
+          if (pendingSrc !== src) return
           audioMenu.setSource(pendingAudioSource)
           try {
             player.error?.({
@@ -2011,6 +1996,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       codecState,
       { get: () => activeHls, set: (handle) => { activeHls = handle } },
       () => {
+        if (pendingSrc !== url) return
         audioControl.setSource(pendingAudioSource)
         try { video.dispatchEvent(new Event("error")) } catch {}
       },

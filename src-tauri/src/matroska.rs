@@ -1,5 +1,4 @@
-// Pure Matroska/WebM push-parser, no tauri/tokio imports so it's unit-testable standalone.
-// `parse_head` reads EBML/Segment Info/Tracks from a byte prefix; `ClusterScanner` streams Cluster data in arbitrary chunks to pull subtitle cues.
+// Pure Matroska/WebM push-parser: head parse from a byte prefix, cue scanning from arbitrary chunks.
 
 use std::collections::HashMap;
 
@@ -7,9 +6,7 @@ use std::collections::HashMap;
 // EBML primitives
 // ---------------------------------------------------------------------------
 
-/// A vint read distinguishes "need more bytes" from "structurally invalid"
-/// (first byte 0x00 can never start a vint): callers that resync past bad
-/// data must not treat the two as the same "wait and retry" case.
+/// A first byte of 0x00 is structurally invalid, not "need more bytes": resyncing callers must not retry it.
 enum VintRead {
     Value(u64, usize),
     NeedMore,
@@ -133,8 +130,7 @@ pub struct HeadInfo {
     pub tracks: Vec<MkvTrack>,
 }
 
-/// File-controlled track metadata (Name, CodecID, Language) flows to the frontend as-is;
-/// strip control chars and truncate before it ever leaves the parser.
+/// File-controlled track metadata reaches the frontend as-is, so sanitize it inside the parser.
 fn sanitize_track_text(text: String) -> String {
     text.chars()
         .filter(|ch| !ch.is_control())
@@ -358,8 +354,7 @@ fn is_recognized_cluster_child(id: u64) -> bool {
     )
 }
 
-/// Parses a Block/SimpleBlock's inner header: track vint + i16 relative
-/// timestamp + 1 flags byte. Returns `(track, rel_timestamp, flags, header_len)`.
+/// Block inner header layout: track vint + i16 relative timestamp + 1 flags byte.
 fn parse_block_header(bytes: &[u8]) -> Option<(u64, i16, u8, usize)> {
     let (track, track_width) = read_vint_raw(bytes)?;
     if bytes.len() < track_width + 3 {
@@ -381,8 +376,7 @@ fn decode_srt(payload: &[u8]) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n").trim_end().to_string()
 }
 
-/// ASS/SSA dialogue payload is `ReadOrder,Layer,Style,Name,MarginL,MarginR,MarginV,Effect,Text`;
-/// split on the first 8 commas only since Text itself may contain commas.
+/// Split on the first 8 commas only: the trailing ASS Text field may contain commas itself.
 fn decode_ass(payload: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(payload);
     let bytes = text.as_bytes();
@@ -491,8 +485,7 @@ pub struct ClusterScanner {
     subtitle_tracks: HashMap<u64, SubtitleCodec>,
     buf: Vec<u8>,
     scanning: bool,
-    /// `None` while `scanning`; once inside a cluster, `None` means the
-    /// cluster declared an unknown size, `Some(n)` is the known byte budget left.
+    /// Inside a cluster, `None` means the cluster declared an unknown size.
     cluster_remaining: Option<u64>,
     cluster_timestamp: u64,
     skip_remaining: u64,
@@ -545,9 +538,7 @@ impl ClusterScanner {
         self.consume_cluster_bytes(n as u64);
     }
 
-    /// Consumes as much of `total` as is already buffered, deferring the
-    /// rest to `skip_remaining` so a multi-megabyte payload never has to be
-    /// buffered in full.
+    /// Defers the unbuffered remainder to `skip_remaining` so a huge payload is never buffered in full.
     fn begin_skip(&mut self, total: u64) {
         let take = total.min(self.buf.len() as u64) as usize;
         if take > 0 {
@@ -557,9 +548,7 @@ impl ClusterScanner {
         self.skip_remaining = total - take as u64;
     }
 
-    /// Peeks the BlockGroup's leading Block header to learn its track number
-    /// before committing to a full-body buffer, so BlockGroups wrapping video
-    /// (some encoders do this) never pay the allocate-copy-discard cost.
+    /// Some encoders wrap video in BlockGroups; peek the track number before buffering the body.
     fn probe_block_group_track(&self, body_start: usize, child_size: u64) -> BlockGroupProbe {
         let probe_cap = (child_size as usize).min(BLOCK_GROUP_PROBE_CAP);
         if self.buf.len() < body_start + probe_cap {
@@ -611,8 +600,7 @@ impl ClusterScanner {
                     return ScanOutcome::NeedMore;
                 }
                 VintRead::Invalid => {
-                    // The byte after a false hit can never start a vint; no amount
-                    // of extra data fixes that, so treat it as a failed candidate.
+                    // No amount of extra data fixes an invalid vint, so drop the candidate.
                     self.buf.drain(0..i + 1);
                     continue;
                 }
@@ -747,8 +735,7 @@ impl ClusterScanner {
             }
 
             let Some(child_size) = child_size else {
-                // A recognized child with unknown size isn't valid Matroska; bail
-                // to Scan rather than stall forever.
+                // A recognized child with unknown size isn't valid Matroska; bail rather than stall.
                 self.buf.drain(0..header_len);
                 self.consume_cluster_bytes(header_len as u64);
                 self.scanning = true;
@@ -835,8 +822,7 @@ impl ClusterScanner {
     }
 }
 
-/// Fixture builders shared by this module's own tests and by `vod_proxy`'s
-/// tests (which need synthetic Matroska bytes but not the parser internals).
+/// Fixture builders shared with `vod_proxy`'s tests.
 #[cfg(test)]
 pub(crate) mod test_fixtures {
     use super::*;
@@ -1091,8 +1077,7 @@ mod tests {
     #[test]
     fn scanner_resyncs_past_false_cluster_hit_and_is_chunk_boundary_safe() {
         let mut garbage = vec![0x11u8; 20];
-        // Embed a false Cluster-ID hit: size parses fine, but the following
-        // "child id" isn't one of the recognized cluster children, so it fails validation.
+        // A false Cluster-ID hit whose size parses but whose child id isn't recognized.
         garbage.extend_from_slice(&CLUSTER_ID_BYTES);
         garbage.extend(encode_size_min(50));
         garbage.extend_from_slice(&[0x12, 0x34, 0x56, 0x78]);
@@ -1121,9 +1106,7 @@ mod tests {
 
     #[test]
     fn scanner_treats_zero_byte_after_false_hit_as_invalid_not_needmore() {
-        // A false 4-byte Cluster-ID hit followed by 0x00 (which can never
-        // start a vint) used to be treated as "wait for more data" forever,
-        // so the real cluster after it, and every cue in it, was lost.
+        // A trailing 0x00 used to read as "wait for more data" forever, losing the real cluster.
         let mut garbage = vec![0x22u8; 16];
         garbage.extend_from_slice(&CLUSTER_ID_BYTES);
         garbage.push(0x00);

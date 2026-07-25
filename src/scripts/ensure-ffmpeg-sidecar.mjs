@@ -7,12 +7,13 @@ import {
   copyFileSync,
   chmodSync,
   unlinkSync,
+  statSync,
   createWriteStream,
   createReadStream,
   readFileSync,
   writeFileSync,
 } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve as resolvePath } from "node:path"
 import { fileURLToPath } from "node:url"
 import { platform } from "node:os"
 import { execFileSync } from "node:child_process"
@@ -27,6 +28,11 @@ const RELEASE_BASE_URL =
   "https://github.com/infinitel8p/Extreme-InfiniTV/releases/download/ffmpeg-sidecar-v2"
 const RELEASE_TAG = RELEASE_BASE_URL.split("/").pop()
 const MARKER_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const PINS_FILE = "src/scripts/ffmpeg-sidecar-checksums.json"
+const pinsPath = join(__dirname, "ffmpeg-sidecar-checksums.json")
+const REFRESH_PINS_HINT =
+  'refresh them with "node src/scripts/ensure-ffmpeg-sidecar.mjs --update-pins", review the diff and commit it'
+const PINNED_BINARY_ASSETS = ["ffmpeg-x86_64-pc-windows-msvc.exe", "ffmpeg-x86_64-unknown-linux-gnu"]
 
 function resolveTarget() {
   switch (platform()) {
@@ -113,23 +119,33 @@ function sha256File(filePath) {
 
 class ChecksumVerificationError extends Error {}
 
-async function expectedHashFor(assetName) {
-  const sumsText = await fetchText(`${RELEASE_BASE_URL}/SHA256SUMS.txt`)
-  const sumsLine = sumsText.split(/\r?\n/).find((line) => line.trim().endsWith(assetName))
-  if (!sumsLine) {
-    throw new ChecksumVerificationError(`${assetName} is not listed in SHA256SUMS.txt`)
+function readPins() {
+  try {
+    return JSON.parse(readFileSync(pinsPath, "utf8"))
+  } catch (readError) {
+    throw new ChecksumVerificationError(`could not read ${PINS_FILE} (${readError.message})`)
   }
-  return sumsLine.trim().split(/\s+/)[0]
+}
+
+// The release's own sums are no trust root; the committed pins decide.
+function pinnedHashFor(assetName) {
+  const pins = readPins()
+  if (pins?.tag !== RELEASE_TAG) {
+    throw new ChecksumVerificationError(
+      `${PINS_FILE} pins tag "${pins?.tag}" but this script downloads from "${RELEASE_TAG}"; ${REFRESH_PINS_HINT}`
+    )
+  }
+  const pinnedHash = pins?.sha256?.[assetName]
+  if (typeof pinnedHash !== "string" || !/^[0-9a-f]{64}$/.test(pinnedHash)) {
+    throw new ChecksumVerificationError(
+      `${assetName} has no pinned sha256 in ${PINS_FILE}; ${REFRESH_PINS_HINT}`
+    )
+  }
+  return pinnedHash
 }
 
 async function verifyChecksum(filePath, assetName) {
-  let expectedHash
-  try {
-    expectedHash = await expectedHashFor(assetName)
-  } catch (fetchError) {
-    if (fetchError instanceof ChecksumVerificationError) throw fetchError
-    throw new ChecksumVerificationError(`could not download SHA256SUMS.txt (${fetchError.message})`)
-  }
+  const expectedHash = pinnedHashFor(assetName)
   const actualHash = await sha256File(filePath)
   if (actualHash !== expectedHash) {
     throw new ChecksumVerificationError(`checksum mismatch for ${assetName}: expected ${expectedHash}, got ${actualHash}`)
@@ -137,19 +153,105 @@ async function verifyChecksum(filePath, assetName) {
   return actualHash
 }
 
-// Lookup failure keeps the existing binary; marked unverifiable, not cached.
-async function checkAgainstRelease(filePath, assetName) {
+// Deliberate asymmetry: fail closed on first install, keep-and-warn on re-verify.
+async function checkAgainstPins(filePath, assetName) {
   let expectedHash
   try {
-    expectedHash = await expectedHashFor(assetName)
+    expectedHash = pinnedHashFor(assetName)
   } catch (checkError) {
     console.warn(
-      `[ensure-ffmpeg-sidecar] could not verify local binary against the latest release (${checkError.message}), keeping it`
+      `[ensure-ffmpeg-sidecar] could not verify local binary against the pinned checksums (${checkError.message}), keeping it`
     )
     return { status: "unverifiable" }
   }
   const actualHash = await sha256File(filePath)
   return actualHash === expectedHash ? { status: "match", sha256: actualHash } : { status: "mismatch" }
+}
+
+function parseSums(sumsText) {
+  const sha256 = {}
+  for (const line of sumsText.split(/\r?\n/)) {
+    const match = line.trim().match(/^([0-9a-f]{64})\s+\*?(\S.*)$/)
+    if (match) sha256[match[2].trim()] = match[1]
+  }
+  return sha256
+}
+
+async function fetchSidecarBuild() {
+  try {
+    const buildInfo = await fetchText(`${RELEASE_BASE_URL}/BUILD-INFO-windows.txt`)
+    const field = (label) => buildInfo.match(new RegExp(`^${label}:\\s*(.+)$`, "m"))?.[1]?.trim() ?? null
+    return {
+      ffmpegVersion: field("ffmpeg version"),
+      builtAt: field("built"),
+      workflowCommit: field("workflow commit"),
+    }
+  } catch {
+    return null
+  }
+}
+
+async function updatePins() {
+  let sha256
+  try {
+    sha256 = parseSums(await fetchText(`${RELEASE_BASE_URL}/SHA256SUMS.txt`))
+  } catch (fetchError) {
+    console.error(
+      `[ensure-ffmpeg-sidecar] could not download SHA256SUMS.txt from ${RELEASE_TAG} (${fetchError.message})`
+    )
+    process.exit(1)
+  }
+  const missing = PINNED_BINARY_ASSETS.filter((assetName) => !sha256[assetName])
+  if (missing.length > 0) {
+    console.error(
+      `[ensure-ffmpeg-sidecar] ${RELEASE_TAG} SHA256SUMS.txt is missing ${missing.join(", ")}; not rewriting ${PINS_FILE}`
+    )
+    process.exit(1)
+  }
+  let previousPins = null
+  try {
+    previousPins = readPins()
+  } catch {
+    previousPins = null
+  }
+  const pins = {
+    tag: RELEASE_TAG,
+    pinnedAt: new Date().toISOString().slice(0, 10),
+    sidecarBuild: (await fetchSidecarBuild()) ?? previousPins?.sidecarBuild ?? null,
+    sha256,
+  }
+  writeFileSync(pinsPath, `${JSON.stringify(pins, null, 2)}\n`)
+  console.log(`[ensure-ffmpeg-sidecar] rewrote ${PINS_FILE} from ${RELEASE_TAG}:`)
+  for (const [assetName, hash] of Object.entries(sha256)) console.log(`  ${hash}  ${assetName}`)
+  console.log("[ensure-ffmpeg-sidecar] review the diff and commit it so CI trusts the new sidecar build")
+}
+
+function printPin(assetName) {
+  if (!assetName) {
+    console.error("[ensure-ffmpeg-sidecar] --print-pin needs an asset filename")
+    process.exit(1)
+  }
+  try {
+    process.stdout.write(`${pinnedHashFor(assetName)}\n`)
+  } catch (pinError) {
+    console.error(`[ensure-ffmpeg-sidecar] ${pinError.message}`)
+    process.exit(1)
+  }
+}
+
+function printUsage() {
+  console.log(
+    [
+      "Usage: node src/scripts/ensure-ffmpeg-sidecar.mjs [option]",
+      "",
+      `  (no option)          ensure src-tauri/binaries holds the sidecar pinned in ${PINS_FILE}`,
+      "  --print-pin <asset>  print the pinned sha256 for one release asset (used by CI)",
+      `  --update-pins        fetch ${RELEASE_TAG} checksums and rewrite ${PINS_FILE}`,
+      "  --help               this text",
+      "",
+      "Env: XT_SKIP_FFMPEG_SIDECAR=1 skips everything, XT_FFMPEG_SIDECAR_PATH=<file> installs a local binary.",
+    ].join("\n")
+  )
 }
 
 function markerPathFor(destPath) {
@@ -207,24 +309,28 @@ async function main() {
 
   const overridePath = process.env.XT_FFMPEG_SIDECAR_PATH
   if (overridePath) {
-    if (!existsSync(overridePath)) {
-      console.error(`[ensure-ffmpeg-sidecar] XT_FFMPEG_SIDECAR_PATH is set but ${overridePath} does not exist`)
+    // Only ever used as a copy source, never handed to a shell.
+    const resolvedOverride = resolvePath(overridePath.trim())
+    if (!existsSync(resolvedOverride) || !statSync(resolvedOverride).isFile()) {
+      console.error(
+        `[ensure-ffmpeg-sidecar] XT_FFMPEG_SIDECAR_PATH is set but ${resolvedOverride} is not an existing file`
+      )
       process.exit(1)
     }
-    copyFileSync(overridePath, destPath)
+    copyFileSync(resolvedOverride, destPath)
     if (platform() === "linux") chmodSync(destPath, 0o755)
     const overrideHash = await sha256File(destPath)
     writeMarker(markerPath, { tag: RELEASE_TAG, sha256: overrideHash, verifiedAt: Date.now() })
-    console.log(`[ensure-ffmpeg-sidecar] using XT_FFMPEG_SIDECAR_PATH override: ${overridePath} -> ${destPath}`)
+    console.log(`[ensure-ffmpeg-sidecar] using XT_FFMPEG_SIDECAR_PATH override: ${resolvedOverride} -> ${destPath}`)
     return
   }
 
   if (existsSync(destPath)) {
     if (await markerIsFresh(markerPath, destPath)) {
-      console.log("[ensure-ffmpeg-sidecar] local binary verified recently, skipping network check")
+      console.log("[ensure-ffmpeg-sidecar] local binary verified recently, skipping re-verification")
       return
     }
-    const check = await checkAgainstRelease(destPath, target.asset)
+    const check = await checkAgainstPins(destPath, target.asset)
     if (check.status === "match") {
       writeMarker(markerPath, { tag: RELEASE_TAG, sha256: check.sha256, verifiedAt: Date.now() })
       return
@@ -278,4 +384,14 @@ async function main() {
   process.exit(1)
 }
 
-await main()
+const cliArgs = process.argv.slice(2)
+
+if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
+  printUsage()
+} else if (cliArgs.includes("--update-pins")) {
+  await updatePins()
+} else if (cliArgs.includes("--print-pin")) {
+  printPin(cliArgs[cliArgs.indexOf("--print-pin") + 1])
+} else {
+  await main()
+}

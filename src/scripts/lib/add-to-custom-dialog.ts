@@ -1,6 +1,4 @@
-// "Add to custom playlist" dialog: pick an existing custom playlist (or
-// create a new one) and add a channel reference to it. Shared by the
-// stream-sniffer "name" phase and the Live TV channel context menu.
+// "Add to custom playlist" dialog: pick or create a custom playlist and add channel references to it.
 
 import { getEntries, addEntry, removeEntry } from "@/scripts/lib/creds.js"
 import { addChannel, loadCustomDoc, saveCustomDoc } from "@/scripts/lib/custom-playlist.ts"
@@ -149,8 +147,7 @@ async function runAddToCustomDialog(items: AddToCustomItem[], subtitle: string):
       focusTarget?.focus()
     }
 
-    // Unguarded: callers (addToEntry, createAndAdd) own the busy flag so this
-    // can run after a playlist was just created without tripping its own guard.
+    // Unguarded on purpose: callers own the busy flag, so this can follow a just-created playlist.
     const doAdd = async (entryId: string): Promise<void> => {
       let doc = await loadCustomDoc(entryId)
       for (const item of items) {
@@ -275,11 +272,7 @@ async function runAddToCustomDialog(items: AddToCustomItem[], subtitle: string):
   })
 }
 
-/**
- * Open the "Add to custom playlist" picker for a single channel. Resolves
- * true once it has been added to a (possibly newly created) custom playlist
- * entry, false on cancel/escape or an unrecoverable failure.
- */
+/** Resolves false on cancel/escape as well as on failure. */
 export async function openAddToCustomDialog(
   source: CustomSource,
   init: AddChannelInit & { name: string }
@@ -287,10 +280,7 @@ export async function openAddToCustomDialog(
   return runAddToCustomDialog([{ source, init }], init.name)
 }
 
-/**
- * Same as openAddToCustomDialog but adds every item to the chosen playlist
- * in a single load -> add each -> save pass.
- */
+/** Multi-item variant: one load -> add each -> save pass. */
 export async function openAddManyToCustomDialog(items: AddToCustomItem[]): Promise<boolean> {
   return runAddToCustomDialog(items, t("addToCustom.itemsSelected", { count: items.length }))
 }

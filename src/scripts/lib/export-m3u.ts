@@ -1,6 +1,4 @@
-// Export any stored playlist entry (xtream / m3u / local-m3u / custom) to an
-// .m3u file: resolve its live catalog through the normal catalog pipeline,
-// map to M3UEntry, serialize, and write it via the platform-appropriate path.
+// Export any stored playlist entry's live catalog to an .m3u file.
 
 import { entryToCreds } from "@/scripts/lib/creds.js"
 import { ensureLive } from "@/scripts/lib/catalog.js"
@@ -25,8 +23,7 @@ export interface BuildM3UResult {
   skippedCount: number
 }
 
-/** Resolve a playlist entry's live catalog into M3UEntry rows. Rows without a
- *  URL (unresolved custom-playlist channels) are dropped and counted. */
+/** Channels without a URL (unresolved custom-playlist rows) are dropped and counted. */
 export async function buildM3UEntriesForEntry(entry: any): Promise<BuildM3UResult> {
   const creds = entryToCreds(entry)
   const channels = await ensureLive(creds, entry._id, { force: true })
@@ -89,8 +86,7 @@ export interface SaveOutcome {
   savedTo: string
 }
 
-/** Write M3U text to disk: Tauri save dialog on desktop, SAF (falling back to
- *  public Downloads/) on Android, Blob download on web. */
+/** Android falls back to public Downloads/ when the SAF picker is unavailable. */
 export async function saveM3UText(filename: string, text: string): Promise<SaveOutcome> {
   if (isTauri && isAndroid) {
     const androidFs = await import("@/scripts/lib/android-fs.js")

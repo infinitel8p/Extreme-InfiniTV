@@ -1,6 +1,4 @@
-// Local HTTP tee-proxy for MKV VOD playback (desktop only): forwards Range requests to the provider 1:1
-// while feeding the passing bytes through `matroska::ClusterScanner` to pull subtitle cues, reported as
-// `xt:vodproxy-tracks` / `xt:vodproxy-cues` events. Core takes `Arc<dyn VodProxyEvents>` so it's testable without a Tauri AppHandle.
+// Local tee-proxy for MKV VOD (desktop only): forwards Range requests 1:1 while demuxing subtitle cues.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -64,9 +62,7 @@ struct VodSession {
     created_at: std::time::Instant,
 }
 
-// A user cannot realistically have more than a handful of concurrent VOD
-// players; capping the session table bounds leaks from navigation races
-// (an unload mid-register orphans a session forever otherwise).
+// Caps leaks from navigation races: an unload mid-register orphans a session forever.
 const MAX_SESSIONS: usize = 8;
 
 type SessionMap = Arc<Mutex<HashMap<String, Arc<VodSession>>>>;
@@ -337,12 +333,7 @@ async fn handle_stream(
     }
 }
 
-/// Per-request tee state. A request that starts before the head parse lands
-/// (almost always true for the very first `bytes=0-` request, since Chromium
-/// holds that connection open for the whole session) buffers passing chunks
-/// into a capped prefix instead of dropping the tee outright; once the head
-/// resolves, the prefix is fed to a freshly built scanner before the live
-/// chunk, so cues embedded in the stream's opening clusters aren't lost.
+/// A request usually starts before the head parse lands, so chunks are buffered and replayed once it does.
 struct TeeState {
     session: Arc<VodSession>,
     scanner: Option<ClusterScanner>,
@@ -380,8 +371,7 @@ impl TeeState {
         }
     }
 
-    /// Feeds a chunk through the (possibly not-yet-attached) scanner, returning
-    /// any cues produced. Guarded against parser panics with a sticky disable.
+    /// A parser panic sticks the tee off for the rest of the request.
     fn process(&mut self, chunk: &[u8]) -> Vec<ScannedCue> {
         if self.disabled {
             return Vec::new();
@@ -515,8 +505,7 @@ fn subtitle_codec_for(codec_id: &str) -> Option<SubtitleCodec> {
     }
 }
 
-// Only announce tracks the scanner can actually decode: PGS/VobSub/WebVTT
-// etc. would otherwise show up as selectable but permanently dead menu entries.
+// Announcing a codec the scanner can't decode yields a selectable but permanently dead menu entry.
 fn subtitle_tracks_payload(head_info: &HeadInfo) -> Vec<Value> {
     head_info
         .tracks
@@ -564,8 +553,7 @@ async fn fetch_range(
         request = request.header(reqwest::header::USER_AGENT, ua.clone());
     }
     let response = request.send().await.ok()?;
-    // A Range-ignoring server answers 200 with the entire (possibly multi-GB)
-    // file; only a genuine 206 guarantees the body is bounded to what we asked for.
+    // A Range-ignoring server answers 200 with the entire multi-GB file; only 206 bounds the body.
     if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
         return None;
     }
@@ -757,8 +745,7 @@ mod tests {
 
     #[test]
     fn tee_state_replays_buffered_prefix_once_head_resolves_after_streaming_started() {
-        // The bytes=0- request's first chunks race spawn_head_parse and
-        // usually win; TeeState must not drop the cues buried in them.
+        // The bytes=0- request's first chunks usually win the race against spawn_head_parse.
         let clusters = cluster(1000, &[block_group(2, 500, 0, b"Hello World", Some(2000))]);
         let session = test_session(OnceLock::new());
         let mut tee_state = TeeState::new(session.clone());
@@ -777,8 +764,7 @@ mod tests {
             .map_err(|_| "head already set")
             .unwrap();
 
-        // The next chunk (here, an otherwise-empty tail) triggers scanner
-        // attach and replay of everything buffered before the head landed.
+        // The next chunk triggers scanner attach and replay of the buffered prefix.
         let cues = tee_state.process(&[]);
         assert_eq!(cues.len(), 1);
         assert_eq!(cues[0].track_number, 2);
@@ -910,12 +896,7 @@ mod tests {
         );
     }
 
-    /// Registers a real provider URL against the proxy core (no AppHandle
-    /// involved) and simulates a Chromium-style playback pattern: an
-    /// open-ended range read partway then dropped, followed by a later seek.
-    /// Requires `XT_VOD_PROXY_TEST_URL` pointing at a real MKV with embedded
-    /// subtitles; skipped otherwise. Run with:
-    /// `XT_VOD_PROXY_TEST_URL=... cargo test --features "" -- --ignored live_provider_tee`
+    /// Needs `XT_VOD_PROXY_TEST_URL` pointing at a real MKV with embedded subtitles; skipped otherwise.
     #[tokio::test]
     #[ignore]
     async fn live_provider_tee() {

@@ -7,6 +7,8 @@
 //     sorts, favorites order)
 //   - app settings (UA preset, download dir, concurrency, player backend
 //     + per-kind path / extra args / reuse-window flag)
+//   - per-entry local content (local-m3u text + custom-playlist docs, keyed
+//     by entry `_id` in the same local-content.js store)
 
 import { getState as getCredsState, restoreState as restoreCredsState } from "@/scripts/lib/creds.js"
 import {
@@ -62,10 +64,10 @@ export async function exportAll() {
   const entries = Array.isArray(credsState.entries) ? credsState.entries : []
   const localContent = {}
   for (const entry of entries) {
-    if (entry?.type === "local-m3u" && entry._id) {
-      const text = await getLocalContent(entry._id)
-      if (typeof text === "string" && text) localContent[entry._id] = text
-    }
+    if (!entry?._id) continue
+    if (entry.type !== "local-m3u" && entry.type !== "custom") continue
+    const text = await getLocalContent(entry._id)
+    if (typeof text === "string" && text) localContent[entry._id] = text
   }
   return {
     format: FORMAT_NAME,
@@ -130,8 +132,7 @@ export async function importAll(blob) {
       : 0
   }
 
-  // Restore local-m3u text saved by exportAll; setLocalContent enforces the
-  // byte cap and returns false when the payload is rejected.
+  // setLocalContent enforces the byte cap; rejected payloads are skipped.
   if (b.localContent && typeof b.localContent === "object") {
     for (const [entryId, text] of Object.entries(b.localContent)) {
       if (typeof entryId === "string" && entryId && typeof text === "string") {

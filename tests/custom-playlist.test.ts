@@ -25,6 +25,8 @@ import {
   renameGroup,
   reorderGroups,
   resolveCustomChannels,
+  collectSourceEntryIds,
+  collectDependentCustomEntryIds,
   type CustomSource,
   type SourcePool,
 } from "@/scripts/lib/custom-playlist.ts"
@@ -367,6 +369,81 @@ describe("loadCustomDoc", () => {
   it("throws instead of returning an empty doc when the storage read fails (null, not empty)", async () => {
     vi.mocked(getLocalContent).mockResolvedValueOnce(null)
     await expect(loadCustomDoc("entry-1")).rejects.toThrow(/storage read failed/)
+  })
+})
+
+describe("collectSourceEntryIds", () => {
+  it("returns each referenced playlist entry id once", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A" }).doc
+    doc = addChannel(doc, xtreamSource("p1", 2), { name: "B" }).doc
+    doc = addChannel(doc, m3uSource("p2", "http://host/c.m3u8", "C"), { name: "C" }).doc
+
+    expect(collectSourceEntryIds(doc).sort()).toEqual(["p1", "p2"])
+  })
+
+  it("ignores direct sources and malformed channel records", () => {
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, directSource("http://raw/stream.m3u8"), { name: "Direct" }).doc
+    doc = addChannel(doc, xtreamSource("p1", 1), { name: "A" }).doc
+    doc = {
+      ...doc,
+      channels: [
+        ...doc.channels,
+        { ...doc.channels[0], key: "broken", sources: undefined as unknown as CustomSource[] },
+        { ...doc.channels[0], key: "empty-entry", sources: [xtreamSource("", 5)] },
+      ],
+    }
+
+    expect(collectSourceEntryIds(doc)).toEqual(["p1"])
+  })
+
+  it("returns nothing for an empty doc", () => {
+    expect(collectSourceEntryIds(emptyCustomDoc())).toEqual([])
+  })
+})
+
+describe("collectDependentCustomEntryIds", () => {
+  it("returns the custom entries referencing the source", () => {
+    const dependents = collectDependentCustomEntryIds("src-1", [
+      { entryId: "cust-1", sourceEntryIds: ["src-1", "src-2"] },
+      { entryId: "cust-2", sourceEntryIds: ["src-2"] },
+    ])
+    expect(dependents).toEqual(["cust-1"])
+  })
+
+  it("follows custom-on-custom references transitively", () => {
+    const dependents = collectDependentCustomEntryIds("src-1", [
+      { entryId: "cust-1", sourceEntryIds: ["src-1"] },
+      { entryId: "cust-2", sourceEntryIds: ["cust-1"] },
+      { entryId: "cust-3", sourceEntryIds: ["src-9"] },
+    ])
+    expect(dependents.sort()).toEqual(["cust-1", "cust-2"])
+  })
+
+  it("terminates on a reference cycle", () => {
+    const dependents = collectDependentCustomEntryIds("src-1", [
+      { entryId: "cust-1", sourceEntryIds: ["src-1", "cust-2"] },
+      { entryId: "cust-2", sourceEntryIds: ["cust-1"] },
+    ])
+    expect(dependents.sort()).toEqual(["cust-1", "cust-2"])
+  })
+
+  it("never returns the source itself when it references itself", () => {
+    expect(
+      collectDependentCustomEntryIds("cust-1", [{ entryId: "cust-1", sourceEntryIds: ["cust-1"] }])
+    ).toEqual([])
+  })
+
+  it("tolerates missing ids, missing source lists and an empty source id", () => {
+    expect(
+      collectDependentCustomEntryIds("src-1", [
+        { entryId: "", sourceEntryIds: ["src-1"] },
+        { entryId: "cust-1", sourceEntryIds: undefined as unknown as string[] },
+        { entryId: "cust-2", sourceEntryIds: ["", "src-1"] },
+      ])
+    ).toEqual(["cust-2"])
+    expect(collectDependentCustomEntryIds("", [{ entryId: "cust-1", sourceEntryIds: [""] }])).toEqual([])
   })
 })
 

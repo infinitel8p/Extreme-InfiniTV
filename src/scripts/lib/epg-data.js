@@ -118,13 +118,7 @@ export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl, customSourceUr
   return out
 }
 
-/**
- * Custom playlist only: union of every source entry's provider default EPG
- * URL (Xtream `xmltv.php`, or the M3U `x-tvg-url` stored for that source).
- *
- * @param {string} playlistId - the custom entry's own id
- * @returns {Promise<string[]>}
- */
+/** Custom playlist only: union of every source entry's provider default EPG URL. */
 async function collectCustomSourceEpgUrls(playlistId) {
   const doc = await loadCustomDoc(playlistId)
   const sourceEntryIds = new Set()

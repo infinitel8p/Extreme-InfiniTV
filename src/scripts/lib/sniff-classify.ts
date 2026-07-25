@@ -1,5 +1,4 @@
-// Pure classifier for network requests sniffed out of an embedded web page:
-// decides whether a URL is a playable HLS/DASH manifest and ranks candidates.
+// Pure classifier for sniffed network requests: playable HLS/DASH manifest or not, plus ranking.
 
 export interface SniffClassification {
   kind: "hls" | "dash"
@@ -31,8 +30,7 @@ function normalizedMimeType(contentType?: string | null): string | null {
   return withoutParameters || null
 }
 
-// Resolving relative URLs against a dummy http base also filters out
-// blob:/data:/ws: schemes, since those keep their own protocol after resolution.
+// The dummy http base also filters blob:/data:/ws:, which keep their protocol after resolution.
 function resolveUrl(url: string): URL | null {
   try {
     const parsed = new URL(url, "http://sniff-classify.invalid/")
@@ -43,7 +41,7 @@ function resolveUrl(url: string): URL | null {
   }
 }
 
-const MASTER_FILENAME_RX = /(?:^|[_.-])master(?:[_.-]|\.m3u8$)/i
+const MASTER_FILENAME_RX = /(?:^|[_.-])master[_.-]/i
 
 function isMasterPlaylist(pathname: string): boolean {
   const lowerPathname = pathname.toLowerCase()

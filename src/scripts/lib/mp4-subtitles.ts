@@ -110,9 +110,10 @@ export function parseBoxHeader(
 }
 
 interface MoovLocation {
-  headBuffer: ArrayBuffer
+  prefixBytes: ArrayBuffer
   moovBytes: ArrayBuffer
-  moovOffset: number
+  /** Append position for moovBytes: mp4box stalls on a gap, so the moov follows the prefix directly. */
+  moovAppendOffset: number
 }
 
 // Content-Range is CORS-hidden on most panels, so the walk tolerates an unknown file size and stops on 416 or a short body.
@@ -151,6 +152,7 @@ async function locateMoov(url: string, signal?: AbortSignal): Promise<MoovLocati
   const headView = new DataView(headBuffer)
 
   let offset = 0
+  let ftypBytes: ArrayBuffer | null = null
   for (;;) {
     if (totalSize != null && offset >= totalSize) break
     let header = offset + 16 <= headBuffer.byteLength ? parseBoxHeader(headView, offset) : null
@@ -191,7 +193,11 @@ async function locateMoov(url: string, signal?: AbortSignal): Promise<MoovLocati
         return null
       }
       const moovBytes = await moovResponse.arrayBuffer()
-      return { headBuffer, moovBytes, moovOffset: offset }
+      if (ftypBytes) return { prefixBytes: ftypBytes, moovBytes, moovAppendOffset: ftypBytes.byteLength }
+      return { prefixBytes: headBuffer, moovBytes, moovAppendOffset: offset }
+    }
+    if (header.type === "ftyp" && offset + boxSize <= headBuffer.byteLength) {
+      ftypBytes = headBuffer.slice(offset, offset + boxSize)
     }
     offset += boxSize
   }
@@ -206,15 +212,15 @@ function withFileStart(buffer: ArrayBuffer, fileStart: number): Mp4BoxBufferLike
 }
 
 function parseTracksFromMoov(
-  headBuffer: ArrayBuffer,
+  prefixBytes: ArrayBuffer,
   moovBytes: ArrayBuffer,
-  moovOffset: number,
+  moovAppendOffset: number,
 ): { mp4boxFile: MP4Box.ISOFile; movie: MP4Box.Movie } | null {
   const mp4boxFile = MP4Box.createFile(false)
   let movie: MP4Box.Movie | null = null
   mp4boxFile.onReady = (info) => { movie = info }
-  mp4boxFile.appendBuffer(withFileStart(headBuffer, 0) as unknown as MP4Box.MP4BoxBuffer)
-  mp4boxFile.appendBuffer(withFileStart(moovBytes, moovOffset) as unknown as MP4Box.MP4BoxBuffer)
+  mp4boxFile.appendBuffer(withFileStart(prefixBytes, 0) as unknown as MP4Box.MP4BoxBuffer)
+  mp4boxFile.appendBuffer(withFileStart(moovBytes, moovAppendOffset) as unknown as MP4Box.MP4BoxBuffer)
   if (!movie) return null
   return { mp4boxFile, movie }
 }
@@ -234,7 +240,7 @@ async function parseMp4TracksCached(url: string, signal?: AbortSignal): Promise<
   const parsePromise = (async () => {
     const moovLocation = await locateMoov(url, signal)
     if (!moovLocation) return null
-    return parseTracksFromMoov(moovLocation.headBuffer, moovLocation.moovBytes, moovLocation.moovOffset)
+    return parseTracksFromMoov(moovLocation.prefixBytes, moovLocation.moovBytes, moovLocation.moovAppendOffset)
   })()
   if (parsedTracksCache.size >= PARSED_TRACKS_CACHE_MAX_ENTRIES) {
     const oldestUrl = parsedTracksCache.keys().next().value

@@ -438,6 +438,8 @@ async function startPlayback() {
     if (resolved) detailSrc = resolved
   }
 
+  if (requestId !== playRequestId) return
+
   if (activePlaylistId) {
     pushRecent(activePlaylistId, "vod", movie.id, movie.name, movie.logo || null)
   }
@@ -446,6 +448,7 @@ async function startPlayback() {
 
   const localSrc = await getLocalPlayableSrc(detailSrc)
   const playSrc = localSrc || detailSrc
+  if (requestId !== playRequestId) return
   const saved = activePlaylistId
     ? getProgress(activePlaylistId, "vod", movie.id)
     : null
@@ -508,6 +511,7 @@ async function startPlayback() {
     return
   }
   if (!player) return
+  if (requestId !== playRequestId) return
   setupPipButton(player)
   setupScaleButton()
   const mime = chooseMime(detailSrc)
@@ -558,6 +562,11 @@ async function startPlayback() {
       })
       initialAudioSource = audioSwitcher.source
     }
+  }
+
+  if (requestId !== playRequestId) {
+    prepared.mkvSession?.stop()
+    return
   }
 
   player.src({
@@ -880,6 +889,7 @@ async function boot() {
 
   // A playlist switch re-boots: dispose any player from the previous playlist
   // so its stream stops and its progress listeners stop writing.
+  playRequestId++
   try {
     vjs?.pause?.()
     await vjs?.dispose?.()

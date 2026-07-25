@@ -257,6 +257,32 @@ describe("attachArtplayerAudioControl", () => {
     expect(secondSource.dispose).not.toHaveBeenCalled()
   })
 
+  it("registers the ready listener once and adds the control with the latest tracks", () => {
+    const readyHandlers: (() => void)[] = []
+    const art = {
+      isReady: false,
+      controls: { add: vi.fn(), remove: vi.fn() },
+      on: vi.fn((event: string, handler: () => void) => {
+        if (event === "ready") readyHandlers.push(handler)
+      }),
+    }
+    const control = attachArtplayerAudioControl(art as any, (key) => key)
+    control.setSource(createFakeSource([
+      { id: "1", label: "English", language: "en", active: true },
+      { id: "2", label: "Spanish", language: "es", active: false },
+    ]) as any)
+    control.setSource(createFakeSource([
+      { id: "1", label: "English", language: "en", active: true },
+      { id: "2", label: "German", language: "de", active: false },
+    ]) as any)
+    expect(readyHandlers).toHaveLength(1)
+    art.isReady = true
+    for (const handler of readyHandlers) handler()
+    expect(art.controls.add).toHaveBeenCalledTimes(1)
+    const selector = art.controls.add.mock.calls[0][0].selector
+    expect(selector.map((item: { html: string }) => item.html)).toEqual(["English", "German"])
+  })
+
   it("disposes the active source on dispose()", () => {
     const art = createFakeArt()
     const control = attachArtplayerAudioControl(art, (key) => key)

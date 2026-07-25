@@ -1,6 +1,4 @@
-// "Add from website" flow: paste a page URL, sniff it via stream-sniffer.ts,
-// pick one candidate stream (or check several) and either save it as a new
-// m3u playlist entry or add it/them to a custom playlist.
+// "Add from website" dialog: page URL -> sniff -> pick candidates -> save as m3u or custom entry.
 
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { t } from "@/scripts/lib/i18n.js"
@@ -92,13 +90,7 @@ function looksLikePlaylistContentType(contentType: string | null): boolean {
 
 const IPV4_RX = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
 
-/**
- * True when the candidate's hostname is a literal loopback/private/link-local
- * address, so enrichment shouldn't fetch it (SSRF guard against a hostile page
- * pointing candidates at the user's own network). We can't resolve DNS
- * client-side, so a hostname that merely *resolves* to a private address
- * still slips through - an accepted limitation.
- */
+/** SSRF guard on literal addresses only: DNS names resolving to private IPs still slip through. */
 function isPrivateOrLoopbackHost(urlString: string): boolean {
   let hostname: string
   try {
@@ -132,6 +124,32 @@ function isPrivateOrLoopbackHost(urlString: string): boolean {
   return false
 }
 
+/** Reads a body as text, or null once the bytes actually received pass maxBytes. */
+async function readCappedText(response: Response, maxBytes: number): Promise<string | null> {
+  const body = response.body
+  if (!body || typeof body.getReader !== "function") {
+    const buffered = await response.text()
+    return buffered.length > maxBytes ? null : buffered
+  }
+  const reader = body.getReader()
+  const decoder = new TextDecoder("utf-8")
+  let received = 0
+  let text = ""
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value?.byteLength) continue
+      received += value.byteLength
+      if (received > maxBytes) return null
+      text += decoder.decode(value, { stream: true })
+    }
+    return text + decoder.decode()
+  } finally {
+    void reader.cancel().catch(() => {})
+  }
+}
+
 /** Fetches an HLS candidate's manifest and parses it, or null on failure/DASH/no data/private host. */
 async function fetchManifestSummary(candidate: SniffCandidate, parentSignal: AbortSignal): Promise<HlsMasterSummary | null> {
   if (candidate.kind !== "hls") return null
@@ -145,7 +163,9 @@ async function fetchManifestSummary(candidate: SniffCandidate, parentSignal: Abo
     if (!looksLikePlaylistContentType(response.headers.get("content-type"))) return null
     const contentLength = Number(response.headers.get("content-length"))
     if (Number.isFinite(contentLength) && contentLength > MAX_MANIFEST_PROBE_BYTES) return null
-    return summarizeHlsMaster(await response.text())
+    const manifestText = await readCappedText(response, MAX_MANIFEST_PROBE_BYTES)
+    if (manifestText === null) return null
+    return summarizeHlsMaster(manifestText)
   } catch {
     return null
   }
@@ -379,10 +399,7 @@ function candidateToSource(candidate: SniffCandidate): CustomSource {
   }
 }
 
-/**
- * Open the "Add from website" dialog. Resolves once the dialog closes,
- * whether the user saved a stream, cancelled, or hit a dead end.
- */
+/** Resolves once the dialog closes, saved or not. */
 export function openAddFromWebsiteDialog(): Promise<void> {
   if (dialogSessionOpen) return Promise.resolve()
   const dialog = ensureDialog()
@@ -403,6 +420,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
     let qualityAbortController: AbortController | null = null
     let resultsGeneration = 0
     let eagerProbeCount = 0
+    let spatialNavCleanup: (() => void) | undefined = undefined
 
     const settle = () => {
       if (resolved) return
@@ -413,6 +431,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       dialog.removeEventListener("focusin", onRowInteract)
       dialog.removeEventListener("cancel", onCancel)
       dialog.removeEventListener("close", onClose)
+      spatialNavCleanup?.()
       qualityAbortController?.abort()
       cancelSniff()
       try {
@@ -447,8 +466,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       badge?.classList.remove("hidden")
     }
 
-    // Master-derived chips win: a media playlist's own probe carries no resolution info,
-    // so once its master has told us what it is, ignore the (empty) own-probe result.
+    // Master-derived chips win: a media playlist's own probe carries no resolution info.
     const applyQuality = (idx: number, quality: string | null, fromMaster: boolean) => {
       if (!fromMaster && masterDerivedIdx.has(idx)) return
       if (fromMaster) masterDerivedIdx.add(idx)
@@ -707,7 +725,7 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       return
     }
 
-    attachDialogSpatialNav(dialog, {
+    spatialNavCleanup = attachDialogSpatialNav(dialog, {
       defaultElement: `#${DIALOG_ID} [data-role="url-input"], #${DIALOG_ID} [data-role="cancel"]`,
     })
   })

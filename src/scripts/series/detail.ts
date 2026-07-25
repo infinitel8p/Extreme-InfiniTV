@@ -775,6 +775,7 @@ async function playEpisode(episode) {
     ? buildEpisodeStreamUrl(episode)
     : await resolveStreamUrl((c) => buildEpisodeStreamUrl(episode, c))
   if (!src) return
+  if (requestId !== playRequestId) return
   dismissUpNext()
 
   if (activePlaylistId) {
@@ -792,6 +793,7 @@ async function playEpisode(episode) {
   markNowPlayingEpisode(episode.id)
 
   if (await tryAndroidIntentPlayback(src)) return
+  if (requestId !== playRequestId) return
 
   if (nowPlayingEl) {
     nowPlayingEl.textContent =
@@ -803,6 +805,7 @@ async function playEpisode(episode) {
 
   const localSrc = await getLocalPlayableSrc(src)
   const playSrc = localSrc || src
+  if (requestId !== playRequestId) return
   const saved = activePlaylistId
     ? getProgress(activePlaylistId, "episode", episode.id)
     : null
@@ -871,6 +874,7 @@ async function playEpisode(episode) {
     return
   }
   if (!player) return
+  if (requestId !== playRequestId) return
   setupPipButton(player)
   setupScaleButton()
   const mime = chooseMime(src)
@@ -921,6 +925,11 @@ async function playEpisode(episode) {
       })
       initialAudioSource = audioSwitcher.source
     }
+  }
+
+  if (requestId !== playRequestId) {
+    prepared.mkvSession?.stop()
+    return
   }
 
   player.src({
@@ -1310,6 +1319,7 @@ async function boot() {
 
   // A playlist switch re-boots: dispose any player from the previous playlist
   // and clear episode/season/up-next state so nothing leaks across.
+  playRequestId++
   try {
     vjs?.pause?.()
     await vjs?.dispose?.()

@@ -1527,9 +1527,7 @@ const audioProxyOneShotFixSet = new Set()
 const audioProxyBypassSet = new Set()
 // Streams already auto-attempted through the proxy on a start failure this session - a start failure is a one-shot try, not a retry loop.
 const audioProxyAutoAttemptedSet = new Set()
-// A proxied mount is single-consumer server-side (reconnecting the same local URL 409s), so stalls/errors must retune through
-// a fresh play() instead of resetting the same src. Counts per streamId; reset on sustained playback, capped so a channel that
-// keeps stalling right after retune eventually bypasses the proxy instead of retuning forever.
+// Capped so a channel that keeps stalling right after retune bypasses the proxy instead of retuning forever.
 const audioProxyStallRetuneCounts = new Map()
 const AUDIO_PROXY_MAX_STALL_RETUNES = 2
 audioTranscodeAvailable()
@@ -1734,9 +1732,7 @@ function giveUpOnPlayback(ctx) {
   clearStallSentinel()
   clearDeadVideoWatchdog()
   clearDeadAudioWatchdog()
-  // A fatal, unrecovered error means the stream is dead whether or not "playing" fired
-  // (video-only buffers can start before an undecodable audio track kills the mount), so
-  // classify and try the audio fix on every terminal path, not just the never-started one.
+  // "playing" can fire before an undecodable audio track kills the mount, so classify every terminal path.
   const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
   const failure = classifyStartFailure({
     videoCodec: info.videoCodec,
@@ -1746,8 +1742,7 @@ function giveUpOnPlayback(ctx) {
     deviceHevc: deviceSupportsHevc(),
   })
   log.log("[xt:livetv] start-failure verdict:", failure.kind, failure.codec)
-  // Bypasses getAndroidNativePlayerEnabled() on purpose: this is a one-shot-per-tune
-  // recovery so an unsupported channel still plays, independent of that opt-in setting.
+  // Bypasses getAndroidNativePlayerEnabled() on purpose: one-shot recovery, not the opt-in setting.
   if (!ctx.started && !ctx.nativeFallbackTried && androidNativePlayerAvailable) {
     ctx.nativeFallbackTried = true
     if (failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio") {
@@ -1760,8 +1755,7 @@ function giveUpOnPlayback(ctx) {
       return
     }
   }
-  // Try the proxy automatically, independent of getAudioTranscodeAuto() (which only gates
-  // the mid-play watchdog). One attempt per streamId per session.
+  // Independent of getAudioTranscodeAuto(), which only gates the mid-play watchdog.
   if (
     failure.kind === "audio" &&
     canUseAudioProxy(ctx) &&
@@ -1922,8 +1916,7 @@ async function mountEmbeddedPlayer(backend, opts) {
       message: err?.message,
       streamId: ctx.streamId,
     })
-    // Both watchdogs re-arm on the next "playing"; clearing them here stops a timer armed by an
-    // earlier "playing" from firing against the mount we're about to reset (retry) or tear down.
+    // Stops a timer armed by an earlier "playing" from firing against the mount we're replacing.
     clearDeadVideoWatchdog()
     clearDeadAudioWatchdog()
     if (!ctx.retried) {
@@ -2010,8 +2003,7 @@ function startRadioElapsed(wrap: HTMLElement) {
   radioElapsedTimer = setInterval(tick, 1000)
 }
 
-// ICY (SHOUTcast/Icecast) response headers carry the real station genre,
-// bitrate and tagline; browser fetch hides them, tauri-plugin-http does not.
+// ICY response headers carry the real station metadata; browser fetch hides them, tauri-plugin-http does not.
 async function fetchRadioIcy(wrap: HTMLElement, channelId: number, url: string, genreFallback: string | null) {
   if (!/^https?:\/\//i.test(url)) return
   radioIcyAbort?.abort()
@@ -2459,9 +2451,7 @@ function armDeadVideoWatchdog() {
 // ----------------------------
 // Dead-audio watchdog
 // ----------------------------
-// AC-3/E-AC-3 can get accepted into a SourceBuffer without error yet never
-// actually decode. `playing` fires, so nothing else catches it. Advisory
-// only: playback keeps going, we just warn that there's likely no sound.
+// AC-3/E-AC-3 can enter a SourceBuffer and fire `playing` yet never decode; advisory only.
 const DEAD_AUDIO_CHECK_MS = 5000
 const DEAD_AUDIO_MAX_CHECKS = 6
 const DEAD_AUDIO_MIN_PLAYED_S = 3
@@ -2481,8 +2471,7 @@ function audioDecodedByteCount(videoEl) {
   return typeof bytes === "number" ? bytes : null
 }
 
-// Proxy is available, source is a plain live tune, and this channel hasn't already
-// fallen back to direct play this session - safe to (re)route it through ffmpeg.
+// A channel that already fell back to direct play this session must not be re-routed.
 function canUseAudioProxy(ctx) {
   return (
     audioProxyAvailable &&
@@ -2497,8 +2486,7 @@ function fixAudioNow(ctx) {
   void play(ctx.streamId, ctx.name)
 }
 
-// A proxied mount's local URL is single-consumer, so a same-src reconnect (stall sentinel, error retry) would 409 and
-// leave a dead player. Retune through a fresh play() instead, which registers a new session and tears the old one down.
+// A proxied mount's local URL is single-consumer: a same-src reconnect 409s and leaves a dead player.
 function retuneProxiedAudioMount(ctx) {
   const attempts = (audioProxyStallRetuneCounts.get(ctx.streamId) || 0) + 1
   audioProxyStallRetuneCounts.set(ctx.streamId, attempts)
@@ -2510,9 +2498,7 @@ function retuneProxiedAudioMount(ctx) {
   void play(ctx.streamId, ctx.name)
 }
 
-// The ffmpeg process/upstream fetch died mid-play; the Rust side has already
-// torn the session down. Bypass the proxy for this channel this session (no
-// retry loop) and fall back to a plain direct tune.
+// The Rust side has already torn the session down by the time this fires.
 function handleAudioProxyError(payload) {
   const ctx = lastPlayContext
   if (!ctx || !ctx.audioProxied) return

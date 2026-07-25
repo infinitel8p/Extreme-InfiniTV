@@ -705,9 +705,7 @@ export function getAudioTranscodeAuto() {
   return readLS(KEY_AUDIO_TRANSCODE_AUTO, "") === "1"
 }
 
-// Custom ffmpeg path for the audio-transcode proxy. Empty falls through to
-// the bundled sidecar, then PATH `ffmpeg` (same resolution order as
-// getPlayerPath/setPlayerPath for MPV/VLC).
+// Empty falls through to the bundled sidecar, then PATH `ffmpeg`.
 export function getFfmpegPath() {
   return readLS(KEY_FFMPEG_PATH, "")
 }

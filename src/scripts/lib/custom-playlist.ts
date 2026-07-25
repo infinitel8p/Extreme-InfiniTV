@@ -1,6 +1,4 @@
-// Custom playlist: document store + pure channel resolver. Channels are
-// user-assembled references into other playlists' catalogs (or raw stream
-// URLs), persisted as one JSON document per custom-playlist entry.
+// Custom playlist document store + pure resolver of its references against other playlists' catalogs.
 
 import { getLocalContent, setLocalContent } from "@/scripts/lib/local-content.js"
 import { normalize } from "@/scripts/lib/text.ts"
@@ -205,8 +203,7 @@ export function renameGroup(doc: CustomPlaylistDoc, from: string, to: string): C
   const channels = doc.channels.map((channel) =>
     channel.group === from ? { ...channel, group: to } : channel
   )
-  // Merge into an existing `to` group instead of the naive rename: drop the
-  // now-duplicate `from` entry rather than adding a second `to`.
+  // Renaming onto an existing group merges into it rather than adding a second `to`.
   const groups =
     to !== from && doc.groups.includes(to)
       ? doc.groups.filter((group) => group !== from)
@@ -224,6 +221,61 @@ export function reorderGroups(doc: CustomPlaylistDoc, orderedGroups: string[]): 
     throw new Error("reorderGroups: orderedGroups must contain the same set of groups")
   }
   return { ...doc, groups: [...orderedGroups] }
+}
+
+// ---------------------------------------------------------------------------
+// Dependencies
+// ---------------------------------------------------------------------------
+
+/** Playlist entry ids a custom doc's channels resolve against. */
+export function collectSourceEntryIds(doc: CustomPlaylistDoc): string[] {
+  const entryIds = new Set<string>()
+  for (const channel of doc?.channels || []) {
+    if (!Array.isArray(channel?.sources)) continue
+    for (const source of channel.sources) {
+      if (!source || typeof source !== "object") continue
+      if ((source.kind === "xtream" || source.kind === "m3u") && source.entryId) {
+        entryIds.add(source.entryId)
+      }
+    }
+  }
+  return [...entryIds]
+}
+
+export interface CustomDependency {
+  entryId: string
+  sourceEntryIds: string[]
+}
+
+/** Custom entries whose resolved catalog depends on `sourceEntryId`, walking custom-on-custom references without looping. */
+export function collectDependentCustomEntryIds(
+  sourceEntryId: string,
+  dependencies: CustomDependency[]
+): string[] {
+  if (!sourceEntryId) return []
+  const dependentsBySource = new Map<string, string[]>()
+  for (const dependency of dependencies || []) {
+    if (!dependency?.entryId || !Array.isArray(dependency.sourceEntryIds)) continue
+    for (const referencedId of dependency.sourceEntryIds) {
+      if (!referencedId) continue
+      const dependents = dependentsBySource.get(referencedId)
+      if (dependents) dependents.push(dependency.entryId)
+      else dependentsBySource.set(referencedId, [dependency.entryId])
+    }
+  }
+  const visited = new Set<string>([sourceEntryId])
+  const queue = [sourceEntryId]
+  const out: string[] = []
+  while (queue.length) {
+    const current = queue.shift() as string
+    for (const dependent of dependentsBySource.get(current) || []) {
+      if (visited.has(dependent)) continue
+      visited.add(dependent)
+      out.push(dependent)
+      queue.push(dependent)
+    }
+  }
+  return out
 }
 
 // ---------------------------------------------------------------------------

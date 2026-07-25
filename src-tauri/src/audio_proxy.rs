@@ -1,8 +1,4 @@
-// ffmpeg audio-transcode proxy (desktop only): tees a live channel through a local ffmpeg
-// process that copies the video untouched and transcodes only the audio to AAC, so the
-// embedded player can handle channels whose audio codec (AC-3/E-AC-3/MP2/DTS) the WebView
-// cannot decode. Mirrors vod_proxy.rs (local 127.0.0.1 server, kill-on-drop child) and
-// external_player.rs (NOT_FOUND:/TIMEOUT:/OTHER: prefixed errors, `-version` probe pattern).
+// ffmpeg live audio-transcode proxy (desktop only): copies video, transcodes audio to AAC.
 
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
@@ -45,8 +41,7 @@ const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 // ---------------------------------------------------------------------------
 
 type ActiveSlot = Arc<Mutex<Option<Arc<AudioSession>>>>;
-// Keyed independently of `active` so a registration that lost the "one live transcode" race
-// can still be reaped by its own id instead of orphaning its ffmpeg child forever.
+// Keyed by id so unregister can reap a session that is no longer the active one.
 type SessionMap = Arc<Mutex<HashMap<String, Arc<AudioSession>>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,8 +68,7 @@ struct ResolvedFfmpeg {
     source: FfmpegSource,
 }
 
-// Keyed by the custom_path that produced it, so a changed (including
-// cleared) custom path always re-resolves instead of returning a stale hit.
+// Keyed by the custom_path that produced it, so a changed path never returns a stale hit.
 struct CachedResolution {
     custom_path: Option<String>,
     resolved: ResolvedFfmpeg,
@@ -94,6 +88,8 @@ pub struct AudioProxyState {
     active: ActiveSlot,
     sessions: SessionMap,
     resolved_ffmpeg: Mutex<Option<CachedResolution>>,
+    // Serializes teardown -> spawn -> activate so a lost race can't orphan ffmpeg.
+    register_lock: tokio::sync::Mutex<()>,
 }
 
 struct AudioSession {
@@ -167,6 +163,8 @@ pub async fn register_audio_transcode(
         return Err("OTHER:url must be http or https".to_string());
     }
 
+    let _register_guard = state.register_lock.lock().await;
+
     // One live session at a time: tear down whatever was there before starting the next.
     teardown_active_session(&state).await;
 
@@ -217,8 +215,7 @@ pub async fn register_audio_transcode(
         blocked_on_send: AtomicBool::new(false),
     });
 
-    // Redirects are followed manually below so the Authorization/User-Agent headers survive
-    // each hop; reqwest's default policy strips sensitive headers on cross-host redirects.
+    // Redirects are followed by hand so the User-Agent survives every hop.
     let http_client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -254,20 +251,7 @@ pub async fn register_audio_transcode(
         *watchdog = Some(watchdog_handle);
     }
 
-    {
-        let mut sessions = state
-            .sessions
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        sessions.insert(token.clone(), session.clone());
-    }
-    {
-        let mut active = state
-            .active
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        *active = Some(session);
-    }
+    activate_session(&state, session);
 
     Ok(RegisterAudioTranscodeResponse {
         session_id: token.clone(),
@@ -300,6 +284,21 @@ pub async fn unregister_audio_transcode(
         teardown_session(&session).await;
     }
     Ok(())
+}
+
+fn activate_session(state: &AudioProxyState, session: Arc<AudioSession>) {
+    {
+        let mut sessions = state
+            .sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        sessions.insert(session.session_id.clone(), session.clone());
+    }
+    let mut active = state
+        .active
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    *active = Some(session);
 }
 
 async fn teardown_active_session(state: &AudioProxyState) {
@@ -407,8 +406,7 @@ fn normalize_custom_path(path: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-// Resolution order: custom path (if set) -> bundled sidecar -> PATH `ffmpeg`. A failing custom
-// path is reported via the returned error but never blocks the bundled/system fallback.
+// A failing custom path is reported but never blocks the bundled/system fallback.
 async fn resolve_ffmpeg(custom_path: Option<&str>) -> (Option<ResolvedFfmpeg>, Option<String>) {
     let mut custom_error = None;
     if let Some(custom) = custom_path {
@@ -514,10 +512,7 @@ fn cached_hit(
     }
 }
 
-// Shared by the availability probe and register_audio_transcode. Cached on the custom_path that
-// produced the resolution, so a changed custom path (set, cleared, or edited) always re-resolves.
-// `force` skips the cache read (a broken/replaced binary at the same path needs a fresh probe)
-// but the fresh result is still written back so playback keeps benefiting from the cache.
+// `force` skips the cache read so a replaced binary at the same path is re-probed.
 async fn resolve_with_cache(
     state: &AudioProxyState,
     custom_path: Option<String>,
@@ -671,8 +666,7 @@ async fn handle_live(
         return cors_response(StatusCode::NOT_FOUND, "unknown session");
     }
 
-    // Fresh channel per connecting client; storing the sender replaces (and drops) any
-    // previous one, which ends the previous response stream once its buffered bytes drain.
+    // Storing the sender drops the previous one, ending the previous response stream.
     let (sender, mut receiver) = mpsc::channel::<Bytes>(OUTPUT_CHANNEL_CAPACITY);
     {
         let mut guard = session
@@ -781,8 +775,19 @@ fn spawn_fetch_task(
 
 const MAX_REDIRECT_HOPS: usize = 5;
 
-// Follows redirects by hand, re-applying the Authorization and User-Agent headers on every hop
-// (reqwest's built-in policy drops them across hosts, which is why the credentialed upstream 401s).
+fn is_same_origin(original_url: &str, candidate_url: &str) -> bool {
+    let Ok(original) = reqwest::Url::parse(original_url) else {
+        return false;
+    };
+    let Ok(candidate) = reqwest::Url::parse(candidate_url) else {
+        return false;
+    };
+    original.scheme() == candidate.scheme()
+        && original.host_str() == candidate.host_str()
+        && original.port_or_known_default() == candidate.port_or_known_default()
+}
+
+// User-Agent survives every hop; Authorization only while on the original origin.
 async fn fetch_following_redirects(
     client: &reqwest::Client,
     url: &str,
@@ -797,7 +802,9 @@ async fn fetch_following_redirects(
             request = request.header(reqwest::header::USER_AGENT, user_agent);
         }
         if let Some(authorization) = authorization {
-            request = request.header(reqwest::header::AUTHORIZATION, authorization);
+            if is_same_origin(url, &current_url) {
+                request = request.header(reqwest::header::AUTHORIZATION, authorization);
+            }
         }
         let response = request.send().await?;
         if !response.status().is_redirection() || hops >= MAX_REDIRECT_HOPS {
@@ -830,9 +837,7 @@ fn mark_activity(session: &AudioSession) {
     *last_activity = Instant::now();
 }
 
-// Sends a chunk to whichever client is currently connected, if any. A missing client (nobody
-// connected yet, or the previous one dropped) just discards the chunk; ffmpeg stdout still
-// needs draining so the process never blocks on a full pipe.
+// Discards the chunk if no client is connected; stdout must still drain.
 async fn send_to_current_client(session: &Arc<AudioSession>, chunk: Bytes) {
     let sender = {
         let guard = session
@@ -1033,10 +1038,7 @@ async fn finish_with_error(app: &AppHandle, session: &Arc<AudioSession>, detail:
 // Teardown
 // ---------------------------------------------------------------------------
 
-/// Kills the ffmpeg child and stops the fetch/output/stderr tasks. Safe to call
-/// from within one of those tasks: it never touches the watchdog's own handle.
-///
-/// Never blocks on the child mutex; killing goes through kill_notify instead.
+/// Safe to call from within an io task: it never touches the watchdog's own handle.
 async fn teardown_io(session: &Arc<AudioSession>) {
     session.torn_down.store(true, Ordering::SeqCst);
     session.kill_notify.notify_one();
@@ -1062,8 +1064,7 @@ async fn teardown_io(session: &Arc<AudioSession>) {
     }
 }
 
-/// Full teardown including the watchdog itself. Only called from outside the
-/// watchdog's own task (register/unregister), so self-abort never applies.
+/// Full teardown including the watchdog; only called outside its own task.
 async fn teardown_session(session: &Arc<AudioSession>) {
     teardown_io(session).await;
     let watchdog = {
@@ -1078,8 +1079,7 @@ async fn teardown_session(session: &Arc<AudioSession>) {
     }
 }
 
-/// Best-effort synchronous teardown for app-exit paths that can't await (e.g. tray Quit
-/// -> `RunEvent::Exit`). No-op if no session is tracked; uses `try_lock` so it never blocks.
+/// Best-effort teardown for app-exit paths that can't await; uses `try_lock`.
 pub fn shutdown(state: &AudioProxyState) {
     {
         let mut active = state
@@ -1294,9 +1294,67 @@ mod tests {
         );
     }
 
-    fn test_audio_session() -> Arc<AudioSession> {
+    #[test]
+    fn is_same_origin_keeps_authorization_on_a_same_origin_redirect() {
+        assert!(is_same_origin(
+            "https://provider.test/live/user/pass/1.ts",
+            "https://provider.test/edge/live/user/pass/1.ts"
+        ));
+    }
+
+    #[test]
+    fn is_same_origin_drops_authorization_for_a_different_host() {
+        assert!(!is_same_origin(
+            "https://provider.test/live/1.ts",
+            "https://attacker.test/live/1.ts"
+        ));
+    }
+
+    #[test]
+    fn is_same_origin_drops_authorization_for_a_different_port() {
+        assert!(!is_same_origin(
+            "http://provider.test:8080/live/1.ts",
+            "http://provider.test:8081/live/1.ts"
+        ));
+    }
+
+    #[test]
+    fn is_same_origin_drops_authorization_for_a_different_scheme() {
+        assert!(!is_same_origin(
+            "https://provider.test/live/1.ts",
+            "http://provider.test/live/1.ts"
+        ));
+    }
+
+    // Scheme upgrades count as cross-origin, so the credential is dropped on http -> https too.
+    #[test]
+    fn is_same_origin_drops_authorization_when_http_upgrades_to_https_on_the_same_host() {
+        assert!(!is_same_origin(
+            "http://provider.test/live/1.ts",
+            "https://provider.test/live/1.ts"
+        ));
+    }
+
+    #[test]
+    fn is_same_origin_normalizes_explicit_default_ports() {
+        assert!(is_same_origin(
+            "https://provider.test/live/1.ts",
+            "https://provider.test:443/live/1.ts"
+        ));
+        assert!(is_same_origin(
+            "http://provider.test:80/live/1.ts",
+            "http://provider.test/live/1.ts"
+        ));
+    }
+
+    #[test]
+    fn is_same_origin_drops_authorization_for_an_unparseable_url() {
+        assert!(!is_same_origin("https://provider.test/live/1.ts", "not a url"));
+    }
+
+    fn test_audio_session_with_id(session_id: &str) -> Arc<AudioSession> {
         Arc::new(AudioSession {
-            session_id: "sess".to_string(),
+            session_id: session_id.to_string(),
             torn_down: AtomicBool::new(false),
             current_client: Mutex::new(None),
             stderr_tail: Mutex::new(VecDeque::new()),
@@ -1307,6 +1365,52 @@ mod tests {
             last_activity: Mutex::new(Instant::now()),
             blocked_on_send: AtomicBool::new(false),
         })
+    }
+
+    fn test_audio_session() -> Arc<AudioSession> {
+        test_audio_session_with_id("sess")
+    }
+
+    // Register's critical section without ffmpeg: the sleep stands in for the spawn.
+    async fn register_under_lock(state: &AudioProxyState, session_id: &str, spawn_delay: Duration) {
+        let _register_guard = state.register_lock.lock().await;
+        teardown_active_session(state).await;
+        tokio::time::sleep(spawn_delay).await;
+        activate_session(state, test_audio_session_with_id(session_id));
+    }
+
+    #[tokio::test]
+    async fn concurrent_registrations_leave_exactly_one_live_session() {
+        let state = Arc::new(AudioProxyState::default());
+
+        let slow_state = state.clone();
+        let slow = tokio::spawn(async move {
+            register_under_lock(&slow_state, "slow", Duration::from_millis(50)).await;
+        });
+        tokio::task::yield_now().await;
+        let fast_state = state.clone();
+        let fast = tokio::spawn(async move {
+            register_under_lock(&fast_state, "fast", Duration::from_millis(0)).await;
+        });
+        slow.await.expect("slow registration");
+        fast.await.expect("fast registration");
+
+        let active_id = {
+            let active = state
+                .active
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            active
+                .as_ref()
+                .map(|session| session.session_id.clone())
+                .expect("a session must stay active")
+        };
+        let sessions = state
+            .sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        assert_eq!(sessions.len(), 1, "the losing registration must not orphan a session");
+        assert!(sessions.contains_key(&active_id));
     }
 
     // Regression test: teardown_io blocking while the watchdog owned the child.

@@ -287,6 +287,22 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           ls -la
 
+      # The app and pipelines verify against the committed pins; SHA256SUMS.txt is informational.
+      - name: Surface checksums for the committed pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### ffmpeg sidecar checksums"
+            echo
+            echo "Pin these in \`src/scripts/ffmpeg-sidecar-checksums.json\` (\`node src/scripts/ensure-ffmpeg-sidecar.mjs --update-pins\`, then review and commit) or release.yml and beta.yml will reject the new binaries."
+            echo
+            echo '```'
+            cat release-assets/SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat release-assets/SHA256SUMS.txt
+
       - name: Create or update rolling prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

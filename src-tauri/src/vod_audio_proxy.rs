@@ -32,7 +32,7 @@ const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 // --- State ---
 
 type ActiveSlot = Arc<Mutex<Option<Arc<VodAudioSession>>>>;
-// Keyed by id so a race-losing session can still be reaped.
+// Keyed by id so the forward route and unregister can find a session directly.
 type SessionMap = Arc<Mutex<HashMap<String, Arc<VodAudioSession>>>>;
 
 #[derive(Debug, Clone)]
@@ -53,6 +53,8 @@ pub struct VodAudioProxyState {
     active: ActiveSlot,
     sessions: SessionMap,
     probe: Mutex<Option<FfmpegProbe>>,
+    // Serializes teardown -> spawn -> activate so a lost race can't orphan ffmpeg.
+    register_lock: tokio::sync::Mutex<()>,
 }
 
 struct VodAudioSession {
@@ -112,6 +114,8 @@ pub async fn register_vod_audio_remux(
     // A loopback tee (e.g. vod_proxy) already applies user_agent/authorization.
     let is_loopback = is_loopback_http(&url);
 
+    let _register_guard = state.register_lock.lock().await;
+
     // One live session at a time; tear down before starting the next.
     teardown_active_session(&state).await;
 
@@ -140,13 +144,7 @@ pub async fn register_vod_audio_remux(
     });
 
     // Inserted before spawn so ffmpeg's request can resolve this token.
-    {
-        let mut sessions = state
-            .sessions
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        sessions.insert(token.clone(), session.clone());
-    }
+    insert_session(&state, session.clone());
 
     let input_url = if is_loopback {
         url
@@ -218,13 +216,7 @@ pub async fn register_vod_audio_remux(
         *watchdog = Some(watchdog_handle);
     }
 
-    {
-        let mut active = state
-            .active
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        *active = Some(session);
-    }
+    set_active_session(&state, session);
 
     Ok(RegisterVodAudioRemuxResponse {
         session_id: token.clone(),
@@ -257,6 +249,22 @@ pub async fn unregister_vod_audio_remux(
         teardown_session(&session).await;
     }
     Ok(())
+}
+
+fn insert_session(state: &VodAudioProxyState, session: Arc<VodAudioSession>) {
+    let mut sessions = state
+        .sessions
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    sessions.insert(session.session_id.clone(), session);
+}
+
+fn set_active_session(state: &VodAudioProxyState, session: Arc<VodAudioSession>) {
+    let mut active = state
+        .active
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    *active = Some(session);
 }
 
 fn remove_session(state: &VodAudioProxyState, token: &str) {
@@ -1158,9 +1166,9 @@ mod tests {
         );
     }
 
-    fn test_vod_audio_session() -> Arc<VodAudioSession> {
+    fn test_vod_audio_session_with_id(session_id: &str) -> Arc<VodAudioSession> {
         Arc::new(VodAudioSession {
-            session_id: "sess".to_string(),
+            session_id: session_id.to_string(),
             upstream_url: "https://example.test/movie.mkv".to_string(),
             user_agent: None,
             authorization: None,
@@ -1174,6 +1182,58 @@ mod tests {
             last_activity: Mutex::new(Instant::now()),
             blocked_on_send: AtomicBool::new(false),
         })
+    }
+
+    fn test_vod_audio_session() -> Arc<VodAudioSession> {
+        test_vod_audio_session_with_id("sess")
+    }
+
+    // Register's critical section without ffmpeg: the sleep stands in for the spawn.
+    async fn register_under_lock(
+        state: &VodAudioProxyState,
+        session_id: &str,
+        spawn_delay: Duration,
+    ) {
+        let _register_guard = state.register_lock.lock().await;
+        teardown_active_session(state).await;
+        let session = test_vod_audio_session_with_id(session_id);
+        insert_session(state, session.clone());
+        tokio::time::sleep(spawn_delay).await;
+        set_active_session(state, session);
+    }
+
+    #[tokio::test]
+    async fn concurrent_registrations_leave_exactly_one_live_session() {
+        let state = Arc::new(VodAudioProxyState::default());
+
+        let slow_state = state.clone();
+        let slow = tokio::spawn(async move {
+            register_under_lock(&slow_state, "slow", Duration::from_millis(50)).await;
+        });
+        tokio::task::yield_now().await;
+        let fast_state = state.clone();
+        let fast = tokio::spawn(async move {
+            register_under_lock(&fast_state, "fast", Duration::from_millis(0)).await;
+        });
+        slow.await.expect("slow registration");
+        fast.await.expect("fast registration");
+
+        let active_id = {
+            let active = state
+                .active
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            active
+                .as_ref()
+                .map(|session| session.session_id.clone())
+                .expect("a session must stay active")
+        };
+        let sessions = state
+            .sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        assert_eq!(sessions.len(), 1, "the losing registration must not orphan a session");
+        assert!(sessions.contains_key(&active_id));
     }
 
     // Regression test: teardown_io blocking while the watchdog owned the child.

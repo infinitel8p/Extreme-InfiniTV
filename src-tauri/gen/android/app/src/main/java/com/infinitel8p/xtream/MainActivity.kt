@@ -669,17 +669,7 @@ class AndroidVideoBridge(private val activity: android.app.Activity) {
   }
 }
 
-/**
- * "Add from website" stream sniffer: loads a page in a throwaway offscreen
- * WebView, watches every request for something that looks like an HLS/DASH
- * manifest, and reports hits to the hosted WebView as DOM CustomEvents (same
- * evaluateJavascript + document.dispatchEvent mechanism `drainAndDispatchVideoEvents`
- * uses, minus the SharedPreferences queue - this bridge and the hosted WebView
- * live in the same activity, so events go out immediately instead of waiting
- * for onResume). Classification of hits (kind / master / ranking) happens
- * JS-side in sniff-classify.ts; this only does a dumb extension/substring
- * prefilter so we don't intercept every image/script request on the page.
- */
+// "Add from website" sniffer: throwaway offscreen WebView, URL prefilter only; sniff-classify.ts classifies.
 class SnifferBridge(
   private val activity: TauriActivity,
   private val hostedWebViewRef: () -> WebView?,
@@ -691,11 +681,16 @@ class SnifferBridge(
     private const val NUDGE_DELAY_MS = 900L
     private const val THROWAWAY_SIZE_PX = 1
     private const val MAX_CANDIDATE_DISPATCHES = 100
+
+    // Mirrors MAX_FIELD_LEN in sniffer.rs.
+    private const val MAX_FIELD_BYTES = 8 * 1024
   }
 
   private val handler = Handler(Looper.getMainLooper())
   private var throwawayWebView: WebView? = null
   private var timeoutRunnable: Runnable? = null
+
+  @Volatile
   private var lastFavicon: String? = null
 
   // shouldInterceptRequest can run off the UI thread, so this page-controlled bookkeeping needs thread-safe primitives.
@@ -705,16 +700,19 @@ class SnifferBridge(
   private val drmReported = java.util.concurrent.atomic.AtomicBoolean(false)
   private val faviconReported = java.util.concurrent.atomic.AtomicBoolean(false)
 
+  // Bumped on start/teardown so in-flight work from an old session is dropped.
+  private val sniffGeneration = java.util.concurrent.atomic.AtomicLong(0L)
+
   // addJavascriptInterface reflects every @JavascriptInterface method regardless of name, so the throwaway WebView gets this report-only object, never SnifferBridge itself.
   inner class SnifferReportBridge {
     @JavascriptInterface
-    fun reportDrm() {
-      this@SnifferBridge.reportDrm()
+    fun reportDrm(generation: String?) {
+      this@SnifferBridge.reportDrm(generation)
     }
 
     @JavascriptInterface
-    fun reportFavicon(favicon: String?) {
-      this@SnifferBridge.reportFavicon(favicon)
+    fun reportFavicon(favicon: String?, generation: String?) {
+      this@SnifferBridge.reportFavicon(favicon, generation)
     }
   }
 
@@ -729,9 +727,9 @@ class SnifferBridge(
       return
     }
     activity.runOnUiThread {
-      // Silent teardown: firing xt:sniff-done here would race the listeners
-      // the caller just attached for this very startSniff() call.
+      // Firing xt:sniff-done here would race the listeners this very call just attached.
       teardown(fireDone = false)
+      val generation = sniffGeneration.incrementAndGet()
       lastFavicon = null
       reportedCandidateUrls.clear()
       candidateDispatchCount.set(0)
@@ -751,17 +749,20 @@ class SnifferBridge(
             view: WebView,
             request: WebResourceRequest,
           ): WebResourceResponse? {
-            maybeEmitCandidate(request)
+            maybeEmitCandidate(request, generation)
             return null
           }
 
           override fun onPageFinished(view: WebView, finishedUrl: String) {
-            nudgePlayback(view)
+            nudgePlayback(view, generation)
           }
         }
         val decor = activity.window.decorView as? ViewGroup
         decor?.addView(webView, FrameLayout.LayoutParams(THROWAWAY_SIZE_PX, THROWAWAY_SIZE_PX))
-        timeoutRunnable = Runnable { teardown(fireDone = true) }
+        timeoutRunnable = Runnable {
+          if (!isCurrentSniff(generation)) return@Runnable
+          teardown(fireDone = true)
+        }
         handler.postDelayed(timeoutRunnable!!, timeoutMs.coerceAtLeast(1000).toLong())
         webView.loadUrl(url)
       } catch (error: Throwable) {
@@ -776,37 +777,55 @@ class SnifferBridge(
     activity.runOnUiThread { teardown(fireDone = true) }
   }
 
-  // Called by the injected nudge script the moment the page attempts an EME
-  // handshake - the URL prefilter alone can't tell a DRM-guarded manifest
-  // from a plain one.
+  // Called from the injected script on the page's first EME handshake; URLs alone can't reveal DRM.
   @JavascriptInterface
-  fun reportDrm() {
+  fun reportDrm(generation: String?) {
+    val reported = parseGeneration(generation) ?: return
+    if (!isCurrentSniff(reported)) return
     if (!drmReported.compareAndSet(false, true)) return
-    dispatchEvent("xt:sniff-drm", JSONObject())
+    dispatchEvent("xt:sniff-drm", JSONObject(), reported)
   }
 
   @JavascriptInterface
-  fun reportFavicon(favicon: String?) {
+  fun reportFavicon(favicon: String?, generation: String?) {
+    val reported = parseGeneration(generation) ?: return
+    if (!isCurrentSniff(reported)) return
+    val trimmed = favicon?.trim().orEmpty()
+    if (trimmed.isEmpty() || !withinFieldLimit(trimmed)) return
     if (!faviconReported.compareAndSet(false, true)) return
-    lastFavicon = favicon
+    lastFavicon = trimmed
   }
 
-  private fun maybeEmitCandidate(request: WebResourceRequest) {
+  private fun maybeEmitCandidate(request: WebResourceRequest, generation: Long) {
+    if (!isCurrentSniff(generation)) return
     val url = request.url?.toString() ?: return
-    if (!looksLikeManifest(url)) return
+    if (!looksLikeManifest(url) || !withinFieldLimit(url)) return
+    val headers = request.requestHeaders ?: emptyMap()
+    val userAgent = headerValue(headers, "User-Agent")
+    val referer = headerValue(headers, "Referer")
+    if (userAgent != null && !withinFieldLimit(userAgent)) return
+    if (referer != null && !withinFieldLimit(referer)) return
     if (candidateDispatchCount.get() >= MAX_CANDIDATE_DISPATCHES) return
     if (!reportedCandidateUrls.add(url)) return
     if (candidateDispatchCount.incrementAndGet() > MAX_CANDIDATE_DISPATCHES) return
-    val headers = request.requestHeaders ?: emptyMap()
     dispatchEvent(
       "xt:sniff-candidate",
       JSONObject().apply {
         put("url", url)
-        put("userAgent", headerValue(headers, "User-Agent") ?: JSONObject.NULL)
-        put("referer", headerValue(headers, "Referer") ?: JSONObject.NULL)
-      }
+        put("userAgent", userAgent ?: JSONObject.NULL)
+        put("referer", referer ?: JSONObject.NULL)
+      },
+      generation
     )
   }
+
+  private fun isCurrentSniff(generation: Long): Boolean = sniffGeneration.get() == generation
+
+  private fun parseGeneration(raw: String?): Long? = raw?.trim()?.toLongOrNull()
+
+  // UTF-8 bytes to match sniffer.rs; the UTF-16 check avoids encoding huge values.
+  private fun withinFieldLimit(value: String): Boolean =
+    value.length <= MAX_FIELD_BYTES && value.toByteArray(Charsets.UTF_8).size <= MAX_FIELD_BYTES
 
   private fun looksLikeManifest(url: String): Boolean =
     MANIFEST_EXTENSION_RX.containsMatchIn(url) || MANIFEST_HINT_RX.containsMatchIn(url)
@@ -814,15 +833,17 @@ class SnifferBridge(
   private fun headerValue(headers: Map<String, String>, name: String): String? =
     headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
 
-  private fun nudgePlayback(view: WebView) {
+  private fun nudgePlayback(view: WebView, generation: Long) {
+    val generationLiteral = JSONObject.quote(generation.toString())
     val script = """
       (function(){
+        var sniffGeneration = $generationLiteral;
         try {
           var originalRequestMediaKeySystemAccess = navigator.requestMediaKeySystemAccess;
           if (originalRequestMediaKeySystemAccess && !navigator.__xtSniffDrmWrapped) {
             navigator.__xtSniffDrmWrapped = true;
             navigator.requestMediaKeySystemAccess = function() {
-              try { window.AndroidSnifferInternal && window.AndroidSnifferInternal.reportDrm(); } catch (_) {}
+              try { window.AndroidSnifferInternal && window.AndroidSnifferInternal.reportDrm(sniffGeneration); } catch (_) {}
               return originalRequestMediaKeySystemAccess.apply(navigator, arguments);
             };
           }
@@ -841,15 +862,19 @@ class SnifferBridge(
             navigator.__xtSniffFaviconReported = true;
             var link = document.querySelector("link[rel~='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']");
             var iconHref = (link && link.href) || (location.origin + "/favicon.ico");
-            window.AndroidSnifferInternal && window.AndroidSnifferInternal.reportFavicon(iconHref);
+            window.AndroidSnifferInternal && window.AndroidSnifferInternal.reportFavicon(iconHref, sniffGeneration);
           }
         } catch (_) {}
       })();
     """.trimIndent()
-    view.postDelayed({ view.evaluateJavascript(script, null) }, NUDGE_DELAY_MS)
+    view.postDelayed({
+      if (!isCurrentSniff(generation)) return@postDelayed
+      view.evaluateJavascript(script, null)
+    }, NUDGE_DELAY_MS)
   }
 
-  private fun dispatchEvent(type: String, payload: JSONObject) {
+  private fun dispatchEvent(type: String, payload: JSONObject, generation: Long) {
+    if (!isCurrentSniff(generation)) return
     val webView = hostedWebViewRef() ?: return
     val script = """
       (function(){
@@ -858,12 +883,16 @@ class SnifferBridge(
         } catch (_) {}
       })();
     """.trimIndent()
-    webView.post { webView.evaluateJavascript(script, null) }
+    webView.post {
+      if (!isCurrentSniff(generation)) return@post
+      webView.evaluateJavascript(script, null)
+    }
   }
 
   private fun teardown(fireDone: Boolean) {
     timeoutRunnable?.let { handler.removeCallbacks(it) }
     timeoutRunnable = null
+    val endedGeneration = sniffGeneration.incrementAndGet()
     throwawayWebView?.let { webView ->
       val parent = webView.parent as? ViewGroup
       webView.stopLoading()
@@ -873,7 +902,11 @@ class SnifferBridge(
     }
     throwawayWebView = null
     if (fireDone) {
-      dispatchEvent("xt:sniff-done", JSONObject().apply { put("favicon", lastFavicon ?: JSONObject.NULL) })
+      dispatchEvent(
+        "xt:sniff-done",
+        JSONObject().apply { put("favicon", lastFavicon ?: JSONObject.NULL) },
+        endedGeneration
+      )
     }
   }
 

@@ -1,10 +1,4 @@
-// Facade for the "Add from website" stream sniffer. On Android the page is
-// loaded in a throwaway WebView by MainActivity's AndroidSniffer bridge; on
-// desktop it's loaded in a hidden Tauri webview window by `sniffer.rs`. Both
-// report every request that looks like a manifest as an `xt:sniff-candidate`
-// event (DOM CustomEvent on Android, Tauri event on desktop) with the same
-// shape. classifySniffedUrl / rankSniffCandidates (sniff-classify.ts) do the
-// real classification - this only wires each bridge to that classifier.
+// "Add from website" stream sniffer facade over the Android WebView bridge and desktop `sniffer.rs`.
 
 import { classifySniffedUrl, rankSniffCandidates } from "@/scripts/lib/sniff-classify.ts"
 import type { SniffCandidate } from "@/scripts/lib/sniff-classify.ts"
@@ -90,12 +84,7 @@ class SniffAccumulator {
   }
 }
 
-/**
- * Load `pageUrl` in the platform sniffer and resolve with every playable
- * manifest it saw, ranked best-first. Resolves with an empty candidate list
- * (never rejects) on timeout or when the sniffer is unavailable; check
- * `drmSeen` to tell "nothing found" apart from "found, but DRM-guarded".
- */
+/** Never rejects: an empty candidate list plus `drmSeen` distinguishes DRM from nothing found. */
 export async function sniffPage(
   pageUrl: string,
   opts: { timeoutMs?: number; onProgress?: (progress: SniffProgress) => void } = {},
@@ -272,14 +261,7 @@ export interface SniffedPlaylistEntry {
   [key: string]: unknown
 }
 
-/**
- * Save a picked candidate as a new m3u playlist entry. `streamHeaders`,
- * `sourcePageUrl`, `logo`, and `manifestType` are new optional fields on m3u
- * entries - addEntry spreads unknown keys onto the stored entry verbatim, so
- * no creds.js change is needed for them to persist. `manifestType` is "mpd"
- * for a DASH candidate so catalog.js's direct-stream synthesis can tell it
- * apart from HLS without needing the manifest body.
- */
+/** The extra m3u fields persist because addEntry spreads unknown keys onto the stored entry verbatim. */
 export async function saveSniffedStream(
   candidate: SniffCandidate,
   opts: SaveSniffedStreamOptions,
