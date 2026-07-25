@@ -662,7 +662,6 @@ const externalBtnHandle = setupExternalPlayerButton(
 subscribeExternalPlayerExit(() => {
   if (!externalPresenceActive) return
   externalPresenceActive = false
-  clearRichPresence().catch(() => {})
 })
 
 document.addEventListener("xt:progress-changed", (e) => {

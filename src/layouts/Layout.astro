@@ -638,6 +638,15 @@ const documentTitle = pageTitle
   pushIdlePresence()
   document.addEventListener("xt:active-changed", pushIdlePresence)
 
+  if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
+    ;(async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event")
+        await listen("xt:external-player-exited", () => pushIdlePresence())
+      } catch {}
+    })()
+  }
+
   let lastPruneAt = 0
   const PRUNE_THROTTLE_MS = 5_000
   async function pruneDownloadsIfStale() {
