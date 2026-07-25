@@ -79,7 +79,7 @@ export function isDownloadable() {
   return isTauri
 }
 
-export async function getLocalPlayableSrc(remoteUrl) {
+async function findCompletedDownloadPath(remoteUrl) {
   if (!isTauri || !remoteUrl) return null
   const item = readState().find(
     (d) => d.url === remoteUrl && d.status === "done" && d.path
@@ -94,12 +94,7 @@ export async function getLocalPlayableSrc(remoteUrl) {
       )
       return null
     }
-    try {
-      return await AFs.convertSrc(item.path)
-    } catch (e) {
-      log.error("[xt:download] android convertSrc failed:", e)
-      return null
-    }
+    return item.path
   }
 
   try {
@@ -115,13 +110,35 @@ export async function getLocalPlayableSrc(remoteUrl) {
     log.error("[xt:download] exists() failed for", item.path, e)
     return null
   }
+  return item.path
+}
+
+export async function getLocalPlayableSrc(remoteUrl) {
+  const path = await findCompletedDownloadPath(remoteUrl)
+  if (!path) return null
+
+  if (AFs.isAndroidUri(path)) {
+    try {
+      return await AFs.convertSrc(path)
+    } catch (e) {
+      log.error("[xt:download] android convertSrc failed:", e)
+      return null
+    }
+  }
+
   try {
     const { convertFileSrc } = await import("@tauri-apps/api/core")
-    return convertFileSrc(item.path)
+    return convertFileSrc(path)
   } catch (e) {
     log.error("[xt:download] convertFileSrc failed:", e)
     return null
   }
+}
+
+/** Raw download path for external players; null on Android. */
+export async function getLocalDownloadPath(remoteUrl) {
+  if (AFs.isAndroidFsActive()) return null
+  return findCompletedDownloadPath(remoteUrl)
 }
 
 /**

@@ -34,6 +34,7 @@ import {
   isDownloadable,
   inferExt,
   getLocalPlayableSrc,
+  getLocalDownloadPath,
   tryAndroidIntentPlayback,
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
@@ -481,7 +482,8 @@ async function startPlayback() {
 
   if (backend === "mpv" || backend === "vlc") {
     try {
-      await launchExternalPlayback(backend, playSrc, resumePos)
+      const externalSrc = (await getLocalDownloadPath(detailSrc)) || playSrc
+      await launchExternalPlayback(backend, externalSrc, resumePos)
       pushMoviePresence()
       externalPresenceActive = true
     } catch (err) {

@@ -37,6 +37,7 @@ import {
   inferExt,
   listDownloads,
   getLocalPlayableSrc,
+  getLocalDownloadPath,
   tryAndroidIntentPlayback,
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
@@ -844,7 +845,8 @@ async function playEpisode(episode) {
 
   if (backend === "mpv" || backend === "vlc") {
     try {
-      await launchExternalPlayback(backend, playSrc, resumePos)
+      const externalSrc = (await getLocalDownloadPath(src)) || playSrc
+      await launchExternalPlayback(backend, externalSrc, resumePos)
       pushEpisodePresence(episode)
       externalPresenceActive = true
     } catch (err) {

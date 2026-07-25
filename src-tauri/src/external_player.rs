@@ -12,12 +12,12 @@
 //   "OTHER:..."       - anything else
 
 use std::collections::HashMap;
-#[cfg(unix)]
-use std::io::Read;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,8 @@ const DETECT_TIMEOUT_MS: u64 = 2000;
 const DETECT_POLL_INTERVAL_MS: u64 = 25;
 #[cfg(unix)]
 const IPC_WRITE_TIMEOUT_MS: u64 = 1500;
+#[cfg(windows)]
+const IPC_REPLY_TIMEOUT_MS: u64 = 500;
 const EXTERNAL_PLAYER_EXITED_EVENT: &str = "xt:external-player-exited";
 const EXIT_WATCH_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -578,7 +580,7 @@ fn open_mpv_pipe(endpoint: &str) -> std::io::Result<std::fs::File> {
 }
 
 /// Inspect bytes read back from mpv's JSON-IPC socket
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn first_mpv_error(buf: &[u8]) -> Option<String> {
     for line in buf.split(|byte| *byte == b'\n') {
         if line.is_empty() {
@@ -650,14 +652,30 @@ fn send_mpv_loadfile(
 
     #[cfg(windows)]
     {
-        // std::fs::File on Windows has no set_read_timeout; reading the
-        // response would need OVERLAPPED I/O. Skip parsing here - the slot
-        // will get cleaned up the next time the client surfaces a failure
-        // (e.g. connect refused on a dead pipe).
         let mut pipe = open_mpv_pipe(endpoint).map_err(|e| format!("IPC:{e}"))?;
         pipe.write_all(&payload).map_err(|e| format!("IPC:{e}"))?;
         pipe.write_all(&unpause).map_err(|e| format!("IPC:{e}"))?;
-        Ok(())
+
+        // File has no read timeout on Windows; a leaked reader unblocks on pipe close
+        let mut reader = pipe.try_clone().map_err(|e| format!("IPC:{e}"))?;
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut sink = [0u8; 1024];
+            let read = reader.read(&mut sink).unwrap_or(0);
+            let _ = tx.send(sink[..read].to_vec());
+        });
+        match rx.recv_timeout(Duration::from_millis(IPC_REPLY_TIMEOUT_MS)) {
+            Ok(bytes) => {
+                if bytes.is_empty() {
+                    return Err("IPC:empty reply from mpv".to_string());
+                }
+                if let Some(err) = first_mpv_error(&bytes) {
+                    return Err(format!("IPC:mpv replied {err}"));
+                }
+                Ok(())
+            }
+            Err(_) => Err("IPC:no reply from mpv".to_string()),
+        }
     }
 }
 
