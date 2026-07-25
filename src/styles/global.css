@@ -2649,7 +2649,7 @@ details[open] > summary .changelog-chevron {
  * D-pad usability.
  * -------------------------------------------------------------------------*/
 html[data-perf-mode="on"] .brand-mark__trail { display: none; }
-html[data-perf-mode="on"] .brand-mark__base { opacity: 0.7; }
+html[data-perf-mode="on"] .brand-mark__mark { opacity: 0.7; }
 html[data-perf-mode="on"] .xt-focus-glide { display: none !important; }
 html[data-perf-mode="on"] .tile-enter,
 html[data-perf-mode="on"] .welcome-enter,

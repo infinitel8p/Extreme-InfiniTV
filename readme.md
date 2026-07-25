@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/128x128@2x.png" alt="Extreme InfiniTV app icon - cross-platform IPTV player"/>
+  <img src="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/logos/readme-lockup-2x.png" alt="Extreme InfiniTV logo" width="400"/>
 </p>
 
 <h1 align="center">Extreme InfiniTV</h1>

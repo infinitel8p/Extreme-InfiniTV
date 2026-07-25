@@ -58,6 +58,38 @@
   [data-theme="light"] { color-scheme: light; }
   [data-theme="dark"]  { color-scheme: dark; }
 
+  /* accent presets mirrored from the app's xt_accent choice */
+  :root[data-accent="rose"] {
+    --color-accent:      light-dark(oklch(0.46 0.19 20), oklch(0.78 0.13 20));
+    --color-accent-soft: light-dark(oklch(0.46 0.19 20 / 0.08), oklch(0.78 0.13 20 / 0.14));
+    --color-accent-ring: light-dark(oklch(0.46 0.19 20 / 0.32), oklch(0.78 0.13 20 / 0.32));
+  }
+  :root[data-accent="ember"] {
+    --color-accent:      light-dark(oklch(0.46 0.19 55), oklch(0.78 0.13 55));
+    --color-accent-soft: light-dark(oklch(0.46 0.19 55 / 0.08), oklch(0.78 0.13 55 / 0.14));
+    --color-accent-ring: light-dark(oklch(0.46 0.19 55 / 0.32), oklch(0.78 0.13 55 / 0.32));
+  }
+  :root[data-accent="emerald"] {
+    --color-accent:      light-dark(oklch(0.46 0.19 160), oklch(0.78 0.13 160));
+    --color-accent-soft: light-dark(oklch(0.46 0.19 160 / 0.08), oklch(0.78 0.13 160 / 0.14));
+    --color-accent-ring: light-dark(oklch(0.46 0.19 160 / 0.32), oklch(0.78 0.13 160 / 0.32));
+  }
+  :root[data-accent="cyan"] {
+    --color-accent:      light-dark(oklch(0.46 0.19 210), oklch(0.78 0.13 210));
+    --color-accent-soft: light-dark(oklch(0.46 0.19 210 / 0.08), oklch(0.78 0.13 210 / 0.14));
+    --color-accent-ring: light-dark(oklch(0.46 0.19 210 / 0.32), oklch(0.78 0.13 210 / 0.32));
+  }
+  :root[data-accent="blue"] {
+    --color-accent:      light-dark(oklch(0.46 0.19 250), oklch(0.78 0.13 250));
+    --color-accent-soft: light-dark(oklch(0.46 0.19 250 / 0.08), oklch(0.78 0.13 250 / 0.14));
+    --color-accent-ring: light-dark(oklch(0.46 0.19 250 / 0.32), oklch(0.78 0.13 250 / 0.32));
+  }
+  :root[data-accent="violet"] {
+    --color-accent:      light-dark(oklch(0.46 0.19 295), oklch(0.78 0.13 295));
+    --color-accent-soft: light-dark(oklch(0.46 0.19 295 / 0.08), oklch(0.78 0.13 295 / 0.14));
+    --color-accent-ring: light-dark(oklch(0.46 0.19 295 / 0.32), oklch(0.78 0.13 295 / 0.32));
+  }
+
   html {
     scroll-behavior: smooth;
   }

@@ -72,23 +72,29 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
            justify-center lg:justify-start outline-none">
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="none"
+      viewBox="8 58 224 124"
       stroke-linecap="round"
       stroke-linejoin="round"
       aria-hidden="true"
-      class="brand-mark__svg shrink-0 size-11 text-accent">
-      <path
-        id="brand-mark-path"
-        class="brand-mark__base"
-        d="M18.1777 8C23.2737 8 23.2737 16 18.1777 16C13.0827 16 11.0447 8 5.43875 8C0.85375 8 0.85375 16 5.43875 16C11.0447 16 13.0828 8 18.1788 8H18.1777Z" />
+      class="brand-mark__svg shrink-0 h-4 w-auto text-accent">
+      <g class="brand-mark__mark">
+        <path
+          id="brand-mark-path"
+          class="brand-mark__base brand-mark__base--stroke"
+          d="M65.6 70.2 A50 50 0 1 1 20.2 115.6" />
+        <circle class="brand-mark__base brand-mark__base--fill" cx="34.6" cy="84.6" r="9" />
+        <circle class="brand-mark__base brand-mark__base--stroke" cx="170" cy="120" r="50" />
+        <rect class="brand-mark__base brand-mark__base--fill" x="146.5" y="94" width="13" height="52" rx="6.5" />
+        <rect class="brand-mark__base brand-mark__base--fill" x="164.5" y="102" width="13" height="36" rx="6.5" />
+        <rect class="brand-mark__base brand-mark__base--fill" x="182.5" y="110" width="13" height="20" rx="6.5" />
+      </g>
       <g class="brand-mark__trail">
-        <circle r="1.15" fill="currentColor" opacity="1"    class="brand-mark__dot brand-mark__dot--1" />
-        <circle r="0.95" fill="currentColor" opacity="0.75" class="brand-mark__dot brand-mark__dot--2" />
-        <circle r="0.8"  fill="currentColor" opacity="0.55" class="brand-mark__dot brand-mark__dot--3" />
-        <circle r="0.65" fill="currentColor" opacity="0.4"  class="brand-mark__dot brand-mark__dot--4" />
-        <circle r="0.5"  fill="currentColor" opacity="0.25" class="brand-mark__dot brand-mark__dot--5" />
-        <circle r="0.35" fill="currentColor" opacity="0.14" class="brand-mark__dot brand-mark__dot--6" />
+        <circle r="11.5" fill="currentColor" opacity="1"    class="brand-mark__dot brand-mark__dot--1" />
+        <circle r="9.5"  fill="currentColor" opacity="0.75" class="brand-mark__dot brand-mark__dot--2" />
+        <circle r="8"    fill="currentColor" opacity="0.55" class="brand-mark__dot brand-mark__dot--3" />
+        <circle r="6.5"  fill="currentColor" opacity="0.4"  class="brand-mark__dot brand-mark__dot--4" />
+        <circle r="5"    fill="currentColor" opacity="0.25" class="brand-mark__dot brand-mark__dot--5" />
+        <circle r="3.5"  fill="currentColor" opacity="0.14" class="brand-mark__dot brand-mark__dot--6" />
       </g>
     </svg>
     <span class="hidden lg:inline-flex items-baseline truncate text-[0.9375rem] tracking-[-0.02em]">
@@ -621,13 +627,22 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
      isn't clipped to a square. */
   .brand-mark__svg { overflow: visible; }
 
-  /* Base infinity: solid enough to read at a glance, calm enough to not
-     compete with the comet for attention. */
-  .brand-mark__base {
-    stroke: var(--color-accent);
-    stroke-width: 1.6;
+  /* Base mark: solid enough to read at a glance, calm enough to not
+     compete with the comet for attention. Opacity lives on the group so
+     overlapping strokes/fills don't stack darker at the ring tangent. */
+  .brand-mark__mark {
     opacity: 0.5;
-    vector-effect: non-scaling-stroke;
+  }
+  .brand-mark__base {
+    opacity: 1;
+  }
+  .brand-mark__base--stroke {
+    fill: none;
+    stroke: var(--color-accent);
+    stroke-width: 20;
+  }
+  .brand-mark__base--fill {
+    fill: var(--color-accent);
   }
 
   /* Comet trail glow: three drop-shadow layers for a richer falloff than
@@ -649,10 +664,10 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
   }
 
   .brand-mark__dot {
-    offset-path: path('M18.1777 8C23.2737 8 23.2737 16 18.1777 16C13.0827 16 11.0447 8 5.43875 8C0.85375 8 0.85375 16 5.43875 16C11.0447 16 13.0828 8 18.1788 8H18.1777Z');
+    offset-path: path('M120,120 A50 50 0 1 1 20 120 A50 50 0 1 1 120 120 A50 50 0 1 0 220 120 A50 50 0 1 0 120 120 Z');
     offset-rotate: 0deg;
     offset-distance: 0%;
-    animation: brand-mark-orbit 6s linear infinite;
+    animation: brand-mark-orbit 6s linear infinite reverse;
   }
   .brand-mark__dot--2 { animation-delay: 0.08s; }
   .brand-mark__dot--3 { animation-delay: 0.16s; }
@@ -663,8 +678,8 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     to { offset-distance: 100%; }
   }
 
-  .brand-mark:hover .brand-mark__base,
-  .brand-mark:focus-visible .brand-mark__base { opacity: 0.75; }
+  .brand-mark:hover .brand-mark__mark,
+  .brand-mark:focus-visible .brand-mark__mark { opacity: 0.75; }
   .brand-mark:hover .brand-mark__trail,
   .brand-mark:focus-visible .brand-mark__trail {
     filter: drop-shadow(0 0 3px var(--color-accent))
@@ -674,6 +689,6 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
 
   @media (prefers-reduced-motion: reduce) {
     .brand-mark__trail { display: none; }
-    .brand-mark__base { opacity: 0.7; }
+    .brand-mark__mark { opacity: 0.7; }
   }
 </style>

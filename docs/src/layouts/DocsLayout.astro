@@ -33,7 +33,7 @@ const titleHtml = title.replace(
 const metaDescription = description ?? lede ?? "Documentation for Extreme InfiniTV, a cross-platform IPTV player for Xtream Codes and M3U playlists."
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, "")
-const ogImage = "https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/512x512.png"
+const ogImage = "https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/logos/icon-1024.png"
 
 const navLinks = [
   { href: `${base}/`, label: "Docs" },
@@ -106,7 +106,7 @@ const editUrl = `https://github.com/infinitel8p/Extreme-InfiniTV/blob/main/docs/
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:image" content={ogImage} />
-    <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/32x32.png" />
+    <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/logos/icon-128.png" />
     <script is:inline>
       (() => {
         try {
@@ -122,6 +122,11 @@ const editUrl = `https://github.com/infinitel8p/Extreme-InfiniTV/blob/main/docs/
             if (saved === "light" || saved === "dark") {
               document.documentElement.setAttribute("data-theme", saved)
             }
+          }
+          const ACCENT_PRESETS = ["rose", "ember", "emerald", "cyan", "blue", "violet"]
+          const accentFromQuery = params.get("accent")
+          if (ACCENT_PRESETS.includes(accentFromQuery)) {
+            document.documentElement.setAttribute("data-accent", accentFromQuery)
           }
         } catch {}
       })()
@@ -183,6 +188,8 @@ const editUrl = `https://github.com/infinitel8p/Extreme-InfiniTV/blob/main/docs/
               url.searchParams.set("embed", "1")
               const theme = document.documentElement.getAttribute("data-theme")
               if (theme === "light" || theme === "dark") url.searchParams.set("theme", theme)
+              const accent = document.documentElement.getAttribute("data-accent")
+              if (accent) url.searchParams.set("accent", accent)
               anchor.setAttribute("href", url.pathname + url.search + url.hash)
               anchor.dataset.embedRewritten = "1"
             } catch {}
@@ -190,11 +197,19 @@ const editUrl = `https://github.com/infinitel8p/Extreme-InfiniTV/blob/main/docs/
         }
         rewriteAnchors(document)
 
+        const ACCENT_PRESETS = ["rose", "ember", "emerald", "cyan", "blue", "violet"]
         window.addEventListener("message", (event) => {
           const data = event.data
           if (!data || typeof data !== "object") return
           if (data.type === "xt-docs:theme" && (data.theme === "light" || data.theme === "dark")) {
             document.documentElement.setAttribute("data-theme", data.theme)
+          }
+          if (data.type === "xt-docs:accent") {
+            if (ACCENT_PRESETS.includes(data.accent)) {
+              document.documentElement.setAttribute("data-accent", data.accent)
+            } else {
+              document.documentElement.removeAttribute("data-accent")
+            }
           }
         })
       })();
