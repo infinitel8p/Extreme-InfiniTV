@@ -85,6 +85,7 @@ const ID_CODEC_ID: u64 = 0x86;
 const ID_LANGUAGE: u64 = 0x22B59C;
 const ID_LANGUAGE_BCP47: u64 = 0x22B59D;
 const ID_NAME: u64 = 0x536E;
+const ID_FLAG_DEFAULT: u64 = 0x88;
 const ID_CLUSTER: u64 = 0x1F43B675;
 const ID_CLUSTER_TIMESTAMP: u64 = 0xE7;
 const ID_SIMPLE_BLOCK: u64 = 0xA3;
@@ -123,6 +124,7 @@ pub struct MkvTrack {
     pub codec: String,
     pub language: Option<String>,
     pub name: Option<String>,
+    pub default: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +174,7 @@ fn parse_track_entry(bytes: &[u8]) -> Option<MkvTrack> {
     let mut language = None;
     let mut language_bcp47 = None;
     let mut name = None;
+    let mut flag_default = None;
 
     let mut pos = 0;
     while pos < bytes.len() {
@@ -193,6 +196,7 @@ fn parse_track_entry(bytes: &[u8]) -> Option<MkvTrack> {
             ID_LANGUAGE => language = Some(latin1_string(field)),
             ID_LANGUAGE_BCP47 => language_bcp47 = Some(latin1_string(field)),
             ID_NAME => name = Some(sanitize_track_text(String::from_utf8_lossy(field).into_owned())),
+            ID_FLAG_DEFAULT => flag_default = Some(read_uint(field) != 0),
             _ => {}
         }
         pos = end;
@@ -204,6 +208,8 @@ fn parse_track_entry(bytes: &[u8]) -> Option<MkvTrack> {
         codec: codec.unwrap_or_default(),
         language: language_bcp47.or(language),
         name,
+        // FlagDefault's EBML default is 1 when absent.
+        default: flag_default.unwrap_or(true),
     })
 }
 
@@ -996,6 +1002,7 @@ mod tests {
                 elem(ID_TRACK_TYPE, &encode_uint(0x11, 1)),
                 elem(ID_CODEC_ID, b"S_TEXT/ASS"),
                 elem(ID_LANGUAGE_BCP47, b"fr"),
+                elem(ID_FLAG_DEFAULT, &encode_uint(0, 1)),
             ]),
         );
         let tracks = elem(ID_TRACKS, &concat(&[video_track, sub_en, sub_fr]));
@@ -1008,18 +1015,21 @@ mod tests {
 
         assert_eq!(head.tracks[0].number, 1);
         assert_eq!(head.tracks[0].track_type, 1);
+        assert!(head.tracks[0].default, "FlagDefault absent must default to true");
 
         assert_eq!(head.tracks[1].number, 2);
         assert_eq!(head.tracks[1].track_type, TRACK_TYPE_SUBTITLE);
         assert_eq!(head.tracks[1].codec, "S_TEXT/UTF8");
         assert_eq!(head.tracks[1].language.as_deref(), Some("eng"));
         assert_eq!(head.tracks[1].name.as_deref(), Some("English"));
+        assert!(head.tracks[1].default, "FlagDefault absent must default to true");
 
         assert_eq!(head.tracks[2].number, 3);
         assert_eq!(head.tracks[2].track_type, TRACK_TYPE_SUBTITLE);
         assert_eq!(head.tracks[2].codec, "S_TEXT/ASS");
         assert_eq!(head.tracks[2].language.as_deref(), Some("fr"));
         assert_eq!(head.tracks[2].name, None);
+        assert!(!head.tracks[2].default, "explicit FlagDefault(0) must parse as false");
     }
 
     #[test]

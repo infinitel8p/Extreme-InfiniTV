@@ -301,4 +301,39 @@ describe("buildTrackLabels", () => {
     )
     expect(labels.map((track) => track.label)).toEqual(["English (SDH)", "English (SDH) 2"])
   })
+
+  it("uses the name alone when it is a superset of the language display name", () => {
+    const labels = buildTrackLabels(
+      [{ trackId: 1, language: "eng", sampleCount: 10, name: "English SDH" }],
+      "en",
+    )
+    expect(labels[0].label).toBe("English SDH")
+  })
+
+  it("uses the language display name alone when the name is identical", () => {
+    const labels = buildTrackLabels(
+      [{ trackId: 1, language: "eng", sampleCount: 10, name: "English" }],
+      "en",
+    )
+    expect(labels[0].label).toBe("English")
+  })
+
+  it("uses the name alone when the language is unresolvable ('und') but a name is present", () => {
+    const labels = buildTrackLabels(
+      [{ trackId: 1, language: "und", sampleCount: 10, name: "Commentary" }],
+      "en",
+    )
+    expect(labels[0].label).toBe("Commentary")
+  })
+
+  it("distinguishes same-name tracks by language instead of an incrementing suffix", () => {
+    const labels = buildTrackLabels(
+      [
+        { trackId: 1, language: "hin", sampleCount: 10, name: "Surround" },
+        { trackId: 2, language: "eng", sampleCount: 8, name: "Surround" },
+      ],
+      "en",
+    )
+    expect(labels.map((track) => track.label)).toEqual(["Hindi (Surround)", "English (Surround)"])
+  })
 })

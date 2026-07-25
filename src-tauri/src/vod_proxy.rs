@@ -19,6 +19,7 @@ use crate::matroska::{self, ClusterScanner, HeadInfo, ScannedCue, SubtitleCodec}
 const TRACKS_EVENT: &str = "xt:vodproxy-tracks";
 const CUES_EVENT: &str = "xt:vodproxy-cues";
 const SUBTITLE_TRACK_TYPE: u8 = 0x11;
+const AUDIO_TRACK_TYPE: u8 = 0x02;
 const HEAD_PROBE_SMALL_END: u64 = 2_097_151;
 const HEAD_PROBE_LARGE_END: u64 = 8_388_607;
 const HEAD_PROBE_SLACK: usize = 64 * 1024;
@@ -532,6 +533,24 @@ fn subtitle_tracks_payload(head_info: &HeadInfo) -> Vec<Value> {
         .collect()
 }
 
+// Unlike subtitles, no codec filter; frontend picks copy vs transcode.
+fn audio_tracks_payload(head_info: &HeadInfo) -> Vec<Value> {
+    head_info
+        .tracks
+        .iter()
+        .filter(|track| track.track_type == AUDIO_TRACK_TYPE)
+        .map(|track| {
+            json!({
+                "number": track.number,
+                "codec": track.codec,
+                "language": track.language,
+                "name": track.name,
+                "default": track.default,
+            })
+        })
+        .collect()
+}
+
 async fn fetch_range(
     client: &reqwest::Client,
     session: &VodSession,
@@ -584,6 +603,10 @@ fn spawn_head_parse(events: Arc<dyn VodProxyEvents>, session: Arc<VodSession>, c
             .as_ref()
             .map(subtitle_tracks_payload)
             .unwrap_or_default();
+        let audio_tracks_json: Vec<Value> = head
+            .as_ref()
+            .map(audio_tracks_payload)
+            .unwrap_or_default();
 
         let subtitle_tracks: HashMap<u64, SubtitleCodec> = head
             .as_ref()
@@ -608,6 +631,7 @@ fn spawn_head_parse(events: Arc<dyn VodProxyEvents>, session: Arc<VodSession>, c
         events.tracks(json!({
             "sessionId": session.session_id,
             "tracks": tracks_payload,
+            "audioTracks": audio_tracks_json,
         }));
     });
 }
@@ -663,6 +687,7 @@ mod tests {
                     codec: "S_TEXT/UTF8".to_string(),
                     language: Some("eng".to_string()),
                     name: None,
+                    default: true,
                 },
                 MkvTrack {
                     number: 2,
@@ -670,6 +695,7 @@ mod tests {
                     codec: "S_HDMV/PGS".to_string(),
                     language: Some("fre".to_string()),
                     name: None,
+                    default: false,
                 },
                 MkvTrack {
                     number: 3,
@@ -677,6 +703,7 @@ mod tests {
                     codec: "V_MPEG4/ISO/AVC".to_string(),
                     language: None,
                     name: None,
+                    default: true,
                 },
             ],
         };
@@ -684,6 +711,48 @@ mod tests {
         let payload = subtitle_tracks_payload(&head_info);
         assert_eq!(payload.len(), 1, "PGS and video tracks must not be announced");
         assert_eq!(payload[0]["number"], 1);
+    }
+
+    #[test]
+    fn audio_tracks_payload_includes_every_audio_track_regardless_of_codec() {
+        let head_info = HeadInfo {
+            timestamp_scale_ns: 1_000_000,
+            tracks: vec![
+                MkvTrack {
+                    number: 1,
+                    track_type: 1,
+                    codec: "V_MPEG4/ISO/AVC".to_string(),
+                    language: None,
+                    name: None,
+                    default: true,
+                },
+                MkvTrack {
+                    number: 2,
+                    track_type: AUDIO_TRACK_TYPE,
+                    codec: "A_AC3".to_string(),
+                    language: Some("eng".to_string()),
+                    name: Some("Stereo".to_string()),
+                    default: true,
+                },
+                MkvTrack {
+                    number: 3,
+                    track_type: AUDIO_TRACK_TYPE,
+                    codec: "A_DTS".to_string(),
+                    language: Some("fre".to_string()),
+                    name: None,
+                    default: false,
+                },
+            ],
+        };
+
+        let payload = audio_tracks_payload(&head_info);
+        assert_eq!(payload.len(), 2, "both audio tracks must be announced regardless of codec");
+        assert_eq!(payload[0]["number"], 2);
+        assert_eq!(payload[0]["codec"], "A_AC3");
+        assert_eq!(payload[0]["default"], true);
+        assert_eq!(payload[1]["number"], 3);
+        assert_eq!(payload[1]["codec"], "A_DTS");
+        assert_eq!(payload[1]["default"], false);
     }
 
     #[test]
@@ -808,6 +877,37 @@ mod tests {
         fn cues(&self, payload: Value) {
             self.cues.lock().unwrap().push(payload);
         }
+    }
+
+    // Bytes re-read through the tee (e.g. audio remux) must not re-emit cues.
+    #[test]
+    fn emit_cues_never_re_emits_cues_from_bytes_that_pass_through_the_tee_twice() {
+        let clusters = cluster(1000, &[block_group(2, 500, 0, b"Hello World", Some(2000))]);
+        let head = OnceLock::new();
+        head.set(Some(HeadContext {
+            timestamp_scale_ns: 1_000_000,
+            subtitle_tracks: subtitle_map(&[(2, SubtitleCodec::Srt)]),
+        }))
+        .unwrap();
+        let session = test_session(head);
+        let collector = CollectorEvents::new();
+        let events: Arc<dyn VodProxyEvents> = collector.clone();
+
+        let mut first_request = TeeState::new(session.clone());
+        let first_cues = first_request.process(&clusters);
+        assert_eq!(first_cues.len(), 1);
+        emit_cues(&session, &events, first_cues);
+        assert_eq!(collector.cues.lock().unwrap().len(), 1);
+
+        let mut second_request = TeeState::new(session.clone());
+        let second_cues = second_request.process(&clusters);
+        assert_eq!(second_cues.len(), 1, "the scanner itself is stateless across requests");
+        emit_cues(&session, &events, second_cues);
+        assert_eq!(
+            collector.cues.lock().unwrap().len(),
+            1,
+            "already-emitted cues must not reach the frontend a second time"
+        );
     }
 
     /// Registers a real provider URL against the proxy core (no AppHandle

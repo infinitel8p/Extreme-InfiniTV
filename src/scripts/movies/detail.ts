@@ -67,6 +67,8 @@ import {
   subscribeExternalPlayerExit,
 } from "@/scripts/lib/player-runtime.ts"
 import { prepareVodPlayback } from "@/scripts/lib/vod-proxy.ts"
+import { vodAudioRemuxAvailable } from "@/scripts/lib/vod-audio-proxy.ts"
+import { createVodAudioSwitcher, discoverVodAudioTracks } from "@/scripts/lib/vod-audio-switch.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
@@ -317,6 +319,8 @@ let progressListenersBound = false
 let pipBtnBound = false
 let scaleBtnBound = false
 let playRequestId = 0
+let audioSwitcher = null
+let audioDiscoveryController = null
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
@@ -527,10 +531,38 @@ async function startPlayback() {
     prepared.mkvSession?.stop()
     return
   }
+
+  audioSwitcher?.dispose()
+  audioSwitcher = null
+  audioDiscoveryController?.abort()
+  audioDiscoveryController = new AbortController()
+  let initialAudioSource = null
+  if (await vodAudioRemuxAvailable()) {
+    const audioTracks = await discoverVodAudioTracks(prepared.mkvSession, playSrc, audioDiscoveryController.signal)
+    if (requestId !== playRequestId) {
+      prepared.mkvSession?.stop()
+      return
+    }
+    if (audioTracks.length >= 2) {
+      audioSwitcher = createVodAudioSwitcher({
+        handle: player,
+        originalSrc: prepared.playbackUrl,
+        originalMime: mime,
+        originalSubtitles: { sourceUrl: playSrc, mkvSession: prepared.mkvSession },
+        sourceUrl: playSrc,
+        remuxInputUrl: prepared.mkvSession ? prepared.playbackUrl : null,
+        getKnownDurationSeconds: () => player.duration?.() || saved?.duration || 0,
+        tracks: audioTracks,
+      })
+      initialAudioSource = audioSwitcher.source
+    }
+  }
+
   player.src({
     src: prepared.playbackUrl,
     type: mime,
     subtitles: { sourceUrl: playSrc, mkvSession: prepared.mkvSession },
+    audio: initialAudioSource,
   })
   applyVideoScale()
 
@@ -653,6 +685,9 @@ window.addEventListener("pagehide", () => {
     }
     vjs?.pause?.()
     vjs?.dispose?.()
+    audioSwitcher?.dispose()
+    audioSwitcher = null
+    audioDiscoveryController?.abort()
   } catch {}
   clearAmbient(ambientEl)
   externalPresenceActive = false
@@ -849,6 +884,9 @@ async function boot() {
     await vjs?.dispose?.()
   } catch {}
   vjs = null
+  audioSwitcher?.dispose()
+  audioSwitcher = null
+  audioDiscoveryController?.abort()
   progressListenersBound = false
 
   movie = null

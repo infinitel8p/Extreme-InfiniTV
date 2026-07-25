@@ -24,4 +24,7 @@ commands.allow = [
     "audio_transcode_available",
     "register_audio_transcode",
     "unregister_audio_transcode",
+    "vod_audio_remux_available",
+    "register_vod_audio_remux",
+    "unregister_vod_audio_remux",
 ]

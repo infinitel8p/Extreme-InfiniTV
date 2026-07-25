@@ -1265,5 +1265,7 @@
   "editor.catchupSourceLabel": "Source URL template",
   "player.subtitles": "Subtitles",
   "player.subtitles.off": "Off",
-  "player.subtitles.error": "Couldn't load subtitles"
+  "player.subtitles.error": "Couldn't load subtitles",
+  "player.audio": "Audio",
+  "player.audio.switchFailed": "Couldn't switch audio track - returned to the original audio"
 }

@@ -23,6 +23,9 @@ mod tray;
 mod updater;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod vod_audio_proxy;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod vod_proxy;
 
 // The Stdout target also covers Android release builds; tauri-plugin-log routes it to logcat there, not just the debug-only terminal.
@@ -149,6 +152,7 @@ pub fn run() {
         .manage(external_player::ExternalPlayerState::default())
         .manage(updater::PendingUpdateState::default())
         .manage(sniffer::SnifferState::default())
+        .manage(vod_audio_proxy::VodAudioProxyState::default())
         .manage(vod_proxy::VodProxyState::default())
         .invoke_handler(tauri::generate_handler![
             audio_proxy::audio_transcode_available,
@@ -167,6 +171,9 @@ pub fn run() {
             tray::set_close_to_tray,
             updater::updater_check_from,
             updater::updater_install,
+            vod_audio_proxy::vod_audio_remux_available,
+            vod_audio_proxy::register_vod_audio_remux,
+            vod_audio_proxy::unregister_vod_audio_remux,
             vod_proxy::register_vod_proxy,
             vod_proxy::unregister_vod_proxy,
         ]);
@@ -210,6 +217,7 @@ pub fn run() {
         if let tauri::RunEvent::Exit = _event {
             use tauri::Manager;
             audio_proxy::shutdown(&_app_handle.state::<audio_proxy::AudioProxyState>());
+            vod_audio_proxy::shutdown(&_app_handle.state::<vod_audio_proxy::VodAudioProxyState>());
         }
     });
 }

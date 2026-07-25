@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command as TokioCommand};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::external_player;
 
@@ -102,7 +102,10 @@ struct AudioSession {
     // Sender for the currently connected HTTP client, if any; a new GET replaces it, dropping the previous sender and ending its stream.
     current_client: Mutex<Option<mpsc::Sender<Bytes>>>,
     stderr_tail: Mutex<VecDeque<String>>,
+    // Held only until run_watchdog takes ownership.
     child: tokio::sync::Mutex<Option<Child>>,
+    // Wakes teardown without touching the child mutex.
+    kill_notify: Notify,
     // Any of the fetch/output/stderr tasks may self-abort via finish_with_error -> teardown_io; harmless since abort only lands at the task's next await point.
     io_tasks: Mutex<Vec<tauri::async_runtime::JoinHandle<()>>>,
     // Kept separate from `io_tasks` so the watchdog never has to abort its own handle.
@@ -207,6 +210,7 @@ pub async fn register_audio_transcode(
         current_client: Mutex::new(None),
         stderr_tail: Mutex::new(VecDeque::new()),
         child: tokio::sync::Mutex::new(Some(child)),
+        kill_notify: Notify::new(),
         io_tasks: Mutex::new(Vec::new()),
         watchdog_task: Mutex::new(None),
         last_activity: Mutex::new(Instant::now()),
@@ -933,57 +937,66 @@ async fn wait_for_stdout_stall(session: &Arc<AudioSession>) {
     }
 }
 
+// Owns the child for its lifetime; teardown wakes it via kill_notify.
 async fn run_watchdog(
     app: AppHandle,
     session: Arc<AudioSession>,
     mut first_byte_rx: oneshot::Receiver<()>,
 ) {
-    let early_exit = {
+    let mut child = {
         let mut child_guard = session.child.lock().await;
-        let Some(child) = child_guard.as_mut() else {
+        let Some(child) = child_guard.take() else {
             return;
         };
-        tokio::select! {
-            status = child.wait() => Some(status),
-            _ = &mut first_byte_rx => None,
-            _ = tokio::time::sleep(STARTUP_SILENCE_TIMEOUT) => {
-                drop(child_guard);
-                finish_with_error(
-                    &app,
-                    &session,
-                    "TIMEOUT:no output from ffmpeg within 10s".to_string(),
-                )
-                .await;
-                return;
-            }
+        child
+    };
+
+    let early_exit = tokio::select! {
+        status = child.wait() => Some(status),
+        _ = &mut first_byte_rx => None,
+        _ = session.kill_notify.notified() => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return;
+        }
+        _ = tokio::time::sleep(STARTUP_SILENCE_TIMEOUT) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            finish_with_error(
+                &app,
+                &session,
+                "TIMEOUT:no output from ffmpeg within 10s".to_string(),
+            )
+            .await;
+            return;
         }
     };
 
     let exit_status = match early_exit {
         Some(status) => status,
-        None => {
-            let mut child_guard = session.child.lock().await;
-            let Some(child) = child_guard.as_mut() else {
+        None => tokio::select! {
+            status = child.wait() => status,
+            _ = wait_for_stdout_stall(&session) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                finish_with_error(
+                    &app,
+                    &session,
+                    format!(
+                        "TIMEOUT:no output from ffmpeg for {}s{}",
+                        STDOUT_STALL_TIMEOUT.as_secs(),
+                        stderr_tail_suffix(&session)
+                    ),
+                )
+                .await;
                 return;
-            };
-            tokio::select! {
-                status = child.wait() => status,
-                _ = wait_for_stdout_stall(&session) => {
-                    drop(child_guard);
-                    finish_with_error(
-                        &app,
-                        &session,
-                        format!(
-                            "TIMEOUT:no output from ffmpeg for {}s{}",
-                            STDOUT_STALL_TIMEOUT.as_secs(),
-                            stderr_tail_suffix(&session)
-                        ),
-                    )
-                    .await;
-                    return;
-                }
             }
-        }
+            _ = session.kill_notify.notified() => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                return;
+            }
+        },
     };
 
     let succeeded = matches!(&exit_status, Ok(status) if status.success());
@@ -1022,18 +1035,19 @@ async fn finish_with_error(app: &AppHandle, session: &Arc<AudioSession>, detail:
 
 /// Kills the ffmpeg child and stops the fetch/output/stderr tasks. Safe to call
 /// from within one of those tasks: it never touches the watchdog's own handle.
+///
+/// Never blocks on the child mutex; killing goes through kill_notify instead.
 async fn teardown_io(session: &Arc<AudioSession>) {
     session.torn_down.store(true, Ordering::SeqCst);
+    session.kill_notify.notify_one();
 
-    let child = {
-        let mut guard = session.child.lock().await;
-        guard.take()
-    };
-    if let Some(mut child) = child {
-        let _ = child.start_kill();
-        tauri::async_runtime::spawn(async move {
-            let _ = child.wait().await;
-        });
+    if let Ok(mut guard) = session.child.try_lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.start_kill();
+            tauri::async_runtime::spawn(async move {
+                let _ = child.wait().await;
+            });
+        }
     }
 
     let tasks: Vec<_> = {
@@ -1084,6 +1098,7 @@ pub fn shutdown(state: &AudioProxyState) {
 
     for session in sessions {
         session.torn_down.store(true, Ordering::SeqCst);
+        session.kill_notify.notify_one();
 
         if let Ok(mut child_guard) = session.child.try_lock() {
             if let Some(child) = child_guard.as_mut() {
@@ -1109,6 +1124,7 @@ pub fn shutdown(state: &AudioProxyState) {
                 .unwrap_or_else(|poison| poison.into_inner());
             guard.take()
         };
+        // Aborting the watchdog drops the child; kill_on_drop kills it too.
         if let Some(task) = watchdog {
             task.abort();
         }
@@ -1246,6 +1262,7 @@ mod tests {
             current_client: Mutex::new(None),
             stderr_tail: Mutex::new(VecDeque::new()),
             child: tokio::sync::Mutex::new(None),
+            kill_notify: Notify::new(),
             io_tasks: Mutex::new(Vec::new()),
             watchdog_task: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
@@ -1265,6 +1282,7 @@ mod tests {
             current_client: Mutex::new(None),
             stderr_tail: Mutex::new(tail),
             child: tokio::sync::Mutex::new(None),
+            kill_notify: Notify::new(),
             io_tasks: Mutex::new(Vec::new()),
             watchdog_task: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
@@ -1274,5 +1292,38 @@ mod tests {
             stderr_tail_suffix(&session),
             " (first warning | second warning)"
         );
+    }
+
+    fn test_audio_session() -> Arc<AudioSession> {
+        Arc::new(AudioSession {
+            session_id: "sess".to_string(),
+            torn_down: AtomicBool::new(false),
+            current_client: Mutex::new(None),
+            stderr_tail: Mutex::new(VecDeque::new()),
+            child: tokio::sync::Mutex::new(None),
+            kill_notify: Notify::new(),
+            io_tasks: Mutex::new(Vec::new()),
+            watchdog_task: Mutex::new(None),
+            last_activity: Mutex::new(Instant::now()),
+            blocked_on_send: AtomicBool::new(false),
+        })
+    }
+
+    // Regression test: teardown_io blocking while the watchdog owned the child.
+    #[tokio::test]
+    async fn teardown_io_wakes_a_task_parked_on_kill_notify_without_blocking() {
+        let session = test_audio_session();
+
+        let waiting_session = session.clone();
+        let woken = tokio::spawn(async move {
+            waiting_session.kill_notify.notified().await;
+        });
+        tokio::task::yield_now().await;
+
+        let teardown = tokio::time::timeout(Duration::from_millis(500), teardown_io(&session)).await;
+        assert!(teardown.is_ok(), "teardown_io must not block on the child mutex");
+
+        let wake_result = tokio::time::timeout(Duration::from_millis(500), woken).await;
+        assert!(wake_result.is_ok(), "kill_notify must wake a task already parked on notified()");
     }
 }

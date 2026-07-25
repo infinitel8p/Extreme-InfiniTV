@@ -1,4 +1,4 @@
-// Desktop client for the Rust MKV tee-proxy: 127.0.0.1 playback URL + embedded-subtitle events, direct-play fallback.
+// Desktop client for the Rust MKV tee-proxy (vod_proxy.rs).
 
 import { log } from "@/scripts/lib/log.js"
 import { getUserAgent } from "@/scripts/lib/app-settings.js"
@@ -10,6 +10,15 @@ export interface MkvSubtitleTrackInfo {
   name: string | null
 }
 
+export interface MkvAudioTrackInfo {
+  number: number
+  codec: string
+  language: string | null
+  name: string | null
+  /** Matroska FlagDefault; optional until the Rust side always reports it. */
+  default?: boolean
+}
+
 export interface MkvCue {
   startMs: number
   endMs: number
@@ -18,6 +27,7 @@ export interface MkvCue {
 
 export interface MkvSubtitleSession {
   tracks(): Promise<MkvSubtitleTrackInfo[]>
+  audioTracks(): Promise<MkvAudioTrackInfo[]>
   onCues(listener: (trackNumber: number, cues: MkvCue[]) => void): void
   stop(): void
 }
@@ -25,6 +35,7 @@ export interface MkvSubtitleSession {
 interface TracksEventPayload {
   sessionId: string
   tracks: MkvSubtitleTrackInfo[]
+  audioTracks?: MkvAudioTrackInfo[]
 }
 
 interface CuesEventPayload {
@@ -67,12 +78,18 @@ export async function prepareVodPlayback(
   let ownSessionId: string | null = null
   const rawTracksBuffer: TracksEventPayload[] = []
   const rawCuesBuffer: CuesEventPayload[] = []
-  const pendingCuesForListener: Array<{ trackNumber: number; cues: MkvCue[] }> = []
+  // The tee never re-emits cues; late listeners replay from here.
+  const cueHistory: Array<{ trackNumber: number; cues: MkvCue[] }> = []
   let cueListener: ((trackNumber: number, cues: MkvCue[]) => void) | null = null
   let tracksSettled = false
   let resolveTracks: ((tracks: MkvSubtitleTrackInfo[]) => void) | null = null
   const tracksPromise = new Promise<MkvSubtitleTrackInfo[]>((resolve) => {
     resolveTracks = resolve
+  })
+  let audioTracksSettled = false
+  let resolveAudioTracks: ((audioTracks: MkvAudioTrackInfo[]) => void) | null = null
+  const audioTracksPromise = new Promise<MkvAudioTrackInfo[]>((resolve) => {
+    resolveAudioTracks = resolve
   })
   let unlistenTracks: (() => void) | null = null
   let unlistenCues: (() => void) | null = null
@@ -83,9 +100,15 @@ export async function prepareVodPlayback(
     resolveTracks?.(tracks)
   }
 
+  function settleAudioTracks(audioTracks: MkvAudioTrackInfo[]): void {
+    if (audioTracksSettled) return
+    audioTracksSettled = true
+    resolveAudioTracks?.(audioTracks)
+  }
+
   function deliverCues(trackNumber: number, cues: MkvCue[]): void {
-    if (cueListener) cueListener(trackNumber, cues)
-    else pendingCuesForListener.push({ trackNumber, cues })
+    cueHistory.push({ trackNumber, cues })
+    cueListener?.(trackNumber, cues)
   }
 
   function handleTracksEvent(payload: TracksEventPayload | undefined): void {
@@ -96,6 +119,7 @@ export async function prepareVodPlayback(
     }
     if (payload.sessionId !== ownSessionId) return
     settleTracks(payload.tracks ?? [])
+    settleAudioTracks(payload.audioTracks ?? [])
   }
 
   function handleCuesEvent(payload: CuesEventPayload | undefined): void {
@@ -129,25 +153,34 @@ export async function prepareVodPlayback(
 
     ownSessionId = result.sessionId
     for (const payload of rawTracksBuffer.splice(0)) {
-      if (payload.sessionId === ownSessionId) settleTracks(payload.tracks ?? [])
+      if (payload.sessionId === ownSessionId) {
+        settleTracks(payload.tracks ?? [])
+        settleAudioTracks(payload.audioTracks ?? [])
+      }
     }
     for (const payload of rawCuesBuffer.splice(0)) {
       if (payload.sessionId === ownSessionId) deliverCues(payload.trackNumber, payload.cues ?? [])
     }
 
-    setTimeout(() => settleTracks([]), TRACKS_TIMEOUT_MS)
+    setTimeout(() => {
+      settleTracks([])
+      settleAudioTracks([])
+    }, TRACKS_TIMEOUT_MS)
 
     const sessionId = ownSessionId
+    let sessionStopped = false
     const session: MkvSubtitleSession = {
       tracks: () => tracksPromise,
+      audioTracks: () => audioTracksPromise,
       onCues(listener) {
         cueListener = listener
-        for (const { trackNumber, cues } of pendingCuesForListener.splice(0)) {
-          listener(trackNumber, cues)
-        }
+        for (const { trackNumber, cues } of cueHistory) listener(trackNumber, cues)
       },
       stop() {
-        if (!unlistenTracks && !unlistenCues) return
+        if (sessionStopped) return
+        sessionStopped = true
+        cueListener = null
+        cueHistory.length = 0
         try { unlistenTracks?.() } catch (err) { log.warn("[xt:vod-proxy] unlisten tracks failed:", err) }
         try { unlistenCues?.() } catch (err) { log.warn("[xt:vod-proxy] unlisten cues failed:", err) }
         unlistenTracks = null

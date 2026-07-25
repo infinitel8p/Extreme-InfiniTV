@@ -9,6 +9,8 @@ import {
   unlinkSync,
   createWriteStream,
   createReadStream,
+  readFileSync,
+  writeFileSync,
 } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -22,7 +24,9 @@ const repoRoot = join(__dirname, "..", "..")
 const binariesDir = join(repoRoot, "src-tauri", "binaries")
 
 const RELEASE_BASE_URL =
-  "https://github.com/infinitel8p/Extreme-InfiniTV/releases/download/ffmpeg-sidecar-v1"
+  "https://github.com/infinitel8p/Extreme-InfiniTV/releases/download/ffmpeg-sidecar-v2"
+const RELEASE_TAG = RELEASE_BASE_URL.split("/").pop()
+const MARKER_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 function resolveTarget() {
   switch (platform()) {
@@ -109,22 +113,72 @@ function sha256File(filePath) {
 
 class ChecksumVerificationError extends Error {}
 
-async function verifyChecksum(filePath, assetName) {
-  let sumsText
-  try {
-    sumsText = await fetchText(`${RELEASE_BASE_URL}/SHA256SUMS.txt`)
-  } catch (fetchError) {
-    throw new ChecksumVerificationError(`could not download SHA256SUMS.txt (${fetchError.message})`)
-  }
+async function expectedHashFor(assetName) {
+  const sumsText = await fetchText(`${RELEASE_BASE_URL}/SHA256SUMS.txt`)
   const sumsLine = sumsText.split(/\r?\n/).find((line) => line.trim().endsWith(assetName))
   if (!sumsLine) {
     throw new ChecksumVerificationError(`${assetName} is not listed in SHA256SUMS.txt`)
   }
-  const expectedHash = sumsLine.trim().split(/\s+/)[0]
+  return sumsLine.trim().split(/\s+/)[0]
+}
+
+async function verifyChecksum(filePath, assetName) {
+  let expectedHash
+  try {
+    expectedHash = await expectedHashFor(assetName)
+  } catch (fetchError) {
+    if (fetchError instanceof ChecksumVerificationError) throw fetchError
+    throw new ChecksumVerificationError(`could not download SHA256SUMS.txt (${fetchError.message})`)
+  }
   const actualHash = await sha256File(filePath)
   if (actualHash !== expectedHash) {
     throw new ChecksumVerificationError(`checksum mismatch for ${assetName}: expected ${expectedHash}, got ${actualHash}`)
   }
+  return actualHash
+}
+
+// Lookup failure keeps the existing binary; marked unverifiable, not cached.
+async function checkAgainstRelease(filePath, assetName) {
+  let expectedHash
+  try {
+    expectedHash = await expectedHashFor(assetName)
+  } catch (checkError) {
+    console.warn(
+      `[ensure-ffmpeg-sidecar] could not verify local binary against the latest release (${checkError.message}), keeping it`
+    )
+    return { status: "unverifiable" }
+  }
+  const actualHash = await sha256File(filePath)
+  return actualHash === expectedHash ? { status: "match", sha256: actualHash } : { status: "mismatch" }
+}
+
+function markerPathFor(destPath) {
+  return `${destPath}.marker.json`
+}
+
+function readMarker(markerPath) {
+  try {
+    return JSON.parse(readFileSync(markerPath, "utf8"))
+  } catch {
+    return null
+  }
+}
+
+function writeMarker(markerPath, marker) {
+  try {
+    writeFileSync(markerPath, JSON.stringify(marker))
+  } catch {
+    // best-effort local cache, safe to skip on write failure
+  }
+}
+
+// Skips the network check when a recent marker still matches.
+async function markerIsFresh(markerPath, destPath) {
+  const marker = readMarker(markerPath)
+  if (!marker || marker.tag !== RELEASE_TAG) return false
+  if (typeof marker.verifiedAt !== "number" || Date.now() - marker.verifiedAt > MARKER_MAX_AGE_MS) return false
+  const actualHash = await sha256File(destPath)
+  return actualHash === marker.sha256
 }
 
 function findOnPath(binaryName) {
@@ -149,15 +203,44 @@ async function main() {
 
   mkdirSync(binariesDir, { recursive: true })
   const destPath = join(binariesDir, `ffmpeg-${target.triple}${target.ext}`)
-  if (existsSync(destPath)) return
+  const markerPath = markerPathFor(destPath)
+
+  const overridePath = process.env.XT_FFMPEG_SIDECAR_PATH
+  if (overridePath) {
+    if (!existsSync(overridePath)) {
+      console.error(`[ensure-ffmpeg-sidecar] XT_FFMPEG_SIDECAR_PATH is set but ${overridePath} does not exist`)
+      process.exit(1)
+    }
+    copyFileSync(overridePath, destPath)
+    if (platform() === "linux") chmodSync(destPath, 0o755)
+    const overrideHash = await sha256File(destPath)
+    writeMarker(markerPath, { tag: RELEASE_TAG, sha256: overrideHash, verifiedAt: Date.now() })
+    console.log(`[ensure-ffmpeg-sidecar] using XT_FFMPEG_SIDECAR_PATH override: ${overridePath} -> ${destPath}`)
+    return
+  }
+
+  if (existsSync(destPath)) {
+    if (await markerIsFresh(markerPath, destPath)) {
+      console.log("[ensure-ffmpeg-sidecar] local binary verified recently, skipping network check")
+      return
+    }
+    const check = await checkAgainstRelease(destPath, target.asset)
+    if (check.status === "match") {
+      writeMarker(markerPath, { tag: RELEASE_TAG, sha256: check.sha256, verifiedAt: Date.now() })
+      return
+    }
+    if (check.status === "unverifiable") return
+    console.log(`[ensure-ffmpeg-sidecar] local binary is out of date, re-fetching ${target.asset}`)
+  }
 
   const tmpPath = `${destPath}.tmp`
 
   try {
     await download(`${RELEASE_BASE_URL}/${target.asset}`, tmpPath)
-    await verifyChecksum(tmpPath, target.asset)
+    const verifiedHash = await verifyChecksum(tmpPath, target.asset)
     renameSync(tmpPath, destPath)
     if (platform() === "linux") chmodSync(destPath, 0o755)
+    writeMarker(markerPath, { tag: RELEASE_TAG, sha256: verifiedHash, verifiedAt: Date.now() })
     console.log(`[ensure-ffmpeg-sidecar] downloaded ${target.asset} -> ${destPath}`)
     return
   } catch (downloadError) {
@@ -187,9 +270,10 @@ async function main() {
 
   console.error(
     "[ensure-ffmpeg-sidecar] no ffmpeg sidecar available. Fix one of:\n" +
-      "  1. Run the ffmpeg-sidecar-v1 release workflow once so the binary exists on GitHub.\n" +
+      "  1. Run the ffmpeg-sidecar-v2 release workflow once so the binary exists on GitHub.\n" +
       "  2. Install ffmpeg and make sure it's on your PATH.\n" +
-      `  3. Drop a ffmpeg binary manually at ${destPath}.`
+      "  3. Set XT_FFMPEG_SIDECAR_PATH to a local ffmpeg binary.\n" +
+      `  4. Drop a ffmpeg binary manually at ${destPath}.`
   )
   process.exit(1)
 }

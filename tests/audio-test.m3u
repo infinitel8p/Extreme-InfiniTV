@@ -1,0 +1,7 @@
+#EXTM3U
+#EXTINF:-1 group-title="Audio test",Angel One (HLS, en/de/it/fr/es + 5.1)
+https://storage.googleapis.com/shaka-demo-assets/angel-one-hls/hls.m3u8
+#EXTINF:-1 group-title="Audio test",Angel One (DASH, multi-language)
+https://storage.googleapis.com/shaka-demo-assets/angel-one/dash.mpd
+#EXTINF:-1 group-title="Audio test",Big Buck Bunny (HLS, single audio - selector must stay hidden)
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8

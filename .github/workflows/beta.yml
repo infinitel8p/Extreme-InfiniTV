@@ -139,7 +139,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # ffmpeg sidecar binaries come from the "ffmpeg Sidecar" workflow's
-      # rolling ffmpeg-sidecar-v1 prerelease, not built here. This job's
+      # rolling ffmpeg-sidecar-v2 prerelease, not built here. This job's
       # matrix has no macOS entry, so both legs fetch a binary.
       - name: Fetch ffmpeg sidecar
         if: matrix.os != 'macos-latest'
@@ -154,20 +154,20 @@ jobs:
           else
             ASSET="ffmpeg-x86_64-unknown-linux-gnu"
           fi
-          if ! gh release download ffmpeg-sidecar-v1 \
+          if ! gh release download ffmpeg-sidecar-v2 \
             --repo "${{ github.repository }}" \
             --pattern "$ASSET" \
             --dir src-tauri/binaries \
             --clobber; then
-            echo "::error::Could not download $ASSET from the ffmpeg-sidecar-v1 release. Run the 'ffmpeg Sidecar' workflow first."
+            echo "::error::Could not download $ASSET from the ffmpeg-sidecar-v2 release. Run the 'ffmpeg Sidecar' workflow first."
             exit 1
           fi
-          if ! gh release download ffmpeg-sidecar-v1 \
+          if ! gh release download ffmpeg-sidecar-v2 \
             --repo "${{ github.repository }}" \
             --pattern "SHA256SUMS.txt" \
             --dir src-tauri/binaries \
             --clobber; then
-            echo "::error::Could not download SHA256SUMS.txt from the ffmpeg-sidecar-v1 release."
+            echo "::error::Could not download SHA256SUMS.txt from the ffmpeg-sidecar-v2 release."
             exit 1
           fi
           cd src-tauri/binaries

@@ -1,0 +1,345 @@
+// Audio-track switcher for native-played VOD: remux via ffmpeg, remount (desktop only).
+
+import { log } from "@/scripts/lib/log.js"
+import { t } from "@/scripts/lib/i18n.js"
+import { toastError } from "@/scripts/lib/toast.js"
+import { getUserAgent } from "@/scripts/lib/app-settings.js"
+import { splitUrlAuth } from "@/scripts/lib/url-auth.ts"
+import { labelAudioTracks, type AudioTrackSource } from "@/scripts/lib/audio-tracks.ts"
+import {
+  startVodAudioRemux,
+  stopVodAudioRemux,
+  onVodAudioError,
+  shouldTranscodeVodAudio,
+} from "@/scripts/lib/vod-audio-proxy.ts"
+import { listMp4AudioTracks } from "@/scripts/lib/mp4-subtitles.ts"
+import type { MkvSubtitleSession } from "@/scripts/lib/vod-proxy.ts"
+import type { VjsLikeHandle } from "@/scripts/lib/player-runtime.ts"
+
+export interface VodAudioTrackOption {
+  id: string
+  /** ffmpeg `-map 0:a:<index>` position, not the container's global track number. */
+  audioStreamIndex: number
+  codec: string
+  language?: string | null
+  name?: string | null
+  isDefault: boolean
+}
+
+export interface VodAudioSwitcherOptions {
+  handle: VjsLikeHandle
+  originalSrc: string
+  originalMime: string
+  originalSubtitles?: { sourceUrl: string; mkvSession?: MkvSubtitleSession | null } | null
+  /** Fallback remux source when remuxInputUrl is unset. */
+  sourceUrl: string
+  /** MKV: local tee URL, kept fed so it keeps demuxing subtitle cues. */
+  remuxInputUrl?: string | null
+  userAgent?: string | null
+  getKnownDurationSeconds(): number | undefined
+  tracks: VodAudioTrackOption[]
+}
+
+export interface VodAudioSwitcher {
+  source: AudioTrackSource
+  dispose(): void
+}
+
+export interface BufferedRange {
+  start: number
+  end: number
+}
+
+/** Mirrors stream.ts's catch-up buffered-range slack. */
+export function isSeekOutsideBufferedRanges(
+  targetSeconds: number,
+  ranges: BufferedRange[],
+  beforeSlackSeconds = 1,
+  afterSlackSeconds = 2,
+): boolean {
+  for (const range of ranges) {
+    if (targetSeconds >= range.start - beforeSlackSeconds && targetSeconds <= range.end + afterSlackSeconds) {
+      return false
+    }
+  }
+  return true
+}
+
+export function timeRangesToArray(ranges: TimeRanges | null | undefined): BufferedRange[] {
+  if (!ranges) return []
+  const result: BufferedRange[] = []
+  for (let i = 0; i < ranges.length; i++) result.push({ start: ranges.start(i), end: ranges.end(i) })
+  return result
+}
+
+export interface VodAudioRemuxRequest {
+  url: string
+  userAgent: string | null
+  authorization: string | null
+  audioStreamIndex: number
+  startSeconds: number
+  transcodeAudio: boolean
+}
+
+export function buildVodAudioRemuxRequest(
+  track: VodAudioTrackOption,
+  cleanUrl: string,
+  startSeconds: number,
+  userAgent: string | null,
+  authorization: string | null,
+): VodAudioRemuxRequest {
+  return {
+    url: cleanUrl,
+    userAgent,
+    authorization,
+    audioStreamIndex: track.audioStreamIndex,
+    startSeconds: Math.max(0, startSeconds),
+    transcodeAudio: shouldTranscodeVodAudio(track.codec),
+  }
+}
+
+export interface VodAudioRemuxInput {
+  cleanUrl: string
+  userAgent: string | null
+  authorization: string | null
+}
+
+/** Tee URL already has headers applied; MP4 path still needs them split. */
+export function resolveVodAudioRemuxInput(
+  remuxInputUrl: string | null | undefined,
+  sourceUrl: string,
+  resolvedUserAgent: string | null,
+): VodAudioRemuxInput {
+  if (remuxInputUrl) return { cleanUrl: remuxInputUrl, userAgent: null, authorization: null }
+  const { url: cleanUrl, authorization } = splitUrlAuth(sourceUrl)
+  return { cleanUrl, userAgent: resolvedUserAgent, authorization: authorization ?? null }
+}
+
+/** MKV reuses the tee's parsed tracks; MP4 does its own moov parse. */
+export async function discoverVodAudioTracks(
+  mkvSession: MkvSubtitleSession | null,
+  sourceUrl: string,
+  signal?: AbortSignal,
+): Promise<VodAudioTrackOption[]> {
+  try {
+    if (mkvSession) {
+      const tracks = await mkvSession.audioTracks()
+      return tracks.map((track, index) => ({
+        id: `mkv:${track.number}`,
+        audioStreamIndex: index,
+        codec: track.codec,
+        language: track.language,
+        name: track.name,
+        isDefault: track.default ?? index === 0,
+      }))
+    }
+    const tracks = await listMp4AudioTracks(sourceUrl, { signal })
+    return tracks.map((track) => ({
+      id: `mp4:${track.trackId}`,
+      audioStreamIndex: track.index,
+      codec: track.codec,
+      language: track.language,
+      name: track.name ?? null,
+      isDefault: track.index === 0,
+    }))
+  } catch (err) {
+    if (err instanceof Error && err.name !== "AbortError") {
+      log.warn("[xt:vod-audio-switch] audio track discovery failed:", err)
+    }
+    return []
+  }
+}
+
+const SEEK_SUPPRESSION_FALLBACK_MS = 1500
+
+export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAudioSwitcher {
+  const defaultTrack = options.tracks.find((track) => track.isDefault) ?? options.tracks[0] ?? null
+  const tracksById = new Map(options.tracks.map((track) => [track.id, track]))
+  const defaultTrackId = defaultTrack?.id ?? null
+
+  let activeTrackId = defaultTrackId
+  let activeSessionId: string | null = null
+  let disposed = false
+  // Guards against stale async resolutions after a newer switch.
+  let generation = 0
+  let seekingEl: HTMLVideoElement | null = null
+  let seekingHandler: (() => void) | null = null
+  let suppressNextSeek = false
+  let suppressExpiryMs = 0
+  const listeners = new Set<() => void>()
+
+  function bumpGeneration(): number {
+    generation += 1
+    return generation
+  }
+
+  function notify(): void {
+    for (const listener of listeners) listener()
+  }
+
+  function currentPlayheadSeconds(): number {
+    return options.handle.currentTime?.() || 0
+  }
+
+  // Ignores the remount's own seek; times out so real seeks aren't lost.
+  function armProgrammaticSeekSuppression(): void {
+    suppressNextSeek = true
+    suppressExpiryMs = Date.now() + SEEK_SUPPRESSION_FALLBACK_MS
+  }
+
+  function detachSeekInterceptor(): void {
+    if (seekingEl && seekingHandler) seekingEl.removeEventListener("seeking", seekingHandler)
+    seekingEl = null
+    seekingHandler = null
+  }
+
+  function attachSeekInterceptor(): void {
+    detachSeekInterceptor()
+    const mediaEl = options.handle.getMediaElement?.()
+    if (!mediaEl) return
+    seekingHandler = () => {
+      if (disposed || !activeSessionId) return
+      if (suppressNextSeek) {
+        suppressNextSeek = false
+        if (Date.now() <= suppressExpiryMs) return
+      }
+      const targetSeconds = mediaEl.currentTime
+      if (!isSeekOutsideBufferedRanges(targetSeconds, timeRangesToArray(mediaEl.buffered))) return
+      void switchToRemux(activeTrackId, targetSeconds)
+    }
+    seekingEl = mediaEl
+    mediaEl.addEventListener("seeking", seekingHandler)
+  }
+
+  function playQuietly(): void {
+    const playResult = options.handle.play()
+    if (playResult && typeof (playResult as Promise<unknown>).catch === "function") {
+      (playResult as Promise<unknown>).catch(() => {})
+    }
+  }
+
+  function remountOriginal(capturedTimeSeconds: number, sessionToStop: string | null): void {
+    bumpGeneration()
+    activeSessionId = null
+    activeTrackId = defaultTrackId
+    detachSeekInterceptor()
+    options.handle.src({
+      src: options.originalSrc,
+      type: options.originalMime,
+      isLive: false,
+      durationSeconds: options.getKnownDurationSeconds(),
+      subtitles: options.originalSubtitles ?? null,
+      audio: sourceHandle,
+    })
+    // No further fallback if this remount also errors.
+    options.handle.one?.("error", () => {
+      log.warn("[xt:vod-audio-switch] fallback remount to the original audio also failed, giving up")
+    })
+    if (capturedTimeSeconds > 0.5) {
+      options.handle.one?.("loadedmetadata", () => {
+        try { options.handle.currentTime?.(capturedTimeSeconds) } catch {}
+      })
+    }
+    playQuietly()
+    if (sessionToStop) void stopVodAudioRemux(sessionToStop)
+  }
+
+  async function switchToRemux(trackId: string | null, startSeconds: number): Promise<void> {
+    const track = trackId ? tracksById.get(trackId) : null
+    if (!track) return
+    const myGeneration = bumpGeneration()
+    const previousTrackId = activeTrackId
+    activeTrackId = track.id
+    notify()
+    const resolvedUserAgent = options.userAgent ?? getUserAgent() ?? null
+    const { cleanUrl, userAgent, authorization } = resolveVodAudioRemuxInput(
+      options.remuxInputUrl,
+      options.sourceUrl,
+      resolvedUserAgent,
+    )
+    const request = buildVodAudioRemuxRequest(track, cleanUrl, startSeconds, userAgent, authorization)
+    const session = await startVodAudioRemux(request)
+    if (myGeneration !== generation) {
+      // Superseded while the register was in flight.
+      if (session) void stopVodAudioRemux(session.sessionId)
+      return
+    }
+    if (!session) {
+      log.warn("[xt:vod-audio-switch] register_vod_audio_remux failed, staying on the current mount")
+      activeTrackId = previousTrackId
+      notify()
+      return
+    }
+    activeSessionId = session.sessionId
+    armProgrammaticSeekSuppression()
+    options.handle.src({
+      src: session.playbackUrl,
+      type: "video/mp2t",
+      isLive: false,
+      durationSeconds: options.getKnownDurationSeconds(),
+      timelineOffsetSeconds: startSeconds,
+      subtitles: options.originalSubtitles ?? null,
+      audio: sourceHandle,
+    })
+    attachSeekInterceptor()
+    playQuietly()
+  }
+
+  const unsubscribeError = onVodAudioError((payload) => {
+    if (disposed || payload.sessionId !== activeSessionId) return
+    log.warn(
+      "[xt:vod-audio-switch] remux session failed mid-play, falling back to the original audio:",
+      payload.detail,
+    )
+    const capturedTimeSeconds = currentPlayheadSeconds()
+    // Server already tore the failed session down; nothing left to stop.
+    remountOriginal(capturedTimeSeconds, null)
+    notify()
+    toastError(t("player.audio.switchFailed"))
+  })
+
+  function disposeAll(): void {
+    if (disposed) return
+    disposed = true
+    bumpGeneration()
+    detachSeekInterceptor()
+    unsubscribeError()
+    if (activeSessionId) {
+      const sessionId = activeSessionId
+      activeSessionId = null
+      void stopVodAudioRemux(sessionId)
+    }
+    listeners.clear()
+  }
+
+  const sourceHandle: AudioTrackSource = {
+    list() {
+      return labelAudioTracks(
+        options.tracks.map((track) => ({
+          id: track.id,
+          name: track.name ?? null,
+          language: track.language ?? null,
+          active: track.id === activeTrackId,
+        })),
+      )
+    },
+    select(id) {
+      if (disposed || id === activeTrackId) return
+      if (id === defaultTrackId) {
+        const capturedTimeSeconds = currentPlayheadSeconds()
+        const sessionToStop = activeSessionId
+        remountOriginal(capturedTimeSeconds, sessionToStop)
+        notify()
+        return
+      }
+      void switchToRemux(id, currentPlayheadSeconds())
+    },
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    dispose: disposeAll,
+  }
+
+  return { source: sourceHandle, dispose: disposeAll }
+}

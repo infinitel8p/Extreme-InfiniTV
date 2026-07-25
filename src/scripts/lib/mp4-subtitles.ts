@@ -4,6 +4,7 @@ import * as MP4Box from "mp4box"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { getActiveLocale } from "@/scripts/lib/i18n.js"
 import { log, redactUrl } from "@/scripts/lib/log.js"
+import { combineLanguageAndName } from "@/scripts/lib/audio-tracks.js"
 
 export interface SubtitleCue {
   startSeconds: number
@@ -16,6 +17,15 @@ export interface Mp4TextTrackInfo {
   language: string
   label: string
   sampleCount: number
+}
+
+export interface Mp4AudioTrackInfo {
+  trackId: number
+  /** Audio-only index; maps to ffmpeg's `-map 0:a:<index>`. */
+  index: number
+  language: string
+  name?: string | null
+  codec: string
 }
 
 export interface Mp4SubtitleSession {
@@ -209,6 +219,33 @@ function parseTracksFromMoov(
   return { mp4boxFile, movie }
 }
 
+interface ParsedMp4Tracks {
+  mp4boxFile: MP4Box.ISOFile
+  movie: MP4Box.Movie
+}
+
+// Shared cache for subtitle + audio probes on the same file; FIFO-capped.
+const PARSED_TRACKS_CACHE_MAX_ENTRIES = 4
+const parsedTracksCache = new Map<string, Promise<ParsedMp4Tracks | null>>()
+
+async function parseMp4TracksCached(url: string, signal?: AbortSignal): Promise<ParsedMp4Tracks | null> {
+  const cached = parsedTracksCache.get(url)
+  if (cached) return cached
+  const parsePromise = (async () => {
+    const moovLocation = await locateMoov(url, signal)
+    if (!moovLocation) return null
+    return parseTracksFromMoov(moovLocation.headBuffer, moovLocation.moovBytes, moovLocation.moovOffset)
+  })()
+  if (parsedTracksCache.size >= PARSED_TRACKS_CACHE_MAX_ENTRIES) {
+    const oldestUrl = parsedTracksCache.keys().next().value
+    if (oldestUrl !== undefined) parsedTracksCache.delete(oldestUrl)
+  }
+  parsedTracksCache.set(url, parsePromise)
+  const parsed = await parsePromise
+  if (!parsed) parsedTracksCache.delete(url)
+  return parsed
+}
+
 function textTracksFromMovie(movie: MP4Box.Movie): RawTextTrack[] {
   return movie.tracks
     .filter((track) => {
@@ -218,8 +255,19 @@ function textTracksFromMovie(movie: MP4Box.Movie): RawTextTrack[] {
     .map((track) => ({ trackId: track.id, language: track.language, sampleCount: track.nb_samples }))
 }
 
-function languageLabelFor(languageCode: string, displayNames: Intl.DisplayNames | null): string {
-  if (!languageCode || languageCode === "und") return "Unknown"
+function audioTracksFromMovie(movie: MP4Box.Movie): Mp4AudioTrackInfo[] {
+  return movie.tracks
+    .filter((track) => (track.type as string | undefined) === "audio")
+    .map((track, index) => ({
+      trackId: track.id,
+      index,
+      language: track.language,
+      codec: track.codec,
+    }))
+}
+
+function languageLabelFor(languageCode: string, displayNames: Intl.DisplayNames | null): string | null {
+  if (!languageCode || languageCode === "und") return null
   if (!displayNames) return languageCode
   try {
     return displayNames.of(languageCode) || languageCode
@@ -228,7 +276,7 @@ function languageLabelFor(languageCode: string, displayNames: Intl.DisplayNames 
   }
 }
 
-/** ISO 639-2 codes to display names; duplicate labels get " 2", " 3" suffixes. */
+/** Falls back to "Unknown"; duplicate labels get " 2", " 3" suffixes. */
 export function buildTrackLabels(rawTracks: RawTextTrack[], locale: string): Mp4TextTrackInfo[] {
   let displayNames: Intl.DisplayNames | null = null
   try {
@@ -239,9 +287,9 @@ export function buildTrackLabels(rawTracks: RawTextTrack[], locale: string): Mp4
   const seenLabelCounts = new Map<string, number>()
   return rawTracks.map((rawTrack) => {
     const languageCode = (rawTrack.language || "").trim().toLowerCase()
-    const languageLabel = languageLabelFor(languageCode, displayNames)
+    const languageDisplay = languageLabelFor(languageCode, displayNames)
     const trackName = rawTrack.name?.trim()
-    const baseLabel = trackName ? `${languageLabel} (${trackName})` : languageLabel
+    const baseLabel = combineLanguageAndName(languageDisplay, trackName) || "Unknown"
     const occurrence = (seenLabelCounts.get(baseLabel) || 0) + 1
     seenLabelCounts.set(baseLabel, occurrence)
     return {
@@ -404,9 +452,7 @@ export async function openMp4SubtitleSession(
 ): Promise<Mp4SubtitleSession | null> {
   if (!isMp4SubtitleCapableUrl(url)) return null
   try {
-    const moovLocation = await locateMoov(url, opts.signal)
-    if (!moovLocation) return null
-    const parsed = parseTracksFromMoov(moovLocation.headBuffer, moovLocation.moovBytes, moovLocation.moovOffset)
+    const parsed = await parseMp4TracksCached(url, opts.signal)
     if (!parsed) return null
     const rawTextTracks = textTracksFromMovie(parsed.movie)
     if (rawTextTracks.length === 0) {
@@ -422,5 +468,22 @@ export async function openMp4SubtitleSession(
     if (error instanceof Error && error.name === "AbortError") throw error
     log.warn("[xt:mp4-subtitles] failed to open subtitle session:", error)
     return null
+  }
+}
+
+/** Shares its moov parse with openMp4SubtitleSession. */
+export async function listMp4AudioTracks(
+  url: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<Mp4AudioTrackInfo[]> {
+  if (!isMp4SubtitleCapableUrl(url)) return []
+  try {
+    const parsed = await parseMp4TracksCached(url, opts.signal)
+    if (!parsed) return []
+    return audioTracksFromMovie(parsed.movie)
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error
+    log.warn("[xt:mp4-subtitles] failed to list audio tracks:", error)
+    return []
   }
 }
