@@ -1,7 +1,7 @@
 {
   "productName": "Extreme InfiniTV",
   "mainBinaryName": "extreme-infinitv",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "identifier": "com.infinitel8p.xtream",
   "build": {
     "frontendDist": "../dist",
