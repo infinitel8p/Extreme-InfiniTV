@@ -3,14 +3,14 @@
   "pinnedAt": "2026-07-25",
   "sidecarBuild": {
     "ffmpegVersion": "7.1.5",
-    "builtAt": "2026-07-25T10:31:31Z",
-    "workflowCommit": "c9352f11b75ca8f9762a6ef6711d61517a30f4f3"
+    "builtAt": "2026-07-25T19:27:52Z",
+    "workflowCommit": "142cf4990d968ed62dfcdb5e123347a943cbc8fe"
   },
   "sha256": {
-    "BUILD-INFO-linux.txt": "135b9b2516e5ee09facccc09363c60b46fb4769d4259cdbfc2de75224448deac",
-    "BUILD-INFO-windows.txt": "aa6d68dcf96f8919ab1039fd078a0d4cf67f79ea91537498d1be14b5db1bfcbb",
+    "BUILD-INFO-linux.txt": "313bed610362d1f8b49282babfc3c92e4dd5d1a63a6e2205d02082ab1bf6adf5",
+    "BUILD-INFO-windows.txt": "f4fc96aea3a7edeacb8d6ca4c27d51db905ec1f5bb77dfc71d21065e3b9aa3e7",
     "COPYING.LGPLv2.1": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30",
-    "ffmpeg-x86_64-pc-windows-msvc.exe": "7af4339b5beb5c3070fcd84fc2f514646b427fc7b6900796c448994dafed5492",
+    "ffmpeg-x86_64-pc-windows-msvc.exe": "e577a47f85c11b98e0394ede49128fa0f8a431c1b36af6d7129ebe9595132ac0",
     "ffmpeg-x86_64-unknown-linux-gnu": "83e174d7b15a0c82071da5bcca6e12fe96549a675d29595a48288fb27744b09d"
   }
 }
