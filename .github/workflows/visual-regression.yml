@@ -1,11 +1,22 @@
-# Baselines are Linux-rendered; bootstrap once via "update-baselines" workflow_dispatch,
-# download the "visual-baselines" artifact, and commit its *-linux.png files under
-# tests/visual/visual.spec.ts-snapshots/. Every PR's "compare" job then diffs against those.
+# Baselines are Linux-rendered *-linux.png files under tests/visual/visual.spec.ts-snapshots/.
+# "compare" diffs every PR against them. "update-baselines" regenerates and commits them on
+# every push to main (a merge defines the new correct look) and via manual dispatch; the
+# baseline commit itself is skipped from retriggering via the paths filter.
 # Local Windows/macOS runs make gitignored *-win32.png/*-darwin.png instead.
 name: visual-regression
 
 on:
   pull_request:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "public/**"
+      - "tests/visual/**"
+      - "!tests/visual/*-snapshots/**"
+      - "playwright.config.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
   workflow_dispatch:
 
 permissions:
@@ -42,8 +53,10 @@ jobs:
             test-results/
 
   update-baselines:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
@@ -67,3 +80,16 @@ jobs:
         with:
           name: visual-baselines
           path: tests/visual/visual.spec.ts-snapshots/
+
+      - name: Commit updated baselines
+        if: github.event_name == 'push'
+        run: |
+          if git status --porcelain tests/visual | grep -q .; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add tests/visual
+            git commit -m "chore: update visual regression baselines"
+            git push
+          else
+            echo "Baselines unchanged, nothing to commit."
+          fi
