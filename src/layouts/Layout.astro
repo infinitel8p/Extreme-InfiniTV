@@ -254,6 +254,7 @@ const documentTitle = pageTitle
               <path
                 id="xt-app-splash-arc"
                 class="xt-app-splash__base xt-app-splash__base--arc"
+                pathLength="100"
                 d="M65.6 70.2 A50 50 0 1 1 20.2 115.6"
               />
               <circle class="xt-app-splash__base xt-app-splash__base--fill" cx="34.6" cy="84.6" r="9" />
@@ -437,8 +438,9 @@ const documentTitle = pageTitle
     fill: none;
     stroke: var(--color-accent);
     stroke-width: 20;
-    stroke-dasharray: 100;
-    stroke-dashoffset: 100;
+    /* Endpoints must sit inside the gap; a boundary on one renders round-cap dots. */
+    stroke-dasharray: 100 102;
+    stroke-dashoffset: 101;
   }
   .xt-app-splash__base--ring {
     fill: none;
@@ -447,6 +449,32 @@ const documentTitle = pageTitle
   }
   .xt-app-splash__base--fill {
     fill: var(--color-accent);
+  }
+  /* Left-to-right build paced with the launch chime: dot > arc > ring > bars. */
+  .xt-app-splash__mark circle.xt-app-splash__base--fill {
+    animation: xt-app-splash-el-in 400ms cubic-bezier(0.16, 1, 0.3, 1) 150ms backwards;
+  }
+  .xt-app-splash__base--ring {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: xt-app-splash-ring-in 700ms cubic-bezier(0.16, 1, 0.3, 1) 1100ms backwards;
+  }
+  .xt-app-splash__mark rect {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: xt-app-splash-bar-in 260ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  }
+  .xt-app-splash__mark rect:nth-of-type(1) { animation-delay: 1850ms; }
+  .xt-app-splash__mark rect:nth-of-type(2) { animation-delay: 1940ms; }
+  .xt-app-splash__mark rect:nth-of-type(3) { animation-delay: 2030ms; }
+  @keyframes xt-app-splash-el-in {
+    from { opacity: 0; }
+  }
+  @keyframes xt-app-splash-ring-in {
+    from { opacity: 0; transform: scale(0.92); }
+  }
+  @keyframes xt-app-splash-bar-in {
+    from { opacity: 0; transform: scaleY(0.25); }
   }
   @media (prefers-reduced-motion: reduce) {
     .xt-app-splash__base--arc {
@@ -461,7 +489,7 @@ const documentTitle = pageTitle
     height: 100%;
     pointer-events: none;
     z-index: 2;
-    animation: xt-app-splash-comet-in 320ms ease-out 800ms backwards;
+    animation: xt-app-splash-comet-in 320ms ease-out 2100ms backwards;
   }
   @keyframes xt-app-splash-comet-in {
     from { opacity: 0; }
@@ -473,7 +501,7 @@ const documentTitle = pageTitle
     letter-spacing: -0.02em;
     display: inline-flex;
     align-items: baseline;
-    animation: xt-app-splash-word-in 480ms cubic-bezier(0.16, 1, 0.3, 1) 980ms backwards;
+    animation: xt-app-splash-word-in 480ms cubic-bezier(0.16, 1, 0.3, 1) 2200ms backwards;
   }
   .xt-app-splash__wordmark-1 {
     font-weight: 500;
@@ -500,7 +528,10 @@ const documentTitle = pageTitle
     background: var(--color-bg);
   }
   :root[data-perf-mode="on"] .xt-app-splash__svg,
-  :root[data-perf-mode="on"] .xt-app-splash__wordmark {
+  :root[data-perf-mode="on"] .xt-app-splash__wordmark,
+  :root[data-perf-mode="on"] .xt-app-splash__mark circle.xt-app-splash__base--fill,
+  :root[data-perf-mode="on"] .xt-app-splash__base--ring,
+  :root[data-perf-mode="on"] .xt-app-splash__mark rect {
     animation: none;
   }
   :root[data-perf-mode="on"] .xt-app-splash__base--arc {
@@ -520,8 +551,10 @@ const documentTitle = pageTitle
   import { setupSplashBackdrop } from "@/scripts/lib/splash-backdrop"
   import { setupSplashComet } from "@/scripts/lib/splash-comet"
   import { initWhatsNew } from "@/scripts/lib/whats-new"
+  import { initUiSounds } from "@/scripts/lib/ui-sounds"
   initI18n()
   initConnectivity()
+  initUiSounds()
 
   ;(function dismissSplash() {
     // ?splash-hold forces the splash and keeps it up for visual review
@@ -534,14 +567,12 @@ const documentTitle = pageTitle
     const backdropCleanup = setupSplashBackdrop(splash)
     const cometCleanup = setupSplashComet(splash)
 
+    // pathLength="100" matches the CSS dash values, so the arc is hidden
+    // from first paint; measuring the real length here flashed a segment.
     const infinityPath = splash.querySelector(
       "#xt-app-splash-arc"
     ) as SVGPathElement | null
-    let pathLen = 0
     if (infinityPath) {
-      try { pathLen = infinityPath.getTotalLength() } catch {}
-    }
-    if (infinityPath && pathLen > 0) {
       const reduce =
         window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
         document.documentElement.getAttribute("data-perf-mode") === "on"
@@ -549,13 +580,11 @@ const documentTitle = pageTitle
         infinityPath.style.strokeDasharray = "none"
         infinityPath.style.strokeDashoffset = "0"
       } else {
-        infinityPath.style.strokeDasharray = `${pathLen}`
-        infinityPath.style.strokeDashoffset = `${pathLen}`
         infinityPath.animate(
-          [{ strokeDashoffset: `${pathLen}` }, { strokeDashoffset: "0" }],
+          [{ strokeDashoffset: "101" }, { strokeDashoffset: "0" }],
           {
-            duration: 800,
-            delay: 200,
+            duration: 2250,
+            delay: 250,
             easing: "cubic-bezier(0.16, 1, 0.3, 1)",
             fill: "forwards",
           }
@@ -565,7 +594,7 @@ const documentTitle = pageTitle
 
     if (holdSplash) return
 
-    const MIN_DISPLAY_MS = 3000
+    const MIN_DISPLAY_MS = 3500
     const start = performance.now()
     const remove = () => {
       cometCleanup()

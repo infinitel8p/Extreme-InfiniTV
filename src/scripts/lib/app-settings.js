@@ -25,6 +25,7 @@ const KEY_ANDROID_REMEMBERED_PLAYER = "xt_android_remembered_player"
 const KEY_VIDEO_SCALE = "xt_video_scale"
 const KEY_UPDATE_CHANNEL = "xt_update_channel"
 const KEY_AUTO_UPDATE = "xt_auto_update"
+const KEY_UI_SOUNDS = "xt_ui_sounds"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -753,6 +754,28 @@ export function setUpdateChannel(channel) {
   writeLS(KEY_UPDATE_CHANNEL, next)
   document.dispatchEvent(
     new CustomEvent(UPDATE_CHANNEL_EVENT, { detail: { value: next } })
+  )
+}
+
+export const UI_SOUNDS_EVENT = "xt:ui-sounds-changed"
+
+/** UI sounds: default on; untouched setting stays quiet for reduced-motion users. */
+export function getUiSoundsEnabled() {
+  const raw = readLS(KEY_UI_SOUNDS, "")
+  if (raw === "1") return true
+  if (raw === "0") return false
+  try {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return false
+  } catch {
+    /* no matchMedia in SSR */
+  }
+  return true
+}
+
+export function setUiSoundsEnabled(enabled) {
+  writeLS(KEY_UI_SOUNDS, enabled ? "1" : "0")
+  document.dispatchEvent(
+    new CustomEvent(UI_SOUNDS_EVENT, { detail: { value: !!enabled } })
   )
 }
 

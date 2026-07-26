@@ -30,6 +30,7 @@ import {
   IconInfoCircle,
   IconSparkles,
   IconBolt,
+  IconVolume2,
   IconPlayerPlay,
   IconBook,
   IconRocket,
@@ -61,6 +62,7 @@ const navStructure: NavSection[] = [
     { id: "card-language",          labelKey: "settings.section.language",     label: "Language" },
     { id: "card-display",           labelKey: "settings.section.display",      label: "Display" },
     { id: "card-perf-mode",         labelKey: "settings.perfMode.title",       label: "Performance mode" },
+    { id: "card-ui-sounds",         labelKey: "settings.uiSounds.title",       label: "Interface sounds" },
     { id: "card-tv-overscan",       labelKey: "settings.tvOverscan.title",     label: "TV safe area" },
     { id: "card-hub-strips",        labelKey: "settings.hubStrips.title",      label: "Home page sections" },
     { id: "close-behavior-section", labelKey: "settings.closeBehavior.title",  label: "Close button behavior" },
@@ -432,6 +434,50 @@ const navStructure: NavSection[] = [
                 for (var pIdx = 0; pIdx < perfBtns.length; pIdx++) {
                   var perfBtnOn = perfBtns[pIdx].getAttribute("data-perf") === "on";
                   perfBtns[pIdx].setAttribute("aria-pressed", perfBtnOn === perfOn ? "true" : "false");
+                }
+              }
+            } catch (e) {}
+          </script>
+        </article>
+
+        <!-- Interface sounds: launch chime + D-pad navigation ticks -->
+        <article id="card-ui-sounds" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
+          <div class="flex items-start gap-3">
+            <span class="icon-mark">
+              <IconVolume2 aria-hidden="true" stroke={2} />
+            </span>
+            <div class="flex flex-col gap-1 min-w-0">
+              <h3 data-i18n="settings.uiSounds.title" class="text-base font-semibold">Interface sounds</h3>
+              <p data-i18n="settings.uiSounds.helperLong" class="text-xs text-fg-3">
+                A soft chime when the app starts and gentle ticks when moving around with a remote or keyboard. Mouse and touch stay silent.
+              </p>
+            </div>
+          </div>
+          <div class="flex flex-col gap-2">
+            <span data-i18n="settings.uiSounds.label" class="text-eyebrow font-medium uppercase text-fg-3">Interface sounds</span>
+            <div
+              id="settings-ui-sounds"
+              class="grid grid-cols-2 gap-2"
+              role="radiogroup"
+              aria-label="Interface sounds"
+              data-i18n-attr="aria-label:settings.uiSounds.label">
+              <button type="button" data-sounds="on"  aria-pressed="false" data-i18n="settings.uiSounds.on"  class="ui-sounds-btn btn">On</button>
+              <button type="button" data-sounds="off" aria-pressed="false" data-i18n="settings.uiSounds.off" class="ui-sounds-btn btn">Off</button>
+            </div>
+          </div>
+          <script is:inline>
+            try {
+              var uiSoundsRaw = localStorage.getItem("xt_ui_sounds");
+              var uiSoundsOn =
+                uiSoundsRaw === "1" ||
+                (uiSoundsRaw !== "0" &&
+                  !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+              var uiSoundsGroup = document.getElementById("settings-ui-sounds");
+              if (uiSoundsGroup) {
+                var uiSoundsBtns = uiSoundsGroup.querySelectorAll(".ui-sounds-btn");
+                for (var sIdx = 0; sIdx < uiSoundsBtns.length; sIdx++) {
+                  var uiSoundsBtnOn = uiSoundsBtns[sIdx].getAttribute("data-sounds") === "on";
+                  uiSoundsBtns[sIdx].setAttribute("aria-pressed", uiSoundsBtnOn === uiSoundsOn ? "true" : "false");
                 }
               }
             } catch (e) {}
@@ -1405,6 +1451,8 @@ const navStructure: NavSection[] = [
       setDownloadConcurrency,
       getPerfMode,
       setPerfMode,
+      getUiSoundsEnabled,
+      setUiSoundsEnabled,
       getAccent,
       setAccent,
       getProgressRetentionDays,
@@ -1420,6 +1468,7 @@ const navStructure: NavSection[] = [
       getFfmpegPath,
       setFfmpegPath,
     } from "@/scripts/lib/app-settings.js"
+    import { playUiSound } from "@/scripts/lib/ui-sounds.ts"
     import { audioTranscodeStatus } from "@/scripts/lib/audio-proxy.ts"
     import {
       ensureUserInfo,
@@ -2333,6 +2382,28 @@ const navStructure: NavSection[] = [
       syncPerfModeButtons()
     })
     syncPerfModeButtons()
+
+    // ---------------------------------------------------------------------
+    // Interface sounds
+    // ---------------------------------------------------------------------
+    const uiSoundsGroup = document.getElementById("settings-ui-sounds")
+    function syncUiSoundsButtons() {
+      const current = getUiSoundsEnabled()
+      for (const btn of uiSoundsGroup?.querySelectorAll(".ui-sounds-btn") || []) {
+        const isOn = btn.dataset.sounds === "on"
+        btn.setAttribute("aria-pressed", String(isOn === current))
+      }
+    }
+    uiSoundsGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".ui-sounds-btn")
+      if (!btn) return
+      const next = btn.dataset.sounds === "on"
+      setUiSoundsEnabled(next)
+      syncUiSoundsButtons()
+      if (next) void playUiSound("confirm")
+    })
+    syncUiSoundsButtons()
 
     // ---------------------------------------------------------------------
     // Audio transcode auto-fix: desktop-only section (visible whether or not
