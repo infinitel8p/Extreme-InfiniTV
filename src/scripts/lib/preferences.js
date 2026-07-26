@@ -2,7 +2,6 @@
 // preferences (hidden categories, sort order), persisted alongside creds.
 import { Store } from "@tauri-apps/plugin-store"
 import { getProgressRetentionDays } from "@/scripts/lib/app-settings.js"
-import { playUiSound } from "@/scripts/lib/ui-sounds.ts"
 import { normalizeVideoScale, VIDEO_SCALE_MODES } from "@/scripts/lib/video-scale.ts"
 import { log } from "@/scripts/lib/log.js"
 
@@ -438,7 +437,6 @@ export function toggleFavorite(playlistId, kind, id, extras) {
   }
   scheduleSave()
   dispatch(EVT_FAV_CHANGED, { playlistId, kind, id, isFav })
-  if (isFav) void playUiSound("confirm")
   return isFav
 }
 

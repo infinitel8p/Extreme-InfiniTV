@@ -271,6 +271,7 @@ fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<
         if !direct_exec && Path::new(path).extension().and_then(|s| s.to_str()) == Some("app") {
             let mut cmd = Command::new("/usr/bin/open");
             if is_macos_app_running(path) {
+                // A running instance only accepts open-document events: URL only, no option args.
                 cmd.arg("-a").arg(path);
                 if let Some(url) = args.last() {
                     cmd.arg(url);
@@ -836,7 +837,8 @@ async fn launch_mode(
         };
         let augmented = augment_vlc_args(args.clone());
         let path_for_spawn = path.clone();
-        // macOS reuse relies on `open -a` routing to the running instance.
+        // macOS reuse rides `open -a`: the pid is `open`'s, so the slot dies and
+        // `reused` reports false there. Raw binary paths get a fresh instance per launch.
         let direct_exec = cfg!(not(target_os = "macos"));
         let (spawned_pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
             spawn_launch_inner(&path_for_spawn, &augmented, direct_exec)

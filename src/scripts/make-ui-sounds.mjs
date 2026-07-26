@@ -1,5 +1,5 @@
-// Synthesizes the UI sound assets in public/sounds/
-// Run: node ./src/scripts/make-ui-sounds.mjs
+// Synthesizes ui-nav / ui-select / ui-confirm in public/sounds/ (ui-launch.wav
+// is a recording, see the README there). Run: node ./src/scripts/make-ui-sounds.mjs
 
 import { mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"

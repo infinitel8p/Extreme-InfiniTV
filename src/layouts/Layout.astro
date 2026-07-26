@@ -523,6 +523,19 @@ const documentTitle = pageTitle
     to   { opacity: 1; transform: translateY(0); letter-spacing: -0.02em; }
   }
 
+  /* Must follow the animation rules it overrides (same specificity); the
+     global reduce rule zeroes durations but not delays. */
+  @media (prefers-reduced-motion: reduce) {
+    .xt-app-splash__svg,
+    .xt-app-splash__wordmark,
+    .xt-app-splash__comet,
+    .xt-app-splash__mark circle.xt-app-splash__base--fill,
+    .xt-app-splash__base--ring,
+    .xt-app-splash__mark rect {
+      animation: none;
+    }
+  }
+
   :root[data-perf-mode="on"] #xt-app-splash {
     transition: none;
     background: var(--color-bg);
