@@ -442,8 +442,16 @@ fn augment_mpv_args(mut args: Vec<String>, endpoint: &str) -> Vec<String> {
     args
 }
 
-fn augment_vlc_args(mut args: Vec<String>) -> Vec<String> {
+fn augment_vlc_args(args: Vec<String>) -> Vec<String> {
+    augment_vlc_args_inner(args, cfg!(target_os = "macos"))
+}
+
+// macOS VLC has no --one-instance (Qt/Win32-only) and exits on unknown options.
+fn augment_vlc_args_inner(mut args: Vec<String>, is_macos: bool) -> Vec<String> {
     args.retain(|arg| arg != "--play-and-exit");
+    if is_macos {
+        return args;
+    }
     let src = args.pop();
     args.push("--one-instance".to_string());
     args.push("--no-playlist-enqueue".to_string());
@@ -828,8 +836,10 @@ async fn launch_mode(
         };
         let augmented = augment_vlc_args(args.clone());
         let path_for_spawn = path.clone();
+        // macOS reuse relies on `open -a` routing to the running instance.
+        let direct_exec = cfg!(not(target_os = "macos"));
         let (spawned_pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
-            spawn_launch_inner(&path_for_spawn, &augmented, true)
+            spawn_launch_inner(&path_for_spawn, &augmented, direct_exec)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
@@ -913,11 +923,26 @@ mod tests {
             "--play-and-exit".to_string(),
             "https://example.com/stream.m3u8".to_string(),
         ];
-        let out = augment_vlc_args(args);
+        let out = augment_vlc_args_inner(args, false);
         assert!(!out.iter().any(|arg| arg == "--play-and-exit"));
         assert!(out.contains(&"--no-qt-error-dialogs".to_string()));
         assert!(out.contains(&"--one-instance".to_string()));
         assert!(out.contains(&"--no-playlist-enqueue".to_string()));
+        assert_eq!(out.last().unwrap(), "https://example.com/stream.m3u8");
+    }
+
+    #[test]
+    fn augment_vlc_on_macos_never_adds_one_instance_flags() {
+        let args = vec![
+            "--no-fullscreen".to_string(),
+            "--play-and-exit".to_string(),
+            "https://example.com/stream.m3u8".to_string(),
+        ];
+        let out = augment_vlc_args_inner(args, true);
+        assert!(!out.iter().any(|arg| arg == "--play-and-exit"));
+        assert!(!out.iter().any(|arg| arg == "--one-instance"));
+        assert!(!out.iter().any(|arg| arg == "--no-playlist-enqueue"));
+        assert!(out.contains(&"--no-fullscreen".to_string()));
         assert_eq!(out.last().unwrap(), "https://example.com/stream.m3u8");
     }
 
