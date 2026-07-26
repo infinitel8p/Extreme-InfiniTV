@@ -1,6 +1,7 @@
 // Desktop ffmpeg VOD audio-remux proxy client: one session at a time.
 
 import { log } from "@/scripts/lib/log.js"
+import { getFfmpegPath, SETTINGS_EVENT } from "@/scripts/lib/app-settings.js"
 
 export interface VodAudioRemuxOptions {
   url: string
@@ -36,7 +37,9 @@ let activeSessionId: string | null = null
 async function probeAvailability(): Promise<boolean> {
   try {
     const { invoke } = await import("@tauri-apps/api/core")
-    return !!(await invoke("vod_audio_remux_available"))
+    return !!(await invoke("vod_audio_remux_available", {
+      ffmpegPath: getFfmpegPath() || null,
+    }))
   } catch (err) {
     log.warn("[xt:vod-audio-proxy] availability check failed:", err)
     return false
@@ -47,6 +50,13 @@ export async function vodAudioRemuxAvailable(): Promise<boolean> {
   if (!vodAudioRemuxPlatformAvailable) return false
   if (!cachedAvailability) cachedAvailability = probeAvailability()
   return cachedAvailability
+}
+
+if (vodAudioRemuxPlatformAvailable && typeof document !== "undefined") {
+  document.addEventListener(SETTINGS_EVENT, (event: Event) => {
+    const detail = (event as CustomEvent)?.detail
+    if (detail?.key === "ffmpegPath") cachedAvailability = null
+  })
 }
 
 export async function startVodAudioRemux(
@@ -62,6 +72,7 @@ export async function startVodAudioRemux(
       audioStreamIndex: options.audioStreamIndex,
       startSeconds: options.startSeconds,
       transcodeAudio: options.transcodeAudio,
+      ffmpegPath: getFfmpegPath() || null,
     })) as { sessionId?: string; playbackUrl?: string }
     if (!result?.sessionId || !result?.playbackUrl) {
       throw new Error("register_vod_audio_remux returned an unexpected shape")

@@ -119,10 +119,8 @@ function shakaChannelSuffix(channelsCount: number | null | undefined): string {
   return ""
 }
 
-// Shaka clears forward buffer when changing audio. Retain roughly two common
-// four-second segments so the replacement audio can arrive without starving
-// playback; Shaka itself warns that a zero safe margin can cause hiccups.
-const SHAKA_AUDIO_SWITCH_SAFE_MARGIN_SECONDS = 8
+// Zero safe margin can cause a rebuffer hiccup (Shaka docs).
+const SHAKA_AUDIO_SWITCH_SAFE_MARGIN_SECONDS = 4
 
 export function createShakaAudioSource(player: any): AudioTrackSource {
   const listeners = new Set<() => void>()

@@ -201,7 +201,7 @@ describe("createShakaAudioSource", () => {
 
     source.select("b")
 
-    expect(player.selectAudioTrack).toHaveBeenCalledWith(tracks[1], 8)
+    expect(player.selectAudioTrack).toHaveBeenCalledWith(tracks[1], 4)
   })
 
   it("retains the same safe margin with Shaka's legacy variant API", () => {
@@ -222,7 +222,7 @@ describe("createShakaAudioSource", () => {
     source.select("b")
 
     expect(player.selectAudioLanguage).toHaveBeenCalledWith("it", undefined)
-    expect(player.selectVariantTrack).toHaveBeenCalledWith(variants[1], true, 8)
+    expect(player.selectVariantTrack).toHaveBeenCalledWith(variants[1], true, 4)
   })
 
   it("suppresses notify for an event whose track list signature is unchanged (video-only adaptation)", () => {

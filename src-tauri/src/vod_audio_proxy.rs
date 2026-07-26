@@ -17,6 +17,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::{Child, Command as TokioCommand};
 use tokio::sync::{mpsc, oneshot, Notify};
 
+use crate::external_player;
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -27,7 +29,7 @@ const OUTPUT_CHANNEL_CAPACITY: usize = 256;
 const STDERR_RING_CAPACITY: usize = 10;
 const STARTUP_SILENCE_TIMEOUT: Duration = Duration::from_secs(10);
 const STDOUT_STALL_TIMEOUT: Duration = Duration::from_secs(20);
-const CLIENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(10);
+const CLIENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(60);
 const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 // --- State ---
@@ -36,13 +38,15 @@ type ActiveSlot = Arc<Mutex<Option<Arc<VodAudioSession>>>>;
 // Keyed by id so the forward route and unregister can find a session directly.
 type SessionMap = Arc<Mutex<HashMap<String, Arc<VodAudioSession>>>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct FfmpegProbe {
     path: String,
-    demuxers_ok: bool,
-    // Matroska commonly omits video DTS; these decoders let FFmpeg infer the
-    // H.264/HEVC reorder delay while probing before stream-copying the video.
-    video_decoders_ok: bool,
+}
+
+struct CachedProbeResolution {
+    custom_path: Option<String>,
+    // None = cached "no capable ffmpeg found".
+    probe: Option<FfmpegProbe>,
 }
 
 struct ServerHandle {
@@ -56,7 +60,7 @@ pub struct VodAudioProxyState {
     server: Mutex<Option<ServerHandle>>,
     active: ActiveSlot,
     sessions: SessionMap,
-    probe: Mutex<Option<FfmpegProbe>>,
+    probe: Mutex<Option<CachedProbeResolution>>,
     // Serializes teardown -> spawn -> activate so a lost race can't orphan ffmpeg.
     register_lock: tokio::sync::Mutex<()>,
 }
@@ -67,9 +71,11 @@ struct VodAudioSession {
     user_agent: Option<String>,
     authorization: Option<String>,
     torn_down: AtomicBool,
+    // Client-timeout marker; makes the watchdog emit the error.
+    client_gone: AtomicBool,
     // New GET replaces the previous client's sender.
     current_client: Mutex<Option<mpsc::Sender<Bytes>>>,
-    // Wakes stdout delivery when the first client connects or a GET replaces it.
+    // Wakes stdout delivery on client connect or replace.
     client_notify: Notify,
     stderr_tail: Mutex<VecDeque<String>>,
     // Held only until run_watchdog takes ownership.
@@ -89,12 +95,9 @@ struct VodAudioSession {
 // --- Commands ---
 
 #[tauri::command]
-pub async fn vod_audio_remux_available(app: AppHandle) -> bool {
+pub async fn vod_audio_remux_available(app: AppHandle, ffmpeg_path: Option<String>) -> bool {
     let state = app.state::<VodAudioProxyState>();
-    ensure_probed(&state)
-        .await
-        .map(|probe| probe.demuxers_ok && probe.video_decoders_ok)
-        .unwrap_or(false)
+    ensure_probed(&state, ffmpeg_path).await.is_some()
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +117,7 @@ pub async fn register_vod_audio_remux(
     audio_stream_index: u32,
     start_seconds: f64,
     transcode_audio: bool,
+    ffmpeg_path: Option<String>,
 ) -> Result<RegisterVodAudioRemuxResponse, String> {
     let parsed = tauri::Url::parse(&url).map_err(|e| format!("OTHER:{e}"))?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
@@ -128,7 +132,7 @@ pub async fn register_vod_audio_remux(
     // One live session at a time; tear down before starting the next.
     teardown_active_session(&state).await;
 
-    let ffmpeg_path = match ensure_probed(&state).await {
+    let resolved_ffmpeg_path = match ensure_probed(&state, ffmpeg_path).await {
         Some(probe) => probe.path,
         None => {
             return Err(
@@ -147,6 +151,7 @@ pub async fn register_vod_audio_remux(
         user_agent: if is_loopback { None } else { user_agent },
         authorization: if is_loopback { None } else { authorization },
         torn_down: AtomicBool::new(false),
+        client_gone: AtomicBool::new(false),
         current_client: Mutex::new(None),
         client_notify: Notify::new(),
         stderr_tail: Mutex::new(VecDeque::new()),
@@ -168,7 +173,7 @@ pub async fn register_vod_audio_remux(
     };
     let ffmpeg_args = build_ffmpeg_args(&input_url, audio_stream_index, start_seconds, transcode_audio);
 
-    let mut command = TokioCommand::new(&ffmpeg_path);
+    let mut command = TokioCommand::new(&resolved_ffmpeg_path);
     command
         .args(&ffmpeg_args)
         .stdin(Stdio::null())
@@ -336,10 +341,7 @@ fn build_ffmpeg_args(input_url: &str, audio_stream_index: u32, start_seconds: f6
         "-loglevel".to_string(),
         "warning".to_string(),
     ];
-    // -ss must precede -i for input seeking. The video is stream-copied, so
-    // preserve its keyframe pre-roll in transcoded audio as well. Otherwise
-    // accurate seeking drops that pre-roll only from audio and leaves the MSE
-    // player correcting a multi-second A/V timestamp gap after a track switch.
+    // -noaccurate_seek keeps audio pre-roll aligned with the copied video.
     if start_seconds > 0.1 {
         args.push("-noaccurate_seek".to_string());
         args.push("-ss".to_string());
@@ -447,10 +449,7 @@ fn ffmpeg_candidates() -> Vec<String> {
         }
     }
 
-    // Cargo/Tauri prepend their target directory to PATH in development. A
-    // stale local sidecar there can shadow a decoder-capable system ffmpeg;
-    // enumerate every PATH entry so capability probing can continue to the
-    // next match instead of stopping at the shadowing executable.
+    // A dev-mode sidecar can shadow a capable system ffmpeg on PATH.
     if let Some(path_var) = std::env::var_os("PATH") {
         let binary_name = if cfg!(windows) {
             "ffmpeg.exe"
@@ -462,8 +461,7 @@ fn ffmpeg_candidates() -> Vec<String> {
         }
     }
 
-    // Keep the bare command as a final fallback for platforms where PATH
-    // lookup is virtual or the environment changes between probes.
+    // Bare fallback for virtual PATH lookups.
     push_candidate("ffmpeg".to_string());
     candidates
 }
@@ -523,46 +521,78 @@ async fn probe_decoders(path: &str) -> Result<String, String> {
     }
 }
 
-async fn resolve_and_probe_ffmpeg() -> Option<FfmpegProbe> {
+async fn probe_candidate(path: &str) -> Option<FfmpegProbe> {
+    let demuxers_stdout = probe_demuxers(path).await.ok()?;
+    if !demuxers_support_matroska_and_mov(&demuxers_stdout) {
+        return None;
+    }
+    // Matroska often omits video DTS; decoders let ffmpeg infer it.
+    if !probe_decoders(path)
+        .await
+        .map(|stdout| decoders_support_video_timestamp_inference(&stdout))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    Some(FfmpegProbe {
+        path: path.to_string(),
+    })
+}
+
+fn normalize_custom_path(path: Option<String>) -> Option<String> {
+    path.map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+async fn resolve_and_probe_ffmpeg(custom_path: Option<&str>) -> Option<FfmpegProbe> {
+    if let Some(custom) = custom_path {
+        if external_player::validate_arg(custom, "ffmpeg path").is_ok() {
+            if let Some(probe) = probe_candidate(custom).await {
+                return Some(probe);
+            }
+        }
+    }
     for candidate in ffmpeg_candidates() {
-        let Ok(demuxers_stdout) = probe_demuxers(&candidate).await else {
-            continue;
-        };
-        let demuxers_ok = demuxers_support_matroska_and_mov(&demuxers_stdout);
-        let video_decoders_ok = probe_decoders(&candidate)
-            .await
-            .map(|stdout| decoders_support_video_timestamp_inference(&stdout))
-            .unwrap_or(false);
-        let probe = FfmpegProbe {
-            path: candidate,
-            demuxers_ok,
-            video_decoders_ok,
-        };
-        if demuxers_ok && video_decoders_ok {
+        if let Some(probe) = probe_candidate(&candidate).await {
             return Some(probe);
         }
     }
     None
 }
 
-async fn ensure_probed(state: &VodAudioProxyState) -> Option<FfmpegProbe> {
+// Outer None is a miss; Some(None) is a cached negative.
+fn cached_probe_hit(
+    cached: &Option<CachedProbeResolution>,
+    normalized_custom: &Option<String>,
+) -> Option<Option<FfmpegProbe>> {
+    let cache = cached.as_ref()?;
+    if cache.custom_path == *normalized_custom {
+        Some(cache.probe.clone())
+    } else {
+        None
+    }
+}
+
+async fn ensure_probed(state: &VodAudioProxyState, custom_path: Option<String>) -> Option<FfmpegProbe> {
+    let normalized_custom = normalize_custom_path(custom_path);
     {
         let cached = state
             .probe
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if let Some(probe) = cached.as_ref() {
-            return Some(probe.clone());
+        if let Some(hit) = cached_probe_hit(&cached, &normalized_custom) {
+            return hit;
         }
     }
-    let probe = resolve_and_probe_ffmpeg().await;
-    if let Some(probe) = probe.clone() {
-        let mut cached = state
-            .probe
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        *cached = Some(probe);
-    }
+    let probe = resolve_and_probe_ffmpeg(normalized_custom.as_deref()).await;
+    let mut cached = state
+        .probe
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    *cached = Some(CachedProbeResolution {
+        custom_path: normalized_custom,
+        probe: probe.clone(),
+    });
     probe
 }
 
@@ -759,7 +789,20 @@ async fn handle_live(
 
     // Fresh channel per client; storing the sender ends any previous one.
     let (sender, mut receiver) = mpsc::channel::<Bytes>(OUTPUT_CHANNEL_CAPACITY);
-    set_current_client(&session, sender);
+    set_current_client(&session, sender.clone());
+
+    // A teardown racing the store must not leave a dead sender in place.
+    if session.torn_down.load(Ordering::SeqCst) {
+        let mut guard = session
+            .current_client
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if guard.as_ref().is_some_and(|current| current.same_channel(&sender)) {
+            *guard = None;
+        }
+        drop(guard);
+        return cors_response(StatusCode::NOT_FOUND, "session is no longer active");
+    }
 
     let body_stream = futures_util::stream::poll_fn(move |cx| {
         receiver
@@ -812,12 +855,12 @@ fn stop_after_client_disconnect(session: &VodAudioSession) {
     }
     session.blocked_on_send.store(false, Ordering::SeqCst);
     session.torn_down.store(true, Ordering::SeqCst);
+    session.client_gone.store(true, Ordering::SeqCst);
     session.kill_notify.notify_one();
     session.client_notify.notify_one();
 }
 
-// Backpressure ffmpeg until a client is ready. Dropping bytes here corrupts the
-// transport stream header on first mount and creates a discontinuity on reconnect.
+// Dropped bytes here would corrupt the TS header.
 async fn send_to_current_client(session: &Arc<VodAudioSession>, chunk: Bytes) {
     send_to_current_client_with_timeout(session, chunk, CLIENT_BACKPRESSURE_TIMEOUT).await;
 }
@@ -833,8 +876,7 @@ async fn send_to_current_client_with_timeout(
             return;
         }
 
-        // Create the waiter before inspecting the sender. A connection racing
-        // with this check leaves a stored permit, so the first chunk cannot hang.
+        // Waiter before sender read so a racing connect isn't missed.
         let client_changed = session.client_notify.notified();
         let sender = {
             let guard = session
@@ -844,8 +886,7 @@ async fn send_to_current_client_with_timeout(
             guard.clone()
         };
 
-        // Waiting for a client or its channel capacity is downstream
-        // backpressure, not an ffmpeg stdout stall.
+        // Downstream backpressure, not an ffmpeg stall.
         session.blocked_on_send.store(true, Ordering::SeqCst);
         let Some(sender) = sender else {
             if tokio::time::timeout(wait_timeout, client_changed).await.is_err() {
@@ -869,8 +910,7 @@ async fn send_to_current_client_with_timeout(
                     if still_current {
                         return;
                     }
-                    // A replacement raced with the send. Forward the same
-                    // chunk to the new client before reading another one.
+                    // Replacement raced the send; resend the chunk to it.
                     continue;
                 }
                 let mut guard = session
@@ -882,8 +922,7 @@ async fn send_to_current_client_with_timeout(
                 }
             }
             _ = client_changed => {
-                // A replacement client must receive this same chunk. Cancelling
-                // mpsc::Sender::send before it wins the select does not enqueue it.
+                // A cancelled send never enqueued; the loop resends.
             }
             _ = tokio::time::sleep(wait_timeout) => {
                 stop_after_client_disconnect(session);
@@ -990,6 +1029,7 @@ async fn run_watchdog(
             let _ = child.start_kill();
             let _ = child.wait().await;
             teardown_io(&session).await;
+            emit_client_timeout_if_disconnected(&app, &session).await;
             return;
         }
         _ = tokio::time::sleep(STARTUP_SILENCE_TIMEOUT) => {
@@ -1028,6 +1068,7 @@ async fn run_watchdog(
                 let _ = child.start_kill();
                 let _ = child.wait().await;
                 teardown_io(&session).await;
+                emit_client_timeout_if_disconnected(&app, &session).await;
                 return;
             }
         },
@@ -1063,11 +1104,35 @@ async fn finish_with_error(app: &AppHandle, session: &Arc<VodAudioSession>, deta
     }
 }
 
+async fn emit_client_timeout_if_disconnected(app: &AppHandle, session: &Arc<VodAudioSession>) {
+    if !session.client_gone.load(Ordering::SeqCst) {
+        return;
+    }
+    let _ = app.emit(
+        ERROR_EVENT,
+        json!({
+            "sessionId": session.session_id,
+            "detail": format!(
+                "TIMEOUT:playback client disconnected for {}s{}",
+                CLIENT_BACKPRESSURE_TIMEOUT.as_secs(),
+                stderr_tail_suffix(session)
+            ),
+        }),
+    );
+}
+
 // --- Teardown ---
 
 /// Never blocks on the child mutex; killing goes through kill_notify instead.
 async fn teardown_io(session: &Arc<VodAudioSession>) {
     session.torn_down.store(true, Ordering::SeqCst);
+    {
+        let mut guard = session
+            .current_client
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard.take();
+    }
     session.kill_notify.notify_one();
     session.client_notify.notify_one();
 
@@ -1368,6 +1433,55 @@ mod tests {
     }
 
     #[test]
+    fn normalize_custom_path_trims_and_drops_blank() {
+        assert_eq!(normalize_custom_path(None), None);
+        assert_eq!(normalize_custom_path(Some("".to_string())), None);
+        assert_eq!(normalize_custom_path(Some("   ".to_string())), None);
+        assert_eq!(
+            normalize_custom_path(Some("  /usr/bin/ffmpeg  ".to_string())),
+            Some("/usr/bin/ffmpeg".to_string())
+        );
+    }
+
+    #[test]
+    fn cached_probe_hit_returns_none_without_a_cache_entry() {
+        assert!(cached_probe_hit(&None, &None).is_none());
+    }
+
+    #[test]
+    fn cached_probe_hit_returns_the_cached_negative_outcome_without_reprobing() {
+        let cached = Some(CachedProbeResolution {
+            custom_path: None,
+            probe: None,
+        });
+        assert_eq!(cached_probe_hit(&cached, &None), Some(None));
+    }
+
+    #[test]
+    fn cached_probe_hit_returns_the_cached_probe_when_the_path_matches() {
+        let probe = FfmpegProbe {
+            path: "/usr/bin/ffmpeg".to_string(),
+        };
+        let cached = Some(CachedProbeResolution {
+            custom_path: Some("/usr/bin/ffmpeg".to_string()),
+            probe: Some(probe.clone()),
+        });
+        assert_eq!(
+            cached_probe_hit(&cached, &Some("/usr/bin/ffmpeg".to_string())),
+            Some(Some(probe))
+        );
+    }
+
+    #[test]
+    fn cached_probe_hit_returns_none_when_the_custom_path_changed() {
+        let cached = Some(CachedProbeResolution {
+            custom_path: Some("/usr/bin/ffmpeg".to_string()),
+            probe: None,
+        });
+        assert!(cached_probe_hit(&cached, &Some("/opt/ffmpeg/ffmpeg".to_string())).is_none());
+    }
+
+    #[test]
     fn stderr_tail_suffix_is_empty_when_no_lines_captured() {
         let session = Arc::new(VodAudioSession {
             session_id: "sess".to_string(),
@@ -1375,6 +1489,7 @@ mod tests {
             user_agent: None,
             authorization: None,
             torn_down: AtomicBool::new(false),
+            client_gone: AtomicBool::new(false),
             current_client: Mutex::new(None),
             client_notify: Notify::new(),
             stderr_tail: Mutex::new(VecDeque::new()),
@@ -1399,6 +1514,7 @@ mod tests {
             user_agent: None,
             authorization: None,
             torn_down: AtomicBool::new(false),
+            client_gone: AtomicBool::new(false),
             current_client: Mutex::new(None),
             client_notify: Notify::new(),
             stderr_tail: Mutex::new(tail),
@@ -1422,6 +1538,7 @@ mod tests {
             user_agent: None,
             authorization: None,
             torn_down: AtomicBool::new(false),
+            client_gone: AtomicBool::new(false),
             current_client: Mutex::new(None),
             client_notify: Notify::new(),
             stderr_tail: Mutex::new(VecDeque::new()),
@@ -1569,7 +1686,7 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(500), send_task)
             .await
             .expect("teardown should wake client delivery")
-        .expect("delivery task should not panic");
+            .expect("delivery task should not panic");
         assert!(!session.blocked_on_send.load(Ordering::SeqCst));
     }
 
@@ -1598,6 +1715,7 @@ mod tests {
             .await
             .expect("client timeout must wake the watchdog");
         assert!(session.torn_down.load(Ordering::SeqCst));
+        assert!(session.client_gone.load(Ordering::SeqCst));
         assert!(!session.blocked_on_send.load(Ordering::SeqCst));
     }
 
