@@ -1301,6 +1301,11 @@ function describeShakaError(detail: any): string {
   return `shaka:${label}:${code}${data ? " " + JSON.stringify(data) : ""}`
 }
 
+/** Converts mpegts.js' native absolute offset back to its relative timeline. */
+export function mpegtsRelativeTimestampOffset(nativeOffset: number, timelineOffset: number): number {
+  return nativeOffset - timelineOffset
+}
+
 async function attachMpegts(
   videoEl: HTMLVideoElement,
   url: string,
@@ -1377,7 +1382,12 @@ async function attachMpegts(
           const sourceBuffer = originalAdd(mime)
           try {
             Object.defineProperty(sourceBuffer, "timestampOffset", {
-              get() { return nativeDescriptor.get!.call(sourceBuffer) },
+              get() {
+                return mpegtsRelativeTimestampOffset(
+                  nativeDescriptor.get!.call(sourceBuffer),
+                  baseSeconds as number,
+                )
+              },
               set(value: number) { nativeDescriptor.set!.call(sourceBuffer, value + (baseSeconds as number)) },
             })
             nativeDescriptor.set!.call(sourceBuffer, baseSeconds as number)
@@ -1425,6 +1435,13 @@ async function attachMpegts(
     const config: Record<string, unknown> = {}
     if (useTauriLoader) config.customLoader = createTauriStreamLoaderClass(mpegts)
     if (authorization) config.headers = { Authorization: authorization }
+    if (!isLive) {
+      try {
+        const hostname = new URL(cleanUrl).hostname
+        // Lazy-load aborts kill stateful local proxy sessions.
+        if (hostname === "127.0.0.1" || hostname === "localhost") config.lazyLoad = false
+      } catch {}
+    }
     const mediaDataSource: Record<string, unknown> = { type: "mpegts", isLive, url: cleanUrl }
     if (!isLive && Number.isFinite(durationSeconds) && (durationSeconds as number) > 0) {
       mediaDataSource.duration = Math.round((durationSeconds as number) * 1000)
