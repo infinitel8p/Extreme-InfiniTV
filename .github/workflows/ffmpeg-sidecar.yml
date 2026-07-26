@@ -20,6 +20,8 @@ name: ffmpeg Sidecar
 #
 # No GPL, no nonfree, no external libraries: LGPL configure only. See
 # ffmpeg.md for the full rationale.
+# H.264/HEVC decoders are retained for Matroska timestamp probing; the video
+# itself is still stream-copied and never re-encoded by the app.
 
 on:
   push:
@@ -92,6 +94,8 @@ jobs:
             --enable-decoder=flac \
             --enable-decoder=truehd \
             --enable-decoder=pcm_s16le \
+            --enable-decoder=h264 \
+            --enable-decoder=hevc \
             --enable-encoder=aac \
             --enable-parser=h264 \
             --enable-parser=hevc \
@@ -128,6 +132,8 @@ jobs:
             exit 1
           fi
           ./ffmpeg.exe -decoders | grep -i eac3
+          ./ffmpeg.exe -decoders | grep -w h264
+          ./ffmpeg.exe -decoders | grep -w hevc
           ./ffmpeg.exe -encoders | grep -w aac
           ls -lh ffmpeg.exe
 
@@ -204,6 +210,8 @@ jobs:
             --enable-decoder=flac \
             --enable-decoder=truehd \
             --enable-decoder=pcm_s16le \
+            --enable-decoder=h264 \
+            --enable-decoder=hevc \
             --enable-encoder=aac \
             --enable-parser=h264 \
             --enable-parser=hevc \
@@ -239,6 +247,8 @@ jobs:
             exit 1
           fi
           ./ffmpeg -decoders | grep -i eac3
+          ./ffmpeg -decoders | grep -w h264
+          ./ffmpeg -decoders | grep -w hevc
           ./ffmpeg -encoders | grep -w aac
           ls -lh ffmpeg
 
@@ -318,7 +328,7 @@ jobs:
             echo
             echo "Configure line:"
             echo '```'
-            echo "./configure --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3,dca,opus,vorbis,flac,truehd,pcm_s16le --enable-encoder=aac --enable-parser=h264,hevc,mpegvideo,mpegaudio,aac,aac_latm,ac3,dca --enable-filter=aresample,aformat,anull --enable-bsf=extract_extradata,h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc --enable-zlib"
+            echo "./configure --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3,dca,opus,vorbis,flac,truehd,pcm_s16le,h264,hevc --enable-encoder=aac --enable-parser=h264,hevc,mpegvideo,mpegaudio,aac,aac_latm,ac3,dca --enable-filter=aresample,aformat,anull --enable-bsf=extract_extradata,h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc --enable-zlib"
             echo '```'
             echo "(each comma-separated group above is repeated once per value in the actual build - see BUILD-INFO-windows.txt / BUILD-INFO-linux.txt attached below for the exact per-platform command.)"
             echo

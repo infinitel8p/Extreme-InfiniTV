@@ -191,6 +191,40 @@ function createFakeShakaPlayer(tracks: any[]) {
 }
 
 describe("createShakaAudioSource", () => {
+  it("retains a safe forward buffer while switching with the audio-track API", () => {
+    const tracks = [
+      { id: "a", label: "English", language: "en", active: true },
+      { id: "b", label: "Italian", language: "it", active: false },
+    ]
+    const player = createFakeShakaPlayer(tracks)
+    const source = createShakaAudioSource(player)
+
+    source.select("b")
+
+    expect(player.selectAudioTrack).toHaveBeenCalledWith(tracks[1], 8)
+  })
+
+  it("retains the same safe margin with Shaka's legacy variant API", () => {
+    const variants = [
+      { id: 10, audioId: "a", language: "en", roles: [], active: true },
+      { id: 20, audioId: "b", language: "it", roles: [], active: false },
+    ]
+    const player = {
+      getVariantTracks: () => variants,
+      selectAudioLanguage: vi.fn(),
+      selectVariantTrack: vi.fn(),
+      configure: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }
+    const source = createShakaAudioSource(player)
+
+    source.select("b")
+
+    expect(player.selectAudioLanguage).toHaveBeenCalledWith("it", undefined)
+    expect(player.selectVariantTrack).toHaveBeenCalledWith(variants[1], true, 8)
+  })
+
   it("suppresses notify for an event whose track list signature is unchanged (video-only adaptation)", () => {
     const tracks = [
       { id: "a", label: "English", language: "en", active: true },

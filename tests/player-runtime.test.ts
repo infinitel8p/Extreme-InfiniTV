@@ -7,9 +7,17 @@ import {
   PlayerLaunchError,
   externalPlayersAvailable,
   androidMimeForUrl,
+  mpegtsRelativeTimestampOffset,
 } from "../src/scripts/lib/player-runtime"
 
 const SRC = "https://example.com/live/u/p/1.m3u8"
+
+describe("mpegtsRelativeTimestampOffset", () => {
+  it("rebases the native absolute offset before mpegts compares segment offsets", () => {
+    expect(mpegtsRelativeTimestampOffset(60.02, 60)).toBeCloseTo(0.02)
+    expect(mpegtsRelativeTimestampOffset(60, 60)).toBe(0)
+  })
+})
 
 describe("buildMpvArgs", () => {
   it("emits required flags and src last with no optional inputs", () => {

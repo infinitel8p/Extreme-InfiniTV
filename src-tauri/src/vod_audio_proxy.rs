@@ -27,6 +27,7 @@ const OUTPUT_CHANNEL_CAPACITY: usize = 256;
 const STDERR_RING_CAPACITY: usize = 10;
 const STARTUP_SILENCE_TIMEOUT: Duration = Duration::from_secs(10);
 const STDOUT_STALL_TIMEOUT: Duration = Duration::from_secs(20);
+const CLIENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(10);
 const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 // --- State ---
@@ -39,6 +40,9 @@ type SessionMap = Arc<Mutex<HashMap<String, Arc<VodAudioSession>>>>;
 struct FfmpegProbe {
     path: String,
     demuxers_ok: bool,
+    // Matroska commonly omits video DTS; these decoders let FFmpeg infer the
+    // H.264/HEVC reorder delay while probing before stream-copying the video.
+    video_decoders_ok: bool,
 }
 
 struct ServerHandle {
@@ -65,6 +69,8 @@ struct VodAudioSession {
     torn_down: AtomicBool,
     // New GET replaces the previous client's sender.
     current_client: Mutex<Option<mpsc::Sender<Bytes>>>,
+    // Wakes stdout delivery when the first client connects or a GET replaces it.
+    client_notify: Notify,
     stderr_tail: Mutex<VecDeque<String>>,
     // Held only until run_watchdog takes ownership.
     child: tokio::sync::Mutex<Option<Child>>,
@@ -85,7 +91,10 @@ struct VodAudioSession {
 #[tauri::command]
 pub async fn vod_audio_remux_available(app: AppHandle) -> bool {
     let state = app.state::<VodAudioProxyState>();
-    ensure_probed(&state).await.map(|probe| probe.demuxers_ok).unwrap_or(false)
+    ensure_probed(&state)
+        .await
+        .map(|probe| probe.demuxers_ok && probe.video_decoders_ok)
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Serialize)]
@@ -121,7 +130,12 @@ pub async fn register_vod_audio_remux(
 
     let ffmpeg_path = match ensure_probed(&state).await {
         Some(probe) => probe.path,
-        None => return Err("NOT_FOUND:ffmpeg binary not found".to_string()),
+        None => {
+            return Err(
+                "NOT_FOUND:ffmpeg with Matroska/MOV demuxers and H.264/HEVC decoders not found"
+                    .to_string(),
+            )
+        }
     };
 
     let port = ensure_server_started(&state).await?;
@@ -134,6 +148,7 @@ pub async fn register_vod_audio_remux(
         authorization: if is_loopback { None } else { authorization },
         torn_down: AtomicBool::new(false),
         current_client: Mutex::new(None),
+        client_notify: Notify::new(),
         stderr_tail: Mutex::new(VecDeque::new()),
         child: tokio::sync::Mutex::new(None),
         kill_notify: Notify::new(),
@@ -321,8 +336,12 @@ fn build_ffmpeg_args(input_url: &str, audio_stream_index: u32, start_seconds: f6
         "-loglevel".to_string(),
         "warning".to_string(),
     ];
-    // -ss must precede -i for input seeking.
+    // -ss must precede -i for input seeking. The video is stream-copied, so
+    // preserve its keyframe pre-roll in transcoded audio as well. Otherwise
+    // accurate seeking drops that pre-roll only from audio and leaves the MSE
+    // player correcting a multi-second A/V timestamp gap after a track switch.
     if start_seconds > 0.1 {
+        args.push("-noaccurate_seek".to_string());
         args.push("-ss".to_string());
         args.push(format!("{start_seconds}"));
     }
@@ -340,7 +359,7 @@ fn build_ffmpeg_args(input_url: &str, audio_stream_index: u32, start_seconds: f6
                 "-c:a",
                 "aac",
                 "-af",
-                "aresample=async=1:first_pts=0",
+                "aresample=async=1",
                 "-ac",
                 "2",
                 "-b:a",
@@ -381,21 +400,87 @@ fn classify_io_error(err: &std::io::Error) -> String {
     }
 }
 
+fn ffmpeg_path_candidates<F>(
+    path_var: &std::ffi::OsStr,
+    binary_name: &str,
+    is_file: F,
+) -> Vec<String>
+where
+    F: Fn(&std::path::Path) -> bool,
+{
+    std::env::split_paths(path_var)
+        .map(|directory| directory.join(binary_name))
+        .filter(|candidate| is_file(candidate))
+        .map(|candidate| candidate.to_string_lossy().into_owned())
+        .collect()
+}
+
+fn same_ffmpeg_candidate(left: &str, right: &str) -> bool {
+    #[cfg(windows)]
+    {
+        left.eq_ignore_ascii_case(right)
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
 fn ffmpeg_candidates() -> Vec<String> {
-    let mut candidates = Vec::new();
+    let mut candidates: Vec<String> = Vec::new();
+    let mut push_candidate = |candidate: String| {
+        if !candidates
+            .iter()
+            .any(|existing| same_ffmpeg_candidate(existing, &candidate))
+        {
+            candidates.push(candidate);
+        }
+    };
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
-            let sidecar_name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
-            candidates.push(parent.join(sidecar_name).to_string_lossy().into_owned());
+            let sidecar_name = if cfg!(windows) {
+                "ffmpeg.exe"
+            } else {
+                "ffmpeg"
+            };
+            push_candidate(parent.join(sidecar_name).to_string_lossy().into_owned());
         }
     }
-    candidates.push("ffmpeg".to_string());
+
+    // Cargo/Tauri prepend their target directory to PATH in development. A
+    // stale local sidecar there can shadow a decoder-capable system ffmpeg;
+    // enumerate every PATH entry so capability probing can continue to the
+    // next match instead of stopping at the shadowing executable.
+    if let Some(path_var) = std::env::var_os("PATH") {
+        let binary_name = if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        };
+        for candidate in ffmpeg_path_candidates(&path_var, binary_name, |path| path.is_file()) {
+            push_candidate(candidate);
+        }
+    }
+
+    // Keep the bare command as a final fallback for platforms where PATH
+    // lookup is virtual or the environment changes between probes.
+    push_candidate("ffmpeg".to_string());
     candidates
 }
 
 fn demuxers_support_matroska_and_mov(stdout: &str) -> bool {
     let lower = stdout.to_lowercase();
     lower.contains("matroska") && lower.contains("mov")
+}
+
+fn decoders_support_video_timestamp_inference(stdout: &str) -> bool {
+    let has_decoder = |name: &str| {
+        stdout.lines().any(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            fields.get(1).is_some_and(|field| field.eq_ignore_ascii_case(name))
+        })
+    };
+    has_decoder("h264") && has_decoder("hevc")
 }
 
 async fn probe_demuxers(path: &str) -> Result<String, String> {
@@ -418,13 +503,43 @@ async fn probe_demuxers(path: &str) -> Result<String, String> {
     }
 }
 
+async fn probe_decoders(path: &str) -> Result<String, String> {
+    let mut command = TokioCommand::new(path);
+    command
+        .args(["-hide_banner", "-decoders"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let child = command.spawn().map_err(|e| classify_io_error(&e))?;
+    match tokio::time::timeout(Duration::from_millis(DETECT_TIMEOUT_MS), child.wait_with_output()).await {
+        Ok(Ok(output)) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
+        Ok(Err(e)) => Err(format!("OTHER:{e}")),
+        Err(_) => Err(format!("TIMEOUT:{path} did not exit within {DETECT_TIMEOUT_MS}ms")),
+    }
+}
+
 async fn resolve_and_probe_ffmpeg() -> Option<FfmpegProbe> {
     for candidate in ffmpeg_candidates() {
-        if let Ok(stdout) = probe_demuxers(&candidate).await {
-            return Some(FfmpegProbe {
-                path: candidate,
-                demuxers_ok: demuxers_support_matroska_and_mov(&stdout),
-            });
+        let Ok(demuxers_stdout) = probe_demuxers(&candidate).await else {
+            continue;
+        };
+        let demuxers_ok = demuxers_support_matroska_and_mov(&demuxers_stdout);
+        let video_decoders_ok = probe_decoders(&candidate)
+            .await
+            .map(|stdout| decoders_support_video_timestamp_inference(&stdout))
+            .unwrap_or(false);
+        let probe = FfmpegProbe {
+            path: candidate,
+            demuxers_ok,
+            video_decoders_ok,
+        };
+        if demuxers_ok && video_decoders_ok {
+            return Some(probe);
         }
     }
     None
@@ -638,16 +753,13 @@ async fn handle_live(
     if session.session_id != session_id {
         return cors_response(StatusCode::NOT_FOUND, "unknown session");
     }
+    if session.torn_down.load(Ordering::SeqCst) {
+        return cors_response(StatusCode::NOT_FOUND, "session is no longer active");
+    }
 
     // Fresh channel per client; storing the sender ends any previous one.
     let (sender, mut receiver) = mpsc::channel::<Bytes>(OUTPUT_CHANNEL_CAPACITY);
-    {
-        let mut guard = session
-            .current_client
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        *guard = Some(sender);
-    }
+    set_current_client(&session, sender);
 
     let body_stream = futures_util::stream::poll_fn(move |cx| {
         receiver
@@ -679,29 +791,104 @@ fn mark_activity(session: &VodAudioSession) {
     *last_activity = Instant::now();
 }
 
-// Discards the chunk if no client is connected; stdout must still drain.
-async fn send_to_current_client(session: &Arc<VodAudioSession>, chunk: Bytes) {
-    let sender = {
-        let guard = session
-            .current_client
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        guard.clone()
-    };
-    let Some(sender) = sender else {
-        return;
-    };
-    // Blocked here means the HTTP consumer is slow, not that ffmpeg stalled.
-    session.blocked_on_send.store(true, Ordering::SeqCst);
-    let send_result = sender.send(chunk).await;
-    session.blocked_on_send.store(false, Ordering::SeqCst);
-    if send_result.is_err() {
+fn set_current_client(session: &VodAudioSession, sender: mpsc::Sender<Bytes>) {
+    {
         let mut guard = session
             .current_client
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if guard.as_ref().is_some_and(|current| current.same_channel(&sender)) {
-            *guard = None;
+        *guard = Some(sender);
+    }
+    session.client_notify.notify_one();
+}
+
+fn stop_after_client_disconnect(session: &VodAudioSession) {
+    {
+        let mut guard = session
+            .current_client
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        *guard = None;
+    }
+    session.blocked_on_send.store(false, Ordering::SeqCst);
+    session.torn_down.store(true, Ordering::SeqCst);
+    session.kill_notify.notify_one();
+    session.client_notify.notify_one();
+}
+
+// Backpressure ffmpeg until a client is ready. Dropping bytes here corrupts the
+// transport stream header on first mount and creates a discontinuity on reconnect.
+async fn send_to_current_client(session: &Arc<VodAudioSession>, chunk: Bytes) {
+    send_to_current_client_with_timeout(session, chunk, CLIENT_BACKPRESSURE_TIMEOUT).await;
+}
+
+async fn send_to_current_client_with_timeout(
+    session: &Arc<VodAudioSession>,
+    chunk: Bytes,
+    wait_timeout: Duration,
+) {
+    loop {
+        if session.torn_down.load(Ordering::SeqCst) {
+            session.blocked_on_send.store(false, Ordering::SeqCst);
+            return;
+        }
+
+        // Create the waiter before inspecting the sender. A connection racing
+        // with this check leaves a stored permit, so the first chunk cannot hang.
+        let client_changed = session.client_notify.notified();
+        let sender = {
+            let guard = session
+                .current_client
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            guard.clone()
+        };
+
+        // Waiting for a client or its channel capacity is downstream
+        // backpressure, not an ffmpeg stdout stall.
+        session.blocked_on_send.store(true, Ordering::SeqCst);
+        let Some(sender) = sender else {
+            if tokio::time::timeout(wait_timeout, client_changed).await.is_err() {
+                stop_after_client_disconnect(session);
+                return;
+            }
+            continue;
+        };
+
+        tokio::select! {
+            send_result = sender.send(chunk.clone()) => {
+                session.blocked_on_send.store(false, Ordering::SeqCst);
+                if send_result.is_ok() {
+                    let still_current = {
+                        let guard = session
+                            .current_client
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner());
+                        guard.as_ref().is_some_and(|current| current.same_channel(&sender))
+                    };
+                    if still_current {
+                        return;
+                    }
+                    // A replacement raced with the send. Forward the same
+                    // chunk to the new client before reading another one.
+                    continue;
+                }
+                let mut guard = session
+                    .current_client
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                if guard.as_ref().is_some_and(|current| current.same_channel(&sender)) {
+                    *guard = None;
+                }
+            }
+            _ = client_changed => {
+                // A replacement client must receive this same chunk. Cancelling
+                // mpsc::Sender::send before it wins the select does not enqueue it.
+            }
+            _ = tokio::time::sleep(wait_timeout) => {
+                stop_after_client_disconnect(session);
+                return;
+            }
         }
     }
 }
@@ -802,6 +989,7 @@ async fn run_watchdog(
         _ = session.kill_notify.notified() => {
             let _ = child.start_kill();
             let _ = child.wait().await;
+            teardown_io(&session).await;
             return;
         }
         _ = tokio::time::sleep(STARTUP_SILENCE_TIMEOUT) => {
@@ -839,6 +1027,7 @@ async fn run_watchdog(
             _ = session.kill_notify.notified() => {
                 let _ = child.start_kill();
                 let _ = child.wait().await;
+                teardown_io(&session).await;
                 return;
             }
         },
@@ -880,6 +1069,7 @@ async fn finish_with_error(app: &AppHandle, session: &Arc<VodAudioSession>, deta
 async fn teardown_io(session: &Arc<VodAudioSession>) {
     session.torn_down.store(true, Ordering::SeqCst);
     session.kill_notify.notify_one();
+    session.client_notify.notify_one();
 
     if let Ok(mut guard) = session.child.try_lock() {
         if let Some(mut child) = guard.take() {
@@ -937,6 +1127,7 @@ pub fn shutdown(state: &VodAudioProxyState) {
     for session in sessions {
         session.torn_down.store(true, Ordering::SeqCst);
         session.kill_notify.notify_one();
+        session.client_notify.notify_one();
 
         if let Ok(mut child_guard) = session.child.try_lock() {
             if let Some(child) = child_guard.as_mut() {
@@ -1025,7 +1216,7 @@ mod tests {
                 "-c:a",
                 "aac",
                 "-af",
-                "aresample=async=1:first_pts=0",
+                "aresample=async=1",
                 "-ac",
                 "2",
                 "-b:a",
@@ -1046,8 +1237,16 @@ mod tests {
     #[test]
     fn build_ffmpeg_args_places_ss_before_i_when_start_seconds_is_meaningful() {
         let args = build_ffmpeg_args("http://127.0.0.1:9000/forward/abc/stream", 0, 12.5, false);
+        let no_accurate_seek_index = args
+            .iter()
+            .position(|arg| arg == "-noaccurate_seek")
+            .expect("-noaccurate_seek must be present");
         let ss_index = args.iter().position(|arg| arg == "-ss").expect("-ss must be present");
         let i_index = args.iter().position(|arg| arg == "-i").expect("-i must be present");
+        assert!(
+            no_accurate_seek_index < ss_index,
+            "-noaccurate_seek must precede -ss"
+        );
         assert!(ss_index < i_index, "-ss must precede -i for input seeking");
         assert_eq!(args[ss_index + 1], "12.5");
     }
@@ -1056,6 +1255,10 @@ mod tests {
     fn build_ffmpeg_args_omits_ss_for_negligible_start_seconds() {
         let args = build_ffmpeg_args("http://127.0.0.1:9000/forward/abc/stream", 0, 0.05, false);
         assert!(!args.iter().any(|arg| arg == "-ss"), "-ss must be omitted below the threshold");
+        assert!(
+            !args.iter().any(|arg| arg == "-noaccurate_seek"),
+            "-noaccurate_seek must be omitted when no input seek is performed"
+        );
     }
 
     #[test]
@@ -1114,10 +1317,54 @@ mod tests {
     }
 
     #[test]
+    fn ffmpeg_path_candidates_keep_searching_after_a_shadowed_binary() {
+        let shadowed_dir = std::path::PathBuf::from("shadowed");
+        let working_dir = std::path::PathBuf::from("working");
+        let missing_dir = std::path::PathBuf::from("missing");
+        let path_var = std::env::join_paths([&shadowed_dir, &working_dir, &missing_dir])
+            .expect("test PATH entries should be joinable");
+        let binary_name = if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        };
+
+        let candidates = ffmpeg_path_candidates(&path_var, binary_name, |candidate| {
+            candidate
+                .parent()
+                .is_some_and(|parent| parent != missing_dir)
+        });
+        let candidates: Vec<std::path::PathBuf> = candidates.into_iter().map(Into::into).collect();
+
+        assert_eq!(
+            candidates,
+            vec![
+                shadowed_dir.join(binary_name),
+                working_dir.join(binary_name)
+            ]
+        );
+    }
+
+    #[test]
+    fn ffmpeg_candidate_comparison_matches_filesystem_case_rules() {
+        #[cfg(windows)]
+        assert!(same_ffmpeg_candidate("C:\\FFMPEG\\ffmpeg.exe", "c:\\ffmpeg\\FFMPEG.EXE"));
+        #[cfg(not(windows))]
+        assert!(!same_ffmpeg_candidate("/opt/FFmpeg/ffmpeg", "/opt/ffmpeg/ffmpeg"));
+    }
+
+    #[test]
     fn demuxers_support_matroska_and_mov_requires_both() {
         let listing = " D  matroska,webm      Matroska / WebM\n D  mov,mp4,m4a,3gp     QuickTime / MOV\n";
         assert!(demuxers_support_matroska_and_mov(listing));
         assert!(!demuxers_support_matroska_and_mov(" D  mpegts     MPEG-TS"));
+    }
+
+    #[test]
+    fn decoders_support_video_timestamp_inference_requires_h264_and_hevc() {
+        let listing = " VFS..D h264                 H.264 / AVC\n VFS..D hevc                 H.265 / HEVC\n";
+        assert!(decoders_support_video_timestamp_inference(listing));
+        assert!(!decoders_support_video_timestamp_inference(" VFS..D h264 H.264 / AVC\n"));
     }
 
     #[test]
@@ -1129,6 +1376,7 @@ mod tests {
             authorization: None,
             torn_down: AtomicBool::new(false),
             current_client: Mutex::new(None),
+            client_notify: Notify::new(),
             stderr_tail: Mutex::new(VecDeque::new()),
             child: tokio::sync::Mutex::new(None),
             kill_notify: Notify::new(),
@@ -1152,6 +1400,7 @@ mod tests {
             authorization: None,
             torn_down: AtomicBool::new(false),
             current_client: Mutex::new(None),
+            client_notify: Notify::new(),
             stderr_tail: Mutex::new(tail),
             child: tokio::sync::Mutex::new(None),
             kill_notify: Notify::new(),
@@ -1174,6 +1423,7 @@ mod tests {
             authorization: None,
             torn_down: AtomicBool::new(false),
             current_client: Mutex::new(None),
+            client_notify: Notify::new(),
             stderr_tail: Mutex::new(VecDeque::new()),
             child: tokio::sync::Mutex::new(None),
             kill_notify: Notify::new(),
@@ -1234,6 +1484,121 @@ mod tests {
             .unwrap_or_else(|poison| poison.into_inner());
         assert_eq!(sessions.len(), 1, "the losing registration must not orphan a session");
         assert!(sessions.contains_key(&active_id));
+    }
+
+    async fn wait_until_output_is_backpressured(session: &VodAudioSession) {
+        for _ in 0..100 {
+            if session.blocked_on_send.load(Ordering::SeqCst) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("output delivery did not enter downstream backpressure");
+    }
+
+    #[tokio::test]
+    async fn output_waits_for_first_client_without_dropping_the_chunk() {
+        let session = test_vod_audio_session();
+        let expected = Bytes::from_static(b"transport stream header");
+        let sending_session = session.clone();
+        let sending_chunk = expected.clone();
+        let send_task = tokio::spawn(async move {
+            send_to_current_client(&sending_session, sending_chunk).await;
+        });
+
+        wait_until_output_is_backpressured(&session).await;
+        assert!(!send_task.is_finished(), "the chunk must wait for the first HTTP client");
+
+        let (sender, mut receiver) = mpsc::channel(1);
+        set_current_client(&session, sender);
+
+        let received = tokio::time::timeout(Duration::from_millis(500), receiver.recv())
+            .await
+            .expect("the client should receive the waiting chunk")
+            .expect("the client channel should remain open");
+        assert_eq!(received, expected);
+        tokio::time::timeout(Duration::from_millis(500), send_task)
+            .await
+            .expect("delivery should finish after the client connects")
+            .expect("delivery task should not panic");
+    }
+
+    #[tokio::test]
+    async fn replacement_client_receives_a_chunk_blocked_on_the_old_client() {
+        let session = test_vod_audio_session();
+        let (old_sender, _old_receiver) = mpsc::channel(1);
+        old_sender
+            .send(Bytes::from_static(b"already queued"))
+            .await
+            .expect("old channel should accept its first chunk");
+        set_current_client(&session, old_sender);
+
+        let expected = Bytes::from_static(b"rerouted chunk");
+        let sending_session = session.clone();
+        let sending_chunk = expected.clone();
+        let send_task = tokio::spawn(async move {
+            send_to_current_client(&sending_session, sending_chunk).await;
+        });
+        wait_until_output_is_backpressured(&session).await;
+
+        let (new_sender, mut new_receiver) = mpsc::channel(1);
+        set_current_client(&session, new_sender);
+
+        let received = tokio::time::timeout(Duration::from_millis(500), new_receiver.recv())
+            .await
+            .expect("replacement client should receive the blocked chunk")
+            .expect("replacement channel should remain open");
+        assert_eq!(received, expected);
+        tokio::time::timeout(Duration::from_millis(500), send_task)
+            .await
+            .expect("delivery should finish through the replacement client")
+            .expect("delivery task should not panic");
+    }
+
+    #[tokio::test]
+    async fn teardown_wakes_output_waiting_for_a_client() {
+        let session = test_vod_audio_session();
+        let sending_session = session.clone();
+        let send_task = tokio::spawn(async move {
+            send_to_current_client(&sending_session, Bytes::from_static(b"pending")).await;
+        });
+        wait_until_output_is_backpressured(&session).await;
+
+        teardown_io(&session).await;
+
+        tokio::time::timeout(Duration::from_millis(500), send_task)
+            .await
+            .expect("teardown should wake client delivery")
+        .expect("delivery task should not panic");
+        assert!(!session.blocked_on_send.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn disconnected_client_timeout_stops_output_backpressure() {
+        let session = test_vod_audio_session();
+        let (sender, receiver) = mpsc::channel(1);
+        drop(receiver);
+        set_current_client(&session, sender);
+        let kill_wakeup = session.kill_notify.notified();
+        let sending_session = session.clone();
+        let send_task = tokio::spawn(async move {
+            send_to_current_client_with_timeout(
+                &sending_session,
+                Bytes::from_static(b"orphaned"),
+                Duration::from_millis(10),
+            )
+            .await;
+        });
+
+        tokio::time::timeout(Duration::from_millis(500), send_task)
+            .await
+            .expect("disconnected delivery must have a finite wait")
+            .expect("delivery task should not panic");
+        tokio::time::timeout(Duration::from_millis(500), kill_wakeup)
+            .await
+            .expect("client timeout must wake the watchdog");
+        assert!(session.torn_down.load(Ordering::SeqCst));
+        assert!(!session.blocked_on_send.load(Ordering::SeqCst));
     }
 
     // Regression test: teardown_io blocking while the watchdog owned the child.
