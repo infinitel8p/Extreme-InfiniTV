@@ -9,16 +9,16 @@ import Callout from "../components/Callout.astro"
 
 The built-in player works for most streams. If a channel won't play, or you'd rather watch in MPV or VLC, hand the stream off to an external player. When a stream's audio format can't be decoded in-app (AC-3 / Dolby Digital is the usual case), the app says so and offers the external-player handoff right in the error message.
 
-Everything playback-related lives in **Settings > Playback**: the built-in player engine (Video.js, ArtPlayer, or Shaka Player), the external player paths, and the option to make MPV or VLC the default way every stream opens.
+Everything playback-related lives in **Settings > Watching > Playback**: the built-in player engine (ArtPlayer by default, with Video.js and Shaka Player as alternatives), the external player paths, and the option to make MPV or VLC the default way every stream opens.
 
 ## Desktop (Windows / macOS / Linux)
 
-Open **Settings > Playback** and point the app at the player you want to use:
+Open **Settings > Watching > Playback** and point the app at the player you want to use:
 
 - **MPV** - paste the path to your `mpv` executable.
-- **VLC** - paste the path to your `vlc` executable.
+- **VLC** - paste the path to your `vlc` executable. On macOS, pick the **app bundle** (`/Applications/VLC.app`), not the binary inside it - window reuse on macOS works by handing the stream to the running app, and that only works with the bundle path.
 
-After you set a path, an **Open in MPV** or **Open in VLC** button appears on movies, series episodes, and next to the currently-tuned channel on Live TV. Click it and the stream opens in that player. Tuning to a new channel reuses the same window instead of opening a new one.
+After you set a path, an **Open in MPV** or **Open in VLC** button appears on movies, series episodes, and next to the currently-tuned channel on Live TV. Click it and the stream opens in that player. Tuning to a new channel reuses the same window instead of opening a new one. One macOS quirk: because the running VLC can only receive the stream URL, per-stream options (like extra VLC arguments) apply on the first launch only.
 
 If you configure both MPV and VLC, the **Preferred external player** setting picks which one the button uses: **MPV**, **VLC**, or **Ask each time** for a per-stream picker.
 
@@ -37,9 +37,13 @@ If something goes wrong, the toast tells you what failed:
 
 ## Android
 
-Tap **Open in player...** on any movie, episode, or Live TV channel. A picker shows every installed app that can play the stream. Pick one and it starts playing.
+Tap **Open in player...** on any movie, episode, or Live TV channel. A picker shows every installed app that can play the stream. Pick one and it starts playing. Tick **Always use this app** in the picker to skip it next time; clear the remembered choice under **Settings > Watching > Default external player** whenever you want to pick again.
 
 If your provider needs a specific User-Agent or Referer per channel, the app passes those to the target player. Players that read these (VLC, MX Player, Just Player) will use them; others fall back to their own defaults.
+
+### Native Android player (experimental)
+
+**Settings > Watching > Native Android player** plays movies, series, and live channels through Android's built-in ExoPlayer instead of the in-app player, with proper Picture-in-Picture, lock-screen, and Bluetooth controls. It's off by default, but the app may switch to it automatically when a channel can't be decoded in-app.
 
 ### Tested players
 
@@ -56,7 +60,7 @@ Snapshot as of 2026-05-19. Not an endorsement or a maintained compatibility matr
 - Samsung Video Player (preinstalled on Samsung devices)
 
 <Callout type="tip">
-  If a player you tried isn't in either list, give it a go - the picker shows whatever Android reports as a video handler.
+  If a player you tried isn't in the list, give it a go - the picker shows whatever Android reports as a video handler.
 </Callout>
 
 ## Downloaded content
