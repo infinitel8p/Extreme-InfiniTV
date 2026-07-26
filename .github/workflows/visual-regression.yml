@@ -1,0 +1,69 @@
+# Baselines are Linux-rendered; bootstrap once via "update-baselines" workflow_dispatch,
+# download the "visual-baselines" artifact, and commit its *-linux.png files under
+# tests/visual/visual.spec.ts-snapshots/. Every PR's "compare" job then diffs against those.
+# Local Windows/macOS runs make gitignored *-win32.png/*-darwin.png instead.
+name: visual-regression
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - run: pnpm test:visual
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: visual-regression-report
+          path: |
+            playwright-report/
+            test-results/
+
+  update-baselines:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - run: pnpm test:visual --update-snapshots
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visual-baselines
+          path: tests/visual/visual.spec.ts-snapshots/

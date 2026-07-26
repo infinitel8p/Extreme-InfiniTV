@@ -1,0 +1,19 @@
+#EXTM3U x-tvg-url="https://fixtures.invalid/epg.xml"
+#EXTINF:-1 tvg-id="news-one" tvg-logo="https://fixtures.invalid/logos/news-one.png" group-title="News",News One
+https://fixtures.invalid/live/1.m3u8
+#EXTINF:-1 tvg-id="news-two" tvg-logo="https://fixtures.invalid/logos/news-two.png" group-title="News",News Two
+https://fixtures.invalid/live/2.m3u8
+#EXTINF:-1 tvg-id="sports-prime" tvg-logo="https://fixtures.invalid/logos/sports-prime.png" group-title="Sports",Sports Prime
+https://fixtures.invalid/live/3.m3u8
+#EXTINF:-1 tvg-id="sports-extra" tvg-logo="https://fixtures.invalid/logos/sports-extra.png" group-title="Sports",Sports Extra
+https://fixtures.invalid/live/4.m3u8
+#EXTINF:-1 tvg-id="sports-plus" tvg-logo="https://fixtures.invalid/logos/sports-plus.png" group-title="Sports",Sports Plus
+https://fixtures.invalid/live/5.m3u8
+#EXTINF:-1 tvg-id="drama-central" tvg-logo="https://fixtures.invalid/logos/drama-central.png" group-title="Entertainment",Drama Central
+https://fixtures.invalid/live/6.m3u8
+#EXTINF:-1 tvg-id="comedy-house" tvg-logo="https://fixtures.invalid/logos/comedy-house.png" group-title="Entertainment",Comedy House
+https://fixtures.invalid/live/7.m3u8
+#EXTINF:-1 tvg-id="movie-channel" tvg-logo="https://fixtures.invalid/logos/movie-channel.png" group-title="Entertainment",Movie Channel
+https://fixtures.invalid/live/8.m3u8
+#EXTINF:-1 tvg-id="kids-zone" tvg-logo="https://fixtures.invalid/logos/kids-zone.png" group-title="Entertainment",Kids Zone
+https://fixtures.invalid/live/9.m3u8

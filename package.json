@@ -14,6 +14,7 @@
     "tauri:android:build": "tauri android build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:visual": "playwright test",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "screenshots": "node ./src/scripts/capture-screenshots.mjs",
@@ -55,6 +56,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.61.1",
     "@tauri-apps/cli": "^2.11.4",
     "@vitest/expect": "^4.1.10",
     "eslint": "^10.8.0",

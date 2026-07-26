@@ -45,3 +45,9 @@ store-listings.md
 
 .ds*
 .de*
+
+# Playwright visual regression: platform-foreign snapshots and run artifacts
+test-results/
+playwright-report/
+tests/visual/**/*-win32.png
+tests/visual/**/*-darwin.png
