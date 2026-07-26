@@ -27,6 +27,7 @@ import {
   getUserAgent,
   EXTERNAL_PLAYER_BACKENDS,
 } from "@/scripts/lib/app-settings.js"
+import { bindMonoAudio } from "@/scripts/lib/audio-effects.js"
 
 export type PlayerBackend = "videojs" | "artplayer" | "shaka" | "mpv" | "vlc"
 export type ExternalPlayerKind = "mpv" | "vlc"
@@ -67,6 +68,8 @@ export interface VjsLikeHandle {
   codecInfo?(): PlaybackCodecInfo
   /** The actual <video> element rendering playback - artplayer/shaka mount their own, distinct from the element passed to mountPlayer(). */
   getMediaElement?(): HTMLVideoElement | null
+  /** Shifts subtitle timing by delta seconds; null if no subtitle track showing. */
+  subtitleDelay?(deltaSeconds: number): number | null
 }
 
 export interface ExternalLaunchOptions {
@@ -1914,6 +1917,9 @@ async function mountVideoJs(
     getMediaElement() {
       return getUnderlyingVideo() ?? videoEl
     },
+    subtitleDelay(deltaSeconds) {
+      return subtitleManager.nudgeDelay(deltaSeconds)
+    },
   }
   return wrapped
 }
@@ -2325,6 +2331,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     getMediaElement() {
       return art.video ?? null
     },
+    subtitleDelay(deltaSeconds) {
+      return subtitleManager.nudgeDelay(deltaSeconds)
+    },
   }
   return handle
 }
@@ -2631,6 +2640,9 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     getMediaElement() {
       return video
     },
+    subtitleDelay(deltaSeconds) {
+      return subtitleManager.nudgeDelay(deltaSeconds)
+    },
   }
   return handle
 }
@@ -2664,6 +2676,7 @@ export async function mountPlayer(
   }
   if (backend === "videojs") {
     const handle = await mountVideoJs(videoEl, options)
+    bindMonoAudio(handle)
     return {
       kind: "embedded",
       backend: "videojs",
@@ -2672,6 +2685,7 @@ export async function mountPlayer(
   }
   if (backend === "shaka") {
     const handle = await mountShaka(videoEl, options)
+    bindMonoAudio(handle)
     return {
       kind: "embedded",
       backend: "shaka",
@@ -2680,6 +2694,7 @@ export async function mountPlayer(
   }
   // artplayer (default)
   const handle = await mountArtPlayer(videoEl, options)
+  bindMonoAudio(handle)
   return {
     kind: "embedded",
     backend: "artplayer",

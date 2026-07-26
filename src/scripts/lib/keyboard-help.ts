@@ -45,6 +45,7 @@ function buildSections(): ShortcutSection[] {
         { keys: ["F"], desc: t("keyboardHelp.desc.fullscreenToggle") },
         { keys: ["J"], desc: t("keyboardHelp.desc.seekBack") },
         { keys: ["L"], desc: t("keyboardHelp.desc.seekForward") },
+        { keys: ["Z", "X"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.subtitleDelay") },
       ],
     },
   ]

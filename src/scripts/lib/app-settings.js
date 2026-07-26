@@ -26,6 +26,8 @@ const KEY_VIDEO_SCALE = "xt_video_scale"
 const KEY_UPDATE_CHANNEL = "xt_update_channel"
 const KEY_AUTO_UPDATE = "xt_auto_update"
 const KEY_UI_SOUNDS = "xt_ui_sounds"
+const KEY_HAPTICS = "xt_haptics"
+const KEY_MONO_AUDIO = "xt_mono_audio"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -776,6 +778,34 @@ export function setUiSoundsEnabled(enabled) {
   writeLS(KEY_UI_SOUNDS, enabled ? "1" : "0")
   document.dispatchEvent(
     new CustomEvent(UI_SOUNDS_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const HAPTICS_EVENT = "xt:haptics-changed"
+
+/** Touch haptics: default on. */
+export function getHapticsEnabled() {
+  return readLS(KEY_HAPTICS, "") !== "0"
+}
+
+export function setHapticsEnabled(enabled) {
+  writeLS(KEY_HAPTICS, enabled ? "" : "0")
+  document.dispatchEvent(
+    new CustomEvent(HAPTICS_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const MONO_AUDIO_EVENT = "xt:mono-audio-changed"
+
+/** Mono audio: default off. */
+export function getMonoAudioEnabled() {
+  return readLS(KEY_MONO_AUDIO, "") === "1"
+}
+
+export function setMonoAudioEnabled(enabled) {
+  writeLS(KEY_MONO_AUDIO, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(MONO_AUDIO_EVENT, { detail: { value: !!enabled } })
   )
 }
 

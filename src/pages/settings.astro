@@ -41,6 +41,8 @@ import {
   IconExternalLink,
   IconRestore,
   IconLicense,
+  IconHeadphones,
+  IconDeviceMobileVibration,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -63,6 +65,7 @@ const navStructure: NavSection[] = [
     { id: "card-display",           labelKey: "settings.section.display",      label: "Display" },
     { id: "card-perf-mode",         labelKey: "settings.perfMode.title",       label: "Performance mode" },
     { id: "card-ui-sounds",         labelKey: "settings.uiSounds.title",       label: "Interface sounds" },
+    { id: "card-haptics",           labelKey: "settings.haptics.title",        label: "Touch feedback", conditional: true },
     { id: "card-tv-overscan",       labelKey: "settings.tvOverscan.title",     label: "TV safe area" },
     { id: "card-hub-strips",        labelKey: "settings.hubStrips.title",      label: "Home page sections" },
     { id: "close-behavior-section", labelKey: "settings.closeBehavior.title",  label: "Close button behavior" },
@@ -72,6 +75,7 @@ const navStructure: NavSection[] = [
     { id: "card-progress-retention",        labelKey: "settings.progressRetention.title",      label: "Continue watching" },
     { id: "epg-tz-section",                 labelKey: "settings.epgTimezone.title",            label: "EPG time zone" },
     { id: "playback-section",               labelKey: "settings.playback.title",               label: "Playback" },
+    { id: "card-mono-audio",                labelKey: "settings.monoAudio.title",              label: "Mono audio" },
     { id: "android-native-player-section",  labelKey: "settings.androidNativePlayer.navLabel", label: "Native Android player", conditional: true },
     { id: "android-default-player-section", labelKey: "settings.androidDefaultPlayer.navLabel", label: "Default external player", conditional: true },
   ]},
@@ -484,6 +488,46 @@ const navStructure: NavSection[] = [
           </script>
         </article>
 
+        <!-- Touch feedback: subtle vibration on favorite/watchlist touch actions -->
+        <article id="card-haptics" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6 hidden">
+          <div class="flex items-start gap-3">
+            <span class="icon-mark">
+              <IconDeviceMobileVibration aria-hidden="true" stroke={2} />
+            </span>
+            <div class="flex flex-col gap-1 min-w-0">
+              <h3 data-i18n="settings.haptics.title" class="text-base font-semibold">Touch feedback</h3>
+              <p data-i18n="settings.haptics.helperLong" class="text-xs text-fg-3">
+                A tiny vibration when you star a favorite or add to your watchlist by touch. Follows the system touch-feedback setting.
+              </p>
+            </div>
+          </div>
+          <div class="flex flex-col gap-2">
+            <span data-i18n="settings.haptics.label" class="text-eyebrow font-medium uppercase text-fg-3">Touch feedback</span>
+            <div
+              id="settings-haptics"
+              class="grid grid-cols-2 gap-2"
+              role="radiogroup"
+              aria-label="Touch feedback"
+              data-i18n-attr="aria-label:settings.haptics.label">
+              <button type="button" data-haptics="on"  aria-pressed="false" data-i18n="settings.haptics.on"  class="haptics-btn btn">On</button>
+              <button type="button" data-haptics="off" aria-pressed="false" data-i18n="settings.haptics.off" class="haptics-btn btn">Off</button>
+            </div>
+          </div>
+          <script is:inline>
+            try {
+              var hapticsOn = localStorage.getItem("xt_haptics") !== "0";
+              var hapticsGroup = document.getElementById("settings-haptics");
+              if (hapticsGroup) {
+                var hapticsBtns = hapticsGroup.querySelectorAll(".haptics-btn");
+                for (var hIdx = 0; hIdx < hapticsBtns.length; hIdx++) {
+                  var hapticsBtnOn = hapticsBtns[hIdx].getAttribute("data-haptics") === "on";
+                  hapticsBtns[hIdx].setAttribute("aria-pressed", hapticsBtnOn === hapticsOn ? "true" : "false");
+                }
+              }
+            } catch (e) {}
+          </script>
+        </article>
+
         <TvOverscanCard client:load />
 
         <!-- Home page sections: which hub strips render, and in what order. -->
@@ -661,6 +705,47 @@ const navStructure: NavSection[] = [
               <button type="button" data-audio-transcode="off" aria-pressed="false" data-i18n="settings.playback.audioTranscodeOff" class="audio-transcode-btn btn">Off</button>
             </div>
           </div>
+        </article>
+
+        <!-- Mono audio: downmixes embedded playback to one channel for single-earbud use -->
+        <article id="card-mono-audio" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
+          <div class="flex items-start gap-3">
+            <span class="icon-mark">
+              <IconHeadphones aria-hidden="true" stroke={2} />
+            </span>
+            <div class="flex flex-col gap-1 min-w-0">
+              <h3 data-i18n="settings.monoAudio.title" class="text-base font-semibold">Mono audio</h3>
+              <p data-i18n="settings.monoAudio.helperLong" class="text-xs text-fg-3">
+                Play all audio in both ears as a single channel - useful with one earbud. Applies to streams played by the built-in engines; some directly played files keep their original stereo.
+              </p>
+            </div>
+          </div>
+          <div class="flex flex-col gap-2">
+            <span data-i18n="settings.monoAudio.label" class="text-eyebrow font-medium uppercase text-fg-3">Mono audio</span>
+            <div
+              id="settings-mono-audio"
+              class="grid grid-cols-2 gap-2"
+              role="radiogroup"
+              aria-label="Mono audio"
+              data-i18n-attr="aria-label:settings.monoAudio.label">
+              <button type="button" data-mono="on"  aria-pressed="false" data-i18n="settings.monoAudio.on"  class="mono-audio-btn btn">On</button>
+              <button type="button" data-mono="off" aria-pressed="false" data-i18n="settings.monoAudio.off" class="mono-audio-btn btn">Off</button>
+            </div>
+          </div>
+          <script is:inline>
+            try {
+              var monoAudioRaw = localStorage.getItem("xt_mono_audio");
+              var monoAudioOn = monoAudioRaw === "1";
+              var monoAudioGroup = document.getElementById("settings-mono-audio");
+              if (monoAudioGroup) {
+                var monoAudioBtns = monoAudioGroup.querySelectorAll(".mono-audio-btn");
+                for (var mIdx = 0; mIdx < monoAudioBtns.length; mIdx++) {
+                  var monoAudioBtnOn = monoAudioBtns[mIdx].getAttribute("data-mono") === "on";
+                  monoAudioBtns[mIdx].setAttribute("aria-pressed", monoAudioBtnOn === monoAudioOn ? "true" : "false");
+                }
+              }
+            } catch (e) {}
+          </script>
         </article>
 
         <AndroidNativePlayerCard client:load />
@@ -1453,6 +1538,10 @@ const navStructure: NavSection[] = [
       setPerfMode,
       getUiSoundsEnabled,
       setUiSoundsEnabled,
+      getHapticsEnabled,
+      setHapticsEnabled,
+      getMonoAudioEnabled,
+      setMonoAudioEnabled,
       getAccent,
       setAccent,
       getProgressRetentionDays,
@@ -1469,6 +1558,7 @@ const navStructure: NavSection[] = [
       setFfmpegPath,
     } from "@/scripts/lib/app-settings.js"
     import { playUiSound } from "@/scripts/lib/ui-sounds.ts"
+    import { hapticsAvailable, performHaptic } from "@/scripts/lib/haptics.ts"
     import { audioTranscodeStatus } from "@/scripts/lib/audio-proxy.ts"
     import {
       ensureUserInfo,
@@ -2404,6 +2494,52 @@ const navStructure: NavSection[] = [
       if (next) void playUiSound("confirm")
     })
     syncUiSoundsButtons()
+
+    // ---------------------------------------------------------------------
+    // Touch feedback (Android / touch devices only)
+    // ---------------------------------------------------------------------
+    const hapticsCard = document.getElementById("card-haptics")
+    const hapticsGroup = document.getElementById("settings-haptics")
+    if (hapticsCard && hapticsAvailable()) {
+      hapticsCard.classList.remove("hidden")
+    }
+    function syncHapticsButtons() {
+      const current = getHapticsEnabled()
+      for (const btn of hapticsGroup?.querySelectorAll(".haptics-btn") || []) {
+        const isOn = btn.dataset.haptics === "on"
+        btn.setAttribute("aria-pressed", String(isOn === current))
+      }
+    }
+    hapticsGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".haptics-btn")
+      if (!btn) return
+      const next = btn.dataset.haptics === "on"
+      setHapticsEnabled(next)
+      syncHapticsButtons()
+      if (next) performHaptic("confirm")
+    })
+    syncHapticsButtons()
+
+    // ---------------------------------------------------------------------
+    // Mono audio
+    // ---------------------------------------------------------------------
+    const monoAudioGroup = document.getElementById("settings-mono-audio")
+    function syncMonoAudioButtons() {
+      const current = getMonoAudioEnabled()
+      for (const btn of monoAudioGroup?.querySelectorAll(".mono-audio-btn") || []) {
+        const isOn = btn.dataset.mono === "on"
+        btn.setAttribute("aria-pressed", String(isOn === current))
+      }
+    }
+    monoAudioGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".mono-audio-btn")
+      if (!btn) return
+      setMonoAudioEnabled(btn.dataset.mono === "on")
+      syncMonoAudioButtons()
+    })
+    syncMonoAudioButtons()
 
     // ---------------------------------------------------------------------
     // Audio transcode auto-fix: desktop-only section (visible whether or not

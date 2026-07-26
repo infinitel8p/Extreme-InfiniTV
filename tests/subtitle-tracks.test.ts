@@ -235,3 +235,123 @@ describe("createSubtitleManager MKV push cues", () => {
     expect(enabled[0]!.visibleTexts()).toEqual(["only once"])
   })
 })
+
+describe("createSubtitleManager subtitle delay", () => {
+  let video: FakeVideo
+
+  beforeEach(() => {
+    video = new FakeVideo()
+    vi.stubGlobal("window", { VTTCue: FakeVTTCue })
+  })
+
+  function mountManager() {
+    const manager = createSubtitleManager({
+      registrar: createNativeTrackRegistrar(() => video as unknown as HTMLVideoElement),
+      getCurrentTime: () => 0,
+    })
+    return { manager }
+  }
+
+  it("returns null when no track is showing", async () => {
+    const { session, emit } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "eng", name: null },
+    ])
+    const { manager } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    emit(2, [{ startMs: 1000, endMs: 3000, text: "hidden cue" }])
+
+    expect(manager.nudgeDelay(0.1)).toBeNull()
+  })
+
+  it("shifts existing cues in place and accumulates the offset across calls", async () => {
+    const { session, emit } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "eng", name: null },
+    ])
+    const { manager } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    emit(2, [{ startMs: 1000, endMs: 3000, text: "shifted cue" }])
+    manager.select(0)
+
+    expect(manager.nudgeDelay(0.1)).toBeCloseTo(0.1)
+    const cue = video.tracks[0]!.cues![0]!
+    expect(cue.startTime).toBeCloseTo(1.1)
+    expect(cue.endTime).toBeCloseTo(3.1)
+
+    expect(manager.nudgeDelay(-0.1)).toBeCloseTo(0)
+    expect(cue.startTime).toBeCloseTo(1)
+    expect(cue.endTime).toBeCloseTo(3)
+  })
+
+  it("applies the accumulated offset to cues added after a nudge", async () => {
+    const { session, emit } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "eng", name: null },
+    ])
+    const { manager } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    emit(2, [{ startMs: 1000, endMs: 3000, text: "before nudge" }])
+    manager.select(0)
+    manager.nudgeDelay(0.2)
+
+    emit(2, [{ startMs: 5000, endMs: 6000, text: "after nudge" }])
+    const cues = video.tracks[0]!.cues!
+    const lateCue = cues.find((entry) => entry.text === "after nudge")!
+    expect(lateCue.startTime).toBeCloseTo(5.2)
+    expect(lateCue.endTime).toBeCloseTo(6.2)
+  })
+
+  it("probes the accumulated offset with a zero delta without shifting cues", async () => {
+    const { session, emit } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "eng", name: null },
+    ])
+    const { manager } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    emit(2, [{ startMs: 1000, endMs: 3000, text: "probed cue" }])
+    manager.select(0)
+    manager.nudgeDelay(0.3)
+
+    expect(manager.nudgeDelay(0)).toBeCloseTo(0.3)
+    const cue = video.tracks[0]!.cues![0]!
+    expect(cue.startTime).toBeCloseTo(1.3)
+    expect(cue.endTime).toBeCloseTo(3.3)
+  })
+
+  it("probe returns null when nothing is showing", async () => {
+    const { manager } = mountManager()
+    expect(manager.nudgeDelay(0)).toBeNull()
+  })
+
+  // FakeTextTrack.cues returns null while disabled, per the real TextTrack spec.
+  it("shifts cues on a track that is currently disabled", async () => {
+    const { session, emit } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "eng", name: null },
+      { number: 3, codec: "S_TEXT/UTF8", language: "fre", name: null },
+    ])
+    const { manager } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    emit(2, [{ startMs: 1000, endMs: 3000, text: "english cue" }])
+    emit(3, [{ startMs: 2000, endMs: 4000, text: "french cue" }])
+    // select(1) then (0): flushes french's cues before it goes disabled.
+    manager.select(1)
+    manager.select(0)
+
+    expect(manager.nudgeDelay(0.1)).toBeCloseTo(0.1)
+
+    const frenchTrack = video.tracks[1]!
+    expect(frenchTrack.mode).toBe("disabled")
+    frenchTrack.mode = "hidden"
+    const frenchCue = frenchTrack.cues![0]!
+    expect(frenchCue.startTime).toBeCloseTo(2.1)
+    expect(frenchCue.endTime).toBeCloseTo(4.1)
+    frenchTrack.mode = "disabled"
+  })
+})

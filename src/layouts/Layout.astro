@@ -565,9 +565,11 @@ const documentTitle = pageTitle
   import { setupSplashComet } from "@/scripts/lib/splash-comet"
   import { initWhatsNew } from "@/scripts/lib/whats-new"
   import { initUiSounds } from "@/scripts/lib/ui-sounds"
+  import { initHaptics } from "@/scripts/lib/haptics"
   initI18n()
   initConnectivity()
   initUiSounds()
+  initHaptics()
 
   ;(function dismissSplash() {
     // ?splash-hold forces the splash and keeps it up for visual review

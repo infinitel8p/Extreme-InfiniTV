@@ -1,6 +1,7 @@
 package com.infinitel8p.xtream
 
 import android.os.Bundle
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
@@ -112,6 +113,28 @@ class WebSettingsBridge(
     val target = if (ua.isNullOrEmpty()) defaultUa else ua
     activity.runOnUiThread {
       webViewRef()?.settings?.userAgentString = target
+    }
+  }
+}
+
+// performHapticFeedback respects the user's system touch-feedback setting.
+class HapticsBridge(
+  private val activity: TauriActivity,
+  private val webViewProvider: () -> WebView?,
+) {
+  @JavascriptInterface
+  fun perform(kind: String) {
+    activity.runOnUiThread {
+      val view = webViewProvider() ?: return@runOnUiThread
+      val constant = when (kind) {
+        "confirm" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+          HapticFeedbackConstants.CONFIRM
+        } else {
+          HapticFeedbackConstants.KEYBOARD_TAP
+        }
+        else -> HapticFeedbackConstants.CLOCK_TICK
+      }
+      view.performHapticFeedback(constant)
     }
   }
 }
@@ -1050,6 +1073,7 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(LogShareBridge(this), "AndroidLog")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
     webView.addJavascriptInterface(AndroidVideoBridge(this), "AndroidVideo")
+    webView.addJavascriptInterface(HapticsBridge(this, { hostedWebView }), "AndroidHaptics")
     val sniffer = SnifferBridge(this, { hostedWebView })
     snifferBridge = sniffer
     webView.addJavascriptInterface(sniffer, "AndroidSniffer")

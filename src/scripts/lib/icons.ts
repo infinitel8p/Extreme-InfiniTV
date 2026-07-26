@@ -109,6 +109,24 @@ export const ICON_BADGE_CC = wrap(
     '<path d="M17 10.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0" />'
 )
 
+export const ICON_HEADPHONES = wrap(
+  '<path d="M4 13m0 2a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2z" />' +
+    '<path d="M15 13m0 2a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2z" />' +
+    '<path d="M4 15v-3a8 8 0 0 1 16 0v3" />'
+)
+
+export const ICON_DOTS = wrap(
+  '<path d="M5 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M12 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M19 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />'
+)
+
+export const ICON_CLOCK_EDIT = wrap(
+  '<path d="M21 12a9 9 0 1 0 -9.972 8.948c.32 .034 .644 .052 .972 .052" />' +
+    '<path d="M12 7v5l2 2" />' +
+    '<path d="M18.42 15.61a2.1 2.1 0 0 1 2.97 2.97l-3.39 3.42h-3v-3l3.42 -3.39" />'
+)
+
 export const ICON_LANGUAGE = wrap(
   '<path d="M4 5h7" />' +
     '<path d="M9 3v2c0 4.418 -2.239 8 -5 8" />' +

@@ -27,6 +27,8 @@ export interface SubtitleManagerOptions {
 export interface SubtitleManager {
   setSource(sourceUrl: string | null, mimeType?: string | null, mkvSession?: MkvSubtitleSession | null): void
   select(index: number): void
+  /** Shifts cue times by delta; delta 0 probes the offset without shifting. */
+  nudgeDelay(deltaSeconds: number): number | null
   detach(): void
 }
 
@@ -70,6 +72,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
   // Viewer's pick, kept across remounts (audio-track switch)
   let selectionSourceIdentity: MkvSubtitleSession | string | null = null
   let rememberedTrackKey: string | null = null
+  let offsetSeconds = 0
 
   function trackKeyOf(managed: ManagedTrack): string {
     return managed.kind === "push" ? `push:${managed.pushState?.trackNumber}` : `mp4:${managed.trackId}`
@@ -96,11 +99,37 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     if (!VTTCueCtor) return
     for (const cue of cues) {
       try {
-        textTrack.addCue(new VTTCueCtor(cue.startSeconds, cue.endSeconds, cue.text))
+        textTrack.addCue(new VTTCueCtor(cue.startSeconds + offsetSeconds, cue.endSeconds + offsetSeconds, cue.text))
       } catch (err) {
         log.warn("[xt:subtitles] failed to add cue:", err)
       }
     }
+  }
+
+  function nudgeDelay(deltaSeconds: number): number | null {
+    const hasShowingTrack = managedTracks.some((managed) => managed.textTrack.mode === "showing")
+    if (!hasShowingTrack) return null
+    if (deltaSeconds === 0) return offsetSeconds
+    offsetSeconds += deltaSeconds
+    for (const managed of managedTracks) {
+      const track = managed.textTrack
+      const restoreMode = track.mode
+      if (track.mode === "disabled") track.mode = "hidden"
+      const cues = track.cues
+      if (cues) {
+        for (let cueIndex = 0; cueIndex < cues.length; cueIndex++) {
+          const cue = cues[cueIndex]!
+          try {
+            cue.startTime += deltaSeconds
+            cue.endTime += deltaSeconds
+          } catch (err) {
+            log.warn("[xt:subtitles] failed to shift cue:", err)
+          }
+        }
+      }
+      track.mode = restoreMode
+    }
+    return offsetSeconds
   }
 
   function startExtraction(index: number): void {
@@ -256,6 +285,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     session = null
     currentSourceUrl = sourceUrl
     toastShownForSource = false
+    offsetSeconds = 0
     teardownTracks()
     // Same mkvSession can return on remux remount; don't stop a tee still in use.
     const incomingMkvSession = mkvSession ?? null
@@ -331,6 +361,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     currentSourceUrl = null
     selectionSourceIdentity = null
     rememberedTrackKey = null
+    offsetSeconds = 0
     if (activeMkvSession) {
       try { activeMkvSession.stop() } catch (err) { log.warn("[xt:subtitles] mkv session stop() failed:", err) }
       activeMkvSession = null
@@ -338,7 +369,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     teardownTracks()
   }
 
-  return { setSource, select, detach }
+  return { setSource, select, nudgeDelay, detach }
 }
 
 // No removeTextTrack API exists, so removed native tracks are drained and pooled for reuse.

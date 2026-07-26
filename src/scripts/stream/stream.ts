@@ -85,6 +85,8 @@ import {
   setVideoScale,
   VIDEO_SCALE_EVENT,
   SETTINGS_EVENT,
+  getMonoAudioEnabled,
+  setMonoAudioEnabled,
 } from "@/scripts/lib/app-settings.js"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
@@ -93,7 +95,7 @@ import {
   surfaceLaunchError,
   type ExternalPlayerButtonHandle,
 } from "@/scripts/lib/external-player-button.js"
-import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE, ICON_ASPECT_RATIO } from "@/scripts/lib/icons.js"
+import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE, ICON_DOTS, ICON_CHECK } from "@/scripts/lib/icons.js"
 import { openAddToCustomDialog } from "@/scripts/lib/add-to-custom-dialog.ts"
 import {
   loadProgrammes,
@@ -2101,6 +2103,46 @@ function clearRadioMode() {
   radioModeChannelId = null
 }
 
+const manualAudioOnlyOff = new Set<number>()
+
+let audioOnlySetCache: { playlistId: string; ids: Set<number> } | null = null
+
+function loadAudioOnlySet(): Set<number> {
+  if (audioOnlySetCache && audioOnlySetCache.playlistId === activePlaylistId) {
+    return audioOnlySetCache.ids
+  }
+  let ids = new Set<number>()
+  try {
+    const raw = localStorage.getItem(`xt_audio_only:${activePlaylistId}`)
+    if (raw) ids = new Set(JSON.parse(raw))
+  } catch {}
+  audioOnlySetCache = { playlistId: activePlaylistId, ids }
+  return ids
+}
+
+function saveAudioOnlySet(ids: Set<number>) {
+  audioOnlySetCache = { playlistId: activePlaylistId, ids }
+  try {
+    localStorage.setItem(`xt_audio_only:${activePlaylistId}`, JSON.stringify([...ids]))
+  } catch {}
+}
+
+function isAudioOnlyChannel(id: number): boolean {
+  return loadAudioOnlySet().has(id)
+}
+
+function toggleAudioOnlyChannel(id: number): boolean {
+  const ids = new Set(loadAudioOnlySet())
+  const nowOn = !ids.has(id)
+  if (nowOn) ids.add(id)
+  else ids.delete(id)
+  saveAudioOnlySet(ids)
+  return nowOn
+}
+
+const CURRENT_ROW_ICON_BTN_CLASS =
+  "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+
 function paintRadioNowPlaying(channelId: number) {
   const wrap = getPlayerWrap()
   if (!wrap) return
@@ -2143,6 +2185,7 @@ function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unkn
     return { ctx, wrap, videoEl }
   }
   const promote = (ctx: NonNullable<typeof lastPlayContext>) => {
+    if (manualAudioOnlyOff.has(ctx.streamId)) return
     const channel = all.find((entry) => entry.id === ctx.streamId)
     if (channel) setRadioMode(channel)
   }
@@ -2183,6 +2226,158 @@ function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unkn
   handle.on("loadedmetadata", detect)
   handle.on("playing", detect)
   handle.on("resize", detect)
+}
+
+// Mirrors openChannelMenu's dismissal + spatial-nav wiring for the now-playing row.
+const CURRENT_MORE_MENU_ID = "current-more-menu"
+let currentMoreMenuEl: HTMLElement | null = null
+let currentMoreMenuTrigger: HTMLButtonElement | null = null
+const currentMoreMenuSpatialNav = attachPopoverSpatialNav({
+  id: `${CURRENT_MORE_MENU_ID}-section`,
+  selector: `#${CURRENT_MORE_MENU_ID} [role^="menuitem"]`,
+})
+
+function closeCurrentMoreMenu(restoreFocus = true) {
+  if (!currentMoreMenuEl) return
+  currentMoreMenuSpatialNav.close()
+  currentMoreMenuEl.remove()
+  currentMoreMenuEl = null
+  document.removeEventListener("pointerdown", onCurrentMoreMenuOutside, true)
+  document.removeEventListener("keydown", onCurrentMoreMenuKey, true)
+  window.removeEventListener("blur", closeCurrentMoreMenuOnBlur)
+  window.removeEventListener("resize", closeCurrentMoreMenuOnBlur)
+  const trigger = currentMoreMenuTrigger
+  currentMoreMenuTrigger = null
+  trigger?.setAttribute("aria-expanded", "false")
+  if (restoreFocus) trigger?.focus({ preventScroll: true })
+}
+function closeCurrentMoreMenuOnBlur() {
+  closeCurrentMoreMenu(false)
+}
+function onCurrentMoreMenuOutside(event: PointerEvent) {
+  if (!currentMoreMenuEl) return
+  if (currentMoreMenuEl.contains(event.target as Node)) return
+  if (currentMoreMenuTrigger?.contains(event.target as Node)) return
+  closeCurrentMoreMenu(false)
+}
+function onCurrentMoreMenuKey(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    event.preventDefault()
+    closeCurrentMoreMenu(true)
+  }
+}
+
+function makeMoreMenuItem(label: string, checked?: boolean): HTMLButtonElement {
+  const item = document.createElement("button")
+  item.type = "button"
+  item.setAttribute("role", checked === undefined ? "menuitem" : "menuitemcheckbox")
+  if (checked !== undefined) item.setAttribute("aria-checked", String(checked))
+  item.className =
+    "w-full flex items-center justify-between gap-3 text-left px-3 py-2.5 min-h-11 rounded-lg text-sm " +
+    "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent outline-none transition-colors"
+  const labelSpan = document.createElement("span")
+  labelSpan.textContent = label
+  item.appendChild(labelSpan)
+  if (checked) {
+    const check = document.createElement("span")
+    check.className = "shrink-0 inline-flex text-accent"
+    check.setAttribute("aria-hidden", "true")
+    check.innerHTML = ICON_CHECK
+    item.appendChild(check)
+  }
+  return item
+}
+
+function setMoreMenuItemChecked(item: HTMLButtonElement, checked: boolean) {
+  item.setAttribute("aria-checked", String(checked))
+  item.querySelector("[aria-hidden='true']")?.remove()
+  if (checked) {
+    const check = document.createElement("span")
+    check.className = "shrink-0 inline-flex text-accent"
+    check.setAttribute("aria-hidden", "true")
+    check.innerHTML = ICON_CHECK
+    item.appendChild(check)
+  }
+}
+
+function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElement[] {
+  const items: HTMLButtonElement[] = []
+
+  const pipSupported = !!window.AndroidPip || document.pictureInPictureEnabled === true
+  if (pipSupported) {
+    const pipItem = makeMoreMenuItem(t("detail.action.pip"))
+    pipItem.addEventListener("click", () => {
+      closeCurrentMoreMenu()
+      if (vjs) togglePip(vjs)
+    })
+    items.push(pipItem)
+  }
+
+  const scaleItem = makeMoreMenuItem(t("stream.scale.button"))
+  scaleItem.addEventListener("click", () => {
+    closeCurrentMoreMenu()
+    openDisplayModeDialog(streamId)
+  })
+  items.push(scaleItem)
+
+  if (!channel?.isRadio) {
+    const audioItem = makeMoreMenuItem(t("livetv.audioOnly"), isAudioOnlyChannel(streamId))
+    audioItem.addEventListener("click", () => {
+      closeCurrentMoreMenu()
+      const nowOn = toggleAudioOnlyChannel(streamId)
+      if (nowOn) {
+        manualAudioOnlyOff.delete(streamId)
+        setRadioMode({ id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src })
+      } else {
+        manualAudioOnlyOff.add(streamId)
+        clearRadioMode()
+      }
+    })
+    items.push(audioItem)
+  }
+
+  // Kept open on toggle so users can A/B the effect by ear.
+  const monoItem = makeMoreMenuItem(t("settings.monoAudio.title"), getMonoAudioEnabled())
+  monoItem.addEventListener("click", () => {
+    const nowOn = !getMonoAudioEnabled()
+    setMonoAudioEnabled(nowOn)
+    setMoreMenuItemChecked(monoItem, nowOn)
+  })
+  items.push(monoItem)
+
+  return items
+}
+
+function openCurrentMoreMenu(trigger: HTMLButtonElement, streamId, channel, src, name) {
+  closeCurrentMoreMenu(false)
+
+  const menu = document.createElement("div")
+  menu.id = CURRENT_MORE_MENU_ID
+  menu.className =
+    "fixed z-50 min-w-[12rem] rounded-xl border border-line bg-surface text-fg shadow-2xl p-1 flex flex-col gap-0.5"
+  menu.setAttribute("role", "menu")
+  menu.setAttribute("aria-label", t("livetv.moreActions"))
+  menu.append(...buildCurrentMoreMenuItems(streamId, channel, src, name))
+  document.body.appendChild(menu)
+
+  const margin = 8
+  const rect = menu.getBoundingClientRect()
+  const anchorRect = trigger.getBoundingClientRect()
+  const left = Math.min(anchorRect.right - rect.width, window.innerWidth - rect.width - margin)
+  const top = Math.min(anchorRect.bottom + 6, window.innerHeight - rect.height - margin)
+  menu.style.left = `${Math.max(margin, left)}px`
+  menu.style.top = `${Math.max(margin, top)}px`
+
+  currentMoreMenuEl = menu
+  currentMoreMenuTrigger = trigger
+  trigger.setAttribute("aria-expanded", "true")
+  currentMoreMenuSpatialNav.open()
+  document.addEventListener("pointerdown", onCurrentMoreMenuOutside, true)
+  document.addEventListener("keydown", onCurrentMoreMenuKey, true)
+  window.addEventListener("blur", closeCurrentMoreMenuOnBlur)
+  window.addEventListener("resize", closeCurrentMoreMenuOnBlur)
+
+  menu.querySelector<HTMLButtonElement>("[role^='menuitem']")?.focus({ preventScroll: true })
 }
 
 function showTuningOverlay(logoUrl, maxMs = TUNING_MAX_MS) {
@@ -3055,25 +3250,22 @@ async function play(streamId, name) {
     if (shouldWarnHevc(name)) wrap.appendChild(buildHevcBadge())
     currentEl.appendChild(wrap)
 
-    const btn = document.createElement("button")
-    btn.id = "pip-btn"
-    btn.type = "button"
-    btn.title = "Picture-in-Picture"
-    btn.setAttribute("aria-label", "Picture-in-Picture")
-    btn.className = "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
-    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M19 4a3 3 0 0 1 3 3v4a1 1 0 0 1 -2 0v-4a1 1 0 0 0 -1 -1h-14a1 1 0 0 0 -1 1v10a1 1 0 0 0 1 1h6a1 1 0 0 1 0 2h-6a3 3 0 0 1 -3 -3v-10a3 3 0 0 1 3 -3z"/><path d="M20 13a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-5a2 2 0 0 1 -2 -2v-3a2 2 0 0 1 2 -2z"/></svg>`
-    btn.addEventListener("click", () => { if (vjs) togglePip(vjs) })
-    currentEl.appendChild(btn)
-
-    const scaleBtn = document.createElement("button")
-    scaleBtn.id = "display-mode-btn"
-    scaleBtn.type = "button"
-    scaleBtn.title = t("stream.scale.button")
-    scaleBtn.setAttribute("aria-label", t("stream.scale.button"))
-    scaleBtn.className = "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
-    scaleBtn.innerHTML = ICON_ASPECT_RATIO
-    scaleBtn.addEventListener("click", () => openDisplayModeDialog(streamId))
-    currentEl.appendChild(scaleBtn)
+    closeCurrentMoreMenu(false)
+    const moreBtn = document.createElement("button")
+    moreBtn.id = "current-more-btn"
+    moreBtn.type = "button"
+    const moreLabel = t("livetv.moreActions")
+    moreBtn.title = moreLabel
+    moreBtn.setAttribute("aria-label", moreLabel)
+    moreBtn.setAttribute("aria-haspopup", "menu")
+    moreBtn.setAttribute("aria-expanded", "false")
+    moreBtn.className = CURRENT_ROW_ICON_BTN_CLASS
+    moreBtn.innerHTML = ICON_DOTS
+    moreBtn.addEventListener("click", () => {
+      if (currentMoreMenuTrigger === moreBtn) closeCurrentMoreMenu()
+      else openCurrentMoreMenu(moreBtn, streamId, channel, src, name)
+    })
+    currentEl.appendChild(moreBtn)
 
     appendExternalLaunchButton(currentEl, streamId, src, name)
 
@@ -3116,8 +3308,8 @@ async function play(streamId, name) {
 
   resetEmptyState()
   document.getElementById("player")?.removeAttribute("hidden")
-  if (channel?.isRadio) {
-    setRadioMode({ id: streamId, name, logo: channel.logo ?? null, category: channel.category ?? null, url: src })
+  if (channel?.isRadio || isAudioOnlyChannel(streamId)) {
+    setRadioMode({ id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src })
   } else {
     clearRadioMode()
   }
