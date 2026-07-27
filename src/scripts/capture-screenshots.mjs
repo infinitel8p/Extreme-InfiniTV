@@ -17,7 +17,8 @@
 //   XT_DISPLAY_NAME=Demo provider        # shown as the playlist title in the sidebar
 //   XT_REDACT=false                      # opt out of the in-page redaction pass
 //   XT_STATE_FILE=path/to/snapshot.json  # localStorage snapshot to seed (defaults to .screenshot-state.json)
-//   State source precedence: XT_STATE_FILE > .screenshot-state.json > Tauri desktop app state (opt out with XT_TAURI_STATE=false)
+//   XT_ALLOW_SHORT_REDACTIONS=1          # allow skipping redaction of <4-char credential values instead of aborting
+//   State source precedence: XT_STATE_FILE > .screenshot-state.json > Tauri desktop app state (opt in with XT_TAURI_STATE=true, real credentials otherwise never read)
 //
 // Output: docs/screenshots/<Device>/<route>.png
 // When credentials are present, additional welcome-state captures are saved
@@ -147,7 +148,14 @@ function loadStateSnapshot() {
     }
   }
 
-  if (process.env.XT_TAURI_STATE === "false") return { snapshot: null, file }
+  const tauriStateEnabled = process.env.XT_TAURI_STATE === "true" || process.env.XT_TAURI_STATE === "1"
+  if (!tauriStateEnabled) {
+    console.log(
+      "No state source configured. Provide one of: a fixture .screenshot-state.json, XT_STATE_FILE=<path>, " +
+        "or XT_TAURI_STATE=true to seed from the installed Tauri app's real credentials (opt-in only, not recommended for committed screenshots).",
+    )
+    return { snapshot: null, file }
+  }
   const tauriFile = tauriStorePath()
   if (!existsSync(tauriFile)) return { snapshot: null, file }
   try {
@@ -171,17 +179,33 @@ function loadStateSnapshot() {
 
 function buildRedactions(snapshot) {
   const replacements = []
-  const add = (raw, replacement) => {
-    if (!raw || String(raw).length < 4) return
-    if (replacements.some((item) => item.raw === String(raw))) return
-    replacements.push({ raw: String(raw), replacement })
+  const allowShort = process.env.XT_ALLOW_SHORT_REDACTIONS === "1"
+  const add = (raw, replacement, { credential = true } = {}) => {
+    if (!raw) return
+    const text = String(raw)
+    if (text.length < 4) {
+      if (!credential) return
+      if (allowShort) {
+        console.warn(`Skipping redaction of a short credential value (${text.length} chars); XT_ALLOW_SHORT_REDACTIONS=1 is set.`)
+        return
+      }
+      console.error(
+        "Aborting: a credential value is shorter than 4 characters and can't be safely redacted " +
+          "(a global replace would corrupt unrelated page text). Set XT_ALLOW_SHORT_REDACTIONS=1 to skip redacting it and proceed anyway.",
+      )
+      process.exit(1)
+    }
+    if (replacements.some((item) => item.raw === text)) return
+    replacements.push({ raw: text, replacement })
   }
   const serverUrl = process.env.XT_SERVER_URL || ""
   const m3uUrl = process.env.XT_M3U_URL || ""
-  const host = hostnameOf(serverUrl || m3uUrl)
+  const sourceUrl = serverUrl || m3uUrl
   add(serverUrl.replace(/\/+$/, ""), "https://provider.example")
   add(m3uUrl, "https://provider.example/playlist.m3u8")
-  add(host, "provider.example")
+  // longer host:port form must be redacted before the bare hostname, or the port survives
+  add(hostnameWithPortOf(sourceUrl), "provider.example")
+  add(hostnameOf(sourceUrl), "provider.example")
   add(process.env.XT_USERNAME, "demo_user")
   add(process.env.XT_PASSWORD, "demo_pass")
   // snapshot entries may point at a different provider than the env vars
@@ -193,10 +217,12 @@ function buildRedactions(snapshot) {
         if (!entry || typeof entry !== "object") continue
         if (entry.serverUrl) {
           add(String(entry.serverUrl).replace(/\/+$/, ""), "https://provider.example")
+          add(hostnameWithPortOf(entry.serverUrl), "provider.example")
           add(hostnameOf(entry.serverUrl), "provider.example")
         }
         if (entry.url) {
           add(entry.url, "https://provider.example/playlist.m3u8")
+          add(hostnameWithPortOf(entry.url), "provider.example")
           add(hostnameOf(entry.url), "provider.example")
         }
         add(entry.username, "demo_user")
@@ -247,6 +273,15 @@ async function redactPage(page, redactions) {
 function hostnameOf(u) {
   try {
     return new URL(/^https?:\/\//i.test(u) ? u : "http://" + u).hostname
+  } catch {
+    return ""
+  }
+}
+
+function hostnameWithPortOf(u) {
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(u) ? u : "http://" + u)
+    return parsed.port ? `${parsed.hostname}:${parsed.port}` : ""
   } catch {
     return ""
   }

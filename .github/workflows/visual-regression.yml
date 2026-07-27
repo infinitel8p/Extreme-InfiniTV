@@ -55,6 +55,9 @@ jobs:
   update-baselines:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    concurrency:
+      group: visual-baselines-main
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
@@ -89,6 +92,7 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add tests/visual
             git commit -m "chore: update visual regression baselines"
+            git pull --rebase origin main
             git push
           else
             echo "Baselines unchanged, nothing to commit."
