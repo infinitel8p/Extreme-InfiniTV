@@ -232,7 +232,15 @@ const documentTitle = pageTitle
            pr-[env(safe-area-inset-right)]"
   >
     <div id="xt-app-splash" aria-hidden="true">
-      <canvas id="xt-app-splash-bg" aria-hidden="true"></canvas>
+      <div id="xt-app-splash-bg" aria-hidden="true">
+        <div class="xt-app-splash__nebula xt-app-splash__nebula--2"></div>
+        <div class="xt-app-splash__nebula xt-app-splash__nebula--band"></div>
+        <div class="xt-app-splash__nebula xt-app-splash__nebula--1"></div>
+        <div class="xt-app-splash__stars xt-app-splash__stars--far"></div>
+        <div class="xt-app-splash__stars xt-app-splash__stars--near"></div>
+        <div class="xt-app-splash__vignette"></div>
+        <div class="xt-app-splash__grain"></div>
+      </div>
       <div class="xt-app-splash__inner">
         <div class="xt-app-splash__mark-wrap">
           <svg
@@ -243,6 +251,18 @@ const documentTitle = pageTitle
             class="xt-app-splash__svg"
             aria-hidden="true"
           >
+            <defs>
+              <radialGradient id="xt-comet-head-gradient" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" class="xt-app-splash__comet-stop-white-hot" />
+                <stop offset="45%" class="xt-app-splash__comet-stop-white-soft" />
+                <stop offset="100%" class="xt-app-splash__comet-stop-accent-clear" />
+              </radialGradient>
+              <radialGradient id="xt-comet-halo-gradient" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" class="xt-app-splash__comet-stop-accent-strong" />
+                <stop offset="45%" class="xt-app-splash__comet-stop-accent-soft" />
+                <stop offset="100%" class="xt-app-splash__comet-stop-accent-clear" />
+              </radialGradient>
+            </defs>
             <path
               id="xt-app-splash-path"
               fill="none"
@@ -263,8 +283,14 @@ const documentTitle = pageTitle
               <rect class="xt-app-splash__base xt-app-splash__base--fill" x="164.5" y="102" width="13" height="36" rx="6.5" />
               <rect class="xt-app-splash__base xt-app-splash__base--fill" x="182.5" y="110" width="13" height="20" rx="6.5" />
             </g>
+            <g class="xt-app-splash__comet" aria-hidden="true">
+              <path class="xt-app-splash__comet-trail xt-app-splash__comet-trail--near" pathLength="100" fill="none" stroke-linecap="round" d="M120,120 A50 50 0 1 1 20 120 A50 50 0 1 1 120 120 A50 50 0 1 0 220 120 A50 50 0 1 0 120 120 Z" />
+              <path class="xt-app-splash__comet-trail xt-app-splash__comet-trail--mid" pathLength="100" fill="none" stroke-linecap="round" d="M120,120 A50 50 0 1 1 20 120 A50 50 0 1 1 120 120 A50 50 0 1 0 220 120 A50 50 0 1 0 120 120 Z" />
+              <path class="xt-app-splash__comet-trail xt-app-splash__comet-trail--far" pathLength="100" fill="none" stroke-linecap="round" d="M120,120 A50 50 0 1 1 20 120 A50 50 0 1 1 120 120 A50 50 0 1 0 220 120 A50 50 0 1 0 120 120 Z" />
+              <circle class="xt-app-splash__comet-part xt-app-splash__comet-halo" cx="0" cy="0" r="15" fill="url(#xt-comet-halo-gradient)" />
+              <circle class="xt-app-splash__comet-part xt-app-splash__comet-head" cx="0" cy="0" r="4" fill="url(#xt-comet-head-gradient)" />
+            </g>
           </svg>
-          <canvas class="xt-app-splash__comet" aria-hidden="true"></canvas>
         </div>
         <span class="xt-app-splash__wordmark">
           <span class="xt-app-splash__wordmark-1">Extreme&nbsp;Infini</span><span class="xt-app-splash__wordmark-2">TV</span>
@@ -385,11 +411,9 @@ const documentTitle = pageTitle
   #xt-app-splash-bg {
     position: absolute;
     inset: 0;
-    width: 100%;
-    height: 100%;
+    overflow: hidden;
     z-index: 0;
     pointer-events: none;
-    display: block;
     opacity: 0;
     animation: xt-app-splash-bg-in 720ms cubic-bezier(0.16, 1, 0.3, 1) 80ms forwards;
   }
@@ -400,6 +424,140 @@ const documentTitle = pageTitle
     #xt-app-splash-bg { display: none; }
   }
   :root[data-perf-mode="on"] #xt-app-splash-bg { display: none; }
+
+  /* Fractal-noise-masked nebula layers drifting on the compositor; no per-frame JS. */
+  .xt-app-splash__nebula {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 130vmax;
+    height: 130vmax;
+    will-change: transform;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size: 100% 100%;
+    mask-size: 100% 100%;
+  }
+  .xt-app-splash__nebula--1 {
+    background: radial-gradient(closest-side, color-mix(in oklch, var(--color-accent) 33%, transparent), color-mix(in oklch, var(--color-accent) 17%, transparent) 55%, transparent 88%);
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011' numOctaves='4' seed='11' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.05 -0.005'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011' numOctaves='4' seed='11' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.05 -0.005'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
+    /* Counter-phased breathing (offset periods) is what reads as morphing fog. */
+    animation: xt-app-splash-nebula-drift-1 13s cubic-bezier(0.45, 0, 0.55, 1) -5s infinite alternate,
+               xt-app-splash-nebula-breathe-1 5.5s ease-in-out -2.5s infinite alternate;
+  }
+  .xt-app-splash__nebula--2 {
+    background: radial-gradient(closest-side, color-mix(in oklch, color-mix(in oklch, var(--color-accent) 60%, #7f8cff) 20%, transparent), transparent 90%);
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.007' numOctaves='4' seed='29' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.15 -0.06'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.007' numOctaves='4' seed='29' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.15 -0.06'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
+    animation: xt-app-splash-nebula-drift-2 18s cubic-bezier(0.45, 0, 0.55, 1) -8s infinite alternate,
+               xt-app-splash-nebula-breathe-2 7.5s ease-in-out -3.5s infinite alternate;
+  }
+  .xt-app-splash__nebula--band {
+    width: 150vmax;
+    height: 150vmax;
+    background: radial-gradient(50% 50% at 50% 50%, color-mix(in oklch, var(--color-accent) 26%, transparent), color-mix(in oklch, var(--color-accent) 17%, transparent) 55%, transparent 85%);
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.013' numOctaves='4' seed='47' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.4 -0.18'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.013' numOctaves='4' seed='47' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.4 -0.18'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
+    animation: xt-app-splash-nebula-drift-band 17s cubic-bezier(0.45, 0, 0.55, 1) -7s infinite alternate,
+               xt-app-splash-nebula-breathe-band 6.5s ease-in-out -3s infinite alternate;
+  }
+  @keyframes xt-app-splash-nebula-drift-1 {
+    from { transform: translate3d(calc(-50% - 6vmin), calc(-50% - 4vmin), 0) rotate(0deg) scale(1); }
+    to   { transform: translate3d(calc(-50% + 5vmin), calc(-50% + 6vmin), 0) rotate(22deg) scale(1.14); }
+  }
+  @keyframes xt-app-splash-nebula-drift-2 {
+    from { transform: translate3d(calc(-50% + 6vmin), calc(-50% - 5vmin), 0) rotate(0deg) scale(1.1); }
+    to   { transform: translate3d(calc(-50% - 5vmin), calc(-50% + 4vmin), 0) rotate(-16deg) scale(1); }
+  }
+  @keyframes xt-app-splash-nebula-drift-band {
+    from { transform: translate3d(calc(-50% - 3vmin), calc(-50% - 2vmin), 0) rotate(-20deg) scaleY(0.42); }
+    to   { transform: translate3d(calc(-50% + 3vmin), calc(-50% + 2vmin), 0) rotate(-14deg) scaleY(0.46); }
+  }
+  @keyframes xt-app-splash-nebula-breathe-1 {
+    from { opacity: 0.75; }
+    to   { opacity: 1; }
+  }
+  @keyframes xt-app-splash-nebula-breathe-2 {
+    from { opacity: 0.55; }
+    to   { opacity: 0.9; }
+  }
+  @keyframes xt-app-splash-nebula-breathe-band {
+    from { opacity: 0.35; }
+    to   { opacity: 0.55; }
+  }
+
+  /* Hand-placed dot fields (repeating mask, no grid) read as distant/near stars. */
+  .xt-app-splash__stars {
+    position: absolute;
+    inset: -12%;
+    will-change: transform, opacity;
+    background: color-mix(in oklch, var(--color-accent) 30%, #b8bdd4);
+    -webkit-mask-repeat: repeat;
+    mask-repeat: repeat;
+    -webkit-mask-size: 512px 512px;
+    mask-size: 512px 512px;
+  }
+  .xt-app-splash__stars--far {
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='b'%3E%3CfeGaussianBlur stdDeviation='1'/%3E%3C/filter%3E%3Cg filter='url(%23b)'%3E%3Ccircle cx='73.8' cy='388.4' r='0.72' fill='%23fff' fill-opacity='0.54'/%3E%3Ccircle cx='198.0' cy='352.7' r='0.74' fill='%23fff' fill-opacity='0.68'/%3E%3Ccircle cx='120.3' cy='44.8' r='0.65' fill='%23fff' fill-opacity='0.61'/%3E%3Ccircle cx='201.7' cy='443.6' r='0.69' fill='%23fff' fill-opacity='0.30'/%3E%3Ccircle cx='36.5' cy='214.9' r='0.51' fill='%23fff' fill-opacity='0.34'/%3E%3Ccircle cx='386.3' cy='141.6' r='0.52' fill='%23fff' fill-opacity='0.54'/%3E%3Ccircle cx='27.1' cy='301.2' r='0.52' fill='%23fff' fill-opacity='0.45'/%3E%3Ccircle cx='436.1' cy='223.6' r='0.80' fill='%23fff' fill-opacity='0.66'/%3E%3Ccircle cx='319.7' cy='40.1' r='0.56' fill='%23fff' fill-opacity='0.32'/%3E%3Ccircle cx='263.9' cy='6.5' r='0.76' fill='%23fff' fill-opacity='0.31'/%3E%3Ccircle cx='92.8' cy='26.5' r='0.88' fill='%23fff' fill-opacity='0.44'/%3E%3Ccircle cx='174.3' cy='382.3' r='0.59' fill='%23fff' fill-opacity='0.46'/%3E%3Ccircle cx='470.8' cy='78.1' r='0.61' fill='%23fff' fill-opacity='0.52'/%3E%3Ccircle cx='480.9' cy='224.1' r='0.65' fill='%23fff' fill-opacity='0.59'/%3E%3Ccircle cx='65.7' cy='422.0' r='0.75' fill='%23fff' fill-opacity='0.51'/%3E%3Ccircle cx='231.2' cy='444.3' r='0.65' fill='%23fff' fill-opacity='0.35'/%3E%3Ccircle cx='85.9' cy='174.3' r='0.76' fill='%23fff' fill-opacity='0.54'/%3E%3Ccircle cx='52.2' cy='60.7' r='0.81' fill='%23fff' fill-opacity='0.31'/%3E%3Ccircle cx='369.4' cy='335.1' r='0.74' fill='%23fff' fill-opacity='0.36'/%3E%3Ccircle cx='310.6' cy='351.8' r='0.78' fill='%23fff' fill-opacity='0.62'/%3E%3Ccircle cx='101.3' cy='448.5' r='0.83' fill='%23fff' fill-opacity='0.53'/%3E%3Ccircle cx='315.7' cy='284.4' r='0.58' fill='%23fff' fill-opacity='0.41'/%3E%3Ccircle cx='256.9' cy='90.1' r='0.72' fill='%23fff' fill-opacity='0.68'/%3E%3Ccircle cx='412.9' cy='280.5' r='0.56' fill='%23fff' fill-opacity='0.33'/%3E%3Ccircle cx='339.7' cy='502.0' r='0.53' fill='%23fff' fill-opacity='0.42'/%3E%3Ccircle cx='326.5' cy='248.5' r='0.54' fill='%23fff' fill-opacity='0.64'/%3E%3Ccircle cx='56.7' cy='454.8' r='0.74' fill='%23fff' fill-opacity='0.62'/%3E%3Ccircle cx='223.3' cy='201.5' r='0.71' fill='%23fff' fill-opacity='0.38'/%3E%3Ccircle cx='265.6' cy='47.7' r='0.67' fill='%23fff' fill-opacity='0.57'/%3E%3Ccircle cx='241.1' cy='299.4' r='0.72' fill='%23fff' fill-opacity='0.47'/%3E%3Ccircle cx='165.9' cy='141.1' r='0.69' fill='%23fff' fill-opacity='0.27'/%3E%3Ccircle cx='112.9' cy='429.0' r='0.86' fill='%23fff' fill-opacity='0.63'/%3E%3Ccircle cx='154.0' cy='158.5' r='0.62' fill='%23fff' fill-opacity='0.69'/%3E%3Ccircle cx='492.8' cy='400.0' r='0.75' fill='%23fff' fill-opacity='0.61'/%3E%3Ccircle cx='208.6' cy='295.5' r='0.77' fill='%23fff' fill-opacity='0.65'/%3E%3Ccircle cx='261.5' cy='191.7' r='0.61' fill='%23fff' fill-opacity='0.57'/%3E%3Ccircle cx='19.2' cy='49.7' r='0.67' fill='%23fff' fill-opacity='0.46'/%3E%3Ccircle cx='28.4' cy='414.5' r='0.74' fill='%23fff' fill-opacity='0.38'/%3E%3Ccircle cx='189.6' cy='147.8' r='0.60' fill='%23fff' fill-opacity='0.55'/%3E%3Ccircle cx='141.1' cy='199.9' r='0.53' fill='%23fff' fill-opacity='0.43'/%3E%3Ccircle cx='344.2' cy='233.2' r='0.71' fill='%23fff' fill-opacity='0.32'/%3E%3Ccircle cx='412.6' cy='199.4' r='0.73' fill='%23fff' fill-opacity='0.67'/%3E%3Ccircle cx='450.5' cy='316.8' r='0.50' fill='%23fff' fill-opacity='0.69'/%3E%3Ccircle cx='425.1' cy='374.6' r='0.86' fill='%23fff' fill-opacity='0.49'/%3E%3Ccircle cx='302.2' cy='83.4' r='0.74' fill='%23fff' fill-opacity='0.65'/%3E%3C/g%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='b'%3E%3CfeGaussianBlur stdDeviation='1'/%3E%3C/filter%3E%3Cg filter='url(%23b)'%3E%3Ccircle cx='73.8' cy='388.4' r='0.72' fill='%23fff' fill-opacity='0.54'/%3E%3Ccircle cx='198.0' cy='352.7' r='0.74' fill='%23fff' fill-opacity='0.68'/%3E%3Ccircle cx='120.3' cy='44.8' r='0.65' fill='%23fff' fill-opacity='0.61'/%3E%3Ccircle cx='201.7' cy='443.6' r='0.69' fill='%23fff' fill-opacity='0.30'/%3E%3Ccircle cx='36.5' cy='214.9' r='0.51' fill='%23fff' fill-opacity='0.34'/%3E%3Ccircle cx='386.3' cy='141.6' r='0.52' fill='%23fff' fill-opacity='0.54'/%3E%3Ccircle cx='27.1' cy='301.2' r='0.52' fill='%23fff' fill-opacity='0.45'/%3E%3Ccircle cx='436.1' cy='223.6' r='0.80' fill='%23fff' fill-opacity='0.66'/%3E%3Ccircle cx='319.7' cy='40.1' r='0.56' fill='%23fff' fill-opacity='0.32'/%3E%3Ccircle cx='263.9' cy='6.5' r='0.76' fill='%23fff' fill-opacity='0.31'/%3E%3Ccircle cx='92.8' cy='26.5' r='0.88' fill='%23fff' fill-opacity='0.44'/%3E%3Ccircle cx='174.3' cy='382.3' r='0.59' fill='%23fff' fill-opacity='0.46'/%3E%3Ccircle cx='470.8' cy='78.1' r='0.61' fill='%23fff' fill-opacity='0.52'/%3E%3Ccircle cx='480.9' cy='224.1' r='0.65' fill='%23fff' fill-opacity='0.59'/%3E%3Ccircle cx='65.7' cy='422.0' r='0.75' fill='%23fff' fill-opacity='0.51'/%3E%3Ccircle cx='231.2' cy='444.3' r='0.65' fill='%23fff' fill-opacity='0.35'/%3E%3Ccircle cx='85.9' cy='174.3' r='0.76' fill='%23fff' fill-opacity='0.54'/%3E%3Ccircle cx='52.2' cy='60.7' r='0.81' fill='%23fff' fill-opacity='0.31'/%3E%3Ccircle cx='369.4' cy='335.1' r='0.74' fill='%23fff' fill-opacity='0.36'/%3E%3Ccircle cx='310.6' cy='351.8' r='0.78' fill='%23fff' fill-opacity='0.62'/%3E%3Ccircle cx='101.3' cy='448.5' r='0.83' fill='%23fff' fill-opacity='0.53'/%3E%3Ccircle cx='315.7' cy='284.4' r='0.58' fill='%23fff' fill-opacity='0.41'/%3E%3Ccircle cx='256.9' cy='90.1' r='0.72' fill='%23fff' fill-opacity='0.68'/%3E%3Ccircle cx='412.9' cy='280.5' r='0.56' fill='%23fff' fill-opacity='0.33'/%3E%3Ccircle cx='339.7' cy='502.0' r='0.53' fill='%23fff' fill-opacity='0.42'/%3E%3Ccircle cx='326.5' cy='248.5' r='0.54' fill='%23fff' fill-opacity='0.64'/%3E%3Ccircle cx='56.7' cy='454.8' r='0.74' fill='%23fff' fill-opacity='0.62'/%3E%3Ccircle cx='223.3' cy='201.5' r='0.71' fill='%23fff' fill-opacity='0.38'/%3E%3Ccircle cx='265.6' cy='47.7' r='0.67' fill='%23fff' fill-opacity='0.57'/%3E%3Ccircle cx='241.1' cy='299.4' r='0.72' fill='%23fff' fill-opacity='0.47'/%3E%3Ccircle cx='165.9' cy='141.1' r='0.69' fill='%23fff' fill-opacity='0.27'/%3E%3Ccircle cx='112.9' cy='429.0' r='0.86' fill='%23fff' fill-opacity='0.63'/%3E%3Ccircle cx='154.0' cy='158.5' r='0.62' fill='%23fff' fill-opacity='0.69'/%3E%3Ccircle cx='492.8' cy='400.0' r='0.75' fill='%23fff' fill-opacity='0.61'/%3E%3Ccircle cx='208.6' cy='295.5' r='0.77' fill='%23fff' fill-opacity='0.65'/%3E%3Ccircle cx='261.5' cy='191.7' r='0.61' fill='%23fff' fill-opacity='0.57'/%3E%3Ccircle cx='19.2' cy='49.7' r='0.67' fill='%23fff' fill-opacity='0.46'/%3E%3Ccircle cx='28.4' cy='414.5' r='0.74' fill='%23fff' fill-opacity='0.38'/%3E%3Ccircle cx='189.6' cy='147.8' r='0.60' fill='%23fff' fill-opacity='0.55'/%3E%3Ccircle cx='141.1' cy='199.9' r='0.53' fill='%23fff' fill-opacity='0.43'/%3E%3Ccircle cx='344.2' cy='233.2' r='0.71' fill='%23fff' fill-opacity='0.32'/%3E%3Ccircle cx='412.6' cy='199.4' r='0.73' fill='%23fff' fill-opacity='0.67'/%3E%3Ccircle cx='450.5' cy='316.8' r='0.50' fill='%23fff' fill-opacity='0.69'/%3E%3Ccircle cx='425.1' cy='374.6' r='0.86' fill='%23fff' fill-opacity='0.49'/%3E%3Ccircle cx='302.2' cy='83.4' r='0.74' fill='%23fff' fill-opacity='0.65'/%3E%3C/g%3E%3C/svg%3E");
+    animation: xt-app-splash-stars-drift-far 26s linear -10s infinite alternate,
+               xt-app-splash-stars-twinkle-far 6s ease-in-out -2s infinite alternate;
+  }
+  .xt-app-splash__stars--near {
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='b'%3E%3CfeGaussianBlur stdDeviation='1'/%3E%3C/filter%3E%3Cg filter='url(%23b)'%3E%3Ccircle cx='70.4' cy='487.7' r='1.20' fill='%23fff' fill-opacity='0.80'/%3E%3Ccircle cx='188.0' cy='153.9' r='1.44' fill='%23fff' fill-opacity='0.74'/%3E%3Ccircle cx='143.1' cy='60.0' r='1.18' fill='%23fff' fill-opacity='0.87'/%3E%3Ccircle cx='314.9' cy='351.1' r='1.24' fill='%23fff' fill-opacity='0.80'/%3E%3Ccircle cx='179.2' cy='101.1' r='1.69' fill='%23fff' fill-opacity='0.64'/%3E%3Ccircle cx='245.0' cy='232.0' r='1.65' fill='%23fff' fill-opacity='0.64'/%3E%3Ccircle cx='448.4' cy='415.4' r='1.58' fill='%23fff' fill-opacity='0.95'/%3E%3Ccircle cx='85.7' cy='285.5' r='1.26' fill='%23fff' fill-opacity='0.99'/%3E%3Ccircle cx='62.9' cy='157.8' r='1.33' fill='%23fff' fill-opacity='0.98'/%3E%3Ccircle cx='410.7' cy='322.1' r='1.71' fill='%23fff' fill-opacity='0.80'/%3E%3Ccircle cx='127.6' cy='38.7' r='1.61' fill='%23fff' fill-opacity='0.82'/%3E%3Ccircle cx='475.9' cy='451.0' r='1.14' fill='%23fff' fill-opacity='0.93'/%3E%3Ccircle cx='23.9' cy='477.5' r='1.54' fill='%23fff' fill-opacity='0.75'/%3E%3Ccircle cx='286.9' cy='465.4' r='1.88' fill='%23fff' fill-opacity='0.91'/%3E%3Ccircle cx='301.1' cy='164.7' r='1.36' fill='%23fff' fill-opacity='0.92'/%3E%3Ccircle cx='226.3' cy='435.5' r='1.38' fill='%23fff' fill-opacity='0.95'/%3E%3Ccircle cx='318.3' cy='413.0' r='1.69' fill='%23fff' fill-opacity='0.87'/%3E%3Ccircle cx='441.2' cy='376.2' r='1.60' fill='%23fff' fill-opacity='0.64'/%3E%3Ccircle cx='257.9' cy='311.1' r='1.81' fill='%23fff' fill-opacity='0.79'/%3E%3Ccircle cx='504.7' cy='146.3' r='1.66' fill='%23fff' fill-opacity='0.99'/%3E%3C/g%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='b'%3E%3CfeGaussianBlur stdDeviation='1'/%3E%3C/filter%3E%3Cg filter='url(%23b)'%3E%3Ccircle cx='70.4' cy='487.7' r='1.20' fill='%23fff' fill-opacity='0.80'/%3E%3Ccircle cx='188.0' cy='153.9' r='1.44' fill='%23fff' fill-opacity='0.74'/%3E%3Ccircle cx='143.1' cy='60.0' r='1.18' fill='%23fff' fill-opacity='0.87'/%3E%3Ccircle cx='314.9' cy='351.1' r='1.24' fill='%23fff' fill-opacity='0.80'/%3E%3Ccircle cx='179.2' cy='101.1' r='1.69' fill='%23fff' fill-opacity='0.64'/%3E%3Ccircle cx='245.0' cy='232.0' r='1.65' fill='%23fff' fill-opacity='0.64'/%3E%3Ccircle cx='448.4' cy='415.4' r='1.58' fill='%23fff' fill-opacity='0.95'/%3E%3Ccircle cx='85.7' cy='285.5' r='1.26' fill='%23fff' fill-opacity='0.99'/%3E%3Ccircle cx='62.9' cy='157.8' r='1.33' fill='%23fff' fill-opacity='0.98'/%3E%3Ccircle cx='410.7' cy='322.1' r='1.71' fill='%23fff' fill-opacity='0.80'/%3E%3Ccircle cx='127.6' cy='38.7' r='1.61' fill='%23fff' fill-opacity='0.82'/%3E%3Ccircle cx='475.9' cy='451.0' r='1.14' fill='%23fff' fill-opacity='0.93'/%3E%3Ccircle cx='23.9' cy='477.5' r='1.54' fill='%23fff' fill-opacity='0.75'/%3E%3Ccircle cx='286.9' cy='465.4' r='1.88' fill='%23fff' fill-opacity='0.91'/%3E%3Ccircle cx='301.1' cy='164.7' r='1.36' fill='%23fff' fill-opacity='0.92'/%3E%3Ccircle cx='226.3' cy='435.5' r='1.38' fill='%23fff' fill-opacity='0.95'/%3E%3Ccircle cx='318.3' cy='413.0' r='1.69' fill='%23fff' fill-opacity='0.87'/%3E%3Ccircle cx='441.2' cy='376.2' r='1.60' fill='%23fff' fill-opacity='0.64'/%3E%3Ccircle cx='257.9' cy='311.1' r='1.81' fill='%23fff' fill-opacity='0.79'/%3E%3Ccircle cx='504.7' cy='146.3' r='1.66' fill='%23fff' fill-opacity='0.99'/%3E%3C/g%3E%3C/svg%3E");
+    animation: xt-app-splash-stars-drift-near 21s linear -8s infinite alternate,
+               xt-app-splash-stars-twinkle-near 4s ease-in-out -1.5s infinite alternate;
+  }
+  @keyframes xt-app-splash-stars-drift-far {
+    from { transform: translate3d(0, 0, 0) scale(1); }
+    to   { transform: translate3d(2vmin, -1.5vmin, 0) scale(1.04); }
+  }
+  @keyframes xt-app-splash-stars-drift-near {
+    from { transform: translate3d(0, 0, 0) scale(1.05); }
+    to   { transform: translate3d(-2vmin, 1.5vmin, 0) scale(1); }
+  }
+  @keyframes xt-app-splash-stars-twinkle-far {
+    from { opacity: 0.12; }
+    to   { opacity: 0.28; }
+  }
+  @keyframes xt-app-splash-stars-twinkle-near {
+    from { opacity: 0.18; }
+    to   { opacity: 0.4; }
+  }
+
+  .xt-app-splash__vignette {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(120% 120% at 50% 50%, transparent 30%, color-mix(in srgb, var(--color-bg) 85%, transparent) 100%);
+  }
+
+  /* SVG feTurbulence tile, transform-jittered in 8 discrete steps - reads as
+     live grain while staying on the compositor. */
+  .xt-app-splash__grain {
+    position: absolute;
+    inset: -50%;
+    width: 200%;
+    height: 200%;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='128'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.6 0'/%3E%3C/filter%3E%3Crect width='128' height='128' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-size: 128px 128px;
+    opacity: 0.05;
+    mix-blend-mode: overlay;
+    will-change: transform;
+    animation: xt-app-splash-grain-shift 800ms infinite;
+  }
+  @keyframes xt-app-splash-grain-shift {
+    0%    { transform: translate3d(0px, 0px, 0); }
+    12.5% { transform: translate3d(-9px, 6px, 0); animation-timing-function: steps(1, jump-start); }
+    25%   { transform: translate3d(7px, -11px, 0); animation-timing-function: steps(1, jump-start); }
+    37.5% { transform: translate3d(-6px, -8px, 0); animation-timing-function: steps(1, jump-start); }
+    50%   { transform: translate3d(11px, 4px, 0); animation-timing-function: steps(1, jump-start); }
+    62.5% { transform: translate3d(-4px, 10px, 0); animation-timing-function: steps(1, jump-start); }
+    75%   { transform: translate3d(8px, -5px, 0); animation-timing-function: steps(1, jump-start); }
+    87.5% { transform: translate3d(-11px, -3px, 0); animation-timing-function: steps(1, jump-start); }
+    100%  { transform: translate3d(0px, 0px, 0); animation-timing-function: steps(1, jump-start); }
+  }
 
   .xt-app-splash__inner {
     position: relative;
@@ -483,18 +641,59 @@ const documentTitle = pageTitle
     }
   }
   .xt-app-splash__comet {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
     pointer-events: none;
-    z-index: 2;
+    mix-blend-mode: screen;
     animation: xt-app-splash-comet-in 320ms ease-out 2100ms backwards;
   }
   @keyframes xt-app-splash-comet-in {
     from { opacity: 0; }
     to   { opacity: 1; }
   }
+  /* Travels the same figure-8 as #xt-app-splash-path. offset-anchor stays at
+     its default (bbox center) on every part - a non-center anchor on the
+     tail's SVG ellipse throws its position off-path in Chromium. */
+  .xt-app-splash__comet-part {
+    offset-path: path("M120,120 A50 50 0 1 1 20 120 A50 50 0 1 1 120 120 A50 50 0 1 0 220 120 A50 50 0 1 0 120 120 Z");
+    offset-rotate: auto;
+    animation: xt-app-splash-comet-travel 6000ms linear infinite;
+  }
+  .xt-app-splash__comet-halo {
+    filter: blur(3px);
+  }
+  @keyframes xt-app-splash-comet-travel {
+    from { offset-distance: 100%; }
+    to   { offset-distance: 0%; }
+  }
+  /* Dashoffset sweeps 0->100 in step with offset-distance, keeping the trail behind the head. */
+  .xt-app-splash__comet-trail {
+    stroke: var(--color-accent);
+    animation: xt-app-splash-comet-trail 6000ms linear infinite;
+  }
+  .xt-app-splash__comet-trail--near {
+    stroke-dasharray: 6 94;
+    stroke-width: 4;
+    opacity: 0.4;
+  }
+  .xt-app-splash__comet-trail--mid {
+    stroke-dasharray: 12 88;
+    stroke-width: 3;
+    opacity: 0.22;
+  }
+  .xt-app-splash__comet-trail--far {
+    stroke-dasharray: 20 80;
+    stroke-width: 2.2;
+    opacity: 0.12;
+    filter: blur(1px);
+  }
+  @keyframes xt-app-splash-comet-trail {
+    from { stroke-dashoffset: 0; }
+    to   { stroke-dashoffset: 100; }
+  }
+  .xt-app-splash__comet-stop-white-hot     { stop-color: #fff; stop-opacity: 0.95; }
+  .xt-app-splash__comet-stop-white-soft    { stop-color: #fff; stop-opacity: 0.5; }
+  .xt-app-splash__comet-stop-accent-strong { stop-color: var(--color-accent); stop-opacity: 0.75; }
+  .xt-app-splash__comet-stop-accent-soft   { stop-color: var(--color-accent); stop-opacity: 0.25; }
+  .xt-app-splash__comet-stop-accent-clear  { stop-color: var(--color-accent); stop-opacity: 0; }
 
   .xt-app-splash__wordmark {
     font-size: clamp(1.125rem, 2.6vmin, 1.5rem);
@@ -519,8 +718,8 @@ const documentTitle = pageTitle
     to   { opacity: 1; transform: scale(1) translateY(0); }
   }
   @keyframes xt-app-splash-word-in {
-    from { opacity: 0; transform: translateY(6px); letter-spacing: 0.04em; }
-    to   { opacity: 1; transform: translateY(0); letter-spacing: -0.02em; }
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 
   /* Must follow the animation rules it overrides (same specificity); the
@@ -529,11 +728,14 @@ const documentTitle = pageTitle
     .xt-app-splash__svg,
     .xt-app-splash__wordmark,
     .xt-app-splash__comet,
+    .xt-app-splash__comet-part,
+    .xt-app-splash__comet-trail,
     .xt-app-splash__mark circle.xt-app-splash__base--fill,
     .xt-app-splash__base--ring,
     .xt-app-splash__mark rect {
       animation: none;
     }
+    .xt-app-splash__comet { display: none; }
   }
 
   :root[data-perf-mode="on"] #xt-app-splash {
@@ -542,6 +744,8 @@ const documentTitle = pageTitle
   }
   :root[data-perf-mode="on"] .xt-app-splash__svg,
   :root[data-perf-mode="on"] .xt-app-splash__wordmark,
+  :root[data-perf-mode="on"] .xt-app-splash__comet-part,
+  :root[data-perf-mode="on"] .xt-app-splash__comet-trail,
   :root[data-perf-mode="on"] .xt-app-splash__mark circle.xt-app-splash__base--fill,
   :root[data-perf-mode="on"] .xt-app-splash__base--ring,
   :root[data-perf-mode="on"] .xt-app-splash__mark rect {
@@ -561,8 +765,6 @@ const documentTitle = pageTitle
   import { initI18n } from "@/scripts/lib/i18n.js"
   import { initConnectivity } from "@/scripts/lib/connectivity.js"
   import { initTrayHandler } from "@/scripts/lib/tray-handler"
-  import { setupSplashBackdrop } from "@/scripts/lib/splash-backdrop"
-  import { setupSplashComet } from "@/scripts/lib/splash-comet"
   import { initWhatsNew } from "@/scripts/lib/whats-new"
   import { initUiSounds } from "@/scripts/lib/ui-sounds"
   import { initHaptics } from "@/scripts/lib/haptics"
@@ -579,9 +781,6 @@ const documentTitle = pageTitle
     const splash = document.getElementById("xt-app-splash")
     if (!splash) return
 
-    const backdropCleanup = setupSplashBackdrop(splash)
-    const cometCleanup = setupSplashComet(splash)
-
     // pathLength="100" matches the CSS dash values, so the arc is hidden
     // from first paint; measuring the real length here flashed a segment.
     const infinityPath = splash.querySelector(
@@ -595,6 +794,7 @@ const documentTitle = pageTitle
         infinityPath.style.strokeDasharray = "none"
         infinityPath.style.strokeDashoffset = "0"
       } else {
+        // Small paint, kept deliberately - the one non-composited animation left in the splash.
         infinityPath.animate(
           [{ strokeDashoffset: "101" }, { strokeDashoffset: "0" }],
           {
@@ -612,8 +812,6 @@ const documentTitle = pageTitle
     const MIN_DISPLAY_MS = 3500
     const start = performance.now()
     const remove = () => {
-      cometCleanup()
-      backdropCleanup()
       document.documentElement.setAttribute("data-splash-done", "")
       try { sessionStorage.setItem("xt_splash_done", "1") } catch {}
       splash.remove()
