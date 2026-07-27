@@ -2,6 +2,8 @@
 
 import { log } from "@/scripts/lib/log.js"
 import { getFfmpegPath, SETTINGS_EVENT } from "@/scripts/lib/app-settings.js"
+import { t } from "@/scripts/lib/i18n.js"
+import { toastWarn } from "@/scripts/lib/toast.js"
 
 export interface VodAudioRemuxOptions {
   url: string
@@ -31,31 +33,51 @@ const isTauri =
 
 const vodAudioRemuxPlatformAvailable = isTauri && !isAndroid
 
-let cachedAvailability: Promise<boolean> | null = null
-let activeSessionId: string | null = null
+interface VodAudioRemuxAvailability {
+  available: boolean
+  customPathIgnored: boolean
+}
 
-async function probeAvailability(): Promise<boolean> {
+let cachedAvailability: Promise<VodAudioRemuxAvailability> | null = null
+let activeSessionId: string | null = null
+let lastWarnedIgnoredPath: string | null = null
+
+async function probeAvailability(): Promise<VodAudioRemuxAvailability> {
   try {
     const { invoke } = await import("@tauri-apps/api/core")
-    return !!(await invoke("vod_audio_remux_available", {
+    const result = (await invoke("vod_audio_remux_available", {
       ffmpegPath: getFfmpegPath() || null,
-    }))
+    })) as { available?: boolean; customPathIgnored?: boolean }
+    return { available: !!result?.available, customPathIgnored: !!result?.customPathIgnored }
   } catch (err) {
     log.warn("[xt:vod-audio-proxy] availability check failed:", err)
-    return false
+    return { available: false, customPathIgnored: false }
   }
+}
+
+function warnCustomPathIgnoredOnce(): void {
+  const currentPath = getFfmpegPath()
+  if (!currentPath || lastWarnedIgnoredPath === currentPath) return
+  lastWarnedIgnoredPath = currentPath
+  log.warn("[xt:vod-audio-proxy] custom ffmpeg path is not usable, using bundled ffmpeg instead")
+  toastWarn(t("settings.playback.ffmpegCustomPathIgnored"))
 }
 
 export async function vodAudioRemuxAvailable(): Promise<boolean> {
   if (!vodAudioRemuxPlatformAvailable) return false
   if (!cachedAvailability) cachedAvailability = probeAvailability()
-  return cachedAvailability
+  const result = await cachedAvailability
+  if (result.customPathIgnored) warnCustomPathIgnoredOnce()
+  return result.available
 }
 
 if (vodAudioRemuxPlatformAvailable && typeof document !== "undefined") {
   document.addEventListener(SETTINGS_EVENT, (event: Event) => {
     const detail = (event as CustomEvent)?.detail
-    if (detail?.key === "ffmpegPath") cachedAvailability = null
+    if (detail?.key === "ffmpegPath") {
+      cachedAvailability = null
+      lastWarnedIgnoredPath = null
+    }
   })
 }
 

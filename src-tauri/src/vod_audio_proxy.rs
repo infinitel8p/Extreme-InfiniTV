@@ -47,6 +47,8 @@ struct CachedProbeResolution {
     custom_path: Option<String>,
     // None = cached "no capable ffmpeg found".
     probe: Option<FfmpegProbe>,
+    // True when a supplied custom path failed and a fallback candidate was used instead.
+    custom_path_ignored: bool,
 }
 
 struct ServerHandle {
@@ -94,10 +96,24 @@ struct VodAudioSession {
 
 // --- Commands ---
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VodAudioRemuxAvailability {
+    pub available: bool,
+    pub custom_path_ignored: bool,
+}
+
 #[tauri::command]
-pub async fn vod_audio_remux_available(app: AppHandle, ffmpeg_path: Option<String>) -> bool {
+pub async fn vod_audio_remux_available(
+    app: AppHandle,
+    ffmpeg_path: Option<String>,
+) -> VodAudioRemuxAvailability {
     let state = app.state::<VodAudioProxyState>();
-    ensure_probed(&state, ffmpeg_path).await.is_some()
+    let (probe, custom_path_ignored) = ensure_probed(&state, ffmpeg_path).await;
+    VodAudioRemuxAvailability {
+        available: probe.is_some(),
+        custom_path_ignored,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -133,8 +149,8 @@ pub async fn register_vod_audio_remux(
     teardown_active_session(&state).await;
 
     let resolved_ffmpeg_path = match ensure_probed(&state, ffmpeg_path).await {
-        Some(probe) => probe.path,
-        None => {
+        (Some(probe), _) => probe.path,
+        (None, _) => {
             return Err(
                 "NOT_FOUND:ffmpeg with Matroska/MOV demuxers and H.264/HEVC decoders not found"
                     .to_string(),
@@ -481,30 +497,10 @@ fn decoders_support_video_timestamp_inference(stdout: &str) -> bool {
     has_decoder("h264") && has_decoder("hevc")
 }
 
-async fn probe_demuxers(path: &str) -> Result<String, String> {
+async fn probe_ffmpeg_listing(path: &str, flag: &str) -> Result<String, String> {
     let mut command = TokioCommand::new(path);
     command
-        .args(["-hide_banner", "-demuxers"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(windows)]
-    {
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    let child = command.spawn().map_err(|e| classify_io_error(&e))?;
-    match tokio::time::timeout(Duration::from_millis(DETECT_TIMEOUT_MS), child.wait_with_output()).await {
-        Ok(Ok(output)) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
-        Ok(Err(e)) => Err(format!("OTHER:{e}")),
-        Err(_) => Err(format!("TIMEOUT:{path} did not exit within {DETECT_TIMEOUT_MS}ms")),
-    }
-}
-
-async fn probe_decoders(path: &str) -> Result<String, String> {
-    let mut command = TokioCommand::new(path);
-    command
-        .args(["-hide_banner", "-decoders"])
+        .args(["-hide_banner", flag])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -522,12 +518,12 @@ async fn probe_decoders(path: &str) -> Result<String, String> {
 }
 
 async fn probe_candidate(path: &str) -> Option<FfmpegProbe> {
-    let demuxers_stdout = probe_demuxers(path).await.ok()?;
+    let demuxers_stdout = probe_ffmpeg_listing(path, "-demuxers").await.ok()?;
     if !demuxers_support_matroska_and_mov(&demuxers_stdout) {
         return None;
     }
     // Matroska often omits video DTS; decoders let ffmpeg infer it.
-    if !probe_decoders(path)
+    if !probe_ffmpeg_listing(path, "-decoders")
         .await
         .map(|stdout| decoders_support_video_timestamp_inference(&stdout))
         .unwrap_or(false)
@@ -544,36 +540,43 @@ fn normalize_custom_path(path: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-async fn resolve_and_probe_ffmpeg(custom_path: Option<&str>) -> Option<FfmpegProbe> {
+// Second value is custom_path_ignored: true when a supplied custom path
+// failed but a fallback candidate satisfied the probe.
+async fn resolve_and_probe_ffmpeg(custom_path: Option<&str>) -> (Option<FfmpegProbe>, bool) {
+    let mut custom_failed = false;
     if let Some(custom) = custom_path {
         if external_player::validate_arg(custom, "ffmpeg path").is_ok() {
             if let Some(probe) = probe_candidate(custom).await {
-                return Some(probe);
+                return (Some(probe), false);
             }
         }
+        custom_failed = true;
     }
     for candidate in ffmpeg_candidates() {
         if let Some(probe) = probe_candidate(&candidate).await {
-            return Some(probe);
+            return (Some(probe), custom_failed);
         }
     }
-    None
+    (None, false)
 }
 
-// Outer None is a miss; Some(None) is a cached negative.
+// Outer None is a miss; Some((probe, custom_path_ignored)) is a cached hit.
 fn cached_probe_hit(
     cached: &Option<CachedProbeResolution>,
     normalized_custom: &Option<String>,
-) -> Option<Option<FfmpegProbe>> {
+) -> Option<(Option<FfmpegProbe>, bool)> {
     let cache = cached.as_ref()?;
     if cache.custom_path == *normalized_custom {
-        Some(cache.probe.clone())
+        Some((cache.probe.clone(), cache.custom_path_ignored))
     } else {
         None
     }
 }
 
-async fn ensure_probed(state: &VodAudioProxyState, custom_path: Option<String>) -> Option<FfmpegProbe> {
+async fn ensure_probed(
+    state: &VodAudioProxyState,
+    custom_path: Option<String>,
+) -> (Option<FfmpegProbe>, bool) {
     let normalized_custom = normalize_custom_path(custom_path);
     {
         let cached = state
@@ -584,7 +587,7 @@ async fn ensure_probed(state: &VodAudioProxyState, custom_path: Option<String>) 
             return hit;
         }
     }
-    let probe = resolve_and_probe_ffmpeg(normalized_custom.as_deref()).await;
+    let (probe, custom_path_ignored) = resolve_and_probe_ffmpeg(normalized_custom.as_deref()).await;
     let mut cached = state
         .probe
         .lock()
@@ -592,8 +595,9 @@ async fn ensure_probed(state: &VodAudioProxyState, custom_path: Option<String>) 
     *cached = Some(CachedProbeResolution {
         custom_path: normalized_custom,
         probe: probe.clone(),
+        custom_path_ignored,
     });
-    probe
+    (probe, custom_path_ignored)
 }
 
 // --- Server lifecycle ---
@@ -1453,8 +1457,9 @@ mod tests {
         let cached = Some(CachedProbeResolution {
             custom_path: None,
             probe: None,
+            custom_path_ignored: false,
         });
-        assert_eq!(cached_probe_hit(&cached, &None), Some(None));
+        assert_eq!(cached_probe_hit(&cached, &None), Some((None, false)));
     }
 
     #[test]
@@ -1465,10 +1470,11 @@ mod tests {
         let cached = Some(CachedProbeResolution {
             custom_path: Some("/usr/bin/ffmpeg".to_string()),
             probe: Some(probe.clone()),
+            custom_path_ignored: false,
         });
         assert_eq!(
             cached_probe_hit(&cached, &Some("/usr/bin/ffmpeg".to_string())),
-            Some(Some(probe))
+            Some((Some(probe), false))
         );
     }
 
@@ -1477,8 +1483,25 @@ mod tests {
         let cached = Some(CachedProbeResolution {
             custom_path: Some("/usr/bin/ffmpeg".to_string()),
             probe: None,
+            custom_path_ignored: false,
         });
         assert!(cached_probe_hit(&cached, &Some("/opt/ffmpeg/ffmpeg".to_string())).is_none());
+    }
+
+    #[test]
+    fn cached_probe_hit_surfaces_a_cached_custom_path_ignored_flag() {
+        let probe = FfmpegProbe {
+            path: "/usr/bin/ffmpeg".to_string(),
+        };
+        let cached = Some(CachedProbeResolution {
+            custom_path: Some("/bad/ffmpeg".to_string()),
+            probe: Some(probe.clone()),
+            custom_path_ignored: true,
+        });
+        assert_eq!(
+            cached_probe_hit(&cached, &Some("/bad/ffmpeg".to_string())),
+            Some((Some(probe), true))
+        );
     }
 
     #[test]
