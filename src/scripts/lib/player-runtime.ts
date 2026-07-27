@@ -27,7 +27,7 @@ import {
   getUserAgent,
   EXTERNAL_PLAYER_BACKENDS,
 } from "@/scripts/lib/app-settings.js"
-import { bindMonoAudio } from "@/scripts/lib/audio-effects.js"
+import { bindMonoAudio, hasMonoGraph, isSafeAudioSourceUrl } from "@/scripts/lib/audio-effects.js"
 
 export type PlayerBackend = "videojs" | "artplayer" | "shaka" | "mpv" | "vlc"
 export type ExternalPlayerKind = "mpv" | "vlc"
@@ -1111,6 +1111,8 @@ function attachHlsToVideo(
   const preferNative =
     isMacOS && video.canPlayType("application/vnd.apple.mpegurl")
   if (preferNative) {
+    // Force CORS when a mono graph is already attached: without it, this src plays silent forever.
+    if (hasMonoGraph(video)) video.crossOrigin = "anonymous"
     video.src = url
     return
   }
@@ -1118,6 +1120,7 @@ function attachHlsToVideo(
     if (!video.canPlayType("application/vnd.apple.mpegurl")) {
       log.warn("[xt:player] hls.js unsupported and no native HLS; fallback to <video src>")
     }
+    if (hasMonoGraph(video)) video.crossOrigin = "anonymous"
     video.src = url
     return
   }
@@ -1309,6 +1312,32 @@ export function mpegtsRelativeTimestampOffset(nativeOffset: number, timelineOffs
   return nativeOffset - timelineOffset
 }
 
+/** Rewraps a SourceBuffer's timestampOffset relative to baseSeconds; mpegts.js re-manages the native absolute value for audio drift. */
+export function defineRelativeTimestampOffset(
+  sourceBuffer: { timestampOffset: number },
+  baseSeconds: number,
+): void {
+  const nativeDescriptor =
+    Object.getOwnPropertyDescriptor(sourceBuffer, "timestampOffset")
+    ?? Object.getOwnPropertyDescriptor(Object.getPrototypeOf(sourceBuffer), "timestampOffset")
+  if (!nativeDescriptor) return
+  let rawValue = nativeDescriptor.get ? nativeDescriptor.get.call(sourceBuffer) : sourceBuffer.timestampOffset
+  const readNative = nativeDescriptor.get ? () => nativeDescriptor.get!.call(sourceBuffer) : () => rawValue
+  const writeNative = nativeDescriptor.set
+    ? (value: number) => nativeDescriptor.set!.call(sourceBuffer, value)
+    : (value: number) => { rawValue = value }
+  Object.defineProperty(sourceBuffer, "timestampOffset", {
+    configurable: true,
+    get() {
+      return mpegtsRelativeTimestampOffset(readNative(), baseSeconds)
+    },
+    set(value: number) {
+      writeNative(value + baseSeconds)
+    },
+  })
+  writeNative(baseSeconds)
+}
+
 async function attachMpegts(
   videoEl: HTMLVideoElement,
   url: string,
@@ -1379,21 +1408,10 @@ async function attachMpegts(
       offsetWrapTimer = null
       try {
         const originalAdd = mediaSource.addSourceBuffer.bind(mediaSource)
-        const nativeDescriptor = Object.getOwnPropertyDescriptor(SourceBuffer.prototype, "timestampOffset")
-        if (!nativeDescriptor?.get || !nativeDescriptor?.set) return
         mediaSource.addSourceBuffer = (mime: string) => {
           const sourceBuffer = originalAdd(mime)
           try {
-            Object.defineProperty(sourceBuffer, "timestampOffset", {
-              get() {
-                return mpegtsRelativeTimestampOffset(
-                  nativeDescriptor.get!.call(sourceBuffer),
-                  baseSeconds as number,
-                )
-              },
-              set(value: number) { nativeDescriptor.set!.call(sourceBuffer, value + (baseSeconds as number)) },
-            })
-            nativeDescriptor.set!.call(sourceBuffer, baseSeconds as number)
+            defineRelativeTimestampOffset(sourceBuffer, baseSeconds as number)
           } catch {}
           return sourceBuffer
         }
@@ -1722,6 +1740,7 @@ async function mountVideoJs(
     destroyMpegts()
     destroyHls()
     destroyShaka()
+    if (hasMonoGraph(videoEl) && !isSafeAudioSourceUrl(src)) videoEl.crossOrigin = "anonymous"
     player.src({ src, type: type || "video/mp4" })
   }
 
@@ -2107,6 +2126,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         const handle = await attachPromise
         if (pendingMpegtsAttach === attachPromise) pendingMpegtsAttach = null
         if (!handle) {
+          if (hasMonoGraph(video)) video.crossOrigin = "anonymous"
           video.src = url
           return
         }
@@ -2247,6 +2267,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       }
       if (hint === "native") {
         art.type = ""
+        // artplayer's default (non-customType) handling sets el.src directly.
+        if (art.video && hasMonoGraph(art.video) && !isSafeAudioSourceUrl(src)) art.video.crossOrigin = "anonymous"
         art.url = src
         return
       }
@@ -2257,6 +2279,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         .then((kind) => {
           if (pendingSrc !== src) return
           art.type = kind === "dash" ? "mpd" : kind === "ts" ? "ts" : kind === "native" ? "" : "m3u8"
+          if (kind === "native" && art.video && hasMonoGraph(art.video) && !isSafeAudioSourceUrl(src)) {
+            art.video.crossOrigin = "anonymous"
+          }
           art.url = src
           if (kind === "ts" || kind === "native") audioControl.setSource(pendingAudioSource)
           if ((kind === "ts" || kind === "native") && subtitles) {
@@ -2449,6 +2474,8 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       setShakaSeekBar(true)
       player.getNetworkingEngine()?.clearAllRequestFilters()
       configureShakaDrmAndAuth(player, clearKeys, authorization, cleanUrl)
+      // Shaka can fall back to src= for non-MSE-able content, setting el.src directly.
+      if (hasMonoGraph(video) && !isSafeAudioSourceUrl(cleanUrl)) video.crossOrigin = "anonymous"
       await player.load(cleanUrl, null, mimeTypeHint || undefined)
       if (pendingSrc !== src) return
       const track = player.getVariantTracks?.().find((variant: any) => variant.active)
@@ -2647,6 +2674,16 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   return handle
 }
 
+// Runs the mono-graph disposer on player teardown so its nodes disconnect.
+function wireMonoAudioDisposal(handle: VjsLikeHandle): void {
+  const disposeMonoAudio = bindMonoAudio(handle)
+  const originalDispose = handle.dispose?.bind(handle)
+  handle.dispose = () => {
+    disposeMonoAudio()
+    return originalDispose?.()
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Mount entry point
 // ---------------------------------------------------------------------------
@@ -2676,7 +2713,7 @@ export async function mountPlayer(
   }
   if (backend === "videojs") {
     const handle = await mountVideoJs(videoEl, options)
-    bindMonoAudio(handle)
+    wireMonoAudioDisposal(handle)
     return {
       kind: "embedded",
       backend: "videojs",
@@ -2685,7 +2722,7 @@ export async function mountPlayer(
   }
   if (backend === "shaka") {
     const handle = await mountShaka(videoEl, options)
-    bindMonoAudio(handle)
+    wireMonoAudioDisposal(handle)
     return {
       kind: "embedded",
       backend: "shaka",
@@ -2694,7 +2731,7 @@ export async function mountPlayer(
   }
   // artplayer (default)
   const handle = await mountArtPlayer(videoEl, options)
-  bindMonoAudio(handle)
+  wireMonoAudioDisposal(handle)
   return {
     kind: "embedded",
     backend: "artplayer",

@@ -8,6 +8,7 @@ import {
   externalPlayersAvailable,
   androidMimeForUrl,
   mpegtsRelativeTimestampOffset,
+  defineRelativeTimestampOffset,
 } from "../src/scripts/lib/player-runtime"
 
 const SRC = "https://example.com/live/u/p/1.m3u8"
@@ -16,6 +17,16 @@ describe("mpegtsRelativeTimestampOffset", () => {
   it("rebases the native absolute offset before mpegts compares segment offsets", () => {
     expect(mpegtsRelativeTimestampOffset(60.02, 60)).toBeCloseTo(0.02)
     expect(mpegtsRelativeTimestampOffset(60, 60)).toBe(0)
+  })
+})
+
+describe("defineRelativeTimestampOffset", () => {
+  it("round-trips a relative value through a real timestampOffset property", () => {
+    const sourceBuffer = { timestampOffset: 0 }
+    defineRelativeTimestampOffset(sourceBuffer, 60)
+    expect(sourceBuffer.timestampOffset).toBe(0)
+    sourceBuffer.timestampOffset = 0.02
+    expect(sourceBuffer.timestampOffset).toBeCloseTo(0.02)
   })
 })
 

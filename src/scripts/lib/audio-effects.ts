@@ -2,21 +2,36 @@
 
 import { getMonoAudioEnabled, MONO_AUDIO_EVENT } from "@/scripts/lib/app-settings.js"
 import { log } from "@/scripts/lib/log.js"
+import { getSharedAudioContext } from "@/scripts/lib/audio-context.ts"
 
 interface MonoGraph {
   source: MediaElementAudioSourceNode
   gain: GainNode
 }
 
-let audioContext: AudioContext | null = null
 const graphs = new WeakMap<HTMLVideoElement, MonoGraph>()
 
-function getContext(): AudioContext | null {
-  if (audioContext) return audioContext
-  const Ctor = window.AudioContext ?? (window as any).webkitAudioContext
-  if (!Ctor) return null
-  audioContext = new Ctor()
-  return audioContext
+// createMediaElementSource() is permanent: once attached it can never be
+// detached, so a later non-CORS cross-origin src on the same element plays
+// silent forever. Only safe to attach on blob: (MSE) or same-origin sources.
+export function isSafeAudioSourceUrl(url: string): boolean {
+  if (!url) return false
+  if (url.startsWith("blob:")) return true
+  try {
+    return new URL(url, window.location.href).origin === window.location.origin
+  } catch {
+    return false
+  }
+}
+
+function isSafeAudioSource(videoEl: HTMLVideoElement): boolean {
+  return isSafeAudioSourceUrl(videoEl.currentSrc)
+}
+
+/** Whether a permanent mono/gain graph is already attached to this element. */
+export function hasMonoGraph(mediaEl: HTMLVideoElement | null): boolean {
+  if (!mediaEl) return false
+  return graphs.has(mediaEl)
 }
 
 function setMonoConfig(gain: GainNode, mono: boolean): void {
@@ -40,9 +55,8 @@ export function applyMonoPreference(videoEl: HTMLVideoElement | null): void {
       return
     }
     if (!monoEnabled) return
-    // createMediaElementSource() is permanent, so only attach for blob: (MSE) sources.
-    if (!videoEl.currentSrc || !videoEl.currentSrc.startsWith("blob:")) return
-    const ctx = getContext()
+    if (!isSafeAudioSource(videoEl)) return
+    const ctx = getSharedAudioContext()
     if (!ctx) return
     if (ctx.state === "suspended") void ctx.resume().catch(() => {})
     const source = ctx.createMediaElementSource(videoEl)
@@ -96,5 +110,11 @@ export function bindMonoAudio(handle: MonoAudioHandle): () => void {
   ensureSettingListener()
   return () => {
     if (currentHandle === handle) currentHandle = null
+    const mediaElement = handle.getMediaElement?.() ?? null
+    const graph = mediaElement ? graphs.get(mediaElement) : undefined
+    if (!graph) return
+    try { graph.source.disconnect() } catch {}
+    try { graph.gain.disconnect() } catch {}
+    if (mediaElement) graphs.delete(mediaElement)
   }
 }
