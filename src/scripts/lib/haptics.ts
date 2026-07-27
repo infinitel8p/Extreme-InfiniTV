@@ -46,13 +46,15 @@ export function initHaptics(): void {
   if (typeof window === "undefined" || initialized) return
   initialized = true
 
-  document.addEventListener(
-    "pointerdown",
-    (ev) => {
-      if ((ev as PointerEvent).pointerType === "touch") lastTouchAt = performance.now()
-    },
-    { capture: true, passive: true },
-  )
+  for (const eventName of ["pointerdown", "pointerup"]) {
+    document.addEventListener(
+      eventName,
+      (ev) => {
+        if ((ev as PointerEvent).pointerType === "touch") lastTouchAt = performance.now()
+      },
+      { capture: true, passive: true },
+    )
+  }
 
   document.addEventListener("xt:favorites-changed", (ev) => {
     const detail = (ev as CustomEvent).detail
