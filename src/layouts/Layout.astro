@@ -756,6 +756,17 @@ const documentTitle = pageTitle
     stroke-dashoffset: 0;
   }
   :root[data-perf-mode="on"] .xt-app-splash__comet { display: none; }
+
+  /* Android WebView mishandles filter masks, offset-path and blend modes, and chokes on these layer sizes. */
+  :root[data-platform="android"] .xt-app-splash__nebula,
+  :root[data-platform="android"] .xt-app-splash__stars,
+  :root[data-platform="android"] .xt-app-splash__grain,
+  :root[data-platform="android"] .xt-app-splash__comet-part {
+    display: none;
+  }
+  :root[data-platform="android"] .xt-app-splash__comet {
+    mix-blend-mode: normal;
+  }
 </style>
 
 <script>

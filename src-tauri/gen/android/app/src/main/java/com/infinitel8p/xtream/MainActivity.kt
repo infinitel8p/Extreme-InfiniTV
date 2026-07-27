@@ -1,6 +1,10 @@
 package com.infinitel8p.xtream
 
+import android.content.Context
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
@@ -117,7 +121,7 @@ class WebSettingsBridge(
   }
 }
 
-// performHapticFeedback respects the user's system touch-feedback setting.
+// Falls back to the system Vibrator when the view/system haptic path reports failure.
 class HapticsBridge(
   private val activity: TauriActivity,
   private val webViewProvider: () -> WebView?,
@@ -134,7 +138,40 @@ class HapticsBridge(
         }
         else -> HapticFeedbackConstants.CLOCK_TICK
       }
-      view.performHapticFeedback(constant)
+      view.isHapticFeedbackEnabled = true
+      val performed = view.performHapticFeedback(constant)
+      if (!performed) {
+        vibrateFallback(kind)
+      }
+    }
+  }
+
+  private fun vibrateFallback(kind: String) {
+    try {
+      val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val manager = activity.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+        manager.defaultVibrator
+      } else {
+        @Suppress("DEPRECATION")
+        activity.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+      }
+      if (!vibrator.hasVibrator()) return
+      when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+          val effect = if (kind == "confirm") VibrationEffect.EFFECT_CLICK else VibrationEffect.EFFECT_TICK
+          vibrator.vibrate(VibrationEffect.createPredefined(effect))
+        }
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O -> {
+          val durationMs = if (kind == "confirm") 20L else 10L
+          vibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+        }
+        else -> {
+          @Suppress("DEPRECATION")
+          vibrator.vibrate(if (kind == "confirm") 20L else 10L)
+        }
+      }
+    } catch (error: Throwable) {
+      Log.w("HapticsBridge", "vibrate fallback failed", error)
     }
   }
 }
