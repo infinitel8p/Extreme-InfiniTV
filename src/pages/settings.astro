@@ -1065,7 +1065,7 @@ const navStructure: NavSection[] = [
         data-state="idle"
         class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-5
                data-[state=available]:border-accent/50 data-[state=available]:bg-accent-soft/30
-               transition-colors">
+               transition-colors scroll-mt-6">
         <div class="flex items-start gap-3">
           <span class="icon-mark">
             <IconInfoCircle aria-hidden="true" stroke={2} />
@@ -3970,6 +3970,44 @@ const navStructure: NavSection[] = [
         window.setTimeout(release, SAFETY_MS)
       }
 
+      // Async content above a deep-link target (playlist rows, hydrating
+      // islands, unhidden cards) shifts layout after the first scroll, so
+      // keep re-anchoring until the page height stops changing.
+      const anchorWhileSettling = (target: HTMLElement) => {
+        target.scrollIntoView({ block: "start" })
+        if (typeof ResizeObserver === "undefined") return
+        const contentEl = scrollEl.firstElementChild ?? scrollEl
+        const QUIET_MS = 250
+        const SAFETY_MS = 2500
+        let released = false
+        let quietTimer = 0
+        const release = () => {
+          if (released) return
+          released = true
+          if (quietTimer) clearTimeout(quietTimer)
+          observer.disconnect()
+          scrollEl.removeEventListener("wheel", release)
+          scrollEl.removeEventListener("touchstart", release)
+          scrollEl.removeEventListener("pointerdown", release)
+          window.removeEventListener("keydown", release)
+          scrollLock = false
+        }
+        const observer = new ResizeObserver(() => {
+          if (released) return
+          target.scrollIntoView({ block: "start" })
+          if (quietTimer) clearTimeout(quietTimer)
+          quietTimer = window.setTimeout(release, QUIET_MS)
+        })
+        scrollLock = true
+        observer.observe(contentEl)
+        scrollEl.addEventListener("wheel", release, { passive: true })
+        scrollEl.addEventListener("touchstart", release, { passive: true })
+        scrollEl.addEventListener("pointerdown", release, { passive: true })
+        window.addEventListener("keydown", release)
+        quietTimer = window.setTimeout(release, QUIET_MS)
+        window.setTimeout(release, SAFETY_MS)
+      }
+
       for (const link of links) {
         link.addEventListener("click", (event) => {
           const targetId = link.getAttribute("href")?.replace("#", "")
@@ -4022,9 +4060,8 @@ const navStructure: NavSection[] = [
         setActiveCard(pickActiveCardWithin(initialHashId))
         if (hadInitialHash) {
           requestAnimationFrame(() => {
-            document
-              .getElementById(initialHashId)
-              ?.scrollIntoView({ block: "start" })
+            const target = document.getElementById(initialHashId)
+            if (target) anchorWhileSettling(target)
           })
         }
       } else if (initialHashId && subLinksByCardId.has(initialHashId)) {
@@ -4033,7 +4070,9 @@ const navStructure: NavSection[] = [
         if (ownerSection) setActive(ownerSection.id)
         setActiveCard(initialHashId)
         if (cardEl instanceof HTMLDetailsElement) cardEl.open = true
-        requestAnimationFrame(() => cardEl?.scrollIntoView({ block: "start" }))
+        requestAnimationFrame(() => {
+          if (cardEl) anchorWhileSettling(cardEl)
+        })
       } else {
         const initialSection = pickActive()
         setActive(initialSection)

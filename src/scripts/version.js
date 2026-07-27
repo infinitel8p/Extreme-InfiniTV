@@ -34,7 +34,7 @@ export async function injectVersion() {
         label.style.color = 'var(--color-accent)'
         label.textContent = t('update.badgeAvailable', { version: status.latestTag })
         const link = document.createElement('a')
-        link.href = '/settings#settings-about'
+        link.href = '/settings#update-section'
         link.style.cssText = 'display:inline-flex;align-items:center;color:inherit;text-decoration:none'
         link.setAttribute('aria-label', t('settings.about.updateAvailableShort'))
         link.append(icon, label)
