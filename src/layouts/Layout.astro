@@ -443,14 +443,14 @@ const documentTitle = pageTitle
     -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011' numOctaves='4' seed='11' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.05 -0.005'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
     mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011' numOctaves='4' seed='11' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.05 -0.005'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
     /* Counter-phased breathing (offset periods) is what reads as morphing fog. */
-    animation: xt-app-splash-nebula-drift-1 13s cubic-bezier(0.45, 0, 0.55, 1) -5s infinite alternate,
+    animation: xt-app-splash-nebula-drift-1 10s cubic-bezier(0.45, 0, 0.55, 1) -5s infinite alternate,
                xt-app-splash-nebula-breathe-1 5.5s ease-in-out -2.5s infinite alternate;
   }
   .xt-app-splash__nebula--2 {
     background: radial-gradient(closest-side, color-mix(in oklch, color-mix(in oklch, var(--color-accent) 60%, #7f8cff) 20%, transparent), transparent 90%);
     -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.007' numOctaves='4' seed='29' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.15 -0.06'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
     mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.007' numOctaves='4' seed='29' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.15 -0.06'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
-    animation: xt-app-splash-nebula-drift-2 18s cubic-bezier(0.45, 0, 0.55, 1) -8s infinite alternate,
+    animation: xt-app-splash-nebula-drift-2 14s cubic-bezier(0.45, 0, 0.55, 1) -8s infinite alternate,
                xt-app-splash-nebula-breathe-2 7.5s ease-in-out -3.5s infinite alternate;
   }
   .xt-app-splash__nebula--band {
@@ -459,20 +459,20 @@ const documentTitle = pageTitle
     background: radial-gradient(50% 50% at 50% 50%, color-mix(in oklch, var(--color-accent) 26%, transparent), color-mix(in oklch, var(--color-accent) 17%, transparent) 55%, transparent 85%);
     -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.013' numOctaves='4' seed='47' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.4 -0.18'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
     mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.013' numOctaves='4' seed='47' result='t'/%3E%3CfeColorMatrix in='t' type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.4 -0.18'/%3E%3CfeGaussianBlur stdDeviation='6'/%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23n)'/%3E%3C/svg%3E");
-    animation: xt-app-splash-nebula-drift-band 17s cubic-bezier(0.45, 0, 0.55, 1) -7s infinite alternate,
+    animation: xt-app-splash-nebula-drift-band 13s cubic-bezier(0.45, 0, 0.55, 1) -7s infinite alternate,
                xt-app-splash-nebula-breathe-band 6.5s ease-in-out -3s infinite alternate;
   }
   @keyframes xt-app-splash-nebula-drift-1 {
-    from { transform: translate3d(calc(-50% - 6vmin), calc(-50% - 4vmin), 0) rotate(0deg) scale(1); }
-    to   { transform: translate3d(calc(-50% + 5vmin), calc(-50% + 6vmin), 0) rotate(22deg) scale(1.14); }
+    from { transform: translate3d(calc(-50% - 15vmin), calc(-50% - 10vmin), 0) rotate(0deg) scale(1); }
+    to   { transform: translate3d(calc(-50% + 13vmin), calc(-50% + 15vmin), 0) rotate(30deg) scale(1.18); }
   }
   @keyframes xt-app-splash-nebula-drift-2 {
-    from { transform: translate3d(calc(-50% + 6vmin), calc(-50% - 5vmin), 0) rotate(0deg) scale(1.1); }
-    to   { transform: translate3d(calc(-50% - 5vmin), calc(-50% + 4vmin), 0) rotate(-16deg) scale(1); }
+    from { transform: translate3d(calc(-50% + 15vmin), calc(-50% - 13vmin), 0) rotate(0deg) scale(1.12); }
+    to   { transform: translate3d(calc(-50% - 13vmin), calc(-50% + 10vmin), 0) rotate(-24deg) scale(1); }
   }
   @keyframes xt-app-splash-nebula-drift-band {
-    from { transform: translate3d(calc(-50% - 3vmin), calc(-50% - 2vmin), 0) rotate(-20deg) scaleY(0.42); }
-    to   { transform: translate3d(calc(-50% + 3vmin), calc(-50% + 2vmin), 0) rotate(-14deg) scaleY(0.46); }
+    from { transform: translate3d(calc(-50% - 8vmin), calc(-50% - 5vmin), 0) rotate(-22deg) scaleY(0.42); }
+    to   { transform: translate3d(calc(-50% + 8vmin), calc(-50% + 5vmin), 0) rotate(-12deg) scaleY(0.48); }
   }
   @keyframes xt-app-splash-nebula-breathe-1 {
     from { opacity: 0.75; }
@@ -643,7 +643,7 @@ const documentTitle = pageTitle
   .xt-app-splash__comet {
     pointer-events: none;
     mix-blend-mode: screen;
-    animation: xt-app-splash-comet-in 320ms ease-out 2100ms backwards;
+    animation: xt-app-splash-comet-in 320ms ease-out 1000ms backwards;
   }
   @keyframes xt-app-splash-comet-in {
     from { opacity: 0; }

@@ -33,7 +33,14 @@ export async function injectVersion() {
         const label = document.createElement('span')
         label.style.color = 'var(--color-accent)'
         label.textContent = t('update.badgeAvailable', { version: status.latestTag })
-        badge.replaceChildren(icon, label)
+        const link = document.createElement('a')
+        link.href = '/settings#settings-about'
+        link.style.cssText = 'display:inline-flex;align-items:center;color:inherit;text-decoration:none'
+        link.setAttribute('aria-label', t('settings.about.updateAvailableShort'))
+        link.append(icon, label)
+        badge.replaceChildren(link)
+        badge.classList.remove('pointer-events-none')
+        badge.style.cursor = 'pointer'
     } catch (e) {
         log.error('Update check failed:', e)
     }
