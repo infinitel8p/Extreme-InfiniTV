@@ -3,6 +3,7 @@
 
 import { getUiSoundsEnabled } from "@/scripts/lib/app-settings.js"
 import { log } from "@/scripts/lib/log.js"
+import { getSharedAudioContext } from "@/scripts/lib/audio-context.ts"
 
 export type UiSoundKind = "nav" | "select" | "confirm" | "launch"
 
@@ -15,20 +16,17 @@ const SOUND_FILES: Record<UiSoundKind, string> = {
 
 const NAV_THROTTLE_MS = 45
 const KEY_MODALITY_WINDOW_MS = 200
+const SELECT_DEFER_MS = 20
 const LAUNCH_CHIME_FLAG = "xt_ui_launch_chimed"
 
-let audioContext: AudioContext | null = null
 const bufferCache = new Map<UiSoundKind, Promise<AudioBuffer | null>>()
 let lastNavPlayAt = 0
 let lastNavKeyAt = 0
 let lastActivateKeyAt = 0
+let pendingSelectTimer: ReturnType<typeof setTimeout> | null = null
 
 function getContext(): AudioContext | null {
-  if (audioContext) return audioContext
-  const Ctor = window.AudioContext ?? (window as any).webkitAudioContext
-  if (!Ctor) return null
-  audioContext = new Ctor()
-  return audioContext
+  return getSharedAudioContext()
 }
 
 function loadBuffer(kind: UiSoundKind): Promise<AudioBuffer | null> {
@@ -55,6 +53,11 @@ function loadBuffer(kind: UiSoundKind): Promise<AudioBuffer | null> {
 /** Resolves true only when playback actually started. */
 export async function playUiSound(kind: UiSoundKind): Promise<boolean> {
   if (typeof window === "undefined" || !getUiSoundsEnabled()) return false
+  // A more specific sound firing synchronously supersedes a still-pending select tick.
+  if (kind !== "select" && pendingSelectTimer !== null) {
+    clearTimeout(pendingSelectTimer)
+    pendingSelectTimer = null
+  }
   if (kind === "nav") {
     const now = performance.now()
     if (now - lastNavPlayAt < NAV_THROTTLE_MS) return false
@@ -126,9 +129,13 @@ export function initUiSounds(): void {
     (ev) => {
       if (performance.now() - lastActivateKeyAt >= KEY_MODALITY_WINDOW_MS) return
       const target = ev.target as Element | null
-      if (target?.closest("button, a, [role='button'], [role='menuitem'], [tabindex]")) {
+      if (!target?.closest("button, a, [role='button'], [role='menuitem'], [tabindex]")) return
+      if (pendingSelectTimer !== null) clearTimeout(pendingSelectTimer)
+      // Deferred so a synchronous confirm (e.g. favorites-changed) from this same click can cancel it.
+      pendingSelectTimer = setTimeout(() => {
+        pendingSelectTimer = null
         void playUiSound("select")
-      }
+      }, SELECT_DEFER_MS)
     },
     { capture: true },
   )
@@ -136,6 +143,14 @@ export function initUiSounds(): void {
   document.addEventListener("xt:favorites-changed", (ev) => {
     const detail = (ev as CustomEvent).detail
     if (!detail?.isFav) return
+    if (performance.now() - lastActivateKeyAt < KEY_MODALITY_WINDOW_MS) {
+      void playUiSound("confirm")
+    }
+  })
+
+  document.addEventListener("xt:watchlist-changed", (ev) => {
+    const detail = (ev as CustomEvent).detail
+    if (!detail?.onWatchlist) return
     if (performance.now() - lastActivateKeyAt < KEY_MODALITY_WINDOW_MS) {
       void playUiSound("confirm")
     }

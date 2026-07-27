@@ -39,6 +39,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -140,9 +141,18 @@ class HapticsBridge(
       }
       view.isHapticFeedbackEnabled = true
       val performed = view.performHapticFeedback(constant)
-      if (!performed) {
+      // False can mean "unsupported" or "user disabled the system setting" - only the former should fall back.
+      if (!performed && systemHapticFeedbackEnabled()) {
         vibrateFallback(kind)
       }
+    }
+  }
+
+  private fun systemHapticFeedbackEnabled(): Boolean {
+    return try {
+      Settings.System.getInt(activity.contentResolver, Settings.System.HAPTIC_FEEDBACK_ENABLED, 1) != 0
+    } catch (error: Throwable) {
+      true
     }
   }
 

@@ -21,7 +21,10 @@ function getAndroidHaptics(): AndroidHapticsBridge | undefined {
 export function hapticsAvailable(): boolean {
   if (typeof window === "undefined") return false
   if (getAndroidHaptics()?.perform) return true
-  return typeof navigator !== "undefined" && typeof navigator.vibrate === "function"
+  if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return false
+  const isTouchCapable =
+    "ontouchstart" in window || (window.matchMedia?.("(pointer: coarse)").matches ?? false)
+  return isTouchCapable
 }
 
 export function performHaptic(kind: HapticKind): void {
