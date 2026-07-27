@@ -2103,7 +2103,12 @@ function clearRadioMode() {
   radioModeChannelId = null
 }
 
-const manualAudioOnlyOff = new Set<number>()
+// Keyed by playlist so an override on one provider can't suppress auto-promotion on another.
+const manualAudioOnlyOff = new Set<string>()
+
+function manualAudioOnlyOffKey(streamId: number): string {
+  return `${activePlaylistId}:${streamId}`
+}
 
 let audioOnlySetCache: { playlistId: string; ids: Set<number> } | null = null
 
@@ -2131,17 +2136,8 @@ function isAudioOnlyChannel(id: number): boolean {
   return loadAudioOnlySet().has(id)
 }
 
-function toggleAudioOnlyChannel(id: number): boolean {
-  const ids = new Set(loadAudioOnlySet())
-  const nowOn = !ids.has(id)
-  if (nowOn) ids.add(id)
-  else ids.delete(id)
-  saveAudioOnlySet(ids)
-  return nowOn
-}
-
 const CURRENT_ROW_ICON_BTN_CLASS =
-  "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+  "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-base text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
 
 function paintRadioNowPlaying(channelId: number) {
   const wrap = getPlayerWrap()
@@ -2185,7 +2181,7 @@ function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unkn
     return { ctx, wrap, videoEl }
   }
   const promote = (ctx: NonNullable<typeof lastPlayContext>) => {
-    if (manualAudioOnlyOff.has(ctx.streamId)) return
+    if (manualAudioOnlyOff.has(manualAudioOnlyOffKey(ctx.streamId))) return
     const channel = all.find((entry) => entry.id === ctx.streamId)
     if (channel) setRadioMode(channel)
   }
@@ -2321,15 +2317,20 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
   items.push(scaleItem)
 
   if (!channel?.isRadio) {
-    const audioItem = makeMoreMenuItem(t("livetv.audioOnly"), isAudioOnlyChannel(streamId))
+    const audioOnlyEffective = isAudioOnlyChannel(streamId) || radioModeChannelId === streamId
+    const audioItem = makeMoreMenuItem(t("livetv.audioOnly"), audioOnlyEffective)
     audioItem.addEventListener("click", () => {
       closeCurrentMoreMenu()
-      const nowOn = toggleAudioOnlyChannel(streamId)
+      const nowOn = !audioOnlyEffective
+      const ids = new Set(loadAudioOnlySet())
+      if (nowOn) ids.add(streamId)
+      else ids.delete(streamId)
+      saveAudioOnlySet(ids)
       if (nowOn) {
-        manualAudioOnlyOff.delete(streamId)
+        manualAudioOnlyOff.delete(manualAudioOnlyOffKey(streamId))
         setRadioMode({ id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src })
       } else {
-        manualAudioOnlyOff.add(streamId)
+        manualAudioOnlyOff.add(manualAudioOnlyOffKey(streamId))
         clearRadioMode()
       }
     })
@@ -2354,7 +2355,7 @@ function openCurrentMoreMenu(trigger: HTMLButtonElement, streamId, channel, src,
   const menu = document.createElement("div")
   menu.id = CURRENT_MORE_MENU_ID
   menu.className =
-    "fixed z-50 min-w-[12rem] rounded-xl border border-line bg-surface text-fg shadow-2xl p-1 flex flex-col gap-0.5"
+    "fixed z-50 min-w-[12rem] rounded-xl border border-line bg-surface text-fg shadow-2xl p-1 flex flex-col gap-0.5 poster-menu-enter"
   menu.setAttribute("role", "menu")
   menu.setAttribute("aria-label", t("livetv.moreActions"))
   menu.append(...buildCurrentMoreMenuItems(streamId, channel, src, name))
@@ -3390,6 +3391,7 @@ async function play(streamId, name) {
 // ----------------------------
 function renderCatchupCurrentRow(channel, title) {
   if (!currentEl) return
+  closeCurrentMoreMenu(false)
   currentEl.replaceChildren()
 
   const wrap = document.createElement("div")
