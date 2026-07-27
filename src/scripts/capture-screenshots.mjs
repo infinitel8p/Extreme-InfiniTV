@@ -186,7 +186,7 @@ function buildRedactions(snapshot) {
     if (text.length < 4) {
       if (!credential) return
       if (allowShort) {
-        console.warn(`Skipping redaction of a short credential value (${text.length} chars); XT_ALLOW_SHORT_REDACTIONS=1 is set.`)
+        console.warn("Skipping redaction of a short credential value (under 4 chars); XT_ALLOW_SHORT_REDACTIONS=1 is set.")
         return
       }
       console.error(
