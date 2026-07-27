@@ -110,21 +110,19 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     const hasShowingTrack = managedTracks.some((managed) => managed.textTrack.mode === "showing")
     if (!hasShowingTrack) return null
     if (deltaSeconds === 0) return offsetSeconds
-    offsetSeconds += deltaSeconds
+    offsetSeconds = Math.round((offsetSeconds + deltaSeconds) * 1000) / 1000
     for (const managed of managedTracks) {
       const track = managed.textTrack
       const restoreMode = track.mode
       if (track.mode === "disabled") track.mode = "hidden"
-      const cues = track.cues
-      if (cues) {
-        for (let cueIndex = 0; cueIndex < cues.length; cueIndex++) {
-          const cue = cues[cueIndex]!
-          try {
-            cue.startTime += deltaSeconds
-            cue.endTime += deltaSeconds
-          } catch (err) {
-            log.warn("[xt:subtitles] failed to shift cue:", err)
-          }
+      // Snapshot first: mutating startTime while iterating the live, time-sorted list can reorder it mid-loop.
+      const cueSnapshot = track.cues ? Array.from(track.cues) : []
+      for (const cue of cueSnapshot) {
+        try {
+          cue.startTime += deltaSeconds
+          cue.endTime += deltaSeconds
+        } catch (err) {
+          log.warn("[xt:subtitles] failed to shift cue:", err)
         }
       }
       track.mode = restoreMode

@@ -2,12 +2,29 @@ import { describe, it, expect, beforeEach, vi } from "vitest"
 import { createSubtitleManager, createNativeTrackRegistrar } from "../src/scripts/lib/subtitle-tracks"
 import type { MkvCue, MkvSubtitleSession, MkvSubtitleTrackInfo } from "../src/scripts/lib/vod-proxy"
 
+// Setters trigger a resort, mirroring real TextTrackCueList's live time-sort.
 class FakeVTTCue {
-  constructor(
-    public startTime: number,
-    public endTime: number,
-    public text: string,
-  ) {}
+  onTimeChanged: (() => void) | null = null
+  private startTimeValue: number
+  private endTimeValue: number
+  constructor(startTime: number, endTime: number, public text: string) {
+    this.startTimeValue = startTime
+    this.endTimeValue = endTime
+  }
+  get startTime(): number {
+    return this.startTimeValue
+  }
+  set startTime(value: number) {
+    this.startTimeValue = value
+    this.onTimeChanged?.()
+  }
+  get endTime(): number {
+    return this.endTimeValue
+  }
+  set endTime(value: number) {
+    this.endTimeValue = value
+    this.onTimeChanged?.()
+  }
 }
 
 class FakeTextTrack {
@@ -22,13 +39,19 @@ class FakeTextTrack {
     return this.mode === "disabled" ? null : this.cueList
   }
   addCue(cue: FakeVTTCue): void {
+    cue.onTimeChanged = () => this.resort()
     this.cueList.push(cue)
+    this.resort()
   }
   removeCue(cue: FakeVTTCue): void {
     this.cueList = this.cueList.filter((entry) => entry !== cue)
   }
   visibleTexts(): string[] {
     return this.mode === "showing" ? this.cueList.map((cue) => cue.text) : []
+  }
+  private resort(): void {
+    // In-place sort: same array reference a caller's `cues` snapshot would already hold.
+    this.cueList.sort((a, b) => a.startTime - b.startTime)
   }
 }
 
@@ -353,5 +376,41 @@ describe("createSubtitleManager subtitle delay", () => {
     expect(frenchCue.startTime).toBeCloseTo(2.1)
     expect(frenchCue.endTime).toBeCloseTo(4.1)
     frenchTrack.mode = "disabled"
+  })
+
+  it("shifts every cue exactly once per nudge even as the live list resorts mid-shift", async () => {
+    const { session, emit } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "eng", name: null },
+    ])
+    const { manager } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    // Tightly spaced so a same-direction shift crosses neighboring cues and forces a resort.
+    const cueDefs = [
+      { startMs: 1000, endMs: 1500, text: "cue A" },
+      { startMs: 1050, endMs: 1550, text: "cue B" },
+      { startMs: 1100, endMs: 1600, text: "cue C" },
+      { startMs: 1150, endMs: 1650, text: "cue D" },
+      { startMs: 1200, endMs: 1700, text: "cue E" },
+    ]
+    emit(2, cueDefs)
+    manager.select(0)
+
+    function startTimesByText(): Map<string, number> {
+      const result = new Map<string, number>()
+      for (const cue of video.tracks[0]!.cues!) result.set(cue.text, cue.startTime)
+      return result
+    }
+
+    let accumulatedOffset = 0
+    for (const delta of [0.2, 0.2, -0.35, -0.1]) {
+      manager.nudgeDelay(delta)
+      accumulatedOffset += delta
+      const actual = startTimesByText()
+      for (const cueDef of cueDefs) {
+        expect(actual.get(cueDef.text)).toBeCloseTo(cueDef.startMs / 1000 + accumulatedOffset)
+      }
+    }
   })
 })

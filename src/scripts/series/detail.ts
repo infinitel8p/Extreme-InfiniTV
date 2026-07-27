@@ -77,8 +77,7 @@ import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
-import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
-import { ICON_CLOCK_EDIT } from "@/scripts/lib/icons.js"
+import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -879,7 +878,7 @@ async function playEpisode(episode) {
   if (requestId !== playRequestId) return
   setupPipButton(player)
   setupScaleButton()
-  setupSubtitleDelayControls()
+  subtitleDelayController.setup()
   const mime = chooseMime(src)
   player.one("error", () => {
     const e = player.error()
@@ -1013,149 +1012,13 @@ async function launchExternalPlayback(backend, src, resumeSeconds) {
 // ----------------------------
 // Subtitle delay
 // ----------------------------
-function isTypingTarget(target) {
-  if (!target) return false
-  if (target.isContentEditable) return true
-  const tag = target.tagName
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true
-  if (typeof target.closest === "function" && target.closest("dialog[open]")) return true
-  return false
-}
-
-const subtitleDelayBtn = document.getElementById("series-subtitle-delay-btn")
-let dismissSubtitleDelayToast = null
-let subtitleDelaySyncTimer = null
-let subtitleDelayDialog = null
-let subtitleDelayDialogValueEl = null
-
-function formatSubtitleDelay(offsetSeconds) {
-  return `${offsetSeconds >= 0 ? "+" : ""}${offsetSeconds.toFixed(1)}s`
-}
-
-function subtitleDelayOffset() {
-  return vjs?.subtitleDelay?.(0) ?? null
-}
-
-// Hidden unless a subtitle track is currently showing, not just built.
-function syncSubtitleDelayButton() {
-  if (!subtitleDelayBtn) return
-  if (subtitleDelayOffset() == null) subtitleDelayBtn.setAttribute("hidden", "")
-  else subtitleDelayBtn.removeAttribute("hidden")
-}
-
-const SUBTITLE_DELAY_DIALOG_ID = "series-subtitle-delay-dialog"
-
-function ensureSubtitleDelayDialog() {
-  if (subtitleDelayDialog) return subtitleDelayDialog
-  const node = document.createElement("dialog")
-  node.id = SUBTITLE_DELAY_DIALOG_ID
-  node.setAttribute("aria-labelledby", `${SUBTITLE_DELAY_DIALOG_ID}-title`)
-  node.className = [
-    "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
-    "w-[min(20rem,calc(100vw-2rem))]",
-    "backdrop:bg-black/30",
-  ].join(" ")
-  node.innerHTML = `
-    <div class="flex flex-col gap-4 p-5">
-      <header class="flex items-center gap-3">
-        <span class="icon-mark" aria-hidden="true">${ICON_CLOCK_EDIT}</span>
-        <h2 id="${SUBTITLE_DELAY_DIALOG_ID}-title" data-role="title" class="text-base font-semibold"></h2>
-      </header>
-      <div class="flex items-center justify-center gap-3">
-        <button
-          type="button"
-          data-role="minus"
-          class="shrink-0 rounded-lg border border-line min-h-11 min-w-11 inline-flex items-center justify-center text-fg-3
-                 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:border-accent
-                 outline-none transition-colors">-</button>
-        <span data-role="value" class="min-w-16 text-center text-base font-medium tabular-nums">0.0s</span>
-        <button
-          type="button"
-          data-role="plus"
-          class="shrink-0 rounded-lg border border-line min-h-11 min-w-11 inline-flex items-center justify-center text-fg-3
-                 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:border-accent
-                 outline-none transition-colors">+</button>
-      </div>
-      <div class="flex justify-between gap-2">
-        <button
-          type="button"
-          data-role="reset"
-          class="rounded-xl border border-line px-4 py-2 text-sm hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent"></button>
-        <button
-          type="button"
-          data-role="close"
-          class="rounded-xl border border-line px-4 py-2 text-sm hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent"></button>
-      </div>
-    </div>
-  `
-  document.body.appendChild(node)
-  attachDialogSpatialNav(node, {
-    defaultElement: `#${SUBTITLE_DELAY_DIALOG_ID} [data-role="minus"]`,
-  })
-
-  node.querySelector('[data-role="close"]')?.addEventListener("click", () => node.close())
-  node.addEventListener("click", (event) => {
-    if (event.target === node) node.close()
-  })
-  node.querySelector('[data-role="minus"]')?.addEventListener("click", () => nudgeSubtitleDelay(-0.1))
-  node.querySelector('[data-role="plus"]')?.addEventListener("click", () => nudgeSubtitleDelay(0.1))
-  node.querySelector('[data-role="reset"]')?.addEventListener("click", () => {
-    const current = subtitleDelayOffset()
-    if (current != null) nudgeSubtitleDelay(Math.round(-current * 10) / 10)
-  })
-
-  subtitleDelayDialog = node
-  subtitleDelayDialogValueEl = node.querySelector('[data-role="value"]')
-  return node
-}
-
-function updateSubtitleDelayDialogValue(offsetSeconds) {
-  if (subtitleDelayDialogValueEl) subtitleDelayDialogValueEl.textContent = formatSubtitleDelay(offsetSeconds)
-}
-
-function openSubtitleDelayDialog() {
-  const node = ensureSubtitleDelayDialog()
-  node.querySelector('[data-role="title"]').textContent = t("detail.subtitleDelay")
-  node.querySelector('[data-role="minus"]').setAttribute("aria-label", t("detail.subtitleDelayEarlier"))
-  node.querySelector('[data-role="plus"]').setAttribute("aria-label", t("detail.subtitleDelayLater"))
-  node.querySelector('[data-role="reset"]').textContent = t("detail.subtitleDelayReset")
-  node.querySelector('[data-role="close"]').textContent = t("common.close")
-  updateSubtitleDelayDialogValue(subtitleDelayOffset() ?? 0)
-  if (typeof node.showModal === "function") node.showModal()
-  else node.setAttribute("open", "")
-}
-
-function nudgeSubtitleDelay(deltaSeconds) {
-  const newOffset = vjs?.subtitleDelay?.(deltaSeconds)
-  if (newOffset == null) return
-  const rounded = Math.round(newOffset * 10) / 10
-  updateSubtitleDelayDialogValue(rounded)
-  syncSubtitleDelayButton()
-  if (subtitleDelayDialog?.hasAttribute("open")) return
-  dismissSubtitleDelayToast?.()
-  dismissSubtitleDelayToast = toast({
-    title: t("player.subtitleDelay", { value: formatSubtitleDelay(rounded) }),
-    duration: 1500,
-  })
-}
-
-let subtitleDelayBtnBound = false
-
-function setupSubtitleDelayControls() {
-  if (!subtitleDelaySyncTimer) subtitleDelaySyncTimer = setInterval(syncSubtitleDelayButton, 1200)
-  syncSubtitleDelayButton()
-  if (subtitleDelayBtnBound) return
-  subtitleDelayBtnBound = true
-  subtitleDelayBtn?.addEventListener("click", () => openSubtitleDelayDialog())
-}
-
-document.addEventListener("keydown", (event) => {
-  if (event.ctrlKey || event.altKey || event.metaKey) return
-  if (isTypingTarget(event.target)) return
-  const key = event.key.toLowerCase()
-  if (key !== "z" && key !== "x") return
-  nudgeSubtitleDelay(key === "z" ? -0.1 : 0.1)
+const subtitleDelayController = createSubtitleDelayController({
+  dialogId: "series-subtitle-delay-dialog",
+  button: document.getElementById("series-subtitle-delay-btn"),
+  nudge: (deltaSeconds) => vjs?.subtitleDelay?.(deltaSeconds),
 })
+
+document.addEventListener("keydown", (event) => subtitleDelayController.handleKeydown(event))
 
 const externalBtnHandle = setupExternalPlayerButton(
   /** @type {HTMLButtonElement|null} */ (document.getElementById("series-detail-open-external")),
@@ -1215,10 +1078,7 @@ window.addEventListener("pagehide", () => {
     audioSwitcher?.dispose()
     audioSwitcher = null
     audioDiscoveryController?.abort()
-    if (subtitleDelaySyncTimer) {
-      clearInterval(subtitleDelaySyncTimer)
-      subtitleDelaySyncTimer = null
-    }
+    subtitleDelayController.teardown()
   } catch {}
   clearAmbient(ambientEl)
   externalPresenceActive = false
