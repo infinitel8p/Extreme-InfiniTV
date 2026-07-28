@@ -46,8 +46,8 @@ function toTarget(triple, ext) {
   return { triple, ext, asset: `ffmpeg-${triple}${ext}` }
 }
 
-// macOS resolves two targets: the host triple (for `tauri dev` / native builds) and the
-// universal binary (for `tauri build --target universal-apple-darwin`, what release CI uses).
+// macOS always resolves all three targets: `tauri build --target universal-apple-darwin`
+// compiles each arch separately (each needs its own triple binary) then bundles the universal one.
 function resolveTargets() {
   switch (platform()) {
     case "win32":
@@ -59,11 +59,12 @@ function resolveTargets() {
       if (process.arch === "arm64") return [toTarget("aarch64-unknown-linux-gnu", "")]
       return []
     case "darwin":
-      if (process.arch === "arm64") {
-        return [toTarget("aarch64-apple-darwin", ""), toTarget("universal-apple-darwin", "")]
-      }
-      if (process.arch === "x64") {
-        return [toTarget("x86_64-apple-darwin", ""), toTarget("universal-apple-darwin", "")]
+      if (process.arch === "arm64" || process.arch === "x64") {
+        return [
+          toTarget("aarch64-apple-darwin", ""),
+          toTarget("x86_64-apple-darwin", ""),
+          toTarget("universal-apple-darwin", ""),
+        ]
       }
       return []
     default:
