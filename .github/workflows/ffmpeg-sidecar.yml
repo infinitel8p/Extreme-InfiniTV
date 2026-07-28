@@ -304,14 +304,14 @@ jobs:
           tar -xf ffmpeg.tar.xz
           Rename-Item "ffmpeg-${env:FFMPEG_VERSION}" ffmpeg-src
 
-      # CLANGARM64's default cc is clang; configure autodetects it without an override
+      # configure defaults to gcc, which CLANGARM64 doesn't ship; force clang
       - name: Configure and build (LGPL, trimmed)
         shell: msys2 {0}
         run: |
           set -euo pipefail
           cd ffmpeg-src
           ./configure \
-            --target-os=mingw32 --arch=aarch64 \
+            --target-os=mingw32 --arch=aarch64 --cc=clang \
             --disable-everything --disable-autodetect --enable-network \
             --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
             --disable-avdevice --disable-postproc \
@@ -388,7 +388,7 @@ jobs:
             echo "workflow commit: ${GITHUB_SHA}"
             echo
             echo "configure line:"
-            echo "./configure --target-os=mingw32 --arch=aarch64 --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-decoder=opus --enable-decoder=vorbis --enable-decoder=flac --enable-decoder=truehd --enable-decoder=pcm_s16le --enable-decoder=h264 --enable-decoder=hevc --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --enable-bsf=h264_mp4toannexb --enable-bsf=hevc_mp4toannexb --enable-bsf=aac_adtstoasc --enable-zlib --extra-ldflags=-static --pkg-config-flags=--static"
+            echo "./configure --target-os=mingw32 --arch=aarch64 --cc=clang --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-decoder=opus --enable-decoder=vorbis --enable-decoder=flac --enable-decoder=truehd --enable-decoder=pcm_s16le --enable-decoder=h264 --enable-decoder=hevc --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --enable-bsf=h264_mp4toannexb --enable-bsf=hevc_mp4toannexb --enable-bsf=aac_adtstoasc --enable-zlib --extra-ldflags=-static --pkg-config-flags=--static"
           } > stage/BUILD-INFO-windows-arm64.txt
 
       - name: Verify standalone binary outside MSYS2
