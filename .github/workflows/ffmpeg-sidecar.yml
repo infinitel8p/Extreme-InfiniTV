@@ -290,14 +290,19 @@ jobs:
             make
             diffutils
 
+      # msys2's curl is emulated x86_64 on this arm runner and resets TLS; use Windows' native curl.exe instead
       - name: Download ffmpeg source
-        shell: msys2 {0}
+        shell: pwsh
         run: |
-          set -euo pipefail
-          curl -fLo ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
-          echo "${FFMPEG_SHA256}  ffmpeg.tar.xz" | sha256sum -c -
+          $ErrorActionPreference = "Stop"
+          curl.exe --retry 5 --retry-all-errors --retry-delay 5 -fLo ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${env:FFMPEG_VERSION}.tar.xz"
+          $actualHash = (Get-FileHash -Algorithm SHA256 ffmpeg.tar.xz).Hash
+          if ($actualHash -ine $env:FFMPEG_SHA256) {
+            Write-Host "::error::sha256 mismatch: expected $env:FFMPEG_SHA256, got $actualHash"
+            exit 1
+          }
           tar -xf ffmpeg.tar.xz
-          mv "ffmpeg-${FFMPEG_VERSION}" ffmpeg-src
+          Rename-Item "ffmpeg-${env:FFMPEG_VERSION}" ffmpeg-src
 
       # CLANGARM64's default cc is clang; configure autodetects it without an override
       - name: Configure and build (LGPL, trimmed)
