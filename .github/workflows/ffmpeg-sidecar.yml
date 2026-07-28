@@ -275,8 +275,420 @@ jobs:
           name: ffmpeg-linux
           path: stage/*
 
+  build-windows-arm64:
+    runs-on: windows-11-arm
+    steps:
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
+        with:
+          msystem: CLANGARM64
+          update: true
+          # yasm/nasm are x86-only assemblers, not needed for aarch64
+          install: >-
+            mingw-w64-clang-aarch64-clang
+            mingw-w64-clang-aarch64-pkgconf
+            mingw-w64-clang-aarch64-zlib
+            make
+            diffutils
+
+      - name: Download ffmpeg source
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          curl -fLo ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          echo "${FFMPEG_SHA256}  ffmpeg.tar.xz" | sha256sum -c -
+          tar -xf ffmpeg.tar.xz
+          mv "ffmpeg-${FFMPEG_VERSION}" ffmpeg-src
+
+      # CLANGARM64's default cc is clang; configure autodetects it without an override
+      - name: Configure and build (LGPL, trimmed)
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          ./configure \
+            --target-os=mingw32 --arch=aarch64 \
+            --disable-everything --disable-autodetect --enable-network \
+            --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+            --disable-avdevice --disable-postproc \
+            --enable-protocol=pipe,http,tcp \
+            --enable-demuxer=mpegts,matroska,mov \
+            --enable-muxer=mpegts \
+            --enable-decoder=aac \
+            --enable-decoder=aac_latm \
+            --enable-decoder=ac3 \
+            --enable-decoder=eac3 \
+            --enable-decoder=mp2 \
+            --enable-decoder=mp3 \
+            --enable-decoder=dca \
+            --enable-decoder=opus \
+            --enable-decoder=vorbis \
+            --enable-decoder=flac \
+            --enable-decoder=truehd \
+            --enable-decoder=pcm_s16le \
+            --enable-decoder=h264 \
+            --enable-decoder=hevc \
+            --enable-encoder=aac \
+            --enable-parser=h264 \
+            --enable-parser=hevc \
+            --enable-parser=mpegvideo \
+            --enable-parser=mpegaudio \
+            --enable-parser=aac \
+            --enable-parser=aac_latm \
+            --enable-parser=ac3 \
+            --enable-parser=dca \
+            --enable-filter=aresample \
+            --enable-filter=aformat \
+            --enable-filter=anull \
+            --enable-bsf=extract_extradata \
+            --enable-bsf=h264_mp4toannexb \
+            --enable-bsf=hevc_mp4toannexb \
+            --enable-bsf=aac_adtstoasc \
+            --enable-zlib \
+            --extra-ldflags=-static \
+            --pkg-config-flags=--static
+          make -j$(nproc)
+
+      - name: Sanity checks
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          ./ffmpeg.exe -version
+          if ./ffmpeg.exe -version | grep -q -- '--enable-gpl'; then
+            echo "::error::Build unexpectedly enabled GPL"
+            exit 1
+          fi
+          if ./ffmpeg.exe -version | grep -q -- '--enable-nonfree'; then
+            echo "::error::Build unexpectedly enabled nonfree"
+            exit 1
+          fi
+          ./ffmpeg.exe -decoders | grep -i eac3
+          ./ffmpeg.exe -decoders | grep -w h264
+          ./ffmpeg.exe -decoders | grep -w hevc
+          ./ffmpeg.exe -encoders | grep -w aac
+          ls -lh ffmpeg.exe
+
+      - name: Stage artifact
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          cp ffmpeg-src/ffmpeg.exe stage/ffmpeg-aarch64-pc-windows-msvc.exe
+          cp ffmpeg-src/COPYING.LGPLv2.1 stage/
+          {
+            echo "ffmpeg version: ${FFMPEG_VERSION}"
+            echo "source: https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+            echo "source sha256: ${FFMPEG_SHA256}"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "workflow commit: ${GITHUB_SHA}"
+            echo
+            echo "configure line:"
+            echo "./configure --target-os=mingw32 --arch=aarch64 --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-decoder=opus --enable-decoder=vorbis --enable-decoder=flac --enable-decoder=truehd --enable-decoder=pcm_s16le --enable-decoder=h264 --enable-decoder=hevc --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --enable-bsf=h264_mp4toannexb --enable-bsf=hevc_mp4toannexb --enable-bsf=aac_adtstoasc --enable-zlib --extra-ldflags=-static --pkg-config-flags=--static"
+          } > stage/BUILD-INFO-windows-arm64.txt
+
+      - name: Verify standalone binary outside MSYS2
+        shell: pwsh
+        run: |
+          & "$PWD\stage\ffmpeg-aarch64-pc-windows-msvc.exe" -version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::ffmpeg.exe -version failed when run outside MSYS2 (binary likely isn't fully static)"
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-windows-arm64
+          path: stage/*
+
+  build-linux-arm64:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential yasm nasm pkg-config zlib1g-dev
+
+      - name: Download ffmpeg source
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fLo ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          echo "${FFMPEG_SHA256}  ffmpeg.tar.xz" | sha256sum -c -
+          tar -xf ffmpeg.tar.xz
+          mv "ffmpeg-${FFMPEG_VERSION}" ffmpeg-src
+
+      - name: Configure and build (LGPL, trimmed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          ./configure \
+            --disable-everything --disable-autodetect --enable-network \
+            --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+            --disable-avdevice --disable-postproc \
+            --enable-protocol=pipe,http,tcp \
+            --enable-demuxer=mpegts,matroska,mov \
+            --enable-muxer=mpegts \
+            --enable-decoder=aac \
+            --enable-decoder=aac_latm \
+            --enable-decoder=ac3 \
+            --enable-decoder=eac3 \
+            --enable-decoder=mp2 \
+            --enable-decoder=mp3 \
+            --enable-decoder=dca \
+            --enable-decoder=opus \
+            --enable-decoder=vorbis \
+            --enable-decoder=flac \
+            --enable-decoder=truehd \
+            --enable-decoder=pcm_s16le \
+            --enable-decoder=h264 \
+            --enable-decoder=hevc \
+            --enable-encoder=aac \
+            --enable-parser=h264 \
+            --enable-parser=hevc \
+            --enable-parser=mpegvideo \
+            --enable-parser=mpegaudio \
+            --enable-parser=aac \
+            --enable-parser=aac_latm \
+            --enable-parser=ac3 \
+            --enable-parser=dca \
+            --enable-filter=aresample \
+            --enable-filter=aformat \
+            --enable-filter=anull \
+            --enable-bsf=extract_extradata \
+            --enable-bsf=h264_mp4toannexb \
+            --enable-bsf=hevc_mp4toannexb \
+            --enable-bsf=aac_adtstoasc \
+            --enable-zlib \
+            --pkg-config-flags=--static
+          make -j$(nproc)
+
+      - name: Sanity checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          ./ffmpeg -version
+          if ./ffmpeg -version | grep -q -- '--enable-gpl'; then
+            echo "::error::Build unexpectedly enabled GPL"
+            exit 1
+          fi
+          if ./ffmpeg -version | grep -q -- '--enable-nonfree'; then
+            echo "::error::Build unexpectedly enabled nonfree"
+            exit 1
+          fi
+          ./ffmpeg -decoders | grep -i eac3
+          ./ffmpeg -decoders | grep -w h264
+          ./ffmpeg -decoders | grep -w hevc
+          ./ffmpeg -encoders | grep -w aac
+          ls -lh ffmpeg
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          cp ffmpeg-src/ffmpeg stage/ffmpeg-aarch64-unknown-linux-gnu
+          chmod +x stage/ffmpeg-aarch64-unknown-linux-gnu
+          cp ffmpeg-src/COPYING.LGPLv2.1 stage/
+          {
+            echo "ffmpeg version: ${FFMPEG_VERSION}"
+            echo "source: https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+            echo "source sha256: ${FFMPEG_SHA256}"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "workflow commit: ${GITHUB_SHA}"
+            echo
+            echo "configure line:"
+            echo "./configure --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-decoder=opus --enable-decoder=vorbis --enable-decoder=flac --enable-decoder=truehd --enable-decoder=pcm_s16le --enable-decoder=h264 --enable-decoder=hevc --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --enable-bsf=h264_mp4toannexb --enable-bsf=hevc_mp4toannexb --enable-bsf=aac_adtstoasc --enable-zlib --pkg-config-flags=--static"
+          } > stage/BUILD-INFO-linux-arm64.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-linux-arm64
+          path: stage/*
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Install build dependencies
+        run: |
+          brew install nasm
+          command -v pkg-config >/dev/null || brew install pkg-config
+
+      - name: Download ffmpeg source
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fLo ffmpeg.tar.xz "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+          echo "${FFMPEG_SHA256}  ffmpeg.tar.xz" | shasum -a 256 -c -
+          tar -xf ffmpeg.tar.xz
+          mv "ffmpeg-${FFMPEG_VERSION}" ffmpeg-src
+
+      - name: Configure and build (arm64 native, LGPL, trimmed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          ./configure \
+            --disable-everything --disable-autodetect --enable-network \
+            --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+            --disable-avdevice --disable-postproc \
+            --enable-protocol=pipe,http,tcp \
+            --enable-demuxer=mpegts,matroska,mov \
+            --enable-muxer=mpegts \
+            --enable-decoder=aac \
+            --enable-decoder=aac_latm \
+            --enable-decoder=ac3 \
+            --enable-decoder=eac3 \
+            --enable-decoder=mp2 \
+            --enable-decoder=mp3 \
+            --enable-decoder=dca \
+            --enable-decoder=opus \
+            --enable-decoder=vorbis \
+            --enable-decoder=flac \
+            --enable-decoder=truehd \
+            --enable-decoder=pcm_s16le \
+            --enable-decoder=h264 \
+            --enable-decoder=hevc \
+            --enable-encoder=aac \
+            --enable-parser=h264 \
+            --enable-parser=hevc \
+            --enable-parser=mpegvideo \
+            --enable-parser=mpegaudio \
+            --enable-parser=aac \
+            --enable-parser=aac_latm \
+            --enable-parser=ac3 \
+            --enable-parser=dca \
+            --enable-filter=aresample \
+            --enable-filter=aformat \
+            --enable-filter=anull \
+            --enable-bsf=extract_extradata \
+            --enable-bsf=h264_mp4toannexb \
+            --enable-bsf=hevc_mp4toannexb \
+            --enable-bsf=aac_adtstoasc \
+            --enable-zlib
+          make -j$(sysctl -n hw.ncpu)
+
+      - name: Sanity checks (arm64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          ./ffmpeg -version
+          if ./ffmpeg -version | grep -q -- '--enable-gpl'; then
+            echo "::error::Build unexpectedly enabled GPL"
+            exit 1
+          fi
+          if ./ffmpeg -version | grep -q -- '--enable-nonfree'; then
+            echo "::error::Build unexpectedly enabled nonfree"
+            exit 1
+          fi
+          ./ffmpeg -decoders | grep -i eac3
+          ./ffmpeg -decoders | grep -w h264
+          ./ffmpeg -decoders | grep -w hevc
+          ./ffmpeg -encoders | grep -w aac
+          ls -lh ffmpeg
+
+      - name: Stage arm64 artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          cp ffmpeg-src/ffmpeg stage/ffmpeg-aarch64-apple-darwin
+          cd ffmpeg-src
+          make distclean
+
+      # Same source tree, cross-compiled via clang's -arch flag (no separate toolchain needed)
+      - name: Configure and build (x86_64 cross, LGPL, trimmed)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          ./configure \
+            --disable-everything --disable-autodetect --enable-network \
+            --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+            --disable-avdevice --disable-postproc \
+            --enable-protocol=pipe,http,tcp \
+            --enable-demuxer=mpegts,matroska,mov \
+            --enable-muxer=mpegts \
+            --enable-decoder=aac \
+            --enable-decoder=aac_latm \
+            --enable-decoder=ac3 \
+            --enable-decoder=eac3 \
+            --enable-decoder=mp2 \
+            --enable-decoder=mp3 \
+            --enable-decoder=dca \
+            --enable-decoder=opus \
+            --enable-decoder=vorbis \
+            --enable-decoder=flac \
+            --enable-decoder=truehd \
+            --enable-decoder=pcm_s16le \
+            --enable-decoder=h264 \
+            --enable-decoder=hevc \
+            --enable-encoder=aac \
+            --enable-parser=h264 \
+            --enable-parser=hevc \
+            --enable-parser=mpegvideo \
+            --enable-parser=mpegaudio \
+            --enable-parser=aac \
+            --enable-parser=aac_latm \
+            --enable-parser=ac3 \
+            --enable-parser=dca \
+            --enable-filter=aresample \
+            --enable-filter=aformat \
+            --enable-filter=anull \
+            --enable-bsf=extract_extradata \
+            --enable-bsf=h264_mp4toannexb \
+            --enable-bsf=hevc_mp4toannexb \
+            --enable-bsf=aac_adtstoasc \
+            --enable-zlib \
+            --enable-cross-compile --arch=x86_64 --target-os=darwin --cc="clang -arch x86_64"
+          make -j$(sysctl -n hw.ncpu)
+
+      # Runner is arm64 and Rosetta isn't guaranteed, so verify the slice without running it
+      - name: Verify x86_64 slice
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          lipo -archs ffmpeg | grep -w x86_64
+          file ffmpeg | grep -i x86_64
+          cd ..
+          mkdir -p stage
+          cp ffmpeg-src/ffmpeg stage/ffmpeg-x86_64-apple-darwin
+
+      - name: Create universal binary and stage artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          lipo -create stage/ffmpeg-aarch64-apple-darwin stage/ffmpeg-x86_64-apple-darwin -output stage/ffmpeg-universal-apple-darwin
+          chmod +x stage/ffmpeg-aarch64-apple-darwin stage/ffmpeg-x86_64-apple-darwin stage/ffmpeg-universal-apple-darwin
+          stage/ffmpeg-aarch64-apple-darwin -version
+          stage/ffmpeg-universal-apple-darwin -version
+          cp ffmpeg-src/COPYING.LGPLv2.1 stage/
+          {
+            echo "ffmpeg version: ${FFMPEG_VERSION}"
+            echo "source: https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+            echo "source sha256: ${FFMPEG_SHA256}"
+            echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "workflow commit: ${GITHUB_SHA}"
+            echo
+            echo "assets: ffmpeg-aarch64-apple-darwin, ffmpeg-x86_64-apple-darwin (cross-compiled, not executed on this runner), ffmpeg-universal-apple-darwin (lipo of the two)"
+            echo
+            echo "arm64 configure line:"
+            echo "./configure --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-decoder=opus --enable-decoder=vorbis --enable-decoder=flac --enable-decoder=truehd --enable-decoder=pcm_s16le --enable-decoder=h264 --enable-decoder=hevc --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --enable-bsf=h264_mp4toannexb --enable-bsf=hevc_mp4toannexb --enable-bsf=aac_adtstoasc --enable-zlib"
+            echo
+            echo "x86_64 configure line:"
+            echo "./configure --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac --enable-decoder=aac_latm --enable-decoder=ac3 --enable-decoder=eac3 --enable-decoder=mp2 --enable-decoder=mp3 --enable-decoder=dca --enable-decoder=opus --enable-decoder=vorbis --enable-decoder=flac --enable-decoder=truehd --enable-decoder=pcm_s16le --enable-decoder=h264 --enable-decoder=hevc --enable-encoder=aac --enable-parser=h264 --enable-parser=hevc --enable-parser=mpegvideo --enable-parser=mpegaudio --enable-parser=aac --enable-parser=aac_latm --enable-parser=ac3 --enable-parser=dca --enable-filter=aresample --enable-filter=aformat --enable-filter=anull --enable-bsf=extract_extradata --enable-bsf=h264_mp4toannexb --enable-bsf=hevc_mp4toannexb --enable-bsf=aac_adtstoasc --enable-zlib --enable-cross-compile --arch=x86_64 --target-os=darwin --cc=\"clang -arch x86_64\""
+          } > stage/BUILD-INFO-macos.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-macos
+          path: stage/*
+
   publish:
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-windows-arm64, build-linux-arm64, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -292,6 +704,9 @@ jobs:
           mkdir -p release-assets
           cp artifacts/ffmpeg-windows/* release-assets/
           cp artifacts/ffmpeg-linux/* release-assets/
+          cp artifacts/ffmpeg-windows-arm64/* release-assets/
+          cp artifacts/ffmpeg-linux-arm64/* release-assets/
+          cp artifacts/ffmpeg-macos/* release-assets/
           cd release-assets
           sha256sum * > SHA256SUMS.txt
           ls -la
@@ -329,7 +744,7 @@ jobs:
             echo '```'
             echo "./configure --disable-everything --disable-autodetect --enable-network --disable-doc --disable-debug --disable-ffplay --disable-ffprobe --disable-avdevice --disable-postproc --enable-protocol=pipe,http,tcp --enable-demuxer=mpegts,matroska,mov --enable-muxer=mpegts --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3,dca,opus,vorbis,flac,truehd,pcm_s16le,h264,hevc --enable-encoder=aac --enable-parser=h264,hevc,mpegvideo,mpegaudio,aac,aac_latm,ac3,dca --enable-filter=aresample,aformat,anull --enable-bsf=extract_extradata,h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc --enable-zlib"
             echo '```'
-            echo "(each comma-separated group above is repeated once per value in the actual build - see BUILD-INFO-windows.txt / BUILD-INFO-linux.txt attached below for the exact per-platform command.)"
+            echo "(each comma-separated group above is repeated once per value in the actual build - see BUILD-INFO-windows.txt / BUILD-INFO-windows-arm64.txt / BUILD-INFO-linux.txt / BUILD-INFO-linux-arm64.txt / BUILD-INFO-macos.txt attached below for the exact per-platform command.)"
             echo
             echo "Source for this exact build: the official ffmpeg ${FFMPEG_VERSION} release tarball, https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz (sha256 ${FFMPEG_SHA256}). This note is the LGPL source offer for the binaries attached to this release."
           } > "$BODY_FILE"
