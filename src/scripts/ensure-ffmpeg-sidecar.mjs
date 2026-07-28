@@ -1,5 +1,5 @@
 // Makes sure a ffmpeg sidecar binary is present for Tauri's externalBin bundling before
-// `tauri dev` / `tauri build` runs. Windows and Linux desktop only; no-op elsewhere.
+// `tauri dev` / `tauri build` runs. Windows, Linux, and macOS desktop only; no-op elsewhere.
 import {
   existsSync,
   mkdirSync,
@@ -32,16 +32,42 @@ const PINS_FILE = "src/scripts/ffmpeg-sidecar-checksums.json"
 const pinsPath = join(__dirname, "ffmpeg-sidecar-checksums.json")
 const REFRESH_PINS_HINT =
   'refresh them with "node src/scripts/ensure-ffmpeg-sidecar.mjs --update-pins", review the diff and commit it'
-const PINNED_BINARY_ASSETS = ["ffmpeg-x86_64-pc-windows-msvc.exe", "ffmpeg-x86_64-unknown-linux-gnu"]
+const PINNED_BINARY_ASSETS = [
+  "ffmpeg-x86_64-pc-windows-msvc.exe",
+  "ffmpeg-x86_64-unknown-linux-gnu",
+  "ffmpeg-aarch64-pc-windows-msvc.exe",
+  "ffmpeg-aarch64-unknown-linux-gnu",
+  "ffmpeg-aarch64-apple-darwin",
+  "ffmpeg-x86_64-apple-darwin",
+  "ffmpeg-universal-apple-darwin",
+]
 
-function resolveTarget() {
+function toTarget(triple, ext) {
+  return { triple, ext, asset: `ffmpeg-${triple}${ext}` }
+}
+
+// macOS resolves two targets: the host triple (for `tauri dev` / native builds) and the
+// universal binary (for `tauri build --target universal-apple-darwin`, what release CI uses).
+function resolveTargets() {
   switch (platform()) {
     case "win32":
-      return { triple: "x86_64-pc-windows-msvc", ext: ".exe", asset: "ffmpeg-x86_64-pc-windows-msvc.exe" }
+      if (process.arch === "x64") return [toTarget("x86_64-pc-windows-msvc", ".exe")]
+      if (process.arch === "arm64") return [toTarget("aarch64-pc-windows-msvc", ".exe")]
+      return []
     case "linux":
-      return { triple: "x86_64-unknown-linux-gnu", ext: "", asset: "ffmpeg-x86_64-unknown-linux-gnu" }
+      if (process.arch === "x64") return [toTarget("x86_64-unknown-linux-gnu", "")]
+      if (process.arch === "arm64") return [toTarget("aarch64-unknown-linux-gnu", "")]
+      return []
+    case "darwin":
+      if (process.arch === "arm64") {
+        return [toTarget("aarch64-apple-darwin", ""), toTarget("universal-apple-darwin", "")]
+      }
+      if (process.arch === "x64") {
+        return [toTarget("x86_64-apple-darwin", ""), toTarget("universal-apple-darwin", "")]
+      }
+      return []
     default:
-      return null
+      return []
   }
 }
 
@@ -294,36 +320,9 @@ function findOnPath(binaryName) {
   }
 }
 
-async function main() {
-  if (["1", "true"].includes(process.env.XT_SKIP_FFMPEG_SIDECAR)) {
-    console.log("[ensure-ffmpeg-sidecar] skipped (XT_SKIP_FFMPEG_SIDECAR set)")
-    return
-  }
-
-  const target = resolveTarget()
-  if (!target) return
-
-  mkdirSync(binariesDir, { recursive: true })
+async function ensureSidecar(target) {
   const destPath = join(binariesDir, `ffmpeg-${target.triple}${target.ext}`)
   const markerPath = markerPathFor(destPath)
-
-  const overridePath = process.env.XT_FFMPEG_SIDECAR_PATH
-  if (overridePath) {
-    // Only ever used as a copy source, never handed to a shell.
-    const resolvedOverride = resolvePath(overridePath.trim())
-    if (!existsSync(resolvedOverride) || !statSync(resolvedOverride).isFile()) {
-      console.error(
-        `[ensure-ffmpeg-sidecar] XT_FFMPEG_SIDECAR_PATH is set but ${resolvedOverride} is not an existing file`
-      )
-      process.exit(1)
-    }
-    copyFileSync(resolvedOverride, destPath)
-    if (platform() === "linux") chmodSync(destPath, 0o755)
-    const overrideHash = await sha256File(destPath)
-    writeMarker(markerPath, { tag: RELEASE_TAG, sha256: overrideHash, verifiedAt: Date.now() })
-    console.log(`[ensure-ffmpeg-sidecar] using XT_FFMPEG_SIDECAR_PATH override: ${resolvedOverride} -> ${destPath}`)
-    return
-  }
 
   if (existsSync(destPath)) {
     if (await markerIsFresh(markerPath, destPath)) {
@@ -345,7 +344,7 @@ async function main() {
     await download(`${RELEASE_BASE_URL}/${target.asset}`, tmpPath)
     const verifiedHash = await verifyChecksum(tmpPath, target.asset)
     renameSync(tmpPath, destPath)
-    if (platform() === "linux") chmodSync(destPath, 0o755)
+    if (platform() !== "win32") chmodSync(destPath, 0o755)
     writeMarker(markerPath, { tag: RELEASE_TAG, sha256: verifiedHash, verifiedAt: Date.now() })
     console.log(`[ensure-ffmpeg-sidecar] downloaded ${target.asset} -> ${destPath}`)
     return
@@ -367,7 +366,7 @@ async function main() {
   if (pathBinary) {
     copyFileSync(pathBinary, tmpPath)
     renameSync(tmpPath, destPath)
-    if (platform() === "linux") chmodSync(destPath, 0o755)
+    if (platform() !== "win32") chmodSync(destPath, 0o755)
     console.log(
       `[ensure-ffmpeg-sidecar] dev fallback: copied PATH ffmpeg (${pathBinary}) -> ${destPath}. The release pipeline uses a trimmed build instead.`
     )
@@ -382,6 +381,43 @@ async function main() {
       `  4. Drop a ffmpeg binary manually at ${destPath}.`
   )
   process.exit(1)
+}
+
+async function main() {
+  if (["1", "true"].includes(process.env.XT_SKIP_FFMPEG_SIDECAR)) {
+    console.log("[ensure-ffmpeg-sidecar] skipped (XT_SKIP_FFMPEG_SIDECAR set)")
+    return
+  }
+
+  const targets = resolveTargets()
+  if (targets.length === 0) return
+
+  mkdirSync(binariesDir, { recursive: true })
+
+  const overridePath = process.env.XT_FFMPEG_SIDECAR_PATH
+  if (overridePath) {
+    // Only ever used as a copy source, never handed to a shell.
+    const resolvedOverride = resolvePath(overridePath.trim())
+    if (!existsSync(resolvedOverride) || !statSync(resolvedOverride).isFile()) {
+      console.error(
+        `[ensure-ffmpeg-sidecar] XT_FFMPEG_SIDECAR_PATH is set but ${resolvedOverride} is not an existing file`
+      )
+      process.exit(1)
+    }
+    for (const target of targets) {
+      const destPath = join(binariesDir, `ffmpeg-${target.triple}${target.ext}`)
+      copyFileSync(resolvedOverride, destPath)
+      if (platform() !== "win32") chmodSync(destPath, 0o755)
+      const overrideHash = await sha256File(destPath)
+      writeMarker(markerPathFor(destPath), { tag: RELEASE_TAG, sha256: overrideHash, verifiedAt: Date.now() })
+      console.log(`[ensure-ffmpeg-sidecar] using XT_FFMPEG_SIDECAR_PATH override: ${resolvedOverride} -> ${destPath}`)
+    }
+    return
+  }
+
+  for (const target of targets) {
+    await ensureSidecar(target)
+  }
 }
 
 const cliArgs = process.argv.slice(2)
