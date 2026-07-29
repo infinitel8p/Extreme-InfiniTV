@@ -76,7 +76,7 @@ if (!sdkTools) {
 }
 console.log(`Using Windows SDK tools from ${sdkTools.dir}`)
 
-const stagingDir = mkdtempSync(path.join(tmpdir(), "xt-msix-"))
+const stagingDir = mkdtempSync(path.join(tmpdir(), "xtream-msix-"))
 console.log(`Staging in ${stagingDir}`)
 
 cpSync(exePath, path.join(stagingDir, "extreme-infinitv.exe"))
@@ -91,7 +91,8 @@ writeFileSync(path.join(stagingDir, "AppxManifest.xml"), manifestXml)
 console.log(`Wrote AppxManifest.xml (version ${msixVersion})`)
 
 // Config lives outside stagingDir so it doesn't get packed as payload.
-const priConfigPath = path.join(tmpdir(), `xt-msix-priconfig-${process.pid}.xml`)
+const priConfigDir = mkdtempSync(path.join(tmpdir(), "xtream-msix-cfg-"))
+const priConfigPath = path.join(priConfigDir, "priconfig.xml")
 run(sdkTools.makepri, ["createconfig", "/cf", priConfigPath, "/dq", "en-US", "/o"])
 
 // The default config auto-splits resources into per-scale .pri files for

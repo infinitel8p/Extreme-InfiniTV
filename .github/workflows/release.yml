@@ -672,6 +672,7 @@ jobs:
   publish-play:
     needs: [build-android]
     runs-on: ubuntu-latest
+    permissions: {}
     env:
       HAS_PLAY_SECRET: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
     steps:
@@ -713,6 +714,7 @@ jobs:
   publish-msstore:
     needs: [create-release, build-tauri]
     runs-on: ubuntu-latest
+    permissions: {}
     env:
       HAS_MSSTORE_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET != '' }}
     steps:
