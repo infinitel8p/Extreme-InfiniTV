@@ -12,6 +12,7 @@ commands.allow = [
     "discord_clear",
     "discord_disconnect",
     "launch_external_player",
+    "sandbox_runtime",
     "install_appx_package",
     "is_store_build",
     "set_close_to_tray",

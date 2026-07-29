@@ -33,6 +33,10 @@ name: Release
 #  MSSTORE_CLIENT_ID                    App registration (client) Id used for
 #                                       Store API access
 #  MSSTORE_CLIENT_SECRET                App registration client secret
+#  SNAPCRAFT_STORE_CREDENTIALS          output of `snapcraft export-login` for the
+#                                       extreme-infinitv Snap Store listing, scoped to
+#                                       package_push/package_release; snap publishing
+#                                       is skipped when unset
 #
 # Outputs (attached to the GitHub Release):
 #  Windows      *-setup.exe + .sig (NSIS; x64 + arm64, arm64 is NSIS-only since
@@ -52,6 +56,11 @@ name: Release
 # submits that package to the existing Store listing (product Id 9NN162Z0WXSR)
 # when the MSSTORE_* secrets are set. `pnpm msix` (buildfiles/make-msix-template.mjs)
 # remains the manual fallback - see `cmds.md`.
+#
+# Snap Store: publish-snap repackages the Linux x64 .deb from build-tauri via
+# `packaging/snap/snapcraft.yaml` and releases it to the stable channel when
+# SNAPCRAFT_STORE_CREDENTIALS is set. See `.github/workflows/snap-test.yml` to
+# dry-run the build against a past release without publishing.
 
 on:
   push:
@@ -744,6 +753,54 @@ jobs:
           set -euo pipefail
           MSIX=$(find msix -name "*.msix")
           msstore publish "$MSIX" -id 9NN162Z0WXSR
+
+  # contents:write needed to download an asset off the still-draft release.
+  publish-snap:
+    needs: [create-release, build-tauri]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      HAS_SNAPCRAFT_SECRET: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS != '' }}
+    steps:
+      - name: Checkout
+        if: env.HAS_SNAPCRAFT_SECRET == 'true'
+        uses: actions/checkout@v5
+
+      - name: Download amd64 deb from the release
+        if: env.HAS_SNAPCRAFT_SECRET == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p packaging/snap/local
+          gh release download "$TAG" --repo "${{ github.repository }}" \
+            --pattern "*amd64.deb" \
+            --output packaging/snap/local/app.deb
+
+      - name: Set snap version
+        if: env.HAS_SNAPCRAFT_SECRET == 'true'
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          sed -i "s/__VERSION__/$VERSION/" packaging/snap/snapcraft.yaml
+
+      - name: Build snap
+        if: env.HAS_SNAPCRAFT_SECRET == 'true'
+        id: build
+        uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
+        with:
+          path: packaging/snap
+
+      - name: Publish to the Snap Store
+        if: env.HAS_SNAPCRAFT_SECRET == 'true'
+        uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1.2.0
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.build.outputs.snap }}
+          release: stable
 
   # Patch the in-app auto-updater dialog text in `latest.json`. tauri-action
   # generates this file with `notes: ""` by default, so the in-app updater

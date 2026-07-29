@@ -54,3 +54,6 @@ test-results/
 playwright-report/
 tests/visual/**/*-win32.png
 tests/visual/**/*-darwin.png
+
+# snap packaging: CI drops the release .deb here before building
+packaging/snap/local/

@@ -28,6 +28,7 @@ import {
   EXTERNAL_PLAYER_BACKENDS,
 } from "@/scripts/lib/app-settings.js"
 import { bindMonoAudio, hasMonoGraph, isSafeAudioSourceUrl } from "@/scripts/lib/audio-effects.js"
+import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 
 export type PlayerBackend = "videojs" | "artplayer" | "shaka" | "mpv" | "vlc"
 export type ExternalPlayerKind = "mpv" | "vlc"
@@ -161,7 +162,10 @@ function bindTauriFullscreenResync(
   }
 }
 
-export const externalPlayersAvailable = isTauri && !isAndroid
+const desktopPlatform = isTauri && !isAndroid
+
+/** False on desktop when Snap/Flatpak confinement blocks host binaries. */
+export const externalPlayersAvailable = desktopPlatform && !sandboxRuntimeSync()
 
 export const androidExternalAvailable =
   isTauri &&

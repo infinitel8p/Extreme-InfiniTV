@@ -1,5 +1,6 @@
 import { log } from "@/scripts/lib/log.js"
 import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
+import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
@@ -577,7 +578,12 @@ export const SETTINGS_EVENT = EVT_CHANGED
 // ---------------------------------------------------------------------------
 export function getPlayerBackend() {
   const raw = readLS(KEY_PLAYER_BACKEND, "")
-  return PLAYER_BACKENDS.includes(raw) ? raw : DEFAULT_PLAYER_BACKEND
+  const backend = PLAYER_BACKENDS.includes(raw) ? raw : DEFAULT_PLAYER_BACKEND
+  // Clamp mpv/vlc pick to default when sandboxed; storage stays untouched.
+  if (EXTERNAL_PLAYER_BACKENDS.includes(backend) && sandboxRuntimeSync()) {
+    return DEFAULT_PLAYER_BACKEND
+  }
+  return backend
 }
 
 export function setPlayerBackend(backend) {

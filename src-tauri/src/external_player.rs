@@ -154,6 +154,67 @@ impl ExternalPlayerState {
 }
 
 // ---------------------------------------------------------------------------
+// Sandbox detection
+// ---------------------------------------------------------------------------
+// Snap/Flatpak confinement blocks exec of host binaries like MPV/VLC.
+
+// SNAP_NAME leaks into launcher children; verify exe sits in the mount.
+#[allow(dead_code)]
+fn snap_confined(exe_path: Option<&Path>, snap_dir: Option<&str>, snap_name: Option<&str>) -> bool {
+    match (snap_dir, snap_name) {
+        (Some(snap_dir), Some(_)) if !snap_dir.is_empty() => {
+            exe_path.is_some_and(|exe| exe.starts_with(snap_dir))
+        }
+        _ => false,
+    }
+}
+
+#[allow(dead_code)]
+fn classify_sandbox_runtime(
+    exe_path: Option<&Path>,
+    snap_dir: Option<&str>,
+    snap_name: Option<&str>,
+    flatpak_id: Option<&str>,
+    flatpak_info_exists: bool,
+) -> Option<&'static str> {
+    if snap_confined(exe_path, snap_dir, snap_name) {
+        return Some("snap");
+    }
+    if flatpak_id.is_some() || flatpak_info_exists {
+        return Some("flatpak");
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn sandbox_runtime_kind() -> Option<String> {
+    classify_sandbox_runtime(
+        std::env::current_exe().ok().as_deref(),
+        std::env::var("SNAP").ok().as_deref(),
+        std::env::var("SNAP_NAME").ok().as_deref(),
+        std::env::var("FLATPAK_ID").ok().as_deref(),
+        Path::new("/.flatpak-info").exists(),
+    )
+    .map(str::to_string)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sandbox_runtime_kind() -> Option<String> {
+    None
+}
+
+// Injects window.__XT_SANDBOX__ before page scripts run (no async race).
+pub fn sandbox_bootstrap_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    let sandbox_value = match sandbox_runtime_kind() {
+        Some(kind) => format!("\"{kind}\""),
+        None => "null".to_string(),
+    };
+    tauri::plugin::Builder::new("xt-sandbox-bootstrap")
+        .js_init_script(format!("window.__XT_SANDBOX__ = {sandbox_value};"))
+        .build()
+}
+
+// ---------------------------------------------------------------------------
 // Spawn helpers (unchanged surface)
 // ---------------------------------------------------------------------------
 fn classify_io_error(err: &std::io::Error) -> String {
@@ -721,6 +782,12 @@ fn send_mpv_loadfile(
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
+/// `"snap"` / `"flatpak"` when the app is sandboxed, `None` elsewhere.
+#[tauri::command]
+pub fn sandbox_runtime() -> Option<String> {
+    sandbox_runtime_kind()
+}
+
 #[tauri::command]
 pub async fn launch_external_player(
     app: AppHandle,
@@ -1150,6 +1217,46 @@ mod tests {
     #[test]
     fn pid_alive_returns_false_for_pid_zero() {
         assert!(!pid_alive(0));
+    }
+
+    #[test]
+    fn classify_sandbox_runtime_detects_snap_when_exe_is_inside_mount() {
+        let exe = Path::new("/snap/xtream/123/usr/bin/xtream");
+        let result = classify_sandbox_runtime(
+            Some(exe),
+            Some("/snap/xtream/123"),
+            Some("xtream"),
+            None,
+            false,
+        );
+        assert_eq!(result, Some("snap"));
+    }
+
+    #[test]
+    fn classify_sandbox_runtime_ignores_inherited_snap_env_outside_mount() {
+        let exe = Path::new("/home/user/.local/bin/xtream");
+        let result = classify_sandbox_runtime(
+            Some(exe),
+            Some("/snap/some-terminal/45"),
+            Some("some-terminal"),
+            None,
+            false,
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn classify_sandbox_runtime_detects_flatpak() {
+        let exe = Path::new("/app/bin/xtream");
+        let result = classify_sandbox_runtime(Some(exe), None, None, Some("com.example.App"), false);
+        assert_eq!(result, Some("flatpak"));
+    }
+
+    #[test]
+    fn classify_sandbox_runtime_returns_none_outside_any_sandbox() {
+        let exe = Path::new("/usr/bin/xtream");
+        let result = classify_sandbox_runtime(Some(exe), None, None, None, false);
+        assert_eq!(result, None);
     }
 
     #[test]

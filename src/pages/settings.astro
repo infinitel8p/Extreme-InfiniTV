@@ -838,7 +838,7 @@ const navStructure: NavSection[] = [
 
           <input id="discord-client-id" type="hidden" />
 
-          <div class="flex flex-col gap-2">
+          <div id="discord-controls" class="flex flex-col gap-2">
             <span data-i18n="settings.discord.perPlaylist" class="text-eyebrow font-medium uppercase text-fg-3">Per-playlist</span>
             <div
               id="discord-playlists"
@@ -846,6 +846,9 @@ const navStructure: NavSection[] = [
               <div data-i18n="settings.playlists.empty" class="px-4 py-4 text-xs text-fg-3">No playlists yet.</div>
             </div>
           </div>
+          <p id="discord-sandbox-note" data-i18n="settings.discord.sandboxNote" class="text-xs text-fg-3" hidden>
+            Discord Rich Presence isn't available in Snap installs.
+          </p>
         </article>
 
       </div>
@@ -1524,6 +1527,7 @@ const navStructure: NavSection[] = [
       resolveUpdateFeedUrl,
       MS_STORE_UPDATES_URL,
     } from "@/scripts/lib/update-check.js"
+    import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
     import { openExternal } from "@/scripts/lib/external-link.js"
     import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
     import {
@@ -1593,13 +1597,14 @@ const navStructure: NavSection[] = [
 
     // Linux notice: surface that auto-updates only land on the AppImage
     // build. Shown on any Tauri Linux session - AppImage users will see
-    // the line as a confirmation, deb / rpm users as guidance.
+    // the line as a confirmation, deb / rpm users as guidance. Skipped in
+    // Snap/Flatpak, where the store handles updates instead.
     try {
       const ua = navigator.userAgent || ""
       const isTauriRuntime =
         !!window.__TAURI_INTERNALS__ || !!window.__TAURI__
       const isLinux = ua.includes("Linux") && !ua.includes("Android")
-      if (isTauriRuntime && isLinux) {
+      if (isTauriRuntime && isLinux && !sandboxRuntimeSync()) {
         document.getElementById("linux-appimage-notice")?.removeAttribute("hidden")
       }
     } catch {}
@@ -3195,11 +3200,14 @@ const navStructure: NavSection[] = [
       !/Android/i.test(navigator.userAgent || "")
     const storeBuild = await isStoreBuild()
     const playStoreInstall = isPlayStoreInstall()
+    // Snap/Flatpak: store owns updates, same as MS Store.
+    const sandboxed = isLinuxDesktop ? sandboxRuntimeSync() : null
+    const noInAppUpdate = storeBuild || !!sandboxed
     // Linux falls back to the GitHub check below if `check()` throws (non-AppImage installs).
-    const canUseTauriUpdater = (isWindowsDesktop && !storeBuild) || isLinuxDesktop
+    const canUseTauriUpdater = (isWindowsDesktop && !storeBuild) || (isLinuxDesktop && !sandboxed)
 
     if (updateChannelSelectEl) updateChannelSelectEl.value = getUpdateChannel()
-    if (storeBuild) updateChannelRowEl?.setAttribute("hidden", "")
+    if (noInAppUpdate) updateChannelRowEl?.setAttribute("hidden", "")
 
     if (autoUpdateSelectEl) autoUpdateSelectEl.value = getAutoUpdateEnabled() ? "on" : "off"
     if (!canUseTauriUpdater) autoUpdateRowEl?.setAttribute("hidden", "")
@@ -3367,7 +3375,9 @@ const navStructure: NavSection[] = [
         updateNotesEl.textContent = status.notes
         updateNotesEl.classList.remove("hidden")
       }
-      updateGetBtn?.removeAttribute("hidden")
+      // No package-manager deep link to send Snap/Flatpak users to.
+      if (sandboxed) updateGetBtn?.setAttribute("hidden", "")
+      else updateGetBtn?.removeAttribute("hidden")
       setUpdateState("available")
     }
 
@@ -3543,6 +3553,11 @@ const navStructure: NavSection[] = [
 
     if (discordSection && discordRpcSupported) {
       discordSection.classList.remove("hidden")
+      // Flatpak grants the IPC socket (xdg-run/discord-ipc-0); snap doesn't.
+      if (sandboxed === "snap") {
+        document.getElementById("discord-controls")?.setAttribute("hidden", "")
+        document.getElementById("discord-sandbox-note")?.removeAttribute("hidden")
+      }
     }
 
     if (discordClientIdInput) {

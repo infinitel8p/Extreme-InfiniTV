@@ -1,0 +1,46 @@
+name: extreme-infinitv
+base: core22
+version: "__VERSION__"
+summary: IPTV player for Xtream Codes and M3U / M3U8 playlists
+description: |
+  Extreme InfiniTV plays Xtream Codes providers and plain M3U / M3U8
+  playlists: live TV with EPG and catch-up, movies, series, custom
+  playlists, offline downloads, and TV-remote (D-pad) navigation.
+grade: stable
+confinement: strict
+
+# core22's gnome platform snap only binds webkit2gtk-4.0, not 4.1.
+layout:
+  /usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.1:
+    bind: $SNAP/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.1
+
+parts:
+  extreme-infinitv:
+    plugin: dump
+    source: local/app.deb
+    source-type: deb
+    stage-packages:
+      - libwebkit2gtk-4.1-0
+      - libappindicator3-1
+      - libgtk-3-0
+    override-build: |
+      craftctl default
+      # snapd's desktop-file sanitizer drops Icon= unless it starts with ${SNAP}/
+      sed -i -e "s|Icon=extreme-infinitv|Icon=\${SNAP}/usr/share/icons/hicolor/128x128/apps/extreme-infinitv.png|g" \
+        "$CRAFT_PART_INSTALL/usr/share/applications/Extreme InfiniTV.desktop"
+
+apps:
+  extreme-infinitv:
+    command: usr/bin/extreme-infinitv
+    desktop: "usr/share/applications/Extreme InfiniTV.desktop"
+    extensions: [gnome]
+    plugs:
+      - network
+      - network-bind
+      - audio-playback
+      - home
+      - removable-media
+      - unity7
+      # WebKitGTK's own process sandbox needs this; auto-connects, no store review.
+      - browser-support
+    # No interface reaches the host's discord-ipc-0 socket under strict confinement.

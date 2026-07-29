@@ -137,6 +137,7 @@ pub fn run() {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder
+        .plugin(external_player::sandbox_bootstrap_plugin())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(
@@ -162,6 +163,7 @@ pub fn run() {
             discord::discord_clear,
             discord::discord_disconnect,
             external_player::launch_external_player,
+            external_player::sandbox_runtime,
             hevc_extension::install_appx_package,
             hevc_extension::is_store_build,
             sniffer::sniff_page,
