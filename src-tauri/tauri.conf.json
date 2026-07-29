@@ -47,6 +47,9 @@
     "category": "public.app-category.video",
     "copyright": "© 2025 Ludovico Ferrara",
     "createUpdaterArtifacts": true,
+    "android": {
+      "versionCode": 100700190
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

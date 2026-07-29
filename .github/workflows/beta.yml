@@ -16,7 +16,9 @@ name: Beta
 #  macOS        *.dmg (universal, unsigned) - install manually from GitHub;
 #               Gatekeeper needs right-click-Open or `xattr -d com.apple.quarantine`
 #               on first launch
-#  Android      *.apk (universal, signed) - no AAB, betas don't ship to Play Store
+#  Android      *.apk (universal, signed); also builds a signed AAB and
+#               publishes it to the Play open testing track when
+#               PLAY_SERVICE_ACCOUNT_JSON is set (see release.yml)
 #
 # Uses the same repo secrets as release.yml (see that file for the list).
 
@@ -245,6 +247,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      HAS_PLAY_SECRET: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -290,6 +294,22 @@ jobs:
 
       - run: pnpm sync-version ${{ needs.create-beta-release.outputs.version }}
 
+      - name: Compute beta versionCode
+        id: versioncode
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=$(node -p "require('./package.json').version.split('-')[0]")
+          # ls-remote emits an extra `^{}` peeled line per annotated tag - exclude those.
+          EXISTING=$(git ls-remote --tags origin "refs/tags/v${BASE}-beta.*" | grep -v '\^{}' | wc -l || true)
+          ORDINAL=$(( EXISTING + 1 ))
+          if [ "$ORDINAL" -gt 89 ]; then
+            ORDINAL=89
+          fi
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+          VERSION_CODE=$(( (10#$MAJOR * 1000000 + 10#$MINOR * 1000 + 10#$PATCH) * 100 + ORDINAL ))
+          echo "XTREAM_VERSION_CODE_OVERRIDE=$VERSION_CODE" >> "$GITHUB_ENV"
+
       - name: Build signed APK (universal)
         env:
           XTREAM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -315,6 +335,40 @@ jobs:
           fi
           cp "$APK" "$OUT/Extreme InfiniTV_${VERSION}.apk"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Build signed AAB (mobile)
+        if: env.HAS_PLAY_SECRET == 'true'
+        env:
+          XTREAM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.13846066
+          XT_SKIP_FFMPEG_SIDECAR: "1"
+        run: pnpm tauri android build --aab
+
+      - name: Locate signed AAB
+        id: locate-aab
+        if: env.HAS_PLAY_SECRET == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAB=$(find src-tauri/gen/android/app/build/outputs/bundle -name "*release*.aab" -printf '%T@\t%p\n' | sort -rn | head -1 | cut -f2-)
+          if [ -z "$AAB" ]; then
+            echo "::error::Could not locate signed AAB after build"
+            find src-tauri/gen/android/app/build/outputs -type f
+            exit 1
+          fi
+          echo "aab=$AAB" >> "$GITHUB_OUTPUT"
+
+      - name: Publish beta AAB to Play open testing track
+        if: env.HAS_PLAY_SECRET == 'true'
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.infinitel8p.xtream
+          releaseFiles: ${{ steps.locate-aab.outputs.aab }}
+          track: beta
+          status: completed
 
       - name: Upload to release
         env:

@@ -19,6 +19,7 @@
     "lint:fix": "eslint . --fix",
     "screenshots": "node ./src/scripts/capture-screenshots.mjs",
     "msix": "node ./buildfiles/make-msix-template.mjs",
+    "msix:ci": "node ./buildfiles/make-msix-ci.mjs",
     "sync-version": "node ./buildfiles/sync-version.mjs",
     "fetch-ffmpeg": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs"
   },

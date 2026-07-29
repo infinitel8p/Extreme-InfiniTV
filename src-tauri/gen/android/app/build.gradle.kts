@@ -35,8 +35,14 @@ android {
         val isTvBuild = (System.getenv("XTREAM_TV_BUILD") ?: "").lowercase(Locale.ROOT) in listOf("1", "true", "yes")
         manifestPlaceholders["leanbackRequired"] = if (isTvBuild) "true" else "false"
         if (isTvBuild) {
-            val tvVersionCodeOffset = 500
+            val tvVersionCodeOffset = 5
             versionCode = (versionCode ?: 0) + tvVersionCodeOffset
+        }
+
+        // Lets CI (beta builds) assign a versionCode ahead of the sync-version pin.
+        val versionCodeOverride = (System.getenv("XTREAM_VERSION_CODE_OVERRIDE") ?: "").toIntOrNull()
+        if (versionCodeOverride != null) {
+            versionCode = versionCodeOverride
         }
     }
 
