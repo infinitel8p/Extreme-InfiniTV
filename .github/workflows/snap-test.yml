@@ -1,7 +1,7 @@
 name: Snap Build Test
 
-# Manual dry run: builds the snap from a past stable release's amd64 .deb and
-# uploads the .snap as a workflow artifact. Never publishes. Use this to prove
+# Dry run: builds the snap from a past stable release's amd64 .deb and uploads
+# the .snap as a workflow artifact. Never publishes. Use this to prove
 # packaging/snap/snapcraft.yaml still builds before cutting the next stable tag.
 
 on:
@@ -11,6 +11,10 @@ on:
         description: "Release tag to build from (defaults to the latest published stable release)"
         required: false
         type: string
+  pull_request:
+    paths:
+      - "packaging/snap/**"
+      - ".github/workflows/snap-test.yml"
 
 jobs:
   build-snap:
