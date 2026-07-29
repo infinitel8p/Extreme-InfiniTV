@@ -1,5 +1,5 @@
 # Flathub submission manifest for Extreme InfiniTV (Tauri desktop build).
-id: io.github.infinitel8p.ExtremeInfiniTV
+id: io.github.infinitel8p.Extreme-InfiniTV
 runtime: org.gnome.Platform
 runtime-version: "50"
 sdk: org.gnome.Sdk
@@ -54,4 +54,4 @@ modules:
         sha256: 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986
         dest-filename: LICENSE
       - type: file
-        path: io.github.infinitel8p.ExtremeInfiniTV.metainfo.xml
+        path: io.github.infinitel8p.Extreme-InfiniTV.metainfo.xml

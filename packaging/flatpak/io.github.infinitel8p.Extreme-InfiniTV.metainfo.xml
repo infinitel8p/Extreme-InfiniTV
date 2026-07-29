@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Copyright 2025 Ludovico Ferrara -->
 <component type="desktop-application">
-  <id>io.github.infinitel8p.ExtremeInfiniTV</id>
+  <id>io.github.infinitel8p.Extreme-InfiniTV</id>
   <name>Extreme InfiniTV</name>
   <summary>Stream live TV, movies and series</summary>
   <metadata_license>CC0-1.0</metadata_license>
@@ -44,7 +44,7 @@
       <li>Light and dark themes with adjustable accent color</li>
     </ul>
   </description>
-  <launchable type="desktop-id">io.github.infinitel8p.ExtremeInfiniTV.desktop</launchable>
+  <launchable type="desktop-id">io.github.infinitel8p.Extreme-InfiniTV.desktop</launchable>
   <branding>
     <color type="primary" scheme_preference="light">#a855f7</color>
     <color type="primary" scheme_preference="dark">#6b21a8</color>

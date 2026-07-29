@@ -26,7 +26,7 @@ jobs:
       - uses: flatpak/flatpak-github-actions/flatpak-builder@401fe28a8384095fc1531b9d320b292f0ee45adb # v6.7
         with:
           bundle: extreme-infinitv.flatpak
-          manifest-path: packaging/flatpak/io.github.infinitel8p.ExtremeInfiniTV.yml
+          manifest-path: packaging/flatpak/io.github.infinitel8p.Extreme-InfiniTV.yml
           cache-key: flatpak-builder-${{ github.sha }}
 
       # The build leaves the OSTree repo behind so the lint job's repo check can use it.
@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Lint manifest
-        run: flatpak-builder-lint manifest packaging/flatpak/io.github.infinitel8p.ExtremeInfiniTV.yml
+        run: flatpak-builder-lint manifest packaging/flatpak/io.github.infinitel8p.Extreme-InfiniTV.yml
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

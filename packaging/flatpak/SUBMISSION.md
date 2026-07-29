@@ -3,16 +3,16 @@
 1. Fork `flathub/flathub` on GitHub with "Copy the master branch only" unchecked.
 2. `git clone --branch=new-pr git@github.com:<you>/flathub.git && cd flathub`
 3. `git checkout -b extreme-infinitv new-pr`
-4. Copy `io.github.infinitel8p.ExtremeInfiniTV.yml`, `io.github.infinitel8p.ExtremeInfiniTV.metainfo.xml`, and `flathub.json` from this folder into the root of that checkout, commit, push.
-5. Open a PR against the `new-pr` base branch (title: `Add io.github.infinitel8p.ExtremeInfiniTV`).
+4. Copy `io.github.infinitel8p.Extreme-InfiniTV.yml`, `io.github.infinitel8p.Extreme-InfiniTV.metainfo.xml`, and `flathub.json` from this folder into the root of that checkout, commit, push.
+5. Open a PR against the `new-pr` base branch (title: `Add io.github.infinitel8p.Extreme-InfiniTV`).
 6. Once comments are resolved, a reviewer (or you, once invited) comments `bot, build` to trigger a test build.
-7. After approval and merge, Flathub creates `github.com/flathub/io.github.infinitel8p.ExtremeInfiniTV`; the external-data-checker config already in the manifest (`x-checker-data`) picks up new stable GitHub releases automatically from then on - no extra setup needed.
+7. After approval and merge, Flathub creates `github.com/flathub/io.github.infinitel8p.Extreme-InfiniTV`; the external-data-checker config already in the manifest (`x-checker-data`) picks up new stable GitHub releases automatically from then on - no extra setup needed.
 
 ## Before opening the PR
 
 - **AI-generated content**: Flathub's Generative AI policy forbids AI-generated manifests, metadata, or PR text. This package was drafted by an AI agent as a starting point. Read every file, rewrite anything you would not personally vouch for in your own words, and write the PR description yourself. Also disable automatic Copilot reviews on your fork before opening the PR.
 - **No aarch64 build yet**: the current stable release (v1.7.0) only publishes an amd64 `.deb`. `flathub.json` restricts the build to `x86_64` for now; add an `aarch64`-only source once a release ships one, and drop `flathub.json` at that point.
-- **App ID vs. repo name**: the ID's last component is `ExtremeInfiniTV` (no hyphen), so the calculated repo URL (`github.com/infinitel8p/ExtremeInfiniTV`) does not exactly match the real repo (`Extreme-InfiniTV`). Flathub's own docs say this needs a manual reviewer check - the `vcs-browser` URL in the metainfo points at the real repo to make that easy.
+- **App ID**: the ID's last component matches the repo name exactly, so the calculated URL (`github.com/infinitel8p/extreme-infinitv`) resolves and needs no reviewer exception. Renaming the ID after submission is disruptive, so keep it as is.
 - **Binary packaging, not source build**: the module extracts the official release `.deb` rather than compiling from source, following Tauri's own Flathub guide. Flathub's default preference is building from source; be ready to explain why (Rust/npm offline vendoring for a Tauri app is heavy) if a reviewer asks, and point at other Tauri/Electron apps on Flathub that got the same exception.
 - **Discord IPC socket**: `--filesystem=xdg-run/discord-ipc-0` has no portal alternative; reviewers sometimes ask about this - Discord Rich Presence in Settings is the only thing that uses it.
 - **Screenshots**: reused from `docs/screenshots/Desktop/` (1300x850, above the 1000x700 quality-guideline suggestion). Not a hard requirement, but consider recapturing at a smaller size for the "featured" bar later.
