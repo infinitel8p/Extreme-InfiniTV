@@ -56,7 +56,24 @@ jobs:
           name: flatpak-repo
           path: .
 
+      # Screenshot mirroring only happens on Flathub's own builders, so those
+      # two errors can never pass here; fail on anything else.
       - name: Lint repo
         run: |
           tar -xf repo.tar
-          flatpak-builder-lint repo repo
+          flatpak-builder-lint repo repo > lint.json || true
+          cat lint.json
+          python3 - <<'PY'
+          import json, sys
+          allowed = {
+              "appstream-external-screenshot-url",
+              "appstream-screenshots-not-mirrored-in-ostree",
+          }
+          with open("lint.json") as handle:
+              report = json.load(handle)
+          unexpected = sorted(set(report.get("errors", [])) - allowed)
+          if unexpected:
+              print("::error::unexpected lint errors: " + ", ".join(unexpected))
+              sys.exit(1)
+          print("repo lint clean (ignoring screenshot-mirroring errors)")
+          PY

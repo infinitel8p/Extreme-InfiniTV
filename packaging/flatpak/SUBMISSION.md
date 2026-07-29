@@ -27,6 +27,14 @@ Every static permission a reviewer will ask about, and why it's there:
 - `--filesystem=xdg-download`: default landing spot for movie/series downloads. The Settings folder picker itself uses Tauri's dialog plugin, which on Linux is `rfd`'s GTK backend (`GtkFileChooserNative`); GTK auto-detects the Flatpak sandbox and routes that dialog through the file-chooser portal, so picking a folder outside `xdg-download` (e.g. `~/Videos`, a mounted drive) is granted dynamically at pick time - the static permission does not need to be widened for that case. One known gap: resuming an in-progress download after an app restart re-opens the previously-picked path directly (not through a fresh portal pick), so if that path is outside `xdg-download` and the portal grant didn't persist, resume can fail under Flatpak specifically. Not fixed here; flag it if a reviewer or user hits it.
 - Nothing here requests `com.canonical.AppMenu.Registrar` (or the related `com.canonical.indicator.application` / `com.canonical.Unity` names some Electron apps request) - those cover exporting a native window menu bar to Unity's global menu, and this app has no window menu bar, only the tray's own popup menu, so there's nothing to justify that grant.
 
+## Expected lint errors
+
+`flatpak-builder-lint repo` always reports `appstream-external-screenshot-url`
+and `appstream-screenshots-not-mirrored-in-ostree` for an app that is not on
+Flathub yet: the mirroring to `dl.flathub.org/media` happens on Flathub's own
+builders. `flatpak-test.yml` ignores exactly those two and fails on anything
+else. They clear themselves once the app is published.
+
 ## Common reviewer flags
 
 - Manifest key ordering, JSON/YAML style (run `flatpak-builder-lint manifest` locally if you have Flatpak).
