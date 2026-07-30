@@ -81,6 +81,13 @@ Downloads pick back up from where they left off when you restart the app. If one
 - Cancel the stuck download and re-queue it.
 - If the same download keeps failing partway through, delete the partial file and start over - some providers send mismatched file sizes that confuse the resume logic.
 
+## Linux: garbled video or the app crashes on start
+
+Some Linux GPU drivers (Raspberry Pi's V3D, Nvidia's proprietary driver, and most virtual machines) don't get along with WebKitGTK's default DMA-BUF renderer - symptoms range from garbled/striped video to an immediate crash with `EGL_BAD_PARAMETER`. The app detects known-risky hardware automatically and switches to a safe rendering mode, but you can also control it yourself:
+
+- **Settings > Appearance > Rendering** lets you force Auto, Faster, or Safe. Faster runs as a one-time trial after restarting - confirm it in the prompt that appears, or it reverts on its own the next time you launch.
+- If the app won't get far enough to reach Settings, launch it with the `WEBKIT_DISABLE_DMABUF_RENDERER=1` environment variable set, or pass `--safe-rendering` on the command line (this rewrites the saved setting immediately, before anything else runs).
+
 ## Sending useful bug reports
 
 On Android, **Settings > Data > Storage > Share logs** shares the newest log file from your device. On desktop, **Settings > Data > Storage > Open log folder** opens the folder with the daily log files. Attach the log to a [GitHub issue](https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose). Logs have credentials and stream URLs redacted automatically.

@@ -43,6 +43,7 @@ import {
   IconLicense,
   IconHeadphones,
   IconDeviceMobileVibration,
+  IconDeviceDesktop,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -64,6 +65,7 @@ const navStructure: NavSection[] = [
     { id: "card-language",          labelKey: "settings.section.language",     label: "Language" },
     { id: "card-display",           labelKey: "settings.section.display",      label: "Display" },
     { id: "card-perf-mode",         labelKey: "settings.perfMode.title",       label: "Performance mode" },
+    { id: "card-rendering",         labelKey: "settings.rendering.title",      label: "Rendering", conditional: true },
     { id: "card-ui-sounds",         labelKey: "settings.uiSounds.title",       label: "Interface sounds" },
     { id: "card-haptics",           labelKey: "settings.haptics.title",        label: "Touch feedback", conditional: true },
     { id: "card-tv-overscan",       labelKey: "settings.tvOverscan.title",     label: "TV safe area" },
@@ -442,6 +444,48 @@ const navStructure: NavSection[] = [
               }
             } catch (e) {}
           </script>
+        </article>
+
+        <!-- Rendering: Linux WebKitGTK DMA-BUF safe mode -->
+        <article id="card-rendering" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6 hidden">
+          <div class="flex items-start gap-3">
+            <span class="icon-mark">
+              <IconDeviceDesktop aria-hidden="true" stroke={2} />
+            </span>
+            <div class="flex flex-col gap-1 min-w-0">
+              <h3 data-i18n="settings.rendering.title" class="text-base font-semibold">Rendering</h3>
+              <p data-i18n="settings.rendering.helperLong" class="text-xs text-fg-3">
+                Some Linux graphics drivers (Raspberry Pi, Nvidia proprietary, virtual machines) show a garbled screen or crash on launch with the default renderer. Safe mode works around this at a small performance cost.
+              </p>
+            </div>
+          </div>
+
+          <p id="rendering-status" aria-live="polite" class="text-xs text-fg-3"></p>
+
+          <div class="flex flex-col gap-2">
+            <span data-i18n="settings.rendering.label" class="text-eyebrow font-medium uppercase text-fg-3">Rendering mode</span>
+            <select id="rendering-select" class="field-input" aria-describedby="rendering-hint">
+              <option value="auto" data-i18n="settings.rendering.auto">Auto (recommended)</option>
+              <option value="fast" data-i18n="settings.rendering.fast">Faster</option>
+              <option value="safe" data-i18n="settings.rendering.safe">Safe</option>
+            </select>
+          </div>
+          <p id="rendering-hint" data-i18n="settings.rendering.hint" class="text-xs text-fg-3">
+            Auto turns on safe mode only on hardware known to have problems. Faster is applied as a trial after a restart: if you do not confirm keeping it, the app switches back on the next launch.
+          </p>
+
+          <p id="rendering-env-override-note" hidden data-i18n-html="settings.rendering.envOverrideNote" class="text-xs text-fg-3">
+            <code class="font-mono text-[0.7rem] px-1 py-0.5 rounded bg-surface-2 border border-line/60">WEBKIT_DISABLE_DMABUF_RENDERER</code> is set outside the app, so this control is disabled.
+          </p>
+
+          <p id="rendering-restart-note" hidden aria-live="polite" class="text-xs text-fg-3"></p>
+          <button id="rendering-restart" type="button" hidden class="btn justify-start sm:justify-center">
+            <span data-i18n="settings.about.restartNow">Restart now</span>
+          </button>
+
+          <p data-i18n-html="settings.rendering.escapeHatches" class="text-xs text-fg-3 border-t border-line/60 pt-3">
+            If the app becomes unusable, force safe mode from outside: launch once with <code class="font-mono text-[0.7rem] px-1 py-0.5 rounded bg-surface-2 border border-line/60">WEBKIT_DISABLE_DMABUF_RENDERER=1</code> (applies to that launch only), or run the app with <code class="font-mono text-[0.7rem] px-1 py-0.5 rounded bg-surface-2 border border-line/60">--safe-rendering</code> to switch the setting back permanently.
+          </p>
         </article>
 
         <!-- Interface sounds: launch chime + D-pad navigation ticks -->
@@ -1528,6 +1572,11 @@ const navStructure: NavSection[] = [
       MS_STORE_UPDATES_URL,
     } from "@/scripts/lib/update-check.js"
     import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
+    import {
+      getCompositingState,
+      setCompositingSetting,
+      relaunchApp as relaunchForCompositing,
+    } from "@/scripts/lib/compositing.ts"
     import { openExternal } from "@/scripts/lib/external-link.js"
     import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
     import {
@@ -2525,6 +2574,80 @@ const navStructure: NavSection[] = [
       if (next) performHaptic("confirm")
     })
     syncHapticsButtons()
+
+    // ---------------------------------------------------------------------
+    // Rendering (Linux desktop only): WebKitGTK DMA-BUF safe mode
+    // ---------------------------------------------------------------------
+    const renderingCard = document.getElementById("card-rendering")
+    const renderingStatusEl = document.getElementById("rendering-status")
+    const renderingSelectEl = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("rendering-select")
+    )
+    const renderingEnvOverrideNoteEl = document.getElementById("rendering-env-override-note")
+    const renderingRestartNoteEl = document.getElementById("rendering-restart-note")
+    const renderingRestartBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("rendering-restart")
+    )
+
+    function renderingDetectionLabel(detection) {
+      if (detection === "raspberry-pi") return t("settings.rendering.detectionRaspberryPi")
+      if (detection === "nvidia") return t("settings.rendering.detectionNvidia")
+      if (detection === "vm") return t("settings.rendering.detectionVm")
+      return ""
+    }
+
+    async function initRenderingCard() {
+      const state = await getCompositingState()
+      if (!renderingCard || !state?.platformSupported) return
+      renderingCard.classList.remove("hidden")
+
+      if (renderingSelectEl) {
+        renderingSelectEl.value = state.setting === "fast-trial" ? "fast" : state.setting
+      }
+      if (renderingStatusEl) {
+        const detectionLabel = renderingDetectionLabel(state.detection)
+        if (state.active === "safe") {
+          renderingStatusEl.textContent = detectionLabel
+            ? t("settings.rendering.statusSafeWithDetection", { detection: detectionLabel })
+            : t("settings.rendering.statusSafe")
+        } else {
+          renderingStatusEl.textContent = detectionLabel
+            ? t("settings.rendering.statusFastWithDetection", { detection: detectionLabel })
+            : t("settings.rendering.statusFast")
+        }
+      }
+      if (state.envOverride) {
+        renderingSelectEl?.setAttribute("disabled", "")
+        renderingEnvOverrideNoteEl?.removeAttribute("hidden")
+      }
+
+      renderingSelectEl?.addEventListener("change", async () => {
+        const chosen = renderingSelectEl.value
+        const isTrial = chosen === "fast"
+        try {
+          await setCompositingSetting(isTrial ? "fast-trial" : chosen)
+        } catch (err) {
+          log.error("Rendering setting update failed:", err)
+          return
+        }
+        if (renderingRestartNoteEl) {
+          renderingRestartNoteEl.textContent = isTrial
+            ? t("settings.rendering.trialRestartNote")
+            : t("settings.rendering.restartNote")
+          renderingRestartNoteEl.removeAttribute("hidden")
+        }
+        renderingRestartBtn?.removeAttribute("hidden")
+      })
+
+      renderingRestartBtn?.addEventListener("click", async () => {
+        try {
+          await relaunchForCompositing()
+        } catch (err) {
+          log.error("Rendering relaunch failed:", err)
+        }
+      })
+    }
+    initRenderingCard()
 
     // ---------------------------------------------------------------------
     // Mono audio

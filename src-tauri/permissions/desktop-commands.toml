@@ -8,6 +8,8 @@
 identifier = "allow-desktop-commands"
 description = "Local-origin access to Extreme InfiniTV's desktop-only commands."
 commands.allow = [
+    "compositing_state",
+    "compositing_set",
     "discord_set_activity",
     "discord_clear",
     "discord_disconnect",

@@ -2,6 +2,9 @@
 mod audio_proxy;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod compositing;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod discord;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -123,6 +126,12 @@ fn install_panic_hook() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    // Must run before the builder exists: the main window is created before
+    // setup(), so the WebKitGTK env var has to land before that.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    compositing::initialize(&context.config().identifier);
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -159,6 +168,8 @@ pub fn run() {
             audio_proxy::audio_transcode_available,
             audio_proxy::register_audio_transcode,
             audio_proxy::unregister_audio_transcode,
+            compositing::compositing_state,
+            compositing::compositing_set,
             discord::discord_set_activity,
             discord::discord_clear,
             discord::discord_disconnect,
@@ -210,7 +221,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while running tauri application");
 
     app.run(|_app_handle, _event| {
