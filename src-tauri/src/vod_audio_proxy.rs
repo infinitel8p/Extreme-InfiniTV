@@ -457,9 +457,9 @@ fn ffmpeg_candidates() -> Vec<String> {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
             let sidecar_name = if cfg!(windows) {
-                "ffmpeg.exe"
+                "infinitv-ffmpeg.exe"
             } else {
-                "ffmpeg"
+                "infinitv-ffmpeg"
             };
             push_candidate(parent.join(sidecar_name).to_string_lossy().into_owned());
         }

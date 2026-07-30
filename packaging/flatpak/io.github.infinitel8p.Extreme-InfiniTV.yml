@@ -27,7 +27,7 @@ modules:
       - ar -x *.deb
       - tar -xf data.tar.gz
       - install -Dm755 usr/bin/extreme-infinitv $FLATPAK_DEST/bin/extreme-infinitv
-      - install -Dm755 usr/bin/ffmpeg $FLATPAK_DEST/bin/ffmpeg
+      - install -Dm755 usr/bin/infinitv-ffmpeg $FLATPAK_DEST/bin/infinitv-ffmpeg
       - install -Dm644 "usr/share/icons/hicolor/32x32/apps/extreme-infinitv.png" $FLATPAK_DEST/share/icons/hicolor/32x32/apps/$FLATPAK_ID.png
       - install -Dm644 "usr/share/icons/hicolor/128x128/apps/extreme-infinitv.png" $FLATPAK_DEST/share/icons/hicolor/128x128/apps/$FLATPAK_ID.png
       - install -Dm644 "usr/share/icons/hicolor/256x256@2/apps/extreme-infinitv.png" "$FLATPAK_DEST/share/icons/hicolor/256x256@2/apps/$FLATPAK_ID.png"

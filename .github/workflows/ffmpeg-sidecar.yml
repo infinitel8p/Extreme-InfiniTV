@@ -13,10 +13,11 @@ name: ffmpeg Sidecar
 # just download the matching asset from that tag, so a normal app release
 # never rebuilds ffmpeg.
 #
-# Binary naming matches the Tauri externalBin convention consumed by
-# tauri.windows.conf.json / tauri.linux.conf.json:
-#   src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
-#   src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu
+# Assets keep the ffmpeg-<triple> names (checksum pins are keyed by them);
+# release.yml / beta.yml / ensure-ffmpeg-sidecar.mjs rename on placement to
+# the externalBin name consumed by the tauri.<platform>.conf.json files:
+#   src-tauri/binaries/infinitv-ffmpeg-x86_64-pc-windows-msvc.exe
+#   src-tauri/binaries/infinitv-ffmpeg-x86_64-unknown-linux-gnu
 #
 # No GPL, no nonfree, no external libraries: LGPL configure only. See
 # ffmpeg.md for the full rationale.

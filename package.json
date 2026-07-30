@@ -27,7 +27,7 @@
     "@astrojs/svelte": "^9.0.1",
     "@fontsource-variable/geist": "5.2.9",
     "@fontsource/instrument-serif": "5.2.8",
-    "@tabler/icons-svelte": "^3.45.0",
+    "@tabler/icons-svelte": "^3.46.0",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "~2.3.2",
@@ -42,13 +42,13 @@
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@tauri-apps/plugin-window-state": "~2.4.1",
     "artplayer": "^5.4.0",
-    "astro": "^7.1.3",
+    "astro": "^7.1.6",
     "dompurify": "^3.4.12",
     "hls.js": "^1.6.16",
     "marked": "^18.0.7",
     "mp4box": "^2.4.1",
     "mpegts.js": "1.8.0",
-    "shaka-player": "^5.2.2",
+    "shaka-player": "^5.2.4",
     "svelte": "^5.56.8",
     "tailwindcss": "^4.3.3",
     "tauri-plugin-android-fs-api": "28.1.0",
@@ -70,7 +70,7 @@
     "svelte-eslint-parser": "^1.8.0",
     "tiny-glob": "^0.2.9",
     "typescript-eslint": "^8.65.0",
-    "vite": "^8.1.5",
+    "vite": "^8.2.0",
     "vitest": "^4.1.10"
   }
 }

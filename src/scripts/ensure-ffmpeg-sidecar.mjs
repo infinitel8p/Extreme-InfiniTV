@@ -310,6 +310,14 @@ async function markerIsFresh(markerPath, destPath) {
   return actualHash === marker.sha256
 }
 
+// Cleans up the pre-rename destination so dev machines don't keep both.
+function removeStaleOldNamedBinary(target) {
+  const oldDestPath = join(binariesDir, `ffmpeg-${target.triple}${target.ext}`)
+  if (existsSync(oldDestPath)) unlinkSync(oldDestPath)
+  const oldMarkerPath = markerPathFor(oldDestPath)
+  if (existsSync(oldMarkerPath)) unlinkSync(oldMarkerPath)
+}
+
 function findOnPath(binaryName) {
   try {
     const command = platform() === "win32" ? "where" : "which"
@@ -322,8 +330,10 @@ function findOnPath(binaryName) {
 }
 
 async function ensureSidecar(target) {
-  const destPath = join(binariesDir, `ffmpeg-${target.triple}${target.ext}`)
+  const destPath = join(binariesDir, `infinitv-ffmpeg-${target.triple}${target.ext}`)
   const markerPath = markerPathFor(destPath)
+
+  removeStaleOldNamedBinary(target)
 
   if (existsSync(destPath)) {
     if (await markerIsFresh(markerPath, destPath)) {
@@ -406,7 +416,8 @@ async function main() {
       process.exit(1)
     }
     for (const target of targets) {
-      const destPath = join(binariesDir, `ffmpeg-${target.triple}${target.ext}`)
+      removeStaleOldNamedBinary(target)
+      const destPath = join(binariesDir, `infinitv-ffmpeg-${target.triple}${target.ext}`)
       copyFileSync(resolvedOverride, destPath)
       if (platform() !== "win32") chmodSync(destPath, 0o755)
       const overrideHash = await sha256File(destPath)

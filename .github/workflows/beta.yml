@@ -235,8 +235,11 @@ jobs:
           fi
           rm -f asset.sha256
           cd - >/dev/null
+          # Rename after verification: checksum pins are keyed by the release asset name.
+          DEST="infinitv-$ASSET"
+          mv "src-tauri/binaries/$ASSET" "src-tauri/binaries/$DEST"
           if [ "${{ matrix.os }}" != "windows-latest" ]; then
-            chmod +x "src-tauri/binaries/$ASSET"
+            chmod +x "src-tauri/binaries/$DEST"
           fi
 
       - run: pnpm sync-version ${{ needs.create-beta-release.outputs.version }}

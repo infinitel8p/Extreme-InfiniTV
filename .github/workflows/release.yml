@@ -521,8 +521,11 @@ jobs:
           fi
           rm -f asset.sha256
           cd - >/dev/null
+          # Rename after verification: checksum pins are keyed by the release asset name.
+          DEST="infinitv-$ASSET"
+          mv "src-tauri/binaries/$ASSET" "src-tauri/binaries/$DEST"
           if [[ "${{ matrix.os }}" != windows-* ]]; then
-            chmod +x "src-tauri/binaries/$ASSET"
+            chmod +x "src-tauri/binaries/$DEST"
           fi
 
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
