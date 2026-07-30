@@ -474,8 +474,8 @@ const navStructure: NavSection[] = [
             Auto turns on safe mode only on hardware known to have problems. Faster is applied as a trial after a restart: if you do not confirm keeping it, the app switches back on the next launch.
           </p>
 
-          <p id="rendering-env-override-note" hidden data-i18n-html="settings.rendering.envOverrideNote" class="text-xs text-fg-3">
-            <code class="font-mono text-[0.7rem] px-1 py-0.5 rounded bg-surface-2 border border-line/60">WEBKIT_DISABLE_DMABUF_RENDERER</code> is set outside the app, so this control is disabled.
+          <p id="rendering-env-override-note" hidden data-i18n="settings.rendering.envOverrideNote" class="text-xs text-fg-3">
+            A WebKit rendering variable is set outside the app, so this control is disabled.
           </p>
 
           <p id="rendering-restart-note" hidden aria-live="polite" class="text-xs text-fg-3"></p>
@@ -484,7 +484,7 @@ const navStructure: NavSection[] = [
           </button>
 
           <p data-i18n-html="settings.rendering.escapeHatches" class="text-xs text-fg-3 border-t border-line/60 pt-3">
-            If the app becomes unusable, force safe mode from outside: launch once with <code class="font-mono text-[0.7rem] px-1 py-0.5 rounded bg-surface-2 border border-line/60">WEBKIT_DISABLE_DMABUF_RENDERER=1</code> (applies to that launch only), or run the app with <code class="font-mono text-[0.7rem] px-1 py-0.5 rounded bg-surface-2 border border-line/60">--safe-rendering</code> to switch the setting back permanently.
+            If the app becomes unusable, run it once with <code class="font-mono text-[0.7rem] px-1 py-0.5 rounded bg-surface-2 border border-line/60">--safe-rendering</code> from a terminal to switch back to safe rendering permanently.
           </p>
         </article>
 

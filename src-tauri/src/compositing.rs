@@ -1,4 +1,4 @@
-// Linux WebKitGTK DMA-BUF rendering safe-mode workaround; see initialize().
+// Linux WebKitGTK DMA-BUF rendering safe mode: per-hardware workaround; see initialize().
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -8,7 +8,8 @@ use serde_json::{json, Value};
 use tauri::Manager;
 
 const SETTING_FILE_NAME: &str = "compositing.json";
-const ENV_VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+const DISABLE_DMABUF_RENDERER_VAR: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+const FORCE_SHM_VAR: &str = "WEBKIT_DMABUF_RENDERER_FORCE_SHM";
 const VM_MARKERS: [&str; 7] = ["qemu", "kvm", "vmware", "virtualbox", "innotek", "bochs", "parallels"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,12 +29,45 @@ impl RiskyHardware {
     }
 }
 
+// WEBKIT_DISABLE_DMABUF_RENDERER=1 segfaults on navigation on Raspberry Pi /
+// WebKitGTK 2.52 (AcceleratedBackingStore::update); FORCE_SHM is the proven fix there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SafeModeVar {
+    ForceShm,
+    DisableDmabuf,
+}
+
+impl SafeModeVar {
+    fn env_name(self) -> &'static str {
+        match self {
+            SafeModeVar::ForceShm => FORCE_SHM_VAR,
+            SafeModeVar::DisableDmabuf => DISABLE_DMABUF_RENDERER_VAR,
+        }
+    }
+}
+
+fn safe_mode_var_for(detection: Option<RiskyHardware>) -> SafeModeVar {
+    match detection {
+        Some(RiskyHardware::Nvidia) | Some(RiskyHardware::Vm) => SafeModeVar::DisableDmabuf,
+        _ => SafeModeVar::ForceShm,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StartupState {
     detection: Option<RiskyHardware>,
     active: &'static str,
     env_override: bool,
     trial_active: bool,
+}
+
+/// Result of `compute_startup_decision`: the state to report, the setting to
+/// persist (if any), and which WebKit variable (if any) this session must set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StartupDecision {
+    state: StartupState,
+    persist: Option<&'static str>,
+    env_var_to_set: Option<SafeModeVar>,
 }
 
 static STARTUP_STATE: OnceLock<StartupState> = OnceLock::new();
@@ -146,28 +180,34 @@ fn env_var_active_mode(value: &str) -> &'static str {
     }
 }
 
-/// Pure startup state machine. `raw_file_contents` is the on-disk setting
-/// file's text (`None` when missing/unreadable). Returns the resolved state
-/// plus an optional new setting the caller should persist (e.g. the
-/// `--safe-rendering` flag, or a consumed `fast-trial` reverting to `auto`).
+// DISABLE_DMABUF takes precedence when both are set; either alone still decides.
+fn env_override_active_mode(disable_dmabuf: Option<&str>, force_shm: Option<&str>) -> &'static str {
+    if let Some(value) = disable_dmabuf {
+        return env_var_active_mode(value);
+    }
+    if let Some(value) = force_shm {
+        return env_var_active_mode(value);
+    }
+    "fast"
+}
+
+/// Pure startup decision: state to report, setting to persist, and which WebKit var (if any) to force.
 fn compute_startup_decision(
     raw_file_contents: Option<&str>,
     cli_safe_flag: bool,
-    env_value: Option<&str>,
+    disable_dmabuf_env: Option<&str>,
+    force_shm_env: Option<&str>,
     detection: Option<RiskyHardware>,
-) -> (StartupState, Option<&'static str>) {
+) -> StartupDecision {
     let persist = if cli_safe_flag { Some("safe") } else { None };
 
-    if let Some(value) = env_value {
-        return (
-            StartupState {
-                detection,
-                active: env_var_active_mode(value),
-                env_override: true,
-                trial_active: false,
-            },
+    if disable_dmabuf_env.is_some() || force_shm_env.is_some() {
+        let active = env_override_active_mode(disable_dmabuf_env, force_shm_env);
+        return StartupDecision {
+            state: StartupState { detection, active, env_override: true, trial_active: false },
             persist,
-        );
+            env_var_to_set: None,
+        };
     }
 
     let file_setting = if cli_safe_flag {
@@ -176,7 +216,7 @@ fn compute_startup_decision(
         raw_file_contents.map(parse_setting_file).unwrap_or_else(|| "auto".to_string())
     };
 
-    match file_setting.as_str() {
+    let (state, persist) = match file_setting.as_str() {
         "safe" => (StartupState { detection, active: "safe", env_override: false, trial_active: false }, persist),
         "fast" => (StartupState { detection, active: "fast", env_override: false, trial_active: false }, persist),
         // Self-healing revert: only a later explicit "fast" write makes this permanent.
@@ -188,32 +228,41 @@ fn compute_startup_decision(
             let active = if detection.is_some() { "safe" } else { "fast" };
             (StartupState { detection, active, env_override: false, trial_active: false }, persist)
         }
-    }
+    };
+
+    let env_var_to_set = if state.active == "safe" { Some(safe_mode_var_for(detection)) } else { None };
+
+    StartupDecision { state, persist, env_var_to_set }
 }
 
 #[cfg(target_os = "linux")]
 fn compute_startup_state(identifier: &str) -> StartupState {
     let config_dir = startup_config_dir(identifier);
     let cli_safe_flag = std::env::args().any(|arg| arg == "--safe-rendering");
-    let env_value = std::env::var(ENV_VAR).ok();
+    let disable_dmabuf_env = std::env::var(DISABLE_DMABUF_RENDERER_VAR).ok();
+    let force_shm_env = std::env::var(FORCE_SHM_VAR).ok();
     let detection = detect_hardware();
     let raw_file_contents = config_dir
         .as_deref()
         .and_then(|dir| std::fs::read_to_string(settings_file_path(dir)).ok());
 
-    let (state, persist) = compute_startup_decision(
+    let decision = compute_startup_decision(
         raw_file_contents.as_deref(),
         cli_safe_flag,
-        env_value.as_deref(),
+        disable_dmabuf_env.as_deref(),
+        force_shm_env.as_deref(),
         detection,
     );
 
     // No resolvable config dir means no setting file to write either.
-    if let (Some(setting), Some(dir)) = (persist, config_dir.as_deref()) {
+    if let (Some(setting), Some(dir)) = (decision.persist, config_dir.as_deref()) {
         let _ = write_setting(dir, setting);
     }
+    if let Some(var) = decision.env_var_to_set {
+        std::env::set_var(var.env_name(), "1");
+    }
 
-    state
+    decision.state
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -221,17 +270,9 @@ fn compute_startup_state(_identifier: &str) -> StartupState {
     StartupState { detection: None, active: "fast", env_override: false, trial_active: false }
 }
 
-fn apply_env_for_active(state: &StartupState) {
-    if state.env_override || state.active != "safe" {
-        return;
-    }
-    std::env::set_var(ENV_VAR, "1");
-}
-
 /// Must run before `tauri::Builder`: the main window predates `setup()`.
 pub fn initialize(identifier: &str) {
     let state = compute_startup_state(identifier);
-    apply_env_for_active(&state);
     let _ = STARTUP_STATE.set(state);
 }
 
@@ -343,6 +384,39 @@ mod tests {
     }
 
     #[test]
+    fn env_override_active_mode_prefers_disable_dmabuf_when_both_are_set() {
+        assert_eq!(env_override_active_mode(Some("0"), Some("1")), "fast");
+        assert_eq!(env_override_active_mode(Some("1"), Some("0")), "safe");
+    }
+
+    #[test]
+    fn env_override_active_mode_falls_back_to_force_shm_alone() {
+        assert_eq!(env_override_active_mode(None, Some("1")), "safe");
+        assert_eq!(env_override_active_mode(None, Some("0")), "fast");
+    }
+
+    #[test]
+    fn env_override_active_mode_is_fast_when_neither_is_set() {
+        assert_eq!(env_override_active_mode(None, None), "fast");
+    }
+
+    #[test]
+    fn safe_mode_var_for_raspberry_pi_is_force_shm() {
+        assert_eq!(safe_mode_var_for(Some(RiskyHardware::RaspberryPi)), SafeModeVar::ForceShm);
+    }
+
+    #[test]
+    fn safe_mode_var_for_nvidia_and_vm_is_disable_dmabuf() {
+        assert_eq!(safe_mode_var_for(Some(RiskyHardware::Nvidia)), SafeModeVar::DisableDmabuf);
+        assert_eq!(safe_mode_var_for(Some(RiskyHardware::Vm)), SafeModeVar::DisableDmabuf);
+    }
+
+    #[test]
+    fn safe_mode_var_for_no_detection_is_force_shm() {
+        assert_eq!(safe_mode_var_for(None), SafeModeVar::ForceShm);
+    }
+
+    #[test]
     fn is_valid_setting_accepts_known_values_only() {
         assert!(is_valid_setting("auto"));
         assert!(is_valid_setting("fast"));
@@ -382,79 +456,103 @@ mod tests {
     }
 
     #[test]
-    fn decision_env_override_truthy_value_forces_safe() {
-        let (result, persist) = compute_startup_decision(None, false, Some("1"), None);
-        assert_eq!(result, state("safe", true, false));
-        assert_eq!(persist, None);
+    fn decision_env_override_truthy_disable_dmabuf_forces_safe() {
+        let decision = compute_startup_decision(None, false, Some("1"), None, None);
+        assert_eq!(decision.state, state("safe", true, false));
+        assert_eq!(decision.persist, None);
+        assert_eq!(decision.env_var_to_set, None);
     }
 
     #[test]
-    fn decision_env_override_falsy_value_forces_fast() {
-        let (result, persist) = compute_startup_decision(None, false, Some("0"), None);
-        assert_eq!(result, state("fast", true, false));
-        assert_eq!(persist, None);
+    fn decision_env_override_falsy_disable_dmabuf_forces_fast() {
+        let decision = compute_startup_decision(None, false, Some("0"), None, None);
+        assert_eq!(decision.state, state("fast", true, false));
+        assert_eq!(decision.persist, None);
+    }
+
+    #[test]
+    fn decision_env_override_truthy_force_shm_forces_safe() {
+        let decision = compute_startup_decision(None, false, None, Some("1"), None);
+        assert_eq!(decision.state, state("safe", true, false));
+        assert_eq!(decision.env_var_to_set, None);
     }
 
     #[test]
     fn decision_env_override_wins_over_cli_flag_but_the_write_still_persists() {
-        let (result, persist) = compute_startup_decision(None, true, Some("0"), None);
-        assert_eq!(result, state("fast", true, false));
-        assert_eq!(persist, Some("safe"));
+        let decision = compute_startup_decision(None, true, Some("0"), None, None);
+        assert_eq!(decision.state, state("fast", true, false));
+        assert_eq!(decision.persist, Some("safe"));
     }
 
     #[test]
-    fn decision_cli_flag_forces_safe_and_persists_it() {
-        let (result, persist) = compute_startup_decision(None, true, None, None);
-        assert_eq!(result, state("safe", false, false));
-        assert_eq!(persist, Some("safe"));
+    fn decision_cli_flag_forces_safe_and_persists_it_with_force_shm() {
+        let decision = compute_startup_decision(None, true, None, None, None);
+        assert_eq!(decision.state, state("safe", false, false));
+        assert_eq!(decision.persist, Some("safe"));
+        assert_eq!(decision.env_var_to_set, Some(SafeModeVar::ForceShm));
     }
 
     #[test]
-    fn decision_setting_safe_is_active_safe() {
-        let (result, persist) = compute_startup_decision(Some(r#"{"setting":"safe"}"#), false, None, None);
-        assert_eq!(result, state("safe", false, false));
-        assert_eq!(persist, None);
+    fn decision_setting_safe_without_detection_uses_force_shm() {
+        let decision = compute_startup_decision(Some(r#"{"setting":"safe"}"#), false, None, None, None);
+        assert_eq!(decision.state, state("safe", false, false));
+        assert_eq!(decision.env_var_to_set, Some(SafeModeVar::ForceShm));
     }
 
     #[test]
     fn decision_setting_fast_is_active_fast_even_with_detection() {
-        let (result, persist) = compute_startup_decision(
+        let decision = compute_startup_decision(
             Some(r#"{"setting":"fast"}"#),
             false,
             None,
+            None,
             Some(RiskyHardware::RaspberryPi),
         );
-        assert_eq!(result.active, "fast");
-        assert!(!result.trial_active);
-        assert_eq!(persist, None);
+        assert_eq!(decision.state.active, "fast");
+        assert!(!decision.state.trial_active);
+        assert_eq!(decision.persist, None);
+        assert_eq!(decision.env_var_to_set, None);
     }
 
     #[test]
     fn decision_setting_fast_trial_runs_fast_and_persists_auto() {
-        let (result, persist) = compute_startup_decision(Some(r#"{"setting":"fast-trial"}"#), false, None, None);
-        assert_eq!(result, state("fast", false, true));
-        assert_eq!(persist, Some("auto"));
+        let decision = compute_startup_decision(Some(r#"{"setting":"fast-trial"}"#), false, None, None, None);
+        assert_eq!(decision.state, state("fast", false, true));
+        assert_eq!(decision.persist, Some("auto"));
+        assert_eq!(decision.env_var_to_set, None);
     }
 
     #[test]
-    fn decision_corrupt_file_behaves_like_auto_with_detection() {
-        let (result, persist) =
-            compute_startup_decision(Some("not json"), false, None, Some(RiskyHardware::Nvidia));
-        assert_eq!(result, state_with_detection(Some(RiskyHardware::Nvidia), "safe", false, false));
-        assert_eq!(persist, None);
+    fn decision_corrupt_file_behaves_like_auto_with_nvidia_detection() {
+        let decision =
+            compute_startup_decision(Some("not json"), false, None, None, Some(RiskyHardware::Nvidia));
+        assert_eq!(decision.state, state_with_detection(Some(RiskyHardware::Nvidia), "safe", false, false));
+        assert_eq!(decision.persist, None);
+        assert_eq!(decision.env_var_to_set, Some(SafeModeVar::DisableDmabuf));
     }
 
     #[test]
-    fn decision_missing_file_with_risky_detection_defaults_to_safe() {
-        let (result, persist) = compute_startup_decision(None, false, None, Some(RiskyHardware::Vm));
-        assert_eq!(result, state_with_detection(Some(RiskyHardware::Vm), "safe", false, false));
-        assert_eq!(persist, None);
+    fn decision_missing_file_with_raspberry_pi_detection_uses_force_shm() {
+        let decision = compute_startup_decision(None, false, None, None, Some(RiskyHardware::RaspberryPi));
+        assert_eq!(
+            decision.state,
+            state_with_detection(Some(RiskyHardware::RaspberryPi), "safe", false, false)
+        );
+        assert_eq!(decision.env_var_to_set, Some(SafeModeVar::ForceShm));
+    }
+
+    #[test]
+    fn decision_missing_file_with_vm_detection_uses_disable_dmabuf() {
+        let decision = compute_startup_decision(None, false, None, None, Some(RiskyHardware::Vm));
+        assert_eq!(decision.state, state_with_detection(Some(RiskyHardware::Vm), "safe", false, false));
+        assert_eq!(decision.env_var_to_set, Some(SafeModeVar::DisableDmabuf));
     }
 
     #[test]
     fn decision_missing_file_without_detection_defaults_to_fast() {
-        let (result, persist) = compute_startup_decision(None, false, None, None);
-        assert_eq!(result, state("fast", false, false));
-        assert_eq!(persist, None);
+        let decision = compute_startup_decision(None, false, None, None, None);
+        assert_eq!(decision.state, state("fast", false, false));
+        assert_eq!(decision.persist, None);
+        assert_eq!(decision.env_var_to_set, None);
     }
 }
