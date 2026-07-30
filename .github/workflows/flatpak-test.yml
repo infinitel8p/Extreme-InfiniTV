@@ -3,12 +3,10 @@ name: Flatpak test build
 # Builds the Flathub submission manifest to catch breakage before it reaches
 # review. Not the actual Flathub build (that runs on Flathub's own infra
 # once the submission PR is merged) - this is a local sanity check.
+# Flathub submission is paused; manual dispatch only.
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "packaging/flatpak/**"
 
 permissions:
   contents: read

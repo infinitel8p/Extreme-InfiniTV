@@ -18,6 +18,9 @@
   <a href="https://play.google.com/store/apps/details?id=com.infinitel8p.xtream">
     <img src="https://img.shields.io/badge/Google%20Play-Download-34A853?logo=google-play&logoColor=white" height="50" alt="Get Extreme InfiniTV on Google Play"/>
   </a>
+  <a href="https://snapcraft.io/extreme-infinitv">
+    <img src="https://img.shields.io/badge/Snap%20Store-Download-E95420?logo=snapcraft&logoColor=white" height="50" alt="Get Extreme InfiniTV from the Snap Store"/>
+  </a>
   <a href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest">
     <img src="https://img.shields.io/badge/GitHub-Releases-181717?logo=github&logoColor=white" height="50" alt="Download Extreme InfiniTV from GitHub Releases"/>
   </a>
@@ -110,9 +113,11 @@
 | Windows (Microsoft Store) | [apps.microsoft.com](https://apps.microsoft.com/detail/9NN162Z0WXSR) | Microsoft Store |
 | Windows (sideload) | NSIS `.exe` (or `.msi`) from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | In-app auto-updater |
 | macOS (Apple Silicon + Intel) | Universal `.dmg` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | Update check in-app, download from Releases |
+| Linux (Snap, most distros) | `sudo snap install extreme-infinitv` or [Snap Store](https://snapcraft.io/extreme-infinitv) | Snap Store |
 | Linux (Debian / Ubuntu / Mint) | `.deb` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | Manual |
 | Linux (Fedora / openSUSE / RHEL) | `.rpm` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | Manual |
 | Linux (any distro, portable) | `.AppImage` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | In-app auto-updater |
+| Raspberry Pi 4 / 5 (64-bit OS) | `sudo snap install extreme-infinitv`, or arm64 `.deb` / `.AppImage` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | Snap Store / in-app (AppImage) |
 | Android phone / tablet | [Google Play](https://play.google.com/store/apps/details?id=com.infinitel8p.xtream) | Play Store |
 | Android TV | Same APK, sideload via ADB or use Play Store on supported devices | Play Store |
 | Web preview | Build with `pnpm build` and serve `dist/` (no auto-update, no native features) | Manual |

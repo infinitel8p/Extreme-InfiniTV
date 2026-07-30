@@ -18,7 +18,15 @@ on:
 
 jobs:
   build-snap:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
     steps:
@@ -44,18 +52,27 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Download amd64 deb from the release
+      # Skip instead of fail when the release predates this arch (no arm64
+      # deb exists before v1.7.1).
+      - name: Download deb from the release
+        id: download
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.resolve.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p packaging/snap/local
-          gh release download "$TAG" --repo "${{ github.repository }}" \
-            --pattern "*amd64.deb" \
-            --output packaging/snap/local/app.deb
+          if gh release download "$TAG" --repo "${{ github.repository }}" \
+            --pattern "*${{ matrix.arch }}.deb" \
+            --output packaging/snap/local/app.deb; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No ${{ matrix.arch }} deb on $TAG - skipping this arch"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set snap version
+        if: steps.download.outputs.found == 'true'
         env:
           TAG: ${{ steps.resolve.outputs.tag }}
         run: |
@@ -64,14 +81,16 @@ jobs:
           sed -i "s/__VERSION__/$VERSION/" packaging/snap/snapcraft.yaml
 
       - name: Build snap
+        if: steps.download.outputs.found == 'true'
         id: build
         uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
         with:
           path: packaging/snap
 
       - name: Upload snap artifact
+        if: steps.download.outputs.found == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: extreme-infinitv-snap
+          name: extreme-infinitv-snap-${{ matrix.arch }}
           path: ${{ steps.build.outputs.snap }}
           if-no-files-found: error

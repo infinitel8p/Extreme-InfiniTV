@@ -57,10 +57,10 @@ name: Release
 # when the MSSTORE_* secrets are set. `pnpm msix` (buildfiles/make-msix-template.mjs)
 # remains the manual fallback - see `cmds.md`.
 #
-# Snap Store: publish-snap repackages the Linux x64 .deb from build-tauri via
-# `packaging/snap/snapcraft.yaml` and releases it to the stable channel when
-# SNAPCRAFT_STORE_CREDENTIALS is set. See `.github/workflows/snap-test.yml` to
-# dry-run the build against a past release without publishing.
+# Snap Store: publish-snap repackages the Linux .debs (x64 + arm64) from
+# build-tauri via `packaging/snap/snapcraft.yaml` and releases them to the
+# stable channel when SNAPCRAFT_STORE_CREDENTIALS is set. See
+# `.github/workflows/snap-test.yml` to dry-run the build without publishing.
 
 on:
   push:
@@ -343,7 +343,7 @@ jobs:
             const downloads = [
               '## Downloads',
               '',
-              'Pick the file that matches your device. Click a filename to download it directly. The Microsoft Store and Google Play buttons below are the easiest path on Windows and Android.',
+              'Pick the file that matches your device. Click a filename to download it directly. The Microsoft Store, Google Play and Snap Store are the easiest path on Windows, Android and Linux.',
               '',
               '| Platform | File |',
               '|----------|------|',
@@ -351,8 +351,9 @@ jobs:
               `| Windows on ARM (Snapdragon laptops) | ${fileLink(`Extreme InfiniTV_${version}_arm64-setup.exe`)} |`,
               `| Windows (MSI alternative) | ${fileLink(`Extreme InfiniTV_${version}_x64_en-US.msi`)} |`,
               `| macOS (Apple Silicon + Intel) | ${fileLink(`Extreme InfiniTV_${version}_universal.dmg`)} |`,
+              `| Linux Snap (most distros) | [Snap Store](https://snapcraft.io/extreme-infinitv) or \`sudo snap install extreme-infinitv\` |`,
               `| Linux Debian / Ubuntu / Mint | ${fileLink(`extreme-infinitv_${version}_amd64.deb`)} |`,
-              `| Linux Debian / Ubuntu / Mint (ARM64) | ${fileLink(`extreme-infinitv_${version}_arm64.deb`)} |`,
+              `| Linux ARM64 - Raspberry Pi 4/5 (64-bit OS), Debian / Ubuntu | ${fileLink(`extreme-infinitv_${version}_arm64.deb`)} |`,
               `| Linux Fedora / openSUSE / RHEL | ${fileLink(`extreme-infinitv-${version}-1.x86_64.rpm`)} |`,
               `| Linux Fedora / openSUSE / RHEL (ARM64) | ${fileLink(`extreme-infinitv-${version}-1.aarch64.rpm`)} |`,
               `| Linux portable (any distro) | ${fileLink(`extreme-infinitv_${version}_amd64.AppImage`)} |`,
@@ -761,7 +762,15 @@ jobs:
   # contents:write needed to download an asset off the still-draft release.
   publish-snap:
     needs: [create-release, build-tauri]
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
     env:
@@ -771,7 +780,7 @@ jobs:
         if: env.HAS_SNAPCRAFT_SECRET == 'true'
         uses: actions/checkout@v5
 
-      - name: Download amd64 deb from the release
+      - name: Download deb from the release
         if: env.HAS_SNAPCRAFT_SECRET == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -780,7 +789,7 @@ jobs:
           set -euo pipefail
           mkdir -p packaging/snap/local
           gh release download "$TAG" --repo "${{ github.repository }}" \
-            --pattern "*amd64.deb" \
+            --pattern "*${{ matrix.arch }}.deb" \
             --output packaging/snap/local/app.deb
 
       - name: Set snap version

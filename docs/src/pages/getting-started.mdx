@@ -16,13 +16,14 @@ Pick the download that matches your device. All builds come from the same source
 | Windows 10 / 11 | [Microsoft Store](https://apps.microsoft.com/detail/9NN162Z0WXSR) or [NSIS installer](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
 | Android phone / tablet / TV | [Google Play](https://play.google.com/store/apps/details?id=com.infinitel8p.xtream) or APK from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
 | macOS | `.dmg` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
-| Linux | `.AppImage` or `.deb` / `.rpm` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
+| Linux | [Snap Store](https://snapcraft.io/extreme-infinitv) (`sudo snap install extreme-infinitv`), or `.AppImage` / `.deb` / `.rpm` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
+| Raspberry Pi 4 / 5 | 64-bit OS required. Same Snap install, or the arm64 `.deb` / `.AppImage` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
 
-The Windows desktop build and the Linux AppImage auto-update from GitHub Releases; you can turn this off with the **Automatic updates** toggle in **Settings > About > App update** (the toggle only appears on builds that have the updater). The Microsoft Store and Google Play handle updates themselves. Other Linux packages (deb / rpm) do not auto-update. On platforms without a built-in updater (web, macOS, and Microsoft Store / MSIX builds), the app shows a hint when a newer version is available; Play Store installs link straight to Google Play.
+The Windows desktop build and the Linux AppImage auto-update from GitHub Releases; you can turn this off with the **Automatic updates** toggle in **Settings > About > App update** (the toggle only appears on builds that have the updater). The Microsoft Store, Google Play, and the Snap Store handle updates themselves. Other Linux packages (deb / rpm) do not auto-update. On platforms without a built-in updater (web, macOS, and Microsoft Store / MSIX builds), the app shows a hint when a newer version is available; Play Store installs link straight to Google Play.
 
 ### Beta updates
 
-To try new features early, open **Settings > About > App update** and switch the **Update channel** to **Beta**. Beta builds ship more often and may be unstable. Updating to one works right from the app, the same way as a stable release. The channel picker is hidden on Microsoft Store installs, since the Store manages those updates itself.
+To try new features early, open **Settings > About > App update** and switch the **Update channel** to **Beta**. Beta builds ship more often and may be unstable. Updating to one works right from the app, the same way as a stable release. The channel picker is hidden on Microsoft Store and Snap installs, since those stores manage updates themselves (and only ship stable releases).
 
 ### Install via winget (Windows)
 
