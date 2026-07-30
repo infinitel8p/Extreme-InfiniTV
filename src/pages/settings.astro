@@ -1635,7 +1635,7 @@ const navStructure: NavSection[] = [
       const body = document.getElementById("changelog-body")
       const status = document.getElementById("changelog-status")
       if (!body) return
-      Promise.all([fetchReleases(undefined, 10), getCurrentAppVersion()])
+      Promise.all([fetchReleases(), getCurrentAppVersion()])
         .then(([allReleases, currentVersion]) => {
           const releases = filterReleasesForDisplay(allReleases, currentVersion || "").slice(0, 3)
           if (!releases.length) {

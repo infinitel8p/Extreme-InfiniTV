@@ -212,7 +212,7 @@ async function maybeShowWhatsNew(): Promise<void> {
 
   let releases: ReleaseSummary[]
   try {
-    releases = await fetchReleases(undefined, 30)
+    releases = await fetchReleases()
   } catch (error) {
     log.error("[whats-new] release fetch failed:", error)
     return

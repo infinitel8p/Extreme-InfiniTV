@@ -27,9 +27,10 @@ interface CacheShape {
   releases: ReleaseSummary[]
 }
 
+const PER_PAGE = 100
+
 export async function fetchReleases(
-  repoSlug = "infinitel8p/Extreme-InfiniTV",
-  limit = 10
+  repoSlug = "infinitel8p/Extreme-InfiniTV"
 ): Promise<ReleaseSummary[]> {
   try {
     const cached = sessionStorage.getItem(CACHE_KEY)
@@ -40,13 +41,13 @@ export async function fetchReleases(
         Date.now() - parsed.fetchedAt < CACHE_TTL_MS &&
         Array.isArray(parsed.releases)
       ) {
-        return parsed.releases.slice(0, limit)
+        return parsed.releases
       }
     }
   } catch {}
 
   const response = await fetch(
-    `https://api.github.com/repos/${repoSlug}/releases?per_page=${limit}`,
+    `https://api.github.com/repos/${repoSlug}/releases?per_page=${PER_PAGE}`,
     { headers: { Accept: "application/vnd.github+json" } }
   )
   if (!response.ok) throw new Error(`GitHub API ${response.status}`)
