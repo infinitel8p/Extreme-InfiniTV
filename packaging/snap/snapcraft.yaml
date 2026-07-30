@@ -44,6 +44,14 @@ parts:
       # snapd's desktop-file sanitizer drops Icon= unless it starts with ${SNAP}/
       sed -i -e "s|Icon=extreme-infinitv|Icon=\${SNAP}/usr/share/icons/hicolor/128x128/apps/extreme-infinitv.png|g" \
         "$CRAFT_PART_INSTALL/usr/share/applications/Extreme InfiniTV.desktop"
+      # gst-libav needs these sonames; update-alternatives never runs in a build.
+      libdir="$CRAFT_PART_INSTALL/usr/lib/$CRAFT_ARCH_TRIPLET"
+      if [ -e "$libdir/blas/libblas.so.3" ]; then
+        ln -sf blas/libblas.so.3 "$libdir/libblas.so.3"
+      fi
+      if [ -e "$libdir/lapack/liblapack.so.3" ]; then
+        ln -sf lapack/liblapack.so.3 "$libdir/liblapack.so.3"
+      fi
 
 apps:
   extreme-infinitv:
