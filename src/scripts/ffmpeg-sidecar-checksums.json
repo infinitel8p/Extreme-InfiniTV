@@ -1,24 +1,24 @@
 {
   "tag": "ffmpeg-sidecar-v2",
-  "pinnedAt": "2026-07-28",
+  "pinnedAt": "2026-07-30",
   "sidecarBuild": {
     "ffmpegVersion": "7.1.5",
-    "builtAt": "2026-07-28T16:10:29Z",
-    "workflowCommit": "fe2a252dfc4be4d3a99ea0f0c4b3e448997946a7"
+    "builtAt": "2026-07-30T15:04:28Z",
+    "workflowCommit": "f62c25cf72ecfb3e84f0a98805c524217caca182"
   },
   "sha256": {
-    "BUILD-INFO-linux-arm64.txt": "f5222209a8f9e6a955a9b426fdda13fb35929a21cfa121503b4928e2ff14aa6e",
-    "BUILD-INFO-linux.txt": "e07f4500707e94a2154b02a990f12156e9b678d83bfa78ff11785efa026397ec",
-    "BUILD-INFO-macos.txt": "221629f0c3b9d3d9b2c6daf5131ed884a5590a93a9be8f8fb70b85ab2f347641",
-    "BUILD-INFO-windows-arm64.txt": "eb315c30e799b0143c07a01f2275267723d75855feb5f644f1b5e6e17a6dc18f",
-    "BUILD-INFO-windows.txt": "b2b9eb000c7b43348ac04996367d54a3fc18721a07eb2eeda5faa298344da8c7",
+    "BUILD-INFO-linux-arm64.txt": "54fdf73a88567a41ca26606845632d53b6ee95438f882c1aeadd2baa68e6188e",
+    "BUILD-INFO-linux.txt": "0f682bd226a80ba967314576d7ab4f0808bc734a9425c14500be47e9a31275cb",
+    "BUILD-INFO-macos.txt": "84eeb92b43612dd590899b0d4617b12738333cb47e52fbe94cb1814fcb4df364",
+    "BUILD-INFO-windows-arm64.txt": "d9593e3b495a1f7ce437f63a4af1086a9998358b3cfb8e03bd4e644f23d0f741",
+    "BUILD-INFO-windows.txt": "9351e57ae89613c09c9277712e31ae7451876fde92a104da74a498e371726394",
     "COPYING.LGPLv2.1": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30",
     "ffmpeg-aarch64-apple-darwin": "f2668fbb69e524a6cb3f28c4626f15a008cf3ee07399bf662ed712512c3fd807",
-    "ffmpeg-aarch64-pc-windows-msvc.exe": "a86c8334264ede0485f37b101e5cdc91ed151e0e1e988e73adad63445ffdf96c",
+    "ffmpeg-aarch64-pc-windows-msvc.exe": "5e420289e4a160ee0ca29414ce808f02452f6d704f8f8b6e8e7d6144e65b9bbf",
     "ffmpeg-aarch64-unknown-linux-gnu": "49714a8e83f852442e5af1e1ae5097607b2d4775447463365a36a8d68ccf6764",
     "ffmpeg-universal-apple-darwin": "f6d11f7d51138797e0adbca34e53438132f9ab120c6abba87a579264ff94c409",
     "ffmpeg-x86_64-apple-darwin": "6f981d55f12268bd390868078e0fdf76fbfccd8db053312c53955bbda059d149",
-    "ffmpeg-x86_64-pc-windows-msvc.exe": "e6e045528917adee1506eb85a1668ce142f1ca8c1f2b391125ed16858661cf49",
+    "ffmpeg-x86_64-pc-windows-msvc.exe": "cf27ee6c19bb6576b08c4b9213f92395eda9e0dc968b4088bd37b92dc121b011",
     "ffmpeg-x86_64-unknown-linux-gnu": "af59256f8055adc8eb6601a7c740c8a0d0c6990042bf48009acc64157b392e4c"
   }
 }
