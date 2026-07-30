@@ -76,6 +76,7 @@
         { "url": "http://**/*" },
         { "url": "ms-windows-store://**" }
       ]
-    }
+    },
+    "allow-warmup-commands"
   ]
 }

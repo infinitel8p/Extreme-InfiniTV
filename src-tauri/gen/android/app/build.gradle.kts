@@ -99,7 +99,8 @@ android {
 }
 
 rust {
-    rootDirRel = "../../../"
+    // Must resolve to the pnpm root: npm 11+ no longer walks up to find package.json.
+    rootDirRel = "../../../../"
 }
 
 dependencies {

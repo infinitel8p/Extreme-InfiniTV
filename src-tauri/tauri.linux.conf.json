@@ -3,7 +3,7 @@
     "externalBin": ["binaries/infinitv-ffmpeg"],
     "linux": {
       "deb": {
-        "depends": ["gstreamer1.0-libav", "gstreamer1.0-plugins-bad"]
+        "depends": ["gstreamer1.0-libav", "gstreamer1.0-plugins-bad", "gstreamer1.0-gl"]
       },
       "appimage": {
         "bundleMediaFramework": true

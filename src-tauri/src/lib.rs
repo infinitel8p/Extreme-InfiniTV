@@ -31,6 +31,8 @@ mod vod_audio_proxy;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod vod_proxy;
 
+mod warmup;
+
 // The Stdout target also covers Android release builds; tauri-plugin-log routes it to logcat there, not just the debug-only terminal.
 #[cfg(not(target_os = "ios"))]
 fn build_log_plugin() -> tauri_plugin_log::Builder {
@@ -139,7 +141,8 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .manage(warmup::WarmupState::default());
 
     #[cfg(not(target_os = "ios"))]
     let builder = builder.plugin(build_log_plugin().build());
@@ -189,24 +192,36 @@ pub fn run() {
             vod_audio_proxy::unregister_vod_audio_remux,
             vod_proxy::register_vod_proxy,
             vod_proxy::unregister_vod_proxy,
+            warmup::warmup_start,
+            warmup::warmup_status,
+            warmup::warmup_cancel,
+            warmup::warmup_ack,
         ]);
 
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_android_fs::init());
 
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        warmup::warmup_start,
+        warmup::warmup_status,
+        warmup::warmup_cancel,
+        warmup::warmup_ack,
+    ]);
+
     let app = builder
-        .setup(|_app| {
+        .setup(|app| {
             install_panic_hook();
             #[cfg(target_os = "android")]
-            prune_old_android_logs(_app);
+            prune_old_android_logs(app);
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             external_player::sweep_orphan_mpv_sockets();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            tray::install(_app)?;
+            tray::install(app)?;
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 use tauri::Manager;
-                if let Some(main_window) = _app.get_webview_window("main") {
+                if let Some(main_window) = app.get_webview_window("main") {
                     if let Err(error) = main_window.set_decorations(false) {
                         log::warn!("[window] set_decorations(false) failed: {error}");
                     }
@@ -219,6 +234,8 @@ pub fn run() {
                     let _ = main_window.set_focus();
                 }
             }
+            // Synchronous: runs before any IPC, so it can't race a warmup_start's staging_dir.
+            warmup::sweep_stale_staging(app.handle());
             Ok(())
         })
         .build(context)

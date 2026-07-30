@@ -26,6 +26,7 @@ parts:
       # gnome platform ships gst base + good only: no H.264/AAC decode, no MSE.
       - gstreamer1.0-plugins-bad
       - gstreamer1.0-libav
+      - gstreamer1.0-gl
     # Mesa and gstreamer core come from the gnome platform snap; staging ours
     # mismatches its DRI drivers ("did not find extension DRI_Mesa").
     prime:
