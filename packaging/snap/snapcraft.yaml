@@ -23,6 +23,22 @@ parts:
       - libwebkit2gtk-4.1-0
       - libappindicator3-1
       - libgtk-3-0
+      # gnome platform ships gst base + good only: no H.264/AAC decode, no MSE.
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-libav
+    # Mesa and gstreamer core come from the gnome platform snap; staging ours
+    # mismatches its DRI drivers ("did not find extension DRI_Mesa").
+    prime:
+      - -usr/lib/*/dri
+      - -usr/lib/*/libEGL*
+      - -usr/lib/*/libGL*
+      - -usr/lib/*/libGLES*
+      - -usr/lib/*/libGLX*
+      - -usr/lib/*/libGLdispatch*
+      - -usr/lib/*/libglapi*
+      - -usr/lib/*/libgbm*
+      - -usr/lib/*/libLLVM*
+      - -usr/lib/*/libgst*-1.0.so*
     override-build: |
       craftctl default
       # snapd's desktop-file sanitizer drops Icon= unless it starts with ${SNAP}/
@@ -34,6 +50,11 @@ apps:
     command: usr/bin/extreme-infinitv
     desktop: "usr/share/applications/Extreme InfiniTV.desktop"
     extensions: [gnome]
+    environment:
+      # Portal-backed GLib proxy/network services are denied under confinement:
+      # the proxy resolver fails every WebView load, the monitor reads offline.
+      GIO_USE_PROXY_RESOLVER: gnome
+      GIO_USE_NETWORK_MONITOR: base
     plugs:
       - network
       - network-bind
