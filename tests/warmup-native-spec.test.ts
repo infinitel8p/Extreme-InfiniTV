@@ -1,5 +1,8 @@
+/**
+ * @vitest-environment jsdom
+ */
 import { describe, it, expect } from "vitest"
-import { buildWarmupSpec, decideNativeKinds } from "@/scripts/lib/warmup-native.ts"
+import { buildWarmupSpec, decideNativeKinds, wrapJsKind } from "@/scripts/lib/warmup-native.ts"
 import type { DecideNativeKindsInput } from "@/scripts/lib/warmup-native.ts"
 import { splitUrlAuth } from "@/scripts/lib/url-auth.ts"
 
@@ -292,5 +295,46 @@ describe("decideNativeKinds", () => {
       seriesCached: true,
     })
     expect(result.nativeKinds.sort()).toEqual(["live", "series", "vod"])
+  })
+})
+
+// Regression: wrapJsKind's dispatch gate must follow showWarming, not its old
+// inverted allHot sense - both call sites now pass showWarming=true, and a
+// still-inverted `if (!showWarming)` would silently drop every event here.
+describe("wrapJsKind", () => {
+  function collectEvents(): { done: CustomEvent[]; error: CustomEvent[] } {
+    const done: CustomEvent[] = []
+    const error: CustomEvent[] = []
+    document.addEventListener("xt:catalog-warming-progress", (event) => {
+      const detail = (event as CustomEvent).detail
+      if (detail?.status === "done") done.push(event as CustomEvent)
+      if (detail?.status === "error") error.push(event as CustomEvent)
+    })
+    return { done, error }
+  }
+
+  it("dispatches a done progress event when showWarming is true", async () => {
+    const { done } = collectEvents()
+    const rows = await wrapJsKind("pl-1", "vod", async () => [1, 2, 3], {}, true)
+    expect(rows).toEqual([1, 2, 3])
+    expect(done).toHaveLength(1)
+    expect(done[0].detail).toMatchObject({ playlistId: "pl-1", kind: "vod", status: "done", count: 3 })
+  })
+
+  it("dispatches an error progress event when showWarming is true and the fetch rejects", async () => {
+    const { error } = collectEvents()
+    const errors: Record<string, string> = {}
+    const rows = await wrapJsKind("pl-1", "series", async () => Promise.reject(new Error("boom")), errors, true)
+    expect(rows).toEqual([])
+    expect(errors.series).toContain("boom")
+    expect(error).toHaveLength(1)
+    expect(error[0].detail).toMatchObject({ playlistId: "pl-1", kind: "series", status: "error" })
+  })
+
+  it("stays silent when showWarming is false", async () => {
+    const { done, error } = collectEvents()
+    await wrapJsKind("pl-1", "vod", async () => [1], {}, false)
+    expect(done).toHaveLength(0)
+    expect(error).toHaveLength(0)
   })
 })

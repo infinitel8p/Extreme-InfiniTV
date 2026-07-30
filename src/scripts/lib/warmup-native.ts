@@ -14,6 +14,7 @@ import {
 } from "@/scripts/lib/creds.js"
 import { hydrate, getCached, setCached, invalidateCustomDependents, hasInflightFetch } from "@/scripts/lib/cache.js"
 import {
+  ensureLive,
   ensureVod,
   ensureSeries,
   m3uToChannelList,
@@ -661,16 +662,23 @@ function dispatchCachedDone(playlistId: string, kind: WarmupKindName, cacheKind:
   dispatch(CATALOG_WARMING_PROGRESS_EVENT, { playlistId, kind, status: "done", count: rows.length })
 }
 
-function wrapJsKind(
+function ensureKind(kind: WarmupKindName, creds: { host: string }, playlistId: string, force: boolean) {
+  if (kind === "live") return ensureLive(creds, playlistId, { force })
+  if (kind === "vod") return ensureVod(creds, playlistId, { force })
+  return ensureSeries(creds, playlistId, { force })
+}
+
+// Exported only so the showWarming dispatch gate has direct test coverage.
+export function wrapJsKind(
   playlistId: string,
-  kind: "vod" | "series",
+  kind: WarmupKindName,
   run: () => Promise<unknown[]>,
   errors: Record<string, string>,
-  allHot: boolean,
+  showWarming: boolean,
 ): Promise<unknown[]> {
   return run()
     .then((rows) => {
-      if (!allHot) {
+      if (showWarming) {
         dispatch(CATALOG_WARMING_PROGRESS_EVENT, {
           playlistId,
           kind,
@@ -683,7 +691,7 @@ function wrapJsKind(
     .catch((err) => {
       errors[kind] = String(err?.message || err)
       log.warn(`[xt:warmup-native] ${kind} warmup failed:`, errors[kind])
-      if (!allHot) {
+      if (showWarming) {
         dispatch(CATALOG_WARMING_PROGRESS_EVENT, { playlistId, kind, status: "error", error: errors[kind] })
       }
       return []
@@ -803,10 +811,24 @@ export async function warmupActiveNative(
     const { job, coveredKinds } = await startOrJoinNativeJob(playlistId, spec, plan.nativeKinds, context)
 
     // A joined job started elsewhere may not cover everything this page wanted natively.
-    if (plan.showWarming) {
-      for (const kind of plan.nativeKinds) {
-        if (!coveredKinds.includes(kind)) dispatchCachedDone(playlistId, kind, cacheKindFor(kind, isM3U))
+    for (const kind of plan.nativeKinds) {
+      if (coveredKinds.includes(kind)) continue
+      const cacheKind = cacheKindFor(kind, isM3U)
+      const cached = getCached(playlistId, cacheKind)
+      if (cached) {
+        if (plan.showWarming) dispatchCachedDone(playlistId, kind, cacheKind)
+        continue
       }
+      // Genuinely uncached and not covered by the joined job - fetch it for real.
+      jsKindPromises.push(
+        wrapJsKind(playlistId, kind, () => ensureKind(kind, creds, playlistId, force), errors, plan.showWarming).then(
+          (rows) => {
+            if (kind === "live") liveRows = rows
+            else if (kind === "vod") vodRows = rows
+            else seriesRows = rows
+          },
+        ),
+      )
     }
 
     await Promise.all(

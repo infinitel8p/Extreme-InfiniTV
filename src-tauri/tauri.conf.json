@@ -23,7 +23,8 @@
         "focus": true,
         "visible": false,
         "decorations": false,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "backgroundColor": "#0b0f14"
       }
     ],
     "security": {
