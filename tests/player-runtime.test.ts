@@ -28,6 +28,31 @@ describe("defineRelativeTimestampOffset", () => {
     sourceBuffer.timestampOffset = 0.02
     expect(sourceBuffer.timestampOffset).toBeCloseTo(0.02)
   })
+
+  it("reads and writes through a native accessor-based timestampOffset", () => {
+    let nativeValue = 0
+    const sourceBuffer = {} as { timestampOffset: number }
+    Object.defineProperty(sourceBuffer, "timestampOffset", {
+      configurable: true,
+      get() {
+        return nativeValue
+      },
+      set(value: number) {
+        nativeValue = value
+      },
+    })
+
+    defineRelativeTimestampOffset(sourceBuffer, 60)
+    expect(nativeValue).toBe(60)
+    expect(sourceBuffer.timestampOffset).toBe(0)
+
+    sourceBuffer.timestampOffset = 0.02
+    expect(nativeValue).toBeCloseTo(60.02)
+    expect(sourceBuffer.timestampOffset).toBeCloseTo(0.02)
+
+    nativeValue = 60.5
+    expect(sourceBuffer.timestampOffset).toBeCloseTo(0.5)
+  })
 })
 
 describe("buildMpvArgs", () => {

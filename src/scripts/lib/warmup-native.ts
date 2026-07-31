@@ -251,7 +251,7 @@ export interface DecideNativeKindsResult {
 }
 
 function needsNativeFor(cached: boolean, inflightJs: boolean, force: boolean): boolean {
-  return (force || !cached) && !inflightJs
+  return force || (!cached && !inflightJs)
 }
 
 export function decideNativeKinds(input: DecideNativeKindsInput): DecideNativeKindsResult {
@@ -392,6 +392,15 @@ function settleTracker(tracker: KindTracker): void {
 
 function cacheKindFor(jobKind: WarmupKindName, isM3U: boolean): WarmupCacheKind {
   return jobKind === "live" && isM3U ? "m3u" : jobKind
+}
+
+/** Adds trackers for kinds not already tracked by this job; existing trackers are untouched. */
+function ensureTrackersForKinds(job: ActiveJobState, jobKinds: WarmupKindName[], isM3U: boolean): void {
+  for (const jobKind of jobKinds) {
+    if (!job.trackers.has(jobKind)) {
+      job.trackers.set(jobKind, createKindTracker(cacheKindFor(jobKind, isM3U)))
+    }
+  }
 }
 
 interface ActiveJobState {
@@ -615,11 +624,7 @@ async function startOrJoinNativeJob(
   const coveredKinds = wantedJobKinds.filter((jobKind) => jobKindsSet.has(jobKind))
 
   if (activeJob && activeJob.jobId === startResult.jobId) {
-    for (const jobKind of coveredKinds) {
-      if (!activeJob.trackers.has(jobKind)) {
-        activeJob.trackers.set(jobKind, createKindTracker(cacheKindFor(jobKind, context.isM3U)))
-      }
-    }
+    ensureTrackersForKinds(activeJob, coveredKinds, context.isM3U)
     reconcileFromStatus(activeJob, startResult.status)
     return { job: activeJob, coveredKinds }
   }
@@ -890,6 +895,16 @@ export async function awaitNativeKind(playlistId: string, cacheKind: WarmupCache
   if (!status || status.state !== "running" || status.playlistId !== playlistId) return
   const kindStatus = status.kinds.find((candidateKindStatus) => candidateKindStatus.kind === jobKind)
   if (!kindStatus || kindStatus.state === "ingested") return
+
+  // Same job as the active one: merge a tracker in rather than replacing the
+  // job, which would force-settle its other in-flight kinds as superseded.
+  if (activeJob && activeJob.jobId === status.jobId) {
+    ensureTrackersForKinds(activeJob, [jobKind], activeJob.context.isM3U)
+    reconcileFromStatus(activeJob, status)
+    const tracker = activeJob.trackers.get(jobKind)
+    if (tracker) await tracker.settlePromise
+    return
+  }
 
   const context = await buildIngestContext(playlistId)
   if (!context) return

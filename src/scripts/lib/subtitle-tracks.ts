@@ -110,7 +110,10 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     const hasShowingTrack = managedTracks.some((managed) => managed.textTrack.mode === "showing")
     if (!hasShowingTrack) return null
     if (deltaSeconds === 0) return offsetSeconds
-    offsetSeconds = Math.round((offsetSeconds + deltaSeconds) * 1000) / 1000
+    const roundedNewOffset = Math.round((offsetSeconds + deltaSeconds) * 1000) / 1000
+    // Apply the rounded delta so cue times never drift sub-ms from the reported offset.
+    const cueDelta = roundedNewOffset - offsetSeconds
+    offsetSeconds = roundedNewOffset
     for (const managed of managedTracks) {
       const track = managed.textTrack
       const restoreMode = track.mode
@@ -119,8 +122,8 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
       const cueSnapshot = track.cues ? Array.from(track.cues) : []
       for (const cue of cueSnapshot) {
         try {
-          cue.startTime += deltaSeconds
-          cue.endTime += deltaSeconds
+          cue.startTime += cueDelta
+          cue.endTime += cueDelta
         } catch (err) {
           log.warn("[xt:subtitles] failed to shift cue:", err)
         }

@@ -85,6 +85,7 @@ async function seedAppState(page: Page) {
 
 async function gotoAndSettle(page: Page, path: string) {
   await page.goto(path, { waitUntil: "networkidle" })
+  await page.evaluate(() => document.fonts.ready)
   await page.waitForTimeout(1200)
   await page.evaluate(() => {
     const active = document.activeElement as HTMLElement | null

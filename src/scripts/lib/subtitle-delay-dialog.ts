@@ -11,6 +11,8 @@ export interface SubtitleDelayDialogOptions {
   button: HTMLElement | null
   /** Nudge the active player's subtitle delay; null/undefined when nothing is showing. */
   nudge: (deltaSeconds: number) => number | null | undefined
+  /** Video element hosting subtitle tracks; drives button visibility via textTracks events. */
+  getMediaElement?: () => HTMLVideoElement | null
 }
 
 export interface SubtitleDelayController {
@@ -34,13 +36,14 @@ export function formatSubtitleDelay(offsetSeconds: number): string {
 }
 
 export function createSubtitleDelayController(options: SubtitleDelayDialogOptions): SubtitleDelayController {
-  const { dialogId, button, nudge } = options
+  const { dialogId, button, nudge, getMediaElement } = options
   let dialogEl: HTMLDialogElement | null = null
   let dialogValueEl: HTMLElement | null = null
   let dialogResetBtn: HTMLButtonElement | null = null
   let syncTimer: ReturnType<typeof setInterval> | null = null
   let dismissToast: (() => void) | null = null
   let buttonBound = false
+  let boundTrackList: TextTrackList | null = null
 
   function currentOffset(): number | null {
     return nudge(0) ?? null
@@ -51,6 +54,36 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
     if (!button) return
     if (currentOffset() == null) button.setAttribute("hidden", "")
     else button.removeAttribute("hidden")
+  }
+
+  function onTrackListEvent(): void {
+    syncButton()
+  }
+
+  // The video element (and its textTracks list) is swapped per playback session.
+  function bindTrackList(): void {
+    const list = getMediaElement?.()?.textTracks ?? null
+    if (list === boundTrackList) return
+    if (boundTrackList) {
+      boundTrackList.removeEventListener("change", onTrackListEvent)
+      boundTrackList.removeEventListener("addtrack", onTrackListEvent)
+      boundTrackList.removeEventListener("removetrack", onTrackListEvent)
+    }
+    boundTrackList = list
+    if (boundTrackList) {
+      boundTrackList.addEventListener("change", onTrackListEvent)
+      boundTrackList.addEventListener("addtrack", onTrackListEvent)
+      boundTrackList.addEventListener("removetrack", onTrackListEvent)
+    }
+    syncButton()
+  }
+
+  function unbindTrackList(): void {
+    if (!boundTrackList) return
+    boundTrackList.removeEventListener("change", onTrackListEvent)
+    boundTrackList.removeEventListener("addtrack", onTrackListEvent)
+    boundTrackList.removeEventListener("removetrack", onTrackListEvent)
+    boundTrackList = null
   }
 
   function updateDialogValue(offsetSeconds: number): void {
@@ -156,8 +189,9 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
   }
 
   function setup(): void {
-    if (!syncTimer) syncTimer = setInterval(syncButton, 1200)
-    syncButton()
+    bindTrackList()
+    // Fallback net for element swaps the events above might miss.
+    if (!syncTimer) syncTimer = setInterval(bindTrackList, 5000)
     if (buttonBound) return
     buttonBound = true
     button?.addEventListener("click", () => openDialog())
@@ -168,6 +202,7 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
       clearInterval(syncTimer)
       syncTimer = null
     }
+    unbindTrackList()
   }
 
   function handleKeydown(event: KeyboardEvent): void {

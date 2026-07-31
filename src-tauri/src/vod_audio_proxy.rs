@@ -29,7 +29,8 @@ const OUTPUT_CHANNEL_CAPACITY: usize = 256;
 const STDERR_RING_CAPACITY: usize = 10;
 const STARTUP_SILENCE_TIMEOUT: Duration = Duration::from_secs(10);
 const STDOUT_STALL_TIMEOUT: Duration = Duration::from_secs(20);
-const CLIENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(60);
+// Real disconnects close the mpsc channel right away; this only reaps pauses.
+const CLIENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(600);
 const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 // --- State ---
@@ -43,6 +44,7 @@ struct FfmpegProbe {
     path: String,
 }
 
+// Path-keyed, process-lifetime cache: a binary swapped in place serves a stale verdict.
 struct CachedProbeResolution {
     custom_path: Option<String>,
     // None = cached "no capable ffmpeg found".

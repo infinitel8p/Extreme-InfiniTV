@@ -413,4 +413,27 @@ describe("createSubtitleManager subtitle delay", () => {
       }
     }
   })
+
+  it("keeps cue times exactly in sync with the reported offset across repeated nudges", async () => {
+    const { session, emit } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "eng", name: null },
+    ])
+    const { manager } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    emit(2, [{ startMs: 1000, endMs: 3000, text: "drifting cue" }])
+    manager.select(0)
+
+    // Repeated thirds accumulate rounding error in the raw sum, which would
+    // desync cue times from the reported offset without the fix.
+    let reportedOffset = 0
+    for (let i = 0; i < 5; i++) {
+      reportedOffset = manager.nudgeDelay(1 / 3)!
+    }
+
+    const cue = video.tracks[0]!.cues![0]!
+    expect(cue.startTime).toBeCloseTo(1 + reportedOffset, 9)
+    expect(cue.endTime).toBeCloseTo(3 + reportedOffset, 9)
+  })
 })

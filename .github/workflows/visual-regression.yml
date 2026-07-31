@@ -25,7 +25,7 @@ permissions:
 jobs:
   compare:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -54,7 +54,7 @@ jobs:
 
   update-baselines:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     concurrency:
       group: visual-baselines-main
       cancel-in-progress: false
@@ -92,8 +92,17 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add tests/visual
             git commit -m "chore: update visual regression baselines"
-            git pull --rebase origin main
-            git push
+            for attempt in 1 2 3; do
+              git pull --rebase origin main
+              if git push; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::push failed after 3 attempts"
+                exit 1
+              fi
+              echo "Push rejected (attempt $attempt), retrying after rebase..."
+            done
           else
             echo "Baselines unchanged, nothing to commit."
           fi

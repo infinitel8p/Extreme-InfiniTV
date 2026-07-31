@@ -644,6 +644,7 @@ const subtitleDelayController = createSubtitleDelayController({
   dialogId: "movie-subtitle-delay-dialog",
   button: document.getElementById("movie-subtitle-delay-btn"),
   nudge: (deltaSeconds) => vjs?.subtitleDelay?.(deltaSeconds),
+  getMediaElement: () => vjs?.getMediaElement?.() ?? null,
 })
 
 document.addEventListener("keydown", (event) => subtitleDelayController.handleKeydown(event))

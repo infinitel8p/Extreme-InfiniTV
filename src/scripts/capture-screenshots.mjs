@@ -204,8 +204,8 @@ function buildRedactions(snapshot) {
   add(serverUrl.replace(/\/+$/, ""), "https://provider.example")
   add(m3uUrl, "https://provider.example/playlist.m3u8")
   // longer host:port form must be redacted before the bare hostname, or the port survives
-  add(hostnameWithPortOf(sourceUrl), "provider.example")
-  add(hostnameOf(sourceUrl), "provider.example")
+  add(hostnameWithPortOf(sourceUrl), "provider.example", { credential: false })
+  add(hostnameOf(sourceUrl), "provider.example", { credential: false })
   add(process.env.XT_USERNAME, "demo_user")
   add(process.env.XT_PASSWORD, "demo_pass")
   // snapshot entries may point at a different provider than the env vars
@@ -217,13 +217,13 @@ function buildRedactions(snapshot) {
         if (!entry || typeof entry !== "object") continue
         if (entry.serverUrl) {
           add(String(entry.serverUrl).replace(/\/+$/, ""), "https://provider.example")
-          add(hostnameWithPortOf(entry.serverUrl), "provider.example")
-          add(hostnameOf(entry.serverUrl), "provider.example")
+          add(hostnameWithPortOf(entry.serverUrl), "provider.example", { credential: false })
+          add(hostnameOf(entry.serverUrl), "provider.example", { credential: false })
         }
         if (entry.url) {
           add(entry.url, "https://provider.example/playlist.m3u8")
-          add(hostnameWithPortOf(entry.url), "provider.example")
-          add(hostnameOf(entry.url), "provider.example")
+          add(hostnameWithPortOf(entry.url), "provider.example", { credential: false })
+          add(hostnameOf(entry.url), "provider.example", { credential: false })
         }
         add(entry.username, "demo_user")
         add(entry.password, "demo_pass")
@@ -359,6 +359,7 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
     }
     // pre-seeded splash stays in the DOM as display:none, so hidden not detached
     await page.waitForSelector("#xt-app-splash", { state: "hidden", timeout: 10_000 }).catch(() => {})
+    await page.evaluate(() => document.fonts.ready).catch(() => {})
     await page.waitForTimeout(1500)
     try {
       await page.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur())

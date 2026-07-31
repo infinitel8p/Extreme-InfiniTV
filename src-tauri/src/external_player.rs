@@ -906,6 +906,7 @@ async fn launch_mode(
         let path_for_spawn = path.clone();
         // macOS reuse rides `open -a`: the pid is `open`'s, so the slot dies and
         // `reused` reports false there. Raw binary paths get a fresh instance per launch.
+        // `open` reuse also forwards only the URL, so custom headers apply on first launch only.
         let direct_exec = cfg!(not(target_os = "macos"));
         let (spawned_pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
             spawn_launch_inner(&path_for_spawn, &augmented, direct_exec)

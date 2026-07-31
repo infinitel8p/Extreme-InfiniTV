@@ -41,8 +41,8 @@ if (!existsSync(exePath)) {
   process.exit(1)
 }
 
-const ffmpegBuiltPath = path.join(ROOT, "src-tauri", "target", "release", "ffmpeg.exe")
-const ffmpegBinariesPath = path.join(ROOT, "src-tauri", "binaries", "ffmpeg-x86_64-pc-windows-msvc.exe")
+const ffmpegBuiltPath = path.join(ROOT, "src-tauri", "target", "release", "infinitv-ffmpeg.exe")
+const ffmpegBinariesPath = path.join(ROOT, "src-tauri", "binaries", "infinitv-ffmpeg-x86_64-pc-windows-msvc.exe")
 const ffmpegSourcePath = existsSync(ffmpegBuiltPath) ? ffmpegBuiltPath : ffmpegBinariesPath
 if (!existsSync(ffmpegSourcePath)) {
   console.error(`Missing ffmpeg sidecar. Looked at:\n  ${ffmpegBuiltPath}\n  ${ffmpegBinariesPath}`)
@@ -80,7 +80,7 @@ const stagingDir = mkdtempSync(path.join(tmpdir(), "xtream-msix-"))
 console.log(`Staging in ${stagingDir}`)
 
 cpSync(exePath, path.join(stagingDir, "extreme-infinitv.exe"))
-cpSync(ffmpegSourcePath, path.join(stagingDir, "ffmpeg.exe"))
+cpSync(ffmpegSourcePath, path.join(stagingDir, "infinitv-ffmpeg.exe"))
 mkdirSync(path.join(stagingDir, "Assets"), { recursive: true })
 for (const iconName of manifestIcons) {
   cpSync(path.join(iconsSourceDir, iconName), path.join(stagingDir, "Assets", iconName))

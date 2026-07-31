@@ -822,6 +822,11 @@ const documentTitle = pageTitle
     if (holdSplash) return
 
     const MIN_DISPLAY_MS = 3500
+    // No chime/build animation to pace on this path, just avoid a flash of splash.
+    const MIN_DISPLAY_MS_SKIP_ANIM = 500
+    const skipAnim =
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+      document.documentElement.getAttribute("data-perf-mode") === "on"
     const start = performance.now()
     const remove = () => {
       document.documentElement.setAttribute("data-splash-done", "")
@@ -830,11 +835,9 @@ const documentTitle = pageTitle
     }
     const finish = () => {
       const elapsed = performance.now() - start
-      const wait = Math.max(0, MIN_DISPLAY_MS - elapsed)
+      const minDisplayMs = skipAnim ? MIN_DISPLAY_MS_SKIP_ANIM : MIN_DISPLAY_MS
+      const wait = Math.max(0, minDisplayMs - elapsed)
       setTimeout(() => {
-        const skipAnim =
-          window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
-          document.documentElement.getAttribute("data-perf-mode") === "on"
         if (skipAnim) {
           remove()
           return

@@ -23,6 +23,7 @@ const bufferCache = new Map<UiSoundKind, Promise<AudioBuffer | null>>()
 let lastNavPlayAt = 0
 let lastNavKeyAt = 0
 let lastActivateKeyAt = 0
+let lastPointerDownAt = 0
 let pendingSelectTimer: ReturnType<typeof setTimeout> | null = null
 
 function getContext(): AudioContext | null {
@@ -124,9 +125,20 @@ export function initUiSounds(): void {
     }
   })
 
+  // Real pointer activity, to silence custom events with no MouseEvent to inspect.
+  document.addEventListener(
+    "pointerdown",
+    (ev) => {
+      if (ev.isTrusted) lastPointerDownAt = performance.now()
+    },
+    { capture: true, passive: true },
+  )
+
   document.addEventListener(
     "click",
     (ev) => {
+      // detail is 0 for keyboard-synthesized clicks (Enter/Space); real pointer clicks never sound.
+      if (ev.detail >= 1) return
       if (performance.now() - lastActivateKeyAt >= KEY_MODALITY_WINDOW_MS) return
       const target = ev.target as Element | null
       if (!target?.closest("button, a, [role='button'], [role='menuitem'], [tabindex]")) return
@@ -143,6 +155,7 @@ export function initUiSounds(): void {
   document.addEventListener("xt:favorites-changed", (ev) => {
     const detail = (ev as CustomEvent).detail
     if (!detail?.isFav) return
+    if (lastPointerDownAt > lastActivateKeyAt) return
     if (performance.now() - lastActivateKeyAt < KEY_MODALITY_WINDOW_MS) {
       void playUiSound("confirm")
     }
@@ -151,6 +164,7 @@ export function initUiSounds(): void {
   document.addEventListener("xt:watchlist-changed", (ev) => {
     const detail = (ev as CustomEvent).detail
     if (!detail?.onWatchlist) return
+    if (lastPointerDownAt > lastActivateKeyAt) return
     if (performance.now() - lastActivateKeyAt < KEY_MODALITY_WINDOW_MS) {
       void playUiSound("confirm")
     }

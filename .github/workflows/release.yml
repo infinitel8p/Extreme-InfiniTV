@@ -691,7 +691,8 @@ jobs:
   publish-play:
     needs: [build-android]
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      actions: read
     env:
       HAS_PLAY_SECRET: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
     steps:
@@ -733,7 +734,9 @@ jobs:
   publish-msstore:
     needs: [create-release, build-tauri]
     runs-on: ubuntu-latest
-    permissions: {}
+    if: ${{ !cancelled() && needs.create-release.result == 'success' }}
+    permissions:
+      actions: read
     env:
       HAS_MSSTORE_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET != '' }}
     steps:
@@ -767,6 +770,7 @@ jobs:
   # contents:write needed to download an asset off the still-draft release.
   publish-snap:
     needs: [create-release, build-tauri]
+    if: ${{ !cancelled() && needs.create-release.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:

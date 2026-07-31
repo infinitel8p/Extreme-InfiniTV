@@ -296,6 +296,23 @@ describe("decideNativeKinds", () => {
     })
     expect(result.nativeKinds.sort()).toEqual(["live", "series", "vod"])
   })
+
+  // BUG 2 repro: force must win over an in-flight JS fetch, not get downgraded to a cache hit.
+  it("still forces a kind native when a background JS fetch is in flight for it", () => {
+    const result = decideNativeKinds({
+      ...baseDecideInput,
+      force: true,
+      liveInflightJs: true,
+    })
+    expect(result.nativeKinds.sort()).toEqual(["live", "series", "vod"])
+    expect(result.cachedKinds).toEqual([])
+  })
+
+  it("without force, an in-flight JS fetch still excludes the kind from native", () => {
+    const result = decideNativeKinds({ ...baseDecideInput, force: false, liveInflightJs: true })
+    expect(result.nativeKinds.sort()).toEqual(["series", "vod"])
+    expect(result.cachedKinds).toEqual(["live"])
+  })
 })
 
 // Regression: wrapJsKind's dispatch gate must follow showWarming, not its old

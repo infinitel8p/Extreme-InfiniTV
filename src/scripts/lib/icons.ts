@@ -109,12 +109,6 @@ export const ICON_BADGE_CC = wrap(
     '<path d="M17 10.5a1.5 1.5 0 0 0 -3 0v3a1.5 1.5 0 0 0 3 0" />'
 )
 
-export const ICON_HEADPHONES = wrap(
-  '<path d="M4 13m0 2a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2z" />' +
-    '<path d="M15 13m0 2a2 2 0 0 1 2 -2h1a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-1a2 2 0 0 1 -2 -2z" />' +
-    '<path d="M4 15v-3a8 8 0 0 1 16 0v3" />'
-)
-
 export const ICON_DOTS = wrap(
   '<path d="M5 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
     '<path d="M12 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +

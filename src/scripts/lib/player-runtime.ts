@@ -1116,7 +1116,7 @@ function attachHlsToVideo(
     isMacOS && video.canPlayType("application/vnd.apple.mpegurl")
   if (preferNative) {
     // Force CORS when a mono graph is already attached: without it, this src plays silent forever.
-    if (hasMonoGraph(video)) video.crossOrigin = "anonymous"
+    if (hasMonoGraph(video) && !isSafeAudioSourceUrl(url)) video.crossOrigin = "anonymous"
     video.src = url
     return
   }
@@ -1124,7 +1124,7 @@ function attachHlsToVideo(
     if (!video.canPlayType("application/vnd.apple.mpegurl")) {
       log.warn("[xt:player] hls.js unsupported and no native HLS; fallback to <video src>")
     }
-    if (hasMonoGraph(video)) video.crossOrigin = "anonymous"
+    if (hasMonoGraph(video) && !isSafeAudioSourceUrl(url)) video.crossOrigin = "anonymous"
     video.src = url
     return
   }
