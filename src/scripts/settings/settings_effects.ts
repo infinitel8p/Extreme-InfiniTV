@@ -33,6 +33,7 @@ const lastPulseAt = new WeakMap<HTMLElement, number>()
 function pulseCard(originEl: Element | null) {
   if (!originEl || motionSuppressed()) return
   const card =
+    originEl.closest<HTMLElement>(".settings-surface") ??
     originEl.closest<HTMLElement>(".icon-mark-host") ??
     originEl.closest<HTMLElement>(
       ".settings-group > div.rounded-2xl, .settings-group > details",
@@ -102,8 +103,8 @@ function setupRadioGroupPill(group: HTMLElement) {
     }
     const groupRect = group.getBoundingClientRect()
     const targetRect = target.getBoundingClientRect()
-    const x = targetRect.left - groupRect.left
-    const y = targetRect.top - groupRect.top
+    const x = targetRect.left - groupRect.left - group.clientLeft
+    const y = targetRect.top - groupRect.top - group.clientTop
     const width = targetRect.width
     const height = targetRect.height
 
@@ -204,8 +205,8 @@ function setupNavRail(nav: HTMLElement) {
     const targetRect = target.getBoundingClientRect()
     // Account for the nav's horizontal scroll so the rail aligns with
     // its target even when the mobile chip rail has scrolled.
-    const x = targetRect.left - navRect.left + nav.scrollLeft
-    const y = targetRect.top - navRect.top + nav.scrollTop
+    const x = targetRect.left - navRect.left - nav.clientLeft + nav.scrollLeft
+    const y = targetRect.top - navRect.top - nav.clientTop + nav.scrollTop
     const width = targetRect.width
     const height = targetRect.height
 

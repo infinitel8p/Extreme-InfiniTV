@@ -656,10 +656,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.875rem;
-    padding: 0.875rem 1rem;
-    border-radius: 0.75rem;
-    border: 1px solid var(--color-line);
-    background: color-mix(in oklab, var(--color-surface-2) 60%, var(--color-surface));
+    padding-top: 0.875rem;
+    border-top: 1px solid var(--color-line-soft);
   }
   .player-config__advanced {
     border-top: 1px solid var(--color-line-soft);

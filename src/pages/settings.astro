@@ -20,7 +20,6 @@ import {
   IconWorld,
   IconPalette,
   IconLayoutSidebar,
-  IconClock,
   IconWifi,
   IconFilter,
   IconStar,
@@ -30,7 +29,6 @@ import {
   IconInfoCircle,
   IconSparkles,
   IconBolt,
-  IconVolume2,
   IconPlayerPlay,
   IconBook,
   IconRocket,
@@ -41,9 +39,6 @@ import {
   IconExternalLink,
   IconRestore,
   IconLicense,
-  IconHeadphones,
-  IconDeviceMobileVibration,
-  IconDeviceDesktop,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -62,24 +57,13 @@ interface NavSection { id: string; labelKey: string; label: string; cards: NavCa
 const navStructure: NavSection[] = [
   { id: "settings-playlists", labelKey: "settings.group.playlists", label: "Playlists", cards: [] },
   { id: "settings-appearance", labelKey: "settings.group.appearance", label: "Appearance", cards: [
-    { id: "card-language",          labelKey: "settings.section.language",     label: "Language" },
-    { id: "card-display",           labelKey: "settings.section.display",      label: "Display" },
-    { id: "card-perf-mode",         labelKey: "settings.perfMode.title",       label: "Performance mode" },
-    { id: "card-rendering",         labelKey: "settings.rendering.title",      label: "Rendering", conditional: true },
-    { id: "card-ui-sounds",         labelKey: "settings.uiSounds.title",       label: "Interface sounds" },
-    { id: "card-haptics",           labelKey: "settings.haptics.title",        label: "Touch feedback", conditional: true },
-    { id: "card-tv-overscan",       labelKey: "settings.tvOverscan.title",     label: "TV safe area" },
-    { id: "card-hub-strips",        labelKey: "settings.hubStrips.title",      label: "Home page sections" },
-    { id: "close-behavior-section", labelKey: "settings.closeBehavior.title",  label: "Close button behavior" },
+    { id: "card-display",    labelKey: "settings.section.display",     label: "Display" },
+    { id: "card-behavior",   labelKey: "settings.appearance.behavior", label: "Behavior" },
+    { id: "card-hub-strips", labelKey: "settings.hubStrips.title",     label: "Home page sections" },
   ]},
   { id: "settings-watching", labelKey: "settings.group.watching", label: "Watching", cards: [
-    { id: "card-livetv-layout",             labelKey: "settings.livetvLayout.title",           label: "Live TV layout" },
-    { id: "card-progress-retention",        labelKey: "settings.progressRetention.title",      label: "Continue watching" },
-    { id: "epg-tz-section",                 labelKey: "settings.epgTimezone.title",            label: "EPG time zone" },
-    { id: "playback-section",               labelKey: "settings.playback.title",               label: "Playback" },
-    { id: "card-mono-audio",                labelKey: "settings.monoAudio.title",              label: "Mono audio" },
-    { id: "android-native-player-section",  labelKey: "settings.androidNativePlayer.navLabel", label: "Native Android player", conditional: true },
-    { id: "android-default-player-section", labelKey: "settings.androidDefaultPlayer.navLabel", label: "Default external player", conditional: true },
+    { id: "card-livetv",      labelKey: "nav.livetv",             label: "Live TV" },
+    { id: "playback-section", labelKey: "settings.playback.title", label: "Playback" },
   ]},
   { id: "settings-network", labelKey: "settings.group.network", label: "Network", cards: [
     { id: "card-network",          labelKey: "settings.network.title", label: "Network" },
@@ -100,10 +84,10 @@ const navStructure: NavSection[] = [
     { id: "licenses-section",  labelKey: "settings.licenses.title", label: "Open-source licenses" },
   ]},
   { id: "settings-help", labelKey: "settings.group.help", label: "Help & feedback", cards: [
-    { id: "card-docs",     labelKey: "settings.help.docsTitle", label: "Read the docs" },
-    { id: "card-feedback", labelKey: "settings.nav.feedback",   label: "Send feedback" },
+    { id: "card-docs",        labelKey: "settings.help.docsTitle",  label: "Read the docs" },
+    { id: "card-feedback",    labelKey: "settings.nav.feedback",    label: "Send feedback" },
+    { id: "settings-support", labelKey: "settings.group.support",   label: "Support" },
   ]},
-  { id: "settings-support", labelKey: "settings.group.support", label: "Support", cards: [] },
   { id: "settings-danger",  labelKey: "settings.group.dangerZone", label: "Danger zone", cards: [], danger: true },
 ]
 ---
@@ -160,7 +144,7 @@ const navStructure: NavSection[] = [
 
     <div class="settings-stack flex-1 min-w-0">
 
-    <div class="lg:sticky lg:top-2 lg:z-10 -mt-2 pt-2 pb-3">
+    <div class="lg:sticky lg:top-0 lg:z-10 -mt-2 pt-2 pb-3">
       <div class="relative">
         <span class="absolute left-3 top-1/2 -translate-y-1/2 text-fg-3 pointer-events-none inline-flex">
           <IconSearch aria-hidden="true" stroke={2} size={16} />
@@ -175,7 +159,7 @@ const navStructure: NavSection[] = [
           enterkeyhint="search"
           data-i18n-attr="placeholder:settings.search.placeholder;aria-label:settings.search.placeholder"
           placeholder="Search settings"
-          class="w-full h-11 rounded-xl border border-line bg-surface text-fg
+          class="w-full h-11 rounded-xl border border-accent bg-surface text-fg
             pl-10 pr-11 text-sm placeholder:text-fg-3
             focus-visible:border-accent outline-none
             transition-colors"
@@ -205,7 +189,7 @@ const navStructure: NavSection[] = [
     </div>
 
     <!-- Group: Playlists -->
-    <section id="settings-playlists" class="settings-group scroll-mt-8">
+    <section id="settings-playlists" class="settings-group scroll-mt-8 lg:scroll-mt-20">
       <h2 data-i18n="settings.group.playlists" class="settings-group__title">Playlists</h2>
       <div class="rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
         <div
@@ -277,1166 +261,1257 @@ const navStructure: NavSection[] = [
     </dialog>
 
     <!-- Group: Appearance (language, theme/font, perf mode, home page sections, close behavior) -->
-    <section id="settings-appearance" class="settings-group scroll-mt-8">
+    <section id="settings-appearance" class="settings-group scroll-mt-8 lg:scroll-mt-20">
       <h2 data-i18n="settings.group.appearance" class="settings-group__title">Appearance</h2>
       <div class="flex flex-col gap-4">
 
-        <!-- Language -->
-        <article id="card-language" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
-            <span class="icon-mark">
-              <IconWorld aria-hidden="true" stroke={2} />
-            </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.section.language" class="text-base font-semibold">Language</h3>
-              <p data-i18n="settings.language.cardHelper" class="text-xs text-fg-3">
-                Pick a language for the interface. Translations are community-driven - missing strings fall back to English.
-              </p>
-            </div>
-          </div>
-          <LocalePicker client:load />
-        </article>
-
-        <!-- Display: theme + font scale -->
-        <article id="card-display" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
+        <!-- Surface: Display -->
+        <div id="card-display" class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
             <span class="icon-mark">
               <IconPalette aria-hidden="true" stroke={2} />
             </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.section.display" class="text-base font-semibold">Display</h3>
-              <p data-i18n="settings.display.helper" class="text-xs text-fg-3">
-                Theme, accent color and base font size. System theme follows your OS preference.
-              </p>
-            </div>
+            <h3 data-i18n="settings.section.display" class="text-base font-semibold">Display</h3>
           </div>
+          <div class="settings-rows">
 
-          <div class="flex flex-col gap-2">
-            <span data-i18n="settings.theme.label" class="text-eyebrow font-medium uppercase text-fg-3">Theme</span>
-            <div
-              id="settings-theme"
-              class="grid grid-cols-3 gap-2"
-              role="radiogroup"
-              data-i18n-attr="aria-label:settings.theme.label"
-              aria-label="Theme">
-              <button type="button" role="radio" data-theme="system" aria-checked="false" data-i18n="settings.theme.system" class="theme-btn btn">System</button>
-              <button type="button" role="radio" data-theme="light"  aria-checked="false" data-i18n="settings.theme.light" class="theme-btn btn">Light</button>
-              <button type="button" role="radio" data-theme="dark"   aria-checked="false" data-i18n="settings.theme.dark" class="theme-btn btn">Dark</button>
+            <!-- Language -->
+            <div id="card-language" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.section.language" class="text-sm font-medium leading-snug">Language</h3>
+                <p data-i18n="settings.language.cardHelper" class="text-xs text-fg-3">
+                  Pick a language for the interface. Translations are community-driven - missing strings fall back to English.
+                </p>
+              </div>
+              <div class="settings-row__control w-full @2xl:w-64">
+                <LocalePicker client:load />
+              </div>
             </div>
-          </div>
 
-          <div class="flex flex-col gap-2">
-            <span data-i18n="settings.accent.label" class="text-eyebrow font-medium uppercase text-fg-3">Accent color</span>
-            <div
-              id="settings-accent"
-              class="flex flex-wrap gap-2"
-              role="radiogroup"
-              data-i18n-attr="aria-label:settings.accent.label"
-              aria-label="Accent color">
-              <button type="button" role="radio" data-accent-value="fuchsia" aria-checked="false" data-i18n-attr="title:settings.accent.fuchsia;aria-label:settings.accent.fuchsia" title="Fuchsia" aria-label="Fuchsia" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-fuchsia)">
-                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
-              </button>
-              <button type="button" role="radio" data-accent-value="rose" aria-checked="false" data-i18n-attr="title:settings.accent.rose;aria-label:settings.accent.rose" title="Rose" aria-label="Rose" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-rose)">
-                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
-              </button>
-              <button type="button" role="radio" data-accent-value="ember" aria-checked="false" data-i18n-attr="title:settings.accent.ember;aria-label:settings.accent.ember" title="Ember" aria-label="Ember" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-ember)">
-                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
-              </button>
-              <button type="button" role="radio" data-accent-value="emerald" aria-checked="false" data-i18n-attr="title:settings.accent.emerald;aria-label:settings.accent.emerald" title="Emerald" aria-label="Emerald" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-emerald)">
-                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
-              </button>
-              <button type="button" role="radio" data-accent-value="cyan" aria-checked="false" data-i18n-attr="title:settings.accent.cyan;aria-label:settings.accent.cyan" title="Cyan" aria-label="Cyan" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-cyan)">
-                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
-              </button>
-              <button type="button" role="radio" data-accent-value="blue" aria-checked="false" data-i18n-attr="title:settings.accent.blue;aria-label:settings.accent.blue" title="Blue" aria-label="Blue" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-blue)">
-                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
-              </button>
-              <button type="button" role="radio" data-accent-value="violet" aria-checked="false" data-i18n-attr="title:settings.accent.violet;aria-label:settings.accent.violet" title="Violet" aria-label="Violet" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-violet)">
-                <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
-              </button>
+            <!-- Theme + accent + font scale -->
+            <div data-settings-item class="scroll-mt-6 lg:scroll-mt-20 settings-rows">
+              <div class="settings-row">
+                <span data-i18n="settings.theme.label" class="text-sm font-medium leading-snug">Theme</span>
+                <div class="settings-row__control">
+                  <div
+                    id="settings-theme"
+                    class="settings-seg"
+                    role="radiogroup"
+                    data-i18n-attr="aria-label:settings.theme.label"
+                    aria-label="Theme">
+                    <button type="button" role="radio" data-theme="system" aria-checked="false" data-i18n="settings.theme.system" class="theme-btn btn">System</button>
+                    <button type="button" role="radio" data-theme="light"  aria-checked="false" data-i18n="settings.theme.light" class="theme-btn btn">Light</button>
+                    <button type="button" role="radio" data-theme="dark"   aria-checked="false" data-i18n="settings.theme.dark" class="theme-btn btn">Dark</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row__text">
+                  <span data-i18n="settings.accent.label" class="text-sm font-medium leading-snug">Accent color</span>
+                </div>
+                <div class="settings-row__control">
+                  <div
+                    id="settings-accent"
+                    class="flex flex-wrap justify-end gap-2"
+                    role="radiogroup"
+                    data-i18n-attr="aria-label:settings.accent.label"
+                    aria-label="Accent color">
+                    <button type="button" role="radio" data-accent-value="fuchsia" aria-checked="false" data-i18n-attr="title:settings.accent.fuchsia;aria-label:settings.accent.fuchsia" title="Fuchsia" aria-label="Fuchsia" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-fuchsia)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="rose" aria-checked="false" data-i18n-attr="title:settings.accent.rose;aria-label:settings.accent.rose" title="Rose" aria-label="Rose" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-rose)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="ember" aria-checked="false" data-i18n-attr="title:settings.accent.ember;aria-label:settings.accent.ember" title="Ember" aria-label="Ember" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-ember)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="emerald" aria-checked="false" data-i18n-attr="title:settings.accent.emerald;aria-label:settings.accent.emerald" title="Emerald" aria-label="Emerald" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-emerald)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="cyan" aria-checked="false" data-i18n-attr="title:settings.accent.cyan;aria-label:settings.accent.cyan" title="Cyan" aria-label="Cyan" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-cyan)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="blue" aria-checked="false" data-i18n-attr="title:settings.accent.blue;aria-label:settings.accent.blue" title="Blue" aria-label="Blue" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-blue)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="violet" aria-checked="false" data-i18n-attr="title:settings.accent.violet;aria-label:settings.accent.violet" title="Violet" aria-label="Violet" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-violet)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row__text">
+                  <span data-i18n="settings.fontScale.label" class="text-sm font-medium leading-snug">Font scale</span>
+                  <p data-i18n="settings.fontScale.helper" class="text-xs text-fg-3">
+                    Bumps the base font size. Use Large or X-Large when viewing on a TV from across the room.
+                  </p>
+                </div>
+                <div class="settings-row__control">
+                  <div
+                    id="settings-font-scale"
+                    class="settings-seg"
+                    role="radiogroup"
+                    data-i18n-attr="aria-label:settings.fontScale.label"
+                    aria-label="Font scale">
+                    <button type="button" data-scale="1"     aria-pressed="false" data-i18n="settings.fontScale.default" class="font-scale-btn btn">Default</button>
+                    <button type="button" data-scale="1.125" aria-pressed="false" data-i18n="settings.fontScale.medium" class="font-scale-btn btn">Medium</button>
+                    <button type="button" data-scale="1.25"  aria-pressed="false" data-i18n="settings.fontScale.large" class="font-scale-btn btn">Large</button>
+                    <button type="button" data-scale="1.5"   aria-pressed="false" data-i18n="settings.fontScale.xlarge" class="font-scale-btn btn">X-Large</button>
+                  </div>
+                </div>
+              </div>
+              <script is:inline>
+                try {
+                  var savedFontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1");
+                  if (!isFinite(savedFontScale) || savedFontScale < 0.75 || savedFontScale > 2) savedFontScale = 1;
+                  var fontScaleGroup = document.getElementById("settings-font-scale");
+                  if (fontScaleGroup) {
+                    var fontScaleBtns = fontScaleGroup.querySelectorAll(".font-scale-btn");
+                    for (var i = 0; i < fontScaleBtns.length; i++) {
+                      var btnScale = parseFloat(fontScaleBtns[i].getAttribute("data-scale") || "1");
+                      fontScaleBtns[i].setAttribute("aria-pressed", Math.abs(btnScale - savedFontScale) < 0.001 ? "true" : "false");
+                    }
+                  }
+                  var currentTheme = localStorage.getItem("xt_theme") || "dark";
+                  var themeGroup = document.getElementById("settings-theme");
+                  if (themeGroup) {
+                    var themeBtns = themeGroup.querySelectorAll(".theme-btn");
+                    for (var j = 0; j < themeBtns.length; j++) {
+                      themeBtns[j].setAttribute("aria-checked", themeBtns[j].getAttribute("data-theme") === currentTheme ? "true" : "false");
+                    }
+                  }
+                  var currentAccent = localStorage.getItem("xt_accent") || "fuchsia";
+                  var accentGroup = document.getElementById("settings-accent");
+                  if (accentGroup) {
+                    var accentBtns = accentGroup.querySelectorAll(".accent-btn");
+                    for (var k = 0; k < accentBtns.length; k++) {
+                      accentBtns[k].setAttribute("aria-checked", accentBtns[k].getAttribute("data-accent-value") === currentAccent ? "true" : "false");
+                    }
+                  }
+                } catch (e) {}
+              </script>
             </div>
-          </div>
 
-          <div class="flex flex-col gap-2">
-            <span data-i18n="settings.fontScale.label" class="text-eyebrow font-medium uppercase text-fg-3">Font scale</span>
-            <p data-i18n="settings.fontScale.helper" class="text-xs text-fg-3">
-              Bumps the base font size. Use Large or X-Large when viewing on a TV from across the room.
-            </p>
-            <div
-              id="settings-font-scale"
-              class="grid grid-cols-2 sm:grid-cols-4 gap-2"
-              role="radiogroup"
-              data-i18n-attr="aria-label:settings.fontScale.label"
-              aria-label="Font scale">
-              <button type="button" data-scale="1"     aria-pressed="false" data-i18n="settings.fontScale.default" class="font-scale-btn btn">Default</button>
-              <button type="button" data-scale="1.125" aria-pressed="false" data-i18n="settings.fontScale.medium" class="font-scale-btn btn">Medium</button>
-              <button type="button" data-scale="1.25"  aria-pressed="false" data-i18n="settings.fontScale.large" class="font-scale-btn btn">Large</button>
-              <button type="button" data-scale="1.5"   aria-pressed="false" data-i18n="settings.fontScale.xlarge" class="font-scale-btn btn">X-Large</button>
+            <!-- Performance mode: skip decorative animations + focus-glide for low-end TV WebViews -->
+            <div id="card-perf-mode" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.perfMode.title" class="text-sm font-medium leading-snug">Performance mode</h3>
+                <p data-i18n="settings.perfMode.helperLong" class="text-xs text-fg-3">
+                  Disables decorative animations (the comet in the sidebar, hub entry stagger, sliding focus ring) for smoother scrolling and D-pad navigation on TV boxes and low-end devices.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-perf-mode"
+                  class="settings-seg shrink-0"
+                  role="radiogroup"
+                  aria-label="Performance mode"
+                  data-i18n-attr="aria-label:settings.perfMode.label">
+                  <button type="button" data-perf="on"  aria-pressed="false" data-i18n="settings.perfMode.on"  class="perf-mode-btn btn">On</button>
+                  <button type="button" data-perf="off" aria-pressed="false" data-i18n="settings.perfMode.off" class="perf-mode-btn btn">Off</button>
+                </div>
+              </div>
+              <script is:inline>
+                try {
+                  var perfOn = localStorage.getItem("xt_perf_mode") === "1";
+                  var perfGroup = document.getElementById("settings-perf-mode");
+                  if (perfGroup) {
+                    var perfBtns = perfGroup.querySelectorAll(".perf-mode-btn");
+                    for (var pIdx = 0; pIdx < perfBtns.length; pIdx++) {
+                      var perfBtnOn = perfBtns[pIdx].getAttribute("data-perf") === "on";
+                      perfBtns[pIdx].setAttribute("aria-pressed", perfBtnOn === perfOn ? "true" : "false");
+                    }
+                  }
+                } catch (e) {}
+              </script>
             </div>
-          </div>
-          <script is:inline>
-            try {
-              var savedFontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1");
-              if (!isFinite(savedFontScale) || savedFontScale < 0.75 || savedFontScale > 2) savedFontScale = 1;
-              var fontScaleGroup = document.getElementById("settings-font-scale");
-              if (fontScaleGroup) {
-                var fontScaleBtns = fontScaleGroup.querySelectorAll(".font-scale-btn");
-                for (var i = 0; i < fontScaleBtns.length; i++) {
-                  var btnScale = parseFloat(fontScaleBtns[i].getAttribute("data-scale") || "1");
-                  fontScaleBtns[i].setAttribute("aria-pressed", Math.abs(btnScale - savedFontScale) < 0.001 ? "true" : "false");
-                }
-              }
-              var currentTheme = localStorage.getItem("xt_theme") || "dark";
-              var themeGroup = document.getElementById("settings-theme");
-              if (themeGroup) {
-                var themeBtns = themeGroup.querySelectorAll(".theme-btn");
-                for (var j = 0; j < themeBtns.length; j++) {
-                  themeBtns[j].setAttribute("aria-checked", themeBtns[j].getAttribute("data-theme") === currentTheme ? "true" : "false");
-                }
-              }
-              var currentAccent = localStorage.getItem("xt_accent") || "fuchsia";
-              var accentGroup = document.getElementById("settings-accent");
-              if (accentGroup) {
-                var accentBtns = accentGroup.querySelectorAll(".accent-btn");
-                for (var k = 0; k < accentBtns.length; k++) {
-                  accentBtns[k].setAttribute("aria-checked", accentBtns[k].getAttribute("data-accent-value") === currentAccent ? "true" : "false");
-                }
-              }
-            } catch (e) {}
-          </script>
-        </article>
 
-        <!-- Performance mode: skip decorative animations + focus-glide for low-end TV WebViews -->
-        <article id="card-perf-mode" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
+          </div>
+        </div>
+
+        <!-- Surface: Behavior -->
+        <div id="card-behavior" class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
             <span class="icon-mark">
               <IconBolt aria-hidden="true" stroke={2} />
             </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.perfMode.title" class="text-base font-semibold">Performance mode</h3>
-              <p data-i18n="settings.perfMode.helperLong" class="text-xs text-fg-3">
-                Disables decorative animations (the comet in the sidebar, hub entry stagger, sliding focus ring) for smoother scrolling and D-pad navigation on TV boxes and low-end devices.
-              </p>
+            <h3 data-i18n="settings.appearance.behavior" class="text-base font-semibold">Behavior</h3>
+          </div>
+          <div class="settings-rows">
+
+            <!-- Interface sounds: launch chime + D-pad navigation ticks -->
+            <div id="card-ui-sounds" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.uiSounds.title" class="text-sm font-medium leading-snug">Interface sounds</h3>
+                <p data-i18n="settings.uiSounds.helperLong" class="text-xs text-fg-3">
+                  A soft chime when the app starts and gentle ticks when moving around with a remote or keyboard. Mouse and touch stay silent.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-ui-sounds"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Interface sounds"
+                  data-i18n-attr="aria-label:settings.uiSounds.label">
+                  <button type="button" data-sounds="on"  aria-pressed="false" data-i18n="settings.uiSounds.on"  class="ui-sounds-btn btn">On</button>
+                  <button type="button" data-sounds="off" aria-pressed="false" data-i18n="settings.uiSounds.off" class="ui-sounds-btn btn">Off</button>
+                </div>
+              </div>
+              <script is:inline>
+                try {
+                  var uiSoundsRaw = localStorage.getItem("xt_ui_sounds");
+                  var uiSoundsOn =
+                    uiSoundsRaw === "1" ||
+                    (uiSoundsRaw !== "0" &&
+                      !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+                  var uiSoundsGroup = document.getElementById("settings-ui-sounds");
+                  if (uiSoundsGroup) {
+                    var uiSoundsBtns = uiSoundsGroup.querySelectorAll(".ui-sounds-btn");
+                    for (var sIdx = 0; sIdx < uiSoundsBtns.length; sIdx++) {
+                      var uiSoundsBtnOn = uiSoundsBtns[sIdx].getAttribute("data-sounds") === "on";
+                      uiSoundsBtns[sIdx].setAttribute("aria-pressed", uiSoundsBtnOn === uiSoundsOn ? "true" : "false");
+                    }
+                  }
+                } catch (e) {}
+              </script>
             </div>
-          </div>
-          <div class="flex flex-col gap-2">
-            <span data-i18n="settings.perfMode.label" class="text-eyebrow font-medium uppercase text-fg-3">Performance mode</span>
-            <div
-              id="settings-perf-mode"
-              class="grid grid-cols-2 gap-2"
-              role="radiogroup"
-              aria-label="Performance mode"
-              data-i18n-attr="aria-label:settings.perfMode.label">
-              <button type="button" data-perf="on"  aria-pressed="false" data-i18n="settings.perfMode.on"  class="perf-mode-btn btn">On</button>
-              <button type="button" data-perf="off" aria-pressed="false" data-i18n="settings.perfMode.off" class="perf-mode-btn btn">Off</button>
+
+            <!-- Touch feedback: subtle vibration on favorite/watchlist touch actions -->
+            <div id="card-haptics" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20 hidden">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.haptics.title" class="text-sm font-medium leading-snug">Touch feedback</h3>
+                <p data-i18n="settings.haptics.helperLong" class="text-xs text-fg-3">
+                  A tiny vibration when you star a favorite or add to your watchlist by touch. Follows the system touch-feedback setting.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-haptics"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Touch feedback"
+                  data-i18n-attr="aria-label:settings.haptics.label">
+                  <button type="button" data-haptics="on"  aria-pressed="false" data-i18n="settings.haptics.on"  class="haptics-btn btn">On</button>
+                  <button type="button" data-haptics="off" aria-pressed="false" data-i18n="settings.haptics.off" class="haptics-btn btn">Off</button>
+                </div>
+              </div>
+              <script is:inline>
+                try {
+                  var hapticsOn = localStorage.getItem("xt_haptics") !== "0";
+                  var hapticsGroup = document.getElementById("settings-haptics");
+                  if (hapticsGroup) {
+                    var hapticsBtns = hapticsGroup.querySelectorAll(".haptics-btn");
+                    for (var hIdx = 0; hIdx < hapticsBtns.length; hIdx++) {
+                      var hapticsBtnOn = hapticsBtns[hIdx].getAttribute("data-haptics") === "on";
+                      hapticsBtns[hIdx].setAttribute("aria-pressed", hapticsBtnOn === hapticsOn ? "true" : "false");
+                    }
+                  }
+                } catch (e) {}
+              </script>
             </div>
-          </div>
-          <script is:inline>
-            try {
-              var perfOn = localStorage.getItem("xt_perf_mode") === "1";
-              var perfGroup = document.getElementById("settings-perf-mode");
-              if (perfGroup) {
-                var perfBtns = perfGroup.querySelectorAll(".perf-mode-btn");
-                for (var pIdx = 0; pIdx < perfBtns.length; pIdx++) {
-                  var perfBtnOn = perfBtns[pIdx].getAttribute("data-perf") === "on";
-                  perfBtns[pIdx].setAttribute("aria-pressed", perfBtnOn === perfOn ? "true" : "false");
-                }
-              }
-            } catch (e) {}
-          </script>
-        </article>
 
-        <!-- Rendering: Linux WebKitGTK DMA-BUF safe mode -->
-        <article id="card-rendering" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6 hidden">
-          <div class="flex items-start gap-3">
-            <span class="icon-mark">
-              <IconDeviceDesktop aria-hidden="true" stroke={2} />
-            </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.rendering.title" class="text-base font-semibold">Rendering</h3>
-              <p data-i18n="settings.rendering.helperLong" class="text-xs text-fg-3">
-                Some Linux graphics drivers (Raspberry Pi, Nvidia proprietary, virtual machines) show a garbled screen or crash on launch with the default renderer. Safe mode works around this at a small performance cost.
-              </p>
+            <!-- TV safe area -->
+            <div id="card-tv-overscan" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.tvOverscan.title" class="text-sm font-medium leading-snug">TV safe area</h3>
+                <p data-i18n="settings.tvOverscan.helperLong" class="text-xs text-fg-3">
+                  Most TVs hide a small band at each edge of the picture (overscan). If sidebar icons or version text look cut off, increase this to inset the whole UI by a few percent.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <TvOverscanCard client:load />
+              </div>
             </div>
+
+            <CloseToTrayCard client:load />
+
+            <!-- Rendering: Linux WebKitGTK DMA-BUF safe mode -->
+            <details id="card-rendering" data-settings-item class="hidden group scroll-mt-6 lg:scroll-mt-20">
+              <summary class="settings-row cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span class="settings-row__text">
+                  <h3 data-i18n="settings.rendering.title" class="text-sm font-medium leading-snug">Rendering</h3>
+                  <span data-i18n="settings.rendering.helperLong" class="text-xs text-fg-3 block">
+                    Some Linux graphics drivers (Raspberry Pi, Nvidia proprietary, virtual machines) show a garbled screen or crash on launch with the default renderer. Safe mode works around this at a small performance cost.
+                  </span>
+                  <span id="rendering-status" aria-live="polite" class="text-xs text-fg-3 block mt-1 empty:hidden"></span>
+                </span>
+                <span class="settings-row__control">
+                  <IconChevronDown aria-hidden="true" stroke={2} class="size-4 text-fg-3 transition-transform group-open:rotate-180" />
+                </span>
+              </summary>
+              <div class="px-5 sm:px-6 pb-4 pt-1 flex flex-col gap-3">
+                <div class="flex flex-col gap-2">
+                  <span data-i18n="settings.rendering.label" class="text-eyebrow font-medium uppercase text-fg-3">Rendering mode</span>
+                  <select id="rendering-select" class="field-input" aria-describedby="rendering-hint">
+                    <option value="auto" data-i18n="settings.rendering.auto">Auto (recommended)</option>
+                    <option value="fast" data-i18n="settings.rendering.fast">Faster</option>
+                    <option value="safe" data-i18n="settings.rendering.safe">Safe</option>
+                  </select>
+                </div>
+                <p id="rendering-hint" data-i18n="settings.rendering.hint" class="text-xs text-fg-3">
+                  Auto turns on safe mode only on hardware known to have problems. Faster is applied as a trial after a restart: if you do not confirm keeping it, the app switches back on the next launch.
+                </p>
+
+                <p id="rendering-env-override-note" hidden data-i18n="settings.rendering.envOverrideNote" class="text-xs text-fg-3">
+                  A WebKit rendering variable is set outside the app, so this control is disabled.
+                </p>
+
+                <p id="rendering-restart-note" hidden aria-live="polite" class="text-xs text-fg-3"></p>
+                <button id="rendering-restart" type="button" hidden class="btn justify-start sm:justify-center">
+                  <span data-i18n="settings.about.restartNow">Restart now</span>
+                </button>
+
+                <p data-i18n-html="settings.rendering.escapeHatches" class="text-xs text-fg-3 border-t border-line/60 pt-3">
+                  If the app becomes unusable, run it once with <code class="font-mono text-[0.7rem] px-1 py-0.5 rounded bg-surface-2 border border-line/60">--safe-rendering</code> from a terminal to switch back to safe rendering permanently.
+                </p>
+              </div>
+            </details>
+
           </div>
+        </div>
 
-          <p id="rendering-status" aria-live="polite" class="text-xs text-fg-3"></p>
-
-          <div class="flex flex-col gap-2">
-            <span data-i18n="settings.rendering.label" class="text-eyebrow font-medium uppercase text-fg-3">Rendering mode</span>
-            <select id="rendering-select" class="field-input" aria-describedby="rendering-hint">
-              <option value="auto" data-i18n="settings.rendering.auto">Auto (recommended)</option>
-              <option value="fast" data-i18n="settings.rendering.fast">Faster</option>
-              <option value="safe" data-i18n="settings.rendering.safe">Safe</option>
-            </select>
-          </div>
-          <p id="rendering-hint" data-i18n="settings.rendering.hint" class="text-xs text-fg-3">
-            Auto turns on safe mode only on hardware known to have problems. Faster is applied as a trial after a restart: if you do not confirm keeping it, the app switches back on the next launch.
-          </p>
-
-          <p id="rendering-env-override-note" hidden data-i18n="settings.rendering.envOverrideNote" class="text-xs text-fg-3">
-            A WebKit rendering variable is set outside the app, so this control is disabled.
-          </p>
-
-          <p id="rendering-restart-note" hidden aria-live="polite" class="text-xs text-fg-3"></p>
-          <button id="rendering-restart" type="button" hidden class="btn justify-start sm:justify-center">
-            <span data-i18n="settings.about.restartNow">Restart now</span>
-          </button>
-
-          <p data-i18n-html="settings.rendering.escapeHatches" class="text-xs text-fg-3 border-t border-line/60 pt-3">
-            If the app becomes unusable, run it once with <code class="font-mono text-[0.7rem] px-1 py-0.5 rounded bg-surface-2 border border-line/60">--safe-rendering</code> from a terminal to switch back to safe rendering permanently.
-          </p>
-        </article>
-
-        <!-- Interface sounds: launch chime + D-pad navigation ticks -->
-        <article id="card-ui-sounds" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
-            <span class="icon-mark">
-              <IconVolume2 aria-hidden="true" stroke={2} />
-            </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.uiSounds.title" class="text-base font-semibold">Interface sounds</h3>
-              <p data-i18n="settings.uiSounds.helperLong" class="text-xs text-fg-3">
-                A soft chime when the app starts and gentle ticks when moving around with a remote or keyboard. Mouse and touch stay silent.
-              </p>
-            </div>
-          </div>
-          <div class="flex flex-col gap-2">
-            <span data-i18n="settings.uiSounds.label" class="text-eyebrow font-medium uppercase text-fg-3">Interface sounds</span>
-            <div
-              id="settings-ui-sounds"
-              class="grid grid-cols-2 gap-2"
-              role="radiogroup"
-              aria-label="Interface sounds"
-              data-i18n-attr="aria-label:settings.uiSounds.label">
-              <button type="button" data-sounds="on"  aria-pressed="false" data-i18n="settings.uiSounds.on"  class="ui-sounds-btn btn">On</button>
-              <button type="button" data-sounds="off" aria-pressed="false" data-i18n="settings.uiSounds.off" class="ui-sounds-btn btn">Off</button>
-            </div>
-          </div>
-          <script is:inline>
-            try {
-              var uiSoundsRaw = localStorage.getItem("xt_ui_sounds");
-              var uiSoundsOn =
-                uiSoundsRaw === "1" ||
-                (uiSoundsRaw !== "0" &&
-                  !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-              var uiSoundsGroup = document.getElementById("settings-ui-sounds");
-              if (uiSoundsGroup) {
-                var uiSoundsBtns = uiSoundsGroup.querySelectorAll(".ui-sounds-btn");
-                for (var sIdx = 0; sIdx < uiSoundsBtns.length; sIdx++) {
-                  var uiSoundsBtnOn = uiSoundsBtns[sIdx].getAttribute("data-sounds") === "on";
-                  uiSoundsBtns[sIdx].setAttribute("aria-pressed", uiSoundsBtnOn === uiSoundsOn ? "true" : "false");
-                }
-              }
-            } catch (e) {}
-          </script>
-        </article>
-
-        <!-- Touch feedback: subtle vibration on favorite/watchlist touch actions -->
-        <article id="card-haptics" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6 hidden">
-          <div class="flex items-start gap-3">
-            <span class="icon-mark">
-              <IconDeviceMobileVibration aria-hidden="true" stroke={2} />
-            </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.haptics.title" class="text-base font-semibold">Touch feedback</h3>
-              <p data-i18n="settings.haptics.helperLong" class="text-xs text-fg-3">
-                A tiny vibration when you star a favorite or add to your watchlist by touch. Follows the system touch-feedback setting.
-              </p>
-            </div>
-          </div>
-          <div class="flex flex-col gap-2">
-            <span data-i18n="settings.haptics.label" class="text-eyebrow font-medium uppercase text-fg-3">Touch feedback</span>
-            <div
-              id="settings-haptics"
-              class="grid grid-cols-2 gap-2"
-              role="radiogroup"
-              aria-label="Touch feedback"
-              data-i18n-attr="aria-label:settings.haptics.label">
-              <button type="button" data-haptics="on"  aria-pressed="false" data-i18n="settings.haptics.on"  class="haptics-btn btn">On</button>
-              <button type="button" data-haptics="off" aria-pressed="false" data-i18n="settings.haptics.off" class="haptics-btn btn">Off</button>
-            </div>
-          </div>
-          <script is:inline>
-            try {
-              var hapticsOn = localStorage.getItem("xt_haptics") !== "0";
-              var hapticsGroup = document.getElementById("settings-haptics");
-              if (hapticsGroup) {
-                var hapticsBtns = hapticsGroup.querySelectorAll(".haptics-btn");
-                for (var hIdx = 0; hIdx < hapticsBtns.length; hIdx++) {
-                  var hapticsBtnOn = hapticsBtns[hIdx].getAttribute("data-haptics") === "on";
-                  hapticsBtns[hIdx].setAttribute("aria-pressed", hapticsBtnOn === hapticsOn ? "true" : "false");
-                }
-              }
-            } catch (e) {}
-          </script>
-        </article>
-
-        <TvOverscanCard client:load />
-
-        <!-- Home page sections: which hub strips render, and in what order. -->
-        <article id="card-hub-strips" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
+        <!-- Surface: Home page sections -->
+        <div id="card-hub-strips" data-settings-item class="settings-surface scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
             <span class="icon-mark">
               <IconLayoutDashboard aria-hidden="true" stroke={2} />
             </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.hubStrips.title" class="text-base font-semibold">Home page sections</h3>
-              <p data-i18n="settings.hubStrips.helper" class="text-xs text-fg-3">
-                Choose which sections appear on your home page and what order they're in.
-              </p>
-            </div>
+            <h3 data-i18n="settings.hubStrips.title" class="text-base font-semibold">Home page sections</h3>
           </div>
-          <HubStripsEditor client:load />
-        </article>
-
-        <CloseToTrayCard client:load />
+          <p data-i18n="settings.hubStrips.helper" class="text-xs text-fg-3 px-5 sm:px-6">
+            Choose which sections appear on your home page and what order they're in.
+          </p>
+          <div class="p-5 sm:p-6 pt-3">
+            <HubStripsEditor client:load />
+          </div>
+        </div>
 
       </div>
     </section>
 
     <!-- Group: Watching (Live TV layout, continue watching retention, EPG time zone, playback) -->
-    <section id="settings-watching" class="settings-group scroll-mt-8">
+    <section id="settings-watching" class="settings-group scroll-mt-8 lg:scroll-mt-20">
       <h2 data-i18n="settings.group.watching" class="settings-group__title">Watching</h2>
       <div class="flex flex-col gap-4">
 
-        <!-- Live TV layout: EPG default + channel column width -->
-        <article id="card-livetv-layout" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
+        <!-- Surface: Live TV -->
+        <div id="card-livetv" class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
             <span class="icon-mark">
               <IconLayoutSidebar aria-hidden="true" stroke={2} />
             </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.livetvLayout.title" class="text-base font-semibold">Live TV layout</h3>
-              <p data-i18n="settings.livetvLayout.helperLong" class="text-xs text-fg-3">
-                Defaults for the channel sidebar and the EPG panel on Live TV. The EPG button on the page itself still toggles per session.
-              </p>
-            </div>
+            <h3 data-i18n="nav.livetv" class="text-base font-semibold">Live TV</h3>
           </div>
+          <div class="settings-rows">
 
-          <div class="flex flex-col gap-2">
-            <span data-i18n="settings.livetvLayout.epgDefault" class="text-eyebrow font-medium uppercase text-fg-3">Show EPG by default</span>
-            <div
-              id="settings-epg-default"
-              class="grid grid-cols-2 gap-2"
-              role="radiogroup"
-              aria-label="Show EPG by default" data-i18n-attr="aria-label:aria.showEpgDefault">
-              <button type="button" data-epg="on"  aria-pressed="false" data-i18n="settings.livetvLayout.epg.on" class="epg-default-btn btn">On</button>
-              <button type="button" data-epg="off" aria-pressed="false" data-i18n="settings.livetvLayout.epg.off" class="epg-default-btn btn">Off</button>
+            <!-- Live TV layout: EPG default + channel column width -->
+            <div id="card-livetv-layout" data-settings-item class="scroll-mt-6 lg:scroll-mt-20 settings-rows">
+              <div class="settings-row">
+                <span data-i18n="settings.livetvLayout.epgDefault" class="text-sm font-medium leading-snug">Show EPG by default</span>
+                <div class="settings-row__control">
+                  <div
+                    id="settings-epg-default"
+                    class="settings-seg"
+                    role="radiogroup"
+                    aria-label="Show EPG by default" data-i18n-attr="aria-label:aria.showEpgDefault">
+                    <button type="button" data-epg="on"  aria-pressed="false" data-i18n="settings.livetvLayout.epg.on" class="epg-default-btn btn">On</button>
+                    <button type="button" data-epg="off" aria-pressed="false" data-i18n="settings.livetvLayout.epg.off" class="epg-default-btn btn">Off</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-row">
+                <span data-i18n="settings.livetvLayout.columnWidth" class="text-sm font-medium leading-snug">Channel column width</span>
+                <div class="settings-row__control">
+                  <div
+                    id="settings-channel-width"
+                    class="settings-seg"
+                    role="radiogroup"
+                    aria-label="Channel column width" data-i18n-attr="aria-label:aria.channelColumnWidth">
+                    <button type="button" data-width="22" aria-pressed="false" data-i18n="settings.livetvLayout.width.compact" class="channel-width-btn btn">Compact</button>
+                    <button type="button" data-width="28" aria-pressed="false" data-i18n="settings.livetvLayout.width.default" class="channel-width-btn btn">Default</button>
+                    <button type="button" data-width="34" aria-pressed="false" data-i18n="settings.livetvLayout.width.wide" class="channel-width-btn btn">Wide</button>
+                    <button type="button" data-width="42" aria-pressed="false" data-i18n="settings.livetvLayout.width.xWide" class="channel-width-btn btn">X-Wide</button>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
 
-          <div class="flex flex-col gap-2">
-            <span data-i18n="settings.livetvLayout.columnWidth" class="text-eyebrow font-medium uppercase text-fg-3">Channel column width</span>
-            <div
-              id="settings-channel-width"
-              class="grid grid-cols-2 sm:grid-cols-4 gap-2"
-              role="radiogroup"
-              aria-label="Channel column width" data-i18n-attr="aria-label:aria.channelColumnWidth">
-              <button type="button" data-width="22" aria-pressed="false" data-i18n="settings.livetvLayout.width.compact" class="channel-width-btn btn">Compact</button>
-              <button type="button" data-width="28" aria-pressed="false" data-i18n="settings.livetvLayout.width.default" class="channel-width-btn btn">Default</button>
-              <button type="button" data-width="34" aria-pressed="false" data-i18n="settings.livetvLayout.width.wide" class="channel-width-btn btn">Wide</button>
-              <button type="button" data-width="42" aria-pressed="false" data-i18n="settings.livetvLayout.width.xWide" class="channel-width-btn btn">X-Wide</button>
+            <!-- EPG: time zone offset (per active playlist) -->
+            <div id="epg-tz-section" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.epgTimezone.title" class="text-sm font-medium leading-snug">EPG time zone</h3>
+                <p data-i18n="epg.timezoneHelper" class="text-xs text-fg-3">
+                  Some providers ship XMLTV with timestamps already shifted to the server's local time, so EPG times look off. Auto-detect picks the offset where the most channels have a programme airing right now.
+                </p>
+              </div>
+              <div class="settings-row__control w-full @2xl:w-64 flex-col items-stretch gap-1">
+                <select id="epg-tz-select" disabled class="field-input" data-i18n-attr="aria-label:settings.epgTimezone.offsetLabel">
+                  <option value="auto" data-i18n="epg.timezoneAutoDetect">Auto-detect</option>
+                </select>
+                <div
+                  id="epg-tz-status"
+                  aria-live="polite"
+                  class="text-xs text-fg-3"></div>
+              </div>
             </div>
-          </div>
-        </article>
 
-        <!-- Continue watching: how long paused movies / episodes linger -->
-        <article id="card-progress-retention" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
+            <!-- Continue watching: how long paused movies / episodes linger -->
+            <div id="card-progress-retention" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.progressRetention.title" class="text-sm font-medium leading-snug">Continue watching</h3>
+                <p data-i18n="settings.progressRetention.helper" class="text-xs text-fg-3">
+                  How long to keep paused movies and episodes in Continue Watching. Older entries are dropped on the next save. The 200-item cap still applies regardless.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-progress-retention"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Continue Watching retention"
+                  data-i18n-attr="aria-label:settings.progressRetention.label">
+                  <button type="button" data-retention="30"  aria-pressed="false" data-i18n="settings.progressRetention.30days"  class="retention-btn btn">30 days</button>
+                  <button type="button" data-retention="90"  aria-pressed="false" data-i18n="settings.progressRetention.90days"  class="retention-btn btn">90 days</button>
+                  <button type="button" data-retention="180" aria-pressed="false" data-i18n="settings.progressRetention.180days" class="retention-btn btn">180 days</button>
+                  <button type="button" data-retention="0"   aria-pressed="false" data-i18n="settings.progressRetention.never"   class="retention-btn btn">Never</button>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Surface: Playback -->
+        <div id="playback-section" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
             <span class="icon-mark">
               <IconPlayerPlay aria-hidden="true" stroke={2} />
             </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.progressRetention.title" class="text-base font-semibold">Continue watching</h3>
-              <p data-i18n="settings.progressRetention.helper" class="text-xs text-fg-3">
-                How long to keep paused movies and episodes in Continue Watching. Older entries are dropped on the next save. The 200-item cap still applies regardless.
-              </p>
-            </div>
+            <h3 data-i18n="settings.playback.title" class="text-base font-semibold">Playback</h3>
           </div>
-          <div class="flex flex-col gap-2">
-            <span data-i18n="settings.progressRetention.label" class="text-eyebrow font-medium uppercase text-fg-3">Continue Watching retention</span>
-            <div
-              id="settings-progress-retention"
-              class="grid grid-cols-2 sm:grid-cols-4 gap-2"
-              role="radiogroup"
-              aria-label="Continue Watching retention"
-              data-i18n-attr="aria-label:settings.progressRetention.label">
-              <button type="button" data-retention="30"  aria-pressed="false" data-i18n="settings.progressRetention.30days"  class="retention-btn btn">30 days</button>
-              <button type="button" data-retention="90"  aria-pressed="false" data-i18n="settings.progressRetention.90days"  class="retention-btn btn">90 days</button>
-              <button type="button" data-retention="180" aria-pressed="false" data-i18n="settings.progressRetention.180days" class="retention-btn btn">180 days</button>
-              <button type="button" data-retention="0"   aria-pressed="false" data-i18n="settings.progressRetention.never"   class="retention-btn btn">Never</button>
-            </div>
-          </div>
-        </article>
+          <div class="settings-rows">
 
-        <!-- EPG: time zone offset (per active playlist) -->
-        <article id="epg-tz-section" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
-          <div class="flex items-start gap-3">
-            <span class="icon-mark">
-              <IconClock aria-hidden="true" stroke={2} />
-            </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.epgTimezone.title" class="text-base font-semibold">EPG time zone</h3>
-              <p data-i18n="epg.timezoneHelper" class="text-xs text-fg-3">
-                Some providers ship XMLTV with timestamps already shifted to the server's local time, so EPG times look off. Auto-detect picks the offset where the most channels have a programme airing right now.
-              </p>
-            </div>
-          </div>
-          <label class="flex flex-col gap-1.5">
-            <span data-i18n="settings.epgTimezone.offsetLabel" class="text-eyebrow font-medium uppercase text-fg-3">
-              Offset for active playlist
-            </span>
-            <select id="epg-tz-select" disabled class="field-input">
-              <option value="auto" data-i18n="epg.timezoneAutoDetect">Auto-detect</option>
-            </select>
-          </label>
-          <div
-            id="epg-tz-status"
-            aria-live="polite"
-            class="text-xs text-fg-3"></div>
-        </article>
-
-        <!-- Playback: embedded player backend on every platform, plus the desktop-only external launcher -->
-        <article id="playback-section" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
-          <div class="flex items-start gap-3">
-            <span class="icon-mark">
-              <IconPlayerPlay aria-hidden="true" stroke={2} />
-            </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.playback.title" class="text-base font-semibold">Playback</h3>
-              <p data-i18n="settings.playback.helper" class="text-xs text-fg-3">
+            <div data-settings-item class="px-5 sm:px-6 py-4">
+              <p data-i18n="settings.playback.helper" class="text-xs text-fg-3 mb-3">
                 Choose how streams open. External players play 4K and HDR more reliably.
               </p>
+              <PlayerPicker client:load />
             </div>
+
+            <!-- Audio transcode auto-fix: desktop-only, unhidden by the script below -->
+            <details id="audio-transcode-section" data-settings-item class="hidden group scroll-mt-6 lg:scroll-mt-20">
+              <summary class="settings-row cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span class="settings-row__text">
+                  <h3 data-i18n="settings.playback.audioTranscodeAuto" class="text-sm font-medium leading-snug">Fix unsupported audio automatically</h3>
+                  <span id="audio-transcode-helper" data-i18n="settings.playback.audioTranscodeAutoHelper" class="text-xs text-fg-3 block">
+                    When a live channel plays video with no sound (AC-3, E-AC-3, MP2, or DTS audio), fix it automatically instead of asking each time.
+                  </span>
+                  <span id="ffmpeg-status" aria-live="polite" class="text-xs text-fg-3 block mt-1 empty:hidden"></span>
+                </span>
+                <span class="settings-row__control">
+                  <IconChevronDown aria-hidden="true" stroke={2} class="size-4 text-fg-3 transition-transform group-open:rotate-180" />
+                </span>
+              </summary>
+              <div class="px-5 sm:px-6 pb-4 pt-1 flex flex-col gap-3">
+                <label for="ffmpeg-path-input" data-i18n="settings.playback.ffmpegPathLabel" class="text-eyebrow font-medium uppercase text-fg-3">FFmpeg path</label>
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    type="text"
+                    id="ffmpeg-path-input"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="C:\ffmpeg\bin\ffmpeg.exe"
+                    class="field-input font-mono flex-1"
+                    aria-describedby="ffmpeg-path-helper" />
+                  <button type="button" id="ffmpeg-browse-btn" class="btn" data-i18n="settings.playback.browse">Browse…</button>
+                  <button type="button" id="ffmpeg-test-btn" class="btn" data-i18n="settings.playback.ffmpegTest">Test</button>
+                </div>
+                <p id="ffmpeg-path-helper" data-i18n="settings.playback.ffmpegPathHelper" class="text-xs text-fg-3">
+                  Point to your own FFmpeg if the bundled one is missing or you prefer a specific build.
+                </p>
+
+                <div class="flex flex-wrap items-center gap-3 pt-3 border-t border-line/60">
+                  <span data-i18n="settings.playback.audioTranscodeAuto" class="text-sm font-medium leading-snug me-auto">Fix unsupported audio automatically</span>
+                  <div
+                    id="settings-audio-transcode-auto"
+                    class="settings-seg"
+                    role="radiogroup"
+                    aria-label="Fix unsupported audio automatically"
+                    data-i18n-attr="aria-label:settings.playback.audioTranscodeAuto"
+                    aria-describedby="audio-transcode-helper">
+                    <button type="button" data-audio-transcode="on" aria-pressed="false" data-i18n="settings.playback.audioTranscodeOn" class="audio-transcode-btn btn">On</button>
+                    <button type="button" data-audio-transcode="off" aria-pressed="false" data-i18n="settings.playback.audioTranscodeOff" class="audio-transcode-btn btn">Off</button>
+                  </div>
+                </div>
+              </div>
+            </details>
+
+            <!-- Mono audio: downmixes embedded playback to one channel for single-earbud use -->
+            <div id="card-mono-audio" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.monoAudio.title" class="text-sm font-medium leading-snug">Mono audio</h3>
+                <p data-i18n="settings.monoAudio.helperLong" class="text-xs text-fg-3">
+                  Play all audio in both ears as a single channel - useful with one earbud. Applies to streams played by the built-in engines; some directly played files keep their original stereo.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-mono-audio"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Mono audio"
+                  data-i18n-attr="aria-label:settings.monoAudio.label">
+                  <button type="button" data-mono="on"  aria-pressed="false" data-i18n="settings.monoAudio.on"  class="mono-audio-btn btn">On</button>
+                  <button type="button" data-mono="off" aria-pressed="false" data-i18n="settings.monoAudio.off" class="mono-audio-btn btn">Off</button>
+                </div>
+              </div>
+              <script is:inline>
+                try {
+                  var monoAudioRaw = localStorage.getItem("xt_mono_audio");
+                  var monoAudioOn = monoAudioRaw === "1";
+                  var monoAudioGroup = document.getElementById("settings-mono-audio");
+                  if (monoAudioGroup) {
+                    var monoAudioBtns = monoAudioGroup.querySelectorAll(".mono-audio-btn");
+                    for (var mIdx = 0; mIdx < monoAudioBtns.length; mIdx++) {
+                      var monoAudioBtnOn = monoAudioBtns[mIdx].getAttribute("data-mono") === "on";
+                      monoAudioBtns[mIdx].setAttribute("aria-pressed", monoAudioBtnOn === monoAudioOn ? "true" : "false");
+                    }
+                  }
+                } catch (e) {}
+              </script>
+            </div>
+
+            <AndroidNativePlayerCard client:load />
+
+            <RememberedAndroidPlayerCard client:load />
+
           </div>
-          <PlayerPicker client:load />
-
-          <div id="audio-transcode-section" class="flex flex-col gap-3 pt-4 border-t border-line/60 hidden">
-            <div class="flex flex-col gap-1">
-              <label for="ffmpeg-path-input" data-i18n="settings.playback.ffmpegPathLabel" class="text-eyebrow font-medium uppercase text-fg-3">FFmpeg path</label>
-              <p id="ffmpeg-status" class="text-xs text-fg-3" aria-live="polite"></p>
-            </div>
-
-            <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <input
-                type="text"
-                id="ffmpeg-path-input"
-                spellcheck="false"
-                autocomplete="off"
-                placeholder="C:\ffmpeg\bin\ffmpeg.exe"
-                class="field-input font-mono flex-1"
-                aria-describedby="ffmpeg-path-helper" />
-              <button type="button" id="ffmpeg-browse-btn" class="btn" data-i18n="settings.playback.browse">Browse…</button>
-              <button type="button" id="ffmpeg-test-btn" class="btn" data-i18n="settings.playback.ffmpegTest">Test</button>
-            </div>
-            <p id="ffmpeg-path-helper" data-i18n="settings.playback.ffmpegPathHelper" class="text-xs text-fg-3">
-              Point to your own FFmpeg if the bundled one is missing or you prefer a specific build.
-            </p>
-
-            <span data-i18n="settings.playback.audioTranscodeAuto" class="text-eyebrow font-medium uppercase text-fg-3">Fix unsupported audio automatically</span>
-            <p id="audio-transcode-helper" data-i18n="settings.playback.audioTranscodeAutoHelper" class="text-xs text-fg-3">
-              When a live channel plays video with no sound (AC-3, E-AC-3, MP2, or DTS audio), fix it automatically instead of asking each time.
-            </p>
-            <div
-              id="settings-audio-transcode-auto"
-              class="grid grid-cols-2 gap-2"
-              role="radiogroup"
-              aria-label="Fix unsupported audio automatically"
-              data-i18n-attr="aria-label:settings.playback.audioTranscodeAuto"
-              aria-describedby="audio-transcode-helper">
-              <button type="button" data-audio-transcode="on" aria-pressed="false" data-i18n="settings.playback.audioTranscodeOn" class="audio-transcode-btn btn">On</button>
-              <button type="button" data-audio-transcode="off" aria-pressed="false" data-i18n="settings.playback.audioTranscodeOff" class="audio-transcode-btn btn">Off</button>
-            </div>
-          </div>
-        </article>
-
-        <!-- Mono audio: downmixes embedded playback to one channel for single-earbud use -->
-        <article id="card-mono-audio" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
-            <span class="icon-mark">
-              <IconHeadphones aria-hidden="true" stroke={2} />
-            </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.monoAudio.title" class="text-base font-semibold">Mono audio</h3>
-              <p data-i18n="settings.monoAudio.helperLong" class="text-xs text-fg-3">
-                Play all audio in both ears as a single channel - useful with one earbud. Applies to streams played by the built-in engines; some directly played files keep their original stereo.
-              </p>
-            </div>
-          </div>
-          <div class="flex flex-col gap-2">
-            <span data-i18n="settings.monoAudio.label" class="text-eyebrow font-medium uppercase text-fg-3">Mono audio</span>
-            <div
-              id="settings-mono-audio"
-              class="grid grid-cols-2 gap-2"
-              role="radiogroup"
-              aria-label="Mono audio"
-              data-i18n-attr="aria-label:settings.monoAudio.label">
-              <button type="button" data-mono="on"  aria-pressed="false" data-i18n="settings.monoAudio.on"  class="mono-audio-btn btn">On</button>
-              <button type="button" data-mono="off" aria-pressed="false" data-i18n="settings.monoAudio.off" class="mono-audio-btn btn">Off</button>
-            </div>
-          </div>
-          <script is:inline>
-            try {
-              var monoAudioRaw = localStorage.getItem("xt_mono_audio");
-              var monoAudioOn = monoAudioRaw === "1";
-              var monoAudioGroup = document.getElementById("settings-mono-audio");
-              if (monoAudioGroup) {
-                var monoAudioBtns = monoAudioGroup.querySelectorAll(".mono-audio-btn");
-                for (var mIdx = 0; mIdx < monoAudioBtns.length; mIdx++) {
-                  var monoAudioBtnOn = monoAudioBtns[mIdx].getAttribute("data-mono") === "on";
-                  monoAudioBtns[mIdx].setAttribute("aria-pressed", monoAudioBtnOn === monoAudioOn ? "true" : "false");
-                }
-              }
-            } catch (e) {}
-          </script>
-        </article>
-
-        <AndroidNativePlayerCard client:load />
-
-        <RememberedAndroidPlayerCard client:load />
+        </div>
 
       </div>
     </section>
 
     <!-- Group: Network (User-Agent spoofing, Discord Rich Presence) -->
-    <section id="settings-network" class="settings-group scroll-mt-8">
+    <section id="settings-network" class="settings-group scroll-mt-8 lg:scroll-mt-20">
       <h2 data-i18n="settings.group.network" class="settings-group__title">Network</h2>
       <div class="flex flex-col gap-4">
 
-        <!-- Network: User-Agent spoofing -->
-        <article id="card-network" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
+        <!-- Surface: Network -->
+        <div id="card-network" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
             <span class="icon-mark">
               <IconWifi aria-hidden="true" stroke={2} />
             </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.network.title" class="text-base font-semibold">Network</h3>
-              <p data-i18n="settings.network.helperLong" class="text-xs text-fg-3">
-                Some IPTV providers reject the default browser User-Agent. Pick a preset or enter a custom string. Applies to provider API, M3U, and EPG fetches. Effective in the desktop build.
-              </p>
-            </div>
+            <h3 data-i18n="settings.network.title" class="text-base font-semibold">Network</h3>
           </div>
-          <div class="flex flex-col gap-3">
-            <label class="flex flex-col gap-1.5">
-              <span data-i18n="settings.network.uaPreset" class="text-eyebrow font-medium uppercase text-fg-3">User-Agent preset</span>
-              <select id="ua-preset" class="field-input"></select>
-            </label>
-            <label class="flex flex-col gap-1.5">
-              <span data-i18n="settings.network.uaCustom" class="text-eyebrow font-medium uppercase text-fg-3">Custom (overrides preset)</span>
-              <input
-                id="ua-custom"
-                type="text"
-                autocomplete="off"
-                spellcheck="false"
-                placeholder="e.g. VLC/3.0.20 LibVLC/3.0.20"
-                data-i18n-attr="placeholder:settings.network.uaPlaceholder"
-                class="field-input font-mono"
-              />
-            </label>
-          </div>
-          <div class="grid grid-cols-1 gap-2 pt-1">
-            <button id="ua-save" type="button" class="btn justify-start sm:justify-center">
-              <IconDeviceFloppy aria-hidden="true" class="btn-icon" />
-              <span data-i18n="common.save">Save</span>
-            </button>
-          </div>
-          <span
-            id="ua-msg"
-            aria-live="polite"
-            class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+          <div class="settings-rows">
 
-          <div class="flex flex-col gap-2 pt-4 border-t border-line/60">
-            <span data-i18n="settings.network.timeoutLabel" class="text-eyebrow font-medium uppercase text-fg-3">Request timeout</span>
-            <p id="settings-network-timeout-helper" data-i18n="settings.network.timeoutHelper" class="text-xs text-fg-3">
-              How long to wait for a provider response before giving up. Bump this when a large catalog (tens of thousands of movies / series) times out before it finishes loading.
-            </p>
-            <div
-              id="settings-network-timeout"
-              class="grid grid-cols-2 sm:grid-cols-4 gap-2"
-              role="radiogroup"
-              aria-label="Request timeout"
-              aria-describedby="settings-network-timeout-helper"
-              data-i18n-attr="aria-label:settings.network.timeoutLabel">
-              <button type="button" role="radio" data-timeout="20"  aria-checked="false" data-i18n="settings.network.timeout.20s"  class="net-timeout-btn btn">20s</button>
-              <button type="button" role="radio" data-timeout="45"  aria-checked="false" data-i18n="settings.network.timeout.45s"  class="net-timeout-btn btn">45s</button>
-              <button type="button" role="radio" data-timeout="90"  aria-checked="false" data-i18n="settings.network.timeout.90s"  class="net-timeout-btn btn">90s</button>
-              <button type="button" role="radio" data-timeout="180" aria-checked="false" data-i18n="settings.network.timeout.180s" class="net-timeout-btn btn">3 min</button>
+            <!-- User agent preset -->
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.network.uaPreset" class="text-sm font-medium leading-snug">User-Agent preset</h3>
+                <p data-i18n="settings.network.helperLong" class="text-xs text-fg-3">
+                  Some IPTV providers reject the default browser User-Agent. Pick a preset or enter a custom string. Applies to provider API, M3U, and EPG fetches. Effective in the desktop build.
+                </p>
+              </div>
+              <div class="settings-row__control w-full @2xl:w-72">
+                <select
+                  id="ua-preset"
+                  class="field-input"
+                  data-i18n-attr="aria-label:settings.network.uaPreset"
+                  aria-label="User-Agent preset"></select>
+              </div>
             </div>
-          </div>
-        </article>
 
-        <!-- Discord Rich Presence -->
-        <article id="discord-rpc-section" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 hidden">
-          <div class="flex items-start gap-3">
-            <span class="icon-mark">
-              <IconBrandDiscord aria-hidden="true" stroke={2} />
-            </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.discord.title" class="text-base font-semibold">Discord Rich Presence</h3>
-              <p data-i18n="settings.discord.helperLong" class="text-xs text-fg-3">
-                Show "Watching X on Extreme InfiniTV" on your Discord profile while you use the app. On by default; uncheck a playlist below to mute presence for that account. Desktop only - requires Discord running on the same machine.
-              </p>
+            <!-- User agent custom override -->
+            <div data-settings-item class="settings-row settings-row--stack scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.network.uaCustom" class="text-sm font-medium leading-snug">Custom (overrides preset)</h3>
+              </div>
+              <div class="settings-row__control w-full flex-col items-stretch gap-1">
+                <div class="flex gap-2">
+                  <input
+                    id="ua-custom"
+                    type="text"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="e.g. VLC/3.0.20 LibVLC/3.0.20"
+                    data-i18n-attr="placeholder:settings.network.uaPlaceholder"
+                    class="field-input font-mono flex-1 min-w-0"
+                  />
+                  <button id="ua-save" type="button" class="btn justify-center">
+                    <IconDeviceFloppy aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="common.save">Save</span>
+                  </button>
+                </div>
+                <span
+                  id="ua-msg"
+                  aria-live="polite"
+                  class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+              </div>
             </div>
-          </div>
 
-          <input id="discord-client-id" type="hidden" />
-
-          <div id="discord-controls" class="flex flex-col gap-2">
-            <span data-i18n="settings.discord.perPlaylist" class="text-eyebrow font-medium uppercase text-fg-3">Per-playlist</span>
-            <div
-              id="discord-playlists"
-              class="flex flex-col divide-y divide-line/60 rounded-xl border border-line bg-bg overflow-hidden">
-              <div data-i18n="settings.playlists.empty" class="px-4 py-4 text-xs text-fg-3">No playlists yet.</div>
+            <!-- Request timeout -->
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.network.timeoutLabel" class="text-sm font-medium leading-snug">Request timeout</h3>
+                <p id="settings-network-timeout-helper" data-i18n="settings.network.timeoutHelper" class="text-xs text-fg-3">
+                  How long to wait for a provider response before giving up. Bump this when a large catalog (tens of thousands of movies / series) times out before it finishes loading.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-network-timeout"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Request timeout"
+                  aria-describedby="settings-network-timeout-helper"
+                  data-i18n-attr="aria-label:settings.network.timeoutLabel">
+                  <button type="button" role="radio" data-timeout="20"  aria-checked="false" data-i18n="settings.network.timeout.20s"  class="net-timeout-btn btn">20s</button>
+                  <button type="button" role="radio" data-timeout="45"  aria-checked="false" data-i18n="settings.network.timeout.45s"  class="net-timeout-btn btn">45s</button>
+                  <button type="button" role="radio" data-timeout="90"  aria-checked="false" data-i18n="settings.network.timeout.90s"  class="net-timeout-btn btn">90s</button>
+                  <button type="button" role="radio" data-timeout="180" aria-checked="false" data-i18n="settings.network.timeout.180s" class="net-timeout-btn btn">3 min</button>
+                </div>
+              </div>
             </div>
+
+            <!-- Discord Rich Presence: desktop-only, unhidden by the script below -->
+            <details id="discord-rpc-section" data-settings-item class="hidden group scroll-mt-6 lg:scroll-mt-20">
+              <summary class="settings-row cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span class="settings-row__text">
+                  <h3 class="text-sm font-medium leading-snug">
+                    <IconBrandDiscord aria-hidden="true" stroke={2} class="size-4 text-fg-3 inline-block align-[-2px] me-1.5" />
+                    <span data-i18n="settings.discord.title">Discord Rich Presence</span>
+                  </h3>
+                  <span data-i18n="settings.discord.helperLong" class="text-xs text-fg-3 line-clamp-1 block">
+                    Show "Watching X on Extreme InfiniTV" on your Discord profile while you use the app. On by default; uncheck a playlist below to mute presence for that account. Desktop only - requires Discord running on the same machine.
+                  </span>
+                </span>
+                <span class="settings-row__control">
+                  <IconChevronDown aria-hidden="true" stroke={2} class="size-4 text-fg-3 transition-transform group-open:rotate-180" />
+                </span>
+              </summary>
+              <div class="px-5 sm:px-6 pb-4 pt-1 flex flex-col gap-3">
+                <input id="discord-client-id" type="hidden" />
+
+                <div id="discord-controls" class="flex flex-col gap-2">
+                  <span data-i18n="settings.discord.perPlaylist" class="text-eyebrow font-medium uppercase text-fg-3">Per-playlist</span>
+                  <div
+                    id="discord-playlists"
+                    class="flex flex-col divide-y divide-line/60 rounded-xl border border-line bg-bg overflow-hidden">
+                    <div data-i18n="settings.playlists.empty" class="px-4 py-4 text-xs text-fg-3">No playlists yet.</div>
+                  </div>
+                </div>
+                <p id="discord-sandbox-note" data-i18n="settings.discord.sandboxNote" class="text-xs text-fg-3" hidden>
+                  Discord Rich Presence isn't available in Snap installs.
+                </p>
+              </div>
+            </details>
+
           </div>
-          <p id="discord-sandbox-note" data-i18n="settings.discord.sandboxNote" class="text-xs text-fg-3" hidden>
-            Discord Rich Presence isn't available in Snap installs.
-          </p>
-        </article>
+        </div>
 
       </div>
     </section>
 
     <!-- Group: Library (per-playlist content curation: hidden categories, favorites order) -->
-    <section id="settings-library" class="settings-group scroll-mt-8">
+    <section id="settings-library" class="settings-group scroll-mt-8 lg:scroll-mt-20">
       <h2 data-i18n="settings.group.library" class="settings-group__title">Library</h2>
       <div class="flex flex-col gap-4">
 
         <!-- Hidden categories editor -->
-        <article id="card-categories" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
-            <span class="icon-mark">
-              <IconFilter aria-hidden="true" stroke={2} />
-            </span>
-            <div class="flex flex-col gap-1 min-w-0">
+        <details id="card-categories" data-settings-item class="settings-surface icon-mark-host group scroll-mt-6 lg:scroll-mt-20">
+          <summary class="settings-surface__header flex-wrap pb-5 sm:pb-6 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+            <span class="flex items-center gap-3 min-w-0 w-full">
+              <span class="icon-mark">
+                <IconFilter aria-hidden="true" stroke={2} />
+              </span>
               <h3 data-i18n="settings.categories.title" class="text-base font-semibold">Categories</h3>
-              <p data-i18n="settings.categories.helperLong" class="text-xs text-fg-3">
-                Per-playlist mute list. Hidden categories are hidden from
-                the picker and the main grid on Live TV, Movies, and Series.
-              </p>
-            </div>
+              <span class="ms-auto shrink-0">
+                <IconChevronDown aria-hidden="true" stroke={2} class="size-4 text-fg-3 transition-transform group-open:rotate-180" />
+              </span>
+            </span>
+            <span data-i18n="settings.categories.helperLong" class="text-xs text-fg-3 block mt-1.5">
+              Per-playlist mute list. Hidden categories are hidden from
+              the picker and the main grid on Live TV, Movies, and Series.
+            </span>
+          </summary>
+          <div class="px-5 sm:px-6 pb-5 pt-1">
+            <HiddenCategoriesEditor client:load />
           </div>
-          <HiddenCategoriesEditor client:load />
-        </article>
+        </details>
 
         <!-- Favorites order -->
-        <article id="card-favorites" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
-            <span class="icon-mark">
-              <IconStar aria-hidden="true" stroke={2} />
-            </span>
-            <div class="flex flex-col gap-1 min-w-0">
+        <details id="card-favorites" data-settings-item class="settings-surface icon-mark-host group scroll-mt-6 lg:scroll-mt-20">
+          <summary class="settings-surface__header flex-wrap pb-5 sm:pb-6 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+            <span class="flex items-center gap-3 min-w-0 w-full">
+              <span class="icon-mark">
+                <IconStar aria-hidden="true" stroke={2} />
+              </span>
               <h3 data-i18n="settings.favoritesSection.title" class="text-base font-semibold">Favorites</h3>
-              <p data-i18n="settings.favoritesSection.helperLong" class="text-xs text-fg-3">
-                Reorder your favorites per kind. The hub Favorites strip and
-                the per-page favorites filter follow this order.
-              </p>
-            </div>
+              <span class="ms-auto shrink-0">
+                <IconChevronDown aria-hidden="true" stroke={2} class="size-4 text-fg-3 transition-transform group-open:rotate-180" />
+              </span>
+            </span>
+            <span data-i18n="settings.favoritesSection.helperLong" class="text-xs text-fg-3 block mt-1.5">
+              Reorder your favorites per kind. The hub Favorites strip and
+              the per-page favorites filter follow this order.
+            </span>
+          </summary>
+          <div class="px-5 sm:px-6 pb-5 pt-1">
+            <FavoritesReorder client:load />
           </div>
-          <FavoritesReorder client:load />
-        </article>
+        </details>
 
       </div>
     </section>
 
     <!-- Group: Data (downloads folder, backup, cache storage) -->
-    <section id="settings-data" class="settings-group scroll-mt-8">
+    <section id="settings-data" class="settings-group scroll-mt-8 lg:scroll-mt-20">
       <h2 data-i18n="settings.group.data" class="settings-group__title">Data</h2>
       <div class="flex flex-col gap-4">
 
-        <!-- Downloads (folder only - queue lives on /downloads) -->
-        <article id="downloads-folder-section" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
+        <!-- Surface: Downloads (folder only - queue lives on /downloads) -->
+        <div id="downloads-folder-section" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
             <span class="icon-mark">
               <IconDownload aria-hidden="true" stroke={2} />
             </span>
-            <div class="flex flex-col gap-1 min-w-0 flex-1">
-              <h3 data-i18n="settings.downloadsSection.title" class="text-base font-semibold">Downloads</h3>
-              <p data-i18n-html="settings.downloadsFolder.intro" class="text-xs text-fg-3">
-                Folder where new downloads land. Manage the queue itself on the
-                <a href="/downloads" class="text-accent underline">Downloads page</a>.
-              </p>
-            </div>
-            <span id="downloads-availability" class="text-xs text-fg-3 shrink-0 truncate empty:hidden"></span>
+            <h3 data-i18n="settings.downloadsSection.title" class="text-base font-semibold">Downloads</h3>
+            <span id="downloads-availability" class="ms-auto text-xs text-fg-3 shrink-0 truncate empty:hidden"></span>
           </div>
-          <div class="flex flex-col gap-1.5">
-            <label data-i18n="settings.downloadsFolder.savedTo" class="text-eyebrow font-medium uppercase text-fg-3" for="download-dir-input">
-              Save to
-            </label>
-            <div class="flex gap-2 flex-wrap">
-              <input
-                id="download-dir-input"
-                type="text"
-                readonly
-                placeholder="Not set - picked on first download"
-                data-i18n-attr="placeholder:settings.downloadsFolder.notSetPlaceholder"
-                class="field-input flex-1 min-w-0 font-mono"
-              />
-              <button id="download-dir-pick" type="button" class="btn">
-                <IconFolderOpen aria-hidden="true" class="btn-icon" />
-                <span data-i18n="settings.downloadsFolder.choose">Choose…</span>
-              </button>
-              <button id="download-dir-clear" type="button" class="btn text-fg-2">
-                <span data-i18n="common.clear">Clear</span>
-              </button>
-            </div>
+          <div class="px-5 sm:px-6 pt-3 empty:pt-0">
+            <ConnectionLimitBanner client:load />
           </div>
+          <div class="settings-rows">
 
-          <div class="flex flex-col gap-1.5">
-            <span data-i18n="settings.downloadsFolder.restoreLabel" class="text-eyebrow font-medium uppercase text-fg-3">
-              Restore from folder
-            </span>
-            <p data-i18n="settings.downloadsFolder.restoreHelper" class="text-xs text-fg-3">
-              After a reinstall, scan the folder above for `.xtmeta.json` sidecars and re-add the matching files to your downloads list.
-            </p>
-            <div class="grid grid-cols-1 gap-2">
-              <button id="downloads-scan" type="button" class="btn justify-start sm:justify-center">
-                <IconRefresh aria-hidden="true" class="btn-icon" />
-                <span data-i18n="settings.downloadsFolder.scanFolder">Scan folder</span>
-              </button>
+            <!-- Save to -->
+            <div data-settings-item class="settings-row settings-row--stack scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.downloadsFolder.savedTo" class="text-sm font-medium leading-snug">Save to</h3>
+                <p data-i18n-html="settings.downloadsFolder.intro" class="text-xs text-fg-3">
+                  Folder where new downloads land. Manage the queue itself on the
+                  <a href="/downloads" class="text-accent underline">Downloads page</a>.
+                </p>
+              </div>
+              <div class="settings-row__control w-full flex-col items-stretch">
+                <div class="flex gap-2 flex-wrap">
+                  <input
+                    id="download-dir-input"
+                    type="text"
+                    readonly
+                    placeholder="Not set - picked on first download"
+                    data-i18n-attr="placeholder:settings.downloadsFolder.notSetPlaceholder;aria-label:settings.downloadsFolder.savedTo"
+                    aria-label="Save to"
+                    class="field-input flex-1 min-w-0 font-mono"
+                  />
+                  <button id="download-dir-pick" type="button" class="btn">
+                    <IconFolderOpen aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.downloadsFolder.choose">Choose…</span>
+                  </button>
+                  <button id="download-dir-clear" type="button" class="btn text-fg-2">
+                    <span data-i18n="common.clear">Clear</span>
+                  </button>
+                </div>
+              </div>
             </div>
-            <span
-              id="downloads-scan-msg"
-              aria-live="polite"
-              class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
-          </div>
 
-          <ConnectionLimitBanner client:load />
-
-          <div class="flex flex-col gap-1.5">
-            <span data-i18n="settings.downloadsFolder.concurrency" class="text-eyebrow font-medium uppercase text-fg-3">
-              Concurrent downloads
-            </span>
-            <p data-i18n="settings.downloadsFolder.concurrencyHelper" class="text-xs text-fg-3">
-              Most Xtream providers cap connections per account, so a second
-              parallel download fails mid-stream. Keep this at 1 unless your
-              provider explicitly allows multiple slots.
-            </p>
-            <div
-              id="settings-download-concurrency"
-              class="grid grid-cols-4 gap-2"
-              role="radiogroup"
-              aria-label="Concurrent downloads"
-              data-i18n-attr="aria-label:settings.downloadsFolder.concurrency">
-              <button type="button" data-concurrency="1" aria-pressed="false" class="dl-concurrency-btn btn">1</button>
-              <button type="button" data-concurrency="2" aria-pressed="false" class="dl-concurrency-btn btn">2</button>
-              <button type="button" data-concurrency="3" aria-pressed="false" class="dl-concurrency-btn btn">3</button>
-              <button type="button" data-concurrency="4" aria-pressed="false" class="dl-concurrency-btn btn">4</button>
+            <!-- Restore from folder -->
+            <div data-settings-item class="settings-row settings-row--stack scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.downloadsFolder.restoreLabel" class="text-sm font-medium leading-snug">Restore from folder</h3>
+                <p data-i18n="settings.downloadsFolder.restoreHelper" class="text-xs text-fg-3">
+                  After a reinstall, scan the folder above for `.xtmeta.json` sidecars and re-add the matching files to your downloads list.
+                </p>
+              </div>
+              <div class="settings-row__control w-full flex-col items-stretch gap-1">
+                <div class="flex">
+                  <button id="downloads-scan" type="button" class="btn justify-start sm:justify-center">
+                    <IconRefresh aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.downloadsFolder.scanFolder">Scan folder</span>
+                  </button>
+                </div>
+                <span
+                  id="downloads-scan-msg"
+                  aria-live="polite"
+                  class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+              </div>
             </div>
-            <p
-              id="settings-download-concurrency-cap"
-              class="text-2xs text-fg-3 tabular-nums empty:hidden"
-              aria-live="polite"></p>
-          </div>
-        </article>
 
-        <!-- Backup / restore -->
-        <article id="card-backup" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
+            <!-- Concurrent downloads -->
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.downloadsFolder.concurrency" class="text-sm font-medium leading-snug">Concurrent downloads</h3>
+                <p data-i18n="settings.downloadsFolder.concurrencyHelper" class="text-xs text-fg-3">
+                  Most Xtream providers cap connections per account, so a second
+                  parallel download fails mid-stream. Keep this at 1 unless your
+                  provider explicitly allows multiple slots.
+                </p>
+              </div>
+              <div class="settings-row__control flex-col items-end gap-1">
+                <div
+                  id="settings-download-concurrency"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Concurrent downloads"
+                  data-i18n-attr="aria-label:settings.downloadsFolder.concurrency">
+                  <button type="button" data-concurrency="1" aria-pressed="false" class="dl-concurrency-btn btn">1</button>
+                  <button type="button" data-concurrency="2" aria-pressed="false" class="dl-concurrency-btn btn">2</button>
+                  <button type="button" data-concurrency="3" aria-pressed="false" class="dl-concurrency-btn btn">3</button>
+                  <button type="button" data-concurrency="4" aria-pressed="false" class="dl-concurrency-btn btn">4</button>
+                </div>
+                <p
+                  id="settings-download-concurrency-cap"
+                  class="text-2xs text-fg-3 tabular-nums empty:hidden"
+                  aria-live="polite"></p>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Surface: Backup / restore -->
+        <div id="card-backup" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
             <span class="icon-mark">
               <IconArchive aria-hidden="true" stroke={2} />
             </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.backup.title" class="text-base font-semibold">Backup</h3>
-              <p data-i18n="settings.backup.helperLong" class="text-xs text-fg-3">
-                Save all playlists, favorites, recents, watched progress, hidden categories, and app settings to a file. Cache and the downloads queue are not exported.
-              </p>
+            <h3 data-i18n="settings.backup.title" class="text-base font-semibold">Backup</h3>
+          </div>
+          <div class="settings-rows">
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <p data-i18n="settings.backup.helperLong" class="text-xs text-fg-3">
+                  Save all playlists, favorites, recents, watched progress, hidden categories, and app settings to a file. Cache and the downloads queue are not exported.
+                </p>
+              </div>
+              <div class="settings-row__control flex-col items-end gap-1">
+                <div class="flex gap-2">
+                  <button id="settings-export" type="button" class="btn justify-center">
+                    <IconDownload aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.backup.export">Export to file</span>
+                  </button>
+                  <button id="settings-import" type="button" class="btn justify-center">
+                    <IconUpload aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.backup.import">Import from file</span>
+                  </button>
+                </div>
+                <input id="settings-import-input" type="file" accept="application/json,text/json,text/plain,.json" hidden />
+                <span id="settings-backup-msg" aria-live="polite" class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+              </div>
             </div>
           </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-            <button id="settings-export" type="button" class="btn justify-start sm:justify-center">
-              <IconDownload aria-hidden="true" class="btn-icon" />
-              <span data-i18n="settings.backup.export">Export to file</span>
-            </button>
-            <button id="settings-import" type="button" class="btn justify-start sm:justify-center">
-              <IconUpload aria-hidden="true" class="btn-icon" />
-              <span data-i18n="settings.backup.import">Import from file</span>
-            </button>
-          </div>
-          <input id="settings-import-input" type="file" accept="application/json,text/json,text/plain,.json" hidden />
-          <span id="settings-backup-msg" aria-live="polite" class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
-        </article>
+        </div>
 
-        <!-- Storage / cache -->
-        <article id="card-storage" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-          <div class="flex items-start gap-3">
+        <!-- Surface: Storage / cache -->
+        <div id="card-storage" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
             <span class="icon-mark">
               <IconDatabase aria-hidden="true" stroke={2} />
             </span>
-            <div class="flex flex-col gap-1 min-w-0">
-              <h3 data-i18n="settings.storage.title" class="text-base font-semibold">Storage</h3>
-              <p data-i18n="settings.storage.helperLong" class="text-xs text-fg-3">
-                Clears channel, movie, and series lists. Playlists, favorites, and recents are kept.
-              </p>
-            </div>
+            <h3 data-i18n="settings.storage.title" class="text-base font-semibold">Storage</h3>
           </div>
-          <dl class="grid grid-cols-2 gap-y-3 gap-x-6 text-sm">
-            <div class="flex flex-col gap-0.5 min-w-0">
-              <dt data-i18n="settings.storage.size" class="text-fg-3 text-eyebrow font-medium uppercase">Cache</dt>
-              <dd id="settings-cache-size" class="text-fg tabular-nums truncate">-</dd>
+          <div class="settings-rows">
+
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.storage.size" class="text-sm font-medium leading-snug">Cache</h3>
+              </div>
+              <div class="settings-row__control flex-col items-end gap-0.5 text-sm">
+                <span id="settings-cache-size" class="text-fg tabular-nums">-</span>
+                <span class="text-xs text-fg-3">
+                  <span data-i18n="settings.storage.lastUpdated">Last updated</span>
+                  <span id="settings-cache-newest" class="tabular-nums">-</span>
+                </span>
+              </div>
             </div>
-            <div class="flex flex-col gap-0.5 min-w-0">
-              <dt data-i18n="settings.storage.lastUpdated" class="text-fg-3 text-eyebrow font-medium uppercase">Last updated</dt>
-              <dd id="settings-cache-newest" class="text-fg tabular-nums truncate">-</dd>
+
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.storage.clear" class="text-sm font-medium leading-snug">Clear cache</h3>
+                <p data-i18n="settings.storage.helperLong" class="text-xs text-fg-3">
+                  Clears channel, movie, and series lists. Playlists, favorites, and recents are kept.
+                </p>
+              </div>
+              <div class="settings-row__control flex-col items-end gap-1">
+                <div class="flex flex-wrap gap-2 justify-end">
+                  <button id="settings-clear-cache" type="button" class="btn justify-center">
+                    <IconTrash aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.storage.clear">Clear cache</span>
+                  </button>
+                  <button id="settings-open-logs" type="button" class="btn justify-center hidden">
+                    <IconFolderOpen aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.storage.openLogs">Open log folder</span>
+                  </button>
+                  <button id="settings-share-logs" type="button" class="btn justify-center hidden">
+                    <IconShare aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.storage.shareLogs">Share logs</span>
+                  </button>
+                </div>
+                <span
+                  id="settings-cache-msg"
+                  aria-live="polite"
+                  class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+              </div>
             </div>
-          </dl>
-          <div class="grid grid-cols-1 gap-2 pt-1">
-            <button id="settings-clear-cache" type="button" class="btn justify-start sm:justify-center">
-              <IconTrash aria-hidden="true" class="btn-icon" />
-              <span data-i18n="settings.storage.clear">Clear cache</span>
-            </button>
-            <button id="settings-open-logs" type="button" class="btn justify-start sm:justify-center hidden">
-              <IconFolderOpen aria-hidden="true" class="btn-icon" />
-              <span data-i18n="settings.storage.openLogs">Open log folder</span>
-            </button>
-            <button id="settings-share-logs" type="button" class="btn justify-start sm:justify-center hidden">
-              <IconShare aria-hidden="true" class="btn-icon" />
-              <span data-i18n="settings.storage.shareLogs">Share logs</span>
-            </button>
+
           </div>
-          <span
-            id="settings-cache-msg"
-            aria-live="polite"
-            class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
-        </article>
+        </div>
 
       </div>
     </section>
 
     <!-- Group: About (App update + version + expiration) -->
-    <section id="settings-about" class="settings-group scroll-mt-8">
+    <section id="settings-about" class="settings-group scroll-mt-8 lg:scroll-mt-20">
       <h2 data-i18n="settings.group.about" class="settings-group__title">About</h2>
-      <article
-        id="update-section"
-        data-state="idle"
-        class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-5
-               data-[state=available]:border-accent/50 data-[state=available]:bg-accent-soft/30
-               transition-colors scroll-mt-6">
-        <div class="flex items-start gap-3">
-          <span class="icon-mark">
-            <IconInfoCircle aria-hidden="true" stroke={2} />
-          </span>
-          <div class="flex flex-col gap-1 min-w-0">
-            <div class="flex items-center gap-2 flex-wrap">
-              <h3 data-i18n="settings.about.title" class="text-base font-semibold">Extreme InfiniTV</h3>
-              <span
-                id="update-pill"
-                data-i18n="settings.about.updateAvailableShort"
-                class="hidden h-5 px-2 items-center justify-center rounded-full text-label font-semibold uppercase tracking-wide bg-accent text-bg shrink-0 pulse-ring">
-                Update available
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <dl class="grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-6 text-sm">
-          <div class="flex flex-col gap-0.5 min-w-0">
-            <dt data-i18n="settings.about.current" class="text-fg-3 text-eyebrow font-medium uppercase">Current</dt>
-            <dd id="update-current" class="text-fg tabular-nums truncate">-</dd>
-          </div>
-          <div class="flex flex-col gap-0.5 min-w-0">
-            <dt data-i18n="settings.about.latest" class="text-fg-3 text-eyebrow font-medium uppercase">Latest</dt>
-            <dd id="update-latest" class="text-fg tabular-nums truncate">-</dd>
-          </div>
-          <div class="flex flex-col gap-0.5 min-w-0 col-span-2 sm:col-span-1">
-            <dt data-i18n="settings.about.accountExpires" class="text-fg-3 text-eyebrow font-medium uppercase">Account expires</dt>
-            <dd data-account-expiration="raw" class="text-fg tabular-nums truncate">-</dd>
-          </div>
-        </dl>
-
+      <div class="flex flex-col gap-4">
         <div
-          id="update-progress-wrap"
-          class="hidden flex-col gap-1.5">
-          <div class="update-progress-track h-1.5 rounded-full bg-surface-2 overflow-hidden">
-            <div id="update-progress-bar" class="update-progress-fill h-full transition-[width] duration-150" style="width: 0%"></div>
+          id="update-section"
+          data-settings-item
+          data-state="idle"
+          class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20
+                 data-[state=available]:border-accent/50 data-[state=available]:bg-accent-soft/30
+                 transition-colors">
+          <div class="settings-surface__header">
+            <span class="icon-mark">
+              <IconInfoCircle aria-hidden="true" stroke={2} />
+            </span>
+            <h3 data-i18n="settings.about.title" class="text-base font-semibold">Extreme InfiniTV</h3>
+            <span
+              id="update-pill"
+              data-i18n="settings.about.updateAvailableShort"
+              class="hidden h-5 px-2 items-center justify-center rounded-full text-label font-semibold uppercase tracking-wide bg-accent text-bg shrink-0 pulse-ring">
+              Update available
+            </span>
           </div>
-          <div id="update-progress-text" class="text-xs text-fg-3 tabular-nums">0%</div>
-        </div>
+          <div class="settings-rows">
 
-        <div id="auto-update-row" class="flex flex-col gap-2 pt-4 border-t border-line/60">
-          <label class="flex flex-col gap-1.5">
-            <span data-i18n="settings.update.autoUpdate" class="text-eyebrow font-medium uppercase text-fg-3">Automatic updates</span>
-            <select id="auto-update-select" class="field-input" aria-describedby="auto-update-hint">
-              <option value="on" data-i18n="settings.update.autoUpdateOn">Enabled</option>
-              <option value="off" data-i18n="settings.update.autoUpdateOff">Disabled</option>
-            </select>
-          </label>
-          <p id="auto-update-hint" data-i18n="settings.update.autoUpdateHint" class="text-xs text-fg-3">
-            When disabled, updates will not install automatically. You will still see when one is available.
-          </p>
-        </div>
+            <div class="settings-row settings-row--stack">
+              <div class="settings-row__control w-full flex-col items-stretch gap-3">
+                <dl class="flex flex-col gap-1.5 sm:grid sm:grid-cols-3 sm:gap-x-6 text-sm">
+                  <div class="flex items-baseline justify-between gap-2 sm:flex-col sm:gap-0.5 min-w-0">
+                    <dt data-i18n="settings.about.current" class="text-fg-3 text-eyebrow font-medium uppercase">Current</dt>
+                    <dd id="update-current" class="text-fg tabular-nums truncate">-</dd>
+                  </div>
+                  <div class="flex items-baseline justify-between gap-2 sm:flex-col sm:gap-0.5 min-w-0">
+                    <dt data-i18n="settings.about.latest" class="text-fg-3 text-eyebrow font-medium uppercase">Latest</dt>
+                    <dd id="update-latest" class="text-fg tabular-nums truncate">-</dd>
+                  </div>
+                  <div class="flex items-baseline justify-between gap-2 sm:flex-col sm:gap-0.5 min-w-0">
+                    <dt data-i18n="settings.about.accountExpires" class="text-fg-3 text-eyebrow font-medium uppercase">Account expires</dt>
+                    <dd data-account-expiration="raw" class="text-fg tabular-nums truncate">-</dd>
+                  </div>
+                </dl>
 
-        <div id="update-channel-row" class="flex flex-col gap-2 pt-4 border-t border-line/60">
-          <label class="flex flex-col gap-1.5">
-            <span data-i18n="settings.update.channel" class="text-eyebrow font-medium uppercase text-fg-3">Update channel</span>
-            <select id="update-channel-select" class="field-input" aria-describedby="update-channel-hint">
-              <option value="stable" data-i18n="settings.update.channelStable">Stable</option>
-              <option value="beta" data-i18n="settings.update.channelBeta">Beta</option>
-            </select>
-          </label>
-          <p id="update-channel-hint" data-i18n="settings.update.channelHint" class="text-xs text-fg-3">
-            Beta versions are early test builds and may be unstable.
-          </p>
-        </div>
+                <div
+                  id="update-progress-wrap"
+                  class="hidden flex-col gap-1.5">
+                  <div class="update-progress-track h-1.5 rounded-full bg-surface-2 overflow-hidden">
+                    <div id="update-progress-bar" class="update-progress-fill h-full transition-[width] duration-150" style="width: 0%"></div>
+                  </div>
+                  <div id="update-progress-text" class="text-xs text-fg-3 tabular-nums">0%</div>
+                </div>
+              </div>
+            </div>
 
-        <div class="flex flex-col gap-2 pt-4 border-t border-line/60">
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <button id="update-check" type="button" class="btn justify-start sm:justify-center">
-              <IconRefresh aria-hidden="true" class="btn-icon" />
-              <span data-i18n="settings.about.checkUpdate">Check for updates</span>
-            </button>
-            <button id="update-install" type="button" hidden class="btn justify-start sm:justify-center">
-              <IconCloudDownload aria-hidden="true" class="btn-icon" />
-              <span id="update-install-label">Download &amp; install</span>
-            </button>
-            <button id="update-relaunch" type="button" hidden class="btn justify-start sm:justify-center">
-              <span data-i18n="settings.about.restartNow">Restart now</span>
-            </button>
-            <button id="update-get" type="button" hidden class="btn justify-start sm:justify-center">
-              <IconExternalLink aria-hidden="true" class="btn-icon" />
-              <span id="update-get-label" data-i18n="settings.update.getFromGithub">Get it on GitHub</span>
-            </button>
-            <a
-              id="update-github"
-              href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest"
-              target="_blank"
-              rel="noopener noreferrer"
-              data-external
-              class="btn justify-start sm:justify-center text-fg-2">
-              <IconBrandGithub aria-hidden="true" class="btn-icon" />
-              <span data-i18n="settings.support.github">GitHub</span>
-            </a>
+            <div id="auto-update-row" class="settings-row">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.update.autoUpdate" class="text-sm font-medium leading-snug">Automatic updates</h3>
+                <p id="auto-update-hint" data-i18n="settings.update.autoUpdateHint" class="text-xs text-fg-3">
+                  When disabled, updates will not install automatically. You will still see when one is available.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <select id="auto-update-select" class="field-input" aria-describedby="auto-update-hint">
+                  <option value="on" data-i18n="settings.update.autoUpdateOn">Enabled</option>
+                  <option value="off" data-i18n="settings.update.autoUpdateOff">Disabled</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="update-channel-row" class="settings-row">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.update.channel" class="text-sm font-medium leading-snug">Update channel</h3>
+                <p id="update-channel-hint" data-i18n="settings.update.channelHint" class="text-xs text-fg-3">
+                  Beta versions are early test builds and may be unstable.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <select id="update-channel-select" class="field-input" aria-describedby="update-channel-hint">
+                  <option value="stable" data-i18n="settings.update.channelStable">Stable</option>
+                  <option value="beta" data-i18n="settings.update.channelBeta">Beta</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="settings-row settings-row--stack">
+              <div class="settings-row__control w-full">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button id="update-check" type="button" class="btn justify-start sm:justify-center">
+                    <IconRefresh aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.about.checkUpdate">Check for updates</span>
+                  </button>
+                  <button id="update-install" type="button" hidden class="btn justify-start sm:justify-center">
+                    <IconCloudDownload aria-hidden="true" class="btn-icon" />
+                    <span id="update-install-label">Download &amp; install</span>
+                  </button>
+                  <button id="update-relaunch" type="button" hidden class="btn justify-start sm:justify-center">
+                    <span data-i18n="settings.about.restartNow">Restart now</span>
+                  </button>
+                  <button id="update-get" type="button" hidden class="btn justify-start sm:justify-center">
+                    <IconExternalLink aria-hidden="true" class="btn-icon" />
+                    <span id="update-get-label" data-i18n="settings.update.getFromGithub">Get it on GitHub</span>
+                  </button>
+                  <a
+                    id="update-github"
+                    href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-external
+                    class="btn justify-start sm:justify-center text-fg-2">
+                    <IconBrandGithub aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.support.github">GitHub</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+
           </div>
-          <span
-            id="update-msg"
-            aria-live="polite"
-            class="text-xs text-fg-3 transition-opacity duration-300"></span>
+
+          <div class="px-5 sm:px-6 pt-4 pb-5 flex flex-col gap-2 border-t border-line/60">
+            <span
+              id="update-msg"
+              aria-live="polite"
+              class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+            <p id="update-notes" class="hidden text-xs text-fg-3 whitespace-pre-line"></p>
+            <p
+              id="update-manual-only"
+              hidden
+              data-i18n="settings.update.manualOnly"
+              class="text-xs text-fg-3 leading-relaxed">
+              Auto-update isn't available on this build.
+            </p>
+            <p
+              id="linux-appimage-notice"
+              hidden
+              data-i18n="settings.about.linuxAppImageNotice"
+              class="text-xs text-fg-3 leading-relaxed">
+              Auto-updates on Linux are only delivered to the AppImage build. For deb / rpm installs, grab new versions from the GitHub releases page above.
+            </p>
+          </div>
         </div>
 
-        <p id="update-notes" class="hidden text-xs text-fg-3 whitespace-pre-line border-t border-line/60 pt-4"></p>
-
-        <p
-          id="update-manual-only"
-          hidden
-          data-i18n="settings.update.manualOnly"
-          class="text-xs text-fg-3 leading-relaxed border-t border-line/60 pt-4">
-          Auto-update isn't available on this build.
-        </p>
-
-        <p
-          id="linux-appimage-notice"
-          hidden
-          data-i18n="settings.about.linuxAppImageNotice"
-          class="text-xs text-fg-3 leading-relaxed border-t border-line/60 pt-4">
-          Auto-updates on Linux are only delivered to the AppImage build. For deb / rpm installs, grab new versions from the GitHub releases page above.
-        </p>
-      </article>
-
-      <details
-        id="changelog-section"
-        class="changelog-outer icon-mark-host rounded-2xl border border-line bg-surface overflow-hidden">
-        <summary class="px-5 sm:px-6 py-4 cursor-pointer flex items-center justify-between gap-3 hover:bg-surface-2 transition-colors list-none">
-          <div class="flex items-center gap-3 min-w-0">
+        <details
+          id="changelog-section"
+          data-settings-item
+          class="changelog-outer settings-surface icon-mark-host group scroll-mt-6 lg:scroll-mt-20">
+          <summary class="settings-surface__header cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden pb-5 sm:pb-6">
             <span class="icon-mark">
               <IconSparkles aria-hidden="true" stroke={2} />
             </span>
-            <h3 data-i18n="settings.about.whatsNew" class="text-base font-semibold">What's new</h3>
-            <span
-              id="changelog-status"
-              data-i18n="settings.about.whatsNewLoading"
-              class="text-xs text-fg-3 empty:hidden">Loading…</span>
-          </div>
-          <IconChevronDown
-            aria-hidden="true"
-            stroke={1.75}
-            class="size-4 text-fg-3 shrink-0 changelog-chevron transition-transform duration-200" />
-        </summary>
-        <div id="changelog-body" class="flex flex-col gap-2 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60 empty:hidden"></div>
-      </details>
+            <span class="flex items-center gap-2 min-w-0">
+              <h3 data-i18n="settings.about.whatsNew" class="text-base font-semibold">What's new</h3>
+              <span
+                id="changelog-status"
+                data-i18n="settings.about.whatsNewLoading"
+                class="text-xs text-fg-3 empty:hidden">Loading…</span>
+            </span>
+            <span class="ms-auto shrink-0">
+              <IconChevronDown
+                aria-hidden="true"
+                stroke={1.75}
+                class="size-4 text-fg-3 shrink-0 changelog-chevron transition-transform duration-200" />
+            </span>
+          </summary>
+          <div id="changelog-body" class="flex flex-col gap-2 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60 empty:hidden"></div>
+        </details>
 
-      <details
-        id="licenses-section"
-        class="changelog-outer icon-mark-host rounded-2xl border border-line bg-surface overflow-hidden">
-        <summary class="px-5 sm:px-6 py-4 cursor-pointer flex items-center justify-between gap-3 hover:bg-surface-2 transition-colors list-none">
-          <div class="flex items-center gap-3 min-w-0">
+        <details
+          id="licenses-section"
+          data-settings-item
+          class="changelog-outer settings-surface icon-mark-host group scroll-mt-6 lg:scroll-mt-20">
+          <summary class="settings-surface__header cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden pb-5 sm:pb-6">
             <span class="icon-mark">
               <IconLicense aria-hidden="true" stroke={2} />
             </span>
             <h3 data-i18n="settings.licenses.title" class="text-base font-semibold">Open-source licenses</h3>
+            <span class="ms-auto shrink-0">
+              <IconChevronDown
+                aria-hidden="true"
+                stroke={1.75}
+                class="size-4 text-fg-3 shrink-0 changelog-chevron transition-transform duration-200" />
+            </span>
+          </summary>
+          <div class="flex flex-col gap-3 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60">
+            <p data-i18n="settings.licenses.ffmpegNotice" class="text-sm text-fg-2">
+              The Windows and Linux desktop builds bundle a trimmed FFmpeg build (LGPL v2.1 or later), used only to convert live TV audio the app can't otherwise play.
+            </p>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <a
+                href="https://ffmpeg.org"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-external
+                class="btn justify-start sm:justify-center">
+                <IconExternalLink aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.licenses.ffmpegSite">FFmpeg project</span>
+              </a>
+              <a
+                href="https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-external
+                class="btn justify-start sm:justify-center">
+                <IconExternalLink aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.licenses.lgplText">LGPL v2.1 license text</span>
+              </a>
+              <a
+                href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/tag/ffmpeg-sidecar-v2"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-external
+                class="btn justify-start sm:justify-center">
+                <IconBrandGithub aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.licenses.sourceRecipe">Source & build recipe</span>
+              </a>
+            </div>
           </div>
-          <IconChevronDown
-            aria-hidden="true"
-            stroke={1.75}
-            class="size-4 text-fg-3 shrink-0 changelog-chevron transition-transform duration-200" />
-        </summary>
-        <div class="flex flex-col gap-3 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60">
-          <p data-i18n="settings.licenses.ffmpegNotice" class="text-sm text-fg-2">
-            The Windows and Linux desktop builds bundle a trimmed FFmpeg build (LGPL v2.1 or later), used only to convert live TV audio the app can't otherwise play.
-          </p>
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            <a
-              href="https://ffmpeg.org"
-              target="_blank"
-              rel="noopener noreferrer"
-              data-external
-              class="btn justify-start sm:justify-center">
-              <IconExternalLink aria-hidden="true" class="btn-icon" />
-              <span data-i18n="settings.licenses.ffmpegSite">FFmpeg project</span>
-            </a>
-            <a
-              href="https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html"
-              target="_blank"
-              rel="noopener noreferrer"
-              data-external
-              class="btn justify-start sm:justify-center">
-              <IconExternalLink aria-hidden="true" class="btn-icon" />
-              <span data-i18n="settings.licenses.lgplText">LGPL v2.1 license text</span>
-            </a>
-            <a
-              href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/tag/ffmpeg-sidecar-v2"
-              target="_blank"
-              rel="noopener noreferrer"
-              data-external
-              class="btn justify-start sm:justify-center">
-              <IconBrandGithub aria-hidden="true" class="btn-icon" />
-              <span data-i18n="settings.licenses.sourceRecipe">Source & build recipe</span>
-            </a>
-          </div>
-        </div>
-      </details>
+        </details>
+      </div>
     </section>
 
     <!-- Group: Help & feedback -->
-    <section id="settings-help" class="settings-group scroll-mt-8">
+    <section id="settings-help" class="settings-group scroll-mt-8 lg:scroll-mt-20">
       <h2 data-i18n="settings.group.help" class="settings-group__title">Help & feedback</h2>
-      <article id="card-docs" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-        <div class="flex items-start gap-3">
-          <span class="icon-mark">
-            <IconBook aria-hidden="true" stroke={2} />
-          </span>
-          <div class="flex flex-col gap-1 min-w-0">
+      <div class="flex flex-col gap-4">
+        <div id="card-docs" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
+            <span class="icon-mark">
+              <IconBook aria-hidden="true" stroke={2} />
+            </span>
             <h3 data-i18n="settings.help.docsTitle" class="text-base font-semibold">Read the docs</h3>
-            <p data-i18n="settings.help.docsIntro" class="text-sm text-fg-2">
-              Step-by-step guides for sign-in, external players, the keyboard and D-pad bindings, and the most common things people get stuck on.
-            </p>
+          </div>
+          <p data-i18n="settings.help.docsIntro" class="px-5 sm:px-6 pt-1 text-xs text-fg-3">
+            Step-by-step guides for sign-in, external players, the keyboard and D-pad bindings, and the most common things people get stuck on.
+          </p>
+          <div class="px-5 sm:px-6 pb-5 pt-1">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <a
+                href="/docs"
+                class="btn justify-start sm:justify-center">
+                <IconBook aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.help.openDocs">Open documentation</span>
+              </a>
+              <a
+                href="/docs?p=getting-started"
+                class="btn justify-start sm:justify-center">
+                <IconRocket aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.help.openQuickStart">Quick start</span>
+              </a>
+            </div>
           </div>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <a
-            href="/docs"
-            class="btn justify-start sm:justify-center">
-            <IconBook aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.openDocs">Open documentation</span>
-          </a>
-          <a
-            href="/docs?p=getting-started"
-            class="btn justify-start sm:justify-center">
-            <IconRocket aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.openQuickStart">Quick start</span>
-          </a>
-        </div>
-      </article>
-      <article id="card-feedback" class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-        <div class="flex items-start gap-3">
-          <span class="icon-mark">
-            <IconMail aria-hidden="true" stroke={2} />
-          </span>
-          <div class="flex flex-col gap-1 min-w-0">
-            <h3 data-i18n="settings.help.title" class="text-base font-semibold">Found a bug or have a suggestion?</h3>
-            <p data-i18n="settings.help.intro" class="text-sm text-fg-2">
-              Bug reports, feature requests, questions, and general feedback all go to GitHub - search existing issues first, or pick a template and open a new one.
-            </p>
-          </div>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <a
-            href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
-            target="_blank"
-            rel="noopener noreferrer"
-            data-external
-            class="btn justify-start sm:justify-center">
-            <IconBug aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.reportIssue">Report a bug</span>
-          </a>
-          <a
-            href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
-            target="_blank"
-            rel="noopener noreferrer"
-            data-external
-            class="btn justify-start sm:justify-center">
-            <IconMail aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.help.sendFeedback">Send feedback</span>
-          </a>
-        </div>
-      </article>
-    </section>
 
-    <!-- Group: Support / donations -->
-    <section id="settings-support" class="settings-group scroll-mt-8">
-      <h2 data-i18n="settings.group.support" class="settings-group__title">Support</h2>
-      <article class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4">
-        <div class="flex items-start gap-3">
-          <span class="icon-mark icon-mark--heart">
-            <IconHeart aria-hidden="true" stroke={2} />
-          </span>
-          <div class="flex flex-col gap-1 min-w-0">
+        <div id="card-feedback" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
+            <span class="icon-mark">
+              <IconMail aria-hidden="true" stroke={2} />
+            </span>
+            <h3 data-i18n="settings.help.title" class="text-base font-semibold">Found a bug or have a suggestion?</h3>
+          </div>
+          <p data-i18n="settings.help.intro" class="px-5 sm:px-6 pt-1 text-xs text-fg-3">
+            Bug reports, feature requests, questions, and general feedback all go to GitHub - search existing issues first, or pick a template and open a new one.
+          </p>
+          <div class="px-5 sm:px-6 pb-5 pt-1">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <a
+                href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-external
+                class="btn justify-start sm:justify-center">
+                <IconBug aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.help.reportIssue">Report a bug</span>
+              </a>
+              <a
+                href="https://github.com/infinitel8p/Extreme-InfiniTV/discussions/new/choose"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-external
+                class="btn justify-start sm:justify-center">
+                <IconMail aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.help.sendFeedback">Send feedback</span>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <div id="settings-support" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
+            <span class="icon-mark icon-mark--heart">
+              <IconHeart aria-hidden="true" stroke={2} />
+            </span>
             <h3 data-i18n="settings.support.title" class="text-base font-semibold">Like the app?</h3>
+          </div>
+          <div class="px-5 sm:px-6 pb-5 pt-1 flex flex-col gap-4">
             <p data-i18n="settings.support.intro" class="text-sm text-fg-2">
               Extreme InfiniTV is free and open source. If it saves you time or sweetens your living-room setup, a small tip helps cover hosting, signing certs, and the next round of features.
             </p>
-          </div>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-          <a
-            href="https://github.com/sponsors/infinitel8p"
-            target="_blank"
-            rel="noopener noreferrer"
-            data-external
-            class="btn justify-start sm:justify-center">
-            <IconBrandGithub aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.support.githubSponsors">GitHub Sponsors</span>
-          </a>
-          <a
-            href="https://ko-fi.com/infinitel8p"
-            target="_blank"
-            rel="noopener noreferrer"
-            data-external
-            class="btn justify-start sm:justify-center">
-            <IconCoffee aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.support.kofi">Ko-fi</span>
-          </a>
-          <a
-            href="https://www.paypal.com/paypalme/ludovicoferrara"
-            target="_blank"
-            rel="noopener noreferrer"
-            data-external
-            class="btn justify-start sm:justify-center">
-            <IconBrandPaypal aria-hidden="true" class="btn-icon" />
-            <span data-i18n="settings.support.paypal">PayPal</span>
-          </a>
-        </div>
-        <p data-i18n="settings.support.fineprint" class="text-2xs text-fg-3">
-          No tracking, no ads, no telemetry - just a thank-you button.
-        </p>
-      </article>
-    </section>
-
-    <!-- Group: Danger zone (always last) -->
-    <section id="settings-danger" class="settings-group settings-group--danger scroll-mt-8">
-      <h2 data-i18n="settings.group.dangerZone" class="settings-group__title">Danger zone</h2>
-      <article class="icon-mark-host rounded-2xl border border-bad/30 bg-bad/[0.03] p-5 sm:p-6 flex flex-col gap-4">
-        <div class="flex items-start gap-3">
-          <span class="icon-mark icon-mark--bad">
-            <IconAlertTriangle aria-hidden="true" stroke={2} />
-          </span>
-          <div class="flex flex-col gap-1 min-w-0">
-            <h3 data-i18n="settings.danger.heading" class="text-base font-semibold text-bad">Reset everything</h3>
-            <p data-i18n-html="settings.danger.helperLong" class="text-sm text-fg-2">
-              Wipes <span class="text-fg font-medium">all</span> app data: playlists, cached lists, favorites, recents, and locally stored EPG references. Next launch starts from a clean slate.
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <a
+                href="https://github.com/sponsors/infinitel8p"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-external
+                class="btn justify-start sm:justify-center">
+                <IconBrandGithub aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.support.githubSponsors">GitHub Sponsors</span>
+              </a>
+              <a
+                href="https://ko-fi.com/infinitel8p"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-external
+                class="btn justify-start sm:justify-center">
+                <IconCoffee aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.support.kofi">Ko-fi</span>
+              </a>
+              <a
+                href="https://www.paypal.com/paypalme/ludovicoferrara"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-external
+                class="btn justify-start sm:justify-center">
+                <IconBrandPaypal aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.support.paypal">PayPal</span>
+              </a>
+            </div>
+            <p data-i18n="settings.support.fineprint" class="text-2xs text-fg-3">
+              No tracking, no ads, no telemetry - just a thank-you button.
             </p>
           </div>
         </div>
+      </div>
+    </section>
+
+    <!-- Group: Danger zone (always last) -->
+    <section id="settings-danger" class="settings-group settings-group--danger scroll-mt-8 lg:scroll-mt-20">
+      <h2 data-i18n="settings.group.dangerZone" class="settings-group__title">Danger zone</h2>
+      <article class="icon-mark-host rounded-2xl border border-bad/30 bg-bad/[0.03] p-5 sm:p-6 flex flex-col gap-4">
+        <div class="flex items-center gap-3">
+          <span class="icon-mark icon-mark--bad">
+            <IconAlertTriangle aria-hidden="true" stroke={2} />
+          </span>
+          <h3 data-i18n="settings.danger.heading" class="text-base font-semibold text-bad">Reset everything</h3>
+        </div>
+        <p data-i18n-html="settings.danger.helperLong" class="text-sm text-fg-2">
+          Wipes <span class="text-fg font-medium">all</span> app data: playlists, cached lists, favorites, recents, and locally stored EPG references. Next launch starts from a clean slate.
+        </p>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
           <button id="settings-reset-all" type="button" class="btn-danger justify-start sm:justify-center">
             <IconTrash aria-hidden="true" class="btn-icon" />
@@ -3824,7 +3899,14 @@ const navStructure: NavSection[] = [
     }
 
     .settings-stack[data-search-active] section[data-search="miss"],
-    .settings-stack[data-search-active] article[data-search="miss"] {
+    .settings-stack[data-search-active] article[data-search="miss"],
+    .settings-stack[data-search-active] [data-settings-item][data-search="miss"] {
+      display: none;
+    }
+    .settings-stack[data-search-active]
+      .settings-surface:not([data-settings-item]):not(
+        :has([data-settings-item]:not([data-search="miss"]))
+      ) {
       display: none;
     }
     .settings-nav-link[data-search-miss],

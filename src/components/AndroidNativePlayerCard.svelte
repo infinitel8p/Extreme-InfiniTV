@@ -7,7 +7,6 @@
   // proper PiP (just the video, not the whole WebView), MediaSession
   // lock-screen + Bluetooth controls, hardened HLS decoding.
   import { onMount } from "svelte"
-  import { IconDeviceTv } from "@tabler/icons-svelte"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import {
     getAndroidNativePlayerEnabled,
@@ -44,27 +43,22 @@
 </script>
 
 {#if available}
-  <article
+  <div
     id="android-native-player-section"
-    class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-    <div class="flex items-start gap-3">
-      <span class="icon-mark">
-        <IconDeviceTv aria-hidden="true" stroke={2} />
-      </span>
-      <div class="flex flex-col gap-1 min-w-0">
-        <div class="flex items-center gap-2 flex-wrap">
-          <h3 class="text-base font-semibold">{tr("settings.androidNativePlayer.title")}</h3>
-          <span class="inline-flex shrink-0 items-center px-2 py-0.5 rounded-full border border-line bg-surface-2 text-fg-3 text-2xs font-medium">
-            {tr("settings.androidNativePlayer.experimental")}
-          </span>
-        </div>
-        <p id="android-native-player-helper" class="text-xs text-fg-3">{tr("settings.androidNativePlayer.helper")}</p>
+    data-settings-item
+    class="settings-row scroll-mt-6 lg:scroll-mt-20 border-t border-line/60">
+    <div class="settings-row__text">
+      <div class="flex items-center gap-2 flex-wrap">
+        <h3 class="text-sm font-medium leading-snug">{tr("settings.androidNativePlayer.title")}</h3>
+        <span class="inline-flex shrink-0 items-center px-2 py-0.5 rounded-full border border-line bg-surface-2 text-fg-3 text-2xs font-medium">
+          {tr("settings.androidNativePlayer.experimental")}
+        </span>
       </div>
+      <p id="android-native-player-helper" class="text-xs text-fg-3">{tr("settings.androidNativePlayer.helper")}</p>
     </div>
-    <div class="flex flex-col gap-2">
-      <span class="text-eyebrow font-medium uppercase text-fg-3">{tr("settings.androidNativePlayer.label")}</span>
+    <div class="settings-row__control">
       <div
-        class="grid grid-cols-2 gap-2"
+        class="settings-seg"
         role="radiogroup"
         aria-label={tr("settings.androidNativePlayer.label")}
         aria-describedby="android-native-player-helper">
@@ -86,5 +80,5 @@
         </button>
       </div>
     </div>
-  </article>
+  </div>
 {/if}

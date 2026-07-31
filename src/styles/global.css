@@ -1973,6 +1973,125 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     color: var(--color-bad);
 }
 
+/* Settings row system: one surface per group, one row per setting.
+   Layered so Tailwind utilities on the elements can override per-spot. */
+@layer components {
+.settings-surface {
+    container-type: inline-size;
+    border-radius: 1rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-surface);
+}
+.settings-surface__header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1.25rem 1.25rem 0.25rem;
+}
+.settings-row {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    column-gap: 1.5rem;
+    row-gap: 0.5rem;
+    padding: 0.875rem 1.25rem;
+    min-height: 3.5rem;
+}
+.settings-row__text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    flex: 1 1 14rem;
+    /* Readability floor: segs wrap internally before text gets crushed */
+    min-width: min(10rem, 100%);
+}
+.settings-row__control {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-inline-start: auto;
+    max-width: 100%;
+    min-width: 0;
+}
+.settings-row--stack {
+    flex-direction: column;
+    align-items: stretch;
+}
+.settings-row--stack .settings-row__control {
+    margin-inline-start: 0;
+}
+/* In column direction the row-basis would become height, not width */
+.settings-row--stack .settings-row__text {
+    flex: 0 0 auto;
+}
+/* Rows container with dividers that ignore hidden rows and empty island
+   wrappers (divide-y borders the :not(:last-child), which leaks a stray
+   line when the last child is hidden or renders nothing). */
+.settings-rows {
+    display: flex;
+    flex-direction: column;
+}
+.settings-rows > astro-island {
+    display: contents;
+}
+.settings-rows > :not([hidden], .hidden, astro-island) ~ :not([hidden], .hidden, astro-island) {
+    border-top: 1px solid color-mix(in oklab, var(--color-line) 60%, transparent);
+}
+@media (min-width: 40rem) {
+    .settings-surface__header { padding: 1.5rem 1.5rem 0.25rem; }
+    .settings-row { padding-inline: 1.5rem; }
+}
+.settings-seg {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    border: 1px solid var(--color-line);
+    border-radius: 1rem;
+    background: var(--color-bg);
+}
+.settings-seg > .btn {
+    border-color: transparent;
+    background: transparent;
+    flex: 1 0 auto;
+}
+
+/* Narrow surfaces stack rows regardless of viewport (phones, split
+   windows, the 1024px sidebar+rail squeeze all behave the same).
+   Boundary matches Tailwind's @2xl container variant used on controls. */
+@container (max-width: 41.9975rem) {
+    .settings-row:not(summary) {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .settings-row:not(summary) .settings-row__control {
+        margin-inline-start: 0;
+    }
+    .settings-row:not(summary) .settings-row__text {
+        flex: 0 0 auto;
+    }
+    .settings-seg {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: 100%;
+    }
+    .settings-seg > .btn:last-of-type:nth-of-type(odd) {
+        grid-column: span 2;
+    }
+    /* Action buttons go full width; segs and swatch groups keep their grid */
+    .settings-row:not(summary) .settings-row__control > :not([role="radiogroup"]) {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+    .settings-row:not(summary) .settings-row__control > .btn,
+    .settings-row:not(summary) .settings-row__control :not([role="radiogroup"]) > .btn {
+        flex: 1 1 100%;
+        width: 100%;
+        justify-content: flex-start;
+    }
+}
+}
+
 /* Each group rises in with a small stagger to give the page a sense of
    choreographed assembly. Pairs with the route-hero's own rise so the
    whole page composes itself top-to-bottom. */
@@ -2580,9 +2699,20 @@ details[open] > summary .changelog-chevron {
     padding: 0.75rem;
     border-radius: 0.5rem;
     overflow-x: auto;
+    max-width: 100%;
     margin: 0.5rem 0;
     font-size: 0.8125rem;
     line-height: 1.5;
+}
+/* Closed details keep contributing layout width in Chromium; clip it */
+.changelog-md details,
+#changelog-body details {
+    overflow-x: clip;
+    max-width: 100%;
+}
+#changelog-body,
+.changelog-md {
+    overflow-x: clip;
 }
 .changelog-md pre code {
     background: transparent;

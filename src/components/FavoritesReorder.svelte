@@ -194,17 +194,12 @@
   let total = $derived(lists.live.length + lists.vod.length + lists.series.length)
 </script>
 
-<div class="rounded-xl border border-line bg-surface p-4 flex flex-col gap-4 overflow-x-clip">
-  <div class="flex items-baseline justify-between gap-2">
-    <h2 class="text-sm font-semibold text-fg">{tr("settings.favoritesReorder.title")}</h2>
+<div class="flex flex-col gap-4 overflow-x-clip">
+  <div class="flex justify-end">
     <span class="text-2xs text-fg-3 tabular-nums">
       {total === 0 ? tr("settings.favoritesReorder.empty") : tr("settings.favoritesReorder.count", { n: total })}
     </span>
   </div>
-  <p class="text-xs text-fg-3">
-    {tr("settings.favoritesReorder.helperLong")}
-  </p>
-
   {#if total === 0}
     <div class="text-xs text-fg-3 italic">
       {tr("settings.favoritesReorder.emptyState")}
@@ -214,7 +209,7 @@
     {#each KIND_ORDER as kind}
       {#if lists[kind].length}
         <div class="flex flex-col gap-1.5">
-          <div class="sticky top-0 z-10 -mx-4 px-4 py-1.5 bg-surface/95 backdrop-blur-sm border-b border-line/60 text-eyebrow font-semibold uppercase tracking-wide text-fg-3">
+          <div class="sticky top-0 z-10 -mx-5 sm:-mx-6 px-5 sm:px-6 py-1.5 bg-surface/95 backdrop-blur-sm border-b border-line/60 text-eyebrow font-semibold uppercase tracking-wide text-fg-3">
             {klp(kind)}
           </div>
           <ul class="flex flex-col gap-1">
@@ -246,7 +241,7 @@
                 <span class="shrink-0 flex items-center gap-1">
                   <button
                     type="button"
-                    class="reorder-arrow size-7 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
+                    class="reorder-arrow size-9 pointer-coarse:size-11 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
                     aria-label={tr("settings.favoritesReorder.moveUpAria", { name: row.name })}
                     title={tr("settings.favoritesReorder.moveUp")}
                     disabled={i === 0}
@@ -255,7 +250,7 @@
                   </button>
                   <button
                     type="button"
-                    class="reorder-arrow size-7 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
+                    class="reorder-arrow size-9 pointer-coarse:size-11 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
                     aria-label={tr("settings.favoritesReorder.moveDownAria", { name: row.name })}
                     title={tr("settings.favoritesReorder.moveDown")}
                     disabled={i === lists[kind].length - 1}
@@ -294,10 +289,6 @@
   @media (pointer: coarse) {
     .reorder-handle {
       display: none;
-    }
-    .reorder-arrow {
-      width: 2.75rem;
-      height: 2.75rem;
     }
   }
 
