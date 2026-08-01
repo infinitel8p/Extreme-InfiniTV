@@ -10,10 +10,12 @@ interface MonoGraph {
 }
 
 const graphs = new WeakMap<HTMLVideoElement, MonoGraph>()
+const silenceWarned = new WeakSet<HTMLVideoElement>()
 
-// createMediaElementSource() is permanent: once attached it can never be
-// detached, so a later non-CORS cross-origin src on the same element plays
-// silent forever. Only safe to attach on blob: (MSE) or same-origin sources.
+// createMediaElementSource() is permanent and emits silence for CORS-cross-origin
+// resources, so the graph only attaches to blob: (MSE) or same-origin sources.
+// Never force crossOrigin="anonymous" to widen that: most IPTV providers send no
+// ACAO header, so a CORS-gated load fails playback entirely.
 export function isSafeAudioSourceUrl(url: string): boolean {
   if (!url) return false
   if (url.startsWith("blob:")) return true
@@ -28,10 +30,25 @@ function isSafeAudioSource(videoEl: HTMLVideoElement): boolean {
   return isSafeAudioSourceUrl(videoEl.currentSrc)
 }
 
-/** Whether a permanent mono/gain graph is already attached to this element. */
-export function hasMonoGraph(mediaEl: HTMLVideoElement | null): boolean {
-  if (!mediaEl) return false
-  return graphs.has(mediaEl)
+/**
+ * True when this element carries a permanent graph and `src` is cross-origin,
+ * which the Web Audio spec renders as silence.
+ */
+function monoGraphWouldSilence(mediaEl: HTMLVideoElement | null, src: string): boolean {
+  if (!mediaEl || !src) return false
+  return graphs.has(mediaEl) && !isSafeAudioSourceUrl(src)
+}
+
+/** Warn once per element when an unsafe source lands on a graphed element. */
+export function noteMonoSourceChange(mediaEl: HTMLVideoElement | null, src: string): void {
+  if (!monoGraphWouldSilence(mediaEl, src)) return
+  const element = mediaEl as HTMLVideoElement
+  if (silenceWarned.has(element)) return
+  silenceWarned.add(element)
+  log.warn(
+    "[xt:audio-effects] mono graph is attached and this source is cross-origin - " +
+      "mono downmix is inactive for it. Turn mono audio off and reopen the player if audio is missing."
+  )
 }
 
 function setMonoConfig(gain: GainNode, mono: boolean): void {
@@ -52,10 +69,14 @@ export function applyMonoPreference(videoEl: HTMLVideoElement | null): void {
     const existing = graphs.get(videoEl)
     if (existing) {
       setMonoConfig(existing.gain, monoEnabled)
+      if (monoEnabled) noteMonoSourceChange(videoEl, videoEl.currentSrc)
       return
     }
     if (!monoEnabled) return
-    if (!isSafeAudioSource(videoEl)) return
+    if (!isSafeAudioSource(videoEl)) {
+      noteMonoSourceChange(videoEl, videoEl.currentSrc)
+      return
+    }
     const ctx = getSharedAudioContext()
     if (!ctx) return
     if (ctx.state === "suspended") void ctx.resume().catch(() => {})
@@ -112,9 +133,13 @@ export function bindMonoAudio(handle: MonoAudioHandle): () => void {
     if (currentHandle === handle) currentHandle = null
     const mediaElement = handle.getMediaElement?.() ?? null
     const graph = mediaElement ? graphs.get(mediaElement) : undefined
-    if (!graph) return
-    try { graph.source.disconnect() } catch {}
-    try { graph.gain.disconnect() } catch {}
-    if (mediaElement) graphs.delete(mediaElement)
+    if (!graph || !mediaElement) return
+    // The source node can never detach; disconnecting would mute a reused element
+    // for good. Reset to stereo pass-through and keep the graph registered.
+    try {
+      setMonoConfig(graph.gain, false)
+    } catch (err) {
+      log.warn("[xt:audio-effects] failed to reset mono graph", err)
+    }
   }
 }

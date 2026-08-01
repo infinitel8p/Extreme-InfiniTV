@@ -9,9 +9,44 @@ import {
   androidMimeForUrl,
   mpegtsRelativeTimestampOffset,
   defineRelativeTimestampOffset,
+  manifestKindFromExtension,
+  shouldPreferNativeHls,
 } from "../src/scripts/lib/player-runtime"
 
 const SRC = "https://example.com/live/u/p/1.m3u8"
+
+describe("manifestKindFromExtension", () => {
+  // Probing costs a provider connection slot (Xtream counts /live GETs against
+  // max_connections), so any URL whose extension is conclusive must skip it.
+  it("resolves HLS manifests without a network probe", () => {
+    expect(manifestKindFromExtension("http://host/live/u/p/123.m3u8")).toBe("hls")
+    expect(manifestKindFromExtension("http://host/live/u/p/123.m3u")).toBe("hls")
+    expect(manifestKindFromExtension("http://host/LIVE/U/P/123.M3U8")).toBe("hls")
+  })
+
+  it("resolves DASH manifests without a network probe", () => {
+    expect(manifestKindFromExtension("https://host/path/stream.mpd")).toBe("dash")
+  })
+
+  it("ignores the query string when reading the extension", () => {
+    expect(manifestKindFromExtension("http://host/live/u/p/9.m3u8?token=abc&x=1")).toBe("hls")
+  })
+
+  it("still probes .ts, because some panels serve HLS from a .ts path", () => {
+    expect(manifestKindFromExtension("http://host/live/u/p/123.ts")).toBeNull()
+  })
+
+  it("still probes extensionless and progressive URLs", () => {
+    expect(manifestKindFromExtension("http://host/live/play/token/123")).toBeNull()
+    expect(manifestKindFromExtension("http://host/movie/u/p/5.mkv")).toBeNull()
+    expect(manifestKindFromExtension("http://host/movie/u/p/5.mp4")).toBeNull()
+  })
+
+  it("returns null for a malformed URL rather than guessing", () => {
+    expect(manifestKindFromExtension("not a url")).toBeNull()
+    expect(manifestKindFromExtension("")).toBeNull()
+  })
+})
 
 describe("mpegtsRelativeTimestampOffset", () => {
   it("rebases the native absolute offset before mpegts compares segment offsets", () => {
@@ -277,5 +312,26 @@ describe("androidMimeForUrl", () => {
     )
     expect(androidMimeForUrl(null)).toBe("video/*")
     expect(androidMimeForUrl(undefined)).toBe("video/*")
+  })
+})
+
+describe("shouldPreferNativeHls", () => {
+  // Native AVFoundation cannot reliably latch IDR-less GDR streams; hls.js can.
+  // Native stays only for the macOS web build, where CORS blocks hls.js.
+  it("uses hls.js in the Tauri app on macOS", () => {
+    expect(shouldPreferNativeHls({ isMacOS: true, isTauri: true, canPlayNativeHls: true })).toBe(false)
+  })
+
+  it("keeps native HLS for the plain web build in Safari", () => {
+    expect(shouldPreferNativeHls({ isMacOS: true, isTauri: false, canPlayNativeHls: true })).toBe(true)
+  })
+
+  it("never prefers native off macOS", () => {
+    expect(shouldPreferNativeHls({ isMacOS: false, isTauri: false, canPlayNativeHls: true })).toBe(false)
+    expect(shouldPreferNativeHls({ isMacOS: false, isTauri: true, canPlayNativeHls: true })).toBe(false)
+  })
+
+  it("never prefers native when the element cannot play HLS natively", () => {
+    expect(shouldPreferNativeHls({ isMacOS: true, isTauri: false, canPlayNativeHls: false })).toBe(false)
   })
 })

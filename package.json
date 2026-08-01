@@ -57,7 +57,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.62.0",
+    "@playwright/test": "^1.62.1",
     "@tauri-apps/cli": "^2.11.4",
     "@vitest/expect": "^4.1.10",
     "eslint": "^10.8.0",
@@ -66,7 +66,7 @@
     "globals": "^17.8.0",
     "jsdom": "^29.1.1",
     "magic-string": "^0.30.21",
-    "playwright": "^1.62.0",
+    "playwright": "^1.62.1",
     "svelte-eslint-parser": "^1.8.0",
     "tiny-glob": "^0.2.9",
     "typescript-eslint": "^8.65.0",

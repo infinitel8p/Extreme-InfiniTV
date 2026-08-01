@@ -189,3 +189,41 @@ export function clearKeyAvailable(): Promise<boolean> {
   })()
   return cachedClearKey
 }
+
+// IDR-less GDR feeds that AVFoundation fails to latch onto decode every frame
+// and then discard it: audio plays, readyState 4, real dimensions, black picture.
+// Only the dropped ratio reveals this, once the sample is large enough.
+const DROPPED_FRAME_RATIO = 0.9
+export const DROPPED_FRAME_MIN_SAMPLE = 50
+
+export function isDroppingEveryFrame(
+  totalVideoFrames: number | null | undefined,
+  droppedVideoFrames: number | null | undefined
+): boolean {
+  if (typeof totalVideoFrames !== "number" || typeof droppedVideoFrames !== "number") return false
+  if (!Number.isFinite(totalVideoFrames) || !Number.isFinite(droppedVideoFrames)) return false
+  if (totalVideoFrames < DROPPED_FRAME_MIN_SAMPLE) return false
+  if (droppedVideoFrames < 0) return false
+  return droppedVideoFrames / totalVideoFrames >= DROPPED_FRAME_RATIO
+}
+
+export type BlackFrameRecovery = "native-retune" | "proxy" | "panel"
+
+export const NATIVE_RELATCH_MAX_ATTEMPTS = 2
+
+/**
+ * Recovery for a stream that decodes but presents nothing. macOS native HLS
+ * re-tunes the native mount (each tune is a fresh chance to latch a recovery
+ * point); never the MSE proxy there, since WebKit MSE cannot present this
+ * video at all. Chromium platforms get one ffmpeg remux proxy attempt.
+ */
+export function chooseBlackFrameRecovery(input: {
+  isMacOSNativeHls: boolean
+  relatchAttempts: number
+  proxyUsable: boolean
+}): BlackFrameRecovery {
+  if (input.isMacOSNativeHls) {
+    return input.relatchAttempts < NATIVE_RELATCH_MAX_ATTEMPTS ? "native-retune" : "panel"
+  }
+  return input.proxyUsable ? "proxy" : "panel"
+}

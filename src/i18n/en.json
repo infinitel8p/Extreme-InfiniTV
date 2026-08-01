@@ -787,6 +787,8 @@
   "stream.audioFix.action": "Fix audio",
   "stream.audioFix.fixing": "Fixing audio…",
   "stream.audioFix.fallback": "Audio fix failed - switched back to the original stream",
+  "stream.videoFix.remuxing": "Picture isn't displaying - retrying through the local converter…",
+  "stream.videoFix.retuning": "Picture isn't displaying - retuning the channel…",
   "stream.offline.title": "You are offline",
   "stream.offline.body": "Reconnect to keep watching.",
   "stream.offline.reconnectFailedTitle": "Still having trouble",

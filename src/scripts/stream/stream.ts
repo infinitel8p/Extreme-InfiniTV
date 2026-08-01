@@ -62,6 +62,9 @@ import {
   classifyStartFailure,
   describeAudioCodec,
   isUnsupportedAudioCodec,
+  isDroppingEveryFrame,
+  DROPPED_FRAME_MIN_SAMPLE,
+  chooseBlackFrameRecovery,
 } from "@/scripts/lib/codec-hints.ts"
 import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
@@ -73,6 +76,7 @@ import {
   androidExternalAvailable,
   getExternalLauncher,
   isMacOS,
+  isTauri,
   subscribeExternalPlayerExit,
 } from "@/scripts/lib/player-runtime.ts"
 import {
@@ -1185,6 +1189,10 @@ const applyFilter = () => {
   if (!searchEl || !listStatus) return
   const qnorm = normalize(searchEl.value || "")
   const tokens = qnorm.length ? qnorm.split(" ") : []
+  // Rows print "Ch 27329 (#1467807)", so digits-only queries also match chno and id.
+  const numericQuery = /^\d+$/.test((searchEl.value || "").trim())
+    ? (searchEl.value || "").trim()
+    : null
 
   const activeCat = picker.getActiveCat()
   /** @type {typeof all} */
@@ -1213,7 +1221,20 @@ const applyFilter = () => {
     scoreById = new Map()
     const scored = []
     for (const channel of out) {
-      const score = scoreNormMatch(channel.norm, tokens)
+      let score = scoreNormMatch(channel.norm, tokens)
+      if (numericQuery) {
+        const idText = String(channel.id)
+        const chnoText = channel.chno != null ? String(channel.chno) : ""
+        if (idText === numericQuery || chnoText === numericQuery) {
+          // Exact number hit outranks any name match.
+          score = Math.max(score, 1000)
+        } else if (
+          idText.startsWith(numericQuery) ||
+          (chnoText && chnoText.startsWith(numericQuery))
+        ) {
+          score = Math.max(score, 500)
+        }
+      }
       if (score > 0) {
         scored.push(channel)
         scoreById.set(channel.id, score)
@@ -1529,6 +1550,40 @@ const audioProxyOneShotFixSet = new Set()
 const audioProxyBypassSet = new Set()
 // Streams already auto-attempted through the proxy on a start failure this session - a start failure is a one-shot try, not a retry loop.
 const audioProxyAutoAttemptedSet = new Set()
+
+// Per-channel budget for black-screen native re-tunes (macOS GDR latch retries).
+const nativeRelatchAttempts = new Map()
+
+// Channels whose AC-3 audio cannot decode in WKWebView MSE remount on native
+// AVFoundation. Persisted per playlist: the codec is stable, and module state
+// dies on every page navigation, so a plain Set would re-pay the hls.js detour.
+let nativeAudioFallbackCache = null
+
+function loadNativeAudioFallbackSet() {
+  if (nativeAudioFallbackCache && nativeAudioFallbackCache.playlistId === activePlaylistId) {
+    return nativeAudioFallbackCache.ids
+  }
+  let ids = new Set()
+  try {
+    const raw = localStorage.getItem(`xt_native_audio_fallback:${activePlaylistId}`)
+    if (raw) ids = new Set(JSON.parse(raw))
+  } catch {}
+  nativeAudioFallbackCache = { playlistId: activePlaylistId, ids }
+  return ids
+}
+
+function isNativeAudioFallbackChannel(id) {
+  return loadNativeAudioFallbackSet().has(id)
+}
+
+function rememberNativeAudioFallbackChannel(id) {
+  const ids = loadNativeAudioFallbackSet()
+  if (ids.has(id)) return
+  ids.add(id)
+  try {
+    localStorage.setItem(`xt_native_audio_fallback:${activePlaylistId}`, JSON.stringify([...ids]))
+  } catch {}
+}
 // Capped so a channel that keeps stalling right after retune bypasses the proxy instead of retuning forever.
 const audioProxyStallRetuneCounts = new Map()
 const AUDIO_PROXY_MAX_STALL_RETUNES = 2
@@ -1743,7 +1798,7 @@ function giveUpOnPlayback(ctx) {
     nameHint: hasHevcNameHint(ctx.name),
     deviceHevc: deviceSupportsHevc(),
   })
-  log.log("[xt:livetv] start-failure verdict:", failure.kind, failure.codec)
+  log.info("[xt:livetv] start-failure verdict", { kind: failure.kind, codec: failure.codec, streamId: ctx.streamId })
   // Bypasses getAndroidNativePlayerEnabled() on purpose: one-shot recovery, not the opt-in setting.
   if (!ctx.started && !ctx.nativeFallbackTried && androidNativePlayerAvailable) {
     ctx.nativeFallbackTried = true
@@ -1756,6 +1811,24 @@ function giveUpOnPlayback(ctx) {
       })
       return
     }
+  }
+  // WKWebView MSE has no AC-3 decoder; remount such channels on native
+  // AVFoundation, which does. The ffmpeg proxy is no answer for HLS sources.
+  if (
+    failure.kind === "audio" &&
+    isMacOS &&
+    isTauri &&
+    ctx.isLive &&
+    !ctx.audioProxied &&
+    !isNativeAudioFallbackChannel(ctx.streamId)
+  ) {
+    rememberNativeAudioFallbackChannel(ctx.streamId)
+    log.warn("[xt:livetv] AC-3 audio cannot decode in this WebView's MSE - remounting on native AVFoundation", {
+      streamId: ctx.streamId,
+      codec: failure.codec,
+    })
+    void play(ctx.streamId, ctx.name, "auto:native-audio-fallback")
+    return
   }
   // Independent of getAudioTranscodeAuto(), which only gates the mid-play watchdog.
   if (
@@ -1826,6 +1899,18 @@ async function mountEmbeddedPlayer(backend, opts) {
   attachAudioOnlyDetection(vjs)
 
   vjs.on("playing", () => {
+    {
+      const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      log.info("[xt:livetv] playing", {
+        streamId: lastPlayContext?.streamId ?? null,
+        t: Math.round((mediaEl?.currentTime || 0) * 10) / 10,
+        videoWidth: mediaEl?.videoWidth ?? null,
+        frames: mediaEl ? decodedFrameCount(mediaEl) : null,
+        dropped: mediaEl ? droppedFrameCount(mediaEl) : null,
+        proxied: !!lastPlayContext?.audioProxied,
+      })
+    }
+    ensureProgressWatch()
     if (lastPlayContext) {
       lastPlayContext.started = true
       if (lastPlayContext.audioProxied) {
@@ -1838,6 +1923,7 @@ async function mountEmbeddedPlayer(backend, opts) {
       catchupAutoRetryCount = 0
       catchupSeekRemountCount = 0
       if (streamIdAtPlaying != null) audioProxyStallRetuneCounts.delete(streamIdAtPlaying)
+      if (streamIdAtPlaying != null) liveStallRetuneCounts.delete(streamIdAtPlaying)
     }, CATCHUP_RETRY_RESET_AFTER_MS)
     hideTuningOverlay()
     hideBufferingChip()
@@ -1847,6 +1933,7 @@ async function mountEmbeddedPlayer(backend, opts) {
     armDeadAudioWatchdog()
   })
   vjs.on("waiting", () => {
+    log.info("[xt:livetv] waiting (buffer underrun)", { streamId: lastPlayContext?.streamId ?? null })
     showBufferingChip()
     armStallSentinel()
   })
@@ -1859,6 +1946,7 @@ async function mountEmbeddedPlayer(backend, opts) {
   })
   ensureTimeshiftActivityTracking()
   vjs.on("stalled", () => {
+    log.info("[xt:livetv] stalled (no data arriving)", { streamId: lastPlayContext?.streamId ?? null })
     showBufferingChip()
     armStallSentinel()
   })
@@ -2050,7 +2138,11 @@ async function fetchRadioIcy(wrap: HTMLElement, channelId: number, url: string, 
   }
 }
 
-function setRadioMode(channel: { id: number; name?: string; logo?: string | null; category?: string | null; url?: string | null }) {
+/** opts.probeIcy fetches ICY station tags; only genuine radio entries pay that stream GET. */
+function setRadioMode(
+  channel: { id: number; name?: string; logo?: string | null; category?: string | null; url?: string | null },
+  opts: { probeIcy?: boolean } = {}
+) {
   const wrap = getPlayerWrap()
   if (!wrap) return
   wrap.dataset.radioMode = "on"
@@ -2076,7 +2168,7 @@ function setRadioMode(channel: { id: number; name?: string; logo?: string | null
   if (descEl) { descEl.textContent = ""; descEl.hidden = true }
   renderRadioTags(wrap, genre, channel.url ? radioCodecFromUrl(channel.url) : null)
   startRadioElapsed(wrap)
-  if (channel.url) fetchRadioIcy(wrap, channel.id, channel.url, genre)
+  if (channel.url && opts.probeIcy) fetchRadioIcy(wrap, channel.id, channel.url, genre)
 
   wrap.setAttribute("aria-label", t("livetv.radioAriaLabel", { name: channel.name || "" }) || `Radio: ${channel.name || ""}`)
 }
@@ -2180,18 +2272,37 @@ function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unkn
     if (!videoEl) return null
     return { ctx, wrap, videoEl }
   }
-  const promote = (ctx: NonNullable<typeof lastPlayContext>) => {
+  const promote = (ctx: NonNullable<typeof lastPlayContext>, videoEl?: HTMLVideoElement) => {
     if (manualAudioOnlyOff.has(manualAudioOnlyOffKey(ctx.streamId))) return
     const channel = all.find((entry) => entry.id === ctx.streamId)
-    if (channel) setRadioMode(channel)
+    if (!channel) return
+    // Radio mode hides the video element, so a wrong promotion looks like "audio only". Leave a trace.
+    log.warn("[xt:livetv] auto-promoting channel to audio-only (radio) mode", {
+      streamId: ctx.streamId,
+      videoWidth: videoEl?.videoWidth ?? null,
+      videoHeight: videoEl?.videoHeight ?? null,
+      readyState: videoEl?.readyState ?? null,
+      videoTracks:
+        videoEl && (videoEl as any).videoTracks
+          ? (videoEl as any).videoTracks.length
+          : null,
+    })
+    // Auto-promotion is a guess; never spend a stream request on ICY tags for it.
+    setRadioMode(channel, { probeIcy: false })
   }
+
+  // HAVE_FUTURE_DATA proves a zero videoWidth is real: on macOS native HLS,
+  // readyState hits 1 seconds before dimensions land, so looser checks hide
+  // working video. Audio-only streams still reach readyState 4 with width 0.
+  const canActuallyPlay = (videoEl: HTMLVideoElement) => videoEl.readyState >= 3
 
   if (!isMacOS) {
     const detect = () => {
       const target = resolveTarget()
       if (!target) return
+      if (!canActuallyPlay(target.videoEl)) return
       if (target.videoEl.videoWidth === 0 && target.videoEl.videoHeight === 0) {
-        promote(target.ctx)
+        promote(target.ctx, target.videoEl)
       }
     }
     handle.on("loadedmetadata", detect)
@@ -2214,9 +2325,10 @@ function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unkn
       pending = null
       if (wrap.dataset.radioMode === "on") return
       if (videoEl.videoWidth > 0 || videoEl.videoHeight > 0) return
+      if (!canActuallyPlay(videoEl)) return
       const tracks = (videoEl as any).videoTracks
       if (tracks && typeof tracks.length === "number" && tracks.length > 0) return
-      promote(ctx)
+      promote(ctx, videoEl)
     }, RADIO_GRACE_MS)
   }
   handle.on("loadedmetadata", detect)
@@ -2328,7 +2440,10 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
       saveAudioOnlySet(ids)
       if (nowOn) {
         manualAudioOnlyOff.delete(manualAudioOnlyOffKey(streamId))
-        setRadioMode({ id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src })
+        setRadioMode(
+          { id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src },
+          { probeIcy: !!channel?.isRadio }
+        )
       } else {
         manualAudioOnlyOff.add(manualAudioOnlyOffKey(streamId))
         clearRadioMode()
@@ -2538,28 +2653,52 @@ function renderTimeshiftChip() {
   ])
 }
 
+// Off-air feeds stall forever without erroring; bound the re-tune loop.
+const LIVE_STALL_RETUNE_MAX = 3
+const liveStallRetuneCounts = new Map()
+
+// Shared by the stall sentinel (event-driven) and the progress watch (frozen currentTime).
+function performStallRetune(trigger) {
+  const ctx = lastPlayContext
+  if (!ctx || !vjs) return
+  log.warn("[xt:livetv] stalled - re-tuning", { streamId: ctx.streamId, trigger })
+  if (retryCatchupSession(ctx, { automatic: true })) return
+  if (!ctx.isLive) {
+    // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
+    giveUpOnPlayback(ctx)
+    return
+  }
+  if (ctx.audioProxied) {
+    retuneProxiedAudioMount(ctx)
+    return
+  }
+  const stallAttempts = (liveStallRetuneCounts.get(ctx.streamId) || 0) + 1
+  liveStallRetuneCounts.set(ctx.streamId, stallAttempts)
+  if (stallAttempts > LIVE_STALL_RETUNE_MAX) {
+    log.warn("[xt:livetv] still no data after repeated re-tunes - the feed appears to be down", {
+      streamId: ctx.streamId,
+      retunes: stallAttempts - 1,
+    })
+    giveUpOnPlayback(ctx)
+    return
+  }
+  try {
+    vjs.reset?.()
+    vjs.src({
+      src: ctx.src,
+      type: ctx.mime || "application/x-mpegURL",
+      isLive: ctx.isLive ?? true,
+      preferNativeHls: isNativeAudioFallbackChannel(ctx.streamId),
+    })
+    vjs.play().catch((err) => {
+      log.info("[xt:livetv] stall-retune play() rejected", { streamId: ctx.streamId, error: err?.name || String(err) })
+    })
+  } catch {}
+}
+
 function armStallSentinel() {
   if (stallSentinel) clearTimeout(stallSentinel)
-  stallSentinel = setTimeout(() => {
-    const ctx = lastPlayContext
-    if (!ctx || !vjs) return
-    log.warn("[xt:livetv] stall sentinel re-tuning", { streamId: ctx.streamId })
-    if (retryCatchupSession(ctx, { automatic: true })) return
-    if (!ctx.isLive) {
-      // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
-      giveUpOnPlayback(ctx)
-      return
-    }
-    if (ctx.audioProxied) {
-      retuneProxiedAudioMount(ctx)
-      return
-    }
-    try {
-      vjs.reset?.()
-      vjs.src({ src: ctx.src, type: ctx.mime || "application/x-mpegURL", isLive: ctx.isLive ?? true })
-      vjs.play().catch(() => {})
-    } catch {}
-  }, STALL_AUTO_TUNE_MS)
+  stallSentinel = setTimeout(() => performStallRetune("stall-sentinel"), STALL_AUTO_TUNE_MS)
 }
 
 function clearStallSentinel() {
@@ -2567,6 +2706,80 @@ function clearStallSentinel() {
     clearTimeout(stallSentinel)
     stallSentinel = null
   }
+}
+
+// ----------------------------
+// Playback progress watch
+// ----------------------------
+// AVFoundation can freeze live playback with no waiting/stalled/error event, so
+// the event-armed stall sentinel never sees it. This samples currentTime and
+// re-tunes when it stops moving; doubles as the log-file playback heartbeat.
+const PROGRESS_WATCH_INTERVAL_MS = 5000
+const PROGRESS_FROZEN_TICKS = 2
+const PROGRESS_HEARTBEAT_EVERY_TICKS = 6
+const FREEZE_RETUNE_MAX_PER_CHANNEL = 3
+const freezeRetuneCounts = new Map()
+let progressWatchTimer = null
+let progressLastTime = -1
+let progressLastSeq = -1
+let progressFrozenTicks = 0
+let progressTickCount = 0
+
+function progressWatchTick() {
+  const ctx = lastPlayContext
+  if (!ctx || !ctx.isLive || catchupSession || !vjs) {
+    progressFrozenTicks = 0
+    return
+  }
+  const wrap = getPlayerWrap()
+  if (!wrap || wrap.dataset.radioMode === "on") {
+    progressFrozenTicks = 0
+    return
+  }
+  const mediaEl = vjs.getMediaElement?.() ?? wrap.querySelector("video")
+  if (!mediaEl || mediaEl.paused || mediaEl.ended || mediaEl.readyState < 2) {
+    progressFrozenTicks = 0
+    return
+  }
+  const currentTime = mediaEl.currentTime || 0
+  progressTickCount++
+  if (progressTickCount % PROGRESS_HEARTBEAT_EVERY_TICKS === 0) {
+    log.info("[xt:livetv] heartbeat", {
+      streamId: ctx.streamId,
+      t: Math.round(currentTime * 10) / 10,
+      readyState: mediaEl.readyState,
+      frames: decodedFrameCount(mediaEl),
+      dropped: droppedFrameCount(mediaEl),
+      proxied: !!ctx.audioProxied,
+    })
+  }
+  if (progressLastSeq === playSeq && currentTime === progressLastTime) {
+    progressFrozenTicks++
+  } else {
+    progressFrozenTicks = 0
+  }
+  progressLastSeq = playSeq
+  progressLastTime = currentTime
+  if (progressFrozenTicks < PROGRESS_FROZEN_TICKS) return
+  progressFrozenTicks = 0
+  const attempts = (freezeRetuneCounts.get(ctx.streamId) || 0) + 1
+  freezeRetuneCounts.set(ctx.streamId, attempts)
+  log.warn("[xt:livetv] playback frozen (currentTime stuck, no stall event fired)", {
+    streamId: ctx.streamId,
+    t: Math.round(currentTime * 10) / 10,
+    readyState: mediaEl.readyState,
+    attempt: attempts,
+  })
+  if (attempts > FREEZE_RETUNE_MAX_PER_CHANNEL) {
+    giveUpOnPlayback(ctx)
+    return
+  }
+  performStallRetune("progress-watch")
+}
+
+function ensureProgressWatch() {
+  if (progressWatchTimer) return
+  progressWatchTimer = setInterval(progressWatchTick, PROGRESS_WATCH_INTERVAL_MS)
 }
 
 // ----------------------------
@@ -2599,6 +2812,16 @@ function decodedFrameCount(videoEl) {
   return typeof legacy === "number" ? legacy : null
 }
 
+function droppedFrameCount(videoEl) {
+  try {
+    const quality = videoEl.getVideoPlaybackQuality?.()
+    if (quality && typeof quality.droppedVideoFrames === "number") {
+      return quality.droppedVideoFrames
+    }
+  } catch {}
+  return null
+}
+
 function armDeadVideoWatchdog() {
   clearDeadVideoWatchdog()
   const ctx = lastPlayContext
@@ -2620,7 +2843,21 @@ function armDeadVideoWatchdog() {
     const video = currentWrap.querySelector("video")
     if (!video || video.paused) return
     const frames = decodedFrameCount(video)
-    if (frames === null || frames > 0) return
+    const dropped = droppedFrameCount(video)
+    // Black can mean zero decodes, or a GDR stream decoding and discarding every frame.
+    const everyFrameDropped = isDroppingEveryFrame(frames, dropped)
+    if (frames === null) return
+    if (frames > 0 && !everyFrameDropped) {
+      // Too few frames to judge the dropped ratio yet - look again while attempts remain.
+      if (frames < DROPPED_FRAME_MIN_SAMPLE && attempts < DEAD_VIDEO_MAX_CHECKS) {
+        attempts++
+        schedule()
+        return
+      }
+      // Conclusively healthy: restore this channel's re-latch budget.
+      nativeRelatchAttempts.delete(ctx.streamId)
+      return
+    }
     if (video.videoWidth === 0 && video.videoHeight === 0) return
     attempts++
     const playedEnough =
@@ -2629,11 +2866,50 @@ function armDeadVideoWatchdog() {
       if (attempts < DEAD_VIDEO_MAX_CHECKS) schedule()
       return
     }
-    log.warn("[xt:livetv] video track decoded zero frames - treating as start failure", {
-      streamId: ctx.streamId,
-      videoWidth: video.videoWidth,
-      videoHeight: video.videoHeight,
-    })
+    log.warn(
+      everyFrameDropped
+        ? "[xt:livetv] every decoded video frame is being dropped (GDR stream failed to latch) - recovering"
+        : "[xt:livetv] video track decoded zero frames - treating as start failure",
+      {
+        streamId: ctx.streamId,
+        totalVideoFrames: frames,
+        droppedVideoFrames: dropped,
+        videoWidth: video.videoWidth,
+        videoHeight: video.videoHeight,
+      }
+    )
+    if (everyFrameDropped) {
+      const relatchAttempts = nativeRelatchAttempts.get(ctx.streamId) || 0
+      const recovery = chooseBlackFrameRecovery({
+        // Native mounts re-tune (a fresh chance to latch); see chooseBlackFrameRecovery.
+        isMacOSNativeHls:
+          isMacOS && !ctx.audioProxied && (!isTauri || isNativeAudioFallbackChannel(ctx.streamId)),
+        relatchAttempts,
+        proxyUsable:
+          canUseAudioProxy(ctx) &&
+          !ctx.audioProxied &&
+          !audioProxyAutoAttemptedSet.has(ctx.streamId),
+      })
+      if (recovery === "native-retune") {
+        nativeRelatchAttempts.set(ctx.streamId, relatchAttempts + 1)
+        log.warn("[xt:livetv] re-tuning the native mount to re-attempt GDR latch", {
+          streamId: ctx.streamId,
+          attempt: relatchAttempts + 1,
+        })
+        toast({ title: t("stream.videoFix.retuning"), duration: 4000 })
+        void play(ctx.streamId, ctx.name, "auto:gdr-relatch")
+        return
+      }
+      if (recovery === "proxy") {
+        audioProxyAutoAttemptedSet.add(ctx.streamId)
+        log.warn("[xt:livetv] retrying through the ffmpeg remux proxy", {
+          streamId: ctx.streamId,
+        })
+        toast({ title: t("stream.videoFix.remuxing"), duration: 4000 })
+        fixAudioNow(ctx)
+        return
+      }
+    }
     suppressPauseTrackingUntilMs = Date.now() + 500
     try { vjs?.pause?.() } catch {}
     hideTuningOverlay()
@@ -2673,13 +2949,16 @@ function canUseAudioProxy(ctx) {
     audioProxyAvailable &&
     !!ctx?.isLive &&
     !catchupSession &&
-    !audioProxyBypassSet.has(ctx.streamId)
+    !audioProxyBypassSet.has(ctx.streamId) &&
+    // The proxy pipes the fetched body into ffmpeg's mpegts demuxer; an HLS
+    // playlist URL feeds it playlist text and dies instantly. Raw TS only.
+    !/\.m3u8?(\?|$)/i.test(String(ctx?.src || ""))
   )
 }
 
 function fixAudioNow(ctx) {
   audioProxyOneShotFixSet.add(ctx.streamId)
-  void play(ctx.streamId, ctx.name)
+  void play(ctx.streamId, ctx.name, "auto:audio-fix")
 }
 
 // A proxied mount's local URL is single-consumer: a same-src reconnect 409s and leaves a dead player.
@@ -2691,7 +2970,7 @@ function retuneProxiedAudioMount(ctx) {
   } else if (!isAudioTranscodeChannel(activePlaylistId, String(ctx.streamId))) {
     audioProxyOneShotFixSet.add(ctx.streamId)
   }
-  void play(ctx.streamId, ctx.name)
+  void play(ctx.streamId, ctx.name, "auto:proxy-stall-retune")
 }
 
 // The Rust side has already torn the session down by the time this fires.
@@ -2706,7 +2985,7 @@ function handleAudioProxyError(payload) {
   }
   log.warn("[xt:livetv] audio transcode proxy failed mid-play, falling back to direct:", payload.detail)
   toast({ title: t("stream.audioFix.fallback"), duration: 7000 })
-  void play(ctx.streamId, ctx.name)
+  void play(ctx.streamId, ctx.name, "auto:proxy-error-fallback")
 }
 
 function armDeadAudioWatchdog() {
@@ -2733,7 +3012,7 @@ function armDeadAudioWatchdog() {
     if (!video || video.paused) return
     if (video.muted || video.volume === 0) return
     const audioBytes = audioDecodedByteCount(video)
-    log.log("[xt:livetv] dead-audio check", {
+    log.info("[xt:livetv] dead-audio check", {
       audioBytes,
       frames: decodedFrameCount(video),
       videoWidth: video.videoWidth,
@@ -2825,6 +3104,10 @@ function applyDiagnosticToFailurePanel(seq, verdict, reason) {
 function showPlaybackFailurePanel(ctx, opts = {}) {
   if (failurePanelSeq === ctx.seq) return
   hidePlaybackFailurePanel()
+  log.warn("[xt:livetv] playback failure panel shown", {
+    streamId: ctx.streamId,
+    decodeFailure: !!opts.decodeFailure,
+  })
   const playerWrap = document.getElementById("player")?.parentElement
   if (!playerWrap) return
 
@@ -3128,7 +3411,14 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
   return launched
 }
 
-async function play(streamId, name) {
+async function play(streamId, name, reason = "user") {
+  // Every tune's trigger reaches the log file, so sessions reconstruct from it.
+  log.info("[xt:livetv] tune", { streamId, name: name || null, reason })
+  if (reason === "user") {
+    freezeRetuneCounts.delete(streamId)
+    nativeRelatchAttempts.delete(streamId)
+    liveStallRetuneCounts.delete(streamId)
+  }
   const targetChannel = all.find((channel) => channel.id === streamId)
   if (targetChannel?.unresolved) {
     void stopAudioTranscode()
@@ -3310,7 +3600,16 @@ async function play(streamId, name) {
   resetEmptyState()
   document.getElementById("player")?.removeAttribute("hidden")
   if (channel?.isRadio || isAudioOnlyChannel(streamId)) {
-    setRadioMode({ id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src })
+    // Both triggers hide the video element, so record which one fired - a stale
+    // manual override is otherwise indistinguishable from a broken video track.
+    log.info("[xt:livetv] starting in audio-only (radio) mode", {
+      streamId,
+      trigger: channel?.isRadio ? "playlist-radio-flag" : "manual-audio-only",
+    })
+    setRadioMode(
+      { id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src },
+      { probeIcy: !!channel?.isRadio }
+    )
   } else {
     clearRadioMode()
   }
@@ -3374,10 +3673,36 @@ async function play(streamId, name) {
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
-  try { player.src({ src: mountSrc, type: mountMime, drm: audioProxied ? null : channelDrm }) } catch {}
+  try {
+    player.src({
+      src: mountSrc,
+      type: mountMime,
+      drm: audioProxied ? null : channelDrm,
+      preferNativeHls: isNativeAudioFallbackChannel(streamId),
+    })
+  } catch {}
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
-    playResult.catch(() => {})
+    playResult.catch((err) => {
+      // An interrupted play() otherwise leaves the tune paused until a manual click.
+      log.info("[xt:livetv] initial play() rejected - re-arming on canplay", {
+        streamId,
+        error: err?.name || String(err),
+      })
+      const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      if (!mediaEl) return
+      const resume = () => {
+        mediaEl.removeEventListener("canplay", resume)
+        if (lastPlayContext?.streamId !== streamId) return
+        try {
+          void player.play?.()?.catch?.((retryErr) => {
+            log.warn("[xt:livetv] retry play() rejected", { streamId, error: retryErr?.name || String(retryErr) })
+          })
+        } catch {}
+      }
+      mediaEl.addEventListener("canplay", resume)
+      setTimeout(() => mediaEl.removeEventListener("canplay", resume), 20000)
+    })
   }
   applyVideoScale()
   pushDiscordPresence(channel || { id: streamId, name }, "live")
@@ -3751,7 +4076,26 @@ async function playCatchup(channel, opts) {
   armLiveEdgeTracking(channel)
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
-    playResult.catch(() => {})
+    playResult.catch((err) => {
+      // An interrupted play() otherwise leaves the tune paused until a manual click.
+      log.info("[xt:livetv] initial play() rejected - re-arming on canplay", {
+        streamId,
+        error: err?.name || String(err),
+      })
+      const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      if (!mediaEl) return
+      const resume = () => {
+        mediaEl.removeEventListener("canplay", resume)
+        if (lastPlayContext?.streamId !== streamId) return
+        try {
+          void player.play?.()?.catch?.((retryErr) => {
+            log.warn("[xt:livetv] retry play() rejected", { streamId, error: retryErr?.name || String(retryErr) })
+          })
+        } catch {}
+      }
+      mediaEl.addEventListener("canplay", resume)
+      setTimeout(() => mediaEl.removeEventListener("canplay", resume), 20000)
+    })
   }
   applyVideoScale()
   return true

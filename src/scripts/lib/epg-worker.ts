@@ -1,6 +1,6 @@
 // XMLTV parser running in a dedicated Web Worker so 5-50MB feeds don't block
-// the main thread. Mirrors parseXmlTv in epg-data.js. If DOMParser is missing
-// (rare on very old Android WebView), we ask the caller to fall back.
+// the main thread. Workers have no DOMParser (a Window-only API), so this walks
+// the markup with a small scanner; tests assert parity with epg-data.js.
 
 import { EPG_PAST_WINDOW_MS } from "@/scripts/lib/epg-constants.ts"
 
@@ -41,6 +41,166 @@ function hasTzSuffix(raw: string): boolean {
   return TZ_SUFFIX_RX.test(String(raw || "").trim())
 }
 
+// ---------------------------------------------------------------------------
+// Minimal XML scanning (no DOMParser)
+// ---------------------------------------------------------------------------
+
+// XML predefines exactly these five; anything else needs a DTD, which we reject.
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+}
+
+const ENTITY_RX = /&(#x[0-9a-fA-F]+|#[0-9]+|[A-Za-z][A-Za-z0-9]*);/g
+
+function decodeEntities(text: string): string {
+  if (!text.includes("&")) return text
+  return text.replace(ENTITY_RX, (match, body: string) => {
+    if (body.charCodeAt(0) === 35 /* # */) {
+      const isHex = body[1] === "x" || body[1] === "X"
+      const codePoint = parseInt(isHex ? body.slice(2) : body.slice(1), isHex ? 16 : 10)
+      if (!Number.isFinite(codePoint) || codePoint < 0 || codePoint > 0x10ffff) return match
+      try {
+        return String.fromCodePoint(codePoint)
+      } catch {
+        return match
+      }
+    }
+    // Entity names are case-sensitive in XML; leave unknown ones verbatim.
+    const named = NAMED_ENTITIES[body]
+    return named === undefined ? match : named
+  })
+}
+
+const ATTR_RX = /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+
+function readAttrs(rawAttrs: string): Record<string, string> {
+  const attrs: Record<string, string> = {}
+  if (!rawAttrs) return attrs
+  ATTR_RX.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = ATTR_RX.exec(rawAttrs)) !== null) {
+    attrs[match[1]] = decodeEntities(match[2] ?? match[3] ?? "")
+  }
+  return attrs
+}
+
+/** Concatenated descendant text, mirroring DOM textContent. */
+function innerTextOf(source: string): string {
+  if (!source) return ""
+  // Fast path: no markup at all.
+  if (!source.includes("<")) return decodeEntities(source)
+  let out = ""
+  let i = 0
+  while (i < source.length) {
+    if (source.startsWith("<![CDATA[", i)) {
+      const end = source.indexOf("]]>", i + 9)
+      if (end === -1) {
+        // Unterminated CDATA: take the rest literally, entities included.
+        out += source.slice(i + 9)
+        break
+      }
+      out += source.slice(i + 9, end)
+      i = end + 3
+      continue
+    }
+    if (source.startsWith("<!--", i)) {
+      const end = source.indexOf("-->", i + 4)
+      i = end === -1 ? source.length : end + 3
+      continue
+    }
+    if (source[i] === "<") {
+      const end = source.indexOf(">", i + 1)
+      i = end === -1 ? source.length : end + 1
+      continue
+    }
+    const next = source.indexOf("<", i)
+    if (next === -1) {
+      out += decodeEntities(source.slice(i))
+      break
+    }
+    out += decodeEntities(source.slice(i, next))
+    i = next
+  }
+  return out
+}
+
+/**
+ * Drop XML comments so a tag mentioned inside one is never scanned as real
+ * markup. CDATA-aware, because `<!--` inside CDATA is literal content.
+ */
+function stripComments(xml: string): string {
+  if (!xml.includes("<!--")) return xml
+  let out = ""
+  let i = 0
+  while (i < xml.length) {
+    const comment = xml.indexOf("<!--", i)
+    if (comment === -1) {
+      out += xml.slice(i)
+      break
+    }
+    const cdata = xml.indexOf("<![CDATA[", i)
+    if (cdata !== -1 && cdata < comment) {
+      const cdataEnd = xml.indexOf("]]>", cdata + 9)
+      if (cdataEnd === -1) {
+        out += xml.slice(i)
+        break
+      }
+      out += xml.slice(i, cdataEnd + 3)
+      i = cdataEnd + 3
+      continue
+    }
+    out += xml.slice(i, comment)
+    const commentEnd = xml.indexOf("-->", comment + 4)
+    if (commentEnd === -1) break
+    i = commentEnd + 3
+  }
+  return out
+}
+
+/**
+ * Visit every `<tagName>` element. The lookahead keeps `<programme` from
+ * matching `<programmes`, and a trailing slash in the attribute run marks a
+ * self-closing tag.
+ */
+function forEachElement(
+  xml: string,
+  tagName: string,
+  visit: (attrs: Record<string, string>, inner: string) => void
+): void {
+  const openRx = new RegExp(`<${tagName}(?=[\\s/>])([^>]*)>`, "g")
+  const closeTag = `</${tagName}>`
+  let match: RegExpExecArray | null
+  while ((match = openRx.exec(xml)) !== null) {
+    const rawAttrs = match[1] || ""
+    const selfClosing = rawAttrs.endsWith("/")
+    const attrs = readAttrs(selfClosing ? rawAttrs.slice(0, -1) : rawAttrs)
+    if (selfClosing) {
+      visit(attrs, "")
+      continue
+    }
+    const contentStart = openRx.lastIndex
+    const closeIdx = xml.indexOf(closeTag, contentStart)
+    if (closeIdx === -1) {
+      visit(attrs, xml.slice(contentStart))
+      break
+    }
+    visit(attrs, xml.slice(contentStart, closeIdx))
+    openRx.lastIndex = closeIdx + closeTag.length
+  }
+}
+
+function firstElementText(source: string, tagName: string): string {
+  let found: string | null = null
+  forEachElement(source, tagName, (_attrs, inner) => {
+    if (found === null) found = innerTextOf(inner)
+  })
+  return found ?? ""
+}
+
 // Exported so tests can check parity with the main-thread parser in epg-data.js.
 export function parseXmlTv(xml: string): {
   programmes: Map<string, Programme[]>
@@ -49,25 +209,22 @@ export function parseXmlTv(xml: string): {
 } {
   const programmes = new Map<string, Programme[]>()
   const channelNames = new Map<string, string>()
-  const sanitized = xml.replace(/<!DOCTYPE[^>[]*>/i, "")
-  if (/<!DOCTYPE\b/i.test(sanitized) || /<!ENTITY\b/i.test(sanitized)) {
+  const declStripped = xml.replace(/<!DOCTYPE[^>[]*>/i, "")
+  if (/<!DOCTYPE\b/i.test(declStripped) || /<!ENTITY\b/i.test(declStripped)) {
     throw new Error("XMLTV contains forbidden DOCTYPE/ENTITY declaration")
   }
-  const doc = new DOMParser().parseFromString(sanitized, "text/xml")
-  const err = doc.querySelector("parsererror")
-  if (err) {
-    throw new Error(
-      "XMLTV parse error: " + (err.textContent || "").slice(0, 200)
-    )
+  const sanitized = stripComments(declStripped)
+  // Reject provider HTML error pages outright (no parsererror without a DOM).
+  if (!/<tv[\s>]/i.test(sanitized)) {
+    throw new Error("XMLTV parse error: no <tv> root element")
   }
 
-  for (const channel of doc.querySelectorAll("channel")) {
-    const id = (channel.getAttribute("id") || "").toLowerCase()
-    if (!id) continue
-    const name =
-      channel.querySelector("display-name")?.textContent?.trim() || ""
+  forEachElement(sanitized, "channel", (attrs, inner) => {
+    const id = (attrs.id || "").toLowerCase()
+    if (!id) return
+    const name = firstElementText(inner, "display-name").trim()
     if (name) channelNames.set(id, name)
-  }
+  })
 
   const lo = Date.now() - EPG_PAST_WINDOW_MS
   const hi = Date.now() + 36 * 60 * 60 * 1000
@@ -75,12 +232,11 @@ export function parseXmlTv(xml: string): {
   let timezoneTimestampCount = 0
   let timezoneSuffixCount = 0
 
-  const list = doc.querySelectorAll("programme")
-  for (const programme of list) {
-    const channelId = (programme.getAttribute("channel") || "").toLowerCase()
-    if (!channelId) continue
-    const startRaw = programme.getAttribute("start") || ""
-    const stopRaw = programme.getAttribute("stop") || ""
+  forEachElement(sanitized, "programme", (attrs, inner) => {
+    const channelId = (attrs.channel || "").toLowerCase()
+    if (!channelId) return
+    const startRaw = attrs.start || ""
+    const stopRaw = attrs.stop || ""
     if (startRaw) {
       timezoneTimestampCount++
       if (hasTzSuffix(startRaw)) timezoneSuffixCount++
@@ -91,14 +247,13 @@ export function parseXmlTv(xml: string): {
     }
     const start = parseXmlTvDate(startRaw)
     const stop = parseXmlTvDate(stopRaw)
-    if (!start || !stop || stop <= start) continue
-    if (stop < lo || start > hi) continue
+    if (!start || !stop || stop <= start) return
+    if (stop < lo || start > hi) return
 
-    const title =
-      programme.querySelector("title")?.textContent?.trim() || "Untitled"
-    const desc = programme.querySelector("desc")?.textContent?.trim() || ""
+    const title = firstElementText(inner, "title").trim() || "Untitled"
+    const desc = firstElementText(inner, "desc").trim()
     // Non-standard, some catchup providers require a programme-specific id in the catchup URL.
-    const catchupId = programme.getAttribute("catchup-id") || undefined
+    const catchupId = attrs["catchup-id"] || undefined
 
     let arr = programmes.get(channelId)
     if (!arr) {
@@ -106,7 +261,7 @@ export function parseXmlTv(xml: string): {
       programmes.set(channelId, arr)
     }
     arr.push({ start, stop, title, desc, catchupId })
-  }
+  })
 
   for (const arr of programmes.values()) {
     arr.sort((first, second) => first.start - second.start)
@@ -130,10 +285,6 @@ const post = (msg: ParseResponse) => (self as unknown as Worker).postMessage(msg
 self.addEventListener("message", (event: MessageEvent<ParseRequest>) => {
   if (event.origin && event.origin !== self.location.origin) return
   const { id, xml } = event.data || ({} as ParseRequest)
-  if (typeof DOMParser === "undefined") {
-    post({ id, fallback: true })
-    return
-  }
   try {
     const { programmes, channelNames, hasExplicitTimezones } = parseXmlTv(xml)
     post({

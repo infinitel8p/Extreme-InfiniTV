@@ -27,7 +27,7 @@ import {
   getUserAgent,
   EXTERNAL_PLAYER_BACKENDS,
 } from "@/scripts/lib/app-settings.js"
-import { bindMonoAudio, hasMonoGraph, isSafeAudioSourceUrl } from "@/scripts/lib/audio-effects.js"
+import { bindMonoAudio, noteMonoSourceChange } from "@/scripts/lib/audio-effects.js"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 
 export type PlayerBackend = "videojs" | "artplayer" | "shaka" | "mpv" | "vlc"
@@ -49,7 +49,7 @@ export interface DrmOptions {
 
 export interface VjsLikeHandle {
   /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. `durationSeconds` seeds duration when the container reports none (raw TS); `timelineOffsetSeconds` places a mid-programme remount on its timeline. `subtitles` opts a progressive MP4 source into embedded tx3g-subtitle extraction, or a `mkvSession` into push-mode subtitles from the MKV tee-proxy. `audio` backs track switching for engines with none (mpegts.js/native). */
-  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string; mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null } | null; audio?: AudioTrackSource | null }): void
+  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string; mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null } | null; audio?: AudioTrackSource | null; preferNativeHls?: boolean }): void
   play(): Promise<unknown> | void
   pause(): void
   paused?(): boolean
@@ -107,7 +107,7 @@ export interface MountOptions {
   html5?: Record<string, unknown>
 }
 
-const isTauri =
+export const isTauri =
   typeof window !== "undefined" &&
   (!!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__)
 
@@ -666,7 +666,25 @@ function isDashSource(drm: DrmOptions | null | undefined, src: string, type?: st
 
 const containerProbeCache = new Map<string, StreamKind>()
 
+// Unambiguous manifest extensions only; .ts and progressive extensions still
+// probe (some panels serve HLS playlists from .ts paths).
+export function manifestKindFromExtension(src: string): StreamKind | null {
+  let pathname: string
+  try {
+    pathname = new URL(src).pathname.toLowerCase()
+  } catch {
+    return null
+  }
+  if (/\.m3u8?$/.test(pathname)) return "hls"
+  if (/\.mpd$/.test(pathname)) return "dash"
+  return null
+}
+
 async function probeContainer(src: string): Promise<StreamKind> {
+  // Never spend a provider request on a question the URL extension already answers.
+  const fromExtension = manifestKindFromExtension(src)
+  if (fromExtension) return fromExtension
+
   let origin: string
   try {
     origin = new URL(src).origin
@@ -1092,6 +1110,46 @@ interface ActiveHlsRef {
   set: (handle: { destroy: () => void } | null) => void
 }
 
+/**
+ * Assign a bare `video.src`, keeping playback alive across the swap: replacing
+ * an existing src fires abort+emptied, which resets the element to paused and
+ * rejects the in-flight play(), so re-assert play() once the new source is ready.
+ */
+export function setNativeSrc(video: HTMLVideoElement, url: string): void {
+  const replacingSource = !!(video.currentSrc || video.getAttribute("src"))
+  video.src = url
+  if (!replacingSource) return
+  const resume = () => {
+    video.removeEventListener("canplay", resume)
+    video.removeEventListener("emptied", cancel)
+    // Runs inside an event listener, so a throwing play() must not escape.
+    try {
+      void video.play()?.catch(() => {})
+    } catch {}
+  }
+  const cancel = () => {
+    // A newer swap superseded this one; that swap arms its own resume.
+    video.removeEventListener("canplay", resume)
+    video.removeEventListener("emptied", cancel)
+  }
+  video.addEventListener("canplay", resume, { once: false })
+  // Registered a tick late so this assignment's own emptied cannot cancel it.
+  setTimeout(() => video.addEventListener("emptied", cancel, { once: true }), 0)
+}
+
+/**
+ * Native AVFoundation HLS is only for the macOS web build, where CORS blocks
+ * hls.js's XHR. The Tauri app uses hls.js (Rust loader, no CORS), which unlike
+ * AVFoundation reliably presents IDR-less GDR streams.
+ */
+export function shouldPreferNativeHls(input: {
+  isMacOS: boolean
+  isTauri: boolean
+  canPlayNativeHls: boolean
+}): boolean {
+  return input.isMacOS && !input.isTauri && input.canPlayNativeHls
+}
+
 function attachHlsToVideo(
   Hls: any,
   video: HTMLVideoElement,
@@ -1099,6 +1157,7 @@ function attachHlsToVideo(
   codecState: PlaybackCodecInfo,
   active: ActiveHlsRef,
   onGiveUp: () => void,
+  forceNative = false,
 ): void {
   const existing = active.get()
   if (existing) {
@@ -1112,22 +1171,32 @@ function attachHlsToVideo(
   if (authorization) {
     try { authorizedOrigin = new URL(cleanUrl).origin } catch {}
   }
+  const canPlayNativeHls = !!video.canPlayType("application/vnd.apple.mpegurl")
+  // forceNative: this channel's audio (AC-3) cannot decode in this WebView's MSE.
   const preferNative =
-    isMacOS && video.canPlayType("application/vnd.apple.mpegurl")
+    (forceNative && canPlayNativeHls) ||
+    shouldPreferNativeHls({ isMacOS, isTauri, canPlayNativeHls })
   if (preferNative) {
-    // Force CORS when a mono graph is already attached: without it, this src plays silent forever.
-    if (hasMonoGraph(video) && !isSafeAudioSourceUrl(url)) video.crossOrigin = "anonymous"
-    video.src = url
+    // AVFoundation fetches everything itself: no custom UA/auth, no codec telemetry.
+    log.info(
+      forceNative
+        ? "[xt:player] hls transport=native (AC-3 audio fallback): MSE has no AC-3 decoder here"
+        : "[xt:player] hls transport=native (macOS AVFoundation): no custom headers, no codec telemetry"
+    )
+    noteMonoSourceChange(video, url)
+    setNativeSrc(video, url)
     return
   }
   if (!Hls.isSupported()) {
     if (!video.canPlayType("application/vnd.apple.mpegurl")) {
       log.warn("[xt:player] hls.js unsupported and no native HLS; fallback to <video src>")
     }
-    if (hasMonoGraph(video) && !isSafeAudioSourceUrl(url)) video.crossOrigin = "anonymous"
-    video.src = url
+    log.info("[xt:player] hls transport=native (hls.js unsupported)")
+    noteMonoSourceChange(video, url)
+    setNativeSrc(video, url)
     return
   }
+  log.info(`[xt:player] hls transport=hls.js loader=${isTauri ? "tauri-http" : "xhr"}`)
   const hlsConfig: Record<string, unknown> = { enableWorker: true }
   if (isTauri) {
     hlsConfig.loader = createTauriHlsLoaderClass(authorization, authorizedOrigin)
@@ -1744,7 +1813,7 @@ async function mountVideoJs(
     destroyMpegts()
     destroyHls()
     destroyShaka()
-    if (hasMonoGraph(videoEl) && !isSafeAudioSourceUrl(src)) videoEl.crossOrigin = "anonymous"
+    noteMonoSourceChange(videoEl, src)
     player.src({ src, type: type || "video/mp4" })
   }
 
@@ -1973,6 +2042,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   let pendingMpegtsAttach: Promise<MpegtsHandle | null> | null = null
   let activeShaka: { destroy: () => void } | null = null
   let pendingSrc: string | null = null
+  let pendingPreferNativeHls = false
   let pendingDrm: DrmOptions | null = null
   let pendingIsLive = true
   let pendingDurationSeconds: number | undefined
@@ -2046,6 +2116,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         audioControl.setSource(pendingAudioSource)
         try { video.dispatchEvent(new Event("error")) } catch {}
       },
+      pendingPreferNativeHls,
     )
     audioControl.setSource(activeHls ? createHlsAudioSource(activeHls as any) : null)
   }
@@ -2130,8 +2201,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         const handle = await attachPromise
         if (pendingMpegtsAttach === attachPromise) pendingMpegtsAttach = null
         if (!handle) {
-          if (hasMonoGraph(video)) video.crossOrigin = "anonymous"
-          video.src = url
+          noteMonoSourceChange(video, url)
+          setNativeSrc(video, url)
           return
         }
         if (pendingSrc !== url) {
@@ -2232,8 +2303,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   }
 
   const handle: VjsLikeHandle = {
-    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, audio }) {
+    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, audio, preferNativeHls }) {
       pendingSrc = src
+      pendingPreferNativeHls = !!preferNativeHls
       pendingDrm = drm ?? null
       pendingIsLive = isLive ?? true
       pendingDurationSeconds = durationSeconds
@@ -2272,7 +2344,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       if (hint === "native") {
         art.type = ""
         // artplayer's default (non-customType) handling sets el.src directly.
-        if (art.video && hasMonoGraph(art.video) && !isSafeAudioSourceUrl(src)) art.video.crossOrigin = "anonymous"
+        noteMonoSourceChange(art.video ?? null, src)
         art.url = src
         return
       }
@@ -2283,9 +2355,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         .then((kind) => {
           if (pendingSrc !== src) return
           art.type = kind === "dash" ? "mpd" : kind === "ts" ? "ts" : kind === "native" ? "" : "m3u8"
-          if (kind === "native" && art.video && hasMonoGraph(art.video) && !isSafeAudioSourceUrl(src)) {
-            art.video.crossOrigin = "anonymous"
-          }
+          if (kind === "native") noteMonoSourceChange(art.video ?? null, src)
           art.url = src
           if (kind === "ts" || kind === "native") audioControl.setSource(pendingAudioSource)
           if ((kind === "ts" || kind === "native") && subtitles) {
@@ -2479,7 +2549,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       player.getNetworkingEngine()?.clearAllRequestFilters()
       configureShakaDrmAndAuth(player, clearKeys, authorization, cleanUrl)
       // Shaka can fall back to src= for non-MSE-able content, setting el.src directly.
-      if (hasMonoGraph(video) && !isSafeAudioSourceUrl(cleanUrl)) video.crossOrigin = "anonymous"
+      noteMonoSourceChange(video, cleanUrl)
       await player.load(cleanUrl, null, mimeTypeHint || undefined)
       if (pendingSrc !== src) return
       const track = player.getVariantTracks?.().find((variant: any) => variant.active)
