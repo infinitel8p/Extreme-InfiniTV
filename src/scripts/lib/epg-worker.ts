@@ -77,15 +77,13 @@ function decodeEntities(text: string): string {
 
 const ATTR_RX = /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
 
-function readAttrs(rawAttrs: string): Record<string, string> {
-  // Null prototype: attribute names come from remote XML, so a name like
-  // __proto__ must land as a plain own property, not hit the prototype setter.
-  const attrs: Record<string, string> = Object.create(null)
+function readAttrs(rawAttrs: string): Map<string, string> {
+  const attrs = new Map<string, string>()
   if (!rawAttrs) return attrs
   ATTR_RX.lastIndex = 0
   let match: RegExpExecArray | null
   while ((match = ATTR_RX.exec(rawAttrs)) !== null) {
-    attrs[match[1]] = decodeEntities(match[2] ?? match[3] ?? "")
+    attrs.set(match[1], decodeEntities(match[2] ?? match[3] ?? ""))
   }
   return attrs
 }
@@ -171,7 +169,7 @@ function stripComments(xml: string): string {
 function forEachElement(
   xml: string,
   tagName: string,
-  visit: (attrs: Record<string, string>, inner: string) => void
+  visit: (attrs: Map<string, string>, inner: string) => void
 ): void {
   const openRx = new RegExp(`<${tagName}(?=[\\s/>])([^>]*)>`, "g")
   const closeTag = `</${tagName}>`
@@ -222,7 +220,7 @@ export function parseXmlTv(xml: string): {
   }
 
   forEachElement(sanitized, "channel", (attrs, inner) => {
-    const id = (attrs.id || "").toLowerCase()
+    const id = (attrs.get("id") || "").toLowerCase()
     if (!id) return
     const name = firstElementText(inner, "display-name").trim()
     if (name) channelNames.set(id, name)
@@ -235,10 +233,10 @@ export function parseXmlTv(xml: string): {
   let timezoneSuffixCount = 0
 
   forEachElement(sanitized, "programme", (attrs, inner) => {
-    const channelId = (attrs.channel || "").toLowerCase()
+    const channelId = (attrs.get("channel") || "").toLowerCase()
     if (!channelId) return
-    const startRaw = attrs.start || ""
-    const stopRaw = attrs.stop || ""
+    const startRaw = attrs.get("start") || ""
+    const stopRaw = attrs.get("stop") || ""
     if (startRaw) {
       timezoneTimestampCount++
       if (hasTzSuffix(startRaw)) timezoneSuffixCount++
@@ -255,7 +253,7 @@ export function parseXmlTv(xml: string): {
     const title = firstElementText(inner, "title").trim() || "Untitled"
     const desc = firstElementText(inner, "desc").trim()
     // Non-standard, some catchup providers require a programme-specific id in the catchup URL.
-    const catchupId = attrs["catchup-id"] || undefined
+    const catchupId = attrs.get("catchup-id") || undefined
 
     let arr = programmes.get(channelId)
     if (!arr) {
