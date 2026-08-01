@@ -8,4 +8,5 @@ commands.allow = [
     "warmup_status",
     "warmup_cancel",
     "warmup_ack",
+    "warmup_read_staged",
 ]

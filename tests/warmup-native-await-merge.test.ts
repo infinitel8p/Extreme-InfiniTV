@@ -39,11 +39,10 @@ vi.mock("@tauri-apps/api/core", () => ({
       }
     }
     if (command === "warmup_status") return statusQueue.shift() ?? null
+    if (command === "warmup_read_staged") return "[]"
     return null
   },
 }))
-
-vi.mock("@tauri-apps/plugin-fs", () => ({ readTextFile: async () => "[]" }))
 
 vi.mock("@/scripts/lib/creds.js", () => ({
   isTauri: true,

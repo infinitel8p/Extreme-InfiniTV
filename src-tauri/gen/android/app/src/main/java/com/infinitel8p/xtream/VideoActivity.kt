@@ -12,6 +12,7 @@ import android.util.Rational
 import android.view.KeyEvent
 import android.view.View
 import android.widget.LinearLayout
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -20,12 +21,9 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -257,7 +255,10 @@ class VideoActivity : AppCompatActivity() {
       }
       MODE_LIVE -> {
         val channel = channels.getOrNull(currentChannelIndex) ?: return
-        loadChannel(channel, fireEvent = false)
+        if (!loadChannel(channel, fireEvent = false)) {
+          finish()
+          return
+        }
       }
     }
 
@@ -283,9 +284,10 @@ class VideoActivity : AppCompatActivity() {
       try { metaBuilder.setArtworkUri(android.net.Uri.parse(poster)) } catch (_: Throwable) {}
     }
     builder.setMediaMetadata(metaBuilder.build())
-    // Hint HLS for `.m3u8` so DASH/HLS DataSource is selected.
+    // Mime hint routes DefaultMediaSourceFactory to the right extractor.
     val lower = url.lowercase()
     if (lower.contains(".m3u8")) builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+    else if (lower.contains(".mpd")) builder.setMimeType(MimeTypes.APPLICATION_MPD)
     return builder.build()
   }
 
@@ -358,10 +360,14 @@ class VideoActivity : AppCompatActivity() {
   private fun switchChannelByIndex(newIndex: Int) {
     if (newIndex !in channels.indices) return
     if (newIndex == currentChannelIndex) return
+    val previousIndex = currentChannelIndex
     currentChannelIndex = newIndex
     val channel = channels[newIndex]
     channelAdapter?.updateCurrentIndex(newIndex)
-    loadChannel(channel, fireEvent = true)
+    if (!loadChannel(channel, fireEvent = true)) {
+      currentChannelIndex = previousIndex
+      channelAdapter?.updateCurrentIndex(previousIndex)
+    }
   }
 
   private fun switchChannelByDelta(delta: Int) {
@@ -370,18 +376,32 @@ class VideoActivity : AppCompatActivity() {
     switchChannelByIndex(next)
   }
 
-  private fun loadChannel(channel: ChannelLite, fireEvent: Boolean) {
-    val player = exoPlayer ?: return
+  private fun loadChannel(channel: ChannelLite, fireEvent: Boolean): Boolean {
+    val player = exoPlayer ?: return false
     val ua = channel.ua.ifBlank { defaultUa }
     val ref = channel.referer.ifBlank { defaultReferer }
-    // Rebuild MediaSource factory only when UA/Referer change. Cheap enough
-    // to rebuild every time.
-    val factory = buildMediaSourceFactory(ua, ref)
-    val item = buildMediaItem(channel.streamUrl, channel.name, channel.logo)
-    val src = factory.createMediaSource(item)
-    player.setMediaSource(src)
-    player.prepare()
-    player.playWhenReady = true
+    try {
+      val factory = buildMediaSourceFactory(ua, ref)
+      val item = buildMediaItem(channel.streamUrl, channel.name, channel.logo)
+      val src = factory.createMediaSource(item)
+      player.setMediaSource(src)
+      player.prepare()
+      player.playWhenReady = true
+    } catch (error: Throwable) {
+      // A missing codec module (e.g. DASH) throws here, not via onPlayerError.
+      Log.e(TAG, "media source unsupported for channel ${channel.id}", error)
+      EventQueue.append(
+        this,
+        "xt:android-native-error",
+        JSONObject().apply {
+          put("contentKey", "live:${channel.id}")
+          put("code", "SOURCE_UNSUPPORTED")
+          put("message", error.message ?: "")
+        }
+      )
+      Toast.makeText(this, R.string.native_player_unsupported_stream, Toast.LENGTH_SHORT).show()
+      return false
+    }
 
     if (fireEvent) {
       EventQueue.append(
@@ -394,6 +414,7 @@ class VideoActivity : AppCompatActivity() {
         }
       )
     }
+    return true
   }
 
   // ---------------------------------------------------------------------

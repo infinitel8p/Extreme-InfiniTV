@@ -22,3 +22,6 @@
 
 -keep class com.infinitel8p.xtream.** { *; }
 -keep class * extends android.webkit.WebChromeClient { *; }
+
+# DefaultMediaSourceFactory loads this reflectively for DASH playback.
+-keep class androidx.media3.exoplayer.dash.DashMediaSource$Factory { *; }

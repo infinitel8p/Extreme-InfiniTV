@@ -196,6 +196,7 @@ pub fn run() {
             warmup::warmup_status,
             warmup::warmup_cancel,
             warmup::warmup_ack,
+            warmup::warmup_read_staged,
         ]);
 
     #[cfg(target_os = "android")]
@@ -207,6 +208,7 @@ pub fn run() {
         warmup::warmup_status,
         warmup::warmup_cancel,
         warmup::warmup_ack,
+        warmup::warmup_read_staged,
     ]);
 
     let app = builder

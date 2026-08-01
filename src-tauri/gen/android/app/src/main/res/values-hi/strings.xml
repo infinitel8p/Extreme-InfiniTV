@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="xt_channels_title">चैनल</string>
+    <string name="native_player_unsupported_stream">इस चैनल को नेटिव प्लेयर में नहीं चलाया जा सकता</string>
 </resources>

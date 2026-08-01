@@ -377,6 +377,49 @@ pub fn warmup_ack(state: State<'_, WarmupState>, job_id: String, kind: WarmupKin
     ack_kind(&state, &job_id, kind)
 }
 
+fn staged_path(
+    state: &WarmupState,
+    job_id: &str,
+    kind: WarmupKind,
+    step: &str,
+) -> Result<String, String> {
+    let job_guard = state.job.lock().unwrap_or_else(|poison| poison.into_inner());
+    let Some(job) = job_guard.as_ref() else {
+        return Err("NOT_FOUND:job".to_string());
+    };
+    if job.job_id != job_id {
+        return Err("NOT_FOUND:job".to_string());
+    }
+    let Some(kind_mutex) = job.kinds.iter().find(|kind_lock| {
+        kind_lock
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .kind
+            == kind
+    }) else {
+        return Err("NOT_FOUND:kind".to_string());
+    };
+    let kind_state = kind_mutex.lock().unwrap_or_else(|poison| poison.into_inner());
+    kind_state
+        .staged_files
+        .iter()
+        .find(|file| file.step == step)
+        .map(|file| file.path.clone())
+        .ok_or_else(|| "NOT_FOUND:step".to_string())
+}
+
+// Keeps staged reads off plugin-fs, whose scope check stalls the Android main thread.
+#[tauri::command]
+pub fn warmup_read_staged(
+    state: State<'_, WarmupState>,
+    job_id: String,
+    kind: WarmupKind,
+    step: String,
+) -> Result<String, String> {
+    let path = staged_path(&state, &job_id, kind, &step)?;
+    std::fs::read_to_string(&path).map_err(|error| format!("OTHER:{error}"))
+}
+
 // ---------------------------------------------------------------------------
 // Staging
 // ---------------------------------------------------------------------------

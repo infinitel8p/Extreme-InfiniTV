@@ -307,19 +307,21 @@ function unwrapRows(parsed: unknown, arrayKey: "streams" | "movies" | "series"):
 }
 
 async function ingestKind(
+  jobId: string,
   jobKind: WarmupKindName,
   cacheKind: WarmupCacheKind,
   stagedFiles: StagedFile[],
   winningMirrorIndex: number,
   context: IngestContext,
 ): Promise<unknown[]> {
-  const { readTextFile } = await import("@tauri-apps/plugin-fs")
+  const { invoke } = await import("@tauri-apps/api/core")
+  const readStaged = (step: string) => invoke<string>("warmup_read_staged", { jobId, kind: jobKind, step })
   const fileFor = (step: string) => stagedFiles.find((file) => file.step === step)
 
   if (cacheKind === "m3u") {
     const playlistFile = fileFor("playlist")
     if (!playlistFile) return []
-    const text = await readTextFile(playlistFile.path)
+    const text = await readStaged(playlistFile.step)
     try {
       const { epgUrl } = parseM3U(text)
       if (epgUrl && typeof localStorage !== "undefined") {
@@ -342,9 +344,9 @@ async function ingestKind(
   setMirrorPin(context.pid, winningMirrorIndex)
   const categoriesFile = fileFor("categories")
   const streamsFile = fileFor("streams")
-  const categoriesRaw = categoriesFile ? JSON.parse(await readTextFile(categoriesFile.path)) : []
+  const categoriesRaw = categoriesFile ? JSON.parse(await readStaged(categoriesFile.step)) : []
   const categoryMap = parseCategoriesToMap(categoriesRaw)
-  const streamsRaw = streamsFile ? JSON.parse(await readTextFile(streamsFile.path)) : null
+  const streamsRaw = streamsFile ? JSON.parse(await readStaged(streamsFile.step)) : null
 
   if (jobKind === "live") {
     const rows = mapXtreamLiveRows(unwrapRows(streamsRaw, "streams"), categoryMap)
@@ -518,7 +520,7 @@ async function createTrackedJob(
       if (!tracker || tracker.settled || tracker.ingesting) return
       tracker.ingesting = true
       try {
-        const rows = await ingestKind(jobKind, tracker.cacheKind, stagedFiles, winningMirrorIndex, job.context)
+        const rows = await ingestKind(job.jobId, jobKind, tracker.cacheKind, stagedFiles, winningMirrorIndex, job.context)
         tracker.rows = rows
         const { invoke } = await import("@tauri-apps/api/core")
         await invoke("warmup_ack", { jobId: job.jobId, kind: jobKind })
