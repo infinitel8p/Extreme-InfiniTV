@@ -787,6 +787,8 @@
   "stream.audioFix.action": "音声を修正",
   "stream.audioFix.fixing": "音声を修正中…",
   "stream.audioFix.fallback": "音声の修正に失敗しました - 元のストリームに戻しました",
+  "stream.videoFix.remuxing": "映像が表示されません - ローカルコンバーター経由で再試行しています…",
+  "stream.videoFix.retuning": "映像が表示されません - チャンネルを再調整しています…",
   "stream.offline.title": "オフラインです",
   "stream.offline.body": "視聴を続けるには再接続してください。",
   "stream.offline.reconnectFailedTitle": "まだ問題があります",

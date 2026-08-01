@@ -78,7 +78,9 @@ function decodeEntities(text: string): string {
 const ATTR_RX = /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
 
 function readAttrs(rawAttrs: string): Record<string, string> {
-  const attrs: Record<string, string> = {}
+  // Null prototype: attribute names come from remote XML, so a name like
+  // __proto__ must land as a plain own property, not hit the prototype setter.
+  const attrs: Record<string, string> = Object.create(null)
   if (!rawAttrs) return attrs
   ATTR_RX.lastIndex = 0
   let match: RegExpExecArray | null

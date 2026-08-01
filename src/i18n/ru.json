@@ -787,6 +787,8 @@
   "stream.audioFix.action": "Исправить звук",
   "stream.audioFix.fixing": "Исправление звука…",
   "stream.audioFix.fallback": "Не удалось исправить звук - возврат к исходному потоку",
+  "stream.videoFix.remuxing": "Нет изображения - повторная попытка через локальный конвертер…",
+  "stream.videoFix.retuning": "Нет изображения - повторная настройка канала…",
   "stream.offline.title": "Вы не в сети",
   "stream.offline.body": "Подключитесь заново, чтобы продолжить просмотр.",
   "stream.offline.reconnectFailedTitle": "Всё ещё есть проблемы",

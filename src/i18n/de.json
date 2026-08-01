@@ -787,6 +787,8 @@
   "stream.audioFix.action": "Ton reparieren",
   "stream.audioFix.fixing": "Ton wird repariert…",
   "stream.audioFix.fallback": "Ton-Reparatur fehlgeschlagen - zurück zum Original-Stream gewechselt",
+  "stream.videoFix.remuxing": "Kein Bild - neuer Versuch über den lokalen Konverter…",
+  "stream.videoFix.retuning": "Kein Bild - Sender wird neu eingestellt…",
   "stream.offline.title": "Du bist offline",
   "stream.offline.body": "Stelle die Verbindung wieder her, um weiterzusehen.",
   "stream.offline.reconnectFailedTitle": "Es gibt weiterhin Probleme",

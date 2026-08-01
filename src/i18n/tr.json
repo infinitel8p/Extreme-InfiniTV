@@ -787,6 +787,8 @@
   "stream.audioFix.action": "Sesi düzelt",
   "stream.audioFix.fixing": "Ses düzeltiliyor…",
   "stream.audioFix.fallback": "Ses düzeltme başarısız - orijinal yayına geri dönüldü",
+  "stream.videoFix.remuxing": "Görüntü yok - yerel dönüştürücü üzerinden yeniden deneniyor…",
+  "stream.videoFix.retuning": "Görüntü yok - kanal yeniden ayarlanıyor…",
   "stream.offline.title": "Çevrimdışısınız",
   "stream.offline.body": "İzlemeye devam etmek için yeniden bağlanın.",
   "stream.offline.reconnectFailedTitle": "Hâlâ sorun var",

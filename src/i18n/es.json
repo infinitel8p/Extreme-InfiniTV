@@ -787,6 +787,8 @@
   "stream.audioFix.action": "Corregir audio",
   "stream.audioFix.fixing": "Corrigiendo audio…",
   "stream.audioFix.fallback": "No se pudo corregir el audio - se volvió a la transmisión original",
+  "stream.videoFix.remuxing": "No se muestra la imagen - reintentando con el conversor local…",
+  "stream.videoFix.retuning": "No se muestra la imagen - resintonizando el canal…",
   "stream.offline.title": "Estás sin conexión",
   "stream.offline.body": "Vuelve a conectarte para seguir viendo.",
   "stream.offline.reconnectFailedTitle": "Sigue habiendo problemas",

@@ -787,6 +787,8 @@
   "stream.audioFix.action": "Perbaiki audio",
   "stream.audioFix.fixing": "Memperbaiki audio…",
   "stream.audioFix.fallback": "Perbaikan audio gagal - beralih kembali ke stream asli",
+  "stream.videoFix.remuxing": "Gambar tidak tampil - mencoba lagi lewat konverter lokal…",
+  "stream.videoFix.retuning": "Gambar tidak tampil - menyetel ulang saluran…",
   "stream.offline.title": "Anda sedang offline",
   "stream.offline.body": "Sambungkan kembali untuk terus menonton.",
   "stream.offline.reconnectFailedTitle": "Masih bermasalah",

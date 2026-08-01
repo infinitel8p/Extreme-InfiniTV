@@ -787,6 +787,8 @@
   "stream.audioFix.action": "Napraw dźwięk",
   "stream.audioFix.fixing": "Naprawianie dźwięku…",
   "stream.audioFix.fallback": "Naprawa dźwięku nie powiodła się - przełączono z powrotem na oryginalny stream",
+  "stream.videoFix.remuxing": "Brak obrazu - ponowna próba przez lokalny konwerter…",
+  "stream.videoFix.retuning": "Brak obrazu - ponowne strojenie kanału…",
   "stream.offline.title": "Jesteś offline",
   "stream.offline.body": "Połącz się ponownie, aby kontynuować oglądanie.",
   "stream.offline.reconnectFailedTitle": "Nadal są problemy",

@@ -787,6 +787,8 @@
   "stream.audioFix.action": "آڈیو ٹھیک کریں",
   "stream.audioFix.fixing": "آڈیو ٹھیک ہو رہا ہے…",
   "stream.audioFix.fallback": "آڈیو ٹھیک کرنا ناکام ہوا - اصل اسٹریم پر واپس چلا گیا",
+  "stream.videoFix.remuxing": "تصویر نظر نہیں آ رہی - مقامی کنورٹر کے ذریعے دوبارہ کوشش کی جا رہی ہے…",
+  "stream.videoFix.retuning": "تصویر نظر نہیں آ رہی - چینل دوبارہ ٹیون کیا جا رہا ہے…",
   "stream.offline.title": "آپ آف لائن ہیں",
   "stream.offline.body": "دیکھنا جاری رکھنے کے لیے دوبارہ کنیکٹ کریں۔",
   "stream.offline.reconnectFailedTitle": "ابھی بھی مسئلہ ہے",

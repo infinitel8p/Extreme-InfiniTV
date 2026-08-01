@@ -787,6 +787,8 @@
   "stream.audioFix.action": "إصلاح الصوت",
   "stream.audioFix.fixing": "جارٍ إصلاح الصوت…",
   "stream.audioFix.fallback": "فشل إصلاح الصوت - تم الرجوع إلى البث الأصلي",
+  "stream.videoFix.remuxing": "لا تظهر الصورة - جارٍ إعادة المحاولة عبر المحوّل المحلي…",
+  "stream.videoFix.retuning": "لا تظهر الصورة - جارٍ إعادة ضبط القناة…",
   "stream.offline.title": "أنت غير متصل بالإنترنت",
   "stream.offline.body": "أعد الاتصال لمتابعة المشاهدة.",
   "stream.offline.reconnectFailedTitle": "لا تزال هناك مشكلة",

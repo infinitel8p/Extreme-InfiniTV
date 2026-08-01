@@ -787,6 +787,8 @@
   "stream.audioFix.action": "Audio herstellen",
   "stream.audioFix.fixing": "Audio herstellen…",
   "stream.audioFix.fallback": "Audio herstellen mislukt - teruggeschakeld naar de originele stream",
+  "stream.videoFix.remuxing": "Geen beeld - opnieuw proberen via de lokale converter…",
+  "stream.videoFix.retuning": "Geen beeld - kanaal wordt opnieuw afgestemd…",
   "stream.offline.title": "Je bent offline",
   "stream.offline.body": "Maak weer verbinding om verder te kijken.",
   "stream.offline.reconnectFailedTitle": "Nog steeds problemen",

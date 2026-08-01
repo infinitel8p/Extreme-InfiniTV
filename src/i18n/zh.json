@@ -787,6 +787,8 @@
   "stream.audioFix.action": "修复音频",
   "stream.audioFix.fixing": "正在修复音频…",
   "stream.audioFix.fallback": "音频修复失败 - 已切换回原始流",
+  "stream.videoFix.remuxing": "画面未显示 - 正在通过本地转换器重试…",
+  "stream.videoFix.retuning": "画面未显示 - 正在重新调谐频道…",
   "stream.offline.title": "您当前离线",
   "stream.offline.body": "请重新连接以继续观看。",
   "stream.offline.reconnectFailedTitle": "仍有问题",
