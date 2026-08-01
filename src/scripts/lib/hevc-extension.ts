@@ -28,18 +28,21 @@ export function isWindowsDesktop(): boolean {
   return isTauri && /Windows/i.test(navigator.userAgent || "")
 }
 
-export async function ensureHevcDecodable(): Promise<boolean> {
+export async function ensureHevcDecodable(options?: { generic?: boolean }): Promise<boolean> {
   if (deviceSupportsHevc()) return true
   if (!isWindowsDesktop() || inFlight) return false
   inFlight = true
+  const generic = options?.generic === true
 
   try {
     if (await invoke<boolean>("is_store_build")) {
       const ok = await confirmDialog({
         title: t("hevc.title") || "Enable HEVC playback",
-        message:
-          t("hevc.storeBody") ||
-          "This channel needs Microsoft's HEVC Video Extensions. Open the Microsoft Store to install it, then restart the app.",
+        message: generic
+          ? t("hevc.storeBodyGeneric") ||
+            "HEVC playback needs Microsoft's HEVC Video Extensions. Open the Microsoft Store to install it, then restart the app."
+          : t("hevc.storeBody") ||
+            "This channel needs Microsoft's HEVC Video Extensions. Open the Microsoft Store to install it, then restart the app.",
         confirmLabel: t("hevc.openStore") || "Open Store",
         link: {
           label: t("hevc.githubLink") || "Or download the desktop version from GitHub",
@@ -54,9 +57,11 @@ export async function ensureHevcDecodable(): Promise<boolean> {
 
     const ok = await confirmDialog({
       title: t("hevc.title") || "Enable HEVC playback",
-      message:
-        t("hevc.downloadBody") ||
-        "This channel is HEVC-encoded. Download Microsoft's HEVC component (~8 MB) and restart to play it in the app?",
+      message: generic
+        ? t("hevc.downloadBodyGeneric") ||
+          "Download Microsoft's HEVC component (~8 MB) and restart to enable HEVC playback in the app?"
+        : t("hevc.downloadBody") ||
+          "This channel is HEVC-encoded. Download Microsoft's HEVC component (~8 MB) and restart to play it in the app?",
       confirmLabel: t("hevc.download") || "Download & install",
     })
     if (!ok) return false

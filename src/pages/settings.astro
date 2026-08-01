@@ -751,6 +751,21 @@ const navStructure: NavSection[] = [
               </div>
             </details>
 
+            <!-- HEVC extension install: Windows desktop only, unhidden by the script below -->
+            <div id="card-hevc" data-settings-item class="settings-row hidden scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.playback.hevcTitle" class="text-sm font-medium leading-snug">HEVC video (H.265)</h3>
+                <p data-i18n="settings.playback.hevcHelper" class="text-xs text-fg-3">Some channels use HEVC video, which Windows can't decode out of the box. Install Microsoft's HEVC extension to play them in the built-in player.</p>
+              </div>
+              <div class="settings-row__control flex-col items-end gap-1">
+                <button id="settings-hevc-install" type="button" class="btn justify-center">
+                  <IconCloudDownload aria-hidden="true" class="btn-icon" />
+                  <span data-i18n="settings.playback.hevcInstall">Install</span>
+                </button>
+                <span id="settings-hevc-status" aria-live="polite" class="text-xs text-fg-3 empty:hidden"></span>
+              </div>
+            </div>
+
             <!-- Mono audio: downmixes embedded playback to one channel for single-earbud use -->
             <div id="card-mono-audio" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
               <div class="settings-row__text">
@@ -1688,6 +1703,8 @@ const navStructure: NavSection[] = [
     import { playUiSound } from "@/scripts/lib/ui-sounds.ts"
     import { hapticsAvailable, performHaptic } from "@/scripts/lib/haptics.ts"
     import { audioTranscodeStatus } from "@/scripts/lib/audio-proxy.ts"
+    import { ensureHevcDecodable, isWindowsDesktop as isWindowsDesktopEnv } from "@/scripts/lib/hevc-extension.ts"
+    import { deviceSupportsHevc } from "@/scripts/lib/codec-hints.ts"
     import {
       ensureUserInfo,
       getMaxConnectionsSync,
@@ -2855,6 +2872,28 @@ const navStructure: NavSection[] = [
       ffmpegTestBtn?.addEventListener("click", async () => {
         flushFfmpegPath()
         await refreshFfmpegStatus()
+      })
+    }
+
+    const hevcRow = document.getElementById("card-hevc")
+    const hevcInstallBtn = document.getElementById("settings-hevc-install")
+    const hevcStatus = document.getElementById("settings-hevc-status")
+    function renderHevcRow() {
+      const hevcSupported = deviceSupportsHevc()
+      if (hevcStatus) hevcStatus.textContent = hevcSupported ? (t("settings.playback.hevcSupported") || "Already supported on this device.") : ""
+      if (hevcInstallBtn) hevcInstallBtn.classList.toggle("hidden", hevcSupported)
+    }
+    if (isWindowsDesktopEnv()) {
+      hevcRow?.classList.remove("hidden")
+      renderHevcRow()
+      hevcInstallBtn?.addEventListener("click", async () => {
+        hevcInstallBtn.disabled = true
+        try {
+          await ensureHevcDecodable({ generic: true })
+        } finally {
+          hevcInstallBtn.disabled = false
+        }
+        renderHevcRow()
       })
     }
 
