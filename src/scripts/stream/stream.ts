@@ -56,6 +56,7 @@ import {
   isAudioTranscodeChannel,
 } from "@/scripts/lib/audio-proxy.ts"
 import { parseM3U as parseSharedM3U } from "@/scripts/lib/m3u-parser.ts"
+import { stepChannelIndex, channelKeyDirection } from "@/scripts/lib/channel-step.ts"
 import {
   hasHevcNameHint,
   deviceSupportsHevc,
@@ -1043,6 +1044,20 @@ function isTypingTarget(target) {
   return false
 }
 
+function tuneRelativeChannel(e, delta, reason) {
+  if (!filtered.length) return
+  const currentIdx = currentlyPlayingId != null
+    ? filtered.findIndex((channel) => channel.id === currentlyPlayingId)
+    : -1
+  const nextIdx = stepChannelIndex(currentIdx, filtered.length, delta)
+  if (nextIdx == null) return
+  const channel = filtered[nextIdx]
+  if (!channel) return
+  e.preventDefault()
+  focusByIdx(nextIdx)
+  play(channel.id, channel.name, reason)
+}
+
 document.addEventListener("keydown", (e) => {
   // AltGr reports as Ctrl+Alt on Windows; `\` needs AltGr on many layouts (e.g. German AltGr+ß).
   const isAltGrBackslash = e.ctrlKey && e.altKey && !e.metaKey && e.key === "\\"
@@ -1074,23 +1089,13 @@ document.addEventListener("keydown", (e) => {
   }
 
   if (e.key === "[" || e.key === "]") {
-    if (!filtered.length) return
-    const currentIdx = currentlyPlayingId != null
-      ? filtered.findIndex((channel) => channel.id === currentlyPlayingId)
-      : -1
-    let nextIdx
-    if (currentIdx === -1) {
-      nextIdx = e.key === "]" ? 0 : filtered.length - 1
-    } else {
-      nextIdx = e.key === "[" ? currentIdx - 1 : currentIdx + 1
-      if (nextIdx < 0) nextIdx = filtered.length - 1
-      if (nextIdx >= filtered.length) nextIdx = 0
-    }
-    const channel = filtered[nextIdx]
-    if (!channel) return
-    e.preventDefault()
-    focusByIdx(nextIdx)
-    play(channel.id, channel.name)
+    tuneRelativeChannel(e, e.key === "]" ? 1 : -1, "user")
+    return
+  }
+
+  const channelKeyDelta = channelKeyDirection(e.key, e.keyCode)
+  if (channelKeyDelta != null) {
+    tuneRelativeChannel(e, channelKeyDelta, "channel-key")
     return
   }
 
