@@ -3478,7 +3478,31 @@ const navStructure: NavSection[] = [
     // "invoke": pendingUpdate is the {version, notes, pubDate} payload from updater_check_from (beta channel).
     let updateInstallMode = "plugin"
 
+    let progressFrame = 0
+    let queuedProgress = null
+
     function setProgress(pct, text) {
+      if (progressFrame) {
+        cancelAnimationFrame(progressFrame)
+        progressFrame = 0
+        queuedProgress = null
+      }
+      paintProgress(pct, text)
+    }
+
+    // Progress events can arrive far faster than frames; paint at most once per frame.
+    function queueProgress(pct, text) {
+      queuedProgress = { pct, text }
+      if (progressFrame) return
+      progressFrame = requestAnimationFrame(() => {
+        progressFrame = 0
+        if (!queuedProgress) return
+        paintProgress(queuedProgress.pct, queuedProgress.text)
+        queuedProgress = null
+      })
+    }
+
+    function paintProgress(pct, text) {
       if (!updateProgressWrap || !updateProgressBar || !updateProgressText) return
       if (pct == null) {
         updateProgressWrap.classList.add("hidden")
@@ -3487,6 +3511,13 @@ const navStructure: NavSection[] = [
       }
       updateProgressWrap.classList.remove("hidden")
       updateProgressWrap.classList.add("flex")
+      if (pct < 0) {
+        updateProgressBar.classList.add("indeterminate")
+        updateProgressBar.style.width = "40%"
+        updateProgressText.textContent = text || ""
+        return
+      }
+      updateProgressBar.classList.remove("indeterminate")
       const clamped = Math.max(0, Math.min(100, pct))
       updateProgressBar.style.width = `${clamped}%`
       updateProgressText.textContent = text || `${clamped.toFixed(0)}%`
@@ -3669,11 +3700,11 @@ const navStructure: NavSection[] = [
           const payload = event.payload
           if (payload.event === "Started") {
             total = payload.data?.contentLength || 0
-            setProgress(0, total ? `0 / ${fmtUpdateBytes(total)}` : t("settings.update.starting"))
+            setProgress(total ? 0 : -1, total ? `0 / ${fmtUpdateBytes(total)}` : t("settings.update.starting"))
           } else if (payload.event === "Progress") {
             received += payload.data?.chunkLength || 0
-            const pct = total ? (received / total) * 100 : 0
-            setProgress(
+            const pct = total ? (received / total) * 100 : -1
+            queueProgress(
               pct,
               total
                 ? `${fmtUpdateBytes(received)} / ${fmtUpdateBytes(total)}`
@@ -3718,11 +3749,11 @@ const navStructure: NavSection[] = [
         await pendingUpdate.downloadAndInstall((event) => {
           if (event.event === "Started") {
             total = event.data?.contentLength || 0
-            setProgress(0, total ? `0 / ${fmtUpdateBytes(total)}` : t("settings.update.starting"))
+            setProgress(total ? 0 : -1, total ? `0 / ${fmtUpdateBytes(total)}` : t("settings.update.starting"))
           } else if (event.event === "Progress") {
             received += event.data?.chunkLength || 0
-            const pct = total ? (received / total) * 100 : 0
-            setProgress(
+            const pct = total ? (received / total) * 100 : -1
+            queueProgress(
               pct,
               total
                 ? `${fmtUpdateBytes(received)} / ${fmtUpdateBytes(total)}`

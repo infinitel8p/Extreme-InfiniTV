@@ -1940,10 +1940,21 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     from { background-position: 100% 0; }
     to   { background-position: -120% 0; }
 }
+.update-progress-fill.indeterminate {
+    animation: update-progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes update-progress-slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(350%); }
+}
 @media (prefers-reduced-motion: reduce) {
     .update-progress-fill {
         animation: none;
         background: var(--color-accent);
+    }
+    .update-progress-fill.indeterminate {
+        animation: none;
+        transform: none;
     }
 }
 
