@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "الرئيسية",
   "sidebar.expirationAria": "تحذير انتهاء صلاحية الحساب",
   "sidebar.expirationTitle": "انتهاء صلاحية الحساب",
+  "sidebar.collapse": "طي الشريط الجانبي",
+  "sidebar.expand": "توسيع الشريط الجانبي",
   "settings.hiddenCategories.empty": "لا شيء مخفي",
   "settings.hiddenCategories.count": "{n} مخفي",
   "settings.hiddenCategories.helperLong": "لا تظهر الفئات المخفية في المنتقي أو الشبكة الرئيسية. استخدم أيقونة العين في صف الفئة لإخفائها؛ أعد إظهارها من هنا.",

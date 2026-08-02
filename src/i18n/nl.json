@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "Hoofd",
   "sidebar.expirationAria": "Waarschuwing accountverloop",
   "sidebar.expirationTitle": "Accountverloop",
+  "sidebar.collapse": "Zijbalk samenvouwen",
+  "sidebar.expand": "Zijbalk uitvouwen",
   "settings.hiddenCategories.empty": "Niets verborgen",
   "settings.hiddenCategories.count": "{n} verborgen",
   "settings.hiddenCategories.helperLong": "Verborgen categorieën verschijnen niet in de kiezer of het hoofdraster. Gebruik het oogpictogram op een categorierij om hem te verbergen; haal hem hier weer tevoorschijn.",

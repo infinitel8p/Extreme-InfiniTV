@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "مرکزی",
   "sidebar.expirationAria": "اکاؤنٹ کی میعاد ختم ہونے کی تنبیہ",
   "sidebar.expirationTitle": "اکاؤنٹ کی میعاد",
+  "sidebar.collapse": "سائیڈ بار سکڑائیں",
+  "sidebar.expand": "سائیڈ بار پھیلائیں",
   "settings.hiddenCategories.empty": "کچھ چھپایا نہیں گیا",
   "settings.hiddenCategories.count": "{n} چھپائے گئے",
   "settings.hiddenCategories.helperLong": "چھپائے گئے زمرے منتخب کنندہ یا مرکزی گرڈ میں نہیں آتے۔ زمرہ کی قطار پر آنکھ آئیکن استعمال کریں اسے چھپانے کے لیے؛ یہاں سے ظاہر کریں۔",

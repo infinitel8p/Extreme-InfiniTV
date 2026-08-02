@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "Utama",
   "sidebar.expirationAria": "Peringatan kedaluwarsa akun",
   "sidebar.expirationTitle": "Kedaluwarsa akun",
+  "sidebar.collapse": "Ciutkan bilah sisi",
+  "sidebar.expand": "Perluas bilah sisi",
   "settings.hiddenCategories.empty": "Tidak ada yang tersembunyi",
   "settings.hiddenCategories.count": "{n} tersembunyi",
   "settings.hiddenCategories.helperLong": "Kategori tersembunyi tidak muncul di pemilih atau kisi utama. Gunakan ikon mata di baris kategori untuk menyembunyikannya; tampilkan di sini.",

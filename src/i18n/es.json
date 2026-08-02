@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "Principal",
   "sidebar.expirationAria": "Aviso de caducidad de la cuenta",
   "sidebar.expirationTitle": "Caducidad de la cuenta",
+  "sidebar.collapse": "Contraer barra lateral",
+  "sidebar.expand": "Expandir barra lateral",
   "settings.hiddenCategories.empty": "Nada oculto",
   "settings.hiddenCategories.count": "{n} ocultas",
   "settings.hiddenCategories.helperLong": "Las categorías ocultas no aparecen en el selector ni en el grid principal. Usa el icono del ojo en una categoría para ocultarla; aquí puedes mostrarlas de nuevo.",

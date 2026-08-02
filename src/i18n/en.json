@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "Main",
   "sidebar.expirationAria": "Account expiration warning",
   "sidebar.expirationTitle": "Account expiration",
+  "sidebar.collapse": "Collapse sidebar",
+  "sidebar.expand": "Expand sidebar",
   "settings.hiddenCategories.empty": "Nothing hidden",
   "settings.hiddenCategories.count": "{n} hidden",
   "settings.hiddenCategories.helperLong": "Hidden categories don't appear in the picker or main grid. Use the eye icon on a category row to hide it; unhide here.",

@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "Principale",
   "sidebar.expirationAria": "Avviso di scadenza dell'account",
   "sidebar.expirationTitle": "Scadenza account",
+  "sidebar.collapse": "Comprimi barra laterale",
+  "sidebar.expand": "Espandi barra laterale",
   "settings.hiddenCategories.empty": "Niente di nascosto",
   "settings.hiddenCategories.count": "{n} nascoste",
   "settings.hiddenCategories.helperLong": "Le categorie nascoste non compaiono nel selettore né nella griglia principale. Usa l'icona occhio su una riga di categoria per nasconderla; mostrala di nuovo qui.",

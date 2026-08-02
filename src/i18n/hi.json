@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "मुख्य",
   "sidebar.expirationAria": "खाता समाप्ति चेतावनी",
   "sidebar.expirationTitle": "खाता समाप्ति",
+  "sidebar.collapse": "साइडबार संक्षिप्त करें",
+  "sidebar.expand": "साइडबार विस्तृत करें",
   "settings.hiddenCategories.empty": "कुछ नहीं छिपा",
   "settings.hiddenCategories.count": "{n} छिपे",
   "settings.hiddenCategories.helperLong": "छिपी हुई श्रेणियाँ पिकर या मुख्य ग्रिड में दिखाई नहीं देतीं। इसे छिपाने के लिए श्रेणी पंक्ति पर आँख आइकन का उपयोग करें; यहाँ से दिखाएँ।",

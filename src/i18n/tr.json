@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "Ana",
   "sidebar.expirationAria": "Hesap süresi sonu uyarısı",
   "sidebar.expirationTitle": "Hesap süresi sonu",
+  "sidebar.collapse": "Kenar çubuğunu daralt",
+  "sidebar.expand": "Kenar çubuğunu genişlet",
   "settings.hiddenCategories.empty": "Gizlenmiş bir şey yok",
   "settings.hiddenCategories.count": "{n} gizli",
   "settings.hiddenCategories.helperLong": "Gizlenmiş kategoriler seçicide veya ana ızgarada görünmez. Bir kategoriyi gizlemek için satırdaki göz simgesini kullanın; buradan tekrar gösterin.",

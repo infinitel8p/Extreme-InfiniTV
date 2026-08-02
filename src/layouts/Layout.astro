@@ -55,6 +55,9 @@ const documentTitle = pageTitle
         if (isFinite(cw) && cw >= 18 && cw <= 60) {
           document.documentElement.style.setProperty("--xt-channels-w", cw + "rem");
         }
+        if (localStorage.getItem("xt_sidebar_collapsed") === "1") {
+          document.documentElement.setAttribute("data-sidebar-collapsed", "");
+        }
         // Auto-enable perf mode on TV / Leanback devices
         var perfStored = localStorage.getItem("xt_perf_mode");
         if (perfStored === null) {

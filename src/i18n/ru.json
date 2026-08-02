@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "Главное меню",
   "sidebar.expirationAria": "Предупреждение об истечении срока действия учётной записи",
   "sidebar.expirationTitle": "Срок действия учётной записи",
+  "sidebar.collapse": "Свернуть боковую панель",
+  "sidebar.expand": "Развернуть боковую панель",
   "settings.hiddenCategories.empty": "Ничего не скрыто",
   "settings.hiddenCategories.count": "Скрыто: {n}",
   "settings.hiddenCategories.helperLong": "Скрытые категории не показываются в селекторе и основной сетке. Скрывайте их по значку глаза в строке категории; здесь можно вернуть их обратно.",

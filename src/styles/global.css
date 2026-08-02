@@ -12,6 +12,31 @@
    contents don't fit. */
 @custom-variant landscape-phone (@media (orientation: landscape) and (max-height: 500px));
 
+/* True when the sidebar is at its full lg+ width: viewport is lg+ and the
+   rail hasn't been manually collapsed. Mirrors --breakpoint-lg (64em). */
+@custom-variant rail-expanded {
+  @media (width >= 64em) {
+    :root:not([data-sidebar-collapsed]) & {
+      @slot;
+    }
+  }
+}
+
+/* Hide the rail's own scrollbar for the width transition's duration, set
+   via the toggle click handler, so it doesn't flash mid-animation. */
+html[data-rail-animating] .sidebar-rail {
+  overflow-y: hidden;
+}
+
+/* Labels reveal slightly behind the width slide on expand; collapse hides
+   them instantly via display so no animation plays there. */
+@keyframes rail-reveal-in {
+  from { opacity: 0; transform: translateX(-4px); }
+}
+html[data-rail-animating] .rail-reveal {
+  animation: rail-reveal-in 180ms cubic-bezier(0.16, 1, 0.3, 1) 60ms both;
+}
+
 @view-transition {
     navigation: auto;
 }

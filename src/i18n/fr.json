@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "Principal",
   "sidebar.expirationAria": "Avertissement d'expiration du compte",
   "sidebar.expirationTitle": "Expiration du compte",
+  "sidebar.collapse": "Réduire la barre latérale",
+  "sidebar.expand": "Développer la barre latérale",
   "settings.hiddenCategories.empty": "Rien de masqué",
   "settings.hiddenCategories.count": "{n} masquées",
   "settings.hiddenCategories.helperLong": "Les catégories masquées n'apparaissent ni dans le sélecteur ni dans la grille principale. Utilisez l'icône œil sur une ligne de catégorie pour la masquer ; rétablissez-la ici.",

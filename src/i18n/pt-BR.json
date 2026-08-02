@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "Principal",
   "sidebar.expirationAria": "Aviso de expiração da conta",
   "sidebar.expirationTitle": "Expiração da conta",
+  "sidebar.collapse": "Recolher barra lateral",
+  "sidebar.expand": "Expandir barra lateral",
   "settings.hiddenCategories.empty": "Nada oculto",
   "settings.hiddenCategories.count": "{n} ocultas",
   "settings.hiddenCategories.helperLong": "Categorias ocultas não aparecem no seletor nem na grade principal. Use o ícone de olho em uma categoria para ocultá-la; restaure-a aqui.",

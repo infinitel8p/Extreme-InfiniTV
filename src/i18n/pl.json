@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "Główne",
   "sidebar.expirationAria": "Ostrzeżenie o wygaśnięciu konta",
   "sidebar.expirationTitle": "Wygaśnięcie konta",
+  "sidebar.collapse": "Zwiń panel boczny",
+  "sidebar.expand": "Rozwiń panel boczny",
   "settings.hiddenCategories.empty": "Nic nie ukryto",
   "settings.hiddenCategories.count": "ukryte: {n}",
   "settings.hiddenCategories.helperLong": "Ukryte kategorie nie pojawiają się w wyborze ani głównej siatce. Użyj ikony oka w wierszu kategorii, aby ją ukryć; tutaj możesz ją odkryć.",

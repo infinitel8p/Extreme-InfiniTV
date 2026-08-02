@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "主菜单",
   "sidebar.expirationAria": "账号到期警告",
   "sidebar.expirationTitle": "账号到期",
+  "sidebar.collapse": "收起侧边栏",
+  "sidebar.expand": "展开侧边栏",
   "settings.hiddenCategories.empty": "未隐藏任何项",
   "settings.hiddenCategories.count": "已隐藏 {n} 个",
   "settings.hiddenCategories.helperLong": "已隐藏的分类不会出现在选择器或主网格中。在分类行上使用眼睛图标隐藏它；在此处取消隐藏。",

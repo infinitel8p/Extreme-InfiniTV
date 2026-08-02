@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "メイン",
   "sidebar.expirationAria": "アカウント有効期限の警告",
   "sidebar.expirationTitle": "アカウント有効期限",
+  "sidebar.collapse": "サイドバーを折りたたむ",
+  "sidebar.expand": "サイドバーを展開する",
   "settings.hiddenCategories.empty": "非表示なし",
   "settings.hiddenCategories.count": "非表示 {n} 件",
   "settings.hiddenCategories.helperLong": "非表示カテゴリーは選択メニューやメイングリッドに表示されません。カテゴリー行の目アイコンで非表示にし、ここで再表示できます。",

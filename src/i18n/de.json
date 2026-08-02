@@ -1119,6 +1119,8 @@
   "sidebar.mainLabel": "Hauptmenü",
   "sidebar.expirationAria": "Warnung zum Kontoablauf",
   "sidebar.expirationTitle": "Kontoablauf",
+  "sidebar.collapse": "Seitenleiste einklappen",
+  "sidebar.expand": "Seitenleiste ausklappen",
   "settings.hiddenCategories.empty": "Nichts ausgeblendet",
   "settings.hiddenCategories.count": "{n} ausgeblendet",
   "settings.hiddenCategories.helperLong": "Ausgeblendete Kategorien erscheinen weder im Auswahlmenü noch im Hauptraster. Über das Augensymbol in einer Kategoriezeile lassen sie sich verbergen; hier können sie wieder eingeblendet werden.",
