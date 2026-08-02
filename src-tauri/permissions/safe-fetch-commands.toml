@@ -1,0 +1,8 @@
+# Cross-platform ACL for the SSRF-safe manifest probe, granted from default.json.
+
+[[permission]]
+identifier = "allow-safe-fetch-commands"
+description = "Local-origin access to the SSRF-safe manifest probe command."
+commands.allow = [
+    "probe_manifest",
+]

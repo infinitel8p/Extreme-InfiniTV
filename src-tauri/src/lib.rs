@@ -16,6 +16,8 @@ mod hevc_extension;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod matroska;
 
+mod safe_fetch;
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod sniffer;
 
@@ -180,6 +182,7 @@ pub fn run() {
             external_player::sandbox_runtime,
             hevc_extension::install_appx_package,
             hevc_extension::is_store_build,
+            safe_fetch::probe_manifest,
             sniffer::sniff_page,
             sniffer::cancel_sniff,
             sniffer::sniff_report,
@@ -204,6 +207,7 @@ pub fn run() {
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        safe_fetch::probe_manifest,
         warmup::warmup_start,
         warmup::warmup_status,
         warmup::warmup_cancel,

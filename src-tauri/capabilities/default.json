@@ -56,6 +56,7 @@
         { "url": "ms-windows-store://**" }
       ]
     },
-    "allow-warmup-commands"
+    "allow-warmup-commands",
+    "allow-safe-fetch-commands"
   ]
 }
