@@ -53,7 +53,7 @@ If new keys appear in `en.json`, locales that don't yet have them fall back to E
 
 ## How the runtime loads translations
 
-- Active locale messages are cached to `localStorage["xt_locale_messages_v1"]` so the pre-paint script in `Layout.astro` can translate `[data-i18n]` elements before first paint - no FOUC.
+- Active locale messages are cached to `localStorage["xt_locale_messages_v3"]` so the pre-paint script in `Layout.astro` can translate `[data-i18n]` elements before first paint - no FOUC. (The key's version suffix is bumped when the cache format changes; check `LOCALE_MESSAGES_STORAGE_KEY` in `i18n.ts` for the current one.)
 - The `LOCALE_EVENT` (`xt:locale-changed`) fires on locale change. Svelte islands subscribe and re-render translations.
 - Markup uses `data-i18n="key"` (text), `data-i18n-html="key"` (innerHTML), and `data-i18n-attr="title:key;aria-label:key2"` for attributes.
 

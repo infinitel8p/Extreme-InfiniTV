@@ -1,6 +1,11 @@
 package com.infinitel8p.xtream
 
+import android.content.Context
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
@@ -34,6 +39,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -112,6 +118,70 @@ class WebSettingsBridge(
     val target = if (ua.isNullOrEmpty()) defaultUa else ua
     activity.runOnUiThread {
       webViewRef()?.settings?.userAgentString = target
+    }
+  }
+}
+
+// Falls back to the system Vibrator when the view/system haptic path reports failure.
+class HapticsBridge(
+  private val activity: TauriActivity,
+  private val webViewProvider: () -> WebView?,
+) {
+  @JavascriptInterface
+  fun perform(kind: String) {
+    activity.runOnUiThread {
+      val view = webViewProvider() ?: return@runOnUiThread
+      val constant = when (kind) {
+        "confirm" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+          HapticFeedbackConstants.CONFIRM
+        } else {
+          HapticFeedbackConstants.KEYBOARD_TAP
+        }
+        else -> HapticFeedbackConstants.CLOCK_TICK
+      }
+      view.isHapticFeedbackEnabled = true
+      val performed = view.performHapticFeedback(constant)
+      // False can mean "unsupported" or "user disabled the system setting" - only the former should fall back.
+      if (!performed && systemHapticFeedbackEnabled()) {
+        vibrateFallback(kind)
+      }
+    }
+  }
+
+  private fun systemHapticFeedbackEnabled(): Boolean {
+    return try {
+      Settings.System.getInt(activity.contentResolver, Settings.System.HAPTIC_FEEDBACK_ENABLED, 1) != 0
+    } catch (error: Throwable) {
+      true
+    }
+  }
+
+  private fun vibrateFallback(kind: String) {
+    try {
+      val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val manager = activity.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+        manager.defaultVibrator
+      } else {
+        @Suppress("DEPRECATION")
+        activity.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+      }
+      if (!vibrator.hasVibrator()) return
+      when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+          val effect = if (kind == "confirm") VibrationEffect.EFFECT_CLICK else VibrationEffect.EFFECT_TICK
+          vibrator.vibrate(VibrationEffect.createPredefined(effect))
+        }
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O -> {
+          val durationMs = if (kind == "confirm") 20L else 10L
+          vibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+        }
+        else -> {
+          @Suppress("DEPRECATION")
+          vibrator.vibrate(if (kind == "confirm") 20L else 10L)
+        }
+      }
+    } catch (error: Throwable) {
+      Log.w("HapticsBridge", "vibrate fallback failed", error)
     }
   }
 }
@@ -1050,6 +1120,7 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(LogShareBridge(this), "AndroidLog")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
     webView.addJavascriptInterface(AndroidVideoBridge(this), "AndroidVideo")
+    webView.addJavascriptInterface(HapticsBridge(this, { hostedWebView }), "AndroidHaptics")
     val sniffer = SnifferBridge(this, { hostedWebView })
     snifferBridge = sniffer
     webView.addJavascriptInterface(sniffer, "AndroidSniffer")

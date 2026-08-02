@@ -28,6 +28,10 @@
   const DETECT_STATUS_PREFIX = "xt_player_detect_status_"
 
   const isAndroidEnv = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent || "")
+  const isDesktopTauriEnv =
+    typeof window !== "undefined" &&
+    !!(window.__TAURI_INTERNALS__ || window.__TAURI__) &&
+    !isAndroidEnv
 
   let backend = $state(getPlayerBackend())
   let pathMpv = $state(getPlayerPath("mpv"))
@@ -41,6 +45,8 @@
   let statusMpv = $state(readDetectStatus("mpv"))
   let statusVlc = $state(readDetectStatus("vlc"))
   let externalPref = $state(getExternalPlayerPref())
+  // externalPlayersAvailable already reflects sandbox state.
+  const sandboxed = isDesktopTauriEnv && !externalPlayersAvailable
 
   let titleLabel = $state(label("title", "Playback"))
   let videojsLabel = $state(label("backend.videojs", "Video.js"))
@@ -66,6 +72,7 @@
   let externalPrefLabel = $state(label("externalPref.label", "Preferred external player"))
   let externalPrefHelper = $state(label("externalPref.helper", "Which player the 'Open in…' button uses when both MPV and VLC are set."))
   let externalPrefAskLabel = $state(label("externalPref.ask", "Ask each time"))
+  let sandboxNoteLabel = $state(label("sandboxNote", "External players (MPV/VLC) aren't available in Snap or Flatpak installs."))
 
   function label(suffix, fallback, params) {
     const key = `settings.playback.${suffix}`
@@ -130,6 +137,7 @@
     externalPrefLabel = label("externalPref.label", "Preferred external player")
     externalPrefHelper = label("externalPref.helper", "Which player the 'Open in…' button uses when both MPV and VLC are set.")
     externalPrefAskLabel = label("externalPref.ask", "Ask each time")
+    sandboxNoteLabel = label("sandboxNote", "External players (MPV/VLC) aren't available in Snap or Flatpak installs.")
   }
 
   function onBackendChange(event) {
@@ -290,7 +298,7 @@
       {/if}
     </label>
 
-    {#if externalPlayersAvailable}
+    {#if externalPlayersAvailable && !sandboxed}
     <label class="player-row">
       <input
         type="radio"
@@ -358,10 +366,12 @@
         </span>
       {/if}
     </label>
+    {:else if sandboxed}
+    <p class="text-xs text-fg-3">{sandboxNoteLabel}</p>
     {/if}
   </fieldset>
 
-  {#if externalPlayersAvailable && pathMpv && pathVlc}
+  {#if externalPlayersAvailable && !sandboxed && pathMpv && pathVlc}
     <fieldset class="flex flex-col gap-2 player-config">
       <legend class="text-eyebrow font-medium uppercase text-fg-3">{externalPrefLabel}</legend>
       <p class="text-xs text-fg-3">{externalPrefHelper}</p>
@@ -400,7 +410,7 @@
     </fieldset>
   {/if}
 
-  {#if backend === "mpv"}
+  {#if backend === "mpv" && !sandboxed}
     <div class="player-config">
       <label class="flex flex-col gap-1.5">
         <span class="text-eyebrow font-medium uppercase text-fg-3">{pathLabel}</span>
@@ -452,7 +462,7 @@
         </label>
       </details>
     </div>
-  {:else if backend === "vlc"}
+  {:else if backend === "vlc" && !sandboxed}
     <div class="player-config">
       <label class="flex flex-col gap-1.5">
         <span class="text-eyebrow font-medium uppercase text-fg-3">{pathLabel}</span>
@@ -646,10 +656,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.875rem;
-    padding: 0.875rem 1rem;
-    border-radius: 0.75rem;
-    border: 1px solid var(--color-line);
-    background: color-mix(in oklab, var(--color-surface-2) 60%, var(--color-surface));
+    padding-top: 0.875rem;
+    border-top: 1px solid var(--color-line-soft);
   }
   .player-config__advanced {
     border-top: 1px solid var(--color-line-soft);

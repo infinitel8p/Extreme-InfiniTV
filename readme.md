@@ -7,7 +7,7 @@
 <p align="center"><strong>A cross-platform IPTV player for Xtream Codes and M3U / M3U8 playlists.</strong></p>
 
 <p align="center">
-  Live TV with EPG, movies, series, offline downloads, and TV-remote (D-pad) navigation.<br/>
+  Live TV with EPG and catch-up, movies, series, custom playlists, offline downloads, and TV-remote (D-pad) navigation.<br/>
   Ships on Windows (Microsoft Store + installer), Android phone / tablet / TV (Google Play), macOS, Linux, and the web.
 </p>
 
@@ -17,6 +17,9 @@
   </a>
   <a href="https://play.google.com/store/apps/details?id=com.infinitel8p.xtream">
     <img src="https://img.shields.io/badge/Google%20Play-Download-34A853?logo=google-play&logoColor=white" height="50" alt="Get Extreme InfiniTV on Google Play"/>
+  </a>
+  <a href="https://snapcraft.io/extreme-infinitv">
+    <img src="https://img.shields.io/badge/Snap%20Store-Download-E95420?logo=snapcraft&logoColor=white" height="50" alt="Get Extreme InfiniTV from the Snap Store"/>
   </a>
   <a href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest">
     <img src="https://img.shields.io/badge/GitHub-Releases-181717?logo=github&logoColor=white" height="50" alt="Download Extreme InfiniTV from GitHub Releases"/>
@@ -83,16 +86,23 @@
 
 ## Features
 
-- **Two backends, one UI.** Sign in with Xtream Codes credentials (host / port / user / pass) or paste a direct `.m3u` / `.m3u8` URL. The app detects the mode automatically.
-- **Live TV** with category filtering, channel search, virtualised list, and inline EPG (now / next / today).
+- **Any source, one UI.** Sign in with Xtream Codes credentials, paste an M3U / M3U8 URL or a direct stream link, or load a playlist file from your device. The app detects the mode automatically.
+- **Live TV** with category filtering, channel search, channel-number entry, a virtualised list, and inline EPG (now / next / today).
+- **[Catch-up TV and replay](https://dev.infinitel8p.com/Extreme-InfiniTV/catch-up/).** Replay programmes from your provider's archive and pause or rewind behind live, with a full-programme seekbar.
+- **[Custom playlists](https://dev.infinitel8p.com/Extreme-InfiniTV/custom-playlists/)** built in a full in-app editor: pull channels from any playlist, reorder and group them, rename, renumber, find and replace, check links, and export as `.m3u`.
+- **[Add a stream from any website](https://dev.infinitel8p.com/Extreme-InfiniTV/add-from-website/).** Paste a page URL and the app sniffs the network for playable HLS / DASH streams, with quality labels and multi-select.
 - **Movies (VOD)** and **Series** library with poster grids, detail dialogs, and season / episode navigation.
-- **Full schedule grid** on the EPG page, with timezone-aware "all times local" rendering.
-- **Picture-in-picture** and a Video.js-powered player tuned for HLS.
-- **Multiple playlists**, switchable from the sidebar without re-entering credentials.
-- **TV-first navigation.** Spatial focus (D-pad / arrow keys) is wired across the whole app via `spatial-navigation-polyfill`. Hit targets, focus rings, and reflow tested for 10-foot UI.
-- **Light and dark themes**, both first-class. Honours `prefers-color-scheme`, `prefers-reduced-motion`, and `prefers-contrast`.
+- **Full schedule grid** on the EPG page, with timezone-aware "all times local" rendering, custom EPG sources, and channel mapping.
+- **A player for everything.** Three embedded engines (ArtPlayer, Video.js, Shaka) cover HLS, MPEG-TS, MPEG-DASH with ClearKey, and HEVC (with one-click install of the Windows HEVC extension). Picture-in-picture included.
+- **[Embedded subtitles](https://dev.infinitel8p.com/Extreme-InfiniTV/subtitles/)** from MP4 files everywhere and MKV files on desktop, plus **audio track switching** and **[automatic audio repair](https://dev.infinitel8p.com/Extreme-InfiniTV/audio-formats/)**: AC-3 / E-AC-3 / MP2 / DTS transcoded on the fly through a bundled FFmpeg (Windows / Linux).
+- **[External players](https://dev.infinitel8p.com/Extreme-InfiniTV/external-players/).** Hand any stream to MPV or VLC on desktop (with window reuse), or to any installed video app on Android.
+- **Multiple playlists**, switchable from the sidebar without re-entering credentials, each with its own favorites, watchlist, progress, and health panel.
+- **TV-first navigation.** Spatial focus (D-pad / arrow keys) is wired across the whole app via `spatial-navigation-polyfill`. Hit targets, focus rings, and reflow tested for 10-foot UI, plus a TV safe-area setting for overscan.
+- **16 languages** including RTL (Arabic, Urdu), translated before first paint so there's no flash of English.
+- **Light and dark themes** with seven accent colors, both first-class. Honours `prefers-color-scheme`, `prefers-reduced-motion`, and `prefers-contrast`.
 - **Adjustable font scale** (Default / Medium / Large / X-Large) plus a responsive root size that scales the whole UI on 4K and 8K displays.
-- **Self-updating Windows desktop build** via the Tauri updater (signed with minisign, served from GitHub Releases).
+- **Self-updating desktop builds** (Windows NSIS and Linux AppImage) via the Tauri updater, signed with minisign and served from GitHub Releases, with stable and beta channels and a "What's new" dialog after each update.
+- **Backup and restore.** Export playlists, preferences, and settings as one file and import them on another device.
 - **Offline-friendly persistence.** Credentials and preferences live in the OS app-data dir on Tauri builds, with a localStorage / cookie fallback on the web build.
 - **No tracking, no ads, no telemetry.** The app collects nothing about you or your viewing habits.
 
@@ -102,10 +112,12 @@
 | --- | --- | --- |
 | Windows (Microsoft Store) | [apps.microsoft.com](https://apps.microsoft.com/detail/9NN162Z0WXSR) | Microsoft Store |
 | Windows (sideload) | NSIS `.exe` (or `.msi`) from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | In-app auto-updater |
-| macOS (Apple Silicon + Intel) | Universal `.dmg` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | In-app auto-updater |
+| macOS (Apple Silicon + Intel) | Universal `.dmg` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | Update check in-app, download from Releases |
+| Linux (Snap, most distros) | `sudo snap install extreme-infinitv` or [Snap Store](https://snapcraft.io/extreme-infinitv) | Snap Store |
 | Linux (Debian / Ubuntu / Mint) | `.deb` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | Manual |
 | Linux (Fedora / openSUSE / RHEL) | `.rpm` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | Manual |
 | Linux (any distro, portable) | `.AppImage` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | In-app auto-updater |
+| Raspberry Pi 4 / 5 (64-bit OS) | `sudo snap install extreme-infinitv`, or arm64 `.deb` / `.AppImage` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | Snap Store / in-app (AppImage) |
 | Android phone / tablet | [Google Play](https://play.google.com/store/apps/details?id=com.infinitel8p.xtream) | Play Store |
 | Android TV | Same APK, sideload via ADB or use Play Store on supported devices | Play Store |
 | Web preview | Build with `pnpm build` and serve `dist/` (no auto-update, no native features) | Manual |
@@ -130,7 +142,7 @@ Then open the app normally. You only need to do this once per install.
 
 ## Develop
 
-Requirements: [pnpm](https://pnpm.io) (the package manager is pinned in `package.json`), Node 20+, the Rust toolchain (only for `tauri` commands), and Android Studio for `tauri:android`.
+Requirements: [pnpm](https://pnpm.io) (the package manager is pinned in `package.json`), Node 20+, the Rust toolchain (only for `tauri` commands), Java 21 and Android Studio for `tauri:android`. `mise.toml` pins the toolchain versions if you use [mise](https://mise.jdx.dev).
 
 ```bash
 pnpm install
@@ -139,13 +151,15 @@ pnpm tauri dev            # Native desktop shell (auto-spawns pnpm dev)
 pnpm tauri:android        # Android dev shell
 ```
 
+On Windows and Linux, `pnpm tauri dev` / `pnpm tauri build` first download and checksum-verify a trimmed FFmpeg sidecar into `src-tauri/binaries/` (run `pnpm fetch-ffmpeg` to do it manually). The first Tauri build therefore needs network access.
+
 To test the dev server on another device on the LAN (phone, TV), set `XTREAM_HMR_HOST` to your machine's LAN IP so Vite advertises the right HMR host:
 
 ```bash
 XTREAM_HMR_HOST=192.168.1.50 pnpm dev
 ```
 
-Tests run with Vitest (`pnpm test`); the suite covers pure-function libs in `tests/`. Lint with ESLint flat config (`pnpm lint` / `pnpm lint:fix`); no Prettier. TypeScript is in strict mode (`tsconfig.json` extends `astro/tsconfigs/strict`); the `@/*` alias maps to `src/*`.
+Tests run with Vitest (`pnpm test`); ~28 suites in `tests/` cover the parsers, serializers, catch-up math, codec hints, custom playlists, backup, and the playback proxies. Lint with ESLint flat config (`pnpm lint` / `pnpm lint:fix`); no Prettier. TypeScript is in strict mode (`tsconfig.json` extends `astro/tsconfigs/strict`); the `@/*` alias maps to `src/*`.
 
 ## Credits
 
@@ -154,3 +168,5 @@ Copyright (c) 2025 Ludovico Ferrara.
 ## License
 
 Extreme InfiniTV is released under the [GNU General Public License v3.0 or later](LICENSE). You are free to use, study, share, and modify it; any distributed fork or derivative must remain under the same license and ship its source.
+
+The Windows and Linux desktop builds bundle a trimmed [FFmpeg](https://ffmpeg.org) binary (LGPL v2.1) for the automatic audio fix. The full notice, source pointer, and build recipe are in the app under **Settings > About > Open-source licenses**.

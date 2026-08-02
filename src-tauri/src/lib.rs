@@ -2,6 +2,9 @@
 mod audio_proxy;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod compositing;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod discord;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -12,6 +15,8 @@ mod hevc_extension;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod matroska;
+
+mod safe_fetch;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod sniffer;
@@ -27,6 +32,8 @@ mod vod_audio_proxy;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod vod_proxy;
+
+mod warmup;
 
 // The Stdout target also covers Android release builds; tauri-plugin-log routes it to logcat there, not just the debug-only terminal.
 #[cfg(not(target_os = "ios"))]
@@ -123,6 +130,12 @@ fn install_panic_hook() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    // Must run before the builder exists: the main window is created before
+    // setup(), so the WebKitGTK env var has to land before that.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    compositing::initialize(&context.config().identifier);
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -130,13 +143,15 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .manage(warmup::WarmupState::default());
 
     #[cfg(not(target_os = "ios"))]
     let builder = builder.plugin(build_log_plugin().build());
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder
+        .plugin(external_player::sandbox_bootstrap_plugin())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(
@@ -158,12 +173,16 @@ pub fn run() {
             audio_proxy::audio_transcode_available,
             audio_proxy::register_audio_transcode,
             audio_proxy::unregister_audio_transcode,
+            compositing::compositing_state,
+            compositing::compositing_set,
             discord::discord_set_activity,
             discord::discord_clear,
             discord::discord_disconnect,
             external_player::launch_external_player,
+            external_player::sandbox_runtime,
             hevc_extension::install_appx_package,
             hevc_extension::is_store_build,
+            safe_fetch::probe_manifest,
             sniffer::sniff_page,
             sniffer::cancel_sniff,
             sniffer::sniff_report,
@@ -176,24 +195,39 @@ pub fn run() {
             vod_audio_proxy::unregister_vod_audio_remux,
             vod_proxy::register_vod_proxy,
             vod_proxy::unregister_vod_proxy,
+            warmup::warmup_start,
+            warmup::warmup_status,
+            warmup::warmup_cancel,
+            warmup::warmup_ack,
+            warmup::warmup_read_staged,
         ]);
 
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_android_fs::init());
 
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        safe_fetch::probe_manifest,
+        warmup::warmup_start,
+        warmup::warmup_status,
+        warmup::warmup_cancel,
+        warmup::warmup_ack,
+        warmup::warmup_read_staged,
+    ]);
+
     let app = builder
-        .setup(|_app| {
+        .setup(|app| {
             install_panic_hook();
             #[cfg(target_os = "android")]
-            prune_old_android_logs(_app);
+            prune_old_android_logs(app);
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             external_player::sweep_orphan_mpv_sockets();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            tray::install(_app)?;
+            tray::install(app)?;
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 use tauri::Manager;
-                if let Some(main_window) = _app.get_webview_window("main") {
+                if let Some(main_window) = app.get_webview_window("main") {
                     if let Err(error) = main_window.set_decorations(false) {
                         log::warn!("[window] set_decorations(false) failed: {error}");
                     }
@@ -206,9 +240,11 @@ pub fn run() {
                     let _ = main_window.set_focus();
                 }
             }
+            // Synchronous: runs before any IPC, so it can't race a warmup_start's staging_dir.
+            warmup::sweep_stale_staging(app.handle());
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while running tauri application");
 
     app.run(|_app_handle, _event| {

@@ -1,0 +1,97 @@
+name: Cleanup Betas
+
+# Triggers:
+#  - a GitHub release is published -> deletes beta prereleases the new
+#    stable supersedes
+#  - run "Cleanup Betas" from the Actions tab -> resolves the current
+#    published stable via the API instead of an event payload
+#
+# release.yml's publish-release job (currently commented out) would flip
+# draft=false via GITHUB_TOKEN, which also doesn't emit this event; the
+# workflow_dispatch path covers that case if it's ever re-enabled.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  cleanup-betas:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete superseded beta prereleases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "release" ]; then
+            # Stable-only guard: beta.yml also publishes releases, so make sure this only acts on a vX.Y.Z publish.
+            if ! printf '%s' "$EVENT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "Published release $EVENT_TAG is not a stable version tag, skipping."
+              exit 0
+            fi
+            STABLE_TAG="$EVENT_TAG"
+          else
+            STABLE_TAGS=$(gh api --paginate "repos/${{ github.repository }}/releases" \
+              --jq '.[] | select(.draft == false) | select(.prerelease == false) | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | .tag_name')
+            STABLE_TAG=""
+            while IFS= read -r CANDIDATE_TAG; do
+              [ -z "$CANDIDATE_TAG" ] && continue
+              if [ -z "$STABLE_TAG" ]; then
+                STABLE_TAG="$CANDIDATE_TAG"
+                continue
+              fi
+              CANDIDATE_VERSION="${CANDIDATE_TAG#v}"
+              CURRENT_VERSION="${STABLE_TAG#v}"
+              # Numeric compare (no lexical sort) to find the newest published stable for the manual-run path.
+              if CANDIDATE_VERSION="$CANDIDATE_VERSION" CURRENT_VERSION="$CURRENT_VERSION" node -e "
+                const a = process.env.CANDIDATE_VERSION.split('.').map(Number);
+                const b = process.env.CURRENT_VERSION.split('.').map(Number);
+                let gt = false;
+                for (let i = 0; i < 3; i++) {
+                  if (a[i] !== b[i]) { gt = a[i] > b[i]; break; }
+                }
+                process.exit(gt ? 0 : 1);
+              "; then
+                STABLE_TAG="$CANDIDATE_TAG"
+              fi
+            done <<< "$STABLE_TAGS"
+            if [ -z "$STABLE_TAG" ]; then
+              echo "No published stable release found, nothing to clean up against."
+              exit 0
+            fi
+          fi
+          STABLE_VERSION="${STABLE_TAG#v}"
+          # Regex fence: only vX.Y.Z-beta.N tags match, never ffmpeg-sidecar-v2 or stable tags.
+          BETA_TAGS=$(gh api --paginate "repos/${{ github.repository }}/releases" \
+            --jq '.[] | select(.draft == false) | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-beta\\.[0-9]+$")) | .tag_name')
+          DELETED=0
+          while IFS= read -r BETA_TAG; do
+            [ -z "$BETA_TAG" ] && continue
+            BETA_VERSION="${BETA_TAG#v}"
+            BETA_BASE="${BETA_VERSION%%-beta.*}"
+            # <=: a beta of the released version, or an older one, is superseded by this stable release.
+            if BETA_BASE="$BETA_BASE" STABLE_VERSION="$STABLE_VERSION" node -e "
+              const a = process.env.BETA_BASE.split('.').map(Number);
+              const b = process.env.STABLE_VERSION.split('.').map(Number);
+              let le = true;
+              for (let i = 0; i < 3; i++) {
+                if (a[i] !== b[i]) { le = a[i] < b[i]; break; }
+              }
+              process.exit(le ? 0 : 1);
+            "; then
+              if gh release delete "$BETA_TAG" --cleanup-tag --yes --repo "${{ github.repository }}"; then
+                echo "Deleted superseded beta release $BETA_TAG"
+                DELETED=$((DELETED + 1))
+              else
+                echo "::warning::Failed to delete beta release $BETA_TAG, continuing"
+              fi
+            fi
+          done <<< "$BETA_TAGS"
+          if [ "$DELETED" -eq 0 ]; then
+            echo "Nothing to delete."
+          fi

@@ -413,14 +413,25 @@ export async function diagnoseStream(url, onUpdate) {
     }
   }
 
-  // probe through the WebView's own fetch
-  const probeTarget = report.firstSegment?.url || url
+  // Probe the WebView's own fetch for CORS / mixed-content blocks. Uses the
+  // original URL: segment URLs are single-use session tokens the HEAD above
+  // already consumed, so re-fetching one reports a spurious 403.
+  const probeTarget = url
   if (hasUrlCredentials(probeTarget)) {
     // WebView fetch always rejects credentialed URLs; probing would misreport CORS.
     report.webviewProbe = { skipped: true, target: probeTarget }
   } else {
     report.webviewProbe = await probeWebViewFetch(probeTarget)
     report.webviewProbe.target = probeTarget
+    // Segments on another CDN host have their own CORS policy; flag that gap.
+    const segmentUrl = report.firstSegment?.url
+    if (segmentUrl) {
+      try {
+        if (new URL(segmentUrl).origin !== new URL(probeTarget).origin) {
+          report.webviewProbe.segmentOriginDiffers = new URL(segmentUrl).origin
+        }
+      } catch {}
+    }
   }
   emit()
 

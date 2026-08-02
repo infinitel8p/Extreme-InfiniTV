@@ -3,7 +3,7 @@
   // user has previously ticked "Always use this app" inside the player
   // picker. Clearing it brings the picker back on the next external launch.
   import { onMount } from "svelte"
-  import { IconExternalLink, IconX } from "@tabler/icons-svelte"
+  import { IconX } from "@tabler/icons-svelte"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import {
     getRememberedAndroidPlayer,
@@ -39,39 +39,37 @@
 </script>
 
 {#if available && remembered}
-  <article
+  <div
     id="android-default-player-section"
-    class="icon-mark-host rounded-2xl border border-line bg-surface p-5 sm:p-6 flex flex-col gap-4 scroll-mt-6">
-    <div class="flex items-start gap-3">
-      <span class="icon-mark">
-        <IconExternalLink aria-hidden="true" stroke={2} />
-      </span>
-      <div class="flex flex-col gap-1 min-w-0">
-        <h3 class="text-base font-semibold">{tr("settings.androidDefaultPlayer.title")}</h3>
-        <p class="text-xs text-fg-3">{tr("settings.androidDefaultPlayer.helper")}</p>
-      </div>
+    data-settings-item
+    class="settings-row scroll-mt-6 lg:scroll-mt-20 border-t border-line/60">
+    <div class="settings-row__text">
+      <h3 class="text-sm font-medium leading-snug">{tr("settings.androidDefaultPlayer.title")}</h3>
+      <p class="text-xs text-fg-3">{tr("settings.androidDefaultPlayer.helper")}</p>
     </div>
-    <div class="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-line bg-bg">
-      {#if remembered.icon}
-        <img
-          src={remembered.icon}
-          alt=""
-          aria-hidden="true"
-          loading="eager"
-          decoding="sync"
-          class="shrink-0 w-10 h-10 rounded-xl object-contain bg-surface-2"
-        />
-      {:else}
-        <span
-          aria-hidden="true"
-          class="shrink-0 w-10 h-10 rounded-xl bg-surface-2 grid place-items-center text-fg-3 text-base font-semibold">
-          {(remembered.label || remembered.pkg).charAt(0).toUpperCase()}
+    <div class="settings-row__control">
+      <div class="flex items-center gap-2.5 min-w-0">
+        {#if remembered.icon}
+          <img
+            src={remembered.icon}
+            alt=""
+            aria-hidden="true"
+            loading="eager"
+            decoding="sync"
+            class="shrink-0 w-8 h-8 rounded-lg object-contain bg-surface-2"
+          />
+        {:else}
+          <span
+            aria-hidden="true"
+            class="shrink-0 w-8 h-8 rounded-lg bg-surface-2 grid place-items-center text-fg-3 text-xs font-semibold">
+            {(remembered.label || remembered.pkg).charAt(0).toUpperCase()}
+          </span>
+        {/if}
+        <span class="flex flex-col min-w-0">
+          <span class="text-sm font-medium leading-snug truncate">{remembered.label || remembered.pkg}</span>
+          <span class="text-xs text-fg-3 truncate">{remembered.pkg}</span>
         </span>
-      {/if}
-      <span class="flex flex-col grow min-w-0">
-        <span class="text-sm font-medium truncate">{remembered.label || remembered.pkg}</span>
-        <span class="text-xs text-fg-3 truncate">{remembered.pkg}</span>
-      </span>
+      </div>
       <button
         type="button"
         class="btn text-fg-2 shrink-0"
@@ -81,5 +79,5 @@
         <span class="hidden sm:inline">{tr("settings.androidDefaultPlayer.clear")}</span>
       </button>
     </div>
-  </article>
+  </div>
 {/if}

@@ -1,0 +1,108 @@
+# Baselines are Linux-rendered *-linux.png files under tests/visual/visual.spec.ts-snapshots/.
+# "compare" diffs every PR against them. "update-baselines" regenerates and commits them on
+# every push to main (a merge defines the new correct look) and via manual dispatch; the
+# baseline commit itself is skipped from retriggering via the paths filter.
+# Local Windows/macOS runs make gitignored *-win32.png/*-darwin.png instead.
+name: visual-regression
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "public/**"
+      - "tests/visual/**"
+      - "!tests/visual/*-snapshots/**"
+      - "playwright.config.ts"
+      - "package.json"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - run: pnpm test:visual
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: visual-regression-report
+          path: |
+            playwright-report/
+            test-results/
+
+  update-baselines:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: visual-baselines-main
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - run: pnpm test:visual --update-snapshots
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visual-baselines
+          path: tests/visual/visual.spec.ts-snapshots/
+
+      - name: Commit updated baselines
+        if: github.event_name == 'push'
+        run: |
+          if git status --porcelain tests/visual | grep -q .; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add tests/visual
+            git commit -m "chore: update visual regression baselines"
+            for attempt in 1 2 3; do
+              git pull --rebase origin main
+              if git push; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::push failed after 3 attempts"
+                exit 1
+              fi
+              echo "Push rejected (attempt $attempt), retrying after rebase..."
+            done
+          else
+            echo "Baselines unchanged, nothing to commit."
+          fi

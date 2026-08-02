@@ -29,8 +29,8 @@ function buildSections(): ShortcutSection[] {
       items: [
         { keys: ["0", "9"], joiner: t("keyboardHelp.joiner.to"), desc: t("keyboardHelp.desc.jumpChannelNumber") },
         { keys: ["Enter"], desc: t("keyboardHelp.desc.commitNumber") },
-        { keys: ["["], desc: t("keyboardHelp.desc.previousChannel") },
-        { keys: ["]"], desc: t("keyboardHelp.desc.nextChannel") },
+        { keys: ["[", "Ch-"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.previousChannel") },
+        { keys: ["]", "Ch+"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.nextChannel") },
         { keys: ["\\"], desc: t("keyboardHelp.desc.lastChannel") },
         { keys: ["↑", "↓"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.moveRow") },
         { keys: ["PgUp", "PgDn"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.movePage") },
@@ -45,6 +45,7 @@ function buildSections(): ShortcutSection[] {
         { keys: ["F"], desc: t("keyboardHelp.desc.fullscreenToggle") },
         { keys: ["J"], desc: t("keyboardHelp.desc.seekBack") },
         { keys: ["L"], desc: t("keyboardHelp.desc.seekForward") },
+        { keys: ["Z", "X"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.subtitleDelay") },
       ],
     },
   ]

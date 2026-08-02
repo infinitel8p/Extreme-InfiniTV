@@ -14,8 +14,15 @@ import {
   readLocalM3UContent,
   getEntries,
   entryToCreds,
+  isTauri,
 } from "@/scripts/lib/creds.js"
 import { normalize } from "@/scripts/lib/text.js"
+import {
+  parseCategoriesToMap,
+  mapXtreamLiveRows,
+  mapXtreamVodRows,
+  mapXtreamSeriesRows,
+} from "@/scripts/lib/catalog-mappers.js"
 import { providerFetch, streamingText } from "@/scripts/lib/provider-fetch.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
@@ -30,9 +37,9 @@ import { t } from "@/scripts/lib/i18n.js"
 import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
 import { log } from "@/scripts/lib/log.js"
 
-const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
-const VOD_TTL_MS = 24 * 60 * 60 * 1000
-const SERIES_TTL_MS = 24 * 60 * 60 * 1000
+export const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
+export const VOD_TTL_MS = 24 * 60 * 60 * 1000
+export const SERIES_TTL_MS = 24 * 60 * 60 * 1000
 
 const EVT_WARMED = "xt:catalog-warmed"
 const EVT_WARMING_START = "xt:catalog-warming-start"
@@ -80,19 +87,10 @@ async function fetchLiveCategoryMap(playlistId) {
     log.warn("[xt:catalog] live categories parse failed:", err?.message || err)
     return []
   })
-  const arr = Array.isArray(data)
-    ? data
-    : Array.isArray(data?.categories)
-    ? data.categories
-    : []
-  return new Map(
-    arr
-      .filter((c) => c && c.category_id != null)
-      .map((c) => [String(c.category_id), String(c.category_name || "").trim()])
-  )
+  return parseCategoriesToMap(data)
 }
 
-function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestType, drmScheme, licenseKey) {
+export function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestType, drmScheme, licenseKey) {
   const fallbackCategory = t("stream.uncategorized") || "Uncategorized"
   const isDirectStream = typeof sourceUrl === "string" && /^https?:\/\//i.test(sourceUrl)
   const isDashSource = isDirectStream && manifestType === "mpd"
@@ -193,6 +191,14 @@ async function fetchCustomLiveChannels(playlistId, opts = {}) {
 export async function ensureLive(creds, playlistId, opts = {}) {
   const isM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
   const kind = isM3U ? "m3u" : "live"
+  if (isTauri) {
+    try {
+      const { awaitNativeKind } = await import("@/scripts/lib/warmup-native.ts")
+      await awaitNativeKind(playlistId, kind)
+    } catch (err) {
+      log.warn("[xt:catalog] await native kind failed:", err?.message || err)
+    }
+  }
   const onBytes = makeBytesEmitter(playlistId, "live")
   const { data } = await cachedFetch(playlistId, kind, CHANNELS_TTL_MS, () => retryWithBackoff(async () => {
     if (isM3U) {
@@ -233,37 +239,7 @@ export async function ensureLive(creds, playlistId, opts = {}) {
     const arr = Array.isArray(parsed)
       ? parsed
       : parsed?.streams || parsed?.results || []
-    return (arr || [])
-      .map((ch) => {
-        const name = String(ch.name || "")
-        const ids =
-          (Array.isArray(ch.category_ids) &&
-            ch.category_ids.length &&
-            ch.category_ids) ||
-          (ch.category_id != null ? [ch.category_id] : [])
-        let category = String(ch.category_name || "").trim()
-        if (!category && ids.length && catMap?.size) {
-          for (const id of ids) {
-            const n = catMap.get(String(id))
-            if (n) {
-              category = n
-              break
-            }
-          }
-        }
-        return {
-          id: Number(ch.stream_id),
-          name,
-          category,
-          logo: ch.stream_icon || null,
-          tvgId: String(ch.epg_channel_id || "") || undefined,
-          chno: Number(ch.num) || undefined,
-          norm: normalize(name + " " + category),
-          tvArchive: Number(ch.tv_archive) || 0,
-          tvArchiveDuration: Number(ch.tv_archive_duration) || 0,
-        }
-      })
-      .filter((x) => x.id && x.name)
+    return mapXtreamLiveRows(arr, catMap)
   }), { force: !!opts.force })
   return data || []
 }
@@ -278,20 +254,19 @@ async function fetchVodCategoryMap() {
     log.warn("[xt:catalog] vod categories parse failed:", err?.message || err)
     return []
   })
-  const arr = Array.isArray(data)
-    ? data
-    : Array.isArray(data?.categories)
-    ? data.categories
-    : []
-  return new Map(
-    arr
-      .filter((c) => c && c.category_id != null)
-      .map((c) => [String(c.category_id), String(c.category_name || "").trim()])
-  )
+  return parseCategoriesToMap(data)
 }
 
 export async function ensureVod(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
+  if (isTauri) {
+    try {
+      const { awaitNativeKind } = await import("@/scripts/lib/warmup-native.ts")
+      await awaitNativeKind(playlistId, "vod")
+    } catch (err) {
+      log.warn("[xt:catalog] await native kind failed:", err?.message || err)
+    }
+  }
   const onBytes = makeBytesEmitter(playlistId, "vod")
   const { data } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, () => retryWithBackoff(async () => {
     const catMap = await fetchVodCategoryMap()
@@ -302,41 +277,7 @@ export async function ensureVod(creds, playlistId, opts = {}) {
     const arr = Array.isArray(parsed)
       ? parsed
       : parsed?.movies || parsed?.results || []
-    return (arr || [])
-      .map((m) => {
-        const name = String(m.name || m.title || "")
-        const id = Number(m.stream_id || m.id)
-        const logo = m.stream_icon || m.cover || null
-        const year = String(m.year || m.releaseDate || "").trim() || ""
-        const rating = m.rating || m.rating_5based || m.vote_average || ""
-        const duration = m.duration || m.runtime || m.duration_secs || ""
-        const categoryId =
-          (Array.isArray(m.category_ids) &&
-            m.category_ids.length &&
-            m.category_ids[0]) ||
-          m.category_id
-        let category = String(m.category_name || "").trim()
-        if (!category && categoryId != null && catMap?.size) {
-          category = catMap.get(String(categoryId)) || ""
-        }
-        const added = Number(m.added) || 0
-        return {
-          id,
-          name,
-          logo: logo || null,
-          year,
-          rating: rating ? String(rating) : "",
-          duration: duration ? String(duration) : "",
-          category,
-          plot: "",
-          added,
-          norm: normalize(`${name} ${category} ${year}`),
-        }
-      })
-      .filter((m) => m.id && m.name)
-      .sort((a, b) =>
-        a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-      )
+    return mapXtreamVodRows(arr, catMap)
   }), { force: !!opts.force })
   return data || []
 }
@@ -351,20 +292,19 @@ async function fetchSeriesCategoryMap() {
     log.warn("[xt:catalog] series categories parse failed:", err?.message || err)
     return []
   })
-  const arr = Array.isArray(data)
-    ? data
-    : Array.isArray(data?.categories)
-    ? data.categories
-    : []
-  return new Map(
-    arr
-      .filter((c) => c && c.category_id != null)
-      .map((c) => [String(c.category_id), String(c.category_name || "").trim()])
-  )
+  return parseCategoriesToMap(data)
 }
 
 export async function ensureSeries(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
+  if (isTauri) {
+    try {
+      const { awaitNativeKind } = await import("@/scripts/lib/warmup-native.ts")
+      await awaitNativeKind(playlistId, "series")
+    } catch (err) {
+      log.warn("[xt:catalog] await native kind failed:", err?.message || err)
+    }
+  }
   const onBytes = makeBytesEmitter(playlistId, "series")
   const { data } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, () => retryWithBackoff(async () => {
     const catMap = await fetchSeriesCategoryMap()
@@ -373,47 +313,7 @@ export async function ensureSeries(creds, playlistId, opts = {}) {
     if (!r.ok) throw new HttpRetryError(r.status, `series ${r.status}`)
     const parsed = JSON.parse(body)
     const arr = Array.isArray(parsed) ? parsed : parsed?.series || parsed?.results || []
-    return (arr || [])
-      .map((s) => {
-        const name = String(s.name || s.title || "")
-        const id = Number(s.series_id || s.id)
-        const logo = s.cover || s.stream_icon || null
-        const year = String(
-          s.year || s.releaseDate || s.release_date || ""
-        ).trim()
-        const rating = s.rating || s.rating_5based || ""
-        const categoryId =
-          (Array.isArray(s.category_ids) &&
-            s.category_ids.length &&
-            s.category_ids[0]) ||
-          s.category_id
-        let category = String(s.category_name || "").trim()
-        if (!category && categoryId != null && catMap?.size) {
-          category = catMap.get(String(categoryId)) || ""
-        }
-        const added =
-          Number(s.last_modified) ||
-          Number(s.added) ||
-          Number(
-            s.releaseDate ? Date.parse(s.releaseDate) / 1000 : 0
-          ) ||
-          0
-        return {
-          id,
-          name,
-          logo: logo || null,
-          year: year || "",
-          rating: rating ? String(rating) : "",
-          category,
-          plot: s.plot || "",
-          added,
-          norm: normalize(`${name} ${category} ${year}`),
-        }
-      })
-      .filter((s) => s.id && s.name)
-      .sort((a, b) =>
-        a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-      )
+    return mapXtreamSeriesRows(arr, catMap)
   }), { force: !!opts.force })
   return data || []
 }
@@ -446,6 +346,15 @@ export async function warmupActive(playlistId, opts = {}) {
   if (!opts.force && inflight.has(pid)) return inflight.get(pid)
 
   const run = (async () => {
+    if (isTauri) {
+      try {
+        const { warmupActiveNative } = await import("@/scripts/lib/warmup-native.ts")
+        const nativeResult = await warmupActiveNative(pid, { force: !!opts.force })
+        if (nativeResult) return nativeResult
+      } catch (err) {
+        log.warn("[xt:catalog] native warmup failed, using JS path:", err?.message || err)
+      }
+    }
     const errors = {}
     const force = !!opts.force
     const isM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
@@ -544,6 +453,14 @@ export async function retryWarmupKind(playlistId, kind) {
     pid = e?._id
   }
   if (!pid) return
+  if (isTauri) {
+    try {
+      const { retryKindNative } = await import("@/scripts/lib/warmup-native.ts")
+      if (await retryKindNative(pid, kind)) return
+    } catch (err) {
+      log.warn("[xt:catalog] native retry failed, using JS path:", err?.message || err)
+    }
+  }
   dispatch(EVT_WARMING_PROGRESS, { playlistId: pid, kind, status: "pending" })
   try {
     const data = await fetcher(creds, pid, { force: true })

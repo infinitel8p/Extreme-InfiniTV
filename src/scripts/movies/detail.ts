@@ -74,6 +74,7 @@ import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
+import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -107,6 +108,7 @@ let wantsAutoplay = urlParams.get("autoplay") === "1"
 let activePlaylistId = ""
 let creds = { host: "", port: "", user: "", pass: "" }
 let movie = null
+let vodInfoRaw = null
 let detailSrc = ""
 let detailSrcBuilder = null
 let externalPresenceActive = false
@@ -153,6 +155,7 @@ function fmtDuration(value) {
 }
 
 function applyVodInfo(data) {
+  vodInfoRaw = data
   const movieData = data?.movie_data || data?.info || data || {}
   const info = data?.info || data?.movie_data || {}
 
@@ -256,6 +259,27 @@ function applyVodInfo(data) {
   if (trailerBtn) {
     if (trailerUrl) trailerBtn.removeAttribute("hidden")
     else trailerBtn.setAttribute("hidden", "")
+  }
+}
+
+function buildMovieNfoMeta() {
+  const data = vodInfoRaw
+  const movieData = data?.movie_data || data?.info || data || {}
+  const info = data?.info || data?.movie_data || {}
+  const releaseDate = movieData.releasedate || movieData.year || info.year || movie?.year || ""
+  const durationSecs = Number(movieData.duration_secs || info.duration_secs || 0)
+  const poster =
+    info.cover_big || info.movie_image || info.cover || movieData.cover || movieData.stream_icon || movie?.logo || ""
+  return {
+    type: "movie",
+    title: movie?.name || "",
+    year: releaseDate,
+    premiered: /^\d{4}-\d{2}-\d{2}/.test(String(releaseDate)) ? String(releaseDate).slice(0, 10) : undefined,
+    plot: movieData.plot || movieData.description || info.plot || info.description || movie?.plot || "",
+    genre: movieData.genre || info.genre || "",
+    rating: movieData.rating || info.rating || movieData.rating_5based || movie?.rating || "",
+    runtimeMinutes: durationSecs > 0 ? Math.round(durationSecs / 60) : 0,
+    poster,
   }
 }
 
@@ -514,6 +538,7 @@ async function startPlayback() {
   if (requestId !== playRequestId) return
   setupPipButton(player)
   setupScaleButton()
+  subtitleDelayController.setup()
   const mime = chooseMime(detailSrc)
   player.one("error", () => {
     const e = player.error()
@@ -635,6 +660,18 @@ async function launchExternalPlayback(backend, src, resumeSeconds) {
   await launcher.launch(src, { resumeSeconds })
 }
 
+// ----------------------------
+// Subtitle delay
+// ----------------------------
+const subtitleDelayController = createSubtitleDelayController({
+  dialogId: "movie-subtitle-delay-dialog",
+  button: document.getElementById("movie-subtitle-delay-btn"),
+  nudge: (deltaSeconds) => vjs?.subtitleDelay?.(deltaSeconds),
+  getMediaElement: () => vjs?.getMediaElement?.() ?? null,
+})
+
+document.addEventListener("keydown", (event) => subtitleDelayController.handleKeydown(event))
+
 playBtn?.addEventListener("click", startPlayback)
 
 restartBtn?.addEventListener("click", () => {
@@ -698,6 +735,7 @@ window.addEventListener("pagehide", () => {
     audioSwitcher?.dispose()
     audioSwitcher = null
     audioDiscoveryController?.abort()
+    subtitleDelayController.teardown()
   } catch {}
   clearAmbient(ambientEl)
   externalPresenceActive = false
@@ -860,6 +898,7 @@ downloadBtn?.addEventListener("click", async () => {
         id: movie.id,
         logo: movie.logo || null,
       },
+      nfo: buildMovieNfoMeta(),
     })
   } catch (e) {
     const msg = String(e?.message || e || t("detail.download.failed"))

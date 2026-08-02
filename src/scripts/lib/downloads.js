@@ -4,6 +4,7 @@ import {
   getDownloadDir,
   setDownloadDir,
   getDownloadConcurrency,
+  getWriteNfoEnabled,
 } from "@/scripts/lib/app-settings.js"
 import {
   getMaxConnectionsSync,
@@ -14,6 +15,7 @@ import * as AFs from "@/scripts/lib/android-fs.js"
 import { notify } from "@/scripts/lib/notify"
 import { t } from "@/scripts/lib/i18n.js"
 import { sanitizeFilename } from "@/scripts/lib/format.ts"
+import { buildNfo } from "@/scripts/lib/nfo.ts"
 
 export { sanitizeFilename }
 
@@ -230,6 +232,13 @@ function metaSidecarPath(mediaPath) {
     : `${META_DIR}${sep}${stem}.json`
 }
 
+// Kodi only finds sidecars next to the media file, not inside .xtream-meta
+function nfoSidecarPath(mediaPath) {
+  const { dir, name, sep } = pathParts(mediaPath)
+  const stem = name.replace(/\.[^.]+$/, "")
+  return dir ? `${dir}${sep}${stem}.nfo` : `${stem}.nfo`
+}
+
 /**
  * Write `<dir>/.xtream-meta/<basename>.json` next to a finished download so a
  * fresh install can rediscover it via scanDownloadsFolder(). Stashed in a
@@ -264,6 +273,18 @@ async function writeMetaSidecar(item) {
   }
 }
 
+async function writeNfoSidecar(item) {
+  if (!isTauri) return
+  if (!item?.path || AFs.isAndroidUri(item.path)) return
+  if (!item?.nfo || !getWriteNfoEnabled()) return
+  try {
+    const fs = await import("@tauri-apps/plugin-fs")
+    await fs.writeTextFile(nfoSidecarPath(item.path), buildNfo(item.nfo))
+  } catch (error) {
+    log.warn("[xt:download] nfo write failed:", error)
+  }
+}
+
 function notifyDownloadComplete(item) {
   if (!item) return
   const title = item.title || ""
@@ -280,6 +301,17 @@ async function removeMetaSidecar(path) {
   try {
     const fs = await import("@tauri-apps/plugin-fs")
     const sidecarPath = metaSidecarPath(path)
+    if (typeof fs.exists === "function" && (await fs.exists(sidecarPath))) {
+      await fs.remove(sidecarPath)
+    }
+  } catch {}
+}
+
+async function removeNfoSidecar(path) {
+  if (!isTauri || !path || AFs.isAndroidUri(path)) return
+  try {
+    const fs = await import("@tauri-apps/plugin-fs")
+    const sidecarPath = nfoSidecarPath(path)
     if (typeof fs.exists === "function" && (await fs.exists(sidecarPath))) {
       await fs.remove(sidecarPath)
     }
@@ -413,6 +445,7 @@ async function runDownloadAndroid(id, item, controller) {
       bytesTotal: total || received,
     })
     writeMetaSidecar(getItem(id))
+    writeNfoSidecar(getItem(id))
     notifyDownloadComplete(getItem(id))
   } catch (e) {
     if (controller.signal.aborted) {
@@ -567,6 +600,7 @@ async function runDownload(id) {
     })
     lockRetryCount.delete(id)
     writeMetaSidecar(getItem(id))
+    writeNfoSidecar(getItem(id))
     notifyDownloadComplete(getItem(id))
   } catch (e) {
     const msg = String(e?.message || e || "Failed")
@@ -635,7 +669,7 @@ function tryRunNext() {
   }
 }
 
-export async function startDownload({ url, title, ext, source }) {
+export async function startDownload({ url, title, ext, source, nfo }) {
   if (!isTauri) {
     throw new Error("Downloads are only available in the desktop build.")
   }
@@ -688,6 +722,7 @@ export async function startDownload({ url, title, ext, source }) {
     startedAt: Date.now(),
     error: "",
     source: source || null,
+    nfo: nfo || null,
   }
   const list = readState()
   list.unshift(item)
@@ -757,6 +792,7 @@ export async function removeDownload(id) {
         log.error("[xt:download] could not delete file", item.path, e)
       }
       await removeMetaSidecar(item.path)
+      await removeNfoSidecar(item.path)
     }
   }
 
@@ -816,6 +852,7 @@ export async function pruneMissingDownloads() {
   for (const item of removedItems) {
     if (item.path && !AFs.isAndroidUri(item.path)) {
       try { await removeMetaSidecar(item.path) } catch {}
+      try { await removeNfoSidecar(item.path) } catch {}
     }
   }
 

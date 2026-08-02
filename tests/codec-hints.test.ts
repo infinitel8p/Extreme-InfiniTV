@@ -7,6 +7,9 @@ import {
   clearKeyAvailable,
   isUnsupportedAudioCodec,
   describeAudioCodec,
+  isDroppingEveryFrame,
+  chooseBlackFrameRecovery,
+  NATIVE_RELATCH_MAX_ATTEMPTS,
 } from "../src/scripts/lib/codec-hints"
 
 describe("hasHevcNameHint", () => {
@@ -375,5 +378,86 @@ describe("describeAudioCodec", () => {
 describe("clearKeyAvailable", () => {
   it("resolves false when the runtime has no EME ClearKey support", async () => {
     expect(await clearKeyAvailable()).toBe(false)
+  })
+})
+
+describe("isDroppingEveryFrame", () => {
+  // Values are real macOS native-HLS measurements (black picture, working audio).
+  it("flags a channel that dropped every frame it decoded", () => {
+    expect(isDroppingEveryFrame(1092, 1092)).toBe(true)
+  })
+
+  it("flags a channel dropping 97% of frames", () => {
+    expect(isDroppingEveryFrame(233, 227)).toBe(true)
+  })
+
+  it("does not flag a healthy channel", () => {
+    expect(isDroppingEveryFrame(220, 0)).toBe(false)
+  })
+
+  it("does not flag ordinary drop rates", () => {
+    expect(isDroppingEveryFrame(1000, 50)).toBe(false)
+    expect(isDroppingEveryFrame(1000, 899)).toBe(false)
+  })
+
+  it("waits for a large enough sample before judging", () => {
+    // 3/3 dropped right after start is not yet evidence of anything.
+    expect(isDroppingEveryFrame(3, 3)).toBe(false)
+    expect(isDroppingEveryFrame(49, 49)).toBe(false)
+    expect(isDroppingEveryFrame(50, 50)).toBe(true)
+  })
+
+  it("returns false when the metrics are unavailable", () => {
+    expect(isDroppingEveryFrame(null, null)).toBe(false)
+    expect(isDroppingEveryFrame(100, null)).toBe(false)
+    expect(isDroppingEveryFrame(undefined, 100)).toBe(false)
+    expect(isDroppingEveryFrame(NaN, NaN)).toBe(false)
+  })
+
+  it("ignores nonsensical negative counters", () => {
+    expect(isDroppingEveryFrame(100, -5)).toBe(false)
+  })
+})
+
+describe("chooseBlackFrameRecovery", () => {
+  it("re-tunes the native mount on macOS while budget remains", () => {
+    expect(
+      chooseBlackFrameRecovery({ isMacOSNativeHls: true, relatchAttempts: 0, proxyUsable: true })
+    ).toBe("native-retune")
+    expect(
+      chooseBlackFrameRecovery({ isMacOSNativeHls: true, relatchAttempts: 1, proxyUsable: false })
+    ).toBe("native-retune")
+  })
+
+  it("escalates to the failure panel once the macOS retune budget is spent", () => {
+    expect(
+      chooseBlackFrameRecovery({
+        isMacOSNativeHls: true,
+        relatchAttempts: NATIVE_RELATCH_MAX_ATTEMPTS,
+        proxyUsable: true,
+      })
+    ).toBe("panel")
+  })
+
+  it("never routes macOS native playback into the MSE proxy, even with budget spent", () => {
+    // WebKit MSE cannot present this video; the proxy would just be a black MSE player.
+    const verdict = chooseBlackFrameRecovery({
+      isMacOSNativeHls: true,
+      relatchAttempts: 99,
+      proxyUsable: true,
+    })
+    expect(verdict).not.toBe("proxy")
+  })
+
+  it("uses the remux proxy on MSE platforms when available", () => {
+    expect(
+      chooseBlackFrameRecovery({ isMacOSNativeHls: false, relatchAttempts: 0, proxyUsable: true })
+    ).toBe("proxy")
+  })
+
+  it("falls back to the panel on MSE platforms without a usable proxy", () => {
+    expect(
+      chooseBlackFrameRecovery({ isMacOSNativeHls: false, relatchAttempts: 0, proxyUsable: false })
+    ).toBe("panel")
   })
 })

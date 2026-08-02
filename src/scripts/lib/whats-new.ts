@@ -121,7 +121,7 @@ function buildDialog(
 
   const body = document.createElement("div")
   body.className =
-    "flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 sm:px-6 py-4 flex flex-col gap-6"
+    "flex-auto min-h-0 overflow-y-auto overscroll-contain px-5 sm:px-6 py-4 flex flex-col gap-6"
   body.tabIndex = 0
 
   const stagger = releases.length > 1
@@ -212,7 +212,7 @@ async function maybeShowWhatsNew(): Promise<void> {
 
   let releases: ReleaseSummary[]
   try {
-    releases = await fetchReleases(undefined, 30)
+    releases = await fetchReleases()
   } catch (error) {
     log.error("[whats-new] release fetch failed:", error)
     return

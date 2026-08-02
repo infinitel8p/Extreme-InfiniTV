@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2025 Ludovico Ferrara -->
+<component type="desktop-application">
+  <id>io.github.infinitel8p.Extreme-InfiniTV</id>
+  <name>Extreme InfiniTV</name>
+  <summary>Stream live TV, movies and series</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.infinitel8p">
+    <name>InfiniteL8p</name>
+  </developer>
+  <description>
+    <p>
+      Extreme InfiniTV is a cross-platform IPTV player for Xtream Codes
+      providers and plain M3U or M3U8 playlists. Sign in with Xtream Codes
+      credentials, paste a playlist URL, or load a playlist file, and the
+      app detects the source automatically.
+    </p>
+    <p>
+      Watch live TV with category filtering, channel search, and an inline
+      programme guide showing what is on now and next. Replay programmes
+      from your provider's catch-up archive, pause and rewind behind live,
+      or seek anywhere in a full-day schedule grid. Browse movies and
+      series in poster grids with detail pages, seasons, and episodes, and
+      download them for offline playback.
+    </p>
+    <p>
+      Build custom playlists in a dedicated editor that pulls channels
+      from any of your existing sources, or add a stream straight from a
+      website by pasting its page URL. Embedded subtitles and audio-track
+      switching are available for movies and series, and live channels
+      with audio codecs the built-in player cannot decode are repaired
+      automatically on desktop.
+    </p>
+    <ul>
+      <li>Xtream Codes and M3U/M3U8 playlists in one interface</li>
+      <li>Live TV with electronic programme guide and catch-up/replay</li>
+      <li>Movies and series library with offline downloads</li>
+      <li>Custom playlists built from your existing sources</li>
+      <li>Add a stream directly from any website</li>
+      <li>Embedded subtitles and audio-track switching</li>
+      <li>Keyboard, mouse, and D-pad navigation throughout</li>
+      <li>16 languages including right-to-left layouts</li>
+      <li>Light and dark themes with adjustable accent color</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.infinitel8p.Extreme-InfiniTV.desktop</launchable>
+  <branding>
+    <color type="primary" scheme_preference="light">#a855f7</color>
+    <color type="primary" scheme_preference="dark">#6b21a8</color>
+  </branding>
+  <url type="homepage">https://dev.infinitel8p.com/Extreme-InfiniTV/</url>
+  <url type="bugtracker">https://github.com/infinitel8p/Extreme-InfiniTV/issues</url>
+  <url type="vcs-browser">https://github.com/infinitel8p/Extreme-InfiniTV</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/175b0301a66959a0ab15dea85e8a996f94a2d98f/docs/screenshots/Desktop/home.png</image>
+      <caption>Home screen with continue watching and content tiles</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/175b0301a66959a0ab15dea85e8a996f94a2d98f/docs/screenshots/Desktop/livetv.png</image>
+      <caption>Live TV with inline programme guide</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/175b0301a66959a0ab15dea85e8a996f94a2d98f/docs/screenshots/Desktop/movies.png</image>
+      <caption>Movies library with category filtering</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/175b0301a66959a0ab15dea85e8a996f94a2d98f/docs/screenshots/Desktop/series.png</image>
+      <caption>Series detail view with seasons and episodes</caption>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="1.7.0" date="2026-07-25">
+      <url type="details">https://github.com/infinitel8p/Extreme-InfiniTV/releases/tag/v1.7.0</url>
+      <description>
+        <p>
+          Custom playlists get a full in-app editor, streams can be added
+          straight from any website, and movies and series gain embedded
+          subtitles and audio-track switching.
+        </p>
+        <ul>
+          <li>Build custom playlists from channels in your existing sources</li>
+          <li>Add a playable stream by pasting a website URL</li>
+          <li>Embedded subtitles and audio-track selection for movies and series</li>
+          <li>Live channels with previously unsupported audio codecs now play</li>
+          <li>Opt-in automatic updates</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+    <control>tv-remote</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <content_rating type="oars-1.1" />
+</component>

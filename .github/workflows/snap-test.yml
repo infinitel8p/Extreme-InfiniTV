@@ -1,0 +1,96 @@
+name: Snap Build Test
+
+# Dry run: builds the snap from a past stable release's amd64 .deb and uploads
+# the .snap as a workflow artifact. Never publishes. Use this to prove
+# packaging/snap/snapcraft.yaml still builds before cutting the next stable tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build from (defaults to the latest published stable release)"
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - "packaging/snap/**"
+      - ".github/workflows/snap-test.yml"
+
+jobs:
+  build-snap:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve release tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG=$(gh release list --repo "${{ github.repository }}" \
+              --exclude-drafts --exclude-pre-releases --limit 1 \
+              --json tagName --jq '.[0].tagName')
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::No published stable release found and no tag input given"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # Skip instead of fail when the release predates this arch (no arm64
+      # deb exists before v1.7.1).
+      - name: Download deb from the release
+        id: download
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p packaging/snap/local
+          if gh release download "$TAG" --repo "${{ github.repository }}" \
+            --pattern "*${{ matrix.arch }}.deb" \
+            --output packaging/snap/local/app.deb; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No ${{ matrix.arch }} deb on $TAG - skipping this arch"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set snap version
+        if: steps.download.outputs.found == 'true'
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          sed -i "s/__VERSION__/$VERSION/" packaging/snap/snapcraft.yaml
+
+      - name: Build snap
+        if: steps.download.outputs.found == 'true'
+        id: build
+        uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
+        with:
+          path: packaging/snap
+
+      - name: Upload snap artifact
+        if: steps.download.outputs.found == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: extreme-infinitv-snap-${{ matrix.arch }}
+          path: ${{ steps.build.outputs.snap }}
+          if-no-files-found: error

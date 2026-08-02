@@ -1,0 +1,57 @@
+# Flathub submission manifest for Extreme InfiniTV (Tauri desktop build).
+id: io.github.infinitel8p.Extreme-InfiniTV
+runtime: org.gnome.Platform
+runtime-version: "50"
+sdk: org.gnome.Sdk
+command: extreme-infinitv
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --socket=pulseaudio
+  # Downloads default here; picking another folder routes through the portal instead.
+  - --filesystem=xdg-download
+  # Discord Rich Presence talks to the client over this socket; no portal covers it.
+  - --filesystem=xdg-run/discord-ipc-0
+  # Tray icon registration (libayatana-appindicator); no portal covers this.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # Desktop notifications; notify-rust calls this name directly, not the portal.
+  - --talk-name=org.freedesktop.Notifications
+
+modules:
+  - name: extreme-infinitv
+    buildsystem: simple
+    build-commands:
+      - ar -x *.deb
+      - tar -xf data.tar.gz
+      - install -Dm755 usr/bin/extreme-infinitv $FLATPAK_DEST/bin/extreme-infinitv
+      - install -Dm755 usr/bin/infinitv-ffmpeg $FLATPAK_DEST/bin/infinitv-ffmpeg
+      - install -Dm644 "usr/share/icons/hicolor/32x32/apps/extreme-infinitv.png" $FLATPAK_DEST/share/icons/hicolor/32x32/apps/$FLATPAK_ID.png
+      - install -Dm644 "usr/share/icons/hicolor/128x128/apps/extreme-infinitv.png" $FLATPAK_DEST/share/icons/hicolor/128x128/apps/$FLATPAK_ID.png
+      - install -Dm644 "usr/share/icons/hicolor/256x256@2/apps/extreme-infinitv.png" "$FLATPAK_DEST/share/icons/hicolor/256x256@2/apps/$FLATPAK_ID.png"
+      - install -Dm644 "usr/share/applications/Extreme InfiniTV.desktop" $FLATPAK_DEST/share/applications/$FLATPAK_ID.desktop
+      - sed -i "s/^Icon=.*/Icon=$FLATPAK_ID/" $FLATPAK_DEST/share/applications/$FLATPAK_ID.desktop
+      - install -Dm644 $FLATPAK_ID.metainfo.xml $FLATPAK_DEST/share/metainfo/$FLATPAK_ID.metainfo.xml
+      - install -Dm644 LICENSE $FLATPAK_DEST/share/licenses/$FLATPAK_ID/LICENSE
+    sources:
+      # No aarch64 .deb is published yet (see flathub.json); add an
+      # only-arches: [aarch64] source here once release.yml ships one.
+      - type: file
+        url: https://github.com/infinitel8p/Extreme-InfiniTV/releases/download/v1.7.0/Extreme.InfiniTV_1.7.0_amd64.deb
+        sha256: 2ca8bd3b30b120ef63d7ef1436e74edd8afad725c37dc0c06956ad98125030fa
+        only-arches:
+          - x86_64
+        x-checker-data:
+          type: json
+          url: https://api.github.com/repos/infinitel8p/Extreme-InfiniTV/releases/latest
+          version-query: .tag_name | sub("^v"; "")
+          url-query: .assets[] | select(.name | test("_amd64\\.deb$")) | .browser_download_url
+          is-main-source: true
+      - type: file
+        url: https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/v1.7.0/LICENSE
+        sha256: 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986
+        dest-filename: LICENSE
+      - type: file
+        path: io.github.infinitel8p.Extreme-InfiniTV.metainfo.xml

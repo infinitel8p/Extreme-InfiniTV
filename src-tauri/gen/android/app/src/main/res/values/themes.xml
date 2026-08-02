@@ -5,7 +5,7 @@
     </style>
 
     <!-- Launch-time splash. Bridges the cold-start gap before the WebView is up;
-         on Android 12+ this is the native SplashScreen API, on 24-30 it's a
+         on Android 12+ this is the native SplashScreen API, on 26-30 it's a
          themed window. installSplashScreen() in MainActivity restores Theme.app. -->
     <style name="Theme.App.Starting" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/splash_bg</item>

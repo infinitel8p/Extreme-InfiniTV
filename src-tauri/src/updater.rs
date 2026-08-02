@@ -72,10 +72,13 @@ pub async fn updater_install(
     };
 
     let mut started = false;
+    let mut pending_bytes: usize = 0;
+    const EMIT_THRESHOLD: usize = 256 * 1024;
     let progress_app = app.clone();
     let finish_app = app.clone();
     update
         .download_and_install(
+            // Per-chunk emits flood the WebView eval queue; batch to ~4 events per MB.
             move |chunk_length, content_length| {
                 if !started {
                     started = true;
@@ -84,10 +87,15 @@ pub async fn updater_install(
                         json!({ "event": "Started", "data": { "contentLength": content_length } }),
                     );
                 }
+                pending_bytes += chunk_length;
+                if pending_bytes < EMIT_THRESHOLD {
+                    return;
+                }
                 let _ = progress_app.emit(
                     PROGRESS_EVENT,
-                    json!({ "event": "Progress", "data": { "chunkLength": chunk_length } }),
+                    json!({ "event": "Progress", "data": { "chunkLength": pending_bytes } }),
                 );
+                pending_bytes = 0;
             },
             move || {
                 // Only chance to emit on Windows - the installer path exits the process next.

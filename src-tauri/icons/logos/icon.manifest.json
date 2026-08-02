@@ -1,5 +1,9 @@
 {
   "default": "icon-1024.png",
+  "macos_linux": "icon-1024-rounded.png (make-rounded-icon.swift from icon-1024.png)",
+  "windows": "icon-1024-transparent.png",
+  "tray": "icon-1024-transparent.png",
+  "bg_color": "#0B0F14",
   "android_bg": "ic_launcher_background.png",
   "android_fg": "ic_launcher_foreground.png",
   "android_fg_scale": 85,

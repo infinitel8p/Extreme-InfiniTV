@@ -68,19 +68,14 @@
   let total = $derived(lists.live.length + lists.vod.length + lists.series.length)
 </script>
 
-<div class="rounded-xl border border-line bg-surface p-4 flex flex-col gap-3 overflow-x-clip">
-  <div class="flex items-baseline justify-between gap-2">
-    <h2 class="text-sm font-semibold text-fg">{tr("settings.hiddenCategories.title")}</h2>
+<div class="flex flex-col gap-3 overflow-x-clip">
+  <div class="flex justify-end">
     <span class="text-2xs text-fg-3 tabular-nums">
       {total === 0
         ? tr("settings.hiddenCategories.empty")
         : tr("settings.hiddenCategories.count", { n: total })}
     </span>
   </div>
-  <p class="text-xs text-fg-3">
-    {tr("settings.hiddenCategories.helperLong")}
-  </p>
-
   {#if total === 0}
     <div class="text-xs text-fg-3 italic">
       {tr("settings.hiddenCategories.emptyState")}
@@ -90,7 +85,7 @@
     {#each KIND_ORDER as kind}
       {#if lists[kind].length}
         <div class="flex flex-col gap-1.5">
-          <div class="sticky top-0 z-10 -mx-4 px-4 py-1.5 bg-surface/95 backdrop-blur-sm border-b border-line/60 text-eyebrow font-semibold uppercase tracking-wide text-fg-3">
+          <div class="sticky top-0 z-10 -mx-5 sm:-mx-6 px-5 sm:px-6 py-1.5 bg-surface/95 backdrop-blur-sm border-b border-line/60 text-eyebrow font-semibold uppercase tracking-wide text-fg-3">
             {klp(kind)}
           </div>
           <ul class="flex flex-wrap gap-1.5">
@@ -99,7 +94,7 @@
                 <button
                   type="button"
                   onclick={() => unhide(kind, name)}
-                  class="hidden-chip inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-2 hover:bg-surface-3 focus-visible:bg-surface-3 focus-visible:border-accent text-fg px-2.5 py-1 text-xs transition-colors outline-none"
+                  class="inline-flex items-center gap-1.5 min-h-9 pointer-coarse:min-h-11 rounded-lg border border-line bg-surface-2 hover:bg-surface-3 focus-visible:bg-surface-3 focus-visible:border-accent text-fg px-3 text-xs transition-colors outline-none"
                   aria-label={tr("settings.hiddenCategories.unhideAria", { name })}
                   title={tr("settings.hiddenCategories.clickToUnhide")}>
                   <span class="truncate max-w-[16rem]">{name}</span>
@@ -128,13 +123,3 @@
   {/if}
 </div>
 
-<style>
-  /* Touch / TV-remote adaptation: chip taps need to be ~44px tall. */
-  @media (pointer: coarse) {
-    .hidden-chip {
-      padding-top: 0.625rem;
-      padding-bottom: 0.625rem;
-      min-height: 2.5rem;
-    }
-  }
-</style>

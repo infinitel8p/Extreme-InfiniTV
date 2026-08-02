@@ -25,7 +25,7 @@ android {
 
     defaultConfig {
         applicationId = "com.infinitel8p.xtream"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 36
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
@@ -35,8 +35,14 @@ android {
         val isTvBuild = (System.getenv("XTREAM_TV_BUILD") ?: "").lowercase(Locale.ROOT) in listOf("1", "true", "yes")
         manifestPlaceholders["leanbackRequired"] = if (isTvBuild) "true" else "false"
         if (isTvBuild) {
-            val tvVersionCodeOffset = 500
+            val tvVersionCodeOffset = 5
             versionCode = (versionCode ?: 0) + tvVersionCodeOffset
+        }
+
+        // Lets CI (beta builds) assign a versionCode ahead of the sync-version pin.
+        val versionCodeOverride = (System.getenv("XTREAM_VERSION_CODE_OVERRIDE") ?: "").toIntOrNull()
+        if (versionCodeOverride != null) {
+            versionCode = versionCodeOverride
         }
     }
 
@@ -77,6 +83,7 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
+            isShrinkResources = true
             signingConfigs.findByName("release")?.let { signingConfig = it }
             ndk {
                 debugSymbolLevel = "FULL"
@@ -93,7 +100,8 @@ android {
 }
 
 rust {
-    rootDirRel = "../../../"
+    // Must resolve to the pnpm root: npm 11+ no longer walks up to find package.json.
+    rootDirRel = "../../../../"
 }
 
 dependencies {
@@ -105,6 +113,7 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-dash:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
     implementation("androidx.media3:media3-session:1.4.1")
     implementation("io.coil-kt:coil:2.7.0")

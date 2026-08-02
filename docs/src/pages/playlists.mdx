@@ -32,6 +32,18 @@ If your provider only gave you a single playlist URL (anything ending in `.m3u` 
 
 A bare direct stream link works too: paste a single `.m3u8` URL that isn't a playlist, just the stream itself, and the app adds it as a playlist with that one playable channel.
 
+### Playlist file from your device
+
+Got a `.m3u` file instead of a URL? Use **Choose file...** on the login screen to load it straight from your device. The playlist is stored locally, so it keeps working with no server involved.
+
+<Callout type="note">
+  Just want to try the app? The login screen also offers a **Demo (iptv-org)** playlist - a free public playlist you can remove at any time.
+</Callout>
+
+### EPG sources
+
+The login screen's advanced options let you attach one or more **EPG URLs** to a playlist (merged in order, with a **Test sources** button), disable the provider's own EPG, and add **backup domains** (mirrors) for Xtream accounts - if the main server stops responding, the app fails over to the next mirror automatically.
+
 ## Multiple playlists
 
 You can add as many Xtream accounts and M3U URLs as you want. Open **Settings > Playlists** to add, rename, or remove them. Switch the active one from the sidebar.
@@ -44,15 +56,19 @@ You can also build a channel list of your own: open **Settings > Playlists > New
 
 ## Hide unwanted categories
 
-Many providers ship hundreds of categories you don't want to see ("Adult", regional channels, dead links). Open **Settings > Categories** (or the filter button on Live TV / Movies / Series) to toggle which ones show up. Hidden categories stay hidden across restarts and are remembered per playlist.
+Many providers ship hundreds of categories you don't want to see ("Adult", regional channels, dead links). Open **Settings > Library > Categories** (or the filter button on Live TV / Movies / Series) to toggle which ones show up. Hidden categories stay hidden across restarts and are remembered per playlist.
+
+## Check on a playlist's health
+
+**Settings > Playlists > Active playlist health** shows your account status (active / expired), the expiry date, how many connections you're using out of your provider's allowance, and when each catalog (live / movies / series / EPG) last loaded successfully. It's the first place to look when something stops loading.
 
 ## EPG looks shifted
 
-If the EPG (now / next, full schedule) looks off by a few hours, your provider is sending timestamps in their own timezone rather than UTC. Open **Settings > Live TV** and adjust the **EPG offset** for the active playlist. The full schedule is on the **EPG** page in the sidebar.
+If the EPG (now / next, full schedule) looks off by a few hours, your provider is sending timestamps in their own timezone rather than UTC. Open **Settings > Watching > EPG time zone** and adjust **Offset for active playlist**. The full schedule is on the **EPG** page in the sidebar.
 
 ## Backup and restore
 
-**Settings > Backup** exports a single JSON file containing your playlists, preferences, and app settings. Import it on another device to bring everything across.
+**Settings > Data > Backup** exports a single JSON file containing your playlists, preferences, and app settings. Import it on another device to bring everything across.
 
 <Callout type="warning">
   The export includes your credentials in plain JSON. Treat the file like a password manager export: don't email it, don't drop it in a shared folder, and delete it from any temporary location once you've restored on the target device.

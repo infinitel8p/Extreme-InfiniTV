@@ -26,9 +26,13 @@ Once a channel has been fixed this way, the app remembers it per playlist - the 
   If the fix fails or the process stops mid-stream, playback falls back to the original silent stream instead of stopping - you'll never end up with a dead player.
 </Callout>
 
-## Settings > Playback
+## Choosing between audio tracks
 
-Open **Settings > Playback** to control this:
+Channels and VOD with several audio languages get an **Audio** menu right in the player's control bar. Pick a track and the player switches over; if a VOD switch fails, playback returns to the original audio instead of stopping.
+
+## Settings > Watching > Playback
+
+Open **Settings > Watching > Playback** to control the audio fix:
 
 - **Fix unsupported audio automatically** - On or Off. Off by default, so you decide per channel via the **Fix audio** button.
 - **FFmpeg status** - shows **Ready** with the version and where it came from (bundled, system, or custom), or **FFmpeg not found** if none is available.
@@ -41,7 +45,7 @@ The app looks for FFmpeg in this order: your custom path first, then the bundled
 | Platform | What happens |
 |---|---|
 | Windows desktop | Bundled FFmpeg fixes audio automatically or on request. |
-| Linux desktop | Bundled FFmpeg fixes audio automatically or on request. |
+| Linux desktop | Bundled FFmpeg (x86_64 builds; on ARM devices the app uses the system `ffmpeg` if one is installed) fixes audio automatically or on request. |
 | macOS desktop | Usually not needed - the system already decodes these formats. The custom FFmpeg path is still available if you hit a channel that needs it. |
 | Android | Not available - the app hands off to your native video player instead. See [External players](./external-players/). |
 | Web | Not available. |

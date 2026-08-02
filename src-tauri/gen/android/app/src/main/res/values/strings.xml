@@ -5,4 +5,5 @@
     <string name="render_gone_crash">Display crashed, reloading</string>
     <string name="render_gone_repeat">Display keeps crashing. Restart the app if this continues.</string>
     <string name="xt_channels_title">Channels</string>
+    <string name="native_player_unsupported_stream">Can\'t play this channel in the native player</string>
 </resources>

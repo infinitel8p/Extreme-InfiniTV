@@ -1,7 +1,7 @@
 {
   "productName": "Extreme InfiniTV",
   "mainBinaryName": "extreme-infinitv",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "identifier": "com.infinitel8p.xtream",
   "build": {
     "frontendDist": "../dist",
@@ -23,7 +23,8 @@
         "focus": true,
         "visible": false,
         "decorations": false,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "backgroundColor": "#0b0f14"
       }
     ],
     "security": {
@@ -47,6 +48,9 @@
     "category": "public.app-category.video",
     "copyright": "© 2025 Ludovico Ferrara",
     "createUpdaterArtifacts": true,
+    "android": {
+      "versionCode": 100700190
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

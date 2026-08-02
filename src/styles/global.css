@@ -87,17 +87,17 @@ html.xt-theme-switching::view-transition-new(root) {
     --breakpoint-2xl: 96em;     /* 1536px */
 
     /* - surfaces - */
-    --color-bg:        light-dark(oklch(0.985 0.004 250), oklch(0.165 0.013 255));
-    --color-surface:   light-dark(oklch(1     0     0  ), oklch(0.215 0.013 255));
-    --color-surface-2: light-dark(oklch(0.965 0.005 250), oklch(0.265 0.013 255));
-    --color-surface-3: light-dark(oklch(0.93  0.007 250), oklch(0.32  0.013 255));
-    --color-line:      light-dark(oklch(0.9   0.008 250), oklch(0.34  0.013 255));
-    --color-line-soft: light-dark(oklch(0.94  0.005 250), oklch(0.27  0.013 255));
+    --color-bg:        light-dark(oklch(0.925 0.030 var(--xt-tint-hue)), oklch(0.165 0.013 255));
+    --color-surface:   light-dark(oklch(0.97  0.012 var(--xt-tint-hue)), oklch(0.215 0.013 255));
+    --color-surface-2: light-dark(oklch(0.895 0.033 var(--xt-tint-hue)), oklch(0.265 0.013 255));
+    --color-surface-3: light-dark(oklch(0.855 0.036 var(--xt-tint-hue)), oklch(0.32  0.013 255));
+    --color-line:      light-dark(oklch(0.815 0.038 var(--xt-tint-hue)), oklch(0.34  0.013 255));
+    --color-line-soft: light-dark(oklch(0.87  0.034 var(--xt-tint-hue)), oklch(0.27  0.013 255));
 
     /* - foreground - */
-    --color-fg:   light-dark(oklch(0.21  0.014 255), oklch(0.97  0.005 250));
-    --color-fg-2: light-dark(oklch(0.4   0.013 255), oklch(0.78  0.011 250));
-    --color-fg-3: light-dark(oklch(0.48  0.012 255), oklch(0.6   0.011 250));
+    --color-fg:   light-dark(oklch(0.22  0.030 var(--xt-tint-hue)), oklch(0.97  0.005 250));
+    --color-fg-2: light-dark(oklch(0.4   0.028 var(--xt-tint-hue)), oklch(0.78  0.011 250));
+    --color-fg-3: light-dark(oklch(0.45  0.026 var(--xt-tint-hue)), oklch(0.6   0.011 250));
 
     /* - accent: a single soft fuchsia - */
     --color-accent:      light-dark(oklch(0.50 0.20 330), oklch(0.78 0.15 330));
@@ -126,6 +126,7 @@ html.xt-theme-switching::view-transition-new(root) {
 
 /* Accent presets */
 :root {
+    --xt-tint-hue: 330;
     --accent-swatch-fuchsia: light-dark(oklch(0.50 0.20 330), oklch(0.78 0.15 330));
     --accent-swatch-rose:    light-dark(oklch(0.50 0.20 20 ), oklch(0.78 0.15 20 ));
     --accent-swatch-ember:   light-dark(oklch(0.50 0.20 55 ), oklch(0.78 0.15 55 ));
@@ -136,26 +137,32 @@ html.xt-theme-switching::view-transition-new(root) {
 }
 
 :root[data-accent="rose"] {
+    --xt-tint-hue: 20;
     --color-accent:      var(--accent-swatch-rose);
     --color-accent-soft: light-dark(oklch(0.50 0.20 20 / 0.12), oklch(0.78 0.15 20 / 0.18));
 }
 :root[data-accent="ember"] {
+    --xt-tint-hue: 55;
     --color-accent:      var(--accent-swatch-ember);
     --color-accent-soft: light-dark(oklch(0.50 0.20 55 / 0.12), oklch(0.78 0.15 55 / 0.18));
 }
 :root[data-accent="emerald"] {
+    --xt-tint-hue: 160;
     --color-accent:      var(--accent-swatch-emerald);
     --color-accent-soft: light-dark(oklch(0.50 0.20 160 / 0.12), oklch(0.78 0.15 160 / 0.18));
 }
 :root[data-accent="cyan"] {
+    --xt-tint-hue: 210;
     --color-accent:      var(--accent-swatch-cyan);
     --color-accent-soft: light-dark(oklch(0.50 0.20 210 / 0.12), oklch(0.78 0.15 210 / 0.18));
 }
 :root[data-accent="blue"] {
+    --xt-tint-hue: 250;
     --color-accent:      var(--accent-swatch-blue);
     --color-accent-soft: light-dark(oklch(0.50 0.20 250 / 0.12), oklch(0.78 0.15 250 / 0.18));
 }
 :root[data-accent="violet"] {
+    --xt-tint-hue: 295;
     --color-accent:      var(--accent-swatch-violet);
     --color-accent-soft: light-dark(oklch(0.50 0.20 295 / 0.12), oklch(0.78 0.15 295 / 0.18));
 }
@@ -323,7 +330,7 @@ dialog[open]::backdrop {
     position: absolute;
     inset: 0;
     background: light-dark(
-        oklch(0.985 0.004 250 / 0.5),
+        oklch(0.925 0.030 var(--xt-tint-hue) / 0.5),
         oklch(0.165 0.013 255 / 0.6)
     );
 }
@@ -1933,10 +1940,21 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     from { background-position: 100% 0; }
     to   { background-position: -120% 0; }
 }
+.update-progress-fill.indeterminate {
+    animation: update-progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes update-progress-slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(350%); }
+}
 @media (prefers-reduced-motion: reduce) {
     .update-progress-fill {
         animation: none;
         background: var(--color-accent);
+    }
+    .update-progress-fill.indeterminate {
+        animation: none;
+        transform: none;
     }
 }
 
@@ -1971,6 +1989,125 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
 }
 .settings-group--danger .settings-group__title {
     color: var(--color-bad);
+}
+
+/* Settings row system: one surface per group, one row per setting.
+   Layered so Tailwind utilities on the elements can override per-spot. */
+@layer components {
+.settings-surface {
+    container-type: inline-size;
+    border-radius: 1rem;
+    border: 1px solid var(--color-line);
+    background: var(--color-surface);
+}
+.settings-surface__header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1.25rem 1.25rem 0.25rem;
+}
+.settings-row {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    column-gap: 1.5rem;
+    row-gap: 0.5rem;
+    padding: 0.875rem 1.25rem;
+    min-height: 3.5rem;
+}
+.settings-row__text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    flex: 1 1 14rem;
+    /* Readability floor: segs wrap internally before text gets crushed */
+    min-width: min(10rem, 100%);
+}
+.settings-row__control {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-inline-start: auto;
+    max-width: 100%;
+    min-width: 0;
+}
+.settings-row--stack {
+    flex-direction: column;
+    align-items: stretch;
+}
+.settings-row--stack .settings-row__control {
+    margin-inline-start: 0;
+}
+/* In column direction the row-basis would become height, not width */
+.settings-row--stack .settings-row__text {
+    flex: 0 0 auto;
+}
+/* Rows container with dividers that ignore hidden rows and empty island
+   wrappers (divide-y borders the :not(:last-child), which leaks a stray
+   line when the last child is hidden or renders nothing). */
+.settings-rows {
+    display: flex;
+    flex-direction: column;
+}
+.settings-rows > astro-island {
+    display: contents;
+}
+.settings-rows > :not([hidden], .hidden, astro-island) ~ :not([hidden], .hidden, astro-island) {
+    border-top: 1px solid color-mix(in oklab, var(--color-line) 60%, transparent);
+}
+@media (min-width: 40rem) {
+    .settings-surface__header { padding: 1.5rem 1.5rem 0.25rem; }
+    .settings-row { padding-inline: 1.5rem; }
+}
+.settings-seg {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    border: 1px solid var(--color-line);
+    border-radius: 1rem;
+    background: var(--color-bg);
+}
+.settings-seg > .btn {
+    border-color: transparent;
+    background: transparent;
+    flex: 1 0 auto;
+}
+
+/* Narrow surfaces stack rows regardless of viewport (phones, split
+   windows, the 1024px sidebar+rail squeeze all behave the same).
+   Boundary matches Tailwind's @2xl container variant used on controls. */
+@container (max-width: 41.9975rem) {
+    .settings-row:not(summary) {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .settings-row:not(summary) .settings-row__control {
+        margin-inline-start: 0;
+    }
+    .settings-row:not(summary) .settings-row__text {
+        flex: 0 0 auto;
+    }
+    .settings-seg {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: 100%;
+    }
+    .settings-seg > .btn:last-of-type:nth-of-type(odd) {
+        grid-column: span 2;
+    }
+    /* Action buttons go full width; segs and swatch groups keep their grid */
+    .settings-row:not(summary) .settings-row__control > :not([role="radiogroup"]) {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+    .settings-row:not(summary) .settings-row__control > .btn,
+    .settings-row:not(summary) .settings-row__control :not([role="radiogroup"]) > .btn {
+        flex: 1 1 100%;
+        width: 100%;
+        justify-content: flex-start;
+    }
+}
 }
 
 /* Each group rises in with a small stagger to give the page a sense of
@@ -2580,9 +2717,20 @@ details[open] > summary .changelog-chevron {
     padding: 0.75rem;
     border-radius: 0.5rem;
     overflow-x: auto;
+    max-width: 100%;
     margin: 0.5rem 0;
     font-size: 0.8125rem;
     line-height: 1.5;
+}
+/* Closed details keep contributing layout width in Chromium; clip it */
+.changelog-md details,
+#changelog-body details {
+    overflow-x: clip;
+    max-width: 100%;
+}
+#changelog-body,
+.changelog-md {
+    overflow-x: clip;
 }
 .changelog-md pre code {
     background: transparent;

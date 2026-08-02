@@ -58,5 +58,5 @@ Some channels only exist as a livestream embedded in a web page, with no Xtream 
 ## Current limits
 
 - Live channels only - movies and series can't be added to a custom playlist yet.
-- [Catch-up and replay](./catch-up/) works for channels that came from an M3U playlist. Channels pulled in from an Xtream playlist don't offer replay inside a custom playlist yet.
+- [Catch-up and replay](./catch-up/) carries over from the source playlist: M3U channels keep their catchup attributes, and Xtream channels with archive support offer replay inside the custom playlist too.
 - On desktop, a stream that needs a custom User-Agent or Referer may not play in the built-in player, since the browser engine controls those headers. Hand it off to MPV or VLC instead - see [External players](./external-players/). On Android the built-in player applies the headers itself.

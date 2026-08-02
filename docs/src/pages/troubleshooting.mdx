@@ -12,14 +12,14 @@ import Callout from "../components/Callout.astro"
 Right-click the channel (or movie / episode) and pick **Test stream**. The dialog tells you whether the stream is reachable.
 
 - **Reachable but won't play** - the in-app player can't decode the codec. Open it in MPV or VLC instead. See [External players](./external-players/).
-- **403 or 401 response** - your provider is blocking you based on your User-Agent. Open **Settings > Network** and pick a different UA preset (VLC, ExoPlayer, and MX Player cover the common cases). A 401 can also mean the stream needs HTTP Basic auth - if your provider gave you a `user:pass@` URL, make sure you pasted it intact, credentials included.
+- **403 or 401 response** - your provider is blocking you based on your User-Agent. Open **Settings > Network** and pick a different UA preset (VLC media player, Kodi, OTT Navigator, and Samsung Smart TV cover the common cases). A 401 can also mean the stream needs HTTP Basic auth - if your provider gave you a `user:pass@` URL, make sure you pasted it intact, credentials included.
 - **Connection failed entirely** - the server is down, your network is blocking it, or the URL has changed. Check the provider's status page or contact support.
 
 ## No sound, or "unsupported audio format"
 
 Some channels use audio formats the built-in player can't decode: AC-3 / E-AC-3, MP2, and DTS are common on TV streams. On Windows and Linux desktop, the app fixes this on the fly - either automatically or via a **Fix audio** button on the toast or failure panel.
 
-If that doesn't happen, check **Settings > Playback** for the FFmpeg status - it needs FFmpeg to do the fix, and will tell you if it can't find one. See [Audio formats & silent channels](./audio-formats/) for the full picture. If the *video* itself won't play (not just the audio), the fix is an external player instead - see [External players](./external-players/).
+If that doesn't happen, check **Settings > Watching > Playback** for the FFmpeg status - it needs FFmpeg to do the fix, and will tell you if it can't find one. See [Audio formats & silent channels](./audio-formats/) for the full picture. If the *video* itself won't play (not just the audio), the fix is an external player instead - see [External players](./external-players/).
 
 ## Subtitles button missing
 
@@ -46,7 +46,7 @@ The Xtream sign-in failed. Most common causes:
 
 ## EPG is shifted by a few hours
 
-Your provider is sending TV listing times in their own timezone instead of UTC. Open **Settings > Live TV** and adjust the **EPG offset** until the program guide matches reality. The offset is saved per playlist.
+Your provider is sending TV listing times in their own timezone instead of UTC. Open **Settings > Watching > EPG time zone** and adjust **Offset for active playlist** until the program guide matches reality. The offset is saved per playlist.
 
 ## EPG titles look like random letters
 
@@ -54,31 +54,45 @@ Some providers encode TV listing data in a way that looks like gibberish until d
 
 ## Streams play but lag or buffer
 
-- Turn on **Performance mode** in **Settings > Display**. It strips out decorative animations to free up CPU - helps a lot on older Android TV boxes and low-end devices.
-- For heavy 4K or HEVC streams on Android, the built-in player is often the bottleneck. Hand off to VLC or MX Player. See [External players](./external-players/).
-- Check whether your provider limits how many streams you can run at once. **Settings > Downloads** shows the cap your account is allowed.
+- Turn on **Performance mode** in **Settings > Appearance > Performance mode**. It strips out decorative animations to free up CPU - helps a lot on older Android TV boxes and low-end devices.
+- For heavy 4K or HEVC streams on Android, the built-in player is often the bottleneck. Hand off to VLC or MX Player, or try the experimental **Native Android player**. See [External players](./external-players/).
+- Check whether your provider limits how many streams you can run at once. **Settings > Playlists > Active playlist health** shows your account's connection count and cap.
+
+## HEVC / H.265 channels won't play
+
+Some channels use the HEVC (H.265) codec, which not every device can decode:
+
+- **Windows**: the app detects the missing codec and offers a one-click install of Microsoft's **HEVC Video Extensions** (a small download; the Microsoft Store build deep-links to the Store instead). Restart playback after the install finishes.
+- **Other platforms**: if the device can't decode HEVC in the app, hand the stream off to an external player - see [External players](./external-players/). Channels the app knows are HEVC show an **HEVC** badge in the Live TV list, and **Test stream** reports when HEVC support is the problem.
 
 ## A stream works in VLC but not the in-app player (Android)
 
-Some providers gate channels behind a specific User-Agent. The in-app player respects per-channel User-Agents on Android, but not every channel sets one correctly. Try a custom UA in **Settings > Network > Custom UA** - your provider can tell you which value to use.
+Some providers gate channels behind a specific User-Agent. The in-app player respects per-channel User-Agents on Android, but not every channel sets one correctly. Try a custom UA in **Settings > Network** (the **Custom** field overrides the preset) - your provider can tell you which value to use.
 
-## Picture-in-picture is a black rectangle (Android)
+## Picture-in-picture problems (Android)
 
-<Callout type="warning">
-  This was fixed in version 1.5. If you're seeing a black PiP window, you're on an older build - update to the latest release from the Play Store, the Microsoft Store, or [GitHub Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest).
-</Callout>
+Make sure you're on the latest release first - a black-PiP bug was fixed back in 1.5. If PiP still doesn't behave the way you want (lock-screen controls, background playback), try the experimental **Native Android player** under **Settings > Watching**, which uses Android's own player with full PiP support.
 
 ## Downloads won't resume
 
 Downloads pick back up from where they left off when you restart the app. If one is stuck:
 
-- Check **Settings > Downloads > Folder** is set and writable. On Android, you may need to re-grant folder access.
+- Check the download folder under **Settings > Data > Downloads** is set and writable. On Android, you may need to re-grant folder access.
 - Cancel the stuck download and re-queue it.
 - If the same download keeps failing partway through, delete the partial file and start over - some providers send mismatched file sizes that confuse the resume logic.
 
+## Linux: garbled video or the app crashes on start
+
+Some Linux GPU drivers (Raspberry Pi's V3D, Nvidia's proprietary driver, and most virtual machines) don't get along with WebKitGTK's default DMA-BUF renderer - symptoms range from a garbled/striped screen to an immediate crash with `EGL_BAD_PARAMETER`. The app detects known-risky hardware automatically and switches to a safe rendering mode, but you can also control it yourself:
+
+- **Settings > Appearance > Rendering** lets you force Auto, Faster, or Safe. Faster runs as a one-time trial after restarting - confirm it in the prompt that appears, or it reverts on its own the next time you launch.
+- Safe mode applies a different fix per hardware: Raspberry Pi gets `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`, while Nvidia's proprietary driver and virtual machines get `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
+- Do not set `WEBKIT_DISABLE_DMABUF_RENDERER=1` on a Raspberry Pi yourself: on WebKitGTK 2.52 it fixes the garbled screen but crashes on every page navigation. Only `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` is safe there.
+- If the app won't get far enough to reach Settings, run it once with `--safe-rendering` on the command line - this immediately resets the saved setting to Safe (picking the correct variable for your hardware) before anything else runs.
+
 ## Sending useful bug reports
 
-On Android, **Settings > Storage > Share logs** shares the newest log file from your device. On desktop, **Settings > Storage > Open log folder** opens the folder with the daily log files. Attach the log to a [GitHub issue](https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose). Logs have credentials and stream URLs redacted automatically.
+On Android, **Settings > Data > Storage > Share logs** shares the newest log file from your device. On desktop, **Settings > Data > Storage > Open log folder** opens the folder with the daily log files. Attach the log to a [GitHub issue](https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose). Logs have credentials and stream URLs redacted automatically.
 
 ## Start fresh
 

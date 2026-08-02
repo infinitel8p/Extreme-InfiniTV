@@ -1,9 +1,11 @@
 import { log } from "@/scripts/lib/log.js"
 import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
+import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
 const KEY_DOWNLOAD_CONCURRENCY = "xt_download_concurrency"
+const KEY_WRITE_NFO = "xt_write_nfo"
 const KEY_PERF_MODE = "xt_perf_mode"
 const KEY_ACCENT = "xt_accent"
 const KEY_PROGRESS_RETENTION = "xt_progress_retention_days"
@@ -25,6 +27,9 @@ const KEY_ANDROID_REMEMBERED_PLAYER = "xt_android_remembered_player"
 const KEY_VIDEO_SCALE = "xt_video_scale"
 const KEY_UPDATE_CHANNEL = "xt_update_channel"
 const KEY_AUTO_UPDATE = "xt_auto_update"
+const KEY_UI_SOUNDS = "xt_ui_sounds"
+const KEY_HAPTICS = "xt_haptics"
+const KEY_MONO_AUDIO = "xt_mono_audio"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -169,6 +174,17 @@ export function setDownloadConcurrency(n) {
     new CustomEvent(EVT_CHANGED, {
       detail: { key: "downloadConcurrency", value: clamped },
     })
+  )
+}
+
+export function getWriteNfoEnabled() {
+  return readLS(KEY_WRITE_NFO, "") === "1"
+}
+
+export function setWriteNfoEnabled(enabled) {
+  writeLS(KEY_WRITE_NFO, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(EVT_CHANGED, { detail: { key: KEY_WRITE_NFO, value: !!enabled } })
   )
 }
 
@@ -574,7 +590,12 @@ export const SETTINGS_EVENT = EVT_CHANGED
 // ---------------------------------------------------------------------------
 export function getPlayerBackend() {
   const raw = readLS(KEY_PLAYER_BACKEND, "")
-  return PLAYER_BACKENDS.includes(raw) ? raw : DEFAULT_PLAYER_BACKEND
+  const backend = PLAYER_BACKENDS.includes(raw) ? raw : DEFAULT_PLAYER_BACKEND
+  // Clamp mpv/vlc pick to default when sandboxed; storage stays untouched.
+  if (EXTERNAL_PLAYER_BACKENDS.includes(backend) && sandboxRuntimeSync()) {
+    return DEFAULT_PLAYER_BACKEND
+  }
+  return backend
 }
 
 export function setPlayerBackend(backend) {
@@ -753,6 +774,56 @@ export function setUpdateChannel(channel) {
   writeLS(KEY_UPDATE_CHANNEL, next)
   document.dispatchEvent(
     new CustomEvent(UPDATE_CHANNEL_EVENT, { detail: { value: next } })
+  )
+}
+
+export const UI_SOUNDS_EVENT = "xt:ui-sounds-changed"
+
+/** UI sounds: default on; untouched setting stays quiet for reduced-motion users. */
+export function getUiSoundsEnabled() {
+  const raw = readLS(KEY_UI_SOUNDS, "")
+  if (raw === "1") return true
+  if (raw === "0") return false
+  try {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return false
+  } catch {
+    /* no matchMedia in SSR */
+  }
+  return true
+}
+
+export function setUiSoundsEnabled(enabled) {
+  writeLS(KEY_UI_SOUNDS, enabled ? "1" : "0")
+  document.dispatchEvent(
+    new CustomEvent(UI_SOUNDS_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const HAPTICS_EVENT = "xt:haptics-changed"
+
+/** Touch haptics: default on. */
+export function getHapticsEnabled() {
+  return readLS(KEY_HAPTICS, "") !== "0"
+}
+
+export function setHapticsEnabled(enabled) {
+  writeLS(KEY_HAPTICS, enabled ? "" : "0")
+  document.dispatchEvent(
+    new CustomEvent(HAPTICS_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const MONO_AUDIO_EVENT = "xt:mono-audio-changed"
+
+/** Mono audio: default off. */
+export function getMonoAudioEnabled() {
+  return readLS(KEY_MONO_AUDIO, "") === "1"
+}
+
+export function setMonoAudioEnabled(enabled) {
+  writeLS(KEY_MONO_AUDIO, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(MONO_AUDIO_EVENT, { detail: { value: !!enabled } })
   )
 }
 

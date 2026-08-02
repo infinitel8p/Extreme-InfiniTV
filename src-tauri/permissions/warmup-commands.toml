@@ -1,0 +1,12 @@
+# Cross-platform ACL for the warmup transfer commands, granted from default.json.
+
+[[permission]]
+identifier = "allow-warmup-commands"
+description = "Local-origin access to the catalog warmup transfer commands."
+commands.allow = [
+    "warmup_start",
+    "warmup_status",
+    "warmup_cancel",
+    "warmup_ack",
+    "warmup_read_staged",
+]

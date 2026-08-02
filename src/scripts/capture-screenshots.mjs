@@ -17,6 +17,8 @@
 //   XT_DISPLAY_NAME=Demo provider        # shown as the playlist title in the sidebar
 //   XT_REDACT=false                      # opt out of the in-page redaction pass
 //   XT_STATE_FILE=path/to/snapshot.json  # localStorage snapshot to seed (defaults to .screenshot-state.json)
+//   XT_ALLOW_SHORT_REDACTIONS=1          # allow skipping redaction of <4-char credential values instead of aborting
+//   State source precedence: XT_STATE_FILE > .screenshot-state.json > Tauri desktop app state (opt in with XT_TAURI_STATE=true, real credentials otherwise never read)
 //
 // Output: docs/screenshots/<Device>/<route>.png
 // When credentials are present, additional welcome-state captures are saved
@@ -28,6 +30,7 @@
 import { chromium } from "playwright"
 import { existsSync, readFileSync } from "node:fs"
 import { mkdir } from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -109,43 +112,124 @@ function buildSeed() {
   }
 }
 
+// Same path the Tauri plugin-store uses for this app's identifier.
+function tauriStorePath() {
+  const identifier = "com.infinitel8p.xtream"
+  if (process.platform === "win32") {
+    return path.join(process.env.APPDATA || "", identifier, ".xtream.creds.json")
+  }
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", identifier, ".xtream.creds.json")
+  }
+  const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config")
+  return path.join(configHome, identifier, ".xtream.creds.json")
+}
+
 function loadStateSnapshot() {
   const file = process.env.XT_STATE_FILE
     ? path.resolve(ROOT, process.env.XT_STATE_FILE)
     : path.join(ROOT, ".screenshot-state.json")
-  if (!existsSync(file)) return { snapshot: null, file }
-  try {
-    const text = readFileSync(file, "utf8")
-    const parsed = JSON.parse(text)
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      console.warn(`State snapshot at ${file} is not a JSON object - ignoring.`)
+  if (existsSync(file)) {
+    try {
+      const text = readFileSync(file, "utf8")
+      const parsed = JSON.parse(text)
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        console.warn(`State snapshot at ${file} is not a JSON object - ignoring.`)
+        return { snapshot: null, file }
+      }
+      const snapshot = {}
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === "string") snapshot[key] = value
+      }
+      return { snapshot, file }
+    } catch (err) {
+      console.warn(`Couldn't parse state snapshot at ${file}: ${err.message}`)
       return { snapshot: null, file }
     }
+  }
+
+  const tauriStateEnabled = process.env.XT_TAURI_STATE === "true" || process.env.XT_TAURI_STATE === "1"
+  if (!tauriStateEnabled) {
+    console.log(
+      "No state source configured. Provide one of: a fixture .screenshot-state.json, XT_STATE_FILE=<path>, " +
+        "or XT_TAURI_STATE=true to seed from the installed Tauri app's real credentials (opt-in only, not recommended for committed screenshots).",
+    )
+    return { snapshot: null, file }
+  }
+  const tauriFile = tauriStorePath()
+  if (!existsSync(tauriFile)) return { snapshot: null, file }
+  try {
+    const text = readFileSync(tauriFile, "utf8")
+    const parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      console.warn(`Tauri app state at ${tauriFile} is not a JSON object - ignoring.`)
+      return { snapshot: null, file }
+    }
+    // plugin-store keeps raw JSON values; localStorage wants JSON strings
     const snapshot = {}
     for (const [key, value] of Object.entries(parsed)) {
-      if (typeof value === "string") snapshot[key] = value
+      snapshot[key] = typeof value === "string" ? value : JSON.stringify(value)
     }
-    return { snapshot, file }
+    return { snapshot, file: tauriFile }
   } catch (err) {
-    console.warn(`Couldn't parse state snapshot at ${file}: ${err.message}`)
+    console.warn(`Couldn't parse Tauri app state at ${tauriFile}: ${err.message}`)
     return { snapshot: null, file }
   }
 }
 
-function buildRedactions() {
+function buildRedactions(snapshot) {
   const replacements = []
-  const add = (raw, replacement) => {
-    if (!raw || String(raw).length < 4) return
-    replacements.push({ raw: String(raw), replacement })
+  const allowShort = process.env.XT_ALLOW_SHORT_REDACTIONS === "1"
+  const add = (raw, replacement, { credential = true } = {}) => {
+    if (!raw) return
+    const text = String(raw)
+    if (text.length < 4) {
+      if (!credential) return
+      if (allowShort) {
+        console.warn("Skipping redaction of a short credential value (under 4 chars); XT_ALLOW_SHORT_REDACTIONS=1 is set.")
+        return
+      }
+      console.error(
+        "Aborting: a credential value is shorter than 4 characters and can't be safely redacted " +
+          "(a global replace would corrupt unrelated page text). Set XT_ALLOW_SHORT_REDACTIONS=1 to skip redacting it and proceed anyway.",
+      )
+      process.exit(1)
+    }
+    if (replacements.some((item) => item.raw === text)) return
+    replacements.push({ raw: text, replacement })
   }
   const serverUrl = process.env.XT_SERVER_URL || ""
   const m3uUrl = process.env.XT_M3U_URL || ""
-  const host = hostnameOf(serverUrl || m3uUrl)
+  const sourceUrl = serverUrl || m3uUrl
   add(serverUrl.replace(/\/+$/, ""), "https://provider.example")
   add(m3uUrl, "https://provider.example/playlist.m3u8")
-  add(host, "provider.example")
+  // longer host:port form must be redacted before the bare hostname, or the port survives
+  add(hostnameWithPortOf(sourceUrl), "provider.example", { credential: false })
+  add(hostnameOf(sourceUrl), "provider.example", { credential: false })
   add(process.env.XT_USERNAME, "demo_user")
   add(process.env.XT_PASSWORD, "demo_pass")
+  // snapshot entries may point at a different provider than the env vars
+  if (snapshot?.xt_playlists) {
+    try {
+      const parsed = JSON.parse(snapshot.xt_playlists)
+      const entries = Array.isArray(parsed?.entries) ? parsed.entries : []
+      for (const entry of entries) {
+        if (!entry || typeof entry !== "object") continue
+        if (entry.serverUrl) {
+          add(String(entry.serverUrl).replace(/\/+$/, ""), "https://provider.example")
+          add(hostnameWithPortOf(entry.serverUrl), "provider.example", { credential: false })
+          add(hostnameOf(entry.serverUrl), "provider.example", { credential: false })
+        }
+        if (entry.url) {
+          add(entry.url, "https://provider.example/playlist.m3u8")
+          add(hostnameWithPortOf(entry.url), "provider.example", { credential: false })
+          add(hostnameOf(entry.url), "provider.example", { credential: false })
+        }
+        add(entry.username, "demo_user")
+        add(entry.password, "demo_pass")
+      }
+    } catch {}
+  }
   return replacements
 }
 
@@ -194,6 +278,15 @@ function hostnameOf(u) {
   }
 }
 
+function hostnameWithPortOf(u) {
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(u) ? u : "http://" + u)
+    return parsed.port ? `${parsed.hostname}:${parsed.port}` : ""
+  } catch {
+    return ""
+  }
+}
+
 function slugRoute(route) {
   if (route === "/") return "home"
   return route.replace(/^\/+/, "").replace(/\//g, "-")
@@ -215,9 +308,12 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
     isMobile: viewport.isMobile,
     hasTouch: viewport.hasTouch,
     colorScheme: theme === "light" ? "light" : "dark",
+    locale: "en-US",
   })
 
-  await context.addInitScript(({ seed, theme, snapshot, displayName }) => {
+  const appVersion = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")).version || "0.0.0"
+
+  await context.addInitScript(({ seed, theme, snapshot, displayName, appVersion }) => {
     try {
       if (snapshot) {
         for (const [key, value] of Object.entries(snapshot)) {
@@ -239,8 +335,13 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
         localStorage.setItem("xt_playlists", JSON.stringify(seed))
       }
       localStorage.setItem("xt_theme", theme)
+      // suppress the "What's new" modal a fresh profile would otherwise show
+      localStorage.setItem("xt_last_seen_version", appVersion)
     } catch {}
-  }, { seed, theme, snapshot, displayName })
+    try {
+      sessionStorage.setItem("xt_splash_done", "1")
+    } catch {}
+  }, { seed, theme, snapshot, displayName, appVersion })
 
   const page = await context.newPage()
 
@@ -256,6 +357,9 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
         continue
       }
     }
+    // pre-seeded splash stays in the DOM as display:none, so hidden not detached
+    await page.waitForSelector("#xt-app-splash", { state: "hidden", timeout: 10_000 }).catch(() => {})
+    await page.evaluate(() => document.fonts.ready).catch(() => {})
     await page.waitForTimeout(1500)
     try {
       await page.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur())
@@ -305,7 +409,11 @@ async function main() {
   const displayName = process.env.XT_DISPLAY_NAME || "Demo provider"
 
   if (snapshot) {
-    console.log(`Loaded localStorage snapshot from ${path.relative(ROOT, stateFile)} (${Object.keys(snapshot).length} keys). Playlist title forced to "${displayName}".`)
+    const relativeStateFile = path.relative(ROOT, stateFile)
+    const source = stateFile === tauriStorePath()
+      ? "Tauri desktop app state"
+      : relativeStateFile.startsWith("..") ? stateFile : relativeStateFile
+    console.log(`Loaded localStorage snapshot from ${source} (${Object.keys(snapshot).length} keys). Playlist title forced to "${displayName}".`)
     if (snapshot.xt_playlists) {
       try {
         const parsed = JSON.parse(snapshot.xt_playlists)
@@ -325,7 +433,7 @@ async function main() {
   const hasState = Boolean(snapshot || seed)
   const welcomeRoutes = hasState ? WELCOME_ROUTES.filter((route) => !routeFilter || route === routeFilter) : []
   const redactionsEnabled = args.redact !== "false" && process.env.XT_REDACT !== "false"
-  const redactions = redactionsEnabled ? buildRedactions() : []
+  const redactions = redactionsEnabled ? buildRedactions(snapshot) : []
 
   console.log(`Capturing ${devices.length} device(s) x ${routes.length} route(s) at ${baseUrl} (theme: ${theme})`)
   if (welcomeRoutes.length > 0) {

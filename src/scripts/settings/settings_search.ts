@@ -1,8 +1,10 @@
 // Settings inline filter. Indexes section title + each card's text content
 // at mount, re-indexes when the locale changes, and on input hides cards
 // whose index doesn't contain every whitespace-split query token (AND
-// match). Sections collapse when all their visible cards miss; sidebar
-// nav links pointing to hidden sections / cards also hide.
+// match). Sections collapse when all their visible cards miss; subnav
+// links resolve their miss state from whatever DOM node their href
+// targets, since some point at surfaces that aren't indexed cards
+// themselves (only the rows inside them are).
 //
 // Cards already platform-hidden (`.hidden` set by some other init code,
 // e.g. desktop-only Discord card on web) are skipped from search results
@@ -18,20 +20,24 @@ const EMPTY_ID = "settings-search-empty"
 interface CardEntry {
   card: HTMLElement
   key: string
-  subnavLinks: HTMLAnchorElement[]
 }
 interface SectionEntry {
   section: HTMLElement
   navLink: HTMLAnchorElement | null
   cards: CardEntry[]
 }
+interface SubnavLinkEntry {
+  link: HTMLAnchorElement
+  targetId: string
+}
 
 let sections: SectionEntry[] = []
+let subnavLinks: SubnavLinkEntry[] = []
 const indexByCardKey = new Map<string, string>()
 
 function findCardsInSection(section: HTMLElement): HTMLElement[] {
   const candidates = section.querySelectorAll<HTMLElement>(
-    "article, details.changelog-outer"
+    "[data-settings-item], article, details.changelog-outer"
   )
   const cards: HTMLElement[] = []
   for (const candidate of candidates) {
@@ -51,19 +57,47 @@ function buildStructure(stack: HTMLElement): void {
       `.settings-nav-link[href="#${section.id}"]`
     )
     const cardEls = findCardsInSection(section)
-    const cards: CardEntry[] = []
-    cardEls.forEach((card, index) => {
-      const key = card.id || `${section.id}__card-${index}`
-      const subnavLinks = card.id
-        ? Array.from(
-            document.querySelectorAll<HTMLAnchorElement>(
-              `.settings-subnav-link[href="#${card.id}"]`
-            )
-          )
-        : []
-      cards.push({ card, key, subnavLinks })
-    })
+    const cards: CardEntry[] = cardEls.map((card, index) => ({
+      card,
+      key: card.id || `${section.id}__card-${index}`,
+    }))
     sections.push({ section, navLink, cards })
+  }
+}
+
+// Subnav links may target a surface that isn't itself an indexed card (the
+// index units are the [data-settings-item] rows inside it), so their
+// miss state is resolved generically against the target's own subtree.
+function buildSubnavLinks(): void {
+  subnavLinks = Array.from(
+    document.querySelectorAll<HTMLAnchorElement>(".settings-subnav-link[href^='#']")
+  )
+    .map((link) => ({ link, targetId: (link.getAttribute("href") ?? "").slice(1) }))
+    .filter((entry) => entry.targetId)
+}
+
+function applySubnavLinkMiss(): void {
+  for (const { link, targetId } of subnavLinks) {
+    const target = document.getElementById(targetId)
+    if (!target || target.classList.contains("hidden")) {
+      if (target) link.setAttribute("data-search-miss", "")
+      else link.removeAttribute("data-search-miss")
+      continue
+    }
+    const selfMatch = target.dataset.search === "match"
+    const descendantMatch = !!target.querySelector('[data-search="match"]')
+    if (selfMatch || descendantMatch) {
+      link.removeAttribute("data-search-miss")
+      continue
+    }
+    const hasCarrier = target.dataset.search !== undefined || !!target.querySelector("[data-search]")
+    if (!hasCarrier) {
+      const ownerSection = target.closest<HTMLElement>("section.settings-group[id]")
+      if (ownerSection?.dataset.search === "miss") link.setAttribute("data-search-miss", "")
+      else link.removeAttribute("data-search-miss")
+      continue
+    }
+    link.setAttribute("data-search-miss", "")
   }
 }
 
@@ -115,11 +149,9 @@ function applyFilter(
       sectionEntry.navLink?.removeAttribute("data-search-miss")
       for (const cardEntry of sectionEntry.cards) {
         delete cardEntry.card.dataset.search
-        for (const link of cardEntry.subnavLinks) {
-          link.removeAttribute("data-search-miss")
-        }
       }
     }
+    for (const { link } of subnavLinks) link.removeAttribute("data-search-miss")
     if (emptyEl) emptyEl.hidden = true
     return
   }
@@ -137,18 +169,11 @@ function applyFilter(
         const { card } = cardEntry
         if (card.classList.contains("hidden")) {
           delete card.dataset.search
-          for (const link of cardEntry.subnavLinks) {
-            link.setAttribute("data-search-miss", "")
-          }
           continue
         }
         const indexText = indexByCardKey.get(cardEntry.key) ?? ""
         const matches = tokens.every((token) => indexText.includes(token))
         card.dataset.search = matches ? "match" : "miss"
-        for (const link of cardEntry.subnavLinks) {
-          if (matches) link.removeAttribute("data-search-miss")
-          else link.setAttribute("data-search-miss", "")
-        }
         if (matches) {
           sectionHasMatch = true
           visibleCount++
@@ -164,6 +189,7 @@ function applyFilter(
     }
   }
 
+  applySubnavLinkMiss()
   if (emptyEl) emptyEl.hidden = visibleCount > 0
 }
 
@@ -176,6 +202,7 @@ function init(): void {
   if (!input) return
 
   buildStructure(stack)
+  buildSubnavLinks()
   buildIndex()
 
   const apply = (): void => applyFilter(input.value, stack, emptyEl)

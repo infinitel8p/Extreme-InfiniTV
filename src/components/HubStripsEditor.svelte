@@ -138,12 +138,12 @@
   })
 </script>
 
-<div class="rounded-xl border border-line bg-surface p-4 flex flex-col gap-4 overflow-x-clip">
+<div class="flex flex-col gap-4 overflow-x-clip">
   <div class="flex items-baseline justify-between gap-2 flex-wrap">
     <h3 class="text-sm font-semibold text-fg">{tr("settings.hubStrips.activeTitle")}</h3>
     <button
       type="button"
-      class="text-xs text-fg-3 hover:text-fg focus-visible:text-fg underline-offset-2 hover:underline outline-none"
+      class="inline-flex items-center min-h-9 px-2 rounded-lg text-xs text-fg-3 hover:text-fg focus-visible:text-fg underline-offset-2 hover:underline outline-none pointer-coarse:min-h-11"
       onclick={reset}>
       {tr("settings.hubStrips.reset")}
     </button>
@@ -174,7 +174,7 @@
           <span class="shrink-0 flex items-center gap-1">
             <button
               type="button"
-              class="reorder-arrow size-7 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
+              class="reorder-arrow size-9 pointer-coarse:size-11 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
               aria-label={tr("settings.hubStrips.moveUpAria", { name: labelFor(row.id) })}
               title={tr("settings.hubStrips.moveUp")}
               disabled={i === 0}
@@ -183,7 +183,7 @@
             </button>
             <button
               type="button"
-              class="reorder-arrow size-7 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
+              class="reorder-arrow size-9 pointer-coarse:size-11 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
               aria-label={tr("settings.hubStrips.moveDownAria", { name: labelFor(row.id) })}
               title={tr("settings.hubStrips.moveDown")}
               disabled={i === activeRows.length - 1}
@@ -192,7 +192,7 @@
             </button>
             <button
               type="button"
-              class="reorder-arrow size-7 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-bad hover:bg-bad-soft focus-visible:text-bad focus-visible:bg-bad-soft outline-none"
+              class="reorder-arrow size-9 pointer-coarse:size-11 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-bad hover:bg-bad-soft focus-visible:text-bad focus-visible:bg-bad-soft outline-none"
               aria-label={tr("settings.hubStrips.removeAria", { name: labelFor(row.id) })}
               title={tr("settings.hubStrips.remove")}
               onclick={() => remove(row.id)}>
@@ -212,7 +212,7 @@
           <li>
             <button
               type="button"
-              class="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-2 px-2.5 py-1 text-xs text-fg-2 hover:text-fg hover:border-line-soft hover:bg-surface-3 focus-visible:bg-surface-3 outline-none transition-colors"
+              class="inline-flex items-center gap-1.5 min-h-9 pointer-coarse:min-h-11 rounded-full border border-line bg-surface-2 px-3 text-xs text-fg-2 hover:text-fg hover:border-line-soft hover:bg-surface-3 focus-visible:bg-surface-3 outline-none transition-colors"
               onclick={() => add(entry.id)}>
               <svg xmlns="http://www.w3.org/2000/svg" width="0.85rem" height="0.85rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
               <span>{labelFor(entry.id)}</span>
@@ -240,7 +240,6 @@
   }
   @media (pointer: coarse) {
     .reorder-handle { display: none; }
-    .reorder-arrow { width: 2.75rem; height: 2.75rem; }
   }
   @media (prefers-reduced-motion: reduce) {
     .reorder-row { transition: none !important; animation: none !important; }

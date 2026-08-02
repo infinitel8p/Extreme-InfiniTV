@@ -56,12 +56,16 @@ import {
   isAudioTranscodeChannel,
 } from "@/scripts/lib/audio-proxy.ts"
 import { parseM3U as parseSharedM3U } from "@/scripts/lib/m3u-parser.ts"
+import { stepChannelIndex, channelKeyDirection } from "@/scripts/lib/channel-step.ts"
 import {
   hasHevcNameHint,
   deviceSupportsHevc,
   classifyStartFailure,
   describeAudioCodec,
   isUnsupportedAudioCodec,
+  isDroppingEveryFrame,
+  DROPPED_FRAME_MIN_SAMPLE,
+  chooseBlackFrameRecovery,
 } from "@/scripts/lib/codec-hints.ts"
 import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
@@ -73,6 +77,7 @@ import {
   androidExternalAvailable,
   getExternalLauncher,
   isMacOS,
+  isTauri,
   subscribeExternalPlayerExit,
 } from "@/scripts/lib/player-runtime.ts"
 import {
@@ -85,6 +90,8 @@ import {
   setVideoScale,
   VIDEO_SCALE_EVENT,
   SETTINGS_EVENT,
+  getMonoAudioEnabled,
+  setMonoAudioEnabled,
 } from "@/scripts/lib/app-settings.js"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
@@ -93,7 +100,7 @@ import {
   surfaceLaunchError,
   type ExternalPlayerButtonHandle,
 } from "@/scripts/lib/external-player-button.js"
-import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE, ICON_ASPECT_RATIO } from "@/scripts/lib/icons.js"
+import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE, ICON_DOTS, ICON_CHECK } from "@/scripts/lib/icons.js"
 import { openAddToCustomDialog } from "@/scripts/lib/add-to-custom-dialog.ts"
 import {
   loadProgrammes,
@@ -1037,6 +1044,20 @@ function isTypingTarget(target) {
   return false
 }
 
+function tuneRelativeChannel(e, delta, reason) {
+  if (!filtered.length) return
+  const currentIdx = currentlyPlayingId != null
+    ? filtered.findIndex((channel) => channel.id === currentlyPlayingId)
+    : -1
+  const nextIdx = stepChannelIndex(currentIdx, filtered.length, delta)
+  if (nextIdx == null) return
+  const channel = filtered[nextIdx]
+  if (!channel) return
+  e.preventDefault()
+  focusByIdx(nextIdx)
+  play(channel.id, channel.name, reason)
+}
+
 document.addEventListener("keydown", (e) => {
   // AltGr reports as Ctrl+Alt on Windows; `\` needs AltGr on many layouts (e.g. German AltGr+ß).
   const isAltGrBackslash = e.ctrlKey && e.altKey && !e.metaKey && e.key === "\\"
@@ -1068,23 +1089,13 @@ document.addEventListener("keydown", (e) => {
   }
 
   if (e.key === "[" || e.key === "]") {
-    if (!filtered.length) return
-    const currentIdx = currentlyPlayingId != null
-      ? filtered.findIndex((channel) => channel.id === currentlyPlayingId)
-      : -1
-    let nextIdx
-    if (currentIdx === -1) {
-      nextIdx = e.key === "]" ? 0 : filtered.length - 1
-    } else {
-      nextIdx = e.key === "[" ? currentIdx - 1 : currentIdx + 1
-      if (nextIdx < 0) nextIdx = filtered.length - 1
-      if (nextIdx >= filtered.length) nextIdx = 0
-    }
-    const channel = filtered[nextIdx]
-    if (!channel) return
-    e.preventDefault()
-    focusByIdx(nextIdx)
-    play(channel.id, channel.name)
+    tuneRelativeChannel(e, e.key === "]" ? 1 : -1, "user")
+    return
+  }
+
+  const channelKeyDelta = channelKeyDirection(e.key, e.keyCode)
+  if (channelKeyDelta != null) {
+    tuneRelativeChannel(e, channelKeyDelta, "channel-key")
     return
   }
 
@@ -1183,6 +1194,10 @@ const applyFilter = () => {
   if (!searchEl || !listStatus) return
   const qnorm = normalize(searchEl.value || "")
   const tokens = qnorm.length ? qnorm.split(" ") : []
+  // Rows print "Ch 27329 (#1467807)", so digits-only queries also match chno and id.
+  const numericQuery = /^\d+$/.test((searchEl.value || "").trim())
+    ? (searchEl.value || "").trim()
+    : null
 
   const activeCat = picker.getActiveCat()
   /** @type {typeof all} */
@@ -1211,7 +1226,20 @@ const applyFilter = () => {
     scoreById = new Map()
     const scored = []
     for (const channel of out) {
-      const score = scoreNormMatch(channel.norm, tokens)
+      let score = scoreNormMatch(channel.norm, tokens)
+      if (numericQuery) {
+        const idText = String(channel.id)
+        const chnoText = channel.chno != null ? String(channel.chno) : ""
+        if (idText === numericQuery || chnoText === numericQuery) {
+          // Exact number hit outranks any name match.
+          score = Math.max(score, 1000)
+        } else if (
+          idText.startsWith(numericQuery) ||
+          (chnoText && chnoText.startsWith(numericQuery))
+        ) {
+          score = Math.max(score, 500)
+        }
+      }
       if (score > 0) {
         scored.push(channel)
         scoreById.set(channel.id, score)
@@ -1527,6 +1555,40 @@ const audioProxyOneShotFixSet = new Set()
 const audioProxyBypassSet = new Set()
 // Streams already auto-attempted through the proxy on a start failure this session - a start failure is a one-shot try, not a retry loop.
 const audioProxyAutoAttemptedSet = new Set()
+
+// Per-channel budget for black-screen native re-tunes (macOS GDR latch retries).
+const nativeRelatchAttempts = new Map()
+
+// Channels whose AC-3 audio cannot decode in WKWebView MSE remount on native
+// AVFoundation. Persisted per playlist: the codec is stable, and module state
+// dies on every page navigation, so a plain Set would re-pay the hls.js detour.
+let nativeAudioFallbackCache = null
+
+function loadNativeAudioFallbackSet() {
+  if (nativeAudioFallbackCache && nativeAudioFallbackCache.playlistId === activePlaylistId) {
+    return nativeAudioFallbackCache.ids
+  }
+  let ids = new Set()
+  try {
+    const raw = localStorage.getItem(`xt_native_audio_fallback:${activePlaylistId}`)
+    if (raw) ids = new Set(JSON.parse(raw))
+  } catch {}
+  nativeAudioFallbackCache = { playlistId: activePlaylistId, ids }
+  return ids
+}
+
+function isNativeAudioFallbackChannel(id) {
+  return loadNativeAudioFallbackSet().has(id)
+}
+
+function rememberNativeAudioFallbackChannel(id) {
+  const ids = loadNativeAudioFallbackSet()
+  if (ids.has(id)) return
+  ids.add(id)
+  try {
+    localStorage.setItem(`xt_native_audio_fallback:${activePlaylistId}`, JSON.stringify([...ids]))
+  } catch {}
+}
 // Capped so a channel that keeps stalling right after retune bypasses the proxy instead of retuning forever.
 const audioProxyStallRetuneCounts = new Map()
 const AUDIO_PROXY_MAX_STALL_RETUNES = 2
@@ -1741,7 +1803,7 @@ function giveUpOnPlayback(ctx) {
     nameHint: hasHevcNameHint(ctx.name),
     deviceHevc: deviceSupportsHevc(),
   })
-  log.log("[xt:livetv] start-failure verdict:", failure.kind, failure.codec)
+  log.info("[xt:livetv] start-failure verdict", { kind: failure.kind, codec: failure.codec, streamId: ctx.streamId })
   // Bypasses getAndroidNativePlayerEnabled() on purpose: one-shot recovery, not the opt-in setting.
   if (!ctx.started && !ctx.nativeFallbackTried && androidNativePlayerAvailable) {
     ctx.nativeFallbackTried = true
@@ -1754,6 +1816,24 @@ function giveUpOnPlayback(ctx) {
       })
       return
     }
+  }
+  // WKWebView MSE has no AC-3 decoder; remount such channels on native
+  // AVFoundation, which does. The ffmpeg proxy is no answer for HLS sources.
+  if (
+    failure.kind === "audio" &&
+    isMacOS &&
+    isTauri &&
+    ctx.isLive &&
+    !ctx.audioProxied &&
+    !isNativeAudioFallbackChannel(ctx.streamId)
+  ) {
+    rememberNativeAudioFallbackChannel(ctx.streamId)
+    log.warn("[xt:livetv] AC-3 audio cannot decode in this WebView's MSE - remounting on native AVFoundation", {
+      streamId: ctx.streamId,
+      codec: failure.codec,
+    })
+    void play(ctx.streamId, ctx.name, "auto:native-audio-fallback")
+    return
   }
   // Independent of getAudioTranscodeAuto(), which only gates the mid-play watchdog.
   if (
@@ -1824,6 +1904,18 @@ async function mountEmbeddedPlayer(backend, opts) {
   attachAudioOnlyDetection(vjs)
 
   vjs.on("playing", () => {
+    {
+      const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      log.info("[xt:livetv] playing", {
+        streamId: lastPlayContext?.streamId ?? null,
+        t: Math.round((mediaEl?.currentTime || 0) * 10) / 10,
+        videoWidth: mediaEl?.videoWidth ?? null,
+        frames: mediaEl ? decodedFrameCount(mediaEl) : null,
+        dropped: mediaEl ? droppedFrameCount(mediaEl) : null,
+        proxied: !!lastPlayContext?.audioProxied,
+      })
+    }
+    ensureProgressWatch()
     if (lastPlayContext) {
       lastPlayContext.started = true
       if (lastPlayContext.audioProxied) {
@@ -1836,6 +1928,7 @@ async function mountEmbeddedPlayer(backend, opts) {
       catchupAutoRetryCount = 0
       catchupSeekRemountCount = 0
       if (streamIdAtPlaying != null) audioProxyStallRetuneCounts.delete(streamIdAtPlaying)
+      if (streamIdAtPlaying != null) liveStallRetuneCounts.delete(streamIdAtPlaying)
     }, CATCHUP_RETRY_RESET_AFTER_MS)
     hideTuningOverlay()
     hideBufferingChip()
@@ -1845,6 +1938,7 @@ async function mountEmbeddedPlayer(backend, opts) {
     armDeadAudioWatchdog()
   })
   vjs.on("waiting", () => {
+    log.info("[xt:livetv] waiting (buffer underrun)", { streamId: lastPlayContext?.streamId ?? null })
     showBufferingChip()
     armStallSentinel()
   })
@@ -1857,6 +1951,7 @@ async function mountEmbeddedPlayer(backend, opts) {
   })
   ensureTimeshiftActivityTracking()
   vjs.on("stalled", () => {
+    log.info("[xt:livetv] stalled (no data arriving)", { streamId: lastPlayContext?.streamId ?? null })
     showBufferingChip()
     armStallSentinel()
   })
@@ -2048,7 +2143,11 @@ async function fetchRadioIcy(wrap: HTMLElement, channelId: number, url: string, 
   }
 }
 
-function setRadioMode(channel: { id: number; name?: string; logo?: string | null; category?: string | null; url?: string | null }) {
+/** opts.probeIcy fetches ICY station tags; only genuine radio entries pay that stream GET. */
+function setRadioMode(
+  channel: { id: number; name?: string; logo?: string | null; category?: string | null; url?: string | null },
+  opts: { probeIcy?: boolean } = {}
+) {
   const wrap = getPlayerWrap()
   if (!wrap) return
   wrap.dataset.radioMode = "on"
@@ -2074,7 +2173,7 @@ function setRadioMode(channel: { id: number; name?: string; logo?: string | null
   if (descEl) { descEl.textContent = ""; descEl.hidden = true }
   renderRadioTags(wrap, genre, channel.url ? radioCodecFromUrl(channel.url) : null)
   startRadioElapsed(wrap)
-  if (channel.url) fetchRadioIcy(wrap, channel.id, channel.url, genre)
+  if (channel.url && opts.probeIcy) fetchRadioIcy(wrap, channel.id, channel.url, genre)
 
   wrap.setAttribute("aria-label", t("livetv.radioAriaLabel", { name: channel.name || "" }) || `Radio: ${channel.name || ""}`)
 }
@@ -2100,6 +2199,42 @@ function clearRadioMode() {
   if (descEl) { descEl.textContent = ""; descEl.hidden = true }
   radioModeChannelId = null
 }
+
+// Keyed by playlist so an override on one provider can't suppress auto-promotion on another.
+const manualAudioOnlyOff = new Set<string>()
+
+function manualAudioOnlyOffKey(streamId: number): string {
+  return `${activePlaylistId}:${streamId}`
+}
+
+let audioOnlySetCache: { playlistId: string; ids: Set<number> } | null = null
+
+function loadAudioOnlySet(): Set<number> {
+  if (audioOnlySetCache && audioOnlySetCache.playlistId === activePlaylistId) {
+    return audioOnlySetCache.ids
+  }
+  let ids = new Set<number>()
+  try {
+    const raw = localStorage.getItem(`xt_audio_only:${activePlaylistId}`)
+    if (raw) ids = new Set(JSON.parse(raw))
+  } catch {}
+  audioOnlySetCache = { playlistId: activePlaylistId, ids }
+  return ids
+}
+
+function saveAudioOnlySet(ids: Set<number>) {
+  audioOnlySetCache = { playlistId: activePlaylistId, ids }
+  try {
+    localStorage.setItem(`xt_audio_only:${activePlaylistId}`, JSON.stringify([...ids]))
+  } catch {}
+}
+
+function isAudioOnlyChannel(id: number): boolean {
+  return loadAudioOnlySet().has(id)
+}
+
+const CURRENT_ROW_ICON_BTN_CLASS =
+  "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-base text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
 
 function paintRadioNowPlaying(channelId: number) {
   const wrap = getPlayerWrap()
@@ -2142,17 +2277,37 @@ function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unkn
     if (!videoEl) return null
     return { ctx, wrap, videoEl }
   }
-  const promote = (ctx: NonNullable<typeof lastPlayContext>) => {
+  const promote = (ctx: NonNullable<typeof lastPlayContext>, videoEl?: HTMLVideoElement) => {
+    if (manualAudioOnlyOff.has(manualAudioOnlyOffKey(ctx.streamId))) return
     const channel = all.find((entry) => entry.id === ctx.streamId)
-    if (channel) setRadioMode(channel)
+    if (!channel) return
+    // Radio mode hides the video element, so a wrong promotion looks like "audio only". Leave a trace.
+    log.warn("[xt:livetv] auto-promoting channel to audio-only (radio) mode", {
+      streamId: ctx.streamId,
+      videoWidth: videoEl?.videoWidth ?? null,
+      videoHeight: videoEl?.videoHeight ?? null,
+      readyState: videoEl?.readyState ?? null,
+      videoTracks:
+        videoEl && (videoEl as any).videoTracks
+          ? (videoEl as any).videoTracks.length
+          : null,
+    })
+    // Auto-promotion is a guess; never spend a stream request on ICY tags for it.
+    setRadioMode(channel, { probeIcy: false })
   }
+
+  // HAVE_FUTURE_DATA proves a zero videoWidth is real: on macOS native HLS,
+  // readyState hits 1 seconds before dimensions land, so looser checks hide
+  // working video. Audio-only streams still reach readyState 4 with width 0.
+  const canActuallyPlay = (videoEl: HTMLVideoElement) => videoEl.readyState >= 3
 
   if (!isMacOS) {
     const detect = () => {
       const target = resolveTarget()
       if (!target) return
+      if (!canActuallyPlay(target.videoEl)) return
       if (target.videoEl.videoWidth === 0 && target.videoEl.videoHeight === 0) {
-        promote(target.ctx)
+        promote(target.ctx, target.videoEl)
       }
     }
     handle.on("loadedmetadata", detect)
@@ -2175,14 +2330,175 @@ function attachAudioOnlyDetection(handle: { on(event: string, fn: (...args: unkn
       pending = null
       if (wrap.dataset.radioMode === "on") return
       if (videoEl.videoWidth > 0 || videoEl.videoHeight > 0) return
+      if (!canActuallyPlay(videoEl)) return
       const tracks = (videoEl as any).videoTracks
       if (tracks && typeof tracks.length === "number" && tracks.length > 0) return
-      promote(ctx)
+      promote(ctx, videoEl)
     }, RADIO_GRACE_MS)
   }
   handle.on("loadedmetadata", detect)
   handle.on("playing", detect)
   handle.on("resize", detect)
+}
+
+// Mirrors openChannelMenu's dismissal + spatial-nav wiring for the now-playing row.
+const CURRENT_MORE_MENU_ID = "current-more-menu"
+let currentMoreMenuEl: HTMLElement | null = null
+let currentMoreMenuTrigger: HTMLButtonElement | null = null
+const currentMoreMenuSpatialNav = attachPopoverSpatialNav({
+  id: `${CURRENT_MORE_MENU_ID}-section`,
+  selector: `#${CURRENT_MORE_MENU_ID} [role^="menuitem"]`,
+})
+
+function closeCurrentMoreMenu(restoreFocus = true) {
+  if (!currentMoreMenuEl) return
+  currentMoreMenuSpatialNav.close()
+  currentMoreMenuEl.remove()
+  currentMoreMenuEl = null
+  document.removeEventListener("pointerdown", onCurrentMoreMenuOutside, true)
+  document.removeEventListener("keydown", onCurrentMoreMenuKey, true)
+  window.removeEventListener("blur", closeCurrentMoreMenuOnBlur)
+  window.removeEventListener("resize", closeCurrentMoreMenuOnBlur)
+  const trigger = currentMoreMenuTrigger
+  currentMoreMenuTrigger = null
+  trigger?.setAttribute("aria-expanded", "false")
+  if (restoreFocus) trigger?.focus({ preventScroll: true })
+}
+function closeCurrentMoreMenuOnBlur() {
+  closeCurrentMoreMenu(false)
+}
+function onCurrentMoreMenuOutside(event: PointerEvent) {
+  if (!currentMoreMenuEl) return
+  if (currentMoreMenuEl.contains(event.target as Node)) return
+  if (currentMoreMenuTrigger?.contains(event.target as Node)) return
+  closeCurrentMoreMenu(false)
+}
+function onCurrentMoreMenuKey(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    event.preventDefault()
+    closeCurrentMoreMenu(true)
+  }
+}
+
+function makeMoreMenuItem(label: string, checked?: boolean): HTMLButtonElement {
+  const item = document.createElement("button")
+  item.type = "button"
+  item.setAttribute("role", checked === undefined ? "menuitem" : "menuitemcheckbox")
+  if (checked !== undefined) item.setAttribute("aria-checked", String(checked))
+  item.className =
+    "w-full flex items-center justify-between gap-3 text-left px-3 py-2.5 min-h-11 rounded-lg text-sm " +
+    "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent outline-none transition-colors"
+  const labelSpan = document.createElement("span")
+  labelSpan.textContent = label
+  item.appendChild(labelSpan)
+  if (checked) {
+    const check = document.createElement("span")
+    check.className = "shrink-0 inline-flex text-accent"
+    check.setAttribute("aria-hidden", "true")
+    check.innerHTML = ICON_CHECK
+    item.appendChild(check)
+  }
+  return item
+}
+
+function setMoreMenuItemChecked(item: HTMLButtonElement, checked: boolean) {
+  item.setAttribute("aria-checked", String(checked))
+  item.querySelector("[aria-hidden='true']")?.remove()
+  if (checked) {
+    const check = document.createElement("span")
+    check.className = "shrink-0 inline-flex text-accent"
+    check.setAttribute("aria-hidden", "true")
+    check.innerHTML = ICON_CHECK
+    item.appendChild(check)
+  }
+}
+
+function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElement[] {
+  const items: HTMLButtonElement[] = []
+
+  const pipSupported = !!window.AndroidPip || document.pictureInPictureEnabled === true
+  if (pipSupported) {
+    const pipItem = makeMoreMenuItem(t("detail.action.pip"))
+    pipItem.addEventListener("click", () => {
+      closeCurrentMoreMenu()
+      if (vjs) togglePip(vjs)
+    })
+    items.push(pipItem)
+  }
+
+  const scaleItem = makeMoreMenuItem(t("stream.scale.button"))
+  scaleItem.addEventListener("click", () => {
+    closeCurrentMoreMenu()
+    openDisplayModeDialog(streamId)
+  })
+  items.push(scaleItem)
+
+  if (!channel?.isRadio) {
+    const audioOnlyEffective = isAudioOnlyChannel(streamId) || radioModeChannelId === streamId
+    const audioItem = makeMoreMenuItem(t("livetv.audioOnly"), audioOnlyEffective)
+    audioItem.addEventListener("click", () => {
+      closeCurrentMoreMenu()
+      const nowOn = !audioOnlyEffective
+      const ids = new Set(loadAudioOnlySet())
+      if (nowOn) ids.add(streamId)
+      else ids.delete(streamId)
+      saveAudioOnlySet(ids)
+      if (nowOn) {
+        manualAudioOnlyOff.delete(manualAudioOnlyOffKey(streamId))
+        setRadioMode(
+          { id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src },
+          { probeIcy: !!channel?.isRadio }
+        )
+      } else {
+        manualAudioOnlyOff.add(manualAudioOnlyOffKey(streamId))
+        clearRadioMode()
+      }
+    })
+    items.push(audioItem)
+  }
+
+  // Kept open on toggle so users can A/B the effect by ear.
+  const monoItem = makeMoreMenuItem(t("settings.monoAudio.title"), getMonoAudioEnabled())
+  monoItem.addEventListener("click", () => {
+    const nowOn = !getMonoAudioEnabled()
+    setMonoAudioEnabled(nowOn)
+    setMoreMenuItemChecked(monoItem, nowOn)
+  })
+  items.push(monoItem)
+
+  return items
+}
+
+function openCurrentMoreMenu(trigger: HTMLButtonElement, streamId, channel, src, name) {
+  closeCurrentMoreMenu(false)
+
+  const menu = document.createElement("div")
+  menu.id = CURRENT_MORE_MENU_ID
+  menu.className =
+    "fixed z-50 min-w-[12rem] rounded-xl border border-line bg-surface text-fg shadow-2xl p-1 flex flex-col gap-0.5 poster-menu-enter"
+  menu.setAttribute("role", "menu")
+  menu.setAttribute("aria-label", t("livetv.moreActions"))
+  menu.append(...buildCurrentMoreMenuItems(streamId, channel, src, name))
+  document.body.appendChild(menu)
+
+  const margin = 8
+  const rect = menu.getBoundingClientRect()
+  const anchorRect = trigger.getBoundingClientRect()
+  const left = Math.min(anchorRect.right - rect.width, window.innerWidth - rect.width - margin)
+  const top = Math.min(anchorRect.bottom + 6, window.innerHeight - rect.height - margin)
+  menu.style.left = `${Math.max(margin, left)}px`
+  menu.style.top = `${Math.max(margin, top)}px`
+
+  currentMoreMenuEl = menu
+  currentMoreMenuTrigger = trigger
+  trigger.setAttribute("aria-expanded", "true")
+  currentMoreMenuSpatialNav.open()
+  document.addEventListener("pointerdown", onCurrentMoreMenuOutside, true)
+  document.addEventListener("keydown", onCurrentMoreMenuKey, true)
+  window.addEventListener("blur", closeCurrentMoreMenuOnBlur)
+  window.addEventListener("resize", closeCurrentMoreMenuOnBlur)
+
+  menu.querySelector<HTMLButtonElement>("[role^='menuitem']")?.focus({ preventScroll: true })
 }
 
 function showTuningOverlay(logoUrl, maxMs = TUNING_MAX_MS) {
@@ -2342,28 +2658,52 @@ function renderTimeshiftChip() {
   ])
 }
 
+// Off-air feeds stall forever without erroring; bound the re-tune loop.
+const LIVE_STALL_RETUNE_MAX = 3
+const liveStallRetuneCounts = new Map()
+
+// Shared by the stall sentinel (event-driven) and the progress watch (frozen currentTime).
+function performStallRetune(trigger) {
+  const ctx = lastPlayContext
+  if (!ctx || !vjs) return
+  log.warn("[xt:livetv] stalled - re-tuning", { streamId: ctx.streamId, trigger })
+  if (retryCatchupSession(ctx, { automatic: true })) return
+  if (!ctx.isLive) {
+    // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
+    giveUpOnPlayback(ctx)
+    return
+  }
+  if (ctx.audioProxied) {
+    retuneProxiedAudioMount(ctx)
+    return
+  }
+  const stallAttempts = (liveStallRetuneCounts.get(ctx.streamId) || 0) + 1
+  liveStallRetuneCounts.set(ctx.streamId, stallAttempts)
+  if (stallAttempts > LIVE_STALL_RETUNE_MAX) {
+    log.warn("[xt:livetv] still no data after repeated re-tunes - the feed appears to be down", {
+      streamId: ctx.streamId,
+      retunes: stallAttempts - 1,
+    })
+    giveUpOnPlayback(ctx)
+    return
+  }
+  try {
+    vjs.reset?.()
+    vjs.src({
+      src: ctx.src,
+      type: ctx.mime || "application/x-mpegURL",
+      isLive: ctx.isLive ?? true,
+      preferNativeHls: isNativeAudioFallbackChannel(ctx.streamId),
+    })
+    vjs.play().catch((err) => {
+      log.info("[xt:livetv] stall-retune play() rejected", { streamId: ctx.streamId, error: err?.name || String(err) })
+    })
+  } catch {}
+}
+
 function armStallSentinel() {
   if (stallSentinel) clearTimeout(stallSentinel)
-  stallSentinel = setTimeout(() => {
-    const ctx = lastPlayContext
-    if (!ctx || !vjs) return
-    log.warn("[xt:livetv] stall sentinel re-tuning", { streamId: ctx.streamId })
-    if (retryCatchupSession(ctx, { automatic: true })) return
-    if (!ctx.isLive) {
-      // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
-      giveUpOnPlayback(ctx)
-      return
-    }
-    if (ctx.audioProxied) {
-      retuneProxiedAudioMount(ctx)
-      return
-    }
-    try {
-      vjs.reset?.()
-      vjs.src({ src: ctx.src, type: ctx.mime || "application/x-mpegURL", isLive: ctx.isLive ?? true })
-      vjs.play().catch(() => {})
-    } catch {}
-  }, STALL_AUTO_TUNE_MS)
+  stallSentinel = setTimeout(() => performStallRetune("stall-sentinel"), STALL_AUTO_TUNE_MS)
 }
 
 function clearStallSentinel() {
@@ -2371,6 +2711,80 @@ function clearStallSentinel() {
     clearTimeout(stallSentinel)
     stallSentinel = null
   }
+}
+
+// ----------------------------
+// Playback progress watch
+// ----------------------------
+// AVFoundation can freeze live playback with no waiting/stalled/error event, so
+// the event-armed stall sentinel never sees it. This samples currentTime and
+// re-tunes when it stops moving; doubles as the log-file playback heartbeat.
+const PROGRESS_WATCH_INTERVAL_MS = 5000
+const PROGRESS_FROZEN_TICKS = 2
+const PROGRESS_HEARTBEAT_EVERY_TICKS = 6
+const FREEZE_RETUNE_MAX_PER_CHANNEL = 3
+const freezeRetuneCounts = new Map()
+let progressWatchTimer = null
+let progressLastTime = -1
+let progressLastSeq = -1
+let progressFrozenTicks = 0
+let progressTickCount = 0
+
+function progressWatchTick() {
+  const ctx = lastPlayContext
+  if (!ctx || !ctx.isLive || catchupSession || !vjs) {
+    progressFrozenTicks = 0
+    return
+  }
+  const wrap = getPlayerWrap()
+  if (!wrap || wrap.dataset.radioMode === "on") {
+    progressFrozenTicks = 0
+    return
+  }
+  const mediaEl = vjs.getMediaElement?.() ?? wrap.querySelector("video")
+  if (!mediaEl || mediaEl.paused || mediaEl.ended || mediaEl.readyState < 2) {
+    progressFrozenTicks = 0
+    return
+  }
+  const currentTime = mediaEl.currentTime || 0
+  progressTickCount++
+  if (progressTickCount % PROGRESS_HEARTBEAT_EVERY_TICKS === 0) {
+    log.info("[xt:livetv] heartbeat", {
+      streamId: ctx.streamId,
+      t: Math.round(currentTime * 10) / 10,
+      readyState: mediaEl.readyState,
+      frames: decodedFrameCount(mediaEl),
+      dropped: droppedFrameCount(mediaEl),
+      proxied: !!ctx.audioProxied,
+    })
+  }
+  if (progressLastSeq === playSeq && currentTime === progressLastTime) {
+    progressFrozenTicks++
+  } else {
+    progressFrozenTicks = 0
+  }
+  progressLastSeq = playSeq
+  progressLastTime = currentTime
+  if (progressFrozenTicks < PROGRESS_FROZEN_TICKS) return
+  progressFrozenTicks = 0
+  const attempts = (freezeRetuneCounts.get(ctx.streamId) || 0) + 1
+  freezeRetuneCounts.set(ctx.streamId, attempts)
+  log.warn("[xt:livetv] playback frozen (currentTime stuck, no stall event fired)", {
+    streamId: ctx.streamId,
+    t: Math.round(currentTime * 10) / 10,
+    readyState: mediaEl.readyState,
+    attempt: attempts,
+  })
+  if (attempts > FREEZE_RETUNE_MAX_PER_CHANNEL) {
+    giveUpOnPlayback(ctx)
+    return
+  }
+  performStallRetune("progress-watch")
+}
+
+function ensureProgressWatch() {
+  if (progressWatchTimer) return
+  progressWatchTimer = setInterval(progressWatchTick, PROGRESS_WATCH_INTERVAL_MS)
 }
 
 // ----------------------------
@@ -2403,6 +2817,16 @@ function decodedFrameCount(videoEl) {
   return typeof legacy === "number" ? legacy : null
 }
 
+function droppedFrameCount(videoEl) {
+  try {
+    const quality = videoEl.getVideoPlaybackQuality?.()
+    if (quality && typeof quality.droppedVideoFrames === "number") {
+      return quality.droppedVideoFrames
+    }
+  } catch {}
+  return null
+}
+
 function armDeadVideoWatchdog() {
   clearDeadVideoWatchdog()
   const ctx = lastPlayContext
@@ -2424,7 +2848,21 @@ function armDeadVideoWatchdog() {
     const video = currentWrap.querySelector("video")
     if (!video || video.paused) return
     const frames = decodedFrameCount(video)
-    if (frames === null || frames > 0) return
+    const dropped = droppedFrameCount(video)
+    // Black can mean zero decodes, or a GDR stream decoding and discarding every frame.
+    const everyFrameDropped = isDroppingEveryFrame(frames, dropped)
+    if (frames === null) return
+    if (frames > 0 && !everyFrameDropped) {
+      // Too few frames to judge the dropped ratio yet - look again while attempts remain.
+      if (frames < DROPPED_FRAME_MIN_SAMPLE && attempts < DEAD_VIDEO_MAX_CHECKS) {
+        attempts++
+        schedule()
+        return
+      }
+      // Conclusively healthy: restore this channel's re-latch budget.
+      nativeRelatchAttempts.delete(ctx.streamId)
+      return
+    }
     if (video.videoWidth === 0 && video.videoHeight === 0) return
     attempts++
     const playedEnough =
@@ -2433,11 +2871,50 @@ function armDeadVideoWatchdog() {
       if (attempts < DEAD_VIDEO_MAX_CHECKS) schedule()
       return
     }
-    log.warn("[xt:livetv] video track decoded zero frames - treating as start failure", {
-      streamId: ctx.streamId,
-      videoWidth: video.videoWidth,
-      videoHeight: video.videoHeight,
-    })
+    log.warn(
+      everyFrameDropped
+        ? "[xt:livetv] every decoded video frame is being dropped (GDR stream failed to latch) - recovering"
+        : "[xt:livetv] video track decoded zero frames - treating as start failure",
+      {
+        streamId: ctx.streamId,
+        totalVideoFrames: frames,
+        droppedVideoFrames: dropped,
+        videoWidth: video.videoWidth,
+        videoHeight: video.videoHeight,
+      }
+    )
+    if (everyFrameDropped) {
+      const relatchAttempts = nativeRelatchAttempts.get(ctx.streamId) || 0
+      const recovery = chooseBlackFrameRecovery({
+        // Native mounts re-tune (a fresh chance to latch); see chooseBlackFrameRecovery.
+        isMacOSNativeHls:
+          isMacOS && !ctx.audioProxied && (!isTauri || isNativeAudioFallbackChannel(ctx.streamId)),
+        relatchAttempts,
+        proxyUsable:
+          canUseAudioProxy(ctx) &&
+          !ctx.audioProxied &&
+          !audioProxyAutoAttemptedSet.has(ctx.streamId),
+      })
+      if (recovery === "native-retune") {
+        nativeRelatchAttempts.set(ctx.streamId, relatchAttempts + 1)
+        log.warn("[xt:livetv] re-tuning the native mount to re-attempt GDR latch", {
+          streamId: ctx.streamId,
+          attempt: relatchAttempts + 1,
+        })
+        toast({ title: t("stream.videoFix.retuning"), duration: 4000 })
+        void play(ctx.streamId, ctx.name, "auto:gdr-relatch")
+        return
+      }
+      if (recovery === "proxy") {
+        audioProxyAutoAttemptedSet.add(ctx.streamId)
+        log.warn("[xt:livetv] retrying through the ffmpeg remux proxy", {
+          streamId: ctx.streamId,
+        })
+        toast({ title: t("stream.videoFix.remuxing"), duration: 4000 })
+        fixAudioNow(ctx)
+        return
+      }
+    }
     suppressPauseTrackingUntilMs = Date.now() + 500
     try { vjs?.pause?.() } catch {}
     hideTuningOverlay()
@@ -2477,13 +2954,16 @@ function canUseAudioProxy(ctx) {
     audioProxyAvailable &&
     !!ctx?.isLive &&
     !catchupSession &&
-    !audioProxyBypassSet.has(ctx.streamId)
+    !audioProxyBypassSet.has(ctx.streamId) &&
+    // The proxy pipes the fetched body into ffmpeg's mpegts demuxer; an HLS
+    // playlist URL feeds it playlist text and dies instantly. Raw TS only.
+    !/\.m3u8?(\?|$)/i.test(String(ctx?.src || ""))
   )
 }
 
 function fixAudioNow(ctx) {
   audioProxyOneShotFixSet.add(ctx.streamId)
-  void play(ctx.streamId, ctx.name)
+  void play(ctx.streamId, ctx.name, "auto:audio-fix")
 }
 
 // A proxied mount's local URL is single-consumer: a same-src reconnect 409s and leaves a dead player.
@@ -2495,7 +2975,7 @@ function retuneProxiedAudioMount(ctx) {
   } else if (!isAudioTranscodeChannel(activePlaylistId, String(ctx.streamId))) {
     audioProxyOneShotFixSet.add(ctx.streamId)
   }
-  void play(ctx.streamId, ctx.name)
+  void play(ctx.streamId, ctx.name, "auto:proxy-stall-retune")
 }
 
 // The Rust side has already torn the session down by the time this fires.
@@ -2510,7 +2990,7 @@ function handleAudioProxyError(payload) {
   }
   log.warn("[xt:livetv] audio transcode proxy failed mid-play, falling back to direct:", payload.detail)
   toast({ title: t("stream.audioFix.fallback"), duration: 7000 })
-  void play(ctx.streamId, ctx.name)
+  void play(ctx.streamId, ctx.name, "auto:proxy-error-fallback")
 }
 
 function armDeadAudioWatchdog() {
@@ -2537,7 +3017,7 @@ function armDeadAudioWatchdog() {
     if (!video || video.paused) return
     if (video.muted || video.volume === 0) return
     const audioBytes = audioDecodedByteCount(video)
-    log.log("[xt:livetv] dead-audio check", {
+    log.info("[xt:livetv] dead-audio check", {
       audioBytes,
       frames: decodedFrameCount(video),
       videoWidth: video.videoWidth,
@@ -2629,6 +3109,10 @@ function applyDiagnosticToFailurePanel(seq, verdict, reason) {
 function showPlaybackFailurePanel(ctx, opts = {}) {
   if (failurePanelSeq === ctx.seq) return
   hidePlaybackFailurePanel()
+  log.warn("[xt:livetv] playback failure panel shown", {
+    streamId: ctx.streamId,
+    decodeFailure: !!opts.decodeFailure,
+  })
   const playerWrap = document.getElementById("player")?.parentElement
   if (!playerWrap) return
 
@@ -2932,7 +3416,14 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
   return launched
 }
 
-async function play(streamId, name) {
+async function play(streamId, name, reason = "user") {
+  // Every tune's trigger reaches the log file, so sessions reconstruct from it.
+  log.info("[xt:livetv] tune", { streamId, name: name || null, reason })
+  if (reason === "user") {
+    freezeRetuneCounts.delete(streamId)
+    nativeRelatchAttempts.delete(streamId)
+    liveStallRetuneCounts.delete(streamId)
+  }
   const targetChannel = all.find((channel) => channel.id === streamId)
   if (targetChannel?.unresolved) {
     void stopAudioTranscode()
@@ -3055,25 +3546,22 @@ async function play(streamId, name) {
     if (shouldWarnHevc(name)) wrap.appendChild(buildHevcBadge())
     currentEl.appendChild(wrap)
 
-    const btn = document.createElement("button")
-    btn.id = "pip-btn"
-    btn.type = "button"
-    btn.title = "Picture-in-Picture"
-    btn.setAttribute("aria-label", "Picture-in-Picture")
-    btn.className = "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
-    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M19 4a3 3 0 0 1 3 3v4a1 1 0 0 1 -2 0v-4a1 1 0 0 0 -1 -1h-14a1 1 0 0 0 -1 1v10a1 1 0 0 0 1 1h6a1 1 0 0 1 0 2h-6a3 3 0 0 1 -3 -3v-10a3 3 0 0 1 3 -3z"/><path d="M20 13a2 2 0 0 1 2 2v3a2 2 0 0 1 -2 2h-5a2 2 0 0 1 -2 -2v-3a2 2 0 0 1 2 -2z"/></svg>`
-    btn.addEventListener("click", () => { if (vjs) togglePip(vjs) })
-    currentEl.appendChild(btn)
-
-    const scaleBtn = document.createElement("button")
-    scaleBtn.id = "display-mode-btn"
-    scaleBtn.type = "button"
-    scaleBtn.title = t("stream.scale.button")
-    scaleBtn.setAttribute("aria-label", t("stream.scale.button"))
-    scaleBtn.className = "shrink-0 inline-flex items-center justify-center min-h-11 min-w-11 px-3.5 rounded-xl border border-line bg-surface text-sm text-fg hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
-    scaleBtn.innerHTML = ICON_ASPECT_RATIO
-    scaleBtn.addEventListener("click", () => openDisplayModeDialog(streamId))
-    currentEl.appendChild(scaleBtn)
+    closeCurrentMoreMenu(false)
+    const moreBtn = document.createElement("button")
+    moreBtn.id = "current-more-btn"
+    moreBtn.type = "button"
+    const moreLabel = t("livetv.moreActions")
+    moreBtn.title = moreLabel
+    moreBtn.setAttribute("aria-label", moreLabel)
+    moreBtn.setAttribute("aria-haspopup", "menu")
+    moreBtn.setAttribute("aria-expanded", "false")
+    moreBtn.className = CURRENT_ROW_ICON_BTN_CLASS
+    moreBtn.innerHTML = ICON_DOTS
+    moreBtn.addEventListener("click", () => {
+      if (currentMoreMenuTrigger === moreBtn) closeCurrentMoreMenu()
+      else openCurrentMoreMenu(moreBtn, streamId, channel, src, name)
+    })
+    currentEl.appendChild(moreBtn)
 
     appendExternalLaunchButton(currentEl, streamId, src, name)
 
@@ -3116,8 +3604,17 @@ async function play(streamId, name) {
 
   resetEmptyState()
   document.getElementById("player")?.removeAttribute("hidden")
-  if (channel?.isRadio) {
-    setRadioMode({ id: streamId, name, logo: channel.logo ?? null, category: channel.category ?? null, url: src })
+  if (channel?.isRadio || isAudioOnlyChannel(streamId)) {
+    // Both triggers hide the video element, so record which one fired - a stale
+    // manual override is otherwise indistinguishable from a broken video track.
+    log.info("[xt:livetv] starting in audio-only (radio) mode", {
+      streamId,
+      trigger: channel?.isRadio ? "playlist-radio-flag" : "manual-audio-only",
+    })
+    setRadioMode(
+      { id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src },
+      { probeIcy: !!channel?.isRadio }
+    )
   } else {
     clearRadioMode()
   }
@@ -3181,10 +3678,36 @@ async function play(streamId, name) {
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
-  try { player.src({ src: mountSrc, type: mountMime, drm: audioProxied ? null : channelDrm }) } catch {}
+  try {
+    player.src({
+      src: mountSrc,
+      type: mountMime,
+      drm: audioProxied ? null : channelDrm,
+      preferNativeHls: isNativeAudioFallbackChannel(streamId),
+    })
+  } catch {}
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
-    playResult.catch(() => {})
+    playResult.catch((err) => {
+      // An interrupted play() otherwise leaves the tune paused until a manual click.
+      log.info("[xt:livetv] initial play() rejected - re-arming on canplay", {
+        streamId,
+        error: err?.name || String(err),
+      })
+      const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      if (!mediaEl) return
+      const resume = () => {
+        mediaEl.removeEventListener("canplay", resume)
+        if (lastPlayContext?.streamId !== streamId) return
+        try {
+          void player.play?.()?.catch?.((retryErr) => {
+            log.warn("[xt:livetv] retry play() rejected", { streamId, error: retryErr?.name || String(retryErr) })
+          })
+        } catch {}
+      }
+      mediaEl.addEventListener("canplay", resume)
+      setTimeout(() => mediaEl.removeEventListener("canplay", resume), 20000)
+    })
   }
   applyVideoScale()
   pushDiscordPresence(channel || { id: streamId, name }, "live")
@@ -3198,6 +3721,7 @@ async function play(streamId, name) {
 // ----------------------------
 function renderCatchupCurrentRow(channel, title) {
   if (!currentEl) return
+  closeCurrentMoreMenu(false)
   currentEl.replaceChildren()
 
   const wrap = document.createElement("div")
@@ -3557,7 +4081,26 @@ async function playCatchup(channel, opts) {
   armLiveEdgeTracking(channel)
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
-    playResult.catch(() => {})
+    playResult.catch((err) => {
+      // An interrupted play() otherwise leaves the tune paused until a manual click.
+      log.info("[xt:livetv] initial play() rejected - re-arming on canplay", {
+        streamId,
+        error: err?.name || String(err),
+      })
+      const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      if (!mediaEl) return
+      const resume = () => {
+        mediaEl.removeEventListener("canplay", resume)
+        if (lastPlayContext?.streamId !== streamId) return
+        try {
+          void player.play?.()?.catch?.((retryErr) => {
+            log.warn("[xt:livetv] retry play() rejected", { streamId, error: retryErr?.name || String(retryErr) })
+          })
+        } catch {}
+      }
+      mediaEl.addEventListener("canplay", resume)
+      setTimeout(() => mediaEl.removeEventListener("canplay", resume), 20000)
+    })
   }
   applyVideoScale()
   return true

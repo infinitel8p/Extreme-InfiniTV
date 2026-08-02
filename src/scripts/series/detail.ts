@@ -77,6 +77,7 @@ import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
+import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -110,6 +111,7 @@ let autoplayPending = !!autoplayEpisodeId
 let activePlaylistId = ""
 let creds = { host: "", port: "", user: "", pass: "" }
 let series = null
+let seriesInfoRaw = null
 let episodesByKey = null
 let currentSeason = ""
 let currentPlayingEpisodeId = null
@@ -267,6 +269,13 @@ function slotMachineEpisodes(direction) {
   }
 }
 
+// Number("") is 0, which Kodi reads as the Specials season
+function toIndex(value) {
+  if (value == null || value === "") return null
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+
 function renderEpisodes() {
   if (!episodeList) return
   episodeList.replaceChildren()
@@ -419,6 +428,9 @@ function renderEpisodes() {
               (series?.name ? `${series.name} - ` : "") +
               `S${currentSeason || "?"}E${ep.episode_num || "?"}` +
               (ep.title ? ` - ${ep.title}` : "")
+            const seriesInfo = seriesInfoRaw?.info || {}
+            const epInfo = ep.info || {}
+            const epDurationSecs = Number(epInfo.duration_secs || 0)
             await startDownload({
               url: epUrl,
               title: epTitle,
@@ -432,6 +444,19 @@ function renderEpisodes() {
                 season: ep.season ?? currentSeason ?? null,
                 episode: ep.episode_num ?? null,
                 logo: series?.logo || null,
+              },
+              nfo: {
+                type: "episode",
+                showTitle: series?.name || seriesInfo.name || seriesInfo.title || "",
+                title: ep.title || "",
+                season: toIndex(ep.season) ?? toIndex(currentSeason),
+                episode: toIndex(ep.episode_num),
+                aired: epInfo.release_date || epInfo.releaseDate || "",
+                plot: epInfo.plot || seriesInfo.plot || seriesInfo.description || series?.plot || "",
+                genre: seriesInfo.genre || seriesInfo.category || "",
+                rating: epInfo.rating || seriesInfo.rating || seriesInfo.rating_5based || series?.rating || "",
+                runtimeMinutes: epDurationSecs > 0 ? Math.round(epDurationSecs / 60) : 0,
+                poster: epInfo.movie_image || seriesInfo.cover || seriesInfo.cover_big || series?.logo || "",
               },
             })
           } catch (err) {
@@ -506,6 +531,7 @@ function renderDownloadedEpisodes(downloads) {
 }
 
 function applySeriesInfo(data) {
+  seriesInfoRaw = data
   const info = data?.info || {}
   const seasons = Array.isArray(data?.seasons) ? data.seasons : []
 
@@ -877,6 +903,7 @@ async function playEpisode(episode) {
   if (requestId !== playRequestId) return
   setupPipButton(player)
   setupScaleButton()
+  subtitleDelayController.setup()
   const mime = chooseMime(src)
   player.one("error", () => {
     const e = player.error()
@@ -1007,6 +1034,18 @@ async function launchExternalPlayback(backend, src, resumeSeconds) {
   await launcher.launch(src, { resumeSeconds })
 }
 
+// ----------------------------
+// Subtitle delay
+// ----------------------------
+const subtitleDelayController = createSubtitleDelayController({
+  dialogId: "series-subtitle-delay-dialog",
+  button: document.getElementById("series-subtitle-delay-btn"),
+  nudge: (deltaSeconds) => vjs?.subtitleDelay?.(deltaSeconds),
+  getMediaElement: () => vjs?.getMediaElement?.() ?? null,
+})
+
+document.addEventListener("keydown", (event) => subtitleDelayController.handleKeydown(event))
+
 const externalBtnHandle = setupExternalPlayerButton(
   /** @type {HTMLButtonElement|null} */ (document.getElementById("series-detail-open-external")),
   {
@@ -1065,6 +1104,7 @@ window.addEventListener("pagehide", () => {
     audioSwitcher?.dispose()
     audioSwitcher = null
     audioDiscoveryController?.abort()
+    subtitleDelayController.teardown()
   } catch {}
   clearAmbient(ambientEl)
   externalPresenceActive = false

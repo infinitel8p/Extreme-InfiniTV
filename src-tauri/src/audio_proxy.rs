@@ -390,7 +390,7 @@ fn ffmpeg_candidates() -> Vec<(String, FfmpegSource)> {
     let mut candidates = Vec::new();
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
-            let sidecar_name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+            let sidecar_name = if cfg!(windows) { "infinitv-ffmpeg.exe" } else { "infinitv-ffmpeg" };
             candidates.push((
                 parent.join(sidecar_name).to_string_lossy().into_owned(),
                 FfmpegSource::Bundled,

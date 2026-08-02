@@ -17,7 +17,12 @@ import {
 } from "@/scripts/lib/sniff-classify.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { openAddToCustomDialog, openAddManyToCustomDialog } from "@/scripts/lib/add-to-custom-dialog.ts"
+import { isPrivateOrLoopbackHost } from "@/scripts/lib/private-host.ts"
 import type { CustomSource } from "@/scripts/lib/custom-playlist.ts"
+
+const isTauri =
+  typeof window !== "undefined" &&
+  (!!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__)
 
 const DIALOG_ID = "add-from-website-dialog"
 const QUALITY_PROBE_TIMEOUT_MS = 4000
@@ -88,42 +93,6 @@ function looksLikePlaylistContentType(contentType: string | null): boolean {
   return !withoutParameters || ALLOWED_MANIFEST_CONTENT_TYPES.has(withoutParameters)
 }
 
-const IPV4_RX = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
-
-/** SSRF guard on literal addresses only: DNS names resolving to private IPs still slip through. */
-function isPrivateOrLoopbackHost(urlString: string): boolean {
-  let hostname: string
-  try {
-    hostname = new URL(urlString).hostname.toLowerCase()
-  } catch {
-    return true
-  }
-  if (hostname === "localhost") return true
-  const bareHost = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname
-
-  const ipv4Match = IPV4_RX.exec(bareHost)
-  if (ipv4Match) {
-    const octets = ipv4Match.slice(1, 5).map(Number)
-    if (octets.some((octet) => octet > 255)) return true
-    const [first, second] = octets
-    if (first === 127) return true
-    if (first === 10) return true
-    if (first === 172 && second >= 16 && second <= 31) return true
-    if (first === 192 && second === 168) return true
-    if (first === 169 && second === 254) return true
-    if (octets.every((octet) => octet === 0)) return true
-    return false
-  }
-
-  if (bareHost.includes(":")) {
-    if (bareHost === "::1") return true
-    if (bareHost.startsWith("fe80:")) return true
-    if (/^f[cd][0-9a-f]{2}:/.test(bareHost)) return true
-  }
-
-  return false
-}
-
 /** Reads a body as text, or null once the bytes actually received pass maxBytes. */
 async function readCappedText(response: Response, maxBytes: number): Promise<string | null> {
   const body = response.body
@@ -150,10 +119,39 @@ async function readCappedText(response: Response, maxBytes: number): Promise<str
   }
 }
 
+interface ProbeManifestResult {
+  status: number
+  contentType: string | null
+  body: string
+}
+
+/** Routes through the Rust-side probe, which does the resolved-IP SSRF check the guard above can't. */
+async function fetchManifestSummaryViaTauri(candidate: SniffCandidate, parentSignal: AbortSignal): Promise<HlsMasterSummary | null> {
+  if (parentSignal.aborted) return null
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    const result = await invoke<ProbeManifestResult>("probe_manifest", {
+      url: candidate.url,
+      userAgent: candidate.userAgent ?? null,
+      referer: candidate.referer ?? null,
+      timeoutMs: QUALITY_PROBE_TIMEOUT_MS,
+      maxBytes: MAX_MANIFEST_PROBE_BYTES,
+    })
+    if (result.status < 200 || result.status >= 300) return null
+    if (!looksLikePlaylistContentType(result.contentType)) return null
+    return summarizeHlsMaster(result.body)
+  } catch (err) {
+    log.warn("[xt:sniffer] probe_manifest failed:", err)
+    return null
+  }
+}
+
 /** Fetches an HLS candidate's manifest and parses it, or null on failure/DASH/no data/private host. */
 async function fetchManifestSummary(candidate: SniffCandidate, parentSignal: AbortSignal): Promise<HlsMasterSummary | null> {
   if (candidate.kind !== "hls") return null
   if (isPrivateOrLoopbackHost(candidate.url)) return null
+  if (isTauri) return fetchManifestSummaryViaTauri(candidate, parentSignal)
+
   const headers: Record<string, string> = {}
   if (candidate.userAgent) headers["User-Agent"] = candidate.userAgent
   if (candidate.referer) headers["Referer"] = candidate.referer

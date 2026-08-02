@@ -33,6 +33,7 @@ function candidatesFor(entry: any) {
 
 vi.mock("@/scripts/lib/creds.js", () => ({
   fmtBase: fmtBaseImpl,
+  isTauri: false,
   getEntries: async () => storedEntries,
   loadCreds: async () => ({ host: "", port: "", user: "", pass: "", liveContainer: "m3u8" }),
   // Mirrors the real implementation: the pin is read at call time, not baked in.

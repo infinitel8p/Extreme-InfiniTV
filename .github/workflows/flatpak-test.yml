@@ -1,0 +1,77 @@
+name: Flatpak test build
+
+# Builds the Flathub submission manifest to catch breakage before it reaches
+# review. Not the actual Flathub build (that runs on Flathub's own infra
+# once the submission PR is merged) - this is a local sanity check.
+# Flathub submission is paused; manual dispatch only.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  flatpak:
+    name: Build manifest
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@401fe28a8384095fc1531b9d320b292f0ee45adb # v6.7
+        with:
+          bundle: extreme-infinitv.flatpak
+          manifest-path: packaging/flatpak/io.github.infinitel8p.Extreme-InfiniTV.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+
+      # Tar it: artifact upload drops empty dirs, and OSTree needs refs/remotes.
+      - name: Pack the OSTree repo
+        run: tar -cf repo.tar repo
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flatpak-repo
+          path: repo.tar
+          retention-days: 1
+
+  lint:
+    name: Lint manifest and repo
+    needs: flatpak
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub/flatpak-builder-lint:latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Lint manifest
+        run: flatpak-builder-lint manifest packaging/flatpak/io.github.infinitel8p.Extreme-InfiniTV.yml
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: flatpak-repo
+          path: .
+
+      # Screenshot mirroring only happens on Flathub's own builders, so those
+      # two errors can never pass here; fail on anything else.
+      - name: Lint repo
+        run: |
+          tar -xf repo.tar
+          flatpak-builder-lint repo repo > lint.json || true
+          cat lint.json
+          python3 - <<'PY'
+          import json, sys
+          allowed = {
+              "appstream-external-screenshot-url",
+              "appstream-screenshots-not-mirrored-in-ostree",
+          }
+          with open("lint.json") as handle:
+              report = json.load(handle)
+          unexpected = sorted(set(report.get("errors", [])) - allowed)
+          if unexpected:
+              print("::error::unexpected lint errors: " + ", ".join(unexpected))
+              sys.exit(1)
+          print("repo lint clean (ignoring screenshot-mirroring errors)")
+          PY

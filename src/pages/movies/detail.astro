@@ -10,6 +10,7 @@ import {
   IconPictureInPicture,
   IconExternalLink,
   IconAspectRatio,
+  IconClockEdit,
 } from "@tabler/icons-svelte"
 ---
 
@@ -129,6 +130,16 @@ import {
             <span data-i18n="stream.scale.button">Display mode</span>
           </button>
           <button
+            id="movie-subtitle-delay-btn"
+            type="button"
+            hidden
+            aria-label="Subtitle delay"
+            data-i18n-attr="aria-label:detail.subtitleDelay"
+            class="btn">
+            <IconClockEdit aria-hidden="true" stroke={2} class="btn-icon" />
+            <span data-i18n="detail.subtitleDelay">Subtitle delay</span>
+          </button>
+          <button
             id="movie-detail-open-external"
             type="button"
             hidden
@@ -156,7 +167,7 @@ import {
 
         <div
           id="movie-detail-plot"
-          class="dt-enter dt-stagger-3 text-sm text-fg-2 leading-relaxed max-w-prose">
+          class="dt-enter dt-stagger-3 text-sm text-fg-2 leading-relaxed max-w-3xl">
           Loading details…
         </div>
 

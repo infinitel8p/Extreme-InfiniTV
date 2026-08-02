@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="xt_channels_title">Saluran</string>
+    <string name="native_player_unsupported_stream">Tidak dapat memutar saluran ini di pemutar bawaan</string>
 </resources>

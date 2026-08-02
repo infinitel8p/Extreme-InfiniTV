@@ -63,7 +63,7 @@ function ensureDialog(): HTMLDialogElement {
   node.id = DIALOG_ID
   node.setAttribute("aria-labelledby", `${DIALOG_ID}-title`)
   node.className = [
-    "fixed inset-0 m-auto lg:mr-10 lg:ml-auto rounded-2xl border border-line bg-surface text-fg p-0",
+    "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
     "w-[min(24rem,calc(100vw-2rem))] max-h-[calc(100dvh-2rem)]",
     "backdrop:bg-black/30",
   ].join(" ")

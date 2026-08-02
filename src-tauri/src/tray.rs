@@ -70,10 +70,8 @@ pub fn install(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         ],
     )?;
 
-    let icon = app
-        .default_window_icon()
-        .cloned()
-        .ok_or("default window icon missing - check bundle.icon in tauri.conf.json")?;
+    // Transparent glyph on every platform, unlike the bundle icons.
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
 
     let tray_result = TrayIconBuilder::with_id("main")
         .icon(icon)

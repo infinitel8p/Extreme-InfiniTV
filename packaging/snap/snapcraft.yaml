@@ -1,0 +1,76 @@
+name: extreme-infinitv
+base: core22
+version: "__VERSION__"
+summary: IPTV player for Xtream Codes and M3U / M3U8 playlists
+description: |
+  Extreme InfiniTV plays Xtream Codes providers and plain M3U / M3U8
+  playlists: live TV with EPG and catch-up, movies, series, custom
+  playlists, offline downloads, and TV-remote (D-pad) navigation.
+grade: stable
+confinement: strict
+
+# core22's gnome platform snap only binds webkit2gtk-4.0, not 4.1.
+layout:
+  /usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.1:
+    bind: $SNAP/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/webkit2gtk-4.1
+
+parts:
+  extreme-infinitv:
+    plugin: dump
+    source: local/app.deb
+    source-type: deb
+    stage-packages:
+      - libwebkit2gtk-4.1-0
+      - libappindicator3-1
+      - libgtk-3-0
+      # gnome platform ships gst base + good only: no H.264/AAC decode, no MSE.
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-libav
+      - gstreamer1.0-gl
+    # Mesa and gstreamer core come from the gnome platform snap; staging ours
+    # mismatches its DRI drivers ("did not find extension DRI_Mesa").
+    prime:
+      - -usr/lib/*/dri
+      - -usr/lib/*/libEGL*
+      - -usr/lib/*/libGL*
+      - -usr/lib/*/libGLES*
+      - -usr/lib/*/libGLX*
+      - -usr/lib/*/libGLdispatch*
+      - -usr/lib/*/libglapi*
+      - -usr/lib/*/libgbm*
+      - -usr/lib/*/libLLVM*
+      - -usr/lib/*/libgst*-1.0.so*
+    override-build: |
+      craftctl default
+      # snapd's desktop-file sanitizer drops Icon= unless it starts with ${SNAP}/
+      sed -i -e "s|Icon=extreme-infinitv|Icon=\${SNAP}/usr/share/icons/hicolor/128x128/apps/extreme-infinitv.png|g" \
+        "$CRAFT_PART_INSTALL/usr/share/applications/Extreme InfiniTV.desktop"
+      # gst-libav needs these sonames; update-alternatives never runs in a build.
+      libdir="$CRAFT_PART_INSTALL/usr/lib/$CRAFT_ARCH_TRIPLET"
+      if [ -e "$libdir/blas/libblas.so.3" ]; then
+        ln -sf blas/libblas.so.3 "$libdir/libblas.so.3"
+      fi
+      if [ -e "$libdir/lapack/liblapack.so.3" ]; then
+        ln -sf lapack/liblapack.so.3 "$libdir/liblapack.so.3"
+      fi
+
+apps:
+  extreme-infinitv:
+    command: usr/bin/extreme-infinitv
+    desktop: "usr/share/applications/Extreme InfiniTV.desktop"
+    extensions: [gnome]
+    environment:
+      # Portal-backed GLib proxy/network services are denied under confinement:
+      # the proxy resolver fails every WebView load, the monitor reads offline.
+      GIO_USE_PROXY_RESOLVER: gnome
+      GIO_USE_NETWORK_MONITOR: base
+    plugs:
+      - network
+      - network-bind
+      - audio-playback
+      - home
+      - removable-media
+      - unity7
+      # WebKitGTK's own process sandbox needs this; auto-connects, no store review.
+      - browser-support
+    # No interface reaches the host's discord-ipc-0 socket under strict confinement.

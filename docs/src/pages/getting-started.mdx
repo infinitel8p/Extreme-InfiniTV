@@ -16,13 +16,14 @@ Pick the download that matches your device. All builds come from the same source
 | Windows 10 / 11 | [Microsoft Store](https://apps.microsoft.com/detail/9NN162Z0WXSR) or [NSIS installer](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
 | Android phone / tablet / TV | [Google Play](https://play.google.com/store/apps/details?id=com.infinitel8p.xtream) or APK from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
 | macOS | `.dmg` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
-| Linux | `.AppImage` or `.deb` / `.rpm` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
+| Linux | [Snap Store](https://snapcraft.io/extreme-infinitv) (`sudo snap install extreme-infinitv`), or `.AppImage` / `.deb` / `.rpm` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
+| Raspberry Pi 4 / 5 | 64-bit OS required. Same Snap install, or the arm64 `.deb` / `.AppImage` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) |
 
-The Windows desktop build and the Linux AppImage auto-update from GitHub Releases. The Microsoft Store and Google Play handle updates themselves. Other Linux packages (deb / rpm) do not auto-update. On platforms without a built-in updater (web, macOS, and Microsoft Store / MSIX builds), the app shows a hint when a newer version is available; Play Store installs link straight to Google Play.
+The Windows desktop build and the Linux AppImage auto-update from GitHub Releases; you can turn this off with the **Automatic updates** toggle in **Settings > About > App update** (the toggle only appears on builds that have the updater). The Microsoft Store, Google Play, and the Snap Store handle updates themselves. Other Linux packages (deb / rpm) do not auto-update. On platforms without a built-in updater (web, macOS, and Microsoft Store / MSIX builds), the app shows a hint when a newer version is available; Play Store installs link straight to Google Play.
 
 ### Beta updates
 
-To try new features early, open **Settings > About > Update channel** and switch to **Beta**. Beta builds ship more often and may be unstable. Updating to one works right from the app, the same way as a stable release.
+To try new features early, open **Settings > About > App update** and switch the **Update channel** to **Beta**. Beta builds ship more often and may be unstable. Updating to one works right from the app, the same way as a stable release. The channel picker is hidden on Microsoft Store and Snap installs, since those stores manage updates themselves (and only ship stable releases).
 
 ### Install via winget (Windows)
 
@@ -58,15 +59,13 @@ Then open the app normally. You only need to do this once per install.
 You only need to sign in once. The app remembers your details for next time.
 
 <Callout type="tip">
-  More on setting up Xtream credentials, M3U URLs, and multiple playlists in [Playlists (Xtream + M3U)](./playlists/).
+  No provider yet? The login screen offers a **Demo (iptv-org)** playlist - a free public playlist you can use to explore the app and remove any time. More on setting up Xtream credentials, M3U URLs, and multiple playlists in [Playlists (Xtream + M3U)](./playlists/).
 </Callout>
 
 ## What's on the home screen
 
-- **Live TV** - your channel list, with categories and what's on now / next.
-- **Movies** - poster grid with category filtering.
-- **Series** - poster grid with seasons and episodes inside each show.
-- **Continue watching** - a strip of what you were last watching, picked up from where you left off.
+- **Live TV / Movies / Series** - three big tiles that take you to your channel list (with categories and now / next), and the movie and series poster grids.
+- **Content strips** below the tiles: by default **Continue watching**, **Favorites**, **Watchlist**, and **Recently added**. You choose which strips show and in what order under **Settings > Appearance > Home page sections**.
 - **Sidebar** on desktop, or a **bottom tab bar** on phones, for jumping between Live TV, Movies, Series, Favorites, Watchlist, Downloads, Search, EPG, and Settings.
 
 ## Next steps

@@ -299,6 +299,11 @@ export async function cachedFetch(entryId, kind, ttlMs, fetcher, opts = {}) {
   return run
 }
 
+/** True when a non-forced JS fetch for (entryId, kind) is already in flight. */
+export function hasInflightFetch(entryId, kind) {
+  return _inflightFetch.has(makeKey(entryId, kind))
+}
+
 const _revalidating = new Map()
 const _revalidateFailedAt = new Map()
 const REVALIDATE_BACKOFF_MS = 30 * 1000

@@ -29,9 +29,12 @@ docs/preview.log
 # Local Netlify folder
 .netlify
 
-# keep buildfiles/ private (signing key, MSIX artifacts) except the version script CI needs
+# keep buildfiles/ private (signing key, MSIX artifacts) except what CI needs
 buildfiles/*
 !buildfiles/sync-version.mjs
+!buildfiles/make-msix-ci.mjs
+!buildfiles/msix/
+!buildfiles/msix/**
 dump/
 
 # local dev tools / scratch scripts
@@ -45,3 +48,12 @@ store-listings.md
 
 .ds*
 .de*
+
+# Playwright visual regression: platform-foreign snapshots and run artifacts
+test-results/
+playwright-report/
+tests/visual/**/*-win32.png
+tests/visual/**/*-darwin.png
+
+# snap packaging: CI drops the release .deb here before building
+packaging/snap/local/

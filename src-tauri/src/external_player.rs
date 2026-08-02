@@ -154,6 +154,67 @@ impl ExternalPlayerState {
 }
 
 // ---------------------------------------------------------------------------
+// Sandbox detection
+// ---------------------------------------------------------------------------
+// Snap/Flatpak confinement blocks exec of host binaries like MPV/VLC.
+
+// SNAP_NAME leaks into launcher children; verify exe sits in the mount.
+#[allow(dead_code)]
+fn snap_confined(exe_path: Option<&Path>, snap_dir: Option<&str>, snap_name: Option<&str>) -> bool {
+    match (snap_dir, snap_name) {
+        (Some(snap_dir), Some(_)) if !snap_dir.is_empty() => {
+            exe_path.is_some_and(|exe| exe.starts_with(snap_dir))
+        }
+        _ => false,
+    }
+}
+
+#[allow(dead_code)]
+fn classify_sandbox_runtime(
+    exe_path: Option<&Path>,
+    snap_dir: Option<&str>,
+    snap_name: Option<&str>,
+    flatpak_id: Option<&str>,
+    flatpak_info_exists: bool,
+) -> Option<&'static str> {
+    if snap_confined(exe_path, snap_dir, snap_name) {
+        return Some("snap");
+    }
+    if flatpak_id.is_some() || flatpak_info_exists {
+        return Some("flatpak");
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn sandbox_runtime_kind() -> Option<String> {
+    classify_sandbox_runtime(
+        std::env::current_exe().ok().as_deref(),
+        std::env::var("SNAP").ok().as_deref(),
+        std::env::var("SNAP_NAME").ok().as_deref(),
+        std::env::var("FLATPAK_ID").ok().as_deref(),
+        Path::new("/.flatpak-info").exists(),
+    )
+    .map(str::to_string)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sandbox_runtime_kind() -> Option<String> {
+    None
+}
+
+// Injects window.__XT_SANDBOX__ before page scripts run (no async race).
+pub fn sandbox_bootstrap_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    let sandbox_value = match sandbox_runtime_kind() {
+        Some(kind) => format!("\"{kind}\""),
+        None => "null".to_string(),
+    };
+    tauri::plugin::Builder::new("xt-sandbox-bootstrap")
+        .js_init_script(format!("window.__XT_SANDBOX__ = {sandbox_value};"))
+        .build()
+}
+
+// ---------------------------------------------------------------------------
 // Spawn helpers (unchanged surface)
 // ---------------------------------------------------------------------------
 fn classify_io_error(err: &std::io::Error) -> String {
@@ -271,6 +332,7 @@ fn spawn_launch_inner(path: &str, args: &[String], direct_exec: bool) -> Result<
         if !direct_exec && Path::new(path).extension().and_then(|s| s.to_str()) == Some("app") {
             let mut cmd = Command::new("/usr/bin/open");
             if is_macos_app_running(path) {
+                // A running instance only accepts open-document events: URL only, no option args.
                 cmd.arg("-a").arg(path);
                 if let Some(url) = args.last() {
                     cmd.arg(url);
@@ -442,8 +504,16 @@ fn augment_mpv_args(mut args: Vec<String>, endpoint: &str) -> Vec<String> {
     args
 }
 
-fn augment_vlc_args(mut args: Vec<String>) -> Vec<String> {
+fn augment_vlc_args(args: Vec<String>) -> Vec<String> {
+    augment_vlc_args_inner(args, cfg!(target_os = "macos"))
+}
+
+// macOS VLC has no --one-instance (Qt/Win32-only) and exits on unknown options.
+fn augment_vlc_args_inner(mut args: Vec<String>, is_macos: bool) -> Vec<String> {
     args.retain(|arg| arg != "--play-and-exit");
+    if is_macos {
+        return args;
+    }
     let src = args.pop();
     args.push("--one-instance".to_string());
     args.push("--no-playlist-enqueue".to_string());
@@ -712,6 +782,12 @@ fn send_mpv_loadfile(
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
+/// `"snap"` / `"flatpak"` when the app is sandboxed, `None` elsewhere.
+#[tauri::command]
+pub fn sandbox_runtime() -> Option<String> {
+    sandbox_runtime_kind()
+}
+
 #[tauri::command]
 pub async fn launch_external_player(
     app: AppHandle,
@@ -828,8 +904,12 @@ async fn launch_mode(
         };
         let augmented = augment_vlc_args(args.clone());
         let path_for_spawn = path.clone();
+        // macOS reuse rides `open -a`: the pid is `open`'s, so the slot dies and
+        // `reused` reports false there. Raw binary paths get a fresh instance per launch.
+        // `open` reuse also forwards only the URL, so custom headers apply on first launch only.
+        let direct_exec = cfg!(not(target_os = "macos"));
         let (spawned_pid, is_real_process) = tauri::async_runtime::spawn_blocking(move || {
-            spawn_launch_inner(&path_for_spawn, &augmented, true)
+            spawn_launch_inner(&path_for_spawn, &augmented, direct_exec)
         })
         .await
         .map_err(|e| format!("OTHER:join: {e}"))??;
@@ -913,11 +993,26 @@ mod tests {
             "--play-and-exit".to_string(),
             "https://example.com/stream.m3u8".to_string(),
         ];
-        let out = augment_vlc_args(args);
+        let out = augment_vlc_args_inner(args, false);
         assert!(!out.iter().any(|arg| arg == "--play-and-exit"));
         assert!(out.contains(&"--no-qt-error-dialogs".to_string()));
         assert!(out.contains(&"--one-instance".to_string()));
         assert!(out.contains(&"--no-playlist-enqueue".to_string()));
+        assert_eq!(out.last().unwrap(), "https://example.com/stream.m3u8");
+    }
+
+    #[test]
+    fn augment_vlc_on_macos_never_adds_one_instance_flags() {
+        let args = vec![
+            "--no-fullscreen".to_string(),
+            "--play-and-exit".to_string(),
+            "https://example.com/stream.m3u8".to_string(),
+        ];
+        let out = augment_vlc_args_inner(args, true);
+        assert!(!out.iter().any(|arg| arg == "--play-and-exit"));
+        assert!(!out.iter().any(|arg| arg == "--one-instance"));
+        assert!(!out.iter().any(|arg| arg == "--no-playlist-enqueue"));
+        assert!(out.contains(&"--no-fullscreen".to_string()));
         assert_eq!(out.last().unwrap(), "https://example.com/stream.m3u8");
     }
 
@@ -1123,6 +1218,46 @@ mod tests {
     #[test]
     fn pid_alive_returns_false_for_pid_zero() {
         assert!(!pid_alive(0));
+    }
+
+    #[test]
+    fn classify_sandbox_runtime_detects_snap_when_exe_is_inside_mount() {
+        let exe = Path::new("/snap/xtream/123/usr/bin/xtream");
+        let result = classify_sandbox_runtime(
+            Some(exe),
+            Some("/snap/xtream/123"),
+            Some("xtream"),
+            None,
+            false,
+        );
+        assert_eq!(result, Some("snap"));
+    }
+
+    #[test]
+    fn classify_sandbox_runtime_ignores_inherited_snap_env_outside_mount() {
+        let exe = Path::new("/home/user/.local/bin/xtream");
+        let result = classify_sandbox_runtime(
+            Some(exe),
+            Some("/snap/some-terminal/45"),
+            Some("some-terminal"),
+            None,
+            false,
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn classify_sandbox_runtime_detects_flatpak() {
+        let exe = Path::new("/app/bin/xtream");
+        let result = classify_sandbox_runtime(Some(exe), None, None, Some("com.example.App"), false);
+        assert_eq!(result, Some("flatpak"));
+    }
+
+    #[test]
+    fn classify_sandbox_runtime_returns_none_outside_any_sandbox() {
+        let exe = Path::new("/usr/bin/xtream");
+        let result = classify_sandbox_runtime(Some(exe), None, None, None, false);
+        assert_eq!(result, None);
     }
 
     #[test]

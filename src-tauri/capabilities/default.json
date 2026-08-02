@@ -23,27 +23,6 @@
         { "url": "https://**:*/*" }
       ]
     },
-    "fs:default",
-    "fs:allow-read-file",
-    "fs:allow-read-text-file",
-    "fs:allow-read-dir",
-    "fs:allow-write-file",
-    "fs:allow-write-text-file",
-    "fs:allow-create",
-    "fs:allow-mkdir",
-    "fs:allow-exists",
-    "fs:allow-stat",
-    "fs:allow-remove",
-    {
-      "identifier": "fs:scope",
-      "allow": [
-        { "path": "$DOWNLOAD/**" },
-        { "path": "$VIDEO/**" },
-        { "path": "$HOME/**" },
-        { "path": "$APPDATA/**" },
-        { "path": "$APPLOCALDATA/**" }
-      ]
-    },
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
@@ -57,7 +36,15 @@
         { "path": "$APPLOCALDATA" },
         { "path": "$APPLOCALDATA/**" },
         { "path": "$APPLOG" },
-        { "path": "$APPLOG/**" }
+        { "path": "$APPLOG/**" },
+        { "path": "$APPDATA" },
+        { "path": "$APPDATA/**" },
+        { "path": "$DOWNLOAD" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$VIDEO" },
+        { "path": "$VIDEO/**" },
+        { "path": "$HOME" },
+        { "path": "$HOME/**" }
       ]
     },
     {
@@ -76,6 +63,8 @@
         { "url": "http://**/*" },
         { "url": "ms-windows-store://**" }
       ]
-    }
+    },
+    "allow-warmup-commands",
+    "allow-safe-fetch-commands"
   ]
 }

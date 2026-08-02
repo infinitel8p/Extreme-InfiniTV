@@ -119,6 +119,9 @@ function shakaChannelSuffix(channelsCount: number | null | undefined): string {
   return ""
 }
 
+// Zero safe margin can cause a rebuffer hiccup (Shaka docs).
+const SHAKA_AUDIO_SWITCH_SAFE_MARGIN_SECONDS = 4
+
 export function createShakaAudioSource(player: any): AudioTrackSource {
   const listeners = new Set<() => void>()
 
@@ -180,7 +183,7 @@ export function createShakaAudioSource(player: any): AudioTrackSource {
         if (usesAudioTrackApi()) {
           const tracks: any[] = player.getAudioTracks() ?? []
           const track = tracks.find((candidate, index) => String(candidate.id ?? index) === id)
-          if (track) player.selectAudioTrack(track)
+          if (track) player.selectAudioTrack(track, SHAKA_AUDIO_SWITCH_SAFE_MARGIN_SECONDS)
           return
         }
         const variants: any[] = player.getVariantTracks?.() ?? []
@@ -194,7 +197,7 @@ export function createShakaAudioSource(player: any): AudioTrackSource {
         } else {
           player.configure({ abr: { enabled: false } })
         }
-        player.selectVariantTrack(variant, true)
+        player.selectVariantTrack(variant, true, SHAKA_AUDIO_SWITCH_SAFE_MARGIN_SECONDS)
       } catch {}
     },
     subscribe(listener) {
