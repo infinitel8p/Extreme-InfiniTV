@@ -877,9 +877,7 @@ const documentTitle = pageTitle
     if (!(ev.metaKey || ev.ctrlKey) || ev.key.toLowerCase() !== "k") return
     ev.preventDefault()
     if (location.pathname === "/search" || location.pathname.startsWith("/search/")) {
-      const input = document.querySelector(
-        'main input[type="search"]'
-      )
+      const input = document.querySelector<HTMLInputElement>('main input[type="search"]')
       if (input) {
         input.focus()
         input.select?.()
@@ -963,14 +961,16 @@ const documentTitle = pageTitle
     let snReady = false
     const initSpatialNav = () => {
       if (snReady) return
+      const sn = SpatialNavigation
+      if (!sn) return
       snReady = true
-      SpatialNavigation.init()
-      SpatialNavigation.add({
+      sn.init()
+      sn.add({
         id: "main",
         selector:
           "a, button, summary, input, textarea, [contenteditable='true'], select, [tabindex]:not([tabindex='-1'])",
       })
-      SpatialNavigation.makeFocusable()
+      sn.makeFocusable()
     }
     if (typeof window.requestIdleCallback === "function") {
       window.requestIdleCallback(initSpatialNav, { timeout: 2000 })
@@ -984,13 +984,13 @@ const documentTitle = pageTitle
       "ArrowLeft",
       "ArrowRight",
     ])
-    const onFirstArrow = (e) => {
+    const onFirstArrow = (e: KeyboardEvent) => {
       if (!ARROWS.has(e.key)) return
       initSpatialNav()
       const active = document.activeElement
       if (!active || active === document.body) {
         e.preventDefault()
-        SpatialNavigation.focus()
+        SpatialNavigation?.focus()
       }
       document.removeEventListener("keydown", onFirstArrow, true)
     }
