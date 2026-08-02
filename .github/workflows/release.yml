@@ -343,7 +343,9 @@ jobs:
             const downloads = [
               '## Downloads',
               '',
-              'Pick the file that matches your device. Click a filename to download it directly. The Microsoft Store, Google Play and Snap Store are the easiest path on Windows, Android and Linux.',
+              'The Microsoft Store, Google Play and Snap Store are the easiest path on Windows, Android and Linux. For direct downloads, expand the table and pick the file that matches your device.',
+              '',
+              '<details><summary><strong>All downloads</strong> (Windows, Windows on ARM, macOS, Linux x64/ARM64, Android)</summary>',
               '',
               '| Platform | File |',
               '|----------|------|',
@@ -380,24 +382,32 @@ jobs:
               'Then open the app normally. You only need to do this once per install.',
               '',
               '</details>',
-            ].join('\n')
-
-            const body = [
-              '<p align="center">',
-              '  <img src="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/128x128@2x.png" alt="App Icon"/>',
-              '</p>',
               '',
-              ...(summary ? [`<p align="center">${summary}</p>`, ''] : []),
-              `## Changelog ${tag}`,
-              changelog,
-              '',
-              downloads,
+              '</details>',
               '',
               '<a href="https://play.google.com/store/apps/details?id=com.infinitel8p.xtream">',
               '<img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="60"/>',
               '</a>',
               '',
               '[![Get it from Microsoft](https://get.microsoft.com/images/en-us%20dark.svg)](https://apps.microsoft.com/store/detail/9NN162Z0WXSR)',
+              '',
+              '<a href="https://snapcraft.io/extreme-infinitv">',
+              '<img alt="Get it from the Snap Store" src="https://snapcraft.io/en/dark/install.svg" height="60"/>',
+              '</a>',
+            ].join('\n')
+
+            // Downloads go above the changelog so they stay visible before
+            // GitHub's "read more" fold on long release notes.
+            const body = [
+              '<p align="center">',
+              '  <img src="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/128x128@2x.png" alt="App Icon"/>',
+              '</p>',
+              '',
+              ...(summary ? [`<p align="center">${summary}</p>`, ''] : []),
+              downloads,
+              '',
+              `## Changelog ${tag}`,
+              changelog,
             ].join('\n')
 
             const { data } = await github.rest.repos.createRelease({
@@ -750,6 +760,14 @@ jobs:
       - name: Setup Microsoft Store CLI
         if: env.HAS_MSSTORE_SECRET == 'true'
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+
+      # msstore-cli's Linux credential store P/Invokes libsecret, which newer
+      # ubuntu-latest images no longer ship (broke the v1.7.1 run).
+      - name: Install libsecret for msstore credential storage
+        if: env.HAS_MSSTORE_SECRET == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-0
 
       - name: Configure Microsoft Store credentials
         if: env.HAS_MSSTORE_SECRET == 'true'

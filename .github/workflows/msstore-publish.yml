@@ -1,0 +1,49 @@
+# Manual Microsoft Store submission fallback. Downloads the msix-package
+# artifact from a given release.yml run and submits it to the Store listing,
+# for when the publish-msstore job failed but the build legs succeeded.
+name: Publish to Microsoft Store (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "release.yml run id to take the msix-package artifact from"
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Download MSIX artifact from source run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: msix-package
+          path: msix
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Microsoft Store CLI
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+
+      # msstore-cli's Linux credential store P/Invokes libsecret, which newer
+      # ubuntu-latest images no longer ship.
+      - name: Install libsecret for msstore credential storage
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-0
+
+      - name: Configure Microsoft Store credentials
+        run: |
+          msstore reconfigure \
+            --tenantId "${{ secrets.MSSTORE_TENANT_ID }}" \
+            --sellerId "${{ secrets.MSSTORE_SELLER_ID }}" \
+            --clientId "${{ secrets.MSSTORE_CLIENT_ID }}" \
+            --clientSecret "${{ secrets.MSSTORE_CLIENT_SECRET }}"
+
+      - name: Publish to Microsoft Store
+        run: |
+          set -euo pipefail
+          MSIX=$(find msix -name "*.msix")
+          msstore publish "$MSIX" -id 9NN162Z0WXSR
