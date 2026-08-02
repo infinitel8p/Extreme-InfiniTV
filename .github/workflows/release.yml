@@ -400,7 +400,7 @@ jobs:
             // GitHub's "read more" fold on long release notes.
             const body = [
               '<p align="center">',
-              '  <img src="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/128x128@2x.png" alt="App Icon"/>',
+              '  <img src="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/logos/readme-lockup-2x.png" alt="Extreme InfiniTV logo" width="400"/>',
               '</p>',
               '',
               ...(summary ? [`<p align="center">${summary}</p>`, ''] : []),
@@ -761,29 +761,31 @@ jobs:
         if: env.HAS_MSSTORE_SECRET == 'true'
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
 
-      # msstore-cli's Linux credential store P/Invokes libsecret, which newer
-      # ubuntu-latest images no longer ship (broke the v1.7.1 run).
-      - name: Install libsecret for msstore credential storage
-        if: env.HAS_MSSTORE_SECRET == 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsecret-1-0
-
-      - name: Configure Microsoft Store credentials
-        if: env.HAS_MSSTORE_SECRET == 'true'
-        run: |
-          msstore reconfigure \
-            --tenantId "${{ secrets.MSSTORE_TENANT_ID }}" \
-            --sellerId "${{ secrets.MSSTORE_SELLER_ID }}" \
-            --clientId "${{ secrets.MSSTORE_CLIENT_ID }}" \
-            --clientSecret "${{ secrets.MSSTORE_CLIENT_SECRET }}"
-
+      # msstore-cli stores credentials via libsecret, which needs a running
+      # Secret Service (gnome-keyring on a D-Bus session bus) that headless
+      # runners lack, so reconfigure and publish run inside one keyring session.
       - name: Publish to Microsoft Store
         if: env.HAS_MSSTORE_SECRET == 'true'
+        env:
+          MSSTORE_TENANT_ID: ${{ secrets.MSSTORE_TENANT_ID }}
+          MSSTORE_SELLER_ID: ${{ secrets.MSSTORE_SELLER_ID }}
+          MSSTORE_CLIENT_ID: ${{ secrets.MSSTORE_CLIENT_ID }}
+          MSSTORE_CLIENT_SECRET: ${{ secrets.MSSTORE_CLIENT_SECRET }}
         run: |
           set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-0 gnome-keyring dbus
           MSIX=$(find msix -name "*.msix")
-          msstore publish "$MSIX" -id 9NN162Z0WXSR
+          export MSIX
+          dbus-run-session -- bash -euo pipefail -c '
+            echo -n "ci-keyring" | gnome-keyring-daemon --unlock --components=secrets
+            msstore reconfigure \
+              --tenantId "$MSSTORE_TENANT_ID" \
+              --sellerId "$MSSTORE_SELLER_ID" \
+              --clientId "$MSSTORE_CLIENT_ID" \
+              --clientSecret "$MSSTORE_CLIENT_SECRET"
+            msstore publish "$MSIX" -id 9NN162Z0WXSR
+          '
 
   # contents:write needed to download an asset off the still-draft release.
   publish-snap:
