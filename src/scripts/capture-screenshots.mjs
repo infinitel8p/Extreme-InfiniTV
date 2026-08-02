@@ -359,6 +359,17 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
     }
     // pre-seeded splash stays in the DOM as display:none, so hidden not detached
     await page.waitForSelector("#xt-app-splash", { state: "hidden", timeout: 10_000 }).catch(() => {})
+    // Catalog warming kicks in on idle after load (a fresh context has an
+    // empty cache); if the strip appears, hold the shot until it is gone.
+    const warmingStrip = page.locator(".warming-strip")
+    const warmingAppearWindowMs = route === routes[0] ? 5_000 : 700
+    const warmingVisible = await warmingStrip
+      .waitFor({ state: "visible", timeout: warmingAppearWindowMs })
+      .then(() => true, () => false)
+    if (warmingVisible) {
+      await warmingStrip.waitFor({ state: "hidden", timeout: 180_000 }).catch(() => {})
+      await page.waitForTimeout(400)
+    }
     await page.evaluate(() => document.fonts.ready).catch(() => {})
     await page.waitForTimeout(1500)
     try {
