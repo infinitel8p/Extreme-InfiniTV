@@ -51,6 +51,7 @@
   "settings.language.system": "使用系统语言",
   "settings.fontScale.helper": "调整基础字体大小。在电视上从远处观看时建议选择「大」或「特大」。",
   "settings.fontScale.label": "字体大小",
+  "settings.fontScale.small": "小",
   "settings.fontScale.default": "默认",
   "settings.fontScale.medium": "中",
   "settings.fontScale.large": "大",

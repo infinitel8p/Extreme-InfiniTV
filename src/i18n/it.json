@@ -51,6 +51,7 @@
   "settings.language.system": "Usa la lingua di sistema",
   "settings.fontScale.helper": "Aumenta la dimensione del testo. Usa Grande o Molto grande per guardare su una TV da lontano.",
   "settings.fontScale.label": "Dimensione del testo",
+  "settings.fontScale.small": "Piccola",
   "settings.fontScale.default": "Predefinita",
   "settings.fontScale.medium": "Media",
   "settings.fontScale.large": "Grande",

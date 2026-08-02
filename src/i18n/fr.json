@@ -51,6 +51,7 @@
   "settings.language.system": "Utiliser la langue du système",
   "settings.fontScale.helper": "Augmente la taille de police. Choisissez Grande ou Très grande pour regarder sur un téléviseur à distance.",
   "settings.fontScale.label": "Taille de police",
+  "settings.fontScale.small": "Petite",
   "settings.fontScale.default": "Par défaut",
   "settings.fontScale.medium": "Moyenne",
   "settings.fontScale.large": "Grande",

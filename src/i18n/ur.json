@@ -51,6 +51,7 @@
   "settings.language.system": "سسٹم زبان استعمال کریں",
   "settings.fontScale.helper": "بنیادی فونٹ سائز بڑھاتا ہے۔ ٹی وی کو دور سے دیکھنے کے لیے بڑا یا بہت بڑا استعمال کریں۔",
   "settings.fontScale.label": "فونٹ سائز",
+  "settings.fontScale.small": "چھوٹا",
   "settings.fontScale.default": "ڈیفالٹ",
   "settings.fontScale.medium": "درمیانہ",
   "settings.fontScale.large": "بڑا",

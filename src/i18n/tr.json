@@ -51,6 +51,7 @@
   "settings.language.system": "Sistem dilini kullan",
   "settings.fontScale.helper": "Temel yazı tipi boyutunu büyütür. TV'yi uzaktan izlerken Büyük veya Çok Büyük seçin.",
   "settings.fontScale.label": "Yazı boyutu",
+  "settings.fontScale.small": "Küçük",
   "settings.fontScale.default": "Varsayılan",
   "settings.fontScale.medium": "Orta",
   "settings.fontScale.large": "Büyük",

@@ -51,6 +51,7 @@
   "settings.language.system": "Use system language",
   "settings.fontScale.helper": "Bumps the base font size. Use Large or X-Large when viewing on a TV from across the room.",
   "settings.fontScale.label": "Font scale",
+  "settings.fontScale.small": "Small",
   "settings.fontScale.default": "Default",
   "settings.fontScale.medium": "Medium",
   "settings.fontScale.large": "Large",

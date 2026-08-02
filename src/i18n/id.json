@@ -51,6 +51,7 @@
   "settings.language.system": "Gunakan bahasa sistem",
   "settings.fontScale.helper": "Memperbesar ukuran font dasar. Gunakan Besar atau Sangat Besar saat menonton TV dari jauh.",
   "settings.fontScale.label": "Skala font",
+  "settings.fontScale.small": "Kecil",
   "settings.fontScale.default": "Default",
   "settings.fontScale.medium": "Sedang",
   "settings.fontScale.large": "Besar",

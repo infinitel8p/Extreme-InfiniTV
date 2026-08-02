@@ -51,6 +51,7 @@
   "settings.language.system": "Systemsprache verwenden",
   "settings.fontScale.helper": "Vergrößert die Schrift. Wähle Groß oder Sehr groß, wenn du den Fernseher aus der Entfernung ansiehst.",
   "settings.fontScale.label": "Schriftgröße",
+  "settings.fontScale.small": "Klein",
   "settings.fontScale.default": "Standard",
   "settings.fontScale.medium": "Mittel",
   "settings.fontScale.large": "Groß",

@@ -51,6 +51,7 @@
   "settings.language.system": "システム言語を使う",
   "settings.fontScale.helper": "基本のフォントサイズを大きくします。テレビで遠くから見るときは「大」か「特大」を選んでください。",
   "settings.fontScale.label": "フォントサイズ",
+  "settings.fontScale.small": "小",
   "settings.fontScale.default": "標準",
   "settings.fontScale.medium": "中",
   "settings.fontScale.large": "大",

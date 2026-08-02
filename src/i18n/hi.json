@@ -51,6 +51,7 @@
   "settings.language.system": "सिस्टम भाषा का उपयोग करें",
   "settings.fontScale.helper": "मूल फ़ॉन्ट आकार बढ़ाता है। टीवी को दूर से देखते समय बड़ा या बहुत बड़ा का उपयोग करें।",
   "settings.fontScale.label": "फ़ॉन्ट आकार",
+  "settings.fontScale.small": "छोटा",
   "settings.fontScale.default": "डिफ़ॉल्ट",
   "settings.fontScale.medium": "मध्यम",
   "settings.fontScale.large": "बड़ा",

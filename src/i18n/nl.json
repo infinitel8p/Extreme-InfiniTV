@@ -51,6 +51,7 @@
   "settings.language.system": "Systeemtaal gebruiken",
   "settings.fontScale.helper": "Vergroot de basistekstgrootte. Gebruik Groot of Extra groot wanneer je vanaf de andere kant van de kamer naar de tv kijkt.",
   "settings.fontScale.label": "Tekstgrootte",
+  "settings.fontScale.small": "Klein",
   "settings.fontScale.default": "Standaard",
   "settings.fontScale.medium": "Middel",
   "settings.fontScale.large": "Groot",

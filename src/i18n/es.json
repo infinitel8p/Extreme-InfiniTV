@@ -51,6 +51,7 @@
   "settings.language.system": "Usar el idioma del sistema",
   "settings.fontScale.helper": "Aumenta el tamaño base de fuente. Usa Grande o Muy grande para verlo en una TV desde lejos.",
   "settings.fontScale.label": "Tamaño de fuente",
+  "settings.fontScale.small": "Pequeño",
   "settings.fontScale.default": "Predeterminado",
   "settings.fontScale.medium": "Mediano",
   "settings.fontScale.large": "Grande",

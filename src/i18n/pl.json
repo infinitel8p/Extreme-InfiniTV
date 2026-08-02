@@ -51,6 +51,7 @@
   "settings.language.system": "Użyj języka systemu",
   "settings.fontScale.helper": "Zwiększa podstawowy rozmiar czcionki. Wybierz Duży lub Bardzo duży, gdy oglądasz telewizor z drugiego końca pokoju.",
   "settings.fontScale.label": "Rozmiar czcionki",
+  "settings.fontScale.small": "Mały",
   "settings.fontScale.default": "Domyślny",
   "settings.fontScale.medium": "Średni",
   "settings.fontScale.large": "Duży",

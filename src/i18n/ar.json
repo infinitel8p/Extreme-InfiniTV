@@ -51,6 +51,7 @@
   "settings.language.system": "استخدام لغة النظام",
   "settings.fontScale.helper": "يكبّر حجم الخط الأساسي. اختر كبير أو كبير جداً عند المشاهدة على التلفاز من بعيد.",
   "settings.fontScale.label": "حجم الخط",
+  "settings.fontScale.small": "صغير",
   "settings.fontScale.default": "افتراضي",
   "settings.fontScale.medium": "متوسط",
   "settings.fontScale.large": "كبير",
