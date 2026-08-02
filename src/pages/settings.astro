@@ -1032,6 +1032,10 @@ const navStructure: NavSection[] = [
                   <button id="download-dir-clear" type="button" class="btn text-fg-2">
                     <span data-i18n="common.clear">Clear</span>
                   </button>
+                  <button id="settings-open-downloads" type="button" class="btn justify-center hidden">
+                    <IconFolderOpen aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="downloads.action.openFolder">Open folder</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -1183,6 +1187,10 @@ const navStructure: NavSection[] = [
                   <button id="settings-open-logs" type="button" class="btn justify-center hidden">
                     <IconFolderOpen aria-hidden="true" class="btn-icon" />
                     <span data-i18n="settings.storage.openLogs">Open log folder</span>
+                  </button>
+                  <button id="settings-open-appdata" type="button" class="btn justify-center hidden">
+                    <IconFolderOpen aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.storage.openAppData">Open app data folder</span>
                   </button>
                   <button id="settings-share-logs" type="button" class="btn justify-center hidden">
                     <IconShare aria-hidden="true" class="btn-icon" />
@@ -2183,6 +2191,25 @@ const navStructure: NavSection[] = [
             } catch {}
           }
           toastError(t("settings.storage.openLogsFail") || "Couldn't open the log folder.")
+        }
+      })
+    }
+
+    const openAppDataBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("settings-open-appdata")
+    )
+    if (openAppDataBtn && isTauriEnv && !isAndroidEnv) {
+      openAppDataBtn.classList.remove("hidden")
+      openAppDataBtn.addEventListener("click", async () => {
+        try {
+          const { appDataDir } = await import("@tauri-apps/api/path")
+          const { openPath } = await import("@tauri-apps/plugin-opener")
+          await openPath(await appDataDir())
+        } catch (err) {
+          log.warn("[settings] open app data folder failed:", err)
+          toastError(
+            t("settings.storage.openAppDataFail") || "Couldn't open the app data folder."
+          )
         }
       })
     }
@@ -3226,6 +3253,29 @@ const navStructure: NavSection[] = [
     if (!isDownloadable()) {
       if (dirPickBtn) dirPickBtn.disabled = true
       if (dirClearBtn) dirClearBtn.disabled = true
+    }
+
+    const openDownloadsBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("settings-open-downloads")
+    )
+    if (openDownloadsBtn && isTauriEnv && !isAndroidEnv) {
+      openDownloadsBtn.classList.remove("hidden")
+      openDownloadsBtn.addEventListener("click", async () => {
+        try {
+          let dir = getDownloadDir()
+          if (!dir) {
+            const { downloadDir } = await import("@tauri-apps/api/path")
+            dir = await downloadDir()
+          }
+          const { openPath } = await import("@tauri-apps/plugin-opener")
+          await openPath(dir)
+        } catch (err) {
+          log.warn("[settings] open downloads folder failed:", err)
+          toastError(
+            t("downloads.action.openFolderFail") || "Couldn't open the downloads folder."
+          )
+        }
+      })
     }
 
     dirPickBtn?.addEventListener("click", async () => {

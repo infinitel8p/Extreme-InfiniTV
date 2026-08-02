@@ -2,6 +2,7 @@
 import Layout from "@/layouts/Layout.astro"
 import {
   IconDownload,
+  IconFolderOpen,
   IconSettings,
 } from "@tabler/icons-svelte"
 ---
@@ -24,23 +25,36 @@ import {
     </header>
 
     <!-- Folder summary -->
-    <a
+    <div
       id="downloads-folder-summary"
-      href="/settings#downloads-folder-section"
       class="rounded-xl border border-line bg-surface px-4 py-2.5 flex items-center gap-3 text-sm
-             hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
-             outline-none transition-colors dl-page-enter dl-stagger-2">
-      <IconSettings aria-hidden="true" class="size-4 text-fg-3 shrink-0" />
-      <span class="flex-1 min-w-0 flex flex-wrap items-baseline gap-x-2">
-        <span data-i18n="downloads.folder.savingTo" class="text-fg-3 shrink-0">Saving to</span>
-        <span
-          id="downloads-folder-path"
-          class="font-mono text-xs text-fg truncate min-w-0">
-          Not set
+             dl-page-enter dl-stagger-2">
+      <a
+        href="/settings#downloads-folder-section"
+        class="flex-1 min-w-0 flex items-center gap-3 rounded-lg -mx-2 -my-1 px-2 py-1
+               hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent
+               outline-none transition-colors">
+        <IconSettings aria-hidden="true" class="size-4 text-fg-3 shrink-0" />
+        <span class="flex-1 min-w-0 flex flex-wrap items-baseline gap-x-2">
+          <span data-i18n="downloads.folder.savingTo" class="text-fg-3 shrink-0">Saving to</span>
+          <span
+            id="downloads-folder-path"
+            class="font-mono text-xs text-fg truncate min-w-0">
+            Not set
+          </span>
         </span>
-      </span>
-      <span data-i18n="downloads.folder.changeInSettings" class="text-xs text-accent shrink-0">Change in Settings</span>
-    </a>
+        <span data-i18n="downloads.folder.changeInSettings" class="text-xs text-accent shrink-0">Change in Settings</span>
+      </a>
+      <button
+        id="downloads-open-folder"
+        type="button"
+        class="hidden shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 -my-1 text-xs text-fg-2
+               hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg
+               focus-visible:ring-2 focus-visible:ring-accent outline-none transition-colors">
+        <IconFolderOpen aria-hidden="true" class="size-4 shrink-0" />
+        <span data-i18n="downloads.action.openFolder">Open folder</span>
+      </button>
+    </div>
 
     <!-- Active downloads (only shown when something is in flight). -->
     <section
@@ -174,14 +188,21 @@ import {
     import { prettifyAndroidUri } from "@/scripts/lib/android-fs.js"
     import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
     import { t } from "@/scripts/lib/i18n.js"
+    import { toastError } from "@/scripts/lib/toast.ts"
+    import { log } from "@/scripts/lib/log.ts"
 
     const isAndroid = /Android/i.test(navigator.userAgent || "")
+    const isTauriEnv =
+      typeof window !== "undefined" && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__)
 
     // ----------------------------
     // DOM refs
     // ----------------------------
     const summaryEl = document.getElementById("downloads-summary")
     const folderPathEl = document.getElementById("downloads-folder-path")
+    const openFolderBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("downloads-open-folder")
+    )
 
     const activeSection = document.getElementById("downloads-active-section")
     const activeListEl = document.getElementById("downloads-active-list")
@@ -222,6 +243,25 @@ import {
     window.addEventListener("storage", (e) => {
       if (e.key === "xt_download_dir" || e.key === null) syncFolderSummary()
     })
+
+    if (openFolderBtn && isTauriEnv && !isAndroid) {
+      openFolderBtn.classList.remove("hidden")
+      openFolderBtn.classList.add("inline-flex")
+      openFolderBtn.addEventListener("click", async () => {
+        try {
+          let dir = getDownloadDir()
+          if (!dir) {
+            const { downloadDir } = await import("@tauri-apps/api/path")
+            dir = await downloadDir()
+          }
+          const { openPath } = await import("@tauri-apps/plugin-opener")
+          await openPath(dir)
+        } catch (err) {
+          log.warn("[downloads] open folder failed:", err)
+          toastError(t("downloads.action.openFolderFail") || "Couldn't open the downloads folder.")
+        }
+      })
+    }
 
     // ----------------------------
     // Formatters

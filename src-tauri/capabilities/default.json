@@ -36,7 +36,15 @@
         { "path": "$APPLOCALDATA" },
         { "path": "$APPLOCALDATA/**" },
         { "path": "$APPLOG" },
-        { "path": "$APPLOG/**" }
+        { "path": "$APPLOG/**" },
+        { "path": "$APPDATA" },
+        { "path": "$APPDATA/**" },
+        { "path": "$DOWNLOAD" },
+        { "path": "$DOWNLOAD/**" },
+        { "path": "$VIDEO" },
+        { "path": "$VIDEO/**" },
+        { "path": "$HOME" },
+        { "path": "$HOME/**" }
       ]
     },
     {
