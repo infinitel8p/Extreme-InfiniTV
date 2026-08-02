@@ -5,6 +5,7 @@ import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
 const KEY_DOWNLOAD_CONCURRENCY = "xt_download_concurrency"
+const KEY_WRITE_NFO = "xt_write_nfo"
 const KEY_PERF_MODE = "xt_perf_mode"
 const KEY_ACCENT = "xt_accent"
 const KEY_PROGRESS_RETENTION = "xt_progress_retention_days"
@@ -173,6 +174,17 @@ export function setDownloadConcurrency(n) {
     new CustomEvent(EVT_CHANGED, {
       detail: { key: "downloadConcurrency", value: clamped },
     })
+  )
+}
+
+export function getWriteNfoEnabled() {
+  return readLS(KEY_WRITE_NFO, "") === "1"
+}
+
+export function setWriteNfoEnabled(enabled) {
+  writeLS(KEY_WRITE_NFO, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(EVT_CHANGED, { detail: { key: KEY_WRITE_NFO, value: !!enabled } })
   )
 }
 

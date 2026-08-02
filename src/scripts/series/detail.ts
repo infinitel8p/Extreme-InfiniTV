@@ -111,6 +111,7 @@ let autoplayPending = !!autoplayEpisodeId
 let activePlaylistId = ""
 let creds = { host: "", port: "", user: "", pass: "" }
 let series = null
+let seriesInfoRaw = null
 let episodesByKey = null
 let currentSeason = ""
 let currentPlayingEpisodeId = null
@@ -268,6 +269,13 @@ function slotMachineEpisodes(direction) {
   }
 }
 
+// Number("") is 0, which Kodi reads as the Specials season
+function toIndex(value) {
+  if (value == null || value === "") return null
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+
 function renderEpisodes() {
   if (!episodeList) return
   episodeList.replaceChildren()
@@ -420,6 +428,9 @@ function renderEpisodes() {
               (series?.name ? `${series.name} - ` : "") +
               `S${currentSeason || "?"}E${ep.episode_num || "?"}` +
               (ep.title ? ` - ${ep.title}` : "")
+            const seriesInfo = seriesInfoRaw?.info || {}
+            const epInfo = ep.info || {}
+            const epDurationSecs = Number(epInfo.duration_secs || 0)
             await startDownload({
               url: epUrl,
               title: epTitle,
@@ -433,6 +444,19 @@ function renderEpisodes() {
                 season: ep.season ?? currentSeason ?? null,
                 episode: ep.episode_num ?? null,
                 logo: series?.logo || null,
+              },
+              nfo: {
+                type: "episode",
+                showTitle: series?.name || seriesInfo.name || seriesInfo.title || "",
+                title: ep.title || "",
+                season: toIndex(ep.season) ?? toIndex(currentSeason),
+                episode: toIndex(ep.episode_num),
+                aired: epInfo.release_date || epInfo.releaseDate || "",
+                plot: epInfo.plot || seriesInfo.plot || seriesInfo.description || series?.plot || "",
+                genre: seriesInfo.genre || seriesInfo.category || "",
+                rating: epInfo.rating || seriesInfo.rating || seriesInfo.rating_5based || series?.rating || "",
+                runtimeMinutes: epDurationSecs > 0 ? Math.round(epDurationSecs / 60) : 0,
+                poster: epInfo.movie_image || seriesInfo.cover || seriesInfo.cover_big || series?.logo || "",
               },
             })
           } catch (err) {
@@ -507,6 +531,7 @@ function renderDownloadedEpisodes(downloads) {
 }
 
 function applySeriesInfo(data) {
+  seriesInfoRaw = data
   const info = data?.info || {}
   const seasons = Array.isArray(data?.seasons) ? data.seasons : []
 

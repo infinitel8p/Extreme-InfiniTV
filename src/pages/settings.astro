@@ -375,7 +375,7 @@ const navStructure: NavSection[] = [
                       fontScaleBtns[i].setAttribute("aria-pressed", Math.abs(btnScale - savedFontScale) < 0.001 ? "true" : "false");
                     }
                   }
-                  var currentTheme = localStorage.getItem("xt_theme") || "dark";
+                  var currentTheme = localStorage.getItem("xt_theme") || "system";
                   var themeGroup = document.getElementById("settings-theme");
                   if (themeGroup) {
                     var themeBtns = themeGroup.querySelectorAll(".theme-btn");
@@ -1087,6 +1087,27 @@ const navStructure: NavSection[] = [
               </div>
             </div>
 
+            <!-- Kodi .nfo sidecar: desktop only -->
+            <div id="card-write-nfo" data-settings-item class="hidden settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.downloadsFolder.nfoTitle" class="text-sm font-medium leading-snug">Write Kodi metadata</h3>
+                <p data-i18n="settings.downloadsFolder.nfoHelper" class="text-xs text-fg-3">
+                  Save a .nfo file with title, year, plot and poster next to each finished download so Kodi, Jellyfin or Emby can index it.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-write-nfo"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Write Kodi metadata"
+                  data-i18n-attr="aria-label:settings.downloadsFolder.nfoTitle">
+                  <button type="button" data-nfo="on"  aria-pressed="false" data-i18n="settings.downloadsFolder.nfo.on"  class="write-nfo-btn btn">On</button>
+                  <button type="button" data-nfo="off" aria-pressed="false" data-i18n="settings.downloadsFolder.nfo.off" class="write-nfo-btn btn">Off</button>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
 
@@ -1226,7 +1247,14 @@ const navStructure: NavSection[] = [
                 <div
                   id="update-progress-wrap"
                   class="hidden flex-col gap-1.5">
-                  <div class="update-progress-track h-1.5 rounded-full bg-surface-2 overflow-hidden">
+                  <div
+                    id="update-progress-track"
+                    class="update-progress-track h-1.5 rounded-full bg-surface-2 overflow-hidden"
+                    role="progressbar"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-label="Update download progress"
+                    data-i18n-attr="aria-label:settings.update.progressLabel">
                     <div id="update-progress-bar" class="update-progress-fill h-full transition-[width] duration-150" style="width: 0%"></div>
                   </div>
                   <div id="update-progress-text" class="text-xs text-fg-3 tabular-nums">0%</div>
@@ -1677,6 +1705,8 @@ const navStructure: NavSection[] = [
       setDownloadDir,
       getDownloadConcurrency,
       setDownloadConcurrency,
+      getWriteNfoEnabled,
+      setWriteNfoEnabled,
       getPerfMode,
       setPerfMode,
       getUiSoundsEnabled,
@@ -2520,9 +2550,9 @@ const navStructure: NavSection[] = [
     const themeGroup = document.getElementById("settings-theme")
     function readTheme() {
       try {
-        return localStorage.getItem("xt_theme") || "dark"
+        return localStorage.getItem("xt_theme") || "system"
       } catch {
-        return "dark"
+        return "system"
       }
     }
     function commitTheme(t) {
@@ -3353,6 +3383,26 @@ const navStructure: NavSection[] = [
       syncConcurrencyButtons()
     })
 
+    const nfoCard = document.getElementById("card-write-nfo")
+    if (nfoCard && isTauriEnv && !isAndroidEnv) nfoCard.classList.remove("hidden")
+
+    const writeNfoGroup = document.getElementById("settings-write-nfo")
+    function syncWriteNfoButtons() {
+      const current = getWriteNfoEnabled()
+      for (const btn of writeNfoGroup?.querySelectorAll(".write-nfo-btn") || []) {
+        const isOn = btn.dataset.nfo === "on"
+        btn.setAttribute("aria-pressed", String(isOn === current))
+      }
+    }
+    writeNfoGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".write-nfo-btn")
+      if (!btn) return
+      setWriteNfoEnabled(btn.dataset.nfo === "on")
+      syncWriteNfoButtons()
+    })
+    syncWriteNfoButtons()
+
     // Refresh user_info on every active-playlist change and on Settings load
     // so the cap reflects the current provider, not whatever was warmed last.
     // The connection-limit banner subscribes to USER_INFO_LOADED_EVENT itself
@@ -3402,6 +3452,7 @@ const navStructure: NavSection[] = [
     const updateGetLabelEl = document.getElementById("update-get-label")
     const updateManualOnlyEl = document.getElementById("update-manual-only")
     const updateProgressWrap = document.getElementById("update-progress-wrap")
+    const updateProgressTrack = document.getElementById("update-progress-track")
     const updateProgressBar = document.getElementById("update-progress-bar")
     const updateProgressText = document.getElementById("update-progress-text")
     const updateChannelRowEl = document.getElementById("update-channel-row")
@@ -3515,12 +3566,15 @@ const navStructure: NavSection[] = [
         updateProgressBar.classList.add("indeterminate")
         updateProgressBar.style.width = "40%"
         updateProgressText.textContent = text || ""
+        // Absent aria-valuenow is how ARIA signals an indeterminate progressbar.
+        updateProgressTrack?.removeAttribute("aria-valuenow")
         return
       }
       updateProgressBar.classList.remove("indeterminate")
       const clamped = Math.max(0, Math.min(100, pct))
       updateProgressBar.style.width = `${clamped}%`
       updateProgressText.textContent = text || `${clamped.toFixed(0)}%`
+      updateProgressTrack?.setAttribute("aria-valuenow", String(Math.round(clamped)))
     }
 
     function fmtUpdateBytes(n) {

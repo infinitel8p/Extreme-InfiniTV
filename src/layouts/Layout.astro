@@ -191,7 +191,7 @@ const documentTitle = pageTitle
           }
         }
 
-        var currentTheme = localStorage.getItem("xt_theme") || "dark";
+        var currentTheme = localStorage.getItem("xt_theme") || "system";
         if (currentTheme === "light") document.documentElement.style.colorScheme = "light";
         else if (currentTheme === "dark") document.documentElement.style.colorScheme = "dark";
 
@@ -215,7 +215,7 @@ const documentTitle = pageTitle
         var systemThemeMql = window.matchMedia("(prefers-color-scheme: dark)");
         if (systemThemeMql.addEventListener) {
           systemThemeMql.addEventListener("change", function () {
-            var t = localStorage.getItem("xt_theme") || "dark";
+            var t = localStorage.getItem("xt_theme") || "system";
             if (t !== "light" && t !== "dark") applyAndroidStatusBar(t);
           });
         }

@@ -108,6 +108,7 @@ let wantsAutoplay = urlParams.get("autoplay") === "1"
 let activePlaylistId = ""
 let creds = { host: "", port: "", user: "", pass: "" }
 let movie = null
+let vodInfoRaw = null
 let detailSrc = ""
 let detailSrcBuilder = null
 let externalPresenceActive = false
@@ -154,6 +155,7 @@ function fmtDuration(value) {
 }
 
 function applyVodInfo(data) {
+  vodInfoRaw = data
   const movieData = data?.movie_data || data?.info || data || {}
   const info = data?.info || data?.movie_data || {}
 
@@ -257,6 +259,27 @@ function applyVodInfo(data) {
   if (trailerBtn) {
     if (trailerUrl) trailerBtn.removeAttribute("hidden")
     else trailerBtn.setAttribute("hidden", "")
+  }
+}
+
+function buildMovieNfoMeta() {
+  const data = vodInfoRaw
+  const movieData = data?.movie_data || data?.info || data || {}
+  const info = data?.info || data?.movie_data || {}
+  const releaseDate = movieData.releasedate || movieData.year || info.year || movie?.year || ""
+  const durationSecs = Number(movieData.duration_secs || info.duration_secs || 0)
+  const poster =
+    info.cover_big || info.movie_image || info.cover || movieData.cover || movieData.stream_icon || movie?.logo || ""
+  return {
+    type: "movie",
+    title: movie?.name || "",
+    year: releaseDate,
+    premiered: /^\d{4}-\d{2}-\d{2}/.test(String(releaseDate)) ? String(releaseDate).slice(0, 10) : undefined,
+    plot: movieData.plot || movieData.description || info.plot || info.description || movie?.plot || "",
+    genre: movieData.genre || info.genre || "",
+    rating: movieData.rating || info.rating || movieData.rating_5based || movie?.rating || "",
+    runtimeMinutes: durationSecs > 0 ? Math.round(durationSecs / 60) : 0,
+    poster,
   }
 }
 
@@ -875,6 +898,7 @@ downloadBtn?.addEventListener("click", async () => {
         id: movie.id,
         logo: movie.logo || null,
       },
+      nfo: buildMovieNfoMeta(),
     })
   } catch (e) {
     const msg = String(e?.message || e || t("detail.download.failed"))
