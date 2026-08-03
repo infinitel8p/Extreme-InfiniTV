@@ -598,7 +598,7 @@ function renderVirtual() {
     playBtn.type = "button"
     playBtn.dataset.role = "play"
     playBtn.className =
-      "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+      "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent"
     playBtn.title = ch.unresolved
       ? `${ch.name || ""} (${t("editor.unresolvedBadge")})`
       : ch.name || ""
@@ -664,7 +664,7 @@ function renderVirtual() {
     starBtn.type = "button"
     starBtn.dataset.role = "star"
     starBtn.className =
-      "star-btn flex shrink-0 h-11 w-11 items-center justify-center rounded-lg text-base outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent " +
+      "star-btn flex shrink-0 h-11 w-11 items-center justify-center rounded-lg text-base outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent " +
       (fav
         ? "text-accent hover:bg-surface-2 focus:bg-surface-2"
         : "text-fg-3 hover:text-fg hover:bg-surface-2 focus:text-fg focus:bg-surface-2")
@@ -2386,7 +2386,7 @@ function makeMoreMenuItem(label: string, checked?: boolean): HTMLButtonElement {
   if (checked !== undefined) item.setAttribute("aria-checked", String(checked))
   item.className =
     "w-full flex items-center justify-between gap-3 text-left px-3 py-2.5 min-h-11 rounded-lg text-sm " +
-    "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent outline-none transition-colors"
+    "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-1 focus-visible:ring-accent outline-none transition-colors"
   const labelSpan = document.createElement("span")
   labelSpan.textContent = label
   item.appendChild(labelSpan)
@@ -3198,9 +3198,9 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   else if (builtinCantDecode && externalAvailable) primaryKind = "external"
 
   const primaryClass =
-    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-xl bg-white text-black text-sm font-semibold transition duration-150 hover:bg-white/90 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-xl bg-white text-black text-sm font-semibold transition duration-150 hover:bg-white/90 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/70"
   const secondaryClass =
-    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-4 rounded-xl border border-white/25 text-white text-sm transition duration-150 hover:bg-white/10 hover:border-white/40 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-4 rounded-xl border border-white/25 text-white text-sm transition duration-150 hover:bg-white/10 hover:border-white/40 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50"
 
   const retryBtn = document.createElement("button")
   retryBtn.type = "button"
@@ -4559,7 +4559,7 @@ async function loadEPG(streamId) {
           <button type="button" data-epg-idx="${idx}"${isPlaying ? ' data-now-playing="true" aria-current="true"' : ""}
             class="epg-entry block w-full min-h-11 text-left rounded-lg px-3 py-2 outline-none transition-colors
                    ${rowClass}
-                   focus-visible:ring-2 focus-visible:ring-accent">
+                   focus-visible:ring-1 focus-visible:ring-accent">
             <div class="flex items-center justify-between gap-2">
               <div class="flex items-center gap-2 min-w-0">
                 ${dot}
@@ -4598,7 +4598,7 @@ function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, i
   const now = Date.now()
   const loadEarlierHtml = canLoadEarlier
     ? `<button type="button" data-epg-load-earlier
-         class="block w-full min-h-11 rounded-lg bg-surface-2 hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-accent text-sm text-fg-2 transition-colors">${escapeHtml(t("livetv.epgLoadEarlier"))}</button>`
+         class="block w-full min-h-11 rounded-lg bg-surface-2 hover:bg-surface-3 focus-visible:ring-1 focus-visible:ring-accent text-sm text-fg-2 transition-colors">${escapeHtml(t("livetv.epgLoadEarlier"))}</button>`
     : ""
 
   let previousDayKey = epgDayKey(now)
@@ -4636,7 +4636,7 @@ function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, i
         <button type="button" data-epg-idx="${idx}"${isPlaying ? ' data-now-playing="true" aria-current="true"' : ""}
           class="epg-entry block w-full min-h-11 text-left rounded-lg px-3 py-2 outline-none transition-colors
                  ${rowClass}
-                 focus-visible:ring-2 focus-visible:ring-accent">
+                 focus-visible:ring-1 focus-visible:ring-accent">
           <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0">
               ${dot}

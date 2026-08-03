@@ -151,7 +151,7 @@
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150
                    hover:ring-[3px] hover:ring-accent
-                   focus-visible:ring-[3px] focus-visible:ring-accent
+                   focus-visible:ring-1 focus-visible:ring-accent
                    hover:transform-[translateY(-2px)]
                    focus-visible:transform-[translateY(-2px)]">
             <div class="ra-poster aspect-2/3 w-full overflow-hidden bg-surface-2 relative">

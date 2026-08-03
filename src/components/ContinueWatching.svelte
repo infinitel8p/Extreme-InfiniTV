@@ -186,7 +186,7 @@
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150
                    hover:ring-[3px] hover:ring-accent
-                   focus-visible:ring-[3px] focus-visible:ring-accent
+                   outline-none focus-visible:ring-1 focus-visible:ring-accent
                    hover:transform-[translateY(-2px)]
                    focus-visible:transform-[translateY(-2px)]">
             <div class="cw-poster aspect-2/3 w-full overflow-hidden bg-surface-2 relative">
@@ -264,7 +264,7 @@
                        opacity-0 group-hover:opacity-100 group-focus-within:opacity-100
                        focus-visible:opacity-100
                        hover:text-white hover:bg-black/75
-                       focus-visible:ring-2 focus-visible:ring-accent
+                       outline-none focus-visible:ring-1 focus-visible:ring-accent
                        transition-opacity flex items-center justify-center">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="size-3.5">
                   <path d="M18 6 6 18" />

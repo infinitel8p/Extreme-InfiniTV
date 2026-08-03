@@ -453,7 +453,7 @@ function renderChannelRow(channel, programmesForRow) {
         : isPast
         ? "epg-cell-past border-line bg-surface text-fg-3 hover:bg-surface-2 hover:text-fg-2 focus-visible:bg-surface-2 focus-visible:text-fg-2"
         : "border-line bg-surface text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg") +
-      " focus-visible:ring-2 focus-visible:ring-accent"
+      " focus-visible:ring-1 focus-visible:ring-accent"
     cell.style.left = `${left}px`
     cell.style.width = `${width}px`
     cell.title = `${fmtTime(p.start)}–${fmtTime(p.stop)} · ${p.title}${p.desc ? "\n\n" + p.desc : ""}`

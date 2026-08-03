@@ -224,7 +224,7 @@ function makeSeriesProgressBadge(series) {
     "series-progress-badge absolute bottom-1.5 right-1.5 inline-flex items-center gap-1 " +
     "rounded-md px-1.5 py-0.5 bg-accent text-bg text-2xs font-semibold tabular-nums " +
     "ring-1 ring-black/10 hover:brightness-110 focus-visible:brightness-110 " +
-    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent " +
+    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent " +
     "transition-[filter,transform] duration-150 active:scale-[0.97]"
   if (epId) {
     badge.href = `/series/detail?id=${encodeURIComponent(series.id)}&autoplay=1&episode=${encodeURIComponent(epId)}`

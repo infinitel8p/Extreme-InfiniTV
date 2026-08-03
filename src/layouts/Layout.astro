@@ -381,9 +381,10 @@ const documentTitle = pageTitle
     }
   }
 
-  :is(a, button, input, summary, [tabindex]):focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 0;
+  /* Inset so scroll containers can't clip it; html.xt-glide-tracking suppresses it. */
+  :is(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: -1px;
   }
 
   #xt-app-splash {

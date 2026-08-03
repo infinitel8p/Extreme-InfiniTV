@@ -311,7 +311,7 @@ function renderEpisodes() {
     playBtn.type = "button"
     playBtn.className =
       "flex flex-1 min-w-0 items-center gap-3 text-left outline-none rounded-lg " +
-      "focus-visible:ring-2 focus-visible:ring-accent"
+      "focus-visible:ring-1 focus-visible:ring-accent"
     playBtn.addEventListener("click", () => playEpisode(ep))
 
     const num = document.createElement("div")

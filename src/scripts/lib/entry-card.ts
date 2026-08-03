@@ -120,8 +120,8 @@ export function buildEntryCard<T extends EntryLike>(
     "movie-card group relative rounded-xl overflow-hidden bg-surface-2 " +
     "ring-1 ring-line " +
     "transition-[transform,box-shadow] duration-150 " +
-    "hover:ring-2 hover:ring-accent hover:[transform:translateY(-2px)] " +
-    "focus-within:ring-2 focus-within:ring-accent focus-within:[transform:translateY(-2px)]" +
+    "hover:ring-1 hover:ring-accent hover:[transform:translateY(-2px)] " +
+    "focus-within:ring-1 focus-within:ring-accent focus-within:[transform:translateY(-2px)]" +
     (stagger ? " grid-card-enter" : "")
   if (stagger) card.style.animationDelay = `${idx * 28}ms`
   card.style.contentVisibility = "auto"
@@ -233,7 +233,7 @@ export function buildEntryCard<T extends EntryLike>(
     "flex items-center justify-center text-base " +
     "bg-black/45 backdrop-blur-sm ring-1 ring-white/10 " +
     "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 " +
-    "focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent " +
+    "focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-accent " +
     "transition-opacity " +
     (fav ? "text-accent" : "text-white/85")
   if (fav) starBtn.classList.add("!opacity-100")

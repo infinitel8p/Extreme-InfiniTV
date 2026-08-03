@@ -170,8 +170,8 @@
         class="ra-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line
                transition-[transform,box-shadow] duration-150
-               hover:ring-2 hover:ring-accent hover:[transform:translateY(-2px)]
-               focus-visible:ring-2 focus-visible:ring-accent focus-visible:[transform:translateY(-2px)]">
+               hover:ring-1 hover:ring-accent hover:[transform:translateY(-2px)]
+               focus-visible:ring-1 focus-visible:ring-accent focus-visible:[transform:translateY(-2px)]">
         <div class="aspect-2/3 w-full bg-surface-2 overflow-hidden relative">
           {#if row.item.logo}
             <img

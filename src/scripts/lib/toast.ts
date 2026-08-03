@@ -151,7 +151,7 @@ function injectStyles() {
       border-color: var(--color-accent);
     }
     .xt-toast__action:focus-visible {
-      outline: 2px solid var(--color-accent);
+      outline: 1px solid var(--color-accent);
       outline-offset: -1px;
     }
     @media (pointer: coarse) {
@@ -185,7 +185,7 @@ function injectStyles() {
       color: var(--color-fg);
     }
     .xt-toast__close:focus-visible {
-      outline: 2px solid var(--color-accent);
+      outline: 1px solid var(--color-accent);
       outline-offset: -1px;
     }
     @media (pointer: coarse) {

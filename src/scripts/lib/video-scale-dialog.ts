@@ -95,7 +95,7 @@ function ensureDialog(): HTMLDialogElement {
       <label class="flex items-center gap-2.5 min-h-11 text-sm text-fg-2 px-3 py-2 rounded-lg cursor-pointer select-none hover:text-fg focus-within:text-fg">
         <span class="relative inline-flex w-9 h-5 shrink-0">
           <input type="checkbox" data-role="apply-all" class="sr-only peer" />
-          <span class="absolute inset-0 rounded-full border border-line bg-surface-2 transition-colors peer-checked:bg-accent peer-checked:border-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface"></span>
+          <span class="absolute inset-0 rounded-full border border-line bg-surface-2 transition-colors peer-checked:bg-accent peer-checked:border-accent peer-focus-visible:ring-1 peer-focus-visible:ring-accent peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface"></span>
           <span class="absolute top-0.5 left-0.5 rtl:left-auto rtl:right-0.5 size-4 rounded-full bg-fg-2 transition-transform peer-checked:translate-x-4 rtl:peer-checked:-translate-x-4 peer-checked:bg-bg"></span>
         </span>
         <span data-role="apply-all-label"></span>

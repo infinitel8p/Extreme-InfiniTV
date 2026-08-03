@@ -74,7 +74,7 @@ function makeItem(label: string, handler: () => void): HTMLButtonElement {
   btn.setAttribute("role", "menuitem")
   btn.className =
     "w-full text-left px-3 py-2.5 min-h-11 rounded-lg text-sm " +
-    "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent " +
+    "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-1 focus-visible:ring-accent " +
     "outline-none transition-colors"
   btn.textContent = label
   btn.addEventListener("click", () => {

@@ -336,7 +336,7 @@ export function mountCategoryPicker(
         : t("list.showCategoryTitle")
       rightAction.className =
         "category-select-btn shrink-0 size-6 inline-flex items-center justify-center rounded-md " +
-        "border outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent " +
+        "border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent " +
         (checked
           ? "bg-accent border-accent text-bg"
           : "border-line text-fg-3 hover:text-fg hover:border-fg-3 focus-visible:border-fg-3")
@@ -729,7 +729,7 @@ export function mountCategoryPicker(
     )
     checkbox.className =
       "category-select-btn shrink-0 size-6 inline-flex items-center justify-center rounded-md " +
-      "border outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent " +
+      "border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent " +
       (allowed
         ? "bg-accent border-accent text-bg"
         : "border-line text-fg-3 hover:text-fg hover:border-fg-3 focus-visible:border-fg-3")

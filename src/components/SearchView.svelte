@@ -493,7 +493,7 @@
                 <button
                   type="button"
                   onclick={() => selectRecentSearch(recent.text)}
-                  class="recent-search-row flex-1 min-w-0 min-h-11 rounded-lg px-2.5 flex items-center gap-2 text-left text-fg-2 border border-transparent hover:bg-surface-2 focus-visible:border-accent outline-none transition-colors">
+                  class="recent-search-row flex-1 min-w-0 min-h-11 rounded-lg px-2.5 flex items-center gap-2 text-left text-fg-2 hover:bg-surface-2 focus-visible:bg-surface-2 outline-none transition-colors">
                   <svg xmlns="http://www.w3.org/2000/svg" width="1rem" height="1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="shrink-0 text-fg-3">
                     <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>
                   </svg>
@@ -594,7 +594,7 @@
   }
 
   .search-input-wrap:focus-within {
-    box-shadow: 0 0 0 4px var(--color-accent-soft);
+    box-shadow: 0 0 0 2px var(--color-accent-soft);
   }
   /* The wrapper carries the focus ring; Layout's global input outline would draw a second, inner one. */
   .search-input-wrap input:focus-visible {

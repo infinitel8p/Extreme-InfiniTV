@@ -523,8 +523,9 @@ dialog[open] .xt-wn-section {
         @apply border-line-soft;
     }
     .field-input:focus {
+        outline: none;
         border-color: var(--color-accent);
-        box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent) 30%, transparent);
+        box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent) 22%, transparent);
     }
     .field-input:disabled {
         @apply opacity-60 cursor-not-allowed;
@@ -2294,7 +2295,7 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
 }
 .movie-card:focus-within {
     box-shadow:
-        0 0 0 2px var(--color-accent),
+        inset 0 0 0 1px var(--color-accent),
         0 18px 40px -22px color-mix(in oklch, var(--color-accent) 55%, transparent),
         0 8px 24px -18px rgb(0 0 0 / 0.45);
 }
@@ -2585,9 +2586,8 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     pointer-events: none;
     z-index: 60;
     box-shadow:
-        0 0 0 2px var(--color-accent),
-        0 0 0 6px color-mix(in oklch, var(--color-accent) 22%, transparent),
-        0 0 36px -18px color-mix(in oklch, var(--color-accent) 70%, transparent);
+        0 0 0 1px var(--color-accent),
+        0 0 20px -10px color-mix(in oklch, var(--color-accent) 55%, transparent);
     border-radius: 12px;
     opacity: 0;
     transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -2596,9 +2596,9 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
 .xt-focus-glide[data-visible="false"] {
     opacity: 0;
 }
-:is(a, button, input, textarea, select, summary, [tabindex]):focus-visible:has(~ .xt-focus-glide) {
-    /* Native outline stays - just kept here as a marker so future devs see
-       the relationship. */
+/* While glide tracks focus it is the ring; the static outline would double-ring the target. */
+html.xt-glide-tracking :is(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+    outline-color: transparent;
 }
 @media (prefers-reduced-motion: reduce) {
     .xt-focus-glide {

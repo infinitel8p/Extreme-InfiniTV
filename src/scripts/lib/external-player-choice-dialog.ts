@@ -22,13 +22,13 @@ const CHOICE_BUTTON_CLASS =
   "flex w-full items-center gap-3 min-h-14 rounded-xl border border-line bg-surface-2 px-3 " +
   "text-left transition duration-150 active:scale-[0.97] " +
   "hover:border-accent hover:bg-surface-3 " +
-  "focus-visible:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent"
+  "focus-visible:outline-none focus-visible:border-accent focus-visible:ring-1 focus-visible:ring-accent"
 
 // Ghost, so the player rows stay the focal point.
 const CANCEL_BUTTON_CLASS =
   "inline-flex items-center justify-center min-h-11 rounded-xl px-4 text-sm text-fg-2 " +
   "transition duration-150 active:scale-[0.97] hover:bg-surface-2 hover:text-fg " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
 
 function labelForChoice(choice: ExternalPlayerChoice): string {
   return choice === "vlc" ? "VLC" : "MPV"
