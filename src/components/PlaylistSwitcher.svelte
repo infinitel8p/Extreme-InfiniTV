@@ -32,6 +32,7 @@
   let activeTitle = $state(t("playlist.none"))
   let activeBadge = $state("-")
   let hasActive = $state(false)
+  let isEmojiBadge = $state(false)
 
   /** @type {HTMLElement | undefined} */
   let wrapEl
@@ -97,10 +98,13 @@
       activeTitle = t("playlist.none")
       activeBadge = "-"
       hasActive = false
+      isEmojiBadge = false
       return
     }
     activeTitle = active.title
-    activeBadge = active.type === "xtream" ? "XT" : "M3U"
+    const emoji = typeof active.emoji === "string" ? active.emoji.trim() : ""
+    activeBadge = emoji || (active.type === "xtream" ? "XT" : "M3U")
+    isEmojiBadge = !!emoji
     hasActive = true
   }
 
@@ -204,7 +208,10 @@
     <span class="flex items-center gap-2.5 min-w-0">
       <span
         id="ps-badge"
-        class="h-5 inline-flex items-center justify-center rounded-md text-label font-semibold uppercase text-fg-2 shrink-0 px-0 ring-0 rail-expanded:px-1.5 rail-expanded:ring-1 rail-expanded:ring-line">
+        class:text-sm={isEmojiBadge}
+        class:text-label={!isEmojiBadge}
+        class:uppercase={!isEmojiBadge}
+        class="h-5 inline-flex items-center justify-center rounded-md font-semibold text-fg-2 shrink-0 px-0 ring-0 rail-expanded:px-1.5 rail-expanded:ring-1 rail-expanded:ring-line">
         {activeBadge}
       </span>
       <span

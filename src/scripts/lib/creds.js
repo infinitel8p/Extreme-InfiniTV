@@ -29,11 +29,15 @@
 // primary override is set, letting the user verify their additional sources
 // in isolation.
 //
+// Optional on every entry type: `emoji` (free-form, trimmed, capped) and `accent`
+// (must be an ACCENT_PRESETS value, else dropped); both absent when unset.
+//
 // Tauri builds persist via @tauri-apps/plugin-store; web/SSR via localStorage
 // + cookies. Old "xt_host" / "xt_port" / "xt_user" / "xt_pass" keys are
 // auto-migrated into one entry on first read.
 
 import { log } from "@/scripts/lib/log.js"
+import { ACCENT_PRESETS } from "@/scripts/lib/app-settings.js"
 import { Store } from "@tauri-apps/plugin-store"
 
 export const isTauri =
@@ -158,6 +162,18 @@ export const LIVE_CONTAINER_VALUES = ["m3u8", "ts"]
 
 export function sanitizeLiveContainer(value) {
   return value === "ts" ? "ts" : LIVE_CONTAINER_DEFAULT
+}
+
+const EMOJI_MAX_LENGTH = 8 // code units, not glyphs - enough for a ZWJ sequence
+
+/** Trims and caps a user-supplied emoji. Returns "" when there's nothing usable. */
+function sanitizeEmoji(value) {
+  return typeof value === "string" ? value.trim().slice(0, EMOJI_MAX_LENGTH) : ""
+}
+
+/** Returns `value` when it's a known accent preset, else "" (falls back to the global accent). */
+function sanitizeAccentOverride(value) {
+  return typeof value === "string" && ACCENT_PRESETS.includes(value) ? value : ""
 }
 
 function sanitizeMirrors(mirrors) {
@@ -357,6 +373,10 @@ export async function addEntry(partial) {
         .filter(Boolean)
     : []
   entry.disableProviderEpg = !!entry.disableProviderEpg
+  entry.emoji = sanitizeEmoji(entry.emoji)
+  if (!entry.emoji) delete entry.emoji
+  entry.accent = sanitizeAccentOverride(entry.accent)
+  if (!entry.accent) delete entry.accent
   if (!entry.title) {
     entry.title =
       entry.type === "xtream"
@@ -434,6 +454,14 @@ export async function updateEntry(id, patch) {
     }
     if ("disableProviderEpg" in merged) {
       merged.disableProviderEpg = !!merged.disableProviderEpg
+    }
+    if ("emoji" in merged) {
+      merged.emoji = sanitizeEmoji(merged.emoji)
+      if (!merged.emoji) delete merged.emoji
+    }
+    if ("accent" in merged) {
+      merged.accent = sanitizeAccentOverride(merged.accent)
+      if (!merged.accent) delete merged.accent
     }
     if (merged.type === "xtream" || (!patch?.type && e.type === "xtream")) {
       if ("mirrors" in merged) merged.mirrors = sanitizeMirrors(merged.mirrors)

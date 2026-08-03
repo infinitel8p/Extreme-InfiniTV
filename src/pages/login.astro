@@ -101,6 +101,69 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				>
 			</label>
 
+			<!-- Emoji + accent personalization; applied while this playlist is active. -->
+			<div class="grid grid-cols-1 sm:grid-cols-[8rem_1fr] gap-6">
+				<label class="flex flex-col gap-2 min-w-0">
+					<span
+						data-i18n="login.field.emoji"
+						class="text-xs font-semibold tracking-wider uppercase text-fg-3">
+						Emoji
+					</span>
+					<input
+						id="playlistEmoji"
+						type="text"
+						maxlength="8"
+						placeholder="🏠"
+						class="field-input w-16 text-center text-lg"
+					/>
+					<span data-i18n="login.field.emoji.helper" class="text-xs text-fg-3 leading-relaxed">
+						Shown instead of the type badge.
+					</span>
+				</label>
+
+				<div class="flex flex-col gap-2">
+					<span
+						data-i18n="login.field.accent"
+						class="text-xs font-semibold tracking-wider uppercase text-fg-3">
+						Accent color
+					</span>
+					<div
+						id="playlistAccent"
+						class="flex flex-wrap gap-2"
+						role="radiogroup"
+						data-i18n-attr="aria-label:login.field.accent"
+						aria-label="Accent color">
+						<button type="button" role="radio" data-accent-value="" aria-checked="true" data-i18n-attr="title:login.field.accent.default;aria-label:login.field.accent.default" title="App default" aria-label="App default" class="accent-btn btn group size-11 p-0" style="--swatch: var(--color-fg-3)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+						<button type="button" role="radio" data-accent-value="fuchsia" aria-checked="false" data-i18n-attr="title:settings.accent.fuchsia;aria-label:settings.accent.fuchsia" title="Fuchsia" aria-label="Fuchsia" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-fuchsia)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+						<button type="button" role="radio" data-accent-value="rose" aria-checked="false" data-i18n-attr="title:settings.accent.rose;aria-label:settings.accent.rose" title="Rose" aria-label="Rose" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-rose)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+						<button type="button" role="radio" data-accent-value="ember" aria-checked="false" data-i18n-attr="title:settings.accent.ember;aria-label:settings.accent.ember" title="Ember" aria-label="Ember" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-ember)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+						<button type="button" role="radio" data-accent-value="emerald" aria-checked="false" data-i18n-attr="title:settings.accent.emerald;aria-label:settings.accent.emerald" title="Emerald" aria-label="Emerald" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-emerald)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+						<button type="button" role="radio" data-accent-value="cyan" aria-checked="false" data-i18n-attr="title:settings.accent.cyan;aria-label:settings.accent.cyan" title="Cyan" aria-label="Cyan" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-cyan)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+						<button type="button" role="radio" data-accent-value="blue" aria-checked="false" data-i18n-attr="title:settings.accent.blue;aria-label:settings.accent.blue" title="Blue" aria-label="Blue" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-blue)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+						<button type="button" role="radio" data-accent-value="violet" aria-checked="false" data-i18n-attr="title:settings.accent.violet;aria-label:settings.accent.violet" title="Violet" aria-label="Violet" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-violet)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+					</div>
+					<span data-i18n="login.field.accent.helper" class="text-xs text-fg-3 leading-relaxed">
+						Overrides the app's accent color while this playlist is active.
+					</span>
+				</div>
+			</div>
+
 			<!-- Xtream fields -->
 			<div id="xtream-fields" class="flex flex-col gap-6">
 				<label class="flex flex-col gap-2">
@@ -510,6 +573,8 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 	const mFields = $("m3u-fields");
 	const lFields = $("local-fields");
 	const titleEl = $("title");
+	const emojiEl = $("playlistEmoji");
+	const accentGroupEl = $("playlistAccent");
 	const serverEl = $("serverUrl");
 	const userEl = $("username");
 	const passEl = $("password");
@@ -561,6 +626,24 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 
 	/** @type {{ name: string, text: string } | null} */
 	let pickedLocal = null;
+
+	// "" (the "App default" swatch) means no override.
+	function syncPlaylistAccentButtons(value) {
+		for (const btn of accentGroupEl?.querySelectorAll(".accent-btn") || []) {
+			btn.setAttribute("aria-checked", String((btn.dataset.accentValue || "") === (value || "")));
+		}
+	}
+	function selectedPlaylistAccent() {
+		const checked = accentGroupEl?.querySelector('.accent-btn[aria-checked="true"]');
+		return checked?.dataset.accentValue || "";
+	}
+	accentGroupEl?.addEventListener("click", (event) => {
+		const target = /** @type {HTMLElement} */ (event.target);
+		const btn = target.closest(".accent-btn");
+		if (!btn) return;
+		syncPlaylistAccentButtons(btn.dataset.accentValue || "");
+	});
+	syncPlaylistAccentButtons("");
 
 	function readEpgUrlsFromForm() {
 		const primary = (epgPrimaryEl?.value || "").trim();
@@ -1537,6 +1620,8 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				const patch = {
 					type: "xtream",
 					title: titleEl.value.trim() || "",
+					emoji: emojiEl.value.trim(),
+					accent: selectedPlaylistAccent(),
 					serverUrl,
 					username,
 					password,
@@ -1567,6 +1652,8 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				const patch = {
 					type: "m3u",
 					title: titleEl.value.trim() || "",
+					emoji: emojiEl.value.trim(),
+					accent: selectedPlaylistAccent(),
 					url: resolvedM3U.url,
 					epgUrl,
 					additionalEpgUrls,
@@ -1586,6 +1673,8 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				const patch = {
 					type: "local-m3u",
 					title: titleEl.value.trim() || pickedLocal.name.replace(/\.(m3u8?|M3U8?)$/, ""),
+					emoji: emojiEl.value.trim(),
+					accent: selectedPlaylistAccent(),
 					content: pickedLocal.text,
 					sourceName: pickedLocal.name,
 					// Preserve any user-supplied override
@@ -1644,6 +1733,8 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 		tabLocal.disabled = editing.type !== "local-m3u";
 		setMode(editing.type);
 		titleEl.value = editing.title || "";
+		emojiEl.value = editing.emoji || "";
+		syncPlaylistAccentButtons(editing.accent || "");
 		if (epgPrimaryEl) epgPrimaryEl.value = editing.epgUrl || "";
 		const additional = Array.isArray(editing.additionalEpgUrls)
 			? editing.additionalEpgUrls

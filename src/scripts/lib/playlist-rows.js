@@ -147,9 +147,16 @@ export function renderPlaylistRow({
         : "ring-line text-fg-2 bg-surface-2"
     }">${badgeLabel}</span>
     <span class="flex flex-col min-w-0 flex-1 ${isCompact ? "" : "gap-0.5"}">
-      <span class="truncate text-sm ${
-        isActive ? "text-fg font-medium" : "text-fg-2"
-      }">${escapeHtml(entry.title)}</span>
+      <span class="flex items-center gap-1 min-w-0">
+        ${
+          entry.emoji
+            ? `<span class="shrink-0 text-sm leading-none" aria-hidden="true">${escapeHtml(entry.emoji)}</span>`
+            : ""
+        }
+        <span class="truncate text-sm flex-1 min-w-0 ${
+          isActive ? "text-fg font-medium" : "text-fg-2"
+        }">${escapeHtml(entry.title)}</span>
+      </span>
       ${
         subtitle
           ? `<span class="truncate text-2xs text-fg-3 font-mono">${escapeHtml(subtitle)}</span>`

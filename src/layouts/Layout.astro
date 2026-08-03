@@ -203,6 +203,12 @@ const documentTitle = pageTitle
         if (storedAccent && storedAccent !== "fuchsia" && KNOWN_ACCENTS.indexOf(storedAccent) !== -1) {
           document.documentElement.setAttribute("data-accent", storedAccent);
         }
+        // Per-playlist override cache (playlist-accent.ts) wins over xt_accent.
+        var activeAccentOverride = localStorage.getItem("xt_accent_active") || "";
+        if (activeAccentOverride && KNOWN_ACCENTS.indexOf(activeAccentOverride) !== -1) {
+          if (activeAccentOverride === "fuchsia") document.documentElement.removeAttribute("data-accent");
+          else document.documentElement.setAttribute("data-accent", activeAccentOverride);
+        }
 
         function applyAndroidStatusBar(theme) {
           try {
@@ -784,10 +790,12 @@ const documentTitle = pageTitle
   import { mountCompositingTrialPrompt } from "@/scripts/lib/compositing"
   import { initUiSounds } from "@/scripts/lib/ui-sounds"
   import { initHaptics } from "@/scripts/lib/haptics"
+  import { initPlaylistAccent } from "@/scripts/lib/playlist-accent"
   initI18n()
   initConnectivity()
   initUiSounds()
   initHaptics()
+  initPlaylistAccent()
 
   ;(function dismissSplash() {
     // ?splash-hold forces the splash and keeps it up for visual review

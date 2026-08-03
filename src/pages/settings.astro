@@ -311,6 +311,7 @@ const navStructure: NavSection[] = [
                   <span data-i18n="settings.accent.label" class="text-sm font-medium leading-snug">Accent color</span>
                 </div>
                 <div class="settings-row__control">
+                <div class="flex flex-col items-end gap-2">
                   <div
                     id="settings-accent"
                     class="flex flex-wrap justify-end gap-2"
@@ -339,6 +340,10 @@ const navStructure: NavSection[] = [
                       <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
                     </button>
                   </div>
+                  <p id="settings-accent-override-hint" data-i18n="settings.accent.overrideHint" class="hidden text-xs text-fg-3 text-right">
+                    The active playlist overrides this color.
+                  </p>
+                </div>
                 </div>
               </div>
 
@@ -1726,6 +1731,7 @@ const navStructure: NavSection[] = [
       setMonoAudioEnabled,
       getAccent,
       setAccent,
+      ACCENT_PRESETS,
       getProgressRetentionDays,
       setProgressRetentionDays,
       getNetworkTimeoutSeconds,
@@ -2652,6 +2658,19 @@ const navStructure: NavSection[] = [
       syncAccentButtons()
     })
     syncAccentButtons()
+
+    // Hint that the active playlist overrides this, so the picker doesn't look broken.
+    const accentOverrideHint = document.getElementById("settings-accent-override-hint")
+    async function syncAccentOverrideHint() {
+      if (!accentOverrideHint) return
+      const active = await getActiveEntry()
+      const hasOverride =
+        typeof active?.accent === "string" && ACCENT_PRESETS.includes(active.accent)
+      accentOverrideHint.classList.toggle("hidden", !hasOverride)
+    }
+    document.addEventListener("xt:active-changed", syncAccentOverrideHint)
+    document.addEventListener("xt:entries-updated", syncAccentOverrideHint)
+    syncAccentOverrideHint()
 
     // ---------------------------------------------------------------------
     // Performance mode: persisted to xt_perf_mode; the inline script in
