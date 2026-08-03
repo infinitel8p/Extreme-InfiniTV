@@ -4,7 +4,14 @@
   import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
   import { normalize } from "@/scripts/lib/text.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js"
+  import {
+    ensureLoaded as ensurePrefsLoaded,
+    getRecentSearches,
+    pushRecentSearch,
+    removeRecentSearch,
+    clearRecentSearches,
+    EVT_SEARCH_RECENT_CHANGED,
+  } from "@/scripts/lib/preferences.js"
   import { warmupActive } from "@/scripts/lib/catalog.js"
   import {
     loadProgrammes,
@@ -46,10 +53,15 @@
     }, 80)
   }
   let activeIndex = $state(0)
+  /** @type {Array<{text: string, ts: number}>} */
+  let recentSearches = $state([])
+  /** @type {HTMLElement|null} */
+  let recentSectionEl = null
 
   /** @type {Array<{ kind: "live"|"vod"|"series"|"epg", id: string|number, name: string, logo: string|null, subtitle: string, href: string, norm: string }>} */
   let allItems = $state([])
   let isWarming = $state(false)
+  const showRecentSearches = $derived(!isWarming && !query.trim() && recentSearches.length > 0)
   let locale = $state(0)
   let activePlaylistId = $state("")
   let seasonCounts = $state({})
@@ -103,11 +115,13 @@
       allItems = []
       activePlaylistId = ""
       seasonCounts = {}
+      recentSearches = []
       return
     }
     if (active._id !== activePlaylistId) seasonCounts = {}
     activePlaylistId = active._id
     await ensurePrefsLoaded()
+    refreshRecentSearches()
     await Promise.all([
       hydrateCache(active._id, "live"),
       hydrateCache(active._id, "m3u"),
@@ -277,14 +291,51 @@
     if (activeIndex >= results.length) activeIndex = 0
   })
 
+  function refreshRecentSearches() {
+    recentSearches = activePlaylistId ? getRecentSearches(activePlaylistId) : []
+  }
+
+  // Record a committed query (result activated), never a per-keystroke
+  // debounce partial.
+  function commitSearch() {
+    const trimmedQuery = query.trim()
+    if (trimmedQuery) pushRecentSearch(activePlaylistId, trimmedQuery)
+  }
+
+  function selectRecentSearch(text) {
+    if (_queryTimer) {
+      clearTimeout(_queryTimer)
+      _queryTimer = null
+    }
+    query = text
+    queryDebounced = text
+    syncUrl(text)
+    inputEl?.focus()
+  }
+
+  function removeOneRecentSearch(text) {
+    removeRecentSearch(activePlaylistId, text)
+  }
+
+  function clearAllRecentSearches() {
+    clearRecentSearches(activePlaylistId)
+    inputEl?.focus()
+  }
+
   function navigate(item) {
     if (!item) return
+    commitSearch()
     window.location.href = item.href
   }
 
   function onKey(ev) {
     const onInput = document.activeElement === inputEl
-    if (onInput && ev.key === "ArrowDown") {
+    const inRecentSection = !!recentSectionEl?.contains(document.activeElement)
+    if (onInput && ev.key === "ArrowDown" && showRecentSearches) {
+      ev.preventDefault()
+      ev.stopImmediatePropagation()
+      recentSectionEl?.querySelector(".recent-search-row")?.focus()
+    } else if (onInput && ev.key === "ArrowDown") {
       ev.preventDefault()
       ev.stopImmediatePropagation()
       if (results.length) activeIndex = (activeIndex + 1) % results.length
@@ -297,6 +348,9 @@
       ev.preventDefault()
       ev.stopImmediatePropagation()
       navigate(results[activeIndex])
+    } else if (ev.key === "Escape" && inRecentSection) {
+      ev.preventDefault()
+      inputEl?.focus()
     } else if (ev.key === "Escape") {
       if (query) {
         ev.preventDefault()
@@ -316,10 +370,15 @@
       loadIndex({ warm: false, warmEpg: false })
     }
     const onLocale = () => { locale++ }
+    const onActiveChanged = () => loadIndex()
+    const onSearchRecentChanged = (ev) => {
+      if (ev.detail?.playlistId === activePlaylistId) refreshRecentSearches()
+    }
     document.addEventListener("xt:catalog-warmed", onWarmed)
     document.addEventListener(EPG_LOADED_EVENT, onEpgLoaded)
-    document.addEventListener("xt:active-changed", () => loadIndex())
+    document.addEventListener("xt:active-changed", onActiveChanged)
     document.addEventListener(LOCALE_EVENT, onLocale)
+    document.addEventListener(EVT_SEARCH_RECENT_CHANGED, onSearchRecentChanged)
     window.addEventListener("keydown", onKey, true)
     if (focusOnMount) {
       tick().then(() => {
@@ -330,7 +389,9 @@
     return () => {
       document.removeEventListener("xt:catalog-warmed", onWarmed)
       document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
+      document.removeEventListener("xt:active-changed", onActiveChanged)
       document.removeEventListener(LOCALE_EVENT, onLocale)
+      document.removeEventListener(EVT_SEARCH_RECENT_CHANGED, onSearchRecentChanged)
       window.removeEventListener("keydown", onKey, true)
       if (_queryTimer) clearTimeout(_queryTimer)
     }
@@ -339,7 +400,7 @@
 
 <section class="search-view flex flex-col gap-4 flex-1 min-h-0">
   <div class="flex flex-col gap-3 shrink-0">
-    <div class="search-input-wrap flex items-center gap-2 px-3 py-2 rounded-xl border border-line bg-surface focus-within:border-accent transition-[border-color,box-shadow] duration-200 ease-out">
+    <div data-focus-glide="off" class="search-input-wrap flex items-center gap-2 px-3 py-2 rounded-xl border border-line bg-surface focus-within:border-accent transition-[border-color,box-shadow] duration-200 ease-out">
       <svg xmlns="http://www.w3.org/2000/svg" width="1.125rem" height="1.125rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="text-fg-3 shrink-0">
         <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
       </svg>
@@ -415,7 +476,42 @@
 
   <div class="flex-1 min-h-0 overflow-auto custom-scroll">
     {#if !queryDebounced.trim()}
-      <div class="px-4 py-12 text-center text-sm text-fg-3 max-w-md mx-auto">
+      {#if showRecentSearches}
+        <div bind:this={recentSectionEl} class="recent-searches pt-3 pb-2">
+          <div class="flex items-baseline justify-between gap-2 mb-1 px-2.5">
+            <span class="text-eyebrow font-medium uppercase tracking-wide text-fg-3">{tr("search.recentHeading")}</span>
+            <button
+              type="button"
+              onclick={clearAllRecentSearches}
+              class="inline-flex items-center min-h-9 px-2 rounded-lg text-xs text-fg-3 hover:text-fg focus-visible:text-fg underline-offset-2 hover:underline outline-none pointer-coarse:min-h-11">
+              {tr("search.recentClear")}
+            </button>
+          </div>
+          <ul class="flex flex-col gap-1">
+            {#each recentSearches as recent (recent.text)}
+              <li class="flex items-center gap-1">
+                <button
+                  type="button"
+                  onclick={() => selectRecentSearch(recent.text)}
+                  class="recent-search-row flex-1 min-w-0 min-h-11 rounded-lg px-2.5 flex items-center gap-2 text-left text-fg-2 border border-transparent hover:bg-surface-2 focus-visible:border-accent outline-none transition-colors">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="1rem" height="1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="shrink-0 text-fg-3">
+                    <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>
+                  </svg>
+                  <span class="truncate text-sm">{recent.text}</span>
+                </button>
+                <button
+                  type="button"
+                  onclick={() => removeOneRecentSearch(recent.text)}
+                  aria-label={tr("search.recentRemove", { query: recent.text })}
+                  class="size-9 pointer-coarse:size-11 shrink-0 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-2 focus-visible:bg-surface-2 outline-none transition-colors">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="0.875rem" height="0.875rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+      <div class="px-4 text-center text-sm text-fg-3 max-w-md mx-auto" class:py-12={!showRecentSearches} class:py-6={showRecentSearches}>
         {#if isWarming}
           {@render warming(tr("search.warmingHint"))}
         {:else}
@@ -448,6 +544,7 @@
               use:lazySeasons={r}
               onmouseenter={() => (activeIndex = i)}
               onfocus={() => (activeIndex = i)}
+              onclick={commitSearch}
               class="w-full text-left rounded-lg px-2.5 py-2 flex items-center gap-3 outline-none transition-colors focus-visible:bg-surface-2"
               class:bg-surface-2={activeIndex === i}>
               <span class="size-12 shrink-0 rounded-md bg-surface-2 ring-1 ring-line overflow-hidden flex items-center justify-center">
@@ -498,6 +595,10 @@
 
   .search-input-wrap:focus-within {
     box-shadow: 0 0 0 4px var(--color-accent-soft);
+  }
+  /* The wrapper carries the focus ring; Layout's global input outline would draw a second, inner one. */
+  .search-input-wrap input:focus-visible {
+    outline: none;
   }
 
   @media (pointer: coarse) {

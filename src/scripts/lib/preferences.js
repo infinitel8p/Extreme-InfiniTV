@@ -12,6 +12,7 @@ const isTauri =
 const STORAGE_KEY = "xt_prefs"
 const VALID_CATEGORY_SORTS = new Set(["default", "az", "za"])
 const RECENT_CAP = 30
+const SEARCH_RECENT_CAP = 10
 const PROGRESS_CAP = 200
 const DAY_MS = 24 * 60 * 60 * 1000
 const COMPLETED_THRESHOLD = 0.95
@@ -28,6 +29,7 @@ const EVT_VIEW_CHANGED = "xt:view-prefs-changed"
 const EVT_FAV_ORDER_CHANGED = "xt:favorites-order-changed"
 const EVT_WATCHLIST_CHANGED = "xt:watchlist-changed"
 const EVT_CHANNEL_VIDEO_SCALE_CHANGED = "xt:channel-video-scale-changed"
+export const EVT_SEARCH_RECENT_CHANGED = "xt:search-recent-changed"
 
 let storePromise = null
 function getStore() {
@@ -100,8 +102,10 @@ async function writeRaw(data) {
 // ---------------------------------------------------------------------------
 /**
  * @typedef {{ id: number, name: string, logo?: string|null, ts: number }} RecentEntry
+ * @typedef {{ text: string, ts: number }} SearchRecentEntry
  * @typedef {{ favLive: Set<number>, favVod: Set<number>, favSeries: Set<number>,
- *             recLive: RecentEntry[], recVod: RecentEntry[], recSeries: RecentEntry[] }} PlaylistPrefs
+ *             recLive: RecentEntry[], recVod: RecentEntry[], recSeries: RecentEntry[],
+ *             searchRecent: SearchRecentEntry[] }} PlaylistPrefs
  */
 
 /** @type {Map<string, PlaylistPrefs>} */
@@ -119,6 +123,7 @@ function emptyEntry() {
     recLive: [],
     recVod: [],
     recSeries: [],
+    searchRecent: [],
     progVod: Object.create(null),
     progEpisode: Object.create(null),
     hiddenLive: new Set(),
@@ -183,6 +188,12 @@ function hydrate(raw) {
       recVod: Array.isArray(val.recVod) ? val.recVod.slice(0, RECENT_CAP) : [],
       recSeries: Array.isArray(val.recSeries)
         ? val.recSeries.slice(0, RECENT_CAP)
+        : [],
+      searchRecent: Array.isArray(val.searchRecent)
+        ? val.searchRecent
+            .filter((entry) => entry && typeof entry.text === "string")
+            .map((entry) => ({ text: entry.text, ts: Number(entry.ts) || 0 }))
+            .slice(0, SEARCH_RECENT_CAP)
         : [],
       progVod:
         val.progVod && typeof val.progVod === "object"
@@ -295,6 +306,7 @@ function dehydrate() {
       recLive: v.recLive,
       recVod: v.recVod,
       recSeries: v.recSeries,
+      searchRecent: v.searchRecent,
       progVod: v.progVod,
       progEpisode: v.progEpisode,
       hiddenLive: [...v.hiddenLive],
@@ -626,6 +638,71 @@ export function clearRecent(playlistId, kind, id) {
 export function clearForPlaylist(playlistId) {
   if (!playlistId) return
   if (cache.delete(playlistId)) scheduleSave()
+}
+
+// ---------------------------------------------------------------------------
+// Recent searches - committed queries only (never per-keystroke partials).
+// ---------------------------------------------------------------------------
+
+/**
+ * Sync read of recent searches. Most-recent first.
+ * @param {string} playlistId
+ * @returns {SearchRecentEntry[]}
+ */
+export function getRecentSearches(playlistId) {
+  const e = cache.get(playlistId)
+  return e ? e.searchRecent : []
+}
+
+/**
+ * Record a committed search query. Ignores empty/short text and
+ * case-insensitively dedupes against an existing entry (moved to the top
+ * with a fresh timestamp rather than duplicated).
+ * @param {string} playlistId @param {string} text
+ */
+export function pushRecentSearch(playlistId, text) {
+  const trimmedText = (text || "").trim()
+  if (!playlistId || trimmedText.length < 2) return
+  const e = getOrCreate(playlistId)
+  const list = e.searchRecent
+  const lowerText = trimmedText.toLowerCase()
+  const existingIdx = list.findIndex(
+    (entry) => entry.text.toLowerCase() === lowerText
+  )
+  if (existingIdx !== -1) list.splice(existingIdx, 1)
+  list.unshift({ text: trimmedText, ts: Date.now() })
+  if (list.length > SEARCH_RECENT_CAP) list.length = SEARCH_RECENT_CAP
+  scheduleSave()
+  dispatch(EVT_SEARCH_RECENT_CHANGED, { playlistId })
+}
+
+/**
+ * Remove one entry from the recent-searches list (case-insensitive match).
+ * No-op if there's nothing to remove.
+ * @param {string} playlistId @param {string} text
+ */
+export function removeRecentSearch(playlistId, text) {
+  if (!playlistId) return
+  const e = cache.get(playlistId)
+  if (!e) return
+  const lowerText = (text || "").trim().toLowerCase()
+  const idx = e.searchRecent.findIndex(
+    (entry) => entry.text.toLowerCase() === lowerText
+  )
+  if (idx === -1) return
+  e.searchRecent.splice(idx, 1)
+  scheduleSave()
+  dispatch(EVT_SEARCH_RECENT_CHANGED, { playlistId })
+}
+
+/** Drop every recent search for a playlist. No-op if already empty. */
+export function clearRecentSearches(playlistId) {
+  if (!playlistId) return
+  const e = cache.get(playlistId)
+  if (!e || !e.searchRecent.length) return
+  e.searchRecent = []
+  scheduleSave()
+  dispatch(EVT_SEARCH_RECENT_CHANGED, { playlistId })
 }
 
 // ---------------------------------------------------------------------------
