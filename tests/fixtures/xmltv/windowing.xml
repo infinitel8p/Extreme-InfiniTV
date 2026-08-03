@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tv>
+  <channel id="win-one">
+    <display-name>Window One</display-name>
+  </channel>
+
+  <!-- Kept: stop lands exactly on the past-window boundary. -->
+  <programme start="20260108110000 +0000" stop="20260108120000 +0000" channel="win-one">
+    <title>Edge Of Past Window Kept</title>
+    <desc>Ends right at the edge of the seven-day past window.</desc>
+  </programme>
+
+  <!-- Dropped: stop is one minute short of the past-window boundary. -->
+  <programme start="20260108100000 +0000" stop="20260108115900 +0000" channel="win-one">
+    <title>Outside Past Window Dropped</title>
+    <desc>Ends just before the seven-day past window opens.</desc>
+  </programme>
+
+  <!-- Kept: start lands exactly on the future-window boundary. -->
+  <programme start="20260117000000 +0000" stop="20260117010000 +0000" channel="win-one">
+    <title>Edge Of Future Window Kept</title>
+    <desc>Starts right at the edge of the thirty-six-hour future window.</desc>
+  </programme>
+
+  <!-- Dropped: start is one minute past the future-window boundary. -->
+  <programme start="20260117000100 +0000" stop="20260117010100 +0000" channel="win-one">
+    <title>Outside Future Window Dropped</title>
+    <desc>Starts just after the thirty-six-hour future window closes.</desc>
+  </programme>
+
+  <!-- Dropped: zero-duration (stop equals start). -->
+  <programme start="20260115100000 +0000" stop="20260115100000 +0000" channel="win-one">
+    <title>Invalid Zero Duration</title>
+    <desc>Rejected regardless of window because stop does not exceed start.</desc>
+  </programme>
+
+  <!-- Dropped: unparseable start timestamp. -->
+  <programme start="notadate" stop="20260115110000 +0000" channel="win-one">
+    <title>Malformed Date Rejected</title>
+    <desc>Rejected because the start timestamp cannot be parsed.</desc>
+  </programme>
+
+  <!-- Kept, on a channel with no matching <channel> declaration. -->
+  <programme start="20260115090000 +0000" stop="20260115100000 +0000" channel="ghost-channel">
+    <title>Programme On Undeclared Channel</title>
+    <desc>The channel attribute references an id with no channel element.</desc>
+  </programme>
+</tv>

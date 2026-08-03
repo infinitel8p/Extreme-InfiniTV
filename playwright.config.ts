@@ -1,8 +1,8 @@
-// Visual-regression suite. Serves the production build (`pnpm build` first) via `astro preview`.
+// Serves the production build via `astro preview`. Visual regression (`tests/visual`) and
+// functional e2e (`tests/e2e`) share this config; each project pins its own `testDir`.
 import { defineConfig, devices } from "@playwright/test"
 
 export default defineConfig({
-  testDir: "tests/visual",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0,
@@ -20,6 +20,7 @@ export default defineConfig({
   projects: [
     {
       name: "desktop",
+      testDir: "tests/visual",
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1300, height: 850 },
@@ -27,12 +28,21 @@ export default defineConfig({
     },
     {
       name: "phone",
+      testDir: "tests/visual",
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 412, height: 915 },
         deviceScaleFactor: 1,
         isMobile: true,
         hasTouch: true,
+      },
+    },
+    {
+      name: "e2e",
+      testDir: "tests/e2e",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1300, height: 850 },
       },
     },
   ],

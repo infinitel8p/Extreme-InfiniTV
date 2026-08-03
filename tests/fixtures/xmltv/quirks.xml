@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE tv>
+<tv>
+
+  <channel id="quirk-one">
+    <display-name>Quirk &amp; Play Caf&#233; &#x1F3AC;</display-name>
+    <display-name>Ignored Second Name</display-name>
+    <icon src='https://example.com/logos/quirkone.png'/>
+  </channel>
+
+  <!-- decoy: <channel id="fake"><display-name>Nope</display-name></channel> must not be scanned -->
+
+  <programme stop='20260115130000 +0000' start="20260115120000 +0000" channel='quirk-one' catchup-id="cu&amp;99">
+    <title><![CDATA[<b>Bold</b> Show]]></title>
+    <desc><![CDATA[Line with & <tag> inside]]></desc>
+  </programme>
+
+  <programme start="20260115130000 +0000" stop="20260115140000 +0000" channel="quirk-one"/>
+
+  <!-- decoy: <title>Decoy Comment Title</title> must not be scanned -->
+  <programme start="20260115140000 +0000" stop="20260115150000 +0000" channel="quirk-one">
+    <title/>
+    <title>Real but Ignored</title>
+    <desc>
+      Padded whitespace desc
+    </desc>
+  </programme>
+
+</tv>
