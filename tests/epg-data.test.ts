@@ -15,6 +15,8 @@ import {
   parseXmlTv,
   inferTimezoneOffsetMin,
   resolveAutoOffsetMin,
+  shiftChannelProgrammes,
+  getNowNextForChannel,
 } from "../src/scripts/lib/epg-data.js"
 import { parseXmlTv as parseXmlTvWorker } from "../src/scripts/lib/epg-worker.ts"
 
@@ -155,6 +157,59 @@ describe("buildEpgUrlsFromEntry: M3U playlist", () => {
     )
     expect(sources).toHaveLength(1)
     expect(sources[0].source).toBe("additional")
+  })
+
+  it("splits a comma-joined header value: first is primary, the rest are additional m3u-header sources", () => {
+    const sources = buildEpgUrlsFromEntry(
+      {},
+      m3uCreds,
+      "https://a.example/1.xml,https://b.example/2.xml,https://c.example/3.xml"
+    )
+    expect(sources).toEqual([
+      { url: "https://a.example/1.xml", source: "m3u-header", kind: "primary" },
+      { url: "https://b.example/2.xml", source: "m3u-header", kind: "additional" },
+      { url: "https://c.example/3.xml", source: "m3u-header", kind: "additional" },
+    ])
+  })
+
+  it("trims whitespace and dedupes a comma-joined header value", () => {
+    const sources = buildEpgUrlsFromEntry(
+      {},
+      m3uCreds,
+      " https://a.example/1.xml , https://a.example/1.xml,https://b.example/2.xml "
+    )
+    expect(sources.map((source) => source.url)).toEqual([
+      "https://a.example/1.xml",
+      "https://b.example/2.xml",
+    ])
+  })
+
+  it("dedupes a header URL that also appears in additionalEpgUrls", () => {
+    const sources = buildEpgUrlsFromEntry(
+      { additionalEpgUrls: ["https://a.example/1.xml", "https://c.example/3.xml"] },
+      m3uCreds,
+      "https://a.example/1.xml,https://b.example/2.xml"
+    )
+    expect(sources.map((source) => source.url)).toEqual([
+      "https://a.example/1.xml",
+      "https://b.example/2.xml",
+      "https://c.example/3.xml",
+    ])
+    expect(sources.map((source) => source.kind)).toEqual([
+      "primary",
+      "additional",
+      "additional",
+    ])
+  })
+
+  it("user override still beats a multi-url header entirely", () => {
+    const sources = buildEpgUrlsFromEntry(
+      { epgUrl: "https://manual.example/g.xml" },
+      m3uCreds,
+      "https://a.example/1.xml,https://b.example/2.xml"
+    )
+    expect(sources).toHaveLength(1)
+    expect(sources[0].source).toBe("override")
   })
 })
 
@@ -852,5 +907,97 @@ describe("resolveAutoOffsetMin: mixed-source timezone gate", () => {
   it("infers normally when no loaded source has explicit timezones", () => {
     const programmes = new Map([["ch0", [programmeLiveAtOffset(90)]]])
     expect(resolveAutoOffsetMin(false, programmes)).toBe(90)
+  })
+})
+
+describe("shiftChannelProgrammes: tvg-shift guide-display offset", () => {
+  const programmes = [
+    { start: 1000, stop: 2000, title: "A", desc: "" },
+    { start: 2000, stop: 3000, title: "B", desc: "" },
+  ]
+
+  it("returns the same reference when the shift is absent", () => {
+    expect(shiftChannelProgrammes(programmes, null)).toBe(programmes)
+    expect(shiftChannelProgrammes(programmes, undefined)).toBe(programmes)
+  })
+
+  it("returns the same reference when the shift is zero", () => {
+    expect(shiftChannelProgrammes(programmes, 0)).toBe(programmes)
+  })
+
+  it("returns the same reference when the shift is non-finite", () => {
+    expect(shiftChannelProgrammes(programmes, NaN)).toBe(programmes)
+  })
+
+  it("shifts start/stop by whole hours without mutating the input", () => {
+    const shifted = shiftChannelProgrammes(programmes, 1)
+    expect(shifted).not.toBe(programmes)
+    expect(shifted[0].start).toBe(1000 + 3600_000)
+    expect(shifted[0].stop).toBe(2000 + 3600_000)
+    expect(programmes[0].start).toBe(1000)
+    expect(programmes[0].stop).toBe(2000)
+  })
+
+  it("shifts by negative and fractional hours", () => {
+    const shifted = shiftChannelProgrammes(programmes, -2.5)
+    const shiftMs = -2.5 * 3600_000
+    expect(shifted[0].start).toBe(1000 + shiftMs)
+    expect(shifted[0].stop).toBe(2000 + shiftMs)
+  })
+
+  it("stashes rawStart/rawStop with the original unshifted times", () => {
+    const shifted = shiftChannelProgrammes(programmes, 1)
+    expect(shifted[0].rawStart).toBe(1000)
+    expect(shifted[0].rawStop).toBe(2000)
+    expect(shifted[1].rawStart).toBe(2000)
+    expect(shifted[1].rawStop).toBe(3000)
+  })
+
+  it("preserves the other programme fields", () => {
+    const shifted = shiftChannelProgrammes(programmes, 1)
+    expect(shifted[0].title).toBe("A")
+    expect(shifted[1].title).toBe("B")
+  })
+
+  it("tolerates an empty or missing programmes array", () => {
+    expect(shiftChannelProgrammes([], 1)).toEqual([])
+    expect(shiftChannelProgrammes(null as never, 1)).toEqual([])
+    expect(shiftChannelProgrammes(undefined as never, 1)).toEqual([])
+  })
+})
+
+describe("getNowNextForChannel: resolves tvg-id and applies tvg-shift", () => {
+  it("returns null/null when the channel has no resolvable tvg-id", () => {
+    const programmes = new Map([["bbc1.uk", [{ start: 0, stop: 10, title: "A", desc: "" }]]])
+    const result = getNowNextForChannel(programmes, { id: 1 }, "playlist-1")
+    expect(result).toEqual({ current: null, next: null })
+  })
+
+  it("finds current/next via the channel's raw tvg-id when no shift is set", () => {
+    const now = Date.now()
+    const programmes = new Map([
+      [
+        "bbc1.uk",
+        [
+          { start: now - 1000, stop: now + 1000, title: "Now", desc: "" },
+          { start: now + 1000, stop: now + 2000, title: "Next", desc: "" },
+        ],
+      ],
+    ])
+    const channel = { id: 1, tvgId: "bbc1.uk", tvgShift: null }
+    const result = getNowNextForChannel(programmes, channel, "playlist-1", now)
+    expect(result.current?.title).toBe("Now")
+    expect(result.next?.title).toBe("Next")
+  })
+
+  it("applies the channel's tvg-shift before computing current/next", () => {
+    const now = Date.now()
+    // Without the +1h shift this programme would be "in the future"; with it, it's live now.
+    const programmes = new Map([
+      ["bbc1.uk", [{ start: now + 3600_000 - 500, stop: now + 3600_000 + 500, title: "Shifted Live", desc: "" }]],
+    ])
+    const channel = { id: 1, tvgId: "bbc1.uk", tvgShift: -1 }
+    const result = getNowNextForChannel(programmes, channel, "playlist-1", now)
+    expect(result.current?.title).toBe("Shifted Live")
   })
 })

@@ -16,6 +16,7 @@ const minimalEntry: M3UEntry = {
   url: "http://example.com/min.m3u8",
   logo: null,
   category: null,
+  categories: [],
   tvgId: null,
   tvgName: null,
   chno: null,
@@ -23,6 +24,7 @@ const minimalEntry: M3UEntry = {
   catchupDays: null,
   catchupSource: null,
   catchupCorrection: null,
+  tvgShift: null,
   userAgent: null,
   referer: null,
   tvgType: null,
@@ -37,6 +39,7 @@ const fullEntry: M3UEntry = {
   url: "http://example.com/full.m3u8",
   logo: "https://example.com/logo.png",
   category: "News",
+  categories: ["News"],
   tvgId: "full.id",
   tvgName: "Full Name",
   chno: 7,
@@ -44,6 +47,7 @@ const fullEntry: M3UEntry = {
   catchupDays: 5,
   catchupSource: "?utc={utc}&lutc={lutc}",
   catchupCorrection: -1.5,
+  tvgShift: 1.5,
   userAgent: "VLC/3.0.18 LibVLC/3.0.18",
   referer: "https://ref.example.com/",
   tvgType: "tv",
@@ -58,7 +62,7 @@ describe("serializeM3U: field emission", () => {
     const result = serializeM3U([fullEntry])
     expect(result).toBe(
       "#EXTM3U\n" +
-        '#EXTINF:-1 tvg-id="full.id" tvg-name="Full Name" tvg-logo="https://example.com/logo.png" tvg-chno="7" group-title="News" catchup="append" catchup-days="5" catchup-source="?utc={utc}&lutc={lutc}" catchup-correction="-1.5" tvg-type="tv",Full Entry\n' +
+        '#EXTINF:-1 tvg-id="full.id" tvg-name="Full Name" tvg-logo="https://example.com/logo.png" tvg-chno="7" group-title="News" catchup="append" catchup-days="5" catchup-source="?utc={utc}&lutc={lutc}" catchup-correction="-1.5" tvg-shift="1.5" tvg-type="tv",Full Entry\n' +
         "#EXTVLCOPT:http-user-agent=VLC/3.0.18 LibVLC/3.0.18\n" +
         "#EXTVLCOPT:http-referrer=https://ref.example.com/\n" +
         "#KODIPROP:inputstream.adaptive.manifest_type=mpd\n" +
@@ -66,6 +70,12 @@ describe("serializeM3U: field emission", () => {
         "#KODIPROP:inputstream.adaptive.license_key=0958b9c657622c465a6205eb2252b8ed:2d2fd7b1661b1e28de38268872b48480\n" +
         "http://example.com/full.m3u8\n",
     )
+  })
+
+  it("joins a multi-group categories array with semicolons instead of the single category", () => {
+    const entry: M3UEntry = { ...minimalEntry, category: "News", categories: ["News", "Sports"] }
+    const result = serializeM3U([entry])
+    expect(result).toContain('group-title="News;Sports"')
   })
 })
 
@@ -152,9 +162,10 @@ describe("serializeM3U: header options", () => {
       catchupDays: 7,
       catchupSource: "/timeshift",
       catchupCorrection: 1.5,
+      tvgShift: 2,
     })
     expect(result).toBe(
-      '#EXTM3U x-tvg-url="https://example.com/epg.xml.gz" catchup="append" catchup-days="7" catchup-source="/timeshift" catchup-correction="1.5"\n',
+      '#EXTM3U x-tvg-url="https://example.com/epg.xml.gz" catchup="append" catchup-days="7" catchup-source="/timeshift" catchup-correction="1.5" tvg-shift="2"\n',
     )
   })
 
@@ -169,6 +180,7 @@ describe("serializeM3U: header options", () => {
       catchupDays: null,
       catchupSource: null,
       catchupCorrection: null,
+      tvgShift: null,
     })
     expect(result).toBe("#EXTM3U\n")
   })
@@ -181,6 +193,7 @@ describe("serializeM3U: round-trip through parseM3U", () => {
       url: "http://example.com/live/u/p/1.m3u8",
       logo: "https://example.com/bbc1.png",
       category: "UK News",
+      categories: ["UK News"],
       tvgId: "bbcone.uk",
       tvgName: "BBC One",
       chno: 1,
@@ -188,6 +201,7 @@ describe("serializeM3U: round-trip through parseM3U", () => {
       catchupDays: 7,
       catchupSource: "?utc={utc}&lutc={lutc}",
       catchupCorrection: -2.5,
+      tvgShift: 2,
       userAgent: "VLC/3.0.18 LibVLC/3.0.18",
       referer: "https://picky.example.com/",
       tvgType: "tv",
@@ -201,6 +215,7 @@ describe("serializeM3U: round-trip through parseM3U", () => {
       url: "https://example.com/myTV/genyg5?token=abc",
       logo: null,
       category: "DASH",
+      categories: ["DASH"],
       tvgId: "jade",
       tvgName: null,
       chno: null,
@@ -208,6 +223,7 @@ describe("serializeM3U: round-trip through parseM3U", () => {
       catchupDays: null,
       catchupSource: null,
       catchupCorrection: null,
+      tvgShift: -1.5,
       userAgent: null,
       referer: null,
       tvgType: null,
@@ -221,6 +237,7 @@ describe("serializeM3U: round-trip through parseM3U", () => {
       url: "http://example.com/rb.m3u8",
       logo: "https://example.com/rb.png",
       category: "Radio",
+      categories: ["Radio"],
       tvgId: "rb",
       tvgName: null,
       chno: null,
@@ -228,6 +245,7 @@ describe("serializeM3U: round-trip through parseM3U", () => {
       catchupDays: 3,
       catchupSource: null,
       catchupCorrection: null,
+      tvgShift: null,
       userAgent: null,
       referer: null,
       tvgType: "radio",
@@ -265,6 +283,34 @@ describe("serializeM3U: fixture round-trip", () => {
       expect(secondPass.entries).toEqual(firstPass.entries)
     })
   }
+})
+
+describe("serializeM3U: multi-group and tvg-shift round-trip", () => {
+  it("round-trips a multi-group categories array through parseM3U", () => {
+    const entry: M3UEntry = { ...minimalEntry, category: "News", categories: ["News", "Sports"] }
+    const reparsed = parseM3U(serializeM3U([entry]))
+    expect(reparsed.entries[0].categories).toEqual(["News", "Sports"])
+    expect(reparsed.entries[0].category).toBe("News")
+  })
+
+  it("round-trips a single group unchanged", () => {
+    const entry: M3UEntry = { ...minimalEntry, category: "News", categories: ["News"] }
+    const reparsed = parseM3U(serializeM3U([entry]))
+    expect(reparsed.entries[0].categories).toEqual(["News"])
+    expect(reparsed.entries[0].category).toBe("News")
+  })
+
+  it("round-trips a fractional negative tvg-shift", () => {
+    const entry: M3UEntry = { ...minimalEntry, tvgShift: -2.5 }
+    const reparsed = parseM3U(serializeM3U([entry]))
+    expect(reparsed.entries[0].tvgShift).toBe(-2.5)
+  })
+
+  it("round-trips a header-level tvg-shift default", () => {
+    const serialized = serializeM3U([minimalEntry], { tvgShift: 1 })
+    const reparsed = parseM3U(serialized)
+    expect(reparsed.entries[0].tvgShift).toBe(1)
+  })
 })
 
 describe("serializeM3U: embedded commas round-trip", () => {

@@ -90,7 +90,7 @@ vi.mock("@/scripts/lib/account-info.js", () => ({ ensureUserInfo: async () => nu
 vi.mock("@/scripts/lib/app-settings.js", () => ({ getUserAgent: () => "UA", getNetworkTimeoutSeconds: () => 15 }))
 vi.mock("@/scripts/lib/provider-fetch.js", () => ({ DEFAULT_BROWSER_UA: "Mozilla/5.0" }))
 vi.mock("@/scripts/lib/url-auth.ts", () => ({ splitUrlAuth: (url: string) => ({ url, authorization: null }) }))
-vi.mock("@/scripts/lib/m3u-parser.ts", () => ({ parseM3U: () => ({ epgUrl: null, entries: [] }) }))
+vi.mock("@/scripts/lib/m3u-parser.ts", () => ({ parseM3U: () => ({ epgUrl: null, epgUrls: [], entries: [] }) }))
 vi.mock("@/scripts/lib/log.js", () => ({
   log: { log: () => {}, warn: () => {}, error: () => {}, info: () => {} },
 }))

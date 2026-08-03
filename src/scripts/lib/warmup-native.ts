@@ -323,9 +323,10 @@ async function ingestKind(
     if (!playlistFile) return []
     const text = await readStaged(playlistFile.step)
     try {
-      const { epgUrl } = parseM3U(text)
-      if (epgUrl && typeof localStorage !== "undefined") {
-        localStorage.setItem(`xt_m3u_epg:${context.pid}`, epgUrl)
+      // Raw comma-joined list, matching the format catalog.js writes to the same key.
+      const { epgUrls } = parseM3U(text)
+      if (epgUrls.length && typeof localStorage !== "undefined") {
+        localStorage.setItem(`xt_m3u_epg:${context.pid}`, epgUrls.join(","))
       }
     } catch {}
     const rows = m3uToChannelList(

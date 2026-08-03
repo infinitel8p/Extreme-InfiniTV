@@ -45,6 +45,8 @@ export type PickerKind = "live" | "vod" | "series" | "epg"
 
 export interface CategoryPickerItem {
   category?: string | null
+  /** Every group this item belongs to (semicolon-split `group-title`). Falls back to `category` when absent. */
+  categories?: string[] | null
 }
 
 export interface CategoryPickerOptions {
@@ -186,8 +188,15 @@ export function mountCategoryPicker(
   const computeCategoryCounts = (items: CategoryPickerItem[]): Map<string, number> => {
     const counts = new Map<string, number>()
     for (const item of items) {
-      const key = ((item.category || "") + "").trim() || t("list.uncategorized")
-      counts.set(key, (counts.get(key) || 0) + 1)
+      const groups =
+        Array.isArray(item.categories) && item.categories.length
+          ? item.categories
+          : [((item.category || "") + "").trim()]
+      // An item present in several groups counts toward every one of them.
+      for (const group of groups) {
+        const key = group.trim() || t("list.uncategorized")
+        counts.set(key, (counts.get(key) || 0) + 1)
+      }
     }
     return counts
   }

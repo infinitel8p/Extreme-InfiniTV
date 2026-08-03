@@ -299,6 +299,8 @@ export interface ResolvedCustomChannel {
   id: number
   name: string
   category: string
+  // Always single-element: custom channels have exactly one group, unlike M3U/Xtream's multi-group shape.
+  categories: string[]
   logo: string | null
   tvgId: string | undefined
   chno: number | undefined
@@ -349,6 +351,7 @@ function unresolvedChannel(channel: CustomChannel, fallbackName: string): Resolv
     id: channel.id,
     name,
     category: channel.group,
+    categories: [channel.group],
     logo: channel.overrides?.logo ?? null,
     tvgId: channel.overrides?.tvgId ?? undefined,
     chno: channel.overrides?.chno ?? undefined,
@@ -378,6 +381,7 @@ function resolveXtreamSource(
     id: channel.id,
     name,
     category: channel.group,
+    categories: [channel.group],
     logo: channel.overrides.logo ?? sourceChannel.logo ?? null,
     tvgId: channel.overrides.tvgId ?? sourceChannel.tvgId,
     chno: channel.overrides.chno ?? sourceChannel.chno,
@@ -420,6 +424,7 @@ function resolveM3USource(
     id: channel.id,
     name,
     category: channel.group,
+    categories: [channel.group],
     logo: channel.overrides.logo ?? sourceChannel.logo ?? null,
     tvgId: channel.overrides.tvgId ?? sourceChannel.tvgId,
     chno: channel.overrides.chno ?? sourceChannel.chno,
@@ -441,6 +446,7 @@ function resolveDirectSource(channel: CustomChannel, source: CustomSourceDirect)
     id: channel.id,
     name,
     category: channel.group,
+    categories: [channel.group],
     logo: channel.overrides.logo ?? null,
     tvgId: channel.overrides.tvgId ?? undefined,
     chno: channel.overrides.chno ?? undefined,

@@ -1598,9 +1598,10 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 					const saved = await addEntry(patch);
 					savedId = saved._id;
 				}
-				if (savedId && parsed.epgUrl) {
+				if (savedId && parsed.epgUrls.length) {
 					try {
-						localStorage.setItem(`xt_m3u_epg:${savedId}`, parsed.epgUrl);
+						// Raw comma-joined list, matching the format catalog.js writes to the same key.
+						localStorage.setItem(`xt_m3u_epg:${savedId}`, parsed.epgUrls.join(","));
 					} catch {}
 				}
 				if (savedId) {

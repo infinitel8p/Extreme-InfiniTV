@@ -18,6 +18,7 @@ import {
   effectiveTvgId,
   getAvailableEpgChannels,
   displayedToUtcMs,
+  shiftChannelProgrammes,
   EPG_OFFSET_EVENT,
 } from "@/scripts/lib/epg-data.js"
 import { openProgrammeDialog } from "@/scripts/lib/programme-dialog.js"
@@ -434,7 +435,10 @@ function renderChannelRow(channel, programmesForRow) {
     const width = Math.max(2, right - left)
     const isLive = p.start <= nowMs && p.stop > nowMs
     const isPast = p.stop <= nowMs
-    const canReplay = isPast && canChannelCatchup && isCatchupPlayable(channel, p.start, nowMs)
+    // rawStart/rawStop recover true XMLTV time so catch-up never sees the guide-display tvg-shift.
+    const rawStart = p.rawStart ?? p.start
+    const rawStop = p.rawStop ?? p.stop
+    const canReplay = isPast && canChannelCatchup && isCatchupPlayable(channel, rawStart, nowMs)
 
     const cell = document.createElement("button")
     cell.type = "button"
@@ -464,10 +468,10 @@ function renderChannelRow(channel, programmesForRow) {
       }
       if (canReplay) {
         dialogOpts.onCatchup = () =>
-          navigateToCatchup(channel.id, p.start, p.stop, p.title, p.catchupId)
-      } else if (isLive && canChannelCatchup && isCatchupPlayable(channel, p.start, nowMs)) {
+          navigateToCatchup(channel.id, rawStart, rawStop, p.title, p.catchupId)
+      } else if (isLive && canChannelCatchup && isCatchupPlayable(channel, rawStart, nowMs)) {
         dialogOpts.onWatchFromStart = () =>
-          navigateToCatchup(channel.id, p.start, p.stop, p.title, p.catchupId)
+          navigateToCatchup(channel.id, rawStart, rawStop, p.title, p.catchupId)
       }
       openProgrammeDialog(dialogOpts)
     })
@@ -555,7 +559,8 @@ function renderVirtualWindow() {
     if (renderedRows.has(idx)) continue
     const channel = channels[idx]
     const key = effectiveTvgId(channel, activePlaylistId)
-    const list = key ? programmes.get(key) || [] : []
+    // shiftChannelProgrammes stashes rawStart/rawStop so catch-up navigation can bypass tvg-shift.
+    const list = key ? shiftChannelProgrammes(programmes.get(key) || [], channel.tvgShift) : []
     const row = renderChannelRow(channel, list)
     row.style.position = "absolute"
     row.style.top = `${idx * ROW_HEIGHT}px`

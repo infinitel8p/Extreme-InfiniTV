@@ -106,6 +106,8 @@ import {
   loadProgrammes,
   getProgrammesSync,
   getNowNext,
+  getNowNextForChannel,
+  shiftChannelProgrammes,
   effectiveTvgId,
   displayedToUtcMs,
   utcToDisplayedMs,
@@ -167,13 +169,14 @@ function buildDirectLiveUrl(id, c = creds) {
 let directUrlById = new Map()
 let streamHeadersById = new Map()
 let streamDrmById = new Map()
-export let m3uEpgUrl = ""
+// Comma-joined, matching the format catalog.js writes to xt_m3u_epg:<id>.
+let m3uEpgUrls = []
 
 function parseM3U(text) {
-  /** @type {Array<{ id:number, name:string, tvgId?:string, chno?:number, category?:string, logo?:string|null, url:string, norm:string, userAgent?:string|null, referer?:string|null }>} */
+  /** @type {Array<{ id:number, name:string, tvgId?:string, chno?:number, category?:string, categories?:string[], logo?:string|null, url:string, norm:string, userAgent?:string|null, referer?:string|null, tvgShift?:number|null }>} */
   const out = []
-  const { entries, epgUrl } = parseSharedM3U(text)
-  m3uEpgUrl = epgUrl || ""
+  const { entries, epgUrls } = parseSharedM3U(text)
+  m3uEpgUrls = epgUrls || []
   const fallbackCategory = t("stream.uncategorized") || "Uncategorized"
   let idSeq = 1
   for (const entry of entries) {
@@ -181,13 +184,16 @@ function parseM3U(text) {
     if (!url) continue
     if (!entry.name) continue
     const category = entry.category || fallbackCategory
+    const categories = entry.categories && entry.categories.length ? entry.categories : [category]
     out.push({
       id: idSeq++,
       name: entry.name,
       category,
+      categories,
       logo: entry.logo,
       tvgId: entry.tvgId || undefined,
       chno: entry.chno ?? undefined,
+      tvgShift: entry.tvgShift ?? null,
       norm: normalize(`${entry.name} ${category} ${entry.tvgId || ""}`),
       url,
       userAgent: entry.userAgent,
@@ -493,9 +499,7 @@ function paintNowSlot(slot, playBtn, ch) {
   slot.replaceChildren()
   const state = activePlaylistId ? getProgrammesSync(activePlaylistId) : null
   if (!state) return
-  const tvgId = effectiveTvgId(ch, activePlaylistId)
-  if (!tvgId) return
-  const { current, next } = getNowNext(state.programmes, tvgId)
+  const { current, next } = getNowNextForChannel(state.programmes, ch, activePlaylistId)
   if (!current && !next) return
 
   if (current) {
@@ -1215,8 +1219,9 @@ const applyFilter = () => {
     }
   } else {
     out = all.filter((ch) => {
-      if (activeCat && (ch.category || "") !== activeCat) return false
-      return picker.categoryPassesFilter((ch.category || "").toString())
+      const categories = Array.isArray(ch.categories) && ch.categories.length ? ch.categories : [ch.category || ""]
+      if (activeCat && !categories.includes(activeCat)) return false
+      return categories.some((category) => picker.categoryPassesFilter(category))
     })
   }
 
@@ -1465,9 +1470,9 @@ async function loadChannels() {
       )
       indexDirectUrls(data)
       categoryMap = null
-      if (m3uEpgUrl) {
+      if (m3uEpgUrls.length) {
         try {
-          localStorage.setItem(`xt_m3u_epg:${active._id}`, m3uEpgUrl)
+          localStorage.setItem(`xt_m3u_epg:${active._id}`, m3uEpgUrls.join(","))
         } catch {}
       }
       paintChannels(data, fromCache, age)
@@ -2247,14 +2252,8 @@ function paintRadioNowPlaying(channelId: number) {
     nowEl.hidden = true
     return
   }
-  const tvgId = effectiveTvgId(channel, activePlaylistId)
-  if (!tvgId) {
-    nowEl.textContent = ""
-    nowEl.hidden = true
-    return
-  }
   const state = getProgrammesSync(activePlaylistId)
-  const { current } = getNowNext(state?.programmes, tvgId)
+  const { current } = getNowNextForChannel(state?.programmes, channel, activePlaylistId)
   if (!current?.title) {
     nowEl.textContent = ""
     nowEl.hidden = true
@@ -3308,9 +3307,8 @@ function pushDiscordPresence(channel, kind) {
   const safeLogo = channel.logo ? safeHttpUrl(channel.logo) : null
   let stateLine = ""
   const state = getProgrammesSync(activePlaylistId)
-  const tvgId = effectiveTvgId(channel, activePlaylistId)
-  if (state && tvgId) {
-    const { current } = getNowNext(state.programmes, tvgId)
+  if (state) {
+    const { current } = getNowNextForChannel(state.programmes, channel, activePlaylistId)
     if (current?.title) stateLine = current.title
   }
   setRichPresence({
@@ -4691,7 +4689,8 @@ function paintSidePanelFromXmltv(streamId) {
   }
 
   const state = getProgrammesSync(activePlaylistId)
-  const programmes = state?.programmes?.get(tvgId) || []
+  // rawStart/rawStop let the catch-up handler below recover true XMLTV time, bypassing tvg-shift.
+  const programmes = shiftChannelProgrammes(state?.programmes?.get(tvgId) || [], channel.tvgShift)
   if (!programmes.length) {
     epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
     epgListData = []
@@ -4895,9 +4894,10 @@ epgList?.addEventListener("click", async (e) => {
   const isLive = entry.start <= now && now < entry.stop
   const isEnded = entry.stop <= now
   // XMLTV panel entries carry display-shifted times; short-EPG and full-table entries are already UTC.
+  // rawStart/rawStop recover the true XMLTV time so catch-up math never sees the tvg-shift correction.
   const isM3uSource = hasDirectUrl(epgListChannelId)
-  const startUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.start) : entry.start
-  const stopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.stop) : entry.stop
+  const startUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.rawStart ?? entry.start) : entry.start
+  const stopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.rawStop ?? entry.stop) : entry.stop
   // has_archive narrows catch-up eligibility when sent; it never widens past the channel-level window check.
   const archiveKnownPlayable = entry.hasArchive == null ? true : entry.hasArchive
 

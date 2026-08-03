@@ -100,9 +100,11 @@ export function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestT
       id: 1,
       name,
       category: fallbackCategory,
+      categories: [fallbackCategory],
       logo: logo || null,
       tvgId: undefined,
       chno: undefined,
+      tvgShift: null,
       norm: normalize(`${name} ${fallbackCategory}`),
       url: sourceUrl,
       isRadio: false,
@@ -123,13 +125,16 @@ export function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestT
   for (const entry of entries) {
     if (!entry.url || !entry.name) continue
     const category = entry.category || fallbackCategory
+    const categories = entry.categories && entry.categories.length ? entry.categories : [category]
     out.push({
       id: idSeq++,
       name: entry.name,
       category,
+      categories,
       logo: entry.logo,
       tvgId: entry.tvgId || undefined,
       chno: entry.chno ?? undefined,
+      tvgShift: entry.tvgShift ?? null,
       norm: normalize(`${entry.name} ${category} ${entry.tvgId || ""}`),
       url: entry.url,
       isRadio: !!entry.isRadio,
@@ -215,9 +220,10 @@ export async function ensureLive(creds, playlistId, opts = {}) {
         text = await streamingText(r, onBytes)
       }
       try {
-        const { epgUrl } = parseM3U(text)
-        if (epgUrl && typeof localStorage !== "undefined") {
-          localStorage.setItem(`xt_m3u_epg:${playlistId}`, epgUrl)
+        // Comma-joined; epg-data.js splits it back apart on read.
+        const { epgUrls } = parseM3U(text)
+        if (epgUrls.length && typeof localStorage !== "undefined") {
+          localStorage.setItem(`xt_m3u_epg:${playlistId}`, epgUrls.join(","))
         }
       } catch {}
       const activeEntry = (await getEntries()).find((entry) => entry._id === playlistId)
