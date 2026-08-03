@@ -99,6 +99,22 @@ jobs:
             --jq .id)
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 
+      # Tag eagerly, before any build can upload to Play: a run that fails after the
+      # Play upload must still leave a tag, or the versionCode ordinal below reuses a
+      # code Play has already consumed. Publishing the draft later reuses this tag.
+      - name: Push beta tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists (re-run); leaving it in place."
+          else
+            gh api repos/${{ github.repository }}/git/refs -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null
+          fi
+
   build-desktop:
     needs: create-beta-release
     permissions:
@@ -314,8 +330,12 @@ jobs:
           set -euo pipefail
           BASE=$(node -p "require('./package.json').version.split('-')[0]")
           # ls-remote emits an extra `^{}` peeled line per annotated tag - exclude those.
+          # The count includes this run's own eagerly-pushed tag, so it IS the ordinal.
           EXISTING=$(git ls-remote --tags origin "refs/tags/v${BASE}-beta.*" | grep -v '\^{}' | wc -l || true)
-          ORDINAL=$(( EXISTING + 1 ))
+          ORDINAL=$EXISTING
+          if [ "$ORDINAL" -lt 1 ]; then
+            ORDINAL=1
+          fi
           if [ "$ORDINAL" -gt 89 ]; then
             ORDINAL=89
           fi
