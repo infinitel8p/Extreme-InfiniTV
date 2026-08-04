@@ -2352,12 +2352,16 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     place-items: center;
     z-index: 30;
     pointer-events: none;
+    container-type: size;
 }
-/* Plate shrink-wraps the logo so it takes the logo's aspect (wide, tall, or square) and never clips, capped so it stays a badge. */
+/* Plate shrink-wraps the logo so it takes the logo's aspect. */
 .tuning-overlay__plate {
     display: grid;
     place-items: center;
-    padding: clamp(0.75rem, 2.4%, 1.25rem);
+    /* Older engines without cqw/cqh drop the later declaration and keep this fallback. */
+    padding: clamp(0.75rem, 1.5vw, 1.25rem);
+    --tuning-plate-pad: clamp(0.75rem, 2.4cqw, 1.25rem);
+    padding: var(--tuning-plate-pad);
     min-width: 5rem;
     min-height: 4.5rem;
     max-width: min(62%, 22rem);
@@ -2376,8 +2380,8 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     display: block;
     max-width: 100%;
     max-height: 100%;
-    width: auto;
-    height: auto;
+    max-width: calc(min(62cqw, 22rem) - 2 * var(--tuning-plate-pad));
+    max-height: calc(min(55cqh, 12rem) - 2 * var(--tuning-plate-pad));
     object-fit: contain;
 }
 .tuning-overlay--leaving .tuning-overlay__plate {
