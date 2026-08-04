@@ -39,10 +39,12 @@ mod warmup;
 #[cfg(not(target_os = "ios"))]
 fn build_log_plugin() -> tauri_plugin_log::Builder {
     let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+    // clear_targets() drops the plugin's own default LogDir target so records aren't double-written.
     let mut log_builder = tauri_plugin_log::Builder::new()
         .level(log::LevelFilter::Info)
         .max_file_size(50_000_000)
         .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+        .clear_targets()
         .target(tauri_plugin_log::Target::new(
             tauri_plugin_log::TargetKind::LogDir {
                 file_name: Some(format!("app-{day}")),
