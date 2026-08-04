@@ -86,6 +86,7 @@ import {
   isRemuxPinnedContent,
   rememberRemuxPinnedContent,
 } from "@/scripts/lib/vod-remux-memory.ts"
+import { deviceSupportsHevc, hasHevcNameHint, classifyStartFailure, describeAudioCodec } from "@/scripts/lib/codec-hints.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
@@ -815,6 +816,22 @@ function showSourceUnavailableToast() {
   externalBtnHandle?.refresh()
 }
 
+/** The container opened fine (remux worked); this device just has no HEVC decoder (e.g. Linux WebKitGTK). */
+function showHevcUnsupportedToast() {
+  toastError(t("detail.error.hevcUnsupported"), {
+    description: t("detail.error.containerUnsupportedHint"),
+  })
+  externalBtnHandle?.refresh()
+}
+
+/** The container opened fine; this platform has no decoder for the audio codec (e.g. DTS on WebKitGTK/WebView2). */
+function showAudioUnsupportedToast(codec) {
+  toastError(t("detail.error.audioUnsupported", { codec: describeAudioCodec(codec) }), {
+    description: t("detail.error.containerUnsupportedHint"),
+  })
+  externalBtnHandle?.refresh()
+}
+
 function setupPipButton(player) {
   const pipBtn = document.getElementById("series-detail-pip")
   if (!pipBtn) return
@@ -1099,6 +1116,47 @@ async function playEpisode(episode) {
   setupScaleButton()
   subtitleDelayController.setup()
   const mime = chooseMime(src)
+
+  // Shared by a genuine post-mount decode failure (a plain player "error" in remux mode) and a
+  // remux session dying mid-play (reported by the audio switcher): same classification, same teardown.
+  function handleRemuxFailure(detail) {
+    ownAudioSwitcher?.dispose()
+    if (audioSwitcher === ownAudioSwitcher) audioSwitcher = null
+    prepared?.mkvSession?.stop()
+    if (activeMkvSession === prepared?.mkvSession) activeMkvSession = null
+    if (posterEl) posterEl.classList.remove("hidden")
+    if (playerWrap) playerWrap.classList.add("hidden")
+    const upstreamFailure = isUpstreamHttpFailure(detail)
+    const codecInfo = upstreamFailure ? null : player.codecInfo?.()
+    const failure = upstreamFailure
+      ? null
+      : classifyStartFailure({
+          videoCodec: codecInfo?.videoCodec,
+          audioCodec: codecInfo?.audioCodec,
+          errorDetail: detail,
+          nameHint: hasHevcNameHint(episode.title || series?.name),
+          deviceHevc: deviceSupportsHevc(),
+        })
+    const toastPath = upstreamFailure
+      ? "upstream-http"
+      : failure?.kind === "hevc"
+        ? "hevc"
+        // Without a known codec we can't name it in the toast, so fall back to the container message.
+        : failure?.kind === "audio" && failure.codec
+          ? "audio"
+          : "container"
+    log.info("[xt:vod-mount] start-failure verdict", {
+      kind: failure?.kind ?? null,
+      codec: failure?.codec ?? null,
+      toastPath,
+      contentKey: buildRemuxContentKey("episode", episode.id),
+    })
+    if (toastPath === "upstream-http") showSourceUnavailableToast()
+    else if (toastPath === "hevc") showHevcUnsupportedToast()
+    else if (toastPath === "audio") showAudioUnsupportedToast(failure.codec)
+    else showContainerUnsupportedToast(detectVodContainer(playSrc) || "mkv")
+  }
+
   // The player is shared across episodes, so a superseded run must not report (or seek) for the one that did play.
   player.one("error", () => {
     if (requestId !== playRequestId) return
@@ -1107,6 +1165,11 @@ async function playEpisode(episode) {
       code: e?.code,
       message: e?.message,
     })
+    if (containerPlan.mode === "remux") {
+      // Any fatal code besides 4 downstream of an otherwise-successful remux mount is a genuine decode failure.
+      if (e?.code !== 4) handleRemuxFailure(e?.message || "")
+      return
+    }
     if (desktopPlatform && e?.code === 4) {
       const unsupportedContainer = localDownloadPath
         ? detectVodContainerFromLocalPath(localDownloadPath)
@@ -1156,7 +1219,10 @@ async function playEpisode(episode) {
       return
     }
     if (!prepared) {
-      log.warn("[xt:series-detail] local vod proxy failed to register, cannot remux this download")
+      log.warn("[xt:series-detail] local vod proxy failed to register, cannot remux this download", {
+        contentKey: buildRemuxContentKey("episode", episode.id),
+        container: detectVodContainerFromLocalPath(localDownloadPath),
+      })
       if (posterEl) posterEl.classList.remove("hidden")
       if (playerWrap) playerWrap.classList.add("hidden")
       showContainerUnsupportedToast("mkv")
@@ -1191,17 +1257,7 @@ async function playEpisode(episode) {
       initialStartSeconds: resumePos,
       onRemuxUnrecoverable: (detail) => {
         log.warn("[xt:series-detail] remux playback unavailable for this source:", detail)
-        ownAudioSwitcher?.dispose()
-        if (audioSwitcher === ownAudioSwitcher) audioSwitcher = null
-        prepared.mkvSession?.stop()
-        if (activeMkvSession === prepared.mkvSession) activeMkvSession = null
-        if (posterEl) posterEl.classList.remove("hidden")
-        if (playerWrap) playerWrap.classList.add("hidden")
-        if (isUpstreamHttpFailure(detail)) {
-          showSourceUnavailableToast()
-        } else {
-          showContainerUnsupportedToast(detectVodContainer(playSrc) || "mkv")
-        }
+        handleRemuxFailure(detail)
       },
     })
   }

@@ -690,6 +690,8 @@
   "detail.error.containerUnsupported": "The built-in player can't play {container} files on this platform.",
   "detail.error.containerUnsupportedHint": "Use the external player button to open it in MPV or VLC.",
   "detail.error.sourceUnavailable": "The provider isn't serving this file right now (it may be temporarily unavailable).",
+  "detail.error.hevcUnsupported": "This device can't decode HEVC (H.265) video.",
+  "detail.error.audioUnsupported": "The built-in player can't decode {codec} audio on this platform.",
   "detail.download.tooltip": "Download to your chosen folder",
   "detail.download.tooltipNoTauri": "Open the source URL in a new tab (desktop app saves to disk)",
   "detail.download.tapPause": "Tap to pause",
