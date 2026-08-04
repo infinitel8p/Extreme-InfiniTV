@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { shouldTranscodeVodAudio } from "../src/scripts/lib/vod-audio-proxy"
+import { shouldTranscodeVodAudio, peekVodAudioRemuxAvailable } from "../src/scripts/lib/vod-audio-proxy"
 
 describe("shouldTranscodeVodAudio", () => {
   it("copies plain aac/mp3 codec ids", () => {
@@ -41,5 +41,11 @@ describe("shouldTranscodeVodAudio", () => {
   it("defaults an unknown/empty codec to true", () => {
     expect(shouldTranscodeVodAudio("")).toBe(true)
     expect(shouldTranscodeVodAudio("something_unrecognized")).toBe(true)
+  })
+})
+
+describe("peekVodAudioRemuxAvailable", () => {
+  it("returns synchronously without forcing a probe outside a Tauri desktop context", () => {
+    expect(peekVodAudioRemuxAvailable()).toBe(false)
   })
 })

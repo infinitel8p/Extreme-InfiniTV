@@ -43,11 +43,17 @@ function stringifyArgs(args: unknown[]): string {
         .join(" ")
 }
 
-// Redact string/Error args before they hit the console, so DevTools output
-// matches the redacted file mirror.
-function redactArg(arg: unknown): unknown {
+// Redact string/Error/object args (objects round-trip through JSON) before they hit the console, so DevTools output matches the redacted file mirror.
+export function redactArg(arg: unknown): unknown {
     if (typeof arg === "string") return redactUrl(arg)
     if (arg instanceof Error) return redactUrl(arg.stack || arg.message)
+    if (arg !== null && typeof arg === "object") {
+        try {
+            return JSON.parse(redactUrl(JSON.stringify(arg)))
+        } catch {
+            return redactUrl(String(arg))
+        }
+    }
     return arg
 }
 
@@ -72,6 +78,10 @@ const SENSITIVE_PARAMS = /(\b(?:username|user|password|pass|token|auth|key|api_k
 const SENSITIVE_PATH =
     /(\/(?:live|movie|series|timeshift|hls|hlsr)\/)([^/\s?#]+)\/([^/\s?#]+)(\/)/gi
 
+// Same sensitive key list as SENSITIVE_PARAMS, shaped for JSON.stringify() output ("key":"value") instead of a query string.
+const SENSITIVE_JSON_VALUE =
+    /("(?:username|user|password|pass|token|auth|key|api_key|apikey)"\s*:\s*)"([^"]*)"/gi
+
 export function redactUrl(input: unknown): string {
     if (input == null) return ""
     const text = typeof input === "string" ? input : String(input)
@@ -79,4 +89,5 @@ export function redactUrl(input: unknown): string {
         .replace(SENSITIVE_USERINFO, "$1***@")
         .replace(SENSITIVE_PARAMS, (_match, prefix) => `${prefix}***`)
         .replace(SENSITIVE_PATH, (_match, prefix) => `${prefix}***/***/`)
+        .replace(SENSITIVE_JSON_VALUE, (_match, prefix) => `${prefix}"***"`)
 }

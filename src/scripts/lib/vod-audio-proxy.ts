@@ -39,6 +39,7 @@ interface VodAudioRemuxAvailability {
 }
 
 let cachedAvailability: Promise<VodAudioRemuxAvailability> | null = null
+let resolvedAvailability: boolean | null = null
 let activeSessionId: string | null = null
 let lastWarnedIgnoredPath: string | null = null
 
@@ -48,9 +49,12 @@ async function probeAvailability(): Promise<VodAudioRemuxAvailability> {
     const result = (await invoke("vod_audio_remux_available", {
       ffmpegPath: getFfmpegPath() || null,
     })) as { available?: boolean; customPathIgnored?: boolean }
-    return { available: !!result?.available, customPathIgnored: !!result?.customPathIgnored }
+    const availability = { available: !!result?.available, customPathIgnored: !!result?.customPathIgnored }
+    resolvedAvailability = availability.available
+    return availability
   } catch (err) {
     log.warn("[xt:vod-audio-proxy] availability check failed:", err)
+    resolvedAvailability = false
     return { available: false, customPathIgnored: false }
   }
 }
@@ -71,11 +75,18 @@ export async function vodAudioRemuxAvailable(): Promise<boolean> {
   return result.available
 }
 
+/** Last resolved probe result without triggering one; null when no probe has run yet this session. */
+export function peekVodAudioRemuxAvailable(): boolean | null {
+  if (!vodAudioRemuxPlatformAvailable) return false
+  return resolvedAvailability
+}
+
 if (vodAudioRemuxPlatformAvailable && typeof document !== "undefined") {
   document.addEventListener(SETTINGS_EVENT, (event: Event) => {
     const detail = (event as CustomEvent)?.detail
     if (detail?.key === "ffmpegPath") {
       cachedAvailability = null
+      resolvedAvailability = null
       lastWarnedIgnoredPath = null
     }
   })

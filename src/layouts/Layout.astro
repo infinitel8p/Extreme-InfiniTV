@@ -791,11 +791,20 @@ const documentTitle = pageTitle
   import { initUiSounds } from "@/scripts/lib/ui-sounds"
   import { initHaptics } from "@/scripts/lib/haptics"
   import { initPlaylistAccent } from "@/scripts/lib/playlist-accent"
+  import { logSessionSnapshot } from "@/scripts/lib/diagnostic-snapshot"
   initI18n()
   initConnectivity()
   initUiSounds()
   initHaptics()
   initPlaylistAccent()
+
+  // Waits for idle rather than competing with first paint; short timeout plus the pagehide
+  // flush in diagnostic-snapshot.ts means a fast navigation still gets logged.
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(() => { logSessionSnapshot() }, { timeout: 300 })
+  } else {
+    setTimeout(() => { logSessionSnapshot() }, 150)
+  }
 
   ;(function dismissSplash() {
     // ?splash-hold forces the splash and keeps it up for visual review
