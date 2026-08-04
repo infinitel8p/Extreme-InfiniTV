@@ -8,7 +8,8 @@ import {
   isUpstreamHttpFailure,
 } from "../src/scripts/lib/vod-container-plan"
 
-const webkitDesktop = { isTauriDesktop: true, isWindows: false, remuxAvailable: true }
+const webkitDesktop = { isTauriDesktop: true, isWindows: false, remuxAvailable: true, forceRemux: false }
+const windowsDesktop = { isTauriDesktop: true, isWindows: true, remuxAvailable: true, forceRemux: false }
 
 describe("planVodContainerPlayback", () => {
   it("routes an MKV on WebKit desktop with the remux proxy available to remux", () => {
@@ -29,25 +30,62 @@ describe("planVodContainerPlayback", () => {
     expect(plan).toEqual({ mode: "unsupported", container: "avi" })
   })
 
-  it("stays direct on Windows regardless of container or remux availability", () => {
-    expect(
-      planVodContainerPlayback("https://host.example/movie.mkv", { ...webkitDesktop, isWindows: true }),
-    ).toEqual({ mode: "direct" })
-    expect(
-      planVodContainerPlayback("https://host.example/movie.avi", {
-        ...webkitDesktop,
-        isWindows: true,
-        remuxAvailable: false,
-      }),
-    ).toEqual({ mode: "direct" })
+  it("routes an MKV on Windows to direct when no prior attempt has proven it needs remuxing", () => {
+    const plan = planVodContainerPlayback("https://host.example/movie.mkv", windowsDesktop)
+    expect(plan).toEqual({ mode: "direct" })
   })
 
-  it("stays direct when not on a Tauri desktop (web, Android)", () => {
+  it("routes an MKV on Windows to remux once forceRemux is set", () => {
     const plan = planVodContainerPlayback("https://host.example/movie.mkv", {
-      ...webkitDesktop,
-      isTauriDesktop: false,
+      ...windowsDesktop,
+      forceRemux: true,
     })
-    expect(plan).toEqual({ mode: "direct" })
+    expect(plan).toEqual({ mode: "remux" })
+  })
+
+  it("routes an MKV on Windows with forceRemux to unsupported when the remux proxy isn't available", () => {
+    const plan = planVodContainerPlayback("https://host.example/movie.mkv", {
+      ...windowsDesktop,
+      forceRemux: true,
+      remuxAvailable: false,
+    })
+    expect(plan).toEqual({ mode: "unsupported", container: "mkv" })
+  })
+
+  it("routes an MKV on WebKit desktop to remux regardless of forceRemux", () => {
+    expect(
+      planVodContainerPlayback("https://host.example/movie.mkv", { ...webkitDesktop, forceRemux: false }),
+    ).toEqual({ mode: "remux" })
+    expect(
+      planVodContainerPlayback("https://host.example/movie.mkv", { ...webkitDesktop, forceRemux: true }),
+    ).toEqual({ mode: "remux" })
+  })
+
+  it("routes an AVI on Windows to unsupported, same as WebKit desktop", () => {
+    const plan = planVodContainerPlayback("https://host.example/movie.avi", windowsDesktop)
+    expect(plan).toEqual({ mode: "unsupported", container: "avi" })
+  })
+
+  it("stays direct on Windows for HLS and MP4 sources", () => {
+    expect(planVodContainerPlayback("https://host.example/master.m3u8", windowsDesktop)).toEqual({
+      mode: "direct",
+    })
+    expect(planVodContainerPlayback("https://host.example/movie.mp4", windowsDesktop)).toEqual({
+      mode: "direct",
+    })
+  })
+
+  it("stays direct when not on a Tauri desktop (web, Android), regardless of container, platform or forceRemux", () => {
+    const nonDesktopEnvs = [
+      { ...webkitDesktop, isTauriDesktop: false },
+      { ...windowsDesktop, isTauriDesktop: false },
+      { ...windowsDesktop, isTauriDesktop: false, forceRemux: true },
+      { ...windowsDesktop, isTauriDesktop: false, remuxAvailable: false },
+    ]
+    for (const env of nonDesktopEnvs) {
+      expect(planVodContainerPlayback("https://host.example/movie.mkv", env)).toEqual({ mode: "direct" })
+      expect(planVodContainerPlayback("https://host.example/movie.avi", env)).toEqual({ mode: "direct" })
+    }
   })
 
   it("stays direct for HLS and MP4 sources on WebKit desktop", () => {
@@ -135,12 +173,18 @@ describe("planLocalVodContainerPlayback", () => {
     expect(plan).toEqual({ mode: "unsupported", container: "avi" })
   })
 
-  it("stays direct on Windows regardless of the local file's extension", () => {
-    const plan = planLocalVodContainerPlayback("C:\\Downloads\\Movie.mkv", {
-      ...webkitDesktop,
-      isWindows: true,
-    })
-    expect(plan).toEqual({ mode: "direct" })
+  it("routes a locally downloaded MKV on Windows to direct until forceRemux is set", () => {
+    expect(
+      planLocalVodContainerPlayback("C:\\Downloads\\Movie.mkv", windowsDesktop),
+    ).toEqual({ mode: "direct" })
+    expect(
+      planLocalVodContainerPlayback("C:\\Downloads\\Movie.mkv", { ...windowsDesktop, forceRemux: true }),
+    ).toEqual({ mode: "remux" })
+  })
+
+  it("routes a locally downloaded AVI on Windows to unsupported", () => {
+    const plan = planLocalVodContainerPlayback("C:\\Downloads\\Movie.avi", windowsDesktop)
+    expect(plan).toEqual({ mode: "unsupported", container: "avi" })
   })
 
   it("stays direct for an mp4 download", () => {

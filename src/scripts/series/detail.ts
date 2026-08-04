@@ -78,8 +78,14 @@ import {
   planVodContainerPlayback,
   planLocalVodContainerPlayback,
   detectVodContainer,
+  detectVodContainerFromLocalPath,
   isUpstreamHttpFailure,
 } from "@/scripts/lib/vod-container-plan.ts"
+import {
+  buildRemuxContentKey,
+  isRemuxPinnedContent,
+  rememberRemuxPinnedContent,
+} from "@/scripts/lib/vod-remux-memory.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
@@ -1043,10 +1049,27 @@ async function playEpisode(episode) {
 
   const mountStartedAt = Date.now()
   const remuxAvailable = await vodAudioRemuxAvailable()
-  const containerPlanEnv = { isTauriDesktop: desktopPlatform, isWindows, remuxAvailable }
+  const forceRemux = activePlaylistId
+    ? isRemuxPinnedContent(activePlaylistId, buildRemuxContentKey("episode", episode.id))
+    : false
+  const containerPlanEnv = { isTauriDesktop: desktopPlatform, isWindows, remuxAvailable, forceRemux }
   const containerPlan = localDownloadPath
     ? planLocalVodContainerPlayback(localDownloadPath, containerPlanEnv)
     : planVodContainerPlayback(playSrc, containerPlanEnv)
+  const detectedContainer = containerPlan.mode === "unsupported"
+    ? containerPlan.container
+    : localDownloadPath
+      ? detectVodContainerFromLocalPath(localDownloadPath)
+      : detectVodContainer(playSrc)
+  log.info("[xt:vod-mount] plan decided", {
+    mode: containerPlan.mode,
+    container: detectedContainer,
+    isTauriDesktop: desktopPlatform,
+    isWindows,
+    remuxAvailable,
+    forceRemux,
+    isLocalDownload: !!localDownloadPath,
+  })
   if (containerPlan.mode === "unsupported") {
     showContainerUnsupportedToast(containerPlan.container)
     return
@@ -1054,7 +1077,6 @@ async function playEpisode(episode) {
   // In remux mode the audio switcher owns the mount (starts + seeks it itself); this function
   // must not touch src/playhead here, or it would re-register the remux.
   const remuxOwnsInitialMount = containerPlan.mode === "remux"
-  log.info("[xt:vod-mount] plan decided", { mode: containerPlan.mode })
 
   if (posterEl) posterEl.classList.add("hidden")
   if (playerWrap) playerWrap.classList.remove("hidden")
@@ -1086,8 +1108,27 @@ async function playEpisode(episode) {
       message: e?.message,
     })
     if (desktopPlatform && e?.code === 4) {
-      const unsupportedContainer = detectVodContainer(playSrc)
-      if (unsupportedContainer) showContainerUnsupportedToast(unsupportedContainer)
+      const unsupportedContainer = localDownloadPath
+        ? detectVodContainerFromLocalPath(localDownloadPath)
+        : detectVodContainer(playSrc)
+      // Pinning forces the retuned attempt's plan to "remux", so this branch cannot re-fire for the same content.
+      if (
+        unsupportedContainer === "mkv" &&
+        containerPlan.mode !== "remux" &&
+        remuxAvailable &&
+        activePlaylistId
+      ) {
+        const contentKey = buildRemuxContentKey("episode", episode.id)
+        rememberRemuxPinnedContent(activePlaylistId, contentKey)
+        log.warn("[xt:series-detail] WebView could not demux this MKV directly - remuxing with ffmpeg instead", {
+          contentKey,
+          container: unsupportedContainer,
+        })
+        retirePreviousPlayback()
+        playEpisode(currentEpisode)
+        return
+      }
+      showContainerUnsupportedToast(unsupportedContainer || "mkv")
     }
   })
   player.one("loadedmetadata", () => {

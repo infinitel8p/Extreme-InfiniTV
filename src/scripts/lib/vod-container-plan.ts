@@ -1,5 +1,6 @@
-// Pure routing decision for MKV/AVI VOD playback: WebKit (macOS/Linux) can't demux Matroska/AVI
-// in a <video> element, but Windows WebView2 is Chromium and plays MKV natively, so it stays direct.
+// Pure routing decision for MKV/AVI VOD playback: WebKit (macOS/Linux) can't demux Matroska/AVI at
+// all (always remux); Windows WebView2's Chromium demuxer plays many MKVs directly but lacks HEVC
+// and reliable Dolby (AC-3/E-AC-3) audio, so it only remuxes once forceRemux proves a file needs it.
 
 export type VodContainer = "mkv" | "avi"
 
@@ -12,6 +13,8 @@ export interface VodContainerPlanEnv {
   isTauriDesktop: boolean
   isWindows: boolean
   remuxAvailable: boolean
+  /** A previous direct-playback attempt for this exact file already failed to demux; retry through the remux proxy. */
+  forceRemux: boolean
 }
 
 /** Extension sniff, query-safe and case-insensitive; only trusts http(s) URLs. */
@@ -44,9 +47,12 @@ function planFromContainer(
   container: VodContainer | null,
   env: VodContainerPlanEnv,
 ): VodContainerPlan {
-  if (!env.isTauriDesktop || env.isWindows) return { mode: "direct" }
+  if (!env.isTauriDesktop) return { mode: "direct" }
   if (!container) return { mode: "direct" }
+  // MPEG-4 Part 2 (the usual AVI payload) has no MSE remux path either - remuxing to TS wouldn't
+  // make it decodable, so there is no forceRemux escape hatch for AVI like there is for MKV.
   if (container === "avi") return { mode: "unsupported", container: "avi" }
+  if (env.isWindows && !env.forceRemux) return { mode: "direct" }
   return env.remuxAvailable ? { mode: "remux" } : { mode: "unsupported", container: "mkv" }
 }
 
