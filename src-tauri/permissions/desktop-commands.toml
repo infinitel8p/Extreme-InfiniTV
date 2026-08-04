@@ -23,6 +23,7 @@ commands.allow = [
     "sniff_page",
     "cancel_sniff",
     "register_vod_proxy",
+    "register_vod_proxy_file",
     "unregister_vod_proxy",
     "audio_transcode_available",
     "register_audio_transcode",

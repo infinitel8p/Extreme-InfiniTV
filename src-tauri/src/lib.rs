@@ -194,6 +194,7 @@ pub fn run() {
             vod_audio_proxy::register_vod_audio_remux,
             vod_audio_proxy::unregister_vod_audio_remux,
             vod_proxy::register_vod_proxy,
+            vod_proxy::register_vod_proxy_file,
             vod_proxy::unregister_vod_proxy,
             warmup::warmup_start,
             warmup::warmup_status,

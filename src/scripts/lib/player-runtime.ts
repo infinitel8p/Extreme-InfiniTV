@@ -50,6 +50,8 @@ export interface DrmOptions {
 export interface VjsLikeHandle {
   /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. `durationSeconds` seeds duration when the container reports none (raw TS); `timelineOffsetSeconds` places a mid-programme remount on its timeline. `subtitles` opts a progressive MP4 source into embedded tx3g-subtitle extraction, or a `mkvSession` into push-mode subtitles from the MKV tee-proxy. `audio` backs track switching for engines with none (mpegts.js/native). */
   src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string; mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null } | null; audio?: AudioTrackSource | null; preferNativeHls?: boolean }): void
+  /** Wires a caller-supplied audio track source into the current mount without remounting; a no-op on engines/mounts that don't use caller-supplied tracks (e.g. hls.js/shaka, which source their own). Lets background VOD audio-track discovery attach a switcher after the source is already playing. */
+  setAudioSource?(source: AudioTrackSource | null): void
   play(): Promise<unknown> | void
   pause(): void
   paused?(): boolean
@@ -122,6 +124,11 @@ export const isMacOS = (() => {
   return /Mac/i.test(platform) || /Macintosh|Mac OS X/i.test(navigator.userAgent || "")
 })()
 
+export const isWindows = (() => {
+  if (typeof navigator === "undefined") return false
+  return /Windows/i.test(navigator.userAgent || "")
+})()
+
 async function tauriWindowSetFullscreen(state: boolean): Promise<void> {
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window")
@@ -162,7 +169,7 @@ function bindTauriFullscreenResync(
   }
 }
 
-const desktopPlatform = isTauri && !isAndroid
+export const desktopPlatform = isTauri && !isAndroid
 
 /** False on desktop when Snap/Flatpak confinement blocks host binaries. */
 export const externalPlayersAvailable = desktopPlatform && !sandboxRuntimeSync()
@@ -1419,6 +1426,7 @@ async function attachMpegts(
   onMediaInfo?: (info: { videoCodec?: string; audioCodec?: string }) => void,
   durationSeconds?: number,
   timelineOffsetSeconds?: number,
+  isStillCurrent?: () => boolean,
 ): Promise<MpegtsHandle | null> {
   const mpegtsMod = await import("mpegts.js")
   const mpegts = (mpegtsMod as any).default || mpegtsMod
@@ -1426,6 +1434,8 @@ async function attachMpegts(
     log.warn("[xt:player] mpegts.js unsupported in this WebView")
     return null
   }
+  // attachMediaElement()/detachMediaElement() both clear the element's src, so a stale attach must bail here.
+  if (isStillCurrent && !isStillCurrent()) return null
 
   let disposed = false
   let player: any = null
@@ -1678,6 +1688,8 @@ async function mountVideoJs(
   let pendingDurationSeconds: number | undefined
   let pendingTimelineOffsetSeconds: number | undefined
   let pendingAudioSource: AudioTrackSource | null = null
+  // Whether the current mount is on a path (ts/native) that reads pendingAudioSource at all.
+  let pendingUsesCallerSuppliedTracks = false
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
   const subtitleManager = createSubtitleManager({
     registrar: createVideoJsTrackRegistrar(player),
@@ -1861,16 +1873,19 @@ async function mountVideoJs(
       },
       pendingDurationSeconds,
       pendingTimelineOffsetSeconds,
+      () => pendingSrc === src,
     )
     pendingMpegtsAttach = attachPromise
     const handle = await attachPromise
     if (pendingMpegtsAttach === attachPromise) pendingMpegtsAttach = null
-    if (!handle) {
-      loadHls(src)
+    // Staleness first: a superseded attach must not drag the player back to its
+    // own url through the hls fallback below.
+    if (pendingSrc !== src) {
+      try { handle?.destroy() } catch {}
       return
     }
-    if (pendingSrc !== src) {
-      try { handle.destroy() } catch {}
+    if (!handle) {
+      loadHls(src)
       return
     }
     activeMpegts = handle
@@ -1896,6 +1911,7 @@ async function mountVideoJs(
       const hint = streamKindHint(src, type)
       // ts/native lack engine audio switching; MKV subs come from the tee, not the container.
       const usesCallerSuppliedTracks = hint === "ts" || hint === "native"
+      pendingUsesCallerSuppliedTracks = usesCallerSuppliedTracks
       subtitleManager.setSource(
         usesCallerSuppliedTracks && subtitles ? subtitles.sourceUrl : null,
         type,
@@ -1922,6 +1938,7 @@ async function mountVideoJs(
       probeContainer(src)
         .then((kind) => {
           if (pendingSrc !== src) return
+          pendingUsesCallerSuppliedTracks = kind === "ts" || kind === "native"
           if (kind === "dash") void loadDash(src, drm)
           else if (kind === "ts") {
             audioMenu.setSource(pendingAudioSource)
@@ -1952,9 +1969,14 @@ async function mountVideoJs(
       player.muted(!!value)
       return undefined
     },
+    setAudioSource(source) {
+      pendingAudioSource = source
+      if (pendingUsesCallerSuppliedTracks) audioMenu.setSource(source)
+    },
     reset() {
       pendingSrc = null
       pendingAudioSource = null
+      pendingUsesCallerSuppliedTracks = false
       destroyMpegts()
       destroyHls()
       destroyShaka()
@@ -1965,6 +1987,7 @@ async function mountVideoJs(
     dispose() {
       pendingSrc = null
       pendingAudioSource = null
+      pendingUsesCallerSuppliedTracks = false
       destroyMpegts()
       destroyHls()
       destroyShaka()
@@ -2048,6 +2071,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   let pendingDurationSeconds: number | undefined
   let pendingTimelineOffsetSeconds: number | undefined
   let pendingAudioSource: AudioTrackSource | null = null
+  // Whether the current mount is on a path (ts/native) that reads pendingAudioSource at all.
+  let pendingUsesCallerSuppliedTracks = false
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
 
   function destroyMpegts(): Promise<void> {
@@ -2196,17 +2221,20 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
           },
           pendingDurationSeconds,
           pendingTimelineOffsetSeconds,
+          () => pendingSrc === url,
         )
         pendingMpegtsAttach = attachPromise
         const handle = await attachPromise
         if (pendingMpegtsAttach === attachPromise) pendingMpegtsAttach = null
+        // Staleness first: a superseded attach must not put its own url back on
+        // the element through the native fallback below.
+        if (pendingSrc !== url) {
+          try { handle?.destroy() } catch {}
+          return
+        }
         if (!handle) {
           noteMonoSourceChange(video, url)
           setNativeSrc(video, url)
-          return
-        }
-        if (pendingSrc !== url) {
-          try { handle.destroy() } catch {}
           return
         }
         activeMpegts = handle
@@ -2325,6 +2353,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       const hint = streamKindHint(src, type)
       // ts/native lack engine audio switching; MKV subs come from the tee, not the container.
       const usesCallerSuppliedTracks = hint === "ts" || hint === "native"
+      pendingUsesCallerSuppliedTracks = usesCallerSuppliedTracks
       setSubtitleSource(
         usesCallerSuppliedTracks && subtitles ? subtitles.sourceUrl : null,
         type,
@@ -2354,6 +2383,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       probeContainer(src)
         .then((kind) => {
           if (pendingSrc !== src) return
+          pendingUsesCallerSuppliedTracks = kind === "ts" || kind === "native"
           art.type = kind === "dash" ? "mpd" : kind === "ts" ? "ts" : kind === "native" ? "" : "m3u8"
           if (kind === "native") noteMonoSourceChange(art.video ?? null, src)
           art.url = src
@@ -2382,9 +2412,14 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       art.muted = !!value
       return undefined
     },
+    setAudioSource(source) {
+      pendingAudioSource = source
+      if (pendingUsesCallerSuppliedTracks) audioControl.setSource(source)
+    },
     reset() {
       pendingSrc = null
       pendingAudioSource = null
+      pendingUsesCallerSuppliedTracks = false
       destroyArtEngines()
       setSubtitleSource(null)
       audioControl.setSource(null)
@@ -2393,6 +2428,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     dispose() {
       pendingSrc = null
       pendingAudioSource = null
+      pendingUsesCallerSuppliedTracks = false
       destroyArtEngines()
       disposeFullscreenSync()
       try { art.destroy(false) } catch {}
@@ -2599,16 +2635,19 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       },
       pendingDurationSeconds,
       pendingTimelineOffsetSeconds,
+      () => pendingSrc === src,
     )
     pendingMpegtsAttach = attachPromise
     const mpegtsHandle = await attachPromise
     if (pendingMpegtsAttach === attachPromise) pendingMpegtsAttach = null
-    if (!mpegtsHandle) {
-      void loadIntoShaka(src, pendingDrm, "application/x-mpegURL")
+    // Staleness first: a superseded attach must not put its own url back on
+    // the player through the shaka fallback below.
+    if (pendingSrc !== src) {
+      try { mpegtsHandle?.destroy() } catch {}
       return
     }
-    if (pendingSrc !== src) {
-      try { mpegtsHandle.destroy() } catch {}
+    if (!mpegtsHandle) {
+      void loadIntoShaka(src, pendingDrm, "application/x-mpegURL")
       return
     }
     activeMpegts = mpegtsHandle

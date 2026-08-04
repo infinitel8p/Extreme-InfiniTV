@@ -38,10 +38,18 @@ export interface VodAudioSwitcherOptions {
   userAgent?: string | null
   getKnownDurationSeconds(): number | undefined
   tracks: VodAudioTrackOption[]
+  /** Force-mount the remux session right away instead of waiting for a track switch; used when the container can't play natively (e.g. MKV on WebKit desktop). */
+  mountRemuxImmediately?: boolean
+  /** Only meaningful with mountRemuxImmediately: seconds to resume the mandatory initial remux at. */
+  initialStartSeconds?: number
+  /** Only meaningful with mountRemuxImmediately: fires once when the remux can't carry playback, either because the session failed to register or because it died mid-play. Remounting the original is not an option in that mode (the engine can't demux the container), so the caller owns the error UI. */
+  onRemuxUnrecoverable?: (detail: string) => void
 }
 
 export interface VodAudioSwitcher {
   source: AudioTrackSource
+  /** Replaces the selectable track list without touching the session already streaming; never remounts. */
+  setTracks(tracks: VodAudioTrackOption[]): void
   dispose(): void
 }
 
@@ -152,14 +160,23 @@ export async function discoverVodAudioTracks(
 
 const SEEK_SUPPRESSION_FALLBACK_MS = 1500
 
+/** A remux-only mount (no discovered tracks) still needs a track to remux against. */
+const SYNTHETIC_DEFAULT_TRACK: VodAudioTrackOption = {
+  id: "default",
+  audioStreamIndex: 0,
+  codec: "",
+  isDefault: true,
+}
+
 export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAudioSwitcher {
-  const defaultTrack = options.tracks.find((track) => track.isDefault) ?? options.tracks[0] ?? null
-  const tracksById = new Map(options.tracks.map((track) => [track.id, track]))
-  const defaultTrackId = defaultTrack?.id ?? null
+  let tracks = options.tracks.length > 0 ? options.tracks : [SYNTHETIC_DEFAULT_TRACK]
+  let tracksById = new Map(tracks.map((track) => [track.id, track]))
+  let defaultTrackId = (tracks.find((track) => track.isDefault) ?? tracks[0] ?? null)?.id ?? null
 
   let activeTrackId = defaultTrackId
   let activeSessionId: string | null = null
   let disposed = false
+  let remuxUnrecoverableReported = false
   // Guards against stale async resolutions after a newer switch.
   let generation = 0
   let seekingEl: HTMLVideoElement | null = null
@@ -244,6 +261,13 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     if (sessionToStop) void stopVodAudioRemux(sessionToStop)
   }
 
+  /** Fires the caller's error UI once; further failures stay silent. */
+  function reportRemuxUnrecoverable(detail: string): void {
+    if (remuxUnrecoverableReported) return
+    remuxUnrecoverableReported = true
+    options.onRemuxUnrecoverable?.(detail)
+  }
+
   async function switchToRemux(trackId: string | null, startSeconds: number): Promise<void> {
     const track = trackId ? tracksById.get(trackId) : null
     if (!track) return
@@ -265,12 +289,21 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
       return
     }
     if (!session) {
-      log.warn("[xt:vod-audio-switch] register_vod_audio_remux failed, staying on the current mount")
+      if (options.mountRemuxImmediately) {
+        // The original container can't play here, so there is nothing to stay on.
+        log.warn("[xt:vod-audio-switch] mandatory remux failed to register, nothing is mounted")
+        reportRemuxUnrecoverable("register_vod_audio_remux failed")
+      } else {
+        log.warn("[xt:vod-audio-switch] register_vod_audio_remux failed, staying on the current mount")
+      }
       activeTrackId = previousTrackId
       notify()
       return
     }
     activeSessionId = session.sessionId
+    if (options.mountRemuxImmediately) {
+      log.info("[xt:vod-mount] remux session registered", { sessionId: session.sessionId })
+    }
     armProgrammaticSeekSuppression()
     options.handle.src({
       src: session.playbackUrl,
@@ -287,6 +320,18 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
 
   const unsubscribeError = onVodAudioError((payload) => {
     if (disposed || payload.sessionId !== activeSessionId) return
+    if (options.mountRemuxImmediately) {
+      // Remounting the original would just fail with MEDIA_ERR_SRC_NOT_SUPPORTED here.
+      log.warn(
+        "[xt:vod-audio-switch] mandatory remux session failed mid-play, no playable fallback:",
+        payload.detail,
+      )
+      bumpGeneration()
+      activeSessionId = null
+      detachSeekInterceptor()
+      reportRemuxUnrecoverable(payload.detail)
+      return
+    }
     log.warn(
       "[xt:vod-audio-switch] remux session failed mid-play, falling back to the original audio:",
       payload.detail,
@@ -312,10 +357,22 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     listeners.clear()
   }
 
+  function setTracks(nextTracks: VodAudioTrackOption[]): void {
+    if (disposed || nextTracks.length === 0) return
+    const playingAudioStreamIndex = (activeTrackId && tracksById.get(activeTrackId)?.audioStreamIndex) ?? 0
+    tracks = nextTracks
+    tracksById = new Map(tracks.map((track) => [track.id, track]))
+    defaultTrackId = (tracks.find((track) => track.isDefault) ?? tracks[0] ?? null)?.id ?? null
+    // Only move the selection marker onto the matching discovered track; never remount for this.
+    const matchingPlayingTrack = tracks.find((track) => track.audioStreamIndex === playingAudioStreamIndex)
+    if (matchingPlayingTrack) activeTrackId = matchingPlayingTrack.id
+    notify()
+  }
+
   const sourceHandle: AudioTrackSource = {
     list() {
       return labelAudioTracks(
-        options.tracks.map((track) => ({
+        tracks.map((track) => ({
           id: track.id,
           name: track.name ?? null,
           language: track.language ?? null,
@@ -325,7 +382,8 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     },
     select(id) {
       if (disposed || id === activeTrackId) return
-      if (id === defaultTrackId) {
+      // With a mandatory remux mount, even the "default" track goes through the remux path.
+      if (id === defaultTrackId && !options.mountRemuxImmediately) {
         const capturedTimeSeconds = currentPlayheadSeconds()
         const sessionToStop = activeSessionId
         remountOriginal(capturedTimeSeconds, sessionToStop)
@@ -341,5 +399,9 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     dispose: disposeAll,
   }
 
-  return { source: sourceHandle, dispose: disposeAll }
+  if (options.mountRemuxImmediately && defaultTrackId) {
+    void switchToRemux(defaultTrackId, Math.max(0, options.initialStartSeconds ?? 0))
+  }
+
+  return { source: sourceHandle, setTracks, dispose: disposeAll }
 }

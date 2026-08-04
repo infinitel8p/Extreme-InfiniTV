@@ -89,7 +89,8 @@ export async function startVodAudioRemux(
     const { invoke } = await import("@tauri-apps/api/core")
     const result = (await invoke("register_vod_audio_remux", {
       url: options.url,
-      userAgent: options.userAgent ?? null,
+      // An empty UA gets rejected or silently rerouted by some panels, so fall back to the WebView's own UA.
+      userAgent: options.userAgent || (typeof navigator !== "undefined" ? navigator.userAgent : null) || null,
       authorization: options.authorization ?? null,
       audioStreamIndex: options.audioStreamIndex,
       startSeconds: options.startSeconds,

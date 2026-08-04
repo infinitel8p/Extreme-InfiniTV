@@ -1,16 +1,19 @@
 // Local tee-proxy for MKV VOD (desktop only): forwards Range requests 1:1 while demuxing subtitle cues.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio_util::io::ReaderStream;
 
 use crate::matroska::{self, ClusterScanner, HeadInfo, ScannedCue, SubtitleCodec};
 
@@ -51,11 +54,18 @@ struct HeadContext {
     subtitle_tracks: HashMap<u64, SubtitleCodec>,
 }
 
+/// Where a session's bytes come from: an upstream provider URL, or a file already on disk.
+#[derive(Debug, Clone)]
+enum VodSource {
+    Upstream(String),
+    LocalFile(PathBuf),
+}
+
 struct VodSession {
     session_id: String,
     #[allow(dead_code)]
     token: String,
-    upstream_url: String,
+    source: VodSource,
     user_agent: Option<String>,
     head: OnceLock<Option<HeadContext>>,
     dedupe: Mutex<HashSet<(u64, u64, u64)>>,
@@ -113,8 +123,62 @@ pub async fn register_vod_proxy(
     let session = Arc::new(VodSession {
         session_id: token.clone(),
         token: token.clone(),
-        upstream_url: url,
+        source: VodSource::Upstream(url),
         user_agent,
+        head: OnceLock::new(),
+        dedupe: Mutex::new(HashSet::new()),
+        created_at: std::time::Instant::now(),
+    });
+
+    {
+        let mut sessions = state
+            .sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        sessions.insert(token.clone(), session.clone());
+        evict_oldest_if_over_capacity(&mut sessions);
+    }
+
+    spawn_head_parse(events, session, client);
+
+    Ok(RegisterVodProxyResponse {
+        session_id: token.clone(),
+        proxy_url: format!("http://127.0.0.1:{port}/{token}/stream{extension}"),
+    })
+}
+
+/// Same tee-proxy, fed from a file on disk: local downloads mount as asset.localhost sources
+/// WebKit can't demux, and the ffmpeg sidecar only speaks http/pipe/tcp, so the file is re-served over HTTP first.
+#[tauri::command]
+pub async fn register_vod_proxy_file(
+    app: AppHandle,
+    state: tauri::State<'_, VodProxyState>,
+    path: String,
+) -> Result<RegisterVodProxyResponse, String> {
+    let canonical_path = tokio::fs::canonicalize(&path)
+        .await
+        .map_err(|e| format!("OTHER:file not found: {e}"))?;
+    let metadata = tokio::fs::metadata(&canonical_path)
+        .await
+        .map_err(|e| format!("OTHER:file not found: {e}"))?;
+    if !metadata.is_file() {
+        return Err("OTHER:path is not a file".to_string());
+    }
+    let allowed_roots = local_file_allowed_roots(&app);
+    if !is_local_file_path_allowed(&canonical_path, &allowed_roots) {
+        return Err("OTHER:path is outside the allowed media directories".to_string());
+    }
+    let extension = extract_extension_from_path(&canonical_path);
+
+    let events: Arc<dyn VodProxyEvents> = Arc::new(app);
+    let (port, client) = ensure_server_started(&state, events.clone()).await?;
+
+    let token = generate_token();
+    let session = Arc::new(VodSession {
+        session_id: token.clone(),
+        token: token.clone(),
+        source: VodSource::LocalFile(canonical_path),
+        user_agent: None,
         head: OnceLock::new(),
         dedupe: Mutex::new(HashSet::new()),
         created_at: std::time::Instant::now(),
@@ -169,6 +233,65 @@ fn extract_extension(parsed: &tauri::Url) -> String {
     match file_name.rfind('.') {
         Some(index) => file_name[index..].to_string(),
         None => String::new(),
+    }
+}
+
+fn extract_extension_from_path(path: &FsPath) -> String {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => format!(".{ext}"),
+        None => String::new(),
+    }
+}
+
+/// Media extensions the frontend can hand to `register_vod_proxy_file` (mirrors the container
+/// list in `player-runtime.ts`'s `streamKindHint`).
+const ALLOWED_LOCAL_FILE_EXTENSIONS: &[&str] = &[
+    "mkv", "webm", "avi", "mp4", "m4v", "mov", "ts", "mp3", "aac", "flac", "m4a", "ogg",
+];
+
+/// Download/video/home/app-data dirs, matching the fs capability scope in `default.json` so this
+/// command can never be pointed at a path the app has no other access to.
+fn local_file_allowed_roots(app: &AppHandle) -> Vec<PathBuf> {
+    let resolver = app.path();
+    [
+        resolver.download_dir().ok(),
+        resolver.video_dir().ok(),
+        resolver.home_dir().ok(),
+        resolver.app_data_dir().ok(),
+        resolver.app_local_data_dir().ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|root| std::fs::canonicalize(&root).unwrap_or(root))
+    .collect()
+}
+
+/// Pure path-confinement check: `canonical_path` must sit under one of `allowed_roots` and carry
+/// one of `ALLOWED_LOCAL_FILE_EXTENSIONS`.
+fn is_local_file_path_allowed(canonical_path: &FsPath, allowed_roots: &[PathBuf]) -> bool {
+    let extension_allowed = canonical_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ALLOWED_LOCAL_FILE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false);
+    extension_allowed && allowed_roots.iter().any(|root| canonical_path.starts_with(root))
+}
+
+// Best-effort MIME hint for the local-file variant; the upstream variant relies on the provider's own Content-Type header instead.
+fn content_type_for_path(path: &FsPath) -> &'static str {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("mkv") => "video/x-matroska",
+        Some("mp4") | Some("m4v") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("mov") => "video/quicktime",
+        Some("avi") => "video/x-msvideo",
+        Some("ts") => "video/mp2t",
+        _ => "application/octet-stream",
     }
 }
 
@@ -285,7 +408,21 @@ async fn handle_stream(
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
 
-    let mut upstream_request = state.client.get(&session.upstream_url);
+    let upstream_url = match &session.source {
+        VodSource::Upstream(url) => url.clone(),
+        VodSource::LocalFile(path) => {
+            let path = path.clone();
+            return serve_local_file(
+                session.clone(),
+                state.events.clone(),
+                &path,
+                headers.get(axum::http::header::RANGE),
+            )
+            .await;
+        }
+    };
+
+    let mut upstream_request = state.client.get(&upstream_url);
     if let Some(range) = headers.get(axum::http::header::RANGE) {
         if let Ok(value) = range.to_str() {
             upstream_request = upstream_request.header(reqwest::header::RANGE, value);
@@ -434,14 +571,16 @@ fn feed_guarded(scanner: &mut ClusterScanner, chunk: &[u8]) -> Option<Vec<Scanne
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| scanner.feed(chunk))).ok()
 }
 
-fn tee_stream<S>(
+// Generic over the error type so the same tee wraps both the upstream stream (reqwest::Error) and the local-file stream (std::io::Error).
+fn tee_stream<S, E>(
     upstream: S,
     mut tee_state: TeeState,
     session: Arc<VodSession>,
     events: Arc<dyn VodProxyEvents>,
-) -> impl futures_util::Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static
+) -> impl futures_util::Stream<Item = Result<Bytes, E>> + Send + 'static
 where
-    S: futures_util::Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
+    S: futures_util::Stream<Item = Result<Bytes, E>> + Send + 'static,
+    E: Send + 'static,
 {
     upstream.map(move |item| {
         if let Ok(chunk) = &item {
@@ -450,6 +589,146 @@ where
         }
         item
     })
+}
+
+/// `NoRange` covers an absent or unparseable header (RFC 7233: ignore and serve the whole file);
+/// `Unsatisfiable` is only a start past EOF or a multi-range request (this proxy serves one range).
+#[derive(Debug, PartialEq)]
+enum RangeOutcome {
+    NoRange,
+    Satisfiable(u64, u64),
+    Unsatisfiable,
+}
+
+fn parse_single_range(header_value: &str, file_len: u64) -> RangeOutcome {
+    let Some(spec) = header_value.trim().strip_prefix("bytes=") else {
+        return RangeOutcome::NoRange;
+    };
+    if spec.contains(',') {
+        return RangeOutcome::Unsatisfiable;
+    }
+    if file_len == 0 {
+        return RangeOutcome::Unsatisfiable;
+    }
+    let Some((start_str, end_str)) = spec.split_once('-') else {
+        return RangeOutcome::NoRange;
+    };
+    if start_str.is_empty() {
+        let Ok(suffix_len) = end_str.parse::<u64>() else {
+            return RangeOutcome::NoRange;
+        };
+        if suffix_len == 0 {
+            return RangeOutcome::NoRange;
+        }
+        let start = file_len.saturating_sub(suffix_len.min(file_len));
+        return RangeOutcome::Satisfiable(start, file_len - 1);
+    }
+    let Ok(start) = start_str.parse::<u64>() else {
+        return RangeOutcome::NoRange;
+    };
+    if start >= file_len {
+        return RangeOutcome::Unsatisfiable;
+    }
+    let end = if end_str.is_empty() {
+        file_len - 1
+    } else {
+        match end_str.parse::<u64>() {
+            Ok(value) => value.min(file_len - 1),
+            Err(_) => return RangeOutcome::NoRange,
+        }
+    };
+    if end < start {
+        return RangeOutcome::NoRange;
+    }
+    RangeOutcome::Satisfiable(start, end)
+}
+
+/// Serves a local file with the same Range semantics the upstream-forwarding path exposes to
+/// the player, tee'd through the same subtitle/audio-cue scanner used for provider streams.
+async fn serve_local_file(
+    session: Arc<VodSession>,
+    events: Arc<dyn VodProxyEvents>,
+    path: &FsPath,
+    range_header: Option<&HeaderValue>,
+) -> Response {
+    let mut file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(error) => {
+            log::warn!("[vod-proxy] local file open failed: {error}");
+            return (StatusCode::NOT_FOUND, "file not found").into_response();
+        }
+    };
+    let file_len = match file.metadata().await {
+        Ok(metadata) => metadata.len(),
+        Err(error) => {
+            log::warn!("[vod-proxy] local file metadata failed: {error}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "metadata failed").into_response();
+        }
+    };
+
+    if file_len == 0 {
+        return axum::http::Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, content_type_for_path(path))
+            .header(axum::http::header::CONTENT_LENGTH, 0)
+            .header(axum::http::header::ACCEPT_RANGES, "bytes")
+            .body(axum::body::Body::empty())
+            .unwrap_or_else(|_| {
+                (StatusCode::INTERNAL_SERVER_ERROR, "response build failed").into_response()
+            });
+    }
+
+    let range_outcome = match range_header.and_then(|value| value.to_str().ok()) {
+        Some(value) => parse_single_range(value, file_len),
+        None => RangeOutcome::NoRange,
+    };
+    let (status, start, end_inclusive) = match range_outcome {
+        RangeOutcome::Unsatisfiable => {
+            return axum::http::Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .header(axum::http::header::CONTENT_RANGE, format!("bytes */{file_len}"))
+                .body(axum::body::Body::empty())
+                .unwrap_or_else(|_| {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "response build failed").into_response()
+                });
+        }
+        RangeOutcome::Satisfiable(start, end) => (StatusCode::PARTIAL_CONTENT, start, end),
+        RangeOutcome::NoRange => (StatusCode::OK, 0, file_len - 1),
+    };
+    if start > 0 {
+        if let Err(error) = file.seek(std::io::SeekFrom::Start(start)).await {
+            log::warn!("[vod-proxy] local file seek failed: {error}");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "seek failed").into_response();
+        }
+    }
+
+    let content_length = end_inclusive - start + 1;
+    let tee_state = TeeState::new(session.clone());
+    let body_stream = tee_stream(
+        ReaderStream::new(file.take(content_length)),
+        tee_state,
+        session,
+        events,
+    );
+
+    let mut response_builder = axum::http::Response::builder()
+        .status(status)
+        .header(axum::http::header::CONTENT_TYPE, content_type_for_path(path))
+        .header(axum::http::header::CONTENT_LENGTH, content_length)
+        .header(axum::http::header::ACCEPT_RANGES, "bytes");
+    if status == StatusCode::PARTIAL_CONTENT {
+        response_builder = response_builder.header(
+            axum::http::header::CONTENT_RANGE,
+            format!("bytes {start}-{end_inclusive}/{file_len}"),
+        );
+    }
+    match response_builder.body(axum::body::Body::from_stream(body_stream)) {
+        Ok(response) => response,
+        Err(error) => {
+            log::warn!("[vod-proxy] failed to build local file response: {error}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "response build failed").into_response()
+        }
+    }
 }
 
 fn cue_dedupe_key(cue: &ScannedCue) -> (u64, u64, u64) {
@@ -546,11 +825,33 @@ async fn fetch_range(
     start: u64,
     end_inclusive: u64,
 ) -> Option<Vec<u8>> {
+    match &session.source {
+        VodSource::Upstream(upstream_url) => {
+            fetch_upstream_range(
+                client,
+                upstream_url,
+                session.user_agent.as_deref(),
+                start,
+                end_inclusive,
+            )
+            .await
+        }
+        VodSource::LocalFile(path) => fetch_local_range(path, start, end_inclusive).await,
+    }
+}
+
+async fn fetch_upstream_range(
+    client: &reqwest::Client,
+    upstream_url: &str,
+    user_agent: Option<&str>,
+    start: u64,
+    end_inclusive: u64,
+) -> Option<Vec<u8>> {
     let mut request = client
-        .get(&session.upstream_url)
+        .get(upstream_url)
         .header(reqwest::header::RANGE, format!("bytes={start}-{end_inclusive}"));
-    if let Some(ua) = &session.user_agent {
-        request = request.header(reqwest::header::USER_AGENT, ua.clone());
+    if let Some(ua) = user_agent {
+        request = request.header(reqwest::header::USER_AGENT, ua);
     }
     let response = request.send().await.ok()?;
     // A Range-ignoring server answers 200 with the entire multi-GB file; only 206 bounds the body.
@@ -568,6 +869,21 @@ async fn fetch_range(
         }
     }
     buffer.truncate(cap);
+    Some(buffer)
+}
+
+// The exact byte count is already known on disk, so no HEAD_PROBE_SLACK is needed here.
+async fn fetch_local_range(path: &FsPath, start: u64, end_inclusive: u64) -> Option<Vec<u8>> {
+    let mut file = tokio::fs::File::open(path).await.ok()?;
+    let file_len = file.metadata().await.ok()?.len();
+    if start >= file_len {
+        return None;
+    }
+    let clamped_end = end_inclusive.min(file_len - 1);
+    file.seek(std::io::SeekFrom::Start(start)).await.ok()?;
+    let want = (clamped_end - start) as usize + 1;
+    let mut buffer = vec![0u8; want];
+    file.read_exact(&mut buffer).await.ok()?;
     Some(buffer)
 }
 
@@ -639,12 +955,157 @@ mod tests {
         Arc::new(VodSession {
             session_id: "sess".to_string(),
             token: "sess".to_string(),
-            upstream_url: "https://example.test/movie.mkv".to_string(),
+            source: VodSource::Upstream("https://example.test/movie.mkv".to_string()),
             user_agent: None,
             head,
             dedupe: Mutex::new(HashSet::new()),
             created_at: std::time::Instant::now(),
         })
+    }
+
+    #[test]
+    fn parse_single_range_handles_bounded_open_ended_and_suffix_forms() {
+        assert_eq!(parse_single_range("bytes=0-499", 1000), RangeOutcome::Satisfiable(0, 499));
+        assert_eq!(parse_single_range("bytes=500-", 1000), RangeOutcome::Satisfiable(500, 999));
+        assert_eq!(parse_single_range("bytes=-200", 1000), RangeOutcome::Satisfiable(800, 999));
+    }
+
+    #[test]
+    fn parse_single_range_clamps_an_end_past_the_file() {
+        assert_eq!(parse_single_range("bytes=900-2000", 1000), RangeOutcome::Satisfiable(900, 999));
+    }
+
+    #[test]
+    fn parse_single_range_rejects_multi_range_and_out_of_bounds_start_as_unsatisfiable() {
+        assert_eq!(parse_single_range("bytes=0-99,200-299", 1000), RangeOutcome::Unsatisfiable);
+        assert_eq!(parse_single_range("bytes=1000-1100", 1000), RangeOutcome::Unsatisfiable);
+        assert_eq!(parse_single_range("bytes=0-499", 0), RangeOutcome::Unsatisfiable);
+    }
+
+    #[test]
+    fn parse_single_range_falls_back_to_no_range_on_malformed_input() {
+        assert_eq!(parse_single_range("not-a-range", 1000), RangeOutcome::NoRange);
+        assert_eq!(parse_single_range("bytes=100-50", 1000), RangeOutcome::NoRange, "end before start");
+        assert_eq!(parse_single_range("bytes=-0", 1000), RangeOutcome::NoRange, "zero-length suffix");
+    }
+
+    #[test]
+    fn extract_extension_from_path_includes_the_leading_dot() {
+        assert_eq!(extract_extension_from_path(FsPath::new("/tmp/movie.mkv")), ".mkv");
+        assert_eq!(extract_extension_from_path(FsPath::new("/tmp/movie")), "");
+    }
+
+    #[test]
+    fn is_local_file_path_allowed_requires_both_root_and_extension_to_match() {
+        let roots = vec![PathBuf::from("/home/user/Downloads")];
+        assert!(is_local_file_path_allowed(
+            FsPath::new("/home/user/Downloads/movie.mkv"),
+            &roots
+        ));
+        assert!(!is_local_file_path_allowed(
+            FsPath::new("/etc/passwd"),
+            &roots
+        ), "outside every allowed root");
+        assert!(!is_local_file_path_allowed(
+            FsPath::new("/home/user/Downloads/notes.txt"),
+            &roots
+        ), "extension not in the allowed media list");
+    }
+
+    #[tokio::test]
+    async fn serve_local_file_returns_a_206_for_a_ranged_request() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("xt-vod-proxy-test-{}.bin", generate_token()));
+        tokio::fs::write(&path, b"0123456789").await.unwrap();
+
+        let session = test_session(OnceLock::new());
+        let collector = CollectorEvents::new();
+        let events: Arc<dyn VodProxyEvents> = collector.clone();
+        let range = HeaderValue::from_static("bytes=2-5");
+        let response = serve_local_file(session, events, &path, Some(&range)).await;
+
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response.headers().get(axum::http::header::CONTENT_RANGE).unwrap(),
+            "bytes 2-5/10"
+        );
+        assert_eq!(response.headers().get(axum::http::header::CONTENT_LENGTH).unwrap(), "4");
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"2345");
+
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn serve_local_file_returns_a_416_for_a_range_past_eof() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("xt-vod-proxy-test-{}.bin", generate_token()));
+        tokio::fs::write(&path, b"0123456789").await.unwrap();
+
+        let session = test_session(OnceLock::new());
+        let collector = CollectorEvents::new();
+        let events: Arc<dyn VodProxyEvents> = collector.clone();
+        let range = HeaderValue::from_static("bytes=1000-1100");
+        let response = serve_local_file(session, events, &path, Some(&range)).await;
+
+        assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(
+            response.headers().get(axum::http::header::CONTENT_RANGE).unwrap(),
+            "bytes */10"
+        );
+
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn serve_local_file_returns_a_suffix_range() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("xt-vod-proxy-test-{}.bin", generate_token()));
+        tokio::fs::write(&path, b"0123456789").await.unwrap();
+
+        let session = test_session(OnceLock::new());
+        let collector = CollectorEvents::new();
+        let events: Arc<dyn VodProxyEvents> = collector.clone();
+        let range = HeaderValue::from_static("bytes=-3");
+        let response = serve_local_file(session, events, &path, Some(&range)).await;
+
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            response.headers().get(axum::http::header::CONTENT_RANGE).unwrap(),
+            "bytes 7-9/10"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"789");
+
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn serve_local_file_returns_an_empty_200_for_a_zero_byte_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("xt-vod-proxy-test-{}.bin", generate_token()));
+        tokio::fs::write(&path, b"").await.unwrap();
+
+        let session = test_session(OnceLock::new());
+        let collector = CollectorEvents::new();
+        let events: Arc<dyn VodProxyEvents> = collector.clone();
+        let response = serve_local_file(session, events, &path, None).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get(axum::http::header::CONTENT_LENGTH).unwrap(), "0");
+        assert!(response.headers().get(axum::http::header::CONTENT_RANGE).is_none());
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(body.is_empty());
+
+        let _ = tokio::fs::remove_file(&path).await;
     }
 
     #[test]
@@ -915,7 +1376,7 @@ mod tests {
         let session = Arc::new(VodSession {
             session_id: token.clone(),
             token: token.clone(),
-            upstream_url: url,
+            source: VodSource::Upstream(url),
             user_agent: None,
             head: OnceLock::new(),
             dedupe: Mutex::new(HashSet::new()),

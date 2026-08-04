@@ -68,13 +68,29 @@ export function isMkvProxyCandidate(url: string): boolean {
   return pathname.endsWith(".mkv") || pathname.endsWith(".webm")
 }
 
-// Listeners attach before the sessionId is known, buffering raw payloads so no early event is lost.
-export async function prepareVodPlayback(
-  sourceUrl: string,
-): Promise<{ playbackUrl: string; mkvSession: MkvSubtitleSession | null }> {
-  const passthrough = { playbackUrl: sourceUrl, mkvSession: null }
-  if (!vodProxyAvailable || !isMkvProxyCandidate(sourceUrl)) return passthrough
+export interface VodProxySession {
+  playbackUrl: string
+  mkvSession: MkvSubtitleSession | null
+}
 
+interface RegisterVodProxyResult {
+  sessionId?: string
+  proxyUrl?: string
+}
+
+async function invokeRegisterCommand(
+  command: string,
+  args: Record<string, unknown>,
+): Promise<RegisterVodProxyResult> {
+  const { invoke } = await import("@tauri-apps/api/core")
+  return (await invoke(command, args)) as RegisterVodProxyResult
+}
+
+// Shared by the remote (register_vod_proxy) and local-file (register_vod_proxy_file) variants:
+// listeners attach before the sessionId is known, buffering raw payloads so no early event is lost.
+async function openMkvProxySession(
+  register: () => Promise<RegisterVodProxyResult>,
+): Promise<VodProxySession | null> {
   let ownSessionId: string | null = null
   const rawTracksBuffer: TracksEventPayload[] = []
   const rawCuesBuffer: CuesEventPayload[] = []
@@ -141,14 +157,9 @@ export async function prepareVodPlayback(
       handleCuesEvent(event.payload),
     )
 
-    const { invoke } = await import("@tauri-apps/api/core")
-    const userAgent = getUserAgent() || null
-    const result = (await invoke("register_vod_proxy", {
-      url: sourceUrl,
-      userAgent,
-    })) as { sessionId?: string; proxyUrl?: string }
+    const result = await register()
     if (!result?.sessionId || !result?.proxyUrl) {
-      throw new Error("register_vod_proxy returned an unexpected shape")
+      throw new Error("vod proxy register command returned an unexpected shape")
     }
 
     ownSessionId = result.sessionId
@@ -197,7 +208,7 @@ export async function prepareVodPlayback(
     }
     return { playbackUrl: result.proxyUrl, mkvSession: session }
   } catch (err) {
-    log.warn("[xt:vod-proxy] falling back to direct playback:", err)
+    log.warn("[xt:vod-proxy] session registration failed:", err)
     try { unlistenTracks?.() } catch (unlistenErr) { log.warn("[xt:vod-proxy] unlisten tracks failed:", unlistenErr) }
     try { unlistenCues?.() } catch (unlistenErr) { log.warn("[xt:vod-proxy] unlisten cues failed:", unlistenErr) }
     if (ownSessionId) {
@@ -211,6 +222,29 @@ export async function prepareVodPlayback(
         }
       })()
     }
-    return passthrough
+    return null
   }
+}
+
+export async function prepareVodPlayback(sourceUrl: string): Promise<VodProxySession> {
+  const passthrough: VodProxySession = { playbackUrl: sourceUrl, mkvSession: null }
+  if (!vodProxyAvailable || !isMkvProxyCandidate(sourceUrl)) return passthrough
+  const session = await openMkvProxySession(() => {
+    // An empty UA gets rejected or silently rerouted by some panels, so fall back to the WebView's own UA.
+    const userAgent = getUserAgent() || (typeof navigator !== "undefined" ? navigator.userAgent : null) || null
+    return invokeRegisterCommand("register_vod_proxy", { url: sourceUrl, userAgent })
+  })
+  if (session === null) log.warn("[xt:vod-proxy] falling back to direct playback")
+  return session ?? passthrough
+}
+
+/**
+ * Serves a completed download over local HTTP so the ffmpeg sidecar (http/pipe/tcp only, no file
+ * protocol) can remux it. Used when a local .mkv can't play in the WebView (WebKit desktop). Null
+ * means the proxy session failed to register - the caller has no direct-playback fallback for a
+ * container that can't play natively, so it owns the error UI.
+ */
+export async function prepareLocalVodPlayback(filePath: string): Promise<VodProxySession | null> {
+  if (!vodProxyAvailable) return null
+  return openMkvProxySession(() => invokeRegisterCommand("register_vod_proxy_file", { path: filePath }))
 }

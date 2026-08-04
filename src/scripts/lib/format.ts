@@ -54,6 +54,17 @@ export function formatBehindLive(behindMs: number): string {
   return `${minutes}:${paddedSeconds}`
 }
 
+/** Parses a colon-delimited "HH:MM:SS" or "MM:SS" clock string into seconds. Returns 0 when unparseable. */
+export function parseHmsToSeconds(value: unknown): number {
+  const raw = String(value ?? "").trim()
+  if (!raw.includes(":")) return 0
+  const parts = raw.split(":").map((part) => Number(part))
+  if (parts.some((part) => !Number.isFinite(part))) return 0
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
+  if (parts.length === 2) return parts[0] * 60 + parts[1]
+  return 0
+}
+
 export function fmtImdbRating(raw: unknown): string {
   if (raw == null || raw === "") return ""
   const value = parseFloat(String(raw).trim())
