@@ -3,6 +3,7 @@
 // against the first segment. Used by the "Test stream" context-menu action
 // to triage "this channel doesn't play" reports.
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
+import { isTauri } from "@/scripts/lib/creds.js"
 
 const FETCH_TIMEOUT_MS = 12_000
 
@@ -246,6 +247,15 @@ async function probeWebViewFetch(url) {
 }
 
 /**
+ * WebViews don't apply browser-style mixed-content blocking to custom-scheme
+ * app origins (e.g. tauri://localhost), so the warning only applies to the
+ * real web deployment (an https:// page in a browser).
+ */
+export function isMixedContentBlocked(appIsTauri, secureContext, url) {
+  return !appIsTauri && secureContext && /^http:\/\//i.test(url)
+}
+
+/**
  * Probe a stream URL. Designed to be paged into the dialog as it makes
  * progress, so the consumer can render partial results.
  *
@@ -264,7 +274,7 @@ export async function diagnoseStream(url, onUpdate) {
     startedAt: Date.now(),
     appOrigin,
     secureContext,
-    mixedContent: secureContext && /^http:\/\//i.test(url),
+    mixedContent: isMixedContentBlocked(isTauri, secureContext, url),
     head: null,
     playlist: null,
     firstSegment: null,
@@ -513,20 +523,21 @@ export function summarizeReport(report) {
     }
   }
 
-  if (report.mixedContent) {
-    return {
-      verdict: "warn",
-      reason:
-        t("streamTest.summary.mixedContent") ||
-        "Stream is http:// but the app runs in a secure context, so the embedded player blocks it as mixed content. Use an external player (MPV/VLC).",
-    }
-  }
+  // Measured blocking evidence always wins over the theoretical mixed-content flag.
   if (report.webviewProbe && report.webviewProbe.blocked) {
     return {
       verdict: "warn",
       reason:
         t("streamTest.summary.webviewBlocked") ||
         "Stream is reachable, but the embedded player is blocked by browser security (CORS / mixed content). On desktop it now routes around this; otherwise use an external player (MPV/VLC).",
+    }
+  }
+  if (report.mixedContent) {
+    return {
+      verdict: "warn",
+      reason:
+        t("streamTest.summary.mixedContent") ||
+        "Stream is http:// but the app runs in a secure context, so the embedded player blocks it as mixed content. Use an external player (MPV/VLC).",
     }
   }
   return {
