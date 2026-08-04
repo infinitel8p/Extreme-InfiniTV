@@ -6,7 +6,6 @@ import { log } from "@/scripts/lib/log.js"
 import {
   loadCreds,
   getActiveEntry,
-  fmtBase,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
@@ -78,6 +77,8 @@ import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/ext
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
+import { buildSeriesStreamUrl } from "@/scripts/lib/stream-urls.ts"
+import { attachPosterContextMenu } from "@/scripts/lib/poster-menu.ts"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -125,19 +126,123 @@ const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
 function buildEpisodeStreamUrl(ep, c = creds) {
   if (ep?._directUrl) return ep._directUrl
   if (!c.host || !c.user || !c.pass) return ""
-  const rawExt = ep.container_extension || "mp4"
-  const ext = String(rawExt).replace(/^\.+/, "").toLowerCase() || "mp4"
-  return (
-    fmtBase(c.host, c.port) +
-    "/series/" +
-    encodeURIComponent(c.user) +
-    "/" +
-    encodeURIComponent(c.pass) +
-    "/" +
-    encodeURIComponent(ep.id) +
-    "." +
-    ext
+  return buildSeriesStreamUrl(c, ep.id, ep.container_extension)
+}
+
+// ----------------------------
+// Right-click / long-press menu: "Test stream" / "Copy stream URL" per episode. Reuses
+// attachPosterContextMenu's wiring, but built locally since episodes don't fit openPosterMenu's shape.
+// ----------------------------
+let episodeMenuEl = null
+
+function closeEpisodeMenu() {
+  if (!episodeMenuEl) return
+  episodeMenuEl.remove()
+  episodeMenuEl = null
+  document.removeEventListener("pointerdown", onEpisodeMenuOutside, true)
+  document.removeEventListener("keydown", onEpisodeMenuKey, true)
+  window.removeEventListener("blur", closeEpisodeMenu)
+  window.removeEventListener("resize", closeEpisodeMenu)
+}
+
+function onEpisodeMenuOutside(event) {
+  if (!episodeMenuEl) return
+  if (episodeMenuEl.contains(event.target)) return
+  closeEpisodeMenu()
+}
+
+function onEpisodeMenuKey(event) {
+  if (event.key === "Escape") {
+    event.preventDefault()
+    closeEpisodeMenu()
+  }
+}
+
+function makeEpisodeMenuItem(label, handler) {
+  const btn = document.createElement("button")
+  btn.type = "button"
+  btn.setAttribute("role", "menuitem")
+  btn.className =
+    "w-full text-left px-3 py-2.5 min-h-11 rounded-lg text-sm " +
+    "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-1 focus-visible:ring-accent " +
+    "outline-none transition-colors"
+  btn.textContent = label
+  btn.addEventListener("click", () => {
+    closeEpisodeMenu()
+    try {
+      handler()
+    } catch (error) {
+      log.warn("[xt:series-detail] episode menu handler threw:", error)
+    }
+  })
+  return btn
+}
+
+function episodeMenuTitle(ep) {
+  return ep.title || t("series.episode.fallback", { n: ep.episode_num || "" })
+}
+
+function openEpisodeMenu(ep, anchor, point) {
+  closeEpisodeMenu()
+  const url = buildEpisodeStreamUrl(ep)
+  if (!url) return
+
+  const menu = document.createElement("div")
+  menu.id = "xt-episode-menu"
+  menu.className =
+    "fixed z-50 min-w-[12rem] rounded-xl border border-line bg-surface text-fg shadow-2xl " +
+    "p-1 flex flex-col gap-0.5 poster-menu-enter"
+  menu.setAttribute("role", "menu")
+  menu.setAttribute(
+    "aria-label",
+    t("list.menu.ariaFor", { name: episodeMenuTitle(ep) || t("list.fallbackTitle") })
   )
+
+  menu.appendChild(
+    makeEpisodeMenuItem(t("stream.menu.test"), () => {
+      import("@/scripts/lib/stream-diagnostic-dialog.js").then(({ openStreamDiagnostic }) => {
+        openStreamDiagnostic({ url, title: episodeMenuTitle(ep) })
+      })
+    })
+  )
+  menu.appendChild(
+    makeEpisodeMenuItem(t("stream.menu.copy"), async () => {
+      try {
+        const { writeClipboardText } = await import("@/scripts/lib/clipboard")
+        await writeClipboardText(url)
+        toast({ title: t("stream.toast.copied"), duration: 2200 })
+      } catch (error) {
+        log.warn("[xt:series-detail] copy stream URL failed:", error)
+        toast({ title: t("toast.copyError"), variant: "warn", duration: 2800 })
+      }
+    })
+  )
+
+  document.body.appendChild(menu)
+
+  const margin = 8
+  const rect = menu.getBoundingClientRect()
+  let left
+  let top
+  if (point) {
+    left = Math.min(point.x, window.innerWidth - rect.width - margin)
+    top = Math.min(point.y, window.innerHeight - rect.height - margin)
+  } else {
+    const anchorRect = anchor.getBoundingClientRect()
+    left = Math.min(anchorRect.right + 6, window.innerWidth - rect.width - margin)
+    top = Math.min(anchorRect.top, window.innerHeight - rect.height - margin)
+  }
+  menu.style.left = `${Math.max(margin, left)}px`
+  menu.style.top = `${Math.max(margin, top)}px`
+
+  episodeMenuEl = menu
+  document.addEventListener("pointerdown", onEpisodeMenuOutside, true)
+  document.addEventListener("keydown", onEpisodeMenuKey, true)
+  window.addEventListener("blur", closeEpisodeMenu)
+  window.addEventListener("resize", closeEpisodeMenu)
+
+  const first = menu.querySelector("button[role='menuitem']")
+  first?.focus({ preventScroll: true })
 }
 
 function syncFavButton() {
@@ -278,6 +383,7 @@ function toIndex(value) {
 
 function renderEpisodes() {
   if (!episodeList) return
+  closeEpisodeMenu()
   episodeList.replaceChildren()
   const eps = episodesByKey?.[currentSeason] || []
   if (!eps.length) {
@@ -469,6 +575,8 @@ function renderEpisodes() {
         row.appendChild(dlBtn)
       }
     }
+
+    attachPosterContextMenu(row, (anchor, point) => openEpisodeMenu(ep, anchor, point))
 
     episodeList.appendChild(row)
   }
@@ -1084,6 +1192,7 @@ subscribeExternalPlayerExit(() => {
 })
 
 window.addEventListener("pagehide", () => {
+  closeEpisodeMenu()
   try {
     if (activePlaylistId && currentEpisode && vjs) {
       const pos = vjs.currentTime?.() || 0
@@ -1373,6 +1482,7 @@ async function boot() {
   currentPlayingEpisodeId = null
   currentSeason = ""
   dismissUpNext()
+  closeEpisodeMenu()
 
   series = null
   episodesByKey = null

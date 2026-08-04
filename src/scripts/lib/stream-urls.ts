@@ -39,6 +39,35 @@ export function buildMovieStreamUrl(
   )
 }
 
+/**
+ * Build the canonical Xtream VOD stream URL for a series episode. Mirrors
+ * the path `series/detail.ts` constructs when the episode has no
+ * `_directUrl` override (see `buildEpisodeStreamUrl` there).
+ *
+ * Extension defaults to `mp4` when the provider didn't tag the episode with
+ * one. Username, password and episodeId are URL-encoded so providers with
+ * `/` or spaces in any of those fields don't break the path.
+ */
+export function buildSeriesStreamUrl(
+  creds: Creds,
+  episodeId: string | number,
+  containerExt: string | null | undefined
+): string {
+  const rawExt = containerExt || "mp4"
+  const ext = String(rawExt).replace(/^\.+/, "").toLowerCase() || "mp4"
+  return (
+    fmtBase(creds.host, creds.port).replace(/\/+$/, "") +
+    "/series/" +
+    encodeURIComponent(creds.user) +
+    "/" +
+    encodeURIComponent(creds.pass) +
+    "/" +
+    encodeURIComponent(String(episodeId)) +
+    "." +
+    ext
+  )
+}
+
 /** Canonical Xtream live-stream URL; mirrors stream.ts's buildDirectLiveUrl byte-for-byte so the two don't drift. */
 export function buildLiveStreamUrl(
   creds: Creds,
