@@ -1283,6 +1283,8 @@ const SHAKA_CATEGORY_NETWORK = 1
 const SHAKA_CATEGORY_MEDIA = 3
 const SHAKA_CATEGORY_DRM = 6
 
+const PLAY_REARM_TIMEOUT_MS = 20000
+
 // Shaka has no per-loader hook, so the Authorization header rides the WebView's fetch via a request filter.
 function configureShakaDrmAndAuth(
   player: any,
@@ -2565,6 +2567,15 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     fail(pendingSrc, describeShakaError(event?.detail))
   })
 
+  // Every src() path loads async, so a caller's play() rejects before media attaches.
+  let pendingPlayIntent = false
+
+  function consumePlayIntent() {
+    if (!pendingPlayIntent) return
+    pendingPlayIntent = false
+    void video.play()?.catch(() => {})
+  }
+
   async function loadIntoShaka(src: string, drm: DrmOptions | null | undefined, mimeTypeHint?: string) {
     destroyMpegts()
     const { url: cleanUrl, authorization } = splitUrlAuth(src)
@@ -2588,6 +2599,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       noteMonoSourceChange(video, cleanUrl)
       await player.load(cleanUrl, null, mimeTypeHint || undefined)
       if (pendingSrc !== src) return
+      consumePlayIntent()
       const track = player.getVariantTracks?.().find((variant: any) => variant.active)
       if (track?.videoCodec) codecState.videoCodec = String(track.videoCodec)
       if (track?.audioCodec) codecState.audioCodec = String(track.audioCodec)
@@ -2654,6 +2666,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     // Shaka's seek bar reads its own (unloaded) player during raw TS, so finite mounts use native controls instead.
     setNativeControls(!pendingIsLive)
     setShakaSeekBar(false)
+    consumePlayIntent()
   }
 
   function setNativeControls(useNative: boolean) {
@@ -2717,7 +2730,12 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
         })
     },
     play() {
-      return video.play()
+      const attempt = video.play()
+      if (!attempt || typeof attempt.catch !== "function") return attempt
+      return attempt.catch((err: any) => {
+        pendingPlayIntent = true
+        throw err
+      })
     },
     pause() {
       video.pause()
@@ -2854,4 +2872,38 @@ export async function mountPlayer(
 
 export function isExternalBackend(backend: PlayerBackend): boolean {
   return EXTERNAL_PLAYER_BACKENDS.includes(backend as ExternalPlayerKind)
+}
+
+export interface PlayWhenReadyOptions {
+  isStale?(): boolean
+  onReject?(err: any): void
+  onRetryReject?(err: any): void
+}
+
+/** Start playback, re-arming on `canplay` when the source load or a lost user gesture rejects play(). */
+export function playWhenReady(handle: VjsLikeHandle, options: PlayWhenReadyOptions = {}): void {
+  let result: Promise<unknown> | void
+  try {
+    result = handle.play?.()
+  } catch (err: any) {
+    options.onReject?.(err)
+    return
+  }
+  if (!result || typeof (result as Promise<unknown>).catch !== "function") return
+  void (result as Promise<unknown>).catch((err: any) => {
+    options.onReject?.(err)
+    const mediaEl = handle.getMediaElement?.()
+    if (!mediaEl) return
+    const resume = () => {
+      mediaEl.removeEventListener("canplay", resume)
+      if (options.isStale?.()) return
+      try {
+        void handle.play?.()?.catch?.((retryErr: any) => options.onRetryReject?.(retryErr))
+      } catch (retryErr: any) {
+        options.onRetryReject?.(retryErr)
+      }
+    }
+    mediaEl.addEventListener("canplay", resume)
+    setTimeout(() => mediaEl.removeEventListener("canplay", resume), PLAY_REARM_TIMEOUT_MS)
+  })
 }

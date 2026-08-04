@@ -66,6 +66,7 @@ import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js
 import { t, initI18n } from "@/scripts/lib/i18n.js"
 import {
   mountPlayer,
+  playWhenReady,
   getExternalLauncher,
   subscribeExternalPlayerExit,
   desktopPlatform,
@@ -1324,12 +1325,15 @@ async function playEpisode(episode) {
 
   // The switcher-owned mount plays itself once its remux session is up.
   if (!remuxOwnsInitialMount) {
-    const playResult = player.play?.()
-    if (playResult && typeof playResult.catch === "function") {
-      playResult.catch((err) =>
-        log.warn("[xt:series-detail] play() rejected:", err?.message || err)
-      )
-    }
+    playWhenReady(player, {
+      isStale: () => requestId !== playRequestId,
+      onReject: (err) =>
+        log.info("[xt:series-detail] play() rejected - re-arming on canplay", {
+          error: err?.name || err?.message || String(err),
+        }),
+      onRetryReject: (err) =>
+        log.warn("[xt:series-detail] retry play() rejected:", err?.name || err?.message || err),
+    })
   }
 
   // Fire-and-forget network probe that must never sit ahead of the mount above.
