@@ -22,6 +22,7 @@ vi.mock("@/scripts/lib/app-settings.js", () => ({
   setUserAgent: () => {},
   getDownloadDir: () => "",
   setDownloadDir: () => {},
+  downloadDirMatchesPlatform: () => true,
   getDownloadConcurrency: () => 2,
   setDownloadConcurrency: () => {},
   getPlayerBackend: () => "videojs",

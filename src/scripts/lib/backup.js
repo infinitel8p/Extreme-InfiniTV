@@ -21,6 +21,7 @@ import {
   setUserAgent,
   getDownloadDir,
   setDownloadDir,
+  downloadDirMatchesPlatform,
   getDownloadConcurrency,
   setDownloadConcurrency,
   getPlayerBackend,
@@ -38,6 +39,7 @@ import {
   getLocalContent,
   setLocalContent,
 } from "@/scripts/lib/local-content.js"
+import { log } from "@/scripts/lib/log.js"
 
 const FORMAT_VERSION = 1
 const FORMAT_NAME = "extreme-infinitv-backup"
@@ -156,8 +158,16 @@ export async function importAll(blob) {
       (b.appSettings.downloadDir === "" ||
         isAcceptablePath(b.appSettings.downloadDir))
     ) {
-      setDownloadDir(b.appSettings.downloadDir)
-      summary.appSettings++
+      if (downloadDirMatchesPlatform(b.appSettings.downloadDir)) {
+        setDownloadDir(b.appSettings.downloadDir)
+        summary.appSettings++
+      } else {
+        // Foreign-OS path (e.g. Windows restored onto macOS): leave the current setting untouched.
+        log.warn(
+          "[xt:backup] restored downloadDir is foreign to this platform, skipping:",
+          b.appSettings.downloadDir
+        )
+      }
     }
     if (typeof b.appSettings.downloadConcurrency === "number") {
       setDownloadConcurrency(b.appSettings.downloadConcurrency)

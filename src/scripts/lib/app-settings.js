@@ -143,8 +143,46 @@ export function setUserAgent(ua) {
   )
 }
 
+function isWindowsPlatform() {
+  return typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent || "")
+}
+
+/**
+ * True if `dir`'s path shape matches the current platform's filesystem
+ * conventions. Used to reject a downloadDir carried over from a different
+ * OS - e.g. a Windows "C:\Users\..." path restored from a backup on macOS,
+ * which fails every download with a sandbox "forbidden path" error.
+ *
+ * Shapes that aren't recognisably Windows or POSIX (Android SAF `content://`
+ * URIs and their JSON-wrapped form) are left alone; the acceptable-path
+ * checks that already gate those live in backup.js / the settings folder
+ * picker.
+ * @param {string} dir
+ * @returns {boolean}
+ */
+export function downloadDirMatchesPlatform(dir) {
+  if (typeof dir !== "string" || !dir) return true
+  const isWindowsShaped = /^[A-Za-z]:[\\/]/.test(dir) || dir.startsWith("\\\\")
+  const isPosixShaped = dir.startsWith("/")
+  if (!isWindowsShaped && !isPosixShaped) return true
+  return isWindowsPlatform() ? isWindowsShaped : isPosixShaped
+}
+
+let warnedForeignDownloadDir = false
+
 export function getDownloadDir() {
-  return readLS(KEY_DOWNLOAD_DIR, "")
+  const stored = readLS(KEY_DOWNLOAD_DIR, "")
+  if (stored && !downloadDirMatchesPlatform(stored)) {
+    if (!warnedForeignDownloadDir) {
+      warnedForeignDownloadDir = true
+      log.warn(
+        "[xt:settings] stored downloadDir is foreign to this platform, ignoring:",
+        stored
+      )
+    }
+    return ""
+  }
+  return stored
 }
 
 export function setDownloadDir(path) {
