@@ -38,6 +38,10 @@ function buildSections(): ShortcutSection[] {
       ],
     },
     {
+      title: t("keyboardHelp.section.moviesSeries"),
+      items: [{ keys: ["R"], desc: t("keyboardHelp.desc.surpriseMe") }],
+    },
+    {
       title: t("keyboardHelp.section.player"),
       items: [
         { keys: ["Space"], desc: t("keyboardHelp.desc.playPause") },

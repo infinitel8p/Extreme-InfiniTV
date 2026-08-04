@@ -3,7 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import SearchInput from "@/components/SearchInput.astro";
 import SortMenu from "@/components/SortMenu.astro";
 import CategoryPickerDialog from "@/components/CategoryPickerDialog.astro";
-import { IconChevronDown } from "@tabler/icons-svelte";
+import { IconChevronDown, IconDice5 } from "@tabler/icons-svelte";
 ---
 
 <Layout pageTitle="Series">
@@ -21,7 +21,7 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 		</header>
 
 		<!-- Toolbar -->
-		<section class="flex flex-col sm:flex-row gap-3 shrink-0">
+		<section class="flex flex-col sm:flex-row sm:flex-wrap gap-3 shrink-0">
 			<button
 				id="series-category-picker-trigger"
 				type="button"
@@ -52,15 +52,31 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 				/>
 			</div>
 
-			<SortMenu
-				id="series-sort"
-				widthClass="sm:w-44 shrink-0"
-				options={[
-					{ value: "default", label: "Default", key: "sort.default" },
-					{ value: "added", label: "Recently added", key: "sort.recentlyAdded" },
-					{ value: "az", label: "A-Z", key: "sort.az" },
-				]}
-			/>
+			<!-- Paired so the dice costs no extra row in the phone's stacked toolbar. -->
+			<div class="flex gap-3 sm:contents">
+				<SortMenu
+					id="series-sort"
+					widthClass="flex-1 sm:flex-none sm:w-44"
+					options={[
+						{ value: "default", label: "Default", key: "sort.default" },
+						{ value: "added", label: "Recently added", key: "sort.recentlyAdded" },
+						{ value: "az", label: "A-Z", key: "sort.az" },
+					]}
+				/>
+
+				<button
+					id="series-surprise"
+					type="button"
+					data-i18n-attr="aria-label:surprise.buttonAria;title:surprise.buttonAria"
+					aria-label="Surprise me with a random title"
+					title="Surprise me with a random title"
+					class="rounded-xl border border-line bg-surface min-h-11 text-sm shrink-0
+						flex items-center justify-center w-11 px-0 gap-0 sm:w-auto sm:px-3.5 sm:gap-2
+						hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
+					<IconDice5 aria-hidden="true" stroke={2} class="size-4 text-fg-3 shrink-0" />
+					<span data-i18n="surprise.button" class="hidden sm:inline">Surprise me</span>
+				</button>
+			</div>
 		</section>
 
 		<div

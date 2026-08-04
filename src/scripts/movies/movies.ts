@@ -21,6 +21,7 @@ import {
   setViewSort,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
+import { mountSurprisePicker } from "@/scripts/lib/surprise-picker.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
@@ -80,6 +81,13 @@ const picker = mountCategoryPicker({
   getItems: () => all,
 })
 document.addEventListener("xt:movie-cat-changed", () => applyFilter())
+
+mountSurprisePicker({
+  kind: "vod",
+  triggerId: "movie-surprise",
+  getPool: () => filtered,
+  getPlaylistId: () => activePlaylistId,
+})
 
 // STAR_OUTLINE / STAR_FILLED / BOOKMARK_FILLED are imported from entry-card.
 
