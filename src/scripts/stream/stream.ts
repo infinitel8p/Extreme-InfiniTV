@@ -160,7 +160,8 @@ function setNowPlaying(id) {
 let creds = { host: "", port: "", user: "", pass: "" }
 
 function buildDirectLiveUrl(id, c = creds) {
-  return buildLiveStreamUrl(c, id, c?.liveContainer)
+  const container = isM3u8ContainerFallbackChannel(id) ? "m3u8" : c?.liveContainer
+  return buildLiveStreamUrl(c, id, container)
 }
 
 // ----------------------------
@@ -1594,6 +1595,36 @@ function rememberNativeAudioFallbackChannel(id) {
     localStorage.setItem(`xt_native_audio_fallback:${activePlaylistId}`, JSON.stringify([...ids]))
   } catch {}
 }
+
+// Channels whose raw-TS audio can't decode are pinned to the m3u8 container instead (where the
+// HLS audio fallbacks apply); persisted per playlist like the native-audio-fallback set above.
+let m3u8ContainerFallbackCache = null
+
+function loadM3u8ContainerFallbackSet() {
+  if (m3u8ContainerFallbackCache && m3u8ContainerFallbackCache.playlistId === activePlaylistId) {
+    return m3u8ContainerFallbackCache.ids
+  }
+  let ids = new Set()
+  try {
+    const raw = localStorage.getItem(`xt_m3u8_container_fallback:${activePlaylistId}`)
+    if (raw) ids = new Set(JSON.parse(raw))
+  } catch {}
+  m3u8ContainerFallbackCache = { playlistId: activePlaylistId, ids }
+  return ids
+}
+
+function isM3u8ContainerFallbackChannel(id) {
+  return loadM3u8ContainerFallbackSet().has(id)
+}
+
+function rememberM3u8ContainerFallbackChannel(id) {
+  const ids = loadM3u8ContainerFallbackSet()
+  if (ids.has(id)) return
+  ids.add(id)
+  try {
+    localStorage.setItem(`xt_m3u8_container_fallback:${activePlaylistId}`, JSON.stringify([...ids]))
+  } catch {}
+}
 // Capped so a channel that keeps stalling right after retune bypasses the proxy instead of retuning forever.
 const audioProxyStallRetuneCounts = new Map()
 const AUDIO_PROXY_MAX_STALL_RETUNES = 2
@@ -1821,6 +1852,23 @@ function giveUpOnPlayback(ctx) {
       })
       return
     }
+  }
+  // MSE lacks a decoder here and the native fallbacks can't demux bare TS; Xtream serves the
+  // same channel as m3u8, so retune there instead.
+  if (
+    failure.kind === "audio" &&
+    ctx.isLive &&
+    creds?.liveContainer === "ts" &&
+    /\.ts(\?|$)/i.test(String(ctx.src || "")) &&
+    !isM3u8ContainerFallbackChannel(ctx.streamId)
+  ) {
+    rememberM3u8ContainerFallbackChannel(ctx.streamId)
+    log.warn("[xt:livetv] raw-TS stream failed with undecodable audio - retuning with the m3u8 container", {
+      streamId: ctx.streamId,
+      codec: failure.codec,
+    })
+    void play(ctx.streamId, ctx.name, "auto:m3u8-container-fallback")
+    return
   }
   // WKWebView MSE has no AC-3 decoder; remount such channels on native
   // AVFoundation, which does. The ffmpeg proxy is no answer for HLS sources.
