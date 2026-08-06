@@ -807,6 +807,41 @@ const navStructure: NavSection[] = [
               </script>
             </div>
 
+            <!-- Captions auto: turns on subtitles at playback start when the title has them -->
+            <div id="card-captions-auto" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.captionsAuto.title" class="text-sm font-medium leading-snug">Captions on by default</h3>
+                <p data-i18n="settings.captionsAuto.helperLong" class="text-xs text-fg-3">
+                  Automatically turns on subtitles when a movie or episode has them, preferring your app language. You can still turn them off in the player. Applies to this device.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-captions-auto"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Captions on by default"
+                  data-i18n-attr="aria-label:settings.captionsAuto.label">
+                  <button type="button" data-captions="on"  aria-pressed="false" data-i18n="settings.captionsAuto.on"  class="captions-auto-btn btn">On</button>
+                  <button type="button" data-captions="off" aria-pressed="false" data-i18n="settings.captionsAuto.off" class="captions-auto-btn btn">Off</button>
+                </div>
+              </div>
+              <script is:inline>
+                try {
+                  var captionsAutoRaw = localStorage.getItem("xt_captions_auto");
+                  var captionsAutoOn = captionsAutoRaw === "1";
+                  var captionsAutoGroup = document.getElementById("settings-captions-auto");
+                  if (captionsAutoGroup) {
+                    var captionsAutoBtns = captionsAutoGroup.querySelectorAll(".captions-auto-btn");
+                    for (var cIdx = 0; cIdx < captionsAutoBtns.length; cIdx++) {
+                      var captionsAutoBtnOn = captionsAutoBtns[cIdx].getAttribute("data-captions") === "on";
+                      captionsAutoBtns[cIdx].setAttribute("aria-pressed", captionsAutoBtnOn === captionsAutoOn ? "true" : "false");
+                    }
+                  }
+                } catch (e) {}
+              </script>
+            </div>
+
             <AndroidNativePlayerCard client:load />
 
             <RememberedAndroidPlayerCard client:load />
@@ -1746,6 +1781,8 @@ const navStructure: NavSection[] = [
       setHapticsEnabled,
       getMonoAudioEnabled,
       setMonoAudioEnabled,
+      getCaptionsAutoEnabled,
+      setCaptionsAutoEnabled,
       getAccent,
       setAccent,
       ACCENT_PRESETS,
@@ -2879,6 +2916,26 @@ const navStructure: NavSection[] = [
       syncMonoAudioButtons()
     })
     syncMonoAudioButtons()
+
+    // ---------------------------------------------------------------------
+    // Captions on by default
+    // ---------------------------------------------------------------------
+    const captionsAutoGroup = document.getElementById("settings-captions-auto")
+    function syncCaptionsAutoButtons() {
+      const current = getCaptionsAutoEnabled()
+      for (const btn of captionsAutoGroup?.querySelectorAll(".captions-auto-btn") || []) {
+        const isOn = btn.dataset.captions === "on"
+        btn.setAttribute("aria-pressed", String(isOn === current))
+      }
+    }
+    captionsAutoGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".captions-auto-btn")
+      if (!btn) return
+      setCaptionsAutoEnabled(btn.dataset.captions === "on")
+      syncCaptionsAutoButtons()
+    })
+    syncCaptionsAutoButtons()
 
     // ---------------------------------------------------------------------
     // Audio transcode auto-fix: desktop-only section (visible whether or not

@@ -1,6 +1,7 @@
 // Per-player subtitle manager: lazy per-track MP4 cue extraction, subtitles off by default.
 import { log } from "@/scripts/lib/log.js"
 import { t, getActiveLocale } from "@/scripts/lib/i18n.js"
+import { getCaptionsAutoEnabled } from "@/scripts/lib/app-settings.js"
 import { toastError } from "@/scripts/lib/toast.js"
 import {
   isMp4SubtitleCapableUrl,
@@ -20,7 +21,7 @@ export interface SubtitleRegistrar {
 export interface SubtitleManagerOptions {
   registrar: SubtitleRegistrar
   getCurrentTime: () => number
-  /** -1 unless a selection carried over from a remount. */
+  /** -1 unless a selection carried over from a remount or captions-auto picked one. */
   onTracksReady?: (tracks: { index: number; label: string; language: string }[], activeIndex: number) => void
 }
 
@@ -57,6 +58,20 @@ function drainTextTrackCues(track: TextTrack, restoreMode: TextTrackMode): void 
   track.mode = restoreMode
 }
 
+function primarySubtag(languageTag: string): string {
+  return languageTag.split("-")[0]?.toLowerCase() ?? ""
+}
+
+export function pickAutoCaptionTrack(
+  tracks: { index: number; label: string; language: string }[],
+  locale: string,
+): number {
+  if (!tracks.length) return -1
+  const localePrimary = primarySubtag(locale)
+  const match = tracks.find((track) => track.language && primarySubtag(track.language) === localePrimary)
+  return (match ?? tracks[0])!.index
+}
+
 export function createSubtitleManager(options: SubtitleManagerOptions): SubtitleManager {
   const { registrar, getCurrentTime, onTracksReady } = options
 
@@ -72,6 +87,8 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
   // Viewer's pick, kept across remounts (audio-track switch)
   let selectionSourceIdentity: MkvSubtitleSession | string | null = null
   let rememberedTrackKey: string | null = null
+  // Distinguishes "never touched" from "explicitly turned off" (both collapse rememberedTrackKey to null)
+  let hasMadeSubtitleSelection = false
   let offsetSeconds = 0
 
   function trackKeyOf(managed: ManagedTrack): string {
@@ -92,6 +109,22 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     if (managed.kind === "push") flushPushCues(managed)
     else startExtraction(index)
     return index
+  }
+
+  function resolveInitialSelection(
+    readyTracks: { index: number; label: string; language: string }[],
+  ): number {
+    const restoredIndex = restoreRememberedSelection()
+    if (restoredIndex >= 0) return restoredIndex
+    if (hasMadeSubtitleSelection || !readyTracks.length || !getCaptionsAutoEnabled()) return -1
+    const autoIndex = pickAutoCaptionTrack(readyTracks, getActiveLocale())
+    const managed = autoIndex >= 0 ? managedTracks[autoIndex] : undefined
+    if (!managed) return -1
+    managed.textTrack.mode = "showing"
+    if (managed.kind === "push") flushPushCues(managed)
+    else startExtraction(autoIndex)
+    rememberShowingTrack()
+    return autoIndex
   }
 
   function addCues(textTrack: TextTrack, cues: SubtitleCue[]): void {
@@ -204,6 +237,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
 
   function onTrackListChange(): void {
     // videojs flips track modes directly instead of calling select().
+    hasMadeSubtitleSelection = true
     rememberShowingTrack()
     managedTracks.forEach((managed, index) => {
       if (managed.textTrack.mode === "disabled") return
@@ -257,8 +291,8 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
           })
           readyTracks.push({ index, label: labeledTrack.label, language: labeledTrack.language })
         })
-        const restoredIndex = restoreRememberedSelection()
-        if (readyTracks.length) onTracksReady?.(readyTracks, restoredIndex)
+        const selectedIndex = resolveInitialSelection(readyTracks)
+        if (readyTracks.length) onTracksReady?.(readyTracks, selectedIndex)
 
         mkvSession.onCues((trackNumber, cues) => {
           if (currentSourceUrl !== sourceUrl || signal.aborted) return
@@ -297,7 +331,10 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
 
     // Identity: mkvSession for MKV, URL for MP4; stable across remux remounts.
     const incomingIdentity: MkvSubtitleSession | string | null = incomingMkvSession ?? sourceUrl
-    if (!incomingIdentity || incomingIdentity !== selectionSourceIdentity) rememberedTrackKey = null
+    if (!incomingIdentity || incomingIdentity !== selectionSourceIdentity) {
+      rememberedTrackKey = null
+      hasMadeSubtitleSelection = false
+    }
     selectionSourceIdentity = incomingIdentity
 
     if (incomingMkvSession) {
@@ -326,8 +363,8 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
           managedTracks.push({ kind: "mp4", trackId: trackInfo.trackId, textTrack, loaded: false, loading: false })
           readyTracks.push({ index, label: trackInfo.label, language: trackInfo.language })
         }
-        const restoredIndex = restoreRememberedSelection()
-        if (readyTracks.length) onTracksReady?.(readyTracks, restoredIndex)
+        const selectedIndex = resolveInitialSelection(readyTracks)
+        if (readyTracks.length) onTracksReady?.(readyTracks, selectedIndex)
       })
       .catch((err) => {
         if (err?.name === "AbortError") return
@@ -336,6 +373,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
   }
 
   function select(index: number): void {
+    hasMadeSubtitleSelection = true
     managedTracks.forEach((managed, managedIndex) => {
       managed.textTrack.mode = managedIndex === index ? "showing" : "disabled"
     })
@@ -362,6 +400,7 @@ export function createSubtitleManager(options: SubtitleManagerOptions): Subtitle
     currentSourceUrl = null
     selectionSourceIdentity = null
     rememberedTrackKey = null
+    hasMadeSubtitleSelection = false
     offsetSeconds = 0
     if (activeMkvSession) {
       try { activeMkvSession.stop() } catch (err) { log.warn("[xt:subtitles] mkv session stop() failed:", err) }

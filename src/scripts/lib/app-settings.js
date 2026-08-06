@@ -30,6 +30,7 @@ const KEY_AUTO_UPDATE = "xt_auto_update"
 const KEY_UI_SOUNDS = "xt_ui_sounds"
 const KEY_HAPTICS = "xt_haptics"
 const KEY_MONO_AUDIO = "xt_mono_audio"
+const KEY_CAPTIONS_AUTO = "xt_captions_auto"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -863,6 +864,20 @@ export function setMonoAudioEnabled(enabled) {
   writeLS(KEY_MONO_AUDIO, enabled ? "1" : "")
   document.dispatchEvent(
     new CustomEvent(MONO_AUDIO_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const CAPTIONS_AUTO_EVENT = "xt:captions-auto-changed"
+
+/** Captions on by default: default off. */
+export function getCaptionsAutoEnabled() {
+  return readLS(KEY_CAPTIONS_AUTO, "") === "1"
+}
+
+export function setCaptionsAutoEnabled(enabled) {
+  writeLS(KEY_CAPTIONS_AUTO, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(CAPTIONS_AUTO_EVENT, { detail: { value: !!enabled } })
   )
 }
 
