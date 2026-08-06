@@ -880,6 +880,40 @@ export function clearProgress(playlistId, kind, id) {
   dispatch(EVT_PROGRESS_CHANGED, { playlistId, kind, id, removed: true })
 }
 
+/** @returns {Promise<number>} total items removed */
+export async function clearViewingHistory() {
+  await ensureLoaded()
+  let removed = 0
+  const affectedPlaylistIds = []
+  for (const [playlistId, entry] of cache) {
+    const count =
+      entry.recLive.length +
+      entry.recVod.length +
+      entry.recSeries.length +
+      Object.keys(entry.progVod).length +
+      Object.keys(entry.progEpisode).length
+    if (!count) continue
+    entry.recLive = []
+    entry.recVod = []
+    entry.recSeries = []
+    entry.progVod = Object.create(null)
+    entry.progEpisode = Object.create(null)
+    removed += count
+    affectedPlaylistIds.push(playlistId)
+  }
+  if (!removed) return 0
+  scheduleSave()
+  for (const playlistId of affectedPlaylistIds) {
+    for (const kind of ["live", "vod", "series"]) {
+      dispatch(EVT_REC_CHANGED, { playlistId, kind })
+    }
+    for (const kind of ["vod", "episode"]) {
+      dispatch(EVT_PROGRESS_CHANGED, { playlistId, kind, removed: true })
+    }
+  }
+  return removed
+}
+
 /**
  * @param {string} playlistId
  * @param {number} [limit]

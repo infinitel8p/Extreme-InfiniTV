@@ -1210,6 +1210,21 @@ const navStructure: NavSection[] = [
               </div>
             </div>
 
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.viewingHistory.title" class="text-sm font-medium leading-snug">Clear viewing history</h3>
+                <p data-i18n="settings.viewingHistory.helper" class="text-xs text-fg-3">
+                  Removes continue watching and recently watched items from every playlist. Favorites and watchlist are kept.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <button id="settings-clear-history" type="button" class="btn justify-center">
+                  <IconTrash aria-hidden="true" class="btn-icon" />
+                  <span data-i18n="settings.viewingHistory.clear">Clear history</span>
+                </button>
+              </div>
+            </div>
+
           </div>
         </div>
 
@@ -1692,6 +1707,8 @@ const navStructure: NavSection[] = [
       renderPlaylistRow,
       getPlaylistListEmptyCopy,
     } from "@/scripts/lib/playlist-rows.js"
+    import { clearViewingHistory } from "@/scripts/lib/preferences.js"
+    import { confirmDialog } from "@/scripts/lib/confirm-dialog.ts"
     import { snifferAvailable } from "@/scripts/lib/stream-sniffer.ts"
     import { fetchReleases, renderMarkdown, filterReleasesForDisplay } from "@/scripts/lib/changelog.ts"
     import {
@@ -1774,7 +1791,7 @@ const navStructure: NavSection[] = [
     } from "@/scripts/lib/backup-snapshot.ts"
 
     bindExternalLinks()
-    import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
+    import { toast, toastSuccess, toastError } from "@/scripts/lib/toast.js"
     import {
       getOffsetSetting,
       setOffsetSetting,
@@ -1942,6 +1959,7 @@ const navStructure: NavSection[] = [
     const cacheNewestEl = document.getElementById("settings-cache-newest")
     const cacheMsgEl = document.getElementById("settings-cache-msg")
     const clearCacheBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-clear-cache"))
+    const clearHistoryBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-clear-history"))
     const resetBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-reset-all"))
     const resetMsgEl = document.getElementById("settings-reset-msg")
     const resetDialog = /** @type {HTMLDialogElement|null} */ (document.getElementById("settings-reset-dialog"))
@@ -2170,6 +2188,30 @@ const navStructure: NavSection[] = [
           syncCache()
         }
         if (ok && removed > 0) flashSuccess(clearCacheBtn)
+      }
+    })
+
+    clearHistoryBtn?.addEventListener("click", async () => {
+      const confirmed = await confirmDialog({
+        title: t("settings.viewingHistory.confirmTitle"),
+        message: t("settings.viewingHistory.confirm"),
+        confirmLabel: t("settings.viewingHistory.clear"),
+        destructive: true,
+      })
+      if (!confirmed) return
+      setLoading(clearHistoryBtn, true)
+      try {
+        const removed = await clearViewingHistory()
+        if (removed > 0) {
+          toastSuccess(t("settings.toast.historyCleared"))
+          flashSuccess(clearHistoryBtn)
+        } else {
+          toast({ title: t("settings.toast.historyEmpty") })
+        }
+      } catch {
+        toastError(t("settings.toast.historyClearFail"))
+      } finally {
+        setLoading(clearHistoryBtn, false)
       }
     })
 
