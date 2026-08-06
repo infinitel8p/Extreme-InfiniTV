@@ -30,6 +30,7 @@ const EVT_FAV_ORDER_CHANGED = "xt:favorites-order-changed"
 const EVT_WATCHLIST_CHANGED = "xt:watchlist-changed"
 const EVT_CHANNEL_VIDEO_SCALE_CHANGED = "xt:channel-video-scale-changed"
 export const EVT_SEARCH_RECENT_CHANGED = "xt:search-recent-changed"
+export const EVT_HIDE_WATCHED_CHANGED = "xt:hide-watched-changed"
 
 let storePromise = null
 function getStore() {
@@ -159,6 +160,9 @@ function emptyEntry() {
     videoScaleLive: Object.create(null),
     videoScaleVod: Object.create(null),
     videoScaleSeries: Object.create(null),
+    hideWatchedVod: false,
+    hideWatchedSeries: false,
+    watchedSeriesOverride: Object.create(null),
   }
 }
 
@@ -289,6 +293,12 @@ function hydrate(raw) {
         val.videoScaleSeries && typeof val.videoScaleSeries === "object"
           ? Object.assign(Object.create(null), val.videoScaleSeries)
           : Object.create(null),
+      hideWatchedVod: !!val.hideWatchedVod,
+      hideWatchedSeries: !!val.hideWatchedSeries,
+      watchedSeriesOverride:
+        val.watchedSeriesOverride && typeof val.watchedSeriesOverride === "object"
+          ? Object.assign(Object.create(null), val.watchedSeriesOverride)
+          : Object.create(null),
     })
   }
 }
@@ -340,6 +350,9 @@ function dehydrate() {
       videoScaleLive: { ...v.videoScaleLive },
       videoScaleVod: { ...v.videoScaleVod },
       videoScaleSeries: { ...v.videoScaleSeries },
+      hideWatchedVod: v.hideWatchedVod,
+      hideWatchedSeries: v.hideWatchedSeries,
+      watchedSeriesOverride: { ...v.watchedSeriesOverride },
     }
   }
   return out
@@ -976,6 +989,79 @@ export function getSeriesProgressSummary(playlistId, seriesId) {
   }
 }
 
+/**
+ * Progress-entry rollup for a series: which recorded episode ids are
+ * completed, and whether any recorded episode is not. Doesn't know the
+ * series' real episode list - callers verify against that separately.
+ * @param {string} playlistId
+ * @param {number|string} seriesId
+ * @returns {{ completedIds: number[], hasIncompleteEpisode: boolean }}
+ */
+export function getSeriesEpisodeProgress(playlistId, seriesId) {
+  const empty = { completedIds: [], hasIncompleteEpisode: false }
+  if (!playlistId || seriesId == null) return empty
+  const entry = cache.get(playlistId)
+  if (!entry) return empty
+  const sid = Number(seriesId)
+  if (!Number.isFinite(sid)) return empty
+
+  const completedIds = []
+  let hasIncompleteEpisode = false
+  for (const [episodeId, prog] of Object.entries(entry.progEpisode)) {
+    if (!prog || Number(prog.seriesId) !== sid) continue
+    if (prog.completed) completedIds.push(Number(episodeId))
+    else hasIncompleteEpisode = true
+  }
+  return { completedIds, hasIncompleteEpisode }
+}
+
+/**
+ * Manual "mark as watched" override for a series, independent of per-episode
+ * progress. Unmarking also clears any recorded episode progress for that
+ * series so a re-watch starts clean.
+ * @param {string} playlistId
+ * @param {number|string} seriesId
+ * @param {boolean} watched
+ */
+export function setSeriesWatchedOverride(playlistId, seriesId, watched) {
+  if (!playlistId || seriesId == null) return
+  const sid = Number(seriesId)
+  if (!Number.isFinite(sid)) return
+  const entry = getOrCreate(playlistId)
+  const key = String(sid)
+
+  if (watched) {
+    if (key in entry.watchedSeriesOverride) return
+    entry.watchedSeriesOverride[key] = Date.now()
+  } else {
+    const hadOverride = key in entry.watchedSeriesOverride
+    if (hadOverride) delete entry.watchedSeriesOverride[key]
+    let progressRemoved = false
+    for (const episodeId of Object.keys(entry.progEpisode)) {
+      if (Number(entry.progEpisode[episodeId]?.seriesId) !== sid) continue
+      delete entry.progEpisode[episodeId]
+      progressRemoved = true
+    }
+    if (!hadOverride && !progressRemoved) return
+  }
+
+  scheduleSave()
+  dispatch(EVT_PROGRESS_CHANGED, {
+    playlistId,
+    kind: "episode",
+    seriesId: sid,
+    override: true,
+  })
+}
+
+/** @param {string} playlistId @param {number|string} seriesId */
+export function hasSeriesWatchedOverride(playlistId, seriesId) {
+  if (!playlistId || seriesId == null) return false
+  const entry = cache.get(playlistId)
+  if (!entry) return false
+  return String(Number(seriesId)) in entry.watchedSeriesOverride
+}
+
 // ---------------------------------------------------------------------------
 // Hidden categories
 // ---------------------------------------------------------------------------
@@ -1436,6 +1522,30 @@ export function setViewSort(playlistId, kind, mode) {
   e.viewSort[kind] = m
   scheduleSave()
   dispatch(EVT_VIEW_CHANGED, { playlistId, kind, mode: m })
+}
+
+// ---------------------------------------------------------------------------
+// Hide watched (movies / series grid toggle)
+// ---------------------------------------------------------------------------
+const HIDE_WATCHED_KEY_BY_KIND = { vod: "hideWatchedVod", series: "hideWatchedSeries" }
+
+/** @param {string} playlistId @param {"vod"|"series"} kind */
+export function getHideWatched(playlistId, kind) {
+  const e = cache.get(playlistId)
+  return !!e?.[HIDE_WATCHED_KEY_BY_KIND[kind]]
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind @param {boolean} enabled */
+export function setHideWatched(playlistId, kind, enabled) {
+  if (!playlistId) return
+  const key = HIDE_WATCHED_KEY_BY_KIND[kind]
+  if (!key) return
+  const e = getOrCreate(playlistId)
+  const next = !!enabled
+  if (e[key] === next) return
+  e[key] = next
+  scheduleSave()
+  dispatch(EVT_HIDE_WATCHED_CHANGED, { playlistId, kind, enabled: next })
 }
 
 // ---------------------------------------------------------------------------

@@ -4,8 +4,8 @@
 // resize / scroll), same long-press threshold, same visual style.
 //
 // The menu items differ per kind:
-//   vod    - Open, Favorite, Watchlist, Download, Copy stream URL
-//   series - Open, Favorite, Watchlist
+//   vod    - Open, Favorite, Watchlist, Watched, Download, Copy stream URL
+//   series - Open, Favorite, Watchlist, Watched
 // (Download and stream URL don't apply at the series level - those are
 // per-episode and live on the detail page.)
 
@@ -17,6 +17,11 @@ import {
   toggleFavorite,
   isOnWatchlist,
   toggleWatchlist,
+  isCompleted,
+  markCompleted,
+  clearProgress,
+  hasSeriesWatchedOverride,
+  setSeriesWatchedOverride,
 } from "@/scripts/lib/preferences.js"
 
 export type PosterMenuKind = "vod" | "series"
@@ -133,6 +138,32 @@ export function openPosterMenu(opts: PosterMenuOptions): void {
           name: entry.name || "",
           logo: entry.logo || null,
         })
+      }
+    )
+  )
+
+  // Watched toggle - vod tracks completion, series uses a manual override
+  const watchedOn = playlistId
+    ? kind === "vod"
+      ? isCompleted(playlistId, "vod", entry.id)
+      : hasSeriesWatchedOverride(playlistId, entry.id)
+    : false
+  menu.appendChild(
+    makeItem(
+      t(watchedOn ? "list.menu.watchedUnmark" : "list.menu.watchedMark"),
+      () => {
+        if (!playlistId) return
+        if (kind === "vod") {
+          if (watchedOn) clearProgress(playlistId, "vod", entry.id)
+          else {
+            markCompleted(playlistId, "vod", entry.id, {
+              name: entry.name || "",
+              logo: entry.logo || null,
+            })
+          }
+        } else {
+          setSeriesWatchedOverride(playlistId, entry.id, !watchedOn)
+        }
       }
     )
   )

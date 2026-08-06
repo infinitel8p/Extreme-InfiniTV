@@ -5,6 +5,13 @@ interface SortOption {
     key?: string;
 }
 
+interface ToggleOption {
+    id: string;
+    label: string;
+    key?: string;
+    ariaKey?: string;
+}
+
 interface Props {
     id: string;
     label?: string;
@@ -12,6 +19,7 @@ interface Props {
     options: SortOption[];
     defaultValue?: string;
     widthClass?: string;
+    toggles?: ToggleOption[];
 }
 
 const {
@@ -21,7 +29,11 @@ const {
     options,
     defaultValue = options[0]?.value,
     widthClass = "sm:w-44 w-full",
+    toggles,
 } = Astro.props;
+
+const hasToggles = Boolean(toggles && toggles.length > 0);
+const hasIcon = Astro.slots.has("icon");
 
 const buttonId = `${id}-button`;
 const menuId = `${id}-menu`;
@@ -32,7 +44,10 @@ const initialLabel =
     "";
 ---
 
-<div class:list={["sort-menu relative", widthClass]} data-sort-menu>
+<div
+    class:list={["sort-menu relative", widthClass]}
+    data-sort-menu
+    data-toggles-active={hasToggles ? "false" : undefined}>
     <select
         id={id}
         class="sr-only"
@@ -51,16 +66,20 @@ const initialLabel =
     <button
         id={buttonId}
         type="button"
-        aria-haspopup="listbox"
+        aria-haspopup={hasToggles ? "menu" : "listbox"}
         aria-expanded="false"
         aria-controls={menuId}
         data-sort-menu-button
-        class="rounded-xl border border-line bg-surface px-3.5 py-2 min-h-11 text-sm w-full
-            flex items-center gap-2 text-left
-            hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
-            aria-expanded:bg-surface-2 aria-expanded:border-accent
-            transition-colors">
-        <span data-i18n={labelKey} class="text-fg-3 shrink-0">{label}</span>
+        class:list={[
+            "rounded-xl border border-line bg-surface px-3.5 py-2 min-h-11 text-sm w-full",
+            "flex items-center gap-2 text-left",
+            "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent",
+            "aria-expanded:bg-surface-2 aria-expanded:border-accent",
+            "transition-colors",
+            hasToggles && "relative",
+        ]}>
+        {hasIcon && <slot name="icon" />}
+        <span data-i18n={labelKey} class:list={[hasIcon ? "sr-only" : "text-fg-3 shrink-0"]}>{label}</span>
         <span
             id={valueId}
             class="text-fg truncate flex-1"
@@ -79,11 +98,16 @@ const initialLabel =
             class="text-fg-3 shrink-0 sort-menu__chevron">
             <path d="M6 9l6 6 6-6"></path>
         </svg>
+        {
+            hasToggles && (
+                <span aria-hidden="true" class="sort-menu__dot absolute top-2 right-2 size-1.5 rounded-full bg-accent pointer-events-none"></span>
+            )
+        }
     </button>
 
     <div
         id={menuId}
-        role="listbox"
+        role={hasToggles ? "menu" : "listbox"}
         aria-labelledby={buttonId}
         data-sort-menu-panel
         hidden
@@ -94,11 +118,18 @@ const initialLabel =
             options.map((opt) => (
                 <button
                     type="button"
-                    role="option"
+                    role={hasToggles ? "menuitemradio" : "option"}
                     data-value={opt.value}
                     data-i18n-key={opt.key}
                     aria-selected={
                         opt.value === defaultValue ? "true" : "false"
+                    }
+                    aria-checked={
+                        hasToggles
+                            ? opt.value === defaultValue
+                                ? "true"
+                                : "false"
+                            : undefined
                     }
                     class="sort-menu__option w-full text-left rounded-lg px-3 py-2 text-sm
                         flex items-center justify-between gap-3
@@ -122,6 +153,45 @@ const initialLabel =
                         </svg>
                 </button>
             ))
+        }
+        {
+            hasToggles && (
+                <>
+                    <div class="my-1 h-px bg-line" role="separator"></div>
+                    {toggles!.map((toggle) => (
+                        <button
+                            type="button"
+                            id={toggle.id}
+                            role="menuitemcheckbox"
+                            aria-checked="false"
+                            aria-label={toggle.label}
+                            data-i18n-attr={toggle.ariaKey ? `aria-label:${toggle.ariaKey}` : undefined}
+                            data-sort-menu-toggle
+                            data-i18n-key={toggle.key}
+                            class="sort-menu__option w-full text-left rounded-lg px-3 py-2 text-sm
+                                flex items-center justify-between gap-3
+                                text-fg-2 hover:text-fg hover:bg-surface-2
+                                focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:outline-none
+                                aria-checked:text-fg aria-checked:bg-accent-soft
+                                transition-colors">
+                                <span data-i18n={toggle.key} class="truncate">{toggle.label}</span>
+                                <svg
+                                    aria-hidden="true"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.5"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    class="text-accent shrink-0 sort-menu__check">
+                                    <path d="M5 12l5 5L20 7" />
+                                </svg>
+                        </button>
+                    ))}
+                </>
+            )
         }
     </div>
 </div>

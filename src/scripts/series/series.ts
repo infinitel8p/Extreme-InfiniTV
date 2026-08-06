@@ -14,11 +14,15 @@ import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
   isOnWatchlist,
+  getSeriesEpisodeProgress,
   getFavorites,
   getRecents,
   getViewSort,
   setViewSort,
   getSeriesProgressSummary,
+  getHideWatched,
+  setHideWatched,
+  hasSeriesWatchedOverride,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { mountSurprisePicker } from "@/scripts/lib/surprise-picker.ts"
@@ -32,6 +36,8 @@ import {
 } from "@/scripts/lib/entry-card.js"
 import {
   getCachedSeasonCount,
+  getCachedEpisodeIds,
+  requestEpisodeIds,
   observeSeasonCount,
   seasonsLabel,
 } from "@/scripts/lib/series-seasons.ts"
@@ -71,6 +77,51 @@ let categoryMap = null
 
 let activePlaylistId = ""
 let activePlaylistTitle = ""
+
+// Series fully watched against their real episode list, not just recorded
+// progress entries. Recomputed whenever progress/hide-watched state changes.
+let fullyWatchedSeriesIds = new Set()
+let recomputeRunToken = 0
+
+async function recomputeFullyWatched() {
+  const runToken = ++recomputeRunToken
+  const playlistId = activePlaylistId
+  if (!playlistId) {
+    fullyWatchedSeriesIds = new Set()
+    return
+  }
+
+  const next = new Set()
+  const candidates = []
+  for (const series of all) {
+    if (hasSeriesWatchedOverride(playlistId, series.id)) {
+      next.add(series.id)
+      continue
+    }
+    const progress = getSeriesEpisodeProgress(playlistId, series.id)
+    if (progress.completedIds.length > 0 && !progress.hasIncompleteEpisode) {
+      candidates.push(series)
+    }
+  }
+
+  for (const series of candidates) {
+    if (runToken !== recomputeRunToken || activePlaylistId !== playlistId) return
+    const episodeIds =
+      getCachedEpisodeIds(playlistId, series.id) ??
+      (await requestEpisodeIds(playlistId, series.id))
+    if (runToken !== recomputeRunToken || activePlaylistId !== playlistId) return
+    if (!episodeIds || !episodeIds.length) continue
+    const completedIds = new Set(
+      getSeriesEpisodeProgress(playlistId, series.id).completedIds
+    )
+    if (episodeIds.every((episodeId) => completedIds.has(episodeId))) {
+      next.add(series.id)
+    }
+  }
+
+  if (runToken !== recomputeRunToken || activePlaylistId !== playlistId) return
+  fullyWatchedSeriesIds = next
+}
 
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
@@ -128,10 +179,15 @@ document.addEventListener("xt:hidden-categories-changed", onSeriesFilterChange)
 document.addEventListener("xt:allowed-categories-changed", onSeriesFilterChange)
 document.addEventListener("xt:category-mode-changed", onSeriesFilterChange)
 
-document.addEventListener("xt:progress-changed", (event) => {
+document.addEventListener("xt:progress-changed", async (event) => {
   const detail = /** @type {CustomEvent} */ (event).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
   if (detail.kind !== "episode") return
+  if (getHideWatched(activePlaylistId, "series")) {
+    await recomputeFullyWatched()
+    applyFilter()
+    return
+  }
   const seriesId = Number(detail.seriesId ?? 0)
   if (!seriesId) {
     refreshSeriesProgressBadges()
@@ -554,6 +610,10 @@ function applyFilter() {
     })
   }
 
+  if (activePlaylistId && getHideWatched(activePlaylistId, "series")) {
+    out = out.filter((s) => !fullyWatchedSeriesIds.has(s.id))
+  }
+
   /** @type {Map<number, number> | null} */
   let scoreById = null
   if (tokens.length) {
@@ -621,6 +681,25 @@ sortEl?.addEventListener("change", () => {
   applyFilter()
 })
 
+const hideWatchedBtn = document.getElementById("series-hide-watched")
+function syncHideWatchedControl() {
+  if (!hideWatchedBtn || !activePlaylistId) return
+  hideWatchedBtn.setAttribute(
+    "aria-checked",
+    String(getHideWatched(activePlaylistId, "series"))
+  )
+}
+// Delegated on document so sort-menu.ts's own click handler (attached
+// directly to the button) flips aria-checked before this one reads it.
+document.addEventListener("click", async (event) => {
+  if (!hideWatchedBtn || !activePlaylistId) return
+  if (!(event.target instanceof Node) || !hideWatchedBtn.contains(event.target)) return
+  const next = hideWatchedBtn.getAttribute("aria-checked") === "true"
+  setHideWatched(activePlaylistId, "series", next)
+  if (next) await recomputeFullyWatched()
+  applyFilter()
+})
+
 searchEl?.addEventListener(
   "input",
   debounce(() => applyFilter(), 160)
@@ -637,7 +716,7 @@ function showEmptyState() {
   renderGrid()
 }
 
-function paintSeries(data, fromCache, age) {
+async function paintSeries(data, fromCache, age) {
   all = data
   if (listStatus) {
     listStatus.textContent =
@@ -645,6 +724,7 @@ function paintSeries(data, fromCache, age) {
       (fromCache ? ` · ${fmtAge(age)}` : "")
   }
   picker.rerender()
+  if (getHideWatched(activePlaylistId, "series")) await recomputeFullyWatched()
   applyFilter()
 }
 
@@ -661,11 +741,12 @@ async function loadSeries() {
   activePlaylistTitle = active.title || ""
   await ensurePrefsLoaded()
   syncSortControl()
+  syncHideWatchedControl()
   await hydrateCache(active._id, "series")
 
   const hit = getCached(active._id, "series")
   if (hit) {
-    paintSeries(hit.data, true, hit.age)
+    await paintSeries(hit.data, true, hit.age)
   } else {
     listStatus.textContent = t("common.loading")
     if (!gridEl?.querySelector("[data-skeleton]")) renderPosterSkeletons(gridEl)
@@ -740,7 +821,7 @@ async function loadSeries() {
           )
       }
     )
-    paintSeries(data, fromCache, age)
+    await paintSeries(data, fromCache, age)
   } catch (e) {
     log.error("[xt:series] loadSeries threw:", e)
     filtered = []

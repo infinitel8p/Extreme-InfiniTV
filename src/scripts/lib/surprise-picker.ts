@@ -6,7 +6,11 @@ import { escapeHtml, fmtImdbRating } from "@/scripts/lib/format.ts"
 import { t } from "@/scripts/lib/i18n.js"
 import { ICON_DICE, ICON_REFRESH, ICON_X } from "@/scripts/lib/icons.ts"
 import { log } from "@/scripts/lib/log.js"
-import { getProgressFraction, getSeriesProgressSummary } from "@/scripts/lib/preferences.js"
+import {
+  getProgressFraction,
+  getSeriesProgressSummary,
+  hasSeriesWatchedOverride,
+} from "@/scripts/lib/preferences.js"
 
 export type SurpriseKind = "vod" | "series"
 
@@ -168,7 +172,8 @@ export function mountSurprisePicker(config: SurprisePickerConfig): SurprisePicke
     const playlistId = config.getPlaylistId()
     if (!playlistId) return false
     if (config.kind === "vod") return getProgressFraction(playlistId, "vod", entry.id) > 0
-    return !!getSeriesProgressSummary(playlistId, entry.id)
+    return !!getSeriesProgressSummary(playlistId, entry.id) ||
+      hasSeriesWatchedOverride(playlistId, entry.id)
   }
 
   function ensureDialog(): HTMLDialogElement {

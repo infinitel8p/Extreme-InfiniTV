@@ -20,8 +20,12 @@ function initSortMenu(wrapper: Element) {
     const valueLabel = valueLabelMaybe
 
     const options = Array.from(
-        panel.querySelectorAll<HTMLButtonElement>("[role='option']")
+        panel.querySelectorAll<HTMLButtonElement>("[role='option'], [role='menuitemradio']")
     )
+    const toggles = Array.from(
+        panel.querySelectorAll<HTMLButtonElement>("[data-sort-menu-toggle]")
+    )
+    const focusables = [...options, ...toggles]
 
     function syncFromSelect() {
         const current = select.value
@@ -75,6 +79,29 @@ function initSortMenu(wrapper: Element) {
         syncFromSelect()
     }
 
+    function syncTogglesActive() {
+        const anyChecked = toggles.some(
+            (toggle) => toggle.getAttribute("aria-checked") === "true"
+        )
+        wrapper.setAttribute("data-toggles-active", String(anyChecked))
+    }
+
+    function toggleChecked(toggle: HTMLButtonElement) {
+        const next = toggle.getAttribute("aria-checked") !== "true"
+        toggle.setAttribute("aria-checked", String(next))
+        syncTogglesActive()
+    }
+
+    function activate(target: HTMLButtonElement | undefined) {
+        if (!target) return
+        if (target.hasAttribute("data-sort-menu-toggle")) {
+            toggleChecked(target)
+            return
+        }
+        selectValue(target.dataset.value || "")
+        close()
+    }
+
     button.addEventListener("click", () => {
         if (isOpen()) close()
         else open()
@@ -96,8 +123,11 @@ function initSortMenu(wrapper: Element) {
         })
     }
 
+    for (const toggle of toggles) {
+        toggle.addEventListener("click", () => toggleChecked(toggle))
+    }
+
     panel.addEventListener("keydown", (event) => {
-        const focusables = options
         const currentIndex = focusables.indexOf(
             document.activeElement as HTMLButtonElement
         )
@@ -147,12 +177,7 @@ function initSortMenu(wrapper: Element) {
             case "Enter":
             case " ": {
                 handled()
-                const current = focusables[currentIndex]
-                if (current) {
-                    const value = current.dataset.value || ""
-                    selectValue(value)
-                    close()
-                }
+                activate(focusables[currentIndex])
                 break
             }
             default:
@@ -192,6 +217,14 @@ function initSortMenu(wrapper: Element) {
                 syncFromSelect()
             },
         })
+    }
+
+    if (toggles.length) {
+        const toggleObserver = new MutationObserver(syncTogglesActive)
+        for (const toggle of toggles) {
+            toggleObserver.observe(toggle, { attributes: true, attributeFilter: ["aria-checked"] })
+        }
+        syncTogglesActive()
     }
 
     syncFromSelect()

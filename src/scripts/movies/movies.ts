@@ -15,10 +15,13 @@ import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
   isOnWatchlist,
+  isCompleted,
   getFavorites,
   getRecents,
   getViewSort,
   setViewSort,
+  getHideWatched,
+  setHideWatched,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { mountSurprisePicker } from "@/scripts/lib/surprise-picker.ts"
@@ -113,6 +116,13 @@ document.addEventListener("xt:recents-changed", (ev) => {
   if (detail.kind !== "vod") return
   if (picker.getActiveCat() === CAT_RECENTS) applyFilter()
   picker.refreshPseudoRows()
+})
+
+document.addEventListener("xt:progress-changed", (ev) => {
+  const detail = /** @type {CustomEvent} */ (ev).detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "vod") return
+  if (getHideWatched(activePlaylistId, "vod")) applyFilter()
 })
 
 const onMovieFilterChange = (ev: Event) => {
@@ -454,6 +464,10 @@ function applyFilter() {
     })
   }
 
+  if (activePlaylistId && getHideWatched(activePlaylistId, "vod")) {
+    out = out.filter((m) => !isCompleted(activePlaylistId, "vod", m.id))
+  }
+
   /** @type {Map<number, number> | null} */
   let scoreById = null
   if (tokens.length) {
@@ -521,6 +535,24 @@ sortEl?.addEventListener("change", () => {
   applyFilter()
 })
 
+const hideWatchedBtn = document.getElementById("movie-hide-watched")
+function syncHideWatchedControl() {
+  if (!hideWatchedBtn || !activePlaylistId) return
+  hideWatchedBtn.setAttribute(
+    "aria-checked",
+    String(getHideWatched(activePlaylistId, "vod"))
+  )
+}
+// Delegated on document so sort-menu.ts's own click handler (attached
+// directly to the button) flips aria-checked before this one reads it.
+document.addEventListener("click", (event) => {
+  if (!hideWatchedBtn || !activePlaylistId) return
+  if (!(event.target instanceof Node) || !hideWatchedBtn.contains(event.target)) return
+  const next = hideWatchedBtn.getAttribute("aria-checked") === "true"
+  setHideWatched(activePlaylistId, "vod", next)
+  applyFilter()
+})
+
 searchEl?.addEventListener(
   "input",
   debounce(() => {
@@ -571,6 +603,7 @@ async function loadMovies() {
   activePlaylistTitle = active.title || ""
   await ensurePrefsLoaded()
   syncSortControl()
+  syncHideWatchedControl()
   await hydrateCache(active._id, "vod")
 
   const hit = getCached(active._id, "vod")

@@ -2673,7 +2673,16 @@ html.xt-glide-tracking :is(a, button, input, textarea, select, summary, [tabinde
     opacity: 0;
     transition: opacity 160ms ease-out;
 }
-.sort-menu__option[aria-selected="true"] .sort-menu__check {
+.sort-menu__option[aria-selected="true"] .sort-menu__check,
+.sort-menu__option[aria-checked="true"] .sort-menu__check {
+    opacity: 1;
+}
+
+.sort-menu__dot {
+    opacity: 0;
+    transition: opacity 160ms ease-out;
+}
+[data-sort-menu][data-toggles-active="true"] .sort-menu__dot {
     opacity: 1;
 }
 
