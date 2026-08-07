@@ -87,24 +87,27 @@
 ## Features
 
 - **Any source, one UI.** Sign in with Xtream Codes credentials, paste an M3U / M3U8 URL or a direct stream link, or load a playlist file from your device. The app detects the mode automatically.
-- **Live TV** with category filtering, channel search, channel-number entry, a virtualised list, and inline EPG (now / next / today).
+- **Live TV** with category filtering, channel search, channel-number entry, a virtualised list, inline EPG (now / next / today), and automatic channel-logo fallback from iptv-org's logo collection when a provider doesn't supply one.
 - **[Catch-up TV and replay](https://dev.infinitel8p.com/Extreme-InfiniTV/catch-up/).** Replay programmes from your provider's archive and pause or rewind behind live, with a full-programme seekbar.
 - **[Custom playlists](https://dev.infinitel8p.com/Extreme-InfiniTV/custom-playlists/)** built in a full in-app editor: pull channels from any playlist, reorder and group them, rename, renumber, find and replace, check links, and export as `.m3u`.
 - **[Add a stream from any website](https://dev.infinitel8p.com/Extreme-InfiniTV/add-from-website/).** Paste a page URL and the app sniffs the network for playable HLS / DASH streams, with quality labels and multi-select.
-- **Movies (VOD)** and **Series** library with poster grids, detail dialogs, and season / episode navigation.
+- **Movies (VOD)** and **Series** library with poster grids, detail dialogs, season / episode navigation, mark watched / unwatched with a watched badge, an optional hide-watched filter, and a "Surprise me" random-title picker.
+- **[TMDB metadata enrichment](https://www.themoviedb.org/).** Optional, bring-your-own free API key (Settings > Network): cast, director, and similar titles on movie and series detail pages.
+- **"Because you watched" recommendations** on the home screen, plus similar-title suggestions on detail pages, both computed locally from category, cast, and director so they work even without a TMDB key.
+- **Search** (`Ctrl+K`) across channels, movies, and series, with recent searches you can revisit or clear.
 - **Full schedule grid** on the EPG page, with timezone-aware "all times local" rendering, custom EPG sources, and channel mapping.
 - **A player for everything.** Three embedded engines (ArtPlayer, Video.js, Shaka) cover HLS, MPEG-TS, MPEG-DASH with ClearKey, and HEVC (with one-click install of the Windows HEVC extension). Picture-in-picture included.
-- **[Embedded subtitles](https://dev.infinitel8p.com/Extreme-InfiniTV/subtitles/)** from MP4 files everywhere and MKV files on desktop, plus **audio track switching** and **[automatic audio repair](https://dev.infinitel8p.com/Extreme-InfiniTV/audio-formats/)**: AC-3 / E-AC-3 / MP2 / DTS transcoded on the fly through a bundled FFmpeg (Windows / Linux).
+- **[Embedded subtitles](https://dev.infinitel8p.com/Extreme-InfiniTV/subtitles/)** from MP4 files everywhere, plus MKV playback on desktop (remuxed on the fly through a bundled FFmpeg on macOS / Linux, and as a Windows fallback when WebView2 can't demux a file), with an option to turn captions on by default, **audio track switching**, and **[automatic audio repair](https://dev.infinitel8p.com/Extreme-InfiniTV/audio-formats/)** for AC-3 / E-AC-3 / MP2 / DTS.
 - **[External players](https://dev.infinitel8p.com/Extreme-InfiniTV/external-players/).** Hand any stream to MPV or VLC on desktop (with window reuse), or to any installed video app on Android.
 - **Multiple playlists**, switchable from the sidebar without re-entering credentials, each with its own favorites, watchlist, progress, and health panel.
-- **TV-first navigation.** Spatial focus (D-pad / arrow keys) is wired across the whole app via `spatial-navigation-polyfill`. Hit targets, focus rings, and reflow tested for 10-foot UI, plus a TV safe-area setting for overscan.
+- **TV-first navigation.** Spatial focus (D-pad / arrow keys) is wired across the whole app via `spatial-navigation-polyfill`. Hit targets, focus rings, and reflow tested for 10-foot UI, plus a TV safe-area setting for overscan and a collapsible desktop sidebar.
 - **16 languages** including RTL (Arabic, Urdu), translated before first paint so there's no flash of English.
-- **Light and dark themes** with seven accent colors, both first-class. Honours `prefers-color-scheme`, `prefers-reduced-motion`, and `prefers-contrast`.
-- **Adjustable font scale** (Default / Medium / Large / X-Large) plus a responsive root size that scales the whole UI on 4K and 8K displays.
+- **Light and dark themes** with seven accent colors, both first-class; each playlist can also override the accent (and add an emoji) so you can tell them apart at a glance. Honours `prefers-color-scheme`, `prefers-reduced-motion`, and `prefers-contrast`.
+- **Adjustable font scale** (Small / Default / Medium / Large / X-Large) plus a responsive root size that scales the whole UI on 4K and 8K displays.
 - **Self-updating desktop builds** (Windows NSIS and Linux AppImage) via the Tauri updater, signed with minisign and served from GitHub Releases, with stable and beta channels and a "What's new" dialog after each update.
 - **Backup and restore.** Export playlists, preferences, and settings as one file and import them on another device.
-- **Offline-friendly persistence.** Credentials and preferences live in the OS app-data dir on Tauri builds, with a localStorage / cookie fallback on the web build.
-- **No tracking, no ads, no telemetry.** The app collects nothing about you or your viewing habits.
+- **Offline-friendly persistence.** Credentials and preferences live in the OS app-data dir on Tauri builds, with a localStorage / cookie fallback on the web build; clear your viewing history from Settings at any time.
+- **No tracking, no ads, no telemetry by default.** The app collects nothing about you or your viewing habits. The only outbound metadata lookup is the optional TMDB enrichment above, off by default and using your own API key when you turn it on.
 
 ## Install
 
@@ -159,7 +162,7 @@ To test the dev server on another device on the LAN (phone, TV), set `XTREAM_HMR
 XTREAM_HMR_HOST=192.168.1.50 pnpm dev
 ```
 
-Tests run with Vitest (`pnpm test`); ~28 suites in `tests/` cover the parsers, serializers, catch-up math, codec hints, custom playlists, backup, and the playback proxies. Lint with ESLint flat config (`pnpm lint` / `pnpm lint:fix`); no Prettier. TypeScript is in strict mode (`tsconfig.json` extends `astro/tsconfigs/strict`); the `@/*` alias maps to `src/*`.
+Tests run with Vitest (`pnpm test`); ~55 suites in `tests/` cover the parsers, serializers, catch-up math, codec hints, custom playlists, backup, and the playback proxies. Lint with ESLint flat config (`pnpm lint` / `pnpm lint:fix`); no Prettier. TypeScript is in strict mode (`tsconfig.json` extends `astro/tsconfigs/strict`); the `@/*` alias maps to `src/*`.
 
 ## Credits
 
@@ -170,3 +173,5 @@ Copyright (c) 2025 Ludovico Ferrara.
 Extreme InfiniTV is released under the [GNU General Public License v3.0 or later](LICENSE). You are free to use, study, share, and modify it; any distributed fork or derivative must remain under the same license and ship its source.
 
 The Windows and Linux desktop builds bundle a trimmed [FFmpeg](https://ffmpeg.org) binary (LGPL v2.1) for the automatic audio fix. The full notice, source pointer, and build recipe are in the app under **Settings > About > Open-source licenses**.
+
+The optional TMDB metadata enrichment uses the [TMDB](https://www.themoviedb.org) API with your own API key. This product uses the TMDB API but is not endorsed or certified by TMDB. Channel logos not supplied by your provider fall back to [iptv-org](https://github.com/iptv-org/api)'s CC0 logo collection.
