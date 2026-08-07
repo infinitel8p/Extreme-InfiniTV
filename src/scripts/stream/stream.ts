@@ -71,6 +71,7 @@ import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extens
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { toast, toastError } from "@/scripts/lib/toast.js"
+import { requestLogoFallback } from "@/scripts/lib/logo-fallback.ts"
 import {
   mountPlayer,
   externalPlayersAvailable,
@@ -622,20 +623,34 @@ function renderVirtual() {
         ;(img as any).fetchPriority = "low"
         img.referrerPolicy = "no-referrer"
         img.className = "h-full w-full object-contain"
-        img.onload = () => logo.setAttribute("data-loaded", "true")
-        img.onerror = () => {
+        // Provider logo requests can hang without firing onerror (Tauri WebView); force the fallback after a grace period.
+        const slowLogoTimer = setTimeout(() => {
           img.remove()
           logo.setAttribute("data-loaded", "true")
+          requestLogoFallback(logo, ch)
+        }, 8000)
+        img.onload = () => {
+          clearTimeout(slowLogoTimer)
+          logo.setAttribute("data-loaded", "true")
+        }
+        img.onerror = () => {
+          clearTimeout(slowLogoTimer)
+          img.remove()
+          logo.setAttribute("data-loaded", "true")
+          requestLogoFallback(logo, ch)
         }
         if (img.complete && img.naturalWidth > 0) {
+          clearTimeout(slowLogoTimer)
           logo.setAttribute("data-loaded", "true")
         }
         logo.appendChild(img)
       } else {
         logo.setAttribute("data-loaded", "true")
+        requestLogoFallback(logo, ch)
       }
     } else {
       logo.setAttribute("data-loaded", "true")
+      requestLogoFallback(logo, ch)
     }
     playBtn.appendChild(logo)
 

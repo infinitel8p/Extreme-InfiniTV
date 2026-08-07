@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "Открыть сетку",
   "livetv.openSchedule.label": "Сетка",
   "livetv.epgPanelHeading": "Программа",
+  "livetv.epgListExpand": "Показать полную программу",
+  "livetv.epgListCollapse": "Показать только текущую передачу",
   "livetv.epgLoadEarlier": "Загрузить более ранние",
   "livetv.idle": "Ожидание",
   "livetv.pickChannel": "Выберите канал.",

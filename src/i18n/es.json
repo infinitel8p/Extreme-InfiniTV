@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "Abrir guía",
   "livetv.openSchedule.label": "Guía",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "Mostrar guía completa",
+  "livetv.epgListCollapse": "Mostrar solo lo que se emite ahora",
   "livetv.epgLoadEarlier": "Cargar anteriores",
   "livetv.idle": "En espera",
   "livetv.pickChannel": "Elige un canal.",

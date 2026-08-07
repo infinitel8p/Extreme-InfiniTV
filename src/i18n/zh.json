@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "打开节目表",
   "livetv.openSchedule.label": "节目表",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "显示完整节目单",
+  "livetv.epgListCollapse": "仅显示正在播出",
   "livetv.epgLoadEarlier": "加载更早",
   "livetv.idle": "空闲",
   "livetv.pickChannel": "选择一个频道。",

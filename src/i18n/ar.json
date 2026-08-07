@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "فتح شبكة الجدول",
   "livetv.openSchedule.label": "شبكة الجدول",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "إظهار الدليل الكامل",
+  "livetv.epgListCollapse": "إظهار ما يُعرض الآن فقط",
   "livetv.epgLoadEarlier": "تحميل الأقدم",
   "livetv.idle": "خامل",
   "livetv.pickChannel": "اختر قناة.",

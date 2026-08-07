@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "Ouvrir la grille",
   "livetv.openSchedule.label": "Grille",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "Afficher le guide complet",
+  "livetv.epgListCollapse": "Afficher seulement ce qui passe",
   "livetv.epgLoadEarlier": "Charger les précédents",
   "livetv.idle": "Inactif",
   "livetv.pickChannel": "Choisissez une chaîne.",

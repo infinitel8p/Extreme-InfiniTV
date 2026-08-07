@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "शेड्यूल ग्रिड खोलें",
   "livetv.openSchedule.label": "शेड्यूल ग्रिड",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "पूरी गाइड दिखाएं",
+  "livetv.epgListCollapse": "सिर्फ़ अभी चल रहा कार्यक्रम दिखाएं",
   "livetv.epgLoadEarlier": "पुराने लोड करें",
   "livetv.idle": "निष्क्रिय",
   "livetv.pickChannel": "एक चैनल चुनें।",

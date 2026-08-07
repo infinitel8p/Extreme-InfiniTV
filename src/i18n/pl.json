@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "Otwórz siatkę programu",
   "livetv.openSchedule.label": "Siatka programu",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "Pokaż pełny program",
+  "livetv.epgListCollapse": "Pokaż tylko aktualny program",
   "livetv.epgLoadEarlier": "Wczytaj wcześniejsze",
   "livetv.idle": "Bezczynny",
   "livetv.pickChannel": "Wybierz kanał.",

@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "Buka kisi jadwal",
   "livetv.openSchedule.label": "Kisi jadwal",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "Tampilkan panduan lengkap",
+  "livetv.epgListCollapse": "Tampilkan yang sedang tayang saja",
   "livetv.epgLoadEarlier": "Muat sebelumnya",
   "livetv.idle": "Diam",
   "livetv.pickChannel": "Pilih saluran.",

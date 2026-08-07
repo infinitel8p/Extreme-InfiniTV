@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "Yayın akışı tablosunu aç",
   "livetv.openSchedule.label": "Yayın akışı tablosu",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "Tüm yayın akışını göster",
+  "livetv.epgListCollapse": "Sadece şu an yayınlananı göster",
   "livetv.epgLoadEarlier": "Öncekileri yükle",
   "livetv.idle": "Boşta",
   "livetv.pickChannel": "Bir kanal seçin.",

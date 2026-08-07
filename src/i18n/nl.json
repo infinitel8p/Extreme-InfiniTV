@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "Schemaweergave openen",
   "livetv.openSchedule.label": "Schemaweergave",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "Volledige gids weergeven",
+  "livetv.epgListCollapse": "Alleen wat nu speelt weergeven",
   "livetv.epgLoadEarlier": "Eerdere laden",
   "livetv.idle": "Inactief",
   "livetv.pickChannel": "Kies een kanaal.",

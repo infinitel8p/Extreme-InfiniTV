@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "Programmraster öffnen",
   "livetv.openSchedule.label": "Programmraster",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "Vollständigen Programmführer anzeigen",
+  "livetv.epgListCollapse": "Nur aktuelle Sendung anzeigen",
   "livetv.epgLoadEarlier": "Frühere laden",
   "livetv.idle": "Inaktiv",
   "livetv.pickChannel": "Wähle einen Sender.",

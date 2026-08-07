@@ -35,6 +35,7 @@ import {
 } from "@/scripts/lib/preferences.js"
 import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
+import { requestLogoFallback } from "@/scripts/lib/logo-fallback.ts"
 
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
@@ -371,17 +372,30 @@ function renderChannelRow(channel, programmesForRow) {
     ;(img as any).fetchPriority = "low"
     img.referrerPolicy = "no-referrer"
     img.className = "h-full w-full object-contain"
-    img.onload = () => logo.setAttribute("data-loaded", "true")
-    img.onerror = () => {
+    // Provider logo requests can hang without firing onerror (Tauri WebView); force the fallback after a grace period.
+    const slowLogoTimer = setTimeout(() => {
       img.remove()
       logo.setAttribute("data-loaded", "true")
+      requestLogoFallback(logo, channel)
+    }, 8000)
+    img.onload = () => {
+      clearTimeout(slowLogoTimer)
+      logo.setAttribute("data-loaded", "true")
+    }
+    img.onerror = () => {
+      clearTimeout(slowLogoTimer)
+      img.remove()
+      logo.setAttribute("data-loaded", "true")
+      requestLogoFallback(logo, channel)
     }
     if (img.complete && img.naturalWidth > 0) {
+      clearTimeout(slowLogoTimer)
       logo.setAttribute("data-loaded", "true")
     }
     logo.appendChild(img)
   } else {
     logo.setAttribute("data-loaded", "true")
+    requestLogoFallback(logo, channel)
   }
   info.appendChild(logo)
 

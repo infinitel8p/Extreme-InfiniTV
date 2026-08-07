@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "Open schedule grid",
   "livetv.openSchedule.label": "Schedule grid",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "Show full guide",
+  "livetv.epgListCollapse": "Show now playing only",
   "livetv.epgLoadEarlier": "Load earlier",
   "livetv.idle": "Idle",
   "livetv.pickChannel": "Pick a channel.",

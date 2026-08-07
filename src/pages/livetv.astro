@@ -247,10 +247,31 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 
 					<div
 						id="epg"
+						data-epg-collapsed="true"
 						class="border-t border-line overflow-auto custom-scroll md:landscape:flex-1 md:landscape:min-h-0 lg:flex-1 lg:min-h-0">
-						<div class="flex items-baseline justify-between gap-2 text-sm font-medium text-fg sticky top-0 bg-surface pt-3 pb-2 z-10">
+						<div class="flex items-center justify-between gap-2 text-sm font-medium text-fg sticky top-0 bg-surface pt-3 pb-2 z-10">
 							<span data-i18n="livetv.epgPanelHeading" class="ps-1">EPG</span>
-							<span id="epg-day-indicator" class="pe-1 text-2xs font-semibold uppercase tracking-wide text-fg-3"></span>
+							<div class="flex items-center gap-1 pe-1">
+								<span id="epg-day-indicator" class="text-2xs font-semibold uppercase tracking-wide text-fg-3"></span>
+								<button
+									id="epg-expand-toggle"
+									type="button"
+									aria-expanded="false"
+									aria-label="Show full guide"
+									data-label-expand="Show full guide"
+									data-label-collapse="Show now playing only"
+									data-i18n-attr="aria-label:livetv.epgListExpand;data-label-expand:livetv.epgListExpand;data-label-collapse:livetv.epgListCollapse"
+									class="group md:landscape:hidden lg:hidden -my-1.5 inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-fg-3
+										hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg
+										outline-none focus-visible:ring-1 focus-visible:ring-accent
+										transition-colors">
+									<IconChevronDown
+										aria-hidden="true"
+										stroke={2}
+										class="size-4 transition-transform duration-200 group-aria-expanded:rotate-180"
+									/>
+								</button>
+							</div>
 						</div>
 						<div id="epg-list" class="space-y-2 text-sm px-1 pb-3"></div>
 					</div>
@@ -401,6 +422,14 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 				padding: 1rem;
 			}
 		}
+
+		/* Collapsed mobile EPG shows only the now-playing row; status text (loading/empty/error) stays visible.
+		   :global() because #epg-list children are inserted at runtime without Astro's scope attribute. */
+		@media (max-width: 767.98px), (max-width: 1023.98px) and (orientation: portrait) {
+			:global(#epg[data-epg-collapsed="true"] #epg-list > :is([data-epg-idx]:not([data-now-playing="true"]), .epg-day-sep, [data-epg-load-earlier])) {
+				display: none;
+			}
+		}
 	</style>
 
 	<script>
@@ -458,6 +487,40 @@ import { IconDeviceTv, IconChevronDown, IconCalendarTime, IconLayoutGrid } from 
 					localStorage.setItem(KEY_VISIBLE, String(next));
 				} catch {}
 				apply(next);
+			});
+		}
+
+		const epgExpandToggle = /** @type {HTMLButtonElement|null} */ (
+			document.getElementById("epg-expand-toggle")
+		);
+		if (epgExpandToggle && epgPanel) {
+			const KEY_LIST_EXPANDED = "xt_epg_list_expanded";
+
+			const readListExpanded = () => {
+				try {
+					return localStorage.getItem(KEY_LIST_EXPANDED) === "1";
+				} catch {
+					return false;
+				}
+			};
+
+			const applyListExpanded = (expanded) => {
+				epgPanel.setAttribute("data-epg-collapsed", expanded ? "false" : "true");
+				epgExpandToggle.setAttribute("aria-expanded", String(expanded));
+				const label = expanded
+					? epgExpandToggle.dataset.labelCollapse
+					: epgExpandToggle.dataset.labelExpand;
+				if (label) epgExpandToggle.setAttribute("aria-label", label);
+			};
+
+			applyListExpanded(readListExpanded());
+
+			epgExpandToggle.addEventListener("click", () => {
+				const next = epgExpandToggle.getAttribute("aria-expanded") !== "true";
+				try {
+					localStorage.setItem(KEY_LIST_EXPANDED, next ? "1" : "0");
+				} catch {}
+				applyListExpanded(next);
 			});
 		}
 	</script>

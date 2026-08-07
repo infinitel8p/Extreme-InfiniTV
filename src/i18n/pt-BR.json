@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "Abrir grade",
   "livetv.openSchedule.label": "Grade",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "Mostrar guia completo",
+  "livetv.epgListCollapse": "Mostrar apenas o que está no ar",
   "livetv.epgLoadEarlier": "Carregar anteriores",
   "livetv.idle": "Inativo",
   "livetv.pickChannel": "Escolha um canal.",

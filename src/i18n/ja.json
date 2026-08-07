@@ -485,6 +485,8 @@
   "livetv.openSchedule.title": "番組表を開く",
   "livetv.openSchedule.label": "番組表",
   "livetv.epgPanelHeading": "EPG",
+  "livetv.epgListExpand": "番組表をすべて表示",
+  "livetv.epgListCollapse": "現在放送中の番組のみ表示",
   "livetv.epgLoadEarlier": "さらに前を読み込む",
   "livetv.idle": "アイドル",
   "livetv.pickChannel": "チャンネルを選んでください。",
