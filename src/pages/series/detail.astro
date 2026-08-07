@@ -32,10 +32,17 @@ import {
         </a>
 
         <div class="dt-enter dt-stagger-1 flex flex-col gap-1">
+          <div data-detail-skeleton class="flex flex-col gap-2 py-0.5">
+            <div class="skel rounded-lg h-8 w-2/5"></div>
+            <div class="flex gap-2">
+              <div class="skel rounded-full h-4 w-14"></div>
+              <div class="skel rounded-full h-4 w-20"></div>
+            </div>
+          </div>
           <h1
             id="series-detail-title"
+            hidden
             class="font-semibold tracking-[-0.02em] leading-tight text-2xl sm:text-3xl">
-            -
           </h1>
           <div
             id="series-now-playing"
@@ -43,7 +50,8 @@ import {
           </div>
           <div
             id="series-detail-meta"
-            class="text-xs text-fg-3 space-x-2 tabular-nums">
+            hidden
+            class="detail-meta text-xs text-fg-3 tabular-nums">
           </div>
         </div>
 
@@ -51,7 +59,7 @@ import {
         <div class="w-full">
           <div
             id="series-detail-poster"
-            class="dt-hero aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
+            class="dt-hero skel aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
                    max-h-[60dvh] max-w-[calc(60dvh*2/3)] sm:max-w-[calc(60dvh*16/9)]"
             style="view-transition-name: active-poster;">
           </div>
@@ -132,12 +140,67 @@ import {
           </button>
         </div>
 
-        <div
-          id="series-detail-plot"
-          data-i18n="detail.loading"
-          class="dt-enter dt-stagger-3 text-sm text-fg-2 leading-relaxed max-w-3xl">
-          Loading details…
+        <div class="dt-enter dt-stagger-3 flex flex-col lg:flex-row lg:items-start gap-4 lg:gap-8">
+          <div class="flex flex-col gap-2 min-w-0 lg:max-w-3xl lg:flex-1">
+            <div
+              id="series-detail-tagline"
+              hidden
+              class="text-sm text-fg-3">
+            </div>
+            <div data-detail-skeleton class="flex flex-col gap-2">
+              <div class="skel rounded h-3.5 w-full"></div>
+              <div class="skel rounded h-3.5 w-11/12"></div>
+              <div class="skel rounded h-3.5 w-2/3"></div>
+            </div>
+            <div
+              id="series-detail-plot"
+              hidden
+              class="text-sm text-fg-2 leading-relaxed">
+            </div>
+          </div>
+
+          <aside class="hidden lg:flex flex-col gap-3 lg:w-72 lg:shrink-0 lg:border-l lg:border-line lg:pl-6">
+            <div
+              id="series-detail-director"
+              hidden
+              class="text-xs text-fg-3">
+            </div>
+            <div
+              id="series-detail-fact-genre"
+              hidden
+              class="flex items-center justify-between gap-3 text-xs">
+              <span class="text-fg-3" data-i18n="detail.section.genre">Genre</span>
+              <span data-role="fact-value" class="text-fg text-right truncate"></span>
+            </div>
+            <div
+              id="series-detail-fact-rating"
+              hidden
+              class="flex items-center justify-between gap-3 text-xs">
+              <span class="text-fg-3" data-i18n="detail.section.rating">Rating</span>
+              <span data-role="fact-value" class="text-fg text-right truncate"></span>
+            </div>
+            <div id="series-detail-provider-people" hidden class="flex flex-col gap-1.5 text-xs">
+              <span class="text-fg-3" data-i18n="detail.cast">Cast</span>
+              <div id="series-detail-provider-people-list" class="flex flex-wrap gap-1.5"></div>
+            </div>
+          </aside>
         </div>
+
+        <section id="series-detail-cast" hidden class="dt-enter flex flex-col gap-3">
+          <h2 class="text-lg font-semibold tracking-[-0.02em]" data-i18n="detail.cast">Cast</h2>
+          <div
+            id="series-detail-cast-list"
+            class="flex gap-3 overflow-x-auto custom-scroll snap-x snap-mandatory -mx-2 px-2 py-1">
+          </div>
+        </section>
+
+        <section id="series-detail-similar" hidden class="dt-enter flex flex-col gap-3">
+          <h2 class="text-lg font-semibold tracking-[-0.02em]" data-i18n="detail.similar">Similar titles</h2>
+          <div
+            id="series-detail-similar-list"
+            class="flex gap-3 overflow-x-auto custom-scroll snap-x snap-mandatory -mx-2 px-2 py-1">
+          </div>
+        </section>
 
         <!-- Season tabs -->
         <div

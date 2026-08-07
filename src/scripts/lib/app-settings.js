@@ -31,6 +31,8 @@ const KEY_UI_SOUNDS = "xt_ui_sounds"
 const KEY_HAPTICS = "xt_haptics"
 const KEY_MONO_AUDIO = "xt_mono_audio"
 const KEY_CAPTIONS_AUTO = "xt_captions_auto"
+const KEY_TMDB_KEY = "xt_tmdb_key"
+const KEY_TMDB_ENABLED = "xt_tmdb_enabled"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -56,7 +58,7 @@ export const DEFAULT_TV_OVERSCAN = 0
  * content filter the strip applies; `all` means cross-kind. Catalog ids
  * are unique and stable across versions.
  *
- * @typedef {"continue-watching" | "favorites" | "watchlist" | "recently-added"} HubStripType
+ * @typedef {"continue-watching" | "favorites" | "watchlist" | "because-watched" | "recently-added"} HubStripType
  * @typedef {"all" | "live" | "vod" | "series"} HubStripKind
  * @typedef {{ id: string, type: HubStripType, kind: HubStripKind }} HubStripDefinition
  */
@@ -70,6 +72,7 @@ export const HUB_STRIP_CATALOG = Object.freeze([
   { id: "watchlist",             type: "watchlist",         kind: "all"    },
   { id: "watchlist:vod",         type: "watchlist",         kind: "vod"    },
   { id: "watchlist:series",      type: "watchlist",         kind: "series" },
+  { id: "because-watched",       type: "because-watched",   kind: "all"    },
   { id: "recently-added",        type: "recently-added",    kind: "all"    },
   { id: "recently-added:vod",    type: "recently-added",    kind: "vod"    },
   { id: "recently-added:series", type: "recently-added",    kind: "series" },
@@ -79,6 +82,7 @@ export const DEFAULT_HUB_STRIPS = Object.freeze([
   "continue-watching",
   "favorites",
   "watchlist",
+  "because-watched",
   "recently-added",
 ])
 export const PROGRESS_RETENTION_VALUES = [30, 90, 180, 0]
@@ -890,4 +894,32 @@ export function setAutoUpdateEnabled(enabled) {
   document.dispatchEvent(
     new CustomEvent(AUTO_UPDATE_EVENT, { detail: { value: !!enabled } })
   )
+}
+
+export const TMDB_SETTINGS_EVENT = "xt:tmdb-settings-changed"
+
+export function getTmdbApiKey() {
+  return readLS(KEY_TMDB_KEY, "").trim()
+}
+
+export function setTmdbApiKey(key) {
+  writeLS(KEY_TMDB_KEY, (key || "").trim())
+  document.dispatchEvent(
+    new CustomEvent(TMDB_SETTINGS_EVENT, { detail: { key: "apiKey" } })
+  )
+}
+
+export function getTmdbEnabled() {
+  return readLS(KEY_TMDB_ENABLED, "") === "1"
+}
+
+export function setTmdbEnabled(enabled) {
+  writeLS(KEY_TMDB_ENABLED, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(TMDB_SETTINGS_EVENT, { detail: { key: "enabled", value: !!enabled } })
+  )
+}
+
+export function isTmdbActive() {
+  return getTmdbEnabled() && !!getTmdbApiKey()
 }

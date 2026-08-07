@@ -9,6 +9,7 @@ import {
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
+import { ensureSeries } from "@/scripts/lib/catalog.js"
 import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
@@ -44,7 +45,7 @@ import {
 import {
   clearAmbient,
   setAmbient as setAmbientOn,
-  paintPoster as paintPosterOn,
+  paintHero as paintHeroOn,
   chooseMime,
 } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
@@ -59,8 +60,23 @@ import {
   getPlayerBackend,
   getVideoScale,
   setVideoScale,
+  isTmdbActive,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
+import {
+  resolveTmdbId,
+  fetchSeriesEnrichment,
+  fetchSeasonEnrichment,
+  peekEarlyDetailData,
+  peekCachedSeasonEnrichment,
+} from "@/scripts/lib/tmdb-enrich.ts"
+import { matchRecommendationsToCatalog, extractLangPrefix } from "@/scripts/lib/tmdb-match.ts"
+import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
+import { tmdbImageUrl, TMDB_PROFILE_SIZE } from "@/scripts/lib/tmdb.ts"
+import { isGenericEpisodeTitle } from "@/scripts/lib/episode-title.ts"
+import { buildEntryCard } from "@/scripts/lib/entry-card.ts"
+import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
+import { ICON_USER } from "@/scripts/lib/icons.ts"
 import { fmtImdbRating, parseHmsToSeconds } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
@@ -101,6 +117,7 @@ const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 // ----------------------------
 // Refs
 // ----------------------------
+const backLink = document.getElementById("series-detail-back")
 const ambientEl = document.getElementById("series-detail-ambient")
 const titleEl = document.getElementById("series-detail-title")
 const nowPlayingEl = document.getElementById("series-now-playing")
@@ -112,9 +129,34 @@ const favBtn = document.getElementById("series-detail-fav")
 const watchBtn = document.getElementById("series-detail-watch")
 const watchLabelEl = document.getElementById("series-detail-watch-label")
 const trailerBtn = document.getElementById("series-detail-trailer")
+const taglineEl = document.getElementById("series-detail-tagline")
+const directorEl = document.getElementById("series-detail-director")
+const castSection = document.getElementById("series-detail-cast")
+const castListEl = document.getElementById("series-detail-cast-list")
+const similarSection = document.getElementById("series-detail-similar")
+const similarListEl = document.getElementById("series-detail-similar-list")
+if (castListEl) dragScroll(castListEl)
+if (similarListEl) dragScroll(similarListEl)
 let trailerUrl = ""
 const seasonTabs = document.getElementById("series-season-tabs")
 const episodeList = document.getElementById("series-episode-list")
+
+// Real back() instead of a push navigation, so bfcache and the grid's own
+// back-navigation restore both work. Falls through to the plain href for
+// deep links or when the referrer isn't the series grid.
+backLink?.addEventListener("click", (event) => {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+  if (history.length <= 1) return
+  let referrerUrl
+  try {
+    referrerUrl = new URL(document.referrer)
+  } catch {
+    return
+  }
+  if (referrerUrl.origin !== location.origin || referrerUrl.pathname !== "/series") return
+  event.preventDefault()
+  history.back()
+})
 
 // ----------------------------
 // State
@@ -135,9 +177,36 @@ let currentPlayingEpisodeId = null
 let tabsStaggered = false
 let episodesStaggered = false
 let externalPresenceActive = false
+let resolvedTmdbId = null
+let enrichRequestId = 0
+let seriesCatalogPromise = null
+let seasonEnrichRequestId = 0
+let metaYearText = ""
+let metaGenreText = ""
+let metaRatingText = ""
+let metaSeasonsText = ""
+let heroPosterUrl = null
+let heroTmdbBackdropUrl = null
+let heroProviderBackdropUrl = null
+let heroSettled = false
+let earlyEnrichmentHandled = false
+let earlyEnrichmentPopulatedSimilar = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
-const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
+
+// Paints the hero exactly once per boot, at whichever point the caller has decided
+// enough is known: immediately when TMDb is inactive or already cache-warm, or after
+// the TMDb enrichment attempt settles (resolved, resolved-null, or failed) otherwise.
+function settleHero() {
+  if (heroSettled) return
+  heroSettled = true
+  posterEl?.classList.remove("skel")
+  paintHeroOn(posterEl, {
+    name: series?.name || "",
+    posterUrl: heroPosterUrl,
+    backdropUrls: [heroTmdbBackdropUrl, heroProviderBackdropUrl],
+  })
+}
 
 function buildEpisodeStreamUrl(ep, c = creds) {
   if (ep?._directUrl) return ep._directUrl
@@ -292,6 +361,13 @@ function youtubeUrlFromTrailer(trailer) {
   return ""
 }
 
+// Providers sometimes send a full release date instead of a bare year; show year-only.
+function extractDisplayYear(value) {
+  const raw = String(value).trim()
+  const match = raw.match(/(19|20)\d{2}/)
+  return match ? match[0] : raw
+}
+
 // ----------------------------
 // Episode list rendering
 // ----------------------------
@@ -415,6 +491,7 @@ function renderEpisodes() {
       "episode-row flex items-center gap-3 p-3 rounded-xl bg-surface-2/40 " +
       "transition-colors hover:bg-surface-2 focus-within:bg-surface-2"
     row.dataset.epId = String(ep.id)
+    row.dataset.epNum = String(ep.episode_num ?? "")
     if (!episodesStaggered) {
       row.classList.add("dt-child-enter")
       row.style.animationDelay = `${400 + Math.min(rowIndex, 9) * 40}ms`
@@ -437,6 +514,7 @@ function renderEpisodes() {
     playBtn.addEventListener("click", () => playEpisode(ep))
 
     const num = document.createElement("div")
+    num.dataset.role = "ep-num"
     num.className =
       "episode-num shrink-0 size-10 rounded-md bg-surface-3 flex items-center justify-center text-sm font-semibold tabular-nums text-fg-2"
     num.textContent = `E${ep.episode_num || "?"}`
@@ -445,6 +523,7 @@ function renderEpisodes() {
     const wrap = document.createElement("div")
     wrap.className = "min-w-0 flex-1"
     const title = document.createElement("div")
+    title.dataset.role = "ep-title"
     title.className = "truncate text-sm font-medium text-fg"
     title.textContent = ep.title || t("series.episode.fallback", { n: ep.episode_num || "" })
     wrap.appendChild(title)
@@ -458,6 +537,11 @@ function renderEpisodes() {
     if (released) bits.push(released)
     meta.textContent = bits.join(" • ")
     wrap.appendChild(meta)
+
+    const overview = document.createElement("div")
+    overview.dataset.role = "ep-overview"
+    overview.className = "text-xs text-fg-3 line-clamp-2 empty:hidden mt-0.5"
+    wrap.appendChild(overview)
 
     playBtn.appendChild(wrap)
 
@@ -598,6 +682,9 @@ function renderEpisodes() {
   }
   if (eps.length) episodesStaggered = true
   try { window.SpatialNavigation?.makeFocusable?.() } catch {}
+  refreshSeasonEnrichment().catch((err) => {
+    log.warn("[xt:series-detail] season tmdb enrichment failed:", err)
+  })
 }
 
 function syncEpisodeDownloadButtons() {
@@ -668,17 +755,16 @@ function applySeriesInfo(data) {
     if (titleEl) titleEl.textContent = apiName
   }
 
-  const apiLogo =
-    info.cover ||
-    info.cover_big ||
-    info.movie_image ||
-    info.backdrop_path?.[0] ||
-    null
+  const apiPoster = info.cover || info.cover_big || info.movie_image || null
+  const apiBackdropPath = Array.isArray(info.backdrop_path) ? info.backdrop_path[0] : null
+  const apiLogo = apiPoster || apiBackdropPath || null
   if (apiLogo && (!series || !series.logo)) {
     if (series) series.logo = apiLogo
-    paintPoster(series?.name, apiLogo)
+    heroPosterUrl = apiLogo
     setAmbient(apiLogo)
   }
+  if (apiBackdropPath) heroProviderBackdropUrl = apiBackdropPath
+  // Hero stays in its skeleton state - settleHero() at the call site decides when to paint it once.
   let byKey = {}
   if (data?.episodes && typeof data.episodes === "object") {
     if (Array.isArray(data.episodes)) {
@@ -697,31 +783,11 @@ function applySeriesInfo(data) {
   const cast = info.cast || ""
   const plot = info.plot || info.description || series?.plot || ""
 
-  if (metaEl) {
-    const bits = []
-    if (year) bits.push(`<span>${escapeRatingText(String(year))}</span>`)
-    if (genre) bits.push(`<span>${escapeRatingText(genre)}</span>`)
-    const ratingText = fmtImdbRating(rating)
-    if (ratingText) {
-      bits.push(
-        '<span class="inline-flex items-center gap-1 text-fg-2" aria-label="IMDB rating ' +
-          ratingText +
-          ' out of 10">' +
-          '<svg viewBox="0 0 24 24" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" class="text-accent">' +
-          '<path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/>' +
-          "</svg>" +
-          `<span class="font-medium tabular-nums">${ratingText}</span>` +
-          '<span class="text-fg-3">/10</span>' +
-          "</span>"
-      )
-    }
-    if (seasons.length) {
-      bits.push(
-        `<span>${seasons.length} season${seasons.length > 1 ? "s" : ""}</span>`
-      )
-    }
-    metaEl.innerHTML = bits.join(' <span aria-hidden="true">·</span> ')
-  }
+  metaYearText = year ? extractDisplayYear(year) : ""
+  metaGenreText = genre || ""
+  metaRatingText = fmtImdbRating(rating)
+  metaSeasonsText = seasons.length ? `${seasons.length} season${seasons.length > 1 ? "s" : ""}` : ""
+  renderMetaLine()
   if (plotEl) {
     plotEl.textContent = plot || (cast ? t("series.castPrefix", { cast }) : t("detail.noDescription"))
   }
@@ -730,6 +796,10 @@ function applySeriesInfo(data) {
   if (trailerBtn) {
     if (trailerUrl) trailerBtn.removeAttribute("hidden")
     else trailerBtn.setAttribute("hidden", "")
+  }
+
+  if (!isTmdbActive()) {
+    renderProviderPeopleChips(providerPeopleNames(parseProviderPeople(info)))
   }
 
   episodesByKey = byKey
@@ -784,6 +854,429 @@ function escapeRatingText(text) {
   const div = document.createElement("div")
   div.textContent = String(text)
   return div.innerHTML
+}
+
+// Genre/rating repeat in the facts column at lg+, so the compact strip hides its own copies there.
+function renderMetaLine() {
+  if (!metaEl) return
+  const bits = []
+  if (metaYearText) bits.push(`<span class="meta-item">${escapeRatingText(metaYearText)}</span>`)
+  if (metaSeasonsText) bits.push(`<span class="meta-item">${metaSeasonsText}</span>`)
+  if (metaGenreText) bits.push(`<span class="meta-item lg:hidden">${escapeRatingText(metaGenreText)}</span>`)
+  if (metaRatingText) {
+    bits.push(
+      '<span class="meta-item inline-flex items-center gap-1 text-fg-2 lg:hidden" aria-label="IMDB rating ' +
+        metaRatingText +
+        ' out of 10">' +
+        '<svg viewBox="0 0 24 24" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" class="text-accent">' +
+        '<path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/>' +
+        "</svg>" +
+        `<span class="font-medium tabular-nums">${metaRatingText}</span>` +
+        '<span class="text-fg-3">/10</span>' +
+        "</span>"
+    )
+  }
+  metaEl.innerHTML = bits.join("")
+  renderFactsColumn()
+}
+
+function setFactRow(id, value) {
+  const row = document.getElementById(id)
+  if (!row) return
+  if (!value) {
+    row.setAttribute("hidden", "")
+    return
+  }
+  const valueEl = row.querySelector('[data-role="fact-value"]')
+  if (valueEl) valueEl.textContent = value
+  row.removeAttribute("hidden")
+}
+
+// Facts column at lg+: same module state as the compact meta strip, no extra data reads.
+// Year/seasons stay in the strip only - the strip keeps them visible at lg+ too.
+function renderFactsColumn() {
+  setFactRow("series-detail-fact-genre", metaGenreText)
+  setFactRow("series-detail-fact-rating", metaRatingText)
+}
+
+// ----------------------------
+// TMDb enrichment
+// ----------------------------
+function resetTmdbEnrichmentUI() {
+  resolvedTmdbId = null
+  if (directorEl) {
+    directorEl.textContent = ""
+    directorEl.setAttribute("hidden", "")
+  }
+  if (taglineEl) {
+    taglineEl.textContent = ""
+    taglineEl.setAttribute("hidden", "")
+  }
+  metaGenreText = ""
+  metaRatingText = ""
+  metaYearText = ""
+  document.getElementById("series-detail-fact-genre")?.setAttribute("hidden", "")
+  document.getElementById("series-detail-fact-rating")?.setAttribute("hidden", "")
+  if (castSection) castSection.setAttribute("hidden", "")
+  castListEl?.replaceChildren()
+  if (similarSection) similarSection.setAttribute("hidden", "")
+  similarListEl?.replaceChildren()
+  document.getElementById("series-detail-provider-people")?.setAttribute("hidden", "")
+}
+
+function patchDirector(director, tmdbPersonId) {
+  if (!directorEl || !director) return
+  directorEl.textContent = ""
+  directorEl.append(`${t("detail.director")}: `)
+  if (tmdbPersonId) {
+    const link = document.createElement("a")
+    link.href = personFilterHref(director, tmdbPersonId)
+    link.textContent = director
+    link.className =
+      "text-fg-2 hover:text-accent focus-visible:text-accent outline-none " +
+      "rounded focus-visible:ring-1 focus-visible:ring-accent"
+    directorEl.appendChild(link)
+  } else {
+    directorEl.append(director)
+  }
+  directorEl.removeAttribute("hidden")
+}
+
+function patchTagline(tagline) {
+  if (!taglineEl || !tagline) return
+  taglineEl.textContent = tagline
+  taglineEl.removeAttribute("hidden")
+}
+
+function patchGenreFromEnrichment(genres) {
+  if (!genres?.length || metaGenreText) return
+  metaGenreText = genres.join(", ")
+  renderMetaLine()
+}
+
+function patchYearFromEnrichment(year) {
+  if (metaYearText || !year) return
+  metaYearText = String(year)
+  renderMetaLine()
+}
+
+function patchRatingFromEnrichment(voteAverage) {
+  if (metaRatingText || !voteAverage) return
+  const ratingText = fmtImdbRating(voteAverage)
+  if (!ratingText) return
+  metaRatingText = ratingText
+  renderMetaLine()
+}
+
+// Defensive: profilePath may be a raw TMDb path rather than an already-mapped full URL.
+function castProfileUrl(profilePath) {
+  if (!profilePath) return null
+  return profilePath.startsWith("http") ? profilePath : tmdbImageUrl(profilePath, TMDB_PROFILE_SIZE)
+}
+
+// tmdbPersonId is omitted for the provider-only chip row (no TMDb id to carry).
+function personFilterHref(name, tmdbPersonId) {
+  const params = new URLSearchParams({ person: name })
+  if (tmdbPersonId) params.set("personId", String(tmdbPersonId))
+  return `/series?${params.toString()}`
+}
+
+function renderCast(cast) {
+  if (!castSection || !castListEl || !cast.length) return
+  castListEl.replaceChildren()
+  for (const member of cast) {
+    const interactive = !!member.tmdbPersonId
+    const card = document.createElement(interactive ? "a" : "div")
+    card.className = "flex flex-col items-center gap-1.5 w-20 sm:w-24 shrink-0 snap-start text-center rounded-lg outline-none"
+    if (interactive) {
+      card.href = personFilterHref(member.name, member.tmdbPersonId)
+      card.classList.add("group", "cursor-pointer", "focus-visible:ring-1", "focus-visible:ring-accent")
+    }
+
+    const photoWrap = document.createElement("div")
+    photoWrap.className =
+      "size-16 sm:size-20 rounded-full overflow-hidden bg-surface-2 ring-1 ring-line flex items-center justify-center text-fg-3"
+    const profileUrl = castProfileUrl(member.profilePath)
+    if (profileUrl) {
+      const img = document.createElement("img")
+      img.src = profileUrl
+      img.alt = ""
+      img.loading = "lazy"
+      img.decoding = "async"
+      img.referrerPolicy = "no-referrer"
+      img.className = "h-full w-full object-cover"
+      img.onerror = () => {
+        img.remove()
+        photoWrap.innerHTML = ICON_USER
+      }
+      photoWrap.appendChild(img)
+    } else {
+      photoWrap.innerHTML = ICON_USER
+    }
+
+    const info = document.createElement("div")
+    info.className = "w-full"
+    const nameEl = document.createElement("div")
+    nameEl.className =
+      "truncate text-sm font-medium text-fg" +
+      (interactive ? " group-hover:text-accent group-focus-visible:text-accent transition-colors" : "")
+    nameEl.textContent = member.name
+    const characterEl = document.createElement("div")
+    characterEl.className = "truncate text-xs text-fg-3"
+    characterEl.textContent = member.character
+    info.append(nameEl, characterEl)
+
+    card.append(photoWrap, info)
+    castListEl.appendChild(card)
+  }
+  castSection.removeAttribute("hidden")
+}
+
+// Dedup preserving order, director first, since IPTV provider casts often repeat a name.
+function providerPeopleNames(peopleInfo) {
+  const names = []
+  const seen = new Set()
+  const add = (name) => {
+    const trimmed = (name || "").trim()
+    if (!trimmed || seen.has(trimmed)) return
+    seen.add(trimmed)
+    names.push(trimmed)
+  }
+  add(peopleInfo.directorName)
+  for (const name of peopleInfo.castNames) add(name)
+  return names
+}
+
+function renderProviderPeopleChips(names) {
+  const row = document.getElementById("series-detail-provider-people")
+  const listEl = document.getElementById("series-detail-provider-people-list")
+  if (!row || !listEl) return
+  if (!names.length) {
+    row.setAttribute("hidden", "")
+    listEl.replaceChildren()
+    return
+  }
+  listEl.replaceChildren()
+  for (const name of names.slice(0, 8)) {
+    const chip = document.createElement("a")
+    chip.href = personFilterHref(name, null)
+    chip.className =
+      "rounded-full border border-line px-2 py-0.5 text-xs text-fg-2 " +
+      "hover:text-accent hover:border-accent focus-visible:text-accent focus-visible:border-accent outline-none transition-colors"
+    chip.textContent = name
+    listEl.appendChild(chip)
+  }
+  row.removeAttribute("hidden")
+}
+
+function renderSimilar(matches) {
+  if (!similarSection || !similarListEl || !matches.length) return
+  similarListEl.replaceChildren()
+  matches.forEach((entry, idx) => {
+    const card = buildEntryCard({
+      entry,
+      idx,
+      kind: "series",
+      activePlaylistId,
+      detailHref: (e) => `/series/detail?id=${encodeURIComponent(e.id)}`,
+      fallbackTitle: (e) => t("list.seriesFallback", { id: e.id }),
+      metaText: (e) => {
+        const parts = []
+        if (e.year) parts.push(e.year)
+        if (e.category) parts.push(e.category)
+        return parts.join(" • ")
+      },
+    })
+    const cardWrap = document.createElement("div")
+    cardWrap.className = "w-32 sm:w-36 lg:w-40 shrink-0 snap-start"
+    cardWrap.appendChild(card)
+    similarListEl.appendChild(cardWrap)
+  })
+  similarSection.removeAttribute("hidden")
+}
+
+function patchEpisodeRow(row, tmdbEpisode) {
+  const titleEl = row.querySelector('[data-role="ep-title"]')
+  const fallbackTitle = t("series.episode.fallback", { n: row.dataset.epNum || "" })
+  if (
+    titleEl &&
+    tmdbEpisode.name &&
+    isGenericEpisodeTitle(titleEl.textContent, { seriesName: series?.name, fallbackTitle })
+  ) {
+    titleEl.textContent = tmdbEpisode.name
+  }
+  const overviewEl = row.querySelector('[data-role="ep-overview"]')
+  if (overviewEl && !overviewEl.textContent && tmdbEpisode.overview) {
+    overviewEl.textContent = tmdbEpisode.overview
+  }
+  const numEl = row.querySelector('[data-role="ep-num"]')
+  if (numEl && tmdbEpisode.stillUrl) {
+    const safeUrl = String(tmdbEpisode.stillUrl).replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+    numEl.style.backgroundImage = `url("${safeUrl}")`
+    numEl.classList.add("bg-cover", "bg-center", "text-white")
+  }
+}
+
+function patchSeasonEpisodes(episodes) {
+  if (!episodeList || !episodes.length) return
+  const byNumber = new Map(episodes.map((episode) => [episode.episodeNumber, episode]))
+  for (const row of episodeList.querySelectorAll(".episode-row")) {
+    const tmdbEpisode = byNumber.get(Number(row.dataset.epNum))
+    if (tmdbEpisode) patchEpisodeRow(row, tmdbEpisode)
+  }
+}
+
+// Re-run on every episode render (initial paint, season switch, up-next), since rows are rebuilt each time.
+async function refreshSeasonEnrichment() {
+  const requestId = ++seasonEnrichRequestId
+  if (!isTmdbActive() || !resolvedTmdbId || !activePlaylistId) return
+  const seasonNumber = toIndex(currentSeason)
+  if (seasonNumber == null) return
+  const season = await fetchSeasonEnrichment(activePlaylistId, resolvedTmdbId, seasonNumber)
+  if (requestId !== seasonEnrichRequestId || !season?.episodes?.length) return
+  patchSeasonEpisodes(season.episodes)
+}
+
+// A deep link boots from a stub series, so take the fields only the catalog row carries.
+function adoptCatalogRow(catalog) {
+  if (!series) return
+  const row = catalog.find((entry) => Number(entry.id) === seriesId)
+  if (!row) return
+  if (!series.category) series.category = row.category || null
+  if (!series.year) series.year = row.year || ""
+}
+
+// The in-memory catalog is empty on a deep link, so load it instead of giving up on the rail.
+function loadSeriesCatalog() {
+  if (!activePlaylistId) return Promise.resolve([])
+  const cached = getCached(activePlaylistId, "series")?.data
+  if (cached?.length) return Promise.resolve(cached)
+  if (!seriesCatalogPromise) {
+    seriesCatalogPromise = ensureSeries(creds, activePlaylistId)
+      .then((catalog) => {
+        adoptCatalogRow(catalog)
+        return catalog
+      })
+      .catch((err) => {
+        log.warn("[xt:series-detail] series catalog load failed:", err)
+        return []
+      })
+  }
+  return seriesCatalogPromise
+}
+
+// Shared by the async patch-in and the cache-warm early merge in boot().
+function applyEnrichmentPatch(enrichment) {
+  if (enrichment.posterUrl) heroPosterUrl = enrichment.posterUrl
+  if (enrichment.backdropUrl) {
+    heroTmdbBackdropUrl = enrichment.backdropUrl
+    setAmbient(enrichment.backdropUrl)
+  }
+  if (enrichment.overview && plotEl) plotEl.textContent = enrichment.overview
+  if (enrichment.director) patchDirector(enrichment.director, enrichment.directorPersonId)
+  if (enrichment.tagline) patchTagline(enrichment.tagline)
+  patchGenreFromEnrichment(enrichment.genres)
+  patchRatingFromEnrichment(enrichment.voteAverage)
+  patchYearFromEnrichment(enrichment.year)
+  if (!trailerUrl && enrichment.trailerYoutubeKey) {
+    trailerUrl = `https://www.youtube.com/watch?v=${enrichment.trailerYoutubeKey}`
+    trailerBtn?.removeAttribute("hidden")
+  }
+  if (enrichment.cast?.length) renderCast(enrichment.cast)
+}
+
+// Returns whether the similar rail was populated from TMDb recommendations.
+async function enrichSeriesDetailFromTmdb(requestId) {
+  if (!isTmdbActive() || !series || !activePlaylistId) {
+    settleHero()
+    return false
+  }
+
+  if (series.name === t("list.seriesFallback", { id: seriesId })) {
+    settleHero()
+    return false
+  }
+
+  const info = seriesInfoRaw?.info || {}
+  const providerTmdbId = Number(info.tmdb || info.tmdb_id) || null
+
+  const tmdbId = await resolveTmdbId(activePlaylistId, "series", {
+    id: series.id,
+    name: series.name,
+    year: series.year || info.releaseDate || info.releasedate || info.year || null,
+    providerTmdbId,
+  })
+  if (requestId !== enrichRequestId) return false
+  if (tmdbId == null) {
+    settleHero()
+    return false
+  }
+
+  resolvedTmdbId = tmdbId
+  // The current season already rendered without a tmdbId, so back-fill it now.
+  refreshSeasonEnrichment()
+
+  const enrichment = await fetchSeriesEnrichment(activePlaylistId, tmdbId)
+  if (requestId !== enrichRequestId) return false
+  if (!enrichment) {
+    settleHero()
+    return false
+  }
+
+  applyEnrichmentPatch(enrichment)
+  settleHero()
+
+  if (enrichment.recommendations?.length) {
+    const catalog = await loadSeriesCatalog()
+    if (requestId !== enrichRequestId) return false
+    const matches = matchRecommendationsToCatalog(enrichment.recommendations, catalog, {
+      mediaType: "tv",
+      limit: 12,
+      sourcePrefix: extractLangPrefix(series.name),
+    })
+    if (matches.length) {
+      renderSimilar(matches)
+      return true
+    }
+  }
+  return false
+}
+
+async function populateLocalSimilarRail(requestId) {
+  if (!series || !activePlaylistId) return
+  const catalog = await loadSeriesCatalog()
+  if (requestId !== enrichRequestId) return
+  const people = parseProviderPeople(seriesInfoRaw?.info)
+  const matches = pickLocalSimilar(
+    {
+      id: series.id,
+      category: series.category || null,
+      castNames: people.castNames,
+      directorName: people.directorName,
+    },
+    catalog,
+    {
+      limit: 12,
+      infoLookup: (id) => {
+        const cached = getCached(activePlaylistId, `series_info_${id}`)?.data
+        return cached ? parseProviderPeople(cached.info) : null
+      },
+      sourcePrefix: extractLangPrefix(series.name),
+    }
+  )
+  if (matches.length) renderSimilar(matches)
+}
+
+async function populateSimilarRail(requestId) {
+  // boot() already merged a cache-warm enrichment into the first paint; only the
+  // local-similar fallback (when TMDb had no catalog-matching recommendations) is left.
+  if (earlyEnrichmentHandled) {
+    if (!earlyEnrichmentPopulatedSimilar) await populateLocalSimilarRail(requestId)
+    return
+  }
+  const populatedFromTmdb = await enrichSeriesDetailFromTmdb(requestId)
+  if (requestId !== enrichRequestId) return
+  if (!populatedFromTmdb) await populateLocalSimilarRail(requestId)
 }
 
 // ----------------------------
@@ -1678,20 +2171,33 @@ document.addEventListener("xt:progress-changed", (e) => {
 // ----------------------------
 // Boot
 // ----------------------------
+function showDetailSkeleton() {
+  document.querySelectorAll("[data-detail-skeleton]").forEach((el) => el.removeAttribute("hidden"))
+  titleEl?.setAttribute("hidden", "")
+  metaEl?.setAttribute("hidden", "")
+  plotEl?.setAttribute("hidden", "")
+}
+
+// Reveals real title/meta/plot and hides the skeleton. Guarantees a non-empty
+// title even if the provider gave no name at all, so the numeric-id stub never shows.
+// The hero settles here too, but only when TMDb is inactive - active TMDb keeps the
+// hero skeleton until the enrichment attempt settles, elsewhere.
+function hideDetailSkeleton() {
+  document.querySelectorAll("[data-detail-skeleton]").forEach((el) => el.setAttribute("hidden", ""))
+  if (titleEl) {
+    if (!titleEl.textContent) titleEl.textContent = t("series.error.cantLoad")
+    titleEl.removeAttribute("hidden")
+  }
+  metaEl?.removeAttribute("hidden")
+  plotEl?.removeAttribute("hidden")
+  if (!isTmdbActive()) settleHero()
+}
+
 function showError(msg) {
   if (titleEl) titleEl.textContent = t("series.error.cantLoad")
   if (plotEl) plotEl.textContent = msg
-}
-
-function showPlotLoading() {
-  if (!plotEl) return
-  plotEl.innerHTML =
-    '<span class="inline-flex items-center gap-2 text-fg-3">' +
-      '<svg viewBox="0 0 24 24" width="1rem" height="1rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" class="animate-spin">' +
-        '<path d="M21 12a9 9 0 1 1-6.2-8.55"/>' +
-      '</svg>' +
-      `<span>${escapeRatingText(t("detail.loading"))}</span>` +
-    '</span>'
+  hideDetailSkeleton()
+  settleHero()
 }
 
 async function boot() {
@@ -1704,6 +2210,8 @@ async function boot() {
   // A playlist switch re-boots: dispose any player from the previous playlist
   // and clear episode/season/up-next state so nothing leaks across.
   playRequestId++
+  const enrichRequestIdForThisBoot = ++enrichRequestId
+  seasonEnrichRequestId++
   try {
     vjs?.pause?.()
     await vjs?.dispose?.()
@@ -1719,8 +2227,18 @@ async function boot() {
 
   series = null
   episodesByKey = null
+  seriesCatalogPromise = null
+  heroPosterUrl = null
+  heroTmdbBackdropUrl = null
+  heroProviderBackdropUrl = null
+  heroSettled = false
+  earlyEnrichmentHandled = false
+  earlyEnrichmentPopulatedSimilar = false
+  showDetailSkeleton()
   if (metaEl) metaEl.textContent = ""
-  showPlotLoading()
+  if (plotEl) plotEl.textContent = ""
+  if (titleEl) titleEl.textContent = ""
+  resetTmdbEnrichmentUI()
   if (seasonTabs) seasonTabs.replaceChildren()
   if (episodeList) episodeList.replaceChildren()
 
@@ -1734,7 +2252,7 @@ async function boot() {
   creds = await loadCreds()
 
   const list = getCached(active._id, "series")
-  series = list?.data?.find((s) => Number(s.id) === seriesId) || null
+  const catalogSeries = list?.data?.find((s) => Number(s.id) === seriesId) || null
 
   const seriesDownloads = listDownloads().filter(
     (d) =>
@@ -1742,35 +2260,74 @@ async function boot() {
       Number(d.source?.seriesId) === seriesId
   )
 
-  if (!series) {
-    const sample = seriesDownloads[0]
-    series = {
-      id: seriesId,
-      name: sample?.source?.seriesName || t("list.seriesFallback", { id: seriesId }),
-      logo: sample?.source?.logo || null,
-    }
+  const stubName = t("list.seriesFallback", { id: seriesId })
+  const sample = seriesDownloads[0]
+  series = catalogSeries || {
+    id: seriesId,
+    name: sample?.source?.seriesName || stubName,
+    logo: sample?.source?.logo || null,
   }
 
-  if (titleEl) titleEl.textContent = series.name || t("list.seriesFallback", { id: seriesId })
-  paintPoster(series.name, series.logo || null)
+  // The stub id-based name never reaches the DOM - the title stays hidden behind
+  // the skeleton until a real name arrives (catalog/download now, or provider below).
+  if (titleEl && series.name !== stubName) titleEl.textContent = series.name
+  // Hero stays in its skeleton state - settleHero() below decides when to paint it once.
+  heroPosterUrl = series.logo || null
   setAmbient(series.logo || null)
   syncFavButton()
   syncWatchButton()
 
-  const cached = getCached(active._id, `series_info_${seriesId}`)
-  if (cached) {
-    applySeriesInfo(cached.data)
-  } else {
-    // Optimistic render
-    if (seriesDownloads.length) renderDownloadedEpisodes(seriesDownloads)
-    showPlotLoading()
+  // Both probes are network-free (hydrate + memory read) and run under one bound,
+  // so a cold IDB read can never delay first paint past the shared timeout.
+  const { enrichment: earlyEnrichment, providerInfo: earlyProviderInfo } = await peekEarlyDetailData(
+    "series",
+    series.id,
+    active._id,
+    `series_info_${seriesId}`
+  )
+  if (enrichRequestIdForThisBoot !== enrichRequestId) return
+
+  let providerInfoReady = false
+  if (earlyProviderInfo) {
+    applySeriesInfo(earlyProviderInfo.data)
+    providerInfoReady = true
+  } else if (seriesDownloads.length) {
+    // Optimistic render: real episode data even before provider info arrives.
+    renderDownloadedEpisodes(seriesDownloads)
   }
+
+  if (earlyEnrichment) {
+    resolvedTmdbId = earlyEnrichment.tmdbId
+    applyEnrichmentPatch(earlyEnrichment.enrichment)
+    settleHero()
+    earlyEnrichmentHandled = true
+    if (earlyEnrichment.enrichment.recommendations?.length) {
+      const matches = matchRecommendationsToCatalog(earlyEnrichment.enrichment.recommendations, list?.data || [], {
+        mediaType: "tv",
+        limit: 12,
+        sourcePrefix: extractLangPrefix(series.name),
+      })
+      if (matches.length) {
+        renderSimilar(matches)
+        earlyEnrichmentPopulatedSimilar = true
+      }
+    }
+    const seasonNumber = toIndex(currentSeason)
+    if (seasonNumber != null) {
+      const seasonEnrichment = await peekCachedSeasonEnrichment(earlyEnrichment.tmdbId, seasonNumber)
+      if (enrichRequestIdForThisBoot === enrichRequestId && seasonEnrichment?.episodes?.length) {
+        patchSeasonEpisodes(seasonEnrichment.episodes)
+      }
+    }
+  }
+
+  if (providerInfoReady) hideDetailSkeleton()
 
   // Early autoplay handoff for downloaded episodes
   if (
     autoplayPending &&
     autoplayEpisodeId &&
-    !cached &&
+    !providerInfoReady &&
     seriesDownloads.length
   ) {
     const dl = seriesDownloads.find(
@@ -1805,7 +2362,7 @@ async function boot() {
     }
   }
 
-  let infoOk = !!cached
+  let infoOk = providerInfoReady
   if (creds.host && creds.user && creds.pass) {
     try {
       const r = await xtreamApiFetch("get_series_info", {
@@ -1815,11 +2372,25 @@ async function boot() {
       if (!r.ok) throw new Error(await r.text())
       const data = await r.json()
       setCached(active._id, `series_info_${seriesId}`, data, SERIES_INFO_TTL_MS)
-      applySeriesInfo(data)
+      if (enrichRequestIdForThisBoot === enrichRequestId) {
+        applySeriesInfo(data)
+        // applySeriesInfo rebuilds meta text and episode rows, wiping the merge; reassert it.
+        // settleHero() is a no-op once already settled, so this never repaints with a different image.
+        if (earlyEnrichmentHandled) {
+          applyEnrichmentPatch(earlyEnrichment.enrichment)
+          settleHero()
+          const seasonNumber = toIndex(currentSeason)
+          if (seasonNumber != null) {
+            const seasonEnrichment = await peekCachedSeasonEnrichment(earlyEnrichment.tmdbId, seasonNumber)
+            if (seasonEnrichment?.episodes?.length) patchSeasonEpisodes(seasonEnrichment.episodes)
+          }
+        }
+        hideDetailSkeleton()
+      }
       infoOk = true
     } catch (e) {
       log.error("[xt:series-detail] info fetch failed:", e)
-      if (!cached) {
+      if (!providerInfoReady && enrichRequestIdForThisBoot === enrichRequestId) {
         if (plotEl) {
           plotEl.textContent = seriesDownloads.length
             ? t("series.error.providerLocal")
@@ -1832,15 +2403,21 @@ async function boot() {
           fail.textContent = t("series.error.cantLoadEpisodes")
           episodeList.appendChild(fail)
         }
+        hideDetailSkeleton()
       }
     }
-  } else if (!cached) {
+  } else if (!providerInfoReady) {
     if (plotEl) {
       plotEl.textContent = seriesDownloads.length
         ? t("series.error.localPlayable")
         : t("detail.error.noPlaylist")
     }
+    hideDetailSkeleton()
   }
+
+  populateSimilarRail(enrichRequestIdForThisBoot).catch((err) => {
+    log.warn("[xt:series-detail] similar rail population failed:", err)
+  })
 
   if (autoplayPending && autoplayEpisodeId && !infoOk) {
     const dl = seriesDownloads.find(

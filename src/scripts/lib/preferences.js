@@ -950,6 +950,43 @@ export function getContinueWatching(playlistId, limit = 6) {
   return out.slice(0, Math.max(0, limit))
 }
 
+/**
+ * Recently watched vod + episode signals for "Because you watched" seeding.
+ * Includes completed entries unconditionally; unfinished entries need the
+ * same meaningful-progress gating as getContinueWatching (position > 0).
+ * @param {string} playlistId
+ * @param {number} [limit]
+ * @returns {Array<{kind: "vod"|"episode", id: string, name?: string, seriesId?: number, seriesName?: string, updatedAt: number, completed: boolean}>}
+ */
+export function getWatchedSignals(playlistId, limit = 20) {
+  const e = cache.get(playlistId)
+  if (!e) return []
+  const out = []
+  for (const [id, p] of Object.entries(e.progVod)) {
+    if (!p?.completed && !(p?.position > 0)) continue
+    out.push({
+      kind: "vod",
+      id,
+      name: p.name,
+      updatedAt: p.updatedAt || 0,
+      completed: !!p.completed,
+    })
+  }
+  for (const [id, p] of Object.entries(e.progEpisode)) {
+    if (!p?.completed && !(p?.position > 0)) continue
+    out.push({
+      kind: "episode",
+      id,
+      seriesId: p.seriesId,
+      seriesName: p.seriesName,
+      updatedAt: p.updatedAt || 0,
+      completed: !!p.completed,
+    })
+  }
+  out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  return out.slice(0, Math.max(0, limit))
+}
+
 export const PROGRESS_COMPLETED_THRESHOLD = COMPLETED_THRESHOLD
 
 /**

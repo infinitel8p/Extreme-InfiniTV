@@ -8,6 +8,7 @@ import {
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
+import { ensureVod } from "@/scripts/lib/catalog.js"
 import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
@@ -42,7 +43,7 @@ import {
 import {
   clearAmbient,
   setAmbient as setAmbientOn,
-  paintPoster as paintPosterOn,
+  paintHero as paintHeroOn,
   chooseMime,
 } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
@@ -57,8 +58,16 @@ import {
   getPlayerBackend,
   getVideoScale,
   setVideoScale,
+  isTmdbActive,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
+import { resolveTmdbId, fetchMovieEnrichment, peekEarlyDetailData } from "@/scripts/lib/tmdb-enrich.ts"
+import { matchRecommendationsToCatalog, extractLangPrefix } from "@/scripts/lib/tmdb-match.ts"
+import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
+import { tmdbImageUrl, TMDB_PROFILE_SIZE } from "@/scripts/lib/tmdb.ts"
+import { buildEntryCard } from "@/scripts/lib/entry-card.ts"
+import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
+import { ICON_USER } from "@/scripts/lib/icons.ts"
 import { fmtImdbRating, parseHmsToSeconds } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
@@ -97,6 +106,7 @@ const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 // ----------------------------
 // Refs
 // ----------------------------
+const backLink = document.getElementById("movie-detail-back")
 const ambientEl = document.getElementById("movie-detail-ambient")
 const titleEl = document.getElementById("movie-detail-title")
 const metaEl = document.getElementById("movie-detail-meta")
@@ -113,7 +123,32 @@ const watchLabelEl = document.getElementById("movie-detail-watch-label")
 const trailerBtn = document.getElementById("movie-detail-trailer")
 const downloadBtn = document.getElementById("movie-detail-download")
 const downloadLabel = document.getElementById("movie-detail-download-label")
+const taglineEl = document.getElementById("movie-detail-tagline")
+const directorEl = document.getElementById("movie-detail-director")
+const castSection = document.getElementById("movie-detail-cast")
+const castListEl = document.getElementById("movie-detail-cast-list")
+const similarSection = document.getElementById("movie-detail-similar")
+const similarListEl = document.getElementById("movie-detail-similar-list")
+if (castListEl) dragScroll(castListEl)
+if (similarListEl) dragScroll(similarListEl)
 let trailerUrl = ""
+
+// Real back() instead of a push navigation, so bfcache and the grid's own
+// back-navigation restore both work. Falls through to the plain href for
+// deep links or when the referrer isn't the movies grid.
+backLink?.addEventListener("click", (event) => {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+  if (history.length <= 1) return
+  let referrerUrl
+  try {
+    referrerUrl = new URL(document.referrer)
+  } catch {
+    return
+  }
+  if (referrerUrl.origin !== location.origin || referrerUrl.pathname !== "/movies") return
+  event.preventDefault()
+  history.back()
+})
 
 // ----------------------------
 // State
@@ -127,10 +162,34 @@ let movie = null
 let vodInfoRaw = null
 let detailSrc = ""
 let detailSrcBuilder = null
+let metaYearText = ""
+let metaDurationText = ""
+let metaGenreText = ""
+let metaRatingText = ""
 let externalPresenceActive = false
+let enrichRequestId = 0
+let vodCatalogPromise = null
+let heroPosterUrl = null
+let heroBackdropUrl = null
+let heroSettled = false
+let earlyEnrichmentHandled = false
+let earlyEnrichmentPopulatedSimilar = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
-const paintPoster = (name, logo) => paintPosterOn(posterEl, name, logo)
+
+// Paints the hero exactly once per boot, at whichever point the caller has decided
+// enough is known: immediately when TMDb is inactive or already cache-warm, or after
+// the TMDb enrichment attempt settles (resolved, resolved-null, or failed) otherwise.
+function settleHero() {
+  if (heroSettled) return
+  heroSettled = true
+  posterEl?.classList.remove("skel")
+  paintHeroOn(posterEl, {
+    name: movie?.name || "",
+    posterUrl: heroPosterUrl,
+    backdropUrls: [heroBackdropUrl],
+  })
+}
 
 // Xtream `youtube_trailer` can be either a bare 11-char video ID or a full
 // URL. Normalize to a watchable youtube.com URL or "" if the value isn't
@@ -144,6 +203,13 @@ function youtubeUrlFromTrailer(trailer) {
     return `https://www.youtube.com/watch?v=${value}`
   }
   return ""
+}
+
+// Providers sometimes send a full release date instead of a bare year; show year-only.
+function extractDisplayYear(value) {
+  const raw = String(value).trim()
+  const match = raw.match(/(19|20)\d{2}/)
+  return match ? match[0] : raw
 }
 
 function fmtDuration(value) {
@@ -206,7 +272,7 @@ function applyVodInfo(data) {
     null
   if (apiLogo && (!movie || !movie.logo)) {
     if (movie) movie.logo = apiLogo
-    paintPoster(movie?.name, apiLogo)
+    heroPosterUrl = apiLogo
     setAmbient(apiLogo)
   }
 
@@ -256,28 +322,11 @@ function applyVodInfo(data) {
     info.description ||
     ""
 
-  if (metaEl) {
-    const bits = []
-    if (year) bits.push(`<span>${escapeText(String(year))}</span>`)
-    const humanDur = fmtDuration(duration)
-    if (humanDur) bits.push(`<span>${escapeText(humanDur)}</span>`)
-    if (genre) bits.push(`<span>${escapeText(genre)}</span>`)
-    const ratingText = fmtImdbRating(rating)
-    if (ratingText) {
-      bits.push(
-        '<span class="inline-flex items-center gap-1 text-fg-2" aria-label="' +
-          escapeText(t("detail.imdbRatingAria", { rating: ratingText })) +
-          '">' +
-          '<svg viewBox="0 0 24 24" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" class="text-accent">' +
-          '<path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/>' +
-          "</svg>" +
-          `<span class="font-medium tabular-nums">${ratingText}</span>` +
-          '<span class="text-fg-3">/10</span>' +
-          "</span>"
-      )
-    }
-    metaEl.innerHTML = bits.join(' <span aria-hidden="true">·</span> ')
-  }
+  metaYearText = year ? extractDisplayYear(year) : ""
+  metaDurationText = fmtDuration(duration)
+  metaGenreText = genre || ""
+  metaRatingText = fmtImdbRating(rating)
+  renderMetaLine()
   if (plotEl) plotEl.textContent = plot || t("detail.noDescription")
 
   trailerUrl = youtubeUrlFromTrailer(
@@ -286,6 +335,10 @@ function applyVodInfo(data) {
   if (trailerBtn) {
     if (trailerUrl) trailerBtn.removeAttribute("hidden")
     else trailerBtn.setAttribute("hidden", "")
+  }
+
+  if (!isTmdbActive()) {
+    renderProviderPeopleChips(providerPeopleNames(parseProviderPeople(providerInfoForVod(data))))
   }
 }
 
@@ -314,6 +367,388 @@ function escapeText(text) {
   const div = document.createElement("div")
   div.textContent = String(text)
   return div.innerHTML
+}
+
+// Genre/rating repeat in the facts column at lg+, so the compact strip hides its own copies there.
+function renderMetaLine() {
+  if (!metaEl) return
+  const bits = []
+  if (metaYearText) bits.push(`<span class="meta-item">${escapeText(metaYearText)}</span>`)
+  if (metaDurationText) bits.push(`<span class="meta-item">${escapeText(metaDurationText)}</span>`)
+  if (metaGenreText) bits.push(`<span class="meta-item lg:hidden">${escapeText(metaGenreText)}</span>`)
+  if (metaRatingText) {
+    bits.push(
+      '<span class="meta-item inline-flex items-center gap-1 text-fg-2 lg:hidden" aria-label="' +
+        escapeText(t("detail.imdbRatingAria", { rating: metaRatingText })) +
+        '">' +
+        '<svg viewBox="0 0 24 24" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" class="text-accent">' +
+        '<path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/>' +
+        "</svg>" +
+        `<span class="font-medium tabular-nums">${metaRatingText}</span>` +
+        '<span class="text-fg-3">/10</span>' +
+        "</span>"
+    )
+  }
+  metaEl.innerHTML = bits.join("")
+  renderFactsColumn()
+}
+
+function setFactRow(id, value) {
+  const row = document.getElementById(id)
+  if (!row) return
+  if (!value) {
+    row.setAttribute("hidden", "")
+    return
+  }
+  const valueEl = row.querySelector('[data-role="fact-value"]')
+  if (valueEl) valueEl.textContent = value
+  row.removeAttribute("hidden")
+}
+
+// Facts column at lg+: same module state as the compact meta strip, no extra data reads.
+// Year/runtime stay in the strip only - the strip keeps them visible at lg+ too.
+function renderFactsColumn() {
+  setFactRow("movie-detail-fact-genre", metaGenreText)
+  setFactRow("movie-detail-fact-rating", metaRatingText)
+}
+
+// ----------------------------
+// TMDb enrichment
+// ----------------------------
+function resetTmdbEnrichmentUI() {
+  if (directorEl) {
+    directorEl.textContent = ""
+    directorEl.setAttribute("hidden", "")
+  }
+  if (taglineEl) {
+    taglineEl.textContent = ""
+    taglineEl.setAttribute("hidden", "")
+  }
+  metaGenreText = ""
+  metaRatingText = ""
+  metaYearText = ""
+  document.getElementById("movie-detail-fact-genre")?.setAttribute("hidden", "")
+  document.getElementById("movie-detail-fact-rating")?.setAttribute("hidden", "")
+  if (castSection) castSection.setAttribute("hidden", "")
+  castListEl?.replaceChildren()
+  if (similarSection) similarSection.setAttribute("hidden", "")
+  similarListEl?.replaceChildren()
+  document.getElementById("movie-detail-provider-people")?.setAttribute("hidden", "")
+}
+
+function patchDirector(director, tmdbPersonId) {
+  if (!directorEl || !director) return
+  directorEl.textContent = ""
+  directorEl.append(`${t("detail.director")}: `)
+  if (tmdbPersonId) {
+    const link = document.createElement("a")
+    link.href = personFilterHref(director, tmdbPersonId)
+    link.textContent = director
+    link.className =
+      "text-fg-2 hover:text-accent focus-visible:text-accent outline-none " +
+      "rounded focus-visible:ring-1 focus-visible:ring-accent"
+    directorEl.appendChild(link)
+  } else {
+    directorEl.append(director)
+  }
+  directorEl.removeAttribute("hidden")
+}
+
+function patchTagline(tagline) {
+  if (!taglineEl || !tagline) return
+  taglineEl.textContent = tagline
+  taglineEl.removeAttribute("hidden")
+}
+
+function patchGenreFromEnrichment(genres) {
+  if (!genres?.length || metaGenreText) return
+  metaGenreText = genres.join(", ")
+  renderMetaLine()
+}
+
+function patchYearFromEnrichment(year) {
+  if (metaYearText || !year) return
+  metaYearText = String(year)
+  renderMetaLine()
+}
+
+function patchRatingFromEnrichment(voteAverage) {
+  if (metaRatingText || !voteAverage) return
+  const ratingText = fmtImdbRating(voteAverage)
+  if (!ratingText) return
+  metaRatingText = ratingText
+  renderMetaLine()
+}
+
+// Defensive: profilePath may be a raw TMDb path rather than an already-mapped full URL.
+function castProfileUrl(profilePath) {
+  if (!profilePath) return null
+  return profilePath.startsWith("http") ? profilePath : tmdbImageUrl(profilePath, TMDB_PROFILE_SIZE)
+}
+
+// tmdbPersonId is omitted for the provider-only chip row (no TMDb id to carry).
+function personFilterHref(name, tmdbPersonId) {
+  const params = new URLSearchParams({ person: name })
+  if (tmdbPersonId) params.set("personId", String(tmdbPersonId))
+  return `/movies?${params.toString()}`
+}
+
+function renderCast(cast) {
+  if (!castSection || !castListEl || !cast.length) return
+  castListEl.replaceChildren()
+  for (const member of cast) {
+    const interactive = !!member.tmdbPersonId
+    const card = document.createElement(interactive ? "a" : "div")
+    card.className = "flex flex-col items-center gap-1.5 w-20 sm:w-24 shrink-0 snap-start text-center rounded-lg outline-none"
+    if (interactive) {
+      card.href = personFilterHref(member.name, member.tmdbPersonId)
+      card.classList.add("group", "cursor-pointer", "focus-visible:ring-1", "focus-visible:ring-accent")
+    }
+
+    const photoWrap = document.createElement("div")
+    photoWrap.className =
+      "size-16 sm:size-20 rounded-full overflow-hidden bg-surface-2 ring-1 ring-line flex items-center justify-center text-fg-3"
+    const profileUrl = castProfileUrl(member.profilePath)
+    if (profileUrl) {
+      const img = document.createElement("img")
+      img.src = profileUrl
+      img.alt = ""
+      img.loading = "lazy"
+      img.decoding = "async"
+      img.referrerPolicy = "no-referrer"
+      img.className = "h-full w-full object-cover"
+      img.onerror = () => {
+        img.remove()
+        photoWrap.innerHTML = ICON_USER
+      }
+      photoWrap.appendChild(img)
+    } else {
+      photoWrap.innerHTML = ICON_USER
+    }
+
+    const info = document.createElement("div")
+    info.className = "w-full"
+    const nameEl = document.createElement("div")
+    nameEl.className =
+      "truncate text-sm font-medium text-fg" +
+      (interactive ? " group-hover:text-accent group-focus-visible:text-accent transition-colors" : "")
+    nameEl.textContent = member.name
+    const characterEl = document.createElement("div")
+    characterEl.className = "truncate text-xs text-fg-3"
+    characterEl.textContent = member.character
+    info.append(nameEl, characterEl)
+
+    card.append(photoWrap, info)
+    castListEl.appendChild(card)
+  }
+  castSection.removeAttribute("hidden")
+}
+
+// Dedup preserving order, director first, since IPTV provider casts often repeat a name.
+function providerPeopleNames(peopleInfo) {
+  const names = []
+  const seen = new Set()
+  const add = (name) => {
+    const trimmed = (name || "").trim()
+    if (!trimmed || seen.has(trimmed)) return
+    seen.add(trimmed)
+    names.push(trimmed)
+  }
+  add(peopleInfo.directorName)
+  for (const name of peopleInfo.castNames) add(name)
+  return names
+}
+
+function renderProviderPeopleChips(names) {
+  const row = document.getElementById("movie-detail-provider-people")
+  const listEl = document.getElementById("movie-detail-provider-people-list")
+  if (!row || !listEl) return
+  if (!names.length) {
+    row.setAttribute("hidden", "")
+    listEl.replaceChildren()
+    return
+  }
+  listEl.replaceChildren()
+  for (const name of names.slice(0, 8)) {
+    const chip = document.createElement("a")
+    chip.href = personFilterHref(name, null)
+    chip.className =
+      "rounded-full border border-line px-2 py-0.5 text-xs text-fg-2 " +
+      "hover:text-accent hover:border-accent focus-visible:text-accent focus-visible:border-accent outline-none transition-colors"
+    chip.textContent = name
+    listEl.appendChild(chip)
+  }
+  row.removeAttribute("hidden")
+}
+
+function renderSimilar(matches) {
+  if (!similarSection || !similarListEl || !matches.length) return
+  similarListEl.replaceChildren()
+  matches.forEach((entry, idx) => {
+    const card = buildEntryCard({
+      entry,
+      idx,
+      kind: "vod",
+      activePlaylistId,
+      detailHref: (e) => `/movies/detail?id=${encodeURIComponent(e.id)}`,
+      fallbackTitle: (e) => t("list.movieFallback", { id: e.id }),
+      metaText: (e) => {
+        const parts = []
+        if (e.year) parts.push(e.year)
+        if (e.category) parts.push(e.category)
+        return parts.join(" • ")
+      },
+    })
+    const cardWrap = document.createElement("div")
+    cardWrap.className = "w-32 sm:w-36 lg:w-40 shrink-0 snap-start"
+    cardWrap.appendChild(card)
+    similarListEl.appendChild(cardWrap)
+  })
+  similarSection.removeAttribute("hidden")
+}
+
+// A deep link boots from a stub movie, so take the fields only the catalog row carries.
+function adoptCatalogRow(catalog) {
+  if (!movie) return
+  const row = catalog.find((entry) => Number(entry.id) === movieId)
+  if (!row) return
+  if (!movie.category) movie.category = row.category || null
+  if (!movie.year) movie.year = row.year || ""
+}
+
+// The in-memory catalog is empty on a deep link, so load it instead of giving up on the rail.
+function loadVodCatalog() {
+  if (!activePlaylistId) return Promise.resolve([])
+  const cached = getCached(activePlaylistId, "vod")?.data
+  if (cached?.length) return Promise.resolve(cached)
+  if (!vodCatalogPromise) {
+    vodCatalogPromise = ensureVod(creds, activePlaylistId)
+      .then((catalog) => {
+        adoptCatalogRow(catalog)
+        return catalog
+      })
+      .catch((err) => {
+        log.warn("[xt:movie-detail] vod catalog load failed:", err)
+        return []
+      })
+  }
+  return vodCatalogPromise
+}
+
+// Shared by the async patch-in and the cache-warm early merge in boot().
+function applyEnrichmentPatch(enrichment) {
+  if (enrichment.posterUrl) heroPosterUrl = enrichment.posterUrl
+  if (enrichment.backdropUrl) {
+    heroBackdropUrl = enrichment.backdropUrl
+    setAmbient(enrichment.backdropUrl)
+  }
+  if (enrichment.overview && plotEl) plotEl.textContent = enrichment.overview
+  if (enrichment.director) patchDirector(enrichment.director, enrichment.directorPersonId)
+  if (enrichment.tagline) patchTagline(enrichment.tagline)
+  patchGenreFromEnrichment(enrichment.genres)
+  patchRatingFromEnrichment(enrichment.voteAverage)
+  patchYearFromEnrichment(enrichment.year)
+  if (!trailerUrl && enrichment.trailerYoutubeKey) {
+    trailerUrl = `https://www.youtube.com/watch?v=${enrichment.trailerYoutubeKey}`
+    trailerBtn?.removeAttribute("hidden")
+  }
+  if (enrichment.cast?.length) renderCast(enrichment.cast)
+}
+
+// Returns whether the similar rail was populated from TMDb recommendations.
+async function enrichMovieDetailFromTmdb(requestId) {
+  if (!isTmdbActive() || !movie || !activePlaylistId) {
+    settleHero()
+    return false
+  }
+
+  if (movie.name === t("list.movieFallback", { id: movieId })) {
+    settleHero()
+    return false
+  }
+
+  const data = vodInfoRaw
+  const movieData = data?.movie_data || data?.info || data || {}
+  const info = data?.info || data?.movie_data || {}
+  const providerTmdbId = Number(info.tmdb_id || movieData.tmdb_id) || null
+
+  const tmdbId = await resolveTmdbId(activePlaylistId, "vod", {
+    id: movie.id,
+    name: movie.name,
+    year: movie.year || movieData.releasedate || movieData.year || info.year || null,
+    providerTmdbId,
+  })
+  if (requestId !== enrichRequestId) return false
+  if (tmdbId == null) {
+    settleHero()
+    return false
+  }
+
+  const enrichment = await fetchMovieEnrichment(activePlaylistId, tmdbId)
+  if (requestId !== enrichRequestId) return false
+  if (!enrichment) {
+    settleHero()
+    return false
+  }
+
+  applyEnrichmentPatch(enrichment)
+  settleHero()
+
+  if (enrichment.recommendations?.length) {
+    const catalog = await loadVodCatalog()
+    if (requestId !== enrichRequestId) return false
+    const matches = matchRecommendationsToCatalog(enrichment.recommendations, catalog, {
+      mediaType: "movie",
+      limit: 12,
+      sourcePrefix: extractLangPrefix(movie.name),
+    })
+    if (matches.length) {
+      renderSimilar(matches)
+      return true
+    }
+  }
+  return false
+}
+
+function providerInfoForVod(cachedData) {
+  return cachedData?.info || cachedData?.movie_data || cachedData || {}
+}
+
+async function populateLocalSimilarRail(requestId) {
+  if (!movie || !activePlaylistId) return
+  const catalog = await loadVodCatalog()
+  if (requestId !== enrichRequestId) return
+  const people = parseProviderPeople(providerInfoForVod(vodInfoRaw))
+  const matches = pickLocalSimilar(
+    {
+      id: movie.id,
+      category: movie.category || null,
+      castNames: people.castNames,
+      directorName: people.directorName,
+    },
+    catalog,
+    {
+      limit: 12,
+      infoLookup: (id) => {
+        const cached = getCached(activePlaylistId, `vod_info_${id}`)?.data
+        return cached ? parseProviderPeople(providerInfoForVod(cached)) : null
+      },
+      sourcePrefix: extractLangPrefix(movie.name),
+    }
+  )
+  if (matches.length) renderSimilar(matches)
+}
+
+async function populateSimilarRail(requestId) {
+  // boot() already merged a cache-warm enrichment into the first paint; only the
+  // local-similar fallback (when TMDb had no catalog-matching recommendations) is left.
+  if (earlyEnrichmentHandled) {
+    if (!earlyEnrichmentPopulatedSimilar) await populateLocalSimilarRail(requestId)
+    return
+  }
+  const populatedFromTmdb = await enrichMovieDetailFromTmdb(requestId)
+  if (requestId !== enrichRequestId) return
+  if (!populatedFromTmdb) await populateLocalSimilarRail(requestId)
 }
 
 function syncFavButton() {
@@ -1149,9 +1584,33 @@ downloadBtn?.addEventListener("click", async () => {
 // ----------------------------
 // Boot
 // ----------------------------
+function showDetailSkeleton() {
+  document.querySelectorAll("[data-detail-skeleton]").forEach((el) => el.removeAttribute("hidden"))
+  titleEl?.setAttribute("hidden", "")
+  metaEl?.setAttribute("hidden", "")
+  plotEl?.setAttribute("hidden", "")
+}
+
+// Reveals real title/meta/plot and hides the skeleton. Guarantees a non-empty
+// title even if the provider gave no name at all, so the numeric-id stub never shows.
+// The hero settles here too, but only when TMDb is inactive - active TMDb keeps the
+// hero skeleton until the enrichment attempt settles, elsewhere.
+function hideDetailSkeleton() {
+  document.querySelectorAll("[data-detail-skeleton]").forEach((el) => el.setAttribute("hidden", ""))
+  if (titleEl) {
+    if (!titleEl.textContent) titleEl.textContent = t("detail.error.cantLoad")
+    titleEl.removeAttribute("hidden")
+  }
+  metaEl?.removeAttribute("hidden")
+  plotEl?.removeAttribute("hidden")
+  if (!isTmdbActive()) settleHero()
+}
+
 function showError(msg) {
   if (titleEl) titleEl.textContent = t("detail.error.cantLoad")
   if (plotEl) plotEl.textContent = msg
+  hideDetailSkeleton()
+  settleHero()
   if (downloadBtn) downloadBtn.setAttribute("hidden", "")
   if (playBtn) playBtn.setAttribute("disabled", "")
 }
@@ -1166,6 +1625,7 @@ async function boot() {
   // A playlist switch re-boots: dispose any player from the previous playlist
   // so its stream stops and its progress listeners stop writing.
   playRequestId++
+  const enrichRequestIdForThisBoot = ++enrichRequestId
   try {
     vjs?.pause?.()
     await vjs?.dispose?.()
@@ -1177,8 +1637,17 @@ async function boot() {
   movie = null
   detailSrc = ""
   detailSrcBuilder = null
+  vodCatalogPromise = null
+  heroPosterUrl = null
+  heroBackdropUrl = null
+  heroSettled = false
+  earlyEnrichmentHandled = false
+  earlyEnrichmentPopulatedSimilar = false
+  showDetailSkeleton()
   if (metaEl) metaEl.textContent = ""
-  if (plotEl) plotEl.textContent = t("detail.loading")
+  if (plotEl) plotEl.textContent = ""
+  if (titleEl) titleEl.textContent = ""
+  resetTmdbEnrichmentUI()
 
   const active = await getActiveEntry()
   if (!active) {
@@ -1191,22 +1660,24 @@ async function boot() {
 
   // Hydrate the basics from the cached VOD list (poster, title, etc.).
   const list = getCached(active._id, "vod")
-  movie = list?.data?.find((m) => Number(m.id) === movieId) || null
+  const catalogMovie = list?.data?.find((m) => Number(m.id) === movieId) || null
 
   const dl = listDownloads().find(
     (d) => d.source?.kind === "vod" && Number(d.source?.id) === movieId
   )
 
-  if (!movie) {
-    movie = {
-      id: movieId,
-      name: dl?.title || t("list.movieFallback", { id: movieId }),
-      logo: dl?.source?.logo || null,
-    }
+  const stubName = t("list.movieFallback", { id: movieId })
+  movie = catalogMovie || {
+    id: movieId,
+    name: dl?.title || stubName,
+    logo: dl?.source?.logo || null,
   }
 
-  if (titleEl) titleEl.textContent = movie.name || t("list.movieFallback", { id: movieId })
-  paintPoster(movie.name, movie.logo || null)
+  // The stub id-based name never reaches the DOM - the title stays hidden behind
+  // the skeleton until a real name arrives (catalog/download now, or provider below).
+  if (titleEl && movie.name !== stubName) titleEl.textContent = movie.name
+  // Hero stays in its skeleton state - settleHero() below decides when to paint it once.
+  heroPosterUrl = movie.logo || null
   setAmbient(movie.logo || null)
   syncFavButton()
   syncWatchButton()
@@ -1218,10 +1689,40 @@ async function boot() {
     externalBtnHandle?.refresh()
   }
 
-  // Per-item cache: paint immediately if available so offline opens work.
-  const cached = getCached(active._id, `vod_info_${movieId}`)
-  if (cached) applyVodInfo(cached.data)
-  else if (plotEl) plotEl.textContent = t("detail.loading")
+  // Both probes are network-free (hydrate + memory read) and run under one bound,
+  // so a cold IDB read can never delay first paint past the shared timeout.
+  const { enrichment: earlyEnrichment, providerInfo: earlyProviderInfo } = await peekEarlyDetailData(
+    "vod",
+    movie.id,
+    active._id,
+    `vod_info_${movieId}`
+  )
+  if (enrichRequestIdForThisBoot !== enrichRequestId) return
+
+  let providerInfoReady = false
+  if (earlyProviderInfo) {
+    applyVodInfo(earlyProviderInfo.data)
+    providerInfoReady = true
+  }
+
+  if (earlyEnrichment) {
+    applyEnrichmentPatch(earlyEnrichment.enrichment)
+    settleHero()
+    earlyEnrichmentHandled = true
+    if (earlyEnrichment.enrichment.recommendations?.length) {
+      const matches = matchRecommendationsToCatalog(earlyEnrichment.enrichment.recommendations, list?.data || [], {
+        mediaType: "movie",
+        limit: 12,
+        sourcePrefix: extractLangPrefix(movie.name),
+      })
+      if (matches.length) {
+        renderSimilar(matches)
+        earlyEnrichmentPopulatedSimilar = true
+      }
+    }
+  }
+
+  if (providerInfoReady) hideDetailSkeleton()
 
   // Early autoplay handoff for downloaded movies
   if (wantsAutoplay && dl?.url) {
@@ -1238,27 +1739,47 @@ async function boot() {
     startPlayback()
   }
 
-  // Refresh from network when reachable.
+  // Refresh from network when reachable. The provider info cache has no TTL gate here -
+  // this always runs, matching the existing offline/SWR behavior for this endpoint.
   if (creds.host && creds.user && creds.pass) {
     try {
       const r = await xtreamApiFetch("get_vod_info", { vod_id: String(movieId) })
       if (!r.ok) throw new Error(await r.text())
       const data = await r.json()
       setCached(active._id, `vod_info_${movieId}`, data, VOD_INFO_TTL_MS)
-      applyVodInfo(data)
+      if (enrichRequestIdForThisBoot === enrichRequestId) {
+        applyVodInfo(data)
+        // applyVodInfo resets the provider-derived fields the merge already backfilled; reassert it.
+        // settleHero() is a no-op once already settled, so this never repaints with a different image.
+        if (earlyEnrichmentHandled) {
+          applyEnrichmentPatch(earlyEnrichment.enrichment)
+          settleHero()
+        }
+        hideDetailSkeleton()
+      }
     } catch (e) {
       log.error("[xt:movie-detail] info fetch failed:", e)
-      if (!cached && plotEl) {
-        plotEl.textContent = dl
-          ? t("detail.error.providerLocal")
-          : t("detail.error.failedTryPlay")
+      if (!providerInfoReady && enrichRequestIdForThisBoot === enrichRequestId) {
+        if (plotEl) {
+          plotEl.textContent = dl
+            ? t("detail.error.providerLocal")
+            : t("detail.error.failedTryPlay")
+        }
+        hideDetailSkeleton()
       }
     }
-  } else if (!cached && plotEl) {
-    plotEl.textContent = dl
-      ? t("detail.error.localAvailable")
-      : t("detail.error.noPlaylist")
+  } else if (!providerInfoReady) {
+    if (plotEl) {
+      plotEl.textContent = dl
+        ? t("detail.error.localAvailable")
+        : t("detail.error.noPlaylist")
+    }
+    hideDetailSkeleton()
   }
+
+  populateSimilarRail(enrichRequestIdForThisBoot).catch((err) => {
+    log.warn("[xt:movie-detail] similar rail population failed:", err)
+  })
 
   if (downloadBtn && isDownloadable()) downloadBtn.removeAttribute("hidden")
   applyDownloadState()

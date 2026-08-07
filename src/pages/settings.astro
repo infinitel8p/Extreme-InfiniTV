@@ -39,6 +39,9 @@ import {
   IconExternalLink,
   IconRestore,
   IconLicense,
+  IconMovie,
+  IconEye,
+  IconEyeOff,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -68,6 +71,7 @@ const navStructure: NavSection[] = [
   { id: "settings-network", labelKey: "settings.group.network", label: "Network", cards: [
     { id: "card-network",          labelKey: "settings.network.title", label: "Network" },
     { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
+    { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "TMDb metadata" },
   ]},
   { id: "settings-library", labelKey: "settings.group.library", label: "Library", cards: [
     { id: "card-categories", labelKey: "settings.categories.title",        label: "Categories" },
@@ -81,7 +85,7 @@ const navStructure: NavSection[] = [
   { id: "settings-about", labelKey: "settings.group.about", label: "About", cards: [
     { id: "update-section",    labelKey: "settings.nav.appUpdate",  label: "App update" },
     { id: "changelog-section", labelKey: "settings.about.whatsNew", label: "What's new" },
-    { id: "licenses-section",  labelKey: "settings.licenses.title", label: "Open-source licenses" },
+    { id: "licenses-section",  labelKey: "settings.licenses.title", label: "Licenses and attribution" },
   ]},
   { id: "settings-help", labelKey: "settings.group.help", label: "Help & feedback", cards: [
     { id: "card-docs",        labelKey: "settings.help.docsTitle",  label: "Read the docs" },
@@ -588,10 +592,10 @@ const navStructure: NavSection[] = [
             </span>
             <h3 data-i18n="settings.hubStrips.title" class="text-base font-semibold">Home page sections</h3>
           </div>
-          <p data-i18n="settings.hubStrips.helper" class="text-xs text-fg-3 px-5 sm:px-6">
+          <p data-i18n="settings.hubStrips.helper" class="settings-surface__helper text-xs text-fg-3">
             Choose which sections appear on your home page and what order they're in.
           </p>
-          <div class="p-5 sm:p-6 pt-3">
+          <div class="px-5 sm:px-6 pb-5 sm:pb-6">
             <HubStripsEditor client:load />
           </div>
         </div>
@@ -972,6 +976,104 @@ const navStructure: NavSection[] = [
           </div>
         </div>
 
+        <!-- Surface: TMDb metadata enrichment -->
+        <div id="card-tmdb" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
+            <span class="icon-mark">
+              <IconMovie aria-hidden="true" stroke={2} />
+            </span>
+            <h3 data-i18n="settings.tmdb.title" class="text-base font-semibold">TMDb metadata</h3>
+          </div>
+          <p data-i18n="settings.tmdb.helper" class="settings-surface__helper text-xs text-fg-3">
+            Enrich movies and series with better posters, cast, trailers, and similar titles from The Movie Database.
+          </p>
+          <div class="settings-rows">
+
+            <!-- Enable enrichment -->
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.tmdb.enable" class="text-sm font-medium leading-snug">Enable enrichment</h3>
+                <p data-i18n="settings.tmdb.privacy" class="text-xs text-fg-3">
+                  When enabled, the titles you open are sent to TMDB for matching.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-tmdb-enabled"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Enable enrichment"
+                  data-i18n-attr="aria-label:settings.tmdb.enable">
+                  <button type="button" data-tmdb="on"  aria-pressed="false" data-i18n="settings.monoAudio.on"  class="tmdb-enabled-btn btn">On</button>
+                  <button type="button" data-tmdb="off" aria-pressed="false" data-i18n="settings.monoAudio.off" class="tmdb-enabled-btn btn">Off</button>
+                </div>
+              </div>
+              <script is:inline>
+                try {
+                  var tmdbEnabledRaw = localStorage.getItem("xt_tmdb_enabled");
+                  var tmdbEnabledOn = tmdbEnabledRaw === "1";
+                  var tmdbEnabledGroup = document.getElementById("settings-tmdb-enabled");
+                  if (tmdbEnabledGroup) {
+                    var tmdbEnabledBtns = tmdbEnabledGroup.querySelectorAll(".tmdb-enabled-btn");
+                    for (var tIdx = 0; tIdx < tmdbEnabledBtns.length; tIdx++) {
+                      var tmdbEnabledBtnOn = tmdbEnabledBtns[tIdx].getAttribute("data-tmdb") === "on";
+                      tmdbEnabledBtns[tIdx].setAttribute("aria-pressed", tmdbEnabledBtnOn === tmdbEnabledOn ? "true" : "false");
+                    }
+                  }
+                } catch (e) {}
+              </script>
+            </div>
+
+            <!-- API key -->
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.tmdb.apiKey" class="text-sm font-medium leading-snug">API key</h3>
+                <p class="text-xs text-fg-3">
+                  <span data-i18n="settings.tmdb.apiKeyHelper">Paste a free TMDB API key or v4 access token.</span>
+                  <a
+                    href="https://www.themoviedb.org/settings/api"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-external
+                    data-i18n="settings.tmdb.getKey"
+                    class="text-accent underline ms-1">Get a key at themoviedb.org</a>
+                </p>
+              </div>
+              <div class="settings-row__control w-full @2xl:w-96 flex-col items-stretch gap-1">
+                <div class="flex gap-2">
+                  <input
+                    id="settings-tmdb-key"
+                    type="password"
+                    autocomplete="off"
+                    spellcheck="false"
+                    class="field-input font-mono flex-1 min-w-0"
+                  />
+                  <button
+                    id="settings-tmdb-reveal"
+                    type="button"
+                    class="btn flex-none w-11 justify-center p-0"
+                    aria-label="Show key"
+                    data-i18n-attr="aria-label:settings.tmdb.reveal">
+                    <IconEye aria-hidden="true" class="btn-icon" data-tmdb-reveal-icon="show" />
+                    <IconEyeOff aria-hidden="true" class="btn-icon hidden" data-tmdb-reveal-icon="hide" />
+                  </button>
+                  <button id="settings-tmdb-test" type="button" class="btn flex-none w-auto justify-center">
+                    <span data-i18n="settings.tmdb.test">Test key</span>
+                  </button>
+                </div>
+                <span
+                  id="settings-tmdb-msg"
+                  aria-live="polite"
+                  class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+              </div>
+            </div>
+
+          </div>
+          <p class="text-2xs text-fg-3 px-5 sm:px-6 pb-5 sm:pb-6 -mt-1">
+            This product uses the TMDB API but is not endorsed or certified by TMDB.
+          </p>
+        </div>
+
       </div>
     </section>
 
@@ -997,7 +1099,7 @@ const navStructure: NavSection[] = [
               the picker and the main grid on Live TV, Movies, and Series.
             </span>
           </summary>
-          <div class="px-5 sm:px-6 pb-5 pt-1">
+          <div class="px-5 sm:px-6 pb-5 sm:pb-6 pt-1">
             <HiddenCategoriesEditor client:load />
           </div>
         </details>
@@ -1019,7 +1121,7 @@ const navStructure: NavSection[] = [
               the per-page favorites filter follow this order.
             </span>
           </summary>
-          <div class="px-5 sm:px-6 pb-5 pt-1">
+          <div class="px-5 sm:px-6 pb-5 sm:pb-6 pt-1">
             <FavoritesReorder client:load />
           </div>
         </details>
@@ -1207,7 +1309,7 @@ const navStructure: NavSection[] = [
                 <span id="settings-cache-size" class="text-fg tabular-nums">-</span>
                 <span class="text-xs text-fg-3">
                   <span data-i18n="settings.storage.lastUpdated">Last updated</span>
-                  <span id="settings-cache-newest" class="tabular-nums">-</span>
+                  <span id="settings-cache-newest" class="tabular-nums ms-1">-</span>
                 </span>
               </div>
             </div>
@@ -1446,7 +1548,7 @@ const navStructure: NavSection[] = [
             <span class="icon-mark">
               <IconLicense aria-hidden="true" stroke={2} />
             </span>
-            <h3 data-i18n="settings.licenses.title" class="text-base font-semibold">Open-source licenses</h3>
+            <h3 data-i18n="settings.licenses.title" class="text-base font-semibold">Licenses and attribution</h3>
             <span class="ms-auto shrink-0">
               <IconChevronDown
                 aria-hidden="true"
@@ -1454,39 +1556,104 @@ const navStructure: NavSection[] = [
                 class="size-4 text-fg-3 shrink-0 changelog-chevron transition-transform duration-200" />
             </span>
           </summary>
-          <div class="flex flex-col gap-3 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60">
-            <p data-i18n="settings.licenses.ffmpegNotice" class="text-sm text-fg-2">
-              The Windows and Linux desktop builds bundle a trimmed FFmpeg build (LGPL v2.1 or later), used only to convert live TV audio the app can't otherwise play.
-            </p>
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <a
-                href="https://ffmpeg.org"
-                target="_blank"
-                rel="noopener noreferrer"
-                data-external
-                class="btn justify-start sm:justify-center">
-                <IconExternalLink aria-hidden="true" class="btn-icon" />
-                <span data-i18n="settings.licenses.ffmpegSite">FFmpeg project</span>
-              </a>
-              <a
-                href="https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html"
-                target="_blank"
-                rel="noopener noreferrer"
-                data-external
-                class="btn justify-start sm:justify-center">
-                <IconExternalLink aria-hidden="true" class="btn-icon" />
-                <span data-i18n="settings.licenses.lgplText">LGPL v2.1 license text</span>
-              </a>
-              <a
-                href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/tag/ffmpeg-sidecar-v2"
-                target="_blank"
-                rel="noopener noreferrer"
-                data-external
-                class="btn justify-start sm:justify-center">
-                <IconBrandGithub aria-hidden="true" class="btn-icon" />
-                <span data-i18n="settings.licenses.sourceRecipe">Source & build recipe</span>
-              </a>
+          <div class="flex flex-col gap-5 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60">
+
+            <!-- FFmpeg -->
+            <div class="flex flex-col gap-2">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">FFmpeg</span>
+                <span class="text-2xs uppercase tracking-wide text-fg-3 shrink-0 ms-3">LGPL 2.1+</span>
+              </div>
+              <p data-i18n="settings.licenses.ffmpegNotice" class="text-xs text-fg-3">
+                The Windows and Linux desktop builds bundle a trimmed FFmpeg build (LGPL v2.1 or later), used only to convert live TV audio the app can't otherwise play.
+              </p>
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <a
+                  href="https://ffmpeg.org"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  class="btn justify-start sm:justify-center">
+                  <IconExternalLink aria-hidden="true" class="btn-icon" />
+                  <span data-i18n="settings.licenses.ffmpegSite">FFmpeg project</span>
+                </a>
+                <a
+                  href="https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  class="btn justify-start sm:justify-center">
+                  <IconExternalLink aria-hidden="true" class="btn-icon" />
+                  <span data-i18n="settings.licenses.lgplText">LGPL v2.1 license text</span>
+                </a>
+                <a
+                  href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/tag/ffmpeg-sidecar-v2"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  class="btn justify-start sm:justify-center">
+                  <IconBrandGithub aria-hidden="true" class="btn-icon" />
+                  <span data-i18n="settings.licenses.sourceRecipe">Source & build recipe</span>
+                </a>
+              </div>
             </div>
+
+            <!-- TMDB -->
+            <div class="flex flex-col gap-1">
+              <span class="text-sm font-medium text-fg">TMDB</span>
+              <p class="text-xs text-fg-3">
+                This product uses the TMDB API but is not endorsed or certified by TMDB.
+                <a
+                  href="https://www.themoviedb.org/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  class="text-accent underline ms-1">themoviedb.org</a>
+              </p>
+            </div>
+
+            <!-- Playback engines -->
+            <div class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">hls.js · mpegts.js · Shaka Player · Video.js · ArtPlayer</span>
+                <span class="text-2xs uppercase tracking-wide text-fg-3 shrink-0 ms-3">APACHE-2.0 · MIT</span>
+              </div>
+              <p class="text-xs text-fg-3">
+                <span data-i18n="settings.licenses.mpegtsPatch">mpegts.js ships with a small audio-track fallback patch.</span>
+                <a
+                  href="https://github.com/infinitel8p/Extreme-InfiniTV/blob/main/patches/mpegts.js.patch"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  data-i18n="settings.licenses.patchFile"
+                  class="text-accent underline ms-1">View patch</a>
+              </p>
+            </div>
+
+            <!-- Fonts -->
+            <div class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">Geist Variable · Instrument Serif</span>
+                <a
+                  href="https://scripts.sil.org/OFL"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  data-i18n="settings.licenses.oflText"
+                  class="text-2xs uppercase tracking-wide text-accent underline shrink-0 ms-3">SIL OFL</a>
+              </div>
+              <p data-i18n="settings.licenses.fontsNotice" class="text-xs text-fg-3">Self-hosted typefaces.</p>
+            </div>
+
+            <!-- Framework -->
+            <div class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">Tauri · Tabler Icons</span>
+                <span class="text-2xs uppercase tracking-wide text-fg-3 shrink-0 ms-3">MIT / APACHE-2.0</span>
+              </div>
+              <p data-i18n="settings.licenses.uiNotice" class="text-xs text-fg-3">App framework and icon set.</p>
+            </div>
+
           </div>
         </details>
       </div>
@@ -1503,10 +1670,10 @@ const navStructure: NavSection[] = [
             </span>
             <h3 data-i18n="settings.help.docsTitle" class="text-base font-semibold">Read the docs</h3>
           </div>
-          <p data-i18n="settings.help.docsIntro" class="px-5 sm:px-6 pt-1 text-xs text-fg-3">
+          <p data-i18n="settings.help.docsIntro" class="settings-surface__helper text-xs text-fg-3">
             Step-by-step guides for sign-in, external players, the keyboard and D-pad bindings, and the most common things people get stuck on.
           </p>
-          <div class="px-5 sm:px-6 pb-5 pt-1">
+          <div class="px-5 sm:px-6 pb-5">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <a
                 href="/docs"
@@ -1531,10 +1698,10 @@ const navStructure: NavSection[] = [
             </span>
             <h3 data-i18n="settings.help.title" class="text-base font-semibold">Found a bug or have a suggestion?</h3>
           </div>
-          <p data-i18n="settings.help.intro" class="px-5 sm:px-6 pt-1 text-xs text-fg-3">
+          <p data-i18n="settings.help.intro" class="settings-surface__helper text-xs text-fg-3">
             Bug reports, feature requests, questions, and general feedback all go to GitHub - search existing issues first, or pick a template and open a new one.
           </p>
-          <div class="px-5 sm:px-6 pb-5 pt-1">
+          <div class="px-5 sm:px-6 pb-5">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <a
                 href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
@@ -1565,7 +1732,7 @@ const navStructure: NavSection[] = [
             </span>
             <h3 data-i18n="settings.support.title" class="text-base font-semibold">Like the app?</h3>
           </div>
-          <div class="px-5 sm:px-6 pb-5 pt-1 flex flex-col gap-4">
+          <div class="px-5 sm:px-6 pb-5 pt-4 flex flex-col gap-4">
             <p data-i18n="settings.support.intro" class="text-sm text-fg-2">
               Extreme InfiniTV is free and open source. If it saves you time or sweetens your living-room setup, a small tip helps cover hosting, signing certs, and the next round of features.
             </p>
@@ -1819,6 +1986,13 @@ const navStructure: NavSection[] = [
       DISCORD_RPC_EVENT,
     } from "@/scripts/lib/app-settings.js"
     import { discordRpcSupported } from "@/scripts/lib/discord-rpc.js"
+    import {
+      getTmdbApiKey,
+      setTmdbApiKey,
+      getTmdbEnabled,
+      setTmdbEnabled,
+    } from "@/scripts/lib/app-settings.js"
+    import { validateTmdbKey } from "@/scripts/lib/tmdb.ts"
     import { bindExternalLinks } from "@/scripts/lib/external-link.js"
     import { bindBackupRestore } from "@/scripts/lib/restore-backup.js"
     import {
@@ -4122,6 +4296,89 @@ const navStructure: NavSection[] = [
       if (discordClientIdInput) {
         const next = getDiscordClientId()
         if (discordClientIdInput.value !== next) discordClientIdInput.value = next
+      }
+    })
+
+    // -------------------------------------------------------------------
+    // TMDb metadata enrichment
+    // -------------------------------------------------------------------
+    const tmdbEnabledGroup = document.getElementById("settings-tmdb-enabled")
+    const tmdbKeyInput = /** @type {HTMLInputElement|null} */ (
+      document.getElementById("settings-tmdb-key")
+    )
+    const tmdbRevealBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("settings-tmdb-reveal")
+    )
+    const tmdbTestBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("settings-tmdb-test")
+    )
+    const tmdbMsgEl = document.getElementById("settings-tmdb-msg")
+
+    function syncTmdbEnabled() {
+      if (!tmdbEnabledGroup) return
+      const enabled = getTmdbEnabled()
+      for (const btn of tmdbEnabledGroup.querySelectorAll(".tmdb-enabled-btn")) {
+        const isOn = btn.getAttribute("data-tmdb") === "on"
+        btn.setAttribute("aria-pressed", isOn === enabled ? "true" : "false")
+      }
+    }
+    syncTmdbEnabled()
+
+    tmdbEnabledGroup?.addEventListener("click", (event) => {
+      const btn = /** @type {HTMLElement} */ (event.target).closest(".tmdb-enabled-btn")
+      if (!btn) return
+      setTmdbEnabled(btn.getAttribute("data-tmdb") === "on")
+      syncTmdbEnabled()
+    })
+
+    function syncTmdbTestDisabled() {
+      if (tmdbTestBtn) tmdbTestBtn.disabled = !(tmdbKeyInput?.value || "").trim()
+    }
+
+    if (tmdbKeyInput) {
+      tmdbKeyInput.value = getTmdbApiKey()
+      let tmdbSaveTimer = null
+      tmdbKeyInput.addEventListener("input", () => {
+        syncTmdbTestDisabled()
+        if (tmdbSaveTimer) window.clearTimeout(tmdbSaveTimer)
+        tmdbSaveTimer = window.setTimeout(() => {
+          setTmdbApiKey(tmdbKeyInput.value)
+        }, 350)
+      })
+      tmdbKeyInput.addEventListener("blur", () => {
+        if (tmdbSaveTimer) {
+          window.clearTimeout(tmdbSaveTimer)
+          tmdbSaveTimer = null
+        }
+        if (tmdbKeyInput.value !== getTmdbApiKey()) setTmdbApiKey(tmdbKeyInput.value)
+      })
+      syncTmdbTestDisabled()
+    }
+
+    tmdbRevealBtn?.addEventListener("click", () => {
+      if (!tmdbKeyInput) return
+      const revealed = tmdbKeyInput.type === "text"
+      tmdbKeyInput.type = revealed ? "password" : "text"
+      tmdbRevealBtn.setAttribute("aria-label", t(revealed ? "settings.tmdb.reveal" : "settings.tmdb.conceal"))
+      tmdbRevealBtn.querySelector('[data-tmdb-reveal-icon="show"]')?.classList.toggle("hidden", !revealed)
+      tmdbRevealBtn.querySelector('[data-tmdb-reveal-icon="hide"]')?.classList.toggle("hidden", revealed)
+    })
+
+    tmdbTestBtn?.addEventListener("click", async () => {
+      const key = (tmdbKeyInput?.value || getTmdbApiKey() || "").trim()
+      setLoading(tmdbTestBtn, true)
+      try {
+        const result = await validateTmdbKey(key)
+        if (result.ok) {
+          flashMsg(tmdbMsgEl, t("settings.tmdb.testOk"))
+          flashSuccess(tmdbTestBtn)
+        } else if (result.status === 401 || result.status === 403 || result.status === 404) {
+          flashMsg(tmdbMsgEl, t("settings.tmdb.testFail"))
+        } else {
+          flashMsg(tmdbMsgEl, t("settings.tmdb.testNetwork"))
+        }
+      } finally {
+        setLoading(tmdbTestBtn, false)
       }
     })
   </script>

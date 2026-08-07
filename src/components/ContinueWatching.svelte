@@ -4,6 +4,7 @@
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
   import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
+  import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
   import {
     ensureLoaded as ensurePrefsLoaded,
     getContinueWatching,
@@ -25,6 +26,8 @@
    *   href: string,
    *   percent: number,
    *   hasProgress: boolean,
+   *   seriesId?: string | number | null,
+   *   seriesName?: string | null,
    * }>}
    */
   let entries = $state([])
@@ -68,6 +71,8 @@
         : "#",
       percent,
       hasProgress: true,
+      seriesId: raw.seriesId ?? null,
+      seriesName: raw.seriesName ?? null,
     }
   }
 
@@ -182,6 +187,15 @@
             aria-label={entry.kind === "live"
               ? `Watch ${entry.name}`
               : `Resume ${entry.name}`}
+            use:hubCardMenu={{
+              kind: entry.kind,
+              id: entry.id,
+              name: entry.name,
+              logo: entry.logo,
+              seriesId: entry.seriesId,
+              seriesName: entry.seriesName,
+              playlistId: activePlaylistId,
+            }}
             class="cw-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150

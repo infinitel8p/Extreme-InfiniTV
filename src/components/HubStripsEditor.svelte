@@ -44,6 +44,7 @@
     if (!entry) return entryId
     void locale
     if (entry.type === "continue-watching") return t("hub.strip.continueWatching")
+    if (entry.type === "because-watched") return t("hub.strip.becauseYouWatched.label")
     const subKey = entry.kind === "all" ? "all" : entry.kind
     const namespace =
       entry.type === "favorites"

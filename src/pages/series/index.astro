@@ -3,7 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import SearchInput from "@/components/SearchInput.astro";
 import SortMenu from "@/components/SortMenu.astro";
 import CategoryPickerDialog from "@/components/CategoryPickerDialog.astro";
-import { IconAdjustmentsHorizontal, IconChevronDown, IconDice5 } from "@tabler/icons-svelte";
+import { IconAdjustmentsHorizontal, IconChevronDown, IconDice5, IconX } from "@tabler/icons-svelte";
 ---
 
 <Layout pageTitle="Series">
@@ -84,6 +84,25 @@ import { IconAdjustmentsHorizontal, IconChevronDown, IconDice5 } from "@tabler/i
 				</button>
 			</div>
 		</section>
+
+		<!-- Active person filter -->
+		<div id="series-person-filter-row" hidden class="flex items-center gap-2 shrink-0 px-1">
+			<span
+				class="inline-flex items-center gap-1.5 rounded-full border border-accent bg-accent-soft
+					px-3 py-1 min-h-8 text-sm text-fg">
+				<span id="series-person-filter-label"></span>
+				<button
+					id="series-person-filter-clear"
+					type="button"
+					data-i18n-attr="aria-label:list.personFilterAria;title:list.personFilterAria"
+					aria-label="Remove person filter"
+					title="Remove person filter"
+					class="rounded-full outline-none hover:text-accent focus-visible:text-accent
+						focus-visible:ring-1 focus-visible:ring-accent -mr-1 p-0.5">
+					<IconX aria-hidden="true" stroke={2} class="size-3.5" />
+				</button>
+			</span>
+		</div>
 
 		<div
 			id="series-list-status"

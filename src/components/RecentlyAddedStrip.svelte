@@ -5,6 +5,7 @@
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
   import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
+  import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
   import { fmtImdbRating } from "@/scripts/lib/format.js"
 
@@ -147,6 +148,13 @@
           <a
             href={entry.href}
             aria-label={`Open ${entry.name}`}
+            use:hubCardMenu={{
+              kind: entry.kind,
+              id: entry.id,
+              name: entry.name,
+              logo: entry.logo,
+              playlistId: activePlaylistId,
+            }}
             class="ra-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150

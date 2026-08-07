@@ -8,6 +8,7 @@
 
 import { t } from "@/scripts/lib/i18n.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
+import { ICON_CHECK } from "@/scripts/lib/icons.js"
 import {
   isFavorite,
   toggleFavorite,
@@ -26,6 +27,20 @@ export const STAR_FILLED =
 
 export const BOOKMARK_FILLED =
   '<svg xmlns="http://www.w3.org/2000/svg" width="0.85em" height="0.85em" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 3a2 2 0 0 0-2 2v16l8-4 8 4V5a2 2 0 0 0-2-2H6z"/></svg>'
+
+export const WATCHED_BADGE_CLASS = "entry-watched-badge"
+
+/** Small check badge for a fully-watched movie/series, same slot as the series progress badge. */
+export function buildWatchedBadge(): HTMLSpanElement {
+  const badge = document.createElement("span")
+  badge.className =
+    `${WATCHED_BADGE_CLASS} absolute bottom-1.5 right-1.5 inline-flex items-center justify-center ` +
+    "rounded-md px-1.5 py-0.5 bg-accent text-bg text-2xs ring-1 ring-black/10"
+  badge.setAttribute("aria-label", t("list.watchedBadge"))
+  badge.title = t("list.watchedBadge")
+  badge.innerHTML = ICON_CHECK
+  return badge
+}
 
 // ---------------------------------------------------------------------------
 // Fallback poster (image failed / missing). Used by both pages when an

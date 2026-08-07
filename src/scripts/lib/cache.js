@@ -253,6 +253,43 @@ export function setCached(entryId, kind, data, ttlMs) {
 }
 
 /**
+ * Every cached (kind, data) pair whose kind starts with `kindPrefix`, read
+ * straight from IDB in one range query (bypasses the in-memory layer).
+ * Powers a local person/cast graph without one round trip per title.
+ * @returns {Promise<Array<{ kind: string, data: any }>>}
+ */
+export async function getCachedByKindPrefix(entryId, kindPrefix) {
+  if (!entryId || !kindPrefix) return []
+  const prefix = `${PREFIX}${entryId}:${kindPrefix}`
+  const kindStart = prefix.length - kindPrefix.length
+  try {
+    const db = await openDB()
+    return await new Promise((resolve) => {
+      const tx = db.transaction(STORE, "readonly")
+      const range = IDBKeyRange.bound(prefix, prefix + "￿")
+      const req = tx.objectStore(STORE).openCursor(range)
+      const results = []
+      req.onsuccess = () => {
+        const cursor = req.result
+        if (!cursor) {
+          resolve(results)
+          return
+        }
+        const value = cursor.value
+        if (typeof cursor.key === "string" && value && typeof value === "object" && "data" in value) {
+          results.push({ kind: cursor.key.slice(kindStart), data: value.data })
+        }
+        cursor.continue()
+      }
+      req.onerror = () => resolve(results)
+    })
+  } catch (e) {
+    log.warn("[xt:cache] getCachedByKindPrefix threw for", entryId, kindPrefix, e)
+    return []
+  }
+}
+
+/**
  * Cache-or-fetch primitive. Hydrates from IDB first, returns cached value
  * if fresh, otherwise runs the fetcher and persists.
  *

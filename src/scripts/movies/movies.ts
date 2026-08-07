@@ -30,12 +30,18 @@ import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import {
   buildEntryCard,
+  buildWatchedBadge,
+  WATCHED_BADGE_CLASS,
   STAR_OUTLINE,
   STAR_FILLED,
 } from "@/scripts/lib/entry-card.js"
 import { buildMovieStreamUrl } from "@/scripts/lib/stream-urls.ts"
+import { resolvePersonTitleIds } from "@/scripts/lib/person-filter.ts"
+import { saveGridState, takeGridState, gridStateMatchesLocation } from "@/scripts/lib/grid-state.ts"
 
 const VOD_TTL_MS = 24 * 60 * 60 * 1000
+
+if (typeof history !== "undefined") history.scrollRestoration = "manual"
 
 function fmtAge(ms) {
   if (ms < 60_000) return "just now"
@@ -122,7 +128,11 @@ document.addEventListener("xt:progress-changed", (ev) => {
   const detail = /** @type {CustomEvent} */ (ev).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
   if (detail.kind !== "vod") return
-  if (getHideWatched(activePlaylistId, "vod")) applyFilter()
+  if (getHideWatched(activePlaylistId, "vod")) {
+    applyFilter()
+    return
+  }
+  updateGridWatchedBadgeFor(detail.id)
 })
 
 const onMovieFilterChange = (ev: Event) => {
@@ -180,6 +190,11 @@ function makeCard(m, idx) {
       if ((entry as any).duration) parts.push((entry as any).duration)
       if (entry.category) parts.push(entry.category)
       return parts.join(" \u2022 ")
+    },
+    decoratePoster: (posterWrap, entry) => {
+      if (activePlaylistId && isCompleted(activePlaylistId, "vod", entry.id)) {
+        posterWrap.appendChild(buildWatchedBadge())
+      }
     },
     starLabel: (entry, fav) =>
       fav
@@ -436,11 +451,214 @@ function updateGridWatchBadgeFor(movieId) {
   badge.hidden = !onWatchlist
 }
 
+function updateGridWatchedBadgeFor(movieId) {
+  if (!gridEl) return
+  const idx = filtered.findIndex((m) => m.id === movieId)
+  if (idx < 0) return
+  const card = gridEl.querySelector(`[data-idx="${idx}"]`)
+  if (!card) return
+  const wrap = card.querySelector("[data-poster-wrap]")
+  if (!wrap) return
+  wrap.querySelector(`.${WATCHED_BADGE_CLASS}`)?.remove()
+  if (activePlaylistId && isCompleted(activePlaylistId, "vod", movieId)) {
+    wrap.appendChild(buildWatchedBadge())
+  }
+}
+
+// ----------------------------
+// Grid state restore (back-navigation from a detail page)
+// ----------------------------
+/** @type {import("@/scripts/lib/grid-state.ts").GridState | null} */
+let pendingGridState = null
+let gridRestoreAttempted = false
+
+function isRestoreNavigation() {
+  try {
+    const navigationType = performance.getEntriesByType("navigation")[0]?.type
+    return navigationType === "back_forward" || navigationType === "reload"
+  } catch {
+    return false
+  }
+}
+
+function attemptGridRestore() {
+  if (gridRestoreAttempted) return
+  gridRestoreAttempted = true
+  if (!isRestoreNavigation()) return
+  const candidate = takeGridState("movies", activePlaylistId)
+  if (!candidate || !gridStateMatchesLocation(candidate, location.search)) return
+  pendingGridState = candidate
+  if (searchEl) searchEl.value = candidate.search
+}
+
+function extendRenderedCountTo(target) {
+  const cappedTarget = Math.min(target, filtered.length)
+  while (renderedCount < cappedTarget) {
+    const before = renderedCount
+    appendNextPage()
+    if (renderedCount === before) break
+  }
+}
+
+function captureScrollY() {
+  const windowY = typeof window !== "undefined" ? window.scrollY || 0 : 0
+  const gridY = gridEl ? gridEl.scrollTop || 0 : 0
+  return Math.max(windowY, gridY)
+}
+
+// The grid section owns its own overflow-auto scroll; restore both it and
+// the window in case a layout has the page itself scrolling instead.
+function restoreScrollY(scrollY) {
+  window.scrollTo(0, scrollY)
+  if (gridEl) gridEl.scrollTop = scrollY
+}
+
+function scheduleScrollRestore(scrollY) {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      restoreScrollY(scrollY)
+    })
+  })
+}
+
+// Runs once the grid has actually rendered the settled (filtered) result,
+// so the extra pages append before the browser paints - no page-1-then-jump flash.
+function consumePendingGridRestore() {
+  if (!pendingGridState) return
+  const state = pendingGridState
+  pendingGridState = null
+  extendRenderedCountTo(state.renderedCount)
+  scheduleScrollRestore(state.scrollY)
+}
+
+function currentGridStateSnapshot() {
+  const personParams = readPersonFilterParams()
+  return {
+    search: searchEl?.value || "",
+    renderedCount,
+    scrollY: captureScrollY(),
+    personSignature: personParams ? { person: personParams.name, personId: personParams.tmdbId } : null,
+  }
+}
+
+function isDefaultGridState(state) {
+  return !state.search && state.renderedCount <= PAGE_SIZE && state.scrollY < 100
+}
+
+window.addEventListener("pagehide", () => {
+  if (!activePlaylistId) return
+  const state = currentGridStateSnapshot()
+  if (isDefaultGridState(state)) return
+  saveGridState("movies", activePlaylistId, state)
+})
+
+// ----------------------------
+// Person filter (cast/crew chip from a detail page)
+// ----------------------------
+let personFilterActive = false
+let personFilterName = ""
+let personFilterTmdbId = null
+/** @type {Set<number>|null} null while inactive or unresolved; a resolved miss is an empty Set. */
+let personTitleIds = null
+let personFilterInFlight = false
+let personFilterToken = 0
+
+function readPersonFilterParams() {
+  const params = new URLSearchParams(location.search)
+  const name = params.get("person")
+  if (!name) return null
+  const tmdbId = Number(params.get("personId"))
+  return { name, tmdbId: Number.isFinite(tmdbId) && tmdbId > 0 ? tmdbId : null }
+}
+
+function stripPersonFilterFromUrl() {
+  const params = new URLSearchParams(location.search)
+  params.delete("person")
+  params.delete("personId")
+  const next = params.toString()
+  history.replaceState(null, "", location.pathname + (next ? `?${next}` : ""))
+}
+
+const personFilterRow = document.getElementById("movie-person-filter-row")
+const personFilterLabel = document.getElementById("movie-person-filter-label")
+
+function renderPersonFilterRow() {
+  if (!personFilterRow || !personFilterLabel) return
+  if (!personFilterActive) {
+    personFilterRow.setAttribute("hidden", "")
+    return
+  }
+  personFilterLabel.textContent = t("list.personFilter", { name: personFilterName })
+  personFilterRow.removeAttribute("hidden")
+}
+
+function deactivatePersonFilter() {
+  personFilterActive = false
+  personFilterName = ""
+  personFilterTmdbId = null
+  personTitleIds = null
+  stripPersonFilterFromUrl()
+  renderPersonFilterRow()
+}
+
+function clearPersonFilter() {
+  if (!personFilterActive) return
+  personFilterToken++
+  deactivatePersonFilter()
+  applyFilter()
+}
+
+document.getElementById("movie-person-filter-clear")?.addEventListener("click", clearPersonFilter)
+
+// Resolved once per activation; a later paint (SWR revalidation, cache hit) is a no-op once settled.
+// While unresolved, applyFilter defers rendering entirely so the grid never flashes unfiltered.
+function ensurePersonFilterResolved() {
+  if (!personFilterActive || personTitleIds !== null || personFilterInFlight) return
+  personFilterInFlight = true
+  const token = ++personFilterToken
+  let resolutionFailed = false
+  resolvePersonTitleIds({
+    kind: "vod",
+    playlistId: activePlaylistId,
+    personName: personFilterName,
+    tmdbPersonId: personFilterTmdbId,
+    catalogEntries: all,
+  })
+    .then((ids) => {
+      if (token === personFilterToken) personTitleIds = ids
+    })
+    .catch((err) => {
+      log.warn("[xt:movies] person filter resolution failed:", err)
+      resolutionFailed = true
+    })
+    .finally(() => {
+      personFilterInFlight = false
+      if (token !== personFilterToken) return
+      // Both sources failed outright: degrade silently to the unfiltered grid rather
+      // than getting stuck. A legitimate zero-match resolution keeps the pill + empty state.
+      if (resolutionFailed) deactivatePersonFilter()
+      applyFilter()
+    })
+}
+
+const initialPersonFilter = readPersonFilterParams()
+if (initialPersonFilter) {
+  personFilterActive = true
+  personFilterName = initialPersonFilter.name
+  personFilterTmdbId = initialPersonFilter.tmdbId
+}
+
 // ----------------------------
 // Search + filter
 // ----------------------------
 function applyFilter() {
   if (!listStatus) return
+  // An active-but-unresolved person filter must never paint the unfiltered grid: kick off
+  // resolution (idempotent) and bail. ensurePersonFilterResolved calls applyFilter once settled.
+  if (personFilterActive && personTitleIds === null) {
+    ensurePersonFilterResolved()
+    return
+  }
   const qnorm = normalize(searchEl?.value || "")
   const tokens = qnorm.length ? qnorm.split(" ") : []
 
@@ -466,6 +684,10 @@ function applyFilter() {
 
   if (activePlaylistId && getHideWatched(activePlaylistId, "vod")) {
     out = out.filter((m) => !isCompleted(activePlaylistId, "vod", m.id))
+  }
+
+  if (personFilterActive && personTitleIds) {
+    out = out.filter((m) => personTitleIds.has(m.id))
   }
 
   /** @type {Map<number, number> | null} */
@@ -520,6 +742,7 @@ function applyFilter() {
           : (activeCat as string) || t("list.allCategories")
   }
   renderGrid()
+  consumePendingGridRestore()
 }
 
 const sortEl = /** @type {HTMLSelectElement|null} */ (
@@ -601,6 +824,7 @@ async function loadMovies() {
   }
   activePlaylistId = active._id
   activePlaylistTitle = active.title || ""
+  attemptGridRestore()
   await ensurePrefsLoaded()
   syncSortControl()
   syncHideWatchedControl()
@@ -704,7 +928,11 @@ if (listStatus && /no playlist selected/i.test(listStatus.textContent || "")) {
   listStatus.textContent = t("common.loading")
 }
 
-document.addEventListener("xt:active-changed", () => loadMovies())
+document.addEventListener("xt:active-changed", () => {
+  if (personFilterActive) clearPersonFilter()
+  pendingGridState = null
+  loadMovies()
+})
 
 document.addEventListener("xt:cache-revalidated", (ev) => {
   const detail = (ev as CustomEvent).detail
@@ -727,6 +955,7 @@ document.addEventListener("xt:catalog-warming-start", () => {
 
 ;(async () => {
   await initI18n()
+  renderPersonFilterRow()
   creds = await loadCreds()
   if (creds.host && creds.user && creds.pass) {
     loadMovies()

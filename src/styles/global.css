@@ -1672,6 +1672,19 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     position: relative;
     isolation: isolate;
 }
+[data-hero-blur] {
+    position: absolute;
+    inset: -8%;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    filter: blur(24px) saturate(1.2) brightness(0.75);
+}
+html[data-perf-mode="on"] [data-hero-blur] {
+    filter: none !important;
+    background-image: none !important;
+    background-color: color-mix(in oklch, var(--color-bg) 80%, black) !important;
+}
 .dt-hero::after {
     content: "";
     position: absolute;
@@ -1712,6 +1725,12 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     .dt-hero img {
         animation: none !important;
     }
+}
+
+.detail-meta > .meta-item + .meta-item::before {
+    content: "·";
+    margin-inline: 0.5ch;
+    color: var(--color-fg-3);
 }
 
 [data-ps-wrap][data-open="true"] #ps-popover {
@@ -2032,6 +2051,10 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     gap: 0.75rem;
     padding: 1.25rem 1.25rem 0.25rem;
 }
+/* Card-level helper paragraph between the header and the body, Playback-derived rhythm */
+.settings-surface__helper {
+    padding: 1rem 1.25rem 0.75rem;
+}
 .settings-row {
     display: flex;
     flex-wrap: nowrap;
@@ -2083,6 +2106,7 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
 }
 @media (min-width: 40rem) {
     .settings-surface__header { padding: 1.5rem 1.5rem 0.25rem; }
+    .settings-surface__helper { padding-inline: 1.5rem; }
     .settings-row { padding-inline: 1.5rem; }
 }
 .settings-seg {

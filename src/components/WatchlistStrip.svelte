@@ -6,6 +6,7 @@
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
   import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
+  import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
   import {
     ensureLoaded as ensurePrefsLoaded,
     getWatchlist,
@@ -174,6 +175,13 @@
           <a
             href={entry.href}
             aria-label={tr("watchlist.itemAriaLabel", { name: entry.name })}
+            use:hubCardMenu={{
+              kind: entry.kind,
+              id: entry.id,
+              name: entry.name,
+              logo: entry.logo,
+              playlistId: activePlaylistId,
+            }}
             class="watch-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150

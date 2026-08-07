@@ -33,6 +33,9 @@ function initSortMenu(wrapper: Element) {
         for (const option of options) {
             const matched = option.dataset.value === current
             option.setAttribute("aria-selected", matched ? "true" : "false")
+            if (option.hasAttribute("aria-checked")) {
+                option.setAttribute("aria-checked", matched ? "true" : "false")
+            }
             if (matched) activeLabel = option.querySelector("span")?.textContent || ""
         }
         if (!activeLabel) {
