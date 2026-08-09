@@ -323,10 +323,15 @@ function appendNextPage() {
   if (renderedCount >= total) {
     teardownInfiniteObs()
     sentinel?.remove()
+  } else if (sentinel && !sentinel.querySelector("button")) {
+    sentinel.textContent = t("movies.showingOf", {
+      shown: renderedCount.toLocaleString(),
+      total: filtered.length.toLocaleString(),
+    })
   }
 }
 
-function renderGrid() {
+function renderGrid(afterRender?: () => void) {
   if (!gridEl) return
   // If we're going from skeletons to real cards, run the swap inside a
   // View Transition so the placeholders cinematically cross-fade into the
@@ -339,7 +344,10 @@ function renderGrid() {
     willShowReal &&
     typeof (document as any).startViewTransition === "function" &&
     !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  const run = () => renderGridInner()
+  const run = () => {
+    renderGridInner()
+    afterRender?.()
+  }
   if (useVT) {
     ;(document as any).startViewTransition(run)
   } else {
@@ -380,6 +388,7 @@ function renderGridInner() {
   sentinel.dataset.gridSentinel = ""
   sentinel.className =
     "col-span-full text-fg-3 text-xs py-3 text-center tabular-nums"
+  sentinel.style.overflowAnchor = "none"
   sentinel.textContent = t("movies.showingOf", { shown: renderedCount.toLocaleString(), total: filtered.length.toLocaleString() })
   gridEl.appendChild(sentinel)
 
@@ -398,6 +407,8 @@ function renderGridInner() {
             shown: renderedCount.toLocaleString(),
             total: filtered.length.toLocaleString(),
           })
+          infiniteObs?.unobserve(s)
+          infiniteObs?.observe(s)
         }
       },
       { root: gridEl, rootMargin: "600px 0px" }
@@ -741,8 +752,7 @@ function applyFilter() {
           ? t("list.heroRecents")
           : (activeCat as string) || t("list.allCategories")
   }
-  renderGrid()
-  consumePendingGridRestore()
+  renderGrid(consumePendingGridRestore)
 }
 
 const sortEl = /** @type {HTMLSelectElement|null} */ (
