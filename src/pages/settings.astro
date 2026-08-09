@@ -1905,6 +1905,7 @@ const navStructure: NavSection[] = [
       clearAll as clearAllCache,
       hydrate as hydrateCache,
     } from "@/scripts/lib/cache.js"
+    import { clearImageCache } from "@/scripts/lib/img-cache.ts"
     import {
       renderPlaylistRow,
       getPlaylistListEmptyCopy,
@@ -2380,6 +2381,7 @@ const navStructure: NavSection[] = [
       } catch {}
       try {
         removed = await clearAllCache()
+        removed += await clearImageCache()
         ok = true
         if (removed > 0) {
           toastSuccess(t("settings.toast.cacheCleared"), {

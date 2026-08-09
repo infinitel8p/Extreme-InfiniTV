@@ -190,6 +190,7 @@ import {
     import { t } from "@/scripts/lib/i18n.js"
     import { toastError } from "@/scripts/lib/toast.ts"
     import { log } from "@/scripts/lib/log.ts"
+    import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 
     const isAndroid = /Android/i.test(navigator.userAgent || "")
     const isTauriEnv =
@@ -780,7 +781,6 @@ import {
       const logoUrl = d.source?.logo || null
       if (logoUrl) {
         posterImg = document.createElement("img")
-        posterImg.src = logoUrl
         posterImg.alt = ""
         posterImg.loading = "lazy"
         posterImg.decoding = "async"
@@ -791,6 +791,7 @@ import {
           posterWrap.appendChild(makePosterFallback(d.title))
         }
         posterWrap.appendChild(posterImg)
+        mountCachedImage(posterImg, logoUrl, "poster")
       } else {
         posterWrap.appendChild(makePosterFallback(d.title))
       }

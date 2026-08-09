@@ -8,6 +8,7 @@
   import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
   import { fmtImdbRating } from "@/scripts/lib/format.js"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   const STRIP_LIMIT = 12
 
@@ -165,7 +166,7 @@
             <div class="ra-poster aspect-2/3 w-full overflow-hidden bg-surface-2 relative">
               {#if entry.logo}
                 <img
-                  src={entry.logo}
+                  use:cachedImg={{ url: entry.logo, kind: "poster" }}
                   alt=""
                   loading="lazy" fetchpriority="low"
                   decoding="async"

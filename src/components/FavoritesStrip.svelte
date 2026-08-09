@@ -14,6 +14,7 @@
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
   import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   /** @type {{ kind?: "all" | "live" | "vod" | "series" }} */
   let { kind: filterKind = "all" } = $props()
@@ -194,7 +195,7 @@
               {#if e.logo}
                 {#if e.kind === "live"}
                   <img
-                    src={e.logo}
+                    use:cachedImg={{ url: e.logo, kind: "logo" }}
                     alt=""
                     aria-hidden="true"
                     loading="lazy" fetchpriority="low"
@@ -204,7 +205,7 @@
                     class="absolute inset-0 h-full w-full object-cover scale-110 saturate-150 brightness-75 opacity-60 blur-2xl pointer-events-none" />
                   <div class="absolute inset-0 flex items-center justify-center p-3">
                     <img
-                      src={e.logo}
+                      use:cachedImg={{ url: e.logo, kind: "logo" }}
                       alt=""
                       loading="lazy" fetchpriority="low"
                       decoding="async"
@@ -214,7 +215,7 @@
                   </div>
                 {:else}
                   <img
-                    src={e.logo}
+                    use:cachedImg={{ url: e.logo, kind: "poster" }}
                     alt=""
                     loading="lazy" fetchpriority="low"
                     decoding="async"

@@ -13,6 +13,7 @@
     clearRecent,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   const STRIP_LIMIT = 8
   const LIVE_TTL_MS = 48 * 60 * 60 * 1000
@@ -207,7 +208,7 @@
               {#if entry.logo}
                 {#if entry.kind === "live"}
                   <img
-                    src={entry.logo}
+                    use:cachedImg={{ url: entry.logo, kind: "logo" }}
                     alt=""
                     aria-hidden="true"
                     loading="lazy" fetchpriority="low"
@@ -217,7 +218,7 @@
                     class="absolute inset-0 h-full w-full object-cover scale-110 saturate-150 brightness-75 opacity-60 blur-2xl pointer-events-none" />
                   <div class="absolute inset-0 flex items-center justify-center p-3">
                     <img
-                      src={entry.logo}
+                      use:cachedImg={{ url: entry.logo, kind: "logo" }}
                       alt=""
                       loading="lazy" fetchpriority="low"
                       decoding="async"
@@ -227,7 +228,7 @@
                   </div>
                 {:else}
                   <img
-                    src={entry.logo}
+                    use:cachedImg={{ url: entry.logo, kind: "poster" }}
                     alt=""
                     loading="lazy" fetchpriority="low"
                     decoding="async"

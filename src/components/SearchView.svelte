@@ -20,6 +20,7 @@
   } from "@/scripts/lib/epg-data.js"
   import { kindLabel } from "@/scripts/lib/kinds.js"
   import { fmtChannelIdentity } from "@/scripts/lib/format.ts"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import {
     observeSeasonCount,
@@ -550,7 +551,7 @@
               <span class="size-12 shrink-0 rounded-md bg-surface-2 ring-1 ring-line overflow-hidden flex items-center justify-center">
                 {#if r.logo}
                   <img
-                    src={r.logo}
+                    use:cachedImg={{ url: r.logo, kind: r.kind === "live" ? "logo" : "poster" }}
                     alt=""
                     loading="lazy" fetchpriority="low"
                     decoding="async"

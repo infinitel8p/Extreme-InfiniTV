@@ -72,6 +72,7 @@ import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { requestLogoFallback } from "@/scripts/lib/logo-fallback.ts"
+import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import {
   mountPlayer,
   externalPlayersAvailable,
@@ -616,7 +617,6 @@ function renderVirtual() {
       const safeLogo = safeHttpUrl(ch.logo)
       if (safeLogo) {
         const img = document.createElement("img")
-        img.src = safeLogo
         img.alt = ""
         img.loading = "lazy"
         img.decoding = "async"
@@ -639,11 +639,8 @@ function renderVirtual() {
           logo.setAttribute("data-loaded", "true")
           requestLogoFallback(logo, ch)
         }
-        if (img.complete && img.naturalWidth > 0) {
-          clearTimeout(slowLogoTimer)
-          logo.setAttribute("data-loaded", "true")
-        }
         logo.appendChild(img)
+        mountCachedImage(img, safeLogo, "logo")
       } else {
         logo.setAttribute("data-loaded", "true")
         requestLogoFallback(logo, ch)

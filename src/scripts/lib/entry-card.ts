@@ -9,6 +9,7 @@
 import { t } from "@/scripts/lib/i18n.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { ICON_CHECK } from "@/scripts/lib/icons.js"
+import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import {
   isFavorite,
   toggleFavorite,
@@ -166,7 +167,6 @@ export function buildEntryCard<T extends EntryLike>(
 
   if (entry.logo) {
     const img = document.createElement("img")
-    img.src = entry.logo
     img.alt = ""
     img.loading = "lazy"
     img.decoding = "async"
@@ -181,6 +181,7 @@ export function buildEntryCard<T extends EntryLike>(
       posterWrap.appendChild(makeFallback(entry.name))
     }
     posterWrap.appendChild(img)
+    mountCachedImage(img, entry.logo, "poster")
   } else {
     posterWrap.appendChild(makeFallback(entry.name))
   }

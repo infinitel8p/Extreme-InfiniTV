@@ -36,6 +36,7 @@ import {
 import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { requestLogoFallback } from "@/scripts/lib/logo-fallback.ts"
+import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
@@ -365,7 +366,6 @@ function renderChannelRow(channel, programmesForRow) {
   const safeLogo = channel.logo ? safeHttpUrl(channel.logo) : null
   if (safeLogo) {
     const img = document.createElement("img")
-    img.src = safeLogo
     img.alt = ""
     img.loading = "lazy"
     img.decoding = "async"
@@ -388,11 +388,8 @@ function renderChannelRow(channel, programmesForRow) {
       logo.setAttribute("data-loaded", "true")
       requestLogoFallback(logo, channel)
     }
-    if (img.complete && img.naturalWidth > 0) {
-      clearTimeout(slowLogoTimer)
-      logo.setAttribute("data-loaded", "true")
-    }
     logo.appendChild(img)
+    mountCachedImage(img, safeLogo, "logo")
   } else {
     logo.setAttribute("data-loaded", "true")
     requestLogoFallback(logo, channel)

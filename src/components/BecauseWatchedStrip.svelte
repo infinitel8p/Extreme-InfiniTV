@@ -17,6 +17,7 @@
   import { fmtImdbRating } from "@/scripts/lib/format.js"
   import { cleanProviderTitle } from "@/scripts/lib/tmdb-match.ts"
   import { pickBecauseSeedPool, seedKey, pickNextSeed, buildBecauseRow } from "@/scripts/lib/because-watched.ts"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   const SEED_KEY_PREFIX = "xt_because_seed:"
 
@@ -295,7 +296,7 @@
             <div class="bw-thumb w-full aspect-2-3 overflow-hidden bg-surface-2 relative">
               {#if entry.logo}
                 <img
-                  src={entry.logo}
+                  use:cachedImg={{ url: entry.logo, kind: "poster" }}
                   alt=""
                   loading="lazy" fetchpriority="low"
                   decoding="async"

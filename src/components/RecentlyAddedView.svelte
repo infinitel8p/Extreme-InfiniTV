@@ -10,6 +10,7 @@
   } from "@/scripts/lib/catalog.js"
   import { fmtImdbRating } from "@/scripts/lib/format.js"
   import { kindLabel } from "@/scripts/lib/kinds.js"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   const PAGE_SIZE = 200
 
@@ -175,7 +176,7 @@
         <div class="aspect-2/3 w-full bg-surface-2 overflow-hidden relative">
           {#if row.item.logo}
             <img
-              src={row.item.logo}
+              use:cachedImg={{ url: row.item.logo, kind: "poster" }}
               alt=""
               loading="lazy" fetchpriority="low"
               decoding="async"

@@ -12,6 +12,7 @@
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
   import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
   import { IconExternalLink } from "@tabler/icons-svelte"
 
   /** @type {"all"|"vod"|"series"} */
@@ -229,7 +230,7 @@
         <div class="aspect-2/3 w-full bg-surface-2 overflow-hidden relative">
           {#if entry.logo}
             <img
-              src={entry.logo}
+              use:cachedImg={{ url: entry.logo, kind: "poster" }}
               alt=""
               loading="lazy" fetchpriority="low"
               decoding="async"
