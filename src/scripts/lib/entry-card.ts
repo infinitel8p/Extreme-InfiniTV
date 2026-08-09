@@ -163,7 +163,7 @@ export function buildEntryCard<T extends EntryLike>(
   const posterWrap = document.createElement("div")
   posterWrap.dataset.posterWrap = "1"
   posterWrap.className =
-    "aspect-[2/3] w-full bg-surface-2 overflow-hidden relative"
+    "logo-skel aspect-[2/3] w-full bg-surface-2 overflow-hidden relative"
 
   if (entry.logo) {
     const img = document.createElement("img")
@@ -176,14 +176,19 @@ export function buildEntryCard<T extends EntryLike>(
     img.height = 300
     img.className =
       "h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+    img.onload = () => {
+      posterWrap.dataset.loaded = "true"
+    }
     img.onerror = () => {
       img.remove()
       posterWrap.appendChild(makeFallback(entry.name))
+      posterWrap.dataset.loaded = "true"
     }
     posterWrap.appendChild(img)
     mountCachedImage(img, entry.logo, "poster")
   } else {
     posterWrap.appendChild(makeFallback(entry.name))
+    posterWrap.dataset.loaded = "true"
   }
 
   const ratingText = fmtImdbRating(entry.rating as any)

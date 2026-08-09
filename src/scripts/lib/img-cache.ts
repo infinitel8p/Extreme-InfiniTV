@@ -122,7 +122,7 @@ async function idbClear(): Promise<void> {
 // ---------------------------------------------------------------------------
 const objectUrlMemo = new Map<string, string>()
 const failedUrls = new Set<string>()
-const inFlight = new Map<string, Promise<string | null>>()
+const inFlight = new Map<string, Promise<void>>()
 
 const MAX_CONCURRENT = 6
 let runningCount = 0
@@ -220,57 +220,61 @@ async function downscaleBlob(originalBlob: Blob, kind: ImgKind): Promise<Blob> {
   }
 }
 
-async function fetchAndStore(cacheKey: string, url: string, kind: ImgKind): Promise<string | null> {
+// Fetches, downscales and caches `url` without touching any <img>
+async function backgroundFill(cacheKey: string, url: string, kind: ImgKind): Promise<void> {
   try {
     const response = await providerFetch(url)
     if (!response.ok) throw new Error(`fetch failed: ${response.status}`)
     const originalBlob = await response.blob()
     const storedBlob = await downscaleBlob(originalBlob, kind)
-    idbPut(cacheKey, { blob: storedBlob, cachedAt: Date.now() }).catch(() => {})
-    const objectUrl = URL.createObjectURL(storedBlob)
-    objectUrlMemo.set(cacheKey, objectUrl)
-    return objectUrl
+    await idbPut(cacheKey, { blob: storedBlob, cachedAt: Date.now() })
+    objectUrlMemo.set(cacheKey, URL.createObjectURL(storedBlob))
   } catch (err) {
-    log.warn("[xt:img-cache] fetch/downscale failed:", err)
+    log.warn("[xt:img-cache] background fill failed:", err)
     failedUrls.add(url)
-    return null
   }
 }
 
-async function resolveObjectUrl(
+function scheduleBackgroundFill(
   cacheKey: string,
   url: string,
   kind: ImgKind,
   stillWanted: () => boolean
-): Promise<string | null> {
-  const existing = inFlight.get(cacheKey)
-  if (existing) return existing
-  const promise = (async (): Promise<string | null> => {
-    const cached = await idbGet(cacheKey)
-    if (cached?.blob) {
-      const objectUrl = URL.createObjectURL(cached.blob)
-      objectUrlMemo.set(cacheKey, objectUrl)
-      return objectUrl
-    }
-    return runLimited(() => {
-      if (!stillWanted()) return Promise.resolve(null)
-      return fetchAndStore(cacheKey, url, kind)
+): void {
+  if (failedUrls.has(url) || inFlight.has(cacheKey)) return
+  const fill = new Promise<void>((resolve) => {
+    const ric =
+      typeof window !== "undefined" && typeof window.requestIdleCallback === "function"
+        ? window.requestIdleCallback
+        : (callback: () => void) => setTimeout(callback, 1000)
+    ric(() => {
+      void runLimited(() =>
+        stillWanted() ? backgroundFill(cacheKey, url, kind) : Promise.resolve()
+      ).then(resolve)
     })
-  })()
-  inFlight.set(cacheKey, promise)
-  try {
-    return await promise
-  } finally {
-    inFlight.delete(cacheKey)
-  }
+  })
+  inFlight.set(cacheKey, fill)
+  fill.finally(() => inFlight.delete(cacheKey))
 }
 
 async function handleVisible(img: HTMLImageElement, url: string, kind: ImgKind): Promise<void> {
   if (!img.isConnected) return
   schedulePrune()
   const cacheKey = imgCacheKey(kind, url)
-  const objectUrl = await resolveObjectUrl(cacheKey, url, kind, () => img.isConnected)
-  img.src = objectUrl || url
+  const memoized = objectUrlMemo.get(cacheKey)
+  if (memoized) {
+    img.src = memoized
+    return
+  }
+  const cached = await idbGet(cacheKey)
+  if (cached?.blob) {
+    const objectUrl = URL.createObjectURL(cached.blob)
+    objectUrlMemo.set(cacheKey, objectUrl)
+    img.src = objectUrl
+    return
+  }
+  img.src = url
+  scheduleBackgroundFill(cacheKey, url, kind, () => img.isConnected)
 }
 
 /** Fetch (or serve cached) `url`, downscale to `kind`'s bucket, and mount it once visible. */
