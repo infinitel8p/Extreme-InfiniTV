@@ -12,7 +12,7 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   /** @type {"all"|"live"|"vod"|"series"} */
@@ -109,7 +109,9 @@
     entries = raw.map((row) => {
       const meta = getFavoriteMeta(row.playlistId, row.kind, row.id)
       const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
-      const name = meta?.name || item?.name || `${kindLabel(row.kind)} ${row.id}`
+      const isStoredNameFallback = !!meta?.name && isKindFallbackName(row.kind, row.id, meta.name)
+      const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
+      const name = effectiveStoredName || item?.name || `${kindLabel(row.kind)} ${row.id}`
       const logo = meta?.logo ?? item?.logo ?? null
       // Lazily backfill meta so cross-playlist clicks still have name + logo
       // even when the source catalog cache later expires.
@@ -117,6 +119,11 @@
         setFavoriteMeta(row.playlistId, row.kind, row.id, {
           name: item.name || "",
           logo: item.logo || null,
+        })
+      } else if (isStoredNameFallback && item?.name) {
+        setFavoriteMeta(row.playlistId, row.kind, row.id, {
+          name: item.name,
+          logo: meta?.logo ?? item?.logo ?? null,
         })
       }
       return {

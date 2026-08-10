@@ -13,7 +13,7 @@
     setWatchlistMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   /** @type {{ kind?: "all" | "vod" | "series" }} */
@@ -40,12 +40,19 @@
 
   function buildEntry(playlistId, kind, id, meta, lookups) {
     const item = lookups[kind]?.get(Number(id))
-    const name = meta?.name || item?.name || `${kindLabel(kind)} ${id}`
+    const isStoredNameFallback = !!meta?.name && isKindFallbackName(kind, id, meta.name)
+    const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
+    const name = effectiveStoredName || item?.name || `${kindLabel(kind)} ${id}`
     const logo = meta?.logo ?? item?.logo ?? null
-    if (!meta?.name && !meta?.logo && (item?.name || item?.logo)) {
+    if (!effectiveStoredName && !meta?.logo && (item?.name || item?.logo)) {
       setWatchlistMeta(playlistId, kind, id, {
         name: item.name || "",
         logo: item.logo || null,
+      })
+    } else if (isStoredNameFallback && item?.name) {
+      setWatchlistMeta(playlistId, kind, id, {
+        name: item.name,
+        logo: meta?.logo ?? item?.logo ?? null,
       })
     }
     const href =

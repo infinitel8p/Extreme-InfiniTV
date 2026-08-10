@@ -11,7 +11,7 @@
     setWatchlistMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
   import { IconExternalLink } from "@tabler/icons-svelte"
 
@@ -99,14 +99,21 @@
     const titleById = new Map(playlists.map((entry) => [entry.id, entry.title]))
     entries = raw.map((row) => {
       const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
-      const name = row.name || item?.name || `${kindLabel(row.kind)} ${row.id}`
+      const isStoredNameFallback = !!row.name && isKindFallbackName(row.kind, row.id, row.name)
+      const effectiveStoredName = isStoredNameFallback ? "" : row.name
+      const name = effectiveStoredName || item?.name || `${kindLabel(row.kind)} ${row.id}`
       const logo = row.logo ?? item?.logo ?? null
       // Lazily backfill stored meta so cross-playlist clicks still have name
       // and poster even when the source catalog cache later expires.
-      if (!row.name && !row.logo && (item?.name || item?.logo)) {
+      if (!effectiveStoredName && !row.logo && (item?.name || item?.logo)) {
         setWatchlistMeta(row.playlistId, row.kind, row.id, {
           name: item.name || "",
           logo: item.logo || null,
+        })
+      } else if (isStoredNameFallback && item?.name) {
+        setWatchlistMeta(row.playlistId, row.kind, row.id, {
+          name: item.name,
+          logo: row.logo ?? item?.logo ?? null,
         })
       }
       return {

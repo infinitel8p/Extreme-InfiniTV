@@ -2116,8 +2116,9 @@ function showUpNextOverlay(next) {
 // ----------------------------
 favBtn?.addEventListener("click", () => {
   if (!series || !activePlaylistId) return
+  const isStubName = series.name === t("list.seriesFallback", { id: series.id })
   toggleFavorite(activePlaylistId, "series", series.id, {
-    name: series.name || series.title || "",
+    name: isStubName ? "" : series.name || series.title || "",
     logo: series.logo || series.cover || null,
   })
 })
@@ -2134,8 +2135,9 @@ document.addEventListener("xt:favorites-changed", (e) => {
 // ----------------------------
 watchBtn?.addEventListener("click", () => {
   if (!series || !activePlaylistId) return
+  const isStubName = series.name === t("list.seriesFallback", { id: series.id })
   toggleWatchlist(activePlaylistId, "series", series.id, {
-    name: series.name || series.title || "",
+    name: isStubName ? "" : series.name || series.title || "",
     logo: series.logo || series.cover || null,
   })
 })

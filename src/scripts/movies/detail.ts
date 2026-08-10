@@ -1419,8 +1419,9 @@ window.addEventListener("pagehide", () => {
 // ----------------------------
 favBtn?.addEventListener("click", () => {
   if (!movie || !activePlaylistId) return
+  const isStubName = movie.name === t("list.movieFallback", { id: movie.id })
   toggleFavorite(activePlaylistId, "vod", movie.id, {
-    name: movie.name || movie.title || "",
+    name: isStubName ? "" : movie.name || movie.title || "",
     logo: movie.logo || movie.cover || movie.stream_icon || null,
   })
 })
@@ -1437,8 +1438,9 @@ document.addEventListener("xt:favorites-changed", (e) => {
 // ----------------------------
 watchBtn?.addEventListener("click", () => {
   if (!movie || !activePlaylistId) return
+  const isStubName = movie.name === t("list.movieFallback", { id: movie.id })
   toggleWatchlist(activePlaylistId, "vod", movie.id, {
-    name: movie.name || movie.title || "",
+    name: isStubName ? "" : movie.name || movie.title || "",
     logo: movie.logo || movie.cover || movie.stream_icon || null,
   })
 })

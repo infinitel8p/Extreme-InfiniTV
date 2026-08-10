@@ -33,6 +33,20 @@ export function kindLabelPlural(kind: Kind): string {
   return t(`kind.${kind}.plural`)
 }
 
+// Detail-page stub-name keys; keep in sync with the `list.*Fallback` keys in en.json.
+const KIND_STUB_NAME_KEY: Partial<Record<Kind, string>> = {
+  vod: "list.movieFallback",
+  series: "list.seriesFallback",
+}
+
+// True when `name` is a machine-generated kind/id placeholder rather than a real title.
+export function isKindFallbackName(kind: Kind, id: number | string, name: string): boolean {
+  if (!name) return false
+  if (name === `${kindLabel(kind)} ${id}`) return true
+  const stubKey = KIND_STUB_NAME_KEY[kind]
+  return stubKey ? name === t(stubKey, { id }) : false
+}
+
 const wrap = (paths: string): string =>
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
   paths +

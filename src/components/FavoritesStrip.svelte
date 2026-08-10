@@ -13,7 +13,7 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   /** @type {{ kind?: "all" | "live" | "vod" | "series" }} */
@@ -41,15 +41,22 @@
   function buildEntry(playlistId, { kind, id }, lookups) {
     const meta = getFavoriteMeta(playlistId, kind, id)
     const item = lookups[kind]?.get(Number(id))
+    const isStoredNameFallback = !!meta?.name && isKindFallbackName(kind, id, meta.name)
+    const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
     // `kindLabel(kind)` here is build-time fallback for items without meta;
     // the badge in the template uses the locale-tracking wrapper so it stays
     // current without rebuilding the array.
-    const name = meta?.name || item?.name || `${kindLabel(kind)} ${id}`
+    const name = effectiveStoredName || item?.name || `${kindLabel(kind)} ${id}`
     const logo = meta?.logo ?? item?.logo ?? null
     if (!meta && (item?.name || item?.logo)) {
       setFavoriteMeta(playlistId, kind, id, {
         name: item.name || "",
         logo: item.logo || null,
+      })
+    } else if (isStoredNameFallback && item?.name) {
+      setFavoriteMeta(playlistId, kind, id, {
+        name: item.name,
+        logo: meta?.logo ?? item?.logo ?? null,
       })
     }
     let href = "#"
