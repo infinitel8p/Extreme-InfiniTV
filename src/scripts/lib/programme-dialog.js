@@ -71,10 +71,11 @@ function ensureDialog() {
   node.className = [
     "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
     "w-[min(40rem,calc(100vw-2rem))] max-h-[min(80dvh,42rem)]",
+    "open:flex flex-col overflow-hidden",
     "backdrop:bg-black/60",
   ].join(" ")
   node.innerHTML = `
-    <div class="flex flex-col h-full p-5 sm:p-6 gap-4">
+    <div class="flex flex-col flex-auto min-h-0 p-5 sm:p-6 gap-4">
       <header class="flex items-start justify-between gap-3 shrink-0">
         <div class="flex flex-col gap-1 min-w-0">
           <div data-role="meta" class="text-eyebrow font-medium uppercase tracking-widest text-fg-3"></div>

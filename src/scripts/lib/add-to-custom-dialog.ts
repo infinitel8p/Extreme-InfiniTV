@@ -35,6 +35,7 @@ function ensureDialog(): HTMLDialogElement | null {
   node.className = [
     "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
     "w-[min(26rem,calc(100vw-2rem))] max-h-[min(80dvh,32rem)]",
+    "open:flex flex-col overflow-hidden",
     "backdrop:bg-black/60",
   ].join(" ")
   document.body.appendChild(node)
@@ -70,7 +71,7 @@ function renderList(subtitle: string, entries: CustomEntryLite[]): string {
     )
     .join("")
   return `
-    <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
+    <div class="flex flex-col flex-auto min-h-0 p-5 sm:p-6 gap-5">
       ${headerHtml(subtitle)}
       <div data-role="list" class="flex flex-col gap-2.5 overflow-y-auto min-h-0">
         ${rows}
@@ -91,7 +92,7 @@ function renderList(subtitle: string, entries: CustomEntryLite[]): string {
 
 function renderCreate(subtitle: string): string {
   return `
-    <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
+    <div class="flex flex-col flex-auto min-h-0 p-5 sm:p-6 gap-5">
       ${headerHtml(subtitle)}
       <label class="flex flex-col gap-2">
         <span class="text-xs font-semibold tracking-wider uppercase text-fg-3">${escapeHtml(t("addToCustom.newPlaylistRow"))}</span>

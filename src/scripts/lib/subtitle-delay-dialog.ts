@@ -113,10 +113,11 @@ export function createSubtitleDelayController(options: SubtitleDelayDialogOption
     node.className = [
       "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
       "w-[min(20rem,calc(100vw-2rem))] max-h-[calc(100dvh-2rem)]",
+      "open:flex flex-col overflow-hidden",
       "backdrop:bg-black/30",
     ].join(" ")
     node.innerHTML = `
-      <div class="flex flex-col gap-4 p-5 overflow-y-auto max-h-full">
+      <div class="flex flex-col flex-auto min-h-0 gap-4 p-5 overflow-y-auto">
         <header class="flex items-center gap-3">
           <span class="icon-mark" aria-hidden="true">${ICON_CLOCK_EDIT}</span>
           <h2 id="${dialogId}-title" data-role="title" class="text-base font-semibold"></h2>

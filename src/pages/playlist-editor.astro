@@ -200,8 +200,8 @@ import {
     id="editor-add-url-dialog"
     aria-labelledby="editor-add-url-title"
     class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
-      w-[min(30rem,calc(100vw-2rem))] max-h-[min(85dvh,42rem)] backdrop:bg-black/60">
-    <form method="dialog" class="flex flex-col h-full p-5 gap-4 overflow-y-auto">
+      w-[min(30rem,calc(100vw-2rem))] max-h-[min(85dvh,42rem)] open:flex flex-col overflow-hidden backdrop:bg-black/60">
+    <form method="dialog" class="flex flex-col flex-auto min-h-0 p-5 gap-4 overflow-y-auto">
       <div class="flex flex-col gap-1">
         <h2 id="editor-add-url-title" data-i18n="editor.addUrlDialogTitle" class="text-base font-semibold">
           Add by URL
@@ -294,8 +294,8 @@ import {
     id="editor-channel-edit-dialog"
     aria-labelledby="editor-channel-edit-title"
     class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
-      w-[min(26rem,calc(100vw-2rem))] max-h-[min(85dvh,44rem)] backdrop:bg-black/60">
-    <form method="dialog" class="flex flex-col h-full gap-4 p-5 overflow-y-auto">
+      w-[min(26rem,calc(100vw-2rem))] max-h-[min(85dvh,44rem)] open:flex flex-col overflow-hidden backdrop:bg-black/60">
+    <form method="dialog" class="flex flex-col flex-auto min-h-0 gap-4 p-5 overflow-y-auto">
       <h2 id="editor-channel-edit-title" data-i18n="editor.editDetailsTitle" class="text-base font-semibold">
         Channel details
       </h2>

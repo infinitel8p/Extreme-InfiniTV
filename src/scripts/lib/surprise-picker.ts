@@ -184,6 +184,7 @@ export function mountSurprisePicker(config: SurprisePickerConfig): SurprisePicke
     node.className = [
       "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
       "w-[min(30rem,calc(100vw-2rem))] max-h-[min(85dvh,36rem)]",
+      "open:flex flex-col overflow-hidden",
       "backdrop:bg-black/60",
     ].join(" ")
     node.addEventListener("click", onClick)
@@ -261,7 +262,7 @@ export function mountSurprisePicker(config: SurprisePickerConfig): SurprisePicke
       ? `<button type="button" data-role="open" class="btn btn-primary w-full sm:w-auto">${escapeHtml(t("surprise.open"))}</button>`
       : ""
     return `
-      <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
+      <div class="flex flex-col flex-auto min-h-0 p-5 sm:p-6 gap-5">
         <header class="flex items-start gap-3.5 shrink-0">
           <span class="icon-mark icon-mark--lg" aria-hidden="true">${ICON_DICE}</span>
           <h2 id="${DIALOG_ID}-title" class="text-lg font-semibold leading-tight tracking-tight pt-0.5">${escapeHtml(t("surprise.dialogTitle"))}</h2>

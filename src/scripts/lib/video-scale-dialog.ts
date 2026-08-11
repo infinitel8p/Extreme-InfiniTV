@@ -65,6 +65,7 @@ function ensureDialog(): HTMLDialogElement {
   node.className = [
     "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
     "w-[min(24rem,calc(100vw-2rem))] max-h-[calc(100dvh-2rem)]",
+    "open:flex flex-col overflow-hidden",
     "backdrop:bg-black/30",
   ].join(" ")
 
@@ -86,7 +87,7 @@ function ensureDialog(): HTMLDialogElement {
   `).join("")
 
   node.innerHTML = `
-    <div class="flex flex-col gap-4 p-5 overflow-y-auto max-h-full">
+    <div class="flex flex-col flex-auto min-h-0 gap-4 p-5 overflow-y-auto">
       <header class="flex items-center gap-3">
         <span class="icon-mark" aria-hidden="true">${ICON_ASPECT_RATIO}</span>
         <h2 id="${DIALOG_ID}-title" data-role="title" class="text-base font-semibold"></h2>
