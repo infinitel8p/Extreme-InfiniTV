@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "स्थानीय प्रति उपलब्ध है - चलाएँ टैप करें।",
   "detail.error.containerUnsupported": "बिल्ट-इन प्लेयर इस प्लैटफ़ॉर्म पर {container} फ़ाइलें नहीं चला सकता।",
   "detail.error.containerUnsupportedHint": "इसे MPV या VLC में खोलने के लिए बाहरी प्लेयर बटन का उपयोग करें।",
+  "detail.error.containerUnsupportedHintNoPlayer": "AVI फ़ाइलें चलाने के लिए सेटिंग्स में प्लेबैक के अंतर्गत एक डिफ़ॉल्ट बाहरी प्लेयर सेट करें।",
   "detail.error.sourceUnavailable": "प्रदाता अभी यह फ़ाइल उपलब्ध नहीं करा रहा है (यह अस्थायी रूप से अनुपलब्ध हो सकती है)।",
   "detail.error.hevcUnsupported": "यह डिवाइस HEVC (H.265) वीडियो डिकोड नहीं कर सकता।",
   "detail.error.audioUnsupported": "बिल्ट-इन प्लेयर इस प्लैटफ़ॉर्म पर {codec} ऑडियो डिकोड नहीं कर सकता।",

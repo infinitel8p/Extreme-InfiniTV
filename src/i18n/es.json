@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "Hay una copia local - pulsa Reproducir.",
   "detail.error.containerUnsupported": "El reproductor integrado no puede reproducir archivos {container} en esta plataforma.",
   "detail.error.containerUnsupportedHint": "Usa el botón de reproductor externo para abrirlo en MPV o VLC.",
+  "detail.error.containerUnsupportedHintNoPlayer": "Configura un reproductor externo predeterminado en Ajustes, en Reproducción, para reproducir archivos AVI.",
   "detail.error.sourceUnavailable": "El proveedor no está sirviendo este archivo ahora mismo (puede que no esté disponible temporalmente).",
   "detail.error.hevcUnsupported": "Este dispositivo no puede decodificar vídeo HEVC (H.265).",
   "detail.error.audioUnsupported": "El reproductor integrado no puede decodificar audio {codec} en esta plataforma.",

@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "Salinan lokal tersedia - ketuk Putar.",
   "detail.error.containerUnsupported": "Pemutar bawaan tidak dapat memutar file {container} di platform ini.",
   "detail.error.containerUnsupportedHint": "Gunakan tombol pemutar eksternal untuk membukanya di MPV atau VLC.",
+  "detail.error.containerUnsupportedHintNoPlayer": "Atur pemutar eksternal bawaan di Pengaturan pada bagian Pemutaran untuk memutar file AVI.",
   "detail.error.sourceUnavailable": "Penyedia sedang tidak melayani file ini (mungkin tidak tersedia untuk sementara).",
   "detail.error.hevcUnsupported": "Perangkat ini tidak dapat mendekode video HEVC (H.265).",
   "detail.error.audioUnsupported": "Pemutar bawaan tidak dapat mendekode audio {codec} di platform ini.",

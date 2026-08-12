@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "Lokale Kopie verfügbar - tippe auf Abspielen.",
   "detail.error.containerUnsupported": "Der integrierte Player kann {container}-Dateien auf dieser Plattform nicht abspielen.",
   "detail.error.containerUnsupportedHint": "Öffne die Datei über die Schaltfläche für externe Player in MPV oder VLC.",
+  "detail.error.containerUnsupportedHintNoPlayer": "Lege in den Einstellungen unter Wiedergabe einen externen Standardplayer fest, um AVI-Dateien abzuspielen.",
   "detail.error.sourceUnavailable": "Der Anbieter liefert diese Datei gerade nicht aus (sie ist womöglich vorübergehend nicht verfügbar).",
   "detail.error.hevcUnsupported": "Dieses Gerät kann HEVC-Video (H.265) nicht dekodieren.",
   "detail.error.audioUnsupported": "Der integrierte Player kann {codec}-Audio auf dieser Plattform nicht dekodieren.",

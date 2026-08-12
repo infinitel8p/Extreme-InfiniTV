@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "Lokalna kopia jest dostępna - dotknij Odtwórz.",
   "detail.error.containerUnsupported": "Wbudowany odtwarzacz nie odtwarza plików {container} na tej platformie.",
   "detail.error.containerUnsupportedHint": "Użyj przycisku odtwarzacza zewnętrznego, aby otworzyć w MPV lub VLC.",
+  "detail.error.containerUnsupportedHintNoPlayer": "Ustaw domyślny odtwarzacz zewnętrzny w Ustawieniach w sekcji Odtwarzanie, aby odtwarzać pliki AVI.",
   "detail.error.sourceUnavailable": "Dostawca nie udostępnia teraz tego pliku (może być tymczasowo niedostępny).",
   "detail.error.hevcUnsupported": "To urządzenie nie dekoduje wideo HEVC (H.265).",
   "detail.error.audioUnsupported": "Wbudowany odtwarzacz nie dekoduje dźwięku {codec} na tej platformie.",

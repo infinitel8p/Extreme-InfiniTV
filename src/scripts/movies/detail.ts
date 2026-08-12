@@ -89,6 +89,7 @@ import {
   detectVodContainerFromLocalPath,
   isUpstreamHttpFailure,
 } from "@/scripts/lib/vod-container-plan.ts"
+import { probeVodContainerAlternative, swapUrlExtension } from "@/scripts/lib/vod-container-probe.ts"
 import {
   buildRemuxContentKey,
   isRemuxPinnedContent,
@@ -96,7 +97,11 @@ import {
 } from "@/scripts/lib/vod-remux-memory.ts"
 import { deviceSupportsHevc, hasHevcNameHint, classifyStartFailure, describeAudioCodec } from "@/scripts/lib/codec-hints.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
-import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
+import {
+  setupExternalPlayerButton,
+  surfaceLaunchError,
+  hasAvailableExternalPlayer,
+} from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
@@ -816,8 +821,11 @@ const PROGRESS_WRITE_INTERVAL_MS = 5000
 
 /** WebKit desktop can't demux this container and there is no remux path available for it. */
 function showContainerUnsupportedToast(container) {
+  const descriptionKey = hasAvailableExternalPlayer()
+    ? "detail.error.containerUnsupportedHint"
+    : "detail.error.containerUnsupportedHintNoPlayer"
   toastError(t("detail.error.containerUnsupported", { container: container.toUpperCase() }), {
-    description: t("detail.error.containerUnsupportedHint"),
+    description: t(descriptionKey),
   })
   externalBtnHandle?.refresh()
 }
@@ -978,7 +986,8 @@ async function startPlayback() {
   if (await tryAndroidIntentPlayback(detailSrc)) return
 
   const localSrc = await getLocalPlayableSrc(detailSrc)
-  const playSrc = localSrc || detailSrc
+  let playSrc = localSrc || detailSrc
+  let mountSrc = detailSrc
   // The asset.localhost/asset:// mount URL doesn't reliably parse as http(s), so the container
   // decision for a local download uses the download's on-disk path instead.
   const localDownloadPath = localSrc ? await getLocalDownloadPath(detailSrc) : null
@@ -1035,14 +1044,31 @@ async function startPlayback() {
     ? isRemuxPinnedContent(activePlaylistId, buildRemuxContentKey("movie", movie.id))
     : false
   const containerPlanEnv = { isTauriDesktop: desktopPlatform, isWindows, remuxAvailable, forceRemux }
-  const containerPlan = localDownloadPath
+  let containerPlan = localDownloadPath
     ? planLocalVodContainerPlayback(localDownloadPath, containerPlanEnv)
     : planVodContainerPlayback(playSrc, containerPlanEnv)
+  let resolvedContainer: "mkv" | "mp4" | null = null
+
+  if (containerPlan.mode === "unsupported" && containerPlan.container === "avi" && !localDownloadPath) {
+    const alternative = await probeVodContainerAlternative(playSrc)
+    if (requestId !== playRequestId) return
+    if (alternative) {
+      log.info("[xt:movie-detail] avi source has a playable alternative container", {
+        container: alternative.container,
+      })
+      playSrc = alternative.url
+      mountSrc = alternative.url
+      resolvedContainer = alternative.container
+      const planningUrl = swapUrlExtension(alternative.url, alternative.container) || alternative.url
+      containerPlan = planVodContainerPlayback(planningUrl, containerPlanEnv)
+    }
+  }
+
   const detectedContainer = containerPlan.mode === "unsupported"
     ? containerPlan.container
     : localDownloadPath
       ? detectVodContainerFromLocalPath(localDownloadPath)
-      : detectVodContainer(playSrc)
+      : resolvedContainer || detectVodContainer(playSrc)
   log.info("[xt:vod-mount] plan decided", {
     mode: containerPlan.mode,
     container: detectedContainer,
@@ -1080,7 +1106,11 @@ async function startPlayback() {
   setupPipButton(player)
   setupScaleButton()
   subtitleDelayController.setup()
-  const mime = chooseMime(detailSrc)
+  const mime = resolvedContainer === "mkv"
+    ? "video/x-matroska"
+    : resolvedContainer === "mp4"
+      ? "video/mp4"
+      : chooseMime(mountSrc)
 
   // Shared by a genuine post-mount decode failure (a plain player "error" in remux mode) and a
   // remux session dying mid-play (reported by the audio switcher): same classification, same teardown.
@@ -1119,7 +1149,7 @@ async function startPlayback() {
     if (toastPath === "upstream-http") showSourceUnavailableToast()
     else if (toastPath === "hevc") showHevcUnsupportedToast()
     else if (toastPath === "audio") showAudioUnsupportedToast(failure.codec)
-    else showContainerUnsupportedToast(detectVodContainer(playSrc) || "mkv")
+    else showContainerUnsupportedToast(resolvedContainer || detectVodContainer(playSrc) || "mkv")
   }
 
   // The player is shared across runs, so a superseded run must not report (or seek) for the one that did play.
@@ -1138,7 +1168,7 @@ async function startPlayback() {
     if (desktopPlatform && e?.code === 4) {
       const unsupportedContainer = localDownloadPath
         ? detectVodContainerFromLocalPath(localDownloadPath)
-        : detectVodContainer(playSrc)
+        : resolvedContainer || detectVodContainer(playSrc)
       // Pinning forces the retuned attempt's plan to "remux", so this branch cannot re-fire for the same content.
       if (
         unsupportedContainer === "mkv" &&

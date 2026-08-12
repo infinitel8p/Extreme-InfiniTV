@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "Yerel kopya mevcut - Oynat'a dokunun.",
   "detail.error.containerUnsupported": "Yerleşik oynatıcı bu platformda {container} dosyalarını oynatamıyor.",
   "detail.error.containerUnsupportedHint": "MPV veya VLC'de açmak için harici oynatıcı düğmesini kullanın.",
+  "detail.error.containerUnsupportedHintNoPlayer": "AVI dosyalarını oynatmak için Ayarlar bölümündeki Oynatma kısmından varsayılan bir harici oynatıcı belirleyin.",
   "detail.error.sourceUnavailable": "Sağlayıcı şu anda bu dosyayı sunmuyor (geçici olarak kullanılamıyor olabilir).",
   "detail.error.hevcUnsupported": "Bu cihaz HEVC (H.265) videoyu çözemiyor.",
   "detail.error.audioUnsupported": "Yerleşik oynatıcı bu platformda {codec} sesini çözemiyor.",

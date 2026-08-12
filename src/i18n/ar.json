@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "النسخة المحلية متاحة - اضغط تشغيل.",
   "detail.error.containerUnsupported": "المشغّل المدمج لا يستطيع تشغيل ملفات {container} على هذه المنصة.",
   "detail.error.containerUnsupportedHint": "استخدم زر المشغّل الخارجي لفتحه في MPV أو VLC.",
+  "detail.error.containerUnsupportedHintNoPlayer": "عيّن مشغّل فيديو خارجيًا افتراضيًا من الإعدادات ضمن قسم التشغيل لتشغيل ملفات AVI.",
   "detail.error.sourceUnavailable": "المزوّد لا يقدّم هذا الملف حاليًا (قد يكون غير متاح مؤقتًا).",
   "detail.error.hevcUnsupported": "هذا الجهاز لا يستطيع فك ترميز فيديو HEVC (H.265).",
   "detail.error.audioUnsupported": "المشغّل المدمج لا يستطيع فك ترميز صوت {codec} على هذه المنصة.",

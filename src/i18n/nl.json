@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "Lokale kopie is beschikbaar - tik op Afspelen.",
   "detail.error.containerUnsupported": "De ingebouwde speler kan geen {container}-bestanden afspelen op dit platform.",
   "detail.error.containerUnsupportedHint": "Gebruik de knop voor externe spelers om het in MPV of VLC te openen.",
+  "detail.error.containerUnsupportedHintNoPlayer": "Stel in Instellingen onder Afspelen een standaard externe speler in om AVI-bestanden af te spelen.",
   "detail.error.sourceUnavailable": "De provider levert dit bestand momenteel niet (mogelijk tijdelijk niet beschikbaar).",
   "detail.error.hevcUnsupported": "Dit apparaat kan geen HEVC-video (H.265) decoderen.",
   "detail.error.audioUnsupported": "De ingebouwde speler kan geen {codec}-audio decoderen op dit platform.",

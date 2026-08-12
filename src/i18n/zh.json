@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "有本地副本 - 点击播放。",
   "detail.error.containerUnsupported": "内置播放器在此平台上无法播放 {container} 文件。",
   "detail.error.containerUnsupportedHint": "请使用外部播放器按钮在 MPV 或 VLC 中打开。",
+  "detail.error.containerUnsupportedHintNoPlayer": "在设置的播放部分中设置默认外部播放器以播放 AVI 文件。",
   "detail.error.sourceUnavailable": "提供商目前未提供此文件（可能暂时不可用）。",
   "detail.error.hevcUnsupported": "此设备无法解码 HEVC（H.265）视频。",
   "detail.error.audioUnsupported": "内置播放器在此平台上无法解码 {codec} 音频。",

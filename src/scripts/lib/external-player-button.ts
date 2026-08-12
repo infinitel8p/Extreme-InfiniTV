@@ -66,6 +66,14 @@ function pickPreferredAndroidHandoff(): AndroidHandoffKind {
   return "system"
 }
 
+export function hasAvailableExternalPlayer(): boolean {
+  if (androidExternalAvailable) return true
+  if (!externalPlayersAvailable) return false
+  const backend = getPlayerBackend()
+  if (backend === "mpv" || backend === "vlc") return false
+  return pickPreferredExternal() !== null
+}
+
 function labelFor(kind: ButtonKind): string {
   if (kind === "system") {
     const localized = t("settings.playback.openInSystem")

@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "Есть локальная копия - нажмите «Смотреть».",
   "detail.error.containerUnsupported": "Встроенный плеер не может воспроизводить файлы {container} на этой платформе.",
   "detail.error.containerUnsupportedHint": "Откройте файл в MPV или VLC кнопкой внешнего плеера.",
+  "detail.error.containerUnsupportedHintNoPlayer": "Укажите внешний проигрыватель по умолчанию в настройках, в разделе воспроизведения, чтобы воспроизводить файлы AVI.",
   "detail.error.sourceUnavailable": "Провайдер сейчас не отдаёт этот файл (возможно, он временно недоступен).",
   "detail.error.hevcUnsupported": "Это устройство не может декодировать видео HEVC (H.265).",
   "detail.error.audioUnsupported": "Встроенный плеер не может декодировать звук {codec} на этой платформе.",

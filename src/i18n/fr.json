@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "Une copie locale est disponible - appuyez sur Lire.",
   "detail.error.containerUnsupported": "Le lecteur intégré ne peut pas lire les fichiers {container} sur cette plateforme.",
   "detail.error.containerUnsupportedHint": "Utilisez le bouton de lecteur externe pour l'ouvrir dans MPV ou VLC.",
+  "detail.error.containerUnsupportedHintNoPlayer": "Définissez un lecteur externe par défaut dans Paramètres, section Lecture, pour lire les fichiers AVI.",
   "detail.error.sourceUnavailable": "Le fournisseur ne sert pas ce fichier pour le moment (il est peut-être temporairement indisponible).",
   "detail.error.hevcUnsupported": "Cet appareil ne peut pas décoder la vidéo HEVC (H.265).",
   "detail.error.audioUnsupported": "Le lecteur intégré ne peut pas décoder l'audio {codec} sur cette plateforme.",

@@ -719,6 +719,7 @@
   "detail.error.localAvailable": "ローカルコピーがあります - 再生をタップしてください。",
   "detail.error.containerUnsupported": "内蔵プレーヤーはこのプラットフォームで {container} ファイルを再生できません。",
   "detail.error.containerUnsupportedHint": "外部プレーヤーボタンから MPV か VLC で開いてください。",
+  "detail.error.containerUnsupportedHintNoPlayer": "AVI ファイルを再生するには、設定の再生セクションで既定の外部プレーヤーを設定してください。",
   "detail.error.sourceUnavailable": "プロバイダーが現在このファイルを配信していません（一時的に利用できない可能性があります）。",
   "detail.error.hevcUnsupported": "このデバイスは HEVC（H.265）動画をデコードできません。",
   "detail.error.audioUnsupported": "内蔵プレーヤーはこのプラットフォームで {codec} 音声をデコードできません。",
