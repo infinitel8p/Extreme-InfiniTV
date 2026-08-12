@@ -1246,6 +1246,7 @@
   "settings.update.reDownload": "Re-download",
   "settings.update.progressLabel": "Update download progress",
   "settings.update.manualOnly": "Auto-update isn't available on this build.",
+  "settings.update.updaterUnreachable": "Couldn't reach the update server, so in-app install isn't available right now. Use GitHub, or check again in a moment.",
   "settings.update.getFromGithub": "Get it on GitHub",
   "settings.update.getFromStore": "Open Microsoft Store",
   "settings.update.getFromPlay": "Open Google Play",

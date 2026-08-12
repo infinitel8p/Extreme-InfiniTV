@@ -56,6 +56,34 @@ let lastStatus: UpdateStatus | null = null
 let updateCheckPromise: Promise<UpdateStatus | null> | null = null
 let updateChannelToken = 0
 
+// reqwest transport failures reach JS as opaque strings; anything else
+// (target missing from latest.json, no APPIMAGE, bad signature) is permanent.
+const TRANSIENT_UPDATER_ERROR =
+  /error sending request|error decoding response|timed? ?out|connection (reset|closed|refused|aborted)|dns error|network|failed to fetch/i
+
+export function isTransientUpdaterError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "")
+  return TRANSIENT_UPDATER_ERROR.test(message)
+}
+
+const UPDATER_RETRY_TRIES = 3
+const UPDATER_RETRY_BASE_MS = 700
+
+export async function withUpdaterRetry<T>(run: () => Promise<T>): Promise<T> {
+  let lastError: unknown = null
+  for (let attempt = 1; attempt <= UPDATER_RETRY_TRIES; attempt++) {
+    try {
+      return await run()
+    } catch (error) {
+      lastError = error
+      if (attempt === UPDATER_RETRY_TRIES || !isTransientUpdaterError(error)) throw error
+      log.warn(`[xt:update-check] transient failure ${attempt}/${UPDATER_RETRY_TRIES}, retrying:`, error)
+      await new Promise((resolve) => setTimeout(resolve, UPDATER_RETRY_BASE_MS * attempt))
+    }
+  }
+  throw lastError
+}
+
 if (typeof document !== "undefined") {
   document.addEventListener(UPDATE_CHANNEL_EVENT, () => {
     updateChannelToken++

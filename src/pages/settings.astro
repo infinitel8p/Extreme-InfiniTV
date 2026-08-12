@@ -1499,6 +1499,13 @@ const navStructure: NavSection[] = [
               class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
             <p id="update-notes" class="hidden text-xs text-fg-3 whitespace-pre-line"></p>
             <p
+              id="update-degraded"
+              hidden
+              data-i18n="settings.update.updaterUnreachable"
+              class="text-xs text-warn leading-relaxed">
+              Couldn't reach the update server, so in-app install isn't available right now. Use GitHub, or check again in a moment.
+            </p>
+            <p
               id="update-manual-only"
               hidden
               data-i18n="settings.update.manualOnly"
@@ -1921,6 +1928,8 @@ const navStructure: NavSection[] = [
       getPlayStoreUrl,
       getCurrentAppVersion,
       resolveUpdateFeedUrl,
+      withUpdaterRetry,
+      isTransientUpdaterError,
       MS_STORE_UPDATES_URL,
     } from "@/scripts/lib/update-check.js"
     import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
@@ -3805,6 +3814,7 @@ const navStructure: NavSection[] = [
     )
     const updateGetLabelEl = document.getElementById("update-get-label")
     const updateManualOnlyEl = document.getElementById("update-manual-only")
+    const updateDegradedEl = document.getElementById("update-degraded")
     const updateProgressWrap = document.getElementById("update-progress-wrap")
     const updateProgressTrack = document.getElementById("update-progress-track")
     const updateProgressBar = document.getElementById("update-progress-bar")
@@ -4033,6 +4043,7 @@ const navStructure: NavSection[] = [
         if (updateLatestEl) updateLatestEl.textContent = t("settings.about.upToDate")
         if (updateMsgEl) updateMsgEl.textContent = t("settings.update.upToDateMsg")
         updateGetBtn?.setAttribute("hidden", "")
+        updateDegradedEl?.setAttribute("hidden", "")
         setUpdateState("up-to-date")
         return
       }
@@ -4064,6 +4075,7 @@ const navStructure: NavSection[] = [
       updateInstallBtn?.setAttribute("hidden", "")
       updateRelaunchBtn?.setAttribute("hidden", "")
       updateGetBtn?.setAttribute("hidden", "")
+      updateDegradedEl?.setAttribute("hidden", "")
       setInstallLabel(t("settings.about.installUpdate"))
       setProgress(null)
       if (updateNotesEl) {
@@ -4073,11 +4085,12 @@ const navStructure: NavSection[] = [
 
       if (canUseTauriUpdater) {
         try {
-          await checkViaTauriUpdater()
+          await withUpdaterRetry(checkViaTauriUpdater)
           updateCheckBtn?.removeAttribute("disabled")
           return
         } catch (e) {
           log.warn("Tauri update check failed, falling back to GitHub check:", e)
+          if (isTransientUpdaterError(e)) updateDegradedEl?.removeAttribute("hidden")
         }
       }
 
