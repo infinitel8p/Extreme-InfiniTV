@@ -248,13 +248,17 @@ async function gatherInputs(): Promise<SessionSnapshotInputs> {
   }
 }
 
+/** Public entry point for callers that want the snapshot without the once-per-launch logging gate. */
+export async function collectSessionSnapshot(): Promise<SessionSnapshot> {
+  return buildSessionSnapshot(await gatherInputs())
+}
+
 /** Fires once per app launch (sessionStorage-gated); safe to call again on the same page load, a no-op once logged. */
 export async function logSessionSnapshot(): Promise<void> {
   try {
     if (!markSessionOnce()) return
     loggedThisPageLoad = true
-    const inputs = await gatherInputs()
-    const snapshot = buildSessionSnapshot(inputs)
+    const snapshot = await collectSessionSnapshot()
     log.info("[xt:session] environment", snapshot)
   } catch (err) {
     try {

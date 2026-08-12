@@ -24,6 +24,7 @@ import {
   IconFilter,
   IconStar,
   IconArchive,
+  IconFileZip,
   IconDatabase,
   IconBrandDiscord,
   IconInfoCircle,
@@ -1815,6 +1816,17 @@ const navStructure: NavSection[] = [
                 <span data-i18n="settings.help.sendFeedback">Send feedback</span>
               </a>
             </div>
+            <button id="settings-export-diagnostics" type="button" class="btn justify-start sm:justify-center w-full mt-2">
+              <IconFileZip aria-hidden="true" class="btn-icon" />
+              <span data-i18n="settings.help.exportDiagnostics">Export diagnostics</span>
+            </button>
+            <p data-i18n="settings.help.exportDiagnosticsHelper" class="text-xs text-fg-3 mt-2">
+              Save a single file with app and device details, recent network activity, playlist types and the newest log files. Attach it to a bug report so the problem can be traced.
+            </p>
+            <p data-i18n="settings.help.diagnosticsPrivacy" class="text-xs text-fg-3 mt-1">
+              Usernames, passwords and tokens are stripped out. Server names can still appear, so review the file before posting it publicly.
+            </p>
+            <span id="settings-export-diagnostics-msg" aria-live="polite" class="text-xs text-fg-3 break-all transition-opacity duration-300 empty:hidden mt-1 block"></span>
           </div>
         </div>
 
@@ -2619,8 +2631,8 @@ const navStructure: NavSection[] = [
     const importInput = /** @type {HTMLInputElement|null} */ (document.getElementById("settings-import-input"))
     const backupMsgEl = document.getElementById("settings-backup-msg")
 
-    async function downloadBlobWeb(name, content) {
-      const blob = new Blob([content], { type: "application/json" })
+    async function downloadBlobWeb(name, content, mime = "application/json") {
+      const blob = new Blob([content], { type: mime })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
@@ -2704,6 +2716,89 @@ const navStructure: NavSection[] = [
         })
       } finally {
         setLoading(exportBtn, false)
+      }
+    })
+
+    // -------------------------
+    // Diagnostics export
+    // -------------------------
+    const exportDiagnosticsBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("settings-export-diagnostics")
+    )
+    const exportDiagnosticsMsgEl = document.getElementById("settings-export-diagnostics-msg")
+
+    exportDiagnosticsBtn?.addEventListener("click", async () => {
+      setLoading(exportDiagnosticsBtn, true)
+      try {
+        const { collectDiagnosticBundle } = await import("@/scripts/lib/diagnostic-bundle.js")
+        const bundle = await collectDiagnosticBundle()
+        let savedTo = ""
+        if (isTauriEnv && isAndroidEnv) {
+          const androidFs = await import("@/scripts/lib/android-fs.js")
+          let pickerError = null
+          try {
+            const written = await androidFs.saveBinaryFile(bundle.filename, bundle.bytes, "application/zip")
+            if (!written) return
+            try {
+              await androidFs.shareFile(written)
+            } catch (shareErr) {
+              log.warn("[settings:export-diagnostics] share failed:", shareErr)
+            }
+          } catch (e) {
+            pickerError = e
+            log.warn(
+              "[settings:export-diagnostics] SAF save picker failed, falling back to public Download/:",
+              e
+            )
+          }
+          if (pickerError) {
+            try {
+              const publicPath = await androidFs.savePublicBinaryFile(
+                bundle.filename,
+                bundle.bytes,
+                "application/zip"
+              )
+              savedTo = publicPath || ""
+            } catch (publicErr) {
+              log.error("[settings:export-diagnostics] public Download/ save failed:", publicErr)
+              toastError(t("settings.toast.diagnosticsExportFail"), {
+                description:
+                  (publicErr && publicErr.message) ||
+                  (pickerError && pickerError.message) ||
+                  "Android FS is not available.",
+                duration: 7000,
+              })
+              return
+            }
+          }
+        } else if (isTauriEnv) {
+          const { save } = await import("@tauri-apps/plugin-dialog")
+          const target = await save({
+            defaultPath: bundle.filename,
+            filters: [{ name: "ZIP", extensions: ["zip"] }],
+          })
+          if (!target) return
+          const { writeFile } = await import("@tauri-apps/plugin-fs")
+          await writeFile(target, bundle.bytes)
+          savedTo = target
+        } else {
+          await downloadBlobWeb(bundle.filename, bundle.bytes, "application/zip")
+        }
+        toastSuccess(t("settings.toast.diagnosticsExported"), {
+          description: savedTo
+            ? `${bundle.fileNames.length} file(s) included - ${savedTo}`
+            : `${bundle.fileNames.length} file(s) included.`,
+          duration: 6000,
+        })
+        flashSuccess(exportDiagnosticsBtn)
+        flashMsg(exportDiagnosticsMsgEl, "Saved.")
+      } catch (e) {
+        log.error("[settings:export-diagnostics] failed:", e)
+        toastError(t("settings.toast.diagnosticsExportFail"), {
+          description: (e && e.message) || "See console.",
+        })
+      } finally {
+        setLoading(exportDiagnosticsBtn, false)
       }
     })
 

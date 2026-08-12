@@ -32,6 +32,7 @@
         { "path": "$HOME/**" },
         { "path": "$APPDATA/**" },
         { "path": "$APPLOCALDATA/**" },
+        { "path": "$APPLOG/**" },
         { "path": "$DOWNLOAD/.xtream-meta/**" },
         { "path": "$VIDEO/.xtream-meta/**" },
         { "path": "$HOME/.xtream-meta/**" },

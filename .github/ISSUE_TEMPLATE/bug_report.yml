@@ -89,12 +89,25 @@ body:
     validations:
       required: true
   - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics file
+      description: |
+        In the app: **Settings -> Help and feedback -> Export diagnostics**. It saves a small `.zip` containing your app version and device details, recent network activity and the newest log files. Drag that file into this box.
+
+        Usernames, passwords and tokens are stripped out before the file is written. Server names can still appear, so have a look through it before attaching.
+      placeholder: Drag the exported .zip in here.
+  - type: textarea
     id: logs
     attributes:
-      label: Logs / console output
+      label: Log file
       description: |
-        Optional but very helpful. On the desktop build, open DevTools (Ctrl+Shift+I) and copy any errors from the Console tab. Redact anything that looks like a credential or a stream URL before pasting.
-      render: shell
+        Only needed if you couldn't export the diagnostics file above. The app writes a log file per day and already strips credentials out of it as it writes.
+
+        - **Desktop:** Settings -> Storage -> **Open log folder**, then attach the newest `app-YYYY-MM-DD.log`, or paste the last part of it below.
+        - **Android:** Settings -> Storage -> **Share logs**.
+
+        Server names can still appear in it, so have a look before attaching.
   - type: checkboxes
     id: checks
     attributes:

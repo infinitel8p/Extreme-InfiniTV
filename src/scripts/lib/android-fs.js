@@ -264,18 +264,26 @@ export async function pickJsonFile() {
 }
 
 /**
+ * Open the system "Save As" picker and write `bytes` to the chosen destination.
+ * @returns the written file's uri (truthy, and passable to `shareFile`), or
+ *          false if the user cancelled or the plugin isn't available.
+ */
+export async function saveBinaryFile(defaultFileName, bytes, mime = "application/octet-stream") {
+  const m = await mod()
+  if (!m) return false
+  const uri = await m.AndroidFs.showSaveFilePicker(defaultFileName, mime)
+  if (!uri) return false
+  await m.AndroidFs.writeFile(uri, bytes)
+  return uri
+}
+
+/**
  * Open the system "Save As" picker and write `text` (UTF-8) to the chosen destination.
  * @returns true if the file was written, false if the user cancelled or
  *          the plugin isn't available.
  */
 export async function saveTextFile(defaultFileName, text, mime = "text/plain") {
-  const m = await mod()
-  if (!m) return false
-  const uri = await m.AndroidFs.showSaveFilePicker(defaultFileName, mime)
-  if (!uri) return false
-  const bytes = new TextEncoder().encode(text)
-  await m.AndroidFs.writeFile(uri, bytes)
-  return true
+  return saveBinaryFile(defaultFileName, new TextEncoder().encode(text), mime)
 }
 
 export async function saveJsonFile(defaultFileName, text) {
@@ -283,14 +291,14 @@ export async function saveJsonFile(defaultFileName, text) {
 }
 
 /**
- * Drop a text file directly into the public Downloads/Extreme InfiniTV/
+ * Drop a binary file directly into the public Downloads/Extreme InfiniTV/
  * folder via MediaStore. No picker UI - used as a fallback when the SAF
  * "Save As" picker is unavailable on the device.
  *
  * @returns the on-device path (best effort) or the URI string of the
  *          written file, or null if the plugin isn't available.
  */
-export async function savePublicTextFile(filename, text, mime = "text/plain") {
+export async function savePublicBinaryFile(filename, bytes, mime = "application/octet-stream") {
   const m = await mod()
   if (!m) return null
   const uri = await m.AndroidFs.createNewPublicFile(
@@ -300,7 +308,6 @@ export async function savePublicTextFile(filename, text, mime = "text/plain") {
     { isPending: true }
   )
   if (!uri) return null
-  const bytes = new TextEncoder().encode(text)
   try {
     await m.AndroidFs.writeFile(uri, bytes)
   } catch (e) {
@@ -320,6 +327,18 @@ export async function savePublicTextFile(filename, text, mime = "text/plain") {
     log.warn("[xt:android-fs] scanPublicFile failed:", e)
   }
   return `Download/${PUBLIC_SUBDIR}/${filename}`
+}
+
+/**
+ * Drop a text file directly into the public Downloads/Extreme InfiniTV/
+ * folder via MediaStore. No picker UI - used as a fallback when the SAF
+ * "Save As" picker is unavailable on the device.
+ *
+ * @returns the on-device path (best effort) or the URI string of the
+ *          written file, or null if the plugin isn't available.
+ */
+export async function savePublicTextFile(filename, text, mime = "text/plain") {
+  return savePublicBinaryFile(filename, new TextEncoder().encode(text), mime)
 }
 
 export async function savePublicJsonFile(filename, text) {
@@ -342,6 +361,22 @@ export async function viewFileExternally(uri) {
     return true
   } catch (e) {
     log.error("[xt:android-fs] showViewFileDialog failed:", e)
+    return false
+  }
+}
+
+/**
+ * Hand the URI off to Android's system share sheet via Intent.ACTION_SEND.
+ * @returns true if the intent was fired, false if the plugin isn't available.
+ */
+export async function shareFile(uri) {
+  const m = await mod()
+  if (!m) return false
+  try {
+    await m.AndroidFs.showShareFileDialog(uri)
+    return true
+  } catch (e) {
+    log.error("[xt:android-fs] showShareFileDialog failed:", e)
     return false
   }
 }
