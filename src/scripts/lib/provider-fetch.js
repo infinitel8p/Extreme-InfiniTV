@@ -4,6 +4,7 @@ import {
   getNetworkTimeoutSeconds,
 } from "@/scripts/lib/app-settings.js"
 import { splitUrlAuth } from "@/scripts/lib/url-auth"
+import { recordNetLog } from "@/scripts/lib/net-log"
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -97,16 +98,22 @@ const _stats = {
   lastStatus: 0,
 }
 
-function noteSuccess(status) {
+function noteSuccess(status, context) {
   _stats.lastSuccessAt = Date.now()
   _stats.lastStatus = status || 0
   _stats.successes++
+  recordNetLog({ ...context, endedAt: Date.now(), status })
 }
 
-function noteFailure(error) {
+function noteFailure(error, context) {
   _stats.lastFailureAt = Date.now()
   _stats.lastError = String(error?.message || error || "").slice(0, 200)
   _stats.failures++
+  recordNetLog({ ...context, endedAt: Date.now(), error })
+}
+
+function noteAborted(context) {
+  recordNetLog({ ...context, endedAt: Date.now(), outcome: "aborted" })
 }
 
 export function getProviderStats() {
@@ -118,12 +125,20 @@ export async function providerFetch(url, init = {}) {
   const { url: requestUrl, authorization } = splitUrlAuth(String(url))
   const ua = getUserAgent()
   const u = redactUrl(requestUrl).slice(0, 200)
+  const context = {
+    method: String(init.method || "GET"),
+    url: u,
+    kind: init.logKind || "other",
+    startedAt: Date.now(),
+    transport: isTauri ? "tauri" : "native",
+  }
 
   const callerSignal = init.signal
   const callInit = { ...init }
   // Still accepted for back-compat (callers pass it); no longer changes
   // routing now that Tauri requests always send a browser UA by default.
   delete callInit.forceTauri
+  delete callInit.logKind
   if (authorization) {
     const mergedHeaders = new Headers(callInit.headers || {})
     if (!mergedHeaders.has("Authorization")) {
@@ -148,10 +163,11 @@ export async function providerFetch(url, init = {}) {
     log.log(`[xt:net] native start`, u)
     try {
       const r = await nativeFetch(requestUrl, callInit, u, callerSignal)
-      noteSuccess(r.status)
+      noteSuccess(r.status, context)
       return r
     } catch (e) {
-      if (!callerSignal?.aborted) noteFailure(e)
+      if (!callerSignal?.aborted) noteFailure(e, context)
+      else noteAborted(context)
       throw e
     }
   }
@@ -161,10 +177,11 @@ export async function providerFetch(url, init = {}) {
     log.log(`[xt:net] native start (no plugin-http)`, u)
     try {
       const r = await nativeFetch(requestUrl, callInit, u, callerSignal)
-      noteSuccess(r.status)
+      noteSuccess(r.status, context)
       return r
     } catch (e) {
-      if (!callerSignal?.aborted) noteFailure(e)
+      if (!callerSignal?.aborted) noteFailure(e, context)
+      else noteAborted(context)
       throw e
     }
   }
@@ -177,20 +194,25 @@ export async function providerFetch(url, init = {}) {
   try {
     const r = await tauriFetch(requestUrl, { ...callInit, headers })
     log.log(`[xt:net] tauri ok ${r.status}`, u)
-    noteSuccess(r.status)
+    noteSuccess(r.status, context)
     return r
   } catch (e) {
-    if (callerSignal?.aborted) throw e
+    if (callerSignal?.aborted) {
+      noteAborted(context)
+      throw e
+    }
+    context.transport = "tauri-fallback"
     log.warn(
       "[xt:net] tauri fetch failed, falling back to native:",
       String(e?.message || e)
     )
     try {
       const r = await nativeFetch(requestUrl, callInit, u, callerSignal)
-      noteSuccess(r.status)
+      noteSuccess(r.status, context)
       return r
     } catch (e2) {
-      if (!callerSignal?.aborted) noteFailure(e2)
+      if (!callerSignal?.aborted) noteFailure(e2, context)
+      else noteAborted(context)
       throw e2
     }
   }

@@ -42,6 +42,7 @@ import {
   IconMovie,
   IconEye,
   IconEyeOff,
+  IconActivity,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -72,6 +73,7 @@ const navStructure: NavSection[] = [
     { id: "card-network",          labelKey: "settings.network.title", label: "Network" },
     { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
     { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "TMDb metadata" },
+    { id: "card-net-log",          labelKey: "settings.netLog.title",  label: "Network log", conditional: true },
   ]},
   { id: "settings-library", labelKey: "settings.group.library", label: "Library", cards: [
     { id: "card-categories", labelKey: "settings.categories.title",        label: "Categories" },
@@ -940,6 +942,28 @@ const navStructure: NavSection[] = [
               </div>
             </div>
 
+            <!-- Developer mode: unlocks the network log card below -->
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.devMode.title" class="text-sm font-medium leading-snug">Developer mode</h3>
+                <p id="settings-dev-mode-helper" data-i18n="settings.devMode.helperLong" class="text-xs text-fg-3">
+                  Unlocks a network log of recent provider requests, useful when troubleshooting a connection issue. Off by default.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-dev-mode"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Developer mode"
+                  aria-describedby="settings-dev-mode-helper"
+                  data-i18n-attr="aria-label:settings.devMode.label">
+                  <button type="button" role="radio" data-dev="on"  aria-checked="false" data-i18n="settings.devMode.on"  class="dev-mode-btn btn">On</button>
+                  <button type="button" role="radio" data-dev="off" aria-checked="false" data-i18n="settings.devMode.off" class="dev-mode-btn btn">Off</button>
+                </div>
+              </div>
+            </div>
+
             <!-- Discord Rich Presence: desktop-only, unhidden by the script below -->
             <details id="discord-rpc-section" data-settings-item class="hidden group scroll-mt-6 lg:scroll-mt-20">
               <summary class="settings-row cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
@@ -1073,6 +1097,68 @@ const navStructure: NavSection[] = [
             This product uses the TMDB API but is not endorsed or certified by TMDB.
           </p>
         </div>
+
+        <!-- Network log: developer-mode only, unhidden by the script below -->
+        <details id="card-net-log" data-settings-item class="changelog-outer settings-surface icon-mark-host group hidden scroll-mt-6 lg:scroll-mt-20">
+          <summary class="settings-surface__header cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden pb-5 sm:pb-6">
+            <span class="icon-mark">
+              <IconActivity aria-hidden="true" stroke={2} />
+            </span>
+            <h3 data-i18n="settings.netLog.title" class="text-base font-semibold">Network log</h3>
+            <span class="ms-auto shrink-0">
+              <IconChevronDown
+                aria-hidden="true"
+                stroke={1.75}
+                class="size-4 text-fg-3 shrink-0 changelog-chevron transition-transform duration-200" />
+            </span>
+          </summary>
+          <div class="flex flex-col gap-3 px-5 sm:px-6 pb-5 sm:pb-6 pt-4 sm:pt-5 border-t border-line/60">
+
+            <p data-i18n="settings.netLog.helper" class="text-xs text-fg-3">
+              Recent provider requests, with credentials stripped. Kept for this app session only and cleared when you close the app.
+            </p>
+
+            <div class="flex flex-wrap items-center gap-2">
+              <button id="net-log-clear" type="button" class="btn">
+                <IconTrash aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.netLog.clear">Clear</span>
+              </button>
+              <select
+                id="net-log-kind-filter"
+                class="field-input w-auto"
+                data-i18n-attr="aria-label:settings.netLog.kindFilter"
+                aria-label="Filter by kind">
+                <option value="all" data-i18n="settings.netLog.kind.all">All kinds</option>
+                <option value="api" data-i18n="settings.netLog.kind.api">API</option>
+                <option value="playlist" data-i18n="settings.netLog.kind.playlist">Playlist</option>
+                <option value="epg" data-i18n="settings.netLog.kind.epg">EPG</option>
+                <option value="image" data-i18n="settings.netLog.kind.image">Image</option>
+                <option value="media" data-i18n="settings.netLog.kind.media">Media</option>
+                <option value="update" data-i18n="settings.netLog.kind.update">Update</option>
+                <option value="other" data-i18n="settings.netLog.kind.other">Other</option>
+              </select>
+              <label class="inline-flex items-center gap-2 min-h-11 px-1 cursor-pointer">
+                <input id="net-log-include-images" type="checkbox" class="size-4 accent-accent" />
+                <span data-i18n="settings.netLog.includeImages" class="text-xs text-fg-2">Include image requests</span>
+              </label>
+              <button id="net-log-copy" type="button" class="btn ms-auto">
+                <IconDeviceFloppy aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.netLog.copyJson">Copy as JSON</span>
+              </button>
+            </div>
+
+            <div id="net-log-rows" class="flex flex-col divide-y divide-line/60 rounded-xl border border-line bg-bg overflow-hidden empty:hidden"></div>
+
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <p id="net-log-count" class="text-2xs text-fg-3 tabular-nums"></p>
+              <span
+                id="net-log-msg"
+                aria-live="polite"
+                class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+            </div>
+
+          </div>
+        </details>
 
       </div>
     </section>
@@ -1896,7 +1982,7 @@ const navStructure: NavSection[] = [
   <script>
     import { Store } from "@tauri-apps/plugin-store"
     import { log } from "@/scripts/lib/log.js"
-    import { t } from "@/scripts/lib/i18n.js"
+    import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
     import { ICON_CHECK } from "@/scripts/lib/icons.ts"
     import {
       getActiveEntry,
@@ -1975,6 +2061,9 @@ const navStructure: NavSection[] = [
       setAudioTranscodeAuto,
       getFfmpegPath,
       setFfmpegPath,
+      getDevModeEnabled,
+      setDevModeEnabled,
+      DEV_MODE_EVENT,
     } from "@/scripts/lib/app-settings.js"
     import { playUiSound } from "@/scripts/lib/ui-sounds.ts"
     import { hapticsAvailable, performHaptic } from "@/scripts/lib/haptics.ts"
@@ -2010,6 +2099,15 @@ const navStructure: NavSection[] = [
       loadBackupSnapshot,
       hasBackupSnapshot,
     } from "@/scripts/lib/backup-snapshot.ts"
+    import {
+      getNetworkLog,
+      clearNetworkLog,
+      getNetLogIncludeImages,
+      setNetLogIncludeImages,
+      NET_LOG_EVENT,
+    } from "@/scripts/lib/net-log.ts"
+    import { fmtAgo } from "@/scripts/lib/playlist-health.ts"
+    import { writeClipboardText } from "@/scripts/lib/clipboard.ts"
 
     bindExternalLinks()
     import { toast, toastSuccess, toastError } from "@/scripts/lib/toast.js"
@@ -3509,6 +3607,34 @@ const navStructure: NavSection[] = [
     syncNetTimeoutButtons()
 
     // ---------------------------------------------------------------------
+    // Developer mode: unlocks the network log card below.
+    // ---------------------------------------------------------------------
+    const devModeGroup = document.getElementById("settings-dev-mode")
+    function syncDevModeButtons() {
+      const current = getDevModeEnabled()
+      for (const btn of devModeGroup?.querySelectorAll(".dev-mode-btn") || []) {
+        btn.setAttribute("aria-checked", String((btn.dataset.dev === "on") === current))
+      }
+    }
+    function applyDevModeVisibility() {
+      document.getElementById("card-net-log")?.classList.toggle("hidden", !getDevModeEnabled())
+    }
+    devModeGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".dev-mode-btn")
+      if (!btn) return
+      setDevModeEnabled(btn.dataset.dev === "on")
+      syncDevModeButtons()
+      applyDevModeVisibility()
+    })
+    document.addEventListener(DEV_MODE_EVENT, () => {
+      syncDevModeButtons()
+      applyDevModeVisibility()
+    })
+    syncDevModeButtons()
+    applyDevModeVisibility()
+
+    // ---------------------------------------------------------------------
     // Downloads folder
     // ---------------------------------------------------------------------
     const dirInput = /** @type {HTMLInputElement|null} */ (
@@ -4405,6 +4531,160 @@ const navStructure: NavSection[] = [
         setLoading(tmdbTestBtn, false)
       }
     })
+
+    // -------------------------------------------------------------------
+    // Network log: recent provider requests, dev-mode gated.
+    // -------------------------------------------------------------------
+    const netLogCard = /** @type {HTMLDetailsElement|null} */ (
+      document.getElementById("card-net-log")
+    )
+    const netLogRowsEl = document.getElementById("net-log-rows")
+    const netLogCountEl = document.getElementById("net-log-count")
+    const netLogMsgEl = document.getElementById("net-log-msg")
+    const netLogKindFilterEl = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("net-log-kind-filter")
+    )
+    const netLogIncludeImagesEl = /** @type {HTMLInputElement|null} */ (
+      document.getElementById("net-log-include-images")
+    )
+    const netLogClearBtn = document.getElementById("net-log-clear")
+    const netLogCopyBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("net-log-copy"))
+
+    const NET_LOG_RENDER_CAP = 100
+    const NET_LOG_BADGE = "shrink-0 px-2 py-0.5 rounded-full text-2xs font-medium bg-surface-2 text-fg-3 uppercase tracking-wide"
+
+    function netLogTone(entry) {
+      if (entry.outcome === "error") return "bad"
+      if (entry.status != null && entry.status >= 500) return "bad"
+      if (entry.outcome === "aborted") return "warn"
+      if (entry.status != null && entry.status >= 400) return "warn"
+      if (entry.outcome === "ok" && entry.status != null && entry.status >= 200 && entry.status < 300) return "good"
+      return "neutral"
+    }
+
+    function netLogRow(entry) {
+      const row = document.createElement("div")
+      row.className = "flex flex-col gap-1 px-3 py-2 text-2xs"
+
+      const tone = netLogTone(entry)
+      const toneClass =
+        tone === "good" ? "text-good" : tone === "warn" ? "text-warn" : tone === "bad" ? "text-bad" : "text-fg-2"
+
+      const metaRow = document.createElement("div")
+      metaRow.className = "flex flex-wrap items-center gap-2"
+
+      const time = document.createElement("span")
+      time.className = "tabular-nums text-fg-3 shrink-0"
+      time.textContent = fmtAgo(entry.startedAt)
+
+      const method = document.createElement("span")
+      method.className = "font-mono text-fg-3 shrink-0"
+      method.textContent = entry.method
+
+      // No HTTP status: show the outcome word, not just a colour, so failure isn't hue-only.
+      const status = document.createElement("span")
+      status.className = `tabular-nums font-medium shrink-0 ${toneClass}`
+      status.textContent = entry.status != null ? String(entry.status) : entry.outcome.toUpperCase()
+
+      const duration = document.createElement("span")
+      duration.className = "tabular-nums text-fg-3 shrink-0"
+      duration.textContent = `${entry.durationMs}ms`
+
+      const kindBadge = document.createElement("span")
+      kindBadge.className = NET_LOG_BADGE
+      kindBadge.textContent = entry.kind
+
+      const transportBadge = document.createElement("span")
+      transportBadge.className = NET_LOG_BADGE
+      transportBadge.textContent = entry.transport
+
+      metaRow.append(time, method, status, duration, kindBadge, transportBadge)
+      row.appendChild(metaRow)
+
+      const url = document.createElement("div")
+      url.className = "font-mono text-fg-2 break-all"
+      url.textContent = entry.url
+      row.appendChild(url)
+
+      if (entry.error) {
+        const errorLine = document.createElement("div")
+        errorLine.className = "text-bad break-all"
+        errorLine.textContent = entry.error
+        row.appendChild(errorLine)
+      }
+
+      return row
+    }
+
+    function netLogCardVisible() {
+      return !!netLogCard && !netLogCard.classList.contains("hidden") && netLogCard.open
+    }
+
+    function repaintNetLog() {
+      if (!netLogRowsEl || !netLogCardVisible()) return
+
+      const snapshot = getNetworkLog()
+      const kindFilter = netLogKindFilterEl?.value || "all"
+      const filtered = kindFilter === "all"
+        ? snapshot.entries
+        : snapshot.entries.filter((entry) => entry.kind === kindFilter)
+      const newestFirst = filtered.slice().reverse().slice(0, NET_LOG_RENDER_CAP)
+
+      netLogRowsEl.replaceChildren()
+      if (!newestFirst.length) {
+        const empty = document.createElement("div")
+        empty.className = "px-4 py-4 text-xs text-fg-3"
+        empty.textContent = t("settings.netLog.empty")
+        netLogRowsEl.appendChild(empty)
+      } else {
+        for (const entry of newestFirst) netLogRowsEl.appendChild(netLogRow(entry))
+      }
+
+      if (netLogCountEl) {
+        const base = t("settings.netLog.count", { count: snapshot.entries.length, capacity: snapshot.capacity })
+        netLogCountEl.textContent = snapshot.dropped > 0
+          ? `${base} ${t("settings.netLog.droppedCount", { count: snapshot.dropped })}`
+          : base
+      }
+    }
+
+    // NET_LOG_EVENT can fire dozens of times a second during a catalog load;
+    // coalesce repaints into one per frame so it doesn't wipe text selection.
+    let netLogRepaintFrame = 0
+    function scheduleNetLogRepaint() {
+      if (netLogRepaintFrame) return
+      netLogRepaintFrame = requestAnimationFrame(() => {
+        netLogRepaintFrame = 0
+        repaintNetLog()
+      })
+    }
+
+    if (netLogIncludeImagesEl) netLogIncludeImagesEl.checked = getNetLogIncludeImages()
+
+    netLogCard?.addEventListener("toggle", repaintNetLog)
+    netLogKindFilterEl?.addEventListener("change", repaintNetLog)
+    netLogIncludeImagesEl?.addEventListener("change", () => {
+      setNetLogIncludeImages(netLogIncludeImagesEl.checked)
+      repaintNetLog()
+    })
+    netLogClearBtn?.addEventListener("click", () => {
+      clearNetworkLog()
+      repaintNetLog()
+      flashMsg(netLogMsgEl, t("settings.netLog.cleared"))
+    })
+    netLogCopyBtn?.addEventListener("click", async () => {
+      try {
+        await writeClipboardText(JSON.stringify(getNetworkLog(), null, 2))
+        toastSuccess(t("settings.netLog.copied"))
+        flashSuccess(netLogCopyBtn)
+      } catch (copyError) {
+        log.warn("[settings] network log copy failed:", copyError)
+        toast({ title: t("toast.copyError"), variant: "warn", duration: 2800 })
+      }
+    })
+    document.addEventListener(NET_LOG_EVENT, scheduleNetLogRepaint)
+    document.addEventListener(LOCALE_EVENT, repaintNetLog)
+    repaintNetLog()
   </script>
 
   <style>

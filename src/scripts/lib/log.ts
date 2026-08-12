@@ -73,14 +73,14 @@ export const log: {
 
 const SENSITIVE_USERINFO = /(\/\/)[^/@\s?#]+@/g
 
-const SENSITIVE_PARAMS = /(\b(?:username|user|password|pass|token|auth|key|api_key|apikey)=)([^&#\s]*)/gi
+const SENSITIVE_PARAMS = /(\b(?:username|user|password|pass|token|authorization|auth|key|api_key|apikey)=)([^&#\s]*)/gi
 
 const SENSITIVE_PATH =
     /(\/(?:live|movie|series|timeshift|hls|hlsr)\/)([^/\s?#]+)\/([^/\s?#]+)(\/)/gi
 
 // Same sensitive key list as SENSITIVE_PARAMS, shaped for JSON.stringify() output ("key":"value") instead of a query string.
 const SENSITIVE_JSON_VALUE =
-    /("(?:username|user|password|pass|token|auth|key|api_key|apikey)"\s*:\s*)"([^"]*)"/gi
+    /("(?:username|user|password|pass|token|authorization|auth|key|api_key|apikey)"\s*:\s*)"([^"]*)"/gi
 
 export function redactUrl(input: unknown): string {
     if (input == null) return ""
@@ -90,4 +90,26 @@ export function redactUrl(input: unknown): string {
         .replace(SENSITIVE_PARAMS, (_match, prefix) => `${prefix}***`)
         .replace(SENSITIVE_PATH, (_match, prefix) => `${prefix}***/***/`)
         .replace(SENSITIVE_JSON_VALUE, (_match, prefix) => `${prefix}"***"`)
+}
+
+function redactDeepInner(value: unknown, seen: WeakSet<object>): unknown {
+    if (typeof value === "string") return redactUrl(value)
+    if (Array.isArray(value)) {
+        if (seen.has(value)) return "[circular]"
+        seen.add(value)
+        return value.map((item) => redactDeepInner(item, seen))
+    }
+    if (value !== null && typeof value === "object") {
+        if (seen.has(value)) return "[circular]"
+        seen.add(value)
+        const redacted: Record<string, unknown> = {}
+        for (const [key, fieldValue] of Object.entries(value)) redacted[key] = redactDeepInner(fieldValue, seen)
+        return redacted
+    }
+    return value
+}
+
+// Recursively redacts every string field of a value; guards against circular refs.
+export function redactDeep(value: unknown): unknown {
+    return redactDeepInner(value, new WeakSet())
 }

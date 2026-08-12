@@ -223,7 +223,7 @@ async function downscaleBlob(originalBlob: Blob, kind: ImgKind): Promise<Blob> {
 // Fetches, downscales and caches `url` without touching any <img>
 async function backgroundFill(cacheKey: string, url: string, kind: ImgKind): Promise<void> {
   try {
-    const response = await providerFetch(url)
+    const response = await providerFetch(url, { logKind: "image" })
     if (!response.ok) throw new Error(`fetch failed: ${response.status}`)
     const originalBlob = await response.blob()
     const storedBlob = await downscaleBlob(originalBlob, kind)

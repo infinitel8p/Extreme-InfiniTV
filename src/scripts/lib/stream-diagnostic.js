@@ -36,7 +36,7 @@ async function providerFetchWithTimeout(url, init, ms, label, externalSignal) {
   }
   try {
     const response = await withTimeout(
-      providerFetch(url, { ...init, signal: controller?.signal }),
+      providerFetch(url, { ...init, signal: controller?.signal, logKind: init.logKind || "media" }),
       ms,
       label
     )
@@ -146,13 +146,13 @@ function readMeta(response, method, startTs) {
   }
 }
 
-async function headOrGet(url, signal) {
+async function headOrGet(url, signal, logKind) {
   const start = performance.now()
   let headInfo = null
   try {
     const response = await providerFetchWithTimeout(
       url,
-      { method: "HEAD" },
+      { method: "HEAD", logKind },
       FETCH_TIMEOUT_MS,
       "HEAD",
       signal
@@ -170,7 +170,7 @@ async function headOrGet(url, signal) {
   try {
     const response = await providerFetchWithTimeout(
       url,
-      { method: "GET", headers: { Range: "bytes=0-0" } },
+      { method: "GET", headers: { Range: "bytes=0-0" }, logKind },
       FETCH_TIMEOUT_MS,
       "GET",
       signal
@@ -195,11 +195,11 @@ async function headOrGet(url, signal) {
   }
 }
 
-/** Thin HEAD/GET reachability probe reused by the playlist editor's "Check links" action; optional AbortSignal cancels the in-flight request. */
-export async function probeStreamHead(url, signal) {
+/** Thin HEAD/GET reachability probe reused by the playlist editor's "Check links" action; optional AbortSignal cancels the in-flight request. Optional `logKind` tags the net-log entries. */
+export async function probeStreamHead(url, signal, logKind) {
   if (signal?.aborted) return { ok: false, status: null, aborted: true }
   try {
-    const result = await headOrGet(url, signal)
+    const result = await headOrGet(url, signal, logKind)
     return { ok: !!result?.ok, status: result?.status ?? null }
   } catch (err) {
     return { ok: false, status: null, aborted: !!signal?.aborted || err?.name === "AbortError" }

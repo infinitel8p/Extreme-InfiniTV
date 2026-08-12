@@ -102,3 +102,39 @@ describe("getDownloadDir", () => {
     expect(getDownloadDir()).toBe("/Users/ludo/Downloads")
   })
 })
+
+describe("dev mode", () => {
+  it("defaults to false", async () => {
+    const { getDevModeEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getDevModeEnabled()).toBe(false)
+  })
+
+  it("set true then get returns true", async () => {
+    const { getDevModeEnabled, setDevModeEnabled } = await import("@/scripts/lib/app-settings.js")
+    setDevModeEnabled(true)
+    expect(getDevModeEnabled()).toBe(true)
+  })
+
+  it("set false clears it", async () => {
+    const { getDevModeEnabled, setDevModeEnabled } = await import("@/scripts/lib/app-settings.js")
+    setDevModeEnabled(true)
+    setDevModeEnabled(false)
+    expect(getDevModeEnabled()).toBe(false)
+  })
+
+  it("fires DEV_MODE_EVENT on document with the correct detail.value in both directions", async () => {
+    const { DEV_MODE_EVENT, setDevModeEnabled } = await import("@/scripts/lib/app-settings.js")
+    const received: boolean[] = []
+    const listener = (event: Event) => {
+      received.push((event as CustomEvent).detail.value)
+    }
+    document.addEventListener(DEV_MODE_EVENT, listener)
+    try {
+      setDevModeEnabled(true)
+      setDevModeEnabled(false)
+    } finally {
+      document.removeEventListener(DEV_MODE_EVENT, listener)
+    }
+    expect(received).toEqual([true, false])
+  })
+})

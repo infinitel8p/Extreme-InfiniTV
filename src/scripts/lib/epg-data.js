@@ -771,7 +771,7 @@ async function fetchEpgConditional(url, meta) {
   const headers = {}
   if (meta?.lastModified) headers["If-Modified-Since"] = meta.lastModified
   if (meta?.etag) headers["If-None-Match"] = meta.etag
-  const init = { forceTauri: true }
+  const init = { forceTauri: true, logKind: "epg" }
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
     init.signal = AbortSignal.timeout(90_000)
   }
@@ -1438,7 +1438,7 @@ export async function testEpgSource(url, opts = {}) {
     return { ok: false, error: "Empty URL" }
   }
   try {
-    const init = { forceTauri: true }
+    const init = { forceTauri: true, logKind: "epg" }
     if (opts.signal) init.signal = opts.signal
     let response
     try {

@@ -88,6 +88,7 @@ async function fetchAndClassify(url: string): Promise<"mkv" | "mp4" | "avi" | "t
       method: "GET",
       headers: { Range: `bytes=0-${PROBE_BYTE_COUNT - 1}` },
       signal: controller?.signal,
+      logKind: "media",
     })
     if (!response.ok) {
       log.log("[xt:vod-probe] non-ok response", response.status, redactUrl(url))

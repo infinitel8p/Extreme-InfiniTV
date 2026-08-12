@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { redactUrl, redactArg } from "../src/scripts/lib/log"
+import { redactUrl, redactArg, redactDeep } from "../src/scripts/lib/log"
 
 describe("redactUrl", () => {
   it("strips Xtream username and password from query strings", () => {
@@ -143,6 +143,24 @@ describe("redactUrl", () => {
     expect(out).not.toContain("hunter2")
     expect(out).toContain("movie:42")
   })
+
+  it("redacts an Authorization key in JSON-shaped text", () => {
+    const out = redactUrl('{"Authorization":"Basic dXNlcjpwYXNz"}')
+    expect(out).toBe('{"Authorization":"***"}')
+    expect(out).not.toContain("dXNlcjpwYXNz")
+  })
+
+  it("redacts a lowercase authorization query param", () => {
+    const out = redactUrl("https://x.test/get.php?authorization=Basic+dXNlcjpwYXNz")
+    expect(out).toBe("https://x.test/get.php?authorization=***")
+    expect(out).not.toContain("dXNlcjpwYXNz")
+  })
+
+  it("still redacts auth/token/password params unaffected by the authorization addition", () => {
+    expect(redactUrl("https://x.test/?auth=Bearer+xyz")).toBe("https://x.test/?auth=***")
+    expect(redactUrl("https://x.test/?token=abcdef")).toBe("https://x.test/?token=***")
+    expect(redactUrl("https://x.test/?password=hunter2")).toBe("https://x.test/?password=***")
+  })
 })
 
 describe("redactArg", () => {
@@ -184,5 +202,40 @@ describe("redactArg", () => {
     const out = redactArg(circular)
     expect(typeof out).toBe("string")
     expect(out).not.toContain("hunter2")
+  })
+})
+
+describe("redactDeep", () => {
+  it("masks a credentialed URL nested inside an object", () => {
+    const out = redactDeep({ diagnostics: { url: "https://x.test/?password=hunter2" } })
+    expect(out).toEqual({ diagnostics: { url: "https://x.test/?password=***" } })
+  })
+
+  it("masks a credentialed URL inside an array", () => {
+    const out = redactDeep(["https://x.test/?password=hunter2", "https://x.test/safe"])
+    expect(out).toEqual(["https://x.test/?password=***", "https://x.test/safe"])
+  })
+
+  it("masks a password-style JSON value embedded as raw text", () => {
+    const out = redactDeep({ requestBody: '{"password":"hunter2"}' })
+    expect(out).toEqual({ requestBody: '{"password":"***"}' })
+  })
+
+  it("leaves plain strings, numbers, and null untouched", () => {
+    expect(redactDeep("hello")).toBe("hello")
+    expect(redactDeep(42)).toBe(42)
+    expect(redactDeep(null)).toBe(null)
+    expect(redactDeep(undefined)).toBe(undefined)
+  })
+
+  it("handles a circular object without throwing", () => {
+    const circular: Record<string, unknown> = { password: "hunter2" }
+    circular.self = circular
+    expect(() => redactDeep(circular)).not.toThrow()
+  })
+
+  it("masks an Authorization-style JSON value embedded as raw text inside a nested object", () => {
+    const out = redactDeep({ requestBody: '{"Authorization":"Basic dXNlcjpwYXNz"}' })
+    expect(out).toEqual({ requestBody: '{"Authorization":"***"}' })
   })
 })

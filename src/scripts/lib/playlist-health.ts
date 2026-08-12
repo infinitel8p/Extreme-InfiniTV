@@ -9,6 +9,7 @@ import {
 } from "@/scripts/lib/account-info.js"
 import { getProgrammesSync } from "@/scripts/lib/epg-data.js"
 import { getProviderStats } from "@/scripts/lib/provider-fetch.js"
+import { getNetworkLog, type NetLogEntry } from "@/scripts/lib/net-log"
 
 export type AccountStatus = "active" | "expired" | "inactive" | "unknown"
 
@@ -99,6 +100,54 @@ function readEpg(playlistId: string): PlaylistHealth["epg"] {
 }
 
 /**
+ * Reduces persisted net-log entries into the same shape as getProviderStats().
+ * Used when the module-level counters are empty (fresh page load after an
+ * MPA navigation) but the session's network log still has requests to show.
+ */
+export function deriveProviderStatsFromNetLog(entries: NetLogEntry[]): PlaylistHealth["provider"] {
+  let lastSuccessAt = 0
+  let lastFailureAt = 0
+  let lastError = ""
+  let successes = 0
+  let failures = 0
+  for (const entry of entries) {
+    if (entry.outcome === "aborted") continue
+    const endedAt = entry.startedAt + entry.durationMs
+    if (entry.outcome === "error") {
+      failures++
+      if (endedAt >= lastFailureAt) {
+        lastFailureAt = endedAt
+        lastError = entry.error || lastError
+      }
+    } else {
+      successes++
+      if (endedAt > lastSuccessAt) lastSuccessAt = endedAt
+    }
+  }
+  return {
+    lastSuccessAt: lastSuccessAt || null,
+    lastFailureAt: lastFailureAt || null,
+    lastError,
+    successes,
+    failures,
+  }
+}
+
+function summarizeProvider(): PlaylistHealth["provider"] {
+  const stats = getProviderStats()
+  if (stats.successes || stats.failures) {
+    return {
+      lastSuccessAt: stats.lastSuccessAt || null,
+      lastFailureAt: stats.lastFailureAt || null,
+      lastError: stats.lastError,
+      successes: stats.successes,
+      failures: stats.failures,
+    }
+  }
+  return deriveProviderStatsFromNetLog(getNetworkLog().entries)
+}
+
+/**
  * Synchronous snapshot of the current playlist health state. Pulls
  * exclusively from in-memory caches and localStorage - safe to call
  * during render. Returns "unknown" / null fields when data hasn't been
@@ -110,7 +159,6 @@ export function getPlaylistHealth(playlistId: string): PlaylistHealth {
   const live = readCatalogKind(playlistId, "live")
   const liveOrM3U = live.fetchedAt ? live : readCatalogKind(playlistId, "m3u")
 
-  const stats = getProviderStats()
   return {
     playlistId,
     fetchedAt: Date.now(),
@@ -121,13 +169,7 @@ export function getPlaylistHealth(playlistId: string): PlaylistHealth {
       series: readCatalogKind(playlistId, "series"),
     },
     epg: readEpg(playlistId),
-    provider: {
-      lastSuccessAt: stats.lastSuccessAt || null,
-      lastFailureAt: stats.lastFailureAt || null,
-      lastError: stats.lastError,
-      successes: stats.successes,
-      failures: stats.failures,
-    },
+    provider: summarizeProvider(),
   }
 }
 

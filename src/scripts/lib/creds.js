@@ -844,7 +844,7 @@ export async function testXtreamConnection({ serverUrl, username, password }) {
       "get_account_info"
     )
     const { providerFetch } = await import("./provider-fetch.js")
-    const response = await providerFetch(url)
+    const response = await providerFetch(url, { logKind: "api" })
     if (!response.ok) {
       const classified = classifyError({ response })
       return {
@@ -905,7 +905,7 @@ export async function testM3UUrl(url) {
   const startedAt = Date.now()
   try {
     const { providerFetch } = await import("./provider-fetch.js")
-    const response = await providerFetch(url)
+    const response = await providerFetch(url, { logKind: "api" })
     if (!response.ok) {
       const classified = classifyError({ response })
       return {

@@ -215,7 +215,7 @@ export async function ensureLive(creds, playlistId, opts = {}) {
         text = await readLocalM3UContent(creds.host)
         try { onBytes(text.length, text.length) } catch {}
       } else {
-        const r = await providerFetch(creds.host)
+        const r = await providerFetch(creds.host, { logKind: "playlist" })
         if (!r.ok) throw new HttpRetryError(r.status, `M3U ${r.status}`)
         text = await streamingText(r, onBytes)
       }

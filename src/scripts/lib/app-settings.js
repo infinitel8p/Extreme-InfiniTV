@@ -33,6 +33,7 @@ const KEY_MONO_AUDIO = "xt_mono_audio"
 const KEY_CAPTIONS_AUTO = "xt_captions_auto"
 const KEY_TMDB_KEY = "xt_tmdb_key"
 const KEY_TMDB_ENABLED = "xt_tmdb_enabled"
+const KEY_DEV_MODE = "xt_dev_mode"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -868,6 +869,20 @@ export function setMonoAudioEnabled(enabled) {
   writeLS(KEY_MONO_AUDIO, enabled ? "1" : "")
   document.dispatchEvent(
     new CustomEvent(MONO_AUDIO_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const DEV_MODE_EVENT = "xt:dev-mode-changed"
+
+/** Dev mode: default off. */
+export function getDevModeEnabled() {
+  return readLS(KEY_DEV_MODE, "") === "1"
+}
+
+export function setDevModeEnabled(enabled) {
+  writeLS(KEY_DEV_MODE, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(DEV_MODE_EVENT, { detail: { value: !!enabled } })
   )
 }
 
