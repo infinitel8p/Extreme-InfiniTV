@@ -17,6 +17,7 @@ commands.allow = [
     "sandbox_runtime",
     "install_appx_package",
     "is_store_build",
+    "resolve_explorer_path",
     "set_close_to_tray",
     "updater_check_from",
     "updater_install",

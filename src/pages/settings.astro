@@ -2440,6 +2440,10 @@ const navStructure: NavSection[] = [
         try {
           const { appLogDir } = await import("@tauri-apps/api/path")
           dir = await appLogDir()
+          try {
+            const { invoke } = await import("@tauri-apps/api/core")
+            dir = await invoke("resolve_explorer_path", { path: dir })
+          } catch {}
           const { openPath } = await import("@tauri-apps/plugin-opener")
           await openPath(dir)
         } catch (err) {
@@ -2465,8 +2469,13 @@ const navStructure: NavSection[] = [
       openAppDataBtn.addEventListener("click", async () => {
         try {
           const { appDataDir } = await import("@tauri-apps/api/path")
+          let dir = await appDataDir()
+          try {
+            const { invoke } = await import("@tauri-apps/api/core")
+            dir = await invoke("resolve_explorer_path", { path: dir })
+          } catch {}
           const { openPath } = await import("@tauri-apps/plugin-opener")
-          await openPath(await appDataDir())
+          await openPath(dir)
         } catch (err) {
           log.warn("[settings] open app data folder failed:", err)
           toastError(

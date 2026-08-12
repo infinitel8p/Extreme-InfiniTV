@@ -22,6 +22,9 @@ mod safe_fetch;
 mod sniffer;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod store_paths;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod tray;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -189,6 +192,7 @@ pub fn run() {
             sniffer::cancel_sniff,
             sniffer::sniff_report,
             sniffer::sniff_report_drm,
+            store_paths::resolve_explorer_path,
             tray::set_close_to_tray,
             updater::updater_check_from,
             updater::updater_install,
