@@ -1538,8 +1538,8 @@ export function getAllGlobalFavorites() {
 // View sort preferences (recently-added etc.)
 // ---------------------------------------------------------------------------
 const VALID_SORTS_BY_KIND = {
-  vod: new Set(["default", "added", "az"]),
-  series: new Set(["default", "added", "az"]),
+  vod: new Set(["default", "added", "rating", "az"]),
+  series: new Set(["default", "added", "rating", "az"]),
   live: new Set(["default", "number", "az", "za", "cataz"]),
 }
 

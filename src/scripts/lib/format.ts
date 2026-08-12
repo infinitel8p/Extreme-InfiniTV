@@ -72,6 +72,13 @@ export function fmtImdbRating(raw: unknown): string {
   return value > 10 ? "10.0" : value.toFixed(1)
 }
 
+export function ratingSortValue(raw: unknown): number {
+  if (raw == null || raw === "") return 0
+  const value = parseFloat(String(raw).trim())
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return value
+}
+
 const WIN_RESERVED_NAMES = new Set([
   "CON", "PRN", "AUX", "NUL",
   "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",

@@ -27,7 +27,7 @@ import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { mountSurprisePicker } from "@/scripts/lib/surprise-picker.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
-import { fmtImdbRating } from "@/scripts/lib/format.js"
+import { fmtImdbRating, ratingSortValue } from "@/scripts/lib/format.js"
 import {
   buildEntryCard,
   buildWatchedBadge,
@@ -729,6 +729,16 @@ function applyFilter() {
     out = out
       .slice()
       .sort((a, b) => Number(b.added || 0) - Number(a.added || 0))
+  } else if (mode === "rating") {
+    out = out
+      .slice()
+      .sort((firstEntry, secondEntry) => {
+        const ratingDelta = ratingSortValue(secondEntry.rating) - ratingSortValue(firstEntry.rating)
+        if (ratingDelta !== 0) return ratingDelta
+        return (firstEntry.name || "").localeCompare(secondEntry.name || "", "en", {
+          sensitivity: "base",
+        })
+      })
   } else if (mode === "az") {
     out = out
       .slice()
