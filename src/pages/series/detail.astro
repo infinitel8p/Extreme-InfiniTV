@@ -8,6 +8,8 @@ import {
   IconExternalLink,
   IconAspectRatio,
   IconClockEdit,
+  IconChartBar,
+  IconActivityHeartbeat,
 } from "@tabler/icons-svelte"
 ---
 
@@ -65,7 +67,7 @@ import {
           </div>
           <div
             id="series-detail-player-wrap"
-            class="hidden aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line
+            class="hidden relative aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line
                    max-h-[60dvh] max-w-[calc(60dvh*16/9)]">
             <video
               id="series-player"
@@ -111,6 +113,27 @@ import {
             class="btn">
             <IconAspectRatio aria-hidden="true" stroke={2} class="btn-icon" />
             <span data-i18n="stream.scale.button">Display mode</span>
+          </button>
+          <button
+            id="series-detail-stats"
+            type="button"
+            hidden
+            aria-pressed="false"
+            aria-label="Playback stats"
+            data-i18n-attr="aria-label:player.stats.title"
+            class="btn">
+            <IconChartBar aria-hidden="true" stroke={2} class="btn-icon" />
+            <span data-i18n="player.stats.title">Playback stats</span>
+          </button>
+          <button
+            id="series-detail-health"
+            type="button"
+            hidden
+            aria-label="Stream health log"
+            data-i18n-attr="aria-label:stream.health.menu"
+            class="btn">
+            <IconActivityHeartbeat aria-hidden="true" stroke={2} class="btn-icon" />
+            <span data-i18n="stream.health.menu">Stream health log</span>
           </button>
           <button
             id="series-subtitle-delay-btn"

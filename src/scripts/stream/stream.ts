@@ -136,6 +136,9 @@ import {
   minDistanceFromLiveMs,
   type StreamProfile,
 } from "@/scripts/lib/timeshift-math.ts"
+import { decodedFrameCount, droppedFrameCount } from "@/scripts/lib/player-telemetry.js"
+import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
+import { isAutomaticRetuneReason } from "@/scripts/lib/stream-health.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 // One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
@@ -1563,8 +1566,23 @@ async function loadChannels() {
 // Player (lazy)
 // ----------------------------
 let vjs = null
+let embeddedPlayerBackend = null
 let playSeq = 0
 let lastPlayContext = null
+let playerInsights = null
+
+function getPlayerInsights() {
+  if (!playerInsights) {
+    playerInsights = attachPlayerInsights({
+      getHandle: () => vjs,
+      getContainer: () => getPlayerWrap(),
+      backendLabel: () => embeddedPlayerBackend || getPlayerBackend(),
+      sessionKind: "live",
+      isSuppressed: () => getPlayerWrap()?.dataset.radioMode === "on",
+    })
+  }
+  return playerInsights
+}
 // ffmpeg audio-transcode proxy state - desktop only, cached at boot.
 let audioProxyAvailable = false
 // Streams queued to remount through the proxy once (watchdog / failure-panel fix), consumed on the next play().
@@ -1852,6 +1870,7 @@ function giveUpOnPlayback(ctx) {
     deviceHevc: deviceSupportsHevc(),
   })
   log.info("[xt:livetv] start-failure verdict", { kind: failure.kind, codec: failure.codec, streamId: ctx.streamId })
+  getPlayerInsights().record("giveup", failure.kind)
   // Bypasses getAndroidNativePlayerEnabled() on purpose: one-shot recovery, not the opt-in setting.
   if (!ctx.started && !ctx.nativeFallbackTried && androidNativePlayerAvailable) {
     ctx.nativeFallbackTried = true
@@ -1960,6 +1979,7 @@ async function mountEmbeddedPlayer(backend, opts) {
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
+  embeddedPlayerBackend = mounted.backend
   embeddedPlayerLiveUi = wantLiveUi
 
   if (mounted.backend === "videojs") {
@@ -2076,6 +2096,7 @@ async function mountEmbeddedPlayer(backend, opts) {
       message: err?.message,
       streamId: ctx.streamId,
     })
+    getPlayerInsights().record("error", `${err?.code ?? "?"} ${err?.message ?? ""}`.trim())
     // Stops a timer armed by an earlier "playing" from firing against the mount we're replacing.
     clearDeadVideoWatchdog()
     clearDeadAudioWatchdog()
@@ -2525,6 +2546,21 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
   })
   items.push(monoItem)
 
+  const insights = getPlayerInsights()
+  const statsItem = makeMoreMenuItem(t("player.stats.title"), insights.isOverlayVisible())
+  statsItem.addEventListener("click", () => {
+    closeCurrentMoreMenu()
+    insights.toggleOverlay()
+  })
+  items.push(statsItem)
+
+  const healthItem = makeMoreMenuItem(t("stream.health.menu"))
+  healthItem.addEventListener("click", () => {
+    closeCurrentMoreMenu()
+    insights.openHealthDialog()
+  })
+  items.push(healthItem)
+
   return items
 }
 
@@ -2865,27 +2901,6 @@ function clearDeadVideoWatchdog() {
   }
 }
 
-function decodedFrameCount(videoEl) {
-  try {
-    const quality = videoEl.getVideoPlaybackQuality?.()
-    if (quality && typeof quality.totalVideoFrames === "number") {
-      return quality.totalVideoFrames
-    }
-  } catch {}
-  const legacy = videoEl.webkitDecodedFrameCount
-  return typeof legacy === "number" ? legacy : null
-}
-
-function droppedFrameCount(videoEl) {
-  try {
-    const quality = videoEl.getVideoPlaybackQuality?.()
-    if (quality && typeof quality.droppedVideoFrames === "number") {
-      return quality.droppedVideoFrames
-    }
-  } catch {}
-  return null
-}
-
 function armDeadVideoWatchdog() {
   clearDeadVideoWatchdog()
   const ctx = lastPlayContext
@@ -3168,6 +3183,8 @@ function applyDiagnosticToFailurePanel(seq, verdict, reason) {
 function showPlaybackFailurePanel(ctx, opts = {}) {
   if (failurePanelSeq === ctx.seq) return
   hidePlaybackFailurePanel()
+  // No automatic retune follows this panel - close the session now, not on the next tune.
+  getPlayerInsights().endSession("giveup")
   log.warn("[xt:livetv] playback failure panel shown", {
     streamId: ctx.streamId,
     decodeFailure: !!opts.decodeFailure,
@@ -3733,6 +3750,12 @@ async function play(streamId, name, reason = "user") {
     audioProxied,
     audioProxySessionId,
   }
+  // An "auto:*" reason is a recovery re-invocation of the same tune, not a new one - keep it in the same session.
+  if (isAutomaticRetuneReason(reason)) {
+    getPlayerInsights().record("fallback", reason)
+  } else {
+    getPlayerInsights().startSession({ label: name, seq })
+  }
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
@@ -4033,6 +4056,7 @@ async function playCatchup(channel, opts) {
     mime,
     isLive: false,
   }
+  getPlayerInsights().startSession({ label: channel.name, seq })
   hideBufferingChip()
   clearStallSentinel()
   suppressPauseTrackingUntilMs = Date.now() + 500

@@ -2561,6 +2561,66 @@ html[data-perf-mode="on"] [data-hero-blur] {
     to   { transform: translateY(0);    opacity: 1; }
 }
 
+.stats-overlay {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    z-index: 36;
+    display: grid;
+    grid-template-columns: auto auto;
+    column-gap: 0.6rem;
+    row-gap: 0.2rem;
+    max-width: min(60%, 16rem);
+    padding: 0.55rem 0.75rem;
+    border-radius: 0.75rem;
+    /* Video-first surface: dim with black, not --color-bg, so light theme stays readable over bright content. */
+    background: rgba(0, 0, 0, 0.68);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    font-size: 0.7rem;
+    line-height: 1.4;
+    backdrop-filter: blur(12px);
+    pointer-events: none;
+    animation: stats-overlay-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.stats-overlay__label {
+    color: rgba(255, 255, 255, 0.78);
+}
+.stats-overlay__value {
+    color: rgba(255, 255, 255, 0.92);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.stats-overlay[hidden] {
+    display: none;
+}
+.stats-overlay[data-fs="on"] {
+    font-size: 0.8rem;
+    top: 1.25rem;
+    right: 1.25rem;
+}
+.player-wrap[data-radio-mode="on"] .stats-overlay {
+    display: none;
+}
+@media (max-width: 32em) {
+    .stats-overlay {
+        max-width: min(72%, 13rem);
+        font-size: 0.6875rem;
+        padding: 0.4rem 0.55rem;
+    }
+}
+[data-perf-mode="on"] .stats-overlay {
+    animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .stats-overlay {
+        animation: none;
+    }
+}
+@keyframes stats-overlay-in {
+    from { transform: translateY(-8px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+
 /* ────────────────────────────── */
 /* Full-programme timeshift seekbar (live-edge marker) */
 /* ────────────────────────────── */

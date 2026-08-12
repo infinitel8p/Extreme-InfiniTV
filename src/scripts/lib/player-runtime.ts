@@ -29,6 +29,13 @@ import {
 } from "@/scripts/lib/app-settings.js"
 import { bindMonoAudio, noteMonoSourceChange } from "@/scripts/lib/audio-effects.js"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
+import {
+  createPlaybackTelemetry,
+  type EngineEvent,
+  type EngineStats,
+  type PlaybackTelemetry,
+  type ResolvedEngine,
+} from "@/scripts/lib/player-telemetry.js"
 
 export type PlayerBackend = "videojs" | "artplayer" | "shaka" | "mpv" | "vlc"
 export type ExternalPlayerKind = "mpv" | "vlc"
@@ -73,6 +80,10 @@ export interface VjsLikeHandle {
   getMediaElement?(): HTMLVideoElement | null
   /** Shifts subtitle timing by delta seconds; null if no subtitle track showing. */
   subtitleDelay?(deltaSeconds: number): number | null
+  /** Live engine snapshot (bitrate, level, buffered) for a stats overlay; null for native <video src> playback. */
+  engineStats?(): EngineStats | null
+  /** Subscribes to engine lifecycle events (variant switches, errors, recoveries) for a stream-health log. */
+  onEngineEvent?(listener: (event: EngineEvent) => void): () => void
 }
 
 export interface ExternalLaunchOptions {
@@ -711,6 +722,7 @@ async function probeContainer(src: string): Promise<StreamKind> {
         method: "GET",
         headers: { Range: "bytes=0-0" },
         signal: controller?.signal,
+        logKind: "media",
       })
       const contentType = (response.headers.get("content-type") || "").toLowerCase()
       if (contentType.includes("dash+xml") || /\.mpd(\?|$)/i.test(response.url || "")) {
@@ -791,6 +803,7 @@ async function tsSourceIsActuallyHls(
         method: "GET",
         headers: { Range: "bytes=0-511" },
         signal: controller?.signal,
+        logKind: "media",
       })
       const contentType = (response.headers.get("content-type") || "").toLowerCase()
       if (contentType.includes("mpegurl")) {
@@ -828,6 +841,7 @@ async function resolveTsRecovery(
 
 interface MpegtsHandle {
   destroy: () => void
+  getPlayer: () => any
 }
 
 // Custom mpegts.js loader that streams via tauri-plugin-http instead of the
@@ -1164,6 +1178,7 @@ function attachHlsToVideo(
   codecState: PlaybackCodecInfo,
   active: ActiveHlsRef,
   onGiveUp: () => void,
+  telemetry?: PlaybackTelemetry,
   forceNative = false,
 ): void {
   const existing = active.get()
@@ -1227,6 +1242,24 @@ function attachHlsToVideo(
     const audioCodec = data?.audio?.levelCodec || data?.audio?.codec
     if (audioCodec) codecState.audioCodec = String(audioCodec)
   })
+  if (telemetry) {
+    hls.on("hlsLevelSwitched", (_event: unknown, data: any) => {
+      if (active.get() !== hls) return
+      try {
+        const levelIndex = typeof data?.level === "number" ? data.level : null
+        const level = levelIndex !== null ? hls.levels?.[levelIndex] : null
+        const quality = level?.height ? `${level.height}p` : level?.bitrate ? `${Math.round(level.bitrate / 1000)}kbps` : ""
+        telemetry.emit("variant", `level ${levelIndex ?? "?"}${quality ? ` (${quality})` : ""}`)
+      } catch {}
+    })
+    hls.on("hlsFragLoaded", (_event: unknown, data: any) => {
+      if (active.get() !== hls) return
+      try {
+        const duration = data?.frag?.duration
+        if (Number.isFinite(duration)) telemetry.noteSegmentDuration(duration)
+      } catch {}
+    })
+  }
   hls.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
     if (active.get() !== hls) return
     if (/codec/i.test(String(data?.details || ""))) {
@@ -1236,23 +1269,29 @@ function attachHlsToVideo(
         if (fromMime) codecState.videoCodec = fromMime
       }
     }
-    if (!data?.fatal) return
+    if (!data?.fatal) {
+      telemetry?.emit("engine-error", String(data?.details || "hls non-fatal error"))
+      return
+    }
     if (!codecState.errorDetail && data?.details) {
       codecState.errorDetail = String(data.details)
     }
     const ErrorTypes = Hls.ErrorTypes
     if (data.type === ErrorTypes.NETWORK_ERROR && netRecover < 2) {
       netRecover++
+      telemetry?.emit("recover", `network: ${data?.details || "error"}`)
       try { hls.startLoad() } catch {}
       return
     }
     if (data.type === ErrorTypes.MEDIA_ERROR && mediaRecover < 2) {
       mediaRecover++
+      telemetry?.emit("recover", `media: ${data?.details || "error"}`)
       try { hls.recoverMediaError() } catch {}
       return
     }
     try { hls.destroy() } catch {}
     if (active.get() === hls) active.set(null)
+    telemetry?.emit("fatal", String(data?.details || "hls fatal error"))
     onGiveUp()
   })
   hls.loadSource(cleanUrl)
@@ -1304,6 +1343,15 @@ function configureShakaDrmAndAuth(
   })
 }
 
+function emitShakaVariant(player: any, isCurrent: () => boolean, telemetry: PlaybackTelemetry): void {
+  if (!isCurrent()) return
+  try {
+    const track = player.getVariantTracks?.().find((variant: any) => variant.active)
+    const quality = track?.height ? `${track.height}p` : track?.bandwidth ? `${Math.round(track.bandwidth / 1000)}kbps` : ""
+    telemetry.emit("variant", quality ? `variant ${quality}` : "variant changed")
+  } catch {}
+}
+
 async function attachShaka(
   video: HTMLVideoElement,
   url: string,
@@ -1312,6 +1360,7 @@ async function attachShaka(
   active: ActiveHlsRef,
   onGiveUp: (detail: string) => void,
   isCurrent: () => boolean,
+  telemetry?: PlaybackTelemetry,
 ): Promise<void> {
   const existing = active.get()
   if (existing) {
@@ -1348,9 +1397,14 @@ async function attachShaka(
       const codecMatch = /codecs=\\?"?([^"\\,]+)/i.exec(detail)
       if (codecMatch) codecState.videoCodec = codecMatch[1]
     }
+    telemetry?.emit("engine-error", detail)
     onGiveUp(detail)
   }
   player.addEventListener("error", (event: any) => fail(event?.detail))
+  if (telemetry) {
+    player.addEventListener("adaptation", () => emitShakaVariant(player, isCurrent, telemetry))
+    player.addEventListener("variantchanged", () => emitShakaVariant(player, isCurrent, telemetry))
+  }
   try {
     await player.attach(video)
     if (!isCurrent()) {
@@ -1429,6 +1483,7 @@ async function attachMpegts(
   durationSeconds?: number,
   timelineOffsetSeconds?: number,
   isStillCurrent?: () => boolean,
+  telemetry?: PlaybackTelemetry,
 ): Promise<MpegtsHandle | null> {
   const mpegtsMod = await import("mpegts.js")
   const mpegts = (mpegtsMod as any).default || mpegtsMod
@@ -1566,6 +1621,17 @@ async function attachMpegts(
       }
       armDurationOverride()
     })
+    if (telemetry) {
+      player.on(mpegts.Events.STATISTICS_INFO, (stats: any) => {
+        if (disposed) return
+        try {
+          const speedKBps = stats?.speed
+          if (typeof speedKBps === "number" && Number.isFinite(speedKBps)) {
+            telemetry.noteMeasuredBitrate(speedKBps * 1024 * 8)
+          }
+        } catch {}
+      })
+    }
     player.on(
       mpegts.Events.ERROR,
       (errorType: string, errorDetail: string, errorInfo: any) => {
@@ -1582,6 +1648,7 @@ async function attachMpegts(
             "[xt:player] mpegts network error - retrying via Tauri HTTP loader:",
             errorDetail
           )
+          telemetry?.emit("engine-switch", "mpegts default loader -> mpegts tauri-http loader")
           teardown()
           start(true)
           return
@@ -1590,6 +1657,7 @@ async function attachMpegts(
           ? `${errorDetail}: ${errorInfo.msg}`
           : String(errorDetail || errorType)
         log.error("[xt:player] mpegts fatal error:", errorType, detail)
+        telemetry?.emit("engine-error", detail)
         teardown()
         onFatalError?.(detail)
       }
@@ -1613,6 +1681,9 @@ async function attachMpegts(
     destroy() {
       disposed = true
       teardown()
+    },
+    getPlayer() {
+      return player
     },
   }
 }
@@ -1693,6 +1764,17 @@ async function mountVideoJs(
   // Whether the current mount is on a path (ts/native) that reads pendingAudioSource at all.
   let pendingUsesCallerSuppliedTracks = false
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
+  function resolveEngine(): ResolvedEngine | null {
+    if (activeHls) return { kind: "hls", instance: activeHls }
+    if (activeShaka) return { kind: "shaka", instance: (activeShaka as any).player }
+    const mpegtsPlayer = activeMpegts?.getPlayer()
+    if (mpegtsPlayer) return { kind: "mpegts", instance: mpegtsPlayer }
+    return null
+  }
+  const telemetry = createPlaybackTelemetry({
+    resolveEngine,
+    getMediaElement: () => getUnderlyingVideo() ?? videoEl,
+  })
   const subtitleManager = createSubtitleManager({
     registrar: createVideoJsTrackRegistrar(player),
     getCurrentTime: () => player.currentTime?.() || 0,
@@ -1759,6 +1841,7 @@ async function mountVideoJs(
         try { player.error?.({ code: 3, message: detail }) } catch {}
       },
       () => pendingSrc === src,
+      telemetry,
     )
     if (pendingSrc === src) {
       audioMenu.setSource(activeShaka ? createShakaAudioSource((activeShaka as any).player) : null)
@@ -1814,6 +1897,7 @@ async function mountVideoJs(
             })
           } catch {}
         },
+        telemetry,
       )
       audioMenu.setSource(activeHls ? createHlsAudioSource(activeHls as any) : null)
       try { player.hasStarted?.(true) } catch {}
@@ -1838,6 +1922,7 @@ async function mountVideoJs(
         "[xt:player] .ts source served an HLS playlist - falling back to hls.js:",
         redactUrl(src)
       )
+      telemetry.emit("engine-switch", "mpegts -> hls")
       loadHls(src)
       return
     }
@@ -1876,6 +1961,7 @@ async function mountVideoJs(
       pendingDurationSeconds,
       pendingTimelineOffsetSeconds,
       () => pendingSrc === src,
+      telemetry,
     )
     pendingMpegtsAttach = attachPromise
     const handle = await attachPromise
@@ -1887,6 +1973,7 @@ async function mountVideoJs(
       return
     }
     if (!handle) {
+      telemetry.emit("engine-switch", "mpegts -> hls")
       loadHls(src)
       return
     }
@@ -1996,6 +2083,7 @@ async function mountVideoJs(
       subtitleManager.detach()
       audioMenu.dispose()
       disposeFullscreenSync()
+      telemetry.dispose()
       try { player.dispose() } catch {}
     },
     duration() {
@@ -2037,6 +2125,12 @@ async function mountVideoJs(
     subtitleDelay(deltaSeconds) {
       return subtitleManager.nudgeDelay(deltaSeconds)
     },
+    engineStats() {
+      return telemetry.snapshot()
+    },
+    onEngineEvent(listener) {
+      return telemetry.subscribe(listener)
+    },
   }
   return wrapped
 }
@@ -2076,6 +2170,17 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   // Whether the current mount is on a path (ts/native) that reads pendingAudioSource at all.
   let pendingUsesCallerSuppliedTracks = false
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
+  function resolveEngine(): ResolvedEngine | null {
+    if (activeHls) return { kind: "hls", instance: activeHls }
+    if (activeShaka) return { kind: "shaka", instance: (activeShaka as any).player }
+    const mpegtsPlayer = activeMpegts?.getPlayer()
+    if (mpegtsPlayer) return { kind: "mpegts", instance: mpegtsPlayer }
+    return null
+  }
+  const telemetry = createPlaybackTelemetry({
+    resolveEngine,
+    getMediaElement: () => art.video ?? null,
+  })
 
   function destroyMpegts(): Promise<void> {
     if (activeMpegts) {
@@ -2117,6 +2222,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         try { video.dispatchEvent(new Event("error")) } catch {}
       },
       () => pendingSrc === url,
+      telemetry,
     ).then(() => {
       if (pendingSrc !== url) return
       audioControl.setSource(activeShaka ? createShakaAudioSource((activeShaka as any).player) : null)
@@ -2143,6 +2249,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         audioControl.setSource(pendingAudioSource)
         try { video.dispatchEvent(new Event("error")) } catch {}
       },
+      telemetry,
       pendingPreferNativeHls,
     )
     audioControl.setSource(activeHls ? createHlsAudioSource(activeHls as any) : null)
@@ -2224,6 +2331,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
           pendingDurationSeconds,
           pendingTimelineOffsetSeconds,
           () => pendingSrc === url,
+          telemetry,
         )
         pendingMpegtsAttach = attachPromise
         const handle = await attachPromise
@@ -2433,6 +2541,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       pendingUsesCallerSuppliedTracks = false
       destroyArtEngines()
       disposeFullscreenSync()
+      telemetry.dispose()
       try { art.destroy(false) } catch {}
     },
     duration() {
@@ -2470,6 +2579,12 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     },
     subtitleDelay(deltaSeconds) {
       return subtitleManager.nudgeDelay(deltaSeconds)
+    },
+    engineStats() {
+      return telemetry.snapshot()
+    },
+    onEngineEvent(listener) {
+      return telemetry.subscribe(listener)
     },
   }
   return handle
@@ -2538,6 +2653,16 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   let pendingDurationSeconds: number | undefined
   let pendingTimelineOffsetSeconds: number | undefined
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
+  // The raw-TS fallback keeps `player` attached-but-unloaded; mpegts, when active, is the real engine.
+  function resolveEngine(): ResolvedEngine | null {
+    const mpegtsPlayer = activeMpegts?.getPlayer()
+    if (mpegtsPlayer) return { kind: "mpegts", instance: mpegtsPlayer }
+    return { kind: "shaka", instance: player }
+  }
+  const telemetry = createPlaybackTelemetry({
+    resolveEngine,
+    getMediaElement: () => video,
+  })
   const subtitleManager = createSubtitleManager({
     registrar: createNativeTrackRegistrar(() => video),
     getCurrentTime: () => video.currentTime || 0,
@@ -2559,6 +2684,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   function fail(src: string, detail: string) {
     if (pendingSrc !== src) return
     codecState.errorDetail = detail
+    telemetry.emit("engine-error", detail)
     try { video.dispatchEvent(new Event("error")) } catch {}
   }
 
@@ -2566,6 +2692,8 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     if (!pendingSrc) return
     fail(pendingSrc, describeShakaError(event?.detail))
   })
+  player.addEventListener("adaptation", () => emitShakaVariant(player, () => !!pendingSrc, telemetry))
+  player.addEventListener("variantchanged", () => emitShakaVariant(player, () => !!pendingSrc, telemetry))
 
   // Every src() path loads async, so a caller's play() rejects before media attaches.
   let pendingPlayIntent = false
@@ -2617,6 +2745,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
         "[xt:player] .ts source served an HLS playlist - switching to shaka:",
         redactUrl(src)
       )
+      telemetry.emit("engine-switch", "mpegts -> shaka")
       void loadIntoShaka(src, pendingDrm, "application/x-mpegURL")
       return
     }
@@ -2648,6 +2777,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       pendingDurationSeconds,
       pendingTimelineOffsetSeconds,
       () => pendingSrc === src,
+      telemetry,
     )
     pendingMpegtsAttach = attachPromise
     const mpegtsHandle = await attachPromise
@@ -2758,6 +2888,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       pendingSrc = null
       destroyMpegts()
       subtitleManager.detach()
+      telemetry.dispose()
       const restoreOriginalVideoElement = () => {
         if (container.parentElement) container.parentElement.replaceChild(videoEl, container)
       }
@@ -2800,6 +2931,12 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     },
     subtitleDelay(deltaSeconds) {
       return subtitleManager.nudgeDelay(deltaSeconds)
+    },
+    engineStats() {
+      return telemetry.snapshot()
+    },
+    onEngineEvent(listener) {
+      return telemetry.subscribe(listener)
     },
   }
   return handle

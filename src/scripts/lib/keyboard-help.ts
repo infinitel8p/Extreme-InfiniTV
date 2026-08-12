@@ -50,6 +50,7 @@ function buildSections(): ShortcutSection[] {
         { keys: ["J"], desc: t("keyboardHelp.desc.seekBack") },
         { keys: ["L"], desc: t("keyboardHelp.desc.seekForward") },
         { keys: ["Z", "X"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.subtitleDelay") },
+        { keys: ["Ctrl", "Shift", "S"], desc: t("keyboardHelp.desc.statsOverlay") },
       ],
     },
   ]

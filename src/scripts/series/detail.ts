@@ -116,6 +116,7 @@ import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/vide
 import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
 import { buildSeriesStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { attachPosterContextMenu } from "@/scripts/lib/poster-menu.ts"
+import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -1288,10 +1289,25 @@ async function populateSimilarRail(requestId) {
 // Playback
 // ----------------------------
 let vjs = null
+let seriesInsights = null
+
+function getSeriesInsights() {
+  if (!seriesInsights) {
+    seriesInsights = attachPlayerInsights({
+      getHandle: () => vjs,
+      getContainer: () => playerWrap,
+      backendLabel: () => getPlayerBackend(),
+      sessionKind: "series",
+    })
+  }
+  return seriesInsights
+}
 let progressListenersBound = false
 let currentEpisode = null
 let pipBtnBound = false
 let scaleBtnBound = false
+let statsBtnBound = false
+let healthBtnBound = false
 let playRequestId = 0
 let audioSwitcher = null
 let audioDiscoveryController = null
@@ -1383,6 +1399,27 @@ function setupScaleButton() {
   scaleBtn.addEventListener("click", () => openDisplayModeDialog())
 }
 
+function setupStatsButton() {
+  const statsBtn = document.getElementById("series-detail-stats")
+  if (!statsBtn) return
+  statsBtn.removeAttribute("hidden")
+  if (statsBtnBound) return
+  statsBtnBound = true
+  statsBtn.addEventListener("click", () => {
+    const visible = getSeriesInsights().toggleOverlay()
+    statsBtn.setAttribute("aria-pressed", String(visible))
+  })
+}
+
+function setupHealthButton() {
+  const healthBtn = document.getElementById("series-detail-health")
+  if (!healthBtn) return
+  healthBtn.removeAttribute("hidden")
+  if (healthBtnBound) return
+  healthBtnBound = true
+  healthBtn.addEventListener("click", () => getSeriesInsights().openHealthDialog())
+}
+
 async function openDisplayModeDialog() {
   if (!series) return
   const currentMode = resolveVideoScaleMode()
@@ -1471,7 +1508,7 @@ function retirePreviousPlayback() {
   activeMkvSession = null
 }
 
-async function playEpisode(episode) {
+async function playEpisode(episode, options = {}) {
   if (!series || !episode) return
   const requestId = ++playRequestId
   let src = episode?._directUrl
@@ -1633,6 +1670,8 @@ async function playEpisode(episode) {
   if (requestId !== playRequestId) return
   setupPipButton(player)
   setupScaleButton()
+  setupStatsButton()
+  setupHealthButton()
   subtitleDelayController.setup()
   const mime = resolvedContainer === "mkv"
     ? "video/x-matroska"
@@ -1674,6 +1713,9 @@ async function playEpisode(episode) {
       toastPath,
       contentKey: buildRemuxContentKey("episode", episode.id),
     })
+    getSeriesInsights().record("giveup", failure?.kind ?? toastPath)
+    // No automatic retry follows this failure - close the session now, not on the next play.
+    getSeriesInsights().endSession("giveup")
     if (toastPath === "upstream-http") showSourceUnavailableToast()
     else if (toastPath === "hevc") showHevcUnsupportedToast()
     else if (toastPath === "audio") showAudioUnsupportedToast(failure.codec)
@@ -1711,7 +1753,7 @@ async function playEpisode(episode) {
           container: unsupportedContainer,
         })
         retirePreviousPlayback()
-        playEpisode(currentEpisode)
+        playEpisode(currentEpisode, { isAutomaticRetry: true })
         return
       }
       showContainerUnsupportedToast(unsupportedContainer || "mkv")
@@ -1803,6 +1845,14 @@ async function playEpisode(episode) {
 
   // This pipeline owns the mount from here on, so its tee session is the one the next episode must stop.
   activeMkvSession = prepared.mkvSession
+  // An automatic remux retry continues the same tune's session instead of opening a new one.
+  if (options.isAutomaticRetry) {
+    getSeriesInsights().record("fallback", "auto:mkv-remux-fallback")
+  } else {
+    getSeriesInsights().startSession({
+      label: [series?.name, episode.title].filter(Boolean).join(" - "),
+    })
+  }
   if (!remuxOwnsInitialMount) {
     player.src({
       src: prepared.playbackUrl,
@@ -1834,6 +1884,7 @@ async function playEpisode(episode) {
       )
     })
     player.on("ended", () => {
+      getSeriesInsights().endSession("ended")
       if (!activePlaylistId || !currentEpisode) return
       const dur = player.duration?.() || 0
       markCompleted(activePlaylistId, "episode", currentEpisode.id, {
