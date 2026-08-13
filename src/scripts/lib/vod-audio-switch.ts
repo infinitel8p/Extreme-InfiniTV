@@ -50,6 +50,11 @@ export interface VodAudioSwitcher {
   source: AudioTrackSource
   /** Replaces the selectable track list without touching the session already streaming; never remounts. */
   setTracks(tracks: VodAudioTrackOption[]): void
+  /** Only meaningful with mountRemuxImmediately: restarts the remux session after a stall was
+   * detected on the mandatory remux path (the direct-path stall watchdog just re-issues the src
+   * instead). No-ops when a restart is already in flight, retries are exhausted, or there is no
+   * active session to restart. */
+  recoverRemuxStall(): void
   dispose(): void
 }
 
@@ -160,6 +165,10 @@ export async function discoverVodAudioTracks(
 
 const SEEK_SUPPRESSION_FALLBACK_MS = 1500
 
+/** Mandatory-remux mid-play recovery: bounded restarts per playback session, forgiven after a healthy run. */
+const MAX_MIDPLAY_RESTART_ATTEMPTS = 2
+const MIDPLAY_RESTART_RESET_MS = 60000
+
 /** A remux-only mount (no discovered tracks) still needs a track to remux against. */
 const SYNTHETIC_DEFAULT_TRACK: VodAudioTrackOption = {
   id: "default",
@@ -184,6 +193,9 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
   let suppressNextSeek = false
   let suppressExpiryMs = 0
   const listeners = new Set<() => void>()
+  let midPlayRestartAttempts = 0
+  let midPlayRestartInFlight = false
+  let midPlayHealthyResetTimer: ReturnType<typeof setTimeout> | null = null
 
   function bumpGeneration(): number {
     generation += 1
@@ -268,6 +280,57 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     options.onRemuxUnrecoverable?.(detail)
   }
 
+  function clearMidPlayHealthyResetTimer(): void {
+    if (midPlayHealthyResetTimer === null) return
+    clearTimeout(midPlayHealthyResetTimer)
+    midPlayHealthyResetTimer = null
+  }
+
+  function armMidPlayHealthyResetTimer(): void {
+    clearMidPlayHealthyResetTimer()
+    midPlayHealthyResetTimer = setTimeout(() => {
+      midPlayRestartAttempts = 0
+      midPlayHealthyResetTimer = null
+    }, MIDPLAY_RESTART_RESET_MS)
+  }
+
+  function finalizeMidPlayUnrecoverable(detail: string): void {
+    log.warn(
+      "[xt:vod-audio-switch] mandatory remux session failed mid-play, no playable fallback:",
+      detail,
+    )
+    bumpGeneration()
+    activeSessionId = null
+    detachSeekInterceptor()
+    reportRemuxUnrecoverable(detail)
+  }
+
+  /** Shared by the vodaudio-error listener and the stall watchdog's recovery hook. */
+  function attemptMidPlayRestart(deadSessionId: string | null, detail: string): void {
+    if (disposed || midPlayRestartInFlight) return
+    if (midPlayRestartAttempts >= MAX_MIDPLAY_RESTART_ATTEMPTS) {
+      finalizeMidPlayUnrecoverable(detail)
+      return
+    }
+    midPlayRestartInFlight = true
+    midPlayRestartAttempts += 1
+    const attemptNumber = midPlayRestartAttempts
+    clearMidPlayHealthyResetTimer()
+    log.warn(
+      `[xt:vod-audio-switch] remux session died mid-play, restarting session (attempt ${attemptNumber}/${MAX_MIDPLAY_RESTART_ATTEMPTS})`,
+      detail,
+    )
+    const capturedTimeSeconds = currentPlayheadSeconds()
+    const restartTrackId = activeTrackId
+    bumpGeneration()
+    activeSessionId = null
+    detachSeekInterceptor()
+    if (deadSessionId) void stopVodAudioRemux(deadSessionId)
+    void switchToRemux(restartTrackId, capturedTimeSeconds).finally(() => {
+      midPlayRestartInFlight = false
+    })
+  }
+
   async function switchToRemux(trackId: string | null, startSeconds: number): Promise<void> {
     const track = trackId ? tracksById.get(trackId) : null
     if (!track) return
@@ -303,6 +366,7 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     activeSessionId = session.sessionId
     if (options.mountRemuxImmediately) {
       log.info("[xt:vod-mount] remux session registered", { sessionId: session.sessionId })
+      armMidPlayHealthyResetTimer()
     }
     armProgrammaticSeekSuppression()
     options.handle.src({
@@ -321,15 +385,8 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
   const unsubscribeError = onVodAudioError((payload) => {
     if (disposed || payload.sessionId !== activeSessionId) return
     if (options.mountRemuxImmediately) {
-      // Remounting the original would just fail with MEDIA_ERR_SRC_NOT_SUPPORTED here.
-      log.warn(
-        "[xt:vod-audio-switch] mandatory remux session failed mid-play, no playable fallback:",
-        payload.detail,
-      )
-      bumpGeneration()
-      activeSessionId = null
-      detachSeekInterceptor()
-      reportRemuxUnrecoverable(payload.detail)
+      // Remounting the original source would just fail (MEDIA_ERR_SRC_NOT_SUPPORTED).
+      attemptMidPlayRestart(payload.sessionId, payload.detail)
       return
     }
     log.warn(
@@ -347,6 +404,7 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     if (disposed) return
     disposed = true
     bumpGeneration()
+    clearMidPlayHealthyResetTimer()
     detachSeekInterceptor()
     unsubscribeError()
     if (activeSessionId) {
@@ -355,6 +413,12 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
       void stopVodAudioRemux(sessionId)
     }
     listeners.clear()
+  }
+
+  function recoverRemuxStall(): void {
+    if (!options.mountRemuxImmediately || disposed || remuxUnrecoverableReported) return
+    if (!activeSessionId) return
+    attemptMidPlayRestart(activeSessionId, "stall watchdog detected no playback progress")
   }
 
   function setTracks(nextTracks: VodAudioTrackOption[]): void {
@@ -403,5 +467,5 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     void switchToRemux(defaultTrackId, Math.max(0, options.initialStartSeconds ?? 0))
   }
 
-  return { source: sourceHandle, setTracks, dispose: disposeAll }
+  return { source: sourceHandle, setTracks, recoverRemuxStall, dispose: disposeAll }
 }

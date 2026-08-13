@@ -1344,26 +1344,31 @@ async function startPlayback(options = {}) {
     })
   }
 
-  if (!remuxOwnsInitialMount) {
-    mountEmbeddedSrc()
-    stallWatchdogDetach?.()
-    stallWatchdogDetach = null
-    const stallVideoEl = player.getMediaElement?.()
-    if (stallVideoEl) {
-      stallWatchdogDetach = attachStallWatchdog(stallVideoEl, {
-        onStall: (attemptNumber) => {
-          log.info("[xt:movie-detail] embedded player stalled - re-attaching src to recover", {
+  if (!remuxOwnsInitialMount) mountEmbeddedSrc()
+  stallWatchdogDetach?.()
+  stallWatchdogDetach = null
+  const stallVideoEl = player.getMediaElement?.()
+  if (stallVideoEl) {
+    stallWatchdogDetach = attachStallWatchdog(stallVideoEl, {
+      onStall: (attemptNumber) => {
+        if (remuxOwnsInitialMount) {
+          log.info("[xt:movie-detail] remux mount stalled - restarting the remux session to recover", {
             attempt: attemptNumber,
           })
-          const resumeAt = stallVideoEl.currentTime || 0
-          mountEmbeddedSrc()
-          player.one("loadedmetadata", () => {
-            try { player.currentTime?.(resumeAt) } catch {}
-            player.play?.()
-          })
-        },
-      })
-    }
+          ownAudioSwitcher?.recoverRemuxStall()
+          return
+        }
+        log.info("[xt:movie-detail] embedded player stalled - re-attaching src to recover", {
+          attempt: attemptNumber,
+        })
+        const resumeAt = stallVideoEl.currentTime || 0
+        mountEmbeddedSrc()
+        player.one("loadedmetadata", () => {
+          try { player.currentTime?.(resumeAt) } catch {}
+          player.play?.()
+        })
+      },
+    })
   }
   if (playerWrap) qualityChipDetach = attachQualityChip(playerWrap, player)
   applyVideoScale()

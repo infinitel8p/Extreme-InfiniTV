@@ -353,6 +353,27 @@ fn is_loopback_http(url: &str) -> bool {
 
 // --- ffmpeg argv (pure, unit-tested) ---
 
+// -reconnect* are http-protocol options; other inputs must not receive them.
+fn http_input_reconnect_args(input_url: &str) -> Vec<String> {
+    let is_http = tauri::Url::parse(input_url)
+        .map(|parsed| parsed.scheme() == "http" || parsed.scheme() == "https")
+        .unwrap_or(false);
+    if !is_http {
+        return Vec::new();
+    }
+    [
+        "-reconnect",
+        "1",
+        "-reconnect_streamed",
+        "1",
+        "-reconnect_delay_max",
+        "5",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
 fn build_ffmpeg_args(input_url: &str, audio_stream_index: u32, start_seconds: f64, transcode_audio: bool) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-hide_banner".to_string(),
@@ -365,6 +386,7 @@ fn build_ffmpeg_args(input_url: &str, audio_stream_index: u32, start_seconds: f6
         args.push("-ss".to_string());
         args.push(format!("{start_seconds}"));
     }
+    args.extend(http_input_reconnect_args(input_url));
     args.push("-i".to_string());
     args.push(input_url.to_string());
     args.push("-map".to_string());
@@ -1244,6 +1266,12 @@ mod tests {
                 "-hide_banner",
                 "-loglevel",
                 "warning",
+                "-reconnect",
+                "1",
+                "-reconnect_streamed",
+                "1",
+                "-reconnect_delay_max",
+                "5",
                 "-i",
                 "http://127.0.0.1:9000/forward/abc/stream",
                 "-map",
@@ -1276,6 +1304,12 @@ mod tests {
                 "-hide_banner",
                 "-loglevel",
                 "warning",
+                "-reconnect",
+                "1",
+                "-reconnect_streamed",
+                "1",
+                "-reconnect_delay_max",
+                "5",
                 "-i",
                 "http://127.0.0.1:9000/forward/abc/stream",
                 "-map",
@@ -1329,6 +1363,44 @@ mod tests {
         assert!(
             !args.iter().any(|arg| arg == "-noaccurate_seek"),
             "-noaccurate_seek must be omitted when no input seek is performed"
+        );
+    }
+
+    #[test]
+    fn build_ffmpeg_args_places_reconnect_flags_before_i() {
+        let args = build_ffmpeg_args("http://127.0.0.1:9000/forward/abc/stream", 0, 0.0, false);
+        let reconnect_index = args
+            .iter()
+            .position(|arg| arg == "-reconnect")
+            .expect("-reconnect must be present for an http input");
+        let i_index = args.iter().position(|arg| arg == "-i").expect("-i must be present");
+        assert!(reconnect_index < i_index, "-reconnect must precede -i");
+    }
+
+    #[test]
+    fn http_input_reconnect_args_covers_http_and_https() {
+        assert_eq!(
+            http_input_reconnect_args("http://127.0.0.1:9000/forward/abc/stream"),
+            vec!["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+        );
+        assert_eq!(
+            http_input_reconnect_args("https://provider.test/movie.mkv"),
+            vec!["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+        );
+    }
+
+    #[test]
+    fn http_input_reconnect_args_is_empty_for_a_local_file_path() {
+        assert!(http_input_reconnect_args("/Users/example/movie.mkv").is_empty());
+        assert!(http_input_reconnect_args("file:///Users/example/movie.mkv").is_empty());
+    }
+
+    #[test]
+    fn build_ffmpeg_args_omits_reconnect_flags_for_a_local_file_input() {
+        let args = build_ffmpeg_args("/Users/example/movie.mkv", 0, 0.0, false);
+        assert!(
+            !args.iter().any(|arg| arg == "-reconnect"),
+            "-reconnect must be omitted for a non-http input"
         );
     }
 
