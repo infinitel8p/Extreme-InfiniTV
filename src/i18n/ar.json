@@ -1492,5 +1492,6 @@
   "player.stats.fps": "FPS",
   "player.stats.dropped": "الإطارات المفقودة",
   "player.stats.buffered": "التخزين المؤقت",
-  "player.stats.segment": "المقطع"
+  "player.stats.segment": "المقطع",
+  "player.qualityBadge.tooltip": "جودة البث"
 }

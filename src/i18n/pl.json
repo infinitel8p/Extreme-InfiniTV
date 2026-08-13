@@ -1492,5 +1492,6 @@
   "player.stats.fps": "FPS",
   "player.stats.dropped": "Utracone klatki",
   "player.stats.buffered": "Bufor",
-  "player.stats.segment": "Segment"
+  "player.stats.segment": "Segment",
+  "player.qualityBadge.tooltip": "Jakość strumienia"
 }

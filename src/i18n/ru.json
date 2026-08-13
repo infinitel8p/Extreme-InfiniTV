@@ -1492,5 +1492,6 @@
   "player.stats.fps": "FPS",
   "player.stats.dropped": "Пропущенные кадры",
   "player.stats.buffered": "Буфер",
-  "player.stats.segment": "Сегмент"
+  "player.stats.segment": "Сегмент",
+  "player.qualityBadge.tooltip": "Качество потока"
 }

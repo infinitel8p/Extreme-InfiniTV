@@ -1492,5 +1492,6 @@
   "player.stats.fps": "FPS",
   "player.stats.dropped": "Düşürülen kareler",
   "player.stats.buffered": "Arabellek",
-  "player.stats.segment": "Segment"
+  "player.stats.segment": "Segment",
+  "player.qualityBadge.tooltip": "Yayın kalitesi"
 }

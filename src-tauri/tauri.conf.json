@@ -10,6 +10,7 @@
     "beforeBuildCommand": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs && pnpm run build"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "Extreme InfiniTV",

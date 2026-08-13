@@ -1492,5 +1492,6 @@
   "player.stats.fps": "FPS",
   "player.stats.dropped": "フレームドロップ",
   "player.stats.buffered": "バッファ",
-  "player.stats.segment": "セグメント"
+  "player.stats.segment": "セグメント",
+  "player.qualityBadge.tooltip": "ストリーム画質"
 }

@@ -1492,5 +1492,6 @@
   "player.stats.fps": "FPS",
   "player.stats.dropped": "丢帧",
   "player.stats.buffered": "缓冲",
-  "player.stats.segment": "分段"
+  "player.stats.segment": "分段",
+  "player.qualityBadge.tooltip": "串流画质"
 }

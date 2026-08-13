@@ -140,6 +140,7 @@ import {
 import { decodedFrameCount, droppedFrameCount } from "@/scripts/lib/player-telemetry.js"
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { isAutomaticRetuneReason } from "@/scripts/lib/stream-health.ts"
+import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 // One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
@@ -1149,8 +1150,8 @@ document.addEventListener("keydown", (e) => {
     }
     case "f": {
       e.preventDefault()
-      if (vjs.isFullscreen()) vjs.exitFullscreen()
-      else vjs.requestFullscreen()
+      if (vjs.isFullscreen?.()) vjs.exitFullscreen?.()
+      else vjs.requestFullscreen?.()
       return
     }
     case "j":
@@ -1571,6 +1572,8 @@ let embeddedPlayerBackend = null
 let playSeq = 0
 let lastPlayContext = null
 let playerInsights = null
+// Detach for the auto-hiding quality chip overlaid on the player edge - rebuilt every tune.
+let qualityChipDetach = null
 
 function getPlayerInsights() {
   if (!playerInsights) {
@@ -2530,9 +2533,17 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
           { id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src },
           { probeIcy: !!channel?.isRadio }
         )
+        // Audio-only hides the video preview - the quality chip has nothing to report.
+        if (qualityChipDetach) {
+          qualityChipDetach()
+          qualityChipDetach = null
+        }
       } else {
         manualAudioOnlyOff.add(manualAudioOnlyOffKey(streamId))
         clearRadioMode()
+        // Same mount, just un-hidden - re-attach the overlay chip to the player edge.
+        const playerWrap = document.getElementById("player")?.parentElement
+        if (playerWrap && vjs) qualityChipDetach = attachQualityChip(playerWrap, vjs)
       }
     })
     items.push(audioItem)
@@ -3529,6 +3540,12 @@ async function play(streamId, name, reason = "user") {
   hideTimeshiftChip()
   clearLiveEdgeTracking()
   if (!currentEl) return
+  // Every tune remounts the <video> below - detach the previous chip's
+  // listeners first so they don't leak onto a removed element.
+  if (qualityChipDetach) {
+    qualityChipDetach()
+    qualityChipDetach = null
+  }
   // Native ExoPlayer Activity path (opt-in via Settings). Hands off the full
   // playback session including channel switching. Returns early if successful.
   if (await tryLaunchNativeLive(streamId, name)) {
@@ -3736,6 +3753,8 @@ async function play(streamId, name, reason = "user") {
   if (!player) {
     return
   }
+  const playerWrap = document.getElementById("player")?.parentElement
+  if (playerWrap) qualityChipDetach = attachQualityChip(playerWrap, player)
   await applyStreamHeaders(channelHeaders)
   const seq = ++playSeq
   lastPlayContext = {
@@ -3933,6 +3952,12 @@ function resolveProgrammeWindowAt(channel, atUtcMs) {
 /** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
 async function playCatchup(channel, opts) {
   if (!currentEl || !channel || !activePlaylistId) return false
+  // Catch-up remounts the <video> without a quality chip - detach the
+  // live one so its listeners don't leak onto a removed element.
+  if (qualityChipDetach) {
+    qualityChipDetach()
+    qualityChipDetach = null
+  }
   if (channel.unresolved) {
     toastError(t("stream.error.cantPlay", { channel: channel.name || `#${channel.id}` }), {
       description: t("stream.error.checkConnection"),

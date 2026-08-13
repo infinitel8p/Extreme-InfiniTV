@@ -106,6 +106,8 @@ import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
+import { attachStallWatchdog } from "@/scripts/lib/stall-watchdog.ts"
+import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -831,6 +833,10 @@ let audioSwitcher = null
 let audioDiscoveryController = null
 /** Tee-proxy session behind the mount that is currently playing, so a later start can stop it. */
 let activeMkvSession = null
+/** Detach for the stall-recovery watchdog on the currently mounted src, if any. */
+let stallWatchdogDetach = null
+/** Detach for the auto-hiding quality chip overlaid on the player edge, if any. */
+let qualityChipDetach = null
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
@@ -989,6 +995,10 @@ function retirePreviousPlayback() {
   audioDiscoveryController = null
   activeMkvSession?.stop()
   activeMkvSession = null
+  stallWatchdogDetach?.()
+  stallWatchdogDetach = null
+  qualityChipDetach?.()
+  qualityChipDetach = null
 }
 
 async function startPlayback(options = {}) {
@@ -1323,14 +1333,39 @@ async function startPlayback(options = {}) {
   } else {
     getMovieInsights().startSession({ label: movie.name })
   }
-  if (!remuxOwnsInitialMount) {
+  // Captured so the stall watchdog can re-issue the identical mount to recover a stuck download.
+  function mountEmbeddedSrc() {
     player.src({
       src: prepared.playbackUrl,
       type: mime,
+      isLive: false,
       subtitles: { sourceUrl: playSrc, mkvSession: prepared.mkvSession },
       audio: initialAudioSource,
     })
   }
+
+  if (!remuxOwnsInitialMount) {
+    mountEmbeddedSrc()
+    stallWatchdogDetach?.()
+    stallWatchdogDetach = null
+    const stallVideoEl = player.getMediaElement?.()
+    if (stallVideoEl) {
+      stallWatchdogDetach = attachStallWatchdog(stallVideoEl, {
+        onStall: (attemptNumber) => {
+          log.info("[xt:movie-detail] embedded player stalled - re-attaching src to recover", {
+            attempt: attemptNumber,
+          })
+          const resumeAt = stallVideoEl.currentTime || 0
+          mountEmbeddedSrc()
+          player.one("loadedmetadata", () => {
+            try { player.currentTime?.(resumeAt) } catch {}
+            player.play?.()
+          })
+        },
+      })
+    }
+  }
+  if (playerWrap) qualityChipDetach = attachQualityChip(playerWrap, player)
   applyVideoScale()
 
   if (!progressListenersBound) {

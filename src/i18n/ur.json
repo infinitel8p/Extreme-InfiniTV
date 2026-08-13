@@ -1492,5 +1492,6 @@
   "player.stats.fps": "FPS",
   "player.stats.dropped": "ڈراپڈ فریمز",
   "player.stats.buffered": "بفر",
-  "player.stats.segment": "سیگمنٹ"
+  "player.stats.segment": "سیگمنٹ",
+  "player.qualityBadge.tooltip": "اسٹریم کا معیار"
 }

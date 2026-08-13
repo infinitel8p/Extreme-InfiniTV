@@ -1492,5 +1492,6 @@
   "player.stats.fps": "FPS",
   "player.stats.dropped": "छूटे हुए फ़्रेम",
   "player.stats.buffered": "बफ़र",
-  "player.stats.segment": "सेगमेंट"
+  "player.stats.segment": "सेगमेंट",
+  "player.qualityBadge.tooltip": "स्ट्रीम गुणवत्ता"
 }

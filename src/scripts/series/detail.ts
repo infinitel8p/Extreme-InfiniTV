@@ -117,6 +117,8 @@ import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dial
 import { buildSeriesStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { attachPosterContextMenu } from "@/scripts/lib/poster-menu.ts"
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
+import { attachStallWatchdog } from "@/scripts/lib/stall-watchdog.ts"
+import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -287,6 +289,19 @@ function openEpisodeMenu(ep, anchor, point) {
   menu.setAttribute(
     "aria-label",
     t("list.menu.ariaFor", { name: episodeMenuTitle(ep) || t("list.fallbackTitle") })
+  )
+
+  const watchedOn = activePlaylistId ? isCompleted(activePlaylistId, "episode", ep.id) : false
+  menu.appendChild(
+    makeEpisodeMenuItem(
+      t(watchedOn ? "list.menu.watchedUnmark" : "list.menu.watchedMark"),
+      () => {
+        if (!activePlaylistId) return
+        if (watchedOn) clearProgress(activePlaylistId, "episode", ep.id)
+        else markCompleted(activePlaylistId, "episode", ep.id, progressExtrasFor(ep))
+        renderEpisodes()
+      }
+    )
   )
 
   menu.appendChild(
@@ -1313,6 +1328,10 @@ let audioSwitcher = null
 let audioDiscoveryController = null
 /** Tee-proxy session behind the mount that is currently playing, so a later episode can stop it. */
 let activeMkvSession = null
+/** Detach for the stall-recovery watchdog on the currently mounted src, if any. */
+let stallWatchdogDetach = null
+/** Detach for the auto-hiding quality chip overlaid on the player edge, if any. */
+let qualityChipDetach = null
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
@@ -1506,6 +1525,10 @@ function retirePreviousPlayback() {
   audioDiscoveryController = null
   activeMkvSession?.stop()
   activeMkvSession = null
+  stallWatchdogDetach?.()
+  stallWatchdogDetach = null
+  qualityChipDetach?.()
+  qualityChipDetach = null
 }
 
 async function playEpisode(episode, options = {}) {
@@ -1853,14 +1876,39 @@ async function playEpisode(episode, options = {}) {
       label: [series?.name, episode.title].filter(Boolean).join(" - "),
     })
   }
-  if (!remuxOwnsInitialMount) {
+  // Captured so the stall watchdog can re-issue the identical mount to recover a stuck download.
+  function mountEmbeddedSrc() {
     player.src({
       src: prepared.playbackUrl,
       type: mime,
+      isLive: false,
       subtitles: { sourceUrl: playSrc, mkvSession: prepared.mkvSession },
       audio: initialAudioSource,
     })
   }
+
+  if (!remuxOwnsInitialMount) {
+    mountEmbeddedSrc()
+    stallWatchdogDetach?.()
+    stallWatchdogDetach = null
+    const stallVideoEl = player.getMediaElement?.()
+    if (stallVideoEl) {
+      stallWatchdogDetach = attachStallWatchdog(stallVideoEl, {
+        onStall: (attemptNumber) => {
+          log.info("[xt:series-detail] embedded player stalled - re-attaching src to recover", {
+            attempt: attemptNumber,
+          })
+          const resumeAt = stallVideoEl.currentTime || 0
+          mountEmbeddedSrc()
+          player.one("loadedmetadata", () => {
+            try { player.currentTime?.(resumeAt) } catch {}
+            player.play?.()
+          })
+        },
+      })
+    }
+  }
+  if (playerWrap) qualityChipDetach = attachQualityChip(playerWrap, player)
   applyVideoScale()
 
   if (!progressListenersBound) {

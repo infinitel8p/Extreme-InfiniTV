@@ -73,6 +73,8 @@ export interface VjsLikeHandle {
   el?(): HTMLElement
   error?(): unknown
   requestFullscreen?(): Promise<void> | void
+  isFullscreen?(): boolean
+  exitFullscreen?(): void
   userActive?(active: boolean): void
   /** What we learned about the current stream - feeds failure classification. */
   codecInfo?(): PlaybackCodecInfo
@@ -139,46 +141,6 @@ export const isWindows = (() => {
   if (typeof navigator === "undefined") return false
   return /Windows/i.test(navigator.userAgent || "")
 })()
-
-async function tauriWindowSetFullscreen(state: boolean): Promise<void> {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window")
-    await getCurrentWindow().setFullscreen(state)
-  } catch {}
-}
-
-async function subscribeTauriFullscreen(
-  handler: (isFullscreen: boolean) => void,
-): Promise<() => void> {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window")
-    const appWindow = getCurrentWindow()
-    return await appWindow.onResized(async () => {
-      try { handler(await appWindow.isFullscreen()) } catch {}
-    })
-  } catch {
-    return () => {}
-  }
-}
-
-function bindTauriFullscreenResync(
-  onResync: (isFullscreen: boolean) => void,
-): () => void {
-  if (!(isTauri && isMacOS)) return () => {}
-  let unlisten: (() => void) | null = null
-  let disposed = false
-  subscribeTauriFullscreen((isFs) => {
-    try { onResync(isFs) } catch {}
-  }).then((fn) => {
-    if (disposed) { try { fn() } catch {} }
-    else unlisten = fn
-  })
-  return () => {
-    disposed = true
-    try { unlisten?.() } catch {}
-    unlisten = null
-  }
-}
 
 export const desktopPlatform = isTauri && !isAndroid
 
@@ -1726,31 +1688,6 @@ async function mountVideoJs(
     },
   }) as any
 
-  let disposeFullscreenSync: () => void = () => {}
-  if (isTauri && isMacOS) {
-    player.requestFullscreen = async function () {
-      try { player.addClass("vjs-fullscreen") } catch {}
-      try { player.trigger("fullscreenchange") } catch {}
-      await tauriWindowSetFullscreen(true)
-    }
-    player.exitFullscreen = async function () {
-      try { player.removeClass("vjs-fullscreen") } catch {}
-      try { player.trigger("fullscreenchange") } catch {}
-      await tauriWindowSetFullscreen(false)
-    }
-    player.isFullscreen = function () {
-      try { return player.hasClass?.("vjs-fullscreen") } catch { return false }
-    }
-    // Resync the vjs-fullscreen class when the window leaves/enters fullscreen
-    // outside our overrides, so isFullscreen() stays truthful.
-    disposeFullscreenSync = bindTauriFullscreenResync((isFs) => {
-      if (isFs === !!player.hasClass?.("vjs-fullscreen")) return
-      if (isFs) player.addClass("vjs-fullscreen")
-      else player.removeClass("vjs-fullscreen")
-      player.trigger("fullscreenchange")
-    })
-  }
-
   let activeMpegts: MpegtsHandle | null = null
   let pendingMpegtsAttach: Promise<MpegtsHandle | null> | null = null
   let activeHls: { destroy: () => void } | null = null
@@ -2082,7 +2019,6 @@ async function mountVideoJs(
       destroyShaka()
       subtitleManager.detach()
       audioMenu.dispose()
-      disposeFullscreenSync()
       telemetry.dispose()
       try { player.dispose() } catch {}
     },
@@ -2112,6 +2048,12 @@ async function mountVideoJs(
     },
     requestFullscreen() {
       return player.requestFullscreen?.()
+    },
+    isFullscreen() {
+      try { return !!player.isFullscreen?.() } catch { return false }
+    },
+    exitFullscreen() {
+      try { player.exitFullscreen?.() } catch {}
     },
     userActive(active) {
       try { player.userActive?.(active) } catch {}
@@ -2352,27 +2294,14 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     },
   })
 
-  let disposeFullscreenSync: () => void = () => {}
-  if (isTauri && isMacOS) {
-    art.on("ready", () => {
-      const btn = container.querySelector(".art-control-fullscreen") as HTMLElement | null
-      if (!btn) return
-      const replacement = btn.cloneNode(true) as HTMLElement
-      btn.replaceWith(replacement)
-      replacement.addEventListener("click", async (event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        const next = !art.fullscreenWeb
-        art.fullscreenWeb = next
-        await tauriWindowSetFullscreen(next)
-      })
-    })
-    // Resync art.fullscreenWeb when the window leaves fullscreen out-of-band
-    // (green button / Esc / gesture), so the next toggle goes the right way.
-    disposeFullscreenSync = bindTauriFullscreenResync((isFs) => {
-      if (art.fullscreenWeb !== isFs) art.fullscreenWeb = isFs
-    })
+  // Matches mountVideoJs's default (preload: options.preload ?? "auto"); art.video isn't
+  // guaranteed to exist synchronously, so fall back to the ready hook the same way
+  // installSubtitleControl does below.
+  const applyPreload = () => {
+    if (art.video) art.video.preload = (options.preload ?? "auto") as HTMLVideoElement["preload"]
   }
+  if (art.isReady) applyPreload()
+  else art.on("ready", applyPreload)
 
   const subtitleManager = createSubtitleManager({
     registrar: createNativeTrackRegistrar(() => art.video ?? null),
@@ -2540,7 +2469,6 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       pendingAudioSource = null
       pendingUsesCallerSuppliedTracks = false
       destroyArtEngines()
-      disposeFullscreenSync()
       telemetry.dispose()
       try { art.destroy(false) } catch {}
     },
@@ -2570,6 +2498,12 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     },
     requestFullscreen() {
       art.fullscreen = true
+    },
+    isFullscreen() {
+      try { return !!art.fullscreen } catch { return false }
+    },
+    exitFullscreen() {
+      try { art.fullscreen = false } catch {}
     },
     codecInfo() {
       return { ...codecState }
@@ -2695,13 +2629,22 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   player.addEventListener("adaptation", () => emitShakaVariant(player, () => !!pendingSrc, telemetry))
   player.addEventListener("variantchanged", () => emitShakaVariant(player, () => !!pendingSrc, telemetry))
 
-  // Every src() path loads async, so a caller's play() rejects before media attaches.
+  // Every src() path loads async, so a caller's play() lands before media attaches. It cannot be
+  // conditioned on that play() rejecting: when the element still holds the previous source and is
+  // ready, the media element load algorithm *resolves* the pending play promise and then sets
+  // paused, so the caller gets a success it never got playback for. Record the intent on every
+  // play() call instead and replay it once a load completes.
   let pendingPlayIntent = false
 
   function consumePlayIntent() {
     if (!pendingPlayIntent) return
     pendingPlayIntent = false
-    void video.play()?.catch(() => {})
+    const attempt = video.play()
+    // A load landing between the intent and this replay aborts it - keep the intent armed so the
+    // next completed load retries instead of leaving the player paused.
+    if (attempt && typeof attempt.catch === "function") {
+      attempt.catch(() => { pendingPlayIntent = true })
+    }
   }
 
   async function loadIntoShaka(src: string, drm: DrmOptions | null | undefined, mimeTypeHint?: string) {
@@ -2860,14 +2803,11 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
         })
     },
     play() {
-      const attempt = video.play()
-      if (!attempt || typeof attempt.catch !== "function") return attempt
-      return attempt.catch((err: any) => {
-        pendingPlayIntent = true
-        throw err
-      })
+      pendingPlayIntent = true
+      return video.play()
     },
     pause() {
+      pendingPlayIntent = false
       video.pause()
     },
     paused() {
@@ -2880,6 +2820,8 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     },
     reset() {
       pendingSrc = null
+      // A load that never completed leaves its intent armed; a teardown discards it.
+      pendingPlayIntent = false
       destroyMpegts()
       subtitleManager.detach()
       void player.unload().catch(() => {})
@@ -2922,6 +2864,18 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       try {
         if (!controls?.isFullScreenEnabled?.()) return controls?.toggleFullScreen?.()
       } catch {}
+    },
+    isFullscreen() {
+      try { return !!controls?.isFullScreenEnabled?.() } catch { return false }
+    },
+    exitFullscreen() {
+      try {
+        if (controls?.isFullScreenEnabled?.()) {
+          void controls.toggleFullScreen?.()
+          return
+        }
+      } catch {}
+      try { void document.exitFullscreen?.() } catch {}
     },
     codecInfo() {
       return { ...codecState }

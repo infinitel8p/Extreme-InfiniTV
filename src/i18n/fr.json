@@ -1492,5 +1492,6 @@
   "player.stats.fps": "FPS",
   "player.stats.dropped": "Images perdues",
   "player.stats.buffered": "Tampon",
-  "player.stats.segment": "Segment"
+  "player.stats.segment": "Segment",
+  "player.qualityBadge.tooltip": "Qualité du flux"
 }

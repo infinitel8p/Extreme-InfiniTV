@@ -1493,5 +1493,6 @@
   "player.stats.fps": "FPS",
   "player.stats.dropped": "Dropped frames",
   "player.stats.buffered": "Buffered",
-  "player.stats.segment": "Segment"
+  "player.stats.segment": "Segment",
+  "player.qualityBadge.tooltip": "Stream quality"
 }
