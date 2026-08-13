@@ -258,14 +258,57 @@ describe("matchRecommendationsToCatalog", () => {
     expect(matched.map((entry) => entry.id)).toEqual(["al"])
   })
 
-  it("skips a cross-language recommendation when no same-prefix candidate exists", () => {
+  it("falls back to a cross-language candidate when no same-prefix or preferred match exists (never drops a recommendation)", () => {
     const recommendations = [{ title: "Project X", year: 2012 }]
     const catalog = [{ id: "de", name: "DE - Project X (2012)", year: 2012 }]
     const matched = matchRecommendationsToCatalog(recommendations, catalog, {
       mediaType: "movie",
       sourcePrefix: "AL",
     })
-    expect(matched).toEqual([])
+    expect(matched.map((entry) => entry.id)).toEqual(["de"])
+  })
+
+  it("prefers a preferredTags match over a cross-language fallback", () => {
+    const recommendations = [{ title: "Project X", year: 2012 }]
+    const catalog = [
+      { id: "de", name: "DE - Project X (2012)", year: 2012 },
+      { id: "fr", name: "FR - Project X (2012)", year: 2012 },
+    ]
+    const matched = matchRecommendationsToCatalog(recommendations, catalog, {
+      mediaType: "movie",
+      sourcePrefix: "AL",
+      preferredTags: ["FR"],
+    })
+    expect(matched.map((entry) => entry.id)).toEqual(["fr"])
+  })
+
+  it("tries each preferredTags entry in order", () => {
+    const recommendations = [{ title: "Project X", year: 2012 }]
+    const catalog = [
+      { id: "de", name: "DE - Project X (2012)", year: 2012 },
+      { id: "fr", name: "FR - Project X (2012)", year: 2012 },
+    ]
+    const matched = matchRecommendationsToCatalog(recommendations, catalog, {
+      mediaType: "movie",
+      preferredTags: ["EN", "FR"],
+    })
+    expect(matched.map((entry) => entry.id)).toEqual(["fr"])
+  })
+
+  it("dedupes matches by group key instead of catalog id, keeping only the first-picked variant per group", () => {
+    const recommendations = [
+      { title: "Alpha", year: 2020 },
+      { title: "Beta", year: 2020 },
+    ]
+    const catalog = [
+      { id: "a", name: "Alpha", year: 2020 },
+      { id: "b", name: "Beta", year: 2020 },
+    ]
+    const matched = matchRecommendationsToCatalog(recommendations, catalog, {
+      mediaType: "movie",
+      groupKeyForEntry: () => "same-group",
+    })
+    expect(matched.map((entry) => entry.id)).toEqual(["a"])
   })
 
   it("falls back to a no-prefix candidate when sourcePrefix has no same-language match", () => {

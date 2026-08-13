@@ -1,4 +1,8 @@
-import { extractLangPrefix } from "@/scripts/lib/tmdb-match.ts"
+import { parseNamePrefix, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
+import { getContentLanguage } from "@/scripts/lib/app-settings.js"
+import { getActiveLocale } from "@/scripts/lib/i18n.js"
+import { normalize } from "@/scripts/lib/text.ts"
+import { cleanProviderTitle } from "@/scripts/lib/tmdb-match.ts"
 import {
   pickLocalSimilar,
   type LocalSimilarCandidate,
@@ -73,6 +77,15 @@ export interface BecauseRowOptions {
   isWatched?: (id: number | string) => boolean
 }
 
+// Groups language-prefixed variants of the same title so they dedupe together.
+function groupKeyForEntry(candidate: LocalSimilarCandidate): string {
+  const cleaned = cleanProviderTitle(candidate.name)
+  const titleKey = normalize(cleaned.variants[0] || candidate.name)
+  if (!titleKey) return `id:${candidate.id}`
+  const year = candidate.year ?? cleaned.year
+  return `${titleKey}|${year ?? ""}`
+}
+
 export function buildBecauseRow(
   seed: BecauseSeed,
   catalog: LocalSimilarCandidate[],
@@ -99,6 +112,8 @@ export function buildBecauseRow(
   return pickLocalSimilar(current, candidates, {
     limit,
     infoLookup,
-    sourcePrefix: extractLangPrefix(seed.name),
+    sourcePrefix: parseNamePrefix(seed.name).tag,
+    preferredTags: effectivePreferredTags(getContentLanguage(), getActiveLocale()),
+    groupKeyForEntry,
   })
 }

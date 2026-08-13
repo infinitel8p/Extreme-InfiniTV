@@ -172,7 +172,7 @@ describe("buildBecauseRow", () => {
     expect(result).toHaveLength(5)
   })
 
-  it("excludes a candidate with a different language prefix from the seed", () => {
+  it("no longer excludes a candidate with a different language prefix from the seed", () => {
     const prefixedSeed: BecauseSeed = { kind: "vod", id: 1, name: "DE | Krieg der Welten", updatedAt: 100 }
     const catalog: LocalSimilarCandidate[] = [
       { id: 1, name: "DE | Krieg der Welten", category: "Sci-Fi" },
@@ -181,7 +181,17 @@ describe("buildBecauseRow", () => {
       { id: 4, name: "Unprefixed Title", category: "Sci-Fi" },
     ]
     const result = buildBecauseRow(prefixedSeed, catalog)
-    expect(result.map((entry) => entry.id).sort()).toEqual([2, 4])
+    expect(result.map((entry) => entry.id).sort()).toEqual([2, 3, 4])
+  })
+
+  it("dedupes same-title candidates across language prefixes, preferring the preferredTags variant", () => {
+    const catalog: LocalSimilarCandidate[] = [
+      { id: 1, name: "War of the Worlds", category: "Sci-Fi" },
+      { id: 2, name: "DE | Other Sci-Fi", category: "Sci-Fi" },
+      { id: 3, name: "EN | Other Sci-Fi", category: "Sci-Fi" },
+    ]
+    const result = buildBecauseRow(seed, catalog)
+    expect(result.map((entry) => entry.id)).toEqual([3])
   })
 
   it("reorders results when infoLookup supplies a director match", () => {

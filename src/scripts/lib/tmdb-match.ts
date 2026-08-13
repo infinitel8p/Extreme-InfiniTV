@@ -1,5 +1,6 @@
 // Pure title cleanup + result matching so provider names resolve to the right TMDb id.
 import { normalize } from "@/scripts/lib/text.ts"
+import { parseNamePrefix } from "@/scripts/lib/language-tags.ts"
 
 const YEAR_MIN = 1900
 const YEAR_MAX = 2099
@@ -196,22 +197,25 @@ function parseKnownYear(yearField?: number | string | null): number | null {
 
 interface IndexedCatalogEntry {
   entry: TmdbCatalogEntry
-  langPrefix: string | null
+  tag: string | null
 }
 
-// Picks the candidate matching sourcePrefix's language, never crossing into a different one.
+// Falls through sourcePrefix, preferredTags, unprefixed, then any candidate: crossing language beats dropping the recommendation.
 function pickCandidateForPrefix(
   candidates: IndexedCatalogEntry[],
-  sourcePrefix: string | null | undefined
+  { sourcePrefix, preferredTags }: { sourcePrefix?: string | null; preferredTags?: string[] }
 ): IndexedCatalogEntry | null {
   if (sourcePrefix) {
-    const sameLang = candidates.find((candidate) => candidate.langPrefix === sourcePrefix)
-    if (sameLang) return sameLang
-    return candidates.find((candidate) => candidate.langPrefix == null) || null
+    const sameTag = candidates.find((candidate) => candidate.tag === sourcePrefix)
+    if (sameTag) return sameTag
   }
-  const noPrefix = candidates.find((candidate) => candidate.langPrefix == null)
-  if (noPrefix) return noPrefix
-  return candidates.length === 1 ? candidates[0] : null
+  for (const preferredTag of preferredTags || []) {
+    const match = candidates.find((candidate) => candidate.tag === preferredTag)
+    if (match) return match
+  }
+  const untagged = candidates.find((candidate) => candidate.tag == null)
+  if (untagged) return untagged
+  return candidates[0] || null
 }
 
 function buildCatalogNameIndex(catalogEntries: TmdbCatalogEntry[]): Map<string, IndexedCatalogEntry[]> {
@@ -220,7 +224,7 @@ function buildCatalogNameIndex(catalogEntries: TmdbCatalogEntry[]): Map<string, 
     const { variants } = cleanProviderTitle(entry.name)
     const key = normalize(variants[0] || entry.name)
     if (!key) continue
-    const indexed = { entry, langPrefix: extractLangPrefix(entry.name) }
+    const indexed = { entry, tag: parseNamePrefix(entry.name).tag }
     const bucket = index.get(key)
     if (bucket) bucket.push(indexed)
     else index.set(key, [indexed])
@@ -235,7 +239,15 @@ export function matchRecommendationsToCatalog(
     mediaType,
     limit = 12,
     sourcePrefix,
-  }: { mediaType: "movie" | "tv"; limit?: number; sourcePrefix?: string | null }
+    preferredTags,
+    groupKeyForEntry,
+  }: {
+    mediaType: "movie" | "tv"
+    limit?: number
+    sourcePrefix?: string | null
+    preferredTags?: string[]
+    groupKeyForEntry?: (entry: TmdbCatalogEntry) => string
+  }
 ): TmdbCatalogEntry[] {
   if (!recommendations?.length || !catalogEntries?.length) return []
 
@@ -243,6 +255,7 @@ export function matchRecommendationsToCatalog(
 
   const matched: TmdbCatalogEntry[] = []
   const seenIds = new Set<string | number>()
+  const seenGroupKeys = new Set<string>()
 
   for (const recommendation of recommendations) {
     if (matched.length >= limit) break
@@ -250,8 +263,11 @@ export function matchRecommendationsToCatalog(
     if (!title) continue
     const candidates = index.get(normalize(title))
     if (!candidates?.length) continue
-    const picked = pickCandidateForPrefix(candidates, sourcePrefix)
-    if (!picked || seenIds.has(picked.entry.id)) continue
+    const picked = pickCandidateForPrefix(candidates, { sourcePrefix, preferredTags })
+    if (!picked) continue
+
+    const groupKey = groupKeyForEntry?.(picked.entry)
+    if (groupKey != null ? seenGroupKeys.has(groupKey) : seenIds.has(picked.entry.id)) continue
 
     const recommendationYear =
       parseKnownYear(recommendation.year) ??
@@ -261,6 +277,7 @@ export function matchRecommendationsToCatalog(
       continue
     }
 
+    if (groupKey != null) seenGroupKeys.add(groupKey)
     seenIds.add(picked.entry.id)
     matched.push(picked.entry)
   }

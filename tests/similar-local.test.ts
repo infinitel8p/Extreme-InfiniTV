@@ -86,23 +86,23 @@ describe("pickLocalSimilar", () => {
     expect(result).toHaveLength(5)
   })
 
-  it("excludes a candidate whose language prefix differs from sourcePrefix", () => {
+  it("no longer excludes a candidate whose language prefix differs from sourcePrefix", () => {
     const candidates: LocalSimilarCandidate[] = [
       { id: 2, name: "AL - Same Language", category: "Action" },
       { id: 3, name: "DE - Other Language", category: "Action" },
     ]
     const result = pickLocalSimilar(current, candidates, { sourcePrefix: "AL" })
-    expect(result.map((entry) => entry.id)).toEqual([2])
+    expect(result.map((entry) => entry.id).sort()).toEqual([2, 3])
   })
 
-  it("keeps an unprefixed candidate when sourcePrefix is set", () => {
+  it("keeps an unprefixed candidate alongside prefixed ones when sourcePrefix is set", () => {
     const candidates: LocalSimilarCandidate[] = [
       { id: 2, name: "AL - Same Language", category: "Action" },
       { id: 3, name: "Unprefixed Title", category: "Action" },
       { id: 4, name: "DE - Other Language", category: "Action" },
     ]
     const result = pickLocalSimilar(current, candidates, { sourcePrefix: "AL" })
-    expect(result.map((entry) => entry.id).sort()).toEqual([2, 3])
+    expect(result.map((entry) => entry.id).sort()).toEqual([2, 3, 4])
   })
 
   it("applies no language filtering when sourcePrefix is null", () => {
@@ -112,6 +112,41 @@ describe("pickLocalSimilar", () => {
     ]
     const result = pickLocalSimilar(current, candidates)
     expect(result.map((entry) => entry.id).sort()).toEqual([2, 3])
+  })
+
+  it("dedupes candidates by group key, keeping the sourcePrefix variant", () => {
+    const candidates: LocalSimilarCandidate[] = [
+      { id: 2, name: "EN - Same Title", category: "Action" },
+      { id: 3, name: "DE - Same Title", category: "Action" },
+    ]
+    const result = pickLocalSimilar(current, candidates, {
+      sourcePrefix: "DE",
+      groupKeyForEntry: () => "group-1",
+    })
+    expect(result.map((entry) => entry.id)).toEqual([3])
+  })
+
+  it("dedupes candidates by group key using preferredTags order when there is no sourcePrefix match", () => {
+    const candidates: LocalSimilarCandidate[] = [
+      { id: 2, name: "DE - Same Title", category: "Action" },
+      { id: 3, name: "FR - Same Title", category: "Action" },
+    ]
+    const result = pickLocalSimilar(current, candidates, {
+      preferredTags: ["FR"],
+      groupKeyForEntry: () => "group-1",
+    })
+    expect(result.map((entry) => entry.id)).toEqual([3])
+  })
+
+  it("dedupes candidates by group key, falling back to the unprefixed variant", () => {
+    const candidates: LocalSimilarCandidate[] = [
+      { id: 2, name: "DE - Same Title", category: "Action" },
+      { id: 3, name: "Same Title", category: "Action" },
+    ]
+    const result = pickLocalSimilar(current, candidates, {
+      groupKeyForEntry: () => "group-1",
+    })
+    expect(result.map((entry) => entry.id)).toEqual([3])
   })
 })
 

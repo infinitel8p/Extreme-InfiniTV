@@ -1,5 +1,5 @@
 // Local "more like this" heuristic used when TMDb is inactive, unresolved, or has no matches.
-import { extractLangPrefix } from "@/scripts/lib/tmdb-match.ts"
+import { parseNamePrefix } from "@/scripts/lib/language-tags.ts"
 
 export interface LocalSimilarCurrent {
   id: number
@@ -26,6 +26,8 @@ export interface PickLocalSimilarOptions {
   limit?: number
   infoLookup?: (id: number | string) => LocalSimilarInfo | null
   sourcePrefix?: string | null
+  preferredTags?: string[]
+  groupKeyForEntry?: (candidate: LocalSimilarCandidate) => string
 }
 
 const CAST_OVERLAP_CAP = 3 // 2 points each, so this caps the cast bonus at 6
@@ -34,25 +36,60 @@ function normalizeName(value: string): string {
   return value.trim().toLowerCase()
 }
 
+// Prefers sourcePrefix's language, then each preferredTags entry in order, then the unprefixed variant.
+function pickBestVariant(
+  group: LocalSimilarCandidate[],
+  sourcePrefix: string | null | undefined,
+  preferredTags: string[]
+): LocalSimilarCandidate {
+  if (group.length === 1) return group[0]
+  if (sourcePrefix) {
+    const sameTag = group.find((candidate) => parseNamePrefix(candidate.name).tag === sourcePrefix)
+    if (sameTag) return sameTag
+  }
+  for (const preferredTag of preferredTags) {
+    const match = group.find((candidate) => parseNamePrefix(candidate.name).tag === preferredTag)
+    if (match) return match
+  }
+  const untagged = group.find((candidate) => parseNamePrefix(candidate.name).tag == null)
+  if (untagged) return untagged
+  return group[0]
+}
+
+function dedupeByGroupKey(
+  candidates: LocalSimilarCandidate[],
+  groupKeyForEntry: (candidate: LocalSimilarCandidate) => string,
+  sourcePrefix: string | null | undefined,
+  preferredTags: string[]
+): LocalSimilarCandidate[] {
+  const groups = new Map<string, LocalSimilarCandidate[]>()
+  for (const candidate of candidates) {
+    const key = groupKeyForEntry(candidate)
+    const bucket = groups.get(key)
+    if (bucket) bucket.push(candidate)
+    else groups.set(key, [candidate])
+  }
+  return [...groups.values()].map((group) => pickBestVariant(group, sourcePrefix, preferredTags))
+}
+
 export function pickLocalSimilar(
   current: LocalSimilarCurrent,
   candidates: LocalSimilarCandidate[],
   options: PickLocalSimilarOptions = {}
 ): LocalSimilarCandidate[] {
-  const { limit = 12, infoLookup, sourcePrefix } = options
+  const { limit = 12, infoLookup, sourcePrefix, preferredTags = [], groupKeyForEntry } = options
   const currentCategory = current.category?.trim() || ""
   const currentDirector = current.directorName ? normalizeName(current.directorName) : ""
   const currentCastNames = new Set(current.castNames.map(normalizeName).filter(Boolean))
 
+  const eligibleCandidates = candidates.filter((candidate) => Number(candidate.id) !== current.id)
+  const pool = groupKeyForEntry
+    ? dedupeByGroupKey(eligibleCandidates, groupKeyForEntry, sourcePrefix, preferredTags)
+    : eligibleCandidates
+
   const scored: Array<{ candidate: LocalSimilarCandidate; score: number }> = []
 
-  for (const candidate of candidates) {
-    if (Number(candidate.id) === current.id) continue
-    if (sourcePrefix) {
-      const candidatePrefix = extractLangPrefix(candidate.name)
-      if (candidatePrefix && candidatePrefix !== sourcePrefix) continue
-    }
-
+  for (const candidate of pool) {
     const candidateCategory = candidate.category?.trim() || ""
     const info = infoLookup ? infoLookup(candidate.id) : null
     const candidateDirector = info?.directorName ? normalizeName(info.directorName) : ""
