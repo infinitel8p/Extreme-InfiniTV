@@ -138,3 +138,43 @@ describe("dev mode", () => {
     expect(received).toEqual([true, false])
   })
 })
+
+describe("density", () => {
+  it("defaults to cozy", async () => {
+    const { getDensity } = await import("@/scripts/lib/app-settings.js")
+    expect(getDensity()).toBe("cozy")
+  })
+
+  it("falls back to cozy for a bogus stored value", async () => {
+    localStorage.setItem("xt_density", "spacious")
+    const { getDensity } = await import("@/scripts/lib/app-settings.js")
+    expect(getDensity()).toBe("cozy")
+  })
+
+  it("set compact writes localStorage and sets --xt-density and data-density on documentElement", async () => {
+    const { setDensity } = await import("@/scripts/lib/app-settings.js")
+    setDensity("compact")
+    expect(localStorage.getItem("xt_density")).toBe("compact")
+    expect(document.documentElement.style.getPropertyValue("--xt-density")).toBe("0.75")
+    expect(document.documentElement.getAttribute("data-density")).toBe("compact")
+  })
+
+  it("set cozy removes the key, the attribute, and the inline var", async () => {
+    const { setDensity } = await import("@/scripts/lib/app-settings.js")
+    setDensity("compact")
+    setDensity("cozy")
+    expect(localStorage.getItem("xt_density")).toBe(null)
+    expect(document.documentElement.style.getPropertyValue("--xt-density")).toBe("")
+    expect(document.documentElement.hasAttribute("data-density")).toBe(false)
+  })
+
+  it("getDensityFactor returns the numeric factor for each preset", async () => {
+    const { setDensity, getDensityFactor } = await import("@/scripts/lib/app-settings.js")
+    setDensity("compact")
+    expect(getDensityFactor()).toBe(0.75)
+    setDensity("cozy")
+    expect(getDensityFactor()).toBe(1)
+    setDensity("comfortable")
+    expect(getDensityFactor()).toBe(1.3)
+  })
+})

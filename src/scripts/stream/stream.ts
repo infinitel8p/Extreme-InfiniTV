@@ -94,6 +94,7 @@ import {
   SETTINGS_EVENT,
   getMonoAudioEnabled,
   setMonoAudioEnabled,
+  getDensityFactor,
 } from "@/scripts/lib/app-settings.js"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
@@ -418,7 +419,7 @@ function computeRowH() {
     getComputedStyle(document.documentElement).fontSize || "16"
   )
   const base = Number.isFinite(rootPx) && rootPx > 0 ? rootPx : 16
-  return Math.max(56, Math.round(base * 4.25))
+  return Math.max(48, Math.round(base * 4.25 * getDensityFactor()))
 }
 let ROW_H = computeRowH()
 

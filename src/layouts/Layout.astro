@@ -55,6 +55,12 @@ const documentTitle = pageTitle
         if (isFinite(cw) && cw >= 18 && cw <= 60) {
           document.documentElement.style.setProperty("--xt-channels-w", cw + "rem");
         }
+        var densityMap = { compact: 0.75, comfortable: 1.3 };
+        var densityName = localStorage.getItem("xt_density");
+        if (densityName && densityMap[densityName]) {
+          document.documentElement.style.setProperty("--xt-density", String(densityMap[densityName]));
+          document.documentElement.setAttribute("data-density", densityName);
+        }
         if (localStorage.getItem("xt_sidebar_collapsed") === "1") {
           document.documentElement.setAttribute("data-sidebar-collapsed", "");
         }

@@ -376,6 +376,27 @@ const navStructure: NavSection[] = [
                   </div>
                 </div>
               </div>
+
+              <div class="settings-row">
+                <div class="settings-row__text">
+                  <span data-i18n="settings.density.label" class="text-sm font-medium leading-snug">Density</span>
+                  <p data-i18n="settings.density.helper" class="text-xs text-fg-3">
+                    Tightens or loosens spacing in lists and menus. Independent of font scale.
+                  </p>
+                </div>
+                <div class="settings-row__control">
+                  <div
+                    id="settings-density"
+                    class="settings-seg"
+                    role="radiogroup"
+                    data-i18n-attr="aria-label:settings.density.label"
+                    aria-label="Density">
+                    <button type="button" data-density="compact"     aria-pressed="false" data-i18n="settings.density.compact" class="density-btn btn">Compact</button>
+                    <button type="button" data-density="cozy"        aria-pressed="false" data-i18n="settings.density.cozy" class="density-btn btn">Cozy</button>
+                    <button type="button" data-density="comfortable" aria-pressed="false" data-i18n="settings.density.comfortable" class="density-btn btn">Comfortable</button>
+                  </div>
+                </div>
+              </div>
               <script is:inline>
                 try {
                   var savedFontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1");
@@ -386,6 +407,15 @@ const navStructure: NavSection[] = [
                     for (var i = 0; i < fontScaleBtns.length; i++) {
                       var btnScale = parseFloat(fontScaleBtns[i].getAttribute("data-scale") || "1");
                       fontScaleBtns[i].setAttribute("aria-pressed", Math.abs(btnScale - savedFontScale) < 0.001 ? "true" : "false");
+                    }
+                  }
+                  var savedDensity = localStorage.getItem("xt_density") || "cozy";
+                  if (savedDensity !== "compact" && savedDensity !== "cozy" && savedDensity !== "comfortable") savedDensity = "cozy";
+                  var densityGroup = document.getElementById("settings-density");
+                  if (densityGroup) {
+                    var densityBtns = densityGroup.querySelectorAll(".density-btn");
+                    for (var densityIndex = 0; densityIndex < densityBtns.length; densityIndex++) {
+                      densityBtns[densityIndex].setAttribute("aria-pressed", densityBtns[densityIndex].getAttribute("data-density") === savedDensity ? "true" : "false");
                     }
                   }
                   var currentTheme = localStorage.getItem("xt_theme") || "system";
@@ -2061,6 +2091,8 @@ const navStructure: NavSection[] = [
       getAccent,
       setAccent,
       ACCENT_PRESETS,
+      getDensity,
+      setDensity,
       getProgressRetentionDays,
       setProgressRetentionDays,
       getNetworkTimeoutSeconds,
@@ -3041,6 +3073,31 @@ const navStructure: NavSection[] = [
       applyFontScale(v)
     })
     syncFontScaleButtons()
+
+    // ---------------------------------------------------------------------
+    // Density: applied inline in <head> on every page load (see
+    // Layout.astro). Here we just expose the picker UI and persist changes.
+    // No preview/animation logic - density flips are discrete.
+    // ---------------------------------------------------------------------
+    const densityGroup = document.getElementById("settings-density")
+    function syncDensityButtons() {
+      const currentDensity = getDensity()
+      for (const densityButton of densityGroup?.querySelectorAll(".density-btn") ||
+        []) {
+        densityButton.setAttribute(
+          "aria-pressed",
+          String(densityButton.dataset.density === currentDensity)
+        )
+      }
+    }
+    densityGroup?.addEventListener("click", (event) => {
+      const clickedElement = /** @type {HTMLElement} */ (event.target)
+      const densityButton = clickedElement.closest(".density-btn")
+      if (!densityButton) return
+      setDensity(densityButton.dataset.density)
+      syncDensityButtons()
+    })
+    syncDensityButtons()
 
     // ---------------------------------------------------------------------
     // Theme: light / dark / system. Persisted to xt_theme; applied by the

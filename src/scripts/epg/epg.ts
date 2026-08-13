@@ -37,13 +37,14 @@ import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { requestLogoFallback } from "@/scripts/lib/logo-fallback.ts"
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
+import { getDensityFactor } from "@/scripts/lib/app-settings.js"
 
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
 
 const PX_PER_HOUR = 200
 const HOURS_VISIBLE = 6
-const ROW_HEIGHT = 64
+const ROW_HEIGHT = Math.max(44, Math.round(64 * getDensityFactor()))
 const CHANNEL_COL_WIDTH = 240
 const MAX_CHANNELS = 150
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -115,7 +116,7 @@ function showLoadingSkeleton(label = t("epg.loadingSkeleton")) {
 function renderEpgSkeletonInto(target, label) {
   const HOURS = 6
   const HEADER_H = 40
-  const ROW_H = 64
+  const ROW_H = Math.max(44, Math.round(64 * getDensityFactor()))
   const CHANNEL_W = 240
   const HOUR_W = 200
   // Calculate rows needed to fill the viewport. Falls back to a generous

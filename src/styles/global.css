@@ -714,7 +714,7 @@ dialog[open] .xt-wn-section {
 /* ────────────────────────────── */
 .channel-row {
     content-visibility: auto;
-    contain-intrinsic-size: 4.25rem;
+    contain-intrinsic-size: calc(4.25rem * var(--xt-density, 1));
     scroll-margin-block: 8px;
     position: relative;
     overflow: hidden;
@@ -730,7 +730,7 @@ dialog[open] .xt-wn-section {
 .map-row,
 .pick-row {
     content-visibility: auto;
-    contain-intrinsic-size: 56px;
+    contain-intrinsic-size: calc(56px * var(--xt-density, 1));
 }
 
 .map-row[data-just-changed="true"] {
@@ -1794,6 +1794,9 @@ html[data-perf-mode="on"] [data-hero-blur] {
     }
 }
 
+html[data-density="compact"] :is(#movie-grid, #series-grid) { gap: 0.375rem; }
+html[data-density="comfortable"] :is(#movie-grid, #series-grid) { gap: 1.5rem; }
+
 /* ────────────────────────────── */
 /* Welcome (no-playlist) hero     */
 /* ────────────────────────────── */
@@ -2059,10 +2062,11 @@ html[data-perf-mode="on"] [data-hero-blur] {
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
-    column-gap: 1.5rem;
-    row-gap: 0.5rem;
-    padding: 0.875rem 1.25rem;
-    min-height: 3.5rem;
+    column-gap: calc(1.5rem * var(--xt-density, 1));
+    row-gap: calc(0.5rem * var(--xt-density, 1));
+    padding-block: calc(0.875rem * var(--xt-density, 1));
+    padding-inline: 1.25rem;
+    min-height: max(2.75rem, calc(3.5rem * var(--xt-density, 1)));
 }
 .settings-row__text {
     display: flex;

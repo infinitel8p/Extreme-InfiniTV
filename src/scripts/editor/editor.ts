@@ -33,8 +33,9 @@ import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.ts"
 import { ICON_GRIP_VERTICAL, ICON_ARROW_UP, ICON_ARROW_DOWN, ICON_TRASH, ICON_PENCIL } from "@/scripts/lib/icons.ts"
 import { log } from "@/scripts/lib/log.ts"
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
+import { getDensityFactor } from "@/scripts/lib/app-settings.js"
 
-const ROW_H = 56
+const ROW_H = Math.max(44, Math.round(56 * getDensityFactor()))
 const SOURCE_OVERSCAN = 6
 
 let entryId = ""

@@ -8,6 +8,7 @@ const KEY_DOWNLOAD_CONCURRENCY = "xt_download_concurrency"
 const KEY_WRITE_NFO = "xt_write_nfo"
 const KEY_PERF_MODE = "xt_perf_mode"
 const KEY_ACCENT = "xt_accent"
+const KEY_DENSITY = "xt_density"
 const KEY_PROGRESS_RETENTION = "xt_progress_retention_days"
 const KEY_NETWORK_TIMEOUT_S = "xt_network_timeout_s"
 const KEY_PLAYER_BACKEND = "xt_player_backend"
@@ -39,6 +40,8 @@ const EVT_CHANGED = "xt:settings-changed"
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
 export const ACCENT_EVENT = "xt:accent-changed"
 export const ACCENT_PRESETS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"]
+export const DENSITY_EVENT = "xt:density-changed"
+export const DENSITY_PRESETS = { compact: 0.75, cozy: 1, comfortable: 1.3 }
 export const PROGRESS_RETENTION_EVENT = "xt:progress-retention-changed"
 export const PLAYER_BACKEND_EVENT = "xt:player-backend-changed"
 export const CLOSE_TO_TRAY_EVENT = "xt:close-to-tray-changed"
@@ -268,6 +271,33 @@ export function setAccent(accentId) {
       new CustomEvent(ACCENT_EVENT, { detail: { value: normalized } })
     )
   }
+}
+
+// Density: spacing preset for lists and settings rows (compact/cozy/comfortable).
+export function getDensity() {
+  const stored = readLS(KEY_DENSITY, "")
+  return Object.prototype.hasOwnProperty.call(DENSITY_PRESETS, stored) ? stored : "cozy"
+}
+
+export function setDensity(name) {
+  const normalized = Object.prototype.hasOwnProperty.call(DENSITY_PRESETS, name) ? name : "cozy"
+  writeLS(KEY_DENSITY, normalized === "cozy" ? "" : normalized)
+  if (typeof document !== "undefined") {
+    if (normalized === "cozy") {
+      document.documentElement.style.removeProperty("--xt-density")
+      document.documentElement.removeAttribute("data-density")
+    } else {
+      document.documentElement.style.setProperty("--xt-density", String(DENSITY_PRESETS[normalized]))
+      document.documentElement.setAttribute("data-density", normalized)
+    }
+    document.dispatchEvent(
+      new CustomEvent(DENSITY_EVENT, { detail: { value: normalized } })
+    )
+  }
+}
+
+export function getDensityFactor() {
+  return DENSITY_PRESETS[getDensity()]
 }
 
 // TV safe-area inset
