@@ -1561,8 +1561,13 @@ async function attachMpegts(
     if (!isLive) {
       try {
         const hostname = new URL(cleanUrl).hostname
-        // Lazy-load aborts kill stateful local proxy sessions.
-        if (hostname === "127.0.0.1" || hostname === "localhost") config.lazyLoad = false
+        // Lazy-load aborts kill stateful proxy sessions; auto-cleanup keeps the MSE quota from filling instead.
+        if (hostname === "127.0.0.1" || hostname === "localhost") {
+          config.lazyLoad = false
+          config.autoCleanupSourceBuffer = true
+          config.autoCleanupMaxBackwardDuration = 90
+          config.autoCleanupMinBackwardDuration = 60
+        }
       } catch {}
     }
     const mediaDataSource: Record<string, unknown> = { type: "mpegts", isLive, url: cleanUrl }

@@ -2034,13 +2034,16 @@ async function playEpisode(episode, options = {}) {
   const stallVideoEl = player.getMediaElement?.()
   if (stallVideoEl) {
     stallWatchdogDetach = attachStallWatchdog(stallVideoEl, {
-      ...(remuxOwnsInitialMount ? { stallTimeoutMs: 6000 } : {}),
+      ...(remuxOwnsInitialMount
+        ? { stallTimeoutMs: 12000, isSuspended: () => ownAudioSwitcher?.isRecovering() ?? false }
+        : {}),
       onStall: (attemptNumber) => {
         if (remuxOwnsInitialMount) {
           log.info("[xt:series-detail] remux mount stalled - restarting the remux session to recover", {
             attempt: attemptNumber,
           })
           ownAudioSwitcher?.recoverRemuxStall()
+          stallWatchdogDetach?.resetStallClock()
           return
         }
         log.info("[xt:series-detail] embedded player stalled - re-attaching src to recover", {

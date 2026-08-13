@@ -36,8 +36,16 @@ export interface StallWatchdogOptions {
   maxAttempts?: number
   /** Continuous healthy-progress duration (ms) that resets the attempt counter. Default 30000. */
   progressResetMs?: number
+  /** While true, ticks are ineligible (like paused), so a caller-driven recovery is never counted as a stall. */
+  isSuspended?: () => boolean
   /** Called with the 1-based attempt number each time a stall period elapses. */
   onStall: (attemptNumber: number) => void
+}
+
+export interface StallWatchdogHandle {
+  (): void
+  /** Clears the stall accumulator and re-baselines progress. */
+  resetStallClock(): void
 }
 
 const DEFAULT_STALL_TIMEOUT_MS = 12000
@@ -57,18 +65,16 @@ function bufferedAheadEnd(video: StallWatchableVideo): number {
   return currentTime
 }
 
-/**
- * Attaches a stall-recovery watchdog to `videoEl`. Returns a detach function
- * that clears the interval and removes all listeners.
- */
+/** The returned handle detaches when called; `.resetStallClock()` re-baselines without detaching. */
 export function attachStallWatchdog(
   videoEl: StallWatchableVideo,
   options: StallWatchdogOptions
-): () => void {
+): StallWatchdogHandle {
   const stallTimeoutMs = options.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS
   const checkIntervalMs = options.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS
   const maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
   const progressResetMs = options.progressResetMs ?? DEFAULT_PROGRESS_RESET_MS
+  const isSuspended = options.isSuspended
   const onStall = options.onStall
 
   let lastCurrentTime = videoEl.currentTime
@@ -80,20 +86,26 @@ export function attachStallWatchdog(
   let attemptCount = 0
   let dormant = false
 
-  function resetStallClock(): void {
+  function clearStalledAccumulator(): void {
     stalledMs = 0
   }
 
+  function resetStallClock(): void {
+    clearStalledAccumulator()
+    lastCurrentTime = videoEl.currentTime
+    lastBufferedEnd = bufferedAheadEnd(videoEl)
+  }
+
   function onPlaying(): void {
-    resetStallClock()
+    clearStalledAccumulator()
   }
 
   function onSeeked(): void {
-    resetStallClock()
+    clearStalledAccumulator()
   }
 
   function onTimeUpdate(): void {
-    if (videoEl.currentTime > lastCurrentTime) resetStallClock()
+    if (videoEl.currentTime > lastCurrentTime) clearStalledAccumulator()
   }
 
   videoEl.addEventListener("playing", onPlaying)
@@ -104,9 +116,10 @@ export function attachStallWatchdog(
     if (dormant) return
 
     // Paused / ended / seeking are user-initiated (or terminal) states, not stalls.
-    const eligible = !videoEl.paused && !videoEl.ended && !videoEl.seeking
+    // A caller-reported suspension (e.g. a recovery remount in flight) is treated the same way.
+    const eligible = !videoEl.paused && !videoEl.ended && !videoEl.seeking && !isSuspended?.()
     if (!eligible) {
-      resetStallClock()
+      clearStalledAccumulator()
       healthyMs = 0
       lastCurrentTime = videoEl.currentTime
       lastBufferedEnd = bufferedAheadEnd(videoEl)
@@ -120,7 +133,7 @@ export function attachStallWatchdog(
     lastBufferedEnd = bufferedEnd
 
     if (progressed) {
-      resetStallClock()
+      clearStalledAccumulator()
       healthyMs += checkIntervalMs
       if (healthyMs >= progressResetMs) {
         attemptCount = 0
@@ -150,10 +163,12 @@ export function attachStallWatchdog(
 
   const intervalId = setInterval(tick, checkIntervalMs)
 
-  return function detach(): void {
+  const detach = function (): void {
     clearInterval(intervalId)
     videoEl.removeEventListener("playing", onPlaying)
     videoEl.removeEventListener("seeked", onSeeked)
     videoEl.removeEventListener("timeupdate", onTimeUpdate)
-  }
+  } as StallWatchdogHandle
+  detach.resetStallClock = resetStallClock
+  return detach
 }

@@ -166,4 +166,48 @@ describe("attachStallWatchdog", () => {
 
     expect(onStall).not.toHaveBeenCalled()
   })
+
+  it("never stalls while isSuspended reports a caller-driven recovery in flight", () => {
+    const video = createFakeVideo({
+      currentTime: 10,
+      buffered: makeBuffered([[0, 10]]),
+      readyState: 2,
+    })
+    const onStall = vi.fn()
+    let suspended = true
+    const detach = attachStallWatchdog(video, {
+      ...OPTIONS_DEFAULTS,
+      onStall,
+      isSuspended: () => suspended,
+    })
+
+    vi.advanceTimersByTime(OPTIONS_DEFAULTS.stallTimeoutMs * 5)
+    expect(onStall).not.toHaveBeenCalled()
+
+    suspended = false
+    vi.advanceTimersByTime(OPTIONS_DEFAULTS.stallTimeoutMs)
+    expect(onStall).toHaveBeenCalledTimes(1)
+    detach()
+  })
+
+  it("resetStallClock() re-baselines progress so a caller's own recovery latency isn't counted", () => {
+    const video = createFakeVideo({
+      currentTime: 10,
+      buffered: makeBuffered([[0, 10]]),
+      readyState: 2,
+    })
+    const onStall = vi.fn()
+    const detach = attachStallWatchdog(video, { ...OPTIONS_DEFAULTS, onStall })
+
+    // Near-stall, then the caller's recovery resets the clock.
+    vi.advanceTimersByTime(OPTIONS_DEFAULTS.stallTimeoutMs - OPTIONS_DEFAULTS.checkIntervalMs)
+    detach.resetStallClock()
+
+    vi.advanceTimersByTime(OPTIONS_DEFAULTS.stallTimeoutMs - OPTIONS_DEFAULTS.checkIntervalMs)
+    expect(onStall).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(OPTIONS_DEFAULTS.checkIntervalMs)
+    expect(onStall).toHaveBeenCalledTimes(1)
+    detach()
+  })
 })
