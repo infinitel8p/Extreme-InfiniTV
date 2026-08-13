@@ -12,6 +12,12 @@ interface ToggleOption {
     ariaKey?: string;
 }
 
+interface SecondarySelect {
+    id: string;
+    label: string;
+    labelKey: string;
+}
+
 interface Props {
     id: string;
     label?: string;
@@ -20,6 +26,7 @@ interface Props {
     defaultValue?: string;
     widthClass?: string;
     toggles?: ToggleOption[];
+    selects?: SecondarySelect[];
 }
 
 const {
@@ -30,9 +37,11 @@ const {
     defaultValue = options[0]?.value,
     widthClass = "sm:w-44 w-full",
     toggles,
+    selects,
 } = Astro.props;
 
 const hasToggles = Boolean(toggles && toggles.length > 0);
+const hasSelects = Boolean(selects && selects.length > 0);
 const hasIcon = Astro.slots.has("icon");
 
 const buttonId = `${id}-button`;
@@ -62,6 +71,19 @@ const initialLabel =
             ))
         }
     </select>
+
+    {
+        hasSelects &&
+            selects!.map((secondary) => (
+                <select
+                    id={secondary.id}
+                    class="sr-only"
+                    tabindex="-1"
+                    aria-hidden="true"
+                    data-sort-menu-select-secondary>
+                </select>
+            ))
+    }
 
     <button
         id={buttonId}
@@ -153,6 +175,18 @@ const initialLabel =
                         </svg>
                 </button>
             ))
+        }
+        {
+            hasSelects &&
+                selects!.map((secondary) => (
+                    <div data-sort-menu-secondary-section={secondary.id} hidden>
+                        <div class="my-1 h-px bg-line" role="separator"></div>
+                        <div class="px-3 py-1.5 text-2xs font-semibold uppercase tracking-wider text-fg-3" data-i18n={secondary.labelKey}>
+                            {secondary.label}
+                        </div>
+                        <div data-sort-menu-secondary-options={secondary.id} role="group"></div>
+                    </div>
+                ))
         }
         {
             hasToggles && (

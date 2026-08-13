@@ -9,19 +9,33 @@ import {
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
 import { debounce } from "@/scripts/lib/debounce.js"
-import { t, initI18n } from "@/scripts/lib/i18n.js"
-import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
+import {
+  cachedFetch,
+  getCached,
+  hydrate as hydrateCache,
+} from "@/scripts/lib/cache.js"
+import { rowsNeedTmdbBackfill } from "@/scripts/lib/catalog-mappers.js"
+import { triggerTmdbBackfillOnce } from "@/scripts/lib/tmdb-backfill.ts"
 import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
+  toggleFavorite,
   isOnWatchlist,
+  toggleWatchlist,
   isCompleted,
+  markCompleted,
+  clearProgress,
   getFavorites,
   getRecents,
   getViewSort,
   setViewSort,
   getHideWatched,
   setHideWatched,
+  getLanguageFilter,
+  setLanguageFilter,
+  getGroupLanguages,
+  setGroupLanguages,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { mountSurprisePicker } from "@/scripts/lib/surprise-picker.ts"
@@ -31,6 +45,8 @@ import { fmtImdbRating, ratingSortValue } from "@/scripts/lib/format.js"
 import {
   buildEntryCard,
   buildWatchedBadge,
+  buildLanguageChips,
+  setLanguageChipsOffset,
   WATCHED_BADGE_CLASS,
   STAR_OUTLINE,
   STAR_FILLED,
@@ -38,6 +54,9 @@ import {
 import { buildMovieStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { resolvePersonTitleIds } from "@/scripts/lib/person-filter.ts"
 import { saveGridState, takeGridState, gridStateMatchesLocation } from "@/scripts/lib/grid-state.ts"
+import { buildGroupingIndex, pickPreferredEntryId, groupPassesLanguageFilter } from "@/scripts/lib/language-groups.ts"
+import { parseNamePrefix, languageTagLabel, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
+import { getContentLanguage, getLanguageGroupingEnabled } from "@/scripts/lib/app-settings.js"
 
 const VOD_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -70,7 +89,11 @@ const clearSearchBtn = document.getElementById("movie-clear-search")
 // State
 // ----------------------------
 let all = []
+// filtered is an array of display groups: { key, entries, tags, globalEntryIds, displayEntry }.
 let filtered = []
+
+// Rebuilt whenever `all` is reassigned; independent of the group-languages toggle.
+let groupingIndex = buildGroupingIndex([])
 
 /** @type {Map<string,string> | null} */
 let categoryMap = null
@@ -94,7 +117,7 @@ document.addEventListener("xt:movie-cat-changed", () => applyFilter())
 mountSurprisePicker({
   kind: "vod",
   triggerId: "movie-surprise",
-  getPool: () => filtered,
+  getPool: () => filtered.map((group) => group.displayEntry),
   getPlaylistId: () => activePlaylistId,
 })
 
@@ -175,9 +198,16 @@ const AUTO_LOAD_CAP = 1500
 let infiniteObs = null
 let renderedCount = 0
 
-function makeCard(m, idx) {
+function makeCard(group, idx) {
+  const displayEntry = group.displayEntry
+  // Strip the tag prefix (redundant once the language shows as a chip) only when 2+ languages are grouped.
+  const stripPrefix = group.tags.length >= 2 && groupingIndex.tagByEntryId.get(displayEntry.id)
+  const cardEntry = stripPrefix
+    ? { ...displayEntry, name: parseNamePrefix(displayEntry.name).rest }
+    : displayEntry
+
   return buildEntryCard({
-    entry: m,
+    entry: cardEntry,
     idx,
     kind: "vod",
     activePlaylistId,
@@ -191,15 +221,50 @@ function makeCard(m, idx) {
       if (entry.category) parts.push(entry.category)
       return parts.join(" \u2022 ")
     },
-    decoratePoster: (posterWrap, entry) => {
-      if (activePlaylistId && isCompleted(activePlaylistId, "vod", entry.id)) {
+    decoratePoster: (posterWrap, _entry) => {
+      let badgePresent = false
+      if (activePlaylistId && group.globalEntryIds.some((id) => isCompleted(activePlaylistId, "vod", id))) {
         posterWrap.appendChild(buildWatchedBadge())
+        badgePresent = true
+      }
+      const chips = buildLanguageChips(
+        group.tags,
+        group.globalEntryIds.length,
+        getActiveLocale(),
+        groupingIndex.tagByEntryId.get(displayEntry.id)
+      )
+      if (chips) {
+        posterWrap.appendChild(chips)
+        setLanguageChipsOffset(posterWrap, badgePresent)
       }
     },
     starLabel: (entry, fav) =>
       fav
         ? `Remove ${entry.name || "movie"} from favorites`
         : `Add ${entry.name || "movie"} to favorites`,
+    favoriteState: () =>
+      activePlaylistId
+        ? group.globalEntryIds.some((id) => isFavorite(activePlaylistId, "vod", id))
+        : false,
+    onToggleFavorite: (entry, currentlyFavorited) => {
+      if (!activePlaylistId) return
+      if (!currentlyFavorited) {
+        toggleFavorite(activePlaylistId, "vod", entry.id, {
+          name: entry.name || "",
+          logo: entry.logo || null,
+        })
+        return
+      }
+      for (const variantId of group.globalEntryIds) {
+        if (isFavorite(activePlaylistId, "vod", variantId)) {
+          toggleFavorite(activePlaylistId, "vod", variantId)
+        }
+      }
+    },
+    watchlistState: () =>
+      activePlaylistId
+        ? group.globalEntryIds.some((id) => isOnWatchlist(activePlaylistId, "vod", id))
+        : false,
     onContextMenu: (entry, anchor, point) => {
       import("@/scripts/lib/poster-menu").then(({ openPosterMenu }) => {
         openPosterMenu({
@@ -218,6 +283,63 @@ function makeCard(m, idx) {
             if (!creds.host || !creds.user || !creds.pass) return null
             const containerExt = (entry as any).container_extension || null
             return buildMovieStreamUrl(creds, entry.id, containerExt)
+          },
+          favoriteActive: () =>
+            activePlaylistId
+              ? group.globalEntryIds.some((id) => isFavorite(activePlaylistId, "vod", id))
+              : false,
+          onToggleFavorite: (currentlyFavorited) => {
+            if (!activePlaylistId) return
+            if (!currentlyFavorited) {
+              toggleFavorite(activePlaylistId, "vod", entry.id, {
+                name: entry.name || "",
+                logo: entry.logo || null,
+              })
+              return
+            }
+            for (const variantId of group.globalEntryIds) {
+              if (isFavorite(activePlaylistId, "vod", variantId)) {
+                toggleFavorite(activePlaylistId, "vod", variantId)
+              }
+            }
+          },
+          watchlistActive: () =>
+            activePlaylistId
+              ? group.globalEntryIds.some((id) => isOnWatchlist(activePlaylistId, "vod", id))
+              : false,
+          onToggleWatchlist: (currentlyOnWatchlist) => {
+            if (!activePlaylistId) return
+            if (!currentlyOnWatchlist) {
+              toggleWatchlist(activePlaylistId, "vod", entry.id, {
+                name: entry.name || "",
+                logo: entry.logo || null,
+              })
+              return
+            }
+            for (const variantId of group.globalEntryIds) {
+              if (isOnWatchlist(activePlaylistId, "vod", variantId)) {
+                toggleWatchlist(activePlaylistId, "vod", variantId)
+              }
+            }
+          },
+          watchedActive: () =>
+            activePlaylistId
+              ? group.globalEntryIds.some((id) => isCompleted(activePlaylistId, "vod", id))
+              : false,
+          onToggleWatched: (currentlyWatched) => {
+            if (!activePlaylistId) return
+            if (!currentlyWatched) {
+              markCompleted(activePlaylistId, "vod", entry.id, {
+                name: entry.name || "",
+                logo: entry.logo || null,
+              })
+              return
+            }
+            for (const variantId of group.globalEntryIds) {
+              if (isCompleted(activePlaylistId, "vod", variantId)) {
+                clearProgress(activePlaylistId, "vod", variantId)
+              }
+            }
           },
         })
       })
@@ -419,15 +541,17 @@ function renderGridInner() {
   }
 }
 
+// movieId may be any variant id in the group, not just the displayed one.
 function updateGridStarFor(movieId) {
   if (!gridEl) return
-  const idx = filtered.findIndex((m) => m.id === movieId)
+  const idx = filtered.findIndex((group) => group.globalEntryIds.includes(movieId))
   if (idx < 0) return
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
-  const m = filtered[idx]
+  const group = filtered[idx]
+  const m = group.displayEntry
   const fav = activePlaylistId
-    ? isFavorite(activePlaylistId, "vod", m.id)
+    ? group.globalEntryIds.some((id) => isFavorite(activePlaylistId, "vod", id))
     : false
   const star = /** @type {HTMLButtonElement|null} */ (
     card.querySelector(".star-btn")
@@ -446,14 +570,16 @@ function updateGridStarFor(movieId) {
   )
 }
 
+// movieId may be any variant id in the group; see updateGridStarFor.
 function updateGridWatchBadgeFor(movieId) {
   if (!gridEl) return
-  const idx = filtered.findIndex((m) => m.id === movieId)
+  const idx = filtered.findIndex((group) => group.globalEntryIds.includes(movieId))
   if (idx < 0) return
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
+  const group = filtered[idx]
   const onWatchlist = activePlaylistId
-    ? isOnWatchlist(activePlaylistId, "vod", movieId)
+    ? group.globalEntryIds.some((id) => isOnWatchlist(activePlaylistId, "vod", id))
     : false
   const badge = /** @type {HTMLElement|null} */ (
     card.querySelector('[data-role="watch-badge"]')
@@ -462,18 +588,21 @@ function updateGridWatchBadgeFor(movieId) {
   badge.hidden = !onWatchlist
 }
 
+// movieId may be any variant id in the group, not just the displayed one.
 function updateGridWatchedBadgeFor(movieId) {
   if (!gridEl) return
-  const idx = filtered.findIndex((m) => m.id === movieId)
+  const idx = filtered.findIndex((group) => group.globalEntryIds.includes(movieId))
   if (idx < 0) return
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
   const wrap = card.querySelector("[data-poster-wrap]")
   if (!wrap) return
   wrap.querySelector(`.${WATCHED_BADGE_CLASS}`)?.remove()
-  if (activePlaylistId && isCompleted(activePlaylistId, "vod", movieId)) {
-    wrap.appendChild(buildWatchedBadge())
-  }
+  const group = filtered[idx]
+  const anyWatched =
+    activePlaylistId && group.globalEntryIds.some((id) => isCompleted(activePlaylistId, "vod", id))
+  if (anyWatched) wrap.appendChild(buildWatchedBadge())
+  setLanguageChipsOffset(wrap, !!anyWatched)
 }
 
 // ----------------------------
@@ -693,10 +822,6 @@ function applyFilter() {
     })
   }
 
-  if (activePlaylistId && getHideWatched(activePlaylistId, "vod")) {
-    out = out.filter((m) => !isCompleted(activePlaylistId, "vod", m.id))
-  }
-
   if (personFilterActive && personTitleIds) {
     out = out.filter((m) => personTitleIds.has(m.id))
   }
@@ -716,43 +841,84 @@ function applyFilter() {
     out = scored
   }
 
+  // Hide-watched and the language filter apply at the group level, so a mismatched variant hides the whole group.
+  // The global setting is a master switch: when off, grouping and the language filter both read as fully absent.
+  const languageGroupingEnabled = getLanguageGroupingEnabled()
+  const groupingEnabled = languageGroupingEnabled && (activePlaylistId ? getGroupLanguages(activePlaylistId, "vod") : true)
+  const selectedLang = languageGroupingEnabled && activePlaylistId ? getLanguageFilter(activePlaylistId, "vod") : ""
+  const hideWatched = activePlaylistId && getHideWatched(activePlaylistId, "vod")
+  // A non-empty language filter takes priority for which variant is displayed.
+  const preferredTags = selectedLang
+    ? [selectedLang, ...effectivePreferredTags(getContentLanguage(), getActiveLocale())].filter(
+        (tag, index, tags) => tags.indexOf(tag) === index
+      )
+    : effectivePreferredTags(getContentLanguage(), getActiveLocale())
+
+  const groupOrder = []
+  const survivorsByKey = new Map()
+  for (const movie of out) {
+    const groupKey = groupingEnabled ? groupingIndex.keyByEntryId.get(movie.id) ?? `e:${movie.id}` : `e:${movie.id}`
+    let survivors = survivorsByKey.get(groupKey)
+    if (!survivors) {
+      survivors = []
+      survivorsByKey.set(groupKey, survivors)
+      groupOrder.push(groupKey)
+    }
+    survivors.push(movie)
+  }
+
+  const displayGroups = []
+  for (const groupKey of groupOrder) {
+    const survivors = survivorsByKey.get(groupKey)
+    const globalInfo = groupingEnabled ? groupingIndex.groupsByKey.get(groupKey) : null
+    const ownTag = groupingIndex.tagByEntryId.get(survivors[0].id) ?? null
+    const tags = globalInfo ? globalInfo.tags : (ownTag ? [ownTag] : [])
+    const globalEntryIds = globalInfo ? globalInfo.entryIds : [survivors[0].id]
+
+    if (!groupPassesLanguageFilter(tags, selectedLang)) continue
+    if (hideWatched && globalEntryIds.some((id) => isCompleted(activePlaylistId, "vod", id))) continue
+
+    const survivorIds = survivors.map((movie) => movie.id)
+    const displayEntryId = pickPreferredEntryId(survivorIds, groupingIndex.tagByEntryId, preferredTags, groupingIndex.qualityRankByEntryId)
+    const displayEntry = survivors.find((movie) => movie.id === displayEntryId) || survivors[0]
+    const maxScore = scoreById ? Math.max(...survivors.map((movie) => scoreById.get(movie.id) || 0)) : 0
+    const maxAdded = Math.max(...survivors.map((movie) => Number(movie.added) || 0))
+
+    displayGroups.push({ key: groupKey, entries: survivors, tags, globalEntryIds, displayEntry, maxScore, maxAdded })
+  }
+
   const mode = activePlaylistId
     ? getViewSort(activePlaylistId, "vod")
     : "default"
   if (mode === "default" && scoreById) {
-    out = out
-      .slice()
-      .sort((firstMovie, secondMovie) =>
-        (scoreById.get(secondMovie.id) || 0) - (scoreById.get(firstMovie.id) || 0)
-      )
+    displayGroups.sort((firstGroup, secondGroup) => secondGroup.maxScore - firstGroup.maxScore)
   } else if (mode === "added") {
-    out = out
-      .slice()
-      .sort((a, b) => Number(b.added || 0) - Number(a.added || 0))
+    displayGroups.sort((firstGroup, secondGroup) => secondGroup.maxAdded - firstGroup.maxAdded)
   } else if (mode === "rating") {
-    out = out
-      .slice()
-      .sort((firstEntry, secondEntry) => {
-        const ratingDelta = ratingSortValue(secondEntry.rating) - ratingSortValue(firstEntry.rating)
-        if (ratingDelta !== 0) return ratingDelta
-        return (firstEntry.name || "").localeCompare(secondEntry.name || "", "en", {
-          sensitivity: "base",
-        })
+    displayGroups.sort((firstGroup, secondGroup) => {
+      const ratingDelta =
+        ratingSortValue(secondGroup.displayEntry.rating) - ratingSortValue(firstGroup.displayEntry.rating)
+      if (ratingDelta !== 0) return ratingDelta
+      return (firstGroup.displayEntry.name || "").localeCompare(secondGroup.displayEntry.name || "", "en", {
+        sensitivity: "base",
       })
+    })
   } else if (mode === "az") {
-    out = out
-      .slice()
-      .sort((a, b) =>
-        (a.name || "").localeCompare(b.name || "", "en", {
-          sensitivity: "base",
-        })
-      )
+    displayGroups.sort((firstGroup, secondGroup) =>
+      (firstGroup.displayEntry.name || "").localeCompare(secondGroup.displayEntry.name || "", "en", {
+        sensitivity: "base",
+      })
+    )
   }
 
-  filtered = out
-  listStatus.textContent = t("movies.ofMovies", { shown: out.length.toLocaleString(), total: all.length.toLocaleString() })
+  filtered = displayGroups
+  const totalGroups = groupingEnabled ? groupingIndex.groupsByKey.size : all.length
+  listStatus.textContent = t("movies.ofMovies", {
+    shown: filtered.length.toLocaleString(),
+    total: totalGroups.toLocaleString(),
+  })
   const heroCount = document.getElementById("movie-hero-count")
-  if (heroCount) heroCount.textContent = out.length.toLocaleString()
+  if (heroCount) heroCount.textContent = filtered.length.toLocaleString()
   const heroCat = document.getElementById("movie-hero-cat")
   if (heroCat) {
     heroCat.textContent =
@@ -796,6 +962,71 @@ document.addEventListener("click", (event) => {
   applyFilter()
 })
 
+const groupLangsBtn = document.getElementById("movie-group-langs")
+// The global setting makes the per-playlist toggle meaningless when off, so hide it entirely.
+if (groupLangsBtn) groupLangsBtn.hidden = !getLanguageGroupingEnabled()
+function syncGroupLangsControl() {
+  if (!groupLangsBtn) return
+  groupLangsBtn.hidden = !getLanguageGroupingEnabled()
+  if (!activePlaylistId) return
+  groupLangsBtn.setAttribute("aria-checked", String(getGroupLanguages(activePlaylistId, "vod")))
+}
+document.addEventListener("click", (event) => {
+  if (!groupLangsBtn || !activePlaylistId) return
+  if (!(event.target instanceof Node) || !groupLangsBtn.contains(event.target)) return
+  const next = groupLangsBtn.getAttribute("aria-checked") === "true"
+  setGroupLanguages(activePlaylistId, "vod", next)
+  applyFilter()
+})
+
+const langFilterEl = /** @type {HTMLSelectElement|null} */ (
+  document.getElementById("movie-lang")
+)
+function syncLangFilterControl() {
+  if (!langFilterEl || !activePlaylistId) return
+  langFilterEl.value = getLanguageFilter(activePlaylistId, "vod")
+}
+langFilterEl?.addEventListener("change", () => {
+  if (!activePlaylistId || !langFilterEl) return
+  setLanguageFilter(activePlaylistId, "vod", langFilterEl.value)
+  applyFilter()
+})
+
+// A stored filter tag no longer in the catalog is kept as a selectable option so it stays visible and clearable.
+function populateLanguageFilterOptions() {
+  if (!langFilterEl) return
+  const languageGroupingEnabled = getLanguageGroupingEnabled()
+  const frequencyByTag = new Map()
+  if (languageGroupingEnabled) {
+    for (const tag of groupingIndex.tagByEntryId.values()) {
+      if (!tag) continue
+      frequencyByTag.set(tag, (frequencyByTag.get(tag) || 0) + 1)
+    }
+  }
+  const tags = Array.from(frequencyByTag.keys()).sort(
+    (firstTag, secondTag) => frequencyByTag.get(secondTag) - frequencyByTag.get(firstTag)
+  )
+
+  const currentValue = languageGroupingEnabled && activePlaylistId ? getLanguageFilter(activePlaylistId, "vod") : ""
+  if (currentValue && !tags.includes(currentValue)) tags.push(currentValue)
+
+  const locale = getActiveLocale()
+  langFilterEl.replaceChildren()
+  const allOption = document.createElement("option")
+  allOption.value = ""
+  allOption.textContent = t("list.langFilter.all")
+  langFilterEl.appendChild(allOption)
+  for (const tag of tags) {
+    const option = document.createElement("option")
+    option.value = tag
+    const label = languageTagLabel(tag, locale)
+    option.textContent = label !== tag ? `${label} (${tag})` : tag
+    langFilterEl.appendChild(option)
+  }
+  langFilterEl.value = currentValue
+  langFilterEl.dispatchEvent(new CustomEvent("xt:sort-menu-refresh"))
+}
+
 searchEl?.addEventListener(
   "input",
   debounce(() => {
@@ -824,13 +1055,66 @@ function showEmptyState() {
 
 function paintMovies(data, fromCache, age) {
   all = data
+  groupingIndex = buildGroupingIndex(all)
   if (listStatus) {
     listStatus.textContent =
       t("movies.totalMovies", { count: all.length.toLocaleString() }) +
       (fromCache ? ` · ${fmtAge(age)}` : "")
   }
   picker.rerender()
+  populateLanguageFilterOptions()
   applyFilter()
+}
+
+async function fetchMovieRows() {
+  const catMap = await ensureVodCategoryMap()
+  const r = await xtreamApiFetch("get_vod_streams")
+  const body = await r.text()
+  if (!r.ok) {
+    log.error("Upstream error body:", body)
+    throw new Error(`API ${r.status}: ${body}`)
+  }
+  const parsed = JSON.parse(body)
+  const arr = Array.isArray(parsed)
+    ? parsed
+    : parsed?.movies || parsed?.results || []
+  return (arr || [])
+    .map((m) => {
+      const name = String(m.name || m.title || "")
+      const id = Number(m.stream_id || m.id)
+      const logo = m.stream_icon || m.cover || null
+      const year = String(m.year || m.releaseDate || "").trim() || ""
+      const rating = m.rating || m.rating_5based || m.vote_average || ""
+      const duration = m.duration || m.runtime || m.duration_secs || ""
+      const categoryId =
+        (Array.isArray(m.category_ids) &&
+          m.category_ids.length &&
+          m.category_ids[0]) ||
+        m.category_id
+      let category = String(m.category_name || "").trim()
+      if (!category && categoryId != null && catMap?.size) {
+        category = catMap.get(String(categoryId)) || ""
+      }
+      const added = Number(m.added) || 0
+      const tmdb = Number(m.tmdb) || Number(m.tmdb_id) || null
+      return {
+        id,
+        name,
+        logo: logo || null,
+        year,
+        rating: rating ? String(rating) : "",
+        duration: duration ? String(duration) : "",
+        category,
+        plot: "",
+        added,
+        norm: normalize(`${name} ${category} ${year}`),
+        tmdb,
+      }
+    })
+    .filter((m) => m.id && m.name)
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, "en", { sensitivity: "base" })
+    )
 }
 
 async function loadMovies() {
@@ -848,11 +1132,16 @@ async function loadMovies() {
   await ensurePrefsLoaded()
   syncSortControl()
   syncHideWatchedControl()
+  syncGroupLangsControl()
+  syncLangFilterControl()
   await hydrateCache(active._id, "vod")
 
   const hit = getCached(active._id, "vod")
   if (hit) {
     paintMovies(hit.data, true, hit.age)
+    if (rowsNeedTmdbBackfill(hit.data)) {
+      triggerTmdbBackfillOnce(active._id, "vod", VOD_TTL_MS, fetchMovieRows)
+    }
   } else {
     listStatus.textContent = t("common.loading")
     if (!gridEl?.querySelector("[data-skeleton]")) renderPosterSkeletons(gridEl)
@@ -874,54 +1163,7 @@ async function loadMovies() {
       active._id,
       "vod",
       VOD_TTL_MS,
-      async () => {
-        const catMap = await ensureVodCategoryMap()
-        const r = await xtreamApiFetch("get_vod_streams")
-        const body = await r.text()
-        if (!r.ok) {
-          log.error("Upstream error body:", body)
-          throw new Error(`API ${r.status}: ${body}`)
-        }
-        const parsed = JSON.parse(body)
-        const arr = Array.isArray(parsed)
-          ? parsed
-          : parsed?.movies || parsed?.results || []
-        return (arr || [])
-          .map((m) => {
-            const name = String(m.name || m.title || "")
-            const id = Number(m.stream_id || m.id)
-            const logo = m.stream_icon || m.cover || null
-            const year = String(m.year || m.releaseDate || "").trim() || ""
-            const rating = m.rating || m.rating_5based || m.vote_average || ""
-            const duration = m.duration || m.runtime || m.duration_secs || ""
-            const categoryId =
-              (Array.isArray(m.category_ids) &&
-                m.category_ids.length &&
-                m.category_ids[0]) ||
-              m.category_id
-            let category = String(m.category_name || "").trim()
-            if (!category && categoryId != null && catMap?.size) {
-              category = catMap.get(String(categoryId)) || ""
-            }
-            const added = Number(m.added) || 0
-            return {
-              id,
-              name,
-              logo: logo || null,
-              year,
-              rating: rating ? String(rating) : "",
-              duration: duration ? String(duration) : "",
-              category,
-              plot: "",
-              added,
-              norm: normalize(`${name} ${category} ${year}`),
-            }
-          })
-          .filter((m) => m.id && m.name)
-          .sort((a, b) =>
-            a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-          )
-      }
+      fetchMovieRows
     )
 
     paintMovies(data, fromCache, age)

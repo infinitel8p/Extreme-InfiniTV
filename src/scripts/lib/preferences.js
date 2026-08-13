@@ -11,6 +11,7 @@ const isTauri =
 
 const STORAGE_KEY = "xt_prefs"
 const VALID_CATEGORY_SORTS = new Set(["default", "az", "za"])
+const LANG_FILTER_PATTERN = /^[A-Z0-9+]{0,8}$/
 const RECENT_CAP = 30
 const SEARCH_RECENT_CAP = 10
 const PROGRESS_CAP = 200
@@ -31,6 +32,8 @@ const EVT_WATCHLIST_CHANGED = "xt:watchlist-changed"
 const EVT_CHANNEL_VIDEO_SCALE_CHANGED = "xt:channel-video-scale-changed"
 export const EVT_SEARCH_RECENT_CHANGED = "xt:search-recent-changed"
 export const EVT_HIDE_WATCHED_CHANGED = "xt:hide-watched-changed"
+export const EVT_LANG_FILTER_CHANGED = "xt:lang-filter-changed"
+export const EVT_GROUP_LANGS_CHANGED = "xt:group-langs-changed"
 
 let storePromise = null
 function getStore() {
@@ -163,6 +166,8 @@ function emptyEntry() {
     hideWatchedVod: false,
     hideWatchedSeries: false,
     watchedSeriesOverride: Object.create(null),
+    langFilter: { vod: "", series: "" },
+    groupLangs: { vod: true, series: true },
   }
 }
 
@@ -172,6 +177,8 @@ function hydrate(raw) {
   for (const [pid, val] of Object.entries(raw)) {
     if (!val || typeof val !== "object") continue
     const v = val.viewSort && typeof val.viewSort === "object" ? val.viewSort : {}
+    const langFilterRaw = val.langFilter && typeof val.langFilter === "object" ? val.langFilter : {}
+    const groupLangsRaw = val.groupLangs && typeof val.groupLangs === "object" ? val.groupLangs : {}
     cache.set(pid, {
       favLive: new Set(Array.isArray(val.favLive) ? val.favLive : []),
       favVod: new Set(Array.isArray(val.favVod) ? val.favVod : []),
@@ -299,6 +306,18 @@ function hydrate(raw) {
         val.watchedSeriesOverride && typeof val.watchedSeriesOverride === "object"
           ? Object.assign(Object.create(null), val.watchedSeriesOverride)
           : Object.create(null),
+      langFilter: {
+        vod: typeof langFilterRaw.vod === "string" && LANG_FILTER_PATTERN.test(langFilterRaw.vod)
+          ? langFilterRaw.vod
+          : "",
+        series: typeof langFilterRaw.series === "string" && LANG_FILTER_PATTERN.test(langFilterRaw.series)
+          ? langFilterRaw.series
+          : "",
+      },
+      groupLangs: {
+        vod: groupLangsRaw.vod !== false,
+        series: groupLangsRaw.series !== false,
+      },
     })
   }
 }
@@ -353,6 +372,8 @@ function dehydrate() {
       hideWatchedVod: v.hideWatchedVod,
       hideWatchedSeries: v.hideWatchedSeries,
       watchedSeriesOverride: { ...v.watchedSeriesOverride },
+      langFilter: { vod: v.langFilter.vod, series: v.langFilter.series },
+      groupLangs: { vod: v.groupLangs.vod, series: v.groupLangs.series },
     }
   }
   return out
@@ -1583,6 +1604,41 @@ export function setHideWatched(playlistId, kind, enabled) {
   e[key] = next
   scheduleSave()
   dispatch(EVT_HIDE_WATCHED_CHANGED, { playlistId, kind, enabled: next })
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind */
+export function getLanguageFilter(playlistId, kind) {
+  const e = cache.get(playlistId)
+  return e?.langFilter?.[kind] || ""
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind @param {string} tag */
+export function setLanguageFilter(playlistId, kind, tag) {
+  if (!playlistId) return
+  const normalized = String(tag || "").toUpperCase()
+  const sanitized = LANG_FILTER_PATTERN.test(normalized) ? normalized : ""
+  const e = getOrCreate(playlistId)
+  if (e.langFilter[kind] === sanitized) return
+  e.langFilter[kind] = sanitized
+  scheduleSave()
+  dispatch(EVT_LANG_FILTER_CHANGED, { playlistId, kind, tag: sanitized })
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind */
+export function getGroupLanguages(playlistId, kind) {
+  const e = cache.get(playlistId)
+  return e?.groupLangs?.[kind] !== false
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind @param {boolean} enabled */
+export function setGroupLanguages(playlistId, kind, enabled) {
+  if (!playlistId) return
+  const e = getOrCreate(playlistId)
+  const next = !!enabled
+  if (e.groupLangs[kind] === next) return
+  e.groupLangs[kind] = next
+  scheduleSave()
+  dispatch(EVT_GROUP_LANGS_CHANGED, { playlistId, kind, enabled: next })
 }
 
 // ---------------------------------------------------------------------------

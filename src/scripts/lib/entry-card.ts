@@ -10,6 +10,7 @@ import { t } from "@/scripts/lib/i18n.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
 import { ICON_CHECK } from "@/scripts/lib/icons.js"
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
+import { languageTagLabel } from "@/scripts/lib/language-tags.ts"
 import {
   isFavorite,
   toggleFavorite,
@@ -41,6 +42,43 @@ export function buildWatchedBadge(): HTMLSpanElement {
   badge.title = t("list.watchedBadge")
   badge.innerHTML = ICON_CHECK
   return badge
+}
+
+export const LANGUAGE_CHIPS_CLASS = "entry-language-chips"
+
+/** Bottom-right language pill for a grouped card (tag + overflow, or a variant count); null when there's nothing to show. */
+export function buildLanguageChips(
+  tags: string[],
+  variantCount: number,
+  locale: string,
+  displayTag?: string | null
+): HTMLSpanElement | null {
+  const showTags = tags.length >= 2
+  const showCount = !showTags && variantCount > 1
+  if (!showTags && !showCount) return null
+
+  const chip = document.createElement("span")
+  chip.className =
+    `${LANGUAGE_CHIPS_CLASS} absolute bottom-1.5 right-1.5 inline-flex items-center gap-1 ` +
+    "rounded-md px-1.5 py-0.5 bg-black/55 backdrop-blur-sm " +
+    "ring-1 ring-white/10 text-white/90 text-2xs font-semibold tabular-nums"
+
+  if (showTags) {
+    const featuredTag = displayTag && tags.includes(displayTag) ? displayTag : tags[0]
+    chip.textContent = `${featuredTag} +${tags.length - 1}`
+    chip.title = tags.map((tag) => languageTagLabel(tag, locale)).join(", ")
+  } else {
+    chip.textContent = `x${variantCount}`
+  }
+  return chip
+}
+
+/** Keeps the language pill from overlapping the watched/progress badge, which shares the bottom-right corner. */
+export function setLanguageChipsOffset(posterWrap: HTMLElement, badgePresent: boolean): void {
+  const chips = posterWrap.querySelector(`.${LANGUAGE_CHIPS_CLASS}`)
+  if (!chips) return
+  chips.classList.toggle("bottom-8", badgePresent)
+  chips.classList.toggle("bottom-1.5", !badgePresent)
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +129,12 @@ export interface BuildEntryCardOptions<T extends EntryLike> {
   decoratePoster?: (posterWrap: HTMLDivElement, entry: T) => void
   /** aria-label for the star button when not yet favorited. */
   starLabel?: (entry: T, fav: boolean) => string
+  /** Opt-in group-aware favorite state, overriding the default `isFavorite` lookup. */
+  favoriteState?: (entry: T) => boolean
+  /** Opt-in group-aware favorite toggle, overriding the default `toggleFavorite` call. */
+  onToggleFavorite?: (entry: T, currentlyFavorited: boolean) => void
+  /** Opt-in group-aware watchlist state, overriding the default `isOnWatchlist` lookup. */
+  watchlistState?: (entry: T) => boolean
   /**
    * Right-click / long-press handler. When provided, wires the shared poster
    * context menu (`poster-menu.ts`) so users get Open / Favorite / Watchlist
@@ -126,6 +170,9 @@ export function buildEntryCard<T extends EntryLike>(
     metaText,
     decoratePoster,
     starLabel = DEFAULT_STAR_LABEL,
+    favoriteState,
+    onToggleFavorite,
+    watchlistState,
     onContextMenu,
   } = opts
 
@@ -215,7 +262,9 @@ export function buildEntryCard<T extends EntryLike>(
   if (decoratePoster) decoratePoster(posterWrap, entry)
 
   const onWatchlist = activePlaylistId
-    ? isOnWatchlist(activePlaylistId, kind, entry.id)
+    ? watchlistState
+      ? watchlistState(entry)
+      : isOnWatchlist(activePlaylistId, kind, entry.id)
     : false
   const watchBadge = document.createElement("span")
   watchBadge.dataset.role = "watch-badge"
@@ -245,7 +294,11 @@ export function buildEntryCard<T extends EntryLike>(
 
   card.appendChild(link)
 
-  const fav = activePlaylistId ? isFavorite(activePlaylistId, kind, entry.id) : false
+  const fav = activePlaylistId
+    ? favoriteState
+      ? favoriteState(entry)
+      : isFavorite(activePlaylistId, kind, entry.id)
+    : false
   const starBtn = document.createElement("button")
   starBtn.type = "button"
   starBtn.dataset.role = "star"
@@ -265,6 +318,10 @@ export function buildEntryCard<T extends EntryLike>(
     e.stopPropagation()
     e.preventDefault()
     if (!activePlaylistId) return
+    if (onToggleFavorite) {
+      onToggleFavorite(entry, fav)
+      return
+    }
     toggleFavorite(activePlaylistId, kind, entry.id, {
       name: entry.name || "",
       logo: entry.logo || null,

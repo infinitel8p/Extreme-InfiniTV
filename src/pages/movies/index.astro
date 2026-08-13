@@ -64,7 +64,11 @@ import { IconAdjustmentsHorizontal, IconChevronDown, IconDice5, IconX } from "@t
 						{ value: "rating", label: "Rating", key: "sort.rating" },
 						{ value: "az", label: "A-Z", key: "sort.az" },
 					]}
+					selects={[
+						{ id: "movie-lang", label: "Language", labelKey: "list.langFilter.label" },
+					]}
 					toggles={[
+						{ id: "movie-group-langs", label: "Group languages", key: "list.groupLangs", ariaKey: "list.groupLangs.aria" },
 						{ id: "movie-hide-watched", label: "Hide watched", key: "list.hideWatched", ariaKey: "list.hideWatched.aria" },
 					]}
 				>

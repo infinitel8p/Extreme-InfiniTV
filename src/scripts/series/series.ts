@@ -8,12 +8,20 @@ import {
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
 import { debounce } from "@/scripts/lib/debounce.js"
-import { t, initI18n } from "@/scripts/lib/i18n.js"
-import { cachedFetch, getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
+import {
+  cachedFetch,
+  getCached,
+  hydrate as hydrateCache,
+} from "@/scripts/lib/cache.js"
+import { rowsNeedTmdbBackfill } from "@/scripts/lib/catalog-mappers.js"
+import { triggerTmdbBackfillOnce } from "@/scripts/lib/tmdb-backfill.ts"
 import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
+  toggleFavorite,
   isOnWatchlist,
+  toggleWatchlist,
   getSeriesEpisodeProgress,
   getFavorites,
   getRecents,
@@ -23,6 +31,11 @@ import {
   getHideWatched,
   setHideWatched,
   hasSeriesWatchedOverride,
+  setSeriesWatchedOverride,
+  getLanguageFilter,
+  setLanguageFilter,
+  getGroupLanguages,
+  setGroupLanguages,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { mountSurprisePicker } from "@/scripts/lib/surprise-picker.ts"
@@ -32,6 +45,8 @@ import { fmtImdbRating, ratingSortValue } from "@/scripts/lib/format.js"
 import {
   buildEntryCard,
   buildWatchedBadge,
+  buildLanguageChips,
+  setLanguageChipsOffset,
   WATCHED_BADGE_CLASS,
   STAR_OUTLINE,
   STAR_FILLED,
@@ -45,6 +60,9 @@ import {
 } from "@/scripts/lib/series-seasons.ts"
 import { resolvePersonTitleIds } from "@/scripts/lib/person-filter.ts"
 import { saveGridState, takeGridState, gridStateMatchesLocation } from "@/scripts/lib/grid-state.ts"
+import { buildGroupingIndex, pickPreferredEntryId, groupPassesLanguageFilter } from "@/scripts/lib/language-groups.ts"
+import { parseNamePrefix, languageTagLabel, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
+import { getContentLanguage, getLanguageGroupingEnabled } from "@/scripts/lib/app-settings.js"
 
 const SERIES_TTL_MS = 24 * 60 * 60 * 1000
 
@@ -76,7 +94,11 @@ const searchEl = /** @type {HTMLInputElement|null} */ (
 // State
 // ----------------------------
 let all = []
+// filtered is an array of display groups: { key, entries, tags, globalEntryIds, displayEntry }.
 let filtered = []
+
+// Rebuilt whenever `all` is reassigned; independent of the group-languages toggle.
+let groupingIndex = buildGroupingIndex([])
 
 /** @type {Map<string,string> | null} */
 let categoryMap = null
@@ -145,7 +167,7 @@ document.addEventListener("xt:series-cat-changed", () => applyFilter())
 mountSurprisePicker({
   kind: "series",
   triggerId: "series-surprise",
-  getPool: () => filtered,
+  getPool: () => filtered.map((group) => group.displayEntry),
   getPlaylistId: () => activePlaylistId,
 })
 
@@ -203,24 +225,32 @@ document.addEventListener("xt:progress-changed", async (event) => {
   refreshSeriesProgressBadges(seriesId)
 })
 
+// specificSeriesId may be any variant id in the group, not just the displayed one.
 function refreshSeriesProgressBadges(specificSeriesId) {
   if (!gridEl) return
   const cards = gridEl.querySelectorAll("[data-idx]")
   for (const card of cards) {
     const idx = Number(card.dataset.idx)
-    const series = filtered[idx]
-    if (!series) continue
-    if (specificSeriesId && series.id !== specificSeriesId) continue
+    const group = filtered[idx]
+    if (!group) continue
+    if (specificSeriesId && !group.globalEntryIds.includes(specificSeriesId)) continue
     const wrap = card.querySelector("[data-poster-wrap]")
     if (!wrap) continue
     wrap.querySelector(".series-progress-badge")?.remove()
     wrap.querySelector(`.${WATCHED_BADGE_CLASS}`)?.remove()
-    if (fullyWatchedSeriesIds.has(series.id)) {
+    const anyWatched = group.globalEntryIds.some((id) => fullyWatchedSeriesIds.has(id))
+    let badgePresent = false
+    if (anyWatched) {
       wrap.appendChild(buildWatchedBadge())
+      badgePresent = true
     } else {
-      const next = makeSeriesProgressBadge(series)
-      if (next) wrap.appendChild(next)
+      const next = makeSeriesProgressBadge(displayCardEntry(group), group)
+      if (next) {
+        wrap.appendChild(next)
+        badgePresent = true
+      }
     }
+    setLanguageChipsOffset(wrap, badgePresent)
   }
 }
 
@@ -271,17 +301,27 @@ function seasonEpisodeCount(seriesId, season) {
   return 0
 }
 
-function makeSeriesProgressBadge(series) {
+// Scans every variant in the group since progress may be recorded against a non-preferred one.
+function findGroupProgress(group) {
+  for (const entryId of group.globalEntryIds) {
+    const summary = getSeriesProgressSummary(activePlaylistId, entryId)
+    if (summary) return { seriesId: entryId, summary }
+  }
+  return null
+}
+
+function makeSeriesProgressBadge(series, group) {
   if (!activePlaylistId) return null
-  const summary = getSeriesProgressSummary(activePlaylistId, series.id)
-  if (!summary) return null
+  const progress = findGroupProgress(group)
+  if (!progress) return null
+  const { seriesId, summary } = progress
 
   const season = summary.lastSeason
   const episodeNum = summary.lastEpisodeNum
   const epId = summary.lastEpisodeId
 
   const seasonLabel = season != null && season !== "" ? `S${season}` : ""
-  const total = season != null ? seasonEpisodeCount(series.id, season) : 0
+  const total = season != null ? seasonEpisodeCount(seriesId, season) : 0
 
   let body
   if (seasonLabel && episodeNum != null && total > 0) {
@@ -302,9 +342,9 @@ function makeSeriesProgressBadge(series) {
     "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent " +
     "transition-[filter,transform] duration-150 active:scale-[0.97]"
   if (epId) {
-    badge.href = `/series/detail?id=${encodeURIComponent(series.id)}&autoplay=1&episode=${encodeURIComponent(epId)}`
+    badge.href = `/series/detail?id=${encodeURIComponent(seriesId)}&autoplay=1&episode=${encodeURIComponent(epId)}`
   } else {
-    badge.href = `/series/detail?id=${encodeURIComponent(series.id)}`
+    badge.href = `/series/detail?id=${encodeURIComponent(seriesId)}`
   }
   badge.title = t("series.resumeNextEpisode")
   badge.setAttribute("aria-label", t("series.resumeAria", { name: series.name || t("page.series.title"), body }))
@@ -326,9 +366,19 @@ function seriesMetaText(entry, seasonCount) {
   return parts.join(" \u2022 ")
 }
 
-function makeCard(s, idx) {
+// Strip the tag prefix (redundant once the language shows as a chip) only when 2+ languages are grouped.
+function displayCardEntry(group) {
+  const displayEntry = group.displayEntry
+  const stripPrefix = group.tags.length >= 2 && groupingIndex.tagByEntryId.get(displayEntry.id)
+  return stripPrefix ? { ...displayEntry, name: parseNamePrefix(displayEntry.name).rest } : displayEntry
+}
+
+function makeCard(group, idx) {
+  const displayEntry = group.displayEntry
+  const cardEntry = displayCardEntry(group)
+
   const card = buildEntryCard({
-    entry: s,
+    entry: cardEntry,
     idx,
     kind: "series",
     activePlaylistId,
@@ -338,17 +388,56 @@ function makeCard(s, idx) {
     metaText: (entry) =>
       seriesMetaText(entry, getCachedSeasonCount(activePlaylistId, entry.id)),
     decoratePoster: (posterWrap, entry) => {
-      if (fullyWatchedSeriesIds.has(entry.id)) {
+      const anyWatched = group.globalEntryIds.some((id) => fullyWatchedSeriesIds.has(id))
+      let badgePresent = false
+      if (anyWatched) {
         posterWrap.appendChild(buildWatchedBadge())
-        return
+        badgePresent = true
+      } else {
+        const progressBadge = makeSeriesProgressBadge(entry, group)
+        if (progressBadge) {
+          posterWrap.appendChild(progressBadge)
+          badgePresent = true
+        }
       }
-      const progressBadge = makeSeriesProgressBadge(entry)
-      if (progressBadge) posterWrap.appendChild(progressBadge)
+      const chips = buildLanguageChips(
+        group.tags,
+        group.globalEntryIds.length,
+        getActiveLocale(),
+        groupingIndex.tagByEntryId.get(displayEntry.id)
+      )
+      if (chips) {
+        posterWrap.appendChild(chips)
+        setLanguageChipsOffset(posterWrap, badgePresent)
+      }
     },
     starLabel: (entry, fav) =>
       fav
         ? `Remove ${entry.name || "series"} from favorites`
         : `Add ${entry.name || "series"} to favorites`,
+    favoriteState: () =>
+      activePlaylistId
+        ? group.globalEntryIds.some((id) => isFavorite(activePlaylistId, "series", id))
+        : false,
+    onToggleFavorite: (entry, currentlyFavorited) => {
+      if (!activePlaylistId) return
+      if (!currentlyFavorited) {
+        toggleFavorite(activePlaylistId, "series", entry.id, {
+          name: entry.name || "",
+          logo: entry.logo || null,
+        })
+        return
+      }
+      for (const variantId of group.globalEntryIds) {
+        if (isFavorite(activePlaylistId, "series", variantId)) {
+          toggleFavorite(activePlaylistId, "series", variantId)
+        }
+      }
+    },
+    watchlistState: () =>
+      activePlaylistId
+        ? group.globalEntryIds.some((id) => isOnWatchlist(activePlaylistId, "series", id))
+        : false,
     onContextMenu: (entry, anchor, point) => {
       import("@/scripts/lib/poster-menu").then(({ openPosterMenu }) => {
         openPosterMenu({
@@ -361,6 +450,58 @@ function makeCard(s, idx) {
             window.location.href = `/series/detail?id=${encodeURIComponent(entry.id)}`
           },
           // omit single stream URL or download for series
+          favoriteActive: () =>
+            activePlaylistId
+              ? group.globalEntryIds.some((id) => isFavorite(activePlaylistId, "series", id))
+              : false,
+          onToggleFavorite: (currentlyFavorited) => {
+            if (!activePlaylistId) return
+            if (!currentlyFavorited) {
+              toggleFavorite(activePlaylistId, "series", entry.id, {
+                name: entry.name || "",
+                logo: entry.logo || null,
+              })
+              return
+            }
+            for (const variantId of group.globalEntryIds) {
+              if (isFavorite(activePlaylistId, "series", variantId)) {
+                toggleFavorite(activePlaylistId, "series", variantId)
+              }
+            }
+          },
+          watchlistActive: () =>
+            activePlaylistId
+              ? group.globalEntryIds.some((id) => isOnWatchlist(activePlaylistId, "series", id))
+              : false,
+          onToggleWatchlist: (currentlyOnWatchlist) => {
+            if (!activePlaylistId) return
+            if (!currentlyOnWatchlist) {
+              toggleWatchlist(activePlaylistId, "series", entry.id, {
+                name: entry.name || "",
+                logo: entry.logo || null,
+              })
+              return
+            }
+            for (const variantId of group.globalEntryIds) {
+              if (isOnWatchlist(activePlaylistId, "series", variantId)) {
+                toggleWatchlist(activePlaylistId, "series", variantId)
+              }
+            }
+          },
+          // Mirrors fullyWatchedSeriesIds, the same group-derived set the grid badge reads.
+          watchedActive: () => group.globalEntryIds.some((id) => fullyWatchedSeriesIds.has(id)),
+          onToggleWatched: (currentlyWatched) => {
+            if (!activePlaylistId) return
+            if (!currentlyWatched) {
+              setSeriesWatchedOverride(activePlaylistId, entry.id, true)
+              return
+            }
+            for (const variantId of group.globalEntryIds) {
+              if (fullyWatchedSeriesIds.has(variantId)) {
+                setSeriesWatchedOverride(activePlaylistId, variantId, false)
+              }
+            }
+          },
         })
       })
     },
@@ -369,8 +510,8 @@ function makeCard(s, idx) {
   if (activePlaylistId) {
     const metaEl = card.querySelector('[data-role="meta"]')
     if (metaEl) {
-      observeSeasonCount(card, activePlaylistId, s.id, (count) => {
-        metaEl.textContent = seriesMetaText(s, count)
+      observeSeasonCount(card, activePlaylistId, displayEntry.id, (count) => {
+        metaEl.textContent = seriesMetaText(displayEntry, count)
       })
     }
   }
@@ -565,15 +706,17 @@ function renderGridInner() {
   }
 }
 
+// seriesId may be any variant id in the group, not just the displayed one.
 function updateGridStarFor(seriesId) {
   if (!gridEl) return
-  const idx = filtered.findIndex((s) => s.id === seriesId)
+  const idx = filtered.findIndex((group) => group.globalEntryIds.includes(seriesId))
   if (idx < 0) return
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
-  const s = filtered[idx]
+  const group = filtered[idx]
+  const s = group.displayEntry
   const fav = activePlaylistId
-    ? isFavorite(activePlaylistId, "series", s.id)
+    ? group.globalEntryIds.some((id) => isFavorite(activePlaylistId, "series", id))
     : false
   const star = /** @type {HTMLButtonElement|null} */ (
     card.querySelector(".star-btn")
@@ -592,14 +735,16 @@ function updateGridStarFor(seriesId) {
   )
 }
 
+// seriesId may be any variant id in the group; see updateGridStarFor.
 function updateGridWatchBadgeFor(seriesId) {
   if (!gridEl) return
-  const idx = filtered.findIndex((s) => s.id === seriesId)
+  const idx = filtered.findIndex((group) => group.globalEntryIds.includes(seriesId))
   if (idx < 0) return
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
+  const group = filtered[idx]
   const onWatchlist = activePlaylistId
-    ? isOnWatchlist(activePlaylistId, "series", seriesId)
+    ? group.globalEntryIds.some((id) => isOnWatchlist(activePlaylistId, "series", id))
     : false
   const badge = /** @type {HTMLElement|null} */ (
     card.querySelector('[data-role="watch-badge"]')
@@ -825,10 +970,6 @@ function applyFilter() {
     })
   }
 
-  if (activePlaylistId && getHideWatched(activePlaylistId, "series")) {
-    out = out.filter((s) => !fullyWatchedSeriesIds.has(s.id))
-  }
-
   if (personFilterActive && personTitleIds) {
     out = out.filter((s) => personTitleIds.has(s.id))
   }
@@ -848,43 +989,84 @@ function applyFilter() {
     out = scored
   }
 
+  // Hide-watched and the language filter apply at the group level, so a mismatched variant hides the whole group.
+  // The global setting is a master switch: when off, grouping and the language filter both read as fully absent.
+  const languageGroupingEnabled = getLanguageGroupingEnabled()
+  const groupingEnabled = languageGroupingEnabled && (activePlaylistId ? getGroupLanguages(activePlaylistId, "series") : true)
+  const selectedLang = languageGroupingEnabled && activePlaylistId ? getLanguageFilter(activePlaylistId, "series") : ""
+  const hideWatched = activePlaylistId && getHideWatched(activePlaylistId, "series")
+  // A non-empty language filter takes priority for which variant is displayed.
+  const preferredTags = selectedLang
+    ? [selectedLang, ...effectivePreferredTags(getContentLanguage(), getActiveLocale())].filter(
+        (tag, index, tags) => tags.indexOf(tag) === index
+      )
+    : effectivePreferredTags(getContentLanguage(), getActiveLocale())
+
+  const groupOrder = []
+  const survivorsByKey = new Map()
+  for (const series of out) {
+    const groupKey = groupingEnabled ? groupingIndex.keyByEntryId.get(series.id) ?? `e:${series.id}` : `e:${series.id}`
+    let survivors = survivorsByKey.get(groupKey)
+    if (!survivors) {
+      survivors = []
+      survivorsByKey.set(groupKey, survivors)
+      groupOrder.push(groupKey)
+    }
+    survivors.push(series)
+  }
+
+  const displayGroups = []
+  for (const groupKey of groupOrder) {
+    const survivors = survivorsByKey.get(groupKey)
+    const globalInfo = groupingEnabled ? groupingIndex.groupsByKey.get(groupKey) : null
+    const ownTag = groupingIndex.tagByEntryId.get(survivors[0].id) ?? null
+    const tags = globalInfo ? globalInfo.tags : (ownTag ? [ownTag] : [])
+    const globalEntryIds = globalInfo ? globalInfo.entryIds : [survivors[0].id]
+
+    if (!groupPassesLanguageFilter(tags, selectedLang)) continue
+    if (hideWatched && globalEntryIds.some((id) => fullyWatchedSeriesIds.has(id))) continue
+
+    const survivorIds = survivors.map((series) => series.id)
+    const displayEntryId = pickPreferredEntryId(survivorIds, groupingIndex.tagByEntryId, preferredTags, groupingIndex.qualityRankByEntryId)
+    const displayEntry = survivors.find((series) => series.id === displayEntryId) || survivors[0]
+    const maxScore = scoreById ? Math.max(...survivors.map((series) => scoreById.get(series.id) || 0)) : 0
+    const maxAdded = Math.max(...survivors.map((series) => Number(series.added) || 0))
+
+    displayGroups.push({ key: groupKey, entries: survivors, tags, globalEntryIds, displayEntry, maxScore, maxAdded })
+  }
+
   const mode = activePlaylistId
     ? getViewSort(activePlaylistId, "series")
     : "default"
   if (mode === "default" && scoreById) {
-    out = out
-      .slice()
-      .sort((firstSeries, secondSeries) =>
-        (scoreById.get(secondSeries.id) || 0) - (scoreById.get(firstSeries.id) || 0)
-      )
+    displayGroups.sort((firstGroup, secondGroup) => secondGroup.maxScore - firstGroup.maxScore)
   } else if (mode === "added") {
-    out = out
-      .slice()
-      .sort((a, b) => Number(b.added || 0) - Number(a.added || 0))
+    displayGroups.sort((firstGroup, secondGroup) => secondGroup.maxAdded - firstGroup.maxAdded)
   } else if (mode === "rating") {
-    out = out
-      .slice()
-      .sort((firstEntry, secondEntry) => {
-        const ratingDelta = ratingSortValue(secondEntry.rating) - ratingSortValue(firstEntry.rating)
-        if (ratingDelta !== 0) return ratingDelta
-        return (firstEntry.name || "").localeCompare(secondEntry.name || "", "en", {
-          sensitivity: "base",
-        })
+    displayGroups.sort((firstGroup, secondGroup) => {
+      const ratingDelta =
+        ratingSortValue(secondGroup.displayEntry.rating) - ratingSortValue(firstGroup.displayEntry.rating)
+      if (ratingDelta !== 0) return ratingDelta
+      return (firstGroup.displayEntry.name || "").localeCompare(secondGroup.displayEntry.name || "", "en", {
+        sensitivity: "base",
       })
+    })
   } else if (mode === "az") {
-    out = out
-      .slice()
-      .sort((a, b) =>
-        (a.name || "").localeCompare(b.name || "", "en", {
-          sensitivity: "base",
-        })
-      )
+    displayGroups.sort((firstGroup, secondGroup) =>
+      (firstGroup.displayEntry.name || "").localeCompare(secondGroup.displayEntry.name || "", "en", {
+        sensitivity: "base",
+      })
+    )
   }
 
-  filtered = out
-  listStatus.textContent = t("series.ofSeries", { shown: out.length.toLocaleString(), total: all.length.toLocaleString() })
+  filtered = displayGroups
+  const totalGroups = groupingEnabled ? groupingIndex.groupsByKey.size : all.length
+  listStatus.textContent = t("series.ofSeries", {
+    shown: filtered.length.toLocaleString(),
+    total: totalGroups.toLocaleString(),
+  })
   const heroCount = document.getElementById("series-hero-count")
-  if (heroCount) heroCount.textContent = out.length.toLocaleString()
+  if (heroCount) heroCount.textContent = filtered.length.toLocaleString()
   const heroCat = document.getElementById("series-hero-cat")
   if (heroCat) {
     heroCat.textContent =
@@ -929,6 +1111,71 @@ document.addEventListener("click", async (event) => {
   applyFilter()
 })
 
+const groupLangsBtn = document.getElementById("series-group-langs")
+// The global setting makes the per-playlist toggle meaningless when off, so hide it entirely.
+if (groupLangsBtn) groupLangsBtn.hidden = !getLanguageGroupingEnabled()
+function syncGroupLangsControl() {
+  if (!groupLangsBtn) return
+  groupLangsBtn.hidden = !getLanguageGroupingEnabled()
+  if (!activePlaylistId) return
+  groupLangsBtn.setAttribute("aria-checked", String(getGroupLanguages(activePlaylistId, "series")))
+}
+document.addEventListener("click", (event) => {
+  if (!groupLangsBtn || !activePlaylistId) return
+  if (!(event.target instanceof Node) || !groupLangsBtn.contains(event.target)) return
+  const next = groupLangsBtn.getAttribute("aria-checked") === "true"
+  setGroupLanguages(activePlaylistId, "series", next)
+  applyFilter()
+})
+
+const langFilterEl = /** @type {HTMLSelectElement|null} */ (
+  document.getElementById("series-lang")
+)
+function syncLangFilterControl() {
+  if (!langFilterEl || !activePlaylistId) return
+  langFilterEl.value = getLanguageFilter(activePlaylistId, "series")
+}
+langFilterEl?.addEventListener("change", () => {
+  if (!activePlaylistId || !langFilterEl) return
+  setLanguageFilter(activePlaylistId, "series", langFilterEl.value)
+  applyFilter()
+})
+
+// A stored filter tag no longer in the catalog is kept as a selectable option so it stays visible and clearable.
+function populateLanguageFilterOptions() {
+  if (!langFilterEl) return
+  const languageGroupingEnabled = getLanguageGroupingEnabled()
+  const frequencyByTag = new Map()
+  if (languageGroupingEnabled) {
+    for (const tag of groupingIndex.tagByEntryId.values()) {
+      if (!tag) continue
+      frequencyByTag.set(tag, (frequencyByTag.get(tag) || 0) + 1)
+    }
+  }
+  const tags = Array.from(frequencyByTag.keys()).sort(
+    (firstTag, secondTag) => frequencyByTag.get(secondTag) - frequencyByTag.get(firstTag)
+  )
+
+  const currentValue = languageGroupingEnabled && activePlaylistId ? getLanguageFilter(activePlaylistId, "series") : ""
+  if (currentValue && !tags.includes(currentValue)) tags.push(currentValue)
+
+  const locale = getActiveLocale()
+  langFilterEl.replaceChildren()
+  const allOption = document.createElement("option")
+  allOption.value = ""
+  allOption.textContent = t("list.langFilter.all")
+  langFilterEl.appendChild(allOption)
+  for (const tag of tags) {
+    const option = document.createElement("option")
+    option.value = tag
+    const label = languageTagLabel(tag, locale)
+    option.textContent = label !== tag ? `${label} (${tag})` : tag
+    langFilterEl.appendChild(option)
+  }
+  langFilterEl.value = currentValue
+  langFilterEl.dispatchEvent(new CustomEvent("xt:sort-menu-refresh"))
+}
+
 searchEl?.addEventListener(
   "input",
   debounce(() => applyFilter(), 160)
@@ -947,14 +1194,71 @@ function showEmptyState() {
 
 async function paintSeries(data, fromCache, age) {
   all = data
+  groupingIndex = buildGroupingIndex(all)
   if (listStatus) {
     listStatus.textContent =
       t("series.totalSeries", { count: all.length.toLocaleString() }) +
       (fromCache ? ` · ${fmtAge(age)}` : "")
   }
   picker.rerender()
+  populateLanguageFilterOptions()
   await recomputeFullyWatched()
   applyFilter()
+}
+
+async function fetchSeriesRows() {
+  const catMap = await ensureSeriesCategoryMap()
+  const r = await xtreamApiFetch("get_series")
+  const body = await r.text()
+  if (!r.ok) {
+    log.error("Upstream error body:", body)
+    throw new Error(`API ${r.status}: ${body}`)
+  }
+  const parsed = JSON.parse(body)
+  const arr = Array.isArray(parsed)
+    ? parsed
+    : parsed?.series || parsed?.results || []
+  return (arr || [])
+    .map((s) => {
+      const name = String(s.name || s.title || "")
+      const id = Number(s.series_id || s.id)
+      const logo = s.cover || s.stream_icon || null
+      const year = String(
+        s.year || s.releaseDate || s.release_date || ""
+      ).trim()
+      const rating = s.rating || s.rating_5based || ""
+      const categoryId =
+        (Array.isArray(s.category_ids) &&
+          s.category_ids.length &&
+          s.category_ids[0]) ||
+        s.category_id
+      let category = String(s.category_name || "").trim()
+      if (!category && categoryId != null && catMap?.size) {
+        category = catMap.get(String(categoryId)) || ""
+      }
+      const added =
+        Number(s.last_modified) ||
+        Number(s.added) ||
+        Number(s.releaseDate ? Date.parse(s.releaseDate) / 1000 : 0) ||
+        0
+      const tmdb = Number(s.tmdb) || Number(s.tmdb_id) || null
+      return {
+        id,
+        name,
+        logo: logo || null,
+        year: year || "",
+        rating: rating ? String(rating) : "",
+        category,
+        plot: s.plot || "",
+        added,
+        norm: normalize(`${name} ${category} ${year}`),
+        tmdb,
+      }
+    })
+    .filter((s) => s.id && s.name)
+    .sort((a, b) =>
+      a.name.localeCompare(b.name, "en", { sensitivity: "base" })
+    )
 }
 
 async function loadSeries() {
@@ -972,11 +1276,16 @@ async function loadSeries() {
   await ensurePrefsLoaded()
   syncSortControl()
   syncHideWatchedControl()
+  syncGroupLangsControl()
+  syncLangFilterControl()
   await hydrateCache(active._id, "series")
 
   const hit = getCached(active._id, "series")
   if (hit) {
     await paintSeries(hit.data, true, hit.age)
+    if (rowsNeedTmdbBackfill(hit.data)) {
+      triggerTmdbBackfillOnce(active._id, "series", SERIES_TTL_MS, fetchSeriesRows)
+    }
   } else {
     listStatus.textContent = t("common.loading")
     if (!gridEl?.querySelector("[data-skeleton]")) renderPosterSkeletons(gridEl)
@@ -998,58 +1307,7 @@ async function loadSeries() {
       active._id,
       "series",
       SERIES_TTL_MS,
-      async () => {
-        const catMap = await ensureSeriesCategoryMap()
-        const r = await xtreamApiFetch("get_series")
-        const body = await r.text()
-        if (!r.ok) {
-          log.error("Upstream error body:", body)
-          throw new Error(`API ${r.status}: ${body}`)
-        }
-        const parsed = JSON.parse(body)
-        const arr = Array.isArray(parsed)
-          ? parsed
-          : parsed?.series || parsed?.results || []
-        return (arr || [])
-          .map((s) => {
-            const name = String(s.name || s.title || "")
-            const id = Number(s.series_id || s.id)
-            const logo = s.cover || s.stream_icon || null
-            const year = String(
-              s.year || s.releaseDate || s.release_date || ""
-            ).trim()
-            const rating = s.rating || s.rating_5based || ""
-            const categoryId =
-              (Array.isArray(s.category_ids) &&
-                s.category_ids.length &&
-                s.category_ids[0]) ||
-              s.category_id
-            let category = String(s.category_name || "").trim()
-            if (!category && categoryId != null && catMap?.size) {
-              category = catMap.get(String(categoryId)) || ""
-            }
-            const added =
-              Number(s.last_modified) ||
-              Number(s.added) ||
-              Number(s.releaseDate ? Date.parse(s.releaseDate) / 1000 : 0) ||
-              0
-            return {
-              id,
-              name,
-              logo: logo || null,
-              year: year || "",
-              rating: rating ? String(rating) : "",
-              category,
-              plot: s.plot || "",
-              added,
-              norm: normalize(`${name} ${category} ${year}`),
-            }
-          })
-          .filter((s) => s.id && s.name)
-          .sort((a, b) =>
-            a.name.localeCompare(b.name, "en", { sensitivity: "base" })
-          )
-      }
+      fetchSeriesRows
     )
     await paintSeries(data, fromCache, age)
   } catch (e) {
