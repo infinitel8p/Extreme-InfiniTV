@@ -423,9 +423,11 @@ async fn handle_stream(
     };
 
     let mut upstream_request = state.client.get(&upstream_url);
+    let mut requested_range_start = None;
     if let Some(range) = headers.get(axum::http::header::RANGE) {
         if let Ok(value) = range.to_str() {
             upstream_request = upstream_request.header(reqwest::header::RANGE, value);
+            requested_range_start = range_request_start(value);
         }
     }
     if let Some(ua) = &session.user_agent {
@@ -441,6 +443,12 @@ async fn handle_stream(
     };
 
     let status = upstream_response.status();
+    if let Some(requested_start) = requested_range_start {
+        if !ranged_response_matches_request(status, upstream_response.headers(), requested_start) {
+            log::warn!("[vod-proxy] upstream did not honor the requested range starting at {requested_start}");
+            return (StatusCode::BAD_GATEWAY, "upstream range response mismatch").into_response();
+        }
+    }
     let mut response_builder = axum::http::Response::builder().status(status.as_u16());
     for header_name in [
         "content-type",
@@ -589,6 +597,43 @@ where
         }
         item
     })
+}
+
+/// Explicit start of `Range: bytes=N-...`; suffix and multi-ranges stay unvalidated.
+fn range_request_start(header_value: &str) -> Option<u64> {
+    let spec = header_value.trim().strip_prefix("bytes=")?;
+    if spec.contains(',') {
+        return None;
+    }
+    let (start_str, _end_str) = spec.split_once('-')?;
+    if start_str.is_empty() {
+        return None;
+    }
+    start_str.parse::<u64>().ok()
+}
+
+/// Start byte of a response `Content-Range` header.
+fn content_range_start(header_value: &str) -> Option<u64> {
+    let spec = header_value.trim().strip_prefix("bytes ")?;
+    let (range_part, _total) = spec.split_once('/')?;
+    let (start_str, _end_str) = range_part.split_once('-')?;
+    start_str.parse::<u64>().ok()
+}
+
+/// A ranged request must get a 206 whose Content-Range starts at the requested byte.
+fn ranged_response_matches_request(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    requested_start: u64,
+) -> bool {
+    if status != reqwest::StatusCode::PARTIAL_CONTENT {
+        return false;
+    }
+    headers
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(content_range_start)
+        == Some(requested_start)
 }
 
 /// `NoRange` covers an absent or unparseable header (RFC 7233: ignore and serve the whole file);
@@ -961,6 +1006,42 @@ mod tests {
             dedupe: Mutex::new(HashSet::new()),
             created_at: std::time::Instant::now(),
         })
+    }
+
+    #[test]
+    fn range_request_start_reads_an_explicit_start() {
+        assert_eq!(range_request_start("bytes=1048576-"), Some(1_048_576));
+        assert_eq!(range_request_start("bytes=0-499"), Some(0));
+    }
+
+    #[test]
+    fn range_request_start_is_none_for_a_suffix_or_multi_range() {
+        assert_eq!(range_request_start("bytes=-500"), None);
+        assert_eq!(range_request_start("bytes=0-99,200-299"), None);
+    }
+
+    #[test]
+    fn content_range_start_reads_the_response_start() {
+        assert_eq!(content_range_start("bytes 1048576-2097151/5000000"), Some(1_048_576));
+        assert_eq!(content_range_start("not a content-range"), None);
+    }
+
+    #[test]
+    fn ranged_response_matches_request_requires_206_and_a_matching_start() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_RANGE,
+            reqwest::header::HeaderValue::from_static("bytes 1000-1999/5000"),
+        );
+        assert!(ranged_response_matches_request(reqwest::StatusCode::PARTIAL_CONTENT, &headers, 1_000));
+        assert!(!ranged_response_matches_request(reqwest::StatusCode::PARTIAL_CONTENT, &headers, 0));
+        assert!(!ranged_response_matches_request(reqwest::StatusCode::OK, &headers, 1_000));
+    }
+
+    #[test]
+    fn ranged_response_matches_request_rejects_a_206_without_content_range() {
+        let headers = reqwest::header::HeaderMap::new();
+        assert!(!ranged_response_matches_request(reqwest::StatusCode::PARTIAL_CONTENT, &headers, 0));
     }
 
     #[test]

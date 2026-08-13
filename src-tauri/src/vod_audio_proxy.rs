@@ -32,8 +32,8 @@ const OUTPUT_CHANNEL_CAPACITY: usize = 256;
 const STDERR_RING_CAPACITY: usize = 10;
 const STARTUP_SILENCE_TIMEOUT: Duration = Duration::from_secs(10);
 const STDOUT_STALL_TIMEOUT: Duration = Duration::from_secs(20);
-// Real disconnects close the mpsc channel right away; this only reaps pauses.
-const CLIENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(600);
+// Fires only when no client is attached; a connected-but-slow client parks with no timer.
+const CLIENT_RECONNECT_GRACE: Duration = Duration::from_secs(120);
 const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 // A fresh -reconnect attempt gets this long to deliver a byte before the cut is final.
 const UPSTREAM_EOF_GRACE: Duration = Duration::from_secs(5);
@@ -400,6 +400,11 @@ fn build_ffmpeg_args(input_url: &str, audio_stream_index: u32, start_seconds: f6
         args.push(format!("{start_seconds}"));
     }
     args.extend(http_input_reconnect_args(input_url));
+    // Paces ffmpeg's reads to 1.5x realtime so the WebView's MSE buffer never overflows.
+    args.push("-readrate".to_string());
+    args.push("1.5".to_string());
+    args.push("-readrate_initial_burst".to_string());
+    args.push("30".to_string());
     args.push("-i".to_string());
     args.push(input_url.to_string());
     args.push("-map".to_string());
@@ -726,6 +731,44 @@ async fn handle_live_options() -> Response {
     }
 }
 
+
+/// Explicit start of `Range: bytes=N-...`; suffix and multi-ranges stay unvalidated.
+fn range_request_start(header_value: &str) -> Option<u64> {
+    let spec = header_value.trim().strip_prefix("bytes=")?;
+    if spec.contains(',') {
+        return None;
+    }
+    let (start_str, _end_str) = spec.split_once('-')?;
+    if start_str.is_empty() {
+        return None;
+    }
+    start_str.parse::<u64>().ok()
+}
+
+/// Start byte of a response `Content-Range` header.
+fn content_range_start(header_value: &str) -> Option<u64> {
+    let spec = header_value.trim().strip_prefix("bytes ")?;
+    let (range_part, _total) = spec.split_once('/')?;
+    let (start_str, _end_str) = range_part.split_once('-')?;
+    start_str.parse::<u64>().ok()
+}
+
+/// A ranged request must get a 206 whose Content-Range starts at the requested byte.
+fn ranged_response_matches_request(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    requested_start: u64,
+) -> bool {
+    if status != reqwest::StatusCode::PARTIAL_CONTENT {
+        return false;
+    }
+    headers
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(content_range_start)
+        == Some(requested_start)
+}
+
 // --- Upstream premature-EOF detection (pure, unit-tested) ---
 
 fn expected_forward_body_length(headers: &reqwest::header::HeaderMap) -> Option<u64> {
@@ -829,9 +872,11 @@ async fn handle_forward(
     };
 
     let mut upstream_request = state.client.get(&session.upstream_url);
+    let mut requested_range_start = None;
     if let Some(range) = headers.get(axum::http::header::RANGE) {
         if let Ok(value) = range.to_str() {
             upstream_request = upstream_request.header(reqwest::header::RANGE, value);
+            requested_range_start = range_request_start(value);
         }
     }
     if let Some(ua) = &session.user_agent {
@@ -850,6 +895,12 @@ async fn handle_forward(
     };
 
     let status = upstream_response.status();
+    if let Some(requested_start) = requested_range_start {
+        if !ranged_response_matches_request(status, upstream_response.headers(), requested_start) {
+            log::warn!("[vod-audio-proxy] upstream did not honor the requested range starting at {requested_start}");
+            return cors_response(StatusCode::BAD_GATEWAY, "upstream range response mismatch");
+        }
+    }
     let expected_total = expected_forward_body_length(upstream_response.headers());
     let mut response_builder = axum::http::Response::builder().status(status.as_u16());
     for header_name in [
@@ -894,6 +945,16 @@ async fn handle_live(
         .unwrap_or(false);
     if !host_ok {
         return cors_response(StatusCode::FORBIDDEN, "forbidden");
+    }
+
+    // `/live` is an unseekable pipe; a Range resume would splice misaligned bytes.
+    if headers
+        .get(axum::http::header::RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(range_request_start)
+        .is_some_and(|start| start != 0)
+    {
+        return cors_response(StatusCode::RANGE_NOT_SATISFIABLE, "resuming mid-stream is not supported");
     }
 
     let session = {
@@ -988,13 +1049,13 @@ fn stop_after_client_disconnect(session: &VodAudioSession) {
 
 // Dropped bytes here would corrupt the TS header.
 async fn send_to_current_client(session: &Arc<VodAudioSession>, chunk: Bytes) {
-    send_to_current_client_with_timeout(session, chunk, CLIENT_BACKPRESSURE_TIMEOUT).await;
+    send_to_current_client_with_reconnect_grace(session, chunk, CLIENT_RECONNECT_GRACE).await;
 }
 
-async fn send_to_current_client_with_timeout(
+async fn send_to_current_client_with_reconnect_grace(
     session: &Arc<VodAudioSession>,
     chunk: Bytes,
-    wait_timeout: Duration,
+    reconnect_grace: Duration,
 ) {
     loop {
         if session.torn_down.load(Ordering::SeqCst) {
@@ -1015,13 +1076,14 @@ async fn send_to_current_client_with_timeout(
         // Downstream backpressure, not an ffmpeg stall.
         session.blocked_on_send.store(true, Ordering::SeqCst);
         let Some(sender) = sender else {
-            if tokio::time::timeout(wait_timeout, client_changed).await.is_err() {
+            if tokio::time::timeout(reconnect_grace, client_changed).await.is_err() {
                 stop_after_client_disconnect(session);
                 return;
             }
             continue;
         };
 
+        // Connected-but-slow clients (long pauses) park with no timer; exit/unregister cleans up.
         tokio::select! {
             send_result = sender.send(chunk.clone()) => {
                 session.blocked_on_send.store(false, Ordering::SeqCst);
@@ -1049,10 +1111,6 @@ async fn send_to_current_client_with_timeout(
             }
             _ = client_changed => {
                 // A cancelled send never enqueued; the loop resends.
-            }
-            _ = tokio::time::sleep(wait_timeout) => {
-                stop_after_client_disconnect(session);
-                return;
             }
         }
     }
@@ -1273,8 +1331,8 @@ async fn emit_client_timeout_if_disconnected(app: &AppHandle, session: &Arc<VodA
         json!({
             "sessionId": session.session_id,
             "detail": format!(
-                "TIMEOUT:playback client disconnected for {}s{}",
-                CLIENT_BACKPRESSURE_TIMEOUT.as_secs(),
+                "TIMEOUT:no playback client for {}s{}",
+                CLIENT_RECONNECT_GRACE.as_secs(),
                 stderr_tail_suffix(session)
             ),
         }),
@@ -1404,6 +1462,10 @@ mod tests {
                 "1",
                 "-reconnect_delay_max",
                 "5",
+                "-readrate",
+                "1.5",
+                "-readrate_initial_burst",
+                "30",
                 "-i",
                 "http://127.0.0.1:9000/forward/abc/stream",
                 "-map",
@@ -1442,6 +1504,10 @@ mod tests {
                 "1",
                 "-reconnect_delay_max",
                 "5",
+                "-readrate",
+                "1.5",
+                "-readrate_initial_burst",
+                "30",
                 "-i",
                 "http://127.0.0.1:9000/forward/abc/stream",
                 "-map",
@@ -1507,6 +1573,30 @@ mod tests {
             .expect("-reconnect must be present for an http input");
         let i_index = args.iter().position(|arg| arg == "-i").expect("-i must be present");
         assert!(reconnect_index < i_index, "-reconnect must precede -i");
+    }
+
+    #[test]
+    fn build_ffmpeg_args_places_readrate_pacing_flags_before_i() {
+        let args = build_ffmpeg_args("http://127.0.0.1:9000/forward/abc/stream", 0, 0.0, false);
+        let readrate_index = args.iter().position(|arg| arg == "-readrate").expect("-readrate must be present");
+        assert_eq!(args[readrate_index + 1], "1.5");
+        let burst_index = args
+            .iter()
+            .position(|arg| arg == "-readrate_initial_burst")
+            .expect("-readrate_initial_burst must be present");
+        assert_eq!(args[burst_index + 1], "30");
+        let i_index = args.iter().position(|arg| arg == "-i").expect("-i must be present");
+        assert!(readrate_index < i_index, "-readrate must precede -i");
+        assert!(burst_index < i_index, "-readrate_initial_burst must precede -i");
+    }
+
+    #[test]
+    fn build_ffmpeg_args_keeps_readrate_pacing_after_a_seek() {
+        let args = build_ffmpeg_args("http://127.0.0.1:9000/forward/abc/stream", 0, 12.5, false);
+        assert!(
+            args.iter().any(|arg| arg == "-readrate"),
+            "seeking must not drop the pacing flags: readrate applies to post-seek reading"
+        );
     }
 
     #[test]
@@ -1589,6 +1679,67 @@ mod tests {
     fn classify_io_error_prefixes_other() {
         let err = std::io::Error::from(std::io::ErrorKind::Other);
         assert!(classify_io_error(&err).starts_with("OTHER:"));
+    }
+
+    #[test]
+    fn range_request_start_reads_an_explicit_start() {
+        assert_eq!(range_request_start("bytes=1048576-"), Some(1_048_576));
+        assert_eq!(range_request_start("bytes=0-499"), Some(0));
+    }
+
+    #[test]
+    fn range_request_start_is_none_for_a_suffix_range() {
+        assert_eq!(range_request_start("bytes=-500"), None);
+    }
+
+    #[test]
+    fn range_request_start_is_none_for_a_multi_range() {
+        assert_eq!(range_request_start("bytes=0-99,200-299"), None);
+    }
+
+    #[test]
+    fn range_request_start_is_none_for_an_unparseable_header() {
+        assert_eq!(range_request_start("not a range"), None);
+    }
+
+    #[test]
+    fn content_range_start_reads_the_response_start() {
+        assert_eq!(content_range_start("bytes 1048576-2097151/5000000"), Some(1_048_576));
+    }
+
+    #[test]
+    fn content_range_start_is_none_for_an_unparseable_header() {
+        assert_eq!(content_range_start("not a content-range"), None);
+    }
+
+    #[test]
+    fn ranged_response_matches_request_requires_206_and_a_matching_start() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_RANGE,
+            reqwest::header::HeaderValue::from_static("bytes 1000-1999/5000"),
+        );
+        assert!(ranged_response_matches_request(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            &headers,
+            1_000
+        ));
+        assert!(!ranged_response_matches_request(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            &headers,
+            0
+        ));
+        assert!(!ranged_response_matches_request(reqwest::StatusCode::OK, &headers, 1_000));
+    }
+
+    #[test]
+    fn ranged_response_matches_request_rejects_a_206_without_content_range() {
+        let headers = reqwest::header::HeaderMap::new();
+        assert!(!ranged_response_matches_request(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            &headers,
+            0
+        ));
     }
 
     #[test]
@@ -1954,7 +2105,7 @@ mod tests {
         let kill_wakeup = session.kill_notify.notified();
         let sending_session = session.clone();
         let send_task = tokio::spawn(async move {
-            send_to_current_client_with_timeout(
+            send_to_current_client_with_reconnect_grace(
                 &sending_session,
                 Bytes::from_static(b"orphaned"),
                 Duration::from_millis(10),
@@ -1972,6 +2123,35 @@ mod tests {
         assert!(session.torn_down.load(Ordering::SeqCst));
         assert!(session.client_gone.load(Ordering::SeqCst));
         assert!(!session.blocked_on_send.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn connected_but_slow_client_is_never_torn_down_by_a_timer() {
+        let session = test_vod_audio_session();
+        let (sender, _receiver) = mpsc::channel(1);
+        // full channel: backpressure, not a missing client
+        sender
+            .send(Bytes::from_static(b"already queued"))
+            .await
+            .expect("channel should accept its first chunk");
+        set_current_client(&session, sender);
+
+        let sending_session = session.clone();
+        let send_task = tokio::spawn(async move {
+            send_to_current_client_with_reconnect_grace(
+                &sending_session,
+                Bytes::from_static(b"waiting"),
+                Duration::from_millis(10),
+            )
+            .await;
+        });
+        wait_until_output_is_backpressured(&session).await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!send_task.is_finished(), "a connected client must not be torn down by a fixed timer");
+        assert!(!session.torn_down.load(Ordering::SeqCst));
+
+        send_task.abort();
     }
 
     // Regression test: teardown_io blocking while the watchdog owned the child.
