@@ -1,6 +1,7 @@
 import { log } from "@/scripts/lib/log.js"
 import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
+import { LANGUAGE_TOKENS } from "@/scripts/lib/language-tags.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
@@ -35,9 +36,12 @@ const KEY_CAPTIONS_AUTO = "xt_captions_auto"
 const KEY_TMDB_KEY = "xt_tmdb_key"
 const KEY_TMDB_ENABLED = "xt_tmdb_enabled"
 const KEY_DEV_MODE = "xt_dev_mode"
+const KEY_CONTENT_LANGUAGE = "xt_content_lang"
+const KEY_LANGUAGE_GROUPING = "xt_lang_grouping"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
+export const CONTENT_LANGUAGE_EVENT = "xt:content-language-changed"
 export const ACCENT_EVENT = "xt:accent-changed"
 export const ACCENT_PRESETS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"]
 export const DENSITY_EVENT = "xt:density-changed"
@@ -52,6 +56,7 @@ export const ANDROID_REMEMBERED_PLAYER_EVENT = "xt:android-remembered-player-cha
 export const VIDEO_SCALE_EVENT = "xt:video-scale-changed"
 export const UPDATE_CHANNEL_EVENT = "xt:update-channel-changed"
 export const AUTO_UPDATE_EVENT = "xt:auto-update-changed"
+export const LANGUAGE_GROUPING_EVENT = "xt:language-grouping-changed"
 export const UPDATE_CHANNELS = ["stable", "beta"]
 export const DEFAULT_UPDATE_CHANNEL = "stable"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
@@ -269,6 +274,23 @@ export function setAccent(accentId) {
     else document.documentElement.setAttribute("data-accent", normalized)
     document.dispatchEvent(
       new CustomEvent(ACCENT_EVENT, { detail: { value: normalized } })
+    )
+  }
+}
+
+// Preferred content language token; "" follows the interface language.
+export function getContentLanguage() {
+  const stored = readLS(KEY_CONTENT_LANGUAGE, "").toUpperCase()
+  return Object.prototype.hasOwnProperty.call(LANGUAGE_TOKENS, stored) ? stored : ""
+}
+
+export function setContentLanguage(tag) {
+  const normalized = (tag || "").toUpperCase()
+  const valid = Object.prototype.hasOwnProperty.call(LANGUAGE_TOKENS, normalized) ? normalized : ""
+  writeLS(KEY_CONTENT_LANGUAGE, valid)
+  if (typeof document !== "undefined") {
+    document.dispatchEvent(
+      new CustomEvent(CONTENT_LANGUAGE_EVENT, { detail: { value: valid } })
     )
   }
 }
@@ -938,6 +960,18 @@ export function setAutoUpdateEnabled(enabled) {
   writeLS(KEY_AUTO_UPDATE, enabled ? "" : "0")
   document.dispatchEvent(
     new CustomEvent(AUTO_UPDATE_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+// Global master switch; overrides the per-playlist + per-kind toggle in preferences.js when off.
+export function getLanguageGroupingEnabled() {
+  return readLS(KEY_LANGUAGE_GROUPING, "") !== "0"
+}
+
+export function setLanguageGroupingEnabled(enabled) {
+  writeLS(KEY_LANGUAGE_GROUPING, enabled ? "" : "0")
+  document.dispatchEvent(
+    new CustomEvent(LANGUAGE_GROUPING_EVENT, { detail: { value: !!enabled } })
   )
 }
 

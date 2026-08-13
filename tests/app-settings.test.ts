@@ -178,3 +178,87 @@ describe("density", () => {
     expect(getDensityFactor()).toBe(1.3)
   })
 })
+
+describe("content language", () => {
+  it("defaults to auto (empty string)", async () => {
+    const { getContentLanguage } = await import("@/scripts/lib/app-settings.js")
+    expect(getContentLanguage()).toBe("")
+  })
+
+  it("set then get round-trips a known tag", async () => {
+    const { getContentLanguage, setContentLanguage } = await import("@/scripts/lib/app-settings.js")
+    setContentLanguage("de")
+    expect(getContentLanguage()).toBe("DE")
+  })
+
+  it("rejects an unknown tag and stores auto instead", async () => {
+    const { getContentLanguage, setContentLanguage } = await import("@/scripts/lib/app-settings.js")
+    setContentLanguage("XX")
+    expect(getContentLanguage()).toBe("")
+    expect(localStorage.getItem("xt_content_lang")).toBe(null)
+  })
+
+  it("self-heals a bogus value poisoned into localStorage", async () => {
+    localStorage.setItem("xt_content_lang", "not-a-tag")
+    const { getContentLanguage } = await import("@/scripts/lib/app-settings.js")
+    expect(getContentLanguage()).toBe("")
+  })
+
+  it("fires CONTENT_LANGUAGE_EVENT on document with the correct detail.value", async () => {
+    const { CONTENT_LANGUAGE_EVENT, setContentLanguage } = await import("@/scripts/lib/app-settings.js")
+    const received: string[] = []
+    const listener = (event: Event) => {
+      received.push((event as CustomEvent).detail.value)
+    }
+    document.addEventListener(CONTENT_LANGUAGE_EVENT, listener)
+    try {
+      setContentLanguage("fr")
+      setContentLanguage("")
+    } finally {
+      document.removeEventListener(CONTENT_LANGUAGE_EVENT, listener)
+    }
+    expect(received).toEqual(["FR", ""])
+  })
+})
+
+describe("language grouping", () => {
+  it("defaults to enabled", async () => {
+    const { getLanguageGroupingEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getLanguageGroupingEnabled()).toBe(true)
+  })
+
+  it("set then get round-trips disabled", async () => {
+    const { getLanguageGroupingEnabled, setLanguageGroupingEnabled } = await import("@/scripts/lib/app-settings.js")
+    setLanguageGroupingEnabled(false)
+    expect(getLanguageGroupingEnabled()).toBe(false)
+  })
+
+  it("set then get round-trips enabled", async () => {
+    const { getLanguageGroupingEnabled, setLanguageGroupingEnabled } = await import("@/scripts/lib/app-settings.js")
+    setLanguageGroupingEnabled(false)
+    setLanguageGroupingEnabled(true)
+    expect(getLanguageGroupingEnabled()).toBe(true)
+  })
+
+  it("stores nothing in localStorage when enabled", async () => {
+    const { setLanguageGroupingEnabled } = await import("@/scripts/lib/app-settings.js")
+    setLanguageGroupingEnabled(true)
+    expect(localStorage.getItem("xt_lang_grouping")).toBe(null)
+  })
+
+  it("fires LANGUAGE_GROUPING_EVENT on document with the correct detail.value", async () => {
+    const { LANGUAGE_GROUPING_EVENT, setLanguageGroupingEnabled } = await import("@/scripts/lib/app-settings.js")
+    const received: boolean[] = []
+    const listener = (event: Event) => {
+      received.push((event as CustomEvent).detail.value)
+    }
+    document.addEventListener(LANGUAGE_GROUPING_EVENT, listener)
+    try {
+      setLanguageGroupingEnabled(false)
+      setLanguageGroupingEnabled(true)
+    } finally {
+      document.removeEventListener(LANGUAGE_GROUPING_EVENT, listener)
+    }
+    expect(received).toEqual([false, true])
+  })
+})
