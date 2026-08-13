@@ -29,6 +29,30 @@ function escapeUrlForCss(url: string): string {
     return url.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
 }
 
+const TMDB_SIZE_SEGMENT = "/t/p/"
+// Portrait-render TMDb size prefixes: reject these when found right after "/t/p/".
+const TMDB_PORTRAIT_SIZE_PREFIXES = ["w92/", "w154/", "w185/", "w342/", "w500/", "w600_and_h900"]
+
+// Rejects backdrop paths that are missing, a poster duplicate, or a portrait poster mislabeled as a backdrop.
+export function sanitizeProviderBackdropUrl(
+    rawBackdropPath: unknown,
+    posterUrl: string | null | undefined
+): string | null {
+    const candidate = Array.isArray(rawBackdropPath) ? rawBackdropPath[0] : rawBackdropPath
+    if (typeof candidate !== "string") return null
+    const url = candidate.trim()
+    if (!url) return null
+    if (posterUrl && url === posterUrl) return null
+
+    const segmentIndex = url.indexOf(TMDB_SIZE_SEGMENT)
+    if (segmentIndex !== -1) {
+        const afterSegment = url.slice(segmentIndex + TMDB_SIZE_SEGMENT.length)
+        if (TMDB_PORTRAIT_SIZE_PREFIXES.some((prefix) => afterSegment.startsWith(prefix))) return null
+    }
+
+    return url
+}
+
 // Backdrops are shot for a wide frame and render cropped-to-cover; a bare poster
 // isn't, so it renders contain-and-centered over a blurred, scaled copy of itself.
 export function paintHero(

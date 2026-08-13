@@ -794,6 +794,33 @@ const navStructure: NavSection[] = [
               </div>
             </details>
 
+            <div id="card-lang-grouping" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.langGrouping.title" class="text-sm font-medium leading-snug">Group language variants</h3>
+                <p data-i18n="settings.langGrouping.hint" class="text-xs text-fg-3">
+                  Combine copies of the same title in different languages into one entry. Turn off if titles are grouped incorrectly for your provider.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <select id="lang-grouping-select" class="field-input">
+                  <option value="on" data-i18n="settings.langGrouping.on">On</option>
+                  <option value="off" data-i18n="settings.langGrouping.off">Off</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="card-content-language" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.contentLang.title" class="text-sm font-medium leading-snug">Preferred audio language</h3>
+                <p data-i18n="settings.contentLang.hint" class="text-xs text-fg-3">
+                  When a title exists in several languages, open and recommend this one first. Auto follows the interface language.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <select id="content-lang-select" class="field-input"></select>
+              </div>
+            </div>
+
             <!-- HEVC extension install: Windows desktop only, unhidden by the script below -->
             <div id="card-hevc" data-settings-item class="settings-row hidden scroll-mt-6 lg:scroll-mt-20">
               <div class="settings-row__text">
@@ -2024,7 +2051,8 @@ const navStructure: NavSection[] = [
   <script>
     import { Store } from "@tauri-apps/plugin-store"
     import { log } from "@/scripts/lib/log.js"
-    import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
+    import { t, LOCALE_EVENT, getActiveLocale, initI18n } from "@/scripts/lib/i18n.js"
+    import { LANGUAGE_TOKENS, languageTagLabel } from "@/scripts/lib/language-tags.ts"
     import { ICON_CHECK } from "@/scripts/lib/icons.ts"
     import {
       getActiveEntry,
@@ -2101,6 +2129,10 @@ const navStructure: NavSection[] = [
       setUpdateChannel,
       getAutoUpdateEnabled,
       setAutoUpdateEnabled,
+      getContentLanguage,
+      setContentLanguage,
+      getLanguageGroupingEnabled,
+      setLanguageGroupingEnabled,
       getAudioTranscodeAuto,
       setAudioTranscodeAuto,
       getFfmpegPath,
@@ -3380,6 +3412,47 @@ const navStructure: NavSection[] = [
       syncCaptionsAutoButtons()
     })
     syncCaptionsAutoButtons()
+
+    const langGroupingSelectEl = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("lang-grouping-select")
+    )
+    if (langGroupingSelectEl) langGroupingSelectEl.value = getLanguageGroupingEnabled() ? "on" : "off"
+    langGroupingSelectEl?.addEventListener("change", () => {
+      setLanguageGroupingEnabled(langGroupingSelectEl.value === "on")
+    })
+
+    const contentLangSelectEl = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("content-lang-select")
+    )
+    // initI18n() may not have settled yet, so await it before reading locale-dependent labels.
+    async function populateContentLangSelect() {
+      if (!contentLangSelectEl) return
+      await initI18n()
+      contentLangSelectEl.replaceChildren()
+
+      const autoOption = document.createElement("option")
+      autoOption.value = ""
+      autoOption.textContent = t("settings.contentLang.auto")
+      contentLangSelectEl.appendChild(autoOption)
+
+      const activeLocale = getActiveLocale()
+      const languageOptions = Object.keys(LANGUAGE_TOKENS)
+        .map((tag) => ({ tag, label: languageTagLabel(tag, activeLocale) }))
+        .sort((firstOption, secondOption) => firstOption.label.localeCompare(secondOption.label, activeLocale))
+      for (const languageOption of languageOptions) {
+        const option = document.createElement("option")
+        option.value = languageOption.tag
+        option.textContent = `${languageOption.label} (${languageOption.tag})`
+        contentLangSelectEl.appendChild(option)
+      }
+
+      contentLangSelectEl.value = getContentLanguage()
+    }
+    contentLangSelectEl?.addEventListener("change", () => {
+      setContentLanguage(contentLangSelectEl.value)
+    })
+    document.addEventListener(LOCALE_EVENT, populateContentLangSelect)
+    populateContentLangSelect()
 
     // ---------------------------------------------------------------------
     // Audio transcode auto-fix: desktop-only section (visible whether or not

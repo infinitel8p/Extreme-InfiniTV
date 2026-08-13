@@ -26,6 +26,7 @@ import {
   setVideoScaleOverride,
   clearAllVideoScaleOverrides,
   CHANNEL_VIDEO_SCALE_CHANGED_EVENT,
+  getGroupLanguages,
 } from "@/scripts/lib/preferences.js"
 import { openExternal } from "@/scripts/lib/external-link.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
@@ -46,6 +47,7 @@ import {
   clearAmbient,
   setAmbient as setAmbientOn,
   paintHero as paintHeroOn,
+  sanitizeProviderBackdropUrl,
   chooseMime,
 } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
@@ -61,6 +63,8 @@ import {
   getVideoScale,
   setVideoScale,
   isTmdbActive,
+  getContentLanguage,
+  getLanguageGroupingEnabled,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
 import {
@@ -70,8 +74,10 @@ import {
   peekEarlyDetailData,
   peekCachedSeasonEnrichment,
 } from "@/scripts/lib/tmdb-enrich.ts"
-import { matchRecommendationsToCatalog, extractLangPrefix } from "@/scripts/lib/tmdb-match.ts"
+import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
+import { buildGroupingIndex } from "@/scripts/lib/language-groups.ts"
+import { parseNamePrefix, languageTagLabel, effectivePreferredTags, prefixQualityTokens } from "@/scripts/lib/language-tags.ts"
 import { tmdbImageUrl, TMDB_PROFILE_SIZE } from "@/scripts/lib/tmdb.ts"
 import { isGenericEpisodeTitle } from "@/scripts/lib/episode-title.ts"
 import { buildEntryCard } from "@/scripts/lib/entry-card.ts"
@@ -79,7 +85,7 @@ import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
 import { ICON_USER } from "@/scripts/lib/icons.ts"
 import { fmtImdbRating, parseHmsToSeconds } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
-import { t, initI18n } from "@/scripts/lib/i18n.js"
+import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
 import {
   mountPlayer,
   playWhenReady,
@@ -131,6 +137,7 @@ const ambientEl = document.getElementById("series-detail-ambient")
 const titleEl = document.getElementById("series-detail-title")
 const nowPlayingEl = document.getElementById("series-now-playing")
 const metaEl = document.getElementById("series-detail-meta")
+const langsEl = document.getElementById("series-detail-langs")
 const plotEl = document.getElementById("series-detail-plot")
 const posterEl = document.getElementById("series-detail-poster")
 const playerWrap = document.getElementById("series-detail-player-wrap")
@@ -213,7 +220,7 @@ function settleHero() {
   paintHeroOn(posterEl, {
     name: series?.name || "",
     posterUrl: heroPosterUrl,
-    backdropUrls: [heroTmdbBackdropUrl, heroProviderBackdropUrl],
+    backdropUrls: [heroProviderBackdropUrl, heroTmdbBackdropUrl],
   })
 }
 
@@ -381,6 +388,13 @@ function youtubeUrlFromTrailer(trailer) {
     return `https://www.youtube.com/watch?v=${value}`
   }
   return ""
+}
+
+// Strips a recognized language prefix for display only; the stored series name keeps the raw provider name.
+function displayTitle(name) {
+  if (!name) return name
+  const { tag, rest } = parseNamePrefix(name)
+  return tag != null ? rest : name
 }
 
 // Providers sometimes send a full release date instead of a bare year; show year-only.
@@ -774,18 +788,19 @@ function applySeriesInfo(data) {
   const fallbackName = t("list.seriesFallback", { id: seriesId })
   if (apiName && series && (!series.name || series.name === fallbackName)) {
     series.name = apiName
-    if (titleEl) titleEl.textContent = apiName
+    if (titleEl) titleEl.textContent = displayTitle(apiName)
   }
 
   const apiPoster = info.cover || info.cover_big || info.movie_image || null
-  const apiBackdropPath = Array.isArray(info.backdrop_path) ? info.backdrop_path[0] : null
-  const apiLogo = apiPoster || apiBackdropPath || null
+  const apiBackdropPath = info.backdrop_path
+  const apiLogo = apiPoster || (Array.isArray(apiBackdropPath) ? apiBackdropPath[0] : apiBackdropPath) || null
   if (apiLogo && (!series || !series.logo)) {
     if (series) series.logo = apiLogo
     heroPosterUrl = apiLogo
     setAmbient(apiLogo)
   }
-  if (apiBackdropPath) heroProviderBackdropUrl = apiBackdropPath
+  heroProviderBackdropUrl = sanitizeProviderBackdropUrl(apiBackdropPath, heroPosterUrl)
+  if (heroProviderBackdropUrl) setAmbient(heroProviderBackdropUrl)
   // Hero stays in its skeleton state - settleHero() at the call site decides when to paint it once.
   let byKey = {}
   if (data?.episodes && typeof data.episodes === "object") {
@@ -1187,12 +1202,131 @@ function loadSeriesCatalog() {
   return seriesCatalogPromise
 }
 
+// Grouping the series catalog is expensive (~800ms at 176k rows), so cache the index per playlist + catalog reference.
+let groupingIndexCache = null
+
+function getGroupingIndexFor(playlistId, catalog) {
+  if (
+    groupingIndexCache &&
+    groupingIndexCache.playlistId === playlistId &&
+    groupingIndexCache.catalogRef === catalog
+  ) {
+    return groupingIndexCache.index
+  }
+  const index = buildGroupingIndex(catalog)
+  groupingIndexCache = { playlistId, catalogRef: catalog, index }
+  return index
+}
+
+function groupKeyForCatalog(catalog) {
+  if (!activePlaylistId || !catalog?.length) return undefined
+  const index = getGroupingIndexFor(activePlaylistId, catalog)
+  return (entry) => index.keyByEntryId.get(Number(entry.id)) ?? `e:${entry.id}`
+}
+
+// One pill per language+quality variant of the current series' group; hidden below 2 pills or when grouping is off.
+function renderLanguagePills(catalog) {
+  if (!langsEl || !series || !activePlaylistId || !catalog?.length) return
+  if (!getLanguageGroupingEnabled() || !getGroupLanguages(activePlaylistId, "series")) {
+    langsEl.setAttribute("hidden", "")
+    langsEl.replaceChildren()
+    return
+  }
+
+  const index = getGroupingIndexFor(activePlaylistId, catalog)
+  const groupKey = index.keyByEntryId.get(series.id)
+  const groupInfo = groupKey ? index.groupsByKey.get(groupKey) : null
+  if (!groupInfo || groupInfo.entryIds.length < 2) {
+    langsEl.setAttribute("hidden", "")
+    langsEl.replaceChildren()
+    return
+  }
+
+  const groupEntryIdSet = new Set(groupInfo.entryIds)
+  const nameByEntryId = new Map()
+  for (const entry of catalog) {
+    if (!groupEntryIdSet.has(entry.id)) continue
+    nameByEntryId.set(entry.id, entry.name)
+    if (nameByEntryId.size === groupEntryIdSet.size) break
+  }
+
+  const entryIdsByTag = new Map()
+  for (const entryId of groupInfo.entryIds) {
+    const tag = index.tagByEntryId.get(entryId) ?? null
+    const bucket = entryIdsByTag.get(tag)
+    if (bucket) bucket.push(entryId)
+    else entryIdsByTag.set(tag, [entryId])
+  }
+
+  // Tag order: current variant first, then content-language preference, then remaining tags; null-tag last.
+  const currentTag = index.tagByEntryId.get(series.id) ?? null
+  const orderedTags = []
+  const addTagOnce = (tag) => {
+    if (tag != null && !orderedTags.includes(tag)) orderedTags.push(tag)
+  }
+  addTagOnce(currentTag)
+  for (const tag of effectivePreferredTags(getContentLanguage(), getActiveLocale())) addTagOnce(tag)
+  for (const tag of groupInfo.tags) addTagOnce(tag)
+  orderedTags.push(null)
+
+  const locale = getActiveLocale()
+  const pillModels = []
+  for (const tag of orderedTags) {
+    const bucket = entryIdsByTag.get(tag)
+    if (!bucket) continue
+
+    // Entries with the same quality-token list are duplicates; keep the first-seen one per list.
+    const survivorByQualityKey = new Map()
+    for (const entryId of bucket) {
+      const qualityTokens = prefixQualityTokens(nameByEntryId.get(entryId) || "")
+      const qualityKey = qualityTokens.join("-")
+      const existingSurvivor = survivorByQualityKey.get(qualityKey)
+      // Prefer the current entry as survivor so the aria-current pill never disappears.
+      if (!existingSurvivor || entryId === series.id) {
+        survivorByQualityKey.set(qualityKey, { entryId, qualityTokens })
+      }
+    }
+
+    const variants = [...survivorByQualityKey.values()].sort(
+      (firstVariant, secondVariant) => firstVariant.qualityTokens.length - secondVariant.qualityTokens.length
+    )
+    const label = tag != null ? languageTagLabel(tag, locale) : t("detail.lang.unknown")
+    for (const variant of variants) {
+      const text = variant.qualityTokens.length ? `${label} · ${variant.qualityTokens.join(" ")}` : label
+      pillModels.push({ entryId: variant.entryId, text })
+    }
+  }
+
+  if (pillModels.length < 2) {
+    langsEl.setAttribute("hidden", "")
+    langsEl.replaceChildren()
+    return
+  }
+
+  langsEl.replaceChildren()
+  for (const { entryId, text } of pillModels) {
+    const isCurrent = entryId === series.id
+    const pill = document.createElement(isCurrent ? "span" : "a")
+    pill.className =
+      "rounded-full border px-2 py-0.5 text-xs outline-none transition-colors " +
+      (isCurrent
+        ? "border-accent text-accent"
+        : "border-line text-fg-2 hover:text-accent hover:border-accent focus-visible:text-accent focus-visible:border-accent")
+    pill.textContent = text
+    if (isCurrent) pill.setAttribute("aria-current", "true")
+    else pill.href = `/series/detail?id=${encodeURIComponent(entryId)}`
+    langsEl.appendChild(pill)
+  }
+
+  langsEl.removeAttribute("hidden")
+}
+
 // Shared by the async patch-in and the cache-warm early merge in boot().
 function applyEnrichmentPatch(enrichment) {
   if (enrichment.posterUrl) heroPosterUrl = enrichment.posterUrl
   if (enrichment.backdropUrl) {
     heroTmdbBackdropUrl = enrichment.backdropUrl
-    setAmbient(enrichment.backdropUrl)
+    if (!heroProviderBackdropUrl) setAmbient(enrichment.backdropUrl)
   }
   if (enrichment.overview && plotEl) plotEl.textContent = enrichment.overview
   if (enrichment.director) patchDirector(enrichment.director, enrichment.directorPersonId)
@@ -1251,10 +1385,13 @@ async function enrichSeriesDetailFromTmdb(requestId) {
   if (enrichment.recommendations?.length) {
     const catalog = await loadSeriesCatalog()
     if (requestId !== enrichRequestId) return false
+    renderLanguagePills(catalog)
     const matches = matchRecommendationsToCatalog(enrichment.recommendations, catalog, {
       mediaType: "tv",
       limit: 12,
-      sourcePrefix: extractLangPrefix(series.name),
+      sourcePrefix: parseNamePrefix(series.name).tag,
+      preferredTags: effectivePreferredTags(getContentLanguage(), getActiveLocale()),
+      groupKeyForEntry: groupKeyForCatalog(catalog),
     })
     if (matches.length) {
       renderSimilar(matches)
@@ -1268,6 +1405,7 @@ async function populateLocalSimilarRail(requestId) {
   if (!series || !activePlaylistId) return
   const catalog = await loadSeriesCatalog()
   if (requestId !== enrichRequestId) return
+  renderLanguagePills(catalog)
   const people = parseProviderPeople(seriesInfoRaw?.info)
   const matches = pickLocalSimilar(
     {
@@ -1283,7 +1421,9 @@ async function populateLocalSimilarRail(requestId) {
         const cached = getCached(activePlaylistId, `series_info_${id}`)?.data
         return cached ? parseProviderPeople(cached.info) : null
       },
-      sourcePrefix: extractLangPrefix(series.name),
+      sourcePrefix: parseNamePrefix(series.name).tag,
+      preferredTags: effectivePreferredTags(getContentLanguage(), getActiveLocale()),
+      groupKeyForEntry: groupKeyForCatalog(catalog),
     }
   )
   if (matches.length) renderSimilar(matches)
@@ -2387,6 +2527,10 @@ async function boot() {
   if (metaEl) metaEl.textContent = ""
   if (plotEl) plotEl.textContent = ""
   if (titleEl) titleEl.textContent = ""
+  if (langsEl) {
+    langsEl.setAttribute("hidden", "")
+    langsEl.replaceChildren()
+  }
   resetTmdbEnrichmentUI()
   if (seasonTabs) seasonTabs.replaceChildren()
   if (episodeList) episodeList.replaceChildren()
@@ -2419,12 +2563,13 @@ async function boot() {
 
   // The stub id-based name never reaches the DOM - the title stays hidden behind
   // the skeleton until a real name arrives (catalog/download now, or provider below).
-  if (titleEl && series.name !== stubName) titleEl.textContent = series.name
+  if (titleEl && series.name !== stubName) titleEl.textContent = displayTitle(series.name)
   // Hero stays in its skeleton state - settleHero() below decides when to paint it once.
   heroPosterUrl = series.logo || null
   setAmbient(series.logo || null)
   syncFavButton()
   syncWatchButton()
+  renderLanguagePills(list?.data || [])
 
   // Both probes are network-free (hydrate + memory read) and run under one bound,
   // so a cold IDB read can never delay first paint past the shared timeout.
@@ -2454,7 +2599,9 @@ async function boot() {
       const matches = matchRecommendationsToCatalog(earlyEnrichment.enrichment.recommendations, list?.data || [], {
         mediaType: "tv",
         limit: 12,
-        sourcePrefix: extractLangPrefix(series.name),
+        sourcePrefix: parseNamePrefix(series.name).tag,
+        preferredTags: effectivePreferredTags(getContentLanguage(), getActiveLocale()),
+        groupKeyForEntry: groupKeyForCatalog(list?.data || []),
       })
       if (matches.length) {
         renderSimilar(matches)
