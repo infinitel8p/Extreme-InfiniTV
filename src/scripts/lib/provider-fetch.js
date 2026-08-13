@@ -21,6 +21,7 @@ async function getTauriFetch() {
       .then((m) => m.fetch)
       .catch((e) => {
         log.error("[xt:net] plugin-http unavailable:", e)
+        tauriFetchPromise = null
         return null
       })
   }
