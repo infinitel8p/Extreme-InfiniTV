@@ -1295,6 +1295,7 @@
   "settings.update.reDownload": "دوبارہ ڈاؤن لوڈ",
   "settings.update.progressLabel": "اپڈیٹ ڈاؤن لوڈ کی پیش رفت",
   "settings.update.manualOnly": "خودکار اپ ڈیٹ اس ورژن پر دستیاب نہیں ہے۔",
+  "settings.update.updaterUnreachable": "اپ ڈیٹ سرور تک رسائی ممکن نہیں، اس لیے ایپ کے اندر انسٹال فی الحال دستیاب نہیں ہے۔ GitHub استعمال کریں یا تھوڑی دیر بعد دوبارہ چیک کریں۔",
   "settings.update.getFromGithub": "GitHub سے ڈاؤن لوڈ کریں",
   "settings.update.getFromStore": "Microsoft Store کھولیں",
   "settings.update.getFromPlay": "Google Play کھولیں",

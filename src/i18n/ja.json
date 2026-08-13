@@ -1295,6 +1295,7 @@
   "settings.update.reDownload": "再ダウンロード",
   "settings.update.progressLabel": "更新プログラムのダウンロード進行状況",
   "settings.update.manualOnly": "自動更新はこのバージョンでは利用できません。",
+  "settings.update.updaterUnreachable": "更新サーバーに接続できないため、アプリ内インストールは現在利用できません。GitHub を利用するか、しばらくしてから再度お試しください。",
   "settings.update.getFromGithub": "GitHubからダウンロード",
   "settings.update.getFromStore": "Microsoft Storeを開く",
   "settings.update.getFromPlay": "Google Playを開く",

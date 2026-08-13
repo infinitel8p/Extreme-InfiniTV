@@ -1295,6 +1295,7 @@
   "settings.update.reDownload": "Скачать заново",
   "settings.update.progressLabel": "Прогресс загрузки обновления",
   "settings.update.manualOnly": "Автоматическое обновление недоступно для этой версии.",
+  "settings.update.updaterUnreachable": "Не удалось связаться с сервером обновлений, поэтому установка из приложения сейчас недоступна. Используйте GitHub или повторите попытку чуть позже.",
   "settings.update.getFromGithub": "Скачать с GitHub",
   "settings.update.getFromStore": "Открыть Microsoft Store",
   "settings.update.getFromPlay": "Открыть Google Play",

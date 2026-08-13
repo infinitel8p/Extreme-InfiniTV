@@ -1295,6 +1295,7 @@
   "settings.update.reDownload": "Unduh ulang",
   "settings.update.progressLabel": "Progres unduhan pembaruan",
   "settings.update.manualOnly": "Pembaruan otomatis tidak tersedia pada versi ini.",
+  "settings.update.updaterUnreachable": "Tidak dapat menghubungi server pembaruan, jadi pemasangan dalam aplikasi tidak tersedia saat ini. Gunakan GitHub atau periksa lagi sebentar lagi.",
   "settings.update.getFromGithub": "Unduh dari GitHub",
   "settings.update.getFromStore": "Buka Microsoft Store",
   "settings.update.getFromPlay": "Buka Google Play",

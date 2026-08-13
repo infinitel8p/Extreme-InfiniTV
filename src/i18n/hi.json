@@ -1295,6 +1295,7 @@
   "settings.update.reDownload": "फिर से डाउनलोड",
   "settings.update.progressLabel": "अपडेट डाउनलोड प्रगति",
   "settings.update.manualOnly": "ऑटो-अपडेट इस संस्करण पर उपलब्ध नहीं है।",
+  "settings.update.updaterUnreachable": "अपडेट सर्वर तक नहीं पहुंच सके, इसलिए ऐप के भीतर इंस्टॉल अभी उपलब्ध नहीं है। GitHub का उपयोग करें या थोड़ी देर में फिर से जांचें।",
   "settings.update.getFromGithub": "GitHub से डाउनलोड करें",
   "settings.update.getFromStore": "Microsoft Store खोलें",
   "settings.update.getFromPlay": "Google Play खोलें",

@@ -1295,6 +1295,7 @@
   "settings.update.reDownload": "Re-télécharger",
   "settings.update.progressLabel": "Progression du téléchargement de la mise à jour",
   "settings.update.manualOnly": "La mise à jour automatique n'est pas disponible sur cette version.",
+  "settings.update.updaterUnreachable": "Impossible de joindre le serveur de mise à jour, l'installation depuis l'application n'est donc pas disponible pour le moment. Utilisez GitHub ou réessayez dans un instant.",
   "settings.update.getFromGithub": "Télécharger sur GitHub",
   "settings.update.getFromStore": "Ouvrir le Microsoft Store",
   "settings.update.getFromPlay": "Ouvrir Google Play",

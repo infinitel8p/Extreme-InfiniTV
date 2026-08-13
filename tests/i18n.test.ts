@@ -33,6 +33,31 @@ const localStorageMock: Storage = {
 
 const DENSITY_KEY = "settings.density.compact"
 
+// The refresh's dynamic import settles an unbounded number of ticks later; wait on the event, not tick counts.
+function waitForLocaleEvents(
+  eventName: string,
+  count: number,
+  timeoutMs = 5000
+): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const codes: string[] = []
+    function listener(event: Event): void {
+      codes.push((event as CustomEvent).detail.code)
+      if (codes.length < count) return
+      clearTimeout(timer)
+      document.removeEventListener(eventName, listener)
+      resolve(codes)
+    }
+    const timer = setTimeout(() => {
+      document.removeEventListener(eventName, listener)
+      reject(
+        new Error(`timed out waiting for ${count} "${eventName}" events, saw ${codes.length}`)
+      )
+    }, timeoutMs)
+    document.addEventListener(eventName, listener)
+  })
+}
+
 function seedStaleSpanishCache(): void {
   // Simulate a translation blob persisted before an app update added a new
   // key: same Spanish snapshot as the bundled JSON but missing one string
@@ -60,16 +85,16 @@ describe("initI18n background refresh", () => {
   it("refreshes a stale persisted locale snapshot with the bundled JSON after boot", async () => {
     seedStaleSpanishCache()
 
-    const { initI18n, t } = await import("@/scripts/lib/i18n")
+    const { initI18n, t, LOCALE_EVENT } = await import("@/scripts/lib/i18n")
+    // two dispatches: initial setLocale, then the background refresh
+    const refreshDispatched = waitForLocaleEvents(LOCALE_EVENT, 2)
     await initI18n()
 
     // Right after the initial setLocale the stale snapshot is still active,
     // so the missing key falls back to English.
     expect(t(DENSITY_KEY)).toBe(en[DENSITY_KEY])
 
-    // Let the fire-and-forget background refresh settle.
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await refreshDispatched
 
     expect(t(DENSITY_KEY)).toBe(es[DENSITY_KEY])
 
@@ -82,22 +107,12 @@ describe("initI18n background refresh", () => {
     seedStaleSpanishCache()
 
     const { initI18n, LOCALE_EVENT } = await import("@/scripts/lib/i18n")
-    const receivedCodes: string[] = []
-    const listener = (event: Event) => {
-      receivedCodes.push((event as CustomEvent).detail.code)
-    }
-    document.addEventListener(LOCALE_EVENT, listener)
-    try {
-      await initI18n()
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    } finally {
-      document.removeEventListener(LOCALE_EVENT, listener)
-    }
+    const receivedCodes = waitForLocaleEvents(LOCALE_EVENT, 2)
+    await initI18n()
 
     // One dispatch from the initial setLocale, one from the background
     // refresh once it finds the bundled JSON differs from the seeded snapshot.
-    expect(receivedCodes).toEqual(["es", "es"])
+    await expect(receivedCodes).resolves.toEqual(["es", "es"])
   })
 
   it("does not overwrite the active locale's cache if the user switched away before the refresh settles", async () => {
@@ -107,10 +122,8 @@ describe("initI18n background refresh", () => {
     await initI18n()
     await setLocale("en")
 
-    // Let the background refresh (still targeting the originally seeded "es")
-    // settle after the user has already switched to English.
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // no event fires here; the refresh is blocked on this same module import and its continuation queued first
+    await import("@/i18n/es.json")
 
     expect(t(DENSITY_KEY)).toBe(en[DENSITY_KEY])
     expect(localStorage.getItem("xt_locale_messages_v3")).toBe(null)

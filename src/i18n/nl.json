@@ -1295,6 +1295,7 @@
   "settings.update.reDownload": "Opnieuw downloaden",
   "settings.update.progressLabel": "Downloadvoortgang van update",
   "settings.update.manualOnly": "Automatische update is niet beschikbaar in deze versie.",
+  "settings.update.updaterUnreachable": "Kan de updateserver niet bereiken, dus installeren vanuit de app is nu niet mogelijk. Gebruik GitHub of probeer het zo weer.",
   "settings.update.getFromGithub": "Download via GitHub",
   "settings.update.getFromStore": "Microsoft Store openen",
   "settings.update.getFromPlay": "Google Play openen",

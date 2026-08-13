@@ -1295,6 +1295,7 @@
   "settings.update.reDownload": "إعادة التنزيل",
   "settings.update.progressLabel": "تقدّم تنزيل التحديث",
   "settings.update.manualOnly": "التحديث التلقائي غير متاح لهذا الإصدار.",
+  "settings.update.updaterUnreachable": "تعذر الوصول إلى خادم التحديثات، لذا فإن التثبيت داخل التطبيق غير متاح حاليًا. استخدم GitHub أو تحقق مرة أخرى بعد قليل.",
   "settings.update.getFromGithub": "احصل عليه من GitHub",
   "settings.update.getFromStore": "فتح Microsoft Store",
   "settings.update.getFromPlay": "فتح Google Play",

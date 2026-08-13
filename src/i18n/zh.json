@@ -1295,6 +1295,7 @@
   "settings.update.reDownload": "重新下载",
   "settings.update.progressLabel": "更新下载进度",
   "settings.update.manualOnly": "此版本不支持自动更新。",
+  "settings.update.updaterUnreachable": "无法连接更新服务器，暂时无法在应用内安装。请使用 GitHub，或稍后再试。",
   "settings.update.getFromGithub": "从 GitHub 下载",
   "settings.update.getFromStore": "打开 Microsoft Store",
   "settings.update.getFromPlay": "打开 Google Play",

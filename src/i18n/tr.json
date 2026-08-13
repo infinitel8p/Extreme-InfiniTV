@@ -1295,6 +1295,7 @@
   "settings.update.reDownload": "Yeniden indir",
   "settings.update.progressLabel": "Güncelleme indirme ilerlemesi",
   "settings.update.manualOnly": "Bu sürümde otomatik güncelleme kullanılamıyor.",
+  "settings.update.updaterUnreachable": "Güncelleme sunucusuna ulaşılamadığından uygulama içi kurulum şu anda kullanılamıyor. GitHub'ı kullanın veya birazdan tekrar deneyin.",
   "settings.update.getFromGithub": "GitHub'dan indirin",
   "settings.update.getFromStore": "Microsoft Store'u aç",
   "settings.update.getFromPlay": "Google Play'i aç",
