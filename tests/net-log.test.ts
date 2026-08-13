@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import {
   makeNetLogEntry,
   pushWithCapacity,
@@ -9,6 +9,49 @@ import {
   NET_LOG_CAPACITY,
   NET_LOG_EVENT,
 } from "../src/scripts/lib/net-log"
+
+// Node 24+ ships experimental native `localStorage` / `sessionStorage` globals that
+// shadow jsdom's: `localStorage` is undefined without --localstorage-file, and the
+// native `sessionStorage` does not inherit from jsdom's `Storage`. Stub both plus the
+// `Storage` class with one in-memory implementation so the store tests below - and the
+// `Storage.prototype.setItem` spies they rely on - see a single consistent Storage.
+class MemoryStorage {
+  private store = new Map<string, string>()
+
+  get length(): number {
+    return this.store.size
+  }
+  getItem(key: string): string | null {
+    return this.store.has(key) ? this.store.get(key)! : null
+  }
+  setItem(key: string, value: string): void {
+    this.store.set(key, String(value))
+  }
+  removeItem(key: string): void {
+    this.store.delete(key)
+  }
+  clear(): void {
+    this.store.clear()
+  }
+  key(index: number): string | null {
+    return Array.from(this.store.keys())[index] ?? null
+  }
+}
+
+const memoryLocalStorage = new MemoryStorage()
+const memorySessionStorage = new MemoryStorage()
+
+beforeEach(() => {
+  vi.stubGlobal("Storage", MemoryStorage)
+  vi.stubGlobal("localStorage", memoryLocalStorage as unknown as Storage)
+  vi.stubGlobal("sessionStorage", memorySessionStorage as unknown as Storage)
+  memoryLocalStorage.clear()
+  memorySessionStorage.clear()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe("makeNetLogEntry", () => {
   it("upper-cases the method", () => {
