@@ -271,15 +271,56 @@ export function applyI18nDOM(root: ParentNode = document): void {
 
 let _initPromise: Promise<void> | null = null
 
+// Locale + messages the in-memory cache was seeded from at boot (persisted
+// storage snapshot). Kept around so the background refresh below can compare
+// the bundled JSON against what was actually served, and only touch that one
+// locale.
+let seededLocaleCode: LocaleCode | null = null
+let seededMessages: LocaleMessages | null = null
+
 // Initialise i18n at app boot
 export function initI18n(): Promise<void> {
   if (!_initPromise) {
     const cached = readCachedMessages()
     if (cached && !cache.has(cached.code)) cache.set(cached.code, cached.messages)
+    if (cached) {
+      seededLocaleCode = cached.code
+      seededMessages = cached.messages
+    }
     const code = detectLocale()
-    _initPromise = setLocale(code === "en" ? "en" : code)
+    _initPromise = setLocale(code === "en" ? "en" : code).then(() => {
+      // Fire-and-forget: refresh the persisted snapshot from the bundled JSON
+      // so keys added by an app update reach users who already have a cached
+      // translation blob (setLocale skips the loader once cache.has(code)).
+      // Not awaited here so initI18n() keeps resolving right after the
+      // initial setLocale - the cached strings are already on screen.
+      void refreshSeededLocale()
+    })
   }
   return _initPromise
+}
+
+async function refreshSeededLocale(): Promise<void> {
+  const code = seededLocaleCode
+  if (!code || code === "en") return
+  try {
+    const fresh = await LOCALE_LOADERS[code]()
+    // Always replace the in-memory entry so a later locale round-trip can't
+    // resurrect the stale snapshot.
+    cache.set(code, fresh)
+    const staleMessages = seededMessages
+    const changed = !staleMessages || JSON.stringify(fresh) !== JSON.stringify(staleMessages)
+    if (changed && code === activeCode) {
+      activeMessages = fresh
+      writeCachedMessages(code, fresh)
+      if (typeof document !== "undefined") {
+        applyI18nDOM()
+        document.dispatchEvent(new CustomEvent(LOCALE_CHANGED_EVENT, { detail: { code } }))
+      }
+    }
+  } catch {
+    /* keep the cached messages - the bundled loader will catch up next time */
+  }
 }
 
 export const LOCALE_EVENT = LOCALE_CHANGED_EVENT
