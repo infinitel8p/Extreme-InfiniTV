@@ -445,6 +445,45 @@ describe("createVodAudioSwitcher async state machine", () => {
     switcher.dispose()
   })
 
+  it("isRecovering reflects a mid-play restart in flight and settles once it resolves", async () => {
+    const handle = createFakeHandle()
+    const { trackDefault } = makeTracks()
+    const captured: { listener: ((payload: { sessionId: string; detail: string }) => void) | null } = { listener: null }
+    onVodAudioErrorMock.mockImplementation((listener: (payload: { sessionId: string; detail: string }) => void) => {
+      captured.listener = listener
+      return () => {}
+    })
+    startVodAudioRemuxMock.mockResolvedValueOnce({
+      sessionId: "session-0",
+      playbackUrl: "http://127.0.0.1/live/session-0",
+    })
+    const restartDeferred = deferred<{ sessionId: string; playbackUrl: string }>()
+    startVodAudioRemuxMock.mockReturnValueOnce(restartDeferred.promise)
+
+    const switcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "http://127.0.0.1/tee-token/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/movie.mkv",
+      remuxInputUrl: "http://127.0.0.1/tee-token/stream.mkv",
+      getKnownDurationSeconds: () => 100,
+      tracks: [trackDefault],
+      mountRemuxImmediately: true,
+    })
+    await flushMicrotasks()
+    expect(switcher.isRecovering()).toBe(false)
+
+    captured.listener?.({ sessionId: "session-0", detail: "died mid-play" })
+    await flushMicrotasks()
+    expect(switcher.isRecovering()).toBe(true)
+
+    restartDeferred.resolve({ sessionId: "session-1", playbackUrl: "http://127.0.0.1/live/session-1" })
+    await flushMicrotasks()
+    expect(switcher.isRecovering()).toBe(false)
+
+    switcher.dispose()
+  })
+
   it("recoverRemuxStall no-ops without an active session or outside the mandatory remux path", async () => {
     const handle = createFakeHandle()
     const { trackDefault, trackA } = makeTracks()

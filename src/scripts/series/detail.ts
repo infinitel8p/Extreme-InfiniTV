@@ -119,6 +119,7 @@ import { attachPosterContextMenu } from "@/scripts/lib/poster-menu.ts"
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { attachStallWatchdog } from "@/scripts/lib/stall-watchdog.ts"
 import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
+import { shouldTrustEndedEvent } from "@/scripts/lib/premature-ended.ts"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -1893,6 +1894,7 @@ async function playEpisode(episode, options = {}) {
   const stallVideoEl = player.getMediaElement?.()
   if (stallVideoEl) {
     stallWatchdogDetach = attachStallWatchdog(stallVideoEl, {
+      ...(remuxOwnsInitialMount ? { stallTimeoutMs: 6000 } : {}),
       onStall: (attemptNumber) => {
         if (remuxOwnsInitialMount) {
           log.info("[xt:series-detail] remux mount stalled - restarting the remux session to recover", {
@@ -1937,6 +1939,18 @@ async function playEpisode(episode, options = {}) {
       )
     })
     player.on("ended", () => {
+      // audioSwitcher tracks the live pipeline; this listener is bound once and outlives any single episode.
+      const knownDurationSeconds = episodeDurationSeconds(currentEpisode) || null
+      const trusted = shouldTrustEndedEvent({
+        currentTimeSeconds: player.currentTime?.() || 0,
+        knownDurationSeconds,
+        recoveryInFlight: audioSwitcher?.isRecovering?.() ?? false,
+      })
+      if (!trusted) {
+        log.info("[xt:series-detail] ignoring a premature ended event short of the known duration")
+        audioSwitcher?.recoverRemuxStall()
+        return
+      }
       getSeriesInsights().endSession("ended")
       if (!activePlaylistId || !currentEpisode) return
       const dur = player.duration?.() || 0

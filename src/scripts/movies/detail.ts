@@ -108,6 +108,7 @@ import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dial
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { attachStallWatchdog } from "@/scripts/lib/stall-watchdog.ts"
 import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
+import { shouldTrustEndedEvent } from "@/scripts/lib/premature-ended.ts"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -1350,6 +1351,7 @@ async function startPlayback(options = {}) {
   const stallVideoEl = player.getMediaElement?.()
   if (stallVideoEl) {
     stallWatchdogDetach = attachStallWatchdog(stallVideoEl, {
+      ...(remuxOwnsInitialMount ? { stallTimeoutMs: 6000 } : {}),
       onStall: (attemptNumber) => {
         if (remuxOwnsInitialMount) {
           log.info("[xt:movie-detail] remux mount stalled - restarting the remux session to recover", {
@@ -1390,6 +1392,17 @@ async function startPlayback(options = {}) {
       })
     })
     player.on("ended", () => {
+      // audioSwitcher tracks the live pipeline; this listener is bound once and outlives any single mount.
+      const trusted = shouldTrustEndedEvent({
+        currentTimeSeconds: player.currentTime?.() || 0,
+        knownDurationSeconds: knownVodDurationSeconds() || null,
+        recoveryInFlight: audioSwitcher?.isRecovering?.() ?? false,
+      })
+      if (!trusted) {
+        log.info("[xt:movies-detail] ignoring a premature ended event short of the known duration")
+        audioSwitcher?.recoverRemuxStall()
+        return
+      }
       getMovieInsights().endSession("ended")
       if (!activePlaylistId || !movie) return
       const dur = player.duration?.() || 0

@@ -1,15 +1,18 @@
 // Desktop-only ffmpeg remux proxy for switching a VOD's audio track.
 
 use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
+use futures_util::Stream;
 use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
@@ -32,6 +35,8 @@ const STDOUT_STALL_TIMEOUT: Duration = Duration::from_secs(20);
 // Real disconnects close the mpsc channel right away; this only reaps pauses.
 const CLIENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(600);
 const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+// A fresh -reconnect attempt gets this long to deliver a byte before the cut is final.
+const UPSTREAM_EOF_GRACE: Duration = Duration::from_secs(5);
 
 // --- State ---
 
@@ -94,6 +99,13 @@ struct VodAudioSession {
     last_activity: Mutex<Instant>,
     // True while blocked on send, so a slow consumer isn't read as a stall.
     blocked_on_send: AtomicBool,
+    // Truncated forward body; a later forward's first byte clears it (reconnect healed).
+    upstream_eof: Mutex<Option<UpstreamEofRecord>>,
+}
+
+struct UpstreamEofRecord {
+    at: Instant,
+    detail: String,
 }
 
 // --- Commands ---
@@ -179,6 +191,7 @@ pub async fn register_vod_audio_remux(
         watchdog_task: Mutex::new(None),
         last_activity: Mutex::new(Instant::now()),
         blocked_on_send: AtomicBool::new(false),
+        upstream_eof: Mutex::new(None),
     });
 
     // Inserted before spawn so ffmpeg's request can resolve this token.
@@ -713,6 +726,81 @@ async fn handle_live_options() -> Response {
     }
 }
 
+// --- Upstream premature-EOF detection (pure, unit-tested) ---
+
+fn expected_forward_body_length(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+fn classify_upstream_end(expected_total: Option<u64>, delivered: u64) -> Option<String> {
+    let expected_total = expected_total?;
+    if expected_total == 0 || delivered >= expected_total {
+        return None;
+    }
+    Some(format!(
+        "OTHER:upstream stream ended prematurely at {delivered}/{expected_total} bytes"
+    ))
+}
+
+fn record_upstream_eof(session: &VodAudioSession, detail: String) {
+    let mut guard = session
+        .upstream_eof
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    *guard = Some(UpstreamEofRecord {
+        at: Instant::now(),
+        detail,
+    });
+}
+
+fn clear_upstream_eof(session: &VodAudioSession) {
+    let mut guard = session
+        .upstream_eof
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    *guard = None;
+}
+
+struct DeliveryTrackedStream {
+    inner: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>,
+    session: Arc<VodAudioSession>,
+    expected_total: Option<u64>,
+    delivered: u64,
+    first_byte_seen: bool,
+    ended: bool,
+}
+
+impl Stream for DeliveryTrackedStream {
+    type Item = reqwest::Result<Bytes>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.ended {
+            return Poll::Ready(None);
+        }
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(chunk))) => {
+                self.delivered += chunk.len() as u64;
+                if !self.first_byte_seen {
+                    self.first_byte_seen = true;
+                    clear_upstream_eof(&self.session);
+                }
+                Poll::Ready(Some(Ok(chunk)))
+            }
+            Poll::Ready(other) => {
+                self.ended = true;
+                if let Some(detail) = classify_upstream_end(self.expected_total, self.delivered) {
+                    record_upstream_eof(&self.session, detail);
+                }
+                Poll::Ready(other)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 // Lets the https-less ffmpeg sidecar read a remote https source via loopback.
 async fn handle_forward(
     State(state): State<Arc<ServerState>>,
@@ -762,6 +850,7 @@ async fn handle_forward(
     };
 
     let status = upstream_response.status();
+    let expected_total = expected_forward_body_length(upstream_response.headers());
     let mut response_builder = axum::http::Response::builder().status(status.as_u16());
     for header_name in [
         "content-type",
@@ -774,7 +863,16 @@ async fn handle_forward(
         }
     }
 
-    match response_builder.body(axum::body::Body::from_stream(upstream_response.bytes_stream())) {
+    let tracked_stream = DeliveryTrackedStream {
+        inner: Box::pin(upstream_response.bytes_stream()),
+        session: session.clone(),
+        expected_total,
+        delivered: 0,
+        first_byte_seen: false,
+        ended: false,
+    };
+
+    match response_builder.body(axum::body::Body::from_stream(tracked_stream)) {
         Ok(response) => response,
         Err(error) => {
             log::warn!("[vod-audio-proxy] failed to build forward response: {error}");
@@ -1036,6 +1134,29 @@ async fn wait_for_stdout_stall(session: &Arc<VodAudioSession>) {
     }
 }
 
+// Not gated on blocked_on_send: a truncated body is unambiguous, unlike a stdout stall.
+async fn wait_for_upstream_eof_expiry(session: &Arc<VodAudioSession>) -> String {
+    loop {
+        tokio::time::sleep(STALL_CHECK_INTERVAL).await;
+        let expired_detail = {
+            let guard = session
+                .upstream_eof
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            guard.as_ref().and_then(|record| {
+                if record.at.elapsed() >= UPSTREAM_EOF_GRACE {
+                    Some(record.detail.clone())
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(detail) = expired_detail {
+            return detail;
+        }
+    }
+}
+
 // Owns the child for its lifetime; teardown wakes it via kill_notify.
 async fn run_watchdog(
     app: AppHandle,
@@ -1088,6 +1209,17 @@ async fn run_watchdog(
                         STDOUT_STALL_TIMEOUT.as_secs(),
                         stderr_tail_suffix(&session)
                     ),
+                )
+                .await;
+                return;
+            }
+            detail = wait_for_upstream_eof_expiry(&session) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                finish_with_error(
+                    &app,
+                    &session,
+                    format!("{detail}{}", stderr_tail_suffix(&session)),
                 )
                 .await;
                 return;
@@ -1460,6 +1592,29 @@ mod tests {
     }
 
     #[test]
+    fn classify_upstream_end_is_none_without_a_content_length() {
+        assert_eq!(classify_upstream_end(None, 1_000), None);
+    }
+
+    #[test]
+    fn classify_upstream_end_is_none_when_delivery_matches_the_declared_length() {
+        assert_eq!(classify_upstream_end(Some(1_000), 1_000), None);
+    }
+
+    #[test]
+    fn classify_upstream_end_is_none_when_the_declared_length_is_zero() {
+        assert_eq!(classify_upstream_end(Some(0), 0), None);
+    }
+
+    #[test]
+    fn classify_upstream_end_flags_a_short_delivery() {
+        assert_eq!(
+            classify_upstream_end(Some(1_000), 400),
+            Some("OTHER:upstream stream ended prematurely at 400/1000 bytes".to_string())
+        );
+    }
+
+    #[test]
     fn ffmpeg_path_candidates_keep_searching_after_a_shadowed_binary() {
         let shadowed_dir = std::path::PathBuf::from("shadowed");
         let working_dir = std::path::PathBuf::from("working");
@@ -1596,6 +1751,7 @@ mod tests {
             watchdog_task: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             blocked_on_send: AtomicBool::new(false),
+            upstream_eof: Mutex::new(None),
         });
         assert_eq!(stderr_tail_suffix(&session), "");
     }
@@ -1621,6 +1777,7 @@ mod tests {
             watchdog_task: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             blocked_on_send: AtomicBool::new(false),
+            upstream_eof: Mutex::new(None),
         });
         assert_eq!(
             stderr_tail_suffix(&session),
@@ -1645,6 +1802,7 @@ mod tests {
             watchdog_task: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             blocked_on_send: AtomicBool::new(false),
+            upstream_eof: Mutex::new(None),
         })
     }
 
@@ -1832,5 +1990,60 @@ mod tests {
 
         let wake_result = tokio::time::timeout(Duration::from_millis(500), woken).await;
         assert!(wake_result.is_ok(), "kill_notify must wake a task already parked on notified()");
+    }
+
+    #[tokio::test]
+    async fn a_later_forwards_first_byte_clears_a_stale_upstream_eof_record() {
+        use futures_util::StreamExt;
+
+        let session = test_vod_audio_session();
+        record_upstream_eof(&session, "OTHER:stale".to_string());
+
+        let inner = futures_util::stream::iter(vec![Ok::<Bytes, reqwest::Error>(Bytes::from_static(
+            b"chunk",
+        ))]);
+        let mut tracked = DeliveryTrackedStream {
+            inner: Box::pin(inner),
+            session: session.clone(),
+            expected_total: None,
+            delivered: 0,
+            first_byte_seen: false,
+            ended: false,
+        };
+
+        tracked.next().await;
+
+        assert!(
+            session
+                .upstream_eof
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .is_none(),
+            "a fresh byte from a later forward must clear the stale premature-EOF record"
+        );
+    }
+
+    #[tokio::test]
+    async fn premature_upstream_eof_unhealed_past_grace_is_returned_by_the_watchdog_wait() {
+        let session = test_vod_audio_session();
+        {
+            let mut guard = session
+                .upstream_eof
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            *guard = Some(UpstreamEofRecord {
+                at: Instant::now() - UPSTREAM_EOF_GRACE - Duration::from_millis(1),
+                detail: "OTHER:upstream stream ended prematurely at 400/1000 bytes".to_string(),
+            });
+        }
+
+        let detail = tokio::time::timeout(
+            Duration::from_millis(1500),
+            wait_for_upstream_eof_expiry(&session),
+        )
+        .await
+        .expect("an unhealed premature-EOF record past grace must resolve");
+
+        assert_eq!(detail, "OTHER:upstream stream ended prematurely at 400/1000 bytes");
     }
 }

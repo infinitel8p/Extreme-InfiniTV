@@ -50,11 +50,10 @@ export interface VodAudioSwitcher {
   source: AudioTrackSource
   /** Replaces the selectable track list without touching the session already streaming; never remounts. */
   setTracks(tracks: VodAudioTrackOption[]): void
-  /** Only meaningful with mountRemuxImmediately: restarts the remux session after a stall was
-   * detected on the mandatory remux path (the direct-path stall watchdog just re-issues the src
-   * instead). No-ops when a restart is already in flight, retries are exhausted, or there is no
-   * active session to restart. */
+  /** Mandatory-remux only: restart after a stall; no-ops when already restarting, exhausted, or sessionless. */
   recoverRemuxStall(): void
+  /** True while a mid-play restart is in flight. */
+  isRecovering(): boolean
   dispose(): void
 }
 
@@ -421,6 +420,10 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     attemptMidPlayRestart(activeSessionId, "stall watchdog detected no playback progress")
   }
 
+  function isRecovering(): boolean {
+    return midPlayRestartInFlight
+  }
+
   function setTracks(nextTracks: VodAudioTrackOption[]): void {
     if (disposed || nextTracks.length === 0) return
     const playingAudioStreamIndex = (activeTrackId && tracksById.get(activeTrackId)?.audioStreamIndex) ?? 0
@@ -467,5 +470,5 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     void switchToRemux(defaultTrackId, Math.max(0, options.initialStartSeconds ?? 0))
   }
 
-  return { source: sourceHandle, setTracks, recoverRemuxStall, dispose: disposeAll }
+  return { source: sourceHandle, setTracks, recoverRemuxStall, isRecovering, dispose: disposeAll }
 }
