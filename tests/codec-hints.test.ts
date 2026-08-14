@@ -121,6 +121,49 @@ describe("classifyStartFailure", () => {
     ).toEqual({ kind: "codec", codec: null })
   })
 
+  it("reports a parse failure when the demuxer choked on a decodable stream", () => {
+    expect(
+      classifyStartFailure({
+        videoCodec: "avc1.64002a",
+        audioCodec: null,
+        errorDetail: "fragParsingError",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "parse", codec: "avc1.64002a" })
+  })
+
+  it("reports a parse failure for HEVC the device can decode", () => {
+    expect(
+      classifyStartFailure({
+        videoCodec: "hvc1.1.6.L120.B0",
+        errorDetail: "fragParsingError",
+        nameHint: true,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "parse", codec: "hvc1.1.6.L120.B0" })
+  })
+
+  it("keeps codec and audio verdicts ahead of a parse failure", () => {
+    expect(
+      classifyStartFailure({
+        videoCodec: "hvc1.1.6.L120.B0",
+        errorDetail: "fragParsingError",
+        nameHint: false,
+        deviceHevc: false,
+      })
+    ).toEqual({ kind: "hevc", codec: "hvc1.1.6.L120.B0" })
+    expect(
+      classifyStartFailure({
+        videoCodec: "avc1.64002a",
+        audioCodec: "ac-3",
+        errorDetail: "fragParsingError",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "audio", codec: "ac-3" })
+  })
+
   it("falls back to the name hint only when the device lacks HEVC", () => {
     expect(
       classifyStartFailure({

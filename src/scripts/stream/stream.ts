@@ -66,6 +66,7 @@ import {
   isDroppingEveryFrame,
   DROPPED_FRAME_MIN_SAMPLE,
   chooseBlackFrameRecovery,
+  isParseFailureDetail,
 } from "@/scripts/lib/codec-hints.ts"
 import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
@@ -1599,39 +1600,43 @@ const audioProxyAutoAttemptedSet = new Set()
 // Per-channel budget for black-screen native re-tunes (macOS GDR latch retries).
 const nativeRelatchAttempts = new Map()
 
-// Channels whose AC-3 audio cannot decode in WKWebView MSE remount on native
-// AVFoundation. Persisted per playlist: the codec is stable, and module state
+// Channels hls.js can't serve in this WebView (AC-3 audio, or a container its demuxer can't read)
+// remount on native AVFoundation. Persisted per playlist: the cause is stable, and module state
 // dies on every page navigation, so a plain Set would re-pay the hls.js detour.
-let nativeAudioFallbackCache = null
+const NATIVE_HLS_FALLBACK_KEY = "xt_native_hls_fallback"
+const LEGACY_NATIVE_AUDIO_FALLBACK_KEY = "xt_native_audio_fallback"
+let nativeHlsFallbackCache = null
 
-function loadNativeAudioFallbackSet() {
-  if (nativeAudioFallbackCache && nativeAudioFallbackCache.playlistId === activePlaylistId) {
-    return nativeAudioFallbackCache.ids
+function loadNativeHlsFallbackSet() {
+  if (nativeHlsFallbackCache && nativeHlsFallbackCache.playlistId === activePlaylistId) {
+    return nativeHlsFallbackCache.ids
   }
   let ids = new Set()
   try {
-    const raw = localStorage.getItem(`xt_native_audio_fallback:${activePlaylistId}`)
+    const raw =
+      localStorage.getItem(`${NATIVE_HLS_FALLBACK_KEY}:${activePlaylistId}`) ??
+      localStorage.getItem(`${LEGACY_NATIVE_AUDIO_FALLBACK_KEY}:${activePlaylistId}`)
     if (raw) ids = new Set(JSON.parse(raw))
   } catch {}
-  nativeAudioFallbackCache = { playlistId: activePlaylistId, ids }
+  nativeHlsFallbackCache = { playlistId: activePlaylistId, ids }
   return ids
 }
 
-function isNativeAudioFallbackChannel(id) {
-  return loadNativeAudioFallbackSet().has(id)
+function isNativeHlsFallbackChannel(id) {
+  return loadNativeHlsFallbackSet().has(id)
 }
 
-function rememberNativeAudioFallbackChannel(id) {
-  const ids = loadNativeAudioFallbackSet()
+function rememberNativeHlsFallbackChannel(id) {
+  const ids = loadNativeHlsFallbackSet()
   if (ids.has(id)) return
   ids.add(id)
   try {
-    localStorage.setItem(`xt_native_audio_fallback:${activePlaylistId}`, JSON.stringify([...ids]))
+    localStorage.setItem(`${NATIVE_HLS_FALLBACK_KEY}:${activePlaylistId}`, JSON.stringify([...ids]))
   } catch {}
 }
 
 // Channels whose raw-TS audio can't decode are pinned to the m3u8 container instead (where the
-// HLS audio fallbacks apply); persisted per playlist like the native-audio-fallback set above.
+// HLS audio fallbacks apply); persisted per playlist like the native-HLS-fallback set above.
 let m3u8ContainerFallbackCache = null
 
 function loadM3u8ContainerFallbackSet() {
@@ -1878,7 +1883,12 @@ function giveUpOnPlayback(ctx) {
   // Bypasses getAndroidNativePlayerEnabled() on purpose: one-shot recovery, not the opt-in setting.
   if (!ctx.started && !ctx.nativeFallbackTried && androidNativePlayerAvailable) {
     ctx.nativeFallbackTried = true
-    if (failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio") {
+    if (
+      failure.kind === "hevc" ||
+      failure.kind === "codec" ||
+      failure.kind === "audio" ||
+      failure.kind === "parse"
+    ) {
       toast({ title: t("stream.failure.nativeFallback") })
       launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
         if (launched) return
@@ -1905,22 +1915,25 @@ function giveUpOnPlayback(ctx) {
     void play(ctx.streamId, ctx.name, "auto:m3u8-container-fallback")
     return
   }
-  // WKWebView MSE has no AC-3 decoder; remount such channels on native
-  // AVFoundation, which does. The ffmpeg proxy is no answer for HLS sources.
+  // WKWebView MSE has no AC-3 decoder and its demuxer gives up on mid-stream container
+  // changes; AVFoundation handles both. The ffmpeg proxy is no answer for HLS sources.
   if (
-    failure.kind === "audio" &&
+    // AVFoundation needs a manifest, so a bare-TS parse failure has nothing to hand it.
+    (failure.kind === "audio" || (failure.kind === "parse" && isHlsSource(ctx.src))) &&
     isMacOS &&
     isTauri &&
     ctx.isLive &&
     !ctx.audioProxied &&
-    !isNativeAudioFallbackChannel(ctx.streamId)
+    !isNativeHlsFallbackChannel(ctx.streamId)
   ) {
-    rememberNativeAudioFallbackChannel(ctx.streamId)
-    log.warn("[xt:livetv] AC-3 audio cannot decode in this WebView's MSE - remounting on native AVFoundation", {
-      streamId: ctx.streamId,
-      codec: failure.codec,
-    })
-    void play(ctx.streamId, ctx.name, "auto:native-audio-fallback")
+    rememberNativeHlsFallbackChannel(ctx.streamId)
+    log.warn(
+      failure.kind === "parse"
+        ? "[xt:livetv] hls.js cannot demux this stream - remounting on native AVFoundation"
+        : "[xt:livetv] AC-3 audio cannot decode in this WebView's MSE - remounting on native AVFoundation",
+      { streamId: ctx.streamId, codec: failure.codec }
+    )
+    void play(ctx.streamId, ctx.name, "auto:native-hls-fallback")
     return
   }
   // Independent of getAudioTranscodeAuto(), which only gates the mid-play watchdog.
@@ -2119,9 +2132,19 @@ async function mountEmbeddedPlayer(backend, opts) {
           retuneProxiedAudioMount(ctx)
           return
         }
+        // The same demuxer on the same container fails the same way; escalate to the verdict instead.
+        if (isParseFailureDetail(vjs?.codecInfo?.()?.errorDetail)) {
+          giveUpOnPlayback(ctx)
+          return
+        }
         try {
           vjs.reset?.()
-          vjs.src({ src: ctx.src, type: ctx.mime || "application/x-mpegURL", isLive: ctx.isLive ?? true })
+          vjs.src({
+            src: ctx.src,
+            type: ctx.mime || "application/x-mpegURL",
+            isLive: ctx.isLive ?? true,
+            preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
+          })
           vjs.play().catch(() => {})
         } catch {}
       }, ERROR_AUTO_RETRY_MS)
@@ -2800,7 +2823,7 @@ function performStallRetune(trigger) {
       src: ctx.src,
       type: ctx.mime || "application/x-mpegURL",
       isLive: ctx.isLive ?? true,
-      preferNativeHls: isNativeAudioFallbackChannel(ctx.streamId),
+      preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
     })
     vjs.play().catch((err) => {
       log.info("[xt:livetv] stall-retune play() rejected", { streamId: ctx.streamId, error: err?.name || String(err) })
@@ -2974,7 +2997,7 @@ function armDeadVideoWatchdog() {
       const recovery = chooseBlackFrameRecovery({
         // Native mounts re-tune (a fresh chance to latch); see chooseBlackFrameRecovery.
         isMacOSNativeHls:
-          isMacOS && !ctx.audioProxied && (!isTauri || isNativeAudioFallbackChannel(ctx.streamId)),
+          isMacOS && !ctx.audioProxied && (!isTauri || isNativeHlsFallbackChannel(ctx.streamId)),
         relatchAttempts,
         proxyUsable:
           canUseAudioProxy(ctx) &&
@@ -3029,9 +3052,14 @@ function clearDeadAudioWatchdog() {
   }
 }
 
+// Blink-only despite the prefix - WebKit never shipped it, hence the codec-string fallback below.
 function audioDecodedByteCount(videoEl) {
   const bytes = videoEl.webkitAudioDecodedByteCount
   return typeof bytes === "number" ? bytes : null
+}
+
+function isHlsSource(src) {
+  return /\.m3u8?(\?|$)/i.test(String(src || ""))
 }
 
 // A channel that already fell back to direct play this session must not be re-routed.
@@ -3043,7 +3071,7 @@ function canUseAudioProxy(ctx) {
     !audioProxyBypassSet.has(ctx.streamId) &&
     // The proxy pipes the fetched body into ffmpeg's mpegts demuxer; an HLS
     // playlist URL feeds it playlist text and dies instantly. Raw TS only.
-    !/\.m3u8?(\?|$)/i.test(String(ctx?.src || ""))
+    !isHlsSource(ctx?.src)
   )
 }
 
@@ -3103,13 +3131,18 @@ function armDeadAudioWatchdog() {
     if (!video || video.paused) return
     if (video.muted || video.volume === 0) return
     const audioBytes = audioDecodedByteCount(video)
+    const codecInfo = vjs?.codecInfo?.() || null
+    // Without a byte counter the codec string is the only evidence; a decodable one stays innocent.
+    const audioDead =
+      audioBytes === null ? isUnsupportedAudioCodec(codecInfo?.audioCodec) : audioBytes === 0
     log.info("[xt:livetv] dead-audio check", {
       audioBytes,
+      audioCodec: codecInfo?.audioCodec ?? null,
       frames: decodedFrameCount(video),
       videoWidth: video.videoWidth,
       played: (video.currentTime || 0) - baselineTime,
     })
-    if (audioBytes === null || audioBytes > 0) return
+    if (!audioDead) return
     const frames = decodedFrameCount(video)
     if (frames === null || frames === 0) return
     if (video.videoWidth === 0) return
@@ -3123,12 +3156,30 @@ function armDeadAudioWatchdog() {
       return
     }
     deadAudioNotifiedSeq = seqAtArm
-    const info = vjs?.codecInfo?.()
-    log.warn("[xt:livetv] video decoding but zero audio bytes decoded - audio codec likely undecodable", {
+    const info = codecInfo || {}
+    log.warn("[xt:livetv] video decoding but no audio decoded - audio codec likely undecodable", {
       streamId: ctx.streamId,
-      audioCodec: info?.audioCodec,
+      audioBytes,
+      audioCodec: info.audioCodec,
     })
-    const audioUnsupported = isUnsupportedAudioCodec(info?.audioCodec)
+    const audioUnsupported = isUnsupportedAudioCodec(info.audioCodec)
+    // AVFoundation has the decoders MSE lacks, so remount rather than just warn.
+    if (
+      isMacOS &&
+      isTauri &&
+      ctx.isLive &&
+      isHlsSource(ctx.src) &&
+      !ctx.audioProxied &&
+      !isNativeHlsFallbackChannel(ctx.streamId)
+    ) {
+      rememberNativeHlsFallbackChannel(ctx.streamId)
+      log.warn("[xt:livetv] silent audio in MSE - remounting on native AVFoundation", {
+        streamId: ctx.streamId,
+        audioCodec: info.audioCodec,
+      })
+      void play(ctx.streamId, ctx.name, "auto:native-hls-fallback")
+      return
+    }
     if (canUseAudioProxy(ctx)) {
       if (getAudioTranscodeAuto()) {
         toast({ title: t("stream.audioFix.fixing"), duration: 4000 })
@@ -3230,6 +3281,8 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
     reason = t("stream.failure.audioUnsupported", {
       codec: describeAudioCodec(failure.codec),
     })
+  } else if (failure.kind === "parse") {
+    reason = t("stream.failure.parseFailed")
   } else {
     reason = t("stream.error.checkConnection")
   }
@@ -3784,17 +3837,17 @@ async function play(streamId, name, reason = "user") {
       src: mountSrc,
       type: mountMime,
       drm: audioProxied ? null : channelDrm,
-      preferNativeHls: isNativeAudioFallbackChannel(streamId),
+      preferNativeHls: isNativeHlsFallbackChannel(streamId),
     })
   } catch {}
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch((err) => {
       // An interrupted play() otherwise leaves the tune paused until a manual click.
-      log.info("[xt:livetv] initial play() rejected - re-arming on canplay", {
-        streamId,
-        error: err?.name || String(err),
-      })
+      // AbortError is the expected remount-vs-autoplay race, so it stays out of the log file.
+      const errorName = err?.name || String(err)
+      const write = errorName === "AbortError" ? log.debug : log.info
+      write("[xt:livetv] initial play() rejected - re-arming on canplay", { streamId, error: errorName })
       const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
       if (!mediaEl) return
       const resume = () => {
@@ -4191,10 +4244,10 @@ async function playCatchup(channel, opts) {
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch((err) => {
       // An interrupted play() otherwise leaves the tune paused until a manual click.
-      log.info("[xt:livetv] initial play() rejected - re-arming on canplay", {
-        streamId,
-        error: err?.name || String(err),
-      })
+      // AbortError is the expected remount-vs-autoplay race, so it stays out of the log file.
+      const errorName = err?.name || String(err)
+      const write = errorName === "AbortError" ? log.debug : log.info
+      write("[xt:livetv] initial play() rejected - re-arming on canplay", { streamId, error: errorName })
       const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
       if (!mediaEl) return
       const resume = () => {

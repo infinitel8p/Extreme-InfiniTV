@@ -326,7 +326,7 @@ export function attachPlayerInsights(options: PlayerInsightsOptions): PlayerInsi
     if (event.kind === "variant") recordHealthEntry("variant", event.detail)
     else if (event.kind === "engine-error" || event.kind === "fatal") recordHealthEntry("error", event.detail)
     else if (event.kind === "engine-switch") recordHealthEntry("fallback", event.detail)
-    else if (event.kind === "recover") recordHealthEntry("playing", event.detail)
+    else if (event.kind === "recover") recordHealthEntry("recover", event.detail)
   }
 
   // The handle is replaced on every remount, so a stale subscription must be swapped, not kept forever.

@@ -1133,6 +1133,11 @@ export function shouldPreferNativeHls(input: {
   return input.isMacOS && !input.isTauri && input.canPlayNativeHls
 }
 
+// A lost demuxer emits these by the hundred per second; the progress threshold spares streams that error yet still play.
+const PARSE_ERROR_LIMIT = 24
+const PARSE_ERROR_WINDOW_MS = 4000
+const PARSE_ERROR_PROGRESS_S = 1.5
+
 function attachHlsToVideo(
   Hls: any,
   video: HTMLVideoElement,
@@ -1197,6 +1202,27 @@ function attachHlsToVideo(
   const hls = new Hls(hlsConfig)
   let netRecover = 0
   let mediaRecover = 0
+  let parseErrors = 0
+  let parseWindowStart = 0
+  let parseWindowTime = 0
+  function parseErrorStormExhausted(): boolean {
+    const now = performance.now()
+    if (!parseWindowStart || now - parseWindowStart > PARSE_ERROR_WINDOW_MS) {
+      parseWindowStart = now
+      parseWindowTime = video.currentTime || 0
+      parseErrors = 1
+      return false
+    }
+    parseErrors++
+    if (parseErrors < PARSE_ERROR_LIMIT) return false
+    const progressed = (video.currentTime || 0) - parseWindowTime >= PARSE_ERROR_PROGRESS_S
+    parseWindowStart = now
+    parseWindowTime = video.currentTime || 0
+    parseErrors = 0
+    if (progressed) return false
+    log.warn(`[xt:player] hls.js parse-error storm (${PARSE_ERROR_LIMIT}+ in ${PARSE_ERROR_WINDOW_MS}ms, playhead stuck) - giving up on this demuxer`)
+    return true
+  }
   hls.on(Hls.Events.BUFFER_CODECS, (_event: unknown, data: any) => {
     if (active.get() !== hls) return
     const videoCodec = data?.video?.levelCodec || data?.video?.codec
@@ -1231,8 +1257,17 @@ function attachHlsToVideo(
         if (fromMime) codecState.videoCodec = fromMime
       }
     }
+    const isParseError = /fragparsing/i.test(String(data?.details || ""))
+    // The verdict needs this detail even when no fatal error ever lands.
+    if (isParseError && !codecState.errorDetail) codecState.errorDetail = String(data.details)
     if (!data?.fatal) {
       telemetry?.emit("engine-error", String(data?.details || "hls non-fatal error"))
+      if (isParseError && parseErrorStormExhausted()) {
+        try { hls.destroy() } catch {}
+        if (active.get() === hls) active.set(null)
+        telemetry?.emit("fatal", String(data.details))
+        onGiveUp()
+      }
       return
     }
     if (!codecState.errorDetail && data?.details) {
@@ -1245,7 +1280,8 @@ function attachHlsToVideo(
       try { hls.startLoad() } catch {}
       return
     }
-    if (data.type === ErrorTypes.MEDIA_ERROR && mediaRecover < 2) {
+    // Rebuilt buffers don't help a container the demuxer can't read - the next fragment fails identically.
+    if (data.type === ErrorTypes.MEDIA_ERROR && !isParseError && mediaRecover < 2) {
       mediaRecover++
       telemetry?.emit("recover", `media: ${data?.details || "error"}`)
       try { hls.recoverMediaError() } catch {}

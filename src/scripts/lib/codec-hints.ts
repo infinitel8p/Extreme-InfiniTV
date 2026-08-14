@@ -34,7 +34,7 @@ export function findHevcInCodecList(codecs: string | null | undefined): string |
   return null
 }
 
-export type StartFailureKind = "hevc" | "codec" | "audio" | "unknown"
+export type StartFailureKind = "hevc" | "codec" | "audio" | "parse" | "unknown"
 
 export interface StartFailureVerdict {
   kind: StartFailureKind
@@ -101,6 +101,13 @@ const AUDIO_BUFFER_ERROR_RX = /addsourcebuffer|limit of sourcebuffer/i
 // Our mpegts path adds the video buffer first, so this message always convicts the audio track.
 const AUDIO_BUFFER_LIMIT_RX = /limit of sourcebuffer/i
 
+// The decoders are fine and the container is what the demuxer choked on, so the fix is a different demuxer.
+const PARSE_ERROR_DETAIL_RX = /fragparsing|parsing.?error|demux/i
+
+export function isParseFailureDetail(detail: string | null | undefined): boolean {
+  return !!detail && PARSE_ERROR_DETAIL_RX.test(detail)
+}
+
 export function classifyStartFailure(input: {
   videoCodec?: string | null
   audioCodec?: string | null
@@ -111,6 +118,7 @@ export function classifyStartFailure(input: {
   const videoCodec = input.videoCodec?.trim() || null
   const errorDetail = input.errorDetail || ""
   const codecError = CODEC_ERROR_DETAIL_RX.test(errorDetail)
+  const parseError = PARSE_ERROR_DETAIL_RX.test(errorDetail)
   const audioBufferError = AUDIO_BUFFER_ERROR_RX.test(errorDetail)
   const audioUnsupported = isUnsupportedAudioCodec(input.audioCodec)
   const videoIsHevc = !!videoCodec && isHevcCodecString(videoCodec)
@@ -123,6 +131,7 @@ export function classifyStartFailure(input: {
 
   if (videoIsHevc) {
     if (!input.deviceHevc || codecError) return { kind: "hevc", codec: videoCodec }
+    if (parseError) return { kind: "parse", codec: videoCodec }
     return { kind: "unknown", codec: videoCodec }
   }
 
@@ -137,6 +146,7 @@ export function classifyStartFailure(input: {
   }
   if (nameSaysHevc) return { kind: "hevc", codec: null }
   if (audioUnsupported) return { kind: "audio", codec: input.audioCodec ?? null }
+  if (parseError) return { kind: "parse", codec: videoCodec }
   return { kind: "unknown", codec: videoCodec }
 }
 

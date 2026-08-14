@@ -11,6 +11,7 @@ export type HealthKind =
   | "variant"
   | "dropped"
   | "error"
+  | "recover"
   | "fallback"
   | "giveup"
   | "end"
