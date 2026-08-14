@@ -74,20 +74,6 @@ async function idbPut(key: string, value: StoredImage): Promise<void> {
   }
 }
 
-async function idbDelete(key: string): Promise<void> {
-  try {
-    const db = await openDb()
-    await new Promise<void>((resolve) => {
-      const tx = db.transaction(STORE, "readwrite")
-      tx.objectStore(STORE).delete(key)
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => resolve()
-    })
-  } catch (err) {
-    log.warn("[xt:img-cache] idbDelete failed:", err)
-  }
-}
-
 async function idbAllKeys(): Promise<string[]> {
   try {
     const db = await openDb()
@@ -117,12 +103,68 @@ async function idbClear(): Promise<void> {
   }
 }
 
+// Single cursor pass: delete entries older than maxAgeMs and return their keys.
+async function idbPruneExpired(maxAgeMs: number): Promise<string[]> {
+  try {
+    const db = await openDb()
+    return await new Promise<string[]>((resolve) => {
+      const cutoff = Date.now() - maxAgeMs
+      const deletedKeys: string[] = []
+      const tx = db.transaction(STORE, "readwrite")
+      const cursorRequest = tx.objectStore(STORE).openCursor()
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result
+        if (!cursor) return
+        const value = cursor.value as StoredImage
+        if (value?.cachedAt && value.cachedAt < cutoff) {
+          deletedKeys.push(String(cursor.key))
+          cursor.delete()
+        }
+        cursor.continue()
+      }
+      tx.oncomplete = () => resolve(deletedKeys)
+      tx.onerror = () => resolve(deletedKeys)
+      tx.onabort = () => resolve(deletedKeys)
+    })
+  } catch (err) {
+    log.warn("[xt:img-cache] idbPruneExpired failed:", err)
+    return []
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------------
 const objectUrlMemo = new Map<string, string>()
 const failedUrls = new Set<string>()
 const inFlight = new Map<string, Promise<void>>()
+
+// Bounds live blob URLs; LRU order keeps in-DOM images safe from eviction.
+const MAX_MEMO_ENTRIES = 512
+
+// Reads a memoized object URL and refreshes its recency (Map insertion order).
+function memoGet(cacheKey: string): string | undefined {
+  const objectUrl = objectUrlMemo.get(cacheKey)
+  if (objectUrl === undefined) return undefined
+  objectUrlMemo.delete(cacheKey)
+  objectUrlMemo.set(cacheKey, objectUrl)
+  return objectUrl
+}
+
+// Insert, then evict and revoke least-recently-used entries past the cap.
+function memoSet(cacheKey: string, objectUrl: string): void {
+  const existing = objectUrlMemo.get(cacheKey)
+  if (existing) URL.revokeObjectURL(existing)
+  objectUrlMemo.delete(cacheKey)
+  objectUrlMemo.set(cacheKey, objectUrl)
+  while (objectUrlMemo.size > MAX_MEMO_ENTRIES) {
+    const oldestKey = objectUrlMemo.keys().next().value
+    if (oldestKey === undefined) break
+    const oldestUrl = objectUrlMemo.get(oldestKey)
+    objectUrlMemo.delete(oldestKey)
+    if (oldestUrl) URL.revokeObjectURL(oldestUrl)
+  }
+}
 
 const MAX_CONCURRENT = 6
 let runningCount = 0
@@ -228,7 +270,7 @@ async function backgroundFill(cacheKey: string, url: string, kind: ImgKind): Pro
     const originalBlob = await response.blob()
     const storedBlob = await downscaleBlob(originalBlob, kind)
     await idbPut(cacheKey, { blob: storedBlob, cachedAt: Date.now() })
-    objectUrlMemo.set(cacheKey, URL.createObjectURL(storedBlob))
+    memoSet(cacheKey, URL.createObjectURL(storedBlob))
   } catch (err) {
     log.warn("[xt:img-cache] background fill failed:", err)
     failedUrls.add(url)
@@ -261,7 +303,7 @@ async function handleVisible(img: HTMLImageElement, url: string, kind: ImgKind):
   if (!img.isConnected) return
   schedulePrune()
   const cacheKey = imgCacheKey(kind, url)
-  const memoized = objectUrlMemo.get(cacheKey)
+  const memoized = memoGet(cacheKey)
   if (memoized) {
     img.src = memoized
     return
@@ -269,7 +311,7 @@ async function handleVisible(img: HTMLImageElement, url: string, kind: ImgKind):
   const cached = await idbGet(cacheKey)
   if (cached?.blob) {
     const objectUrl = URL.createObjectURL(cached.blob)
-    objectUrlMemo.set(cacheKey, objectUrl)
+    memoSet(cacheKey, objectUrl)
     img.src = objectUrl
     return
   }
@@ -284,7 +326,7 @@ export function mountCachedImage(img: HTMLImageElement, url: string, kind: ImgKi
     return
   }
   const cacheKey = imgCacheKey(kind, url)
-  const memoized = objectUrlMemo.get(cacheKey)
+  const memoized = memoGet(cacheKey)
   if (memoized) {
     img.src = memoized
     return
@@ -330,6 +372,7 @@ export function cachedImg(
 export async function clearImageCache(): Promise<number> {
   const removed = (await idbAllKeys()).length
   await idbClear()
+  for (const objectUrl of objectUrlMemo.values()) URL.revokeObjectURL(objectUrl)
   objectUrlMemo.clear()
   failedUrls.clear()
   return removed
@@ -351,11 +394,12 @@ async function pruneOldEntries(): Promise<void> {
       lastPrune = Number(localStorage.getItem(PRUNE_SENTINEL_KEY)) || 0
     } catch {}
     if (Date.now() - lastPrune < PRUNE_INTERVAL_MS) return
-    const keys = await idbAllKeys()
-    for (const key of keys) {
-      const value = await idbGet(key)
-      if (value?.cachedAt && Date.now() - value.cachedAt > MAX_AGE_MS) {
-        await idbDelete(key)
+    const prunedKeys = await idbPruneExpired(MAX_AGE_MS)
+    for (const key of prunedKeys) {
+      const objectUrl = objectUrlMemo.get(key)
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl)
+        objectUrlMemo.delete(key)
       }
     }
     try {

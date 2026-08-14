@@ -187,6 +187,15 @@ describe("pickTmdbMatch", () => {
   it("returns null for an empty result list", () => {
     expect(pickTmdbMatch([], { variants: ["Dune"], year: 2010, mediaType: "movie" })).toBeNull()
   })
+
+  it("prefers a same-title tv reboot near the requested year over a high-vote-count original from decades earlier", () => {
+    const results: TmdbMatchCandidate[] = [
+      { id: 1, name: "Doctor Who", first_air_date: "1998-01-01", vote_count: 5000, popularity: 50 },
+      { id: 2, name: "Doctor Who", first_air_date: "2023-01-01", vote_count: 10, popularity: 5 },
+    ]
+    const match = pickTmdbMatch(results, { variants: ["Doctor Who"], year: 2023, mediaType: "tv" })
+    expect(match?.id).toBe(2)
+  })
 })
 
 describe("matchRecommendationsToCatalog", () => {

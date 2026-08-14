@@ -61,7 +61,8 @@ export function extractM3UHeaderEpgUrl(text: string): string | null {
     readHeaderAttr(firstLine, "x-tvg-url") ||
     readHeaderAttr(firstLine, "tvg-url")
   if (!raw) return null
-  const first = raw.split(",")[0]?.trim() ?? ""
+  // Split only on commas followed by a scheme so query-string commas survive.
+  const first = raw.split(/\s*,+\s*(?=https?:\/\/)/i)[0]?.trim() ?? ""
   return /^https?:\/\//i.test(first) ? first : null
 }
 

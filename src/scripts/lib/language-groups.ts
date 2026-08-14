@@ -175,3 +175,17 @@ export function groupPassesLanguageFilter(tags: string[], selected: string): boo
   if (!tags.length) return true
   return tags.includes(selected)
 }
+
+// Grouping a catalog is expensive (~800ms at 176k rows), so memoize per playlist and catalog reference.
+export function createGroupingIndexMemo() {
+  let cache: { playlistId: string | null; catalogRef: GroupableEntry[]; index: CatalogGroupingIndex } | null = null
+
+  return function getGroupingIndexFor(playlistId: string | null, catalog: GroupableEntry[]): CatalogGroupingIndex {
+    if (cache && cache.playlistId === playlistId && cache.catalogRef === catalog) {
+      return cache.index
+    }
+    const index = buildGroupingIndex(catalog)
+    cache = { playlistId, catalogRef: catalog, index }
+    return index
+  }
+}

@@ -253,18 +253,22 @@ export function setCached(entryId, kind, data, ttlMs) {
 }
 
 /**
- * Every cached (kind, data) pair whose kind starts with `kindPrefix`, read
- * straight from IDB in one range query (bypasses the in-memory layer).
- * Powers a local person/cast graph without one round trip per title.
+ * Every cached (kind, data) pair whose kind starts with `kindPrefix`, merging the in-memory layer over an IDB range query.
  * @returns {Promise<Array<{ kind: string, data: any }>>}
  */
 export async function getCachedByKindPrefix(entryId, kindPrefix) {
   if (!entryId || !kindPrefix) return []
   const prefix = `${PREFIX}${entryId}:${kindPrefix}`
   const kindStart = prefix.length - kindPrefix.length
+  const byKind = new Map()
+  for (const [key, entry] of _mem) {
+    if (typeof key !== "string" || !key.startsWith(prefix)) continue
+    if (!entry || typeof entry !== "object" || !("data" in entry)) continue
+    byKind.set(key.slice(kindStart), entry.data)
+  }
   try {
     const db = await openDB()
-    return await new Promise((resolve) => {
+    const idbResults = await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readonly")
       const range = IDBKeyRange.bound(prefix, prefix + "￿")
       const req = tx.objectStore(STORE).openCursor(range)
@@ -283,10 +287,14 @@ export async function getCachedByKindPrefix(entryId, kindPrefix) {
       }
       req.onerror = () => resolve(results)
     })
+    // In-memory wins on key collision since it's always the freshest write.
+    for (const { kind, data } of idbResults) {
+      if (!byKind.has(kind)) byKind.set(kind, data)
+    }
   } catch (e) {
     log.warn("[xt:cache] getCachedByKindPrefix threw for", entryId, kindPrefix, e)
-    return []
   }
+  return [...byKind].map(([kind, data]) => ({ kind, data }))
 }
 
 /**

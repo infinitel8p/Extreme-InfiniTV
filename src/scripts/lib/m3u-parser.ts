@@ -20,8 +20,9 @@ export interface M3UEntry {
   name: string
   url: string
   logo: string | null
+  // Raw trimmed group-title (or #EXTGRP) value; semicolons kept so the literal name stays one bucket.
   category: string | null
-  // Semicolon-split, deduped group-title (or #EXTGRP) tokens; category === categories[0] ?? null.
+  // Semicolon-split, deduped group-title (or #EXTGRP) tokens, for multi-category grouping.
   categories: string[]
   tvgId: string | null
   tvgName: string | null
@@ -45,7 +46,7 @@ export interface M3UEntry {
 export interface M3UParseResult {
   entries: M3UEntry[]
   epgUrl: string
-  // Comma-split, deduped x-tvg-url/tvg-url/url-tvg values; epgUrl === epgUrls[0] ?? "".
+  // Scheme-aware comma-split, deduped x-tvg-url/tvg-url/url-tvg values; epgUrl === epgUrls[0] ?? "".
   epgUrls: string[]
 }
 
@@ -182,6 +183,19 @@ function splitDedupeTrim(raw: string, separator: string): string[] {
 /** Split a `group-title` (or `#EXTGRP` fallback) value on `;` into its member groups. */
 function splitGroups(raw: string | null): string[] {
   return raw ? splitDedupeTrim(raw, ";") : []
+}
+
+// Splits only on commas followed by a URL scheme so query-string commas survive.
+function splitEpgUrls(raw: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const part of raw.split(/\s*,+\s*(?=https?:\/\/)/i)) {
+    const trimmed = part.trim()
+    if (!trimmed || !/^https?:\/\//i.test(trimmed) || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
 }
 
 /**
@@ -328,7 +342,7 @@ export function parseM3U(text: string): M3UParseResult {
         readAttr(line, "tvg-url") ||
         readAttr(line, "url-tvg")
       if (epgUrlRaw) {
-        epgUrls = splitDedupeTrim(epgUrlRaw, ",")
+        epgUrls = splitEpgUrls(epgUrlRaw)
         epgUrl = epgUrls[0] || epgUrl
       }
       headerCatchup = readAttr(line, "catchup") || readAttr(line, "catchup-type") || headerCatchup
@@ -390,7 +404,7 @@ export function parseM3U(text: string): M3UParseResult {
     }
     const rawCategory = pending.category ?? extgrpFallback
     const categories = splitGroups(rawCategory)
-    const category = categories[0] ?? null
+    const category = rawCategory ? rawCategory.trim() : null
     const { siptvDays, ...pendingEntry } = pending
     let catchup = pendingEntry.catchup ?? headerCatchup
     let catchupDays = pendingEntry.catchupDays ?? headerCatchupDays

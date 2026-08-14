@@ -56,6 +56,11 @@ describe("extractM3UHeaderEpgUrl", () => {
     const text = '#EXTM3U\n#EXTINF:-1 tvg-url="https://example.com/late.xml",Ch\nhttp://example.com/1.m3u8\n'
     expect(extractM3UHeaderEpgUrl(text)).toBeNull()
   })
+
+  it("keeps a comma inside the first URL's query string intact instead of truncating it", () => {
+    const text = '#EXTM3U url-tvg="http://epg.example.com/guide.xml?ids=1,2"\n'
+    expect(extractM3UHeaderEpgUrl(text)).toBe("http://epg.example.com/guide.xml?ids=1,2")
+  })
 })
 
 describe("firstStreamUrlFromM3U", () => {

@@ -823,7 +823,7 @@ function applyFilter() {
   }
 
   if (personFilterActive && personTitleIds) {
-    out = out.filter((m) => personTitleIds.has(m.id))
+    out = out.filter((movie) => personTitleIds.has(movie.id))
   }
 
   /** @type {Map<number, number> | null} */
@@ -1079,24 +1079,24 @@ async function fetchMovieRows() {
     ? parsed
     : parsed?.movies || parsed?.results || []
   return (arr || [])
-    .map((m) => {
-      const name = String(m.name || m.title || "")
-      const id = Number(m.stream_id || m.id)
-      const logo = m.stream_icon || m.cover || null
-      const year = String(m.year || m.releaseDate || "").trim() || ""
-      const rating = m.rating || m.rating_5based || m.vote_average || ""
-      const duration = m.duration || m.runtime || m.duration_secs || ""
+    .map((movie) => {
+      const name = String(movie.name || movie.title || "")
+      const id = Number(movie.stream_id || movie.id)
+      const logo = movie.stream_icon || movie.cover || null
+      const year = String(movie.year || movie.releaseDate || "").trim() || ""
+      const rating = movie.rating || movie.rating_5based || movie.vote_average || ""
+      const duration = movie.duration || movie.runtime || movie.duration_secs || ""
       const categoryId =
-        (Array.isArray(m.category_ids) &&
-          m.category_ids.length &&
-          m.category_ids[0]) ||
-        m.category_id
-      let category = String(m.category_name || "").trim()
+        (Array.isArray(movie.category_ids) &&
+          movie.category_ids.length &&
+          movie.category_ids[0]) ||
+        movie.category_id
+      let category = String(movie.category_name || "").trim()
       if (!category && categoryId != null && catMap?.size) {
         category = catMap.get(String(categoryId)) || ""
       }
-      const added = Number(m.added) || 0
-      const tmdb = Number(m.tmdb) || Number(m.tmdb_id) || null
+      const added = Number(movie.added) || 0
+      const tmdb = Number(movie.tmdb) || Number(movie.tmdb_id) || null
       return {
         id,
         name,
@@ -1111,7 +1111,7 @@ async function fetchMovieRows() {
         tmdb,
       }
     })
-    .filter((m) => m.id && m.name)
+    .filter((movie) => movie.id && movie.name)
     .sort((a, b) =>
       a.name.localeCompare(b.name, "en", { sensitivity: "base" })
     )

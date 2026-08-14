@@ -293,7 +293,7 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     }, MIDPLAY_RESTART_RESET_MS)
   }
 
-  function finalizeMidPlayUnrecoverable(detail: string): void {
+  function finalizeMidPlayUnrecoverable(deadSessionId: string | null, detail: string): void {
     log.warn(
       "[xt:vod-audio-switch] mandatory remux session failed mid-play, no playable fallback:",
       detail,
@@ -301,6 +301,7 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
     bumpGeneration()
     activeSessionId = null
     detachSeekInterceptor()
+    if (deadSessionId) void stopVodAudioRemux(deadSessionId)
     reportRemuxUnrecoverable(detail)
   }
 
@@ -308,7 +309,7 @@ export function createVodAudioSwitcher(options: VodAudioSwitcherOptions): VodAud
   function attemptMidPlayRestart(deadSessionId: string | null, detail: string): void {
     if (disposed || midPlayRestartInFlight) return
     if (midPlayRestartAttempts >= MAX_MIDPLAY_RESTART_ATTEMPTS) {
-      finalizeMidPlayUnrecoverable(detail)
+      finalizeMidPlayUnrecoverable(deadSessionId, detail)
       return
     }
     midPlayRestartInFlight = true

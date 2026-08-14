@@ -164,11 +164,29 @@ export function sanitizeLiveContainer(value) {
   return value === "ts" ? "ts" : LIVE_CONTAINER_DEFAULT
 }
 
-const EMOJI_MAX_LENGTH = 8 // code units, not glyphs - enough for a ZWJ sequence
+const EMOJI_MAX_LENGTH = 8 // sane bound on accumulated length while walking whole grapheme clusters
 
-/** Trims and caps a user-supplied emoji. Returns "" when there's nothing usable. */
+// Caps on grapheme-cluster boundaries so ZWJ/flag sequences never end in a lone surrogate.
 function sanitizeEmoji(value) {
-  return typeof value === "string" ? value.trim().slice(0, EMOJI_MAX_LENGTH) : ""
+  if (typeof value !== "string") return ""
+  const trimmed = value.trim()
+  if (!trimmed) return ""
+  if (typeof Intl !== "undefined" && typeof Intl.Segmenter === "function") {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    let result = ""
+    for (const { segment } of segmenter.segment(trimmed)) {
+      if (result && result.length + segment.length > EMOJI_MAX_LENGTH) break
+      result += segment
+    }
+    return result
+  }
+  // No Intl.Segmenter: code-point slice keeps surrogate pairs intact.
+  let result = ""
+  for (const codePoint of Array.from(trimmed)) {
+    if (result && result.length + codePoint.length > EMOJI_MAX_LENGTH) break
+    result += codePoint
+  }
+  return result
 }
 
 /** Returns `value` when it's a known accent preset, else "" (falls back to the global accent). */

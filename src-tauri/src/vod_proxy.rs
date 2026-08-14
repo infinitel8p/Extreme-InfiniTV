@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
+use crate::http_range::{range_request_start, ranged_response_matches_request};
 use crate::matroska::{self, ClusterScanner, HeadInfo, ScannedCue, SubtitleCodec};
 
 const TRACKS_EVENT: &str = "xt:vodproxy-tracks";
@@ -154,6 +155,7 @@ pub async fn register_vod_proxy_file(
     app: AppHandle,
     state: tauri::State<'_, VodProxyState>,
     path: String,
+    extra_allowed_root: Option<String>,
 ) -> Result<RegisterVodProxyResponse, String> {
     let canonical_path = tokio::fs::canonicalize(&path)
         .await
@@ -164,7 +166,12 @@ pub async fn register_vod_proxy_file(
     if !metadata.is_file() {
         return Err("OTHER:path is not a file".to_string());
     }
-    let allowed_roots = local_file_allowed_roots(&app);
+    let mut allowed_roots = local_file_allowed_roots(&app);
+    if let Some(extra_root) = extra_allowed_root {
+        if let Some(canonical_root) = canonicalize_allowed_root(&extra_root).await {
+            allowed_roots.push(canonical_root);
+        }
+    }
     if !is_local_file_path_allowed(&canonical_path, &allowed_roots) {
         return Err("OTHER:path is outside the allowed media directories".to_string());
     }
@@ -264,6 +271,17 @@ fn local_file_allowed_roots(app: &AppHandle) -> Vec<PathBuf> {
     .flatten()
     .map(|root| std::fs::canonicalize(&root).unwrap_or(root))
     .collect()
+}
+
+/// Resolves a user-configured extra root; None unless it canonicalizes to an existing directory.
+async fn canonicalize_allowed_root(root: &str) -> Option<PathBuf> {
+    let canonical_root = tokio::fs::canonicalize(root).await.ok()?;
+    let metadata = tokio::fs::metadata(&canonical_root).await.ok()?;
+    if metadata.is_dir() {
+        Some(canonical_root)
+    } else {
+        None
+    }
 }
 
 /// Pure path-confinement check: `canonical_path` must sit under one of `allowed_roots` and carry
@@ -597,43 +615,6 @@ where
         }
         item
     })
-}
-
-/// Explicit start of `Range: bytes=N-...`; suffix and multi-ranges stay unvalidated.
-fn range_request_start(header_value: &str) -> Option<u64> {
-    let spec = header_value.trim().strip_prefix("bytes=")?;
-    if spec.contains(',') {
-        return None;
-    }
-    let (start_str, _end_str) = spec.split_once('-')?;
-    if start_str.is_empty() {
-        return None;
-    }
-    start_str.parse::<u64>().ok()
-}
-
-/// Start byte of a response `Content-Range` header.
-fn content_range_start(header_value: &str) -> Option<u64> {
-    let spec = header_value.trim().strip_prefix("bytes ")?;
-    let (range_part, _total) = spec.split_once('/')?;
-    let (start_str, _end_str) = range_part.split_once('-')?;
-    start_str.parse::<u64>().ok()
-}
-
-/// A ranged request must get a 206 whose Content-Range starts at the requested byte.
-fn ranged_response_matches_request(
-    status: reqwest::StatusCode,
-    headers: &reqwest::header::HeaderMap,
-    requested_start: u64,
-) -> bool {
-    if status != reqwest::StatusCode::PARTIAL_CONTENT {
-        return false;
-    }
-    headers
-        .get(reqwest::header::CONTENT_RANGE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(content_range_start)
-        == Some(requested_start)
 }
 
 /// `NoRange` covers an absent or unparseable header (RFC 7233: ignore and serve the whole file);
@@ -1006,42 +987,6 @@ mod tests {
             dedupe: Mutex::new(HashSet::new()),
             created_at: std::time::Instant::now(),
         })
-    }
-
-    #[test]
-    fn range_request_start_reads_an_explicit_start() {
-        assert_eq!(range_request_start("bytes=1048576-"), Some(1_048_576));
-        assert_eq!(range_request_start("bytes=0-499"), Some(0));
-    }
-
-    #[test]
-    fn range_request_start_is_none_for_a_suffix_or_multi_range() {
-        assert_eq!(range_request_start("bytes=-500"), None);
-        assert_eq!(range_request_start("bytes=0-99,200-299"), None);
-    }
-
-    #[test]
-    fn content_range_start_reads_the_response_start() {
-        assert_eq!(content_range_start("bytes 1048576-2097151/5000000"), Some(1_048_576));
-        assert_eq!(content_range_start("not a content-range"), None);
-    }
-
-    #[test]
-    fn ranged_response_matches_request_requires_206_and_a_matching_start() {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::CONTENT_RANGE,
-            reqwest::header::HeaderValue::from_static("bytes 1000-1999/5000"),
-        );
-        assert!(ranged_response_matches_request(reqwest::StatusCode::PARTIAL_CONTENT, &headers, 1_000));
-        assert!(!ranged_response_matches_request(reqwest::StatusCode::PARTIAL_CONTENT, &headers, 0));
-        assert!(!ranged_response_matches_request(reqwest::StatusCode::OK, &headers, 1_000));
-    }
-
-    #[test]
-    fn ranged_response_matches_request_rejects_a_206_without_content_range() {
-        let headers = reqwest::header::HeaderMap::new();
-        assert!(!ranged_response_matches_request(reqwest::StatusCode::PARTIAL_CONTENT, &headers, 0));
     }
 
     #[test]

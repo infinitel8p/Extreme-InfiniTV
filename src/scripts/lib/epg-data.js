@@ -64,14 +64,14 @@ async function findEntry(playlistId) {
  * @property {"primary"|"additional"} kind
  */
 
-/** Splits a comma-joined `x-tvg-url`/`tvg-url`/`url-tvg` value into trimmed, deduped URLs. */
+// Splits only on commas followed by a URL scheme so query-string commas survive.
 function splitHeaderEpgUrls(raw) {
   if (!raw || typeof raw !== "string") return []
   const seen = new Set()
   const out = []
-  for (const part of raw.split(",")) {
+  for (const part of raw.split(/\s*,+\s*(?=https?:\/\/)/i)) {
     const trimmed = part.trim()
-    if (!trimmed || seen.has(trimmed)) continue
+    if (!trimmed || !/^https?:\/\//i.test(trimmed) || seen.has(trimmed)) continue
     seen.add(trimmed)
     out.push(trimmed)
   }

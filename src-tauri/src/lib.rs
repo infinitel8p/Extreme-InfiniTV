@@ -14,6 +14,9 @@ mod external_player;
 mod hevc_extension;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod http_range;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod matroska;
 
 mod safe_fetch;

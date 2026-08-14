@@ -67,6 +67,13 @@ describe("playlist entry personalization (emoji + accent override)", () => {
     expect(entry.emoji.length).toBeLessThanOrEqual(8)
   })
 
+  it("addEntry keeps a ZWJ family emoji whole instead of bisecting it into a lone surrogate", async () => {
+    const familyEmoji = "👨‍👩‍👧‍👦" // one grapheme cluster, 11 UTF-16 code units - past the old 8-unit cap
+    const entry = await addEntry({ type: "m3u", url: "http://example.com/list.m3u", emoji: familyEmoji })
+    expect(entry.emoji).toBe(familyEmoji)
+    expect(entry.emoji.length).toBeGreaterThan(8)
+  })
+
   it("addEntry omits emoji/accent entirely when neither is supplied", async () => {
     const entry = await addEntry({ type: "m3u", url: "http://example.com/list.m3u" })
     expect("emoji" in entry).toBe(false)

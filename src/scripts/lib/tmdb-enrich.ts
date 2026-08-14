@@ -117,7 +117,7 @@ export async function resolveTmdbId(
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_match_${kind}_${providerEntry.id}:${language}`
+  const cacheKind = `tmdb_match_${kind}_${playlistId}_${providerEntry.id}:${language}`
   try {
     const result = await cachedFetch(TMDB_CACHE_ENTRY_ID, cacheKind, TMDB_MATCH_TTL_MS, () =>
       resolveTmdbIdUncached(apiKey, kind, providerEntry, language)
@@ -225,7 +225,8 @@ async function fillEnglishTextFallback(
   enrichment: TmdbTitleEnrichment
 ): Promise<TmdbTitleEnrichment> {
   if (language === ENGLISH_FALLBACK_LANGUAGE) return enrichment
-  if (enrichment.overview && enrichment.tagline) return enrichment
+  // Tagline alone is decorative and often absent on TMDb; only a missing overview justifies the fetch.
+  if (enrichment.overview) return enrichment
   try {
     const bundle: TmdbBundleWithTagline =
       mediaType === "movie"
@@ -420,12 +421,13 @@ export interface CachedTmdbEnrichment {
 
 // Unbounded: callers combine this with other probes under one shared withProbeTimeout window.
 async function peekCachedEnrichmentRaw(
+  playlistId: string,
   kind: TmdbKind,
   mediaId: string | number
 ): Promise<CachedTmdbEnrichment | null> {
   if (!isTmdbActive()) return null
   const language = tmdbLanguageFor(getActiveLocale())
-  const matchCacheKind = `tmdb_match_${kind}_${mediaId}:${language}`
+  const matchCacheKind = `tmdb_match_${kind}_${playlistId}_${mediaId}:${language}`
   const match = await peekFreshCache<{ tmdbId: number | null }>(matchCacheKind)
   if (!match?.tmdbId) return null
   const detailCacheKind =
@@ -468,13 +470,14 @@ export interface EarlyDetailProbeResult<T> {
  * one shared bound, so boot() can decide what to merge into the first paint.
  */
 export async function peekEarlyDetailData<T>(
+  playlistId: string,
   kind: TmdbKind,
   mediaId: string | number,
   providerEntryId: string,
   providerCacheKind: string
 ): Promise<EarlyDetailProbeResult<T>> {
   const combined = Promise.all([
-    peekCachedEnrichmentRaw(kind, mediaId),
+    peekCachedEnrichmentRaw(playlistId, kind, mediaId),
     peekCachedEntryRaw<T>(providerEntryId, providerCacheKind),
   ])
   const [enrichment, providerInfo] = await withProbeTimeout(combined, [null, null] as const)

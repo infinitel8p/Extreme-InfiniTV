@@ -971,7 +971,7 @@ function applyFilter() {
   }
 
   if (personFilterActive && personTitleIds) {
-    out = out.filter((s) => personTitleIds.has(s.id))
+    out = out.filter((series) => personTitleIds.has(series.id))
   }
 
   /** @type {Map<number, number> | null} */
@@ -1219,29 +1219,29 @@ async function fetchSeriesRows() {
     ? parsed
     : parsed?.series || parsed?.results || []
   return (arr || [])
-    .map((s) => {
-      const name = String(s.name || s.title || "")
-      const id = Number(s.series_id || s.id)
-      const logo = s.cover || s.stream_icon || null
+    .map((series) => {
+      const name = String(series.name || series.title || "")
+      const id = Number(series.series_id || series.id)
+      const logo = series.cover || series.stream_icon || null
       const year = String(
-        s.year || s.releaseDate || s.release_date || ""
+        series.year || series.releaseDate || series.release_date || ""
       ).trim()
-      const rating = s.rating || s.rating_5based || ""
+      const rating = series.rating || series.rating_5based || ""
       const categoryId =
-        (Array.isArray(s.category_ids) &&
-          s.category_ids.length &&
-          s.category_ids[0]) ||
-        s.category_id
-      let category = String(s.category_name || "").trim()
+        (Array.isArray(series.category_ids) &&
+          series.category_ids.length &&
+          series.category_ids[0]) ||
+        series.category_id
+      let category = String(series.category_name || "").trim()
       if (!category && categoryId != null && catMap?.size) {
         category = catMap.get(String(categoryId)) || ""
       }
       const added =
-        Number(s.last_modified) ||
-        Number(s.added) ||
-        Number(s.releaseDate ? Date.parse(s.releaseDate) / 1000 : 0) ||
+        Number(series.last_modified) ||
+        Number(series.added) ||
+        Number(series.releaseDate ? Date.parse(series.releaseDate) / 1000 : 0) ||
         0
-      const tmdb = Number(s.tmdb) || Number(s.tmdb_id) || null
+      const tmdb = Number(series.tmdb) || Number(series.tmdb_id) || null
       return {
         id,
         name,
@@ -1249,13 +1249,13 @@ async function fetchSeriesRows() {
         year: year || "",
         rating: rating ? String(rating) : "",
         category,
-        plot: s.plot || "",
+        plot: series.plot || "",
         added,
         norm: normalize(`${name} ${category} ${year}`),
         tmdb,
       }
     })
-    .filter((s) => s.id && s.name)
+    .filter((series) => series.id && series.name)
     .sort((a, b) =>
       a.name.localeCompare(b.name, "en", { sensitivity: "base" })
     )

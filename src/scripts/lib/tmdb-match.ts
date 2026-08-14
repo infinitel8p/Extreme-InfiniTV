@@ -134,7 +134,12 @@ export function pickTmdbMatch(
   const normalizedVariants = variants.map((variant) => normalize(variant)).filter(Boolean)
   if (!normalizedVariants.length) return null
 
-  const passing: Array<{ result: TmdbMatchCandidate; title: string; resultYear: number | null }> = []
+  const passing: Array<{
+    result: TmdbMatchCandidate
+    title: string
+    resultYear: number | null
+    isCloseYear: boolean
+  }> = []
 
   for (const result of results) {
     const title =
@@ -146,14 +151,15 @@ export function pickTmdbMatch(
 
     if (!normalizedVariants.includes(normalize(title))) continue
 
+    let isCloseYear = false
     if (year != null) {
-      const yearOk =
-        resultYear != null &&
-        (Math.abs(resultYear - year) <= 1 || (mediaType === "tv" && resultYear < year))
-      if (!yearOk) continue
+      if (resultYear == null) continue
+      isCloseYear = Math.abs(resultYear - year) <= 1
+      const isOlderTvOriginal = mediaType === "tv" && resultYear < year
+      if (!isCloseYear && !isOlderTvOriginal) continue
     }
 
-    passing.push({ result, title, resultYear })
+    passing.push({ result, title, resultYear, isCloseYear })
   }
 
   if (!passing.length) return null
@@ -164,12 +170,16 @@ export function pickTmdbMatch(
     return { id: onlyMatch.result.id, title: onlyMatch.title, year: onlyMatch.resultYear }
   }
 
-  passing.sort((a, b) => {
+  // Close-year candidates win; the older-TV allowance is only a fallback pool.
+  const closeYearCandidates = passing.filter((candidate) => candidate.isCloseYear)
+  const tieBreakPool = closeYearCandidates.length ? closeYearCandidates : passing
+
+  tieBreakPool.sort((a, b) => {
     const voteDelta = (b.result.vote_count || 0) - (a.result.vote_count || 0)
     if (voteDelta !== 0) return voteDelta
     return (b.result.popularity || 0) - (a.result.popularity || 0)
   })
-  const best = passing[0]
+  const best = tieBreakPool[0]
   return { id: best.result.id, title: best.title, year: best.resultYear }
 }
 

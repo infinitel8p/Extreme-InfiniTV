@@ -290,7 +290,7 @@ describe("serializeM3U: multi-group and tvg-shift round-trip", () => {
     const entry: M3UEntry = { ...minimalEntry, category: "News", categories: ["News", "Sports"] }
     const reparsed = parseM3U(serializeM3U([entry]))
     expect(reparsed.entries[0].categories).toEqual(["News", "Sports"])
-    expect(reparsed.entries[0].category).toBe("News")
+    expect(reparsed.entries[0].category).toBe("News;Sports")
   })
 
   it("round-trips a single group unchanged", () => {

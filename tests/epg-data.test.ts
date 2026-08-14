@@ -202,6 +202,33 @@ describe("buildEpgUrlsFromEntry: M3U playlist", () => {
     ])
   })
 
+  it("keeps a comma inside a single URL's query string intact instead of splitting on it", () => {
+    const sources = buildEpgUrlsFromEntry(
+      {},
+      m3uCreds,
+      "http://epg.example.com/guide.xml?ids=1,2"
+    )
+    expect(sources).toEqual([
+      {
+        url: "http://epg.example.com/guide.xml?ids=1,2",
+        source: "m3u-header",
+        kind: "primary",
+      },
+    ])
+  })
+
+  it("splits a query-string URL followed by a second real header source", () => {
+    const sources = buildEpgUrlsFromEntry(
+      {},
+      m3uCreds,
+      "http://epg.example.com/guide.xml?ids=1,2,https://b.example/2.xml"
+    )
+    expect(sources.map((source) => source.url)).toEqual([
+      "http://epg.example.com/guide.xml?ids=1,2",
+      "https://b.example/2.xml",
+    ])
+  })
+
   it("user override still beats a multi-url header entirely", () => {
     const sources = buildEpgUrlsFromEntry(
       { epgUrl: "https://manual.example/g.xml" },

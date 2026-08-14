@@ -1,7 +1,7 @@
 // Desktop client for the Rust MKV tee-proxy (vod_proxy.rs).
 
 import { log } from "@/scripts/lib/log.js"
-import { getUserAgent } from "@/scripts/lib/app-settings.js"
+import { getUserAgent, getDownloadDir } from "@/scripts/lib/app-settings.js"
 
 export interface MkvSubtitleTrackInfo {
   number: number
@@ -246,5 +246,9 @@ export async function prepareVodPlayback(sourceUrl: string): Promise<VodProxySes
  */
 export async function prepareLocalVodPlayback(filePath: string): Promise<VodProxySession | null> {
   if (!vodProxyAvailable) return null
-  return openMkvProxySession(() => invokeRegisterCommand("register_vod_proxy_file", { path: filePath }))
+  // A custom downloads dir can live outside the default roots the Rust side checks.
+  const extraAllowedRoot = getDownloadDir() || null
+  return openMkvProxySession(() =>
+    invokeRegisterCommand("register_vod_proxy_file", { path: filePath, extraAllowedRoot }),
+  )
 }

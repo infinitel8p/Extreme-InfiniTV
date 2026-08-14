@@ -240,6 +240,28 @@ describe("parseM3U: EPG header variants", () => {
     const result = parseM3U(fixture("standard.m3u"))
     expect(result.epgUrls).toEqual(["https://example.com/epg.xml.gz"])
   })
+
+  it("keeps a comma inside a single URL's query string intact instead of splitting on it", () => {
+    const text =
+      '#EXTM3U url-tvg="http://epg.example.com/guide.xml?ids=1,2"\n' +
+      '#EXTINF:-1 tvg-id="x",Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.epgUrls).toEqual(["http://epg.example.com/guide.xml?ids=1,2"])
+    expect(result.epgUrl).toBe("http://epg.example.com/guide.xml?ids=1,2")
+  })
+
+  it("splits a query-string URL followed by a second real header source", () => {
+    const text =
+      '#EXTM3U url-tvg="http://epg.example.com/guide.xml?ids=1,2,https://b.example/2.xml"\n' +
+      '#EXTINF:-1 tvg-id="x",Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.epgUrls).toEqual([
+      "http://epg.example.com/guide.xml?ids=1,2",
+      "https://b.example/2.xml",
+    ])
+  })
 })
 
 describe("parseM3U: EXTGRP and tvg-chno", () => {
@@ -272,14 +294,24 @@ describe("parseM3U: EXTGRP and tvg-chno", () => {
 })
 
 describe("parseM3U: multi-group group-title", () => {
-  it("splits a semicolon-separated group-title into categories, keeping category as the first", () => {
+  it("splits a semicolon-separated group-title into categories, keeping category as the raw string", () => {
     const text =
       "#EXTM3U\n" +
       '#EXTINF:-1 tvg-id="x" group-title="News;Sports",Multi Group\n' +
       "http://example.com/x.m3u8\n"
     const result = parseM3U(text)
     expect(result.entries[0].categories).toEqual(["News", "Sports"])
-    expect(result.entries[0].category).toBe("News")
+    expect(result.entries[0].category).toBe("News;Sports")
+  })
+
+  it("keeps a group-title with a semicolon meant as one category name intact", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" group-title="Kids; Cartoons",One Category\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].category).toBe("Kids; Cartoons")
+    expect(result.entries[0].categories).toEqual(["Kids", "Cartoons"])
   })
 
   it("trims whitespace around each group and drops empty segments", () => {
@@ -328,7 +360,7 @@ describe("parseM3U: multi-group group-title", () => {
       "http://example.com/x.m3u8\n"
     const result = parseM3U(text)
     expect(result.entries[0].categories).toEqual(["News", "Sports"])
-    expect(result.entries[0].category).toBe("News")
+    expect(result.entries[0].category).toBe("News;Sports")
   })
 })
 

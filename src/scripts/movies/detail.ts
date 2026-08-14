@@ -68,7 +68,7 @@ import {
 import { resolveTmdbId, fetchMovieEnrichment, peekEarlyDetailData } from "@/scripts/lib/tmdb-enrich.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
-import { buildGroupingIndex } from "@/scripts/lib/language-groups.ts"
+import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, languageTagLabel, effectivePreferredTags, prefixQualityTokens } from "@/scripts/lib/language-tags.ts"
 import { tmdbImageUrl, TMDB_PROFILE_SIZE } from "@/scripts/lib/tmdb.ts"
 import { buildEntryCard } from "@/scripts/lib/entry-card.ts"
@@ -93,28 +93,23 @@ import {
   planLocalVodContainerPlayback,
   detectVodContainer,
   detectVodContainerFromLocalPath,
-  isUpstreamHttpFailure,
 } from "@/scripts/lib/vod-container-plan.ts"
 import { probeVodContainerAlternative, swapUrlExtension } from "@/scripts/lib/vod-container-probe.ts"
-import {
-  buildRemuxContentKey,
-  isRemuxPinnedContent,
-  rememberRemuxPinnedContent,
-} from "@/scripts/lib/vod-remux-memory.ts"
-import { deviceSupportsHevc, hasHevcNameHint, classifyStartFailure, describeAudioCodec } from "@/scripts/lib/codec-hints.ts"
+import { buildRemuxContentKey, isRemuxPinnedContent } from "@/scripts/lib/vod-remux-memory.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
-import {
-  setupExternalPlayerButton,
-  surfaceLaunchError,
-  hasAvailableExternalPlayer,
-} from "@/scripts/lib/external-player-button.ts"
+import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
-import { attachStallWatchdog } from "@/scripts/lib/stall-watchdog.ts"
 import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
 import { shouldTrustEndedEvent } from "@/scripts/lib/premature-ended.ts"
+import { createVodPlaybackToasts } from "@/scripts/lib/vod-playback-toasts.ts"
+import {
+  createRemuxFailureHandler,
+  handlePlayerStartError,
+  attachVodStallWatchdog,
+} from "@/scripts/lib/vod-remux-recovery.ts"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -662,21 +657,7 @@ function loadVodCatalog() {
   return vodCatalogPromise
 }
 
-// Grouping the VOD catalog is expensive (~800ms at 176k rows), so cache the index per playlist + catalog reference.
-let groupingIndexCache = null
-
-function getGroupingIndexFor(playlistId, catalog) {
-  if (
-    groupingIndexCache &&
-    groupingIndexCache.playlistId === playlistId &&
-    groupingIndexCache.catalogRef === catalog
-  ) {
-    return groupingIndexCache.index
-  }
-  const index = buildGroupingIndex(catalog)
-  groupingIndexCache = { playlistId, catalogRef: catalog, index }
-  return index
-}
+const getGroupingIndexFor = createGroupingIndexMemo()
 
 function groupKeyForCatalog(catalog) {
   if (!activePlaylistId || !catalog?.length) return undefined
@@ -985,38 +966,8 @@ const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 const PROGRESS_WRITE_INTERVAL_MS = 5000
 
-/** WebKit desktop can't demux this container and there is no remux path available for it. */
-function showContainerUnsupportedToast(container) {
-  const descriptionKey = hasAvailableExternalPlayer()
-    ? "detail.error.containerUnsupportedHint"
-    : "detail.error.containerUnsupportedHintNoPlayer"
-  toastError(t("detail.error.containerUnsupported", { container: container.toUpperCase() }), {
-    description: t(descriptionKey),
-  })
-  externalBtnHandle?.refresh()
-}
-
-/** The remux failed because the provider itself rejected/failed the request, not because of the container. */
-function showSourceUnavailableToast() {
-  toastError(t("detail.error.sourceUnavailable"))
-  externalBtnHandle?.refresh()
-}
-
-/** The container opened fine (remux worked); this device just has no HEVC decoder (e.g. Linux WebKitGTK). */
-function showHevcUnsupportedToast() {
-  toastError(t("detail.error.hevcUnsupported"), {
-    description: t("detail.error.containerUnsupportedHint"),
-  })
-  externalBtnHandle?.refresh()
-}
-
-/** The container opened fine; this platform has no decoder for the audio codec (e.g. DTS on WebKitGTK/WebView2). */
-function showAudioUnsupportedToast(codec) {
-  toastError(t("detail.error.audioUnsupported", { codec: describeAudioCodec(codec) }), {
-    description: t("detail.error.containerUnsupportedHint"),
-  })
-  externalBtnHandle?.refresh()
-}
+const vodPlaybackToasts = createVodPlaybackToasts(() => externalBtnHandle?.refresh())
+const { showContainerUnsupportedToast } = vodPlaybackToasts
 
 function setupPipButton(player) {
   const pipBtn = document.getElementById("movie-detail-pip")
@@ -1305,85 +1256,43 @@ async function startPlayback(options = {}) {
       ? "video/mp4"
       : chooseMime(mountSrc)
 
-  // Shared by a genuine post-mount decode failure (a plain player "error" in remux mode) and a
-  // remux session dying mid-play (reported by the audio switcher): same classification, same teardown.
-  function handleRemuxFailure(detail) {
-    ownAudioSwitcher?.dispose()
-    if (audioSwitcher === ownAudioSwitcher) audioSwitcher = null
-    prepared?.mkvSession?.stop()
-    if (activeMkvSession === prepared?.mkvSession) activeMkvSession = null
-    if (posterEl) posterEl.classList.remove("hidden")
-    if (playerWrap) playerWrap.classList.add("hidden")
-    const upstreamFailure = isUpstreamHttpFailure(detail)
-    const codecInfo = upstreamFailure ? null : player.codecInfo?.()
-    const failure = upstreamFailure
-      ? null
-      : classifyStartFailure({
-          videoCodec: codecInfo?.videoCodec,
-          audioCodec: codecInfo?.audioCodec,
-          errorDetail: detail,
-          nameHint: hasHevcNameHint(movie.name),
-          deviceHevc: deviceSupportsHevc(),
-        })
-    const toastPath = upstreamFailure
-      ? "upstream-http"
-      : failure?.kind === "hevc"
-        ? "hevc"
-        // Without a known codec we can't name it in the toast, so fall back to the container message.
-        : failure?.kind === "audio" && failure.codec
-          ? "audio"
-          : "container"
-    log.info("[xt:vod-mount] start-failure verdict", {
-      kind: failure?.kind ?? null,
-      codec: failure?.codec ?? null,
-      toastPath,
-      contentKey: buildRemuxContentKey("movie", movie.id),
-    })
-    getMovieInsights().record("giveup", failure?.kind ?? toastPath)
-    // No automatic retry follows this failure - close the session now, not on the next play.
-    getMovieInsights().endSession("giveup")
-    if (toastPath === "upstream-http") showSourceUnavailableToast()
-    else if (toastPath === "hevc") showHevcUnsupportedToast()
-    else if (toastPath === "audio") showAudioUnsupportedToast(failure.codec)
-    else showContainerUnsupportedToast(resolvedContainer || detectVodContainer(playSrc) || "mkv")
-  }
+  const handleRemuxFailure = createRemuxFailureHandler({
+    player,
+    posterEl,
+    playerWrap,
+    getOwnAudioSwitcher: () => ownAudioSwitcher,
+    clearAudioSwitcherIfOwn: (own) => { if (audioSwitcher === own) audioSwitcher = null },
+    getPipelineMkvSession: () => prepared?.mkvSession,
+    clearActiveMkvSessionIfMatches: (mkvSession) => { if (activeMkvSession === mkvSession) activeMkvSession = null },
+    nameHintSource: movie.name,
+    contentKey: buildRemuxContentKey("movie", movie.id),
+    recordGiveUp: (kind) => getMovieInsights().record("giveup", kind),
+    endGiveUpSession: () => getMovieInsights().endSession("giveup"),
+    resolvedContainer,
+    playSrc,
+    toasts: vodPlaybackToasts,
+  })
 
-  // The player is shared across runs, so a superseded run must not report (or seek) for the one that did play.
   player.one("error", () => {
-    if (requestId !== playRequestId) return
-    const e = player.error()
-    log.error("[xt:movie-detail] player error", {
-      code: e?.code,
-      message: e?.message,
-    })
-    if (containerPlan.mode === "remux") {
-      // Any fatal code besides 4 downstream of an otherwise-successful remux mount is a genuine decode failure.
-      if (e?.code !== 4) handleRemuxFailure(e?.message || "")
-      return
-    }
-    if (desktopPlatform && e?.code === 4) {
-      const unsupportedContainer = localDownloadPath
-        ? detectVodContainerFromLocalPath(localDownloadPath)
-        : resolvedContainer || detectVodContainer(playSrc)
-      // Pinning forces the retuned attempt's plan to "remux", so this branch cannot re-fire for the same content.
-      if (
-        unsupportedContainer === "mkv" &&
-        containerPlan.mode !== "remux" &&
-        remuxAvailable &&
-        activePlaylistId
-      ) {
-        const contentKey = buildRemuxContentKey("movie", movie.id)
-        rememberRemuxPinnedContent(activePlaylistId, contentKey)
-        log.warn("[xt:movie-detail] WebView could not demux this MKV directly - remuxing with ffmpeg instead", {
-          contentKey,
-          container: unsupportedContainer,
-        })
+    handlePlayerStartError({
+      logTag: "[xt:movie-detail]",
+      player,
+      isStale: () => requestId !== playRequestId,
+      containerPlanMode: containerPlan.mode,
+      desktopPlatform,
+      localDownloadPath,
+      resolvedContainer,
+      playSrc,
+      remuxAvailable,
+      activePlaylistId,
+      contentKey: buildRemuxContentKey("movie", movie.id),
+      handleRemuxFailure,
+      retirePreviousPlaybackAndRetryRemux: () => {
         retirePreviousPlayback()
         startPlayback({ isAutomaticRetry: true })
-        return
-      }
-      showContainerUnsupportedToast(unsupportedContainer || "mkv")
-    }
+      },
+      toasts: vodPlaybackToasts,
+    })
   })
   player.one("loadedmetadata", () => {
     if (requestId !== playRequestId) return
@@ -1492,32 +1401,14 @@ async function startPlayback(options = {}) {
   stallWatchdogDetach?.()
   stallWatchdogDetach = null
   const stallVideoEl = player.getMediaElement?.()
-  if (stallVideoEl) {
-    stallWatchdogDetach = attachStallWatchdog(stallVideoEl, {
-      ...(remuxOwnsInitialMount
-        ? { stallTimeoutMs: 12000, isSuspended: () => ownAudioSwitcher?.isRecovering() ?? false }
-        : {}),
-      onStall: (attemptNumber) => {
-        if (remuxOwnsInitialMount) {
-          log.info("[xt:movie-detail] remux mount stalled - restarting the remux session to recover", {
-            attempt: attemptNumber,
-          })
-          ownAudioSwitcher?.recoverRemuxStall()
-          stallWatchdogDetach?.resetStallClock()
-          return
-        }
-        log.info("[xt:movie-detail] embedded player stalled - re-attaching src to recover", {
-          attempt: attemptNumber,
-        })
-        const resumeAt = stallVideoEl.currentTime || 0
-        mountEmbeddedSrc()
-        player.one("loadedmetadata", () => {
-          try { player.currentTime?.(resumeAt) } catch {}
-          player.play?.()
-        })
-      },
-    })
-  }
+  stallWatchdogDetach = attachVodStallWatchdog(stallVideoEl, {
+    logTag: "[xt:movie-detail]",
+    player,
+    remuxOwnsInitialMount,
+    isAudioSwitcherRecovering: () => ownAudioSwitcher?.isRecovering() ?? false,
+    recoverRemuxStall: () => ownAudioSwitcher?.recoverRemuxStall(),
+    mountEmbeddedSrc,
+  })
   if (playerWrap) qualityChipDetach = attachQualityChip(playerWrap, player)
   applyVideoScale()
 
@@ -1945,7 +1836,7 @@ async function boot() {
 
   // Hydrate the basics from the cached VOD list (poster, title, etc.).
   const list = getCached(active._id, "vod")
-  const catalogMovie = list?.data?.find((m) => Number(m.id) === movieId) || null
+  const catalogMovie = list?.data?.find((entry) => Number(entry.id) === movieId) || null
 
   const dl = listDownloads().find(
     (d) => d.source?.kind === "vod" && Number(d.source?.id) === movieId
@@ -1978,6 +1869,7 @@ async function boot() {
   // Both probes are network-free (hydrate + memory read) and run under one bound,
   // so a cold IDB read can never delay first paint past the shared timeout.
   const { enrichment: earlyEnrichment, providerInfo: earlyProviderInfo } = await peekEarlyDetailData(
+    active._id,
     "vod",
     movie.id,
     active._id,

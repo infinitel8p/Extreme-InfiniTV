@@ -7,6 +7,8 @@ const PROBE_TIMEOUT_MS = 8000
 const PROBE_BYTE_COUNT = 128
 const MIN_CLASSIFIABLE_BYTES = 12
 const MAX_ACCUMULATED_BYTES = 512
+// Solo window for the preferred probe before the fallback is also fired.
+const HEDGE_DELAY_MS = 1800
 
 export function classifyContainerBytes(bytes: Uint8Array): "mkv" | "mp4" | "avi" | "ts" | null {
   if (!bytes || bytes.length < 12) return null
@@ -115,6 +117,53 @@ export function clearVodContainerProbeCache(): void {
   probeCache.clear()
 }
 
+// Preferred probe starts now; fallback joins on early failure or after HEDGE_DELAY_MS.
+async function hedgedProbe(
+  candidates: Array<{ url: string; expected: ProbedContainer }>,
+): Promise<{ url: string; container: ProbedContainer } | null> {
+  if (candidates.length === 0) return null
+  if (candidates.length === 1) {
+    const [onlyCandidate] = candidates
+    const detected = await fetchAndClassify(onlyCandidate.url)
+    return detected === onlyCandidate.expected
+      ? { url: onlyCandidate.url, container: onlyCandidate.expected }
+      : null
+  }
+
+  const [preferredCandidate, fallbackCandidate] = candidates
+  const preferredPromise = fetchAndClassify(preferredCandidate.url)
+
+  let hedgeTimer: ReturnType<typeof setTimeout> | null = null
+  const hedgeElapsed = new Promise<"hedge">((resolve) => {
+    hedgeTimer = setTimeout(() => resolve("hedge"), HEDGE_DELAY_MS)
+  })
+  const winner = await Promise.race([preferredPromise.then(() => "preferred" as const), hedgeElapsed])
+  if (hedgeTimer) clearTimeout(hedgeTimer)
+
+  if (winner === "preferred") {
+    const preferredDetected = await preferredPromise
+    if (preferredDetected === preferredCandidate.expected) {
+      return { url: preferredCandidate.url, container: preferredCandidate.expected }
+    }
+    // Preferred already failed: start the fallback immediately.
+    const fallbackDetected = await fetchAndClassify(fallbackCandidate.url)
+    return fallbackDetected === fallbackCandidate.expected
+      ? { url: fallbackCandidate.url, container: fallbackCandidate.expected }
+      : null
+  }
+
+  // Hedge window elapsed: run the fallback in parallel, preferred still wins.
+  const fallbackPromise = fetchAndClassify(fallbackCandidate.url)
+  const [preferredDetected, fallbackDetected] = await Promise.all([preferredPromise, fallbackPromise])
+  if (preferredDetected === preferredCandidate.expected) {
+    return { url: preferredCandidate.url, container: preferredCandidate.expected }
+  }
+  if (fallbackDetected === fallbackCandidate.expected) {
+    return { url: fallbackCandidate.url, container: fallbackCandidate.expected }
+  }
+  return null
+}
+
 export async function probeVodContainerAlternative(
   originalUrl: string,
 ): Promise<{ url: string; container: ProbedContainer } | null> {
@@ -136,14 +185,11 @@ export async function probeVodContainerAlternative(
   const mkvUrl = swapUrlExtension(originalUrl, "mkv")
   if (mkvUrl) swapCandidates.push({ url: mkvUrl, expected: "mkv" })
 
-  for (const candidate of swapCandidates) {
-    const detected = await fetchAndClassify(candidate.url)
-    if (detected === candidate.expected) {
-      const hit = { url: candidate.url, container: candidate.expected }
-      log.log("[xt:vod-probe] found working alternative:", candidate.expected, redactUrl(candidate.url))
-      probeCache.set(originalUrl, hit)
-      return hit
-    }
+  const hit = await hedgedProbe(swapCandidates)
+  if (hit) {
+    log.log("[xt:vod-probe] found working alternative:", hit.container, redactUrl(hit.url))
+    probeCache.set(originalUrl, hit)
+    return hit
   }
 
   log.log("[xt:vod-probe] no working alternative found for", redactUrl(originalUrl))
