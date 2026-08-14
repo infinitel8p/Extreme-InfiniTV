@@ -1,6 +1,7 @@
 // In-memory per-play-session playback health log. No persistence.
 
 import { redactUrl } from "@/scripts/lib/log.js"
+import { formatPaddedHms } from "@/scripts/lib/format.js"
 
 export type HealthKind =
   | "start"
@@ -89,9 +90,7 @@ export function summarizeSession(session: HealthSession): HealthSummary {
 export function formatEntryOffset(at: number, startedAt: number): string {
   let deltaSeconds = Math.round((at - startedAt) / 1000)
   if (!Number.isFinite(deltaSeconds) || deltaSeconds < 0) deltaSeconds = 0
-  const minutes = Math.floor(deltaSeconds / 60)
-  const seconds = deltaSeconds % 60
-  return `+${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+  return `+${formatPaddedHms(deltaSeconds)}`
 }
 
 export function redactHealthDetail(detail: string): string {
@@ -179,6 +178,10 @@ export function listHealthSessions(): HealthSession[] {
 
 export function getActiveHealthSession(): HealthSession | null {
   return activeSession ? cloneSession(activeSession) : null
+}
+
+export function hasActiveHealthSession(): boolean {
+  return activeSession !== null
 }
 
 export function subscribeHealth(listener: () => void): () => void {

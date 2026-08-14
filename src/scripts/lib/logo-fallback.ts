@@ -188,10 +188,7 @@ export function requestLogoFallback(
       if (container.querySelector("img")) return
 
       const img = document.createElement("img")
-      // Testing aid: tint fallback logos; remove before release.
       img.dataset.logoFallback = "true"
-      img.style.filter = "sepia(1) hue-rotate(280deg) saturate(4)"
-      container.style.boxShadow = "inset 0 0 0 2px var(--color-accent, #d946ef)"
       img.src = safeUrl
       img.alt = ""
       img.loading = "lazy"

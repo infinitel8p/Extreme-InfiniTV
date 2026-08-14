@@ -33,8 +33,10 @@ const OUTPUT_CHANNEL_CAPACITY: usize = 256;
 const STDERR_RING_CAPACITY: usize = 10;
 const STARTUP_SILENCE_TIMEOUT: Duration = Duration::from_secs(10);
 const STDOUT_STALL_TIMEOUT: Duration = Duration::from_secs(20);
-// Fires only when no client is attached; a connected-but-slow client parks with no timer.
+// Fires only when no client is attached; a connected-but-slow client gets CLIENT_BACKPRESSURE_TIMEOUT instead.
 const CLIENT_RECONNECT_GRACE: Duration = Duration::from_secs(120);
+// Backstop for a client that stays connected but stops reading; generous enough to survive a long pause.
+const CLIENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 // A fresh -reconnect attempt gets this long to deliver a byte before the cut is final.
 const UPSTREAM_EOF_GRACE: Duration = Duration::from_secs(5);
@@ -100,6 +102,8 @@ struct VodAudioSession {
     last_activity: Mutex<Instant>,
     // True while blocked on send, so a slow consumer isn't read as a stall.
     blocked_on_send: AtomicBool,
+    // Set when teardown came from CLIENT_BACKPRESSURE_TIMEOUT rather than a vanished client.
+    backpressure_timed_out: AtomicBool,
     // Truncated forward body; a later forward's first byte clears it (reconnect healed).
     upstream_eof: Mutex<Option<UpstreamEofRecord>>,
 }
@@ -192,6 +196,7 @@ pub async fn register_vod_audio_remux(
         watchdog_task: Mutex::new(None),
         last_activity: Mutex::new(Instant::now()),
         blocked_on_send: AtomicBool::new(false),
+        backpressure_timed_out: AtomicBool::new(false),
         upstream_eof: Mutex::new(None),
     });
 
@@ -1013,13 +1018,20 @@ fn stop_after_client_disconnect(session: &VodAudioSession) {
 
 // Dropped bytes here would corrupt the TS header.
 async fn send_to_current_client(session: &Arc<VodAudioSession>, chunk: Bytes) {
-    send_to_current_client_with_reconnect_grace(session, chunk, CLIENT_RECONNECT_GRACE).await;
+    send_to_current_client_with_timeouts(
+        session,
+        chunk,
+        CLIENT_RECONNECT_GRACE,
+        CLIENT_BACKPRESSURE_TIMEOUT,
+    )
+    .await;
 }
 
-async fn send_to_current_client_with_reconnect_grace(
+async fn send_to_current_client_with_timeouts(
     session: &Arc<VodAudioSession>,
     chunk: Bytes,
     reconnect_grace: Duration,
+    backpressure_timeout: Duration,
 ) {
     loop {
         if session.torn_down.load(Ordering::SeqCst) {
@@ -1047,7 +1059,7 @@ async fn send_to_current_client_with_reconnect_grace(
             continue;
         };
 
-        // Connected-but-slow clients (long pauses) park with no timer; exit/unregister cleans up.
+        // Connected-but-slow clients (long pauses) get backpressure_timeout before teardown, not reconnect_grace.
         tokio::select! {
             send_result = sender.send(chunk.clone()) => {
                 session.blocked_on_send.store(false, Ordering::SeqCst);
@@ -1075,6 +1087,11 @@ async fn send_to_current_client_with_reconnect_grace(
             }
             _ = client_changed => {
                 // A cancelled send never enqueued; the loop resends.
+            }
+            _ = tokio::time::sleep(backpressure_timeout) => {
+                session.backpressure_timed_out.store(true, Ordering::SeqCst);
+                stop_after_client_disconnect(session);
+                return;
             }
         }
     }
@@ -1290,15 +1307,25 @@ async fn emit_client_timeout_if_disconnected(app: &AppHandle, session: &Arc<VodA
     if !session.client_gone.load(Ordering::SeqCst) {
         return;
     }
+    // Distinguishes a vanished client from one that stayed connected but stopped reading.
+    let detail = if session.backpressure_timed_out.load(Ordering::SeqCst) {
+        format!(
+            "TIMEOUT:playback client stopped reading for {}s{}",
+            CLIENT_BACKPRESSURE_TIMEOUT.as_secs(),
+            stderr_tail_suffix(session)
+        )
+    } else {
+        format!(
+            "TIMEOUT:no playback client for {}s{}",
+            CLIENT_RECONNECT_GRACE.as_secs(),
+            stderr_tail_suffix(session)
+        )
+    };
     let _ = app.emit(
         ERROR_EVENT,
         json!({
             "sessionId": session.session_id,
-            "detail": format!(
-                "TIMEOUT:no playback client for {}s{}",
-                CLIENT_RECONNECT_GRACE.as_secs(),
-                stderr_tail_suffix(session)
-            ),
+            "detail": detail,
         }),
     );
 }
@@ -1805,6 +1832,7 @@ mod tests {
             watchdog_task: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             blocked_on_send: AtomicBool::new(false),
+            backpressure_timed_out: AtomicBool::new(false),
             upstream_eof: Mutex::new(None),
         });
         assert_eq!(stderr_tail_suffix(&session), "");
@@ -1831,6 +1859,7 @@ mod tests {
             watchdog_task: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             blocked_on_send: AtomicBool::new(false),
+            backpressure_timed_out: AtomicBool::new(false),
             upstream_eof: Mutex::new(None),
         });
         assert_eq!(
@@ -1856,6 +1885,7 @@ mod tests {
             watchdog_task: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             blocked_on_send: AtomicBool::new(false),
+            backpressure_timed_out: AtomicBool::new(false),
             upstream_eof: Mutex::new(None),
         })
     }
@@ -2008,10 +2038,11 @@ mod tests {
         let kill_wakeup = session.kill_notify.notified();
         let sending_session = session.clone();
         let send_task = tokio::spawn(async move {
-            send_to_current_client_with_reconnect_grace(
+            send_to_current_client_with_timeouts(
                 &sending_session,
                 Bytes::from_static(b"orphaned"),
                 Duration::from_millis(10),
+                Duration::from_secs(3600),
             )
             .await;
         });
@@ -2025,11 +2056,12 @@ mod tests {
             .expect("client timeout must wake the watchdog");
         assert!(session.torn_down.load(Ordering::SeqCst));
         assert!(session.client_gone.load(Ordering::SeqCst));
+        assert!(!session.backpressure_timed_out.load(Ordering::SeqCst));
         assert!(!session.blocked_on_send.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
-    async fn connected_but_slow_client_is_never_torn_down_by_a_timer() {
+    async fn connected_but_slow_client_survives_within_the_backpressure_window() {
         let session = test_vod_audio_session();
         let (sender, _receiver) = mpsc::channel(1);
         // full channel: backpressure, not a missing client
@@ -2041,20 +2073,56 @@ mod tests {
 
         let sending_session = session.clone();
         let send_task = tokio::spawn(async move {
-            send_to_current_client_with_reconnect_grace(
+            send_to_current_client_with_timeouts(
                 &sending_session,
                 Bytes::from_static(b"waiting"),
                 Duration::from_millis(10),
+                Duration::from_millis(200),
             )
             .await;
         });
         wait_until_output_is_backpressured(&session).await;
 
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(!send_task.is_finished(), "a connected client must not be torn down by a fixed timer");
+        assert!(!send_task.is_finished(), "a connected client must survive within the backpressure window");
         assert!(!session.torn_down.load(Ordering::SeqCst));
 
         send_task.abort();
+    }
+
+    #[tokio::test]
+    async fn connected_but_slow_client_is_torn_down_after_the_backpressure_timeout() {
+        let session = test_vod_audio_session();
+        let (sender, _receiver) = mpsc::channel(1);
+        // full channel: backpressure, not a missing client
+        sender
+            .send(Bytes::from_static(b"already queued"))
+            .await
+            .expect("channel should accept its first chunk");
+        set_current_client(&session, sender);
+        let kill_wakeup = session.kill_notify.notified();
+        let sending_session = session.clone();
+        let send_task = tokio::spawn(async move {
+            send_to_current_client_with_timeouts(
+                &sending_session,
+                Bytes::from_static(b"waiting"),
+                Duration::from_secs(3600),
+                Duration::from_millis(10),
+            )
+            .await;
+        });
+        wait_until_output_is_backpressured(&session).await;
+
+        tokio::time::timeout(Duration::from_millis(500), send_task)
+            .await
+            .expect("a client that never reads again must have a finite wait")
+            .expect("delivery task should not panic");
+        tokio::time::timeout(Duration::from_millis(500), kill_wakeup)
+            .await
+            .expect("the backpressure timeout must wake the watchdog");
+        assert!(session.torn_down.load(Ordering::SeqCst));
+        assert!(session.client_gone.load(Ordering::SeqCst));
+        assert!(session.backpressure_timed_out.load(Ordering::SeqCst));
     }
 
     // Regression test: teardown_io blocking while the watchdog owned the child.

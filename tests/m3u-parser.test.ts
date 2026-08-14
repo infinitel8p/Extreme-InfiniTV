@@ -262,6 +262,28 @@ describe("parseM3U: EPG header variants", () => {
       "https://b.example/2.xml",
     ])
   })
+
+  it("keeps a protocol-relative header value as a single URL", () => {
+    const text =
+      '#EXTM3U x-tvg-url="//epg.example.com/epg.xml"\n' +
+      '#EXTINF:-1 tvg-id="x",Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.epgUrls).toEqual(["//epg.example.com/epg.xml"])
+    expect(result.epgUrl).toBe("//epg.example.com/epg.xml")
+  })
+
+  it("splits a query-string URL followed by a protocol-relative second source", () => {
+    const text =
+      '#EXTM3U url-tvg="http://epg.example.com/guide.xml?ids=1,2,//b.example/2.xml"\n' +
+      '#EXTINF:-1 tvg-id="x",Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.epgUrls).toEqual([
+      "http://epg.example.com/guide.xml?ids=1,2",
+      "//b.example/2.xml",
+    ])
+  })
 })
 
 describe("parseM3U: EXTGRP and tvg-chno", () => {

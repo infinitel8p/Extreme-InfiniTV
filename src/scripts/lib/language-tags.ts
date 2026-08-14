@@ -164,6 +164,25 @@ export function preferredTagsForLocale(locale: string): string[] {
   return Object.prototype.hasOwnProperty.call(LANGUAGE_TOKENS, primarySubtag) ? [primarySubtag] : []
 }
 
+// Falls through sourcePrefix, preferredTags in order, unprefixed, then the first candidate: crossing language beats dropping the result.
+export function pickByTagPreference<T>(
+  candidates: T[],
+  getTag: (candidate: T) => string | null,
+  { sourcePrefix, preferredTags }: { sourcePrefix?: string | null; preferredTags?: string[] }
+): T | null {
+  if (sourcePrefix) {
+    const sameTag = candidates.find((candidate) => getTag(candidate) === sourcePrefix)
+    if (sameTag) return sameTag
+  }
+  for (const preferredTag of preferredTags || []) {
+    const match = candidates.find((candidate) => getTag(candidate) === preferredTag)
+    if (match) return match
+  }
+  const untagged = candidates.find((candidate) => getTag(candidate) == null)
+  if (untagged) return untagged
+  return candidates[0] || null
+}
+
 // Ordered tag preference: explicit content-language setting, then the interface locale, then English.
 export function effectivePreferredTags(contentLanguage: string, locale: string): string[] {
   const localePreferred = preferredTagsForLocale(locale)

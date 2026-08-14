@@ -1,12 +1,12 @@
 // Formatting layer plus the DOM overlay + keybinding for the player stats overlay.
 
 import type { EngineStats, EngineEvent } from "@/scripts/lib/player-telemetry.js"
-import { bufferedAheadSeconds, decodedFrameCount, droppedFrameCount, deriveFps } from "@/scripts/lib/player-telemetry.js"
+import { droppedFrameCount, deriveFps, readMediaFields } from "@/scripts/lib/player-telemetry.js"
 import {
   startHealthSession,
   recordHealth as recordHealthEntry,
   endHealthSession,
-  getActiveHealthSession,
+  hasActiveHealthSession,
   type HealthKind,
 } from "@/scripts/lib/stream-health.js"
 import { t } from "@/scripts/lib/i18n.js"
@@ -156,21 +156,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
   return false
 }
 
-function readBufferedRanges(video: HTMLVideoElement | null): { start: number; end: number }[] {
-  if (!video) return []
-  try {
-    const ranges: { start: number; end: number }[] = []
-    for (let index = 0; index < video.buffered.length; index++) {
-      ranges.push({ start: video.buffered.start(index), end: video.buffered.end(index) })
-    }
-    return ranges
-  } catch {
-    return []
-  }
-}
-
 function mediaFallbackStats(video: HTMLVideoElement | null): EngineStats {
-  const currentTime = video?.currentTime ?? NaN
   return {
     engine: null,
     declaredBitrateBps: null,
@@ -178,13 +164,9 @@ function mediaFallbackStats(video: HTMLVideoElement | null): EngineStats {
     levelIndex: null,
     levelCount: null,
     autoLevel: null,
-    videoWidth: video?.videoWidth || null,
-    videoHeight: video?.videoHeight || null,
     segmentDurationSeconds: null,
-    bufferedAheadSeconds: bufferedAheadSeconds(readBufferedRanges(video), currentTime),
-    droppedFrames: droppedFrameCount(video),
-    totalFrames: decodedFrameCount(video),
     stalls: null,
+    ...readMediaFields(video),
   }
 }
 
@@ -364,7 +346,7 @@ export function attachPlayerInsights(options: PlayerInsightsOptions): PlayerInsi
     bindMediaEvents()
     ensureEngineEventSubscription()
     reconcilePolling()
-    if (!getActiveHealthSession()) return
+    if (!hasActiveHealthSession()) return
     const dropped = droppedFrameCount(options.getHandle()?.getMediaElement?.() ?? null)
     if (dropped == null) return
     if (lastDroppedSample != null) {

@@ -42,16 +42,30 @@ export function fmtBytes(n: number | null | undefined): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+function splitHms(totalSeconds: number): { hours: number; minutes: number; seconds: number } {
+  const safeSeconds = Number.isFinite(totalSeconds) && totalSeconds > 0 ? Math.floor(totalSeconds) : 0
+  return {
+    hours: Math.floor(safeSeconds / 3600),
+    minutes: Math.floor((safeSeconds % 3600) / 60),
+    seconds: safeSeconds % 60,
+  }
+}
+
 export function formatBehindLive(behindMs: number): string {
-  const totalSeconds = Math.floor(Math.max(0, behindMs) / 1000)
-  const hours = Math.floor(totalSeconds / 3600)
-  const minutes = Math.floor((totalSeconds % 3600) / 60)
-  const seconds = totalSeconds % 60
+  const { hours, minutes, seconds } = splitHms(Math.max(0, behindMs) / 1000)
   const paddedSeconds = String(seconds).padStart(2, "0")
   if (hours > 0) {
     return `${hours}:${String(minutes).padStart(2, "0")}:${paddedSeconds}`
   }
   return `${minutes}:${paddedSeconds}`
+}
+
+/** Zero-padded H:MM:SS, or MM:SS under an hour. */
+export function formatPaddedHms(totalSeconds: number): string {
+  const { hours, minutes, seconds } = splitHms(totalSeconds)
+  const paddedMinutes = String(minutes).padStart(2, "0")
+  const paddedSeconds = String(seconds).padStart(2, "0")
+  return hours > 0 ? `${hours}:${paddedMinutes}:${paddedSeconds}` : `${paddedMinutes}:${paddedSeconds}`
 }
 
 /** Parses a colon-delimited "HH:MM:SS" or "MM:SS" clock string into seconds. Returns 0 when unparseable. */

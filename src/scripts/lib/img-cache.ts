@@ -360,7 +360,13 @@ export function cachedImg(
     update(nextParams) {
       if (nextParams.url === mountedUrl) return
       mountedUrl = nextParams.url
-      if (nextParams.url) mountCachedImage(node, nextParams.url, nextParams.kind)
+      if (nextParams.url) {
+        mountCachedImage(node, nextParams.url, nextParams.kind)
+        return
+      }
+      sharedObserver?.unobserve(node)
+      pendingParams.delete(node)
+      node.removeAttribute("src")
     },
     destroy() {
       sharedObserver?.unobserve(node)

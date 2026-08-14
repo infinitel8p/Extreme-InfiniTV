@@ -61,6 +61,16 @@ describe("extractM3UHeaderEpgUrl", () => {
     const text = '#EXTM3U url-tvg="http://epg.example.com/guide.xml?ids=1,2"\n'
     expect(extractM3UHeaderEpgUrl(text)).toBe("http://epg.example.com/guide.xml?ids=1,2")
   })
+
+  it("keeps a protocol-relative value as a single URL", () => {
+    const text = '#EXTM3U url-tvg="//epg.example.com/epg.xml"\n'
+    expect(extractM3UHeaderEpgUrl(text)).toBe("//epg.example.com/epg.xml")
+  })
+
+  it("keeps a comma inside the first URL's query string when a protocol-relative source follows", () => {
+    const text = '#EXTM3U url-tvg="http://epg.example.com/guide.xml?ids=1,2,//b.example/2.xml"\n'
+    expect(extractM3UHeaderEpgUrl(text)).toBe("http://epg.example.com/guide.xml?ids=1,2")
+  })
 })
 
 describe("firstStreamUrlFromM3U", () => {

@@ -267,14 +267,10 @@ async function readRecentLogTails(): Promise<{ name: string; text: string }[]> {
 export async function collectDiagnosticBundle(): Promise<CollectedBundle> {
   const createdAt = new Date()
 
-  // Accessed defensively: diagnostic-snapshot.js's public entry point is a moving
-  // target under concurrent development, unlike the other lib modules here.
   const snapshot = await withTimeout(
     safeAsync<unknown>(async () => {
-      const snapshotModule = await import("@/scripts/lib/diagnostic-snapshot.js")
-      const collector = (snapshotModule as any).collectSessionSnapshot
-      if (typeof collector !== "function") return null
-      return await collector()
+      const { collectSessionSnapshot } = await import("@/scripts/lib/diagnostic-snapshot.js")
+      return await collectSessionSnapshot()
     }, null),
     SNAPSHOT_TIMEOUT_MS,
     null
@@ -296,8 +292,8 @@ export async function collectDiagnosticBundle(): Promise<CollectedBundle> {
   )
   const diagnosticResult = await withTimeout(
     safeAsync<unknown>(async () => {
-      const diagnosticModule = await import("@/scripts/lib/diagnostic.js")
-      return (diagnosticModule as any).getLastDiagnosticResult?.() ?? null
+      const { getLastDiagnosticResult } = await import("@/scripts/lib/diagnostic.js")
+      return getLastDiagnosticResult()
     }, null),
     DIAGNOSTIC_RESULT_TIMEOUT_MS,
     null

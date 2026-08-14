@@ -1,6 +1,6 @@
 // Pure title cleanup + result matching so provider names resolve to the right TMDb id.
 import { normalize } from "@/scripts/lib/text.ts"
-import { parseNamePrefix } from "@/scripts/lib/language-tags.ts"
+import { parseNamePrefix, pickByTagPreference } from "@/scripts/lib/language-tags.ts"
 
 const YEAR_MIN = 1900
 const YEAR_MAX = 2099
@@ -210,22 +210,11 @@ interface IndexedCatalogEntry {
   tag: string | null
 }
 
-// Falls through sourcePrefix, preferredTags, unprefixed, then any candidate: crossing language beats dropping the recommendation.
 function pickCandidateForPrefix(
   candidates: IndexedCatalogEntry[],
   { sourcePrefix, preferredTags }: { sourcePrefix?: string | null; preferredTags?: string[] }
 ): IndexedCatalogEntry | null {
-  if (sourcePrefix) {
-    const sameTag = candidates.find((candidate) => candidate.tag === sourcePrefix)
-    if (sameTag) return sameTag
-  }
-  for (const preferredTag of preferredTags || []) {
-    const match = candidates.find((candidate) => candidate.tag === preferredTag)
-    if (match) return match
-  }
-  const untagged = candidates.find((candidate) => candidate.tag == null)
-  if (untagged) return untagged
-  return candidates[0] || null
+  return pickByTagPreference(candidates, (candidate) => candidate.tag, { sourcePrefix, preferredTags })
 }
 
 function buildCatalogNameIndex(catalogEntries: TmdbCatalogEntry[]): Map<string, IndexedCatalogEntry[]> {

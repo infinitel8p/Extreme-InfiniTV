@@ -249,10 +249,14 @@ function makeCard(group, idx) {
     onToggleFavorite: (entry, currentlyFavorited) => {
       if (!activePlaylistId) return
       if (!currentlyFavorited) {
-        toggleFavorite(activePlaylistId, "vod", entry.id, {
-          name: entry.name || "",
-          logo: entry.logo || null,
-        })
+        for (const variantId of group.globalEntryIds) {
+          if (isFavorite(activePlaylistId, "vod", variantId)) continue
+          const variantEntry = group.entries.find((movie) => movie.id === variantId) || entry
+          toggleFavorite(activePlaylistId, "vod", variantId, {
+            name: variantEntry.name || "",
+            logo: variantEntry.logo || null,
+          })
+        }
         return
       }
       for (const variantId of group.globalEntryIds) {
@@ -291,10 +295,14 @@ function makeCard(group, idx) {
           onToggleFavorite: (currentlyFavorited) => {
             if (!activePlaylistId) return
             if (!currentlyFavorited) {
-              toggleFavorite(activePlaylistId, "vod", entry.id, {
-                name: entry.name || "",
-                logo: entry.logo || null,
-              })
+              for (const variantId of group.globalEntryIds) {
+                if (isFavorite(activePlaylistId, "vod", variantId)) continue
+                const variantEntry = group.entries.find((movie) => movie.id === variantId) || entry
+                toggleFavorite(activePlaylistId, "vod", variantId, {
+                  name: variantEntry.name || "",
+                  logo: variantEntry.logo || null,
+                })
+              }
               return
             }
             for (const variantId of group.globalEntryIds) {
@@ -310,10 +318,14 @@ function makeCard(group, idx) {
           onToggleWatchlist: (currentlyOnWatchlist) => {
             if (!activePlaylistId) return
             if (!currentlyOnWatchlist) {
-              toggleWatchlist(activePlaylistId, "vod", entry.id, {
-                name: entry.name || "",
-                logo: entry.logo || null,
-              })
+              for (const variantId of group.globalEntryIds) {
+                if (isOnWatchlist(activePlaylistId, "vod", variantId)) continue
+                const variantEntry = group.entries.find((movie) => movie.id === variantId) || entry
+                toggleWatchlist(activePlaylistId, "vod", variantId, {
+                  name: variantEntry.name || "",
+                  logo: variantEntry.logo || null,
+                })
+              }
               return
             }
             for (const variantId of group.globalEntryIds) {
@@ -329,10 +341,14 @@ function makeCard(group, idx) {
           onToggleWatched: (currentlyWatched) => {
             if (!activePlaylistId) return
             if (!currentlyWatched) {
-              markCompleted(activePlaylistId, "vod", entry.id, {
-                name: entry.name || "",
-                logo: entry.logo || null,
-              })
+              for (const variantId of group.globalEntryIds) {
+                if (isCompleted(activePlaylistId, "vod", variantId)) continue
+                const variantEntry = group.entries.find((movie) => movie.id === variantId) || entry
+                markCompleted(activePlaylistId, "vod", variantId, {
+                  name: variantEntry.name || "",
+                  logo: variantEntry.logo || null,
+                })
+              }
               return
             }
             for (const variantId of group.globalEntryIds) {

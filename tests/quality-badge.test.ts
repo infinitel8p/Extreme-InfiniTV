@@ -32,6 +32,15 @@ describe("qualityLabel", () => {
   it("returns null below the lowest bucket", () => {
     expect(qualityLabel(160, 120)).toBe(null)
   })
+
+  it("does not inflate a portrait stream by treating its tall side as the width", () => {
+    expect(qualityLabel(608, 1080)).not.toBe("1080p")
+    expect(qualityLabel(608, 1080)).toBe("576p")
+  })
+
+  it("classifies a portrait stream by its short side, not above its 1080-line", () => {
+    expect(qualityLabel(1080, 1920)).toBe("1080p")
+  })
 })
 
 describe("attachQualityChip", () => {

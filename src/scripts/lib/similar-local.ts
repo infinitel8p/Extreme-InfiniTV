@@ -1,5 +1,5 @@
 // Local "more like this" heuristic used when TMDb is inactive, unresolved, or has no matches.
-import { parseNamePrefix } from "@/scripts/lib/language-tags.ts"
+import { parseNamePrefix, pickByTagPreference } from "@/scripts/lib/language-tags.ts"
 
 export interface LocalSimilarCurrent {
   id: number
@@ -43,17 +43,8 @@ function pickBestVariant(
   preferredTags: string[]
 ): LocalSimilarCandidate {
   if (group.length === 1) return group[0]
-  if (sourcePrefix) {
-    const sameTag = group.find((candidate) => parseNamePrefix(candidate.name).tag === sourcePrefix)
-    if (sameTag) return sameTag
-  }
-  for (const preferredTag of preferredTags) {
-    const match = group.find((candidate) => parseNamePrefix(candidate.name).tag === preferredTag)
-    if (match) return match
-  }
-  const untagged = group.find((candidate) => parseNamePrefix(candidate.name).tag == null)
-  if (untagged) return untagged
-  return group[0]
+  const getTag = (candidate: LocalSimilarCandidate) => parseNamePrefix(candidate.name).tag
+  return pickByTagPreference(group, getTag, { sourcePrefix, preferredTags }) || group[0]
 }
 
 function dedupeByGroupKey(

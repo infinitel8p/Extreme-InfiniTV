@@ -243,10 +243,7 @@ async function fillEnglishTextFallback(
   }
 }
 
-export async function fetchMovieEnrichment(
-  playlistId: string,
-  tmdbId: number
-): Promise<TmdbTitleEnrichment | null> {
+export async function fetchMovieEnrichment(tmdbId: number): Promise<TmdbTitleEnrichment | null> {
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
@@ -264,10 +261,7 @@ export async function fetchMovieEnrichment(
   }
 }
 
-export async function fetchSeriesEnrichment(
-  playlistId: string,
-  tmdbId: number
-): Promise<TmdbTitleEnrichment | null> {
+export async function fetchSeriesEnrichment(tmdbId: number): Promise<TmdbTitleEnrichment | null> {
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
@@ -325,7 +319,6 @@ async function fillEnglishSeasonFallback(
 }
 
 export async function fetchSeasonEnrichment(
-  playlistId: string,
   tmdbId: number,
   seasonNumber: number
 ): Promise<TmdbSeasonEnrichment | null> {

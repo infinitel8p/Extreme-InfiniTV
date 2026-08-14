@@ -48,7 +48,6 @@ import {
   setAmbient as setAmbientOn,
   paintHero as paintHeroOn,
   sanitizeProviderBackdropUrl,
-  chooseMime,
 } from "@/scripts/lib/morph-detail.js"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
@@ -88,24 +87,10 @@ import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
 import {
   mountPlayer,
-  playWhenReady,
   getExternalLauncher,
   subscribeExternalPlayerExit,
-  desktopPlatform,
-  isWindows,
 } from "@/scripts/lib/player-runtime.ts"
-import { prepareVodPlayback, prepareLocalVodPlayback } from "@/scripts/lib/vod-proxy.ts"
-import { vodAudioRemuxAvailable } from "@/scripts/lib/vod-audio-proxy.ts"
-import { createVodAudioSwitcher, discoverVodAudioTracks } from "@/scripts/lib/vod-audio-switch.ts"
-import {
-  planVodContainerPlayback,
-  planLocalVodContainerPlayback,
-  detectVodContainer,
-  detectVodContainerFromLocalPath,
-} from "@/scripts/lib/vod-container-plan.ts"
-import { probeVodContainerAlternative, swapUrlExtension } from "@/scripts/lib/vod-container-probe.ts"
-import { buildRemuxContentKey, isRemuxPinnedContent } from "@/scripts/lib/vod-remux-memory.ts"
-import { toast, toastError } from "@/scripts/lib/toast.js"
+import { toast } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
@@ -113,14 +98,8 @@ import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dial
 import { buildSeriesStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { attachPosterContextMenu } from "@/scripts/lib/poster-menu.ts"
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
-import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
-import { shouldTrustEndedEvent } from "@/scripts/lib/premature-ended.ts"
 import { createVodPlaybackToasts } from "@/scripts/lib/vod-playback-toasts.ts"
-import {
-  createRemuxFailureHandler,
-  handlePlayerStartError,
-  attachVodStallWatchdog,
-} from "@/scripts/lib/vod-remux-recovery.ts"
+import { mountVodPlayback } from "@/scripts/lib/vod-mount.ts"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -1164,7 +1143,7 @@ async function refreshSeasonEnrichment() {
   if (!isTmdbActive() || !resolvedTmdbId || !activePlaylistId) return
   const seasonNumber = toIndex(currentSeason)
   if (seasonNumber == null) return
-  const season = await fetchSeasonEnrichment(activePlaylistId, resolvedTmdbId, seasonNumber)
+  const season = await fetchSeasonEnrichment(resolvedTmdbId, seasonNumber)
   if (requestId !== seasonEnrichRequestId || !season?.episodes?.length) return
   patchSeasonEpisodes(season.episodes)
 }
@@ -1353,7 +1332,7 @@ async function enrichSeriesDetailFromTmdb(requestId) {
   // The current season already rendered without a tmdbId, so back-fill it now.
   refreshSeasonEnrichment()
 
-  const enrichment = await fetchSeriesEnrichment(activePlaylistId, tmdbId)
+  const enrichment = await fetchSeriesEnrichment(tmdbId)
   if (requestId !== enrichRequestId) return false
   if (!enrichment) {
     settleHero()
@@ -1456,10 +1435,8 @@ let stallWatchdogDetach = null
 let qualityChipDetach = null
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
-const PROGRESS_WRITE_INTERVAL_MS = 5000
 
 const vodPlaybackToasts = createVodPlaybackToasts(() => externalBtnHandle?.refresh())
-const { showContainerUnsupportedToast } = vodPlaybackToasts
 
 function setupPipButton(player) {
   const pipBtn = document.getElementById("series-detail-pip")
@@ -1626,7 +1603,7 @@ function retirePreviousPlayback() {
 async function playEpisode(episode, options = {}) {
   if (!series || !episode) return
   const requestId = ++playRequestId
-  let src = episode?._directUrl
+  const src = episode?._directUrl
     ? buildEpisodeStreamUrl(episode)
     : await resolveStreamUrl((c) => buildEpisodeStreamUrl(episode, c))
   if (!src) return
@@ -1661,7 +1638,7 @@ async function playEpisode(episode, options = {}) {
   externalBtnHandle?.refresh()
 
   const localSrc = await getLocalPlayableSrc(src)
-  let playSrc = localSrc || src
+  const playSrc = localSrc || src
   // The asset.localhost/asset:// mount URL doesn't reliably parse as http(s), so the container
   // decision for a local download uses the download's on-disk path instead.
   const localDownloadPath = localSrc ? await getLocalDownloadPath(src) : null
@@ -1718,315 +1695,80 @@ async function playEpisode(episode, options = {}) {
     return
   }
 
-  const mountStartedAt = Date.now()
-  const remuxAvailable = await vodAudioRemuxAvailable()
-  const forceRemux = activePlaylistId
-    ? isRemuxPinnedContent(activePlaylistId, buildRemuxContentKey("episode", episode.id))
-    : false
-  const containerPlanEnv = { isTauriDesktop: desktopPlatform, isWindows, remuxAvailable, forceRemux }
-  let containerPlan = localDownloadPath
-    ? planLocalVodContainerPlayback(localDownloadPath, containerPlanEnv)
-    : planVodContainerPlayback(playSrc, containerPlanEnv)
-  let resolvedContainer: "mkv" | "mp4" | null = null
-
-  if (containerPlan.mode === "unsupported" && containerPlan.container === "avi" && !localDownloadPath) {
-    const alternative = await probeVodContainerAlternative(playSrc)
-    if (requestId !== playRequestId) return
-    if (alternative) {
-      log.info("[xt:series-detail] avi source has a playable alternative container", {
-        container: alternative.container,
-      })
-      src = alternative.url
-      playSrc = alternative.url
-      resolvedContainer = alternative.container
-      const planningUrl = swapUrlExtension(alternative.url, alternative.container) || alternative.url
-      containerPlan = planVodContainerPlayback(planningUrl, containerPlanEnv)
-    }
-  }
-
-  const detectedContainer = containerPlan.mode === "unsupported"
-    ? containerPlan.container
-    : localDownloadPath
-      ? detectVodContainerFromLocalPath(localDownloadPath)
-      : resolvedContainer || detectVodContainer(playSrc)
-  log.info("[xt:vod-mount] plan decided", {
-    mode: containerPlan.mode,
-    container: detectedContainer,
-    isTauriDesktop: desktopPlatform,
-    isWindows,
-    remuxAvailable,
-    forceRemux,
-    isLocalDownload: !!localDownloadPath,
-  })
-  if (containerPlan.mode === "unsupported") {
-    showContainerUnsupportedToast(containerPlan.container)
-    return
-  }
-  // In remux mode the audio switcher owns the mount (starts + seeks it itself); this function
-  // must not touch src/playhead here, or it would re-register the remux.
-  const remuxOwnsInitialMount = containerPlan.mode === "remux"
-
-  if (posterEl) posterEl.classList.add("hidden")
-  if (playerWrap) playerWrap.classList.remove("hidden")
-  const videoEl = document.getElementById("series-player")
-  videoEl?.removeAttribute("hidden")
-
-  let player
-  try {
-    player = await ensureEmbeddedPlayer(backend)
-  } catch (err) {
-    log.error("[xt:series-detail] failed to mount player:", err)
-    toastError("Couldn't start playback.")
-    if (posterEl) posterEl.classList.remove("hidden")
-    if (playerWrap) playerWrap.classList.add("hidden")
-    return
-  }
-  if (!player) return
-  if (requestId !== playRequestId) return
-  setupPipButton(player)
-  setupScaleButton()
-  setupStatsButton()
-  setupHealthButton()
-  subtitleDelayController.setup()
-  const mime = resolvedContainer === "mkv"
-    ? "video/x-matroska"
-    : resolvedContainer === "mp4"
-      ? "video/mp4"
-      : chooseMime(src)
-
-  const handleRemuxFailure = createRemuxFailureHandler({
-    player,
+  await mountVodPlayback({
+    logTag: "[xt:series-detail]",
+    prematureEndedLogTag: "[xt:series-detail]",
+    contentId: episode.id,
+    remuxContentKind: "episode",
+    playlistId: activePlaylistId,
+    playSrc,
+    mimeFallbackSrc: src,
+    localDownloadPath,
+    savedProgress: saved,
+    resumePos,
+    nameHintSource: episode.title || series?.name,
     posterEl,
     playerWrap,
-    getOwnAudioSwitcher: () => ownAudioSwitcher,
-    clearAudioSwitcherIfOwn: (own) => { if (audioSwitcher === own) audioSwitcher = null },
-    getPipelineMkvSession: () => prepared?.mkvSession,
-    clearActiveMkvSessionIfMatches: (mkvSession) => { if (activeMkvSession === mkvSession) activeMkvSession = null },
-    nameHintSource: episode.title || series?.name,
-    contentKey: buildRemuxContentKey("episode", episode.id),
+    videoElementId: "series-player",
+    backend,
+    isAutomaticRetry: !!options.isAutomaticRetry,
+    ensureEmbeddedPlayer,
+    setupPlayerUi: (player) => {
+      setupPipButton(player)
+      setupScaleButton()
+      setupStatsButton()
+      setupHealthButton()
+      subtitleDelayController.setup()
+    },
+    applyVideoScale,
+    toasts: vodPlaybackToasts,
     recordGiveUp: (kind) => getSeriesInsights().record("giveup", kind),
     endGiveUpSession: () => getSeriesInsights().endSession("giveup"),
-    resolvedContainer,
-    playSrc,
-    toasts: vodPlaybackToasts,
-  })
-
-  player.one("error", () => {
-    handlePlayerStartError({
-      logTag: "[xt:series-detail]",
-      player,
-      isStale: () => requestId !== playRequestId,
-      containerPlanMode: containerPlan.mode,
-      desktopPlatform,
-      localDownloadPath,
-      resolvedContainer,
-      playSrc,
-      remuxAvailable,
-      activePlaylistId,
-      contentKey: buildRemuxContentKey("episode", episode.id),
-      handleRemuxFailure,
-      retirePreviousPlaybackAndRetryRemux: () => {
-        retirePreviousPlayback()
-        playEpisode(currentEpisode, { isAutomaticRetry: true })
-      },
-      toasts: vodPlaybackToasts,
-    })
-  })
-  player.one("loadedmetadata", () => {
-    if (requestId !== playRequestId) return
-    log.info("[xt:vod-mount] first loadedmetadata", { elapsedMs: Date.now() - mountStartedAt })
-  })
-
-  if (resumePos > 0 && !remuxOwnsInitialMount) {
-    player.one("loadedmetadata", () => {
-      if (requestId !== playRequestId) return
-      const dur = player.duration?.() || saved?.duration || 0
-      if (dur === 0 || resumePos / dur < RESUME_MAX_FRACTION) {
-        try { player.currentTime?.(resumePos) } catch {}
-      }
-    })
-  }
-
-  // A local .mkv goes through the same tee proxy as a remote one, fed from its on-disk path
-  // instead of a URL, since the ffmpeg sidecar only speaks http/pipe/tcp.
-  let prepared
-  if (remuxOwnsInitialMount && localDownloadPath) {
-    prepared = await prepareLocalVodPlayback(localDownloadPath)
-    if (requestId !== playRequestId) {
-      prepared?.mkvSession?.stop()
-      return
-    }
-    if (!prepared) {
-      log.warn("[xt:series-detail] local vod proxy failed to register, cannot remux this download", {
-        contentKey: buildRemuxContentKey("episode", episode.id),
-        container: detectVodContainerFromLocalPath(localDownloadPath),
-      })
-      if (posterEl) posterEl.classList.remove("hidden")
-      if (playerWrap) playerWrap.classList.add("hidden")
-      showContainerUnsupportedToast("mkv")
-      return
-    }
-  } else {
-    prepared = await prepareVodPlayback(playSrc)
-    if (requestId !== playRequestId) {
-      prepared.mkvSession?.stop()
-      return
-    }
-  }
-
-  // The previous pipeline was already retired at the top of this run.
-  audioDiscoveryController = new AbortController()
-  const discoverySignal = audioDiscoveryController.signal
-  let initialAudioSource = null
-  // Only this pipeline's switcher, so a superseded pipeline tears down its own sessions and never the live one's.
-  let ownAudioSwitcher = null
-
-  function buildAudioSwitcher(tracks) {
-    return createVodAudioSwitcher({
-      handle: player,
-      originalSrc: prepared.playbackUrl,
-      originalMime: mime,
-      originalSubtitles: { sourceUrl: playSrc, mkvSession: prepared.mkvSession },
-      sourceUrl: playSrc,
-      remuxInputUrl: prepared.mkvSession ? prepared.playbackUrl : null,
-      getKnownDurationSeconds: () => episodeDurationSeconds(episode) || saved?.duration || player.duration?.() || 0,
-      tracks,
-      mountRemuxImmediately: remuxOwnsInitialMount,
-      initialStartSeconds: resumePos,
-      onRemuxUnrecoverable: (detail) => {
-        log.warn("[xt:series-detail] remux playback unavailable for this source:", detail)
-        handleRemuxFailure(detail)
-      },
-    })
-  }
-
-  if (remuxOwnsInitialMount) {
-    // Registers against the synthetic default track right away; the real list arrives via
-    // setTracks once the container-head discovery below resolves, with no remount in between.
-    ownAudioSwitcher = buildAudioSwitcher([])
-    audioSwitcher = ownAudioSwitcher
-    initialAudioSource = ownAudioSwitcher.source
-  }
-
-  if (requestId !== playRequestId) {
-    // Dispose first: stops any remux session before the tee that feeds it goes away.
-    ownAudioSwitcher?.dispose()
-    if (audioSwitcher === ownAudioSwitcher) audioSwitcher = null
-    prepared.mkvSession?.stop()
-    return
-  }
-
-  // This pipeline owns the mount from here on, so its tee session is the one the next episode must stop.
-  activeMkvSession = prepared.mkvSession
-  // An automatic remux retry continues the same tune's session instead of opening a new one.
-  if (options.isAutomaticRetry) {
-    getSeriesInsights().record("fallback", "auto:mkv-remux-fallback")
-  } else {
-    getSeriesInsights().startSession({
-      label: [series?.name, episode.title].filter(Boolean).join(" - "),
-    })
-  }
-  // Captured so the stall watchdog can re-issue the identical mount to recover a stuck download.
-  function mountEmbeddedSrc() {
-    player.src({
-      src: prepared.playbackUrl,
-      type: mime,
-      isLive: false,
-      subtitles: { sourceUrl: playSrc, mkvSession: prepared.mkvSession },
-      audio: initialAudioSource,
-    })
-  }
-
-  if (!remuxOwnsInitialMount) mountEmbeddedSrc()
-  stallWatchdogDetach?.()
-  stallWatchdogDetach = null
-  const stallVideoEl = player.getMediaElement?.()
-  stallWatchdogDetach = attachVodStallWatchdog(stallVideoEl, {
-    logTag: "[xt:series-detail]",
-    player,
-    remuxOwnsInitialMount,
-    isAudioSwitcherRecovering: () => ownAudioSwitcher?.isRecovering() ?? false,
-    recoverRemuxStall: () => ownAudioSwitcher?.recoverRemuxStall(),
-    mountEmbeddedSrc,
-  })
-  if (playerWrap) qualityChipDetach = attachQualityChip(playerWrap, player)
-  applyVideoScale()
-
-  if (!progressListenersBound) {
-    progressListenersBound = true
-    let lastWriteAt = 0
-    player.on("timeupdate", () => {
-      if (!activePlaylistId || !currentEpisode) return
-      const now = Date.now()
-      if (now - lastWriteAt < PROGRESS_WRITE_INTERVAL_MS) return
-      const pos = player.currentTime?.() || 0
-      const dur = player.duration?.() || 0
-      if (pos < 1) return
-      lastWriteAt = now
-      setProgress(
-        activePlaylistId,
-        "episode",
-        currentEpisode.id,
-        pos,
-        dur,
-        progressExtrasFor(currentEpisode)
-      )
-    })
-    player.on("ended", () => {
-      // audioSwitcher tracks the live pipeline; this listener is bound once and outlives any single episode.
-      const knownDurationSeconds = episodeDurationSeconds(currentEpisode) || null
-      const trusted = shouldTrustEndedEvent({
-        currentTimeSeconds: player.currentTime?.() || 0,
-        knownDurationSeconds,
-        recoveryInFlight: audioSwitcher?.isRecovering?.() ?? false,
-      })
-      if (!trusted) {
-        log.info("[xt:series-detail] ignoring a premature ended event short of the known duration")
-        audioSwitcher?.recoverRemuxStall()
-        return
-      }
-      getSeriesInsights().endSession("ended")
-      if (!activePlaylistId || !currentEpisode) return
-      const dur = player.duration?.() || 0
+    clearAudioSwitcherIfOwn: (own) => { if (audioSwitcher === own) audioSwitcher = null },
+    clearActiveMkvSessionIfMatches: (mkvSession) => { if (activeMkvSession === mkvSession) activeMkvSession = null },
+    isStale: () => requestId !== playRequestId,
+    retirePreviousPlaybackAndRetryRemux: () => {
+      retirePreviousPlayback()
+      playEpisode(currentEpisode, { isAutomaticRetry: true })
+    },
+    beginInsightsSession: (isAutomaticRetry) => {
+      if (isAutomaticRetry) getSeriesInsights().record("fallback", "auto:mkv-remux-fallback")
+      else getSeriesInsights().startSession({ label: [series?.name, episode.title].filter(Boolean).join(" - ") })
+    },
+    getKnownDurationSecondsForSwitcher: () => episodeDurationSeconds(episode),
+    getKnownDurationSecondsForEnded: () => episodeDurationSeconds(currentEpisode) || null,
+    getAudioSwitcher: () => audioSwitcher,
+    setAudioSwitcher: (switcher) => { audioSwitcher = switcher },
+    setActiveMkvSession: (session) => { activeMkvSession = session },
+    setAudioDiscoveryController: (controller) => { audioDiscoveryController = controller },
+    replaceStallWatchdog: (detach) => {
+      stallWatchdogDetach?.()
+      stallWatchdogDetach = detach
+    },
+    setQualityChipDetach: (detach) => { qualityChipDetach = detach },
+    bindProgressListenersOnce: (registerListeners) => {
+      if (progressListenersBound) return
+      progressListenersBound = true
+      registerListeners()
+    },
+    hasActiveContent: () => !!activePlaylistId && !!currentEpisode,
+    writeProgress: (pos, dur) => {
+      setProgress(activePlaylistId, "episode", currentEpisode.id, pos, dur, progressExtrasFor(currentEpisode))
+    },
+    recordPlaybackEndedSession: () => getSeriesInsights().endSession("ended"),
+    markContentCompleted: (dur) => {
       markCompleted(activePlaylistId, "episode", currentEpisode.id, {
         duration: dur,
         ...progressExtrasFor(currentEpisode),
       })
       const nextEp = findNextEpisode(currentEpisode)
       if (nextEp) showUpNextOverlay(nextEp)
-    })
-  }
-
-  // The switcher-owned mount plays itself once its remux session is up.
-  if (!remuxOwnsInitialMount) {
-    playWhenReady(player, {
-      isStale: () => requestId !== playRequestId,
-      onReject: (err) =>
-        log.info("[xt:series-detail] play() rejected - re-arming on canplay", {
-          error: err?.name || err?.message || String(err),
-        }),
-      onRetryReject: (err) =>
-        log.warn("[xt:series-detail] retry play() rejected:", err?.name || err?.message || err),
-    })
-  }
-
-  // Fire-and-forget network probe that must never sit ahead of the mount above.
-  if (remuxAvailable) {
-    discoverVodAudioTracks(prepared.mkvSession, playSrc, discoverySignal).then((audioTracks) => {
-      if (requestId !== playRequestId) return
-      if (remuxOwnsInitialMount) {
-        if (audioTracks.length > 0) ownAudioSwitcher?.setTracks(audioTracks)
-        return
-      }
-      if (audioTracks.length < 2) return
-      ownAudioSwitcher = buildAudioSwitcher(audioTracks)
-      audioSwitcher = ownAudioSwitcher
-      player.setAudioSource?.(ownAudioSwitcher.source)
-    })
-  }
-
-  pushEpisodePresence(episode)
-  externalPresenceActive = false
+    },
+    onMounted: () => {
+      pushEpisodePresence(episode)
+      externalPresenceActive = false
+    },
+  })
 }
 
 function pushEpisodePresence(episode) {

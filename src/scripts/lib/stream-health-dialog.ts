@@ -9,6 +9,7 @@ import {
   type HealthSession,
   type HealthEntry,
 } from "@/scripts/lib/stream-health.js"
+import { formatPaddedHms } from "@/scripts/lib/format.js"
 import { kindLabel } from "@/scripts/lib/kinds.js"
 import { t } from "@/scripts/lib/i18n.js"
 import { writeClipboardText } from "@/scripts/lib/clipboard.js"
@@ -30,10 +31,7 @@ let emptyMessageEl: HTMLParagraphElement | null = null
 const sessionNodesById = new Map<number, HTMLDetailsElement>()
 
 function formatDuration(ms: number): string {
-  const totalSeconds = Math.max(0, Math.round(ms / 1000))
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+  return formatPaddedHms(Math.max(0, Math.round(ms / 1000)))
 }
 
 function buildEntryItem(session: HealthSession, entry: HealthEntry): HTMLLIElement {

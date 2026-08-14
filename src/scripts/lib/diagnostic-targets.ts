@@ -61,9 +61,9 @@ export function extractM3UHeaderEpgUrl(text: string): string | null {
     readHeaderAttr(firstLine, "x-tvg-url") ||
     readHeaderAttr(firstLine, "tvg-url")
   if (!raw) return null
-  // Split only on commas followed by a scheme so query-string commas survive.
-  const first = raw.split(/\s*,+\s*(?=https?:\/\/)/i)[0]?.trim() ?? ""
-  return /^https?:\/\//i.test(first) ? first : null
+  // Split only on commas followed by a scheme (or protocol-relative //) so query-string commas survive.
+  const first = raw.split(/\s*,+\s*(?=(?:https?:)?\/\/)/i)[0]?.trim() ?? ""
+  return /^(?:https?:)?\/\//i.test(first) ? first : null
 }
 
 /** First non-comment, non-blank line of an M3U, trimmed. Scheme not validated (relative URLs exist in the wild). */

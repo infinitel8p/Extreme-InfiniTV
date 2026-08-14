@@ -109,7 +109,8 @@ export function handlePlayerStartError(options: PlayerStartErrorOptions) {
     message: playerError?.message,
   })
   if (options.containerPlanMode === "remux") {
-    if (playerError?.code !== 4) options.handleRemuxFailure(playerError?.message || "")
+    // Code 4 here means the remux output itself was rejected, not the pre-remux source, so it's a genuine decode failure too.
+    options.handleRemuxFailure(playerError?.message || "")
     return
   }
   if (options.desktopPlatform && playerError?.code === 4) {

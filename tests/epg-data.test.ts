@@ -217,6 +217,25 @@ describe("buildEpgUrlsFromEntry: M3U playlist", () => {
     ])
   })
 
+  it("keeps a protocol-relative header value as a single URL", () => {
+    const sources = buildEpgUrlsFromEntry({}, m3uCreds, "//epg.example.com/epg.xml")
+    expect(sources).toEqual([
+      { url: "//epg.example.com/epg.xml", source: "m3u-header", kind: "primary" },
+    ])
+  })
+
+  it("splits a query-string URL followed by a protocol-relative second source", () => {
+    const sources = buildEpgUrlsFromEntry(
+      {},
+      m3uCreds,
+      "http://epg.example.com/guide.xml?ids=1,2,//b.example/2.xml"
+    )
+    expect(sources.map((source) => source.url)).toEqual([
+      "http://epg.example.com/guide.xml?ids=1,2",
+      "//b.example/2.xml",
+    ])
+  })
+
   it("splits a query-string URL followed by a second real header source", () => {
     const sources = buildEpgUrlsFromEntry(
       {},

@@ -102,7 +102,7 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null
 }
 
-interface MediaFields {
+export interface MediaFields {
   videoWidth: number | null
   videoHeight: number | null
   bufferedAheadSeconds: number | null
@@ -110,7 +110,7 @@ interface MediaFields {
   totalFrames: number | null
 }
 
-function readMediaFields(video: HTMLVideoElement | null): MediaFields {
+export function readMediaFields(video: HTMLVideoElement | null): MediaFields {
   if (!video) {
     return { videoWidth: null, videoHeight: null, bufferedAheadSeconds: null, droppedFrames: null, totalFrames: null }
   }

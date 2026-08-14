@@ -185,13 +185,13 @@ function splitGroups(raw: string | null): string[] {
   return raw ? splitDedupeTrim(raw, ";") : []
 }
 
-// Splits only on commas followed by a URL scheme so query-string commas survive.
+// Splits only on commas followed by a URL scheme (or protocol-relative //) so query-string commas survive.
 function splitEpgUrls(raw: string): string[] {
   const seen = new Set<string>()
   const out: string[] = []
-  for (const part of raw.split(/\s*,+\s*(?=https?:\/\/)/i)) {
+  for (const part of raw.split(/\s*,+\s*(?=(?:https?:)?\/\/)/i)) {
     const trimmed = part.trim()
-    if (!trimmed || !/^https?:\/\//i.test(trimmed) || seen.has(trimmed)) continue
+    if (!trimmed || !/^(?:https?:)?\/\//i.test(trimmed) || seen.has(trimmed)) continue
     seen.add(trimmed)
     out.push(trimmed)
   }

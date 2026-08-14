@@ -64,14 +64,14 @@ async function findEntry(playlistId) {
  * @property {"primary"|"additional"} kind
  */
 
-// Splits only on commas followed by a URL scheme so query-string commas survive.
+// Splits only on commas followed by a URL scheme (or protocol-relative //) so query-string commas survive.
 function splitHeaderEpgUrls(raw) {
   if (!raw || typeof raw !== "string") return []
   const seen = new Set()
   const out = []
-  for (const part of raw.split(/\s*,+\s*(?=https?:\/\/)/i)) {
+  for (const part of raw.split(/\s*,+\s*(?=(?:https?:)?\/\/)/i)) {
     const trimmed = part.trim()
-    if (!trimmed || !/^https?:\/\//i.test(trimmed) || seen.has(trimmed)) continue
+    if (!trimmed || !/^(?:https?:)?\/\//i.test(trimmed) || seen.has(trimmed)) continue
     seen.add(trimmed)
     out.push(trimmed)
   }

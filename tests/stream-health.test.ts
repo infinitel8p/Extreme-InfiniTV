@@ -133,8 +133,12 @@ describe("formatEntryOffset", () => {
     expect(formatEntryOffset(65_000, 0)).toBe("+01:05")
   })
 
-  it("keeps counting minutes past an hour", () => {
-    expect(formatEntryOffset(3_660_000, 0)).toBe("+61:00")
+  it("rolls over into hours past 60 minutes", () => {
+    expect(formatEntryOffset(3_660_000, 0)).toBe("+1:01:00")
+  })
+
+  it("keeps zero-padded minutes and seconds within an hour rollover", () => {
+    expect(formatEntryOffset(7_533_000, 0)).toBe("+2:05:33")
   })
 
   it("clamps negative deltas to +00:00", () => {
@@ -201,6 +205,15 @@ describe("stream health store", () => {
     expect(health.getActiveHealthSession()).toBeNull()
     const sessions = health.listHealthSessions()
     expect(sessions[0].endedAt).not.toBeNull()
+  })
+
+  it("reports hasActiveHealthSession without cloning", async () => {
+    const health = await import("@/scripts/lib/stream-health.js")
+    expect(health.hasActiveHealthSession()).toBe(false)
+    health.startHealthSession({ label: "Channel A", kind: "live", backend: "videojs" })
+    expect(health.hasActiveHealthSession()).toBe(true)
+    health.endHealthSession()
+    expect(health.hasActiveHealthSession()).toBe(false)
   })
 
   it("no-ops recordHealth when no session is open", async () => {

@@ -28,7 +28,10 @@ export function qualityLabel(
   // Letterboxed/anamorphic sources (e.g. 1920x800 cinemascope) report a
   // short height relative to their width - classify by the 16:9-equivalent
   // height instead so those still land in the bucket their width implies.
-  const effectiveHeight = Math.max(videoHeight, Math.round((videoWidth * 9) / 16))
+  // Orient by long/short side, not width/height, so portrait feeds (e.g. 608x1080) aren't inflated.
+  const longSide = Math.max(videoWidth, videoHeight)
+  const shortSide = Math.min(videoWidth, videoHeight)
+  const effectiveHeight = Math.max(shortSide, Math.round((longSide * 9) / 16))
 
   for (const [threshold, label] of QUALITY_THRESHOLDS) {
     if (effectiveHeight >= threshold) return label

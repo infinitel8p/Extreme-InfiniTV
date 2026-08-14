@@ -111,7 +111,17 @@ async function fetchAndClassify(url: string): Promise<"mkv" | "mp4" | "avi" | "t
   }
 }
 
+const PROBE_CACHE_MAX_ENTRIES = 200
+
 const probeCache = new Map<string, { url: string; container: ProbedContainer } | null>()
+
+function cacheProbeResult(originalUrl: string, result: { url: string; container: ProbedContainer } | null): void {
+  if (probeCache.size >= PROBE_CACHE_MAX_ENTRIES && !probeCache.has(originalUrl)) {
+    const oldestKey = probeCache.keys().next().value
+    if (oldestKey !== undefined) probeCache.delete(oldestKey)
+  }
+  probeCache.set(originalUrl, result)
+}
 
 export function clearVodContainerProbeCache(): void {
   probeCache.clear()
@@ -175,7 +185,7 @@ export async function probeVodContainerAlternative(
   if (originalContainer === "mkv" || originalContainer === "mp4") {
     const hit = { url: originalUrl, container: originalContainer }
     log.log("[xt:vod-probe] original URL is mislabeled, actual container:", originalContainer)
-    probeCache.set(originalUrl, hit)
+    cacheProbeResult(originalUrl, hit)
     return hit
   }
 
@@ -188,11 +198,11 @@ export async function probeVodContainerAlternative(
   const hit = await hedgedProbe(swapCandidates)
   if (hit) {
     log.log("[xt:vod-probe] found working alternative:", hit.container, redactUrl(hit.url))
-    probeCache.set(originalUrl, hit)
+    cacheProbeResult(originalUrl, hit)
     return hit
   }
 
   log.log("[xt:vod-probe] no working alternative found for", redactUrl(originalUrl))
-  probeCache.set(originalUrl, null)
+  cacheProbeResult(originalUrl, null)
   return null
 }

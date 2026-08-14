@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { formatBehindLive, parseHmsToSeconds, ratingSortValue } from "../src/scripts/lib/format"
+import { formatBehindLive, formatPaddedHms, parseHmsToSeconds, ratingSortValue } from "../src/scripts/lib/format"
 
 describe("formatBehindLive", () => {
   it("renders zero as 0:00", () => {
@@ -24,6 +24,21 @@ describe("formatBehindLive", () => {
 
   it("renders exactly one hour as 1:00:00", () => {
     expect(formatBehindLive(3_600_000)).toBe("1:00:00")
+  })
+})
+
+describe("formatPaddedHms", () => {
+  it("zero-pads minutes and seconds under an hour", () => {
+    expect(formatPaddedHms(65)).toBe("01:05")
+  })
+
+  it("rolls over into hours past 60 minutes", () => {
+    expect(formatPaddedHms(3_660)).toBe("1:01:00")
+  })
+
+  it("clamps negative or non-finite totals to 00:00", () => {
+    expect(formatPaddedHms(-5)).toBe("00:00")
+    expect(formatPaddedHms(NaN)).toBe("00:00")
   })
 })
 
