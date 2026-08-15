@@ -224,7 +224,7 @@ describe("network log store", () => {
     expect(second.entries[0].url).toBe("https://x.test/1")
   })
 
-  it("clears entries while keeping the lifetime recorded count", async () => {
+  it("resets entries, dropped, and recorded counts on clear", async () => {
     const { recordNetLog, getNetworkLog, clearNetworkLog } = await import("../src/scripts/lib/net-log")
     recordNetLog({ url: "https://x.test/1", status: 200 })
     recordNetLog({ url: "https://x.test/2", status: 200 })
@@ -232,7 +232,7 @@ describe("network log store", () => {
     const snapshot = getNetworkLog()
     expect(snapshot.entries).toEqual([])
     expect(snapshot.dropped).toBe(0)
-    expect(snapshot.recorded).toBe(2)
+    expect(snapshot.recorded).toBe(0)
   })
 
   it("fires exactly one coalesced event for a burst of requests", async () => {

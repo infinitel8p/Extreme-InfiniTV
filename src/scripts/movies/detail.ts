@@ -24,7 +24,6 @@ import {
   setVideoScaleOverride,
   clearAllVideoScaleOverrides,
   CHANNEL_VIDEO_SCALE_CHANGED_EVENT,
-  getGroupLanguages,
 } from "@/scripts/lib/preferences.js"
 import { openExternal } from "@/scripts/lib/external-link.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
@@ -61,18 +60,32 @@ import {
   setVideoScale,
   isTmdbActive,
   getContentLanguage,
-  getLanguageGroupingEnabled,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
 import { resolveTmdbId, fetchMovieEnrichment, peekEarlyDetailData } from "@/scripts/lib/tmdb-enrich.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
-import { parseNamePrefix, languageTagLabel, effectivePreferredTags, prefixQualityTokens } from "@/scripts/lib/language-tags.ts"
-import { tmdbImageUrl, TMDB_PROFILE_SIZE } from "@/scripts/lib/tmdb.ts"
-import { buildEntryCard } from "@/scripts/lib/entry-card.ts"
+import { parseNamePrefix, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
 import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
-import { ICON_USER } from "@/scripts/lib/icons.ts"
+import {
+  wireDetailBackLink,
+  setDetailSkeletonVisible,
+  youtubeUrlFromTrailer,
+  displayTitle,
+  extractDisplayYear,
+  escapeDetailText,
+  setFactRow,
+  personFilterHref as buildPersonFilterHref,
+  providerPeopleNames,
+  patchDirectorElement,
+  patchTaglineElement,
+  renderCastList,
+  renderProviderPeopleChipRow,
+  renderSimilarRail,
+  groupKeyForCatalog as sharedGroupKeyForCatalog,
+  renderLanguagePills as sharedRenderLanguagePills,
+} from "@/scripts/lib/detail-chrome.ts"
 import { fmtImdbRating, parseHmsToSeconds } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
@@ -123,22 +136,7 @@ if (castListEl) dragScroll(castListEl)
 if (similarListEl) dragScroll(similarListEl)
 let trailerUrl = ""
 
-// Real back() instead of a push navigation, so bfcache and the grid's own
-// back-navigation restore both work. Falls through to the plain href for
-// deep links or when the referrer isn't the movies grid.
-backLink?.addEventListener("click", (event) => {
-  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
-  if (history.length <= 1) return
-  let referrerUrl
-  try {
-    referrerUrl = new URL(document.referrer)
-  } catch {
-    return
-  }
-  if (referrerUrl.origin !== location.origin || referrerUrl.pathname !== "/movies") return
-  event.preventDefault()
-  history.back()
-})
+wireDetailBackLink(backLink, "/movies")
 
 // ----------------------------
 // State
@@ -180,34 +178,6 @@ function settleHero() {
     posterUrl: heroPosterUrl,
     backdropUrls: [heroProviderBackdropUrl, heroBackdropUrl],
   })
-}
-
-// Xtream `youtube_trailer` can be either a bare 11-char video ID or a full
-// URL. Normalize to a watchable youtube.com URL or "" if the value isn't
-// shaped like either.
-function youtubeUrlFromTrailer(trailer) {
-  if (!trailer) return ""
-  const value = String(trailer).trim()
-  if (!value) return ""
-  if (/^https?:\/\//i.test(value)) return value
-  if (/^[a-zA-Z0-9_-]{11}$/.test(value)) {
-    return `https://www.youtube.com/watch?v=${value}`
-  }
-  return ""
-}
-
-// Strips a recognized language prefix for display only; the stored movie name keeps the raw provider name.
-function displayTitle(name) {
-  if (!name) return name
-  const { tag, rest } = parseNamePrefix(name)
-  return tag != null ? rest : name
-}
-
-// Providers sometimes send a full release date instead of a bare year; show year-only.
-function extractDisplayYear(value) {
-  const raw = String(value).trim()
-  const match = raw.match(/(19|20)\d{2}/)
-  return match ? match[0] : raw
 }
 
 function fmtDuration(value) {
@@ -364,23 +334,17 @@ function buildMovieNfoMeta() {
   }
 }
 
-function escapeText(text) {
-  const div = document.createElement("div")
-  div.textContent = String(text)
-  return div.innerHTML
-}
-
 // Genre/rating repeat in the facts column at lg+, so the compact strip hides its own copies there.
 function renderMetaLine() {
   if (!metaEl) return
   const bits = []
-  if (metaYearText) bits.push(`<span class="meta-item">${escapeText(metaYearText)}</span>`)
-  if (metaDurationText) bits.push(`<span class="meta-item">${escapeText(metaDurationText)}</span>`)
-  if (metaGenreText) bits.push(`<span class="meta-item lg:hidden">${escapeText(metaGenreText)}</span>`)
+  if (metaYearText) bits.push(`<span class="meta-item">${escapeDetailText(metaYearText)}</span>`)
+  if (metaDurationText) bits.push(`<span class="meta-item">${escapeDetailText(metaDurationText)}</span>`)
+  if (metaGenreText) bits.push(`<span class="meta-item lg:hidden">${escapeDetailText(metaGenreText)}</span>`)
   if (metaRatingText) {
     bits.push(
       '<span class="meta-item inline-flex items-center gap-1 text-fg-2 lg:hidden" aria-label="' +
-        escapeText(t("detail.imdbRatingAria", { rating: metaRatingText })) +
+        escapeDetailText(t("detail.imdbRatingAria", { rating: metaRatingText })) +
         '">' +
         '<svg viewBox="0 0 24 24" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" class="text-accent">' +
         '<path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/>' +
@@ -392,18 +356,6 @@ function renderMetaLine() {
   }
   metaEl.innerHTML = bits.join("")
   renderFactsColumn()
-}
-
-function setFactRow(id, value) {
-  const row = document.getElementById(id)
-  if (!row) return
-  if (!value) {
-    row.setAttribute("hidden", "")
-    return
-  }
-  const valueEl = row.querySelector('[data-role="fact-value"]')
-  if (valueEl) valueEl.textContent = value
-  row.removeAttribute("hidden")
 }
 
 // Facts column at lg+: same module state as the compact meta strip, no extra data reads.
@@ -438,27 +390,11 @@ function resetTmdbEnrichmentUI() {
 }
 
 function patchDirector(director, tmdbPersonId) {
-  if (!directorEl || !director) return
-  directorEl.textContent = ""
-  directorEl.append(`${t("detail.director")}: `)
-  if (tmdbPersonId) {
-    const link = document.createElement("a")
-    link.href = personFilterHref(director, tmdbPersonId)
-    link.textContent = director
-    link.className =
-      "text-fg-2 hover:text-accent focus-visible:text-accent outline-none " +
-      "rounded focus-visible:ring-1 focus-visible:ring-accent"
-    directorEl.appendChild(link)
-  } else {
-    directorEl.append(director)
-  }
-  directorEl.removeAttribute("hidden")
+  patchDirectorElement(directorEl, director, tmdbPersonId, personFilterHref)
 }
 
 function patchTagline(tagline) {
-  if (!taglineEl || !tagline) return
-  taglineEl.textContent = tagline
-  taglineEl.removeAttribute("hidden")
+  patchTaglineElement(taglineEl, tagline)
 }
 
 function patchGenreFromEnrichment(genres) {
@@ -481,131 +417,33 @@ function patchRatingFromEnrichment(voteAverage) {
   renderMetaLine()
 }
 
-// Defensive: profilePath may be a raw TMDb path rather than an already-mapped full URL.
-function castProfileUrl(profilePath) {
-  if (!profilePath) return null
-  return profilePath.startsWith("http") ? profilePath : tmdbImageUrl(profilePath, TMDB_PROFILE_SIZE)
-}
-
-// tmdbPersonId is omitted for the provider-only chip row (no TMDb id to carry).
 function personFilterHref(name, tmdbPersonId) {
-  const params = new URLSearchParams({ person: name })
-  if (tmdbPersonId) params.set("personId", String(tmdbPersonId))
-  return `/movies?${params.toString()}`
+  return buildPersonFilterHref("/movies", name, tmdbPersonId)
 }
 
 function renderCast(cast) {
-  if (!castSection || !castListEl || !cast.length) return
-  castListEl.replaceChildren()
-  for (const member of cast) {
-    const interactive = !!member.tmdbPersonId
-    const card = document.createElement(interactive ? "a" : "div")
-    card.className = "flex flex-col items-center gap-1.5 w-20 sm:w-24 shrink-0 snap-start text-center rounded-lg outline-none"
-    if (interactive) {
-      card.href = personFilterHref(member.name, member.tmdbPersonId)
-      card.classList.add("group", "cursor-pointer", "focus-visible:ring-1", "focus-visible:ring-accent")
-    }
-
-    const photoWrap = document.createElement("div")
-    photoWrap.className =
-      "size-16 sm:size-20 rounded-full overflow-hidden bg-surface-2 ring-1 ring-line flex items-center justify-center text-fg-3"
-    const profileUrl = castProfileUrl(member.profilePath)
-    if (profileUrl) {
-      const img = document.createElement("img")
-      img.src = profileUrl
-      img.alt = ""
-      img.loading = "lazy"
-      img.decoding = "async"
-      img.referrerPolicy = "no-referrer"
-      img.className = "h-full w-full object-cover"
-      img.onerror = () => {
-        img.remove()
-        photoWrap.innerHTML = ICON_USER
-      }
-      photoWrap.appendChild(img)
-    } else {
-      photoWrap.innerHTML = ICON_USER
-    }
-
-    const info = document.createElement("div")
-    info.className = "w-full"
-    const nameEl = document.createElement("div")
-    nameEl.className =
-      "truncate text-sm font-medium text-fg" +
-      (interactive ? " group-hover:text-accent group-focus-visible:text-accent transition-colors" : "")
-    nameEl.textContent = member.name
-    const characterEl = document.createElement("div")
-    characterEl.className = "truncate text-xs text-fg-3"
-    characterEl.textContent = member.character
-    info.append(nameEl, characterEl)
-
-    card.append(photoWrap, info)
-    castListEl.appendChild(card)
-  }
-  castSection.removeAttribute("hidden")
-}
-
-// Dedup preserving order, director first, since IPTV provider casts often repeat a name.
-function providerPeopleNames(peopleInfo) {
-  const names = []
-  const seen = new Set()
-  const add = (name) => {
-    const trimmed = (name || "").trim()
-    if (!trimmed || seen.has(trimmed)) return
-    seen.add(trimmed)
-    names.push(trimmed)
-  }
-  add(peopleInfo.directorName)
-  for (const name of peopleInfo.castNames) add(name)
-  return names
+  renderCastList({ castSection, castListEl, cast, buildPersonHref: personFilterHref })
 }
 
 function renderProviderPeopleChips(names) {
-  const row = document.getElementById("movie-detail-provider-people")
-  const listEl = document.getElementById("movie-detail-provider-people-list")
-  if (!row || !listEl) return
-  if (!names.length) {
-    row.setAttribute("hidden", "")
-    listEl.replaceChildren()
-    return
-  }
-  listEl.replaceChildren()
-  for (const name of names.slice(0, 8)) {
-    const chip = document.createElement("a")
-    chip.href = personFilterHref(name, null)
-    chip.className =
-      "rounded-full border border-line px-2 py-0.5 text-xs text-fg-2 " +
-      "hover:text-accent hover:border-accent focus-visible:text-accent focus-visible:border-accent outline-none transition-colors"
-    chip.textContent = name
-    listEl.appendChild(chip)
-  }
-  row.removeAttribute("hidden")
+  renderProviderPeopleChipRow({
+    row: document.getElementById("movie-detail-provider-people"),
+    listEl: document.getElementById("movie-detail-provider-people-list"),
+    names,
+    buildPersonHref: personFilterHref,
+  })
 }
 
 function renderSimilar(matches) {
-  if (!similarSection || !similarListEl || !matches.length) return
-  similarListEl.replaceChildren()
-  matches.forEach((entry, idx) => {
-    const card = buildEntryCard({
-      entry,
-      idx,
-      kind: "vod",
-      activePlaylistId,
-      detailHref: (e) => `/movies/detail?id=${encodeURIComponent(e.id)}`,
-      fallbackTitle: (e) => t("list.movieFallback", { id: e.id }),
-      metaText: (e) => {
-        const parts = []
-        if (e.year) parts.push(e.year)
-        if (e.category) parts.push(e.category)
-        return parts.join(" • ")
-      },
-    })
-    const cardWrap = document.createElement("div")
-    cardWrap.className = "w-32 sm:w-36 lg:w-40 shrink-0 snap-start"
-    cardWrap.appendChild(card)
-    similarListEl.appendChild(cardWrap)
+  renderSimilarRail({
+    section: similarSection,
+    listEl: similarListEl,
+    matches,
+    kind: "vod",
+    activePlaylistId,
+    detailHrefBase: "/movies/detail",
+    fallbackTitleKey: "list.movieFallback",
   })
-  similarSection.removeAttribute("hidden")
 }
 
 // A deep link boots from a stub movie, so take the fields only the catalog row carries.
@@ -639,106 +477,19 @@ function loadVodCatalog() {
 const getGroupingIndexFor = createGroupingIndexMemo()
 
 function groupKeyForCatalog(catalog) {
-  if (!activePlaylistId || !catalog?.length) return undefined
-  const index = getGroupingIndexFor(activePlaylistId, catalog)
-  return (entry) => index.keyByEntryId.get(Number(entry.id)) ?? `e:${entry.id}`
+  return sharedGroupKeyForCatalog(activePlaylistId, catalog, getGroupingIndexFor)
 }
 
-// One pill per language+quality variant of the current movie's group; hidden below 2 pills or when grouping is off.
 function renderLanguagePills(catalog) {
-  if (!langsEl || !movie || !activePlaylistId || !catalog?.length) return
-  if (!getLanguageGroupingEnabled() || !getGroupLanguages(activePlaylistId, "vod")) {
-    langsEl.setAttribute("hidden", "")
-    langsEl.replaceChildren()
-    return
-  }
-
-  const index = getGroupingIndexFor(activePlaylistId, catalog)
-  const groupKey = index.keyByEntryId.get(movie.id)
-  const groupInfo = groupKey ? index.groupsByKey.get(groupKey) : null
-  if (!groupInfo || groupInfo.entryIds.length < 2) {
-    langsEl.setAttribute("hidden", "")
-    langsEl.replaceChildren()
-    return
-  }
-
-  const groupEntryIdSet = new Set(groupInfo.entryIds)
-  const nameByEntryId = new Map()
-  for (const entry of catalog) {
-    if (!groupEntryIdSet.has(entry.id)) continue
-    nameByEntryId.set(entry.id, entry.name)
-    if (nameByEntryId.size === groupEntryIdSet.size) break
-  }
-
-  const entryIdsByTag = new Map()
-  for (const entryId of groupInfo.entryIds) {
-    const tag = index.tagByEntryId.get(entryId) ?? null
-    const bucket = entryIdsByTag.get(tag)
-    if (bucket) bucket.push(entryId)
-    else entryIdsByTag.set(tag, [entryId])
-  }
-
-  // Tag order: current variant first, then content-language preference, then remaining tags; null-tag last.
-  const currentTag = index.tagByEntryId.get(movie.id) ?? null
-  const orderedTags = []
-  const addTagOnce = (tag) => {
-    if (tag != null && !orderedTags.includes(tag)) orderedTags.push(tag)
-  }
-  addTagOnce(currentTag)
-  for (const tag of effectivePreferredTags(getContentLanguage(), getActiveLocale())) addTagOnce(tag)
-  for (const tag of groupInfo.tags) addTagOnce(tag)
-  orderedTags.push(null)
-
-  const locale = getActiveLocale()
-  const pillModels = []
-  for (const tag of orderedTags) {
-    const bucket = entryIdsByTag.get(tag)
-    if (!bucket) continue
-
-    // Entries with the same quality-token list are duplicates; keep the first-seen one per list.
-    const survivorByQualityKey = new Map()
-    for (const entryId of bucket) {
-      const qualityTokens = prefixQualityTokens(nameByEntryId.get(entryId) || "")
-      const qualityKey = qualityTokens.join("-")
-      const existingSurvivor = survivorByQualityKey.get(qualityKey)
-      // Prefer the current entry as survivor so the aria-current pill never disappears.
-      if (!existingSurvivor || entryId === movie.id) {
-        survivorByQualityKey.set(qualityKey, { entryId, qualityTokens })
-      }
-    }
-
-    const variants = [...survivorByQualityKey.values()].sort(
-      (firstVariant, secondVariant) => firstVariant.qualityTokens.length - secondVariant.qualityTokens.length
-    )
-    const label = tag != null ? languageTagLabel(tag, locale) : t("detail.lang.unknown")
-    for (const variant of variants) {
-      const text = variant.qualityTokens.length ? `${label} · ${variant.qualityTokens.join(" ")}` : label
-      pillModels.push({ entryId: variant.entryId, text })
-    }
-  }
-
-  if (pillModels.length < 2) {
-    langsEl.setAttribute("hidden", "")
-    langsEl.replaceChildren()
-    return
-  }
-
-  langsEl.replaceChildren()
-  for (const { entryId, text } of pillModels) {
-    const isCurrent = entryId === movie.id
-    const pill = document.createElement(isCurrent ? "span" : "a")
-    pill.className =
-      "rounded-full border px-2 py-0.5 text-xs outline-none transition-colors " +
-      (isCurrent
-        ? "border-accent text-accent"
-        : "border-line text-fg-2 hover:text-accent hover:border-accent focus-visible:text-accent focus-visible:border-accent")
-    pill.textContent = text
-    if (isCurrent) pill.setAttribute("aria-current", "true")
-    else pill.href = `/movies/detail?id=${encodeURIComponent(entryId)}`
-    langsEl.appendChild(pill)
-  }
-
-  langsEl.removeAttribute("hidden")
+  sharedRenderLanguagePills({
+    langsEl,
+    item: movie,
+    kind: "vod",
+    activePlaylistId,
+    catalog,
+    getGroupingIndexFor,
+    detailHrefBase: "/movies/detail",
+  })
 }
 
 // Shared by the async patch-in and the cache-warm early merge in boot().
@@ -1508,10 +1259,7 @@ downloadBtn?.addEventListener("click", async () => {
 // Boot
 // ----------------------------
 function showDetailSkeleton() {
-  document.querySelectorAll("[data-detail-skeleton]").forEach((el) => el.removeAttribute("hidden"))
-  titleEl?.setAttribute("hidden", "")
-  metaEl?.setAttribute("hidden", "")
-  plotEl?.setAttribute("hidden", "")
+  setDetailSkeletonVisible({ titleEl, metaEl, plotEl })
 }
 
 // Reveals real title/meta/plot and hides the skeleton. Guarantees a non-empty

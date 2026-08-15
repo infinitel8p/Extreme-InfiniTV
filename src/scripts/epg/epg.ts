@@ -379,6 +379,7 @@ function renderChannelRow(channel, programmesForRow) {
       logo.setAttribute("data-loaded", "true")
       requestLogoFallback(logo, channel)
     }, 8000)
+    ;(img as HTMLImageElement & { logoFallbackTimer?: ReturnType<typeof setTimeout> }).logoFallbackTimer = slowLogoTimer
     img.onload = () => {
       clearTimeout(slowLogoTimer)
       logo.setAttribute("data-loaded", "true")
@@ -529,6 +530,12 @@ function renderNowLine() {
 // Row virtualization
 // ----------------------------
 const OVERSCAN_ROWS = 4
+
+function clearRowLogoFallbackTimer(row: HTMLElement) {
+  const img = row.querySelector("img") as (HTMLImageElement & { logoFallbackTimer?: ReturnType<typeof setTimeout> }) | null
+  if (img?.logoFallbackTimer) clearTimeout(img.logoFallbackTimer)
+}
+
 /** @type {Map<number, HTMLElement>} */
 const renderedRows = new Map()
 let virtualizedRangeStart = -1
@@ -561,6 +568,7 @@ function renderVirtualWindow() {
 
   for (const [idx, row] of renderedRows) {
     if (idx < startIdx || idx >= endIdx) {
+      clearRowLogoFallbackTimer(row)
       row.remove()
       renderedRows.delete(idx)
     }
@@ -730,6 +738,7 @@ function render() {
   renderTimeHeader()
 
   // Reset windowed render state
+  for (const row of renderedRows.values()) clearRowLogoFallbackTimer(row)
   bodyEl.replaceChildren()
   renderedRows.clear()
   virtualizedRangeStart = -1

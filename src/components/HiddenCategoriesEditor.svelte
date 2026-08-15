@@ -38,8 +38,8 @@
     }
   }
 
-  function sortStrings(a, b) {
-    return a.localeCompare(b, "en", { sensitivity: "base" })
+  function sortStrings(left, right) {
+    return left.localeCompare(right, "en", { sensitivity: "base" })
   }
 
   function unhide(kind, name) {
@@ -55,12 +55,12 @@
       "xt:hidden-categories-changed": reload,
       [LOCALE_EVENT]: onLocale,
     }
-    for (const [k, v] of Object.entries(handlers)) {
-      document.addEventListener(k, v)
+    for (const [eventName, handler] of Object.entries(handlers)) {
+      document.addEventListener(eventName, handler)
     }
     return () => {
-      for (const [k, v] of Object.entries(handlers)) {
-        document.removeEventListener(k, v)
+      for (const [eventName, handler] of Object.entries(handlers)) {
+        document.removeEventListener(eventName, handler)
       }
     }
   })

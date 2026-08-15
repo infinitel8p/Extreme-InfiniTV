@@ -18,10 +18,6 @@ import { rowsNeedTmdbBackfill } from "@/scripts/lib/catalog-mappers.js"
 import { triggerTmdbBackfillOnce } from "@/scripts/lib/tmdb-backfill.ts"
 import {
   ensureLoaded as ensurePrefsLoaded,
-  isFavorite,
-  toggleFavorite,
-  isOnWatchlist,
-  toggleWatchlist,
   getSeriesEpisodeProgress,
   getFavorites,
   getRecents,
@@ -58,25 +54,26 @@ import {
   observeSeasonCount,
   seasonsLabel,
 } from "@/scripts/lib/series-seasons.ts"
-import { resolvePersonTitleIds } from "@/scripts/lib/person-filter.ts"
-import { saveGridState, takeGridState, gridStateMatchesLocation } from "@/scripts/lib/grid-state.ts"
 import { buildGroupingIndex, pickPreferredEntryId, groupPassesLanguageFilter } from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, languageTagLabel, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
 import { getContentLanguage, getLanguageGroupingEnabled } from "@/scripts/lib/app-settings.js"
+import {
+  fmtAge,
+  posterSkeletonCount,
+  renderPosterSkeletons,
+  fetchCategoryMap,
+  groupHasFavorite,
+  groupHasWatchlist,
+  toggleGroupFavorite,
+  toggleGroupWatchlist,
+  createPersonFilterController,
+  createGridRestoreController,
+  personFilterGridSignature,
+} from "@/scripts/lib/grid-view.ts"
 
 const SERIES_TTL_MS = 24 * 60 * 60 * 1000
 
 if (typeof history !== "undefined") history.scrollRestoration = "manual"
-
-function fmtAge(ms) {
-  if (ms < 60_000) return "just now"
-  const m = Math.floor(ms / 60_000)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  return `${d}d ago`
-}
 
 let creds = { host: "", port: "", user: "", pass: "" }
 
@@ -259,18 +256,7 @@ function refreshSeriesProgressBadges(specificSeriesId) {
 // ----------------------------
 async function ensureSeriesCategoryMap() {
   if (categoryMap) return categoryMap
-  const r = await xtreamApiFetch("get_series_categories")
-  const data = await r.json().catch(() => [])
-  const arr = Array.isArray(data)
-    ? data
-    : Array.isArray(data?.categories)
-    ? data.categories
-    : []
-  categoryMap = new Map(
-    arr
-      .filter((c) => c && c.category_id != null)
-      .map((c) => [String(c.category_id), String(c.category_name || "").trim()])
-  )
+  categoryMap = await fetchCategoryMap("get_series_categories")
   return categoryMap
 }
 
@@ -415,33 +401,11 @@ function makeCard(group, idx) {
       fav
         ? `Remove ${entry.name || "series"} from favorites`
         : `Add ${entry.name || "series"} to favorites`,
-    favoriteState: () =>
-      activePlaylistId
-        ? group.globalEntryIds.some((id) => isFavorite(activePlaylistId, "series", id))
-        : false,
+    favoriteState: () => groupHasFavorite(activePlaylistId, "series", group),
     onToggleFavorite: (entry, currentlyFavorited) => {
-      if (!activePlaylistId) return
-      if (!currentlyFavorited) {
-        for (const variantId of group.globalEntryIds) {
-          if (isFavorite(activePlaylistId, "series", variantId)) continue
-          const variantEntry = group.entries.find((series) => series.id === variantId) || entry
-          toggleFavorite(activePlaylistId, "series", variantId, {
-            name: variantEntry.name || "",
-            logo: variantEntry.logo || null,
-          })
-        }
-        return
-      }
-      for (const variantId of group.globalEntryIds) {
-        if (isFavorite(activePlaylistId, "series", variantId)) {
-          toggleFavorite(activePlaylistId, "series", variantId)
-        }
-      }
+      toggleGroupFavorite(activePlaylistId, "series", group, entry, currentlyFavorited)
     },
-    watchlistState: () =>
-      activePlaylistId
-        ? group.globalEntryIds.some((id) => isOnWatchlist(activePlaylistId, "series", id))
-        : false,
+    watchlistState: () => groupHasWatchlist(activePlaylistId, "series", group),
     onContextMenu: (entry, anchor, point) => {
       import("@/scripts/lib/poster-menu").then(({ openPosterMenu }) => {
         openPosterMenu({
@@ -454,51 +418,13 @@ function makeCard(group, idx) {
             window.location.href = `/series/detail?id=${encodeURIComponent(entry.id)}`
           },
           // omit single stream URL or download for series
-          favoriteActive: () =>
-            activePlaylistId
-              ? group.globalEntryIds.some((id) => isFavorite(activePlaylistId, "series", id))
-              : false,
+          favoriteActive: () => groupHasFavorite(activePlaylistId, "series", group),
           onToggleFavorite: (currentlyFavorited) => {
-            if (!activePlaylistId) return
-            if (!currentlyFavorited) {
-              for (const variantId of group.globalEntryIds) {
-                if (isFavorite(activePlaylistId, "series", variantId)) continue
-                const variantEntry = group.entries.find((series) => series.id === variantId) || entry
-                toggleFavorite(activePlaylistId, "series", variantId, {
-                  name: variantEntry.name || "",
-                  logo: variantEntry.logo || null,
-                })
-              }
-              return
-            }
-            for (const variantId of group.globalEntryIds) {
-              if (isFavorite(activePlaylistId, "series", variantId)) {
-                toggleFavorite(activePlaylistId, "series", variantId)
-              }
-            }
+            toggleGroupFavorite(activePlaylistId, "series", group, entry, currentlyFavorited)
           },
-          watchlistActive: () =>
-            activePlaylistId
-              ? group.globalEntryIds.some((id) => isOnWatchlist(activePlaylistId, "series", id))
-              : false,
+          watchlistActive: () => groupHasWatchlist(activePlaylistId, "series", group),
           onToggleWatchlist: (currentlyOnWatchlist) => {
-            if (!activePlaylistId) return
-            if (!currentlyOnWatchlist) {
-              for (const variantId of group.globalEntryIds) {
-                if (isOnWatchlist(activePlaylistId, "series", variantId)) continue
-                const variantEntry = group.entries.find((series) => series.id === variantId) || entry
-                toggleWatchlist(activePlaylistId, "series", variantId, {
-                  name: variantEntry.name || "",
-                  logo: variantEntry.logo || null,
-                })
-              }
-              return
-            }
-            for (const variantId of group.globalEntryIds) {
-              if (isOnWatchlist(activePlaylistId, "series", variantId)) {
-                toggleWatchlist(activePlaylistId, "series", variantId)
-              }
-            }
+            toggleGroupWatchlist(activePlaylistId, "series", group, entry, currentlyOnWatchlist)
           },
           // Mirrors fullyWatchedSeriesIds, the same group-derived set the grid badge reads.
           watchedActive: () => group.globalEntryIds.some((id) => fullyWatchedSeriesIds.has(id)),
@@ -532,50 +458,6 @@ function makeCard(group, idx) {
   }
 
   return card
-}
-
-function posterSkeletonGeometry() {
-  const w = typeof window !== "undefined" ? window.innerWidth || 1280 : 1280
-  const h = typeof window !== "undefined" ? window.innerHeight || 720 : 720
-  const cardW = w >= 1024 ? 176 : w >= 640 ? 160 : 128
-  const cardH = cardW * 1.7
-  const cols = Math.max(2, Math.floor((w - 48) / (cardW + 16)))
-  const rows = Math.max(2, Math.ceil(h / cardH) + 1)
-  const count = Math.min(48, cols * rows)
-  return { cols, count }
-}
-
-function posterSkeletonCount() {
-  return posterSkeletonGeometry().count
-}
-
-function renderPosterSkeletons(target, count) {
-  if (!target) return
-  const geom = posterSkeletonGeometry()
-  const total = Number.isFinite(count) && count > 0 ? count : geom.count
-  const cols = geom.cols || 4
-  const frag = document.createDocumentFragment()
-  for (let i = 0; i < total; i++) {
-    const col = i % cols
-    const row = Math.floor(i / cols)
-    const waveDelay = ((col * 90) + (row * 140)) % 1600
-    const enterDelay = Math.min(i, 8) * 28
-
-    const card = document.createElement("div")
-    card.dataset.skeleton = "true"
-    card.className =
-      "rounded-xl overflow-hidden ring-1 ring-line bg-surface-2"
-    card.style.setProperty("--skel-delay", `${waveDelay}ms`)
-    card.style.setProperty("--skel-enter-delay", `${enterDelay}ms`)
-    card.innerHTML =
-      `<div class="aspect-2/3 w-full skel" style="--skel-delay:${waveDelay}ms;"></div>
-       <div class="px-2 py-2 flex flex-col gap-1.5">
-         <div class="h-3 rounded skel" style="width:${60 + ((i * 7) % 35)}%; --skel-delay:${waveDelay + 80}ms;"></div>
-         <div class="h-2.5 rounded skel" style="width:${30 + ((i * 5) % 30)}%; --skel-delay:${waveDelay + 160}ms;"></div>
-       </div>`
-    frag.appendChild(card)
-  }
-  target.replaceChildren(frag)
 }
 
 function teardownInfiniteObs() {
@@ -730,9 +612,7 @@ function updateGridStarFor(seriesId) {
   if (!card) return
   const group = filtered[idx]
   const s = group.displayEntry
-  const fav = activePlaylistId
-    ? group.globalEntryIds.some((id) => isFavorite(activePlaylistId, "series", id))
-    : false
+  const fav = groupHasFavorite(activePlaylistId, "series", group)
   const star = /** @type {HTMLButtonElement|null} */ (
     card.querySelector(".star-btn")
   )
@@ -758,9 +638,7 @@ function updateGridWatchBadgeFor(seriesId) {
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
   const group = filtered[idx]
-  const onWatchlist = activePlaylistId
-    ? group.globalEntryIds.some((id) => isOnWatchlist(activePlaylistId, "series", id))
-    : false
+  const onWatchlist = groupHasWatchlist(activePlaylistId, "series", group)
   const badge = /** @type {HTMLElement|null} */ (
     card.querySelector('[data-role="watch-badge"]')
   )
@@ -771,197 +649,39 @@ function updateGridWatchBadgeFor(seriesId) {
 // ----------------------------
 // Grid state restore (back-navigation from a detail page)
 // ----------------------------
-/** @type {import("@/scripts/lib/grid-state.ts").GridState | null} */
-let pendingGridState = null
-let gridRestoreAttempted = false
-
-function isRestoreNavigation() {
-  try {
-    const navigationType = performance.getEntriesByType("navigation")[0]?.type
-    return navigationType === "back_forward" || navigationType === "reload"
-  } catch {
-    return false
-  }
-}
-
-function attemptGridRestore() {
-  if (gridRestoreAttempted) return
-  gridRestoreAttempted = true
-  if (!isRestoreNavigation()) return
-  const candidate = takeGridState("series", activePlaylistId)
-  if (!candidate || !gridStateMatchesLocation(candidate, location.search)) return
-  pendingGridState = candidate
-  if (searchEl) searchEl.value = candidate.search
-}
-
-function extendRenderedCountTo(target) {
-  const cappedTarget = Math.min(target, filtered.length)
-  while (renderedCount < cappedTarget) {
-    const before = renderedCount
-    appendNextPage()
-    if (renderedCount === before) break
-  }
-}
-
-function captureScrollY() {
-  const windowY = typeof window !== "undefined" ? window.scrollY || 0 : 0
-  const gridY = gridEl ? gridEl.scrollTop || 0 : 0
-  return Math.max(windowY, gridY)
-}
-
-// The grid section owns its own overflow-auto scroll; restore both it and
-// the window in case a layout has the page itself scrolling instead.
-function restoreScrollY(scrollY) {
-  window.scrollTo(0, scrollY)
-  if (gridEl) gridEl.scrollTop = scrollY
-}
-
-function scheduleScrollRestore(scrollY) {
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      restoreScrollY(scrollY)
-    })
-  })
-}
-
-// Runs once the grid has actually rendered the settled (filtered) result,
-// so the extra pages append before the browser paints - no page-1-then-jump flash.
-function consumePendingGridRestore() {
-  if (!pendingGridState) return
-  const state = pendingGridState
-  pendingGridState = null
-  extendRenderedCountTo(state.renderedCount)
-  scheduleScrollRestore(state.scrollY)
-}
-
-function currentGridStateSnapshot() {
-  const personParams = readPersonFilterParams()
-  return {
-    search: searchEl?.value || "",
-    renderedCount,
-    scrollY: captureScrollY(),
-    personSignature: personParams ? { person: personParams.name, personId: personParams.tmdbId } : null,
-  }
-}
-
-function isDefaultGridState(state) {
-  return !state.search && state.renderedCount <= PAGE_SIZE && state.scrollY < 100
-}
-
-window.addEventListener("pagehide", () => {
-  if (!activePlaylistId) return
-  const state = currentGridStateSnapshot()
-  if (isDefaultGridState(state)) return
-  saveGridState("series", activePlaylistId, state)
+const gridRestore = createGridRestoreController({
+  routeKind: "series",
+  pageSize: PAGE_SIZE,
+  getActivePlaylistId: () => activePlaylistId,
+  getGridEl: () => gridEl,
+  getSearchEl: () => searchEl,
+  getFilteredLength: () => filtered.length,
+  getRenderedCount: () => renderedCount,
+  appendNextPage: () => appendNextPage(),
+  getPersonSignature: () => personFilterGridSignature(location.search),
 })
 
 // ----------------------------
 // Person filter (cast/crew chip from a detail page)
 // ----------------------------
-let personFilterActive = false
-let personFilterName = ""
-let personFilterTmdbId = null
-/** @type {Set<number>|null} null while inactive or unresolved; a resolved miss is an empty Set. */
-let personTitleIds = null
-let personFilterInFlight = false
-let personFilterToken = 0
-
-function readPersonFilterParams() {
-  const params = new URLSearchParams(location.search)
-  const name = params.get("person")
-  if (!name) return null
-  const tmdbId = Number(params.get("personId"))
-  return { name, tmdbId: Number.isFinite(tmdbId) && tmdbId > 0 ? tmdbId : null }
-}
-
-function stripPersonFilterFromUrl() {
-  const params = new URLSearchParams(location.search)
-  params.delete("person")
-  params.delete("personId")
-  const next = params.toString()
-  history.replaceState(null, "", location.pathname + (next ? `?${next}` : ""))
-}
-
-const personFilterRow = document.getElementById("series-person-filter-row")
-const personFilterLabel = document.getElementById("series-person-filter-label")
-
-function renderPersonFilterRow() {
-  if (!personFilterRow || !personFilterLabel) return
-  if (!personFilterActive) {
-    personFilterRow.setAttribute("hidden", "")
-    return
-  }
-  personFilterLabel.textContent = t("list.personFilter", { name: personFilterName })
-  personFilterRow.removeAttribute("hidden")
-}
-
-function deactivatePersonFilter() {
-  personFilterActive = false
-  personFilterName = ""
-  personFilterTmdbId = null
-  personTitleIds = null
-  stripPersonFilterFromUrl()
-  renderPersonFilterRow()
-}
-
-function clearPersonFilter() {
-  if (!personFilterActive) return
-  personFilterToken++
-  deactivatePersonFilter()
-  applyFilter()
-}
-
-document.getElementById("series-person-filter-clear")?.addEventListener("click", clearPersonFilter)
-
-// Resolved once per activation; a later paint (SWR revalidation, cache hit) is a no-op once settled.
-// While unresolved, applyFilter defers rendering entirely so the grid never flashes unfiltered.
-function ensurePersonFilterResolved() {
-  if (!personFilterActive || personTitleIds !== null || personFilterInFlight) return
-  personFilterInFlight = true
-  const token = ++personFilterToken
-  let resolutionFailed = false
-  resolvePersonTitleIds({
-    kind: "series",
-    playlistId: activePlaylistId,
-    personName: personFilterName,
-    tmdbPersonId: personFilterTmdbId,
-    catalogEntries: all,
-  })
-    .then((ids) => {
-      if (token === personFilterToken) personTitleIds = ids
-    })
-    .catch((err) => {
-      log.warn("[xt:series] person filter resolution failed:", err)
-      resolutionFailed = true
-    })
-    .finally(() => {
-      personFilterInFlight = false
-      if (token !== personFilterToken) return
-      // Both sources failed outright: degrade silently to the unfiltered grid rather
-      // than getting stuck. A legitimate zero-match resolution keeps the pill + empty state.
-      if (resolutionFailed) deactivatePersonFilter()
-      applyFilter()
-    })
-}
-
-const initialPersonFilter = readPersonFilterParams()
-if (initialPersonFilter) {
-  personFilterActive = true
-  personFilterName = initialPersonFilter.name
-  personFilterTmdbId = initialPersonFilter.tmdbId
-}
+const personFilter = createPersonFilterController({
+  contentKind: "series",
+  rowId: "series-person-filter-row",
+  labelId: "series-person-filter-label",
+  clearButtonId: "series-person-filter-clear",
+  logTag: "xt:series",
+  getActivePlaylistId: () => activePlaylistId,
+  getCatalogEntries: () => all,
+  applyFilter: () => applyFilter(),
+})
 
 // ----------------------------
 // Search + filter
 // ----------------------------
 function applyFilter() {
   if (!listStatus) return
-  // An active-but-unresolved person filter must never paint the unfiltered grid: kick off
-  // resolution (idempotent) and bail. ensurePersonFilterResolved calls applyFilter once settled.
-  if (personFilterActive && personTitleIds === null) {
-    ensurePersonFilterResolved()
-    return
-  }
+  // An active-but-unresolved person filter must never paint the unfiltered grid.
+  if (personFilter.guardUnresolved()) return
   const qnorm = normalize(searchEl?.value || "")
   const tokens = qnorm.length ? qnorm.split(" ") : []
 
@@ -985,7 +705,8 @@ function applyFilter() {
     })
   }
 
-  if (personFilterActive && personTitleIds) {
+  const personTitleIds = personFilter.getTitleIds()
+  if (personFilter.isActive() && personTitleIds) {
     out = out.filter((series) => personTitleIds.has(series.id))
   }
 
@@ -1091,7 +812,7 @@ function applyFilter() {
           ? t("list.heroRecents")
           : (activeCat as string) || t("list.allCategories")
   }
-  renderGrid(consumePendingGridRestore)
+  renderGrid(gridRestore.consumePending)
 }
 
 const sortEl = /** @type {HTMLSelectElement|null} */ (
@@ -1287,7 +1008,7 @@ async function loadSeries() {
   }
   activePlaylistId = active._id
   activePlaylistTitle = active.title || ""
-  attemptGridRestore()
+  gridRestore.attemptRestore()
   await ensurePrefsLoaded()
   syncSortControl()
   syncHideWatchedControl()
@@ -1348,8 +1069,8 @@ if (listStatus && /no playlist selected/i.test(listStatus.textContent || "")) {
 }
 
 document.addEventListener("xt:active-changed", () => {
-  if (personFilterActive) clearPersonFilter()
-  pendingGridState = null
+  if (personFilter.isActive()) personFilter.clear()
+  gridRestore.reset()
   loadSeries()
 })
 
@@ -1373,7 +1094,7 @@ document.addEventListener("xt:catalog-warming-start", () => {
 
 ;(async () => {
   await initI18n()
-  renderPersonFilterRow()
+  personFilter.render()
   creds = await loadCreds()
   if (creds.host && creds.user && creds.pass) {
     loadSeries()

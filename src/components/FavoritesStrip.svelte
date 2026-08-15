@@ -88,15 +88,15 @@
           getCached(playlistId, "live")?.data ||
           getCached(playlistId, "m3u")?.data ||
           []
-        ).map((c) => [Number(c.id), c])
+        ).map((channel) => [Number(channel.id), channel])
       ),
       vod: new Map(
-        (getCached(playlistId, "vod")?.data || []).map((m) => [Number(m.id), m])
+        (getCached(playlistId, "vod")?.data || []).map((movie) => [Number(movie.id), movie])
       ),
       series: new Map(
-        (getCached(playlistId, "series")?.data || []).map((s) => [
-          Number(s.id),
-          s,
+        (getCached(playlistId, "series")?.data || []).map((series) => [
+          Number(series.id),
+          series,
         ])
       ),
     }
@@ -146,12 +146,12 @@
       "xt:favorites-order-changed": reload,
       [LOCALE_EVENT]: onLocaleChange,
     }
-    for (const [k, v] of Object.entries(handlers)) {
-      document.addEventListener(k, v)
+    for (const [eventName, handler] of Object.entries(handlers)) {
+      document.addEventListener(eventName, handler)
     }
     return () => {
-      for (const [k, v] of Object.entries(handlers)) {
-        document.removeEventListener(k, v)
+      for (const [eventName, handler] of Object.entries(handlers)) {
+        document.removeEventListener(eventName, handler)
       }
     }
   })
@@ -179,16 +179,16 @@
       use:dragScroll
       class="fav-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
              snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
-      {#each entries as e, i (e.kind + ":" + e.id)}
-        <li class="fav-item shrink-0 snap-start" data-kind={e.kind} style:--enter-delay={Math.min(i, 8) * 28 + "ms"}>
+      {#each entries as entry, idx (entry.kind + ":" + entry.id)}
+        <li class="fav-item shrink-0 snap-start" data-kind={entry.kind} style:--enter-delay={Math.min(idx, 8) * 28 + "ms"}>
           <a
-            href={e.href}
-            aria-label={tr("favorites.itemAriaLabel", { name: e.name })}
+            href={entry.href}
+            aria-label={tr("favorites.itemAriaLabel", { name: entry.name })}
             use:hubCardMenu={{
-              kind: e.kind,
-              id: e.id,
-              name: e.name,
-              logo: e.logo,
+              kind: entry.kind,
+              id: entry.id,
+              name: entry.name,
+              logo: entry.logo,
               playlistId: activePlaylistId,
             }}
             class="fav-card group relative block rounded-xl overflow-hidden
@@ -199,10 +199,10 @@
                    hover:transform-[translateY(-2px)]
                    focus-visible:transform-[translateY(-2px)]">
             <div class="fav-thumb w-full aspect-2-3 overflow-hidden bg-surface-2 relative">
-              {#if e.logo}
-                {#if e.kind === "live"}
+              {#if entry.logo}
+                {#if entry.kind === "live"}
                   <img
-                    use:cachedImg={{ url: e.logo, kind: "logo" }}
+                    use:cachedImg={{ url: entry.logo, kind: "logo" }}
                     alt=""
                     aria-hidden="true"
                     loading="lazy" fetchpriority="low"
@@ -212,7 +212,7 @@
                     class="absolute inset-0 h-full w-full object-cover scale-110 saturate-150 brightness-75 opacity-60 blur-2xl pointer-events-none" />
                   <div class="absolute inset-0 flex items-center justify-center p-3">
                     <img
-                      use:cachedImg={{ url: e.logo, kind: "logo" }}
+                      use:cachedImg={{ url: entry.logo, kind: "logo" }}
                       alt=""
                       loading="lazy" fetchpriority="low"
                       decoding="async"
@@ -222,7 +222,7 @@
                   </div>
                 {:else}
                   <img
-                    use:cachedImg={{ url: e.logo, kind: "poster" }}
+                    use:cachedImg={{ url: entry.logo, kind: "poster" }}
                     alt=""
                     loading="lazy" fetchpriority="low"
                     decoding="async"
@@ -234,21 +234,21 @@
                 <div
                   class="h-full w-full flex flex-col items-center justify-center gap-2 px-3
                          text-fg-3 bg-linear-to-br from-surface-2 to-surface-3">
-                  <span class="size-7 opacity-60 inline-flex items-center justify-center" aria-hidden="true">{@html KIND_ICON_SVG[e.kind]}</span>
-                  <span class="text-2xs text-center truncate max-w-full">{e.name}</span>
+                  <span class="size-7 opacity-60 inline-flex items-center justify-center" aria-hidden="true">{@html KIND_ICON_SVG[entry.kind]}</span>
+                  <span class="text-2xs text-center truncate max-w-full">{entry.name}</span>
                 </div>
               {/if}
 
               <span
                 class="absolute top-1.5 left-1.5 text-label font-medium uppercase tracking-wide
                        rounded-md px-1.5 py-0.5 bg-black/55 text-white/85 backdrop-blur-sm ring-1 ring-white/10">
-                {kl(e.kind)}
+                {kl(entry.kind)}
               </span>
             </div>
 
             <div class="px-2 py-2 min-w-0">
               <div class="truncate text-sm font-medium text-fg">
-                {e.name}
+                {entry.name}
               </div>
             </div>
           </a>

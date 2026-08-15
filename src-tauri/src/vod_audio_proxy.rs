@@ -21,7 +21,7 @@ use tokio::process::{Child, Command as TokioCommand};
 use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::external_player;
-use crate::http_range::{range_request_start, ranged_response_matches_request};
+use crate::http_range::{range_request_start, ranged_response_is_corrupted};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -38,8 +38,9 @@ const CLIENT_RECONNECT_GRACE: Duration = Duration::from_secs(120);
 // Backstop for a client that stays connected but stops reading; generous enough to survive a long pause.
 const CLIENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
-// A fresh -reconnect attempt gets this long to deliver a byte before the cut is final.
-const UPSTREAM_EOF_GRACE: Duration = Duration::from_secs(5);
+// A fresh -reconnect attempt gets this long to deliver a byte before the cut is final;
+// comfortably above -reconnect_delay_max so a healing reconnect doesn't lose the race.
+const UPSTREAM_EOF_GRACE: Duration = Duration::from_secs(15);
 
 // --- State ---
 
@@ -865,8 +866,8 @@ async fn handle_forward(
 
     let status = upstream_response.status();
     if let Some(requested_start) = requested_range_start {
-        if !ranged_response_matches_request(status, upstream_response.headers(), requested_start) {
-            log::warn!("[vod-audio-proxy] upstream did not honor the requested range starting at {requested_start}");
+        if ranged_response_is_corrupted(status, upstream_response.headers(), requested_start) {
+            log::warn!("[vod-audio-proxy] upstream sent a 206 starting at the wrong byte for range {requested_start}");
             return cors_response(StatusCode::BAD_GATEWAY, "upstream range response mismatch");
         }
     }
@@ -1173,7 +1174,8 @@ async fn wait_for_stdout_stall(session: &Arc<VodAudioSession>) {
     }
 }
 
-// Not gated on blocked_on_send: a truncated body is unambiguous, unlike a stdout stall.
+// A session still draining ffmpeg's own output to the client is not stuck: child.wait()
+// wins that race once ffmpeg finishes, so this only fires once output has also gone quiet.
 async fn wait_for_upstream_eof_expiry(session: &Arc<VodAudioSession>) -> String {
     loop {
         tokio::time::sleep(STALL_CHECK_INTERVAL).await;
@@ -1190,9 +1192,21 @@ async fn wait_for_upstream_eof_expiry(session: &Arc<VodAudioSession>) -> String 
                 }
             })
         };
-        if let Some(detail) = expired_detail {
-            return detail;
+        let Some(detail) = expired_detail else {
+            continue;
+        };
+        if session.blocked_on_send.load(Ordering::SeqCst) {
+            continue;
         }
+        let idle_for = session
+            .last_activity
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .elapsed();
+        if idle_for < UPSTREAM_EOF_GRACE {
+            continue;
+        }
+        return detail;
     }
 }
 
@@ -2187,6 +2201,14 @@ mod tests {
                 detail: "OTHER:upstream stream ended prematurely at 400/1000 bytes".to_string(),
             });
         }
+        {
+            // No recent stdout activity either: ffmpeg is genuinely stuck, not draining.
+            let mut guard = session
+                .last_activity
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            *guard = Instant::now() - UPSTREAM_EOF_GRACE - Duration::from_millis(1);
+        }
 
         let detail = tokio::time::timeout(
             Duration::from_millis(1500),
@@ -2196,5 +2218,31 @@ mod tests {
         .expect("an unhealed premature-EOF record past grace must resolve");
 
         assert_eq!(detail, "OTHER:upstream stream ended prematurely at 400/1000 bytes");
+    }
+
+    #[tokio::test]
+    async fn premature_upstream_eof_does_not_fire_while_ffmpeg_output_is_still_draining() {
+        let session = test_vod_audio_session();
+        {
+            let mut guard = session
+                .upstream_eof
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            *guard = Some(UpstreamEofRecord {
+                at: Instant::now() - UPSTREAM_EOF_GRACE - Duration::from_millis(1),
+                detail: "OTHER:upstream stream ended prematurely at 400/1000 bytes".to_string(),
+            });
+        }
+        // last_activity stays fresh (default = session creation time): ffmpeg is still
+        // producing output, so the expiry must not fire even though the record is old.
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(300),
+            wait_for_upstream_eof_expiry(&session),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "a still-draining session must not be torn down by the upstream-EOF expiry"
+        );
     }
 }

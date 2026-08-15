@@ -236,7 +236,7 @@
            lg:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]
            auto-rows-min content-start
            p-2 pb-4">
-    {#each visible as entry, i (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
+    {#each visible as entry, idx (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
       <a
         href={entry.href}
         onclick={(event) => openCard(event, entry)}

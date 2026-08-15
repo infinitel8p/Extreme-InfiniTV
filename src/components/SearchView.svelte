@@ -46,11 +46,11 @@
   let query = $state(initialFromUrl)
   let queryDebounced = $state(initialFromUrl)
   let _queryTimer = null
-  function setQueryDebounced(v) {
+  function setQueryDebounced(value) {
     if (_queryTimer) clearTimeout(_queryTimer)
     _queryTimer = setTimeout(() => {
-      queryDebounced = v
-      syncUrl(v)
+      queryDebounced = value
+      syncUrl(value)
     }, 80)
   }
   let activeIndex = $state(0)
@@ -148,39 +148,39 @@
     }
 
     const items = []
-    for (const c of liveData) {
+    for (const channel of liveData) {
       items.push({
         kind: "live",
-        id: Number(c.id),
-        name: c.name || "",
-        logo: c.logo || null,
-        subtitle: `${fmtChannelIdentity(c.chno, c.id)} · ${c.category || "Live"}`,
-        href: buildHref("live", c.id),
-        norm: c.norm || normalize(`${c.name || ""} ${c.category || ""}`),
+        id: Number(channel.id),
+        name: channel.name || "",
+        logo: channel.logo || null,
+        subtitle: `${fmtChannelIdentity(channel.chno, channel.id)} · ${channel.category || "Live"}`,
+        href: buildHref("live", channel.id),
+        norm: channel.norm || normalize(`${channel.name || ""} ${channel.category || ""}`),
       })
     }
-    for (const m of vodData) {
+    for (const movie of vodData) {
       items.push({
         kind: "vod",
-        id: Number(m.id),
-        name: m.name || "",
-        logo: m.logo || null,
-        subtitle: m.year ? `Movie · ${m.year}` : "Movie",
-        href: buildHref("vod", m.id),
-        norm: m.norm || normalize(`${m.name || ""} ${m.category || ""}`),
+        id: Number(movie.id),
+        name: movie.name || "",
+        logo: movie.logo || null,
+        subtitle: movie.year ? `Movie · ${movie.year}` : "Movie",
+        href: buildHref("vod", movie.id),
+        norm: movie.norm || normalize(`${movie.name || ""} ${movie.category || ""}`),
       })
     }
-    for (const s of seriesData) {
+    for (const series of seriesData) {
       items.push({
         kind: "series",
-        id: Number(s.id),
-        name: s.name || "",
-        logo: s.logo || null,
-        year: s.year || "",
-        genre: s.category || "",
-        subtitle: s.year ? `Series · ${s.year}` : "Series",
-        href: buildHref("series", s.id),
-        norm: s.norm || normalize(`${s.name || ""} ${s.category || ""}`),
+        id: Number(series.id),
+        name: series.name || "",
+        logo: series.logo || null,
+        year: series.year || "",
+        genre: series.category || "",
+        subtitle: series.year ? `Series · ${series.year}` : "Series",
+        href: buildHref("series", series.id),
+        norm: series.norm || normalize(`${series.name || ""} ${series.category || ""}`),
       })
     }
 
@@ -228,10 +228,10 @@
     allItems = items
   }
 
-  function syncUrl(q) {
+  function syncUrl(queryValue) {
     try {
       const url = new URL(window.location.href)
-      if (q) url.searchParams.set("q", q)
+      if (queryValue) url.searchParams.set("q", queryValue)
       else url.searchParams.delete("q")
       window.history.replaceState({}, "", url.toString())
     } catch {}
@@ -239,9 +239,9 @@
 
   let scoredAll = $derived.by(() => {
     const counts = { all: 0, live: 0, vod: 0, series: 0, epg: 0 }
-    const q = normalize(queryDebounced.trim())
-    if (!q) return { items: [], counts }
-    const tokens = q.split(" ").filter(Boolean)
+    const normalizedQuery = normalize(queryDebounced.trim())
+    if (!normalizedQuery) return { items: [], counts }
+    const tokens = normalizedQuery.split(" ").filter(Boolean)
     if (!tokens.length) return { items: [], counts }
     const items = allItems
     const itemsLen = items.length
@@ -253,14 +253,14 @@
       const norm = item.norm
       let score = 0
       let allMatch = true
-      for (let t = 0; t < tokensLen; t++) {
-        const tok = tokens[t]
-        const idx = norm.indexOf(tok)
-        if (idx === -1) {
+      for (let tokenIndex = 0; tokenIndex < tokensLen; tokenIndex++) {
+        const tok = tokens[tokenIndex]
+        const matchIndex = norm.indexOf(tok)
+        if (matchIndex === -1) {
           allMatch = false
           break
         }
-        score += 100 - (idx > 99 ? 99 : idx) + (norm.startsWith(tok) ? 25 : 0)
+        score += 100 - (matchIndex > 99 ? 99 : matchIndex) + (norm.startsWith(tok) ? 25 : 0)
       }
       if (allMatch) {
         counts.all++
@@ -268,18 +268,18 @@
         if (matched.length < HARD_CAP) matched.push({ item, score })
       }
     }
-    matched.sort((a, b) => b.score - a.score)
+    matched.sort((left, right) => right.score - left.score)
     return { items: matched, counts }
   })
 
   let results = $derived.by(() => {
     const items = scoredAll.items
-    const k = kindFilter
+    const activeKind = kindFilter
     const out = []
     const MAX = 200
     for (let i = 0; i < items.length && out.length < MAX; i++) {
       const it = items[i].item
-      if (k !== "all" && it.kind !== k) continue
+      if (activeKind !== "all" && it.kind !== activeKind) continue
       out.push(it)
     }
     return out
@@ -409,9 +409,9 @@
         bind:this={inputEl}
         value={query}
         oninput={(ev) => {
-          const v = ev.currentTarget.value
-          query = v
-          setQueryDebounced(v)
+          const value = ev.currentTarget.value
+          query = value
+          setQueryDebounced(value)
         }}
         type="search"
         placeholder={tr("search.placeholderFull")}
@@ -436,29 +436,29 @@
     </div>
 
     <div class="flex items-center gap-1 overflow-x-auto custom-scroll -mx-1 px-1">
-      {#each /** @type {const} */ (["all", "live", "vod", "series", "epg"]) as k}
+      {#each /** @type {const} */ (["all", "live", "vod", "series", "epg"]) as kindOption}
         <button
           type="button"
-          onclick={() => (kindFilter = k)}
-          aria-pressed={kindFilter === k}
+          onclick={() => (kindFilter = kindOption)}
+          aria-pressed={kindFilter === kindOption}
           class="filter-chip rounded-lg px-3 py-1.5 text-sm whitespace-nowrap transition-colors outline-none border"
-          class:bg-accent-soft={kindFilter === k}
-          class:text-accent={kindFilter === k}
-          class:border-accent={kindFilter === k}
-          class:text-fg-2={kindFilter !== k}
-          class:border-line={kindFilter !== k}
-          class:hover:bg-surface-2={kindFilter !== k}>
-          {k === "all"
+          class:bg-accent-soft={kindFilter === kindOption}
+          class:text-accent={kindFilter === kindOption}
+          class:border-accent={kindFilter === kindOption}
+          class:text-fg-2={kindFilter !== kindOption}
+          class:border-line={kindFilter !== kindOption}
+          class:hover:bg-surface-2={kindFilter !== kindOption}>
+          {kindOption === "all"
             ? tr("common.all")
-            : k === "vod"
+            : kindOption === "vod"
             ? tr("nav.movies")
-            : k === "live"
+            : kindOption === "live"
             ? tr("nav.livetv")
-            : k === "epg"
+            : kindOption === "epg"
             ? tr("nav.epg")
             : tr("nav.series")}
           {#if queryDebounced.trim()}
-            <span class="ml-1.5 text-2xs tabular-nums opacity-70">{kindCounts[k]}</span>
+            <span class="ml-1.5 text-2xs tabular-nums opacity-70">{kindCounts[kindOption]}</span>
           {/if}
         </button>
       {/each}
@@ -538,38 +538,38 @@
       </div>
     {:else}
       <ul class="flex flex-col gap-1 pb-4">
-        {#each results as r, i (r.kind + ":" + r.id)}
-          <li class="result-row" style:--enter-delay={Math.min(i, 12) * 18 + "ms"}>
+        {#each results as result, idx (result.kind + ":" + result.id)}
+          <li class="result-row" style:--enter-delay={Math.min(idx, 12) * 18 + "ms"}>
             <a
-              href={r.href}
-              use:lazySeasons={r}
-              onmouseenter={() => (activeIndex = i)}
-              onfocus={() => (activeIndex = i)}
+              href={result.href}
+              use:lazySeasons={result}
+              onmouseenter={() => (activeIndex = idx)}
+              onfocus={() => (activeIndex = idx)}
               onclick={commitSearch}
               class="w-full text-left rounded-lg px-2.5 py-2 flex items-center gap-3 outline-none transition-colors focus-visible:bg-surface-2"
-              class:bg-surface-2={activeIndex === i}>
+              class:bg-surface-2={activeIndex === idx}>
               <span class="size-12 shrink-0 rounded-md bg-surface-2 ring-1 ring-line overflow-hidden flex items-center justify-center">
-                {#if r.logo}
+                {#if result.logo}
                   <img
-                    use:cachedImg={{ url: r.logo, kind: r.kind === "live" ? "logo" : "poster" }}
+                    use:cachedImg={{ url: result.logo, kind: result.kind === "live" ? "logo" : "poster" }}
                     alt=""
                     loading="lazy" fetchpriority="low"
                     decoding="async"
                     referrerpolicy="no-referrer"
                     width="48" height="48"
                     class="h-full w-full"
-                    class:object-cover={r.kind !== "live"}
-                    class:object-contain={r.kind === "live"} />
+                    class:object-cover={result.kind !== "live"}
+                    class:object-contain={result.kind === "live"} />
                 {:else}
-                  <span class="text-2xs text-fg-3 uppercase">{kl(r.kind)[0]}</span>
+                  <span class="text-2xs text-fg-3 uppercase">{kl(result.kind)[0]}</span>
                 {/if}
               </span>
               <span class="flex-1 min-w-0">
-                <span class="block truncate text-sm text-fg">{r.name}</span>
-                <span class="block truncate text-2xs text-fg-3">{displaySubtitle(r)}</span>
+                <span class="block truncate text-sm text-fg">{result.name}</span>
+                <span class="block truncate text-2xs text-fg-3">{displaySubtitle(result)}</span>
               </span>
               <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
-                {kl(r.kind)}
+                {kl(result.kind)}
               </span>
             </a>
           </li>

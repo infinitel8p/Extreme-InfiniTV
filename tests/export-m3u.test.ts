@@ -96,6 +96,28 @@ describe("buildM3UEntriesForEntry: m3u entries", () => {
   })
 })
 
+describe("buildM3UEntriesForEntry: tvgShift", () => {
+  it("carries the channel's tvgShift through to the exported entry", async () => {
+    entryToCredsMock.mockReturnValue({ host: "http://example.com/list.m3u8", port: "", user: "", pass: "", liveContainer: "m3u8" })
+    ensureLiveMock.mockResolvedValue([
+      { id: 1, name: "Chan", url: "http://host/chan.m3u8", tvgShift: -1 },
+    ])
+
+    const result = await buildM3UEntriesForEntry({ _id: "e5", type: "m3u" })
+
+    expect(result.entries[0].tvgShift).toBe(-1)
+  })
+
+  it("defaults tvgShift to null when the channel doesn't carry one", async () => {
+    entryToCredsMock.mockReturnValue({ host: "http://example.com/list.m3u8", port: "", user: "", pass: "", liveContainer: "m3u8" })
+    ensureLiveMock.mockResolvedValue([{ id: 1, name: "Chan", url: "http://host/chan.m3u8" }])
+
+    const result = await buildM3UEntriesForEntry({ _id: "e6", type: "m3u" })
+
+    expect(result.entries[0].tvgShift).toBeNull()
+  })
+})
+
 describe("buildM3UEntriesForEntry: dropped channels", () => {
   it("drops unresolved channels and counts them as skipped", async () => {
     entryToCredsMock.mockReturnValue({ host: "http://example.com/list.m3u8", port: "", user: "", pass: "", liveContainer: "m3u8" })

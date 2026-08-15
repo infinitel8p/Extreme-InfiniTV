@@ -43,13 +43,16 @@ function stringifyArgs(args: unknown[]): string {
         .join(" ")
 }
 
-// Redact string/Error/object args (objects round-trip through JSON) before they hit the console, so DevTools output matches the redacted file mirror.
+// Redact string/Error/object args before they hit the console, so DevTools output matches the redacted file mirror.
+// Objects only round-trip through JSON when something actually needed redacting, so untouched values (Dates, etc.) keep their original type.
 export function redactArg(arg: unknown): unknown {
     if (typeof arg === "string") return redactUrl(arg)
     if (arg instanceof Error) return redactUrl(arg.stack || arg.message)
     if (arg !== null && typeof arg === "object") {
         try {
-            return JSON.parse(redactUrl(JSON.stringify(arg)))
+            const serialized = JSON.stringify(arg)
+            const redacted = redactUrl(serialized)
+            return redacted === serialized ? arg : JSON.parse(redacted)
         } catch {
             return redactUrl(String(arg))
         }

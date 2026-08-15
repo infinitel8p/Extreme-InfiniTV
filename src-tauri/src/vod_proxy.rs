@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
-use crate::http_range::{range_request_start, ranged_response_matches_request};
+use crate::http_range::{range_request_start, ranged_response_is_corrupted};
 use crate::matroska::{self, ClusterScanner, HeadInfo, ScannedCue, SubtitleCodec};
 
 const TRACKS_EVENT: &str = "xt:vodproxy-tracks";
@@ -462,8 +462,8 @@ async fn handle_stream(
 
     let status = upstream_response.status();
     if let Some(requested_start) = requested_range_start {
-        if !ranged_response_matches_request(status, upstream_response.headers(), requested_start) {
-            log::warn!("[vod-proxy] upstream did not honor the requested range starting at {requested_start}");
+        if ranged_response_is_corrupted(status, upstream_response.headers(), requested_start) {
+            log::warn!("[vod-proxy] upstream sent a 206 starting at the wrong byte for range {requested_start}");
             return (StatusCode::BAD_GATEWAY, "upstream range response mismatch").into_response();
         }
     }

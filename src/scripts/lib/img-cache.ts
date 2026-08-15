@@ -151,11 +151,11 @@ function memoGet(cacheKey: string): string | undefined {
   return objectUrl
 }
 
-// Insert, then evict and revoke least-recently-used entries past the cap.
-function memoSet(cacheKey: string, objectUrl: string): void {
-  const existing = objectUrlMemo.get(cacheKey)
-  if (existing) URL.revokeObjectURL(existing)
-  objectUrlMemo.delete(cacheKey)
+// An existing memo wins so an in-flight sibling <img> load is never revoked.
+function memoAdopt(cacheKey: string, blob: Blob): string {
+  const existing = memoGet(cacheKey)
+  if (existing) return existing
+  const objectUrl = URL.createObjectURL(blob)
   objectUrlMemo.set(cacheKey, objectUrl)
   while (objectUrlMemo.size > MAX_MEMO_ENTRIES) {
     const oldestKey = objectUrlMemo.keys().next().value
@@ -164,6 +164,7 @@ function memoSet(cacheKey: string, objectUrl: string): void {
     objectUrlMemo.delete(oldestKey)
     if (oldestUrl) URL.revokeObjectURL(oldestUrl)
   }
+  return objectUrl
 }
 
 const MAX_CONCURRENT = 6
@@ -270,7 +271,7 @@ async function backgroundFill(cacheKey: string, url: string, kind: ImgKind): Pro
     const originalBlob = await response.blob()
     const storedBlob = await downscaleBlob(originalBlob, kind)
     await idbPut(cacheKey, { blob: storedBlob, cachedAt: Date.now() })
-    memoSet(cacheKey, URL.createObjectURL(storedBlob))
+    memoAdopt(cacheKey, storedBlob)
   } catch (err) {
     log.warn("[xt:img-cache] background fill failed:", err)
     failedUrls.add(url)
@@ -310,9 +311,7 @@ async function handleVisible(img: HTMLImageElement, url: string, kind: ImgKind):
   }
   const cached = await idbGet(cacheKey)
   if (cached?.blob) {
-    const objectUrl = URL.createObjectURL(cached.blob)
-    memoSet(cacheKey, objectUrl)
-    img.src = objectUrl
+    img.src = memoAdopt(cacheKey, cached.blob)
     return
   }
   img.src = url

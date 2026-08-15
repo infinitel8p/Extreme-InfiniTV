@@ -141,11 +141,11 @@
       use:dragScroll
       class="ra-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
              snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
-      {#each entries as entry, i (entry.kind + ":" + entry.id)}
+      {#each entries as entry, idx (entry.kind + ":" + entry.id)}
         <li
           class="ra-item shrink-0 snap-start"
           data-kind={entry.kind}
-          style:--enter-delay={Math.min(i, 8) * 28 + "ms"}>
+          style:--enter-delay={Math.min(idx, 8) * 28 + "ms"}>
           <a
             href={entry.href}
             aria-label={`Open ${entry.name}`}

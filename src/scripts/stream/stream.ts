@@ -635,6 +635,7 @@ function renderVirtual() {
           logo.setAttribute("data-loaded", "true")
           requestLogoFallback(logo, ch)
         }, 8000)
+        ;(img as HTMLImageElement & { logoFallbackTimer?: ReturnType<typeof setTimeout> }).logoFallbackTimer = slowLogoTimer
         img.onload = () => {
           clearTimeout(slowLogoTimer)
           logo.setAttribute("data-loaded", "true")
@@ -716,6 +717,12 @@ function renderVirtual() {
     frag.appendChild(row)
   }
 
+  // Rows are fully rebuilt each render; cancel outgoing rows' pending logo-fallback timers before they're discarded.
+  for (const staleImg of viewport.querySelectorAll("img")) {
+    const timer = (staleImg as HTMLImageElement & { logoFallbackTimer?: ReturnType<typeof setTimeout> })
+      .logoFallbackTimer
+    if (timer) clearTimeout(timer)
+  }
   viewport.replaceChildren(frag)
   viewport.style.transform = `translateY(${startIdx * ROW_H}px)`
 

@@ -126,7 +126,7 @@
         built: buildLiveEntry(row, liveById),
       }))
 
-    const merged = [...progress, ...recents].sort((a, b) => b.ts - a.ts)
+    const merged = [...progress, ...recents].sort((left, right) => right.ts - left.ts)
     entries = merged.slice(0, STRIP_LIMIT).map((row) => row.built)
   }
 
@@ -178,11 +178,11 @@
       use:dragScroll
       class="cw-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
              snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
-      {#each entries as entry, i (entry.kind + ":" + entry.id)}
+      {#each entries as entry, idx (entry.kind + ":" + entry.id)}
         <li
           class="cw-item shrink-0 snap-start"
           data-kind={entry.kind}
-          style:--enter-delay={Math.min(i, 6) * 28 + "ms"}>
+          style:--enter-delay={Math.min(idx, 6) * 28 + "ms"}>
           <a
             href={entry.href}
             aria-label={entry.kind === "live"

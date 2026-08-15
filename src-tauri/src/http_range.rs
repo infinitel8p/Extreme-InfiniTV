@@ -37,6 +37,19 @@ pub(crate) fn ranged_response_matches_request(
         == Some(requested_start)
 }
 
+/// True only for a corrupted 206 (Content-Range starts at the wrong byte). A 200 (Range
+/// ignored) or any other status is the upstream's genuine answer and is always safe to
+/// relay: at start 0 a 200 body is byte-identical, and a start-past-0 request answered
+/// with a full body just makes the downstream player/demuxer restart from 0.
+pub(crate) fn ranged_response_is_corrupted(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    requested_start: u64,
+) -> bool {
+    status == reqwest::StatusCode::PARTIAL_CONTENT
+        && !ranged_response_matches_request(status, headers, requested_start)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +112,41 @@ mod tests {
             reqwest::StatusCode::PARTIAL_CONTENT,
             &headers,
             0
+        ));
+    }
+
+    #[test]
+    fn ranged_response_is_corrupted_flags_a_206_with_a_mismatched_content_range() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_RANGE,
+            reqwest::header::HeaderValue::from_static("bytes 0-999/5000"),
+        );
+        assert!(ranged_response_is_corrupted(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            &headers,
+            1_000
+        ));
+    }
+
+    #[test]
+    fn ranged_response_is_corrupted_allows_a_200_that_ignores_the_range() {
+        let headers = reqwest::header::HeaderMap::new();
+        assert!(!ranged_response_is_corrupted(reqwest::StatusCode::OK, &headers, 0));
+        assert!(!ranged_response_is_corrupted(reqwest::StatusCode::OK, &headers, 1_000));
+    }
+
+    #[test]
+    fn ranged_response_is_corrupted_allows_a_206_with_a_matching_content_range() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_RANGE,
+            reqwest::header::HeaderValue::from_static("bytes 1000-1999/5000"),
+        );
+        assert!(!ranged_response_is_corrupted(
+            reqwest::StatusCode::PARTIAL_CONTENT,
+            &headers,
+            1_000
         ));
     }
 }

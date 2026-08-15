@@ -311,6 +311,7 @@ export interface ResolvedCustomChannel {
   catchupDays: number | null
   catchupSource: string | null
   catchupCorrection: number | null
+  tvgShift?: number | null
   tvArchive?: number
   tvArchiveDuration?: number
   userAgent?: string | null
@@ -389,6 +390,7 @@ function resolveXtreamSource(
     url: pool.buildUrl(source.streamId),
     isRadio: false,
     ...resolveXtreamCatchupFields(channel, sourceChannel),
+    tvgShift: sourceChannel.tvgShift ?? null,
     tvArchive: sourceChannel.tvArchive,
     tvArchiveDuration: sourceChannel.tvArchiveDuration,
     userAgent: sourceChannel.userAgent ?? null,
@@ -432,6 +434,7 @@ function resolveM3USource(
     url: sourceChannel.url,
     isRadio: !!sourceChannel.isRadio,
     ...resolveCatchupFields(channel, sourceChannel),
+    tvgShift: sourceChannel.tvgShift ?? null,
     userAgent: sourceChannel.userAgent ?? null,
     referer: sourceChannel.referer ?? null,
     manifestType: sourceChannel.manifestType ?? null,

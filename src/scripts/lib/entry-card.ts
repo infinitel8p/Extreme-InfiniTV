@@ -294,11 +294,13 @@ export function buildEntryCard<T extends EntryLike>(
 
   card.appendChild(link)
 
-  const fav = activePlaylistId
-    ? favoriteState
-      ? favoriteState(entry)
-      : isFavorite(activePlaylistId, kind, entry.id)
-    : false
+  const getCurrentlyFavorited = (): boolean =>
+    activePlaylistId
+      ? favoriteState
+        ? favoriteState(entry)
+        : isFavorite(activePlaylistId, kind, entry.id)
+      : false
+  const fav = getCurrentlyFavorited()
   const starBtn = document.createElement("button")
   starBtn.type = "button"
   starBtn.dataset.role = "star"
@@ -318,8 +320,10 @@ export function buildEntryCard<T extends EntryLike>(
     e.stopPropagation()
     e.preventDefault()
     if (!activePlaylistId) return
+    // Re-check state at click time; a prior toggle only patches the DOM, not this closure.
+    const currentlyFavorited = getCurrentlyFavorited()
     if (onToggleFavorite) {
-      onToggleFavorite(entry, fav)
+      onToggleFavorite(entry, currentlyFavorited)
       return
     }
     toggleFavorite(activePlaylistId, kind, entry.id, {

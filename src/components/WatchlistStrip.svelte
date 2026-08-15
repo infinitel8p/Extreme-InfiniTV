@@ -74,12 +74,12 @@
     ])
     lookups = {
       vod: new Map(
-        (getCached(playlistId, "vod")?.data || []).map((m) => [Number(m.id), m])
+        (getCached(playlistId, "vod")?.data || []).map((movie) => [Number(movie.id), movie])
       ),
       series: new Map(
-        (getCached(playlistId, "series")?.data || []).map((s) => [
-          Number(s.id),
-          s,
+        (getCached(playlistId, "series")?.data || []).map((series) => [
+          Number(series.id),
+          series,
         ])
       ),
     }
@@ -115,7 +115,7 @@
         })
       }
     }
-    merged.sort((a, b) => b.ts - a.ts)
+    merged.sort((left, right) => right.ts - left.ts)
     entries = merged
       .slice(0, 12)
       .map((row) =>

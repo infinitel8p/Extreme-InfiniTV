@@ -3,7 +3,7 @@
 import { log, redactUrl } from "@/scripts/lib/log.js"
 import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
 import { splitUrlAuth } from "@/scripts/lib/url-auth.js"
-import { clearKeyAvailable } from "@/scripts/lib/codec-hints"
+import { clearKeyAvailable, isParseFailureDetail } from "@/scripts/lib/codec-hints"
 import { t } from "@/scripts/lib/i18n.js"
 import { escapeHtml } from "@/scripts/lib/format.js"
 import { ICON_BADGE_CC } from "@/scripts/lib/icons.js"
@@ -1215,7 +1215,8 @@ function attachHlsToVideo(
     }
     parseErrors++
     if (parseErrors < PARSE_ERROR_LIMIT) return false
-    const progressed = (video.currentTime || 0) - parseWindowTime >= PARSE_ERROR_PROGRESS_S
+    // hls.js keeps parsing while paused, so a frozen playhead isn't a stall then.
+    const progressed = video.paused || (video.currentTime || 0) - parseWindowTime >= PARSE_ERROR_PROGRESS_S
     parseWindowStart = now
     parseWindowTime = video.currentTime || 0
     parseErrors = 0
@@ -1257,7 +1258,7 @@ function attachHlsToVideo(
         if (fromMime) codecState.videoCodec = fromMime
       }
     }
-    const isParseError = /fragparsing/i.test(String(data?.details || ""))
+    const isParseError = isParseFailureDetail(data?.details)
     // The verdict needs this detail even when no fatal error ever lands.
     if (isParseError && !codecState.errorDetail) codecState.errorDetail = String(data.details)
     if (!data?.fatal) {
@@ -1280,8 +1281,8 @@ function attachHlsToVideo(
       try { hls.startLoad() } catch {}
       return
     }
-    // Rebuilt buffers don't help a container the demuxer can't read - the next fragment fails identically.
-    if (data.type === ErrorTypes.MEDIA_ERROR && !isParseError && mediaRecover < 2) {
+    // A single corrupt fragment (e.g. at an ad-break discontinuity) can still heal via recoverMediaError.
+    if (data.type === ErrorTypes.MEDIA_ERROR && mediaRecover < 2) {
       mediaRecover++
       telemetry?.emit("recover", `media: ${data?.details || "error"}`)
       try { hls.recoverMediaError() } catch {}
@@ -2739,7 +2740,8 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
 
   async function loadTs(src: string) {
     const mpegtsDrained = destroyMpegts()
-    try { await player.detach() } catch {}
+    // isSwitchingContent=true: shaka.ui exits fullscreen/PiP on any other unload
+    try { await player.detach(false, true) } catch {}
     if (pendingSrc !== src) return
     await mpegtsDrained
     if (pendingSrc !== src) return
@@ -2865,7 +2867,8 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       pendingPlayIntent = false
       destroyMpegts()
       subtitleManager.detach()
-      void player.unload().catch(() => {})
+      // isSwitchingContent=true keeps shaka.ui from exiting fullscreen on remounts
+      void player.unload(true, false, true).catch(() => {})
     },
     dispose() {
       pendingSrc = null

@@ -196,6 +196,13 @@ describe("redactArg", () => {
     })
   })
 
+  it("returns the same object reference when nothing needs redaction", () => {
+    const date = new Date("2024-01-01T00:00:00.000Z")
+    const arg = { contentKey: "movie:42", when: date }
+    expect(redactArg(arg)).toBe(arg)
+    expect((redactArg(arg) as { when: Date }).when).toBe(date)
+  })
+
   it("falls back to a redacted string for a value JSON can't serialize", () => {
     const circular: Record<string, unknown> = { password: "hunter2" }
     circular.self = circular

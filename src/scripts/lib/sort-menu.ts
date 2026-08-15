@@ -200,7 +200,8 @@ function initSortMenu(wrapper: Element) {
     function activate(target: HTMLButtonElement | undefined) {
         if (!target) return
         if (target.hasAttribute("data-sort-menu-toggle")) {
-            toggleChecked(target)
+            // Real click: document-level listeners must fire too
+            target.click()
             return
         }
         const secondaryContainer = target.closest<HTMLElement>("[data-sort-menu-secondary-options]")

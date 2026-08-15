@@ -94,6 +94,8 @@ export interface PlayerStartErrorOptions {
   remuxAvailable: boolean
   activePlaylistId: string | null
   contentKey: string
+  posterEl: HTMLElement | null
+  playerWrap: HTMLElement | null
   handleRemuxFailure(detail: string): void
   /** Ahead-of-the-error handleRemuxFailure teardown (audio switcher, mkv session, watchdog) then re-run the tune in remux mode. */
   retirePreviousPlaybackAndRetryRemux(): void
@@ -130,7 +132,14 @@ export function handlePlayerStartError(options: PlayerStartErrorOptions) {
       options.retirePreviousPlaybackAndRetryRemux()
       return
     }
-    options.toasts.showContainerUnsupportedToast(unsupportedContainer || "mkv")
+    if (options.posterEl) options.posterEl.classList.remove("hidden")
+    if (options.playerWrap) options.playerWrap.classList.add("hidden")
+    options.toasts.showContainerUnsupportedToast(unsupportedContainer || "video")
+    return
+  }
+  // Demux succeeded but decoding failed (e.g. an HEVC .mkv played direct) - same treatment as a remux decode failure.
+  if (playerError?.code === 3) {
+    options.handleRemuxFailure(playerError?.message || "")
   }
 }
 

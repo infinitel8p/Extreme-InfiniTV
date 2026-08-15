@@ -151,7 +151,7 @@
   })
 
   let doneCount = $derived(
-    KIND_ORDER.reduce((n, k) => (kinds[k] !== "pending" ? n + 1 : n), 0)
+    KIND_ORDER.reduce((count, kind) => (kinds[kind] !== "pending" ? count + 1 : count), 0)
   )
   let allDone = $derived(doneCount === KIND_ORDER.length)
   let hasError = $derived(KIND_ORDER.some((kind) => kinds[kind] === "error"))

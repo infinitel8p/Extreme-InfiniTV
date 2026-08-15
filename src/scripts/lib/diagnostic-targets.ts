@@ -51,15 +51,15 @@ function readHeaderAttr(source: string, key: string): string {
   return ""
 }
 
-/** First `url-tvg` / `x-tvg-url` / `tvg-url` value off the `#EXTM3U` header line, first URL when comma-separated. */
+/** First `x-tvg-url` / `tvg-url` / `url-tvg` value off the `#EXTM3U` header line, matching m3u-parser.ts precedence. */
 export function extractM3UHeaderEpgUrl(text: string): string | null {
   const prefix = stripBom(text).slice(0, PROBE_PREFIX_CHARS)
   const firstLine = prefix.split(/\r?\n/).find((line) => line.trim().length > 0)
   if (!firstLine || !firstLine.trim().toUpperCase().startsWith("#EXTM3U")) return null
   const raw =
-    readHeaderAttr(firstLine, "url-tvg") ||
     readHeaderAttr(firstLine, "x-tvg-url") ||
-    readHeaderAttr(firstLine, "tvg-url")
+    readHeaderAttr(firstLine, "tvg-url") ||
+    readHeaderAttr(firstLine, "url-tvg")
   if (!raw) return null
   // Split only on commas followed by a scheme (or protocol-relative //) so query-string commas survive.
   const first = raw.split(/\s*,+\s*(?=(?:https?:)?\/\/)/i)[0]?.trim() ?? ""

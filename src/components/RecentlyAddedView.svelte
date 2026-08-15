@@ -163,7 +163,7 @@
            lg:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]
            auto-rows-min content-start
            p-2 pb-4">
-    {#each visible as row, i (row.kind + ":" + row.item.id)}
+    {#each visible as row, idx (row.kind + ":" + row.item.id)}
       {@const ratingText = fmtImdbRating(row.item.rating)}
       <a
         href={buildHref(row.kind, row.item.id)}

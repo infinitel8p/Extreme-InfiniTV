@@ -182,7 +182,11 @@ export async function mountVodPlayback(options: VodMountOptions): Promise<void> 
     toasts: options.toasts,
   })
 
-  mountedPlayer.one?.("error", () => {
+  // The reused player can emit 'error' mid-await (proxy registration in flight); buffer until init is safe to unwind.
+  let pipelineReady = false
+  let bufferedStartError = false
+
+  function handleStartError() {
     handlePlayerStartError({
       logTag: options.logTag,
       player: mountedPlayer,
@@ -195,10 +199,17 @@ export async function mountVodPlayback(options: VodMountOptions): Promise<void> 
       remuxAvailable,
       activePlaylistId: options.playlistId,
       contentKey: remuxContentKey,
+      posterEl: options.posterEl,
+      playerWrap: options.playerWrap,
       handleRemuxFailure,
       retirePreviousPlaybackAndRetryRemux: options.retirePreviousPlaybackAndRetryRemux,
       toasts: options.toasts,
     })
+  }
+
+  mountedPlayer.one?.("error", () => {
+    if (pipelineReady) handleStartError()
+    else bufferedStartError = true
   })
   mountedPlayer.one?.("loadedmetadata", () => {
     if (options.isStale()) return
@@ -277,11 +288,22 @@ export async function mountVodPlayback(options: VodMountOptions): Promise<void> 
     initialAudioSource = ownAudioSwitcher.source
   }
 
-  if (options.isStale()) {
-    // Dispose first: stops any remux session before the tee that feeds it goes away.
+  // Dispose first: stops any remux session before the tee that feeds it goes away.
+  function abandonOwnPipeline() {
     ownAudioSwitcher?.dispose()
     if (options.getAudioSwitcher() === ownAudioSwitcher) options.setAudioSwitcher(null)
     preparedPlayback.mkvSession?.stop()
+  }
+
+  pipelineReady = true
+  if (bufferedStartError) {
+    handleStartError()
+    abandonOwnPipeline()
+    return
+  }
+
+  if (options.isStale()) {
+    abandonOwnPipeline()
     return
   }
 

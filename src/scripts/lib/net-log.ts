@@ -245,6 +245,7 @@ export function clearNetworkLog(): void {
   try {
     store.entries = []
     store.dropped = 0
+    store.recorded = 0
     clearSession()
     dispatchNetLogEvent()
   } catch {}

@@ -75,18 +75,18 @@
           getCached(playlistId, "live")?.data ||
           getCached(playlistId, "m3u")?.data ||
           []
-        ).map((c) => [Number(c.id), c])
+        ).map((channel) => [Number(channel.id), channel])
       ),
       vod: new Map(
-        (getCached(playlistId, "vod")?.data || []).map((m) => [
-          Number(m.id),
-          m,
+        (getCached(playlistId, "vod")?.data || []).map((movie) => [
+          Number(movie.id),
+          movie,
         ])
       ),
       series: new Map(
-        (getCached(playlistId, "series")?.data || []).map((s) => [
-          Number(s.id),
-          s,
+        (getCached(playlistId, "series")?.data || []).map((series) => [
+          Number(series.id),
+          series,
         ])
       ),
     }
@@ -160,7 +160,7 @@
     dragState = null
     dragOver = null
     if (from === to) return
-    const ids = lists[kind].map((r) => r.id)
+    const ids = lists[kind].map((favorite) => favorite.id)
     const [moved] = ids.splice(from, 1)
     ids.splice(to, 0, moved)
     setFavoritesOrder(activePlaylistId, kind, ids)
@@ -182,12 +182,12 @@
       "xt:favorites-order-changed": reload,
       [LOCALE_EVENT]: onLocale,
     }
-    for (const [k, v] of Object.entries(handlers)) {
-      document.addEventListener(k, v)
+    for (const [eventName, handler] of Object.entries(handlers)) {
+      document.addEventListener(eventName, handler)
     }
     return () => {
-      for (const [k, v] of Object.entries(handlers)) {
-        document.removeEventListener(k, v)
+      for (const [eventName, handler] of Object.entries(handlers)) {
+        document.removeEventListener(eventName, handler)
       }
     }
   })
@@ -214,19 +214,19 @@
             {klp(kind)}
           </div>
           <ul class="flex flex-col gap-1">
-            {#each lists[kind] as row, i (row.id)}
+            {#each lists[kind] as row, idx (row.id)}
               <li
                 draggable="true"
-                ondragstart={(ev) => onDragStart(kind, i, ev)}
-                ondragover={(ev) => onDragOver(kind, i, ev)}
-                ondragleave={(ev) => onDragLeave(kind, i, ev)}
+                ondragstart={(ev) => onDragStart(kind, idx, ev)}
+                ondragover={(ev) => onDragOver(kind, idx, ev)}
+                ondragleave={(ev) => onDragLeave(kind, idx, ev)}
                 ondragend={onDragEnd}
-                ondrop={(ev) => onDrop(kind, i, ev)}
+                ondrop={(ev) => onDrop(kind, idx, ev)}
                 class="reorder-row group flex items-center gap-2 rounded-lg border bg-surface-2 px-2 py-1.5 transition-[opacity,border-color] duration-150"
-                class:is-dragging={dragState?.kind === kind && dragState?.fromIdx === i}
-                class:is-drop-target={dragOver?.kind === kind && dragOver?.idx === i && dragState?.fromIdx !== i}
+                class:is-dragging={dragState?.kind === kind && dragState?.fromIdx === idx}
+                class:is-drop-target={dragOver?.kind === kind && dragOver?.idx === idx && dragState?.fromIdx !== idx}
                 class:is-settling={justMoved?.kind === kind && justMoved?.id === row.id}
-                class:border-line={!(dragOver?.kind === kind && dragOver?.idx === i && dragState?.fromIdx !== i)}
+                class:border-line={!(dragOver?.kind === kind && dragOver?.idx === idx && dragState?.fromIdx !== idx)}
                 class:hover:border-line-soft={!dragState}>
                 <span aria-hidden="true" class="reorder-handle text-fg-3 cursor-grab active:cursor-grabbing px-1 select-none" title={tr("settings.favoritesReorder.dragToReorder")}>
                   <svg xmlns="http://www.w3.org/2000/svg" width="0.875rem" height="0.875rem" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
@@ -245,8 +245,8 @@
                     class="reorder-arrow size-9 pointer-coarse:size-11 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
                     aria-label={tr("settings.favoritesReorder.moveUpAria", { name: row.name })}
                     title={tr("settings.favoritesReorder.moveUp")}
-                    disabled={i === 0}
-                    onclick={() => move(kind, i, -1)}>
+                    disabled={idx === 0}
+                    onclick={() => move(kind, idx, -1)}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="1rem" height="1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>
                   </button>
                   <button
@@ -254,8 +254,8 @@
                     class="reorder-arrow size-9 pointer-coarse:size-11 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
                     aria-label={tr("settings.favoritesReorder.moveDownAria", { name: row.name })}
                     title={tr("settings.favoritesReorder.moveDown")}
-                    disabled={i === lists[kind].length - 1}
-                    onclick={() => move(kind, i, 1)}>
+                    disabled={idx === lists[kind].length - 1}
+                    onclick={() => move(kind, idx, 1)}>
                     <svg xmlns="http://www.w3.org/2000/svg" width="1rem" height="1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
                   </button>
                 </span>

@@ -154,19 +154,19 @@
     <div class="text-xs text-fg-3 italic">{tr("settings.hubStrips.emptyActive")}</div>
   {:else}
     <ul class="flex flex-col gap-1">
-      {#each activeRows as row, i (row.id)}
+      {#each activeRows as row, idx (row.id)}
         <li
           draggable="true"
-          ondragstart={(event) => onDragStart(i, event)}
-          ondragover={(event) => onDragOver(i, event)}
-          ondragleave={() => onDragLeave(i)}
+          ondragstart={(event) => onDragStart(idx, event)}
+          ondragover={(event) => onDragOver(idx, event)}
+          ondragleave={() => onDragLeave(idx)}
           ondragend={onDragEnd}
-          ondrop={(event) => onDrop(i, event)}
+          ondrop={(event) => onDrop(idx, event)}
           class="reorder-row group flex items-center gap-2 rounded-lg border bg-surface-2 px-2 py-1.5 transition-[opacity,border-color] duration-150"
-          class:is-dragging={dragState?.fromIdx === i}
-          class:is-drop-target={dragOver?.idx === i && dragState?.fromIdx !== i}
+          class:is-dragging={dragState?.fromIdx === idx}
+          class:is-drop-target={dragOver?.idx === idx && dragState?.fromIdx !== idx}
           class:is-settling={justMoved?.id === row.id}
-          class:border-line={!(dragOver?.idx === i && dragState?.fromIdx !== i)}
+          class:border-line={!(dragOver?.idx === idx && dragState?.fromIdx !== idx)}
           class:hover:border-line-soft={!dragState}>
           <span aria-hidden="true" class="reorder-handle text-fg-3 cursor-grab active:cursor-grabbing px-1 select-none" title={tr("settings.hubStrips.dragToReorder")}>
             <svg xmlns="http://www.w3.org/2000/svg" width="0.875rem" height="0.875rem" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
@@ -178,7 +178,7 @@
               class="reorder-arrow size-9 pointer-coarse:size-11 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
               aria-label={tr("settings.hubStrips.moveUpAria", { name: labelFor(row.id) })}
               title={tr("settings.hubStrips.moveUp")}
-              disabled={i === 0}
+              disabled={idx === 0}
               onclick={() => move(row.id, -1)}>
               <svg xmlns="http://www.w3.org/2000/svg" width="1rem" height="1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>
             </button>
@@ -187,7 +187,7 @@
               class="reorder-arrow size-9 pointer-coarse:size-11 inline-flex items-center justify-center rounded-md text-fg-3 hover:text-fg hover:bg-surface-3 focus-visible:bg-surface-3 outline-none disabled:opacity-30"
               aria-label={tr("settings.hubStrips.moveDownAria", { name: labelFor(row.id) })}
               title={tr("settings.hubStrips.moveDown")}
-              disabled={i === activeRows.length - 1}
+              disabled={idx === activeRows.length - 1}
               onclick={() => move(row.id, 1)}>
               <svg xmlns="http://www.w3.org/2000/svg" width="1rem" height="1rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
             </button>

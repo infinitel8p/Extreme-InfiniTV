@@ -17,20 +17,20 @@ describe("extractM3UHeaderEpgUrl", () => {
     expect(extractM3UHeaderEpgUrl(text)).toBe("https://example.com/epg.xml")
   })
 
-  it("falls back to x-tvg-url when url-tvg is absent", () => {
-    const text = '#EXTM3U x-tvg-url="https://example.com/xtvg.xml"\n'
-    expect(extractM3UHeaderEpgUrl(text)).toBe("https://example.com/xtvg.xml")
-  })
-
-  it("falls back to tvg-url when neither url-tvg nor x-tvg-url is present", () => {
+  it("falls back to tvg-url when x-tvg-url is absent", () => {
     const text = '#EXTM3U tvg-url="https://example.com/tvgurl.xml"\n'
     expect(extractM3UHeaderEpgUrl(text)).toBe("https://example.com/tvgurl.xml")
   })
 
-  it("prefers url-tvg over x-tvg-url and tvg-url when several are present", () => {
+  it("falls back to url-tvg when neither x-tvg-url nor tvg-url is present", () => {
+    const text = '#EXTM3U url-tvg="https://example.com/win.xml"\n'
+    expect(extractM3UHeaderEpgUrl(text)).toBe("https://example.com/win.xml")
+  })
+
+  it("prefers x-tvg-url over tvg-url and url-tvg when several are present", () => {
     const text =
       '#EXTM3U tvg-url="https://example.com/tvgurl.xml" x-tvg-url="https://example.com/xtvg.xml" url-tvg="https://example.com/win.xml"\n'
-    expect(extractM3UHeaderEpgUrl(text)).toBe("https://example.com/win.xml")
+    expect(extractM3UHeaderEpgUrl(text)).toBe("https://example.com/xtvg.xml")
   })
 
   it("returns only the first URL of a comma-separated multi-source value", () => {
