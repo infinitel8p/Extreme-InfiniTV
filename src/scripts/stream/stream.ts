@@ -68,6 +68,7 @@ import {
   chooseBlackFrameRecovery,
   isParseFailureDetail,
   isMseAudioClockWedge,
+  chromiumMajorFromUserAgent,
 } from "@/scripts/lib/codec-hints.ts"
 import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
@@ -1877,6 +1878,7 @@ function giveUpOnPlayback(ctx) {
   clearStallSentinel()
   clearDeadVideoWatchdog()
   clearDeadAudioWatchdog()
+  clearStartWedgeWatch()
   // "playing" can fire before an undecodable audio track kills the mount, so classify every terminal path.
   const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
   const failure = classifyStartFailure({
@@ -2868,9 +2870,6 @@ let progressLastTime = -1
 let progressLastSeq = -1
 let progressFrozenTicks = 0
 let progressTickCount = 0
-const START_WEDGE_TICKS = 2
-let startWedgeTicks = 0
-let startWedgeSeq = -1
 
 function progressWatchTick() {
   const ctx = lastPlayContext
@@ -2884,40 +2883,6 @@ function progressWatchTick() {
     return
   }
   const mediaEl = vjs.getMediaElement?.() ?? wrap.querySelector("video")
-  if (
-    mediaEl &&
-    !mediaEl.paused &&
-    !mediaEl.ended &&
-    !ctx.started &&
-    !ctx.audioProxied &&
-    mediaEl.readyState < 2
-  ) {
-    if (startWedgeSeq !== playSeq) {
-      startWedgeSeq = playSeq
-      startWedgeTicks = 0
-    }
-    const wedged = isMseAudioClockWedge({
-      readyState: mediaEl.readyState,
-      currentTime: mediaEl.currentTime || 0,
-      bufferedEndSeconds: bufferedEndSeconds(mediaEl),
-      audioCodec: vjs?.codecInfo?.()?.audioCodec,
-    })
-    if (wedged) {
-      startWedgeTicks++
-      if (startWedgeTicks >= START_WEDGE_TICKS) {
-        startWedgeTicks = 0
-        ctx.audioClockWedge = true
-        log.warn("[xt:livetv] clock never started despite buffered MPEG audio - convicting the audio track", {
-          streamId: ctx.streamId,
-          readyState: mediaEl.readyState,
-        })
-        giveUpOnPlayback(ctx)
-        return
-      }
-    } else {
-      startWedgeTicks = 0
-    }
-  }
   if (!mediaEl || mediaEl.paused || mediaEl.ended || mediaEl.readyState < 2) {
     progressFrozenTicks = 0
     return
@@ -2961,6 +2926,94 @@ function progressWatchTick() {
 function ensureProgressWatch() {
   if (progressWatchTimer) return
   progressWatchTimer = setInterval(progressWatchTick, PROGRESS_WATCH_INTERVAL_MS)
+}
+
+// ----------------------------
+// Start-wedge watchdog
+// ----------------------------
+// Chromium majors where the audio/mpeg wedge was already confirmed once; lets
+// later tunes convict on the first hit instead of two.
+const WEDGE_ENGINE_KEY = "xt_mpeg_wedge_engine"
+const START_WEDGE_WATCH_INTERVAL_MS = 2000
+const START_WEDGE_WATCH_MAX_TICKS = 20
+let startWedgeWatchTimer = null
+let startWedgeWatchTicks = 0
+let startWedgeWatchHits = 0
+
+function currentChromiumMajor() {
+  return chromiumMajorFromUserAgent(typeof navigator !== "undefined" ? navigator.userAgent : null)
+}
+
+function isKnownWedgedEngine() {
+  const major = currentChromiumMajor()
+  if (major == null) return false
+  try {
+    return localStorage.getItem(WEDGE_ENGINE_KEY) === String(major)
+  } catch {
+    return false
+  }
+}
+
+function rememberWedgedEngine() {
+  const major = currentChromiumMajor()
+  if (major == null) return
+  try {
+    localStorage.setItem(WEDGE_ENGINE_KEY, String(major))
+  } catch {}
+}
+
+function clearStartWedgeWatch() {
+  if (startWedgeWatchTimer) {
+    clearInterval(startWedgeWatchTimer)
+    startWedgeWatchTimer = null
+  }
+}
+
+function armStartWedgeWatch() {
+  clearStartWedgeWatch()
+  const ctx = lastPlayContext
+  if (!ctx || !ctx.isLive || ctx.audioProxied) return
+  const seqAtArm = ctx.seq
+  startWedgeWatchTicks = 0
+  startWedgeWatchHits = 0
+  startWedgeWatchTimer = setInterval(() => {
+    const current = lastPlayContext
+    if (!current || current.seq !== seqAtArm || current.started || !vjs) {
+      clearStartWedgeWatch()
+      return
+    }
+    startWedgeWatchTicks++
+    if (startWedgeWatchTicks > START_WEDGE_WATCH_MAX_TICKS) {
+      clearStartWedgeWatch()
+      return
+    }
+    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    if (!mediaEl || mediaEl.paused || mediaEl.ended) return
+    const wedged = isMseAudioClockWedge({
+      readyState: mediaEl.readyState,
+      currentTime: mediaEl.currentTime || 0,
+      bufferedEndSeconds: bufferedEndSeconds(mediaEl),
+      audioCodec: vjs?.codecInfo?.()?.audioCodec,
+    })
+    if (!wedged) {
+      startWedgeWatchHits = 0
+      return
+    }
+    startWedgeWatchHits++
+    // Never convict on the very first interval - a healthy start can look wedged for a beat.
+    if (startWedgeWatchTicks < 2) return
+    const hitsNeeded = isKnownWedgedEngine() ? 1 : 2
+    if (startWedgeWatchHits < hitsNeeded) return
+    clearStartWedgeWatch()
+    rememberWedgedEngine()
+    current.audioClockWedge = true
+    log.warn("[xt:livetv] clock never started despite buffered MPEG audio - convicting the audio track", {
+      streamId: current.streamId,
+      readyState: mediaEl.readyState,
+      knownEngine: hitsNeeded === 1,
+    })
+    giveUpOnPlayback(current)
+  }, START_WEDGE_WATCH_INTERVAL_MS)
 }
 
 // ----------------------------
@@ -3923,6 +3976,7 @@ async function play(streamId, name, reason = "user") {
       setTimeout(() => mediaEl.removeEventListener("canplay", resume), 20000)
     })
   }
+  armStartWedgeWatch()
   applyVideoScale()
   pushDiscordPresence(channel || { id: streamId, name }, "live")
   externalPresenceActive = false

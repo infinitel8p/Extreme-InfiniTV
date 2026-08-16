@@ -12,6 +12,7 @@ import {
   isDroppingEveryFrame,
   chooseBlackFrameRecovery,
   NATIVE_RELATCH_MAX_ATTEMPTS,
+  chromiumMajorFromUserAgent,
 } from "../src/scripts/lib/codec-hints"
 
 describe("hasHevcNameHint", () => {
@@ -444,6 +445,29 @@ describe("isMseAudioClockWedge", () => {
     expect(
       isMseAudioClockWedge({ readyState: 1, currentTime: 0, bufferedEndSeconds: 12, audioCodec: null })
     ).toBe(false)
+  })
+})
+
+describe("chromiumMajorFromUserAgent", () => {
+  it("extracts the Chromium major version from a Chrome/Edge user agent", () => {
+    expect(
+      chromiumMajorFromUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.4129.86"
+      )
+    ).toBe(151)
+  })
+
+  it("returns null for a user agent without a Chrome token", () => {
+    expect(
+      chromiumMajorFromUserAgent(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+      )
+    ).toBe(null)
+  })
+
+  it("returns null for null or empty input", () => {
+    expect(chromiumMajorFromUserAgent(null)).toBe(null)
+    expect(chromiumMajorFromUserAgent("")).toBe(null)
   })
 })
 

@@ -70,6 +70,13 @@ export function isMpegAudioCodecString(codec: string | null | undefined): boolea
   return MPEG_AUDIO_CODEC_RX.test(normalized)
 }
 
+export function chromiumMajorFromUserAgent(userAgent: string | null | undefined): number | null {
+  const match = userAgent?.match(/(?:Chrome|Chromium|CriOS)\/(\d+)/)
+  if (!match) return null
+  const major = Number(match[1])
+  return Number.isFinite(major) ? major : null
+}
+
 export function describeAudioCodec(codec: string | null | undefined): string {
   switch (classifyAudioCodec(codec)) {
     case "ac3":
