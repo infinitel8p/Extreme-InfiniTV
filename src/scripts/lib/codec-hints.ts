@@ -61,6 +61,15 @@ export function isUnsupportedAudioCodec(codec: string | null | undefined): boole
   return classifyAudioCodec(codec) !== null
 }
 
+// mpegts.js audio/mpeg passthrough codecs; MP2 also reports as "mp3".
+const MPEG_AUDIO_CODEC_RX = /^(?:mp3|mp2|mp2a|mpeg|mpga)$/i
+
+export function isMpegAudioCodecString(codec: string | null | undefined): boolean {
+  const normalized = codec?.trim()
+  if (!normalized) return false
+  return MPEG_AUDIO_CODEC_RX.test(normalized)
+}
+
 export function describeAudioCodec(codec: string | null | undefined): string {
   switch (classifyAudioCodec(codec)) {
     case "ac3":
@@ -72,6 +81,7 @@ export function describeAudioCodec(codec: string | null | undefined): string {
     case "dts":
       return "DTS"
     default:
+      if (isMpegAudioCodecString(codec)) return "MPEG audio"
       return codec?.trim() || "?"
   }
 }
@@ -114,6 +124,7 @@ export function classifyStartFailure(input: {
   errorDetail?: string | null
   nameHint?: boolean
   deviceHevc: boolean
+  audioClockWedge?: boolean
 }): StartFailureVerdict {
   const videoCodec = input.videoCodec?.trim() || null
   const errorDetail = input.errorDetail || ""
@@ -125,7 +136,7 @@ export function classifyStartFailure(input: {
 
   // A known-decodable video track shifts blame to the audio track instead.
   const videoPlayable = videoIsHevc ? input.deviceHevc : videoCodecDecodable(videoCodec)
-  if (videoPlayable && (audioUnsupported || audioBufferError)) {
+  if (videoPlayable && (audioUnsupported || audioBufferError || input.audioClockWedge)) {
     return { kind: "audio", codec: input.audioCodec ?? null }
   }
 
@@ -205,6 +216,22 @@ export function clearKeyAvailable(): Promise<boolean> {
 // Only the dropped ratio reveals this, once the sample is large enough.
 const DROPPED_FRAME_RATIO = 0.9
 export const DROPPED_FRAME_MIN_SAMPLE = 50
+
+// Chromium 151 wedges the clock on audio/mpeg buffers with no error event.
+export const AUDIO_CLOCK_WEDGE_MIN_BUFFERED_S = 2
+const AUDIO_CLOCK_WEDGE_MAX_POSITION_S = 0.5
+
+export function isMseAudioClockWedge(input: {
+  readyState: number
+  currentTime: number
+  bufferedEndSeconds: number
+  audioCodec: string | null | undefined
+}): boolean {
+  if (input.readyState > 1) return false
+  if (input.currentTime > AUDIO_CLOCK_WEDGE_MAX_POSITION_S) return false
+  if (input.bufferedEndSeconds < AUDIO_CLOCK_WEDGE_MIN_BUFFERED_S) return false
+  return isMpegAudioCodecString(input.audioCodec)
+}
 
 export function isDroppingEveryFrame(
   totalVideoFrames: number | null | undefined,

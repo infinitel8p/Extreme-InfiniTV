@@ -7,6 +7,8 @@ import {
   clearKeyAvailable,
   isUnsupportedAudioCodec,
   describeAudioCodec,
+  isMpegAudioCodecString,
+  isMseAudioClockWedge,
   isDroppingEveryFrame,
   chooseBlackFrameRecovery,
   NATIVE_RELATCH_MAX_ATTEMPTS,
@@ -374,6 +376,75 @@ describe("classifyStartFailure", () => {
       })
     ).toEqual({ kind: "audio", codec: null })
   })
+
+  it("blames the audio track for a Chromium 151 audio/mpeg clock wedge when the video decodes", () => {
+    const originalMediaSource = (globalThis as any).MediaSource
+    ;(globalThis as any).MediaSource = { isTypeSupported: () => true }
+    try {
+      expect(
+        classifyStartFailure({
+          videoCodec: "avc1.640029",
+          audioCodec: "mp3",
+          errorDetail: null,
+          nameHint: false,
+          deviceHevc: true,
+          audioClockWedge: true,
+        })
+      ).toEqual({ kind: "audio", codec: "mp3" })
+    } finally {
+      (globalThis as any).MediaSource = originalMediaSource
+    }
+  })
+})
+
+describe("isMpegAudioCodecString", () => {
+  it("matches MPEG audio codec strings", () => {
+    expect(isMpegAudioCodecString("mp3")).toBe(true)
+    expect(isMpegAudioCodecString("mp2")).toBe(true)
+    expect(isMpegAudioCodecString("MP2A")).toBe(true)
+  })
+
+  it("ignores AAC and empty codec strings", () => {
+    expect(isMpegAudioCodecString("mp4a.40.2")).toBe(false)
+    expect(isMpegAudioCodecString("mp4a.40.34")).toBe(false)
+    expect(isMpegAudioCodecString(null)).toBe(false)
+    expect(isMpegAudioCodecString("")).toBe(false)
+  })
+})
+
+describe("isMseAudioClockWedge", () => {
+  it("flags a stuck clock with buffered MPEG audio", () => {
+    expect(
+      isMseAudioClockWedge({ readyState: 1, currentTime: 0, bufferedEndSeconds: 12, audioCodec: "mp3" })
+    ).toBe(true)
+  })
+
+  it("ignores playback that already advanced past HAVE_METADATA", () => {
+    expect(
+      isMseAudioClockWedge({ readyState: 2, currentTime: 0, bufferedEndSeconds: 12, audioCodec: "mp3" })
+    ).toBe(false)
+  })
+
+  it("waits for enough buffered data before judging", () => {
+    expect(
+      isMseAudioClockWedge({ readyState: 1, currentTime: 0, bufferedEndSeconds: 0.5, audioCodec: "mp3" })
+    ).toBe(false)
+  })
+
+  it("ignores a clock that has already moved", () => {
+    expect(
+      isMseAudioClockWedge({ readyState: 1, currentTime: 4, bufferedEndSeconds: 12, audioCodec: "mp3" })
+    ).toBe(false)
+  })
+
+  it("ignores non-MPEG audio codecs", () => {
+    expect(
+      isMseAudioClockWedge({ readyState: 1, currentTime: 0, bufferedEndSeconds: 12, audioCodec: "mp4a.40.2" })
+    ).toBe(false)
+    expect(
+      isMseAudioClockWedge({ readyState: 1, currentTime: 0, bufferedEndSeconds: 12, audioCodec: null })
+    ).toBe(false)
+  })
 })
 
 describe("isUnsupportedAudioCodec", () => {
@@ -409,6 +480,10 @@ describe("describeAudioCodec", () => {
     expect(describeAudioCodec("eac3")).toBe("Dolby Digital Plus (E-AC-3)")
     expect(describeAudioCodec("mp2")).toBe("MPEG audio (MP2)")
     expect(describeAudioCodec("dts")).toBe("DTS")
+  })
+
+  it("labels an MPEG audio (MP3) codec string", () => {
+    expect(describeAudioCodec("mp3")).toBe("MPEG audio")
   })
 
   it("falls back to the raw codec string or a placeholder", () => {

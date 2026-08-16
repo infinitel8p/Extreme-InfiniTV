@@ -67,6 +67,7 @@ import {
   DROPPED_FRAME_MIN_SAMPLE,
   chooseBlackFrameRecovery,
   isParseFailureDetail,
+  isMseAudioClockWedge,
 } from "@/scripts/lib/codec-hints.ts"
 import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
@@ -1884,6 +1885,7 @@ function giveUpOnPlayback(ctx) {
     errorDetail: info.errorDetail,
     nameHint: hasHevcNameHint(ctx.name),
     deviceHevc: deviceSupportsHevc(),
+    audioClockWedge: !!ctx.audioClockWedge,
   })
   log.info("[xt:livetv] start-failure verdict", { kind: failure.kind, codec: failure.codec, streamId: ctx.streamId })
   getPlayerInsights().record("giveup", failure.kind)
@@ -2866,6 +2868,9 @@ let progressLastTime = -1
 let progressLastSeq = -1
 let progressFrozenTicks = 0
 let progressTickCount = 0
+const START_WEDGE_TICKS = 2
+let startWedgeTicks = 0
+let startWedgeSeq = -1
 
 function progressWatchTick() {
   const ctx = lastPlayContext
@@ -2879,6 +2884,40 @@ function progressWatchTick() {
     return
   }
   const mediaEl = vjs.getMediaElement?.() ?? wrap.querySelector("video")
+  if (
+    mediaEl &&
+    !mediaEl.paused &&
+    !mediaEl.ended &&
+    !ctx.started &&
+    !ctx.audioProxied &&
+    mediaEl.readyState < 2
+  ) {
+    if (startWedgeSeq !== playSeq) {
+      startWedgeSeq = playSeq
+      startWedgeTicks = 0
+    }
+    const wedged = isMseAudioClockWedge({
+      readyState: mediaEl.readyState,
+      currentTime: mediaEl.currentTime || 0,
+      bufferedEndSeconds: bufferedEndSeconds(mediaEl),
+      audioCodec: vjs?.codecInfo?.()?.audioCodec,
+    })
+    if (wedged) {
+      startWedgeTicks++
+      if (startWedgeTicks >= START_WEDGE_TICKS) {
+        startWedgeTicks = 0
+        ctx.audioClockWedge = true
+        log.warn("[xt:livetv] clock never started despite buffered MPEG audio - convicting the audio track", {
+          streamId: ctx.streamId,
+          readyState: mediaEl.readyState,
+        })
+        giveUpOnPlayback(ctx)
+        return
+      }
+    } else {
+      startWedgeTicks = 0
+    }
+  }
   if (!mediaEl || mediaEl.paused || mediaEl.ended || mediaEl.readyState < 2) {
     progressFrozenTicks = 0
     return
@@ -3063,6 +3102,16 @@ function clearDeadAudioWatchdog() {
 function audioDecodedByteCount(videoEl) {
   const bytes = videoEl.webkitAudioDecodedByteCount
   return typeof bytes === "number" ? bytes : null
+}
+
+function bufferedEndSeconds(videoEl) {
+  try {
+    const ranges = videoEl.buffered
+    if (!ranges || ranges.length === 0) return 0
+    return ranges.end(ranges.length - 1)
+  } catch {
+    return 0
+  }
 }
 
 function isHlsSource(src) {
@@ -3270,6 +3319,7 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
       info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
     nameHint: hasHevcNameHint(ctx.name),
     deviceHevc: deviceSupportsHevc(),
+    audioClockWedge: !!ctx.audioClockWedge,
   })
   log.log("[xt:livetv] start failure classified:", failure.kind, {
     videoCodec: info.videoCodec,
@@ -3825,6 +3875,7 @@ async function play(streamId, name, reason = "user") {
     retried: false,
     started: false,
     nativeFallbackTried: false,
+    audioClockWedge: false,
     mime: mountMime,
     isLive: true,
     audioProxied,
@@ -3836,6 +3887,8 @@ async function play(streamId, name, reason = "user") {
   } else {
     getPlayerInsights().startSession({ label: name, seq })
   }
+  // Armed here, not just on "playing": a wedged first tune never fires it.
+  ensureProgressWatch()
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
@@ -4139,6 +4192,7 @@ async function playCatchup(channel, opts) {
     started: false,
     // Skip the Android native-handoff escape hatch for catch-up sessions.
     nativeFallbackTried: true,
+    audioClockWedge: false,
     mime,
     isLive: false,
   }
