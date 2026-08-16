@@ -69,6 +69,7 @@ import {
   isParseFailureDetail,
   isMseAudioClockWedge,
   chromiumMajorFromUserAgent,
+  isMpegAudioCodecString,
 } from "@/scripts/lib/codec-hints.ts"
 import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
@@ -2931,11 +2932,11 @@ function ensureProgressWatch() {
 // ----------------------------
 // Start-wedge watchdog
 // ----------------------------
-// Chromium majors where the audio/mpeg wedge was already confirmed once; lets
-// later tunes convict on the first hit instead of two.
+// Chromium majors where the audio/mpeg wedge was already confirmed once.
 const WEDGE_ENGINE_KEY = "xt_mpeg_wedge_engine"
-const START_WEDGE_WATCH_INTERVAL_MS = 2000
-const START_WEDGE_WATCH_MAX_TICKS = 20
+const START_WEDGE_WATCH_INTERVAL_MS = 500
+const START_WEDGE_WATCH_MAX_TICKS = 80
+const START_WEDGE_CONFIRM_HITS = 8
 let startWedgeWatchTimer = null
 let startWedgeWatchTicks = 0
 let startWedgeWatchHits = 0
@@ -2989,28 +2990,34 @@ function armStartWedgeWatch() {
     }
     const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
     if (!mediaEl || mediaEl.paused || mediaEl.ended) return
-    const wedged = isMseAudioClockWedge({
-      readyState: mediaEl.readyState,
-      currentTime: mediaEl.currentTime || 0,
-      bufferedEndSeconds: bufferedEndSeconds(mediaEl),
-      audioCodec: vjs?.codecInfo?.()?.audioCodec,
-    })
-    if (!wedged) {
-      startWedgeWatchHits = 0
-      return
+    const audioCodec = vjs?.codecInfo?.()?.audioCodec
+    // A flagged engine wedges MPEG audio deterministically - codec alone convicts.
+    const knownEngine =
+      isKnownWedgedEngine() &&
+      isMpegAudioCodecString(audioCodec) &&
+      mediaEl.readyState < 2 &&
+      startWedgeWatchTicks >= 2
+    if (!knownEngine) {
+      const wedged = isMseAudioClockWedge({
+        readyState: mediaEl.readyState,
+        currentTime: mediaEl.currentTime || 0,
+        bufferedEndSeconds: bufferedEndSeconds(mediaEl),
+        audioCodec,
+      })
+      if (!wedged) {
+        startWedgeWatchHits = 0
+        return
+      }
+      startWedgeWatchHits++
+      if (startWedgeWatchHits < START_WEDGE_CONFIRM_HITS) return
     }
-    startWedgeWatchHits++
-    // Never convict on the very first interval - a healthy start can look wedged for a beat.
-    if (startWedgeWatchTicks < 2) return
-    const hitsNeeded = isKnownWedgedEngine() ? 1 : 2
-    if (startWedgeWatchHits < hitsNeeded) return
     clearStartWedgeWatch()
     rememberWedgedEngine()
     current.audioClockWedge = true
     log.warn("[xt:livetv] clock never started despite buffered MPEG audio - convicting the audio track", {
       streamId: current.streamId,
       readyState: mediaEl.readyState,
-      knownEngine: hitsNeeded === 1,
+      knownEngine,
     })
     giveUpOnPlayback(current)
   }, START_WEDGE_WATCH_INTERVAL_MS)
