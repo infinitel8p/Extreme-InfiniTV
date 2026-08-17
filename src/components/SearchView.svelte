@@ -26,6 +26,8 @@
     observeSeasonCount,
     seasonsLabel,
   } from "@/scripts/lib/series-seasons.ts"
+  import { searchPeople } from "@/scripts/lib/person-search.ts"
+  import { resolvePersonTitleIds } from "@/scripts/lib/person-filter.ts"
 
   /** @type {{ focusOnMount?: boolean }} */
   let { focusOnMount = false } = $props()
@@ -39,9 +41,22 @@
       return ""
     }
   }
-  const initialFromUrl = readUrlQuery()
+  function readUrlPersonParams() {
+    if (typeof window === "undefined") return null
+    try {
+      const params = new URL(window.location.href).searchParams
+      const name = params.get("person")
+      if (!name) return null
+      const tmdbIdRaw = Number(params.get("personId"))
+      return { name, tmdbId: Number.isFinite(tmdbIdRaw) && tmdbIdRaw > 0 ? tmdbIdRaw : null }
+    } catch {
+      return null
+    }
+  }
+  const initialPersonFromUrl = readUrlPersonParams()
+  const initialFromUrl = initialPersonFromUrl ? "" : readUrlQuery()
 
-  /** @type {"all"|"live"|"vod"|"series"|"epg"} */
+  /** @type {"all"|"live"|"vod"|"series"|"epg"|"actors"} */
   let kindFilter = $state("all")
   let query = $state(initialFromUrl)
   let queryDebounced = $state(initialFromUrl)
@@ -53,6 +68,17 @@
       syncUrl(value)
     }, 80)
   }
+
+  /** @type {{name: string, tmdbId: number|null}|null} */
+  let personMode = $state(initialPersonFromUrl)
+  /** @type {{vod: Set<number>, series: Set<number>}|null} */
+  let personTitleIds = $state(null)
+  let personResolveToken = 0
+  /** @type {import("@/scripts/lib/person-search.ts").PersonCandidate[]} */
+  let actorResults = $state([])
+  let _personSearchTimer = null
+  let _personSearchToken = 0
+
   let activeIndex = $state(0)
   /** @type {Array<{text: string, ts: number}>} */
   let recentSearches = $state([])
@@ -61,8 +87,10 @@
 
   /** @type {Array<{ kind: "live"|"vod"|"series"|"epg", id: string|number, name: string, logo: string|null, subtitle: string, href: string, norm: string }>} */
   let allItems = $state([])
+  let rawVodData = $state([])
+  let rawSeriesData = $state([])
   let isWarming = $state(false)
-  const showRecentSearches = $derived(!isWarming && !query.trim() && recentSearches.length > 0)
+  const showRecentSearches = $derived(!personMode && !isWarming && !query.trim() && recentSearches.length > 0)
   let locale = $state(0)
   let activePlaylistId = $state("")
   let seasonCounts = $state({})
@@ -136,6 +164,8 @@
       []
     const vodData = getCached(active._id, "vod")?.data || []
     const seriesData = getCached(active._id, "series")?.data || []
+    rawVodData = vodData
+    rawSeriesData = seriesData
 
     const cold =
       !liveData.length && !vodData.length && !seriesData.length
@@ -237,6 +267,115 @@
     } catch {}
   }
 
+  function syncPersonUrl() {
+    try {
+      const url = new URL(window.location.href)
+      if (personMode) {
+        url.searchParams.set("person", personMode.name)
+        if (personMode.tmdbId) url.searchParams.set("personId", String(personMode.tmdbId))
+        else url.searchParams.delete("personId")
+        url.searchParams.delete("q")
+      } else {
+        url.searchParams.delete("person")
+        url.searchParams.delete("personId")
+      }
+      window.history.replaceState({}, "", url.toString())
+    } catch {}
+  }
+
+  function personInitials(name) {
+    const parts = (name || "").trim().split(/\s+/).filter(Boolean)
+    if (!parts.length) return "?"
+    if (parts.length === 1) return parts[0][0].toUpperCase()
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+  }
+
+  function toCatalogEntries(list) {
+    return list.map((entry) => ({ id: entry.id, name: entry.name || "", year: entry.year || null }))
+  }
+
+  async function resolvePersonMode() {
+    if (!personMode) return
+    const runToken = ++personResolveToken
+    personTitleIds = null
+    const currentPerson = personMode
+    const [vodIds, seriesIds] = await Promise.all([
+      resolvePersonTitleIds({
+        kind: "vod",
+        playlistId: activePlaylistId,
+        personName: currentPerson.name,
+        tmdbPersonId: currentPerson.tmdbId,
+        catalogEntries: toCatalogEntries(rawVodData),
+      }),
+      resolvePersonTitleIds({
+        kind: "series",
+        playlistId: activePlaylistId,
+        personName: currentPerson.name,
+        tmdbPersonId: currentPerson.tmdbId,
+        catalogEntries: toCatalogEntries(rawSeriesData),
+      }),
+    ])
+    if (runToken !== personResolveToken) return
+    personTitleIds = { vod: vodIds, series: seriesIds }
+  }
+
+  function enterPersonMode(candidate) {
+    if (_personSearchTimer) {
+      clearTimeout(_personSearchTimer)
+      _personSearchTimer = null
+    }
+    _personSearchToken++
+    actorResults = []
+    personMode = { name: candidate.name, tmdbId: candidate.tmdbId }
+    personTitleIds = null
+    kindFilter = "all"
+    query = ""
+    queryDebounced = ""
+    syncPersonUrl()
+    resolvePersonMode()
+  }
+
+  function exitPersonMode() {
+    if (!personMode) return
+    personResolveToken++
+    personMode = null
+    personTitleIds = null
+    syncPersonUrl()
+  }
+
+  function scheduleActorSearch(value) {
+    if (_personSearchTimer) clearTimeout(_personSearchTimer)
+    const trimmed = value.trim()
+    if (trimmed.length < 2 || !activePlaylistId) {
+      actorResults = []
+      return
+    }
+    _personSearchTimer = setTimeout(async () => {
+      const runToken = ++_personSearchToken
+      const candidates = await searchPeople(activePlaylistId, trimmed, 5)
+      if (runToken !== _personSearchToken) return
+      actorResults = candidates
+    }, 300)
+  }
+
+  function personModeResults() {
+    if (!personTitleIds) return []
+    const activeKind = kindFilter === "vod" || kindFilter === "series" ? kindFilter : "all"
+    const out = []
+    for (const item of allItems) {
+      if (item.kind === "vod") {
+        if (!personTitleIds.vod.has(item.id)) continue
+      } else if (item.kind === "series") {
+        if (!personTitleIds.series.has(item.id)) continue
+      } else {
+        continue
+      }
+      if (activeKind !== "all" && activeKind !== item.kind) continue
+      out.push(item)
+    }
+    return out
+  }
+
   let scoredAll = $derived.by(() => {
     const counts = { all: 0, live: 0, vod: 0, series: 0, epg: 0 }
     const normalizedQuery = normalize(queryDebounced.trim())
@@ -273,19 +412,34 @@
   })
 
   let results = $derived.by(() => {
+    if (personMode) return personTitleIds === null ? [] : personModeResults()
     const items = scoredAll.items
     const activeKind = kindFilter
     const out = []
     const MAX = 200
-    for (let i = 0; i < items.length && out.length < MAX; i++) {
-      const it = items[i].item
-      if (activeKind !== "all" && it.kind !== activeKind) continue
-      out.push(it)
+    if ((activeKind === "all" || activeKind === "actors") && actorResults.length && queryDebounced.trim()) {
+      for (const candidate of actorResults) {
+        out.push({
+          kind: "person",
+          id: candidate.tmdbId ?? candidate.name,
+          name: candidate.name,
+          profileUrl: candidate.profileUrl,
+          knownFor: candidate.knownFor,
+          candidate,
+        })
+      }
+    }
+    if (activeKind !== "actors") {
+      for (let i = 0; i < items.length && out.length < MAX; i++) {
+        const it = items[i].item
+        if (activeKind !== "all" && it.kind !== activeKind) continue
+        out.push(it)
+      }
     }
     return out
   })
 
-  let kindCounts = $derived(scoredAll.counts)
+  let kindCounts = $derived({ ...scoredAll.counts, actors: actorResults.length })
 
   $effect(() => {
     void results
@@ -308,9 +462,11 @@
       clearTimeout(_queryTimer)
       _queryTimer = null
     }
+    if (personMode) exitPersonMode()
     query = text
     queryDebounced = text
     syncUrl(text)
+    scheduleActorSearch(text)
     inputEl?.focus()
   }
 
@@ -325,6 +481,10 @@
 
   function navigate(item) {
     if (!item) return
+    if (item.kind === "person") {
+      enterPersonMode(item.candidate)
+      return
+    }
     commitSearch()
     window.location.href = item.href
   }
@@ -332,7 +492,14 @@
   function onKey(ev) {
     const onInput = document.activeElement === inputEl
     const inRecentSection = !!recentSectionEl?.contains(document.activeElement)
-    if (onInput && ev.key === "ArrowDown" && showRecentSearches) {
+    if (onInput && personMode && ev.key === "Backspace" && !query) {
+      ev.preventDefault()
+      exitPersonMode()
+    } else if (ev.key === "Escape" && personMode) {
+      ev.preventDefault()
+      exitPersonMode()
+      inputEl?.focus()
+    } else if (onInput && ev.key === "ArrowDown" && showRecentSearches) {
       ev.preventDefault()
       ev.stopImmediatePropagation()
       recentSectionEl?.querySelector(".recent-search-row")?.focus()
@@ -363,7 +530,9 @@
   }
 
   onMount(() => {
-    loadIndex()
+    loadIndex().then(() => {
+      if (personMode) resolvePersonMode()
+    })
     function onWarmed() {
       loadIndex({ warm: false })
     }
@@ -371,7 +540,10 @@
       loadIndex({ warm: false, warmEpg: false })
     }
     const onLocale = () => { locale++ }
-    const onActiveChanged = () => loadIndex()
+    const onActiveChanged = () =>
+      loadIndex().then(() => {
+        if (personMode) resolvePersonMode()
+      })
     const onSearchRecentChanged = (ev) => {
       if (ev.detail?.playlistId === activePlaylistId) refreshRecentSearches()
     }
@@ -395,6 +567,7 @@
       document.removeEventListener(EVT_SEARCH_RECENT_CHANGED, onSearchRecentChanged)
       window.removeEventListener("keydown", onKey, true)
       if (_queryTimer) clearTimeout(_queryTimer)
+      if (_personSearchTimer) clearTimeout(_personSearchTimer)
     }
   })
 </script>
@@ -405,13 +578,27 @@
       <svg xmlns="http://www.w3.org/2000/svg" width="1.125rem" height="1.125rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="text-fg-3 shrink-0">
         <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
       </svg>
+      {#if personMode}
+        <span class="person-chip inline-flex items-center gap-1.5 min-h-9 pl-2.5 pr-1 py-1 rounded-lg bg-accent-soft text-accent text-sm max-w-[55%] shrink-0">
+          <span class="truncate">{personMode.name}</span>
+          <button
+            type="button"
+            onclick={exitPersonMode}
+            aria-label={tr("search.personChipRemove", { name: personMode.name })}
+            class="person-chip-remove size-7 shrink-0 inline-flex items-center justify-center rounded-md text-accent hover:bg-surface-2/60 focus-visible:bg-surface-2/60 outline-none transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="0.8rem" height="0.8rem" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </span>
+      {/if}
       <input
         bind:this={inputEl}
-        value={query}
+        value={personMode ? "" : query}
         oninput={(ev) => {
           const value = ev.currentTarget.value
+          if (personMode) exitPersonMode()
           query = value
           setQueryDebounced(value)
+          scheduleActorSearch(value)
         }}
         type="search"
         placeholder={tr("search.placeholderFull")}
@@ -419,13 +606,18 @@
         autocomplete="off"
         spellcheck="false"
         class="flex-1 min-w-0 bg-transparent text-fg placeholder:text-fg-3 outline-none py-2 text-base" />
-      {#if query}
+      {#if query && !personMode}
         <button
           type="button"
           onclick={() => {
             query = ""
             queryDebounced = ""
             syncUrl("")
+            actorResults = []
+            if (_personSearchTimer) {
+              clearTimeout(_personSearchTimer)
+              _personSearchTimer = null
+            }
             inputEl?.focus()
           }}
           aria-label={tr("search.clear")}
@@ -436,7 +628,7 @@
     </div>
 
     <div class="flex items-center gap-1 overflow-x-auto custom-scroll -mx-1 px-1">
-      {#each /** @type {const} */ (["all", "live", "vod", "series", "epg"]) as kindOption}
+      {#each /** @type {const} */ (["all", "live", "vod", "series", "actors", "epg"]) as kindOption}
         <button
           type="button"
           onclick={() => (kindFilter = kindOption)}
@@ -456,6 +648,8 @@
             ? tr("nav.livetv")
             : kindOption === "epg"
             ? tr("nav.epg")
+            : kindOption === "actors"
+            ? tr("search.actors")
             : tr("nav.series")}
           {#if queryDebounced.trim()}
             <span class="ml-1.5 text-2xs tabular-nums opacity-70">{kindCounts[kindOption]}</span>
@@ -476,7 +670,7 @@
   {/snippet}
 
   <div class="flex-1 min-h-0 overflow-auto custom-scroll">
-    {#if !queryDebounced.trim()}
+    {#if !personMode && !queryDebounced.trim()}
       {#if showRecentSearches}
         <div bind:this={recentSectionEl} class="recent-searches pt-3 pb-2">
           <div class="flex items-baseline justify-between gap-2 mb-1 px-2.5">
@@ -520,9 +714,23 @@
           <p class="text-2xs">{tr("search.helpKbd")}</p>
         {/if}
       </div>
+    {:else if personMode && personTitleIds === null}
+      <ul class="flex flex-col gap-1 pt-3 pb-4" aria-hidden="true">
+        {#each Array.from({ length: 6 }) as _, i (i)}
+          <li class="flex items-center gap-3 px-2.5 py-2">
+            <span class="size-12 shrink-0 rounded-full skel" style:--skel-delay={i * 90 + "ms"}></span>
+            <span class="flex-1 min-w-0 flex flex-col gap-1.5">
+              <span class="h-3 rounded skel" style:width={60 + ((i * 7) % 30) + "%"} style:--skel-delay={i * 90 + 70 + "ms"}></span>
+              <span class="h-2.5 rounded skel" style:width={30 + ((i * 5) % 25) + "%"} style:--skel-delay={i * 90 + 140 + "ms"}></span>
+            </span>
+          </li>
+        {/each}
+      </ul>
     {:else if !results.length}
       <div class="px-4 py-12 text-center text-sm text-fg-3 max-w-md mx-auto">
-        {#if isWarming}
+        {#if personMode}
+          <p>{tr("search.noResultsForPerson", { name: personMode.name })}</p>
+        {:else if isWarming}
           {@render warming(tr("search.warmingResultsHint"))}
         {:else}
           <p>{tr("search.noResults", { query: queryDebounced.trim() })}</p>
@@ -539,39 +747,76 @@
     {:else}
       <ul class="flex flex-col gap-1 pb-4">
         {#each results as result, idx (result.kind + ":" + result.id)}
+          {#if !personMode && result.kind === "person" && idx === 0}
+            <li class="px-2.5 pt-1 pb-1.5">
+              <span class="text-eyebrow font-medium uppercase tracking-wide text-fg-3">{tr("search.actors")}</span>
+            </li>
+          {/if}
           <li class="result-row" style:--enter-delay={Math.min(idx, 12) * 18 + "ms"}>
-            <a
-              href={result.href}
-              use:lazySeasons={result}
-              onmouseenter={() => (activeIndex = idx)}
-              onfocus={() => (activeIndex = idx)}
-              onclick={commitSearch}
-              class="w-full text-left rounded-lg px-2.5 py-2 flex items-center gap-3 outline-none transition-colors focus-visible:bg-surface-2"
-              class:bg-surface-2={activeIndex === idx}>
-              <span class="size-12 shrink-0 rounded-md bg-surface-2 ring-1 ring-line overflow-hidden flex items-center justify-center">
-                {#if result.logo}
-                  <img
-                    use:cachedImg={{ url: result.logo, kind: result.kind === "live" ? "logo" : "poster" }}
-                    alt=""
-                    loading="lazy" fetchpriority="low"
-                    decoding="async"
-                    referrerpolicy="no-referrer"
-                    width="48" height="48"
-                    class="h-full w-full"
-                    class:object-cover={result.kind !== "live"}
-                    class:object-contain={result.kind === "live"} />
-                {:else}
-                  <span class="text-2xs text-fg-3 uppercase">{kl(result.kind)[0]}</span>
-                {/if}
-              </span>
-              <span class="flex-1 min-w-0">
-                <span class="block truncate text-sm text-fg">{result.name}</span>
-                <span class="block truncate text-2xs text-fg-3">{displaySubtitle(result)}</span>
-              </span>
-              <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
-                {kl(result.kind)}
-              </span>
-            </a>
+            {#if result.kind === "person"}
+              <button
+                type="button"
+                onmouseenter={() => (activeIndex = idx)}
+                onfocus={() => (activeIndex = idx)}
+                onclick={() => enterPersonMode(result.candidate)}
+                class="w-full text-left rounded-lg px-2.5 py-2 flex items-center gap-3 outline-none transition-colors focus-visible:bg-surface-2"
+                class:bg-surface-2={activeIndex === idx}>
+                <span class="size-12 shrink-0 rounded-full bg-surface-2 ring-1 ring-line overflow-hidden flex items-center justify-center text-2xs font-medium uppercase text-fg-3">
+                  {#if result.profileUrl}
+                    <img
+                      use:cachedImg={{ url: result.profileUrl, kind: "poster" }}
+                      alt=""
+                      loading="lazy" fetchpriority="low"
+                      decoding="async"
+                      referrerpolicy="no-referrer"
+                      width="48" height="48"
+                      class="h-full w-full object-cover" />
+                  {:else}
+                    {personInitials(result.name)}
+                  {/if}
+                </span>
+                <span class="flex-1 min-w-0">
+                  <span class="block truncate text-sm text-fg">{result.name}</span>
+                  <span class="block truncate text-2xs text-fg-3">{result.knownFor || tr("search.actorGeneric")}</span>
+                </span>
+                <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
+                  {tr("search.actorGeneric")}
+                </span>
+              </button>
+            {:else}
+              <a
+                href={result.href}
+                use:lazySeasons={result}
+                onmouseenter={() => (activeIndex = idx)}
+                onfocus={() => (activeIndex = idx)}
+                onclick={commitSearch}
+                class="w-full text-left rounded-lg px-2.5 py-2 flex items-center gap-3 outline-none transition-colors focus-visible:bg-surface-2"
+                class:bg-surface-2={activeIndex === idx}>
+                <span class="size-12 shrink-0 rounded-md bg-surface-2 ring-1 ring-line overflow-hidden flex items-center justify-center">
+                  {#if result.logo}
+                    <img
+                      use:cachedImg={{ url: result.logo, kind: result.kind === "live" ? "logo" : "poster" }}
+                      alt=""
+                      loading="lazy" fetchpriority="low"
+                      decoding="async"
+                      referrerpolicy="no-referrer"
+                      width="48" height="48"
+                      class="h-full w-full"
+                      class:object-cover={result.kind !== "live"}
+                      class:object-contain={result.kind === "live"} />
+                  {:else}
+                    <span class="text-2xs text-fg-3 uppercase">{kl(result.kind)[0]}</span>
+                  {/if}
+                </span>
+                <span class="flex-1 min-w-0">
+                  <span class="block truncate text-sm text-fg">{result.name}</span>
+                  <span class="block truncate text-2xs text-fg-3">{displaySubtitle(result)}</span>
+                </span>
+                <span class="shrink-0 text-2xs uppercase tracking-wide text-fg-3 px-1.5 py-0.5 rounded border border-line">
+                  {kl(result.kind)}
+                </span>
+              </a>
+            {/if}
           </li>
         {/each}
         {#if scoredAll.items.length >= 500}
@@ -603,7 +848,8 @@
   }
 
   @media (pointer: coarse) {
-    .search-clear {
+    .search-clear,
+    .person-chip-remove {
       width: 2.75rem;
       height: 2.75rem;
     }

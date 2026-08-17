@@ -23,6 +23,7 @@ import {
   mapXtreamVodRows,
   mapXtreamSeriesRows,
   rowsNeedTmdbBackfill,
+  rowsNeedGenreBackfill,
 } from "@/scripts/lib/catalog-mappers.js"
 import { triggerTmdbBackfillOnce } from "@/scripts/lib/tmdb-backfill.ts"
 import { providerFetch, streamingText } from "@/scripts/lib/provider-fetch.js"
@@ -328,7 +329,7 @@ export async function ensureSeries(creds, playlistId, opts = {}) {
     return mapXtreamSeriesRows(arr, catMap)
   })
   const { data } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, fetcher, { force: !!opts.force })
-  if (!opts.force && rowsNeedTmdbBackfill(data)) {
+  if (!opts.force && (rowsNeedTmdbBackfill(data) || rowsNeedGenreBackfill(data))) {
     triggerTmdbBackfillOnce(playlistId, "series", SERIES_TTL_MS, fetcher)
   }
   return data || []

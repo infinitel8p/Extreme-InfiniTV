@@ -63,6 +63,7 @@ import {
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
 import { resolveTmdbId, fetchMovieEnrichment, peekEarlyDetailData } from "@/scripts/lib/tmdb-enrich.ts"
+import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
@@ -298,6 +299,7 @@ function applyVodInfo(data) {
   metaGenreText = genre || ""
   metaRatingText = fmtImdbRating(rating)
   renderMetaLine()
+  if (activePlaylistId) noteDetailGenres(activePlaylistId, "vod", movieId, genre)
   if (plotEl) plotEl.textContent = plot || t("detail.noDescription")
 
   trailerUrl = youtubeUrlFromTrailer(
@@ -401,6 +403,7 @@ function patchGenreFromEnrichment(genres) {
   if (!genres?.length || metaGenreText) return
   metaGenreText = genres.join(", ")
   renderMetaLine()
+  if (activePlaylistId) noteDetailGenres(activePlaylistId, "vod", movieId, metaGenreText)
 }
 
 function patchYearFromEnrichment(year) {

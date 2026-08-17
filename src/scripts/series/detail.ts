@@ -72,6 +72,7 @@ import {
   peekCachedSeasonEnrichment,
 } from "@/scripts/lib/tmdb-enrich.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
+import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
@@ -770,6 +771,7 @@ function applySeriesInfo(data) {
   metaRatingText = fmtImdbRating(rating)
   metaSeasonsText = seasons.length ? `${seasons.length} season${seasons.length > 1 ? "s" : ""}` : ""
   renderMetaLine()
+  if (activePlaylistId) noteDetailGenres(activePlaylistId, "series", seriesId, genre)
   if (plotEl) {
     plotEl.textContent = plot || (cast ? t("series.castPrefix", { cast }) : t("detail.noDescription"))
   }
@@ -900,6 +902,7 @@ function patchGenreFromEnrichment(genres) {
   if (!genres?.length || metaGenreText) return
   metaGenreText = genres.join(", ")
   renderMetaLine()
+  if (activePlaylistId) noteDetailGenres(activePlaylistId, "series", seriesId, metaGenreText)
 }
 
 function patchYearFromEnrichment(year) {

@@ -1,4 +1,6 @@
 // Thin TMDb v3 API client. Auth via Bearer (v4 read token) or api_key query param.
+import { getTmdbApiKey, isTmdbActive } from "@/scripts/lib/app-settings.js"
+import { log } from "@/scripts/lib/log.js"
 
 const TMDB_BASE = "https://api.themoviedb.org/3"
 
@@ -174,6 +176,88 @@ export async function tmdbSearchTv(
   if (Number.isFinite(year)) params.first_air_date_year = year as number
   const data = await tmdbFetch<{ results?: TmdbSearchResult[] }>(key, "/search/tv", params)
   return data.results || []
+}
+
+export interface TmdbPersonSearchItem {
+  id: number
+  name: string
+  profile_path?: string | null
+  known_for?: Array<{ title?: string; name?: string }>
+  popularity?: number
+}
+
+export interface TmdbPersonResult {
+  id: number
+  name: string
+  profileUrl: string | null
+  knownFor: string | null
+  popularity: number
+}
+
+export interface TmdbDiscoverItem {
+  tmdbId: number
+  name: string
+  year: string
+}
+
+interface TmdbDiscoverResult {
+  id: number
+  title?: string
+  name?: string
+  release_date?: string
+  first_air_date?: string
+}
+
+interface TmdbDiscoverResponse {
+  results?: TmdbDiscoverResult[]
+  total_pages?: number
+}
+
+export async function tmdbDiscoverByGenre(
+  kind: "vod" | "series",
+  tmdbGenreId: number,
+  page: number
+): Promise<{ items: TmdbDiscoverItem[]; totalPages: number } | null> {
+  if (!isTmdbActive()) return null
+  const apiKey = getTmdbApiKey()
+  const path = kind === "vod" ? "/discover/movie" : "/discover/tv"
+  try {
+    const data = await tmdbFetch<TmdbDiscoverResponse>(apiKey, path, {
+      with_genres: tmdbGenreId,
+      page,
+      sort_by: "popularity.desc",
+    })
+    const items = (data.results || []).map((result) => ({
+      tmdbId: result.id,
+      name: (kind === "vod" ? result.title : result.name) || "",
+      year: ((kind === "vod" ? result.release_date : result.first_air_date) || "").slice(0, 4),
+    }))
+    return { items, totalPages: data.total_pages || 0 }
+  } catch (error) {
+    log.warn("[xt:tmdb] tmdbDiscoverByGenre failed:", kind, tmdbGenreId, page, error)
+    return null
+  }
+}
+
+export async function tmdbSearchPerson(query: string): Promise<TmdbPersonResult[]> {
+  const trimmed = query.trim()
+  if (!trimmed || !isTmdbActive()) return []
+  const apiKey = getTmdbApiKey()
+  try {
+    const data = await tmdbFetch<{ results?: TmdbPersonSearchItem[] }>(apiKey, "/search/person", {
+      query: trimmed,
+    })
+    return (data.results || []).map((item) => ({
+      id: item.id,
+      name: item.name,
+      profileUrl: tmdbImageUrl(item.profile_path, TMDB_PROFILE_SIZE),
+      knownFor: item.known_for?.[0] ? item.known_for[0].title || item.known_for[0].name || null : null,
+      popularity: item.popularity || 0,
+    }))
+  } catch (error) {
+    log.warn("[xt:tmdb] tmdbSearchPerson failed:", error)
+    return []
+  }
 }
 
 export async function tmdbMovieBundle(

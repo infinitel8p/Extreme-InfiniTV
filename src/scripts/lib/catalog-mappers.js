@@ -134,10 +134,18 @@ export function mapXtreamSeriesRows(rawRows, categoryMap) {
         added,
         norm: normalize(`${name} ${category} ${year}`),
         tmdb,
+        genre: String(s.genre || "").trim(),
       }
     })
     .filter((s) => s.id && s.name)
     .sort((a, b) =>
       a.name.localeCompare(b.name, "en", { sensitivity: "base" })
     )
+}
+
+/** True when `rows` predate the `genre` field and need a background backfill. */
+export function rowsNeedGenreBackfill(rows) {
+  if (!Array.isArray(rows) || !rows.length) return false
+  const firstRow = rows[0]
+  return !!firstRow && typeof firstRow === "object" && !("genre" in firstRow)
 }

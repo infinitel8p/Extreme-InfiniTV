@@ -37,7 +37,7 @@ export function titleIdsForPersonLocal(
   return ids
 }
 
-function parseProviderPeopleFor(kind: TmdbKind, data: unknown): LocalSimilarInfo {
+export function parseProviderPeopleFor(kind: TmdbKind, data: unknown): LocalSimilarInfo {
   const record = data as Record<string, unknown> | null | undefined
   const info = kind === "series" ? record?.info : record?.info || record?.movie_data || record
   return parseProviderPeople(info as Parameters<typeof parseProviderPeople>[0])

@@ -33,8 +33,10 @@ import {
   getGroupLanguages,
   setGroupLanguages,
 } from "@/scripts/lib/preferences.js"
-import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
+import { mountCategoryPicker, genreLabelForCategory } from "@/scripts/lib/category-picker.ts"
+import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
 import { mountSurprisePicker } from "@/scripts/lib/surprise-picker.ts"
+import { mountPersonSuggestStrip } from "@/scripts/lib/person-suggest.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { fmtImdbRating, ratingSortValue } from "@/scripts/lib/format.js"
@@ -98,6 +100,38 @@ let categoryMap = null
 let activePlaylistId = ""
 let activePlaylistTitle = ""
 
+// Genre index is async and rebuilt local-only; snapshot + playlist guard avoid races on quick playlist switches.
+let genreSets = null
+let genreSetsPlaylistId = ""
+let genreSetsLoadingId = ""
+
+async function refreshGenreSets(playlistId) {
+  if (!playlistId) return
+  genreSetsLoadingId = playlistId
+  try {
+    const index = await getGenreIndex(playlistId, "vod")
+    if (playlistId !== activePlaylistId) return
+    genreSets = index.sets
+    genreSetsPlaylistId = playlistId
+    applyFilter()
+  } finally {
+    if (genreSetsLoadingId === playlistId) genreSetsLoadingId = ""
+  }
+}
+
+// applyFilter can hit a genre category before any paint loaded the snapshot (back-nav, bfcache, playlist switch).
+function ensureGenreSets() {
+  if (!activePlaylistId || genreSetsLoadingId === activePlaylistId) return
+  refreshGenreSets(activePlaylistId).catch(() => {})
+}
+
+document.addEventListener(GENRE_INDEX_EVENT, (ev) => {
+  const detail = /** @type {CustomEvent} */ (ev).detail
+  if (!detail || detail.kind !== "vod") return
+  if (detail.playlistId !== activePlaylistId) return
+  refreshGenreSets(activePlaylistId)
+})
+
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
 
@@ -109,7 +143,13 @@ const picker = mountCategoryPicker({
   getActivePlaylistId: () => activePlaylistId,
   getItems: () => all,
 })
-document.addEventListener("xt:movie-cat-changed", () => applyFilter())
+document.addEventListener("xt:movie-cat-changed", (ev) => {
+  const activeCat = /** @type {CustomEvent} */ (ev).detail
+  if (activePlaylistId && typeof activeCat === "string" && activeCat.startsWith(GENRE_CAT_PREFIX)) {
+    ensureGenreBoost(activePlaylistId, "vod", activeCat.slice(GENRE_CAT_PREFIX.length)).catch(() => {})
+  }
+  applyFilter()
+})
 
 mountSurprisePicker({
   kind: "vod",
@@ -527,6 +567,16 @@ const personFilter = createPersonFilterController({
 })
 
 // ----------------------------
+// Actor suggestion pills (search input -> existing person filter)
+// ----------------------------
+const personSuggest = mountPersonSuggestStrip({
+  searchEl,
+  insertBeforeEl: listStatus,
+  basePath: "/movies",
+  getActivePlaylistId: () => activePlaylistId,
+})
+
+// ----------------------------
 // Search + filter
 // ----------------------------
 function applyFilter() {
@@ -549,6 +599,12 @@ function applyFilter() {
       const m = byId.get(r.id)
       if (m) out.push(m)
     }
+  } else if (activeCat.startsWith(GENRE_CAT_PREFIX)) {
+    const genreId = activeCat.slice(GENRE_CAT_PREFIX.length)
+    const snapshotReady = !!genreSets && genreSetsPlaylistId === activePlaylistId
+    if (!snapshotReady) ensureGenreSets()
+    const idsForGenre = snapshotReady ? genreSets.get(genreId) : null
+    out = idsForGenre ? all.filter((m) => idsForGenre.has(m.id)) : []
   } else {
     out = all.filter((m) => {
       if (activeCat && (m.category || "") !== activeCat) return false
@@ -661,7 +717,7 @@ function applyFilter() {
         ? t("list.heroFavorites")
         : activeCat === CAT_RECENTS
           ? t("list.heroRecents")
-          : (activeCat as string) || t("list.allCategories")
+          : genreLabelForCategory(activeCat) || (activeCat as string) || t("list.allCategories")
   }
   renderGrid(gridRestore.consumePending)
 }
@@ -774,6 +830,7 @@ clearSearchBtn?.addEventListener("click", () => {
   if (!searchEl) return
   searchEl.value = ""
   clearSearchBtn.classList.add("hidden")
+  personSuggest.clear()
   applyFilter()
 })
 
@@ -798,6 +855,7 @@ function paintMovies(data, fromCache, age) {
   }
   picker.rerender()
   populateLanguageFilterOptions()
+  refreshGenreSets(activePlaylistId)
   applyFilter()
 }
 
@@ -927,6 +985,7 @@ if (listStatus && /no playlist selected/i.test(listStatus.textContent || "")) {
 
 document.addEventListener("xt:active-changed", () => {
   if (personFilter.isActive()) personFilter.clear()
+  personSuggest.clear()
   gridRestore.reset()
   loadMovies()
 })
