@@ -1,7 +1,7 @@
 {
   "productName": "Extreme InfiniTV",
   "mainBinaryName": "extreme-infinitv",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "identifier": "com.infinitel8p.xtream",
   "build": {
     "frontendDist": "../dist",
@@ -50,7 +50,7 @@
     "copyright": "© 2025 Ludovico Ferrara",
     "createUpdaterArtifacts": true,
     "android": {
-      "versionCode": 100800090
+      "versionCode": 100900090
     },
     "icon": [
       "icons/32x32.png",
