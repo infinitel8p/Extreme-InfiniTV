@@ -468,6 +468,8 @@
   "detail.action.watchLater": "Watch later",
   "detail.action.removeWatchlist": "Remove from watch later",
   "detail.action.trailer": "Trailer",
+  "detail.trailer.openYoutube": "Open in YouTube",
+  "detail.trailer.embedBlocked": "Trailer can't be embedded here - opening in YouTube",
   "detail.action.pip": "Picture-in-Picture",
   "detail.action.download": "Download",
   "detail.action.downloading": "Downloading…",

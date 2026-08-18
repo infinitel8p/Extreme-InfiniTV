@@ -468,6 +468,8 @@
   "detail.action.watchLater": "Tonton nanti",
   "detail.action.removeWatchlist": "Hapus dari tonton nanti",
   "detail.action.trailer": "Trailer",
+  "detail.trailer.openYoutube": "Buka di YouTube",
+  "detail.trailer.embedBlocked": "Trailer tidak dapat disematkan di sini - membuka di YouTube",
   "detail.action.pip": "Gambar dalam gambar",
   "detail.action.download": "Unduh",
   "detail.action.downloading": "Mengunduh…",

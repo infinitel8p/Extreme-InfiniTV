@@ -13,6 +13,7 @@ import {
   IconClockEdit,
   IconChartBar,
   IconActivityHeartbeat,
+  IconX,
 } from "@tabler/icons-svelte"
 ---
 
@@ -81,6 +82,34 @@ import {
               controls
               hidden
               playsinline></video>
+          </div>
+          <div
+            id="movie-detail-trailer-wrap"
+            class="hidden relative aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line
+                   max-h-[60dvh] max-w-[calc(60dvh*16/9)]">
+            <iframe
+              id="movie-detail-trailer-frame"
+              class="h-full w-full border-0"
+              allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+              allowfullscreen></iframe>
+            <div class="absolute top-2 right-2 z-10 flex gap-1.5">
+              <button
+                id="movie-detail-trailer-external"
+                type="button"
+                class="grid place-items-center min-h-11 min-w-11 rounded-lg bg-black/60 text-white
+                       hover:bg-black/80 focus-visible:bg-black/80 focus-visible:ring-2 focus-visible:ring-accent"
+                data-i18n-attr="aria-label:detail.trailer.openYoutube;title:detail.trailer.openYoutube">
+                <IconBrandYoutube aria-hidden="true" stroke={2} class="size-5" />
+              </button>
+              <button
+                id="movie-detail-trailer-close"
+                type="button"
+                class="grid place-items-center min-h-11 min-w-11 rounded-lg bg-black/60 text-white
+                       hover:bg-black/80 focus-visible:bg-black/80 focus-visible:ring-2 focus-visible:ring-accent"
+                data-i18n-attr="aria-label:common.close;title:common.close">
+                <IconX aria-hidden="true" stroke={2} class="size-5" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -189,7 +218,8 @@ import {
             id="movie-detail-trailer"
             type="button"
             hidden
-            class="btn">
+            aria-pressed="false"
+            class="btn aria-pressed:bg-accent-soft aria-pressed:text-fg aria-pressed:border-accent">
             <IconBrandYoutube aria-hidden="true" stroke={2} class="btn-icon" />
             <span data-i18n="detail.action.trailer">Trailer</span>
           </button>

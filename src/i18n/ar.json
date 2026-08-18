@@ -468,6 +468,8 @@
   "detail.action.watchLater": "للمشاهدة لاحقاً",
   "detail.action.removeWatchlist": "إزالة من المشاهدة لاحقاً",
   "detail.action.trailer": "المقطع الترويجي",
+  "detail.trailer.openYoutube": "فتح في YouTube",
+  "detail.trailer.embedBlocked": "لا يمكن تضمين المقطع الترويجي هنا - سيتم فتحه في YouTube",
   "detail.action.pip": "صورة داخل صورة",
   "detail.action.download": "تنزيل",
   "detail.action.downloading": "جارٍ التنزيل…",

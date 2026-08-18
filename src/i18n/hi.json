@@ -468,6 +468,8 @@
   "detail.action.watchLater": "बाद में देखें",
   "detail.action.removeWatchlist": "बाद में देखें से हटाएं",
   "detail.action.trailer": "ट्रेलर",
+  "detail.trailer.openYoutube": "यूट्यूब में खोलें",
+  "detail.trailer.embedBlocked": "ट्रेलर यहां एम्बेड नहीं किया जा सकता - यूट्यूब में खोला जा रहा है",
   "detail.action.pip": "पिक्चर-इन-पिक्चर",
   "detail.action.download": "डाउनलोड",
   "detail.action.downloading": "डाउनलोड हो रहा है…",

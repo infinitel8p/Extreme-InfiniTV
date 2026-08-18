@@ -468,6 +468,8 @@
   "detail.action.watchLater": "Daha sonra izle",
   "detail.action.removeWatchlist": "Daha sonra izle listesinden kaldır",
   "detail.action.trailer": "Fragman",
+  "detail.trailer.openYoutube": "YouTube'da aç",
+  "detail.trailer.embedBlocked": "Fragman burada gömülemiyor - YouTube'da açılıyor",
   "detail.action.pip": "Görüntü içinde görüntü",
   "detail.action.download": "İndir",
   "detail.action.downloading": "İndiriliyor…",

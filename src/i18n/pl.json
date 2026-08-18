@@ -468,6 +468,8 @@
   "detail.action.watchLater": "Obejrzyj później",
   "detail.action.removeWatchlist": "Usuń z obejrzyj później",
   "detail.action.trailer": "Zwiastun",
+  "detail.trailer.openYoutube": "Otwórz w YouTube",
+  "detail.trailer.embedBlocked": "Zwiastuna nie można osadzić tutaj - otwieranie w YouTube",
   "detail.action.pip": "Obraz w obrazie",
   "detail.action.download": "Pobierz",
   "detail.action.downloading": "Pobieranie…",

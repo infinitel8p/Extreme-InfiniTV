@@ -468,6 +468,8 @@
   "detail.action.watchLater": "Assistir depois",
   "detail.action.removeWatchlist": "Remover de Assistir depois",
   "detail.action.trailer": "Trailer",
+  "detail.trailer.openYoutube": "Abrir no YouTube",
+  "detail.trailer.embedBlocked": "O trailer não pode ser incorporado aqui - abrindo no YouTube",
   "detail.action.pip": "Picture-in-Picture",
   "detail.action.download": "Baixar",
   "detail.action.downloading": "Baixando…",

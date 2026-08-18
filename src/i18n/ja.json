@@ -468,6 +468,8 @@
   "detail.action.watchLater": "後で見る",
   "detail.action.removeWatchlist": "後で見るから削除",
   "detail.action.trailer": "予告編",
+  "detail.trailer.openYoutube": "YouTube で開く",
+  "detail.trailer.embedBlocked": "予告編はここに埋め込めません - YouTube で開きます",
   "detail.action.pip": "ピクチャー イン ピクチャー",
   "detail.action.download": "ダウンロード",
   "detail.action.downloading": "ダウンロード中…",

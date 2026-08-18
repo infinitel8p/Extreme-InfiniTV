@@ -468,6 +468,8 @@
   "detail.action.watchLater": "Later kijken",
   "detail.action.removeWatchlist": "Uit later kijken verwijderen",
   "detail.action.trailer": "Trailer",
+  "detail.trailer.openYoutube": "Openen in YouTube",
+  "detail.trailer.embedBlocked": "De trailer kan hier niet worden ingesloten - wordt geopend in YouTube",
   "detail.action.pip": "Beeld-in-beeld",
   "detail.action.download": "Downloaden",
   "detail.action.downloading": "Downloaden…",

@@ -27,7 +27,6 @@ import {
   clearAllVideoScaleOverrides,
   CHANNEL_VIDEO_SCALE_CHANGED_EVENT,
 } from "@/scripts/lib/preferences.js"
-import { openExternal } from "@/scripts/lib/external-link.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
   startDownload,
@@ -96,6 +95,7 @@ import {
   groupKeyForCatalog as sharedGroupKeyForCatalog,
   renderLanguagePills as sharedRenderLanguagePills,
 } from "@/scripts/lib/detail-chrome.ts"
+import { createInlineTrailer } from "@/scripts/lib/trailer-inline.ts"
 import { fmtImdbRating, parseHmsToSeconds } from "@/scripts/lib/format.js"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
@@ -1162,6 +1162,17 @@ async function populateSimilarRail(requestId) {
 let vjs = null
 let seriesInsights = null
 
+const inlineTrailer = createInlineTrailer({
+  wrapEl: document.getElementById("series-detail-trailer-wrap"),
+  frameEl: document.getElementById("series-detail-trailer-frame"),
+  closeBtn: document.getElementById("series-detail-trailer-close"),
+  externalBtn: document.getElementById("series-detail-trailer-external"),
+  posterEl,
+  playerWrap,
+  onOpen: () => { vjs?.pause?.() },
+  onStateChange: (open) => trailerBtn?.setAttribute("aria-pressed", open ? "true" : "false"),
+})
+
 function getSeriesInsights() {
   if (!seriesInsights) {
     seriesInsights = attachPlayerInsights({
@@ -1357,6 +1368,7 @@ function retirePreviousPlayback() {
 
 async function playEpisode(episode, options = {}) {
   if (!series || !episode) return
+  inlineTrailer.close()
   const requestId = ++playRequestId
   const src = episode?._directUrl
     ? buildEpisodeStreamUrl(episode)
@@ -1832,7 +1844,8 @@ document.addEventListener("xt:watchlist-changed", (e) => {
 // ----------------------------
 trailerBtn?.addEventListener("click", () => {
   if (!trailerUrl) return
-  openExternal(trailerUrl)
+  if (inlineTrailer.isOpen()) inlineTrailer.close()
+  else inlineTrailer.open(trailerUrl, titleEl?.textContent?.trim() || undefined)
 })
 
 document.addEventListener("xt:progress-changed", (e) => {

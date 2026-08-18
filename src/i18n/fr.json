@@ -468,6 +468,8 @@
   "detail.action.watchLater": "À voir plus tard",
   "detail.action.removeWatchlist": "Retirer de À voir plus tard",
   "detail.action.trailer": "Bande-annonce",
+  "detail.trailer.openYoutube": "Ouvrir dans YouTube",
+  "detail.trailer.embedBlocked": "La bande-annonce ne peut pas être intégrée ici - ouverture dans YouTube",
   "detail.action.pip": "Picture-in-Picture",
   "detail.action.download": "Télécharger",
   "detail.action.downloading": "Téléchargement…",

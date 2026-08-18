@@ -468,6 +468,8 @@
   "detail.action.watchLater": "Посмотреть позже",
   "detail.action.removeWatchlist": "Убрать из «Посмотреть позже»",
   "detail.action.trailer": "Трейлер",
+  "detail.trailer.openYoutube": "Открыть в YouTube",
+  "detail.trailer.embedBlocked": "Трейлер нельзя встроить здесь - открывается в YouTube",
   "detail.action.pip": "Картинка в картинке",
   "detail.action.download": "Скачать",
   "detail.action.downloading": "Загрузка…",

@@ -468,6 +468,8 @@
   "detail.action.watchLater": "稍后观看",
   "detail.action.removeWatchlist": "从「稍后观看」移除",
   "detail.action.trailer": "预告片",
+  "detail.trailer.openYoutube": "在 YouTube 中打开",
+  "detail.trailer.embedBlocked": "无法在此嵌入预告片 - 正在通过 YouTube 打开",
   "detail.action.pip": "画中画",
   "detail.action.download": "下载",
   "detail.action.downloading": "下载中…",

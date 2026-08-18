@@ -65,6 +65,42 @@ export function youtubeUrlFromTrailer(trailer: unknown): string {
   return ""
 }
 
+const YOUTUBE_HOSTS = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "youtube-nocookie.com",
+  "www.youtube-nocookie.com",
+  "youtu.be",
+])
+
+/** Extracts the 11-char video id from a bare id or any recognized YouTube URL shape; "" otherwise. */
+export function youtubeKeyFromUrl(url: string): string {
+  const value = String(url ?? "").trim()
+  if (!value) return ""
+  if (/^[a-zA-Z0-9_-]{11}$/.test(value)) return value
+
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return ""
+  }
+  if (!/^https?:$/i.test(parsed.protocol)) return ""
+  if (!YOUTUBE_HOSTS.has(parsed.hostname.toLowerCase())) return ""
+
+  if (parsed.hostname.toLowerCase() === "youtu.be") {
+    const key = parsed.pathname.slice(1)
+    return /^[a-zA-Z0-9_-]{11}$/.test(key) ? key : ""
+  }
+
+  const watchKey = parsed.searchParams.get("v")
+  if (watchKey && /^[a-zA-Z0-9_-]{11}$/.test(watchKey)) return watchKey
+
+  const pathMatch = parsed.pathname.match(/\/(?:embed|shorts|v)\/([a-zA-Z0-9_-]{11})/)
+  return pathMatch ? pathMatch[1] : ""
+}
+
 /** Strips a recognized language prefix for display only; the stored name keeps the raw provider name. */
 export function displayTitle(name: string | null | undefined): string | null | undefined {
   if (!name) return name
