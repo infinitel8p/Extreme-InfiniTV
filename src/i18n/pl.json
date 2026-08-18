@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "Wzbogaca filmy i seriale o lepsze plakaty, obsadę, zwiastuny i podobne tytuły z The Movie Database.",
   "settings.tmdb.enable": "Włącz wzbogacanie",
   "settings.tmdb.privacy": "Po włączeniu tytuły, które otwierasz, są wysyłane do TMDB w celu dopasowania.",
+  "settings.tmdb.on": "Wł.",
+  "settings.tmdb.off": "Wył.",
   "settings.tmdb.apiKey": "Klucz API",
   "settings.tmdb.apiKeyHelper": "Wklej darmowy klucz API TMDB lub token dostępu v4.",
   "settings.tmdb.getKey": "Uzyskaj klucz na themoviedb.org",

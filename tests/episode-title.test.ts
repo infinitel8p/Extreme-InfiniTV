@@ -73,4 +73,8 @@ describe("isGenericEpisodeTitle", () => {
   it("recognizes a bare number as generic", () => {
     expect(isGenericEpisodeTitle("12", { seriesName: "Show" })).toBe(true)
   })
+
+  it("does not treat a non-language acronym prefix as strippable", () => {
+    expect(isGenericEpisodeTitle("US - 1x03", { seriesName: "Show", fallbackTitle: "Episode 3" })).toBe(false)
+  })
 })

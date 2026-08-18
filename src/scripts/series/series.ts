@@ -25,13 +25,10 @@ import {
   setViewSort,
   getSeriesProgressSummary,
   getHideWatched,
-  setHideWatched,
   hasSeriesWatchedOverride,
   setSeriesWatchedOverride,
   getLanguageFilter,
-  setLanguageFilter,
   getGroupLanguages,
-  setGroupLanguages,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker, genreLabelForCategory } from "@/scripts/lib/category-picker.ts"
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
@@ -70,6 +67,7 @@ import {
   toggleGroupWatchlist,
   createPersonFilterController,
   createGridRestoreController,
+  createGridSecondaryControls,
   personFilterGridSignature,
 } from "@/scripts/lib/grid-view.ts"
 
@@ -651,7 +649,7 @@ function updateGridStarFor(seriesId) {
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
   const group = filtered[idx]
-  const s = group.displayEntry
+  const displayEntry = group.displayEntry
   const fav = groupHasFavorite(activePlaylistId, "series", group)
   const star = /** @type {HTMLButtonElement|null} */ (
     card.querySelector(".star-btn")
@@ -665,8 +663,8 @@ function updateGridStarFor(seriesId) {
   star.setAttribute(
     "aria-label",
     fav
-      ? `Remove ${s.name || "series"} from favorites`
-      : `Add ${s.name || "series"} to favorites`
+      ? `Remove ${displayEntry.name || "series"} from favorites`
+      : `Add ${displayEntry.name || "series"} to favorites`
   )
 }
 
@@ -884,54 +882,16 @@ sortEl?.addEventListener("change", () => {
   applyFilter()
 })
 
-const hideWatchedBtn = document.getElementById("series-hide-watched")
-function syncHideWatchedControl() {
-  if (!hideWatchedBtn || !activePlaylistId) return
-  hideWatchedBtn.setAttribute(
-    "aria-checked",
-    String(getHideWatched(activePlaylistId, "series"))
-  )
-}
-// Delegated on document so sort-menu.ts's own click handler (attached
-// directly to the button) flips aria-checked before this one reads it.
-document.addEventListener("click", async (event) => {
-  if (!hideWatchedBtn || !activePlaylistId) return
-  if (!(event.target instanceof Node) || !hideWatchedBtn.contains(event.target)) return
-  const next = hideWatchedBtn.getAttribute("aria-checked") === "true"
-  setHideWatched(activePlaylistId, "series", next)
-  if (next) await recomputeFullyWatched()
-  applyFilter()
-})
-
-const groupLangsBtn = document.getElementById("series-group-langs")
-// The global setting makes the per-playlist toggle meaningless when off, so hide it entirely.
-if (groupLangsBtn) groupLangsBtn.hidden = !getLanguageGroupingEnabled()
-function syncGroupLangsControl() {
-  if (!groupLangsBtn) return
-  groupLangsBtn.hidden = !getLanguageGroupingEnabled()
-  if (!activePlaylistId) return
-  groupLangsBtn.setAttribute("aria-checked", String(getGroupLanguages(activePlaylistId, "series")))
-}
-document.addEventListener("click", (event) => {
-  if (!groupLangsBtn || !activePlaylistId) return
-  if (!(event.target instanceof Node) || !groupLangsBtn.contains(event.target)) return
-  const next = groupLangsBtn.getAttribute("aria-checked") === "true"
-  setGroupLanguages(activePlaylistId, "series", next)
-  applyFilter()
-})
-
-const langFilterEl = /** @type {HTMLSelectElement|null} */ (
-  document.getElementById("series-lang")
-)
-function syncLangFilterControl() {
-  if (!langFilterEl || !activePlaylistId) return
-  langFilterEl.value = getLanguageFilter(activePlaylistId, "series")
-}
-langFilterEl?.addEventListener("change", () => {
-  if (!activePlaylistId || !langFilterEl) return
-  setLanguageFilter(activePlaylistId, "series", langFilterEl.value)
-  applyFilter()
-})
+const { langFilterEl, syncHideWatchedControl, syncGroupLangsControl, syncLangFilterControl } =
+  createGridSecondaryControls({
+    contentKind: "series",
+    hideWatchedButtonId: "series-hide-watched",
+    groupLangsButtonId: "series-group-langs",
+    langFilterSelectId: "series-lang",
+    getActivePlaylistId: () => activePlaylistId,
+    applyFilter,
+    onHideWatchedEnabled: recomputeFullyWatched,
+  })
 
 // A stored filter tag no longer in the catalog is kept as a selectable option so it stays visible and clearable.
 function populateLanguageFilterOptions() {

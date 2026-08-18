@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "يثري الأفلام والمسلسلات بملصقات أفضل وطاقم التمثيل والإعلانات الدعائية وعناوين مشابهة من The Movie Database.",
   "settings.tmdb.enable": "تفعيل الإثراء",
   "settings.tmdb.privacy": "عند التفعيل، تُرسل عناوين ما تفتحه إلى TMDB للمطابقة.",
+  "settings.tmdb.on": "مفعّل",
+  "settings.tmdb.off": "معطّل",
   "settings.tmdb.apiKey": "مفتاح API",
   "settings.tmdb.apiKeyHelper": "الصق مفتاح TMDB API مجانيًا أو رمز وصول v4.",
   "settings.tmdb.getKey": "احصل على مفتاح من themoviedb.org",

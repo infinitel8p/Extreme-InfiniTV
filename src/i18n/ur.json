@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "The Movie Database سے بہتر پوسٹرز، کاسٹ، ٹریلرز اور ملتے جلتے عنوانات کے ساتھ فلموں اور سیریز کو بہتر بناتا ہے۔",
   "settings.tmdb.enable": "افزودگی فعال کریں",
   "settings.tmdb.privacy": "فعال ہونے پر، آپ کے کھولے گئے عنوانات مماثلت کے لیے TMDB کو بھیجے جاتے ہیں۔",
+  "settings.tmdb.on": "آن",
+  "settings.tmdb.off": "آف",
   "settings.tmdb.apiKey": "API کلید",
   "settings.tmdb.apiKeyHelper": "مفت TMDB API کلید یا v4 رسائی ٹوکن چسپاں کریں۔",
   "settings.tmdb.getKey": "themoviedb.org سے کلید حاصل کریں",

@@ -1,12 +1,4 @@
-// Progressive-download stall recovery for the embedded VOD players. On macOS,
-// progressive (non-HLS) downloads can get suspended by the WebView and never
-// resume on their own, silently hanging playback. This watches currentTime /
-// buffered progress on a tick and calls back so the caller can re-issue the
-// same src to kick the download loose.
-//
-// Testable without a real HTMLVideoElement: only needs addEventListener /
-// removeEventListener, currentTime, paused, ended, seeking, buffered, and
-// readyState.
+// VOD stall-recovery watchdog: works around macOS suspending downloads mid-play.
 
 import { log } from "@/scripts/lib/log.js"
 

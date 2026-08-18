@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "Enrichit les films et séries avec de meilleures affiches, la distribution, des bandes-annonces et des titres similaires depuis The Movie Database.",
   "settings.tmdb.enable": "Activer l'enrichissement",
   "settings.tmdb.privacy": "Une fois activé, les titres que vous ouvrez sont envoyés à TMDB pour correspondance.",
+  "settings.tmdb.on": "Activé",
+  "settings.tmdb.off": "Désactivé",
   "settings.tmdb.apiKey": "Clé API",
   "settings.tmdb.apiKeyHelper": "Collez une clé API TMDB gratuite ou un jeton d'accès v4.",
   "settings.tmdb.getKey": "Obtenez une clé sur themoviedb.org",

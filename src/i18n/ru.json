@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "Дополняет фильмы и сериалы улучшенными постерами, актёрским составом, трейлерами и похожими названиями из The Movie Database.",
   "settings.tmdb.enable": "Включить обогащение",
   "settings.tmdb.privacy": "Если включено, названия открываемых вами фильмов и сериалов отправляются в TMDB для сопоставления.",
+  "settings.tmdb.on": "Вкл",
+  "settings.tmdb.off": "Выкл",
   "settings.tmdb.apiKey": "API-ключ",
   "settings.tmdb.apiKeyHelper": "Вставьте бесплатный API-ключ TMDB или токен доступа v4.",
   "settings.tmdb.getKey": "Получите ключ на themoviedb.org",

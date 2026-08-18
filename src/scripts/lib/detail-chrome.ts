@@ -1,7 +1,4 @@
-// Shared chrome for the movie/series detail pages: back-link nav, cast rail,
-// provider-people chips, similar rail, and language pills. Each function is
-// parameterized by kind/DOM refs/href base rather than assuming which page
-// called it - playback wiring stays local to each page since it diverges.
+// Shared movie/series detail-page chrome: back-link, cast rail, similar rail, language pills.
 
 import { t, getActiveLocale } from "@/scripts/lib/i18n.js"
 import { tmdbImageUrl, TMDB_PROFILE_SIZE } from "@/scripts/lib/tmdb.ts"

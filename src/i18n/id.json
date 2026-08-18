@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "Memperkaya film dan serial dengan poster yang lebih baik, pemeran, trailer, dan judul serupa dari The Movie Database.",
   "settings.tmdb.enable": "Aktifkan pengayaan",
   "settings.tmdb.privacy": "Saat aktif, judul yang Anda buka dikirim ke TMDB untuk pencocokan.",
+  "settings.tmdb.on": "Aktif",
+  "settings.tmdb.off": "Nonaktif",
   "settings.tmdb.apiKey": "Kunci API",
   "settings.tmdb.apiKeyHelper": "Tempel kunci API TMDB gratis atau token akses v4.",
   "settings.tmdb.getKey": "Dapatkan kunci di themoviedb.org",

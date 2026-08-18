@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "Filmleri ve dizileri The Movie Database'den daha iyi afişler, oyuncu kadrosu, fragmanlar ve benzer yapımlarla zenginleştirir.",
   "settings.tmdb.enable": "Zenginleştirmeyi etkinleştir",
   "settings.tmdb.privacy": "Etkinleştirildiğinde, açtığınız yapımların adları eşleştirme için TMDB'ye gönderilir.",
+  "settings.tmdb.on": "Açık",
+  "settings.tmdb.off": "Kapalı",
   "settings.tmdb.apiKey": "API anahtarı",
   "settings.tmdb.apiKeyHelper": "Ücretsiz bir TMDB API anahtarı veya v4 erişim belirteci yapıştırın.",
   "settings.tmdb.getKey": "themoviedb.org adresinden anahtar alın",

@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "Arricchisce film e serie con locandine migliori, cast, trailer e titoli simili da The Movie Database.",
   "settings.tmdb.enable": "Attiva arricchimento",
   "settings.tmdb.privacy": "Se attivo, i titoli che apri vengono inviati a TMDB per l'abbinamento.",
+  "settings.tmdb.on": "Attiva",
+  "settings.tmdb.off": "Disattivata",
   "settings.tmdb.apiKey": "Chiave API",
   "settings.tmdb.apiKeyHelper": "Incolla una chiave API TMDB gratuita o un token di accesso v4.",
   "settings.tmdb.getKey": "Ottieni una chiave su themoviedb.org",

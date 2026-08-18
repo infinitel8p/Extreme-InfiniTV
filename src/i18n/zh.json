@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "使用 The Movie Database 的数据丰富电影和剧集：更好的海报、演员阵容、预告片和类似作品。",
   "settings.tmdb.enable": "启用元数据增强",
   "settings.tmdb.privacy": "启用后，你打开的作品名称会发送到 TMDB 进行匹配。",
+  "settings.tmdb.on": "开",
+  "settings.tmdb.off": "关",
   "settings.tmdb.apiKey": "API 密钥",
   "settings.tmdb.apiKeyHelper": "粘贴免费的 TMDB API 密钥或 v4 访问令牌。",
   "settings.tmdb.getKey": "前往 themoviedb.org 获取密钥",

@@ -1,6 +1,17 @@
 // Shared grid-page behavior for the movies and series listing bundles.
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
-import { isFavorite, toggleFavorite, isOnWatchlist, toggleWatchlist } from "@/scripts/lib/preferences.js"
+import {
+  isFavorite,
+  toggleFavorite,
+  isOnWatchlist,
+  toggleWatchlist,
+  getHideWatched,
+  setHideWatched,
+  getLanguageFilter,
+  setLanguageFilter,
+  getGroupLanguages,
+  setGroupLanguages,
+} from "@/scripts/lib/preferences.js"
 import { t } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
 import { resolvePersonTitleIds } from "@/scripts/lib/person-filter.ts"
@@ -13,21 +24,12 @@ import {
   type GridState,
   type GridPersonSignature,
 } from "@/scripts/lib/grid-state.ts"
+import { fmtElapsedMs } from "@/scripts/lib/format.ts"
+import { getLanguageGroupingEnabled } from "@/scripts/lib/app-settings.js"
 
 export type ContentKind = "vod" | "series"
 
-// ----------------------------
-// Age label
-// ----------------------------
-export function fmtAge(ms: number): string {
-  if (ms < 60_000) return "just now"
-  const minutes = Math.floor(ms / 60_000)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
+export { fmtElapsedMs as fmtAge }
 
 // ----------------------------
 // Poster skeleton placeholders
@@ -178,6 +180,81 @@ export function toggleGroupWatchlist(
       toggleWatchlist(playlistId, kind, variantId)
     }
   }
+}
+
+// ----------------------------
+// Hide-watched / group-languages / language-filter toggle wiring
+// ----------------------------
+export interface GridSecondaryControlsOptions {
+  contentKind: ContentKind
+  hideWatchedButtonId: string
+  groupLangsButtonId: string
+  langFilterSelectId: string
+  getActivePlaylistId: () => string
+  applyFilter: () => void
+  onHideWatchedEnabled?: () => Promise<void> | void
+}
+
+export interface GridSecondaryControls {
+  langFilterEl: HTMLSelectElement | null
+  syncHideWatchedControl: () => void
+  syncGroupLangsControl: () => void
+  syncLangFilterControl: () => void
+}
+
+export function createGridSecondaryControls(options: GridSecondaryControlsOptions): GridSecondaryControls {
+  const contentKind = options.contentKind
+
+  const hideWatchedBtn = document.getElementById(options.hideWatchedButtonId)
+  function syncHideWatchedControl(): void {
+    const playlistId = options.getActivePlaylistId()
+    if (!hideWatchedBtn || !playlistId) return
+    hideWatchedBtn.setAttribute("aria-checked", String(getHideWatched(playlistId, contentKind)))
+  }
+  // Delegated on document so sort-menu.ts's own handler flips aria-checked first.
+  document.addEventListener("click", async (event) => {
+    const playlistId = options.getActivePlaylistId()
+    if (!hideWatchedBtn || !playlistId) return
+    if (!(event.target instanceof Node) || !hideWatchedBtn.contains(event.target)) return
+    const next = hideWatchedBtn.getAttribute("aria-checked") === "true"
+    setHideWatched(playlistId, contentKind, next)
+    if (next && options.onHideWatchedEnabled) await options.onHideWatchedEnabled()
+    options.applyFilter()
+  })
+
+  const groupLangsBtn = document.getElementById(options.groupLangsButtonId)
+  // The global setting makes the per-playlist toggle meaningless when off, so hide it entirely.
+  if (groupLangsBtn) groupLangsBtn.hidden = !getLanguageGroupingEnabled()
+  function syncGroupLangsControl(): void {
+    if (!groupLangsBtn) return
+    groupLangsBtn.hidden = !getLanguageGroupingEnabled()
+    const playlistId = options.getActivePlaylistId()
+    if (!playlistId) return
+    groupLangsBtn.setAttribute("aria-checked", String(getGroupLanguages(playlistId, contentKind)))
+  }
+  document.addEventListener("click", (event) => {
+    const playlistId = options.getActivePlaylistId()
+    if (!groupLangsBtn || !playlistId) return
+    if (!(event.target instanceof Node) || !groupLangsBtn.contains(event.target)) return
+    const next = groupLangsBtn.getAttribute("aria-checked") === "true"
+    setGroupLanguages(playlistId, contentKind, next)
+    options.applyFilter()
+  })
+
+  const langFilterEl = document.getElementById(options.langFilterSelectId) as HTMLSelectElement | null
+  function syncLangFilterControl(): void {
+    const playlistId = options.getActivePlaylistId()
+    if (!langFilterEl || !playlistId) return
+    langFilterEl.value = getLanguageFilter(playlistId, contentKind)
+  }
+  langFilterEl?.addEventListener("change", () => {
+    const playlistId = options.getActivePlaylistId()
+    if (!playlistId || !langFilterEl) return
+    setLanguageFilter(playlistId, contentKind, langFilterEl.value)
+    options.applyFilter()
+  })
+
+  return { langFilterEl, syncHideWatchedControl, syncGroupLangsControl, syncLangFilterControl }
 }
 
 // ----------------------------

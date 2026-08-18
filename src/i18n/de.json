@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "Reichere Filme und Serien mit besseren Postern, Besetzung, Trailern und ähnlichen Titeln von The Movie Database an.",
   "settings.tmdb.enable": "Anreicherung aktivieren",
   "settings.tmdb.privacy": "Wenn aktiviert, werden die Titel, die du öffnest, zum Abgleich an TMDB gesendet.",
+  "settings.tmdb.on": "An",
+  "settings.tmdb.off": "Aus",
   "settings.tmdb.apiKey": "API-Schlüssel",
   "settings.tmdb.apiKeyHelper": "Füge einen kostenlosen TMDB-API-Schlüssel oder v4-Zugriffstoken ein.",
   "settings.tmdb.getKey": "Schlüssel auf themoviedb.org erstellen",

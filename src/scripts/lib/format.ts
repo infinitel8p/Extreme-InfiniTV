@@ -22,9 +22,7 @@ export function fmtChannelIdentity(
     : t("channel.identityId", { id })
 }
 
-export function fmtAge(ts: number | null | undefined): string | null {
-  if (!ts) return null
-  const ms = Date.now() - ts
+export function fmtElapsedMs(ms: number): string {
   if (ms < 60_000) return "just now"
   const m = Math.floor(ms / 60_000)
   if (m < 60) return `${m}m ago`
@@ -32,6 +30,11 @@ export function fmtAge(ts: number | null | undefined): string | null {
   if (h < 24) return `${h}h ago`
   const d = Math.floor(h / 24)
   return `${d}d ago`
+}
+
+export function fmtAge(ts: number | null | undefined): string | null {
+  if (!ts) return null
+  return fmtElapsedMs(Date.now() - ts)
 }
 
 export function fmtBytes(n: number | null | undefined): string {

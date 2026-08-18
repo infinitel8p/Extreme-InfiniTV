@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "Enrich movies and series with better posters, cast, trailers, and similar titles from The Movie Database.",
   "settings.tmdb.enable": "Enable enrichment",
   "settings.tmdb.privacy": "When enabled, the titles you open are sent to TMDB for matching.",
+  "settings.tmdb.on": "On",
+  "settings.tmdb.off": "Off",
   "settings.tmdb.apiKey": "API key",
   "settings.tmdb.apiKeyHelper": "Paste a free TMDB API key or v4 access token.",
   "settings.tmdb.getKey": "Get a key at themoviedb.org",

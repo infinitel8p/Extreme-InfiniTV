@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "Enriquece películas y series con mejores pósteres, reparto, tráilers y títulos similares de The Movie Database.",
   "settings.tmdb.enable": "Activar enriquecimiento",
   "settings.tmdb.privacy": "Al activarlo, los títulos que abres se envían a TMDB para su emparejamiento.",
+  "settings.tmdb.on": "Activado",
+  "settings.tmdb.off": "Desactivado",
   "settings.tmdb.apiKey": "Clave de API",
   "settings.tmdb.apiKeyHelper": "Pega una clave de API gratuita de TMDB o un token de acceso v4.",
   "settings.tmdb.getKey": "Consigue una clave en themoviedb.org",

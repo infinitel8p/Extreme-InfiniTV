@@ -27,11 +27,8 @@ import {
   getViewSort,
   setViewSort,
   getHideWatched,
-  setHideWatched,
   getLanguageFilter,
-  setLanguageFilter,
   getGroupLanguages,
-  setGroupLanguages,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker, genreLabelForCategory } from "@/scripts/lib/category-picker.ts"
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
@@ -64,6 +61,7 @@ import {
   toggleGroupWatchlist,
   createPersonFilterController,
   createGridRestoreController,
+  createGridSecondaryControls,
   personFilterGridSignature,
 } from "@/scripts/lib/grid-view.ts"
 
@@ -485,7 +483,7 @@ function updateGridStarFor(movieId) {
   const card = gridEl.querySelector(`[data-idx="${idx}"]`)
   if (!card) return
   const group = filtered[idx]
-  const m = group.displayEntry
+  const displayEntry = group.displayEntry
   const fav = groupHasFavorite(activePlaylistId, "vod", group)
   const star = /** @type {HTMLButtonElement|null} */ (
     card.querySelector(".star-btn")
@@ -499,8 +497,8 @@ function updateGridStarFor(movieId) {
   star.setAttribute(
     "aria-label",
     fav
-      ? `Remove ${m.name || "movie"} from favorites`
-      : `Add ${m.name || "movie"} to favorites`
+      ? `Remove ${displayEntry.name || "movie"} from favorites`
+      : `Add ${displayEntry.name || "movie"} to favorites`
   )
 }
 
@@ -735,53 +733,15 @@ sortEl?.addEventListener("change", () => {
   applyFilter()
 })
 
-const hideWatchedBtn = document.getElementById("movie-hide-watched")
-function syncHideWatchedControl() {
-  if (!hideWatchedBtn || !activePlaylistId) return
-  hideWatchedBtn.setAttribute(
-    "aria-checked",
-    String(getHideWatched(activePlaylistId, "vod"))
-  )
-}
-// Delegated on document so sort-menu.ts's own click handler (attached
-// directly to the button) flips aria-checked before this one reads it.
-document.addEventListener("click", (event) => {
-  if (!hideWatchedBtn || !activePlaylistId) return
-  if (!(event.target instanceof Node) || !hideWatchedBtn.contains(event.target)) return
-  const next = hideWatchedBtn.getAttribute("aria-checked") === "true"
-  setHideWatched(activePlaylistId, "vod", next)
-  applyFilter()
-})
-
-const groupLangsBtn = document.getElementById("movie-group-langs")
-// The global setting makes the per-playlist toggle meaningless when off, so hide it entirely.
-if (groupLangsBtn) groupLangsBtn.hidden = !getLanguageGroupingEnabled()
-function syncGroupLangsControl() {
-  if (!groupLangsBtn) return
-  groupLangsBtn.hidden = !getLanguageGroupingEnabled()
-  if (!activePlaylistId) return
-  groupLangsBtn.setAttribute("aria-checked", String(getGroupLanguages(activePlaylistId, "vod")))
-}
-document.addEventListener("click", (event) => {
-  if (!groupLangsBtn || !activePlaylistId) return
-  if (!(event.target instanceof Node) || !groupLangsBtn.contains(event.target)) return
-  const next = groupLangsBtn.getAttribute("aria-checked") === "true"
-  setGroupLanguages(activePlaylistId, "vod", next)
-  applyFilter()
-})
-
-const langFilterEl = /** @type {HTMLSelectElement|null} */ (
-  document.getElementById("movie-lang")
-)
-function syncLangFilterControl() {
-  if (!langFilterEl || !activePlaylistId) return
-  langFilterEl.value = getLanguageFilter(activePlaylistId, "vod")
-}
-langFilterEl?.addEventListener("change", () => {
-  if (!activePlaylistId || !langFilterEl) return
-  setLanguageFilter(activePlaylistId, "vod", langFilterEl.value)
-  applyFilter()
-})
+const { langFilterEl, syncHideWatchedControl, syncGroupLangsControl, syncLangFilterControl } =
+  createGridSecondaryControls({
+    contentKind: "vod",
+    hideWatchedButtonId: "movie-hide-watched",
+    groupLangsButtonId: "movie-group-langs",
+    langFilterSelectId: "movie-lang",
+    getActivePlaylistId: () => activePlaylistId,
+    applyFilter,
+  })
 
 // A stored filter tag no longer in the catalog is kept as a selectable option so it stays visible and clearable.
 function populateLanguageFilterOptions() {

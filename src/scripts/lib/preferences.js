@@ -684,8 +684,8 @@ export function clearForPlaylist(playlistId) {
  * @returns {SearchRecentEntry[]}
  */
 export function getRecentSearches(playlistId) {
-  const e = cache.get(playlistId)
-  return e ? e.searchRecent : []
+  const entry = cache.get(playlistId)
+  return entry ? entry.searchRecent : []
 }
 
 /**
@@ -697,11 +697,11 @@ export function getRecentSearches(playlistId) {
 export function pushRecentSearch(playlistId, text) {
   const trimmedText = (text || "").trim()
   if (!playlistId || trimmedText.length < 2) return
-  const e = getOrCreate(playlistId)
-  const list = e.searchRecent
+  const playlistEntry = getOrCreate(playlistId)
+  const list = playlistEntry.searchRecent
   const lowerText = trimmedText.toLowerCase()
   const existingIdx = list.findIndex(
-    (entry) => entry.text.toLowerCase() === lowerText
+    (searchEntry) => searchEntry.text.toLowerCase() === lowerText
   )
   if (existingIdx !== -1) list.splice(existingIdx, 1)
   list.unshift({ text: trimmedText, ts: Date.now() })
@@ -717,14 +717,14 @@ export function pushRecentSearch(playlistId, text) {
  */
 export function removeRecentSearch(playlistId, text) {
   if (!playlistId) return
-  const e = cache.get(playlistId)
-  if (!e) return
+  const playlistEntry = cache.get(playlistId)
+  if (!playlistEntry) return
   const lowerText = (text || "").trim().toLowerCase()
-  const idx = e.searchRecent.findIndex(
-    (entry) => entry.text.toLowerCase() === lowerText
+  const idx = playlistEntry.searchRecent.findIndex(
+    (searchEntry) => searchEntry.text.toLowerCase() === lowerText
   )
   if (idx === -1) return
-  e.searchRecent.splice(idx, 1)
+  playlistEntry.searchRecent.splice(idx, 1)
   scheduleSave()
   dispatch(EVT_SEARCH_RECENT_CHANGED, { playlistId })
 }
@@ -732,9 +732,9 @@ export function removeRecentSearch(playlistId, text) {
 /** Drop every recent search for a playlist. No-op if already empty. */
 export function clearRecentSearches(playlistId) {
   if (!playlistId) return
-  const e = cache.get(playlistId)
-  if (!e || !e.searchRecent.length) return
-  e.searchRecent = []
+  const entry = cache.get(playlistId)
+  if (!entry || !entry.searchRecent.length) return
+  entry.searchRecent = []
   scheduleSave()
   dispatch(EVT_SEARCH_RECENT_CHANGED, { playlistId })
 }
@@ -980,28 +980,28 @@ export function getContinueWatching(playlistId, limit = 6) {
  * @returns {Array<{kind: "vod"|"episode", id: string, name?: string, seriesId?: number, seriesName?: string, updatedAt: number, completed: boolean}>}
  */
 export function getWatchedSignals(playlistId, limit = 20) {
-  const e = cache.get(playlistId)
-  if (!e) return []
+  const entry = cache.get(playlistId)
+  if (!entry) return []
   const out = []
-  for (const [id, p] of Object.entries(e.progVod)) {
-    if (!p?.completed && !(p?.position > 0)) continue
+  for (const [id, progress] of Object.entries(entry.progVod)) {
+    if (!progress?.completed && !(progress?.position > 0)) continue
     out.push({
       kind: "vod",
       id,
-      name: p.name,
-      updatedAt: p.updatedAt || 0,
-      completed: !!p.completed,
+      name: progress.name,
+      updatedAt: progress.updatedAt || 0,
+      completed: !!progress.completed,
     })
   }
-  for (const [id, p] of Object.entries(e.progEpisode)) {
-    if (!p?.completed && !(p?.position > 0)) continue
+  for (const [id, progress] of Object.entries(entry.progEpisode)) {
+    if (!progress?.completed && !(progress?.position > 0)) continue
     out.push({
       kind: "episode",
       id,
-      seriesId: p.seriesId,
-      seriesName: p.seriesName,
-      updatedAt: p.updatedAt || 0,
-      completed: !!p.completed,
+      seriesId: progress.seriesId,
+      seriesName: progress.seriesName,
+      updatedAt: progress.updatedAt || 0,
+      completed: !!progress.completed,
     })
   }
   out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
@@ -1589,8 +1589,8 @@ const HIDE_WATCHED_KEY_BY_KIND = { vod: "hideWatchedVod", series: "hideWatchedSe
 
 /** @param {string} playlistId @param {"vod"|"series"} kind */
 export function getHideWatched(playlistId, kind) {
-  const e = cache.get(playlistId)
-  return !!e?.[HIDE_WATCHED_KEY_BY_KIND[kind]]
+  const entry = cache.get(playlistId)
+  return !!entry?.[HIDE_WATCHED_KEY_BY_KIND[kind]]
 }
 
 /** @param {string} playlistId @param {"vod"|"series"} kind @param {boolean} enabled */
@@ -1598,18 +1598,18 @@ export function setHideWatched(playlistId, kind, enabled) {
   if (!playlistId) return
   const key = HIDE_WATCHED_KEY_BY_KIND[kind]
   if (!key) return
-  const e = getOrCreate(playlistId)
+  const entry = getOrCreate(playlistId)
   const next = !!enabled
-  if (e[key] === next) return
-  e[key] = next
+  if (entry[key] === next) return
+  entry[key] = next
   scheduleSave()
   dispatch(EVT_HIDE_WATCHED_CHANGED, { playlistId, kind, enabled: next })
 }
 
 /** @param {string} playlistId @param {"vod"|"series"} kind */
 export function getLanguageFilter(playlistId, kind) {
-  const e = cache.get(playlistId)
-  return e?.langFilter?.[kind] || ""
+  const entry = cache.get(playlistId)
+  return entry?.langFilter?.[kind] || ""
 }
 
 /** @param {string} playlistId @param {"vod"|"series"} kind @param {string} tag */
@@ -1617,26 +1617,26 @@ export function setLanguageFilter(playlistId, kind, tag) {
   if (!playlistId) return
   const normalized = String(tag || "").toUpperCase()
   const sanitized = LANG_FILTER_PATTERN.test(normalized) ? normalized : ""
-  const e = getOrCreate(playlistId)
-  if (e.langFilter[kind] === sanitized) return
-  e.langFilter[kind] = sanitized
+  const entry = getOrCreate(playlistId)
+  if (entry.langFilter[kind] === sanitized) return
+  entry.langFilter[kind] = sanitized
   scheduleSave()
   dispatch(EVT_LANG_FILTER_CHANGED, { playlistId, kind, tag: sanitized })
 }
 
 /** @param {string} playlistId @param {"vod"|"series"} kind */
 export function getGroupLanguages(playlistId, kind) {
-  const e = cache.get(playlistId)
-  return e?.groupLangs?.[kind] !== false
+  const entry = cache.get(playlistId)
+  return entry?.groupLangs?.[kind] !== false
 }
 
 /** @param {string} playlistId @param {"vod"|"series"} kind @param {boolean} enabled */
 export function setGroupLanguages(playlistId, kind, enabled) {
   if (!playlistId) return
-  const e = getOrCreate(playlistId)
+  const entry = getOrCreate(playlistId)
   const next = !!enabled
-  if (e.groupLangs[kind] === next) return
-  e.groupLangs[kind] = next
+  if (entry.groupLangs[kind] === next) return
+  entry.groupLangs[kind] = next
   scheduleSave()
   dispatch(EVT_GROUP_LANGS_CHANGED, { playlistId, kind, enabled: next })
 }

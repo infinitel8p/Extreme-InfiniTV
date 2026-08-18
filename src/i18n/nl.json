@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "Verrijkt films en series met betere posters, cast, trailers en vergelijkbare titels van The Movie Database.",
   "settings.tmdb.enable": "Verrijking inschakelen",
   "settings.tmdb.privacy": "Indien ingeschakeld worden de titels die je opent naar TMDB gestuurd voor matching.",
+  "settings.tmdb.on": "Aan",
+  "settings.tmdb.off": "Uit",
   "settings.tmdb.apiKey": "API-sleutel",
   "settings.tmdb.apiKeyHelper": "Plak een gratis TMDB-API-sleutel of v4-toegangstoken.",
   "settings.tmdb.getKey": "Vraag een sleutel aan op themoviedb.org",

@@ -292,6 +292,25 @@ export function noteDetailGenres(
   })
 }
 
+const TMDB_ID_SWEEP_CONCURRENCY = 3
+
+async function mapWithConcurrency<Item, Result>(
+  items: Item[],
+  limit: number,
+  mapper: (item: Item) => Promise<Result>
+): Promise<Result[]> {
+  const results: Result[] = new Array(items.length)
+  let nextIndex = 0
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++
+      results[currentIndex] = await mapper(items[currentIndex])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
 async function sweepTmdbGenreId(
   kind: GenreKind,
   tmdbGenreId: number,
@@ -351,11 +370,10 @@ export async function ensureGenreBoost(playlistId: string, kind: GenreKind, genr
     }
 
     const items: TmdbDiscoverItem[] = []
-    let allComplete = true
-    for (const tmdbGenreId of tmdbGenreIds) {
-      const complete = await sweepTmdbGenreId(kind, tmdbGenreId, items)
-      if (!complete) allComplete = false
-    }
+    const completions = await mapWithConcurrency(tmdbGenreIds, TMDB_ID_SWEEP_CONCURRENCY, (tmdbGenreId) =>
+      sweepTmdbGenreId(kind, tmdbGenreId, items)
+    )
+    const allComplete = completions.every(Boolean)
 
     let matchedCount = 0
     if (items.length) {

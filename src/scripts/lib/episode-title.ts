@@ -1,6 +1,6 @@
 // Pure check for whether a provider episode title is generic filler worth replacing with TMDb's.
 import { normalize } from "@/scripts/lib/text.ts"
-import { extractLangPrefix } from "@/scripts/lib/tmdb-match.ts"
+import { parseNamePrefix } from "@/scripts/lib/language-tags.ts"
 
 // Season/episode markers left over once language prefix + series name are stripped.
 const GENERIC_REMAINDER_PATTERNS = [
@@ -17,8 +17,8 @@ export interface IsGenericEpisodeTitleOptions {
 }
 
 function stripLangPrefix(value: string): string {
-  const prefix = extractLangPrefix(value)
-  return prefix ? value.replace(new RegExp(`^${prefix}\\s*[-|:]\\s*`), "") : value
+  const { tag, rest } = parseNamePrefix(value)
+  return tag != null ? rest : value
 }
 
 export function isGenericEpisodeTitle(

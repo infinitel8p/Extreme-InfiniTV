@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "The Movie Databaseの情報で映画やシリーズを補完します。より良いポスター、キャスト、予告編、類似作品など。",
   "settings.tmdb.enable": "補完を有効にする",
   "settings.tmdb.privacy": "有効にすると、開いた作品のタイトルが照合のためTMDBに送信されます。",
+  "settings.tmdb.on": "オン",
+  "settings.tmdb.off": "オフ",
   "settings.tmdb.apiKey": "APIキー",
   "settings.tmdb.apiKeyHelper": "無料のTMDB APIキーまたはv4アクセストークンを貼り付けてください。",
   "settings.tmdb.getKey": "themoviedb.orgでキーを取得",

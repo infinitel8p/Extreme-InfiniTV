@@ -1131,6 +1131,8 @@
   "settings.tmdb.helper": "The Movie Database से बेहतर पोस्टर, कलाकार, ट्रेलर और मिलते-जुलते टाइटल के साथ फ़िल्में और सीरीज़ समृद्ध करता है।",
   "settings.tmdb.enable": "संवर्धन चालू करें",
   "settings.tmdb.privacy": "चालू करने पर, आपके खोले गए टाइटल मिलान के लिए TMDB को भेजे जाते हैं।",
+  "settings.tmdb.on": "चालू",
+  "settings.tmdb.off": "बंद",
   "settings.tmdb.apiKey": "API कुंजी",
   "settings.tmdb.apiKeyHelper": "एक मुफ़्त TMDB API कुंजी या v4 एक्सेस टोकन चिपकाएँ।",
   "settings.tmdb.getKey": "themoviedb.org से कुंजी प्राप्त करें",

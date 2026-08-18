@@ -267,42 +267,44 @@ async function readRecentLogTails(): Promise<{ name: string; text: string }[]> {
 export async function collectDiagnosticBundle(): Promise<CollectedBundle> {
   const createdAt = new Date()
 
-  const snapshot = await withTimeout(
-    safeAsync<unknown>(async () => {
-      const { collectSessionSnapshot } = await import("@/scripts/lib/diagnostic-snapshot.js")
-      return await collectSessionSnapshot()
-    }, null),
-    SNAPSHOT_TIMEOUT_MS,
-    null
-  )
-  const networkLog = await withTimeout(
-    safeAsync<unknown>(async () => getNetworkLog(), null),
-    NETWORK_LOG_TIMEOUT_MS,
-    null
-  )
-  const playlists = await withTimeout(
-    safeAsync<PlaylistSummary>(async () => {
-      const entries = await getEntries()
-      const activeEntry = await getActiveEntry()
-      const activeId = isRecord(activeEntry) && typeof activeEntry._id === "string" ? activeEntry._id : null
-      return summarizePlaylists(Array.isArray(entries) ? entries : [], activeId)
-    }, { count: 0, activeIndex: -1, entries: [] }),
-    PLAYLISTS_TIMEOUT_MS,
-    { count: 0, activeIndex: -1, entries: [] }
-  )
-  const diagnosticResult = await withTimeout(
-    safeAsync<unknown>(async () => {
-      const { getLastDiagnosticResult } = await import("@/scripts/lib/diagnostic.js")
-      return getLastDiagnosticResult()
-    }, null),
-    DIAGNOSTIC_RESULT_TIMEOUT_MS,
-    null
-  )
-  const logFiles = await withTimeout(
-    safeAsync<{ name: string; text: string }[]>(() => readRecentLogTails(), []),
-    LOG_TAILS_TIMEOUT_MS,
-    []
-  )
+  const [snapshot, networkLog, playlists, diagnosticResult, logFiles] = await Promise.all([
+    withTimeout(
+      safeAsync<unknown>(async () => {
+        const { collectSessionSnapshot } = await import("@/scripts/lib/diagnostic-snapshot.js")
+        return await collectSessionSnapshot()
+      }, null),
+      SNAPSHOT_TIMEOUT_MS,
+      null
+    ),
+    withTimeout(
+      safeAsync<unknown>(async () => getNetworkLog(), null),
+      NETWORK_LOG_TIMEOUT_MS,
+      null
+    ),
+    withTimeout(
+      safeAsync<PlaylistSummary>(async () => {
+        const entries = await getEntries()
+        const activeEntry = await getActiveEntry()
+        const activeId = isRecord(activeEntry) && typeof activeEntry._id === "string" ? activeEntry._id : null
+        return summarizePlaylists(Array.isArray(entries) ? entries : [], activeId)
+      }, { count: 0, activeIndex: -1, entries: [] }),
+      PLAYLISTS_TIMEOUT_MS,
+      { count: 0, activeIndex: -1, entries: [] }
+    ),
+    withTimeout(
+      safeAsync<unknown>(async () => {
+        const { getLastDiagnosticResult } = await import("@/scripts/lib/diagnostic.js")
+        return getLastDiagnosticResult()
+      }, null),
+      DIAGNOSTIC_RESULT_TIMEOUT_MS,
+      null
+    ),
+    withTimeout(
+      safeAsync<{ name: string; text: string }[]>(() => readRecentLogTails(), []),
+      LOG_TAILS_TIMEOUT_MS,
+      []
+    ),
+  ])
 
   const manifest = buildBundleManifest({ createdAt, snapshot, networkLog, playlists, diagnosticResult, logFiles })
   const textEncoder = new TextEncoder()
