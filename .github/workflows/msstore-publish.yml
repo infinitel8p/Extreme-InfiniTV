@@ -26,6 +26,9 @@ jobs:
 
       - name: Setup Microsoft Store CLI
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+        with:
+          # msstore-cli 0.4.0 (native AOT rebuild) fails the Azure blob upload; unpin after this release
+          version: 0.3.9
 
       # msstore-cli stores credentials via libsecret, which needs a running
       # Secret Service (gnome-keyring on a D-Bus session bus) that headless
