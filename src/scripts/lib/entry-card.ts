@@ -8,6 +8,9 @@
 
 import { t } from "@/scripts/lib/i18n.js"
 import { fmtImdbRating } from "@/scripts/lib/format.js"
+import { ICON_CHECK } from "@/scripts/lib/icons.js"
+import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
+import { languageTagLabel } from "@/scripts/lib/language-tags.ts"
 import {
   isFavorite,
   toggleFavorite,
@@ -26,6 +29,57 @@ export const STAR_FILLED =
 
 export const BOOKMARK_FILLED =
   '<svg xmlns="http://www.w3.org/2000/svg" width="0.85em" height="0.85em" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 3a2 2 0 0 0-2 2v16l8-4 8 4V5a2 2 0 0 0-2-2H6z"/></svg>'
+
+export const WATCHED_BADGE_CLASS = "entry-watched-badge"
+
+/** Small check badge for a fully-watched movie/series, same slot as the series progress badge. */
+export function buildWatchedBadge(): HTMLSpanElement {
+  const badge = document.createElement("span")
+  badge.className =
+    `${WATCHED_BADGE_CLASS} absolute bottom-1.5 right-1.5 inline-flex items-center justify-center ` +
+    "rounded-md px-1.5 py-0.5 bg-accent text-bg text-2xs ring-1 ring-black/10"
+  badge.setAttribute("aria-label", t("list.watchedBadge"))
+  badge.title = t("list.watchedBadge")
+  badge.innerHTML = ICON_CHECK
+  return badge
+}
+
+export const LANGUAGE_CHIPS_CLASS = "entry-language-chips"
+
+/** Bottom-right language pill for a grouped card (tag + overflow, or a variant count); null when there's nothing to show. */
+export function buildLanguageChips(
+  tags: string[],
+  variantCount: number,
+  locale: string,
+  displayTag?: string | null
+): HTMLSpanElement | null {
+  const showTags = tags.length >= 2
+  const showCount = !showTags && variantCount > 1
+  if (!showTags && !showCount) return null
+
+  const chip = document.createElement("span")
+  chip.className =
+    `${LANGUAGE_CHIPS_CLASS} absolute bottom-1.5 right-1.5 inline-flex items-center gap-1 ` +
+    "rounded-md px-1.5 py-0.5 bg-black/55 backdrop-blur-sm " +
+    "ring-1 ring-white/10 text-white/90 text-2xs font-semibold tabular-nums"
+
+  if (showTags) {
+    const featuredTag = displayTag && tags.includes(displayTag) ? displayTag : tags[0]
+    chip.textContent = `${featuredTag} +${tags.length - 1}`
+    chip.title = tags.map((tag) => languageTagLabel(tag, locale)).join(", ")
+  } else {
+    chip.textContent = `x${variantCount}`
+  }
+  return chip
+}
+
+/** Keeps the language pill from overlapping the watched/progress badge, which shares the bottom-right corner. */
+export function setLanguageChipsOffset(posterWrap: HTMLElement, badgePresent: boolean): void {
+  const chips = posterWrap.querySelector(`.${LANGUAGE_CHIPS_CLASS}`)
+  if (!chips) return
+  chips.classList.toggle("bottom-8", badgePresent)
+  chips.classList.toggle("bottom-1.5", !badgePresent)
+}
 
 // ---------------------------------------------------------------------------
 // Fallback poster (image failed / missing). Used by both pages when an
@@ -75,6 +129,12 @@ export interface BuildEntryCardOptions<T extends EntryLike> {
   decoratePoster?: (posterWrap: HTMLDivElement, entry: T) => void
   /** aria-label for the star button when not yet favorited. */
   starLabel?: (entry: T, fav: boolean) => string
+  /** Opt-in group-aware favorite state, overriding the default `isFavorite` lookup. */
+  favoriteState?: (entry: T) => boolean
+  /** Opt-in group-aware favorite toggle, overriding the default `toggleFavorite` call. */
+  onToggleFavorite?: (entry: T, currentlyFavorited: boolean) => void
+  /** Opt-in group-aware watchlist state, overriding the default `isOnWatchlist` lookup. */
+  watchlistState?: (entry: T) => boolean
   /**
    * Right-click / long-press handler. When provided, wires the shared poster
    * context menu (`poster-menu.ts`) so users get Open / Favorite / Watchlist
@@ -110,6 +170,9 @@ export function buildEntryCard<T extends EntryLike>(
     metaText,
     decoratePoster,
     starLabel = DEFAULT_STAR_LABEL,
+    favoriteState,
+    onToggleFavorite,
+    watchlistState,
     onContextMenu,
   } = opts
 
@@ -120,8 +183,8 @@ export function buildEntryCard<T extends EntryLike>(
     "movie-card group relative rounded-xl overflow-hidden bg-surface-2 " +
     "ring-1 ring-line " +
     "transition-[transform,box-shadow] duration-150 " +
-    "hover:ring-2 hover:ring-accent hover:[transform:translateY(-2px)] " +
-    "focus-within:ring-2 focus-within:ring-accent focus-within:[transform:translateY(-2px)]" +
+    "hover:ring-1 hover:ring-accent hover:[transform:translateY(-2px)] " +
+    "focus-within:ring-1 focus-within:ring-accent focus-within:[transform:translateY(-2px)]" +
     (stagger ? " grid-card-enter" : "")
   if (stagger) card.style.animationDelay = `${idx * 28}ms`
   card.style.contentVisibility = "auto"
@@ -147,11 +210,10 @@ export function buildEntryCard<T extends EntryLike>(
   const posterWrap = document.createElement("div")
   posterWrap.dataset.posterWrap = "1"
   posterWrap.className =
-    "aspect-[2/3] w-full bg-surface-2 overflow-hidden relative"
+    "logo-skel aspect-[2/3] w-full bg-surface-2 overflow-hidden relative"
 
   if (entry.logo) {
     const img = document.createElement("img")
-    img.src = entry.logo
     img.alt = ""
     img.loading = "lazy"
     img.decoding = "async"
@@ -161,13 +223,19 @@ export function buildEntryCard<T extends EntryLike>(
     img.height = 300
     img.className =
       "h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+    img.onload = () => {
+      posterWrap.dataset.loaded = "true"
+    }
     img.onerror = () => {
       img.remove()
       posterWrap.appendChild(makeFallback(entry.name))
+      posterWrap.dataset.loaded = "true"
     }
     posterWrap.appendChild(img)
+    mountCachedImage(img, entry.logo, "poster")
   } else {
     posterWrap.appendChild(makeFallback(entry.name))
+    posterWrap.dataset.loaded = "true"
   }
 
   const ratingText = fmtImdbRating(entry.rating as any)
@@ -194,7 +262,9 @@ export function buildEntryCard<T extends EntryLike>(
   if (decoratePoster) decoratePoster(posterWrap, entry)
 
   const onWatchlist = activePlaylistId
-    ? isOnWatchlist(activePlaylistId, kind, entry.id)
+    ? watchlistState
+      ? watchlistState(entry)
+      : isOnWatchlist(activePlaylistId, kind, entry.id)
     : false
   const watchBadge = document.createElement("span")
   watchBadge.dataset.role = "watch-badge"
@@ -224,7 +294,13 @@ export function buildEntryCard<T extends EntryLike>(
 
   card.appendChild(link)
 
-  const fav = activePlaylistId ? isFavorite(activePlaylistId, kind, entry.id) : false
+  const getCurrentlyFavorited = (): boolean =>
+    activePlaylistId
+      ? favoriteState
+        ? favoriteState(entry)
+        : isFavorite(activePlaylistId, kind, entry.id)
+      : false
+  const fav = getCurrentlyFavorited()
   const starBtn = document.createElement("button")
   starBtn.type = "button"
   starBtn.dataset.role = "star"
@@ -233,7 +309,7 @@ export function buildEntryCard<T extends EntryLike>(
     "flex items-center justify-center text-base " +
     "bg-black/45 backdrop-blur-sm ring-1 ring-white/10 " +
     "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 " +
-    "focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent " +
+    "focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-accent " +
     "transition-opacity " +
     (fav ? "text-accent" : "text-white/85")
   if (fav) starBtn.classList.add("!opacity-100")
@@ -244,6 +320,12 @@ export function buildEntryCard<T extends EntryLike>(
     e.stopPropagation()
     e.preventDefault()
     if (!activePlaylistId) return
+    // Re-check state at click time; a prior toggle only patches the DOM, not this closure.
+    const currentlyFavorited = getCurrentlyFavorited()
+    if (onToggleFavorite) {
+      onToggleFavorite(entry, currentlyFavorited)
+      return
+    }
     toggleFavorite(activePlaylistId, kind, entry.id, {
       name: entry.name || "",
       logo: entry.logo || null,

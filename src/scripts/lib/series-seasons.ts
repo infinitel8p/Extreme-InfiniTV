@@ -54,20 +54,65 @@ export function countSeasons(info: any): number {
 }
 
 /**
+ * Flatten a get_series_info payload into its episode ids, across every
+ * season key. Used to verify "every episode is watched" against the real
+ * episode list rather than just the recorded progress entries.
+ */
+export function extractEpisodeIds(info: any): number[] {
+  if (!info || typeof info !== "object") return []
+  const episodes = info.episodes
+  const ids: number[] = []
+  const collect = (episode: any) => {
+    const id = Number(episode?.id)
+    if (Number.isFinite(id)) ids.push(id)
+  }
+  if (episodes && typeof episodes === "object" && !Array.isArray(episodes)) {
+    for (const season of Object.values(episodes)) {
+      if (Array.isArray(season)) season.forEach(collect)
+    }
+  } else if (Array.isArray(episodes)) {
+    episodes.forEach(collect)
+  }
+  return ids
+}
+
+/**
  * Synchronous read of the cached series-info state. `cached` is true whenever a
  * (non-expired) payload is in memory, even when it contains zero seasons - so
  * callers can tell "no data yet" apart from "confirmed to have no seasons" and
  * avoid re-fetching a series the provider genuinely lists with no episodes.
  */
+function getCachedSeriesInfo(
+  playlistId: string,
+  seriesId: string | number
+): { cached: boolean; data: any } {
+  if (!playlistId || seriesId == null) return { cached: false, data: null }
+  const hit = getCached(playlistId, seriesInfoKind(seriesId))
+  if (!hit) return { cached: false, data: null }
+  return { cached: true, data: hit.data }
+}
+
 function getCachedSeasonState(
   playlistId: string,
   seriesId: string | number
 ): { cached: boolean; count: number | null } {
-  if (!playlistId || seriesId == null) return { cached: false, count: null }
-  const hit = getCached(playlistId, seriesInfoKind(seriesId))
-  if (!hit) return { cached: false, count: null }
-  const count = countSeasons(hit.data)
+  const { cached, data } = getCachedSeriesInfo(playlistId, seriesId)
+  if (!cached) return { cached: false, count: null }
+  const count = countSeasons(data)
   return { cached: true, count: count > 0 ? count : null }
+}
+
+/**
+ * Synchronous read: cached episode ids for a series, or null when the
+ * series_info payload isn't in memory yet. Callers that need a network fetch
+ * on miss should go through requestEpisodeIds.
+ */
+export function getCachedEpisodeIds(
+  playlistId: string,
+  seriesId: string | number
+): number[] | null {
+  const { cached, data } = getCachedSeriesInfo(playlistId, seriesId)
+  return cached ? extractEpisodeIds(data) : null
 }
 
 /**
@@ -87,7 +132,7 @@ export function getCachedSeasonCount(
 // ---------------------------------------------------------------------------
 type Job = () => Promise<void>
 const _queue: Job[] = []
-const _pending = new Map<string, Promise<number | null>>()
+const _pending = new Map<string, Promise<any | null>>()
 const _failed = new Set<string>()
 let _active = 0
 
@@ -119,10 +164,10 @@ async function isActivePlaylist(playlistId: string): Promise<boolean> {
   }
 }
 
-async function fetchSeasonCount(
+async function fetchSeriesInfo(
   playlistId: string,
   seriesId: string | number
-): Promise<number | null> {
+): Promise<any | null> {
   try {
     const response = await xtreamApiFetch("get_series_info", {
       series_id: String(seriesId),
@@ -132,8 +177,7 @@ async function fetchSeasonCount(
     const data = await response.json()
     if (!(await isActivePlaylist(playlistId))) return null
     setCached(playlistId, seriesInfoKind(seriesId), data, SERIES_INFO_TTL_MS)
-    const count = countSeasons(data)
-    return count > 0 ? count : null
+    return data
   } catch (err) {
     _failed.add(jobKey(playlistId, seriesId))
     log.warn(`[xt:seasons] ${seriesId} lookup failed:`, err)
@@ -142,44 +186,73 @@ async function fetchSeasonCount(
 }
 
 /**
- * Resolve a season count for one series. Returns the cached value immediately
- * when available, otherwise queues a throttled fetch. Resolves to null when
- * unavailable (M3U source, network failure, or genuinely no seasons).
+ * Resolve the raw get_series_info payload for one series. Returns the cached
+ * value immediately when available, otherwise queues a throttled fetch.
+ * Resolves to null when unavailable (M3U source, network failure, or a
+ * playlist switch mid-fetch). Shared by requestSeasonCount and
+ * requestEpisodeIds so both derive from one cache entry / one fetch.
  */
-export function requestSeasonCount(
+export function requestSeriesInfo(
   playlistId: string,
   seriesId: string | number
-): Promise<number | null> {
+): Promise<any | null> {
   if (!playlistId || seriesId == null) return Promise.resolve(null)
 
-  const cached = getCachedSeasonState(playlistId, seriesId)
-  if (cached.cached) return Promise.resolve(cached.count)
+  const cached = getCachedSeriesInfo(playlistId, seriesId)
+  if (cached.cached) return Promise.resolve(cached.data)
   const key = jobKey(playlistId, seriesId)
   if (_failed.has(key)) return Promise.resolve(null)
   const existing = _pending.get(key)
   if (existing) return existing
 
-  const promise = new Promise<number | null>((resolve) => {
+  const promise = new Promise<any | null>((resolve) => {
     _queue.push(async () => {
-
       if (!(await isActivePlaylist(playlistId))) {
         resolve(null)
         return
       }
 
       await hydrate(playlistId, seriesInfoKind(seriesId)).catch(() => {})
-      const fromCache = getCachedSeasonState(playlistId, seriesId)
+      const fromCache = getCachedSeriesInfo(playlistId, seriesId)
       if (fromCache.cached) {
-        resolve(fromCache.count)
+        resolve(fromCache.data)
         return
       }
-      resolve(await fetchSeasonCount(playlistId, seriesId))
+      resolve(await fetchSeriesInfo(playlistId, seriesId))
     })
     pump()
   }).finally(() => _pending.delete(key))
 
   _pending.set(key, promise)
   return promise
+}
+
+/**
+ * Resolve a season count for one series. Resolves to null when unavailable
+ * (M3U source, network failure, or genuinely no seasons).
+ */
+export function requestSeasonCount(
+  playlistId: string,
+  seriesId: string | number
+): Promise<number | null> {
+  return requestSeriesInfo(playlistId, seriesId).then((data) => {
+    const count = countSeasons(data)
+    return count > 0 ? count : null
+  })
+}
+
+/**
+ * Resolve a series' real episode ids, fetching on cache miss. Resolves to
+ * null when unavailable, so callers can tell "unproven" apart from "confirmed
+ * empty" and stay conservative about the former.
+ */
+export function requestEpisodeIds(
+  playlistId: string,
+  seriesId: string | number
+): Promise<number[] | null> {
+  return requestSeriesInfo(playlistId, seriesId).then((data) =>
+    data ? extractEpisodeIds(data) : null
+  )
 }
 
 // ---------------------------------------------------------------------------

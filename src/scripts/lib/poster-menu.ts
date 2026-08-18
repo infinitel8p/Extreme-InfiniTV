@@ -4,8 +4,8 @@
 // resize / scroll), same long-press threshold, same visual style.
 //
 // The menu items differ per kind:
-//   vod    - Open, Favorite, Watchlist, Download, Copy stream URL
-//   series - Open, Favorite, Watchlist
+//   vod    - Open, Favorite, Watchlist, Watched, Download, Copy stream URL
+//   series - Open, Favorite, Watchlist, Watched
 // (Download and stream URL don't apply at the series level - those are
 // per-episode and live on the detail page.)
 
@@ -17,6 +17,11 @@ import {
   toggleFavorite,
   isOnWatchlist,
   toggleWatchlist,
+  isCompleted,
+  markCompleted,
+  clearProgress,
+  hasSeriesWatchedOverride,
+  setSeriesWatchedOverride,
 } from "@/scripts/lib/preferences.js"
 
 export type PosterMenuKind = "vod" | "series"
@@ -38,6 +43,13 @@ export interface PosterMenuOptions {
   onDownload?: () => void
   /** vod only - returns the canonical stream URL for the clipboard. */
   buildStreamUrl?: () => string | null
+  /** Opt-in group-aware overrides, mirroring entry-card.ts's star/badge hooks; read at menu-open time, not memoized. */
+  favoriteActive?: () => boolean
+  onToggleFavorite?: (currentlyFavorited: boolean) => void
+  watchlistActive?: () => boolean
+  onToggleWatchlist?: (currentlyOnWatchlist: boolean) => void
+  watchedActive?: () => boolean
+  onToggleWatched?: (currentlyWatched: boolean) => void
 }
 
 const MENU_ID = "xt-poster-menu"
@@ -74,7 +86,7 @@ function makeItem(label: string, handler: () => void): HTMLButtonElement {
   btn.setAttribute("role", "menuitem")
   btn.className =
     "w-full text-left px-3 py-2.5 min-h-11 rounded-lg text-sm " +
-    "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent " +
+    "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-1 focus-visible:ring-accent " +
     "outline-none transition-colors"
   btn.textContent = label
   btn.addEventListener("click", () => {
@@ -108,11 +120,19 @@ export function openPosterMenu(opts: PosterMenuOptions): void {
   menu.appendChild(makeItem(t("list.menu.open"), () => opts.onOpen()))
 
   // Favorite toggle - label flips between add/remove based on state
-  const favOn = playlistId ? isFavorite(playlistId, kind, entry.id) : false
+  const favOn = opts.favoriteActive
+    ? opts.favoriteActive()
+    : playlistId
+      ? isFavorite(playlistId, kind, entry.id)
+      : false
   menu.appendChild(
     makeItem(
       t(favOn ? "list.menu.favoriteRemove" : "list.menu.favoriteAdd"),
       () => {
+        if (opts.onToggleFavorite) {
+          opts.onToggleFavorite(favOn)
+          return
+        }
         if (!playlistId) return
         toggleFavorite(playlistId, kind, entry.id, {
           name: entry.name || "",
@@ -123,16 +143,56 @@ export function openPosterMenu(opts: PosterMenuOptions): void {
   )
 
   // Watchlist toggle - same pattern
-  const watchOn = playlistId ? isOnWatchlist(playlistId, kind, entry.id) : false
+  const watchOn = opts.watchlistActive
+    ? opts.watchlistActive()
+    : playlistId
+      ? isOnWatchlist(playlistId, kind, entry.id)
+      : false
   menu.appendChild(
     makeItem(
       t(watchOn ? "list.menu.watchlistRemove" : "list.menu.watchlistAdd"),
       () => {
+        if (opts.onToggleWatchlist) {
+          opts.onToggleWatchlist(watchOn)
+          return
+        }
         if (!playlistId) return
         toggleWatchlist(playlistId, kind, entry.id, {
           name: entry.name || "",
           logo: entry.logo || null,
         })
+      }
+    )
+  )
+
+  // Watched toggle - vod tracks completion, series uses a manual override
+  const watchedOn = opts.watchedActive
+    ? opts.watchedActive()
+    : playlistId
+      ? kind === "vod"
+        ? isCompleted(playlistId, "vod", entry.id)
+        : hasSeriesWatchedOverride(playlistId, entry.id)
+      : false
+  menu.appendChild(
+    makeItem(
+      t(watchedOn ? "list.menu.watchedUnmark" : "list.menu.watchedMark"),
+      () => {
+        if (opts.onToggleWatched) {
+          opts.onToggleWatched(watchedOn)
+          return
+        }
+        if (!playlistId) return
+        if (kind === "vod") {
+          if (watchedOn) clearProgress(playlistId, "vod", entry.id)
+          else {
+            markCompleted(playlistId, "vod", entry.id, {
+              name: entry.name || "",
+              logo: entry.logo || null,
+            })
+          }
+        } else {
+          setSeriesWatchedOverride(playlistId, entry.id, !watchedOn)
+        }
       }
     )
   )
@@ -143,6 +203,15 @@ export function openPosterMenu(opts: PosterMenuOptions): void {
       menu.appendChild(makeItem(t("list.menu.download"), () => opts.onDownload!()))
     }
     if (opts.buildStreamUrl) {
+      menu.appendChild(
+        makeItem(t("stream.menu.test"), () => {
+          const url = opts.buildStreamUrl!()
+          if (!url) return
+          import("@/scripts/lib/stream-diagnostic-dialog.js").then(({ openStreamDiagnostic }) => {
+            openStreamDiagnostic({ url, title: entry.name || "" })
+          })
+        })
+      )
       menu.appendChild(
         makeItem(t("list.menu.copyUrl"), async () => {
           const url = opts.buildStreamUrl!()

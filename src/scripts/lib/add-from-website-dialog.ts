@@ -277,7 +277,7 @@ function renderPhase(
 ): string {
   if (phase.kind === "input") {
     return `
-      <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
+      <div class="flex flex-col flex-auto min-h-0 overflow-y-auto p-5 sm:p-6 gap-5">
         ${headerHtml()}
         <label class="flex flex-col gap-2">
           <span class="text-xs font-semibold tracking-wider uppercase text-fg-3">${escapeHtml(t("sniffer.urlLabel"))}</span>
@@ -304,7 +304,7 @@ function renderPhase(
   if (phase.kind === "progress") {
     const message = phase.stage === "loading" ? t("sniffer.progress.loading") : t("sniffer.progress.waiting")
     return `
-      <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
+      <div class="flex flex-col flex-auto min-h-0 overflow-y-auto p-5 sm:p-6 gap-5">
         ${headerHtml()}
         <div class="flex flex-col items-center justify-center gap-3 py-10 text-center">
           <span class="size-8 rounded-full border-2 border-line border-t-accent animate-spin" aria-hidden="true"></span>
@@ -325,7 +325,7 @@ function renderPhase(
       .join("")
     const checkedCount = checkedIdx.size
     return `
-      <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
+      <div class="flex flex-col flex-auto min-h-0 p-5 sm:p-6 gap-5">
         ${headerHtml()}
         <h3 class="text-sm font-semibold text-fg-2">${escapeHtml(t("sniffer.results.title"))}</h3>
         <div data-role="list" class="flex flex-col gap-2.5 overflow-y-auto min-h-0">${rows}</div>
@@ -347,7 +347,7 @@ function renderPhase(
       ? `<img src="${escapeHtml(safeFavicon)}" alt="${escapeHtml(t("sniffer.name.logoAlt"))}" onerror="this.remove()" class="size-9 rounded-lg border border-line object-contain bg-surface-2 shrink-0" />`
       : ""
     return `
-      <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
+      <div class="flex flex-col flex-auto min-h-0 overflow-y-auto p-5 sm:p-6 gap-5">
         ${headerHtml()}
         <label class="flex flex-col gap-2">
           <span class="text-xs font-semibold tracking-wider uppercase text-fg-3">${escapeHtml(t("sniffer.name.label"))}</span>
@@ -374,7 +374,7 @@ function renderPhase(
 
   const message = phase.reason === "drm" ? t("sniffer.error.drm") : t("sniffer.error.empty")
   return `
-    <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
+    <div class="flex flex-col flex-auto min-h-0 overflow-y-auto p-5 sm:p-6 gap-5">
       ${headerHtml()}
       <p class="text-sm text-fg-2 py-6 text-center">${escapeHtml(message)}</p>
       <footer class="flex items-center gap-3 shrink-0 mt-auto">
@@ -743,6 +743,7 @@ function ensureDialog(): HTMLDialogElement | null {
   node.className = [
     "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
     "w-[min(36rem,calc(100vw-2rem))] max-h-[min(80dvh,36rem)]",
+    "open:flex flex-col overflow-hidden",
     "backdrop:bg-black/60",
   ].join(" ")
   document.body.appendChild(node)

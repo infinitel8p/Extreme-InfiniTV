@@ -18,6 +18,7 @@ import {
   effectiveTvgId,
   getAvailableEpgChannels,
   displayedToUtcMs,
+  shiftChannelProgrammes,
   EPG_OFFSET_EVENT,
 } from "@/scripts/lib/epg-data.js"
 import { openProgrammeDialog } from "@/scripts/lib/programme-dialog.js"
@@ -34,13 +35,16 @@ import {
 } from "@/scripts/lib/preferences.js"
 import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
+import { requestLogoFallback } from "@/scripts/lib/logo-fallback.ts"
+import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
+import { getDensityFactor } from "@/scripts/lib/app-settings.js"
 
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
 
 const PX_PER_HOUR = 200
 const HOURS_VISIBLE = 6
-const ROW_HEIGHT = 64
+const ROW_HEIGHT = Math.max(44, Math.round(64 * getDensityFactor()))
 const CHANNEL_COL_WIDTH = 240
 const MAX_CHANNELS = 150
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -112,7 +116,7 @@ function showLoadingSkeleton(label = t("epg.loadingSkeleton")) {
 function renderEpgSkeletonInto(target, label) {
   const HOURS = 6
   const HEADER_H = 40
-  const ROW_H = 64
+  const ROW_H = Math.max(44, Math.round(64 * getDensityFactor()))
   const CHANNEL_W = 240
   const HOUR_W = 200
   // Calculate rows needed to fill the viewport. Falls back to a generous
@@ -363,24 +367,34 @@ function renderChannelRow(channel, programmesForRow) {
   const safeLogo = channel.logo ? safeHttpUrl(channel.logo) : null
   if (safeLogo) {
     const img = document.createElement("img")
-    img.src = safeLogo
     img.alt = ""
     img.loading = "lazy"
     img.decoding = "async"
     ;(img as any).fetchPriority = "low"
     img.referrerPolicy = "no-referrer"
     img.className = "h-full w-full object-contain"
-    img.onload = () => logo.setAttribute("data-loaded", "true")
-    img.onerror = () => {
+    // Provider logo requests can hang without firing onerror (Tauri WebView); force the fallback after a grace period.
+    const slowLogoTimer = setTimeout(() => {
       img.remove()
       logo.setAttribute("data-loaded", "true")
-    }
-    if (img.complete && img.naturalWidth > 0) {
+      requestLogoFallback(logo, channel)
+    }, 8000)
+    ;(img as HTMLImageElement & { logoFallbackTimer?: ReturnType<typeof setTimeout> }).logoFallbackTimer = slowLogoTimer
+    img.onload = () => {
+      clearTimeout(slowLogoTimer)
       logo.setAttribute("data-loaded", "true")
     }
+    img.onerror = () => {
+      clearTimeout(slowLogoTimer)
+      img.remove()
+      logo.setAttribute("data-loaded", "true")
+      requestLogoFallback(logo, channel)
+    }
     logo.appendChild(img)
+    mountCachedImage(img, safeLogo, "logo")
   } else {
     logo.setAttribute("data-loaded", "true")
+    requestLogoFallback(logo, channel)
   }
   info.appendChild(logo)
 
@@ -434,7 +448,10 @@ function renderChannelRow(channel, programmesForRow) {
     const width = Math.max(2, right - left)
     const isLive = p.start <= nowMs && p.stop > nowMs
     const isPast = p.stop <= nowMs
-    const canReplay = isPast && canChannelCatchup && isCatchupPlayable(channel, p.start, nowMs)
+    // rawStart/rawStop recover true XMLTV time so catch-up never sees the guide-display tvg-shift.
+    const rawStart = p.rawStart ?? p.start
+    const rawStop = p.rawStop ?? p.stop
+    const canReplay = isPast && canChannelCatchup && isCatchupPlayable(channel, rawStart, nowMs)
 
     const cell = document.createElement("button")
     cell.type = "button"
@@ -449,7 +466,7 @@ function renderChannelRow(channel, programmesForRow) {
         : isPast
         ? "epg-cell-past border-line bg-surface text-fg-3 hover:bg-surface-2 hover:text-fg-2 focus-visible:bg-surface-2 focus-visible:text-fg-2"
         : "border-line bg-surface text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg") +
-      " focus-visible:ring-2 focus-visible:ring-accent"
+      " focus-visible:ring-1 focus-visible:ring-accent"
     cell.style.left = `${left}px`
     cell.style.width = `${width}px`
     cell.title = `${fmtTime(p.start)}–${fmtTime(p.stop)} · ${p.title}${p.desc ? "\n\n" + p.desc : ""}`
@@ -464,10 +481,10 @@ function renderChannelRow(channel, programmesForRow) {
       }
       if (canReplay) {
         dialogOpts.onCatchup = () =>
-          navigateToCatchup(channel.id, p.start, p.stop, p.title, p.catchupId)
-      } else if (isLive && canChannelCatchup && isCatchupPlayable(channel, p.start, nowMs)) {
+          navigateToCatchup(channel.id, rawStart, rawStop, p.title, p.catchupId)
+      } else if (isLive && canChannelCatchup && isCatchupPlayable(channel, rawStart, nowMs)) {
         dialogOpts.onWatchFromStart = () =>
-          navigateToCatchup(channel.id, p.start, p.stop, p.title, p.catchupId)
+          navigateToCatchup(channel.id, rawStart, rawStop, p.title, p.catchupId)
       }
       openProgrammeDialog(dialogOpts)
     })
@@ -513,6 +530,12 @@ function renderNowLine() {
 // Row virtualization
 // ----------------------------
 const OVERSCAN_ROWS = 4
+
+function clearRowLogoFallbackTimer(row: HTMLElement) {
+  const img = row.querySelector("img") as (HTMLImageElement & { logoFallbackTimer?: ReturnType<typeof setTimeout> }) | null
+  if (img?.logoFallbackTimer) clearTimeout(img.logoFallbackTimer)
+}
+
 /** @type {Map<number, HTMLElement>} */
 const renderedRows = new Map()
 let virtualizedRangeStart = -1
@@ -545,6 +568,7 @@ function renderVirtualWindow() {
 
   for (const [idx, row] of renderedRows) {
     if (idx < startIdx || idx >= endIdx) {
+      clearRowLogoFallbackTimer(row)
       row.remove()
       renderedRows.delete(idx)
     }
@@ -555,7 +579,8 @@ function renderVirtualWindow() {
     if (renderedRows.has(idx)) continue
     const channel = channels[idx]
     const key = effectiveTvgId(channel, activePlaylistId)
-    const list = key ? programmes.get(key) || [] : []
+    // shiftChannelProgrammes stashes rawStart/rawStop so catch-up navigation can bypass tvg-shift.
+    const list = key ? shiftChannelProgrammes(programmes.get(key) || [], channel.tvgShift) : []
     const row = renderChannelRow(channel, list)
     row.style.position = "absolute"
     row.style.top = `${idx * ROW_HEIGHT}px`
@@ -713,6 +738,7 @@ function render() {
   renderTimeHeader()
 
   // Reset windowed render state
+  for (const row of renderedRows.values()) clearRowLogoFallbackTimer(row)
   bodyEl.replaceChildren()
   renderedRows.clear()
   virtualizedRangeStart = -1

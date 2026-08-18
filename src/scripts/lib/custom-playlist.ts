@@ -299,6 +299,8 @@ export interface ResolvedCustomChannel {
   id: number
   name: string
   category: string
+  // Always single-element: custom channels have exactly one group, unlike M3U/Xtream's multi-group shape.
+  categories: string[]
   logo: string | null
   tvgId: string | undefined
   chno: number | undefined
@@ -309,6 +311,7 @@ export interface ResolvedCustomChannel {
   catchupDays: number | null
   catchupSource: string | null
   catchupCorrection: number | null
+  tvgShift?: number | null
   tvArchive?: number
   tvArchiveDuration?: number
   userAgent?: string | null
@@ -349,6 +352,7 @@ function unresolvedChannel(channel: CustomChannel, fallbackName: string): Resolv
     id: channel.id,
     name,
     category: channel.group,
+    categories: [channel.group],
     logo: channel.overrides?.logo ?? null,
     tvgId: channel.overrides?.tvgId ?? undefined,
     chno: channel.overrides?.chno ?? undefined,
@@ -378,6 +382,7 @@ function resolveXtreamSource(
     id: channel.id,
     name,
     category: channel.group,
+    categories: [channel.group],
     logo: channel.overrides.logo ?? sourceChannel.logo ?? null,
     tvgId: channel.overrides.tvgId ?? sourceChannel.tvgId,
     chno: channel.overrides.chno ?? sourceChannel.chno,
@@ -385,6 +390,7 @@ function resolveXtreamSource(
     url: pool.buildUrl(source.streamId),
     isRadio: false,
     ...resolveXtreamCatchupFields(channel, sourceChannel),
+    tvgShift: sourceChannel.tvgShift ?? null,
     tvArchive: sourceChannel.tvArchive,
     tvArchiveDuration: sourceChannel.tvArchiveDuration,
     userAgent: sourceChannel.userAgent ?? null,
@@ -420,6 +426,7 @@ function resolveM3USource(
     id: channel.id,
     name,
     category: channel.group,
+    categories: [channel.group],
     logo: channel.overrides.logo ?? sourceChannel.logo ?? null,
     tvgId: channel.overrides.tvgId ?? sourceChannel.tvgId,
     chno: channel.overrides.chno ?? sourceChannel.chno,
@@ -427,6 +434,7 @@ function resolveM3USource(
     url: sourceChannel.url,
     isRadio: !!sourceChannel.isRadio,
     ...resolveCatchupFields(channel, sourceChannel),
+    tvgShift: sourceChannel.tvgShift ?? null,
     userAgent: sourceChannel.userAgent ?? null,
     referer: sourceChannel.referer ?? null,
     manifestType: sourceChannel.manifestType ?? null,
@@ -441,6 +449,7 @@ function resolveDirectSource(channel: CustomChannel, source: CustomSourceDirect)
     id: channel.id,
     name,
     category: channel.group,
+    categories: [channel.group],
     logo: channel.overrides.logo ?? null,
     tvgId: channel.overrides.tvgId ?? undefined,
     chno: channel.overrides.chno ?? undefined,

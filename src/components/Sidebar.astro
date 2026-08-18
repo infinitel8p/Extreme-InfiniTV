@@ -12,6 +12,8 @@ import {
   IconSparkles,
   IconStar,
   IconBookmark,
+  IconLayoutSidebarLeftCollapse,
+  IconLayoutSidebarLeftExpand,
 } from "@tabler/icons-svelte"
 import PlaylistSwitcher from "@/components/PlaylistSwitcher.svelte"
 
@@ -50,10 +52,11 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
 ---
 
 <aside
-  class="hidden md:flex landscape-phone:flex md:order-first landscape-phone:order-first
+  class="sidebar-rail hidden md:flex landscape-phone:flex md:order-first landscape-phone:order-first
          shrink-0 flex-col gap-2 border-r border-line bg-bg
-         w-16 lg:w-64
-         p-2 lg:p-3
+         w-16 rail-expanded:w-64
+         p-2 rail-expanded:p-3
+         transition-[width,padding] duration-[240ms] ease-[cubic-bezier(0.16,1,0.3,1)]
          pl-[max(0.5rem,env(safe-area-inset-left))]
          pb-[max(0.5rem,env(safe-area-inset-bottom))]
          md:sticky md:top-0 md:self-start md:h-full md:overflow-y-auto
@@ -63,44 +66,68 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
          landscape-phone:scrollbar-none
          landscape-phone:[&::-webkit-scrollbar]:hidden">
 
-  <a
-    href="/"
-    aria-label="Extreme InfiniTV - Home"
-    data-i18n-attr="aria-label:sidebar.brandHome"
-    class="brand-mark group [view-transition-name:brand-mark]
-           hidden lg:flex items-center gap-3 px-2 py-2
-           justify-center lg:justify-start outline-none">
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="8 58 224 124"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-      class="brand-mark__svg shrink-0 h-4 w-auto text-accent">
-      <g class="brand-mark__mark">
-        <path
-          id="brand-mark-path"
-          class="brand-mark__base brand-mark__base--stroke"
-          d="M65.6 70.2 A50 50 0 1 1 20.2 115.6" />
-        <circle class="brand-mark__base brand-mark__base--fill" cx="34.6" cy="84.6" r="9" />
-        <circle class="brand-mark__base brand-mark__base--stroke" cx="170" cy="120" r="50" />
-        <rect class="brand-mark__base brand-mark__base--fill" x="146.5" y="94" width="13" height="52" rx="6.5" />
-        <rect class="brand-mark__base brand-mark__base--fill" x="164.5" y="102" width="13" height="36" rx="6.5" />
-        <rect class="brand-mark__base brand-mark__base--fill" x="182.5" y="110" width="13" height="20" rx="6.5" />
-      </g>
-      <g class="brand-mark__trail">
-        <circle r="11.5" fill="currentColor" opacity="1"    class="brand-mark__dot brand-mark__dot--1" />
-        <circle r="9.5"  fill="currentColor" opacity="0.75" class="brand-mark__dot brand-mark__dot--2" />
-        <circle r="8"    fill="currentColor" opacity="0.55" class="brand-mark__dot brand-mark__dot--3" />
-        <circle r="6.5"  fill="currentColor" opacity="0.4"  class="brand-mark__dot brand-mark__dot--4" />
-        <circle r="5"    fill="currentColor" opacity="0.25" class="brand-mark__dot brand-mark__dot--5" />
-        <circle r="3.5"  fill="currentColor" opacity="0.14" class="brand-mark__dot brand-mark__dot--6" />
-      </g>
-    </svg>
-    <span class="hidden lg:inline-flex items-baseline truncate text-[0.9375rem] tracking-[-0.02em]">
-      <span class="font-semibold text-fg">Extreme&nbsp;Infini</span><span class="font-extrabold text-accent tracking-[0.04em] ml-[0.05em]">TV</span>
-    </span>
-  </a>
+  <div class="hidden lg:flex flex-col items-center gap-1 rail-expanded:flex-row rail-expanded:items-center">
+    <a
+      href="/"
+      aria-label="Extreme InfiniTV - Home"
+      data-i18n-attr="aria-label:sidebar.brandHome"
+      class="brand-mark group [view-transition-name:brand-mark]
+             flex items-center gap-3 p-2.5 rail-expanded:px-2 rail-expanded:py-2 outline-none">
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="8 58 224 124"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+        class="brand-mark__svg shrink-0 h-4 w-auto text-accent">
+        <g class="brand-mark__mark">
+          <path
+            id="brand-mark-path"
+            class="brand-mark__base brand-mark__base--stroke"
+            d="M65.6 70.2 A50 50 0 1 1 20.2 115.6" />
+          <circle class="brand-mark__base brand-mark__base--fill" cx="34.6" cy="84.6" r="9" />
+          <circle class="brand-mark__base brand-mark__base--stroke" cx="170" cy="120" r="50" />
+          <rect class="brand-mark__base brand-mark__base--fill" x="146.5" y="94" width="13" height="52" rx="6.5" />
+          <rect class="brand-mark__base brand-mark__base--fill" x="164.5" y="102" width="13" height="36" rx="6.5" />
+          <rect class="brand-mark__base brand-mark__base--fill" x="182.5" y="110" width="13" height="20" rx="6.5" />
+        </g>
+        <g class="brand-mark__trail">
+          <circle r="11.5" fill="currentColor" opacity="1"    class="brand-mark__dot brand-mark__dot--1" />
+          <circle r="9.5"  fill="currentColor" opacity="0.75" class="brand-mark__dot brand-mark__dot--2" />
+          <circle r="8"    fill="currentColor" opacity="0.55" class="brand-mark__dot brand-mark__dot--3" />
+          <circle r="6.5"  fill="currentColor" opacity="0.4"  class="brand-mark__dot brand-mark__dot--4" />
+          <circle r="5"    fill="currentColor" opacity="0.25" class="brand-mark__dot brand-mark__dot--5" />
+          <circle r="3.5"  fill="currentColor" opacity="0.14" class="brand-mark__dot brand-mark__dot--6" />
+        </g>
+      </svg>
+      <span class="rail-reveal hidden rail-expanded:inline-flex items-baseline truncate text-[0.9375rem] tracking-[-0.02em]">
+        <span class="font-semibold text-fg">Extreme&nbsp;Infini</span><span class="font-extrabold text-accent tracking-[0.04em] ml-[0.05em]">TV</span>
+      </span>
+    </a>
+    <button
+      type="button"
+      id="sidebar-collapse-toggle"
+      aria-expanded="true"
+      aria-label="Collapse sidebar"
+      title="Collapse sidebar"
+      class:list={[
+        "group/collapse flex items-center justify-center shrink-0 size-9 rounded-lg",
+        "rail-expanded:ml-auto",
+        "text-fg-3 hover:text-fg hover:bg-surface-2",
+        "outline-none focus-visible:ring-1 focus-visible:ring-accent",
+      ]}>
+      <IconLayoutSidebarLeftCollapse
+        aria-hidden="true"
+        stroke={1.75}
+        class="hidden size-4 shrink-0 rail-expanded:block transition-transform duration-150 group-hover/collapse:-translate-x-0.5"
+      />
+      <IconLayoutSidebarLeftExpand
+        aria-hidden="true"
+        stroke={1.75}
+        class="size-4 shrink-0 rail-expanded:hidden transition-transform duration-150 group-hover/collapse:translate-x-0.5"
+      />
+    </button>
+  </div>
 
   {(() => {
     const searchActive = path === "/search" || path.startsWith("/search/")
@@ -113,7 +140,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
         aria-current={searchActive ? "page" : undefined}
         class:list={[
           "mt-2 flex items-center gap-3 rounded-xl px-2.5 py-2.5 min-h-11",
-          "justify-center lg:justify-start",
+          "justify-center rail-expanded:justify-start",
           "border border-line bg-surface",
           "transition-colors outline-none",
           searchActive
@@ -121,8 +148,8 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
             : "text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:border-accent",
         ]}>
         <IconSearch aria-hidden="true" stroke={searchActive ? 2 : 1.75} class:list={["size-5 shrink-0", searchActive ? "text-accent" : "text-fg-3"]} />
-        <span data-i18n="nav.search" class="hidden lg:inline truncate text-sm flex-1 text-left">Search</span>
-        <kbd class="hidden lg:inline-block text-2xs text-fg-3 border border-line rounded px-1.5 py-0.5 font-sans">
+        <span data-i18n="nav.search" class="rail-reveal hidden rail-expanded:inline truncate text-sm flex-1 text-left">Search</span>
+        <kbd class="rail-reveal hidden rail-expanded:inline-block text-2xs text-fg-3 border border-line rounded px-1.5 py-0.5 font-sans">
           Ctrl K
         </kbd>
       </a>
@@ -143,7 +170,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
           data-i18n-attr={`aria-label:${key};title:${key}`}
           class:list={[
             "flex items-center gap-3 rounded-xl px-2.5 py-2.5 min-h-11",
-            "justify-center lg:justify-start",
+            "justify-center rail-expanded:justify-start",
             "transition-[color,background-color,transform] duration-150 outline-none",
             "hover:bg-surface-2 focus-visible:bg-surface-2 active:scale-[0.98]",
             active
@@ -170,13 +197,13 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
                        tabular-nums ring-2 ring-bg">0</span>
             )}
           </span>
-          <span data-i18n={key} class="hidden lg:inline truncate text-sm font-medium">
+          <span data-i18n={key} class="rail-reveal hidden rail-expanded:inline truncate text-sm font-medium">
             {label}
           </span>
           {isDownloads && (
             <span
               id="sidebar-downloads-sub"
-              class="hidden lg:inline ml-auto truncate text-2xs text-fg-3 tabular-nums empty:hidden"></span>
+              class="hidden rail-expanded:inline ml-auto truncate text-2xs text-fg-3 tabular-nums empty:hidden"></span>
           )}
         </a>
       )
@@ -190,7 +217,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     aria-label="Account expiration warning"
     title="Account expiration"
     data-i18n-attr="aria-label:sidebar.expirationAria;title:sidebar.expirationTitle"
-    class="hidden lg:flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium tabular-nums
+    class="hidden rail-expanded:flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium tabular-nums
            border border-warn/30 bg-warn/10 text-warn
            data-[state=critical]:border-bad/40 data-[state=critical]:bg-bad/10 data-[state=critical]:text-bad
            data-[state=expired]:border-bad/40 data-[state=expired]:bg-bad/10 data-[state=expired]:text-bad
@@ -200,7 +227,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
 
   <div
     data-account-expiration
-    class="hidden lg:block px-2.5 text-2xs text-fg-3 tabular-nums truncate empty:hidden">
+    class="hidden rail-expanded:block px-2.5 text-2xs text-fg-3 tabular-nums truncate empty:hidden">
   </div>
 
   <div class="flex flex-col gap-1 pt-2 border-t border-line">
@@ -215,7 +242,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
       data-i18n-attr="aria-label:nav.settings;title:nav.settings"
       class:list={[
         "flex items-center gap-3 rounded-xl px-2.5 py-2.5 min-h-11",
-        "justify-center lg:justify-start",
+        "justify-center rail-expanded:justify-start",
         "transition-colors outline-none",
         "hover:bg-surface-2 focus-visible:bg-surface-2",
         settingsActive
@@ -230,7 +257,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
           settingsActive ? "text-accent" : "text-fg-3",
         ]}
       />
-      <span data-i18n="nav.settings" class="hidden lg:inline truncate text-sm font-medium">
+      <span data-i18n="nav.settings" class="rail-reveal hidden rail-expanded:inline truncate text-sm font-medium">
         Settings
       </span>
     </a>
@@ -454,7 +481,7 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     DOWNLOAD_PROGRESS_EVENT,
   } from "@/scripts/lib/downloads.js"
   import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
-  import { t } from "@/scripts/lib/i18n.js"
+  import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 
   function onLoginPage() {
     return (
@@ -615,6 +642,53 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
       moreBtn.focus()
     }
   })
+
+  // Desktop rail collapse toggle (lg+ only; below lg the rail is icons-only already)
+  const collapseToggle = /** @type {HTMLButtonElement|null} */ (
+    document.getElementById("sidebar-collapse-toggle")
+  )
+  const SIDEBAR_COLLAPSED_KEY = "xt_sidebar_collapsed"
+
+  function isSidebarCollapsed() {
+    return document.documentElement.hasAttribute("data-sidebar-collapsed")
+  }
+
+  function refreshCollapseToggle() {
+    if (!collapseToggle) return
+    const collapsed = isSidebarCollapsed()
+    const label = t(collapsed ? "sidebar.expand" : "sidebar.collapse")
+    collapseToggle.setAttribute("aria-label", label)
+    collapseToggle.setAttribute("title", label)
+    collapseToggle.setAttribute("aria-expanded", collapsed ? "false" : "true")
+  }
+
+  const sidebarRail = /** @type {HTMLElement|null} */ (
+    collapseToggle?.closest("aside") || null
+  )
+  let railAnimationTimeout
+
+  function clearRailAnimating() {
+    document.documentElement.removeAttribute("data-rail-animating")
+    clearTimeout(railAnimationTimeout)
+  }
+
+  sidebarRail?.addEventListener("transitionend", (ev) => {
+    if (ev.propertyName === "width") clearRailAnimating()
+  })
+
+  collapseToggle?.addEventListener("click", () => {
+    const collapsed = !isSidebarCollapsed()
+    document.documentElement.setAttribute("data-rail-animating", "")
+    document.documentElement.toggleAttribute("data-sidebar-collapsed", collapsed)
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0")
+    } catch {}
+    refreshCollapseToggle()
+    railAnimationTimeout = setTimeout(clearRailAnimating, 500)
+  })
+
+  document.addEventListener(LOCALE_EVENT, refreshCollapseToggle)
+  refreshCollapseToggle()
 </script>
 
 <style>

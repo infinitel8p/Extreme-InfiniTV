@@ -11,7 +11,12 @@
 // people at Settings > About. Snap/Flatpak skip this file entirely: their
 // store owns updates, and Flathub flags a reachable self-update path.
 import { log } from "@/scripts/lib/log.js"
-import { checkForUpdate, isStoreBuild, resolveUpdateFeedUrl } from "@/scripts/lib/update-check.js"
+import {
+    checkForUpdate,
+    isStoreBuild,
+    resolveUpdateFeedUrl,
+    withUpdaterRetry,
+} from "@/scripts/lib/update-check.js"
 import { sandboxRuntime } from "@/scripts/lib/sandbox.ts"
 import { getUpdateChannel, getAutoUpdateEnabled } from "@/scripts/lib/app-settings.js"
 import { toast } from "@/scripts/lib/toast.js"
@@ -63,7 +68,7 @@ async function runBetaAutoUpdate() {
     const { invoke } = await import("@tauri-apps/api/core")
     const { relaunch } = await import("@tauri-apps/plugin-process")
     const url = await resolveUpdateFeedUrl()
-    const update = await invoke("updater_check_from", { url })
+    const update = await withUpdaterRetry(() => invoke("updater_check_from", { url }))
     if (update === null) return
     await invoke("updater_install")
     // Windows exits the process mid-install (NSIS restarts it); relaunch() only matters on Linux AppImage.
@@ -82,7 +87,7 @@ async function runAutoUpdate() {
 
     const { check } = await import("@tauri-apps/plugin-updater")
     const { relaunch } = await import("@tauri-apps/plugin-process")
-    const update = await check()
+    const update = await withUpdaterRetry(() => check())
     if (update !== null) {
         await update.downloadAndInstall()
         await relaunch()

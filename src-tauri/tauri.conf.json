@@ -1,7 +1,7 @@
 {
   "productName": "Extreme InfiniTV",
   "mainBinaryName": "extreme-infinitv",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "identifier": "com.infinitel8p.xtream",
   "build": {
     "frontendDist": "../dist",
@@ -10,6 +10,7 @@
     "beforeBuildCommand": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs && pnpm run build"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "Extreme InfiniTV",
@@ -49,7 +50,7 @@
     "copyright": "© 2025 Ludovico Ferrara",
     "createUpdaterArtifacts": true,
     "android": {
-      "versionCode": 100700190
+      "versionCode": 100800090
     },
     "icon": [
       "icons/32x32.png",

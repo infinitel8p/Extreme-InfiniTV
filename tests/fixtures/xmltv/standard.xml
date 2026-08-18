@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tv generator-info-name="Extreme InfiniTV test fixture">
+  <channel id="news-one">
+    <display-name>News One</display-name>
+    <icon src="https://example.com/logos/newsone.png"/>
+  </channel>
+  <channel id="sports-one">
+    <display-name>Sports One</display-name>
+    <icon src="https://example.com/logos/sportsone.png"/>
+  </channel>
+  <channel id="movie-central">
+    <display-name>Movie Central</display-name>
+    <icon src="https://example.com/logos/moviecentral.png"/>
+  </channel>
+  <channel id="kids-fun">
+    <display-name>Kids Fun</display-name>
+    <icon src="https://example.com/logos/kidsfun.png"/>
+  </channel>
+  <channel id="docu-world">
+    <display-name>Docu World</display-name>
+    <icon src="https://example.com/logos/docuworld.png"/>
+  </channel>
+
+  <programme start="20260115100000 +0000" stop="20260115110000 +0000" channel="news-one">
+    <title>Morning Report</title>
+    <desc>A live rundown of the day's top stories from the newsroom.</desc>
+  </programme>
+  <programme start="20260115110000 +0000" stop="20260115120000 +0000" channel="news-one">
+    <title>Midday Briefing</title>
+    <desc>Correspondents check in with updates from around the world.</desc>
+  </programme>
+  <programme start="20260115120000 +0000" stop="20260115130000 +0000" channel="news-one" catchup-id="nw-1200">
+    <title>World Watch</title>
+    <desc>In-depth analysis of the week's biggest international story.</desc>
+  </programme>
+  <programme start="20260115130000 +0000" stop="20260115140000 +0000" channel="News-One">
+    <title>Afternoon Edition</title>
+    <desc>A closer look at the stories developing since midday.</desc>
+  </programme>
+
+  <programme start="20260115140000 +0000" stop="20260115150000 +0000" channel="sports-one">
+    <title>Matchday Preview</title>
+    <desc>Pundits break down today's fixtures before kickoff.</desc>
+  </programme>
+  <programme start="20260115150000 +0000" stop="20260115160000 +0000" channel="sports-one">
+    <title>Live: Derby Day</title>
+    <desc>Coverage of the local derby, live from the stadium.</desc>
+  </programme>
+  <programme start="20260115160000 +0000" stop="20260115170000 +0000" channel="sports-one">
+    <title>Post-Match Analysis</title>
+    <desc>Highlights and reaction from today's biggest match.</desc>
+  </programme>
+
+  <programme start="20260115180000 +0000" stop="20260115200000 +0000" channel="movie-central">
+    <title>Saturday Night Feature</title>
+    <desc>A crowd-pleasing action feature to open the evening.</desc>
+  </programme>
+  <programme start="20260115200000 +0000" stop="20260115220000 +0000" channel="movie-central">
+    <title>Late Night Thriller</title>
+    <desc>A tense psychological thriller closes out the night slot.</desc>
+  </programme>
+
+  <programme start="20260115070000 +0000" stop="20260115080000 +0000" channel="kids-fun">
+    <title>Morning Cartoons</title>
+    <desc>A cheerful block of animated shorts to start the day.</desc>
+  </programme>
+  <programme start="20260115080000 +0000" stop="20260115090000 +0000" channel="kids-fun">
+    <title>Adventure Time Block</title>
+    <desc>Two young explorers set off on another treasure hunt.</desc>
+  </programme>
+  <programme start="20260115090000 +0000" stop="20260115100000 +0000" channel="kids-fun">
+    <title>Puzzle Pals</title>
+    <desc>A gentle game show for younger viewers, no elimination.</desc>
+  </programme>
+
+  <programme start="20260115210000 +0000" stop="20260115220000 +0000" channel="docu-world">
+    <title>Wild Frontiers</title>
+    <desc>Following a research team tracking migration across the tundra.</desc>
+  </programme>
+  <programme start="20260115220000 +0000" stop="20260115230000 +0000" channel="docu-world">
+    <title>Deep Ocean</title>
+    <desc>Submersible footage from one of the deepest trenches on Earth.</desc>
+  </programme>
+  <programme start="20260115230000 +0000" stop="20260116000000 +0000" channel="docu-world">
+    <title>Space Odyssey</title>
+    <desc>A history of crewed spaceflight, from Gagarin to the present.</desc>
+  </programme>
+  <programme start="20260116000000 +0000" stop="20260116010000 +0000" channel="docu-world">
+    <title>History Uncovered</title>
+    <desc>Archivists piece together a forgotten chapter of local history.</desc>
+  </programme>
+</tv>

@@ -22,7 +22,10 @@ import {
   mapXtreamLiveRows,
   mapXtreamVodRows,
   mapXtreamSeriesRows,
+  rowsNeedTmdbBackfill,
+  rowsNeedGenreBackfill,
 } from "@/scripts/lib/catalog-mappers.js"
+import { triggerTmdbBackfillOnce } from "@/scripts/lib/tmdb-backfill.ts"
 import { providerFetch, streamingText } from "@/scripts/lib/provider-fetch.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
@@ -100,9 +103,11 @@ export function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestT
       id: 1,
       name,
       category: fallbackCategory,
+      categories: [fallbackCategory],
       logo: logo || null,
       tvgId: undefined,
       chno: undefined,
+      tvgShift: null,
       norm: normalize(`${name} ${fallbackCategory}`),
       url: sourceUrl,
       isRadio: false,
@@ -123,13 +128,16 @@ export function m3uToChannelList(text, sourceUrl, streamHeaders, logo, manifestT
   for (const entry of entries) {
     if (!entry.url || !entry.name) continue
     const category = entry.category || fallbackCategory
+    const categories = entry.categories && entry.categories.length ? entry.categories : [category]
     out.push({
       id: idSeq++,
       name: entry.name,
       category,
+      categories,
       logo: entry.logo,
       tvgId: entry.tvgId || undefined,
       chno: entry.chno ?? undefined,
+      tvgShift: entry.tvgShift ?? null,
       norm: normalize(`${entry.name} ${category} ${entry.tvgId || ""}`),
       url: entry.url,
       isRadio: !!entry.isRadio,
@@ -210,14 +218,15 @@ export async function ensureLive(creds, playlistId, opts = {}) {
         text = await readLocalM3UContent(creds.host)
         try { onBytes(text.length, text.length) } catch {}
       } else {
-        const r = await providerFetch(creds.host)
+        const r = await providerFetch(creds.host, { logKind: "playlist" })
         if (!r.ok) throw new HttpRetryError(r.status, `M3U ${r.status}`)
         text = await streamingText(r, onBytes)
       }
       try {
-        const { epgUrl } = parseM3U(text)
-        if (epgUrl && typeof localStorage !== "undefined") {
-          localStorage.setItem(`xt_m3u_epg:${playlistId}`, epgUrl)
+        // Comma-joined; epg-data.js splits it back apart on read.
+        const { epgUrls } = parseM3U(text)
+        if (epgUrls.length && typeof localStorage !== "undefined") {
+          localStorage.setItem(`xt_m3u_epg:${playlistId}`, epgUrls.join(","))
         }
       } catch {}
       const activeEntry = (await getEntries()).find((entry) => entry._id === playlistId)
@@ -268,7 +277,7 @@ export async function ensureVod(creds, playlistId, opts = {}) {
     }
   }
   const onBytes = makeBytesEmitter(playlistId, "vod")
-  const { data } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, () => retryWithBackoff(async () => {
+  const fetcher = () => retryWithBackoff(async () => {
     const catMap = await fetchVodCategoryMap()
     const r = await xtreamApiFetch("get_vod_streams")
     const body = await streamingText(r, onBytes)
@@ -278,7 +287,11 @@ export async function ensureVod(creds, playlistId, opts = {}) {
       ? parsed
       : parsed?.movies || parsed?.results || []
     return mapXtreamVodRows(arr, catMap)
-  }), { force: !!opts.force })
+  })
+  const { data } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, fetcher, { force: !!opts.force })
+  if (!opts.force && rowsNeedTmdbBackfill(data)) {
+    triggerTmdbBackfillOnce(playlistId, "vod", VOD_TTL_MS, fetcher)
+  }
   return data || []
 }
 
@@ -306,7 +319,7 @@ export async function ensureSeries(creds, playlistId, opts = {}) {
     }
   }
   const onBytes = makeBytesEmitter(playlistId, "series")
-  const { data } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, () => retryWithBackoff(async () => {
+  const fetcher = () => retryWithBackoff(async () => {
     const catMap = await fetchSeriesCategoryMap()
     const r = await xtreamApiFetch("get_series")
     const body = await streamingText(r, onBytes)
@@ -314,7 +327,11 @@ export async function ensureSeries(creds, playlistId, opts = {}) {
     const parsed = JSON.parse(body)
     const arr = Array.isArray(parsed) ? parsed : parsed?.series || parsed?.results || []
     return mapXtreamSeriesRows(arr, catMap)
-  }), { force: !!opts.force })
+  })
+  const { data } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, fetcher, { force: !!opts.force })
+  if (!opts.force && (rowsNeedTmdbBackfill(data) || rowsNeedGenreBackfill(data))) {
+    triggerTmdbBackfillOnce(playlistId, "series", SERIES_TTL_MS, fetcher)
+  }
   return data || []
 }
 

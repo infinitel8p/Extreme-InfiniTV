@@ -11,7 +11,9 @@ const isTauri =
 
 const STORAGE_KEY = "xt_prefs"
 const VALID_CATEGORY_SORTS = new Set(["default", "az", "za"])
+const LANG_FILTER_PATTERN = /^[A-Z0-9+]{0,8}$/
 const RECENT_CAP = 30
+const SEARCH_RECENT_CAP = 10
 const PROGRESS_CAP = 200
 const DAY_MS = 24 * 60 * 60 * 1000
 const COMPLETED_THRESHOLD = 0.95
@@ -28,6 +30,10 @@ const EVT_VIEW_CHANGED = "xt:view-prefs-changed"
 const EVT_FAV_ORDER_CHANGED = "xt:favorites-order-changed"
 const EVT_WATCHLIST_CHANGED = "xt:watchlist-changed"
 const EVT_CHANNEL_VIDEO_SCALE_CHANGED = "xt:channel-video-scale-changed"
+export const EVT_SEARCH_RECENT_CHANGED = "xt:search-recent-changed"
+export const EVT_HIDE_WATCHED_CHANGED = "xt:hide-watched-changed"
+export const EVT_LANG_FILTER_CHANGED = "xt:lang-filter-changed"
+export const EVT_GROUP_LANGS_CHANGED = "xt:group-langs-changed"
 
 let storePromise = null
 function getStore() {
@@ -100,8 +106,10 @@ async function writeRaw(data) {
 // ---------------------------------------------------------------------------
 /**
  * @typedef {{ id: number, name: string, logo?: string|null, ts: number }} RecentEntry
+ * @typedef {{ text: string, ts: number }} SearchRecentEntry
  * @typedef {{ favLive: Set<number>, favVod: Set<number>, favSeries: Set<number>,
- *             recLive: RecentEntry[], recVod: RecentEntry[], recSeries: RecentEntry[] }} PlaylistPrefs
+ *             recLive: RecentEntry[], recVod: RecentEntry[], recSeries: RecentEntry[],
+ *             searchRecent: SearchRecentEntry[] }} PlaylistPrefs
  */
 
 /** @type {Map<string, PlaylistPrefs>} */
@@ -119,6 +127,7 @@ function emptyEntry() {
     recLive: [],
     recVod: [],
     recSeries: [],
+    searchRecent: [],
     progVod: Object.create(null),
     progEpisode: Object.create(null),
     hiddenLive: new Set(),
@@ -154,6 +163,11 @@ function emptyEntry() {
     videoScaleLive: Object.create(null),
     videoScaleVod: Object.create(null),
     videoScaleSeries: Object.create(null),
+    hideWatchedVod: false,
+    hideWatchedSeries: false,
+    watchedSeriesOverride: Object.create(null),
+    langFilter: { vod: "", series: "" },
+    groupLangs: { vod: true, series: true },
   }
 }
 
@@ -163,6 +177,8 @@ function hydrate(raw) {
   for (const [pid, val] of Object.entries(raw)) {
     if (!val || typeof val !== "object") continue
     const v = val.viewSort && typeof val.viewSort === "object" ? val.viewSort : {}
+    const langFilterRaw = val.langFilter && typeof val.langFilter === "object" ? val.langFilter : {}
+    const groupLangsRaw = val.groupLangs && typeof val.groupLangs === "object" ? val.groupLangs : {}
     cache.set(pid, {
       favLive: new Set(Array.isArray(val.favLive) ? val.favLive : []),
       favVod: new Set(Array.isArray(val.favVod) ? val.favVod : []),
@@ -183,6 +199,12 @@ function hydrate(raw) {
       recVod: Array.isArray(val.recVod) ? val.recVod.slice(0, RECENT_CAP) : [],
       recSeries: Array.isArray(val.recSeries)
         ? val.recSeries.slice(0, RECENT_CAP)
+        : [],
+      searchRecent: Array.isArray(val.searchRecent)
+        ? val.searchRecent
+            .filter((entry) => entry && typeof entry.text === "string")
+            .map((entry) => ({ text: entry.text, ts: Number(entry.ts) || 0 }))
+            .slice(0, SEARCH_RECENT_CAP)
         : [],
       progVod:
         val.progVod && typeof val.progVod === "object"
@@ -278,6 +300,24 @@ function hydrate(raw) {
         val.videoScaleSeries && typeof val.videoScaleSeries === "object"
           ? Object.assign(Object.create(null), val.videoScaleSeries)
           : Object.create(null),
+      hideWatchedVod: !!val.hideWatchedVod,
+      hideWatchedSeries: !!val.hideWatchedSeries,
+      watchedSeriesOverride:
+        val.watchedSeriesOverride && typeof val.watchedSeriesOverride === "object"
+          ? Object.assign(Object.create(null), val.watchedSeriesOverride)
+          : Object.create(null),
+      langFilter: {
+        vod: typeof langFilterRaw.vod === "string" && LANG_FILTER_PATTERN.test(langFilterRaw.vod)
+          ? langFilterRaw.vod
+          : "",
+        series: typeof langFilterRaw.series === "string" && LANG_FILTER_PATTERN.test(langFilterRaw.series)
+          ? langFilterRaw.series
+          : "",
+      },
+      groupLangs: {
+        vod: groupLangsRaw.vod !== false,
+        series: groupLangsRaw.series !== false,
+      },
     })
   }
 }
@@ -295,6 +335,7 @@ function dehydrate() {
       recLive: v.recLive,
       recVod: v.recVod,
       recSeries: v.recSeries,
+      searchRecent: v.searchRecent,
       progVod: v.progVod,
       progEpisode: v.progEpisode,
       hiddenLive: [...v.hiddenLive],
@@ -328,6 +369,11 @@ function dehydrate() {
       videoScaleLive: { ...v.videoScaleLive },
       videoScaleVod: { ...v.videoScaleVod },
       videoScaleSeries: { ...v.videoScaleSeries },
+      hideWatchedVod: v.hideWatchedVod,
+      hideWatchedSeries: v.hideWatchedSeries,
+      watchedSeriesOverride: { ...v.watchedSeriesOverride },
+      langFilter: { vod: v.langFilter.vod, series: v.langFilter.series },
+      groupLangs: { vod: v.groupLangs.vod, series: v.groupLangs.series },
     }
   }
   return out
@@ -629,6 +675,71 @@ export function clearForPlaylist(playlistId) {
 }
 
 // ---------------------------------------------------------------------------
+// Recent searches - committed queries only (never per-keystroke partials).
+// ---------------------------------------------------------------------------
+
+/**
+ * Sync read of recent searches. Most-recent first.
+ * @param {string} playlistId
+ * @returns {SearchRecentEntry[]}
+ */
+export function getRecentSearches(playlistId) {
+  const entry = cache.get(playlistId)
+  return entry ? entry.searchRecent : []
+}
+
+/**
+ * Record a committed search query. Ignores empty/short text and
+ * case-insensitively dedupes against an existing entry (moved to the top
+ * with a fresh timestamp rather than duplicated).
+ * @param {string} playlistId @param {string} text
+ */
+export function pushRecentSearch(playlistId, text) {
+  const trimmedText = (text || "").trim()
+  if (!playlistId || trimmedText.length < 2) return
+  const playlistEntry = getOrCreate(playlistId)
+  const list = playlistEntry.searchRecent
+  const lowerText = trimmedText.toLowerCase()
+  const existingIdx = list.findIndex(
+    (searchEntry) => searchEntry.text.toLowerCase() === lowerText
+  )
+  if (existingIdx !== -1) list.splice(existingIdx, 1)
+  list.unshift({ text: trimmedText, ts: Date.now() })
+  if (list.length > SEARCH_RECENT_CAP) list.length = SEARCH_RECENT_CAP
+  scheduleSave()
+  dispatch(EVT_SEARCH_RECENT_CHANGED, { playlistId })
+}
+
+/**
+ * Remove one entry from the recent-searches list (case-insensitive match).
+ * No-op if there's nothing to remove.
+ * @param {string} playlistId @param {string} text
+ */
+export function removeRecentSearch(playlistId, text) {
+  if (!playlistId) return
+  const playlistEntry = cache.get(playlistId)
+  if (!playlistEntry) return
+  const lowerText = (text || "").trim().toLowerCase()
+  const idx = playlistEntry.searchRecent.findIndex(
+    (searchEntry) => searchEntry.text.toLowerCase() === lowerText
+  )
+  if (idx === -1) return
+  playlistEntry.searchRecent.splice(idx, 1)
+  scheduleSave()
+  dispatch(EVT_SEARCH_RECENT_CHANGED, { playlistId })
+}
+
+/** Drop every recent search for a playlist. No-op if already empty. */
+export function clearRecentSearches(playlistId) {
+  if (!playlistId) return
+  const entry = cache.get(playlistId)
+  if (!entry || !entry.searchRecent.length) return
+  entry.searchRecent = []
+  scheduleSave()
+  dispatch(EVT_SEARCH_RECENT_CHANGED, { playlistId })
+}
+
+// ---------------------------------------------------------------------------
 // Playback progress
 // ---------------------------------------------------------------------------
 /**
@@ -803,6 +914,40 @@ export function clearProgress(playlistId, kind, id) {
   dispatch(EVT_PROGRESS_CHANGED, { playlistId, kind, id, removed: true })
 }
 
+/** @returns {Promise<number>} total items removed */
+export async function clearViewingHistory() {
+  await ensureLoaded()
+  let removed = 0
+  const affectedPlaylistIds = []
+  for (const [playlistId, entry] of cache) {
+    const count =
+      entry.recLive.length +
+      entry.recVod.length +
+      entry.recSeries.length +
+      Object.keys(entry.progVod).length +
+      Object.keys(entry.progEpisode).length
+    if (!count) continue
+    entry.recLive = []
+    entry.recVod = []
+    entry.recSeries = []
+    entry.progVod = Object.create(null)
+    entry.progEpisode = Object.create(null)
+    removed += count
+    affectedPlaylistIds.push(playlistId)
+  }
+  if (!removed) return 0
+  scheduleSave()
+  for (const playlistId of affectedPlaylistIds) {
+    for (const kind of ["live", "vod", "series"]) {
+      dispatch(EVT_REC_CHANGED, { playlistId, kind })
+    }
+    for (const kind of ["vod", "episode"]) {
+      dispatch(EVT_PROGRESS_CHANGED, { playlistId, kind, removed: true })
+    }
+  }
+  return removed
+}
+
 /**
  * @param {string} playlistId
  * @param {number} [limit]
@@ -821,6 +966,43 @@ export function getContinueWatching(playlistId, limit = 6) {
     if (p?.completed) continue
     if (!(p?.position > 0)) continue
     out.push({ kind: "episode", id, ...p })
+  }
+  out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  return out.slice(0, Math.max(0, limit))
+}
+
+/**
+ * Recently watched vod + episode signals for "Because you watched" seeding.
+ * Includes completed entries unconditionally; unfinished entries need the
+ * same meaningful-progress gating as getContinueWatching (position > 0).
+ * @param {string} playlistId
+ * @param {number} [limit]
+ * @returns {Array<{kind: "vod"|"episode", id: string, name?: string, seriesId?: number, seriesName?: string, updatedAt: number, completed: boolean}>}
+ */
+export function getWatchedSignals(playlistId, limit = 20) {
+  const entry = cache.get(playlistId)
+  if (!entry) return []
+  const out = []
+  for (const [id, progress] of Object.entries(entry.progVod)) {
+    if (!progress?.completed && !(progress?.position > 0)) continue
+    out.push({
+      kind: "vod",
+      id,
+      name: progress.name,
+      updatedAt: progress.updatedAt || 0,
+      completed: !!progress.completed,
+    })
+  }
+  for (const [id, progress] of Object.entries(entry.progEpisode)) {
+    if (!progress?.completed && !(progress?.position > 0)) continue
+    out.push({
+      kind: "episode",
+      id,
+      seriesId: progress.seriesId,
+      seriesName: progress.seriesName,
+      updatedAt: progress.updatedAt || 0,
+      completed: !!progress.completed,
+    })
   }
   out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
   return out.slice(0, Math.max(0, limit))
@@ -863,6 +1045,79 @@ export function getSeriesProgressSummary(playlistId, seriesId) {
     lastSeason: lastWatched.season ?? null,
     lastEpisodeNum: lastWatched.episodeNum ?? null,
   }
+}
+
+/**
+ * Progress-entry rollup for a series: which recorded episode ids are
+ * completed, and whether any recorded episode is not. Doesn't know the
+ * series' real episode list - callers verify against that separately.
+ * @param {string} playlistId
+ * @param {number|string} seriesId
+ * @returns {{ completedIds: number[], hasIncompleteEpisode: boolean }}
+ */
+export function getSeriesEpisodeProgress(playlistId, seriesId) {
+  const empty = { completedIds: [], hasIncompleteEpisode: false }
+  if (!playlistId || seriesId == null) return empty
+  const entry = cache.get(playlistId)
+  if (!entry) return empty
+  const sid = Number(seriesId)
+  if (!Number.isFinite(sid)) return empty
+
+  const completedIds = []
+  let hasIncompleteEpisode = false
+  for (const [episodeId, prog] of Object.entries(entry.progEpisode)) {
+    if (!prog || Number(prog.seriesId) !== sid) continue
+    if (prog.completed) completedIds.push(Number(episodeId))
+    else hasIncompleteEpisode = true
+  }
+  return { completedIds, hasIncompleteEpisode }
+}
+
+/**
+ * Manual "mark as watched" override for a series, independent of per-episode
+ * progress. Unmarking also clears any recorded episode progress for that
+ * series so a re-watch starts clean.
+ * @param {string} playlistId
+ * @param {number|string} seriesId
+ * @param {boolean} watched
+ */
+export function setSeriesWatchedOverride(playlistId, seriesId, watched) {
+  if (!playlistId || seriesId == null) return
+  const sid = Number(seriesId)
+  if (!Number.isFinite(sid)) return
+  const entry = getOrCreate(playlistId)
+  const key = String(sid)
+
+  if (watched) {
+    if (key in entry.watchedSeriesOverride) return
+    entry.watchedSeriesOverride[key] = Date.now()
+  } else {
+    const hadOverride = key in entry.watchedSeriesOverride
+    if (hadOverride) delete entry.watchedSeriesOverride[key]
+    let progressRemoved = false
+    for (const episodeId of Object.keys(entry.progEpisode)) {
+      if (Number(entry.progEpisode[episodeId]?.seriesId) !== sid) continue
+      delete entry.progEpisode[episodeId]
+      progressRemoved = true
+    }
+    if (!hadOverride && !progressRemoved) return
+  }
+
+  scheduleSave()
+  dispatch(EVT_PROGRESS_CHANGED, {
+    playlistId,
+    kind: "episode",
+    seriesId: sid,
+    override: true,
+  })
+}
+
+/** @param {string} playlistId @param {number|string} seriesId */
+export function hasSeriesWatchedOverride(playlistId, seriesId) {
+  if (!playlistId || seriesId == null) return false
+  const entry = cache.get(playlistId)
+  if (!entry) return false
+  return String(Number(seriesId)) in entry.watchedSeriesOverride
 }
 
 // ---------------------------------------------------------------------------
@@ -1304,8 +1559,8 @@ export function getAllGlobalFavorites() {
 // View sort preferences (recently-added etc.)
 // ---------------------------------------------------------------------------
 const VALID_SORTS_BY_KIND = {
-  vod: new Set(["default", "added", "az"]),
-  series: new Set(["default", "added", "az"]),
+  vod: new Set(["default", "added", "rating", "az"]),
+  series: new Set(["default", "added", "rating", "az"]),
   live: new Set(["default", "number", "az", "za", "cataz"]),
 }
 
@@ -1325,6 +1580,65 @@ export function setViewSort(playlistId, kind, mode) {
   e.viewSort[kind] = m
   scheduleSave()
   dispatch(EVT_VIEW_CHANGED, { playlistId, kind, mode: m })
+}
+
+// ---------------------------------------------------------------------------
+// Hide watched (movies / series grid toggle)
+// ---------------------------------------------------------------------------
+const HIDE_WATCHED_KEY_BY_KIND = { vod: "hideWatchedVod", series: "hideWatchedSeries" }
+
+/** @param {string} playlistId @param {"vod"|"series"} kind */
+export function getHideWatched(playlistId, kind) {
+  const entry = cache.get(playlistId)
+  return !!entry?.[HIDE_WATCHED_KEY_BY_KIND[kind]]
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind @param {boolean} enabled */
+export function setHideWatched(playlistId, kind, enabled) {
+  if (!playlistId) return
+  const key = HIDE_WATCHED_KEY_BY_KIND[kind]
+  if (!key) return
+  const entry = getOrCreate(playlistId)
+  const next = !!enabled
+  if (entry[key] === next) return
+  entry[key] = next
+  scheduleSave()
+  dispatch(EVT_HIDE_WATCHED_CHANGED, { playlistId, kind, enabled: next })
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind */
+export function getLanguageFilter(playlistId, kind) {
+  const entry = cache.get(playlistId)
+  return entry?.langFilter?.[kind] || ""
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind @param {string} tag */
+export function setLanguageFilter(playlistId, kind, tag) {
+  if (!playlistId) return
+  const normalized = String(tag || "").toUpperCase()
+  const sanitized = LANG_FILTER_PATTERN.test(normalized) ? normalized : ""
+  const entry = getOrCreate(playlistId)
+  if (entry.langFilter[kind] === sanitized) return
+  entry.langFilter[kind] = sanitized
+  scheduleSave()
+  dispatch(EVT_LANG_FILTER_CHANGED, { playlistId, kind, tag: sanitized })
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind */
+export function getGroupLanguages(playlistId, kind) {
+  const entry = cache.get(playlistId)
+  return entry?.groupLangs?.[kind] !== false
+}
+
+/** @param {string} playlistId @param {"vod"|"series"} kind @param {boolean} enabled */
+export function setGroupLanguages(playlistId, kind, enabled) {
+  if (!playlistId) return
+  const entry = getOrCreate(playlistId)
+  const next = !!enabled
+  if (entry.groupLangs[kind] === next) return
+  entry.groupLangs[kind] = next
+  scheduleSave()
+  dispatch(EVT_GROUP_LANGS_CHANGED, { playlistId, kind, enabled: next })
 }
 
 // ---------------------------------------------------------------------------

@@ -68,6 +68,7 @@ export function mapXtreamVodRows(rawRows, categoryMap) {
         category = categoryMap.get(String(categoryId)) || ""
       }
       const added = Number(m.added) || 0
+      const tmdb = Number(m.tmdb) || Number(m.tmdb_id) || null
       return {
         id,
         name,
@@ -79,12 +80,20 @@ export function mapXtreamVodRows(rawRows, categoryMap) {
         plot: "",
         added,
         norm: normalize(`${name} ${category} ${year}`),
+        tmdb,
       }
     })
     .filter((m) => m.id && m.name)
     .sort((a, b) =>
       a.name.localeCompare(b.name, "en", { sensitivity: "base" })
     )
+}
+
+/** True when `rows` predate the `tmdb` field and need a background backfill. */
+export function rowsNeedTmdbBackfill(rows) {
+  if (!Array.isArray(rows) || !rows.length) return false
+  const firstRow = rows[0]
+  return !!firstRow && typeof firstRow === "object" && !("tmdb" in firstRow)
 }
 
 export function mapXtreamSeriesRows(rawRows, categoryMap) {
@@ -113,6 +122,7 @@ export function mapXtreamSeriesRows(rawRows, categoryMap) {
           s.releaseDate ? Date.parse(s.releaseDate) / 1000 : 0
         ) ||
         0
+      const tmdb = Number(s.tmdb) || Number(s.tmdb_id) || null
       return {
         id,
         name,
@@ -123,10 +133,19 @@ export function mapXtreamSeriesRows(rawRows, categoryMap) {
         plot: s.plot || "",
         added,
         norm: normalize(`${name} ${category} ${year}`),
+        tmdb,
+        genre: String(s.genre || "").trim(),
       }
     })
     .filter((s) => s.id && s.name)
     .sort((a, b) =>
       a.name.localeCompare(b.name, "en", { sensitivity: "base" })
     )
+}
+
+/** True when `rows` predate the `genre` field and need a background backfill. */
+export function rowsNeedGenreBackfill(rows) {
+  if (!Array.isArray(rows) || !rows.length) return false
+  const firstRow = rows[0]
+  return !!firstRow && typeof firstRow === "object" && !("genre" in firstRow)
 }

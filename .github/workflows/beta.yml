@@ -4,10 +4,12 @@ name: Beta
 #  - push to any `release/**` branch  -> builds and publishes a beta prerelease
 #  - run "Beta" from the Actions tab  -> same build, from whichever branch it's run on
 #
-# Versioning: X.Y.Z-beta.<run_number>, where X.Y.Z is the stable core version
-# read from package.json (any existing "-..." suffix is stripped first) and
-# <run_number> is this workflow's GITHUB_RUN_NUMBER, so every push gets a
-# unique, increasing beta tag (vX.Y.Z-beta.N) without hand-editing versions.
+# Versioning: X.Y.Z-beta.<ordinal>, where X.Y.Z is the stable core version read
+# from package.json (any existing "-..." suffix is stripped first) and <ordinal>
+# counts this base version's beta tags. The same ordinal forms the Android
+# versionCode's last two digits, so release name and Play upload stay in sync.
+# The tag is pushed eagerly, before any build, so failed runs still advance the
+# count. (1.8.0 only: names keep the legacy GITHUB_RUN_NUMBER suffix, see meta.)
 #
 # Outputs (attached to a GitHub prerelease, published once desktop assets land):
 #  Windows      *-setup.exe + .sig (NSIS only - WiX/MSI rejects prerelease
@@ -44,6 +46,7 @@ jobs:
       release_id: ${{ steps.create.outputs.release_id }}
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
+      version_code: ${{ steps.meta.outputs.version_code }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -54,10 +57,32 @@ jobs:
         run: |
           set -euo pipefail
           BASE=$(node -p "require('./package.json').version.split('-')[0]")
-          VERSION="${BASE}-beta.${GITHUB_RUN_NUMBER}"
+
+          # Beta ordinal = count of this base version's beta tags + 1. The eager tag
+          # push below records it, so a run that fails after the Play upload still
+          # advances the count and the versionCode can never be reused.
+          # ls-remote emits an extra `^{}` peeled line per annotated tag - exclude those.
+          EXISTING=$(git ls-remote --tags origin "refs/tags/v${BASE}-beta.*" | grep -v '\^{}' | wc -l || true)
+          ORDINAL=$(( EXISTING + 1 ))
+          if [ "$ORDINAL" -gt 89 ]; then
+            ORDINAL=89
+          fi
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+          VERSION_CODE=$(( (10#$MAJOR * 1000000 + 10#$MINOR * 1000 + 10#$PATCH) * 100 + ORDINAL ))
+
+          # Legacy guard: 1.8.0 shipped run-number-named betas (v1.8.0-beta.94), and the
+          # beta update channel ranks prerelease suffixes numerically, so renaming that
+          # version to low ordinals would never reach its users. Drop this branch (keep
+          # the ordinal one) after 1.8.0.
+          if [ "$BASE" = "1.8.0" ]; then
+            VERSION="${BASE}-beta.${GITHUB_RUN_NUMBER}"
+          else
+            VERSION="${BASE}-beta.${ORDINAL}"
+          fi
           TAG="v${VERSION}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
 
           PREV=$(git tag --sort=-creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
           echo "prev_tag=$PREV" >> "$GITHUB_OUTPUT"
@@ -69,6 +94,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.meta.outputs.tag }}
           PREV_TAG: ${{ steps.meta.outputs.prev_tag }}
+          VERSION_CODE: ${{ steps.meta.outputs.version_code }}
         run: |
           set -euo pipefail
           SHORT_SHA=$(git rev-parse --short HEAD)
@@ -77,6 +103,8 @@ jobs:
           COMMIT_FORMAT="- %s ([\`%h\`](${REPO_URL}/commit/%H))"
           {
             echo "Automated beta build from [\`${BRANCH_NAME}\`](${REPO_URL}/tree/${BRANCH_NAME}) @ [\`${SHORT_SHA}\`](${REPO_URL}/commit/${GITHUB_SHA})."
+            echo
+            echo "Android versionCode: \`${VERSION_CODE}\`"
             echo
             if [ -n "$PREV_TAG" ]; then
               echo "### Commits since [\`${PREV_TAG}\`](${REPO_URL}/releases/tag/${PREV_TAG})"
@@ -98,6 +126,22 @@ jobs:
             -F prerelease=true \
             --jq .id)
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+
+      # Tag eagerly, before any build can upload to Play: a run that fails after the
+      # Play upload must still leave a tag, or the versionCode ordinal below reuses a
+      # code Play has already consumed. Publishing the draft later reuses this tag.
+      - name: Push beta tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists (re-run); leaving it in place."
+          else
+            gh api repos/${{ github.repository }}/git/refs -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA" >/dev/null
+          fi
 
   build-desktop:
     needs: create-beta-release
@@ -307,21 +351,11 @@ jobs:
 
       - run: pnpm sync-version ${{ needs.create-beta-release.outputs.version }}
 
-      - name: Compute beta versionCode
-        id: versioncode
+      # The ordinal (and thus the versionCode) is computed once in create-beta-release
+      # and recorded by its eager tag push; reusing the output keeps them in lockstep.
+      - name: Set beta versionCode
         shell: bash
-        run: |
-          set -euo pipefail
-          BASE=$(node -p "require('./package.json').version.split('-')[0]")
-          # ls-remote emits an extra `^{}` peeled line per annotated tag - exclude those.
-          EXISTING=$(git ls-remote --tags origin "refs/tags/v${BASE}-beta.*" | grep -v '\^{}' | wc -l || true)
-          ORDINAL=$(( EXISTING + 1 ))
-          if [ "$ORDINAL" -gt 89 ]; then
-            ORDINAL=89
-          fi
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
-          VERSION_CODE=$(( (10#$MAJOR * 1000000 + 10#$MINOR * 1000 + 10#$PATCH) * 100 + ORDINAL ))
-          echo "XTREAM_VERSION_CODE_OVERRIDE=$VERSION_CODE" >> "$GITHUB_ENV"
+        run: echo "XTREAM_VERSION_CODE_OVERRIDE=${{ needs.create-beta-release.outputs.version_code }}" >> "$GITHUB_ENV"
 
       - name: Build signed APK (universal)
         env:

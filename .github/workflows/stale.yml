@@ -35,6 +35,6 @@ jobs:
           Closing this PR for lack of activity. Feel free to reopen if you want to continue working on it.
         stale-issue-label: 'stale'
         stale-pr-label: 'stale'
-        exempt-issue-labels: 'pinned,security,bug,roadmap'
+        exempt-issue-labels: 'pinned,security,bug,roadmap,pending'
         exempt-pr-labels: 'pinned,security,work-in-progress'
         operations-per-run: 60

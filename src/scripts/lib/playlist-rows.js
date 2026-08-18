@@ -1,5 +1,6 @@
 import { selectEntry, removeEntry, loadCreds, getActiveEntry } from "./creds.js"
-import { getNewestCacheTime } from "./cache.js"
+import { getNewestCacheTime, getCached } from "./cache.js"
+import { buildLiveStreamUrl } from "./stream-urls.ts"
 import {
   ICON_TRASH,
   ICON_PENCIL,
@@ -53,6 +54,27 @@ async function exportEntryM3U(entry) {
   } catch (e) {
     log.error("[xt:playlist-rows] export failed:", e)
     toastError(t("editor.toastExportFail"), { description: (e && e.message) || undefined })
+  }
+}
+
+/** First cached channel's stream URL, so "Run diagnostic" can probe playback without an extra catalog fetch. Checks "live" then falls back to "m3u", same as playlist-health.ts. */
+function resolveSampleStreamUrl(entry) {
+  try {
+    const live = getCached(entry._id, "live")
+    const hit = live && Array.isArray(live.data) && live.data.length ? live : getCached(entry._id, "m3u")
+    const firstChannel = Array.isArray(hit?.data) ? hit.data[0] : null
+    if (!firstChannel) return null
+    if (typeof firstChannel.url === "string" && firstChannel.url) return firstChannel.url
+    if (firstChannel.id != null && entry.type === "xtream") {
+      return buildLiveStreamUrl(
+        { host: entry.serverUrl, port: "", user: entry.username, pass: entry.password },
+        firstChannel.id,
+        entry.liveContainer
+      )
+    }
+    return null
+  } catch {
+    return null
   }
 }
 
@@ -147,9 +169,16 @@ export function renderPlaylistRow({
         : "ring-line text-fg-2 bg-surface-2"
     }">${badgeLabel}</span>
     <span class="flex flex-col min-w-0 flex-1 ${isCompact ? "" : "gap-0.5"}">
-      <span class="truncate text-sm ${
-        isActive ? "text-fg font-medium" : "text-fg-2"
-      }">${escapeHtml(entry.title)}</span>
+      <span class="flex items-center gap-1 min-w-0">
+        ${
+          entry.emoji
+            ? `<span class="shrink-0 text-sm leading-none" aria-hidden="true">${escapeHtml(entry.emoji)}</span>`
+            : ""
+        }
+        <span class="truncate text-sm flex-1 min-w-0 ${
+          isActive ? "text-fg font-medium" : "text-fg-2"
+        }">${escapeHtml(entry.title)}</span>
+      </span>
       ${
         subtitle
           ? `<span class="truncate text-2xs text-fg-3 font-mono">${escapeHtml(subtitle)}</span>`
@@ -259,7 +288,7 @@ function fmtCount(n) {
   return Number.isFinite(n) ? n.toLocaleString() : "-"
 }
 
-function healthRow(label, value, tone) {
+function healthRow(label, value, tone, title) {
   const row = document.createElement("div")
   row.className =
     "flex items-center justify-between gap-3 py-1.5 border-b border-line/40 last:border-b-0 text-2xs"
@@ -275,12 +304,15 @@ function healthRow(label, value, tone) {
       ? "text-warn"
       : tone === "bad"
       ? "text-bad"
+      : tone === "unmeasured"
+      ? "text-fg-3 italic"
       : "text-fg-2")
   if (value && typeof value === "object" && "nodeType" in value) {
     dd.appendChild(value)
   } else {
     dd.textContent = String(value ?? "-")
   }
+  if (title) dd.title = title
   row.append(dt, dd)
   return row
 }
@@ -373,7 +405,10 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
       ? "warn"
       : h.provider.successes
       ? "good"
-      : "neutral"
+      : "unmeasured"
+
+  // No i18n key for "not loaded on this page" - reuse the panel helper copy as a tooltip.
+  const notLoadedHereTitle = t("settings.health.helper")
 
   const list = document.createElement("dl")
   list.className = "flex flex-col gap-0"
@@ -406,10 +441,18 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
     healthRow(
       t("settings.health.epg"),
       epgText,
-      h.epg.fetchedAt ? "good" : "neutral"
+      h.epg.fetchedAt ? "good" : "unmeasured",
+      h.epg.fetchedAt ? undefined : notLoadedHereTitle
     )
   )
-  list.appendChild(healthRow(t("settings.health.provider"), provText, provTone))
+  list.appendChild(
+    healthRow(
+      t("settings.health.provider"),
+      provText,
+      provTone,
+      provTone === "unmeasured" ? notLoadedHereTitle : undefined
+    )
+  )
   if (h.provider.lastError && h.provider.failures > 0) {
     const errEl = document.createElement("span")
     errEl.className = "text-bad break-all"
@@ -481,15 +524,26 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
             verdictMessage: t("diagnostic.running"),
           })
         }
+        const runOptions = {
+          onProgress,
+          entry: {
+            epgUrl: entry.epgUrl,
+            additionalEpgUrls: entry.additionalEpgUrls,
+            disableProviderEpg: entry.disableProviderEpg,
+            liveContainer: entry.liveContainer,
+            type: entry.type,
+          },
+          sampleStreamUrl: resolveSampleStreamUrl(entry) || undefined,
+        }
         let result
         if (entry.type === "xtream") {
           result = await runXtreamDiagnostic({
             serverUrl: entry.serverUrl,
             username: entry.username,
             password: entry.password,
-          }, { onProgress })
+          }, runOptions)
         } else {
-          result = await runM3UDiagnostic(entry.url, { onProgress })
+          result = await runM3UDiagnostic(entry.url, runOptions)
         }
         renderDiagnosticInto(diagnosticResultEl, result)
       } catch (error) {
@@ -497,6 +551,8 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
       } finally {
         diagnostic.removeAttribute("disabled")
         diagnostic.classList.remove("opacity-60")
+        // Repaint so the rows above reflect the requests the diagnostic just made.
+        paintPlaylistHealthInto(panel, entry, opts)
       }
     })
   }

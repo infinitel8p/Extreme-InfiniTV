@@ -31,9 +31,25 @@ import {
   sortCategoryNames,
   type CategorySortMode,
 } from "@/scripts/lib/channel-sort.ts"
+import { CANONICAL_GENRES, type GenreId } from "@/scripts/lib/genres.ts"
+import {
+  GENRE_CAT_PREFIX,
+  GENRE_INDEX_EVENT,
+  getGenreIndex,
+  type GenreIndex,
+} from "@/scripts/lib/genre-index.ts"
+import { isTmdbActive } from "@/scripts/lib/app-settings.js"
 
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
+
+/** Translated label for a `GENRE_CAT_PREFIX`-prefixed category value, or null for anything else. */
+export function genreLabelForCategory(cat: string): string | null {
+  if (!cat || !cat.startsWith(GENRE_CAT_PREFIX)) return null
+  const genreId = cat.slice(GENRE_CAT_PREFIX.length) as GenreId
+  const genre = CANONICAL_GENRES.find((candidate) => candidate.id === genreId)
+  return genre ? t(genre.labelKey) : null
+}
 
 const EYE_OPEN_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7"/><circle cx="12" cy="12" r="3"/></svg>'
@@ -45,6 +61,8 @@ export type PickerKind = "live" | "vod" | "series" | "epg"
 
 export interface CategoryPickerItem {
   category?: string | null
+  /** Every group this item belongs to (semicolon-split `group-title`). Falls back to `category` when absent. */
+  categories?: string[] | null
 }
 
 export interface CategoryPickerOptions {
@@ -101,6 +119,9 @@ export function mountCategoryPicker(
   opts: CategoryPickerOptions
 ): CategoryPickerHandle {
   const pseudoKind = opts.pseudoRowKind || (opts.kind === "epg" ? "live" : opts.kind)
+  const genreKind: "vod" | "series" | null =
+    opts.kind === "vod" || opts.kind === "series" ? opts.kind : null
+  let genreIndexSnapshot: GenreIndex | null = null
 
   const dialog = document.getElementById(
     `${opts.idPrefix}-dialog`
@@ -186,8 +207,15 @@ export function mountCategoryPicker(
   const computeCategoryCounts = (items: CategoryPickerItem[]): Map<string, number> => {
     const counts = new Map<string, number>()
     for (const item of items) {
-      const key = ((item.category || "") + "").trim() || t("list.uncategorized")
-      counts.set(key, (counts.get(key) || 0) + 1)
+      const groups =
+        Array.isArray(item.categories) && item.categories.length
+          ? item.categories
+          : [((item.category || "") + "").trim()]
+      // An item present in several groups counts toward every one of them.
+      for (const group of groups) {
+        const key = group.trim() || t("list.uncategorized")
+        counts.set(key, (counts.get(key) || 0) + 1)
+      }
     }
     return counts
   }
@@ -202,7 +230,7 @@ export function mountCategoryPicker(
       labelEl.setAttribute("data-i18n", "list.specialRecents")
       labelEl.textContent = t("list.specialRecents")
     } else if (activeCat) {
-      labelEl.textContent = activeCat
+      labelEl.textContent = genreLabelForCategory(activeCat) || activeCat
     } else {
       labelEl.setAttribute("data-i18n", "list.allCategories")
       labelEl.textContent = t("list.allCategories")
@@ -251,6 +279,7 @@ export function mountCategoryPicker(
       selectAction?: boolean
       selectChecked?: boolean
       dim?: boolean
+      searchLabel?: string
     } = {}
   ): HTMLElement => {
     const row = document.createElement("div")
@@ -258,6 +287,7 @@ export function mountCategoryPicker(
     row.setAttribute("tabindex", "0")
     row.setAttribute("aria-selected", "false")
     row.dataset.val = val
+    if (rowOpts.searchLabel) row.dataset.searchLabel = normalize(rowOpts.searchLabel)
     if (val.startsWith("__")) row.dataset.rowKind = "pseudo"
     else if (val === "") row.dataset.rowKind = "all"
     else if (rowOpts.hideAction === "unhide") row.dataset.rowKind = "hidden"
@@ -327,7 +357,7 @@ export function mountCategoryPicker(
         : t("list.showCategoryTitle")
       rightAction.className =
         "category-select-btn shrink-0 size-6 inline-flex items-center justify-center rounded-md " +
-        "border outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent " +
+        "border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent " +
         (checked
           ? "bg-accent border-accent text-bg"
           : "border-line text-fg-3 hover:text-fg hover:border-fg-3 focus-visible:border-fg-3")
@@ -399,6 +429,45 @@ export function mountCategoryPicker(
     frag.appendChild(recRow)
 
     frag.appendChild(addRow("", t("list.allCategories"), null, ""))
+
+    if (genreKind) {
+      const tmdbActive = isTmdbActive()
+      const genreEntries = CANONICAL_GENRES.map((genre) => ({
+        genre,
+        count: genreIndexSnapshot?.sets.get(genre.id)?.size || 0,
+      })).filter((entry) => tmdbActive || entry.count > 0)
+
+      if (genreEntries.length) {
+        const header = document.createElement("div")
+        header.className =
+          "px-2 pt-3 pb-1 text-eyebrow font-semibold uppercase tracking-wide text-fg-3"
+        header.textContent = t("genres.section")
+        frag.appendChild(header)
+
+        for (const { genre, count } of genreEntries) {
+          const label = t(genre.labelKey)
+          frag.appendChild(
+            addRow(GENRE_CAT_PREFIX + genre.id, label, count, "", { searchLabel: label })
+          )
+        }
+
+        if (genreIndexSnapshot) {
+          const footer = document.createElement("div")
+          footer.className = "px-2 pt-1.5 pb-2 text-xs text-fg-3 border-b border-line"
+          footer.textContent = t("genres.coverage", {
+            classified: genreIndexSnapshot.classifiedCount.toLocaleString(),
+            total: genreIndexSnapshot.totalCount.toLocaleString(),
+          })
+          if (!tmdbActive) {
+            const hint = document.createElement("div")
+            hint.className = "mt-0.5"
+            hint.textContent = t("genres.coverageHint")
+            footer.appendChild(hint)
+          }
+          frag.appendChild(footer)
+        }
+      }
+    }
 
     let origIndex = 0
     if (mode === "select") {
@@ -501,7 +570,7 @@ export function mountCategoryPicker(
       const isAllButton = val === ""
       const isRegularRow = !isAllButton && !isPseudo
       if (isRegularRow) totalCount++
-      const label = normalize(val || row.textContent || "")
+      const label = row.dataset.searchLabel || normalize(val || row.textContent || "")
       const searchMatches =
         !tokens.length || tokens.every((token) => label.includes(token))
       let show = searchMatches
@@ -573,6 +642,17 @@ export function mountCategoryPicker(
     for (const row of sorted) {
       listEl.insertBefore(row, anchor)
     }
+  }
+
+  const refreshGenreIndex = (): void => {
+    if (!genreKind) return
+    const playlistId = opts.getActivePlaylistId()
+    if (!playlistId) return
+    getGenreIndex(playlistId, genreKind).then((index) => {
+      if (opts.getActivePlaylistId() !== playlistId) return
+      genreIndexSnapshot = index
+      renderList()
+    })
   }
 
   const syncModeToggle = (): void => {
@@ -720,7 +800,7 @@ export function mountCategoryPicker(
     )
     checkbox.className =
       "category-select-btn shrink-0 size-6 inline-flex items-center justify-center rounded-md " +
-      "border outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent " +
+      "border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent " +
       (allowed
         ? "bg-accent border-accent text-bg"
         : "border-line text-fg-3 hover:text-fg hover:border-fg-3 focus-visible:border-fg-3")
@@ -752,6 +832,14 @@ export function mountCategoryPicker(
   onDoc("xt:allowed-categories-changed", onAnyPrefChange)
   onDoc("xt:category-mode-changed", onAnyPrefChange)
   onDoc("xt:category-sort-changed", onAnyPrefChange)
+
+  onDoc(GENRE_INDEX_EVENT, (event: Event) => {
+    const detail = (event as CustomEvent).detail
+    if (!detail || !genreKind) return
+    if (detail.playlistId !== opts.getActivePlaylistId()) return
+    if (detail.kind !== genreKind) return
+    refreshGenreIndex()
+  })
 
   triggerEl?.addEventListener("click", () => {
     if (!dialog) return
@@ -807,6 +895,7 @@ export function mountCategoryPicker(
       syncModeToggle()
       syncSortToggle()
       renderList()
+      refreshGenreIndex()
     },
     refreshPseudoRows,
     setActiveCat,

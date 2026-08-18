@@ -5,8 +5,10 @@
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
   import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
+  import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
   import { fmtImdbRating } from "@/scripts/lib/format.js"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   const STRIP_LIMIT = 12
 
@@ -139,25 +141,32 @@
       use:dragScroll
       class="ra-strip flex gap-3 sm:gap-4 overflow-x-auto custom-scroll
              snap-x snap-mandatory py-3 -my-2 -mx-2 px-2">
-      {#each entries as entry, i (entry.kind + ":" + entry.id)}
+      {#each entries as entry, idx (entry.kind + ":" + entry.id)}
         <li
           class="ra-item shrink-0 snap-start"
           data-kind={entry.kind}
-          style:--enter-delay={Math.min(i, 8) * 28 + "ms"}>
+          style:--enter-delay={Math.min(idx, 8) * 28 + "ms"}>
           <a
             href={entry.href}
             aria-label={`Open ${entry.name}`}
+            use:hubCardMenu={{
+              kind: entry.kind,
+              id: entry.id,
+              name: entry.name,
+              logo: entry.logo,
+              playlistId: activePlaylistId,
+            }}
             class="ra-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150
                    hover:ring-[3px] hover:ring-accent
-                   focus-visible:ring-[3px] focus-visible:ring-accent
+                   focus-visible:ring-1 focus-visible:ring-accent
                    hover:transform-[translateY(-2px)]
                    focus-visible:transform-[translateY(-2px)]">
             <div class="ra-poster aspect-2/3 w-full overflow-hidden bg-surface-2 relative">
               {#if entry.logo}
                 <img
-                  src={entry.logo}
+                  use:cachedImg={{ url: entry.logo, kind: "poster" }}
                   alt=""
                   loading="lazy" fetchpriority="low"
                   decoding="async"

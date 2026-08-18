@@ -64,13 +64,28 @@ async function findEntry(playlistId) {
  * @property {"primary"|"additional"} kind
  */
 
+// Splits only on commas followed by a URL scheme (or protocol-relative //) so query-string commas survive.
+function splitHeaderEpgUrls(raw) {
+  if (!raw || typeof raw !== "string") return []
+  const seen = new Set()
+  const out = []
+  for (const part of raw.split(/\s*,+\s*(?=(?:https?:)?\/\/)/i)) {
+    const trimmed = part.trim()
+    if (!trimmed || !/^(?:https?:)?\/\//i.test(trimmed) || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
+}
+
 /**
  * Pure URL-resolution helper. Given the playlist entry, the creds, and the
  * M3U `x-tvg-url` header value (already loaded by the caller, since storage
  * is async on Tauri), build the ordered source list:
  *   1. user-supplied primary `epgUrl` if set, else the auto-detected source
- *      (provider default for Xtream / `x-tvg-url` for M3U). Auto-detect is
- *      suppressed when `entry.disableProviderEpg` is true - lets the user
+ *      (provider default for Xtream / `x-tvg-url` for M3U - a comma-joined
+ *      list becomes primary + additional `m3u-header` sources). Auto-detect
+ *      is suppressed when `entry.disableProviderEpg` is true - lets the user
  *      verify their custom additional sources in isolation.
  *   2. each `additionalEpgUrls[]` entry, in order, deduped against the primary
  *
@@ -78,7 +93,7 @@ async function findEntry(playlistId) {
  *
  * @param {{ type?: string, epgUrl?: string, additionalEpgUrls?: string[], disableProviderEpg?: boolean } | null} entry
  * @param {{host:string,port:string,user:string,pass:string}} creds
- * @param {string} m3uHeaderUrl - value of `x-tvg-url` for M3U playlists, or ""
+ * @param {string} m3uHeaderUrl - raw (possibly comma-joined) `x-tvg-url` value for M3U playlists, or ""
  * @param {string[]} [customSourceUrls] - custom playlist only: provider EPG URLs
  *   unioned from every source entry (already resolved by the async wrapper)
  * @returns {EpgSource[]}
@@ -100,7 +115,10 @@ export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl, customSourceUr
   } else if (!skipAuto && entry?.type === "custom") {
     for (const url of customSourceUrls) push(url, "custom-sources", "primary")
   } else if (!skipAuto && isLikelyM3USource(creds?.host, creds?.user, creds?.pass)) {
-    if (m3uHeaderUrl) push(m3uHeaderUrl, "m3u-header", "primary")
+    const headerUrls = splitHeaderEpgUrls(m3uHeaderUrl)
+    headerUrls.forEach((url, index) => {
+      push(url, "m3u-header", index === 0 ? "primary" : "additional")
+    })
   } else if (!skipAuto && creds?.host) {
     const base = fmtBase(creds.host, creds.port).replace(/\/+$/, "")
     const url =
@@ -152,10 +170,10 @@ async function collectCustomSourceEpgUrls(playlistId) {
           stored = localStorage.getItem(`xt_m3u_epg:${sourceEntryId}`) || ""
         } catch {}
       }
-      return stored || null
+      return splitHeaderEpgUrls(stored)
     })
   )
-  return resolvedUrls.filter(Boolean)
+  return resolvedUrls.flat().filter(Boolean)
 }
 
 /**
@@ -218,7 +236,7 @@ export function mergeChannelNameMaps(maps) {
   return out
 }
 
-/** @typedef {{ start:number, stop:number, title:string, desc:string, catchupId?:string }} Programme */
+/** @typedef {{ start:number, stop:number, title:string, desc:string, catchupId?:string, rawStart?:number, rawStop?:number }} Programme */
 
 /**
  * @typedef {Object} EpgState
@@ -424,15 +442,8 @@ export function parseXmlTv(xml) {
 // ---------------------------------------------------------------------------
 // Lookups
 // ---------------------------------------------------------------------------
-/**
- * @param {Map<string, Programme[]>} programmes
- * @param {string|undefined|null} tvgId
- * @param {number} [atMs]
- * @returns {{ current: Programme|null, next: Programme|null }}
- */
-export function getNowNext(programmes, tvgId, atMs = Date.now()) {
-  if (!programmes || !tvgId) return { current: null, next: null }
-  const arr = programmes.get(String(tvgId).toLowerCase())
+/** Binary-search current/next lookup shared by `getNowNext` and `getNowNextForChannel`. */
+function getNowNextFromArray(arr, atMs) {
   if (!arr || !arr.length) return { current: null, next: null }
 
   let lo = 0
@@ -453,6 +464,43 @@ export function getNowNext(programmes, tvgId, atMs = Date.now()) {
   const afterIdx = current ? best + 1 : Math.max(0, best + 1)
   if (afterIdx < arr.length) next = arr[afterIdx]
   return { current, next }
+}
+
+/**
+ * @param {Map<string, Programme[]>} programmes
+ * @param {string|undefined|null} tvgId
+ * @param {number} [atMs]
+ * @returns {{ current: Programme|null, next: Programme|null }}
+ */
+export function getNowNext(programmes, tvgId, atMs = Date.now()) {
+  if (!programmes || !tvgId) return { current: null, next: null }
+  const arr = programmes.get(String(tvgId).toLowerCase())
+  return getNowNextFromArray(arr, atMs)
+}
+
+/** Shifted copy of a channel's programmes; `rawStart`/`rawStop` keep the true XMLTV time for catch-up. */
+export function shiftChannelProgrammes(programmes, tvgShiftHours) {
+  if (!programmes || !programmes.length) return programmes || []
+  const hours = Number(tvgShiftHours)
+  if (!Number.isFinite(hours) || hours === 0) return programmes
+  const shiftMs = hours * 60 * 60 * 1000
+  return programmes.map((programme) => ({
+    ...programme,
+    start: programme.start + shiftMs,
+    stop: programme.stop + shiftMs,
+    rawStart: programme.start,
+    rawStop: programme.stop,
+  }))
+}
+
+/** Like `getNowNext`, but resolves tvg-id + tvg-shift first (catch-up math calls `getNowNext` directly). */
+export function getNowNextForChannel(programmes, channel, playlistId, atMs = Date.now()) {
+  if (!programmes || !channel) return { current: null, next: null }
+  const tvgId = effectiveTvgId(channel, playlistId)
+  if (!tvgId) return { current: null, next: null }
+  const arr = programmes.get(String(tvgId).toLowerCase())
+  const shifted = shiftChannelProgrammes(arr, channel.tvgShift)
+  return getNowNextFromArray(shifted, atMs)
 }
 
 // ---------------------------------------------------------------------------
@@ -723,7 +771,7 @@ async function fetchEpgConditional(url, meta) {
   const headers = {}
   if (meta?.lastModified) headers["If-Modified-Since"] = meta.lastModified
   if (meta?.etag) headers["If-None-Match"] = meta.etag
-  const init = { forceTauri: true }
+  const init = { forceTauri: true, logKind: "epg" }
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
     init.signal = AbortSignal.timeout(90_000)
   }
@@ -1390,7 +1438,7 @@ export async function testEpgSource(url, opts = {}) {
     return { ok: false, error: "Empty URL" }
   }
   try {
-    const init = { forceTauri: true }
+    const init = { forceTauri: true, logKind: "epg" }
     if (opts.signal) init.signal = opts.signal
     let response
     try {

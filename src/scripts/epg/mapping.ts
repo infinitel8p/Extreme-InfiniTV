@@ -25,6 +25,7 @@ import {
 } from "@/scripts/lib/preferences.js"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { ICON_INFO } from "@/scripts/lib/icons.js"
+import { getDensityFactor } from "@/scripts/lib/app-settings.js"
 
 type Channel = {
   id: number
@@ -104,7 +105,7 @@ let filteredChannels: Channel[] = []
 
 let channelById = new Map<number, Channel>()
 
-const MAP_ROW_H = 60
+const MAP_ROW_H = Math.max(44, Math.round(60 * getDensityFactor()))
 const MAP_OVERSCAN = 6
 let mapSpacer: HTMLElement | null = null
 let mapRenderToken = 0

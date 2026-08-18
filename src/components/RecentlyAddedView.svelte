@@ -10,6 +10,7 @@
   } from "@/scripts/lib/catalog.js"
   import { fmtImdbRating } from "@/scripts/lib/format.js"
   import { kindLabel } from "@/scripts/lib/kinds.js"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   const PAGE_SIZE = 200
 
@@ -162,7 +163,7 @@
            lg:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]
            auto-rows-min content-start
            p-2 pb-4">
-    {#each visible as row, i (row.kind + ":" + row.item.id)}
+    {#each visible as row, idx (row.kind + ":" + row.item.id)}
       {@const ratingText = fmtImdbRating(row.item.rating)}
       <a
         href={buildHref(row.kind, row.item.id)}
@@ -170,12 +171,12 @@
         class="ra-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line
                transition-[transform,box-shadow] duration-150
-               hover:ring-2 hover:ring-accent hover:[transform:translateY(-2px)]
-               focus-visible:ring-2 focus-visible:ring-accent focus-visible:[transform:translateY(-2px)]">
+               hover:ring-1 hover:ring-accent hover:[transform:translateY(-2px)]
+               focus-visible:ring-1 focus-visible:ring-accent focus-visible:[transform:translateY(-2px)]">
         <div class="aspect-2/3 w-full bg-surface-2 overflow-hidden relative">
           {#if row.item.logo}
             <img
-              src={row.item.logo}
+              use:cachedImg={{ url: row.item.logo, kind: "poster" }}
               alt=""
               loading="lazy" fetchpriority="low"
               decoding="async"

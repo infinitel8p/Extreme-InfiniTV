@@ -32,6 +32,7 @@ const isTauri =
 const audioProxyPlatformAvailable = isTauri && !isAndroid
 
 let cachedAvailability: Promise<boolean> | null = null
+let resolvedAvailability: boolean | null = null
 let activeSessionId: string | null = null
 
 function normalizeStatus(result: any): AudioTranscodeStatus {
@@ -51,9 +52,11 @@ async function probeAvailability(force: boolean): Promise<boolean> {
       customPath: getFfmpegPath() || null,
       force,
     })
-    return normalizeStatus(result).available
+    resolvedAvailability = normalizeStatus(result).available
+    return resolvedAvailability
   } catch (err) {
     log.warn("[xt:audio-proxy] availability check failed:", err)
+    resolvedAvailability = false
     return false
   }
 }
@@ -62,6 +65,12 @@ export async function audioTranscodeAvailable(): Promise<boolean> {
   if (!audioProxyPlatformAvailable) return false
   if (!cachedAvailability) cachedAvailability = probeAvailability(false)
   return cachedAvailability
+}
+
+/** Last resolved probe result without triggering one; null when no probe has run yet this session. */
+export function peekAudioTranscodeAvailable(): boolean | null {
+  if (!audioProxyPlatformAvailable) return false
+  return resolvedAvailability
 }
 
 /** Forces a fresh Rust-side probe (bypassing its resolution cache) after a settings change. */
@@ -90,7 +99,7 @@ export async function audioTranscodeStatus(): Promise<AudioTranscodeStatus | nul
 if (audioProxyPlatformAvailable && typeof document !== "undefined") {
   document.addEventListener(SETTINGS_EVENT, (event: Event) => {
     const detail = (event as CustomEvent)?.detail
-    if (detail?.key === "ffmpegPath") cachedAvailability = null
+    if (detail?.key === "ffmpegPath") { cachedAvailability = null; resolvedAvailability = null }
   })
 }
 

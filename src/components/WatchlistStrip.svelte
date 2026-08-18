@@ -6,13 +6,15 @@
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
   import { getActiveEntry } from "@/scripts/lib/creds.js"
   import { dragScroll } from "@/scripts/lib/drag-scroll.ts"
+  import { hubCardMenu } from "@/scripts/lib/hub-card-menu.ts"
   import {
     ensureLoaded as ensurePrefsLoaded,
     getWatchlist,
     setWatchlistMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   /** @type {{ kind?: "all" | "vod" | "series" }} */
   let { kind: filterKind = "all" } = $props()
@@ -38,12 +40,19 @@
 
   function buildEntry(playlistId, kind, id, meta, lookups) {
     const item = lookups[kind]?.get(Number(id))
-    const name = meta?.name || item?.name || `${kindLabel(kind)} ${id}`
+    const isStoredNameFallback = !!meta?.name && isKindFallbackName(kind, id, meta.name)
+    const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
+    const name = effectiveStoredName || item?.name || `${kindLabel(kind)} ${id}`
     const logo = meta?.logo ?? item?.logo ?? null
-    if (!meta?.name && !meta?.logo && (item?.name || item?.logo)) {
+    if (!effectiveStoredName && !meta?.logo && (item?.name || item?.logo)) {
       setWatchlistMeta(playlistId, kind, id, {
         name: item.name || "",
         logo: item.logo || null,
+      })
+    } else if (isStoredNameFallback && item?.name) {
+      setWatchlistMeta(playlistId, kind, id, {
+        name: item.name,
+        logo: meta?.logo ?? item?.logo ?? null,
       })
     }
     const href =
@@ -65,12 +74,12 @@
     ])
     lookups = {
       vod: new Map(
-        (getCached(playlistId, "vod")?.data || []).map((m) => [Number(m.id), m])
+        (getCached(playlistId, "vod")?.data || []).map((movie) => [Number(movie.id), movie])
       ),
       series: new Map(
-        (getCached(playlistId, "series")?.data || []).map((s) => [
-          Number(s.id),
-          s,
+        (getCached(playlistId, "series")?.data || []).map((series) => [
+          Number(series.id),
+          series,
         ])
       ),
     }
@@ -106,7 +115,7 @@
         })
       }
     }
-    merged.sort((a, b) => b.ts - a.ts)
+    merged.sort((left, right) => right.ts - left.ts)
     entries = merged
       .slice(0, 12)
       .map((row) =>
@@ -174,17 +183,24 @@
           <a
             href={entry.href}
             aria-label={tr("watchlist.itemAriaLabel", { name: entry.name })}
+            use:hubCardMenu={{
+              kind: entry.kind,
+              id: entry.id,
+              name: entry.name,
+              logo: entry.logo,
+              playlistId: activePlaylistId,
+            }}
             class="watch-card group relative block rounded-xl overflow-hidden
                    bg-surface-2 ring-1 ring-line
                    transition-[transform,box-shadow] duration-150
                    hover:ring-[3px] hover:ring-accent
-                   focus-visible:ring-[3px] focus-visible:ring-accent
+                   outline-none focus-visible:ring-1 focus-visible:ring-accent
                    hover:transform-[translateY(-2px)]
                    focus-visible:transform-[translateY(-2px)]">
             <div class="watch-thumb w-full aspect-2-3 overflow-hidden bg-surface-2 relative">
               {#if entry.logo}
                 <img
-                  src={entry.logo}
+                  use:cachedImg={{ url: entry.logo, kind: "poster" }}
                   alt=""
                   loading="lazy" fetchpriority="low"
                   decoding="async"

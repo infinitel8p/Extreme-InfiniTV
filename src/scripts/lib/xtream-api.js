@@ -44,7 +44,7 @@ async function noticeFailover() {
 async function fetchCandidate(url, opts) {
   const userSignal = opts?.signal
   if (typeof AbortController === "undefined") {
-    return providerFetch(url, opts)
+    return providerFetch(url, { ...opts, logKind: "api" })
   }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), candidateTimeoutMs())
@@ -53,7 +53,7 @@ async function fetchCandidate(url, opts) {
     else userSignal.addEventListener("abort", () => controller.abort(), { once: true })
   }
   try {
-    return await providerFetch(url, { ...opts, signal: controller.signal })
+    return await providerFetch(url, { ...opts, signal: controller.signal, logKind: "api" })
   } finally {
     clearTimeout(timer)
   }
@@ -162,6 +162,7 @@ async function probeStreamUrl(url) {
       method: "GET",
       headers: { Range: "bytes=0-0" },
       signal: controller.signal,
+      logKind: "api",
     })
     return response.ok || response.status === 206
   } catch {

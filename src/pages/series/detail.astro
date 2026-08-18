@@ -8,6 +8,9 @@ import {
   IconExternalLink,
   IconAspectRatio,
   IconClockEdit,
+  IconChartBar,
+  IconActivityHeartbeat,
+  IconX,
 } from "@tabler/icons-svelte"
 ---
 
@@ -32,10 +35,17 @@ import {
         </a>
 
         <div class="dt-enter dt-stagger-1 flex flex-col gap-1">
+          <div data-detail-skeleton class="flex flex-col gap-2 py-0.5">
+            <div class="skel rounded-lg h-8 w-2/5"></div>
+            <div class="flex gap-2">
+              <div class="skel rounded-full h-4 w-14"></div>
+              <div class="skel rounded-full h-4 w-20"></div>
+            </div>
+          </div>
           <h1
             id="series-detail-title"
+            hidden
             class="font-semibold tracking-[-0.02em] leading-tight text-2xl sm:text-3xl">
-            -
           </h1>
           <div
             id="series-now-playing"
@@ -43,7 +53,15 @@ import {
           </div>
           <div
             id="series-detail-meta"
-            class="text-xs text-fg-3 space-x-2 tabular-nums">
+            hidden
+            class="detail-meta text-xs text-fg-3 tabular-nums">
+          </div>
+          <div
+            id="series-detail-langs"
+            hidden
+            aria-label="Available languages"
+            data-i18n-attr="aria-label:detail.lang.title"
+            class="flex flex-wrap gap-1.5">
           </div>
         </div>
 
@@ -51,13 +69,13 @@ import {
         <div class="w-full">
           <div
             id="series-detail-poster"
-            class="dt-hero aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
+            class="dt-hero skel aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
                    max-h-[60dvh] max-w-[calc(60dvh*2/3)] sm:max-w-[calc(60dvh*16/9)]"
             style="view-transition-name: active-poster;">
           </div>
           <div
             id="series-detail-player-wrap"
-            class="hidden aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line
+            class="hidden relative aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line
                    max-h-[60dvh] max-w-[calc(60dvh*16/9)]">
             <video
               id="series-player"
@@ -65,6 +83,34 @@ import {
               controls
               hidden
               playsinline></video>
+          </div>
+          <div
+            id="series-detail-trailer-wrap"
+            class="hidden relative aspect-video w-full mx-auto overflow-hidden rounded-xl bg-black ring-1 ring-line
+                   max-h-[60dvh] max-w-[calc(60dvh*16/9)]">
+            <iframe
+              id="series-detail-trailer-frame"
+              class="h-full w-full border-0"
+              allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+              allowfullscreen></iframe>
+            <div class="absolute top-2 right-2 z-10 flex gap-1.5">
+              <button
+                id="series-detail-trailer-external"
+                type="button"
+                class="grid place-items-center min-h-11 min-w-11 rounded-lg bg-black/60 text-white
+                       hover:bg-black/80 focus-visible:bg-black/80 focus-visible:ring-2 focus-visible:ring-accent"
+                data-i18n-attr="aria-label:detail.trailer.openYoutube;title:detail.trailer.openYoutube">
+                <IconBrandYoutube aria-hidden="true" stroke={2} class="size-5" />
+              </button>
+              <button
+                id="series-detail-trailer-close"
+                type="button"
+                class="grid place-items-center min-h-11 min-w-11 rounded-lg bg-black/60 text-white
+                       hover:bg-black/80 focus-visible:bg-black/80 focus-visible:ring-2 focus-visible:ring-accent"
+                data-i18n-attr="aria-label:common.close;title:common.close">
+                <IconX aria-hidden="true" stroke={2} class="size-5" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -105,6 +151,27 @@ import {
             <span data-i18n="stream.scale.button">Display mode</span>
           </button>
           <button
+            id="series-detail-stats"
+            type="button"
+            hidden
+            aria-pressed="false"
+            aria-label="Playback stats"
+            data-i18n-attr="aria-label:player.stats.title"
+            class="btn">
+            <IconChartBar aria-hidden="true" stroke={2} class="btn-icon" />
+            <span data-i18n="player.stats.title">Playback stats</span>
+          </button>
+          <button
+            id="series-detail-health"
+            type="button"
+            hidden
+            aria-label="Stream health log"
+            data-i18n-attr="aria-label:stream.health.menu"
+            class="btn">
+            <IconActivityHeartbeat aria-hidden="true" stroke={2} class="btn-icon" />
+            <span data-i18n="stream.health.menu">Stream health log</span>
+          </button>
+          <button
             id="series-subtitle-delay-btn"
             type="button"
             hidden
@@ -126,18 +193,74 @@ import {
             id="series-detail-trailer"
             type="button"
             hidden
-            class="btn">
+            aria-pressed="false"
+            class="btn aria-pressed:bg-accent-soft aria-pressed:text-fg aria-pressed:border-accent">
             <IconBrandYoutube aria-hidden="true" stroke={2} class="btn-icon" />
             <span data-i18n="detail.action.trailer">Trailer</span>
           </button>
         </div>
 
-        <div
-          id="series-detail-plot"
-          data-i18n="detail.loading"
-          class="dt-enter dt-stagger-3 text-sm text-fg-2 leading-relaxed max-w-3xl">
-          Loading details…
+        <div class="dt-enter dt-stagger-3 flex flex-col lg:flex-row lg:items-start gap-4 lg:gap-8">
+          <div class="flex flex-col gap-2 min-w-0 lg:max-w-3xl lg:flex-1">
+            <div
+              id="series-detail-tagline"
+              hidden
+              class="text-sm text-fg-3">
+            </div>
+            <div data-detail-skeleton class="flex flex-col gap-2">
+              <div class="skel rounded h-3.5 w-full"></div>
+              <div class="skel rounded h-3.5 w-11/12"></div>
+              <div class="skel rounded h-3.5 w-2/3"></div>
+            </div>
+            <div
+              id="series-detail-plot"
+              hidden
+              class="text-sm text-fg-2 leading-relaxed">
+            </div>
+          </div>
+
+          <aside class="hidden lg:flex flex-col gap-3 lg:w-72 lg:shrink-0 lg:border-l lg:border-line lg:pl-6">
+            <div
+              id="series-detail-director"
+              hidden
+              class="text-xs text-fg-3">
+            </div>
+            <div
+              id="series-detail-fact-genre"
+              hidden
+              class="flex items-center justify-between gap-3 text-xs">
+              <span class="text-fg-3" data-i18n="detail.section.genre">Genre</span>
+              <span data-role="fact-value" class="text-fg text-right truncate"></span>
+            </div>
+            <div
+              id="series-detail-fact-rating"
+              hidden
+              class="flex items-center justify-between gap-3 text-xs">
+              <span class="text-fg-3" data-i18n="detail.section.rating">Rating</span>
+              <span data-role="fact-value" class="text-fg text-right truncate"></span>
+            </div>
+            <div id="series-detail-provider-people" hidden class="flex flex-col gap-1.5 text-xs">
+              <span class="text-fg-3" data-i18n="detail.cast">Cast</span>
+              <div id="series-detail-provider-people-list" class="flex flex-wrap gap-1.5"></div>
+            </div>
+          </aside>
         </div>
+
+        <section id="series-detail-cast" hidden class="dt-enter flex flex-col gap-3">
+          <h2 class="text-lg font-semibold tracking-[-0.02em]" data-i18n="detail.cast">Cast</h2>
+          <div
+            id="series-detail-cast-list"
+            class="flex gap-3 overflow-x-auto custom-scroll snap-x snap-mandatory -mx-2 px-2 py-1">
+          </div>
+        </section>
+
+        <section id="series-detail-similar" hidden class="dt-enter flex flex-col gap-3">
+          <h2 class="text-lg font-semibold tracking-[-0.02em]" data-i18n="detail.similar">Similar titles</h2>
+          <div
+            id="series-detail-similar-list"
+            class="flex gap-3 overflow-x-auto custom-scroll snap-x snap-mandatory -mx-2 px-2 py-1">
+          </div>
+        </section>
 
         <!-- Season tabs -->
         <div

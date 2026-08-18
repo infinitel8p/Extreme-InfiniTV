@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tv>
+  <channel id="tz-one">
+    <display-name>Timezone One</display-name>
+  </channel>
+
+  <programme start="20260115130000 +0200" stop="20260115140000 +0200" channel="tz-one">
+    <title>Continental Broadcast</title>
+    <desc>A broadcast timestamped in a Central European offset.</desc>
+  </programme>
+  <programme start="20260115180000 -0530" stop="20260115190000 -0530" channel="tz-one">
+    <title>Overseas Feed</title>
+    <desc>A relay timestamped in a South Asian offset.</desc>
+  </programme>
+  <programme start="20260115200000" stop="20260115210000" channel="tz-one">
+    <title>Floating Slot</title>
+    <desc>A programme with no explicit offset on its timestamps.</desc>
+  </programme>
+</tv>

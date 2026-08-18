@@ -61,7 +61,8 @@ body:
     id: stream-format
     attributes:
       label: Stream format (if known)
-      description: HLS (.m3u8), MPEG-TS, MP4, etc. Often visible in the Network tab of DevTools or in your provider's interface.
+      description: |
+        HLS (.m3u8), MPEG-TS, MP4, etc. The app can tell you: right-click (or long-press) the channel in Live TV and pick **Test stream**, which reports the content type. During playback, `Ctrl+Shift+S` shows the playback stats overlay, including which engine is handling the stream. Your provider's interface may also list it.
       placeholder: e.g. HLS / .m3u8
   - type: dropdown
     id: platform
@@ -85,12 +86,26 @@ body:
     validations:
       required: true
   - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics file
+      description: |
+        1. In the app, go to **Settings -> Playlists**, expand the playlist that's failing, and press **Run full diagnostic**. It checks your login, the channel/movie/series lists, your guide (EPG), a sample stream and the update service.
+        2. Then go to **Settings -> Help and feedback -> Export diagnostics** and drag the saved `.zip` into this box. Running the diagnostic first means its results are included in the file.
+
+        Usernames, passwords and tokens are stripped out before the file is written. Server names can still appear, so have a look through it before attaching.
+      placeholder: Drag the exported .zip in here.
+  - type: textarea
     id: console-errors
     attributes:
-      label: Console / network errors
+      label: Log file
       description: |
-        On the desktop build, open DevTools (Ctrl+Shift+I) and copy any errors from the Console tab. **Redact your credentials and the full stream URL** (the host:port and `/live/<user>/<pass>/...` part) - the error message itself is what we need.
-      render: shell
+        Only needed if you couldn't export the diagnostics file above. The app writes a log file per day and already strips credentials and stream paths out of it as it writes.
+
+        - **Desktop:** Settings -> Storage -> **Open log folder**, then attach the newest `app-YYYY-MM-DD.log`, or paste the last part of it below.
+        - **Android:** Settings -> Storage -> **Share logs**.
+
+        Server names can still appear in it, so have a look before attaching.
   - type: checkboxes
     id: checks
     attributes:

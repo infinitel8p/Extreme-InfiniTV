@@ -7,9 +7,12 @@ import {
   clearKeyAvailable,
   isUnsupportedAudioCodec,
   describeAudioCodec,
+  isMpegAudioCodecString,
+  isMseAudioClockWedge,
   isDroppingEveryFrame,
   chooseBlackFrameRecovery,
   NATIVE_RELATCH_MAX_ATTEMPTS,
+  chromiumMajorFromUserAgent,
 } from "../src/scripts/lib/codec-hints"
 
 describe("hasHevcNameHint", () => {
@@ -119,6 +122,49 @@ describe("classifyStartFailure", () => {
         deviceHevc: true,
       })
     ).toEqual({ kind: "codec", codec: null })
+  })
+
+  it("reports a parse failure when the demuxer choked on a decodable stream", () => {
+    expect(
+      classifyStartFailure({
+        videoCodec: "avc1.64002a",
+        audioCodec: null,
+        errorDetail: "fragParsingError",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "parse", codec: "avc1.64002a" })
+  })
+
+  it("reports a parse failure for HEVC the device can decode", () => {
+    expect(
+      classifyStartFailure({
+        videoCodec: "hvc1.1.6.L120.B0",
+        errorDetail: "fragParsingError",
+        nameHint: true,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "parse", codec: "hvc1.1.6.L120.B0" })
+  })
+
+  it("keeps codec and audio verdicts ahead of a parse failure", () => {
+    expect(
+      classifyStartFailure({
+        videoCodec: "hvc1.1.6.L120.B0",
+        errorDetail: "fragParsingError",
+        nameHint: false,
+        deviceHevc: false,
+      })
+    ).toEqual({ kind: "hevc", codec: "hvc1.1.6.L120.B0" })
+    expect(
+      classifyStartFailure({
+        videoCodec: "avc1.64002a",
+        audioCodec: "ac-3",
+        errorDetail: "fragParsingError",
+        nameHint: false,
+        deviceHevc: true,
+      })
+    ).toEqual({ kind: "audio", codec: "ac-3" })
   })
 
   it("falls back to the name hint only when the device lacks HEVC", () => {
@@ -331,6 +377,98 @@ describe("classifyStartFailure", () => {
       })
     ).toEqual({ kind: "audio", codec: null })
   })
+
+  it("blames the audio track for a Chromium 151 audio/mpeg clock wedge when the video decodes", () => {
+    const originalMediaSource = (globalThis as any).MediaSource
+    ;(globalThis as any).MediaSource = { isTypeSupported: () => true }
+    try {
+      expect(
+        classifyStartFailure({
+          videoCodec: "avc1.640029",
+          audioCodec: "mp3",
+          errorDetail: null,
+          nameHint: false,
+          deviceHevc: true,
+          audioClockWedge: true,
+        })
+      ).toEqual({ kind: "audio", codec: "mp3" })
+    } finally {
+      (globalThis as any).MediaSource = originalMediaSource
+    }
+  })
+})
+
+describe("isMpegAudioCodecString", () => {
+  it("matches MPEG audio codec strings", () => {
+    expect(isMpegAudioCodecString("mp3")).toBe(true)
+    expect(isMpegAudioCodecString("mp2")).toBe(true)
+    expect(isMpegAudioCodecString("MP2A")).toBe(true)
+  })
+
+  it("ignores AAC and empty codec strings", () => {
+    expect(isMpegAudioCodecString("mp4a.40.2")).toBe(false)
+    expect(isMpegAudioCodecString("mp4a.40.34")).toBe(false)
+    expect(isMpegAudioCodecString(null)).toBe(false)
+    expect(isMpegAudioCodecString("")).toBe(false)
+  })
+})
+
+describe("isMseAudioClockWedge", () => {
+  it("flags a stuck clock with buffered MPEG audio", () => {
+    expect(
+      isMseAudioClockWedge({ readyState: 1, currentTime: 0, bufferedEndSeconds: 12, audioCodec: "mp3" })
+    ).toBe(true)
+  })
+
+  it("ignores playback that already advanced past HAVE_METADATA", () => {
+    expect(
+      isMseAudioClockWedge({ readyState: 2, currentTime: 0, bufferedEndSeconds: 12, audioCodec: "mp3" })
+    ).toBe(false)
+  })
+
+  it("waits for enough buffered data before judging", () => {
+    expect(
+      isMseAudioClockWedge({ readyState: 1, currentTime: 0, bufferedEndSeconds: 0.5, audioCodec: "mp3" })
+    ).toBe(false)
+  })
+
+  it("ignores a clock that has already moved", () => {
+    expect(
+      isMseAudioClockWedge({ readyState: 1, currentTime: 4, bufferedEndSeconds: 12, audioCodec: "mp3" })
+    ).toBe(false)
+  })
+
+  it("ignores non-MPEG audio codecs", () => {
+    expect(
+      isMseAudioClockWedge({ readyState: 1, currentTime: 0, bufferedEndSeconds: 12, audioCodec: "mp4a.40.2" })
+    ).toBe(false)
+    expect(
+      isMseAudioClockWedge({ readyState: 1, currentTime: 0, bufferedEndSeconds: 12, audioCodec: null })
+    ).toBe(false)
+  })
+})
+
+describe("chromiumMajorFromUserAgent", () => {
+  it("extracts the Chromium major version from a Chrome/Edge user agent", () => {
+    expect(
+      chromiumMajorFromUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.4129.86"
+      )
+    ).toBe(151)
+  })
+
+  it("returns null for a user agent without a Chrome token", () => {
+    expect(
+      chromiumMajorFromUserAgent(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+      )
+    ).toBe(null)
+  })
+
+  it("returns null for null or empty input", () => {
+    expect(chromiumMajorFromUserAgent(null)).toBe(null)
+    expect(chromiumMajorFromUserAgent("")).toBe(null)
+  })
 })
 
 describe("isUnsupportedAudioCodec", () => {
@@ -366,6 +504,10 @@ describe("describeAudioCodec", () => {
     expect(describeAudioCodec("eac3")).toBe("Dolby Digital Plus (E-AC-3)")
     expect(describeAudioCodec("mp2")).toBe("MPEG audio (MP2)")
     expect(describeAudioCodec("dts")).toBe("DTS")
+  })
+
+  it("labels an MPEG audio (MP3) codec string", () => {
+    expect(describeAudioCodec("mp3")).toBe("MPEG audio")
   })
 
   it("falls back to the raw codec string or a placeholder", () => {

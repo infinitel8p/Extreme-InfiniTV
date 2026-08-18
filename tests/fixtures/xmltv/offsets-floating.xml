@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tv>
+  <channel id="float-one">
+    <display-name>Float One</display-name>
+  </channel>
+
+  <programme start="20260115090000" stop="20260115100000" channel="float-one">
+    <title>Local Slot A</title>
+    <desc>No offset given, assumed local to the provider.</desc>
+  </programme>
+  <programme start="20260115100000" stop="20260115110000" channel="float-one">
+    <title>Local Slot B</title>
+    <desc>Also no offset given.</desc>
+  </programme>
+  <programme start="20260115110000 +0000" stop="20260115120000 +0000" channel="float-one">
+    <title>UTC Slot C</title>
+    <desc>The lone timestamp in this feed that carries an explicit offset.</desc>
+  </programme>
+</tv>

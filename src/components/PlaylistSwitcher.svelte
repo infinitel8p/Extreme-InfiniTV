@@ -32,6 +32,7 @@
   let activeTitle = $state(t("playlist.none"))
   let activeBadge = $state("-")
   let hasActive = $state(false)
+  let isEmojiBadge = $state(false)
 
   /** @type {HTMLElement | undefined} */
   let wrapEl
@@ -61,9 +62,16 @@
     triggerEl?.focus()
   }
 
+  function isRailExpanded() {
+    return (
+      window.matchMedia("(min-width: 64rem)").matches &&
+      !document.documentElement.hasAttribute("data-sidebar-collapsed")
+    )
+  }
+
   function onTriggerClick(event) {
     event.stopPropagation()
-    if (!window.matchMedia("(min-width: 64rem)").matches) {
+    if (!isRailExpanded()) {
       window.location.href = "/settings"
       return
     }
@@ -90,10 +98,13 @@
       activeTitle = t("playlist.none")
       activeBadge = "-"
       hasActive = false
+      isEmojiBadge = false
       return
     }
     activeTitle = active.title
-    activeBadge = active.type === "xtream" ? "XT" : "M3U"
+    const emoji = typeof active.emoji === "string" ? active.emoji.trim() : ""
+    activeBadge = emoji || (active.type === "xtream" ? "XT" : "M3U")
+    isEmojiBadge = !!emoji
     hasActive = true
   }
 
@@ -192,25 +203,28 @@
     title="Switch playlist"
     data-i18n-attr="title:playlist.switch"
     onclick={onTriggerClick}
-    class="flex w-full items-center gap-2.5 px-2.5 py-2.5 min-h-11 rounded-xl border border-line bg-surface text-sm font-medium text-fg transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
-      justify-center lg:justify-between">
+    class="flex w-full min-w-0 items-center gap-2.5 px-1 rail-expanded:px-2.5 py-2.5 min-h-11 rounded-xl border border-line bg-surface text-sm font-medium text-fg transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent
+      justify-center rail-expanded:justify-between">
     <span class="flex items-center gap-2.5 min-w-0">
       <span
         id="ps-badge"
-        class="h-5 px-1.5 inline-flex items-center justify-center rounded-md text-label font-semibold uppercase text-fg-2 ring-1 ring-line shrink-0">
+        class:text-sm={isEmojiBadge}
+        class:text-label={!isEmojiBadge}
+        class:uppercase={!isEmojiBadge}
+        class="h-5 inline-flex items-center justify-center rounded-md font-semibold text-fg-2 shrink-0 px-0 ring-0 rail-expanded:px-1.5 rail-expanded:ring-1 rail-expanded:ring-line">
         {activeBadge}
       </span>
       <span
         id="ps-title"
         class:text-fg={hasActive}
         class:text-fg-3={!hasActive}
-        class="hidden lg:inline truncate tracking-tight">
+        class="hidden rail-expanded:inline rail-reveal truncate tracking-tight">
         {activeTitle}
       </span>
     </span>
     <IconChevronDown
       aria-hidden="true"
-      class="hidden lg:block h-4 w-4 text-fg-3 shrink-0 transition-transform duration-200 ps-chevron"
+      class="hidden rail-expanded:block h-4 w-4 text-fg-3 shrink-0 transition-transform duration-200 ps-chevron"
     />
   </button>
 

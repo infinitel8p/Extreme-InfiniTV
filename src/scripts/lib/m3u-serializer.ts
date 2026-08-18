@@ -8,6 +8,7 @@ export interface M3UHeaderOptions {
   catchupDays?: number | null
   catchupSource?: string | null
   catchupCorrection?: number | null
+  tvgShift?: number | null
 }
 
 /** Drop embedded CR/LF and other control chars so a field value can never fabricate a new line. */
@@ -27,7 +28,15 @@ function buildHeaderLine(header?: M3UHeaderOptions): string {
   if (header.catchupDays != null) line += ` catchup-days="${header.catchupDays}"`
   if (header.catchupSource != null) line += ` catchup-source="${escapeAttrValue(header.catchupSource)}"`
   if (header.catchupCorrection != null) line += ` catchup-correction="${header.catchupCorrection}"`
+  if (header.tvgShift != null) line += ` tvg-shift="${header.tvgShift}"`
   return line
+}
+
+/** group-title value for an entry: joined multi-group when `categories` is set, else the single `category`. */
+function groupTitleValue(entry: M3UEntry): string | null {
+  return Array.isArray(entry.categories) && entry.categories.length
+    ? entry.categories.join(";")
+    : entry.category
 }
 
 function buildExtinfAttrs(entry: M3UEntry): string {
@@ -36,11 +45,13 @@ function buildExtinfAttrs(entry: M3UEntry): string {
   if (entry.tvgName != null) attrs.push(`tvg-name="${escapeAttrValue(entry.tvgName)}"`)
   if (entry.logo != null) attrs.push(`tvg-logo="${escapeAttrValue(entry.logo)}"`)
   if (entry.chno != null) attrs.push(`tvg-chno="${entry.chno}"`)
-  if (entry.category != null) attrs.push(`group-title="${escapeAttrValue(entry.category)}"`)
+  const groupTitle = groupTitleValue(entry)
+  if (groupTitle != null) attrs.push(`group-title="${escapeAttrValue(groupTitle)}"`)
   if (entry.catchup != null) attrs.push(`catchup="${escapeAttrValue(entry.catchup)}"`)
   if (entry.catchupDays != null) attrs.push(`catchup-days="${entry.catchupDays}"`)
   if (entry.catchupSource != null) attrs.push(`catchup-source="${escapeAttrValue(entry.catchupSource)}"`)
   if (entry.catchupCorrection != null) attrs.push(`catchup-correction="${entry.catchupCorrection}"`)
+  if (entry.tvgShift != null) attrs.push(`tvg-shift="${entry.tvgShift}"`)
   if (entry.tvgType != null) attrs.push(`tvg-type="${escapeAttrValue(entry.tvgType)}"`)
   if (entry.isRadio) attrs.push(`radio="true"`)
   return attrs.length ? " " + attrs.join(" ") : ""

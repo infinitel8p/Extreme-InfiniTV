@@ -210,6 +210,80 @@ describe("parseM3U: EPG header variants", () => {
     const result = parseM3U(fixture("alt-order.m3u"))
     expect(result.epgUrl).toBe("")
   })
+
+  it("splits a comma-joined header value into epgUrls, keeping epgUrl as the first", () => {
+    const text =
+      '#EXTM3U x-tvg-url="https://a.example/1.xml, https://b.example/2.xml"\n' +
+      '#EXTINF:-1 tvg-id="x",Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.epgUrls).toEqual([
+      "https://a.example/1.xml",
+      "https://b.example/2.xml",
+    ])
+    expect(result.epgUrl).toBe("https://a.example/1.xml")
+  })
+
+  it("dedupes and drops empty segments in a comma-joined header value", () => {
+    const text =
+      '#EXTM3U x-tvg-url="https://a.example/1.xml,,https://a.example/1.xml, https://b.example/2.xml"\n' +
+      '#EXTINF:-1 tvg-id="x",Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.epgUrls).toEqual([
+      "https://a.example/1.xml",
+      "https://b.example/2.xml",
+    ])
+  })
+
+  it("returns a single-element epgUrls for a plain single-URL header", () => {
+    const result = parseM3U(fixture("standard.m3u"))
+    expect(result.epgUrls).toEqual(["https://example.com/epg.xml.gz"])
+  })
+
+  it("keeps a comma inside a single URL's query string intact instead of splitting on it", () => {
+    const text =
+      '#EXTM3U url-tvg="http://epg.example.com/guide.xml?ids=1,2"\n' +
+      '#EXTINF:-1 tvg-id="x",Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.epgUrls).toEqual(["http://epg.example.com/guide.xml?ids=1,2"])
+    expect(result.epgUrl).toBe("http://epg.example.com/guide.xml?ids=1,2")
+  })
+
+  it("splits a query-string URL followed by a second real header source", () => {
+    const text =
+      '#EXTM3U url-tvg="http://epg.example.com/guide.xml?ids=1,2,https://b.example/2.xml"\n' +
+      '#EXTINF:-1 tvg-id="x",Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.epgUrls).toEqual([
+      "http://epg.example.com/guide.xml?ids=1,2",
+      "https://b.example/2.xml",
+    ])
+  })
+
+  it("keeps a protocol-relative header value as a single URL", () => {
+    const text =
+      '#EXTM3U x-tvg-url="//epg.example.com/epg.xml"\n' +
+      '#EXTINF:-1 tvg-id="x",Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.epgUrls).toEqual(["//epg.example.com/epg.xml"])
+    expect(result.epgUrl).toBe("//epg.example.com/epg.xml")
+  })
+
+  it("splits a query-string URL followed by a protocol-relative second source", () => {
+    const text =
+      '#EXTM3U url-tvg="http://epg.example.com/guide.xml?ids=1,2,//b.example/2.xml"\n' +
+      '#EXTINF:-1 tvg-id="x",Channel\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.epgUrls).toEqual([
+      "http://epg.example.com/guide.xml?ids=1,2",
+      "//b.example/2.xml",
+    ])
+  })
 })
 
 describe("parseM3U: EXTGRP and tvg-chno", () => {
@@ -221,6 +295,7 @@ describe("parseM3U: EXTGRP and tvg-chno", () => {
       "http://example.com/x.m3u8\n"
     const result = parseM3U(text)
     expect(result.entries[0].category).toBe("Sports")
+    expect(result.entries[0].categories).toEqual(["Sports"])
   })
 
   it("prefers group-title over #EXTGRP: when both are present", () => {
@@ -237,6 +312,133 @@ describe("parseM3U: EXTGRP and tvg-chno", () => {
     const result = parseM3U(fixture("catchup.m3u"))
     expect(result.entries[0].chno).toBe(42)
     expect(result.entries[1].chno).toBeNull()
+  })
+})
+
+describe("parseM3U: multi-group group-title", () => {
+  it("splits a semicolon-separated group-title into categories, keeping category as the raw string", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" group-title="News;Sports",Multi Group\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].categories).toEqual(["News", "Sports"])
+    expect(result.entries[0].category).toBe("News;Sports")
+  })
+
+  it("keeps a group-title with a semicolon meant as one category name intact", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" group-title="Kids; Cartoons",One Category\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].category).toBe("Kids; Cartoons")
+    expect(result.entries[0].categories).toEqual(["Kids", "Cartoons"])
+  })
+
+  it("trims whitespace around each group and drops empty segments", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" group-title=" News ; ;Sports ",Spaced\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].categories).toEqual(["News", "Sports"])
+  })
+
+  it("dedupes repeated groups", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" group-title="News;Sports;News",Dupe\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].categories).toEqual(["News", "Sports"])
+  })
+
+  it("keeps a single group as a one-element categories array", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" group-title="News",Single\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].categories).toEqual(["News"])
+    expect(result.entries[0].category).toBe("News")
+  })
+
+  it("returns an empty categories array and null category when no group is set", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x",No Group\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].categories).toEqual([])
+    expect(result.entries[0].category).toBeNull()
+  })
+
+  it("splits the #EXTGRP fallback into multiple groups too", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x",Fallback Groups\n' +
+      "#EXTGRP:News;Sports\n" +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].categories).toEqual(["News", "Sports"])
+    expect(result.entries[0].category).toBe("News;Sports")
+  })
+})
+
+describe("parseM3U: tvg-shift", () => {
+  it("parses a positive integer tvg-shift", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" tvg-shift="1",Shifted\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].tvgShift).toBe(1)
+  })
+
+  it("parses a negative tvg-shift", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" tvg-shift="-2",Shifted Back\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].tvgShift).toBe(-2)
+  })
+
+  it("parses a fractional tvg-shift", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x" tvg-shift="-2.5",Fractional\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].tvgShift).toBe(-2.5)
+  })
+
+  it("leaves tvgShift null when neither entry nor header sets it", () => {
+    const text =
+      "#EXTM3U\n" +
+      '#EXTINF:-1 tvg-id="x",No Shift\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].tvgShift).toBeNull()
+  })
+
+  it("falls back to a header-level tvg-shift default", () => {
+    const text =
+      '#EXTM3U tvg-shift="+1"\n' +
+      '#EXTINF:-1 tvg-id="x",Header Default\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].tvgShift).toBe(1)
+  })
+
+  it("lets an entry's own tvg-shift override the header default", () => {
+    const text =
+      '#EXTM3U tvg-shift="1"\n' +
+      '#EXTINF:-1 tvg-id="x" tvg-shift="-3",Overrides Header\n' +
+      "http://example.com/x.m3u8\n"
+    const result = parseM3U(text)
+    expect(result.entries[0].tvgShift).toBe(-3)
   })
 })
 
@@ -549,11 +751,11 @@ describe("parseM3U: malformed input resilience", () => {
   })
 
   it("returns an empty result for an empty input", () => {
-    expect(parseM3U("")).toEqual({ entries: [], epgUrl: "" })
+    expect(parseM3U("")).toEqual({ entries: [], epgUrl: "", epgUrls: [] })
   })
 
   it("returns an empty result for whitespace-only input", () => {
-    expect(parseM3U("\n\n  \n\r\n")).toEqual({ entries: [], epgUrl: "" })
+    expect(parseM3U("\n\n  \n\r\n")).toEqual({ entries: [], epgUrl: "", epgUrls: [] })
   })
 })
 

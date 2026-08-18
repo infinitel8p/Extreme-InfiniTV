@@ -20,7 +20,10 @@ export interface M3UEntry {
   name: string
   url: string
   logo: string | null
+  // Raw trimmed group-title (or #EXTGRP) value; semicolons kept so the literal name stays one bucket.
   category: string | null
+  // Semicolon-split, deduped group-title (or #EXTGRP) tokens, for multi-category grouping.
+  categories: string[]
   tvgId: string | null
   tvgName: string | null
   chno: number | null
@@ -28,6 +31,8 @@ export interface M3UEntry {
   catchupDays: number | null
   catchupSource: string | null
   catchupCorrection: number | null
+  // tvg-shift: per-channel EPG display offset in hours, guide-display only, never applied to catch-up math.
+  tvgShift: number | null
   userAgent: string | null
   referer: string | null
   tvgType: string | null
@@ -41,6 +46,8 @@ export interface M3UEntry {
 export interface M3UParseResult {
   entries: M3UEntry[]
   epgUrl: string
+  // Scheme-aware comma-split, deduped x-tvg-url/tvg-url/url-tvg values; epgUrl === epgUrls[0] ?? "".
+  epgUrls: string[]
 }
 
 const HLS_PREFIXES = ["#EXT-X-", "#EXTM3U:VERSION", "#EXT-X-VERSION"]
@@ -152,12 +159,43 @@ function firstCommaOutsideQuotes(text: string): number {
   return -1
 }
 
-/** Parse a decimal hour string (e.g. `catchup-correction`) into a number, or null when unset/non-finite. No clamping. */
+/** Parse a decimal hour string (e.g. `catchup-correction`, `tvg-shift`) into a number, or null when unset/non-finite. No clamping. */
 function readHoursAttr(source: string, key: string): number | null {
   const raw = readAttr(source, key)
   if (!raw) return null
   const parsed = Number(raw)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+/** Split a delimiter-separated list value into trimmed, deduped, non-empty tokens, preserving source order. */
+function splitDedupeTrim(raw: string, separator: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const part of raw.split(separator)) {
+    const trimmed = part.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
+}
+
+/** Split a `group-title` (or `#EXTGRP` fallback) value on `;` into its member groups. */
+function splitGroups(raw: string | null): string[] {
+  return raw ? splitDedupeTrim(raw, ";") : []
+}
+
+// Splits only on commas followed by a URL scheme (or protocol-relative //) so query-string commas survive.
+function splitEpgUrls(raw: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const part of raw.split(/\s*,+\s*(?=(?:https?:)?\/\/)/i)) {
+    const trimmed = part.trim()
+    if (!trimmed || !/^(?:https?:)?\/\//i.test(trimmed) || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
 }
 
 /**
@@ -220,7 +258,9 @@ function parseExtinf(line: string): Omit<M3UEntry, "url"> & { siptvDays: number 
   return {
     name: finalName,
     logo: readAttr(attrs, "tvg-logo") || null,
+    // Placeholder; the caller recomputes category/categories once extgrpFallback is known.
     category: readAttr(attrs, "group-title") || null,
+    categories: [],
     tvgId:
       readAttr(attrs, "tvg-id") || readAttr(attrs, "channel-id") || null,
     tvgName,
@@ -229,6 +269,7 @@ function parseExtinf(line: string): Omit<M3UEntry, "url"> & { siptvDays: number 
     catchupDays: Number.isFinite(catchupDays) ? catchupDays : null,
     catchupSource: readAttr(attrs, "catchup-source") || null,
     catchupCorrection: readHoursAttr(attrs, "catchup-correction"),
+    tvgShift: readHoursAttr(attrs, "tvg-shift"),
     siptvDays: readSiptvDays(attrs),
     userAgent: null,
     referer: null,
@@ -253,6 +294,7 @@ function bareUrlPending(url: string): Omit<M3UEntry, "url"> & { siptvDays: numbe
     name: nameFromBareUrl(url),
     logo: null,
     category: null,
+    categories: [],
     tvgId: null,
     tvgName: null,
     chno: null,
@@ -260,6 +302,7 @@ function bareUrlPending(url: string): Omit<M3UEntry, "url"> & { siptvDays: numbe
     catchupDays: null,
     catchupSource: null,
     catchupCorrection: null,
+    tvgShift: null,
     siptvDays: 0,
     userAgent: null,
     referer: null,
@@ -277,6 +320,7 @@ export function parseM3U(text: string): M3UParseResult {
 
   const entries: M3UEntry[] = []
   let epgUrl = ""
+  let epgUrls: string[] = []
   let pending: (Omit<M3UEntry, "url"> & { siptvDays: number }) | null = null
   let extgrpFallback: string | null = null
   // pvr.iptvsimple convention: #EXTM3U can carry catchup defaults for every
@@ -285,6 +329,7 @@ export function parseM3U(text: string): M3UParseResult {
   let headerCatchupDays: number | null = null
   let headerCatchupSource: string | null = null
   let headerCatchupCorrection: number | null = null
+  let headerTvgShift: number | null = null
   let headerSiptvDays = 0
 
   for (const raw of payload.split(/\r?\n/)) {
@@ -292,11 +337,14 @@ export function parseM3U(text: string): M3UParseResult {
     if (!line) continue
 
     if (line.startsWith("#EXTM3U")) {
-      epgUrl =
+      const epgUrlRaw =
         readAttr(line, "x-tvg-url") ||
         readAttr(line, "tvg-url") ||
-        readAttr(line, "url-tvg") ||
-        epgUrl
+        readAttr(line, "url-tvg")
+      if (epgUrlRaw) {
+        epgUrls = splitEpgUrls(epgUrlRaw)
+        epgUrl = epgUrls[0] || epgUrl
+      }
       headerCatchup = readAttr(line, "catchup") || readAttr(line, "catchup-type") || headerCatchup
       const headerCatchupDaysRaw = readAttr(line, "catchup-days")
       if (headerCatchupDaysRaw) {
@@ -305,6 +353,7 @@ export function parseM3U(text: string): M3UParseResult {
       }
       headerCatchupSource = readAttr(line, "catchup-source") || headerCatchupSource
       headerCatchupCorrection = readHoursAttr(line, "catchup-correction") ?? headerCatchupCorrection
+      headerTvgShift = readHoursAttr(line, "tvg-shift") ?? headerTvgShift
       headerSiptvDays = readSiptvDays(line) || headerSiptvDays
       continue
     }
@@ -353,7 +402,9 @@ export function parseM3U(text: string): M3UParseResult {
       if (/^https?:\/\//i.test(line)) pending = bareUrlPending(line)
       else continue
     }
-    const category = pending.category ?? extgrpFallback
+    const rawCategory = pending.category ?? extgrpFallback
+    const categories = splitGroups(rawCategory)
+    const category = rawCategory ? rawCategory.trim() : null
     const { siptvDays, ...pendingEntry } = pending
     let catchup = pendingEntry.catchup ?? headerCatchup
     let catchupDays = pendingEntry.catchupDays ?? headerCatchupDays
@@ -365,15 +416,17 @@ export function parseM3U(text: string): M3UParseResult {
     entries.push({
       ...pendingEntry,
       category,
+      categories,
       catchup,
       catchupDays,
       catchupSource: pendingEntry.catchupSource ?? headerCatchupSource,
       catchupCorrection: pendingEntry.catchupCorrection ?? headerCatchupCorrection,
+      tvgShift: pendingEntry.tvgShift ?? headerTvgShift,
       url: line,
     })
     pending = null
     extgrpFallback = null
   }
 
-  return { entries, epgUrl }
+  return { entries, epgUrl, epgUrls }
 }

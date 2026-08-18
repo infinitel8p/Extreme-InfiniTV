@@ -8,6 +8,7 @@
     HUB_STRIPS_EVENT,
   } from "@/scripts/lib/app-settings.js"
   import ContinueWatching from "./ContinueWatching.svelte"
+  import BecauseWatchedStrip from "./BecauseWatchedStrip.svelte"
   import FavoritesStrip from "./FavoritesStrip.svelte"
   import WatchlistStrip from "./WatchlistStrip.svelte"
   import RecentlyAddedStrip from "./RecentlyAddedStrip.svelte"
@@ -24,6 +25,8 @@
 {#each strips as strip (strip.id)}
   {#if strip.type === "continue-watching"}
     <ContinueWatching />
+  {:else if strip.type === "because-watched"}
+    <BecauseWatchedStrip />
   {:else if strip.type === "favorites"}
     <FavoritesStrip kind={strip.kind} />
   {:else if strip.type === "watchlist"}

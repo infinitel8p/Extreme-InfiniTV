@@ -1,6 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { createSubtitleManager, createNativeTrackRegistrar } from "../src/scripts/lib/subtitle-tracks"
+
+vi.mock("@/scripts/lib/app-settings.js", () => ({
+  getCaptionsAutoEnabled: vi.fn(() => false),
+}))
+vi.mock("@/scripts/lib/i18n.js", () => ({
+  t: (key: string) => key,
+  getActiveLocale: vi.fn(() => "en"),
+}))
+
+import { createSubtitleManager, createNativeTrackRegistrar, pickAutoCaptionTrack } from "../src/scripts/lib/subtitle-tracks"
 import type { MkvCue, MkvSubtitleSession, MkvSubtitleTrackInfo } from "../src/scripts/lib/vod-proxy"
+import { getCaptionsAutoEnabled } from "@/scripts/lib/app-settings.js"
+import { getActiveLocale } from "@/scripts/lib/i18n.js"
 
 // Setters trigger a resort, mirroring real TextTrackCueList's live time-sort.
 class FakeVTTCue {
@@ -89,6 +100,58 @@ function createFakeMkvSession(trackInfos: MkvSubtitleTrackInfo[]) {
 const flush = async () => {
   for (let i = 0; i < 5; i++) await Promise.resolve()
 }
+
+describe("pickAutoCaptionTrack", () => {
+  it("returns -1 for an empty track list", () => {
+    expect(pickAutoCaptionTrack([], "en")).toBe(-1)
+  })
+
+  it("matches the locale exactly", () => {
+    const tracks = [
+      { index: 0, label: "English", language: "en" },
+      { index: 1, label: "French", language: "fr" },
+    ]
+    expect(pickAutoCaptionTrack(tracks, "fr")).toBe(1)
+  })
+
+  it("matches a regional locale against a bare track language", () => {
+    const tracks = [
+      { index: 0, label: "English", language: "en" },
+      { index: 1, label: "Portuguese", language: "pt" },
+    ]
+    expect(pickAutoCaptionTrack(tracks, "pt-BR")).toBe(1)
+  })
+
+  it("matches a bare locale against a regional track language", () => {
+    const tracks = [
+      { index: 0, label: "English", language: "en" },
+      { index: 1, label: "Portuguese (Brazil)", language: "pt-BR" },
+    ]
+    expect(pickAutoCaptionTrack(tracks, "pt")).toBe(1)
+  })
+
+  it("matches case-insensitively", () => {
+    const tracks = [{ index: 0, label: "French", language: "FR-ca" }]
+    expect(pickAutoCaptionTrack(tracks, "fr")).toBe(0)
+  })
+
+  it("falls back to the first track when nothing matches the locale", () => {
+    const tracks = [
+      { index: 3, label: "German", language: "de" },
+      { index: 4, label: "French", language: "fr" },
+    ]
+    expect(pickAutoCaptionTrack(tracks, "en")).toBe(3)
+  })
+
+  it("reaches a track with an empty language only through the fallback", () => {
+    const tracks = [
+      { index: 0, label: "Unknown", language: "" },
+      { index: 1, label: "French", language: "fr" },
+    ]
+    expect(pickAutoCaptionTrack(tracks, "en")).toBe(0)
+    expect(pickAutoCaptionTrack(tracks, "fr")).toBe(1)
+  })
+})
 
 describe("createSubtitleManager MKV push cues", () => {
   let video: FakeVideo
@@ -435,5 +498,130 @@ describe("createSubtitleManager subtitle delay", () => {
     const cue = video.tracks[0]!.cues![0]!
     expect(cue.startTime).toBeCloseTo(1 + reportedOffset, 9)
     expect(cue.endTime).toBeCloseTo(3 + reportedOffset, 9)
+  })
+})
+
+describe("captions auto-on", () => {
+  let video: FakeVideo
+
+  beforeEach(() => {
+    video = new FakeVideo()
+    vi.stubGlobal("window", { VTTCue: FakeVTTCue })
+    vi.mocked(getCaptionsAutoEnabled).mockReturnValue(false)
+    vi.mocked(getActiveLocale).mockReturnValue("en")
+  })
+
+  function mountManager() {
+    const activeIndexes: number[] = []
+    const manager = createSubtitleManager({
+      registrar: createNativeTrackRegistrar(() => video as unknown as HTMLVideoElement),
+      getCurrentTime: () => 0,
+      onTracksReady: (_tracks, activeIndex) => {
+        activeIndexes.push(activeIndex)
+      },
+    })
+    return { manager, activeIndexes }
+  }
+
+  it("leaves captions off on a fresh source when the setting is off", async () => {
+    const { session } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "en", name: null },
+    ])
+    const { manager, activeIndexes } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+
+    expect(activeIndexes).toEqual([-1])
+    expect(video.tracks.filter((track) => track.mode === "showing")).toHaveLength(0)
+  })
+
+  it("auto-enables the picked track on a fresh source when the setting is on", async () => {
+    vi.mocked(getCaptionsAutoEnabled).mockReturnValue(true)
+    const { session } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "en", name: null },
+    ])
+    const { manager, activeIndexes } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+
+    expect(activeIndexes).toEqual([0])
+    expect(video.tracks[0]!.mode).toBe("showing")
+  })
+
+  it("prefers the track matching the active locale over the first track", async () => {
+    vi.mocked(getCaptionsAutoEnabled).mockReturnValue(true)
+    vi.mocked(getActiveLocale).mockReturnValue("de")
+    const { session } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "en", name: null },
+      { number: 3, codec: "S_TEXT/UTF8", language: "de", name: null },
+    ])
+    const { manager, activeIndexes } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+
+    expect(activeIndexes).toEqual([1])
+    expect(video.tracks[1]!.mode).toBe("showing")
+    expect(video.tracks[0]!.mode).toBe("disabled")
+  })
+
+  it("stays off after a same-identity remount once the viewer explicitly turned captions off", async () => {
+    vi.mocked(getCaptionsAutoEnabled).mockReturnValue(true)
+    const { session } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "en", name: null },
+    ])
+    const { manager, activeIndexes } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    manager.select(-1)
+
+    manager.setSource("http://127.0.0.1:2/remux/stream.ts", "video/mp2t", session)
+    await flush()
+
+    expect(activeIndexes.at(-1)).toBe(-1)
+    expect(video.tracks.filter((track) => track.mode === "showing")).toHaveLength(0)
+  })
+
+  it("re-applies auto-on when the source identity changes after an explicit off", async () => {
+    vi.mocked(getCaptionsAutoEnabled).mockReturnValue(true)
+    const first = createFakeMkvSession([{ number: 2, codec: "S_TEXT/UTF8", language: "en", name: null }])
+    const second = createFakeMkvSession([{ number: 2, codec: "S_TEXT/UTF8", language: "en", name: null }])
+    const { manager, activeIndexes } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", first.session)
+    await flush()
+    manager.select(-1)
+
+    manager.setSource("http://127.0.0.1:2/tee/other.mkv", "video/x-matroska", second.session)
+    await flush()
+
+    expect(activeIndexes.at(-1)).toBe(0)
+    expect(video.tracks.filter((track) => track.mode === "showing")).toHaveLength(1)
+  })
+
+  it("restores a manually picked track over the auto pick on a same-identity remount", async () => {
+    vi.mocked(getCaptionsAutoEnabled).mockReturnValue(true)
+    const { session } = createFakeMkvSession([
+      { number: 2, codec: "S_TEXT/UTF8", language: "en", name: null },
+      { number: 3, codec: "S_TEXT/UTF8", language: "fr", name: null },
+    ])
+    const { manager, activeIndexes } = mountManager()
+
+    manager.setSource("http://127.0.0.1:1/tee/stream.mkv", "video/x-matroska", session)
+    await flush()
+    expect(activeIndexes.at(-1)).toBe(0)
+
+    manager.select(1)
+
+    manager.setSource("http://127.0.0.1:2/remux/stream.ts", "video/mp2t", session)
+    await flush()
+
+    expect(activeIndexes.at(-1)).toBe(1)
+    const showing = video.tracks.filter((track) => track.mode === "showing")
+    expect(showing).toHaveLength(1)
+    expect(showing[0]!.language).toBe("fr")
   })
 })

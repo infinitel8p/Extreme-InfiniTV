@@ -280,6 +280,309 @@ describe("createVodAudioSwitcher async state machine", () => {
     switcher.dispose()
   })
 
+  it("restarts a dead mandatory remux session up to twice before reporting unrecoverable", async () => {
+    const handle = createFakeHandle()
+    const { trackDefault } = makeTracks()
+    const captured: { listener: ((payload: { sessionId: string; detail: string }) => void) | null } = { listener: null }
+    onVodAudioErrorMock.mockImplementation((listener: (payload: { sessionId: string; detail: string }) => void) => {
+      captured.listener = listener
+      return () => {}
+    })
+    startVodAudioRemuxMock
+      .mockResolvedValueOnce({ sessionId: "session-0", playbackUrl: "http://127.0.0.1/live/session-0" })
+      .mockResolvedValueOnce({ sessionId: "session-1", playbackUrl: "http://127.0.0.1/live/session-1" })
+      .mockResolvedValueOnce({ sessionId: "session-2", playbackUrl: "http://127.0.0.1/live/session-2" })
+    const unrecoverable = vi.fn()
+
+    const switcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "http://127.0.0.1/tee-token/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/movie.mkv",
+      remuxInputUrl: "http://127.0.0.1/tee-token/stream.mkv",
+      getKnownDurationSeconds: () => 100,
+      tracks: [trackDefault],
+      mountRemuxImmediately: true,
+      initialStartSeconds: 12,
+      onRemuxUnrecoverable: unrecoverable,
+    })
+    await flushMicrotasks()
+
+    expect(handle.src).toHaveBeenCalledWith(
+      expect.objectContaining({ src: "http://127.0.0.1/live/session-0" }),
+    )
+
+    // attempt 1/2
+    captured.listener?.({ sessionId: "session-0", detail: "OTHER:ffmpeg exited with exit status: 8" })
+    await flushMicrotasks()
+    expect(stopVodAudioRemuxMock).toHaveBeenCalledWith("session-0")
+    expect(handle.src).toHaveBeenCalledWith(
+      expect.objectContaining({ src: "http://127.0.0.1/live/session-1" }),
+    )
+    expect(unrecoverable).not.toHaveBeenCalled()
+
+    // attempt 2/2
+    captured.listener?.({ sessionId: "session-1", detail: "OTHER:ffmpeg exited with exit status: 8" })
+    await flushMicrotasks()
+    expect(stopVodAudioRemuxMock).toHaveBeenCalledWith("session-1")
+    expect(handle.src).toHaveBeenCalledWith(
+      expect.objectContaining({ src: "http://127.0.0.1/live/session-2" }),
+    )
+    expect(unrecoverable).not.toHaveBeenCalled()
+
+    // attempts exhausted
+    const srcCallCountBeforeGiveUp = handle.src.mock.calls.length
+    // The tee relays the provider's status verbatim, so a dead source shows up as an ffmpeg exit.
+    captured.listener?.({ sessionId: "session-2", detail: "OTHER:ffmpeg exited with exit status: 8 (404 Not Found)" })
+    await flushMicrotasks()
+
+    expect(unrecoverable).toHaveBeenCalledTimes(1)
+    expect(unrecoverable.mock.calls[0][0]).toContain("404")
+    expect(handle.src.mock.calls.length).toBe(srcCallCountBeforeGiveUp)
+
+    switcher.dispose()
+  })
+
+  it("resets the restart budget after the session has been healthy for a while", async () => {
+    vi.useFakeTimers()
+    try {
+      const handle = createFakeHandle()
+      const { trackDefault } = makeTracks()
+      const captured: { listener: ((payload: { sessionId: string; detail: string }) => void) | null } = { listener: null }
+      onVodAudioErrorMock.mockImplementation((listener: (payload: { sessionId: string; detail: string }) => void) => {
+        captured.listener = listener
+        return () => {}
+      })
+      startVodAudioRemuxMock
+        .mockResolvedValueOnce({ sessionId: "session-0", playbackUrl: "http://127.0.0.1/live/session-0" })
+        .mockResolvedValueOnce({ sessionId: "session-1", playbackUrl: "http://127.0.0.1/live/session-1" })
+        .mockResolvedValueOnce({ sessionId: "session-2", playbackUrl: "http://127.0.0.1/live/session-2" })
+        .mockResolvedValueOnce({ sessionId: "session-3", playbackUrl: "http://127.0.0.1/live/session-3" })
+      const unrecoverable = vi.fn()
+
+      const switcher = createVodAudioSwitcher({
+        handle: handle as any,
+        originalSrc: "http://127.0.0.1/tee-token/stream.mkv",
+        originalMime: "video/x-matroska",
+        sourceUrl: "https://host.example/movie.mkv",
+        remuxInputUrl: "http://127.0.0.1/tee-token/stream.mkv",
+        getKnownDurationSeconds: () => 100,
+        tracks: [trackDefault],
+        mountRemuxImmediately: true,
+        onRemuxUnrecoverable: unrecoverable,
+      })
+      await flushMicrotasks()
+
+      // Use up both restart attempts.
+      captured.listener?.({ sessionId: "session-0", detail: "died once" })
+      await flushMicrotasks()
+      captured.listener?.({ sessionId: "session-1", detail: "died twice" })
+      await flushMicrotasks()
+      expect(unrecoverable).not.toHaveBeenCalled()
+
+      // session-2 outlives the reset window
+      await vi.advanceTimersByTimeAsync(60000)
+
+      captured.listener?.({ sessionId: "session-2", detail: "died a third time, well after recovering" })
+      await flushMicrotasks()
+
+      expect(unrecoverable).not.toHaveBeenCalled()
+      expect(handle.src).toHaveBeenCalledWith(
+        expect.objectContaining({ src: "http://127.0.0.1/live/session-3" }),
+      )
+
+      switcher.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("ignores a stall recovery call while a mid-play restart is already in flight", async () => {
+    const handle = createFakeHandle()
+    const { trackDefault } = makeTracks()
+    const captured: { listener: ((payload: { sessionId: string; detail: string }) => void) | null } = { listener: null }
+    onVodAudioErrorMock.mockImplementation((listener: (payload: { sessionId: string; detail: string }) => void) => {
+      captured.listener = listener
+      return () => {}
+    })
+    startVodAudioRemuxMock.mockResolvedValueOnce({
+      sessionId: "session-0",
+      playbackUrl: "http://127.0.0.1/live/session-0",
+    })
+    const restartDeferred = deferred<{ sessionId: string; playbackUrl: string }>()
+    startVodAudioRemuxMock.mockReturnValueOnce(restartDeferred.promise)
+    const unrecoverable = vi.fn()
+
+    const switcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "http://127.0.0.1/tee-token/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/movie.mkv",
+      remuxInputUrl: "http://127.0.0.1/tee-token/stream.mkv",
+      getKnownDurationSeconds: () => 100,
+      tracks: [trackDefault],
+      mountRemuxImmediately: true,
+      onRemuxUnrecoverable: unrecoverable,
+    })
+    await flushMicrotasks()
+
+    // a restart is left unresolved in flight
+    captured.listener?.({ sessionId: "session-0", detail: "died mid-play" })
+    await flushMicrotasks()
+    const registerCallCountWhileInFlight = startVodAudioRemuxMock.mock.calls.length
+
+    // the watchdog's recovery must no-op instead of racing a second register
+    switcher.recoverRemuxStall()
+    await flushMicrotasks()
+    expect(startVodAudioRemuxMock.mock.calls.length).toBe(registerCallCountWhileInFlight)
+
+    restartDeferred.resolve({ sessionId: "session-1", playbackUrl: "http://127.0.0.1/live/session-1" })
+    await flushMicrotasks()
+    expect(handle.src).toHaveBeenCalledWith(
+      expect.objectContaining({ src: "http://127.0.0.1/live/session-1" }),
+    )
+
+    switcher.dispose()
+  })
+
+  it("isRecovering reflects a mid-play restart in flight and settles once it resolves", async () => {
+    const handle = createFakeHandle()
+    const { trackDefault } = makeTracks()
+    const captured: { listener: ((payload: { sessionId: string; detail: string }) => void) | null } = { listener: null }
+    onVodAudioErrorMock.mockImplementation((listener: (payload: { sessionId: string; detail: string }) => void) => {
+      captured.listener = listener
+      return () => {}
+    })
+    startVodAudioRemuxMock.mockResolvedValueOnce({
+      sessionId: "session-0",
+      playbackUrl: "http://127.0.0.1/live/session-0",
+    })
+    const restartDeferred = deferred<{ sessionId: string; playbackUrl: string }>()
+    startVodAudioRemuxMock.mockReturnValueOnce(restartDeferred.promise)
+
+    const switcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "http://127.0.0.1/tee-token/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/movie.mkv",
+      remuxInputUrl: "http://127.0.0.1/tee-token/stream.mkv",
+      getKnownDurationSeconds: () => 100,
+      tracks: [trackDefault],
+      mountRemuxImmediately: true,
+    })
+    await flushMicrotasks()
+    expect(switcher.isRecovering()).toBe(false)
+
+    captured.listener?.({ sessionId: "session-0", detail: "died mid-play" })
+    await flushMicrotasks()
+    expect(switcher.isRecovering()).toBe(true)
+
+    restartDeferred.resolve({ sessionId: "session-1", playbackUrl: "http://127.0.0.1/live/session-1" })
+    await flushMicrotasks()
+    expect(switcher.isRecovering()).toBe(false)
+
+    switcher.dispose()
+  })
+
+  it("recoverRemuxStall no-ops without an active session or outside the mandatory remux path", async () => {
+    const handle = createFakeHandle()
+    const { trackDefault, trackA } = makeTracks()
+
+    const directSwitcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "https://host.example/movie.mp4",
+      originalMime: "video/mp4",
+      sourceUrl: "https://host.example/movie.mp4",
+      getKnownDurationSeconds: () => 100,
+      tracks: [trackDefault, trackA],
+    })
+    directSwitcher.recoverRemuxStall()
+    expect(startVodAudioRemuxMock).not.toHaveBeenCalled()
+    directSwitcher.dispose()
+
+    startVodAudioRemuxMock.mockResolvedValueOnce(null)
+    const unrecoverable = vi.fn()
+    const remuxSwitcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "http://127.0.0.1/tee-token/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/movie.mkv",
+      getKnownDurationSeconds: () => 100,
+      tracks: [trackDefault],
+      mountRemuxImmediately: true,
+      onRemuxUnrecoverable: unrecoverable,
+    })
+    await flushMicrotasks()
+    // Registration failed, so there is no active session to restart.
+    const registerCallCount = startVodAudioRemuxMock.mock.calls.length
+    remuxSwitcher.recoverRemuxStall()
+    await flushMicrotasks()
+    expect(startVodAudioRemuxMock.mock.calls.length).toBe(registerCallCount)
+
+    remuxSwitcher.dispose()
+  })
+
+  it("reports an unrecoverable failure when the mandatory remux never registers", async () => {
+    const handle = createFakeHandle()
+    const { trackDefault } = makeTracks()
+    startVodAudioRemuxMock.mockResolvedValueOnce(null)
+    const unrecoverable = vi.fn()
+
+    const switcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "http://127.0.0.1/tee-token/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/movie.mkv",
+      getKnownDurationSeconds: () => 100,
+      tracks: [trackDefault],
+      mountRemuxImmediately: true,
+      onRemuxUnrecoverable: unrecoverable,
+    })
+    await flushMicrotasks()
+
+    expect(unrecoverable).toHaveBeenCalledTimes(1)
+    expect(handle.src).not.toHaveBeenCalled()
+
+    switcher.dispose()
+  })
+
+  it("still falls back to the original audio mid-play when the container plays natively", async () => {
+    const handle = createFakeHandle()
+    const { trackDefault, trackA } = makeTracks()
+    const captured: { listener: ((payload: { sessionId: string; detail: string }) => void) | null } = { listener: null }
+    onVodAudioErrorMock.mockImplementation((listener: (payload: { sessionId: string; detail: string }) => void) => {
+      captured.listener = listener
+      return () => {}
+    })
+    startVodAudioRemuxMock.mockResolvedValueOnce({
+      sessionId: "session-a",
+      playbackUrl: "http://127.0.0.1/live/session-a",
+    })
+    const unrecoverable = vi.fn()
+
+    const switcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "https://host.example/movie.mp4",
+      originalMime: "video/mp4",
+      sourceUrl: "https://host.example/movie.mp4",
+      getKnownDurationSeconds: () => 100,
+      tracks: [trackDefault, trackA],
+      onRemuxUnrecoverable: unrecoverable,
+    })
+
+    switcher.source.select("a")
+    await flushMicrotasks()
+
+    captured.listener?.({ sessionId: "session-a", detail: "OTHER:ffmpeg exited with exit status: 1" })
+
+    expect(unrecoverable).not.toHaveBeenCalled()
+    expect(handle.src).toHaveBeenCalledWith(
+      expect.objectContaining({ src: "https://host.example/movie.mp4" }),
+    )
+
+    switcher.dispose()
+  })
+
   it("stops a session that resolves after dispose and mutates no further state", async () => {
     const handle = createFakeHandle()
     const { trackDefault, trackA, trackB } = makeTracks()
@@ -304,5 +607,178 @@ describe("createVodAudioSwitcher async state machine", () => {
 
     expect(stopVodAudioRemuxMock).toHaveBeenCalledWith("session-a")
     expect(handle.src.mock.calls.length).toBe(srcCallCountBeforeDispose)
+  })
+
+  // register_vod_audio_remux is one session at a time, so disposing during a switch tears the
+  // old ffmpeg down and its error must not reach the caller's UI.
+  it("detaches its error listener on dispose and reports nothing for a late error on its own session", async () => {
+    const handle = createFakeHandle()
+    const { trackDefault } = makeTracks()
+    const captured: { listener: ((payload: { sessionId: string; detail: string }) => void) | null } = { listener: null }
+    const unsubscribe = vi.fn()
+    onVodAudioErrorMock.mockImplementation((listener: (payload: { sessionId: string; detail: string }) => void) => {
+      captured.listener = listener
+      return unsubscribe
+    })
+    startVodAudioRemuxMock.mockResolvedValueOnce({
+      sessionId: "session-old",
+      playbackUrl: "http://127.0.0.1/live/session-old",
+    })
+    const unrecoverable = vi.fn()
+
+    const switcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "http://127.0.0.1/tee-old/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/episode2.mkv",
+      remuxInputUrl: "http://127.0.0.1/tee-old/stream.mkv",
+      getKnownDurationSeconds: () => 100,
+      tracks: [trackDefault],
+      mountRemuxImmediately: true,
+      onRemuxUnrecoverable: unrecoverable,
+    })
+    await flushMicrotasks()
+
+    switcher.dispose()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+    const srcCallCountAfterDispose = handle.src.mock.calls.length
+
+    // The unlisten round-trip is async on the Tauri side, so a late event can still land after dispose.
+    captured.listener?.({ sessionId: "session-old", detail: "OTHER:ffmpeg exited with exit status: 255" })
+    await flushMicrotasks()
+
+    expect(unrecoverable).not.toHaveBeenCalled()
+    expect(handle.src.mock.calls.length).toBe(srcCallCountAfterDispose)
+  })
+
+  it("ignores an error for a foreign session id", async () => {
+    const handle = createFakeHandle()
+    const { trackDefault } = makeTracks()
+    const captured: { listener: ((payload: { sessionId: string; detail: string }) => void) | null } = { listener: null }
+    onVodAudioErrorMock.mockImplementation((listener: (payload: { sessionId: string; detail: string }) => void) => {
+      captured.listener = listener
+      return () => {}
+    })
+    startVodAudioRemuxMock.mockResolvedValueOnce({
+      sessionId: "session-mine",
+      playbackUrl: "http://127.0.0.1/live/session-mine",
+    })
+    const unrecoverable = vi.fn()
+
+    const switcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "http://127.0.0.1/tee-mine/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/episode3.mkv",
+      remuxInputUrl: "http://127.0.0.1/tee-mine/stream.mkv",
+      getKnownDurationSeconds: () => 100,
+      tracks: [trackDefault],
+      mountRemuxImmediately: true,
+      onRemuxUnrecoverable: unrecoverable,
+    })
+    await flushMicrotasks()
+    const srcCallCountBeforeError = handle.src.mock.calls.length
+
+    captured.listener?.({ sessionId: "session-someone-else", detail: "OTHER:ffmpeg exited with exit status: 8" })
+    await flushMicrotasks()
+
+    expect(unrecoverable).not.toHaveBeenCalled()
+    expect(handle.src.mock.calls.length).toBe(srcCallCountBeforeError)
+    expect(stopVodAudioRemuxMock).not.toHaveBeenCalledWith("session-someone-else")
+
+    switcher.dispose()
+  })
+})
+
+describe("createVodAudioSwitcher.setTracks", () => {
+  beforeEach(() => {
+    startVodAudioRemuxMock.mockReset()
+    stopVodAudioRemuxMock.mockReset()
+    onVodAudioErrorMock.mockReset().mockImplementation(() => () => {})
+  })
+
+  it("replaces the synthetic default track with the discovered list and marks the currently playing stream active, without remounting", async () => {
+    const handle = createFakeHandle()
+    const { trackDefault, trackA, trackB } = makeTracks()
+    startVodAudioRemuxMock.mockResolvedValueOnce({
+      sessionId: "session-initial",
+      playbackUrl: "http://127.0.0.1/live/session-initial",
+    })
+
+    const switcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "http://127.0.0.1/tee/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/movie.mkv",
+      remuxInputUrl: "http://127.0.0.1/tee/stream.mkv",
+      getKnownDurationSeconds: () => 100,
+      // No tracks yet: the switcher mounts against the synthetic default (audioStreamIndex 0).
+      tracks: [],
+      mountRemuxImmediately: true,
+    })
+    await flushMicrotasks()
+    const srcCallCountBeforeSetTracks = handle.src.mock.calls.length
+
+    // trackDefault also has audioStreamIndex 0, so it matches what the synthetic default was streaming.
+    switcher.setTracks([trackDefault, trackA, trackB])
+
+    const list = switcher.source.list()
+    expect(list.map((track) => track.id)).toEqual(["default", "a", "b"])
+    expect(list.find((track) => track.active)?.id).toBe("default")
+    expect(handle.src.mock.calls.length).toBe(srcCallCountBeforeSetTracks)
+
+    switcher.dispose()
+  })
+
+  it("ignores an empty track list", async () => {
+    const handle = createFakeHandle()
+    startVodAudioRemuxMock.mockResolvedValueOnce({
+      sessionId: "session-initial",
+      playbackUrl: "http://127.0.0.1/live/session-initial",
+    })
+
+    const switcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "http://127.0.0.1/tee/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/movie.mkv",
+      remuxInputUrl: "http://127.0.0.1/tee/stream.mkv",
+      getKnownDurationSeconds: () => 100,
+      tracks: [],
+      mountRemuxImmediately: true,
+    })
+    await flushMicrotasks()
+
+    switcher.setTracks([])
+
+    expect(switcher.source.list().map((track) => track.id)).toEqual(["default"])
+
+    switcher.dispose()
+  })
+
+  it("is a no-op after dispose", async () => {
+    const handle = createFakeHandle()
+    const { trackDefault, trackA, trackB } = makeTracks()
+    startVodAudioRemuxMock.mockResolvedValueOnce({
+      sessionId: "session-initial",
+      playbackUrl: "http://127.0.0.1/live/session-initial",
+    })
+
+    const switcher = createVodAudioSwitcher({
+      handle: handle as any,
+      originalSrc: "http://127.0.0.1/tee/stream.mkv",
+      originalMime: "video/x-matroska",
+      sourceUrl: "https://host.example/movie.mkv",
+      remuxInputUrl: "http://127.0.0.1/tee/stream.mkv",
+      getKnownDurationSeconds: () => 100,
+      tracks: [],
+      mountRemuxImmediately: true,
+    })
+    await flushMicrotasks()
+    switcher.dispose()
+
+    switcher.setTracks([trackDefault, trackA, trackB])
+
+    expect(switcher.source.list().map((track) => track.id)).toEqual(["default"])
   })
 })

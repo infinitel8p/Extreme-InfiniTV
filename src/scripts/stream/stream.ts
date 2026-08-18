@@ -66,11 +66,17 @@ import {
   isDroppingEveryFrame,
   DROPPED_FRAME_MIN_SAMPLE,
   chooseBlackFrameRecovery,
+  isParseFailureDetail,
+  isMseAudioClockWedge,
+  chromiumMajorFromUserAgent,
+  isMpegAudioCodecString,
 } from "@/scripts/lib/codec-hints.ts"
 import { ensureHevcDecodable, isWindowsDesktop } from "@/scripts/lib/hevc-extension.ts"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers.ts"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import { toast, toastError } from "@/scripts/lib/toast.js"
+import { requestLogoFallback } from "@/scripts/lib/logo-fallback.ts"
+import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import {
   mountPlayer,
   externalPlayersAvailable,
@@ -92,6 +98,7 @@ import {
   SETTINGS_EVENT,
   getMonoAudioEnabled,
   setMonoAudioEnabled,
+  getDensityFactor,
 } from "@/scripts/lib/app-settings.js"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
@@ -106,6 +113,8 @@ import {
   loadProgrammes,
   getProgrammesSync,
   getNowNext,
+  getNowNextForChannel,
+  shiftChannelProgrammes,
   effectiveTvgId,
   displayedToUtcMs,
   utcToDisplayedMs,
@@ -132,6 +141,10 @@ import {
   minDistanceFromLiveMs,
   type StreamProfile,
 } from "@/scripts/lib/timeshift-math.ts"
+import { decodedFrameCount, droppedFrameCount } from "@/scripts/lib/player-telemetry.js"
+import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
+import { isAutomaticRetuneReason } from "@/scripts/lib/stream-health.ts"
+import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 // One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
@@ -158,7 +171,8 @@ function setNowPlaying(id) {
 let creds = { host: "", port: "", user: "", pass: "" }
 
 function buildDirectLiveUrl(id, c = creds) {
-  return buildLiveStreamUrl(c, id, c?.liveContainer)
+  const container = isM3u8ContainerFallbackChannel(id) ? "m3u8" : c?.liveContainer
+  return buildLiveStreamUrl(c, id, container)
 }
 
 // ----------------------------
@@ -167,13 +181,14 @@ function buildDirectLiveUrl(id, c = creds) {
 let directUrlById = new Map()
 let streamHeadersById = new Map()
 let streamDrmById = new Map()
-export let m3uEpgUrl = ""
+// Comma-joined, matching the format catalog.js writes to xt_m3u_epg:<id>.
+let m3uEpgUrls = []
 
 function parseM3U(text) {
-  /** @type {Array<{ id:number, name:string, tvgId?:string, chno?:number, category?:string, logo?:string|null, url:string, norm:string, userAgent?:string|null, referer?:string|null }>} */
+  /** @type {Array<{ id:number, name:string, tvgId?:string, chno?:number, category?:string, categories?:string[], logo?:string|null, url:string, norm:string, userAgent?:string|null, referer?:string|null, tvgShift?:number|null }>} */
   const out = []
-  const { entries, epgUrl } = parseSharedM3U(text)
-  m3uEpgUrl = epgUrl || ""
+  const { entries, epgUrls } = parseSharedM3U(text)
+  m3uEpgUrls = epgUrls || []
   const fallbackCategory = t("stream.uncategorized") || "Uncategorized"
   let idSeq = 1
   for (const entry of entries) {
@@ -181,13 +196,16 @@ function parseM3U(text) {
     if (!url) continue
     if (!entry.name) continue
     const category = entry.category || fallbackCategory
+    const categories = entry.categories && entry.categories.length ? entry.categories : [category]
     out.push({
       id: idSeq++,
       name: entry.name,
       category,
+      categories,
       logo: entry.logo,
       tvgId: entry.tvgId || undefined,
       chno: entry.chno ?? undefined,
+      tvgShift: entry.tvgShift ?? null,
       norm: normalize(`${entry.name} ${category} ${entry.tvgId || ""}`),
       url,
       userAgent: entry.userAgent,
@@ -406,7 +424,7 @@ function computeRowH() {
     getComputedStyle(document.documentElement).fontSize || "16"
   )
   const base = Number.isFinite(rootPx) && rootPx > 0 ? rootPx : 16
-  return Math.max(56, Math.round(base * 4.25))
+  return Math.max(48, Math.round(base * 4.25 * getDensityFactor()))
 }
 let ROW_H = computeRowH()
 
@@ -493,9 +511,7 @@ function paintNowSlot(slot, playBtn, ch) {
   slot.replaceChildren()
   const state = activePlaylistId ? getProgrammesSync(activePlaylistId) : null
   if (!state) return
-  const tvgId = effectiveTvgId(ch, activePlaylistId)
-  if (!tvgId) return
-  const { current, next } = getNowNext(state.programmes, tvgId)
+  const { current, next } = getNowNextForChannel(state.programmes, ch, activePlaylistId)
   if (!current && !next) return
 
   if (current) {
@@ -594,7 +610,7 @@ function renderVirtual() {
     playBtn.type = "button"
     playBtn.dataset.role = "play"
     playBtn.className =
-      "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+      "play-btn flex flex-1 items-center gap-3 rounded-xl px-2.5 py-2 text-left h-full min-w-0 hover:bg-surface-2 focus:bg-surface-2 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent"
     playBtn.title = ch.unresolved
       ? `${ch.name || ""} (${t("editor.unresolvedBadge")})`
       : ch.name || ""
@@ -610,27 +626,38 @@ function renderVirtual() {
       const safeLogo = safeHttpUrl(ch.logo)
       if (safeLogo) {
         const img = document.createElement("img")
-        img.src = safeLogo
         img.alt = ""
         img.loading = "lazy"
         img.decoding = "async"
         ;(img as any).fetchPriority = "low"
         img.referrerPolicy = "no-referrer"
         img.className = "h-full w-full object-contain"
-        img.onload = () => logo.setAttribute("data-loaded", "true")
-        img.onerror = () => {
+        // Provider logo requests can hang without firing onerror (Tauri WebView); force the fallback after a grace period.
+        const slowLogoTimer = setTimeout(() => {
           img.remove()
           logo.setAttribute("data-loaded", "true")
-        }
-        if (img.complete && img.naturalWidth > 0) {
+          requestLogoFallback(logo, ch)
+        }, 8000)
+        ;(img as HTMLImageElement & { logoFallbackTimer?: ReturnType<typeof setTimeout> }).logoFallbackTimer = slowLogoTimer
+        img.onload = () => {
+          clearTimeout(slowLogoTimer)
           logo.setAttribute("data-loaded", "true")
         }
+        img.onerror = () => {
+          clearTimeout(slowLogoTimer)
+          img.remove()
+          logo.setAttribute("data-loaded", "true")
+          requestLogoFallback(logo, ch)
+        }
         logo.appendChild(img)
+        mountCachedImage(img, safeLogo, "logo")
       } else {
         logo.setAttribute("data-loaded", "true")
+        requestLogoFallback(logo, ch)
       }
     } else {
       logo.setAttribute("data-loaded", "true")
+      requestLogoFallback(logo, ch)
     }
     playBtn.appendChild(logo)
 
@@ -660,7 +687,7 @@ function renderVirtual() {
     starBtn.type = "button"
     starBtn.dataset.role = "star"
     starBtn.className =
-      "star-btn flex shrink-0 h-11 w-11 items-center justify-center rounded-lg text-base outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent " +
+      "star-btn flex shrink-0 h-11 w-11 items-center justify-center rounded-lg text-base outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent " +
       (fav
         ? "text-accent hover:bg-surface-2 focus:bg-surface-2"
         : "text-fg-3 hover:text-fg hover:bg-surface-2 focus:text-fg focus:bg-surface-2")
@@ -693,6 +720,12 @@ function renderVirtual() {
     frag.appendChild(row)
   }
 
+  // Rows are fully rebuilt each render; cancel outgoing rows' pending logo-fallback timers before they're discarded.
+  for (const staleImg of viewport.querySelectorAll("img")) {
+    const timer = (staleImg as HTMLImageElement & { logoFallbackTimer?: ReturnType<typeof setTimeout> })
+      .logoFallbackTimer
+    if (timer) clearTimeout(timer)
+  }
   viewport.replaceChildren(frag)
   viewport.style.transform = `translateY(${startIdx * ROW_H}px)`
 
@@ -1128,8 +1161,8 @@ document.addEventListener("keydown", (e) => {
     }
     case "f": {
       e.preventDefault()
-      if (vjs.isFullscreen()) vjs.exitFullscreen()
-      else vjs.requestFullscreen()
+      if (vjs.isFullscreen?.()) vjs.exitFullscreen?.()
+      else vjs.requestFullscreen?.()
       return
     }
     case "j":
@@ -1215,8 +1248,9 @@ const applyFilter = () => {
     }
   } else {
     out = all.filter((ch) => {
-      if (activeCat && (ch.category || "") !== activeCat) return false
-      return picker.categoryPassesFilter((ch.category || "").toString())
+      const categories = Array.isArray(ch.categories) && ch.categories.length ? ch.categories : [ch.category || ""]
+      if (activeCat && !categories.includes(activeCat)) return false
+      return categories.some((category) => picker.categoryPassesFilter(category))
     })
   }
 
@@ -1465,9 +1499,9 @@ async function loadChannels() {
       )
       indexDirectUrls(data)
       categoryMap = null
-      if (m3uEpgUrl) {
+      if (m3uEpgUrls.length) {
         try {
-          localStorage.setItem(`xt_m3u_epg:${active._id}`, m3uEpgUrl)
+          localStorage.setItem(`xt_m3u_epg:${active._id}`, m3uEpgUrls.join(","))
         } catch {}
       }
       paintChannels(data, fromCache, age)
@@ -1545,8 +1579,25 @@ async function loadChannels() {
 // Player (lazy)
 // ----------------------------
 let vjs = null
+let embeddedPlayerBackend = null
 let playSeq = 0
 let lastPlayContext = null
+let playerInsights = null
+// Detach for the auto-hiding quality chip overlaid on the player edge - rebuilt every tune.
+let qualityChipDetach = null
+
+function getPlayerInsights() {
+  if (!playerInsights) {
+    playerInsights = attachPlayerInsights({
+      getHandle: () => vjs,
+      getContainer: () => getPlayerWrap(),
+      backendLabel: () => embeddedPlayerBackend || getPlayerBackend(),
+      sessionKind: "live",
+      isSuppressed: () => getPlayerWrap()?.dataset.radioMode === "on",
+    })
+  }
+  return playerInsights
+}
 // ffmpeg audio-transcode proxy state - desktop only, cached at boot.
 let audioProxyAvailable = false
 // Streams queued to remount through the proxy once (watchdog / failure-panel fix), consumed on the next play().
@@ -1559,34 +1610,68 @@ const audioProxyAutoAttemptedSet = new Set()
 // Per-channel budget for black-screen native re-tunes (macOS GDR latch retries).
 const nativeRelatchAttempts = new Map()
 
-// Channels whose AC-3 audio cannot decode in WKWebView MSE remount on native
-// AVFoundation. Persisted per playlist: the codec is stable, and module state
+// Channels hls.js can't serve in this WebView (AC-3 audio, or a container its demuxer can't read)
+// remount on native AVFoundation. Persisted per playlist: the cause is stable, and module state
 // dies on every page navigation, so a plain Set would re-pay the hls.js detour.
-let nativeAudioFallbackCache = null
+const NATIVE_HLS_FALLBACK_KEY = "xt_native_hls_fallback"
+const LEGACY_NATIVE_AUDIO_FALLBACK_KEY = "xt_native_audio_fallback"
+let nativeHlsFallbackCache = null
 
-function loadNativeAudioFallbackSet() {
-  if (nativeAudioFallbackCache && nativeAudioFallbackCache.playlistId === activePlaylistId) {
-    return nativeAudioFallbackCache.ids
+function loadNativeHlsFallbackSet() {
+  if (nativeHlsFallbackCache && nativeHlsFallbackCache.playlistId === activePlaylistId) {
+    return nativeHlsFallbackCache.ids
   }
   let ids = new Set()
   try {
-    const raw = localStorage.getItem(`xt_native_audio_fallback:${activePlaylistId}`)
+    const raw =
+      localStorage.getItem(`${NATIVE_HLS_FALLBACK_KEY}:${activePlaylistId}`) ??
+      localStorage.getItem(`${LEGACY_NATIVE_AUDIO_FALLBACK_KEY}:${activePlaylistId}`)
     if (raw) ids = new Set(JSON.parse(raw))
   } catch {}
-  nativeAudioFallbackCache = { playlistId: activePlaylistId, ids }
+  nativeHlsFallbackCache = { playlistId: activePlaylistId, ids }
   return ids
 }
 
-function isNativeAudioFallbackChannel(id) {
-  return loadNativeAudioFallbackSet().has(id)
+function isNativeHlsFallbackChannel(id) {
+  return loadNativeHlsFallbackSet().has(id)
 }
 
-function rememberNativeAudioFallbackChannel(id) {
-  const ids = loadNativeAudioFallbackSet()
+function rememberNativeHlsFallbackChannel(id) {
+  const ids = loadNativeHlsFallbackSet()
   if (ids.has(id)) return
   ids.add(id)
   try {
-    localStorage.setItem(`xt_native_audio_fallback:${activePlaylistId}`, JSON.stringify([...ids]))
+    localStorage.setItem(`${NATIVE_HLS_FALLBACK_KEY}:${activePlaylistId}`, JSON.stringify([...ids]))
+  } catch {}
+}
+
+// Channels whose raw-TS audio can't decode are pinned to the m3u8 container instead (where the
+// HLS audio fallbacks apply); persisted per playlist like the native-HLS-fallback set above.
+let m3u8ContainerFallbackCache = null
+
+function loadM3u8ContainerFallbackSet() {
+  if (m3u8ContainerFallbackCache && m3u8ContainerFallbackCache.playlistId === activePlaylistId) {
+    return m3u8ContainerFallbackCache.ids
+  }
+  let ids = new Set()
+  try {
+    const raw = localStorage.getItem(`xt_m3u8_container_fallback:${activePlaylistId}`)
+    if (raw) ids = new Set(JSON.parse(raw))
+  } catch {}
+  m3u8ContainerFallbackCache = { playlistId: activePlaylistId, ids }
+  return ids
+}
+
+function isM3u8ContainerFallbackChannel(id) {
+  return loadM3u8ContainerFallbackSet().has(id)
+}
+
+function rememberM3u8ContainerFallbackChannel(id) {
+  const ids = loadM3u8ContainerFallbackSet()
+  if (ids.has(id)) return
+  ids.add(id)
+  try {
+    localStorage.setItem(`xt_m3u8_container_fallback:${activePlaylistId}`, JSON.stringify([...ids]))
   } catch {}
 }
 // Capped so a channel that keeps stalling right after retune bypasses the proxy instead of retuning forever.
@@ -1794,6 +1879,7 @@ function giveUpOnPlayback(ctx) {
   clearStallSentinel()
   clearDeadVideoWatchdog()
   clearDeadAudioWatchdog()
+  clearStartWedgeWatch()
   // "playing" can fire before an undecodable audio track kills the mount, so classify every terminal path.
   const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
   const failure = classifyStartFailure({
@@ -1802,12 +1888,19 @@ function giveUpOnPlayback(ctx) {
     errorDetail: info.errorDetail,
     nameHint: hasHevcNameHint(ctx.name),
     deviceHevc: deviceSupportsHevc(),
+    audioClockWedge: !!ctx.audioClockWedge,
   })
   log.info("[xt:livetv] start-failure verdict", { kind: failure.kind, codec: failure.codec, streamId: ctx.streamId })
+  getPlayerInsights().record("giveup", failure.kind)
   // Bypasses getAndroidNativePlayerEnabled() on purpose: one-shot recovery, not the opt-in setting.
   if (!ctx.started && !ctx.nativeFallbackTried && androidNativePlayerAvailable) {
     ctx.nativeFallbackTried = true
-    if (failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio") {
+    if (
+      failure.kind === "hevc" ||
+      failure.kind === "codec" ||
+      failure.kind === "audio" ||
+      failure.kind === "parse"
+    ) {
       toast({ title: t("stream.failure.nativeFallback") })
       launchNativeLiveSession(ctx.streamId, ctx.name).then((launched) => {
         if (launched) return
@@ -1817,22 +1910,42 @@ function giveUpOnPlayback(ctx) {
       return
     }
   }
-  // WKWebView MSE has no AC-3 decoder; remount such channels on native
-  // AVFoundation, which does. The ffmpeg proxy is no answer for HLS sources.
+  // MSE lacks a decoder here and the native fallbacks can't demux bare TS; Xtream serves the
+  // same channel as m3u8, so retune there instead.
   if (
     failure.kind === "audio" &&
+    ctx.isLive &&
+    creds?.liveContainer === "ts" &&
+    /\.ts(\?|$)/i.test(String(ctx.src || "")) &&
+    !isM3u8ContainerFallbackChannel(ctx.streamId)
+  ) {
+    rememberM3u8ContainerFallbackChannel(ctx.streamId)
+    log.warn("[xt:livetv] raw-TS stream failed with undecodable audio - retuning with the m3u8 container", {
+      streamId: ctx.streamId,
+      codec: failure.codec,
+    })
+    void play(ctx.streamId, ctx.name, "auto:m3u8-container-fallback")
+    return
+  }
+  // WKWebView MSE has no AC-3 decoder and its demuxer gives up on mid-stream container
+  // changes; AVFoundation handles both. The ffmpeg proxy is no answer for HLS sources.
+  if (
+    // AVFoundation needs a manifest, so a bare-TS parse failure has nothing to hand it.
+    (failure.kind === "audio" || (failure.kind === "parse" && isHlsSource(ctx.src))) &&
     isMacOS &&
     isTauri &&
     ctx.isLive &&
     !ctx.audioProxied &&
-    !isNativeAudioFallbackChannel(ctx.streamId)
+    !isNativeHlsFallbackChannel(ctx.streamId)
   ) {
-    rememberNativeAudioFallbackChannel(ctx.streamId)
-    log.warn("[xt:livetv] AC-3 audio cannot decode in this WebView's MSE - remounting on native AVFoundation", {
-      streamId: ctx.streamId,
-      codec: failure.codec,
-    })
-    void play(ctx.streamId, ctx.name, "auto:native-audio-fallback")
+    rememberNativeHlsFallbackChannel(ctx.streamId)
+    log.warn(
+      failure.kind === "parse"
+        ? "[xt:livetv] hls.js cannot demux this stream - remounting on native AVFoundation"
+        : "[xt:livetv] AC-3 audio cannot decode in this WebView's MSE - remounting on native AVFoundation",
+      { streamId: ctx.streamId, codec: failure.codec }
+    )
+    void play(ctx.streamId, ctx.name, "auto:native-hls-fallback")
     return
   }
   // Independent of getAudioTranscodeAuto(), which only gates the mid-play watchdog.
@@ -1895,6 +2008,7 @@ async function mountEmbeddedPlayer(backend, opts) {
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
+  embeddedPlayerBackend = mounted.backend
   embeddedPlayerLiveUi = wantLiveUi
 
   if (mounted.backend === "videojs") {
@@ -2011,6 +2125,7 @@ async function mountEmbeddedPlayer(backend, opts) {
       message: err?.message,
       streamId: ctx.streamId,
     })
+    getPlayerInsights().record("error", `${err?.code ?? "?"} ${err?.message ?? ""}`.trim())
     // Stops a timer armed by an earlier "playing" from firing against the mount we're replacing.
     clearDeadVideoWatchdog()
     clearDeadAudioWatchdog()
@@ -2029,9 +2144,19 @@ async function mountEmbeddedPlayer(backend, opts) {
           retuneProxiedAudioMount(ctx)
           return
         }
+        // The same demuxer on the same container fails the same way; escalate to the verdict instead.
+        if (isParseFailureDetail(vjs?.codecInfo?.()?.errorDetail)) {
+          giveUpOnPlayback(ctx)
+          return
+        }
         try {
           vjs.reset?.()
-          vjs.src({ src: ctx.src, type: ctx.mime || "application/x-mpegURL", isLive: ctx.isLive ?? true })
+          vjs.src({
+            src: ctx.src,
+            type: ctx.mime || "application/x-mpegURL",
+            isLive: ctx.isLive ?? true,
+            preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
+          })
           vjs.play().catch(() => {})
         } catch {}
       }, ERROR_AUTO_RETRY_MS)
@@ -2247,14 +2372,8 @@ function paintRadioNowPlaying(channelId: number) {
     nowEl.hidden = true
     return
   }
-  const tvgId = effectiveTvgId(channel, activePlaylistId)
-  if (!tvgId) {
-    nowEl.textContent = ""
-    nowEl.hidden = true
-    return
-  }
   const state = getProgrammesSync(activePlaylistId)
-  const { current } = getNowNext(state?.programmes, tvgId)
+  const { current } = getNowNextForChannel(state?.programmes, channel, activePlaylistId)
   if (!current?.title) {
     nowEl.textContent = ""
     nowEl.hidden = true
@@ -2387,7 +2506,7 @@ function makeMoreMenuItem(label: string, checked?: boolean): HTMLButtonElement {
   if (checked !== undefined) item.setAttribute("aria-checked", String(checked))
   item.className =
     "w-full flex items-center justify-between gap-3 text-left px-3 py-2.5 min-h-11 rounded-lg text-sm " +
-    "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent outline-none transition-colors"
+    "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-1 focus-visible:ring-accent outline-none transition-colors"
   const labelSpan = document.createElement("span")
   labelSpan.textContent = label
   item.appendChild(labelSpan)
@@ -2449,9 +2568,17 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
           { id: streamId, name, logo: channel?.logo ?? null, category: channel?.category ?? null, url: src },
           { probeIcy: !!channel?.isRadio }
         )
+        // Audio-only hides the video preview - the quality chip has nothing to report.
+        if (qualityChipDetach) {
+          qualityChipDetach()
+          qualityChipDetach = null
+        }
       } else {
         manualAudioOnlyOff.add(manualAudioOnlyOffKey(streamId))
         clearRadioMode()
+        // Same mount, just un-hidden - re-attach the overlay chip to the player edge.
+        const playerWrap = document.getElementById("player")?.parentElement
+        if (playerWrap && vjs) qualityChipDetach = attachQualityChip(playerWrap, vjs)
       }
     })
     items.push(audioItem)
@@ -2465,6 +2592,21 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
     setMoreMenuItemChecked(monoItem, nowOn)
   })
   items.push(monoItem)
+
+  const insights = getPlayerInsights()
+  const statsItem = makeMoreMenuItem(t("player.stats.title"), insights.isOverlayVisible())
+  statsItem.addEventListener("click", () => {
+    closeCurrentMoreMenu()
+    insights.toggleOverlay()
+  })
+  items.push(statsItem)
+
+  const healthItem = makeMoreMenuItem(t("stream.health.menu"))
+  healthItem.addEventListener("click", () => {
+    closeCurrentMoreMenu()
+    insights.openHealthDialog()
+  })
+  items.push(healthItem)
 
   return items
 }
@@ -2693,7 +2835,7 @@ function performStallRetune(trigger) {
       src: ctx.src,
       type: ctx.mime || "application/x-mpegURL",
       isLive: ctx.isLive ?? true,
-      preferNativeHls: isNativeAudioFallbackChannel(ctx.streamId),
+      preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
     })
     vjs.play().catch((err) => {
       log.info("[xt:livetv] stall-retune play() rejected", { streamId: ctx.streamId, error: err?.name || String(err) })
@@ -2788,6 +2930,100 @@ function ensureProgressWatch() {
 }
 
 // ----------------------------
+// Start-wedge watchdog
+// ----------------------------
+// Chromium majors where the audio/mpeg wedge was already confirmed once.
+const WEDGE_ENGINE_KEY = "xt_mpeg_wedge_engine"
+const START_WEDGE_WATCH_INTERVAL_MS = 500
+const START_WEDGE_WATCH_MAX_TICKS = 80
+const START_WEDGE_CONFIRM_HITS = 8
+let startWedgeWatchTimer = null
+let startWedgeWatchTicks = 0
+let startWedgeWatchHits = 0
+
+function currentChromiumMajor() {
+  return chromiumMajorFromUserAgent(typeof navigator !== "undefined" ? navigator.userAgent : null)
+}
+
+function isKnownWedgedEngine() {
+  const major = currentChromiumMajor()
+  if (major == null) return false
+  try {
+    return localStorage.getItem(WEDGE_ENGINE_KEY) === String(major)
+  } catch {
+    return false
+  }
+}
+
+function rememberWedgedEngine() {
+  const major = currentChromiumMajor()
+  if (major == null) return
+  try {
+    localStorage.setItem(WEDGE_ENGINE_KEY, String(major))
+  } catch {}
+}
+
+function clearStartWedgeWatch() {
+  if (startWedgeWatchTimer) {
+    clearInterval(startWedgeWatchTimer)
+    startWedgeWatchTimer = null
+  }
+}
+
+function armStartWedgeWatch() {
+  clearStartWedgeWatch()
+  const ctx = lastPlayContext
+  if (!ctx || !ctx.isLive || ctx.audioProxied) return
+  const seqAtArm = ctx.seq
+  startWedgeWatchTicks = 0
+  startWedgeWatchHits = 0
+  startWedgeWatchTimer = setInterval(() => {
+    const current = lastPlayContext
+    if (!current || current.seq !== seqAtArm || current.started || !vjs) {
+      clearStartWedgeWatch()
+      return
+    }
+    startWedgeWatchTicks++
+    if (startWedgeWatchTicks > START_WEDGE_WATCH_MAX_TICKS) {
+      clearStartWedgeWatch()
+      return
+    }
+    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    if (!mediaEl || mediaEl.paused || mediaEl.ended) return
+    const audioCodec = vjs?.codecInfo?.()?.audioCodec
+    // A flagged engine wedges MPEG audio deterministically - codec alone convicts.
+    const knownEngine =
+      isKnownWedgedEngine() &&
+      isMpegAudioCodecString(audioCodec) &&
+      mediaEl.readyState < 2 &&
+      startWedgeWatchTicks >= 2
+    if (!knownEngine) {
+      const wedged = isMseAudioClockWedge({
+        readyState: mediaEl.readyState,
+        currentTime: mediaEl.currentTime || 0,
+        bufferedEndSeconds: bufferedEndSeconds(mediaEl),
+        audioCodec,
+      })
+      if (!wedged) {
+        startWedgeWatchHits = 0
+        return
+      }
+      startWedgeWatchHits++
+      if (startWedgeWatchHits < START_WEDGE_CONFIRM_HITS) return
+    }
+    clearStartWedgeWatch()
+    rememberWedgedEngine()
+    current.audioClockWedge = true
+    log.warn("[xt:livetv] clock never started despite buffered MPEG audio - convicting the audio track", {
+      streamId: current.streamId,
+      readyState: mediaEl.readyState,
+      knownEngine,
+    })
+    giveUpOnPlayback(current)
+  }, START_WEDGE_WATCH_INTERVAL_MS)
+}
+
+// ----------------------------
 // Dead-video watchdog
 // ----------------------------
 // WebView2 sometimes accepts an HEVC stream. `playing` fires, so the
@@ -2804,27 +3040,6 @@ function clearDeadVideoWatchdog() {
     clearTimeout(deadVideoTimer)
     deadVideoTimer = null
   }
-}
-
-function decodedFrameCount(videoEl) {
-  try {
-    const quality = videoEl.getVideoPlaybackQuality?.()
-    if (quality && typeof quality.totalVideoFrames === "number") {
-      return quality.totalVideoFrames
-    }
-  } catch {}
-  const legacy = videoEl.webkitDecodedFrameCount
-  return typeof legacy === "number" ? legacy : null
-}
-
-function droppedFrameCount(videoEl) {
-  try {
-    const quality = videoEl.getVideoPlaybackQuality?.()
-    if (quality && typeof quality.droppedVideoFrames === "number") {
-      return quality.droppedVideoFrames
-    }
-  } catch {}
-  return null
 }
 
 function armDeadVideoWatchdog() {
@@ -2888,7 +3103,7 @@ function armDeadVideoWatchdog() {
       const recovery = chooseBlackFrameRecovery({
         // Native mounts re-tune (a fresh chance to latch); see chooseBlackFrameRecovery.
         isMacOSNativeHls:
-          isMacOS && !ctx.audioProxied && (!isTauri || isNativeAudioFallbackChannel(ctx.streamId)),
+          isMacOS && !ctx.audioProxied && (!isTauri || isNativeHlsFallbackChannel(ctx.streamId)),
         relatchAttempts,
         proxyUsable:
           canUseAudioProxy(ctx) &&
@@ -2943,9 +3158,24 @@ function clearDeadAudioWatchdog() {
   }
 }
 
+// Blink-only despite the prefix - WebKit never shipped it, hence the codec-string fallback below.
 function audioDecodedByteCount(videoEl) {
   const bytes = videoEl.webkitAudioDecodedByteCount
   return typeof bytes === "number" ? bytes : null
+}
+
+function bufferedEndSeconds(videoEl) {
+  try {
+    const ranges = videoEl.buffered
+    if (!ranges || ranges.length === 0) return 0
+    return ranges.end(ranges.length - 1)
+  } catch {
+    return 0
+  }
+}
+
+function isHlsSource(src) {
+  return /\.m3u8?(\?|$)/i.test(String(src || ""))
 }
 
 // A channel that already fell back to direct play this session must not be re-routed.
@@ -2957,7 +3187,7 @@ function canUseAudioProxy(ctx) {
     !audioProxyBypassSet.has(ctx.streamId) &&
     // The proxy pipes the fetched body into ffmpeg's mpegts demuxer; an HLS
     // playlist URL feeds it playlist text and dies instantly. Raw TS only.
-    !/\.m3u8?(\?|$)/i.test(String(ctx?.src || ""))
+    !isHlsSource(ctx?.src)
   )
 }
 
@@ -3017,13 +3247,18 @@ function armDeadAudioWatchdog() {
     if (!video || video.paused) return
     if (video.muted || video.volume === 0) return
     const audioBytes = audioDecodedByteCount(video)
+    const codecInfo = vjs?.codecInfo?.() || null
+    // Without a byte counter the codec string is the only evidence; a decodable one stays innocent.
+    const audioDead =
+      audioBytes === null ? isUnsupportedAudioCodec(codecInfo?.audioCodec) : audioBytes === 0
     log.info("[xt:livetv] dead-audio check", {
       audioBytes,
+      audioCodec: codecInfo?.audioCodec ?? null,
       frames: decodedFrameCount(video),
       videoWidth: video.videoWidth,
       played: (video.currentTime || 0) - baselineTime,
     })
-    if (audioBytes === null || audioBytes > 0) return
+    if (!audioDead) return
     const frames = decodedFrameCount(video)
     if (frames === null || frames === 0) return
     if (video.videoWidth === 0) return
@@ -3037,12 +3272,30 @@ function armDeadAudioWatchdog() {
       return
     }
     deadAudioNotifiedSeq = seqAtArm
-    const info = vjs?.codecInfo?.()
-    log.warn("[xt:livetv] video decoding but zero audio bytes decoded - audio codec likely undecodable", {
+    const info = codecInfo || {}
+    log.warn("[xt:livetv] video decoding but no audio decoded - audio codec likely undecodable", {
       streamId: ctx.streamId,
-      audioCodec: info?.audioCodec,
+      audioBytes,
+      audioCodec: info.audioCodec,
     })
-    const audioUnsupported = isUnsupportedAudioCodec(info?.audioCodec)
+    const audioUnsupported = isUnsupportedAudioCodec(info.audioCodec)
+    // AVFoundation has the decoders MSE lacks, so remount rather than just warn.
+    if (
+      isMacOS &&
+      isTauri &&
+      ctx.isLive &&
+      isHlsSource(ctx.src) &&
+      !ctx.audioProxied &&
+      !isNativeHlsFallbackChannel(ctx.streamId)
+    ) {
+      rememberNativeHlsFallbackChannel(ctx.streamId)
+      log.warn("[xt:livetv] silent audio in MSE - remounting on native AVFoundation", {
+        streamId: ctx.streamId,
+        audioCodec: info.audioCodec,
+      })
+      void play(ctx.streamId, ctx.name, "auto:native-hls-fallback")
+      return
+    }
     if (canUseAudioProxy(ctx)) {
       if (getAudioTranscodeAuto()) {
         toast({ title: t("stream.audioFix.fixing"), duration: 4000 })
@@ -3109,6 +3362,8 @@ function applyDiagnosticToFailurePanel(seq, verdict, reason) {
 function showPlaybackFailurePanel(ctx, opts = {}) {
   if (failurePanelSeq === ctx.seq) return
   hidePlaybackFailurePanel()
+  // No automatic retune follows this panel - close the session now, not on the next tune.
+  getPlayerInsights().endSession("giveup")
   log.warn("[xt:livetv] playback failure panel shown", {
     streamId: ctx.streamId,
     decodeFailure: !!opts.decodeFailure,
@@ -3124,6 +3379,7 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
       info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
     nameHint: hasHevcNameHint(ctx.name),
     deviceHevc: deviceSupportsHevc(),
+    audioClockWedge: !!ctx.audioClockWedge,
   })
   log.log("[xt:livetv] start failure classified:", failure.kind, {
     videoCodec: info.videoCodec,
@@ -3142,6 +3398,8 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
     reason = t("stream.failure.audioUnsupported", {
       codec: describeAudioCodec(failure.codec),
     })
+  } else if (failure.kind === "parse") {
+    reason = t("stream.failure.parseFailed")
   } else {
     reason = t("stream.error.checkConnection")
   }
@@ -3199,9 +3457,9 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   else if (builtinCantDecode && externalAvailable) primaryKind = "external"
 
   const primaryClass =
-    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-xl bg-white text-black text-sm font-semibold transition duration-150 hover:bg-white/90 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-5 rounded-xl bg-white text-black text-sm font-semibold transition duration-150 hover:bg-white/90 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/70"
   const secondaryClass =
-    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-4 rounded-xl border border-white/25 text-white text-sm transition duration-150 hover:bg-white/10 hover:border-white/40 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50"
+    "shrink-0 inline-flex items-center justify-center gap-2 min-h-11 px-4 rounded-xl border border-white/25 text-white text-sm transition duration-150 hover:bg-white/10 hover:border-white/40 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/50"
 
   const retryBtn = document.createElement("button")
   retryBtn.type = "button"
@@ -3308,9 +3566,8 @@ function pushDiscordPresence(channel, kind) {
   const safeLogo = channel.logo ? safeHttpUrl(channel.logo) : null
   let stateLine = ""
   const state = getProgrammesSync(activePlaylistId)
-  const tvgId = effectiveTvgId(channel, activePlaylistId)
-  if (state && tvgId) {
-    const { current } = getNowNext(state.programmes, tvgId)
+  if (state) {
+    const { current } = getNowNextForChannel(state.programmes, channel, activePlaylistId)
     if (current?.title) stateLine = current.title
   }
   setRichPresence({
@@ -3453,6 +3710,12 @@ async function play(streamId, name, reason = "user") {
   hideTimeshiftChip()
   clearLiveEdgeTracking()
   if (!currentEl) return
+  // Every tune remounts the <video> below - detach the previous chip's
+  // listeners first so they don't leak onto a removed element.
+  if (qualityChipDetach) {
+    qualityChipDetach()
+    qualityChipDetach = null
+  }
   // Native ExoPlayer Activity path (opt-in via Settings). Hands off the full
   // playback session including channel switching. Returns early if successful.
   if (await tryLaunchNativeLive(streamId, name)) {
@@ -3660,6 +3923,8 @@ async function play(streamId, name, reason = "user") {
   if (!player) {
     return
   }
+  const playerWrap = document.getElementById("player")?.parentElement
+  if (playerWrap) qualityChipDetach = attachQualityChip(playerWrap, player)
   await applyStreamHeaders(channelHeaders)
   const seq = ++playSeq
   lastPlayContext = {
@@ -3670,11 +3935,20 @@ async function play(streamId, name, reason = "user") {
     retried: false,
     started: false,
     nativeFallbackTried: false,
+    audioClockWedge: false,
     mime: mountMime,
     isLive: true,
     audioProxied,
     audioProxySessionId,
   }
+  // An "auto:*" reason is a recovery re-invocation of the same tune, not a new one - keep it in the same session.
+  if (isAutomaticRetuneReason(reason)) {
+    getPlayerInsights().record("fallback", reason)
+  } else {
+    getPlayerInsights().startSession({ label: name, seq })
+  }
+  // Armed here, not just on "playing": a wedged first tune never fires it.
+  ensureProgressWatch()
   hideBufferingChip()
   clearStallSentinel()
   try { player.reset?.() } catch {}
@@ -3683,17 +3957,17 @@ async function play(streamId, name, reason = "user") {
       src: mountSrc,
       type: mountMime,
       drm: audioProxied ? null : channelDrm,
-      preferNativeHls: isNativeAudioFallbackChannel(streamId),
+      preferNativeHls: isNativeHlsFallbackChannel(streamId),
     })
   } catch {}
   const playResult = player.play?.()
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch((err) => {
       // An interrupted play() otherwise leaves the tune paused until a manual click.
-      log.info("[xt:livetv] initial play() rejected - re-arming on canplay", {
-        streamId,
-        error: err?.name || String(err),
-      })
+      // AbortError is the expected remount-vs-autoplay race, so it stays out of the log file.
+      const errorName = err?.name || String(err)
+      const write = errorName === "AbortError" ? log.debug : log.info
+      write("[xt:livetv] initial play() rejected - re-arming on canplay", { streamId, error: errorName })
       const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
       if (!mediaEl) return
       const resume = () => {
@@ -3709,6 +3983,7 @@ async function play(streamId, name, reason = "user") {
       setTimeout(() => mediaEl.removeEventListener("canplay", resume), 20000)
     })
   }
+  armStartWedgeWatch()
   applyVideoScale()
   pushDiscordPresence(channel || { id: streamId, name }, "live")
   externalPresenceActive = false
@@ -3851,6 +4126,12 @@ function resolveProgrammeWindowAt(channel, atUtcMs) {
 /** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
 async function playCatchup(channel, opts) {
   if (!currentEl || !channel || !activePlaylistId) return false
+  // Catch-up remounts the <video> without a quality chip - detach the
+  // live one so its listeners don't leak onto a removed element.
+  if (qualityChipDetach) {
+    qualityChipDetach()
+    qualityChipDetach = null
+  }
   if (channel.unresolved) {
     toastError(t("stream.error.cantPlay", { channel: channel.name || `#${channel.id}` }), {
       description: t("stream.error.checkConnection"),
@@ -3972,9 +4253,11 @@ async function playCatchup(channel, opts) {
     started: false,
     // Skip the Android native-handoff escape hatch for catch-up sessions.
     nativeFallbackTried: true,
+    audioClockWedge: false,
     mime,
     isLive: false,
   }
+  getPlayerInsights().startSession({ label: channel.name, seq })
   hideBufferingChip()
   clearStallSentinel()
   suppressPauseTrackingUntilMs = Date.now() + 500
@@ -4083,10 +4366,10 @@ async function playCatchup(channel, opts) {
   if (playResult && typeof playResult.catch === "function") {
     playResult.catch((err) => {
       // An interrupted play() otherwise leaves the tune paused until a manual click.
-      log.info("[xt:livetv] initial play() rejected - re-arming on canplay", {
-        streamId,
-        error: err?.name || String(err),
-      })
+      // AbortError is the expected remount-vs-autoplay race, so it stays out of the log file.
+      const errorName = err?.name || String(err)
+      const write = errorName === "AbortError" ? log.debug : log.info
+      write("[xt:livetv] initial play() rejected - re-arming on canplay", { streamId, error: errorName })
       const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
       if (!mediaEl) return
       const resume = () => {
@@ -4561,7 +4844,7 @@ async function loadEPG(streamId) {
           <button type="button" data-epg-idx="${idx}"${isPlaying ? ' data-now-playing="true" aria-current="true"' : ""}
             class="epg-entry block w-full min-h-11 text-left rounded-lg px-3 py-2 outline-none transition-colors
                    ${rowClass}
-                   focus-visible:ring-2 focus-visible:ring-accent">
+                   focus-visible:ring-1 focus-visible:ring-accent">
             <div class="flex items-center justify-between gap-2">
               <div class="flex items-center gap-2 min-w-0">
                 ${dot}
@@ -4600,7 +4883,7 @@ function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, i
   const now = Date.now()
   const loadEarlierHtml = canLoadEarlier
     ? `<button type="button" data-epg-load-earlier
-         class="block w-full min-h-11 rounded-lg bg-surface-2 hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-accent text-sm text-fg-2 transition-colors">${escapeHtml(t("livetv.epgLoadEarlier"))}</button>`
+         class="block w-full min-h-11 rounded-lg bg-surface-2 hover:bg-surface-3 focus-visible:ring-1 focus-visible:ring-accent text-sm text-fg-2 transition-colors">${escapeHtml(t("livetv.epgLoadEarlier"))}</button>`
     : ""
 
   let previousDayKey = epgDayKey(now)
@@ -4638,7 +4921,7 @@ function renderEpgSidePanelRows(past, upcoming, { isM3uSource, canLoadEarlier, i
         <button type="button" data-epg-idx="${idx}"${isPlaying ? ' data-now-playing="true" aria-current="true"' : ""}
           class="epg-entry block w-full min-h-11 text-left rounded-lg px-3 py-2 outline-none transition-colors
                  ${rowClass}
-                 focus-visible:ring-2 focus-visible:ring-accent">
+                 focus-visible:ring-1 focus-visible:ring-accent">
           <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0">
               ${dot}
@@ -4691,7 +4974,8 @@ function paintSidePanelFromXmltv(streamId) {
   }
 
   const state = getProgrammesSync(activePlaylistId)
-  const programmes = state?.programmes?.get(tvgId) || []
+  // rawStart/rawStop let the catch-up handler below recover true XMLTV time, bypassing tvg-shift.
+  const programmes = shiftChannelProgrammes(state?.programmes?.get(tvgId) || [], channel.tvgShift)
   if (!programmes.length) {
     epgList.innerHTML = `<div class="text-fg-3">${escapeHtml(t("epg.sidePanelEmpty"))}</div>`
     epgListData = []
@@ -4895,9 +5179,10 @@ epgList?.addEventListener("click", async (e) => {
   const isLive = entry.start <= now && now < entry.stop
   const isEnded = entry.stop <= now
   // XMLTV panel entries carry display-shifted times; short-EPG and full-table entries are already UTC.
+  // rawStart/rawStop recover the true XMLTV time so catch-up math never sees the tvg-shift correction.
   const isM3uSource = hasDirectUrl(epgListChannelId)
-  const startUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.start) : entry.start
-  const stopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.stop) : entry.stop
+  const startUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.rawStart ?? entry.start) : entry.start
+  const stopUtcMs = isM3uSource ? displayedToUtcMs(activePlaylistId, entry.rawStop ?? entry.stop) : entry.stop
   // has_archive narrows catch-up eligibility when sent; it never widens past the channel-level window check.
   const archiveKnownPlayable = entry.hasArchive == null ? true : entry.hasArchive
 

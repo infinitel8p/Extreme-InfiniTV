@@ -57,6 +57,20 @@ describe("serializeChannelsForActivity", () => {
     expect(out[0].nowProgramme).toBe("Now: News at Noon")
   })
 
+  it("applies tvgShift before resolving nowProgramme", () => {
+    const programmes = new Map<string, Array<{ start: number; stop: number; title: string; desc: string }>>([
+      [
+        "bbc.one",
+        [{ start: fixedNow + 3_600_000, stop: fixedNow + 7_200_000, title: "News at One", desc: "" }],
+      ],
+    ])
+    const out = serializeChannelsForActivity(
+      [{ id: 1, name: "BBC One", streamUrl: "https://x/bbc.m3u8", tvgId: "bbc.one", tvgShift: -1 }],
+      { programmes, atMs: fixedNow },
+    )
+    expect(out[0].nowProgramme).toBe("Now: News at One")
+  })
+
   it("leaves nowProgramme empty when no programmes provided", () => {
     const out = serializeChannelsForActivity(
       [{ id: 1, name: "A", streamUrl: "https://x/a.m3u8", tvgId: "x.y" }],

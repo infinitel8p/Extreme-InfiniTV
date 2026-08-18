@@ -93,7 +93,7 @@ function buildDialog(
     <button
       data-role="close-x"
       type="button"
-      class="shrink-0 -mt-1 -mr-1 rounded-lg p-2 text-fg-3 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+      class="shrink-0 -mt-1 -mr-1 rounded-lg p-2 text-fg-3 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent">
       ${CLOSE_ICON}
     </button>
   `
@@ -168,7 +168,7 @@ function buildDialog(
   gotItBtn.className =
     "rounded-xl px-4 py-2 text-sm font-semibold bg-accent text-bg " +
     "hover:opacity-90 focus-visible:opacity-90 focus-visible:outline-none " +
-    "focus-visible:ring-2 focus-visible:ring-accent"
+    "focus-visible:ring-1 focus-visible:ring-accent"
   gotItBtn.textContent = t("whatsNew.gotIt")
   footer.appendChild(gotItBtn)
 

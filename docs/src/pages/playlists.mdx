@@ -44,6 +44,12 @@ Got a `.m3u` file instead of a URL? Use **Choose file...** on the login screen t
 
 The login screen's advanced options let you attach one or more **EPG URLs** to a playlist (merged in order, with a **Test sources** button), disable the provider's own EPG, and add **backup domains** (mirrors) for Xtream accounts - if the main server stops responding, the app fails over to the next mirror automatically.
 
+For M3U playlists, the app also picks up EPG sources the playlist itself already points to: if the file lists more than one guide URL (`x-tvg-url`, `tvg-url`, or `url-tvg`, comma-separated), all of them get merged in automatically.
+
+### Personalize a playlist
+
+Still in the login screen's advanced options, you can give a playlist a **Name**, an **Emoji**, and an **Accent color**. The emoji replaces the type badge next to that playlist wherever it's listed, and the accent color overrides the app's accent while that playlist is active - handy for telling accounts apart at a glance.
+
 ## Multiple playlists
 
 You can add as many Xtream accounts and M3U URLs as you want. Open **Settings > Playlists** to add, rename, or remove them. Switch the active one from the sidebar.
@@ -58,6 +64,12 @@ You can also build a channel list of your own: open **Settings > Playlists > New
 
 Many providers ship hundreds of categories you don't want to see ("Adult", regional channels, dead links). Open **Settings > Library > Categories** (or the filter button on Live TV / Movies / Series) to toggle which ones show up. Hidden categories stay hidden across restarts and are remembered per playlist.
 
+For M3U playlists, if a channel's `group-title` lists more than one group separated by semicolons, the app puts that channel in every group listed instead of just the first one.
+
+## Missing channel logos
+
+If a channel doesn't have a logo from your provider, the app fills it in automatically from [iptv-org](https://github.com/iptv-org)'s free, open logo collection. It's fetched once and cached on your device, then matched to your channels by `tvg-id` first, falling back to the channel name.
+
 ## Check on a playlist's health
 
 **Settings > Playlists > Active playlist health** shows your account status (active / expired), the expiry date, how many connections you're using out of your provider's allowance, and when each catalog (live / movies / series / EPG) last loaded successfully. It's the first place to look when something stops loading.
@@ -65,6 +77,8 @@ Many providers ship hundreds of categories you don't want to see ("Adult", regio
 ## EPG looks shifted
 
 If the EPG (now / next, full schedule) looks off by a few hours, your provider is sending timestamps in their own timezone rather than UTC. Open **Settings > Watching > EPG time zone** and adjust **Offset for active playlist**. The full schedule is on the **EPG** page in the sidebar.
+
+For M3U playlists, if just one or two channels look shifted while the rest are fine, the playlist itself may set a `tvg-shift` on those channels - the app honors it for the guide display automatically, no setting needed.
 
 ## Backup and restore
 

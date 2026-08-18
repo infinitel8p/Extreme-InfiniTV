@@ -55,6 +55,15 @@ const documentTitle = pageTitle
         if (isFinite(cw) && cw >= 18 && cw <= 60) {
           document.documentElement.style.setProperty("--xt-channels-w", cw + "rem");
         }
+        var densityMap = { compact: 0.75, comfortable: 1.3 };
+        var densityName = localStorage.getItem("xt_density");
+        if (densityName && densityMap[densityName]) {
+          document.documentElement.style.setProperty("--xt-density", String(densityMap[densityName]));
+          document.documentElement.setAttribute("data-density", densityName);
+        }
+        if (localStorage.getItem("xt_sidebar_collapsed") === "1") {
+          document.documentElement.setAttribute("data-sidebar-collapsed", "");
+        }
         // Auto-enable perf mode on TV / Leanback devices
         var perfStored = localStorage.getItem("xt_perf_mode");
         if (perfStored === null) {
@@ -199,6 +208,12 @@ const documentTitle = pageTitle
         var storedAccent = localStorage.getItem("xt_accent") || "";
         if (storedAccent && storedAccent !== "fuchsia" && KNOWN_ACCENTS.indexOf(storedAccent) !== -1) {
           document.documentElement.setAttribute("data-accent", storedAccent);
+        }
+        // Per-playlist override cache (playlist-accent.ts) wins over xt_accent.
+        var activeAccentOverride = localStorage.getItem("xt_accent_active") || "";
+        if (activeAccentOverride && KNOWN_ACCENTS.indexOf(activeAccentOverride) !== -1) {
+          if (activeAccentOverride === "fuchsia") document.documentElement.removeAttribute("data-accent");
+          else document.documentElement.setAttribute("data-accent", activeAccentOverride);
         }
 
         function applyAndroidStatusBar(theme) {
@@ -378,9 +393,10 @@ const documentTitle = pageTitle
     }
   }
 
-  :is(a, button, input, summary, [tabindex]):focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: 0;
+  /* Inset so scroll containers can't clip it; html.xt-glide-tracking suppresses it. */
+  :is(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: -1px;
   }
 
   #xt-app-splash {
@@ -780,10 +796,21 @@ const documentTitle = pageTitle
   import { mountCompositingTrialPrompt } from "@/scripts/lib/compositing"
   import { initUiSounds } from "@/scripts/lib/ui-sounds"
   import { initHaptics } from "@/scripts/lib/haptics"
+  import { initPlaylistAccent } from "@/scripts/lib/playlist-accent"
+  import { logSessionSnapshot } from "@/scripts/lib/diagnostic-snapshot"
   initI18n()
   initConnectivity()
   initUiSounds()
   initHaptics()
+  initPlaylistAccent()
+
+  // Waits for idle rather than competing with first paint; short timeout plus the pagehide
+  // flush in diagnostic-snapshot.ts means a fast navigation still gets logged.
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(() => { logSessionSnapshot() }, { timeout: 300 })
+  } else {
+    setTimeout(() => { logSessionSnapshot() }, 150)
+  }
 
   ;(function dismissSplash() {
     // ?splash-hold forces the splash and keeps it up for visual review

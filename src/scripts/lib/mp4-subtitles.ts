@@ -76,7 +76,7 @@ function isHttpUrl(url: string): boolean {
 
 async function rangedFetch(url: string, start: number, end: number, signal?: AbortSignal): Promise<Response> {
   const init: RequestInit = { headers: { Range: `bytes=${start}-${end}` }, signal }
-  return isHttpUrl(url) ? providerFetch(url, init) : fetch(url, init)
+  return isHttpUrl(url) ? providerFetch(url, { ...init, logKind: "media" }) : fetch(url, init)
 }
 
 function parseTotalSizeFromContentRange(contentRange: string | null): number | null {

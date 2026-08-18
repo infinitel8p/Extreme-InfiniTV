@@ -396,7 +396,7 @@ async function runDownloadAndroid(id, item, controller) {
   try {
     updateItem(id, { status: "downloading", bytesDone: 0, error: "" })
 
-    const res = await providerFetch(item.url, { signal: controller.signal })
+    const res = await providerFetch(item.url, { signal: controller.signal, logKind: "media" })
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
     const total = Number(res.headers.get("content-length") || 0)
     updateItem(id, { bytesTotal: total, bytesDone: 0 })
@@ -531,6 +531,7 @@ async function runDownload(id) {
     const res = await providerFetch(item.url, {
       signal: controller.signal,
       headers,
+      logKind: "media",
     })
 
     // 416 = Range Not Satisfiable. If we already have everything, treat as done.

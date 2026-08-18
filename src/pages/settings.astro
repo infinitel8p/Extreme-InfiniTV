@@ -24,6 +24,7 @@ import {
   IconFilter,
   IconStar,
   IconArchive,
+  IconFileZip,
   IconDatabase,
   IconBrandDiscord,
   IconInfoCircle,
@@ -39,6 +40,10 @@ import {
   IconExternalLink,
   IconRestore,
   IconLicense,
+  IconMovie,
+  IconEye,
+  IconEyeOff,
+  IconActivity,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -68,6 +73,8 @@ const navStructure: NavSection[] = [
   { id: "settings-network", labelKey: "settings.group.network", label: "Network", cards: [
     { id: "card-network",          labelKey: "settings.network.title", label: "Network" },
     { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
+    { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "TMDb metadata" },
+    { id: "card-net-log",          labelKey: "settings.netLog.title",  label: "Network log", conditional: true },
   ]},
   { id: "settings-library", labelKey: "settings.group.library", label: "Library", cards: [
     { id: "card-categories", labelKey: "settings.categories.title",        label: "Categories" },
@@ -81,7 +88,7 @@ const navStructure: NavSection[] = [
   { id: "settings-about", labelKey: "settings.group.about", label: "About", cards: [
     { id: "update-section",    labelKey: "settings.nav.appUpdate",  label: "App update" },
     { id: "changelog-section", labelKey: "settings.about.whatsNew", label: "What's new" },
-    { id: "licenses-section",  labelKey: "settings.licenses.title", label: "Open-source licenses" },
+    { id: "licenses-section",  labelKey: "settings.licenses.title", label: "Licenses and attribution" },
   ]},
   { id: "settings-help", labelKey: "settings.group.help", label: "Help & feedback", cards: [
     { id: "card-docs",        labelKey: "settings.help.docsTitle",  label: "Read the docs" },
@@ -311,6 +318,7 @@ const navStructure: NavSection[] = [
                   <span data-i18n="settings.accent.label" class="text-sm font-medium leading-snug">Accent color</span>
                 </div>
                 <div class="settings-row__control">
+                <div class="flex flex-col items-end gap-2">
                   <div
                     id="settings-accent"
                     class="flex flex-wrap justify-end gap-2"
@@ -339,6 +347,10 @@ const navStructure: NavSection[] = [
                       <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
                     </button>
                   </div>
+                  <p id="settings-accent-override-hint" data-i18n="settings.accent.overrideHint" class="hidden text-xs text-fg-3 text-right">
+                    The active playlist overrides this color.
+                  </p>
+                </div>
                 </div>
               </div>
 
@@ -356,10 +368,32 @@ const navStructure: NavSection[] = [
                     role="radiogroup"
                     data-i18n-attr="aria-label:settings.fontScale.label"
                     aria-label="Font scale">
+                    <button type="button" data-scale="0.875" aria-pressed="false" data-i18n="settings.fontScale.small" class="font-scale-btn btn">Small</button>
                     <button type="button" data-scale="1"     aria-pressed="false" data-i18n="settings.fontScale.default" class="font-scale-btn btn">Default</button>
                     <button type="button" data-scale="1.125" aria-pressed="false" data-i18n="settings.fontScale.medium" class="font-scale-btn btn">Medium</button>
                     <button type="button" data-scale="1.25"  aria-pressed="false" data-i18n="settings.fontScale.large" class="font-scale-btn btn">Large</button>
                     <button type="button" data-scale="1.5"   aria-pressed="false" data-i18n="settings.fontScale.xlarge" class="font-scale-btn btn">X-Large</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row__text">
+                  <span data-i18n="settings.density.label" class="text-sm font-medium leading-snug">Density</span>
+                  <p data-i18n="settings.density.helper" class="text-xs text-fg-3">
+                    Tightens or loosens spacing in lists and menus. Independent of font scale.
+                  </p>
+                </div>
+                <div class="settings-row__control">
+                  <div
+                    id="settings-density"
+                    class="settings-seg"
+                    role="radiogroup"
+                    data-i18n-attr="aria-label:settings.density.label"
+                    aria-label="Density">
+                    <button type="button" data-density="compact"     aria-pressed="false" data-i18n="settings.density.compact" class="density-btn btn">Compact</button>
+                    <button type="button" data-density="cozy"        aria-pressed="false" data-i18n="settings.density.cozy" class="density-btn btn">Cozy</button>
+                    <button type="button" data-density="comfortable" aria-pressed="false" data-i18n="settings.density.comfortable" class="density-btn btn">Comfortable</button>
                   </div>
                 </div>
               </div>
@@ -373,6 +407,15 @@ const navStructure: NavSection[] = [
                     for (var i = 0; i < fontScaleBtns.length; i++) {
                       var btnScale = parseFloat(fontScaleBtns[i].getAttribute("data-scale") || "1");
                       fontScaleBtns[i].setAttribute("aria-pressed", Math.abs(btnScale - savedFontScale) < 0.001 ? "true" : "false");
+                    }
+                  }
+                  var savedDensity = localStorage.getItem("xt_density") || "cozy";
+                  if (savedDensity !== "compact" && savedDensity !== "cozy" && savedDensity !== "comfortable") savedDensity = "cozy";
+                  var densityGroup = document.getElementById("settings-density");
+                  if (densityGroup) {
+                    var densityBtns = densityGroup.querySelectorAll(".density-btn");
+                    for (var densityIndex = 0; densityIndex < densityBtns.length; densityIndex++) {
+                      densityBtns[densityIndex].setAttribute("aria-pressed", densityBtns[densityIndex].getAttribute("data-density") === savedDensity ? "true" : "false");
                     }
                   }
                   var currentTheme = localStorage.getItem("xt_theme") || "system";
@@ -582,10 +625,10 @@ const navStructure: NavSection[] = [
             </span>
             <h3 data-i18n="settings.hubStrips.title" class="text-base font-semibold">Home page sections</h3>
           </div>
-          <p data-i18n="settings.hubStrips.helper" class="text-xs text-fg-3 px-5 sm:px-6">
+          <p data-i18n="settings.hubStrips.helper" class="settings-surface__helper text-xs text-fg-3">
             Choose which sections appear on your home page and what order they're in.
           </p>
-          <div class="p-5 sm:p-6 pt-3">
+          <div class="px-5 sm:px-6 pb-5 sm:pb-6">
             <HubStripsEditor client:load />
           </div>
         </div>
@@ -751,6 +794,33 @@ const navStructure: NavSection[] = [
               </div>
             </details>
 
+            <div id="card-lang-grouping" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.langGrouping.title" class="text-sm font-medium leading-snug">Group language variants</h3>
+                <p data-i18n="settings.langGrouping.hint" class="text-xs text-fg-3">
+                  Combine copies of the same title in different languages into one entry. Turn off if titles are grouped incorrectly for your provider.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <select id="lang-grouping-select" class="field-input">
+                  <option value="on" data-i18n="settings.langGrouping.on">On</option>
+                  <option value="off" data-i18n="settings.langGrouping.off">Off</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="card-content-language" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.contentLang.title" class="text-sm font-medium leading-snug">Preferred audio language</h3>
+                <p data-i18n="settings.contentLang.hint" class="text-xs text-fg-3">
+                  When a title exists in several languages, open and recommend this one first. Auto follows the interface language.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <select id="content-lang-select" class="field-input"></select>
+              </div>
+            </div>
+
             <!-- HEVC extension install: Windows desktop only, unhidden by the script below -->
             <div id="card-hevc" data-settings-item class="settings-row hidden scroll-mt-6 lg:scroll-mt-20">
               <div class="settings-row__text">
@@ -795,6 +865,41 @@ const navStructure: NavSection[] = [
                     for (var mIdx = 0; mIdx < monoAudioBtns.length; mIdx++) {
                       var monoAudioBtnOn = monoAudioBtns[mIdx].getAttribute("data-mono") === "on";
                       monoAudioBtns[mIdx].setAttribute("aria-pressed", monoAudioBtnOn === monoAudioOn ? "true" : "false");
+                    }
+                  }
+                } catch (e) {}
+              </script>
+            </div>
+
+            <!-- Captions auto: turns on subtitles at playback start when the title has them -->
+            <div id="card-captions-auto" data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.captionsAuto.title" class="text-sm font-medium leading-snug">Captions on by default</h3>
+                <p data-i18n="settings.captionsAuto.helperLong" class="text-xs text-fg-3">
+                  Automatically turns on subtitles when a movie or episode has them, preferring your app language. You can still turn them off in the player. Applies to this device.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-captions-auto"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Captions on by default"
+                  data-i18n-attr="aria-label:settings.captionsAuto.label">
+                  <button type="button" data-captions="on"  aria-pressed="false" data-i18n="settings.captionsAuto.on"  class="captions-auto-btn btn">On</button>
+                  <button type="button" data-captions="off" aria-pressed="false" data-i18n="settings.captionsAuto.off" class="captions-auto-btn btn">Off</button>
+                </div>
+              </div>
+              <script is:inline>
+                try {
+                  var captionsAutoRaw = localStorage.getItem("xt_captions_auto");
+                  var captionsAutoOn = captionsAutoRaw === "1";
+                  var captionsAutoGroup = document.getElementById("settings-captions-auto");
+                  if (captionsAutoGroup) {
+                    var captionsAutoBtns = captionsAutoGroup.querySelectorAll(".captions-auto-btn");
+                    for (var cIdx = 0; cIdx < captionsAutoBtns.length; cIdx++) {
+                      var captionsAutoBtnOn = captionsAutoBtns[cIdx].getAttribute("data-captions") === "on";
+                      captionsAutoBtns[cIdx].setAttribute("aria-pressed", captionsAutoBtnOn === captionsAutoOn ? "true" : "false");
                     }
                   }
                 } catch (e) {}
@@ -895,6 +1000,28 @@ const navStructure: NavSection[] = [
               </div>
             </div>
 
+            <!-- Developer mode: unlocks the network log card below -->
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.devMode.title" class="text-sm font-medium leading-snug">Developer mode</h3>
+                <p id="settings-dev-mode-helper" data-i18n="settings.devMode.helperLong" class="text-xs text-fg-3">
+                  Unlocks a network log of recent provider requests, useful when troubleshooting a connection issue. Off by default.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-dev-mode"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Developer mode"
+                  aria-describedby="settings-dev-mode-helper"
+                  data-i18n-attr="aria-label:settings.devMode.label">
+                  <button type="button" role="radio" data-dev="on"  aria-checked="false" data-i18n="settings.devMode.on"  class="dev-mode-btn btn">On</button>
+                  <button type="button" role="radio" data-dev="off" aria-checked="false" data-i18n="settings.devMode.off" class="dev-mode-btn btn">Off</button>
+                </div>
+              </div>
+            </div>
+
             <!-- Discord Rich Presence: desktop-only, unhidden by the script below -->
             <details id="discord-rpc-section" data-settings-item class="hidden group scroll-mt-6 lg:scroll-mt-20">
               <summary class="settings-row cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
@@ -931,6 +1058,166 @@ const navStructure: NavSection[] = [
           </div>
         </div>
 
+        <!-- Surface: TMDb metadata enrichment -->
+        <div id="card-tmdb" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
+            <span class="icon-mark">
+              <IconMovie aria-hidden="true" stroke={2} />
+            </span>
+            <h3 data-i18n="settings.tmdb.title" class="text-base font-semibold">TMDb metadata</h3>
+          </div>
+          <p data-i18n="settings.tmdb.helper" class="settings-surface__helper text-xs text-fg-3">
+            Enrich movies and series with better posters, cast, trailers, and similar titles from The Movie Database.
+          </p>
+          <div class="settings-rows">
+
+            <!-- Enable enrichment -->
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.tmdb.enable" class="text-sm font-medium leading-snug">Enable enrichment</h3>
+                <p data-i18n="settings.tmdb.privacy" class="text-xs text-fg-3">
+                  When enabled, the titles you open are sent to TMDB for matching.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-tmdb-enabled"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Enable enrichment"
+                  data-i18n-attr="aria-label:settings.tmdb.enable">
+                  <button type="button" data-tmdb="on"  aria-pressed="false" data-i18n="settings.tmdb.on"  class="tmdb-enabled-btn btn">On</button>
+                  <button type="button" data-tmdb="off" aria-pressed="false" data-i18n="settings.tmdb.off" class="tmdb-enabled-btn btn">Off</button>
+                </div>
+              </div>
+              <script is:inline>
+                try {
+                  var tmdbEnabledRaw = localStorage.getItem("xt_tmdb_enabled");
+                  var tmdbEnabledOn = tmdbEnabledRaw === "1";
+                  var tmdbEnabledGroup = document.getElementById("settings-tmdb-enabled");
+                  if (tmdbEnabledGroup) {
+                    var tmdbEnabledBtns = tmdbEnabledGroup.querySelectorAll(".tmdb-enabled-btn");
+                    for (var tIdx = 0; tIdx < tmdbEnabledBtns.length; tIdx++) {
+                      var tmdbEnabledBtnOn = tmdbEnabledBtns[tIdx].getAttribute("data-tmdb") === "on";
+                      tmdbEnabledBtns[tIdx].setAttribute("aria-pressed", tmdbEnabledBtnOn === tmdbEnabledOn ? "true" : "false");
+                    }
+                  }
+                } catch (e) {}
+              </script>
+            </div>
+
+            <!-- API key -->
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.tmdb.apiKey" class="text-sm font-medium leading-snug">API key</h3>
+                <p class="text-xs text-fg-3">
+                  <span data-i18n="settings.tmdb.apiKeyHelper">Paste a free TMDB API key or v4 access token.</span>
+                  <a
+                    href="https://www.themoviedb.org/settings/api"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-external
+                    data-i18n="settings.tmdb.getKey"
+                    class="text-accent underline ms-1">Get a key at themoviedb.org</a>
+                </p>
+              </div>
+              <div class="settings-row__control w-full @2xl:w-96 flex-col items-stretch gap-1">
+                <div class="flex gap-2">
+                  <input
+                    id="settings-tmdb-key"
+                    type="password"
+                    autocomplete="off"
+                    spellcheck="false"
+                    class="field-input font-mono flex-1 min-w-0"
+                  />
+                  <button
+                    id="settings-tmdb-reveal"
+                    type="button"
+                    class="btn flex-none w-11 justify-center p-0"
+                    aria-label="Show key"
+                    data-i18n-attr="aria-label:settings.tmdb.reveal">
+                    <IconEye aria-hidden="true" class="btn-icon" data-tmdb-reveal-icon="show" />
+                    <IconEyeOff aria-hidden="true" class="btn-icon hidden" data-tmdb-reveal-icon="hide" />
+                  </button>
+                  <button id="settings-tmdb-test" type="button" class="btn flex-none w-auto justify-center">
+                    <span data-i18n="settings.tmdb.test">Test key</span>
+                  </button>
+                </div>
+                <span
+                  id="settings-tmdb-msg"
+                  aria-live="polite"
+                  class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+              </div>
+            </div>
+
+          </div>
+          <p class="text-2xs text-fg-3 px-5 sm:px-6 pb-5 sm:pb-6 -mt-1">
+            This product uses the TMDB API but is not endorsed or certified by TMDB.
+          </p>
+        </div>
+
+        <!-- Network log: developer-mode only, unhidden by the script below -->
+        <details id="card-net-log" data-settings-item class="changelog-outer settings-surface icon-mark-host group hidden scroll-mt-6 lg:scroll-mt-20">
+          <summary class="settings-surface__header cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden pb-5 sm:pb-6">
+            <span class="icon-mark">
+              <IconActivity aria-hidden="true" stroke={2} />
+            </span>
+            <h3 data-i18n="settings.netLog.title" class="text-base font-semibold">Network log</h3>
+            <span class="ms-auto shrink-0">
+              <IconChevronDown
+                aria-hidden="true"
+                stroke={1.75}
+                class="size-4 text-fg-3 shrink-0 changelog-chevron transition-transform duration-200" />
+            </span>
+          </summary>
+          <div class="flex flex-col gap-3 px-5 sm:px-6 pb-5 sm:pb-6 pt-4 sm:pt-5 border-t border-line/60">
+
+            <p data-i18n="settings.netLog.helper" class="text-xs text-fg-3">
+              Recent provider requests, with credentials stripped. Kept for this app session only and cleared when you close the app.
+            </p>
+
+            <div class="flex flex-wrap items-center gap-2">
+              <button id="net-log-clear" type="button" class="btn">
+                <IconTrash aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.netLog.clear">Clear</span>
+              </button>
+              <select
+                id="net-log-kind-filter"
+                class="field-input w-auto"
+                data-i18n-attr="aria-label:settings.netLog.kindFilter"
+                aria-label="Filter by kind">
+                <option value="all" data-i18n="settings.netLog.kind.all">All kinds</option>
+                <option value="api" data-i18n="settings.netLog.kind.api">API</option>
+                <option value="playlist" data-i18n="settings.netLog.kind.playlist">Playlist</option>
+                <option value="epg" data-i18n="settings.netLog.kind.epg">EPG</option>
+                <option value="image" data-i18n="settings.netLog.kind.image">Image</option>
+                <option value="media" data-i18n="settings.netLog.kind.media">Media</option>
+                <option value="update" data-i18n="settings.netLog.kind.update">Update</option>
+                <option value="other" data-i18n="settings.netLog.kind.other">Other</option>
+              </select>
+              <label class="inline-flex items-center gap-2 min-h-11 px-1 cursor-pointer">
+                <input id="net-log-include-images" type="checkbox" class="size-4 accent-accent" />
+                <span data-i18n="settings.netLog.includeImages" class="text-xs text-fg-2">Include image requests</span>
+              </label>
+              <button id="net-log-copy" type="button" class="btn ms-auto">
+                <IconDeviceFloppy aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.netLog.copyJson">Copy as JSON</span>
+              </button>
+            </div>
+
+            <div id="net-log-rows" class="flex flex-col divide-y divide-line/60 rounded-xl border border-line bg-bg overflow-hidden empty:hidden"></div>
+
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+              <p id="net-log-count" class="text-2xs text-fg-3 tabular-nums"></p>
+              <span
+                id="net-log-msg"
+                aria-live="polite"
+                class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+            </div>
+
+          </div>
+        </details>
+
       </div>
     </section>
 
@@ -956,7 +1243,7 @@ const navStructure: NavSection[] = [
               the picker and the main grid on Live TV, Movies, and Series.
             </span>
           </summary>
-          <div class="px-5 sm:px-6 pb-5 pt-1">
+          <div class="px-5 sm:px-6 pb-5 sm:pb-6 pt-1">
             <HiddenCategoriesEditor client:load />
           </div>
         </details>
@@ -978,7 +1265,7 @@ const navStructure: NavSection[] = [
               the per-page favorites filter follow this order.
             </span>
           </summary>
-          <div class="px-5 sm:px-6 pb-5 pt-1">
+          <div class="px-5 sm:px-6 pb-5 sm:pb-6 pt-1">
             <FavoritesReorder client:load />
           </div>
         </details>
@@ -1166,7 +1453,7 @@ const navStructure: NavSection[] = [
                 <span id="settings-cache-size" class="text-fg tabular-nums">-</span>
                 <span class="text-xs text-fg-3">
                   <span data-i18n="settings.storage.lastUpdated">Last updated</span>
-                  <span id="settings-cache-newest" class="tabular-nums">-</span>
+                  <span id="settings-cache-newest" class="tabular-nums ms-1">-</span>
                 </span>
               </div>
             </div>
@@ -1201,6 +1488,21 @@ const navStructure: NavSection[] = [
                   id="settings-cache-msg"
                   aria-live="polite"
                   class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+              </div>
+            </div>
+
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.viewingHistory.title" class="text-sm font-medium leading-snug">Clear viewing history</h3>
+                <p data-i18n="settings.viewingHistory.helper" class="text-xs text-fg-3">
+                  Removes continue watching and recently watched items from every playlist. Favorites and watchlist are kept.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <button id="settings-clear-history" type="button" class="btn justify-center">
+                  <IconTrash aria-hidden="true" class="btn-icon" />
+                  <span data-i18n="settings.viewingHistory.clear">Clear history</span>
+                </button>
               </div>
             </div>
 
@@ -1302,7 +1604,7 @@ const navStructure: NavSection[] = [
 
             <div class="settings-row settings-row--stack">
               <div class="settings-row__control w-full">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div class="grid grid-cols-1 gap-2 sm:grid-flow-col sm:auto-cols-fr">
                   <button id="update-check" type="button" class="btn justify-start sm:justify-center">
                     <IconRefresh aria-hidden="true" class="btn-icon" />
                     <span data-i18n="settings.about.checkUpdate">Check for updates</span>
@@ -1340,6 +1642,13 @@ const navStructure: NavSection[] = [
               aria-live="polite"
               class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
             <p id="update-notes" class="hidden text-xs text-fg-3 whitespace-pre-line"></p>
+            <p
+              id="update-degraded"
+              hidden
+              data-i18n="settings.update.updaterUnreachable"
+              class="text-xs text-warn leading-relaxed">
+              Couldn't reach the update server, so in-app install isn't available right now. Use GitHub, or check again in a moment.
+            </p>
             <p
               id="update-manual-only"
               hidden
@@ -1390,7 +1699,7 @@ const navStructure: NavSection[] = [
             <span class="icon-mark">
               <IconLicense aria-hidden="true" stroke={2} />
             </span>
-            <h3 data-i18n="settings.licenses.title" class="text-base font-semibold">Open-source licenses</h3>
+            <h3 data-i18n="settings.licenses.title" class="text-base font-semibold">Licenses and attribution</h3>
             <span class="ms-auto shrink-0">
               <IconChevronDown
                 aria-hidden="true"
@@ -1398,39 +1707,104 @@ const navStructure: NavSection[] = [
                 class="size-4 text-fg-3 shrink-0 changelog-chevron transition-transform duration-200" />
             </span>
           </summary>
-          <div class="flex flex-col gap-3 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60">
-            <p data-i18n="settings.licenses.ffmpegNotice" class="text-sm text-fg-2">
-              The Windows and Linux desktop builds bundle a trimmed FFmpeg build (LGPL v2.1 or later), used only to convert live TV audio the app can't otherwise play.
-            </p>
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <a
-                href="https://ffmpeg.org"
-                target="_blank"
-                rel="noopener noreferrer"
-                data-external
-                class="btn justify-start sm:justify-center">
-                <IconExternalLink aria-hidden="true" class="btn-icon" />
-                <span data-i18n="settings.licenses.ffmpegSite">FFmpeg project</span>
-              </a>
-              <a
-                href="https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html"
-                target="_blank"
-                rel="noopener noreferrer"
-                data-external
-                class="btn justify-start sm:justify-center">
-                <IconExternalLink aria-hidden="true" class="btn-icon" />
-                <span data-i18n="settings.licenses.lgplText">LGPL v2.1 license text</span>
-              </a>
-              <a
-                href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/tag/ffmpeg-sidecar-v2"
-                target="_blank"
-                rel="noopener noreferrer"
-                data-external
-                class="btn justify-start sm:justify-center">
-                <IconBrandGithub aria-hidden="true" class="btn-icon" />
-                <span data-i18n="settings.licenses.sourceRecipe">Source & build recipe</span>
-              </a>
+          <div class="flex flex-col gap-5 px-5 sm:px-6 pb-5 sm:pb-6 pt-1 border-t border-line/60">
+
+            <!-- FFmpeg -->
+            <div class="flex flex-col gap-2">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">FFmpeg</span>
+                <span class="text-2xs uppercase tracking-wide text-fg-3 shrink-0 ms-3">LGPL 2.1+</span>
+              </div>
+              <p data-i18n="settings.licenses.ffmpegNotice" class="text-xs text-fg-3">
+                The Windows and Linux desktop builds bundle a trimmed FFmpeg build (LGPL v2.1 or later), used only to convert live TV audio the app can't otherwise play.
+              </p>
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <a
+                  href="https://ffmpeg.org"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  class="btn justify-start sm:justify-center">
+                  <IconExternalLink aria-hidden="true" class="btn-icon" />
+                  <span data-i18n="settings.licenses.ffmpegSite">FFmpeg project</span>
+                </a>
+                <a
+                  href="https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  class="btn justify-start sm:justify-center">
+                  <IconExternalLink aria-hidden="true" class="btn-icon" />
+                  <span data-i18n="settings.licenses.lgplText">LGPL v2.1 license text</span>
+                </a>
+                <a
+                  href="https://github.com/infinitel8p/Extreme-InfiniTV/releases/tag/ffmpeg-sidecar-v2"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  class="btn justify-start sm:justify-center">
+                  <IconBrandGithub aria-hidden="true" class="btn-icon" />
+                  <span data-i18n="settings.licenses.sourceRecipe">Source & build recipe</span>
+                </a>
+              </div>
             </div>
+
+            <!-- TMDB -->
+            <div class="flex flex-col gap-1">
+              <span class="text-sm font-medium text-fg">TMDB</span>
+              <p class="text-xs text-fg-3">
+                This product uses the TMDB API but is not endorsed or certified by TMDB.
+                <a
+                  href="https://www.themoviedb.org/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  class="text-accent underline ms-1">themoviedb.org</a>
+              </p>
+            </div>
+
+            <!-- Playback engines -->
+            <div class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">hls.js · mpegts.js · Shaka Player · Video.js · ArtPlayer</span>
+                <span class="text-2xs uppercase tracking-wide text-fg-3 shrink-0 ms-3">APACHE-2.0 · MIT</span>
+              </div>
+              <p class="text-xs text-fg-3">
+                <span data-i18n="settings.licenses.mpegtsPatch">mpegts.js ships with a small audio-track fallback patch.</span>
+                <a
+                  href="https://github.com/infinitel8p/Extreme-InfiniTV/blob/main/patches/mpegts.js.patch"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  data-i18n="settings.licenses.patchFile"
+                  class="text-accent underline ms-1">View patch</a>
+              </p>
+            </div>
+
+            <!-- Fonts -->
+            <div class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">Geist Variable · Instrument Serif</span>
+                <a
+                  href="https://scripts.sil.org/OFL"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-external
+                  data-i18n="settings.licenses.oflText"
+                  class="text-2xs uppercase tracking-wide text-accent underline shrink-0 ms-3">SIL OFL</a>
+              </div>
+              <p data-i18n="settings.licenses.fontsNotice" class="text-xs text-fg-3">Self-hosted typefaces.</p>
+            </div>
+
+            <!-- Framework -->
+            <div class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">Tauri · Tabler Icons</span>
+                <span class="text-2xs uppercase tracking-wide text-fg-3 shrink-0 ms-3">MIT / APACHE-2.0</span>
+              </div>
+              <p data-i18n="settings.licenses.uiNotice" class="text-xs text-fg-3">App framework and icon set.</p>
+            </div>
+
           </div>
         </details>
       </div>
@@ -1447,10 +1821,10 @@ const navStructure: NavSection[] = [
             </span>
             <h3 data-i18n="settings.help.docsTitle" class="text-base font-semibold">Read the docs</h3>
           </div>
-          <p data-i18n="settings.help.docsIntro" class="px-5 sm:px-6 pt-1 text-xs text-fg-3">
+          <p data-i18n="settings.help.docsIntro" class="settings-surface__helper text-xs text-fg-3">
             Step-by-step guides for sign-in, external players, the keyboard and D-pad bindings, and the most common things people get stuck on.
           </p>
-          <div class="px-5 sm:px-6 pb-5 pt-1">
+          <div class="px-5 sm:px-6 pb-5">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <a
                 href="/docs"
@@ -1475,10 +1849,10 @@ const navStructure: NavSection[] = [
             </span>
             <h3 data-i18n="settings.help.title" class="text-base font-semibold">Found a bug or have a suggestion?</h3>
           </div>
-          <p data-i18n="settings.help.intro" class="px-5 sm:px-6 pt-1 text-xs text-fg-3">
+          <p data-i18n="settings.help.intro" class="settings-surface__helper text-xs text-fg-3">
             Bug reports, feature requests, questions, and general feedback all go to GitHub - search existing issues first, or pick a template and open a new one.
           </p>
-          <div class="px-5 sm:px-6 pb-5 pt-1">
+          <div class="px-5 sm:px-6 pb-5">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <a
                 href="https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose"
@@ -1499,6 +1873,17 @@ const navStructure: NavSection[] = [
                 <span data-i18n="settings.help.sendFeedback">Send feedback</span>
               </a>
             </div>
+            <button id="settings-export-diagnostics" type="button" class="btn justify-start sm:justify-center w-full mt-2">
+              <IconFileZip aria-hidden="true" class="btn-icon" />
+              <span data-i18n="settings.help.exportDiagnostics">Export diagnostics</span>
+            </button>
+            <p data-i18n="settings.help.exportDiagnosticsHelper" class="text-xs text-fg-3 mt-2">
+              Save a single file with app and device details, recent network activity, playlist types and the newest log files. Attach it to a bug report so the problem can be traced.
+            </p>
+            <p data-i18n="settings.help.diagnosticsPrivacy" class="text-xs text-fg-3 mt-1">
+              Usernames, passwords and tokens are stripped out. Server names can still appear, so review the file before posting it publicly.
+            </p>
+            <span id="settings-export-diagnostics-msg" aria-live="polite" class="text-xs text-fg-3 break-all transition-opacity duration-300 empty:hidden mt-1 block"></span>
           </div>
         </div>
 
@@ -1509,7 +1894,7 @@ const navStructure: NavSection[] = [
             </span>
             <h3 data-i18n="settings.support.title" class="text-base font-semibold">Like the app?</h3>
           </div>
-          <div class="px-5 sm:px-6 pb-5 pt-1 flex flex-col gap-4">
+          <div class="px-5 sm:px-6 pb-5 pt-4 flex flex-col gap-4">
             <p data-i18n="settings.support.intro" class="text-sm text-fg-2">
               Extreme InfiniTV is free and open source. If it saves you time or sweetens your living-room setup, a small tip helps cover hosting, signing certs, and the next round of features.
             </p>
@@ -1666,7 +2051,8 @@ const navStructure: NavSection[] = [
   <script>
     import { Store } from "@tauri-apps/plugin-store"
     import { log } from "@/scripts/lib/log.js"
-    import { t } from "@/scripts/lib/i18n.js"
+    import { t, LOCALE_EVENT, getActiveLocale, initI18n } from "@/scripts/lib/i18n.js"
+    import { LANGUAGE_TOKENS, languageTagLabel } from "@/scripts/lib/language-tags.ts"
     import { ICON_CHECK } from "@/scripts/lib/icons.ts"
     import {
       getActiveEntry,
@@ -1682,10 +2068,13 @@ const navStructure: NavSection[] = [
       clearAll as clearAllCache,
       hydrate as hydrateCache,
     } from "@/scripts/lib/cache.js"
+    import { clearImageCache } from "@/scripts/lib/img-cache.ts"
     import {
       renderPlaylistRow,
       getPlaylistListEmptyCopy,
     } from "@/scripts/lib/playlist-rows.js"
+    import { clearViewingHistory } from "@/scripts/lib/preferences.js"
+    import { confirmDialog } from "@/scripts/lib/confirm-dialog.ts"
     import { snifferAvailable } from "@/scripts/lib/stream-sniffer.ts"
     import { fetchReleases, renderMarkdown, filterReleasesForDisplay } from "@/scripts/lib/changelog.ts"
     import {
@@ -1695,6 +2084,8 @@ const navStructure: NavSection[] = [
       getPlayStoreUrl,
       getCurrentAppVersion,
       resolveUpdateFeedUrl,
+      withUpdaterRetry,
+      isTransientUpdaterError,
       MS_STORE_UPDATES_URL,
     } from "@/scripts/lib/update-check.js"
     import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
@@ -1723,8 +2114,13 @@ const navStructure: NavSection[] = [
       setHapticsEnabled,
       getMonoAudioEnabled,
       setMonoAudioEnabled,
+      getCaptionsAutoEnabled,
+      setCaptionsAutoEnabled,
       getAccent,
       setAccent,
+      ACCENT_PRESETS,
+      getDensity,
+      setDensity,
       getProgressRetentionDays,
       setProgressRetentionDays,
       getNetworkTimeoutSeconds,
@@ -1733,10 +2129,17 @@ const navStructure: NavSection[] = [
       setUpdateChannel,
       getAutoUpdateEnabled,
       setAutoUpdateEnabled,
+      getContentLanguage,
+      setContentLanguage,
+      getLanguageGroupingEnabled,
+      setLanguageGroupingEnabled,
       getAudioTranscodeAuto,
       setAudioTranscodeAuto,
       getFfmpegPath,
       setFfmpegPath,
+      getDevModeEnabled,
+      setDevModeEnabled,
+      DEV_MODE_EVENT,
     } from "@/scripts/lib/app-settings.js"
     import { playUiSound } from "@/scripts/lib/ui-sounds.ts"
     import { hapticsAvailable, performHaptic } from "@/scripts/lib/haptics.ts"
@@ -1758,6 +2161,13 @@ const navStructure: NavSection[] = [
       DISCORD_RPC_EVENT,
     } from "@/scripts/lib/app-settings.js"
     import { discordRpcSupported } from "@/scripts/lib/discord-rpc.js"
+    import {
+      getTmdbApiKey,
+      setTmdbApiKey,
+      getTmdbEnabled,
+      setTmdbEnabled,
+    } from "@/scripts/lib/app-settings.js"
+    import { validateTmdbKey } from "@/scripts/lib/tmdb.ts"
     import { bindExternalLinks } from "@/scripts/lib/external-link.js"
     import { bindBackupRestore } from "@/scripts/lib/restore-backup.js"
     import {
@@ -1765,9 +2175,18 @@ const navStructure: NavSection[] = [
       loadBackupSnapshot,
       hasBackupSnapshot,
     } from "@/scripts/lib/backup-snapshot.ts"
+    import {
+      getNetworkLog,
+      clearNetworkLog,
+      getNetLogIncludeImages,
+      setNetLogIncludeImages,
+      NET_LOG_EVENT,
+    } from "@/scripts/lib/net-log.ts"
+    import { fmtAgo } from "@/scripts/lib/playlist-health.ts"
+    import { writeClipboardText } from "@/scripts/lib/clipboard.ts"
 
     bindExternalLinks()
-    import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
+    import { toast, toastSuccess, toastError } from "@/scripts/lib/toast.js"
     import {
       getOffsetSetting,
       setOffsetSetting,
@@ -1935,6 +2354,7 @@ const navStructure: NavSection[] = [
     const cacheNewestEl = document.getElementById("settings-cache-newest")
     const cacheMsgEl = document.getElementById("settings-cache-msg")
     const clearCacheBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-clear-cache"))
+    const clearHistoryBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-clear-history"))
     const resetBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-reset-all"))
     const resetMsgEl = document.getElementById("settings-reset-msg")
     const resetDialog = /** @type {HTMLDialogElement|null} */ (document.getElementById("settings-reset-dialog"))
@@ -2144,6 +2564,7 @@ const navStructure: NavSection[] = [
       } catch {}
       try {
         removed = await clearAllCache()
+        removed += await clearImageCache()
         ok = true
         if (removed > 0) {
           toastSuccess(t("settings.toast.cacheCleared"), {
@@ -2166,6 +2587,30 @@ const navStructure: NavSection[] = [
       }
     })
 
+    clearHistoryBtn?.addEventListener("click", async () => {
+      const confirmed = await confirmDialog({
+        title: t("settings.viewingHistory.confirmTitle"),
+        message: t("settings.viewingHistory.confirm"),
+        confirmLabel: t("settings.viewingHistory.clear"),
+        destructive: true,
+      })
+      if (!confirmed) return
+      setLoading(clearHistoryBtn, true)
+      try {
+        const removed = await clearViewingHistory()
+        if (removed > 0) {
+          toastSuccess(t("settings.toast.historyCleared"))
+          flashSuccess(clearHistoryBtn)
+        } else {
+          toast({ title: t("settings.toast.historyEmpty") })
+        }
+      } catch {
+        toastError(t("settings.toast.historyClearFail"))
+      } finally {
+        setLoading(clearHistoryBtn, false)
+      }
+    })
+
     const openLogsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-open-logs"))
     const shareLogsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("settings-share-logs"))
     const isTauriEnv =
@@ -2178,6 +2623,10 @@ const navStructure: NavSection[] = [
         try {
           const { appLogDir } = await import("@tauri-apps/api/path")
           dir = await appLogDir()
+          try {
+            const { invoke } = await import("@tauri-apps/api/core")
+            dir = await invoke("resolve_explorer_path", { path: dir })
+          } catch {}
           const { openPath } = await import("@tauri-apps/plugin-opener")
           await openPath(dir)
         } catch (err) {
@@ -2203,8 +2652,13 @@ const navStructure: NavSection[] = [
       openAppDataBtn.addEventListener("click", async () => {
         try {
           const { appDataDir } = await import("@tauri-apps/api/path")
+          let dir = await appDataDir()
+          try {
+            const { invoke } = await import("@tauri-apps/api/core")
+            dir = await invoke("resolve_explorer_path", { path: dir })
+          } catch {}
           const { openPath } = await import("@tauri-apps/plugin-opener")
-          await openPath(await appDataDir())
+          await openPath(dir)
         } catch (err) {
           log.warn("[settings] open app data folder failed:", err)
           toastError(
@@ -2241,8 +2695,8 @@ const navStructure: NavSection[] = [
     const importInput = /** @type {HTMLInputElement|null} */ (document.getElementById("settings-import-input"))
     const backupMsgEl = document.getElementById("settings-backup-msg")
 
-    async function downloadBlobWeb(name, content) {
-      const blob = new Blob([content], { type: "application/json" })
+    async function downloadBlobWeb(name, content, mime = "application/json") {
+      const blob = new Blob([content], { type: mime })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
@@ -2326,6 +2780,89 @@ const navStructure: NavSection[] = [
         })
       } finally {
         setLoading(exportBtn, false)
+      }
+    })
+
+    // -------------------------
+    // Diagnostics export
+    // -------------------------
+    const exportDiagnosticsBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("settings-export-diagnostics")
+    )
+    const exportDiagnosticsMsgEl = document.getElementById("settings-export-diagnostics-msg")
+
+    exportDiagnosticsBtn?.addEventListener("click", async () => {
+      setLoading(exportDiagnosticsBtn, true)
+      try {
+        const { collectDiagnosticBundle } = await import("@/scripts/lib/diagnostic-bundle.js")
+        const bundle = await collectDiagnosticBundle()
+        let savedTo = ""
+        if (isTauriEnv && isAndroidEnv) {
+          const androidFs = await import("@/scripts/lib/android-fs.js")
+          let pickerError = null
+          try {
+            const written = await androidFs.saveBinaryFile(bundle.filename, bundle.bytes, "application/zip")
+            if (!written) return
+            try {
+              await androidFs.shareFile(written)
+            } catch (shareErr) {
+              log.warn("[settings:export-diagnostics] share failed:", shareErr)
+            }
+          } catch (e) {
+            pickerError = e
+            log.warn(
+              "[settings:export-diagnostics] SAF save picker failed, falling back to public Download/:",
+              e
+            )
+          }
+          if (pickerError) {
+            try {
+              const publicPath = await androidFs.savePublicBinaryFile(
+                bundle.filename,
+                bundle.bytes,
+                "application/zip"
+              )
+              savedTo = publicPath || ""
+            } catch (publicErr) {
+              log.error("[settings:export-diagnostics] public Download/ save failed:", publicErr)
+              toastError(t("settings.toast.diagnosticsExportFail"), {
+                description:
+                  (publicErr && publicErr.message) ||
+                  (pickerError && pickerError.message) ||
+                  "Android FS is not available.",
+                duration: 7000,
+              })
+              return
+            }
+          }
+        } else if (isTauriEnv) {
+          const { save } = await import("@tauri-apps/plugin-dialog")
+          const target = await save({
+            defaultPath: bundle.filename,
+            filters: [{ name: "ZIP", extensions: ["zip"] }],
+          })
+          if (!target) return
+          const { writeFile } = await import("@tauri-apps/plugin-fs")
+          await writeFile(target, bundle.bytes)
+          savedTo = target
+        } else {
+          await downloadBlobWeb(bundle.filename, bundle.bytes, "application/zip")
+        }
+        toastSuccess(t("settings.toast.diagnosticsExported"), {
+          description: savedTo
+            ? `${bundle.fileNames.length} file(s) included - ${savedTo}`
+            : `${bundle.fileNames.length} file(s) included.`,
+          duration: 6000,
+        })
+        flashSuccess(exportDiagnosticsBtn)
+        flashMsg(exportDiagnosticsMsgEl, "Saved.")
+      } catch (e) {
+        log.error("[settings:export-diagnostics] failed:", e)
+        toastError(t("settings.toast.diagnosticsExportFail"), {
+          description: (e && e.message) || "See console.",
+        })
+      } finally {
+        setLoading(exportDiagnosticsBtn, false)
       }
     })
 
@@ -2570,6 +3107,31 @@ const navStructure: NavSection[] = [
     syncFontScaleButtons()
 
     // ---------------------------------------------------------------------
+    // Density: applied inline in <head> on every page load (see
+    // Layout.astro). Here we just expose the picker UI and persist changes.
+    // No preview/animation logic - density flips are discrete.
+    // ---------------------------------------------------------------------
+    const densityGroup = document.getElementById("settings-density")
+    function syncDensityButtons() {
+      const currentDensity = getDensity()
+      for (const densityButton of densityGroup?.querySelectorAll(".density-btn") ||
+        []) {
+        densityButton.setAttribute(
+          "aria-pressed",
+          String(densityButton.dataset.density === currentDensity)
+        )
+      }
+    }
+    densityGroup?.addEventListener("click", (event) => {
+      const clickedElement = /** @type {HTMLElement} */ (event.target)
+      const densityButton = clickedElement.closest(".density-btn")
+      if (!densityButton) return
+      setDensity(densityButton.dataset.density)
+      syncDensityButtons()
+    })
+    syncDensityButtons()
+
+    // ---------------------------------------------------------------------
     // Theme: light / dark / system. Persisted to xt_theme; applied by the
     // inline script in <head> on page load. CSS uses `light-dark()` so the
     // single `colorScheme` property on :root drives the whole palette.
@@ -2651,6 +3213,19 @@ const navStructure: NavSection[] = [
       syncAccentButtons()
     })
     syncAccentButtons()
+
+    // Hint that the active playlist overrides this, so the picker doesn't look broken.
+    const accentOverrideHint = document.getElementById("settings-accent-override-hint")
+    async function syncAccentOverrideHint() {
+      if (!accentOverrideHint) return
+      const active = await getActiveEntry()
+      const hasOverride =
+        typeof active?.accent === "string" && ACCENT_PRESETS.includes(active.accent)
+      accentOverrideHint.classList.toggle("hidden", !hasOverride)
+    }
+    document.addEventListener("xt:active-changed", syncAccentOverrideHint)
+    document.addEventListener("xt:entries-updated", syncAccentOverrideHint)
+    syncAccentOverrideHint()
 
     // ---------------------------------------------------------------------
     // Performance mode: persisted to xt_perf_mode; the inline script in
@@ -2817,6 +3392,67 @@ const navStructure: NavSection[] = [
       syncMonoAudioButtons()
     })
     syncMonoAudioButtons()
+
+    // ---------------------------------------------------------------------
+    // Captions on by default
+    // ---------------------------------------------------------------------
+    const captionsAutoGroup = document.getElementById("settings-captions-auto")
+    function syncCaptionsAutoButtons() {
+      const current = getCaptionsAutoEnabled()
+      for (const btn of captionsAutoGroup?.querySelectorAll(".captions-auto-btn") || []) {
+        const isOn = btn.dataset.captions === "on"
+        btn.setAttribute("aria-pressed", String(isOn === current))
+      }
+    }
+    captionsAutoGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".captions-auto-btn")
+      if (!btn) return
+      setCaptionsAutoEnabled(btn.dataset.captions === "on")
+      syncCaptionsAutoButtons()
+    })
+    syncCaptionsAutoButtons()
+
+    const langGroupingSelectEl = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("lang-grouping-select")
+    )
+    if (langGroupingSelectEl) langGroupingSelectEl.value = getLanguageGroupingEnabled() ? "on" : "off"
+    langGroupingSelectEl?.addEventListener("change", () => {
+      setLanguageGroupingEnabled(langGroupingSelectEl.value === "on")
+    })
+
+    const contentLangSelectEl = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("content-lang-select")
+    )
+    // initI18n() may not have settled yet, so await it before reading locale-dependent labels.
+    async function populateContentLangSelect() {
+      if (!contentLangSelectEl) return
+      await initI18n()
+      contentLangSelectEl.replaceChildren()
+
+      const autoOption = document.createElement("option")
+      autoOption.value = ""
+      autoOption.textContent = t("settings.contentLang.auto")
+      contentLangSelectEl.appendChild(autoOption)
+
+      const activeLocale = getActiveLocale()
+      const languageOptions = Object.keys(LANGUAGE_TOKENS)
+        .map((tag) => ({ tag, label: languageTagLabel(tag, activeLocale) }))
+        .sort((firstOption, secondOption) => firstOption.label.localeCompare(secondOption.label, activeLocale))
+      for (const languageOption of languageOptions) {
+        const option = document.createElement("option")
+        option.value = languageOption.tag
+        option.textContent = `${languageOption.label} (${languageOption.tag})`
+        contentLangSelectEl.appendChild(option)
+      }
+
+      contentLangSelectEl.value = getContentLanguage()
+    }
+    contentLangSelectEl?.addEventListener("change", () => {
+      setContentLanguage(contentLangSelectEl.value)
+    })
+    document.addEventListener(LOCALE_EVENT, populateContentLangSelect)
+    populateContentLangSelect()
 
     // ---------------------------------------------------------------------
     // Audio transcode auto-fix: desktop-only section (visible whether or not
@@ -3196,6 +3832,34 @@ const navStructure: NavSection[] = [
     syncNetTimeoutButtons()
 
     // ---------------------------------------------------------------------
+    // Developer mode: unlocks the network log card below.
+    // ---------------------------------------------------------------------
+    const devModeGroup = document.getElementById("settings-dev-mode")
+    function syncDevModeButtons() {
+      const current = getDevModeEnabled()
+      for (const btn of devModeGroup?.querySelectorAll(".dev-mode-btn") || []) {
+        btn.setAttribute("aria-checked", String((btn.dataset.dev === "on") === current))
+      }
+    }
+    function applyDevModeVisibility() {
+      document.getElementById("card-net-log")?.classList.toggle("hidden", !getDevModeEnabled())
+    }
+    devModeGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".dev-mode-btn")
+      if (!btn) return
+      setDevModeEnabled(btn.dataset.dev === "on")
+      syncDevModeButtons()
+      applyDevModeVisibility()
+    })
+    document.addEventListener(DEV_MODE_EVENT, () => {
+      syncDevModeButtons()
+      applyDevModeVisibility()
+    })
+    syncDevModeButtons()
+    applyDevModeVisibility()
+
+    // ---------------------------------------------------------------------
     // Downloads folder
     // ---------------------------------------------------------------------
     const dirInput = /** @type {HTMLInputElement|null} */ (
@@ -3501,6 +4165,7 @@ const navStructure: NavSection[] = [
     )
     const updateGetLabelEl = document.getElementById("update-get-label")
     const updateManualOnlyEl = document.getElementById("update-manual-only")
+    const updateDegradedEl = document.getElementById("update-degraded")
     const updateProgressWrap = document.getElementById("update-progress-wrap")
     const updateProgressTrack = document.getElementById("update-progress-track")
     const updateProgressBar = document.getElementById("update-progress-bar")
@@ -3729,6 +4394,7 @@ const navStructure: NavSection[] = [
         if (updateLatestEl) updateLatestEl.textContent = t("settings.about.upToDate")
         if (updateMsgEl) updateMsgEl.textContent = t("settings.update.upToDateMsg")
         updateGetBtn?.setAttribute("hidden", "")
+        updateDegradedEl?.setAttribute("hidden", "")
         setUpdateState("up-to-date")
         return
       }
@@ -3760,6 +4426,7 @@ const navStructure: NavSection[] = [
       updateInstallBtn?.setAttribute("hidden", "")
       updateRelaunchBtn?.setAttribute("hidden", "")
       updateGetBtn?.setAttribute("hidden", "")
+      updateDegradedEl?.setAttribute("hidden", "")
       setInstallLabel(t("settings.about.installUpdate"))
       setProgress(null)
       if (updateNotesEl) {
@@ -3769,11 +4436,12 @@ const navStructure: NavSection[] = [
 
       if (canUseTauriUpdater) {
         try {
-          await checkViaTauriUpdater()
+          await withUpdaterRetry(checkViaTauriUpdater)
           updateCheckBtn?.removeAttribute("disabled")
           return
         } catch (e) {
           log.warn("Tauri update check failed, falling back to GitHub check:", e)
+          if (isTransientUpdaterError(e)) updateDegradedEl?.removeAttribute("hidden")
         }
       }
 
@@ -4005,6 +4673,243 @@ const navStructure: NavSection[] = [
         if (discordClientIdInput.value !== next) discordClientIdInput.value = next
       }
     })
+
+    // -------------------------------------------------------------------
+    // TMDb metadata enrichment
+    // -------------------------------------------------------------------
+    const tmdbEnabledGroup = document.getElementById("settings-tmdb-enabled")
+    const tmdbKeyInput = /** @type {HTMLInputElement|null} */ (
+      document.getElementById("settings-tmdb-key")
+    )
+    const tmdbRevealBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("settings-tmdb-reveal")
+    )
+    const tmdbTestBtn = /** @type {HTMLButtonElement|null} */ (
+      document.getElementById("settings-tmdb-test")
+    )
+    const tmdbMsgEl = document.getElementById("settings-tmdb-msg")
+
+    function syncTmdbEnabled() {
+      if (!tmdbEnabledGroup) return
+      const enabled = getTmdbEnabled()
+      for (const btn of tmdbEnabledGroup.querySelectorAll(".tmdb-enabled-btn")) {
+        const isOn = btn.getAttribute("data-tmdb") === "on"
+        btn.setAttribute("aria-pressed", isOn === enabled ? "true" : "false")
+      }
+    }
+    syncTmdbEnabled()
+
+    tmdbEnabledGroup?.addEventListener("click", (event) => {
+      const btn = /** @type {HTMLElement} */ (event.target).closest(".tmdb-enabled-btn")
+      if (!btn) return
+      setTmdbEnabled(btn.getAttribute("data-tmdb") === "on")
+      syncTmdbEnabled()
+    })
+
+    function syncTmdbTestDisabled() {
+      if (tmdbTestBtn) tmdbTestBtn.disabled = !(tmdbKeyInput?.value || "").trim()
+    }
+
+    if (tmdbKeyInput) {
+      tmdbKeyInput.value = getTmdbApiKey()
+      let tmdbSaveTimer = null
+      tmdbKeyInput.addEventListener("input", () => {
+        syncTmdbTestDisabled()
+        if (tmdbSaveTimer) window.clearTimeout(tmdbSaveTimer)
+        tmdbSaveTimer = window.setTimeout(() => {
+          setTmdbApiKey(tmdbKeyInput.value)
+        }, 350)
+      })
+      tmdbKeyInput.addEventListener("blur", () => {
+        if (tmdbSaveTimer) {
+          window.clearTimeout(tmdbSaveTimer)
+          tmdbSaveTimer = null
+        }
+        if (tmdbKeyInput.value !== getTmdbApiKey()) setTmdbApiKey(tmdbKeyInput.value)
+      })
+      syncTmdbTestDisabled()
+    }
+
+    tmdbRevealBtn?.addEventListener("click", () => {
+      if (!tmdbKeyInput) return
+      const revealed = tmdbKeyInput.type === "text"
+      tmdbKeyInput.type = revealed ? "password" : "text"
+      tmdbRevealBtn.setAttribute("aria-label", t(revealed ? "settings.tmdb.reveal" : "settings.tmdb.conceal"))
+      tmdbRevealBtn.querySelector('[data-tmdb-reveal-icon="show"]')?.classList.toggle("hidden", !revealed)
+      tmdbRevealBtn.querySelector('[data-tmdb-reveal-icon="hide"]')?.classList.toggle("hidden", revealed)
+    })
+
+    tmdbTestBtn?.addEventListener("click", async () => {
+      const key = (tmdbKeyInput?.value || getTmdbApiKey() || "").trim()
+      setLoading(tmdbTestBtn, true)
+      try {
+        const result = await validateTmdbKey(key)
+        if (result.ok) {
+          flashMsg(tmdbMsgEl, t("settings.tmdb.testOk"))
+          flashSuccess(tmdbTestBtn)
+        } else if (result.status === 401 || result.status === 403 || result.status === 404) {
+          flashMsg(tmdbMsgEl, t("settings.tmdb.testFail"))
+        } else {
+          flashMsg(tmdbMsgEl, t("settings.tmdb.testNetwork"))
+        }
+      } finally {
+        setLoading(tmdbTestBtn, false)
+      }
+    })
+
+    // -------------------------------------------------------------------
+    // Network log: recent provider requests, dev-mode gated.
+    // -------------------------------------------------------------------
+    const netLogCard = /** @type {HTMLDetailsElement|null} */ (
+      document.getElementById("card-net-log")
+    )
+    const netLogRowsEl = document.getElementById("net-log-rows")
+    const netLogCountEl = document.getElementById("net-log-count")
+    const netLogMsgEl = document.getElementById("net-log-msg")
+    const netLogKindFilterEl = /** @type {HTMLSelectElement|null} */ (
+      document.getElementById("net-log-kind-filter")
+    )
+    const netLogIncludeImagesEl = /** @type {HTMLInputElement|null} */ (
+      document.getElementById("net-log-include-images")
+    )
+    const netLogClearBtn = document.getElementById("net-log-clear")
+    const netLogCopyBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("net-log-copy"))
+
+    const NET_LOG_RENDER_CAP = 100
+    const NET_LOG_BADGE = "shrink-0 px-2 py-0.5 rounded-full text-2xs font-medium bg-surface-2 text-fg-3 uppercase tracking-wide"
+
+    function netLogTone(entry) {
+      if (entry.outcome === "error") return "bad"
+      if (entry.status != null && entry.status >= 500) return "bad"
+      if (entry.outcome === "aborted") return "warn"
+      if (entry.status != null && entry.status >= 400) return "warn"
+      if (entry.outcome === "ok" && entry.status != null && entry.status >= 200 && entry.status < 300) return "good"
+      return "neutral"
+    }
+
+    function netLogRow(entry) {
+      const row = document.createElement("div")
+      row.className = "flex flex-col gap-1 px-3 py-2 text-2xs"
+
+      const tone = netLogTone(entry)
+      const toneClass =
+        tone === "good" ? "text-good" : tone === "warn" ? "text-warn" : tone === "bad" ? "text-bad" : "text-fg-2"
+
+      const metaRow = document.createElement("div")
+      metaRow.className = "flex flex-wrap items-center gap-2"
+
+      const time = document.createElement("span")
+      time.className = "tabular-nums text-fg-3 shrink-0"
+      time.textContent = fmtAgo(entry.startedAt)
+
+      const method = document.createElement("span")
+      method.className = "font-mono text-fg-3 shrink-0"
+      method.textContent = entry.method
+
+      // No HTTP status: show the outcome word, not just a colour, so failure isn't hue-only.
+      const status = document.createElement("span")
+      status.className = `tabular-nums font-medium shrink-0 ${toneClass}`
+      status.textContent = entry.status != null ? String(entry.status) : entry.outcome.toUpperCase()
+
+      const duration = document.createElement("span")
+      duration.className = "tabular-nums text-fg-3 shrink-0"
+      duration.textContent = `${entry.durationMs}ms`
+
+      const kindBadge = document.createElement("span")
+      kindBadge.className = NET_LOG_BADGE
+      kindBadge.textContent = entry.kind
+
+      const transportBadge = document.createElement("span")
+      transportBadge.className = NET_LOG_BADGE
+      transportBadge.textContent = entry.transport
+
+      metaRow.append(time, method, status, duration, kindBadge, transportBadge)
+      row.appendChild(metaRow)
+
+      const url = document.createElement("div")
+      url.className = "font-mono text-fg-2 break-all"
+      url.textContent = entry.url
+      row.appendChild(url)
+
+      if (entry.error) {
+        const errorLine = document.createElement("div")
+        errorLine.className = "text-bad break-all"
+        errorLine.textContent = entry.error
+        row.appendChild(errorLine)
+      }
+
+      return row
+    }
+
+    function netLogCardVisible() {
+      return !!netLogCard && !netLogCard.classList.contains("hidden") && netLogCard.open
+    }
+
+    function repaintNetLog() {
+      if (!netLogRowsEl || !netLogCardVisible()) return
+
+      const snapshot = getNetworkLog()
+      const kindFilter = netLogKindFilterEl?.value || "all"
+      const filtered = kindFilter === "all"
+        ? snapshot.entries
+        : snapshot.entries.filter((entry) => entry.kind === kindFilter)
+      const newestFirst = filtered.slice().reverse().slice(0, NET_LOG_RENDER_CAP)
+
+      netLogRowsEl.replaceChildren()
+      if (!newestFirst.length) {
+        const empty = document.createElement("div")
+        empty.className = "px-4 py-4 text-xs text-fg-3"
+        empty.textContent = t("settings.netLog.empty")
+        netLogRowsEl.appendChild(empty)
+      } else {
+        for (const entry of newestFirst) netLogRowsEl.appendChild(netLogRow(entry))
+      }
+
+      if (netLogCountEl) {
+        const base = t("settings.netLog.count", { count: snapshot.entries.length, capacity: snapshot.capacity })
+        netLogCountEl.textContent = snapshot.dropped > 0
+          ? `${base} ${t("settings.netLog.droppedCount", { count: snapshot.dropped })}`
+          : base
+      }
+    }
+
+    // NET_LOG_EVENT can fire dozens of times a second during a catalog load;
+    // coalesce repaints into one per frame so it doesn't wipe text selection.
+    let netLogRepaintFrame = 0
+    function scheduleNetLogRepaint() {
+      if (netLogRepaintFrame) return
+      netLogRepaintFrame = requestAnimationFrame(() => {
+        netLogRepaintFrame = 0
+        repaintNetLog()
+      })
+    }
+
+    if (netLogIncludeImagesEl) netLogIncludeImagesEl.checked = getNetLogIncludeImages()
+
+    netLogCard?.addEventListener("toggle", repaintNetLog)
+    netLogKindFilterEl?.addEventListener("change", repaintNetLog)
+    netLogIncludeImagesEl?.addEventListener("change", () => {
+      setNetLogIncludeImages(netLogIncludeImagesEl.checked)
+      repaintNetLog()
+    })
+    netLogClearBtn?.addEventListener("click", () => {
+      clearNetworkLog()
+      repaintNetLog()
+      flashMsg(netLogMsgEl, t("settings.netLog.cleared"))
+    })
+    netLogCopyBtn?.addEventListener("click", async () => {
+      try {
+        await writeClipboardText(JSON.stringify(getNetworkLog(), null, 2))
+        toastSuccess(t("settings.netLog.copied"))
+        flashSuccess(netLogCopyBtn)
+      } catch (copyError) {
+        log.warn("[settings] network log copy failed:", copyError)
+        toast({ title: t("toast.copyError"), variant: "warn", duration: 2800 })
+      }
+    })
+    document.addEventListener(NET_LOG_EVENT, scheduleNetLogRepaint)
+    document.addEventListener(LOCALE_EVENT, repaintNetLog)
+    repaintNetLog()
   </script>
 
   <style>

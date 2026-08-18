@@ -14,7 +14,7 @@
 //     nowProgramme:  string,  // "now: <title>" string, may be ""
 //   }
 
-import { getNowNext } from "@/scripts/lib/epg-data.js"
+import { getNowNextForChannel } from "@/scripts/lib/epg-data.js"
 import { t } from "@/scripts/lib/i18n.js"
 
 export interface ChannelInput {
@@ -28,6 +28,8 @@ export interface ChannelInput {
   referer?: string | null
   /** XMLTV channel id used to look up the "now playing" programme. */
   tvgId?: string | null
+  /** Per-channel tvg-shift hours applied to EPG lookups. */
+  tvgShift?: number | null
 }
 
 export interface ChannelLite {
@@ -63,14 +65,19 @@ export interface SerializeOptions {
 
 function programmeLabel(
   programmes: SerializeOptions["programmes"],
-  tvgId: string | null | undefined,
+  channel: ChannelInput,
   atMs: number,
 ): string {
-  if (!programmes || !tvgId) return ""
+  if (!programmes || !channel.tvgId) return ""
   try {
-    // getNowNext is plain JS (epg-data.js) and doesn't enforce the full
-    // Programme type at runtime; pass through unchecked.
-    const { current } = getNowNext(programmes as unknown as never, tvgId, atMs)
+    // getNowNextForChannel is plain JS (epg-data.js) and doesn't enforce the
+    // full Programme/Channel types at runtime; pass through unchecked.
+    const { current } = getNowNextForChannel(
+      programmes as unknown as never,
+      channel as unknown as never,
+      undefined,
+      atMs,
+    )
     return current?.title ? `${t("livetv.now")}: ${current.title}` : ""
   } catch {
     return ""
@@ -97,7 +104,7 @@ export function serializeChannelsForActivity(
       streamUrl: channel.streamUrl,
       ua: channel.ua || defaultUa || "",
       referer: channel.referer || "",
-      nowProgramme: programmeLabel(options.programmes, channel.tvgId, atMs),
+      nowProgramme: programmeLabel(options.programmes, channel, atMs),
     })
   }
   return out

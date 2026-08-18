@@ -1,0 +1,53 @@
+---
+layout: ../layouts/DocsLayout.astro
+title: "TMDb metadata"
+description: "Turn on TMDB enrichment for richer cast, director, and similar-titles info on movies and series."
+lede: "An optional, free add-on that pulls cast, director, and similar-title info from The Movie Database. Off by default."
+---
+
+import Callout from "../components/Callout.astro"
+
+## What it adds
+
+With TMDb metadata turned on, movie and series detail pages show:
+
+- **Cast** and **Director**
+- **Similar titles** you can jump straight to
+
+It's entirely optional. Extreme InfiniTV works fine without it - you just won't see these extra details.
+
+## What works without it
+
+The **Because you watched** row on the home screen doesn't need any of this. It matches titles you've already watched against the rest of your library, right on your device, with no API key and no account required.
+
+## Getting a free API key
+
+TMDB's data is free to use with your own key:
+
+1. Create a free account at [themoviedb.org](https://www.themoviedb.org/).
+2. Open your account settings and go to the **API** section.
+3. Request an API key (the approval is instant for personal use).
+
+You'll end up with two credentials on that page: a short **API key (v3 auth)** and a longer **API read access token (v4 auth)**. Either one works in Extreme InfiniTV - paste whichever you have.
+
+## Turning it on
+
+1. Open **Settings > Network > TMDb metadata**.
+2. Paste your key or token into the **API key** field.
+3. Press **Test key** to confirm it works.
+4. Switch **Enable enrichment** to **On**.
+
+<Callout type="tip">
+  The key field is masked by default. Use the eye icon next to it if you need to check what you pasted.
+</Callout>
+
+## Privacy
+
+When enabled, the titles you open are sent to TMDB for matching - nothing else leaves your device, and only while enrichment is switched on. Turn it off at any time to stop.
+
+This product uses the TMDB API but is not endorsed or certified by TMDB.
+
+## If the key test fails
+
+- **TMDB rejected this key** - the key or token is wrong, expired, or was typed with extra spaces. Copy it again from themoviedb.org and paste it fresh.
+- **Couldn't reach TMDB** - this is a network problem, not the key itself. Check your connection and try again in a moment.

@@ -1,15 +1,18 @@
 // Desktop-only ffmpeg remux proxy for switching a VOD's audio track.
 
 use std::collections::{HashMap, VecDeque};
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
+use futures_util::Stream;
 use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
@@ -18,6 +21,7 @@ use tokio::process::{Child, Command as TokioCommand};
 use tokio::sync::{mpsc, oneshot, Notify};
 
 use crate::external_player;
+use crate::http_range::{range_request_start, ranged_response_is_corrupted};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -29,9 +33,14 @@ const OUTPUT_CHANNEL_CAPACITY: usize = 256;
 const STDERR_RING_CAPACITY: usize = 10;
 const STARTUP_SILENCE_TIMEOUT: Duration = Duration::from_secs(10);
 const STDOUT_STALL_TIMEOUT: Duration = Duration::from_secs(20);
-// Real disconnects close the mpsc channel right away; this only reaps pauses.
-const CLIENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(600);
+// Fires only when no client is attached; a connected-but-slow client gets CLIENT_BACKPRESSURE_TIMEOUT instead.
+const CLIENT_RECONNECT_GRACE: Duration = Duration::from_secs(120);
+// Backstop for a client that stays connected but stops reading; generous enough to survive a long pause.
+const CLIENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 const STALL_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+// A fresh -reconnect attempt gets this long to deliver a byte before the cut is final;
+// comfortably above -reconnect_delay_max so a healing reconnect doesn't lose the race.
+const UPSTREAM_EOF_GRACE: Duration = Duration::from_secs(15);
 
 // --- State ---
 
@@ -94,6 +103,15 @@ struct VodAudioSession {
     last_activity: Mutex<Instant>,
     // True while blocked on send, so a slow consumer isn't read as a stall.
     blocked_on_send: AtomicBool,
+    // Set when teardown came from CLIENT_BACKPRESSURE_TIMEOUT rather than a vanished client.
+    backpressure_timed_out: AtomicBool,
+    // Truncated forward body; a later forward's first byte clears it (reconnect healed).
+    upstream_eof: Mutex<Option<UpstreamEofRecord>>,
+}
+
+struct UpstreamEofRecord {
+    at: Instant,
+    detail: String,
 }
 
 // --- Commands ---
@@ -179,6 +197,8 @@ pub async fn register_vod_audio_remux(
         watchdog_task: Mutex::new(None),
         last_activity: Mutex::new(Instant::now()),
         blocked_on_send: AtomicBool::new(false),
+        backpressure_timed_out: AtomicBool::new(false),
+        upstream_eof: Mutex::new(None),
     });
 
     // Inserted before spawn so ffmpeg's request can resolve this token.
@@ -353,6 +373,27 @@ fn is_loopback_http(url: &str) -> bool {
 
 // --- ffmpeg argv (pure, unit-tested) ---
 
+// -reconnect* are http-protocol options; other inputs must not receive them.
+fn http_input_reconnect_args(input_url: &str) -> Vec<String> {
+    let is_http = tauri::Url::parse(input_url)
+        .map(|parsed| parsed.scheme() == "http" || parsed.scheme() == "https")
+        .unwrap_or(false);
+    if !is_http {
+        return Vec::new();
+    }
+    [
+        "-reconnect",
+        "1",
+        "-reconnect_streamed",
+        "1",
+        "-reconnect_delay_max",
+        "5",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
 fn build_ffmpeg_args(input_url: &str, audio_stream_index: u32, start_seconds: f64, transcode_audio: bool) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-hide_banner".to_string(),
@@ -365,6 +406,12 @@ fn build_ffmpeg_args(input_url: &str, audio_stream_index: u32, start_seconds: f6
         args.push("-ss".to_string());
         args.push(format!("{start_seconds}"));
     }
+    args.extend(http_input_reconnect_args(input_url));
+    // Paces ffmpeg's reads to 1.5x realtime so the WebView's MSE buffer never overflows.
+    args.push("-readrate".to_string());
+    args.push("1.5".to_string());
+    args.push("-readrate_initial_burst".to_string());
+    args.push("30".to_string());
     args.push("-i".to_string());
     args.push(input_url.to_string());
     args.push("-map".to_string());
@@ -691,6 +738,82 @@ async fn handle_live_options() -> Response {
     }
 }
 
+
+// --- Upstream premature-EOF detection (pure, unit-tested) ---
+
+fn expected_forward_body_length(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+}
+
+fn classify_upstream_end(expected_total: Option<u64>, delivered: u64) -> Option<String> {
+    let expected_total = expected_total?;
+    if expected_total == 0 || delivered >= expected_total {
+        return None;
+    }
+    Some(format!(
+        "OTHER:upstream stream ended prematurely at {delivered}/{expected_total} bytes"
+    ))
+}
+
+fn record_upstream_eof(session: &VodAudioSession, detail: String) {
+    let mut guard = session
+        .upstream_eof
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    *guard = Some(UpstreamEofRecord {
+        at: Instant::now(),
+        detail,
+    });
+}
+
+fn clear_upstream_eof(session: &VodAudioSession) {
+    let mut guard = session
+        .upstream_eof
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    *guard = None;
+}
+
+struct DeliveryTrackedStream {
+    inner: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>,
+    session: Arc<VodAudioSession>,
+    expected_total: Option<u64>,
+    delivered: u64,
+    first_byte_seen: bool,
+    ended: bool,
+}
+
+impl Stream for DeliveryTrackedStream {
+    type Item = reqwest::Result<Bytes>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.ended {
+            return Poll::Ready(None);
+        }
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(chunk))) => {
+                self.delivered += chunk.len() as u64;
+                if !self.first_byte_seen {
+                    self.first_byte_seen = true;
+                    clear_upstream_eof(&self.session);
+                }
+                Poll::Ready(Some(Ok(chunk)))
+            }
+            Poll::Ready(other) => {
+                self.ended = true;
+                if let Some(detail) = classify_upstream_end(self.expected_total, self.delivered) {
+                    record_upstream_eof(&self.session, detail);
+                }
+                Poll::Ready(other)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 // Lets the https-less ffmpeg sidecar read a remote https source via loopback.
 async fn handle_forward(
     State(state): State<Arc<ServerState>>,
@@ -719,9 +842,11 @@ async fn handle_forward(
     };
 
     let mut upstream_request = state.client.get(&session.upstream_url);
+    let mut requested_range_start = None;
     if let Some(range) = headers.get(axum::http::header::RANGE) {
         if let Ok(value) = range.to_str() {
             upstream_request = upstream_request.header(reqwest::header::RANGE, value);
+            requested_range_start = range_request_start(value);
         }
     }
     if let Some(ua) = &session.user_agent {
@@ -740,6 +865,13 @@ async fn handle_forward(
     };
 
     let status = upstream_response.status();
+    if let Some(requested_start) = requested_range_start {
+        if ranged_response_is_corrupted(status, upstream_response.headers(), requested_start) {
+            log::warn!("[vod-audio-proxy] upstream sent a 206 starting at the wrong byte for range {requested_start}");
+            return cors_response(StatusCode::BAD_GATEWAY, "upstream range response mismatch");
+        }
+    }
+    let expected_total = expected_forward_body_length(upstream_response.headers());
     let mut response_builder = axum::http::Response::builder().status(status.as_u16());
     for header_name in [
         "content-type",
@@ -752,7 +884,16 @@ async fn handle_forward(
         }
     }
 
-    match response_builder.body(axum::body::Body::from_stream(upstream_response.bytes_stream())) {
+    let tracked_stream = DeliveryTrackedStream {
+        inner: Box::pin(upstream_response.bytes_stream()),
+        session: session.clone(),
+        expected_total,
+        delivered: 0,
+        first_byte_seen: false,
+        ended: false,
+    };
+
+    match response_builder.body(axum::body::Body::from_stream(tracked_stream)) {
         Ok(response) => response,
         Err(error) => {
             log::warn!("[vod-audio-proxy] failed to build forward response: {error}");
@@ -774,6 +915,16 @@ async fn handle_live(
         .unwrap_or(false);
     if !host_ok {
         return cors_response(StatusCode::FORBIDDEN, "forbidden");
+    }
+
+    // `/live` is an unseekable pipe; a Range resume would splice misaligned bytes.
+    if headers
+        .get(axum::http::header::RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(range_request_start)
+        .is_some_and(|start| start != 0)
+    {
+        return cors_response(StatusCode::RANGE_NOT_SATISFIABLE, "resuming mid-stream is not supported");
     }
 
     let session = {
@@ -868,13 +1019,20 @@ fn stop_after_client_disconnect(session: &VodAudioSession) {
 
 // Dropped bytes here would corrupt the TS header.
 async fn send_to_current_client(session: &Arc<VodAudioSession>, chunk: Bytes) {
-    send_to_current_client_with_timeout(session, chunk, CLIENT_BACKPRESSURE_TIMEOUT).await;
+    send_to_current_client_with_timeouts(
+        session,
+        chunk,
+        CLIENT_RECONNECT_GRACE,
+        CLIENT_BACKPRESSURE_TIMEOUT,
+    )
+    .await;
 }
 
-async fn send_to_current_client_with_timeout(
+async fn send_to_current_client_with_timeouts(
     session: &Arc<VodAudioSession>,
     chunk: Bytes,
-    wait_timeout: Duration,
+    reconnect_grace: Duration,
+    backpressure_timeout: Duration,
 ) {
     loop {
         if session.torn_down.load(Ordering::SeqCst) {
@@ -895,13 +1053,14 @@ async fn send_to_current_client_with_timeout(
         // Downstream backpressure, not an ffmpeg stall.
         session.blocked_on_send.store(true, Ordering::SeqCst);
         let Some(sender) = sender else {
-            if tokio::time::timeout(wait_timeout, client_changed).await.is_err() {
+            if tokio::time::timeout(reconnect_grace, client_changed).await.is_err() {
                 stop_after_client_disconnect(session);
                 return;
             }
             continue;
         };
 
+        // Connected-but-slow clients (long pauses) get backpressure_timeout before teardown, not reconnect_grace.
         tokio::select! {
             send_result = sender.send(chunk.clone()) => {
                 session.blocked_on_send.store(false, Ordering::SeqCst);
@@ -930,7 +1089,8 @@ async fn send_to_current_client_with_timeout(
             _ = client_changed => {
                 // A cancelled send never enqueued; the loop resends.
             }
-            _ = tokio::time::sleep(wait_timeout) => {
+            _ = tokio::time::sleep(backpressure_timeout) => {
+                session.backpressure_timed_out.store(true, Ordering::SeqCst);
                 stop_after_client_disconnect(session);
                 return;
             }
@@ -1014,6 +1174,42 @@ async fn wait_for_stdout_stall(session: &Arc<VodAudioSession>) {
     }
 }
 
+// A session still draining ffmpeg's own output to the client is not stuck: child.wait()
+// wins that race once ffmpeg finishes, so this only fires once output has also gone quiet.
+async fn wait_for_upstream_eof_expiry(session: &Arc<VodAudioSession>) -> String {
+    loop {
+        tokio::time::sleep(STALL_CHECK_INTERVAL).await;
+        let expired_detail = {
+            let guard = session
+                .upstream_eof
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            guard.as_ref().and_then(|record| {
+                if record.at.elapsed() >= UPSTREAM_EOF_GRACE {
+                    Some(record.detail.clone())
+                } else {
+                    None
+                }
+            })
+        };
+        let Some(detail) = expired_detail else {
+            continue;
+        };
+        if session.blocked_on_send.load(Ordering::SeqCst) {
+            continue;
+        }
+        let idle_for = session
+            .last_activity
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .elapsed();
+        if idle_for < UPSTREAM_EOF_GRACE {
+            continue;
+        }
+        return detail;
+    }
+}
+
 // Owns the child for its lifetime; teardown wakes it via kill_notify.
 async fn run_watchdog(
     app: AppHandle,
@@ -1070,6 +1266,17 @@ async fn run_watchdog(
                 .await;
                 return;
             }
+            detail = wait_for_upstream_eof_expiry(&session) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                finish_with_error(
+                    &app,
+                    &session,
+                    format!("{detail}{}", stderr_tail_suffix(&session)),
+                )
+                .await;
+                return;
+            }
             _ = session.kill_notify.notified() => {
                 let _ = child.start_kill();
                 let _ = child.wait().await;
@@ -1114,15 +1321,25 @@ async fn emit_client_timeout_if_disconnected(app: &AppHandle, session: &Arc<VodA
     if !session.client_gone.load(Ordering::SeqCst) {
         return;
     }
+    // Distinguishes a vanished client from one that stayed connected but stopped reading.
+    let detail = if session.backpressure_timed_out.load(Ordering::SeqCst) {
+        format!(
+            "TIMEOUT:playback client stopped reading for {}s{}",
+            CLIENT_BACKPRESSURE_TIMEOUT.as_secs(),
+            stderr_tail_suffix(session)
+        )
+    } else {
+        format!(
+            "TIMEOUT:no playback client for {}s{}",
+            CLIENT_RECONNECT_GRACE.as_secs(),
+            stderr_tail_suffix(session)
+        )
+    };
     let _ = app.emit(
         ERROR_EVENT,
         json!({
             "sessionId": session.session_id,
-            "detail": format!(
-                "TIMEOUT:playback client disconnected for {}s{}",
-                CLIENT_BACKPRESSURE_TIMEOUT.as_secs(),
-                stderr_tail_suffix(session)
-            ),
+            "detail": detail,
         }),
     );
 }
@@ -1244,6 +1461,16 @@ mod tests {
                 "-hide_banner",
                 "-loglevel",
                 "warning",
+                "-reconnect",
+                "1",
+                "-reconnect_streamed",
+                "1",
+                "-reconnect_delay_max",
+                "5",
+                "-readrate",
+                "1.5",
+                "-readrate_initial_burst",
+                "30",
                 "-i",
                 "http://127.0.0.1:9000/forward/abc/stream",
                 "-map",
@@ -1276,6 +1503,16 @@ mod tests {
                 "-hide_banner",
                 "-loglevel",
                 "warning",
+                "-reconnect",
+                "1",
+                "-reconnect_streamed",
+                "1",
+                "-reconnect_delay_max",
+                "5",
+                "-readrate",
+                "1.5",
+                "-readrate_initial_burst",
+                "30",
                 "-i",
                 "http://127.0.0.1:9000/forward/abc/stream",
                 "-map",
@@ -1333,6 +1570,68 @@ mod tests {
     }
 
     #[test]
+    fn build_ffmpeg_args_places_reconnect_flags_before_i() {
+        let args = build_ffmpeg_args("http://127.0.0.1:9000/forward/abc/stream", 0, 0.0, false);
+        let reconnect_index = args
+            .iter()
+            .position(|arg| arg == "-reconnect")
+            .expect("-reconnect must be present for an http input");
+        let i_index = args.iter().position(|arg| arg == "-i").expect("-i must be present");
+        assert!(reconnect_index < i_index, "-reconnect must precede -i");
+    }
+
+    #[test]
+    fn build_ffmpeg_args_places_readrate_pacing_flags_before_i() {
+        let args = build_ffmpeg_args("http://127.0.0.1:9000/forward/abc/stream", 0, 0.0, false);
+        let readrate_index = args.iter().position(|arg| arg == "-readrate").expect("-readrate must be present");
+        assert_eq!(args[readrate_index + 1], "1.5");
+        let burst_index = args
+            .iter()
+            .position(|arg| arg == "-readrate_initial_burst")
+            .expect("-readrate_initial_burst must be present");
+        assert_eq!(args[burst_index + 1], "30");
+        let i_index = args.iter().position(|arg| arg == "-i").expect("-i must be present");
+        assert!(readrate_index < i_index, "-readrate must precede -i");
+        assert!(burst_index < i_index, "-readrate_initial_burst must precede -i");
+    }
+
+    #[test]
+    fn build_ffmpeg_args_keeps_readrate_pacing_after_a_seek() {
+        let args = build_ffmpeg_args("http://127.0.0.1:9000/forward/abc/stream", 0, 12.5, false);
+        assert!(
+            args.iter().any(|arg| arg == "-readrate"),
+            "seeking must not drop the pacing flags: readrate applies to post-seek reading"
+        );
+    }
+
+    #[test]
+    fn http_input_reconnect_args_covers_http_and_https() {
+        assert_eq!(
+            http_input_reconnect_args("http://127.0.0.1:9000/forward/abc/stream"),
+            vec!["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+        );
+        assert_eq!(
+            http_input_reconnect_args("https://provider.test/movie.mkv"),
+            vec!["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+        );
+    }
+
+    #[test]
+    fn http_input_reconnect_args_is_empty_for_a_local_file_path() {
+        assert!(http_input_reconnect_args("/Users/example/movie.mkv").is_empty());
+        assert!(http_input_reconnect_args("file:///Users/example/movie.mkv").is_empty());
+    }
+
+    #[test]
+    fn build_ffmpeg_args_omits_reconnect_flags_for_a_local_file_input() {
+        let args = build_ffmpeg_args("/Users/example/movie.mkv", 0, 0.0, false);
+        assert!(
+            !args.iter().any(|arg| arg == "-reconnect"),
+            "-reconnect must be omitted for a non-http input"
+        );
+    }
+
+    #[test]
     fn is_loopback_http_accepts_127_0_0_1() {
         assert!(is_loopback_http("http://127.0.0.1:5173/abc/stream.mkv"));
     }
@@ -1385,6 +1684,29 @@ mod tests {
     fn classify_io_error_prefixes_other() {
         let err = std::io::Error::from(std::io::ErrorKind::Other);
         assert!(classify_io_error(&err).starts_with("OTHER:"));
+    }
+
+    #[test]
+    fn classify_upstream_end_is_none_without_a_content_length() {
+        assert_eq!(classify_upstream_end(None, 1_000), None);
+    }
+
+    #[test]
+    fn classify_upstream_end_is_none_when_delivery_matches_the_declared_length() {
+        assert_eq!(classify_upstream_end(Some(1_000), 1_000), None);
+    }
+
+    #[test]
+    fn classify_upstream_end_is_none_when_the_declared_length_is_zero() {
+        assert_eq!(classify_upstream_end(Some(0), 0), None);
+    }
+
+    #[test]
+    fn classify_upstream_end_flags_a_short_delivery() {
+        assert_eq!(
+            classify_upstream_end(Some(1_000), 400),
+            Some("OTHER:upstream stream ended prematurely at 400/1000 bytes".to_string())
+        );
     }
 
     #[test]
@@ -1524,6 +1846,8 @@ mod tests {
             watchdog_task: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             blocked_on_send: AtomicBool::new(false),
+            backpressure_timed_out: AtomicBool::new(false),
+            upstream_eof: Mutex::new(None),
         });
         assert_eq!(stderr_tail_suffix(&session), "");
     }
@@ -1549,6 +1873,8 @@ mod tests {
             watchdog_task: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             blocked_on_send: AtomicBool::new(false),
+            backpressure_timed_out: AtomicBool::new(false),
+            upstream_eof: Mutex::new(None),
         });
         assert_eq!(
             stderr_tail_suffix(&session),
@@ -1573,6 +1899,8 @@ mod tests {
             watchdog_task: Mutex::new(None),
             last_activity: Mutex::new(Instant::now()),
             blocked_on_send: AtomicBool::new(false),
+            backpressure_timed_out: AtomicBool::new(false),
+            upstream_eof: Mutex::new(None),
         })
     }
 
@@ -1724,10 +2052,11 @@ mod tests {
         let kill_wakeup = session.kill_notify.notified();
         let sending_session = session.clone();
         let send_task = tokio::spawn(async move {
-            send_to_current_client_with_timeout(
+            send_to_current_client_with_timeouts(
                 &sending_session,
                 Bytes::from_static(b"orphaned"),
                 Duration::from_millis(10),
+                Duration::from_secs(3600),
             )
             .await;
         });
@@ -1741,7 +2070,73 @@ mod tests {
             .expect("client timeout must wake the watchdog");
         assert!(session.torn_down.load(Ordering::SeqCst));
         assert!(session.client_gone.load(Ordering::SeqCst));
+        assert!(!session.backpressure_timed_out.load(Ordering::SeqCst));
         assert!(!session.blocked_on_send.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn connected_but_slow_client_survives_within_the_backpressure_window() {
+        let session = test_vod_audio_session();
+        let (sender, _receiver) = mpsc::channel(1);
+        // full channel: backpressure, not a missing client
+        sender
+            .send(Bytes::from_static(b"already queued"))
+            .await
+            .expect("channel should accept its first chunk");
+        set_current_client(&session, sender);
+
+        let sending_session = session.clone();
+        let send_task = tokio::spawn(async move {
+            send_to_current_client_with_timeouts(
+                &sending_session,
+                Bytes::from_static(b"waiting"),
+                Duration::from_millis(10),
+                Duration::from_millis(200),
+            )
+            .await;
+        });
+        wait_until_output_is_backpressured(&session).await;
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!send_task.is_finished(), "a connected client must survive within the backpressure window");
+        assert!(!session.torn_down.load(Ordering::SeqCst));
+
+        send_task.abort();
+    }
+
+    #[tokio::test]
+    async fn connected_but_slow_client_is_torn_down_after_the_backpressure_timeout() {
+        let session = test_vod_audio_session();
+        let (sender, _receiver) = mpsc::channel(1);
+        // full channel: backpressure, not a missing client
+        sender
+            .send(Bytes::from_static(b"already queued"))
+            .await
+            .expect("channel should accept its first chunk");
+        set_current_client(&session, sender);
+        let kill_wakeup = session.kill_notify.notified();
+        let sending_session = session.clone();
+        let send_task = tokio::spawn(async move {
+            send_to_current_client_with_timeouts(
+                &sending_session,
+                Bytes::from_static(b"waiting"),
+                Duration::from_secs(3600),
+                Duration::from_millis(10),
+            )
+            .await;
+        });
+        wait_until_output_is_backpressured(&session).await;
+
+        tokio::time::timeout(Duration::from_millis(500), send_task)
+            .await
+            .expect("a client that never reads again must have a finite wait")
+            .expect("delivery task should not panic");
+        tokio::time::timeout(Duration::from_millis(500), kill_wakeup)
+            .await
+            .expect("the backpressure timeout must wake the watchdog");
+        assert!(session.torn_down.load(Ordering::SeqCst));
+        assert!(session.client_gone.load(Ordering::SeqCst));
+        assert!(session.backpressure_timed_out.load(Ordering::SeqCst));
     }
 
     // Regression test: teardown_io blocking while the watchdog owned the child.
@@ -1760,5 +2155,94 @@ mod tests {
 
         let wake_result = tokio::time::timeout(Duration::from_millis(500), woken).await;
         assert!(wake_result.is_ok(), "kill_notify must wake a task already parked on notified()");
+    }
+
+    #[tokio::test]
+    async fn a_later_forwards_first_byte_clears_a_stale_upstream_eof_record() {
+        use futures_util::StreamExt;
+
+        let session = test_vod_audio_session();
+        record_upstream_eof(&session, "OTHER:stale".to_string());
+
+        let inner = futures_util::stream::iter(vec![Ok::<Bytes, reqwest::Error>(Bytes::from_static(
+            b"chunk",
+        ))]);
+        let mut tracked = DeliveryTrackedStream {
+            inner: Box::pin(inner),
+            session: session.clone(),
+            expected_total: None,
+            delivered: 0,
+            first_byte_seen: false,
+            ended: false,
+        };
+
+        tracked.next().await;
+
+        assert!(
+            session
+                .upstream_eof
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .is_none(),
+            "a fresh byte from a later forward must clear the stale premature-EOF record"
+        );
+    }
+
+    #[tokio::test]
+    async fn premature_upstream_eof_unhealed_past_grace_is_returned_by_the_watchdog_wait() {
+        let session = test_vod_audio_session();
+        {
+            let mut guard = session
+                .upstream_eof
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            *guard = Some(UpstreamEofRecord {
+                at: Instant::now() - UPSTREAM_EOF_GRACE - Duration::from_millis(1),
+                detail: "OTHER:upstream stream ended prematurely at 400/1000 bytes".to_string(),
+            });
+        }
+        {
+            // No recent stdout activity either: ffmpeg is genuinely stuck, not draining.
+            let mut guard = session
+                .last_activity
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            *guard = Instant::now() - UPSTREAM_EOF_GRACE - Duration::from_millis(1);
+        }
+
+        let detail = tokio::time::timeout(
+            Duration::from_millis(1500),
+            wait_for_upstream_eof_expiry(&session),
+        )
+        .await
+        .expect("an unhealed premature-EOF record past grace must resolve");
+
+        assert_eq!(detail, "OTHER:upstream stream ended prematurely at 400/1000 bytes");
+    }
+
+    #[tokio::test]
+    async fn premature_upstream_eof_does_not_fire_while_ffmpeg_output_is_still_draining() {
+        let session = test_vod_audio_session();
+        {
+            let mut guard = session
+                .upstream_eof
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            *guard = Some(UpstreamEofRecord {
+                at: Instant::now() - UPSTREAM_EOF_GRACE - Duration::from_millis(1),
+                detail: "OTHER:upstream stream ended prematurely at 400/1000 bytes".to_string(),
+            });
+        }
+        // last_activity stays fresh (default = session creation time): ffmpeg is still
+        // producing output, so the expiry must not fire even though the record is old.
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(300),
+            wait_for_upstream_eof_expiry(&session),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "a still-draining session must not be torn down by the upstream-EOF expiry"
+        );
     }
 }

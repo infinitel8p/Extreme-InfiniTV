@@ -38,6 +38,10 @@ function buildSections(): ShortcutSection[] {
       ],
     },
     {
+      title: t("keyboardHelp.section.moviesSeries"),
+      items: [{ keys: ["R"], desc: t("keyboardHelp.desc.surpriseMe") }],
+    },
+    {
       title: t("keyboardHelp.section.player"),
       items: [
         { keys: ["Space"], desc: t("keyboardHelp.desc.playPause") },
@@ -46,6 +50,7 @@ function buildSections(): ShortcutSection[] {
         { keys: ["J"], desc: t("keyboardHelp.desc.seekBack") },
         { keys: ["L"], desc: t("keyboardHelp.desc.seekForward") },
         { keys: ["Z", "X"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.subtitleDelay") },
+        { keys: ["Ctrl", "Shift", "S"], desc: t("keyboardHelp.desc.statsOverlay") },
       ],
     },
   ]

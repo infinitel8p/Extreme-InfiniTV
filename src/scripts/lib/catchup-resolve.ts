@@ -86,6 +86,7 @@ async function probeVariantUrl(url: string): Promise<boolean> {
       method: "GET",
       headers: { Range: "bytes=0-1" },
       signal: controller.signal,
+      logKind: "media",
     })
     const reachable = response.ok || response.status === 206
     // Timeshift streams are endless; cancel so the probe doesn't hold a provider connection slot.

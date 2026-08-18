@@ -14,12 +14,18 @@ mod external_player;
 mod hevc_extension;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod http_range;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod matroska;
 
 mod safe_fetch;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod sniffer;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod store_paths;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod tray;
@@ -39,10 +45,12 @@ mod warmup;
 #[cfg(not(target_os = "ios"))]
 fn build_log_plugin() -> tauri_plugin_log::Builder {
     let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+    // clear_targets() drops the plugin's own default LogDir target so records aren't double-written.
     let mut log_builder = tauri_plugin_log::Builder::new()
         .level(log::LevelFilter::Info)
         .max_file_size(50_000_000)
         .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+        .clear_targets()
         .target(tauri_plugin_log::Target::new(
             tauri_plugin_log::TargetKind::LogDir {
                 file_name: Some(format!("app-{day}")),
@@ -187,6 +195,7 @@ pub fn run() {
             sniffer::cancel_sniff,
             sniffer::sniff_report,
             sniffer::sniff_report_drm,
+            store_paths::resolve_explorer_path,
             tray::set_close_to_tray,
             updater::updater_check_from,
             updater::updater_install,
@@ -194,6 +203,7 @@ pub fn run() {
             vod_audio_proxy::register_vod_audio_remux,
             vod_audio_proxy::unregister_vod_audio_remux,
             vod_proxy::register_vod_proxy,
+            vod_proxy::register_vod_proxy_file,
             vod_proxy::unregister_vod_proxy,
             warmup::warmup_start,
             warmup::warmup_status,

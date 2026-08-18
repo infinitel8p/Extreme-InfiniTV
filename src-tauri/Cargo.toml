@@ -22,7 +22,7 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 chrono = "0.4"
-tauri = { version = "2.11", features = ["protocol-asset", "tray-icon", "image-png"] }
+tauri = { version = "2.11", features = ["protocol-asset", "tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-log = "2"
 tauri-plugin-store = "2"
 tauri-plugin-process = "2"
@@ -42,7 +42,8 @@ tauri-plugin-updater = "2"
 discord-rich-presence = "0.2"
 tauri-plugin-window-state = "2"
 axum = "0.8"
-tokio = { version = "1", features = ["net", "sync", "io-util", "time", "macros", "process"] }
+tokio = { version = "1", features = ["net", "sync", "io-util", "time", "macros", "process", "fs"] }
+tokio-util = { version = "0.7", features = ["io"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-android-fs = { version = "=28.1.0", features = [] }

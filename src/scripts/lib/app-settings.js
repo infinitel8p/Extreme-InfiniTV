@@ -1,6 +1,7 @@
 import { log } from "@/scripts/lib/log.js"
 import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
+import { LANGUAGE_TOKENS } from "@/scripts/lib/language-tags.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
@@ -8,6 +9,7 @@ const KEY_DOWNLOAD_CONCURRENCY = "xt_download_concurrency"
 const KEY_WRITE_NFO = "xt_write_nfo"
 const KEY_PERF_MODE = "xt_perf_mode"
 const KEY_ACCENT = "xt_accent"
+const KEY_DENSITY = "xt_density"
 const KEY_PROGRESS_RETENTION = "xt_progress_retention_days"
 const KEY_NETWORK_TIMEOUT_S = "xt_network_timeout_s"
 const KEY_PLAYER_BACKEND = "xt_player_backend"
@@ -30,11 +32,20 @@ const KEY_AUTO_UPDATE = "xt_auto_update"
 const KEY_UI_SOUNDS = "xt_ui_sounds"
 const KEY_HAPTICS = "xt_haptics"
 const KEY_MONO_AUDIO = "xt_mono_audio"
+const KEY_CAPTIONS_AUTO = "xt_captions_auto"
+const KEY_TMDB_KEY = "xt_tmdb_key"
+const KEY_TMDB_ENABLED = "xt_tmdb_enabled"
+const KEY_DEV_MODE = "xt_dev_mode"
+const KEY_CONTENT_LANGUAGE = "xt_content_lang"
+const KEY_LANGUAGE_GROUPING = "xt_lang_grouping"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
+export const CONTENT_LANGUAGE_EVENT = "xt:content-language-changed"
 export const ACCENT_EVENT = "xt:accent-changed"
 export const ACCENT_PRESETS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"]
+export const DENSITY_EVENT = "xt:density-changed"
+export const DENSITY_PRESETS = { compact: 0.75, cozy: 1, comfortable: 1.3 }
 export const PROGRESS_RETENTION_EVENT = "xt:progress-retention-changed"
 export const PLAYER_BACKEND_EVENT = "xt:player-backend-changed"
 export const CLOSE_TO_TRAY_EVENT = "xt:close-to-tray-changed"
@@ -45,6 +56,7 @@ export const ANDROID_REMEMBERED_PLAYER_EVENT = "xt:android-remembered-player-cha
 export const VIDEO_SCALE_EVENT = "xt:video-scale-changed"
 export const UPDATE_CHANNEL_EVENT = "xt:update-channel-changed"
 export const AUTO_UPDATE_EVENT = "xt:auto-update-changed"
+export const LANGUAGE_GROUPING_EVENT = "xt:language-grouping-changed"
 export const UPDATE_CHANNELS = ["stable", "beta"]
 export const DEFAULT_UPDATE_CHANNEL = "stable"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
@@ -55,7 +67,7 @@ export const DEFAULT_TV_OVERSCAN = 0
  * content filter the strip applies; `all` means cross-kind. Catalog ids
  * are unique and stable across versions.
  *
- * @typedef {"continue-watching" | "favorites" | "watchlist" | "recently-added"} HubStripType
+ * @typedef {"continue-watching" | "favorites" | "watchlist" | "because-watched" | "recently-added"} HubStripType
  * @typedef {"all" | "live" | "vod" | "series"} HubStripKind
  * @typedef {{ id: string, type: HubStripType, kind: HubStripKind }} HubStripDefinition
  */
@@ -69,6 +81,7 @@ export const HUB_STRIP_CATALOG = Object.freeze([
   { id: "watchlist",             type: "watchlist",         kind: "all"    },
   { id: "watchlist:vod",         type: "watchlist",         kind: "vod"    },
   { id: "watchlist:series",      type: "watchlist",         kind: "series" },
+  { id: "because-watched",       type: "because-watched",   kind: "all"    },
   { id: "recently-added",        type: "recently-added",    kind: "all"    },
   { id: "recently-added:vod",    type: "recently-added",    kind: "vod"    },
   { id: "recently-added:series", type: "recently-added",    kind: "series" },
@@ -78,6 +91,7 @@ export const DEFAULT_HUB_STRIPS = Object.freeze([
   "continue-watching",
   "favorites",
   "watchlist",
+  "because-watched",
   "recently-added",
 ])
 export const PROGRESS_RETENTION_VALUES = [30, 90, 180, 0]
@@ -143,8 +157,46 @@ export function setUserAgent(ua) {
   )
 }
 
+function isWindowsPlatform() {
+  return typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent || "")
+}
+
+/**
+ * True if `dir`'s path shape matches the current platform's filesystem
+ * conventions. Used to reject a downloadDir carried over from a different
+ * OS - e.g. a Windows "C:\Users\..." path restored from a backup on macOS,
+ * which fails every download with a sandbox "forbidden path" error.
+ *
+ * Shapes that aren't recognisably Windows or POSIX (Android SAF `content://`
+ * URIs and their JSON-wrapped form) are left alone; the acceptable-path
+ * checks that already gate those live in backup.js / the settings folder
+ * picker.
+ * @param {string} dir
+ * @returns {boolean}
+ */
+export function downloadDirMatchesPlatform(dir) {
+  if (typeof dir !== "string" || !dir) return true
+  const isWindowsShaped = /^[A-Za-z]:[\\/]/.test(dir) || dir.startsWith("\\\\")
+  const isPosixShaped = dir.startsWith("/")
+  if (!isWindowsShaped && !isPosixShaped) return true
+  return isWindowsPlatform() ? isWindowsShaped : isPosixShaped
+}
+
+let warnedForeignDownloadDir = false
+
 export function getDownloadDir() {
-  return readLS(KEY_DOWNLOAD_DIR, "")
+  const stored = readLS(KEY_DOWNLOAD_DIR, "")
+  if (stored && !downloadDirMatchesPlatform(stored)) {
+    if (!warnedForeignDownloadDir) {
+      warnedForeignDownloadDir = true
+      log.warn(
+        "[xt:settings] stored downloadDir is foreign to this platform, ignoring:",
+        stored
+      )
+    }
+    return ""
+  }
+  return stored
 }
 
 export function setDownloadDir(path) {
@@ -224,6 +276,50 @@ export function setAccent(accentId) {
       new CustomEvent(ACCENT_EVENT, { detail: { value: normalized } })
     )
   }
+}
+
+// Preferred content language token; "" follows the interface language.
+export function getContentLanguage() {
+  const stored = readLS(KEY_CONTENT_LANGUAGE, "").toUpperCase()
+  return Object.prototype.hasOwnProperty.call(LANGUAGE_TOKENS, stored) ? stored : ""
+}
+
+export function setContentLanguage(tag) {
+  const normalized = (tag || "").toUpperCase()
+  const valid = Object.prototype.hasOwnProperty.call(LANGUAGE_TOKENS, normalized) ? normalized : ""
+  writeLS(KEY_CONTENT_LANGUAGE, valid)
+  if (typeof document !== "undefined") {
+    document.dispatchEvent(
+      new CustomEvent(CONTENT_LANGUAGE_EVENT, { detail: { value: valid } })
+    )
+  }
+}
+
+// Density: spacing preset for lists and settings rows (compact/cozy/comfortable).
+export function getDensity() {
+  const stored = readLS(KEY_DENSITY, "")
+  return Object.prototype.hasOwnProperty.call(DENSITY_PRESETS, stored) ? stored : "cozy"
+}
+
+export function setDensity(name) {
+  const normalized = Object.prototype.hasOwnProperty.call(DENSITY_PRESETS, name) ? name : "cozy"
+  writeLS(KEY_DENSITY, normalized === "cozy" ? "" : normalized)
+  if (typeof document !== "undefined") {
+    if (normalized === "cozy") {
+      document.documentElement.style.removeProperty("--xt-density")
+      document.documentElement.removeAttribute("data-density")
+    } else {
+      document.documentElement.style.setProperty("--xt-density", String(DENSITY_PRESETS[normalized]))
+      document.documentElement.setAttribute("data-density", normalized)
+    }
+    document.dispatchEvent(
+      new CustomEvent(DENSITY_EVENT, { detail: { value: normalized } })
+    )
+  }
+}
+
+export function getDensityFactor() {
+  return DENSITY_PRESETS[getDensity()]
 }
 
 // TV safe-area inset
@@ -779,11 +875,12 @@ export function setUpdateChannel(channel) {
 
 export const UI_SOUNDS_EVENT = "xt:ui-sounds-changed"
 
-/** UI sounds: default on; untouched setting stays quiet for reduced-motion users. */
+/** UI sounds: default on; untouched setting stays quiet for reduced-motion or perf-mode users. */
 export function getUiSoundsEnabled() {
   const raw = readLS(KEY_UI_SOUNDS, "")
   if (raw === "1") return true
   if (raw === "0") return false
+  if (getPerfMode()) return false
   try {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return false
   } catch {
@@ -827,6 +924,34 @@ export function setMonoAudioEnabled(enabled) {
   )
 }
 
+export const DEV_MODE_EVENT = "xt:dev-mode-changed"
+
+/** Dev mode: default off. */
+export function getDevModeEnabled() {
+  return readLS(KEY_DEV_MODE, "") === "1"
+}
+
+export function setDevModeEnabled(enabled) {
+  writeLS(KEY_DEV_MODE, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(DEV_MODE_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const CAPTIONS_AUTO_EVENT = "xt:captions-auto-changed"
+
+/** Captions on by default: default off. */
+export function getCaptionsAutoEnabled() {
+  return readLS(KEY_CAPTIONS_AUTO, "") === "1"
+}
+
+export function setCaptionsAutoEnabled(enabled) {
+  writeLS(KEY_CAPTIONS_AUTO, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(CAPTIONS_AUTO_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
 export function getAutoUpdateEnabled() {
   return readLS(KEY_AUTO_UPDATE, "") !== "0"
 }
@@ -836,4 +961,44 @@ export function setAutoUpdateEnabled(enabled) {
   document.dispatchEvent(
     new CustomEvent(AUTO_UPDATE_EVENT, { detail: { value: !!enabled } })
   )
+}
+
+// Global master switch; overrides the per-playlist + per-kind toggle in preferences.js when off.
+export function getLanguageGroupingEnabled() {
+  return readLS(KEY_LANGUAGE_GROUPING, "") !== "0"
+}
+
+export function setLanguageGroupingEnabled(enabled) {
+  writeLS(KEY_LANGUAGE_GROUPING, enabled ? "" : "0")
+  document.dispatchEvent(
+    new CustomEvent(LANGUAGE_GROUPING_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const TMDB_SETTINGS_EVENT = "xt:tmdb-settings-changed"
+
+export function getTmdbApiKey() {
+  return readLS(KEY_TMDB_KEY, "").trim()
+}
+
+export function setTmdbApiKey(key) {
+  writeLS(KEY_TMDB_KEY, (key || "").trim())
+  document.dispatchEvent(
+    new CustomEvent(TMDB_SETTINGS_EVENT, { detail: { key: "apiKey" } })
+  )
+}
+
+export function getTmdbEnabled() {
+  return readLS(KEY_TMDB_ENABLED, "") === "1"
+}
+
+export function setTmdbEnabled(enabled) {
+  writeLS(KEY_TMDB_ENABLED, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(TMDB_SETTINGS_EVENT, { detail: { key: "enabled", value: !!enabled } })
+  )
+}
+
+export function isTmdbActive() {
+  return getTmdbEnabled() && !!getTmdbApiKey()
 }

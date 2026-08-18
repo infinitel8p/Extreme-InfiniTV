@@ -6,6 +6,7 @@
 // a caller-supplied endpoint, restricted to our own GitHub releases host.
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tauri::Emitter;
@@ -13,6 +14,9 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 
 const ALLOWED_HOST: &str = "github.com";
 const ALLOWED_PATH_PREFIX: &str = "/infinitel8p/Extreme-InfiniTV/releases/download/";
+
+// Builder timeout covers the manifest fetch only - `check()` hands the Update a fresh `timeout: None`.
+const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub const PROGRESS_EVENT: &str = "xt:updater-progress";
 
@@ -38,6 +42,7 @@ pub async fn updater_check_from(
         .updater_builder()
         .endpoints(vec![endpoint])
         .map_err(|e| format!("OTHER:{e}"))?
+        .timeout(CHECK_TIMEOUT)
         .build()
         .map_err(|e| format!("OTHER:{e}"))?
         .check()

@@ -54,6 +54,8 @@ function loadBuffer(kind: UiSoundKind): Promise<AudioBuffer | null> {
 /** Resolves true only when playback actually started. */
 export async function playUiSound(kind: UiSoundKind): Promise<boolean> {
   if (typeof window === "undefined" || !getUiSoundsEnabled()) return false
+  // Ticks would layer over playback audio during D-pad channel surfing.
+  if ((kind === "nav" || kind === "select") && isVideoPlaying()) return false
   // A more specific sound firing synchronously supersedes a still-pending select tick.
   if (kind !== "select" && pendingSelectTimer !== null) {
     clearTimeout(pendingSelectTimer)
@@ -82,6 +84,14 @@ export async function playUiSound(kind: UiSoundKind): Promise<boolean> {
   source.connect(ctx.destination)
   source.start()
   return true
+}
+
+function isVideoPlaying(): boolean {
+  const videoElements = document.querySelectorAll("video")
+  for (const videoElement of videoElements) {
+    if (!videoElement.paused && !videoElement.ended && videoElement.readyState >= 2) return true
+  }
+  return false
 }
 
 function isNavKey(key: string): boolean {

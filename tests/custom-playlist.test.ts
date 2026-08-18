@@ -701,6 +701,54 @@ describe("resolveCustomChannels", () => {
     expect(resolved[0].licenseKey).toBe("kid:key")
   })
 
+  it("carries tvgShift through from an m3u-sourced channel", () => {
+    const pools = new Map<string, SourcePool>([
+      [
+        "p2",
+        {
+          kind: "m3u",
+          channels: [
+            { name: "CNN", url: "http://host/cnn.m3u8", logo: null, isRadio: false, tvgShift: -1 },
+          ],
+        },
+      ],
+    ])
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, m3uSource("p2", "http://host/cnn.m3u8", "CNN"), { group: "News" }).doc
+
+    const resolved = resolveCustomChannels(doc, pools)
+    expect(resolved[0].tvgShift).toBe(-1)
+  })
+
+  it("carries tvgShift through from an xtream-sourced channel", () => {
+    const pools = new Map<string, SourcePool>([
+      [
+        "p1",
+        {
+          kind: "xtream",
+          channels: [{ id: 10, name: "BBC One", tvgShift: 2 }],
+          buildUrl: (streamId: number) => `http://host/${streamId}.m3u8`,
+        },
+      ],
+    ])
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 10), { group: "News" }).doc
+
+    const resolved = resolveCustomChannels(doc, pools)
+    expect(resolved[0].tvgShift).toBe(2)
+  })
+
+  it("defaults tvgShift to null when the source channel doesn't carry one", () => {
+    const pools = new Map<string, SourcePool>([
+      ["p1", { kind: "xtream", channels: [{ id: 10, name: "BBC One" }], buildUrl: (id: number) => `http://x/${id}` }],
+    ])
+    let doc = emptyCustomDoc()
+    doc = addChannel(doc, xtreamSource("p1", 10), { group: "News" }).doc
+
+    const resolved = resolveCustomChannels(doc, pools)
+    expect(resolved[0].tvgShift).toBeNull()
+  })
+
   it("marks a channel unresolved when its source pool is missing", () => {
     let doc = emptyCustomDoc()
     doc = addChannel(doc, xtreamSource("missing-entry", 5), { group: "News", name: "Ghost" }).doc

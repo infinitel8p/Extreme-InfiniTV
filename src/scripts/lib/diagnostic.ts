@@ -21,10 +21,23 @@
 // Test button uses, so users see the same wording across both surfaces.
 // Auth failure stops downstream steps - no point probing catalogue
 // endpoints with bad creds.
+//
+// Auxiliary steps (EPG, updater, sample stream) never affect the verdict
+// beyond a warn. The sample stream probe also skips when the auth step
+// reports the connection pool already at max_connections, so it never
+// steals the user's own playback slot.
 
 import { t } from "@/scripts/lib/i18n.js"
-import { buildApiUrl, safeHttpUrl } from "@/scripts/lib/creds.js"
+import { buildApiUrl, safeHttpUrl, isTauri } from "@/scripts/lib/creds.js"
 import { classifyError } from "@/scripts/lib/provider-error.js"
+import { redactUrl } from "@/scripts/lib/log.js"
+import { buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
+import {
+  extractM3UHeaderEpgUrl,
+  firstStreamUrlFromM3U,
+  isAbsoluteHttpUrl,
+  pickSampleLiveStreamId,
+} from "@/scripts/lib/diagnostic-targets.ts"
 
 export type StepStatus = "pass" | "warn" | "fail" | "skip"
 
@@ -52,6 +65,50 @@ export interface DiagnosticResult {
   verdictMessage: string
 }
 
+// Steps every pipeline needs to function; everything else (EPG, updater,
+// sample stream) is auxiliary and can never fail the overall verdict.
+const CORE_STEP_KEYS = new Set([
+  "diagnostic.step.auth",
+  "diagnostic.step.live",
+  "diagnostic.step.vod",
+  "diagnostic.step.series",
+  "diagnostic.step.fetch",
+  "diagnostic.step.parse",
+])
+
+export function deriveVerdict(
+  steps: DiagnosticStep[]
+): { verdict: DiagnosticVerdict; messageKey: string } {
+  let coreFail = false
+  let coreWarn = false
+  let auxIssue = false
+  for (const step of steps) {
+    const isCore = CORE_STEP_KEYS.has(step.labelKey)
+    if (isCore) {
+      if (step.status === "fail") coreFail = true
+      else if (step.status === "warn") coreWarn = true
+    } else if (step.status === "warn" || step.status === "fail") {
+      auxIssue = true
+    }
+  }
+  if (coreFail) return { verdict: "fail", messageKey: "diagnostic.verdict.partial" }
+  if (coreWarn) return { verdict: "warn", messageKey: "diagnostic.verdict.partial" }
+  if (auxIssue) return { verdict: "warn", messageKey: "diagnostic.verdict.auxWarn" }
+  return { verdict: "ok", messageKey: "diagnostic.verdict.allGood" }
+}
+
+let lastDiagnosticResult: DiagnosticResult | null = null
+
+/** Most recent diagnostic run, from either runner. Feeds a future bug-report attachment. */
+export function getLastDiagnosticResult(): DiagnosticResult | null {
+  return lastDiagnosticResult
+}
+
+function finish(result: DiagnosticResult): DiagnosticResult {
+  lastDiagnosticResult = result
+  return result
+}
+
 interface XtreamCreds {
   serverUrl: string
   username: string
@@ -59,6 +116,7 @@ interface XtreamCreds {
 }
 
 const STEP_TIMEOUT_MS = 12_000
+const STREAM_PROBE_TIMEOUT_MS = 8_000
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -76,12 +134,15 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   })
 }
 
-async function jsonCount(response: Response, keys: string[]): Promise<number> {
+async function jsonCountAndData(
+  response: Response,
+  keys: string[]
+): Promise<{ count: number; data: unknown }> {
   const data = await response.json()
-  if (Array.isArray(data)) return data.length
+  if (Array.isArray(data)) return { count: data.length, data }
   for (const key of keys) {
     const value = (data as any)?.[key]
-    if (Array.isArray(value)) return value.length
+    if (Array.isArray(value)) return { count: value.length, data: value }
   }
   // Server replied with 2xx + valid JSON, but the body isn't an array under
   // any expected key. Most often this means an Xtream panel returned
@@ -109,6 +170,162 @@ export interface DiagnosticRunOptions {
    * resolved promise for that.
    */
   onProgress?: (steps: DiagnosticStep[]) => void
+  entry?: {
+    epgUrl?: string
+    additionalEpgUrls?: string[]
+    disableProviderEpg?: boolean
+    liveContainer?: string
+    type?: string
+  }
+  sampleStreamUrl?: string
+}
+
+/** EPG target for the Xtream runner: same resolution `buildEpgUrlsFromEntry` uses elsewhere, so there's one implementation of the URL shape. */
+async function resolveXtreamEpgTargetUrl(
+  entry: DiagnosticRunOptions["entry"],
+  creds: { host: string; port: string; user: string; pass: string }
+): Promise<string | null> {
+  try {
+    const { buildEpgUrlsFromEntry } = await import("@/scripts/lib/epg-data.js")
+    const sources = buildEpgUrlsFromEntry(entry ?? {}, creds, "", [])
+    return sources.find((source: { kind: string }) => source.kind === "primary")?.url ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Shared EPG reachability probe for both runners. Never fails - a dead guide doesn't stop playback. */
+async function probeEpgStep(targetUrl: string | null): Promise<DiagnosticStep> {
+  if (!targetUrl) {
+    return { labelKey: "diagnostic.step.epg", status: "skip", detail: t("diagnostic.detail.epgNone") }
+  }
+  try {
+    const { probeStreamHead } = await import("@/scripts/lib/stream-diagnostic.js")
+    const started = Date.now()
+    const result = await probeStreamHead(targetUrl, undefined, "epg")
+    return {
+      labelKey: "diagnostic.step.epg",
+      status: result.ok ? "pass" : "warn",
+      latencyMs: Date.now() - started,
+      detail: t("diagnostic.detail.epgSource", { url: redactUrl(targetUrl).slice(0, 80) }),
+    }
+  } catch {
+    return { labelKey: "diagnostic.step.epg", status: "skip", detail: t("diagnostic.detail.epgNone") }
+  }
+}
+
+/** Update-feed reachability probe. Skips on Android/web/store builds, since none of them use this feed. */
+async function probeUpdaterStep(): Promise<DiagnosticStep> {
+  const isAndroidApp = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent || "")
+  if (!isTauri || isAndroidApp) {
+    return { labelKey: "diagnostic.step.updater", status: "skip", detail: t("diagnostic.detail.updaterNotApplicable") }
+  }
+  try {
+    const { isStoreBuild, resolveUpdateFeedUrl } = await import("@/scripts/lib/update-check.js")
+    if (await isStoreBuild()) {
+      return { labelKey: "diagnostic.step.updater", status: "skip", detail: t("diagnostic.detail.updaterNotApplicable") }
+    }
+    const started = Date.now()
+    try {
+      const { providerFetch } = await import("@/scripts/lib/provider-fetch.js")
+      const feedUrl = await resolveUpdateFeedUrl()
+      const response = await withTimeout(
+        providerFetch(feedUrl, { method: "GET", headers: { Range: "bytes=0-0" }, logKind: "update" }),
+        STEP_TIMEOUT_MS
+      )
+      const latency = Date.now() - started
+      if (response.status === 404) {
+        return { labelKey: "diagnostic.step.updater", status: "warn", latencyMs: latency, detail: t("diagnostic.detail.updaterMissing") }
+      }
+      if (response.ok || response.status === 206 || (response.status >= 300 && response.status < 400)) {
+        return { labelKey: "diagnostic.step.updater", status: "pass", latencyMs: latency, detail: t("diagnostic.detail.updaterOk") }
+      }
+      return {
+        labelKey: "diagnostic.step.updater",
+        status: "warn",
+        latencyMs: latency,
+        detail: t("diagnostic.detail.httpStatus", { status: String(response.status) }),
+        httpStatus: response.status,
+      }
+    } catch (error) {
+      const classified = classifyError({ error })
+      return {
+        labelKey: "diagnostic.step.updater",
+        status: "warn",
+        latencyMs: Date.now() - started,
+        detail: t(`providerError.classify.${classified.kind}`),
+        reason: classified.kind,
+      }
+    }
+  } catch {
+    return { labelKey: "diagnostic.step.updater", status: "skip", detail: t("diagnostic.detail.updaterNotApplicable") }
+  }
+}
+
+interface SampleStreamProbeInput {
+  isTauriApp: boolean
+  entryType?: string
+  targetUrl: string | null
+  busy: boolean
+}
+
+/** Shared "can we actually watch a channel" probe. Runs last so it never delays the rest of the report. */
+async function probeSampleStreamStep(input: SampleStreamProbeInput): Promise<DiagnosticStep> {
+  if (!input.isTauriApp) {
+    return { labelKey: "diagnostic.step.stream", status: "skip", detail: t("diagnostic.detail.skipWeb") }
+  }
+  if (input.busy) {
+    return { labelKey: "diagnostic.step.stream", status: "skip", detail: t("diagnostic.detail.streamBusy") }
+  }
+  if (!input.targetUrl || input.entryType === "local-m3u" || input.entryType === "custom") {
+    return { labelKey: "diagnostic.step.stream", status: "skip", detail: t("diagnostic.detail.streamNone") }
+  }
+  try {
+    const { probeStreamHead } = await import("@/scripts/lib/stream-diagnostic.js")
+    const started = Date.now()
+    try {
+      const result = await withTimeout(
+        probeStreamHead(input.targetUrl, undefined, "media"),
+        STREAM_PROBE_TIMEOUT_MS
+      )
+      const latency = Date.now() - started
+      if (result.ok) {
+        return {
+          labelKey: "diagnostic.step.stream",
+          status: "pass",
+          latencyMs: latency,
+          detail: t("diagnostic.detail.fetchOk", { status: String(result.status ?? "") }),
+        }
+      }
+      if (result.status === 401 || result.status === 403) {
+        return {
+          labelKey: "diagnostic.step.stream",
+          status: "fail",
+          latencyMs: latency,
+          detail: t("diagnostic.detail.streamAuth"),
+          httpStatus: result.status,
+        }
+      }
+      return {
+        labelKey: "diagnostic.step.stream",
+        status: "warn",
+        latencyMs: latency,
+        detail: t("diagnostic.detail.httpStatus", { status: String(result.status ?? 0) }),
+        httpStatus: result.status ?? undefined,
+      }
+    } catch (error) {
+      const classified = classifyError({ error })
+      return {
+        labelKey: "diagnostic.step.stream",
+        status: "warn",
+        latencyMs: Date.now() - started,
+        detail: t(`providerError.classify.${classified.kind}`),
+        reason: classified.kind,
+      }
+    }
+  } catch {
+    return { labelKey: "diagnostic.step.stream", status: "skip", detail: t("diagnostic.detail.streamNone") }
+  }
 }
 
 /**
@@ -137,7 +354,7 @@ export async function runXtreamDiagnostic(
   const base = safeHttpUrl(creds.serverUrl)
   if (!base) {
     pushStep({ labelKey: "diagnostic.step.auth", status: "fail", detail: t("diagnostic.detail.invalidUrl") })
-    return { steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.invalidUrl") }
+    return finish({ steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.invalidUrl") })
   }
 
   const apiCreds = {
@@ -146,6 +363,10 @@ export async function runXtreamDiagnostic(
     user: creds.username,
     pass: creds.password,
   }
+
+  // Connection slot is at capacity - probing the sample stream would steal it
+  // from the user's own playback (some providers cap max_connections at 1).
+  let connectionsAtLimit: boolean
 
   // Step 1: authenticate. The roundtrip latency doubles as the reach
   // measurement, and classifyError tells us whether the failure was
@@ -166,7 +387,7 @@ export async function runXtreamDiagnostic(
         reason: classified.kind,
         httpStatus: classified.httpStatus,
       })
-      return { steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.authFailed") }
+      return finish({ steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.authFailed") })
     }
     let data: any
     try {
@@ -179,7 +400,7 @@ export async function runXtreamDiagnostic(
         detail: t("providerError.classify.bad_response"),
         reason: "bad_response",
       })
-      return { steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.badResponse") }
+      return finish({ steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.badResponse") })
     }
     const info = data?.user_info
     if (info && (info.auth === 0 || info.auth === "0")) {
@@ -190,7 +411,7 @@ export async function runXtreamDiagnostic(
         detail: t("providerError.classify.auth_rejected"),
         reason: "auth_rejected",
       })
-      return { steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.authRejected") }
+      return finish({ steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.authRejected") })
     }
     if (!info?.status) {
       pushStep({
@@ -200,12 +421,19 @@ export async function runXtreamDiagnostic(
         detail: t("providerError.classify.bad_response"),
         reason: "bad_response",
       })
-      return { steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.badResponse") }
+      return finish({ steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.badResponse") })
     }
     const maxCons = info.max_connections ?? "-"
     const activeCons = info.active_cons ?? "-"
     const accountStatus = String(info.status)
     const isActive = accountStatus === "Active"
+    const maxConsNum = Number(info.max_connections)
+    const activeConsNum = Number(info.active_cons)
+    connectionsAtLimit =
+      Number.isFinite(maxConsNum) &&
+      maxConsNum > 0 &&
+      Number.isFinite(activeConsNum) &&
+      activeConsNum >= maxConsNum
     pushStep({
       labelKey: "diagnostic.step.auth",
       status: isActive ? "pass" : "warn",
@@ -217,11 +445,11 @@ export async function runXtreamDiagnostic(
       }),
     })
     if (!isActive) {
-      return {
+      return finish({
         steps,
         verdict: "warn",
         verdictMessage: t("diagnostic.verdict.accountInactive", { status: accountStatus }),
-      }
+      })
     }
   } catch (error) {
     const classified = classifyError({ error })
@@ -232,14 +460,15 @@ export async function runXtreamDiagnostic(
       detail: t(`providerError.classify.${classified.kind}`),
       reason: classified.kind,
     })
-    return { steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.authFailed") }
+    return finish({ steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.authFailed") })
   }
 
   // Steps 2-4
   const probeStep = async (
     labelKey: string,
     action: string,
-    countKeys: string[]
+    countKeys: string[],
+    onData?: (data: unknown) => void
   ): Promise<void> => {
     const started = Date.now()
     try {
@@ -261,7 +490,8 @@ export async function runXtreamDiagnostic(
         return
       }
       try {
-        const count = await jsonCount(response, countKeys)
+        const { count, data } = await jsonCountAndData(response, countKeys)
+        onData?.(data)
         pushStep({
           labelKey,
           status: "pass",
@@ -290,23 +520,42 @@ export async function runXtreamDiagnostic(
     }
   }
 
+  let liveStreamsPayload: unknown = null
   await Promise.all([
-    probeStep("diagnostic.step.live", "get_live_streams", ["streams", "results"]),
-    probeStep("diagnostic.step.vod", "get_vod_streams", ["movies", "results"]),
-    probeStep("diagnostic.step.series", "get_series", ["series", "results"]),
+    probeStep("diagnostic.step.live", "get_live_streams", ["streams", "results"], (data) => {
+      liveStreamsPayload = data
+    }).catch(() => {}),
+    probeStep("diagnostic.step.vod", "get_vod_streams", ["movies", "results"]).catch(() => {}),
+    probeStep("diagnostic.step.series", "get_series", ["series", "results"]).catch(() => {}),
+    resolveXtreamEpgTargetUrl(options.entry, apiCreds)
+      .then(async (targetUrl) => {
+        pushStep(await probeEpgStep(targetUrl))
+      })
+      .catch(() => {
+        pushStep({ labelKey: "diagnostic.step.epg", status: "skip", detail: t("diagnostic.detail.epgNone") })
+      }),
+    probeUpdaterStep()
+      .then((step) => pushStep(step))
+      .catch(() => {
+        pushStep({ labelKey: "diagnostic.step.updater", status: "skip", detail: t("diagnostic.detail.updaterNotApplicable") })
+      }),
   ])
 
-  // Verdict: all-pass → ok. Auth OK but any catalogue step warn → warn
-  // (partial outage, the user can still play what's reachable). Anything
-  // worse than that already returned earlier.
-  const anyWarn = steps.some((step) => step.status === "warn")
-  return {
-    steps,
-    verdict: anyWarn ? "warn" : "ok",
-    verdictMessage: anyWarn
-      ? t("diagnostic.verdict.partial")
-      : t("diagnostic.verdict.allGood"),
-  }
+  const sampleStreamId = pickSampleLiveStreamId(liveStreamsPayload)
+  const derivedStreamUrl = sampleStreamId
+    ? buildLiveStreamUrl(apiCreds, sampleStreamId, options.entry?.liveContainer)
+    : null
+  pushStep(
+    await probeSampleStreamStep({
+      isTauriApp: isTauri,
+      entryType: options.entry?.type,
+      targetUrl: options.sampleStreamUrl || derivedStreamUrl,
+      busy: connectionsAtLimit,
+    })
+  )
+
+  const { verdict, messageKey } = deriveVerdict(steps)
+  return finish({ steps, verdict, verdictMessage: t(messageKey) })
 }
 
 export async function runM3UDiagnostic(
@@ -326,7 +575,7 @@ export async function runM3UDiagnostic(
       status: "fail",
       detail: t("diagnostic.detail.invalidUrl"),
     })
-    return { steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.invalidUrl") }
+    return finish({ steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.invalidUrl") })
   }
 
   const { providerFetch } = await import("@/scripts/lib/provider-fetch.js")
@@ -346,7 +595,7 @@ export async function runM3UDiagnostic(
         reason: classified.kind,
         httpStatus: classified.httpStatus,
       })
-      return { steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.fetchFailed") }
+      return finish({ steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.fetchFailed") })
     }
     text = await response.text()
     pushStep({
@@ -364,7 +613,7 @@ export async function runM3UDiagnostic(
       detail: t(`providerError.classify.${classified.kind}`),
       reason: classified.kind,
     })
-    return { steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.fetchFailed") }
+    return finish({ steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.fetchFailed") })
   }
 
   const parseStart = Date.now()
@@ -378,7 +627,7 @@ export async function runM3UDiagnostic(
       detail: t("providerError.classify.bad_response"),
       reason: "bad_response",
     })
-    return { steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.badResponse") }
+    return finish({ steps, verdict: "fail", verdictMessage: t("diagnostic.verdict.badResponse") })
   }
   const matches = text.match(/#EXTINF\s*:/gi)
   const count = matches ? matches.length : 0
@@ -390,7 +639,31 @@ export async function runM3UDiagnostic(
     detail: t("diagnostic.detail.count", { count: count.toLocaleString() }),
   })
 
-  return { steps, verdict: "ok", verdictMessage: t("diagnostic.verdict.allGood") }
+  await Promise.all([
+    probeEpgStep(extractM3UHeaderEpgUrl(text))
+      .then((step) => pushStep(step))
+      .catch(() => {
+        pushStep({ labelKey: "diagnostic.step.epg", status: "skip", detail: t("diagnostic.detail.epgNone") })
+      }),
+    probeUpdaterStep()
+      .then((step) => pushStep(step))
+      .catch(() => {
+        pushStep({ labelKey: "diagnostic.step.updater", status: "skip", detail: t("diagnostic.detail.updaterNotApplicable") })
+      }),
+  ])
+
+  const sampleStreamCandidate = options.sampleStreamUrl || firstStreamUrlFromM3U(text)
+  pushStep(
+    await probeSampleStreamStep({
+      isTauriApp: isTauri,
+      entryType: options.entry?.type,
+      targetUrl: isAbsoluteHttpUrl(sampleStreamCandidate) ? sampleStreamCandidate : null,
+      busy: false,
+    })
+  )
+
+  const { verdict, messageKey } = deriveVerdict(steps)
+  return finish({ steps, verdict, verdictMessage: t(messageKey) })
 }
 
 /**
@@ -497,7 +770,7 @@ export function renderDiagnosticInto(
         ? "!"
         : step.status === "fail"
         ? "✗"
-        : "·"
+        : "○"
     const body = document.createElement("div")
     body.className = "min-w-0 flex-1 text-fg"
     const labelRow = document.createElement("div")

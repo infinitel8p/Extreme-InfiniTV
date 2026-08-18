@@ -44,6 +44,7 @@ function ensureDialog(): HTMLDialogElement | null {
   node.className = [
     "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
     "w-[min(32rem,calc(100vw-2rem))] max-h-[min(80dvh,36rem)]",
+    "open:flex flex-col overflow-hidden",
     "backdrop:bg-black/60",
   ].join(" ")
   document.body.appendChild(node)
@@ -159,7 +160,7 @@ export function openAndroidPlayerPicker(
       : ""
 
     dialog.innerHTML = `
-      <div class="flex flex-col h-full p-5 sm:p-6 gap-5">
+      <div class="flex flex-col flex-auto min-h-0 p-5 sm:p-6 gap-5">
         <header class="flex items-start gap-3.5 shrink-0 px-3">
           <span class="icon-mark icon-mark--lg" aria-hidden="true">${ICON_EXTERNAL_LINK}</span>
           <div class="flex flex-col gap-1 min-w-0 pt-0.5">

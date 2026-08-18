@@ -12,6 +12,31 @@
    contents don't fit. */
 @custom-variant landscape-phone (@media (orientation: landscape) and (max-height: 500px));
 
+/* True when the sidebar is at its full lg+ width: viewport is lg+ and the
+   rail hasn't been manually collapsed. Mirrors --breakpoint-lg (64em). */
+@custom-variant rail-expanded {
+  @media (width >= 64em) {
+    :root:not([data-sidebar-collapsed]) & {
+      @slot;
+    }
+  }
+}
+
+/* Hide the rail's own scrollbar for the width transition's duration, set
+   via the toggle click handler, so it doesn't flash mid-animation. */
+html[data-rail-animating] .sidebar-rail {
+  overflow-y: hidden;
+}
+
+/* Labels reveal slightly behind the width slide on expand; collapse hides
+   them instantly via display so no animation plays there. */
+@keyframes rail-reveal-in {
+  from { opacity: 0; transform: translateX(-4px); }
+}
+html[data-rail-animating] .rail-reveal {
+  animation: rail-reveal-in 180ms cubic-bezier(0.16, 1, 0.3, 1) 60ms both;
+}
+
 @view-transition {
     navigation: auto;
 }
@@ -498,8 +523,9 @@ dialog[open] .xt-wn-section {
         @apply border-line-soft;
     }
     .field-input:focus {
+        outline: none;
         border-color: var(--color-accent);
-        box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent) 30%, transparent);
+        box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-accent) 22%, transparent);
     }
     .field-input:disabled {
         @apply opacity-60 cursor-not-allowed;
@@ -688,7 +714,7 @@ dialog[open] .xt-wn-section {
 /* ────────────────────────────── */
 .channel-row {
     content-visibility: auto;
-    contain-intrinsic-size: 4.25rem;
+    contain-intrinsic-size: calc(4.25rem * var(--xt-density, 1));
     scroll-margin-block: 8px;
     position: relative;
     overflow: hidden;
@@ -704,7 +730,7 @@ dialog[open] .xt-wn-section {
 .map-row,
 .pick-row {
     content-visibility: auto;
-    contain-intrinsic-size: 56px;
+    contain-intrinsic-size: calc(56px * var(--xt-density, 1));
 }
 
 .map-row[data-just-changed="true"] {
@@ -1646,6 +1672,19 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     position: relative;
     isolation: isolate;
 }
+[data-hero-blur] {
+    position: absolute;
+    inset: -8%;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    filter: blur(24px) saturate(1.2) brightness(0.75);
+}
+html[data-perf-mode="on"] [data-hero-blur] {
+    filter: none !important;
+    background-image: none !important;
+    background-color: color-mix(in oklch, var(--color-bg) 80%, black) !important;
+}
 .dt-hero::after {
     content: "";
     position: absolute;
@@ -1686,6 +1725,12 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     .dt-hero img {
         animation: none !important;
     }
+}
+
+.detail-meta > .meta-item + .meta-item::before {
+    content: "·";
+    margin-inline: 0.5ch;
+    color: var(--color-fg-3);
 }
 
 [data-ps-wrap][data-open="true"] #ps-popover {
@@ -1748,6 +1793,9 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
         animation: none;
     }
 }
+
+html[data-density="compact"] :is(#movie-grid, #series-grid) { gap: 0.375rem; }
+html[data-density="comfortable"] :is(#movie-grid, #series-grid) { gap: 1.5rem; }
 
 /* ────────────────────────────── */
 /* Welcome (no-playlist) hero     */
@@ -2006,14 +2054,19 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     gap: 0.75rem;
     padding: 1.25rem 1.25rem 0.25rem;
 }
+/* Card-level helper paragraph between the header and the body, Playback-derived rhythm */
+.settings-surface__helper {
+    padding: 1rem 1.25rem 0.75rem;
+}
 .settings-row {
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
-    column-gap: 1.5rem;
-    row-gap: 0.5rem;
-    padding: 0.875rem 1.25rem;
-    min-height: 3.5rem;
+    column-gap: calc(1.5rem * var(--xt-density, 1));
+    row-gap: calc(0.5rem * var(--xt-density, 1));
+    padding-block: calc(0.875rem * var(--xt-density, 1));
+    padding-inline: 1.25rem;
+    min-height: max(2.75rem, calc(3.5rem * var(--xt-density, 1)));
 }
 .settings-row__text {
     display: flex;
@@ -2057,6 +2110,7 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
 }
 @media (min-width: 40rem) {
     .settings-surface__header { padding: 1.5rem 1.5rem 0.25rem; }
+    .settings-surface__helper { padding-inline: 1.5rem; }
     .settings-row { padding-inline: 1.5rem; }
 }
 .settings-seg {
@@ -2269,7 +2323,7 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
 }
 .movie-card:focus-within {
     box-shadow:
-        0 0 0 2px var(--color-accent),
+        inset 0 0 0 1px var(--color-accent),
         0 18px 40px -22px color-mix(in oklch, var(--color-accent) 55%, transparent),
         0 8px 24px -18px rgb(0 0 0 / 0.45);
 }
@@ -2326,12 +2380,16 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     place-items: center;
     z-index: 30;
     pointer-events: none;
+    container-type: size;
 }
-/* Plate shrink-wraps the logo so it takes the logo's aspect (wide, tall, or square) and never clips, capped so it stays a badge. */
+/* Plate shrink-wraps the logo so it takes the logo's aspect. */
 .tuning-overlay__plate {
     display: grid;
     place-items: center;
-    padding: clamp(0.75rem, 2.4%, 1.25rem);
+    /* Older engines without cqw/cqh drop the later declaration and keep this fallback. */
+    padding: clamp(0.75rem, 1.5vw, 1.25rem);
+    --tuning-plate-pad: clamp(0.75rem, 2.4cqw, 1.25rem);
+    padding: var(--tuning-plate-pad);
     min-width: 5rem;
     min-height: 4.5rem;
     max-width: min(62%, 22rem);
@@ -2350,8 +2408,8 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     display: block;
     max-width: 100%;
     max-height: 100%;
-    width: auto;
-    height: auto;
+    max-width: calc(min(62cqw, 22rem) - 2 * var(--tuning-plate-pad));
+    max-height: calc(min(55cqh, 12rem) - 2 * var(--tuning-plate-pad));
     object-fit: contain;
 }
 .tuning-overlay--leaving .tuning-overlay__plate {
@@ -2470,6 +2528,46 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     }
 }
 
+.quality-chip {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    z-index: 35;
+    padding: 0.4rem 0.85rem;
+    border-radius: 9999px;
+    background: color-mix(in oklch, var(--color-bg) 70%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-line) 90%, transparent);
+    color: var(--color-fg);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    backdrop-filter: blur(12px);
+    pointer-events: none;
+    animation: quality-chip-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.quality-chip.is-leaving {
+    opacity: 0;
+}
+@keyframes quality-chip-in {
+    from { transform: translateY(-8px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+[data-perf-mode="on"] .quality-chip {
+    animation: none;
+}
+[data-perf-mode="on"] .quality-chip.is-leaving {
+    transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .quality-chip {
+        animation: none;
+    }
+    .quality-chip.is-leaving {
+        transition: none;
+    }
+}
+
 .timeshift-chip {
     position: absolute;
     top: 0.75rem;
@@ -2503,6 +2601,66 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     }
 }
 @keyframes timeshift-chip-in {
+    from { transform: translateY(-8px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+}
+
+.stats-overlay {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    z-index: 36;
+    display: grid;
+    grid-template-columns: auto auto;
+    column-gap: 0.6rem;
+    row-gap: 0.2rem;
+    max-width: min(60%, 16rem);
+    padding: 0.55rem 0.75rem;
+    border-radius: 0.75rem;
+    /* Video-first surface: dim with black, not --color-bg, so light theme stays readable over bright content. */
+    background: rgba(0, 0, 0, 0.68);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    font-size: 0.7rem;
+    line-height: 1.4;
+    backdrop-filter: blur(12px);
+    pointer-events: none;
+    animation: stats-overlay-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.stats-overlay__label {
+    color: rgba(255, 255, 255, 0.78);
+}
+.stats-overlay__value {
+    color: rgba(255, 255, 255, 0.92);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.stats-overlay[hidden] {
+    display: none;
+}
+.stats-overlay[data-fs="on"] {
+    font-size: 0.8rem;
+    top: 1.25rem;
+    right: 1.25rem;
+}
+.player-wrap[data-radio-mode="on"] .stats-overlay {
+    display: none;
+}
+@media (max-width: 32em) {
+    .stats-overlay {
+        max-width: min(72%, 13rem);
+        font-size: 0.6875rem;
+        padding: 0.4rem 0.55rem;
+    }
+}
+[data-perf-mode="on"] .stats-overlay {
+    animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .stats-overlay {
+        animation: none;
+    }
+}
+@keyframes stats-overlay-in {
     from { transform: translateY(-8px); opacity: 0; }
     to   { transform: translateY(0);    opacity: 1; }
 }
@@ -2560,9 +2718,8 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     pointer-events: none;
     z-index: 60;
     box-shadow:
-        0 0 0 2px var(--color-accent),
-        0 0 0 6px color-mix(in oklch, var(--color-accent) 22%, transparent),
-        0 0 36px -18px color-mix(in oklch, var(--color-accent) 70%, transparent);
+        0 0 0 1px var(--color-accent),
+        0 0 20px -10px color-mix(in oklch, var(--color-accent) 55%, transparent);
     border-radius: 12px;
     opacity: 0;
     transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -2571,9 +2728,9 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
 .xt-focus-glide[data-visible="false"] {
     opacity: 0;
 }
-:is(a, button, input, textarea, select, summary, [tabindex]):focus-visible:has(~ .xt-focus-glide) {
-    /* Native outline stays - just kept here as a marker so future devs see
-       the relationship. */
+/* While glide tracks focus it is the ring; the static outline would double-ring the target. */
+html.xt-glide-tracking :is(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+    outline-color: transparent;
 }
 @media (prefers-reduced-motion: reduce) {
     .xt-focus-glide {
@@ -2644,7 +2801,16 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     opacity: 0;
     transition: opacity 160ms ease-out;
 }
-.sort-menu__option[aria-selected="true"] .sort-menu__check {
+.sort-menu__option[aria-selected="true"] .sort-menu__check,
+.sort-menu__option[aria-checked="true"] .sort-menu__check {
+    opacity: 1;
+}
+
+.sort-menu__dot {
+    opacity: 0;
+    transition: opacity 160ms ease-out;
+}
+[data-sort-menu][data-toggles-active="true"] .sort-menu__dot {
     opacity: 1;
 }
 

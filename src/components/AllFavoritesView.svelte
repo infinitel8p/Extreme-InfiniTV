@@ -12,7 +12,8 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   /** @type {"all"|"live"|"vod"|"series"} */
   let filter = $state("all")
@@ -108,7 +109,9 @@
     entries = raw.map((row) => {
       const meta = getFavoriteMeta(row.playlistId, row.kind, row.id)
       const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
-      const name = meta?.name || item?.name || `${kindLabel(row.kind)} ${row.id}`
+      const isStoredNameFallback = !!meta?.name && isKindFallbackName(row.kind, row.id, meta.name)
+      const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
+      const name = effectiveStoredName || item?.name || `${kindLabel(row.kind)} ${row.id}`
       const logo = meta?.logo ?? item?.logo ?? null
       // Lazily backfill meta so cross-playlist clicks still have name + logo
       // even when the source catalog cache later expires.
@@ -116,6 +119,11 @@
         setFavoriteMeta(row.playlistId, row.kind, row.id, {
           name: item.name || "",
           logo: item.logo || null,
+        })
+      } else if (isStoredNameFallback && item?.name) {
+        setFavoriteMeta(row.playlistId, row.kind, row.id, {
+          name: item.name,
+          logo: meta?.logo ?? item?.logo ?? null,
         })
       }
       return {
@@ -228,7 +236,7 @@
            lg:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]
            auto-rows-min content-start
            p-2 pb-4">
-    {#each visible as entry, i (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
+    {#each visible as entry, idx (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
       <a
         href={entry.href}
         onclick={(event) => openCard(event, entry)}
@@ -236,13 +244,13 @@
         class="fav-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line
                transition-[transform,box-shadow] duration-150
-               hover:ring-2 hover:ring-accent hover:[transform:translateY(-2px)]
-               focus-visible:ring-2 focus-visible:ring-accent focus-visible:[transform:translateY(-2px)]">
+               hover:ring-1 hover:ring-accent hover:transform-[translateY(-2px)]
+               outline-none focus-visible:ring-1 focus-visible:ring-accent focus-visible:transform-[translateY(-2px)]">
         <div class="aspect-2/3 w-full bg-surface-2 overflow-hidden relative">
           {#if entry.logo}
             {#if entry.kind === "live"}
               <img
-                src={entry.logo}
+                use:cachedImg={{ url: entry.logo, kind: "logo" }}
                 alt=""
                 aria-hidden="true"
                 loading="lazy" fetchpriority="low"
@@ -252,7 +260,7 @@
                 class="absolute inset-0 h-full w-full object-cover scale-110 saturate-150 brightness-75 opacity-60 blur-2xl pointer-events-none" />
               <div class="absolute inset-0 flex items-center justify-center p-3">
                 <img
-                  src={entry.logo}
+                  use:cachedImg={{ url: entry.logo, kind: "logo" }}
                   alt=""
                   loading="lazy" fetchpriority="low"
                   decoding="async"
@@ -262,7 +270,7 @@
               </div>
             {:else}
               <img
-                src={entry.logo}
+                use:cachedImg={{ url: entry.logo, kind: "poster" }}
                 alt=""
                 loading="lazy" fetchpriority="low"
                 decoding="async"

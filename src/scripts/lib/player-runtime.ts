@@ -3,7 +3,7 @@
 import { log, redactUrl } from "@/scripts/lib/log.js"
 import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
 import { splitUrlAuth } from "@/scripts/lib/url-auth.js"
-import { clearKeyAvailable } from "@/scripts/lib/codec-hints"
+import { clearKeyAvailable, isParseFailureDetail } from "@/scripts/lib/codec-hints"
 import { t } from "@/scripts/lib/i18n.js"
 import { escapeHtml } from "@/scripts/lib/format.js"
 import { ICON_BADGE_CC } from "@/scripts/lib/icons.js"
@@ -29,6 +29,13 @@ import {
 } from "@/scripts/lib/app-settings.js"
 import { bindMonoAudio, noteMonoSourceChange } from "@/scripts/lib/audio-effects.js"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
+import {
+  createPlaybackTelemetry,
+  type EngineEvent,
+  type EngineStats,
+  type PlaybackTelemetry,
+  type ResolvedEngine,
+} from "@/scripts/lib/player-telemetry.js"
 
 export type PlayerBackend = "videojs" | "artplayer" | "shaka" | "mpv" | "vlc"
 export type ExternalPlayerKind = "mpv" | "vlc"
@@ -50,6 +57,8 @@ export interface DrmOptions {
 export interface VjsLikeHandle {
   /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. `durationSeconds` seeds duration when the container reports none (raw TS); `timelineOffsetSeconds` places a mid-programme remount on its timeline. `subtitles` opts a progressive MP4 source into embedded tx3g-subtitle extraction, or a `mkvSession` into push-mode subtitles from the MKV tee-proxy. `audio` backs track switching for engines with none (mpegts.js/native). */
   src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string; mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null } | null; audio?: AudioTrackSource | null; preferNativeHls?: boolean }): void
+  /** Wires a caller-supplied audio track source into the current mount without remounting; a no-op on engines/mounts that don't use caller-supplied tracks (e.g. hls.js/shaka, which source their own). Lets background VOD audio-track discovery attach a switcher after the source is already playing. */
+  setAudioSource?(source: AudioTrackSource | null): void
   play(): Promise<unknown> | void
   pause(): void
   paused?(): boolean
@@ -64,6 +73,8 @@ export interface VjsLikeHandle {
   el?(): HTMLElement
   error?(): unknown
   requestFullscreen?(): Promise<void> | void
+  isFullscreen?(): boolean
+  exitFullscreen?(): void
   userActive?(active: boolean): void
   /** What we learned about the current stream - feeds failure classification. */
   codecInfo?(): PlaybackCodecInfo
@@ -71,6 +82,10 @@ export interface VjsLikeHandle {
   getMediaElement?(): HTMLVideoElement | null
   /** Shifts subtitle timing by delta seconds; null if no subtitle track showing. */
   subtitleDelay?(deltaSeconds: number): number | null
+  /** Live engine snapshot (bitrate, level, buffered) for a stats overlay; null for native <video src> playback. */
+  engineStats?(): EngineStats | null
+  /** Subscribes to engine lifecycle events (variant switches, errors, recoveries) for a stream-health log. */
+  onEngineEvent?(listener: (event: EngineEvent) => void): () => void
 }
 
 export interface ExternalLaunchOptions {
@@ -122,47 +137,12 @@ export const isMacOS = (() => {
   return /Mac/i.test(platform) || /Macintosh|Mac OS X/i.test(navigator.userAgent || "")
 })()
 
-async function tauriWindowSetFullscreen(state: boolean): Promise<void> {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window")
-    await getCurrentWindow().setFullscreen(state)
-  } catch {}
-}
+export const isWindows = (() => {
+  if (typeof navigator === "undefined") return false
+  return /Windows/i.test(navigator.userAgent || "")
+})()
 
-async function subscribeTauriFullscreen(
-  handler: (isFullscreen: boolean) => void,
-): Promise<() => void> {
-  try {
-    const { getCurrentWindow } = await import("@tauri-apps/api/window")
-    const appWindow = getCurrentWindow()
-    return await appWindow.onResized(async () => {
-      try { handler(await appWindow.isFullscreen()) } catch {}
-    })
-  } catch {
-    return () => {}
-  }
-}
-
-function bindTauriFullscreenResync(
-  onResync: (isFullscreen: boolean) => void,
-): () => void {
-  if (!(isTauri && isMacOS)) return () => {}
-  let unlisten: (() => void) | null = null
-  let disposed = false
-  subscribeTauriFullscreen((isFs) => {
-    try { onResync(isFs) } catch {}
-  }).then((fn) => {
-    if (disposed) { try { fn() } catch {} }
-    else unlisten = fn
-  })
-  return () => {
-    disposed = true
-    try { unlisten?.() } catch {}
-    unlisten = null
-  }
-}
-
-const desktopPlatform = isTauri && !isAndroid
+export const desktopPlatform = isTauri && !isAndroid
 
 /** False on desktop when Snap/Flatpak confinement blocks host binaries. */
 export const externalPlayersAvailable = desktopPlatform && !sandboxRuntimeSync()
@@ -704,6 +684,7 @@ async function probeContainer(src: string): Promise<StreamKind> {
         method: "GET",
         headers: { Range: "bytes=0-0" },
         signal: controller?.signal,
+        logKind: "media",
       })
       const contentType = (response.headers.get("content-type") || "").toLowerCase()
       if (contentType.includes("dash+xml") || /\.mpd(\?|$)/i.test(response.url || "")) {
@@ -784,6 +765,7 @@ async function tsSourceIsActuallyHls(
         method: "GET",
         headers: { Range: "bytes=0-511" },
         signal: controller?.signal,
+        logKind: "media",
       })
       const contentType = (response.headers.get("content-type") || "").toLowerCase()
       if (contentType.includes("mpegurl")) {
@@ -821,6 +803,7 @@ async function resolveTsRecovery(
 
 interface MpegtsHandle {
   destroy: () => void
+  getPlayer: () => any
 }
 
 // Custom mpegts.js loader that streams via tauri-plugin-http instead of the
@@ -1150,6 +1133,11 @@ export function shouldPreferNativeHls(input: {
   return input.isMacOS && !input.isTauri && input.canPlayNativeHls
 }
 
+// A lost demuxer emits these by the hundred per second; the progress threshold spares streams that error yet still play.
+const PARSE_ERROR_LIMIT = 24
+const PARSE_ERROR_WINDOW_MS = 4000
+const PARSE_ERROR_PROGRESS_S = 1.5
+
 function attachHlsToVideo(
   Hls: any,
   video: HTMLVideoElement,
@@ -1157,6 +1145,7 @@ function attachHlsToVideo(
   codecState: PlaybackCodecInfo,
   active: ActiveHlsRef,
   onGiveUp: () => void,
+  telemetry?: PlaybackTelemetry,
   forceNative = false,
 ): void {
   const existing = active.get()
@@ -1213,6 +1202,28 @@ function attachHlsToVideo(
   const hls = new Hls(hlsConfig)
   let netRecover = 0
   let mediaRecover = 0
+  let parseErrors = 0
+  let parseWindowStart = 0
+  let parseWindowTime = 0
+  function parseErrorStormExhausted(): boolean {
+    const now = performance.now()
+    if (!parseWindowStart || now - parseWindowStart > PARSE_ERROR_WINDOW_MS) {
+      parseWindowStart = now
+      parseWindowTime = video.currentTime || 0
+      parseErrors = 1
+      return false
+    }
+    parseErrors++
+    if (parseErrors < PARSE_ERROR_LIMIT) return false
+    // hls.js keeps parsing while paused, so a frozen playhead isn't a stall then.
+    const progressed = video.paused || (video.currentTime || 0) - parseWindowTime >= PARSE_ERROR_PROGRESS_S
+    parseWindowStart = now
+    parseWindowTime = video.currentTime || 0
+    parseErrors = 0
+    if (progressed) return false
+    log.warn(`[xt:player] hls.js parse-error storm (${PARSE_ERROR_LIMIT}+ in ${PARSE_ERROR_WINDOW_MS}ms, playhead stuck) - giving up on this demuxer`)
+    return true
+  }
   hls.on(Hls.Events.BUFFER_CODECS, (_event: unknown, data: any) => {
     if (active.get() !== hls) return
     const videoCodec = data?.video?.levelCodec || data?.video?.codec
@@ -1220,6 +1231,24 @@ function attachHlsToVideo(
     const audioCodec = data?.audio?.levelCodec || data?.audio?.codec
     if (audioCodec) codecState.audioCodec = String(audioCodec)
   })
+  if (telemetry) {
+    hls.on("hlsLevelSwitched", (_event: unknown, data: any) => {
+      if (active.get() !== hls) return
+      try {
+        const levelIndex = typeof data?.level === "number" ? data.level : null
+        const level = levelIndex !== null ? hls.levels?.[levelIndex] : null
+        const quality = level?.height ? `${level.height}p` : level?.bitrate ? `${Math.round(level.bitrate / 1000)}kbps` : ""
+        telemetry.emit("variant", `level ${levelIndex ?? "?"}${quality ? ` (${quality})` : ""}`)
+      } catch {}
+    })
+    hls.on("hlsFragLoaded", (_event: unknown, data: any) => {
+      if (active.get() !== hls) return
+      try {
+        const duration = data?.frag?.duration
+        if (Number.isFinite(duration)) telemetry.noteSegmentDuration(duration)
+      } catch {}
+    })
+  }
   hls.on(Hls.Events.ERROR, (_event: unknown, data: any) => {
     if (active.get() !== hls) return
     if (/codec/i.test(String(data?.details || ""))) {
@@ -1229,23 +1258,39 @@ function attachHlsToVideo(
         if (fromMime) codecState.videoCodec = fromMime
       }
     }
-    if (!data?.fatal) return
+    const isParseError = isParseFailureDetail(data?.details)
+    // The verdict needs this detail even when no fatal error ever lands.
+    if (isParseError && !codecState.errorDetail) codecState.errorDetail = String(data.details)
+    if (!data?.fatal) {
+      telemetry?.emit("engine-error", String(data?.details || "hls non-fatal error"))
+      if (isParseError && parseErrorStormExhausted()) {
+        try { hls.destroy() } catch {}
+        if (active.get() === hls) active.set(null)
+        telemetry?.emit("fatal", String(data.details))
+        onGiveUp()
+      }
+      return
+    }
     if (!codecState.errorDetail && data?.details) {
       codecState.errorDetail = String(data.details)
     }
     const ErrorTypes = Hls.ErrorTypes
     if (data.type === ErrorTypes.NETWORK_ERROR && netRecover < 2) {
       netRecover++
+      telemetry?.emit("recover", `network: ${data?.details || "error"}`)
       try { hls.startLoad() } catch {}
       return
     }
+    // A single corrupt fragment (e.g. at an ad-break discontinuity) can still heal via recoverMediaError.
     if (data.type === ErrorTypes.MEDIA_ERROR && mediaRecover < 2) {
       mediaRecover++
+      telemetry?.emit("recover", `media: ${data?.details || "error"}`)
       try { hls.recoverMediaError() } catch {}
       return
     }
     try { hls.destroy() } catch {}
     if (active.get() === hls) active.set(null)
+    telemetry?.emit("fatal", String(data?.details || "hls fatal error"))
     onGiveUp()
   })
   hls.loadSource(cleanUrl)
@@ -1276,6 +1321,8 @@ const SHAKA_CATEGORY_NETWORK = 1
 const SHAKA_CATEGORY_MEDIA = 3
 const SHAKA_CATEGORY_DRM = 6
 
+const PLAY_REARM_TIMEOUT_MS = 20000
+
 // Shaka has no per-loader hook, so the Authorization header rides the WebView's fetch via a request filter.
 function configureShakaDrmAndAuth(
   player: any,
@@ -1295,6 +1342,15 @@ function configureShakaDrmAndAuth(
   })
 }
 
+function emitShakaVariant(player: any, isCurrent: () => boolean, telemetry: PlaybackTelemetry): void {
+  if (!isCurrent()) return
+  try {
+    const track = player.getVariantTracks?.().find((variant: any) => variant.active)
+    const quality = track?.height ? `${track.height}p` : track?.bandwidth ? `${Math.round(track.bandwidth / 1000)}kbps` : ""
+    telemetry.emit("variant", quality ? `variant ${quality}` : "variant changed")
+  } catch {}
+}
+
 async function attachShaka(
   video: HTMLVideoElement,
   url: string,
@@ -1303,6 +1359,7 @@ async function attachShaka(
   active: ActiveHlsRef,
   onGiveUp: (detail: string) => void,
   isCurrent: () => boolean,
+  telemetry?: PlaybackTelemetry,
 ): Promise<void> {
   const existing = active.get()
   if (existing) {
@@ -1339,9 +1396,14 @@ async function attachShaka(
       const codecMatch = /codecs=\\?"?([^"\\,]+)/i.exec(detail)
       if (codecMatch) codecState.videoCodec = codecMatch[1]
     }
+    telemetry?.emit("engine-error", detail)
     onGiveUp(detail)
   }
   player.addEventListener("error", (event: any) => fail(event?.detail))
+  if (telemetry) {
+    player.addEventListener("adaptation", () => emitShakaVariant(player, isCurrent, telemetry))
+    player.addEventListener("variantchanged", () => emitShakaVariant(player, isCurrent, telemetry))
+  }
   try {
     await player.attach(video)
     if (!isCurrent()) {
@@ -1419,6 +1481,8 @@ async function attachMpegts(
   onMediaInfo?: (info: { videoCodec?: string; audioCodec?: string }) => void,
   durationSeconds?: number,
   timelineOffsetSeconds?: number,
+  isStillCurrent?: () => boolean,
+  telemetry?: PlaybackTelemetry,
 ): Promise<MpegtsHandle | null> {
   const mpegtsMod = await import("mpegts.js")
   const mpegts = (mpegtsMod as any).default || mpegtsMod
@@ -1426,6 +1490,8 @@ async function attachMpegts(
     log.warn("[xt:player] mpegts.js unsupported in this WebView")
     return null
   }
+  // attachMediaElement()/detachMediaElement() both clear the element's src, so a stale attach must bail here.
+  if (isStillCurrent && !isStillCurrent()) return null
 
   let disposed = false
   let player: any = null
@@ -1532,8 +1598,13 @@ async function attachMpegts(
     if (!isLive) {
       try {
         const hostname = new URL(cleanUrl).hostname
-        // Lazy-load aborts kill stateful local proxy sessions.
-        if (hostname === "127.0.0.1" || hostname === "localhost") config.lazyLoad = false
+        // Lazy-load aborts kill stateful proxy sessions; auto-cleanup keeps the MSE quota from filling instead.
+        if (hostname === "127.0.0.1" || hostname === "localhost") {
+          config.lazyLoad = false
+          config.autoCleanupSourceBuffer = true
+          config.autoCleanupMaxBackwardDuration = 90
+          config.autoCleanupMinBackwardDuration = 60
+        }
       } catch {}
     }
     const mediaDataSource: Record<string, unknown> = { type: "mpegts", isLive, url: cleanUrl }
@@ -1554,6 +1625,17 @@ async function attachMpegts(
       }
       armDurationOverride()
     })
+    if (telemetry) {
+      player.on(mpegts.Events.STATISTICS_INFO, (stats: any) => {
+        if (disposed) return
+        try {
+          const speedKBps = stats?.speed
+          if (typeof speedKBps === "number" && Number.isFinite(speedKBps)) {
+            telemetry.noteMeasuredBitrate(speedKBps * 1024 * 8)
+          }
+        } catch {}
+      })
+    }
     player.on(
       mpegts.Events.ERROR,
       (errorType: string, errorDetail: string, errorInfo: any) => {
@@ -1570,6 +1652,7 @@ async function attachMpegts(
             "[xt:player] mpegts network error - retrying via Tauri HTTP loader:",
             errorDetail
           )
+          telemetry?.emit("engine-switch", "mpegts default loader -> mpegts tauri-http loader")
           teardown()
           start(true)
           return
@@ -1578,6 +1661,7 @@ async function attachMpegts(
           ? `${errorDetail}: ${errorInfo.msg}`
           : String(errorDetail || errorType)
         log.error("[xt:player] mpegts fatal error:", errorType, detail)
+        telemetry?.emit("engine-error", detail)
         teardown()
         onFatalError?.(detail)
       }
@@ -1601,6 +1685,9 @@ async function attachMpegts(
     destroy() {
       disposed = true
       teardown()
+    },
+    getPlayer() {
+      return player
     },
   }
 }
@@ -1643,31 +1730,6 @@ async function mountVideoJs(
     },
   }) as any
 
-  let disposeFullscreenSync: () => void = () => {}
-  if (isTauri && isMacOS) {
-    player.requestFullscreen = async function () {
-      try { player.addClass("vjs-fullscreen") } catch {}
-      try { player.trigger("fullscreenchange") } catch {}
-      await tauriWindowSetFullscreen(true)
-    }
-    player.exitFullscreen = async function () {
-      try { player.removeClass("vjs-fullscreen") } catch {}
-      try { player.trigger("fullscreenchange") } catch {}
-      await tauriWindowSetFullscreen(false)
-    }
-    player.isFullscreen = function () {
-      try { return player.hasClass?.("vjs-fullscreen") } catch { return false }
-    }
-    // Resync the vjs-fullscreen class when the window leaves/enters fullscreen
-    // outside our overrides, so isFullscreen() stays truthful.
-    disposeFullscreenSync = bindTauriFullscreenResync((isFs) => {
-      if (isFs === !!player.hasClass?.("vjs-fullscreen")) return
-      if (isFs) player.addClass("vjs-fullscreen")
-      else player.removeClass("vjs-fullscreen")
-      player.trigger("fullscreenchange")
-    })
-  }
-
   let activeMpegts: MpegtsHandle | null = null
   let pendingMpegtsAttach: Promise<MpegtsHandle | null> | null = null
   let activeHls: { destroy: () => void } | null = null
@@ -1678,7 +1740,20 @@ async function mountVideoJs(
   let pendingDurationSeconds: number | undefined
   let pendingTimelineOffsetSeconds: number | undefined
   let pendingAudioSource: AudioTrackSource | null = null
+  // Whether the current mount is on a path (ts/native) that reads pendingAudioSource at all.
+  let pendingUsesCallerSuppliedTracks = false
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
+  function resolveEngine(): ResolvedEngine | null {
+    if (activeHls) return { kind: "hls", instance: activeHls }
+    if (activeShaka) return { kind: "shaka", instance: (activeShaka as any).player }
+    const mpegtsPlayer = activeMpegts?.getPlayer()
+    if (mpegtsPlayer) return { kind: "mpegts", instance: mpegtsPlayer }
+    return null
+  }
+  const telemetry = createPlaybackTelemetry({
+    resolveEngine,
+    getMediaElement: () => getUnderlyingVideo() ?? videoEl,
+  })
   const subtitleManager = createSubtitleManager({
     registrar: createVideoJsTrackRegistrar(player),
     getCurrentTime: () => player.currentTime?.() || 0,
@@ -1745,6 +1820,7 @@ async function mountVideoJs(
         try { player.error?.({ code: 3, message: detail }) } catch {}
       },
       () => pendingSrc === src,
+      telemetry,
     )
     if (pendingSrc === src) {
       audioMenu.setSource(activeShaka ? createShakaAudioSource((activeShaka as any).player) : null)
@@ -1800,6 +1876,7 @@ async function mountVideoJs(
             })
           } catch {}
         },
+        telemetry,
       )
       audioMenu.setSource(activeHls ? createHlsAudioSource(activeHls as any) : null)
       try { player.hasStarted?.(true) } catch {}
@@ -1824,6 +1901,7 @@ async function mountVideoJs(
         "[xt:player] .ts source served an HLS playlist - falling back to hls.js:",
         redactUrl(src)
       )
+      telemetry.emit("engine-switch", "mpegts -> hls")
       loadHls(src)
       return
     }
@@ -1861,16 +1939,21 @@ async function mountVideoJs(
       },
       pendingDurationSeconds,
       pendingTimelineOffsetSeconds,
+      () => pendingSrc === src,
+      telemetry,
     )
     pendingMpegtsAttach = attachPromise
     const handle = await attachPromise
     if (pendingMpegtsAttach === attachPromise) pendingMpegtsAttach = null
-    if (!handle) {
-      loadHls(src)
+    // Staleness first: a superseded attach must not drag the player back to its
+    // own url through the hls fallback below.
+    if (pendingSrc !== src) {
+      try { handle?.destroy() } catch {}
       return
     }
-    if (pendingSrc !== src) {
-      try { handle.destroy() } catch {}
+    if (!handle) {
+      telemetry.emit("engine-switch", "mpegts -> hls")
+      loadHls(src)
       return
     }
     activeMpegts = handle
@@ -1896,6 +1979,7 @@ async function mountVideoJs(
       const hint = streamKindHint(src, type)
       // ts/native lack engine audio switching; MKV subs come from the tee, not the container.
       const usesCallerSuppliedTracks = hint === "ts" || hint === "native"
+      pendingUsesCallerSuppliedTracks = usesCallerSuppliedTracks
       subtitleManager.setSource(
         usesCallerSuppliedTracks && subtitles ? subtitles.sourceUrl : null,
         type,
@@ -1922,6 +2006,7 @@ async function mountVideoJs(
       probeContainer(src)
         .then((kind) => {
           if (pendingSrc !== src) return
+          pendingUsesCallerSuppliedTracks = kind === "ts" || kind === "native"
           if (kind === "dash") void loadDash(src, drm)
           else if (kind === "ts") {
             audioMenu.setSource(pendingAudioSource)
@@ -1952,9 +2037,14 @@ async function mountVideoJs(
       player.muted(!!value)
       return undefined
     },
+    setAudioSource(source) {
+      pendingAudioSource = source
+      if (pendingUsesCallerSuppliedTracks) audioMenu.setSource(source)
+    },
     reset() {
       pendingSrc = null
       pendingAudioSource = null
+      pendingUsesCallerSuppliedTracks = false
       destroyMpegts()
       destroyHls()
       destroyShaka()
@@ -1965,12 +2055,13 @@ async function mountVideoJs(
     dispose() {
       pendingSrc = null
       pendingAudioSource = null
+      pendingUsesCallerSuppliedTracks = false
       destroyMpegts()
       destroyHls()
       destroyShaka()
       subtitleManager.detach()
       audioMenu.dispose()
-      disposeFullscreenSync()
+      telemetry.dispose()
       try { player.dispose() } catch {}
     },
     duration() {
@@ -2000,6 +2091,12 @@ async function mountVideoJs(
     requestFullscreen() {
       return player.requestFullscreen?.()
     },
+    isFullscreen() {
+      try { return !!player.isFullscreen?.() } catch { return false }
+    },
+    exitFullscreen() {
+      try { player.exitFullscreen?.() } catch {}
+    },
     userActive(active) {
       try { player.userActive?.(active) } catch {}
     },
@@ -2011,6 +2108,12 @@ async function mountVideoJs(
     },
     subtitleDelay(deltaSeconds) {
       return subtitleManager.nudgeDelay(deltaSeconds)
+    },
+    engineStats() {
+      return telemetry.snapshot()
+    },
+    onEngineEvent(listener) {
+      return telemetry.subscribe(listener)
     },
   }
   return wrapped
@@ -2048,7 +2151,20 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   let pendingDurationSeconds: number | undefined
   let pendingTimelineOffsetSeconds: number | undefined
   let pendingAudioSource: AudioTrackSource | null = null
+  // Whether the current mount is on a path (ts/native) that reads pendingAudioSource at all.
+  let pendingUsesCallerSuppliedTracks = false
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
+  function resolveEngine(): ResolvedEngine | null {
+    if (activeHls) return { kind: "hls", instance: activeHls }
+    if (activeShaka) return { kind: "shaka", instance: (activeShaka as any).player }
+    const mpegtsPlayer = activeMpegts?.getPlayer()
+    if (mpegtsPlayer) return { kind: "mpegts", instance: mpegtsPlayer }
+    return null
+  }
+  const telemetry = createPlaybackTelemetry({
+    resolveEngine,
+    getMediaElement: () => art.video ?? null,
+  })
 
   function destroyMpegts(): Promise<void> {
     if (activeMpegts) {
@@ -2090,6 +2206,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         try { video.dispatchEvent(new Event("error")) } catch {}
       },
       () => pendingSrc === url,
+      telemetry,
     ).then(() => {
       if (pendingSrc !== url) return
       audioControl.setSource(activeShaka ? createShakaAudioSource((activeShaka as any).player) : null)
@@ -2116,6 +2233,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         audioControl.setSource(pendingAudioSource)
         try { video.dispatchEvent(new Event("error")) } catch {}
       },
+      telemetry,
       pendingPreferNativeHls,
     )
     audioControl.setSource(activeHls ? createHlsAudioSource(activeHls as any) : null)
@@ -2196,17 +2314,21 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
           },
           pendingDurationSeconds,
           pendingTimelineOffsetSeconds,
+          () => pendingSrc === url,
+          telemetry,
         )
         pendingMpegtsAttach = attachPromise
         const handle = await attachPromise
         if (pendingMpegtsAttach === attachPromise) pendingMpegtsAttach = null
+        // Staleness first: a superseded attach must not put its own url back on
+        // the element through the native fallback below.
+        if (pendingSrc !== url) {
+          try { handle?.destroy() } catch {}
+          return
+        }
         if (!handle) {
           noteMonoSourceChange(video, url)
           setNativeSrc(video, url)
-          return
-        }
-        if (pendingSrc !== url) {
-          try { handle.destroy() } catch {}
           return
         }
         activeMpegts = handle
@@ -2214,27 +2336,14 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     },
   })
 
-  let disposeFullscreenSync: () => void = () => {}
-  if (isTauri && isMacOS) {
-    art.on("ready", () => {
-      const btn = container.querySelector(".art-control-fullscreen") as HTMLElement | null
-      if (!btn) return
-      const replacement = btn.cloneNode(true) as HTMLElement
-      btn.replaceWith(replacement)
-      replacement.addEventListener("click", async (event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        const next = !art.fullscreenWeb
-        art.fullscreenWeb = next
-        await tauriWindowSetFullscreen(next)
-      })
-    })
-    // Resync art.fullscreenWeb when the window leaves fullscreen out-of-band
-    // (green button / Esc / gesture), so the next toggle goes the right way.
-    disposeFullscreenSync = bindTauriFullscreenResync((isFs) => {
-      if (art.fullscreenWeb !== isFs) art.fullscreenWeb = isFs
-    })
+  // Matches mountVideoJs's default (preload: options.preload ?? "auto"); art.video isn't
+  // guaranteed to exist synchronously, so fall back to the ready hook the same way
+  // installSubtitleControl does below.
+  const applyPreload = () => {
+    if (art.video) art.video.preload = (options.preload ?? "auto") as HTMLVideoElement["preload"]
   }
+  if (art.isReady) applyPreload()
+  else art.on("ready", applyPreload)
 
   const subtitleManager = createSubtitleManager({
     registrar: createNativeTrackRegistrar(() => art.video ?? null),
@@ -2325,6 +2434,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       const hint = streamKindHint(src, type)
       // ts/native lack engine audio switching; MKV subs come from the tee, not the container.
       const usesCallerSuppliedTracks = hint === "ts" || hint === "native"
+      pendingUsesCallerSuppliedTracks = usesCallerSuppliedTracks
       setSubtitleSource(
         usesCallerSuppliedTracks && subtitles ? subtitles.sourceUrl : null,
         type,
@@ -2354,6 +2464,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       probeContainer(src)
         .then((kind) => {
           if (pendingSrc !== src) return
+          pendingUsesCallerSuppliedTracks = kind === "ts" || kind === "native"
           art.type = kind === "dash" ? "mpd" : kind === "ts" ? "ts" : kind === "native" ? "" : "m3u8"
           if (kind === "native") noteMonoSourceChange(art.video ?? null, src)
           art.url = src
@@ -2382,9 +2493,14 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       art.muted = !!value
       return undefined
     },
+    setAudioSource(source) {
+      pendingAudioSource = source
+      if (pendingUsesCallerSuppliedTracks) audioControl.setSource(source)
+    },
     reset() {
       pendingSrc = null
       pendingAudioSource = null
+      pendingUsesCallerSuppliedTracks = false
       destroyArtEngines()
       setSubtitleSource(null)
       audioControl.setSource(null)
@@ -2393,8 +2509,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     dispose() {
       pendingSrc = null
       pendingAudioSource = null
+      pendingUsesCallerSuppliedTracks = false
       destroyArtEngines()
-      disposeFullscreenSync()
+      telemetry.dispose()
       try { art.destroy(false) } catch {}
     },
     duration() {
@@ -2424,6 +2541,12 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     requestFullscreen() {
       art.fullscreen = true
     },
+    isFullscreen() {
+      try { return !!art.fullscreen } catch { return false }
+    },
+    exitFullscreen() {
+      try { art.fullscreen = false } catch {}
+    },
     codecInfo() {
       return { ...codecState }
     },
@@ -2432,6 +2555,12 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     },
     subtitleDelay(deltaSeconds) {
       return subtitleManager.nudgeDelay(deltaSeconds)
+    },
+    engineStats() {
+      return telemetry.snapshot()
+    },
+    onEngineEvent(listener) {
+      return telemetry.subscribe(listener)
     },
   }
   return handle
@@ -2500,6 +2629,16 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   let pendingDurationSeconds: number | undefined
   let pendingTimelineOffsetSeconds: number | undefined
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
+  // The raw-TS fallback keeps `player` attached-but-unloaded; mpegts, when active, is the real engine.
+  function resolveEngine(): ResolvedEngine | null {
+    const mpegtsPlayer = activeMpegts?.getPlayer()
+    if (mpegtsPlayer) return { kind: "mpegts", instance: mpegtsPlayer }
+    return { kind: "shaka", instance: player }
+  }
+  const telemetry = createPlaybackTelemetry({
+    resolveEngine,
+    getMediaElement: () => video,
+  })
   const subtitleManager = createSubtitleManager({
     registrar: createNativeTrackRegistrar(() => video),
     getCurrentTime: () => video.currentTime || 0,
@@ -2521,6 +2660,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   function fail(src: string, detail: string) {
     if (pendingSrc !== src) return
     codecState.errorDetail = detail
+    telemetry.emit("engine-error", detail)
     try { video.dispatchEvent(new Event("error")) } catch {}
   }
 
@@ -2528,6 +2668,26 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     if (!pendingSrc) return
     fail(pendingSrc, describeShakaError(event?.detail))
   })
+  player.addEventListener("adaptation", () => emitShakaVariant(player, () => !!pendingSrc, telemetry))
+  player.addEventListener("variantchanged", () => emitShakaVariant(player, () => !!pendingSrc, telemetry))
+
+  // Every src() path loads async, so a caller's play() lands before media attaches. It cannot be
+  // conditioned on that play() rejecting: when the element still holds the previous source and is
+  // ready, the media element load algorithm *resolves* the pending play promise and then sets
+  // paused, so the caller gets a success it never got playback for. Record the intent on every
+  // play() call instead and replay it once a load completes.
+  let pendingPlayIntent = false
+
+  function consumePlayIntent() {
+    if (!pendingPlayIntent) return
+    pendingPlayIntent = false
+    const attempt = video.play()
+    // A load landing between the intent and this replay aborts it - keep the intent armed so the
+    // next completed load retries instead of leaving the player paused.
+    if (attempt && typeof attempt.catch === "function") {
+      attempt.catch(() => { pendingPlayIntent = true })
+    }
+  }
 
   async function loadIntoShaka(src: string, drm: DrmOptions | null | undefined, mimeTypeHint?: string) {
     destroyMpegts()
@@ -2552,6 +2712,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       noteMonoSourceChange(video, cleanUrl)
       await player.load(cleanUrl, null, mimeTypeHint || undefined)
       if (pendingSrc !== src) return
+      consumePlayIntent()
       const track = player.getVariantTracks?.().find((variant: any) => variant.active)
       if (track?.videoCodec) codecState.videoCodec = String(track.videoCodec)
       if (track?.audioCodec) codecState.audioCodec = String(track.audioCodec)
@@ -2569,6 +2730,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
         "[xt:player] .ts source served an HLS playlist - switching to shaka:",
         redactUrl(src)
       )
+      telemetry.emit("engine-switch", "mpegts -> shaka")
       void loadIntoShaka(src, pendingDrm, "application/x-mpegURL")
       return
     }
@@ -2578,7 +2740,8 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
 
   async function loadTs(src: string) {
     const mpegtsDrained = destroyMpegts()
-    try { await player.detach() } catch {}
+    // isSwitchingContent=true: shaka.ui exits fullscreen/PiP on any other unload
+    try { await player.detach(false, true) } catch {}
     if (pendingSrc !== src) return
     await mpegtsDrained
     if (pendingSrc !== src) return
@@ -2599,22 +2762,27 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       },
       pendingDurationSeconds,
       pendingTimelineOffsetSeconds,
+      () => pendingSrc === src,
+      telemetry,
     )
     pendingMpegtsAttach = attachPromise
     const mpegtsHandle = await attachPromise
     if (pendingMpegtsAttach === attachPromise) pendingMpegtsAttach = null
-    if (!mpegtsHandle) {
-      void loadIntoShaka(src, pendingDrm, "application/x-mpegURL")
+    // Staleness first: a superseded attach must not put its own url back on
+    // the player through the shaka fallback below.
+    if (pendingSrc !== src) {
+      try { mpegtsHandle?.destroy() } catch {}
       return
     }
-    if (pendingSrc !== src) {
-      try { mpegtsHandle.destroy() } catch {}
+    if (!mpegtsHandle) {
+      void loadIntoShaka(src, pendingDrm, "application/x-mpegURL")
       return
     }
     activeMpegts = mpegtsHandle
     // Shaka's seek bar reads its own (unloaded) player during raw TS, so finite mounts use native controls instead.
     setNativeControls(!pendingIsLive)
     setShakaSeekBar(false)
+    consumePlayIntent()
   }
 
   function setNativeControls(useNative: boolean) {
@@ -2678,9 +2846,11 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
         })
     },
     play() {
+      pendingPlayIntent = true
       return video.play()
     },
     pause() {
+      pendingPlayIntent = false
       video.pause()
     },
     paused() {
@@ -2693,14 +2863,18 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     },
     reset() {
       pendingSrc = null
+      // A load that never completed leaves its intent armed; a teardown discards it.
+      pendingPlayIntent = false
       destroyMpegts()
       subtitleManager.detach()
-      void player.unload().catch(() => {})
+      // isSwitchingContent=true keeps shaka.ui from exiting fullscreen on remounts
+      void player.unload(true, false, true).catch(() => {})
     },
     dispose() {
       pendingSrc = null
       destroyMpegts()
       subtitleManager.detach()
+      telemetry.dispose()
       const restoreOriginalVideoElement = () => {
         if (container.parentElement) container.parentElement.replaceChild(videoEl, container)
       }
@@ -2735,6 +2909,18 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
         if (!controls?.isFullScreenEnabled?.()) return controls?.toggleFullScreen?.()
       } catch {}
     },
+    isFullscreen() {
+      try { return !!controls?.isFullScreenEnabled?.() } catch { return false }
+    },
+    exitFullscreen() {
+      try {
+        if (controls?.isFullScreenEnabled?.()) {
+          void controls.toggleFullScreen?.()
+          return
+        }
+      } catch {}
+      try { void document.exitFullscreen?.() } catch {}
+    },
     codecInfo() {
       return { ...codecState }
     },
@@ -2743,6 +2929,12 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     },
     subtitleDelay(deltaSeconds) {
       return subtitleManager.nudgeDelay(deltaSeconds)
+    },
+    engineStats() {
+      return telemetry.snapshot()
+    },
+    onEngineEvent(listener) {
+      return telemetry.subscribe(listener)
     },
   }
   return handle
@@ -2815,4 +3007,38 @@ export async function mountPlayer(
 
 export function isExternalBackend(backend: PlayerBackend): boolean {
   return EXTERNAL_PLAYER_BACKENDS.includes(backend as ExternalPlayerKind)
+}
+
+export interface PlayWhenReadyOptions {
+  isStale?(): boolean
+  onReject?(err: any): void
+  onRetryReject?(err: any): void
+}
+
+/** Start playback, re-arming on `canplay` when the source load or a lost user gesture rejects play(). */
+export function playWhenReady(handle: VjsLikeHandle, options: PlayWhenReadyOptions = {}): void {
+  let result: Promise<unknown> | void
+  try {
+    result = handle.play?.()
+  } catch (err: any) {
+    options.onReject?.(err)
+    return
+  }
+  if (!result || typeof (result as Promise<unknown>).catch !== "function") return
+  void (result as Promise<unknown>).catch((err: any) => {
+    options.onReject?.(err)
+    const mediaEl = handle.getMediaElement?.()
+    if (!mediaEl) return
+    const resume = () => {
+      mediaEl.removeEventListener("canplay", resume)
+      if (options.isStale?.()) return
+      try {
+        void handle.play?.()?.catch?.((retryErr: any) => options.onRetryReject?.(retryErr))
+      } catch (retryErr: any) {
+        options.onRetryReject?.(retryErr)
+      }
+    }
+    mediaEl.addEventListener("canplay", resume)
+    setTimeout(() => mediaEl.removeEventListener("canplay", resume), PLAY_REARM_TIMEOUT_MS)
+  })
 }

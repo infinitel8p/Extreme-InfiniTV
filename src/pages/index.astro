@@ -40,7 +40,7 @@ import {
 				border border-warn/35 bg-warn/10 text-warn
 				data-[state=critical]:border-bad/45 data-[state=critical]:bg-bad/12 data-[state=critical]:text-bad
 				data-[state=expired]:border-bad/55 data-[state=expired]:bg-bad/14 data-[state=expired]:text-bad
-				hover:border-current focus-visible:border-current
+				hover:border-current
 				outline-none transition-colors no-underline">
 		</a>
 
@@ -68,7 +68,7 @@ import {
 					min-h-56 landscape:min-h-0 lg:min-h-0 overflow-hidden
 					transition-[transform,border-color,background-color] duration-300 ease-out
 					hover:border-accent hover:bg-surface-2
-					focus-visible:border-accent focus-visible:bg-surface-2
+					focus-visible:bg-surface-2
 					hover:transform-[translateY(-2px)]
 					focus-visible:transform-[translateY(-2px)]">
 				<div
@@ -115,7 +115,7 @@ import {
 					min-h-28 landscape:min-h-0 lg:min-h-0
 					transition-[transform,border-color,background-color] duration-300 ease-out
 					hover:border-accent hover:bg-surface-2
-					focus-visible:border-accent focus-visible:bg-surface-2
+					focus-visible:bg-surface-2
 					hover:transform-[translateY(-2px)]
 					focus-visible:transform-[translateY(-2px)]">
 				<div
@@ -149,7 +149,7 @@ import {
 					min-h-28 landscape:min-h-0 lg:min-h-0
 					transition-[transform,border-color,background-color] duration-300 ease-out
 					hover:border-accent hover:bg-surface-2
-					focus-visible:border-accent focus-visible:bg-surface-2
+					focus-visible:bg-surface-2
 					hover:transform-[translateY(-2px)]
 					focus-visible:transform-[translateY(-2px)]">
 				<div
@@ -203,7 +203,7 @@ import {
 	import { getEntries, getActiveEntry, loadCreds } from "@/scripts/lib/creds.js";
 	import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js";
 	import { getRecents, ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js";
-	import { getProgrammesSync, getNowNext, loadProgrammes } from "@/scripts/lib/epg-data.js";
+	import { getProgrammesSync, getNowNextForChannel, loadProgrammes } from "@/scripts/lib/epg-data.js";
 
 	const eyebrow = document.getElementById("hero-eyebrow");
 	let heroChannelCount = 0;
@@ -393,7 +393,7 @@ import {
 		};
 		const cached = getProgrammesSync(active._id);
 		const cachedHit = cached?.programmes && tvgId
-			? setOnAir(getNowNext(cached.programmes, tvgId).current)
+			? setOnAir(getNowNextForChannel(cached.programmes, lastChannel, active._id).current)
 			: false;
 		if (!cachedHit) {
 			liveTileSub.textContent = t("hub.tile.livetv.lastWatched", { name: lastChannel.name });
@@ -403,7 +403,7 @@ import {
 					if (creds?.host) {
 						const state = await loadProgrammes(active._id, creds);
 						if (state?.programmes) {
-							const { current } = getNowNext(state.programmes, tvgId);
+							const { current } = getNowNextForChannel(state.programmes, lastChannel, active._id);
 							if (current) setOnAir(current);
 						}
 					}

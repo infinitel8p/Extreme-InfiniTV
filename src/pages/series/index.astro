@@ -3,7 +3,7 @@ import Layout from "@/layouts/Layout.astro";
 import SearchInput from "@/components/SearchInput.astro";
 import SortMenu from "@/components/SortMenu.astro";
 import CategoryPickerDialog from "@/components/CategoryPickerDialog.astro";
-import { IconChevronDown } from "@tabler/icons-svelte";
+import { IconAdjustmentsHorizontal, IconChevronDown, IconDice5, IconX } from "@tabler/icons-svelte";
 ---
 
 <Layout pageTitle="Series">
@@ -21,14 +21,14 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 		</header>
 
 		<!-- Toolbar -->
-		<section class="flex flex-col sm:flex-row gap-3 shrink-0">
+		<section class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center shrink-0">
 			<button
 				id="series-category-picker-trigger"
 				type="button"
 				aria-haspopup="dialog"
 				aria-controls="series-category-picker-dialog"
 				class="rounded-xl border border-line bg-surface px-3.5 py-2 min-h-11 text-sm flex items-center gap-2 text-left
-					sm:w-72 lg:w-80 shrink-0
+					sm:w-60 lg:w-72 shrink-0
 					hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
 				<span data-i18n="list.category" class="text-fg-3 shrink-0">Category</span>
 				<span
@@ -42,7 +42,7 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 				/>
 			</button>
 
-			<div class="flex-1 min-w-0">
+			<div class="flex-1 sm:basis-64 min-w-56">
 				<SearchInput
 					id="series-search"
 					label="Search series"
@@ -52,16 +52,62 @@ import { IconChevronDown } from "@tabler/icons-svelte";
 				/>
 			</div>
 
-			<SortMenu
-				id="series-sort"
-				widthClass="sm:w-44 shrink-0"
-				options={[
-					{ value: "default", label: "Default", key: "sort.default" },
-					{ value: "added", label: "Recently added", key: "sort.recentlyAdded" },
-					{ value: "az", label: "A-Z", key: "sort.az" },
-				]}
-			/>
+			<div class="flex gap-2 sm:ml-auto shrink-0">
+				<SortMenu
+					id="series-sort"
+					label="View"
+					labelKey="list.view"
+					widthClass="flex-1 sm:flex-none sm:w-44"
+					options={[
+						{ value: "default", label: "Default", key: "sort.default" },
+						{ value: "added", label: "Recently added", key: "sort.recentlyAdded" },
+						{ value: "rating", label: "Rating", key: "sort.rating" },
+						{ value: "az", label: "A-Z", key: "sort.az" },
+					]}
+					selects={[
+						{ id: "series-lang", label: "Language", labelKey: "list.langFilter.label" },
+					]}
+					toggles={[
+						{ id: "series-group-langs", label: "Group languages", key: "list.groupLangs", ariaKey: "list.groupLangs.aria" },
+						{ id: "series-hide-watched", label: "Hide watched", key: "list.hideWatched", ariaKey: "list.hideWatched.aria" },
+					]}
+				>
+					<IconAdjustmentsHorizontal slot="icon" aria-hidden="true" stroke={2} class="size-4 text-fg-3 shrink-0" />
+				</SortMenu>
+
+				<button
+					id="series-surprise"
+					type="button"
+					data-i18n-attr="aria-label:surprise.buttonAria;title:surprise.buttonAria"
+					aria-label="Surprise me with a random title"
+					title="Surprise me with a random title"
+					class="rounded-xl border border-line bg-surface min-h-11 text-sm shrink-0
+						flex items-center justify-center w-11 px-0 gap-0 xl:w-auto xl:px-3.5 xl:gap-2
+						hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
+					<IconDice5 aria-hidden="true" stroke={2} class="size-4 text-fg-3 shrink-0" />
+					<span data-i18n="surprise.button" class="hidden xl:inline">Surprise me</span>
+				</button>
+			</div>
 		</section>
+
+		<!-- Active person filter -->
+		<div id="series-person-filter-row" hidden class="flex items-center gap-2 shrink-0 px-1">
+			<span
+				class="inline-flex items-center gap-1.5 rounded-full border border-accent bg-accent-soft
+					px-3 py-1 min-h-8 text-sm text-fg">
+				<span id="series-person-filter-label"></span>
+				<button
+					id="series-person-filter-clear"
+					type="button"
+					data-i18n-attr="aria-label:list.personFilterAria;title:list.personFilterAria"
+					aria-label="Remove person filter"
+					title="Remove person filter"
+					class="rounded-full outline-none hover:text-accent focus-visible:text-accent
+						focus-visible:ring-1 focus-visible:ring-accent -mr-1 p-0.5">
+					<IconX aria-hidden="true" stroke={2} class="size-3.5" />
+				</button>
+			</span>
+		</div>
 
 		<div
 			id="series-list-status"

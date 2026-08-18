@@ -29,12 +29,12 @@ export interface ConfirmDialogOptions {
 const BUTTON_CLASS_DEFAULT =
   "rounded-xl px-4 py-2 text-sm font-semibold bg-accent text-bg " +
   "hover:opacity-90 focus-visible:opacity-90 focus-visible:outline-none " +
-  "focus-visible:ring-2 focus-visible:ring-accent"
+  "focus-visible:ring-1 focus-visible:ring-accent"
 
 const BUTTON_CLASS_DESTRUCTIVE =
   "rounded-xl px-4 py-2 text-sm font-semibold bg-bad text-bg " +
   "hover:opacity-90 focus-visible:opacity-90 focus-visible:outline-none " +
-  "focus-visible:ring-2 focus-visible:ring-bad"
+  "focus-visible:ring-1 focus-visible:ring-bad"
 
 function ensureDialog(): HTMLDialogElement {
   if (dlg) return dlg

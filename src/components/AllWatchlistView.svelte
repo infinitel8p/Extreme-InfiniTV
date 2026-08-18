@@ -11,7 +11,8 @@
     setWatchlistMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
-  import { kindLabel, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
+  import { cachedImg } from "@/scripts/lib/img-cache.ts"
   import { IconExternalLink } from "@tabler/icons-svelte"
 
   /** @type {"all"|"vod"|"series"} */
@@ -98,14 +99,21 @@
     const titleById = new Map(playlists.map((entry) => [entry.id, entry.title]))
     entries = raw.map((row) => {
       const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
-      const name = row.name || item?.name || `${kindLabel(row.kind)} ${row.id}`
+      const isStoredNameFallback = !!row.name && isKindFallbackName(row.kind, row.id, row.name)
+      const effectiveStoredName = isStoredNameFallback ? "" : row.name
+      const name = effectiveStoredName || item?.name || `${kindLabel(row.kind)} ${row.id}`
       const logo = row.logo ?? item?.logo ?? null
       // Lazily backfill stored meta so cross-playlist clicks still have name
       // and poster even when the source catalog cache later expires.
-      if (!row.name && !row.logo && (item?.name || item?.logo)) {
+      if (!effectiveStoredName && !row.logo && (item?.name || item?.logo)) {
         setWatchlistMeta(row.playlistId, row.kind, row.id, {
           name: item.name || "",
           logo: item.logo || null,
+        })
+      } else if (isStoredNameFallback && item?.name) {
+        setWatchlistMeta(row.playlistId, row.kind, row.id, {
+          name: item.name,
+          logo: row.logo ?? item?.logo ?? null,
         })
       }
       return {
@@ -216,7 +224,7 @@
            lg:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))]
            auto-rows-min content-start
            p-2 pb-4">
-    {#each visible as entry, i (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
+    {#each visible as entry, idx (entry.playlistId + ":" + entry.kind + ":" + entry.id)}
       <a
         href={entry.href}
         onclick={(event) => openCard(event, entry)}
@@ -224,12 +232,12 @@
         class="fav-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line
                transition-[transform,box-shadow] duration-150
-               hover:ring-2 hover:ring-accent hover:[transform:translateY(-2px)]
-               focus-visible:ring-2 focus-visible:ring-accent focus-visible:[transform:translateY(-2px)]">
+               hover:ring-1 hover:ring-accent hover:[transform:translateY(-2px)]
+               focus-visible:ring-1 focus-visible:ring-accent focus-visible:[transform:translateY(-2px)]">
         <div class="aspect-2/3 w-full bg-surface-2 overflow-hidden relative">
           {#if entry.logo}
             <img
-              src={entry.logo}
+              use:cachedImg={{ url: entry.logo, kind: "poster" }}
               alt=""
               loading="lazy" fetchpriority="low"
               decoding="async"

@@ -128,3 +128,22 @@ export const ICON_LANGUAGE = wrap(
     '<path d="M12 20l4 -9l4 9" />' +
     '<path d="M19.1 18h-6.2" />'
 )
+
+export const ICON_DICE = wrap(
+  '<path d="M3 5a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14" />' +
+    '<path d="M8 8.5a.5 .5 0 1 0 1 0a.5 .5 0 1 0 -1 0" fill="currentColor" />' +
+    '<path d="M15 8.5a.5 .5 0 1 0 1 0a.5 .5 0 1 0 -1 0" fill="currentColor" />' +
+    '<path d="M15 15.5a.5 .5 0 1 0 1 0a.5 .5 0 1 0 -1 0" fill="currentColor" />' +
+    '<path d="M8 15.5a.5 .5 0 1 0 1 0a.5 .5 0 1 0 -1 0" fill="currentColor" />' +
+    '<path d="M11.5 12a.5 .5 0 1 0 1 0a.5 .5 0 1 0 -1 0" fill="currentColor" />'
+)
+
+export const ICON_REFRESH = wrap(
+  '<path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4" />' +
+    '<path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" />'
+)
+
+export const ICON_USER = wrap(
+  '<path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0" />' +
+    '<path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />'
+)

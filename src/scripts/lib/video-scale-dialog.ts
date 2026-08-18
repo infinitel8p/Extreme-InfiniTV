@@ -65,6 +65,7 @@ function ensureDialog(): HTMLDialogElement {
   node.className = [
     "fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0",
     "w-[min(24rem,calc(100vw-2rem))] max-h-[calc(100dvh-2rem)]",
+    "open:flex flex-col overflow-hidden",
     "backdrop:bg-black/30",
   ].join(" ")
 
@@ -86,7 +87,7 @@ function ensureDialog(): HTMLDialogElement {
   `).join("")
 
   node.innerHTML = `
-    <div class="flex flex-col gap-4 p-5 overflow-y-auto max-h-full">
+    <div class="flex flex-col flex-auto min-h-0 gap-4 p-5 overflow-y-auto">
       <header class="flex items-center gap-3">
         <span class="icon-mark" aria-hidden="true">${ICON_ASPECT_RATIO}</span>
         <h2 id="${DIALOG_ID}-title" data-role="title" class="text-base font-semibold"></h2>
@@ -95,7 +96,7 @@ function ensureDialog(): HTMLDialogElement {
       <label class="flex items-center gap-2.5 min-h-11 text-sm text-fg-2 px-3 py-2 rounded-lg cursor-pointer select-none hover:text-fg focus-within:text-fg">
         <span class="relative inline-flex w-9 h-5 shrink-0">
           <input type="checkbox" data-role="apply-all" class="sr-only peer" />
-          <span class="absolute inset-0 rounded-full border border-line bg-surface-2 transition-colors peer-checked:bg-accent peer-checked:border-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface"></span>
+          <span class="absolute inset-0 rounded-full border border-line bg-surface-2 transition-colors peer-checked:bg-accent peer-checked:border-accent peer-focus-visible:ring-1 peer-focus-visible:ring-accent peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface"></span>
           <span class="absolute top-0.5 left-0.5 rtl:left-auto rtl:right-0.5 size-4 rounded-full bg-fg-2 transition-transform peer-checked:translate-x-4 rtl:peer-checked:-translate-x-4 peer-checked:bg-bg"></span>
         </span>
         <span data-role="apply-all-label"></span>

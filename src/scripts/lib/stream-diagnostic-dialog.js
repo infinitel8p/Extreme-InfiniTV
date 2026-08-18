@@ -1,5 +1,5 @@
 // Lazy-mounted "Test stream" diagnostic dialog.
-import { log, redactUrl } from "@/scripts/lib/log.js"
+import { log, redactUrl, redactDeep } from "@/scripts/lib/log.js"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { diagnoseStream, summarizeReport } from "@/scripts/lib/stream-diagnostic.js"
 import { t } from "@/scripts/lib/i18n.js"
@@ -93,18 +93,6 @@ function ensureDialog() {
 
   dlg = node
   return dlg
-}
-
-// Deep-redact every string field before the report leaves the app
-function redactReportDeep(value) {
-  if (typeof value === "string") return redactUrl(value)
-  if (Array.isArray(value)) return value.map(redactReportDeep)
-  if (value && typeof value === "object") {
-    const redacted = {}
-    for (const [key, fieldValue] of Object.entries(value)) redacted[key] = redactReportDeep(fieldValue)
-    return redacted
-  }
-  return value
 }
 
 function renderStage(label, content) {
@@ -301,7 +289,7 @@ export function openStreamDiagnostic(opts) {
     copyBtn.onclick = async () => {
       if (!lastReport) return
       try {
-        await writeClipboardText(JSON.stringify(redactReportDeep(lastReport), null, 2))
+        await writeClipboardText(JSON.stringify(redactDeep(lastReport), null, 2))
         copyBtn.textContent = t("streamTest.copied")
         setTimeout(() => {
           if (copyBtn) copyBtn.textContent = t("streamTest.copy")
