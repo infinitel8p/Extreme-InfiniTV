@@ -757,6 +757,7 @@
   "detail.error.failedTryPlay": "Nie udało się załadować informacji o filmie. Spróbuj mimo to nacisnąć Odtwórz.",
   "detail.error.localAvailable": "Lokalna kopia jest dostępna - dotknij Odtwórz.",
   "detail.error.containerUnsupported": "Wbudowany odtwarzacz nie odtwarza plików {container} na tej platformie.",
+  "detail.error.formatUnsupported": "Wbudowany odtwarzacz nie odtwarza tego wideo na tej platformie.",
   "detail.error.containerUnsupportedHint": "Użyj przycisku odtwarzacza zewnętrznego, aby otworzyć w MPV lub VLC.",
   "detail.error.containerUnsupportedHintNoPlayer": "Ustaw domyślny odtwarzacz zewnętrzny w Ustawieniach w sekcji Odtwarzanie, aby odtwarzać pliki AVI.",
   "detail.error.sourceUnavailable": "Dostawca nie udostępnia teraz tego pliku (może być tymczasowo niedostępny).",

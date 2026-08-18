@@ -757,6 +757,7 @@
   "detail.error.failedTryPlay": "فشل تحميل معلومات الفيلم. جرّب التشغيل على أي حال.",
   "detail.error.localAvailable": "النسخة المحلية متاحة - اضغط تشغيل.",
   "detail.error.containerUnsupported": "المشغّل المدمج لا يستطيع تشغيل ملفات {container} على هذه المنصة.",
+  "detail.error.formatUnsupported": "المشغّل المدمج لا يستطيع تشغيل هذا الفيديو على هذه المنصة.",
   "detail.error.containerUnsupportedHint": "استخدم زر المشغّل الخارجي لفتحه في MPV أو VLC.",
   "detail.error.containerUnsupportedHintNoPlayer": "عيّن مشغّل فيديو خارجيًا افتراضيًا من الإعدادات ضمن قسم التشغيل لتشغيل ملفات AVI.",
   "detail.error.sourceUnavailable": "المزوّد لا يقدّم هذا الملف حاليًا (قد يكون غير متاح مؤقتًا).",

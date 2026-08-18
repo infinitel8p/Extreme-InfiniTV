@@ -757,6 +757,7 @@
   "detail.error.failedTryPlay": "فلم کی معلومات لوڈ نہیں ہو سکیں۔ پھر بھی چلانا آزمائیں۔",
   "detail.error.localAvailable": "مقامی کاپی دستیاب ہے - چلائیں دبائیں۔",
   "detail.error.containerUnsupported": "بلٹ اِن پلیئر اس پلیٹ فارم پر {container} فائلیں نہیں چلا سکتا۔",
+  "detail.error.formatUnsupported": "بلٹ اِن پلیئر اس پلیٹ فارم پر یہ ویڈیو نہیں چلا سکتا۔",
   "detail.error.containerUnsupportedHint": "اسے MPV یا VLC میں کھولنے کے لیے بیرونی پلیئر بٹن استعمال کریں۔",
   "detail.error.containerUnsupportedHintNoPlayer": "AVI فائلیں چلانے کے لیے ترتیبات میں پلے بیک کے تحت ایک ڈیفالٹ بیرونی پلیئر منتخب کریں۔",
   "detail.error.sourceUnavailable": "فراہم کنندہ فی الحال یہ فائل فراہم نہیں کر رہا (شاید عارضی طور پر دستیاب نہیں)۔",

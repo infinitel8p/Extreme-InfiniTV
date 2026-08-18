@@ -757,6 +757,7 @@
   "detail.error.failedTryPlay": "情報の読み込みに失敗しました。再生をお試しください。",
   "detail.error.localAvailable": "ローカルコピーがあります - 再生をタップしてください。",
   "detail.error.containerUnsupported": "内蔵プレーヤーはこのプラットフォームで {container} ファイルを再生できません。",
+  "detail.error.formatUnsupported": "内蔵プレーヤーはこのプラットフォームでこの動画を再生できません。",
   "detail.error.containerUnsupportedHint": "外部プレーヤーボタンから MPV か VLC で開いてください。",
   "detail.error.containerUnsupportedHintNoPlayer": "AVI ファイルを再生するには、設定の再生セクションで既定の外部プレーヤーを設定してください。",
   "detail.error.sourceUnavailable": "プロバイダーが現在このファイルを配信していません（一時的に利用できない可能性があります）。",

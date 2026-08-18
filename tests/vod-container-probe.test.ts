@@ -12,6 +12,7 @@ vi.mock("@/scripts/lib/log.js", () => ({
 
 import {
   classifyContainerBytes,
+  classifySourceHealth,
   swapUrlExtension,
   probeVodContainerAlternative,
   clearVodContainerProbeCache,
@@ -54,6 +55,27 @@ describe("classifyContainerBytes", () => {
   it("returns null for a too-short array", () => {
     const bytes = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 0x00, 0x00])
     expect(classifyContainerBytes(bytes)).toBeNull()
+  })
+})
+
+describe("classifySourceHealth", () => {
+  it("returns unreachable for a non-ok response", () => {
+    const bytes = new Uint8Array([0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d])
+    expect(classifySourceHealth(false, bytes)).toBe("unreachable")
+  })
+
+  it("returns unreachable for an ok response with null bytes", () => {
+    expect(classifySourceHealth(true, null)).toBe("unreachable")
+  })
+
+  it("returns media for an ok response with MP4 magic bytes", () => {
+    const bytes = new Uint8Array([0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d])
+    expect(classifySourceHealth(true, bytes)).toBe("media")
+  })
+
+  it("returns not-media for an ok response with HTML-looking bytes", () => {
+    const bytes = new TextEncoder().encode("<html><body>error")
+    expect(classifySourceHealth(true, bytes)).toBe("not-media")
   })
 })
 

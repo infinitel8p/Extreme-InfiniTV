@@ -757,6 +757,7 @@
   "detail.error.failedTryPlay": "Gagal memuat info film. Coba Putar tetap.",
   "detail.error.localAvailable": "Salinan lokal tersedia - ketuk Putar.",
   "detail.error.containerUnsupported": "Pemutar bawaan tidak dapat memutar file {container} di platform ini.",
+  "detail.error.formatUnsupported": "Pemutar bawaan tidak dapat memutar video ini di platform ini.",
   "detail.error.containerUnsupportedHint": "Gunakan tombol pemutar eksternal untuk membukanya di MPV atau VLC.",
   "detail.error.containerUnsupportedHintNoPlayer": "Atur pemutar eksternal bawaan di Pengaturan pada bagian Pemutaran untuk memutar file AVI.",
   "detail.error.sourceUnavailable": "Penyedia sedang tidak melayani file ini (mungkin tidak tersedia untuk sementara).",

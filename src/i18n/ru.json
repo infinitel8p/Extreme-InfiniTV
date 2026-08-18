@@ -757,6 +757,7 @@
   "detail.error.failedTryPlay": "Не удалось загрузить сведения. Попробуйте «Смотреть» в любом случае.",
   "detail.error.localAvailable": "Есть локальная копия - нажмите «Смотреть».",
   "detail.error.containerUnsupported": "Встроенный плеер не может воспроизводить файлы {container} на этой платформе.",
+  "detail.error.formatUnsupported": "Встроенный плеер не может воспроизводить это видео на этой платформе.",
   "detail.error.containerUnsupportedHint": "Откройте файл в MPV или VLC кнопкой внешнего плеера.",
   "detail.error.containerUnsupportedHintNoPlayer": "Укажите внешний проигрыватель по умолчанию в настройках, в разделе воспроизведения, чтобы воспроизводить файлы AVI.",
   "detail.error.sourceUnavailable": "Провайдер сейчас не отдаёт этот файл (возможно, он временно недоступен).",

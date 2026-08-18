@@ -7,6 +7,7 @@ import {
   detectVodContainerFromLocalPath,
   isUpstreamHttpFailure,
 } from "@/scripts/lib/vod-container-plan.ts"
+import { probeVodSourceHealth } from "@/scripts/lib/vod-container-probe.ts"
 import { rememberRemuxPinnedContent } from "@/scripts/lib/vod-remux-memory.ts"
 import type { VjsLikeHandle } from "@/scripts/lib/player-runtime.ts"
 import type { VodAudioSwitcher } from "@/scripts/lib/vod-audio-switch.ts"
@@ -134,7 +135,16 @@ export function handlePlayerStartError(options: PlayerStartErrorOptions) {
     }
     if (options.posterEl) options.posterEl.classList.remove("hidden")
     if (options.playerWrap) options.playerWrap.classList.add("hidden")
-    options.toasts.showContainerUnsupportedToast(unsupportedContainer || "video")
+    if (unsupportedContainer) {
+      options.toasts.showContainerUnsupportedToast(unsupportedContainer)
+      return
+    }
+    // Code 4 with no known container often means the server sent an error page, not a codec problem.
+    void probeVodSourceHealth(options.playSrc).then((verdict) => {
+      log.info("[xt:vod-mount] source health probe verdict", { verdict, contentKey: options.contentKey })
+      if (verdict === "media") options.toasts.showFormatUnsupportedToast()
+      else options.toasts.showSourceUnavailableToast()
+    })
     return
   }
   // Demux succeeded but decoding failed (e.g. an HEVC .mkv played direct) - same treatment as a remux decode failure.

@@ -111,6 +111,34 @@ async function fetchAndClassify(url: string): Promise<"mkv" | "mp4" | "avi" | "t
   }
 }
 
+export function classifySourceHealth(
+  responseOk: boolean,
+  bytes: Uint8Array | null,
+): "unreachable" | "not-media" | "media" {
+  if (!responseOk || bytes === null) return "unreachable"
+  return classifyContainerBytes(bytes) !== null ? "media" : "not-media"
+}
+
+export async function probeVodSourceHealth(url: string): Promise<"unreachable" | "not-media" | "media"> {
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null
+  const timer = controller ? setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS) : null
+  try {
+    const response = await providerFetch(url, {
+      method: "GET",
+      headers: { Range: `bytes=0-${PROBE_BYTE_COUNT - 1}` },
+      signal: controller?.signal,
+      logKind: "media",
+    })
+    const bytes = response.ok ? await readClassifiableBytes(response) : null
+    return classifySourceHealth(response.ok, bytes)
+  } catch (err) {
+    log.log("[xt:vod-probe] source health fetch failed", redactUrl(url), String((err as Error)?.message || err))
+    return "unreachable"
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 const PROBE_CACHE_MAX_ENTRIES = 200
 
 const probeCache = new Map<string, { url: string; container: ProbedContainer } | null>()

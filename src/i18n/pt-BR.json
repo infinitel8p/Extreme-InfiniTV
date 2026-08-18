@@ -757,6 +757,7 @@
   "detail.error.failedTryPlay": "Falha ao carregar informações. Tente Reproduzir mesmo assim.",
   "detail.error.localAvailable": "Há cópia local - toque em Reproduzir.",
   "detail.error.containerUnsupported": "O reprodutor integrado não consegue reproduzir arquivos {container} nesta plataforma.",
+  "detail.error.formatUnsupported": "O reprodutor integrado não consegue reproduzir este vídeo nesta plataforma.",
   "detail.error.containerUnsupportedHint": "Use o botão de reprodutor externo para abrir no MPV ou VLC.",
   "detail.error.containerUnsupportedHintNoPlayer": "Defina um player externo padrão em Configurações, em Reprodução, para reproduzir arquivos AVI.",
   "detail.error.sourceUnavailable": "O provedor não está servindo este arquivo agora (pode estar temporariamente indisponível).",

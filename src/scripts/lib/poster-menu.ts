@@ -204,6 +204,15 @@ export function openPosterMenu(opts: PosterMenuOptions): void {
     }
     if (opts.buildStreamUrl) {
       menu.appendChild(
+        makeItem(t("stream.menu.test"), () => {
+          const url = opts.buildStreamUrl!()
+          if (!url) return
+          import("@/scripts/lib/stream-diagnostic-dialog.js").then(({ openStreamDiagnostic }) => {
+            openStreamDiagnostic({ url, title: entry.name || "" })
+          })
+        })
+      )
+      menu.appendChild(
         makeItem(t("list.menu.copyUrl"), async () => {
           const url = opts.buildStreamUrl!()
           if (!url) return
