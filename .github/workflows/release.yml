@@ -73,7 +73,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      models: read
     outputs:
       release_id: ${{ steps.create.outputs.result }}
       tag: ${{ steps.meta.outputs.tag }}
@@ -155,14 +154,8 @@ jobs:
             echo
             git diff --stat $RANGE | tail -n 200
           } > "$RUNNER_TEMP/changes.md"
-          # GitHub Models on Copilot Pro caps gpt-4o at 8000 input tokens per
-          # request (rate-limit tier "Low"). With the system prompt eating
-          # ~800 tokens, we have ~7000 tokens for content - roughly 24 KB of
-          # ASCII text. Trim aggressively from the front of the file so the
-          # most important section (PR descriptions, when present) is most
-          # likely to fit; the gather step ordered them with PR descriptions
-          # first when available.
-          head -c 24000 "$RUNNER_TEMP/changes.md" > "$RUNNER_TEMP/changes.trimmed.md"
+          # cap so a huge release range can't blow the model's context window
+          head -c 400000 "$RUNNER_TEMP/changes.md" > "$RUNNER_TEMP/changes.trimmed.md"
           {
             echo 'log<<CHANGES_EOF'
             cat "$RUNNER_TEMP/changes.trimmed.md"
@@ -170,18 +163,14 @@ jobs:
             echo 'CHANGES_EOF'
           } >> "$GITHUB_OUTPUT"
 
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
       - id: ai
         continue-on-error: true
         uses: actions/ai-inference@v1
         with:
-          # On Copilot Pro, gpt-4o is the strongest practical model for this
-          # task because it has the largest input window (8000 tokens). The
-          # newer reasoning-tier models (gpt-5, gpt-5-mini, o4-mini) are
-          # capped at 4000 input tokens which is too tight for the PR-body +
-          # commit-body payload below. Don't "upgrade" to gpt-5 without first
-          # cutting the input cap in half.
-          # See https://docs.github.com/en/github-models/use-github-models/prototyping-with-ai-models#rate-limits
-          model: openai/gpt-4o
+          model: claude-sonnet-4.5
           max-tokens: 4000
           system-prompt: |
             You write user-facing release notes for "Extreme InfiniTV", an IPTV
@@ -256,6 +245,8 @@ jobs:
             Write release notes for tag ${{ steps.meta.outputs.tag }}.
 
             ${{ steps.gather.outputs.log }}
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
 
       - id: create
         uses: actions/github-script@v8
