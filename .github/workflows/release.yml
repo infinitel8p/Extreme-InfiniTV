@@ -168,10 +168,9 @@ jobs:
 
       - id: ai
         continue-on-error: true
-        uses: actions/ai-inference@v1
+        uses: actions/ai-inference@v3
         with:
           model: claude-sonnet-4.5
-          max-tokens: 4000
           system-prompt: |
             You write user-facing release notes for "Extreme InfiniTV", an IPTV
             player built with Astro + Svelte 5 and Tauri 2. It ships on
