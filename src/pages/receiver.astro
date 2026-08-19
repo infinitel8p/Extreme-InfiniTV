@@ -1,0 +1,60 @@
+---
+import ReceiverLayout from "@/layouts/ReceiverLayout.astro";
+---
+
+<ReceiverLayout pageTitle="Receiver">
+	<div class="relative h-dvh w-full">
+		<main
+			id="receiver-idle"
+			class="h-dvh w-full flex flex-col items-center justify-center gap-6 px-6 text-center">
+
+			<span class="text-xs font-semibold uppercase tracking-[0.22em] text-fg-3">Extreme InfiniTV</span>
+
+			<h1 id="receiver-device-name" class="text-2xl font-semibold text-fg">-</h1>
+
+			<div id="receiver-addresses" class="flex flex-col gap-1 text-sm text-fg-3 tabular-nums"></div>
+
+			<div class="flex flex-col items-center gap-2">
+				<span
+					data-i18n="receiver.idle.codeLabel"
+					class="text-xs font-semibold uppercase tracking-[0.22em] text-fg-3">Pair code</span>
+				<span
+					id="receiver-pair-code"
+					class="text-6xl sm:text-7xl font-semibold tracking-[0.35em] tabular-nums text-accent">------</span>
+			</div>
+
+			<p data-i18n="receiver.idle.hint" class="max-w-md text-sm text-fg-3">
+				In the app on your phone or computer, choose Play on TV, then Add a device with this address and code.
+			</p>
+
+			<button id="receiver-exit" type="button" class="btn" data-i18n="receiver.idle.exit">Exit receiver</button>
+		</main>
+
+		<div
+			id="receiver-paired-flash"
+			class="hidden fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-full border border-accent/40 bg-accent-soft px-4 py-2 text-sm text-fg"></div>
+
+		<div id="receiver-player" class="hidden absolute inset-0 bg-black">
+			<video id="receiver-video" class="h-full w-full" playsinline></video>
+
+			<div id="receiver-title" class="hidden absolute top-4 left-4 text-sm text-fg-3 drop-shadow"></div>
+
+			<div
+				id="receiver-loading"
+				data-i18n="receiver.loading"
+				class="hidden absolute inset-0 flex items-center justify-center text-sm text-fg-3">Loading…</div>
+
+			<div id="receiver-error" class="hidden absolute inset-0 flex items-center justify-center px-6">
+				<div class="rounded-2xl border border-line bg-surface p-6 max-w-sm flex flex-col items-center gap-2 text-center">
+					<p data-i18n="receiver.error.title" class="text-fg font-semibold">Playback failed</p>
+					<p id="receiver-error-message" class="text-sm text-fg-3"></p>
+					<p data-i18n="receiver.error.returning" class="text-xs text-fg-3">Returning to the pairing screen…</p>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		import "../scripts/receiver/receiver.ts";
+	</script>
+</ReceiverLayout>

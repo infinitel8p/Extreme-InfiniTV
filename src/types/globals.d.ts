@@ -66,6 +66,16 @@ interface AndroidSnifferBridge {
   cancelSniff?: () => void
 }
 
+interface AndroidNsdBridge {
+  isSupported?: () => boolean
+  advertise?: (name: string, port: number) => void
+  stopAdvertise?: () => void
+  startDiscovery?: () => void
+  stopDiscovery?: () => void
+  /** Returns a JSON-encoded array of {name, host, port}. */
+  drainDiscovered?: () => string
+}
+
 interface SpatialNavigationApi {
   init: () => void
   uninit: () => void
@@ -92,6 +102,7 @@ declare global {
     AndroidIntent?: AndroidIntentBridge
     AndroidVideo?: AndroidVideoBridge
     AndroidSniffer?: AndroidSnifferBridge
+    AndroidNsd?: AndroidNsdBridge
     /** Called from MainActivity on PiP enter to promote the playing video into HTML5 fullscreen. */
     __xtPipFullscreen?: () => void
     /** Called from MainActivity on PiP exit; undoes __xtPipFullscreen if it succeeded. */

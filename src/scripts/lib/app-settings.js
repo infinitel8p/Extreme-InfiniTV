@@ -36,6 +36,9 @@ const KEY_CAPTIONS_AUTO = "xt_captions_auto"
 const KEY_TMDB_KEY = "xt_tmdb_key"
 const KEY_TMDB_ENABLED = "xt_tmdb_enabled"
 const KEY_DEV_MODE = "xt_dev_mode"
+const KEY_RECEIVER_MODE = "xt_receiver_mode"
+const KEY_RECEIVER_BOOT = "xt_receiver_boot"
+const KEY_RECEIVER_NAME = "xt_receiver_name"
 const KEY_CONTENT_LANGUAGE = "xt_content_lang"
 const KEY_LANGUAGE_GROUPING = "xt_lang_grouping"
 const EVT_CHANGED = "xt:settings-changed"
@@ -936,6 +939,42 @@ export function setDevModeEnabled(enabled) {
   document.dispatchEvent(
     new CustomEvent(DEV_MODE_EVENT, { detail: { value: !!enabled } })
   )
+}
+
+export const RECEIVER_MODE_EVENT = "xt:receiver-mode-changed"
+
+/** TV receiver mode: default off. */
+export function getReceiverModeEnabled() {
+  return readLS(KEY_RECEIVER_MODE, "") === "1"
+}
+
+export function setReceiverModeEnabled(enabled) {
+  writeLS(KEY_RECEIVER_MODE, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(RECEIVER_MODE_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const RECEIVER_BOOT_EVENT = "xt:receiver-boot-changed"
+
+/** Boot straight into the receiver screen on launch: default off. */
+export function getReceiverBootEnabled() {
+  return readLS(KEY_RECEIVER_BOOT, "") === "1"
+}
+
+export function setReceiverBootEnabled(enabled) {
+  writeLS(KEY_RECEIVER_BOOT, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(RECEIVER_BOOT_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export function getReceiverDeviceName() {
+  return readLS(KEY_RECEIVER_NAME, "")
+}
+
+export function setReceiverDeviceName(name) {
+  writeLS(KEY_RECEIVER_NAME, name || "")
 }
 
 export const CAPTIONS_AUTO_EVENT = "xt:captions-auto-changed"

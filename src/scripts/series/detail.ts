@@ -106,6 +106,7 @@ import {
 } from "@/scripts/lib/player-runtime.ts"
 import { toast } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
+import { setupPlayOnTvButton } from "@/scripts/lib/play-on-tv-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
@@ -1202,7 +1203,10 @@ let qualityChipDetach = null
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 
-const vodPlaybackToasts = createVodPlaybackToasts(() => externalBtnHandle?.refresh())
+const vodPlaybackToasts = createVodPlaybackToasts(() => {
+  externalBtnHandle?.refresh()
+  playTvBtnHandle?.refresh()
+})
 
 function setupPipButton(player) {
   const pipBtn = document.getElementById("series-detail-pip")
@@ -1403,6 +1407,7 @@ async function playEpisode(episode, options = {}) {
 
   currentEpisode = episode
   externalBtnHandle?.refresh()
+  playTvBtnHandle?.refresh()
 
   const localSrc = await getLocalPlayableSrc(src)
   const playSrc = localSrc || src
@@ -1602,6 +1607,42 @@ const externalBtnHandle = setupExternalPlayerButton(
     afterLaunch() {
       pushEpisodePresence(currentEpisode)
       externalPresenceActive = true
+    },
+  }
+)
+
+const playTvBtnHandle = setupPlayOnTvButton(
+  document.getElementById("series-detail-play-tv"),
+  {
+    getSrc() {
+      if (!currentEpisode) return null
+      return buildEpisodeStreamUrl(currentEpisode) || null
+    },
+    getTitle() {
+      if (!currentEpisode) return series?.name || null
+      const seasonNum = currentEpisode.season || currentSeason
+      const epNum = currentEpisode.episode_num
+      const episodeTitle = currentEpisode.title || ""
+      const seriesName = series?.name || ""
+      const sxe = seasonNum && epNum ? `S${seasonNum}E${epNum}` : ""
+      return [seriesName, sxe, episodeTitle].filter(Boolean).join(" · ") || null
+    },
+    getLogo() {
+      return series?.logo || null
+    },
+    getResumeSeconds() {
+      if (!activePlaylistId || !currentEpisode) return 0
+      const saved = getProgress(activePlaylistId, "episode", currentEpisode.id)
+      if (!saved || saved.completed) return 0
+      return saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+    },
+    getDurationSeconds() {
+      if (!currentEpisode) return undefined
+      const seconds = episodeDurationSeconds(currentEpisode)
+      return seconds > 0 ? seconds : undefined
+    },
+    beforeCast() {
+      try { vjs?.pause?.() } catch {}
     },
   }
 )

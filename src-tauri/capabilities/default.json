@@ -65,6 +65,7 @@
       ]
     },
     "allow-warmup-commands",
-    "allow-safe-fetch-commands"
+    "allow-safe-fetch-commands",
+    "allow-receiver-commands"
   ]
 }

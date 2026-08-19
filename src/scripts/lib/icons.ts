@@ -147,3 +147,33 @@ export const ICON_USER = wrap(
   '<path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0" />' +
     '<path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />'
 )
+
+export const ICON_DEVICE_TV = wrap(
+  '<path d="M3 9a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v9a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2l0 -9" />' +
+    '<path d="M16 3l-4 4l-4 -4" />'
+)
+
+export const ICON_PLAYER_PLAY = wrap('<path d="M7 4v16l13 -8l-13 -8" />')
+
+export const ICON_PLAYER_PAUSE = wrap(
+  '<path d="M6 6a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1l0 -12" />' +
+    '<path d="M14 6a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1l0 -12" />'
+)
+
+export const ICON_PLAYER_STOP = wrap(
+  '<path d="M5 7a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2l0 -10" />'
+)
+
+export const ICON_REWIND_BACKWARD_30 = wrap(
+  '<path d="M19.007 16.466a6 6 0 0 0 -4.007 -10.466h-11" />' +
+    '<path d="M12 15.5v3a1.5 1.5 0 0 0 3 0v-3a1.5 1.5 0 0 0 -3 0" />' +
+    '<path d="M6 14h1.5a1.5 1.5 0 0 1 0 3h-.5h.5a1.5 1.5 0 0 1 0 3h-1.5" />' +
+    '<path d="M7 9l-3 -3l3 -3" />'
+)
+
+export const ICON_REWIND_FORWARD_30 = wrap(
+  '<path d="M5.007 16.478a6 6 0 0 1 3.993 -10.478h11" />' +
+    '<path d="M15 15.5v3a1.5 1.5 0 0 0 3 0v-3a1.5 1.5 0 0 0 -3 0" />' +
+    '<path d="M17 9l3 -3l-3 -3" />' +
+    '<path d="M9 14h1.5a1.5 1.5 0 0 1 0 3h-.5h.5a1.5 1.5 0 0 1 0 3h-1.5" />'
+)

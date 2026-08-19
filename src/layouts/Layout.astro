@@ -14,6 +14,7 @@ const { pageTitle, showVersion = true } = Astro.props
 const documentTitle = pageTitle
   ? `${pageTitle} | Extreme InfiniTV`
   : "Extreme InfiniTV"
+const appMode = import.meta.env.PUBLIC_APP_MODE || ""
 ---
 
 <!doctype html>
@@ -31,6 +32,13 @@ const documentTitle = pageTitle
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta property="og:title" content="Extreme InfiniTV" />
     <meta property="og:image" content="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/logos/icon-1024.png" />
+    {
+      appMode === "receiver" && (
+        <script is:inline>
+          if (location.pathname !== "/receiver") location.replace("/receiver")
+        </script>
+      )
+    }
     <script is:inline>
       try {
         if (sessionStorage.getItem("xt_splash_done") === "1") {
@@ -64,10 +72,12 @@ const documentTitle = pageTitle
         if (localStorage.getItem("xt_sidebar_collapsed") === "1") {
           document.documentElement.setAttribute("data-sidebar-collapsed", "");
         }
-        // Auto-enable perf mode on TV / Leanback devices
+        // Auto-enable perf mode + receiver mode + receiver boot on TV / Leanback devices
         var perfStored = localStorage.getItem("xt_perf_mode");
-        if (perfStored === null) {
-          var isTvDevice = false;
+        var receiverStored = localStorage.getItem("xt_receiver_mode");
+        var receiverBootStored = localStorage.getItem("xt_receiver_boot");
+        var isTvDevice = false;
+        if (perfStored === null || receiverStored === null || receiverBootStored === null) {
           try {
             if (window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function") {
               isTvDevice = !!window.AndroidDeviceInfo.isTv();
@@ -94,15 +104,35 @@ const documentTitle = pageTitle
               }
             } catch (e) {}
           }
-          if (isTvDevice) {
-            localStorage.setItem("xt_perf_mode", "1");
-            localStorage.setItem("xt_perf_mode_auto", "1");
-            perfStored = "1";
-          }
+        }
+        if (perfStored === null && isTvDevice) {
+          localStorage.setItem("xt_perf_mode", "1");
+          localStorage.setItem("xt_perf_mode_auto", "1");
+          perfStored = "1";
         }
         if (perfStored === "1") {
           document.documentElement.setAttribute("data-perf-mode", "on");
         }
+        if (receiverStored === null && isTvDevice) {
+          localStorage.setItem("xt_receiver_mode", "1");
+          localStorage.setItem("xt_receiver_mode_auto", "1");
+        }
+        if (receiverBootStored === null && isTvDevice) {
+          localStorage.setItem("xt_receiver_boot", "1");
+          localStorage.setItem("xt_receiver_boot_auto", "1");
+        }
+
+        // Boot straight into the receiver screen when enabled, unless the user exited it this session
+        try {
+          if (
+            localStorage.getItem("xt_receiver_mode") === "1" &&
+            localStorage.getItem("xt_receiver_boot") === "1" &&
+            sessionStorage.getItem("xt_receiver_exited") !== "1" &&
+            location.pathname !== "/receiver"
+          ) {
+            location.replace("/receiver");
+          }
+        } catch (e) {}
 
         // TV safe-area inset
         var overscanStored = localStorage.getItem("xt_tv_overscan");
@@ -792,6 +822,7 @@ const documentTitle = pageTitle
   import { initI18n } from "@/scripts/lib/i18n.js"
   import { initConnectivity } from "@/scripts/lib/connectivity.js"
   import { initTrayHandler } from "@/scripts/lib/tray-handler"
+  import { initTvCastPill } from "@/scripts/lib/tv-cast-pill"
   import { initWhatsNew } from "@/scripts/lib/whats-new"
   import { mountCompositingTrialPrompt } from "@/scripts/lib/compositing"
   import { initUiSounds } from "@/scripts/lib/ui-sounds"
@@ -917,6 +948,7 @@ const documentTitle = pageTitle
   initFocusGlide()
   initKeyboardHelp()
   initTrayHandler()
+  initTvCastPill()
   initWhatsNew()
   mountCompositingTrialPrompt()
 
@@ -961,6 +993,40 @@ const documentTitle = pageTitle
       try {
         const { listen } = await import("@tauri-apps/api/event")
         await listen("xt:external-player-exited", () => pushIdlePresence())
+      } catch {}
+    })()
+  }
+
+  // TV receiver mode: auto-start the local pairing server, and hop to the
+  // receiver screen whenever a paired sender pushes a play command.
+  if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
+    ;(async () => {
+      try {
+        const [{ invoke }, { listen }, { getReceiverModeEnabled, getReceiverDeviceName }, { advertiseReceiver }] =
+          await Promise.all([
+            import("@tauri-apps/api/core"),
+            import("@tauri-apps/api/event"),
+            import("@/scripts/lib/app-settings.js"),
+            import("@/scripts/lib/receiver-discovery.js"),
+          ])
+        if (getReceiverModeEnabled()) {
+          invoke<{ name: string; port?: number }>("receiver_start", {
+            name: getReceiverDeviceName() || undefined,
+          })
+            .then((status) => {
+              if (status.port !== undefined) advertiseReceiver(status.name, status.port)
+            })
+            .catch(() => {})
+        }
+        await listen<{ descriptor: unknown }>("xt:receiver-play", (event) => {
+          try {
+            sessionStorage.setItem(
+              "xt_receiver_pending_play",
+              JSON.stringify(event.payload?.descriptor)
+            )
+          } catch {}
+          location.href = "/receiver"
+        })
       } catch {}
     })()
   }

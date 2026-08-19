@@ -33,6 +33,8 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.Bitmap
 import android.net.Uri
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.util.Base64
 import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
@@ -664,6 +666,253 @@ class PipBridge(private val activity: TauriActivity) {
   }
 }
 
+// Receiver auto-discovery via mDNS/DNS-SD. Advertise runs on a receiving device,
+// startDiscovery/drainDiscovered on a sender looking for one. NsdManager only
+// allows one resolveService in flight, so found services queue and resolve one at a time.
+class NsdBridge(private val activity: TauriActivity) {
+  companion object {
+    private const val TAG = "AndroidNsd"
+    private const val SERVICE_TYPE = "_xtream-recv._tcp."
+    private const val MAX_SERVICE_NAME_LEN = 63
+  }
+
+  private val nsdManager: NsdManager? by lazy {
+    try {
+      activity.getSystemService(Context.NSD_SERVICE) as? NsdManager
+    } catch (error: Throwable) {
+      Log.w(TAG, "getSystemService(NSD_SERVICE) failed", error)
+      null
+    }
+  }
+
+  private val lock = Any()
+  private var registrationListener: NsdManager.RegistrationListener? = null
+  private var advertisedServiceName: String? = null
+
+  private var discoveryListener: NsdManager.DiscoveryListener? = null
+  private var resolving = false
+  private val resolveQueue = ArrayDeque<NsdServiceInfo>()
+  private val discovered = mutableListOf<String>()
+  private val seenKeys = mutableSetOf<String>()
+
+  @JavascriptInterface
+  fun isSupported(): Boolean = nsdManager != null
+
+  @JavascriptInterface
+  fun advertise(name: String?, port: Int) {
+    val manager = nsdManager ?: return
+    val serviceName = (name?.trim().orEmpty()).take(MAX_SERVICE_NAME_LEN).ifEmpty { "xtream" }
+    synchronized(lock) {
+      registrationListener?.let { unregisterLocked(manager, it) }
+      registrationListener = null
+      val serviceInfo = NsdServiceInfo().apply {
+        this.serviceName = serviceName
+        this.serviceType = SERVICE_TYPE
+        this.port = port
+      }
+      val listener = object : NsdManager.RegistrationListener {
+        override fun onServiceRegistered(info: NsdServiceInfo) {
+          Log.d(TAG, "advertise registered: ${info.serviceName}")
+        }
+        override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {
+          Log.w(TAG, "advertise registration failed: $errorCode")
+          synchronized(lock) { if (registrationListener === this) registrationListener = null }
+        }
+        override fun onServiceUnregistered(info: NsdServiceInfo) {
+          Log.d(TAG, "advertise unregistered: ${info.serviceName}")
+        }
+        override fun onUnregistrationFailed(info: NsdServiceInfo, errorCode: Int) {
+          Log.w(TAG, "advertise unregistration failed: $errorCode")
+        }
+      }
+      registrationListener = listener
+      advertisedServiceName = serviceName
+      try {
+        manager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener)
+      } catch (error: Throwable) {
+        Log.w(TAG, "registerService threw", error)
+        registrationListener = null
+      }
+    }
+  }
+
+  @JavascriptInterface
+  fun stopAdvertise() {
+    val manager = nsdManager ?: return
+    synchronized(lock) {
+      registrationListener?.let { unregisterLocked(manager, it) }
+      registrationListener = null
+      advertisedServiceName = null
+    }
+  }
+
+  @JavascriptInterface
+  fun startDiscovery() {
+    val manager = nsdManager ?: return
+    synchronized(lock) {
+      discoveryListener?.let { stopDiscoveryLocked(manager, it) }
+      discoveryListener = null
+      discovered.clear()
+      seenKeys.clear()
+      resolveQueue.clear()
+      resolving = false
+      val listener = object : NsdManager.DiscoveryListener {
+        override fun onDiscoveryStarted(serviceType: String) {
+          Log.d(TAG, "discovery started")
+        }
+        override fun onServiceFound(info: NsdServiceInfo) {
+          if (info.serviceName == advertisedServiceName) return
+          enqueueResolve(manager, info)
+        }
+        override fun onServiceLost(info: NsdServiceInfo) {
+          Log.d(TAG, "service lost: ${info.serviceName}")
+        }
+        override fun onDiscoveryStopped(serviceType: String) {
+          Log.d(TAG, "discovery stopped")
+        }
+        override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+          Log.w(TAG, "start discovery failed: $errorCode")
+          synchronized(lock) { if (discoveryListener === this) discoveryListener = null }
+        }
+        override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+          Log.w(TAG, "stop discovery failed: $errorCode")
+        }
+      }
+      discoveryListener = listener
+      try {
+        manager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+      } catch (error: Throwable) {
+        Log.w(TAG, "discoverServices threw", error)
+        discoveryListener = null
+      }
+    }
+  }
+
+  @JavascriptInterface
+  fun stopDiscovery() {
+    val manager = nsdManager ?: return
+    synchronized(lock) {
+      discoveryListener?.let { stopDiscoveryLocked(manager, it) }
+      discoveryListener = null
+      resolveQueue.clear()
+      resolving = false
+    }
+  }
+
+  @JavascriptInterface
+  fun drainDiscovered(): String {
+    synchronized(lock) {
+      if (discovered.isEmpty()) return "[]"
+      val joined = discovered.joinToString(",")
+      discovered.clear()
+      return "[$joined]"
+    }
+  }
+
+  private fun unregisterLocked(manager: NsdManager, listener: NsdManager.RegistrationListener) {
+    try {
+      manager.unregisterService(listener)
+    } catch (error: Throwable) {
+      Log.w(TAG, "unregisterService threw", error)
+    }
+  }
+
+  private fun stopDiscoveryLocked(manager: NsdManager, listener: NsdManager.DiscoveryListener) {
+    try {
+      manager.stopServiceDiscovery(listener)
+    } catch (error: Throwable) {
+      Log.w(TAG, "stopServiceDiscovery threw", error)
+    }
+  }
+
+  private fun enqueueResolve(manager: NsdManager, info: NsdServiceInfo) {
+    synchronized(lock) {
+      resolveQueue.add(info)
+      if (!resolving) {
+        resolving = true
+        resolveNextLocked(manager)
+      }
+    }
+  }
+
+  private fun resolveNextLocked(manager: NsdManager) {
+    val next = resolveQueue.removeFirstOrNull()
+    if (next == null) {
+      resolving = false
+      return
+    }
+    val listener = object : NsdManager.ResolveListener {
+      override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+        Log.w(TAG, "resolve failed for ${info.serviceName}: $errorCode")
+        synchronized(lock) { resolveNextLocked(manager) }
+      }
+      override fun onServiceResolved(info: NsdServiceInfo) {
+        addResolved(info)
+        synchronized(lock) { resolveNextLocked(manager) }
+      }
+    }
+    try {
+      manager.resolveService(next, listener)
+    } catch (error: Throwable) {
+      Log.w(TAG, "resolveService threw", error)
+      resolveNextLocked(manager)
+    }
+  }
+
+  private fun addResolved(info: NsdServiceInfo) {
+    val host = preferredHostAddress(info) ?: return
+    val port = info.port
+    val key = "$host:$port"
+    synchronized(lock) {
+      if (!seenKeys.add(key)) return
+      discovered.add(
+        "{\"name\":\"${escapeJson(info.serviceName ?: "")}\"," +
+          "\"host\":\"${escapeJson(host)}\"," +
+          "\"port\":$port}"
+      )
+    }
+  }
+
+  // API 34+ can report multiple resolved addresses; older resolveService only ever gave one.
+  private fun preferredHostAddress(info: NsdServiceInfo): String? {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      val addresses = info.hostAddresses
+      val ipv4 = addresses.firstOrNull { it is java.net.Inet4Address }
+      if (ipv4 != null) return ipv4.hostAddress
+      addresses.firstOrNull()?.hostAddress?.let { return it }
+    }
+    return info.host?.hostAddress
+  }
+
+  private fun escapeJson(value: String): String {
+    val out = StringBuilder(value.length + 2)
+    for (ch in value) {
+      when {
+        ch == '\\' -> out.append("\\\\")
+        ch == '"' -> out.append("\\\"")
+        ch.code < 0x20 -> out.append(String.format("\\u%04x", ch.code))
+        else -> out.append(ch)
+      }
+    }
+    return out.toString()
+  }
+
+  // Called from MainActivity.onDestroy so registration/discovery listeners never leak.
+  fun activityDestroyed() {
+    val manager = nsdManager
+    synchronized(lock) {
+      if (manager != null) {
+        registrationListener?.let { unregisterLocked(manager, it) }
+        discoveryListener?.let { stopDiscoveryLocked(manager, it) }
+      }
+      registrationListener = null
+      discoveryListener = null
+      resolveQueue.clear()
+      resolving = false
+    }
+  }
+}
+
 /**
  * Bridge for the native ExoPlayer-backed VideoActivity. Opt-in path (Settings:
  * "Use native Android video player"). JS calls one of launchVod / launchLive
@@ -998,6 +1247,9 @@ class MainActivity : TauriActivity() {
   // Cached so onDestroy() can tear down the throwaway sniffer WebView if it's still running.
   private var snifferBridge: SnifferBridge? = null
 
+  // Cached so onDestroy() can unregister/stop NSD listeners.
+  private var nsdBridge: NsdBridge? = null
+
   // Set by PipBridge.setAutoEnter() whenever a <video> starts/stops playing
   @Volatile
   var autoEnterPipEnabled: Boolean = false
@@ -1124,6 +1376,9 @@ class MainActivity : TauriActivity() {
     val sniffer = SnifferBridge(this, { hostedWebView })
     snifferBridge = sniffer
     webView.addJavascriptInterface(sniffer, "AndroidSniffer")
+    val nsd = NsdBridge(this)
+    nsdBridge = nsd
+    webView.addJavascriptInterface(nsd, "AndroidNsd")
     webView.addJavascriptInterface(
       WebSettingsBridge(this, { hostedWebView }, webView.settings.userAgentString),
       "AndroidWebSettings"
@@ -1256,6 +1511,7 @@ class MainActivity : TauriActivity() {
   // Tear down the throwaway sniffer WebView instead of leaving the remote page running until its timeout.
   override fun onDestroy() {
     snifferBridge?.activityDestroyed()
+    nsdBridge?.activityDestroyed()
     super.onDestroy()
   }
 

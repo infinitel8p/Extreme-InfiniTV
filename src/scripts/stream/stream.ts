@@ -863,6 +863,30 @@ function openChannelMenu(channel, anchor, point) {
     }
   })
 
+  let playOnTvItem = null
+  if (isTauri) {
+    playOnTvItem = document.createElement("button")
+    playOnTvItem.type = "button"
+    playOnTvItem.setAttribute("role", "menuitem")
+    playOnTvItem.className =
+      "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+    playOnTvItem.textContent = t("cast.menu.playOnTv")
+    playOnTvItem.addEventListener("click", () => {
+      closeChannelMenu()
+      import("@/scripts/lib/tv-cast.ts").then(({ castLiveChannelToTv }) => {
+        castLiveChannelToTv({
+          contentTitle: channel.name || null,
+          title: channel.name || "",
+          logo: channel.logo || undefined,
+          buildSrc: () => buildChannelStreamUrl(channel),
+          drm: streamDrmById.get(channel.id) || undefined,
+          headers: streamHeadersById.get(channel.id) || undefined,
+          preferNativeHls: isNativeHlsFallbackChannel(channel.id),
+        })()
+      })
+    })
+  }
+
   const customSource = buildCustomSourceForChannel(channel)
   let addToCustomItem = null
   if (customSource) {
@@ -883,7 +907,13 @@ function openChannelMenu(channel, anchor, point) {
     })
   }
 
-  menu.append(playItem, testItem, copyItem, ...(addToCustomItem ? [addToCustomItem] : []))
+  menu.append(
+    playItem,
+    testItem,
+    copyItem,
+    ...(playOnTvItem ? [playOnTvItem] : []),
+    ...(addToCustomItem ? [addToCustomItem] : [])
+  )
   document.body.appendChild(menu)
 
   const margin = 8
@@ -2607,6 +2637,29 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
     insights.openHealthDialog()
   })
   items.push(healthItem)
+
+  if (isTauri) {
+    const playOnTvItem = makeMoreMenuItem(t("cast.menu.playOnTv"))
+    playOnTvItem.addEventListener("click", () => {
+      closeCurrentMoreMenu()
+      import("@/scripts/lib/tv-cast.ts").then(({ castLiveChannelToTv }) => {
+        castLiveChannelToTv({
+          contentTitle: name || null,
+          title: name || "",
+          logo: channel?.logo || undefined,
+          buildSrc: () => (channel ? buildChannelStreamUrl(channel) : null),
+          drm: streamDrmById.get(streamId) || undefined,
+          headers: streamHeadersById.get(streamId) || undefined,
+          preferNativeHls: isNativeHlsFallbackChannel(streamId),
+          stopLocal: () => {
+            suppressPauseTrackingUntilMs = Date.now() + 500
+            try { vjs?.pause?.() } catch {}
+          },
+        })()
+      })
+    })
+    items.push(playOnTvItem)
+  }
 
   return items
 }

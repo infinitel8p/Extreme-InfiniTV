@@ -39,6 +39,8 @@ export interface PosterMenuOptions {
   anchor: HTMLElement
   point: { x: number; y: number } | null
   onOpen: () => void
+  /** Tauri-only escape hatch to cast this entry to a paired TV. */
+  onPlayOnTv?: () => void
   /** vod only - kicks off the download queue for this movie. */
   onDownload?: () => void
   /** vod only - returns the canonical stream URL for the clipboard. */
@@ -118,6 +120,10 @@ export function openPosterMenu(opts: PosterMenuOptions): void {
 
   // Open
   menu.appendChild(makeItem(t("list.menu.open"), () => opts.onOpen()))
+
+  if (opts.onPlayOnTv) {
+    menu.appendChild(makeItem(t("cast.menu.playOnTv"), opts.onPlayOnTv))
+  }
 
   // Favorite toggle - label flips between add/remove based on state
   const favOn = opts.favoriteActive

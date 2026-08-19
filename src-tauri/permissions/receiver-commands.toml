@@ -1,0 +1,15 @@
+# Cross-platform ACL for the TV receiver mode commands, granted from default.json.
+
+[[permission]]
+identifier = "allow-receiver-commands"
+description = "Local-origin access to the TV receiver mode commands."
+commands.allow = [
+    "receiver_start",
+    "receiver_stop",
+    "receiver_status",
+    "receiver_regenerate_code",
+    "receiver_set_name",
+    "receiver_revoke_device",
+    "receiver_report_state",
+    "receiver_discover",
+]

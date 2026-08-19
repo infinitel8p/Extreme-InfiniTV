@@ -5,6 +5,7 @@ import { log } from "@/scripts/lib/log.js"
 import {
   loadCreds,
   getActiveEntry,
+  isTauri,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
@@ -47,6 +48,7 @@ import {
   STAR_FILLED,
 } from "@/scripts/lib/entry-card.js"
 import { buildMovieStreamUrl } from "@/scripts/lib/stream-urls.ts"
+import { castXtreamVodToTv } from "@/scripts/lib/tv-cast.ts"
 import { buildGroupingIndex, pickPreferredEntryId, groupPassesLanguageFilter } from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, languageTagLabel, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
 import { getContentLanguage, getLanguageGroupingEnabled } from "@/scripts/lib/app-settings.js"
@@ -290,6 +292,15 @@ function makeCard(group, idx) {
             const containerExt = (entry as any).container_extension || null
             return buildMovieStreamUrl(creds, entry.id, containerExt)
           },
+          onPlayOnTv: isTauri && creds.host && creds.user && creds.pass
+            ? castXtreamVodToTv({
+                creds,
+                vodId: entry.id,
+                containerExt: (entry as any).container_extension || null,
+                title: entry.name || null,
+                logo: entry.logo || undefined,
+              })
+            : undefined,
           favoriteActive: () => groupHasFavorite(activePlaylistId, "vod", group),
           onToggleFavorite: (currentlyFavorited) => {
             toggleGroupFavorite(activePlaylistId, "vod", group, entry, currentlyFavorited)

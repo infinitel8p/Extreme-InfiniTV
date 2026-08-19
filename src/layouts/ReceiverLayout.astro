@@ -1,0 +1,132 @@
+---
+import "../styles/global.css"
+
+interface Props {
+  pageTitle?: string
+}
+const { pageTitle } = Astro.props
+const documentTitle = pageTitle
+  ? `${pageTitle} | Extreme InfiniTV`
+  : "Extreme InfiniTV"
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>{documentTitle}</title>
+    <script is:inline>
+      try {
+        var fontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1");
+        if (!isFinite(fontScale) || fontScale < 0.75 || fontScale > 2) fontScale = 1;
+        document.documentElement.style.setProperty("--xt-font-scale", String(fontScale));
+
+        if (localStorage.getItem("xt_perf_mode") === "1") {
+          document.documentElement.setAttribute("data-perf-mode", "on");
+        }
+
+        var overscan = parseFloat(localStorage.getItem("xt_tv_overscan") || "");
+        if (!isFinite(overscan) || overscan < 0 || overscan > 8) overscan = 0;
+        if (overscan > 0) {
+          document.documentElement.style.setProperty("--xt-tv-overscan", String(overscan));
+          document.documentElement.setAttribute("data-tv-overscan", "");
+        }
+
+        var KNOWN_LOCALES = ["en","es","de","fr","pt-BR","it","ru","zh","ja","tr","ar","ur","nl","hi","id","pl"];
+        var RTL_LOCALES = ["ar","ur"];
+        var storedLocale = localStorage.getItem("xt_locale") || "";
+        if (storedLocale && KNOWN_LOCALES.indexOf(storedLocale) !== -1) {
+          document.documentElement.setAttribute("lang", storedLocale);
+          document.documentElement.setAttribute(
+            "dir",
+            RTL_LOCALES.indexOf(storedLocale) !== -1 ? "rtl" : "ltr"
+          );
+        }
+
+        // Translate [data-i18n*] elements before first paint
+        if (storedLocale && storedLocale !== "en") {
+          var rawMessages = localStorage.getItem("xt_locale_messages_v3");
+          if (rawMessages) {
+            var cached = JSON.parse(rawMessages);
+            if (cached && cached.code === storedLocale && cached.messages) {
+              var msgs = cached.messages;
+              var translateEl = function (el) {
+                if (!el || el.nodeType !== 1) return;
+                var textKey = el.getAttribute("data-i18n");
+                if (textKey && msgs[textKey] != null) el.textContent = msgs[textKey];
+                var htmlKey = el.getAttribute("data-i18n-html");
+                if (htmlKey && msgs[htmlKey] != null) el.innerHTML = msgs[htmlKey];
+                var attrSpec = el.getAttribute("data-i18n-attr");
+                if (attrSpec) {
+                  var pairs = attrSpec.split(";");
+                  for (var pi = 0; pi < pairs.length; pi++) {
+                    var parts = pairs[pi].split(":");
+                    var attrName = (parts[0] || "").trim();
+                    var attrKey = (parts[1] || "").trim();
+                    if (attrName && attrKey && msgs[attrKey] != null) {
+                      el.setAttribute(attrName, msgs[attrKey]);
+                    }
+                  }
+                }
+              };
+              var i18nObserver = new MutationObserver(function (mutations) {
+                for (var mi = 0; mi < mutations.length; mi++) {
+                  var added = mutations[mi].addedNodes;
+                  for (var ai = 0; ai < added.length; ai++) {
+                    var node = added[ai];
+                    if (node.nodeType !== 1) continue;
+                    if (
+                      node.hasAttribute("data-i18n") ||
+                      node.hasAttribute("data-i18n-html") ||
+                      node.hasAttribute("data-i18n-attr")
+                    ) {
+                      translateEl(node);
+                    }
+                    var matches = node.querySelectorAll
+                      ? node.querySelectorAll("[data-i18n], [data-i18n-html], [data-i18n-attr]")
+                      : null;
+                    if (matches) {
+                      for (var qi = 0; qi < matches.length; qi++) translateEl(matches[qi]);
+                    }
+                  }
+                }
+              });
+              i18nObserver.observe(document.documentElement, { childList: true, subtree: true });
+              document.addEventListener("DOMContentLoaded", function () {
+                i18nObserver.disconnect();
+              });
+            }
+          }
+        }
+
+        var currentTheme = localStorage.getItem("xt_theme") || "system";
+        if (currentTheme === "light") document.documentElement.style.colorScheme = "light";
+        else if (currentTheme === "dark") document.documentElement.style.colorScheme = "dark";
+      } catch (e) {}
+    </script>
+  </head>
+
+  <body class="antialiased bg-bg text-fg h-dvh overflow-hidden">
+    <slot />
+  </body>
+</html>
+
+<style is:global>
+  /* Same overscan padding Layout.astro applies to its own body. */
+  html[data-tv-overscan] body {
+    padding-top: max(
+      env(safe-area-inset-top),
+      calc(var(--xt-tv-overscan, 0) * 1vh)
+    );
+    padding-right: max(
+      env(safe-area-inset-right),
+      calc(var(--xt-tv-overscan, 0) * 1vw)
+    );
+    padding-bottom: calc(var(--xt-tv-overscan, 0) * 1vh);
+    padding-left: calc(var(--xt-tv-overscan, 0) * 1vw);
+  }
+</style>

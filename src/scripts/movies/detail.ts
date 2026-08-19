@@ -97,6 +97,7 @@ import {
 } from "@/scripts/lib/player-runtime.ts"
 import { toast } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
+import { setupPlayOnTvButton } from "@/scripts/lib/play-on-tv-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
@@ -277,6 +278,7 @@ function applyVodInfo(data) {
   detailSrcBuilder = builder
   applyDownloadState()
   externalBtnHandle?.refresh()
+  playTvBtnHandle?.refresh()
 
   const year = movieData.releasedate || movieData.year || info.year || ""
   const durationSecs = Number(movieData.duration_secs || info.duration_secs || 0)
@@ -709,7 +711,10 @@ let qualityChipDetach = null
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 
-const vodPlaybackToasts = createVodPlaybackToasts(() => externalBtnHandle?.refresh())
+const vodPlaybackToasts = createVodPlaybackToasts(() => {
+  externalBtnHandle?.refresh()
+  playTvBtnHandle?.refresh()
+})
 
 function setupPipButton(player) {
   const pipBtn = document.getElementById("movie-detail-pip")
@@ -1066,6 +1071,37 @@ const externalBtnHandle = setupExternalPlayerButton(
   }
 )
 
+const playTvBtnHandle = setupPlayOnTvButton(
+  document.getElementById("movie-detail-play-tv"),
+  {
+    getSrcBuilder() {
+      return detailSrcBuilder
+    },
+    getSrc() {
+      return detailSrc || null
+    },
+    getTitle() {
+      return movie?.name || null
+    },
+    getLogo() {
+      return movie?.logo || null
+    },
+    getResumeSeconds() {
+      if (!activePlaylistId || !movie) return 0
+      const saved = getProgress(activePlaylistId, "vod", movie.id)
+      if (!saved || saved.completed) return 0
+      return saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+    },
+    getDurationSeconds() {
+      const seconds = knownVodDurationSeconds()
+      return seconds > 0 ? seconds : undefined
+    },
+    beforeCast() {
+      try { vjs?.pause?.() } catch {}
+    },
+  }
+)
+
 subscribeExternalPlayerExit(() => {
   if (!externalPresenceActive) return
   externalPresenceActive = false
@@ -1380,6 +1416,7 @@ async function boot() {
     detailSrc = dl.url
     applyDownloadState()
     externalBtnHandle?.refresh()
+    playTvBtnHandle?.refresh()
   }
 
   // Both probes are network-free (hydrate + memory read) and run under one bound,

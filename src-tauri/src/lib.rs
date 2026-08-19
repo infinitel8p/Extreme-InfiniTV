@@ -19,6 +19,10 @@ mod http_range;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod matroska;
 
+mod receiver;
+
+mod receiver_store;
+
 mod safe_fetch;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -152,7 +156,8 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(warmup::WarmupState::default());
+        .manage(warmup::WarmupState::default())
+        .manage(receiver::ReceiverState::default());
 
     #[cfg(not(target_os = "ios"))]
     let builder = builder.plugin(build_log_plugin().build());
@@ -190,6 +195,14 @@ pub fn run() {
             external_player::sandbox_runtime,
             hevc_extension::install_appx_package,
             hevc_extension::is_store_build,
+            receiver::receiver_start,
+            receiver::receiver_stop,
+            receiver::receiver_status,
+            receiver::receiver_regenerate_code,
+            receiver::receiver_set_name,
+            receiver::receiver_revoke_device,
+            receiver::receiver_report_state,
+            receiver::receiver_discover,
             safe_fetch::probe_manifest,
             sniffer::sniff_page,
             sniffer::cancel_sniff,
@@ -217,6 +230,14 @@ pub fn run() {
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        receiver::receiver_start,
+        receiver::receiver_stop,
+        receiver::receiver_status,
+        receiver::receiver_regenerate_code,
+        receiver::receiver_set_name,
+        receiver::receiver_revoke_device,
+        receiver::receiver_report_state,
+        receiver::receiver_discover,
         safe_fetch::probe_manifest,
         warmup::warmup_start,
         warmup::warmup_status,
@@ -264,6 +285,10 @@ pub fn run() {
             use tauri::Manager;
             audio_proxy::shutdown(&_app_handle.state::<audio_proxy::AudioProxyState>());
             vod_audio_proxy::shutdown(&_app_handle.state::<vod_audio_proxy::VodAudioProxyState>());
+        }
+        if let tauri::RunEvent::Exit = _event {
+            use tauri::Manager;
+            receiver::shutdown(&_app_handle.state::<receiver::ReceiverState>());
         }
     });
 }

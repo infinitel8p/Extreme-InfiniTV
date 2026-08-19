@@ -44,6 +44,7 @@ import {
   IconEye,
   IconEyeOff,
   IconActivity,
+  IconDeviceTv,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -73,6 +74,7 @@ const navStructure: NavSection[] = [
   { id: "settings-network", labelKey: "settings.group.network", label: "Network", cards: [
     { id: "card-network",          labelKey: "settings.network.title", label: "Network" },
     { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
+    { id: "card-tv-receiver",      labelKey: "settings.receiver.title", label: "TV receiver", conditional: true },
     { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "TMDb metadata" },
     { id: "card-net-log",          labelKey: "settings.netLog.title",  label: "Network log", conditional: true },
   ]},
@@ -1052,6 +1054,114 @@ const navStructure: NavSection[] = [
                 <p id="discord-sandbox-note" data-i18n="settings.discord.sandboxNote" class="text-xs text-fg-3" hidden>
                   Discord Rich Presence isn't available in Snap installs.
                 </p>
+              </div>
+            </details>
+
+            <!-- TV receiver: desktop-only, unhidden by receiver-card.ts -->
+            <details id="card-tv-receiver" data-settings-item class="hidden group scroll-mt-6 lg:scroll-mt-20">
+              <summary class="settings-row cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span class="settings-row__text">
+                  <h3 class="text-sm font-medium leading-snug">
+                    <IconDeviceTv aria-hidden="true" stroke={2} class="size-4 text-fg-3 inline-block align-[-2px] me-1.5" />
+                    <span data-i18n="settings.receiver.title">TV receiver</span>
+                  </h3>
+                  <span data-i18n="settings.receiver.helperLong" class="text-xs text-fg-3 line-clamp-1 block">
+                    Let other devices running Extreme InfiniTV send playback to this one over your local network.
+                  </span>
+                </span>
+                <span class="settings-row__control">
+                  <IconChevronDown aria-hidden="true" stroke={2} class="size-4 text-fg-3 transition-transform group-open:rotate-180" />
+                </span>
+              </summary>
+              <div class="px-5 sm:px-6 pb-4 pt-1 flex flex-col gap-3">
+
+                <div data-settings-item class="settings-row">
+                  <div class="settings-row__text">
+                    <h3 data-i18n="settings.receiver.label" class="text-sm font-medium leading-snug">Receiver mode</h3>
+                  </div>
+                  <div class="settings-row__control">
+                    <div
+                      id="receiver-mode-toggle"
+                      class="settings-seg"
+                      role="radiogroup"
+                      aria-label="Receiver mode"
+                      data-i18n-attr="aria-label:settings.receiver.label">
+                      <button type="button" role="radio" data-receiver="on"  aria-checked="false" data-i18n="settings.receiver.on"  class="receiver-mode-btn btn">On</button>
+                      <button type="button" role="radio" data-receiver="off" aria-checked="false" data-i18n="settings.receiver.off" class="receiver-mode-btn btn">Off</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div data-settings-item class="settings-row">
+                  <div class="settings-row__text">
+                    <h3 data-i18n="settings.receiver.boot.title" class="text-sm font-medium leading-snug">Start on receiver screen</h3>
+                    <p data-i18n="settings.receiver.boot.helper" class="text-xs text-fg-3">
+                      Open the pairing screen when the app starts. Exit it anytime; it returns on the next launch.
+                    </p>
+                  </div>
+                  <div class="settings-row__control">
+                    <div
+                      id="receiver-boot-toggle"
+                      class="settings-seg"
+                      role="radiogroup"
+                      aria-label="Start on receiver screen"
+                      data-i18n-attr="aria-label:settings.receiver.boot.label">
+                      <button type="button" role="radio" data-receiver-boot="on"  aria-checked="false" data-i18n="settings.receiver.boot.on"  class="receiver-boot-btn btn">On</button>
+                      <button type="button" role="radio" data-receiver-boot="off" aria-checked="false" data-i18n="settings.receiver.boot.off" class="receiver-boot-btn btn">Off</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div data-settings-item class="settings-row">
+                  <div class="settings-row__text">
+                    <h3 data-i18n="settings.receiver.deviceName" class="text-sm font-medium leading-snug">Device name</h3>
+                  </div>
+                  <div class="settings-row__control w-full @2xl:w-72">
+                    <input
+                      id="receiver-device-name-input"
+                      type="text"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="This device's name"
+                      data-i18n-attr="placeholder:settings.receiver.deviceNamePlaceholder"
+                      class="field-input"
+                    />
+                  </div>
+                </div>
+
+                <div id="receiver-status-block" class="hidden flex-col gap-3">
+
+                  <div data-settings-item class="settings-row settings-row--stack">
+                    <div class="settings-row__text">
+                      <h3 data-i18n="settings.receiver.code" class="text-sm font-medium leading-snug">Pair code</h3>
+                    </div>
+                    <div class="settings-row__control w-full flex-col items-stretch gap-2">
+                      <div id="receiver-addresses-list" class="flex flex-col gap-0.5 text-xs text-fg-3 tabular-nums"></div>
+                      <div id="receiver-pair-code-display" class="text-3xl tracking-[0.3em] tabular-nums text-accent font-semibold"></div>
+                      <div class="flex flex-wrap gap-2">
+                        <button id="receiver-regenerate-btn" type="button" data-settings-item class="btn">
+                          <IconRefresh aria-hidden="true" class="btn-icon" />
+                          <span data-i18n="settings.receiver.regenerate">Regenerate code</span>
+                        </button>
+                        <button id="receiver-open-screen" type="button" data-settings-item class="btn">
+                          <IconExternalLink aria-hidden="true" class="btn-icon" />
+                          <span data-i18n="settings.receiver.openScreen">Open receiver screen</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div data-settings-item class="settings-row settings-row--stack">
+                    <div class="settings-row__text">
+                      <h3 data-i18n="settings.receiver.pairedDevices" class="text-sm font-medium leading-snug">Paired devices</h3>
+                    </div>
+                    <div class="settings-row__control w-full flex-col items-stretch gap-1">
+                      <div id="receiver-paired-list" class="flex flex-col divide-y divide-line/60 rounded-xl border border-line bg-bg overflow-hidden"></div>
+                      <p id="receiver-no-devices" data-i18n="settings.receiver.noDevices" class="px-4 py-4 text-xs text-fg-3 hidden">No devices have paired yet.</p>
+                    </div>
+                  </div>
+
+                </div>
               </div>
             </details>
 
@@ -5386,5 +5496,9 @@ const navStructure: NavSection[] = [
 
   <script>
     import "@/scripts/settings/settings_search.ts"
+  </script>
+
+  <script>
+    import "@/scripts/settings/receiver-card.ts"
   </script>
 </Layout>

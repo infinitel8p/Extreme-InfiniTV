@@ -2,6 +2,8 @@
 // hub strip cards. Episode entries resolve to their parent series; live and
 // entries without a playlist attach nothing.
 
+import { isTauri } from "@/scripts/lib/creds.js"
+
 export type HubCardMenuKind = "vod" | "series" | "episode" | "live"
 
 export interface HubCardMenuParams {
@@ -56,6 +58,7 @@ export function hubCardMenu(
 
       let buildStreamUrl: (() => string | null) | undefined
       let onDownload: (() => void) | undefined
+      let onPlayOnTv: (() => void) | undefined
 
       if (target.kind === "vod") {
         const [{ loadCreds }, { buildMovieStreamUrl }, { getCached }] = await Promise.all([
@@ -74,6 +77,19 @@ export function hubCardMenu(
           if (!creds.host || !creds.user || !creds.pass) return null
           return buildMovieStreamUrl(creds, target.id, vodEntry?.container_extension || null)
         }
+        if (isTauri && creds.host && creds.user && creds.pass) {
+          onPlayOnTv = () => {
+            import("@/scripts/lib/tv-cast.ts").then(({ castXtreamVodToTv }) => {
+              castXtreamVodToTv({
+                creds,
+                vodId: target.id,
+                containerExt: vodEntry?.container_extension || null,
+                title: target.name || null,
+                logo: target.logo || undefined,
+              })()
+            })
+          }
+        }
       }
 
       if (destroyed) return
@@ -91,6 +107,7 @@ export function hubCardMenu(
         },
         onDownload,
         buildStreamUrl,
+        onPlayOnTv,
       })
     })
   }

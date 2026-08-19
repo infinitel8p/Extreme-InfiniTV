@@ -1,0 +1,74 @@
+// "Play on TV" escape-hatch button for movie/series/live surfaces; mirrors external-player-button.ts.
+
+import { isTauri } from "@/scripts/lib/creds.js"
+import { resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
+import { playOnTv } from "@/scripts/lib/tv-cast.js"
+import { log } from "@/scripts/lib/log.js"
+import { LOCALE_EVENT } from "@/scripts/lib/i18n.js"
+
+export interface PlayOnTvHooks {
+  getSrcBuilder?: () => ((creds: any) => string) | null
+  getSrc?: () => string | null
+  getTitle?: () => string | null
+  getLogo?: () => string | null
+  getResumeSeconds?: () => number
+  getDurationSeconds?: () => number | undefined
+  beforeCast?: () => void
+}
+
+export interface PlayOnTvButtonHandle {
+  refresh: () => void
+  dispose: () => void
+}
+
+export function setupPlayOnTvButton(
+  button: HTMLElement | null,
+  hooks: PlayOnTvHooks
+): PlayOnTvButtonHandle {
+  if (!button) return { refresh: () => {}, dispose: () => {} }
+
+  const refresh = () => {
+    const hasSource = !!hooks.getSrcBuilder?.() || !!hooks.getSrc?.()
+    button.hidden = !isTauri || !hasSource
+  }
+
+  const onClick = async () => {
+    const builder = hooks.getSrcBuilder?.()
+    let src: string | null = null
+    try {
+      src = builder ? await resolveStreamUrl(builder) : hooks.getSrc?.() || null
+    } catch (err) {
+      log.warn("[xt:play-on-tv] failed to resolve stream url:", err)
+    }
+    const title = hooks.getTitle?.() || ""
+    const descriptor =
+      src && isCastableSrc(src)
+        ? buildVodCastDescriptor({
+            src,
+            title,
+            logo: hooks.getLogo?.() || undefined,
+            resumeSeconds: hooks.getResumeSeconds?.(),
+            durationSeconds: hooks.getDurationSeconds?.(),
+          })
+        : null
+    await playOnTv({
+      buildDescriptor: () => descriptor,
+      stopLocal: hooks.beforeCast,
+      contentTitle: title || null,
+    })
+  }
+
+  button.addEventListener("click", onClick)
+  document.addEventListener(LOCALE_EVENT, refresh)
+
+  refresh()
+
+  return {
+    refresh,
+    dispose() {
+      button.removeEventListener("click", onClick)
+      document.removeEventListener(LOCALE_EVENT, refresh)
+    },
+  }
+}
