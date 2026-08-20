@@ -145,6 +145,7 @@ import { decodedFrameCount, droppedFrameCount } from "@/scripts/lib/player-telem
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { isAutomaticRetuneReason } from "@/scripts/lib/stream-health.ts"
 import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
+import { isCastRoutingActive, routePlayToCast, getCastSession } from "@/scripts/lib/tv-cast.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 // One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
@@ -882,6 +883,7 @@ function openChannelMenu(channel, anchor, point) {
           drm: streamDrmById.get(channel.id) || undefined,
           headers: streamHeadersById.get(channel.id) || undefined,
           preferNativeHls: isNativeHlsFallbackChannel(channel.id),
+          stopLocal: teardownLocalPlaybackForCast,
         })()
       })
     })
@@ -1180,8 +1182,11 @@ document.addEventListener("keydown", (e) => {
     case " ":
     case "spacebar": {
       e.preventDefault()
-      if (vjs.paused()) vjs.play()?.catch(() => {})
-      else vjs.pause()
+      if (vjs.paused()) {
+        if (!isCastRoutingActive()) vjs.play()?.catch(() => {})
+      } else {
+        vjs.pause()
+      }
       return
     }
     case "m": {
@@ -2164,6 +2169,7 @@ async function mountEmbeddedPlayer(backend, opts) {
       const seqAtRetry = ctx.seq
       setTimeout(() => {
         if (seqAtRetry !== playSeq) return
+        if (isCastRoutingActive()) return
         if (retryCatchupSession(ctx, { automatic: true })) return
         if (!ctx.isLive) {
           // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
@@ -2651,10 +2657,7 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
           drm: streamDrmById.get(streamId) || undefined,
           headers: streamHeadersById.get(streamId) || undefined,
           preferNativeHls: isNativeHlsFallbackChannel(streamId),
-          stopLocal: () => {
-            suppressPauseTrackingUntilMs = Date.now() + 500
-            try { vjs?.pause?.() } catch {}
-          },
+          stopLocal: teardownLocalPlaybackForCast,
         })()
       })
     })
@@ -2859,6 +2862,7 @@ const liveStallRetuneCounts = new Map()
 
 // Shared by the stall sentinel (event-driven) and the progress watch (frozen currentTime).
 function performStallRetune(trigger) {
+  if (isCastRoutingActive()) return
   const ctx = lastPlayContext
   if (!ctx || !vjs) return
   log.warn("[xt:livetv] stalled - re-tuning", { streamId: ctx.streamId, trigger })
@@ -3726,6 +3730,18 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
   return launched
 }
 
+/** Releases the local player + all recovery machinery so nothing re-mounts and steals the provider connection back from the receiver. */
+function teardownLocalPlaybackForCast() {
+  suppressPauseTrackingUntilMs = Date.now() + 500
+  try { vjs?.pause?.() } catch {}
+  try { vjs?.reset?.() } catch {}
+  clearStallSentinel()
+  clearDeadVideoWatchdog()
+  clearDeadAudioWatchdog()
+  hidePlaybackFailurePanel()
+  lastPlayContext = null
+}
+
 async function play(streamId, name, reason = "user") {
   // Every tune's trigger reaches the log file, so sessions reconstruct from it.
   log.info("[xt:livetv] tune", { streamId, name: name || null, reason })
@@ -3742,34 +3758,32 @@ async function play(streamId, name, reason = "user") {
     })
     return
   }
-  if (reason === "user" && isTauri) {
-    const { isCastRoutingActive, routePlayToCast } = await import("@/scripts/lib/tv-cast.ts")
-    if (isCastRoutingActive()) {
-      const routed = await routePlayToCast({
-        contentTitle: name || null,
-        quiet: true,
-        stopLocal: () => {
-          suppressPauseTrackingUntilMs = Date.now() + 500
-          try { vjs?.pause?.() } catch {}
-        },
-        buildDescriptor: async () => {
-          const { isCastableSrc, buildLiveCastDescriptor } = await import("@/scripts/lib/tv-cast-descriptor")
-          const liveSrc = targetChannel ? buildChannelStreamUrl(targetChannel) : null
-          if (!liveSrc || !isCastableSrc(liveSrc)) return null
-          return buildLiveCastDescriptor({
-            src: liveSrc,
-            title: name || "",
-            logo: targetChannel?.logo || undefined,
-            drm: streamDrmById.get(streamId) || undefined,
-            headers: streamHeadersById.get(streamId) || undefined,
-            preferNativeHls: isNativeHlsFallbackChannel(streamId),
-          })
-        },
-      })
-      // Cast session owns playback now - never fall through to a local mount.
-      if (routed) setNowPlaying(streamId)
+  if (isTauri && isCastRoutingActive()) {
+    if (reason !== "user" && reason !== "channel-key") {
+      log.info("[xt:livetv] skipping local mount - cast session active", { reason })
       return
     }
+    const routed = await routePlayToCast({
+      contentTitle: name || null,
+      quiet: true,
+      stopLocal: teardownLocalPlaybackForCast,
+      buildDescriptor: async () => {
+        const { isCastableSrc, buildLiveCastDescriptor } = await import("@/scripts/lib/tv-cast-descriptor")
+        const liveSrc = targetChannel ? buildChannelStreamUrl(targetChannel) : null
+        if (!liveSrc || !isCastableSrc(liveSrc)) return null
+        return buildLiveCastDescriptor({
+          src: liveSrc,
+          title: name || "",
+          logo: targetChannel?.logo || undefined,
+          drm: streamDrmById.get(streamId) || undefined,
+          headers: streamHeadersById.get(streamId) || undefined,
+          preferNativeHls: isNativeHlsFallbackChannel(streamId),
+        })
+      },
+    })
+    // Cast session owns playback now - never fall through to a local mount.
+    if (routed) setNowPlaying(streamId)
+    return
   }
   hidePlaybackFailurePanel()
   clearDeadVideoWatchdog()
@@ -4208,6 +4222,11 @@ function resolveProgrammeWindowAt(channel, atUtcMs) {
 /** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
 async function playCatchup(channel, opts) {
   if (!currentEl || !channel || !activePlaylistId) return false
+  if (isCastRoutingActive()) {
+    const deviceName = getCastSession()?.deviceName || ""
+    toast({ title: t("cast.toast.localPlaybackBlocked", { device: deviceName }) })
+    return false
+  }
   // Catch-up remounts the <video> without a quality chip - detach the
   // live one so its listeners don't leak onto a removed element.
   if (qualityChipDetach) {

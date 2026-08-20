@@ -854,6 +854,8 @@ async function startPlayback(options = {}) {
       contentTitle: title || null,
       stopLocal: () => {
         try { vjs?.pause?.() } catch {}
+        try { vjs?.reset?.() } catch {}
+        retirePreviousPlayback()
       },
       buildDescriptor: async () => {
         let src = null

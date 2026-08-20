@@ -1628,6 +1628,7 @@
   "cast.toast.authFailed": "{device} no longer trusts this device.",
   "cast.toast.pairAgain": "Pair again",
   "cast.toast.connected": "Connected to {device}. Anything you play now casts there.",
+  "cast.toast.localPlaybackBlocked": "Playing on {device} - stop casting to play here.",
   "cast.pill.pause": "Pause",
   "cast.pill.resume": "Resume",
   "cast.pill.stop": "Stop casting",

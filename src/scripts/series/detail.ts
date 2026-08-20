@@ -1384,6 +1384,8 @@ async function playEpisode(episode, options = {}) {
       contentTitle: title || null,
       stopLocal: () => {
         try { vjs?.pause?.() } catch {}
+        try { vjs?.reset?.() } catch {}
+        retirePreviousPlayback()
       },
       buildDescriptor: () => {
         const src = buildEpisodeStreamUrl(episode)
