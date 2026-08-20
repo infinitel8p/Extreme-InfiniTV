@@ -2150,13 +2150,13 @@ html[data-density="comfortable"] :is(#movie-grid, #series-grid) { gap: 1.5rem; }
     .settings-seg > .btn:last-of-type:nth-of-type(odd) {
         grid-column: span 2;
     }
-    /* Action buttons go full width; segs and swatch groups keep their grid */
+    /* Action buttons go full width; segs and deeper composite widgets don't */
     .settings-row:not(summary) .settings-row__control > :not([role="radiogroup"]) {
         width: 100%;
         flex-wrap: wrap;
     }
     .settings-row:not(summary) .settings-row__control > .btn,
-    .settings-row:not(summary) .settings-row__control :not([role="radiogroup"]) > .btn {
+    .settings-row:not(summary) .settings-row__control > :not([role="radiogroup"]) > .btn {
         flex: 1 1 100%;
         width: 100%;
         justify-content: flex-start;

@@ -50,7 +50,7 @@
     "copyright": "© 2025 Ludovico Ferrara",
     "createUpdaterArtifacts": true,
     "android": {
-      "versionCode": 100900090
+      "versionCode": 109009000
     },
     "icon": [
       "icons/32x32.png",

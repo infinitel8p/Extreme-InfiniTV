@@ -14,7 +14,8 @@
         app:show_buffering="when_playing"
         app:use_controller="true"
         app:auto_show="true"
-        app:hide_on_touch="true" />
+        app:hide_on_touch="true"
+        app:show_subtitle_button="true" />
 
     <LinearLayout
         android:id="@+id/channel_list_overlay"

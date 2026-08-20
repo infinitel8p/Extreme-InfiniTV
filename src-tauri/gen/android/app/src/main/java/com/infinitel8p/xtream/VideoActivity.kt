@@ -11,9 +11,11 @@ import android.util.Log
 import android.util.Rational
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
@@ -236,6 +238,12 @@ class VideoActivity : AppCompatActivity() {
     exoPlayer = player
     view.player = player
 
+    // Subs off by default; the controller's CC dialog re-enables the text type on pick.
+    player.trackSelectionParameters = player.trackSelectionParameters
+      .buildUpon()
+      .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+      .build()
+
     player.addListener(object : Player.Listener {
       override fun onPlayerError(error: PlaybackException) {
         Log.e(TAG, "playback error: ${error.errorCodeName}", error)
@@ -250,7 +258,12 @@ class VideoActivity : AppCompatActivity() {
         )
       }
 
+      override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+        updateKeepScreenOn(player)
+      }
+
       override fun onPlaybackStateChanged(state: Int) {
+        updateKeepScreenOn(player)
         if (state == Player.STATE_ENDED && mode == MODE_VOD) {
           finishedEmitted = true
           EventQueue.append(
@@ -285,7 +298,16 @@ class VideoActivity : AppCompatActivity() {
     }
 
     setupMediaSession(player)
+    updateKeepScreenOn(player)
     updatePictureInPictureParams(autoEnter = true)
+  }
+
+  private fun updateKeepScreenOn(player: Player) {
+    val active = player.playWhenReady &&
+      player.playbackState != Player.STATE_IDLE &&
+      player.playbackState != Player.STATE_ENDED
+    if (active) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
   }
 
   private fun buildMediaSourceFactory(ua: String, referer: String): MediaSource.Factory {

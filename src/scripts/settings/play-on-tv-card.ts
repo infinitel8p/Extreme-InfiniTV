@@ -24,6 +24,7 @@ function init(): void {
 
   const card = document.getElementById("card-play-on-tv") as HTMLDetailsElement | null
   card?.classList.remove("hidden")
+  document.getElementById("card-casting")?.classList.remove("hidden")
 
   const listEl = document.getElementById("play-on-tv-list")
   const emptyEl = document.getElementById("play-on-tv-empty")
@@ -107,10 +108,10 @@ function init(): void {
 
   function renderRow(device: TvDevice): HTMLDivElement {
     const row = document.createElement("div")
-    row.className = "flex items-center justify-between gap-3 px-4 py-3"
+    row.className = "flex w-full items-center gap-3 px-4 py-3"
 
     const textColumn = document.createElement("div")
-    textColumn.className = "flex flex-col min-w-0"
+    textColumn.className = "flex flex-1 flex-col min-w-0"
 
     const nameEl = document.createElement("span")
     nameEl.className = "truncate text-sm font-medium"
@@ -118,23 +119,24 @@ function init(): void {
     textColumn.appendChild(nameEl)
 
     const metaRow = document.createElement("span")
-    metaRow.className = "text-2xs text-fg-3 flex items-center gap-2"
+    metaRow.className = "text-2xs text-fg-3 flex flex-wrap items-center gap-x-2 gap-y-0.5"
 
     const hostPortEl = document.createElement("span")
-    hostPortEl.className = "tabular-nums"
+    hostPortEl.className = "tabular-nums whitespace-nowrap"
     hostPortEl.textContent = `${device.host}:${device.port}`
     metaRow.appendChild(hostPortEl)
 
     const lastUsedAge = fmtAge(device.lastSeenAt)
     if (lastUsedAge) {
       const lastUsedEl = document.createElement("span")
+      lastUsedEl.className = "whitespace-nowrap"
       lastUsedEl.textContent = t("cast.picker.lastUsed", { when: lastUsedAge })
       metaRow.appendChild(lastUsedEl)
     }
 
     const statusEl = document.createElement("span")
     statusEl.dataset.role = "status"
-    statusEl.className = "flex items-center gap-1.5"
+    statusEl.className = "flex items-center gap-1.5 whitespace-nowrap"
     applyRowStatus(statusEl, "checking")
     metaRow.appendChild(statusEl)
 

@@ -8,6 +8,7 @@ import android.os.VibratorManager
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebSettings
@@ -1007,6 +1008,14 @@ class AndroidVideoBridge(
     activity.receiverSessionActive = false
     EventQueue.pushListener = null
     if (NativePlayerControl.isActive()) NativePlayerControl.finishPlayback()
+  }
+
+  @JavascriptInterface
+  fun setKeepScreenOn(enabled: Boolean) {
+    activity.runOnUiThread {
+      if (enabled) activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
   }
 
   @JavascriptInterface

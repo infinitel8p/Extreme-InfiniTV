@@ -35,7 +35,7 @@ android {
         val isTvBuild = (System.getenv("XTREAM_TV_BUILD") ?: "").lowercase(Locale.ROOT) in listOf("1", "true", "yes")
         manifestPlaceholders["leanbackRequired"] = if (isTvBuild) "true" else "false"
         if (isTvBuild) {
-            val tvVersionCodeOffset = 5
+            val tvVersionCodeOffset = 500
             versionCode = (versionCode ?: 0) + tvVersionCodeOffset
         }
 

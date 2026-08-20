@@ -30,6 +30,7 @@ async function init(): Promise<void> {
 
   const card = document.getElementById("card-tv-receiver")
   card?.classList.remove("hidden")
+  document.getElementById("card-casting")?.classList.remove("hidden")
 
   const { invoke } = await import("@tauri-apps/api/core")
   const { listen } = await import("@tauri-apps/api/event")
@@ -114,10 +115,10 @@ async function init(): Promise<void> {
     noDevicesEl?.classList.toggle("hidden", devices.length > 0)
     for (const device of devices) {
       const row = document.createElement("div")
-      row.className = "flex items-center justify-between gap-3 px-4 py-3"
+      row.className = "flex w-full items-center gap-3 px-4 py-3"
 
       const textWrap = document.createElement("div")
-      textWrap.className = "flex flex-col min-w-0"
+      textWrap.className = "flex flex-1 flex-col min-w-0"
       const nameEl = document.createElement("span")
       nameEl.className = "truncate text-sm font-medium"
       nameEl.textContent = device.deviceName

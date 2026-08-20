@@ -1558,6 +1558,7 @@
   "receiver.error.network": "The stream couldn't be loaded.",
   "receiver.error.timeout": "The stream didn't start.",
   "receiver.error.returning": "Returning to the pairing screen…",
+  "settings.casting.title": "Casting",
   "settings.receiver.title": "TV receiver",
   "settings.receiver.helperLong": "Let other devices running Extreme InfiniTV send playback to this one over your local network.",
   "settings.receiver.statusReceiving": "Receiving as {name}",

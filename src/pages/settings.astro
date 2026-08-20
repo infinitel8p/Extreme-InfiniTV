@@ -75,8 +75,7 @@ const navStructure: NavSection[] = [
   { id: "settings-network", labelKey: "settings.group.network", label: "Network", cards: [
     { id: "card-network",          labelKey: "settings.network.title", label: "Network" },
     { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
-    { id: "card-tv-receiver",      labelKey: "settings.receiver.title", label: "TV receiver", conditional: true },
-    { id: "card-play-on-tv",       labelKey: "settings.playOnTv.title", label: "Play on TV", conditional: true },
+    { id: "card-casting",          labelKey: "settings.casting.title", label: "Casting", conditional: true },
     { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "TMDb metadata" },
     { id: "card-net-log",          labelKey: "settings.netLog.title",  label: "Network log", conditional: true },
   ]},
@@ -1059,6 +1058,19 @@ const navStructure: NavSection[] = [
               </div>
             </details>
 
+          </div>
+        </div>
+
+        <!-- Surface: Casting, unhidden by receiver-card.ts / play-on-tv-card.ts -->
+        <div id="card-casting" data-settings-item class="settings-surface icon-mark-host hidden scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
+            <span class="icon-mark">
+              <IconCast aria-hidden="true" stroke={2} />
+            </span>
+            <h3 data-i18n="settings.casting.title" class="text-base font-semibold">Casting</h3>
+          </div>
+          <div class="settings-rows">
+
             <!-- TV receiver: desktop-only, unhidden by receiver-card.ts -->
             <details id="card-tv-receiver" data-settings-item class="hidden group scroll-mt-6 lg:scroll-mt-20">
               <summary class="settings-row cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
@@ -1238,7 +1250,7 @@ const navStructure: NavSection[] = [
                   </div>
                 </div>
 
-                <button id="play-on-tv-add" type="button" data-settings-item class="btn-primary self-start">
+                <button id="play-on-tv-add" type="button" data-settings-item class="btn-primary self-end">
                   <IconPlus aria-hidden="true" class="btn-icon" />
                   <span data-i18n="settings.playOnTv.addDevice">Add a TV</span>
                 </button>

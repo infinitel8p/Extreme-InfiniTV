@@ -139,8 +139,13 @@ function showSeekFlash(deltaSeconds: number): void {
   seekFlashTimer = setTimeout(() => seekFlashEl.classList.add("hidden"), 900)
 }
 
+function setKeepScreenOn(enabled: boolean): void {
+  try { window.AndroidVideo?.setKeepScreenOn?.(enabled) } catch {}
+}
+
 function reportState(partial: ReceiverStatePartial): void {
   currentPlaybackState = partial.state
+  setKeepScreenOn(partial.state === "playing" || partial.state === "loading" || partial.state === "buffering")
   if (typeof partial.positionSeconds === "number") lastKnownPositionSeconds = partial.positionSeconds
   const payload = {
     state: partial.state,
