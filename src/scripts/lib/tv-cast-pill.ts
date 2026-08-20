@@ -37,6 +37,7 @@ let pollHandle: ReturnType<typeof setInterval> | null = null
 let consecutiveMisses = 0
 let lastKnownPositionSeconds = 0
 let initialized = false
+let errorToastShown = false
 
 function sessionAsDevice(session: CastSession): TvDevice {
   return {
@@ -179,6 +180,17 @@ async function tick(): Promise<void> {
     clearCastSession()
     return
   }
+  if (state.state === "error") {
+    if (!errorToastShown) {
+      errorToastShown = true
+      toast({
+        title: t("cast.toast.playbackError", { device: session.deviceName, error: state.error || t("receiver.error.title") }),
+        variant: "error",
+      })
+    }
+  } else {
+    errorToastShown = false
+  }
   setPlayPauseIcon(pillEl, state.state === "paused")
   if (!session.isLive) updateTime(pillEl, state.positionSeconds, state.durationSeconds)
 }
@@ -252,6 +264,7 @@ function onLocaleChange(): void {
 
 function mount(session: CastSession): void {
   if (pillEl) unmount()
+  errorToastShown = false
   const pill = buildPill()
   applySessionToPill(pill, session)
   setPlayPauseIcon(pill, false)

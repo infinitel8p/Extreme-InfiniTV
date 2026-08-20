@@ -333,6 +333,7 @@ export interface CastState {
   positionSeconds: number
   durationSeconds?: number
   title?: string
+  error?: string
 }
 
 export async function fetchCastState(device: TvDevice): Promise<CastState | null> {
@@ -351,6 +352,7 @@ export async function fetchCastState(device: TvDevice): Promise<CastState | null
     const state: CastState = { state: data.state, positionSeconds: data.positionSeconds }
     if (typeof data.durationSeconds === "number") state.durationSeconds = data.durationSeconds
     if (typeof data.title === "string") state.title = data.title
+    if (typeof data.error === "string" && data.error) state.error = data.error
     return state
   } catch {
     return null

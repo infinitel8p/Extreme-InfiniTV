@@ -257,6 +257,22 @@ fn resolve_device_name(name: &str, fallback: &str) -> String {
     }
 }
 
+// Android hostnames are useless (always "localhost"); the JS side supplies the real device name.
+#[cfg(target_os = "android")]
+fn default_receiver_name() -> String {
+    "Extreme InfiniTV".to_string()
+}
+
+#[cfg(not(target_os = "android"))]
+fn default_receiver_name() -> String {
+    let hostname = gethostname::gethostname().to_string_lossy().trim().to_string();
+    if hostname.is_empty() || hostname.eq_ignore_ascii_case("localhost") {
+        "Extreme InfiniTV".to_string()
+    } else {
+        hostname
+    }
+}
+
 fn generate_device_key() -> String {
     use rand::RngCore;
     let mut bytes = [0u8; 16];
@@ -488,7 +504,7 @@ pub async fn receiver_start(
 
         let trimmed_name = name.unwrap_or_default();
         let resolved_name = if trimmed_name.trim().is_empty() {
-            "Extreme InfiniTV".to_string()
+            default_receiver_name()
         } else {
             trimmed_name.trim().to_string()
         };
@@ -583,7 +599,7 @@ pub fn receiver_regenerate_code(app: AppHandle, state: tauri::State<'_, Receiver
 
 #[tauri::command]
 pub fn receiver_set_name(app: AppHandle, state: tauri::State<'_, ReceiverState>, name: String) -> Value {
-    let resolved_name = resolve_device_name(&name, "Extreme InfiniTV");
+    let resolved_name = resolve_device_name(&name, &default_receiver_name());
     *state.shared.name.lock().unwrap_or_else(|poison| poison.into_inner()) = resolved_name.clone();
     readvertise_mdns(&state, &resolved_name);
 
@@ -1289,6 +1305,12 @@ mod tests {
     fn resolve_device_name_falls_back_when_blank() {
         assert_eq!(resolve_device_name("   ", "Extreme InfiniTV"), "Extreme InfiniTV");
         assert_eq!(resolve_device_name("", "Extreme InfiniTV"), "Extreme InfiniTV");
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn default_receiver_name_is_never_blank() {
+        assert!(!default_receiver_name().is_empty());
     }
 
     #[test]

@@ -7,11 +7,19 @@ import {
   type Mounted,
   type VjsLikeHandle,
 } from "@/scripts/lib/player-runtime"
-import { getPlayerBackend, getReceiverDeviceName } from "@/scripts/lib/app-settings.js"
+import { getPlayerBackend, getEffectiveReceiverDeviceName } from "@/scripts/lib/app-settings.js"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers"
 import { validateCastDescriptor } from "@/scripts/lib/tv-cast-descriptor"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
+import { decodedFrameCount } from "@/scripts/lib/player-telemetry.js"
+import {
+  classifyStartFailure,
+  deviceSupportsHevc,
+  hasHevcNameHint,
+  type StartFailureKind,
+  type StartFailureVerdict,
+} from "@/scripts/lib/codec-hints.js"
 import {
   formatReceiverAddress,
   formatReceiverPairCode,
@@ -55,6 +63,7 @@ let mounted: Mounted | null = null
 let activeHandle: VjsLikeHandle | null = null
 let mediaListenersWired = false
 let currentTitle = ""
+let currentMime = ""
 let currentIsLive = false
 let currentPlaybackState = "idle"
 let tearingDown = false
@@ -64,6 +73,15 @@ let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let pairedFlashTimer: ReturnType<typeof setTimeout> | null = null
 let titleHideTimer: ReturnType<typeof setTimeout> | null = null
 let errorHideTimer: ReturnType<typeof setTimeout> | null = null
+let deadVideoTimer: ReturnType<typeof setTimeout> | null = null
+let loadingTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+
+// Time to let a stream settle before judging zero decoded frames a decode failure.
+const DEAD_VIDEO_CHECK_MS = 6000
+const DEAD_VIDEO_RECHECK_MS = 4000
+const DEAD_VIDEO_MIN_PLAYED_S = 3
+// A descriptor that never reaches "playing" in this long is a stuck load, not a slow one.
+const LOADING_TIMEOUT_MS = 30000
 
 function getMediaElementFor(handle: VjsLikeHandle | null): HTMLVideoElement | null {
   return handle?.getMediaElement?.() ?? videoEl
@@ -100,7 +118,7 @@ async function refreshStatus(): Promise<void> {
 }
 
 async function startReceiver(): Promise<void> {
-  const name = getReceiverDeviceName()
+  const name = getEffectiveReceiverDeviceName() || undefined
   try {
     const status = await invoke<ReceiverStatus>("receiver_start", { name })
     renderStatus(status)
@@ -160,30 +178,129 @@ function reportState(partial: {
   })
 }
 
-function describePlaybackError(): string {
-  try {
-    const mediaError = getMediaElementFor(activeHandle)?.error
-    if (mediaError?.message) return mediaError.message
-    const errorDetail = activeHandle?.codecInfo?.()?.errorDetail
-    if (errorDetail) return errorDetail
-  } catch {}
-  return t("receiver.error.title")
+const FAILURE_MESSAGE_KEYS: Partial<Record<StartFailureKind, string>> = {
+  hevc: "receiver.error.hevc",
+  codec: "receiver.error.videoCodec",
+  audio: "receiver.error.audioCodec",
+  parse: "receiver.error.container",
 }
 
-function handleError(): void {
-  const message = describePlaybackError()
+function mediaErrorMessageKey(code: number): string | null {
+  if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) return "receiver.error.container"
+  if (code === MediaError.MEDIA_ERR_DECODE) return "receiver.error.videoCodec"
+  if (code === MediaError.MEDIA_ERR_NETWORK) return "receiver.error.network"
+  return null
+}
+
+function mediaErrorTechnical(mediaError: MediaError): string {
+  const parts = [currentMime, `MediaError ${mediaError.code}${mediaError.message ? `: ${mediaError.message}` : ""}`]
+  return parts.filter(Boolean).join("; ")
+}
+
+function classifyCurrentFailure(): StartFailureVerdict {
+  const info = activeHandle?.codecInfo?.() ?? { videoCodec: null, audioCodec: null, errorDetail: null }
+  return classifyStartFailure({
+    videoCodec: info.videoCodec,
+    audioCodec: info.audioCodec,
+    errorDetail: info.errorDetail,
+    nameHint: hasHevcNameHint(currentTitle),
+    deviceHevc: deviceSupportsHevc(),
+  })
+}
+
+type FailureContext = "player" | "dead-video" | "timeout"
+
+function describePlaybackError(context: FailureContext): { message: string; technical: string | null } {
+  if (context === "timeout") return { message: t("receiver.error.timeout"), technical: null }
+
+  const verdict = classifyCurrentFailure()
+  const knownKey = FAILURE_MESSAGE_KEYS[verdict.kind]
+  if (knownKey) return { message: t(knownKey), technical: verdict.codec }
+
+  // A dead-video conviction is already known to be a video decode failure even without a codec string.
+  if (context === "dead-video") return { message: t("receiver.error.videoCodec"), technical: verdict.codec }
+
+  const mediaError = getMediaElementFor(activeHandle)?.error
+  if (mediaError) {
+    const messageKey = mediaErrorMessageKey(mediaError.code)
+    if (messageKey) return { message: t(messageKey), technical: mediaErrorTechnical(mediaError) }
+  }
+
+  const errorDetail = activeHandle?.codecInfo?.()?.errorDetail
+  if (errorDetail) return { message: t("receiver.error.title"), technical: errorDetail }
+
+  return { message: t("receiver.error.title"), technical: null }
+}
+
+function handleError(context: FailureContext = "player"): void {
+  clearDeadVideoWatchdog()
+  clearLoadingWatchdog()
+  const { message, technical } = describePlaybackError(context)
+  const detail = technical ? `${message} (${technical})`.slice(0, 300) : message
+  log.error("[xt:receiver] playback failed:", detail)
   if (errorMessageEl) errorMessageEl.textContent = message
   showLoading(false)
   errorEl?.classList.remove("hidden")
-  reportState({ state: "error", error: message, positionSeconds: 0 })
+  reportState({ state: "error", error: detail, positionSeconds: 0 })
   if (errorHideTimer) clearTimeout(errorHideTimer)
   errorHideTimer = setTimeout(() => teardownToIdle(), 10000)
+}
+
+function clearDeadVideoWatchdog(): void {
+  if (deadVideoTimer) {
+    clearTimeout(deadVideoTimer)
+    deadVideoTimer = null
+  }
+}
+
+function armDeadVideoWatchdog(handle: VjsLikeHandle): void {
+  clearDeadVideoWatchdog()
+  const baselineTime = getMediaElementFor(handle)?.currentTime ?? 0
+  let rechecked = false
+  const check = () => {
+    deadVideoTimer = null
+    if (activeHandle !== handle) return
+    const mediaEl = getMediaElementFor(handle)
+    if (!mediaEl || mediaEl.paused) return
+    if (mediaEl.videoWidth === 0 && mediaEl.videoHeight === 0) return
+    const frames = decodedFrameCount(mediaEl)
+    if (frames === null || frames > 0) return
+    const playedEnough = (mediaEl.currentTime || 0) - baselineTime >= DEAD_VIDEO_MIN_PLAYED_S
+    if (!playedEnough && !rechecked) {
+      rechecked = true
+      deadVideoTimer = setTimeout(check, DEAD_VIDEO_RECHECK_MS)
+      return
+    }
+    log.warn("[xt:receiver] video track decoded zero frames - treating as start failure")
+    try { handle.pause() } catch {}
+    handleError("dead-video")
+  }
+  deadVideoTimer = setTimeout(check, DEAD_VIDEO_CHECK_MS)
+}
+
+function clearLoadingWatchdog(): void {
+  if (loadingTimeoutTimer) {
+    clearTimeout(loadingTimeoutTimer)
+    loadingTimeoutTimer = null
+  }
+}
+
+function armLoadingWatchdog(handle: VjsLikeHandle): void {
+  clearLoadingWatchdog()
+  loadingTimeoutTimer = setTimeout(() => {
+    loadingTimeoutTimer = null
+    if (activeHandle !== handle || currentPlaybackState === "playing") return
+    log.warn("[xt:receiver] stream never reached playing state within timeout")
+    handleError("timeout")
+  }, LOADING_TIMEOUT_MS)
 }
 
 function teardownToIdle(): void {
   tearingDown = true
   if (titleHideTimer) clearTimeout(titleHideTimer)
   if (errorHideTimer) clearTimeout(errorHideTimer)
+  clearDeadVideoWatchdog()
+  clearLoadingWatchdog()
   try { activeHandle?.pause() } catch {}
   try { activeHandle?.reset?.() } catch {}
   playerViewEl?.classList.add("hidden")
@@ -199,6 +316,8 @@ function wireMediaListeners(handle: VjsLikeHandle): void {
   mediaListenersWired = true
   handle.on("playing", () => {
     showLoading(false)
+    clearLoadingWatchdog()
+    armDeadVideoWatchdog(handle)
     reportState({ state: "playing" })
   })
   handle.on("pause", () => {
@@ -250,7 +369,10 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
   }
 
   tearingDown = false
+  clearDeadVideoWatchdog()
+  clearLoadingWatchdog()
   currentTitle = descriptor.title
+  currentMime = descriptor.mime
   currentIsLive = descriptor.isLive
 
   await applyStreamHeaders(
@@ -278,6 +400,7 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
     timelineOffsetSeconds: descriptor.timelineOffsetSeconds,
     preferNativeHls: descriptor.preferNativeHls,
   })
+  armLoadingWatchdog(handle)
 
   if (!descriptor.isLive && (descriptor.resumeSeconds ?? 0) > 5) {
     const resumeSeconds = descriptor.resumeSeconds!

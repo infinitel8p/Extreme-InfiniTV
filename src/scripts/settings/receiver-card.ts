@@ -10,6 +10,7 @@ import {
   setReceiverBootEnabled,
   getReceiverDeviceName,
   setReceiverDeviceName,
+  getEffectiveReceiverDeviceName,
 } from "@/scripts/lib/app-settings.js"
 import {
   formatReceiverAddress,
@@ -132,7 +133,7 @@ async function init(): Promise<void> {
     setReceiverModeEnabled(enabled)
     syncModeButtons()
     if (enabled) {
-      invoke<ReceiverStatus>("receiver_start", { name: getReceiverDeviceName() || undefined })
+      invoke<ReceiverStatus>("receiver_start", { name: getEffectiveReceiverDeviceName() || undefined })
         .then((status) => {
           renderStatus(status)
           if (status.port !== undefined) advertiseReceiver(status.name, status.port)

@@ -73,6 +73,7 @@ dependencies = [
  "chrono",
  "discord-rich-presence",
  "futures-util",
+ "gethostname",
  "log",
  "mdns-sd",
  "rand 0.9.5",

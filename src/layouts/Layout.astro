@@ -1002,7 +1002,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
     ;(async () => {
       try {
-        const [{ invoke }, { listen }, { getReceiverModeEnabled, getReceiverDeviceName }, { advertiseReceiver }] =
+        const [{ invoke }, { listen }, { getReceiverModeEnabled, getEffectiveReceiverDeviceName }, { advertiseReceiver }] =
           await Promise.all([
             import("@tauri-apps/api/core"),
             import("@tauri-apps/api/event"),
@@ -1011,7 +1011,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
           ])
         if (getReceiverModeEnabled()) {
           invoke<{ name: string; port?: number }>("receiver_start", {
-            name: getReceiverDeviceName() || undefined,
+            name: getEffectiveReceiverDeviceName() || undefined,
           })
             .then((status) => {
               if (status.port !== undefined) advertiseReceiver(status.name, status.port)

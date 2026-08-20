@@ -977,6 +977,19 @@ export function setReceiverDeviceName(name) {
   writeLS(KEY_RECEIVER_NAME, name || "")
 }
 
+/** Falls back to the Android device name when no custom name is set; "" lets Rust use the hostname. */
+export function getEffectiveReceiverDeviceName() {
+  const stored = getReceiverDeviceName()
+  if (stored) return stored
+  try {
+    const bridge = typeof window !== "undefined" ? window.AndroidDeviceInfo : undefined
+    const deviceName = bridge?.getDeviceName?.()
+    return typeof deviceName === "string" ? deviceName.trim() : ""
+  } catch {
+    return ""
+  }
+}
+
 export const CAPTIONS_AUTO_EVENT = "xt:captions-auto-changed"
 
 /** Captions on by default: default off. */
