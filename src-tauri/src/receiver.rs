@@ -258,6 +258,21 @@ fn resolve_device_name(name: &str, fallback: &str) -> String {
     }
 }
 
+/// None for blank or "localhost", which gethostname returns on containers/CI and Android.
+fn usable_hostname(hostname: &str) -> Option<String> {
+    let trimmed = hostname.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("localhost") {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn system_hostname() -> String {
+    gethostname::gethostname().to_string_lossy().into_owned()
+}
+
 // Android hostnames are useless (always "localhost"); the JS side supplies the real device name.
 #[cfg(target_os = "android")]
 fn default_receiver_name() -> String {
@@ -266,11 +281,19 @@ fn default_receiver_name() -> String {
 
 #[cfg(not(target_os = "android"))]
 fn default_receiver_name() -> String {
-    let hostname = gethostname::gethostname().to_string_lossy().trim().to_string();
-    if hostname.is_empty() || hostname.eq_ignore_ascii_case("localhost") {
-        "Extreme InfiniTV".to_string()
-    } else {
-        hostname
+    usable_hostname(&system_hostname()).unwrap_or_else(|| "Extreme InfiniTV".to_string())
+}
+
+/// Sender-side device-name lookup: the OS hostname, or "" when unusable (Android has no bridge here).
+#[tauri::command]
+pub fn device_hostname() -> String {
+    #[cfg(target_os = "android")]
+    {
+        String::new()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        usable_hostname(&system_hostname()).unwrap_or_default()
     }
 }
 
@@ -1366,6 +1389,19 @@ mod tests {
     #[test]
     fn default_receiver_name_is_never_blank() {
         assert!(!default_receiver_name().is_empty());
+    }
+
+    #[test]
+    fn usable_hostname_rejects_blank_and_localhost() {
+        assert_eq!(usable_hostname(""), None);
+        assert_eq!(usable_hostname("   "), None);
+        assert_eq!(usable_hostname("localhost"), None);
+        assert_eq!(usable_hostname("LOCALHOST"), None);
+    }
+
+    #[test]
+    fn usable_hostname_trims_and_keeps_a_real_name() {
+        assert_eq!(usable_hostname("  living-room-pc  "), Some("living-room-pc".to_string()));
     }
 
     #[test]

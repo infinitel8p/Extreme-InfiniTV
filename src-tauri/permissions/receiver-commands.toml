@@ -12,4 +12,5 @@ commands.allow = [
     "receiver_revoke_device",
     "receiver_report_state",
     "receiver_discover",
+    "device_hostname",
 ]

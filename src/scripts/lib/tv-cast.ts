@@ -202,7 +202,37 @@ function baseUrl(host: string, port: number): string {
   return `http://${host}:${port}`
 }
 
+interface AndroidDeviceInfoBridge {
+  getDeviceName?: () => string
+}
+
+function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && (!!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__)
+}
+
+let cachedSenderDeviceName: string | null = null
+
+async function initSenderDeviceName(): Promise<void> {
+  if (typeof window === "undefined") return
+  try {
+    const bridge = (window as any).AndroidDeviceInfo as AndroidDeviceInfoBridge | undefined
+    const androidName = bridge?.getDeviceName?.()?.trim()
+    if (androidName) {
+      cachedSenderDeviceName = androidName
+      return
+    }
+    if (!isTauriRuntime()) return
+    const { invoke } = await import("@tauri-apps/api/core")
+    const hostname = (await invoke<string>("device_hostname")).trim()
+    if (hostname) cachedSenderDeviceName = hostname
+  } catch {}
+}
+
+void initSenderDeviceName()
+
+/** UA-based label is a fallback for the brief window before the real device name resolves. */
 export function senderDeviceName(): string {
+  if (cachedSenderDeviceName) return cachedSenderDeviceName
   const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : ""
   if (/Android/i.test(userAgent)) return "Extreme InfiniTV on Android"
   if (/Windows/i.test(userAgent)) return "Extreme InfiniTV on Windows"
