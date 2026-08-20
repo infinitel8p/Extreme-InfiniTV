@@ -3,6 +3,9 @@ import { debounce } from "@/scripts/lib/debounce"
 import { log } from "@/scripts/lib/log.js"
 import { t } from "@/scripts/lib/i18n.js"
 import { isTauri } from "@/scripts/lib/creds.js"
+import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
+import { confirmDialog } from "@/scripts/lib/confirm-dialog.js"
+import { writeClipboardText } from "@/scripts/lib/clipboard.js"
 import {
   getReceiverModeEnabled,
   setReceiverModeEnabled,
@@ -20,6 +23,8 @@ import {
 } from "@/scripts/lib/receiver-shared.js"
 import { advertiseReceiver, stopAdvertisingReceiver } from "@/scripts/lib/receiver-discovery.js"
 
+const MASKED_PAIR_CODE = "••• •••"
+
 async function init(): Promise<void> {
   if (!isTauri) return
 
@@ -35,12 +40,22 @@ async function init(): Promise<void> {
     "receiver-device-name-input"
   ) as HTMLInputElement | null
   const statusBlock = document.getElementById("receiver-status-block")
+  const liveBadge = document.getElementById("receiver-live-badge")
+  const summaryHelper = document.getElementById("receiver-summary-helper")
+  const summaryStatus = document.getElementById("receiver-summary-status")
+  const statusLineText = document.getElementById("receiver-status-line-text")
   const addressesList = document.getElementById("receiver-addresses-list")
   const pairCodeDisplay = document.getElementById("receiver-pair-code-display")
+  const codeRevealBtn = document.getElementById("receiver-code-reveal")
+  const codeShowIcon = codeRevealBtn?.querySelector<HTMLElement>('[data-receiver-reveal-icon="show"]')
+  const codeHideIcon = codeRevealBtn?.querySelector<HTMLElement>('[data-receiver-reveal-icon="hide"]')
   const regenerateBtn = document.getElementById("receiver-regenerate-btn")
   const openScreenBtn = document.getElementById("receiver-open-screen")
   const pairedList = document.getElementById("receiver-paired-list")
   const noDevicesEl = document.getElementById("receiver-no-devices")
+
+  let rawPairCode = ""
+  let codeRevealed = false
 
   function syncModeButtons(): void {
     const enabled = getReceiverModeEnabled()
@@ -54,6 +69,43 @@ async function init(): Promise<void> {
     for (const btn of bootGroup?.querySelectorAll<HTMLElement>(".receiver-boot-btn") ?? []) {
       btn.setAttribute("aria-checked", String((btn.dataset.receiverBoot === "on") === enabled))
     }
+  }
+
+  function renderPairCodeDisplay(): void {
+    if (!pairCodeDisplay) return
+    pairCodeDisplay.textContent = codeRevealed ? formatReceiverPairCode(rawPairCode) : MASKED_PAIR_CODE
+  }
+
+  function setCodeRevealed(revealed: boolean): void {
+    codeRevealed = revealed
+    codeShowIcon?.classList.toggle("hidden", revealed)
+    codeHideIcon?.classList.toggle("hidden", !revealed)
+    codeRevealBtn?.setAttribute(
+      "aria-label",
+      t(revealed ? "settings.receiver.hideCode" : "settings.receiver.showCode")
+    )
+    renderPairCodeDisplay()
+  }
+
+  function renderAddresses(status: ReceiverStatus): void {
+    if (!addressesList) return
+    addressesList.replaceChildren()
+    for (const ip of status.ips ?? []) {
+      const address = formatReceiverAddress(ip, status.port)
+      const addressBtn = document.createElement("button")
+      addressBtn.type = "button"
+      addressBtn.className = "btn min-h-9 px-2.5 py-1 text-sm tabular-nums"
+      addressBtn.textContent = address
+      addressBtn.title = t("settings.receiver.copyAddress")
+      addressBtn.setAttribute("aria-label", t("settings.receiver.copyAddress"))
+      addressBtn.addEventListener("click", () => {
+        writeClipboardText(address)
+          .then(() => toastSuccess(t("toast.copyOk")))
+          .catch((err) => log.warn("[settings:receiver] clipboard write failed:", err))
+      })
+      addressesList.appendChild(addressBtn)
+    }
+    window.SpatialNavigation?.makeFocusable?.()
   }
 
   function renderPairedDevices(devices: ReceiverPairedDevice[]): void {
@@ -78,7 +130,7 @@ async function init(): Promise<void> {
       revokeBtn.type = "button"
       revokeBtn.className = "btn flex-none"
       revokeBtn.textContent = t("settings.receiver.revoke")
-      revokeBtn.addEventListener("click", () => void revokeDevice(device.key))
+      revokeBtn.addEventListener("click", () => void revokeDevice(device.key, device.deviceName))
 
       row.append(textWrap, revokeBtn)
       pairedList.appendChild(row)
@@ -86,24 +138,37 @@ async function init(): Promise<void> {
     window.SpatialNavigation?.makeFocusable?.()
   }
 
+  function updateDeviceNamePlaceholder(status: ReceiverStatus): void {
+    if (!deviceNameInput || deviceNameInput.value) return
+    deviceNameInput.placeholder = status.name || t("settings.receiver.deviceNamePlaceholder")
+  }
+
   function renderStatus(status: ReceiverStatus): void {
+    updateDeviceNamePlaceholder(status)
+
     const enabled = !!status.enabled
     statusBlock?.classList.toggle("hidden", !enabled)
     statusBlock?.classList.toggle("flex", enabled)
+
+    liveBadge?.classList.toggle("hidden", !enabled)
+    summaryHelper?.classList.toggle("hidden", enabled)
+    summaryStatus?.classList.toggle("hidden", !enabled)
+    if (summaryStatus) {
+      summaryStatus.textContent = enabled
+        ? t("settings.receiver.statusReceiving", { name: status.name })
+        : ""
+    }
+
     if (!enabled) return
 
-    if (addressesList) {
-      addressesList.replaceChildren()
-      for (const ip of status.ips ?? []) {
-        const row = document.createElement("div")
-        row.textContent = formatReceiverAddress(ip, status.port)
-        addressesList.appendChild(row)
-      }
+    if (statusLineText) {
+      statusLineText.textContent = t("settings.receiver.statusVisibleAs", { name: status.name })
     }
 
-    if (pairCodeDisplay) {
-      pairCodeDisplay.textContent = formatReceiverPairCode(status.pairCode)
-    }
+    renderAddresses(status)
+
+    rawPairCode = status.pairCode ?? ""
+    renderPairCodeDisplay()
 
     renderPairedDevices(status.pairedDevices ?? [])
   }
@@ -116,7 +181,13 @@ async function init(): Promise<void> {
     }
   }
 
-  async function revokeDevice(key: string): Promise<void> {
+  async function revokeDevice(key: string, deviceName: string): Promise<void> {
+    const confirmed = await confirmDialog({
+      message: t("settings.receiver.revokeConfirm", { deviceName }),
+      confirmLabel: t("settings.receiver.revoke"),
+      destructive: true,
+    })
+    if (!confirmed) return
     try {
       await invoke("receiver_revoke_device", { key })
       await refreshStatus()
@@ -138,7 +209,12 @@ async function init(): Promise<void> {
           renderStatus(status)
           if (status.port !== undefined) advertiseReceiver(status.name, status.port)
         })
-        .catch((err) => log.warn("[settings:receiver] receiver_start failed:", err))
+        .catch((err) => {
+          log.warn("[settings:receiver] receiver_start failed:", err)
+          setReceiverModeEnabled(false)
+          syncModeButtons()
+          toastError(t("settings.receiver.startFailed"))
+        })
     } else {
       invoke("receiver_stop")
         .then(refreshStatus)
@@ -155,9 +231,14 @@ async function init(): Promise<void> {
     syncBootButtons()
   })
 
+  codeRevealBtn?.addEventListener("click", () => setCodeRevealed(!codeRevealed))
+
   regenerateBtn?.addEventListener("click", () => {
     invoke<ReceiverStatus>("receiver_regenerate_code")
-      .then(renderStatus)
+      .then((status) => {
+        renderStatus(status)
+        toastSuccess(t("settings.receiver.regenerated"))
+      })
       .catch((err) => log.warn("[settings:receiver] receiver_regenerate_code failed:", err))
   })
 

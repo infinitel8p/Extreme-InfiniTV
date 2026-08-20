@@ -1064,10 +1064,15 @@ const navStructure: NavSection[] = [
                   <h3 class="text-sm font-medium leading-snug">
                     <IconDeviceTv aria-hidden="true" stroke={2} class="size-4 text-fg-3 inline-block align-[-2px] me-1.5" />
                     <span data-i18n="settings.receiver.title">TV receiver</span>
+                    <span id="receiver-live-badge" class="hidden ms-2 inline-flex items-center gap-1.5 align-middle rounded-full bg-accent-soft px-2 py-0.5 text-2xs font-semibold text-accent">
+                      <span class="size-1.5 rounded-full bg-ok"></span>
+                      <span data-i18n="settings.receiver.on">On</span>
+                    </span>
                   </h3>
-                  <span data-i18n="settings.receiver.helperLong" class="text-xs text-fg-3 line-clamp-1 block">
+                  <span id="receiver-summary-helper" data-i18n="settings.receiver.helperLong" class="text-xs text-fg-3 line-clamp-1 block">
                     Let other devices running Extreme InfiniTV send playback to this one over your local network.
                   </span>
+                  <span id="receiver-summary-status" class="hidden text-xs text-fg-3 line-clamp-1 block"></span>
                 </span>
                 <span class="settings-row__control">
                   <IconChevronDown aria-hidden="true" stroke={2} class="size-4 text-fg-3 transition-transform group-open:rotate-180" />
@@ -1077,14 +1082,14 @@ const navStructure: NavSection[] = [
 
                 <div data-settings-item class="settings-row">
                   <div class="settings-row__text">
-                    <h3 data-i18n="settings.receiver.label" class="text-sm font-medium leading-snug">Receiver mode</h3>
+                    <h3 data-i18n="settings.receiver.label" class="text-sm font-medium leading-snug">Allow casting to this device</h3>
                   </div>
                   <div class="settings-row__control">
                     <div
                       id="receiver-mode-toggle"
                       class="settings-seg"
                       role="radiogroup"
-                      aria-label="Receiver mode"
+                      aria-label="Allow casting to this device"
                       data-i18n-attr="aria-label:settings.receiver.label">
                       <button type="button" role="radio" data-receiver="on"  aria-checked="false" data-i18n="settings.receiver.on"  class="receiver-mode-btn btn">On</button>
                       <button type="button" role="radio" data-receiver="off" aria-checked="false" data-i18n="settings.receiver.off" class="receiver-mode-btn btn">Off</button>
@@ -1094,27 +1099,8 @@ const navStructure: NavSection[] = [
 
                 <div data-settings-item class="settings-row">
                   <div class="settings-row__text">
-                    <h3 data-i18n="settings.receiver.boot.title" class="text-sm font-medium leading-snug">Start on receiver screen</h3>
-                    <p data-i18n="settings.receiver.boot.helper" class="text-xs text-fg-3">
-                      Open the pairing screen when the app starts. Exit it anytime; it returns on the next launch.
-                    </p>
-                  </div>
-                  <div class="settings-row__control">
-                    <div
-                      id="receiver-boot-toggle"
-                      class="settings-seg"
-                      role="radiogroup"
-                      aria-label="Start on receiver screen"
-                      data-i18n-attr="aria-label:settings.receiver.boot.label">
-                      <button type="button" role="radio" data-receiver-boot="on"  aria-checked="false" data-i18n="settings.receiver.boot.on"  class="receiver-boot-btn btn">On</button>
-                      <button type="button" role="radio" data-receiver-boot="off" aria-checked="false" data-i18n="settings.receiver.boot.off" class="receiver-boot-btn btn">Off</button>
-                    </div>
-                  </div>
-                </div>
-
-                <div data-settings-item class="settings-row">
-                  <div class="settings-row__text">
                     <h3 data-i18n="settings.receiver.deviceName" class="text-sm font-medium leading-snug">Device name</h3>
+                    <p data-i18n="settings.receiver.deviceNameHelper" class="text-xs text-fg-3">Shown on the pairing screen and in other devices' cast menus.</p>
                   </div>
                   <div class="settings-row__control w-full @2xl:w-72">
                     <input
@@ -1132,22 +1118,45 @@ const navStructure: NavSection[] = [
                 <div id="receiver-status-block" class="hidden flex-col gap-3">
 
                   <div data-settings-item class="settings-row settings-row--stack">
-                    <div class="settings-row__text">
-                      <h3 data-i18n="settings.receiver.code" class="text-sm font-medium leading-snug">Pair code</h3>
-                    </div>
-                    <div class="settings-row__control w-full flex-col items-stretch gap-2">
-                      <div id="receiver-addresses-list" class="flex flex-col gap-0.5 text-xs text-fg-3 tabular-nums"></div>
-                      <div id="receiver-pair-code-display" class="text-3xl tracking-[0.3em] tabular-nums text-accent font-semibold"></div>
-                      <div class="flex flex-wrap gap-2">
-                        <button id="receiver-regenerate-btn" type="button" data-settings-item class="btn">
-                          <IconRefresh aria-hidden="true" class="btn-icon" />
-                          <span data-i18n="settings.receiver.regenerate">Regenerate code</span>
-                        </button>
-                        <button id="receiver-open-screen" type="button" data-settings-item class="btn">
-                          <IconExternalLink aria-hidden="true" class="btn-icon" />
-                          <span data-i18n="settings.receiver.openScreen">Open receiver screen</span>
-                        </button>
+                    <div class="settings-row__control w-full flex-col items-stretch gap-3">
+                      <p id="receiver-status-line" class="inline-flex items-center gap-2 text-sm text-fg">
+                        <span class="size-2 rounded-full bg-ok"></span>
+                        <span id="receiver-status-line-text"></span>
+                      </p>
+
+                      <div class="flex flex-col items-start gap-1.5">
+                        <span data-i18n="settings.receiver.addressLabel" class="text-2xs font-semibold uppercase tracking-[0.18em] text-fg-3">Address</span>
+                        <div id="receiver-addresses-list" class="flex flex-col items-start gap-1"></div>
                       </div>
+
+                      <div class="flex flex-col items-start gap-1.5">
+                        <span data-i18n="settings.receiver.code" class="text-2xs font-semibold uppercase tracking-[0.18em] text-fg-3">Pair code</span>
+                        <div class="flex items-center gap-3">
+                          <div id="receiver-pair-code-display" class="text-3xl tracking-[0.3em] tabular-nums text-accent font-semibold select-none"></div>
+                          <button
+                            id="receiver-code-reveal"
+                            type="button"
+                            class="btn flex-none w-11 justify-center p-0"
+                            aria-label="Show pair code"
+                            data-i18n-attr="aria-label:settings.receiver.showCode">
+                            <IconEye aria-hidden="true" class="btn-icon" data-receiver-reveal-icon="show" />
+                            <IconEyeOff aria-hidden="true" class="btn-icon hidden" data-receiver-reveal-icon="hide" />
+                          </button>
+                          <button
+                            id="receiver-regenerate-btn"
+                            type="button"
+                            data-settings-item
+                            class="inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-fg-3 transition-colors hover:bg-surface-2 hover:text-fg">
+                            <IconRefresh aria-hidden="true" class="size-4" />
+                            <span data-i18n="settings.receiver.regenerate">Regenerate code</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <button id="receiver-open-screen" type="button" data-settings-item class="btn-primary self-start">
+                        <IconExternalLink aria-hidden="true" class="btn-icon" />
+                        <span data-i18n="settings.receiver.openScreen">Open receiver screen</span>
+                      </button>
                     </div>
                   </div>
 
@@ -1157,11 +1166,32 @@ const navStructure: NavSection[] = [
                     </div>
                     <div class="settings-row__control w-full flex-col items-stretch gap-1">
                       <div id="receiver-paired-list" class="flex flex-col divide-y divide-line/60 rounded-xl border border-line bg-bg overflow-hidden"></div>
-                      <p id="receiver-no-devices" data-i18n="settings.receiver.noDevices" class="px-4 py-4 text-xs text-fg-3 hidden">No devices have paired yet.</p>
+                      <p id="receiver-no-devices" data-i18n="settings.receiver.noDevices" class="px-4 py-4 text-xs text-fg-3 hidden">No devices have paired yet. Pair one by choosing Play on TV on your phone or computer.</p>
                     </div>
                   </div>
 
                 </div>
+
+                <div data-settings-item class="settings-row mt-1 border-t border-line-soft pt-4">
+                  <div class="settings-row__text">
+                    <h3 data-i18n="settings.receiver.boot.title" class="text-sm font-medium leading-snug">Start on receiver screen</h3>
+                    <p data-i18n="settings.receiver.boot.helper" class="text-xs text-fg-3">
+                      Start the app on the pairing screen, like a dedicated receiver. Exit it anytime; it returns on the next launch.
+                    </p>
+                  </div>
+                  <div class="settings-row__control">
+                    <div
+                      id="receiver-boot-toggle"
+                      class="settings-seg"
+                      role="radiogroup"
+                      aria-label="Start on receiver screen"
+                      data-i18n-attr="aria-label:settings.receiver.boot.label">
+                      <button type="button" role="radio" data-receiver-boot="on"  aria-checked="false" data-i18n="settings.receiver.boot.on"  class="receiver-boot-btn btn">On</button>
+                      <button type="button" role="radio" data-receiver-boot="off" aria-checked="false" data-i18n="settings.receiver.boot.off" class="receiver-boot-btn btn">Off</button>
+                    </div>
+                  </div>
+                </div>
+
               </div>
             </details>
 
