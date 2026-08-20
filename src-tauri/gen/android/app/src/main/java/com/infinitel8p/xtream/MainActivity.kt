@@ -699,6 +699,7 @@ class NsdBridge(private val activity: TauriActivity) {
   private val lock = Any()
   private var registrationListener: NsdManager.RegistrationListener? = null
   private var advertisedServiceName: String? = null
+  @Volatile private var lastAdvertiseState: String = "off"
 
   private var discoveryListener: NsdManager.DiscoveryListener? = null
   private var resolving = false
@@ -710,23 +711,29 @@ class NsdBridge(private val activity: TauriActivity) {
   fun isSupported(): Boolean = nsdManager != null
 
   @JavascriptInterface
-  fun advertise(name: String?, port: Int) {
+  fun advertise(name: String?, port: Int, id: String?) {
     val manager = nsdManager ?: return
     val serviceName = (name?.trim().orEmpty()).take(MAX_SERVICE_NAME_LEN).ifEmpty { "xtream" }
     synchronized(lock) {
       registrationListener?.let { unregisterLocked(manager, it) }
       registrationListener = null
+      lastAdvertiseState = "pending"
       val serviceInfo = NsdServiceInfo().apply {
         this.serviceName = serviceName
         this.serviceType = SERVICE_TYPE
         this.port = port
+        if (!id.isNullOrEmpty()) {
+          setAttribute("id", id)
+        }
       }
       val listener = object : NsdManager.RegistrationListener {
         override fun onServiceRegistered(info: NsdServiceInfo) {
           Log.d(TAG, "advertise registered: ${info.serviceName}")
+          lastAdvertiseState = "registered"
         }
         override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {
           Log.w(TAG, "advertise registration failed: $errorCode")
+          lastAdvertiseState = "failed:$errorCode"
           synchronized(lock) { if (registrationListener === this) registrationListener = null }
         }
         override fun onServiceUnregistered(info: NsdServiceInfo) {
@@ -742,6 +749,7 @@ class NsdBridge(private val activity: TauriActivity) {
         manager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener)
       } catch (error: Throwable) {
         Log.w(TAG, "registerService threw", error)
+        lastAdvertiseState = "failed:exception"
         registrationListener = null
       }
     }
@@ -754,8 +762,12 @@ class NsdBridge(private val activity: TauriActivity) {
       registrationListener?.let { unregisterLocked(manager, it) }
       registrationListener = null
       advertisedServiceName = null
+      lastAdvertiseState = "off"
     }
   }
+
+  @JavascriptInterface
+  fun advertiseState(): String = lastAdvertiseState
 
   @JavascriptInterface
   fun startDiscovery() {
@@ -871,28 +883,45 @@ class NsdBridge(private val activity: TauriActivity) {
   }
 
   private fun addResolved(info: NsdServiceInfo) {
-    val host = preferredHostAddress(info) ?: return
+    val hosts = resolvedHostAddresses(info)
+    if (hosts.isEmpty()) return
+    val host = hosts.first()
     val port = info.port
-    val key = "$host:$port"
+    val id = readTxtAttribute(info, "id")
+    val key = if (id != null) "id:$id" else "$host:$port"
     synchronized(lock) {
       if (!seenKeys.add(key)) return
+      val hostsJson = hosts.joinToString(",") { "\"${escapeJson(it)}\"" }
+      val idJson = id?.let { ",\"id\":\"${escapeJson(it)}\"" } ?: ""
       discovered.add(
         "{\"name\":\"${escapeJson(info.serviceName ?: "")}\"," +
           "\"host\":\"${escapeJson(host)}\"," +
-          "\"port\":$port}"
+          "\"port\":$port," +
+          "\"hosts\":[$hostsJson]" +
+          "$idJson}"
       )
     }
   }
 
-  // API 34+ can report multiple resolved addresses; older resolveService only ever gave one.
-  private fun preferredHostAddress(info: NsdServiceInfo): String? {
+  // API 34+ can report multiple resolved addresses (IPv4 first); older resolveService only ever gave one.
+  private fun resolvedHostAddresses(info: NsdServiceInfo): List<String> {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
       val addresses = info.hostAddresses
-      val ipv4 = addresses.firstOrNull { it is java.net.Inet4Address }
-      if (ipv4 != null) return ipv4.hostAddress
-      addresses.firstOrNull()?.hostAddress?.let { return it }
+      val ipv4 = addresses.filterIsInstance<java.net.Inet4Address>().mapNotNull { it.hostAddress }
+      val ipv6 = addresses.filter { it !is java.net.Inet4Address }.mapNotNull { it.hostAddress }
+      val ordered = ipv4 + ipv6
+      if (ordered.isNotEmpty()) return ordered
     }
-    return info.host?.hostAddress
+    return info.host?.hostAddress?.let { listOf(it) } ?: emptyList()
+  }
+
+  private fun readTxtAttribute(info: NsdServiceInfo, key: String): String? {
+    return try {
+      info.attributes[key]?.let { String(it, Charsets.UTF_8) }
+    } catch (error: Throwable) {
+      Log.w(TAG, "reading txt attribute '$key' threw", error)
+      null
+    }
   }
 
   private fun escapeJson(value: String): String {

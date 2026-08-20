@@ -40,6 +40,7 @@ const KEY_RECEIVER_MODE = "xt_receiver_mode"
 const KEY_RECEIVER_BOOT = "xt_receiver_boot"
 const KEY_RECEIVER_NAME = "xt_receiver_name"
 const KEY_RECEIVER_ENGINE = "xt_receiver_engine"
+const KEY_RECEIVER_ID = "xt_receiver_id"
 const KEY_CONTENT_LANGUAGE = "xt_content_lang"
 const KEY_LANGUAGE_GROUPING = "xt_lang_grouping"
 const EVT_CHANGED = "xt:settings-changed"
@@ -976,6 +977,22 @@ export function getReceiverDeviceName() {
 
 export function setReceiverDeviceName(name) {
   writeLS(KEY_RECEIVER_NAME, name || "")
+}
+
+function generateReceiverId() {
+  const bytes = new Uint8Array(16)
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(bytes)
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256)
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+/** Persistent per-install receiver id for the Android NSD TXT record; generated once. */
+export function getReceiverId() {
+  const stored = readLS(KEY_RECEIVER_ID, "")
+  if (stored) return stored
+  const generated = generateReceiverId()
+  writeLS(KEY_RECEIVER_ID, generated)
+  return generated
 }
 
 /** Falls back to the Android device name when no custom name is set; "" lets Rust use the hostname. */

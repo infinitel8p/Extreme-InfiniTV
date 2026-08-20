@@ -19,6 +19,8 @@ export interface TvDevice {
   key: string
   createdAt: number
   lastSeenAt: number
+  hosts?: string[]
+  pinnedHostIndex?: number
 }
 
 export const TV_DEVICES_EVENT = "xt:tv-devices-changed"
@@ -67,15 +69,22 @@ function dispatchDocumentEvent(name: string): void {
 function isTvDevice(value: unknown): value is TvDevice {
   if (!value || typeof value !== "object") return false
   const device = value as Record<string, unknown>
-  return (
-    typeof device.id === "string" &&
-    typeof device.name === "string" &&
-    typeof device.host === "string" &&
-    typeof device.port === "number" &&
-    typeof device.key === "string" &&
-    typeof device.createdAt === "number" &&
-    typeof device.lastSeenAt === "number"
-  )
+  if (
+    typeof device.id !== "string" ||
+    typeof device.name !== "string" ||
+    typeof device.host !== "string" ||
+    typeof device.port !== "number" ||
+    typeof device.key !== "string" ||
+    typeof device.createdAt !== "number" ||
+    typeof device.lastSeenAt !== "number"
+  ) {
+    return false
+  }
+  if (device.hosts !== undefined && (!Array.isArray(device.hosts) || device.hosts.some((host) => typeof host !== "string"))) {
+    return false
+  }
+  if (device.pinnedHostIndex !== undefined && typeof device.pinnedHostIndex !== "number") return false
+  return true
 }
 
 export function listTvDevices(): TvDevice[] {
@@ -150,6 +159,8 @@ export interface CastSession {
   startedAt: number
   dismissed?: boolean
   connectedOnly?: boolean
+  hosts?: string[]
+  pinnedHostIndex?: number
 }
 
 export const CAST_SESSION_EVENT = "xt:cast-session-changed"
@@ -202,6 +213,71 @@ function baseUrl(host: string, port: number): string {
   return `http://${host}:${port}`
 }
 
+/** Thrown only for a connection-level failure (refused/timeout/DNS); never for an HTTP response. */
+class HostUnreachableError extends Error {}
+
+async function fetchFromHost(url: string, init: RequestInit & { logKind?: string }): Promise<Response> {
+  try {
+    return await providerFetch(url, init)
+  } catch (err) {
+    throw new HostUnreachableError(err instanceof Error ? err.message : String(err))
+  }
+}
+
+/**
+ * [pinned-or-primary, ...rest], mirroring the Xtream mirror-pin walk in xtream-api.js.
+ */
+export function candidateHostOrder(hosts: string[], pinnedHostIndex?: number): string[] {
+  if (hosts.length === 0) return []
+  const pinnedIndex = pinnedHostIndex != null && pinnedHostIndex >= 0 && pinnedHostIndex < hosts.length ? pinnedHostIndex : 0
+  const pinned = hosts[pinnedIndex]
+  const rest = hosts.filter((_, index) => index !== pinnedIndex)
+  return [pinned, ...rest]
+}
+
+function deviceHostOrder(device: TvDevice): string[] {
+  const hosts = device.hosts && device.hosts.length ? device.hosts : [device.host]
+  return candidateHostOrder(hosts, device.pinnedHostIndex)
+}
+
+/** Tries each host in order, stopping at the first that doesn't throw `HostUnreachableError`. */
+async function walkHosts<T>(
+  hosts: string[],
+  attempt: (host: string) => Promise<T>
+): Promise<{ result: T; host: string }> {
+  let lastError: unknown = null
+  for (const host of hosts) {
+    try {
+      return { result: await attempt(host), host }
+    } catch (err) {
+      lastError = err
+      if (!(err instanceof HostUnreachableError)) throw err
+    }
+  }
+  throw lastError instanceof Error ? lastError : new HostUnreachableError("no reachable host")
+}
+
+function pinHostForDevice(device: TvDevice, host: string): void {
+  const hosts = device.hosts && device.hosts.length ? device.hosts : [device.host]
+  const index = hosts.indexOf(host)
+  if (index === -1) return
+  const stored = listTvDevices().find((entry) => entry.id === device.id)
+  if (stored) saveTvDevice({ ...stored, pinnedHostIndex: index })
+  const session = getCastSession()
+  if (session && session.deviceId === device.id) updateCastSession({ pinnedHostIndex: index })
+}
+
+/**
+ * Walks a device's candidate hosts on a connection failure, pinning the winner. An HTTP-level
+ * failure (auth, bad status) propagates immediately instead of trying another host.
+ */
+async function withHostFallback<T>(device: TvDevice, attempt: (host: string) => Promise<T>): Promise<T> {
+  const hosts = deviceHostOrder(device)
+  const { result, host } = await walkHosts(hosts, attempt)
+  if (host !== hosts[0]) pinHostForDevice(device, host)
+  return result
+}
+
 interface AndroidDeviceInfoBridge {
   getDeviceName?: () => string
 }
@@ -241,31 +317,53 @@ export function senderDeviceName(): string {
   return "Extreme InfiniTV"
 }
 
+/**
+ * Pre-pairing reachability probe. `hosts` (when given) are tried in order; unlike the
+ * post-pairing calls below, a bad response also moves on to the next host, since there's no
+ * established device yet to tell a live-but-wrong host apart from a dead one.
+ */
 export async function probeTvDevice(
   host: string,
-  port: number
+  port: number,
+  hosts?: string[]
 ): Promise<{ v: number; app: string; name: string } | null> {
-  try {
-    const response = await providerFetch(`${baseUrl(host, port)}/info`, {
-      method: "GET",
-      signal: AbortSignal.timeout(5000),
-      logKind: "other",
-    })
-    if (!response.ok) return null
-    const data = await response.json()
-    if (
-      !data ||
-      typeof data !== "object" ||
-      typeof data.v !== "number" ||
-      typeof data.app !== "string" ||
-      typeof data.name !== "string"
-    ) {
-      return null
+  const candidates = candidateHostOrder(hosts && hosts.length ? hosts : [host])
+  for (const candidate of candidates) {
+    try {
+      const response = await providerFetch(`${baseUrl(candidate, port)}/info`, {
+        method: "GET",
+        signal: AbortSignal.timeout(5000),
+        logKind: "other",
+      })
+      if (!response.ok) continue
+      const data = await response.json()
+      if (
+        !data ||
+        typeof data !== "object" ||
+        typeof data.v !== "number" ||
+        typeof data.app !== "string" ||
+        typeof data.name !== "string"
+      ) {
+        continue
+      }
+      return { v: data.v, app: data.app, name: data.name }
+    } catch {
+      continue
     }
-    return { v: data.v, app: data.app, name: data.name }
-  } catch {
-    return null
   }
+  return null
+}
+
+async function probeAuthorizedAtHost(host: string, device: TvDevice): Promise<"online" | "unauthorized"> {
+  const response = await fetchFromHost(`${baseUrl(host, device.port)}/state`, {
+    method: "GET",
+    headers: { "X-XT-Key": device.key },
+    signal: AbortSignal.timeout(4000),
+    logKind: "other",
+  })
+  if (response.ok) return "online"
+  if (response.status === 401 || response.status === 403) return "unauthorized"
+  throw new Error(`probe failed: ${response.status}`)
 }
 
 /** Probes a paired device's own auth, distinguishing a stale key from an unreachable TV. */
@@ -273,15 +371,7 @@ export async function probeTvDeviceAuthorized(
   device: TvDevice
 ): Promise<"online" | "unauthorized" | "unreachable"> {
   try {
-    const response = await providerFetch(`${baseUrl(device.host, device.port)}/state`, {
-      method: "GET",
-      headers: { "X-XT-Key": device.key },
-      signal: AbortSignal.timeout(4000),
-      logKind: "other",
-    })
-    if (response.ok) return "online"
-    if (response.status === 401 || response.status === 403) return "unauthorized"
-    return "unreachable"
+    return await withHostFallback(device, (host) => probeAuthorizedAtHost(host, device))
   } catch {
     return "unreachable"
   }
@@ -291,16 +381,25 @@ export async function pairTvDevice(params: {
   host: string
   port: number
   code: string
+  hosts?: string[]
+  /** mDNS id of the discovered receiver being paired, when pairing came from the discovery list. */
+  id?: string
 }): Promise<TvDevice> {
+  const hosts = candidateHostOrder(params.hosts && params.hosts.length ? params.hosts : [params.host])
   let response: Response
+  let winningHost: string
   try {
-    response = await providerFetch(`${baseUrl(params.host, params.port)}/pair`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ v: 1, code: params.code, deviceName: senderDeviceName() }),
-      signal: AbortSignal.timeout(8000),
-      logKind: "other",
-    })
+    const walked = await walkHosts(hosts, (host) =>
+      fetchFromHost(`${baseUrl(host, params.port)}/pair`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ v: 1, code: params.code, deviceName: senderDeviceName() }),
+        signal: AbortSignal.timeout(8000),
+        logKind: "other",
+      })
+    )
+    response = walked.result
+    winningHost = walked.host
   } catch {
     throw new Error("unreachable")
   }
@@ -313,13 +412,17 @@ export async function pairTvDevice(params: {
   }
 
   const device: TvDevice = {
-    id: typeof data.id === "string" && data.id ? data.id : `${params.host}:${params.port}`,
+    id: params.id || (typeof data.id === "string" && data.id ? data.id : `${winningHost}:${params.port}`),
     name: data.name,
-    host: params.host,
+    host: winningHost,
     port: params.port,
     key: data.key,
     createdAt: Date.now(),
     lastSeenAt: Date.now(),
+  }
+  if (hosts.length > 1) {
+    device.hosts = hosts
+    device.pinnedHostIndex = hosts.indexOf(winningHost)
   }
   saveTvDevice(device)
   return device
@@ -331,34 +434,39 @@ async function postDeviceAction(
   body: unknown,
   timeoutMs: number
 ): Promise<void> {
-  const response = await providerFetch(`${baseUrl(device.host, device.port)}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-XT-Key": device.key },
-    body: JSON.stringify(body ?? {}),
-    signal: AbortSignal.timeout(timeoutMs),
-    logKind: "other",
+  await withHostFallback(device, async (host) => {
+    const response = await fetchFromHost(`${baseUrl(host, device.port)}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-XT-Key": device.key },
+      body: JSON.stringify(body ?? {}),
+      signal: AbortSignal.timeout(timeoutMs),
+      logKind: "other",
+    })
+    if (response.status === 401 || response.status === 403) {
+      throw new CastAuthError("unauthorized")
+    }
+    if (!response.ok) {
+      throw new Error(`cast request failed: ${response.status}`)
+    }
   })
-  if (response.status === 401 || response.status === 403) {
-    throw new CastAuthError("unauthorized")
-  }
-  if (!response.ok) {
-    throw new Error(`cast request failed: ${response.status}`)
-  }
 }
 
 export async function castPlay(device: TvDevice, descriptor: CastDescriptorV1): Promise<void> {
   await postDeviceAction(device, "/play", descriptor, 8000)
+  const storedDevice = listTvDevices().find((entry) => entry.id === device.id) ?? device
   setCastSession({
-    deviceId: device.id,
-    deviceName: device.name,
-    host: device.host,
-    port: device.port,
-    key: device.key,
+    deviceId: storedDevice.id,
+    deviceName: storedDevice.name,
+    host: storedDevice.host,
+    port: storedDevice.port,
+    key: storedDevice.key,
     title: descriptor.title,
     isLive: descriptor.isLive,
     startedAt: Date.now(),
+    hosts: storedDevice.hosts,
+    pinnedHostIndex: storedDevice.pinnedHostIndex,
   })
-  touchTvDevice(device.id)
+  touchTvDevice(storedDevice.id)
 }
 
 export async function castPause(device: TvDevice): Promise<void> {
@@ -390,24 +498,38 @@ export interface CastState {
   error?: string
 }
 
+async function fetchStateFromHost(host: string, device: TvDevice): Promise<CastState> {
+  const response = await fetchFromHost(`${baseUrl(host, device.port)}/state`, {
+    method: "GET",
+    headers: { "X-XT-Key": device.key },
+    signal: AbortSignal.timeout(4000),
+    logKind: "other",
+  })
+  if (!response.ok) throw new Error(`cast state failed: ${response.status}`)
+  const data = await response.json()
+  if (!data || typeof data !== "object" || typeof data.state !== "string" || typeof data.positionSeconds !== "number") {
+    throw new Error("cast state: bad payload")
+  }
+  const state: CastState = { state: data.state, positionSeconds: data.positionSeconds }
+  if (typeof data.durationSeconds === "number") state.durationSeconds = data.durationSeconds
+  if (typeof data.title === "string") state.title = data.title
+  if (typeof data.error === "string" && data.error) state.error = data.error
+  return state
+}
+
+/** Poll-tick state fetch: pinned host only, no fallback walk (keeps the 2s poll cheap). */
 export async function fetchCastState(device: TvDevice): Promise<CastState | null> {
   try {
-    const response = await providerFetch(`${baseUrl(device.host, device.port)}/state`, {
-      method: "GET",
-      headers: { "X-XT-Key": device.key },
-      signal: AbortSignal.timeout(4000),
-      logKind: "other",
-    })
-    if (!response.ok) return null
-    const data = await response.json()
-    if (!data || typeof data !== "object" || typeof data.state !== "string" || typeof data.positionSeconds !== "number") {
-      return null
-    }
-    const state: CastState = { state: data.state, positionSeconds: data.positionSeconds }
-    if (typeof data.durationSeconds === "number") state.durationSeconds = data.durationSeconds
-    if (typeof data.title === "string") state.title = data.title
-    if (typeof data.error === "string" && data.error) state.error = data.error
-    return state
+    return await fetchStateFromHost(deviceHostOrder(device)[0], device)
+  } catch {
+    return null
+  }
+}
+
+/** Same as fetchCastState but walks the device's remaining hosts on a connection failure. */
+export async function fetchCastStateWithFallback(device: TvDevice): Promise<CastState | null> {
+  try {
+    return await withHostFallback(device, (host) => fetchStateFromHost(host, device))
   } catch {
     return null
   }
@@ -416,14 +538,16 @@ export async function fetchCastState(device: TvDevice): Promise<CastState | null
 /** Fetches the receiver's own log tail for diagnostics; null on any failure. */
 export async function fetchReceiverLogs(device: TvDevice): Promise<string | null> {
   try {
-    const response = await providerFetch(`${baseUrl(device.host, device.port)}/logs`, {
-      method: "GET",
-      headers: { "X-XT-Key": device.key },
-      signal: AbortSignal.timeout(5000),
-      logKind: "other",
+    return await withHostFallback(device, async (host) => {
+      const response = await fetchFromHost(`${baseUrl(host, device.port)}/logs`, {
+        method: "GET",
+        headers: { "X-XT-Key": device.key },
+        signal: AbortSignal.timeout(5000),
+        logKind: "other",
+      })
+      if (!response.ok) throw new Error(`logs failed: ${response.status}`)
+      return await response.text()
     })
-    if (!response.ok) return null
-    return await response.text()
   } catch {
     return null
   }
@@ -514,6 +638,8 @@ export function sessionAsDevice(session: CastSession): TvDevice {
     key: session.key,
     createdAt: 0,
     lastSeenAt: 0,
+    hosts: session.hosts,
+    pinnedHostIndex: session.pinnedHostIndex,
   }
 }
 
@@ -580,18 +706,21 @@ export async function castConnect(device: TvDevice): Promise<boolean> {
 
   const status = await probeTvDeviceAuthorized(device)
   if (status === "online") {
+    const storedDevice = listTvDevices().find((entry) => entry.id === device.id) ?? device
     setCastSession({
-      deviceId: device.id,
-      deviceName: device.name,
-      host: device.host,
-      port: device.port,
-      key: device.key,
+      deviceId: storedDevice.id,
+      deviceName: storedDevice.name,
+      host: storedDevice.host,
+      port: storedDevice.port,
+      key: storedDevice.key,
       title: "",
       isLive: false,
       startedAt: Date.now(),
       connectedOnly: true,
+      hosts: storedDevice.hosts,
+      pinnedHostIndex: storedDevice.pinnedHostIndex,
     })
-    touchTvDevice(device.id)
+    touchTvDevice(storedDevice.id)
     toast({ title: t("cast.toast.connected", { device: device.name }), duration: 2600 })
     return true
   }

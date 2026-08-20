@@ -11,6 +11,7 @@ export interface ReceiverStatus {
   port?: number
   ips: string[]
   name: string
+  id?: string
   pairCode?: string
   pairCodeExpiresInSeconds?: number
   pairedDevices: ReceiverPairedDevice[]

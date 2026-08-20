@@ -127,6 +127,7 @@ struct ReceiverShared {
     playback: Mutex<PlaybackReport>,
     name: Mutex<String>,
     ips: Mutex<Vec<String>>,
+    receiver_id: Mutex<String>,
     broadcast: broadcast::Sender<String>,
 }
 
@@ -139,6 +140,7 @@ impl ReceiverShared {
             playback: Mutex::new(PlaybackReport::default()),
             name: Mutex::new(String::new()),
             ips: Mutex::new(Vec::new()),
+            receiver_id: Mutex::new(String::new()),
             broadcast,
         }
     }
@@ -339,7 +341,7 @@ fn mdns_host_label(instance_name: &str) -> String {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn register_mdns_service(name: &str, port: u16) -> Option<(mdns_sd::ServiceDaemon, String)> {
+fn register_mdns_service(name: &str, port: u16, receiver_id: &str) -> Option<(mdns_sd::ServiceDaemon, String)> {
     let daemon = match mdns_sd::ServiceDaemon::new() {
         Ok(daemon) => daemon,
         Err(error) => {
@@ -350,13 +352,20 @@ fn register_mdns_service(name: &str, port: u16) -> Option<(mdns_sd::ServiceDaemo
 
     let instance_name = mdns_instance_name(name);
     let host_name = format!("{}.local.", mdns_host_label(&instance_name));
-    // enable_addr_auto() announces every interface indiscriminately (loopback, VirtualBox/WSL
-    // adapters, ...); prefer the default-route IP from local_ips() and only fall back to it.
-    let advertised_ips = local_ips().join(",");
-    let service_info =
-        mdns_sd::ServiceInfo::new(MDNS_SERVICE_TYPE, &instance_name, &host_name, advertised_ips.as_str(), port, &[("v", "1")][..]);
+    let advertised_ips = local_ips();
+    log::info!("[receiver] advertising mdns on ips: {}", advertised_ips.join(", "));
+    // addr_auto adds every interface's address on register (mdns-sd's register_service), on top
+    // of the explicit list below, not instead of it - the two are additive, not a fallback pair.
+    let service_info = mdns_sd::ServiceInfo::new(
+        MDNS_SERVICE_TYPE,
+        &instance_name,
+        &host_name,
+        advertised_ips.join(",").as_str(),
+        port,
+        &[("v", "1"), ("id", receiver_id)][..],
+    )
+    .map(mdns_sd::ServiceInfo::enable_addr_auto);
     let service_info = match service_info {
-        Ok(info) if advertised_ips.is_empty() => info.enable_addr_auto(),
         Ok(info) => info,
         Err(error) => {
             log::warn!("[receiver] mdns service info build failed: {error}");
@@ -380,7 +389,8 @@ fn advertise_mdns(state: &ReceiverState, name: &str, port: u16) {
     if mdns_guard.is_some() {
         return;
     }
-    if let Some((daemon, fullname)) = register_mdns_service(name, port) {
+    let receiver_id = state.shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    if let Some((daemon, fullname)) = register_mdns_service(name, port, &receiver_id) {
         *mdns_guard = Some(MdnsHandle { daemon, fullname });
     }
 }
@@ -438,9 +448,19 @@ async fn load_devices(config_dir: std::path::PathBuf) -> Vec<PairedDevice> {
         .unwrap_or_default()
 }
 
+async fn ensure_receiver_id(config_dir: std::path::PathBuf) -> String {
+    tauri::async_runtime::spawn_blocking(move || receiver_store::ensure_id(&config_dir))
+        .await
+        .unwrap_or_else(|_| receiver_store::generate_receiver_id())
+}
+
 // Callers clone the device list and drop the mutex guard before awaiting this.
-async fn persist_devices(config_dir: std::path::PathBuf, devices: Vec<PairedDevice>) -> std::io::Result<()> {
-    tauri::async_runtime::spawn_blocking(move || receiver_store::save(&config_dir, &devices))
+async fn persist_devices(
+    config_dir: std::path::PathBuf,
+    receiver_id: String,
+    devices: Vec<PairedDevice>,
+) -> std::io::Result<()> {
+    tauri::async_runtime::spawn_blocking(move || receiver_store::save(&config_dir, &receiver_id, &devices))
         .await
         .unwrap_or_else(|join_error| Err(std::io::Error::other(join_error.to_string())))
 }
@@ -474,12 +494,14 @@ fn build_status_json(shared: &Arc<ReceiverShared>, port: Option<u16>) -> Value {
         .collect();
 
     let ips = shared.ips.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    let receiver_id = shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
 
     json!({
         "enabled": port.is_some(),
         "port": port,
         "ips": ips,
         "name": name,
+        "id": receiver_id,
         "pairCode": pair_code,
         "pairCodeExpiresInSeconds": pair_code_expires_in_seconds,
         "pairedDevices": paired_devices,
@@ -487,21 +509,41 @@ fn build_status_json(shared: &Arc<ReceiverShared>, port: Option<u16>) -> Value {
 }
 
 /// Std-only UDP-connect trick: no packet is sent, just resolves which local interface
-/// would route toward the internet. A device on an active VPN may report the tunnel IP.
-fn local_ips() -> Vec<String> {
+/// would route toward the internet. On an active VPN this is the tunnel, not the LAN.
+fn default_route_ip() -> Option<std::net::IpAddr> {
     use std::net::UdpSocket;
-    let Ok(socket) = UdpSocket::bind("0.0.0.0:0") else {
-        return Vec::new();
-    };
-    if socket.connect(("8.8.8.8", 80)).is_err() {
-        return Vec::new();
-    }
-    match socket.local_addr() {
-        Ok(local_addr) if !local_addr.ip().is_loopback() && !local_addr.ip().is_unspecified() => {
-            vec![local_addr.ip().to_string()]
-        }
-        _ => Vec::new(),
-    }
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect(("8.8.8.8", 80)).ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+}
+
+// Android/iOS have no bundled if-addrs; the default-route probe is the only signal there
+// anyway since mDNS advertising goes through NsdManager instead of this Rust path.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn local_ips() -> Vec<String> {
+    default_route_ip().map(|ip| vec![ip.to_string()]).unwrap_or_default()
+}
+
+/// All usable addresses across every adapter (not just the default route), so a VPN tunnel
+/// doesn't hide the LAN address the mobile app actually needs to reach.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn local_ips() -> Vec<String> {
+    let default_route = default_route_ip();
+    let mut candidates: std::collections::HashSet<std::net::IpAddr> = if_addrs::get_if_addrs()
+        .map(|interfaces| interfaces.into_iter().map(|interface| interface.ip()).collect())
+        .unwrap_or_default();
+    candidates.retain(is_usable_mdns_addr);
+
+    let mut ranked: Vec<std::net::IpAddr> = candidates.into_iter().collect();
+    ranked.sort_by(|left, right| {
+        mdns_addr_rank(right).cmp(&mdns_addr_rank(left)).then_with(|| {
+            let left_is_default_route = default_route == Some(*left);
+            let right_is_default_route = default_route == Some(*right);
+            right_is_default_route.cmp(&left_is_default_route)
+        })
+    });
+    ranked.into_iter().map(|ip| ip.to_string()).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +568,9 @@ pub async fn receiver_start(
     if !already_running {
         let devices = load_devices(config_dir.clone()).await;
         *state.shared.devices.lock().unwrap_or_else(|poison| poison.into_inner()) = devices;
+
+        let receiver_id = ensure_receiver_id(config_dir.clone()).await;
+        *state.shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()) = receiver_id;
 
         let trimmed_name = name.unwrap_or_default();
         let resolved_name = if trimmed_name.trim().is_empty() {
@@ -647,12 +692,13 @@ pub async fn receiver_revoke_device(
     key: String,
 ) -> Result<(), String> {
     let config_dir = app.path().app_config_dir().map_err(|error| format!("OTHER:{error}"))?;
+    let receiver_id = state.shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
     let devices_snapshot = {
         let mut devices = state.shared.devices.lock().unwrap_or_else(|poison| poison.into_inner());
         devices.retain(|device| device.key != key);
         devices.clone()
     };
-    persist_devices(config_dir, devices_snapshot).await.map_err(|error| format!("OTHER:{error}"))?;
+    persist_devices(config_dir, receiver_id, devices_snapshot).await.map_err(|error| format!("OTHER:{error}"))?;
 
     let port = state
         .server
@@ -690,6 +736,9 @@ pub struct DiscoveredReceiver {
     pub name: String,
     pub host: String,
     pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub hosts: Vec<String>,
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -728,8 +777,117 @@ fn mdns_addr_rank(ip: &std::net::IpAddr) -> u8 {
 
 /// Picks the best address for a resolved service: private IPv4 first, then any IPv4, then IPv6.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[allow(dead_code)] // superseded by rank_discovered_hosts in receiver_discover; kept + tested for the subnet-unaware fallback shape
 fn best_mdns_addr(candidates: &[std::net::IpAddr]) -> Option<std::net::IpAddr> {
     candidates.iter().copied().filter(is_usable_mdns_addr).max_by_key(mdns_addr_rank)
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn same_subnet_v4(local: std::net::Ipv4Addr, candidate: std::net::Ipv4Addr, prefixlen: u8) -> bool {
+    if prefixlen == 0 || prefixlen > 32 {
+        return false;
+    }
+    let mask = u32::MAX << (32 - u32::from(prefixlen));
+    (u32::from(local) & mask) == (u32::from(candidate) & mask)
+}
+
+// if-addrs has no reliable cross-platform IPv6 prefix length; same-/64 is the closest cheap proxy.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn same_subnet_v6(local: std::net::Ipv6Addr, candidate: std::net::Ipv6Addr) -> bool {
+    local.segments()[..4] == candidate.segments()[..4]
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn shares_subnet_with_any_interface(candidate: &std::net::IpAddr, interfaces: &[if_addrs::Interface]) -> bool {
+    interfaces.iter().any(|interface| match (&interface.addr, candidate) {
+        (if_addrs::IfAddr::V4(local), std::net::IpAddr::V4(candidate_v4)) => {
+            same_subnet_v4(local.ip, *candidate_v4, local.prefixlen)
+        }
+        (if_addrs::IfAddr::V6(local), std::net::IpAddr::V6(candidate_v6)) => {
+            same_subnet_v6(local.ip, *candidate_v6)
+        }
+        _ => false,
+    })
+}
+
+/// (same-subnet bonus, address-family rank): a subnet match outranks private-v4 > public-v4 > v6.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn discovery_addr_rank(ip: &std::net::IpAddr, interfaces: &[if_addrs::Interface]) -> (u8, u8) {
+    (u8::from(shares_subnet_with_any_interface(ip, interfaces)), mdns_addr_rank(ip))
+}
+
+/// Ranks a resolved service's usable addresses, best first.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn rank_discovered_hosts(
+    addresses: impl IntoIterator<Item = std::net::IpAddr>,
+    interfaces: &[if_addrs::Interface],
+) -> Vec<std::net::IpAddr> {
+    let mut ranked: Vec<std::net::IpAddr> = addresses.into_iter().filter(is_usable_mdns_addr).collect();
+    ranked.sort_by(|left, right| discovery_addr_rank(right, interfaces).cmp(&discovery_addr_rank(left, interfaces)));
+    ranked
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn discovery_identity_key(name: &str, port: u16, id: Option<&str>) -> String {
+    match id {
+        Some(id) if !id.is_empty() => format!("id:{id}"),
+        _ => format!("np:{name}:{port}"),
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+struct ResolvedEvent {
+    name: String,
+    port: u16,
+    id: Option<String>,
+    addresses: Vec<std::net::IpAddr>,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+struct DiscoveryEntry {
+    name: String,
+    port: u16,
+    id: Option<String>,
+    addresses: std::collections::HashSet<std::net::IpAddr>,
+}
+
+/// Merges resolved-service events into one entry per identity (mDNS id when present, else
+/// name+port), unioning addresses across repeat events for the same identity.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn merge_resolved_events(
+    events: Vec<ResolvedEvent>,
+    interfaces: &[if_addrs::Interface],
+) -> Vec<DiscoveredReceiver> {
+    let mut entries: std::collections::HashMap<String, DiscoveryEntry> = std::collections::HashMap::new();
+    for event in events {
+        let usable: Vec<std::net::IpAddr> = event.addresses.into_iter().filter(is_usable_mdns_addr).collect();
+        if usable.is_empty() {
+            continue;
+        }
+        let key = discovery_identity_key(&event.name, event.port, event.id.as_deref());
+        let entry = entries.entry(key).or_insert_with(|| DiscoveryEntry {
+            name: event.name.clone(),
+            port: event.port,
+            id: None,
+            addresses: std::collections::HashSet::new(),
+        });
+        entry.name = event.name;
+        entry.port = event.port;
+        if entry.id.is_none() {
+            entry.id = event.id;
+        }
+        entry.addresses.extend(usable);
+    }
+
+    entries
+        .into_values()
+        .map(|entry| {
+            let hosts: Vec<String> =
+                rank_discovered_hosts(entry.addresses, interfaces).into_iter().map(|ip| ip.to_string()).collect();
+            let host = hosts.first().cloned().unwrap_or_default();
+            DiscoveredReceiver { name: entry.name, host, port: entry.port, id: entry.id, hosts }
+        })
+        .collect()
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -740,13 +898,14 @@ pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<Discovered
         .clamp(DISCOVER_MIN_TIMEOUT_MS, DISCOVER_MAX_TIMEOUT_MS);
     let deadline = tokio::time::Instant::now() + Duration::from_millis(clamped_timeout);
 
+    log::info!("[receiver] discover browsing {MDNS_SERVICE_TYPE}, timeout={clamped_timeout}ms");
+
     let daemon = mdns_sd::ServiceDaemon::new().map_err(|error| format!("OTHER:mdns daemon start failed: {error}"))?;
     let events = daemon
         .browse(MDNS_SERVICE_TYPE)
         .map_err(|error| format!("OTHER:mdns browse failed: {error}"))?;
 
-    let mut discovered = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut resolved_events = Vec::new();
 
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -759,21 +918,23 @@ pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<Discovered
         let mdns_sd::ServiceEvent::ServiceResolved(resolved) = event else {
             continue;
         };
-        let candidates: Vec<std::net::IpAddr> =
+        let addresses: Vec<std::net::IpAddr> =
             resolved.get_addresses().iter().map(mdns_sd::ScopedIp::to_ip_addr).collect();
-        let Some(host_ip) = best_mdns_addr(&candidates) else {
-            continue;
-        };
-        let port = resolved.get_port();
-        let name = strip_mdns_service_suffix(resolved.get_fullname());
-        if !seen.insert((name.clone(), port)) {
-            continue;
-        }
-        discovered.push(DiscoveredReceiver { name, host: host_ip.to_string(), port });
+        let id = resolved.get_property_val_str("id").map(str::to_string).filter(|id| !id.is_empty());
+        resolved_events.push(ResolvedEvent {
+            name: strip_mdns_service_suffix(resolved.get_fullname()),
+            port: resolved.get_port(),
+            id,
+            addresses,
+        });
     }
 
     let _ = daemon.stop_browse(MDNS_SERVICE_TYPE);
     let _ = daemon.shutdown();
+
+    let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
+    let discovered = merge_resolved_events(resolved_events, &interfaces);
+    log::info!("[receiver] discover complete, found={}", discovered.len());
     Ok(discovered)
 }
 
@@ -997,13 +1158,14 @@ async fn handle_pair(State(ctx): State<Arc<ServerCtx>>, Json(body): Json<PairReq
                 device_name: bounded_name.clone(),
                 created_at: chrono::Utc::now().to_rfc3339(),
             };
+            let receiver_id = ctx.shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
             let devices_snapshot = {
                 let mut devices = ctx.shared.devices.lock().unwrap_or_else(|poison| poison.into_inner());
                 devices.push(device);
                 evict_oldest_if_over_capacity(&mut devices);
                 devices.clone()
             };
-            if let Err(error) = persist_devices(ctx.config_dir.clone(), devices_snapshot).await {
+            if let Err(error) = persist_devices(ctx.config_dir.clone(), receiver_id, devices_snapshot).await {
                 log::warn!("[receiver] failed to persist paired device: {error}");
             }
             ctx.events.paired(json!({"deviceName": bounded_name}));
@@ -1480,6 +1642,196 @@ mod tests {
         assert_eq!(best_mdns_addr(&candidates), None);
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn test_interface_v4(ip: &str, prefixlen: u8) -> if_addrs::Interface {
+        if_addrs::Interface {
+            name: "test0".to_string(),
+            addr: if_addrs::IfAddr::V4(if_addrs::Ifv4Addr {
+                ip: ip.parse().unwrap(),
+                netmask: std::net::Ipv4Addr::new(255, 255, 255, 0),
+                prefixlen,
+                broadcast: None,
+            }),
+            index: None,
+            oper_status: if_addrs::IfOperStatus::Up,
+            is_p2p: false,
+            #[cfg(windows)]
+            adapter_name: String::new(),
+        }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn test_interface_v6(ip: &str, prefixlen: u8) -> if_addrs::Interface {
+        if_addrs::Interface {
+            name: "test0".to_string(),
+            addr: if_addrs::IfAddr::V6(if_addrs::Ifv6Addr {
+                ip: ip.parse().unwrap(),
+                netmask: std::net::Ipv6Addr::UNSPECIFIED,
+                prefixlen,
+                broadcast: None,
+            }),
+            index: None,
+            oper_status: if_addrs::IfOperStatus::Up,
+            is_p2p: false,
+            #[cfg(windows)]
+            adapter_name: String::new(),
+        }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn same_subnet_v4_matches_within_the_masked_prefix() {
+        let local: std::net::Ipv4Addr = "192.168.1.5".parse().unwrap();
+        assert!(same_subnet_v4(local, "192.168.1.20".parse().unwrap(), 24));
+        assert!(!same_subnet_v4(local, "192.168.2.20".parse().unwrap(), 24));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn same_subnet_v4_rejects_zero_and_oversized_prefixlen() {
+        let local: std::net::Ipv4Addr = "192.168.1.5".parse().unwrap();
+        let candidate: std::net::Ipv4Addr = "192.168.1.20".parse().unwrap();
+        assert!(!same_subnet_v4(local, candidate, 0));
+        assert!(!same_subnet_v4(local, candidate, 33));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn same_subnet_v6_compares_the_top_64_bits_only() {
+        let local: std::net::Ipv6Addr = "2001:db8:1::1".parse().unwrap();
+        assert!(same_subnet_v6(local, "2001:db8:1::9999".parse().unwrap()));
+        assert!(!same_subnet_v6(local, "2001:db8:2::1".parse().unwrap()));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn rank_discovered_hosts_prefers_a_same_subnet_address_over_any_other() {
+        let interfaces = vec![test_interface_v4("192.168.1.5", 24)];
+        let addresses: Vec<std::net::IpAddr> = vec![
+            "203.0.113.5".parse().unwrap(),
+            "192.168.1.20".parse().unwrap(),
+            "10.0.0.5".parse().unwrap(),
+        ];
+        let ranked = rank_discovered_hosts(addresses, &interfaces);
+        assert_eq!(ranked[0], "192.168.1.20".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn rank_discovered_hosts_falls_back_to_private_then_public_then_v6_without_a_subnet_match() {
+        let interfaces = vec![test_interface_v4("192.168.1.5", 24)];
+        let addresses: Vec<std::net::IpAddr> = vec![
+            "2001:db8::1".parse().unwrap(),
+            "203.0.113.5".parse().unwrap(),
+            "10.0.0.5".parse().unwrap(),
+        ];
+        let ranked = rank_discovered_hosts(addresses, &interfaces);
+        assert_eq!(
+            ranked,
+            vec![
+                "10.0.0.5".parse::<std::net::IpAddr>().unwrap(),
+                "203.0.113.5".parse().unwrap(),
+                "2001:db8::1".parse().unwrap(),
+            ]
+        );
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn rank_discovered_hosts_prefers_a_v6_subnet_match_too() {
+        let interfaces = vec![test_interface_v6("2001:db8:1::5", 64)];
+        let addresses: Vec<std::net::IpAddr> =
+            vec!["192.168.1.20".parse().unwrap(), "2001:db8:1::9999".parse().unwrap()];
+        let ranked = rank_discovered_hosts(addresses, &interfaces);
+        assert_eq!(ranked[0], "2001:db8:1::9999".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn discovery_identity_key_prefers_id_over_name_and_port() {
+        assert_eq!(discovery_identity_key("Living Room", 47815, Some("abc123")), "id:abc123");
+        assert_eq!(discovery_identity_key("Living Room", 47815, None), "np:Living Room:47815");
+        assert_eq!(discovery_identity_key("Living Room", 47815, Some("")), "np:Living Room:47815");
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_dedupes_by_id_and_unions_addresses_across_events() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["10.0.0.20".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].id.as_deref(), Some("abc123"));
+        assert_eq!(discovered[0].hosts.len(), 2);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_dedupes_by_name_and_port_when_id_is_missing() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Old Firmware TV".to_string(),
+                port: 47815,
+                id: None,
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Old Firmware TV".to_string(),
+                port: 47815,
+                id: None,
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 1);
+        assert!(discovered[0].id.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_keeps_distinct_identities_separate() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Bedroom".to_string(),
+                port: 47815,
+                id: Some("def456".to_string()),
+                addresses: vec!["192.168.1.21".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 2);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_drops_events_with_no_usable_address() {
+        let events = vec![ResolvedEvent {
+            name: "Living Room".to_string(),
+            port: 47815,
+            id: None,
+            addresses: vec!["127.0.0.1".parse().unwrap()],
+        }];
+        assert!(merge_resolved_events(events, &[]).is_empty());
+    }
+
     // Uses an explicit TEST-NET IP (RFC 5737) instead of local_ips()'s real default-route
     // address: keeps the assertion on the resolved host reliable across CI network setups.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1497,7 +1849,7 @@ mod tests {
             &host_name,
             "192.0.2.10",
             port,
-            &[("v", "1")][..],
+            &[("v", "1"), ("id", "self-discovery-test-id")][..],
         )
         .expect("service info must build");
         let fullname = service_info.get_fullname().to_string();
@@ -1510,6 +1862,8 @@ mod tests {
 
         let matches: Vec<_> = discovered.iter().filter(|receiver| receiver.port == port).collect();
         assert_eq!(matches.len(), 1, "expected exactly one entry for the advertised receiver");
+        assert_eq!(matches[0].id.as_deref(), Some("self-discovery-test-id"));
+        assert_eq!(matches[0].hosts, vec!["192.0.2.10".to_string()]);
         assert_eq!(matches[0].host, "192.0.2.10");
         assert_eq!(matches[0].name, instance_name);
     }

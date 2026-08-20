@@ -1,7 +1,7 @@
 // TV receiver screen: pairing idle view + remote-controlled playback.
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
-import { getEffectiveReceiverDeviceName, getReceiverEngine } from "@/scripts/lib/app-settings.js"
+import { getEffectiveReceiverDeviceName, getReceiverEngine, getReceiverId } from "@/scripts/lib/app-settings.js"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers"
 import { validateCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
@@ -110,7 +110,7 @@ async function startReceiver(): Promise<void> {
   try {
     const status = await invoke<ReceiverStatus>("receiver_start", { name })
     renderStatus(status)
-    if (status.port !== undefined) advertiseReceiver(status.name, status.port)
+    if (status.port !== undefined) advertiseReceiver(status.name, status.port, getReceiverId())
     return
   } catch (err) {
     log.warn("[xt:receiver] receiver_start failed:", err)

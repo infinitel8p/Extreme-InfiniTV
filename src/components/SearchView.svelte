@@ -58,6 +58,8 @@
 
   /** @type {"all"|"live"|"vod"|"series"|"epg"|"actors"} */
   let kindFilter = $state("all")
+  /** @type {Array<"all"|"live"|"vod"|"series"|"actors"|"epg">} */
+  const kindOptions = ["all", "live", "vod", "series", "actors", "epg"]
   let query = $state(initialFromUrl)
   let queryDebounced = $state(initialFromUrl)
   let _queryTimer = null
@@ -628,7 +630,7 @@
     </div>
 
     <div class="flex items-center gap-1 overflow-x-auto custom-scroll -mx-1 px-1">
-      {#each /** @type {const} */ (["all", "live", "vod", "series", "actors", "epg"]) as kindOption}
+      {#each kindOptions as kindOption}
         <button
           type="button"
           onclick={() => (kindFilter = kindOption)}

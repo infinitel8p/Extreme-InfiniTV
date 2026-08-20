@@ -74,7 +74,7 @@ import ReceiverLayout from "@/layouts/ReceiverLayout.astro"
 
 		<div
 			id="receiver-paired-flash"
-			class="hidden xt-receiver-flash fixed top-6 left-1/2 -translate-x-1/2 z-50 rounded-full border border-accent/40 bg-accent-soft px-6 py-3 text-base text-fg"></div>
+			class="hidden xt-receiver-flash fixed left-1/2 -translate-x-1/2 rounded-full border border-accent/40 bg-accent-soft px-6 py-3 text-base text-fg"></div>
 
 		<div id="receiver-player" class="xt-receiver-view hidden absolute inset-0 bg-black">
 			<video id="receiver-video" class="h-full w-full" playsinline></video>
@@ -129,6 +129,8 @@ import ReceiverLayout from "@/layouts/ReceiverLayout.astro"
 	}
 
 	.xt-receiver-flash {
+		top: calc(max(1.5rem, env(safe-area-inset-top, 0px)) + var(--xt-titlebar-h, 0px) + var(--xt-tv-overscan, 0) * 1vh);
+		z-index: 10001;
 		animation: xt-receiver-flash-in 360ms cubic-bezier(0.16, 1, 0.3, 1);
 	}
 	@keyframes xt-receiver-flash-in {

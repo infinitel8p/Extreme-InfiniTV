@@ -75,11 +75,13 @@ interface AndroidSnifferBridge {
 
 interface AndroidNsdBridge {
   isSupported?: () => boolean
-  advertise?: (name: string, port: number) => void
+  advertise?: (name: string, port: number, id?: string) => void
   stopAdvertise?: () => void
+  /** "off" / "pending" / "registered" / "failed:<code>". */
+  advertiseState?: () => string
   startDiscovery?: () => void
   stopDiscovery?: () => void
-  /** Returns a JSON-encoded array of {name, host, port}. */
+  /** Returns a JSON-encoded array of {name, host, port, id?, hosts?}. */
   drainDiscovered?: () => string
 }
 

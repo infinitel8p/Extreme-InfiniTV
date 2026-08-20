@@ -14,6 +14,7 @@ import {
   getReceiverDeviceName,
   setReceiverDeviceName,
   getEffectiveReceiverDeviceName,
+  getReceiverId,
 } from "@/scripts/lib/app-settings.js"
 import {
   formatReceiverAddress,
@@ -21,7 +22,7 @@ import {
   type ReceiverPairedDevice,
   type ReceiverStatus,
 } from "@/scripts/lib/receiver-shared.js"
-import { advertiseReceiver, stopAdvertisingReceiver } from "@/scripts/lib/receiver-discovery.js"
+import { advertiseReceiver, stopAdvertisingReceiver, getAdvertiseState } from "@/scripts/lib/receiver-discovery.js"
 
 const MASKED_PAIR_CODE = "••• •••"
 
@@ -45,6 +46,7 @@ async function init(): Promise<void> {
   const summaryHelper = document.getElementById("receiver-summary-helper")
   const summaryStatus = document.getElementById("receiver-summary-status")
   const statusLineText = document.getElementById("receiver-status-line-text")
+  const discoverableLine = document.getElementById("receiver-discoverable-line")
   const addressesList = document.getElementById("receiver-addresses-list")
   const pairCodeDisplay = document.getElementById("receiver-pair-code-display")
   const codeRevealBtn = document.getElementById("receiver-code-reveal")
@@ -144,6 +146,21 @@ async function init(): Promise<void> {
     deviceNameInput.placeholder = status.name || t("settings.receiver.deviceNamePlaceholder")
   }
 
+  // Android only; getAdvertiseState() returns null when the NSD bridge is unavailable (desktop).
+  function renderDiscoverability(status: ReceiverStatus): void {
+    if (!discoverableLine) return
+    const state = status.enabled ? getAdvertiseState() : null
+    if (state === "registered") {
+      discoverableLine.textContent = t("settings.receiver.discoverableAs", { name: status.name })
+      discoverableLine.classList.remove("hidden")
+    } else if (state?.startsWith("failed")) {
+      discoverableLine.textContent = t("settings.receiver.notDiscoverable")
+      discoverableLine.classList.remove("hidden")
+    } else {
+      discoverableLine.classList.add("hidden")
+    }
+  }
+
   function renderStatus(status: ReceiverStatus): void {
     updateDeviceNamePlaceholder(status)
 
@@ -160,6 +177,8 @@ async function init(): Promise<void> {
         ? t("settings.receiver.statusReceiving", { name: status.name })
         : ""
     }
+
+    renderDiscoverability(status)
 
     if (!enabled) return
 
@@ -209,7 +228,10 @@ async function init(): Promise<void> {
       invoke<ReceiverStatus>("receiver_start", { name: getEffectiveReceiverDeviceName() || undefined })
         .then((status) => {
           renderStatus(status)
-          if (status.port !== undefined) advertiseReceiver(status.name, status.port)
+          if (status.port !== undefined) {
+            advertiseReceiver(status.name, status.port, getReceiverId())
+            setTimeout(() => renderDiscoverability(status), 1800)
+          }
         })
         .catch((err) => {
           log.warn("[settings:receiver] receiver_start failed:", err)
@@ -256,7 +278,10 @@ async function init(): Promise<void> {
       invoke<ReceiverStatus>("receiver_set_name", { name: value })
         .then((status) => {
           renderStatus(status)
-          if (status.port !== undefined) advertiseReceiver(status.name, status.port)
+          if (status.port !== undefined) {
+            advertiseReceiver(status.name, status.port, getReceiverId())
+            setTimeout(() => renderDiscoverability(status), 1800)
+          }
         })
         .catch((err) => log.warn("[settings:receiver] receiver_set_name failed:", err))
     }, 600)

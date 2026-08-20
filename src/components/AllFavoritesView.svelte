@@ -140,16 +140,59 @@
     loading = false
   }
 
-  async function openCard(event, entry) {
-    if (!entry.isCrossPlaylist) return
-    // Cross-playlist click
-    event.preventDefault()
-    try {
-      await selectEntry(entry.playlistId)
-    } catch (err) {
-      log.error("[xt:favorites] selectEntry failed:", err)
+  async function openEntry(entry) {
+    if (entry.isCrossPlaylist) {
+      try {
+        await selectEntry(entry.playlistId)
+      } catch (err) {
+        log.error("[xt:favorites] selectEntry failed:", err)
+      }
     }
     window.location.href = entry.href
+  }
+
+  async function openCard(event, entry) {
+    if (!entry.isCrossPlaylist) return
+    event.preventDefault()
+    await openEntry(entry)
+  }
+
+  // Svelte action: right-click / long-press "Remove from favorites" menu.
+  function favoriteCardMenu(node, entry) {
+    let current = entry
+    let attached = false
+    let destroyed = false
+
+    function open(anchor, point) {
+      if (destroyed) return
+      import("@/scripts/lib/poster-menu").then(({ openPosterMenu }) => {
+        if (destroyed) return
+        openPosterMenu({
+          kind: current.kind,
+          entry: { id: current.id, name: current.name, logo: current.logo },
+          activePlaylistId: current.playlistId,
+          anchor,
+          point,
+          onOpen: () => openEntry(current),
+        })
+      })
+    }
+
+    function attach() {
+      if (attached || destroyed) return
+      attached = true
+      import("@/scripts/lib/poster-menu").then(({ attachPosterContextMenu }) => {
+        if (destroyed) return
+        attachPosterContextMenu(node, open)
+      })
+    }
+
+    attach()
+
+    return {
+      update(next) { current = next },
+      destroy() { destroyed = true },
+    }
   }
 
   function setFilter(next) {
@@ -240,6 +283,7 @@
       <a
         href={entry.href}
         onclick={(event) => openCard(event, entry)}
+        use:favoriteCardMenu={entry}
         aria-label={tr("favorites.cardAriaLabel", { name: entry.name, playlist: entry.playlistTitle })}
         class="fav-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line

@@ -6,6 +6,7 @@
 // The menu items differ per kind:
 //   vod    - Open, Favorite, Watchlist, Watched, Download, Copy stream URL
 //   series - Open, Favorite, Watchlist, Watched
+//   live   - Open, Favorite (no watchlist/watched concept for channels)
 // (Download and stream URL don't apply at the series level - those are
 // per-episode and live on the detail page.)
 
@@ -24,7 +25,7 @@ import {
   setSeriesWatchedOverride,
 } from "@/scripts/lib/preferences.js"
 
-export type PosterMenuKind = "vod" | "series"
+export type PosterMenuKind = "vod" | "series" | "live"
 
 export interface PosterMenuEntry {
   id: string | number
@@ -148,60 +149,61 @@ export function openPosterMenu(opts: PosterMenuOptions): void {
     )
   )
 
-  // Watchlist toggle - same pattern
-  const watchOn = opts.watchlistActive
-    ? opts.watchlistActive()
-    : playlistId
-      ? isOnWatchlist(playlistId, kind, entry.id)
-      : false
-  menu.appendChild(
-    makeItem(
-      t(watchOn ? "list.menu.watchlistRemove" : "list.menu.watchlistAdd"),
-      () => {
-        if (opts.onToggleWatchlist) {
-          opts.onToggleWatchlist(watchOn)
-          return
-        }
-        if (!playlistId) return
-        toggleWatchlist(playlistId, kind, entry.id, {
-          name: entry.name || "",
-          logo: entry.logo || null,
-        })
-      }
-    )
-  )
-
-  // Watched toggle - vod tracks completion, series uses a manual override
-  const watchedOn = opts.watchedActive
-    ? opts.watchedActive()
-    : playlistId
-      ? kind === "vod"
-        ? isCompleted(playlistId, "vod", entry.id)
-        : hasSeriesWatchedOverride(playlistId, entry.id)
-      : false
-  menu.appendChild(
-    makeItem(
-      t(watchedOn ? "list.menu.watchedUnmark" : "list.menu.watchedMark"),
-      () => {
-        if (opts.onToggleWatched) {
-          opts.onToggleWatched(watchedOn)
-          return
-        }
-        if (!playlistId) return
-        if (kind === "vod") {
-          if (watchedOn) clearProgress(playlistId, "vod", entry.id)
-          else {
-            markCompleted(playlistId, "vod", entry.id, {
-              name: entry.name || "",
-              logo: entry.logo || null,
-            })
+  // Watchlist / watched - no equivalent concept for live channels
+  if (kind !== "live") {
+    const watchOn = opts.watchlistActive
+      ? opts.watchlistActive()
+      : playlistId
+        ? isOnWatchlist(playlistId, kind, entry.id)
+        : false
+    menu.appendChild(
+      makeItem(
+        t(watchOn ? "list.menu.watchlistRemove" : "list.menu.watchlistAdd"),
+        () => {
+          if (opts.onToggleWatchlist) {
+            opts.onToggleWatchlist(watchOn)
+            return
           }
-        } else {
-          setSeriesWatchedOverride(playlistId, entry.id, !watchedOn)
+          if (!playlistId) return
+          toggleWatchlist(playlistId, kind, entry.id, {
+            name: entry.name || "",
+            logo: entry.logo || null,
+          })
         }
-      }
+      )
     )
-  )
+
+    const watchedOn = opts.watchedActive
+      ? opts.watchedActive()
+      : playlistId
+        ? kind === "vod"
+          ? isCompleted(playlistId, "vod", entry.id)
+          : hasSeriesWatchedOverride(playlistId, entry.id)
+        : false
+    menu.appendChild(
+      makeItem(
+        t(watchedOn ? "list.menu.watchedUnmark" : "list.menu.watchedMark"),
+        () => {
+          if (opts.onToggleWatched) {
+            opts.onToggleWatched(watchedOn)
+            return
+          }
+          if (!playlistId) return
+          if (kind === "vod") {
+            if (watchedOn) clearProgress(playlistId, "vod", entry.id)
+            else {
+              markCompleted(playlistId, "vod", entry.id, {
+                name: entry.name || "",
+                logo: entry.logo || null,
+              })
+            }
+          } else {
+            setSeriesWatchedOverride(playlistId, entry.id, !watchedOn)
+          }
+        }
+      )
+    )
+  }
 
   // VOD-only items
   if (kind === "vod") {

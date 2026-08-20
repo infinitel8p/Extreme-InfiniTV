@@ -2,6 +2,7 @@
 
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { isTauri } from "@/scripts/lib/creds.js"
+import { log } from "@/scripts/lib/log.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { ICON_DEVICE_TV, ICON_TRASH, ICON_X } from "@/scripts/lib/icons.js"
 import { fmtAge } from "@/scripts/lib/format.js"
@@ -16,6 +17,7 @@ import {
 import { discoverReceivers, type DiscoveredReceiver } from "@/scripts/lib/receiver-discovery.js"
 
 const DIALOG_ID = "tv-device-picker"
+const DEFAULT_RECEIVER_PORT = 47815
 
 let dlg: HTMLDialogElement | null = null
 
@@ -54,9 +56,11 @@ export function openTvDevicePicker(
   const dialog = ensureDialog()
   if (!dialog) return Promise.resolve(null)
 
+  const dialogEl: HTMLDialogElement = dialog
+
   return new Promise((resolve) => {
     const addMode = options.mode === "add"
-    const devices = [...listTvDevices()].sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+    const devices = [...listTvDevices()]
     const showAddFormByDefault = addMode || devices.length === 0
 
     const subtitleHtml = options.contentTitle
@@ -64,7 +68,7 @@ export function openTvDevicePicker(
       : ""
 
     dialog.innerHTML = `
-      <div class="flex flex-col flex-auto min-h-0 p-5 sm:p-6 gap-5">
+      <div class="flex flex-col flex-auto min-h-0 p-5 sm:p-6 gap-4">
         <header class="flex items-start gap-3.5 shrink-0 px-3">
           <span class="icon-mark icon-mark--lg" aria-hidden="true">${ICON_DEVICE_TV}</span>
           <div class="flex flex-col gap-1 min-w-0 pt-0.5">
@@ -73,14 +77,13 @@ export function openTvDevicePicker(
           </div>
           <button type="button" data-role="close" class="ms-auto shrink-0 min-h-11 min-w-11 grid place-items-center rounded-xl text-fg-3 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2">${ICON_X}</button>
         </header>
-        <p data-role="empty" class="hidden text-sm text-fg-3 text-center py-1 px-4"></p>
-        <div data-role="found-section" class="flex flex-col gap-2 shrink-0">
-          <h3 data-role="found-title" class="text-xs font-medium text-fg-3 px-1"></h3>
-          <ul data-role="found-list" class="flex flex-col gap-2.5 list-none m-0 p-0"></ul>
-          <p data-role="found-status" class="hidden items-center gap-2 text-sm text-fg-3 px-1"></p>
+        <ul data-role="list" class="flex flex-col gap-1 overflow-y-auto min-h-0 list-none m-0 p-0"></ul>
+        <div data-role="scan-line" class="flex items-center gap-3 shrink-0 px-3 min-h-11">
+          <span data-role="scan-status" class="flex items-center gap-2 min-w-0 text-sm text-fg-3"></span>
+          <button type="button" data-role="rescan-btn" class="hidden shrink-0 ms-auto inline-flex items-center min-h-11 px-2.5 -me-2.5 rounded-xl text-sm text-fg-2 hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2"></button>
         </div>
-        <ul data-role="list" class="flex flex-col gap-2.5 overflow-y-auto min-h-0 list-none m-0 p-0"></ul>
-        <div data-role="add-section" class="flex flex-col gap-3 shrink-0">
+        <p data-role="empty-hint" class="hidden shrink-0 px-3 text-sm text-fg-3"></p>
+        <div data-role="add-section" class="flex flex-col gap-3 shrink-0 px-3">
           <button type="button" data-role="toggle-add" class="btn self-start"></button>
           <form data-role="add-form" class="flex flex-col gap-3">
             <div class="flex flex-col gap-1">
@@ -91,7 +94,7 @@ export function openTvDevicePicker(
             <div class="flex gap-3">
               <div class="flex flex-col gap-1 flex-1">
                 <label for="${DIALOG_ID}-port" data-role="port-label" class="text-xs font-medium text-fg-2"></label>
-                <input id="${DIALOG_ID}-port" data-role="port-input" type="number" placeholder="47815" inputmode="numeric" class="field-input" />
+                <input id="${DIALOG_ID}-port" data-role="port-input" type="number" inputmode="numeric" class="field-input" />
                 <span data-role="port-error" class="hidden text-xs text-bad"></span>
               </div>
               <div class="flex flex-col gap-1 flex-1">
@@ -117,17 +120,14 @@ export function openTvDevicePicker(
     closeBtn.setAttribute("aria-label", t("common.cancel"))
 
     const listEl = dialog.querySelector<HTMLUListElement>('[data-role="list"]')!
-    const emptyEl = dialog.querySelector<HTMLElement>('[data-role="empty"]')!
-    emptyEl.textContent = t("cast.picker.empty")
-    listEl.classList.toggle("hidden", addMode)
-    emptyEl.classList.toggle("hidden", addMode || devices.length > 0)
-
-    const foundListEl = dialog.querySelector<HTMLUListElement>('[data-role="found-list"]')!
-    const foundStatusEl = dialog.querySelector<HTMLElement>('[data-role="found-status"]')!
-    dialog.querySelector<HTMLElement>('[data-role="found-title"]')!.textContent = t("cast.picker.found")
+    const scanStatusEl = dialog.querySelector<HTMLElement>('[data-role="scan-status"]')!
+    const emptyHintEl = dialog.querySelector<HTMLElement>('[data-role="empty-hint"]')!
+    emptyHintEl.textContent = t("cast.picker.emptyHint")
+    const rescanBtn = dialog.querySelector<HTMLButtonElement>('[data-role="rescan-btn"]')!
+    rescanBtn.textContent = t("cast.picker.rescan")
 
     const toggleAddBtn = dialog.querySelector<HTMLButtonElement>('[data-role="toggle-add"]')!
-    toggleAddBtn.textContent = t("cast.picker.add")
+    toggleAddBtn.textContent = t("cast.picker.addTv")
     toggleAddBtn.classList.toggle("hidden", showAddFormByDefault)
 
     const addForm = dialog.querySelector<HTMLFormElement>('[data-role="add-form"]')!
@@ -147,7 +147,7 @@ export function openTvDevicePicker(
     const formError = dialog.querySelector<HTMLElement>('[data-role="form-error"]')!
 
     if (options.prefillHost) hostInput.value = options.prefillHost
-    if (options.prefillPort) portInput.value = String(options.prefillPort)
+    portInput.value = String(options.prefillPort || DEFAULT_RECEIVER_PORT)
 
     function clearFieldErrors(): void {
       for (const el of [hostError, portError, codeError, formError]) {
@@ -156,20 +156,31 @@ export function openTvDevicePicker(
       }
     }
 
-    function renderRow(device: TvDevice): HTMLLIElement {
+    const ROW_BTN_CLASS =
+      "xt-picker-row flex-1 min-w-0 flex items-center gap-3.5 min-h-11 px-3 py-2.5 rounded-xl text-left hover:bg-surface-2 focus-visible:bg-surface-2 active:scale-[0.98]"
+
+    /** Appends a muted " +N" hint to a host:port label when more addresses are known. */
+    function appendHostsHint(hostPortEl: HTMLElement, hosts: string[] | undefined): void {
+      if (!hosts || hosts.length <= 1) return
+      const hintEl = document.createElement("span")
+      hintEl.className = "text-fg-3/70"
+      hintEl.textContent = ` +${hosts.length - 1}`
+      hostPortEl.appendChild(hintEl)
+    }
+
+    function renderRow(device: TvDevice, online: boolean): HTMLLIElement {
       const row = document.createElement("li")
-      row.className = "flex items-center gap-2"
+      row.className = "flex items-center gap-1"
 
       const connectBtn = document.createElement("button")
       connectBtn.type = "button"
       connectBtn.dataset.role = "device-btn"
       connectBtn.dataset.id = device.id
-      connectBtn.className =
-        "xt-picker-row flex-1 min-w-0 flex items-center gap-3.5 min-h-11 px-3 py-2.5 rounded-xl border border-line bg-surface text-left hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent active:scale-[0.98]"
+      connectBtn.className = ROW_BTN_CLASS
 
       const icon = document.createElement("span")
       icon.dataset.role = "device-icon"
-      icon.className = "shrink-0 w-10 h-10 rounded-xl bg-surface-2 grid place-items-center text-fg-3"
+      icon.className = "shrink-0 grid place-items-center text-fg-3"
       icon.setAttribute("aria-hidden", "true")
       icon.innerHTML = ICON_DEVICE_TV
       connectBtn.appendChild(icon)
@@ -189,14 +200,26 @@ export function openTvDevicePicker(
       const hostPortEl = document.createElement("span")
       hostPortEl.className = "tabular-nums truncate"
       hostPortEl.textContent = `${device.host}:${device.port}`
+      appendHostsHint(hostPortEl, device.hosts)
       metaRow.appendChild(hostPortEl)
 
-      const lastUsedAge = fmtAge(device.lastSeenAt)
-      if (lastUsedAge) {
-        const lastUsedEl = document.createElement("span")
-        lastUsedEl.dataset.role = "lastused"
-        lastUsedEl.textContent = t("cast.picker.lastUsed", { when: lastUsedAge })
-        metaRow.appendChild(lastUsedEl)
+      if (online) {
+        const onlineEl = document.createElement("span")
+        onlineEl.className = "inline-flex items-center gap-1.5"
+        const dot = document.createElement("span")
+        dot.className = "size-1.5 rounded-full bg-ok"
+        dot.setAttribute("aria-hidden", "true")
+        onlineEl.appendChild(dot)
+        onlineEl.appendChild(document.createTextNode(t("cast.picker.online")))
+        metaRow.appendChild(onlineEl)
+      } else {
+        const lastUsedAge = fmtAge(device.lastSeenAt)
+        if (lastUsedAge) {
+          const lastUsedEl = document.createElement("span")
+          lastUsedEl.dataset.role = "lastused"
+          lastUsedEl.textContent = t("cast.picker.lastUsed", { when: lastUsedAge })
+          metaRow.appendChild(lastUsedEl)
+        }
       }
 
       textCol.appendChild(metaRow)
@@ -213,7 +236,8 @@ export function openTvDevicePicker(
       forgetBtn.type = "button"
       forgetBtn.dataset.role = "forget-btn"
       forgetBtn.dataset.id = device.id
-      forgetBtn.className = "btn shrink-0 min-h-11 min-w-11"
+      forgetBtn.className =
+        "shrink-0 min-h-11 min-w-11 grid place-items-center rounded-xl text-fg-3 hover:bg-surface-2 hover:text-bad focus-visible:bg-surface-2"
       forgetBtn.setAttribute("aria-label", t("cast.picker.forget"))
       forgetBtn.innerHTML = ICON_TRASH
       row.appendChild(forgetBtn)
@@ -221,23 +245,17 @@ export function openTvDevicePicker(
       return row
     }
 
-    function renderList(): void {
-      listEl.replaceChildren(...devices.map(renderRow))
-    }
-    renderList()
-
     function renderFoundRow(receiver: DiscoveredReceiver): HTMLLIElement {
       const row = document.createElement("li")
-      row.className = "flex items-center gap-2"
+      row.className = "flex items-center gap-1"
 
       const foundBtn = document.createElement("button")
       foundBtn.type = "button"
       foundBtn.dataset.role = "found-btn"
-      foundBtn.className =
-        "xt-picker-row flex-1 min-w-0 flex items-center gap-3.5 min-h-11 px-3 py-2.5 rounded-xl border border-line bg-surface text-left hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent active:scale-[0.98]"
+      foundBtn.className = ROW_BTN_CLASS
 
       const icon = document.createElement("span")
-      icon.className = "shrink-0 w-10 h-10 rounded-xl bg-surface-2 grid place-items-center text-fg-3"
+      icon.className = "shrink-0 grid place-items-center text-fg-3"
       icon.setAttribute("aria-hidden", "true")
       icon.innerHTML = ICON_DEVICE_TV
       foundBtn.appendChild(icon)
@@ -253,14 +271,23 @@ export function openTvDevicePicker(
       const hostPortEl = document.createElement("span")
       hostPortEl.className = "text-xs text-fg-3 tabular-nums truncate"
       hostPortEl.textContent = `${receiver.host}:${receiver.port}`
+      appendHostsHint(hostPortEl, receiver.hosts)
       textCol.appendChild(hostPortEl)
 
       foundBtn.appendChild(textCol)
+
+      const pairLabel = document.createElement("span")
+      pairLabel.className = "shrink-0 text-xs font-medium text-accent"
+      pairLabel.textContent = t("cast.picker.pair")
+      foundBtn.appendChild(pairLabel)
+
       row.appendChild(foundBtn)
 
       foundBtn.addEventListener("click", () => {
         hostInput.value = receiver.host
         portInput.value = String(receiver.port)
+        pendingHosts = receiver.hosts?.length ? receiver.hosts : [receiver.host]
+        pendingId = receiver.id
         addForm.classList.remove("hidden")
         toggleAddBtn.classList.add("hidden")
         codeInput.focus()
@@ -269,40 +296,95 @@ export function openTvDevicePicker(
       return row
     }
 
+    // Candidate hosts + mDNS id of the discovered receiver a found-row click is about to pair.
+    let pendingHosts: string[] | undefined
+    let pendingId: string | undefined
+
     let discoveredReceivers: DiscoveredReceiver[] = []
     let discoverySearching = true
+    let discoveryFailed = false
     const selfHostPorts = new Set<string>()
 
-    function renderFound(): void {
-      const pairedKeys = new Set(devices.map((device) => `${device.host}:${device.port}`))
-      const unpaired = discoveredReceivers.filter(
-        (receiver) =>
-          !pairedKeys.has(`${receiver.host}:${receiver.port}`) &&
-          !selfHostPorts.has(`${receiver.host}:${receiver.port}`)
-      )
-      foundListEl.replaceChildren(...unpaired.map(renderFoundRow))
-      const showStatus = unpaired.length === 0
-      foundStatusEl.classList.toggle("hidden", !showStatus)
-      foundStatusEl.classList.toggle("flex", showStatus)
-      if (showStatus) {
-        foundStatusEl.innerHTML = discoverySearching
-          ? `<span class="size-4 rounded-full border-2 border-line border-t-accent animate-spin shrink-0" aria-hidden="true"></span><span>${t("cast.picker.searching")}</span>`
-          : ""
-        if (!discoverySearching) foundStatusEl.textContent = t("cast.picker.noneFound")
+    // Same receiver as a discovered entry when the mDNS ids match, else when any known host overlaps.
+    function isSameReceiver(device: TvDevice, receiver: DiscoveredReceiver): boolean {
+      if (device.id && receiver.id) return device.id === receiver.id
+      if (device.port !== receiver.port) return false
+      const deviceHosts = device.hosts?.length ? device.hosts : [device.host]
+      const receiverHosts = receiver.hosts?.length ? receiver.hosts : [receiver.host]
+      return deviceHosts.some((host) => receiverHosts.includes(host))
+    }
+
+    function renderAll(): void {
+      const unpaired = discoveredReceivers.filter((receiver) => {
+        const key = `${receiver.host}:${receiver.port}`
+        if (selfHostPorts.has(key)) return false
+        return !devices.some((device) => isSameReceiver(device, receiver))
+      })
+
+      const savedSorted = addMode
+        ? []
+        : [...devices].sort((a, b) => {
+            const aOnline = discoveredReceivers.some((receiver) => isSameReceiver(a, receiver)) ? 1 : 0
+            const bOnline = discoveredReceivers.some((receiver) => isSameReceiver(b, receiver)) ? 1 : 0
+            if (aOnline !== bOnline) return bOnline - aOnline
+            return b.lastSeenAt - a.lastSeenAt
+          })
+
+      const rows = [
+        ...savedSorted.map((device) =>
+          renderRow(device, discoveredReceivers.some((receiver) => isSameReceiver(device, receiver)))
+        ),
+        ...unpaired.map(renderFoundRow),
+      ]
+      listEl.replaceChildren(...rows)
+      listEl.classList.toggle("hidden", rows.length === 0)
+
+      if (discoverySearching) {
+        scanStatusEl.innerHTML = `<span class="size-4 rounded-full border-2 border-line border-t-accent animate-spin shrink-0" aria-hidden="true"></span><span></span>`
+        scanStatusEl.lastElementChild!.textContent = t("cast.picker.searching")
+      } else if (discoveryFailed) {
+        scanStatusEl.textContent = t("cast.picker.scanFailed")
+      } else if (rows.length === 0) {
+        scanStatusEl.textContent = t("cast.picker.noTvsFound")
+      } else if (unpaired.length === 0) {
+        scanStatusEl.textContent = t("cast.picker.noNewFound")
+      } else {
+        scanStatusEl.textContent = ""
       }
+      scanStatusEl.classList.toggle("hidden", scanStatusEl.textContent === "" && !discoverySearching)
+      rescanBtn.classList.toggle("hidden", discoverySearching)
+      emptyHintEl.classList.toggle("hidden", discoverySearching || discoveryFailed || rows.length > 0)
+
       window.SpatialNavigation?.makeFocusable?.()
     }
-    renderFound()
+    renderAll()
 
-    const DISCOVERY_TIMEOUT_MS = 3000
-    const cancelDiscovery = discoverReceivers((list) => {
-      discoveredReceivers = list
-      renderFound()
-    }, DISCOVERY_TIMEOUT_MS)
-    const discoveryDoneTimer = setTimeout(() => {
-      discoverySearching = false
-      renderFound()
-    }, DISCOVERY_TIMEOUT_MS)
+    const DISCOVERY_TIMEOUT_MS = 5000
+    let cancelDiscovery = () => {}
+
+    function startDiscoveryScan(): void {
+      cancelDiscovery()
+      discoveredReceivers = []
+      discoverySearching = true
+      discoveryFailed = false
+      renderAll()
+      cancelDiscovery = discoverReceivers(
+        (list) => {
+          discoveredReceivers = list
+          renderAll()
+        },
+        DISCOVERY_TIMEOUT_MS,
+        (errorMessage) => {
+          discoverySearching = false
+          discoveryFailed = errorMessage !== null
+          if (errorMessage) log.warn("[xt:tv-device-dialog] receiver scan failed:", errorMessage)
+          renderAll()
+        }
+      )
+    }
+    startDiscoveryScan()
+
+    rescanBtn.addEventListener("click", startDiscoveryScan)
 
     let resolved = false
     const settle = (choice: TvDevice | null) => {
@@ -322,7 +404,7 @@ export function openTvDevicePicker(
       button.disabled = true
       iconEl.classList.add("animate-spin")
       rowErrorEl.classList.add("hidden")
-      const probed = await probeTvDevice(device.host, device.port)
+      const probed = await probeTvDevice(device.host, device.port, device.hosts)
       if (!probed) {
         button.disabled = false
         iconEl.classList.remove("animate-spin")
@@ -343,8 +425,7 @@ export function openTvDevicePicker(
           removeTvDevice(id)
           const index = devices.findIndex((device) => device.id === id)
           if (index !== -1) devices.splice(index, 1)
-          renderList()
-          emptyEl.classList.toggle("hidden", devices.length > 0)
+          renderAll()
         }
         return
       }
@@ -359,6 +440,8 @@ export function openTvDevicePicker(
     listEl.addEventListener("click", onListClick)
 
     const onToggleAdd = () => {
+      pendingHosts = undefined
+      pendingId = undefined
       addForm.classList.toggle("hidden")
     }
     toggleAddBtn.addEventListener("click", onToggleAdd)
@@ -387,7 +470,13 @@ export function openTvDevicePicker(
       submitBtn.disabled = true
       submitBtn.dataset.loading = "true"
       try {
-        const device = await pairTvDevice({ host: result.host, port: result.port, code: result.code })
+        const device = await pairTvDevice({
+          host: result.host,
+          port: result.port,
+          code: result.code,
+          hosts: pendingHosts,
+          id: pendingId,
+        })
         settle(device)
       } catch (err) {
         submitBtn.disabled = false
@@ -430,13 +519,13 @@ export function openTvDevicePicker(
 
     function detach() {
       cancelDiscovery()
-      clearTimeout(discoveryDoneTimer)
+      rescanBtn.removeEventListener("click", startDiscoveryScan)
       listEl.removeEventListener("click", onListClick)
       toggleAddBtn.removeEventListener("click", onToggleAdd)
       addForm.removeEventListener("submit", onFormSubmit)
-      dialog.removeEventListener("click", onClick)
-      dialog.removeEventListener("cancel", onCancel)
-      dialog.removeEventListener("close", onClose)
+      dialogEl.removeEventListener("click", onClick)
+      dialogEl.removeEventListener("cancel", onCancel)
+      dialogEl.removeEventListener("close", onClose)
       document.removeEventListener(LOCALE_EVENT, onLocaleChange)
     }
 
@@ -454,7 +543,7 @@ export function openTvDevicePicker(
     }
 
     attachDialogSpatialNav(dialog, {
-      defaultElement: `#${DIALOG_ID} [data-role="device-btn"], #${DIALOG_ID} [data-role="toggle-add"], #${DIALOG_ID} [data-role="host-input"]`,
+      defaultElement: `#${DIALOG_ID} [data-role="device-btn"], #${DIALOG_ID} [data-role="found-btn"], #${DIALOG_ID} [data-role="toggle-add"], #${DIALOG_ID} [data-role="host-input"]`,
     })
 
     if (isTauri) {
@@ -464,7 +553,7 @@ export function openTvDevicePicker(
           const status = await invoke<{ enabled: boolean; port?: number; ips?: string[] }>("receiver_status")
           if (typeof status.port === "number" && status.ips?.length) {
             for (const ip of status.ips) selfHostPorts.add(`${ip}:${status.port}`)
-            renderFound()
+            renderAll()
           }
         } catch {}
       })()
@@ -472,6 +561,7 @@ export function openTvDevicePicker(
 
     const firstFocusable =
       dialog.querySelector<HTMLElement>('[data-role="device-btn"]') ||
+      dialog.querySelector<HTMLElement>('[data-role="found-btn"]') ||
       dialog.querySelector<HTMLElement>('[data-role="host-input"]')
     firstFocusable?.focus()
   })

@@ -5,6 +5,7 @@ import {
   updateCastSession,
   clearCastSession,
   fetchCastState,
+  fetchCastStateWithFallback,
   fetchReceiverLogs,
   cacheReceiverLogSnapshot,
   castPause,
@@ -50,6 +51,8 @@ function sessionAsDevice(session: CastSession): TvDevice {
     key: session.key,
     createdAt: 0,
     lastSeenAt: 0,
+    hosts: session.hosts,
+    pinnedHostIndex: session.pinnedHostIndex,
   }
 }
 
@@ -170,7 +173,9 @@ async function tick(): Promise<void> {
   const session = getCastSession()
   if (!session || !pillEl) return
   const device = sessionAsDevice(session)
-  const state = await fetchCastState(device)
+  // One miss away from giving up: walk the device's other known addresses before declaring it gone.
+  const nearGiveUp = consecutiveMisses === MAX_CONSECUTIVE_MISSES - 1
+  const state = nearGiveUp ? await fetchCastStateWithFallback(device) : await fetchCastState(device)
   if (!state) {
     consecutiveMisses++
     if (consecutiveMisses >= MAX_CONSECUTIVE_MISSES) {

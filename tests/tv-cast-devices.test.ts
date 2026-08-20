@@ -14,6 +14,7 @@ import {
   clearCastSession,
   cacheReceiverLogSnapshot,
   getReceiverLogSnapshots,
+  candidateHostOrder,
   TV_DEVICES_EVENT,
   CAST_SESSION_EVENT,
   type TvDevice,
@@ -142,6 +143,43 @@ describe("tv device store", () => {
     localStorage.setItem("xt_tv_devices", JSON.stringify({ not: "an array" }))
     expect(listTvDevices()).toEqual([])
   })
+
+  it("round-trips hosts and pinnedHostIndex when present", () => {
+    const device = makeDevice({ hosts: ["192.168.1.50", "10.0.0.5"], pinnedHostIndex: 1 })
+    saveTvDevice(device)
+    expect(listTvDevices()).toEqual([device])
+  })
+
+  it("drops an entry whose hosts array contains a non-string", () => {
+    localStorage.setItem(
+      "xt_tv_devices",
+      JSON.stringify([{ ...makeDevice(), hosts: ["192.168.1.50", 123] }])
+    )
+    expect(listTvDevices()).toEqual([])
+  })
+})
+
+describe("candidateHostOrder", () => {
+  it("returns an empty list for no hosts", () => {
+    expect(candidateHostOrder([])).toEqual([])
+  })
+
+  it("defaults to the first host when no pin is set", () => {
+    expect(candidateHostOrder(["192.168.1.50", "10.0.0.5"])).toEqual(["192.168.1.50", "10.0.0.5"])
+  })
+
+  it("puts the pinned host first, keeping the rest in order", () => {
+    expect(candidateHostOrder(["192.168.1.50", "10.0.0.5", "203.0.113.5"], 2)).toEqual([
+      "203.0.113.5",
+      "192.168.1.50",
+      "10.0.0.5",
+    ])
+  })
+
+  it("falls back to the first host for an out-of-range pin", () => {
+    expect(candidateHostOrder(["192.168.1.50", "10.0.0.5"], 5)).toEqual(["192.168.1.50", "10.0.0.5"])
+    expect(candidateHostOrder(["192.168.1.50", "10.0.0.5"], -1)).toEqual(["192.168.1.50", "10.0.0.5"])
+  })
 })
 
 describe("validateDeviceInput", () => {
@@ -222,6 +260,12 @@ describe("cast session store", () => {
     setCastSession(makeSession())
     updateCastSession({ dismissed: true })
     expect(getCastSession()).toEqual(makeSession({ dismissed: true }))
+  })
+
+  it("round-trips hosts and pinnedHostIndex when present", () => {
+    const session = makeSession({ hosts: ["192.168.1.50", "10.0.0.5"], pinnedHostIndex: 1 })
+    setCastSession(session)
+    expect(getCastSession()).toEqual(session)
   })
 
   it("no-ops an update when there is no active session", () => {
