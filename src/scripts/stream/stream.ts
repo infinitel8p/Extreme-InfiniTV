@@ -3742,6 +3742,35 @@ async function play(streamId, name, reason = "user") {
     })
     return
   }
+  if (reason === "user" && isTauri) {
+    const { isCastRoutingActive, routePlayToCast } = await import("@/scripts/lib/tv-cast.ts")
+    if (isCastRoutingActive()) {
+      const routed = await routePlayToCast({
+        contentTitle: name || null,
+        quiet: true,
+        stopLocal: () => {
+          suppressPauseTrackingUntilMs = Date.now() + 500
+          try { vjs?.pause?.() } catch {}
+        },
+        buildDescriptor: async () => {
+          const { isCastableSrc, buildLiveCastDescriptor } = await import("@/scripts/lib/tv-cast-descriptor")
+          const liveSrc = targetChannel ? buildChannelStreamUrl(targetChannel) : null
+          if (!liveSrc || !isCastableSrc(liveSrc)) return null
+          return buildLiveCastDescriptor({
+            src: liveSrc,
+            title: name || "",
+            logo: targetChannel?.logo || undefined,
+            drm: streamDrmById.get(streamId) || undefined,
+            headers: streamHeadersById.get(streamId) || undefined,
+            preferNativeHls: isNativeHlsFallbackChannel(streamId),
+          })
+        },
+      })
+      // Cast session owns playback now - never fall through to a local mount.
+      if (routed) setNowPlaying(streamId)
+      return
+    }
+  }
   hidePlaybackFailurePanel()
   clearDeadVideoWatchdog()
   clearDeadAudioWatchdog()

@@ -1,6 +1,7 @@
 // Pairing + device picker for "Play on TV". Clones the player-picker-dialog shape.
 
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
+import { isTauri } from "@/scripts/lib/creds.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { ICON_DEVICE_TV, ICON_TRASH, ICON_X } from "@/scripts/lib/icons.js"
 import { fmtAge } from "@/scripts/lib/format.js"
@@ -41,6 +42,7 @@ function ensureDialog(): HTMLDialogElement | null {
 }
 
 export interface TvDevicePickerOptions {
+  mode?: "pick" | "add"
   contentTitle?: string | null
   prefillHost?: string
   prefillPort?: number
@@ -53,8 +55,9 @@ export function openTvDevicePicker(
   if (!dialog) return Promise.resolve(null)
 
   return new Promise((resolve) => {
+    const addMode = options.mode === "add"
     const devices = [...listTvDevices()].sort((a, b) => b.lastSeenAt - a.lastSeenAt)
-    const showAddFormByDefault = devices.length === 0
+    const showAddFormByDefault = addMode || devices.length === 0
 
     const subtitleHtml = options.contentTitle
       ? `<div data-role="subtitle" class="text-sm text-fg-3 line-clamp-2"></div>`
@@ -105,7 +108,7 @@ export function openTvDevicePicker(
     `
 
     const titleEl = dialog.querySelector<HTMLElement>("h2")!
-    titleEl.textContent = t("cast.picker.title")
+    titleEl.textContent = t(addMode ? "cast.picker.addTitle" : "cast.picker.title")
     if (options.contentTitle) {
       const subtitleEl = dialog.querySelector<HTMLElement>('[data-role="subtitle"]')
       if (subtitleEl) subtitleEl.textContent = options.contentTitle
@@ -116,7 +119,8 @@ export function openTvDevicePicker(
     const listEl = dialog.querySelector<HTMLUListElement>('[data-role="list"]')!
     const emptyEl = dialog.querySelector<HTMLElement>('[data-role="empty"]')!
     emptyEl.textContent = t("cast.picker.empty")
-    emptyEl.classList.toggle("hidden", devices.length > 0)
+    listEl.classList.toggle("hidden", addMode)
+    emptyEl.classList.toggle("hidden", addMode || devices.length > 0)
 
     const foundListEl = dialog.querySelector<HTMLUListElement>('[data-role="found-list"]')!
     const foundStatusEl = dialog.querySelector<HTMLElement>('[data-role="found-status"]')!
@@ -267,11 +271,14 @@ export function openTvDevicePicker(
 
     let discoveredReceivers: DiscoveredReceiver[] = []
     let discoverySearching = true
+    const selfHostPorts = new Set<string>()
 
     function renderFound(): void {
       const pairedKeys = new Set(devices.map((device) => `${device.host}:${device.port}`))
       const unpaired = discoveredReceivers.filter(
-        (receiver) => !pairedKeys.has(`${receiver.host}:${receiver.port}`)
+        (receiver) =>
+          !pairedKeys.has(`${receiver.host}:${receiver.port}`) &&
+          !selfHostPorts.has(`${receiver.host}:${receiver.port}`)
       )
       foundListEl.replaceChildren(...unpaired.map(renderFoundRow))
       const showStatus = unpaired.length === 0
@@ -449,6 +456,19 @@ export function openTvDevicePicker(
     attachDialogSpatialNav(dialog, {
       defaultElement: `#${DIALOG_ID} [data-role="device-btn"], #${DIALOG_ID} [data-role="toggle-add"], #${DIALOG_ID} [data-role="host-input"]`,
     })
+
+    if (isTauri) {
+      void (async () => {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core")
+          const status = await invoke<{ enabled: boolean; port?: number; ips?: string[] }>("receiver_status")
+          if (typeof status.port === "number" && status.ips?.length) {
+            for (const ip of status.ips) selfHostPorts.add(`${ip}:${status.port}`)
+            renderFound()
+          }
+        } catch {}
+      })()
+    }
 
     const firstFocusable =
       dialog.querySelector<HTMLElement>('[data-role="device-btn"]') ||

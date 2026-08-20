@@ -5,8 +5,11 @@ import {
   loadCreds,
   getActiveEntry,
   fmtBase,
+  isTauri,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { isCastRoutingActive, routePlayToCast } from "@/scripts/lib/tv-cast.js"
+import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
 import { ensureVod } from "@/scripts/lib/catalog.js"
 import {
@@ -845,6 +848,36 @@ function retirePreviousPlayback() {
 
 async function startPlayback(options = {}) {
   if (!movie) return
+  if (isTauri && isCastRoutingActive()) {
+    const title = movie.name || ""
+    await routePlayToCast({
+      contentTitle: title || null,
+      stopLocal: () => {
+        try { vjs?.pause?.() } catch {}
+      },
+      buildDescriptor: async () => {
+        let src = null
+        try {
+          src = detailSrcBuilder ? await resolveStreamUrl(detailSrcBuilder) : detailSrc || null
+        } catch (err) {
+          log.warn("[xt:movie-detail] failed to resolve cast stream url:", err)
+        }
+        if (!src || !isCastableSrc(src)) return null
+        const saved = activePlaylistId ? getProgress(activePlaylistId, "vod", movie.id) : null
+        const resumeSeconds =
+          saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+        const durationSeconds = knownVodDurationSeconds()
+        return buildVodCastDescriptor({
+          src,
+          title,
+          logo: movie.logo || undefined,
+          resumeSeconds,
+          durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
+        })
+      },
+    })
+    return
+  }
   inlineTrailer.close()
   const requestId = ++playRequestId
 

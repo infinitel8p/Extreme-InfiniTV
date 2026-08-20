@@ -139,12 +139,16 @@ function buildPill(): HTMLElement {
 }
 
 function applySessionToPill(pill: HTMLElement, session: CastSession): void {
+  const connectedOnly = !!session.connectedOnly && !session.title
   pill.querySelector<HTMLElement>('[data-role="device-name"]')!.textContent = session.deviceName
-  pill.querySelector<HTMLElement>('[data-role="title"]')!.textContent = session.title
-  pill.querySelector<HTMLElement>('[data-role="live"]')!.classList.toggle("hidden", !session.isLive)
-  pill.querySelector<HTMLElement>('[data-role="time"]')!.classList.toggle("hidden", session.isLive)
-  pill.querySelector<HTMLElement>('[data-role="back30"]')!.classList.toggle("hidden", session.isLive)
-  pill.querySelector<HTMLElement>('[data-role="forward30"]')!.classList.toggle("hidden", session.isLive)
+  pill.querySelector<HTMLElement>('[data-role="title"]')!.textContent = connectedOnly
+    ? t("cast.pill.ready")
+    : session.title
+  pill.querySelector<HTMLElement>('[data-role="live"]')!.classList.toggle("hidden", connectedOnly || !session.isLive)
+  pill.querySelector<HTMLElement>('[data-role="time"]')!.classList.toggle("hidden", connectedOnly || session.isLive)
+  pill.querySelector<HTMLElement>('[data-role="back30"]')!.classList.toggle("hidden", connectedOnly || session.isLive)
+  pill.querySelector<HTMLElement>('[data-role="forward30"]')!.classList.toggle("hidden", connectedOnly || session.isLive)
+  pill.querySelector<HTMLElement>('[data-role="playpause"]')!.classList.toggle("hidden", connectedOnly)
 }
 
 function setPlayPauseIcon(pill: HTMLElement, paused: boolean): void {
@@ -178,8 +182,11 @@ async function tick(): Promise<void> {
   consecutiveMisses = 0
   lastKnownPositionSeconds = state.positionSeconds
   if (state.state === "idle") {
-    unmount()
-    clearCastSession()
+    // Connected-only mode is meant to survive receiver idle, not tear it down.
+    if (!session.connectedOnly) {
+      unmount()
+      clearCastSession()
+    }
     return
   }
   if (state.state === "error") {

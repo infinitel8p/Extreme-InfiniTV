@@ -6,8 +6,11 @@ import { log } from "@/scripts/lib/log.js"
 import {
   loadCreds,
   getActiveEntry,
+  isTauri,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { isCastRoutingActive, routePlayToCast } from "@/scripts/lib/tv-cast.js"
+import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
 import { ensureSeries } from "@/scripts/lib/catalog.js"
 import {
@@ -1372,6 +1375,34 @@ function retirePreviousPlayback() {
 
 async function playEpisode(episode, options = {}) {
   if (!series || !episode) return
+  if (isTauri && isCastRoutingActive()) {
+    const seasonNum = episode.season || currentSeason
+    const epNum = episode.episode_num
+    const sxe = seasonNum && epNum ? `S${seasonNum}E${epNum}` : ""
+    const title = [series?.name || "", sxe, episode.title || ""].filter(Boolean).join(" · ")
+    await routePlayToCast({
+      contentTitle: title || null,
+      stopLocal: () => {
+        try { vjs?.pause?.() } catch {}
+      },
+      buildDescriptor: () => {
+        const src = buildEpisodeStreamUrl(episode)
+        if (!src || !isCastableSrc(src)) return null
+        const saved = activePlaylistId ? getProgress(activePlaylistId, "episode", episode.id) : null
+        const resumeSeconds =
+          saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+        const durationSeconds = episodeDurationSeconds(episode)
+        return buildVodCastDescriptor({
+          src,
+          title,
+          logo: series?.logo || undefined,
+          resumeSeconds,
+          durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
+        })
+      },
+    })
+    return
+  }
   inlineTrailer.close()
   const requestId = ++playRequestId
   const src = episode?._directUrl

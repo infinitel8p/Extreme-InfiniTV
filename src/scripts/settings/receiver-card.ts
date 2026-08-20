@@ -151,6 +151,7 @@ async function init(): Promise<void> {
     statusBlock?.classList.toggle("flex", enabled)
 
     liveBadge?.classList.toggle("hidden", !enabled)
+    liveBadge?.classList.toggle("inline-flex", enabled)
     summaryHelper?.classList.toggle("hidden", enabled)
     summaryStatus?.classList.toggle("hidden", !enabled)
     if (summaryStatus) {

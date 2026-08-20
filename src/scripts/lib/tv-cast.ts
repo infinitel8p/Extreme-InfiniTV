@@ -149,6 +149,7 @@ export interface CastSession {
   isLive: boolean
   startedAt: number
   dismissed?: boolean
+  connectedOnly?: boolean
 }
 
 export const CAST_SESSION_EVENT = "xt:cast-session-changed"
@@ -234,6 +235,25 @@ export async function probeTvDevice(
     return { v: data.v, app: data.app, name: data.name }
   } catch {
     return null
+  }
+}
+
+/** Probes a paired device's own auth, distinguishing a stale key from an unreachable TV. */
+export async function probeTvDeviceAuthorized(
+  device: TvDevice
+): Promise<"online" | "unauthorized" | "unreachable"> {
+  try {
+    const response = await providerFetch(`${baseUrl(device.host, device.port)}/state`, {
+      method: "GET",
+      headers: { "X-XT-Key": device.key },
+      signal: AbortSignal.timeout(4000),
+      logKind: "other",
+    })
+    if (response.ok) return "online"
+    if (response.status === 401 || response.status === 403) return "unauthorized"
+    return "unreachable"
+  } catch {
+    return "unreachable"
   }
 }
 
@@ -324,8 +344,12 @@ export async function castSeek(device: TvDevice, seconds: number): Promise<void>
 }
 
 export async function castStop(device: TvDevice): Promise<void> {
-  await postDeviceAction(device, "/stop", {}, 4000)
-  clearCastSession()
+  // Session must clear even when the TV is gone, or routing stays on forever.
+  try {
+    await postDeviceAction(device, "/stop", {}, 4000)
+  } finally {
+    clearCastSession()
+  }
 }
 
 export interface CastState {
@@ -447,6 +471,25 @@ export interface PlayOnTvOptions {
   buildDescriptor: () => Promise<CastDescriptorV1 | null> | CastDescriptorV1 | null
   stopLocal?: () => void
   contentTitle?: string | null
+  quiet?: boolean
+}
+
+/** Reconstructs a TvDevice from an active cast session, for routing without the picker. */
+export function sessionAsDevice(session: CastSession): TvDevice {
+  return {
+    id: session.deviceId,
+    name: session.deviceName,
+    host: session.host,
+    port: session.port,
+    key: session.key,
+    createdAt: 0,
+    lastSeenAt: 0,
+  }
+}
+
+export function isCastRoutingActive(): boolean {
+  const session = getCastSession()
+  return !!session && !session.dismissed
 }
 
 async function castToDevice(device: TvDevice, options: PlayOnTvOptions): Promise<boolean> {
@@ -459,7 +502,9 @@ async function castToDevice(device: TvDevice, options: PlayOnTvOptions): Promise
   try {
     await castPlay(device, descriptor)
     options.stopLocal?.()
-    toast({ title: t("cast.toast.playing", { device: device.name }), duration: 2600 })
+    if (!options.quiet) {
+      toast({ title: t("cast.toast.playing", { device: device.name }), duration: 2600 })
+    }
     return true
   } catch (err) {
     if (err instanceof CastAuthError) {
@@ -491,12 +536,64 @@ async function repairAndCast(device: TvDevice, options: PlayOnTvOptions): Promis
   return castToDevice(repaired, options)
 }
 
+async function repairAndConnect(device: TvDevice): Promise<boolean> {
+  const { openTvDevicePicker } = await import("@/scripts/lib/tv-device-dialog.js")
+  const repaired = await openTvDevicePicker({ prefillHost: device.host, prefillPort: device.port })
+  if (!repaired) return false
+  return castConnect(repaired)
+}
+
+/** Connects to a TV before playing anything, Chromecast-style; leaves an already-casting session alone. */
+export async function castConnect(device: TvDevice): Promise<boolean> {
+  const current = getCastSession()
+  if (current && current.deviceId === device.id && current.title) return true
+
+  const status = await probeTvDeviceAuthorized(device)
+  if (status === "online") {
+    setCastSession({
+      deviceId: device.id,
+      deviceName: device.name,
+      host: device.host,
+      port: device.port,
+      key: device.key,
+      title: "",
+      isLive: false,
+      startedAt: Date.now(),
+      connectedOnly: true,
+    })
+    touchTvDevice(device.id)
+    toast({ title: t("cast.toast.connected", { device: device.name }), duration: 2600 })
+    return true
+  }
+  if (status === "unauthorized") {
+    toast({
+      title: t("cast.toast.authFailed", { device: device.name }),
+      action: {
+        label: t("cast.toast.pairAgain"),
+        onClick: () => {
+          void repairAndConnect(device)
+        },
+      },
+    })
+    return false
+  }
+  toast({ title: t("cast.toast.failed", { device: device.name }) })
+  return false
+}
+
 /** Orchestrates picker -> descriptor build -> cast; reopens the picker on an auth failure. */
 export async function playOnTv(options: PlayOnTvOptions): Promise<boolean> {
   const { openTvDevicePicker } = await import("@/scripts/lib/tv-device-dialog.js")
   const device = await openTvDevicePicker({ contentTitle: options.contentTitle })
   if (!device) return false
   return castToDevice(device, options)
+}
+
+/** Casts to the already-active session's device without opening the picker. */
+export async function routePlayToCast(options: PlayOnTvOptions): Promise<boolean> {
+  const session = getCastSession()
+  if (!session || session.dismissed) return false
+  return castToDevice(sessionAsDevice(session), options)
 }
 
 interface XtreamCastCreds {

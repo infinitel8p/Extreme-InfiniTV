@@ -78,6 +78,7 @@ function renderStatus(status: ReceiverStatus): void {
   if (status.name) {
     if (deviceNameEl) deviceNameEl.textContent = status.name
     readyBadgeEl?.classList.remove("hidden")
+    readyBadgeEl?.classList.add("inline-flex")
   }
   const ips = status.ips || []
   if (addressesEl && ips.length > 0) {
