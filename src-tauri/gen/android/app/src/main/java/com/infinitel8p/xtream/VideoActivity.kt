@@ -117,6 +117,30 @@ class VideoActivity : AppCompatActivity() {
     channelOverlay = findViewById(R.id.channel_list_overlay)
     channelListView = findViewById(R.id.channel_list)
 
+    // Keep the source-rect hint in sync with the player view so the PiP
+    // transition animates from the visible video bounds.
+    playerView?.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+      updatePictureInPictureParams(autoEnter = true)
+    }
+
+    NativePlayerControl.register(this)
+    initializeFromIntent(intent)
+  }
+
+  // singleTop delivery for a repeat launchVod/launchLive while this activity is on top.
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    progressHandler.removeCallbacks(progressTick)
+    hideChannelOverlay()
+    releasePlayer()
+    finishedEmitted = false
+    NativePlayerControl.register(this)
+    initializeFromIntent(intent)
+    if (mode == MODE_VOD) progressHandler.postDelayed(progressTick, PROGRESS_INTERVAL_MS)
+  }
+
+  private fun initializeFromIntent(intent: Intent) {
     mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_VOD
     contentKey = intent.getStringExtra(EXTRA_CONTENT_KEY) ?: ""
     defaultUa = intent.getStringExtra(EXTRA_UA) ?: ""
@@ -133,13 +157,10 @@ class VideoActivity : AppCompatActivity() {
         .takeIf { it >= 0 } ?: 0
       setupChannelList()
     } else {
+      channels = emptyList()
+      currentChannelIndex = -1
+      channelAdapter = null
       channelOverlay?.visibility = View.GONE
-    }
-
-    // Keep the source-rect hint in sync with the player view so the PiP
-    // transition animates from the visible video bounds.
-    playerView?.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-      updatePictureInPictureParams(autoEnter = true)
     }
 
     initializePlayer()
@@ -176,6 +197,7 @@ class VideoActivity : AppCompatActivity() {
 
   override fun onDestroy() {
     progressHandler.removeCallbacks(progressTick)
+    NativePlayerControl.unregister(this)
     releasePlayer()
     if (!finishedEmitted) {
       EventQueue.append(
@@ -305,6 +327,19 @@ class VideoActivity : AppCompatActivity() {
     exoPlayer?.release()
     exoPlayer = null
     playerView?.player = null
+  }
+
+  // ---------------------------------------------------------------------
+  // Remote control, called from NativePlayerControl (TV receiver mode).
+  // ---------------------------------------------------------------------
+
+  fun applyPlayWhenReady(playing: Boolean) {
+    exoPlayer?.playWhenReady = playing
+  }
+
+  fun applySeekToMs(positionMs: Long) {
+    if (mode != MODE_VOD) return
+    exoPlayer?.seekTo(positionMs)
   }
 
   // ---------------------------------------------------------------------
@@ -555,13 +590,52 @@ object NativePlayerPayload {
   }
 }
 
+// In-process remote control for the TV receiver mode: AndroidVideoBridge
+// routes xt:receiver-control commands here instead of round-tripping through
+// an Intent/broadcast, since both live in the same process.
+object NativePlayerControl {
+  @Volatile
+  private var activeActivity: VideoActivity? = null
+
+  fun register(activity: VideoActivity) {
+    activeActivity = activity
+  }
+
+  fun unregister(activity: VideoActivity) {
+    if (activeActivity === activity) activeActivity = null
+  }
+
+  fun isActive(): Boolean = activeActivity != null
+
+  fun setPlayWhenReady(playing: Boolean) {
+    val activity = activeActivity ?: return
+    activity.runOnUiThread { activity.applyPlayWhenReady(playing) }
+  }
+
+  fun seekToMs(positionMs: Long) {
+    val activity = activeActivity ?: return
+    activity.runOnUiThread { activity.applySeekToMs(positionMs) }
+  }
+
+  fun finishPlayback() {
+    val activity = activeActivity ?: return
+    activity.runOnUiThread { activity.finish() }
+  }
+}
+
 object EventQueue {
   private const val PREF_NAME = "xt_native_events"
   private const val KEY_QUEUE = "queue"
   private const val MAX_ENTRIES = 200
 
+  // Installed by AndroidVideoBridge.receiverSessionStart(); returning false falls back to the queue below.
+  @Volatile
+  var pushListener: ((String, JSONObject) -> Boolean)? = null
+
   @Synchronized
   fun append(activity: android.content.Context, type: String, payload: JSONObject) {
+    val listener = pushListener
+    if (listener != null && listener(type, payload)) return
     try {
       val prefs = prefs(activity)
       val raw = prefs.getString(KEY_QUEUE, "[]") ?: "[]"

@@ -7,8 +7,10 @@ import {
   tailLogBytes,
   decodeLogTail,
   withTimeout,
+  sanitizeDeviceNameForFilename,
   type BundleInput,
   type PlaylistSummary,
+  type ReceiverLogResult,
 } from "@/scripts/lib/diagnostic-bundle.js"
 
 const SECRET_PASS = "secret-pass"
@@ -249,6 +251,79 @@ describe("buildBundleManifest", () => {
     const manifest = buildBundleManifest(baseBundleInput())
     const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
     expect(readme).not.toContain("diagnostic-result.json")
+  })
+
+  it("adds a receiver-logs entry for a fetched device", () => {
+    const receiverLogs: ReceiverLogResult[] = [
+      { deviceName: "Living Room TV", host: "192.168.1.50", status: "fetched", text: "line one\nline two\n" },
+    ]
+    const manifest = buildBundleManifest(baseBundleInput({ receiverLogs }))
+    const entry = manifest.find((file) => file.name === "receiver-logs/Living-Room-TV.log")
+    expect(entry?.text).toBe("line one\nline two\n")
+  })
+
+  it("adds a receiver-logs snapshot entry with a captured-at header", () => {
+    const receiverLogs: ReceiverLogResult[] = [
+      {
+        deviceName: "Bedroom TV",
+        host: "192.168.1.51",
+        status: "snapshot",
+        text: "old error line\n",
+        snapshotAt: "2026-03-15T10:00:00.000Z",
+      },
+    ]
+    const manifest = buildBundleManifest(baseBundleInput({ receiverLogs }))
+    const entry = manifest.find((file) => file.name === "receiver-logs/Bedroom-TV-snapshot.log")
+    expect(entry?.text).toContain("2026-03-15T10:00:00.000Z")
+    expect(entry?.text).toContain("old error line")
+  })
+
+  it("adds no file for an unreachable device but still notes it in the README", () => {
+    const receiverLogs: ReceiverLogResult[] = [
+      { deviceName: "Kitchen TV", host: "192.168.1.52", status: "unreachable" },
+    ]
+    const manifest = buildBundleManifest(baseBundleInput({ receiverLogs }))
+    expect(manifest.some((file) => file.name.startsWith("receiver-logs/"))).toBe(false)
+    const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
+    expect(readme).toContain("Kitchen TV: unreachable")
+  })
+
+  it("redacts a credential pattern inside a receiver log tail", () => {
+    const receiverLogs: ReceiverLogResult[] = [
+      {
+        deviceName: "Living Room TV",
+        host: "192.168.1.50",
+        status: "fetched",
+        text: "fetching http://joe:hunter2@host.example/list.m3u",
+      },
+    ]
+    const manifest = buildBundleManifest(baseBundleInput({ receiverLogs }))
+    const entry = manifest.find((file) => file.name === "receiver-logs/Living-Room-TV.log")
+    expect(entry?.text).not.toContain("hunter2")
+  })
+
+  it("omits the receiver-cast section from the README when there are no devices", () => {
+    const manifest = buildBundleManifest(baseBundleInput())
+    const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
+    expect(readme).not.toContain("Receiver-cast devices")
+  })
+})
+
+describe("sanitizeDeviceNameForFilename", () => {
+  it("keeps alphanumerics and collapses everything else to a dash", () => {
+    expect(sanitizeDeviceNameForFilename("Living Room TV", "192.168.1.50")).toBe("Living-Room-TV")
+  })
+
+  it("keeps underscores and existing dashes", () => {
+    expect(sanitizeDeviceNameForFilename("tv_1-main", "192.168.1.50")).toBe("tv_1-main")
+  })
+
+  it("falls back to the host when the name sanitizes to nothing", () => {
+    expect(sanitizeDeviceNameForFilename("!!!", "192.168.1.50")).toBe("192-168-1-50")
+  })
+
+  it("falls back to 'device' when both name and host sanitize to nothing", () => {
+    expect(sanitizeDeviceNameForFilename("!!!", "!!!")).toBe("device")
   })
 })
 

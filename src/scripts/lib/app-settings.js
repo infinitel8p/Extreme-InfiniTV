@@ -39,6 +39,7 @@ const KEY_DEV_MODE = "xt_dev_mode"
 const KEY_RECEIVER_MODE = "xt_receiver_mode"
 const KEY_RECEIVER_BOOT = "xt_receiver_boot"
 const KEY_RECEIVER_NAME = "xt_receiver_name"
+const KEY_RECEIVER_ENGINE = "xt_receiver_engine"
 const KEY_CONTENT_LANGUAGE = "xt_content_lang"
 const KEY_LANGUAGE_GROUPING = "xt_lang_grouping"
 const EVT_CHANGED = "xt:settings-changed"
@@ -988,6 +989,15 @@ export function getEffectiveReceiverDeviceName() {
   } catch {
     return ""
   }
+}
+
+export const RECEIVER_ENGINE_VALUES = ["auto", "embedded", "native"]
+export const DEFAULT_RECEIVER_ENGINE = "auto"
+
+// Android TV receiver playback engine override. No Settings UI yet.
+export function getReceiverEngine() {
+  const raw = readLS(KEY_RECEIVER_ENGINE, "")
+  return RECEIVER_ENGINE_VALUES.includes(raw) ? raw : DEFAULT_RECEIVER_ENGINE
 }
 
 export const CAPTIONS_AUTO_EVENT = "xt:captions-auto-changed"

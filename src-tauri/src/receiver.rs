@@ -32,6 +32,7 @@ const MAX_URL_LEN: usize = 8 * 1024;
 const MAX_TITLE_LEN: usize = 512;
 const MAX_MIME_LEN: usize = 256;
 const MAX_DRM_JSON_BYTES: usize = 16 * 1024;
+const MAX_LOG_TAIL_BYTES: usize = 64 * 1024;
 
 const PLAY_EVENT: &str = "xt:receiver-play";
 const CONTROL_EVENT: &str = "xt:receiver-control";
@@ -491,6 +492,7 @@ pub async fn receiver_start(
     name: Option<String>,
 ) -> Result<Value, String> {
     let config_dir = app.path().app_config_dir().map_err(|error| format!("OTHER:{error}"))?;
+    let log_dir = app.path().app_log_dir().unwrap_or_default();
 
     let already_running = state
         .server
@@ -514,7 +516,7 @@ pub async fn receiver_start(
         *state.shared.ips.lock().unwrap_or_else(|poison| poison.into_inner()) = local_ips();
 
         let events: Arc<dyn ReceiverEvents> = Arc::new(app.clone());
-        ensure_server_started(&state, events, config_dir).await?;
+        ensure_server_started(&state, events, config_dir, log_dir).await?;
 
         let port = state
             .server
@@ -780,6 +782,7 @@ struct ServerCtx {
     events: Arc<dyn ReceiverEvents>,
     port: u16,
     config_dir: std::path::PathBuf,
+    log_dir: std::path::PathBuf,
     shutdown_rx: watch::Receiver<bool>,
 }
 
@@ -787,6 +790,7 @@ async fn ensure_server_started(
     state: &ReceiverState,
     events: Arc<dyn ReceiverEvents>,
     config_dir: std::path::PathBuf,
+    log_dir: std::path::PathBuf,
 ) -> Result<(), String> {
     {
         let guard = state.server.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -795,9 +799,17 @@ async fn ensure_server_started(
         }
     }
 
-    let (port, shutdown) = start_server("0.0.0.0", RECEIVER_PORT, PORT_ATTEMPTS, state.shared.clone(), events, config_dir)
-        .await
-        .map_err(|error| format!("OTHER:failed to start receiver server: {error}"))?;
+    let (port, shutdown) = start_server(
+        "0.0.0.0",
+        RECEIVER_PORT,
+        PORT_ATTEMPTS,
+        state.shared.clone(),
+        events,
+        config_dir,
+        log_dir,
+    )
+    .await
+    .map_err(|error| format!("OTHER:failed to start receiver server: {error}"))?;
 
     let mut guard = state.server.lock().unwrap_or_else(|poison| poison.into_inner());
     if guard.is_some() {
@@ -816,11 +828,12 @@ async fn start_server(
     shared: Arc<ReceiverShared>,
     events: Arc<dyn ReceiverEvents>,
     config_dir: std::path::PathBuf,
+    log_dir: std::path::PathBuf,
 ) -> std::io::Result<(u16, watch::Sender<bool>)> {
     let mut last_error = None;
     for offset in 0..port_attempts.max(1) {
         match tokio::net::TcpListener::bind((bind_addr, base_port.wrapping_add(offset))).await {
-            Ok(listener) => return spawn_server(listener, shared, events, config_dir).await,
+            Ok(listener) => return spawn_server(listener, shared, events, config_dir, log_dir).await,
             Err(error) => last_error = Some(error),
         }
     }
@@ -832,10 +845,11 @@ async fn spawn_server(
     shared: Arc<ReceiverShared>,
     events: Arc<dyn ReceiverEvents>,
     config_dir: std::path::PathBuf,
+    log_dir: std::path::PathBuf,
 ) -> std::io::Result<(u16, watch::Sender<bool>)> {
     let port = listener.local_addr()?.port();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let ctx = Arc::new(ServerCtx { shared, events, port, config_dir, shutdown_rx: shutdown_rx.clone() });
+    let ctx = Arc::new(ServerCtx { shared, events, port, config_dir, log_dir, shutdown_rx: shutdown_rx.clone() });
     let router = build_router(ctx);
 
     let mut graceful_shutdown_rx = shutdown_rx;
@@ -861,6 +875,7 @@ fn build_router(ctx: Arc<ServerCtx>) -> axum::Router {
         .route("/stop", post(handle_stop))
         .route("/seek", post(handle_seek))
         .route("/state", get(handle_state))
+        .route("/logs", get(handle_logs))
         .route("/events", get(handle_events))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(ctx)
@@ -1160,6 +1175,46 @@ async fn handle_state(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap) -> 
     }
     let playback = ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
     Json(playback).into_response()
+}
+
+async fn handle_logs(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap) -> Response {
+    if authenticate(&ctx, &headers).is_none() {
+        return unauthorized_response();
+    }
+    let log_dir = ctx.log_dir.clone();
+    let text = tauri::async_runtime::spawn_blocking(move || newest_log_tail(&log_dir)).await.unwrap_or_default();
+    (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response()
+}
+
+fn newest_log_tail(log_dir: &std::path::Path) -> String {
+    let Ok(entries) = std::fs::read_dir(log_dir) else {
+        return String::new();
+    };
+    let newest_log = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("log"))
+        .filter_map(|entry| entry.metadata().and_then(|metadata| metadata.modified()).ok().map(|modified| (modified, entry.path())))
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path);
+    let Some(newest_log) = newest_log else {
+        return String::new();
+    };
+    let Ok(bytes) = std::fs::read(&newest_log) else {
+        return String::new();
+    };
+    tail_as_utf8(&bytes, MAX_LOG_TAIL_BYTES)
+}
+
+fn tail_as_utf8(bytes: &[u8], max_bytes: usize) -> String {
+    let tail_start = bytes.len().saturating_sub(max_bytes);
+    let tail = String::from_utf8_lossy(&bytes[tail_start..]);
+    if tail_start == 0 {
+        return tail.into_owned();
+    }
+    match tail.find('\n') {
+        Some(index) => tail[index + 1..].to_string(),
+        None => String::new(),
+    }
 }
 
 async fn handle_events(
@@ -1490,6 +1545,7 @@ mod tests {
         shared: Arc<ReceiverShared>,
         client: reqwest::Client,
         config_dir: std::path::PathBuf,
+        log_dir: std::path::PathBuf,
         _shutdown: watch::Sender<bool>,
     }
 
@@ -1505,6 +1561,11 @@ mod tests {
     }
 
     async fn start_test_server() -> TestServer {
+        start_test_server_with_log_dir(std::env::temp_dir().join(format!("xt-receiver-test-logs-{}", generate_device_key())))
+            .await
+    }
+
+    async fn start_test_server_with_log_dir(log_dir: std::path::PathBuf) -> TestServer {
         let shared = Arc::new(ReceiverShared::new());
         let collector = CollectorEvents::new();
         let events: Arc<dyn ReceiverEvents> = collector.clone();
@@ -1513,9 +1574,10 @@ mod tests {
         *shared.pairing.lock().unwrap() = Some(PairingState::new());
         *shared.name.lock().unwrap() = "Test Receiver".to_string();
 
-        let (port, shutdown) = start_server("127.0.0.1", 0, 1, shared.clone(), events, config_dir.clone())
-            .await
-            .expect("test server must bind");
+        let (port, shutdown) =
+            start_server("127.0.0.1", 0, 1, shared.clone(), events, config_dir.clone(), log_dir.clone())
+                .await
+                .expect("test server must bind");
 
         TestServer {
             base_url: format!("http://127.0.0.1:{port}"),
@@ -1523,6 +1585,7 @@ mod tests {
             shared,
             client: reqwest::Client::new(),
             config_dir,
+            log_dir,
             _shutdown: shutdown,
         }
     }
@@ -1531,6 +1594,7 @@ mod tests {
         fn drop(&mut self) {
             let _ = self._shutdown.send(true);
             let _ = std::fs::remove_dir_all(&self.config_dir);
+            let _ = std::fs::remove_dir_all(&self.log_dir);
         }
     }
 
@@ -1803,6 +1867,60 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(negative_seek.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_logs_requires_auth() {
+        let server = start_test_server().await;
+        let response = server.client.get(format!("{}/logs", server.base_url)).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_logs_returns_empty_body_when_log_dir_is_missing() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = server.client.get(format!("{}/logs", server.base_url)).header("X-XT-Key", &key).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn receiver_http_logs_returns_the_newest_log_file_tail() {
+        let log_dir = std::env::temp_dir().join(format!("xt-receiver-test-logs-{}", generate_device_key()));
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(log_dir.join("app-2026-01-01.log"), "stale entry\n").unwrap();
+        std::fs::write(log_dir.join("not-a-log.txt"), "should never appear\n").unwrap();
+        // Newest-file selection is by mtime; the sleep keeps write order unambiguous on any filesystem clock.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        std::fs::write(log_dir.join("app-2026-01-02.log"), "line one\nline two\n").unwrap();
+
+        let server = start_test_server_with_log_dir(log_dir).await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = server.client.get(format!("{}/logs", server.base_url)).header("X-XT-Key", &key).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), "line one\nline two\n");
+    }
+
+    #[test]
+    fn tail_as_utf8_returns_the_whole_input_when_under_the_cap() {
+        assert_eq!(tail_as_utf8(b"hello world", 1024), "hello world");
+    }
+
+    #[test]
+    fn tail_as_utf8_caps_and_starts_on_a_whole_line() {
+        let bytes = b"AAAAAAAAAA\nBBBBBBBBBB\nCCCCCCCCCC\n";
+        assert_eq!(tail_as_utf8(bytes, 15), "CCCCCCCCCC\n");
     }
 
     #[test]

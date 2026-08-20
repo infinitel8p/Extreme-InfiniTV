@@ -930,8 +930,16 @@ class NsdBridge(private val activity: TauriActivity) {
  * progress / channel-changed / finished events written by VideoActivity into
  * SharedPreferences; MainActivity.onResume also drains and dispatches them as
  * DOM CustomEvents on the WebView automatically.
+ *
+ * receiverSessionStart/-End/-Control back the TV receiver mode: while a cast
+ * session is playing through VideoActivity, events are pushed straight into
+ * the WebView instead of waiting for the SharedPreferences drain, and remote
+ * control commands route to NativePlayerControl instead of a fresh Intent.
  */
-class AndroidVideoBridge(private val activity: android.app.Activity) {
+class AndroidVideoBridge(
+  private val activity: MainActivity,
+  private val hostedWebViewRef: () -> WebView?,
+) {
   @JavascriptInterface
   fun isSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
 
@@ -976,6 +984,54 @@ class AndroidVideoBridge(private val activity: android.app.Activity) {
   @JavascriptInterface
   fun drainEvents(): String {
     return EventQueue.drain(activity)
+  }
+
+  @JavascriptInterface
+  fun receiverSessionStart(): Boolean {
+    activity.receiverSessionActive = true
+    EventQueue.pushListener = { type, payload ->
+      val webView = hostedWebViewRef()
+      if (webView == null) {
+        false
+      } else {
+        val script = dispatchScript(type, payload)
+        activity.runOnUiThread { webView.evaluateJavascript(script, null) }
+        true
+      }
+    }
+    return true
+  }
+
+  @JavascriptInterface
+  fun receiverSessionEnd() {
+    activity.receiverSessionActive = false
+    EventQueue.pushListener = null
+    if (NativePlayerControl.isActive()) NativePlayerControl.finishPlayback()
+  }
+
+  @JavascriptInterface
+  fun receiverControl(action: String, positionMs: Long): Boolean {
+    val wasActive = NativePlayerControl.isActive()
+    when (action) {
+      "pause" -> NativePlayerControl.setPlayWhenReady(false)
+      "resume" -> NativePlayerControl.setPlayWhenReady(true)
+      "seek" -> NativePlayerControl.seekToMs(positionMs)
+      "stop" -> NativePlayerControl.finishPlayback()
+    }
+    return wasActive
+  }
+
+  // Mirrors MainActivity.drainAndDispatchVideoEvents' escaping approach for a single event.
+  private fun dispatchScript(type: String, payload: JSONObject): String {
+    val entry = JSONObject().put("type", type).put("payload", payload)
+    return """
+      (function(){
+        try {
+          var evt = $entry;
+          document.dispatchEvent(new CustomEvent(evt.type, { detail: evt.payload }));
+        } catch (_) {}
+      })();
+    """.trimIndent()
   }
 
   private fun tryLaunch(mode: String, configure: (android.content.Intent) -> Unit): Boolean {
@@ -1264,6 +1320,10 @@ class MainActivity : TauriActivity() {
   @Volatile
   var autoEnterPipEnabled: Boolean = false
 
+  // Set by AndroidVideoBridge.receiverSessionStart()/receiverSessionEnd() while a TV-receiver cast plays through VideoActivity
+  @Volatile
+  var receiverSessionActive: Boolean = false
+
   private val rendererRecreating = AtomicBoolean(false)
 
   companion object {
@@ -1381,7 +1441,7 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(DeviceInfoBridge(this), "AndroidDeviceInfo")
     webView.addJavascriptInterface(LogShareBridge(this), "AndroidLog")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
-    webView.addJavascriptInterface(AndroidVideoBridge(this), "AndroidVideo")
+    webView.addJavascriptInterface(AndroidVideoBridge(this, { hostedWebView }), "AndroidVideo")
     webView.addJavascriptInterface(HapticsBridge(this, { hostedWebView }), "AndroidHaptics")
     val sniffer = SnifferBridge(this, { hostedWebView })
     snifferBridge = sniffer
@@ -1516,6 +1576,12 @@ class MainActivity : TauriActivity() {
   override fun onResume() {
     super.onResume()
     drainAndDispatchVideoEvents()
+  }
+
+  override fun onPause() {
+    super.onPause()
+    // Same wry WebView-pause behavior as the PiP fix above; keep it alive for receiver event pushes.
+    if (receiverSessionActive) hostedWebView?.onResume()
   }
 
   // Tear down the throwaway sniffer WebView instead of leaving the remote page running until its timeout.

@@ -68,6 +68,14 @@ export function summarizePlaylists(entries: unknown[], activeId: string | null):
   }
 }
 
+export interface ReceiverLogResult {
+  deviceName: string
+  host: string
+  status: "fetched" | "snapshot" | "unreachable"
+  text?: string
+  snapshotAt?: string
+}
+
 export interface BundleInput {
   createdAt: Date
   snapshot: unknown
@@ -75,6 +83,14 @@ export interface BundleInput {
   playlists: PlaylistSummary
   diagnosticResult: unknown | null
   logFiles: { name: string; text: string }[]
+  receiverLogs?: ReceiverLogResult[]
+}
+
+export function sanitizeDeviceNameForFilename(deviceName: string, host: string): string {
+  const cleanedName = deviceName.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "")
+  if (cleanedName) return cleanedName
+  const cleanedHost = host.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "")
+  return cleanedHost || "device"
 }
 
 function buildReadme(input: BundleInput): string {
@@ -100,6 +116,22 @@ function buildReadme(input: BundleInput): string {
   for (const logFile of input.logFiles) {
     lines.push(`- logs/${logFile.name}: tail of the app log file, redacted.`)
   }
+  const receiverLogs = input.receiverLogs ?? []
+  for (const result of receiverLogs) {
+    const safeName = sanitizeDeviceNameForFilename(result.deviceName, result.host)
+    if (result.status === "fetched" && result.text) {
+      lines.push(`- receiver-logs/${safeName}.log: log tail fetched live from ${result.deviceName}.`)
+    } else if (result.status === "snapshot" && result.text) {
+      lines.push(`- receiver-logs/${safeName}-snapshot.log: cached log tail from ${result.deviceName} (receiver was unreachable during export).`)
+    }
+  }
+  if (receiverLogs.length > 0) {
+    lines.push("")
+    lines.push("Receiver-cast devices:")
+    for (const result of receiverLogs) {
+      lines.push(`- ${result.deviceName}: ${result.status}`)
+    }
+  }
   return lines.join("\n")
 }
 
@@ -118,6 +150,16 @@ export function buildBundleManifest(input: BundleInput): { name: string; text: s
   }
   for (const logFile of input.logFiles) {
     files.push({ name: `logs/${logFile.name}`, text: redactUrl(logFile.text) })
+  }
+  for (const result of input.receiverLogs ?? []) {
+    if (!result.text) continue
+    const safeName = sanitizeDeviceNameForFilename(result.deviceName, result.host)
+    if (result.status === "fetched") {
+      files.push({ name: `receiver-logs/${safeName}.log`, text: redactUrl(result.text) })
+    } else if (result.status === "snapshot") {
+      const header = `Captured ${result.snapshotAt ?? "unknown time"} (receiver unreachable during export)\n`
+      files.push({ name: `receiver-logs/${safeName}-snapshot.log`, text: redactUrl(header + result.text) })
+    }
   }
   return files
 }
@@ -264,10 +306,34 @@ async function readRecentLogTails(): Promise<{ name: string; text: string }[]> {
   return readDesktopLogTails()
 }
 
+const RECEIVER_LOGS_TIMEOUT_MS = 7000
+
+// A stale/unreachable receiver falls back to its last error-time snapshot, if any.
+async function collectReceiverLogs(): Promise<ReceiverLogResult[]> {
+  const { listTvDevices, fetchReceiverLogs, getReceiverLogSnapshots } = await import("@/scripts/lib/tv-cast.js")
+  const devices = listTvDevices()
+  if (devices.length === 0) return []
+
+  const snapshots = getReceiverLogSnapshots()
+  const settled = await Promise.allSettled(devices.map((device) => fetchReceiverLogs(device)))
+
+  return devices.map((device, index) => {
+    const outcome = settled[index]
+    const text = outcome.status === "fulfilled" ? outcome.value : null
+    if (text) return { deviceName: device.name, host: device.host, status: "fetched" as const, text }
+
+    const snapshot = snapshots[device.name]
+    if (snapshot?.text) {
+      return { deviceName: device.name, host: device.host, status: "snapshot" as const, text: snapshot.text, snapshotAt: snapshot.at }
+    }
+    return { deviceName: device.name, host: device.host, status: "unreachable" as const }
+  })
+}
+
 export async function collectDiagnosticBundle(): Promise<CollectedBundle> {
   const createdAt = new Date()
 
-  const [snapshot, networkLog, playlists, diagnosticResult, logFiles] = await Promise.all([
+  const [snapshot, networkLog, playlists, diagnosticResult, logFiles, receiverLogs] = await Promise.all([
     withTimeout(
       safeAsync<unknown>(async () => {
         const { collectSessionSnapshot } = await import("@/scripts/lib/diagnostic-snapshot.js")
@@ -304,9 +370,14 @@ export async function collectDiagnosticBundle(): Promise<CollectedBundle> {
       LOG_TAILS_TIMEOUT_MS,
       []
     ),
+    withTimeout(
+      safeAsync<ReceiverLogResult[]>(() => collectReceiverLogs(), []),
+      RECEIVER_LOGS_TIMEOUT_MS,
+      []
+    ),
   ])
 
-  const manifest = buildBundleManifest({ createdAt, snapshot, networkLog, playlists, diagnosticResult, logFiles })
+  const manifest = buildBundleManifest({ createdAt, snapshot, networkLog, playlists, diagnosticResult, logFiles, receiverLogs })
   const textEncoder = new TextEncoder()
   const bytes = createZip(
     manifest.map((file) => ({ name: file.name, data: textEncoder.encode(file.text), modifiedAt: createdAt }))

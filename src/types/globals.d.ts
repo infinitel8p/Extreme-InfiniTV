@@ -29,6 +29,12 @@ interface AndroidVideoBridge {
     referer: string,
   ) => boolean
   drainEvents?: () => string
+  /** Starts pushing native-player events straight into the WebView instead of the SharedPreferences queue. */
+  receiverSessionStart?: () => boolean
+  /** Stops the event push and finishes the native player if it's still running. */
+  receiverSessionEnd?: () => void
+  /** Routes a remote control command into the running native player; returns whether a session was active. */
+  receiverControl?: (action: string, positionMs: number) => boolean
 }
 
 interface AndroidIntentBridge {

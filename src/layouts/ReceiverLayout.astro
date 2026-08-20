@@ -1,4 +1,6 @@
 ---
+import TitleBar from "@/components/TitleBar.astro"
+import WindowResizeEdges from "@/components/WindowResizeEdges.astro"
 import "../styles/global.css"
 
 interface Props {
@@ -103,25 +105,45 @@ const documentTitle = pageTitle
           }
         }
 
-        var currentTheme = localStorage.getItem("xt_theme") || "system";
-        if (currentTheme === "light") document.documentElement.style.colorScheme = "light";
-        else if (currentTheme === "dark") document.documentElement.style.colorScheme = "dark";
+        // Video-first surface: always dark
+        document.documentElement.style.colorScheme = "dark";
+
+        var uaPlatform = (navigator.userAgent || "").toLowerCase();
+        var hasTauri = !!window.__TAURI_INTERNALS__ || !!window.__TAURI__;
+        if (hasTauri && uaPlatform.indexOf("android") === -1) {
+          document.documentElement.setAttribute("data-tauri-desktop", "1");
+        }
       } catch (e) {}
     </script>
   </head>
 
   <body class="antialiased bg-bg text-fg h-dvh overflow-hidden">
+    <TitleBar />
+    <WindowResizeEdges />
     <slot />
   </body>
 </html>
 
 <style is:global>
+  html[data-tauri-desktop] {
+    --xt-titlebar-h: 2.25rem;
+  }
+  html[data-tauri-desktop] body {
+    padding-top: var(--xt-titlebar-h);
+  }
+  html[data-tauri-desktop][data-fullscreen] {
+    --xt-titlebar-h: 0px;
+  }
+  html[data-tauri-desktop][data-fullscreen] #xt-titlebar {
+    display: none !important;
+  }
+
   /* Same overscan padding Layout.astro applies to its own body. */
   html[data-tv-overscan] body {
-    padding-top: max(
+    padding-top: calc(var(--xt-titlebar-h, 0px) + max(
       env(safe-area-inset-top),
       calc(var(--xt-tv-overscan, 0) * 1vh)
-    );
+    ));
     padding-right: max(
       env(safe-area-inset-right),
       calc(var(--xt-tv-overscan, 0) * 1vw)

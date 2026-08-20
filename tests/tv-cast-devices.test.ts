@@ -12,6 +12,8 @@ import {
   setCastSession,
   updateCastSession,
   clearCastSession,
+  cacheReceiverLogSnapshot,
+  getReceiverLogSnapshots,
   TV_DEVICES_EVENT,
   CAST_SESSION_EVENT,
   type TvDevice,
@@ -246,5 +248,48 @@ describe("cast session store", () => {
   it("tolerantly returns null for corrupt session JSON", () => {
     sessionStorage.setItem("xt_cast_session", "{not json")
     expect(getCastSession()).toBeNull()
+  })
+})
+
+describe("receiver log snapshots", () => {
+  it("returns an empty object when nothing is cached", () => {
+    expect(getReceiverLogSnapshots()).toEqual({})
+  })
+
+  it("caches and returns a snapshot by device name", () => {
+    cacheReceiverLogSnapshot("Living Room TV", "boom at line 12\n")
+    const snapshots = getReceiverLogSnapshots()
+    expect(snapshots["Living Room TV"].text).toBe("boom at line 12\n")
+    expect(typeof snapshots["Living Room TV"].at).toBe("string")
+  })
+
+  it("keeps snapshots for distinct devices separately", () => {
+    cacheReceiverLogSnapshot("Living Room TV", "first")
+    cacheReceiverLogSnapshot("Bedroom TV", "second")
+    const snapshots = getReceiverLogSnapshots()
+    expect(snapshots["Living Room TV"].text).toBe("first")
+    expect(snapshots["Bedroom TV"].text).toBe("second")
+  })
+
+  it("overwrites a prior snapshot for the same device", () => {
+    cacheReceiverLogSnapshot("Living Room TV", "first")
+    cacheReceiverLogSnapshot("Living Room TV", "second")
+    expect(getReceiverLogSnapshots()["Living Room TV"].text).toBe("second")
+  })
+
+  it("caps a snapshot at 64 KiB", () => {
+    const oversized = "a".repeat(70 * 1024)
+    cacheReceiverLogSnapshot("Living Room TV", oversized)
+    const text = getReceiverLogSnapshots()["Living Room TV"].text
+    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(64 * 1024)
+  })
+
+  it("falls back to an in-memory cache when sessionStorage.setItem throws", () => {
+    const setItemSpy = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+      throw new Error("quota exceeded")
+    })
+    cacheReceiverLogSnapshot("Living Room TV", "still visible")
+    setItemSpy.mockRestore()
+    expect(getReceiverLogSnapshots()["Living Room TV"].text).toBe("still visible")
   })
 })

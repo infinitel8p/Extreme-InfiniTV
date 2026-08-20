@@ -1,21 +1,21 @@
 ---
-import ReceiverLayout from "@/layouts/ReceiverLayout.astro";
+import ReceiverLayout from "@/layouts/ReceiverLayout.astro"
 ---
 
 <ReceiverLayout pageTitle="Receiver">
-	<div class="relative h-dvh w-full">
+	<div class="relative h-full w-full">
 		<main
 			id="receiver-idle"
-			class="relative h-dvh w-full flex flex-col items-center justify-center gap-6 px-6 text-center">
+			class="xt-receiver-view relative h-full w-full flex flex-col p-6 sm:p-8 lg:p-10 transition-transform duration-[2000ms] ease-linear">
 
-			<div class="flex items-center gap-3">
+			<div class="flex items-center gap-3 text-left">
 				<svg
 					xmlns="http://www.w3.org/2000/svg"
 					viewBox="8 58 224 124"
 					stroke-linecap="round"
 					stroke-linejoin="round"
 					aria-hidden="true"
-					class="h-10 sm:h-12 w-auto shrink-0 text-accent">
+					class="h-7 w-auto shrink-0 text-accent">
 					<path fill="none" stroke="currentColor" stroke-width="20" d="M65.6 70.2 A50 50 0 1 1 20.2 115.6" />
 					<circle fill="currentColor" cx="34.6" cy="84.6" r="9" />
 					<circle fill="none" stroke="currentColor" stroke-width="20" cx="170" cy="120" r="50" />
@@ -23,63 +23,92 @@ import ReceiverLayout from "@/layouts/ReceiverLayout.astro";
 					<rect fill="currentColor" x="164.5" y="102" width="13" height="36" rx="6.5" />
 					<rect fill="currentColor" x="182.5" y="110" width="13" height="20" rx="6.5" />
 				</svg>
-				<span class="flex items-baseline text-xl sm:text-2xl tracking-[-0.02em]">
-					<span class="font-semibold text-fg">Extreme&nbsp;Infini</span><span class="font-extrabold text-accent tracking-[0.04em] ml-[0.05em]">TV</span>
+				<h1 id="receiver-device-name" class="text-lg sm:text-xl font-medium text-fg-2">
+					<span id="receiver-name-skel" class="skel inline-block h-6 w-44 rounded-md align-middle"></span>
+				</h1>
+				<span id="receiver-ready" class="hidden inline-flex items-center gap-2 text-sm text-fg-3">
+					<span class="size-2 rounded-full bg-ok"></span>
+					<span data-i18n="receiver.idle.ready">Ready to pair</span>
 				</span>
 			</div>
 
-			<h1 id="receiver-device-name" class="text-2xl font-semibold text-fg">-</h1>
+			<div class="flex-1 grid place-items-center">
+				<div class="flex flex-col items-center text-center">
+					<span data-i18n="receiver.idle.addressLabel" class="text-sm font-semibold uppercase tracking-[0.22em] text-fg-3">Address</span>
+					<div id="receiver-addresses" class="mt-2 flex flex-col gap-1 text-[clamp(1.75rem,3.5vw,3rem)] font-semibold leading-tight tabular-nums text-fg">
+						<span id="receiver-address-skel" class="skel inline-block h-10 w-72 rounded-lg"></span>
+					</div>
 
-			<div id="receiver-addresses" class="flex flex-col gap-1 text-sm text-fg-3 tabular-nums"></div>
+					<span data-i18n="receiver.idle.codeLabel" class="mt-8 sm:mt-10 text-sm font-semibold uppercase tracking-[0.22em] text-fg-3">Pair code</span>
+					<span
+						id="receiver-pair-code"
+						class="mt-2 text-[clamp(3.5rem,8vw,6.75rem)] font-semibold leading-none tracking-[0.3em] tabular-nums text-accent">------</span>
 
-			<div class="flex flex-col items-center gap-2">
-				<span
-					data-i18n="receiver.idle.codeLabel"
-					class="text-xs font-semibold uppercase tracking-[0.22em] text-fg-3">Pair code</span>
-				<span
-					id="receiver-pair-code"
-					class="text-6xl sm:text-7xl font-semibold tracking-[0.35em] tabular-nums text-accent">------</span>
+					<p data-i18n="receiver.idle.hint" class="mt-8 max-w-xl text-base lg:text-lg text-fg-2">
+						On your phone or computer, choose Play on TV, then add this device with the address and code above.
+					</p>
+				</div>
 			</div>
 
-			<p data-i18n="receiver.idle.hint" class="max-w-md text-sm text-fg-3">
-				In the app on your phone or computer, choose Play on TV, then Add a device with this address and code.
-			</p>
+			<div class="flex items-end justify-between gap-4 flex-wrap">
+				<button
+					id="receiver-exit"
+					type="button"
+					data-i18n="receiver.idle.exit"
+					class="inline-flex min-h-11 items-center rounded-xl px-3 py-2 text-sm text-fg-3 transition-colors hover:bg-surface hover:text-fg">Exit receiver</button>
 
-			<button id="receiver-exit" type="button" class="btn" data-i18n="receiver.idle.exit">Exit receiver</button>
-
-			<div class="static lg:absolute lg:bottom-8 lg:right-8 mt-2 lg:mt-0 flex items-center gap-3 rounded-2xl border border-line bg-surface p-3 text-left">
-				<div class="shrink-0 rounded-xl bg-white p-2">
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 41 41" shape-rendering="crispEdges" aria-hidden="true" class="block size-28 sm:size-32">
-						<path fill="#ffffff" d="M0 0h41v41H0z"/><path stroke="#000000" d="M4 4.5h7m2 0h1m4 0h1m1 0h1m1 0h3m2 0h1m2 0h7M4 5.5h1m5 0h1m2 0h2m1 0h1m2 0h1m2 0h1m2 0h1m4 0h1m5 0h1M4 6.5h1m1 0h3m1 0h1m1 0h4m2 0h2m3 0h4m3 0h1m1 0h3m1 0h1M4 7.5h1m1 0h3m1 0h1m1 0h2m1 0h1m6 0h2m1 0h2m1 0h1m1 0h1m1 0h3m1 0h1M4 8.5h1m1 0h3m1 0h1m1 0h5m1 0h3m3 0h4m2 0h1m1 0h3m1 0h1M4 9.5h1m5 0h1m1 0h1m2 0h1m5 0h1m1 0h1m4 0h1m1 0h1m5 0h1M4 10.5h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7M12 11.5h1m1 0h2m4 0h1m1 0h4m1 0h1M4 12.5h1m1 0h5m2 0h1m1 0h1m1 0h1m2 0h2m1 0h1m3 0h1m2 0h5M6 13.5h1m1 0h2m1 0h3m1 0h1m1 0h1m3 0h5m1 0h1m2 0h2m1 0h4M6 14.5h2m2 0h1m5 0h4m1 0h1m2 0h3m1 0h3m1 0h1m1 0h2M5 15.5h2m4 0h1m3 0h3m1 0h4m2 0h1m2 0h2m2 0h3M5 16.5h6m1 0h1m2 0h2m1 0h1m1 0h1m2 0h7m1 0h3m2 0h1M6 17.5h1m1 0h2m3 0h4m2 0h1m1 0h2m3 0h2m3 0h1m1 0h4M4 18.5h1m1 0h1m1 0h3m1 0h2m5 0h2m1 0h1m1 0h1m2 0h2m3 0h2M4 19.5h1m1 0h2m1 0h1m1 0h1m2 0h2m1 0h1m1 0h1m5 0h1m2 0h3m2 0h2M7 20.5h1m1 0h5m1 0h3m1 0h1m1 0h1m4 0h4m1 0h3m2 0h1M4 21.5h2m3 0h1m2 0h1m1 0h5m1 0h1m1 0h4m1 0h1m2 0h2m1 0h4M4 22.5h2m1 0h2m1 0h4m2 0h1m1 0h3m1 0h1m1 0h1m1 0h1m1 0h3m1 0h2M4 23.5h1m1 0h2m8 0h2m1 0h2m2 0h3m3 0h1m1 0h5M5 24.5h1m1 0h1m1 0h4m1 0h1m3 0h2m2 0h2m1 0h1m2 0h2m1 0h3m1 0h1M4 25.5h2m10 0h6m2 0h2m1 0h1m2 0h1m3 0h1m1 0h1M4 26.5h1m1 0h3m1 0h1m1 0h1m1 0h1m1 0h1m2 0h1m1 0h1m4 0h2m5 0h1M4 27.5h1m3 0h2m1 0h4m5 0h1m1 0h6m1 0h2m1 0h5M4 28.5h1m3 0h1m1 0h1m4 0h1m5 0h1m1 0h1m2 0h1m1 0h5m2 0h2M12 29.5h2m1 0h3m2 0h4m3 0h2m3 0h1m1 0h1M4 30.5h7m2 0h1m2 0h1m1 0h2m1 0h1m2 0h1m1 0h3m1 0h1m1 0h1m1 0h2M4 31.5h1m5 0h1m1 0h1m6 0h4m1 0h1m2 0h2m3 0h5M4 32.5h1m1 0h3m1 0h1m1 0h3m1 0h2m1 0h2m2 0h4m1 0h6m1 0h2M4 33.5h1m1 0h3m1 0h1m1 0h1m2 0h5m1 0h2m4 0h3m2 0h3m1 0h1M4 34.5h1m1 0h3m1 0h1m1 0h3m2 0h1m1 0h2m1 0h1m1 0h1m3 0h2m1 0h2M4 35.5h1m5 0h1m2 0h2m4 0h1m5 0h2m2 0h2m1 0h3M4 36.5h7m1 0h2m3 0h5m4 0h3m1 0h2m3 0h1"/>
-					</svg>
-				</div>
-				<div class="flex flex-col gap-0.5">
-					<p data-i18n="receiver.idle.getAppTitle" class="text-sm font-semibold text-fg">Don't have the app?</p>
-					<p data-i18n="receiver.idle.getAppHint" class="text-xs text-fg-3 max-w-[16rem]">Scan to get Extreme InfiniTV for phone and desktop</p>
-					<p class="text-xs text-fg-3 tabular-nums">github.com/infinitel8p/Extreme-InfiniTV</p>
+				<div class="ml-auto flex items-center gap-3 rounded-2xl border border-line bg-surface p-3 text-left opacity-60 transition-opacity duration-300 hover:opacity-100 focus-within:opacity-100">
+					<div class="shrink-0 rounded-xl bg-white p-2">
+						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 41 41" shape-rendering="crispEdges" aria-hidden="true" class="block size-24">
+							<path fill="#ffffff" d="M0 0h41v41H0z"/><path stroke="#000000" d="M4 4.5h7m2 0h1m4 0h1m1 0h1m1 0h3m2 0h1m2 0h7M4 5.5h1m5 0h1m2 0h2m1 0h1m2 0h1m2 0h1m2 0h1m4 0h1m5 0h1M4 6.5h1m1 0h3m1 0h1m1 0h4m2 0h2m3 0h4m3 0h1m1 0h3m1 0h1M4 7.5h1m1 0h3m1 0h1m1 0h2m1 0h1m6 0h2m1 0h2m1 0h1m1 0h1m1 0h3m1 0h1M4 8.5h1m1 0h3m1 0h1m1 0h5m1 0h3m3 0h4m2 0h1m1 0h3m1 0h1M4 9.5h1m5 0h1m1 0h1m2 0h1m5 0h1m1 0h1m4 0h1m1 0h1m5 0h1M4 10.5h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7M12 11.5h1m1 0h2m4 0h1m1 0h4m1 0h1M4 12.5h1m1 0h5m2 0h1m1 0h1m1 0h1m2 0h2m1 0h1m3 0h1m2 0h5M6 13.5h1m1 0h2m1 0h3m1 0h1m1 0h1m3 0h5m1 0h1m2 0h2m1 0h4M6 14.5h2m2 0h1m5 0h4m1 0h1m2 0h3m1 0h3m1 0h1m1 0h2M5 15.5h2m4 0h1m3 0h3m1 0h4m2 0h1m2 0h2m2 0h3M5 16.5h6m1 0h1m2 0h2m1 0h1m1 0h1m2 0h7m1 0h3m2 0h1M6 17.5h1m1 0h2m3 0h4m2 0h1m1 0h2m3 0h2m3 0h1m1 0h4M4 18.5h1m1 0h1m1 0h3m1 0h2m5 0h2m1 0h1m1 0h1m2 0h2m3 0h2M4 19.5h1m1 0h2m1 0h1m1 0h1m2 0h2m1 0h1m1 0h1m5 0h1m2 0h3m2 0h2M7 20.5h1m1 0h5m1 0h3m1 0h1m1 0h1m4 0h4m1 0h3m2 0h1M4 21.5h2m3 0h1m2 0h1m1 0h5m1 0h1m1 0h4m1 0h1m2 0h2m1 0h4M4 22.5h2m1 0h2m1 0h4m2 0h1m1 0h3m1 0h1m1 0h1m1 0h1m1 0h3m1 0h2M4 23.5h1m1 0h2m8 0h2m1 0h2m2 0h3m3 0h1m1 0h5M5 24.5h1m1 0h1m1 0h4m1 0h1m3 0h2m2 0h2m1 0h1m2 0h2m1 0h3m1 0h1M4 25.5h2m10 0h6m2 0h2m1 0h1m2 0h1m3 0h1m1 0h1M4 26.5h1m1 0h3m1 0h1m1 0h1m1 0h1m1 0h1m2 0h1m1 0h1m4 0h2m5 0h1M4 27.5h1m3 0h2m1 0h4m5 0h1m1 0h6m1 0h2m1 0h5M4 28.5h1m3 0h1m1 0h1m4 0h1m5 0h1m1 0h1m2 0h1m1 0h5m2 0h2M12 29.5h2m1 0h3m2 0h4m3 0h2m3 0h1m1 0h1M4 30.5h7m2 0h1m2 0h1m1 0h2m1 0h1m2 0h1m1 0h3m1 0h1m1 0h1m1 0h2M4 31.5h1m5 0h1m1 0h1m6 0h4m1 0h1m2 0h2m3 0h5M4 32.5h1m1 0h3m1 0h1m1 0h3m1 0h2m1 0h2m2 0h4m1 0h6m1 0h2M4 33.5h1m1 0h3m1 0h1m1 0h1m2 0h5m1 0h2m4 0h3m2 0h3m1 0h1M4 34.5h1m1 0h3m1 0h1m1 0h3m2 0h1m1 0h2m1 0h1m1 0h1m3 0h2m1 0h2M4 35.5h1m5 0h1m2 0h2m4 0h1m5 0h2m2 0h2m1 0h3M4 36.5h7m1 0h2m3 0h5m4 0h3m1 0h2m3 0h1"/>
+						</svg>
+					</div>
+					<div class="flex flex-col gap-0.5">
+						<p data-i18n="receiver.idle.getAppTitle" class="text-sm font-semibold text-fg">Don't have the app?</p>
+						<p data-i18n="receiver.idle.getAppHint" class="text-xs text-fg-3 max-w-[16rem]">Scan to get Extreme InfiniTV for phone and desktop</p>
+						<p class="text-xs text-fg-3">github.com/infinitel8p/Extreme-InfiniTV</p>
+					</div>
 				</div>
 			</div>
 		</main>
 
 		<div
 			id="receiver-paired-flash"
-			class="hidden fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-full border border-accent/40 bg-accent-soft px-4 py-2 text-sm text-fg"></div>
+			class="hidden xt-receiver-flash fixed top-6 left-1/2 -translate-x-1/2 z-50 rounded-full border border-accent/40 bg-accent-soft px-6 py-3 text-base text-fg"></div>
 
-		<div id="receiver-player" class="hidden absolute inset-0 bg-black">
+		<div id="receiver-player" class="xt-receiver-view hidden absolute inset-0 bg-black">
 			<video id="receiver-video" class="h-full w-full" playsinline></video>
 
-			<div id="receiver-title" class="hidden absolute top-4 left-4 text-sm text-fg-3 drop-shadow"></div>
-
 			<div
-				id="receiver-loading"
-				data-i18n="receiver.loading"
-				class="hidden absolute inset-0 flex items-center justify-center text-sm text-fg-3">Loading…</div>
+				id="receiver-title-wrap"
+				class="pointer-events-none absolute inset-x-0 top-0 pt-[var(--xt-titlebar-h,0px)] bg-gradient-to-b from-black/70 via-black/35 to-transparent pb-10 opacity-0 transition-opacity duration-500">
+				<div id="receiver-title" class="px-6 pt-5 text-xl sm:text-2xl font-medium text-white/95"></div>
+			</div>
+
+			<div id="receiver-loading" class="hidden absolute inset-0 flex flex-col items-center justify-center gap-5 bg-black/40">
+				<div class="size-10 rounded-full border-2 border-white/20 border-t-white/90 animate-spin motion-reduce:animate-none" aria-hidden="true"></div>
+				<p id="receiver-loading-title" data-i18n="receiver.loading" class="max-w-lg px-6 text-center text-lg text-white/85">Loading…</p>
+			</div>
+
+			<div id="receiver-paused" class="hidden absolute inset-0 flex items-center justify-center">
+				<div class="flex size-24 items-center justify-center rounded-full bg-black/50">
+					<svg viewBox="0 0 24 24" class="size-10 text-white/90" aria-hidden="true">
+						<rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="currentColor"/>
+						<rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="currentColor"/>
+					</svg>
+				</div>
+			</div>
+
+			<div id="receiver-seek-flash" class="hidden absolute bottom-10 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-5 py-2 text-lg tabular-nums text-white/90"></div>
 
 			<div id="receiver-error" class="hidden absolute inset-0 flex items-center justify-center px-6">
-				<div class="rounded-2xl border border-line bg-surface p-6 max-w-sm flex flex-col items-center gap-2 text-center">
-					<p data-i18n="receiver.error.title" class="text-fg font-semibold">Playback failed</p>
-					<p id="receiver-error-message" class="text-sm text-fg-3"></p>
-					<p data-i18n="receiver.error.returning" class="text-xs text-fg-3">Returning to the pairing screen…</p>
+				<div class="flex max-w-md flex-col items-center gap-3 rounded-2xl border border-line bg-surface p-8 text-center">
+					<p data-i18n="receiver.error.title" class="text-xl font-semibold text-fg">Playback failed</p>
+					<p id="receiver-error-message" class="text-base text-fg-3"></p>
+					<p data-i18n="receiver.error.returning" class="text-sm text-fg-3">Returning to the pairing screen…</p>
+					<div class="mt-1 h-0.5 w-full overflow-hidden rounded bg-line">
+						<div id="receiver-error-countdown" class="h-full w-full origin-left bg-accent"></div>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -89,3 +118,29 @@ import ReceiverLayout from "@/layouts/ReceiverLayout.astro";
 		import "../scripts/receiver/receiver.ts";
 	</script>
 </ReceiverLayout>
+
+<style>
+	.xt-receiver-view {
+		animation: xt-receiver-fade-in 300ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	@keyframes xt-receiver-fade-in {
+		from { opacity: 0; }
+		to { opacity: 1; }
+	}
+
+	.xt-receiver-flash {
+		animation: xt-receiver-flash-in 360ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	@keyframes xt-receiver-flash-in {
+		from { opacity: 0; transform: translate(-50%, -8px); }
+		to { opacity: 1; transform: translate(-50%, 0); }
+	}
+
+	.receiver-countdown-run {
+		animation: xt-receiver-countdown 10s linear forwards;
+	}
+	@keyframes xt-receiver-countdown {
+		from { transform: scaleX(1); }
+		to { transform: scaleX(0); }
+	}
+</style>

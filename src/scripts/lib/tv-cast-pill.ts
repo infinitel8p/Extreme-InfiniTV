@@ -5,6 +5,8 @@ import {
   updateCastSession,
   clearCastSession,
   fetchCastState,
+  fetchReceiverLogs,
+  cacheReceiverLogSnapshot,
   castPause,
   castResume,
   castSeek,
@@ -183,9 +185,13 @@ async function tick(): Promise<void> {
   if (state.state === "error") {
     if (!errorToastShown) {
       errorToastShown = true
+      log.error("[xt:cast] receiver playback error on", session.deviceName, ":", state.error)
       toast({
         title: t("cast.toast.playbackError", { device: session.deviceName, error: state.error || t("receiver.error.title") }),
         variant: "error",
+      })
+      void fetchReceiverLogs(device).then((text) => {
+        if (text) cacheReceiverLogSnapshot(session.deviceName, text)
       })
     }
   } else {

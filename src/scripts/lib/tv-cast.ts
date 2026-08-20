@@ -359,6 +359,71 @@ export async function fetchCastState(device: TvDevice): Promise<CastState | null
   }
 }
 
+/** Fetches the receiver's own log tail for diagnostics; null on any failure. */
+export async function fetchReceiverLogs(device: TvDevice): Promise<string | null> {
+  try {
+    const response = await providerFetch(`${baseUrl(device.host, device.port)}/logs`, {
+      method: "GET",
+      headers: { "X-XT-Key": device.key },
+      signal: AbortSignal.timeout(5000),
+      logKind: "other",
+    })
+    if (!response.ok) return null
+    return await response.text()
+  } catch {
+    return null
+  }
+}
+
+export interface ReceiverLogSnapshot {
+  at: string
+  text: string
+}
+
+const RECEIVER_LOG_SNAPSHOT_KEY = "xt_receiver_log_snapshot_v1"
+const RECEIVER_LOG_SNAPSHOT_MAX_BYTES = 64 * 1024
+const receiverLogSnapshotFallback = new Map<string, ReceiverLogSnapshot>()
+
+function capReceiverLogText(text: string): string {
+  const encoded = new TextEncoder().encode(text)
+  if (encoded.length <= RECEIVER_LOG_SNAPSHOT_MAX_BYTES) return text
+  return new TextDecoder("utf-8", { fatal: false }).decode(
+    encoded.subarray(encoded.length - RECEIVER_LOG_SNAPSHOT_MAX_BYTES)
+  )
+}
+
+function readReceiverLogSnapshotsFromStorage(): Record<string, ReceiverLogSnapshot> {
+  const raw = readSessionStorage(RECEIVER_LOG_SNAPSHOT_KEY)
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Caches a receiver's log tail so a diagnostic export can still find it after the device drops offline. */
+export function cacheReceiverLogSnapshot(deviceName: string, text: string): void {
+  const snapshot: ReceiverLogSnapshot = { at: new Date().toISOString(), text: capReceiverLogText(text) }
+  try {
+    if (typeof sessionStorage === "undefined") throw new Error("no-session-storage")
+    const snapshots = readReceiverLogSnapshotsFromStorage()
+    snapshots[deviceName] = snapshot
+    sessionStorage.setItem(RECEIVER_LOG_SNAPSHOT_KEY, JSON.stringify(snapshots))
+  } catch {
+    receiverLogSnapshotFallback.set(deviceName, snapshot)
+  }
+}
+
+export function getReceiverLogSnapshots(): Record<string, ReceiverLogSnapshot> {
+  const merged = readReceiverLogSnapshotsFromStorage()
+  for (const [deviceName, snapshot] of receiverLogSnapshotFallback) {
+    if (!merged[deviceName]) merged[deviceName] = snapshot
+  }
+  return merged
+}
+
 export function startCastStatePolling(
   device: TvDevice,
   onState: (state: CastState) => void,
