@@ -116,34 +116,41 @@
       return
     }
     const active = await getActiveEntry()
-    await Promise.all(
+    const buildRows = () => {
+      const frag = document.createDocumentFragment()
+      for (const entry of entries) {
+        frag.appendChild(
+          renderPlaylistRow({
+            entry,
+            isActive: active?._id === entry._id,
+            density: "compact",
+            onAfterSelect: async () => {
+              await renderHeader()
+              await renderList()
+              closePopover()
+            },
+            onAfterRemove: async () => {
+              await renderHeader()
+              await renderList()
+            },
+          })
+        )
+      }
+      listEl.replaceChildren(frag)
+    }
+    // Rows paint immediately from what's in memory; cache hydration only
+    // refreshes the counts afterwards and must never block or kill the list.
+    buildRows()
+    void Promise.allSettled(
       entries.flatMap((entry) => [
         hydrateCache(entry._id, "live"),
         hydrateCache(entry._id, "m3u"),
         hydrateCache(entry._id, "vod"),
         hydrateCache(entry._id, "series"),
       ])
-    )
-    const frag = document.createDocumentFragment()
-    for (const entry of entries) {
-      frag.appendChild(
-        renderPlaylistRow({
-          entry,
-          isActive: active?._id === entry._id,
-          density: "compact",
-          onAfterSelect: async () => {
-            await renderHeader()
-            await renderList()
-            closePopover()
-          },
-          onAfterRemove: async () => {
-            await renderHeader()
-            await renderList()
-          },
-        })
-      )
-    }
-    listEl.replaceChildren(frag)
+    ).then(() => {
+      if (isOpen) buildRows()
+    })
   }
 
   onMount(() => {

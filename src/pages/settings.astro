@@ -1131,47 +1131,41 @@ const navStructure: NavSection[] = [
 
                 <div id="receiver-status-block" class="hidden flex-col gap-3">
 
-                  <div data-settings-item class="settings-row settings-row--stack">
-                    <div class="settings-row__control w-full flex-col items-stretch gap-3">
-                      <p id="receiver-status-line" class="inline-flex items-center gap-2 text-sm text-fg">
-                        <span class="size-2 rounded-full bg-ok"></span>
-                        <span id="receiver-status-line-text"></span>
-                      </p>
+                  <div data-settings-item class="settings-row settings-row--stack gap-1.5">
+                    <p id="receiver-status-line" class="inline-flex items-center gap-2 text-sm text-fg">
+                      <span class="size-2 rounded-full bg-ok"></span>
+                      <span id="receiver-status-line-text"></span>
+                    </p>
+                    <p id="receiver-discoverable-line" class="hidden text-xs text-fg-3"></p>
+                  </div>
 
-                      <p id="receiver-discoverable-line" class="hidden text-xs text-fg-3"></p>
+                  <div data-settings-item class="settings-row">
+                    <div class="settings-row__text">
+                      <h3 data-i18n="settings.receiver.addressLabel" class="text-sm font-medium leading-snug">Address</h3>
+                    </div>
+                    <div class="settings-row__control">
+                      <div id="receiver-addresses-list" class="flex flex-wrap items-center justify-end gap-1.5"></div>
+                    </div>
+                  </div>
 
-                      <div class="flex flex-col items-start gap-1.5">
-                        <span data-i18n="settings.receiver.addressLabel" class="text-2xs font-semibold uppercase tracking-[0.18em] text-fg-3">Address</span>
-                        <div id="receiver-addresses-list" class="flex flex-col items-start gap-1"></div>
-                      </div>
-
-                      <div class="flex flex-col items-start gap-1.5">
-                        <span data-i18n="settings.receiver.code" class="text-2xs font-semibold uppercase tracking-[0.18em] text-fg-3">Pair code</span>
-                        <div class="flex items-center gap-3">
-                          <div id="receiver-pair-code-display" class="text-3xl tracking-[0.3em] tabular-nums text-accent font-semibold select-none"></div>
-                          <button
-                            id="receiver-code-reveal"
-                            type="button"
-                            class="btn flex-none w-11 justify-center p-0"
-                            aria-label="Show pair code"
-                            data-i18n-attr="aria-label:settings.receiver.showCode">
-                            <IconEye aria-hidden="true" class="btn-icon" data-receiver-reveal-icon="show" />
-                            <IconEyeOff aria-hidden="true" class="btn-icon hidden" data-receiver-reveal-icon="hide" />
-                          </button>
-                          <button
-                            id="receiver-regenerate-btn"
-                            type="button"
-                            data-settings-item
-                            class="inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-fg-3 transition-colors hover:bg-surface-2 hover:text-fg">
-                            <IconRefresh aria-hidden="true" class="size-4" />
-                            <span data-i18n="settings.receiver.regenerate">Regenerate code</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      <button id="receiver-open-screen" type="button" data-settings-item class="btn-primary self-start">
-                        <IconExternalLink aria-hidden="true" class="btn-icon" />
-                        <span data-i18n="settings.receiver.openScreen">Open receiver screen</span>
+                  <div data-settings-item class="settings-row">
+                    <div class="settings-row__text">
+                      <h3 data-i18n="settings.receiver.code" class="text-sm font-medium leading-snug">Pair code</h3>
+                    </div>
+                    <div class="settings-row__control flex-wrap justify-end">
+                      <div id="receiver-pair-code-display" class="text-3xl tracking-[0.3em] tabular-nums text-fg-3 font-semibold select-none"></div>
+                      <button
+                        id="receiver-code-reveal"
+                        type="button"
+                        class="btn flex-none w-11 justify-center p-0"
+                        aria-label="Show pair code"
+                        data-i18n-attr="aria-label:settings.receiver.showCode">
+                        <IconEye aria-hidden="true" class="btn-icon" data-receiver-reveal-icon="show" />
+                        <IconEyeOff aria-hidden="true" class="btn-icon hidden" data-receiver-reveal-icon="hide" />
+                      </button>
+                      <button id="receiver-regenerate-btn" type="button" data-settings-item class="btn">
+                        <IconRefresh aria-hidden="true" class="btn-icon" />
+                        <span data-i18n="settings.receiver.regenerate">Regenerate code</span>
                       </button>
                     </div>
                   </div>
@@ -1185,6 +1179,11 @@ const navStructure: NavSection[] = [
                       <p id="receiver-no-devices" data-i18n="settings.receiver.noDevices" class="px-4 py-4 text-xs text-fg-3 hidden">No devices have paired yet. Pair one by choosing Play on TV on your phone or computer.</p>
                     </div>
                   </div>
+
+                  <button id="receiver-open-screen" type="button" data-settings-item class="btn-primary self-end">
+                    <IconExternalLink aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.receiver.openScreen">Open receiver screen</span>
+                  </button>
 
                 </div>
 

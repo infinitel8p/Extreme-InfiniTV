@@ -161,6 +161,7 @@ export interface CastSession {
   connectedOnly?: boolean
   hosts?: string[]
   pinnedHostIndex?: number
+  contentHref?: string
 }
 
 export const CAST_SESSION_EVENT = "xt:cast-session-changed"
@@ -465,6 +466,7 @@ export async function castPlay(device: TvDevice, descriptor: CastDescriptorV1): 
     startedAt: Date.now(),
     hosts: storedDevice.hosts,
     pinnedHostIndex: storedDevice.pinnedHostIndex,
+    contentHref: typeof location !== "undefined" ? location.pathname + location.search : undefined,
   })
   touchTvDevice(storedDevice.id)
 }
@@ -626,6 +628,7 @@ export interface PlayOnTvOptions {
   stopLocal?: () => void
   contentTitle?: string | null
   quiet?: boolean
+  contentHref?: string | null
 }
 
 /** Reconstructs a TvDevice from an active cast session, for routing without the picker. */
@@ -657,6 +660,7 @@ async function castToDevice(device: TvDevice, options: PlayOnTvOptions): Promise
 
   try {
     await castPlay(device, descriptor)
+    if (options.contentHref) updateCastSession({ contentHref: options.contentHref })
     options.stopLocal?.()
     if (!options.quiet) {
       toast({ title: t("cast.toast.playing", { device: device.name }), duration: 2600 })
@@ -768,6 +772,7 @@ export interface CastXtreamVodParams {
   containerExt?: string | null
   title?: string | null
   logo?: string | null
+  contentHref?: string | null
 }
 
 /** Builds a "play on TV" click handler for an Xtream VOD entry (movies + hub cards). */
@@ -775,6 +780,7 @@ export function castXtreamVodToTv(params: CastXtreamVodParams): () => void {
   return () => {
     void playOnTv({
       contentTitle: params.title || null,
+      contentHref: params.contentHref ?? `/movies/detail?id=${params.vodId}`,
       buildDescriptor: () => {
         const src = buildMovieStreamUrl(params.creds, params.vodId, params.containerExt || null)
         if (!isCastableSrc(src)) return null
@@ -793,6 +799,7 @@ export interface CastLiveChannelParams {
   headers?: CastDescriptorV1["headers"]
   preferNativeHls?: boolean
   stopLocal?: () => void
+  contentHref?: string | null
 }
 
 /** Builds a "play on TV" click handler for a live channel (Live TV channel list + player more-menu). */
@@ -800,6 +807,7 @@ export function castLiveChannelToTv(params: CastLiveChannelParams): () => void {
   return () => {
     void playOnTv({
       contentTitle: params.contentTitle,
+      contentHref: params.contentHref ?? "/livetv",
       stopLocal: params.stopLocal,
       buildDescriptor: () => {
         const src = params.buildSrc()

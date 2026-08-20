@@ -19,6 +19,7 @@ import {
 import {
   formatReceiverAddress,
   formatReceiverPairCode,
+  rankReceiverIps,
   type ReceiverStatus,
 } from "@/scripts/lib/receiver-shared.js"
 import { advertiseReceiver } from "@/scripts/lib/receiver-discovery.js"
@@ -80,13 +81,19 @@ function renderStatus(status: ReceiverStatus): void {
     readyBadgeEl?.classList.remove("hidden")
     readyBadgeEl?.classList.add("inline-flex")
   }
-  const ips = status.ips || []
+  const ips = rankReceiverIps(status.ips || [])
   if (addressesEl && ips.length > 0) {
     addressesEl.textContent = ""
-    for (const ip of ips) {
-      const row = document.createElement("div")
-      row.textContent = formatReceiverAddress(ip, status.port)
-      addressesEl.appendChild(row)
+    const primary = document.createElement("div")
+    primary.textContent = formatReceiverAddress(ips[0], status.port)
+    addressesEl.appendChild(primary)
+    if (ips.length > 1) {
+      const alternates = document.createElement("div")
+      alternates.className = "mt-2 max-w-2xl text-sm font-normal tracking-normal text-fg-3"
+      alternates.textContent = t("receiver.idle.alsoReachable", {
+        list: ips.slice(1).map((ip) => formatReceiverAddress(ip, status.port)).join("  ·  "),
+      })
+      addressesEl.appendChild(alternates)
     }
   }
   if (pairCodeEl) pairCodeEl.textContent = formatReceiverPairCode(status.pairCode)

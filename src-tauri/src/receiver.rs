@@ -762,7 +762,7 @@ fn is_usable_mdns_addr(ip: &std::net::IpAddr) -> bool {
     }
     match ip {
         std::net::IpAddr::V4(v4) => !v4.is_link_local(),
-        std::net::IpAddr::V6(_) => true,
+        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) != 0xfe80,
     }
 }
 
@@ -1551,6 +1551,16 @@ mod tests {
     #[test]
     fn default_receiver_name_is_never_blank() {
         assert!(!default_receiver_name().is_empty());
+    }
+
+    #[test]
+    fn usable_mdns_addr_rejects_link_local_v6() {
+        let link_local: std::net::IpAddr = "fe80::75b5:1a9f:336:d8b5".parse().unwrap();
+        let global_v6: std::net::IpAddr = "2001:db8::1".parse().unwrap();
+        let private_v4: std::net::IpAddr = "192.168.178.27".parse().unwrap();
+        assert!(!is_usable_mdns_addr(&link_local));
+        assert!(is_usable_mdns_addr(&global_v6));
+        assert!(is_usable_mdns_addr(&private_v4));
     }
 
     #[test]

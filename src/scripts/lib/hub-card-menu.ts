@@ -1,6 +1,6 @@
 // Svelte action wiring the shared poster context menu (poster-menu.ts) onto
-// hub strip cards. Episode entries resolve to their parent series; live and
-// entries without a playlist attach nothing.
+// hub strip cards. Episode entries resolve to their parent series; entries
+// without a playlist attach nothing.
 
 import { isTauri } from "@/scripts/lib/creds.js"
 
@@ -17,14 +17,14 @@ export interface HubCardMenuParams {
 }
 
 interface EffectiveTarget {
-  kind: "vod" | "series"
+  kind: "vod" | "series" | "live"
   id: string | number
   name?: string | null
   logo?: string | null
 }
 
 function effectiveTarget(params: HubCardMenuParams): EffectiveTarget | null {
-  if (params.kind === "vod" || params.kind === "series") {
+  if (params.kind === "vod" || params.kind === "series" || params.kind === "live") {
     return { kind: params.kind, id: params.id, name: params.name, logo: params.logo }
   }
   if (params.kind === "episode") {
@@ -60,34 +60,77 @@ export function hubCardMenu(
       let onDownload: (() => void) | undefined
       let onPlayOnTv: (() => void) | undefined
 
-      if (target.kind === "vod") {
-        const [{ loadCreds }, { buildMovieStreamUrl }, { getCached }] = await Promise.all([
+      if (target.kind !== "series") {
+        const [{ getState, entryToCreds, loadCreds }, streamUrls, { getCached }] = await Promise.all([
           import("@/scripts/lib/creds.js"),
           import("@/scripts/lib/stream-urls.ts"),
           import("@/scripts/lib/cache.js"),
         ])
-        const creds = await loadCreds()
-        const vodEntry = (getCached(playlistId, "vod")?.data || []).find(
-          (item: any) => String(item?.id) === String(target.id)
-        )
-        onDownload = () => {
-          window.location.href = `/movies/detail?id=${encodeURIComponent(String(target.id))}&download=1`
-        }
-        buildStreamUrl = () => {
-          if (!creds.host || !creds.user || !creds.pass) return null
-          return buildMovieStreamUrl(creds, target.id, vodEntry?.container_extension || null)
-        }
-        if (isTauri && creds.host && creds.user && creds.pass) {
-          onPlayOnTv = () => {
-            import("@/scripts/lib/tv-cast.ts").then(({ castXtreamVodToTv }) => {
-              castXtreamVodToTv({
-                creds,
-                vodId: target.id,
-                containerExt: vodEntry?.container_extension || null,
-                title: target.name || null,
-                logo: target.logo || undefined,
-              })()
-            })
+        // Hub cards can belong to non-active playlists; resolve creds per card.
+        const state = await getState()
+        const playlistEntry = (state.entries || []).find((entry: any) => entry?._id === playlistId)
+        const creds = playlistEntry ? entryToCreds(playlistEntry) : await loadCreds()
+        const hasXtreamCreds = !!(creds.host && creds.user && creds.pass)
+
+        if (target.kind === "vod") {
+          const vodEntry = (getCached(playlistId, "vod")?.data || []).find(
+            (item: any) => String(item?.id) === String(target.id)
+          )
+          onDownload = () => {
+            window.location.href = `/movies/detail?id=${encodeURIComponent(String(target.id))}&download=1`
+          }
+          buildStreamUrl = () => {
+            if (!hasXtreamCreds) return null
+            return streamUrls.buildMovieStreamUrl(creds, target.id, vodEntry?.container_extension || null)
+          }
+          if (isTauri && hasXtreamCreds) {
+            onPlayOnTv = () => {
+              import("@/scripts/lib/tv-cast.ts").then(({ castXtreamVodToTv }) => {
+                castXtreamVodToTv({
+                  creds,
+                  vodId: target.id,
+                  containerExt: vodEntry?.container_extension || null,
+                  title: target.name || null,
+                  logo: target.logo || undefined,
+                })()
+              })
+            }
+          }
+        } else {
+          const liveEntry = (getCached(playlistId, "live")?.data || []).find(
+            (item: any) => String(item?.id) === String(target.id)
+          )
+          const liveUrl = () => {
+            if (liveEntry?.url) return liveEntry.url as string
+            if (!hasXtreamCreds) return null
+            return streamUrls.buildLiveStreamUrl(creds, target.id, creds.liveContainer || null)
+          }
+          if (liveEntry?.url || hasXtreamCreds) buildStreamUrl = liveUrl
+          if (isTauri && (liveEntry?.url || hasXtreamCreds)) {
+            const headers =
+              liveEntry?.userAgent || liveEntry?.referer
+                ? { userAgent: liveEntry.userAgent || null, referer: liveEntry.referer || null }
+                : undefined
+            const drm =
+              liveEntry?.manifestType || liveEntry?.licenseKey
+                ? {
+                    manifestType: liveEntry.manifestType || null,
+                    drmScheme: liveEntry.drmScheme || null,
+                    licenseKey: liveEntry.licenseKey || null,
+                  }
+                : undefined
+            onPlayOnTv = () => {
+              import("@/scripts/lib/tv-cast.ts").then(({ castLiveChannelToTv }) => {
+                castLiveChannelToTv({
+                  contentTitle: target.name || null,
+                  title: target.name || "",
+                  logo: target.logo || undefined,
+                  buildSrc: liveUrl,
+                  drm,
+                  headers,
+                })()
+              })
+            }
           }
         }
       }
@@ -103,7 +146,9 @@ export function hubCardMenu(
           window.location.href =
             target.kind === "vod"
               ? `/movies/detail?id=${encodeURIComponent(String(target.id))}`
-              : `/series/detail?id=${encodeURIComponent(String(target.id))}`
+              : target.kind === "live"
+                ? `/livetv?channel=${encodeURIComponent(String(target.id))}`
+                : `/series/detail?id=${encodeURIComponent(String(target.id))}`
         },
         onDownload,
         buildStreamUrl,
@@ -114,7 +159,7 @@ export function hubCardMenu(
 
   function attach() {
     if (attached || destroyed) return
-    if (current.kind === "live" || !current.playlistId) return
+    if (!current.playlistId) return
     attached = true
     import("@/scripts/lib/poster-menu").then(({ attachPosterContextMenu }) => {
       if (destroyed) return

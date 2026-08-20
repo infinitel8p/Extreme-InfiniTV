@@ -753,10 +753,15 @@ const settingsActive = path === "/settings" || path.startsWith("/settings/")
     }
 
     async function connectToTv() {
+      const { getCastSession, updateCastSession, castConnect } = await loadTvCast()
+      const session = getCastSession()
+      if (session?.dismissed) {
+        updateCastSession({ dismissed: false })
+        return
+      }
       const { openTvDevicePicker } = await import("@/scripts/lib/tv-device-dialog.js")
       const device = await openTvDevicePicker({})
       if (!device) return
-      const { castConnect } = await loadTvCast()
       void castConnect(device)
     }
 

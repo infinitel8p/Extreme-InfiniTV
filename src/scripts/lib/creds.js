@@ -52,16 +52,36 @@ export const LOCAL_M3U_SCHEME = "xt-local://"
 export const CUSTOM_PLAYLIST_SCHEME = "xt-custom://"
 
 let storePromise = null
+const STORE_LOAD_TIMEOUT_MS = 3000
+
+// Raced against a timeout: a wedged IPC load must not hang every creds read
+// behind the cached promise - localStorage stays in sync and covers the page.
 function getStore() {
   if (!isTauri) return Promise.resolve(null)
   if (!storePromise) {
-    storePromise = Store.load(".xtream.creds.json").catch((e) => {
-      log.error(
-        "[xt:creds] plugin-store unavailable, falling back to localStorage:",
-        e
-      )
-      return null
-    })
+    let settled = false
+    const load = Store.load(".xtream.creds.json")
+      .then((store) => {
+        settled = true
+        return store
+      })
+      .catch((e) => {
+        settled = true
+        log.error(
+          "[xt:creds] plugin-store unavailable, falling back to localStorage:",
+          e
+        )
+        return null
+      })
+    storePromise = Promise.race([
+      load,
+      new Promise((resolve) =>
+        setTimeout(() => {
+          if (!settled) log.warn("[xt:creds] plugin-store load timed out, using localStorage for this page")
+          resolve(null)
+        }, STORE_LOAD_TIMEOUT_MS)
+      ),
+    ])
   }
   return storePromise
 }

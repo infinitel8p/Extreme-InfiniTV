@@ -1545,6 +1545,7 @@
   "receiver.idle.ready": "Ready to pair",
   "receiver.idle.hint": "On your phone or computer, choose Play on TV, then add this device with the address and code above.",
   "receiver.idle.exit": "Exit receiver",
+  "receiver.idle.alsoReachable": "Also reachable: {list}",
   "receiver.idle.getAppTitle": "Don't have the app?",
   "receiver.idle.getAppHint": "Scan to get Extreme InfiniTV for phone and desktop",
   "receiver.idle.paired": "Paired with {deviceName}",
@@ -1586,6 +1587,7 @@
   "settings.receiver.startFailed": "Couldn't start the receiver. Check the log for details.",
   "settings.receiver.openScreen": "Open receiver screen",
   "settings.receiver.pairedDevices": "Paired devices",
+  "settings.receiver.pairedOn": "Paired {date}",
   "settings.receiver.noDevices": "No devices have paired yet. Pair one by choosing Play on TV on your phone or computer.",
   "settings.receiver.revoke": "Remove",
   "settings.receiver.revokeConfirm": "Remove {deviceName}? It will need to pair again.",
@@ -1641,5 +1643,9 @@
   "cast.pill.back30": "Back 30 seconds",
   "cast.pill.forward30": "Forward 30 seconds",
   "cast.pill.live": "Live",
-  "cast.pill.ready": "Ready to cast"
+  "cast.pill.ready": "Ready to cast",
+  "cast.pill.error": "Playback error",
+  "cast.pill.reconnecting": "Reconnecting…",
+  "cast.pill.openContent": "Open {title}",
+  "cast.toast.stillCasting": "Still casting - tap the cast button to show controls."
 }

@@ -6,6 +6,7 @@ import { isTauri } from "@/scripts/lib/creds.js"
 import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog.js"
 import { writeClipboardText } from "@/scripts/lib/clipboard.js"
+import { ICON_COPY } from "@/scripts/lib/icons.js"
 import {
   getReceiverModeEnabled,
   setReceiverModeEnabled,
@@ -19,6 +20,7 @@ import {
 import {
   formatReceiverAddress,
   formatReceiverPairCode,
+  rankReceiverIps,
   type ReceiverPairedDevice,
   type ReceiverStatus,
 } from "@/scripts/lib/receiver-shared.js"
@@ -29,7 +31,7 @@ const MASKED_PAIR_CODE = "••• •••"
 async function init(): Promise<void> {
   if (!isTauri) return
 
-  const card = document.getElementById("card-tv-receiver")
+  const card = document.getElementById("card-tv-receiver") as HTMLDetailsElement | null
   card?.classList.remove("hidden")
   document.getElementById("card-casting")?.classList.remove("hidden")
 
@@ -59,6 +61,13 @@ async function init(): Promise<void> {
 
   let rawPairCode = ""
   let codeRevealed = false
+  let receiverEnabled = false
+
+  function syncSummaryLines(): void {
+    const showStatus = receiverEnabled && !(card?.open ?? false)
+    summaryHelper?.classList.toggle("hidden", showStatus)
+    summaryStatus?.classList.toggle("hidden", !showStatus)
+  }
 
   function syncModeButtons(): void {
     const enabled = getReceiverModeEnabled()
@@ -77,6 +86,8 @@ async function init(): Promise<void> {
   function renderPairCodeDisplay(): void {
     if (!pairCodeDisplay) return
     pairCodeDisplay.textContent = codeRevealed ? formatReceiverPairCode(rawPairCode) : MASKED_PAIR_CODE
+    pairCodeDisplay.classList.toggle("text-accent", codeRevealed)
+    pairCodeDisplay.classList.toggle("text-fg-3", !codeRevealed)
   }
 
   function setCodeRevealed(revealed: boolean): void {
@@ -93,12 +104,17 @@ async function init(): Promise<void> {
   function renderAddresses(status: ReceiverStatus): void {
     if (!addressesList) return
     addressesList.replaceChildren()
-    for (const ip of status.ips ?? []) {
+    for (const ip of rankReceiverIps(status.ips ?? [])) {
       const address = formatReceiverAddress(ip, status.port)
       const addressBtn = document.createElement("button")
       addressBtn.type = "button"
-      addressBtn.className = "btn min-h-9 px-2.5 py-1 text-sm tabular-nums"
-      addressBtn.textContent = address
+      addressBtn.className = "btn min-h-9 px-2.5 py-1 text-sm tabular-nums gap-1.5"
+      const addressLabel = document.createElement("span")
+      addressLabel.textContent = address
+      const copyGlyph = document.createElement("span")
+      copyGlyph.className = "inline-flex text-xs text-fg-3"
+      copyGlyph.innerHTML = ICON_COPY
+      addressBtn.append(addressLabel, copyGlyph)
       addressBtn.title = t("settings.receiver.copyAddress")
       addressBtn.setAttribute("aria-label", t("settings.receiver.copyAddress"))
       addressBtn.addEventListener("click", () => {
@@ -126,7 +142,7 @@ async function init(): Promise<void> {
       nameEl.textContent = device.deviceName
       const dateEl = document.createElement("span")
       dateEl.className = "text-2xs text-fg-3"
-      dateEl.textContent = new Date(device.createdAt).toLocaleDateString()
+      dateEl.textContent = t("settings.receiver.pairedOn", { date: new Date(device.createdAt).toLocaleDateString() })
       textWrap.append(nameEl, dateEl)
 
       const revokeBtn = document.createElement("button")
@@ -170,13 +186,13 @@ async function init(): Promise<void> {
 
     liveBadge?.classList.toggle("hidden", !enabled)
     liveBadge?.classList.toggle("inline-flex", enabled)
-    summaryHelper?.classList.toggle("hidden", enabled)
-    summaryStatus?.classList.toggle("hidden", !enabled)
+    receiverEnabled = enabled
     if (summaryStatus) {
       summaryStatus.textContent = enabled
         ? t("settings.receiver.statusReceiving", { name: status.name })
         : ""
     }
+    syncSummaryLines()
 
     renderDiscoverability(status)
 
@@ -287,6 +303,8 @@ async function init(): Promise<void> {
     }, 600)
     deviceNameInput.addEventListener("input", () => commitDeviceName(deviceNameInput.value))
   }
+
+  card?.addEventListener("toggle", syncSummaryLines)
 
   syncModeButtons()
   syncBootButtons()

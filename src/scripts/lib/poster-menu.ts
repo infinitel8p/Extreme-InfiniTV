@@ -4,9 +4,9 @@
 // resize / scroll), same long-press threshold, same visual style.
 //
 // The menu items differ per kind:
-//   vod    - Open, Favorite, Watchlist, Watched, Download, Copy stream URL
+//   vod    - Open, Favorite, Watchlist, Watched, Download, Test, Copy stream URL
 //   series - Open, Favorite, Watchlist, Watched
-//   live   - Open, Favorite (no watchlist/watched concept for channels)
+//   live   - Open, Favorite, Test, Copy stream URL (no watchlist/watched)
 // (Download and stream URL don't apply at the series level - those are
 // per-episode and live on the detail page.)
 
@@ -44,7 +44,7 @@ export interface PosterMenuOptions {
   onPlayOnTv?: () => void
   /** vod only - kicks off the download queue for this movie. */
   onDownload?: () => void
-  /** vod only - returns the canonical stream URL for the clipboard. */
+  /** vod + live - returns the canonical stream URL for test/clipboard. */
   buildStreamUrl?: () => string | null
   /** Opt-in group-aware overrides, mirroring entry-card.ts's star/badge hooks; read at menu-open time, not memoized. */
   favoriteActive?: () => boolean
@@ -205,11 +205,12 @@ export function openPosterMenu(opts: PosterMenuOptions): void {
     )
   }
 
-  // VOD-only items
-  if (kind === "vod") {
-    if (opts.onDownload) {
-      menu.appendChild(makeItem(t("list.menu.download"), () => opts.onDownload!()))
-    }
+  if (kind === "vod" && opts.onDownload) {
+    menu.appendChild(makeItem(t("list.menu.download"), () => opts.onDownload!()))
+  }
+
+  // Stream-URL items apply to anything with a single canonical URL (vod + live)
+  if (kind !== "series") {
     if (opts.buildStreamUrl) {
       menu.appendChild(
         makeItem(t("stream.menu.test"), () => {
