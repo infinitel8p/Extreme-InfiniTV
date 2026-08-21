@@ -4405,43 +4405,54 @@ const navStructure: NavSection[] = [
       isTauri &&
       /Linux/i.test(navigator.userAgent || "") &&
       !/Android/i.test(navigator.userAgent || "")
-    const storeBuild = await isStoreBuild()
     const playStoreInstall = isPlayStoreInstall()
     // Snap/Flatpak: store owns updates, same as MS Store.
     const sandboxed = isLinuxDesktop ? sandboxRuntimeSync() : null
-    const noInAppUpdate = storeBuild || !!sandboxed
-    // Linux falls back to the GitHub check below if `check()` throws (non-AppImage installs).
-    const canUseTauriUpdater = (isWindowsDesktop && !storeBuild) || (isLinuxDesktop && !sandboxed)
+    // Resolved below; checkViaGithub/checkForUpdates close over these.
+    let storeBuild = false
+    let canUseTauriUpdater = false
 
     if (updateChannelSelectEl) updateChannelSelectEl.value = getUpdateChannel()
-    if (noInAppUpdate) updateChannelRowEl?.setAttribute("hidden", "")
-
     if (autoUpdateSelectEl) autoUpdateSelectEl.value = getAutoUpdateEnabled() ? "on" : "off"
-    if (!canUseTauriUpdater) autoUpdateRowEl?.setAttribute("hidden", "")
 
     if (updateCurrentEl) {
-      try {
-        const { getVersion } = await import("@tauri-apps/api/app")
-        updateCurrentEl.textContent = await getVersion()
-      } catch {
-        const tag = document.querySelector(
-          'meta[name="x-app-version"]'
-        )?.getAttribute("content")
-        updateCurrentEl.textContent = tag || "-"
-      }
+      import("@tauri-apps/api/app")
+        .then(({ getVersion }) => getVersion())
+        .then((version) => {
+          updateCurrentEl.textContent = version
+        })
+        .catch(() => {
+          const tag = document.querySelector(
+            'meta[name="x-app-version"]'
+          )?.getAttribute("content")
+          updateCurrentEl.textContent = tag || "-"
+        })
     }
 
-    if (!canUseTauriUpdater) {
-      updateManualOnlyEl?.removeAttribute("hidden")
-      // data-i18n stays in sync with locale changes; textContent updates it immediately.
-      if (updateGetLabelEl && storeBuild) {
-        updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromStore")
-        updateGetLabelEl.textContent = t("settings.update.getFromStore")
-      } else if (updateGetLabelEl && playStoreInstall) {
-        updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromPlay")
-        updateGetLabelEl.textContent = t("settings.update.getFromPlay")
+    // Off the top-level await chain: a stuck isStoreBuild() IPC must not block this script.
+    const updaterConfigReady = (async () => {
+      storeBuild = await isStoreBuild()
+      const noInAppUpdate = storeBuild || !!sandboxed
+      // Linux falls back to the GitHub check below if `check()` throws (non-AppImage installs).
+      canUseTauriUpdater = (isWindowsDesktop && !storeBuild) || (isLinuxDesktop && !sandboxed)
+
+      if (noInAppUpdate) updateChannelRowEl?.setAttribute("hidden", "")
+      if (!canUseTauriUpdater) autoUpdateRowEl?.setAttribute("hidden", "")
+
+      if (!canUseTauriUpdater) {
+        updateManualOnlyEl?.removeAttribute("hidden")
+        // data-i18n stays in sync with locale changes; textContent updates it immediately.
+        if (updateGetLabelEl && storeBuild) {
+          updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromStore")
+          updateGetLabelEl.textContent = t("settings.update.getFromStore")
+        } else if (updateGetLabelEl && playStoreInstall) {
+          updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromPlay")
+          updateGetLabelEl.textContent = t("settings.update.getFromPlay")
+        }
       }
-    }
+
+      checkForUpdates()
+    })().catch(() => {})
 
     let pendingUpdate = null
     // "plugin": pendingUpdate is a @tauri-apps/plugin-updater Update object.
@@ -4624,6 +4635,8 @@ const navStructure: NavSection[] = [
     }
 
     async function checkForUpdates() {
+      // Give the store-build detection a moment; degrades to the GitHub path if it's still stuck.
+      await Promise.race([updaterConfigReady, new Promise((resolve) => setTimeout(resolve, 2000))])
       if (updateMsgEl) updateMsgEl.textContent = t("settings.update.checking")
       setUpdateState("checking")
       updateCheckBtn?.setAttribute("disabled", "")
@@ -4783,8 +4796,6 @@ const navStructure: NavSection[] = [
     autoUpdateSelectEl?.addEventListener("change", () => {
       setAutoUpdateEnabled(autoUpdateSelectEl.value === "on")
     })
-
-    checkForUpdates()
 
     // -------------------------------------------------------------------
     // Discord Rich Presence

@@ -421,6 +421,17 @@ let activeJob: ActiveJobState | null = null
 let pendingStatusCheck: Promise<WarmupStatus | null> | null = null
 const POLL_INTERVAL_MS = 2500
 const MAX_POLL_FAILURES = 3
+const WARMUP_STATUS_TIMEOUT_MS = 4000
+const STATUS_TIMEOUT = Symbol("warmup-status-timeout")
+
+/** Races warmup_status against a timeout so a wedged invoke can't hang callers forever. */
+async function invokeWarmupStatus(): Promise<WarmupStatus | null | typeof STATUS_TIMEOUT> {
+  const { invoke } = await import("@tauri-apps/api/core")
+  return Promise.race([
+    invoke<WarmupStatus | null>("warmup_status"),
+    new Promise<typeof STATUS_TIMEOUT>((resolve) => setTimeout(() => resolve(STATUS_TIMEOUT), WARMUP_STATUS_TIMEOUT_MS)),
+  ])
+}
 
 function dispatch(name: string, detail: unknown): void {
   try {
@@ -466,8 +477,8 @@ function reconcileFromStatus(job: ActiveJobState, status: WarmupStatus): void {
 
 async function pollJobStatus(job: ActiveJobState): Promise<void> {
   try {
-    const { invoke } = await import("@tauri-apps/api/core")
-    const status = (await invoke("warmup_status")) as WarmupStatus | null
+    const status = await invokeWarmupStatus()
+    if (status === STATUS_TIMEOUT) throw new Error("warmup_status invoke timed out")
     job.pollFailureCount = 0
     if (!status || status.jobId !== job.jobId) return
     reconcileFromStatus(job, status)
@@ -870,8 +881,12 @@ export async function warmupActiveNative(
 
 async function queryWarmupStatusOnce(): Promise<WarmupStatus | null> {
   try {
-    const { invoke } = await import("@tauri-apps/api/core")
-    return (await invoke("warmup_status")) as WarmupStatus | null
+    const status = await invokeWarmupStatus()
+    if (status === STATUS_TIMEOUT) {
+      log.warn("[xt:warmup-native] status query timed out")
+      return null
+    }
+    return status
   } catch (err) {
     log.warn("[xt:warmup-native] status query failed:", err)
     return null

@@ -36,9 +36,36 @@ export const EVT_LANG_FILTER_CHANGED = "xt:lang-filter-changed"
 export const EVT_GROUP_LANGS_CHANGED = "xt:group-langs-changed"
 
 let storePromise = null
+const STORE_LOAD_TIMEOUT_MS = 3000
+
+// Raced against a timeout: a wedged IPC load must not hang every prefs read.
 function getStore() {
   if (!isTauri) return Promise.resolve(null)
-  if (!storePromise) storePromise = Store.load(".xtream.creds.json")
+  if (!storePromise) {
+    let settled = false
+    const load = Store.load(".xtream.creds.json")
+      .then((store) => {
+        settled = true
+        return store
+      })
+      .catch((loadError) => {
+        settled = true
+        log.error(
+          "[xt:prefs] plugin-store unavailable, falling back to localStorage:",
+          loadError
+        )
+        return null
+      })
+    storePromise = Promise.race([
+      load,
+      new Promise((resolve) =>
+        setTimeout(() => {
+          if (!settled) log.warn("[xt:prefs] plugin-store load timed out, using localStorage for this page")
+          resolve(null)
+        }, STORE_LOAD_TIMEOUT_MS)
+      ),
+    ])
+  }
   return storePromise
 }
 
@@ -87,17 +114,17 @@ async function readRaw() {
 }
 
 async function writeRaw(data) {
-  const store = await getStore()
   const json = JSON.stringify(data)
-  if (store) {
-    await store.set(STORAGE_KEY, data)
-    await store.save()
-  }
   try {
     localStorage.setItem(STORAGE_KEY, json)
     setCookie(STORAGE_KEY, json)
   } catch (writeError) {
     log.error("[xt:prefs] localStorage/cookie write failed:", writeError)
+  }
+  const store = await getStore()
+  if (store) {
+    await store.set(STORAGE_KEY, data)
+    await store.save()
   }
 }
 
