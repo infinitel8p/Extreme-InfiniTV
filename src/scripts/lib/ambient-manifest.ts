@@ -1,0 +1,346 @@
+// Ranked artwork rotation for the ambient/screensaver screen, biased toward watched/watching content.
+import { ensureLoaded, getContinueWatching, getRecents, getWatchlist, getWatchedSignals } from "@/scripts/lib/preferences.js"
+import { getCached, getCachedByKindPrefix, hydrate } from "@/scripts/lib/cache.js"
+import { pickBecauseSeedPool, buildBecauseRow } from "@/scripts/lib/because-watched.ts"
+import type { LocalSimilarCandidate } from "@/scripts/lib/similar-local.ts"
+import { sanitizeProviderBackdropUrl } from "@/scripts/lib/morph-detail.ts"
+import { getCachedTitleEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
+
+const DEFAULT_LIMIT = 50
+const RECOMMENDED_SEED_COUNT = 3
+const RECOMMENDED_PICKS_PER_SEED = 6
+
+export type AmbientTier = "watching" | "recent" | "recommended" | "catalog"
+
+export interface AmbientEntry {
+  kind: "vod" | "series"
+  id: string
+  title: string
+  posterUrl: string | null
+  backdropUrl: string | null
+  logoUrl: string | null
+  tier: AmbientTier
+}
+
+export type AmbientCandidate = Omit<AmbientEntry, "tier">
+
+export interface AssembleAmbientEntriesInput {
+  watching: AmbientCandidate[]
+  recent: AmbientCandidate[]
+  recommended: AmbientCandidate[]
+  catalog: AmbientCandidate[]
+  limit: number
+  random: () => number
+}
+
+function hasArtwork(candidate: AmbientCandidate): boolean {
+  return !!(candidate.posterUrl || candidate.backdropUrl || candidate.logoUrl)
+}
+
+function shuffle<T>(items: T[], random: () => number): T[] {
+  const shuffled = items.slice()
+  for (let index = shuffled.length - 1; index > 0; index--) {
+    const swapIndex = Math.floor(random() * (index + 1))
+    ;[shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]]
+  }
+  return shuffled
+}
+
+export function assembleAmbientEntries(input: AssembleAmbientEntriesInput): AmbientEntry[] {
+  const { watching, recent, recommended, catalog, limit, random } = input
+  const seenKeys = new Set<string>()
+  const entries: AmbientEntry[] = []
+
+  function addFromTier(candidates: AmbientCandidate[], tier: AmbientTier) {
+    for (const candidate of candidates) {
+      if (entries.length >= limit) return
+      if (!candidate.title?.trim()) continue
+      if (!hasArtwork(candidate)) continue
+      const dedupeKey = `${candidate.kind}:${candidate.id}`
+      if (seenKeys.has(dedupeKey)) continue
+      seenKeys.add(dedupeKey)
+      entries.push({ ...candidate, tier })
+    }
+  }
+
+  addFromTier(watching, "watching")
+  addFromTier(shuffle(recent, random), "recent")
+  addFromTier(shuffle(recommended, random), "recommended")
+  addFromTier(shuffle(catalog, random), "catalog")
+
+  return entries
+}
+
+// ---------------------------------------------------------------------------
+// Impure collector: cache-only wiring against preferences.js / cache.js.
+// ---------------------------------------------------------------------------
+
+interface CatalogRow {
+  id: number | string
+  name?: string
+  logo?: string | null
+  category?: string
+  rating?: unknown
+}
+
+function catalogRowTitle(row: CatalogRow | undefined): string {
+  return row?.name || ""
+}
+
+function catalogRowPoster(row: CatalogRow | undefined): string | null {
+  return row?.logo || null
+}
+
+async function loadCatalog(playlistId: string, kind: "vod" | "series"): Promise<CatalogRow[]> {
+  await hydrate(playlistId, kind)
+  return getCached(playlistId, kind)?.data || []
+}
+
+function indexCatalogById(rows: CatalogRow[]): Map<string, CatalogRow> {
+  const byId = new Map<string, CatalogRow>()
+  for (const row of rows) {
+    if (row?.id == null) continue
+    byId.set(String(row.id), row)
+  }
+  return byId
+}
+
+// preferences.js's JSDoc types are looser than its runtime behavior (e.g. the
+// vod/episode union doesn't narrow on `kind`, and "series" isn't in the
+// recents/watchlist kind unions even though the implementation supports it).
+interface ContinueWatchingRow {
+  kind: "vod" | "episode"
+  id: string
+  name?: string
+  logo?: string | null
+  seriesId?: number
+  seriesName?: string
+  seriesLogo?: string | null
+}
+
+interface RecentRow {
+  id: number | string
+  name?: string
+  logo?: string | null
+}
+
+interface WatchlistMeta {
+  ts: number
+  name?: string
+  logo?: string | null
+}
+
+function readContinueWatching(playlistId: string): ContinueWatchingRow[] {
+  return getContinueWatching(playlistId, 12) as unknown as ContinueWatchingRow[]
+}
+
+function readRecents(playlistId: string, kind: "vod" | "series"): RecentRow[] {
+  return (getRecents as (playlistId: string, kind: string) => RecentRow[])(playlistId, kind)
+}
+
+function readWatchlist(playlistId: string, kind: "vod" | "series"): Record<string, WatchlistMeta> {
+  return (getWatchlist as (playlistId: string, kind: string) => Record<string, WatchlistMeta>)(playlistId, kind)
+}
+
+function collectWatchingCandidates(
+  playlistId: string,
+  vodById: Map<string, CatalogRow>,
+  seriesById: Map<string, CatalogRow>
+): AmbientCandidate[] {
+  const rows = readContinueWatching(playlistId)
+  const out: AmbientCandidate[] = []
+  for (const row of rows) {
+    if (row.kind === "vod") {
+      const catalogRow = vodById.get(String(row.id))
+      const title = row.name || catalogRowTitle(catalogRow)
+      if (!title) continue
+      out.push({
+        kind: "vod",
+        id: String(row.id),
+        title,
+        posterUrl: row.logo || catalogRowPoster(catalogRow),
+        backdropUrl: null,
+        logoUrl: null,
+      })
+    } else if (row.kind === "episode" && row.seriesId != null) {
+      const seriesId = String(row.seriesId)
+      const catalogRow = seriesById.get(seriesId)
+      const title = row.seriesName || catalogRowTitle(catalogRow)
+      if (!title) continue
+      out.push({
+        kind: "series",
+        id: seriesId,
+        title,
+        posterUrl: row.seriesLogo || catalogRowPoster(catalogRow),
+        backdropUrl: null,
+        logoUrl: null,
+      })
+    }
+  }
+  return out
+}
+
+function collectRecentCandidates(
+  playlistId: string,
+  vodById: Map<string, CatalogRow>,
+  seriesById: Map<string, CatalogRow>
+): AmbientCandidate[] {
+  const out: AmbientCandidate[] = []
+  for (const kind of ["vod", "series"] as const) {
+    const catalogById = kind === "vod" ? vodById : seriesById
+
+    for (const row of readRecents(playlistId, kind)) {
+      const catalogRow = catalogById.get(String(row.id))
+      const title = row.name || catalogRowTitle(catalogRow)
+      if (!title) continue
+      out.push({
+        kind,
+        id: String(row.id),
+        title,
+        posterUrl: row.logo || catalogRowPoster(catalogRow),
+        backdropUrl: null,
+        logoUrl: null,
+      })
+    }
+
+    for (const [id, meta] of Object.entries(readWatchlist(playlistId, kind))) {
+      const catalogRow = catalogById.get(id)
+      const title = meta?.name || catalogRowTitle(catalogRow)
+      if (!title) continue
+      out.push({
+        kind,
+        id,
+        title,
+        posterUrl: meta?.logo || catalogRowPoster(catalogRow),
+        backdropUrl: null,
+        logoUrl: null,
+      })
+    }
+  }
+  return out
+}
+
+async function collectRecommendedCandidates(
+  playlistId: string,
+  vodRows: CatalogRow[],
+  seriesRows: CatalogRow[]
+): Promise<AmbientCandidate[]> {
+  const pool = pickBecauseSeedPool(getWatchedSignals(playlistId, 20), 5)
+  if (!pool.length) return []
+  const catalogByKind = { vod: vodRows, series: seriesRows }
+
+  const out: AmbientCandidate[] = []
+  for (const seed of pool.slice(0, RECOMMENDED_SEED_COUNT)) {
+    const catalog = catalogByKind[seed.kind]
+    if (!catalog.length) continue
+    const picks = buildBecauseRow(seed, catalog as LocalSimilarCandidate[], {
+      limit: RECOMMENDED_PICKS_PER_SEED,
+    })
+    for (const pick of picks) {
+      out.push({
+        kind: seed.kind,
+        id: String(pick.id),
+        title: pick.name,
+        posterUrl: pick.logo || null,
+        backdropUrl: null,
+        logoUrl: null,
+      })
+    }
+  }
+  return out
+}
+
+function collectCatalogCandidates(vodRows: CatalogRow[], seriesRows: CatalogRow[]): AmbientCandidate[] {
+  const toCandidate = (kind: "vod" | "series", row: CatalogRow): AmbientCandidate => ({
+    kind,
+    id: String(row.id),
+    title: catalogRowTitle(row),
+    posterUrl: catalogRowPoster(row),
+    backdropUrl: null,
+    logoUrl: null,
+  })
+  return [
+    ...vodRows.map((row) => toCandidate("vod", row)),
+    ...seriesRows.map((row) => toCandidate("series", row)),
+  ]
+}
+
+// Xtream vod/series info responses both nest the real payload under `info`
+// (movies also accept `movie_data`); `backdrop_path` is a string on movies,
+// an array on series.
+function extractProviderBackdropPath(data: unknown): unknown {
+  const record = data as { info?: { backdrop_path?: unknown }; movie_data?: { backdrop_path?: unknown } } | null
+  return record?.info?.backdrop_path ?? record?.movie_data?.backdrop_path ?? null
+}
+
+async function providerBackdropsFor(
+  playlistId: string,
+  kind: "vod" | "series",
+  ids: Set<string>
+): Promise<Map<string, unknown>> {
+  const backdropById = new Map<string, unknown>()
+  if (!ids.size) return backdropById
+  const kindPrefix = kind === "vod" ? "vod_info_" : "series_info_"
+  const rows = await getCachedByKindPrefix(playlistId, kindPrefix)
+  for (const row of rows) {
+    const id = row.kind.slice(kindPrefix.length)
+    if (ids.has(id)) backdropById.set(id, extractProviderBackdropPath(row.data))
+  }
+  return backdropById
+}
+
+async function upgradeArtwork(playlistId: string, entries: AmbientEntry[]): Promise<AmbientEntry[]> {
+  const vodIds = new Set(entries.filter((entry) => entry.kind === "vod").map((entry) => entry.id))
+  const seriesIds = new Set(entries.filter((entry) => entry.kind === "series").map((entry) => entry.id))
+  const [vodBackdropById, seriesBackdropById] = await Promise.all([
+    providerBackdropsFor(playlistId, "vod", vodIds),
+    providerBackdropsFor(playlistId, "series", seriesIds),
+  ])
+
+  return Promise.all(
+    entries.map(async (entry) => {
+      const enrichment = await getCachedTitleEnrichment(entry.kind, playlistId, entry.id)
+      const backdropById = entry.kind === "vod" ? vodBackdropById : seriesBackdropById
+      const providerBackdrop = sanitizeProviderBackdropUrl(backdropById.get(entry.id), entry.posterUrl)
+      return {
+        ...entry,
+        posterUrl: enrichment?.posterUrl || entry.posterUrl,
+        backdropUrl: enrichment?.backdropUrl || providerBackdrop || entry.backdropUrl,
+        logoUrl: enrichment?.logoUrl || entry.logoUrl,
+      }
+    })
+  )
+}
+
+export async function buildAmbientManifest(
+  playlistId: string,
+  options: { limit?: number } = {}
+): Promise<AmbientEntry[]> {
+  if (!playlistId) return []
+  const limit = options.limit ?? DEFAULT_LIMIT
+
+  await ensureLoaded()
+
+  const [vodRows, seriesRows] = await Promise.all([
+    loadCatalog(playlistId, "vod"),
+    loadCatalog(playlistId, "series"),
+  ])
+  const vodById = indexCatalogById(vodRows)
+  const seriesById = indexCatalogById(seriesRows)
+
+  const watching = collectWatchingCandidates(playlistId, vodById, seriesById)
+  const recent = collectRecentCandidates(playlistId, vodById, seriesById)
+  const recommended = await collectRecommendedCandidates(playlistId, vodRows, seriesRows)
+  const catalog = collectCatalogCandidates(vodRows, seriesRows)
+
+  const assembled = assembleAmbientEntries({
+    watching,
+    recent,
+    recommended,
+    catalog,
+    limit,
+    random: Math.random,
+  })
+
+  return upgradeArtwork(playlistId, assembled)
+}
