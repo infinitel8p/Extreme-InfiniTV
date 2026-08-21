@@ -8,6 +8,7 @@ export const TMDB_POSTER_SIZE = "w500"
 export const TMDB_BACKDROP_SIZE = "w1280"
 export const TMDB_PROFILE_SIZE = "w185"
 export const TMDB_STILL_SIZE = "w300"
+export const TMDB_LOGO_SIZE = "w500"
 
 export class TmdbHttpError extends Error {
   status: number
@@ -77,6 +78,17 @@ export interface TmdbSearchResult {
   overview?: string
 }
 
+export interface TmdbLogo {
+  file_path: string
+  iso_639_1: string | null
+  vote_average?: number
+  vote_count?: number
+}
+
+export interface TmdbImagesResponse {
+  logos?: TmdbLogo[]
+}
+
 export interface TmdbBundle {
   id: number
   title?: string
@@ -89,6 +101,7 @@ export interface TmdbBundle {
   credits?: TmdbCredits
   videos?: TmdbVideosResponse
   recommendations?: { results?: TmdbSearchResult[] }
+  images?: TmdbImagesResponse
 }
 
 export interface TmdbSeasonEpisode {
@@ -260,13 +273,20 @@ export async function tmdbSearchPerson(query: string): Promise<TmdbPersonResult[
   }
 }
 
+function includeImageLanguageFor(language?: string): string {
+  const primarySubtag = (language || "").split("-")[0].toLowerCase()
+  const tags = primarySubtag && primarySubtag !== "en" ? [primarySubtag, "en"] : ["en"]
+  return [...tags, "null"].join(",")
+}
+
 export async function tmdbMovieBundle(
   key: string,
   tmdbId: number,
   language?: string
 ): Promise<TmdbBundle> {
   return tmdbFetch<TmdbBundle>(key, `/movie/${tmdbId}`, {
-    append_to_response: "credits,videos,recommendations",
+    append_to_response: "credits,videos,recommendations,images",
+    include_image_language: includeImageLanguageFor(language),
     language,
   })
 }
@@ -277,7 +297,8 @@ export async function tmdbTvBundle(
   language?: string
 ): Promise<TmdbBundle> {
   return tmdbFetch<TmdbBundle>(key, `/tv/${tmdbId}`, {
-    append_to_response: "credits,videos,recommendations",
+    append_to_response: "credits,videos,recommendations,images",
+    include_image_language: includeImageLanguageFor(language),
     language,
   })
 }

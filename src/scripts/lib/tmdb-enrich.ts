@@ -23,9 +23,11 @@ import {
   TMDB_BACKDROP_SIZE,
   TMDB_PROFILE_SIZE,
   TMDB_STILL_SIZE,
+  TMDB_LOGO_SIZE,
   type TmdbBundle,
   type TmdbSearchResult,
   type TmdbPersonCreditItem,
+  type TmdbLogo,
 } from "@/scripts/lib/tmdb.ts"
 import { cleanProviderTitle, pickTmdbMatch } from "@/scripts/lib/tmdb-match.ts"
 
@@ -45,6 +47,10 @@ export interface ProviderEntry {
 
 function mediaTypeFor(kind: TmdbKind): "movie" | "tv" {
   return kind === "series" ? "tv" : "movie"
+}
+
+function primaryLangSubtag(language: string): string {
+  return language.split("-")[0].toLowerCase()
 }
 
 function parseYearField(yearField?: number | string | null): number | null {
@@ -148,6 +154,7 @@ export interface TmdbTitleEnrichment {
   overview: string
   posterUrl: string | null
   backdropUrl: string | null
+  logoUrl: string | null
   director: string | null
   directorPersonId: number | null
   cast: TmdbCastMemberOut[]
@@ -157,6 +164,29 @@ export interface TmdbTitleEnrichment {
   genres: string[]
   tagline: string | null
   year: number | null
+}
+
+/** Ranks TMDb title logos by language match, then rating; excludes SVGs (not raster-displayable here). */
+export function pickTmdbLogo(logos: TmdbLogo[] | undefined, preferredLang: string): string | null {
+  const candidates = (logos || []).filter((logo) => !logo.file_path.endsWith(".svg"))
+  if (!candidates.length) return null
+
+  function langRank(logo: TmdbLogo): number {
+    if (logo.iso_639_1 === preferredLang) return 0
+    if (logo.iso_639_1 === "en") return 1
+    if (logo.iso_639_1 === null) return 2
+    return 3
+  }
+
+  const best = candidates.slice().sort((firstLogo, secondLogo) => {
+    const rankDiff = langRank(firstLogo) - langRank(secondLogo)
+    if (rankDiff !== 0) return rankDiff
+    const voteAverageDiff = (secondLogo.vote_average || 0) - (firstLogo.vote_average || 0)
+    if (voteAverageDiff !== 0) return voteAverageDiff
+    return (secondLogo.vote_count || 0) - (firstLogo.vote_count || 0)
+  })[0]
+
+  return best.file_path
 }
 
 const YEAR_MIN = 1900
@@ -180,7 +210,8 @@ type TmdbBundleWithTagline = TmdbBundle & {
 function mapBundleToEnrichment(
   bundle: TmdbBundleWithTagline,
   tmdbId: number,
-  mediaType: "movie" | "tv"
+  mediaType: "movie" | "tv",
+  preferredLang: string
 ): TmdbTitleEnrichment {
   const recommendations = (bundle.recommendations?.results || []).slice(0, 12).map((item) => ({
     tmdbId: item.id,
@@ -199,6 +230,7 @@ function mapBundleToEnrichment(
     overview: bundle.overview || "",
     posterUrl: tmdbImageUrl(bundle.poster_path, TMDB_POSTER_SIZE),
     backdropUrl: tmdbImageUrl(bundle.backdrop_path, TMDB_BACKDROP_SIZE),
+    logoUrl: tmdbImageUrl(pickTmdbLogo(bundle.images?.logos, preferredLang), TMDB_LOGO_SIZE),
     director: directorEntry?.name ?? null,
     directorPersonId: directorEntry?.tmdbPersonId ?? null,
     cast: extractCast(bundle.credits).map((member) => ({
@@ -247,11 +279,11 @@ export async function fetchMovieEnrichment(tmdbId: number): Promise<TmdbTitleEnr
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_movie_${tmdbId}:${language}`
+  const cacheKind = `tmdb_movie_${tmdbId}:${language}:v2`
   try {
     const result = await cachedFetch(TMDB_CACHE_ENTRY_ID, cacheKind, TMDB_DETAIL_TTL_MS, async () => {
       const bundle = await tmdbMovieBundle(apiKey, tmdbId, language)
-      const enrichment = mapBundleToEnrichment(bundle, tmdbId, "movie")
+      const enrichment = mapBundleToEnrichment(bundle, tmdbId, "movie", primaryLangSubtag(language))
       return fillEnglishTextFallback(apiKey, "movie", tmdbId, language, enrichment)
     })
     return result.data
@@ -265,11 +297,11 @@ export async function fetchSeriesEnrichment(tmdbId: number): Promise<TmdbTitleEn
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_series_${tmdbId}:${language}`
+  const cacheKind = `tmdb_series_${tmdbId}:${language}:v2`
   try {
     const result = await cachedFetch(TMDB_CACHE_ENTRY_ID, cacheKind, TMDB_DETAIL_TTL_MS, async () => {
       const bundle = await tmdbTvBundle(apiKey, tmdbId, language)
-      const enrichment = mapBundleToEnrichment(bundle, tmdbId, "tv")
+      const enrichment = mapBundleToEnrichment(bundle, tmdbId, "tv", primaryLangSubtag(language))
       return fillEnglishTextFallback(apiKey, "tv", tmdbId, language, enrichment)
     })
     return result.data
@@ -412,6 +444,23 @@ export interface CachedTmdbEnrichment {
   enrichment: TmdbTitleEnrichment
 }
 
+function tmdbDetailCacheKind(kind: TmdbKind, tmdbId: number, language: string): string {
+  return kind === "series" ? `tmdb_series_${tmdbId}:${language}:v2` : `tmdb_movie_${tmdbId}:${language}:v2`
+}
+
+/** Cache-only lookup, no isTmdbActive() gate: reading cache is harmless even with TMDb disabled. */
+export async function getCachedTitleEnrichment(
+  kind: TmdbKind,
+  playlistId: string,
+  itemId: string
+): Promise<TmdbTitleEnrichment | null> {
+  const language = tmdbLanguageFor(getActiveLocale())
+  const matchCacheKind = `tmdb_match_${kind}_${playlistId}_${itemId}:${language}`
+  const match = await peekFreshCache<{ tmdbId: number | null }>(matchCacheKind)
+  if (!match?.tmdbId) return null
+  return peekFreshCache<TmdbTitleEnrichment>(tmdbDetailCacheKind(kind, match.tmdbId, language))
+}
+
 // Unbounded: callers combine this with other probes under one shared withProbeTimeout window.
 async function peekCachedEnrichmentRaw(
   playlistId: string,
@@ -423,8 +472,7 @@ async function peekCachedEnrichmentRaw(
   const matchCacheKind = `tmdb_match_${kind}_${playlistId}_${mediaId}:${language}`
   const match = await peekFreshCache<{ tmdbId: number | null }>(matchCacheKind)
   if (!match?.tmdbId) return null
-  const detailCacheKind =
-    kind === "series" ? `tmdb_series_${match.tmdbId}:${language}` : `tmdb_movie_${match.tmdbId}:${language}`
+  const detailCacheKind = tmdbDetailCacheKind(kind, match.tmdbId, language)
   const enrichment = await peekFreshCache<TmdbTitleEnrichment>(detailCacheKind)
   return enrichment ? { tmdbId: match.tmdbId, enrichment } : null
 }
