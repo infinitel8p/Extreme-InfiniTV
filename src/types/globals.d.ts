@@ -36,6 +36,7 @@ interface AndroidVideoBridge {
   /** Routes a remote control command into the running native player; returns whether a session was active. */
   receiverControl?: (action: string, positionMs: number) => boolean
   setKeepScreenOn?: (enabled: boolean) => void
+  setTvOverscan?: (percent: number) => void
 }
 
 interface AndroidIntentBridge {

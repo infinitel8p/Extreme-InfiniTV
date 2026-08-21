@@ -17,6 +17,7 @@
 import type { ChannelInput } from "@/scripts/lib/channel-lite.js"
 import { serializeChannelsJson } from "@/scripts/lib/channel-lite.js"
 import { setProgress, markCompleted } from "@/scripts/lib/preferences.js"
+import { getTvOverscan, TV_OVERSCAN_EVENT } from "@/scripts/lib/app-settings.js"
 import { log, redactUrl } from "@/scripts/lib/log.js"
 
 export type AndroidNativeEventType =
@@ -66,6 +67,21 @@ const isAndroid =
 
 export const androidNativePlayerAvailable: boolean =
   typeof window !== "undefined" && isAndroid && !!window.AndroidVideo?.launchVod
+
+// Keeps VideoActivity's launch intents in sync with the overscan safe-area
+// setting so its playback chrome respects the same margin as the WebView.
+function pushTvOverscan(): void {
+  try {
+    window.AndroidVideo?.setTvOverscan?.(getTvOverscan())
+  } catch (err) {
+    log.warn("[xt:android-video] setTvOverscan bridge call failed:", err)
+  }
+}
+
+if (androidNativePlayerAvailable) {
+  pushTvOverscan()
+  document.addEventListener(TV_OVERSCAN_EVENT, pushTvOverscan)
+}
 
 /**
  * Launch the native VOD player. Returns true on success.

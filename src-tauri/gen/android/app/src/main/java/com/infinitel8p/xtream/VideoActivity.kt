@@ -12,6 +12,7 @@ import android.util.Rational
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -58,6 +59,7 @@ class VideoActivity : AppCompatActivity() {
     const val EXTRA_POSTER = "posterUrl"
     const val EXTRA_START_MS = "startMs"
     const val EXTRA_INITIAL_CHANNEL_ID = "initialChannelId"
+    const val EXTRA_TV_OVERSCAN_PERCENT = "tvOverscanPercent"
 
     const val MODE_VOD = "vod"
     const val MODE_LIVE = "live"
@@ -79,6 +81,7 @@ class VideoActivity : AppCompatActivity() {
   private var initialTitle: String = ""
   private var posterUrl: String = ""
   private var resumeMs: Long = 0L
+  private var tvOverscanPercent: Int = 0
 
   private var channels: List<ChannelLite> = emptyList()
   private var currentChannelIndex: Int = -1
@@ -150,6 +153,7 @@ class VideoActivity : AppCompatActivity() {
     initialTitle = intent.getStringExtra(EXTRA_TITLE) ?: ""
     posterUrl = intent.getStringExtra(EXTRA_POSTER) ?: ""
     resumeMs = intent.getLongExtra(EXTRA_START_MS, 0L)
+    applyTvOverscanPadding(intent.getIntExtra(EXTRA_TV_OVERSCAN_PERCENT, 0))
 
     if (mode == MODE_LIVE) {
       val json = NativePlayerPayload.takeChannels() ?: "[]"
@@ -390,9 +394,38 @@ class VideoActivity : AppCompatActivity() {
     }
   }
 
+  // Pads playback chrome for TV overscan; the video surface (PlayerView itself) stays full-bleed.
+  private fun applyTvOverscanPadding(percent: Int) {
+    tvOverscanPercent = percent.coerceIn(0, 8)
+    val metrics = resources.displayMetrics
+    val horizontalPx = metrics.widthPixels * tvOverscanPercent / 100
+    val verticalPx = metrics.heightPixels * tvOverscanPercent / 100
+
+    playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_controller)
+      ?.setPadding(horizontalPx, verticalPx, horizontalPx, verticalPx)
+    playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_subtitles)
+      ?.setPadding(horizontalPx, verticalPx, horizontalPx, verticalPx)
+    playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_error_message)
+      ?.setPadding(horizontalPx, verticalPx, horizontalPx, verticalPx)
+
+    val overlay = channelOverlay
+    val overlayParams = overlay?.layoutParams as? FrameLayout.LayoutParams
+    if (overlayParams != null) {
+      overlayParams.leftMargin = horizontalPx
+      overlayParams.rightMargin = horizontalPx
+      overlayParams.bottomMargin = verticalPx
+      overlay.layoutParams = overlayParams
+    }
+
+    if (tvOverscanPercent > 0) {
+      Log.d(TAG, "applied tv overscan safe margin: $tvOverscanPercent% -> ${horizontalPx}x${verticalPx}px")
+    }
+  }
+
   override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
     super.onConfigurationChanged(newConfig)
     if (mode == MODE_LIVE) applyOverlayHeight()
+    applyTvOverscanPadding(tvOverscanPercent)
   }
 
   private fun showChannelOverlay() {
@@ -610,6 +643,13 @@ object NativePlayerPayload {
     pendingChannelsJson = null
     return payload
   }
+}
+
+// Current TV safe-area overscan percent (0-8), pushed from JS via
+// AndroidVideoBridge.setTvOverscan and read by tryLaunch for every launch intent.
+object TvOverscanState {
+  @Volatile
+  var percent: Int = 0
 }
 
 // In-process remote control for the TV receiver mode: AndroidVideoBridge

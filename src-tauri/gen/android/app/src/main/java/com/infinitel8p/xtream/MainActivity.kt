@@ -1115,6 +1115,11 @@ class AndroidVideoBridge(
   }
 
   @JavascriptInterface
+  fun setTvOverscan(percent: Int) {
+    TvOverscanState.percent = percent.coerceIn(0, 8)
+  }
+
+  @JavascriptInterface
   fun setKeepScreenOn(enabled: Boolean) {
     activity.runOnUiThread {
       if (enabled) activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1151,6 +1156,7 @@ class AndroidVideoBridge(
     return try {
       val intent = android.content.Intent(activity, VideoActivity::class.java)
       intent.putExtra(VideoActivity.EXTRA_MODE, mode)
+      intent.putExtra(VideoActivity.EXTRA_TV_OVERSCAN_PERCENT, TvOverscanState.percent)
       configure(intent)
       activity.runOnUiThread {
         try {
