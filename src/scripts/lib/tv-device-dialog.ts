@@ -84,7 +84,7 @@ export function openTvDevicePicker(
         </div>
         <p data-role="empty-hint" class="hidden shrink-0 px-3 text-sm text-fg-3"></p>
         <div data-role="add-section" class="flex flex-col gap-3 shrink-0 px-3">
-          <button type="button" data-role="toggle-add" class="btn self-start"></button>
+          <button type="button" data-role="toggle-add" class="btn self-end"></button>
           <form data-role="add-form" class="flex flex-col gap-3">
             <div class="flex flex-col gap-1">
               <label for="${DIALOG_ID}-host" data-role="host-label" class="text-xs font-medium text-fg-2"></label>
@@ -104,7 +104,7 @@ export function openTvDevicePicker(
               </div>
             </div>
             <span data-role="form-error" class="hidden text-xs text-bad"></span>
-            <button type="submit" data-role="pair-submit" class="btn-primary self-start"></button>
+            <button type="submit" data-role="pair-submit" class="btn-primary self-end"></button>
           </form>
         </div>
       </div>

@@ -93,7 +93,7 @@ function ensureDialog() {
         </button>
       </header>
       <div data-role="desc" class="text-sm text-fg-2 leading-relaxed overflow-auto custom-scroll min-h-0"></div>
-      <footer data-role="footer" class="flex flex-wrap items-center gap-2 pt-1 shrink-0 hidden">
+      <footer data-role="footer" class="flex flex-wrap items-center justify-end gap-2 pt-1 shrink-0 hidden">
         <button
           data-role="watch"
           type="button"
