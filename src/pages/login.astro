@@ -997,18 +997,13 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 			target.badge.textContent = t("login.epg.sourceFetching");
 		}
 
-		const results = await Promise.all(
-			targets.map((target) =>
-				testEpgSource(target.url, { signal }).then((res) => ({ target, res }))
-			)
-		);
-
-		if (signal.aborted) return;
-
+		// Each probe applies its own badge as soon as it lands, independently of
+		// how long (or whether) the others take. allSettled just waits for all
+		// of them to be done before the summary below.
 		let okCount = 0;
 		let errCount = 0;
-		for (const { target, res } of results) {
-			if (!target.badge) continue;
+		function applyEpgProbeResult(target, res) {
+			if (signal.aborted || !target.badge) return;
 			target.badge.classList.remove("text-fg-3", "text-bad", "text-good", "text-warn");
 			target.badge.removeAttribute("data-i18n");
 			if (res.ok) {
@@ -1027,6 +1022,16 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				});
 			}
 		}
+
+		await Promise.allSettled(
+			targets.map((target) =>
+				testEpgSource(target.url, { signal })
+					.catch((err) => ({ ok: false, error: String(err?.message || err || "Unknown error") }))
+					.then((res) => applyEpgProbeResult(target, res))
+			)
+		);
+
+		if (signal.aborted) return;
 
 		if (epgTestBtn) {
 			epgTestBtn.disabled = false;
@@ -1390,6 +1395,19 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 		return 0;
 	}
 
+	// Every candidate's scheme needs resolving on its own merits (primary and
+	// each mirror are independent servers), so we still await all of them -
+	// but a single rejection must not take the others down with it.
+	function safeResolveServerScheme(candidate) {
+		return resolveServerScheme(candidate).catch((error) => ({
+			serverUrl: candidate.serverUrl,
+			scheme: "http",
+			swapped: false,
+			originalScheme: null,
+			test: { status: "unavailable", reason: "unknown", raw: String(error?.message || error) },
+		}));
+	}
+
 	testBtn.addEventListener("click", async () => {
 		testBtn.disabled = true;
 		try {
@@ -1414,7 +1432,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				showStatus("busy", t("login.status.testing"));
 				const resolveds = await Promise.all(
 					candidates.map((cand) =>
-						resolveServerScheme({
+						safeResolveServerScheme({
 							serverUrl: cand.serverUrl,
 							username: cand.username,
 							password: cand.password,
@@ -1603,8 +1621,8 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				showStatus("busy", t("login.status.testing"));
 				const rawMirrors = readMirrorsFromForm();
 				const allResolveds = await Promise.all([
-					resolveServerScheme({ serverUrl: rawServerUrl, username, password }),
-					...rawMirrors.map((mirror) => resolveServerScheme(mirror)),
+					safeResolveServerScheme({ serverUrl: rawServerUrl, username, password }),
+					...rawMirrors.map((mirror) => safeResolveServerScheme(mirror)),
 				]);
 				const primaryResolved = allResolveds[0];
 				const mirrorResolveds = allResolveds.slice(1);

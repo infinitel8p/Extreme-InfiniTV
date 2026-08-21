@@ -153,21 +153,28 @@
       return
     }
 
-    const catalogByKind = {}
-    async function catalogFor(kind) {
-      if (kind in catalogByKind) return catalogByKind[kind]
-      await hydrateCache(playlistId, kind)
-      catalogByKind[kind] = getCached(playlistId, kind)?.data || []
-      return catalogByKind[kind]
+    // Cache the in-flight promise (not just the resolved value) so parallel attempts share one fetch.
+    const catalogPromiseByKind = {}
+    function catalogFor(kind) {
+      if (!(kind in catalogPromiseByKind)) {
+        catalogPromiseByKind[kind] = (async () => {
+          await hydrateCache(playlistId, kind)
+          return getCached(playlistId, kind)?.data || []
+        })()
+      }
+      return catalogPromiseByKind[kind]
     }
 
-    const infoRowsByKind = {}
-    async function infoRowsFor(kind) {
-      if (kind in infoRowsByKind) return infoRowsByKind[kind]
-      const prefix = kind === "vod" ? "vod_info_" : "series_info_"
-      const rows = await getCachedByKindPrefix(playlistId, prefix)
-      infoRowsByKind[kind] = { rows, prefixLength: prefix.length }
-      return infoRowsByKind[kind]
+    const infoRowsPromiseByKind = {}
+    function infoRowsFor(kind) {
+      if (!(kind in infoRowsPromiseByKind)) {
+        infoRowsPromiseByKind[kind] = (async () => {
+          const prefix = kind === "vod" ? "vod_info_" : "series_info_"
+          const rows = await getCachedByKindPrefix(playlistId, prefix)
+          return { rows, prefixLength: prefix.length }
+        })()
+      }
+      return infoRowsPromiseByKind[kind]
     }
 
     let watchedSeriesIdsPromise = null
@@ -198,21 +205,33 @@
       return buildBecauseRow(candidateSeed, catalog, { limit: 12, infoLookup, isWatched })
     }
 
+    // The candidate cycle is deterministic up front (pickNextSeed only depends on pool + key),
+    // so fire every attempt in parallel and resolve them in priority order rather than one at a time.
+    const seedAttemptOrder = []
     let candidateSeed = seed
+    for (let attempt = 0; attempt < pool.length && candidateSeed; attempt++) {
+      seedAttemptOrder.push(candidateSeed)
+      candidateSeed = pickNextSeed(pool, seedKey(candidateSeed))
+    }
+    const attemptResults = seedAttemptOrder.map((attemptedSeed) => {
+      const attemptPromise = attemptSeed(attemptedSeed)
+      // We may never await attempts after the winning one, so keep a rejection from going unhandled.
+      attemptPromise.catch(() => {})
+      return attemptPromise
+    })
+
     let lastAttemptedSeed = seed
     let shownSeed = null
     let shownItems = []
-    for (let attempt = 0; attempt < pool.length; attempt++) {
-      lastAttemptedSeed = candidateSeed
-      const row = await attemptSeed(candidateSeed)
+    for (let attempt = 0; attempt < seedAttemptOrder.length; attempt++) {
+      lastAttemptedSeed = seedAttemptOrder[attempt]
+      const row = await attemptResults[attempt]
       if (token !== requestToken) return
       if (row.length) {
-        shownSeed = candidateSeed
+        shownSeed = lastAttemptedSeed
         shownItems = row
         break
       }
-      candidateSeed = pickNextSeed(pool, seedKey(candidateSeed))
-      if (!candidateSeed) break
     }
 
     const persistedSeed = shownSeed || lastAttemptedSeed

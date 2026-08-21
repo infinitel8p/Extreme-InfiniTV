@@ -94,6 +94,9 @@
   }
 
   function done() {
+    // `xt:catalog-warmed` now fires once per kind plus a final "everything" event,
+    // so ignore firings until every kind has actually left the "pending" state.
+    if (!allDone) return
     _doneSeen = true
     if (_stripTimer) {
       clearTimeout(_stripTimer)

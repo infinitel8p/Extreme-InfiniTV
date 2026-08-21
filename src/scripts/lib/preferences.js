@@ -1147,6 +1147,8 @@ export function hasSeriesWatchedOverride(playlistId, seriesId) {
   return String(Number(seriesId)) in entry.watchedSeriesOverride
 }
 
+export const PROGRESS_CHANGED_EVENT = EVT_PROGRESS_CHANGED
+
 // ---------------------------------------------------------------------------
 // Hidden categories
 // ---------------------------------------------------------------------------

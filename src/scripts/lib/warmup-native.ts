@@ -679,6 +679,7 @@ async function buildIngestContext(playlistId: string): Promise<IngestContext | n
 function dispatchCachedDone(playlistId: string, kind: WarmupKindName, cacheKind: WarmupCacheKind): void {
   const rows = (getCached(playlistId, cacheKind)?.data as unknown[]) || []
   dispatch(CATALOG_WARMING_PROGRESS_EVENT, { playlistId, kind, status: "done", count: rows.length })
+  dispatch(CATALOG_WARMED_EVENT, { playlistId, kind, errors: {} })
 }
 
 function ensureKind(kind: WarmupKindName, creds: { host: string }, playlistId: string, force: boolean) {
@@ -705,6 +706,8 @@ export function wrapJsKind(
           count: Array.isArray(rows) ? rows.length : 0,
         })
       }
+      // Fires as soon as this one kind is ready, independent of its siblings.
+      dispatch(CATALOG_WARMED_EVENT, { playlistId, kind, errors })
       return rows
     })
     .catch((err) => {
@@ -713,6 +716,7 @@ export function wrapJsKind(
       if (showWarming) {
         dispatch(CATALOG_WARMING_PROGRESS_EVENT, { playlistId, kind, status: "error", error: errors[kind] })
       }
+      dispatch(CATALOG_WARMED_EVENT, { playlistId, kind, errors })
       return []
     })
 }
@@ -864,6 +868,9 @@ export async function warmupActiveNative(
         } else {
           seriesRows = tracker.rows
         }
+        // Dispatched as this kind settles rather than after every covered kind does,
+        // so a page waiting on a single kind isn't held up by its slower siblings.
+        dispatch(CATALOG_WARMED_EVENT, { playlistId, kind: jobKind, errors })
       }),
     )
   } catch (err) {
@@ -874,6 +881,7 @@ export async function warmupActiveNative(
   await Promise.all([userInfoPromise, ...jsKindPromises])
 
   if (force) await invalidateCustomDependents(playlistId)
+  // Final "everything including user info" signal, on top of the per-kind ones above.
   dispatch(CATALOG_WARMED_EVENT, { playlistId, errors })
 
   return { live: liveRows, vod: vodRows, series: seriesRows, errors }

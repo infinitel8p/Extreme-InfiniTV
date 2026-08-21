@@ -167,6 +167,10 @@ export function mountCategoryPicker(
 
   let showHidden = false
   let showSelectedOnly = false
+  // Set when a catalog/preference/genre update lands while the dialog is
+  // closed, so the expensive full pass runs lazily on the next open instead.
+  let listRefreshDirty = false
+  let genreRefreshDirty = false
 
   const resolvedKind = (): PickerKind => {
     if (opts.kind !== "epg") return opts.kind
@@ -676,6 +680,35 @@ export function mountCategoryPicker(
     sortZaBtn?.setAttribute("aria-checked", String(mode === "za"))
   }
 
+  const refreshListState = (): void => {
+    syncModeToggle()
+    syncSortToggle()
+    renderList()
+  }
+
+  // Run the full category pass now if the dialog is open (matches the old
+  // always-on behavior), otherwise defer it until the dialog next opens.
+  const scheduleListRefresh = (): void => {
+    if (dialog?.open) refreshListState()
+    else listRefreshDirty = true
+  }
+
+  const scheduleGenreRefresh = (): void => {
+    if (dialog?.open) refreshGenreIndex()
+    else genreRefreshDirty = true
+  }
+
+  const flushPendingRefresh = (): void => {
+    if (listRefreshDirty) {
+      listRefreshDirty = false
+      refreshListState()
+    }
+    if (genreRefreshDirty) {
+      genreRefreshDirty = false
+      refreshGenreIndex()
+    }
+  }
+
   const refreshPseudoRows = (): void => {
     if (!listEl) return
     const pid = opts.getActivePlaylistId()
@@ -767,15 +800,11 @@ export function mountCategoryPicker(
       const detail = (event as CustomEvent).detail
       if (!detail || detail.playlistId !== opts.getActivePlaylistId()) return
       syncInput.checked = !!detail.on
-      syncModeToggle()
-      syncSortToggle()
-      renderList()
+      scheduleListRefresh()
     })
     onDoc("xt:active-changed", () => {
       reflectSync()
-      syncModeToggle()
-      syncSortToggle()
-      renderList()
+      scheduleListRefresh()
     })
   }
 
@@ -824,9 +853,7 @@ export function mountCategoryPicker(
       return
     }
 
-    syncModeToggle()
-    syncSortToggle()
-    renderList()
+    scheduleListRefresh()
   }
   onDoc("xt:hidden-categories-changed", onAnyPrefChange)
   onDoc("xt:allowed-categories-changed", onAnyPrefChange)
@@ -838,11 +865,12 @@ export function mountCategoryPicker(
     if (!detail || !genreKind) return
     if (detail.playlistId !== opts.getActivePlaylistId()) return
     if (detail.kind !== genreKind) return
-    refreshGenreIndex()
+    scheduleGenreRefresh()
   })
 
   triggerEl?.addEventListener("click", () => {
     if (!dialog) return
+    flushPendingRefresh()
     if (typeof dialog.showModal === "function") dialog.showModal()
     else dialog.setAttribute("open", "")
     setTimeout(() => {
@@ -877,7 +905,7 @@ export function mountCategoryPicker(
 
   onDoc(LOCALE_EVENT, () => {
     syncLabel()
-    renderList()
+    scheduleListRefresh()
   })
   onDoc(opts.activeCatChangedEvent, (event: Event) => {
     const next = ((event as CustomEvent).detail || "") as string
@@ -892,10 +920,8 @@ export function mountCategoryPicker(
 
   return {
     rerender: () => {
-      syncModeToggle()
-      syncSortToggle()
-      renderList()
-      refreshGenreIndex()
+      scheduleListRefresh()
+      scheduleGenreRefresh()
     },
     refreshPseudoRows,
     setActiveCat,

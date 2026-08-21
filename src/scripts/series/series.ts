@@ -29,6 +29,7 @@ import {
   setSeriesWatchedOverride,
   getLanguageFilter,
   getGroupLanguages,
+  PROGRESS_CHANGED_EVENT,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker, genreLabelForCategory } from "@/scripts/lib/category-picker.ts"
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
@@ -108,11 +109,30 @@ let activePlaylistTitle = ""
 let fullyWatchedSeriesIds = new Set()
 let recomputeRunToken = 0
 
+// Keeps the last computed set per playlist so switching back to an
+// already-computed playlist within the same page session skips the
+// O(series x episodes) scan. Invalidated on xt:progress-changed.
+const fullyWatchedCacheByPlaylistId = new Map()
+
+function scheduleIdle(callback) {
+  const requestIdle =
+    typeof window !== "undefined" && typeof window.requestIdleCallback === "function"
+      ? window.requestIdleCallback
+      : (fn) => setTimeout(fn, 0)
+  return requestIdle(callback)
+}
+
 async function recomputeFullyWatched() {
   const runToken = ++recomputeRunToken
   const playlistId = activePlaylistId
   if (!playlistId) {
     fullyWatchedSeriesIds = new Set()
+    return
+  }
+
+  const cached = fullyWatchedCacheByPlaylistId.get(playlistId)
+  if (cached) {
+    fullyWatchedSeriesIds = cached
     return
   }
 
@@ -146,6 +166,24 @@ async function recomputeFullyWatched() {
 
   if (runToken !== recomputeRunToken || activePlaylistId !== playlistId) return
   fullyWatchedSeriesIds = next
+  fullyWatchedCacheByPlaylistId.set(playlistId, next)
+}
+
+// Runs the recompute off the critical path so the first grid paint isn't
+// blocked by the series x episodes scan, then applies the result to the
+// already-rendered UI once it lands.
+function scheduleFullyWatchedRecompute() {
+  const playlistId = activePlaylistId
+  scheduleIdle(async () => {
+    if (playlistId !== activePlaylistId) return
+    await recomputeFullyWatched()
+    if (playlistId !== activePlaylistId) return
+    if (getHideWatched(playlistId, "series")) {
+      applyFilter()
+    } else {
+      refreshSeriesProgressBadges()
+    }
+  })
 }
 
 // Genre index is async and rebuilt local-only; snapshot + playlist guard avoid races on quick playlist switches.
@@ -242,10 +280,11 @@ document.addEventListener("xt:hidden-categories-changed", onSeriesFilterChange)
 document.addEventListener("xt:allowed-categories-changed", onSeriesFilterChange)
 document.addEventListener("xt:category-mode-changed", onSeriesFilterChange)
 
-document.addEventListener("xt:progress-changed", async (event) => {
+document.addEventListener(PROGRESS_CHANGED_EVENT, async (event) => {
   const detail = /** @type {CustomEvent} */ (event).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
   if (detail.kind !== "episode") return
+  fullyWatchedCacheByPlaylistId.delete(detail.playlistId)
   await recomputeFullyWatched()
   if (detail.playlistId !== activePlaylistId) return
   if (getHideWatched(activePlaylistId, "series")) {
@@ -955,8 +994,15 @@ async function paintSeries(data, fromCache, age) {
   picker.rerender()
   populateLanguageFilterOptions()
   refreshGenreSets(activePlaylistId)
-  await recomputeFullyWatched()
+  // A genuinely fresh (non-cached) fetch means the catalog itself just changed
+  // upstream, so any previously cached fully-watched verdict is stale - drop it
+  // and let the scheduled recompute below actually rescan.
+  if (!fromCache) fullyWatchedCacheByPlaylistId.delete(activePlaylistId)
+  // Paint immediately with whatever's cached (or nothing) so the fully-watched
+  // scan never blocks first paint; the idle recompute below reconciles it.
+  fullyWatchedSeriesIds = fullyWatchedCacheByPlaylistId.get(activePlaylistId) ?? new Set()
   applyFilter()
+  scheduleFullyWatchedRecompute()
 }
 
 async function fetchSeriesRows() {
@@ -1096,6 +1142,9 @@ document.addEventListener("xt:cache-revalidated", (ev) => {
   const detail = (ev as CustomEvent).detail
   if (!detail || detail.entryId !== activePlaylistId) return
   if (detail.kind !== "series") return
+  // The catalog behind this playlist just changed in the background (episode
+  // counts included), so the cached fully-watched verdict can no longer be trusted.
+  fullyWatchedCacheByPlaylistId.delete(detail.entryId)
   loadSeries()
 })
 
