@@ -130,7 +130,7 @@ async function castLiveNeighbor(session: CastSession, direction: 1 | -1): Promis
     headers,
   })
   await castPlay(sessionAsDevice(session), descriptor, { liveContext: { ...liveContext, index: nextIndex } })
-  if (session.contentHref) updateCastSession({ contentHref: session.contentHref })
+  updateCastSession({ contentHref: `/livetv?channel=${channelId}` })
   return true
 }
 

@@ -71,9 +71,12 @@ export function summarizePlaylists(entries: unknown[], activeId: string | null):
 export interface ReceiverLogResult {
   deviceName: string
   host: string
-  status: "fetched" | "snapshot" | "unreachable"
+  /** "fetched" = live /logs tail, "streamed" = session pushed over /events, "snapshot" = older cached tail. */
+  status: "fetched" | "streamed" | "snapshot" | "unreachable"
   text?: string
   snapshotAt?: string
+  streamedText?: string
+  streamedAt?: string
 }
 
 export interface BundleInput {
@@ -121,8 +124,13 @@ function buildReadme(input: BundleInput): string {
     const safeName = sanitizeDeviceNameForFilename(result.deviceName, result.host)
     if (result.status === "fetched" && result.text) {
       lines.push(`- receiver-logs/${safeName}.log: log tail fetched live from ${result.deviceName}.`)
+    } else if (result.status === "streamed" && result.text) {
+      lines.push(`- receiver-logs/${safeName}-session.log: log streamed from ${result.deviceName} while casting.`)
     } else if (result.status === "snapshot" && result.text) {
       lines.push(`- receiver-logs/${safeName}-snapshot.log: cached log tail from ${result.deviceName} (receiver was unreachable during export).`)
+    }
+    if (result.status === "fetched" && result.streamedText) {
+      lines.push(`- receiver-logs/${safeName}-session.log: log streamed from ${result.deviceName} while casting.`)
     }
   }
   if (receiverLogs.length > 0) {
@@ -152,13 +160,25 @@ export function buildBundleManifest(input: BundleInput): { name: string; text: s
     files.push({ name: `logs/${logFile.name}`, text: redactUrl(logFile.text) })
   }
   for (const result of input.receiverLogs ?? []) {
-    if (!result.text) continue
     const safeName = sanitizeDeviceNameForFilename(result.deviceName, result.host)
-    if (result.status === "fetched") {
-      files.push({ name: `receiver-logs/${safeName}.log`, text: redactUrl(result.text) })
-    } else if (result.status === "snapshot") {
-      const header = `Captured ${result.snapshotAt ?? "unknown time"} (receiver unreachable during export)\n`
-      files.push({ name: `receiver-logs/${safeName}-snapshot.log`, text: redactUrl(header + result.text) })
+    if (result.text) {
+      if (result.status === "fetched") {
+        files.push({ name: `receiver-logs/${safeName}.log`, text: redactUrl(result.text) })
+      } else if (result.status === "streamed") {
+        const header = `Streamed over /events while casting, last line ${result.streamedAt ?? "unknown time"}\n`
+        files.push({ name: `receiver-logs/${safeName}-session.log`, text: redactUrl(header + result.text) })
+      } else if (result.status === "snapshot") {
+        const header = `Captured ${result.snapshotAt ?? "unknown time"} (receiver unreachable during export)\n`
+        files.push({ name: `receiver-logs/${safeName}-snapshot.log`, text: redactUrl(header + result.text) })
+      }
+    }
+    // A live tail covers only the last 64 KB, so keep the streamed session alongside it.
+    if (result.status === "fetched" && result.streamedText) {
+      const header = `Streamed over /events while casting, last line ${result.streamedAt ?? "unknown time"}\n`
+      files.push({
+        name: `receiver-logs/${safeName}-session.log`,
+        text: redactUrl(header + result.streamedText),
+      })
     }
   }
   return files
@@ -320,9 +340,27 @@ async function collectReceiverLogs(): Promise<ReceiverLogResult[]> {
   return devices.map((device, index) => {
     const outcome = settled[index]
     const text = outcome.status === "fulfilled" ? outcome.value : null
-    if (text) return { deviceName: device.name, host: device.host, status: "fetched" as const, text }
-
     const snapshot = snapshots[device.name]
+    const streamed = snapshot?.source === "stream" ? snapshot : null
+
+    if (text) {
+      return {
+        deviceName: device.name,
+        host: device.host,
+        status: "fetched" as const,
+        text,
+        ...(streamed ? { streamedText: streamed.text, streamedAt: streamed.at } : {}),
+      }
+    }
+    if (streamed?.text) {
+      return {
+        deviceName: device.name,
+        host: device.host,
+        status: "streamed" as const,
+        text: streamed.text,
+        streamedAt: streamed.at,
+      }
+    }
     if (snapshot?.text) {
       return { deviceName: device.name, host: device.host, status: "snapshot" as const, text: snapshot.text, snapshotAt: snapshot.at }
     }

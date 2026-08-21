@@ -1,5 +1,6 @@
 // Shared cast-state feed: WebSocket push first, HTTP polling fallback, watchdog liveness check.
 import {
+  appendStreamedReceiverLog,
   getCastSession,
   sessionAsDevice,
   fetchCastState,
@@ -39,6 +40,20 @@ export function effectiveCadence(subscriberCadences: number[]): number {
 export function parseFeedMessage(raw: string): CastState | null {
   try {
     return parseCastStateValue(JSON.parse(raw))
+  } catch {
+    return null
+  }
+}
+
+/** Log frames are additive; state frames stay bare playback JSON for cross-version compat. */
+export function parseLogFrame(raw: string): string[] | null {
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object" || (parsed as { kind?: unknown }).kind !== "log") return null
+    const lines = (parsed as { lines?: unknown }).lines
+    if (!Array.isArray(lines)) return null
+    const usable = lines.filter((line): line is string => typeof line === "string")
+    return usable.length > 0 ? usable : null
   } catch {
     return null
   }
@@ -222,7 +237,19 @@ function connectWebSocket(isInitial: boolean): void {
 
   socket.addEventListener("message", (event) => {
     if (generation !== wsGeneration) return
-    const state = parseFeedMessage(typeof event.data === "string" ? event.data : "")
+    const raw = typeof event.data === "string" ? event.data : ""
+    const logLines = parseLogFrame(raw)
+    if (logLines) {
+      // Proves the socket works; the miss counter tracks state freshness, so leave it alone.
+      if (!sawMessage) {
+        sawMessage = true
+        clearFirstMessageTimer()
+        enterWsMode()
+      }
+      if (boundDevice) appendStreamedReceiverLog(boundDevice.name, logLines)
+      return
+    }
+    const state = parseFeedMessage(raw)
     if (!state) return
     if (!sawMessage) {
       sawMessage = true

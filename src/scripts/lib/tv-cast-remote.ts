@@ -15,6 +15,7 @@ import {
   castStop,
   castSetVolume,
   sessionAsDevice,
+  getReceiverLogTail,
   CAST_SESSION_EVENT,
   type CastSession,
   type CastState,
@@ -91,6 +92,10 @@ function buildSkeleton(dialog: HTMLDialogElement): void {
           <span data-role="state" aria-live="polite"></span>
         </div>
         <h2 id="${DIALOG_ID}-title" data-role="title" class="text-lg font-semibold leading-tight tracking-tight line-clamp-2"></h2>
+        <details data-role="error-log" class="hidden text-xs text-fg-3">
+          <summary data-role="error-log-summary" class="cursor-pointer select-none"></summary>
+          <div data-role="error-log-text" class="mt-1 whitespace-pre-wrap break-words text-[11px] leading-snug"></div>
+        </details>
       </div>
 
       <div data-role="scrubber" class="flex flex-col gap-1.5">
@@ -99,6 +104,17 @@ function buildSkeleton(dialog: HTMLDialogElement): void {
           <span data-role="position-time"></span>
           <span data-role="duration-time"></span>
         </div>
+      </div>
+
+      <div data-role="metadata" class="hidden flex-col gap-2 text-fg-3">
+        <div data-role="metadata-now-meta" class="hidden text-xs tabular-nums"></div>
+        <div data-role="metadata-heading" class="hidden text-sm font-medium text-fg leading-tight line-clamp-1"></div>
+        <button type="button" data-role="metadata-plot-btn" class="hidden block w-full text-start">
+          <p data-role="metadata-plot" class="text-xs leading-snug line-clamp-3"></p>
+        </button>
+        <div data-role="metadata-next-row" class="hidden text-xs truncate"></div>
+        <div data-role="metadata-genre-row" class="hidden text-xs"></div>
+        <div data-role="metadata-cast-row" class="hidden text-xs"></div>
       </div>
 
       <div class="flex items-center justify-between gap-0.5">
@@ -132,10 +148,21 @@ interface RemoteRefs {
   deviceName: HTMLElement
   stateEl: HTMLElement
   title: HTMLElement
+  errorLog: HTMLElement
+  errorLogSummary: HTMLElement
+  errorLogText: HTMLElement
   scrubber: HTMLElement
   seekRange: HTMLInputElement
   positionTime: HTMLElement
   durationTime: HTMLElement
+  metadata: HTMLElement
+  metadataNowMeta: HTMLElement
+  metadataHeading: HTMLElement
+  metadataPlotBtn: HTMLButtonElement
+  metadataPlot: HTMLElement
+  metadataNextRow: HTMLElement
+  metadataGenreRow: HTMLElement
+  metadataCastRow: HTMLElement
   prev: HTMLButtonElement
   back30: HTMLButtonElement
   back10: HTMLButtonElement
@@ -160,10 +187,21 @@ function collectRefs(dialog: HTMLDialogElement): RemoteRefs {
     deviceName: query("device-name"),
     stateEl: query("state"),
     title: query("title"),
+    errorLog: query("error-log"),
+    errorLogSummary: query("error-log-summary"),
+    errorLogText: query("error-log-text"),
     scrubber: query("scrubber"),
     seekRange: query<HTMLInputElement>("seek-range"),
     positionTime: query("position-time"),
     durationTime: query("duration-time"),
+    metadata: query("metadata"),
+    metadataNowMeta: query("metadata-now-meta"),
+    metadataHeading: query("metadata-heading"),
+    metadataPlotBtn: query<HTMLButtonElement>("metadata-plot-btn"),
+    metadataPlot: query("metadata-plot"),
+    metadataNextRow: query("metadata-next-row"),
+    metadataGenreRow: query("metadata-genre-row"),
+    metadataCastRow: query("metadata-cast-row"),
     prev: query<HTMLButtonElement>("prev"),
     back30: query<HTMLButtonElement>("back30"),
     back10: query<HTMLButtonElement>("back10"),
@@ -191,6 +229,7 @@ function applyLabels(refs: RemoteRefs): void {
   refs.seekRange.setAttribute("aria-label", t("cast.remote.seek"))
   refs.volumeRange.setAttribute("aria-label", t("cast.remote.volume"))
   refs.footerStop.textContent = t("cast.pill.stop")
+  refs.errorLogSummary.textContent = t("cast.remote.errorLogSummary")
 }
 
 function setPlayPauseIcon(refs: RemoteRefs, paused: boolean): void {
@@ -250,7 +289,7 @@ function applyScrubberState(refs: RemoteRefs, state: CastState): void {
 
 function applyState(refs: RemoteRefs, state: CastState): void {
   if (state.state === "error") {
-    refs.stateEl.textContent = t("cast.pill.error")
+    refs.stateEl.textContent = state.error ? `${t("cast.pill.error")}: ${state.error}` : t("cast.pill.error")
   } else {
     refs.stateEl.textContent = state.state === "paused" ? t("cast.remote.statePaused") : t("cast.remote.statePlaying")
     setPlayPauseIcon(refs, state.state === "paused")
@@ -261,6 +300,92 @@ function applyState(refs: RemoteRefs, state: CastState): void {
     refs.volumeRange.value = String(state.volume)
     setMuteIcon(refs, !!state.muted)
   }
+}
+
+/** Shows the receiver's last few log lines only while the cast is in the error state. */
+function updateErrorLog(refs: RemoteRefs, session: CastSession): void {
+  const lines = getReceiverLogTail(session.deviceName)
+  if (!lines.length) {
+    refs.errorLog.classList.add("hidden")
+    return
+  }
+  refs.errorLogText.textContent = lines.join("\n")
+  refs.errorLog.classList.remove("hidden")
+}
+
+function formatProgrammeTimeRange(startMs: number, stopMs: number): string {
+  try {
+    const formatter = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" })
+    return `${formatter.format(startMs)}–${formatter.format(stopMs)}`
+  } catch {
+    return ""
+  }
+}
+
+function formatProgrammeStartTime(startMs: number): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(startMs)
+  } catch {
+    return ""
+  }
+}
+
+/** Key for the on-screen content, so a same-content session patch skips the metadata refetch. */
+function metadataKeyFor(session: CastSession): string {
+  if (session.liveContext) {
+    const { playlistId, channelIds, index } = session.liveContext
+    return `live:${playlistId}:${channelIds[index]}`
+  }
+  if (session.seriesContext) {
+    const { playlistId, seriesId, season, episodeNum } = session.seriesContext
+    return `series:${playlistId}:${seriesId}:${season}:${episodeNum}`
+  }
+  if (session.vodContext) {
+    const { playlistId, vodId } = session.vodContext
+    return `vod:${playlistId}:${vodId}`
+  }
+  return ""
+}
+
+/** Finds the raw get_series_info episode record for a season/episode, across the array-or-season-keyed `episodes` shapes. */
+function findRawSeriesEpisode(seriesInfo: unknown, season: number, episodeNum: number): any {
+  const episodes = (seriesInfo as { episodes?: unknown } | null)?.episodes
+  const matches = (episode: any, seasonFallback: string) =>
+    Number(episode?.season ?? seasonFallback) === season && Number(episode?.episode_num) === episodeNum
+  if (Array.isArray(episodes)) {
+    return episodes.find((episode: any) => matches(episode, "1")) ?? null
+  }
+  if (episodes && typeof episodes === "object") {
+    for (const [seasonKey, seasonEpisodes] of Object.entries(episodes as Record<string, unknown>)) {
+      if (!Array.isArray(seasonEpisodes)) continue
+      const found = seasonEpisodes.find((episode: any) => matches(episode, seasonKey))
+      if (found) return found
+    }
+  }
+  return null
+}
+
+function resetMetadata(refs: RemoteRefs): void {
+  refs.metadata.classList.remove("flex")
+  refs.metadata.classList.add("hidden")
+  refs.metadataNowMeta.classList.add("hidden")
+  refs.metadataNowMeta.textContent = ""
+  refs.metadataHeading.classList.add("hidden")
+  refs.metadataHeading.textContent = ""
+  refs.metadataPlotBtn.classList.add("hidden")
+  refs.metadataPlot.textContent = ""
+  refs.metadataPlot.classList.add("line-clamp-3")
+  refs.metadataNextRow.classList.add("hidden")
+  refs.metadataNextRow.textContent = ""
+  refs.metadataGenreRow.classList.add("hidden")
+  refs.metadataGenreRow.textContent = ""
+  refs.metadataCastRow.classList.add("hidden")
+  refs.metadataCastRow.textContent = ""
+}
+
+function revealMetadata(refs: RemoteRefs): void {
+  refs.metadata.classList.remove("hidden")
+  refs.metadata.classList.add("flex")
 }
 
 /** Opens the remote overlay for the active cast session; a no-op when nothing is casting. */
@@ -294,9 +419,121 @@ export function openCastRemote(): void {
     applyAvailability(refs, availability)
   })
 
+  let metadataToken = 0
+  let lastMetadataKey = ""
+
   function device() {
     return sessionAsDevice(currentSession)
   }
+
+  async function loadLiveMetadata(liveContext: NonNullable<CastSession["liveContext"]>, token: number): Promise<void> {
+    try {
+      const { getCached } = await import("@/scripts/lib/cache.js")
+      const liveList = getCached(liveContext.playlistId, "live")?.data || []
+      const channelId = liveContext.channelIds[liveContext.index]
+      const channel = liveList.find((entry: any) => String(entry?.id) === String(channelId))
+      if (!channel) return
+      const { getProgrammesSync, getNowNextForChannel } = await import("@/scripts/lib/epg-data.js")
+      const state = getProgrammesSync(liveContext.playlistId)
+      if (!state) return
+      const { current, next } = getNowNextForChannel(state.programmes, channel, liveContext.playlistId)
+      if (token !== metadataToken || (!current && !next)) return
+      if (current) {
+        refs.metadataNowMeta.textContent = `${t("cast.remote.nowLabel")} · ${formatProgrammeTimeRange(current.start, current.stop)}`
+        refs.metadataNowMeta.classList.remove("hidden")
+        refs.metadataHeading.textContent = current.title || ""
+        refs.metadataHeading.classList.remove("hidden")
+        if (current.desc) {
+          refs.metadataPlot.textContent = current.desc
+          refs.metadataPlotBtn.classList.remove("hidden")
+        }
+      }
+      if (next) {
+        refs.metadataNextRow.textContent = `${t("cast.remote.nextLabel")}: ${next.title || ""} · ${formatProgrammeStartTime(next.start)}`
+        refs.metadataNextRow.classList.remove("hidden")
+      }
+      revealMetadata(refs)
+    } catch (err) {
+      log.warn("[xt:tv-cast-remote] live metadata load failed:", err)
+    }
+  }
+
+  async function loadSeriesMetadata(seriesContext: NonNullable<CastSession["seriesContext"]>, token: number): Promise<void> {
+    try {
+      const { requestSeriesInfo } = await import("@/scripts/lib/series-seasons.js")
+      const seriesInfo = await requestSeriesInfo(seriesContext.playlistId, seriesContext.seriesId)
+      if (!seriesInfo || token !== metadataToken) return
+      const episode = findRawSeriesEpisode(seriesInfo, seriesContext.season, seriesContext.episodeNum)
+      const plot =
+        episode?.info?.plot ||
+        episode?.info?.overview ||
+        episode?.plot ||
+        seriesInfo?.info?.plot ||
+        seriesInfo?.info?.description ||
+        ""
+      refs.metadataHeading.textContent =
+        t("detail.seasonShort", { n: seriesContext.season }) + t("detail.episodeShort", { n: seriesContext.episodeNum })
+      refs.metadataHeading.classList.remove("hidden")
+      if (plot) {
+        refs.metadataPlot.textContent = plot
+        refs.metadataPlotBtn.classList.remove("hidden")
+      }
+      revealMetadata(refs)
+    } catch (err) {
+      log.warn("[xt:tv-cast-remote] series metadata load failed:", err)
+    }
+  }
+
+  async function loadVodMetadata(vodContext: NonNullable<CastSession["vodContext"]>, token: number): Promise<void> {
+    try {
+      const { xtreamApiFetch } = await import("@/scripts/lib/xtream-api.js")
+      const response = await xtreamApiFetch(
+        "get_vod_info",
+        { vod_id: String(vodContext.vodId) },
+        { entryId: vodContext.playlistId }
+      )
+      if (!response.ok) return
+      const data = await response.json()
+      if (token !== metadataToken) return
+      const info = data?.info || data?.movie_data || {}
+      const movieData = data?.movie_data || data?.info || {}
+      const plot = movieData.plot || movieData.description || info.plot || info.description || ""
+      const genre = movieData.genre || info.genre || ""
+      const castNames = String(info.cast || info.actors || info.director || "")
+        .split(",")
+        .map((name: string) => name.trim())
+        .filter(Boolean)
+      if (plot) {
+        refs.metadataPlot.textContent = plot
+        refs.metadataPlotBtn.classList.remove("hidden")
+      }
+      if (genre) {
+        refs.metadataGenreRow.textContent = `${t("cast.remote.genreLabel")}: ${genre}`
+        refs.metadataGenreRow.classList.remove("hidden")
+      }
+      if (castNames.length) {
+        refs.metadataCastRow.textContent = `${t("cast.remote.castLabel")}: ${castNames.join(", ")}`
+        refs.metadataCastRow.classList.remove("hidden")
+      }
+      if (plot || genre || castNames.length) revealMetadata(refs)
+    } catch (err) {
+      log.warn("[xt:tv-cast-remote] vod metadata load failed:", err)
+    }
+  }
+
+  function refreshMetadata(session: CastSession, force = false): void {
+    const key = metadataKeyFor(session)
+    if (!force && key === lastMetadataKey) return
+    lastMetadataKey = key
+    metadataToken += 1
+    const token = metadataToken
+    resetMetadata(refs)
+    if (session.liveContext) void loadLiveMetadata(session.liveContext, token)
+    else if (session.seriesContext) void loadSeriesMetadata(session.seriesContext, token)
+    else if (session.vodContext) void loadVodMetadata(session.vodContext, token)
+  }
+
+  refreshMetadata(currentSession, true)
 
   const debouncedSetVolume = debounce((level: number, muted: boolean) => {
     castSetVolume(device(), level, muted).catch((err) => log.warn("[xt:tv-cast-remote] set volume failed:", err))
@@ -310,6 +547,8 @@ export function openCastRemote(): void {
     if (state.volume !== undefined) lastKnownVolume = state.volume
     if (state.muted !== undefined) lastKnownMuted = state.muted
     applyState(refs, state)
+    if (state.state === "error") updateErrorLog(refs, currentSession)
+    else refs.errorLog.classList.add("hidden")
     if (currentSession.isLive || scrubbing || Date.now() < suppressPositionUntil) return
     lastKnownPositionSeconds = state.positionSeconds
     applyScrubberState(refs, state)
@@ -385,6 +624,10 @@ export function openCastRemote(): void {
       void skipNeighbor(1)
       return
     }
+    if (target.closest('[data-role="metadata-plot-btn"]')) {
+      refs.metadataPlot.classList.toggle("line-clamp-3")
+      return
+    }
     if (target.closest('[data-role="playpause"]')) {
       const paused = refs.playpause.dataset.paused === "true"
       const action = paused ? castResume(device()) : castPause(device())
@@ -441,6 +684,7 @@ export function openCastRemote(): void {
     void resolveNeighborAvailability(currentSession).then((availability) => {
       applyAvailability(refs, availability)
     })
+    refreshMetadata(currentSession)
   }
 
   function onCancel(event: Event): void {

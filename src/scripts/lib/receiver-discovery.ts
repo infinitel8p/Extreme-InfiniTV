@@ -22,7 +22,8 @@ export function advertiseReceiver(name: string, port: number, id?: string): void
   setTimeout(() => {
     const state = getAdvertiseState()
     if (state === "registered") {
-      log.info(`[xt:receiver-discovery] advertise registered as ${name}`)
+      // Debug, not info: repeats on every re-advertise and would crowd the 64 KB tail.
+      log.debug(`[xt:receiver-discovery] advertise registered as ${name}`)
     } else if (state?.startsWith("failed")) {
       log.error(`[xt:receiver-discovery] advertise failed, state=${state}`)
     }

@@ -1102,6 +1102,12 @@ const externalBtnHandle = setupExternalPlayerButton(
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}
     },
+    releaseLocal() {
+      // Same release the cast handoff does: a paused mount can still hold the provider connection.
+      try { vjs?.pause?.() } catch {}
+      try { vjs?.reset?.() } catch {}
+      retirePreviousPlayback()
+    },
     afterLaunch() {
       pushMoviePresence()
       externalPresenceActive = true

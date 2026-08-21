@@ -34,6 +34,10 @@ const MAX_TITLE_LEN: usize = 512;
 const MAX_MIME_LEN: usize = 256;
 const MAX_DRM_JSON_BYTES: usize = 16 * 1024;
 const MAX_LOG_TAIL_BYTES: usize = 64 * 1024;
+/// Session-log ring bounds; the byte cap stops one pathological line from eating the buffer.
+const MAX_LOG_RING_LINES: usize = 500;
+const MAX_LOG_LINE_BYTES: usize = 2 * 1024;
+const MAX_LOG_LINES_PER_CALL: usize = 64;
 
 const PLAY_EVENT: &str = "xt:receiver-play";
 const CONTROL_EVENT: &str = "xt:receiver-control";
@@ -146,6 +150,8 @@ struct ReceiverShared {
     ips: Mutex<Vec<String>>,
     receiver_id: Mutex<String>,
     broadcast: broadcast::Sender<String>,
+    // Session log the receiver page feeds us: live stream to the sender plus mid-session backlog.
+    log_ring: Mutex<std::collections::VecDeque<String>>,
     ip_watcher_running: AtomicBool,
 }
 
@@ -160,6 +166,7 @@ impl ReceiverShared {
             ips: Mutex::new(Vec::new()),
             receiver_id: Mutex::new(String::new()),
             broadcast,
+            log_ring: Mutex::new(std::collections::VecDeque::new()),
             ip_watcher_running: AtomicBool::new(false),
         }
     }
@@ -607,17 +614,27 @@ fn local_ips() -> Vec<String> {
 fn local_ips() -> Vec<String> {
     let default_route = default_route_ip();
     let mut candidates: std::collections::HashSet<std::net::IpAddr> = if_addrs::get_if_addrs()
-        .map(|interfaces| interfaces.into_iter().map(|interface| interface.ip()).collect())
+        .map(|interfaces| {
+            interfaces
+                .into_iter()
+                .filter(is_advertisable_interface)
+                .map(|interface| interface.ip())
+                .collect()
+        })
         .unwrap_or_default();
     candidates.retain(is_usable_mdns_addr);
 
     let mut ranked: Vec<std::net::IpAddr> = candidates.into_iter().collect();
+    // Total order: HashSet-order ties made the same address set re-advertise every 15s.
     ranked.sort_by(|left, right| {
-        mdns_addr_rank(right).cmp(&mdns_addr_rank(left)).then_with(|| {
-            let left_is_default_route = default_route == Some(*left);
-            let right_is_default_route = default_route == Some(*right);
-            right_is_default_route.cmp(&left_is_default_route)
-        })
+        mdns_addr_rank(right)
+            .cmp(&mdns_addr_rank(left))
+            .then_with(|| {
+                let left_is_default_route = default_route == Some(*left);
+                let right_is_default_route = default_route == Some(*right);
+                right_is_default_route.cmp(&left_is_default_route)
+            })
+            .then_with(|| left.cmp(right))
     });
     ranked.into_iter().map(|ip| ip.to_string()).collect()
 }
@@ -789,22 +806,71 @@ pub async fn receiver_revoke_device(
     Ok(())
 }
 
+/// Frame the sender recognizes as a log batch; state frames stay bare JSON for cross-version compat.
+fn log_frame(lines: &[String]) -> Option<String> {
+    if lines.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&serde_json::json!({ "kind": "log", "lines": lines })).ok()
+}
+
+/// Caps count and per-line length, and drops blanks, before anything reaches the ring or the wire.
+fn sanitize_log_lines(lines: Vec<String>) -> Vec<String> {
+    lines
+        .into_iter()
+        .take(MAX_LOG_LINES_PER_CALL)
+        .map(|line| line.chars().take(MAX_LOG_LINE_BYTES).collect::<String>())
+        .filter(|line| !line.trim().is_empty())
+        .collect()
+}
+
+/// Appends to the ring, evicting oldest first so a long session keeps its most recent history.
+fn push_log_lines(ring: &mut std::collections::VecDeque<String>, lines: &[String]) {
+    for line in lines {
+        if ring.len() >= MAX_LOG_RING_LINES {
+            ring.pop_front();
+        }
+        ring.push_back(line.clone());
+    }
+}
+
+#[tauri::command]
+pub fn receiver_log_lines(state: tauri::State<'_, ReceiverState>, lines: Vec<String>) -> Result<(), String> {
+    let bounded = sanitize_log_lines(lines);
+    if bounded.is_empty() {
+        return Ok(());
+    }
+    {
+        let mut ring = state.shared.log_ring.lock().unwrap_or_else(|poison| poison.into_inner());
+        push_log_lines(&mut ring, &bounded);
+    }
+    if let Some(frame) = log_frame(&bounded) {
+        let _ = state.shared.broadcast.send(frame);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn receiver_report_state(state: tauri::State<'_, ReceiverState>, payload: PlaybackReport) -> Result<(), String> {
     if !ALLOWED_PLAYBACK_STATES.contains(&payload.state.as_str()) {
         return Err(format!("OTHER:invalid playback state '{}'", payload.state));
     }
-    let bounded = PlaybackReport {
-        state: payload.state,
-        position_seconds: payload.position_seconds,
-        duration_seconds: payload.duration_seconds,
-        title: payload.title.map(|title| title.chars().take(MAX_TITLE_LEN).collect()),
-        error: payload.error.map(|error| error.chars().take(MAX_TITLE_LEN).collect()),
-        volume: payload.volume,
-        muted: payload.muted,
+    let serialized = {
+        let mut playback = state.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner());
+        let bounded = PlaybackReport {
+            state: payload.state,
+            position_seconds: payload.position_seconds,
+            duration_seconds: payload.duration_seconds,
+            title: payload.title.map(|title| title.chars().take(MAX_TITLE_LEN).collect()),
+            error: payload.error.map(|error| error.chars().take(MAX_TITLE_LEN).collect()),
+            // A report omitting the level must not wipe what /volume or an earlier report set.
+            volume: payload.volume.or(playback.volume),
+            muted: payload.muted.or(playback.muted),
+        };
+        let serialized = serde_json::to_string(&bounded).map_err(|error| format!("OTHER:{error}"))?;
+        *playback = bounded;
+        serialized
     };
-    let serialized = serde_json::to_string(&bounded).map_err(|error| format!("OTHER:{error}"))?;
-    *state.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner()) = bounded;
     let _ = state.shared.broadcast.send(serialized);
     Ok(())
 }
@@ -833,8 +899,18 @@ fn strip_mdns_service_suffix(fullname: &str) -> String {
     fullname.strip_suffix(suffix.as_str()).unwrap_or(fullname).to_string()
 }
 
-// Rejects loopback/unspecified/link-local candidates from other interfaces on the same host.
+/// Rejects loopback/link-local/VPN candidates: a tunnel address is reachable only from this host.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn is_advertisable_interface(interface: &if_addrs::Interface) -> bool {
+    !interface.is_p2p
+}
+
+/// Order-preserving dedupe, so a logged address list reads as the set that was actually learned.
+fn dedupe_ips(ips: &[std::net::IpAddr]) -> Vec<std::net::IpAddr> {
+    let mut seen = std::collections::HashSet::new();
+    ips.iter().filter(|ip| seen.insert(**ip)).copied().collect()
+}
+
 fn is_usable_mdns_addr(ip: &std::net::IpAddr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() {
         return false;
@@ -1168,12 +1244,13 @@ pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<Discovered
             id,
             addresses,
         };
+        // mdns_sd re-reports the same addresses as records arrive; unfiltered they crowd the log.
         log::info!(
             "[receiver] discover resolved {} port={} host={} addrs=[{}]",
             event.name,
             event.port,
             resolved.get_hostname(),
-            join_ips(&event.addresses)
+            join_ips(&dedupe_ips(&event.addresses))
         );
         resolved_events.push(event);
     }
@@ -1753,19 +1830,51 @@ fn newest_log_tail(log_dir: &std::path::Path) -> String {
     let Ok(entries) = std::fs::read_dir(log_dir) else {
         return String::new();
     };
-    let newest_log = entries
+    let logs: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
         .filter_map(Result::ok)
         .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("log"))
         .filter_map(|entry| entry.metadata().and_then(|metadata| metadata.modified()).ok().map(|modified| (modified, entry.path())))
-        .max_by_key(|(modified, _)| *modified)
-        .map(|(_, path)| path);
+        .collect();
+    // Newest of *our* day-stamped files first: the newest .log outright can be a foreign log.
+    let newest_log = newest_by_modified(&logs, true).or_else(|| newest_by_modified(&logs, false));
     let Some(newest_log) = newest_log else {
         return String::new();
     };
-    let Ok(bytes) = std::fs::read(&newest_log) else {
-        return String::new();
-    };
-    tail_as_utf8(&bytes, MAX_LOG_TAIL_BYTES)
+    read_tail_bytes(&newest_log, MAX_LOG_TAIL_BYTES)
+        .map(|bytes| tail_as_utf8(&bytes, MAX_LOG_TAIL_BYTES))
+        .unwrap_or_default()
+}
+
+/// Newest path by mtime, optionally restricted to the `app-*.log` files our log plugin writes.
+fn newest_by_modified(
+    logs: &[(std::time::SystemTime, std::path::PathBuf)],
+    ours_only: bool,
+) -> Option<std::path::PathBuf> {
+    logs.iter()
+        .filter(|(_, path)| !ours_only || is_app_log_name(path))
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path.clone())
+}
+
+fn is_app_log_name(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("app-"))
+}
+
+/// Reads at most the last `max_bytes`; with KeepAll rotation the file can dwarf the tail.
+fn read_tail_bytes(path: &std::path::Path, max_bytes: usize) -> std::io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(max_bytes as u64);
+    if start > 0 {
+        file.seek(SeekFrom::Start(start))?;
+    }
+    let mut bytes = Vec::with_capacity(max_bytes.min(len as usize));
+    file.take(max_bytes as u64).read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn tail_as_utf8(bytes: &[u8], max_bytes: usize) -> String {
@@ -1802,6 +1911,17 @@ async fn handle_socket(mut socket: WebSocket, ctx: Arc<ServerCtx>) {
     };
     if socket.send(Message::Text(initial_state.into())).await.is_err() {
         return;
+    }
+
+    // Backlog first: the interesting part is usually logged before the sender connects.
+    let backlog: Vec<String> = {
+        let ring = ctx.shared.log_ring.lock().unwrap_or_else(|poison| poison.into_inner());
+        ring.iter().cloned().collect()
+    };
+    if let Some(frame) = log_frame(&backlog) {
+        if socket.send(Message::Text(frame.into())).await.is_err() {
+            return;
+        }
     }
 
     loop {
@@ -2394,6 +2514,11 @@ mod tests {
         let Some(advertised_ip) = local_ips().into_iter().next() else {
             return;
         };
+        // Multi-homed hosts can't self-discover over mDNS; asserting through that is a permanent false alarm.
+        if same_subnet_ipv4_interface_count() > 1 {
+            eprintln!("skipping mdns self-discovery: more than one IPv4 interface on the same subnet");
+            return;
+        }
         let port = 47_900;
         let name = format!("Test Receiver {}", generate_device_key());
         let instance_name = mdns_instance_name(&name);
@@ -3188,6 +3313,173 @@ mod tests {
         }
         assert_eq!(devices.len(), receiver_store::MAX_PAIRED_DEVICES);
         assert!(!devices.iter().any(|device| device.device_name == "device-0"));
+    }
+
+    // ---------------------------------------------------------------------
+    // Log tail
+    // ---------------------------------------------------------------------
+
+    fn write_log(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("write log fixture");
+        path
+    }
+
+    /// How many of these /24s appear more than once, i.e. how many interfaces share a subnet.
+    fn count_shared_subnets(subnets: &[[u8; 3]]) -> usize {
+        subnets
+            .iter()
+            .filter(|subnet| subnets.iter().filter(|other| other == subnet).count() > 1)
+            .count()
+    }
+
+    fn same_subnet_ipv4_interface_count() -> usize {
+        let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
+        let subnets: Vec<[u8; 3]> = interfaces
+            .iter()
+            .filter(|interface| !interface.is_loopback())
+            .filter_map(|interface| match interface.ip() {
+                std::net::IpAddr::V4(v4) if !v4.is_link_local() => {
+                    let octets = v4.octets();
+                    Some([octets[0], octets[1], octets[2]])
+                }
+                _ => None,
+            })
+            .collect();
+        count_shared_subnets(&subnets)
+    }
+
+    #[test]
+    fn count_shared_subnets_spots_a_multi_homed_lan() {
+        // Wi-Fi + Ethernet on one subnet: the setup that breaks local mDNS self-discovery.
+        assert_eq!(count_shared_subnets(&[[192, 168, 178], [192, 168, 178]]), 2);
+        // One LAN address plus a VPN on its own subnet is fine.
+        assert_eq!(count_shared_subnets(&[[192, 168, 178], [10, 2, 0]]), 0);
+        assert_eq!(count_shared_subnets(&[[192, 168, 178]]), 0);
+        assert_eq!(count_shared_subnets(&[]), 0);
+    }
+
+    #[test]
+    fn dedupe_ips_keeps_first_occurrence_order() {
+        let ips: Vec<std::net::IpAddr> = ["192.168.1.2", "::1", "192.168.1.2", "192.168.1.3", "::1"]
+            .iter()
+            .map(|text| text.parse().expect("parse ip"))
+            .collect();
+        let deduped = dedupe_ips(&ips);
+        assert_eq!(deduped.len(), 3);
+        assert_eq!(deduped[0].to_string(), "192.168.1.2");
+        assert_eq!(deduped[1].to_string(), "::1");
+        assert_eq!(deduped[2].to_string(), "192.168.1.3");
+    }
+
+
+    // ---------------------------------------------------------------------
+    // Session log ring
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn sanitize_log_lines_drops_blanks_and_caps_the_batch() {
+        let lines = vec!["  ".to_string(), "kept".to_string(), String::new(), "also".to_string()];
+        assert_eq!(sanitize_log_lines(lines), vec!["kept".to_string(), "also".to_string()]);
+
+        let many: Vec<String> = (0..MAX_LOG_LINES_PER_CALL + 10).map(|index| format!("line-{index}")).collect();
+        assert_eq!(sanitize_log_lines(many).len(), MAX_LOG_LINES_PER_CALL);
+    }
+
+    #[test]
+    fn sanitize_log_lines_truncates_one_pathological_line() {
+        let long = "x".repeat(MAX_LOG_LINE_BYTES * 2);
+        let sanitized = sanitize_log_lines(vec![long]);
+        assert_eq!(sanitized[0].chars().count(), MAX_LOG_LINE_BYTES);
+    }
+
+    #[test]
+    fn push_log_lines_evicts_the_oldest_once_full() {
+        let mut ring = std::collections::VecDeque::new();
+        let lines: Vec<String> = (0..MAX_LOG_RING_LINES + 5).map(|index| format!("line-{index}")).collect();
+        push_log_lines(&mut ring, &lines);
+        assert_eq!(ring.len(), MAX_LOG_RING_LINES);
+        assert_eq!(ring.front().map(String::as_str), Some("line-5"));
+        assert_eq!(ring.back().map(String::as_str), Some(format!("line-{}", MAX_LOG_RING_LINES + 4).as_str()));
+    }
+
+    #[test]
+    fn log_frame_is_a_kinded_envelope_and_empty_batches_send_nothing() {
+        let frame = log_frame(&["one".to_string(), "two".to_string()]).expect("frame");
+        let parsed: serde_json::Value = serde_json::from_str(&frame).expect("valid json");
+        assert_eq!(parsed["kind"], "log");
+        assert_eq!(parsed["lines"][0], "one");
+        assert_eq!(parsed["lines"][1], "two");
+        assert!(log_frame(&[]).is_none());
+    }
+
+    #[test]
+    fn local_ips_returns_a_deterministic_order() {
+        // An unstable order made every 15s tick look like an address change.
+        let first = local_ips();
+        for _ in 0..8 {
+            assert_eq!(local_ips(), first, "local_ips must be deterministic for one address set");
+        }
+
+        // No VPN/point-to-point address may be advertised: only this host can reach it.
+        let p2p: Vec<String> = if_addrs::get_if_addrs()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|interface| interface.is_p2p)
+            .map(|interface| interface.ip().to_string())
+            .collect();
+        for address in &p2p {
+            assert!(!first.contains(address), "advertised a point-to-point address: {address}");
+        }
+        eprintln!("local_ips={first:?} excluded_p2p={p2p:?}");
+    }
+
+    #[test]
+    fn read_tail_bytes_returns_only_the_tail_of_a_larger_file() {
+        let dir = std::env::temp_dir().join(format!("xt-log-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = write_log(&dir, "app-2026-01-01.log", "0123456789ABCDEF");
+        let tail = read_tail_bytes(&path, 6).expect("read tail");
+        assert_eq!(tail, b"ABCDEF");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_tail_bytes_returns_the_whole_file_when_it_is_shorter_than_the_cap() {
+        let dir = std::env::temp_dir().join(format!("xt-log-short-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = write_log(&dir, "app-2026-01-01.log", "short");
+        assert_eq!(read_tail_bytes(&path, 4096).expect("read tail"), b"short");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn newest_log_tail_prefers_our_app_log_over_a_newer_foreign_log() {
+        let dir = std::env::temp_dir().join(format!("xt-log-pick-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        write_log(&dir, "app-2026-01-01.log", "ours\n");
+        // Written second, so it is the newest .log in the directory.
+        write_log(&dir, "webview.log", "theirs\n");
+        assert_eq!(newest_log_tail(&dir), "ours\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn newest_log_tail_falls_back_to_any_log_when_we_wrote_none() {
+        let dir = std::env::temp_dir().join(format!("xt-log-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        write_log(&dir, "webview.log", "theirs\n");
+        assert_eq!(newest_log_tail(&dir), "theirs\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn newest_log_tail_is_empty_for_a_directory_with_no_logs() {
+        let dir = std::env::temp_dir().join(format!("xt-log-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        write_log(&dir, "notes.txt", "not a log");
+        assert_eq!(newest_log_tail(&dir), "");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
 

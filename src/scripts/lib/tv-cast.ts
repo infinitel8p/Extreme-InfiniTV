@@ -165,9 +165,13 @@ export interface CastSession {
   logo?: string
   liveContext?: { playlistId: string; channelIds: string[]; index: number }
   seriesContext?: { playlistId: string; seriesId: string; season: number; episodeNum: number }
+  vodContext?: { playlistId: string; vodId: string }
 }
 
 export const CAST_SESSION_EVENT = "xt:cast-session-changed"
+
+/** Bumped on every teardown so an in-flight castPlay can tell its session is gone and skip resurrecting it. */
+let castGeneration = 0
 
 function isCastSession(value: unknown): value is CastSession {
   if (!value || typeof value !== "object") return false
@@ -207,6 +211,7 @@ export function updateCastSession(patch: Partial<CastSession>): void {
 }
 
 export function clearCastSession(): void {
+  castGeneration += 1
   writeSessionStorage(SESSION_STORAGE_KEY, null)
   dispatchDocumentEvent(CAST_SESSION_EVENT)
 }
@@ -554,14 +559,27 @@ export async function pushAmbientManifest(device: TvDevice): Promise<void> {
 export interface CastPlayContext {
   liveContext?: CastSession["liveContext"]
   seriesContext?: CastSession["seriesContext"]
+  vodContext?: CastSession["vodContext"]
 }
+
+interface LastPlayRequest {
+  deviceId: string
+  descriptor: CastDescriptorV1
+  context?: CastPlayContext
+}
+
+/** The most recent successful castPlay, kept so the pill's Retry button can replay it after a receiver error. */
+let lastPlayRequest: LastPlayRequest | null = null
 
 export async function castPlay(
   device: TvDevice,
   descriptor: CastDescriptorV1,
   context?: CastPlayContext
 ): Promise<void> {
+  const generationAtRequest = castGeneration
   await postDeviceAction(device, "/play", descriptor, 8000)
+  // Session was torn down (e.g. stop) while this request was in flight; don't resurrect it.
+  if (generationAtRequest !== castGeneration) return
   const storedDevice = listTvDevices().find((entry) => entry.id === device.id) ?? device
   setCastSession({
     deviceId: storedDevice.id,
@@ -578,9 +596,23 @@ export async function castPlay(
     logo: descriptor.logo,
     liveContext: context?.liveContext,
     seriesContext: context?.seriesContext,
+    vodContext: context?.vodContext,
   })
   touchTvDevice(storedDevice.id)
+  lastPlayRequest = { deviceId: storedDevice.id, descriptor, context }
   void pushAmbientManifest(storedDevice)
+}
+
+/** Replays the last successful castPlay for this device, for the pill's error-state Retry button. */
+export async function castRetryLast(device: TvDevice): Promise<boolean> {
+  if (!lastPlayRequest || lastPlayRequest.deviceId !== device.id) return false
+  try {
+    await castPlay(device, lastPlayRequest.descriptor, lastPlayRequest.context)
+    return true
+  } catch (err) {
+    log.warn("[xt:tv-cast] castRetryLast failed:", err)
+    return false
+  }
 }
 
 export async function castPause(device: TvDevice): Promise<void> {
@@ -600,6 +632,7 @@ export async function castStop(device: TvDevice): Promise<void> {
   try {
     await postDeviceAction(device, "/stop", {}, 4000)
   } finally {
+    lastPlayRequest = null
     clearCastSession()
   }
 }
@@ -686,6 +719,8 @@ export async function fetchReceiverLogs(device: TvDevice): Promise<string | null
 export interface ReceiverLogSnapshot {
   at: string
   text: string
+  /** "stream" came off the /events socket as the session ran; "fetch" is a /logs tail. */
+  source?: "stream" | "fetch"
 }
 
 const RECEIVER_LOG_SNAPSHOT_KEY = "xt_receiver_log_snapshot_v1"
@@ -712,8 +747,12 @@ function readReceiverLogSnapshotsFromStorage(): Record<string, ReceiverLogSnapsh
 }
 
 /** Caches a receiver's log tail in localStorage so it survives an app restart, not just the tab. */
-export function cacheReceiverLogSnapshot(deviceName: string, text: string): void {
-  const snapshot: ReceiverLogSnapshot = { at: new Date().toISOString(), text: capReceiverLogText(text) }
+export function cacheReceiverLogSnapshot(
+  deviceName: string,
+  text: string,
+  source: ReceiverLogSnapshot["source"] = "fetch"
+): void {
+  const snapshot: ReceiverLogSnapshot = { at: new Date().toISOString(), text: capReceiverLogText(text), source }
   try {
     if (typeof localStorage === "undefined") throw new Error("no-local-storage")
     const snapshots = readReceiverLogSnapshotsFromStorage()
@@ -722,6 +761,24 @@ export function cacheReceiverLogSnapshot(deviceName: string, text: string): void
   } catch {
     receiverLogSnapshotFallback.set(deviceName, snapshot)
   }
+}
+
+const MAX_STREAMED_LOG_LINES = 400
+const streamedReceiverLogs = new Map<string, string[]>()
+
+/** Appends /events log lines; persisted per batch so a bug report survives the TV going unreachable. */
+export function appendStreamedReceiverLog(deviceName: string, lines: string[]): void {
+  const usable = lines.filter((line) => typeof line === "string" && line.trim() !== "")
+  if (usable.length === 0) return
+  const existing = streamedReceiverLogs.get(deviceName) ?? []
+  const combined = existing.concat(usable)
+  const capped = combined.slice(Math.max(0, combined.length - MAX_STREAMED_LOG_LINES))
+  streamedReceiverLogs.set(deviceName, capped)
+  cacheReceiverLogSnapshot(deviceName, capped.join("\n"), "stream")
+}
+
+export function getStreamedReceiverLog(deviceName: string): string[] {
+  return streamedReceiverLogs.get(deviceName) ?? []
 }
 
 export function getReceiverLogSnapshots(): Record<string, ReceiverLogSnapshot> {
@@ -737,6 +794,19 @@ export function getReceiverLogSnapshotAt(deviceName: string): number | null {
   if (!snapshot) return null
   const at = Date.parse(snapshot.at)
   return Number.isNaN(at) ? null : at
+}
+
+const RECEIVER_LOG_TAIL_LINES = 5
+
+/** Last few receiver log lines cached for a device, for the remote dialog's collapsed error detail. */
+export function getReceiverLogTail(deviceName: string): string[] {
+  const snapshot = getReceiverLogSnapshots()[deviceName]
+  if (!snapshot) return []
+  return snapshot.text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-RECEIVER_LOG_TAIL_LINES)
 }
 
 export function startCastStatePolling(
@@ -760,12 +830,14 @@ export function startCastStatePolling(
 
 export interface PlayOnTvOptions {
   buildDescriptor: () => Promise<CastDescriptorV1 | null> | CastDescriptorV1 | null
-  stopLocal?: () => void
+  /** Return false when nothing was actually released, to skip the provider-slot wait. */
+  stopLocal?: () => boolean | void
   contentTitle?: string | null
   quiet?: boolean
   contentHref?: string | null
   liveContext?: CastSession["liveContext"]
   seriesContext?: CastSession["seriesContext"]
+  vodContext?: CastSession["vodContext"]
 }
 
 /** Reconstructs a TvDevice from an active cast session, for routing without the picker. */
@@ -783,6 +855,13 @@ export function sessionAsDevice(session: CastSession): TvDevice {
   }
 }
 
+// Xtream panels free a stream slot only once the sender's socket has closed.
+const PROVIDER_SLOT_SETTLE_MS = 600
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 export function isCastRoutingActive(): boolean {
   const session = getCastSession()
   return !!session && !session.dismissed
@@ -795,10 +874,19 @@ async function castToDevice(device: TvDevice, options: PlayOnTvOptions): Promise
     return false
   }
 
+  // Hand our provider connection over first: a capped account refuses the second one outright.
+  if (options.stopLocal) {
+    const released = options.stopLocal()
+    if (released !== false) await sleep(PROVIDER_SLOT_SETTLE_MS)
+  }
+
   try {
-    await castPlay(device, descriptor, { liveContext: options.liveContext, seriesContext: options.seriesContext })
+    await castPlay(device, descriptor, {
+      liveContext: options.liveContext,
+      seriesContext: options.seriesContext,
+      vodContext: options.vodContext,
+    })
     if (options.contentHref) updateCastSession({ contentHref: options.contentHref })
-    options.stopLocal?.()
     if (!options.quiet) {
       toast({ title: t("cast.toast.playing", { device: device.name }), duration: 2600 })
     }
@@ -916,15 +1004,19 @@ export interface CastXtreamVodParams {
 /** Builds a "play on TV" click handler for an Xtream VOD entry (movies + hub cards). */
 export function castXtreamVodToTv(params: CastXtreamVodParams): () => void {
   return () => {
-    void playOnTv({
-      contentTitle: params.title || null,
-      contentHref: params.contentHref ?? `/movies/detail?id=${params.vodId}`,
-      buildDescriptor: () => {
-        const src = buildMovieStreamUrl(params.creds, params.vodId, params.containerExt || null)
-        if (!isCastableSrc(src)) return null
-        return buildVodCastDescriptor({ src, title: params.title || "", logo: params.logo || undefined })
-      },
-    })
+    void (async () => {
+      const playlistId = await activePlaylistId()
+      await playOnTv({
+        contentTitle: params.title || null,
+        contentHref: params.contentHref ?? `/movies/detail?id=${params.vodId}`,
+        vodContext: playlistId ? { playlistId, vodId: String(params.vodId) } : undefined,
+        buildDescriptor: () => {
+          const src = buildMovieStreamUrl(params.creds, params.vodId, params.containerExt || null)
+          if (!isCastableSrc(src)) return null
+          return buildVodCastDescriptor({ src, title: params.title || "", logo: params.logo || undefined })
+        },
+      })
+    })()
   }
 }
 
@@ -936,7 +1028,7 @@ export interface CastLiveChannelParams {
   drm?: CastDescriptorV1["drm"]
   headers?: CastDescriptorV1["headers"]
   preferNativeHls?: boolean
-  stopLocal?: () => void
+  stopLocal?: () => boolean | void
   contentHref?: string | null
   liveContext?: CastSession["liveContext"]
 }
@@ -944,9 +1036,10 @@ export interface CastLiveChannelParams {
 /** Builds a "play on TV" click handler for a live channel (Live TV channel list + player more-menu). */
 export function castLiveChannelToTv(params: CastLiveChannelParams): () => void {
   return () => {
+    const channelId = params.liveContext?.channelIds[params.liveContext.index]
     void playOnTv({
       contentTitle: params.contentTitle,
-      contentHref: params.contentHref ?? "/livetv",
+      contentHref: params.contentHref ?? (channelId ? `/livetv?channel=${channelId}` : "/livetv"),
       stopLocal: params.stopLocal,
       liveContext: params.liveContext,
       buildDescriptor: () => {

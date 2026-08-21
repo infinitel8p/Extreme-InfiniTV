@@ -34,7 +34,21 @@ export function findHevcInCodecList(codecs: string | null | undefined): string |
   return null
 }
 
-export type StartFailureKind = "hevc" | "codec" | "audio" | "parse" | "unknown"
+export type StartFailureKind = "hevc" | "codec" | "audio" | "parse" | "connection-limit" | "unknown"
+
+// Connection-cap refusals: 458 is Xtream Codes' own code, 429/509 come from nginx-fronted panels.
+const CONNECTION_LIMIT_STATUSES = new Set([429, 458, 509])
+
+export function isConnectionLimitStatus(status: number | null | undefined): boolean {
+  return typeof status === "number" && CONNECTION_LIMIT_STATUSES.has(status)
+}
+
+/** Pulls an HTTP status out of an engine error string (shaka reports it inside its error data). */
+export function httpStatusFromErrorDetail(detail: string | null | undefined): number | null {
+  if (!detail) return null
+  const status = /\bHTTP (\d{3})\b/.exec(detail) || /shaka:network:1001\s+\[[^,]*,\s*(\d{3})/.exec(detail)
+  return status ? Number(status[1]) : null
+}
 
 export interface StartFailureVerdict {
   kind: StartFailureKind
@@ -135,6 +149,10 @@ export function classifyStartFailure(input: {
 }): StartFailureVerdict {
   const videoCodec = input.videoCodec?.trim() || null
   const errorDetail = input.errorDetail || ""
+  // A provider refusal is unambiguous, so it settles the verdict before any codec guesswork.
+  if (isConnectionLimitStatus(httpStatusFromErrorDetail(errorDetail))) {
+    return { kind: "connection-limit", codec: null }
+  }
   const codecError = CODEC_ERROR_DETAIL_RX.test(errorDetail)
   const parseError = PARSE_ERROR_DETAIL_RX.test(errorDetail)
   const audioBufferError = AUDIO_BUFFER_ERROR_RX.test(errorDetail)

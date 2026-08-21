@@ -68,16 +68,19 @@
             <ImageButton
                 android:id="@id/exo_subtitle"
                 style="@style/ExoStyledControls.Button.Bottom.CC"
+                android:focusable="true"
                 android:background="@drawable/bg_video_control_focus" />
 
             <ImageButton
                 android:id="@id/exo_audio_track"
                 style="@style/ExoStyledControls.Button.Bottom.AudioTrack"
+                android:focusable="true"
                 android:background="@drawable/bg_video_control_focus" />
 
             <ImageButton
                 android:id="@id/exo_settings"
                 style="@style/ExoStyledControls.Button.Bottom.Settings"
+                android:focusable="true"
                 android:background="@drawable/bg_video_control_focus" />
 
         </LinearLayout>

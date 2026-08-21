@@ -49,6 +49,8 @@ export interface EscapeHatchHooks {
   getResumeSeconds?(): number
   getTitle?(): string | null | undefined
   beforeLaunch?(kind: ButtonKind): void
+  /** Fires past every cancellable chooser, right before launch: drop local playback and its recovery machinery here. */
+  releaseLocal?(kind: ButtonKind): void
   afterLaunch?(kind: ButtonKind): void
 }
 
@@ -161,6 +163,13 @@ export function setupExternalPlayerButton(
         log.warn("[xt:external-btn] afterLaunch threw:", err)
       }
     }
+    const releaseLocal = (launchedKind: ButtonKind) => {
+      try {
+        hooks.releaseLocal?.(launchedKind)
+      } catch (err) {
+        log.warn("[xt:external-btn] releaseLocal threw:", err)
+      }
+    }
     try {
       hooks.beforeLaunch?.(kind)
     } catch (err) {
@@ -175,6 +184,7 @@ export function setupExternalPlayerButton(
           title: t("settings.playback.launching", { player: "VLC" }) || "Launching VLC…",
           duration: 2000,
         })
+        releaseLocal(kind)
         try {
           await launcher.launch(src, {
             userAgent: headers?.userAgent ?? null,
@@ -213,6 +223,7 @@ export function setupExternalPlayerButton(
               }) || `Launching ${stillInstalled.label || stillInstalled.pkg}…`,
             duration: 2000,
           })
+          releaseLocal("system")
           try {
             await openStreamInAndroidPackage(stillInstalled.pkg, src, {
               activity: stillInstalled.activity || remembered.activity || null,
@@ -249,6 +260,7 @@ export function setupExternalPlayerButton(
           `Launching ${pickedApp.label || pickedApp.pkg}…`,
         duration: 2000,
       })
+      releaseLocal("system")
       try {
         await openStreamInAndroidPackage(pickedApp.pkg, src, {
           activity: pickedApp.activity || null,
@@ -282,6 +294,7 @@ export function setupExternalPlayerButton(
         `Launching ${desktopKind.toUpperCase()}…`,
       duration: 2000,
     })
+    releaseLocal(desktopKind)
     try {
       await launcher.launch(src, opts)
       notifyLaunched(desktopKind)

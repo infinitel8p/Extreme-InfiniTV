@@ -25,8 +25,10 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -101,24 +103,30 @@ class VideoActivity : AppCompatActivity() {
   private var overlayVisible = false
   private var releaseSuppressed = false
   private var finishedEmitted = false
+  // Records an onPause()-initiated stop so onResume() resumes without overriding a viewer pause.
+  private var resumePlaybackOnReturn = false
 
   private val progressHandler = Handler(Looper.getMainLooper())
   private val progressTick = object : Runnable {
     override fun run() {
-      val player = exoPlayer ?: return
-      if (player.isPlaying && mode == MODE_VOD) {
-        EventQueue.append(
-          this@VideoActivity,
-          "xt:android-native-progress",
-          JSONObject().apply {
-            put("contentKey", contentKey)
-            put("positionMs", player.currentPosition)
-            put("durationMs", player.duration.coerceAtLeast(0))
-          }
-        )
-      }
+      val player = exoPlayer
+      if (player != null && player.isPlaying) emitProgress(player)
       progressHandler.postDelayed(this, PROGRESS_INTERVAL_MS)
     }
+  }
+
+  // durationMs is omitted while unknown: C.TIME_UNSET must not reach JS as a zero-length media.
+  private fun emitProgress(player: Player) {
+    val durationMs = player.duration
+    EventQueue.append(
+      this,
+      "xt:android-native-progress",
+      JSONObject().apply {
+        put("contentKey", contentKey)
+        put("positionMs", player.currentPosition.coerceAtLeast(0))
+        if (durationMs != C.TIME_UNSET && durationMs > 0) put("durationMs", durationMs)
+      }
+    )
   }
 
   // ---------------------------------------------------------------------
@@ -175,7 +183,7 @@ class VideoActivity : AppCompatActivity() {
     finishedEmitted = false
     NativePlayerControl.register(this)
     initializeFromIntent(intent)
-    if (mode == MODE_VOD) progressHandler.postDelayed(progressTick, PROGRESS_INTERVAL_MS)
+    progressHandler.postDelayed(progressTick, PROGRESS_INTERVAL_MS)
   }
 
   private fun initializeFromIntent(intent: Intent) {
@@ -222,9 +230,13 @@ class VideoActivity : AppCompatActivity() {
     val playPause = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_play_pause)
     val forward = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_ffwd)
     val progress = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_progress)
+      ?.takeIf { !isLive }
     val subtitle = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle)
+      ?.also { it.isFocusable = true }
     val audioTrack = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_audio_track)
+      ?.also { it.isFocusable = true }
     val settings = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_settings)
+      ?.also { it.isFocusable = true }
     val mute = muteButton
     val volume = volumeSeekBar
     val channelDown = channelDownButton
@@ -244,42 +256,33 @@ class VideoActivity : AppCompatActivity() {
       current.nextFocusRightId = transportRow.getOrElse(index + 1) { current }.id
     }
 
-    // Icon row (subtitle/audio/settings), left to right.
-    val iconRow = listOfNotNull(subtitle, audioTrack, settings)
-    for (index in iconRow.indices) {
-      val current = iconRow[index]
-      current.nextFocusLeftId = iconRow.getOrElse(index - 1) { current }.id
-      current.nextFocusRightId = iconRow.getOrElse(index + 1) { current }.id
+    // Volume row: hidden members are skipped so the chain still connects across them.
+    val volumeRow = listOfNotNull(mute, volume, subtitle, audioTrack, settings)
+      .filter { it.visibility != View.GONE }
+    for (index in volumeRow.indices) {
+      val current = volumeRow[index]
+      current.nextFocusLeftId = volumeRow.getOrElse(index - 1) { current }.id
+      current.nextFocusRightId = volumeRow.getOrElse(index + 1) { current }.id
     }
 
-    // Up entry into the transport row: from the time bar in VOD, straight from the volume row in live.
-    val aboveTransport = if (isLive) mute else progress
-    transportRow.forEach { it.nextFocusUpId = aboveTransport?.id ?: it.id }
-
-    // Down exit out of the volume row: to the time bar in VOD, straight into the transport row in live.
-    val belowVolumeRow = if (isLive) playPause else progress
-    listOfNotNull(mute, volume, subtitle, audioTrack, settings).forEach {
+    // The volume row never escapes upward; down goes to the time bar (VOD) or transport row (live).
+    val belowVolumeRow = progress ?: playPause
+    volumeRow.forEach {
+      it.nextFocusUpId = it.id
       it.nextFocusDownId = belowVolumeRow?.id ?: it.id
     }
 
-    // Mute/seekbar sit apart from the icon row: the seekbar keeps LEFT/RIGHT for volume, so the
-    // icon row is only reached by going up out of it.
-    mute?.let { muteView ->
-      muteView.nextFocusLeftId = muteView.id
-      volume?.let { muteView.nextFocusRightId = it.id }
-    }
-    volume?.let { volumeView -> subtitle?.let { volumeView.nextFocusUpId = it.id } }
-    subtitle?.let { subtitleView -> mute?.let { subtitleView.nextFocusLeftId = it.id } }
-
-    if (isLive) return
+    // Up entry into the transport row: from the time bar in VOD, straight from the volume row in live.
+    val aboveTransport = progress ?: volume ?: mute
+    transportRow.forEach { it.nextFocusUpId = aboveTransport?.id ?: it.id }
 
     // DefaultTimeBar can swallow DPAD_UP outright; force the escape to the volume row.
     progress?.let { timeBar ->
-      timeBar.nextFocusUpId = mute?.id ?: timeBar.id
+      timeBar.nextFocusUpId = volume?.id ?: mute?.id ?: timeBar.id
       timeBar.nextFocusDownId = playPause?.id ?: timeBar.id
       timeBar.setOnKeyListener { _, keyCode, event ->
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP && event.action == KeyEvent.ACTION_DOWN) {
-          mute?.requestFocus()
+          (volume ?: mute)?.requestFocus()
           true
         } else {
           false
@@ -296,7 +299,12 @@ class VideoActivity : AppCompatActivity() {
   override fun onResume() {
     super.onResume()
     progressHandler.removeCallbacks(progressTick)
-    if (mode == MODE_VOD) progressHandler.postDelayed(progressTick, PROGRESS_INTERVAL_MS)
+    progressHandler.postDelayed(progressTick, PROGRESS_INTERVAL_MS)
+    // A transient background (overlay, CEC, assistant) would otherwise leave a cast paused for good.
+    if (resumePlaybackOnReturn) {
+      resumePlaybackOnReturn = false
+      exoPlayer?.playWhenReady = true
+    }
   }
 
   override fun onPause() {
@@ -306,6 +314,7 @@ class VideoActivity : AppCompatActivity() {
     // Activity briefly during the PiP transition; we only really stop in
     // onStop().
     if (!isInPictureInPictureMode) {
+      resumePlaybackOnReturn = exoPlayer?.playWhenReady == true
       exoPlayer?.playWhenReady = false
     }
   }
@@ -366,7 +375,8 @@ class VideoActivity : AppCompatActivity() {
 
     player.addListener(object : Player.Listener {
       override fun onPlayerError(error: PlaybackException) {
-        Log.e(TAG, "playback error: ${error.errorCodeName}", error)
+        val httpStatus = httpStatusOf(error)
+        Log.e(TAG, "playback error: ${error.errorCodeName} http=$httpStatus", error)
         EventQueue.append(
           this@VideoActivity,
           "xt:android-native-error",
@@ -374,16 +384,34 @@ class VideoActivity : AppCompatActivity() {
             put("contentKey", contentKey)
             put("code", error.errorCodeName)
             put("message", error.message ?: "")
+            if (httpStatus > 0) put("httpStatus", httpStatus)
           }
         )
       }
 
       override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
         updateKeepScreenOn(player)
+        // playWhenReady, not isPlaying: a buffer stall must not surface to the sender as a pause.
+        EventQueue.append(
+          this@VideoActivity,
+          "xt:android-native-play-state",
+          JSONObject().apply {
+            put("contentKey", contentKey)
+            put("playing", playWhenReady)
+            put("positionMs", player.currentPosition.coerceAtLeast(0))
+          }
+        )
+      }
+
+      // Re-wire after the control view hides trackless buttons, so the chain never points through a GONE view.
+      override fun onTracksChanged(tracks: Tracks) {
+        playerView?.post { wireControllerFocusChain(mode == MODE_LIVE) }
       }
 
       override fun onPlaybackStateChanged(state: Int) {
         updateKeepScreenOn(player)
+        // STATE_READY knows the timeline; ticks only fire while playing, so report it right away.
+        if (state == Player.STATE_READY && mode == MODE_VOD) emitProgress(player)
         if (state == Player.STATE_ENDED && mode == MODE_VOD) {
           finishedEmitted = true
           EventQueue.append(
@@ -429,6 +457,19 @@ class VideoActivity : AppCompatActivity() {
       player.playbackState != Player.STATE_ENDED
     if (active) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+  }
+
+  // Digs the HTTP status out of Media3's cause chain; 0 when there was none.
+  private fun httpStatusOf(error: Throwable?): Int {
+    var cause: Throwable? = error
+    var depth = 0
+    while (depth < 8) {
+      val current = cause ?: return 0
+      if (current is HttpDataSource.InvalidResponseCodeException) return current.responseCode
+      cause = current.cause
+      depth++
+    }
+    return 0
   }
 
   private fun buildMediaSourceFactory(ua: String, referer: String): MediaSource.Factory {

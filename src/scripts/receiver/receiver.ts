@@ -5,14 +5,16 @@ import { getEffectiveReceiverDeviceName, getReceiverEngine, getReceiverId } from
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers"
 import { validateCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
-import { log } from "@/scripts/lib/log.js"
+import { log, redactUrl } from "@/scripts/lib/log.js"
 import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
 import { getActiveEntry } from "@/scripts/lib/creds.js"
 import { mountReceiverAmbient, type ReceiverAmbient } from "@/scripts/receiver/ambient"
 import { startReceiverKeepAlive, stopReceiverKeepAlive } from "@/scripts/lib/receiver-keep-alive"
+import { startReceiverLogStream, stopReceiverLogStream } from "@/scripts/lib/receiver-log-stream"
 import {
   createAndroidNativeReceiverEngine,
   createEmbeddedReceiverEngine,
+  normalizeReportedDuration,
   type ReceiverControlAction,
   type ReceiverEngine,
   type ReceiverEngineCallbacks,
@@ -71,6 +73,7 @@ let currentTitle = ""
 let currentIsLive = false
 let currentPlaybackState: ReceiverPlaybackState = "idle"
 let lastKnownPositionSeconds = 0
+let lastKnownDurationSeconds: number | undefined
 let lastKnownVolume: number | undefined
 let lastKnownMuted: boolean | undefined
 
@@ -117,8 +120,11 @@ function mountAmbient(): void {
 function syncReceiverKeepAlive(status: ReceiverStatus): void {
   if (status.enabled && status.name) {
     startReceiverKeepAlive(status.name)
+    // Mirror this page's log to whoever casts here - a TV has no console to read it on.
+    startReceiverLogStream()
   } else {
     stopReceiverKeepAlive()
+    stopReceiverLogStream()
   }
 }
 
@@ -206,18 +212,29 @@ function setKeepScreenOn(enabled: boolean): void {
 }
 
 function reportState(partial: ReceiverStatePartial): void {
+  if (partial.state && partial.state !== currentPlaybackState) {
+    log.info("[xt:receiver] state", {
+      from: currentPlaybackState,
+      to: partial.state,
+      position: partial.positionSeconds ?? lastKnownPositionSeconds,
+      error: partial.error ?? null,
+    })
+  }
   if (partial.state) {
     currentPlaybackState = partial.state
     ambient?.notifyPlaybackState(partial.state)
     setKeepScreenOn(partial.state === "playing" || partial.state === "loading" || partial.state === "buffering")
   }
   if (typeof partial.positionSeconds === "number") lastKnownPositionSeconds = partial.positionSeconds
+  // The server replaces the whole report, so a partial one must not drop a duration the player already knows.
+  const durationSeconds = normalizeReportedDuration(partial.durationSeconds)
+  if (durationSeconds !== undefined) lastKnownDurationSeconds = durationSeconds
   if (typeof partial.volume === "number") lastKnownVolume = partial.volume
   if (typeof partial.muted === "boolean") lastKnownMuted = partial.muted
   const payload = {
     state: partial.state ?? currentPlaybackState,
     positionSeconds: partial.positionSeconds ?? lastKnownPositionSeconds,
-    durationSeconds: partial.durationSeconds,
+    durationSeconds: durationSeconds ?? lastKnownDurationSeconds,
     title: currentTitle || undefined,
     error: partial.error,
     volume: partial.volume ?? lastKnownVolume,
@@ -273,6 +290,7 @@ async function startWithEngine(engine: ReceiverEngine, descriptor: CastDescripto
 async function onPlay(rawDescriptor: unknown): Promise<void> {
   const descriptor = validateCastDescriptor(rawDescriptor)
   if (!descriptor) {
+    log.warn("[xt:receiver] play rejected: descriptor failed validation")
     reportState({ state: "error", error: "bad-descriptor", positionSeconds: 0 })
     return
   }
@@ -282,6 +300,7 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
 
   currentTitle = descriptor.title
   currentIsLive = descriptor.isLive
+  lastKnownDurationSeconds = descriptor.isLive ? undefined : normalizeReportedDuration(descriptor.durationSeconds)
   ambient?.noteCastDescriptor({ title: descriptor.title, logo: descriptor.logo })
 
   await applyStreamHeaders(
@@ -291,6 +310,17 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
   )
 
   const engine = pickEngine(descriptor)
+  log.info("[xt:receiver] play", {
+    engine: engine === androidNativeEngine ? "android-native" : "embedded",
+    enginePref: getReceiverEngine(),
+    isLive: descriptor.isLive,
+    mime: descriptor.mime,
+    drm: descriptor.drm?.drmScheme ?? null,
+    ua: descriptor.headers?.userAgent ? "set" : "none",
+    preferNativeHls: descriptor.preferNativeHls ?? false,
+    resumeSeconds: descriptor.resumeSeconds ?? 0,
+    src: redactUrl(descriptor.src),
+  })
   const started = await startWithEngine(engine, descriptor)
   if (started) return
 
@@ -298,6 +328,7 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
     log.warn("[xt:receiver] native playback unavailable, falling back to embedded playback")
     if (await startWithEngine(embeddedEngine, descriptor)) return
   }
+  log.error("[xt:receiver] no engine could start playback")
   reportState({ state: "error", error: "player-unavailable", positionSeconds: 0 })
 }
 

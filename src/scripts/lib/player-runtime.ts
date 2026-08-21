@@ -1272,7 +1272,9 @@ function attachHlsToVideo(
       return
     }
     if (!codecState.errorDetail && data?.details) {
-      codecState.errorDetail = String(data.details)
+      // hls.js keeps the response code out of `details`; callers need it to spot a provider refusal.
+      const status = data?.response?.code
+      codecState.errorDetail = status ? `${data.details} (HTTP ${status})` : String(data.details)
     }
     const ErrorTypes = Hls.ErrorTypes
     if (data.type === ErrorTypes.NETWORK_ERROR && netRecover < 2) {
@@ -3002,6 +3004,17 @@ export async function mountPlayer(
     kind: "embedded",
     backend: "artplayer",
     handle,
+  }
+}
+
+/** Asks a running external player to let go of the stream without closing it; only mpv can, so VLC resolves false. */
+export async function stopExternalPlayback(kind: string): Promise<boolean> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    return (await invoke("stop_external_player", { kind })) === true
+  } catch (err) {
+    log.warn("[xt:player] stop_external_player failed:", err)
+    return false
   }
 }
 

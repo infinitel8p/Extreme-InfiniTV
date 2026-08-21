@@ -11,6 +11,7 @@ import {
   castResume,
   castSeek,
   castStop,
+  castRetryLast,
   sessionAsDevice,
   CAST_SESSION_EVENT,
   type CastSession,
@@ -34,10 +35,18 @@ import {
 
 const PILL_ID = "xt-cast-pill"
 const FEED_CADENCE_MS = 2000
+// Always spans one full poll cadence, so a poll landing just after a manual seek can't roll it back.
+const SEEK_SUPPRESS_MS = FEED_CADENCE_MS + 500
 const SEEK_STEP_SECONDS = 30
-const SEEK_SUPPRESS_MS = 2500
 const EXIT_ANIMATION_MS = 320
 const LOG_SNAPSHOT_INTERVAL_MS = 60_000
+const STOP_CONFIRM_WINDOW_MS = 3000
+const IDLE_COLLAPSE_MS = 45_000
+const POST_INTERACTION_GRACE_MS = 5000
+// Swallows the click whose own focusin/pointerenter just expanded the collapsed chip.
+const EXPAND_CLICK_SUPPRESS_MS = 400
+const COLLAPSE_HIDDEN_ROLES = ["live", "time", "back30", "playpause", "forward30", "retry", "divider", "stop", "dismiss"]
+const COLLAPSE_MARK_CLASS = "xt-idle-collapsed"
 
 type PillStatus = "ok" | "reconnecting" | "error"
 
@@ -50,6 +59,15 @@ let errorToastShown = false
 let suppressPollPositionUntil = 0
 let morePanelObserver: MutationObserver | null = null
 let logSnapshotInFlight = false
+let stopArmed = false
+let stopArmTimeout: ReturnType<typeof setTimeout> | null = null
+let lastAnnouncedPlaybackState: string | null = null
+let lastAppliedTitle: string | null = null
+let pillCollapsed = false
+let idleCollapseTimeout: ReturnType<typeof setTimeout> | null = null
+let lastPillInteractionAt = 0
+let retryInFlight = false
+let lastExpandFromCollapsedAtMs = 0
 
 function formatClock(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds))
@@ -78,16 +96,17 @@ function buildPill(): HTMLElement {
   const pill = document.createElement("div")
   pill.id = PILL_ID
   pill.className =
-    "fixed left-4 sm:left-auto right-4 bottom-[calc(1rem+env(safe-area-inset-bottom,0px))] z-40 " +
-    "flex items-center gap-2 rounded-full border border-line bg-surface px-3 py-2 shadow-lg overflow-hidden " +
+    "fixed start-4 sm:start-auto end-4 bottom-[calc(1rem+env(safe-area-inset-bottom,0px))] z-40 " +
+    "flex items-center gap-2 rounded-full border border-line bg-surface py-2 shadow-lg overflow-hidden " +
     "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
   pill.setAttribute("role", "group")
 
+  // Full-height start segment of the capsule, so its hover/focus background isn't an inset rectangle.
   const contentBtn = document.createElement("button")
   contentBtn.type = "button"
   contentBtn.dataset.role = "content"
   contentBtn.className =
-    "flex min-w-0 flex-1 sm:flex-initial items-center gap-2.5 min-h-11 rounded-lg text-left px-1 -mx-1 " +
+    "flex min-w-0 flex-1 sm:flex-initial items-center gap-2.5 self-stretch -my-2 min-h-11 rounded-s-full text-start ps-3 " +
     "enabled:hover:bg-surface-2 enabled:focus-visible:bg-surface-2"
 
   const icon = document.createElement("span")
@@ -98,14 +117,15 @@ function buildPill(): HTMLElement {
   contentBtn.appendChild(icon)
 
   const textCol = document.createElement("div")
-  textCol.className = "flex flex-col min-w-0 leading-tight"
+  textCol.dataset.role = "text-col"
+  textCol.className =
+    "flex flex-col min-w-0 leading-tight max-w-none overflow-hidden transition-[max-width,opacity] duration-200"
   const deviceNameEl = document.createElement("span")
   deviceNameEl.dataset.role = "device-name"
   deviceNameEl.className = "text-xs text-fg-2 truncate sm:max-w-48 lg:max-w-72"
   const titleEl = document.createElement("span")
   titleEl.dataset.role = "title"
   titleEl.className = "text-sm truncate sm:max-w-48 lg:max-w-72"
-  titleEl.setAttribute("aria-live", "polite")
   textCol.appendChild(deviceNameEl)
   textCol.appendChild(titleEl)
   contentBtn.appendChild(textCol)
@@ -149,24 +169,55 @@ function buildPill(): HTMLElement {
   forward30.innerHTML = ICON_REWIND_FORWARD_30
   pill.appendChild(forward30)
 
+  const retryBtn = document.createElement("button")
+  retryBtn.type = "button"
+  retryBtn.dataset.role = "retry"
+  retryBtn.className =
+    "hidden min-h-11 shrink-0 flex items-center justify-center rounded-full px-3 text-xs font-semibold text-accent " +
+    "enabled:hover:bg-surface-2 enabled:focus-visible:bg-surface-2 disabled:opacity-60"
+  retryBtn.textContent = t("cast.pill.retry")
+  retryBtn.title = t("cast.pill.retry")
+  pill.appendChild(retryBtn)
+
   const divider = document.createElement("span")
+  divider.dataset.role = "divider"
   divider.setAttribute("aria-hidden", "true")
   divider.className = "h-6 w-px shrink-0 bg-line"
   pill.appendChild(divider)
 
+  // Icon stays first so arming the stop confirmation (which appends a label after it) never moves it.
   const stopBtn = document.createElement("button")
   stopBtn.type = "button"
   stopBtn.dataset.role = "stop"
-  stopBtn.className = "min-h-11 min-w-11 grid place-items-center rounded-full text-bad hover:bg-surface-2 focus-visible:bg-surface-2"
+  stopBtn.dataset.armed = "false"
+  stopBtn.className =
+    "min-h-11 min-w-11 flex items-center rounded-full text-bad enabled:hover:bg-surface-2 enabled:focus-visible:bg-surface-2"
   stopBtn.setAttribute("aria-label", t("cast.pill.stop"))
   stopBtn.title = t("cast.pill.stop")
-  stopBtn.innerHTML = ICON_PLAYER_STOP
+
+  const stopIcon = document.createElement("span")
+  stopIcon.dataset.role = "stop-icon"
+  stopIcon.className = "grid h-11 w-11 shrink-0 place-items-center"
+  stopIcon.setAttribute("aria-hidden", "true")
+  stopIcon.innerHTML = ICON_PLAYER_STOP
+  stopBtn.appendChild(stopIcon)
+
+  const stopLabel = document.createElement("span")
+  stopLabel.dataset.role = "stop-label"
+  stopLabel.className =
+    "max-w-0 overflow-hidden whitespace-nowrap text-xs font-semibold transition-[max-width,margin-inline-end] duration-200"
+  stopLabel.textContent = t("cast.pill.stopConfirm")
+  stopBtn.appendChild(stopLabel)
+  stopBtn.addEventListener("blur", () => disarmStopButton(pill))
   pill.appendChild(stopBtn)
 
+  // Mirrors contentBtn on the opposite end: full-height end segment carrying its own end padding.
   const dismissBtn = document.createElement("button")
   dismissBtn.type = "button"
   dismissBtn.dataset.role = "dismiss"
-  dismissBtn.className = "min-h-11 min-w-11 grid place-items-center rounded-full text-fg-3 hover:bg-surface-2 focus-visible:bg-surface-2"
+  dismissBtn.className =
+    "self-stretch -my-2 min-h-11 min-w-11 grid place-items-center rounded-e-full pe-3 text-fg-3 " +
+    "hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg"
   dismissBtn.setAttribute("aria-label", t("cast.pill.dismiss"))
   dismissBtn.title = t("cast.pill.dismiss")
   dismissBtn.innerHTML = ICON_X
@@ -174,25 +225,72 @@ function buildPill(): HTMLElement {
 
   const progressEl = document.createElement("div")
   progressEl.dataset.role = "progress"
-  progressEl.className = "absolute left-0 bottom-0 h-0.5 bg-accent hidden"
+  progressEl.className = "absolute start-0 bottom-0 h-0.5 bg-accent hidden"
   pill.appendChild(progressEl)
+
+  const srStatusEl = document.createElement("span")
+  srStatusEl.dataset.role = "sr-status"
+  srStatusEl.className = "sr-only"
+  srStatusEl.setAttribute("aria-live", "polite")
+  srStatusEl.setAttribute("role", "status")
+  pill.appendChild(srStatusEl)
 
   return pill
 }
 
-function applySessionToPill(pill: HTMLElement, session: CastSession): void {
-  const connectedOnly = !!session.connectedOnly && !session.title
-  pill.setAttribute("aria-label", t("settings.playOnTv.castingTo", { device: session.deviceName }))
-  pill.querySelector<HTMLElement>('[data-role="device-name"]')!.textContent = session.deviceName
-  pill.querySelector<HTMLElement>('[data-role="title"]')!.textContent = connectedOnly
-    ? t("cast.pill.ready")
-    : session.title
-  pill.querySelector<HTMLElement>('[data-role="live"]')!.classList.toggle("hidden", connectedOnly || !session.isLive)
-  pill.querySelector<HTMLElement>('[data-role="time"]')!.classList.toggle("hidden", connectedOnly || session.isLive)
+function announceStatus(pill: HTMLElement, text: string): void {
+  pill.querySelector<HTMLElement>('[data-role="sr-status"]')!.textContent = text
+}
+
+function clearStopArmTimeout(): void {
+  if (stopArmTimeout != null) {
+    clearTimeout(stopArmTimeout)
+    stopArmTimeout = null
+  }
+}
+
+function armStopButton(pill: HTMLElement): void {
+  stopArmed = true
+  clearIdleCollapseTimeout()
+  const stopBtn = pill.querySelector<HTMLButtonElement>('[data-role="stop"]')!
+  const stopLabel = pill.querySelector<HTMLElement>('[data-role="stop-label"]')!
+  stopBtn.dataset.armed = "true"
+  stopBtn.setAttribute("aria-label", t("cast.pill.stopConfirmLabel"))
+  stopBtn.title = t("cast.pill.stopConfirmLabel")
+  stopLabel.classList.add("max-w-24", "me-3")
+  announceStatus(pill, t("cast.pill.stopConfirmLabel"))
+  clearStopArmTimeout()
+  stopArmTimeout = setTimeout(() => disarmStopButton(pill), STOP_CONFIRM_WINDOW_MS)
+}
+
+function disarmStopButton(pill: HTMLElement): void {
+  clearStopArmTimeout()
+  if (!stopArmed) return
+  stopArmed = false
+  const stopBtn = pill.querySelector<HTMLButtonElement>('[data-role="stop"]')!
+  const stopLabel = pill.querySelector<HTMLElement>('[data-role="stop-label"]')!
+  stopBtn.dataset.armed = "false"
+  stopBtn.setAttribute("aria-label", t("cast.pill.stop"))
+  stopBtn.title = t("cast.pill.stop")
+  stopLabel.classList.remove("max-w-24", "me-3")
+  const session = getCastSession()
+  if (session) restartIdleCollapseCountdown(pill, session)
+}
+
+/** Connected to a device but nothing chosen to play yet. */
+function isConnectedOnlySession(session: CastSession): boolean {
+  return !!session.connectedOnly && !session.title
+}
+
+function applyTransportVisibility(pill: HTMLElement, session: CastSession): void {
+  const connectedOnly = isConnectedOnlySession(session)
   pill.querySelector<HTMLElement>('[data-role="back30"]')!.classList.toggle("hidden", connectedOnly || session.isLive)
   pill.querySelector<HTMLElement>('[data-role="forward30"]')!.classList.toggle("hidden", connectedOnly || session.isLive)
   pill.querySelector<HTMLElement>('[data-role="playpause"]')!.classList.toggle("hidden", connectedOnly)
+}
 
+function applyContentButtonAffordance(pill: HTMLElement, session: CastSession): void {
+  const connectedOnly = isConnectedOnlySession(session)
   const contentBtn = pill.querySelector<HTMLButtonElement>('[data-role="content"]')!
   const canOpenContent = !connectedOnly && !!session.contentHref
   contentBtn.disabled = !canOpenContent
@@ -204,6 +302,30 @@ function applySessionToPill(pill: HTMLElement, session: CastSession): void {
   } else {
     contentBtn.removeAttribute("aria-label")
     contentBtn.removeAttribute("title")
+  }
+}
+
+function applySessionToPill(pill: HTMLElement, session: CastSession): void {
+  const connectedOnly = isConnectedOnlySession(session)
+  pill.setAttribute("aria-label", t("settings.playOnTv.castingTo", { device: session.deviceName }))
+  const deviceNameEl = pill.querySelector<HTMLElement>('[data-role="device-name"]')!
+  deviceNameEl.textContent = session.deviceName
+  deviceNameEl.title = session.deviceName
+  const titleEl = pill.querySelector<HTMLElement>('[data-role="title"]')!
+  const displayTitle = connectedOnly ? t("cast.pill.connectedPrompt") : session.title
+  titleEl.textContent = displayTitle
+  titleEl.title = displayTitle
+  const titleChanged = lastAppliedTitle !== null && session.title !== lastAppliedTitle
+  lastAppliedTitle = session.title
+  if (titleChanged) announceStatus(pill, displayTitle)
+  pill.querySelector<HTMLElement>('[data-role="live"]')!.classList.toggle("hidden", connectedOnly || !session.isLive)
+  pill.querySelector<HTMLElement>('[data-role="time"]')!.classList.toggle("hidden", connectedOnly || session.isLive)
+
+  // A same-title patch must not re-run the transport/content visuals while collapsed.
+  if (titleChanged) expandPill(pill, session)
+  if (!pillCollapsed) {
+    applyTransportVisibility(pill, session)
+    applyContentButtonAffordance(pill, session)
   }
 
   if (connectedOnly || session.isLive) {
@@ -239,13 +361,20 @@ function updateProgressBar(pill: HTMLElement, positionSeconds: number, durationS
   progressEl.classList.remove("hidden")
 }
 
+function resetRetryButton(pill: HTMLElement): void {
+  const retryBtn = pill.querySelector<HTMLButtonElement>('[data-role="retry"]')!
+  retryBtn.disabled = false
+  retryBtn.classList.remove("opacity-60")
+}
+
 function renderStatus(pill: HTMLElement, session: CastSession, status: PillStatus): void {
   if (pill.dataset.status === status) return
   pill.dataset.status = status
 
-  const connectedOnly = !!session.connectedOnly && !session.title
+  const connectedOnly = isConnectedOnlySession(session)
   const iconEl = pill.querySelector<HTMLElement>('[data-role="icon"]')!
   const titleEl = pill.querySelector<HTMLElement>('[data-role="title"]')!
+  const retryBtn = pill.querySelector<HTMLButtonElement>('[data-role="retry"]')!
   const transportButtons = [
     pill.querySelector<HTMLButtonElement>('[data-role="back30"]')!,
     pill.querySelector<HTMLButtonElement>('[data-role="playpause"]')!,
@@ -254,10 +383,14 @@ function renderStatus(pill: HTMLElement, session: CastSession, status: PillStatu
 
   if (status === "reconnecting") {
     titleEl.textContent = t("cast.pill.reconnecting")
+    titleEl.title = t("cast.pill.reconnecting")
     for (const button of transportButtons) {
       button.disabled = true
       button.classList.add("opacity-60")
     }
+    retryBtn.classList.add("hidden")
+    lastAnnouncedPlaybackState = null
+    announceStatus(pill, t("cast.pill.reconnecting"))
     return
   }
 
@@ -269,11 +402,137 @@ function renderStatus(pill: HTMLElement, session: CastSession, status: PillStatu
     iconEl.classList.remove("text-fg-3")
     iconEl.classList.add("text-bad")
     titleEl.textContent = t("cast.pill.error")
+    titleEl.title = t("cast.pill.error")
+    for (const button of transportButtons) button.classList.add("hidden")
+    resetRetryButton(pill)
+    retryBtn.classList.remove("hidden")
+    lastAnnouncedPlaybackState = null
+    announceStatus(pill, titleEl.textContent)
     return
   }
   iconEl.classList.remove("text-bad")
   iconEl.classList.add("text-fg-3")
-  titleEl.textContent = connectedOnly ? t("cast.pill.ready") : session.title
+  retryBtn.classList.add("hidden")
+  applyTransportVisibility(pill, session)
+  const displayTitle = connectedOnly ? t("cast.pill.connectedPrompt") : session.title
+  titleEl.textContent = displayTitle
+  titleEl.title = displayTitle
+}
+
+function prefersHardCutMotion(): boolean {
+  return (
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true ||
+    document.documentElement.dataset.perfMode === "on"
+  )
+}
+
+/** Steady playback is the only state the idle-collapse chip is allowed to trigger from. */
+function isSteadyPlaybackNow(pill: HTMLElement, session: CastSession): boolean {
+  if (isConnectedOnlySession(session)) return false
+  if (pill.dataset.status !== "ok") return false
+  const playPauseButton = pill.querySelector<HTMLElement>('[data-role="playpause"]')
+  return playPauseButton?.dataset.paused !== "true"
+}
+
+function setPillCollapsed(pill: HTMLElement, isCollapsed: boolean, session: CastSession): void {
+  pillCollapsed = isCollapsed
+  pill.dataset.collapsed = isCollapsed ? "true" : "false"
+  const contentBtn = pill.querySelector<HTMLButtonElement>('[data-role="content"]')!
+  const textCol = pill.querySelector<HTMLElement>('[data-role="text-col"]')!
+
+  if (isCollapsed) {
+    for (const role of COLLAPSE_HIDDEN_ROLES) {
+      const roleEl = pill.querySelector<HTMLElement>(`[data-role="${role}"]`)
+      if (roleEl && !roleEl.classList.contains("hidden")) roleEl.classList.add("hidden", COLLAPSE_MARK_CLASS)
+    }
+  } else {
+    for (const role of COLLAPSE_HIDDEN_ROLES) {
+      const roleEl = pill.querySelector<HTMLElement>(`[data-role="${role}"]`)
+      if (roleEl?.classList.contains(COLLAPSE_MARK_CLASS)) roleEl.classList.remove("hidden", COLLAPSE_MARK_CLASS)
+    }
+  }
+
+  contentBtn.classList.toggle("rounded-e-full", isCollapsed)
+  contentBtn.classList.toggle("pe-3", isCollapsed)
+  contentBtn.classList.toggle("gap-0", isCollapsed)
+  contentBtn.classList.toggle("gap-2.5", !isCollapsed)
+  textCol.style.transitionDuration = prefersHardCutMotion() ? "0s" : ""
+  textCol.classList.toggle("max-w-0", isCollapsed)
+  textCol.classList.toggle("max-w-none", !isCollapsed)
+  textCol.classList.toggle("opacity-0", isCollapsed)
+
+  if (isCollapsed) {
+    contentBtn.disabled = false
+    contentBtn.classList.remove("cursor-default")
+    contentBtn.setAttribute("aria-label", t("cast.pill.expand"))
+    contentBtn.title = t("cast.pill.expand")
+  } else {
+    applyContentButtonAffordance(pill, session)
+  }
+}
+
+function clearIdleCollapseTimeout(): void {
+  if (idleCollapseTimeout != null) {
+    clearTimeout(idleCollapseTimeout)
+    idleCollapseTimeout = null
+  }
+}
+
+function tryIdleCollapse(pill: HTMLElement): void {
+  idleCollapseTimeout = null
+  if (pillCollapsed || stopArmed || retryInFlight) return
+  const session = getCastSession()
+  if (!session || !pillEl) return
+  if (Date.now() - lastPillInteractionAt < POST_INTERACTION_GRACE_MS) return
+  if (!isSteadyPlaybackNow(pill, session)) return
+  setPillCollapsed(pill, true, session)
+}
+
+function scheduleIdleCollapse(pill: HTMLElement): void {
+  clearIdleCollapseTimeout()
+  idleCollapseTimeout = setTimeout(() => tryIdleCollapse(pill), IDLE_COLLAPSE_MS)
+}
+
+/** Called after state renders (feed ticks, session updates): never resets a timer already counting down. */
+function refreshIdleCollapseState(pill: HTMLElement, session: CastSession): void {
+  const steady = isSteadyPlaybackNow(pill, session)
+  if (pillCollapsed) {
+    if (!steady) expandPill(pill, session)
+    return
+  }
+  if (!steady || stopArmed || retryInFlight) {
+    clearIdleCollapseTimeout()
+    return
+  }
+  if (idleCollapseTimeout == null) scheduleIdleCollapse(pill)
+}
+
+/** Called after real user interaction: always pushes the countdown back out to a fresh 45s. */
+function restartIdleCollapseCountdown(pill: HTMLElement, session: CastSession): void {
+  lastPillInteractionAt = Date.now()
+  if (isSteadyPlaybackNow(pill, session) && !stopArmed && !retryInFlight) {
+    scheduleIdleCollapse(pill)
+  } else {
+    clearIdleCollapseTimeout()
+  }
+}
+
+function expandPill(pill: HTMLElement, session: CastSession): void {
+  if (!pillCollapsed) return
+  lastExpandFromCollapsedAtMs = Date.now()
+  setPillCollapsed(pill, false, session)
+  refreshIdleCollapseState(pill, session)
+}
+
+function onPillHoverOrFocus(): void {
+  if (!pillEl) return
+  const session = getCastSession()
+  if (!session) return
+  if (pillCollapsed) {
+    expandPill(pillEl, session)
+    return
+  }
+  restartIdleCollapseCountdown(pillEl, session)
 }
 
 function refreshReceiverLogSnapshotIfStale(session: CastSession, device: TvDevice): void {
@@ -320,8 +579,14 @@ function onFeedState(state: CastState): void {
   } else {
     errorToastShown = false
     renderStatus(pillEl, session, "ok")
-    setPlayPauseIcon(pillEl, state.state === "paused")
+    const paused = state.state === "paused"
+    setPlayPauseIcon(pillEl, paused)
+    if (state.state !== lastAnnouncedPlaybackState) {
+      lastAnnouncedPlaybackState = state.state
+      announceStatus(pillEl, paused ? t("cast.remote.statePaused") : t("cast.remote.statePlaying"))
+    }
   }
+  refreshIdleCollapseState(pillEl, session)
   if (Date.now() < suppressPollPositionUntil) return
   lastKnownPositionSeconds = state.positionSeconds
   if (!session.isLive) {
@@ -339,6 +604,7 @@ function onFeedHealth(health: CastFeedHealth): void {
   const session = getCastSession()
   if (!session || !pillEl) return
   renderStatus(pillEl, session, health.consecutiveMisses > 0 ? "reconnecting" : "ok")
+  refreshIdleCollapseState(pillEl, session)
 }
 
 function startFeed(): void {
@@ -364,12 +630,44 @@ async function openRemoteOrNavigate(session: CastSession): Promise<void> {
   }
 }
 
+async function handleRetryClick(session: CastSession, device: TvDevice): Promise<void> {
+  const retryBtn = pillEl?.querySelector<HTMLButtonElement>('[data-role="retry"]')
+  if (!retryBtn || retryBtn.disabled) return
+  retryBtn.disabled = true
+  retryBtn.classList.add("opacity-60")
+  retryInFlight = true
+  clearIdleCollapseTimeout()
+  const retried = await castRetryLast(device)
+  retryInFlight = false
+  if (!retried) {
+    retryBtn.disabled = false
+    retryBtn.classList.remove("opacity-60")
+    toast({ title: t("cast.toast.failed", { device: device.name }) })
+  }
+  if (pillEl) refreshIdleCollapseState(pillEl, session)
+}
+
 function onPillClick(event: Event): void {
   const target = event.target as HTMLElement | null
   if (!target || !pillEl) return
   const session = getCastSession()
   if (!session) return
+
+  if (pillCollapsed) {
+    // Tapping the collapsed chip must only expand it, never fall through to an inner control's action.
+    expandPill(pillEl, session)
+    return
+  }
+  if (Date.now() - lastExpandFromCollapsedAtMs < EXPAND_CLICK_SUPPRESS_MS) {
+    // This click's own focusin/pointerenter already expanded the chip; don't let it fall through.
+    restartIdleCollapseCountdown(pillEl, session)
+    return
+  }
+  restartIdleCollapseCountdown(pillEl, session)
+
   const device = sessionAsDevice(session)
+
+  if (stopArmed && !target.closest('[data-role="stop"]')) disarmStopButton(pillEl)
 
   if (target.closest('[data-role="content"]')) {
     void openRemoteOrNavigate(session)
@@ -381,7 +679,16 @@ function onPillClick(event: Event): void {
     unmount()
     return
   }
+  if (target.closest('[data-role="retry"]')) {
+    void handleRetryClick(session, device)
+    return
+  }
   if (target.closest('[data-role="stop"]')) {
+    if (!stopArmed) {
+      armStopButton(pillEl)
+      return
+    }
+    disarmStopButton(pillEl)
     castStop(device)
       .then(() => toast({ title: t("cast.toast.stopped", { device: device.name }) }))
       .catch((err) => log.warn("[xt:tv-cast-pill] stop failed:", err))
@@ -428,16 +735,32 @@ function onLocaleChange(): void {
   }
 }
 
+function onPillKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape" && pillEl && stopArmed) disarmStopButton(pillEl)
+}
+
 function mount(session: CastSession): void {
   if (pillEl) unmount(false)
   errorToastShown = false
   suppressPollPositionUntil = 0
   lastKnownDurationSeconds = null
+  lastAnnouncedPlaybackState = null
+  lastAppliedTitle = null
+  stopArmed = false
+  pillCollapsed = false
+  retryInFlight = false
+  lastPillInteractionAt = Date.now()
+  lastExpandFromCollapsedAtMs = 0
+  clearStopArmTimeout()
+  clearIdleCollapseTimeout()
   const pill = buildPill()
   pill.classList.add("translate-y-2", "opacity-0")
   applySessionToPill(pill, session)
   setPlayPauseIcon(pill, false)
   pill.addEventListener("click", onPillClick)
+  pill.addEventListener("keydown", onPillKeydown)
+  pill.addEventListener("pointerenter", onPillHoverOrFocus)
+  pill.addEventListener("focusin", onPillHoverOrFocus)
   document.body.appendChild(pill)
   pillEl = pill
   positionAboveMobileNav(pill)
@@ -456,15 +779,24 @@ function mount(session: CastSession): void {
     })
   })
   startFeed()
+  refreshIdleCollapseState(pill, session)
 }
 
 function unmount(animate = true): void {
   if (!pillEl) return
   const pill = pillEl
   pill.removeEventListener("click", onPillClick)
+  pill.removeEventListener("keydown", onPillKeydown)
+  pill.removeEventListener("pointerenter", onPillHoverOrFocus)
+  pill.removeEventListener("focusin", onPillHoverOrFocus)
   window.removeEventListener("resize", onWindowResize)
   morePanelObserver?.disconnect()
   morePanelObserver = null
+  clearStopArmTimeout()
+  clearIdleCollapseTimeout()
+  stopArmed = false
+  pillCollapsed = false
+  retryInFlight = false
   stopFeed()
   pillEl = null
   if (!animate) {
@@ -481,6 +813,7 @@ function onSessionChanged(): void {
     if (pillEl) {
       applySessionToPill(pillEl, session)
       renderStatus(pillEl, session, "ok")
+      refreshIdleCollapseState(pillEl, session)
     } else {
       mount(session)
     }

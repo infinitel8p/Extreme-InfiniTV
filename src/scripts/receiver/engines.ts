@@ -16,6 +16,8 @@ import {
   classifyStartFailure,
   deviceSupportsHevc,
   hasHevcNameHint,
+  httpStatusFromErrorDetail,
+  isConnectionLimitStatus,
   type StartFailureKind,
   type StartFailureVerdict,
 } from "@/scripts/lib/codec-hints.js"
@@ -64,6 +66,24 @@ export function clampReceiverVolume(level: number): number {
   return Math.min(1, Math.max(0, level))
 }
 
+/** A duration only means something once it is finite and positive: live HLS reports Infinity and a pre-metadata read is 0 or NaN. */
+export function normalizeReportedDuration(seconds: number | null | undefined): number | undefined {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return undefined
+  return seconds
+}
+
+/** Same gate for the native player's millisecond payload; ExoPlayer omits the field for C.TIME_UNSET. */
+export function durationSecondsFromMs(durationMs: number | null | undefined): number | undefined {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0) return undefined
+  return Math.floor(durationMs / 1000)
+}
+
+/** The remote reveals its slider only for a report carrying a level, so "none" must mean "no volume surface". */
+export function normalizeReportedVolume(level: number | null | undefined): number | undefined {
+  if (typeof level !== "number" || !Number.isFinite(level) || level < 0 || level > 1) return undefined
+  return level
+}
+
 // ---------------------------------------------------------------------
 // Embedded engine: mountPlayer-backed playback inside the receiver page.
 // ---------------------------------------------------------------------
@@ -109,6 +129,7 @@ export function createEmbeddedReceiverEngine(
   let currentMime = ""
   let currentIsLive = false
   let currentPlaybackState: ReceiverPlaybackState = "idle"
+  let knownDurationSeconds: number | undefined
   let tearingDown = false
   let lastTimeReportAt = 0
 
@@ -121,16 +142,30 @@ export function createEmbeddedReceiverEngine(
     return handle?.getMediaElement?.() ?? dom.videoEl
   }
 
+  // Backends answer 0 for unknown; reporting 0 would pin the remote's scrubber range at zero.
+  function currentDurationSeconds(explicit?: number): number | undefined {
+    if (currentIsLive) return undefined
+    const mediaEl = getMediaElementFor(activeHandle)
+    return normalizeReportedDuration(explicit)
+      ?? normalizeReportedDuration(activeHandle?.duration?.())
+      ?? normalizeReportedDuration(mediaEl?.duration)
+      ?? knownDurationSeconds
+  }
+
   function report(partial: ReceiverStatePartial): void {
     if (partial.state) currentPlaybackState = partial.state
     const mediaEl = getMediaElementFor(activeHandle)
+    const durationSeconds = currentDurationSeconds(partial.durationSeconds)
+    if (durationSeconds !== undefined) knownDurationSeconds = durationSeconds
+    // Read live off the media element so even a plain state transition carries a level.
+    const volume = normalizeReportedVolume(partial.volume ?? mediaEl?.volume)
     callbacks.report({
       state: partial.state ?? currentPlaybackState,
       positionSeconds: partial.positionSeconds ?? mediaEl?.currentTime ?? 0,
-      durationSeconds: partial.durationSeconds ?? activeHandle?.duration?.(),
+      durationSeconds,
       error: partial.error,
-      volume: partial.volume,
-      muted: partial.muted,
+      volume,
+      muted: volume === undefined ? undefined : (partial.muted ?? mediaEl?.muted ?? false),
     })
   }
 
@@ -182,6 +217,12 @@ export function createEmbeddedReceiverEngine(
 
   function describePlaybackError(context: FailureContext): { message: string; technical: string | null } {
     if (context === "timeout") return { message: t("receiver.error.timeout"), technical: null }
+
+    // A provider refusal is unambiguous, so it settles the message before any codec guesswork.
+    const refusedStatus = httpStatusFromErrorDetail(activeHandle?.codecInfo?.()?.errorDetail)
+    if (isConnectionLimitStatus(refusedStatus)) {
+      return { message: t("receiver.error.connectionLimit"), technical: `HTTP ${refusedStatus}` }
+    }
 
     const verdict = classifyCurrentFailure()
     const knownKey = FAILURE_MESSAGE_KEYS[verdict.kind]
@@ -285,6 +326,7 @@ export function createEmbeddedReceiverEngine(
     dom.titleWrapEl?.classList.add("opacity-0")
     dom.pausedEl?.classList.add("hidden")
     dom.idleEl?.classList.remove("hidden")
+    knownDurationSeconds = undefined
     report({ state: "idle", positionSeconds: 0 })
     tearingDown = false
     if (notify) callbacks.onSessionEnded()
@@ -323,8 +365,6 @@ export function createEmbeddedReceiverEngine(
         state: currentPlaybackState,
         positionSeconds: mediaEl?.currentTime ?? 0,
         durationSeconds: handle.duration?.(),
-        volume: mediaEl?.volume,
-        muted: mediaEl?.muted,
       })
     })
   }
@@ -352,6 +392,8 @@ export function createEmbeddedReceiverEngine(
       currentTitle = descriptor.title
       currentMime = descriptor.mime
       currentIsLive = descriptor.isLive
+      // Seeded from the sender's metadata so the first report already carries a range.
+      knownDurationSeconds = descriptor.isLive ? undefined : normalizeReportedDuration(descriptor.durationSeconds)
 
       report({ state: "loading", positionSeconds: 0 })
       showLoading(true, descriptor.title)
@@ -433,8 +475,10 @@ export function createEmbeddedReceiverEngine(
 
 // Media3 PlaybackException.errorCodeName values, plus our synthetic
 // "SOURCE_UNSUPPORTED" from VideoActivity's media-source construction catch.
-export function mapNativeErrorCode(code: string | null | undefined): string {
+export function mapNativeErrorCode(code: string | null | undefined, httpStatus?: number | null): string {
   const normalized = (code || "").toUpperCase()
+  // A refusal outranks the transport code: BAD_HTTP_STATUS alone reads as a network fault.
+  if (isConnectionLimitStatus(httpStatus)) return "receiver.error.connectionLimit"
   if (!normalized) return "receiver.error.title"
   if (normalized.includes("DECODING") || normalized.includes("DECODER") || normalized.includes("DRM")) {
     return "receiver.error.videoCodec"
@@ -447,12 +491,8 @@ export function mapNativeErrorCode(code: string | null | undefined): string {
   ) {
     return "receiver.error.container"
   }
-  if (
-    normalized.includes("IO_") ||
-    normalized.includes("BAD_HTTP") ||
-    normalized.includes("NETWORK") ||
-    normalized.includes("TIMEOUT")
-  ) {
+  if (normalized.includes("TIMEOUT")) return "receiver.error.timeout"
+  if (normalized.includes("IO_") || normalized.includes("BAD_HTTP") || normalized.includes("NETWORK")) {
     return "receiver.error.network"
   }
   return "receiver.error.title"
@@ -468,6 +508,12 @@ const NATIVE_LIVE_CHANNEL_ERROR_KEY = `live:${RECEIVER_LIVE_CHANNEL_ID}`
 export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallbacks): ReceiverEngine {
   let unsubscribe: (() => void) | null = null
   let isLive = false
+  // Sticky so pause / resume / seek echoes keep carrying the range the progress ticks established.
+  let knownDurationSeconds: number | undefined
+  // Mirrors VideoActivity's ReceiverVolumeState so every report carries a level from the start.
+  const volumeControlAvailable = typeof window !== "undefined" && !!window.AndroidVideo?.receiverVolume
+  let knownVolume = 1
+  let knownMuted = false
   // Bumped on every play() so a stale event from a torn-down session (its
   // finishPlayback() is async via runOnUiThread) can't clobber a newer one.
   let generation = 0
@@ -478,9 +524,22 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
     unsubscribe = null
   }
 
+  function report(partial: ReceiverStatePartial): void {
+    if (!volumeControlAvailable) {
+      callbacks.report(partial)
+      return
+    }
+    callbacks.report({
+      ...partial,
+      volume: partial.volume ?? knownVolume,
+      muted: partial.muted ?? knownMuted,
+    })
+  }
+
   // Finishes the native activity and unwinds our end of the session. Safe to
   // call after the activity already finished itself (Kotlin no-ops).
   function finishAndEndSession(): void {
+    knownDurationSeconds = undefined
     try { window.AndroidVideo?.receiverControl?.("stop", 0) } catch {}
     stopListening()
     try { window.AndroidVideo?.receiverSessionEnd?.() } catch {}
@@ -495,30 +554,45 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
   function handleEvent(sessionGeneration: number, event: AndroidNativeEvent): void {
     if (!isCurrentEvent(sessionGeneration, event.payload.contentKey)) return
     switch (event.type) {
-      case "xt:android-native-progress":
-        callbacks.report({
+      case "xt:android-native-progress": {
+        const reportedDuration = durationSecondsFromMs(event.payload.durationMs)
+        if (reportedDuration !== undefined) knownDurationSeconds = reportedDuration
+        report({
           state: "playing",
           positionSeconds: Math.max(0, Math.floor((event.payload.positionMs || 0) / 1000)),
-          durationSeconds: Math.max(0, Math.floor((event.payload.durationMs || 0) / 1000)),
+          durationSeconds: knownDurationSeconds,
+        })
+        break
+      }
+      case "xt:android-native-play-state":
+        // The only signal that can move a tick-less live cast off the one-shot "playing" from play().
+        report({
+          state: event.payload.playing ? "playing" : "paused",
+          positionSeconds: Math.max(0, Math.floor((event.payload.positionMs || 0) / 1000)),
+          durationSeconds: knownDurationSeconds,
         })
         break
       case "xt:android-native-error": {
-        const messageKey = mapNativeErrorCode(event.payload.code)
-        const technical = `${event.payload.code || "?"}${event.payload.message ? `: ${event.payload.message}` : ""}`
+        const httpStatus = event.payload.httpStatus ?? null
+        const messageKey = mapNativeErrorCode(event.payload.code, httpStatus)
+        const statusPart = httpStatus ? ` HTTP ${httpStatus}` : ""
+        const technical = `${event.payload.code || "?"}${statusPart}${event.payload.message ? `: ${event.payload.message}` : ""}`
         const detail = `${t(messageKey)} (${technical})`.slice(0, 300)
         log.error("[xt:receiver] native playback failed:", detail)
-        callbacks.report({ state: "error", error: detail, positionSeconds: 0 })
+        report({ state: "error", error: detail, positionSeconds: 0 })
         finishAndEndSession()
         callbacks.onSessionEnded()
         break
       }
       case "xt:android-native-finished":
-        callbacks.report({ state: event.payload.completed ? "ended" : "idle", positionSeconds: 0 })
+        report({ state: event.payload.completed ? "ended" : "idle", positionSeconds: 0 })
         finishAndEndSession()
         callbacks.onSessionEnded()
         break
       case "xt:android-native-volume":
-        callbacks.report({ volume: event.payload.volume, muted: event.payload.muted })
+        knownVolume = normalizeReportedVolume(event.payload.volume) ?? knownVolume
+        knownMuted = event.payload.muted ?? knownMuted
+        report({ volume: knownVolume, muted: knownMuted })
         break
       default:
         break
@@ -528,13 +602,15 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
   return {
     async play(descriptor: CastDescriptorV1): Promise<boolean> {
       isLive = descriptor.isLive
+      // Seeded from the sender's metadata so the first report already carries a range.
+      knownDurationSeconds = descriptor.isLive ? undefined : normalizeReportedDuration(descriptor.durationSeconds)
       const sessionStarted = window.AndroidVideo?.receiverSessionStart?.() ?? false
       if (!sessionStarted) return false
       const sessionGeneration = ++generation
       const contentKey = `${descriptor.isLive ? RECEIVER_LIVE_CONTENT_KEY : RECEIVER_VOD_CONTENT_KEY}-${sessionGeneration}`
       activeContentKey = contentKey
       unsubscribe = subscribeAndroidNativeEvents((event) => handleEvent(sessionGeneration, event))
-      callbacks.report({ state: "loading", positionSeconds: 0 })
+      report({ state: "loading", positionSeconds: 0, durationSeconds: knownDurationSeconds })
 
       const ua = descriptor.headers?.userAgent || ""
       const referer = descriptor.headers?.referer || ""
@@ -564,7 +640,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
         return false
       }
 
-      if (descriptor.isLive) callbacks.report({ state: "playing", positionSeconds: 0 })
+      if (descriptor.isLive) report({ state: "playing", positionSeconds: 0 })
       return true
     },
 
@@ -580,15 +656,22 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
       let reachedSession = false
       try { reachedSession = window.AndroidVideo?.receiverControl?.(action, positionMs) ?? false } catch {}
       if (!reachedSession || sessionGeneration !== generation) return
-      if (action === "pause") callbacks.report({ state: "paused" })
-      else if (action === "resume") callbacks.report({ state: "playing" })
+      if (action === "pause") report({ state: "paused", durationSeconds: knownDurationSeconds })
+      else if (action === "resume") report({ state: "playing", durationSeconds: knownDurationSeconds })
+      // A paused scrub gets no progress tick, so echo the requested position back to the remote.
+      else if (action === "seek") {
+        report({ positionSeconds: Math.floor(positionMs / 1000), durationSeconds: knownDurationSeconds })
+      }
     },
 
     setVolume(level: number, muted: boolean): void {
       const clamped = clampReceiverVolume(level)
       let applied = false
       try { applied = window.AndroidVideo?.receiverVolume?.(clamped, muted) ?? false } catch {}
-      if (applied) callbacks.report({ volume: clamped, muted })
+      if (!applied) return
+      knownVolume = clamped
+      knownMuted = muted
+      report({ volume: clamped, muted })
     },
 
     teardown(): void {

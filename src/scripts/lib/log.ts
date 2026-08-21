@@ -26,11 +26,31 @@ const isTauri =
 type PluginLog = typeof import("@tauri-apps/plugin-log")
 let pluginLogPromise: Promise<PluginLog> | null = null
 function toFile(level: "error" | "warn" | "info", args: unknown[]): void {
+    const text = redactUrl(stringifyArgs(args))
+    toSinks(level, text)
     if (!isTauri) return
     try {
         if (!pluginLogPromise) pluginLogPromise = import("@tauri-apps/plugin-log")
-        void pluginLogPromise.then((mod) => mod[level](redactUrl(stringifyArgs(args)))).catch(() => {})
+        void pluginLogPromise.then((mod) => mod[level](text)).catch(() => {})
     } catch {}
+}
+
+// Extra destinations for warn/error/info, fed the same redacted text the file mirror gets.
+export type LogSink = (level: "error" | "warn" | "info", text: string) => void
+
+const sinks = new Set<LogSink>()
+
+export function addLogSink(sink: LogSink): () => void {
+    sinks.add(sink)
+    return () => sinks.delete(sink)
+}
+
+function toSinks(level: "error" | "warn" | "info", text: string): void {
+    if (sinks.size === 0) return
+    for (const sink of sinks) {
+        // A throwing sink must never take down the call site it was logging for.
+        try { sink(level, text) } catch {}
+    }
 }
 
 function stringifyArgs(args: unknown[]): string {

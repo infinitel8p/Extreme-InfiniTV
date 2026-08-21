@@ -84,6 +84,7 @@ import {
   getExternalLauncher,
   isMacOS,
   isTauri,
+  stopExternalPlayback,
   subscribeExternalPlayerExit,
 } from "@/scripts/lib/player-runtime.ts"
 import {
@@ -264,7 +265,10 @@ const epgDayIndicator = document.getElementById("epg-day-indicator")
 let activePlaylistId = ""
 let activePlaylistTitle = ""
 let activeTuningTransition: any = null
-let externalPresenceActive = false
+// Guards every implicit local restart: nothing may remount behind MPV/VLC and take its provider connection.
+let externalPlaybackActive = false
+// Which player holds it, so a handoff can ask that one to let the stream go.
+let externalPlaybackKind = null
 
 // The inline script in livetv.astro sets data-first-run optimistically from
 // localStorage["xt_playlists"]. On Tauri builds the real entry list lives in
@@ -289,7 +293,8 @@ document.addEventListener("xt:entries-updated", () => {
 
 document.addEventListener("xt:active-changed", () => {
   clearRichPresence().catch(() => {})
-  externalPresenceActive = false
+  externalPlaybackActive = false
+  externalPlaybackKind = null
   reconcileFirstRun()
   loadChannels()
 })
@@ -302,8 +307,9 @@ document.addEventListener("xt:cache-revalidated", (e) => {
 })
 
 subscribeExternalPlayerExit(() => {
-  if (!externalPresenceActive) return
-  externalPresenceActive = false
+  if (!externalPlaybackActive) return
+  externalPlaybackActive = false
+  externalPlaybackKind = null
 })
 
 document.addEventListener("xt:channel-epg-changed", (e) => {
@@ -890,7 +896,7 @@ function openChannelMenu(channel, anchor, point) {
           drm: streamDrmById.get(channel.id) || undefined,
           headers: streamHeadersById.get(channel.id) || undefined,
           preferNativeHls: isNativeHlsFallbackChannel(channel.id),
-          stopLocal: teardownLocalPlaybackForCast,
+          stopLocal: releaseLocalPlaybackForHandoff,
           liveContext: liveContextForChannelId(channel.id),
         })()
       })
@@ -1191,7 +1197,7 @@ document.addEventListener("keydown", (e) => {
     case "spacebar": {
       e.preventDefault()
       if (vjs.paused()) {
-        if (!isCastRoutingActive()) vjs.play()?.catch(() => {})
+        if (!isCastRoutingActive() && !externalPlaybackActive) vjs.play()?.catch(() => {})
       } else {
         vjs.pause()
       }
@@ -2198,7 +2204,7 @@ async function mountEmbeddedPlayer(backend, opts) {
       const seqAtRetry = ctx.seq
       setTimeout(() => {
         if (seqAtRetry !== playSeq) return
-        if (isCastRoutingActive()) return
+        if (isCastRoutingActive() || externalPlaybackActive) return
         if (retryCatchupSession(ctx, { automatic: true })) return
         if (!ctx.isLive) {
           // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
@@ -2686,7 +2692,7 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
           drm: streamDrmById.get(streamId) || undefined,
           headers: streamHeadersById.get(streamId) || undefined,
           preferNativeHls: isNativeHlsFallbackChannel(streamId),
-          stopLocal: teardownLocalPlaybackForCast,
+          stopLocal: releaseLocalPlaybackForHandoff,
           liveContext: liveContextForChannelId(streamId),
         })()
       })
@@ -2892,7 +2898,7 @@ const liveStallRetuneCounts = new Map()
 
 // Shared by the stall sentinel (event-driven) and the progress watch (frozen currentTime).
 function performStallRetune(trigger) {
-  if (isCastRoutingActive()) return
+  if (isCastRoutingActive() || externalPlaybackActive) return
   const ctx = lastPlayContext
   if (!ctx || !vjs) return
   log.warn("[xt:livetv] stalled - re-tuning", { streamId: ctx.streamId, trigger })
@@ -3487,6 +3493,8 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
     })
   } else if (failure.kind === "parse") {
     reason = t("stream.failure.parseFailed")
+  } else if (failure.kind === "connection-limit") {
+    reason = t("stream.failure.connectionLimit")
   } else {
     reason = t("stream.error.checkConnection")
   }
@@ -3610,10 +3618,14 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
       beforeLaunch: () => {
         hidePlaybackFailurePanel()
       },
-      afterLaunch: () => {
+      releaseLocal: () => {
+        releaseLocalPlaybackForHandoff()
+      },
+      afterLaunch: (kind) => {
         const channel = all.find((entry) => entry.id === ctx.streamId)
         pushDiscordPresence(channel || { id: ctx.streamId, name: ctx.name }, "live")
-        externalPresenceActive = true
+        externalPlaybackActive = true
+        externalPlaybackKind = kind
       },
     })
   }
@@ -3644,7 +3656,8 @@ function runScanLineSweep() {
 
 window.addEventListener("pagehide", () => {
   clearRichPresence().catch(() => {})
-  externalPresenceActive = false
+  externalPlaybackActive = false
+  externalPlaybackKind = null
   void stopAudioTranscode()
 })
 
@@ -3760,8 +3773,21 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
   return launched
 }
 
-/** Releases the local player + all recovery machinery so nothing re-mounts and steals the provider connection back from the receiver. */
-function teardownLocalPlaybackForCast() {
+/** Releases the local player + recovery machinery so nothing re-mounts and steals the provider connection back. */
+function releaseLocalPlaybackForHandoff() {
+  // False lets channel-to-channel casting skip the slot-settle wait.
+  const heldProviderConnection = !!lastPlayContext || externalPlaybackActive
+  // Ask the external player to let go, or the receiver is the second connection again.
+  if (externalPlaybackKind) {
+    const kind = externalPlaybackKind
+    externalPlaybackKind = null
+    externalPlaybackActive = false
+    void stopExternalPlayback(kind).then((released) => {
+      if (!released) {
+        log.warn("[xt:livetv] external player kept the stream open - it may still hold the provider connection", { player: kind })
+      }
+    })
+  }
   suppressPauseTrackingUntilMs = Date.now() + 500
   try { vjs?.pause?.() } catch {}
   try { vjs?.reset?.() } catch {}
@@ -3770,6 +3796,7 @@ function teardownLocalPlaybackForCast() {
   clearDeadAudioWatchdog()
   hidePlaybackFailurePanel()
   lastPlayContext = null
+  return heldProviderConnection
 }
 
 async function play(streamId, name, reason = "user") {
@@ -3796,7 +3823,7 @@ async function play(streamId, name, reason = "user") {
     const routed = await routePlayToCast({
       contentTitle: name || null,
       quiet: true,
-      stopLocal: teardownLocalPlaybackForCast,
+      stopLocal: releaseLocalPlaybackForHandoff,
       liveContext: liveContextForChannelId(streamId),
       buildDescriptor: async () => {
         const { isCastableSrc, buildLiveCastDescriptor } = await import("@/scripts/lib/tv-cast-descriptor")
@@ -3871,7 +3898,8 @@ async function play(streamId, name, reason = "user") {
           await launchExternalLive(externalKind, src, channelHeaders)
           showExternalPlayerEmptyState(externalKind, name)
           pushDiscordPresence(channel || { id: streamId, name }, "live")
-          externalPresenceActive = true
+          externalPlaybackActive = true
+          externalPlaybackKind = externalKind
         } catch (err) {
           surfaceLaunchError(err, externalKind)
         }
@@ -3984,7 +4012,8 @@ async function play(streamId, name, reason = "user") {
       await launchExternalLive(backend, src, channelHeaders)
       showExternalPlayerEmptyState(backend, name)
       pushDiscordPresence(channel || { id: streamId, name }, "live")
-      externalPresenceActive = true
+      externalPlaybackActive = true
+      externalPlaybackKind = backend
     } catch (err) {
       surfaceLaunchError(err, backend)
     }
@@ -4113,7 +4142,8 @@ async function play(streamId, name, reason = "user") {
   armStartWedgeWatch()
   applyVideoScale()
   pushDiscordPresence(channel || { id: streamId, name }, "live")
-  externalPresenceActive = false
+  externalPlaybackActive = false
+  externalPlaybackKind = null
 
   paintEpgSidePanel(streamId)
 }
@@ -4752,10 +4782,19 @@ function appendExternalLaunchButton(parent, streamId, src, name) {
       suppressPauseTrackingUntilMs = Date.now() + 500
       try { vjs?.pause?.() } catch {}
     },
-    afterLaunch: () => {
+    releaseLocal: () => {
+      releaseLocalPlaybackForHandoff()
+    },
+    afterLaunch: (kind) => {
       const channel = all.find((entry) => entry.id === streamId)
       pushDiscordPresence(channel || { id: streamId, name }, "live")
-      externalPresenceActive = true
+      externalPlaybackActive = true
+      externalPlaybackKind = kind
+      // The embedded surface is empty now; show the "Now playing in <PLAYER>" state instead.
+      if (kind === "mpv" || kind === "vlc") {
+        document.getElementById("player")?.setAttribute("hidden", "")
+        showExternalPlayerEmptyState(kind, name)
+      }
     },
   })
 }

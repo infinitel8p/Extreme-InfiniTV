@@ -25,6 +25,7 @@ export type AndroidNativeEventType =
   | "xt:android-native-channel-changed"
   | "xt:android-native-finished"
   | "xt:android-native-error"
+  | "xt:android-native-play-state"
   | "xt:android-native-volume"
 
 export interface AndroidNativeEvent {
@@ -41,6 +42,8 @@ export interface AndroidNativeEvent {
     mode?: string
     code?: string
     message?: string
+    httpStatus?: number
+    playing?: boolean
     volume?: number
     muted?: boolean
   }
@@ -162,6 +165,7 @@ function installListeners(): void {
     "xt:android-native-channel-changed",
     "xt:android-native-finished",
     "xt:android-native-error",
+    "xt:android-native-play-state",
     "xt:android-native-volume",
   ]
   for (const type of types) {

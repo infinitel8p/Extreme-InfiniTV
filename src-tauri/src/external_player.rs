@@ -730,6 +730,37 @@ fn write_and_read_reply(pipe: &mut std::fs::File, payload: &[u8]) -> Result<Vec<
     }
 }
 
+// "stop" rather than "quit": releases the provider connection but keeps the reuse slot valid.
+fn build_mpv_stop() -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(&json!({ "command": ["stop"] })).unwrap_or_else(|_| Vec::new());
+    bytes.push(b'\n');
+    bytes
+}
+
+fn send_mpv_stop(endpoint: &str) -> Result<(), String> {
+    let payload = build_mpv_stop();
+
+    #[cfg(unix)]
+    {
+        let mut stream = open_mpv_socket(endpoint).map_err(|e| format!("IPC:{e}"))?;
+        let reply = write_and_read_reply(&mut stream, &payload)?;
+        if let Some(err) = first_mpv_error(&reply) {
+            return Err(format!("IPC:mpv replied {err}"));
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        let mut pipe = open_mpv_pipe(endpoint).map_err(|e| format!("IPC:{e}"))?;
+        let reply = write_and_read_reply(&mut pipe, &payload)?;
+        if let Some(err) = first_mpv_error(&reply) {
+            return Err(format!("IPC:mpv replied {err}"));
+        }
+        Ok(())
+    }
+}
+
 fn send_mpv_loadfile(
     endpoint: &str,
     url: &str,
@@ -782,6 +813,29 @@ fn send_mpv_loadfile(
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
+/// Releases a running player's hold on the stream without closing it; only mpv can, so VLC reports false.
+#[tauri::command]
+pub async fn stop_external_player(
+    state: State<'_, ExternalPlayerState>,
+    kind: String,
+) -> Result<bool, String> {
+    if kind != "mpv" {
+        return Ok(false);
+    }
+    let Some(slot) = state.get(&kind) else {
+        return Ok(false);
+    };
+    match send_mpv_stop(&slot.endpoint) {
+        Ok(()) => Ok(true),
+        Err(error) => {
+            // A dead socket means the player is gone, which is the outcome we wanted anyway.
+            state.drop_slot(&kind);
+            log::warn!("[external-player] mpv stop failed, dropping reuse slot: {error}");
+            Ok(false)
+        }
+    }
+}
+
 /// `"snap"` / `"flatpak"` when the app is sandboxed, `None` elsewhere.
 #[tauri::command]
 pub fn sandbox_runtime() -> Option<String> {
@@ -967,6 +1021,15 @@ fn extract_arg(args: &[String], prefix: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_mpv_stop_is_a_newline_terminated_stop_command() {
+        let payload = build_mpv_stop();
+        assert_eq!(payload.last(), Some(&b'\n'));
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&payload[..payload.len() - 1]).expect("valid json");
+        assert_eq!(parsed["command"][0], "stop");
+    }
 
     #[test]
     fn augment_mpv_strips_existing_ipc_server() {
