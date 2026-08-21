@@ -12,10 +12,12 @@ import {
   saveTvDevice,
   listTvDevices,
   castPause,
+  castSetVolume,
   fetchCastState,
   fetchCastStateWithFallback,
   probeTvDeviceAuthorized,
   pairTvDevice,
+  parseCastStateValue,
   CastAuthError,
   type TvDevice,
 } from "@/scripts/lib/tv-cast"
@@ -120,6 +122,71 @@ describe("postDeviceAction host fallback (via castPause)", () => {
 
     await expect(castPause(device)).rejects.toBeInstanceOf(CastAuthError)
     expect(providerFetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("castSetVolume", () => {
+  it("posts the clamped level and muted flag to /volume", async () => {
+    const device = makeDevice()
+    saveTvDevice(device)
+    providerFetchMock.mockResolvedValue(jsonResponse(200, { ok: true }))
+
+    await castSetVolume(device, 1.5, true)
+
+    expect(providerFetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = providerFetchMock.mock.calls[0]
+    expect(url).toContain("/volume")
+    expect(JSON.parse(init.body)).toEqual({ level: 1, muted: true })
+  })
+
+  it("clamps a negative level to 0", async () => {
+    const device = makeDevice()
+    saveTvDevice(device)
+    providerFetchMock.mockResolvedValue(jsonResponse(200, { ok: true }))
+
+    await castSetVolume(device, -0.5, false)
+
+    const [, init] = providerFetchMock.mock.calls[0]
+    expect(JSON.parse(init.body)).toEqual({ level: 0, muted: false })
+  })
+})
+
+describe("parseCastStateValue", () => {
+  it("parses a minimal valid payload", () => {
+    expect(parseCastStateValue({ state: "playing", positionSeconds: 12 })).toEqual({
+      state: "playing",
+      positionSeconds: 12,
+    })
+  })
+
+  it("accepts volume and muted when in range", () => {
+    expect(parseCastStateValue({ state: "playing", positionSeconds: 12, volume: 0.4, muted: true })).toEqual({
+      state: "playing",
+      positionSeconds: 12,
+      volume: 0.4,
+      muted: true,
+    })
+  })
+
+  it("drops an out-of-range volume", () => {
+    const result = parseCastStateValue({ state: "playing", positionSeconds: 12, volume: 1.5 })
+    expect(result?.volume).toBeUndefined()
+  })
+
+  it("drops a non-boolean muted field", () => {
+    const result = parseCastStateValue({ state: "playing", positionSeconds: 12, muted: "yes" })
+    expect(result?.muted).toBeUndefined()
+  })
+
+  it("returns null for a missing required field", () => {
+    expect(parseCastStateValue({ positionSeconds: 12 })).toBeNull()
+    expect(parseCastStateValue({ state: "playing" })).toBeNull()
+  })
+
+  it("returns null for garbage input", () => {
+    expect(parseCastStateValue(null)).toBeNull()
+    expect(parseCastStateValue("nope")).toBeNull()
+    expect(parseCastStateValue(42)).toBeNull()
   })
 })
 

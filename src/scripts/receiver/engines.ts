@@ -36,10 +36,12 @@ export type ReceiverPlaybackState =
   | "error"
 
 export interface ReceiverStatePartial {
-  state: ReceiverPlaybackState
+  state?: ReceiverPlaybackState
   positionSeconds?: number
   durationSeconds?: number
   error?: string
+  volume?: number
+  muted?: boolean
 }
 
 export interface ReceiverEngineCallbacks {
@@ -52,7 +54,14 @@ export type ReceiverControlAction = "pause" | "resume" | "seek" | "stop"
 export interface ReceiverEngine {
   play(descriptor: CastDescriptorV1): Promise<boolean>
   control(action: ReceiverControlAction, seconds?: number): void
+  setVolume(level: number, muted: boolean): void
   teardown(): void
+}
+
+/** Clamps to [0, 1], treating non-finite input as silence rather than throwing. */
+export function clampReceiverVolume(level: number): number {
+  if (!Number.isFinite(level)) return 0
+  return Math.min(1, Math.max(0, level))
 }
 
 // ---------------------------------------------------------------------
@@ -113,13 +122,15 @@ export function createEmbeddedReceiverEngine(
   }
 
   function report(partial: ReceiverStatePartial): void {
-    currentPlaybackState = partial.state
+    if (partial.state) currentPlaybackState = partial.state
     const mediaEl = getMediaElementFor(activeHandle)
     callbacks.report({
-      state: partial.state,
+      state: partial.state ?? currentPlaybackState,
       positionSeconds: partial.positionSeconds ?? mediaEl?.currentTime ?? 0,
       durationSeconds: partial.durationSeconds ?? activeHandle?.duration?.(),
       error: partial.error,
+      volume: partial.volume,
+      muted: partial.muted,
     })
   }
 
@@ -312,6 +323,8 @@ export function createEmbeddedReceiverEngine(
         state: currentPlaybackState,
         positionSeconds: mediaEl?.currentTime ?? 0,
         durationSeconds: handle.duration?.(),
+        volume: mediaEl?.volume,
+        muted: mediaEl?.muted,
       })
     })
   }
@@ -395,6 +408,17 @@ export function createEmbeddedReceiverEngine(
         default:
           break
       }
+    },
+
+    setVolume(level: number, muted: boolean): void {
+      const clamped = clampReceiverVolume(level)
+      const mediaEl = getMediaElementFor(activeHandle)
+      if (mediaEl) {
+        mediaEl.volume = clamped
+        mediaEl.muted = muted
+      }
+      activeHandle?.muted?.(muted)
+      report({ volume: clamped, muted })
     },
 
     teardown(): void {
@@ -493,6 +517,9 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
         finishAndEndSession()
         callbacks.onSessionEnded()
         break
+      case "xt:android-native-volume":
+        callbacks.report({ volume: event.payload.volume, muted: event.payload.muted })
+        break
       default:
         break
     }
@@ -555,6 +582,13 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
       if (!reachedSession || sessionGeneration !== generation) return
       if (action === "pause") callbacks.report({ state: "paused" })
       else if (action === "resume") callbacks.report({ state: "playing" })
+    },
+
+    setVolume(level: number, muted: boolean): void {
+      const clamped = clampReceiverVolume(level)
+      let applied = false
+      try { applied = window.AndroidVideo?.receiverVolume?.(clamped, muted) ?? false } catch {}
+      if (applied) callbacks.report({ volume: clamped, muted })
     },
 
     teardown(): void {

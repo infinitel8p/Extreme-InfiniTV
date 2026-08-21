@@ -1,11 +1,9 @@
-// Floating "casting to <TV>" pill: mounts while a cast session is active, polls the receiver's /state endpoint.
+// Floating "casting to <TV>" pill: mounts while a cast session is active, tracks the shared cast state feed.
 
 import {
   getCastSession,
   updateCastSession,
   clearCastSession,
-  fetchCastState,
-  fetchCastStateWithFallback,
   fetchReceiverLogs,
   cacheReceiverLogSnapshot,
   getReceiverLogSnapshotAt,
@@ -16,8 +14,10 @@ import {
   sessionAsDevice,
   CAST_SESSION_EVENT,
   type CastSession,
+  type CastState,
   type TvDevice,
 } from "@/scripts/lib/tv-cast.js"
+import { subscribeCastStateFeed, type CastFeedHealth } from "@/scripts/lib/tv-cast-state-feed.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
@@ -33,8 +33,7 @@ import {
 } from "@/scripts/lib/icons.js"
 
 const PILL_ID = "xt-cast-pill"
-const POLL_INTERVAL_MS = 2000
-const MAX_CONSECUTIVE_MISSES = 3
+const FEED_CADENCE_MS = 2000
 const SEEK_STEP_SECONDS = 30
 const SEEK_SUPPRESS_MS = 2500
 const EXIT_ANIMATION_MS = 320
@@ -43,8 +42,7 @@ const LOG_SNAPSHOT_INTERVAL_MS = 60_000
 type PillStatus = "ok" | "reconnecting" | "error"
 
 let pillEl: HTMLElement | null = null
-let pollHandle: ReturnType<typeof setInterval> | null = null
-let consecutiveMisses = 0
+let feedUnsubscribe: (() => void) | null = null
 let lastKnownPositionSeconds = 0
 let lastKnownDurationSeconds: number | null = null
 let initialized = false
@@ -200,7 +198,7 @@ function applySessionToPill(pill: HTMLElement, session: CastSession): void {
   contentBtn.disabled = !canOpenContent
   contentBtn.classList.toggle("cursor-default", !canOpenContent)
   if (canOpenContent) {
-    const label = t("cast.pill.openContent", { title: session.title })
+    const label = t("cast.pill.openRemote")
     contentBtn.setAttribute("aria-label", label)
     contentBtn.title = label
   } else {
@@ -292,24 +290,10 @@ function refreshReceiverLogSnapshotIfStale(session: CastSession, device: TvDevic
     })
 }
 
-async function tick(): Promise<void> {
+function onFeedState(state: CastState): void {
   const session = getCastSession()
   if (!session || !pillEl) return
   const device = sessionAsDevice(session)
-  // One miss away from giving up: walk the device's other known addresses before declaring it gone.
-  const nearGiveUp = consecutiveMisses === MAX_CONSECUTIVE_MISSES - 1
-  const state = nearGiveUp ? await fetchCastStateWithFallback(device) : await fetchCastState(device)
-  if (!state) {
-    consecutiveMisses++
-    if (consecutiveMisses >= MAX_CONSECUTIVE_MISSES) {
-      unmount()
-      clearCastSession()
-    } else {
-      renderStatus(pillEl, session, "reconnecting")
-    }
-    return
-  }
-  consecutiveMisses = 0
   refreshReceiverLogSnapshotIfStale(session, device)
   if (state.durationSeconds != null) lastKnownDurationSeconds = state.durationSeconds
   if (state.state === "idle") {
@@ -346,19 +330,37 @@ async function tick(): Promise<void> {
   }
 }
 
-function startPolling(): void {
-  stopPolling()
-  consecutiveMisses = 0
-  pollHandle = setInterval(() => {
-    if (typeof document !== "undefined" && document.visibilityState !== "visible") return
-    void tick()
-  }, POLL_INTERVAL_MS)
+function onFeedLost(): void {
+  unmount()
+  clearCastSession()
 }
 
-function stopPolling(): void {
-  if (pollHandle != null) {
-    clearInterval(pollHandle)
-    pollHandle = null
+function onFeedHealth(health: CastFeedHealth): void {
+  const session = getCastSession()
+  if (!session || !pillEl) return
+  renderStatus(pillEl, session, health.consecutiveMisses > 0 ? "reconnecting" : "ok")
+}
+
+function startFeed(): void {
+  stopFeed()
+  feedUnsubscribe = subscribeCastStateFeed(onFeedState, {
+    cadenceMs: FEED_CADENCE_MS,
+    onLost: onFeedLost,
+    onHealth: onFeedHealth,
+  })
+}
+
+function stopFeed(): void {
+  feedUnsubscribe?.()
+  feedUnsubscribe = null
+}
+
+async function openRemoteOrNavigate(session: CastSession): Promise<void> {
+  try {
+    const { openCastRemote } = await import("@/scripts/lib/tv-cast-remote")
+    openCastRemote()
+  } catch {
+    if (session.contentHref) window.location.assign(session.contentHref)
   }
 }
 
@@ -370,7 +372,7 @@ function onPillClick(event: Event): void {
   const device = sessionAsDevice(session)
 
   if (target.closest('[data-role="content"]')) {
-    if (session.contentHref) window.location.assign(session.contentHref)
+    void openRemoteOrNavigate(session)
     return
   }
   if (target.closest('[data-role="dismiss"]')) {
@@ -453,8 +455,7 @@ function mount(session: CastSession): void {
       syncMorePanelOverlap(pill)
     })
   })
-  startPolling()
-  void tick()
+  startFeed()
 }
 
 function unmount(animate = true): void {
@@ -464,7 +465,7 @@ function unmount(animate = true): void {
   window.removeEventListener("resize", onWindowResize)
   morePanelObserver?.disconnect()
   morePanelObserver = null
-  stopPolling()
+  stopFeed()
   pillEl = null
   if (!animate) {
     pill.remove()

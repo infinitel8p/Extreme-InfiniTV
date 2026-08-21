@@ -145,7 +145,7 @@ import { decodedFrameCount, droppedFrameCount } from "@/scripts/lib/player-telem
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { isAutomaticRetuneReason } from "@/scripts/lib/stream-health.ts"
 import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
-import { isCastRoutingActive, routePlayToCast, getCastSession } from "@/scripts/lib/tv-cast.ts"
+import { isCastRoutingActive, routePlayToCast, getCastSession, buildLiveCastContext } from "@/scripts/lib/tv-cast.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 // One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
@@ -408,6 +408,13 @@ const STAR_FILLED =
 let all = []
 /** @type {Array<typeof all[number]>} */
 let filtered = []
+
+/** Ordered-channel-list cast context for the given channel, from the currently rendered list. */
+function liveContextForChannelId(channelId) {
+  if (!activePlaylistId) return undefined
+  const channelIds = filtered.map((channel) => String(channel.id))
+  return buildLiveCastContext(activePlaylistId, channelIds, String(channelId))
+}
 
 const picker = mountCategoryPicker({
   kind: "live",
@@ -884,6 +891,7 @@ function openChannelMenu(channel, anchor, point) {
           headers: streamHeadersById.get(channel.id) || undefined,
           preferNativeHls: isNativeHlsFallbackChannel(channel.id),
           stopLocal: teardownLocalPlaybackForCast,
+          liveContext: liveContextForChannelId(channel.id),
         })()
       })
     })
@@ -2679,6 +2687,7 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
           headers: streamHeadersById.get(streamId) || undefined,
           preferNativeHls: isNativeHlsFallbackChannel(streamId),
           stopLocal: teardownLocalPlaybackForCast,
+          liveContext: liveContextForChannelId(streamId),
         })()
       })
     })
@@ -3788,6 +3797,7 @@ async function play(streamId, name, reason = "user") {
       contentTitle: name || null,
       quiet: true,
       stopLocal: teardownLocalPlaybackForCast,
+      liveContext: liveContextForChannelId(streamId),
       buildDescriptor: async () => {
         const { isCastableSrc, buildLiveCastDescriptor } = await import("@/scripts/lib/tv-cast-descriptor")
         const liveSrc = targetChannel ? buildChannelStreamUrl(targetChannel) : null

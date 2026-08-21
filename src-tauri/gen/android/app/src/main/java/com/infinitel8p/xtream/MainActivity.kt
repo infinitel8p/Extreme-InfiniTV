@@ -1036,7 +1036,7 @@ class ReceiverKeepAliveBridge(private val activity: TauriActivity) {
  * SharedPreferences; MainActivity.onResume also drains and dispatches them as
  * DOM CustomEvents on the WebView automatically.
  *
- * receiverSessionStart/-End/-Control back the TV receiver mode: while a cast
+ * receiverSessionStart/-End/-Control/-Volume back the TV receiver mode: while a cast
  * session is playing through VideoActivity, events are pushed straight into
  * the WebView instead of waiting for the SharedPreferences drain, and remote
  * control commands route to NativePlayerControl instead of a fresh Intent.
@@ -1136,6 +1136,13 @@ class AndroidVideoBridge(
       "seek" -> NativePlayerControl.seekToMs(positionMs)
       "stop" -> NativePlayerControl.finishPlayback()
     }
+    return wasActive
+  }
+
+  @JavascriptInterface
+  fun receiverVolume(level: Double, muted: Boolean): Boolean {
+    val wasActive = NativePlayerControl.isActive()
+    NativePlayerControl.setVolume(level.toFloat(), muted)
     return wasActive
   }
 

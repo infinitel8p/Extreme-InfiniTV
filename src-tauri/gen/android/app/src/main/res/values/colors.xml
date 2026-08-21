@@ -12,6 +12,7 @@
 
     <!-- Brand accent -->
     <color name="xt_accent">#FFCF1F8B</color>
+    <color name="xt_brand_rose">#FFEC92E5</color>
     <color name="xt_overlay_scrim">#B3000000</color>
     <color name="xt_row_bg">#FF0F0F11</color>
     <color name="xt_row_bg_selected">#33CF1F8B</color>

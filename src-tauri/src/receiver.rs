@@ -97,6 +97,10 @@ pub struct PlaybackReport {
     pub title: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub volume: Option<f64>,
+    #[serde(default)]
+    pub muted: Option<bool>,
 }
 
 impl Default for PlaybackReport {
@@ -107,6 +111,8 @@ impl Default for PlaybackReport {
             duration_seconds: None,
             title: None,
             error: None,
+            volume: None,
+            muted: None,
         }
     }
 }
@@ -794,6 +800,8 @@ pub fn receiver_report_state(state: tauri::State<'_, ReceiverState>, payload: Pl
         duration_seconds: payload.duration_seconds,
         title: payload.title.map(|title| title.chars().take(MAX_TITLE_LEN).collect()),
         error: payload.error.map(|error| error.chars().take(MAX_TITLE_LEN).collect()),
+        volume: payload.volume,
+        muted: payload.muted,
     };
     let serialized = serde_json::to_string(&bounded).map_err(|error| format!("OTHER:{error}"))?;
     *state.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner()) = bounded;
@@ -1312,6 +1320,7 @@ fn build_router(ctx: Arc<ServerCtx>) -> axum::Router {
         .route("/resume", post(handle_resume))
         .route("/stop", post(handle_stop))
         .route("/seek", post(handle_seek))
+        .route("/volume", post(handle_volume))
         .route("/state", get(handle_state))
         .route("/logs", get(handle_logs))
         .route("/events", get(handle_events))
@@ -1545,12 +1554,16 @@ async fn handle_play(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_
 
     {
         let mut playback = ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner());
+        let previous_volume = playback.volume;
+        let previous_muted = playback.muted;
         *playback = PlaybackReport {
             state: "loading".to_string(),
             position_seconds: 0.0,
             duration_seconds: body.duration_seconds,
             title: body.title.clone(),
             error: None,
+            volume: previous_volume,
+            muted: previous_muted,
         };
     }
     broadcast_playback(&ctx);
@@ -1686,6 +1699,36 @@ async fn handle_seek(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_
         return bad_request_response("invalidSeconds");
     }
     ctx.events.control(json!({"action": "seek", "seconds": seconds, "deviceName": device_name}));
+    (StatusCode::OK, Json(json!({"ok": true}))).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct VolumeRequest {
+    // Option, not f64: NaN/Infinity round-trip through JSON as `null`, which must still be rejected.
+    level: Option<f64>,
+    muted: bool,
+}
+
+async fn handle_volume(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_body: Bytes) -> Response {
+    let Some(device_name) = authenticate(&ctx, &headers) else {
+        return unauthorized_response();
+    };
+    let Ok(body) = serde_json::from_slice::<VolumeRequest>(&raw_body) else {
+        return bad_request_response("badRequest");
+    };
+    let Some(level) = body.level else {
+        return bad_request_response("invalidLevel");
+    };
+    if !level.is_finite() || !(0.0..=1.0).contains(&level) {
+        return bad_request_response("invalidLevel");
+    }
+    ctx.events.control(json!({"action": "volume", "level": level, "muted": body.muted, "deviceName": device_name}));
+    {
+        let mut playback = ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner());
+        playback.volume = Some(level);
+        playback.muted = Some(body.muted);
+    }
+    broadcast_playback(&ctx);
     (StatusCode::OK, Json(json!({"ok": true}))).into_response()
 }
 
@@ -2967,6 +3010,114 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(negative_seek.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_volume_authenticates_before_parsing_the_body() {
+        let server = start_test_server().await;
+
+        let response = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", "not-a-real-key")
+            .body("not json")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_rejects_invalid_volume_requests() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let missing_field = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"level": 0.5}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(missing_field.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(missing_field.json::<Value>().await.unwrap()["error"], "badRequest");
+
+        let out_of_range = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"level": 1.5, "muted": false}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(out_of_range.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(out_of_range.json::<Value>().await.unwrap()["error"], "invalidLevel");
+
+        let nan_level = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"level": f64::NAN, "muted": false}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(nan_level.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(nan_level.json::<Value>().await.unwrap()["error"], "invalidLevel");
+
+        let non_json = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", &key)
+            .body("not json")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(non_json.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(non_json.json::<Value>().await.unwrap()["error"], "badRequest");
+    }
+
+    #[tokio::test]
+    async fn receiver_http_volume_accepts_a_valid_request_and_echoes_it() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"level": 0.4, "muted": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let control_events = server.collector.control.lock().unwrap();
+        let last_event = control_events.last().unwrap();
+        assert_eq!(last_event["action"], "volume");
+        assert_eq!(last_event["level"], 0.4);
+        assert_eq!(last_event["muted"], true);
+        drop(control_events);
+
+        let state_response = server
+            .client
+            .get(format!("{}/state", server.base_url))
+            .header("X-XT-Key", &key)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(state_response.status(), StatusCode::OK);
+        let state_body: PlaybackReport = state_response.json().await.unwrap();
+        assert_eq!(state_body.volume, Some(0.4));
+        assert_eq!(state_body.muted, Some(true));
     }
 
     #[tokio::test]

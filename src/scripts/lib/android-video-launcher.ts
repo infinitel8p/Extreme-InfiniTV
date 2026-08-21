@@ -25,6 +25,7 @@ export type AndroidNativeEventType =
   | "xt:android-native-channel-changed"
   | "xt:android-native-finished"
   | "xt:android-native-error"
+  | "xt:android-native-volume"
 
 export interface AndroidNativeEvent {
   type: AndroidNativeEventType
@@ -40,6 +41,8 @@ export interface AndroidNativeEvent {
     mode?: string
     code?: string
     message?: string
+    volume?: number
+    muted?: boolean
   }
 }
 
@@ -159,6 +162,7 @@ function installListeners(): void {
     "xt:android-native-channel-changed",
     "xt:android-native-finished",
     "xt:android-native-error",
+    "xt:android-native-volume",
   ]
   for (const type of types) {
     document.addEventListener(type, (event: Event) => {

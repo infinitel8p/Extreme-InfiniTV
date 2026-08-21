@@ -35,6 +35,8 @@ interface AndroidVideoBridge {
   receiverSessionEnd?: () => void
   /** Routes a remote control command into the running native player; returns whether a session was active. */
   receiverControl?: (action: string, positionMs: number) => boolean
+  /** Applies a remote volume/mute change to the running native player; returns whether a session was active. */
+  receiverVolume?: (level: number, muted: boolean) => boolean
   setKeepScreenOn?: (enabled: boolean) => void
   setTvOverscan?: (percent: number) => void
 }

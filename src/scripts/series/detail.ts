@@ -1390,6 +1390,9 @@ async function playEpisode(episode, options = {}) {
         try { vjs?.reset?.() } catch {}
         retirePreviousPlayback()
       },
+      seriesContext: activePlaylistId
+        ? { playlistId: activePlaylistId, seriesId: String(series.id), season: Number(seasonNum) || 0, episodeNum: Number(epNum) || 0 }
+        : undefined,
       buildDescriptor: () => {
         const src = buildEpisodeStreamUrl(episode)
         if (!src || !isCastableSrc(src)) return null

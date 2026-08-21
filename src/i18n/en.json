@@ -1651,5 +1651,16 @@
   "cast.pill.error": "Playback error",
   "cast.pill.reconnecting": "Reconnecting…",
   "cast.pill.openContent": "Open {title}",
+  "cast.pill.openRemote": "Open remote",
+  "cast.remote.previous": "Previous",
+  "cast.remote.next": "Next",
+  "cast.remote.back10": "Back 10 seconds",
+  "cast.remote.forward10": "Forward 10 seconds",
+  "cast.remote.volume": "Volume",
+  "cast.remote.mute": "Mute",
+  "cast.remote.unmute": "Unmute",
+  "cast.remote.seek": "Seek",
+  "cast.remote.statePlaying": "Playing",
+  "cast.remote.statePaused": "Paused",
   "cast.toast.stillCasting": "Still casting - tap the cast button to show controls."
 }

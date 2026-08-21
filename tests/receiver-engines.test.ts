@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { mapNativeErrorCode } from "../src/scripts/receiver/engines"
+import { clampReceiverVolume, mapNativeErrorCode } from "../src/scripts/receiver/engines"
 
 describe("mapNativeErrorCode", () => {
   it("maps decoder/decoding/DRM codes to the video codec message", () => {
@@ -28,5 +28,24 @@ describe("mapNativeErrorCode", () => {
     expect(mapNativeErrorCode(null)).toBe("receiver.error.title")
     expect(mapNativeErrorCode(undefined)).toBe("receiver.error.title")
     expect(mapNativeErrorCode("")).toBe("receiver.error.title")
+  })
+})
+
+describe("clampReceiverVolume", () => {
+  it("passes through values already within [0, 1]", () => {
+    expect(clampReceiverVolume(0)).toBe(0)
+    expect(clampReceiverVolume(0.4)).toBe(0.4)
+    expect(clampReceiverVolume(1)).toBe(1)
+  })
+
+  it("clamps out-of-range values to the nearest bound", () => {
+    expect(clampReceiverVolume(-0.5)).toBe(0)
+    expect(clampReceiverVolume(1.5)).toBe(1)
+  })
+
+  it("treats non-finite input as silence", () => {
+    expect(clampReceiverVolume(Number.NaN)).toBe(0)
+    expect(clampReceiverVolume(Number.POSITIVE_INFINITY)).toBe(0)
+    expect(clampReceiverVolume(Number.NEGATIVE_INFINITY)).toBe(0)
   })
 })

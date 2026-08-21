@@ -15,7 +15,8 @@
         app:use_controller="true"
         app:auto_show="true"
         app:hide_on_touch="true"
-        app:show_subtitle_button="true" />
+        app:show_subtitle_button="true"
+        app:controller_layout_id="@layout/player_controller_tv" />
 
     <LinearLayout
         android:id="@+id/channel_list_overlay"

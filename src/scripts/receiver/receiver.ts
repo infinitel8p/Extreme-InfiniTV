@@ -37,8 +37,10 @@ interface ReceiverPlayPayload {
 }
 
 interface ReceiverControlPayload {
-  action: ReceiverControlAction
+  action: ReceiverControlAction | "volume"
   seconds?: number
+  level?: number
+  muted?: boolean
   deviceName?: string
 }
 
@@ -69,6 +71,8 @@ let currentTitle = ""
 let currentIsLive = false
 let currentPlaybackState: ReceiverPlaybackState = "idle"
 let lastKnownPositionSeconds = 0
+let lastKnownVolume: number | undefined
+let lastKnownMuted: boolean | undefined
 
 let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let pairedFlashTimer: ReturnType<typeof setTimeout> | null = null
@@ -202,16 +206,22 @@ function setKeepScreenOn(enabled: boolean): void {
 }
 
 function reportState(partial: ReceiverStatePartial): void {
-  currentPlaybackState = partial.state
-  ambient?.notifyPlaybackState(partial.state)
-  setKeepScreenOn(partial.state === "playing" || partial.state === "loading" || partial.state === "buffering")
+  if (partial.state) {
+    currentPlaybackState = partial.state
+    ambient?.notifyPlaybackState(partial.state)
+    setKeepScreenOn(partial.state === "playing" || partial.state === "loading" || partial.state === "buffering")
+  }
   if (typeof partial.positionSeconds === "number") lastKnownPositionSeconds = partial.positionSeconds
+  if (typeof partial.volume === "number") lastKnownVolume = partial.volume
+  if (typeof partial.muted === "boolean") lastKnownMuted = partial.muted
   const payload = {
-    state: partial.state,
+    state: partial.state ?? currentPlaybackState,
     positionSeconds: partial.positionSeconds ?? lastKnownPositionSeconds,
     durationSeconds: partial.durationSeconds,
     title: currentTitle || undefined,
     error: partial.error,
+    volume: partial.volume ?? lastKnownVolume,
+    muted: partial.muted ?? lastKnownMuted,
   }
   void invoke("receiver_report_state", { payload }).catch((err) => {
     log.warn("[xt:receiver] receiver_report_state failed:", err)
@@ -304,6 +314,12 @@ function consumePendingPlay(): void {
 
 function onControl(payload: ReceiverControlPayload | undefined): void {
   if (!payload) return
+  if (payload.action === "volume") {
+    if (typeof payload.level === "number" && typeof payload.muted === "boolean") {
+      activeEngine?.setVolume(payload.level, payload.muted)
+    }
+    return
+  }
   activeEngine?.control(payload.action, payload.seconds)
 }
 

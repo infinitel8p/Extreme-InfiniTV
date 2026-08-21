@@ -13,7 +13,10 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.LinearLayout
+import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.C
@@ -33,6 +36,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 /**
  * Native ExoPlayer-backed playback activity.
@@ -64,12 +68,19 @@ class VideoActivity : AppCompatActivity() {
     const val MODE_VOD = "vod"
     const val MODE_LIVE = "live"
 
-    private const val PROGRESS_INTERVAL_MS = 5_000L
+    private const val PROGRESS_INTERVAL_MS = 2_000L
   }
 
   private var playerView: PlayerView? = null
   private var channelOverlay: LinearLayout? = null
   private var channelListView: RecyclerView? = null
+
+  private var controllerTitleView: TextView? = null
+  private var timeBarRow: View? = null
+  private var channelDownButton: View? = null
+  private var channelUpButton: View? = null
+  private var muteButton: ImageButton? = null
+  private var volumeSeekBar: SeekBar? = null
 
   private var exoPlayer: ExoPlayer? = null
   private var mediaSession: MediaSession? = null
@@ -122,6 +133,14 @@ class VideoActivity : AppCompatActivity() {
     channelOverlay = findViewById(R.id.channel_list_overlay)
     channelListView = findViewById(R.id.channel_list)
 
+    controllerTitleView = playerView?.findViewById(R.id.tv_controller_title)
+    timeBarRow = playerView?.findViewById(R.id.tv_time_row)
+    channelDownButton = playerView?.findViewById(R.id.tv_channel_down)
+    channelUpButton = playerView?.findViewById(R.id.tv_channel_up)
+    muteButton = playerView?.findViewById(R.id.tv_mute_button)
+    volumeSeekBar = playerView?.findViewById(R.id.tv_volume_seekbar)
+    setupCustomControls()
+
     // Keep the source-rect hint in sync with the player view so the PiP
     // transition animates from the visible video bounds.
     playerView?.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
@@ -130,6 +149,20 @@ class VideoActivity : AppCompatActivity() {
 
     NativePlayerControl.register(this)
     initializeFromIntent(intent)
+  }
+
+  private fun setupCustomControls() {
+    channelDownButton?.setOnClickListener { switchChannelByDelta(-1) }
+    channelUpButton?.setOnClickListener { switchChannelByDelta(+1) }
+    muteButton?.setOnClickListener { applyVolume(ReceiverVolumeState.volume, !ReceiverVolumeState.muted) }
+    volumeSeekBar?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+      override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+        if (fromUser) applyVolume(progress / 100f, muted = false)
+      }
+      override fun onStartTrackingTouch(seekBar: SeekBar) {}
+      override fun onStopTrackingTouch(seekBar: SeekBar) {}
+    })
+    updateVolumeControlsUi(ReceiverVolumeState.volume, ReceiverVolumeState.muted)
   }
 
   // singleTop delivery for a repeat launchVod/launchLive while this activity is on top.
@@ -154,6 +187,7 @@ class VideoActivity : AppCompatActivity() {
     posterUrl = intent.getStringExtra(EXTRA_POSTER) ?: ""
     resumeMs = intent.getLongExtra(EXTRA_START_MS, 0L)
     applyTvOverscanPadding(intent.getIntExtra(EXTRA_TV_OVERSCAN_PERCENT, 0))
+    controllerTitleView?.text = initialTitle
 
     if (mode == MODE_LIVE) {
       val json = NativePlayerPayload.takeChannels() ?: "[]"
@@ -169,7 +203,89 @@ class VideoActivity : AppCompatActivity() {
       channelOverlay?.visibility = View.GONE
     }
 
+    updateControllerForMode()
     initializePlayer()
+  }
+
+  // Live has no timeline (hide the time bar); VOD has no channel list (hide the flip buttons).
+  private fun updateControllerForMode() {
+    val isLive = mode == MODE_LIVE
+    timeBarRow?.visibility = if (isLive) View.GONE else View.VISIBLE
+    channelDownButton?.visibility = if (isLive) View.VISIBLE else View.GONE
+    channelUpButton?.visibility = if (isLive) View.VISIBLE else View.GONE
+    wireControllerFocusChain(isLive)
+  }
+
+  // Explicit D-pad focus ring since the two modes show a different set of rows.
+  private fun wireControllerFocusChain(isLive: Boolean) {
+    val rewind = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_rew)
+    val playPause = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_play_pause)
+    val forward = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_ffwd)
+    val progress = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_progress)
+    val subtitle = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_subtitle)
+    val audioTrack = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_audio_track)
+    val settings = playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_settings)
+    val mute = muteButton
+    val volume = volumeSeekBar
+    val channelDown = channelDownButton
+    val channelUp = channelUpButton
+
+    // Bottom row (transport), left to right; the channel buttons only exist in the chain when live.
+    val transportRow = listOfNotNull(
+      channelDown?.takeIf { isLive },
+      rewind,
+      playPause,
+      forward,
+      channelUp?.takeIf { isLive },
+    )
+    for (index in transportRow.indices) {
+      val current = transportRow[index]
+      current.nextFocusLeftId = transportRow.getOrElse(index - 1) { current }.id
+      current.nextFocusRightId = transportRow.getOrElse(index + 1) { current }.id
+    }
+
+    // Icon row (subtitle/audio/settings), left to right.
+    val iconRow = listOfNotNull(subtitle, audioTrack, settings)
+    for (index in iconRow.indices) {
+      val current = iconRow[index]
+      current.nextFocusLeftId = iconRow.getOrElse(index - 1) { current }.id
+      current.nextFocusRightId = iconRow.getOrElse(index + 1) { current }.id
+    }
+
+    // Up entry into the transport row: from the time bar in VOD, straight from the volume row in live.
+    val aboveTransport = if (isLive) mute else progress
+    transportRow.forEach { it.nextFocusUpId = aboveTransport?.id ?: it.id }
+
+    // Down exit out of the volume row: to the time bar in VOD, straight into the transport row in live.
+    val belowVolumeRow = if (isLive) playPause else progress
+    listOfNotNull(mute, volume, subtitle, audioTrack, settings).forEach {
+      it.nextFocusDownId = belowVolumeRow?.id ?: it.id
+    }
+
+    // Mute/seekbar sit apart from the icon row: the seekbar keeps LEFT/RIGHT for volume, so the
+    // icon row is only reached by going up out of it.
+    mute?.let { muteView ->
+      muteView.nextFocusLeftId = muteView.id
+      volume?.let { muteView.nextFocusRightId = it.id }
+    }
+    volume?.let { volumeView -> subtitle?.let { volumeView.nextFocusUpId = it.id } }
+    subtitle?.let { subtitleView -> mute?.let { subtitleView.nextFocusLeftId = it.id } }
+
+    if (isLive) return
+
+    // DefaultTimeBar can swallow DPAD_UP outright; force the escape to the volume row.
+    progress?.let { timeBar ->
+      timeBar.nextFocusUpId = mute?.id ?: timeBar.id
+      timeBar.nextFocusDownId = playPause?.id ?: timeBar.id
+      timeBar.setOnKeyListener { _, keyCode, event ->
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP && event.action == KeyEvent.ACTION_DOWN) {
+          mute?.requestFocus()
+          true
+        } else {
+          false
+        }
+      }
+    }
   }
 
   override fun onStart() {
@@ -304,6 +420,7 @@ class VideoActivity : AppCompatActivity() {
     setupMediaSession(player)
     updateKeepScreenOn(player)
     updatePictureInPictureParams(autoEnter = true)
+    applyVolume(ReceiverVolumeState.volume, ReceiverVolumeState.muted)
   }
 
   private fun updateKeepScreenOn(player: Player) {
@@ -368,6 +485,34 @@ class VideoActivity : AppCompatActivity() {
     exoPlayer?.seekTo(positionMs)
   }
 
+  fun applyVolume(level: Float, muted: Boolean) {
+    val clampedLevel = level.coerceIn(0f, 1f)
+    exoPlayer?.volume = if (muted) 0f else clampedLevel
+    ReceiverVolumeState.volume = clampedLevel
+    ReceiverVolumeState.muted = muted
+    updateVolumeControlsUi(clampedLevel, muted)
+    EventQueue.append(
+      this,
+      "xt:android-native-volume",
+      JSONObject().apply {
+        put("contentKey", contentKey)
+        put("volume", clampedLevel)
+        put("muted", muted)
+      }
+    )
+  }
+
+  // Single UI update path for both the on-screen controls and remote-driven volume changes.
+  private fun updateVolumeControlsUi(level: Float, muted: Boolean) {
+    val progress = (level * 100).roundToInt().coerceIn(0, 100)
+    volumeSeekBar?.let { if (it.progress != progress) it.progress = progress }
+    val isMuted = muted || level <= 0f
+    muteButton?.setImageResource(if (isMuted) R.drawable.ic_video_volume_mute else R.drawable.ic_video_volume)
+    muteButton?.contentDescription = getString(
+      if (isMuted) R.string.xt_video_unmute_description else R.string.xt_video_mute_description
+    )
+  }
+
   // ---------------------------------------------------------------------
   // Channel list (Live TV only)
   // ---------------------------------------------------------------------
@@ -394,19 +539,14 @@ class VideoActivity : AppCompatActivity() {
     }
   }
 
-  // Pads playback chrome for TV overscan; the video surface (PlayerView itself) stays full-bleed.
+  // Pads the PlayerView itself so video, subtitles and the controller all sit inside the safe area.
   private fun applyTvOverscanPadding(percent: Int) {
     tvOverscanPercent = percent.coerceIn(0, 8)
     val metrics = resources.displayMetrics
     val horizontalPx = metrics.widthPixels * tvOverscanPercent / 100
     val verticalPx = metrics.heightPixels * tvOverscanPercent / 100
 
-    playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_controller)
-      ?.setPadding(horizontalPx, verticalPx, horizontalPx, verticalPx)
-    playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_subtitles)
-      ?.setPadding(horizontalPx, verticalPx, horizontalPx, verticalPx)
-    playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_error_message)
-      ?.setPadding(horizontalPx, verticalPx, horizontalPx, verticalPx)
+    playerView?.setPadding(horizontalPx, verticalPx, horizontalPx, verticalPx)
 
     val overlay = channelOverlay
     val overlayParams = overlay?.layoutParams as? FrameLayout.LayoutParams
@@ -652,6 +792,15 @@ object TvOverscanState {
   var percent: Int = 0
 }
 
+// Remembered receiver volume/mute level, re-applied by initializePlayer() so a
+// relaunch (channel switch, onNewIntent) doesn't reset the level a remote set.
+object ReceiverVolumeState {
+  @Volatile
+  var volume: Float = 1f
+  @Volatile
+  var muted: Boolean = false
+}
+
 // In-process remote control for the TV receiver mode: AndroidVideoBridge
 // routes xt:receiver-control commands here instead of round-tripping through
 // an Intent/broadcast, since both live in the same process.
@@ -677,6 +826,11 @@ object NativePlayerControl {
   fun seekToMs(positionMs: Long) {
     val activity = activeActivity ?: return
     activity.runOnUiThread { activity.applySeekToMs(positionMs) }
+  }
+
+  fun setVolume(level: Float, muted: Boolean) {
+    val activity = activeActivity ?: return
+    activity.runOnUiThread { activity.applyVolume(level, muted) }
   }
 
   fun finishPlayback() {

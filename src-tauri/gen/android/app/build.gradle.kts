@@ -79,6 +79,8 @@ android {
                 jniLibs.keepDebugSymbols.add("**/armeabi-v7a/*.so")
                 jniLibs.keepDebugSymbols.add("**/x86/*.so")
                 jniLibs.keepDebugSymbols.add("**/x86_64/*.so")
+                // Deflate the huge debug Rust lib; stored+extract-free APKs overflow small TV storage.
+                jniLibs.useLegacyPackaging = true
             }
         }
         getByName("release") {

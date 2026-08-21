@@ -97,9 +97,8 @@ export function hubCardMenu(
             }
           }
         } else {
-          const liveEntry = (getCached(playlistId, "live")?.data || []).find(
-            (item: any) => String(item?.id) === String(target.id)
-          )
+          const liveList = getCached(playlistId, "live")?.data || []
+          const liveEntry = liveList.find((item: any) => String(item?.id) === String(target.id))
           const liveUrl = () => {
             if (liveEntry?.url) return liveEntry.url as string
             if (!hasXtreamCreds) return null
@@ -120,7 +119,8 @@ export function hubCardMenu(
                   }
                 : undefined
             onPlayOnTv = () => {
-              import("@/scripts/lib/tv-cast.ts").then(({ castLiveChannelToTv }) => {
+              import("@/scripts/lib/tv-cast.ts").then(({ castLiveChannelToTv, buildLiveCastContext }) => {
+                const channelIds = liveList.map((item: any) => String(item?.id))
                 castLiveChannelToTv({
                   contentTitle: target.name || null,
                   title: target.name || "",
@@ -128,6 +128,7 @@ export function hubCardMenu(
                   buildSrc: liveUrl,
                   drm,
                   headers,
+                  liveContext: buildLiveCastContext(playlistId, channelIds, String(target.id)),
                 })()
               })
             }

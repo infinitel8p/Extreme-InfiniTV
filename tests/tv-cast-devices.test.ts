@@ -18,6 +18,7 @@ import {
   candidateHostOrder,
   formatHostForUrl,
   isLinkLocalHost,
+  buildLiveCastContext,
   TV_DEVICES_EVENT,
   CAST_SESSION_EVENT,
   type TvDevice,
@@ -283,6 +284,21 @@ describe("cast session store", () => {
     expect(getCastSession()).toEqual(session)
   })
 
+  it("round-trips logo, liveContext, and seriesContext when present", () => {
+    const session = makeSession({
+      logo: "https://example.com/logo.png",
+      liveContext: { playlistId: "playlist-1", channelIds: ["10", "11", "12"], index: 1 },
+    })
+    setCastSession(session)
+    expect(getCastSession()).toEqual(session)
+
+    const seriesSession = makeSession({
+      seriesContext: { playlistId: "playlist-1", seriesId: "500", season: 2, episodeNum: 5 },
+    })
+    setCastSession(seriesSession)
+    expect(getCastSession()).toEqual(seriesSession)
+  })
+
   it("no-ops an update when there is no active session", () => {
     updateCastSession({ dismissed: true })
     expect(getCastSession()).toBeNull()
@@ -380,6 +396,44 @@ describe("formatHostForUrl", () => {
 
   it("leaves an already-bracketed IPv6 address unchanged", () => {
     expect(formatHostForUrl("[fe80::1]")).toBe("[fe80::1]")
+  })
+})
+
+describe("buildLiveCastContext", () => {
+  it("returns undefined when the channel isn't in the list", () => {
+    expect(buildLiveCastContext("playlist-1", ["1", "2", "3"], "9")).toBeUndefined()
+  })
+
+  it("returns the full list and index when under the cap", () => {
+    expect(buildLiveCastContext("playlist-1", ["1", "2", "3"], "2")).toEqual({
+      playlistId: "playlist-1",
+      channelIds: ["1", "2", "3"],
+      index: 1,
+    })
+  })
+
+  it("windows to 500 ids centered on the channel when over the cap", () => {
+    const channelIds = Array.from({ length: 1000 }, (_, index) => String(index))
+    const result = buildLiveCastContext("playlist-1", channelIds, "500")!
+    expect(result.channelIds).toHaveLength(500)
+    expect(result.channelIds[result.index]).toBe("500")
+    expect(result.channelIds[0]).toBe("250")
+  })
+
+  it("clamps the window at the start of the list", () => {
+    const channelIds = Array.from({ length: 1000 }, (_, index) => String(index))
+    const result = buildLiveCastContext("playlist-1", channelIds, "10")!
+    expect(result.channelIds).toHaveLength(500)
+    expect(result.channelIds[0]).toBe("0")
+    expect(result.channelIds[result.index]).toBe("10")
+  })
+
+  it("clamps the window at the end of the list", () => {
+    const channelIds = Array.from({ length: 1000 }, (_, index) => String(index))
+    const result = buildLiveCastContext("playlist-1", channelIds, "995")!
+    expect(result.channelIds).toHaveLength(500)
+    expect(result.channelIds[result.channelIds.length - 1]).toBe("999")
+    expect(result.channelIds[result.index]).toBe("995")
   })
 })
 

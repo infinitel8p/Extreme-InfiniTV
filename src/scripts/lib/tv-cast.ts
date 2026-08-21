@@ -162,6 +162,9 @@ export interface CastSession {
   hosts?: string[]
   pinnedHostIndex?: number
   contentHref?: string
+  logo?: string
+  liveContext?: { playlistId: string; channelIds: string[]; index: number }
+  seriesContext?: { playlistId: string; seriesId: string; season: number; episodeNum: number }
 }
 
 export const CAST_SESSION_EVENT = "xt:cast-session-changed"
@@ -206,6 +209,23 @@ export function updateCastSession(patch: Partial<CastSession>): void {
 export function clearCastSession(): void {
   writeSessionStorage(SESSION_STORAGE_KEY, null)
   dispatchDocumentEvent(CAST_SESSION_EVENT)
+}
+
+const LIVE_CONTEXT_MAX_CHANNELS = 500
+
+/** Builds an ordered-channel-list cast context, windowed to 500 ids around the cast channel. */
+export function buildLiveCastContext(
+  playlistId: string,
+  channelIds: string[],
+  channelId: string
+): CastSession["liveContext"] | undefined {
+  const index = channelIds.indexOf(channelId)
+  if (index === -1) return undefined
+  if (channelIds.length <= LIVE_CONTEXT_MAX_CHANNELS) return { playlistId, channelIds, index }
+  const halfWindow = Math.floor(LIVE_CONTEXT_MAX_CHANNELS / 2)
+  const maxStart = channelIds.length - LIVE_CONTEXT_MAX_CHANNELS
+  const start = Math.min(Math.max(0, index - halfWindow), maxStart)
+  return { playlistId, channelIds: channelIds.slice(start, start + LIVE_CONTEXT_MAX_CHANNELS), index: index - start }
 }
 
 export class CastAuthError extends Error {}
@@ -531,7 +551,16 @@ export async function pushAmbientManifest(device: TvDevice): Promise<void> {
   }
 }
 
-export async function castPlay(device: TvDevice, descriptor: CastDescriptorV1): Promise<void> {
+export interface CastPlayContext {
+  liveContext?: CastSession["liveContext"]
+  seriesContext?: CastSession["seriesContext"]
+}
+
+export async function castPlay(
+  device: TvDevice,
+  descriptor: CastDescriptorV1,
+  context?: CastPlayContext
+): Promise<void> {
   await postDeviceAction(device, "/play", descriptor, 8000)
   const storedDevice = listTvDevices().find((entry) => entry.id === device.id) ?? device
   setCastSession({
@@ -546,6 +575,9 @@ export async function castPlay(device: TvDevice, descriptor: CastDescriptorV1): 
     hosts: storedDevice.hosts,
     pinnedHostIndex: storedDevice.pinnedHostIndex,
     contentHref: typeof location !== "undefined" ? location.pathname + location.search : undefined,
+    logo: descriptor.logo,
+    liveContext: context?.liveContext,
+    seriesContext: context?.seriesContext,
   })
   touchTvDevice(storedDevice.id)
   void pushAmbientManifest(storedDevice)
@@ -572,12 +604,33 @@ export async function castStop(device: TvDevice): Promise<void> {
   }
 }
 
+export async function castSetVolume(device: TvDevice, level: number, muted: boolean): Promise<void> {
+  const clampedLevel = Math.min(1, Math.max(0, level))
+  await postDeviceAction(device, "/volume", { level: clampedLevel, muted }, 5000)
+}
+
 export interface CastState {
   state: string
   positionSeconds: number
   durationSeconds?: number
   title?: string
   error?: string
+  volume?: number
+  muted?: boolean
+}
+
+/** Shared payload validation for the poll (`/state`) and push (`/events` WebSocket) transports. */
+export function parseCastStateValue(value: unknown): CastState | null {
+  if (!value || typeof value !== "object") return null
+  const data = value as Record<string, unknown>
+  if (typeof data.state !== "string" || typeof data.positionSeconds !== "number") return null
+  const state: CastState = { state: data.state, positionSeconds: data.positionSeconds }
+  if (typeof data.durationSeconds === "number") state.durationSeconds = data.durationSeconds
+  if (typeof data.title === "string") state.title = data.title
+  if (typeof data.error === "string" && data.error) state.error = data.error
+  if (typeof data.volume === "number" && data.volume >= 0 && data.volume <= 1) state.volume = data.volume
+  if (typeof data.muted === "boolean") state.muted = data.muted
+  return state
 }
 
 async function fetchStateFromHost(host: string, device: TvDevice): Promise<CastState> {
@@ -589,13 +642,8 @@ async function fetchStateFromHost(host: string, device: TvDevice): Promise<CastS
   })
   if (!response.ok) throw new Error(`cast state failed: ${response.status}`)
   const data = await response.json()
-  if (!data || typeof data !== "object" || typeof data.state !== "string" || typeof data.positionSeconds !== "number") {
-    throw new Error("cast state: bad payload")
-  }
-  const state: CastState = { state: data.state, positionSeconds: data.positionSeconds }
-  if (typeof data.durationSeconds === "number") state.durationSeconds = data.durationSeconds
-  if (typeof data.title === "string") state.title = data.title
-  if (typeof data.error === "string" && data.error) state.error = data.error
+  const state = parseCastStateValue(data)
+  if (!state) throw new Error("cast state: bad payload")
   return state
 }
 
@@ -716,6 +764,8 @@ export interface PlayOnTvOptions {
   contentTitle?: string | null
   quiet?: boolean
   contentHref?: string | null
+  liveContext?: CastSession["liveContext"]
+  seriesContext?: CastSession["seriesContext"]
 }
 
 /** Reconstructs a TvDevice from an active cast session, for routing without the picker. */
@@ -746,7 +796,7 @@ async function castToDevice(device: TvDevice, options: PlayOnTvOptions): Promise
   }
 
   try {
-    await castPlay(device, descriptor)
+    await castPlay(device, descriptor, { liveContext: options.liveContext, seriesContext: options.seriesContext })
     if (options.contentHref) updateCastSession({ contentHref: options.contentHref })
     options.stopLocal?.()
     if (!options.quiet) {
@@ -888,6 +938,7 @@ export interface CastLiveChannelParams {
   preferNativeHls?: boolean
   stopLocal?: () => void
   contentHref?: string | null
+  liveContext?: CastSession["liveContext"]
 }
 
 /** Builds a "play on TV" click handler for a live channel (Live TV channel list + player more-menu). */
@@ -897,6 +948,7 @@ export function castLiveChannelToTv(params: CastLiveChannelParams): () => void {
       contentTitle: params.contentTitle,
       contentHref: params.contentHref ?? "/livetv",
       stopLocal: params.stopLocal,
+      liveContext: params.liveContext,
       buildDescriptor: () => {
         const src = params.buildSrc()
         if (!src || !isCastableSrc(src)) return null

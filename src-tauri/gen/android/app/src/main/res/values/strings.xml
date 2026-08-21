@@ -10,4 +10,9 @@
     <string name="receiver_notification_channel">TV receiver</string>
     <string name="receiver_notification_title">TV receiver active</string>
     <string name="receiver_notification_text">Receiving as %1$s</string>
+    <string name="xt_video_mute_description">Mute</string>
+    <string name="xt_video_unmute_description">Unmute</string>
+    <string name="xt_video_volume_description">Volume</string>
+    <string name="xt_video_next_channel_description">Next channel</string>
+    <string name="xt_video_previous_channel_description">Previous channel</string>
 </resources>

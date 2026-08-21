@@ -15,6 +15,7 @@ import android.service.dreams.DreamService
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -163,12 +164,12 @@ class XtreamDreamService : DreamService() {
 
     val brandIcon = ImageView(this).apply {
       setImageResource(R.drawable.ic_brand_mark)
-      imageTintList = ColorStateList.valueOf(getColor(R.color.xt_accent))
+      imageTintList = ColorStateList.valueOf(getColor(R.color.xt_brand_rose))
     }
     val brandWordmark = TextView(this).apply {
       text = buildBrandWordmark()
       textSize = 24f
-      setTypeface(typeface, Typeface.BOLD)
+      typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
       gravity = Gravity.CENTER
     }
     val brand = LinearLayout(this).apply {
@@ -209,7 +210,8 @@ class XtreamDreamService : DreamService() {
     val tvStart = text.length - 2
     return SpannableString(text).apply {
       setSpan(ForegroundColorSpan(Color.WHITE), 0, tvStart, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-      setSpan(ForegroundColorSpan(getColor(R.color.xt_accent)), tvStart, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+      setSpan(ForegroundColorSpan(getColor(R.color.xt_brand_rose)), tvStart, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+      setSpan(StyleSpan(Typeface.BOLD), tvStart, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     }
   }
 
