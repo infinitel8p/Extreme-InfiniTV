@@ -184,6 +184,7 @@ let heroProviderBackdropUrl = null
 let heroSettled = false
 let earlyEnrichmentHandled = false
 let earlyEnrichmentPopulatedSimilar = false
+let providerPlotApplied = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 
@@ -776,6 +777,7 @@ function applySeriesInfo(data) {
   metaSeasonsText = seasons.length ? `${seasons.length} season${seasons.length > 1 ? "s" : ""}` : ""
   renderMetaLine()
   if (activePlaylistId) noteDetailGenres(activePlaylistId, "series", seriesId, genre)
+  providerPlotApplied = Boolean(plot.trim())
   if (plotEl) {
     plotEl.textContent = plot || (cast ? t("series.castPrefix", { cast }) : t("detail.noDescription"))
   }
@@ -1047,7 +1049,8 @@ function applyEnrichmentPatch(enrichment) {
     heroTmdbBackdropUrl = enrichment.backdropUrl
     if (!heroProviderBackdropUrl) setAmbient(enrichment.backdropUrl)
   }
-  if (enrichment.overview && plotEl) plotEl.textContent = enrichment.overview
+  if (enrichment.overview && plotEl && (!enrichment.overviewIsFallback || !providerPlotApplied))
+    plotEl.textContent = enrichment.overview
   if (enrichment.director) patchDirector(enrichment.director, enrichment.directorPersonId)
   if (enrichment.tagline) patchTagline(enrichment.tagline)
   patchGenreFromEnrichment(enrichment.genres)
@@ -2001,6 +2004,7 @@ async function boot() {
   showDetailSkeleton()
   if (metaEl) metaEl.textContent = ""
   if (plotEl) plotEl.textContent = ""
+  providerPlotApplied = false
   if (titleEl) titleEl.textContent = ""
   if (langsEl) {
     langsEl.setAttribute("hidden", "")

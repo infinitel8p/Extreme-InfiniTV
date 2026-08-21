@@ -164,6 +164,7 @@ export interface TmdbTitleEnrichment {
   genres: string[]
   tagline: string | null
   year: number | null
+  overviewIsFallback?: boolean
 }
 
 /** Ranks TMDb title logos by language match, then rating; excludes SVGs (not raster-displayable here). */
@@ -268,6 +269,7 @@ async function fillEnglishTextFallback(
       ...enrichment,
       overview: enrichment.overview || bundle.overview || "",
       tagline: enrichment.tagline || bundle.tagline || null,
+      overviewIsFallback: !enrichment.overview && Boolean(bundle.overview),
     }
   } catch (error) {
     log.warn("[xt:tmdb] en-US text fallback failed:", mediaType, tmdbId, error)
@@ -279,7 +281,7 @@ export async function fetchMovieEnrichment(tmdbId: number): Promise<TmdbTitleEnr
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_movie_${tmdbId}:${language}:v2`
+  const cacheKind = `tmdb_movie_${tmdbId}:${language}:v3`
   try {
     const result = await cachedFetch(TMDB_CACHE_ENTRY_ID, cacheKind, TMDB_DETAIL_TTL_MS, async () => {
       const bundle = await tmdbMovieBundle(apiKey, tmdbId, language)
@@ -297,7 +299,7 @@ export async function fetchSeriesEnrichment(tmdbId: number): Promise<TmdbTitleEn
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_series_${tmdbId}:${language}:v2`
+  const cacheKind = `tmdb_series_${tmdbId}:${language}:v3`
   try {
     const result = await cachedFetch(TMDB_CACHE_ENTRY_ID, cacheKind, TMDB_DETAIL_TTL_MS, async () => {
       const bundle = await tmdbTvBundle(apiKey, tmdbId, language)
@@ -445,7 +447,7 @@ export interface CachedTmdbEnrichment {
 }
 
 function tmdbDetailCacheKind(kind: TmdbKind, tmdbId: number, language: string): string {
-  return kind === "series" ? `tmdb_series_${tmdbId}:${language}:v2` : `tmdb_movie_${tmdbId}:${language}:v2`
+  return kind === "series" ? `tmdb_series_${tmdbId}:${language}:v3` : `tmdb_movie_${tmdbId}:${language}:v3`
 }
 
 /** Cache-only lookup, no isTmdbActive() gate: reading cache is harmless even with TMDb disabled. */
