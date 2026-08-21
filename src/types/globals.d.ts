@@ -73,6 +73,11 @@ interface AndroidSnifferBridge {
   cancelSniff?: () => void
 }
 
+interface AndroidReceiverKeepAliveBridge {
+  start?: (deviceName: string) => boolean
+  stop?: () => boolean
+}
+
 interface AndroidNsdBridge {
   isSupported?: () => boolean
   advertise?: (name: string, port: number, id?: string) => void
@@ -112,6 +117,7 @@ declare global {
     AndroidVideo?: AndroidVideoBridge
     AndroidSniffer?: AndroidSnifferBridge
     AndroidNsd?: AndroidNsdBridge
+    AndroidReceiverKeepAlive?: AndroidReceiverKeepAliveBridge
     /** Called from MainActivity on PiP enter to promote the playing video into HTML5 fullscreen. */
     __xtPipFullscreen?: () => void
     /** Called from MainActivity on PiP exit; undoes __xtPipFullscreen if it succeeded. */

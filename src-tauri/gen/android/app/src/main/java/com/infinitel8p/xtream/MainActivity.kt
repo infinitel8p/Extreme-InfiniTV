@@ -992,6 +992,42 @@ class NsdBridge(private val activity: TauriActivity) {
   }
 }
 
+// Starts/stops ReceiverForegroundService, which holds the wake lock + Wi-Fi
+// lock keeping the receiver's HTTP server alive while the app is backgrounded.
+class ReceiverKeepAliveBridge(private val activity: TauriActivity) {
+  @JavascriptInterface
+  fun start(deviceName: String): Boolean {
+    return try {
+      val intent = Intent(activity, ReceiverForegroundService::class.java)
+        .setAction(ReceiverForegroundService.ACTION_START)
+        .putExtra(ReceiverForegroundService.EXTRA_DEVICE_NAME, deviceName)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        activity.startForegroundService(intent)
+      } else {
+        activity.startService(intent)
+      }
+      true
+    } catch (error: Throwable) {
+      Log.w("ReceiverKeepAlive", "start failed", error)
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun stop(): Boolean {
+    return try {
+      activity.startService(
+        Intent(activity, ReceiverForegroundService::class.java)
+          .setAction(ReceiverForegroundService.ACTION_STOP)
+      )
+      true
+    } catch (error: Throwable) {
+      Log.w("ReceiverKeepAlive", "stop failed", error)
+      false
+    }
+  }
+}
+
 /**
  * Bridge for the native ExoPlayer-backed VideoActivity. Opt-in path (Settings:
  * "Use native Android video player"). JS calls one of launchVod / launchLive
@@ -1527,6 +1563,7 @@ class MainActivity : TauriActivity() {
     val nsd = NsdBridge(this)
     nsdBridge = nsd
     webView.addJavascriptInterface(nsd, "AndroidNsd")
+    webView.addJavascriptInterface(ReceiverKeepAliveBridge(this), "AndroidReceiverKeepAlive")
     webView.addJavascriptInterface(
       WebSettingsBridge(this, { hostedWebView }, webView.settings.userAgentString),
       "AndroidWebSettings"

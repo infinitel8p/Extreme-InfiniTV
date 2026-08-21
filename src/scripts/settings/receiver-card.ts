@@ -25,6 +25,7 @@ import {
   type ReceiverStatus,
 } from "@/scripts/lib/receiver-shared.js"
 import { advertiseReceiver, stopAdvertisingReceiver, getAdvertiseState } from "@/scripts/lib/receiver-discovery.js"
+import { startReceiverKeepAlive, stopReceiverKeepAlive } from "@/scripts/lib/receiver-keep-alive"
 
 const MASKED_PAIR_CODE = "••• •••"
 
@@ -246,6 +247,7 @@ async function init(): Promise<void> {
       invoke<ReceiverStatus>("receiver_start", { name: getEffectiveReceiverDeviceName() || undefined })
         .then((status) => {
           renderStatus(status)
+          startReceiverKeepAlive(status.name)
           if (status.port !== undefined) {
             advertiseReceiver(status.name, status.port, getReceiverId())
             setTimeout(() => renderDiscoverability(status), 1800)
@@ -261,6 +263,7 @@ async function init(): Promise<void> {
       invoke("receiver_stop")
         .then(refreshStatus)
         .then(stopAdvertisingReceiver)
+        .then(stopReceiverKeepAlive)
         .catch((err) => log.warn("[settings:receiver] receiver_stop failed:", err))
     }
   })

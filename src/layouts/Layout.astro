@@ -1047,6 +1047,11 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
           })
             .then((status) => {
               if (status.port !== undefined) advertiseReceiver(status.name, status.port)
+              if ((window as any).AndroidReceiverKeepAlive) {
+                import("@/scripts/lib/receiver-keep-alive").then(({ startReceiverKeepAlive }) => {
+                  startReceiverKeepAlive(status.name)
+                })
+              }
             })
             .catch(() => {})
         }

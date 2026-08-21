@@ -7,4 +7,7 @@
     <string name="xt_channels_title">Channels</string>
     <string name="native_player_unsupported_stream">Can\'t play this channel in the native player</string>
     <string name="dream_label">Extreme InfiniTV</string>
+    <string name="receiver_notification_channel">TV receiver</string>
+    <string name="receiver_notification_title">TV receiver active</string>
+    <string name="receiver_notification_text">Receiving as %1$s</string>
 </resources>
