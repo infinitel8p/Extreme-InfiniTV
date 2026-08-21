@@ -38,6 +38,12 @@ const PLAY_EVENT: &str = "xt:receiver-play";
 const CONTROL_EVENT: &str = "xt:receiver-control";
 const STATUS_EVENT: &str = "xt:receiver-status";
 const PAIRED_EVENT: &str = "xt:receiver-paired";
+const AMBIENT_EVENT: &str = "xt:receiver-ambient";
+
+const MAX_AMBIENT_ENTRIES: usize = 50;
+const MAX_AMBIENT_ID_LEN: usize = 256;
+const ALLOWED_AMBIENT_KINDS: [&str; 2] = ["vod", "series"];
+const ALLOWED_AMBIENT_TIERS: [&str; 4] = ["watching", "recent", "recommended", "catalog"];
 
 const ALLOWED_PLAYBACK_STATES: [&str; 7] =
     ["idle", "loading", "buffering", "playing", "paused", "ended", "error"];
@@ -53,6 +59,7 @@ pub trait ReceiverEvents: Send + Sync + 'static {
     fn control(&self, payload: Value);
     fn status(&self, payload: Value);
     fn paired(&self, payload: Value);
+    fn ambient(&self, payload: Value);
 }
 
 impl ReceiverEvents for AppHandle {
@@ -67,6 +74,9 @@ impl ReceiverEvents for AppHandle {
     }
     fn paired(&self, payload: Value) {
         let _ = self.emit(PAIRED_EVENT, payload);
+    }
+    fn ambient(&self, payload: Value) {
+        let _ = self.emit(AMBIENT_EVENT, payload);
     }
 }
 
@@ -1054,6 +1064,7 @@ fn build_router(ctx: Arc<ServerCtx>) -> axum::Router {
         .route("/info", get(handle_info))
         .route("/pair", post(handle_pair))
         .route("/play", post(handle_play))
+        .route("/ambient", post(handle_ambient))
         .route("/pause", post(handle_pause))
         .route("/resume", post(handle_resume))
         .route("/stop", post(handle_stop))
@@ -1305,6 +1316,87 @@ async fn handle_play(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_
     ctx.events.play(json!({"descriptor": descriptor, "deviceName": device_name}));
 
     (StatusCode::OK, Json(json!({"ok": true}))).into_response()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AmbientPushEntry {
+    kind: String,
+    id: String,
+    title: String,
+    #[serde(default)]
+    poster_url: Option<String>,
+    #[serde(default)]
+    backdrop_url: Option<String>,
+    #[serde(default)]
+    logo_url: Option<String>,
+    tier: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AmbientPushRequest {
+    v: u32,
+    entries: Vec<AmbientPushEntry>,
+}
+
+fn sanitize_ambient_url(value: Option<String>) -> Option<String> {
+    let value = value?;
+    if value.len() > MAX_URL_LEN || !is_http_url(&value) {
+        return None;
+    }
+    Some(value)
+}
+
+/// Drops an entry outright on a bad kind/title/id or when no artwork url survives sanitization;
+/// an unknown tier falls back to "catalog" rather than dropping the entry.
+fn sanitize_ambient_entry(entry: AmbientPushEntry) -> Option<AmbientPushEntry> {
+    if !ALLOWED_AMBIENT_KINDS.contains(&entry.kind.as_str()) {
+        return None;
+    }
+    let id = entry.id.trim();
+    if id.is_empty() || id.chars().count() > MAX_AMBIENT_ID_LEN {
+        return None;
+    }
+    let title = entry.title.trim();
+    if title.is_empty() || title.chars().count() > MAX_TITLE_LEN {
+        return None;
+    }
+    let poster_url = sanitize_ambient_url(entry.poster_url);
+    let backdrop_url = sanitize_ambient_url(entry.backdrop_url);
+    let logo_url = sanitize_ambient_url(entry.logo_url);
+    if poster_url.is_none() && backdrop_url.is_none() && logo_url.is_none() {
+        return None;
+    }
+    let tier = if ALLOWED_AMBIENT_TIERS.contains(&entry.tier.as_str()) {
+        entry.tier
+    } else {
+        "catalog".to_string()
+    };
+    Some(AmbientPushEntry { kind: entry.kind, id: id.to_string(), title: title.to_string(), poster_url, backdrop_url, logo_url, tier })
+}
+
+async fn handle_ambient(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_body: Bytes) -> Response {
+    let Some(device_name) = authenticate(&ctx, &headers) else {
+        return unauthorized_response();
+    };
+    let Ok(mut body) = serde_json::from_slice::<AmbientPushRequest>(&raw_body) else {
+        return bad_request_response("badRequest");
+    };
+    if body.v != PROTOCOL_VERSION {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "unsupportedVersion", "supported": PROTOCOL_VERSION})),
+        )
+            .into_response();
+    }
+    body.entries.truncate(MAX_AMBIENT_ENTRIES);
+    let sanitized: Vec<AmbientPushEntry> = body.entries.into_iter().filter_map(sanitize_ambient_entry).collect();
+
+    let entries = serde_json::to_value(&sanitized).unwrap_or_else(|_| json!([]));
+    ctx.events.ambient(json!({"entries": entries, "deviceName": device_name}));
+
+    (StatusCode::OK, Json(json!({"ok": true, "accepted": sanitized.len()}))).into_response()
 }
 
 async fn handle_transport(ctx: Arc<ServerCtx>, headers: HeaderMap, action: &'static str) -> Response {
@@ -1911,6 +2003,7 @@ mod tests {
         control: StdMutex<Vec<Value>>,
         status: StdMutex<Vec<Value>>,
         paired: StdMutex<Vec<Value>>,
+        ambient: StdMutex<Vec<Value>>,
     }
 
     impl CollectorEvents {
@@ -1920,6 +2013,7 @@ mod tests {
                 control: StdMutex::new(Vec::new()),
                 status: StdMutex::new(Vec::new()),
                 paired: StdMutex::new(Vec::new()),
+                ambient: StdMutex::new(Vec::new()),
             })
         }
     }
@@ -1936,6 +2030,9 @@ mod tests {
         }
         fn paired(&self, payload: Value) {
             self.paired.lock().unwrap().push(payload);
+        }
+        fn ambient(&self, payload: Value) {
+            self.ambient.lock().unwrap().push(payload);
         }
     }
 
@@ -2237,6 +2334,197 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ---------------------------------------------------------------------
+    // Ambient manifest push
+    // ---------------------------------------------------------------------
+
+    fn ambient_entry(overrides: impl FnOnce(&mut AmbientPushEntry)) -> AmbientPushEntry {
+        let mut entry = AmbientPushEntry {
+            kind: "vod".to_string(),
+            id: "1".to_string(),
+            title: "Some Movie".to_string(),
+            poster_url: Some("https://example.test/poster.jpg".to_string()),
+            backdrop_url: None,
+            logo_url: None,
+            tier: "catalog".to_string(),
+        };
+        overrides(&mut entry);
+        entry
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_keeps_a_valid_entry() {
+        let sanitized = sanitize_ambient_entry(ambient_entry(|_| {}));
+        assert!(sanitized.is_some());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_drops_an_unknown_kind() {
+        assert!(sanitize_ambient_entry(ambient_entry(|entry| entry.kind = "channel".to_string())).is_none());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_drops_a_blank_title() {
+        assert!(sanitize_ambient_entry(ambient_entry(|entry| entry.title = "   ".to_string())).is_none());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_drops_a_blank_id() {
+        assert!(sanitize_ambient_entry(ambient_entry(|entry| entry.id = "".to_string())).is_none());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_nulls_a_non_http_url_but_keeps_the_entry_alive_with_another() {
+        let sanitized = sanitize_ambient_entry(ambient_entry(|entry| {
+            entry.poster_url = Some("javascript:alert(1)".to_string());
+            entry.backdrop_url = Some("https://example.test/backdrop.jpg".to_string());
+        }))
+        .unwrap();
+        assert!(sanitized.poster_url.is_none());
+        assert_eq!(sanitized.backdrop_url, Some("https://example.test/backdrop.jpg".to_string()));
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_drops_when_every_url_fails_sanitization() {
+        let dropped = sanitize_ambient_entry(ambient_entry(|entry| entry.poster_url = Some("not-a-url".to_string())));
+        assert!(dropped.is_none());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_drops_an_oversized_url() {
+        let oversized = format!("https://example.test/{}", "a".repeat(MAX_URL_LEN));
+        let dropped = sanitize_ambient_entry(ambient_entry(|entry| entry.poster_url = Some(oversized)));
+        assert!(dropped.is_none());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_falls_back_to_catalog_tier_for_an_unknown_tier() {
+        let sanitized = sanitize_ambient_entry(ambient_entry(|entry| entry.tier = "trending".to_string())).unwrap();
+        assert_eq!(sanitized.tier, "catalog");
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_keeps_every_known_tier() {
+        for tier in ALLOWED_AMBIENT_TIERS {
+            let sanitized = sanitize_ambient_entry(ambient_entry(|entry| entry.tier = tier.to_string())).unwrap();
+            assert_eq!(sanitized.tier, tier);
+        }
+    }
+
+    #[tokio::test]
+    async fn receiver_http_ambient_requires_auth() {
+        let server = start_test_server().await;
+        let response = server
+            .client
+            .post(format!("{}/ambient", server.base_url))
+            .json(&json!({"v": PROTOCOL_VERSION, "entries": []}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_ambient_rejects_the_wrong_protocol_version() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = server
+            .client
+            .post(format!("{}/ambient", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"v": 2, "entries": []}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body, json!({"error": "unsupportedVersion", "supported": PROTOCOL_VERSION}));
+    }
+
+    #[tokio::test]
+    async fn receiver_http_ambient_accepts_a_manifest_and_emits_the_sanitized_entries() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = server
+            .client
+            .post(format!("{}/ambient", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({
+                "v": PROTOCOL_VERSION,
+                "entries": [
+                    {
+                        "kind": "vod",
+                        "id": "1",
+                        "title": "Some Movie",
+                        "posterUrl": "https://example.test/poster.jpg",
+                        "tier": "recent",
+                    },
+                    {
+                        "kind": "unknown-kind",
+                        "id": "2",
+                        "title": "Dropped",
+                        "posterUrl": "https://example.test/poster2.jpg",
+                        "tier": "recent",
+                    },
+                ],
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["accepted"], 1);
+
+        let ambient_events = server.collector.ambient.lock().unwrap();
+        let entries = ambient_events.last().unwrap()["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["id"], "1");
+    }
+
+    #[tokio::test]
+    async fn receiver_http_ambient_truncates_a_manifest_over_the_entry_cap() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let entries: Vec<Value> = (0..(MAX_AMBIENT_ENTRIES + 10))
+            .map(|index| {
+                json!({
+                    "kind": "vod",
+                    "id": index.to_string(),
+                    "title": format!("Movie {index}"),
+                    "posterUrl": "https://example.test/poster.jpg",
+                    "tier": "catalog",
+                })
+            })
+            .collect();
+
+        let response = server
+            .client
+            .post(format!("{}/ambient", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"v": PROTOCOL_VERSION, "entries": entries}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["accepted"], MAX_AMBIENT_ENTRIES);
     }
 
     #[tokio::test]

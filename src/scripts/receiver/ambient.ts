@@ -1,5 +1,5 @@
 // Ambient idle screensaver for the TV receiver: rotating artwork after inactivity.
-import { buildAmbientManifest, type AmbientEntry } from "@/scripts/lib/ambient-manifest"
+import { buildAmbientManifest, type AmbientEntry, type AmbientTier } from "@/scripts/lib/ambient-manifest"
 import { log } from "@/scripts/lib/log.js"
 
 export type ReceiverAmbientVisualState = "info" | "ambient"
@@ -13,6 +13,9 @@ export interface CastHistoryEntry {
 const HTTP_URL_PATTERN = /^https?:\/\//i
 const CAST_HISTORY_KEY = "xt_receiver_cast_history"
 const CAST_HISTORY_CAP = 50
+const PUSHED_MANIFEST_KEY = "xt_receiver_ambient_manifest"
+const PUSHED_MANIFEST_CAP = 50
+const PUSHED_MANIFEST_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const IDLE_TIMEOUT_MS = 90_000
 const HOLD_MS = 25_000
 const MANIFEST_REFRESH_MS = 30 * 60 * 1000
@@ -20,6 +23,7 @@ const MAX_ARTWORK_FAILURES = 2
 const BURN_IN_INTERVAL_MS = 5 * 60 * 1000
 const BURN_IN_MAX_PX = 8
 const AMBIENT_ELIGIBLE_STATES = new Set(["idle", "ended", "error"])
+const AMBIENT_TIERS = new Set<AmbientTier>(["watching", "recent", "recommended", "catalog"])
 
 export function appendCastHistory(
   list: CastHistoryEntry[],
@@ -47,6 +51,55 @@ export function castHistoryToAmbientEntries(history: CastHistoryEntry[]): Ambien
 
 export function ambientEntryKey(entry: AmbientEntry): string {
   return `${entry.kind}:${entry.id}`
+}
+
+function sanitizePushedAmbientEntry(value: unknown): AmbientEntry | null {
+  if (!value || typeof value !== "object") return null
+  const record = value as Record<string, unknown>
+  if (record.kind !== "vod" && record.kind !== "series") return null
+  if (typeof record.id !== "string" || !record.id) return null
+  if (typeof record.title !== "string" || !record.title.trim()) return null
+  const posterUrl = typeof record.posterUrl === "string" && HTTP_URL_PATTERN.test(record.posterUrl) ? record.posterUrl : null
+  const backdropUrl = typeof record.backdropUrl === "string" && HTTP_URL_PATTERN.test(record.backdropUrl) ? record.backdropUrl : null
+  const logoUrl = typeof record.logoUrl === "string" && HTTP_URL_PATTERN.test(record.logoUrl) ? record.logoUrl : null
+  if (!posterUrl && !backdropUrl && !logoUrl) return null
+  const tier = AMBIENT_TIERS.has(record.tier as AmbientTier) ? (record.tier as AmbientTier) : "catalog"
+  return { kind: record.kind, id: record.id, title: record.title, posterUrl, backdropUrl, logoUrl, tier }
+}
+
+/** Defensive shape validation for a manifest pushed over the network; caps the result too. */
+export function sanitizePushedAmbientEntries(value: unknown, cap = PUSHED_MANIFEST_CAP): AmbientEntry[] {
+  if (!Array.isArray(value)) return []
+  const sanitized: AmbientEntry[] = []
+  for (const item of value) {
+    const entry = sanitizePushedAmbientEntry(item)
+    if (entry) sanitized.push(entry)
+    if (sanitized.length >= cap) break
+  }
+  return sanitized
+}
+
+export interface PushedAmbientManifest {
+  at: number
+  entries: AmbientEntry[]
+}
+
+export interface AmbientArtworkSources {
+  libraryEntries: AmbientEntry[]
+  pushedManifest: PushedAmbientManifest | null
+  castHistoryEntries: AmbientEntry[]
+  now?: number
+}
+
+/** Cascade: local library artwork, then a fresh sender-pushed manifest, then cast history. */
+export function selectAmbientArtwork(sources: AmbientArtworkSources): AmbientEntry[] {
+  if (sources.libraryEntries.length > 0) return sources.libraryEntries
+  const pushed = sources.pushedManifest
+  if (pushed && pushed.entries.length > 0) {
+    const now = sources.now ?? Date.now()
+    if (now - pushed.at < PUSHED_MANIFEST_MAX_AGE_MS) return pushed.entries
+  }
+  return sources.castHistoryEntries
 }
 
 export interface AmbientRenderModel {
@@ -105,6 +158,25 @@ function saveCastHistory(history: CastHistoryEntry[]): void {
   } catch {}
 }
 
+function loadPushedManifest(): PushedAmbientManifest | null {
+  try {
+    const raw = localStorage.getItem(PUSHED_MANIFEST_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object" || typeof parsed.at !== "number") return null
+    const entries = sanitizePushedAmbientEntries(parsed.entries)
+    return entries.length > 0 ? { at: parsed.at, entries } : null
+  } catch {
+    return null
+  }
+}
+
+function savePushedManifest(entries: AmbientEntry[]): void {
+  try {
+    localStorage.setItem(PUSHED_MANIFEST_KEY, JSON.stringify({ at: Date.now(), entries }))
+  } catch {}
+}
+
 function prefersReducedMotion(): boolean {
   return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches
 }
@@ -134,6 +206,7 @@ export interface ReceiverAmbientDeps {
 export interface ReceiverAmbient {
   notifyPlaybackState(state: string): void
   noteCastDescriptor(descriptor: { title?: string; logo?: string }): void
+  notePushedManifest(entries: unknown): void
   setPairingInfo(address: string, code: string): void
   destroy(): void
 }
@@ -147,6 +220,7 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
   let rotationTimer: ReturnType<typeof setTimeout> | null = null
 
   let manifestEntries: AmbientEntry[] = []
+  let libraryEntriesCache: AmbientEntry[] = []
   let lastManifestFetchAt = 0
   let rotationEntries: AmbientEntry[] = []
   let rotationIndex = -1
@@ -172,24 +246,30 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
     }
   }
 
-  async function loadArtworkEntries(): Promise<AmbientEntry[]> {
+  async function fetchLibraryEntries(): Promise<AmbientEntry[]> {
     try {
       const playlistId = await deps.getPlaylistId()
-      if (playlistId) {
-        const artwork = await buildAmbientManifest(playlistId)
-        if (artwork.length > 0) return artwork
-      }
+      if (playlistId) return await buildAmbientManifest(playlistId)
     } catch (err) {
       log.warn("[xt:receiver-ambient] manifest build failed:", err)
     }
-    return castHistoryToAmbientEntries(loadCastHistory())
+    return []
+  }
+
+  function recomputeManifestEntries(): void {
+    manifestEntries = selectAmbientArtwork({
+      libraryEntries: libraryEntriesCache,
+      pushedManifest: loadPushedManifest(),
+      castHistoryEntries: castHistoryToAmbientEntries(loadCastHistory()),
+    })
   }
 
   async function ensureManifestFresh(): Promise<void> {
     const now = Date.now()
     if (manifestEntries.length > 0 && now - lastManifestFetchAt < MANIFEST_REFRESH_MS) return
     lastManifestFetchAt = now
-    manifestEntries = await loadArtworkEntries()
+    libraryEntriesCache = await fetchLibraryEntries()
+    recomputeManifestEntries()
   }
 
   async function attemptEnterAmbient(): Promise<void> {
@@ -345,6 +425,14 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
       const existing = loadCastHistory()
       const updated = appendCastHistory(existing, descriptor)
       if (updated !== existing) saveCastHistory(updated)
+    },
+
+    notePushedManifest(entries: unknown): void {
+      const sanitized = sanitizePushedAmbientEntries(entries)
+      if (sanitized.length === 0) return
+      savePushedManifest(sanitized)
+      recomputeManifestEntries()
+      if (visualState === "ambient") rotationEntries = playableAmbientEntries(manifestEntries)
     },
 
     setPairingInfo(address: string, code: string): void {

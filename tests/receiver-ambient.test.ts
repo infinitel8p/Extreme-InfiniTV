@@ -13,6 +13,8 @@ import {
   nextRotationIndex,
   playableAmbientEntries,
   recordArtworkFailure,
+  sanitizePushedAmbientEntries,
+  selectAmbientArtwork,
   type CastHistoryEntry,
 } from "../src/scripts/receiver/ambient"
 import type { AmbientEntry } from "../src/scripts/lib/ambient-manifest"
@@ -162,5 +164,116 @@ describe("recordArtworkFailure", () => {
 describe("ambientEntryKey", () => {
   it("combines kind and id", () => {
     expect(ambientEntryKey(makeEntry({ kind: "series", id: "42" }))).toBe("series:42")
+  })
+})
+
+describe("sanitizePushedAmbientEntries", () => {
+  it("returns an empty list for a non-array", () => {
+    expect(sanitizePushedAmbientEntries(null)).toEqual([])
+    expect(sanitizePushedAmbientEntries({ entries: [] })).toEqual([])
+  })
+
+  it("keeps a well-formed entry", () => {
+    const entries = sanitizePushedAmbientEntries([
+      { kind: "vod", id: "1", title: "Some Movie", posterUrl: "https://x/p.png", tier: "recent" },
+    ])
+    expect(entries).toEqual([
+      { kind: "vod", id: "1", title: "Some Movie", posterUrl: "https://x/p.png", backdropUrl: null, logoUrl: null, tier: "recent" },
+    ])
+  })
+
+  it("drops an entry with an unknown kind, a blank id, or a blank title", () => {
+    const entries = sanitizePushedAmbientEntries([
+      { kind: "channel", id: "1", title: "Bad kind", posterUrl: "https://x/p.png", tier: "catalog" },
+      { kind: "vod", id: "", title: "Blank id", posterUrl: "https://x/p.png", tier: "catalog" },
+      { kind: "vod", id: "2", title: "   ", posterUrl: "https://x/p.png", tier: "catalog" },
+    ])
+    expect(entries).toEqual([])
+  })
+
+  it("drops an entry with no artwork url at all", () => {
+    expect(sanitizePushedAmbientEntries([{ kind: "vod", id: "1", title: "No art", tier: "catalog" }])).toEqual([])
+  })
+
+  it("nulls non-http posterUrl/backdropUrl/logoUrl values", () => {
+    const entries = sanitizePushedAmbientEntries([
+      {
+        kind: "vod",
+        id: "1",
+        title: "Local file art",
+        posterUrl: "file:///etc/passwd",
+        backdropUrl: "javascript:alert(1)",
+        logoUrl: "https://x/logo.png",
+        tier: "catalog",
+      },
+    ])
+    expect(entries).toEqual([
+      { kind: "vod", id: "1", title: "Local file art", posterUrl: null, backdropUrl: null, logoUrl: "https://x/logo.png", tier: "catalog" },
+    ])
+  })
+
+  it("drops an entry whose artwork urls are all non-http", () => {
+    const entries = sanitizePushedAmbientEntries([
+      { kind: "vod", id: "1", title: "All local", posterUrl: "file:///poster.png", backdropUrl: "data:image/png;base64,abc", tier: "catalog" },
+    ])
+    expect(entries).toEqual([])
+  })
+
+  it("falls back to the catalog tier for an unknown tier", () => {
+    const entries = sanitizePushedAmbientEntries([
+      { kind: "vod", id: "1", title: "Movie", posterUrl: "https://x/p.png", tier: "trending" },
+    ])
+    expect(entries[0].tier).toBe("catalog")
+  })
+
+  it("caps the result at the given limit", () => {
+    const source = Array.from({ length: 5 }, (_, index) => ({
+      kind: "vod",
+      id: String(index),
+      title: `Movie ${index}`,
+      posterUrl: "https://x/p.png",
+      tier: "catalog",
+    }))
+    expect(sanitizePushedAmbientEntries(source, 2)).toHaveLength(2)
+  })
+})
+
+describe("selectAmbientArtwork", () => {
+  const libraryEntries = [makeEntry({ id: "library" })]
+  const pushedEntries = [makeEntry({ id: "pushed" })]
+  const castHistoryEntries = [makeEntry({ id: "history" })]
+
+  it("prefers local library artwork when it is non-empty", () => {
+    const selected = selectAmbientArtwork({
+      libraryEntries,
+      pushedManifest: { at: Date.now(), entries: pushedEntries },
+      castHistoryEntries,
+    })
+    expect(selected).toBe(libraryEntries)
+  })
+
+  it("falls back to a fresh pushed manifest when the library is empty", () => {
+    const selected = selectAmbientArtwork({
+      libraryEntries: [],
+      pushedManifest: { at: Date.now(), entries: pushedEntries },
+      castHistoryEntries,
+    })
+    expect(selected).toBe(pushedEntries)
+  })
+
+  it("ignores a pushed manifest older than 7 days", () => {
+    const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000
+    const selected = selectAmbientArtwork({
+      libraryEntries: [],
+      pushedManifest: { at: eightDaysAgo, entries: pushedEntries },
+      castHistoryEntries,
+      now: Date.now(),
+    })
+    expect(selected).toBe(castHistoryEntries)
+  })
+
+  it("falls back to cast history when there is no pushed manifest", () => {
+    const selected = selectAmbientArtwork({ libraryEntries: [], pushedManifest: null, castHistoryEntries })
+    expect(selected).toBe(castHistoryEntries)
   })
 })

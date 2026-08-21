@@ -471,6 +471,66 @@ async function postDeviceAction(
   })
 }
 
+const AMBIENT_PUSH_THROTTLE_KEY = "xt_tv_ambient_pushed"
+const AMBIENT_PUSH_THROTTLE_MS = 6 * 60 * 60 * 1000
+
+function readAmbientPushTimestamps(): Record<string, number> {
+  const raw = readLocalStorage(AMBIENT_PUSH_THROTTLE_KEY)
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function wasAmbientPushedRecently(deviceId: string): boolean {
+  const pushedAt = readAmbientPushTimestamps()[deviceId]
+  return typeof pushedAt === "number" && Date.now() - pushedAt < AMBIENT_PUSH_THROTTLE_MS
+}
+
+function markAmbientPushed(deviceId: string): void {
+  const timestamps = readAmbientPushTimestamps()
+  timestamps[deviceId] = Date.now()
+  writeLocalStorage(AMBIENT_PUSH_THROTTLE_KEY, JSON.stringify(timestamps))
+}
+
+async function activePlaylistId(): Promise<string | null> {
+  try {
+    const { getActiveEntry } = await import("@/scripts/lib/creds.js")
+    const entry = await getActiveEntry()
+    return entry?._id ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Best-effort artwork push for receiver-only ambient screensavers; never throws or surfaces a toast. */
+export async function pushAmbientManifest(device: TvDevice): Promise<void> {
+  if (wasAmbientPushedRecently(device.id)) return
+  try {
+    const playlistId = await activePlaylistId()
+    if (!playlistId) return
+    const { buildAmbientManifest } = await import("@/scripts/lib/ambient-manifest.js")
+    const entries = await buildAmbientManifest(playlistId)
+    if (!entries.length) return
+    await withHostFallback(device, async (host) => {
+      const response = await fetchFromHost(`${baseUrl(host, device.port)}/ambient`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-XT-Key": device.key },
+        body: JSON.stringify({ v: 1, entries }),
+        signal: AbortSignal.timeout(8000),
+        logKind: "other",
+      })
+      if (!response.ok) throw new Error(`ambient push failed: ${response.status}`)
+    })
+    markAmbientPushed(device.id)
+  } catch (err) {
+    log.warn("[xt:tv-cast] pushAmbientManifest failed:", err)
+  }
+}
+
 export async function castPlay(device: TvDevice, descriptor: CastDescriptorV1): Promise<void> {
   await postDeviceAction(device, "/play", descriptor, 8000)
   const storedDevice = listTvDevices().find((entry) => entry.id === device.id) ?? device
@@ -488,6 +548,7 @@ export async function castPlay(device: TvDevice, descriptor: CastDescriptorV1): 
     contentHref: typeof location !== "undefined" ? location.pathname + location.search : undefined,
   })
   touchTvDevice(storedDevice.id)
+  void pushAmbientManifest(storedDevice)
 }
 
 export async function castPause(device: TvDevice): Promise<void> {
@@ -752,6 +813,7 @@ export async function castConnect(device: TvDevice): Promise<boolean> {
     })
     touchTvDevice(storedDevice.id)
     toast({ title: t("cast.toast.connected", { device: device.name }), duration: 2600 })
+    void pushAmbientManifest(storedDevice)
     return true
   }
   if (status === "unauthorized") {

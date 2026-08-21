@@ -356,6 +356,7 @@ void listen<ReceiverStatus>("xt:receiver-status", (event) => renderStatus(event.
 void listen<{ deviceName: string }>("xt:receiver-paired", (event) => showPairedFlash(event.payload?.deviceName || ""))
 void listen<ReceiverPlayPayload>("xt:receiver-play", (event) => void onPlay(event.payload?.descriptor))
 void listen<ReceiverControlPayload>("xt:receiver-control", (event) => onControl(event.payload))
+void listen<{ entries: unknown }>("xt:receiver-ambient", (event) => ambient?.notePushedManifest(event.payload?.entries))
 
 void startReceiver().then(mountAmbient)
 consumePendingPlay()
