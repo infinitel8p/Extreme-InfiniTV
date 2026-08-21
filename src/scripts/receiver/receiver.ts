@@ -391,10 +391,13 @@ document.addEventListener("keydown", (event) => {
 })
 
 function exitReceiver(): void {
+  setKeepScreenOn(false)
   // Server keeps running in the background; only auto-boot-in is suppressed.
   try { sessionStorage.setItem("xt_receiver_exited", "1") } catch {}
   window.location.href = "/"
 }
+
+window.addEventListener("pagehide", () => setKeepScreenOn(false))
 
 if (isKioskBuild) {
   exitBtn?.classList.add("hidden")

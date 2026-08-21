@@ -1112,6 +1112,7 @@ class AndroidVideoBridge(
     activity.receiverSessionActive = false
     EventQueue.pushListener = null
     if (NativePlayerControl.isActive()) NativePlayerControl.finishPlayback()
+    setKeepScreenOn(false)
   }
 
   @JavascriptInterface

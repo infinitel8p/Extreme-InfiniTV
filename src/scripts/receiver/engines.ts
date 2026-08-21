@@ -646,6 +646,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
 
     control(action: ReceiverControlAction, seconds?: number): void {
       if (action === "stop") {
+        report({ state: "idle", positionSeconds: 0 })
         finishAndEndSession()
         callbacks.onSessionEnded()
         return
@@ -675,6 +676,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
     },
 
     teardown(): void {
+      report({ state: "idle", positionSeconds: 0 })
       finishAndEndSession()
     },
   }
