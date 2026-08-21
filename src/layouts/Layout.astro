@@ -57,6 +57,10 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
           var hasTauri = !!window.__TAURI_INTERNALS__ || !!window.__TAURI__;
           if (hasTauri && uaPlatform.indexOf("android") === -1) {
             document.documentElement.setAttribute("data-tauri-desktop", "1");
+            // Mirrors TitleBar's async isFullscreen() check to avoid a layout flash on nav.
+            if (sessionStorage.getItem("xt_fullscreen") === "1") {
+              document.documentElement.setAttribute("data-fullscreen", "");
+            }
           }
         } catch (e) {}
         var cw = parseFloat(localStorage.getItem("xt_channels_w") || "");
@@ -1002,10 +1006,21 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
     ;(async () => {
       try {
-        const [{ invoke }, { listen }, { getReceiverModeEnabled, getEffectiveReceiverDeviceName }, { advertiseReceiver }] =
+        // Registered first: this listener is the primary input path on TV devices.
+        const { listen } = await import("@tauri-apps/api/event")
+        await listen<{ descriptor: unknown }>("xt:receiver-play", (event) => {
+          try {
+            sessionStorage.setItem(
+              "xt_receiver_pending_play",
+              JSON.stringify(event.payload?.descriptor)
+            )
+          } catch {}
+          location.href = "/receiver"
+        })
+
+        const [{ invoke }, { getReceiverModeEnabled, getEffectiveReceiverDeviceName }, { advertiseReceiver }] =
           await Promise.all([
             import("@tauri-apps/api/core"),
-            import("@tauri-apps/api/event"),
             import("@/scripts/lib/app-settings.js"),
             import("@/scripts/lib/receiver-discovery.js"),
           ])
@@ -1018,15 +1033,6 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
             })
             .catch(() => {})
         }
-        await listen<{ descriptor: unknown }>("xt:receiver-play", (event) => {
-          try {
-            sessionStorage.setItem(
-              "xt_receiver_pending_play",
-              JSON.stringify(event.payload?.descriptor)
-            )
-          } catch {}
-          location.href = "/receiver"
-        })
       } catch {}
     })()
   }

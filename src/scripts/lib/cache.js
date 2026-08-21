@@ -24,13 +24,16 @@ const _mem = new Map()
 // ---------------------------------------------------------------------------
 /** @type {Promise<IDBDatabase>|null} */
 let _dbPromise = null
+const DB_OPEN_TIMEOUT_MS = 3000
 
+// Raced against a timeout so a wedged/blocked open doesn't hang every cache read.
 function openDB() {
   if (_dbPromise) return _dbPromise
   if (typeof indexedDB === "undefined") {
     return Promise.reject(new Error("IndexedDB unavailable"))
   }
-  _dbPromise = new Promise((resolve, reject) => {
+  let settled = false
+  const open = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = (event) => {
       const db = req.result
@@ -40,19 +43,50 @@ function openDB() {
         req.transaction.objectStore(STORE).clear()
       }
     }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-    req.onblocked = () => reject(new Error("IDB blocked"))
+    req.onsuccess = () => {
+      settled = true
+      const db = req.result
+      // Another document upgrading the schema needs this connection closed.
+      db.onversionchange = () => {
+        try { db.close() } catch {}
+        _dbPromise = null
+      }
+      resolve(db)
+    }
+    req.onerror = () => {
+      settled = true
+      reject(req.error)
+    }
+    // Per spec `blocked` doesn't abort the request; it still resolves later.
+    req.onblocked = () => {
+      log.warn("[xt:cache] open blocked by another connection, waiting")
+    }
   })
-  _dbPromise.catch(() => {
-    _dbPromise = null
-  })
-  return _dbPromise
+  const raced = Promise.race([
+    open,
+    new Promise((resolve) =>
+      setTimeout(() => {
+        if (!settled) log.warn("[xt:cache] IDB open timed out, caching disabled for this page")
+        resolve(null)
+      }, DB_OPEN_TIMEOUT_MS)
+    ),
+  ])
+  open.then(
+    (db) => {
+      if (_dbPromise === raced) _dbPromise = Promise.resolve(db)
+    },
+    () => {
+      if (_dbPromise === raced) _dbPromise = null
+    }
+  )
+  _dbPromise = raced
+  return raced
 }
 
 async function idbGet(key) {
   try {
     const db = await openDB()
+    if (!db) return null
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readonly")
       const req = tx.objectStore(STORE).get(key)
@@ -67,6 +101,7 @@ async function idbGet(key) {
 async function idbPut(key, value) {
   try {
     const db = await openDB()
+    if (!db) return false
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).put(value, key)
@@ -89,6 +124,7 @@ async function idbPut(key, value) {
 async function idbDelete(key) {
   try {
     const db = await openDB()
+    if (!db) return false
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).delete(key)
@@ -107,6 +143,7 @@ async function idbDelete(key) {
 async function idbAllKeys() {
   try {
     const db = await openDB()
+    if (!db) return []
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readonly")
       const req = tx.objectStore(STORE).getAllKeys()
@@ -121,6 +158,7 @@ async function idbAllKeys() {
 async function idbDeleteWhere(prefix) {
   try {
     const db = await openDB()
+    if (!db) return 0
     const keys = await idbAllKeys()
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readwrite")
@@ -147,6 +185,7 @@ async function idbDeleteWhere(prefix) {
 async function idbClearAll() {
   try {
     const db = await openDB()
+    if (!db) return false
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).clear()
@@ -268,6 +307,7 @@ export async function getCachedByKindPrefix(entryId, kindPrefix) {
   }
   try {
     const db = await openDB()
+    if (!db) return [...byKind].map(([kind, data]) => ({ kind, data }))
     const idbResults = await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readonly")
       const range = IDBKeyRange.bound(prefix, prefix + "￿")

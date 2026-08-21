@@ -52,27 +52,29 @@ export async function initTrayHandler(): Promise<UnlistenFn | null> {
 
   try {
     const { listen } = await import("@tauri-apps/api/event")
-    const unlistenNavigate = await listen<string>("xt:tray:navigate", (event) => {
-      const route = String(event.payload || "").trim()
-      if (!KNOWN_ROUTES.has(route)) {
-        log.warn("[xt:tray] unknown navigate route:", route)
-        return
-      }
-      if (window.location.pathname === route) return
-      window.location.href = route
-    })
-    const unlistenHidden = await listen("xt:tray:hidden-to-tray", () => {
-      let alreadyShown = false
-      try {
-        alreadyShown = localStorage.getItem(TRAY_NOTICE_STORAGE_KEY) === "1"
-        if (!alreadyShown) localStorage.setItem(TRAY_NOTICE_STORAGE_KEY, "1")
-      } catch {}
-      if (alreadyShown) return
-      notify({
-        title: t("tray.notice.title"),
-        body: t("tray.notice.body"),
-      }).catch(() => {})
-    })
+    const [unlistenNavigate, unlistenHidden] = await Promise.all([
+      listen<string>("xt:tray:navigate", (event) => {
+        const route = String(event.payload || "").trim()
+        if (!KNOWN_ROUTES.has(route)) {
+          log.warn("[xt:tray] unknown navigate route:", route)
+          return
+        }
+        if (window.location.pathname === route) return
+        window.location.href = route
+      }),
+      listen("xt:tray:hidden-to-tray", () => {
+        let alreadyShown = false
+        try {
+          alreadyShown = localStorage.getItem(TRAY_NOTICE_STORAGE_KEY) === "1"
+          if (!alreadyShown) localStorage.setItem(TRAY_NOTICE_STORAGE_KEY, "1")
+        } catch {}
+        if (alreadyShown) return
+        notify({
+          title: t("tray.notice.title"),
+          body: t("tray.notice.body"),
+        }).catch(() => {})
+      }),
+    ])
     return () => {
       unlistenNavigate()
       unlistenHidden()

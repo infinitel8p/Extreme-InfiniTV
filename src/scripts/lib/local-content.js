@@ -40,9 +40,20 @@ function openDB() {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
     }
-    req.onsuccess = () => resolve(req.result)
+    req.onsuccess = () => {
+      const db = req.result
+      // Another document upgrading the schema needs this connection closed.
+      db.onversionchange = () => {
+        try { db.close() } catch {}
+        dbPromise = null
+      }
+      resolve(db)
+    }
     req.onerror = () => reject(req.error)
-    req.onblocked = () => reject(new Error("IDB blocked"))
+    // Per spec `blocked` doesn't abort the request; it still resolves later.
+    req.onblocked = () => {
+      log.warn("[xt:local-content] open blocked by another connection, waiting")
+    }
   })
   dbPromise.catch(() => {
     dbPromise = null

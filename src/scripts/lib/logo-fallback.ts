@@ -26,33 +26,67 @@ interface StoredLogos {
   fetchedAt: number
 }
 
-let dbPromise: Promise<IDBDatabase> | null = null
+let dbPromise: Promise<IDBDatabase | null> | null = null
+const DB_OPEN_TIMEOUT_MS = 3000
 
-function openDB(): Promise<IDBDatabase> {
+// Raced against a timeout so a wedged/blocked open doesn't hang the logo fallback lookup.
+function openDB(): Promise<IDBDatabase | null> {
   if (dbPromise) return dbPromise
   if (typeof indexedDB === "undefined") {
     return Promise.reject(new Error("IndexedDB unavailable"))
   }
-  dbPromise = new Promise((resolve, reject) => {
+  let settled = false
+  const open = new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = () => {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
     }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-    req.onblocked = () => reject(new Error("IDB blocked"))
+    req.onsuccess = () => {
+      settled = true
+      const db = req.result
+      // Another document upgrading the schema needs this connection closed.
+      db.onversionchange = () => {
+        try { db.close() } catch {}
+        dbPromise = null
+      }
+      resolve(db)
+    }
+    req.onerror = () => {
+      settled = true
+      reject(req.error)
+    }
+    // Per spec `blocked` doesn't abort the request; it still resolves later.
+    req.onblocked = () => {
+      log.warn("[xt:logo-fallback] open blocked by another connection, waiting")
+    }
   })
-  dbPromise.catch(() => {
-    dbPromise = null
-  })
-  return dbPromise
+  const raced: Promise<IDBDatabase | null> = Promise.race([
+    open,
+    new Promise<null>((resolve) =>
+      setTimeout(() => {
+        if (!settled) log.warn("[xt:logo-fallback] IDB open timed out, logo cache disabled for this page")
+        resolve(null)
+      }, DB_OPEN_TIMEOUT_MS)
+    ),
+  ])
+  open.then(
+    (db) => {
+      if (dbPromise === raced) dbPromise = Promise.resolve(db)
+    },
+    () => {
+      if (dbPromise === raced) dbPromise = null
+    }
+  )
+  dbPromise = raced
+  return raced
 }
 
 async function idbGetLogos(): Promise<StoredLogos | null> {
   if (typeof indexedDB === "undefined") return null
   try {
     const db = await openDB()
+    if (!db) return null
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readonly")
       const req = tx.objectStore(STORE).get(RECORD_KEY)
@@ -69,6 +103,7 @@ async function idbPutLogos(value: StoredLogos): Promise<void> {
   if (typeof indexedDB === "undefined") return
   try {
     const db = await openDB()
+    if (!db) return
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).put(value, RECORD_KEY)
