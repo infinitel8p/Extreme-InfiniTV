@@ -101,6 +101,8 @@ function mountAmbient(): void {
       addressEl: document.getElementById("receiver-ambient-address"),
       codeEl: document.getElementById("receiver-ambient-code"),
       foregroundEl: document.getElementById("receiver-ambient-foreground"),
+      brandEl: document.getElementById("receiver-ambient-brand"),
+      brandMarkEl: document.getElementById("receiver-ambient-brand-mark"),
     },
     getPlaylistId: getActivePlaylistId,
   })
@@ -363,11 +365,14 @@ setInterval(() => {
   idleEl.style.transform = `translate(${dx}px, ${dy}px)`
 }, OLED_NUDGE_INTERVAL_MS)
 
+// Mounted synchronously (no receiver-status dependency) so no pushed manifest/cast event is dropped.
+mountAmbient()
+
 void listen<ReceiverStatus>("xt:receiver-status", (event) => renderStatus(event.payload))
 void listen<{ deviceName: string }>("xt:receiver-paired", (event) => showPairedFlash(event.payload?.deviceName || ""))
 void listen<ReceiverPlayPayload>("xt:receiver-play", (event) => void onPlay(event.payload?.descriptor))
 void listen<ReceiverControlPayload>("xt:receiver-control", (event) => onControl(event.payload))
 void listen<{ entries: unknown }>("xt:receiver-ambient", (event) => ambient?.notePushedManifest(event.payload?.entries))
 
-void startReceiver().then(mountAmbient)
+void startReceiver()
 consumePendingPlay()

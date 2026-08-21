@@ -123,6 +123,14 @@ export function canEnterAmbient(playbackState: string, entries: AmbientEntry[]):
   return AMBIENT_ELIGIBLE_STATES.has(playbackState) && entries.length > 0
 }
 
+export type AmbientMode = "artwork" | "brand" | "none"
+
+/** Idle-timer entry decision: rotate artwork, fall back to the brand mark, or stay on the pairing screen. */
+export function resolveAmbientMode(playbackState: string, entries: AmbientEntry[]): AmbientMode {
+  if (!AMBIENT_ELIGIBLE_STATES.has(playbackState)) return "none"
+  return entries.length > 0 ? "artwork" : "brand"
+}
+
 export function nextRotationIndex(length: number, currentIndex: number): number {
   if (length <= 0) return 0
   return (currentIndex + 1) % length
@@ -197,6 +205,8 @@ export interface ReceiverAmbientDom {
   addressEl: HTMLElement | null
   codeEl: HTMLElement | null
   foregroundEl: HTMLElement | null
+  brandEl: HTMLElement | null
+  brandMarkEl: HTMLElement | null
 }
 
 export interface ReceiverAmbientDeps {
@@ -226,6 +236,8 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
   let rotationEntries: AmbientEntry[] = []
   let rotationIndex = -1
   let activeLayer: "a" | "b" = "a"
+  let ambientMode: AmbientMode | null = null
+  let lastLoggedBailReason: string | null = null
   const failureCounts = new Map<string, number>()
 
   function clearIdleTimer(): void {
@@ -274,13 +286,33 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
     recomputeManifestEntries()
   }
 
+  function describeArtworkSourceCounts(): string {
+    const pushedCount = loadPushedManifest()?.entries.length ?? 0
+    const historyCount = loadCastHistory().length
+    return `library=${libraryEntriesCache.length} pushed=${pushedCount} history=${historyCount}`
+  }
+
+  function logBailReasonIfChanged(): void {
+    const reason = describeArtworkSourceCounts()
+    if (reason === lastLoggedBailReason) return
+    lastLoggedBailReason = reason
+    log.info(`[xt:receiver-ambient] idle timeout with no playable artwork (${reason})`)
+  }
+
   async function attemptEnterAmbient(): Promise<void> {
     if (destroyed || visualState === "ambient") return
     if (!AMBIENT_ELIGIBLE_STATES.has(playbackState)) return
     await ensureManifestFresh()
     const entries = playableAmbientEntries(manifestEntries)
-    if (!canEnterAmbient(playbackState, entries)) {
+    const mode = resolveAmbientMode(playbackState, entries)
+    if (mode === "none") {
       resetIdleTimer()
+      return
+    }
+    if (mode === "brand") {
+      logBailReasonIfChanged()
+      log.info("[xt:receiver-ambient] no artwork available, showing brand fallback")
+      enterBrandAmbient()
       return
     }
     enterAmbient(entries)
@@ -288,22 +320,61 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
 
   function enterAmbient(entries: AmbientEntry[]): void {
     visualState = "ambient"
+    ambientMode = "artwork"
     rotationEntries = entries
     rotationIndex = -1
     failureCounts.clear()
+    lastLoggedBailReason = null
+    log.info(`[xt:receiver-ambient] entering ambient: ${entries.length} entries`)
     dom.root?.setAttribute("data-active", "true")
     dom.root?.setAttribute("aria-hidden", "false")
     dom.idleEl?.setAttribute("data-ambient-active", "true")
+    dom.brandEl?.classList.add("hidden")
     advanceRotation()
+  }
+
+  function enterBrandAmbient(): void {
+    visualState = "ambient"
+    ambientMode = "brand"
+    stopRotation()
+    dom.root?.setAttribute("data-active", "true")
+    dom.root?.setAttribute("aria-hidden", "false")
+    dom.idleEl?.setAttribute("data-ambient-active", "true")
+    dom.layerA?.classList.remove("xt-ambient-layer-visible", "xt-ambient-kenburns")
+    dom.layerB?.classList.remove("xt-ambient-layer-visible", "xt-ambient-kenburns")
+    dom.posterEl?.classList.add("hidden")
+    dom.logoEl?.classList.add("hidden")
+    dom.titleEl?.classList.add("hidden")
+    dom.brandMarkEl?.classList.toggle("xt-ambient-brand-breathe", !motionDisabled())
+    dom.brandEl?.classList.remove("hidden")
+    scheduleBrandRecheck()
+  }
+
+  function scheduleBrandRecheck(): void {
+    stopRotation()
+    rotationTimer = setTimeout(() => { void recheckBrandAmbient() }, HOLD_MS)
+  }
+
+  async function recheckBrandAmbient(): Promise<void> {
+    if (visualState !== "ambient" || ambientMode !== "brand") return
+    await ensureManifestFresh()
+    const entries = playableAmbientEntries(manifestEntries)
+    if (entries.length > 0) {
+      enterAmbient(entries)
+      return
+    }
+    scheduleBrandRecheck()
   }
 
   function exitAmbient(): void {
     if (visualState !== "ambient") return
     visualState = "info"
+    ambientMode = null
     stopRotation()
     dom.root?.setAttribute("data-active", "false")
     dom.root?.setAttribute("aria-hidden", "true")
     dom.idleEl?.removeAttribute("data-ambient-active")
+    dom.brandEl?.classList.add("hidden")
   }
 
   function dropEntry(entry: AmbientEntry): void {
@@ -339,6 +410,7 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
     }
     image.onerror = () => {
       if (visualState !== "ambient") return
+      log.warn(`[xt:receiver-ambient] artwork failed to load: ${model.coverImageUrl}`)
       if (recordArtworkFailure(failureCounts, ambientEntryKey(entry))) {
         dropEntry(entry)
         rotationIndex = -1
@@ -402,11 +474,22 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
   document.addEventListener("pointermove", onPointerWake)
   document.addEventListener("pointerdown", onPointerWake)
 
-  const burnInInterval = setInterval(() => {
-    if (visualState !== "ambient" || motionDisabled() || !dom.foregroundEl) return
+  function shiftForBurnIn(element: HTMLElement | null): void {
+    if (!element) return
     const dx = Math.round((Math.random() - 0.5) * 2 * BURN_IN_MAX_PX)
     const dy = Math.round((Math.random() - 0.5) * 2 * BURN_IN_MAX_PX)
-    dom.foregroundEl.style.transform = `translate(${dx}px, ${dy}px)`
+    element.style.transform = `translate(${dx}px, ${dy}px)`
+  }
+
+  const burnInInterval = setInterval(() => {
+    if (visualState !== "ambient") return
+    if (ambientMode === "brand") {
+      // Brand fallback is fully static, so it shifts even in perf mode.
+      shiftForBurnIn(dom.brandEl)
+      return
+    }
+    if (motionDisabled()) return
+    shiftForBurnIn(dom.foregroundEl)
   }, BURN_IN_INTERVAL_MS)
 
   resetIdleTimer()
@@ -420,7 +503,10 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
         clearIdleTimer()
         return
       }
-      if (!AMBIENT_ELIGIBLE_STATES.has(previousState)) resetIdleTimer()
+      if (!AMBIENT_ELIGIBLE_STATES.has(previousState)) {
+        lastLoggedBailReason = null
+        resetIdleTimer()
+      }
     },
 
     noteCastDescriptor(descriptor: { title?: string; logo?: string }): void {
@@ -430,11 +516,19 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
     },
 
     notePushedManifest(entries: unknown): void {
+      const rawCount = Array.isArray(entries) ? entries.length : 0
       const sanitized = sanitizePushedAmbientEntries(entries)
+      log.info(`[xt:receiver-ambient] pushed manifest received: ${rawCount} entries, ${sanitized.length} kept`)
       if (sanitized.length === 0) return
       savePushedManifest(sanitized)
       recomputeManifestEntries()
-      if (visualState === "ambient") rotationEntries = playableAmbientEntries(manifestEntries)
+      const playable = playableAmbientEntries(manifestEntries)
+      if (visualState !== "ambient") return
+      if (ambientMode === "brand" && playable.length > 0) {
+        enterAmbient(playable)
+      } else if (ambientMode === "artwork") {
+        rotationEntries = playable
+      }
     },
 
     setPairingInfo(address: string, code: string): void {

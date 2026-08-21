@@ -77,10 +77,35 @@ import ReceiverLayout from "@/layouts/ReceiverLayout.astro"
 			data-active="false"
 			aria-hidden="true"
 			data-i18n-attr="aria-label:receiver.ambient.label"
-			class="xt-receiver-ambient absolute inset-0 z-20 overflow-hidden bg-black">
+			class="xt-receiver-ambient fixed inset-0 z-20 overflow-hidden bg-black">
 			<div id="receiver-ambient-layer-a" class="xt-ambient-layer absolute inset-0 bg-cover bg-center"></div>
 			<div id="receiver-ambient-layer-b" class="xt-ambient-layer absolute inset-0 bg-cover bg-center"></div>
 			<div class="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent"></div>
+
+			<div
+				id="receiver-ambient-brand"
+				class="hidden absolute inset-0 z-10 flex items-center justify-center transition-transform duration-[2000ms] ease-linear">
+				<div class="flex flex-col items-center gap-4">
+					<svg
+						id="receiver-ambient-brand-mark"
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="8 58 224 124"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						aria-hidden="true"
+						class="xt-ambient-brand-mark h-16 sm:h-20 w-auto text-accent">
+						<path fill="none" stroke="currentColor" stroke-width="20" d="M65.6 70.2 A50 50 0 1 1 20.2 115.6" />
+						<circle fill="currentColor" cx="34.6" cy="84.6" r="9" />
+						<circle fill="none" stroke="currentColor" stroke-width="20" cx="170" cy="120" r="50" />
+						<rect fill="currentColor" x="146.5" y="94" width="13" height="52" rx="6.5" />
+						<rect fill="currentColor" x="164.5" y="102" width="13" height="36" rx="6.5" />
+						<rect fill="currentColor" x="182.5" y="110" width="13" height="20" rx="6.5" />
+					</svg>
+					<p class="text-2xl sm:text-3xl font-semibold tracking-[-0.02em]">
+						<span class="text-white">Infini</span><span class="font-extrabold text-accent tracking-[0.04em]">TV</span>
+					</p>
+				</div>
+			</div>
 
 			<img
 				id="receiver-ambient-poster"
@@ -193,13 +218,33 @@ import ReceiverLayout from "@/layouts/ReceiverLayout.astro"
 		from { transform: scale(1); }
 		to { transform: scale(1.06); }
 	}
+	.xt-ambient-brand-mark.xt-ambient-brand-breathe {
+		animation: xt-ambient-brand-breathe 6s ease-in-out infinite;
+	}
+	@keyframes xt-ambient-brand-breathe {
+		0%, 100% { opacity: 0.85; transform: scale(1); }
+		50% { opacity: 1; transform: scale(1.05); }
+	}
+	/* Ambient artwork is full-bleed (fixed, ignores body overscan padding); keep its UI in the safe area. */
+	html[data-tv-overscan] #receiver-ambient-foreground {
+		padding-right: calc(3rem + var(--xt-tv-overscan, 0) * 1vw);
+		padding-bottom: calc(3rem + var(--xt-tv-overscan, 0) * 1vh);
+		padding-left: calc(3rem + var(--xt-tv-overscan, 0) * 1vw);
+	}
+	html[data-tv-overscan] #receiver-ambient-poster {
+		right: calc(3.5rem + var(--xt-tv-overscan, 0) * 1vw);
+		bottom: calc(3.5rem + var(--xt-tv-overscan, 0) * 1vh);
+	}
+
 	@media (prefers-reduced-motion: reduce) {
 		#receiver-idle,
 		.xt-receiver-ambient,
-		.xt-ambient-layer {
+		.xt-ambient-layer,
+		#receiver-ambient-brand {
 			transition: none;
 		}
-		.xt-ambient-layer.xt-ambient-kenburns {
+		.xt-ambient-layer.xt-ambient-kenburns,
+		.xt-ambient-brand-mark.xt-ambient-brand-breathe {
 			animation: none;
 		}
 	}

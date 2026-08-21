@@ -13,6 +13,7 @@ import {
   nextRotationIndex,
   playableAmbientEntries,
   recordArtworkFailure,
+  resolveAmbientMode,
   sanitizePushedAmbientEntries,
   selectAmbientArtwork,
   type CastHistoryEntry,
@@ -132,6 +133,28 @@ describe("canEnterAmbient", () => {
 
   it("blocks entering with no artwork available", () => {
     expect(canEnterAmbient("idle", [])).toBe(false)
+  })
+})
+
+describe("resolveAmbientMode", () => {
+  const entries = [makeEntry({ posterUrl: "https://x/p.png" })]
+
+  it("resolves to artwork when eligible and entries are playable", () => {
+    expect(resolveAmbientMode("idle", entries)).toBe("artwork")
+    expect(resolveAmbientMode("ended", entries)).toBe("artwork")
+    expect(resolveAmbientMode("error", entries)).toBe("artwork")
+  })
+
+  it("resolves to brand when eligible but no artwork is available", () => {
+    expect(resolveAmbientMode("idle", [])).toBe("brand")
+    expect(resolveAmbientMode("ended", [])).toBe("brand")
+    expect(resolveAmbientMode("error", [])).toBe("brand")
+  })
+
+  it("resolves to none while actively playing, regardless of artwork", () => {
+    expect(resolveAmbientMode("playing", entries)).toBe("none")
+    expect(resolveAmbientMode("playing", [])).toBe("none")
+    expect(resolveAmbientMode("paused", entries)).toBe("none")
   })
 })
 

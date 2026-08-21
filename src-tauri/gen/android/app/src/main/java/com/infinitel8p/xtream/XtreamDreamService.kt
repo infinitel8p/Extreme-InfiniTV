@@ -3,6 +3,7 @@ package com.infinitel8p.xtream
 import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
@@ -11,6 +12,9 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.service.dreams.DreamService
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -18,6 +22,7 @@ import android.view.ViewGroup
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import coil.ImageLoader
 import coil.disk.DiskCache
@@ -50,6 +55,8 @@ class XtreamDreamService : DreamService() {
     private const val OVERLAY_NUDGE_PX = 8
     private const val BRAND_ALPHA = 0.4f
     private const val BRAND_DRIFT_DURATION_MS = 60_000L
+    private const val BRAND_FALLBACK_ALPHA = 1f
+    private const val FALLBACK_REFRESH_INTERVAL_MS = 5 * 60_000L
     private const val DISK_CACHE_MAX_BYTES = 64L * 1024 * 1024
   }
 
@@ -66,7 +73,7 @@ class XtreamDreamService : DreamService() {
   private var overlayContainer: FrameLayout? = null
   private var overlayLogo: ImageView? = null
   private var overlayTitle: TextView? = null
-  private var brandMark: ImageView? = null
+  private var brandMark: View? = null
 
   private var activeEntries: MutableList<DreamEntry> = mutableListOf()
   private var userAgent: String? = null
@@ -154,10 +161,28 @@ class XtreamDreamService : DreamService() {
       }
     )
 
-    val brand = ImageView(this).apply {
+    val brandIcon = ImageView(this).apply {
       setImageResource(R.drawable.ic_brand_mark)
+      imageTintList = ColorStateList.valueOf(getColor(R.color.xt_accent))
+    }
+    val brandWordmark = TextView(this).apply {
+      text = buildBrandWordmark()
+      textSize = 24f
+      setTypeface(typeface, Typeface.BOLD)
+      gravity = Gravity.CENTER
+    }
+    val brand = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      gravity = Gravity.CENTER
       alpha = 0f
       visibility = View.GONE
+      addView(brandIcon, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+      addView(
+        brandWordmark,
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+          topMargin = (16 * displayMetrics.density).toInt()
+        }
+      )
     }
     root.addView(
       brand,
@@ -178,6 +203,15 @@ class XtreamDreamService : DreamService() {
 
   private fun matchParentParams() =
     FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+
+  private fun buildBrandWordmark(): CharSequence {
+    val text = "InfiniTV"
+    val tvStart = text.length - 2
+    return SpannableString(text).apply {
+      setSpan(ForegroundColorSpan(Color.WHITE), 0, tvStart, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+      setSpan(ForegroundColorSpan(getColor(R.color.xt_accent)), tvStart, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+  }
 
   // ---------------------------------------------------------------------
   // Manifest
@@ -360,7 +394,7 @@ class XtreamDreamService : DreamService() {
   private fun startBrandFallback() {
     if (fallbackActive) return
     fallbackActive = true
-    Log.d(TAG, "switching to brand fallback")
+    Log.d(TAG, "no artwork available, showing brand fallback")
     frontLayer?.animate()?.alpha(0f)?.setDuration(CROSSFADE_DURATION_MS)?.start()
     backLayer?.animate()?.alpha(0f)?.setDuration(CROSSFADE_DURATION_MS)?.start()
     overlayContainer?.visibility = View.GONE
@@ -369,7 +403,7 @@ class XtreamDreamService : DreamService() {
 
     val brand = brandMark ?: return
     brand.visibility = View.VISIBLE
-    brand.alpha = BRAND_ALPHA
+    brand.animate().alpha(BRAND_FALLBACK_ALPHA).setDuration(CROSSFADE_DURATION_MS).start()
 
     val displayMetrics = resources.displayMetrics
     val amplitudeX = displayMetrics.widthPixels * 0.1f
@@ -386,6 +420,44 @@ class XtreamDreamService : DreamService() {
       }
       start()
     }
+    scheduleFallbackRefresh()
+  }
+
+  // Polls the manifest while the brand fallback is showing so a background
+  // catalog refresh can hand rotation back its artwork without restarting the dream.
+  private fun scheduleFallbackRefresh() {
+    postDelayed(FALLBACK_REFRESH_INTERVAL_MS) {
+      if (!fallbackActive) return@postDelayed
+      Thread {
+        val data = readManifest()
+        mainHandler.post { onFallbackRefreshResult(data) }
+      }.start()
+    }
+  }
+
+  private fun onFallbackRefreshResult(data: DreamData) {
+    if (!fallbackActive) return
+    val renderable = data.entries.filter { it.posterUrl != null || it.backdropUrl != null }
+    if (renderable.isEmpty()) {
+      scheduleFallbackRefresh()
+      return
+    }
+    activeEntries = renderable.toMutableList()
+    userAgent = data.ua
+    Log.d(TAG, "artwork available again, leaving brand fallback")
+    endBrandFallback()
+    showNextEntry()
+  }
+
+  private fun endBrandFallback() {
+    fallbackActive = false
+    brandDriftAnimator?.cancel()
+    brandDriftAnimator = null
+    val brand = brandMark
+    brand?.animate()?.alpha(0f)?.setDuration(CROSSFADE_DURATION_MS)?.withEndAction {
+      brand.visibility = View.GONE
+    }?.start()
+    overlayContainer?.visibility = View.VISIBLE
   }
 
   // ---------------------------------------------------------------------
