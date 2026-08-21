@@ -573,7 +573,7 @@ function capReceiverLogText(text: string): string {
 }
 
 function readReceiverLogSnapshotsFromStorage(): Record<string, ReceiverLogSnapshot> {
-  const raw = readSessionStorage(RECEIVER_LOG_SNAPSHOT_KEY)
+  const raw = readLocalStorage(RECEIVER_LOG_SNAPSHOT_KEY)
   if (!raw) return {}
   try {
     const parsed = JSON.parse(raw)
@@ -583,14 +583,14 @@ function readReceiverLogSnapshotsFromStorage(): Record<string, ReceiverLogSnapsh
   }
 }
 
-/** Caches a receiver's log tail so a diagnostic export can still find it after the device drops offline. */
+/** Caches a receiver's log tail in localStorage so it survives an app restart, not just the tab. */
 export function cacheReceiverLogSnapshot(deviceName: string, text: string): void {
   const snapshot: ReceiverLogSnapshot = { at: new Date().toISOString(), text: capReceiverLogText(text) }
   try {
-    if (typeof sessionStorage === "undefined") throw new Error("no-session-storage")
+    if (typeof localStorage === "undefined") throw new Error("no-local-storage")
     const snapshots = readReceiverLogSnapshotsFromStorage()
     snapshots[deviceName] = snapshot
-    sessionStorage.setItem(RECEIVER_LOG_SNAPSHOT_KEY, JSON.stringify(snapshots))
+    localStorage.setItem(RECEIVER_LOG_SNAPSHOT_KEY, JSON.stringify(snapshots))
   } catch {
     receiverLogSnapshotFallback.set(deviceName, snapshot)
   }
@@ -602,6 +602,13 @@ export function getReceiverLogSnapshots(): Record<string, ReceiverLogSnapshot> {
     if (!merged[deviceName]) merged[deviceName] = snapshot
   }
   return merged
+}
+
+export function getReceiverLogSnapshotAt(deviceName: string): number | null {
+  const snapshot = getReceiverLogSnapshots()[deviceName]
+  if (!snapshot) return null
+  const at = Date.parse(snapshot.at)
+  return Number.isNaN(at) ? null : at
 }
 
 export function startCastStatePolling(

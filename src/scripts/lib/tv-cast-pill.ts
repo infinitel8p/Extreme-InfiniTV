@@ -8,6 +8,7 @@ import {
   fetchCastStateWithFallback,
   fetchReceiverLogs,
   cacheReceiverLogSnapshot,
+  getReceiverLogSnapshotAt,
   castPause,
   castResume,
   castSeek,
@@ -15,6 +16,7 @@ import {
   sessionAsDevice,
   CAST_SESSION_EVENT,
   type CastSession,
+  type TvDevice,
 } from "@/scripts/lib/tv-cast.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
@@ -36,6 +38,7 @@ const MAX_CONSECUTIVE_MISSES = 3
 const SEEK_STEP_SECONDS = 30
 const SEEK_SUPPRESS_MS = 2500
 const EXIT_ANIMATION_MS = 320
+const LOG_SNAPSHOT_INTERVAL_MS = 60_000
 
 type PillStatus = "ok" | "reconnecting" | "error"
 
@@ -48,6 +51,7 @@ let initialized = false
 let errorToastShown = false
 let suppressPollPositionUntil = 0
 let morePanelObserver: MutationObserver | null = null
+let logSnapshotInFlight = false
 
 function formatClock(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds))
@@ -274,6 +278,20 @@ function renderStatus(pill: HTMLElement, session: CastSession, status: PillStatu
   titleEl.textContent = connectedOnly ? t("cast.pill.ready") : session.title
 }
 
+function refreshReceiverLogSnapshotIfStale(session: CastSession, device: TvDevice): void {
+  if (logSnapshotInFlight) return
+  const snapshotAt = getReceiverLogSnapshotAt(session.deviceName)
+  if (snapshotAt != null && Date.now() - snapshotAt < LOG_SNAPSHOT_INTERVAL_MS) return
+  logSnapshotInFlight = true
+  void fetchReceiverLogs(device)
+    .then((text) => {
+      if (text) cacheReceiverLogSnapshot(session.deviceName, text)
+    })
+    .finally(() => {
+      logSnapshotInFlight = false
+    })
+}
+
 async function tick(): Promise<void> {
   const session = getCastSession()
   if (!session || !pillEl) return
@@ -292,6 +310,7 @@ async function tick(): Promise<void> {
     return
   }
   consecutiveMisses = 0
+  refreshReceiverLogSnapshotIfStale(session, device)
   if (state.durationSeconds != null) lastKnownDurationSeconds = state.durationSeconds
   if (state.state === "idle") {
     // Connected-only mode is meant to survive receiver idle, not tear it down.

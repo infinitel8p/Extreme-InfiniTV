@@ -14,6 +14,7 @@ import {
   clearCastSession,
   cacheReceiverLogSnapshot,
   getReceiverLogSnapshots,
+  getReceiverLogSnapshotAt,
   candidateHostOrder,
   TV_DEVICES_EVENT,
   CAST_SESSION_EVENT,
@@ -328,12 +329,24 @@ describe("receiver log snapshots", () => {
     expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(64 * 1024)
   })
 
-  it("falls back to an in-memory cache when sessionStorage.setItem throws", () => {
-    const setItemSpy = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+  it("falls back to an in-memory cache when localStorage.setItem throws", () => {
+    const setItemSpy = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
       throw new Error("quota exceeded")
     })
     cacheReceiverLogSnapshot("Living Room TV", "still visible")
     setItemSpy.mockRestore()
     expect(getReceiverLogSnapshots()["Living Room TV"].text).toBe("still visible")
+  })
+
+  it("round-trips through localStorage and exposes the snapshot timestamp", () => {
+    cacheReceiverLogSnapshot("Living Room TV", "log tail")
+    expect(localStorage.getItem("xt_receiver_log_snapshot_v1")).toContain("log tail")
+    const at = getReceiverLogSnapshotAt("Living Room TV")
+    expect(at).not.toBeNull()
+    expect(at).toBe(Date.parse(getReceiverLogSnapshots()["Living Room TV"].at))
+  })
+
+  it("returns null for a device with no cached snapshot", () => {
+    expect(getReceiverLogSnapshotAt("Unknown TV")).toBeNull()
   })
 })
