@@ -972,6 +972,157 @@ fn merge_resolved_events(
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Unicast subnet sweep fallback (VPN split-tunnels and multicast-hostile LANs kill mDNS)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const SWEEP_CANDIDATE_CAP: usize = 1024;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const SWEEP_BUDGET: Duration = Duration::from_millis(4000);
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const SWEEP_CONNECT_TIMEOUT: Duration = Duration::from_millis(400);
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const SWEEP_REQUEST_TIMEOUT: Duration = Duration::from_millis(1500);
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const SWEEP_CONCURRENCY: usize = 128;
+
+/// Hosts in one interface's subnet, clamped to /24 max width, excluding network/broadcast/self.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn sweep_hosts_for_interface(ip: std::net::Ipv4Addr, netmask: std::net::Ipv4Addr) -> Vec<std::net::Ipv4Addr> {
+    if ip.is_loopback() || ip.is_link_local() || !ip.is_private() {
+        return Vec::new();
+    }
+    let prefixlen = u32::from(netmask).count_ones().max(24);
+    if prefixlen >= 32 {
+        return Vec::new();
+    }
+    let mask = u32::MAX << (32 - prefixlen);
+    let network = u32::from(ip) & mask;
+    let broadcast = network | !mask;
+    let own = u32::from(ip);
+
+    let mut hosts = Vec::new();
+    let mut host = network + 1;
+    while host < broadcast {
+        // Only this interface's own address is excluded, not every local address.
+        if host != own {
+            hosts.push(std::net::Ipv4Addr::from(host));
+        }
+        host += 1;
+    }
+    hosts
+}
+
+/// Candidate hosts to unicast-probe, deduped across interfaces and capped.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn sweep_candidates_v4(interface_subnets: &[(std::net::Ipv4Addr, std::net::Ipv4Addr)]) -> Vec<std::net::Ipv4Addr> {
+    let mut seen = std::collections::HashSet::new();
+    let mut candidates = Vec::new();
+    for &(ip, netmask) in interface_subnets {
+        for host in sweep_hosts_for_interface(ip, netmask) {
+            if candidates.len() >= SWEEP_CANDIDATE_CAP {
+                return candidates;
+            }
+            if seen.insert(host) {
+                candidates.push(host);
+            }
+        }
+    }
+    candidates
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn sweep_candidates_from_interfaces(interfaces: &[if_addrs::Interface]) -> Vec<std::net::Ipv4Addr> {
+    let subnets: Vec<(std::net::Ipv4Addr, std::net::Ipv4Addr)> = interfaces
+        .iter()
+        .filter_map(|interface| match &interface.addr {
+            if_addrs::IfAddr::V4(v4) => Some((v4.ip, v4.netmask)),
+            _ => None,
+        })
+        .collect();
+    sweep_candidates_v4(&subnets)
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[derive(Debug, Deserialize)]
+struct SweepInfoResponse {
+    v: u32,
+    #[serde(default)]
+    app: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn probe_sweep_host(client: reqwest::Client, ip: std::net::Ipv4Addr, port: u16) -> Option<ResolvedEvent> {
+    let connect = tokio::time::timeout(SWEEP_CONNECT_TIMEOUT, tokio::net::TcpStream::connect((ip, port))).await;
+    if !matches!(connect, Ok(Ok(_))) {
+        return None;
+    }
+    let response = client
+        .get(format!("http://{ip}:{port}/info"))
+        .timeout(SWEEP_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .ok()?;
+    let info: SweepInfoResponse = response.json().await.ok()?;
+    if info.v != PROTOCOL_VERSION || info.app.as_deref() != Some("extreme-infinitv") {
+        return None;
+    }
+    Some(ResolvedEvent {
+        name: info.name.unwrap_or_default(),
+        port,
+        // mDNS ids don't exist here; a synthetic per-ip id keeps same-name receivers distinct.
+        id: Some(format!("sweep:{ip}")),
+        addresses: vec![std::net::IpAddr::V4(ip)],
+    })
+}
+
+/// Probes every candidate for a bare /info, since multicast is blocked but unicast still reaches it.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn sweep_subnets(interfaces: &[if_addrs::Interface]) -> Vec<DiscoveredReceiver> {
+    let candidates = sweep_candidates_from_interfaces(interfaces);
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    log::info!("[receiver] discover sweep probing {} hosts", candidates.len());
+
+    let client = reqwest::Client::new();
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(SWEEP_CONCURRENCY));
+    let mut join_set = tokio::task::JoinSet::new();
+    for ip in candidates {
+        let client = client.clone();
+        let semaphore = semaphore.clone();
+        join_set.spawn(async move {
+            let _permit = semaphore.acquire_owned().await.ok();
+            probe_sweep_host(client, ip, RECEIVER_PORT).await
+        });
+    }
+
+    let deadline = tokio::time::Instant::now() + SWEEP_BUDGET;
+    let mut events = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, join_set.join_next()).await {
+            Ok(Some(Ok(Some(event)))) => events.push(event),
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    join_set.abort_all();
+
+    let discovered = merge_resolved_events(events, interfaces);
+    for entry in &discovered {
+        log::info!("[receiver] discover sweep found {} at {}:{}", entry.name, entry.host, entry.port);
+    }
+    discovered
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<DiscoveredReceiver>, String> {
@@ -1023,7 +1174,7 @@ pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<Discovered
     let _ = daemon.shutdown();
 
     let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
-    let discovered = merge_resolved_events(resolved_events, &interfaces);
+    let mut discovered = merge_resolved_events(resolved_events, &interfaces);
     for entry in &discovered {
         log::info!(
             "[receiver] discover kept {} at {}:{} hosts=[{}]",
@@ -1032,6 +1183,9 @@ pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<Discovered
             entry.port,
             entry.hosts.join(", ")
         );
+    }
+    if discovered.is_empty() {
+        discovered = sweep_subnets(&interfaces).await;
     }
     log::info!("[receiver] discover complete, found={}", discovered.len());
     Ok(discovered)
@@ -2039,6 +2193,154 @@ mod tests {
             addresses: vec!["127.0.0.1".parse().unwrap()],
         }];
         assert!(merge_resolved_events(events, &[]).is_empty());
+    }
+
+    // ---------------------------------------------------------------------
+    // Unicast subnet sweep candidate enumeration
+    // ---------------------------------------------------------------------
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_hosts_for_interface_covers_a_slash_24_excluding_network_broadcast_and_self() {
+        let hosts = sweep_hosts_for_interface("192.168.1.5".parse().unwrap(), "255.255.255.0".parse().unwrap());
+        assert_eq!(hosts.len(), 253);
+        assert!(!hosts.contains(&"192.168.1.0".parse().unwrap()));
+        assert!(!hosts.contains(&"192.168.1.255".parse().unwrap()));
+        assert!(!hosts.contains(&"192.168.1.5".parse().unwrap()));
+        assert!(hosts.contains(&"192.168.1.1".parse().unwrap()));
+        assert!(hosts.contains(&"192.168.1.254".parse().unwrap()));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_hosts_for_interface_clamps_a_slash_16_down_to_the_containing_slash_24() {
+        let hosts = sweep_hosts_for_interface("10.20.30.5".parse().unwrap(), "255.255.0.0".parse().unwrap());
+        assert_eq!(hosts.len(), 253);
+        assert!(hosts.iter().all(|host| { let octets = host.octets(); octets[0] == 10 && octets[1] == 20 && octets[2] == 30 }));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_hosts_for_interface_slash_25_stays_narrower_than_the_slash_24_clamp() {
+        let hosts = sweep_hosts_for_interface("192.168.1.0".parse().unwrap(), "255.255.255.128".parse().unwrap());
+        assert_eq!(hosts.len(), 126);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_hosts_for_interface_slash_31_point_to_point_link_yields_no_candidates() {
+        let hosts = sweep_hosts_for_interface("192.168.1.0".parse().unwrap(), "255.255.255.254".parse().unwrap());
+        assert!(hosts.is_empty());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_hosts_for_interface_rejects_public_loopback_and_link_local_addresses() {
+        assert!(sweep_hosts_for_interface("8.8.8.8".parse().unwrap(), "255.255.255.0".parse().unwrap()).is_empty());
+        assert!(sweep_hosts_for_interface("127.0.0.1".parse().unwrap(), "255.0.0.0".parse().unwrap()).is_empty());
+        assert!(sweep_hosts_for_interface("169.254.1.5".parse().unwrap(), "255.255.0.0".parse().unwrap()).is_empty());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_candidates_v4_dedupes_addresses_shared_across_interfaces() {
+        // Each interface excludes only its own address, so the union covers the full range.
+        let subnets = vec![
+            ("192.168.1.5".parse().unwrap(), "255.255.255.0".parse().unwrap()),
+            ("192.168.1.6".parse().unwrap(), "255.255.255.0".parse().unwrap()),
+        ];
+        let candidates = sweep_candidates_v4(&subnets);
+        assert_eq!(candidates.len(), 254);
+        assert!(candidates.contains(&"192.168.1.5".parse().unwrap()));
+        assert!(candidates.contains(&"192.168.1.6".parse().unwrap()));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_candidates_v4_caps_the_total_across_many_distinct_subnets() {
+        let subnets: Vec<(std::net::Ipv4Addr, std::net::Ipv4Addr)> = (0..10u8)
+            .map(|third_octet| (std::net::Ipv4Addr::new(10, 0, third_octet, 1), "255.255.255.0".parse().unwrap()))
+            .collect();
+        let candidates = sweep_candidates_v4(&subnets);
+        assert_eq!(candidates.len(), SWEEP_CANDIDATE_CAP);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_candidates_from_interfaces_ignores_ipv6_interfaces() {
+        let interfaces = vec![test_interface_v6("2001:db8:1::5", 64)];
+        assert!(sweep_candidates_from_interfaces(&interfaces).is_empty());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    async fn spawn_static_info_responder(body: String) -> (u16, tokio::sync::oneshot::Sender<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind must succeed");
+        let port = listener.local_addr().unwrap().port();
+        let router = axum::Router::new().route(
+            "/info",
+            get(move || {
+                let body = body.clone();
+                async move { body }
+            }),
+        );
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
+        });
+        (port, shutdown_tx)
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_accepts_a_valid_response_and_derives_a_synthetic_id() {
+        let body = json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": "Living Room"}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        let event = probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port)
+            .await
+            .expect("a valid /info response must be accepted");
+        assert_eq!(event.name, "Living Room");
+        assert_eq!(event.id.as_deref(), Some("sweep:127.0.0.1"));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_rejects_a_protocol_version_mismatch() {
+        let body = json!({"v": PROTOCOL_VERSION + 1, "app": "extreme-infinitv", "name": "Living Room"}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        assert!(probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port).await.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_rejects_an_app_mismatch() {
+        let body = json!({"v": PROTOCOL_VERSION, "app": "some-other-app", "name": "Living Room"}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        assert!(probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port).await.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_rejects_a_non_json_body() {
+        let (port, _shutdown) = spawn_static_info_responder("not json".to_string()).await;
+        assert!(probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port).await.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_returns_none_quickly_on_connection_refused() {
+        let closed_port = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let started = std::time::Instant::now();
+        let result = probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), closed_port).await;
+        assert!(result.is_none());
+        // Must bail at the connect timeout, not fall through to the (much longer) request timeout.
+        assert!(started.elapsed() < SWEEP_CONNECT_TIMEOUT + Duration::from_millis(600));
     }
 
     // Must advertise a real interface address: mdns-sd only puts an address record on an
