@@ -55,10 +55,13 @@
     return `/series/detail?id=${encodeURIComponent(id)}`
   }
 
+  let reloadGeneration = 0
+
   async function reload() {
+    const generation = ++reloadGeneration
     await ensurePrefsLoaded()
-    const allEntries = await getEntries()
-    const active = await getActiveEntry()
+    const [allEntries, active] = await Promise.all([getEntries(), getActiveEntry()])
+    if (generation !== reloadGeneration) return
     activePlaylistId = active?._id || ""
     playlists = allEntries.map((entry) => ({
       id: entry._id,
@@ -73,71 +76,90 @@
       if (row.kind === "live") kinds.add("m3u")
       needed.set(row.playlistId, kinds)
     }
-    await Promise.all(
-      [...needed].flatMap(([playlistId, kinds]) =>
-        [...kinds].map((kind) => hydrateCache(playlistId, kind))
-      )
-    )
+    const titleById = new Map(playlists.map((entry) => [entry.id, entry.title]))
 
-    /** @type {Map<string, { live: Map<number, any>, vod: Map<number, any>, series: Map<number, any> }>} */
-    const lookups = new Map()
-    for (const playlistId of needed.keys()) {
-      lookups.set(playlistId, {
-        live: new Map(
-          (
-            getCached(playlistId, "live")?.data ||
-            getCached(playlistId, "m3u")?.data ||
-            []
-          ).map((item) => [Number(item.id), item])
-        ),
-        vod: new Map(
-          (getCached(playlistId, "vod")?.data || []).map((item) => [
-            Number(item.id),
-            item,
-          ])
-        ),
-        series: new Map(
-          (getCached(playlistId, "series")?.data || []).map((item) => [
-            Number(item.id),
-            item,
-          ])
-        ),
+    const buildEntries = () => {
+      /** @type {Map<string, { live: Map<number, any>, vod: Map<number, any>, series: Map<number, any> }>} */
+      const lookups = new Map()
+      for (const playlistId of needed.keys()) {
+        lookups.set(playlistId, {
+          live: new Map(
+            (
+              getCached(playlistId, "live")?.data ||
+              getCached(playlistId, "m3u")?.data ||
+              []
+            ).map((item) => [Number(item.id), item])
+          ),
+          vod: new Map(
+            (getCached(playlistId, "vod")?.data || []).map((item) => [
+              Number(item.id),
+              item,
+            ])
+          ),
+          series: new Map(
+            (getCached(playlistId, "series")?.data || []).map((item) => [
+              Number(item.id),
+              item,
+            ])
+          ),
+        })
+      }
+
+      entries = raw.map((row) => {
+        const meta = getFavoriteMeta(row.playlistId, row.kind, row.id)
+        const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
+        const isStoredNameFallback = !!meta?.name && isKindFallbackName(row.kind, row.id, meta.name)
+        const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
+        const name = effectiveStoredName || item?.name || `${kindLabel(row.kind)} ${row.id}`
+        const logo = meta?.logo ?? item?.logo ?? null
+        // Lazily backfill meta so cross-playlist clicks still have name + logo
+        // even when the source catalog cache later expires.
+        if (!meta && (item?.name || item?.logo)) {
+          setFavoriteMeta(row.playlistId, row.kind, row.id, {
+            name: item.name || "",
+            logo: item.logo || null,
+          })
+        } else if (isStoredNameFallback && item?.name) {
+          setFavoriteMeta(row.playlistId, row.kind, row.id, {
+            name: item.name,
+            logo: meta?.logo ?? item?.logo ?? null,
+          })
+        }
+        return {
+          playlistId: row.playlistId,
+          playlistTitle: titleById.get(row.playlistId) || "Removed playlist",
+          kind: row.kind,
+          id: Number(row.id),
+          name,
+          logo,
+          href: buildHref(row.kind, row.id),
+          isCrossPlaylist: row.playlistId !== activePlaylistId,
+        }
       })
     }
 
-    const titleById = new Map(playlists.map((entry) => [entry.id, entry.title]))
-    entries = raw.map((row) => {
-      const meta = getFavoriteMeta(row.playlistId, row.kind, row.id)
-      const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
-      const isStoredNameFallback = !!meta?.name && isKindFallbackName(row.kind, row.id, meta.name)
-      const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
-      const name = effectiveStoredName || item?.name || `${kindLabel(row.kind)} ${row.id}`
-      const logo = meta?.logo ?? item?.logo ?? null
-      // Lazily backfill meta so cross-playlist clicks still have name + logo
-      // even when the source catalog cache later expires.
-      if (!meta && (item?.name || item?.logo)) {
-        setFavoriteMeta(row.playlistId, row.kind, row.id, {
-          name: item.name || "",
-          logo: item.logo || null,
-        })
-      } else if (isStoredNameFallback && item?.name) {
-        setFavoriteMeta(row.playlistId, row.kind, row.id, {
-          name: item.name,
-          logo: meta?.logo ?? item?.logo ?? null,
-        })
-      }
-      return {
-        playlistId: row.playlistId,
-        playlistTitle: titleById.get(row.playlistId) || "Removed playlist",
-        kind: row.kind,
-        id: Number(row.id),
-        name,
-        logo,
-        href: buildHref(row.kind, row.id),
-        isCrossPlaylist: row.playlistId !== activePlaylistId,
-      }
-    })
-    loading = false
+    const hydrations = [...needed].flatMap(([playlistId, kinds]) =>
+      [...kinds].map((kind) => hydrateCache(playlistId, kind))
+    )
+    const allCached = raw.every((row) =>
+      row.kind === "live"
+        ? !!(getCached(row.playlistId, "live") || getCached(row.playlistId, "m3u"))
+        : !!getCached(row.playlistId, row.kind)
+    )
+
+    if (allCached) {
+      // Paint from memory now; hydration below only refreshes stale rows.
+      buildEntries()
+      loading = false
+      void Promise.allSettled(hydrations).then(() => {
+        if (generation === reloadGeneration) buildEntries()
+      }).catch(() => {})
+    } else {
+      await Promise.allSettled(hydrations)
+      if (generation !== reloadGeneration) return
+      buildEntries()
+      loading = false
+    }
   }
 
   async function openEntry(entry) {

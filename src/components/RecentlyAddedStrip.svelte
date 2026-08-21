@@ -55,27 +55,14 @@
     }
   }
 
-  async function reload() {
-    const active = await getActiveEntry()
-    if (!active) {
-      entries = []
-      activePlaylistId = ""
-      return
-    }
-    activePlaylistId = active._id
-    const wantVod = filterKind === "all" || filterKind === "vod"
-    const wantSeries = filterKind === "all" || filterKind === "series"
-    await Promise.all([
-      wantVod ? hydrateCache(active._id, "vod") : Promise.resolve(),
-      wantSeries ? hydrateCache(active._id, "series") : Promise.resolve(),
-    ])
+  function buildEntries(playlistId, wantVod, wantSeries) {
     const vod = wantVod
-      ? (getCached(active._id, "vod")?.data || []).filter(
+      ? (getCached(playlistId, "vod")?.data || []).filter(
           (item) => item && item.id && (item.added || 0) > 0,
         )
       : []
     const series = wantSeries
-      ? (getCached(active._id, "series")?.data || []).filter(
+      ? (getCached(playlistId, "series")?.data || []).filter(
           (item) => item && item.id && (item.added || 0) > 0,
         )
       : []
@@ -84,9 +71,42 @@
       ...series.map((item) => ({ ts: Number(item.added) || 0, kind: "series", item })),
     ]
     merged.sort((firstRow, secondRow) => secondRow.ts - firstRow.ts)
-    entries = merged
-      .slice(0, STRIP_LIMIT)
-      .map((row) => buildEntry(row.item, row.kind))
+    return merged.slice(0, STRIP_LIMIT).map((row) => buildEntry(row.item, row.kind))
+  }
+
+  let reloadGeneration = 0
+
+  async function reload() {
+    const generation = ++reloadGeneration
+    const active = await getActiveEntry()
+    if (generation !== reloadGeneration) return
+    if (!active) {
+      entries = []
+      activePlaylistId = ""
+      return
+    }
+    activePlaylistId = active._id
+    const wantVod = filterKind === "all" || filterKind === "vod"
+    const wantSeries = filterKind === "all" || filterKind === "series"
+    const hydrations = [
+      wantVod ? hydrateCache(active._id, "vod") : Promise.resolve(),
+      wantSeries ? hydrateCache(active._id, "series") : Promise.resolve(),
+    ]
+    const alreadyHydrated =
+      (!wantVod || getCached(active._id, "vod") !== null) &&
+      (!wantSeries || getCached(active._id, "series") !== null)
+    if (alreadyHydrated) {
+      entries = buildEntries(active._id, wantVod, wantSeries)
+      void Promise.allSettled(hydrations).then(() => {
+        if (generation !== reloadGeneration) return
+        entries = buildEntries(active._id, wantVod, wantSeries)
+      }).catch(() => {})
+      return
+    }
+    // Cold path: keep current entries (skeleton/hidden) until hydration resolves.
+    await Promise.allSettled(hydrations)
+    if (generation !== reloadGeneration) return
+    entries = buildEntries(active._id, wantVod, wantSeries)
   }
 
   onMount(() => {

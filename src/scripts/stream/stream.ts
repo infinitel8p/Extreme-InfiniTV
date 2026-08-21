@@ -1480,21 +1480,35 @@ async function loadChannels() {
   activePlaylistId = active._id
   activePlaylistTitle = active.title || ""
 
-  await ensurePrefsLoaded()
-  syncSortControl()
-  await Promise.all([
-    hydrateCache(active._id, "live"),
-    hydrateCache(active._id, "m3u"),
+  const prefsReady = ensurePrefsLoaded()
+  const liveHydrated = hydrateCache(active._id, "live")
+  const m3uHydrated = hydrateCache(active._id, "m3u")
+
+  // Paint from whichever kind resolves first - a playlist only ever hits one.
+  let painted = false
+  const paintFromCacheOnceReady = async (hydratePromise, kind) => {
+    await hydratePromise
+    await prefsReady
+    if (painted) return
+    const hit = getCached(active._id, kind)
+    if (!hit) return
+    painted = true
+    if (kind === "m3u") indexDirectUrls(hit.data)
+    else directUrlById = new Map()
+    paintChannels(hit.data, true, hit.age)
+  }
+  await Promise.allSettled([
+    paintFromCacheOnceReady(liveHydrated, "live"),
+    paintFromCacheOnceReady(m3uHydrated, "m3u"),
   ])
+
+  await prefsReady
+  syncSortControl()
 
   const liveHit = getCached(active._id, "live")
   const m3uHit = getCached(active._id, "m3u")
   const hit = liveHit || m3uHit
-  if (hit) {
-    if (m3uHit) indexDirectUrls(hit.data)
-    else directUrlById = new Map()
-    paintChannels(hit.data, true, hit.age)
-  } else {
+  if (!hit) {
     listStatus.textContent = t("stream.loading")
     if (!viewport?.querySelector("[data-skeleton]")) renderChannelSkeletons()
   }
@@ -1503,6 +1517,13 @@ async function loadChannels() {
   if (!creds.host) {
     if (!hit) showEmptyState()
     return
+  }
+  if (hit && !painted) {
+    // A background cache write can land here after the paint race above missed it.
+    if (liveHit) directUrlById = new Map()
+    else indexDirectUrls(hit.data)
+    paintChannels(hit.data, true, hit.age)
+    painted = true
   }
   if (hit) return // cache already painted; nothing else to do.
 

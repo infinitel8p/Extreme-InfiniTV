@@ -70,19 +70,8 @@
     return { kind, id, name, logo, href }
   }
 
-  async function rebuildLookups(playlistId) {
-    if (!playlistId) {
-      lookups = null
-      lookupsForPlaylistId = ""
-      return
-    }
-    await Promise.all([
-      hydrateCache(playlistId, "live"),
-      hydrateCache(playlistId, "m3u"),
-      hydrateCache(playlistId, "vod"),
-      hydrateCache(playlistId, "series"),
-    ])
-    lookups = {
+  function buildLookupsFromCache(playlistId) {
+    return {
       live: new Map(
         (
           getCached(playlistId, "live")?.data ||
@@ -100,25 +89,44 @@
         ])
       ),
     }
-    lookupsForPlaylistId = playlistId
   }
 
+  function buildEntries(playlistId) {
+    const raw = getGlobalFavorites(playlistId)
+    const filtered = filterKind === "all" ? raw : raw.filter((row) => row.kind === filterKind)
+    return filtered.map((entry) => buildEntry(playlistId, entry, lookups || {})).slice(0, 12)
+  }
+
+  let reloadGeneration = 0
+
   async function reload() {
-    const active = await getActiveEntry()
+    const generation = ++reloadGeneration
+    const [active] = await Promise.all([getActiveEntry(), ensurePrefsLoaded()])
+    if (generation !== reloadGeneration) return
     if (!active) {
       entries = []
       activePlaylistId = ""
       lookups = null
+      lookupsForPlaylistId = ""
       return
     }
     activePlaylistId = active._id
-    await ensurePrefsLoaded()
     if (lookupsForPlaylistId !== active._id || !lookups) {
-      await rebuildLookups(active._id)
+      // Paint with whatever's cached in memory now, hydration upgrades after.
+      lookups = buildLookupsFromCache(active._id)
+      lookupsForPlaylistId = active._id
+      void Promise.allSettled([
+        hydrateCache(active._id, "live"),
+        hydrateCache(active._id, "m3u"),
+        hydrateCache(active._id, "vod"),
+        hydrateCache(active._id, "series"),
+      ]).then(() => {
+        if (generation !== reloadGeneration) return
+        lookups = buildLookupsFromCache(active._id)
+        entries = buildEntries(active._id)
+      }).catch(() => {})
     }
-    const raw = getGlobalFavorites(active._id)
-    const filtered = filterKind === "all" ? raw : raw.filter((row) => row.kind === filterKind)
-    entries = filtered.map((entry) => buildEntry(active._id, entry, lookups || {})).slice(0, 12)
+    entries = buildEntries(active._id)
   }
 
   onMount(() => {

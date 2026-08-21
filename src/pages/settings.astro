@@ -2661,8 +2661,11 @@ const navStructure: NavSection[] = [
       successTimers.set(btn, timer)
     }
 
+    let playlistsRenderGeneration = 0
+
     async function renderPlaylists() {
       if (!playlistsEl) return
+      const generation = ++playlistsRenderGeneration
       const [entries, active] = await Promise.all([
         getEntries(),
         getActiveEntry(),
@@ -2674,29 +2677,36 @@ const navStructure: NavSection[] = [
         return
       }
 
-      await Promise.all(
-        entries.flatMap((e) => [
-          hydrateCache(e._id, "live"),
-          hydrateCache(e._id, "m3u"),
-          hydrateCache(e._id, "vod"),
-          hydrateCache(e._id, "series"),
-        ])
-      )
-
-      const frag = document.createDocumentFragment()
-      for (const e of entries) {
-        frag.appendChild(
-          renderPlaylistRow({
-            entry: e,
-            isActive: active?._id === e._id,
-            density: "full",
-          })
-        )
+      const buildRows = () => {
+        const frag = document.createDocumentFragment()
+        for (const entry of entries) {
+          frag.appendChild(
+            renderPlaylistRow({
+              entry,
+              isActive: active?._id === entry._id,
+              density: "full",
+            })
+          )
+        }
+        playlistsEl.replaceChildren(frag)
       }
-      playlistsEl.replaceChildren(frag)
+
+      // Rows paint from memory immediately; hydration only refreshes counts.
+      buildRows()
 
       if (active) refreshBtn?.classList.remove("hidden")
       else refreshBtn?.classList.add("hidden")
+
+      void Promise.allSettled(
+        entries.flatMap((entry) => [
+          hydrateCache(entry._id, "live"),
+          hydrateCache(entry._id, "m3u"),
+          hydrateCache(entry._id, "vod"),
+          hydrateCache(entry._id, "series"),
+        ])
+      ).then(() => {
+        if (generation === playlistsRenderGeneration) buildRows()
+      })
     }
 
     async function syncCache() {

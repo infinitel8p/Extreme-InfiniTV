@@ -91,35 +91,23 @@
     }
   }
 
-  async function reload() {
-    const active = await getActiveEntry()
-    if (!active) {
-      entries = []
-      activePlaylistId = ""
-      return
-    }
-    activePlaylistId = active._id
-    await ensurePrefsLoaded()
-    await Promise.all([
-      hydrateCache(active._id, "vod"),
-      hydrateCache(active._id, "live"),
-      hydrateCache(active._id, "m3u"),
-    ])
+  let reloadGeneration = 0
 
-    const vodList = getCached(active._id, "vod")?.data || []
+  function buildEntries(playlistId) {
+    const vodList = getCached(playlistId, "vod")?.data || []
     const vodById = new Map(vodList.map((movie) => [Number(movie.id), movie]))
     const liveList =
-      getCached(active._id, "live")?.data ||
-      getCached(active._id, "m3u")?.data ||
+      getCached(playlistId, "live")?.data ||
+      getCached(playlistId, "m3u")?.data ||
       []
     const liveById = new Map(liveList.map((channel) => [Number(channel.id), channel]))
 
-    const progress = getContinueWatching(active._id, STRIP_LIMIT).map((row) => ({
+    const progress = getContinueWatching(playlistId, STRIP_LIMIT).map((row) => ({
       ts: row.updatedAt || 0,
       built: buildProgressEntry(row, vodById),
     }))
     const liveCutoff = Date.now() - LIVE_TTL_MS
-    const recents = getRecents(active._id, "live")
+    const recents = getRecents(playlistId, "live")
       .filter((row) => (row.ts || 0) >= liveCutoff)
       .map((row) => ({
         ts: row.ts || 0,
@@ -127,7 +115,29 @@
       }))
 
     const merged = [...progress, ...recents].sort((left, right) => right.ts - left.ts)
-    entries = merged.slice(0, STRIP_LIMIT).map((row) => row.built)
+    return merged.slice(0, STRIP_LIMIT).map((row) => row.built)
+  }
+
+  async function reload() {
+    const generation = ++reloadGeneration
+    const [active] = await Promise.all([getActiveEntry(), ensurePrefsLoaded()])
+    if (generation !== reloadGeneration) return
+    if (!active) {
+      entries = []
+      activePlaylistId = ""
+      return
+    }
+    activePlaylistId = active._id
+    // Paint from what's cached in memory first, upgrade after hydration.
+    entries = buildEntries(active._id)
+    void Promise.allSettled([
+      hydrateCache(active._id, "vod"),
+      hydrateCache(active._id, "live"),
+      hydrateCache(active._id, "m3u"),
+    ]).then(() => {
+      if (generation !== reloadGeneration) return
+      entries = buildEntries(active._id)
+    }).catch(() => {})
   }
 
   function dismiss(event, entry) {
