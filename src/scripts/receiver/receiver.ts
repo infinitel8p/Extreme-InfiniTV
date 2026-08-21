@@ -7,6 +7,8 @@ import { validateCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-
 import { t, initI18n } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
 import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
+import { getActiveEntry } from "@/scripts/lib/creds.js"
+import { mountReceiverAmbient, type ReceiverAmbient } from "@/scripts/receiver/ambient"
 import {
   createAndroidNativeReceiverEngine,
   createEmbeddedReceiverEngine,
@@ -71,6 +73,40 @@ let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let pairedFlashTimer: ReturnType<typeof setTimeout> | null = null
 let seekFlashTimer: ReturnType<typeof setTimeout> | null = null
 
+let ambient: ReceiverAmbient | null = null
+let latestPrimaryAddress = ""
+let latestPairCode = ""
+
+async function getActivePlaylistId(): Promise<string | null> {
+  try {
+    const entry = await getActiveEntry()
+    return entry?._id ?? null
+  } catch {
+    return null
+  }
+}
+
+function mountAmbient(): void {
+  if (ambient) return
+  ambient = mountReceiverAmbient({
+    dom: {
+      root: document.getElementById("receiver-ambient"),
+      idleEl,
+      layerA: document.getElementById("receiver-ambient-layer-a"),
+      layerB: document.getElementById("receiver-ambient-layer-b"),
+      posterEl: document.getElementById("receiver-ambient-poster") as HTMLImageElement | null,
+      logoEl: document.getElementById("receiver-ambient-logo") as HTMLImageElement | null,
+      titleEl: document.getElementById("receiver-ambient-title"),
+      addressEl: document.getElementById("receiver-ambient-address"),
+      codeEl: document.getElementById("receiver-ambient-code"),
+      foregroundEl: document.getElementById("receiver-ambient-foreground"),
+    },
+    getPlaylistId: getActivePlaylistId,
+  })
+  ambient.setPairingInfo(latestPrimaryAddress, latestPairCode)
+  ambient.notifyPlaybackState(currentPlaybackState)
+}
+
 function renderStatus(status: ReceiverStatus): void {
   if (statusRefreshTimer) {
     clearTimeout(statusRefreshTimer)
@@ -82,6 +118,7 @@ function renderStatus(status: ReceiverStatus): void {
     readyBadgeEl?.classList.add("inline-flex")
   }
   const ips = rankReceiverIps(status.ips || [])
+  if (ips.length > 0) latestPrimaryAddress = formatReceiverAddress(ips[0], status.port)
   if (addressesEl && ips.length > 0) {
     addressesEl.textContent = ""
     const primary = document.createElement("div")
@@ -96,7 +133,9 @@ function renderStatus(status: ReceiverStatus): void {
       addressesEl.appendChild(alternates)
     }
   }
-  if (pairCodeEl) pairCodeEl.textContent = formatReceiverPairCode(status.pairCode)
+  latestPairCode = formatReceiverPairCode(status.pairCode)
+  if (pairCodeEl) pairCodeEl.textContent = latestPairCode
+  ambient?.setPairingInfo(latestPrimaryAddress, latestPairCode)
   const expiresIn = status.pairCodeExpiresInSeconds
   if (typeof expiresIn === "number" && expiresIn > 0) {
     statusRefreshTimer = setTimeout(() => { void refreshStatus() }, (expiresIn + 1) * 1000)
@@ -152,6 +191,7 @@ function setKeepScreenOn(enabled: boolean): void {
 
 function reportState(partial: ReceiverStatePartial): void {
   currentPlaybackState = partial.state
+  ambient?.notifyPlaybackState(partial.state)
   setKeepScreenOn(partial.state === "playing" || partial.state === "loading" || partial.state === "buffering")
   if (typeof partial.positionSeconds === "number") lastKnownPositionSeconds = partial.positionSeconds
   const payload = {
@@ -220,6 +260,7 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
 
   currentTitle = descriptor.title
   currentIsLive = descriptor.isLive
+  ambient?.noteCastDescriptor({ title: descriptor.title, logo: descriptor.logo })
 
   await applyStreamHeaders(
     descriptor.headers
@@ -316,5 +357,5 @@ void listen<{ deviceName: string }>("xt:receiver-paired", (event) => showPairedF
 void listen<ReceiverPlayPayload>("xt:receiver-play", (event) => void onPlay(event.payload?.descriptor))
 void listen<ReceiverControlPayload>("xt:receiver-control", (event) => onControl(event.payload))
 
-void startReceiver()
+void startReceiver().then(mountAmbient)
 consumePendingPlay()

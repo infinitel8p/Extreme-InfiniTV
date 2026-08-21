@@ -72,6 +72,38 @@ import ReceiverLayout from "@/layouts/ReceiverLayout.astro"
 			</div>
 		</main>
 
+		<section
+			id="receiver-ambient"
+			data-active="false"
+			aria-hidden="true"
+			data-i18n-attr="aria-label:receiver.ambient.label"
+			class="xt-receiver-ambient absolute inset-0 z-20 overflow-hidden bg-black">
+			<div id="receiver-ambient-layer-a" class="xt-ambient-layer absolute inset-0 bg-cover bg-center"></div>
+			<div id="receiver-ambient-layer-b" class="xt-ambient-layer absolute inset-0 bg-cover bg-center"></div>
+			<div class="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent"></div>
+
+			<img
+				id="receiver-ambient-poster"
+				alt=""
+				class="hidden absolute right-8 sm:right-14 bottom-8 sm:bottom-14 max-h-[60vh] w-auto aspect-[2/3] rounded-xl object-cover shadow-2xl shadow-black/60" />
+
+			<div
+				id="receiver-ambient-foreground"
+				class="absolute inset-x-0 bottom-0 flex items-end justify-between gap-6 p-8 sm:p-12 transition-transform duration-[2000ms] ease-linear">
+				<div class="flex min-w-0 flex-col gap-2">
+					<img id="receiver-ambient-logo" alt="" class="hidden max-h-[16vh] max-w-[40vw] object-contain drop-shadow-lg" />
+					<p
+						id="receiver-ambient-title"
+						class="hidden max-w-[60vw] text-3xl sm:text-4xl font-semibold text-white [text-shadow:0_2px_16px_rgb(0_0_0/0.6)]"></p>
+				</div>
+				<div class="flex shrink-0 items-center gap-3 rounded-2xl border border-white/15 bg-black/40 px-4 py-2.5 text-sm text-white/70 backdrop-blur-sm">
+					<span id="receiver-ambient-address" class="tabular-nums"></span>
+					<span aria-hidden="true" class="text-white/30">·</span>
+					<span id="receiver-ambient-code" class="tabular-nums tracking-widest text-white/90"></span>
+				</div>
+			</div>
+		</section>
+
 		<div
 			id="receiver-paired-flash"
 			class="hidden xt-receiver-flash fixed left-1/2 -translate-x-1/2 rounded-full border border-accent/40 bg-accent-soft px-6 py-3 text-base text-fg"></div>
@@ -126,6 +158,50 @@ import ReceiverLayout from "@/layouts/ReceiverLayout.astro"
 	@keyframes xt-receiver-fade-in {
 		from { opacity: 0; }
 		to { opacity: 1; }
+	}
+
+	#receiver-idle {
+		transition: transform 2000ms linear, opacity 600ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	#receiver-idle[data-ambient-active="true"] {
+		opacity: 0;
+		pointer-events: none;
+	}
+
+	.xt-receiver-ambient {
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 600ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	.xt-receiver-ambient[data-active="true"] {
+		opacity: 1;
+		pointer-events: auto;
+	}
+
+	.xt-ambient-layer {
+		opacity: 0;
+		transform: scale(1);
+		transition: opacity 1200ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	.xt-ambient-layer.xt-ambient-layer-visible {
+		opacity: 1;
+	}
+	.xt-ambient-layer.xt-ambient-kenburns {
+		animation: xt-ambient-kenburns 25s linear forwards;
+	}
+	@keyframes xt-ambient-kenburns {
+		from { transform: scale(1); }
+		to { transform: scale(1.06); }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		#receiver-idle,
+		.xt-receiver-ambient,
+		.xt-ambient-layer {
+			transition: none;
+		}
+		.xt-ambient-layer.xt-ambient-kenburns {
+			animation: none;
+		}
 	}
 
 	.xt-receiver-flash {
