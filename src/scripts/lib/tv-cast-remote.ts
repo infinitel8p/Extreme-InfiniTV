@@ -3,7 +3,7 @@
 
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
-import { formatPaddedHms } from "@/scripts/lib/format.js"
+import { formatElapsedSinceStart, formatPaddedHms } from "@/scripts/lib/format.js"
 import { debounce } from "@/scripts/lib/debounce.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { log } from "@/scripts/lib/log.js"
@@ -20,7 +20,11 @@ import {
   type CastSession,
   type CastState,
 } from "@/scripts/lib/tv-cast.js"
-import { subscribeCastStateFeed, type CastFeedHealth } from "@/scripts/lib/tv-cast-state-feed.js"
+import {
+  subscribeCastStateFeed,
+  pokeCastStateFeed,
+  type CastFeedHealth,
+} from "@/scripts/lib/tv-cast-state-feed.js"
 import { castNeighbor, neighborAvailability, resolveNeighborAvailability } from "@/scripts/lib/tv-cast-next.js"
 import {
   ICON_X,
@@ -106,6 +110,8 @@ function buildSkeleton(dialog: HTMLDialogElement): void {
         </div>
       </div>
 
+      <div data-role="live-elapsed" class="hidden text-xs tabular-nums text-fg-3"></div>
+
       <div data-role="metadata" class="hidden flex-col gap-2 text-fg-3">
         <div data-role="metadata-now-meta" class="hidden text-xs tabular-nums"></div>
         <div data-role="metadata-heading" class="hidden text-sm font-medium text-fg leading-tight line-clamp-1"></div>
@@ -114,7 +120,6 @@ function buildSkeleton(dialog: HTMLDialogElement): void {
         </button>
         <div data-role="metadata-next-row" class="hidden text-xs truncate"></div>
         <div data-role="metadata-genre-row" class="hidden text-xs"></div>
-        <div data-role="metadata-cast-row" class="hidden text-xs"></div>
       </div>
 
       <div class="flex items-center justify-between gap-0.5">
@@ -155,6 +160,7 @@ interface RemoteRefs {
   seekRange: HTMLInputElement
   positionTime: HTMLElement
   durationTime: HTMLElement
+  liveElapsed: HTMLElement
   metadata: HTMLElement
   metadataNowMeta: HTMLElement
   metadataHeading: HTMLElement
@@ -162,7 +168,6 @@ interface RemoteRefs {
   metadataPlot: HTMLElement
   metadataNextRow: HTMLElement
   metadataGenreRow: HTMLElement
-  metadataCastRow: HTMLElement
   prev: HTMLButtonElement
   back30: HTMLButtonElement
   back10: HTMLButtonElement
@@ -194,6 +199,7 @@ function collectRefs(dialog: HTMLDialogElement): RemoteRefs {
     seekRange: query<HTMLInputElement>("seek-range"),
     positionTime: query("position-time"),
     durationTime: query("duration-time"),
+    liveElapsed: query("live-elapsed"),
     metadata: query("metadata"),
     metadataNowMeta: query("metadata-now-meta"),
     metadataHeading: query("metadata-heading"),
@@ -201,7 +207,6 @@ function collectRefs(dialog: HTMLDialogElement): RemoteRefs {
     metadataPlot: query("metadata-plot"),
     metadataNextRow: query("metadata-next-row"),
     metadataGenreRow: query("metadata-genre-row"),
-    metadataCastRow: query("metadata-cast-row"),
     prev: query<HTMLButtonElement>("prev"),
     back30: query<HTMLButtonElement>("back30"),
     back10: query<HTMLButtonElement>("back10"),
@@ -365,6 +370,15 @@ function findRawSeriesEpisode(seriesInfo: unknown, season: number, episodeNum: n
   return null
 }
 
+/** Resolves the stored creds for a playlist id, not just the currently active one. */
+async function resolvePlaylistCreds(
+  playlistId: string
+): Promise<{ host: string; port: string; user: string; pass: string } | null> {
+  const { getEntries, entryToCreds } = await import("@/scripts/lib/creds.js")
+  const entry = (await getEntries()).find((candidate: any) => candidate._id === playlistId)
+  return entry ? entryToCreds(entry) : null
+}
+
 function resetMetadata(refs: RemoteRefs): void {
   refs.metadata.classList.remove("flex")
   refs.metadata.classList.add("hidden")
@@ -379,8 +393,6 @@ function resetMetadata(refs: RemoteRefs): void {
   refs.metadataNextRow.textContent = ""
   refs.metadataGenreRow.classList.add("hidden")
   refs.metadataGenreRow.textContent = ""
-  refs.metadataCastRow.classList.add("hidden")
-  refs.metadataCastRow.textContent = ""
 }
 
 function revealMetadata(refs: RemoteRefs): void {
@@ -411,10 +423,40 @@ export function openCastRemote(): void {
   let lastKnownVolume = 1
   let lastKnownMuted = false
   let scrubbing = false
+  let liveElapsedTicker: ReturnType<typeof setInterval> | null = null
+
+  function stopLiveElapsedTicker(): void {
+    if (liveElapsedTicker != null) {
+      clearInterval(liveElapsedTicker)
+      liveElapsedTicker = null
+    }
+  }
+
+  function renderLiveElapsed(session: CastSession): void {
+    if (!session.isLive || session.startedAtMs == null) {
+      refs.liveElapsed.classList.add("hidden")
+      return
+    }
+    refs.liveElapsed.textContent = formatElapsedSinceStart(session.startedAtMs, Date.now())
+    refs.liveElapsed.classList.remove("hidden")
+  }
+
+  /** Ticks the live elapsed clock only while playing; a paused/buffering/reconnecting state freezes it. */
+  function updateLiveElapsedTicking(playbackSession: CastSession, playing: boolean): void {
+    renderLiveElapsed(playbackSession)
+    const shouldTick = playing && playbackSession.isLive && playbackSession.startedAtMs != null
+    if (!shouldTick) {
+      stopLiveElapsedTicker()
+      return
+    }
+    if (liveElapsedTicker != null) return
+    liveElapsedTicker = setInterval(() => renderLiveElapsed(currentSession), 1000)
+  }
 
   applySession(refs, currentSession)
   applyAvailability(refs, neighborAvailability(currentSession))
   setPlayPauseIcon(refs, false)
+  updateLiveElapsedTicking(currentSession, true)
   void resolveNeighborAvailability(currentSession).then((availability) => {
     applyAvailability(refs, availability)
   })
@@ -429,13 +471,26 @@ export function openCastRemote(): void {
   async function loadLiveMetadata(liveContext: NonNullable<CastSession["liveContext"]>, token: number): Promise<void> {
     try {
       const { getCached } = await import("@/scripts/lib/cache.js")
-      const liveList = getCached(liveContext.playlistId, "live")?.data || []
       const channelId = liveContext.channelIds[liveContext.index]
-      const channel = liveList.find((entry: any) => String(entry?.id) === String(channelId))
-      if (!channel) return
-      const { getProgrammesSync, getNowNextForChannel } = await import("@/scripts/lib/epg-data.js")
-      const state = getProgrammesSync(liveContext.playlistId)
-      if (!state) return
+      let liveList = getCached(liveContext.playlistId, "live")?.data || []
+      let channel = liveList.find((entry: any) => String(entry?.id) === String(channelId))
+      if (!channel) {
+        const creds = await resolvePlaylistCreds(liveContext.playlistId)
+        if (!creds || token !== metadataToken) return
+        const { ensureLive } = await import("@/scripts/lib/catalog.js")
+        liveList = await ensureLive(creds, liveContext.playlistId)
+        if (token !== metadataToken) return
+        channel = liveList.find((entry: any) => String(entry?.id) === String(channelId))
+        if (!channel) return
+      }
+      const { getProgrammesSync, getNowNextForChannel, loadProgrammes } = await import("@/scripts/lib/epg-data.js")
+      let state = getProgrammesSync(liveContext.playlistId)
+      if (!state) {
+        const creds = await resolvePlaylistCreds(liveContext.playlistId)
+        if (!creds || token !== metadataToken) return
+        state = await loadProgrammes(liveContext.playlistId, creds)
+        if (token !== metadataToken || !state) return
+      }
       const { current, next } = getNowNextForChannel(state.programmes, channel, liveContext.playlistId)
       if (token !== metadataToken || (!current && !next)) return
       if (current) {
@@ -462,21 +517,50 @@ export function openCastRemote(): void {
     try {
       const { requestSeriesInfo } = await import("@/scripts/lib/series-seasons.js")
       const seriesInfo = await requestSeriesInfo(seriesContext.playlistId, seriesContext.seriesId)
-      if (!seriesInfo || token !== metadataToken) return
-      const episode = findRawSeriesEpisode(seriesInfo, seriesContext.season, seriesContext.episodeNum)
-      const plot =
-        episode?.info?.plot ||
-        episode?.info?.overview ||
-        episode?.plot ||
-        seriesInfo?.info?.plot ||
-        seriesInfo?.info?.description ||
-        ""
-      refs.metadataHeading.textContent =
+      if (token !== metadataToken) return
+
+      const episodeShortLabel =
         t("detail.seasonShort", { n: seriesContext.season }) + t("detail.episodeShort", { n: seriesContext.episodeNum })
+      const episode = seriesInfo ? findRawSeriesEpisode(seriesInfo, seriesContext.season, seriesContext.episodeNum) : null
+      const seriesInfoRecord = seriesInfo?.info || {}
+      const providerEpisodeTitle = episode?.title || ""
+      let providerPlot = episode?.info?.plot || episode?.info?.overview || episode?.plot || ""
+
+      refs.metadataNowMeta.textContent = episodeShortLabel
+      refs.metadataNowMeta.classList.remove("hidden")
+      refs.metadataHeading.textContent = providerEpisodeTitle || episodeShortLabel
       refs.metadataHeading.classList.remove("hidden")
-      if (plot) {
-        refs.metadataPlot.textContent = plot
+      if (providerPlot) {
+        refs.metadataPlot.textContent = providerPlot
         refs.metadataPlotBtn.classList.remove("hidden")
+      }
+      revealMetadata(refs)
+
+      const { resolveTmdbId, fetchSeasonEnrichment } = await import("@/scripts/lib/tmdb-enrich.ts")
+      const providerTmdbId = Number(seriesInfoRecord.tmdb || seriesInfoRecord.tmdb_id) || null
+      const tmdbId = await resolveTmdbId(seriesContext.playlistId, "series", {
+        id: seriesContext.seriesId,
+        name: seriesInfoRecord.name || seriesInfoRecord.title || currentSession.title || "",
+        year: seriesInfoRecord.releaseDate || seriesInfoRecord.releasedate || seriesInfoRecord.year || null,
+        providerTmdbId,
+      })
+      if (token !== metadataToken || tmdbId == null) return
+
+      const seasonEnrichment = await fetchSeasonEnrichment(tmdbId, seriesContext.season)
+      if (token !== metadataToken) return
+
+      const tmdbEpisode = seasonEnrichment?.episodes.find(
+        (candidate) => candidate.episodeNumber === seriesContext.episodeNum
+      )
+      if (!providerEpisodeTitle && tmdbEpisode?.name) {
+        refs.metadataHeading.textContent = tmdbEpisode.name
+      }
+      if (!providerPlot) {
+        providerPlot = tmdbEpisode?.overview || seriesInfoRecord.plot || seriesInfoRecord.description || ""
+        if (providerPlot) {
+          refs.metadataPlot.textContent = providerPlot
+          refs.metadataPlotBtn.classList.remove("hidden")
+        }
       }
       revealMetadata(refs)
     } catch (err) {
@@ -485,6 +569,8 @@ export function openCastRemote(): void {
   }
 
   async function loadVodMetadata(vodContext: NonNullable<CastSession["vodContext"]>, token: number): Promise<void> {
+    let info: any = {}
+    let movieData: any = {}
     try {
       const { xtreamApiFetch } = await import("@/scripts/lib/xtream-api.js")
       const response = await xtreamApiFetch(
@@ -492,32 +578,56 @@ export function openCastRemote(): void {
         { vod_id: String(vodContext.vodId) },
         { entryId: vodContext.playlistId }
       )
-      if (!response.ok) return
-      const data = await response.json()
-      if (token !== metadataToken) return
-      const info = data?.info || data?.movie_data || {}
-      const movieData = data?.movie_data || data?.info || {}
-      const plot = movieData.plot || movieData.description || info.plot || info.description || ""
-      const genre = movieData.genre || info.genre || ""
-      const castNames = String(info.cast || info.actors || info.director || "")
-        .split(",")
-        .map((name: string) => name.trim())
-        .filter(Boolean)
-      if (plot) {
+      if (response.ok) {
+        const data = await response.json()
+        info = data?.info || data?.movie_data || {}
+        movieData = data?.movie_data || data?.info || {}
+      }
+    } catch (err) {
+      log.warn("[xt:tv-cast-remote] vod provider info load failed:", err)
+    }
+    if (token !== metadataToken) return
+
+    let plot = movieData.plot || movieData.description || info.plot || info.description || ""
+    let genre = movieData.genre || info.genre || ""
+
+    if (plot) {
+      refs.metadataPlot.textContent = plot
+      refs.metadataPlotBtn.classList.remove("hidden")
+    }
+    if (genre) {
+      refs.metadataGenreRow.textContent = `${t("cast.remote.genreLabel")}: ${genre}`
+      refs.metadataGenreRow.classList.remove("hidden")
+    }
+    if (plot || genre) revealMetadata(refs)
+
+    try {
+      const { resolveTmdbId, fetchMovieEnrichment } = await import("@/scripts/lib/tmdb-enrich.ts")
+      const providerTmdbId = Number(info.tmdb_id || movieData.tmdb_id) || null
+      const tmdbId = await resolveTmdbId(vodContext.playlistId, "vod", {
+        id: vodContext.vodId,
+        name: movieData.name || info.name || currentSession.title || "",
+        year: movieData.releasedate || movieData.year || info.year || null,
+        providerTmdbId,
+      })
+      if (token !== metadataToken || tmdbId == null) return
+
+      const enrichment = await fetchMovieEnrichment(tmdbId)
+      if (token !== metadataToken || !enrichment) return
+
+      if (!plot && enrichment.overview) {
+        plot = enrichment.overview
         refs.metadataPlot.textContent = plot
         refs.metadataPlotBtn.classList.remove("hidden")
       }
-      if (genre) {
+      if (!genre && enrichment.genres.length) {
+        genre = enrichment.genres.join(", ")
         refs.metadataGenreRow.textContent = `${t("cast.remote.genreLabel")}: ${genre}`
         refs.metadataGenreRow.classList.remove("hidden")
       }
-      if (castNames.length) {
-        refs.metadataCastRow.textContent = `${t("cast.remote.castLabel")}: ${castNames.join(", ")}`
-        refs.metadataCastRow.classList.remove("hidden")
-      }
-      if (plot || genre || castNames.length) revealMetadata(refs)
+      revealMetadata(refs)
     } catch (err) {
-      log.warn("[xt:tv-cast-remote] vod metadata load failed:", err)
+      log.warn("[xt:tv-cast-remote] vod tmdb enrichment failed:", err)
     }
   }
 
@@ -536,7 +646,9 @@ export function openCastRemote(): void {
   refreshMetadata(currentSession, true)
 
   const debouncedSetVolume = debounce((level: number, muted: boolean) => {
-    castSetVolume(device(), level, muted).catch((err) => log.warn("[xt:tv-cast-remote] set volume failed:", err))
+    castSetVolume(device(), level, muted)
+      .then(() => pokeCastStateFeed())
+      .catch((err) => log.warn("[xt:tv-cast-remote] set volume failed:", err))
   }, VOLUME_DEBOUNCE_MS)
 
   function onFeedState(state: CastState): void {
@@ -547,6 +659,7 @@ export function openCastRemote(): void {
     if (state.volume !== undefined) lastKnownVolume = state.volume
     if (state.muted !== undefined) lastKnownMuted = state.muted
     applyState(refs, state)
+    updateLiveElapsedTicking(currentSession, state.state === "playing")
     if (state.state === "error") updateErrorLog(refs, currentSession)
     else refs.errorLog.classList.add("hidden")
     if (currentSession.isLive || scrubbing || Date.now() < suppressPositionUntil) return
@@ -576,7 +689,9 @@ export function openCastRemote(): void {
     suppressPositionUntil = Date.now() + SEEK_SUPPRESS_MS
     refs.seekRange.value = String(clamped)
     refs.positionTime.textContent = formatClock(clamped)
-    castSeek(device(), clamped).catch((err) => log.warn("[xt:tv-cast-remote] seek failed:", err))
+    castSeek(device(), clamped)
+      .then(() => pokeCastStateFeed())
+      .catch((err) => log.warn("[xt:tv-cast-remote] seek failed:", err))
   }
 
   async function skipNeighbor(direction: 1 | -1): Promise<void> {
@@ -631,7 +746,9 @@ export function openCastRemote(): void {
     if (target.closest('[data-role="playpause"]')) {
       const paused = refs.playpause.dataset.paused === "true"
       const action = paused ? castResume(device()) : castPause(device())
-      action.catch((err) => log.warn("[xt:tv-cast-remote] pause/resume failed:", err))
+      action
+        .then(() => pokeCastStateFeed())
+        .catch((err) => log.warn("[xt:tv-cast-remote] pause/resume failed:", err))
       setPlayPauseIcon(refs, !paused)
       return
     }
@@ -681,6 +798,7 @@ export function openCastRemote(): void {
     currentSession = nextSession
     applySession(refs, currentSession)
     applyAvailability(refs, neighborAvailability(currentSession))
+    updateLiveElapsedTicking(currentSession, refs.playpause.dataset.paused !== "true")
     void resolveNeighborAvailability(currentSession).then((availability) => {
       applyAvailability(refs, availability)
     })
@@ -705,6 +823,7 @@ export function openCastRemote(): void {
   }
 
   function detach(): void {
+    stopLiveElapsedTicker()
     feedUnsubscribe()
     dialog.removeEventListener("click", onClick)
     refs.seekRange.removeEventListener("pointerdown", onSeekPointerDown)

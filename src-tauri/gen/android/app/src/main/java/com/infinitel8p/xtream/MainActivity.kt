@@ -1123,8 +1123,14 @@ class AndroidVideoBridge(
   @JavascriptInterface
   fun setKeepScreenOn(enabled: Boolean) {
     activity.runOnUiThread {
-      if (enabled) activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-      else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      if (enabled) {
+        activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (XtreamDreamService.dismissActiveDream()) {
+          Log.d("AndroidVideoBridge", "dismissed active dream for receiver playback")
+        }
+      } else {
+        activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      }
     }
   }
 

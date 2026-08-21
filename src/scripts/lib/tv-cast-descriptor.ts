@@ -111,6 +111,18 @@ export function buildCatchupCastDescriptor(input: BuildCatchupCastDescriptorInpu
   return descriptor
 }
 
+interface DeriveSessionIsLiveContext {
+  liveContext?: unknown
+}
+
+/** Live-channel casts stay live even if a shipped-with-duration catch-up descriptor never reaches here. */
+export function deriveSessionIsLive(
+  descriptor: Pick<CastDescriptorV1, "isLive" | "durationSeconds">,
+  context?: DeriveSessionIsLiveContext
+): boolean {
+  return descriptor.isLive || (Boolean(context?.liveContext) && descriptor.durationSeconds === undefined)
+}
+
 function pickKnownStringOrNullFields<Key extends string>(
   value: unknown,
   keys: readonly Key[]

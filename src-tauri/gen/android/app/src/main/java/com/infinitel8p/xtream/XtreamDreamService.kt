@@ -6,6 +6,7 @@ import android.animation.ValueAnimator
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Outline
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
@@ -20,10 +21,12 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextClock
 import android.widget.TextView
 import coil.ImageLoader
 import coil.disk.DiskCache
@@ -54,11 +57,33 @@ class XtreamDreamService : DreamService() {
     private const val MAX_FAILURES_PER_ENTRY = 2
     private const val OVERLAY_HEIGHT_FRACTION = 0.16f
     private const val OVERLAY_NUDGE_PX = 8
+    private const val POSTER_CARD_HEIGHT_FRACTION = 0.58f
+    private const val POSTER_CARD_ASPECT_WIDTH_OVER_HEIGHT = 2f / 3f
+    private const val POSTER_CARD_CORNER_RADIUS_DP = 12f
+    private const val POSTER_CARD_ELEVATION_DP = 12f
     private const val BRAND_ALPHA = 0.4f
     private const val BRAND_DRIFT_DURATION_MS = 60_000L
     private const val BRAND_FALLBACK_ALPHA = 1f
     private const val FALLBACK_REFRESH_INTERVAL_MS = 5 * 60_000L
     private const val DISK_CACHE_MAX_BYTES = 64L * 1024 * 1024
+
+    @Volatile
+    private var activeDream: XtreamDreamService? = null
+
+    // Activity window flags can't dismiss a running dream, so cast playback asks the dream to end itself.
+    @JvmStatic
+    fun dismissActiveDream(): Boolean {
+      val dream = activeDream ?: return false
+      dream.mainHandler.post {
+        try {
+          dream.wakeUp()
+        } catch (error: Throwable) {
+          Log.w(TAG, "wakeUp failed: $error")
+          try { dream.finish() } catch (fallbackError: Throwable) { Log.w(TAG, "finish failed: $fallbackError") }
+        }
+      }
+      return true
+    }
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -67,6 +92,7 @@ class XtreamDreamService : DreamService() {
   private var imageLoader: ImageLoader? = null
   private var posterDisposable: Disposable? = null
   private var logoDisposable: Disposable? = null
+  private var posterCardDisposable: Disposable? = null
 
   private var rootView: FrameLayout? = null
   private var frontLayer: ImageView? = null
@@ -74,7 +100,10 @@ class XtreamDreamService : DreamService() {
   private var overlayContainer: FrameLayout? = null
   private var overlayLogo: ImageView? = null
   private var overlayTitle: TextView? = null
+  private var posterCardView: ImageView? = null
   private var brandMark: View? = null
+  private var topBarLockup: View? = null
+  private var clockView: TextClock? = null
 
   private var activeEntries: MutableList<DreamEntry> = mutableListOf()
   private var userAgent: String? = null
@@ -87,6 +116,7 @@ class XtreamDreamService : DreamService() {
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
+    activeDream = this
     isInteractive = false
     isFullscreen = true
     isScreenBright = true
@@ -162,6 +192,74 @@ class XtreamDreamService : DreamService() {
       }
     )
 
+    val posterCardHeightPx = (displayMetrics.heightPixels * POSTER_CARD_HEIGHT_FRACTION).toInt()
+    val posterCardWidthPx = (posterCardHeightPx * POSTER_CARD_ASPECT_WIDTH_OVER_HEIGHT).toInt()
+    val posterCardCornerRadiusPx = POSTER_CARD_CORNER_RADIUS_DP * displayMetrics.density
+    val posterCard = ImageView(this).apply {
+      scaleType = ImageView.ScaleType.CENTER_CROP
+      visibility = View.GONE
+      elevation = POSTER_CARD_ELEVATION_DP * displayMetrics.density
+      clipToOutline = true
+      outlineProvider = object : ViewOutlineProvider() {
+        override fun getOutline(view: View, outline: Outline) {
+          outline.setRoundRect(0, 0, view.width, view.height, posterCardCornerRadiusPx)
+        }
+      }
+    }
+    root.addView(
+      posterCard,
+      FrameLayout.LayoutParams(posterCardWidthPx, posterCardHeightPx).apply {
+        gravity = Gravity.BOTTOM or Gravity.END
+        rightMargin = overlayMarginPx
+        bottomMargin = overlayMarginPx
+      }
+    )
+
+    val lockupIconHeightPx = (40 * displayMetrics.density).toInt()
+    val lockupIconWidthPx = lockupIconHeightPx * 224 / 124
+    val lockupIcon = ImageView(this).apply {
+      setImageResource(R.drawable.ic_brand_mark)
+      imageTintList = ColorStateList.valueOf(getColor(R.color.xt_brand_rose))
+    }
+    val lockupWordmark = TextView(this).apply {
+      text = buildBrandWordmark()
+      textSize = 22f
+      typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+    }
+    val lockup = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      addView(lockupIcon, LinearLayout.LayoutParams(lockupIconWidthPx, lockupIconHeightPx))
+      addView(
+        lockupWordmark,
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+          marginStart = (8 * displayMetrics.density).toInt()
+        }
+      )
+    }
+    root.addView(
+      lockup,
+      FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+        gravity = Gravity.TOP or Gravity.START
+        leftMargin = overlayMarginPx
+        topMargin = overlayMarginPx
+      }
+    )
+
+    val clock = TextClock(this).apply {
+      setTextColor(Color.argb(204, 255, 255, 255))
+      textSize = 32f
+      setShadowLayer(6f, 0f, 2f, Color.argb(200, 0, 0, 0))
+    }
+    root.addView(
+      clock,
+      FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+        gravity = Gravity.TOP or Gravity.END
+        rightMargin = overlayMarginPx
+        topMargin = overlayMarginPx
+      }
+    )
+
     val brandIcon = ImageView(this).apply {
       setImageResource(R.drawable.ic_brand_mark)
       imageTintList = ColorStateList.valueOf(getColor(R.color.xt_brand_rose))
@@ -198,7 +296,10 @@ class XtreamDreamService : DreamService() {
     overlayContainer = overlay
     overlayLogo = logo
     overlayTitle = title
+    posterCardView = posterCard
     brandMark = brand
+    topBarLockup = lockup
+    clockView = clock
     setContentView(root)
   }
 
@@ -237,6 +338,7 @@ class XtreamDreamService : DreamService() {
     Log.d(TAG, "manifest loaded: entries=${activeEntries.size} ageMs=${System.currentTimeMillis() - data.at}")
     imageLoader = buildImageLoader()
 
+    hideLockup()
     brandMark?.visibility = View.VISIBLE
     brandMark?.animate()?.alpha(BRAND_ALPHA)?.setDuration(CROSSFADE_DURATION_MS)?.start()
     postDelayed(INTRO_DURATION_MS) {
@@ -246,9 +348,18 @@ class XtreamDreamService : DreamService() {
         brandMark?.animate()?.alpha(0f)?.setDuration(CROSSFADE_DURATION_MS)?.withEndAction {
           brandMark?.visibility = View.GONE
         }?.start()
+        showLockup()
         showNextEntry()
       }
     }
+  }
+
+  private fun hideLockup() {
+    topBarLockup?.visibility = View.GONE
+  }
+
+  private fun showLockup() {
+    topBarLockup?.visibility = View.VISIBLE
   }
 
   private fun buildImageLoader(): ImageLoader {
@@ -329,6 +440,7 @@ class XtreamDreamService : DreamService() {
     frontLayer = back
     backLayer = front
     updateOverlay(entry)
+    updatePosterCard(entry)
     nudgeOverlay()
     scheduleNextEntry(holdMs)
   }
@@ -382,6 +494,29 @@ class XtreamDreamService : DreamService() {
     logoDisposable = loader.enqueue(requestBuilder.build())
   }
 
+  private fun updatePosterCard(entry: DreamEntry) {
+    val card = posterCardView ?: return
+    val posterUrl = entry.posterUrl
+    if (posterUrl.isNullOrBlank()) {
+      posterCardDisposable?.dispose()
+      card.visibility = View.GONE
+      return
+    }
+    val loader = imageLoader ?: return
+    posterCardDisposable?.dispose()
+    val requestBuilder = ImageRequest.Builder(this)
+      .data(posterUrl)
+      .target(
+        onSuccess = { drawable ->
+          card.setImageDrawable(drawable)
+          card.visibility = View.VISIBLE
+        },
+        onError = { card.visibility = View.GONE },
+      )
+    userAgent?.takeIf { it.isNotBlank() }?.let { requestBuilder.setHeader("User-Agent", it) }
+    posterCardDisposable = loader.enqueue(requestBuilder.build())
+  }
+
   // Small position shift each swap so the overlay never burns the same pixels in.
   private fun nudgeOverlay() {
     val overlay = overlayContainer ?: return
@@ -397,9 +532,11 @@ class XtreamDreamService : DreamService() {
     if (fallbackActive) return
     fallbackActive = true
     Log.d(TAG, "no artwork available, showing brand fallback")
+    hideLockup()
     frontLayer?.animate()?.alpha(0f)?.setDuration(CROSSFADE_DURATION_MS)?.start()
     backLayer?.animate()?.alpha(0f)?.setDuration(CROSSFADE_DURATION_MS)?.start()
     overlayContainer?.visibility = View.GONE
+    posterCardView?.visibility = View.GONE
     kenBurnsAnimator?.cancel()
     kenBurnsAnimator = null
 
@@ -460,6 +597,7 @@ class XtreamDreamService : DreamService() {
       brand.visibility = View.GONE
     }?.start()
     overlayContainer?.visibility = View.VISIBLE
+    showLockup()
   }
 
   // ---------------------------------------------------------------------
@@ -473,6 +611,7 @@ class XtreamDreamService : DreamService() {
   }
 
   private fun teardown() {
+    if (activeDream === this) activeDream = null
     pendingRunnables.forEach { mainHandler.removeCallbacks(it) }
     pendingRunnables.clear()
     kenBurnsAnimator?.cancel()
@@ -481,8 +620,10 @@ class XtreamDreamService : DreamService() {
     brandDriftAnimator = null
     posterDisposable?.dispose()
     logoDisposable?.dispose()
+    posterCardDisposable?.dispose()
     posterDisposable = null
     logoDisposable = null
+    posterCardDisposable = null
     imageLoader?.shutdown()
     imageLoader = null
     fallbackActive = false
@@ -494,7 +635,10 @@ class XtreamDreamService : DreamService() {
     overlayContainer = null
     overlayLogo = null
     overlayTitle = null
+    posterCardView = null
     brandMark = null
+    topBarLockup = null
+    clockView = null
     rootView = null
   }
 }

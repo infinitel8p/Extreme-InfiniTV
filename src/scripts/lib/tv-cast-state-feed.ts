@@ -331,6 +331,7 @@ export function subscribeCastStateFeed(
   subscribers.set(id, { cadenceMs: opts.cadenceMs, listener, onLost: opts.onLost, onHealth: opts.onHealth })
   syncToSession()
   if (mode === "poll") startPollingLoop()
+  if (boundDevice) void pollOnce()
   return () => {
     subscribers.delete(id)
     if (subscribers.size === 0) {
@@ -339,4 +340,9 @@ export function subscribeCastStateFeed(
       startPollingLoop()
     }
   }
+}
+
+/** One-shot poll for callers that just sent a control command and want the echoed state quickly. */
+export function pokeCastStateFeed(): void {
+  if (boundDevice) void pollOnce()
 }

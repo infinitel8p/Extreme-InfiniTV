@@ -20,12 +20,13 @@ import {
   type CastState,
   type TvDevice,
 } from "@/scripts/lib/tv-cast.js"
-import { subscribeCastStateFeed, type CastFeedHealth } from "@/scripts/lib/tv-cast-state-feed.js"
+import { subscribeCastStateFeed, pokeCastStateFeed, type CastFeedHealth } from "@/scripts/lib/tv-cast-state-feed.js"
+import { castNeighbor, createAutoAdvanceTracker, resolveNeighborAvailability } from "@/scripts/lib/tv-cast-next.js"
 import { RECONNECT_EVENT } from "@/scripts/lib/connectivity.ts"
 import { toast } from "@/scripts/lib/toast.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
-import { formatPaddedHms } from "@/scripts/lib/format.js"
+import { formatElapsedSinceStart, formatPaddedHms } from "@/scripts/lib/format.js"
 import {
   ICON_DEVICE_TV,
   ICON_PLAYER_PLAY,
@@ -48,7 +49,7 @@ const IDLE_COLLAPSE_MS = 45_000
 const POST_INTERACTION_GRACE_MS = 5000
 // Swallows the click whose own focusin/pointerenter just expanded the collapsed chip.
 const EXPAND_CLICK_SUPPRESS_MS = 400
-const COLLAPSE_HIDDEN_ROLES = ["live", "time", "back30", "playpause", "forward30", "retry", "divider", "stop", "dismiss"]
+const COLLAPSE_HIDDEN_ROLES = ["live", "live-elapsed", "time", "back30", "playpause", "forward30", "retry", "divider", "stop", "dismiss"]
 const COLLAPSE_MARK_CLASS = "xt-idle-collapsed"
 
 type PillStatus = "ok" | "reconnecting" | "error"
@@ -71,6 +72,11 @@ let idleCollapseTimeout: ReturnType<typeof setTimeout> | null = null
 let lastPillInteractionAt = 0
 let retryInFlight = false
 let lastExpandFromCollapsedAtMs = 0
+let autoAdvanceTracker = createAutoAdvanceTracker()
+let autoAdvanceInFlight = false
+// The receiver's idle report right after ended must wait for an in-flight advance to resolve.
+let idleDeferredDuringAdvance = false
+let liveElapsedTicker: ReturnType<typeof setInterval> | null = null
 
 function formatClock(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds))
@@ -109,7 +115,7 @@ function buildPill(): HTMLElement {
   contentBtn.type = "button"
   contentBtn.dataset.role = "content"
   contentBtn.className =
-    "flex min-w-0 flex-1 sm:flex-initial items-center gap-2.5 self-stretch -my-2 min-h-11 rounded-s-full text-start ps-3 " +
+    "flex min-w-0 flex-1 sm:flex-initial items-center gap-2.5 self-stretch -my-2 min-h-11 rounded-s-full text-start px-3 " +
     "enabled:hover:bg-surface-2 enabled:focus-visible:bg-surface-2"
 
   const icon = document.createElement("span")
@@ -139,6 +145,11 @@ function buildPill(): HTMLElement {
   liveEl.className = "hidden text-xs font-semibold text-ok"
   liveEl.textContent = t("cast.pill.live")
   pill.appendChild(liveEl)
+
+  const liveElapsedEl = document.createElement("span")
+  liveElapsedEl.dataset.role = "live-elapsed"
+  liveElapsedEl.className = "hidden text-xs tabular-nums text-fg-3 shrink-0"
+  pill.appendChild(liveElapsedEl)
 
   const timeEl = document.createElement("span")
   timeEl.dataset.role = "time"
@@ -219,7 +230,7 @@ function buildPill(): HTMLElement {
   dismissBtn.type = "button"
   dismissBtn.dataset.role = "dismiss"
   dismissBtn.className =
-    "self-stretch -my-2 min-h-11 min-w-11 grid place-items-center rounded-e-full pe-3 text-fg-3 " +
+    "self-stretch -my-2 min-h-11 min-w-11 grid place-items-center rounded-e-full -ml-2 px-3 text-fg-3 " +
     "hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg"
   dismissBtn.setAttribute("aria-label", t("cast.pill.dismiss"))
   dismissBtn.title = t("cast.pill.dismiss")
@@ -362,6 +373,46 @@ function updateProgressBar(pill: HTMLElement, positionSeconds: number, durationS
   const pct = Math.min(100, Math.max(0, (positionSeconds / durationSeconds) * 100))
   progressEl.style.width = `${pct}%`
   progressEl.classList.remove("hidden")
+}
+
+function isPillPlaybackPlaying(pill: HTMLElement): boolean {
+  return pill.querySelector<HTMLElement>('[data-role="playpause"]')?.dataset.paused !== "true"
+}
+
+function stopLiveElapsedTicker(): void {
+  if (liveElapsedTicker != null) {
+    clearInterval(liveElapsedTicker)
+    liveElapsedTicker = null
+  }
+}
+
+function renderLiveElapsed(pill: HTMLElement, session: CastSession): void {
+  const liveElapsedEl = pill.querySelector<HTMLElement>('[data-role="live-elapsed"]')!
+  if (isConnectedOnlySession(session) || !session.isLive || session.startedAtMs == null) {
+    liveElapsedEl.classList.add("hidden")
+    return
+  }
+  liveElapsedEl.textContent = formatElapsedSinceStart(session.startedAtMs, Date.now())
+  liveElapsedEl.classList.remove("hidden")
+}
+
+/** Ticks the live elapsed clock only while playing; a paused/buffering/reconnecting state freezes it. */
+function updateLiveElapsedTicking(pill: HTMLElement, session: CastSession, playing: boolean): void {
+  renderLiveElapsed(pill, session)
+  const shouldTick = playing && session.isLive && !isConnectedOnlySession(session) && session.startedAtMs != null
+  if (!shouldTick) {
+    stopLiveElapsedTicker()
+    return
+  }
+  if (liveElapsedTicker != null) return
+  liveElapsedTicker = setInterval(() => {
+    const currentSession = getCastSession()
+    if (!pillEl || !currentSession) {
+      stopLiveElapsedTicker()
+      return
+    }
+    renderLiveElapsed(pillEl, currentSession)
+  }, 1000)
 }
 
 function resetRetryButton(pill: HTMLElement): void {
@@ -552,13 +603,47 @@ function refreshReceiverLogSnapshotIfStale(session: CastSession, device: TvDevic
     })
 }
 
+function performDeferredIdleTeardown(): void {
+  if (!idleDeferredDuringAdvance) return
+  idleDeferredDuringAdvance = false
+  const session = getCastSession()
+  if (session && !session.connectedOnly) {
+    unmount()
+    clearCastSession()
+  }
+}
+
+/** Casts the next episode when a series session runs out; no-op (and no auto-retry) with no next episode. */
+async function triggerAutoAdvance(session: CastSession): Promise<void> {
+  autoAdvanceInFlight = true
+  idleDeferredDuringAdvance = false
+  try {
+    const availability = await resolveNeighborAvailability(session)
+    if (!availability.next) return
+    const advanced = await castNeighbor(1)
+    if (!advanced) return
+    idleDeferredDuringAdvance = false
+    pokeCastStateFeed()
+  } catch (err) {
+    log.warn("[xt:tv-cast-pill] auto-advance failed:", err)
+  } finally {
+    autoAdvanceInFlight = false
+    performDeferredIdleTeardown()
+  }
+}
+
 function onFeedState(state: CastState): void {
   const session = getCastSession()
   if (!session || !pillEl) return
   const device = sessionAsDevice(session)
   refreshReceiverLogSnapshotIfStale(session, device)
   if (state.durationSeconds != null) lastKnownDurationSeconds = state.durationSeconds
+  if (autoAdvanceTracker.observe(session, state.state)) void triggerAutoAdvance(session)
   if (state.state === "idle") {
+    if (autoAdvanceInFlight) {
+      idleDeferredDuringAdvance = true
+      return
+    }
     // Connected-only mode is meant to survive receiver idle, not tear it down.
     if (!session.connectedOnly) {
       unmount()
@@ -589,6 +674,7 @@ function onFeedState(state: CastState): void {
       announceStatus(pillEl, paused ? t("cast.remote.statePaused") : t("cast.remote.statePlaying"))
     }
   }
+  updateLiveElapsedTicking(pillEl, session, state.state === "playing")
   refreshIdleCollapseState(pillEl, session)
   if (Date.now() < suppressPollPositionUntil) return
   lastKnownPositionSeconds = state.positionSeconds
@@ -754,12 +840,16 @@ function mount(session: CastSession): void {
   retryInFlight = false
   lastPillInteractionAt = Date.now()
   lastExpandFromCollapsedAtMs = 0
+  autoAdvanceTracker = createAutoAdvanceTracker()
+  autoAdvanceInFlight = false
+  idleDeferredDuringAdvance = false
   clearStopArmTimeout()
   clearIdleCollapseTimeout()
   const pill = buildPill()
   pill.classList.add("translate-y-2", "opacity-0")
   applySessionToPill(pill, session)
   setPlayPauseIcon(pill, false)
+  updateLiveElapsedTicking(pill, session, true)
   pill.addEventListener("click", onPillClick)
   pill.addEventListener("keydown", onPillKeydown)
   pill.addEventListener("pointerenter", onPillHoverOrFocus)
@@ -801,6 +891,7 @@ function unmount(animate = true): void {
   pillCollapsed = false
   retryInFlight = false
   stopFeed()
+  stopLiveElapsedTicker()
   pillEl = null
   if (!animate) {
     pill.remove()
@@ -816,6 +907,7 @@ function onSessionChanged(): void {
     if (pillEl) {
       applySessionToPill(pillEl, session)
       renderStatus(pillEl, session, "ok")
+      updateLiveElapsedTicking(pillEl, session, isPillPlaybackPlaying(pillEl))
       refreshIdleCollapseState(pillEl, session)
     } else {
       mount(session)

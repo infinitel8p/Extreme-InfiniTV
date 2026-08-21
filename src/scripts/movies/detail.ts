@@ -855,6 +855,8 @@ async function startPlayback(options = {}) {
     const title = movie.name || ""
     await routePlayToCast({
       contentTitle: title || null,
+      contentHref: `/movies/detail?id=${movie.id}`,
+      vodContext: activePlaylistId ? { playlistId: activePlaylistId, vodId: String(movie.id) } : undefined,
       stopLocal: () => {
         try { vjs?.pause?.() } catch {}
         try { vjs?.reset?.() } catch {}

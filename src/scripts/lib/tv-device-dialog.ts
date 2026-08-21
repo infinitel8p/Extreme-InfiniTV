@@ -249,9 +249,12 @@ export function openTvDevicePicker(
       const row = document.createElement("li")
       row.className = "flex items-center gap-1"
 
+      const hostPortKey = `${receiver.host}:${receiver.port}`
+
       const foundBtn = document.createElement("button")
       foundBtn.type = "button"
       foundBtn.dataset.role = "found-btn"
+      foundBtn.dataset.hostport = hostPortKey
       foundBtn.className = ROW_BTN_CLASS
 
       const icon = document.createElement("span")
@@ -268,11 +271,22 @@ export function openTvDevicePicker(
       nameEl.textContent = receiver.name
       textCol.appendChild(nameEl)
 
+      const metaRow = document.createElement("span")
+      metaRow.className = "flex items-center gap-2 text-xs text-fg-3"
+
       const hostPortEl = document.createElement("span")
-      hostPortEl.className = "text-xs text-fg-3 tabular-nums truncate"
-      hostPortEl.textContent = `${receiver.host}:${receiver.port}`
+      hostPortEl.className = "tabular-nums truncate"
+      hostPortEl.textContent = hostPortKey
       appendHostsHint(hostPortEl, receiver.hosts)
-      textCol.appendChild(hostPortEl)
+      metaRow.appendChild(hostPortEl)
+
+      const statusEl = document.createElement("span")
+      statusEl.dataset.role = "reachability"
+      statusEl.className = "inline-flex items-center gap-1.5 shrink-0"
+      metaRow.appendChild(statusEl)
+      renderReachabilityStatus(statusEl, reachability.get(hostPortKey))
+
+      textCol.appendChild(metaRow)
 
       foundBtn.appendChild(textCol)
 
@@ -293,7 +307,53 @@ export function openTvDevicePicker(
         codeInput.focus()
       })
 
+      ensureReachabilityProbe(receiver, hostPortKey)
+
       return row
+    }
+
+    type ReachabilityStatus = "online" | "unreachable"
+    const REACHABILITY_TIMEOUT_MS = 2500
+    // host:port -> latest known status, and the in-flight probe (deduped per discovery refresh).
+    const reachability = new Map<string, ReachabilityStatus>()
+    const reachabilityProbes = new Map<string, Promise<void>>()
+    let discoveryToken = 0
+
+    function renderReachabilityStatus(statusEl: HTMLElement, status: ReachabilityStatus | undefined): void {
+      statusEl.replaceChildren()
+      const dot = document.createElement("span")
+      dot.setAttribute("aria-hidden", "true")
+      dot.className = `size-1.5 rounded-full ${status === "online" ? "bg-ok" : "bg-fg-3/40"}`
+      statusEl.appendChild(dot)
+      if (status === "online") {
+        statusEl.appendChild(document.createTextNode(t("cast.picker.online")))
+      } else if (status === "unreachable") {
+        statusEl.appendChild(document.createTextNode(t("cast.picker.unreachable")))
+      }
+    }
+
+    function updateReachabilityRow(hostPortKey: string): void {
+      const statusEl = listEl.querySelector<HTMLElement>(
+        `[data-role="found-btn"][data-hostport="${CSS.escape(hostPortKey)}"] [data-role="reachability"]`
+      )
+      if (statusEl) renderReachabilityStatus(statusEl, reachability.get(hostPortKey))
+    }
+
+    // Advisory only: probes never block the row from rendering or staying clickable.
+    function ensureReachabilityProbe(receiver: DiscoveredReceiver, hostPortKey: string): void {
+      if (reachabilityProbes.has(hostPortKey)) return
+      const token = discoveryToken
+      const probe = (async () => {
+        const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), REACHABILITY_TIMEOUT_MS))
+        const result = await Promise.race([
+          probeTvDevice(receiver.host, receiver.port, receiver.hosts),
+          timeout,
+        ]).catch(() => null)
+        if (token !== discoveryToken || !listEl.isConnected) return
+        reachability.set(hostPortKey, result ? "online" : "unreachable")
+        updateReachabilityRow(hostPortKey)
+      })()
+      reachabilityProbes.set(hostPortKey, probe)
     }
 
     // Candidate hosts + mDNS id of the discovered receiver a found-row click is about to pair.
@@ -364,6 +424,9 @@ export function openTvDevicePicker(
 
     function startDiscoveryScan(): void {
       cancelDiscovery()
+      discoveryToken += 1
+      reachability.clear()
+      reachabilityProbes.clear()
       discoveredReceivers = []
       discoverySearching = true
       discoveryFailed = false

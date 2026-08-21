@@ -10,6 +10,7 @@ import {
   isCastableSrc,
   buildVodCastDescriptor,
   buildLiveCastDescriptor,
+  deriveSessionIsLive,
   type CastDescriptorV1,
 } from "@/scripts/lib/tv-cast-descriptor"
 import { discoverReceivers, type DiscoveredReceiver } from "@/scripts/lib/receiver-discovery.ts"
@@ -170,6 +171,8 @@ export interface CastSession {
   title: string
   isLive: boolean
   startedAt: number
+  /** Wall-clock session start, for the live elapsed-time clock; absent on pre-1.9 backups. */
+  startedAtMs?: number
   dismissed?: boolean
   connectedOnly?: boolean
   hosts?: string[]
@@ -620,8 +623,9 @@ export async function castPlay(
     port: storedDevice.port,
     key: storedDevice.key,
     title: descriptor.title,
-    isLive: descriptor.isLive,
+    isLive: deriveSessionIsLive(descriptor, context),
     startedAt: Date.now(),
+    startedAtMs: Date.now(),
     hosts: storedDevice.hosts,
     pinnedHostIndex: storedDevice.pinnedHostIndex,
     contentHref: typeof location !== "undefined" ? location.pathname + location.search : undefined,

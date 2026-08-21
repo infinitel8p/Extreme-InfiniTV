@@ -1229,6 +1229,7 @@ document.addEventListener("keydown", (e) => {
       const channel = all.find((entry) => entry.id === currentlyPlayingId)
       const isArchiveChannel = channel ? channelSupportsCatchup(channel) : false
       if (catchupSession || isArchiveChannel) {
+        if (isCastRoutingActive() || externalPlaybackActive) return
         // Fast-forward at the live edge with nothing pending must not start a session.
         if (!catchupSession && deltaMs > 0 && pendingSeekTargetUtcMs == null) return
         const nowUtcMs = Date.now()
@@ -2156,6 +2157,7 @@ async function mountEmbeddedPlayer(backend, opts) {
       : Date.now()
   })
   vjs.on("play", () => {
+    if (isCastRoutingActive() || externalPlaybackActive) return
     if (pausedAtAbsUtcMs == null) return
     const pausedAbsUtcMs = pausedAtAbsUtcMs
     pausedAtAbsUtcMs = null

@@ -189,10 +189,10 @@ describe("subscribeCastStateFeed onHealth transitions", () => {
     const unsubscribe = subscribeCastStateFeed(vi.fn(), { cadenceMs: 1000, onHealth, onLost: vi.fn() })
 
     await vi.advanceTimersByTimeAsync(1000)
-    expect(onHealth).toHaveBeenLastCalledWith({ consecutiveMisses: 1, transport: "poll" })
+    expect(onHealth).toHaveBeenLastCalledWith({ consecutiveMisses: 2, transport: "poll" })
 
     await vi.advanceTimersByTimeAsync(1000)
-    expect(onHealth).toHaveBeenLastCalledWith({ consecutiveMisses: 2, transport: "poll" })
+    expect(onHealth).toHaveBeenLastCalledWith({ consecutiveMisses: 3, transport: "poll" })
 
     unsubscribe()
   })
@@ -212,14 +212,13 @@ describe("subscribeCastStateFeed onHealth transitions", () => {
   })
 
   it("resets consecutiveMisses to zero once a miss streak recovers", async () => {
-    fetchCastStateMock
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ state: "playing", positionSeconds: 2 })
+    fetchCastStateMock.mockResolvedValueOnce(null).mockResolvedValueOnce(null)
+    fetchCastStateWithFallbackMock.mockResolvedValueOnce({ state: "playing", positionSeconds: 2 })
     const onHealth = vi.fn()
     const unsubscribe = subscribeCastStateFeed(vi.fn(), { cadenceMs: 1000, onHealth })
 
     await vi.advanceTimersByTimeAsync(1000)
-    expect(onHealth).toHaveBeenLastCalledWith({ consecutiveMisses: 1, transport: "poll" })
+    expect(onHealth).toHaveBeenLastCalledWith({ consecutiveMisses: 2, transport: "poll" })
 
     await vi.advanceTimersByTimeAsync(1000)
     expect(onHealth).toHaveBeenLastCalledWith({ consecutiveMisses: 0, transport: "poll" })

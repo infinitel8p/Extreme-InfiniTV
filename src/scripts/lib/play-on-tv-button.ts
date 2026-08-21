@@ -1,4 +1,4 @@
-// "Play on TV" escape-hatch button for movie/series/live surfaces; mirrors external-player-button.ts.
+// "Play on TV" escape-hatch button, VOD-only (movies/series detail); mirrors external-player-button.ts.
 
 import { isTauri } from "@/scripts/lib/creds.js"
 import { resolveStreamUrl } from "@/scripts/lib/xtream-api.js"

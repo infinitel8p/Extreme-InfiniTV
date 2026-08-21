@@ -1385,6 +1385,7 @@ async function playEpisode(episode, options = {}) {
     const title = [series?.name || "", sxe, episode.title || ""].filter(Boolean).join(" · ")
     await routePlayToCast({
       contentTitle: title || null,
+      contentHref: `/series/detail?id=${series.id}`,
       stopLocal: () => {
         try { vjs?.pause?.() } catch {}
         try { vjs?.reset?.() } catch {}

@@ -110,7 +110,9 @@ export interface AmbientRenderModel {
 }
 
 export function buildAmbientRenderModel(entry: AmbientEntry): AmbientRenderModel | null {
-  if (entry.backdropUrl) return { coverImageUrl: entry.backdropUrl, posterUrl: null, kenBurns: true }
+  if (entry.backdropUrl) {
+    return { coverImageUrl: entry.backdropUrl, posterUrl: entry.posterUrl ?? null, kenBurns: true }
+  }
   if (entry.posterUrl) return { coverImageUrl: entry.posterUrl, posterUrl: entry.posterUrl, kenBurns: false }
   return null
 }
@@ -207,6 +209,8 @@ export interface ReceiverAmbientDom {
   foregroundEl: HTMLElement | null
   brandEl: HTMLElement | null
   brandMarkEl: HTMLElement | null
+  lockupEl: HTMLElement | null
+  clockEl: HTMLElement | null
 }
 
 export interface ReceiverAmbientDeps {
@@ -238,7 +242,34 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
   let activeLayer: "a" | "b" = "a"
   let ambientMode: AmbientMode | null = null
   let lastLoggedBailReason: string | null = null
+  let clockTimer: ReturnType<typeof setTimeout> | null = null
   const failureCounts = new Map<string, number>()
+
+  function updateClockText(): void {
+    if (dom.clockEl) dom.clockEl.textContent = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date())
+  }
+
+  function scheduleClockTick(): void {
+    const now = new Date()
+    const msToNextMinute = 60_000 - (now.getSeconds() * 1000 + now.getMilliseconds())
+    clockTimer = setTimeout(() => {
+      updateClockText()
+      scheduleClockTick()
+    }, msToNextMinute)
+  }
+
+  function startClock(): void {
+    if (clockTimer) return
+    updateClockText()
+    scheduleClockTick()
+  }
+
+  function stopClock(): void {
+    if (clockTimer) {
+      clearTimeout(clockTimer)
+      clockTimer = null
+    }
+  }
 
   function clearIdleTimer(): void {
     if (idleTimer) {
@@ -330,6 +361,8 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
     dom.root?.setAttribute("aria-hidden", "false")
     dom.idleEl?.setAttribute("data-ambient-active", "true")
     dom.brandEl?.classList.add("hidden")
+    dom.lockupEl?.classList.remove("hidden")
+    startClock()
     advanceRotation()
   }
 
@@ -347,6 +380,8 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
     dom.titleEl?.classList.add("hidden")
     dom.brandMarkEl?.classList.toggle("xt-ambient-brand-breathe", !motionDisabled())
     dom.brandEl?.classList.remove("hidden")
+    dom.lockupEl?.classList.add("hidden")
+    startClock()
     scheduleBrandRecheck()
   }
 
@@ -375,6 +410,7 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
     dom.root?.setAttribute("aria-hidden", "true")
     dom.idleEl?.removeAttribute("data-ambient-active")
     dom.brandEl?.classList.add("hidden")
+    stopClock()
   }
 
   function dropEntry(entry: AmbientEntry): void {
@@ -540,6 +576,7 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
       destroyed = true
       clearIdleTimer()
       stopRotation()
+      stopClock()
       clearInterval(burnInInterval)
       document.removeEventListener("keydown", onKeydownCapture, true)
       document.removeEventListener("pointermove", onPointerWake)

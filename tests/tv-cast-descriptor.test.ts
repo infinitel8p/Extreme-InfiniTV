@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest"
 import {
+  buildCatchupCastDescriptor,
   buildLiveCastDescriptor,
   buildVodCastDescriptor,
+  deriveSessionIsLive,
   isCastableSrc,
   validateCastDescriptor,
 } from "@/scripts/lib/tv-cast-descriptor"
@@ -74,6 +76,44 @@ describe("buildVodCastDescriptor", () => {
       durationSeconds: input,
     })
     expect(descriptor.durationSeconds).toBe(expected)
+  })
+})
+
+describe("deriveSessionIsLive", () => {
+  it("stays true for a live descriptor", () => {
+    const descriptor = buildLiveCastDescriptor({
+      src: "https://provider.example/live/1.m3u8",
+      title: "Channel One",
+    })
+    expect(deriveSessionIsLive(descriptor)).toBe(true)
+  })
+
+  it("stays false for a vod descriptor", () => {
+    const descriptor = buildVodCastDescriptor({
+      src: "https://provider.example/movie.mp4",
+      title: "Movie",
+    })
+    expect(deriveSessionIsLive(descriptor)).toBe(false)
+  })
+
+  it("stays false for a catchup descriptor with a duration, even with liveContext", () => {
+    const descriptor = buildCatchupCastDescriptor({
+      src: "https://provider.example/timeshift/1.m3u8",
+      mime: "application/x-mpegURL",
+      title: "Channel One - Yesterday",
+      durationSeconds: 3600,
+    })
+    const context = { liveContext: { playlistId: "p1", channelIds: ["1"], index: 0 } }
+    expect(deriveSessionIsLive(descriptor, context)).toBe(false)
+  })
+
+  it("becomes true for a bare (non-live-flagged) descriptor with liveContext and no duration", () => {
+    const descriptor = buildVodCastDescriptor({
+      src: "https://provider.example/live/1.m3u8",
+      title: "Channel One",
+    })
+    const context = { liveContext: { playlistId: "p1", channelIds: ["1"], index: 0 } }
+    expect(deriveSessionIsLive(descriptor, context)).toBe(true)
   })
 })
 

@@ -74,6 +74,7 @@ function fakeElement(): HTMLElement {
     textContent: "",
     offsetWidth: 0,
     classList: { add: () => {}, remove: () => {}, toggle: () => {}, contains: () => false },
+    focus: () => {},
   } as unknown as HTMLElement
 }
 
@@ -140,6 +141,7 @@ function embeddedDom(videoEl: unknown): EmbeddedEngineDom {
     errorEl: fakeElement(),
     errorMessageEl: fakeElement(),
     errorCountdownEl: fakeElement(),
+    errorRetryEl: fakeElement(),
   }
 }
 

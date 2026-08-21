@@ -68,6 +68,7 @@ const seekFlashEl = document.getElementById("receiver-seek-flash")
 const errorEl = document.getElementById("receiver-error")
 const errorMessageEl = document.getElementById("receiver-error-message")
 const errorCountdownEl = document.getElementById("receiver-error-countdown")
+const errorRetryEl = document.getElementById("receiver-error-retry")
 
 let currentTitle = ""
 let currentIsLive = false
@@ -110,6 +111,8 @@ function mountAmbient(): void {
       foregroundEl: document.getElementById("receiver-ambient-foreground"),
       brandEl: document.getElementById("receiver-ambient-brand"),
       brandMarkEl: document.getElementById("receiver-ambient-brand-mark"),
+      lockupEl: document.getElementById("receiver-ambient-lockup"),
+      clockEl: document.getElementById("receiver-ambient-clock"),
     },
     getPlaylistId: getActivePlaylistId,
   })
@@ -231,11 +234,18 @@ function reportState(partial: ReceiverStatePartial): void {
   if (durationSeconds !== undefined) lastKnownDurationSeconds = durationSeconds
   if (typeof partial.volume === "number") lastKnownVolume = partial.volume
   if (typeof partial.muted === "boolean") lastKnownMuted = partial.muted
+  const reportedState = partial.state ?? currentPlaybackState
+  // Natural end has no explicit "stop" action to reset /state server-side, so clear it here.
+  const isTerminalReport = reportedState === "ended" || reportedState === "idle"
+  if (isTerminalReport) {
+    currentTitle = ""
+    lastKnownDurationSeconds = undefined
+  }
   const payload = {
-    state: partial.state ?? currentPlaybackState,
+    state: reportedState,
     positionSeconds: partial.positionSeconds ?? lastKnownPositionSeconds,
-    durationSeconds: durationSeconds ?? lastKnownDurationSeconds,
-    title: currentTitle || undefined,
+    durationSeconds: isTerminalReport ? undefined : (durationSeconds ?? lastKnownDurationSeconds),
+    title: isTerminalReport ? undefined : (currentTitle || undefined),
     error: partial.error,
     volume: partial.volume ?? lastKnownVolume,
     muted: partial.muted ?? lastKnownMuted,
@@ -265,6 +275,7 @@ const embeddedEngine = createEmbeddedReceiverEngine(
     errorEl,
     errorMessageEl,
     errorCountdownEl,
+    errorRetryEl,
   },
   engineCallbacks,
 )
@@ -289,7 +300,10 @@ async function startWithEngine(engine: ReceiverEngine, descriptor: CastDescripto
   return started
 }
 
+let lastPlayPayload: unknown = null
+
 async function onPlay(rawDescriptor: unknown): Promise<void> {
+  lastPlayPayload = rawDescriptor
   const descriptor = validateCastDescriptor(rawDescriptor)
   if (!descriptor) {
     log.warn("[xt:receiver] play rejected: descriptor failed validation")
@@ -361,7 +375,14 @@ function isPlayerActive(): boolean {
   return !!playerViewEl && !playerViewEl.classList.contains("hidden")
 }
 
+errorRetryEl?.addEventListener("click", () => {
+  if (lastPlayPayload == null) return
+  void onPlay(lastPlayPayload)
+})
+
 document.addEventListener("keydown", (event) => {
+  // Let the focused retry button handle its own Enter/Space activation.
+  if (document.activeElement === errorRetryEl) return
   const key = event.key
   if (isPlayerActive()) {
     if (key === "Enter" || key === " " || key === "MediaPlayPause") {

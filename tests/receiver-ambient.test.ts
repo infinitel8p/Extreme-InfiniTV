@@ -92,8 +92,13 @@ describe("castHistoryToAmbientEntries", () => {
 })
 
 describe("buildAmbientRenderModel", () => {
-  it("prefers the backdrop as a full-bleed cover with ken burns enabled", () => {
+  it("prefers the backdrop as a full-bleed cover with ken burns enabled, carrying the poster for the card", () => {
     const model = buildAmbientRenderModel(makeEntry({ backdropUrl: "https://x/backdrop.png", posterUrl: "https://x/poster.png" }))
+    expect(model).toEqual({ coverImageUrl: "https://x/backdrop.png", posterUrl: "https://x/poster.png", kenBurns: true })
+  })
+
+  it("uses the backdrop with no poster card when the entry has no poster", () => {
+    const model = buildAmbientRenderModel(makeEntry({ backdropUrl: "https://x/backdrop.png" }))
     expect(model).toEqual({ coverImageUrl: "https://x/backdrop.png", posterUrl: null, kenBurns: true })
   })
 

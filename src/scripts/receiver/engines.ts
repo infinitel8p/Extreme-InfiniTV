@@ -100,6 +100,7 @@ export interface EmbeddedEngineDom {
   errorEl: HTMLElement | null
   errorMessageEl: HTMLElement | null
   errorCountdownEl: HTMLElement | null
+  errorRetryEl: HTMLElement | null
 }
 
 const FAILURE_MESSAGE_KEYS: Partial<Record<StartFailureKind, string>> = {
@@ -261,6 +262,8 @@ export function createEmbeddedReceiverEngine(
     report({ state: "error", error: detail, positionSeconds: 0 })
     if (errorHideTimer) clearTimeout(errorHideTimer)
     errorHideTimer = setTimeout(() => teardownInternal(true), ERROR_HIDE_MS)
+    // Single OK press retries: the panel's only control should already have focus.
+    dom.errorRetryEl?.focus()
   }
 
   function clearDeadVideoWatchdog(): void {

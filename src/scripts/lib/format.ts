@@ -71,6 +71,14 @@ export function formatPaddedHms(totalSeconds: number): string {
   return hours > 0 ? `${hours}:${paddedMinutes}:${paddedSeconds}` : `${paddedMinutes}:${paddedSeconds}`
 }
 
+/** M:SS under an hour, H:MM:SS above; clamps a negative or non-finite delta to 0:00. */
+export function formatElapsedSinceStart(startedAtMs: number, nowMs: number): string {
+  const { hours, minutes, seconds } = splitHms((nowMs - startedAtMs) / 1000)
+  const paddedSeconds = String(seconds).padStart(2, "0")
+  if (hours > 0) return formatPaddedHms(hours * 3600 + minutes * 60 + seconds)
+  return `${minutes}:${paddedSeconds}`
+}
+
 /** Parses a colon-delimited "HH:MM:SS" or "MM:SS" clock string into seconds. Returns 0 when unparseable. */
 export function parseHmsToSeconds(value: unknown): number {
   const raw = String(value ?? "").trim()

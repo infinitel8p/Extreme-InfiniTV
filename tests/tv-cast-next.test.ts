@@ -4,6 +4,8 @@ import {
   neighborEpisode,
   neighborAvailability,
   flattenSeriesEpisodes,
+  shouldAutoAdvance,
+  createAutoAdvanceTracker,
 } from "@/scripts/lib/tv-cast-next"
 
 describe("neighborChannelIndex", () => {
@@ -84,6 +86,88 @@ describe("neighborAvailability", () => {
   it("is unavailable for a session with neither context", () => {
     const session: any = {}
     expect(neighborAvailability(session)).toEqual({ previous: false, next: false })
+  })
+})
+
+describe("shouldAutoAdvance", () => {
+  const seriesSession: any = { seriesContext: { playlistId: "p1", seriesId: "s1", season: 1, episodeNum: 1 } }
+  const liveSession: any = { liveContext: { playlistId: "p1", channelIds: ["a", "b"], index: 0 } }
+  const seriesLiveFlagged: any = { ...seriesSession, isLive: true }
+
+  it("is true for a series session moving to ended after playback was observed", () => {
+    expect(shouldAutoAdvance(seriesSession, "ended", true)).toBe(true)
+  })
+
+  it("is false when no playback was observed yet (guards the stale-ended snapshot replay)", () => {
+    expect(shouldAutoAdvance(seriesSession, "ended", false)).toBe(false)
+  })
+
+  it("is false for a non-ended state, even after playback", () => {
+    expect(shouldAutoAdvance(seriesSession, "playing", true)).toBe(false)
+    expect(shouldAutoAdvance(seriesSession, "paused", true)).toBe(false)
+    expect(shouldAutoAdvance(seriesSession, "idle", true)).toBe(false)
+  })
+
+  it("is false for a session with no seriesContext", () => {
+    expect(shouldAutoAdvance(liveSession, "ended", true)).toBe(false)
+  })
+
+  it("is false for a null session", () => {
+    expect(shouldAutoAdvance(null, "ended", true)).toBe(false)
+  })
+
+  it("is false for a series session explicitly flagged live", () => {
+    expect(shouldAutoAdvance(seriesLiveFlagged, "ended", true)).toBe(false)
+  })
+})
+
+describe("createAutoAdvanceTracker", () => {
+  const seriesSession: any = { seriesContext: { playlistId: "p1", seriesId: "s1", season: 1, episodeNum: 1 } }
+  const liveSession: any = { liveContext: { playlistId: "p1", channelIds: ["a", "b"], index: 0 } }
+
+  it("does not advance on the first frame after (re)connect, even if it's ended", () => {
+    const tracker = createAutoAdvanceTracker()
+    expect(tracker.observe(seriesSession, "ended")).toBe(false)
+  })
+
+  it("advances once playback was observed and the state moves to ended", () => {
+    const tracker = createAutoAdvanceTracker()
+    expect(tracker.observe(seriesSession, "playing")).toBe(false)
+    expect(tracker.observe(seriesSession, "ended")).toBe(true)
+  })
+
+  it("advances after a paused frame too", () => {
+    const tracker = createAutoAdvanceTracker()
+    tracker.observe(seriesSession, "paused")
+    expect(tracker.observe(seriesSession, "ended")).toBe(true)
+  })
+
+  it("dedupes repeated ended frames from WS/watchdog/poll overlap", () => {
+    const tracker = createAutoAdvanceTracker()
+    tracker.observe(seriesSession, "playing")
+    expect(tracker.observe(seriesSession, "ended")).toBe(true)
+    expect(tracker.observe(seriesSession, "ended")).toBe(false)
+    expect(tracker.observe(seriesSession, "ended")).toBe(false)
+  })
+
+  it("resets the guard once a subsequent playing frame is observed (next episode started)", () => {
+    const tracker = createAutoAdvanceTracker()
+    tracker.observe(seriesSession, "playing")
+    expect(tracker.observe(seriesSession, "ended")).toBe(true)
+    tracker.observe(seriesSession, "playing")
+    expect(tracker.observe(seriesSession, "ended")).toBe(true)
+  })
+
+  it("never advances a live session", () => {
+    const tracker = createAutoAdvanceTracker()
+    tracker.observe(liveSession, "playing")
+    expect(tracker.observe(liveSession, "ended")).toBe(false)
+  })
+
+  it("never advances on an explicit stop, since that reports idle, not ended", () => {
+    const tracker = createAutoAdvanceTracker()
+    tracker.observe(seriesSession, "playing")
+    expect(tracker.observe(seriesSession, "idle")).toBe(false)
   })
 })
 

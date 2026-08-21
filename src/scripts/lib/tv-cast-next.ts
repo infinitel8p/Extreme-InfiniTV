@@ -179,6 +179,44 @@ export async function castNeighbor(direction: 1 | -1): Promise<boolean> {
   }
 }
 
+/**
+ * Pure decision: auto-advance only for a non-live series session moving into "ended", after real
+ * playback ("playing"/"paused") was already observed earlier in the same feed subscription - guards
+ * against the stale "ended" snapshot a freshly (re)connected feed can push as its first frame.
+ */
+export function shouldAutoAdvance(
+  session: CastSession | null,
+  nextStateValue: string,
+  sawPlaybackInSubscription: boolean
+): boolean {
+  if (!session?.seriesContext || session.isLive) return false
+  return nextStateValue === "ended" && sawPlaybackInSubscription
+}
+
+export interface AutoAdvanceTracker {
+  /** Feed each cast-state frame; returns true at most once per "ended" run. */
+  observe(session: CastSession | null, stateValue: string): boolean
+}
+
+/** Tracks "saw playback" across a feed subscription and dedupes repeats of the same "ended" run. */
+export function createAutoAdvanceTracker(): AutoAdvanceTracker {
+  let sawPlayback = false
+  let advancedForCurrentEnded = false
+  return {
+    observe(session, stateValue) {
+      if (stateValue === "playing" || stateValue === "paused") {
+        sawPlayback = true
+        advancedForCurrentEnded = false
+        return false
+      }
+      if (advancedForCurrentEnded) return false
+      const advance = shouldAutoAdvance(session, stateValue, sawPlayback)
+      if (advance) advancedForCurrentEnded = true
+      return advance
+    },
+  }
+}
+
 /** Async refinement of neighborAvailability for series, once the episode list is known. */
 export async function resolveNeighborAvailability(
   session: CastSession | null
