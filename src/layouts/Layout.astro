@@ -956,6 +956,23 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   initWhatsNew()
   mountCompositingTrialPrompt()
 
+  // Safety net for full-app-on-TV users who never open /receiver.
+  if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
+    setTimeout(() => {
+      let isAndroidTv = false
+      try {
+        isAndroidTv = !!(window as any).AndroidDeviceInfo?.isTv?.()
+      } catch {}
+      if (!isAndroidTv) return
+      Promise.all([
+        import("@/scripts/lib/ambient-handoff"),
+        import("@/scripts/lib/account-info.js"),
+      ]).then(([{ maybeRefreshAmbientHandoff }, { getActivePlaylistIdSync }]) => {
+        void maybeRefreshAmbientHandoff(() => getActivePlaylistIdSync() || null)
+      })
+    }, 60_000)
+  }
+
   // -----------------------------------------------------------------------
   // Discord idle presence: push "Browsing the catalog" on every page load
   // -----------------------------------------------------------------------

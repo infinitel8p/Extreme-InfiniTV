@@ -232,6 +232,45 @@ class DeviceInfoBridge(private val activity: TauriActivity) {
   }
 }
 
+// System screensaver handoff: Settings > Display > Screen saver has no API to preselect
+// an entry, so this only opens the picker; the user still has to choose XtreamDreamService.
+class ScreensaverBridge(private val activity: TauriActivity) {
+  @JavascriptInterface
+  fun isDreamSettingsAvailable(): Boolean {
+    return try {
+      resolveDreamSettingsActivity() != null
+    } catch (e: Throwable) {
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun openDreamSettings(): Boolean {
+    if (resolveDreamSettingsActivity() == null) return false
+    val intent = Intent(Settings.ACTION_DREAM_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    activity.runOnUiThread {
+      try {
+        activity.startActivity(intent)
+      } catch (e: ActivityNotFoundException) {
+        Log.w("xtream-rs", "openDreamSettings startActivity threw: $e")
+      } catch (e: Throwable) {
+        Log.w("xtream-rs", "openDreamSettings launch threw: $e")
+      }
+    }
+    return true
+  }
+
+  private fun resolveDreamSettingsActivity(): ResolveInfo? {
+    val intent = Intent(Settings.ACTION_DREAM_SETTINGS)
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      activity.packageManager.resolveActivity(intent, PackageManager.ResolveInfoFlags.of(0))
+    } else {
+      @Suppress("DEPRECATION")
+      activity.packageManager.resolveActivity(intent, 0)
+    }
+  }
+}
+
 // {dataDir}/logs isn't a declared FileProvider root, so the newest log file is copied to the cache dir first and shared from there.
 class LogShareBridge(private val activity: TauriActivity) {
   // Mirrors PathPlugin.kt's getConfigDir(): tauri-plugin-log writes to app_log_dir() = configDir/logs.
@@ -1478,6 +1517,7 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(StatusBarBridge(this), "AndroidStatusBar")
     webView.addJavascriptInterface(DeviceInfoBridge(this), "AndroidDeviceInfo")
     webView.addJavascriptInterface(LogShareBridge(this), "AndroidLog")
+    webView.addJavascriptInterface(ScreensaverBridge(this), "AndroidScreensaver")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
     webView.addJavascriptInterface(AndroidVideoBridge(this, { hostedWebView }), "AndroidVideo")
     webView.addJavascriptInterface(HapticsBridge(this, { hostedWebView }), "AndroidHaptics")

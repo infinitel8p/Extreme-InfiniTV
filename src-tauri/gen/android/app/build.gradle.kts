@@ -97,6 +97,10 @@ android {
     }
 
     buildFeatures { buildConfig = true }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 rust {
@@ -118,6 +122,7 @@ dependencies {
     implementation("androidx.media3:media3-session:1.4.1")
     implementation("io.coil-kt:coil:2.7.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20231013")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
 }

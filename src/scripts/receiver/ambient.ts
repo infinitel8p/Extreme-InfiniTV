@@ -1,5 +1,6 @@
 // Ambient idle screensaver for the TV receiver: rotating artwork after inactivity.
 import { buildAmbientManifest, type AmbientEntry, type AmbientTier } from "@/scripts/lib/ambient-manifest"
+import { writeAmbientHandoff } from "@/scripts/lib/ambient-handoff"
 import { log } from "@/scripts/lib/log.js"
 
 export type ReceiverAmbientVisualState = "info" | "ambient"
@@ -262,6 +263,7 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
       pushedManifest: loadPushedManifest(),
       castHistoryEntries: castHistoryToAmbientEntries(loadCastHistory()),
     })
+    if (manifestEntries.length > 0) void writeAmbientHandoff(manifestEntries)
   }
 
   async function ensureManifestFresh(): Promise<void> {

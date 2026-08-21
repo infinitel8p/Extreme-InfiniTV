@@ -83,6 +83,18 @@
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboard|keyboardHidden|uiMode"
             android:theme="@style/Theme.App.VideoFullscreen" />
 
+        <service
+            android:name=".XtreamDreamService"
+            android:exported="true"
+            android:permission="android.permission.BIND_DREAM_SERVICE"
+            android:label="@string/dream_label"
+            android:icon="@mipmap/ic_launcher">
+            <intent-filter>
+                <action android:name="android.service.dreams.DreamService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

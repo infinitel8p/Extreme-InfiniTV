@@ -58,6 +58,8 @@ async function init(): Promise<void> {
   const openScreenBtn = document.getElementById("receiver-open-screen")
   const pairedList = document.getElementById("receiver-paired-list")
   const noDevicesEl = document.getElementById("receiver-no-devices")
+  const screensaverHintRow = document.getElementById("settings-receiver-screensaver-hint")
+  const screensaverOpenBtn = document.getElementById("settings-receiver-screensaver-open")
 
   let rawPairCode = ""
   let codeRevealed = false
@@ -284,6 +286,19 @@ async function init(): Promise<void> {
 
   openScreenBtn?.addEventListener("click", () => {
     location.href = "/receiver"
+  })
+
+  try {
+    if ((window as any).AndroidScreensaver?.isDreamSettingsAvailable?.()) {
+      screensaverHintRow?.classList.remove("hidden")
+    }
+  } catch {}
+  screensaverOpenBtn?.addEventListener("click", () => {
+    try {
+      (window as any).AndroidScreensaver?.openDreamSettings?.()
+    } catch (err) {
+      log.warn("[settings:receiver] AndroidScreensaver.openDreamSettings failed:", err)
+    }
   })
 
   if (deviceNameInput) {
