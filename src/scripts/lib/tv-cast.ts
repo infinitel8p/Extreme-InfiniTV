@@ -210,8 +210,25 @@ export function clearCastSession(): void {
 
 export class CastAuthError extends Error {}
 
+/** Wraps a raw IPv6 host in brackets so it can sit in a URL authority; passthrough otherwise. */
+export function formatHostForUrl(host: string): string {
+  const alreadyBracketed = host.startsWith("[") && host.endsWith("]")
+  if (host.includes(":") && !alreadyBracketed) return `[${host}]`
+  return host
+}
+
+/** True for IPv6 link-local (fe80::/10) and IPv4 link-local (169.254.0.0/16) - unusable without a zone index. */
+export function isLinkLocalHost(host: string): boolean {
+  const unwrapped = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host
+  if (/^169\.254\.\d{1,3}\.\d{1,3}$/.test(unwrapped)) return true
+  if (!unwrapped.includes(":")) return false
+  const firstHextet = unwrapped.split(":")[0]
+  if (!/^[0-9a-fA-F]{1,4}$/.test(firstHextet)) return false
+  return (parseInt(firstHextet, 16) & 0xffc0) === 0xfe80
+}
+
 function baseUrl(host: string, port: number): string {
-  return `http://${host}:${port}`
+  return `http://${formatHostForUrl(host)}:${port}`
 }
 
 /** Thrown only for a connection-level failure (refused/timeout/DNS); never for an HTTP response. */
@@ -233,7 +250,9 @@ export function candidateHostOrder(hosts: string[], pinnedHostIndex?: number): s
   const pinnedIndex = pinnedHostIndex != null && pinnedHostIndex >= 0 && pinnedHostIndex < hosts.length ? pinnedHostIndex : 0
   const pinned = hosts[pinnedIndex]
   const rest = hosts.filter((_, index) => index !== pinnedIndex)
-  return [pinned, ...rest]
+  const ordered = [pinned, ...rest]
+  const reachable = ordered.filter((host) => !isLinkLocalHost(host))
+  return reachable.length > 0 ? reachable : ordered
 }
 
 function deviceHostOrder(device: TvDevice): string[] {

@@ -16,6 +16,8 @@ import {
   getReceiverLogSnapshots,
   getReceiverLogSnapshotAt,
   candidateHostOrder,
+  formatHostForUrl,
+  isLinkLocalHost,
   TV_DEVICES_EVENT,
   CAST_SESSION_EVENT,
   type TvDevice,
@@ -180,6 +182,18 @@ describe("candidateHostOrder", () => {
   it("falls back to the first host for an out-of-range pin", () => {
     expect(candidateHostOrder(["192.168.1.50", "10.0.0.5"], 5)).toEqual(["192.168.1.50", "10.0.0.5"])
     expect(candidateHostOrder(["192.168.1.50", "10.0.0.5"], -1)).toEqual(["192.168.1.50", "10.0.0.5"])
+  })
+
+  it("drops link-local hosts from the walk order", () => {
+    expect(candidateHostOrder(["192.168.1.50", "fe80::1", "10.0.0.5"])).toEqual(["192.168.1.50", "10.0.0.5"])
+  })
+
+  it("keeps pinned-first ordering after filtering link-local hosts", () => {
+    expect(candidateHostOrder(["fe80::1", "192.168.1.50", "10.0.0.5"], 2)).toEqual(["10.0.0.5", "192.168.1.50"])
+  })
+
+  it("returns the unfiltered ordered list when every host is link-local", () => {
+    expect(candidateHostOrder(["fe80::1", "169.254.1.5"])).toEqual(["fe80::1", "169.254.1.5"])
   })
 })
 
@@ -348,5 +362,41 @@ describe("receiver log snapshots", () => {
 
   it("returns null for a device with no cached snapshot", () => {
     expect(getReceiverLogSnapshotAt("Unknown TV")).toBeNull()
+  })
+})
+
+describe("formatHostForUrl", () => {
+  it("leaves a plain IPv4 address unchanged", () => {
+    expect(formatHostForUrl("192.168.1.50")).toBe("192.168.1.50")
+  })
+
+  it("leaves a hostname unchanged", () => {
+    expect(formatHostForUrl("living-room-tv.local")).toBe("living-room-tv.local")
+  })
+
+  it("brackets a raw IPv6 address", () => {
+    expect(formatHostForUrl("fe80::1")).toBe("[fe80::1]")
+  })
+
+  it("leaves an already-bracketed IPv6 address unchanged", () => {
+    expect(formatHostForUrl("[fe80::1]")).toBe("[fe80::1]")
+  })
+})
+
+describe("isLinkLocalHost", () => {
+  it.each([
+    ["fe80::1", true],
+    ["FE80::1", true],
+    ["fe9d::abcd", true],
+    ["feaf::1", true],
+    ["febf::1", true],
+    ["[fe80::1]", true],
+    ["2a02:1234::1", false],
+    ["fdd0::1", false],
+    ["169.254.1.5", true],
+    ["192.168.178.42", false],
+    ["living-room-tv.local", false],
+  ])("host=%s -> linkLocal=%s", (host, expected) => {
+    expect(isLinkLocalHost(host)).toBe(expected)
   })
 })
