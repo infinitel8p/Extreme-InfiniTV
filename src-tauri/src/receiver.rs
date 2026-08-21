@@ -1,5 +1,6 @@
 // TV receiver mode: LAN HTTP+WebSocket server other app instances pair with and send play/transport commands to.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -139,6 +140,7 @@ struct ReceiverShared {
     ips: Mutex<Vec<String>>,
     receiver_id: Mutex<String>,
     broadcast: broadcast::Sender<String>,
+    ip_watcher_running: AtomicBool,
 }
 
 impl ReceiverShared {
@@ -152,6 +154,7 @@ impl ReceiverShared {
             ips: Mutex::new(Vec::new()),
             receiver_id: Mutex::new(String::new()),
             broadcast,
+            ip_watcher_running: AtomicBool::new(false),
         }
     }
 }
@@ -272,11 +275,17 @@ fn resolve_device_name(name: &str, fallback: &str) -> String {
 
 /// None for blank or "localhost", which gethostname returns on containers/CI and Android.
 fn usable_hostname(hostname: &str) -> Option<String> {
-    let trimmed = hostname.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("localhost") {
+    let trimmed = hostname.trim().trim_end_matches('.');
+    let suffix_start = trimmed.len().saturating_sub(".local".len());
+    let stripped = if trimmed.is_char_boundary(suffix_start) && trimmed[suffix_start..].eq_ignore_ascii_case(".local") {
+        trimmed[..suffix_start].trim()
+    } else {
+        trimmed
+    };
+    if stripped.is_empty() || stripped.eq_ignore_ascii_case("localhost") {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(stripped.to_string())
     }
 }
 
@@ -437,6 +446,57 @@ fn readvertise_mdns(state: &ReceiverState, name: &str) {
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 fn readvertise_mdns(_state: &ReceiverState, _name: &str) {}
+
+const IP_WATCH_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Wi-Fi roams, VPNs and docks change our addresses while the receiver stays up; without this the
+/// advertised records and the status IPs both go stale until the user toggles receiver mode.
+fn spawn_ip_watcher(app: AppHandle) {
+    let shared = {
+        let state = app.state::<ReceiverState>();
+        if state.shared.ip_watcher_running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        state.shared.clone()
+    };
+
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(IP_WATCH_INTERVAL).await;
+
+            let state = app.state::<ReceiverState>();
+            let port = state
+                .server
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .as_ref()
+                .map(|handle| handle.port);
+            let Some(port) = port else {
+                break;
+            };
+
+            let current = local_ips();
+            let changed = {
+                let mut ips = shared.ips.lock().unwrap_or_else(|poison| poison.into_inner());
+                if *ips == current {
+                    false
+                } else {
+                    *ips = current.clone();
+                    true
+                }
+            };
+            if !changed {
+                continue;
+            }
+
+            let name = shared.name.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+            log::info!("[receiver] addresses changed, re-advertising on: {}", current.join(", "));
+            readvertise_mdns(&state, &name);
+            ReceiverEvents::status(&app, build_status_json(&shared, Some(port)));
+        }
+        shared.ip_watcher_running.store(false, Ordering::SeqCst);
+    });
+}
 
 fn evict_oldest_if_over_capacity(devices: &mut Vec<PairedDevice>) {
     while devices.len() > receiver_store::MAX_PAIRED_DEVICES {
@@ -604,6 +664,7 @@ pub async fn receiver_start(
             .map(|handle| handle.port);
         if let Some(port) = port {
             advertise_mdns(&state, &resolved_name, port);
+            spawn_ip_watcher(app.clone());
         }
     }
 
@@ -861,6 +922,11 @@ struct DiscoveryEntry {
     addresses: std::collections::HashSet<std::net::IpAddr>,
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn join_ips(ips: &[std::net::IpAddr]) -> String {
+    ips.iter().map(|ip| ip.to_string()).collect::<Vec<_>>().join(", ")
+}
+
 /// Merges resolved-service events into one entry per identity (mDNS id when present, else
 /// name+port), unioning addresses across repeat events for the same identity.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -870,8 +936,14 @@ fn merge_resolved_events(
 ) -> Vec<DiscoveredReceiver> {
     let mut entries: std::collections::HashMap<String, DiscoveryEntry> = std::collections::HashMap::new();
     for event in events {
-        let usable: Vec<std::net::IpAddr> = event.addresses.into_iter().filter(is_usable_mdns_addr).collect();
+        let usable: Vec<std::net::IpAddr> = event.addresses.iter().copied().filter(is_usable_mdns_addr).collect();
         if usable.is_empty() {
+            log::warn!(
+                "[receiver] discover dropped {} port={}: no usable address in [{}]",
+                event.name,
+                event.port,
+                join_ips(&event.addresses)
+            );
             continue;
         }
         let key = discovery_identity_key(&event.name, event.port, event.id.as_deref());
@@ -931,12 +1003,20 @@ pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<Discovered
         let addresses: Vec<std::net::IpAddr> =
             resolved.get_addresses().iter().map(mdns_sd::ScopedIp::to_ip_addr).collect();
         let id = resolved.get_property_val_str("id").map(str::to_string).filter(|id| !id.is_empty());
-        resolved_events.push(ResolvedEvent {
+        let event = ResolvedEvent {
             name: strip_mdns_service_suffix(resolved.get_fullname()),
             port: resolved.get_port(),
             id,
             addresses,
-        });
+        };
+        log::info!(
+            "[receiver] discover resolved {} port={} host={} addrs=[{}]",
+            event.name,
+            event.port,
+            resolved.get_hostname(),
+            join_ips(&event.addresses)
+        );
+        resolved_events.push(event);
     }
 
     let _ = daemon.stop_browse(MDNS_SERVICE_TYPE);
@@ -944,6 +1024,15 @@ pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<Discovered
 
     let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
     let discovered = merge_resolved_events(resolved_events, &interfaces);
+    for entry in &discovered {
+        log::info!(
+            "[receiver] discover kept {} at {}:{} hosts=[{}]",
+            entry.name,
+            entry.host,
+            entry.port,
+            entry.hosts.join(", ")
+        );
+    }
     log::info!("[receiver] discover complete, found={}", discovered.len());
     Ok(discovered)
 }
@@ -1642,7 +1731,9 @@ mod tests {
     #[cfg(not(target_os = "android"))]
     #[test]
     fn default_receiver_name_is_never_blank() {
-        assert!(!default_receiver_name().is_empty());
+        let name = default_receiver_name();
+        assert!(!name.is_empty());
+        assert!(!name.to_ascii_lowercase().ends_with(".local"), "unexpected mDNS suffix in {name}");
     }
 
     #[test]
@@ -1666,6 +1757,22 @@ mod tests {
     #[test]
     fn usable_hostname_trims_and_keeps_a_real_name() {
         assert_eq!(usable_hostname("  living-room-pc  "), Some("living-room-pc".to_string()));
+    }
+
+    #[test]
+    fn usable_hostname_strips_the_macos_mdns_suffix() {
+        assert_eq!(usable_hostname("MacBook-Pro-von-Ludo.local"), Some("MacBook-Pro-von-Ludo".to_string()));
+        assert_eq!(usable_hostname("MacBook-Pro-von-Ludo.local."), Some("MacBook-Pro-von-Ludo".to_string()));
+        assert_eq!(usable_hostname("Mac.LOCAL"), Some("Mac".to_string()));
+        assert_eq!(usable_hostname("localhost.local"), None);
+        assert_eq!(usable_hostname(".local"), None);
+    }
+
+    #[test]
+    fn usable_hostname_keeps_names_that_merely_contain_local() {
+        assert_eq!(usable_hostname("local-tv"), Some("local-tv".to_string()));
+        assert_eq!(usable_hostname("DESKTOP-ANRA73S"), Some("DESKTOP-ANRA73S".to_string()));
+        assert_eq!(usable_hostname("wohnzimmer-übertragung"), Some("wohnzimmer-übertragung".to_string()));
     }
 
     #[test]
@@ -1934,11 +2041,14 @@ mod tests {
         assert!(merge_resolved_events(events, &[]).is_empty());
     }
 
-    // Uses an explicit TEST-NET IP (RFC 5737) instead of local_ips()'s real default-route
-    // address: keeps the assertion on the resolved host reliable across CI network setups.
+    // Must advertise a real interface address: mdns-sd only puts an address record on an
+    // interface whose subnet contains it, so a TEST-NET IP is announced on no interface at all.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[tokio::test]
     async fn mdns_self_discovery_finds_the_advertised_receiver() {
+        let Some(advertised_ip) = local_ips().into_iter().next() else {
+            return;
+        };
         let port = 47_900;
         let name = format!("Test Receiver {}", generate_device_key());
         let instance_name = mdns_instance_name(&name);
@@ -1949,7 +2059,7 @@ mod tests {
             MDNS_SERVICE_TYPE,
             &instance_name,
             &host_name,
-            "192.0.2.10",
+            advertised_ip.as_str(),
             port,
             &[("v", "1"), ("id", "self-discovery-test-id")][..],
         )
@@ -1965,8 +2075,8 @@ mod tests {
         let matches: Vec<_> = discovered.iter().filter(|receiver| receiver.port == port).collect();
         assert_eq!(matches.len(), 1, "expected exactly one entry for the advertised receiver");
         assert_eq!(matches[0].id.as_deref(), Some("self-discovery-test-id"));
-        assert_eq!(matches[0].hosts, vec!["192.0.2.10".to_string()]);
-        assert_eq!(matches[0].host, "192.0.2.10");
+        assert!(matches[0].hosts.contains(&advertised_ip), "hosts {:?} must include {advertised_ip}", matches[0].hosts);
+        assert_eq!(matches[0].host, matches[0].hosts[0]);
         assert_eq!(matches[0].name, instance_name);
     }
 
