@@ -13,12 +13,15 @@ import {
   castStop,
   castRetryLast,
   sessionAsDevice,
+  tryReattachCastSession,
+  hasReattachableCastBackup,
   CAST_SESSION_EVENT,
   type CastSession,
   type CastState,
   type TvDevice,
 } from "@/scripts/lib/tv-cast.js"
 import { subscribeCastStateFeed, type CastFeedHealth } from "@/scripts/lib/tv-cast-state-feed.js"
+import { RECONNECT_EVENT } from "@/scripts/lib/connectivity.ts"
 import { toast } from "@/scripts/lib/toast.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
@@ -822,13 +825,86 @@ function onSessionChanged(): void {
   }
 }
 
+const REATTACH_GUARD_KEY = "xt_cast_reattach_done"
+// Fallback for the transient case when the network comes back without ever firing a browser "offline" event
+// (e.g. Wi-Fi re-associating on wake) - xt:reconnected is the primary trigger.
+const REATTACH_RETRY_DELAY_MS = 4000
+const REATTACH_MAX_ATTEMPTS = 3
+
+let reattachAttempts = 0
+let reattachInFlight = false
+let reattachRetryTimeout: ReturnType<typeof setTimeout> | null = null
+
+function hasAttemptedReattachThisSession(): boolean {
+  try {
+    return typeof sessionStorage !== "undefined" && sessionStorage.getItem(REATTACH_GUARD_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+function markReattachAttempted(): void {
+  try {
+    if (typeof sessionStorage !== "undefined") sessionStorage.setItem(REATTACH_GUARD_KEY, "1")
+  } catch {}
+}
+
+function clearReattachRetryTimeout(): void {
+  if (reattachRetryTimeout != null) {
+    clearTimeout(reattachRetryTimeout)
+    reattachRetryTimeout = null
+  }
+}
+
+function scheduleReattachRetry(): void {
+  clearReattachRetryTimeout()
+  reattachRetryTimeout = setTimeout(() => {
+    reattachRetryTimeout = null
+    attemptSessionReattach()
+  }, REATTACH_RETRY_DELAY_MS)
+}
+
+/**
+ * The guard is only set once an attempt is conclusive (a session was restored, or the backup was discarded
+ * for good). A merely unreachable receiver leaves the backup in place, so retry on xt:reconnected plus a
+ * delayed fallback instead of giving up for the rest of the session - bounded by REATTACH_MAX_ATTEMPTS.
+ */
+function attemptSessionReattach(): void {
+  if (reattachInFlight || hasAttemptedReattachThisSession() || getCastSession()) return
+  reattachInFlight = true
+  reattachAttempts += 1
+  void tryReattachCastSession().then((session) => {
+    reattachInFlight = false
+    if (session) {
+      markReattachAttempted()
+      if (!session.dismissed && !pillEl) mount(session)
+      return
+    }
+    if (!hasReattachableCastBackup() || reattachAttempts >= REATTACH_MAX_ATTEMPTS) {
+      markReattachAttempted()
+      return
+    }
+    scheduleReattachRetry()
+  })
+}
+
+function onReconnectedRetryReattach(): void {
+  clearReattachRetryTimeout()
+  attemptSessionReattach()
+}
+
 export function initTvCastPill(): void {
   if (initialized) return
   initialized = true
 
   document.addEventListener(CAST_SESSION_EVENT, onSessionChanged)
   document.addEventListener(LOCALE_EVENT, onLocaleChange)
+  document.addEventListener(RECONNECT_EVENT, onReconnectedRetryReattach)
 
   const session = getCastSession()
-  if (session && !session.dismissed) mount(session)
+  if (session && !session.dismissed) {
+    mount(session)
+  } else if (!hasAttemptedReattachThisSession()) {
+    attemptSessionReattach()
+  }
 }

@@ -278,7 +278,9 @@ function pickEngine(descriptor: CastDescriptorV1): ReceiverEngine {
   const preference = getReceiverEngine()
   if (preference === "embedded") return embeddedEngine
   if (preference === "native") return androidNativeEngine
-  return descriptor.drm ? embeddedEngine : androidNativeEngine
+  // The native ExoPlayer engine ignores timelineOffsetSeconds; catch-up needs the embedded engine to land on the right offset.
+  const hasTimelineOffset = typeof descriptor.timelineOffsetSeconds === "number" && descriptor.timelineOffsetSeconds > 0
+  return descriptor.drm || hasTimelineOffset ? embeddedEngine : androidNativeEngine
 }
 
 async function startWithEngine(engine: ReceiverEngine, descriptor: CastDescriptorV1): Promise<boolean> {

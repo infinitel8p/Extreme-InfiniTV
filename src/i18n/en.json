@@ -1597,6 +1597,12 @@
   "settings.receiver.screensaver.title": "Screensaver",
   "settings.receiver.screensaver.helper": "Select Extreme InfiniTV as the system screensaver to see artwork from your library while idle.",
   "settings.receiver.screensaver.open": "Open screensaver settings",
+  "settings.receiver.firewall.title": "Windows Firewall may be blocking this",
+  "settings.receiver.firewall.body": "Other devices on your network may not be able to reach this receiver. Windows should prompt you to allow it the first time; if it doesn't, add a firewall rule here.",
+  "settings.receiver.firewall.blockedTitle": "Windows Firewall is blocking this",
+  "settings.receiver.firewall.blockedBody": "Other devices on your network can't reach this receiver, likely because a Windows Firewall prompt was declined. Allowing it removes the block and permits access on private networks.",
+  "settings.receiver.firewall.allow": "Allow through firewall",
+  "settings.receiver.firewall.allowed": "Firewall rule added",
   "settings.playOnTv.title": "Play on TV",
   "settings.playOnTv.helper": "Pair TVs on your network. While casting, play actions go to the TV.",
   "settings.playOnTv.devices": "Paired TVs",
@@ -1673,5 +1679,9 @@
   "cast.remote.nextLabel": "Next",
   "cast.remote.genreLabel": "Genre",
   "cast.remote.castLabel": "Cast",
-  "cast.remote.errorLogSummary": "Receiver log"
+  "cast.remote.errorLogSummary": "Receiver log",
+  "cast.connLimit.confirmTitle": "Connection limit reached",
+  "cast.connLimit.confirmBody": "Your provider allows {max} connections and {current} are already in use. Casting briefly opens an extra stream, which may be refused.",
+  "cast.connLimit.confirmAction": "Cast anyway",
+  "cast.connLimit.toastWarn": "Using {current} of {max} provider connections - casting briefly uses an extra one."
 }

@@ -1139,6 +1139,19 @@ const navStructure: NavSection[] = [
                     <p id="receiver-discoverable-line" class="hidden text-xs text-fg-3"></p>
                   </div>
 
+                  <div id="receiver-firewall-warning" data-settings-item class="hidden flex-col gap-2 rounded-xl border border-warn/35 bg-warn/10 px-4 py-3">
+                    <p class="inline-flex items-center gap-2 text-sm font-medium text-warn">
+                      <IconAlertTriangle aria-hidden="true" stroke={2} class="size-4 flex-none" />
+                      <span id="receiver-firewall-warning-title" data-i18n="settings.receiver.firewall.title">Windows Firewall may be blocking this</span>
+                    </p>
+                    <p id="receiver-firewall-warning-body" data-i18n="settings.receiver.firewall.body" class="text-xs text-warn/90">
+                      Other devices on your network may not be able to reach this receiver. Add a firewall rule to allow it.
+                    </p>
+                    <button id="receiver-firewall-allow-btn" type="button" data-settings-item class="btn self-start">
+                      <span data-i18n="settings.receiver.firewall.allow">Allow through firewall</span>
+                    </button>
+                  </div>
+
                   <div data-settings-item class="settings-row">
                     <div class="settings-row__text">
                       <h3 data-i18n="settings.receiver.addressLabel" class="text-sm font-medium leading-snug">Address</h3>

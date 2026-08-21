@@ -921,7 +921,8 @@ fn is_usable_mdns_addr(ip: &std::net::IpAddr) -> bool {
     }
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+// Shared by desktop mDNS resolution and the sweep fallback (which also runs on Android).
+#[cfg(not(target_os = "ios"))]
 fn mdns_addr_rank(ip: &std::net::IpAddr) -> u8 {
     match ip {
         std::net::IpAddr::V4(v4) if v4.is_private() => 2,
@@ -937,7 +938,7 @@ fn best_mdns_addr(candidates: &[std::net::IpAddr]) -> Option<std::net::IpAddr> {
     candidates.iter().copied().filter(is_usable_mdns_addr).max_by_key(mdns_addr_rank)
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn same_subnet_v4(local: std::net::Ipv4Addr, candidate: std::net::Ipv4Addr, prefixlen: u8) -> bool {
     if prefixlen == 0 || prefixlen > 32 {
         return false;
@@ -947,12 +948,12 @@ fn same_subnet_v4(local: std::net::Ipv4Addr, candidate: std::net::Ipv4Addr, pref
 }
 
 // if-addrs has no reliable cross-platform IPv6 prefix length; same-/64 is the closest cheap proxy.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn same_subnet_v6(local: std::net::Ipv6Addr, candidate: std::net::Ipv6Addr) -> bool {
     local.segments()[..4] == candidate.segments()[..4]
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn shares_subnet_with_any_interface(candidate: &std::net::IpAddr, interfaces: &[if_addrs::Interface]) -> bool {
     interfaces.iter().any(|interface| match (&interface.addr, candidate) {
         (if_addrs::IfAddr::V4(local), std::net::IpAddr::V4(candidate_v4)) => {
@@ -966,13 +967,13 @@ fn shares_subnet_with_any_interface(candidate: &std::net::IpAddr, interfaces: &[
 }
 
 /// (same-subnet bonus, address-family rank): a subnet match outranks private-v4 > public-v4 > v6.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn discovery_addr_rank(ip: &std::net::IpAddr, interfaces: &[if_addrs::Interface]) -> (u8, u8) {
     (u8::from(shares_subnet_with_any_interface(ip, interfaces)), mdns_addr_rank(ip))
 }
 
 /// Ranks a resolved service's usable addresses, best first.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn rank_discovered_hosts(
     addresses: impl IntoIterator<Item = std::net::IpAddr>,
     interfaces: &[if_addrs::Interface],
@@ -982,7 +983,7 @@ fn rank_discovered_hosts(
     ranked
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn discovery_identity_key(name: &str, port: u16, id: Option<&str>) -> String {
     match id {
         Some(id) if !id.is_empty() => format!("id:{id}"),
@@ -990,7 +991,7 @@ fn discovery_identity_key(name: &str, port: u16, id: Option<&str>) -> String {
     }
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 struct ResolvedEvent {
     name: String,
     port: u16,
@@ -998,7 +999,7 @@ struct ResolvedEvent {
     addresses: Vec<std::net::IpAddr>,
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 struct DiscoveryEntry {
     name: String,
     port: u16,
@@ -1006,14 +1007,14 @@ struct DiscoveryEntry {
     addresses: std::collections::HashSet<std::net::IpAddr>,
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn join_ips(ips: &[std::net::IpAddr]) -> String {
     ips.iter().map(|ip| ip.to_string()).collect::<Vec<_>>().join(", ")
 }
 
 /// Merges resolved-service events into one entry per identity (mDNS id when present, else
 /// name+port), unioning addresses across repeat events for the same identity.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn merge_resolved_events(
     events: Vec<ResolvedEvent>,
     interfaces: &[if_addrs::Interface],
@@ -1057,22 +1058,22 @@ fn merge_resolved_events(
 }
 
 // ---------------------------------------------------------------------------
-// Unicast subnet sweep fallback (VPN split-tunnels and multicast-hostile LANs kill mDNS)
+// Unicast subnet sweep fallback (VPN split-tunnels and multicast-hostile LANs kill mDNS; also Android's only fallback below NsdManager)
 // ---------------------------------------------------------------------------
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 const SWEEP_CANDIDATE_CAP: usize = 1024;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 const SWEEP_BUDGET: Duration = Duration::from_millis(4000);
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 const SWEEP_CONNECT_TIMEOUT: Duration = Duration::from_millis(400);
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 const SWEEP_REQUEST_TIMEOUT: Duration = Duration::from_millis(1500);
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 const SWEEP_CONCURRENCY: usize = 128;
 
 /// Hosts in one interface's subnet, clamped to /24 max width, excluding network/broadcast/self.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn sweep_hosts_for_interface(ip: std::net::Ipv4Addr, netmask: std::net::Ipv4Addr) -> Vec<std::net::Ipv4Addr> {
     if ip.is_loopback() || ip.is_link_local() || !ip.is_private() {
         return Vec::new();
@@ -1099,7 +1100,7 @@ fn sweep_hosts_for_interface(ip: std::net::Ipv4Addr, netmask: std::net::Ipv4Addr
 }
 
 /// Candidate hosts to unicast-probe, deduped across interfaces and capped.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn sweep_candidates_v4(interface_subnets: &[(std::net::Ipv4Addr, std::net::Ipv4Addr)]) -> Vec<std::net::Ipv4Addr> {
     let mut seen = std::collections::HashSet::new();
     let mut candidates = Vec::new();
@@ -1116,7 +1117,7 @@ fn sweep_candidates_v4(interface_subnets: &[(std::net::Ipv4Addr, std::net::Ipv4A
     candidates
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn sweep_candidates_from_interfaces(interfaces: &[if_addrs::Interface]) -> Vec<std::net::Ipv4Addr> {
     let subnets: Vec<(std::net::Ipv4Addr, std::net::Ipv4Addr)> = interfaces
         .iter()
@@ -1128,7 +1129,7 @@ fn sweep_candidates_from_interfaces(interfaces: &[if_addrs::Interface]) -> Vec<s
     sweep_candidates_v4(&subnets)
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 #[derive(Debug, Deserialize)]
 struct SweepInfoResponse {
     v: u32,
@@ -1138,7 +1139,7 @@ struct SweepInfoResponse {
     name: Option<String>,
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 async fn probe_sweep_host(client: reqwest::Client, ip: std::net::Ipv4Addr, port: u16) -> Option<ResolvedEvent> {
     let connect = tokio::time::timeout(SWEEP_CONNECT_TIMEOUT, tokio::net::TcpStream::connect((ip, port))).await;
     if !matches!(connect, Ok(Ok(_))) {
@@ -1164,7 +1165,7 @@ async fn probe_sweep_host(client: reqwest::Client, ip: std::net::Ipv4Addr, port:
 }
 
 /// Probes every candidate for a bare /info, since multicast is blocked but unicast still reaches it.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 async fn sweep_subnets(interfaces: &[if_addrs::Interface]) -> Vec<DiscoveredReceiver> {
     let candidates = sweep_candidates_from_interfaces(interfaces);
     if candidates.is_empty() {
@@ -1276,7 +1277,19 @@ pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<Discovered
     Ok(discovered)
 }
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+// Android advertises/discovers via NsdManager, not Rust mDNS; the sweep is its only fallback.
+// timeout_ms is ignored here - the subnet sweep runs its own fixed budget.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn receiver_discover(_timeout_ms: Option<u64>) -> Result<Vec<DiscoveredReceiver>, String> {
+    log::info!("[receiver] discover sweeping subnets (android)");
+    let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
+    let discovered = sweep_subnets(&interfaces).await;
+    log::info!("[receiver] discover complete, found={}", discovered.len());
+    Ok(discovered)
+}
+
+#[cfg(target_os = "ios")]
 #[tauri::command]
 pub async fn receiver_discover(_timeout_ms: Option<u64>) -> Result<Vec<DiscoveredReceiver>, String> {
     Ok(Vec::new())

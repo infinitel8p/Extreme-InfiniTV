@@ -75,6 +75,27 @@ function identityKey(receiver: DiscoveredReceiver): string {
   return receiver.id ? `id:${receiver.id}` : `${receiver.host}:${receiver.port}`
 }
 
+/** How long to give NSD a head start before racing it against the Rust subnet sweep. */
+const SWEEP_GRACE_PERIOD_MS = 1200
+
+/** Shared in-flight Rust subnet sweep so a Rescan (or a second scanner) never launches a duplicate. */
+let inFlightSweep: Promise<DiscoveredReceiver[]> | null = null
+
+function sweepSubnet(): Promise<DiscoveredReceiver[]> {
+  if (!inFlightSweep) {
+    inFlightSweep = (async () => {
+      const { invoke } = await import("@tauri-apps/api/core")
+      const swept = await invoke<DiscoveredReceiver[]>("receiver_discover", {})
+      return swept.map(normalizeDiscovered)
+    })()
+    const clearInFlightSweepSlot = () => {
+      inFlightSweep = null
+    }
+    inFlightSweep.then(clearInFlightSweepSlot, clearInFlightSweepSlot)
+  }
+  return inFlightSweep
+}
+
 /** Starts discovery, returns a cancel function. Android polls AndroidNsd; desktop probes mDNS once via Rust. */
 export function discoverReceivers(
   onFound: (list: DiscoveredReceiver[]) => void,
@@ -96,21 +117,44 @@ export function discoverReceivers(
       } catch {}
     }
 
-    const poll = setInterval(() => {
-      if (cancelled) return
-      const drained = parseDiscovered(window.AndroidNsd?.drainDiscovered?.() ?? "[]")
+    const mergeAndReport = (receivers: DiscoveredReceiver[]) => {
       let changed = false
-      for (const receiver of drained) {
+      for (const receiver of receivers) {
         const key = identityKey(receiver)
         if (!found.has(key)) changed = true
         found.set(key, receiver)
       }
       if (changed) onFound([...found.values()])
+    }
+
+    const poll = setInterval(() => {
+      if (cancelled) return
+      mergeAndReport(parseDiscovered(window.AndroidNsd?.drainDiscovered?.() ?? "[]"))
     }, 700)
+
+    // NSD needs multicast; race it against the Rust unicast subnet sweep instead of waiting out
+    // the whole NSD window first, so a silent network doesn't cost timeoutMs + the sweep budget.
+    let sweepStarted = false
+    const startSweepIfNeeded = () => {
+      if (sweepStarted || found.size > 0 || !isTauriRuntime()) return
+      sweepStarted = true
+      log.info("[xt:receiver-discovery] android-nsd found nothing yet, starting subnet sweep")
+      sweepSubnet()
+        .then((swept) => {
+          if (cancelled) return
+          mergeAndReport(swept)
+        })
+        .catch((err) => {
+          log.warn("[xt:receiver-discovery] sweep fallback failed:", err)
+        })
+    }
+    const graceTimer = setTimeout(startSweepIfNeeded, SWEEP_GRACE_PERIOD_MS)
 
     const stopTimer = setTimeout(() => {
       clearInterval(poll)
+      clearTimeout(graceTimer)
       stopDiscovery()
+      if (cancelled) return
       log.info(`[xt:receiver-discovery] scan complete, found=${found.size}`)
       onDone?.(null)
     }, timeoutMs)
@@ -118,6 +162,7 @@ export function discoverReceivers(
     return () => {
       cancelled = true
       clearInterval(poll)
+      clearTimeout(graceTimer)
       clearTimeout(stopTimer)
       stopDiscovery()
     }

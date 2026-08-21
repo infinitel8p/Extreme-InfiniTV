@@ -61,10 +61,84 @@ async function init(): Promise<void> {
   const noDevicesEl = document.getElementById("receiver-no-devices")
   const screensaverHintRow = document.getElementById("settings-receiver-screensaver-hint")
   const screensaverOpenBtn = document.getElementById("settings-receiver-screensaver-open")
+  const firewallWarningRow = document.getElementById("receiver-firewall-warning")
+  const firewallWarningTitle = document.getElementById("receiver-firewall-warning-title")
+  const firewallWarningBody = document.getElementById("receiver-firewall-warning-body")
+  const firewallAllowBtn = document.getElementById("receiver-firewall-allow-btn")
 
   let rawPairCode = ""
   let codeRevealed = false
   let receiverEnabled = false
+  let firewallStatusChecked = false
+  let firewallWatchActive = false
+  let firewallRecheckTimeoutId: ReturnType<typeof setTimeout> | undefined
+
+  const isWindowsDesktop = (navigator.userAgent || "").includes("Windows")
+  // The Windows Defender consent prompt triggered by receiver_start may still be
+  // unanswered right after it resolves; give the user a few seconds to respond
+  // before the first automatic re-check.
+  const FIREWALL_RECHECK_DELAY_MS = 4000
+
+  function renderFirewallWarning(status: string): void {
+    if (!firewallWarningRow) return
+    const isBlocked = status === "blocked"
+    firewallWarningRow.classList.toggle("hidden", !isBlocked && status !== "missing")
+    if (firewallWarningTitle) {
+      firewallWarningTitle.textContent = t(
+        isBlocked ? "settings.receiver.firewall.blockedTitle" : "settings.receiver.firewall.title"
+      )
+    }
+    if (firewallWarningBody) {
+      firewallWarningBody.textContent = t(
+        isBlocked ? "settings.receiver.firewall.blockedBody" : "settings.receiver.firewall.body"
+      )
+    }
+  }
+
+  function onFirewallRecheckTrigger(): void {
+    if (!firewallWatchActive || document.visibilityState === "hidden") return
+    void refreshFirewallStatus()
+  }
+
+  // Stops re-checking once the status resolves to "allowed" or the receiver is disabled.
+  function stopFirewallWatch(): void {
+    if (!firewallWatchActive) return
+    firewallWatchActive = false
+    if (firewallRecheckTimeoutId !== undefined) {
+      clearTimeout(firewallRecheckTimeoutId)
+      firewallRecheckTimeoutId = undefined
+    }
+    window.removeEventListener("focus", onFirewallRecheckTrigger)
+    document.removeEventListener("visibilitychange", onFirewallRecheckTrigger)
+  }
+
+  // Covers the race with the Windows Defender prompt: a delayed re-check plus
+  // re-checks on window focus / tab visibility while the warning is still showing.
+  function startFirewallWatch(): void {
+    if (firewallWatchActive) return
+    firewallWatchActive = true
+    window.addEventListener("focus", onFirewallRecheckTrigger)
+    document.addEventListener("visibilitychange", onFirewallRecheckTrigger)
+    firewallRecheckTimeoutId = setTimeout(() => {
+      firewallRecheckTimeoutId = undefined
+      void refreshFirewallStatus()
+    }, FIREWALL_RECHECK_DELAY_MS)
+  }
+
+  async function refreshFirewallStatus(): Promise<void> {
+    if (!firewallWarningRow || !isWindowsDesktop) return
+    try {
+      const status = await invoke<string>("receiver_firewall_status")
+      renderFirewallWarning(status)
+      if (status === "allowed") {
+        stopFirewallWatch()
+      } else {
+        startFirewallWatch()
+      }
+    } catch (err) {
+      log.warn("[settings:receiver] receiver_firewall_status failed:", err)
+    }
+  }
 
   function syncSummaryLines(): void {
     const showStatus = receiverEnabled && !(card?.open ?? false)
@@ -199,7 +273,17 @@ async function init(): Promise<void> {
 
     renderDiscoverability(status)
 
-    if (!enabled) return
+    if (!enabled) {
+      firewallStatusChecked = false
+      stopFirewallWatch()
+      firewallWarningRow?.classList.add("hidden")
+      return
+    }
+
+    if (isWindowsDesktop && !firewallStatusChecked) {
+      firewallStatusChecked = true
+      void refreshFirewallStatus()
+    }
 
     if (statusLineText) {
       statusLineText.textContent = t("settings.receiver.statusVisibleAs", { name: status.name })
@@ -289,6 +373,15 @@ async function init(): Promise<void> {
 
   openScreenBtn?.addEventListener("click", () => {
     location.href = "/receiver"
+  })
+
+  firewallAllowBtn?.addEventListener("click", () => {
+    invoke<string>("receiver_firewall_allow")
+      .then((status) => {
+        renderFirewallWarning(status)
+        if (status === "allowed") toastSuccess(t("settings.receiver.firewall.allowed"))
+      })
+      .catch((err) => log.warn("[settings:receiver] receiver_firewall_allow failed:", err))
   })
 
   try {

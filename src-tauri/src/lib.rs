@@ -11,6 +11,9 @@ mod discord;
 mod external_player;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod firewall;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod hevc_extension;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -194,6 +197,8 @@ pub fn run() {
             external_player::launch_external_player,
             external_player::stop_external_player,
             external_player::sandbox_runtime,
+            firewall::receiver_firewall_status,
+            firewall::receiver_firewall_allow,
             hevc_extension::install_appx_package,
             hevc_extension::is_store_build,
             receiver::receiver_start,

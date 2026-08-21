@@ -1,15 +1,18 @@
 // TV receiver mode: sender-side device store, session store, and HTTP client.
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { toast } from "@/scripts/lib/toast.js"
+import { confirmDialog } from "@/scripts/lib/confirm-dialog.js"
 import { t } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
 import { buildMovieStreamUrl } from "@/scripts/lib/stream-urls.ts"
+import { getActivePlaylistIdSync, getConnectionLimitWarning } from "@/scripts/lib/account-info.js"
 import {
   isCastableSrc,
   buildVodCastDescriptor,
   buildLiveCastDescriptor,
   type CastDescriptorV1,
 } from "@/scripts/lib/tv-cast-descriptor"
+import { discoverReceivers, type DiscoveredReceiver } from "@/scripts/lib/receiver-discovery.ts"
 
 export interface TvDevice {
   id: string
@@ -27,6 +30,9 @@ export const TV_DEVICES_EVENT = "xt:tv-devices-changed"
 
 const DEVICES_STORAGE_KEY = "xt_tv_devices"
 const SESSION_STORAGE_KEY = "xt_cast_session"
+/** localStorage mirror of the session, so a still-playing receiver can be found again after an app relaunch. */
+const SESSION_BACKUP_STORAGE_KEY = "xt_cast_session_backup_v1"
+const SESSION_BACKUP_MAX_AGE_MS = 12 * 60 * 60 * 1000
 
 function readLocalStorage(key: string): string | null {
   try {
@@ -40,6 +46,13 @@ function writeLocalStorage(key: string, value: string): void {
   try {
     if (typeof localStorage === "undefined") return
     localStorage.setItem(key, value)
+  } catch {}
+}
+
+function removeLocalStorage(key: string): void {
+  try {
+    if (typeof localStorage === "undefined") return
+    localStorage.removeItem(key)
   } catch {}
 }
 
@@ -199,8 +212,26 @@ export function getCastSession(): CastSession | null {
   }
 }
 
+export interface CastSessionBackup {
+  session: CastSession
+  savedAt: number
+}
+
+function isCastSessionBackup(value: unknown): value is CastSessionBackup {
+  if (!value || typeof value !== "object") return false
+  const backup = value as Record<string, unknown>
+  return typeof backup.savedAt === "number" && isCastSession(backup.session)
+}
+
+/** Pure shape + expiry gate for a relaunch-reattach candidate; also narrows the parsed JSON. */
+export function isReattachableBackup(value: unknown, nowMs: number): value is CastSessionBackup {
+  if (!isCastSessionBackup(value)) return false
+  return nowMs - value.savedAt < SESSION_BACKUP_MAX_AGE_MS
+}
+
 export function setCastSession(session: CastSession): void {
   writeSessionStorage(SESSION_STORAGE_KEY, JSON.stringify(session))
+  writeLocalStorage(SESSION_BACKUP_STORAGE_KEY, JSON.stringify({ session, savedAt: Date.now() }))
   dispatchDocumentEvent(CAST_SESSION_EVENT)
 }
 
@@ -213,6 +244,7 @@ export function updateCastSession(patch: Partial<CastSession>): void {
 export function clearCastSession(): void {
   castGeneration += 1
   writeSessionStorage(SESSION_STORAGE_KEY, null)
+  removeLocalStorage(SESSION_BACKUP_STORAGE_KEY)
   dispatchDocumentEvent(CAST_SESSION_EVENT)
 }
 
@@ -698,6 +730,141 @@ export async function fetchCastStateWithFallback(device: TvDevice): Promise<Cast
   }
 }
 
+/** Distinguishes an actively-running receiver session (worth reattaching to) from idle or errored. */
+export function isActivelyPlayingState(state: CastState): boolean {
+  return state.state === "playing" || state.state === "paused"
+}
+
+/** Matches a rediscovered receiver to a paired device: by receiver id when known, else by name. */
+export function matchDiscoveredReceiver(
+  device: TvDevice,
+  discovered: DiscoveredReceiver[]
+): DiscoveredReceiver | null {
+  const byId = discovered.find((receiver) => receiver.id && receiver.id === device.id)
+  if (byId) return byId
+  return discovered.find((receiver) => receiver.name === device.name) ?? null
+}
+
+/** Builds an in-memory candidate only; the caller persists it once a probe confirms the identity. */
+function applyDiscoveredHost(device: TvDevice, discovered: DiscoveredReceiver): TvDevice {
+  const hosts = discovered.hosts.length ? discovered.hosts : [discovered.host]
+  return { ...device, host: hosts[0], port: discovered.port, hosts, pinnedHostIndex: 0 }
+}
+
+function discoverReceiversOnce(timeoutMs: number): Promise<DiscoveredReceiver[]> {
+  return new Promise((resolve) => {
+    let latest: DiscoveredReceiver[] = []
+    discoverReceivers(
+      (list) => {
+        latest = list
+      },
+      timeoutMs,
+      () => resolve(latest)
+    )
+  })
+}
+
+/** Probes the paired device's own hosts, picking up any pinnedHostIndex the host-fallback walk just persisted. */
+async function probeDeviceForReattach(device: TvDevice): Promise<{ state: CastState; device: TvDevice } | null> {
+  const state = await fetchCastStateWithFallback(device)
+  if (!state) return null
+  const pinnedDevice = listTvDevices().find((entry) => entry.id === device.id) ?? device
+  return { state, device: pinnedDevice }
+}
+
+/**
+ * Probes a rediscovered host without touching storage. Answering with a valid state at all (even idle)
+ * already proves identity, since /state requires the paired device's own key - the caller persists the
+ * candidate only once this succeeds.
+ */
+async function probeDiscoveredHostForReattach(
+  pairedDevice: TvDevice,
+  discovered: DiscoveredReceiver
+): Promise<{ state: CastState; device: TvDevice } | null> {
+  const candidate = applyDiscoveredHost(pairedDevice, discovered)
+  const state = await fetchCastStateWithFallback(candidate)
+  if (!state) return null
+  return { state, device: candidate }
+}
+
+/** True when a still-fresh backup is on disk, i.e. a later reattach attempt is worth making. */
+export function hasReattachableCastBackup(): boolean {
+  const rawBackup = readLocalStorage(SESSION_BACKUP_STORAGE_KEY)
+  if (!rawBackup) return false
+  try {
+    return isReattachableBackup(JSON.parse(rawBackup), Date.now())
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Relaunch-time rediscovery: rebuilds an orphaned cast session from the localStorage backup, probing
+ * (and, if unreachable, rediscovering) the receiver so a still-playing TV doesn't lose its pill for good.
+ * The backup is only removed on a conclusive negative (expired, unpaired, or a receiver that answered but
+ * isn't playing our session); a merely unreachable receiver keeps the backup so a later retry can succeed.
+ */
+export async function tryReattachCastSession(): Promise<CastSession | null> {
+  if (getCastSession()) return null
+
+  const rawBackup = readLocalStorage(SESSION_BACKUP_STORAGE_KEY)
+  if (!rawBackup) return null
+
+  let parsedBackup: unknown
+  try {
+    parsedBackup = JSON.parse(rawBackup)
+  } catch {
+    removeLocalStorage(SESSION_BACKUP_STORAGE_KEY)
+    return null
+  }
+  if (!isReattachableBackup(parsedBackup, Date.now())) {
+    removeLocalStorage(SESSION_BACKUP_STORAGE_KEY)
+    return null
+  }
+
+  const pairedDevice = listTvDevices().find((entry) => entry.id === parsedBackup.session.deviceId)
+  if (!pairedDevice) {
+    removeLocalStorage(SESSION_BACKUP_STORAGE_KEY)
+    return null
+  }
+
+  let probe = await probeDeviceForReattach(pairedDevice)
+  if (!probe) {
+    const discovered = await discoverReceiversOnce(3000)
+    const match = matchDiscoveredReceiver(pairedDevice, discovered)
+    if (match) {
+      probe = await probeDiscoveredHostForReattach(pairedDevice, match)
+      if (probe) saveTvDevice(probe.device)
+    }
+  }
+
+  // Transient: the receiver simply didn't answer this time - keep the backup for a later retry.
+  if (!probe) return null
+
+  // Conclusive: the receiver answered but isn't playing our session anymore.
+  if (!isActivelyPlayingState(probe.state)) {
+    removeLocalStorage(SESSION_BACKUP_STORAGE_KEY)
+    return null
+  }
+
+  const restoredSession: CastSession = {
+    ...parsedBackup.session,
+    deviceName: probe.device.name,
+    host: deviceHostOrder(probe.device)[0],
+    port: probe.device.port,
+    key: probe.device.key,
+    hosts: probe.device.hosts,
+    pinnedHostIndex: probe.device.pinnedHostIndex,
+    // Keep a dismissed session dismissed: it should reattach for accurate state, not silently re-route.
+    dismissed: parsedBackup.session.dismissed === true,
+  }
+  // The probes above can take several seconds - if the user (or another reattach)
+  // started a session in the meantime, leave it alone instead of clobbering it.
+  if (getCastSession()) return null
+  setCastSession(restoredSession)
+  return restoredSession
+}
+
 /** Fetches the receiver's own log tail for diagnostics; null on any failure. */
 export async function fetchReceiverLogs(device: TvDevice): Promise<string | null> {
   try {
@@ -828,8 +995,15 @@ export function startCastStatePolling(
   }
 }
 
+/** Sentinel a buildDescriptor callback returns when a newer request superseded it; distinct from a genuine build failure. */
+export const CAST_SUPERSEDED = "cast-superseded"
+
 export interface PlayOnTvOptions {
-  buildDescriptor: () => Promise<CastDescriptorV1 | null> | CastDescriptorV1 | null
+  buildDescriptor: () =>
+    | Promise<CastDescriptorV1 | null | typeof CAST_SUPERSEDED>
+    | CastDescriptorV1
+    | null
+    | typeof CAST_SUPERSEDED
   /** Return false when nothing was actually released, to skip the provider-slot wait. */
   stopLocal?: () => boolean | void
   contentTitle?: string | null
@@ -838,6 +1012,8 @@ export interface PlayOnTvOptions {
   liveContext?: CastSession["liveContext"]
   seriesContext?: CastSession["seriesContext"]
   vodContext?: CastSession["vodContext"]
+  /** True for live/catch-up sources that hold a provider connection open, so the connection-limit gate applies. */
+  holdsProviderConnection?: boolean
 }
 
 /** Reconstructs a TvDevice from an active cast session, for routing without the picker. */
@@ -867,8 +1043,60 @@ export function isCastRoutingActive(): boolean {
   return !!session && !session.dismissed
 }
 
-async function castToDevice(device: TvDevice, options: PlayOnTvOptions): Promise<boolean> {
+type ConnLimitWarning = { level: "ok" | "warn" | "crit"; currentCons: number; maxCons: number } | null
+
+export type ConnLimitGateAction = "block-confirm" | "toast" | "proceed"
+
+/** Pure decision for the connection-limit gate ahead of an initial live cast handoff. */
+export function decideConnLimitGateAction(warning: ConnLimitWarning): ConnLimitGateAction {
+  if (!warning) return "proceed"
+  if (warning.level === "crit") return "block-confirm"
+  if (warning.level === "warn") return "toast"
+  return "proceed"
+}
+
+/** Warns or blocks before a live handoff briefly holds two provider connections; false = abort the cast. */
+async function gateConnectionLimitForLiveCast(): Promise<boolean> {
+  const playlistId = getActivePlaylistIdSync()
+  const warning = playlistId ? getConnectionLimitWarning(playlistId) : null
+  const action = decideConnLimitGateAction(warning)
+  if (action === "proceed") return true
+
+  const params = { current: String(warning!.currentCons), max: String(warning!.maxCons) }
+  if (action === "toast") {
+    toast({ title: t("cast.connLimit.toastWarn", params), variant: "warn" })
+    return true
+  }
+
+  return confirmDialog({
+    title: t("cast.connLimit.confirmTitle"),
+    message: t("cast.connLimit.confirmBody", params),
+    confirmLabel: t("cast.connLimit.confirmAction"),
+  })
+}
+
+/** A cast session already running on this device means the receiver will just swap streams, not add a connection. */
+function isAlreadyCastingToDevice(device: TvDevice): boolean {
+  const session = getCastSession()
+  return !!session && !session.dismissed && session.deviceId === device.id
+}
+
+async function castToDevice(
+  device: TvDevice,
+  options: PlayOnTvOptions,
+  skipConnLimitGate = false
+): Promise<boolean> {
+  if (
+    !skipConnLimitGate &&
+    options.holdsProviderConnection &&
+    !isAlreadyCastingToDevice(device) &&
+    !(await gateConnectionLimitForLiveCast())
+  ) {
+    return false
+  }
+
   const descriptor = await options.buildDescriptor()
+  if (descriptor === CAST_SUPERSEDED) return false
   if (!descriptor) {
     toast({ title: t("cast.toast.failed", { device: device.name }) })
     return false
@@ -918,7 +1146,8 @@ async function repairAndCast(device: TvDevice, options: PlayOnTvOptions): Promis
     prefillPort: device.port,
   })
   if (!repaired) return false
-  return castToDevice(repaired, options)
+  // The original attempt already gated (and the user may have confirmed) - don't ask twice for one cast.
+  return castToDevice(repaired, options, true)
 }
 
 async function repairAndConnect(device: TvDevice): Promise<boolean> {
@@ -1042,6 +1271,7 @@ export function castLiveChannelToTv(params: CastLiveChannelParams): () => void {
       contentHref: params.contentHref ?? (channelId ? `/livetv?channel=${channelId}` : "/livetv"),
       stopLocal: params.stopLocal,
       liveContext: params.liveContext,
+      holdsProviderConnection: true,
       buildDescriptor: () => {
         const src = params.buildSrc()
         if (!src || !isCastableSrc(src)) return null

@@ -81,6 +81,36 @@ export function buildVodCastDescriptor(input: BuildVodCastDescriptorInput): Cast
   return descriptor
 }
 
+interface BuildCatchupCastDescriptorInput {
+  src: string
+  mime: string
+  title: string
+  logo?: string
+  headers?: CastDescriptorV1["headers"]
+  resumeSeconds?: number
+  durationSeconds?: number
+  timelineOffsetSeconds?: number
+}
+
+export function buildCatchupCastDescriptor(input: BuildCatchupCastDescriptorInput): CastDescriptorV1 {
+  const descriptor: CastDescriptorV1 = {
+    v: 1,
+    src: input.src,
+    mime: input.mime,
+    isLive: false,
+    title: input.title,
+  }
+  if (input.logo !== undefined) descriptor.logo = input.logo
+  if (input.headers !== undefined) descriptor.headers = input.headers
+  const resumeSeconds = clampNonNegativeFinite(input.resumeSeconds)
+  if (resumeSeconds !== undefined) descriptor.resumeSeconds = resumeSeconds
+  const durationSeconds = clampNonNegativeFinite(input.durationSeconds)
+  if (durationSeconds !== undefined) descriptor.durationSeconds = durationSeconds
+  const timelineOffsetSeconds = clampNonNegativeFinite(input.timelineOffsetSeconds)
+  if (timelineOffsetSeconds !== undefined) descriptor.timelineOffsetSeconds = timelineOffsetSeconds
+  return descriptor
+}
+
 function pickKnownStringOrNullFields<Key extends string>(
   value: unknown,
   keys: readonly Key[]

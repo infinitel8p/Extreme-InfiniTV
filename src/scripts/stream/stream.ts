@@ -133,6 +133,11 @@ import {
 } from "@/scripts/lib/catchup.ts"
 import { resolveCatchupSrc } from "@/scripts/lib/catchup-resolve.ts"
 import {
+  computeCatchupTimeline,
+  catchupMimeForKindHint,
+  resolveCatchupCastDescriptor,
+} from "@/scripts/lib/tv-cast-catchup.ts"
+import {
   clampSeekTarget,
   adjustTargetForGranularity,
   shouldIgnoreSeek,
@@ -146,7 +151,7 @@ import { decodedFrameCount, droppedFrameCount } from "@/scripts/lib/player-telem
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { isAutomaticRetuneReason } from "@/scripts/lib/stream-health.ts"
 import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
-import { isCastRoutingActive, routePlayToCast, getCastSession, buildLiveCastContext } from "@/scripts/lib/tv-cast.ts"
+import { isCastRoutingActive, routePlayToCast, buildLiveCastContext, CAST_SUPERSEDED } from "@/scripts/lib/tv-cast.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 // One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
@@ -3825,6 +3830,7 @@ async function play(streamId, name, reason = "user") {
       quiet: true,
       stopLocal: releaseLocalPlaybackForHandoff,
       liveContext: liveContextForChannelId(streamId),
+      holdsProviderConnection: true,
       buildDescriptor: async () => {
         const { isCastableSrc, buildLiveCastDescriptor } = await import("@/scripts/lib/tv-cast-descriptor")
         const liveSrc = targetChannel ? buildChannelStreamUrl(targetChannel) : null
@@ -4283,17 +4289,6 @@ function resolveProgrammeWindowAt(channel, atUtcMs) {
 /** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
 async function playCatchup(channel, opts) {
   if (!currentEl || !channel || !activePlaylistId) return false
-  if (isCastRoutingActive()) {
-    const deviceName = getCastSession()?.deviceName || ""
-    toast({ title: t("cast.toast.localPlaybackBlocked", { device: deviceName }) })
-    return false
-  }
-  // Catch-up remounts the <video> without a quality chip - detach the
-  // live one so its listeners don't leak onto a removed element.
-  if (qualityChipDetach) {
-    qualityChipDetach()
-    qualityChipDetach = null
-  }
   if (channel.unresolved) {
     toastError(t("stream.error.cantPlay", { channel: channel.name || `#${channel.id}` }), {
       description: t("stream.error.checkConnection"),
@@ -4311,6 +4306,51 @@ async function playCatchup(channel, opts) {
   const catchupId = opts?.catchupId || resolveProgrammeCatchupIdAt(channel, startUtcMs)
   let title = opts?.title || ""
   if (!Number.isFinite(startUtcMs) || !Number.isFinite(stopUtcMs) || stopUtcMs <= startUtcMs) return false
+  if (!title && kind === "timeshift") title = resolveProgrammeTitleAt(channel, startUtcMs)
+
+  // Shared with the local path below - only one branch runs per call, so a single
+  // increment here keeps the counter coherent between cast and local requests.
+  const requestSeq = ++catchupRequestSeq
+
+  if (isCastRoutingActive()) {
+    const routed = await routePlayToCast({
+      contentTitle: title || channel.name || null,
+      quiet: true,
+      stopLocal: releaseLocalPlaybackForHandoff,
+      liveContext: liveContextForChannelId(channel.id),
+      holdsProviderConnection: true,
+      buildDescriptor: async () => {
+        const descriptor = await resolveCatchupCastDescriptor({
+          playlistId: activePlaylistId,
+          creds,
+          channel,
+          startUtcMs,
+          stopUtcMs,
+          catchupId,
+          kind,
+          timelineStartUtcMs: opts?.timelineStartUtcMs ?? null,
+          timelineStopUtcMs: opts?.timelineStopUtcMs ?? null,
+          timeshiftAnchorWindow: kind === "timeshift" ? resolveProgrammeWindowAt(channel, startUtcMs) : null,
+          seekSeconds,
+          title: title || channel.name || "",
+          logo: channel.logo || undefined,
+          headers: streamHeadersById.get(channel.id) || undefined,
+        })
+        // A newer play()/playCatchup() call took over while the descriptor was resolving - superseded, not failed.
+        if (requestSeq !== catchupRequestSeq) return CAST_SUPERSEDED
+        return descriptor
+      },
+    })
+    if (routed && requestSeq === catchupRequestSeq) setNowPlaying(channel.id)
+    return routed
+  }
+
+  // Catch-up remounts the <video> without a quality chip - detach the
+  // live one so its listeners don't leak onto a removed element.
+  if (qualityChipDetach) {
+    qualityChipDetach()
+    qualityChipDetach = null
+  }
 
   const backend = getPlayerBackend()
   if (backend === "mpv" || backend === "vlc") {
@@ -4335,7 +4375,6 @@ async function playCatchup(channel, opts) {
 
   // Resolving the archive URL can take several seconds (probing candidate
   // wire formats) - give the same tuning feedback the live path shows.
-  const myRequest = ++catchupRequestSeq
   showTuningOverlay(channel.logo ? safeHttpUrl(channel.logo) : null, CATCHUP_TUNING_MAX_MS)
 
   const resolution = await resolveCatchupSrc(activePlaylistId, creds, {
@@ -4346,7 +4385,7 @@ async function playCatchup(channel, opts) {
   })
   // A newer play()/playCatchup() call has since taken over - bail without
   // touching whatever it's already showing.
-  if (myRequest !== catchupRequestSeq) {
+  if (requestSeq !== catchupRequestSeq) {
     return false
   }
   if (!resolution) {
@@ -4355,25 +4394,28 @@ async function playCatchup(channel, opts) {
     return false
   }
 
-  if (!title && kind === "timeshift") title = resolveProgrammeTitleAt(channel, startUtcMs)
-  const mountedStartUtcMs = resolution.effectiveStartUtcMs
-
-  // Full-programme span (TiviMate-style bar) only for non-terminating streams still mid-broadcast; terminating archives end exactly at the requested stop, so they keep the elapsed-so-far span.
-  let timelineStopUtcMs = opts?.timelineStopUtcMs ?? null
-  if (timelineStopUtcMs == null && !resolution.profile.terminates) {
-    const anchorWindow = kind === "programme" ? { startUtcMs, stopUtcMs } : resolveProgrammeWindowAt(channel, startUtcMs)
-    if (anchorWindow && anchorWindow.stopUtcMs > Date.now()) {
-      if (opts?.timelineStartUtcMs == null) timelineStartUtcMs = anchorWindow.startUtcMs
-      timelineStopUtcMs = anchorWindow.stopUtcMs
-    }
-  }
+  const timeline = computeCatchupTimeline({
+    kind,
+    startUtcMs,
+    stopUtcMs,
+    effectiveStartUtcMs: resolution.effectiveStartUtcMs,
+    timelineStartUtcMs,
+    timelineStartUtcMsWasExplicit: opts?.timelineStartUtcMs != null,
+    timelineStopUtcMsOverride: opts?.timelineStopUtcMs ?? null,
+    profileTerminates: resolution.profile.terminates,
+    timeshiftAnchorWindow: kind === "timeshift" ? resolveProgrammeWindowAt(channel, startUtcMs) : null,
+    seekSeconds,
+  })
+  const mountedStartUtcMs = timeline.mountedStartUtcMs
+  timelineStartUtcMs = timeline.timelineStartUtcMs
+  const timelineStopUtcMs = timeline.timelineStopUtcMs
 
   resetEmptyState()
   document.getElementById("player")?.removeAttribute("hidden")
 
   const player = await ensureEmbeddedPlayer(backend, { liveui: false })
   // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
-  if (myRequest !== catchupRequestSeq) {
+  if (requestSeq !== catchupRequestSeq) {
     return false
   }
   if (!player) {
@@ -4405,7 +4447,7 @@ async function playCatchup(channel, opts) {
   paintEpgSidePanel(channel.id)
 
   const seq = ++playSeq
-  const mime = resolution.kindHint === "hls" ? "application/x-mpegURL" : "video/mp2t"
+  const mime = catchupMimeForKindHint(resolution.kindHint)
   lastPlayContext = {
     streamId: channel.id,
     name: channel.name,
@@ -4435,12 +4477,7 @@ async function playCatchup(channel, opts) {
     catchupEndedHandler = null
   }
 
-  // Mounted stream lands at [offset, span] on the [timelineStart, stop] timeline so position/duration stay 1:1 across remounts.
-  const timelineOffsetSeconds = Math.max(0, (mountedStartUtcMs - timelineStartUtcMs) / 1000)
-  const timelineSpanSeconds = timelineStopUtcMs != null
-    ? Math.max(1, Math.round((timelineStopUtcMs - timelineStartUtcMs) / 1000))
-    : Math.max(1, Math.round((Math.min(stopUtcMs, Date.now()) - timelineStartUtcMs) / 1000))
-  const initialPositionSeconds = Math.max(0, (startUtcMs - timelineStartUtcMs) / 1000 + seekSeconds)
+  const { timelineOffsetSeconds, timelineSpanSeconds, initialPositionSeconds } = timeline
   if (initialPositionSeconds > 0.05) {
     catchupLoadedMetadataHandler = () => {
       markProgrammaticCatchupSeek()
