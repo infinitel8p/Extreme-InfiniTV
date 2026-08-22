@@ -4,6 +4,9 @@
 
 import { isTauri } from "@/scripts/lib/creds.js"
 
+// Matches the resume threshold on the movie/series detail pages.
+const RESUME_MIN_SECONDS = 30
+
 export type HubCardMenuKind = "vod" | "series" | "episode" | "live"
 
 export interface HubCardMenuParams {
@@ -49,6 +52,9 @@ export function hubCardMenu(
 
   function open(anchor: HTMLElement, point: { x: number; y: number } | null) {
     if (destroyed) return
+    const originalKind = current.kind
+    const originalId = current.id
+    const originalSeriesId = current.seriesId
     const target = effectiveTarget(current)
     const playlistId = current.playlistId
     if (!target || !playlistId) return
@@ -60,7 +66,7 @@ export function hubCardMenu(
       let onDownload: (() => void) | undefined
       let onPlayOnTv: (() => void) | undefined
 
-      if (target.kind !== "series") {
+      if (target.kind !== "series" || isTauri) {
         const [{ getState, entryToCreds, loadCreds }, streamUrls, { getCached }] = await Promise.all([
           import("@/scripts/lib/creds.js"),
           import("@/scripts/lib/stream-urls.ts"),
@@ -85,18 +91,28 @@ export function hubCardMenu(
           }
           if (isTauri && hasXtreamCreds) {
             onPlayOnTv = () => {
-              import("@/scripts/lib/tv-cast.ts").then(({ castXtreamVodToTv }) => {
+              void (async () => {
+                const [{ castXtreamVodToTv }, { getProgress }] = await Promise.all([
+                  import("@/scripts/lib/tv-cast.ts"),
+                  import("@/scripts/lib/preferences.js"),
+                ])
+                const saved = getProgress(playlistId, "vod", target.id)
+                const resumable = saved && !saved.completed
                 castXtreamVodToTv({
                   creds,
+                  playlistId,
                   vodId: target.id,
                   containerExt: vodEntry?.container_extension || null,
                   title: target.name || null,
                   logo: target.logo || undefined,
+                  resumeSeconds:
+                    resumable && saved.position > RESUME_MIN_SECONDS ? saved.position : 0,
+                  durationSeconds: resumable && saved.duration > 0 ? saved.duration : undefined,
                 })()
-              })
+              })()
             }
           }
-        } else {
+        } else if (target.kind === "live") {
           const liveList = getCached(playlistId, "live")?.data || []
           const liveEntry = liveList.find((item: any) => String(item?.id) === String(target.id))
           const liveUrl = () => {
@@ -132,6 +148,61 @@ export function hubCardMenu(
                 })()
               })
             }
+          }
+        } else if (isTauri && hasXtreamCreds) {
+          // target.kind === "series"; an episode card casts itself, a series card casts next-up.
+          const seriesId = target.id
+          onPlayOnTv = () => {
+            void (async () => {
+              const [{ castXtreamEpisodeToTv }, { flattenSeriesEpisodes, resolveSeriesNextUp }, { requestSeriesInfo }, { getProgress }] =
+                await Promise.all([
+                  import("@/scripts/lib/tv-cast.ts"),
+                  import("@/scripts/lib/tv-cast-next.ts"),
+                  import("@/scripts/lib/series-seasons.ts"),
+                  import("@/scripts/lib/preferences.js"),
+                ])
+
+              if (originalKind === "episode" && originalSeriesId != null) {
+                const data = await requestSeriesInfo(playlistId, seriesId)
+                const episodeEntry = flattenSeriesEpisodes(data).find(
+                  (episode) => String(episode.id) === String(originalId)
+                )
+                if (!episodeEntry) return
+                const saved = getProgress(playlistId, "episode", originalId)
+                const resumeSeconds =
+                  saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+                castXtreamEpisodeToTv({
+                  creds,
+                  playlistId,
+                  seriesId,
+                  episodeId: episodeEntry.id,
+                  containerExt: episodeEntry.containerExt,
+                  season: episodeEntry.season,
+                  episodeNum: episodeEntry.episodeNum,
+                  title: episodeEntry.title || target.name || null,
+                  logo: target.logo || undefined,
+                  resumeSeconds,
+                  contentHref: `/series/detail?id=${encodeURIComponent(String(seriesId))}`,
+                })()
+                return
+              }
+
+              const nextUp = await resolveSeriesNextUp(playlistId, seriesId)
+              if (!nextUp) return
+              castXtreamEpisodeToTv({
+                creds,
+                playlistId,
+                seriesId,
+                episodeId: nextUp.episodeId,
+                containerExt: nextUp.containerExt,
+                season: nextUp.season,
+                episodeNum: nextUp.episodeNum,
+                title: nextUp.title || target.name || null,
+                logo: target.logo || undefined,
+                resumeSeconds: nextUp.resumeSeconds,
+                contentHref: `/series/detail?id=${encodeURIComponent(String(seriesId))}`,
+              })()
+            })()
           }
         }
       }

@@ -81,6 +81,68 @@ export function flattenSeriesEpisodes(seriesInfo: unknown): SeriesEpisodeEntry[]
   return entries
 }
 
+export interface SeriesNextUpResult {
+  episodeId: string | number
+  containerExt: string | null
+  season: number
+  episodeNum: number
+  title: string | null
+  resumeSeconds: number
+}
+
+function findEpisodeEntry(
+  episodes: SeriesEpisodeEntry[],
+  season: number,
+  episodeNum: number
+): SeriesEpisodeEntry | null {
+  return episodes.find((episode) => episode.season === season && episode.episodeNum === episodeNum) ?? null
+}
+
+function toNextUpResult(entry: SeriesEpisodeEntry, resumeSeconds: number): SeriesNextUpResult {
+  return {
+    episodeId: entry.id,
+    containerExt: entry.containerExt ?? null,
+    season: entry.season,
+    episodeNum: entry.episodeNum,
+    title: entry.title ?? null,
+    resumeSeconds,
+  }
+}
+
+/**
+ * Resolves the episode a series should resume from: the first episode when nothing is watched yet,
+ * the in-progress episode at its saved position, or the episode following a completed one.
+ */
+export async function resolveSeriesNextUp(
+  playlistId: string,
+  seriesId: string | number
+): Promise<SeriesNextUpResult | null> {
+  const { requestSeriesInfo } = await import("@/scripts/lib/series-seasons.js")
+  const data = await requestSeriesInfo(playlistId, seriesId)
+  const episodes = flattenSeriesEpisodes(data)
+  if (!episodes.length) return null
+  const ordered = [...episodes].sort((a, b) => a.season - b.season || a.episodeNum - b.episodeNum)
+
+  const { getSeriesProgressSummary } = await import("@/scripts/lib/preferences.js")
+  const summary = getSeriesProgressSummary(playlistId, seriesId)
+  const lastSeason = summary?.lastSeason
+  const lastEpisodeNum = summary?.lastEpisodeNum
+  if (!summary || !Number.isFinite(lastSeason) || !Number.isFinite(lastEpisodeNum)) {
+    return toNextUpResult(ordered[0], 0)
+  }
+
+  const lastEntry = findEpisodeEntry(ordered, lastSeason as number, lastEpisodeNum as number)
+  if (!summary.lastWatched.completed) {
+    return lastEntry ? toNextUpResult(lastEntry, summary.lastWatched.position || 0) : toNextUpResult(ordered[0], 0)
+  }
+
+  const neighbor = neighborEpisode(ordered, { season: lastSeason as number, episodeNum: lastEpisodeNum as number }, 1)
+  const neighborEntry = neighbor ? findEpisodeEntry(ordered, neighbor.season, neighbor.episodeNum) : null
+  if (neighborEntry) return toNextUpResult(neighborEntry, 0)
+
+  return lastEntry ? toNextUpResult(lastEntry, 0) : toNextUpResult(ordered[0], 0)
+}
+
 async function resolveXtreamCreds(playlistId: string) {
   const { getState, entryToCreds } = await import("@/scripts/lib/creds.js")
   const state = await getState()

@@ -1,4 +1,15 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
+
+const requestSeriesInfoMock = vi.fn()
+vi.mock("@/scripts/lib/series-seasons.js", () => ({
+  requestSeriesInfo: (...args: unknown[]) => requestSeriesInfoMock(...args),
+}))
+
+const getSeriesProgressSummaryMock = vi.fn()
+vi.mock("@/scripts/lib/preferences.js", () => ({
+  getSeriesProgressSummary: (...args: unknown[]) => getSeriesProgressSummaryMock(...args),
+}))
+
 import {
   neighborChannelIndex,
   neighborEpisode,
@@ -6,6 +17,7 @@ import {
   flattenSeriesEpisodes,
   shouldAutoAdvance,
   createAutoAdvanceTracker,
+  resolveSeriesNextUp,
 } from "@/scripts/lib/tv-cast-next"
 
 describe("neighborChannelIndex", () => {
@@ -194,5 +206,100 @@ describe("flattenSeriesEpisodes", () => {
     expect(flattenSeriesEpisodes(null)).toEqual([])
     expect(flattenSeriesEpisodes({})).toEqual([])
     expect(flattenSeriesEpisodes({ episodes: "nope" })).toEqual([])
+  })
+})
+
+describe("resolveSeriesNextUp", () => {
+  const seriesInfo = {
+    episodes: {
+      "1": [
+        { id: 10, episode_num: 1, container_extension: "mp4", title: "Pilot" },
+        { id: 11, episode_num: 2, container_extension: "mp4", title: "Episode Two" },
+      ],
+      "2": [{ id: 20, episode_num: 1, container_extension: "mkv", title: "S2E1" }],
+    },
+  }
+
+  beforeEach(() => {
+    requestSeriesInfoMock.mockReset()
+    getSeriesProgressSummaryMock.mockReset()
+    requestSeriesInfoMock.mockResolvedValue(seriesInfo)
+  })
+
+  it("resolves the first episode at resume 0 when nothing was watched yet", async () => {
+    getSeriesProgressSummaryMock.mockReturnValue(null)
+    const result = await resolveSeriesNextUp("playlist-1", "9")
+    expect(result).toEqual({
+      episodeId: 10,
+      containerExt: "mp4",
+      season: 1,
+      episodeNum: 1,
+      title: "Pilot",
+      resumeSeconds: 0,
+    })
+  })
+
+  it("resumes the last-watched episode at its saved position when not completed", async () => {
+    getSeriesProgressSummaryMock.mockReturnValue({
+      watchedCount: 1,
+      lastWatched: { completed: false, position: 340 },
+      lastEpisodeId: "11",
+      lastSeason: 1,
+      lastEpisodeNum: 2,
+    })
+    const result = await resolveSeriesNextUp("playlist-1", "9")
+    expect(result).toEqual({
+      episodeId: 11,
+      containerExt: "mp4",
+      season: 1,
+      episodeNum: 2,
+      title: "Episode Two",
+      resumeSeconds: 340,
+    })
+  })
+
+  it("advances to the following episode at resume 0 when the last-watched one is completed", async () => {
+    getSeriesProgressSummaryMock.mockReturnValue({
+      watchedCount: 2,
+      lastWatched: { completed: true, position: 1000 },
+      lastEpisodeId: "11",
+      lastSeason: 1,
+      lastEpisodeNum: 2,
+    })
+    const result = await resolveSeriesNextUp("playlist-1", "9")
+    expect(result).toEqual({
+      episodeId: 20,
+      containerExt: "mkv",
+      season: 2,
+      episodeNum: 1,
+      title: "S2E1",
+      resumeSeconds: 0,
+    })
+  })
+
+  it("falls back to the last-watched episode at resume 0 when the series is finished", async () => {
+    getSeriesProgressSummaryMock.mockReturnValue({
+      watchedCount: 3,
+      lastWatched: { completed: true, position: 500 },
+      lastEpisodeId: "20",
+      lastSeason: 2,
+      lastEpisodeNum: 1,
+    })
+    const result = await resolveSeriesNextUp("playlist-1", "9")
+    expect(result).toEqual({
+      episodeId: 20,
+      containerExt: "mkv",
+      season: 2,
+      episodeNum: 1,
+      title: "S2E1",
+      resumeSeconds: 0,
+    })
+  })
+
+  it("returns null when the series has no episodes", async () => {
+    requestSeriesInfoMock.mockResolvedValue({ episodes: {} })
+    getSeriesProgressSummaryMock.mockReturnValue(null)
+    const result = await resolveSeriesNextUp("playlist-1", "9")
+    expect(result).toBeNull()
   })
 })

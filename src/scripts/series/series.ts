@@ -4,6 +4,7 @@ import { log } from "@/scripts/lib/log.js"
 import {
   loadCreds,
   getActiveEntry,
+  isTauri,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
@@ -54,6 +55,8 @@ import {
   observeSeasonCount,
   seasonsLabel,
 } from "@/scripts/lib/series-seasons.ts"
+import { resolveSeriesNextUp } from "@/scripts/lib/tv-cast-next.ts"
+import { castXtreamEpisodeToTv } from "@/scripts/lib/tv-cast.ts"
 import { buildGroupingIndex, pickPreferredEntryId, groupPassesLanguageFilter } from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, languageTagLabel, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
 import { getContentLanguage, getLanguageGroupingEnabled } from "@/scripts/lib/app-settings.js"
@@ -495,6 +498,28 @@ function makeCard(group, idx) {
             window.location.href = `/series/detail?id=${encodeURIComponent(entry.id)}`
           },
           // omit single stream URL or download for series
+          onPlayOnTv: isTauri && creds.host && creds.user && creds.pass
+            ? () => {
+                void (async () => {
+                  if (!activePlaylistId) return
+                  const nextUp = await resolveSeriesNextUp(activePlaylistId, entry.id)
+                  if (!nextUp) return
+                  castXtreamEpisodeToTv({
+                    creds,
+                    playlistId: activePlaylistId,
+                    seriesId: entry.id,
+                    episodeId: nextUp.episodeId,
+                    containerExt: nextUp.containerExt,
+                    season: nextUp.season,
+                    episodeNum: nextUp.episodeNum,
+                    title: nextUp.title || entry.name || null,
+                    logo: entry.logo || undefined,
+                    resumeSeconds: nextUp.resumeSeconds,
+                    contentHref: `/series/detail?id=${encodeURIComponent(entry.id)}`,
+                  })()
+                })()
+              }
+            : undefined,
           favoriteActive: () => groupHasFavorite(activePlaylistId, "series", group),
           onToggleFavorite: (currentlyFavorited) => {
             toggleGroupFavorite(activePlaylistId, "series", group, entry, currentlyFavorited)

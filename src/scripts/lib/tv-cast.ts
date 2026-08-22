@@ -1248,13 +1248,17 @@ export interface CastXtreamVodParams {
   title?: string | null
   logo?: string | null
   contentHref?: string | null
+  resumeSeconds?: number
+  durationSeconds?: number
+  /** Hub cards can belong to a non-active playlist; progress must be recorded against that one. */
+  playlistId?: string | null
 }
 
 /** Builds a "play on TV" click handler for an Xtream VOD entry (movies + hub cards). */
 export function castXtreamVodToTv(params: CastXtreamVodParams): () => void {
   return () => {
     void (async () => {
-      const playlistId = await activePlaylistId()
+      const playlistId = params.playlistId || (await activePlaylistId())
       await playOnTv({
         contentTitle: params.title || null,
         contentHref: params.contentHref ?? `/movies/detail?id=${params.vodId}`,
@@ -1262,7 +1266,13 @@ export function castXtreamVodToTv(params: CastXtreamVodParams): () => void {
         buildDescriptor: () => {
           const src = buildMovieStreamUrl(params.creds, params.vodId, params.containerExt || null)
           if (!isCastableSrc(src)) return null
-          return buildVodCastDescriptor({ src, title: params.title || "", logo: params.logo || undefined })
+          return buildVodCastDescriptor({
+            src,
+            title: params.title || "",
+            logo: params.logo || undefined,
+            resumeSeconds: params.resumeSeconds,
+            durationSeconds: params.durationSeconds,
+          })
         },
       })
     })()
