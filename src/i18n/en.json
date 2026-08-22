@@ -617,6 +617,8 @@
   "settings.playback.active": "Active",
   "settings.playback.browse": "Browse…",
   "settings.playback.detect": "Detect",
+  "settings.playback.autoDetect": "Auto-detect",
+  "settings.playback.autoDetectNotFound": "Couldn't find {player} automatically. Browse for it manually.",
   "settings.playback.advanced": "Advanced",
   "settings.playback.extraArgs": "Extra arguments (one per line)",
   "settings.playback.reuse": "Reuse the same window",

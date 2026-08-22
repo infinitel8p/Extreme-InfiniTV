@@ -197,6 +197,7 @@ pub fn run() {
             external_player::launch_external_player,
             external_player::stop_external_player,
             external_player::sandbox_runtime,
+            external_player::discover_external_players,
             firewall::receiver_firewall_status,
             firewall::receiver_firewall_allow,
             hevc_extension::install_appx_package,

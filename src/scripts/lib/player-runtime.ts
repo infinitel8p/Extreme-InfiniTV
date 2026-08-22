@@ -577,6 +577,21 @@ export async function openStreamInAndroidPackage(
   }
 }
 
+export async function discoverExternalPlayers(): Promise<{ mpv: string[]; vlc: string[] }> {
+  const invoke = await getInvoke()
+  if (!invoke) return { mpv: [], vlc: [] }
+  try {
+    const result = (await invoke("discover_external_players", {})) as {
+      mpv?: string[]
+      vlc?: string[]
+    }
+    return { mpv: result?.mpv || [], vlc: result?.vlc || [] }
+  } catch (error) {
+    log.warn("[xt:player] discover_external_players failed:", error)
+    return { mpv: [], vlc: [] }
+  }
+}
+
 export async function detectPlayer(
   kind: ExternalPlayerKind,
   candidatePath: string,

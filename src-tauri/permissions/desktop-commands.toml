@@ -15,6 +15,7 @@ commands.allow = [
     "discord_disconnect",
     "launch_external_player",
     "sandbox_runtime",
+    "discover_external_players",
     "receiver_firewall_status",
     "receiver_firewall_allow",
     "install_appx_package",
