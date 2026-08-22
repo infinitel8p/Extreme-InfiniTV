@@ -248,31 +248,34 @@ input[type="search"]::-webkit-search-decoration {
 }
 
 /* ────────────────────────────── */
-/* Custom scrollbar styling       */
+/* Scrollbar styling              */
 /* ────────────────────────────── */
-.custom-scroll::-webkit-scrollbar {
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+}
+
+*::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
-.custom-scroll::-webkit-scrollbar-thumb {
+*::-webkit-scrollbar-thumb {
     background: var(--color-line);
     border-radius: 9999px;
 }
 
-.custom-scroll::-webkit-scrollbar-thumb:hover {
+*::-webkit-scrollbar-thumb:hover {
     background: var(--color-fg-3);
 }
 
-.custom-scroll::-webkit-scrollbar-track {
+*::-webkit-scrollbar-track {
     background: transparent;
 }
 
 .custom-scroll {
     scroll-padding-block: 0.75rem;
     scroll-padding-inline: 0.5rem;
-    scrollbar-width: thin;
-    scrollbar-color: var(--color-line) transparent;
     scrollbar-gutter: stable;
 }
 
