@@ -1046,6 +1046,9 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         const { listen } = await import("@tauri-apps/api/event")
         await listen<{ descriptor: unknown }>("xt:receiver-play", (event) => {
           try {
+            if (document.visibilityState !== "visible") {
+              import("@/scripts/lib/receiver-wake").then(({ wakeReceiverApp }) => wakeReceiverApp()).catch(() => {})
+            }
             sessionStorage.setItem(
               "xt_receiver_pending_play",
               JSON.stringify(event.payload?.descriptor)

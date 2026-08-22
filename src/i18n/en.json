@@ -1646,6 +1646,7 @@
   "cast.toast.stopped": "Stopped playback on {device}",
   "cast.toast.failed": "Couldn't play on {device}.",
   "cast.toast.playbackError": "Playback failed on {device}: {error}",
+  "cast.toast.wakeFailed": "Couldn't wake {device}. Open the app on the TV and try again.",
   "cast.toast.authFailed": "{device} no longer trusts this device.",
   "cast.toast.pairAgain": "Pair again",
   "cast.toast.connected": "Connected to {device}. Anything you play now casts there.",

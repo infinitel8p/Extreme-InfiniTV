@@ -1052,7 +1052,7 @@ class NsdBridge(private val activity: TauriActivity) {
 
 // Starts/stops ReceiverForegroundService, which holds the wake lock + Wi-Fi
 // lock keeping the receiver's HTTP server alive while the app is backgrounded.
-class ReceiverKeepAliveBridge(private val activity: TauriActivity) {
+class ReceiverKeepAliveBridge(private val activity: MainActivity) {
   @JavascriptInterface
   fun start(deviceName: String): Boolean {
     return try {
@@ -1064,6 +1064,7 @@ class ReceiverKeepAliveBridge(private val activity: TauriActivity) {
       } else {
         activity.startService(intent)
       }
+      activity.receiverModeActive = true
       true
     } catch (error: Throwable) {
       Log.w("ReceiverKeepAlive", "start failed", error)
@@ -1073,6 +1074,7 @@ class ReceiverKeepAliveBridge(private val activity: TauriActivity) {
 
   @JavascriptInterface
   fun stop(): Boolean {
+    activity.receiverModeActive = false
     return try {
       activity.startService(
         Intent(activity, ReceiverForegroundService::class.java)
@@ -1083,6 +1085,102 @@ class ReceiverKeepAliveBridge(private val activity: TauriActivity) {
       Log.w("ReceiverKeepAlive", "stop failed", error)
       false
     }
+  }
+}
+
+// Brings the app forward when a cast POST arrives while the WebView is backgrounded and paused.
+// Direct startActivity works on older Android/some TV builds; elsewhere a full-screen-intent
+// notification is the only launch path Android still allows from a background process.
+class ReceiverWakeBridge(private val activity: MainActivity) {
+  companion object {
+    private const val TAG = "AndroidReceiverWake"
+    private const val CHANNEL_ID = "receiver_wake"
+    private const val NOTIFICATION_ID = 4401
+  }
+
+  @JavascriptInterface
+  fun isSupported(): Boolean {
+    return try {
+      if (!NotificationManagerCompat.from(activity).areNotificationsEnabled()) return false
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+        val manager = activity.getSystemService(NotificationManager::class.java) ?: return false
+        manager.canUseFullScreenIntent()
+      } else {
+        true
+      }
+    } catch (error: Throwable) {
+      Log.w(TAG, "isSupported failed", error)
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun wake(): Boolean {
+    return try {
+      XtreamDreamService.dismissActiveDream()
+      val intent = wakeIntent()
+      // Q+ blocks background activity starts silently (no throw), so its success is unknowable;
+      // the full-screen intent is the only outcome we can actually report back.
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return postFullScreenIntent(intent)
+      activity.startActivity(intent)
+      true
+    } catch (error: Throwable) {
+      Log.w(TAG, "wake failed", error)
+      false
+    }
+  }
+
+  private fun wakeIntent(): Intent =
+    Intent(activity, MainActivity::class.java)
+      .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+
+  private fun postFullScreenIntent(intent: Intent): Boolean {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+      ActivityCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) !=
+        PackageManager.PERMISSION_GRANTED
+    ) {
+      return false
+    }
+    ensureNotificationChannel()
+    val pendingIntent = PendingIntent.getActivity(activity, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+    val notification = NotificationCompat.Builder(activity, CHANNEL_ID)
+      .setSmallIcon(R.drawable.ic_brand_mark)
+      .setContentTitle(activity.getString(R.string.receiver_wake_notification_title))
+      .setContentText(activity.getString(R.string.receiver_wake_notification_text))
+      .setPriority(NotificationCompat.PRIORITY_HIGH)
+      .setCategory(NotificationCompat.CATEGORY_EVENT)
+      .setOngoing(false)
+      .setAutoCancel(true)
+      .setFullScreenIntent(pendingIntent, true)
+      .build()
+    return try {
+      NotificationManagerCompat.from(activity).notify(NOTIFICATION_ID, notification)
+      true
+    } catch (error: SecurityException) {
+      Log.w(TAG, "notify blocked by SecurityException", error)
+      false
+    }
+  }
+
+  fun clearWakeNotification() {
+    try {
+      NotificationManagerCompat.from(activity).cancel(NOTIFICATION_ID)
+    } catch (error: Throwable) {
+      Log.w(TAG, "cancel failed", error)
+    }
+  }
+
+  private fun ensureNotificationChannel() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val manager = activity.getSystemService(NotificationManager::class.java) ?: return
+    if (manager.getNotificationChannel(CHANNEL_ID) != null) return
+    manager.createNotificationChannel(
+      NotificationChannel(
+        CHANNEL_ID,
+        activity.getString(R.string.receiver_wake_notification_channel),
+        NotificationManager.IMPORTANCE_HIGH
+      )
+    )
   }
 }
 
@@ -1802,6 +1900,9 @@ class MainActivity : TauriActivity() {
   // Cached so onDestroy() can cancel the cast media notification + release its session.
   private var castMediaBridge: CastMediaBridge? = null
 
+  // Cached so onResume() can clear the wake notification once the app is actually up.
+  private var receiverWakeBridge: ReceiverWakeBridge? = null
+
   // Set by PipBridge.setAutoEnter() whenever a <video> starts/stops playing
   @Volatile
   var autoEnterPipEnabled: Boolean = false
@@ -1809,6 +1910,10 @@ class MainActivity : TauriActivity() {
   // Set by AndroidVideoBridge.receiverSessionStart()/receiverSessionEnd() while a TV-receiver cast plays through VideoActivity
   @Volatile
   var receiverSessionActive: Boolean = false
+
+  // Set by ReceiverKeepAliveBridge.start()/stop() while the receiver HTTP server is running
+  @Volatile
+  var receiverModeActive: Boolean = false
 
   private val rendererRecreating = AtomicBoolean(false)
 
@@ -1968,6 +2073,9 @@ class MainActivity : TauriActivity() {
     nsdBridge = nsd
     webView.addJavascriptInterface(nsd, "AndroidNsd")
     webView.addJavascriptInterface(ReceiverKeepAliveBridge(this), "AndroidReceiverKeepAlive")
+    val receiverWake = ReceiverWakeBridge(this)
+    webView.addJavascriptInterface(receiverWake, "AndroidReceiverWake")
+    receiverWakeBridge = receiverWake
     val castMedia = CastMediaBridge(this, { hostedWebView })
     castMediaBridge = castMedia
     webView.addJavascriptInterface(castMedia, "AndroidCastMedia")
@@ -2098,12 +2206,13 @@ class MainActivity : TauriActivity() {
   override fun onResume() {
     super.onResume()
     drainAndDispatchVideoEvents()
+    receiverWakeBridge?.clearWakeNotification()
   }
 
   override fun onPause() {
     super.onPause()
-    // Same wry WebView-pause behavior as the PiP fix above; keep it alive for receiver event pushes.
-    if (receiverSessionActive) hostedWebView?.onResume()
+    // Same wry WebView-pause behavior as the PiP fix above; keep it alive so xt:receiver-play can still fire.
+    if (receiverSessionActive || receiverModeActive) hostedWebView?.onResume()
   }
 
   // Tear down the throwaway sniffer WebView instead of leaving the remote page running until its timeout.

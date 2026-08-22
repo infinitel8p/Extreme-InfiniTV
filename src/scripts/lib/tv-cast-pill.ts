@@ -25,6 +25,7 @@ import {
   subscribeCastStateFeed,
   pokeCastStateFeed,
   createIdleTeardownGuard,
+  createCastLoadingStallGuard,
   type CastFeedHealth,
 } from "@/scripts/lib/tv-cast-state-feed.js"
 import { castNeighbor, createAutoAdvanceTracker, resolveNeighborAvailability, neighborAvailability } from "@/scripts/lib/tv-cast-next.js"
@@ -91,6 +92,7 @@ let idleDeferredDuringAdvance = false
 let liveElapsedTicker: ReturnType<typeof setInterval> | null = null
 // Session-keyed, so it survives the locale-change remount and resets itself on a new cast.
 const idleTeardownGuard = createIdleTeardownGuard()
+let castLoadingStallGuard = createCastLoadingStallGuard()
 const castProgressRecorder = createCastProgressRecorder()
 
 function formatClock(seconds: number): string {
@@ -656,6 +658,20 @@ function onFeedState(state: CastState): void {
   refreshReceiverLogSnapshotIfStale(session, device)
   if (state.durationSeconds != null) lastKnownDurationSeconds = state.durationSeconds
   if (autoAdvanceTracker.observe(session, state.state)) void triggerAutoAdvance(session)
+  const loadingStalled = castLoadingStallGuard.observe({
+    stateValue: state.state,
+    playRequestedAtMs: session.startedAtMs ?? session.startedAt,
+    nowMs: Date.now(),
+  })
+  if (loadingStalled) {
+    log.warn("[xt:tv-cast-pill] cast never surfaced past loading on", session.deviceName)
+    renderStatus(pillEl, session, "error")
+    toast({ title: t("cast.toast.wakeFailed", { device: session.deviceName }), variant: "error" })
+    void fetchReceiverLogs(device).then((text) => {
+      if (text) cacheReceiverLogSnapshot(session.deviceName, text)
+    })
+    return
+  }
   const idleTeardownAllowed = idleTeardownGuard.allowsTeardown({
     stateValue: state.state,
     sessionStartedAtMs: session.startedAtMs ?? session.startedAt,
@@ -681,7 +697,10 @@ function onFeedState(state: CastState): void {
       errorToastShown = true
       log.error("[xt:cast] receiver playback error on", session.deviceName, ":", state.error)
       toast({
-        title: t("cast.toast.playbackError", { device: session.deviceName, error: state.error || t("receiver.error.title") }),
+        title:
+          state.error === "app-not-foreground"
+            ? t("cast.toast.wakeFailed", { device: session.deviceName })
+            : t("cast.toast.playbackError", { device: session.deviceName, error: state.error || t("receiver.error.title") }),
         variant: "error",
       })
       void fetchReceiverLogs(device).then((text) => {
@@ -879,6 +898,7 @@ function mount(session: CastSession): void {
   autoAdvanceTracker = createAutoAdvanceTracker()
   autoAdvanceInFlight = false
   idleDeferredDuringAdvance = false
+  castLoadingStallGuard = createCastLoadingStallGuard()
   clearStopArmTimeout()
   clearIdleCollapseTimeout()
   const pill = buildPill()

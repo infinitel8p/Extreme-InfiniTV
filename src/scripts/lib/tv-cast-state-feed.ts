@@ -109,6 +109,47 @@ export function createIdleTeardownGuard(graceMs = IDLE_TEARDOWN_GRACE_MS): IdleT
   }
 }
 
+export const CAST_LOADING_STALL_TIMEOUT_MS = 25000
+
+export interface CastLoadingStallInput {
+  stateValue: string
+  playRequestedAtMs: number
+  nowMs: number
+}
+
+export interface CastLoadingStallGuard {
+  /** Feed every frame; true at most once per play request when loading stalls past the timeout. */
+  observe(input: CastLoadingStallInput): boolean
+}
+
+/**
+ * Declares a cast failed to surface when the receiver reports "loading" for longer than the timeout
+ * since the /play request landed. Any non-"loading" frame settles the request for good, so a later
+ * re-buffer can't retroactively trip the same judgment.
+ */
+export function createCastLoadingStallGuard(timeoutMs = CAST_LOADING_STALL_TIMEOUT_MS): CastLoadingStallGuard {
+  let trackedRequestedAtMs: number | null = null
+  let settled = false
+  let declaredFailed = false
+  return {
+    observe(input) {
+      if (input.playRequestedAtMs !== trackedRequestedAtMs) {
+        trackedRequestedAtMs = input.playRequestedAtMs
+        settled = false
+        declaredFailed = false
+      }
+      if (input.stateValue !== "loading") {
+        settled = true
+        return false
+      }
+      if (settled || declaredFailed) return false
+      const stalled = input.nowMs - input.playRequestedAtMs >= timeoutMs
+      if (stalled) declaredFailed = true
+      return stalled
+    },
+  }
+}
+
 type FeedMode = "idle" | "connecting" | "ws" | "poll"
 
 const subscribers = new Map<number, Subscriber>()

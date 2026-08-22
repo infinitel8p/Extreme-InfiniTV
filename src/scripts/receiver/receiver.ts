@@ -10,6 +10,7 @@ import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launch
 import { getActiveEntry } from "@/scripts/lib/creds.js"
 import { mountReceiverAmbient, type ReceiverAmbient } from "@/scripts/receiver/ambient"
 import { startReceiverKeepAlive, stopReceiverKeepAlive } from "@/scripts/lib/receiver-keep-alive"
+import { receiverWakeAvailable, wakeReceiverApp } from "@/scripts/lib/receiver-wake"
 import { startReceiverLogStream, stopReceiverLogStream } from "@/scripts/lib/receiver-log-stream"
 import {
   createAndroidNativeReceiverEngine,
@@ -309,6 +310,17 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
     log.warn("[xt:receiver] play rejected: descriptor failed validation")
     reportState({ state: "error", error: "bad-descriptor", positionSeconds: 0 })
     return
+  }
+
+  // Native playback backgrounds this WebView, so only a hidden idle receiver needs waking;
+  // rejecting mid-session would break episode auto-advance.
+  if (document.visibilityState !== "visible" && !activeEngine) {
+    const woke = wakeReceiverApp()
+    if (!woke || !receiverWakeAvailable()) {
+      log.warn("[xt:receiver] play rejected: app is backgrounded and could not be woken")
+      reportState({ state: "error", error: "app-not-foreground", positionSeconds: 0 })
+      return
+    }
   }
 
   activeEngine?.teardown()
