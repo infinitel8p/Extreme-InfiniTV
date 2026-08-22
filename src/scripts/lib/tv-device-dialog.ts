@@ -12,6 +12,7 @@ import {
   probeTvDevice,
   removeTvDevice,
   validateDeviceInput,
+  deviceKnownHostEntries,
   type TvDevice,
 } from "@/scripts/lib/tv-cast.js"
 import { discoverReceivers, type DiscoveredReceiver } from "@/scripts/lib/receiver-discovery.js"
@@ -62,6 +63,7 @@ export function openTvDevicePicker(
     const addMode = options.mode === "add"
     const devices = [...listTvDevices()]
     const showAddFormByDefault = addMode || devices.length === 0
+    const knownHosts = devices.flatMap(deviceKnownHostEntries)
 
     const subtitleHtml = options.contentTitle
       ? `<div data-role="subtitle" class="text-sm text-fg-3 line-clamp-2"></div>`
@@ -422,7 +424,7 @@ export function openTvDevicePicker(
     const DISCOVERY_TIMEOUT_MS = 5000
     let cancelDiscovery = () => {}
 
-    function startDiscoveryScan(): void {
+    function startDiscoveryScan(force = false): void {
       cancelDiscovery()
       discoveryToken += 1
       reachability.clear()
@@ -442,12 +444,14 @@ export function openTvDevicePicker(
           discoveryFailed = errorMessage !== null
           if (errorMessage) log.warn("[xt:tv-device-dialog] receiver scan failed:", errorMessage)
           renderAll()
-        }
+        },
+        { knownHosts, force }
       )
     }
     startDiscoveryScan()
 
-    rescanBtn.addEventListener("click", startDiscoveryScan)
+    const onRescanClick = () => startDiscoveryScan(true)
+    rescanBtn.addEventListener("click", onRescanClick)
 
     let resolved = false
     const settle = (choice: TvDevice | null) => {
@@ -582,7 +586,7 @@ export function openTvDevicePicker(
 
     function detach() {
       cancelDiscovery()
-      rescanBtn.removeEventListener("click", startDiscoveryScan)
+      rescanBtn.removeEventListener("click", onRescanClick)
       listEl.removeEventListener("click", onListClick)
       toggleAddBtn.removeEventListener("click", onToggleAdd)
       addForm.removeEventListener("submit", onFormSubmit)

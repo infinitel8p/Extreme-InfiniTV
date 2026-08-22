@@ -1208,15 +1208,115 @@ async fn sweep_subnets(interfaces: &[if_addrs::Interface]) -> Vec<DiscoveredRece
     discovered
 }
 
+// ---------------------------------------------------------------------------
+// Known-host fast path (probes already-paired devices directly; a hit skips the sweep entirely)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_os = "ios"))]
+const KNOWN_HOST_PROBE_CAP: usize = 8;
+
+/// "host" or "host:port", defaulting to RECEIVER_PORT. Non-IPv4 / malformed entries are dropped.
+#[cfg(not(target_os = "ios"))]
+fn parse_known_host_entry(entry: &str) -> Option<(std::net::Ipv4Addr, u16)> {
+    let trimmed = entry.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(ip) = trimmed.parse::<std::net::Ipv4Addr>() {
+        return Some((ip, RECEIVER_PORT));
+    }
+    let (host_part, port_part) = trimmed.rsplit_once(':')?;
+    let ip = host_part.parse::<std::net::Ipv4Addr>().ok()?;
+    let port = port_part.parse::<u16>().ok()?;
+    Some((ip, port))
+}
+
+#[cfg(not(target_os = "ios"))]
+fn parse_known_hosts(entries: &[String]) -> Vec<(std::net::Ipv4Addr, u16)> {
+    entries.iter().filter_map(|entry| parse_known_host_entry(entry)).take(KNOWN_HOST_PROBE_CAP).collect()
+}
+
+/// Probes every known host concurrently via the same /info check the sweep uses.
+#[cfg(not(target_os = "ios"))]
+async fn probe_known_hosts(entries: Vec<(std::net::Ipv4Addr, u16)>) -> Vec<ResolvedEvent> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let client = reqwest::Client::new();
+    let mut join_set = tokio::task::JoinSet::new();
+    for (ip, port) in entries {
+        let client = client.clone();
+        join_set.spawn(async move { probe_sweep_host(client, ip, port).await });
+    }
+    let mut events = Vec::new();
+    while let Some(result) = join_set.join_next().await {
+        if let Ok(Some(event)) = result {
+            events.push(event);
+        }
+    }
+    events
+}
+
+// ---------------------------------------------------------------------------
+// Sweep rate limiting (a known-host miss still shouldn't sweep on every discover call)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_os = "ios"))]
+const SWEEP_MIN_INTERVAL: Duration = Duration::from_secs(60);
+
+#[cfg(not(target_os = "ios"))]
+static LAST_SWEEP_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Pure so the rate-limit decision is testable without sleeping.
+#[cfg(not(target_os = "ios"))]
+fn sweep_allowed(now: Instant, last_swept_at: Option<Instant>, force_sweep: bool) -> bool {
+    if force_sweep {
+        return true;
+    }
+    match last_swept_at {
+        None => true,
+        Some(last) => now.saturating_duration_since(last) >= SWEEP_MIN_INTERVAL,
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+async fn sweep_subnets_rate_limited(interfaces: &[if_addrs::Interface], force_sweep: bool) -> Vec<DiscoveredReceiver> {
+    let now = Instant::now();
+    let previous = {
+        let mut last_swept_at = LAST_SWEEP_AT.lock().unwrap_or_else(|poison| poison.into_inner());
+        let previous = *last_swept_at;
+        if sweep_allowed(now, previous, force_sweep) {
+            *last_swept_at = Some(now);
+        }
+        previous
+    };
+    if !sweep_allowed(now, previous, force_sweep) {
+        let elapsed_secs = previous.map(|instant| now.saturating_duration_since(instant).as_secs()).unwrap_or(0);
+        log::info!(
+            "[receiver] discover sweep skipped: last sweep was {elapsed_secs}s ago, minimum interval is {}s",
+            SWEEP_MIN_INTERVAL.as_secs()
+        );
+        return Vec::new();
+    }
+    sweep_subnets(interfaces).await
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
-pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<DiscoveredReceiver>, String> {
+pub async fn receiver_discover(
+    timeout_ms: Option<u64>,
+    known_hosts: Option<Vec<String>>,
+    force_sweep: Option<bool>,
+) -> Result<Vec<DiscoveredReceiver>, String> {
     let clamped_timeout = timeout_ms
         .unwrap_or(DISCOVER_DEFAULT_TIMEOUT_MS)
         .clamp(DISCOVER_MIN_TIMEOUT_MS, DISCOVER_MAX_TIMEOUT_MS);
     let deadline = tokio::time::Instant::now() + Duration::from_millis(clamped_timeout);
 
     log::info!("[receiver] discover browsing {MDNS_SERVICE_TYPE}, timeout={clamped_timeout}ms");
+
+    let known_host_entries = parse_known_hosts(&known_hosts.unwrap_or_default());
+    let known_host_probe = tauri::async_runtime::spawn(probe_known_hosts(known_host_entries));
 
     let daemon = mdns_sd::ServiceDaemon::new().map_err(|error| format!("OTHER:mdns daemon start failed: {error}"))?;
     let events = daemon
@@ -1259,6 +1359,12 @@ pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<Discovered
     let _ = daemon.stop_browse(MDNS_SERVICE_TYPE);
     let _ = daemon.shutdown();
 
+    let known_host_events = known_host_probe.await.unwrap_or_default();
+    for event in &known_host_events {
+        log::info!("[receiver] discover known-host hit {} at {}", event.name, join_ips(&event.addresses));
+    }
+    resolved_events.extend(known_host_events);
+
     let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
     let mut discovered = merge_resolved_events(resolved_events, &interfaces);
     for entry in &discovered {
@@ -1271,27 +1377,40 @@ pub async fn receiver_discover(timeout_ms: Option<u64>) -> Result<Vec<Discovered
         );
     }
     if discovered.is_empty() {
-        discovered = sweep_subnets(&interfaces).await;
+        discovered = sweep_subnets_rate_limited(&interfaces, force_sweep.unwrap_or(false)).await;
     }
     log::info!("[receiver] discover complete, found={}", discovered.len());
     Ok(discovered)
 }
 
-// Android advertises/discovers via NsdManager, not Rust mDNS; the sweep is its only fallback.
-// timeout_ms is ignored here - the subnet sweep runs its own fixed budget.
+// Android advertises/discovers via NsdManager, not Rust mDNS; the known-host probe and sweep are
+// its only fallback. timeout_ms is ignored here - the subnet sweep runs its own fixed budget.
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn receiver_discover(_timeout_ms: Option<u64>) -> Result<Vec<DiscoveredReceiver>, String> {
-    log::info!("[receiver] discover sweeping subnets (android)");
+pub async fn receiver_discover(
+    _timeout_ms: Option<u64>,
+    known_hosts: Option<Vec<String>>,
+    force_sweep: Option<bool>,
+) -> Result<Vec<DiscoveredReceiver>, String> {
     let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
-    let discovered = sweep_subnets(&interfaces).await;
+    let known_host_entries = parse_known_hosts(&known_hosts.unwrap_or_default());
+    let known_host_events = probe_known_hosts(known_host_entries).await;
+    let mut discovered = merge_resolved_events(known_host_events, &interfaces);
+    if discovered.is_empty() {
+        log::info!("[receiver] discover sweeping subnets (android)");
+        discovered = sweep_subnets_rate_limited(&interfaces, force_sweep.unwrap_or(false)).await;
+    }
     log::info!("[receiver] discover complete, found={}", discovered.len());
     Ok(discovered)
 }
 
 #[cfg(target_os = "ios")]
 #[tauri::command]
-pub async fn receiver_discover(_timeout_ms: Option<u64>) -> Result<Vec<DiscoveredReceiver>, String> {
+pub async fn receiver_discover(
+    _timeout_ms: Option<u64>,
+    _known_hosts: Option<Vec<String>>,
+    _force_sweep: Option<bool>,
+) -> Result<Vec<DiscoveredReceiver>, String> {
     Ok(Vec::new())
 }
 
@@ -2519,6 +2638,106 @@ mod tests {
         assert!(started.elapsed() < SWEEP_CONNECT_TIMEOUT + Duration::from_millis(600));
     }
 
+    // -----------------------------------------------------------------
+    // Known-host fast path
+    // -----------------------------------------------------------------
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn parse_known_host_entry_accepts_a_bare_host() {
+        let (ip, port) = parse_known_host_entry("192.168.1.50").expect("bare host must parse");
+        assert_eq!(ip, "192.168.1.50".parse::<std::net::Ipv4Addr>().unwrap());
+        assert_eq!(port, RECEIVER_PORT);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn parse_known_host_entry_accepts_a_host_with_an_explicit_port() {
+        let (ip, port) = parse_known_host_entry("192.168.1.50:47816").expect("host:port must parse");
+        assert_eq!(ip, "192.168.1.50".parse::<std::net::Ipv4Addr>().unwrap());
+        assert_eq!(port, 47816);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn parse_known_host_entry_rejects_malformed_entries() {
+        assert!(parse_known_host_entry("").is_none());
+        assert!(parse_known_host_entry("   ").is_none());
+        assert!(parse_known_host_entry("not-a-host").is_none());
+        assert!(parse_known_host_entry("192.168.1.50:not-a-port").is_none());
+        assert!(parse_known_host_entry("192.168.1.50:99999").is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn parse_known_hosts_drops_malformed_entries_and_keeps_the_rest() {
+        let parsed = parse_known_hosts(&["192.168.1.50".to_string(), "not-a-host".to_string(), "192.168.1.51:47816".to_string()]);
+        assert_eq!(parsed, vec![("192.168.1.50".parse().unwrap(), RECEIVER_PORT), ("192.168.1.51".parse().unwrap(), 47816)]);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn parse_known_hosts_caps_at_the_probe_limit() {
+        let entries: Vec<String> = (0..20u8).map(|third_octet| format!("192.168.1.{third_octet}")).collect();
+        assert_eq!(parse_known_hosts(&entries).len(), KNOWN_HOST_PROBE_CAP);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_known_hosts_finds_a_reachable_entry_and_ignores_an_unreachable_one() {
+        let body = json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": "Known Host"}).to_string();
+        let (reachable_port, _shutdown) = spawn_static_info_responder(body).await;
+        let unreachable_port = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let events =
+            probe_known_hosts(vec![("127.0.0.1".parse().unwrap(), reachable_port), ("127.0.0.1".parse().unwrap(), unreachable_port)])
+                .await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name, "Known Host");
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_known_hosts_returns_empty_for_no_entries() {
+        assert!(probe_known_hosts(Vec::new()).await.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Sweep rate limiting
+    // -----------------------------------------------------------------
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_allowed_when_never_swept_before() {
+        assert!(sweep_allowed(Instant::now(), None, false));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_allowed_blocks_a_sweep_inside_the_minimum_interval() {
+        let last_swept_at = Instant::now();
+        let now = last_swept_at + Duration::from_secs(1);
+        assert!(!sweep_allowed(now, Some(last_swept_at), false));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_allowed_permits_a_sweep_once_the_minimum_interval_has_passed() {
+        let last_swept_at = Instant::now();
+        let now = last_swept_at + SWEEP_MIN_INTERVAL;
+        assert!(sweep_allowed(now, Some(last_swept_at), false));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_allowed_force_bypasses_the_minimum_interval() {
+        let last_swept_at = Instant::now();
+        let now = last_swept_at + Duration::from_secs(1);
+        assert!(sweep_allowed(now, Some(last_swept_at), true));
+    }
+
     // Must advertise a real interface address: mdns-sd only puts an address record on an
     // interface whose subnet contains it, so a TEST-NET IP is announced on no interface at all.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2550,7 +2769,7 @@ mod tests {
         let fullname = service_info.get_fullname().to_string();
         daemon.register(service_info).expect("mdns register must succeed");
 
-        let discovered = receiver_discover(Some(4000)).await.expect("discover must succeed");
+        let discovered = receiver_discover(Some(4000), None, None).await.expect("discover must succeed");
 
         let _ = daemon.unregister(&fullname);
         let _ = daemon.shutdown();

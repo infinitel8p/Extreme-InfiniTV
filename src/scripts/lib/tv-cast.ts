@@ -320,6 +320,12 @@ function deviceHostOrder(device: TvDevice): string[] {
   return candidateHostOrder(hosts, device.pinnedHostIndex)
 }
 
+/** "host:port" entries for the Rust known-host discovery fast path (port-qualified, since PORT_ATTEMPTS can offset it). */
+export function deviceKnownHostEntries(device: TvDevice): string[] {
+  const hosts = device.hosts && device.hosts.length ? device.hosts : [device.host]
+  return hosts.map((host) => `${host}:${device.port}`)
+}
+
 /** Tries each host in order, stopping at the first that doesn't throw `HostUnreachableError`. */
 async function walkHosts<T>(
   hosts: string[],
@@ -771,7 +777,7 @@ function applyDiscoveredHost(device: TvDevice, discovered: DiscoveredReceiver): 
   return { ...device, host: hosts[0], port: discovered.port, hosts, pinnedHostIndex: 0 }
 }
 
-function discoverReceiversOnce(timeoutMs: number): Promise<DiscoveredReceiver[]> {
+function discoverReceiversOnce(timeoutMs: number, knownHosts?: string[]): Promise<DiscoveredReceiver[]> {
   return new Promise((resolve) => {
     let latest: DiscoveredReceiver[] = []
     discoverReceivers(
@@ -779,7 +785,8 @@ function discoverReceiversOnce(timeoutMs: number): Promise<DiscoveredReceiver[]>
         latest = list
       },
       timeoutMs,
-      () => resolve(latest)
+      () => resolve(latest),
+      { knownHosts }
     )
   })
 }
@@ -850,7 +857,7 @@ export async function tryReattachCastSession(): Promise<CastSession | null> {
 
   let probe = await probeDeviceForReattach(pairedDevice)
   if (!probe) {
-    const discovered = await discoverReceiversOnce(3000)
+    const discovered = await discoverReceiversOnce(3000, deviceKnownHostEntries(pairedDevice))
     const match = matchDiscoveredReceiver(pairedDevice, discovered)
     if (match) {
       probe = await probeDiscoveredHostForReattach(pairedDevice, match)

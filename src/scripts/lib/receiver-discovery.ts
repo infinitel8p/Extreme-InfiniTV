@@ -78,14 +78,24 @@ function identityKey(receiver: DiscoveredReceiver): string {
 /** How long to give NSD a head start before racing it against the Rust subnet sweep. */
 const SWEEP_GRACE_PERIOD_MS = 1200
 
+export interface DiscoverReceiversOptions {
+  /** Already-paired devices' "host:port" entries, probed directly before falling back to a sweep. */
+  knownHosts?: string[]
+  /** Bypasses the sweep rate limit; only an explicit user-initiated rescan should set this. */
+  force?: boolean
+}
+
 /** Shared in-flight Rust subnet sweep so a Rescan (or a second scanner) never launches a duplicate. */
 let inFlightSweep: Promise<DiscoveredReceiver[]> | null = null
 
-function sweepSubnet(): Promise<DiscoveredReceiver[]> {
+function sweepSubnet(options: DiscoverReceiversOptions): Promise<DiscoveredReceiver[]> {
   if (!inFlightSweep) {
     inFlightSweep = (async () => {
       const { invoke } = await import("@tauri-apps/api/core")
-      const swept = await invoke<DiscoveredReceiver[]>("receiver_discover", {})
+      const swept = await invoke<DiscoveredReceiver[]>("receiver_discover", {
+        knownHosts: options.knownHosts,
+        forceSweep: options.force,
+      })
       return swept.map(normalizeDiscovered)
     })()
     const clearInFlightSweepSlot = () => {
@@ -100,7 +110,8 @@ function sweepSubnet(): Promise<DiscoveredReceiver[]> {
 export function discoverReceivers(
   onFound: (list: DiscoveredReceiver[]) => void,
   timeoutMs = 3000,
-  onDone?: (errorMessage: string | null) => void
+  onDone?: (errorMessage: string | null) => void,
+  options: DiscoverReceiversOptions = {}
 ): () => void {
   let cancelled = false
 
@@ -139,7 +150,7 @@ export function discoverReceivers(
       if (sweepStarted || found.size > 0 || !isTauriRuntime()) return
       sweepStarted = true
       log.info("[xt:receiver-discovery] android-nsd found nothing yet, starting subnet sweep")
-      sweepSubnet()
+      sweepSubnet(options)
         .then((swept) => {
           if (cancelled) return
           mergeAndReport(swept)
@@ -173,7 +184,11 @@ export function discoverReceivers(
     void (async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core")
-        const result = await invoke<DiscoveredReceiver[]>("receiver_discover", { timeoutMs })
+        const result = await invoke<DiscoveredReceiver[]>("receiver_discover", {
+          timeoutMs,
+          knownHosts: options.knownHosts,
+          forceSweep: options.force,
+        })
         if (cancelled) return
         onFound(result)
         log.info(`[xt:receiver-discovery] scan complete, found=${result.length}`)
