@@ -606,13 +606,29 @@ interface LastPlayRequest {
 /** The most recent successful castPlay, kept so the pill's Retry button can replay it after a receiver error. */
 let lastPlayRequest: LastPlayRequest | null = null
 
+export const CAST_PLAY_SETTLE_MS = 5000
+let castPlayInFlight = 0
+let lastCastPlayAtMs = 0
+
+/** A /play swaps the receiver's engine, which reports a transient idle; senders must not read that as a stop. */
+export function isCastPlaySettling(nowMs: number = Date.now()): boolean {
+  return castPlayInFlight > 0 || (lastCastPlayAtMs > 0 && nowMs - lastCastPlayAtMs < CAST_PLAY_SETTLE_MS)
+}
+
 export async function castPlay(
   device: TvDevice,
   descriptor: CastDescriptorV1,
   context?: CastPlayContext
 ): Promise<void> {
   const generationAtRequest = castGeneration
-  await postDeviceAction(device, "/play", descriptor, 8000)
+  castPlayInFlight += 1
+  lastCastPlayAtMs = Date.now()
+  try {
+    await postDeviceAction(device, "/play", descriptor, 8000)
+  } finally {
+    castPlayInFlight -= 1
+    lastCastPlayAtMs = Date.now()
+  }
   // Session was torn down (e.g. stop) while this request was in flight; don't resurrect it.
   if (generationAtRequest !== castGeneration) return
   const storedDevice = listTvDevices().find((entry) => entry.id === device.id) ?? device

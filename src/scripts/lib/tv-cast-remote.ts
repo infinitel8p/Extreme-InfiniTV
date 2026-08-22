@@ -14,6 +14,7 @@ import {
   castSeek,
   castStop,
   castSetVolume,
+  isCastPlaySettling,
   sessionAsDevice,
   getReceiverLogTail,
   CAST_SESSION_EVENT,
@@ -23,6 +24,7 @@ import {
 import {
   subscribeCastStateFeed,
   pokeCastStateFeed,
+  createIdleTeardownGuard,
   type CastFeedHealth,
 } from "@/scripts/lib/tv-cast-state-feed.js"
 import { castNeighbor, neighborAvailability, resolveNeighborAvailability } from "@/scripts/lib/tv-cast-next.js"
@@ -81,12 +83,12 @@ const TRANSPORT_BUTTON_CLASS =
 
 function buildSkeleton(dialog: HTMLDialogElement): void {
   dialog.innerHTML = `
-    <div data-role="backdrop" class="relative shrink-0 h-56 sm:h-64 overflow-hidden bg-surface-2">
+    <div data-role="backdrop" class="relative shrink-0 h-[calc(14rem+env(safe-area-inset-top,0px))] sm:h-64 overflow-hidden bg-surface-2">
       <div data-role="backdrop-img" class="absolute inset-0 scale-110 bg-cover bg-center blur-2xl opacity-0"></div>
       <div class="absolute inset-0 bg-gradient-to-b from-black/10 to-surface"></div>
-      <img data-role="artwork-img" alt="" class="hidden absolute inset-0 m-auto max-h-[65%] max-w-[65%] object-contain rounded-lg shadow-xl" />
-      <span data-role="artwork-fallback" class="absolute inset-0 grid place-items-center text-fg-3" aria-hidden="true">${ICON_DEVICE_TV}</span>
-      <button type="button" data-role="close" class="absolute top-3 end-3 min-h-11 min-w-11 grid place-items-center rounded-full bg-black/40 text-white hover:bg-black/60 focus-visible:bg-black/60"></button>
+      <img data-role="artwork-img" alt="" class="hidden absolute inset-x-0 bottom-0 top-[env(safe-area-inset-top,0px)] m-auto max-h-[65%] max-w-[65%] object-contain rounded-lg shadow-xl" />
+      <span data-role="artwork-fallback" class="absolute inset-x-0 bottom-0 top-[env(safe-area-inset-top,0px)] grid place-items-center text-fg-3" aria-hidden="true">${ICON_DEVICE_TV}</span>
+      <button type="button" data-role="close" class="absolute top-[calc(0.75rem+env(safe-area-inset-top,0px))] end-3 min-h-11 min-w-11 grid place-items-center rounded-full bg-black/40 text-white hover:bg-black/60 focus-visible:bg-black/60"></button>
     </div>
     <div class="flex flex-col gap-5 p-5 sm:p-6 overflow-y-auto min-h-0 flex-1">
       <div class="flex flex-col gap-1">
@@ -424,6 +426,7 @@ export function openCastRemote(): void {
   let lastKnownMuted = false
   let scrubbing = false
   let liveElapsedTicker: ReturnType<typeof setInterval> | null = null
+  const idleTeardownGuard = createIdleTeardownGuard()
 
   function stopLiveElapsedTicker(): void {
     if (liveElapsedTicker != null) {
@@ -652,8 +655,14 @@ export function openCastRemote(): void {
   }, VOLUME_DEBOUNCE_MS)
 
   function onFeedState(state: CastState): void {
+    const idleTeardownAllowed = idleTeardownGuard.allowsTeardown({
+      stateValue: state.state,
+      sessionStartedAtMs: currentSession.startedAtMs ?? currentSession.startedAt,
+      nowMs: Date.now(),
+      playPending: isCastPlaySettling(),
+    })
     if (state.state === "idle") {
-      settleClose()
+      if (idleTeardownAllowed) settleClose()
       return
     }
     if (state.volume !== undefined) lastKnownVolume = state.volume

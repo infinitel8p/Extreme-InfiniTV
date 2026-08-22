@@ -71,6 +71,44 @@ export function nextMissState(current: number, hit: boolean, maxMisses = MAX_CON
   return { count, lost: count >= maxMisses }
 }
 
+export const IDLE_TEARDOWN_GRACE_MS = 15000
+
+export interface IdleTeardownInput {
+  stateValue: string
+  sessionStartedAtMs: number
+  nowMs: number
+  /** A /play is in flight or just landed, so the receiver's engine-swap idle is not a stop. */
+  playPending: boolean
+}
+
+export interface IdleTeardownGuard {
+  allowsTeardown(input: IdleTeardownInput): boolean
+}
+
+/**
+ * Whether an idle frame may tear the session down: a fresh cast can be handed an idle by the receiver's
+ * engine swap or the socket's stored snapshot, so idle only counts once playback was seen for this session
+ * or the grace elapsed. Feed it every frame, not just idle ones.
+ */
+export function createIdleTeardownGuard(graceMs = IDLE_TEARDOWN_GRACE_MS): IdleTeardownGuard {
+  let trackedStartedAtMs: number | null = null
+  let sawNonIdle = false
+  return {
+    allowsTeardown(input) {
+      if (input.sessionStartedAtMs !== trackedStartedAtMs) {
+        trackedStartedAtMs = input.sessionStartedAtMs
+        sawNonIdle = false
+      }
+      if (input.stateValue !== "idle") {
+        sawNonIdle = true
+        return false
+      }
+      if (input.playPending) return false
+      return sawNonIdle || input.nowMs - input.sessionStartedAtMs >= graceMs
+    },
+  }
+}
+
 type FeedMode = "idle" | "connecting" | "ws" | "poll"
 
 const subscribers = new Map<number, Subscriber>()
