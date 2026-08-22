@@ -393,6 +393,17 @@ jobs:
           cp "$APK" "$OUT/Extreme InfiniTV_${VERSION}.apk"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
 
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=$(gh release view ${{ needs.create-beta-release.outputs.release_id }} --json tagName -q .tagName 2>/dev/null \
+            || gh api repos/${{ github.repository }}/releases/${{ needs.create-beta-release.outputs.release_id }} --jq .tag_name)
+          gh release upload "$TAG" \
+            "${{ steps.collect.outputs.out }}/"*.apk \
+            --clobber
+
       - name: Build signed AAB (mobile)
         if: env.HAS_PLAY_SECRET == 'true'
         env:
@@ -415,30 +426,12 @@ jobs:
             find src-tauri/gen/android/app/build/outputs -type f
             exit 1
           fi
-          echo "aab=$AAB" >> "$GITHUB_OUTPUT"
+          # Copied out: the TV build below writes the same path.
+          OUT="$RUNNER_TEMP/android-aab"
+          mkdir -p "$OUT"
+          cp "$AAB" "$OUT/mobile-release.aab"
+          echo "aab=$OUT/mobile-release.aab" >> "$GITHUB_OUTPUT"
 
-      - name: Publish beta AAB to Play open testing track
-        if: env.HAS_PLAY_SECRET == 'true'
-        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: com.infinitel8p.xtream
-          releaseFiles: ${{ steps.locate-aab.outputs.aab }}
-          track: beta
-          status: completed
-
-      - name: Upload to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TAG=$(gh release view ${{ needs.create-beta-release.outputs.release_id }} --json tagName -q .tagName 2>/dev/null \
-            || gh api repos/${{ github.repository }}/releases/${{ needs.create-beta-release.outputs.release_id }} --jq .tag_name)
-          gh release upload "$TAG" \
-            "${{ steps.collect.outputs.out }}/"*.apk \
-            --clobber
-
-      # TV AAB last: a TV-only failure must not block the APK or Play beta.
       # Same build with leanback required + its own versionCode slot.
       - name: Set TV beta versionCode
         if: env.HAS_PLAY_SECRET == 'true'
@@ -470,7 +463,10 @@ jobs:
             find src-tauri/gen/android/app/build/outputs/bundle -type f
             exit 1
           fi
-          echo "aab=$AAB" >> "$GITHUB_OUTPUT"
+          OUT="$RUNNER_TEMP/android-aab"
+          mkdir -p "$OUT"
+          cp "$AAB" "$OUT/tv-release.aab"
+          echo "aab=$OUT/tv-release.aab" >> "$GITHUB_OUTPUT"
 
       # Bootstrap-only: the manual Play Console upload that unlocks the TV form
       # factor needs this artifact; once PLAY_TV_TRACKS_READY is set it stops.
@@ -481,6 +477,17 @@ jobs:
           name: tv-aab
           path: ${{ steps.locate-tv-aab.outputs.aab }}
           if-no-files-found: error
+
+      # Play uploads last: a rejected submission must not cost the APK or the AABs.
+      - name: Publish beta AAB to Play open testing track
+        if: env.HAS_PLAY_SECRET == 'true'
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.infinitel8p.xtream
+          releaseFiles: ${{ steps.locate-aab.outputs.aab }}
+          track: beta
+          status: completed
 
       # Needs the dedicated Android TV tracks in Play Console; flip the repo
       # variable PLAY_TV_TRACKS_READY to "true" once the form factor is active.
