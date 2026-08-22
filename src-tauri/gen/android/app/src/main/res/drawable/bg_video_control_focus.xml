@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Focus/press feedback for the TV player controller; transparent otherwise. -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_selected="true" android:state_focused="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="8dp" />
+            <stroke android:width="2dp" android:color="@color/xt_accent" />
+            <solid android:color="@color/xt_row_bg_active" />
+        </shape>
+    </item>
     <item android:state_focused="true">
         <shape android:shape="rectangle">
             <corners android:radius="8dp" />

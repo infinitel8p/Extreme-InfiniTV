@@ -101,6 +101,8 @@ class VideoActivity : AppCompatActivity() {
   private var channelAdapter: ChannelListAdapter? = null
 
   private var overlayVisible = false
+  private var controllerVisible = false
+  private var volumeAdjustActive = false
   private var releaseSuppressed = false
   private var finishedEmitted = false
   // Records an onPause()-initiated stop so onResume() resumes without overriding a viewer pause.
@@ -138,6 +140,10 @@ class VideoActivity : AppCompatActivity() {
     setContentView(R.layout.activity_video)
 
     playerView = findViewById(R.id.player_view)
+    // A focused PlayerView swallows D-pad into media3's show-controller path and derails
+    // focus search, so keys must fall through to onKeyDown.
+    playerView?.isFocusable = false
+    playerView?.isFocusableInTouchMode = false
     channelOverlay = findViewById(R.id.channel_list_overlay)
     channelListView = findViewById(R.id.channel_list)
 
@@ -148,6 +154,20 @@ class VideoActivity : AppCompatActivity() {
     muteButton = playerView?.findViewById(R.id.tv_mute_button)
     volumeSeekBar = playerView?.findViewById(R.id.tv_volume_seekbar)
     setupCustomControls()
+
+    // Rewire on every show so the chain never points through buttons the control view hid meanwhile;
+    // requestFocus is a no-op in touch mode so phone users are unaffected.
+    playerView?.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
+      controllerVisible = visibility == View.VISIBLE
+      if (controllerVisible) {
+        wireControllerFocusChain(mode == MODE_LIVE)
+        if (currentFocus == null && !overlayVisible) {
+          playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_play_pause)?.requestFocus()
+        }
+      } else {
+        setVolumeAdjustActive(false)
+      }
+    })
 
     // Keep the source-rect hint in sync with the player view so the PiP
     // transition animates from the visible video bounds.
@@ -170,7 +190,43 @@ class VideoActivity : AppCompatActivity() {
       override fun onStartTrackingTouch(seekBar: SeekBar) {}
       override fun onStopTrackingTouch(seekBar: SeekBar) {}
     })
+    volumeSeekBar?.setOnFocusChangeListener { _, hasFocus ->
+      if (!hasFocus) setVolumeAdjustActive(false)
+    }
+    // OK toggles adjust mode; otherwise LEFT/RIGHT traverse so the slider does not trap horizontal focus.
+    volumeSeekBar?.setOnKeyListener { seekBar, keyCode, event ->
+      val pressed = event.action == KeyEvent.ACTION_DOWN
+      when (keyCode) {
+        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+          if (pressed) setVolumeAdjustActive(!volumeAdjustActive)
+          true
+        }
+        KeyEvent.KEYCODE_BACK -> {
+          if (!volumeAdjustActive) return@setOnKeyListener false
+          if (pressed) setVolumeAdjustActive(false)
+          true
+        }
+        KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+          if (volumeAdjustActive) return@setOnKeyListener false
+          if (pressed) {
+            val direction = if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) View.FOCUS_LEFT else View.FOCUS_RIGHT
+            seekBar.focusSearch(direction)?.requestFocus()
+          }
+          true
+        }
+        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+          if (pressed) setVolumeAdjustActive(false)
+          false
+        }
+        else -> false
+      }
+    }
     updateVolumeControlsUi(ReceiverVolumeState.volume, ReceiverVolumeState.muted)
+  }
+
+  private fun setVolumeAdjustActive(active: Boolean) {
+    volumeAdjustActive = active
+    volumeSeekBar?.isSelected = active
   }
 
   // singleTop delivery for a repeat launchVod/launchLive while this activity is on top.
@@ -242,23 +298,24 @@ class VideoActivity : AppCompatActivity() {
     val channelDown = channelDownButton
     val channelUp = channelUpButton
 
-    // Bottom row (transport), left to right; the channel buttons only exist in the chain when live.
+    // Bottom row (transport), left to right; hidden or disabled members are skipped (e.g. rew/ffwd
+    // disabled on live) so the chain still connects across them.
     val transportRow = listOfNotNull(
       channelDown?.takeIf { isLive },
       rewind,
       playPause,
       forward,
       channelUp?.takeIf { isLive },
-    )
+    ).filter { it.visibility == View.VISIBLE && it.isEnabled }
     for (index in transportRow.indices) {
       val current = transportRow[index]
       current.nextFocusLeftId = transportRow.getOrElse(index - 1) { current }.id
       current.nextFocusRightId = transportRow.getOrElse(index + 1) { current }.id
     }
 
-    // Volume row: hidden members are skipped so the chain still connects across them.
+    // Volume row: hidden or disabled members are skipped so the chain still connects across them.
     val volumeRow = listOfNotNull(mute, volume, subtitle, audioTrack, settings)
-      .filter { it.visibility != View.GONE }
+      .filter { it.visibility == View.VISIBLE && it.isEnabled }
     for (index in volumeRow.indices) {
       val current = volumeRow[index]
       current.nextFocusLeftId = volumeRow.getOrElse(index - 1) { current }.id
@@ -625,7 +682,9 @@ class VideoActivity : AppCompatActivity() {
     val overlay = channelOverlay ?: return
     overlay.visibility = View.GONE
     overlayVisible = false
-    playerView?.requestFocus()
+    if (controllerVisible) {
+      playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_play_pause)?.requestFocus()
+    }
   }
 
   private fun switchChannelByIndex(newIndex: Int) {
@@ -692,9 +751,9 @@ class VideoActivity : AppCompatActivity() {
   // Key handling: D-pad + media keys for channel flipping.
   // ---------------------------------------------------------------------
 
+  // Keys only flip channels or open overlays while the controller is hidden; while visible,
+  // unhandled D-pad falls through to the framework focus navigation.
   override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-    if (mode != MODE_LIVE) return super.onKeyDown(keyCode, event)
-    // Overlay-visible nav: BACK closes it, OK selects, list rows handle up/down.
     if (overlayVisible) {
       if (keyCode == KeyEvent.KEYCODE_BACK) {
         hideChannelOverlay()
@@ -702,15 +761,35 @@ class VideoActivity : AppCompatActivity() {
       }
       return super.onKeyDown(keyCode, event)
     }
+    if (mode == MODE_LIVE) {
+      when (keyCode) {
+        KeyEvent.KEYCODE_CHANNEL_DOWN -> { switchChannelByDelta(-1); return true }
+        KeyEvent.KEYCODE_CHANNEL_UP -> { switchChannelByDelta(+1); return true }
+      }
+    }
+    if (controllerVisible) {
+      if (keyCode == KeyEvent.KEYCODE_BACK) {
+        playerView?.hideController()
+        return true
+      }
+      return super.onKeyDown(keyCode, event)
+    }
     return when (keyCode) {
       KeyEvent.KEYCODE_DPAD_UP -> {
-        showChannelOverlay(); true
+        if (mode == MODE_LIVE) showChannelOverlay() else playerView?.showController()
+        true
       }
-      KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-        switchChannelByDelta(-1); true
+      KeyEvent.KEYCODE_DPAD_LEFT -> {
+        if (mode == MODE_LIVE) switchChannelByDelta(-1) else playerView?.showController()
+        true
       }
-      KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_CHANNEL_UP -> {
-        switchChannelByDelta(+1); true
+      KeyEvent.KEYCODE_DPAD_RIGHT -> {
+        if (mode == MODE_LIVE) switchChannelByDelta(+1) else playerView?.showController()
+        true
+      }
+      KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+        playerView?.showController()
+        true
       }
       else -> super.onKeyDown(keyCode, event)
     }
