@@ -23,5 +23,5 @@
     <string name="cast_media_previous">Previous</string>
     <string name="receiver_wake_notification_channel">Cast wake</string>
     <string name="receiver_wake_notification_title">Casting to this TV</string>
-    <string name="receiver_wake_notification_text">Something is being cast to this TV</string>
+    <string name="receiver_wake_notification_text">Tap to open and start playback</string>
 </resources>

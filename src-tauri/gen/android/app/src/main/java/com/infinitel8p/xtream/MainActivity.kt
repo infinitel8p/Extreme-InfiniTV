@@ -1088,9 +1088,8 @@ class ReceiverKeepAliveBridge(private val activity: MainActivity) {
   }
 }
 
-// Brings the app forward when a cast POST arrives while the WebView is backgrounded and paused.
-// Direct startActivity works on older Android/some TV builds; elsewhere a full-screen-intent
-// notification is the only launch path Android still allows from a background process.
+// A cast POST arriving while the WebView is backgrounded can only foreground the app on Android 9 and older.
+// On Android 10+ background activity starts are blocked, so we post a tap-to-open notification instead.
 class ReceiverWakeBridge(private val activity: MainActivity) {
   companion object {
     private const val TAG = "AndroidReceiverWake"
@@ -1102,12 +1101,7 @@ class ReceiverWakeBridge(private val activity: MainActivity) {
   fun isSupported(): Boolean {
     return try {
       if (!NotificationManagerCompat.from(activity).areNotificationsEnabled()) return false
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-        val manager = activity.getSystemService(NotificationManager::class.java) ?: return false
-        manager.canUseFullScreenIntent()
-      } else {
-        true
-      }
+      true
     } catch (error: Throwable) {
       Log.w(TAG, "isSupported failed", error)
       false
@@ -1119,9 +1113,11 @@ class ReceiverWakeBridge(private val activity: MainActivity) {
     return try {
       XtreamDreamService.dismissActiveDream()
       val intent = wakeIntent()
-      // Q+ blocks background activity starts silently (no throw), so its success is unknowable;
-      // the full-screen intent is the only outcome we can actually report back.
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return postFullScreenIntent(intent)
+      // Q+ can only be offered a tap-to-open notification, so wake() reports false there.
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        postWakeNotification(intent)
+        return false
+      }
       activity.startActivity(intent)
       true
     } catch (error: Throwable) {
@@ -1134,12 +1130,12 @@ class ReceiverWakeBridge(private val activity: MainActivity) {
     Intent(activity, MainActivity::class.java)
       .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
 
-  private fun postFullScreenIntent(intent: Intent): Boolean {
+  private fun postWakeNotification(intent: Intent) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
       ActivityCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) !=
         PackageManager.PERMISSION_GRANTED
     ) {
-      return false
+      return
     }
     ensureNotificationChannel()
     val pendingIntent = PendingIntent.getActivity(activity, 0, intent, PendingIntent.FLAG_IMMUTABLE)
@@ -1151,14 +1147,12 @@ class ReceiverWakeBridge(private val activity: MainActivity) {
       .setCategory(NotificationCompat.CATEGORY_EVENT)
       .setOngoing(false)
       .setAutoCancel(true)
-      .setFullScreenIntent(pendingIntent, true)
+      .setContentIntent(pendingIntent)
       .build()
-    return try {
+    try {
       NotificationManagerCompat.from(activity).notify(NOTIFICATION_ID, notification)
-      true
     } catch (error: SecurityException) {
       Log.w(TAG, "notify blocked by SecurityException", error)
-      false
     }
   }
 

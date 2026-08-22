@@ -1,4 +1,4 @@
-// Wakes the receiver app to the foreground when a cast arrives while backgrounded (Android only).
+// Tries to bring the receiver app forward when a cast arrives while backgrounded (Android only).
 import { log } from "@/scripts/lib/log.js"
 
 interface AndroidReceiverWakeBridge {
@@ -19,6 +19,7 @@ export function receiverWakeAvailable(): boolean {
   }
 }
 
+// True only when the app really came forward: Android 10+ can only post a tap-to-open notification.
 export function wakeReceiverApp(): boolean {
   try {
     return bridge()?.wake?.() === true
