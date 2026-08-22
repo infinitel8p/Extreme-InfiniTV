@@ -449,6 +449,7 @@ jobs:
         if: env.HAS_PLAY_SECRET == 'true'
         env:
           XTREAM_TV_BUILD: "true"
+          PUBLIC_APP_MODE: "receiver"
           XTREAM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}

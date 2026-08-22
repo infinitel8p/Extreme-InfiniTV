@@ -667,6 +667,7 @@ jobs:
       - name: Build signed Android TV AAB
         env:
           XTREAM_TV_BUILD: "true"
+          PUBLIC_APP_MODE: "receiver"
           XTREAM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
@@ -695,6 +696,44 @@ jobs:
           name: play-tv-aab
           path: ${{ steps.collect.outputs.out }}/*_tv.aab
           if-no-files-found: error
+
+      - name: Build signed Android TV APK (receiver kiosk)
+        env:
+          XTREAM_TV_BUILD: "true"
+          PUBLIC_APP_MODE: "receiver"
+          XTREAM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.13846066
+          XT_SKIP_FFMPEG_SIDECAR: "1"
+        run: pnpm tauri android build --apk
+
+      - name: Collect TV APK artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="${{ steps.collect.outputs.out }}"
+          VERSION=$(node -p "require('./package.json').version")
+          TV_APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "*release*.apk" -printf '%T@\t%p\n' | sort -rn | head -1 | cut -f2-)
+          if [ -z "$TV_APK" ]; then
+            echo "::error::Could not locate signed Android TV APK after build"
+            find src-tauri/gen/android/app/build/outputs/apk -type f
+            exit 1
+          fi
+          cp "$TV_APK" "$OUT/Extreme InfiniTV_${VERSION}_receiver.apk"
+          # Stable asset name for the AFTVnews Downloader Code (receiver kiosk build)
+          cp "$TV_APK" "$OUT/Extreme-InfiniTV-receiver.apk"
+
+      - name: Upload TV APK to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=$(gh release view ${{ needs.create-release.outputs.release_id }} --json tagName -q .tagName 2>/dev/null \
+            || gh api repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }} --jq .tag_name)
+          gh release upload "$TAG" \
+            "${{ steps.collect.outputs.out }}/"*receiver.apk \
+            --clobber
 
   # Publishes the phone/tablet AAB to Play production, reading it from the
   # play-aab workflow artifact - it never touches the GitHub release.

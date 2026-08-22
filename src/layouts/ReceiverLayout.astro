@@ -10,6 +10,7 @@ const { pageTitle } = Astro.props
 const documentTitle = pageTitle
   ? `${pageTitle} | Extreme InfiniTV`
   : "Extreme InfiniTV"
+const appMode = import.meta.env.PUBLIC_APP_MODE || ""
 ---
 
 <!doctype html>
@@ -21,6 +22,31 @@ const documentTitle = pageTitle
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <title>{documentTitle}</title>
+    {
+      appMode === "receiver" && (
+        <script is:inline>
+          // kiosk build boots straight here, so TV defaults are written here, not Layout
+          try {
+            if (localStorage.getItem("xt_perf_mode") === null) {
+              localStorage.setItem("xt_perf_mode", "1");
+              localStorage.setItem("xt_perf_mode_auto", "1");
+            }
+            if (localStorage.getItem("xt_tv_overscan") === null) {
+              localStorage.setItem("xt_tv_overscan", "4");
+              localStorage.setItem("xt_tv_overscan_auto", "1");
+            }
+            if (localStorage.getItem("xt_receiver_mode") === null) {
+              localStorage.setItem("xt_receiver_mode", "1");
+              localStorage.setItem("xt_receiver_mode_auto", "1");
+            }
+            if (localStorage.getItem("xt_receiver_boot") === null) {
+              localStorage.setItem("xt_receiver_boot", "1");
+              localStorage.setItem("xt_receiver_boot_auto", "1");
+            }
+          } catch (e) {}
+        </script>
+      )
+    }
     <script is:inline>
       try {
         var fontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1");
