@@ -53,6 +53,21 @@ import androidx.annotation.RequiresApi
 import app.tauri.plugin.PluginManager
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import android.graphics.BitmapFactory
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import java.net.URL
 
 @RequiresApi(Build.VERSION_CODES.O)
 private class RenderGoneGuardingClient(
@@ -1434,6 +1449,298 @@ class SnifferBridge(
   }
 }
 
+// Sender-side "casting to <TV>" media notification: MediaSessionCompat + NotificationCompat.MediaStyle,
+// so playback can be controlled from the shade without reopening the app. Notification action taps and
+// hardware media-button presses both funnel into dispatchAction(), which forwards to JS as xt:cast-media-action.
+class CastMediaBridge(
+  private val activity: TauriActivity,
+  private val hostedWebViewRef: () -> WebView?,
+) {
+  companion object {
+    private const val TAG = "AndroidCastMedia"
+    private const val CHANNEL_ID = "cast_media"
+    private const val NOTIFICATION_ID = 4301
+    private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 4302
+    private const val ACTION_CAST_MEDIA = "com.infinitel8p.xtream.CAST_MEDIA_ACTION"
+    private const val EXTRA_ACTION = "action"
+  }
+
+  private var mediaSession: MediaSessionCompat? = null
+  private var receiverRegistered = false
+  private var lastArtworkUrl: String? = null
+  private var artworkGeneration = 0
+
+  private val actionReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+      val action = intent.getStringExtra(EXTRA_ACTION) ?: return
+      dispatchAction(action)
+    }
+  }
+
+  @JavascriptInterface
+  fun update(
+    title: String,
+    deviceName: String,
+    isPlaying: Boolean,
+    isLive: Boolean,
+    hasNext: Boolean,
+    hasPrev: Boolean,
+    artworkUrl: String,
+  ) {
+    activity.runOnUiThread {
+      val session = ensureMediaSession()
+      session.isActive = true
+      session.setMetadata(buildMetadata(title, deviceName, null))
+      session.setPlaybackState(buildPlaybackState(isPlaying, hasNext, hasPrev))
+      postNotification(title, deviceName, isLive, isPlaying, hasNext, hasPrev, session, null)
+    }
+    val trimmedArtwork = artworkUrl.trim()
+    if (trimmedArtwork.isEmpty()) {
+      lastArtworkUrl = null
+      return
+    }
+    if (trimmedArtwork == lastArtworkUrl) return
+    lastArtworkUrl = trimmedArtwork
+    loadArtwork(trimmedArtwork, title, deviceName, isLive, isPlaying, hasNext, hasPrev)
+  }
+
+  @JavascriptInterface
+  fun clear() {
+    activity.runOnUiThread {
+      artworkGeneration++
+      lastArtworkUrl = null
+      NotificationManagerCompat.from(activity).cancel(NOTIFICATION_ID)
+      mediaSession?.isActive = false
+      mediaSession?.release()
+      mediaSession = null
+    }
+  }
+
+  private fun ensureMediaSession(): MediaSessionCompat {
+    mediaSession?.let { return it }
+    ensureReceiverRegistered()
+    val contentIntent = PendingIntent.getActivity(
+      activity,
+      0,
+      Intent(activity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+      PendingIntent.FLAG_IMMUTABLE
+    )
+    val session = MediaSessionCompat(activity, TAG).apply {
+      setSessionActivity(contentIntent)
+      setCallback(object : MediaSessionCompat.Callback() {
+        override fun onPlay() = dispatchAction("resume")
+        override fun onPause() = dispatchAction("pause")
+        override fun onSkipToNext() = dispatchAction("next")
+        override fun onSkipToPrevious() = dispatchAction("prev")
+        override fun onStop() = dispatchAction("stop")
+      })
+    }
+    mediaSession = session
+    return session
+  }
+
+  private fun ensureReceiverRegistered() {
+    if (receiverRegistered) return
+    try {
+      ContextCompat.registerReceiver(
+        activity,
+        actionReceiver,
+        IntentFilter(ACTION_CAST_MEDIA),
+        ContextCompat.RECEIVER_NOT_EXPORTED
+      )
+      receiverRegistered = true
+    } catch (error: Throwable) {
+      Log.w(TAG, "registerReceiver failed", error)
+    }
+  }
+
+  private fun ensureNotificationPermission(): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+    if (ActivityCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) ==
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      return true
+    }
+    try {
+      ActivityCompat.requestPermissions(
+        activity,
+        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+        NOTIFICATION_PERMISSION_REQUEST_CODE
+      )
+    } catch (error: Throwable) {
+      Log.w(TAG, "requestPermissions failed", error)
+    }
+    return false
+  }
+
+  private fun ensureNotificationChannel() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val manager = activity.getSystemService(NotificationManager::class.java) ?: return
+    if (manager.getNotificationChannel(CHANNEL_ID) != null) return
+    manager.createNotificationChannel(
+      NotificationChannel(
+        CHANNEL_ID,
+        activity.getString(R.string.cast_media_notification_channel),
+        NotificationManager.IMPORTANCE_LOW
+      )
+    )
+  }
+
+  private fun buildMetadata(title: String, deviceName: String, artwork: Bitmap?): MediaMetadataCompat {
+    val builder = MediaMetadataCompat.Builder()
+      .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+      .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, deviceName)
+    if (artwork != null) builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artwork)
+    return builder.build()
+  }
+
+  private fun buildPlaybackState(isPlaying: Boolean, hasNext: Boolean, hasPrev: Boolean): PlaybackStateCompat {
+    var actions = PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP
+    if (hasNext) actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+    if (hasPrev) actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+    val state = if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+    return PlaybackStateCompat.Builder()
+      .setActions(actions)
+      .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, if (isPlaying) 1f else 0f)
+      .build()
+  }
+
+  private fun buildAction(action: String, iconRes: Int, label: String): NotificationCompat.Action {
+    val intent = Intent(ACTION_CAST_MEDIA).apply {
+      setPackage(activity.packageName)
+      putExtra(EXTRA_ACTION, action)
+    }
+    val pendingIntent = PendingIntent.getBroadcast(
+      activity,
+      action.hashCode(),
+      intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+    return NotificationCompat.Action.Builder(iconRes, label, pendingIntent).build()
+  }
+
+  private fun postNotification(
+    title: String,
+    deviceName: String,
+    isLive: Boolean,
+    isPlaying: Boolean,
+    hasNext: Boolean,
+    hasPrev: Boolean,
+    session: MediaSessionCompat,
+    artwork: Bitmap?,
+  ) {
+    if (!ensureNotificationPermission()) return
+    ensureNotificationChannel()
+    val contentIntent = PendingIntent.getActivity(
+      activity,
+      0,
+      Intent(activity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+      PendingIntent.FLAG_IMMUTABLE
+    )
+    val builder = NotificationCompat.Builder(activity, CHANNEL_ID)
+      .setSmallIcon(R.drawable.ic_brand_mark)
+      .setContentTitle(title)
+      .setContentText(if (isLive) "$deviceName · ${activity.getString(R.string.cast_media_live_suffix)}" else deviceName)
+      .setContentIntent(contentIntent)
+      .setOngoing(isPlaying)
+      .setOnlyAlertOnce(true)
+      .setPriority(NotificationCompat.PRIORITY_LOW)
+      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+    if (artwork != null) builder.setLargeIcon(artwork)
+
+    val compactIndices = mutableListOf<Int>()
+    var actionCount = 0
+    if (hasPrev) {
+      builder.addAction(buildAction("prev", R.drawable.ic_notif_skip_previous, activity.getString(R.string.cast_media_previous)))
+      compactIndices.add(actionCount)
+      actionCount++
+    }
+    builder.addAction(
+      buildAction(
+        if (isPlaying) "pause" else "resume",
+        if (isPlaying) R.drawable.ic_notif_pause else R.drawable.ic_notif_play,
+        activity.getString(if (isPlaying) R.string.cast_media_pause else R.string.cast_media_resume)
+      )
+    )
+    compactIndices.add(actionCount)
+    actionCount++
+    if (hasNext) {
+      builder.addAction(buildAction("next", R.drawable.ic_notif_skip_next, activity.getString(R.string.cast_media_next)))
+      compactIndices.add(actionCount)
+    }
+
+    builder.setStyle(
+      androidx.media.app.NotificationCompat.MediaStyle()
+        .setMediaSession(session.sessionToken)
+        .setShowActionsInCompactView(*compactIndices.toIntArray())
+    )
+
+    try {
+      NotificationManagerCompat.from(activity).notify(NOTIFICATION_ID, builder.build())
+    } catch (error: SecurityException) {
+      Log.w(TAG, "notify blocked by SecurityException: $error")
+    }
+  }
+
+  private fun loadArtwork(
+    url: String,
+    title: String,
+    deviceName: String,
+    isLive: Boolean,
+    isPlaying: Boolean,
+    hasNext: Boolean,
+    hasPrev: Boolean,
+  ) {
+    val generation = ++artworkGeneration
+    Thread {
+      val bitmap = try {
+        URL(url).openConnection().run {
+          connectTimeout = 4000
+          readTimeout = 4000
+          getInputStream().use { BitmapFactory.decodeStream(it) }
+        }
+      } catch (error: Throwable) {
+        Log.w(TAG, "artwork fetch failed: $error")
+        null
+      }
+      if (bitmap == null || generation != artworkGeneration) return@Thread
+      activity.runOnUiThread {
+        val session = mediaSession
+        if (generation != artworkGeneration || session == null) return@runOnUiThread
+        session.setMetadata(buildMetadata(title, deviceName, bitmap))
+        postNotification(title, deviceName, isLive, isPlaying, hasNext, hasPrev, session, bitmap)
+      }
+    }.start()
+  }
+
+  private fun dispatchAction(action: String) {
+    val webView = hostedWebViewRef() ?: return
+    val script = """
+      (function(){
+        try {
+          document.dispatchEvent(new CustomEvent('xt:cast-media-action', { detail: { action: ${JSONObject.quote(action)} } }));
+        } catch (_) {}
+      })();
+    """.trimIndent()
+    activity.runOnUiThread { webView.evaluateJavascript(script, null) }
+  }
+
+  // Called from MainActivity.onDestroy so the notification/session/receiver never outlive the activity.
+  fun activityDestroyed() {
+    if (receiverRegistered) {
+      try {
+        activity.unregisterReceiver(actionReceiver)
+      } catch (error: Throwable) {
+        Log.w(TAG, "unregisterReceiver failed", error)
+      }
+      receiverRegistered = false
+    }
+    NotificationManagerCompat.from(activity).cancel(NOTIFICATION_ID)
+    mediaSession?.release()
+    mediaSession = null
+  }
+}
+
 class MainActivity : TauriActivity() {
 
   private var fullscreenView: View? = null
@@ -1448,6 +1755,9 @@ class MainActivity : TauriActivity() {
 
   // Cached so onDestroy() can unregister/stop NSD listeners.
   private var nsdBridge: NsdBridge? = null
+
+  // Cached so onDestroy() can cancel the cast media notification + release its session.
+  private var castMediaBridge: CastMediaBridge? = null
 
   // Set by PipBridge.setAutoEnter() whenever a <video> starts/stops playing
   @Volatile
@@ -1584,6 +1894,9 @@ class MainActivity : TauriActivity() {
     nsdBridge = nsd
     webView.addJavascriptInterface(nsd, "AndroidNsd")
     webView.addJavascriptInterface(ReceiverKeepAliveBridge(this), "AndroidReceiverKeepAlive")
+    val castMedia = CastMediaBridge(this, { hostedWebView })
+    castMediaBridge = castMedia
+    webView.addJavascriptInterface(castMedia, "AndroidCastMedia")
     webView.addJavascriptInterface(
       WebSettingsBridge(this, { hostedWebView }, webView.settings.userAgentString),
       "AndroidWebSettings"
@@ -1723,6 +2036,7 @@ class MainActivity : TauriActivity() {
   override fun onDestroy() {
     snifferBridge?.activityDestroyed()
     nsdBridge?.activityDestroyed()
+    castMediaBridge?.activityDestroyed()
     super.onDestroy()
   }
 

@@ -15,4 +15,10 @@
     <string name="xt_video_volume_description">Volume</string>
     <string name="xt_video_next_channel_description">Next channel</string>
     <string name="xt_video_previous_channel_description">Previous channel</string>
+    <string name="cast_media_notification_channel">Cast controls</string>
+    <string name="cast_media_live_suffix">Live</string>
+    <string name="cast_media_pause">Pause</string>
+    <string name="cast_media_resume">Resume</string>
+    <string name="cast_media_next">Next</string>
+    <string name="cast_media_previous">Previous</string>
 </resources>
