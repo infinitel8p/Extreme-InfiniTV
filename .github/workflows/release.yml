@@ -640,6 +640,8 @@ jobs:
           fi
           cp "$AAB" "$OUT/Extreme InfiniTV_${VERSION}.aab"
           cp "$APK" "$OUT/Extreme InfiniTV_${VERSION}.apk"
+          # Stable asset name for AFTVnews Downloader Code
+          cp "$APK" "$OUT/Extreme-InfiniTV.apk"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
 
       # The AAB never touches the release - Play publishing reads it from here.
