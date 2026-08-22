@@ -81,6 +81,50 @@ class DreamManifestTest {
     assertEquals(50, data.entries.size)
   }
 
+  // Android's JSONObject.optString coerces a JSON null to the literal "null", which the
+  // handoff writer emits for every missing artwork field; that string reached Coil as a url.
+  @Test
+  fun `explicit json nulls and the literal string null never become urls`() {
+    val json = """
+      {
+        "at": 0,
+        "ua": null,
+        "entries": [
+          { "kind": "vod", "id": "1", "title": "Title", "posterUrl": "https://x/p1.jpg", "backdropUrl": null, "logoUrl": null },
+          { "kind": "vod", "id": "2", "title": "Title", "posterUrl": "https://x/p2.jpg", "backdropUrl": "null", "logoUrl": "null" }
+        ]
+      }
+    """.trimIndent()
+
+    val data = DreamManifest.parse(json)
+
+    assertNull(data.ua)
+    assertEquals(2, data.entries.size)
+    assertEquals("https://x/p1.jpg", data.entries[0].posterUrl)
+    assertNull(data.entries[0].backdropUrl)
+    assertNull(data.entries[0].logoUrl)
+    assertEquals("https://x/p2.jpg", data.entries[1].posterUrl)
+    assertNull(data.entries[1].backdropUrl)
+    assertNull(data.entries[1].logoUrl)
+  }
+
+  @Test
+  fun `drops url fields that are not http`() {
+    val json = """
+      {
+        "entries": [
+          { "kind": "vod", "id": "1", "title": "Title", "posterUrl": "/t/p/w500/abc.jpg", "backdropUrl": "file:///data/x.jpg" }
+        ]
+      }
+    """.trimIndent()
+
+    val data = DreamManifest.parse(json)
+
+    assertEquals(1, data.entries.size)
+    assertNull(data.entries[0].posterUrl)
+    assertNull(data.entries[0].backdropUrl)
+  }
+
   @Test
   fun `blank optional fields become null`() {
     val json = """

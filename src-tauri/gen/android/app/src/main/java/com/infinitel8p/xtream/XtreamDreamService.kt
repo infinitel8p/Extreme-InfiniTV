@@ -10,6 +10,7 @@ import android.graphics.Outline
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.service.dreams.DreamService
@@ -22,6 +23,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.view.animation.AnimationUtils
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -36,13 +38,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import kotlin.math.PI
-import kotlin.math.sin
+import kotlin.math.abs
+import kotlin.math.tan
 import kotlin.random.Random
 
 /**
  * System screensaver (Settings > Display > Screen saver). Rotates
  * posters/backdrops from a manifest the web app writes to dataDir; falls
- * back to a drifting brand mark when offline or once every entry fails.
+ * back to a bouncing brand mark when offline or once every entry fails.
  */
 class XtreamDreamService : DreamService() {
 
@@ -62,10 +65,18 @@ class XtreamDreamService : DreamService() {
     private const val POSTER_CARD_CORNER_RADIUS_DP = 12f
     private const val POSTER_CARD_ELEVATION_DP = 12f
     private const val BRAND_ALPHA = 0.4f
-    private const val BRAND_DRIFT_DURATION_MS = 60_000L
     private const val BRAND_FALLBACK_ALPHA = 1f
+    private const val BRAND_BOUNCE_MIN_CROSSING_MS = 8_000f
+    private const val BRAND_BOUNCE_MAX_CROSSING_MS = 12_000f
+    private const val BRAND_BOUNCE_MIN_ANGLE_DEG = 25f
+    private const val BRAND_BOUNCE_MAX_ANGLE_DEG = 65f
+    private const val BRAND_BOUNCE_FRAME_CAP_MS = 64L
+    private const val BRAND_BOUNCE_MEASURE_RETRY_MS = 100L
+    private const val BRAND_BOUNCE_MEASURE_MAX_RETRIES = 20
     private const val FALLBACK_REFRESH_INTERVAL_MS = 5 * 60_000L
     private const val DISK_CACHE_MAX_BYTES = 64L * 1024 * 1024
+    private val URL_IN_TEXT = Regex("""\w+://\S+""")
+    private const val MAX_LOGGED_MESSAGE_CHARS = 160
 
     @Volatile
     private var activeDream: XtreamDreamService? = null
@@ -111,7 +122,7 @@ class XtreamDreamService : DreamService() {
   private val failureCounts = HashMap<String, Int>()
 
   private var kenBurnsAnimator: AnimatorSet? = null
-  private var brandDriftAnimator: ValueAnimator? = null
+  private var brandBounceAnimator: ValueAnimator? = null
   private var fallbackActive = false
 
   override fun onAttachedToWindow() {
@@ -335,7 +346,7 @@ class XtreamDreamService : DreamService() {
     val renderable = data.entries.filter { it.posterUrl != null || it.backdropUrl != null }
     activeEntries = renderable.toMutableList()
     userAgent = data.ua
-    Log.d(TAG, "manifest loaded: entries=${activeEntries.size} ageMs=${System.currentTimeMillis() - data.at}")
+    logManifestSummary(data, renderable)
     imageLoader = buildImageLoader()
 
     hideLockup()
@@ -352,6 +363,17 @@ class XtreamDreamService : DreamService() {
         showNextEntry()
       }
     }
+  }
+
+  private fun logManifestSummary(data: DreamData, renderable: List<DreamEntry>) {
+    val posterCount = renderable.count { it.posterUrl != null }
+    val backdropCount = renderable.count { it.backdropUrl != null }
+    val sample = renderable.firstNotNullOfOrNull { it.backdropUrl ?: it.posterUrl }
+    Log.d(
+      TAG,
+      "manifest loaded: entries=${renderable.size}/${data.entries.size} poster=$posterCount backdrop=$backdropCount " +
+        "sample=${redactUrl(sample)} ua=${if (data.ua != null) "set" else "none"} ageMs=${System.currentTimeMillis() - data.at}",
+    )
   }
 
   private fun hideLockup() {
@@ -389,7 +411,7 @@ class XtreamDreamService : DreamService() {
     val entry = activeEntries[currentIndex]
     val imageUrl = entry.backdropUrl ?: entry.posterUrl
     if (imageUrl == null) {
-      onEntryFailed(entry)
+      onEntryFailed(entry, null, null)
       return
     }
     loadEntryImage(entry, imageUrl, isBackdrop = entry.backdropUrl != null)
@@ -404,10 +426,8 @@ class XtreamDreamService : DreamService() {
     val requestBuilder = ImageRequest.Builder(this)
       .data(imageUrl)
       .size(displayMetrics.widthPixels, displayMetrics.heightPixels)
-      .target(
-        onSuccess = { drawable -> onEntryImageReady(entry, drawable, isBackdrop) },
-        onError = { onEntryFailed(entry) },
-      )
+      .target(onSuccess = { drawable -> onEntryImageReady(entry, drawable, isBackdrop) })
+      .listener(onError = { _, result -> onEntryFailed(entry, imageUrl, result.throwable) })
     userAgent?.takeIf { it.isNotBlank() }?.let { requestBuilder.setHeader("User-Agent", it) }
     posterDisposable?.dispose()
     posterDisposable = loader.enqueue(requestBuilder.build())
@@ -445,10 +465,13 @@ class XtreamDreamService : DreamService() {
     scheduleNextEntry(holdMs)
   }
 
-  private fun onEntryFailed(entry: DreamEntry) {
+  private fun onEntryFailed(entry: DreamEntry, imageUrl: String?, error: Throwable?) {
     val failures = (failureCounts[entry.id] ?: 0) + 1
     failureCounts[entry.id] = failures
-    Log.w(TAG, "entry ${entry.id} failed (${failures}/$MAX_FAILURES_PER_ENTRY)")
+    Log.w(
+      TAG,
+      "entry ${entry.id} failed (${failures}/$MAX_FAILURES_PER_ENTRY) url=${redactUrl(imageUrl)} cause=${describeError(error)}",
+    )
     if (failures >= MAX_FAILURES_PER_ENTRY) {
       activeEntries.removeAll { it.id == entry.id }
       failureCounts.remove(entry.id)
@@ -484,7 +507,10 @@ class XtreamDreamService : DreamService() {
           logo.visibility = View.VISIBLE
           title.visibility = View.GONE
         },
-        onError = {
+      )
+      .listener(
+        onError = { _, result ->
+          Log.w(TAG, "logo ${entry.id} failed url=${redactUrl(logoUrl)} cause=${describeError(result.throwable)}")
           logo.visibility = View.GONE
           title.visibility = View.VISIBLE
           title.text = entry.title
@@ -511,7 +537,12 @@ class XtreamDreamService : DreamService() {
           card.setImageDrawable(drawable)
           card.visibility = View.VISIBLE
         },
-        onError = { card.visibility = View.GONE },
+      )
+      .listener(
+        onError = { _, result ->
+          Log.w(TAG, "poster ${entry.id} failed url=${redactUrl(posterUrl)} cause=${describeError(result.throwable)}")
+          card.visibility = View.GONE
+        },
       )
     userAgent?.takeIf { it.isNotBlank() }?.let { requestBuilder.setHeader("User-Agent", it) }
     posterCardDisposable = loader.enqueue(requestBuilder.build())
@@ -543,23 +574,63 @@ class XtreamDreamService : DreamService() {
     val brand = brandMark ?: return
     brand.visibility = View.VISIBLE
     brand.animate().alpha(BRAND_FALLBACK_ALPHA).setDuration(CROSSFADE_DURATION_MS).start()
+    startBrandBounce(brand, attempt = 0)
+    scheduleFallbackRefresh()
+  }
 
-    val displayMetrics = resources.displayMetrics
-    val amplitudeX = displayMetrics.widthPixels * 0.1f
-    val amplitudeY = displayMetrics.heightPixels * 0.1f
-    brandDriftAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-      duration = BRAND_DRIFT_DURATION_MS
+  // Constant-velocity DVD-logo bounce off the visible bounds; retries until the mark is measured.
+  private fun startBrandBounce(brand: View, attempt: Int) {
+    if (!fallbackActive) return
+    val root = rootView ?: return
+    if (brand.width == 0 || brand.height == 0 || root.width == 0 || root.height == 0) {
+      if (attempt >= BRAND_BOUNCE_MEASURE_MAX_RETRIES) return
+      postDelayed(BRAND_BOUNCE_MEASURE_RETRY_MS) { startBrandBounce(brand, attempt + 1) }
+      return
+    }
+
+    val maxX = ((root.width - brand.width) / 2f).coerceAtLeast(0f)
+    val maxY = ((root.height - brand.height) / 2f).coerceAtLeast(0f)
+    val crossingMs = BRAND_BOUNCE_MIN_CROSSING_MS +
+      Random.nextFloat() * (BRAND_BOUNCE_MAX_CROSSING_MS - BRAND_BOUNCE_MIN_CROSSING_MS)
+    val angleRad = (BRAND_BOUNCE_MIN_ANGLE_DEG +
+      Random.nextFloat() * (BRAND_BOUNCE_MAX_ANGLE_DEG - BRAND_BOUNCE_MIN_ANGLE_DEG)) * PI.toFloat() / 180f
+    val horizontalSpeed = root.width / crossingMs
+    var velocityX = horizontalSpeed * if (Random.nextBoolean()) 1f else -1f
+    var velocityY = horizontalSpeed * tan(angleRad) * if (Random.nextBoolean()) 1f else -1f
+    var positionX = brand.translationX.coerceIn(-maxX, maxX)
+    var positionY = brand.translationY.coerceIn(-maxY, maxY)
+    var lastFrameMs = AnimationUtils.currentAnimationTimeMillis()
+
+    brandBounceAnimator?.cancel()
+    brandBounceAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+      duration = 1_000L
       repeatCount = ValueAnimator.INFINITE
       interpolator = LinearInterpolator()
-      addUpdateListener { animator ->
-        val fraction = animator.animatedValue as Float
-        val angle = fraction * 2f * PI.toFloat()
-        brand.translationX = amplitudeX * sin(angle)
-        brand.translationY = amplitudeY * sin(2f * angle + PI.toFloat() / 2f)
+      addUpdateListener {
+        val nowMs = AnimationUtils.currentAnimationTimeMillis()
+        val deltaMs = (nowMs - lastFrameMs).coerceIn(0L, BRAND_BOUNCE_FRAME_CAP_MS)
+        lastFrameMs = nowMs
+        positionX += velocityX * deltaMs
+        positionY += velocityY * deltaMs
+        if (positionX <= -maxX) {
+          positionX = -maxX
+          velocityX = abs(velocityX)
+        } else if (positionX >= maxX) {
+          positionX = maxX
+          velocityX = -abs(velocityX)
+        }
+        if (positionY <= -maxY) {
+          positionY = -maxY
+          velocityY = abs(velocityY)
+        } else if (positionY >= maxY) {
+          positionY = maxY
+          velocityY = -abs(velocityY)
+        }
+        brand.translationX = positionX
+        brand.translationY = positionY
       }
       start()
     }
-    scheduleFallbackRefresh()
   }
 
   // Polls the manifest while the brand fallback is showing so a background
@@ -590,14 +661,33 @@ class XtreamDreamService : DreamService() {
 
   private fun endBrandFallback() {
     fallbackActive = false
-    brandDriftAnimator?.cancel()
-    brandDriftAnimator = null
+    brandBounceAnimator?.cancel()
+    brandBounceAnimator = null
     val brand = brandMark
     brand?.animate()?.alpha(0f)?.setDuration(CROSSFADE_DURATION_MS)?.withEndAction {
       brand.visibility = View.GONE
     }?.start()
     overlayContainer?.visibility = View.VISIBLE
     showLockup()
+  }
+
+  // ---------------------------------------------------------------------
+  // Diagnostics
+  // ---------------------------------------------------------------------
+
+  // Logs stay credential-free: scheme + host only, never a path or query.
+  private fun redactUrl(url: String?): String {
+    if (url.isNullOrBlank()) return "none"
+    val uri = try { Uri.parse(url) } catch (error: Throwable) { null }
+    val scheme = uri?.scheme ?: return "unparseable(len=${url.length})"
+    val host = uri.host ?: return "$scheme://?"
+    return "$scheme://$host"
+  }
+
+  private fun describeError(error: Throwable?): String {
+    if (error == null) return "unknown"
+    val message = error.message?.let { URL_IN_TEXT.replace(it) { match -> redactUrl(match.value) } } ?: "no message"
+    return "${error.javaClass.simpleName}: ${message.take(MAX_LOGGED_MESSAGE_CHARS)}"
   }
 
   // ---------------------------------------------------------------------
@@ -616,8 +706,8 @@ class XtreamDreamService : DreamService() {
     pendingRunnables.clear()
     kenBurnsAnimator?.cancel()
     kenBurnsAnimator = null
-    brandDriftAnimator?.cancel()
-    brandDriftAnimator = null
+    brandBounceAnimator?.cancel()
+    brandBounceAnimator = null
     posterDisposable?.dispose()
     logoDisposable?.dispose()
     posterCardDisposable?.dispose()
@@ -663,12 +753,13 @@ data class DreamData(
 object DreamManifest {
   private const val MAX_ENTRIES = 50
   private val VALID_KINDS = setOf("vod", "series")
+  private val HTTP_URL = Regex("^https?://", RegexOption.IGNORE_CASE)
 
   fun parse(json: String): DreamData {
     return try {
       val root = JSONObject(json)
       val at = root.optLong("at", 0L)
-      val ua = root.optString("ua").takeIf { it.isNotBlank() }
+      val ua = root.stringOrNull("ua")
       val entriesArray = root.optJSONArray("entries") ?: JSONArray()
       val entries = ArrayList<DreamEntry>()
       for (i in 0 until entriesArray.length()) {
@@ -685,18 +776,27 @@ object DreamManifest {
   }
 
   private fun parseEntry(obj: JSONObject): DreamEntry? {
-    val kind = obj.optString("kind")
-    val id = obj.optString("id")
-    val title = obj.optString("title")
-    if (kind !in VALID_KINDS || id.isBlank() || title.isBlank()) return null
+    val kind = obj.stringOrNull("kind")
+    val id = obj.stringOrNull("id")
+    val title = obj.stringOrNull("title")
+    if (kind == null || kind !in VALID_KINDS || id == null || title == null) return null
     return DreamEntry(
       kind = kind,
       id = id,
       title = title,
-      posterUrl = obj.optString("posterUrl").takeIf { it.isNotBlank() },
-      backdropUrl = obj.optString("backdropUrl").takeIf { it.isNotBlank() },
-      logoUrl = obj.optString("logoUrl").takeIf { it.isNotBlank() },
-      tier = obj.optString("tier"),
+      posterUrl = obj.urlOrNull("posterUrl"),
+      backdropUrl = obj.urlOrNull("backdropUrl"),
+      logoUrl = obj.urlOrNull("logoUrl"),
+      tier = obj.stringOrNull("tier") ?: "",
     )
   }
+
+  // Android's optString coerces a JSON null to the literal "null"; isNull is the only safe gate.
+  private fun JSONObject.stringOrNull(key: String): String? {
+    if (isNull(key)) return null
+    return optString(key).trim().takeIf { it.isNotEmpty() }
+  }
+
+  private fun JSONObject.urlOrNull(key: String): String? =
+    stringOrNull(key)?.takeIf { HTTP_URL.containsMatchIn(it) }
 }
