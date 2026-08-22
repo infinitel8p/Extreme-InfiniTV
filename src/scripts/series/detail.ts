@@ -9,7 +9,7 @@ import {
   isTauri,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
-import { isCastRoutingActive, routePlayToCast } from "@/scripts/lib/tv-cast.js"
+import { isCastRoutingActive, routePlayToCast, castXtreamEpisodeToTv } from "@/scripts/lib/tv-cast.js"
 import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
 import { ensureSeries } from "@/scripts/lib/catalog.js"
@@ -29,6 +29,7 @@ import {
   setVideoScaleOverride,
   clearAllVideoScaleOverrides,
   CHANNEL_VIDEO_SCALE_CHANGED_EVENT,
+  getSeriesProgressSummary,
 } from "@/scripts/lib/preferences.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
@@ -276,6 +277,32 @@ function openEpisodeMenu(ep, anchor, point) {
     "aria-label",
     t("list.menu.ariaFor", { name: episodeMenuTitle(ep) || t("list.fallbackTitle") })
   )
+
+  if (isTauri && activePlaylistId && series) {
+    const saved = getProgress(activePlaylistId, "episode", ep.id)
+    const resumeSeconds = saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+    const durationSeconds = episodeDurationSeconds(ep)
+    menu.appendChild(
+      makeEpisodeMenuItem(
+        t("cast.menu.playOnTv"),
+        castXtreamEpisodeToTv({
+          creds,
+          playlistId: activePlaylistId,
+          seriesId: series.id,
+          episodeId: ep.id,
+          containerExt: ep.container_extension,
+          season: Number(ep.season || currentSeason) || 0,
+          episodeNum: Number(ep.episode_num) || 0,
+          title: episodeCastTitle(ep),
+          logo: series.logo || null,
+          resumeSeconds,
+          durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
+          contentHref: `/series/detail?id=${series.id}`,
+          src: ep._directUrl || undefined,
+        })
+      )
+    )
+  }
 
   const watchedOn = activePlaylistId ? isCompleted(activePlaylistId, "episode", ep.id) : false
   menu.appendChild(
@@ -668,6 +695,8 @@ function renderEpisodes() {
     episodeList.appendChild(row)
   }
   if (eps.length) episodesStaggered = true
+  defaultPlayEpisode = pickDefaultPlayEpisode()
+  playTvBtnHandle?.refresh()
   try { window.SpatialNavigation?.makeFocusable?.() } catch {}
   refreshSeasonEnrichment().catch((err) => {
     log.warn("[xt:series-detail] season tmdb enrichment failed:", err)
@@ -1193,6 +1222,8 @@ function getSeriesInsights() {
 }
 let progressListenersBound = false
 let currentEpisode = null
+/** Resume-or-first-episode pick, kept fresh so "Play on TV" works before any local playback starts. */
+let defaultPlayEpisode = null
 let pipBtnBound = false
 let scaleBtnBound = false
 let statsBtnBound = false
@@ -1317,6 +1348,14 @@ function progressExtrasFor(ep) {
   }
 }
 
+/** "<Series> · S<n>E<n> · <Episode>", the shared cast title format for series playback. */
+function episodeCastTitle(ep) {
+  const seasonNum = ep.season || currentSeason
+  const epNum = ep.episode_num
+  const sxe = seasonNum && epNum ? `S${seasonNum}E${epNum}` : ""
+  return [series?.name || "", sxe, ep.title || ""].filter(Boolean).join(" · ")
+}
+
 async function ensureEmbeddedPlayer(backend) {
   if (vjs) return vjs
   const videoEl = document.getElementById("series-player")
@@ -1352,6 +1391,34 @@ function markNowPlayingEpisode(epId) {
   }
 }
 
+function findEpisodeById(episodeId) {
+  if (!episodesByKey) return null
+  for (const episodesInSeason of Object.values(episodesByKey)) {
+    const match = (episodesInSeason || []).find((ep) => Number(ep.id) === Number(episodeId))
+    if (match) return match
+  }
+  return null
+}
+
+/** Mirrors the poster-badge "resume next episode" pick, falling back to the first episode overall. */
+function pickDefaultPlayEpisode() {
+  if (!episodesByKey) return null
+  if (activePlaylistId && series) {
+    const summary = getSeriesProgressSummary(activePlaylistId, series.id)
+    const resumeEpisode = summary?.lastEpisodeId != null ? findEpisodeById(summary.lastEpisodeId) : null
+    if (resumeEpisode) {
+      if (!summary.lastWatched?.completed) return resumeEpisode
+      return findNextEpisode(resumeEpisode)?.episode || resumeEpisode
+    }
+  }
+  const seasonKeys = Object.keys(episodesByKey).sort((a, b) => Number(a) - Number(b))
+  for (const seasonKey of seasonKeys) {
+    const episodesInSeason = episodesByKey[seasonKey] || []
+    if (episodesInSeason.length) return episodesInSeason[0]
+  }
+  return null
+}
+
 // The remuxed TS pipe has no intrinsic duration; get_series_info's episode.info.duration_secs is
 // the source of truth, with episode.info.duration ("HH:MM:SS") as fallback.
 function episodeDurationSeconds(episode) {
@@ -1379,10 +1446,7 @@ function retirePreviousPlayback() {
 async function playEpisode(episode, options = {}) {
   if (!series || !episode) return
   if (isTauri && isCastRoutingActive()) {
-    const seasonNum = episode.season || currentSeason
-    const epNum = episode.episode_num
-    const sxe = seasonNum && epNum ? `S${seasonNum}E${epNum}` : ""
-    const title = [series?.name || "", sxe, episode.title || ""].filter(Boolean).join(" · ")
+    const title = episodeCastTitle(episode)
     await routePlayToCast({
       contentTitle: title || null,
       contentHref: `/series/detail?id=${series.id}`,
@@ -1392,7 +1456,12 @@ async function playEpisode(episode, options = {}) {
         retirePreviousPlayback()
       },
       seriesContext: activePlaylistId
-        ? { playlistId: activePlaylistId, seriesId: String(series.id), season: Number(seasonNum) || 0, episodeNum: Number(epNum) || 0 }
+        ? {
+            playlistId: activePlaylistId,
+            seriesId: String(series.id),
+            season: Number(episode.season || currentSeason) || 0,
+            episodeNum: Number(episode.episode_num) || 0,
+          }
         : undefined,
       buildDescriptor: () => {
         const src = buildEpisodeStreamUrl(episode)
@@ -1660,32 +1729,45 @@ const externalBtnHandle = setupExternalPlayerButton(
 const playTvBtnHandle = setupPlayOnTvButton(
   document.getElementById("series-detail-play-tv"),
   {
+    getSrcBuilder() {
+      const episode = currentEpisode || defaultPlayEpisode
+      return episode ? (c) => buildEpisodeStreamUrl(episode, c) : null
+    },
     getSrc() {
-      if (!currentEpisode) return null
-      return buildEpisodeStreamUrl(currentEpisode) || null
+      const episode = currentEpisode || defaultPlayEpisode
+      return episode ? buildEpisodeStreamUrl(episode) || null : null
     },
     getTitle() {
-      if (!currentEpisode) return series?.name || null
-      const seasonNum = currentEpisode.season || currentSeason
-      const epNum = currentEpisode.episode_num
-      const episodeTitle = currentEpisode.title || ""
-      const seriesName = series?.name || ""
-      const sxe = seasonNum && epNum ? `S${seasonNum}E${epNum}` : ""
-      return [seriesName, sxe, episodeTitle].filter(Boolean).join(" · ") || null
+      const episode = currentEpisode || defaultPlayEpisode
+      return episode ? episodeCastTitle(episode) || null : series?.name || null
     },
     getLogo() {
       return series?.logo || null
     },
     getResumeSeconds() {
-      if (!activePlaylistId || !currentEpisode) return 0
-      const saved = getProgress(activePlaylistId, "episode", currentEpisode.id)
+      const episode = currentEpisode || defaultPlayEpisode
+      if (!activePlaylistId || !episode) return 0
+      const saved = getProgress(activePlaylistId, "episode", episode.id)
       if (!saved || saved.completed) return 0
       return saved.position > RESUME_MIN_SECONDS ? saved.position : 0
     },
     getDurationSeconds() {
-      if (!currentEpisode) return undefined
-      const seconds = episodeDurationSeconds(currentEpisode)
+      const episode = currentEpisode || defaultPlayEpisode
+      if (!episode) return undefined
+      const seconds = episodeDurationSeconds(episode)
       return seconds > 0 ? seconds : undefined
+    },
+    getCastContext() {
+      const episode = currentEpisode || defaultPlayEpisode
+      if (!activePlaylistId || !series || !episode) return null
+      return {
+        seriesContext: {
+          playlistId: activePlaylistId,
+          seriesId: String(series.id),
+          season: Number(episode.season || currentSeason) || 0,
+          episodeNum: Number(episode.episode_num) || 0,
+        },
+      }
     },
     beforeCast() {
       try { vjs?.pause?.() } catch {}

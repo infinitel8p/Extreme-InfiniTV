@@ -1142,6 +1142,10 @@ const playTvBtnHandle = setupPlayOnTvButton(
       const seconds = knownVodDurationSeconds()
       return seconds > 0 ? seconds : undefined
     },
+    getCastContext() {
+      if (!activePlaylistId || !movie) return null
+      return { vodContext: { playlistId: activePlaylistId, vodId: String(movie.id) } }
+    },
     beforeCast() {
       try { vjs?.pause?.() } catch {}
     },

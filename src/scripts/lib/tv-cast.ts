@@ -4,7 +4,7 @@ import { toast } from "@/scripts/lib/toast.js"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog.js"
 import { t } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
-import { buildMovieStreamUrl } from "@/scripts/lib/stream-urls.ts"
+import { buildMovieStreamUrl, buildSeriesStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { getActivePlaylistIdSync, getConnectionLimitWarning } from "@/scripts/lib/account-info.js"
 import {
   isCastableSrc,
@@ -1266,6 +1266,52 @@ export function castXtreamVodToTv(params: CastXtreamVodParams): () => void {
         },
       })
     })()
+  }
+}
+
+export interface CastXtreamEpisodeParams {
+  creds: XtreamCastCreds
+  playlistId: string
+  seriesId: string | number
+  episodeId: string | number
+  containerExt?: string | null
+  season: number
+  episodeNum: number
+  title?: string | null
+  logo?: string | null
+  resumeSeconds?: number
+  durationSeconds?: number
+  contentHref?: string | null
+  stopLocal?: () => boolean | void
+  /** Overrides the built Xtream URL - custom-playlist episodes carry their own direct stream URL. */
+  src?: string | null
+}
+
+/** Builds a "play on TV" click handler for a series episode (episode context menu + detail-page button). */
+export function castXtreamEpisodeToTv(params: CastXtreamEpisodeParams): () => void {
+  return () => {
+    void playOnTv({
+      contentTitle: params.title || null,
+      contentHref: params.contentHref ?? null,
+      stopLocal: params.stopLocal,
+      seriesContext: {
+        playlistId: params.playlistId,
+        seriesId: String(params.seriesId),
+        season: params.season,
+        episodeNum: params.episodeNum,
+      },
+      buildDescriptor: () => {
+        const src = params.src || buildSeriesStreamUrl(params.creds, params.episodeId, params.containerExt)
+        if (!isCastableSrc(src)) return null
+        return buildVodCastDescriptor({
+          src,
+          title: params.title || "",
+          logo: params.logo || undefined,
+          resumeSeconds: params.resumeSeconds,
+          durationSeconds: params.durationSeconds,
+        })
+      },
+    })
   }
 }
 
