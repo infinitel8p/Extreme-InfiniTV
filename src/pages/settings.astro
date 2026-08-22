@@ -5559,6 +5559,22 @@ const navStructure: NavSection[] = [
         window.setTimeout(release, SAFETY_MS)
       }
 
+      // D-pad activation leaves focus in the nav rail otherwise, so the next
+      // press yanks the page back before the user can act on the section.
+      function focusScrolledTarget(target: HTMLElement, event: Event) {
+        const detail = (event as MouseEvent).detail ?? 0
+        if (detail !== 0 && document.documentElement.dataset.tv !== "1") return
+        const focusable = target.querySelector<HTMLElement>(
+          "a, button, input, select, textarea, [tabindex]:not([tabindex='-1'])"
+        )
+        if (focusable) {
+          focusable.focus({ preventScroll: true })
+          return
+        }
+        target.setAttribute("tabindex", "-1")
+        target.focus({ preventScroll: true })
+      }
+
       for (const link of links) {
         link.addEventListener("click", (event) => {
           const targetId = link.getAttribute("href")?.replace("#", "")
@@ -5574,6 +5590,7 @@ const navStructure: NavSection[] = [
           setActiveCard(firstCard?.id ?? "")
           writeHash(targetId)
           target.scrollIntoView({ behavior: "smooth", block: "start" })
+          focusScrolledTarget(target, event)
           armScrollUnlock()
         })
       }
@@ -5597,6 +5614,7 @@ const navStructure: NavSection[] = [
           if (cardEl instanceof HTMLDetailsElement) cardEl.open = true
           writeHash(cardId)
           cardEl.scrollIntoView({ behavior: "smooth", block: "start" })
+          focusScrolledTarget(cardEl, event)
           armScrollUnlock()
         })
       }

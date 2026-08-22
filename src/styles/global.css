@@ -304,6 +304,12 @@ input[type="search"]::-webkit-search-decoration {
     background: rgba(0, 0, 0, 0.6);
 }
 
+/* Keep the control bar clear of TV overscan while fullscreen */
+html[data-tv-overscan] :fullscreen .vjs-control-bar {
+    margin-inline: calc(var(--xt-tv-overscan, 0) * 1vw);
+    margin-bottom: calc(var(--xt-tv-overscan, 0) * 1vh);
+}
+
 .vjs-play-progress,
 .vjs-volume-level {
     background: var(--color-accent) !important;
@@ -2996,6 +3002,30 @@ html[data-perf-mode="on"] *::after {
 
 html[data-perf-mode="on"] * {
     will-change: auto !important;
+}
+
+/* -------------------------------------------------------------------------
+ * TV: perf mode hides .xt-focus-glide, so D-pad focus needs its own ring.
+ * -------------------------------------------------------------------------*/
+html[data-tv] :is(a, button, summary, input, textarea, select, [tabindex]):focus-visible {
+    outline: 3px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+/* TV: compact hero so the poster grid below fits above the fold. */
+html[data-tv] .route-hero--tv-compact .route-hero__title {
+    font-size: clamp(1.6875rem, 1.21875vw + 0.515625rem, 2.0625rem);
+}
+html[data-tv] .route-hero--tv-compact .route-hero__sub {
+    display: none;
+}
+
+/* Keep a focused/scrolled card fully in view instead of stopping mid-card. */
+.fav-grid {
+    scroll-padding-block: 12px;
+}
+.fav-card {
+    scroll-margin-block: 12px;
 }
 
 html[data-perf-mode="on"] [data-modal-ambient] {

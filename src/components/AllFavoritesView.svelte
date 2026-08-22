@@ -294,7 +294,7 @@
 
 {#if visible.length}
   <section
-    class="flex-1 min-h-0 overflow-auto custom-scroll
+    class="fav-grid flex-1 min-h-0 overflow-auto custom-scroll
            grid gap-3 sm:gap-4
            grid-cols-[repeat(auto-fill,minmax(8rem,1fr))]
            sm:grid-cols-[repeat(auto-fill,minmax(10rem,1fr))]

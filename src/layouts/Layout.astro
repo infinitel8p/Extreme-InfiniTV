@@ -46,6 +46,11 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         }
       } catch (e) {}
       try {
+        if (localStorage.getItem("xt_is_tv") === "1") {
+          document.documentElement.dataset.tv = "1";
+        }
+      } catch (e) {}
+      try {
         var fontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1");
         if (!isFinite(fontScale) || fontScale < 0.75 || fontScale > 2) fontScale = 1;
         document.documentElement.style.setProperty("--xt-font-scale", String(fontScale));
@@ -108,6 +113,10 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
               }
             } catch (e) {}
           }
+        }
+        if (isTvDevice) {
+          document.documentElement.dataset.tv = "1";
+          localStorage.setItem("xt_is_tv", "1");
         }
         if (perfStored === null && isTvDevice) {
           localStorage.setItem("xt_perf_mode", "1");
@@ -833,11 +842,21 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   import { initHaptics } from "@/scripts/lib/haptics"
   import { initPlaylistAccent } from "@/scripts/lib/playlist-accent"
   import { logSessionSnapshot } from "@/scripts/lib/diagnostic-snapshot"
+  import { mountBackHandler } from "@/scripts/lib/back-handler"
+  import { mountTvInputGuard } from "@/scripts/lib/tv-input-guard"
+  import { isTvDevice } from "@/scripts/lib/tv-detect"
   initI18n()
   initConnectivity()
   initUiSounds()
   initHaptics()
   initPlaylistAccent()
+  // Heals installs that predate the xt_is_tv seed: the pre-paint stamp needs the stored flag.
+  if (isTvDevice()) {
+    document.documentElement.dataset.tv = "1"
+    try { localStorage.setItem("xt_is_tv", "1") } catch {}
+  }
+  mountBackHandler()
+  mountTvInputGuard()
 
   // Waits for idle rather than competing with first paint; short timeout plus the pagehide
   // flush in diagnostic-snapshot.ts means a fast navigation still gets logged.
@@ -1090,6 +1109,22 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         id: "main",
         selector:
           "a, button, summary, input, textarea, [contenteditable='true'], select, [tabindex]:not([tabindex='-1'])",
+        // Reject fullscreen-occluded, inert, offscreen-parked, invisible, or faded-out player-chrome targets
+        navigableFilter: (elem: Element) => {
+          const fullscreenEl = document.fullscreenElement
+          if (fullscreenEl && !fullscreenEl.contains(elem)) return false
+          if (elem.closest("[inert]")) return false
+          const rect = elem.getBoundingClientRect()
+          if (rect.right <= 0 || rect.bottom <= 0) return false
+          if (getComputedStyle(elem).visibility !== "visible") return false
+          const playerChrome = elem.closest(
+            ".vjs-control-bar, .vjs-volume-vertical, .vjs-menu"
+          )
+          if (playerChrome && parseFloat(getComputedStyle(playerChrome).opacity) === 0) {
+            return false
+          }
+          return true
+        },
       })
       sn.makeFocusable()
     }

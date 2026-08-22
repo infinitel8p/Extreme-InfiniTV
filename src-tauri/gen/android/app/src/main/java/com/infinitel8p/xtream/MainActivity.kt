@@ -6,9 +6,11 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebSettings
@@ -136,6 +138,47 @@ class WebSettingsBridge(
     val target = if (ua.isNullOrEmpty()) defaultUa else ua
     activity.runOnUiThread {
       webViewRef()?.settings?.userAgentString = target
+    }
+  }
+}
+
+// JS focus() alone doesn't summon the IME in an Android WebView; needs an explicit showSoftInput.
+class ImeBridge(
+  private val activity: TauriActivity,
+  private val webViewRef: () -> WebView?,
+) {
+  @JavascriptInterface
+  fun show() {
+    activity.runOnUiThread {
+      try {
+        val webView = webViewRef() ?: return@runOnUiThread
+        // No requestFocus here: it resets the WebView's DOM focus to the first anchor.
+        // Delay past the WebView's InputConnection rebuild; flag 0 = explicit request, SHOW_IMPLICIT gets ignored on TVs.
+        webView.postDelayed({
+          try {
+            val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            if (!imm.showSoftInput(webView, 0)) {
+              Log.w("xtream-rs", "AndroidIme.show: showSoftInput returned false")
+            }
+          } catch (e: Throwable) {
+            Log.w("xtream-rs", "AndroidIme.show failed: $e")
+          }
+        }, 80L)
+      } catch (e: Throwable) {
+        Log.w("xtream-rs", "AndroidIme.show failed: $e")
+      }
+    }
+  }
+
+  @JavascriptInterface
+  fun hide() {
+    activity.runOnUiThread {
+      try {
+        val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(webViewRef()?.windowToken, 0)
+      } catch (e: Throwable) {
+        Log.w("xtream-rs", "AndroidIme.hide failed: $e")
+      }
     }
   }
 }
@@ -1775,6 +1818,19 @@ class MainActivity : TauriActivity() {
     private var lastRenderGoneAt: Long = 0L
   }
 
+  // Some WebViews emit no DOM event for DPAD_CENTER on inputmode="none" inputs, so the
+  // TV input guard's OK-to-edit hook is fed from here; buttons still activate natively.
+  override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
+      try {
+        hostedWebView?.evaluateJavascript("window.__xtRemoteOk && window.__xtRemoteOk()", null)
+      } catch (e: Throwable) {
+        Log.w("xtream-rs", "remote ok forward failed: $e")
+      }
+    }
+    return super.dispatchKeyEvent(event)
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     // installSplashScreen() must run before super.onCreate so Theme.App.Starting
     // can hand control back to Theme.app once the WebView is ready to paint.
@@ -1790,16 +1846,33 @@ class MainActivity : TauriActivity() {
     // singleton's lateinit still points at the dead activity.
     bindPluginManagerLaunchers()
 
-    // Back button exits fullscreen first, then falls back to default behavior.
+    // Back button order: exit fullscreen, page-level JS handler, WebView history, app exit.
     onBackPressedDispatcher.addCallback(
       this,
       object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
           if (fullscreenView != null) {
             (hostedWebView?.webChromeClient as? WebChromeClient)?.onHideCustomView()
-          } else {
+            return
+          }
+          val webView = hostedWebView
+          if (webView == null) {
             isEnabled = false
             onBackPressedDispatcher.onBackPressed()
+            isEnabled = true
+            return
+          }
+          webView.evaluateJavascript(
+            "window.__xtHandleBack ? String(window.__xtHandleBack()) : \"false\""
+          ) { result ->
+            if (result == "true" || result == "\"true\"") return@evaluateJavascript
+            if (webView.canGoBack()) {
+              webView.goBack()
+            } else {
+              isEnabled = false
+              onBackPressedDispatcher.onBackPressed()
+              isEnabled = true
+            }
           }
         }
       }
@@ -1887,6 +1960,7 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
     webView.addJavascriptInterface(AndroidVideoBridge(this, { hostedWebView }), "AndroidVideo")
     webView.addJavascriptInterface(HapticsBridge(this, { hostedWebView }), "AndroidHaptics")
+    webView.addJavascriptInterface(ImeBridge(this, { hostedWebView }), "AndroidIme")
     val sniffer = SnifferBridge(this, { hostedWebView })
     snifferBridge = sniffer
     webView.addJavascriptInterface(sniffer, "AndroidSniffer")

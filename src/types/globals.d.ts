@@ -71,6 +71,15 @@ interface AndroidIntentBridge {
   ) => boolean
 }
 
+interface AndroidDeviceInfoBridge {
+  isTv?: () => boolean
+}
+
+interface AndroidImeBridge {
+  show?: () => void
+  hide?: () => void
+}
+
 interface AndroidSnifferBridge {
   startSniff?: (pageUrl: string, timeoutMs: number) => void
   cancelSniff?: () => void
@@ -128,6 +137,8 @@ declare global {
     __TAURI__?: unknown
     __TAURI_INTERNALS__?: unknown
     SpatialNavigation?: SpatialNavigationApi
+    AndroidDeviceInfo?: AndroidDeviceInfoBridge
+    AndroidIme?: AndroidImeBridge
     AndroidPip?: AndroidPipBridge
     AndroidIntent?: AndroidIntentBridge
     AndroidVideo?: AndroidVideoBridge

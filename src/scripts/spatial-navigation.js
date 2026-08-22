@@ -902,7 +902,8 @@
 
     if (
       (evt.keyCode === 37 || evt.keyCode === 39) &&
-      isEditableTextTarget(evt.target)
+      isEditableTextTarget(evt.target) &&
+      evt.target.getAttribute("inputmode") !== "none"
     ) {
       return
     }

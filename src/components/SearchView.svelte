@@ -28,6 +28,7 @@
   } from "@/scripts/lib/series-seasons.ts"
   import { searchPeople } from "@/scripts/lib/person-search.ts"
   import { resolvePersonTitleIds } from "@/scripts/lib/person-filter.ts"
+  import { isTvDevice } from "@/scripts/lib/tv-detect"
 
   /** @type {{ focusOnMount?: boolean }} */
   let { focusOnMount = false } = $props()
@@ -515,6 +516,7 @@
   }
 
   function onKey(ev) {
+    if (isTvDevice()) return
     const onInput = document.activeElement === inputEl
     const inRecentSection = !!recentSectionEl?.contains(document.activeElement)
     if (onInput && personMode && ev.key === "Backspace" && !query) {
