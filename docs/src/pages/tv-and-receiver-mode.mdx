@@ -1,0 +1,53 @@
+---
+layout: ../layouts/DocsLayout.astro
+title: "TV & receiver mode"
+description: "Turn a TV into a pairable playback receiver and send video to it from your phone or desktop."
+lede: "Pick something to watch on your phone or desktop, then send it to the TV with Play on TV."
+---
+
+import Callout from "../components/Callout.astro"
+
+## What receiver mode is
+
+In receiver mode, the TV sits on an idle screen showing an address and a 6-digit pair code. You do the browsing, searching, and typing on your phone or computer, then choose **Play on TV** and pick that TV. Playback starts there, with transport controls (play/pause, seek, volume) working from the sender.
+
+## The dedicated TV build (kiosk)
+
+The dedicated TV build - what you get from the Google Play listing for Android TV, or the sideloadable `Extreme-InfiniTV-receiver.apk` from [GitHub Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) - boots straight into the pairing screen and doesn't include the browse UI at all. There's no exit button, and the back key doesn't leave the receiver screen. That's intentional: this build only does one job.
+
+Building from source? The kiosk variant is a normal Android build with two extra environment variables:
+
+```bash
+XTREAM_TV_BUILD=true PUBLIC_APP_MODE=receiver pnpm tauri android build --apk
+```
+
+`PUBLIC_APP_MODE=receiver` bakes the kiosk frontend in; `XTREAM_TV_BUILD=true` marks the package as a TV app (leanback) and bumps its version number into the TV slot.
+
+## Installing the regular app on a TV instead
+
+If you install the normal mobile APK (`Extreme-InfiniTV.apk`, or the versioned APK from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest)) on a TV, it detects the TV and still boots into the receiver screen by default. The difference: here you can leave. The idle screen shows an **Exit receiver** button, and the back key also exits, dropping you into the full app with the remote - Live TV, Movies, Series, Search, Settings, all of it.
+
+On this install, receiver mode itself and whether it starts on boot are both toggles in the **TV receiver** section of the **Casting** card, under **Settings > Network**:
+
+- **Allow casting to this device** - turns receiving on or off.
+- **Start on receiver screen** - launches straight to the pairing screen like a dedicated receiver; exit it anytime and it comes back next launch.
+
+<Callout type="note">
+  These two toggles only appear on the mobile build. The dedicated TV build has no Settings screen to toggle them from - it's always on.
+</Callout>
+
+## Switching between the two builds
+
+The receiver build carries a higher internal version number than the mobile build. Installing receiver over mobile works as a normal update, but going the other way - receiver back to mobile - needs an uninstall first, since Android won't let a lower version number install over a higher one.
+
+## Pairing
+
+Sender and TV need to be on the same network. On the sender, open the **Play on TV** picker (from a poster's context menu, or the **Play on TV** section of the Casting card under **Settings > Network**) and either pick the TV from the scan or add it by address, then enter the pair code shown on the TV's idle screen. Once paired, the sender remembers the TV for next time.
+
+## Sideloading on Fire TV
+
+Fire TV doesn't have the receiver build on the Play Store. Sideload it with the [AFTVnews Downloader](https://www.aftvnews.com/downloader/) app using this stable URL, which always points at the latest release:
+
+```
+https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest/download/Extreme-InfiniTV-receiver.apk
+```
