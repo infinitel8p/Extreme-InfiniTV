@@ -634,6 +634,7 @@
   "settings.playback.launchingSystem": "Opening…",
   "settings.playback.opening": "Opening…",
   "settings.playback.notConfigured": "{player} isn't configured. Set its path in Settings → Playback.",
+  "settings.playback.launchFallback": "Couldn't start {player}. Playing in the app instead.",
   "settings.playback.noSource": "Nothing to play yet.",
   "settings.playback.error.not_found": "{player} not found at {path}. Install it or set a custom path.",
   "settings.playback.error.permission": "{path} isn't executable. Check the file permissions.",

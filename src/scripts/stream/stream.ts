@@ -93,6 +93,7 @@ import {
   getUserAgent,
   getExternalPlayerPref,
   EXTERNAL_PLAYER_BACKENDS,
+  DEFAULT_PLAYER_BACKEND,
   getVideoScale,
   setVideoScale,
   VIDEO_SCALE_EVENT,
@@ -106,6 +107,7 @@ import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/vide
 import {
   setupExternalPlayerButton,
   surfaceLaunchError,
+  surfaceLaunchErrorFallback,
   type ExternalPlayerButtonHandle,
 } from "@/scripts/lib/external-player-button.js"
 import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE, ICON_DOTS, ICON_CHECK } from "@/scripts/lib/icons.js"
@@ -4010,7 +4012,7 @@ async function play(streamId, name, reason = "user") {
     swapState()
   }
 
-  const backend = getPlayerBackend()
+  let backend = getPlayerBackend()
   const channelHeaders = streamHeadersById.get(streamId) || null
   const channelDrm = streamDrmById.get(streamId) || null
 
@@ -4022,11 +4024,12 @@ async function play(streamId, name, reason = "user") {
       pushDiscordPresence(channel || { id: streamId, name }, "live")
       externalPlaybackActive = true
       externalPlaybackKind = backend
+      paintEpgSidePanel(streamId)
+      return
     } catch (err) {
-      surfaceLaunchError(err, backend)
+      surfaceLaunchErrorFallback(err, backend, "[xt:livetv]")
+      backend = DEFAULT_PLAYER_BACKEND
     }
-    paintEpgSidePanel(streamId)
-    return
   }
 
   resetEmptyState()

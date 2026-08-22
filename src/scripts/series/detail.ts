@@ -61,6 +61,7 @@ import {
 import {
   getAndroidNativePlayerEnabled,
   getPlayerBackend,
+  DEFAULT_PLAYER_BACKEND,
   getVideoScale,
   setVideoScale,
   isTmdbActive,
@@ -109,7 +110,7 @@ import {
   subscribeExternalPlayerExit,
 } from "@/scripts/lib/player-runtime.ts"
 import { toast } from "@/scripts/lib/toast.js"
-import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
+import { setupExternalPlayerButton, surfaceLaunchErrorFallback } from "@/scripts/lib/external-player-button.ts"
 import { setupPlayOnTvButton } from "@/scripts/lib/play-on-tv-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
@@ -1562,7 +1563,7 @@ async function playEpisode(episode, options = {}) {
     if (launched) return
   }
 
-  const backend = getPlayerBackend()
+  let backend = getPlayerBackend()
 
   if (backend === "mpv" || backend === "vlc") {
     try {
@@ -1570,10 +1571,11 @@ async function playEpisode(episode, options = {}) {
       await launchExternalPlayback(backend, externalSrc, resumePos)
       pushEpisodePresence(episode)
       externalPresenceActive = true
+      return
     } catch (err) {
-      surfaceLaunchError(err, backend)
+      surfaceLaunchErrorFallback(err, backend, "[xt:series-detail]")
+      backend = DEFAULT_PLAYER_BACKEND
     }
-    return
   }
 
   await mountVodPlayback({

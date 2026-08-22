@@ -350,6 +350,22 @@ export function surfaceAndroidHandoffError(err: unknown, kind: AndroidHandoffKin
   toastError(`Couldn't open in ${playerName}.`)
 }
 
+/** Same log detail as surfaceLaunchError, but a single toast that playback continues embedded instead of the failed-launch copy. */
+export function surfaceLaunchErrorFallback(err: unknown, kind: ExternalPlayerKind, logTag: string): void {
+  const playerName = kind.toUpperCase()
+  if (err instanceof PlayerNotConfiguredError) {
+    log.warn(`${logTag} ${playerName} not configured, falling back to embedded playback`)
+  } else if (err instanceof PlayerLaunchError) {
+    log.warn(`${logTag} ${playerName} launch failed, falling back to embedded playback:`, err.message)
+  } else {
+    log.error(`${logTag} ${playerName} launch threw, falling back to embedded playback:`, err)
+  }
+  toastError(
+    t("settings.playback.launchFallback", { player: playerName }) ||
+      `Couldn't start ${playerName}. Playing in the app instead.`,
+  )
+}
+
 export function surfaceLaunchError(err: unknown, kind: ExternalPlayerKind): void {
   const playerName = kind.toUpperCase()
   if (err instanceof PlayerNotConfiguredError) {
