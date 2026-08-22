@@ -12,6 +12,7 @@ import {
   castSeek,
   castStop,
   castRetryLast,
+  isCastPlaySettling,
   sessionAsDevice,
   tryReattachCastSession,
   hasReattachableCastBackup,
@@ -20,8 +21,19 @@ import {
   type CastState,
   type TvDevice,
 } from "@/scripts/lib/tv-cast.js"
-import { subscribeCastStateFeed, pokeCastStateFeed, type CastFeedHealth } from "@/scripts/lib/tv-cast-state-feed.js"
-import { castNeighbor, createAutoAdvanceTracker, resolveNeighborAvailability } from "@/scripts/lib/tv-cast-next.js"
+import {
+  subscribeCastStateFeed,
+  pokeCastStateFeed,
+  createIdleTeardownGuard,
+  type CastFeedHealth,
+} from "@/scripts/lib/tv-cast-state-feed.js"
+import { castNeighbor, createAutoAdvanceTracker, resolveNeighborAvailability, neighborAvailability } from "@/scripts/lib/tv-cast-next.js"
+import { createCastProgressRecorder } from "@/scripts/lib/tv-cast-progress.js"
+import {
+  initCastMediaNotificationActions,
+  updateCastMediaNotification,
+  clearCastMediaNotification,
+} from "@/scripts/lib/cast-media-notification.js"
 import { RECONNECT_EVENT } from "@/scripts/lib/connectivity.ts"
 import { toast } from "@/scripts/lib/toast.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
@@ -77,6 +89,9 @@ let autoAdvanceInFlight = false
 // The receiver's idle report right after ended must wait for an in-flight advance to resolve.
 let idleDeferredDuringAdvance = false
 let liveElapsedTicker: ReturnType<typeof setInterval> | null = null
+// Session-keyed, so it survives the locale-change remount and resets itself on a new cast.
+const idleTeardownGuard = createIdleTeardownGuard()
+const castProgressRecorder = createCastProgressRecorder()
 
 function formatClock(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds))
@@ -104,8 +119,9 @@ function syncMorePanelOverlap(pill: HTMLElement): void {
 function buildPill(): HTMLElement {
   const pill = document.createElement("div")
   pill.id = PILL_ID
+  // end-6/bottom base of 1.5rem (not 1rem) so the pill clears a native scrollbar instead of touching it.
   pill.className =
-    "fixed start-4 sm:start-auto end-4 bottom-[calc(1rem+env(safe-area-inset-bottom,0px))] z-40 " +
+    "fixed start-6 sm:start-auto end-6 bottom-[calc(1.5rem+env(safe-area-inset-bottom,0px))] z-40 " +
     "flex items-center gap-2 rounded-full border border-line bg-surface py-2 shadow-lg overflow-hidden " +
     "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
   pill.setAttribute("role", "group")
@@ -635,15 +651,23 @@ async function triggerAutoAdvance(session: CastSession): Promise<void> {
 function onFeedState(state: CastState): void {
   const session = getCastSession()
   if (!session || !pillEl) return
+  castProgressRecorder.observe(session, state)
   const device = sessionAsDevice(session)
   refreshReceiverLogSnapshotIfStale(session, device)
   if (state.durationSeconds != null) lastKnownDurationSeconds = state.durationSeconds
   if (autoAdvanceTracker.observe(session, state.state)) void triggerAutoAdvance(session)
+  const idleTeardownAllowed = idleTeardownGuard.allowsTeardown({
+    stateValue: state.state,
+    sessionStartedAtMs: session.startedAtMs ?? session.startedAt,
+    nowMs: Date.now(),
+    playPending: isCastPlaySettling(),
+  })
   if (state.state === "idle") {
     if (autoAdvanceInFlight) {
       idleDeferredDuringAdvance = true
       return
     }
+    if (!idleTeardownAllowed) return
     // Connected-only mode is meant to survive receiver idle, not tear it down.
     if (!session.connectedOnly) {
       unmount()
@@ -676,6 +700,18 @@ function onFeedState(state: CastState): void {
   }
   updateLiveElapsedTicking(pillEl, session, state.state === "playing")
   refreshIdleCollapseState(pillEl, session)
+  if (!isConnectedOnlySession(session)) {
+    const availability = neighborAvailability(session)
+    updateCastMediaNotification({
+      title: session.title,
+      deviceName: session.deviceName,
+      isPlaying: state.state === "playing",
+      isLive: session.isLive,
+      hasNext: availability.next,
+      hasPrev: availability.previous,
+      artworkUrl: session.logo,
+    })
+  }
   if (Date.now() < suppressPollPositionUntil) return
   lastKnownPositionSeconds = state.positionSeconds
   if (!session.isLive) {
@@ -873,10 +909,24 @@ function mount(session: CastSession): void {
   })
   startFeed()
   refreshIdleCollapseState(pill, session)
+  if (!isConnectedOnlySession(session)) {
+    const availability = neighborAvailability(session)
+    updateCastMediaNotification({
+      title: session.title,
+      deviceName: session.deviceName,
+      isPlaying: true,
+      isLive: session.isLive,
+      hasNext: availability.next,
+      hasPrev: availability.previous,
+      artworkUrl: session.logo,
+    })
+  }
 }
 
 function unmount(animate = true): void {
   if (!pillEl) return
+  castProgressRecorder.flush()
+  clearCastMediaNotification()
   const pill = pillEl
   pill.removeEventListener("click", onPillClick)
   pill.removeEventListener("keydown", onPillKeydown)
@@ -989,6 +1039,7 @@ export function initTvCastPill(): void {
   if (initialized) return
   initialized = true
 
+  initCastMediaNotificationActions()
   document.addEventListener(CAST_SESSION_EVENT, onSessionChanged)
   document.addEventListener(LOCALE_EVENT, onLocaleChange)
   document.addEventListener(RECONNECT_EVENT, onReconnectedRetryReattach)
