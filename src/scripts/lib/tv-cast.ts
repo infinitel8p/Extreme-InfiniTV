@@ -3,7 +3,7 @@ import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { toast } from "@/scripts/lib/toast.js"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog.js"
 import { t } from "@/scripts/lib/i18n.js"
-import { log } from "@/scripts/lib/log.js"
+import { log, redactUrl } from "@/scripts/lib/log.js"
 import { buildMovieStreamUrl, buildSeriesStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { getActivePlaylistIdSync, getConnectionLimitWarning } from "@/scripts/lib/account-info.js"
 import {
@@ -629,6 +629,14 @@ export async function castPlay(
   const generationAtRequest = castGeneration
   castPlayInFlight += 1
   lastCastPlayAtMs = Date.now()
+  // Receiver errors arrive minutes later over the state feed; without this they read as spontaneous.
+  log.info("[xt:cast] play", {
+    device: device.name,
+    title: descriptor.title,
+    isLive: descriptor.isLive,
+    mime: descriptor.mime,
+    src: redactUrl(descriptor.src),
+  })
   try {
     await postDeviceAction(device, "/play", descriptor, 8000)
   } finally {

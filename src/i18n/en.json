@@ -1562,6 +1562,7 @@
   "receiver.error.container": "This file type can't be played on this TV.",
   "receiver.error.network": "The stream couldn't be loaded.",
   "receiver.error.connectionLimit": "Your provider won't allow another stream right now. Something else may still be playing on this account.",
+  "receiver.error.providerRefused": "Your provider didn't return a playable stream for this channel.",
   "receiver.error.timeout": "The stream didn't start.",
   "receiver.error.returning": "Returning to the pairing screen…",
   "receiver.error.retry": "Try again",

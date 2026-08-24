@@ -27,6 +27,11 @@ import {
   subscribeAndroidNativeEvents,
   type AndroidNativeEvent,
 } from "@/scripts/lib/android-video-launcher.js"
+import {
+  messageKeyForProbeVerdict,
+  probeManifestSource,
+  type ManifestProbeVerdict,
+} from "@/scripts/lib/manifest-probe.js"
 
 export type ReceiverPlaybackState =
   | "idle"
@@ -128,10 +133,13 @@ export function createEmbeddedReceiverEngine(
   let mediaListenersWired = false
   let currentTitle = ""
   let currentMime = ""
+  let currentSrc = ""
+  let currentUserAgent: string | null = null
   let currentIsLive = false
   let currentPlaybackState: ReceiverPlaybackState = "idle"
   let knownDurationSeconds: number | undefined
   let tearingDown = false
+  let errorReported = false
   let lastTimeReportAt = 0
 
   let titleHideTimer: ReturnType<typeof setTimeout> | null = null
@@ -216,38 +224,51 @@ export function createEmbeddedReceiverEngine(
 
   type FailureContext = "player" | "dead-video" | "timeout"
 
-  function describePlaybackError(context: FailureContext): { message: string; technical: string | null } {
-    if (context === "timeout") return { message: t("receiver.error.timeout"), technical: null }
+  function describePlaybackError(context: FailureContext): { messageKey: string; technical: string | null } {
+    if (context === "timeout") return { messageKey: "receiver.error.timeout", technical: null }
 
     // A provider refusal is unambiguous, so it settles the message before any codec guesswork.
     const refusedStatus = httpStatusFromErrorDetail(activeHandle?.codecInfo?.()?.errorDetail)
     if (isConnectionLimitStatus(refusedStatus)) {
-      return { message: t("receiver.error.connectionLimit"), technical: `HTTP ${refusedStatus}` }
+      return { messageKey: "receiver.error.connectionLimit", technical: `HTTP ${refusedStatus}` }
     }
 
     const verdict = classifyCurrentFailure()
     const knownKey = FAILURE_MESSAGE_KEYS[verdict.kind]
-    if (knownKey) return { message: t(knownKey), technical: verdict.codec }
+    if (knownKey) return { messageKey: knownKey, technical: verdict.codec }
 
     // A dead-video conviction is already known to be a video decode failure even without a codec string.
-    if (context === "dead-video") return { message: t("receiver.error.videoCodec"), technical: verdict.codec }
+    if (context === "dead-video") return { messageKey: "receiver.error.videoCodec", technical: verdict.codec }
 
     const mediaError = getMediaElementFor(activeHandle)?.error
     if (mediaError) {
       const messageKey = mediaErrorMessageKey(mediaError.code)
-      if (messageKey) return { message: t(messageKey), technical: mediaErrorTechnical(mediaError) }
+      if (messageKey) return { messageKey, technical: mediaErrorTechnical(mediaError) }
     }
 
     const errorDetail = activeHandle?.codecInfo?.()?.errorDetail
-    if (errorDetail) return { message: t("receiver.error.title"), technical: errorDetail }
+    if (errorDetail) return { messageKey: "receiver.error.title", technical: errorDetail }
 
-    return { message: t("receiver.error.title"), technical: null }
+    return { messageKey: "receiver.error.title", technical: null }
   }
 
-  function handleError(context: FailureContext = "player"): void {
+  async function handleError(context: FailureContext = "player"): Promise<void> {
+    // A flapping stream fires error after error; the first report speaks for them all.
+    if (errorReported) return
+    errorReported = true
     clearDeadVideoWatchdog()
     clearLoadingWatchdog()
-    const { message, technical } = describePlaybackError(context)
+    const handleAtFailure = activeHandle
+    const described = describePlaybackError(context)
+    const refined = await refineParseFailureKey(described.messageKey, {
+      src: currentSrc,
+      userAgent: currentUserAgent,
+    })
+    // A new play() during the probe owns the screen; painting this error would clobber it.
+    if (activeHandle !== handleAtFailure) return
+    const message = t(refined.messageKey)
+    const verdictPart = refined.verdict && refined.verdict !== "inconclusive" ? `probe ${refined.verdict}` : null
+    const technical = [described.technical, verdictPart].filter(Boolean).join("; ") || null
     const detail = technical ? `${message} (${technical})`.slice(0, 300) : message
     log.error("[xt:receiver] playback failed:", detail)
     if (dom.errorMessageEl) dom.errorMessageEl.textContent = message
@@ -293,7 +314,7 @@ export function createEmbeddedReceiverEngine(
       }
       log.warn("[xt:receiver] video track decoded zero frames - treating as start failure")
       try { handle.pause() } catch {}
-      handleError("dead-video")
+      void handleError("dead-video")
     }
     deadVideoTimer = setTimeout(check, DEAD_VIDEO_CHECK_MS)
   }
@@ -311,7 +332,7 @@ export function createEmbeddedReceiverEngine(
       loadingTimeoutTimer = null
       if (activeHandle !== handle || currentPlaybackState === "playing") return
       log.warn("[xt:receiver] stream never reached playing state within timeout")
-      handleError("timeout")
+      void handleError("timeout")
     }, LOADING_TIMEOUT_MS)
   }
 
@@ -358,7 +379,7 @@ export function createEmbeddedReceiverEngine(
       report({ state: "ended" })
       teardownInternal(true)
     })
-    handle.on("error", () => handleError())
+    handle.on("error", () => void handleError())
     handle.on("timeupdate", () => {
       const now = Date.now()
       if (now - lastTimeReportAt < 1000) return
@@ -392,8 +413,11 @@ export function createEmbeddedReceiverEngine(
       tearingDown = false
       clearDeadVideoWatchdog()
       clearLoadingWatchdog()
+      errorReported = false
       currentTitle = descriptor.title
       currentMime = descriptor.mime
+      currentSrc = descriptor.src
+      currentUserAgent = descriptor.headers?.userAgent ?? null
       currentIsLive = descriptor.isLive
       // Seeded from the sender's metadata so the first report already carries a range.
       knownDurationSeconds = descriptor.isLive ? undefined : normalizeReportedDuration(descriptor.durationSeconds)
@@ -501,6 +525,19 @@ export function mapNativeErrorCode(code: string | null | undefined, httpStatus?:
   return "receiver.error.title"
 }
 
+/** Keys that only mean "the player couldn't parse this" - a provider refusal looks identical. */
+const PROBE_REFINABLE_KEYS = new Set(["receiver.error.container", "receiver.error.title"])
+
+/** Asked only when the player's verdict is a parse guess, which a provider refusal mimics. */
+export async function refineParseFailureKey(
+  messageKey: string,
+  source: { src: string; userAgent?: string | null }
+): Promise<{ messageKey: string; verdict: ManifestProbeVerdict | null }> {
+  if (!PROBE_REFINABLE_KEYS.has(messageKey) || !source.src) return { messageKey, verdict: null }
+  const verdict = await probeManifestSource(source.src, { userAgent: source.userAgent })
+  return { messageKey: messageKeyForProbeVerdict(verdict) ?? messageKey, verdict }
+}
+
 const RECEIVER_LIVE_CONTENT_KEY = "receiver-live"
 const RECEIVER_VOD_CONTENT_KEY = "receiver-vod"
 const RECEIVER_LIVE_CHANNEL_ID = "cast"
@@ -511,6 +548,10 @@ const NATIVE_LIVE_CHANNEL_ERROR_KEY = `live:${RECEIVER_LIVE_CHANNEL_ID}`
 export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallbacks): ReceiverEngine {
   let unsubscribe: (() => void) | null = null
   let isLive = false
+  // Kept for the error path's probe, which runs after the source is out of view.
+  let activeSrc = ""
+  let activeUserAgent: string | null = null
+  let errorReported = false
   // Sticky so pause / resume / seek echoes keep carrying the range the progress ticks established.
   let knownDurationSeconds: number | undefined
   // Mirrors VideoActivity's ReceiverVolumeState so every report carries a level from the start.
@@ -554,6 +595,26 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
     return contentKey === activeContentKey || contentKey === NATIVE_LIVE_CHANNEL_ERROR_KEY
   }
 
+  async function reportNativeError(sessionGeneration: number, event: AndroidNativeEvent): Promise<void> {
+    if (errorReported) return
+    errorReported = true
+    const httpStatus = event.payload.httpStatus ?? null
+    const mapped = mapNativeErrorCode(event.payload.code, httpStatus)
+    const { messageKey, verdict } = httpStatus
+      ? { messageKey: mapped, verdict: null }
+      : await refineParseFailureKey(mapped, { src: activeSrc, userAgent: activeUserAgent })
+    // A new play() during the probe owns the session; reporting this error would kill it.
+    if (sessionGeneration !== generation) return
+    const statusPart = httpStatus ? ` HTTP ${httpStatus}` : ""
+    const verdictPart = verdict && verdict !== "inconclusive" ? `; probe ${verdict}` : ""
+    const technical = `${event.payload.code || "?"}${statusPart}${event.payload.message ? `: ${event.payload.message}` : ""}${verdictPart}`
+    const detail = `${t(messageKey)} (${technical})`.slice(0, 300)
+    log.error("[xt:receiver] native playback failed:", detail)
+    report({ state: "error", error: detail, positionSeconds: 0 })
+    finishAndEndSession()
+    callbacks.onSessionEnded()
+  }
+
   function handleEvent(sessionGeneration: number, event: AndroidNativeEvent): void {
     if (!isCurrentEvent(sessionGeneration, event.payload.contentKey)) return
     switch (event.type) {
@@ -575,18 +636,9 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
           durationSeconds: knownDurationSeconds,
         })
         break
-      case "xt:android-native-error": {
-        const httpStatus = event.payload.httpStatus ?? null
-        const messageKey = mapNativeErrorCode(event.payload.code, httpStatus)
-        const statusPart = httpStatus ? ` HTTP ${httpStatus}` : ""
-        const technical = `${event.payload.code || "?"}${statusPart}${event.payload.message ? `: ${event.payload.message}` : ""}`
-        const detail = `${t(messageKey)} (${technical})`.slice(0, 300)
-        log.error("[xt:receiver] native playback failed:", detail)
-        report({ state: "error", error: detail, positionSeconds: 0 })
-        finishAndEndSession()
-        callbacks.onSessionEnded()
+      case "xt:android-native-error":
+        void reportNativeError(sessionGeneration, event)
         break
-      }
       case "xt:android-native-finished":
         report({ state: event.payload.completed ? "ended" : "idle", positionSeconds: 0 })
         finishAndEndSession()
@@ -605,6 +657,9 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
   return {
     async play(descriptor: CastDescriptorV1): Promise<boolean> {
       isLive = descriptor.isLive
+      activeSrc = descriptor.src
+      activeUserAgent = descriptor.headers?.userAgent ?? null
+      errorReported = false
       // Seeded from the sender's metadata so the first report already carries a range.
       knownDurationSeconds = descriptor.isLive ? undefined : normalizeReportedDuration(descriptor.durationSeconds)
       const sessionStarted = window.AndroidVideo?.receiverSessionStart?.() ?? false

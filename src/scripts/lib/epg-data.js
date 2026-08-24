@@ -253,9 +253,8 @@ const memCache = new Map()
 const inflight = new Map()
 
 // ---------------------------------------------------------------------------
-// Worker-backed XMLTV parsing. Falls back to main-thread parseXmlTv when
-// Worker construction fails (web build SSR snapshot, sandboxed contexts) or
-// when the worker reports it can't access DOMParser.
+// Worker-backed XMLTV parsing. Falls back to main-thread parseXmlTv when Worker construction
+// fails (web build SSR snapshot, sandboxed contexts), or when the worker errors or times out.
 // ---------------------------------------------------------------------------
 /** @type {Worker | null} */
 let xmlWorker = null
@@ -263,6 +262,12 @@ let xmlWorkerBroken = false
 let xmlWorkerSeq = 0
 /** @type {Map<number, { resolve: (v: any) => void, reject: (e: any) => void }>} */
 const xmlWorkerPending = new Map()
+
+function retireXmlWorker() {
+  xmlWorkerBroken = true
+  try { xmlWorker?.terminate() } catch {}
+  xmlWorker = null
+}
 
 function getXmlWorker() {
   if (xmlWorkerBroken) return null
@@ -285,9 +290,7 @@ function getXmlWorker() {
     })
     xmlWorker.addEventListener("error", (event) => {
       log.warn("[xt:epg-worker] error:", event?.message || event)
-      xmlWorkerBroken = true
-      xmlWorker?.terminate()
-      xmlWorker = null
+      retireXmlWorker()
       for (const pending of xmlWorkerPending.values()) {
         pending.reject(new Error("epg worker error"))
       }
@@ -301,14 +304,31 @@ function getXmlWorker() {
   }
 }
 
-async function parseXmlTvOffMain(xml) {
+// A worker killed without firing "error" would leave the parse pending forever and the EPG would
+// never load. Budgeted per megabyte so a big feed on a slow device isn't cut off early.
+const XML_WORKER_TIMEOUT_MIN_MS = 20_000
+const XML_WORKER_TIMEOUT_PER_MB_MS = 4_000
+
+export function xmlWorkerTimeoutMs(xmlLength) {
+  const megabytes = Math.max(0, Number(xmlLength) || 0) / (1024 * 1024)
+  return XML_WORKER_TIMEOUT_MIN_MS + Math.ceil(megabytes) * XML_WORKER_TIMEOUT_PER_MB_MS
+}
+
+export async function parseXmlTvOffMain(xml) {
   const worker = getXmlWorker()
   if (!worker) return parseXmlTv(xml)
   const id = ++xmlWorkerSeq
-  let reply = null
+  let reply
+  let timer = null
   try {
     reply = await new Promise((resolve, reject) => {
       xmlWorkerPending.set(id, { resolve, reject })
+      timer = setTimeout(() => {
+        xmlWorkerPending.delete(id)
+        // A wedged worker won't recover; retire it rather than pay the budget again next parse.
+        retireXmlWorker()
+        reject(new Error(`worker did not reply within ${xmlWorkerTimeoutMs(xml?.length)}ms`))
+      }, xmlWorkerTimeoutMs(xml?.length))
       worker.postMessage({ id, xml })
     })
   } catch (err) {
@@ -317,10 +337,8 @@ async function parseXmlTvOffMain(xml) {
       err?.message || err
     )
     return parseXmlTv(xml)
-  }
-  if (!reply || reply.fallback) {
-    log.warn("[xt:epg-data] worker reported fallback, parsing on main thread")
-    return parseXmlTv(xml)
+  } finally {
+    if (timer) clearTimeout(timer)
   }
   if (reply.error) throw new Error(reply.error)
   return {

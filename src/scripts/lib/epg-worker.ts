@@ -17,7 +17,6 @@ interface ParseResponse {
   channelNames?: Array<[string, string]>
   hasExplicitTimezones?: boolean
   error?: string
-  fallback?: boolean
 }
 
 function parseXmlTvDate(value: string): number {
@@ -283,7 +282,7 @@ export function parseXmlTv(xml: string): {
 const post = (msg: ParseResponse) => (self as unknown as Worker).postMessage(msg)
 
 self.addEventListener("message", (event: MessageEvent<ParseRequest>) => {
-  if (event.origin && event.origin !== self.location.origin) return
+  // No origin check: only the owner can post here, and dropping a message would hang the sender.
   const { id, xml } = event.data || ({} as ParseRequest)
   try {
     const { programmes, channelNames, hasExplicitTimezones } = parseXmlTv(xml)

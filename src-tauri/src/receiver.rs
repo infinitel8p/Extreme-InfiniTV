@@ -972,6 +972,30 @@ fn discovery_addr_rank(ip: &std::net::IpAddr, interfaces: &[if_addrs::Interface]
     (u8::from(shares_subnet_with_any_interface(ip, interfaces)), mdns_addr_rank(ip))
 }
 
+/// A receiver too old to return its id from /info gets a synthetic one, which the identity key
+/// can't match to that receiver's mDNS resolve. A shared address settles it.
+#[cfg(not(target_os = "ios"))]
+fn collapse_synthetic_id_entries(entries: &mut std::collections::HashMap<String, DiscoveryEntry>) {
+    let synthetic_keys: Vec<String> =
+        entries.keys().filter(|key| key.starts_with("id:sweep:")).cloned().collect();
+    for synthetic_key in synthetic_keys {
+        let Some(synthetic) = entries.get(&synthetic_key) else { continue };
+        let host_key = entries
+            .iter()
+            .find(|(key, candidate)| {
+                *key != &synthetic_key
+                    && candidate.port == synthetic.port
+                    && !candidate.addresses.is_disjoint(&synthetic.addresses)
+            })
+            .map(|(key, _)| key.clone());
+        let Some(host_key) = host_key else { continue };
+        let Some(synthetic) = entries.remove(&synthetic_key) else { continue };
+        if let Some(host) = entries.get_mut(&host_key) {
+            host.addresses.extend(synthetic.addresses);
+        }
+    }
+}
+
 /// Ranks a resolved service's usable addresses, best first.
 #[cfg(not(target_os = "ios"))]
 fn rank_discovered_hosts(
@@ -1020,18 +1044,16 @@ fn merge_resolved_events(
     interfaces: &[if_addrs::Interface],
 ) -> Vec<DiscoveredReceiver> {
     let mut entries: std::collections::HashMap<String, DiscoveryEntry> = std::collections::HashMap::new();
+    // mdns-sd re-reports a service as records arrive, so a loopback-only event is a normal
+    // partial: warn at the end, only for identities nothing usable ever arrived for.
+    let mut address_less: Vec<(String, String, u16, String)> = Vec::new();
     for event in events {
         let usable: Vec<std::net::IpAddr> = event.addresses.iter().copied().filter(is_usable_mdns_addr).collect();
+        let key = discovery_identity_key(&event.name, event.port, event.id.as_deref());
         if usable.is_empty() {
-            log::warn!(
-                "[receiver] discover dropped {} port={}: no usable address in [{}]",
-                event.name,
-                event.port,
-                join_ips(&event.addresses)
-            );
+            address_less.push((key, event.name, event.port, join_ips(&dedupe_ips(&event.addresses))));
             continue;
         }
-        let key = discovery_identity_key(&event.name, event.port, event.id.as_deref());
         let entry = entries.entry(key).or_insert_with(|| DiscoveryEntry {
             name: event.name.clone(),
             port: event.port,
@@ -1045,6 +1067,16 @@ fn merge_resolved_events(
         }
         entry.addresses.extend(usable);
     }
+
+    for (key, name, port, addresses) in address_less {
+        if entries.contains_key(&key) {
+            log::debug!("[receiver] discover partial event for {name} port={port}: [{addresses}]");
+        } else {
+            log::warn!("[receiver] discover dropped {name} port={port}: no usable address in [{addresses}]");
+        }
+    }
+
+    collapse_synthetic_id_entries(&mut entries);
 
     entries
         .into_values()
@@ -1137,6 +1169,8 @@ struct SweepInfoResponse {
     app: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -1158,8 +1192,12 @@ async fn probe_sweep_host(client: reqwest::Client, ip: std::net::Ipv4Addr, port:
     Some(ResolvedEvent {
         name: info.name.unwrap_or_default(),
         port,
-        // mDNS ids don't exist here; a synthetic per-ip id keeps same-name receivers distinct.
-        id: Some(format!("sweep:{ip}")),
+        // Its own id merges this probe with the mDNS resolve; without one (older receivers) a
+        // synthetic per-ip id still keeps same-name receivers distinct.
+        id: info
+            .id
+            .filter(|id| !id.is_empty())
+            .or_else(|| Some(format!("sweep:{ip}"))),
         addresses: vec![std::net::IpAddr::V4(ip)],
     })
 }
@@ -1590,7 +1628,9 @@ fn broadcast_playback(ctx: &ServerCtx) {
 
 async fn handle_info(State(ctx): State<Arc<ServerCtx>>) -> Response {
     let name = ctx.shared.name.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
-    Json(json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": name})).into_response()
+    // The id mirrors the mDNS TXT record so a probe and a browse resolve to one identity.
+    let id = ctx.shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    Json(json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": name, "id": id})).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2490,6 +2530,96 @@ mod tests {
         assert!(merge_resolved_events(events, &[]).is_empty());
     }
 
+    // A known-host probe and an mDNS resolve for one TV listed it twice in the picker.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_merges_a_probe_carrying_the_receivers_own_id() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap(), "10.0.0.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 1, "the probe must merge into the mdns identity, not add an entry");
+        assert_eq!(discovered[0].hosts.len(), 2);
+    }
+
+    // An older receiver returns no id from /info, so its probe carries a synthetic one.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_collapses_a_synthetic_id_sharing_an_address_with_a_real_one() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap(), "10.0.0.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("sweep:192.168.1.20".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 1, "a probe of an older receiver must not add a second entry");
+        assert_eq!(discovered[0].id.as_deref(), Some("abc123"));
+    }
+
+    // Two receivers on one host would share no address, so a real second device must survive.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_keeps_a_synthetic_id_that_shares_no_address() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Bedroom".to_string(),
+                port: 47815,
+                id: Some("sweep:192.168.1.21".to_string()),
+                addresses: vec!["192.168.1.21".parse().unwrap()],
+            },
+        ];
+        assert_eq!(merge_resolved_events(events, &[]).len(), 2);
+    }
+
+    // mdns-sd re-reports a service as records arrive: the loopback-only first event is a partial.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_keeps_an_identity_whose_first_event_had_only_loopback() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["127.0.0.1".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].host, "192.168.1.20");
+    }
+
     // ---------------------------------------------------------------------
     // Unicast subnet sweep candidate enumeration
     // ---------------------------------------------------------------------
@@ -2598,6 +2728,31 @@ mod tests {
             .await
             .expect("a valid /info response must be accepted");
         assert_eq!(event.name, "Living Room");
+        assert_eq!(event.id.as_deref(), Some("sweep:127.0.0.1"));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_prefers_the_receivers_own_id_over_the_synthetic_one() {
+        let body =
+            json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": "Living Room", "id": "abc123"})
+                .to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        let event = probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port)
+            .await
+            .expect("a valid /info response must be accepted");
+        assert_eq!(event.id.as_deref(), Some("abc123"));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_ignores_an_empty_id_from_an_older_receiver() {
+        let body =
+            json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": "Living Room", "id": ""}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        let event = probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port)
+            .await
+            .expect("a valid /info response must be accepted");
         assert_eq!(event.id.as_deref(), Some("sweep:127.0.0.1"));
     }
 
