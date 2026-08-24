@@ -42,6 +42,16 @@ function buildSections(): ShortcutSection[] {
       items: [{ keys: ["R"], desc: t("keyboardHelp.desc.surpriseMe") }],
     },
     {
+      title: t("keyboardHelp.section.castRemote"),
+      items: [
+        { keys: ["Space", "K"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.playPause") },
+        { keys: ["M"], desc: t("keyboardHelp.desc.muteToggle") },
+        { keys: ["P", "N"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.castPrevNext") },
+        { keys: ["C"], desc: t("keyboardHelp.desc.castChannels") },
+        { keys: ["Esc"], desc: t("keyboardHelp.desc.castBack") },
+      ],
+    },
+    {
       title: t("keyboardHelp.section.player"),
       items: [
         { keys: ["Space"], desc: t("keyboardHelp.desc.playPause") },

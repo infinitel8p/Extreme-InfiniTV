@@ -213,6 +213,22 @@ export const ICON_PLAYER_TRACK_NEXT = wrap(
   '<path d="M3 5v14l8 -7l-8 -7" />' + '<path d="M14 5v14l8 -7l-8 -7" />'
 )
 
+export const ICON_ARROW_LEFT = wrap('<path d="M5 12l14 0" /><path d="M5 12l6 6" /><path d="M5 12l6 -6" />')
+
+export const ICON_SEARCH = wrap(
+  '<path d="M10 10m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0" />' + '<path d="M21 21l-6 -6" />'
+)
+
+export const ICON_STAR = wrap(
+  '<path d="M12 17.75l-6.172 3.245l1.179 -6.873l-5 -4.867l6.9 -1l3.086 -6.253l3.086 6.253l6.9 1l-5 4.867l1.179 6.873z" />'
+)
+
+export const ICON_LIST_DETAILS = wrap(
+  '<path d="M13 5h8" /><path d="M13 9h5" /><path d="M13 15h8" /><path d="M13 19h5" />' +
+    '<path d="M3 4m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z" />' +
+    '<path d="M3 14m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z" />'
+)
+
 export const ICON_PLAYER_TRACK_PREV = wrap(
   '<path d="M21 5v14l-8 -7l8 -7" />' + '<path d="M10 5v14l-8 -7l8 -7" />'
 )

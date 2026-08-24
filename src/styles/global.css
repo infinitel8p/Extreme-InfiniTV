@@ -12,6 +12,13 @@
    contents don't fit. */
 @custom-variant landscape-phone (@media (orientation: landscape) and (max-height: 500px));
 
+/* Short viewport: any window too low to afford a tall panel header, which
+   covers landscape phones and small desktop windows alike. Gated on height
+   only, so it fires wherever vertical space is the constraint. Used by the
+   cast remote to tighten its spacing and lay its footer actions side by
+   side instead of stacked. */
+@custom-variant short-viewport (@media (max-height: 600px));
+
 /* True when the sidebar is at its full lg+ width: viewport is lg+ and the
    rail hasn't been manually collapsed. Mirrors --breakpoint-lg (64em). */
 @custom-variant rail-expanded {
@@ -721,6 +728,30 @@ dialog[open] .xt-wn-section {
 /* ────────────────────────────── */
 /* Virtualised channel list       */
 /* ────────────────────────────── */
+/* Cast remote ambient wash: the artwork's own colours, blurred out behind it, so the
+   panel picks up the mood of what is playing. Masked to fade before the control deck
+   and kept cheap in perf mode, where a large blurred layer is the expensive part. */
+.xt-cast-wash {
+    background-size: cover;
+    background-position: center;
+    filter: blur(64px) saturate(180%);
+    transform: scale(1.35);
+    transform-origin: center top;
+    opacity: 0;
+    transition: opacity 420ms cubic-bezier(0.16, 1, 0.3, 1);
+    mask-image: radial-gradient(115% 62% at 50% 16%, #000 0%, #000 30%, transparent 72%);
+    -webkit-mask-image: radial-gradient(115% 62% at 50% 16%, #000 0%, #000 30%, transparent 72%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .xt-cast-wash { transition: none; }
+}
+
+:root[data-perf-mode="on"] .xt-cast-wash {
+    filter: blur(32px);
+    transform: none;
+}
+
 .channel-row {
     content-visibility: auto;
     contain-intrinsic-size: calc(4.25rem * var(--xt-density, 1));
