@@ -156,6 +156,12 @@ function buildPill(): HTMLElement {
   textCol.appendChild(deviceNameEl)
   textCol.appendChild(titleEl)
   contentBtn.appendChild(textCol)
+
+  // Only visible while collapsed: keeps "still casting, N minutes in" readable without reopening the pill.
+  const chipClock = document.createElement("span")
+  chipClock.dataset.role = "chip-clock"
+  chipClock.className = "hidden ms-2 shrink-0 text-xs tabular-nums text-fg-3"
+  contentBtn.appendChild(chipClock)
   pill.appendChild(contentBtn)
 
   const liveEl = document.createElement("span")
@@ -314,11 +320,21 @@ function isConnectedOnlySession(session: CastSession): boolean {
   return !!session.connectedOnly && !session.title
 }
 
+/** Visibility that respects the idle-collapsed chip: a role hidden by the collapse stays hidden until it expands. */
+function setRoleHidden(el: HTMLElement, hidden: boolean): void {
+  if (!hidden && pillCollapsed && COLLAPSE_HIDDEN_ROLES.includes(el.dataset.role ?? "")) {
+    el.classList.add("hidden", COLLAPSE_MARK_CLASS)
+    return
+  }
+  el.classList.toggle("hidden", hidden)
+  el.classList.remove(COLLAPSE_MARK_CLASS)
+}
+
 function applyTransportVisibility(pill: HTMLElement, session: CastSession): void {
   const connectedOnly = isConnectedOnlySession(session)
-  pill.querySelector<HTMLElement>('[data-role="back30"]')!.classList.toggle("hidden", connectedOnly || session.isLive)
-  pill.querySelector<HTMLElement>('[data-role="forward30"]')!.classList.toggle("hidden", connectedOnly || session.isLive)
-  pill.querySelector<HTMLElement>('[data-role="playpause"]')!.classList.toggle("hidden", connectedOnly)
+  setRoleHidden(pill.querySelector<HTMLElement>('[data-role="back30"]')!, connectedOnly || session.isLive)
+  setRoleHidden(pill.querySelector<HTMLElement>('[data-role="forward30"]')!, connectedOnly || session.isLive)
+  setRoleHidden(pill.querySelector<HTMLElement>('[data-role="playpause"]')!, connectedOnly)
 }
 
 function applyContentButtonAffordance(pill: HTMLElement, session: CastSession): void {
@@ -350,8 +366,8 @@ function applySessionToPill(pill: HTMLElement, session: CastSession): void {
   const titleChanged = lastAppliedTitle !== null && session.title !== lastAppliedTitle
   lastAppliedTitle = session.title
   if (titleChanged) announceStatus(pill, displayTitle)
-  pill.querySelector<HTMLElement>('[data-role="live"]')!.classList.toggle("hidden", connectedOnly || !session.isLive)
-  pill.querySelector<HTMLElement>('[data-role="time"]')!.classList.toggle("hidden", connectedOnly || session.isLive)
+  setRoleHidden(pill.querySelector<HTMLElement>('[data-role="live"]')!, connectedOnly || !session.isLive)
+  setRoleHidden(pill.querySelector<HTMLElement>('[data-role="time"]')!, connectedOnly || session.isLive)
 
   // A same-title patch must not re-run the transport/content visuals while collapsed.
   if (titleChanged) expandPill(pill, session)
@@ -374,12 +390,28 @@ function setPlayPauseIcon(pill: HTMLElement, paused: boolean): void {
   button.dataset.paused = paused ? "true" : "false"
 }
 
+/** Short single clock for the collapsed chip: elapsed for live, position for VOD. */
+function chipClockText(session: CastSession): string | null {
+  if (isConnectedOnlySession(session)) return null
+  if (session.isLive) return session.startedAtMs == null ? null : formatElapsedSinceStart(session.startedAtMs, Date.now())
+  return formatClock(lastKnownPositionSeconds)
+}
+
+function renderChipClock(pill: HTMLElement): void {
+  const chipClock = pill.querySelector<HTMLElement>('[data-role="chip-clock"]')!
+  const session = getCastSession()
+  const text = pillCollapsed && session ? chipClockText(session) : null
+  chipClock.textContent = text ?? ""
+  chipClock.classList.toggle("hidden", text == null)
+}
+
 function updateTime(pill: HTMLElement, positionSeconds: number, durationSeconds?: number): void {
   const timeEl = pill.querySelector<HTMLElement>('[data-role="time"]')!
   timeEl.textContent =
     durationSeconds != null
       ? `${formatClock(positionSeconds)} / ${formatClock(durationSeconds)}`
       : formatClock(positionSeconds)
+  renderChipClock(pill)
 }
 
 function updateProgressBar(pill: HTMLElement, positionSeconds: number, durationSeconds: number | null): void {
@@ -407,11 +439,13 @@ function stopLiveElapsedTicker(): void {
 function renderLiveElapsed(pill: HTMLElement, session: CastSession): void {
   const liveElapsedEl = pill.querySelector<HTMLElement>('[data-role="live-elapsed"]')!
   if (isConnectedOnlySession(session) || !session.isLive || session.startedAtMs == null) {
-    liveElapsedEl.classList.add("hidden")
+    setRoleHidden(liveElapsedEl, true)
+    renderChipClock(pill)
     return
   }
   liveElapsedEl.textContent = formatElapsedSinceStart(session.startedAtMs, Date.now())
-  liveElapsedEl.classList.remove("hidden")
+  setRoleHidden(liveElapsedEl, false)
+  renderChipClock(pill)
 }
 
 /** Ticks the live elapsed clock only while playing; a paused/buffering/reconnecting state freezes it. */
@@ -460,7 +494,7 @@ function renderStatus(pill: HTMLElement, session: CastSession, status: PillStatu
       button.disabled = true
       button.classList.add("opacity-60")
     }
-    retryBtn.classList.add("hidden")
+    setRoleHidden(retryBtn, true)
     lastAnnouncedPlaybackState = null
     announceStatus(pill, t("cast.pill.reconnecting"))
     return
@@ -475,16 +509,16 @@ function renderStatus(pill: HTMLElement, session: CastSession, status: PillStatu
     iconEl.classList.add("text-bad")
     titleEl.textContent = t("cast.pill.error")
     titleEl.title = t("cast.pill.error")
-    for (const button of transportButtons) button.classList.add("hidden")
+    for (const button of transportButtons) setRoleHidden(button, true)
     resetRetryButton(pill)
-    retryBtn.classList.remove("hidden")
+    setRoleHidden(retryBtn, false)
     lastAnnouncedPlaybackState = null
     announceStatus(pill, titleEl.textContent)
     return
   }
   iconEl.classList.remove("text-bad")
   iconEl.classList.add("text-fg-3")
-  retryBtn.classList.add("hidden")
+  setRoleHidden(retryBtn, true)
   applyTransportVisibility(pill, session)
   const displayTitle = connectedOnly ? t("cast.pill.connectedPrompt") : session.title
   titleEl.textContent = displayTitle
@@ -532,6 +566,7 @@ function setPillCollapsed(pill: HTMLElement, isCollapsed: boolean, session: Cast
   textCol.classList.toggle("max-w-0", isCollapsed)
   textCol.classList.toggle("max-w-none", !isCollapsed)
   textCol.classList.toggle("opacity-0", isCollapsed)
+  renderChipClock(pill)
 
   if (isCollapsed) {
     contentBtn.disabled = false
