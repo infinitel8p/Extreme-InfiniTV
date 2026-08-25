@@ -48,12 +48,37 @@ mod vod_proxy;
 
 mod warmup;
 
+#[cfg(not(target_os = "ios"))]
+fn log_line_prefix(
+    stamp: &chrono::DateTime<chrono::FixedOffset>,
+    target: &str,
+    level: log::Level,
+) -> String {
+    format!(
+        "[{}][{}][{}][{}] ",
+        stamp.format("%Y-%m-%d"),
+        stamp.format("%H:%M:%S%.3f%:z"),
+        target,
+        level
+    )
+}
+
 // The Stdout target also covers Android release builds; tauri-plugin-log routes it to logcat there, not just the debug-only terminal.
 #[cfg(not(target_os = "ios"))]
 fn build_log_plugin() -> tauri_plugin_log::Builder {
-    let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let now = chrono::Local::now();
+    let day = now.format("%Y-%m-%d").to_string();
+    // The plugin's own default format drops the date and level on mobile, so state it here:
+    // an Android log with no timestamps can't be correlated with anything a reporter says.
+    // Offset resolved once - a per-record local lookup would hit the tz database on every line.
+    let offset = *now.offset();
     // clear_targets() drops the plugin's own default LogDir target so records aren't double-written.
     let mut log_builder = tauri_plugin_log::Builder::new()
+        .format(move |out, message, record| {
+            let prefix =
+                log_line_prefix(&chrono::Utc::now().with_timezone(&offset), record.target(), record.level());
+            out.finish(format_args!("{prefix}{message}"))
+        })
         .level(log::LevelFilter::Info)
         .max_file_size(50_000_000)
         .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
@@ -99,12 +124,16 @@ fn prune_old_android_logs(app: &tauri::App) {
         return;
     };
 
+    let mut kept = 0usize;
+    let mut removed = 0usize;
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
+        // Every log in our own log dir: day-stamped, plugin-log's size-rotation names, and
+        // the pre-day-stamp "<app name>.log" that the prefix check used to leave behind.
         let is_app_log = path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("app-") && name.ends_with(".log"));
+            .is_some_and(|name| name.ends_with(".log") || name.ends_with(".log.bak"));
         if !is_app_log {
             continue;
         }
@@ -116,11 +145,37 @@ fn prune_old_android_logs(app: &tauri::App) {
             }
         };
         if modified < cutoff {
-            if let Err(error) = std::fs::remove_file(&path) {
-                log::warn!("[log-prune] remove_file failed for {}: {error}", path.display());
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(error) => {
+                    log::warn!("[log-prune] remove_file failed for {}: {error}", path.display())
+                }
             }
+        } else {
+            kept += 1;
         }
     }
+    log::info!("[log-prune] kept {kept} log file(s), removed {removed} older than {LOG_RETENTION_DAYS} days");
+}
+
+// Marks a session boundary in a log file that can span days and app restarts.
+fn log_session_banner(app: &tauri::App) {
+    use tauri::Manager;
+
+    let package = app.package_info();
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map(|dir| dir.display().to_string())
+        .unwrap_or_else(|_| "unavailable".to_string());
+    log::info!(
+        "[session] {} {} start on {} {} ({} build), logs at {log_dir}",
+        package.name,
+        package.version,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+    );
 }
 
 fn install_panic_hook() {
@@ -260,6 +315,7 @@ pub fn run() {
     let app = builder
         .setup(|app| {
             install_panic_hook();
+            log_session_banner(app);
             #[cfg(target_os = "android")]
             prune_old_android_logs(app);
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -302,4 +358,31 @@ pub fn run() {
             receiver::shutdown(&_app_handle.state::<receiver::ReceiverState>());
         }
     });
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+mod tests {
+    use super::log_line_prefix;
+
+    fn stamp(text: &str) -> chrono::DateTime<chrono::FixedOffset> {
+        chrono::DateTime::parse_from_rfc3339(text).unwrap()
+    }
+
+    #[test]
+    fn log_line_prefix_carries_date_time_offset_target_and_level() {
+        let prefix = log_line_prefix(&stamp("2026-08-25T11:27:23.456+02:00"), "webview:app", log::Level::Warn);
+        assert_eq!(prefix, "[2026-08-25][11:27:23.456+02:00][webview:app][WARN] ");
+    }
+
+    #[test]
+    fn log_line_prefix_keeps_a_utc_offset_explicit() {
+        let prefix = log_line_prefix(&stamp("2026-01-02T03:04:05.006Z"), "app_lib::receiver", log::Level::Info);
+        assert_eq!(prefix, "[2026-01-02][03:04:05.006+00:00][app_lib::receiver][INFO] ");
+    }
+
+    #[test]
+    fn log_line_prefix_keeps_a_negative_offset() {
+        let prefix = log_line_prefix(&stamp("2026-08-25T20:15:00.000-07:00"), "app_lib", log::Level::Error);
+        assert_eq!(prefix, "[2026-08-25][20:15:00.000-07:00][app_lib][ERROR] ");
+    }
 }

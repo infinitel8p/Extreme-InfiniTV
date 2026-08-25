@@ -1415,6 +1415,7 @@
   "sniffer.backBtn": "Kembali",
   "sniffer.toast.saved": "Playlist ditambahkan",
   "sniffer.error.empty": "Tidak ada stream yang ditemukan di halaman itu. Mungkin memerlukan login, menggunakan DRM, atau memulai pemutaran dengan cara yang tidak dapat kami picu.",
+  "sniffer.error.launch": "Tidak dapat membuka halaman itu di latar belakang. Tunggu sebentar lalu coba lagi.",
   "sniffer.error.drm": "Stream itu dilindungi DRM dan tidak dapat diekstrak.",
   "sniffer.error.invalidUrl": "Masukkan URL halaman yang valid.",
   "sniffer.error.saveFailed": "Tidak dapat menyimpan playlist.",

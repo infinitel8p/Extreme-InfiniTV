@@ -1415,6 +1415,7 @@
   "sniffer.backBtn": "Back",
   "sniffer.toast.saved": "Playlist added",
   "sniffer.error.empty": "No stream found on that page. It may need a login, use DRM, or start playback in a way we can't trigger.",
+  "sniffer.error.launch": "Couldn't open that page in the background. Wait a moment and try again.",
   "sniffer.error.drm": "That stream is DRM-protected and can't be extracted.",
   "sniffer.error.invalidUrl": "Enter a valid page URL.",
   "sniffer.error.saveFailed": "Couldn't save the playlist.",

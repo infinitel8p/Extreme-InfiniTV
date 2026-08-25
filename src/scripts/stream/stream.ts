@@ -5071,7 +5071,12 @@ async function loadEPG(streamId) {
       .join("")
     updateEpgDayIndicator()
   } catch (e) {
-    log.error(e)
+    // A channel switch aborts this fetch mid-body; that's expected, not a failure to report.
+    if (epgListChannelId !== streamId) {
+      log.warn("[xt:livetv] short-EPG fetch superseded by a newer channel", { streamId, error: e })
+      return
+    }
+    log.error("[xt:livetv] short-EPG fetch failed", { streamId, error: e })
     epgList.innerHTML = `<div class="text-bad">Failed to load EPG.</div>`
     if (epgDayIndicator) epgDayIndicator.textContent = ""
   }

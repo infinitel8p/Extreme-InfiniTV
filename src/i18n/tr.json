@@ -1415,6 +1415,7 @@
   "sniffer.backBtn": "Geri",
   "sniffer.toast.saved": "Oynatma listesi eklendi",
   "sniffer.error.empty": "Bu sayfada yayın bulunamadı. Giriş gerektiriyor, DRM kullanıyor veya oynatmayı bizim tetikleyemeyeceğimiz bir şekilde başlatıyor olabilir.",
+  "sniffer.error.launch": "Bu sayfa arka planda açılamadı. Biraz bekleyip tekrar deneyin.",
   "sniffer.error.drm": "Bu yayın DRM korumalı ve çıkarılamıyor.",
   "sniffer.error.invalidUrl": "Geçerli bir sayfa URL'si girin.",
   "sniffer.error.saveFailed": "Oynatma listesi kaydedilemedi.",

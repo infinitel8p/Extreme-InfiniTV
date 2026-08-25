@@ -256,12 +256,26 @@ export function classifyError(raw: unknown, kind: ExternalPlayerKind, path: stri
   return new PlayerLaunchError(msg, code, kind, path)
 }
 
+/** MPV has no Android build, so an mpv backend hands off to the system chooser there. */
+export function androidHandoffKindFor(kind: ExternalPlayerKind): AndroidHandoffKind {
+  return kind === "vlc" ? "vlc" : "system"
+}
+
 export function getExternalLauncher(kind: ExternalPlayerKind): ExternalLauncher {
   const path = getPlayerPath(kind)
   return {
     kind,
     path,
     async launch(src, options = {}) {
+      // A desktop-only backend can reach Android through a restored backup; Intent handoff
+      // is the only external path there, and it needs no configured binary path.
+      if (androidExternalAvailable) {
+        await getAndroidHandoffLauncher(androidHandoffKindFor(kind)).launch(src, {
+          userAgent: options.userAgent ?? null,
+          referer: options.referer ?? null,
+        })
+        return { pid: 0, reused: false }
+      }
       if (!path) throw new PlayerNotConfiguredError(kind)
       const invoke = await getInvoke()
       if (!invoke) {

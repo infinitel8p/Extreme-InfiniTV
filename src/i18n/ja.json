@@ -1415,6 +1415,7 @@
   "sniffer.backBtn": "戻る",
   "sniffer.toast.saved": "プレイリストを追加しました",
   "sniffer.error.empty": "そのページにストリームが見つかりませんでした。ログインが必要か、DRMを使用しているか、こちらから再生を開始できない可能性があります。",
+  "sniffer.error.launch": "そのページをバックグラウンドで開けませんでした。少し待ってからもう一度お試しください。",
   "sniffer.error.drm": "そのストリームはDRMで保護されており、抽出できません。",
   "sniffer.error.invalidUrl": "有効なページURLを入力してください。",
   "sniffer.error.saveFailed": "プレイリストを保存できませんでした。",

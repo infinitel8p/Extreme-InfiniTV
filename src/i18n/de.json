@@ -1415,6 +1415,7 @@
   "sniffer.backBtn": "Zurück",
   "sniffer.toast.saved": "Wiedergabeliste hinzugefügt",
   "sniffer.error.empty": "Kein Stream auf dieser Seite gefunden. Möglicherweise ist eine Anmeldung nötig, DRM im Einsatz, oder die Wiedergabe startet auf eine Weise, die wir nicht auslösen können.",
+  "sniffer.error.launch": "Diese Seite konnte nicht im Hintergrund geöffnet werden. Warte einen Moment und versuche es erneut.",
   "sniffer.error.drm": "Dieser Stream ist DRM-geschützt und kann nicht extrahiert werden.",
   "sniffer.error.invalidUrl": "Gib eine gültige Seiten-URL ein.",
   "sniffer.error.saveFailed": "Wiedergabeliste konnte nicht gespeichert werden.",

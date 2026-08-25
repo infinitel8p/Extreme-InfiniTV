@@ -1415,6 +1415,7 @@
   "sniffer.backBtn": "返回",
   "sniffer.toast.saved": "播放列表已添加",
   "sniffer.error.empty": "在该网页上未找到流媒体。可能需要登录、使用了 DRM，或以我们无法触发的方式开始播放。",
+  "sniffer.error.launch": "无法在后台打开该网页。请稍等一下再试。",
   "sniffer.error.drm": "该流媒体受 DRM 保护，无法提取。",
   "sniffer.error.invalidUrl": "请输入有效的网页 URL。",
   "sniffer.error.saveFailed": "无法保存播放列表。",

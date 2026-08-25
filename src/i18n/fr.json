@@ -1415,6 +1415,7 @@
   "sniffer.backBtn": "Retour",
   "sniffer.toast.saved": "Liste ajoutée",
   "sniffer.error.empty": "Aucun flux trouvé sur cette page. Elle nécessite peut-être une connexion, utilise un DRM, ou démarre la lecture d'une façon que nous ne pouvons pas déclencher.",
+  "sniffer.error.launch": "Impossible d’ouvrir cette page en arrière-plan. Patientez un instant puis réessayez.",
   "sniffer.error.drm": "Ce flux est protégé par DRM et ne peut pas être extrait.",
   "sniffer.error.invalidUrl": "Saisissez une URL de page valide.",
   "sniffer.error.saveFailed": "Impossible d'enregistrer la liste.",

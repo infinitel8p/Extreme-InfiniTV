@@ -53,12 +53,22 @@ function toSinks(level: "error" | "warn" | "info", text: string): void {
     }
 }
 
+// Error's message/stack are non-enumerable, so a nested one stringifies to "{}".
+function errorReplacer(_key: string, value: unknown): unknown {
+    if (!(value instanceof Error)) return value
+    return { name: value.name, message: value.message, ...(value.stack ? { stack: value.stack } : {}) }
+}
+
+export function stringifyLogValue(value: unknown): string {
+    try { return JSON.stringify(value, errorReplacer) ?? String(value) } catch { return String(value) }
+}
+
 function stringifyArgs(args: unknown[]): string {
     return args
         .map((arg) => {
             if (typeof arg === "string") return arg
             if (arg instanceof Error) return arg.stack || arg.message
-            try { return JSON.stringify(arg) } catch { return String(arg) }
+            return stringifyLogValue(arg)
         })
         .join(" ")
 }
@@ -70,9 +80,11 @@ export function redactArg(arg: unknown): unknown {
     if (arg instanceof Error) return redactUrl(arg.stack || arg.message)
     if (arg !== null && typeof arg === "object") {
         try {
-            const serialized = JSON.stringify(arg)
+            const serialized = JSON.stringify(arg, errorReplacer)
             const redacted = redactUrl(serialized)
-            return redacted === serialized ? arg : JSON.parse(redacted)
+            if (redacted === serialized) return arg
+            // A redaction that broke the JSON must still not put the raw value on the console.
+            try { return JSON.parse(redacted) } catch { return redacted }
         } catch {
             return redactUrl(String(arg))
         }
@@ -96,7 +108,9 @@ export const log: {
 
 const SENSITIVE_USERINFO = /(\/\/)[^/@\s?#]+@/g
 
-const SENSITIVE_PARAMS = /(\b(?:username|user|password|pass|token|authorization|auth|key|api_key|apikey)=)([^&#\s]*)/gi
+// The value class excludes `"` so redacting a URL inside JSON can't eat the closing
+// quote and leave the document unparseable.
+const SENSITIVE_PARAMS = /(\b(?:username|user|password|pass|token|authorization|auth|key|api_key|apikey)=)([^&#\s"]*)/gi
 
 const SENSITIVE_PATH =
     /(\/(?:live|movie|series|timeshift|hls|hlsr)\/)([^/\s?#]+)\/([^/\s?#]+)(\/)/gi

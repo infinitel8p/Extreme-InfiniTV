@@ -6,11 +6,13 @@ import {
   recentLogFileNames,
   tailLogBytes,
   decodeLogTail,
+  allocateLogTailBudget,
   withTimeout,
   sanitizeDeviceNameForFilename,
   type BundleInput,
   type PlaylistSummary,
   type ReceiverLogResult,
+  type LogInventoryItem,
 } from "@/scripts/lib/diagnostic-bundle.js"
 
 const SECRET_PASS = "secret-pass"
@@ -306,6 +308,93 @@ describe("buildBundleManifest", () => {
     const manifest = buildBundleManifest(baseBundleInput())
     const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
     expect(readme).not.toContain("Receiver-cast devices")
+  })
+
+  it("marks a truncated log tail with the omitted byte count", () => {
+    const manifest = buildBundleManifest(
+      baseBundleInput({
+        logFiles: [
+          {
+            name: "app-2026-03-15.log",
+            text: "tail lines",
+            sizeBytes: 2 * 1024 * 1024,
+            includedBytes: 512 * 1024,
+            modifiedAt: "2026-03-15T09:00:00.000Z",
+          },
+        ],
+      })
+    )
+    const logFile = manifest.find((file) => file.name === "logs/app-2026-03-15.log")
+    expect(logFile?.text).toContain("omitted")
+    expect(logFile?.text).toContain("2026-03-15T09:00:00.000Z")
+    expect(logFile?.text).toContain("tail lines")
+  })
+
+  it("marks an untruncated log tail as the complete file", () => {
+    const manifest = buildBundleManifest(
+      baseBundleInput({
+        logFiles: [
+          { name: "app-2026-03-15.log", text: "all of it", sizeBytes: 9, includedBytes: 9 },
+        ],
+      })
+    )
+    const logFile = manifest.find((file) => file.name === "logs/app-2026-03-15.log")
+    expect(logFile?.text).toContain("complete file")
+    expect(logFile?.text).not.toContain("omitted")
+  })
+
+  it("writes an inventory listing every file found, attached or not", () => {
+    const logInventory: LogInventoryItem[] = [
+      { name: "app-2026-03-15.log", sizeBytes: 1024, modifiedAt: "2026-03-15T09:00:00.000Z", state: "full" },
+      { name: "app-2026-03-01.log", sizeBytes: 4096, modifiedAt: "2026-03-01T09:00:00.000Z", state: "omitted" },
+    ]
+    const manifest = buildBundleManifest(
+      baseBundleInput({
+        logFiles: [{ name: "app-2026-03-15.log", text: "hello", sizeBytes: 1024, includedBytes: 1024 }],
+        logInventory,
+      })
+    )
+    const inventory = manifest.find((file) => file.name === "logs/INVENTORY.txt")?.text ?? ""
+    expect(inventory).toContain("app-2026-03-15.log")
+    expect(inventory).toContain("app-2026-03-01.log")
+    expect(inventory).toContain("omitted")
+    const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
+    expect(readme).toContain("logs/INVENTORY.txt")
+  })
+
+  it("adds no inventory file when nothing was enumerated", () => {
+    const manifest = buildBundleManifest(baseBundleInput({ logInventory: [] }))
+    expect(manifest.some((file) => file.name === "logs/INVENTORY.txt")).toBe(false)
+  })
+})
+
+describe("allocateLogTailBudget", () => {
+  it("gives the newest file its full per-file allowance", () => {
+    expect(allocateLogTailBudget([900, 900], 500, 5000, 100)).toEqual([500, 500])
+  })
+
+  it("charges a small file only its own size", () => {
+    expect(allocateLogTailBudget([10, 20], 500, 5000, 5)).toEqual([10, 20])
+  })
+
+  it("stops allocating once the total budget is spent", () => {
+    expect(allocateLogTailBudget([500, 500, 500], 500, 1000, 100)).toEqual([500, 500, 0])
+  })
+
+  it("hands out the remainder when it still clears the minimum chunk", () => {
+    expect(allocateLogTailBudget([500, 500], 500, 700, 100)).toEqual([500, 200])
+  })
+
+  it("skips a file when the leftover budget is below the minimum chunk", () => {
+    expect(allocateLogTailBudget([500, 500], 500, 550, 100)).toEqual([500, 0])
+  })
+
+  it("treats a negative or zero size as no allowance", () => {
+    expect(allocateLogTailBudget([0, -5, 10], 500, 5000, 1)).toEqual([0, 0, 10])
+  })
+
+  it("returns an empty list for no files", () => {
+    expect(allocateLogTailBudget([])).toEqual([])
   })
 })
 

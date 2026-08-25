@@ -1415,6 +1415,7 @@
   "sniffer.backBtn": "Wstecz",
   "sniffer.toast.saved": "Dodano playlistę",
   "sniffer.error.empty": "Nie znaleziono streamu na tej stronie. Może wymagać logowania, używać DRM lub uruchamiać odtwarzanie w sposób, którego nie potrafimy wywołać.",
+  "sniffer.error.launch": "Nie udało się otworzyć tej strony w tle. Odczekaj chwilę i spróbuj ponownie.",
   "sniffer.error.drm": "Ten stream jest chroniony przez DRM i nie można go wyodrębnić.",
   "sniffer.error.invalidUrl": "Wprowadź prawidłowy adres URL strony.",
   "sniffer.error.saveFailed": "Nie udało się zapisać playlisty.",

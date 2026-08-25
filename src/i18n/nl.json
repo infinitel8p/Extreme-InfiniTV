@@ -1415,6 +1415,7 @@
   "sniffer.backBtn": "Terug",
   "sniffer.toast.saved": "Afspeellijst toegevoegd",
   "sniffer.error.empty": "Geen stream gevonden op die pagina. Mogelijk is inloggen vereist, wordt DRM gebruikt, of start het afspelen op een manier die we niet kunnen activeren.",
+  "sniffer.error.launch": "Kon die pagina niet op de achtergrond openen. Wacht een moment en probeer het opnieuw.",
   "sniffer.error.drm": "Die stream is DRM-beveiligd en kan niet worden geëxtraheerd.",
   "sniffer.error.invalidUrl": "Voer een geldige pagina-URL in.",
   "sniffer.error.saveFailed": "Afspeellijst kon niet worden opgeslagen.",

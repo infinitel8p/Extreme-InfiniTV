@@ -355,6 +355,10 @@ export function surfaceLaunchErrorFallback(err: unknown, kind: ExternalPlayerKin
   const playerName = kind.toUpperCase()
   if (err instanceof PlayerNotConfiguredError) {
     log.warn(`${logTag} ${playerName} not configured, falling back to embedded playback`)
+  } else if (err instanceof AndroidHandoffError) {
+    log.warn(`${logTag} android handoff failed (${err.code}), falling back to embedded playback`)
+    surfaceAndroidHandoffError(err, err.kind)
+    return
   } else if (err instanceof PlayerLaunchError) {
     log.warn(`${logTag} ${playerName} launch failed, falling back to embedded playback:`, err.message)
   } else {

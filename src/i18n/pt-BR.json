@@ -1415,6 +1415,7 @@
   "sniffer.backBtn": "Voltar",
   "sniffer.toast.saved": "Playlist adicionada",
   "sniffer.error.empty": "Nenhuma transmissão encontrada nessa página. Ela pode exigir login, usar DRM ou iniciar a reprodução de um jeito que não conseguimos acionar.",
+  "sniffer.error.launch": "Não foi possível abrir essa página em segundo plano. Aguarde um momento e tente novamente.",
   "sniffer.error.drm": "Essa transmissão é protegida por DRM e não pode ser extraída.",
   "sniffer.error.invalidUrl": "Informe uma URL de página válida.",
   "sniffer.error.saveFailed": "Não foi possível salvar a playlist.",

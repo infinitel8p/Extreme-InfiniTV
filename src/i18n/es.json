@@ -1415,6 +1415,7 @@
   "sniffer.backBtn": "Atrás",
   "sniffer.toast.saved": "Lista añadida",
   "sniffer.error.empty": "No se encontró ninguna transmisión en esa página. Puede que requiera iniciar sesión, use DRM, o inicie la reproducción de una forma que no podemos activar.",
+  "sniffer.error.launch": "No se pudo abrir esa página en segundo plano. Espera un momento e inténtalo de nuevo.",
   "sniffer.error.drm": "Esa transmisión está protegida con DRM y no se puede extraer.",
   "sniffer.error.invalidUrl": "Introduce una URL de página válida.",
   "sniffer.error.saveFailed": "No se pudo guardar la lista.",

@@ -246,3 +246,56 @@ describe("redactDeep", () => {
     expect(out).toEqual({ requestBody: '{"Authorization":"***"}' })
   })
 })
+
+describe("redactUrl inside JSON payloads", () => {
+  it("keeps a serialized object parseable after masking a credentialed URL", () => {
+    const payload = JSON.stringify(
+      { url: "http://host.example/xmltv.php?username=joe&password=hunter2", kind: "epg" },
+      null,
+      2
+    )
+    const redacted = redactUrl(payload)
+    expect(redacted).not.toContain("hunter2")
+    expect(redacted).not.toContain("joe")
+    expect(() => JSON.parse(redacted)).not.toThrow()
+    expect(JSON.parse(redacted).kind).toBe("epg")
+  })
+
+  it("keeps every field after the masked URL intact", () => {
+    const payload = JSON.stringify({ url: "http://h.test/?password=hunter2", status: 200, ok: true })
+    const parsed = JSON.parse(redactUrl(payload))
+    expect(parsed.status).toBe(200)
+    expect(parsed.ok).toBe(true)
+    expect(parsed.url).toBe("http://h.test/?password=***")
+  })
+
+  it("still masks a credential that ends the string with no trailing quote", () => {
+    expect(redactUrl("http://h.test/?password=hunter2")).toBe("http://h.test/?password=***")
+  })
+
+  it("masks each credential param of a multi-param query inside JSON", () => {
+    const payload = JSON.stringify({ url: "http://h.test/?user=joe&token=abc&keep=yes" })
+    const parsed = JSON.parse(redactUrl(payload))
+    expect(parsed.url).toBe("http://h.test/?user=***&token=***&keep=yes")
+  })
+})
+
+describe("redactArg with nested errors", () => {
+  it("keeps a nested error's message instead of collapsing it to an empty object", () => {
+    const redacted = redactArg({ url: "http://h.test/?password=hunter2", error: new Error("boom") })
+    const serialized = JSON.stringify(redacted)
+    expect(serialized).toContain("boom")
+    expect(serialized).not.toContain('"error":{}')
+    expect(serialized).not.toContain("hunter2")
+  })
+
+  it("keeps a nested error when nothing needed redacting", () => {
+    const redacted = redactArg({ error: new TypeError("Failed to fetch") }) as any
+    expect(redacted.error).toBeInstanceOf(TypeError)
+  })
+
+  it("does not leak a raw value when redaction breaks the serialized JSON", () => {
+    const redacted = redactArg({ note: 'password=hunter2"tail' })
+    expect(JSON.stringify(redacted)).not.toContain("hunter2")
+  })
+})
