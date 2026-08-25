@@ -602,16 +602,16 @@ fn default_route_ip() -> Option<std::net::IpAddr> {
     (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
 }
 
-// Android/iOS have no bundled if-addrs; the default-route probe is the only signal there
-// anyway since mDNS advertising goes through NsdManager instead of this Rust path.
-#[cfg(any(target_os = "android", target_os = "ios"))]
+// iOS only: the default-route probe is the sole signal there.
+#[cfg(target_os = "ios")]
 fn local_ips() -> Vec<String> {
     default_route_ip().map(|ip| vec![ip.to_string()]).unwrap_or_default()
 }
 
 /// All usable addresses across every adapter (not just the default route), so a VPN tunnel
-/// doesn't hide the LAN address the mobile app actually needs to reach.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+/// doesn't hide the LAN address the mobile app actually needs to reach. Android included: an
+/// active VPN there makes the default route the tunnel, which no sender on the LAN can reach.
+#[cfg(not(target_os = "ios"))]
 fn local_ips() -> Vec<String> {
     let default_route = default_route_ip();
     let mut candidates: std::collections::HashSet<std::net::IpAddr> = if_addrs::get_if_addrs()
@@ -901,7 +901,7 @@ fn strip_mdns_service_suffix(fullname: &str) -> String {
 }
 
 /// Rejects loopback/link-local/VPN candidates: a tunnel address is reachable only from this host.
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(target_os = "ios"))]
 fn is_advertisable_interface(interface: &if_addrs::Interface) -> bool {
     !interface.is_p2p
 }

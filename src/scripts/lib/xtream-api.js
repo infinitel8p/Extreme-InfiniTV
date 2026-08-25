@@ -164,11 +164,15 @@ async function probeStreamUrl(url) {
       signal: controller.signal,
       logKind: "api",
     })
-    return response.ok || response.status === 206
+    const reachable = response.ok || response.status === 206
+    // Live streams are endless; release the body so the probe doesn't hold a connection slot.
+    try { void response.body?.cancel?.()?.catch?.(() => {}) } catch {}
+    return reachable
   } catch {
     return false
   } finally {
     clearTimeout(timer)
+    try { controller.abort() } catch {}
   }
 }
 

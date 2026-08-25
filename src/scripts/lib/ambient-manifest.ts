@@ -4,11 +4,19 @@ import { getCached, getCachedByKindPrefix, hydrate } from "@/scripts/lib/cache.j
 import { pickBecauseSeedPool, buildBecauseRow } from "@/scripts/lib/because-watched.ts"
 import type { LocalSimilarCandidate } from "@/scripts/lib/similar-local.ts"
 import { sanitizeProviderBackdropUrl } from "@/scripts/lib/morph-detail.ts"
-import { getCachedTitleEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
+import {
+  getCachedTitleEnrichment,
+  resolveTmdbId,
+  fetchMovieEnrichment,
+  fetchSeriesEnrichment,
+} from "@/scripts/lib/tmdb-enrich.ts"
+import { isTmdbActive } from "@/scripts/lib/app-settings.js"
+import { log } from "@/scripts/lib/log.js"
 
 const DEFAULT_LIMIT = 50
 const RECOMMENDED_SEED_COUNT = 3
 const RECOMMENDED_PICKS_PER_SEED = 6
+const BACKDROP_FETCH_CONCURRENCY = 6
 
 export type AmbientTier = "watching" | "recent" | "recommended" | "catalog"
 
@@ -81,6 +89,8 @@ interface CatalogRow {
   logo?: string | null
   category?: string
   rating?: unknown
+  year?: number | string | null
+  tmdb?: number | null
 }
 
 function catalogRowTitle(row: CatalogRow | undefined): string {
@@ -289,6 +299,55 @@ async function providerBackdropsFor(
   return backdropById
 }
 
+async function fetchBackdrop(
+  playlistId: string,
+  entry: AmbientEntry,
+  catalogRow: CatalogRow | undefined
+): Promise<string | null> {
+  const tmdbId = await resolveTmdbId(playlistId, entry.kind, {
+    id: entry.id,
+    name: catalogRow?.name || entry.title,
+    year: catalogRow?.year ?? null,
+    providerTmdbId: catalogRow?.tmdb ?? null,
+  })
+  if (!tmdbId) return null
+  const enrichment =
+    entry.kind === "series" ? await fetchSeriesEnrichment(tmdbId) : await fetchMovieEnrichment(tmdbId)
+  return enrichment?.backdropUrl || null
+}
+
+// The cache peek only sees titles some other screen already opened, so a manifest
+// built from recommendations and catalog picks comes back almost entirely bare.
+async function fillMissingBackdrops(
+  playlistId: string,
+  entries: AmbientEntry[],
+  vodById: Map<string, CatalogRow>,
+  seriesById: Map<string, CatalogRow>
+): Promise<AmbientEntry[]> {
+  if (!isTmdbActive()) return entries
+  const pending = entries.filter((entry) => !entry.backdropUrl)
+  if (!pending.length) return entries
+
+  const filled = new Map<AmbientEntry, string>()
+  let cursor = 0
+  async function worker(): Promise<void> {
+    while (cursor < pending.length) {
+      const entry = pending[cursor++]
+      const byId = entry.kind === "vod" ? vodById : seriesById
+      const backdropUrl = await fetchBackdrop(playlistId, entry, byId.get(entry.id))
+      if (backdropUrl) filled.set(entry, backdropUrl)
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(BACKDROP_FETCH_CONCURRENCY, pending.length) }, () => worker())
+  )
+  log.info(`[xt:ambient] backdrop fetch: ${filled.size}/${pending.length} resolved`)
+  return entries.map((entry) => {
+    const backdropUrl = filled.get(entry)
+    return backdropUrl ? { ...entry, backdropUrl } : entry
+  })
+}
+
 async function upgradeArtwork(playlistId: string, entries: AmbientEntry[]): Promise<AmbientEntry[]> {
   const vodIds = new Set(entries.filter((entry) => entry.kind === "vod").map((entry) => entry.id))
   const seriesIds = new Set(entries.filter((entry) => entry.kind === "series").map((entry) => entry.id))
@@ -342,5 +401,6 @@ export async function buildAmbientManifest(
     random: Math.random,
   })
 
-  return upgradeArtwork(playlistId, assembled)
+  const upgraded = await upgradeArtwork(playlistId, assembled)
+  return fillMissingBackdrops(playlistId, upgraded, vodById, seriesById)
 }

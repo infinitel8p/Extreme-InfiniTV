@@ -149,7 +149,9 @@ export function xtreamCandidatesFor(entry) {
   }
   if (Array.isArray(entry.mirrors)) {
     for (const mirror of entry.mirrors) {
-      if (!mirror?.serverUrl || !mirror?.username || !mirror?.password) continue
+      if (!mirror?.serverUrl) continue
+      // Mirrors stored before sanitizeMirrors validated credentials can still be broken.
+      if (!isUsableCredential(mirror.username) || !isUsableCredential(mirror.password)) continue
       out.push({
         host: mirror.serverUrl,
         port: "",
@@ -214,6 +216,11 @@ function sanitizeAccentOverride(value) {
   return typeof value === "string" && ACCENT_PRESETS.includes(value) ? value : ""
 }
 
+// Xtream credentials ride in URL path segments, so interior whitespace can never authenticate.
+function isUsableCredential(value) {
+  return typeof value === "string" && value.length > 0 && !/\s/.test(value)
+}
+
 function sanitizeMirrors(mirrors) {
   if (!Array.isArray(mirrors)) return []
   const out = []
@@ -224,8 +231,12 @@ function sanitizeMirrors(mirrors) {
       ? mirror.serverUrl.trim().replace(/\/+$/, "")
       : ""
     const username = typeof mirror.username === "string" ? mirror.username.trim() : ""
-    const password = typeof mirror.password === "string" ? mirror.password : ""
-    if (!serverUrl || !username || !password) continue
+    const password = typeof mirror.password === "string" ? mirror.password.trim() : ""
+    if (!serverUrl) continue
+    if (!isUsableCredential(username) || !isUsableCredential(password)) {
+      log.warn("[xt:creds] dropping mirror with unusable credentials:", hostnameFrom(serverUrl))
+      continue
+    }
     if (!/^https?:\/\//i.test(serverUrl)) continue
     const key = JSON.stringify([serverUrl, username, password])
     if (seen.has(key)) continue

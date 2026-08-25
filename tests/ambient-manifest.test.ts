@@ -136,8 +136,37 @@ vi.mock("@/scripts/lib/cache.js", () => ({
   getCachedByKindPrefix: async () => [],
 }))
 
+let tmdbActive = false
+let resolvedTmdbId: number | null = 7
+let fetchedBackdrop: string | null = "http://img/backdrop.jpg"
+let inFlightFetches = 0
+let peakInFlightFetches = 0
+const resolveCalls: Array<{ kind: string; name: string; providerTmdbId: unknown; year: unknown }> = []
+
+vi.mock("@/scripts/lib/app-settings.js", () => ({
+  isTmdbActive: () => tmdbActive,
+  ACCENT_PRESETS: ["fuchsia"],
+}))
+
 vi.mock("@/scripts/lib/tmdb-enrich.ts", () => ({
   getCachedTitleEnrichment: async () => null,
+  resolveTmdbId: async (_playlistId: string, kind: string, providerEntry: any) => {
+    resolveCalls.push({
+      kind,
+      name: providerEntry.name,
+      providerTmdbId: providerEntry.providerTmdbId,
+      year: providerEntry.year,
+    })
+    return resolvedTmdbId
+  },
+  fetchMovieEnrichment: async () => {
+    inFlightFetches++
+    peakInFlightFetches = Math.max(peakInFlightFetches, inFlightFetches)
+    await new Promise((resolve) => setTimeout(resolve, 1))
+    inFlightFetches--
+    return { backdropUrl: fetchedBackdrop }
+  },
+  fetchSeriesEnrichment: async () => ({ backdropUrl: fetchedBackdrop }),
 }))
 
 import {
@@ -152,6 +181,77 @@ beforeEach(() => {
   watchlistByKind = { vod: {}, series: {} }
   watchedSignals = []
   cachedByKind = { vod: [], series: [] }
+  tmdbActive = false
+  resolvedTmdbId = 7
+  fetchedBackdrop = "http://img/backdrop.jpg"
+  inFlightFetches = 0
+  peakInFlightFetches = 0
+  resolveCalls.length = 0
+})
+
+describe("buildAmbientManifest backdrop fetching", () => {
+  function seedCatalog(count: number) {
+    cachedByKind = {
+      vod: Array.from({ length: count }, (_unused, index) => ({
+        id: index + 1,
+        name: `Movie ${index + 1}`,
+        logo: `http://img/poster${index + 1}.jpg`,
+        year: 2020,
+        tmdb: 500 + index,
+      })),
+      series: [],
+    }
+  }
+
+  it("leaves entries bare when TMDb is not active", async () => {
+    tmdbActive = false
+    seedCatalog(3)
+    const result = await buildAmbientManifest("pl1")
+    expect(result.length).toBeGreaterThan(0)
+    expect(result.every((entry) => entry.backdropUrl === null)).toBe(true)
+    expect(resolveCalls).toHaveLength(0)
+  })
+
+  it("fills a backdrop for every entry the cache peek left bare", async () => {
+    tmdbActive = true
+    seedCatalog(3)
+    const result = await buildAmbientManifest("pl1")
+    expect(result.length).toBeGreaterThan(0)
+    expect(result.every((entry) => entry.backdropUrl === "http://img/backdrop.jpg")).toBe(true)
+  })
+
+  it("passes the catalog row's tmdb id and year through to the match", async () => {
+    tmdbActive = true
+    seedCatalog(1)
+    await buildAmbientManifest("pl1")
+    expect(resolveCalls[0]).toMatchObject({ kind: "vod", name: "Movie 1", providerTmdbId: 500, year: 2020 })
+  })
+
+  it("keeps the poster untouched when no backdrop comes back", async () => {
+    tmdbActive = true
+    fetchedBackdrop = null
+    seedCatalog(2)
+    const result = await buildAmbientManifest("pl1")
+    expect(result.every((entry) => entry.backdropUrl === null)).toBe(true)
+    expect(result.every((entry) => !!entry.posterUrl)).toBe(true)
+  })
+
+  it("skips the detail fetch when no tmdb id resolves", async () => {
+    tmdbActive = true
+    resolvedTmdbId = null
+    seedCatalog(2)
+    const result = await buildAmbientManifest("pl1")
+    expect(result.every((entry) => entry.backdropUrl === null)).toBe(true)
+    expect(peakInFlightFetches).toBe(0)
+  })
+
+  it("bounds concurrent detail fetches", async () => {
+    tmdbActive = true
+    seedCatalog(30)
+    await buildAmbientManifest("pl1")
+    expect(peakInFlightFetches).toBeGreaterThan(0)
+    expect(peakInFlightFetches).toBeLessThanOrEqual(6)
+  })
 })
 
 describe("buildAmbientManifest", () => {

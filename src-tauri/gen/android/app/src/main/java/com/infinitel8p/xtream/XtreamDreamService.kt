@@ -3,6 +3,7 @@ package com.infinitel8p.xtream
 import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
+import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -257,7 +258,7 @@ class XtreamDreamService : DreamService() {
       }
     )
 
-    val clock = TextClock(this).apply {
+    val clock = SafeTextClock(this).apply {
       setTextColor(Color.argb(204, 255, 255, 255))
       textSize = 32f
       setShadowLayer(6f, 0f, 2f, Color.argb(200, 0, 0, 0))
@@ -799,4 +800,15 @@ object DreamManifest {
 
   private fun JSONObject.urlOrNull(key: String): String? =
     stringOrNull(key)?.takeIf { HTTP_URL.containsMatchIn(it) }
+}
+
+// TextClock.onDetachedFromWindow() unregisters a receiver it may never have registered; on a
+// DreamService context that throws IllegalArgumentException and takes the whole process down.
+private class SafeTextClock(context: Context) : TextClock(context) {
+  override fun onDetachedFromWindow() {
+    try {
+      super.onDetachedFromWindow()
+    } catch (_: IllegalArgumentException) {
+    }
+  }
 }

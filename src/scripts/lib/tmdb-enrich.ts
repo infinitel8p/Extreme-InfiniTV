@@ -31,7 +31,7 @@ import {
 } from "@/scripts/lib/tmdb.ts"
 import { cleanProviderTitle, pickTmdbMatch } from "@/scripts/lib/tmdb-match.ts"
 
-const TMDB_MATCH_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const TMDB_MATCH_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const TMDB_DETAIL_TTL_MS = 30 * 24 * 60 * 60 * 1000
 // TMDb data is playlist-independent, so every playlist shares one cache namespace.
 const TMDB_CACHE_ENTRY_ID = "tmdb"
