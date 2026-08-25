@@ -13,6 +13,12 @@ val tauriProperties = Properties().apply {
     if (propFile.exists()) propFile.inputStream().use { load(it) }
 }
 
+// Keep the media3 artifacts on one version: a mismatched set throws at runtime
+// (a missing -dash module surfaced as ClassNotFoundException in 1.7.0).
+// Ceiling is 1.10.1 until the Kotlin plugin moves off 1.9.25: media3-session/-ui 1.11.0
+// require kotlin-stdlib 2.2.10, whose metadata (mv 2.2.0) the 1.9 compiler cannot read.
+val media3Version = "1.10.1"
+
 /** Read from user gradle.properties OR environment, fail fast if missing */
 fun required(name: String): String =
     providers.gradleProperty(name)
@@ -117,11 +123,11 @@ dependencies {
     implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
-    implementation("androidx.media3:media3-exoplayer:1.4.1")
-    implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
-    implementation("androidx.media3:media3-exoplayer-dash:1.4.1")
-    implementation("androidx.media3:media3-ui:1.4.1")
-    implementation("androidx.media3:media3-session:1.4.1")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
+    implementation("androidx.media3:media3-session:$media3Version")
     implementation("androidx.media:media:1.7.0")
     implementation("io.coil-kt:coil:2.7.0")
     testImplementation("junit:junit:4.13.2")
