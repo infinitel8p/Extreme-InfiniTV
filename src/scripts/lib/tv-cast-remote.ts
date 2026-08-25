@@ -661,8 +661,8 @@ export function openCastRemote(): void {
     const playlistId = await resolveActivePlaylistId()
     if (!playlistId) return null
     try {
-      const { getCached } = await import("@/scripts/lib/cache.js")
-      return getCached(playlistId, "live")?.data?.length ? "channels" : null
+      const { readCachedLiveChannels } = await import("@/scripts/lib/live-catalog.ts")
+      return readCachedLiveChannels(playlistId).length ? "channels" : null
     } catch {
       return null
     }
@@ -788,9 +788,9 @@ export function openCastRemote(): void {
 
   async function loadLiveMetadata(liveContext: NonNullable<CastSession["liveContext"]>, token: number): Promise<void> {
     try {
-      const { getCached } = await import("@/scripts/lib/cache.js")
+      const { readCachedLiveChannels } = await import("@/scripts/lib/live-catalog.ts")
       const channelId = liveContext.channelIds[liveContext.index]
-      let liveList = getCached(liveContext.playlistId, "live")?.data || []
+      let liveList: any[] = readCachedLiveChannels(liveContext.playlistId)
       let channel = liveList.find((entry: any) => String(entry?.id) === String(channelId))
       if (!channel) {
         const creds = await resolvePlaylistCreds(liveContext.playlistId)

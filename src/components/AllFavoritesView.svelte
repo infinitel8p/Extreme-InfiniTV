@@ -12,6 +12,7 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+  import { readCachedLiveChannels, hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
   import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
@@ -84,11 +85,7 @@
       for (const playlistId of needed.keys()) {
         lookups.set(playlistId, {
           live: new Map(
-            (
-              getCached(playlistId, "live")?.data ||
-              getCached(playlistId, "m3u")?.data ||
-              []
-            ).map((item) => [Number(item.id), item])
+            readCachedLiveChannels(playlistId).map((item) => [Number(item.id), item])
           ),
           vod: new Map(
             (getCached(playlistId, "vod")?.data || []).map((item) => [
@@ -143,7 +140,7 @@
     )
     const allCached = raw.every((row) =>
       row.kind === "live"
-        ? !!(getCached(row.playlistId, "live") || getCached(row.playlistId, "m3u"))
+        ? hasCachedLiveChannels(row.playlistId)
         : !!getCached(row.playlistId, row.kind)
     )
 

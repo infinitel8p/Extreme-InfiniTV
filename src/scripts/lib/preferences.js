@@ -3,6 +3,12 @@
 import { Store } from "@tauri-apps/plugin-store"
 import { getProgressRetentionDays } from "@/scripts/lib/app-settings.js"
 import { normalizeVideoScale, VIDEO_SCALE_MODES } from "@/scripts/lib/video-scale.ts"
+import {
+  sanitizeOverrideName,
+  sanitizeOverrideLogo,
+  sanitizeOverrideChno,
+  MAX_OVERRIDE_NAME_LENGTH,
+} from "@/scripts/lib/channel-overrides.ts"
 import { log } from "@/scripts/lib/log.js"
 
 const isTauri =
@@ -26,6 +32,7 @@ const EVT_CAT_MODE_CHANGED = "xt:category-mode-changed"
 const EVT_CAT_SORT_CHANGED = "xt:category-sort-changed"
 const EVT_EPG_SYNC_CHANGED = "xt:epg-sync-changed"
 const EVT_CHANNEL_EPG_CHANGED = "xt:channel-epg-changed"
+const EVT_CHANNEL_OV_CHANGED = "xt:channel-overrides-changed"
 const EVT_VIEW_CHANGED = "xt:view-prefs-changed"
 const EVT_FAV_ORDER_CHANGED = "xt:favorites-order-changed"
 const EVT_WATCHLIST_CHANGED = "xt:watchlist-changed"
@@ -143,6 +150,38 @@ async function writeRaw(data) {
 let cache = new Map()
 let loadPromise = null
 
+/** Drops junk records so a hand-edited or older prefs blob can't feed bad values into the overlay. */
+function hydrateChannelOverrides(raw) {
+  const out = Object.create(null)
+  if (!raw || typeof raw !== "object") return out
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key || !value || typeof value !== "object") continue
+    const record = sanitizeChannelOverride(value)
+    if (record) out[key] = record
+  }
+  return out
+}
+
+/** @returns {object|null} null when nothing worth persisting is left. */
+function sanitizeChannelOverride(patch) {
+  const record = {}
+  const name = sanitizeOverrideName(patch.name)
+  if (name) record.name = name
+  const logo = sanitizeOverrideLogo(patch.logo)
+  if (logo) record.logo = logo
+  const chno = sanitizeOverrideChno(patch.chno)
+  if (chno != null) record.chno = chno
+  if (patch.hidden === true) record.hidden = true
+  if (!record.name && !record.logo && record.chno == null && !record.hidden) return null
+  // Identity aids, never displayed as the channel's own value.
+  const srcName = sanitizeOverrideName(patch.srcName)
+  if (srcName) record.srcName = srcName
+  const srcTvgId =
+    typeof patch.srcTvgId === "string" ? patch.srcTvgId.trim().slice(0, MAX_OVERRIDE_NAME_LENGTH) : ""
+  if (srcTvgId) record.srcTvgId = srcTvgId
+  return record
+}
+
 function emptyEntry() {
   return {
     favLive: new Set(),
@@ -175,6 +214,7 @@ function emptyEntry() {
     catSortEpg: "default",
     syncEpgWithLive: true,
     channelEpgMap: Object.create(null),
+    channelOv: Object.create(null),
     favOrderLive: [],
     favOrderVod: [],
     favOrderSeries: [],
@@ -286,6 +326,7 @@ function hydrate(raw) {
         val.channelEpgMap && typeof val.channelEpgMap === "object"
           ? Object.assign(Object.create(null), val.channelEpgMap)
           : Object.create(null),
+      channelOv: hydrateChannelOverrides(val.channelOv),
       favOrderLive: Array.isArray(val.favOrderLive)
         ? val.favOrderLive.map(Number).filter(Number.isFinite)
         : [],
@@ -383,6 +424,7 @@ function dehydrate() {
       catSortEpg: v.catSortEpg,
       syncEpgWithLive: v.syncEpgWithLive,
       channelEpgMap: { ...v.channelEpgMap },
+      channelOv: { ...v.channelOv },
       favOrderLive: v.favOrderLive.slice(),
       favOrderVod: v.favOrderVod.slice(),
       favOrderSeries: v.favOrderSeries.slice(),
@@ -1409,6 +1451,102 @@ export function clearAllChannelEpgOverrides(playlistId) {
 }
 
 export const CHANNEL_EPG_CHANGED_EVENT = EVT_CHANNEL_EPG_CHANGED
+
+// ---------------------------------------------------------------------------
+// Per-channel display overrides (name / logo / number / hidden)
+// ---------------------------------------------------------------------------
+// Keyed by a content-derived key from channel-overrides.ts, never by the runtime
+// channel id: M3U ids are positional, so one added provider line would shift
+// every id and land these on the wrong channels.
+
+/** @param {string} playlistId */
+export function getChannelOverrides(playlistId) {
+  const entry = cache.get(playlistId)
+  return entry?.channelOv || Object.create(null)
+}
+
+/** @param {string} playlistId @param {string} key */
+export function getChannelOverride(playlistId, key) {
+  if (!key) return null
+  return getChannelOverrides(playlistId)[key] || null
+}
+
+export function countChannelOverrides(playlistId) {
+  return Object.keys(getChannelOverrides(playlistId)).length
+}
+
+/**
+ * Merges `patch` into the record for `key`; a field set to null/"" is cleared.
+ * @param {string} playlistId @param {string} key
+ * @param {{name?: string|null, logo?: string|null, chno?: number|null, hidden?: boolean, srcName?: string|null, srcTvgId?: string|null}} patch
+ */
+export function setChannelOverride(playlistId, key, patch) {
+  if (!playlistId || !key || !patch) return
+  const entry = getOrCreate(playlistId)
+  const merged = { ...(entry.channelOv[key] || {}) }
+  for (const [field, value] of Object.entries(patch)) {
+    if (value == null || value === "" || value === false) delete merged[field]
+    else merged[field] = value
+  }
+  const record = sanitizeChannelOverride(merged)
+  if (!record) {
+    if (!(key in entry.channelOv)) return
+    delete entry.channelOv[key]
+  } else {
+    entry.channelOv[key] = record
+  }
+  scheduleSave()
+  dispatch(EVT_CHANNEL_OV_CHANGED, { playlistId, key })
+}
+
+/** Replaces many records at once (bulk rename); one save, one event. */
+export function setChannelOverrides(playlistId, patches) {
+  if (!playlistId || !patches || !patches.length) return 0
+  const entry = getOrCreate(playlistId)
+  let changed = 0
+  for (const { key, patch } of patches) {
+    if (!key || !patch) continue
+    const merged = { ...(entry.channelOv[key] || {}) }
+    for (const [field, value] of Object.entries(patch)) {
+      if (value == null || value === "" || value === false) delete merged[field]
+      else merged[field] = value
+    }
+    const record = sanitizeChannelOverride(merged)
+    if (!record) {
+      if (key in entry.channelOv) {
+        delete entry.channelOv[key]
+        changed++
+      }
+      continue
+    }
+    entry.channelOv[key] = record
+    changed++
+  }
+  if (!changed) return 0
+  scheduleSave()
+  dispatch(EVT_CHANNEL_OV_CHANGED, { playlistId, key: null })
+  return changed
+}
+
+export function clearChannelOverride(playlistId, key) {
+  if (!playlistId || !key) return
+  const entry = cache.get(playlistId)
+  if (!entry || !(key in entry.channelOv)) return
+  delete entry.channelOv[key]
+  scheduleSave()
+  dispatch(EVT_CHANNEL_OV_CHANGED, { playlistId, key })
+}
+
+export function clearAllChannelOverrides(playlistId) {
+  if (!playlistId) return
+  const entry = cache.get(playlistId)
+  if (!entry || !Object.keys(entry.channelOv).length) return
+  entry.channelOv = Object.create(null)
+  scheduleSave()
+  dispatch(EVT_CHANNEL_OV_CHANGED, { playlistId, key: null })
+}
+
+export const CHANNEL_OVERRIDES_CHANGED_EVENT = EVT_CHANNEL_OV_CHANGED
 
 // ---------------------------------------------------------------------------
 // Per-item video display mode override (Live TV channel / movie / series)

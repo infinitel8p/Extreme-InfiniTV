@@ -23,6 +23,7 @@ import {
   IconWifi,
   IconFilter,
   IconStar,
+  IconPencil,
   IconArchive,
   IconFileZip,
   IconDatabase,
@@ -50,6 +51,7 @@ import {
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
 import FavoritesReorder from "@/components/FavoritesReorder.svelte"
+import ChannelOverridesEditor from "@/components/ChannelOverridesEditor.svelte"
 import HubStripsEditor from "@/components/HubStripsEditor.svelte"
 import PlayerPicker from "@/components/PlayerPicker.svelte"
 import TvOverscanCard from "@/components/TvOverscanCard.svelte"
@@ -1476,6 +1478,28 @@ const navStructure: NavSection[] = [
           </summary>
           <div class="px-5 sm:px-6 pb-5 sm:pb-6 pt-1">
             <HiddenCategoriesEditor client:load />
+          </div>
+        </details>
+
+        <!-- Channel overrides (rename / logo / number / hidden) -->
+        <details id="card-channel-overrides" data-settings-item class="settings-surface icon-mark-host group scroll-mt-6 lg:scroll-mt-20">
+          <summary class="settings-surface__header flex-wrap pb-5 sm:pb-6 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+            <span class="flex items-center gap-3 min-w-0 w-full">
+              <span class="icon-mark">
+                <IconPencil aria-hidden="true" stroke={2} />
+              </span>
+              <h3 data-i18n="settings.channelOverrides.title" class="text-base font-semibold">Channel edits</h3>
+              <span class="ms-auto shrink-0">
+                <IconChevronDown aria-hidden="true" stroke={2} class="size-4 text-fg-3 transition-transform group-open:rotate-180" />
+              </span>
+            </span>
+            <span data-i18n="settings.channelOverrides.helperLong" class="text-xs text-fg-3 block mt-1.5">
+              Custom names, logos and numbers you set from a channel's right-click menu on Live TV,
+              plus the channels you hid. Provider data is never changed, so any edit can be reset.
+            </span>
+          </summary>
+          <div class="px-5 sm:px-6 pb-5 sm:pb-6 pt-1">
+            <ChannelOverridesEditor client:load />
           </div>
         </details>
 

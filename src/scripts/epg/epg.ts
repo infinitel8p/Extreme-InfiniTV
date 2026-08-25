@@ -9,7 +9,8 @@ import {
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
-import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+import { hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+import { readCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { renderProviderError } from "@/scripts/lib/provider-error.js"
 import {
@@ -947,8 +948,8 @@ async function init() {
   const isM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
   // Hydrate from IDB before reading
   await hydrateCache(activePlaylistId, isM3U ? "m3u" : "live")
-  let cached =
-    getCached(activePlaylistId, isM3U ? "m3u" : "live")?.data || null
+  let cached = readCachedLiveChannels(activePlaylistId)
+  if (!cached.length) cached = null
 
   if (!cached?.length) {
     if (isM3U) {

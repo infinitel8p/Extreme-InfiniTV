@@ -13,6 +13,7 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+  import { readCachedLiveChannels, hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
   import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
@@ -73,11 +74,7 @@
   function buildLookupsFromCache(playlistId) {
     return {
       live: new Map(
-        (
-          getCached(playlistId, "live")?.data ||
-          getCached(playlistId, "m3u")?.data ||
-          []
-        ).map((channel) => [Number(channel.id), channel])
+        readCachedLiveChannels(playlistId).map((channel) => [Number(channel.id), channel])
       ),
       vod: new Map(
         (getCached(playlistId, "vod")?.data || []).map((movie) => [Number(movie.id), movie])

@@ -67,8 +67,8 @@ export async function castLiveChannel(
   const id = String(channelId)
 
   try {
-    const { getCached } = await import("@/scripts/lib/cache.js")
-    let liveList: any[] = getCached(playlistId, "live")?.data || []
+    const { readCachedLiveChannels } = await import("@/scripts/lib/live-catalog.ts")
+    let liveList: any[] = readCachedLiveChannels(playlistId)
     let channel = liveList.find((entry: any) => String(entry?.id) === id)
     if (!channel) {
       const creds = await resolvePlaylistCreds(playlistId)

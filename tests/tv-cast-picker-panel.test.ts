@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 
 const castLiveChannelMock = vi.fn(async () => true)
 const castSeriesEpisodeMock = vi.fn(async () => true)
-const getCachedMock = vi.fn()
+const readCachedLiveChannelsMock = vi.fn()
 
 const EPISODES = [
   { season: 1, episodeNum: 1, id: 11, title: "Pilot" },
@@ -21,7 +21,10 @@ vi.mock("@/scripts/lib/tv-cast-episode.js", () => ({
   castSeriesEpisode: (...args: unknown[]) => castSeriesEpisodeMock(...(args as [])),
   loadSeriesEpisodes: async () => EPISODES,
 }))
-vi.mock("@/scripts/lib/cache.js", () => ({ getCached: (...args: unknown[]) => getCachedMock(...(args as [])) }))
+vi.mock("@/scripts/lib/live-catalog.ts", () => ({
+  readCachedLiveChannels: (...args: unknown[]) => readCachedLiveChannelsMock(...(args as [])),
+}))
+vi.mock("@/scripts/lib/catalog.js", () => ({ ensureLive: async () => [] }))
 vi.mock("@/scripts/lib/i18n.js", () => ({ t: (key: string) => key, LOCALE_EVENT: "xt:locale-changed" }))
 vi.mock("@/scripts/lib/toast.js", () => ({ toast: vi.fn() }))
 vi.mock("@/scripts/lib/logo-fallback.js", () => ({ requestLogoFallback: vi.fn() }))
@@ -67,7 +70,7 @@ async function settle(): Promise<void> {
 
 beforeEach(async () => {
   castLiveChannelMock.mockClear()
-  getCachedMock.mockReturnValue({ data: CATALOG })
+  readCachedLiveChannelsMock.mockReturnValue(CATALOG)
   container = document.createElement("div")
   document.body.appendChild(container)
   onBack = vi.fn<() => void>()
@@ -145,7 +148,7 @@ describe("cast picker panel: channels", () => {
 
   it("reports an empty catalog instead of rendering an empty list", async () => {
     panel.destroy()
-    getCachedMock.mockReturnValue({ data: [] })
+    readCachedLiveChannelsMock.mockReturnValue([])
     panel = mountCastPickerPanel(container, {
       source: createChannelPickerSource({ playlistId: "p1", getPlayingChannelId: () => null }),
       onBack,

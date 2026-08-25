@@ -76,8 +76,8 @@ export function createChannelPickerSource(options: ChannelSourceOptions): Picker
       backToGroups: t("cast.remote.backToGroups"),
     },
     async load(): Promise<PickerGroup[]> {
-      const { getCached } = await import("@/scripts/lib/cache.js")
-      let list: CastChannel[] = getCached(options.playlistId, "live")?.data || []
+      const { readCachedLiveChannels } = await import("@/scripts/lib/live-catalog.ts")
+      let list: CastChannel[] = readCachedLiveChannels(options.playlistId) as CastChannel[]
       if (!list.length) {
         const creds = await resolvePlaylistCreds(options.playlistId)
         if (creds) {

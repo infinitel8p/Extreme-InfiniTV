@@ -10,7 +10,7 @@ import {
   isLikelyM3USource,
   safeHttpUrl,
 } from "@/scripts/lib/creds.js"
-import { getCached } from "@/scripts/lib/cache.js"
+import { readCachedLiveChannels, ensureOverridesReady } from "@/scripts/lib/live-catalog.ts"
 import {
   effectiveTvgId,
   getAvailableEpgChannels,
@@ -75,9 +75,9 @@ async function getActiveChannels(): Promise<Channel[]> {
   activePlaylistId = entry._id
   const creds = await loadCreds()
   activeIsM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
-  const hit = getCached(activePlaylistId, activeIsM3U ? "m3u" : "live")
-  if (!hit?.data) return []
-  return hit.data as Channel[]
+  // Overrides live in prefs, so a cache-only read has to wait for them.
+  await ensureOverridesReady()
+  return readCachedLiveChannels(activePlaylistId) as Channel[]
 }
 
 function escapeHtml(input: string) {

@@ -1,5 +1,6 @@
 import { selectEntry, removeEntry, loadCreds, getActiveEntry } from "./creds.js"
-import { getNewestCacheTime, getCached } from "./cache.js"
+import { getNewestCacheTime } from "./cache.js"
+import { readCachedLiveChannels } from "./live-catalog.ts"
 import { buildLiveStreamUrl } from "./stream-urls.ts"
 import {
   ICON_TRASH,
@@ -60,9 +61,7 @@ async function exportEntryM3U(entry) {
 /** First cached channel's stream URL, so "Run diagnostic" can probe playback without an extra catalog fetch. Checks "live" then falls back to "m3u", same as playlist-health.ts. */
 function resolveSampleStreamUrl(entry) {
   try {
-    const live = getCached(entry._id, "live")
-    const hit = live && Array.isArray(live.data) && live.data.length ? live : getCached(entry._id, "m3u")
-    const firstChannel = Array.isArray(hit?.data) ? hit.data[0] : null
+    const firstChannel = readCachedLiveChannels(entry._id)[0] || null
     if (!firstChannel) return null
     if (typeof firstChannel.url === "string" && firstChannel.url) return firstChannel.url
     if (firstChannel.id != null && entry.type === "xtream") {

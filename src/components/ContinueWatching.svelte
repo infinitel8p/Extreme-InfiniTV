@@ -13,6 +13,7 @@
     clearRecent,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+  import { readCachedLiveChannels, hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   const STRIP_LIMIT = 8
@@ -96,10 +97,7 @@
   function buildEntries(playlistId) {
     const vodList = getCached(playlistId, "vod")?.data || []
     const vodById = new Map(vodList.map((movie) => [Number(movie.id), movie]))
-    const liveList =
-      getCached(playlistId, "live")?.data ||
-      getCached(playlistId, "m3u")?.data ||
-      []
+    const liveList = readCachedLiveChannels(playlistId)
     const liveById = new Map(liveList.map((channel) => [Number(channel.id), channel]))
 
     const progress = getContinueWatching(playlistId, STRIP_LIMIT).map((row) => ({

@@ -13,6 +13,7 @@
     EVT_SEARCH_RECENT_CHANGED,
   } from "@/scripts/lib/preferences.js"
   import { warmupActive } from "@/scripts/lib/catalog.js"
+  import { readCachedLiveChannels, hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
   import {
     loadProgrammes,
     getProgrammesSync,
@@ -159,10 +160,7 @@
     refreshRecentSearches()
 
     const buildIndex = async () => {
-      const liveData =
-        getCached(active._id, "live")?.data ||
-        getCached(active._id, "m3u")?.data ||
-        []
+      const liveData = readCachedLiveChannels(active._id)
       const vodData = getCached(active._id, "vod")?.data || []
       const seriesData = getCached(active._id, "series")?.data || []
       rawVodData = vodData
@@ -267,7 +265,7 @@
       hydrateCache(active._id, "series"),
     ]
     const allCached =
-      !!(getCached(active._id, "live") || getCached(active._id, "m3u")) &&
+      hasCachedLiveChannels(active._id) &&
       !!getCached(active._id, "vod") &&
       !!getCached(active._id, "series")
 

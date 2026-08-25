@@ -29,7 +29,15 @@ import {
   setVideoScaleOverride,
   clearAllVideoScaleOverrides,
   CHANNEL_VIDEO_SCALE_CHANGED_EVENT,
+  getChannelOverrides,
+  setChannelOverride,
+  CHANNEL_OVERRIDES_CHANGED_EVENT,
 } from "@/scripts/lib/preferences.js"
+import {
+  applyChannelOverrides,
+  resolveOverrideKey,
+  overrideIdentity,
+} from "@/scripts/lib/channel-overrides.ts"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
 import { fmtChannelIdentity, formatBehindLive } from "@/scripts/lib/format.ts"
@@ -419,6 +427,9 @@ const STAR_FILLED =
 // ----------------------------
 /** @type {Array<{ id: number, name: string, category?: string, logo?: string | null, norm:string }>} */
 let all = []
+let channelsAreM3U = false
+let providerChannels = []
+let lastPaintMeta = { fromCache: false, age: 0 }
 /** @type {Array<typeof all[number]>} */
 let filtered = []
 
@@ -806,6 +817,9 @@ function openChannelDiagnostic(channel) {
 
 let channelMenuEl = null
 const CHANNEL_MENU_ID = "xt-channel-menu"
+const MENU_ITEM_CLASS =
+  "w-full text-left px-3 py-2 min-h-11 flex items-center rounded-lg text-sm " +
+  "hover:bg-surface-2 focus:bg-surface-2 outline-none"
 const channelMenuSpatialNav = attachPopoverSpatialNav({
   id: `${CHANNEL_MENU_ID}-section`,
   selector: `#${CHANNEL_MENU_ID} [role="menuitem"]`,
@@ -847,7 +861,7 @@ function openChannelMenu(channel, anchor, point) {
   playItem.type = "button"
   playItem.setAttribute("role", "menuitem")
   playItem.className =
-    "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+    MENU_ITEM_CLASS
   playItem.textContent = t("stream.menu.play")
   playItem.addEventListener("click", () => {
     closeChannelMenu()
@@ -858,7 +872,7 @@ function openChannelMenu(channel, anchor, point) {
   testItem.type = "button"
   testItem.setAttribute("role", "menuitem")
   testItem.className =
-    "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+    MENU_ITEM_CLASS
   testItem.textContent = t("stream.menu.test")
   testItem.addEventListener("click", () => {
     closeChannelMenu()
@@ -869,7 +883,7 @@ function openChannelMenu(channel, anchor, point) {
   copyItem.type = "button"
   copyItem.setAttribute("role", "menuitem")
   copyItem.className =
-    "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+    MENU_ITEM_CLASS
   copyItem.textContent = t("stream.menu.copy")
   copyItem.addEventListener("click", async () => {
     const url = buildChannelStreamUrl(channel)
@@ -890,7 +904,7 @@ function openChannelMenu(channel, anchor, point) {
     playOnTvItem.type = "button"
     playOnTvItem.setAttribute("role", "menuitem")
     playOnTvItem.className =
-      "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+      MENU_ITEM_CLASS
     playOnTvItem.textContent = t("cast.menu.playOnTv")
     playOnTvItem.addEventListener("click", () => {
       closeChannelMenu()
@@ -910,6 +924,46 @@ function openChannelMenu(channel, anchor, point) {
     })
   }
 
+  // Custom playlists curate their own names/logos in the editor - one source of truth.
+  // No derivable key means an override could not be stored, so don't offer the action.
+  const editable =
+    !isCustomHost(creds.host) && !channel.unresolved && !!resolveOverrideKey(channel, channelsAreM3U)
+  let editItem = null
+  let hideItem = null
+  if (editable) {
+    editItem = document.createElement("button")
+    editItem.type = "button"
+    editItem.setAttribute("role", "menuitem")
+    editItem.className =
+      MENU_ITEM_CLASS
+    editItem.textContent = t("stream.menu.editChannel")
+    editItem.addEventListener("click", async () => {
+      closeChannelMenu()
+      const { openChannelEditDialog } = await import("@/scripts/lib/channel-edit-dialog.ts")
+      // The row carries the overlay, so the provider's own values come from the
+      // untouched list - otherwise the dialog would show an edit as the original.
+      const provider = providerChannels.find((row) => row.id === channel.id) || channel
+      const result = await openChannelEditDialog({
+        playlistId: activePlaylistId,
+        channel,
+        isM3U: channelsAreM3U,
+        providerName: provider.name || "",
+        providerLogo: provider.logo || null,
+      })
+    })
+
+    hideItem = document.createElement("button")
+    hideItem.type = "button"
+    hideItem.setAttribute("role", "menuitem")
+    hideItem.className =
+      MENU_ITEM_CLASS
+    hideItem.textContent = t("stream.menu.hideChannel")
+    hideItem.addEventListener("click", () => {
+      closeChannelMenu()
+      hideChannelWithUndo(channel)
+    })
+  }
+
   const customSource = buildCustomSourceForChannel(channel)
   let addToCustomItem = null
   if (customSource) {
@@ -917,7 +971,7 @@ function openChannelMenu(channel, anchor, point) {
     addToCustomItem.type = "button"
     addToCustomItem.setAttribute("role", "menuitem")
     addToCustomItem.className =
-      "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+      MENU_ITEM_CLASS
     addToCustomItem.textContent = t("stream.menu.addToCustom")
     addToCustomItem.addEventListener("click", () => {
       closeChannelMenu()
@@ -930,12 +984,22 @@ function openChannelMenu(channel, anchor, point) {
     })
   }
 
+  let separator = null
+  if (editItem || hideItem) {
+    separator = document.createElement("div")
+    separator.setAttribute("role", "separator")
+    separator.className = "my-1 h-px bg-line"
+  }
+
   menu.append(
     playItem,
     testItem,
     copyItem,
     ...(playOnTvItem ? [playOnTvItem] : []),
-    ...(addToCustomItem ? [addToCustomItem] : [])
+    ...(addToCustomItem ? [addToCustomItem] : []),
+    ...(separator ? [separator] : []),
+    ...(editItem ? [editItem] : []),
+    ...(hideItem ? [hideItem] : [])
   )
   document.body.appendChild(menu)
 
@@ -966,6 +1030,34 @@ function openChannelMenu(channel, anchor, point) {
   listEl?.addEventListener("scroll", closeChannelMenu, { passive: true })
 
   testItem.focus({ preventScroll: true })
+}
+
+// Covers every write path: the dialog, the quick hide, and both undo toasts.
+document.addEventListener(CHANNEL_OVERRIDES_CHANGED_EVENT, () => repaintAfterOverrideChange())
+
+/** Re-runs the overlay over the last painted provider list; no refetch. */
+function repaintAfterOverrideChange() {
+  if (!providerChannels.length) return
+  paintChannels(providerChannels, lastPaintMeta.fromCache, lastPaintMeta.age, channelsAreM3U)
+}
+
+function hideChannelWithUndo(channel) {
+  const key = resolveOverrideKey(channel, channelsAreM3U)
+  if (!key || !activePlaylistId) return
+  const identity = overrideIdentity(channel)
+  setChannelOverride(activePlaylistId, key, {
+    hidden: true,
+    srcName: identity.srcName,
+    srcTvgId: identity.srcTvgId,
+  })
+  toast({
+    title: t("stream.toast.channelHidden", { name: channel.name || "" }),
+    duration: 6000,
+    action: {
+      label: t("common.undo"),
+      onClick: () => setChannelOverride(activePlaylistId, key, { hidden: false }),
+    },
+  })
 }
 
 const LONG_PRESS_MS = 500
@@ -1400,10 +1492,18 @@ function fmtAge(ms) {
   return `${d}d ago`
 }
 
-function paintChannels(data, fromCache, age) {
-  all = data
+function paintChannels(data, fromCache, age, isM3U = false) {
+  channelsAreM3U = isM3U
+  // Kept unoverridden so an edit can be re-overlaid without refetching.
+  providerChannels = Array.isArray(data) ? data : []
+  lastPaintMeta = { fromCache, age }
+  all = applyChannelOverrides(providerChannels, getChannelOverrides(activePlaylistId), { isM3U })
+  // Only the overlay removes rows, so the difference is exactly the hidden count.
+  // Without this the list is a dead end: channels vanish with nothing saying why.
+  const hiddenCount = Math.max(0, providerChannels.length - all.length)
   listStatus.textContent =
     `${all.length.toLocaleString()} channels` +
+    (hiddenCount ? ` · ${t("stream.hiddenCount", { n: hiddenCount.toLocaleString() })}` : "") +
     (fromCache ? ` · cached, ${fmtAge(age)}` : "")
   picker.rerender()
   applyFilter()
@@ -1517,7 +1617,7 @@ async function loadChannels() {
     painted = true
     if (kind === "m3u") indexDirectUrls(hit.data)
     else directUrlById = new Map()
-    paintChannels(hit.data, true, hit.age)
+    paintChannels(hit.data, true, hit.age, kind === "m3u")
   }
   await Promise.allSettled([
     paintFromCacheOnceReady(liveHydrated, "live"),
@@ -1544,7 +1644,7 @@ async function loadChannels() {
     // A background cache write can land here after the paint race above missed it.
     if (liveHit) directUrlById = new Map()
     else indexDirectUrls(hit.data)
-    paintChannels(hit.data, true, hit.age)
+    paintChannels(hit.data, true, hit.age, !liveHit)
     painted = true
   }
   if (hit) return // cache already painted; nothing else to do.
@@ -1556,7 +1656,7 @@ async function loadChannels() {
         const data = await ensureLive(creds, active._id)
         indexDirectUrls(data)
         categoryMap = null
-        paintChannels(data, false, 0)
+        paintChannels(data, false, 0, true)
         return
       }
       const { data, fromCache, age } = await cachedFetch(
@@ -1582,7 +1682,7 @@ async function loadChannels() {
           localStorage.setItem(`xt_m3u_epg:${active._id}`, m3uEpgUrls.join(","))
         } catch {}
       }
-      paintChannels(data, fromCache, age)
+      paintChannels(data, fromCache, age, true)
       return
     }
 
@@ -1640,7 +1740,7 @@ async function loadChannels() {
     )
     directUrlById = new Map()
     log.log("[xt:livetv] cachedFetch returned len=", data?.length ?? 0, "fromCache=", fromCache)
-    paintChannels(data, fromCache, age)
+    paintChannels(data, fromCache, age, false)
     log.log("[xt:livetv] paintChannels done")
   } catch (e) {
     log.error("[xt:livetv] loadChannels threw:", e)

@@ -67,11 +67,13 @@ export function hubCardMenu(
       let onPlayOnTv: (() => void) | undefined
 
       if (target.kind !== "series" || isTauri) {
-        const [{ getState, entryToCreds, loadCreds }, streamUrls, { getCached }] = await Promise.all([
-          import("@/scripts/lib/creds.js"),
-          import("@/scripts/lib/stream-urls.ts"),
-          import("@/scripts/lib/cache.js"),
-        ])
+        const [{ getState, entryToCreds, loadCreds }, streamUrls, { getCached }, { readCachedLiveChannels }] =
+          await Promise.all([
+            import("@/scripts/lib/creds.js"),
+            import("@/scripts/lib/stream-urls.ts"),
+            import("@/scripts/lib/cache.js"),
+            import("@/scripts/lib/live-catalog.ts"),
+          ])
         // Hub cards can belong to non-active playlists; resolve creds per card.
         const state = await getState()
         const playlistEntry = (state.entries || []).find((entry: any) => entry?._id === playlistId)
@@ -113,7 +115,7 @@ export function hubCardMenu(
             }
           }
         } else if (target.kind === "live") {
-          const liveList = getCached(playlistId, "live")?.data || []
+          const liveList = readCachedLiveChannels(playlistId)
           const liveEntry = liveList.find((item: any) => String(item?.id) === String(target.id))
           const liveUrl = () => {
             if (liveEntry?.url) return liveEntry.url as string
