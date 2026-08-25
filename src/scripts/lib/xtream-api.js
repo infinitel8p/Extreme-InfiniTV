@@ -21,6 +21,8 @@ import {
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { getNetworkTimeoutSeconds } from "@/scripts/lib/app-settings.js"
 import { log } from "@/scripts/lib/log.js"
+import { toast } from "@/scripts/lib/toast.ts"
+import { t } from "@/scripts/lib/i18n.js"
 
 const failoverNoticed = new Set()
 function candidateTimeoutMs() {
@@ -29,10 +31,8 @@ function candidateTimeoutMs() {
 const allFailedAt = new Map()
 const ALL_FAILED_TTL_MS = 15_000
 
-async function noticeFailover() {
+function noticeFailover() {
   try {
-    const { toast } = await import("@/scripts/lib/toast.ts")
-    const { t } = await import("@/scripts/lib/i18n.js")
     toast({
       title: t("backup.failoverNoticeTitle"),
       description: t("backup.failoverNoticeBody"),

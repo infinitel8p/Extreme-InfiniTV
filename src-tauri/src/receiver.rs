@@ -287,6 +287,7 @@ fn resolve_device_name(name: &str, fallback: &str) -> String {
 }
 
 /// None for blank or "localhost", which gethostname returns on containers/CI and Android.
+#[cfg(not(target_os = "android"))]
 fn usable_hostname(hostname: &str) -> Option<String> {
     let trimmed = hostname.trim().trim_end_matches('.');
     let suffix_start = trimmed.len().saturating_sub(".local".len());
