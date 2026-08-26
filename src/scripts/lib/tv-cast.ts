@@ -1032,13 +1032,23 @@ export function startCastStatePolling(
 
 /** Sentinel a buildDescriptor callback returns when a newer request superseded it; distinct from a genuine build failure. */
 export const CAST_SUPERSEDED = "cast-superseded"
+const UNCASTABLE_SCHEME_PREFIX = "cast-uncastable-scheme:"
+export type CastUncastableScheme = `${typeof UNCASTABLE_SCHEME_PREFIX}${string}`
+
+/** Rejects a source by scheme so the toast can name it; null for http(s). */
+export function castUncastableScheme(src: string): CastUncastableScheme | null {
+  const scheme = (String(src).split("://")[0] || "").toLowerCase()
+  if (!scheme || scheme === "http" || scheme === "https") return null
+  return `${UNCASTABLE_SCHEME_PREFIX}${scheme}`
+}
 
 export interface PlayOnTvOptions {
   buildDescriptor: () =>
-    | Promise<CastDescriptorV1 | null | typeof CAST_SUPERSEDED>
+    | Promise<CastDescriptorV1 | null | typeof CAST_SUPERSEDED | CastUncastableScheme>
     | CastDescriptorV1
     | null
     | typeof CAST_SUPERSEDED
+    | CastUncastableScheme
   /** Return false when nothing was actually released, to skip the provider-slot wait. */
   stopLocal?: () => boolean | void
   contentTitle?: string | null
@@ -1132,6 +1142,12 @@ async function castToDevice(
 
   const descriptor = await options.buildDescriptor()
   if (descriptor === CAST_SUPERSEDED) return false
+  if (typeof descriptor === "string") {
+    const scheme = descriptor.slice(UNCASTABLE_SCHEME_PREFIX.length)
+    log.warn("[xt:tv-cast] source scheme cannot be cast", { scheme, device: device.name })
+    toast({ title: t("cast.toast.schemeUnsupported", { scheme, device: device.name }) })
+    return false
+  }
   if (!descriptor) {
     toast({ title: t("cast.toast.failed", { device: device.name }) })
     return false
@@ -1365,7 +1381,8 @@ export function castLiveChannelToTv(params: CastLiveChannelParams): () => void {
       holdsProviderConnection: true,
       buildDescriptor: () => {
         const src = params.buildSrc()
-        if (!src || !isCastableSrc(src)) return null
+        if (!src) return null
+        if (!isCastableSrc(src, { live: true })) return castUncastableScheme(src)
         return buildLiveCastDescriptor({
           src,
           title: params.title,

@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "正在 {device} 上播放",
   "cast.toast.stopped": "已停止在 {device} 上播放",
   "cast.toast.failed": "无法在 {device} 上播放。",
+  "cast.toast.schemeUnsupported": "无法在 {device} 上播放 \"{scheme}://\" 流。",
   "cast.toast.playbackError": "在 {device} 上播放失败：{error}",
   "cast.toast.wakeFailed": "无法唤醒 {device}。请在电视上打开应用后重试。",
   "cast.toast.authFailed": "{device} 不再信任此设备。",

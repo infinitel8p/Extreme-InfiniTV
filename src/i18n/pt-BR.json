@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "Reproduzindo em {device}",
   "cast.toast.stopped": "Reprodução interrompida em {device}",
   "cast.toast.failed": "Não foi possível reproduzir em {device}.",
+  "cast.toast.schemeUnsupported": "Não é possível reproduzir streams \"{scheme}://\" em {device}.",
   "cast.toast.playbackError": "Falha na reprodução em {device}: {error}",
   "cast.toast.wakeFailed": "Não foi possível ativar {device}. Abra o aplicativo na TV e tente novamente.",
   "cast.toast.authFailed": "{device} não confia mais neste dispositivo.",

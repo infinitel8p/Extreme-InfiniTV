@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "Lecture sur {device}",
   "cast.toast.stopped": "Lecture arrêtée sur {device}",
   "cast.toast.failed": "Impossible de lire sur {device}.",
+  "cast.toast.schemeUnsupported": "Impossible de lire les flux \"{scheme}://\" sur {device}.",
   "cast.toast.playbackError": "Échec de la lecture sur {device} : {error}",
   "cast.toast.wakeFailed": "Impossible de réveiller {device}. Ouvrez l'application sur le téléviseur et réessayez.",
   "cast.toast.authFailed": "{device} ne fait plus confiance à cet appareil.",

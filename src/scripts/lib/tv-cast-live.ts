@@ -80,7 +80,7 @@ export async function castLiveChannel(
     if (!channel) return false
 
     const src = await resolveChannelSrc(playlistId, channel, id)
-    if (!src || !isCastableSrc(src)) return false
+    if (!src || !isCastableSrc(src, { live: true })) return false
 
     const headers =
       channel.userAgent || channel.referer

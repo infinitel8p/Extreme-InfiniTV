@@ -25,3 +25,6 @@
 
 # DefaultMediaSourceFactory loads this reflectively for DASH playback.
 -keep class androidx.media3.exoplayer.dash.DashMediaSource$Factory { *; }
+
+# Same reflective load for RTSP (FRITZ!Box and other tuner sources).
+-keep class androidx.media3.exoplayer.rtsp.RtspMediaSource$Factory { *; }

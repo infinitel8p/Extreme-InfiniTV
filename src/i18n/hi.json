@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "{device} पर चल रहा है",
   "cast.toast.stopped": "{device} पर प्लेबैक रोक दिया गया",
   "cast.toast.failed": "{device} पर नहीं चला सके।",
+  "cast.toast.schemeUnsupported": "{device} पर \"{scheme}://\" स्ट्रीम नहीं चला सकते।",
   "cast.toast.playbackError": "{device} पर प्लेबैक विफल रहा: {error}",
   "cast.toast.wakeFailed": "{device} को जगाया नहीं जा सका। टीवी पर ऐप खोलें और फिर कोशिश करें।",
   "cast.toast.authFailed": "{device} अब इस डिवाइस पर भरोसा नहीं करता।",

@@ -17,16 +17,28 @@ export interface CastDescriptorV1 {
 }
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "tauri.localhost"])
+// No seekable HTTP semantics, so VOD and catch-up can never use these.
+const LIVE_ONLY_PROTOCOLS = new Set(["rtsp:"])
 
-export function isCastableSrc(src: string): boolean {
+export function isCastableSrc(src: string, opts?: { live?: boolean }): boolean {
   let parsed: URL
   try {
     parsed = new URL(src)
   } catch {
     return false
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false
+  const isHttp = parsed.protocol === "http:" || parsed.protocol === "https:"
+  const isLiveOnly = Boolean(opts?.live) && LIVE_ONLY_PROTOCOLS.has(parsed.protocol)
+  if (!isHttp && !isLiveOnly) return false
   return !LOCAL_HOSTS.has(parsed.hostname.toLowerCase())
+}
+
+export function isRtspSrc(src: string): boolean {
+  try {
+    return new URL(src).protocol === "rtsp:"
+  } catch {
+    return false
+  }
 }
 
 function clampNonNegativeFinite(value: unknown): number | undefined {
@@ -46,7 +58,7 @@ export function buildLiveCastDescriptor(input: BuildLiveCastDescriptorInput): Ca
   const descriptor: CastDescriptorV1 = {
     v: 1,
     src: input.src,
-    mime: "application/x-mpegURL",
+    mime: isRtspSrc(input.src) ? "application/x-rtsp" : "application/x-mpegURL",
     isLive: true,
     title: input.title,
   }
@@ -149,10 +161,10 @@ export function validateCastDescriptor(value: unknown): CastDescriptorV1 | null 
   if (!value || typeof value !== "object") return null
   const source = value as Record<string, unknown>
   if (source.v !== 1) return null
-  if (typeof source.src !== "string" || !isCastableSrc(source.src)) return null
+  if (typeof source.isLive !== "boolean") return null
+  if (typeof source.src !== "string" || !isCastableSrc(source.src, { live: source.isLive })) return null
   if (typeof source.mime !== "string" || source.mime === "") return null
   if (typeof source.title !== "string") return null
-  if (typeof source.isLive !== "boolean") return null
 
   const descriptor: CastDescriptorV1 = {
     v: 1,

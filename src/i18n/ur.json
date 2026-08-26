@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "{device} پر چل رہا ہے",
   "cast.toast.stopped": "{device} پر پلے بیک روک دیا گیا",
   "cast.toast.failed": "{device} پر نہیں چل سکا۔",
+  "cast.toast.schemeUnsupported": "\"{scheme}://\" اسٹریمز {device} پر نہیں چل سکتیں۔",
   "cast.toast.playbackError": "{device} پر پلے بیک ناکام رہا: {error}",
   "cast.toast.wakeFailed": "{device} کو بیدار نہیں کیا جا سکا۔ ٹی وی پر ایپ کھولیں اور دوبارہ کوشش کریں۔",
   "cast.toast.authFailed": "{device} اب اس ڈیوائس پر بھروسہ نہیں کرتا۔",

@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "Wordt afgespeeld op {device}",
   "cast.toast.stopped": "Weergave op {device} gestopt",
   "cast.toast.failed": "Afspelen op {device} is niet gelukt.",
+  "cast.toast.schemeUnsupported": "Kan \"{scheme}://\"-streams niet afspelen op {device}.",
   "cast.toast.playbackError": "Afspelen mislukt op {device}: {error}",
   "cast.toast.wakeFailed": "{device} kon niet worden gewekt. Open de app op de tv en probeer het opnieuw.",
   "cast.toast.authFailed": "{device} vertrouwt dit apparaat niet meer.",

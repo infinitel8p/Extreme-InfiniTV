@@ -5,6 +5,7 @@ import {
   buildVodCastDescriptor,
   deriveSessionIsLive,
   isCastableSrc,
+  isRtspSrc,
   validateCastDescriptor,
 } from "@/scripts/lib/tv-cast-descriptor"
 
@@ -129,6 +130,43 @@ describe("isCastableSrc", () => {
     ["", false],
   ])("evaluates %s -> %s", (src, expected) => {
     expect(isCastableSrc(src)).toBe(expected)
+  })
+
+  it("accepts rtsp only for live sources", () => {
+    const src = "rtsp://192.168.178.1:554/?avm=1&freq=546&msys=dvbc"
+    expect(isCastableSrc(src, { live: true })).toBe(true)
+    expect(isCastableSrc(src)).toBe(false)
+    expect(isCastableSrc(src, { live: false })).toBe(false)
+  })
+
+  it("still rejects local hosts and other schemes for live sources", () => {
+    expect(isCastableSrc("rtsp://localhost:554/stream", { live: true })).toBe(false)
+    expect(isCastableSrc("udp://239.1.1.1:1234", { live: true })).toBe(false)
+    expect(isCastableSrc("rtmp://provider.example/live", { live: true })).toBe(false)
+  })
+})
+
+describe("isRtspSrc", () => {
+  it.each([
+    ["rtsp://192.168.178.1:554/?avm=1", true],
+    ["https://provider.example/live/1.m3u8", false],
+    ["not a url", false],
+  ])("evaluates %s -> %s", (src, expected) => {
+    expect(isRtspSrc(src)).toBe(expected)
+  })
+})
+
+describe("rtsp live descriptors", () => {
+  const rtspSrc = "rtsp://192.168.178.1:554/?avm=1&freq=546&msys=dvbc"
+
+  it("carries an rtsp mime instead of the HLS default", () => {
+    expect(buildLiveCastDescriptor({ src: rtspSrc, title: "Das Erste HD" }).mime).toBe("application/x-rtsp")
+  })
+
+  it("validates on the receiver when live, and is refused when not", () => {
+    const descriptor = buildLiveCastDescriptor({ src: rtspSrc, title: "Das Erste HD" })
+    expect(validateCastDescriptor(descriptor)).toEqual(descriptor)
+    expect(validateCastDescriptor({ ...descriptor, isLive: false })).toBeNull()
   })
 })
 

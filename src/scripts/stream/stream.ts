@@ -161,7 +161,7 @@ import { decodedFrameCount, droppedFrameCount } from "@/scripts/lib/player-telem
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { isAutomaticRetuneReason } from "@/scripts/lib/stream-health.ts"
 import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
-import { isCastRoutingActive, routePlayToCast, buildLiveCastContext, CAST_SUPERSEDED } from "@/scripts/lib/tv-cast.ts"
+import { isCastRoutingActive, routePlayToCast, buildLiveCastContext, CAST_SUPERSEDED, castUncastableScheme } from "@/scripts/lib/tv-cast.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 // One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
@@ -3919,6 +3919,7 @@ async function play(streamId, name, reason = "user") {
   const targetChannel = all.find((channel) => channel.id === streamId)
   if (targetChannel?.unresolved) {
     void stopAudioTranscode()
+    log.warn("[xt:livetv] channel unresolved - source playlist no longer has it", { streamId })
     toastError(t("stream.error.cantPlay", { channel: name || targetChannel.name || `#${streamId}` }), {
       description: t("stream.error.checkConnection"),
     })
@@ -3938,7 +3939,8 @@ async function play(streamId, name, reason = "user") {
       buildDescriptor: async () => {
         const { isCastableSrc, buildLiveCastDescriptor } = await import("@/scripts/lib/tv-cast-descriptor")
         const liveSrc = targetChannel ? buildChannelStreamUrl(targetChannel) : null
-        if (!liveSrc || !isCastableSrc(liveSrc)) return null
+        if (!liveSrc) return null
+        if (!isCastableSrc(liveSrc, { live: true })) return castUncastableScheme(liveSrc)
         return buildLiveCastDescriptor({
           src: liveSrc,
           title: name || "",
@@ -4020,6 +4022,7 @@ async function play(streamId, name, reason = "user") {
         return
       }
       const scheme = (src.split("://")[0] || "").toLowerCase()
+      log.warn("[xt:livetv] scheme needs an external player", { streamId, scheme })
       toastError(
         t("stream.error.schemeUnsupported", { scheme }) ||
           `Can't play "${scheme}://" streams in the embedded player. Set up MPV or VLC in Settings → Playback.`

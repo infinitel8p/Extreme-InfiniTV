@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { getEffectiveReceiverDeviceName, getReceiverEngine, getReceiverId } from "@/scripts/lib/app-settings.js"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers"
-import { validateCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
+import { isRtspSrc, validateCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
 import { log, redactUrl } from "@/scripts/lib/log.js"
 import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
@@ -287,6 +287,8 @@ const androidNativeEngine = androidNativePlayerAvailable
 
 function pickEngine(descriptor: CastDescriptorV1): ReceiverEngine {
   if (!androidNativeEngine) return embeddedEngine
+  // The WebView has no RTSP at all - only ExoPlayer can try these, whatever the preference says.
+  if (isRtspSrc(descriptor.src)) return androidNativeEngine
   const preference = getReceiverEngine()
   if (preference === "embedded") return embeddedEngine
   if (preference === "native") return androidNativeEngine
@@ -352,7 +354,7 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
   const started = await startWithEngine(engine, descriptor)
   if (started) return
 
-  if (engine === androidNativeEngine) {
+  if (engine === androidNativeEngine && !isRtspSrc(descriptor.src)) {
     log.warn("[xt:receiver] native playback unavailable, falling back to embedded playback")
     if (await startWithEngine(embeddedEngine, descriptor)) return
   }

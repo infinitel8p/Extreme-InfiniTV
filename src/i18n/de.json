@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "Wird auf {device} abgespielt",
   "cast.toast.stopped": "Wiedergabe auf {device} beendet",
   "cast.toast.failed": "Wiedergabe auf {device} nicht möglich.",
+  "cast.toast.schemeUnsupported": "\"{scheme}://\"-Streams können auf {device} nicht wiedergegeben werden.",
   "cast.toast.playbackError": "Wiedergabe auf {device} fehlgeschlagen: {error}",
   "cast.toast.wakeFailed": "{device} konnte nicht aufgeweckt werden. Öffne die App auf dem TV und versuche es erneut.",
   "cast.toast.authFailed": "{device} vertraut diesem Gerät nicht mehr.",

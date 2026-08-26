@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "قيد التشغيل على {device}",
   "cast.toast.stopped": "تم إيقاف التشغيل على {device}",
   "cast.toast.failed": "تعذّر التشغيل على {device}.",
+  "cast.toast.schemeUnsupported": "تعذّر تشغيل بثوث \"{scheme}://\" على {device}.",
   "cast.toast.playbackError": "فشل التشغيل على {device}: {error}",
   "cast.toast.wakeFailed": "تعذّر تنبيه {device}. افتح التطبيق على التلفاز وحاول مرة أخرى.",
   "cast.toast.authFailed": "لم يعد {device} يثق بهذا الجهاز.",

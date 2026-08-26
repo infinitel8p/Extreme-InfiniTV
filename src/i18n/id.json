@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "Diputar di {device}",
   "cast.toast.stopped": "Pemutaran di {device} dihentikan",
   "cast.toast.failed": "Tidak dapat diputar di {device}.",
+  "cast.toast.schemeUnsupported": "Tidak bisa memutar streaming \"{scheme}://\" di {device}.",
   "cast.toast.playbackError": "Pemutaran gagal di {device}: {error}",
   "cast.toast.wakeFailed": "{device} tidak dapat dibangunkan. Buka aplikasi di TV lalu coba lagi.",
   "cast.toast.authFailed": "{device} tidak lagi memercayai perangkat ini.",

@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "{device} cihazında oynatılıyor",
   "cast.toast.stopped": "{device} cihazında oynatma durduruldu",
   "cast.toast.failed": "{device} cihazında oynatılamadı.",
+  "cast.toast.schemeUnsupported": "\"{scheme}://\" akışları {device} cihazında oynatılamaz.",
   "cast.toast.playbackError": "{device} cihazında oynatma başarısız: {error}",
   "cast.toast.wakeFailed": "{device} uyandırılamadı. TV'de uygulamayı açıp yeniden deneyin.",
   "cast.toast.authFailed": "{device} artık bu cihaza güvenmiyor.",

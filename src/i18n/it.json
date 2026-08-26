@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "In riproduzione su {device}",
   "cast.toast.stopped": "Riproduzione interrotta su {device}",
   "cast.toast.failed": "Impossibile riprodurre su {device}.",
+  "cast.toast.schemeUnsupported": "Impossibile riprodurre flussi \"{scheme}://\" su {device}.",
   "cast.toast.playbackError": "Riproduzione non riuscita su {device}: {error}",
   "cast.toast.wakeFailed": "Impossibile riattivare {device}. Apri l'app sulla TV e riprova.",
   "cast.toast.authFailed": "{device} non considera più attendibile questo dispositivo.",

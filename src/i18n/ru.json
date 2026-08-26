@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "Воспроизводится на {device}",
   "cast.toast.stopped": "Воспроизведение на {device} остановлено",
   "cast.toast.failed": "Не удалось воспроизвести на {device}.",
+  "cast.toast.schemeUnsupported": "Не удаётся воспроизвести потоки \"{scheme}://\" на {device}.",
   "cast.toast.playbackError": "Ошибка воспроизведения на {device}: {error}",
   "cast.toast.wakeFailed": "Не удалось разбудить {device}. Откройте приложение на телевизоре и попробуйте снова.",
   "cast.toast.authFailed": "{device} больше не доверяет этому устройству.",

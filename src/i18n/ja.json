@@ -1704,6 +1704,7 @@
   "cast.toast.playing": "{device} で再生中",
   "cast.toast.stopped": "{device} での再生を停止しました",
   "cast.toast.failed": "{device} で再生できませんでした。",
+  "cast.toast.schemeUnsupported": "\"{scheme}://\" ストリームは {device} で再生できません。",
   "cast.toast.playbackError": "{device} で再生に失敗しました: {error}",
   "cast.toast.wakeFailed": "{device} を復帰できませんでした。テレビでアプリを開いてからもう一度お試しください。",
   "cast.toast.authFailed": "{device} はこのデバイスを信頼しなくなりました。",
