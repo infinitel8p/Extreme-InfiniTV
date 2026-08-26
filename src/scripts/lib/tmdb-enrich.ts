@@ -13,6 +13,8 @@ import {
   tmdbMovieBundle,
   tmdbTvBundle,
   tmdbTvSeason,
+  tmdbTvEpisodeGroups,
+  tmdbEpisodeGroup,
   tmdbSearchMovie,
   tmdbSearchTv,
   tmdbPersonCredits,
@@ -30,6 +32,14 @@ import {
   type TmdbLogo,
 } from "@/scripts/lib/tmdb.ts"
 import { cleanProviderTitle, pickTmdbMatch } from "@/scripts/lib/tmdb-match.ts"
+import {
+  alignEpisodeGroup,
+  providerSeasonFingerprint,
+  refsForSeason,
+  usableProviderSeasons,
+  type MappedSeason,
+  type ProviderSeason,
+} from "@/scripts/lib/tmdb-season-map.ts"
 
 const TMDB_MATCH_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const TMDB_DETAIL_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -352,25 +362,138 @@ async function fillEnglishSeasonFallback(
   }
 }
 
+async function fetchTmdbSeasonEpisodes(
+  apiKey: string,
+  tmdbId: number,
+  seasonNumber: number,
+  language: string
+): Promise<TmdbSeasonEpisodeOut[]> {
+  const season = await tmdbTvSeason(apiKey, tmdbId, seasonNumber, language)
+  const episodes = (season.episodes || []).map((episode) => ({
+    episodeNumber: episode.episode_number,
+    name: episode.name || "",
+    overview: episode.overview || "",
+    stillUrl: tmdbImageUrl(episode.still_path, TMDB_STILL_SIZE),
+  }))
+  return fillEnglishSeasonFallback(apiKey, tmdbId, seasonNumber, language, episodes)
+}
+
+// Cached in TMDb space so one fetch serves every provider season mapped onto it.
+async function cachedTmdbSeasonEpisodes(
+  apiKey: string,
+  tmdbId: number,
+  seasonNumber: number,
+  language: string
+): Promise<TmdbSeasonEpisodeOut[]> {
+  const result = await cachedFetch(
+    TMDB_CACHE_ENTRY_ID,
+    `tmdb_tvseason_${tmdbId}_${seasonNumber}:${language}`,
+    TMDB_DETAIL_TTL_MS,
+    () => fetchTmdbSeasonEpisodes(apiKey, tmdbId, seasonNumber, language)
+  )
+  return result.data
+}
+
+// Cached per series+season-shape, so the group search runs once for all seasons.
+async function resolveSeasonMap(
+  apiKey: string,
+  tmdbId: number,
+  providerSeasons: ProviderSeason[]
+): Promise<MappedSeason[] | null> {
+  const fingerprint = providerSeasonFingerprint(providerSeasons)
+  if (!fingerprint) return null
+  const result = await cachedFetch(
+    TMDB_CACHE_ENTRY_ID,
+    `tmdb_seasonmap_${tmdbId}_${fingerprint}`,
+    TMDB_DETAIL_TTL_MS,
+    async () => {
+      const groups = (await tmdbTvEpisodeGroups(apiKey, tmdbId)).results || []
+      const seasonCount = usableProviderSeasons(providerSeasons).length
+      for (const group of groups) {
+        if (!group.id || (group.group_count ?? 0) < seasonCount) continue
+        const detail = await tmdbEpisodeGroup(apiKey, group.id)
+        const parts = (detail.groups || []).map((part) => ({
+          name: part.name,
+          order: part.order,
+          episodes: (part.episodes || [])
+            .filter((episode) => episode.season_number != null && episode.episode_number != null)
+            .map((episode) => ({
+              seasonNumber: Number(episode.season_number),
+              episodeNumber: Number(episode.episode_number),
+            })),
+        }))
+        const aligned = alignEpisodeGroup(parts, providerSeasons)
+        if (aligned) {
+          log.info("[xt:tmdb] season map resolved", {
+            tmdbId,
+            group: group.name || group.id,
+            seasons: aligned.length,
+          })
+          return { mapped: aligned }
+        }
+      }
+      log.info("[xt:tmdb] no episode group matches the provider season shape", { tmdbId, fingerprint })
+      return { mapped: null }
+    }
+  )
+  return result.data.mapped
+}
+
+async function mapSeasonThroughEpisodeGroup(
+  apiKey: string,
+  tmdbId: number,
+  seasonNumber: number,
+  language: string,
+  providerSeasons?: ProviderSeason[]
+): Promise<TmdbSeasonEpisodeOut[]> {
+  if (!providerSeasons?.length) return []
+  const mapped = await resolveSeasonMap(apiKey, tmdbId, providerSeasons)
+  if (!mapped) return []
+  const refs = refsForSeason(mapped, seasonNumber)
+  if (refs.length === 0) return []
+  const bySeason = new Map<number, Map<number, TmdbSeasonEpisodeOut>>()
+  for (const tmdbSeason of new Set(refs.map((ref) => ref.seasonNumber))) {
+    const episodes = await cachedTmdbSeasonEpisodes(apiKey, tmdbId, tmdbSeason, language)
+    bySeason.set(tmdbSeason, new Map(episodes.map((episode) => [episode.episodeNumber, episode])))
+  }
+  const renumbered: TmdbSeasonEpisodeOut[] = []
+  for (const ref of refs) {
+    const episode = bySeason.get(ref.seasonNumber)?.get(ref.episodeNumber)
+    if (episode) renumbered.push({ ...episode, episodeNumber: ref.providerEpisodeNumber })
+  }
+  return renumbered
+}
+
+export interface SeasonEnrichmentOptions {
+  providerSeasons?: ProviderSeason[]
+}
+
 export async function fetchSeasonEnrichment(
   tmdbId: number,
-  seasonNumber: number
+  seasonNumber: number,
+  options?: SeasonEnrichmentOptions
 ): Promise<TmdbSeasonEnrichment | null> {
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_season_${tmdbId}_${seasonNumber}:${language}`
+  const cacheKind = `tmdb_season_${tmdbId}_${seasonNumber}:${language}:v2`
   try {
     const result = await cachedFetch(TMDB_CACHE_ENTRY_ID, cacheKind, TMDB_DETAIL_TTL_MS, async () => {
-      const season = await tmdbTvSeason(apiKey, tmdbId, seasonNumber, language)
-      const episodes = (season.episodes || []).map((episode) => ({
-        episodeNumber: episode.episode_number,
-        name: episode.name || "",
-        overview: episode.overview || "",
-        stillUrl: tmdbImageUrl(episode.still_path, TMDB_STILL_SIZE),
-      }))
-      const filledEpisodes = await fillEnglishSeasonFallback(apiKey, tmdbId, seasonNumber, language, episodes)
-      return { episodes: filledEpisodes }
+      try {
+        return { episodes: await fetchTmdbSeasonEpisodes(apiKey, tmdbId, seasonNumber, language) }
+      } catch (error) {
+        // 404 is authoritative - TMDb has no such season number, so try the group mapping.
+        if (!(error instanceof TmdbHttpError) || error.status !== 404) throw error
+      }
+      const episodes = await mapSeasonThroughEpisodeGroup(
+        apiKey,
+        tmdbId,
+        seasonNumber,
+        language,
+        options?.providerSeasons
+      )
+      // Empty is cached on purpose: an unmappable season must not refetch on every render.
+      return { episodes }
     })
     return result.data
   } catch (error) {
@@ -486,7 +609,7 @@ export async function peekCachedSeasonEnrichment(
 ): Promise<TmdbSeasonEnrichment | null> {
   if (!isTmdbActive()) return null
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_season_${tmdbId}_${seasonNumber}:${language}`
+  const cacheKind = `tmdb_season_${tmdbId}_${seasonNumber}:${language}:v2`
   return withProbeTimeout(peekFreshCache<TmdbSeasonEnrichment>(cacheKind), null)
 }
 

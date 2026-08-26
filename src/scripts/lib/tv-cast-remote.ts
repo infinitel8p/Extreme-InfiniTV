@@ -863,7 +863,10 @@ export function openCastRemote(): void {
       })
       if (token !== metadataToken || tmdbId == null) return
 
-      const seasonEnrichment = await fetchSeasonEnrichment(tmdbId, seriesContext.season)
+      const { providerSeasonsFromEpisodeMap } = await import("@/scripts/lib/tmdb-season-map.ts")
+      const seasonEnrichment = await fetchSeasonEnrichment(tmdbId, seriesContext.season, {
+        providerSeasons: providerSeasonsFromEpisodeMap(seriesInfo?.episodes),
+      })
       if (token !== metadataToken) return
 
       const tmdbEpisode = seasonEnrichment?.episodes.find(

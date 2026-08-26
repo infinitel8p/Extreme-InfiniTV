@@ -76,6 +76,7 @@ import {
   peekCachedSeasonEnrichment,
 } from "@/scripts/lib/tmdb-enrich.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
+import { providerSeasonsFromEpisodeMap } from "@/scripts/lib/tmdb-season-map.ts"
 import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
@@ -1021,7 +1022,9 @@ async function refreshSeasonEnrichment() {
   if (!isTmdbActive() || !resolvedTmdbId || !activePlaylistId) return
   const seasonNumber = toIndex(currentSeason)
   if (seasonNumber == null) return
-  const season = await fetchSeasonEnrichment(resolvedTmdbId, seasonNumber)
+  const season = await fetchSeasonEnrichment(resolvedTmdbId, seasonNumber, {
+    providerSeasons: providerSeasonsFromEpisodeMap(episodesByKey),
+  })
   if (requestId !== seasonEnrichRequestId || !season?.episodes?.length) return
   patchSeasonEpisodes(season.episodes)
 }

@@ -115,6 +115,35 @@ export interface TmdbSeasonResponse {
   episodes?: TmdbSeasonEpisode[]
 }
 
+export interface TmdbEpisodeGroupSummary {
+  id: string
+  name?: string
+  type?: number
+  group_count?: number
+  episode_count?: number
+}
+
+export interface TmdbEpisodeGroupsResponse {
+  results?: TmdbEpisodeGroupSummary[]
+}
+
+export interface TmdbEpisodeGroupEpisode {
+  season_number?: number
+  episode_number?: number
+  order?: number
+}
+
+export interface TmdbEpisodeGroupPart {
+  name?: string
+  order?: number
+  episodes?: TmdbEpisodeGroupEpisode[]
+}
+
+export interface TmdbEpisodeGroupResponse {
+  id?: string
+  groups?: TmdbEpisodeGroupPart[]
+}
+
 function isBearerKey(key: string): boolean {
   return /^eyJ/.test(key)
 }
@@ -310,6 +339,21 @@ export async function tmdbTvSeason(
   language?: string
 ): Promise<TmdbSeasonResponse> {
   return tmdbFetch<TmdbSeasonResponse>(key, `/tv/${tmdbId}/season/${seasonNumber}`, { language })
+}
+
+// Index only - no language, since the parts are consumed for episode numbering.
+export async function tmdbTvEpisodeGroups(
+  key: string,
+  tmdbId: number
+): Promise<TmdbEpisodeGroupsResponse> {
+  return tmdbFetch<TmdbEpisodeGroupsResponse>(key, `/tv/${tmdbId}/episode_groups`, {})
+}
+
+export async function tmdbEpisodeGroup(
+  key: string,
+  groupId: string
+): Promise<TmdbEpisodeGroupResponse> {
+  return tmdbFetch<TmdbEpisodeGroupResponse>(key, `/tv/episode_group/${groupId}`, {})
 }
 
 export async function tmdbPersonCredits(
