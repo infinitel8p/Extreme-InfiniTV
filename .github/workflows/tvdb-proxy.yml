@@ -1,0 +1,58 @@
+name: tvdb-proxy
+
+# The Worker bundles shared modules out of src/scripts/lib, so an app-side edit
+# to those files desyncs the deployment until this runs. Release branches deploy
+# too: betas ship against this same Worker, and there is only one instance.
+on:
+  push:
+    branches: [main, "release/**"]
+    paths:
+      - "proxy/**"
+      - "src/scripts/lib/tvdb-contract.ts"
+      - "src/scripts/lib/tvdb-params.ts"
+      - "src/scripts/lib/tvdb-normalize.ts"
+      - "src/scripts/lib/tvdb-rate-limit.ts"
+      - ".github/workflows/tvdb-proxy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: tvdb-proxy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'infinitel8p' }}
+    # Job level, so the guards on the steps below can actually read it.
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Typecheck and bundle
+        working-directory: proxy
+        run: |
+          npx --yes wrangler@4.126.0 types
+          npx --yes tsc --noEmit -p tsconfig.json
+          npx --yes wrangler@4.126.0 deploy --dry-run --outdir=.wrangler/dry-run
+
+      - name: Deploy
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        working-directory: proxy
+        run: npx --yes wrangler@4.126.0 deploy
+
+      - name: Smoke test
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        run: |
+          set -e
+          BASE="https://xt-tvdb-proxy.infinitel8p.com"
+          test "$(curl -sf --max-time 30 "$BASE/healthz")" = "ok"
+          curl -sf --max-time 45 "$BASE/v1/season?tmdb=65942&season=2&lang=deu" \
+            | grep -q '"episodeNumber":1'
+          curl -sf --max-time 45 "$BASE/v1/find?name=Breaking%20Bad&year=2008" \
+            | grep -q '"tvdbId"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$BASE/v1/title?tmdb=abc")" = "400"

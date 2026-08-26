@@ -77,6 +77,13 @@ import {
 } from "@/scripts/lib/tmdb-enrich.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
 import { providerSeasonsFromEpisodeMap } from "@/scripts/lib/tmdb-season-map.ts"
+import {
+  enrichmentNeedsFill,
+  fetchTvdbSeason,
+  parseProviderTmdbId,
+  mergeTitleEnrichment,
+  tvdbEnrichment,
+} from "@/scripts/lib/tvdb-proxy.ts"
 import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
@@ -174,6 +181,7 @@ let tabsStaggered = false
 let episodesStaggered = false
 let externalPresenceActive = false
 let resolvedTmdbId = null
+let resolvedTvdbId = null
 let enrichRequestId = 0
 let seriesCatalogPromise = null
 let seasonEnrichRequestId = 0
@@ -185,19 +193,32 @@ let heroPosterUrl = null
 let heroTmdbBackdropUrl = null
 let heroProviderBackdropUrl = null
 let heroSettled = false
+let paintedHeroPosterUrl = null
 let earlyEnrichmentHandled = false
+let earlyEnrichmentNeedsFill = false
 let earlyEnrichmentPopulatedSimilar = false
 let providerPlotApplied = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 
-// Paints the hero exactly once per boot, at whichever point the caller has decided
-// enough is known: immediately when TMDb is inactive or already cache-warm, or after
-// the TMDb enrichment attempt settles (resolved, resolved-null, or failed) otherwise.
+// Paints the hero once, at whichever point the caller decided enough is known.
 function settleHero() {
   if (heroSettled) return
   heroSettled = true
+  paintedHeroPosterUrl = heroPosterUrl
   posterEl?.classList.remove("skel")
+  paintHeroOn(posterEl, {
+    name: series?.name || "",
+    posterUrl: heroPosterUrl,
+    backdropUrls: [heroProviderBackdropUrl, heroTmdbBackdropUrl],
+  })
+}
+
+// Enrichment can land after the hero settled (no TMDb key, or a warm-cache paint),
+// so repaint when it actually brought better artwork.
+function repaintHeroIfArtworkChanged() {
+  if (!heroSettled || heroPosterUrl === paintedHeroPosterUrl) return
+  paintedHeroPosterUrl = heroPosterUrl
   paintHeroOn(posterEl, {
     name: series?.name || "",
     posterUrl: heroPosterUrl,
@@ -907,6 +928,7 @@ function renderFactsColumn() {
 // ----------------------------
 function resetTmdbEnrichmentUI() {
   resolvedTmdbId = null
+  resolvedTvdbId = null
   if (directorEl) {
     directorEl.textContent = ""
     directorEl.setAttribute("hidden", "")
@@ -1019,14 +1041,28 @@ function patchSeasonEpisodes(episodes) {
 // Re-run on every episode render (initial paint, season switch, up-next), since rows are rebuilt each time.
 async function refreshSeasonEnrichment() {
   const requestId = ++seasonEnrichRequestId
-  if (!isTmdbActive() || !resolvedTmdbId || !activePlaylistId) return
+  if (!activePlaylistId) return
+  if (!resolvedTmdbId && !resolvedTvdbId) return
   const seasonNumber = toIndex(currentSeason)
   if (seasonNumber == null) return
-  const season = await fetchSeasonEnrichment(resolvedTmdbId, seasonNumber, {
-    providerSeasons: providerSeasonsFromEpisodeMap(episodesByKey),
-  })
-  if (requestId !== seasonEnrichRequestId || !season?.episodes?.length) return
-  patchSeasonEpisodes(season.episodes)
+
+  if (isTmdbActive() && resolvedTmdbId) {
+    const season = await fetchSeasonEnrichment(resolvedTmdbId, seasonNumber, {
+      providerSeasons: providerSeasonsFromEpisodeMap(episodesByKey),
+    })
+    if (requestId !== seasonEnrichRequestId) return
+    if (season?.episodes?.length) {
+      patchSeasonEpisodes(season.episodes)
+      return
+    }
+  }
+  // TheTVDB models broadcast seasons that TMDb files as one flat run.
+  const tvdbSeason = await fetchTvdbSeason(
+    { tvdbId: resolvedTvdbId, tmdbId: resolvedTvdbId ? null : resolvedTmdbId },
+    seasonNumber
+  )
+  if (requestId !== seasonEnrichRequestId || !tvdbSeason?.episodes.length) return
+  patchSeasonEpisodes(tvdbSeason.episodes)
 }
 
 // A deep link boots from a stub series, so take the fields only the catalog row carries.
@@ -1094,11 +1130,13 @@ function applyEnrichmentPatch(enrichment) {
     trailerBtn?.removeAttribute("hidden")
   }
   if (enrichment.cast?.length) renderCast(enrichment.cast)
+  repaintHeroIfArtworkChanged()
 }
 
 // Returns whether the similar rail was populated from TMDb recommendations.
 async function enrichSeriesDetailFromTmdb(requestId) {
-  if (!isTmdbActive() || !series || !activePlaylistId) {
+  // No isTmdbActive() gate: the TheTVDB proxy enriches without a user key.
+  if (!series || !activePlaylistId) {
     settleHero()
     return false
   }
@@ -1109,25 +1147,39 @@ async function enrichSeriesDetailFromTmdb(requestId) {
   }
 
   const info = seriesInfoRaw?.info || {}
-  const providerTmdbId = Number(info.tmdb || info.tmdb_id) || null
+  const providerTmdbId = parseProviderTmdbId(info)
 
-  const tmdbId = await resolveTmdbId(activePlaylistId, "series", {
-    id: series.id,
-    name: series.name,
-    year: series.year || info.releaseDate || info.releasedate || info.year || null,
-    providerTmdbId,
-  })
+  // A null from resolveTmdbId means TMDb validated the id as absent, so it must
+  // not be revived; the name search is the correct next step.
+  const tmdbId = isTmdbActive()
+    ? await resolveTmdbId(activePlaylistId, "series", {
+        id: series.id,
+        name: series.name,
+        year: series.year || info.releaseDate || info.releasedate || info.year || null,
+        providerTmdbId,
+      })
+    : providerTmdbId
   if (requestId !== enrichRequestId) return false
-  if (tmdbId == null) {
-    settleHero()
-    return false
-  }
 
   resolvedTmdbId = tmdbId
   // The current season already rendered without a tmdbId, so back-fill it now.
   refreshSeasonEnrichment()
 
-  const enrichment = await fetchSeriesEnrichment(tmdbId)
+  const tmdbEnrichment = tmdbId ? await fetchSeriesEnrichment(tmdbId) : null
+  // TMDb stays authoritative; TheTVDB is only called when something is missing.
+  let enrichment = tmdbEnrichment
+  if (enrichmentNeedsFill(tmdbEnrichment)) {
+    const filled = await tvdbEnrichment(tmdbId, "series", {
+      name: series.name,
+      year: parseInt(String(series.year), 10) || null,
+    })
+    if (filled) {
+      resolvedTvdbId = filled.tvdbId
+      enrichment = mergeTitleEnrichment(tmdbEnrichment, filled.enrichment)
+      // A name match resolves no tmdb id, so seasons could not run until now.
+      if (!tmdbId) refreshSeasonEnrichment()
+    }
+  }
   if (requestId !== enrichRequestId) return false
   if (!enrichment) {
     settleHero()
@@ -1188,7 +1240,15 @@ async function populateSimilarRail(requestId) {
   // boot() already merged a cache-warm enrichment into the first paint; only the
   // local-similar fallback (when TMDb had no catalog-matching recommendations) is left.
   if (earlyEnrichmentHandled) {
-    if (!earlyEnrichmentPopulatedSimilar) await populateLocalSimilarRail(requestId)
+    // The warm paint came from the TMDb cache alone, so it may still have gaps.
+    let refilledSimilar = false
+    if (earlyEnrichmentNeedsFill) {
+      earlyEnrichmentNeedsFill = false
+      refilledSimilar = await enrichSeriesDetailFromTmdb(requestId)
+    }
+    if (!earlyEnrichmentPopulatedSimilar && !refilledSimilar) {
+      await populateLocalSimilarRail(requestId)
+    }
     return
   }
   const populatedFromTmdb = await enrichSeriesDetailFromTmdb(requestId)
@@ -2172,6 +2232,7 @@ async function boot() {
     applyEnrichmentPatch(earlyEnrichment.enrichment)
     settleHero()
     earlyEnrichmentHandled = true
+    earlyEnrichmentNeedsFill = enrichmentNeedsFill(earlyEnrichment.enrichment)
     if (earlyEnrichment.enrichment.recommendations?.length) {
       const matches = matchRecommendationsToCatalog(earlyEnrichment.enrichment.recommendations, list?.data || [], {
         mediaType: "tv",

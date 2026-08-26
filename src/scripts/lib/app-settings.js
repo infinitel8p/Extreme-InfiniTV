@@ -35,6 +35,7 @@ const KEY_MONO_AUDIO = "xt_mono_audio"
 const KEY_CAPTIONS_AUTO = "xt_captions_auto"
 const KEY_TMDB_KEY = "xt_tmdb_key"
 const KEY_TMDB_ENABLED = "xt_tmdb_enabled"
+const KEY_TVDB_ENABLED = "xt_tvdb_enabled"
 const KEY_DEV_MODE = "xt_dev_mode"
 const KEY_RECEIVER_MODE = "xt_receiver_mode"
 const KEY_RECEIVER_BOOT = "xt_receiver_boot"
@@ -1076,6 +1077,15 @@ export function setTmdbEnabled(enabled) {
   document.dispatchEvent(
     new CustomEvent(TMDB_SETTINGS_EVENT, { detail: { key: "enabled", value: !!enabled } })
   )
+}
+
+// Defaults on: it needs no key, so it is the only enrichment most users get.
+export function getTvdbEnabled() {
+  return readLS(KEY_TVDB_ENABLED, "") !== "0"
+}
+
+export function setTvdbEnabled(enabled) {
+  writeLS(KEY_TVDB_ENABLED, enabled ? "" : "0")
 }
 
 export function isTmdbActive() {

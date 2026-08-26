@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": ["./worker-configuration.d.ts"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": { "@/*": ["../src/*"] },
+    "ignoreDeprecations": "6.0"
+  },
+  "include": [
+    "src/**/*.ts",
+    "worker-configuration.d.ts",
+    "../src/scripts/lib/tvdb-contract.ts",
+    "../src/scripts/lib/tvdb-params.ts",
+    "../src/scripts/lib/tvdb-normalize.ts",
+    "../src/scripts/lib/tvdb-rate-limit.ts"
+  ]
+}

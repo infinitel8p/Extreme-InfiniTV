@@ -68,6 +68,12 @@ import {
 import { resolveTmdbId, fetchMovieEnrichment, peekEarlyDetailData } from "@/scripts/lib/tmdb-enrich.ts"
 import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
+import {
+  enrichmentNeedsFill,
+  mergeTitleEnrichment,
+  parseProviderTmdbId,
+  tvdbEnrichment,
+} from "@/scripts/lib/tvdb-proxy.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
@@ -167,7 +173,9 @@ let heroPosterUrl = null
 let heroBackdropUrl = null
 let heroProviderBackdropUrl = null
 let heroSettled = false
+let paintedHeroPosterUrl = null
 let earlyEnrichmentHandled = false
+let earlyEnrichmentNeedsFill = false
 let earlyEnrichmentPopulatedSimilar = false
 let providerPlotApplied = false
 
@@ -179,7 +187,20 @@ const setAmbient = (url) => setAmbientOn(ambientEl, url)
 function settleHero() {
   if (heroSettled) return
   heroSettled = true
+  paintedHeroPosterUrl = heroPosterUrl
   posterEl?.classList.remove("skel")
+  paintHeroOn(posterEl, {
+    name: movie?.name || "",
+    posterUrl: heroPosterUrl,
+    backdropUrls: [heroProviderBackdropUrl, heroBackdropUrl],
+  })
+}
+
+// Enrichment can land after the hero settled (no TMDb key, or a warm-cache paint),
+// so repaint when it actually brought better artwork.
+function repaintHeroIfArtworkChanged() {
+  if (!heroSettled || heroPosterUrl === paintedHeroPosterUrl) return
+  paintedHeroPosterUrl = heroPosterUrl
   paintHeroOn(posterEl, {
     name: movie?.name || "",
     posterUrl: heroPosterUrl,
@@ -522,11 +543,13 @@ function applyEnrichmentPatch(enrichment) {
     trailerBtn?.removeAttribute("hidden")
   }
   if (enrichment.cast?.length) renderCast(enrichment.cast)
+  repaintHeroIfArtworkChanged()
 }
 
 // Returns whether the similar rail was populated from TMDb recommendations.
 async function enrichMovieDetailFromTmdb(requestId) {
-  if (!isTmdbActive() || !movie || !activePlaylistId) {
+  // No isTmdbActive() gate: the TheTVDB proxy enriches without a user key.
+  if (!movie || !activePlaylistId) {
     settleHero()
     return false
   }
@@ -539,21 +562,30 @@ async function enrichMovieDetailFromTmdb(requestId) {
   const data = vodInfoRaw
   const movieData = data?.movie_data || data?.info || data || {}
   const info = data?.info || data?.movie_data || {}
-  const providerTmdbId = Number(info.tmdb_id || movieData.tmdb_id) || null
+  const providerTmdbId = parseProviderTmdbId(info) ?? parseProviderTmdbId(movieData)
 
-  const tmdbId = await resolveTmdbId(activePlaylistId, "vod", {
-    id: movie.id,
-    name: movie.name,
-    year: movie.year || movieData.releasedate || movieData.year || info.year || null,
-    providerTmdbId,
-  })
+  // A null from resolveTmdbId means TMDb validated the id as absent, so it must
+  // not be revived; the name search is the correct next step.
+  const tmdbId = isTmdbActive()
+    ? await resolveTmdbId(activePlaylistId, "vod", {
+        id: movie.id,
+        name: movie.name,
+        year: movie.year || movieData.releasedate || movieData.year || info.year || null,
+        providerTmdbId,
+      })
+    : providerTmdbId
   if (requestId !== enrichRequestId) return false
-  if (tmdbId == null) {
-    settleHero()
-    return false
-  }
 
-  const enrichment = await fetchMovieEnrichment(tmdbId)
+  const tmdbEnrichmentResult = tmdbId ? await fetchMovieEnrichment(tmdbId) : null
+  // TMDb stays authoritative; TheTVDB is only called when something is missing.
+  let enrichment = tmdbEnrichmentResult
+  if (enrichmentNeedsFill(tmdbEnrichmentResult)) {
+    const filled = await tvdbEnrichment(tmdbId, "movie", {
+      name: movie.name,
+      year: parseInt(String(movie.year), 10) || null,
+    })
+    if (filled) enrichment = mergeTitleEnrichment(tmdbEnrichmentResult, filled.enrichment)
+  }
   if (requestId !== enrichRequestId) return false
   if (!enrichment) {
     settleHero()
@@ -618,7 +650,15 @@ async function populateSimilarRail(requestId) {
   // boot() already merged a cache-warm enrichment into the first paint; only the
   // local-similar fallback (when TMDb had no catalog-matching recommendations) is left.
   if (earlyEnrichmentHandled) {
-    if (!earlyEnrichmentPopulatedSimilar) await populateLocalSimilarRail(requestId)
+    // The warm paint came from the TMDb cache alone, so it may still have gaps.
+    let refilledSimilar = false
+    if (earlyEnrichmentNeedsFill) {
+      earlyEnrichmentNeedsFill = false
+      refilledSimilar = await enrichMovieDetailFromTmdb(requestId)
+    }
+    if (!earlyEnrichmentPopulatedSimilar && !refilledSimilar) {
+      await populateLocalSimilarRail(requestId)
+    }
     return
   }
   const populatedFromTmdb = await enrichMovieDetailFromTmdb(requestId)
@@ -1493,6 +1533,7 @@ async function boot() {
     applyEnrichmentPatch(earlyEnrichment.enrichment)
     settleHero()
     earlyEnrichmentHandled = true
+    earlyEnrichmentNeedsFill = enrichmentNeedsFill(earlyEnrichment.enrichment)
     if (earlyEnrichment.enrichment.recommendations?.length) {
       const matches = matchRecommendationsToCatalog(earlyEnrichment.enrichment.recommendations, list?.data || [], {
         mediaType: "movie",

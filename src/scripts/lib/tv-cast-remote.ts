@@ -861,15 +861,29 @@ export function openCastRemote(): void {
         year: seriesInfoRecord.releaseDate || seriesInfoRecord.releasedate || seriesInfoRecord.year || null,
         providerTmdbId,
       })
-      if (token !== metadataToken || tmdbId == null) return
-
-      const { providerSeasonsFromEpisodeMap } = await import("@/scripts/lib/tmdb-season-map.ts")
-      const seasonEnrichment = await fetchSeasonEnrichment(tmdbId, seriesContext.season, {
-        providerSeasons: providerSeasonsFromEpisodeMap(seriesInfo?.episodes),
-      })
+      // No tmdbId bail: resolveTmdbId returns null without a TMDb key, and the
+      // TheTVDB fallback below needs no key at all.
       if (token !== metadataToken) return
 
-      const tmdbEpisode = seasonEnrichment?.episodes.find(
+      const { providerSeasonsFromEpisodeMap } = await import("@/scripts/lib/tmdb-season-map.ts")
+      const seasonEnrichment =
+        tmdbId == null
+          ? null
+          : await fetchSeasonEnrichment(tmdbId, seriesContext.season, {
+              providerSeasons: providerSeasonsFromEpisodeMap(seriesInfo?.episodes),
+            })
+      if (token !== metadataToken) return
+
+      let episodes = seasonEnrichment?.episodes ?? []
+      if (episodes.length === 0 && (tmdbId ?? providerTmdbId) != null) {
+        const { fetchTvdbSeason } = await import("@/scripts/lib/tvdb-proxy.ts")
+        episodes =
+          (await fetchTvdbSeason({ tmdbId: tmdbId ?? providerTmdbId }, seriesContext.season))
+            ?.episodes ?? []
+        if (token !== metadataToken) return
+      }
+
+      const tmdbEpisode = episodes.find(
         (candidate) => candidate.episodeNumber === seriesContext.episodeNum
       )
       if (!providerEpisodeTitle && tmdbEpisode?.name) {

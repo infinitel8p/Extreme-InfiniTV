@@ -1,7 +1,7 @@
 {
   "extends": "astro/tsconfigs/strict",
   "include": [".astro/types.d.ts", "**/*"],
-  "exclude": ["dist", "src-tauri/target", "src-tauri/gen", "node_modules"],
+  "exclude": ["dist", "src-tauri/target", "src-tauri/gen", "node_modules", "proxy"],
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {

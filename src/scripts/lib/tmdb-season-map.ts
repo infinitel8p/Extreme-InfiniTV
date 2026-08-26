@@ -1,6 +1,4 @@
-// Pure alignment of TMDb episode-group parts onto a provider's season split.
-// TMDb often files an anime's whole run as one season while providers split it
-// per broadcast season; episode groups carry the real boundaries.
+// Aligns TMDb episode-group parts onto a provider's season split.
 
 export interface EpisodeGroupEpisodeRef {
   seasonNumber: number
@@ -31,7 +29,7 @@ function isSpecialsPart(part: EpisodeGroupPart): boolean {
   return part.episodes.every((episode) => episode.seasonNumber === 0)
 }
 
-/** Drops specials and empty seasons, then orders ascending - the order parts are matched in. */
+/** Drops specials and empties, ascending - the order parts are matched in. */
 export function usableProviderSeasons(seasons: ProviderSeason[]): ProviderSeason[] {
   return seasons
     .filter((entry) => Number.isFinite(entry.season) && entry.season > 0 && entry.episodeNumbers.length > 0)
@@ -46,11 +44,8 @@ function orderedParts(parts: EpisodeGroupPart[]): EpisodeGroupPart[] {
     .filter((part) => part.episodes.length > 0 && !isSpecialsPart(part))
 }
 
-/**
- * Counts must match exactly, except the provider's last season, which may be a
- * prefix of a still-airing one. Returns null rather than a partial alignment:
- * a near-miss silently attaches the wrong episode's plot and still.
- */
+/** Exact counts bar a still-airing last season; null beats a near-miss that
+ * would attach the wrong episode's plot. */
 export function alignEpisodeGroup(
   parts: EpisodeGroupPart[],
   providerSeasons: ProviderSeason[]

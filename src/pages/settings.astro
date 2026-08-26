@@ -1304,6 +1304,27 @@ const navStructure: NavSection[] = [
           </p>
           <div class="settings-rows">
 
+            <!-- TheTVDB enrichment: separate service, so it gets its own opt-out. -->
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.tvdb.enable" class="text-sm font-medium leading-snug">TheTVDB metadata</h3>
+                <p data-i18n="settings.tmdb.tvdbPrivacy" class="text-xs text-fg-3">
+                  Titles you open are sent to TheTVDB through our proxy to look up artwork and episode details. No account or key is needed.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-tvdb-enabled"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="TheTVDB metadata"
+                  data-i18n-attr="aria-label:settings.tvdb.enable">
+                  <button type="button" data-tvdb="on"  aria-pressed="false" data-i18n="settings.tmdb.on"  class="tvdb-enabled-btn btn">On</button>
+                  <button type="button" data-tvdb="off" aria-pressed="false" data-i18n="settings.tmdb.off" class="tvdb-enabled-btn btn">Off</button>
+                </div>
+              </div>
+            </div>
+
             <!-- Enable enrichment -->
             <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
               <div class="settings-row__text">
@@ -2060,6 +2081,29 @@ const navStructure: NavSection[] = [
               <p data-i18n="settings.licenses.uiNotice" class="text-xs text-fg-3">App framework and icon set.</p>
             </div>
 
+            <!-- Metadata attribution: wording is required by each provider's terms. -->
+            <div class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">TheTVDB</span>
+                <span data-i18n="settings.licenses.metadataTag" class="text-2xs uppercase tracking-wide text-fg-3 shrink-0 ms-3">Metadata</span>
+              </div>
+              <p class="text-xs text-fg-3">
+                Metadata provided by <a href="https://www.thetvdb.com/" data-external class="underline hover:text-fg">TheTVDB</a>.
+                Please consider <a href="https://www.thetvdb.com/subscribe" data-external class="underline hover:text-fg">adding missing information or subscribing</a>.
+              </p>
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">TMDB</span>
+                <span data-i18n="settings.licenses.metadataTag" class="text-2xs uppercase tracking-wide text-fg-3 shrink-0 ms-3">Metadata</span>
+              </div>
+              <p class="text-xs text-fg-3">
+                This application uses <a href="https://www.themoviedb.org/" data-external class="underline hover:text-fg">TMDB</a>
+                and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.
+              </p>
+            </div>
+
           </div>
         </details>
       </div>
@@ -2421,6 +2465,8 @@ const navStructure: NavSection[] = [
       setTmdbApiKey,
       getTmdbEnabled,
       setTmdbEnabled,
+      getTvdbEnabled,
+      setTvdbEnabled,
     } from "@/scripts/lib/app-settings.js"
     import { validateTmdbKey } from "@/scripts/lib/tmdb.ts"
     import { bindExternalLinks } from "@/scripts/lib/external-link.js"
@@ -4980,6 +5026,25 @@ const navStructure: NavSection[] = [
       if (!btn) return
       setTmdbEnabled(btn.getAttribute("data-tmdb") === "on")
       syncTmdbEnabled()
+    })
+
+    const tvdbEnabledGroup = document.getElementById("settings-tvdb-enabled")
+
+    function syncTvdbEnabled() {
+      if (!tvdbEnabledGroup) return
+      const enabled = getTvdbEnabled()
+      for (const btn of tvdbEnabledGroup.querySelectorAll(".tvdb-enabled-btn")) {
+        const isOn = btn.getAttribute("data-tvdb") === "on"
+        btn.setAttribute("aria-pressed", isOn === enabled ? "true" : "false")
+      }
+    }
+    syncTvdbEnabled()
+
+    tvdbEnabledGroup?.addEventListener("click", (event) => {
+      const btn = /** @type {HTMLElement} */ (event.target).closest(".tvdb-enabled-btn")
+      if (!btn) return
+      setTvdbEnabled(btn.getAttribute("data-tvdb") === "on")
+      syncTvdbEnabled()
     })
 
     function syncTmdbTestDisabled() {
