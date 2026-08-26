@@ -20,7 +20,7 @@ import {
 import {
   formatReceiverAddress,
   formatReceiverPairCode,
-  rankReceiverIps,
+  pairableReceiverIps,
   type ReceiverPairedDevice,
   type ReceiverStatus,
 } from "@/scripts/lib/receiver-shared.js"
@@ -181,7 +181,7 @@ async function init(): Promise<void> {
   function renderAddresses(status: ReceiverStatus): void {
     if (!addressesList) return
     addressesList.replaceChildren()
-    for (const ip of rankReceiverIps(status.ips ?? [])) {
+    for (const ip of pairableReceiverIps(status.ips ?? [])) {
       const address = formatReceiverAddress(ip, status.port)
       const addressBtn = document.createElement("button")
       addressBtn.type = "button"

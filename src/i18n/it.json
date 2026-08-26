@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "Impossibile ripristinare il backup",
   "settings.toast.scanFail": "Impossibile scansionare la cartella",
   "settings.toast.pickFolderFail": "Impossibile aprire il selettore di cartelle",
+  "settings.toast.noFolderPicker": "Questo dispositivo non ha un selettore di cartelle",
+  "settings.toast.noFolderPickerHint": "I download vengono salvati nella cartella Download.",
   "settings.toast.pickFileFail": "Impossibile aprire il selettore di file",
   "settings.toast.imported": "{count} download importati",
   "settings.toast.checkConnLogin": "Controlla la connessione o le credenziali.",

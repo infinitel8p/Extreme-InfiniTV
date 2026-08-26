@@ -40,3 +40,11 @@ function addressRank(ip: string): number {
 export function rankReceiverIps(ips: string[]): string[] {
   return [...ips].sort((first, second) => addressRank(first) - addressRank(second))
 }
+
+/** Addresses a viewer can actually pair with: the add-device form rejects any host
+ *  containing ":", so a listed IPv6 literal is untypeable. Discovery still uses them. */
+export function pairableReceiverIps(ips: string[]): string[] {
+  const ranked = rankReceiverIps(ips)
+  const ipv4 = ranked.filter((ip) => IPV4_PATTERN.test(ip))
+  return ipv4.length > 0 ? ipv4 : ranked
+}

@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "تعذّر استعادة النسخة الاحتياطية",
   "settings.toast.scanFail": "تعذّر فحص المجلد",
   "settings.toast.pickFolderFail": "تعذّر فتح منتقي المجلدات",
+  "settings.toast.noFolderPicker": "لا يحتوي هذا الجهاز على أداة اختيار مجلد",
+  "settings.toast.noFolderPickerHint": "يتم حفظ التنزيلات في مجلد التنزيلات بدلاً من ذلك.",
   "settings.toast.pickFileFail": "تعذّر فتح منتقي الملفات",
   "settings.toast.imported": "تم استيراد {count} تنزيل",
   "settings.toast.checkConnLogin": "تحقق من اتصالك أو بيانات الدخول.",

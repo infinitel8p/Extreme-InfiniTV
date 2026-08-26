@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "Yedek geri yüklenemedi",
   "settings.toast.scanFail": "Klasör taranamadı",
   "settings.toast.pickFolderFail": "Klasör seçici açılamadı",
+  "settings.toast.noFolderPicker": "Bu cihazda klasör seçici yok",
+  "settings.toast.noFolderPickerHint": "İndirilenler bunun yerine İndirilenler klasörüne kaydedilir.",
   "settings.toast.pickFileFail": "Dosya seçici açılamadı",
   "settings.toast.imported": "{count} indirme içe aktarıldı",
   "settings.toast.checkConnLogin": "Bağlantınızı veya giriş bilgilerinizi kontrol edin.",

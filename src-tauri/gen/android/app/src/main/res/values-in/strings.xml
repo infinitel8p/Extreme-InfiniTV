@@ -2,4 +2,11 @@
 <resources>
     <string name="xt_channels_title">Saluran</string>
     <string name="native_player_unsupported_stream">Tidak dapat memutar saluran ini di pemutar bawaan</string>
+    <string name="xt_video_settings_title">Pengaturan pemutar</string>
+    <string name="xt_video_display_mode">Mode tampilan</string>
+    <string name="xt_video_display_fit">Sesuaikan</string>
+    <string name="xt_video_display_zoom">Penuhi layar</string>
+    <string name="xt_video_display_stretch">Regangkan</string>
+    <string name="xt_video_playback_speed">Kecepatan pemutaran</string>
+    <string name="xt_video_speed_normal">Normal</string>
 </resources>

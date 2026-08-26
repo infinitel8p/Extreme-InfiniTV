@@ -2,4 +2,11 @@
 <resources>
     <string name="xt_channels_title">القنوات</string>
     <string name="native_player_unsupported_stream">تعذّر تشغيل هذه القناة في المشغّل الأصلي</string>
+    <string name="xt_video_settings_title">إعدادات المشغّل</string>
+    <string name="xt_video_display_mode">وضع العرض</string>
+    <string name="xt_video_display_fit">احتواء</string>
+    <string name="xt_video_display_zoom">ملء الشاشة</string>
+    <string name="xt_video_display_stretch">تمديد</string>
+    <string name="xt_video_playback_speed">سرعة التشغيل</string>
+    <string name="xt_video_speed_normal">عادية</string>
 </resources>

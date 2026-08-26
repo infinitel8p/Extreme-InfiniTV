@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "バックアップを復元できませんでした",
   "settings.toast.scanFail": "フォルダをスキャンできませんでした",
   "settings.toast.pickFolderFail": "フォルダピッカーを開けませんでした",
+  "settings.toast.noFolderPicker": "このデバイスにはフォルダー選択機能がありません",
+  "settings.toast.noFolderPickerHint": "ダウンロードは「ダウンロード」フォルダーに保存されます。",
   "settings.toast.pickFileFail": "ファイルピッカーを開けませんでした",
   "settings.toast.imported": "{count} 件のダウンロードをインポートしました",
   "settings.toast.checkConnLogin": "接続またはログイン情報を確認してください。",

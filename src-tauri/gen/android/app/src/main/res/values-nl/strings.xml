@@ -2,4 +2,11 @@
 <resources>
     <string name="xt_channels_title">Kanalen</string>
     <string name="native_player_unsupported_stream">Kan dit kanaal niet afspelen in de native speler</string>
+    <string name="xt_video_settings_title">Spelerinstellingen</string>
+    <string name="xt_video_display_mode">Weergavemodus</string>
+    <string name="xt_video_display_fit">Passend</string>
+    <string name="xt_video_display_zoom">Scherm vullen</string>
+    <string name="xt_video_display_stretch">Uitrekken</string>
+    <string name="xt_video_playback_speed">Afspeelsnelheid</string>
+    <string name="xt_video_speed_normal">Normaal</string>
 </resources>

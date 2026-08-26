@@ -2,4 +2,11 @@
 <resources>
     <string name="xt_channels_title">Sender</string>
     <string name="native_player_unsupported_stream">Dieser Sender kann im nativen Player nicht wiedergegeben werden</string>
+    <string name="xt_video_settings_title">Player-Einstellungen</string>
+    <string name="xt_video_display_mode">Anzeigemodus</string>
+    <string name="xt_video_display_fit">Anpassen</string>
+    <string name="xt_video_display_zoom">Bildschirm füllen</string>
+    <string name="xt_video_display_stretch">Strecken</string>
+    <string name="xt_video_playback_speed">Wiedergabegeschwindigkeit</string>
+    <string name="xt_video_speed_normal">Normal</string>
 </resources>

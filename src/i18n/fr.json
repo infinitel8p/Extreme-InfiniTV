@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "Impossible de restaurer la sauvegarde",
   "settings.toast.scanFail": "Impossible de scanner le dossier",
   "settings.toast.pickFolderFail": "Impossible d'ouvrir le sélecteur de dossier",
+  "settings.toast.noFolderPicker": "Cet appareil n'a pas de sélecteur de dossier",
+  "settings.toast.noFolderPickerHint": "Les téléchargements sont enregistrés dans le dossier Téléchargements.",
   "settings.toast.pickFileFail": "Impossible d'ouvrir le sélecteur de fichier",
   "settings.toast.imported": "{count} téléchargements importés",
   "settings.toast.checkConnLogin": "Vérifiez votre connexion ou vos identifiants.",

@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "Не удалось восстановить резервную копию",
   "settings.toast.scanFail": "Не удалось просканировать папку",
   "settings.toast.pickFolderFail": "Не удалось открыть выбор папки",
+  "settings.toast.noFolderPicker": "На этом устройстве нет выбора папки",
+  "settings.toast.noFolderPickerHint": "Загрузки сохраняются в папку «Загрузки».",
   "settings.toast.pickFileFail": "Не удалось открыть выбор файла",
   "settings.toast.imported": "Импортировано загрузок: {count}",
   "settings.toast.checkConnLogin": "Проверьте подключение или логин.",

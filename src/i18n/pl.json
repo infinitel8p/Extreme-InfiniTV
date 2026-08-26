@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "Nie udało się przywrócić kopii zapasowej",
   "settings.toast.scanFail": "Nie udało się przeskanować folderu",
   "settings.toast.pickFolderFail": "Nie udało się otworzyć selektora folderów",
+  "settings.toast.noFolderPicker": "To urządzenie nie ma selektora folderów",
+  "settings.toast.noFolderPickerHint": "Pobrane pliki są zapisywane w folderze Pobrane.",
   "settings.toast.pickFileFail": "Nie udało się otworzyć selektora plików",
   "settings.toast.imported": "Zaimportowano {count} pobrań",
   "settings.toast.checkConnLogin": "Sprawdź połączenie lub dane logowania.",

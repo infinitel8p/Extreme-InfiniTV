@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "无法恢复备份",
   "settings.toast.scanFail": "无法扫描文件夹",
   "settings.toast.pickFolderFail": "无法打开文件夹选择器",
+  "settings.toast.noFolderPicker": "此设备没有文件夹选择器",
+  "settings.toast.noFolderPickerHint": "下载内容将保存到“下载”文件夹。",
   "settings.toast.pickFileFail": "无法打开文件选择器",
   "settings.toast.imported": "已导入 {count} 个下载",
   "settings.toast.checkConnLogin": "请检查网络或登录信息。",

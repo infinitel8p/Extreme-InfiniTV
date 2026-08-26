@@ -2,4 +2,11 @@
 <resources>
     <string name="xt_channels_title">チャンネル</string>
     <string name="native_player_unsupported_stream">このチャンネルはネイティブプレーヤーで再生できません</string>
+    <string name="xt_video_settings_title">プレーヤー設定</string>
+    <string name="xt_video_display_mode">表示モード</string>
+    <string name="xt_video_display_fit">フィット</string>
+    <string name="xt_video_display_zoom">画面いっぱい</string>
+    <string name="xt_video_display_stretch">引き伸ばし</string>
+    <string name="xt_video_playback_speed">再生速度</string>
+    <string name="xt_video_speed_normal">標準</string>
 </resources>

@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "बैकअप पुनर्स्थापित नहीं हो सका",
   "settings.toast.scanFail": "फ़ोल्डर स्कैन नहीं हो सका",
   "settings.toast.pickFolderFail": "फ़ोल्डर पिकर नहीं खुल सका",
+  "settings.toast.noFolderPicker": "इस डिवाइस में फ़ोल्डर चुनने का विकल्प नहीं है",
+  "settings.toast.noFolderPickerHint": "डाउनलोड इसके बजाय डाउनलोड फ़ोल्डर में सहेजे जाते हैं।",
   "settings.toast.pickFileFail": "फ़ाइल पिकर नहीं खोला जा सका।",
   "settings.toast.imported": "{count} डाउनलोड आयात हुए",
   "settings.toast.checkConnLogin": "अपना कनेक्शन या लॉगिन जाँचें।",

@@ -15,6 +15,13 @@
     <string name="xt_video_volume_description">Volume</string>
     <string name="xt_video_next_channel_description">Next channel</string>
     <string name="xt_video_previous_channel_description">Previous channel</string>
+    <string name="xt_video_settings_title">Player settings</string>
+    <string name="xt_video_display_mode">Display mode</string>
+    <string name="xt_video_display_fit">Fit</string>
+    <string name="xt_video_display_zoom">Zoom to fill</string>
+    <string name="xt_video_display_stretch">Stretch</string>
+    <string name="xt_video_playback_speed">Playback speed</string>
+    <string name="xt_video_speed_normal">Normal</string>
     <string name="cast_media_notification_channel">Cast controls</string>
     <string name="cast_media_live_suffix">Live</string>
     <string name="cast_media_pause">Pause</string>

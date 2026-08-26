@@ -18,6 +18,7 @@ import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -33,6 +34,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.session.MediaSession
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -71,6 +73,22 @@ class VideoActivity : AppCompatActivity() {
     const val MODE_LIVE = "live"
 
     private const val PROGRESS_INTERVAL_MS = 2_000L
+
+    private const val PREF_PLAYER = "xt_native_player"
+    private const val KEY_DISPLAY_MODE = "displayMode"
+
+    // Dialog order; labels are index-matched.
+    private val DISPLAY_MODES = intArrayOf(
+      AspectRatioFrameLayout.RESIZE_MODE_FIT,
+      AspectRatioFrameLayout.RESIZE_MODE_ZOOM,
+      AspectRatioFrameLayout.RESIZE_MODE_FILL,
+    )
+    private val DISPLAY_MODE_LABELS = intArrayOf(
+      R.string.xt_video_display_fit,
+      R.string.xt_video_display_zoom,
+      R.string.xt_video_display_stretch,
+    )
+    private val PLAYBACK_SPEEDS = floatArrayOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
   }
 
   private var playerView: PlayerView? = null
@@ -95,6 +113,7 @@ class VideoActivity : AppCompatActivity() {
   private var posterUrl: String = ""
   private var resumeMs: Long = 0L
   private var tvOverscanPercent: Int = 0
+  private var displayMode: Int = AspectRatioFrameLayout.RESIZE_MODE_FIT
 
   private var channels: List<ChannelLite> = emptyList()
   private var currentChannelIndex: Int = -1
@@ -154,6 +173,7 @@ class VideoActivity : AppCompatActivity() {
     muteButton = playerView?.findViewById(R.id.tv_mute_button)
     volumeSeekBar = playerView?.findViewById(R.id.tv_volume_seekbar)
     setupCustomControls()
+    applyDisplayMode(storedDisplayMode())
 
     // Rewire on every show so the chain never points through buttons the control view hid meanwhile;
     // requestFocus is a no-op in touch mode so phone users are unaffected.
@@ -221,7 +241,69 @@ class VideoActivity : AppCompatActivity() {
         else -> false
       }
     }
+    // Replaces media3's built-in settings popup: display mode is what a TV viewer reaches for,
+    // and the tracks that popup would offer already have their own buttons in this row.
+    playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_settings)?.setOnClickListener {
+      showPlayerSettings()
+    }
     updateVolumeControlsUi(ReceiverVolumeState.volume, ReceiverVolumeState.muted)
+  }
+
+  private fun storedDisplayMode(): Int {
+    val stored = getSharedPreferences(PREF_PLAYER, 0).getInt(KEY_DISPLAY_MODE, DISPLAY_MODES[0])
+    return if (DISPLAY_MODES.contains(stored)) stored else DISPLAY_MODES[0]
+  }
+
+  private fun applyDisplayMode(resizeMode: Int) {
+    displayMode = resizeMode
+    playerView?.resizeMode = resizeMode
+    getSharedPreferences(PREF_PLAYER, 0).edit().putInt(KEY_DISPLAY_MODE, resizeMode).apply()
+  }
+
+  // Gear-button menu. Speed is VOD-only: a live edge has nowhere to run ahead to.
+  private fun showPlayerSettings() {
+    if (mode == MODE_LIVE) {
+      showDisplayModeChooser()
+      return
+    }
+    val labels = arrayOf(
+      getString(R.string.xt_video_display_mode),
+      getString(R.string.xt_video_playback_speed),
+    )
+    AlertDialog.Builder(this)
+      .setTitle(R.string.xt_video_settings_title)
+      .setItems(labels) { _, which ->
+        if (which == 0) showDisplayModeChooser() else showPlaybackSpeedChooser()
+      }
+      .show()
+  }
+
+  private fun showDisplayModeChooser() {
+    val labels = DISPLAY_MODE_LABELS.map { getString(it) }.toTypedArray()
+    AlertDialog.Builder(this)
+      .setTitle(R.string.xt_video_display_mode)
+      .setSingleChoiceItems(labels, DISPLAY_MODES.indexOf(displayMode).coerceAtLeast(0)) { dialog, which ->
+        applyDisplayMode(DISPLAY_MODES[which])
+        dialog.dismiss()
+      }
+      .setOnDismissListener { playerView?.showController() }
+      .show()
+  }
+
+  private fun showPlaybackSpeedChooser() {
+    val player = exoPlayer ?: return
+    val current = player.playbackParameters.speed
+    val labels = PLAYBACK_SPEEDS.map { speed ->
+      if (speed == 1f) getString(R.string.xt_video_speed_normal) else "${speed}x"
+    }.toTypedArray()
+    AlertDialog.Builder(this)
+      .setTitle(R.string.xt_video_playback_speed)
+      .setSingleChoiceItems(labels, PLAYBACK_SPEEDS.indexOfFirst { kotlin.math.abs(it - current) < 0.01f }) { dialog, which ->
+        player.setPlaybackSpeed(PLAYBACK_SPEEDS[which])
+        dialog.dismiss()
+      }
+      .setOnDismissListener { playerView?.showController() }
+      .show()
   }
 
   private fun setVolumeAdjustActive(active: Boolean) {
@@ -637,14 +719,19 @@ class VideoActivity : AppCompatActivity() {
     }
   }
 
-  // Pads the PlayerView itself so video, subtitles and the controller all sit inside the safe area.
+  // Insets the chrome (controller, subtitles, channel overlay) but never the picture: overscan is
+  // a safe area for things that must stay readable, and padding the PlayerView pulled the video
+  // itself off the screen edges.
   private fun applyTvOverscanPadding(percent: Int) {
     tvOverscanPercent = percent.coerceIn(0, 8)
     val metrics = resources.displayMetrics
     val horizontalPx = metrics.widthPixels * tvOverscanPercent / 100
     val verticalPx = metrics.heightPixels * tvOverscanPercent / 100
 
-    playerView?.setPadding(horizontalPx, verticalPx, horizontalPx, verticalPx)
+    playerView?.setPadding(0, 0, 0, 0)
+    playerView?.findViewById<View>(androidx.media3.ui.R.id.exo_controller)
+      ?.setPadding(horizontalPx, verticalPx, horizontalPx, verticalPx)
+    playerView?.subtitleView?.setPadding(horizontalPx, verticalPx, horizontalPx, verticalPx)
 
     val overlay = channelOverlay
     val overlayParams = overlay?.layoutParams as? FrameLayout.LayoutParams

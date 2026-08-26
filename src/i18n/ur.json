@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "بیک اپ بحال نہیں ہو سکا",
   "settings.toast.scanFail": "فولڈر اسکین نہیں ہو سکا",
   "settings.toast.pickFolderFail": "فولڈر سلیکٹر نہیں کھل سکا",
+  "settings.toast.noFolderPicker": "اس ڈیوائس میں فولڈر منتخب کرنے کی سہولت نہیں ہے",
+  "settings.toast.noFolderPickerHint": "ڈاؤن لوڈز اس کے بجائے ڈاؤن لوڈ فولڈر میں محفوظ ہوتی ہیں۔",
   "settings.toast.pickFileFail": "فائل منتخب کرنے کا ڈائیلاگ نہیں کھل سکا",
   "settings.toast.imported": "{count} ڈاؤن لوڈز درآمد ہوئے",
   "settings.toast.checkConnLogin": "اپنا کنکشن یا لاگ ان چیک کریں۔",

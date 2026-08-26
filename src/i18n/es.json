@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "No se pudo restaurar la copia",
   "settings.toast.scanFail": "No se pudo escanear la carpeta",
   "settings.toast.pickFolderFail": "No se pudo abrir el selector de carpetas",
+  "settings.toast.noFolderPicker": "Este dispositivo no tiene selector de carpetas",
+  "settings.toast.noFolderPickerHint": "Las descargas se guardan en la carpeta Descargas.",
   "settings.toast.pickFileFail": "No se pudo abrir el selector de archivos",
   "settings.toast.imported": "Se importaron {count} descargas",
   "settings.toast.checkConnLogin": "Comprueba tu conexión o tus credenciales.",
