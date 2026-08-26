@@ -315,7 +315,7 @@ export function candidateHostOrder(hosts: string[], pinnedHostIndex?: number): s
   return reachable.length > 0 ? reachable : ordered
 }
 
-function deviceHostOrder(device: TvDevice): string[] {
+export function deviceHostOrder(device: TvDevice): string[] {
   const hosts = device.hosts && device.hosts.length ? device.hosts : [device.host]
   return candidateHostOrder(hosts, device.pinnedHostIndex)
 }

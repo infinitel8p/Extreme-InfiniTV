@@ -87,23 +87,31 @@ export interface DiscoverReceiversOptions {
 
 /** Shared in-flight Rust subnet sweep so a Rescan (or a second scanner) never launches a duplicate. */
 let inFlightSweep: Promise<DiscoveredReceiver[]> | null = null
+let inFlightSweepForced = false
 
 function sweepSubnet(options: DiscoverReceiversOptions): Promise<DiscoveredReceiver[]> {
-  if (!inFlightSweep) {
-    inFlightSweep = (async () => {
-      const { invoke } = await import("@tauri-apps/api/core")
-      const swept = await invoke<DiscoveredReceiver[]>("receiver_discover", {
-        knownHosts: options.knownHosts,
-        forceSweep: options.force,
-      })
-      return swept.map(normalizeDiscovered)
-    })()
-    const clearInFlightSweepSlot = () => {
-      inFlightSweep = null
-    }
-    inFlightSweep.then(clearInFlightSweepSlot, clearInFlightSweepSlot)
+  const force = options.force === true
+  // A forced rescan queues behind an unforced sweep rather than inheriting its dropped bypass.
+  if (inFlightSweep && (!force || inFlightSweepForced)) return inFlightSweep
+  const previous = inFlightSweep
+  const sweep = (async () => {
+    if (previous) await previous.catch(() => {})
+    const { invoke } = await import("@tauri-apps/api/core")
+    const swept = await invoke<DiscoveredReceiver[]>("receiver_discover", {
+      knownHosts: options.knownHosts,
+      forceSweep: options.force,
+    })
+    return swept.map(normalizeDiscovered)
+  })()
+  inFlightSweep = sweep
+  inFlightSweepForced = force
+  const clearInFlightSweepSlot = () => {
+    if (inFlightSweep !== sweep) return
+    inFlightSweep = null
+    inFlightSweepForced = false
   }
-  return inFlightSweep
+  sweep.then(clearInFlightSweepSlot, clearInFlightSweepSlot)
+  return sweep
 }
 
 /** Starts discovery, returns a cancel function. Android polls AndroidNsd; desktop probes mDNS once via Rust. */

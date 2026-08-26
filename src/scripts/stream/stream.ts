@@ -943,7 +943,7 @@ function openChannelMenu(channel, anchor, point) {
       // The row carries the overlay, so the provider's own values come from the
       // untouched list - otherwise the dialog would show an edit as the original.
       const provider = providerChannels.find((row) => row.id === channel.id) || channel
-      const result = await openChannelEditDialog({
+      await openChannelEditDialog({
         playlistId: activePlaylistId,
         channel,
         isM3U: channelsAreM3U,
@@ -1372,6 +1372,20 @@ function scheduleApplyFilter() {
   })
 }
 
+function renderListStatus(shownCount) {
+  if (!listStatus) return
+  // Only the overlay removes rows, so the difference is exactly the hidden count.
+  const hiddenCount = Math.max(0, providerChannels.length - all.length)
+  const head =
+    shownCount === all.length
+      ? `${all.length.toLocaleString()} channels`
+      : `${shownCount.toLocaleString()} of ${all.length.toLocaleString()} channels`
+  listStatus.textContent =
+    head +
+    (hiddenCount ? ` · ${t("stream.hiddenCount", { n: hiddenCount.toLocaleString() })}` : "") +
+    (lastPaintMeta.fromCache ? ` · cached, ${fmtAge(lastPaintMeta.age)}` : "")
+}
+
 const applyFilter = () => {
   if (!searchEl || !listStatus) return
   const qnorm = normalize(searchEl.value || "")
@@ -1436,7 +1450,7 @@ const applyFilter = () => {
     : "default"
   out = sortChannelsForView(out, sortMode, scoreById)
 
-  listStatus.textContent = `${out.length.toLocaleString()} of ${all.length.toLocaleString()} channels`
+  renderListStatus(out.length)
   mountVirtualList(out)
 }
 
@@ -1498,13 +1512,7 @@ function paintChannels(data, fromCache, age, isM3U = false) {
   providerChannels = Array.isArray(data) ? data : []
   lastPaintMeta = { fromCache, age }
   all = applyChannelOverrides(providerChannels, getChannelOverrides(activePlaylistId), { isM3U })
-  // Only the overlay removes rows, so the difference is exactly the hidden count.
-  // Without this the list is a dead end: channels vanish with nothing saying why.
-  const hiddenCount = Math.max(0, providerChannels.length - all.length)
-  listStatus.textContent =
-    `${all.length.toLocaleString()} channels` +
-    (hiddenCount ? ` · ${t("stream.hiddenCount", { n: hiddenCount.toLocaleString() })}` : "") +
-    (fromCache ? ` · cached, ${fmtAge(age)}` : "")
+  renderListStatus(all.length)
   picker.rerender()
   applyFilter()
   maybeAutoplayFromUrl()
@@ -3898,6 +3906,10 @@ function releaseLocalPlaybackForHandoff() {
     })
   }
   suppressPauseTrackingUntilMs = Date.now() + 500
+  if (qualityChipDetach) {
+    qualityChipDetach()
+    qualityChipDetach = null
+  }
   try { vjs?.pause?.() } catch {}
   try { vjs?.reset?.() } catch {}
   clearStallSentinel()

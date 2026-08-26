@@ -186,11 +186,13 @@ function init(): void {
   })
 
   addBtn?.addEventListener("click", () => {
-    void openTvDevicePicker({ mode: "add" }).then((device) => {
-      if (!device) return
-      renderDevices()
-      void probeAll()
-    })
+    openTvDevicePicker({ mode: "add" })
+      .then((device) => {
+        if (!device) return
+        renderDevices()
+        void probeAll()
+      })
+      .catch(log.warn)
   })
 
   stopBtn?.addEventListener("click", () => {

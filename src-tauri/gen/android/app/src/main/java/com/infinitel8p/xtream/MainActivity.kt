@@ -55,6 +55,7 @@ import androidx.annotation.RequiresApi
 import app.tauri.plugin.PluginManager
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -1602,8 +1603,9 @@ class CastMediaBridge(
 
   private var mediaSession: MediaSessionCompat? = null
   private var receiverRegistered = false
+  @Volatile
   private var lastArtworkUrl: String? = null
-  private var artworkGeneration = 0
+  private val artworkGeneration = AtomicInteger(0)
 
   private val actionReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -1642,7 +1644,7 @@ class CastMediaBridge(
   @JavascriptInterface
   fun clear() {
     activity.runOnUiThread {
-      artworkGeneration++
+      artworkGeneration.incrementAndGet()
       lastArtworkUrl = null
       NotificationManagerCompat.from(activity).cancel(NOTIFICATION_ID)
       mediaSession?.isActive = false
@@ -1826,7 +1828,7 @@ class CastMediaBridge(
     hasNext: Boolean,
     hasPrev: Boolean,
   ) {
-    val generation = ++artworkGeneration
+    val generation = artworkGeneration.incrementAndGet()
     Thread {
       val bitmap = try {
         URL(url).openConnection().run {
@@ -1838,10 +1840,10 @@ class CastMediaBridge(
         Log.w(TAG, "artwork fetch failed: $error")
         null
       }
-      if (bitmap == null || generation != artworkGeneration) return@Thread
+      if (bitmap == null || generation != artworkGeneration.get()) return@Thread
       activity.runOnUiThread {
         val session = mediaSession
-        if (generation != artworkGeneration || session == null) return@runOnUiThread
+        if (generation != artworkGeneration.get() || session == null) return@runOnUiThread
         session.setMetadata(buildMetadata(title, deviceName, bitmap))
         postNotification(title, deviceName, isLive, isPlaying, hasNext, hasPrev, session, bitmap)
       }
@@ -1913,6 +1915,8 @@ class MainActivity : TauriActivity() {
 
   companion object {
     private const val RENDER_GONE_REPEAT_WINDOW_MS = 60_000L
+    // Frees the back guard if the WebView dies before evaluateJavascript answers.
+    private const val BACK_JS_TIMEOUT_MS = 1_500L
     @Volatile
     private var lastRenderGoneAt: Long = 0L
   }
@@ -1949,6 +1953,8 @@ class MainActivity : TauriActivity() {
     onBackPressedDispatcher.addCallback(
       this,
       object : OnBackPressedCallback(true) {
+        private var awaitingJsBack = false
+
         override fun handleOnBackPressed() {
           if (fullscreenView != null) {
             (hostedWebView?.webChromeClient as? WebChromeClient)?.onHideCustomView()
@@ -1961,9 +1967,16 @@ class MainActivity : TauriActivity() {
             isEnabled = true
             return
           }
+          // isEnabled only flips inside the callback, so a second press mid-round-trip would pop twice.
+          if (awaitingJsBack) return
+          awaitingJsBack = true
+          val releaseGuard = Runnable { awaitingJsBack = false }
+          webView.postDelayed(releaseGuard, BACK_JS_TIMEOUT_MS)
           webView.evaluateJavascript(
             "window.__xtHandleBack ? String(window.__xtHandleBack()) : \"false\""
           ) { result ->
+            webView.removeCallbacks(releaseGuard)
+            awaitingJsBack = false
             if (result == "true" || result == "\"true\"") return@evaluateJavascript
             if (webView.canGoBack()) {
               webView.goBack()
@@ -2211,6 +2224,8 @@ class MainActivity : TauriActivity() {
 
   // Tear down the throwaway sniffer WebView instead of leaving the remote page running until its timeout.
   override fun onDestroy() {
+    // Closes over this activity's WebView, so a recreate() would leave it swallowing every receiver event.
+    if (receiverSessionActive) EventQueue.pushListener = null
     snifferBridge?.activityDestroyed()
     nsdBridge?.activityDestroyed()
     castMediaBridge?.activityDestroyed()

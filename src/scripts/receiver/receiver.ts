@@ -362,12 +362,23 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
   reportState({ state: "error", error: "player-unavailable", positionSeconds: 0 })
 }
 
+let playGeneration = 0
+let playChain: Promise<void> = Promise.resolve()
+
+/** Serialized: activeEngine is set only after play() resolves, so concurrent plays double-mount. */
+function enqueuePlay(rawDescriptor: unknown): void {
+  const generation = ++playGeneration
+  playChain = playChain
+    .then(() => (generation === playGeneration ? onPlay(rawDescriptor) : undefined))
+    .catch((err) => log.warn("[xt:receiver] play failed:", err))
+}
+
 function consumePendingPlay(): void {
   try {
     const raw = sessionStorage.getItem(PENDING_PLAY_KEY)
     if (!raw) return
     sessionStorage.removeItem(PENDING_PLAY_KEY)
-    void onPlay(JSON.parse(raw))
+    enqueuePlay(JSON.parse(raw))
   } catch (err) {
     log.warn("[xt:receiver] pending play parse failed:", err)
   }
@@ -391,7 +402,7 @@ function isPlayerActive(): boolean {
 
 errorRetryEl?.addEventListener("click", () => {
   if (lastPlayPayload == null) return
-  void onPlay(lastPlayPayload)
+  enqueuePlay(lastPlayPayload)
 })
 
 document.addEventListener("keydown", (event) => {
@@ -427,6 +438,9 @@ document.addEventListener("keydown", (event) => {
 
 function exitReceiver(): void {
   setKeepScreenOn(false)
+  // The native engine plays in a separate activity that outlives this page.
+  activeEngine?.teardown()
+  activeEngine = null
   // Server keeps running in the background; only auto-boot-in is suppressed.
   try { sessionStorage.setItem("xt_receiver_exited", "1") } catch {}
   window.location.href = "/"
@@ -457,7 +471,7 @@ mountAmbient()
 
 void listen<ReceiverStatus>("xt:receiver-status", (event) => renderStatus(event.payload))
 void listen<{ deviceName: string }>("xt:receiver-paired", (event) => showPairedFlash(event.payload?.deviceName || ""))
-void listen<ReceiverPlayPayload>("xt:receiver-play", (event) => void onPlay(event.payload?.descriptor))
+void listen<ReceiverPlayPayload>("xt:receiver-play", (event) => enqueuePlay(event.payload?.descriptor))
 void listen<ReceiverControlPayload>("xt:receiver-control", (event) => onControl(event.payload))
 void listen<{ entries: unknown }>("xt:receiver-ambient", (event) => ambient?.notePushedManifest(event.payload?.entries))
 

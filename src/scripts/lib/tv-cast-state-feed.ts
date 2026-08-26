@@ -3,6 +3,7 @@ import {
   appendStreamedReceiverLog,
   getCastSession,
   sessionAsDevice,
+  deviceHostOrder,
   fetchCastState,
   fetchCastStateWithFallback,
   formatHostForUrl,
@@ -169,7 +170,8 @@ let firstMessageTimer: ReturnType<typeof setTimeout> | null = null
 let lastHealth: CastFeedHealth | null = null
 
 function sessionKey(session: CastSession): string {
-  return `${session.deviceId}:${session.host}:${session.port}:${session.key}`
+  // pinnedHostIndex included so a host-fallback pin rebinds the socket instead of retrying the dead host.
+  return `${session.deviceId}:${session.host}:${session.port}:${session.key}:${session.pinnedHostIndex ?? 0}`
 }
 
 function documentHidden(): boolean {
@@ -294,7 +296,8 @@ function connectWebSocket(isInitial: boolean): void {
   let socket: WebSocket
   try {
     if (typeof WebSocket === "undefined") throw new Error("WebSocket unsupported")
-    const url = `ws://${formatHostForUrl(device.host)}:${device.port}/events?key=${encodeURIComponent(device.key)}`
+    const host = deviceHostOrder(device)[0] ?? device.host
+    const url = `ws://${formatHostForUrl(host)}:${device.port}/events?key=${encodeURIComponent(device.key)}`
     socket = new WebSocket(url)
   } catch (err) {
     log.warn("[xt:cast-state-feed] WebSocket unavailable:", err)
@@ -388,6 +391,7 @@ function syncToSession(): void {
   }
   if (boundSession && sessionKey(boundSession) === sessionKey(session)) {
     boundSession = session
+    boundDevice = sessionAsDevice(session)
     return
   }
   unbind()

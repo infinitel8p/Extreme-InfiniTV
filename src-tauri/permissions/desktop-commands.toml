@@ -14,6 +14,7 @@ commands.allow = [
     "discord_clear",
     "discord_disconnect",
     "launch_external_player",
+    "stop_external_player",
     "sandbox_runtime",
     "discover_external_players",
     "receiver_firewall_status",

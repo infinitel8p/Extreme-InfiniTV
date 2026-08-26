@@ -368,11 +368,14 @@ export function createEmbeddedReceiverEngine(
     })
     handle.on("pause", () => {
       if (tearingDown) return
+      clearLoadingWatchdog()
       dom.pausedEl?.classList.remove("hidden")
       report({ state: "paused" })
     })
     handle.on("waiting", () => {
       showLoading(true)
+      // The initial arm is cleared on first playing, so a mid-stream stall had no timeout at all.
+      armLoadingWatchdog(handle)
       report({ state: "buffering" })
     })
     handle.on("ended", () => {

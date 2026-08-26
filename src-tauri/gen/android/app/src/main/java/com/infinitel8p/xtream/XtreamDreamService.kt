@@ -125,6 +125,7 @@ class XtreamDreamService : DreamService() {
   private var kenBurnsAnimator: AnimatorSet? = null
   private var brandBounceAnimator: ValueAnimator? = null
   private var fallbackActive = false
+  private var dreaming = false
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
@@ -138,9 +139,11 @@ class XtreamDreamService : DreamService() {
   override fun onDreamingStarted() {
     super.onDreamingStarted()
     Log.d(TAG, "onDreamingStarted")
+    dreaming = true
     Thread {
       val data = readManifest()
-      mainHandler.post { onManifestLoaded(data) }
+      // A CEC wake can stop the dream before this lands; without the flag it rebuilds the ImageLoader.
+      mainHandler.post { if (dreaming) onManifestLoaded(data) }
     }.start()
   }
 
@@ -702,6 +705,7 @@ class XtreamDreamService : DreamService() {
   }
 
   private fun teardown() {
+    dreaming = false
     if (activeDream === this) activeDream = null
     pendingRunnables.forEach { mainHandler.removeCallbacks(it) }
     pendingRunnables.clear()
