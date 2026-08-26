@@ -15,6 +15,10 @@ on:
       - ".github/workflows/tvdb-proxy.yml"
   workflow_dispatch:
 
+# Only checkout needs the token; the Cloudflare deploy uses its own secret.
+permissions:
+  contents: read
+
 concurrency:
   group: tvdb-proxy
   cancel-in-progress: false
@@ -32,12 +36,15 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          # This job runs wrangler through npx and never installs pnpm, but v5
+          # auto-detects the packageManager field and fails looking for it.
+          package-manager-cache: false
 
       - name: Typecheck and bundle
         working-directory: proxy
         run: |
           npx --yes wrangler@4.126.0 types
-          npx --yes tsc --noEmit -p tsconfig.json
+          npx --yes --package typescript@6.0.3 -- tsc --noEmit -p tsconfig.json
           npx --yes wrangler@4.126.0 deploy --dry-run --outdir=.wrangler/dry-run
 
       - name: Deploy
