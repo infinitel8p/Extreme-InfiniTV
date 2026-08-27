@@ -3,15 +3,17 @@ import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { getEffectiveReceiverDeviceName, getReceiverEngine, getReceiverId } from "@/scripts/lib/app-settings.js"
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers"
-import { isRtspSrc, validateCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
+import { validateCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
 import { log, redactUrl } from "@/scripts/lib/log.js"
 import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
 import { getActiveEntry } from "@/scripts/lib/creds.js"
+import { isTvDevice } from "@/scripts/lib/tv-detect"
 import { mountReceiverAmbient, type ReceiverAmbient } from "@/scripts/receiver/ambient"
 import { startReceiverKeepAlive, stopReceiverKeepAlive } from "@/scripts/lib/receiver-keep-alive"
 import { receiverWakeAvailable, wakeReceiverApp } from "@/scripts/lib/receiver-wake"
 import { startReceiverLogStream, stopReceiverLogStream } from "@/scripts/lib/receiver-log-stream"
+import { setKeepScreenOn } from "@/scripts/lib/keep-screen-on"
 import {
   createAndroidNativeReceiverEngine,
   createEmbeddedReceiverEngine,
@@ -20,8 +22,15 @@ import {
   type ReceiverEngine,
   type ReceiverEngineCallbacks,
   type ReceiverPlaybackState,
+  type ReceiverPlayOptions,
   type ReceiverStatePartial,
 } from "@/scripts/receiver/engines"
+import {
+  playWithFallback,
+  selectEngine,
+  type EngineRegistry,
+  type ReceiverEnginePreference,
+} from "@/scripts/receiver/engine-select"
 import {
   formatReceiverAddress,
   formatReceiverPairCode,
@@ -211,10 +220,6 @@ function showSeekFlash(deltaSeconds: number): void {
   seekFlashTimer = setTimeout(() => seekFlashEl.classList.add("hidden"), 900)
 }
 
-function setKeepScreenOn(enabled: boolean): void {
-  try { window.AndroidVideo?.setKeepScreenOn?.(enabled) } catch {}
-}
-
 function reportState(partial: ReceiverStatePartial): void {
   if (partial.state && partial.state !== currentPlaybackState) {
     log.info("[xt:receiver] state", {
@@ -285,20 +290,14 @@ const androidNativeEngine = androidNativePlayerAvailable
   ? createAndroidNativeReceiverEngine(engineCallbacks)
   : null
 
-function pickEngine(descriptor: CastDescriptorV1): ReceiverEngine {
-  if (!androidNativeEngine) return embeddedEngine
-  // The WebView has no RTSP at all - only ExoPlayer can try these, whatever the preference says.
-  if (isRtspSrc(descriptor.src)) return androidNativeEngine
-  const preference = getReceiverEngine()
-  if (preference === "embedded") return embeddedEngine
-  if (preference === "native") return androidNativeEngine
-  // The native ExoPlayer engine ignores timelineOffsetSeconds; catch-up needs the embedded engine to land on the right offset.
-  const hasTimelineOffset = typeof descriptor.timelineOffsetSeconds === "number" && descriptor.timelineOffsetSeconds > 0
-  return descriptor.drm || hasTimelineOffset ? embeddedEngine : androidNativeEngine
-}
+const engineRegistry: EngineRegistry = { embedded: embeddedEngine, native: androidNativeEngine }
 
-async function startWithEngine(engine: ReceiverEngine, descriptor: CastDescriptorV1): Promise<boolean> {
-  const started = await engine.play(descriptor)
+async function startWithEngine(
+  engine: ReceiverEngine,
+  descriptor: CastDescriptorV1,
+  playOptions?: ReceiverPlayOptions,
+): Promise<boolean> {
+  const started = await engine.play(descriptor, playOptions)
   if (started) activeEngine = engine
   return started
 }
@@ -339,10 +338,11 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
       : null
   )
 
-  const engine = pickEngine(descriptor)
+  const enginePreference = getReceiverEngine() as ReceiverEnginePreference
+  const engine = selectEngine(engineRegistry, descriptor, enginePreference)
   log.info("[xt:receiver] play", {
     engine: engine === androidNativeEngine ? "android-native" : "embedded",
-    enginePref: getReceiverEngine(),
+    enginePref: enginePreference,
     isLive: descriptor.isLive,
     mime: descriptor.mime,
     drm: descriptor.drm?.drmScheme ?? null,
@@ -351,13 +351,14 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
     resumeSeconds: descriptor.resumeSeconds ?? 0,
     src: redactUrl(descriptor.src),
   })
-  const started = await startWithEngine(engine, descriptor)
+
+  const { started } = await playWithFallback(engineRegistry, descriptor, {
+    preference: enginePreference,
+    start: startWithEngine,
+    onFallback: () => log.warn("[xt:receiver] native playback unavailable, falling back to embedded playback"),
+  })
   if (started) return
 
-  if (engine === androidNativeEngine && !isRtspSrc(descriptor.src)) {
-    log.warn("[xt:receiver] native playback unavailable, falling back to embedded playback")
-    if (await startWithEngine(embeddedEngine, descriptor)) return
-  }
   log.error("[xt:receiver] no engine could start playback")
   reportState({ state: "error", error: "player-unavailable", positionSeconds: 0 })
 }
@@ -443,7 +444,7 @@ function exitReceiver(): void {
   activeEngine = null
   // Server keeps running in the background; only auto-boot-in is suppressed.
   try { sessionStorage.setItem("xt_receiver_exited", "1") } catch {}
-  window.location.href = "/"
+  window.location.href = isTvDevice() ? "/tv" : "/"
 }
 
 window.addEventListener("pagehide", () => setKeepScreenOn(false))

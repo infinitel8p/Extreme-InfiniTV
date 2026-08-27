@@ -132,6 +132,7 @@ import {
   EPG_LOADED_EVENT,
   EPG_OFFSET_EVENT,
 } from "@/scripts/lib/epg-data.js"
+import { computeNowNext, formatTimeRange } from "@/scripts/lib/now-next.ts"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { maybeB64ToUtf8, escapeHtml } from "@/scripts/lib/b64-utf8.ts"
 import {
@@ -526,24 +527,12 @@ function mountVirtualList(items) {
   renderVirtual()
 }
 
-function fmtNowTimeRange(start, stop) {
-  try {
-    const fmt = new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    })
-    return `${fmt.format(start)}–${fmt.format(stop)}`
-  } catch {
-    return ""
-  }
-}
-
 function paintNowSlot(slot, playBtn, ch) {
   if (!slot) return
   slot.replaceChildren()
   const state = activePlaylistId ? getProgrammesSync(activePlaylistId) : null
   if (!state) return
-  const { current, next } = getNowNextForChannel(state.programmes, ch, activePlaylistId)
+  const { current, next } = computeNowNext(state.programmes, ch, activePlaylistId)
   if (!current && !next) return
 
   if (current) {
@@ -556,12 +545,7 @@ function paintNowSlot(slot, playBtn, ch) {
     bar.className = "channel-now-bar"
     bar.setAttribute("aria-hidden", "true")
     const fill = document.createElement("i")
-    const span = current.stop - current.start
-    const pct =
-      span > 0
-        ? Math.max(0, Math.min(100, ((Date.now() - current.start) / span) * 100))
-        : 0
-    fill.style.width = `${pct}%`
+    fill.style.width = `${current.progress * 100}%`
     bar.appendChild(fill)
     slot.appendChild(bar)
   } else if (next) {
@@ -574,10 +558,10 @@ function paintNowSlot(slot, playBtn, ch) {
   if (playBtn) {
     const parts = [ch.name || ""]
     if (current) {
-      parts.push(`Now: ${current.title} (${fmtNowTimeRange(current.start, current.stop)})`)
+      parts.push(`Now: ${current.title} (${formatTimeRange(current.start, current.stop)})`)
     }
     if (next) {
-      parts.push(`Next: ${next.title} (${fmtNowTimeRange(next.start, next.stop)})`)
+      parts.push(`Next: ${next.title} (${formatTimeRange(next.start, next.stop)})`)
     }
     playBtn.title = parts.filter(Boolean).join("\n")
   }

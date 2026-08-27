@@ -1,0 +1,37 @@
+/* TV-only rules for /tv/*: root type scale, overscan padding, focus ring, keepFocusedInView transform. */
+
+html[data-tv-ui] {
+  font-size: calc(1.15rem * var(--xt-font-scale, 1));
+  /* Buffer so focus-visible outlines/rings aren't clipped by ancestor overflow:hidden/auto. */
+  --tv-focus-pad: 0.875rem;
+}
+
+/* Mirrors the overscan padding Layout.astro / ReceiverLayout.astro apply to their own body. */
+html[data-tv-overscan] body {
+  padding-top: max(env(safe-area-inset-top), calc(var(--xt-tv-overscan, 0) * 1vh));
+  padding-right: max(env(safe-area-inset-right), calc(var(--xt-tv-overscan, 0) * 1vw));
+  padding-bottom: calc(var(--xt-tv-overscan, 0) * 1vh);
+  padding-left: calc(var(--xt-tv-overscan, 0) * 1vw);
+}
+html[data-tauri-desktop][data-tv-overscan] body {
+  padding-top: max(
+    env(safe-area-inset-top),
+    calc(var(--xt-titlebar-h, 0px) + var(--xt-tv-overscan, 0) * 1vh)
+  );
+}
+
+/* Higher specificity than global.css's html[data-tv] rule so it wins regardless of CSS order. */
+html[data-tv-ui][data-tv] :is(a, button, summary, input, textarea, select, [tabindex]):focus-visible {
+  outline: 4px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+/* focus.ts keepFocusedInView() toggles this class before translating the track. */
+.tv-keep-in-view-animated {
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* focus.ts keepFocusedInView() adds this so a static track becomes its children's offsetParent. */
+.tv-keep-in-view-track {
+  position: relative;
+}
