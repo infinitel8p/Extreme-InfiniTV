@@ -539,6 +539,7 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
           updaterJsonPreferNsis: true
+          retryAttempts: 2
 
       # Windows x64 only - MSIX is x64-only and the Store product targets that
       # architecture. Building always runs; submission needs Store secrets.

@@ -308,6 +308,7 @@ jobs:
           releaseId: ${{ needs.create-beta-release.outputs.release_id }}
           args: ${{ matrix.args }}
           updaterJsonPreferNsis: true
+          retryAttempts: 2
 
   build-android:
     needs: create-beta-release
