@@ -25,6 +25,8 @@ import {
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
 import { resolveTmdbId, fetchMovieEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
+import { parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
+import { fillHeroGaps, heroFieldsNeedFill, resolveTvdbFallback, type DetailHeroFields } from "@/scripts/tv/detail-enrich.ts"
 import { isTmdbActive } from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating, parseHmsToSeconds, ratingSortValue } from "@/scripts/lib/format.ts"
 import { parseNamePrefix, languageTagLabel, prefixQualityTokens } from "@/scripts/lib/language-tags.ts"
@@ -313,6 +315,24 @@ const view: TvView = {
       renderActions()
     }
 
+    function currentHeroFields(): DetailHeroFields {
+      return {
+        backdropUrl: heroBackdropUrl,
+        overview: heroOverview,
+        genres: heroGenres,
+        ratingText: heroRatingText,
+        yearText: heroYearText,
+      }
+    }
+
+    function applyHeroFields(fields: DetailHeroFields): void {
+      heroBackdropUrl = fields.backdropUrl
+      heroOverview = fields.overview
+      heroGenres = fields.genres
+      heroRatingText = fields.ratingText
+      heroYearText = fields.yearText
+    }
+
     async function enrichFromTmdb(requestId: number): Promise<void> {
       if (!movie || !activePlaylistId || !isTmdbActive()) return
       try {
@@ -325,15 +345,29 @@ const view: TvView = {
         if (requestId !== enrichRequestId || !tmdbId) return
         const enrichment = await fetchMovieEnrichment(tmdbId)
         if (requestId !== enrichRequestId || !enrichment) return
-        if (!heroBackdropUrl && enrichment.backdropUrl) heroBackdropUrl = enrichment.backdropUrl
-        if (!heroOverview && enrichment.overview) heroOverview = enrichment.overview
-        if (!heroGenres && enrichment.genres?.length) heroGenres = enrichment.genres.join(", ")
-        if (!heroRatingText && enrichment.voteAverage) heroRatingText = fmtImdbRating(enrichment.voteAverage)
-        if (!heroYearText && enrichment.year) heroYearText = String(enrichment.year)
+        applyHeroFields(fillHeroGaps(currentHeroFields(), enrichment))
+        if (!movie.logo && enrichment.posterUrl) movie.logo = enrichment.posterUrl
         renderHero()
       } catch (err) {
         log.warn("[xt:tv-movie-detail] TMDb enrichment failed:", err)
       }
+    }
+
+    // No isTmdbActive() gate: the TheTVDB proxy enriches without a user key.
+    async function enrichFromTvdb(requestId: number): Promise<void> {
+      if (!movie || !activePlaylistId || !heroFieldsNeedFill(currentHeroFields())) return
+      const data = vodInfoRaw
+      const movieData = data?.movie_data || data?.info || data || {}
+      const info = data?.info || data?.movie_data || {}
+      const providerTmdbId = parseProviderTmdbId(info) ?? parseProviderTmdbId(movieData) ?? movie.tmdb ?? null
+      const filled = await resolveTvdbFallback(providerTmdbId, "movie", {
+        name: movie.name,
+        year: parseInt(String(movie.year), 10) || null,
+      })
+      if (requestId !== enrichRequestId || !filled) return
+      applyHeroFields(fillHeroGaps(currentHeroFields(), filled.enrichment))
+      if (!movie.logo && filled.enrichment.posterUrl) movie.logo = filled.enrichment.posterUrl
+      renderHero()
     }
 
     async function loadSimilar(): Promise<void> {
@@ -476,7 +510,9 @@ const view: TvView = {
         }
       }
 
-      void enrichFromTmdb(requestId)
+      await enrichFromTmdb(requestId)
+      if (destroyed || requestId !== enrichRequestId) return
+      void enrichFromTvdb(requestId)
     }
 
     void boot()

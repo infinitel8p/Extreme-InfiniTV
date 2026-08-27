@@ -28,6 +28,17 @@ import {
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
 import { resolveTmdbId, fetchSeriesEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
+import { parseProviderTmdbId, type TvdbSeasonRef } from "@/scripts/lib/tvdb-proxy.ts"
+import type { TvdbEpisode } from "@/scripts/lib/tvdb-contract"
+import {
+  fillHeroGaps,
+  heroFieldsNeedFill,
+  resolveTvdbFallback,
+  resolveTvdbSeason,
+  patchEpisodeFromTvdb,
+  type DetailHeroFields,
+} from "@/scripts/tv/detail-enrich.ts"
+import { isGenericEpisodeTitle } from "@/scripts/lib/episode-title.ts"
 import { isTmdbActive } from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating, ratingSortValue, formatPaddedHms } from "@/scripts/lib/format.ts"
 import { parseNamePrefix, languageTagLabel, prefixQualityTokens } from "@/scripts/lib/language-tags.ts"
@@ -143,6 +154,7 @@ const view: TvView = {
     let activePlaylistId = ""
     let creds: Creds = { host: "", port: "", user: "", pass: "" }
     let series: CatalogRow | null = null
+    let seriesInfoRaw: any = null
     let episodes: EpisodeRow[] = []
     let currentSeason: number | null = deepLinkSeason
     let nextUp: Awaited<ReturnType<typeof resolveSeriesNextUp>> = null
@@ -152,6 +164,10 @@ const view: TvView = {
     let heroRatingText = ""
     let heroYearText = ""
     let enrichRequestId = 0
+    let resolvedTmdbId: number | null = null
+    let resolvedTvdbId: number | null = null
+    let providerTmdbIdForTvdb: number | null = null
+    let seasonEnrichRequestId = 0
     let focusedDeepLinkOnce = deepLinkSeason == null
     let focusedPrimaryOnce = false
     let focusPlaced = false
@@ -430,6 +446,7 @@ const view: TvView = {
           currentSeason = seasonNumber
           renderSeasons()
           renderEpisodes()
+          void enrichSeasonFromTvdb(seasonNumber)
         })
         seasonsSection.appendChild(chip)
       }
@@ -473,6 +490,7 @@ const view: TvView = {
     }
 
     function applySeriesInfo(data: any): void {
+      seriesInfoRaw = data
       const info = data?.info || {}
 
       const apiName = info.name || info.title || ""
@@ -514,6 +532,24 @@ const view: TvView = {
       renderEpisodes()
     }
 
+    function currentHeroFields(): DetailHeroFields {
+      return {
+        backdropUrl: heroBackdropUrl,
+        overview: heroOverview,
+        genres: heroGenres,
+        ratingText: heroRatingText,
+        yearText: heroYearText,
+      }
+    }
+
+    function applyHeroFields(fields: DetailHeroFields): void {
+      heroBackdropUrl = fields.backdropUrl
+      heroOverview = fields.overview
+      heroGenres = fields.genres
+      heroRatingText = fields.ratingText
+      heroYearText = fields.yearText
+    }
+
     async function enrichFromTmdb(requestId: number): Promise<void> {
       if (!series || !activePlaylistId || !isTmdbActive()) return
       try {
@@ -523,18 +559,82 @@ const view: TvView = {
           year: series.year || null,
           providerTmdbId: series.tmdb,
         })
-        if (requestId !== enrichRequestId || !tmdbId) return
+        if (requestId !== enrichRequestId) return
+        resolvedTmdbId = tmdbId
+        if (!tmdbId) return
         const enrichment = await fetchSeriesEnrichment(tmdbId)
         if (requestId !== enrichRequestId || !enrichment) return
-        if (!heroBackdropUrl && enrichment.backdropUrl) heroBackdropUrl = enrichment.backdropUrl
-        if (!heroOverview && enrichment.overview) heroOverview = enrichment.overview
-        if (!heroGenres && enrichment.genres?.length) heroGenres = enrichment.genres.join(", ")
-        if (!heroRatingText && enrichment.voteAverage) heroRatingText = fmtImdbRating(enrichment.voteAverage)
-        if (!heroYearText && enrichment.year) heroYearText = String(enrichment.year)
+        applyHeroFields(fillHeroGaps(currentHeroFields(), enrichment))
+        if (!series.logo && enrichment.posterUrl) series.logo = enrichment.posterUrl
         renderHero()
       } catch (err) {
         log.warn("[xt:tv-series-detail] TMDb enrichment failed:", err)
       }
+    }
+
+    function episodeNeedsTvdbFill(entry: EpisodeRow): boolean {
+      const fallbackTitle = t("series.episode.fallback", { n: entry.episodeNum })
+      return isGenericEpisodeTitle(entry.title, { seriesName: series?.name, fallbackTitle }) || !entry.thumbUrl || !entry.plot
+    }
+
+    function patchSeasonEpisodesFromTvdb(seasonNumber: number, tvdbEpisodes: TvdbEpisode[]): void {
+      if (!series || !tvdbEpisodes.length) return
+      const byNumber = new Map(tvdbEpisodes.map((episode) => [episode.episodeNumber, episode]))
+      let changed = false
+      episodes = episodes.map((entry) => {
+        if (entry.season !== seasonNumber) return entry
+        const tvdbEpisode = byNumber.get(entry.episodeNum)
+        if (!tvdbEpisode) return entry
+        const fallbackTitle = t("series.episode.fallback", { n: entry.episodeNum })
+        const isGenericTitle = isGenericEpisodeTitle(entry.title, { seriesName: series?.name, fallbackTitle })
+        const patched = patchEpisodeFromTvdb(
+          { title: entry.title ?? null, thumbUrl: entry.thumbUrl, plot: entry.plot },
+          tvdbEpisode,
+          isGenericTitle
+        )
+        if (patched.title === entry.title && patched.thumbUrl === entry.thumbUrl && patched.plot === entry.plot) return entry
+        changed = true
+        return { ...entry, title: patched.title, thumbUrl: patched.thumbUrl, plot: patched.plot }
+      })
+      if (changed && currentSeason === seasonNumber) renderEpisodes()
+    }
+
+    // Re-run per season shown (initial paint, season switch), since TheTVDB models broadcast
+    // seasons TMDb files as one flat run and providers can leave episode titles/thumbs empty.
+    async function enrichSeasonFromTvdb(seasonNumber: number): Promise<void> {
+      if (!series || !activePlaylistId) return
+      const seasonRef: TvdbSeasonRef = resolvedTvdbId
+        ? { tvdbId: resolvedTvdbId }
+        : { tmdbId: resolvedTmdbId ?? providerTmdbIdForTvdb }
+      if (!seasonRef.tvdbId && !seasonRef.tmdbId) return
+      const seasonEpisodes = episodes.filter((entry) => entry.season === seasonNumber)
+      if (!seasonEpisodes.length || !seasonEpisodes.some(episodeNeedsTvdbFill)) return
+      const requestId = ++seasonEnrichRequestId
+      const tvdbEpisodes = await resolveTvdbSeason(seasonRef, seasonNumber)
+      if (destroyed || requestId !== seasonEnrichRequestId) return
+      patchSeasonEpisodesFromTvdb(seasonNumber, tvdbEpisodes)
+    }
+
+    // No isTmdbActive() gate: the TheTVDB proxy enriches without a user key.
+    async function enrichFromTvdb(requestId: number): Promise<void> {
+      if (!series || !activePlaylistId) return
+      const info = seriesInfoRaw?.info || {}
+      providerTmdbIdForTvdb = resolvedTmdbId ?? parseProviderTmdbId(info) ?? series.tmdb ?? null
+
+      if (heroFieldsNeedFill(currentHeroFields())) {
+        const filled = await resolveTvdbFallback(providerTmdbIdForTvdb, "series", {
+          name: series.name,
+          year: parseInt(String(series.year), 10) || null,
+        })
+        if (requestId === enrichRequestId && filled) {
+          resolvedTvdbId = filled.tvdbId
+          applyHeroFields(fillHeroGaps(currentHeroFields(), filled.enrichment))
+          if (!series.logo && filled.enrichment.posterUrl) series.logo = filled.enrichment.posterUrl
+          renderHero()
+        }
+      }
+      if (requestId !== enrichRequestId) return
+      if (currentSeason != null) void enrichSeasonFromTvdb(currentSeason)
     }
 
     async function loadSimilar(): Promise<void> {
@@ -672,10 +772,13 @@ const view: TvView = {
         log.warn("[xt:tv-series-detail] series_info fetch failed:", err)
       }
 
-      void enrichFromTmdb(requestId)
       // loadSeriesEpisodes/flattenSeriesEpisodes power resolveSeriesNextUp's own lookup;
       // touching them here keeps their cache warm for the neighbor-episode helpers.
       void loadSeriesEpisodes(activePlaylistId, seriesId)
+
+      await enrichFromTmdb(requestId)
+      if (destroyed || requestId !== enrichRequestId) return
+      void enrichFromTvdb(requestId)
     }
 
     void boot()
