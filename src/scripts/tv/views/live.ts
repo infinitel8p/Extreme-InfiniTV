@@ -1,6 +1,6 @@
 // Live TV: groups | channels | programme guide, three spatial-nav columns.
 import type { TvView, TvViewContext } from "@/scripts/tv/router"
-import { t, getActiveLocale, LOCALE_EVENT } from "@/scripts/lib/i18n"
+import { t, LOCALE_EVENT } from "@/scripts/lib/i18n"
 import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
 import { getActiveEntry } from "@/scripts/lib/creds.js"
 import { resolvePlaylistCreds } from "@/scripts/lib/tv-cast-live.js"
@@ -15,26 +15,24 @@ import {
   getCategorySort,
   getViewSort,
 } from "@/scripts/lib/preferences.js"
-import {
-  buildCastChannelGroups,
-  searchCastChannels,
-  type CastChannel,
-  type CastChannelGroup,
-} from "@/scripts/lib/tv-cast-channel-list"
+import { buildCastChannelGroups, searchCastChannels, type CastChannelGroup } from "@/scripts/lib/tv-cast-channel-list"
 import { getProgrammesSync, loadProgrammes, effectiveTvgId, EPG_LOADED_EVENT } from "@/scripts/lib/epg-data.js"
-import {
-  computeNowNext,
-  formatTimeRange,
-  programmesForDay,
-  type Programme,
-  type NowNextSlot,
-} from "@/scripts/lib/now-next"
-import { channelSupportsCatchup, isCatchupPlayable, type CatchupCapableChannel } from "@/scripts/lib/catchup.ts"
-import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
+import { computeNowNext, programmesForDay, type Programme } from "@/scripts/lib/now-next"
 import { openProgrammeDialog } from "@/scripts/lib/programme-dialog.js"
 import { debounce } from "@/scripts/lib/debounce"
 import { ICON_SEARCH } from "@/scripts/lib/icons.js"
 import { playLive, playCatchup } from "@/scripts/tv/playback"
+import {
+  type LiveChannel,
+  type GuideStatus,
+  buildGroupButton,
+  buildChannelRowSkeleton,
+  buildChannelRow,
+  buildGuideHero,
+  buildUpNextHeading,
+  buildGuideRowSkeleton,
+  buildGuideRow,
+} from "@/scripts/tv/ui/live-row"
 
 const RENDER_CHUNK = 40
 const SEARCH_DEBOUNCE_MS = 140
@@ -44,10 +42,6 @@ const SKELETON_ROW_COUNT = 8
 const LAST_CHANNEL_KEY = "xt_tv_last_channel"
 const GROUPS_KEEP_IN_VIEW_OFFSET = 120
 const GUIDE_KEEP_IN_VIEW_OFFSET = 140
-
-interface LiveChannel extends CastChannel, CatchupCapableChannel {
-  tvgShift?: number | null
-}
 
 interface ViewState {
   playlistId: string
@@ -65,6 +59,7 @@ interface ViewState {
 
 interface Refs {
   groupsCol: HTMLElement
+  groupsHeading: HTMLElement
   groupsScroller: HTMLElement
   groupsTrack: HTMLElement
   channelsCol: HTMLElement
@@ -73,36 +68,35 @@ interface Refs {
   channelsTrack: HTMLElement
   channelsStatus: HTMLElement
   guideCol: HTMLElement
-  guideHeader: HTMLElement
   guideScroller: HTMLElement
   guideTrack: HTMLElement
 }
 
 function buildShellMarkup(): string {
   return `
-    <div class="grid h-full grid-cols-[16rem_minmax(0,1fr)_26rem] gap-6">
+    <div class="grid h-full grid-cols-[14rem_minmax(0,1fr)_30rem] gap-6">
       <nav data-role="groups-col" class="flex min-h-0 flex-col overflow-hidden">
-        <div data-role="groups-scroller" class="min-h-0 flex-1 overflow-hidden p-2">
+        <p data-role="groups-heading" class="shrink-0 px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-fg-3"></p>
+        <div data-role="groups-scroller" class="min-h-0 flex-1 overflow-hidden">
           <div data-role="groups-track" class="flex flex-col gap-1"></div>
         </div>
       </nav>
 
       <div data-role="channels-col" class="flex min-h-0 flex-col overflow-hidden pt-2 px-2">
-        <div class="mb-3 flex shrink-0 items-center gap-2 rounded-lg bg-surface-2 px-3">
+        <div class="mb-3 flex min-h-[3.25rem] shrink-0 items-center gap-2 rounded-2xl bg-surface-2 px-4">
           <span class="shrink-0 text-fg-3" aria-hidden="true">${ICON_SEARCH}</span>
           <input data-role="search" type="search" autocomplete="off" spellcheck="false"
-                 class="min-h-11 w-full rounded-lg bg-transparent text-sm outline-none tv-focus-inset placeholder:text-fg-3" />
+                 class="w-full rounded-2xl bg-transparent text-sm outline-none tv-focus-inset placeholder:text-fg-3" />
         </div>
         <div data-role="channels-scroller" class="min-h-0 flex-1 overflow-hidden py-2">
-          <div data-role="channels-track" class="flex flex-col gap-1"></div>
+          <div data-role="channels-track" class="flex flex-col gap-3"></div>
         </div>
         <p data-role="channels-status" class="hidden shrink-0 pt-3 text-center text-sm text-fg-3" role="status"></p>
       </div>
 
       <div data-role="guide-col" class="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-surface">
-        <header data-role="guide-header" class="hidden shrink-0 items-center gap-3 border-b border-line p-4"></header>
         <div data-role="guide-scroller" class="min-h-0 flex-1 overflow-hidden">
-          <div data-role="guide-track" class="flex flex-col gap-1 p-2"></div>
+          <div data-role="guide-track" class="flex flex-col gap-1 p-4"></div>
         </div>
       </div>
     </div>
@@ -113,6 +107,7 @@ function collectRefs(root: HTMLElement): Refs {
   const query = <T extends HTMLElement>(role: string) => root.querySelector<T>(`[data-role="${role}"]`)!
   return {
     groupsCol: query("groups-col"),
+    groupsHeading: query("groups-heading"),
     groupsScroller: query("groups-scroller"),
     groupsTrack: query("groups-track"),
     channelsCol: query("channels-col"),
@@ -121,120 +116,9 @@ function collectRefs(root: HTMLElement): Refs {
     channelsTrack: query("channels-track"),
     channelsStatus: query("channels-status"),
     guideCol: query("guide-col"),
-    guideHeader: query("guide-header"),
     guideScroller: query("guide-scroller"),
     guideTrack: query("guide-track"),
   }
-}
-
-function buildLogoChip(logoUrl: string | null | undefined, sizeClass: string): HTMLSpanElement {
-  const box = document.createElement("span")
-  box.setAttribute("aria-hidden", "true")
-  box.className = `grid aspect-video shrink-0 place-items-center overflow-hidden rounded-md bg-surface-2 ring-1 ring-inset ring-line ${sizeClass}`
-  if (logoUrl) {
-    const img = document.createElement("img")
-    img.alt = ""
-    img.loading = "lazy"
-    img.decoding = "async"
-    img.referrerPolicy = "no-referrer"
-    img.className = "h-full w-full object-contain"
-    mountCachedImage(img, logoUrl, "logo")
-    box.appendChild(img)
-  }
-  return box
-}
-
-function buildSkeletonRow(): HTMLDivElement {
-  const row = document.createElement("div")
-  row.setAttribute("aria-hidden", "true")
-  row.className =
-    "grid min-h-[4.5rem] grid-cols-[3.25rem_4rem_minmax(0,1fr)] items-center gap-3 rounded-xl px-3 py-2"
-  const number = document.createElement("span")
-  number.className = "h-4 w-6 animate-pulse justify-self-center rounded bg-surface-2"
-  const logo = document.createElement("span")
-  logo.className = "aspect-video h-10 animate-pulse rounded-md bg-surface-2"
-  const text = document.createElement("span")
-  text.className = "flex h-8 flex-col justify-center gap-2"
-  const line1 = document.createElement("span")
-  line1.className = "h-3 w-2/3 animate-pulse rounded bg-surface-2"
-  const line2 = document.createElement("span")
-  line2.className = "h-2.5 w-1/3 animate-pulse rounded bg-surface-2"
-  text.append(line1, line2)
-  row.append(number, logo, text)
-  return row
-}
-
-function buildGroupButton(group: CastChannelGroup, isActive: boolean): HTMLButtonElement {
-  const button = document.createElement("button")
-  button.type = "button"
-  button.dataset.focusKey = `group:${group.key}`
-  button.dataset.groupKey = group.key
-  button.dataset.active = isActive ? "true" : "false"
-  button.className =
-    "group/grp relative flex min-h-12 w-full items-center gap-3 rounded-xl px-4 text-start outline-none " +
-    "transition-colors hover:bg-surface-2 tv-focus-inset data-[active=true]:bg-surface-2 data-[active=true]:text-fg"
-
-  const accentBar = document.createElement("span")
-  accentBar.setAttribute("aria-hidden", "true")
-  accentBar.className =
-    "absolute inset-y-2 left-0 w-1 rounded-full bg-accent opacity-0 transition-opacity group-data-[active=true]/grp:opacity-100"
-
-  const label = document.createElement("span")
-  label.className = "min-w-0 flex-1 truncate text-sm"
-  label.textContent = group.label
-
-  const count = document.createElement("span")
-  count.className = "shrink-0 text-xs tabular-nums text-fg-3"
-  count.textContent = group.channels.length.toLocaleString()
-
-  button.append(accentBar, label, count)
-  return button
-}
-
-function buildChannelRow(channel: LiveChannel, index: number, isPlaying: boolean): HTMLButtonElement {
-  const row = document.createElement("button")
-  row.type = "button"
-  row.className =
-    "channel-row grid min-h-[4.5rem] w-full grid-cols-[3.25rem_4rem_minmax(0,1fr)] items-center gap-3 rounded-xl px-3 py-2 " +
-    "text-start outline-none hover:bg-surface-2 tv-focus-inset"
-  row.dataset.focusKey = `ch:${channel.id}`
-  row.dataset.channelId = String(channel.id)
-  if (isPlaying) row.dataset.nowPlaying = "true"
-
-  const number = document.createElement("span")
-  number.className = "text-center text-sm tabular-nums text-fg-3"
-  number.textContent = String(channel.chno ?? index + 1)
-  row.appendChild(number)
-
-  row.appendChild(buildLogoChip(channel.logo, "h-10"))
-
-  const textCol = document.createElement("span")
-  textCol.className = "flex min-w-0 items-center gap-3"
-
-  const mainCol = document.createElement("span")
-  mainCol.className = "flex min-w-0 flex-1 flex-col gap-1"
-  const nameLine = document.createElement("span")
-  nameLine.className = "truncate text-sm font-medium"
-  nameLine.textContent = channel.name
-  const nowLine = document.createElement("span")
-  nowLine.dataset.role = "now"
-  nowLine.className = "truncate text-xs text-fg-3"
-  const progressTrack = document.createElement("span")
-  progressTrack.className = "block h-[2px] w-full overflow-hidden rounded-full bg-line"
-  const progressFill = document.createElement("span")
-  progressFill.dataset.role = "progress"
-  progressFill.className = "block h-full rounded-full bg-accent"
-  progressTrack.appendChild(progressFill)
-  mainCol.append(nameLine, nowLine, progressTrack)
-  textCol.appendChild(mainCol)
-
-  const nextLine = document.createElement("span")
-  nextLine.dataset.role = "next"
-  nextLine.className = "hidden max-w-[8rem] shrink-0 truncate text-2xs text-fg-3 sm:block"
-  textCol.appendChild(nextLine)
-
-  row.appendChild(textCol)
-  return row
 }
 
 const view: TvView = {
@@ -345,123 +229,64 @@ const view: TvView = {
       if (options.focus) refs.channelsTrack.querySelector<HTMLElement>("[data-channel-id]")?.focus()
     }
 
-    function renderGuideHeader(channel: LiveChannel | null): void {
-      if (!refs) return
-      refs.guideHeader.replaceChildren()
-      refs.guideHeader.classList.toggle("hidden", !channel)
-      refs.guideHeader.classList.toggle("flex", !!channel)
-      if (!channel) return
-      const nameEl = document.createElement("span")
-      nameEl.className = "min-w-0 flex-1 truncate text-base font-semibold"
-      nameEl.textContent = channel.name
-      refs.guideHeader.append(buildLogoChip(channel.logo, "h-12"), nameEl)
+    function onGuideReplay(channel: LiveChannel, programme: Programme, rawStart: number, rawStop: number): void {
+      void playCatchup(
+        {
+          playlistId: state.playlistId,
+          channel,
+          startUtcMs: rawStart,
+          stopUtcMs: rawStop,
+          catchupId: programme.catchupId ?? null,
+          title: programme.title,
+          logo: channel.logo ?? null,
+        },
+        { onLiveChannelChanged: setPlayingChannel }
+      )
     }
 
-    function buildGuideRow(channel: LiveChannel, programme: Programme, nowNext: NowNextSlot, nowMs: number): HTMLButtonElement {
-      const isCurrent =
-        !!nowNext.current && nowNext.current.start === programme.start && nowNext.current.stop === programme.stop
-      const isPast = programme.stop <= nowMs
-      // rawStart/rawStop recover true XMLTV time; catch-up must not see the guide-display tvg-shift.
-      const rawStart = programme.rawStart ?? programme.start
-      const rawStop = programme.rawStop ?? programme.stop
-      const canReplay = isPast && !isCurrent && channelSupportsCatchup(channel) && isCatchupPlayable(channel, rawStart, nowMs)
-
-      const row = document.createElement("button")
-      row.type = "button"
-      row.className =
-        "relative flex min-h-14 w-full flex-col gap-1 rounded-lg px-3 py-2 text-start outline-none " +
-        "hover:bg-surface-2 tv-focus-inset" +
-        (isPast && !canReplay && !isCurrent ? " text-fg-3" : "")
-
-      const topLine = document.createElement("span")
-      topLine.className = "flex items-center gap-2 text-xs text-fg-3 tabular-nums"
-      const timeEl = document.createElement("span")
-      timeEl.textContent = formatTimeRange(programme.start, programme.stop, getActiveLocale())
-      topLine.appendChild(timeEl)
-      if (canReplay) {
-        const pill = document.createElement("span")
-        pill.className = "rounded-full border border-line px-1.5 py-0.5 text-2xs text-fg-2"
-        pill.textContent = t("catchup.badge")
-        topLine.appendChild(pill)
-      }
-      row.appendChild(topLine)
-
-      const titleEl = document.createElement("span")
-      titleEl.className = "truncate text-sm font-medium"
-      titleEl.textContent = programme.title
-      row.appendChild(titleEl)
-
-      if (isCurrent && nowNext.current) {
-        const accent = document.createElement("span")
-        accent.setAttribute("aria-hidden", "true")
-        accent.className = "absolute inset-y-2 left-0 w-[3px] rounded-full bg-accent"
-        row.appendChild(accent)
-
-        const track = document.createElement("span")
-        track.className = "mt-1 block h-[2px] w-full overflow-hidden rounded-full bg-line"
-        const fill = document.createElement("span")
-        fill.className = "block h-full rounded-full bg-accent"
-        fill.style.width = `${nowNext.current.progress * 100}%`
-        track.appendChild(fill)
-        row.appendChild(track)
-      }
-
-      row.addEventListener("click", () => {
-        if (isCurrent) {
-          activateChannel(channel)
-        } else if (canReplay) {
-          void playCatchup(
-            {
-              playlistId: state.playlistId,
-              channel,
-              startUtcMs: rawStart,
-              stopUtcMs: rawStop,
-              catchupId: programme.catchupId ?? null,
-              title: programme.title,
-              logo: channel.logo ?? null,
-            },
-            { onLiveChannelChanged: setPlayingChannel }
-          )
-        } else {
-          openProgrammeDialog({
-            title: programme.title,
-            desc: programme.desc,
-            start: programme.start,
-            stop: programme.stop,
-            channelName: channel.name,
-            channelId: channel.id,
-          })
-        }
+    function onGuideDetails(channel: LiveChannel, programme: Programme): void {
+      openProgrammeDialog({
+        title: programme.title,
+        desc: programme.desc,
+        start: programme.start,
+        stop: programme.stop,
+        channelName: channel.name,
+        channelId: channel.id,
       })
-
-      return row
     }
 
     function renderGuide(channel: LiveChannel | null): void {
       if (!refs) return
       state.guideChannel = channel
-      renderGuideHeader(channel)
       refs.guideTrack.replaceChildren()
       if (!channel) return
 
       const epgState = getProgrammesSync(state.playlistId)
-      if (!epgState) return // background load may still be in flight; EPG_LOADED_EVENT repaints once it lands
-
-      const tvgId = effectiveTvgId(channel, state.playlistId)
-      const dayProgrammes = tvgId ? epgState.programmes.get(tvgId) : undefined
+      const tvgId = epgState ? effectiveTvgId(channel, state.playlistId) : null
+      const dayProgrammes = epgState && tvgId ? epgState.programmes.get(tvgId) : undefined
       const rows = programmesForDay(dayProgrammes, startOfToday())
-      if (!rows.length) {
-        const empty = document.createElement("p")
-        empty.className = "px-1 py-2 text-sm text-fg-3"
-        empty.textContent = t("tv.live.noGuide")
-        refs.guideTrack.appendChild(empty)
-        return
+      const nowMs = Date.now()
+      const nowNext = epgState ? computeNowNext(epgState.programmes, channel, state.playlistId, nowMs) : { current: null, next: null }
+      const currentFull = nowNext.current
+        ? (rows.find((row) => row.start === nowNext.current!.start && row.stop === nowNext.current!.stop) ?? null)
+        : null
+
+      const status: GuideStatus = !epgState ? "loading" : rows.length ? "ready" : "empty"
+      refs.guideTrack.appendChild(buildGuideHero(channel, status, currentFull, nowNext.current?.progress ?? 0))
+
+      if (status === "loading") {
+        const skeletons = document.createDocumentFragment()
+        for (let i = 0; i < 3; i++) skeletons.appendChild(buildGuideRowSkeleton())
+        refs.guideTrack.appendChild(skeletons)
+        return // EPG_LOADED_EVENT repaints once the background load lands
       }
 
-      const nowMs = Date.now()
-      const nowNext = computeNowNext(epgState.programmes, channel, state.playlistId, nowMs)
+      const upcoming = currentFull ? rows.filter((row) => row !== currentFull) : rows
+      if (!upcoming.length) return
+
+      refs.guideTrack.appendChild(buildUpNextHeading())
       const fragment = document.createDocumentFragment()
-      for (const programme of rows) fragment.appendChild(buildGuideRow(channel, programme, nowNext, nowMs))
+      for (const programme of upcoming) fragment.appendChild(buildGuideRow(channel, programme, nowMs, onGuideReplay, onGuideDetails))
       refs.guideTrack.appendChild(fragment)
     }
 
@@ -542,6 +367,7 @@ const view: TvView = {
 
     function applyLocale(): void {
       if (!refs) return
+      refs.groupsHeading.textContent = t("settings.categories.title")
       refs.search.placeholder = t("cast.remote.channelsSearch")
       refs.search.setAttribute("aria-label", t("cast.remote.channelsSearch"))
       if (!state.channels.length) return
@@ -612,8 +438,9 @@ const view: TvView = {
       refs.channelsCol.id = "tv-live-channels"
       refs.guideCol.id = "tv-live-guide"
 
-      for (let i = 0; i < SKELETON_ROW_COUNT; i++) refs.channelsTrack.appendChild(buildSkeletonRow())
+      for (let i = 0; i < SKELETON_ROW_COUNT; i++) refs.channelsTrack.appendChild(buildChannelRowSkeleton())
 
+      refs.groupsHeading.textContent = t("settings.categories.title")
       refs.search.placeholder = t("cast.remote.channelsSearch")
       refs.search.setAttribute("aria-label", t("cast.remote.channelsSearch"))
 
