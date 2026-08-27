@@ -10,7 +10,7 @@ import {
   buildLiveCastContext,
   type CastSession,
 } from "@/scripts/lib/tv-cast.js"
-import { isCastableSrc, buildLiveCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
+import { isCastableSrc, buildLiveCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor.js"
 
 export interface CastLiveChannelOptions {
   /** Channel ids of the list the channel was picked from, used when the session context has to be rebuilt. */
@@ -45,7 +45,7 @@ export function resolveTunedLiveContext(
 }
 
 /** Resolves a playable src for a cached live-catalog row: M3U carries its own URL, Xtream builds one. */
-async function resolveChannelSrc(playlistId: string, channel: any, channelId: string): Promise<string | null> {
+export async function resolveChannelSrc(playlistId: string, channel: any, channelId: string): Promise<string | null> {
   if (channel?.url) return channel.url
   const creds = await resolvePlaylistCreds(playlistId)
   if (!creds?.host || !creds.user || !creds.pass) return null
@@ -53,34 +53,27 @@ async function resolveChannelSrc(playlistId: string, channel: any, channelId: st
   return buildLiveStreamUrl(creds, channelId, creds.liveContainer || null)
 }
 
-/**
- * Casts one live channel on the session's current device. Never throws; false on any failure.
- * The receiver swaps streams in place, so this holds no extra provider connection.
- */
-export async function castLiveChannel(
+/** Resolves one live channel by id into a playable cast descriptor (src, headers, DRM). */
+export async function resolveLiveChannelCastDescriptor(
   playlistId: string,
-  channelId: string | number,
-  options: CastLiveChannelOptions = {}
-): Promise<boolean> {
-  const session = getCastSession()
-  if (!session) return false
+  channelId: string | number
+): Promise<{ channel: any; descriptor: CastDescriptorV1 } | null> {
   const id = String(channelId)
-
   try {
     const { readCachedLiveChannels } = await import("@/scripts/lib/live-catalog.ts")
     let liveList: any[] = readCachedLiveChannels(playlistId)
     let channel = liveList.find((entry: any) => String(entry?.id) === id)
     if (!channel) {
       const creds = await resolvePlaylistCreds(playlistId)
-      if (!creds) return false
+      if (!creds) return null
       const { ensureLive } = await import("@/scripts/lib/catalog.js")
       liveList = await ensureLive(creds, playlistId)
       channel = liveList.find((entry: any) => String(entry?.id) === id)
     }
-    if (!channel) return false
+    if (!channel) return null
 
     const src = await resolveChannelSrc(playlistId, channel, id)
-    if (!src || !isCastableSrc(src, { live: true })) return false
+    if (!src || !isCastableSrc(src, { live: true })) return null
 
     const headers =
       channel.userAgent || channel.referer
@@ -102,10 +95,33 @@ export async function castLiveChannel(
       drm,
       headers,
     })
+    return { channel, descriptor }
+  } catch (err) {
+    log.warn("[xt:tv-cast-live] resolveLiveChannelCastDescriptor failed:", err)
+    return null
+  }
+}
+
+/**
+ * Casts one live channel on the session's current device. Never throws; false on any failure.
+ * The receiver swaps streams in place, so this holds no extra provider connection.
+ */
+export async function castLiveChannel(
+  playlistId: string,
+  channelId: string | number,
+  options: CastLiveChannelOptions = {}
+): Promise<boolean> {
+  const session = getCastSession()
+  if (!session) return false
+  const id = String(channelId)
+  const resolved = await resolveLiveChannelCastDescriptor(playlistId, id)
+  if (!resolved) return false
+
+  try {
     const liveContext =
       options.liveContext ??
       resolveTunedLiveContext(session.liveContext, playlistId, id, options.groupChannelIds || [id])
-    await castPlay(sessionAsDevice(session), descriptor, { liveContext })
+    await castPlay(sessionAsDevice(session), resolved.descriptor, { liveContext })
     updateCastSession({ contentHref: `/livetv?channel=${id}` })
     return true
   } catch (err) {

@@ -4,6 +4,7 @@ import TitleBar from "@/components/TitleBar.astro"
 import WindowResizeEdges from "@/components/WindowResizeEdges.astro"
 import CatalogWarmingIndicator from "@/components/CatalogWarmingIndicator.svelte"
 import pkg from "../../package.json"
+import { TV_ROUTE_TABLE } from "@/scripts/lib/tv-routes"
 import "../styles/global.css"
 
 interface Props {
@@ -263,6 +264,26 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
           });
         }
         window.__applyAndroidStatusBar = applyAndroidStatusBar;
+      } catch (e) {}
+    </script>
+    <script is:inline define:vars={{ tvRouteTable: TV_ROUTE_TABLE, appMode }}>
+      try {
+        if (appMode !== "receiver" && document.documentElement.dataset.tv === "1") {
+          var tvRedirectPath = location.pathname.replace(/\/+$/, "");
+          if (tvRedirectPath === "") tvRedirectPath = "/";
+          var tvRedirectTarget = tvRouteTable[tvRedirectPath];
+          if (tvRedirectTarget && tvRedirectPath.indexOf("/tv") !== 0) {
+            // Mirrors tvRouteFor's query-preserving target set in tv-routes.ts
+            if (
+              tvRedirectTarget === "/tv/movies/detail" ||
+              tvRedirectTarget === "/tv/series/detail" ||
+              tvRedirectTarget === "/tv/search"
+            ) {
+              tvRedirectTarget += location.search;
+            }
+            location.replace(tvRedirectTarget);
+          }
+        }
       } catch (e) {}
     </script>
   </head>

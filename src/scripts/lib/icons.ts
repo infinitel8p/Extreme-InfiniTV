@@ -232,3 +232,19 @@ export const ICON_LIST_DETAILS = wrap(
 export const ICON_PLAYER_TRACK_PREV = wrap(
   '<path d="M21 5v14l-8 -7l8 -7" />' + '<path d="M10 5v14l-8 -7l8 -7" />'
 )
+
+export const ICON_PALETTE = wrap(
+  '<path d="M12 21a9 9 0 0 1 0 -18c4.97 0 9 3.582 9 8c0 1.06 -.474 2.078 -1.318 2.828c-.844 .75 -1.989 1.172 -3.182 1.172h-2.5a2 2 0 0 0 -1 3.75a1.3 1.3 0 0 1 -1 2.25" />' +
+    '<path d="M7.5 10.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M11.5 7.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M15.5 10.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />'
+)
+
+export const ICON_TEXT_SIZE = wrap(
+  '<path d="M3 7v-2h13v2" />' +
+    '<path d="M10 5v14" />' +
+    '<path d="M12 19h-4" />' +
+    '<path d="M15 13v-1h6v1" />' +
+    '<path d="M18 12v7" />' +
+    '<path d="M17 19h2" />'
+)

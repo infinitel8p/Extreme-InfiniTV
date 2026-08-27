@@ -52,6 +52,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         if (localStorage.getItem("xt_perf_mode") === "1") {
           document.documentElement.setAttribute("data-perf-mode", "on");
         }
+        if (localStorage.getItem("xt_is_tv") === "1") document.documentElement.dataset.tv = "1";
 
         if (localStorage.getItem("xt_tv_overscan_auto") === "1") {
           localStorage.removeItem("xt_tv_overscan");

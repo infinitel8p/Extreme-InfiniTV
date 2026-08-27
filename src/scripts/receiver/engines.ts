@@ -54,12 +54,25 @@ export interface ReceiverStatePartial {
 export interface ReceiverEngineCallbacks {
   report(partial: ReceiverStatePartial): void
   onSessionEnded(): void
+  onLiveChannelChanged?(channelId: string, channelName: string): void
+  onFinished?(finalChannelId: string | null): void
 }
 
 export type ReceiverControlAction = "pause" | "resume" | "seek" | "stop"
 
+export type NativeLiveChannel = Parameters<typeof launchAndroidNativeLive>[0]["channels"][number]
+
+export interface ReceiverLiveContext {
+  channels: NativeLiveChannel[]
+  initialChannelId: string
+}
+
+export interface ReceiverPlayOptions {
+  liveContext?: ReceiverLiveContext
+}
+
 export interface ReceiverEngine {
-  play(descriptor: CastDescriptorV1): Promise<boolean>
+  play(descriptor: CastDescriptorV1, options?: ReceiverPlayOptions): Promise<boolean>
   control(action: ReceiverControlAction, seconds?: number): void
   setVolume(level: number, muted: boolean): void
   teardown(): void
@@ -544,9 +557,6 @@ export async function refineParseFailureKey(
 const RECEIVER_LIVE_CONTENT_KEY = "receiver-live"
 const RECEIVER_VOD_CONTENT_KEY = "receiver-vod"
 const RECEIVER_LIVE_CHANNEL_ID = "cast"
-// loadChannel's own construction-failure catch in VideoActivity.kt reports this key
-// instead of the launch contentKey; we only ever launch the single "cast" channel.
-const NATIVE_LIVE_CHANNEL_ERROR_KEY = `live:${RECEIVER_LIVE_CHANNEL_ID}`
 
 export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallbacks): ReceiverEngine {
   let unsubscribe: (() => void) | null = null
@@ -565,6 +575,8 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
   // finishPlayback() is async via runOnUiThread) can't clobber a newer one.
   let generation = 0
   let activeContentKey = ""
+  // null = synthetic single "cast" channel
+  let liveChannelIds: Set<string> | null = null
 
   function stopListening(): void {
     unsubscribe?.()
@@ -592,10 +604,17 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
     try { window.AndroidVideo?.receiverSessionEnd?.() } catch {}
   }
 
+  // VideoActivity's loadChannel catch reports "live:<channelId>", not the launch contentKey
+  function isLiveChannelKey(contentKey: string): boolean {
+    if (!contentKey.startsWith("live:")) return false
+    const channelId = contentKey.slice("live:".length)
+    return liveChannelIds ? liveChannelIds.has(channelId) : channelId === RECEIVER_LIVE_CHANNEL_ID
+  }
+
   function isCurrentEvent(sessionGeneration: number, contentKey: string | undefined): boolean {
     if (sessionGeneration !== generation) return false
     if (!contentKey) return true
-    return contentKey === activeContentKey || contentKey === NATIVE_LIVE_CHANNEL_ERROR_KEY
+    return contentKey === activeContentKey || isLiveChannelKey(contentKey)
   }
 
   async function reportNativeError(sessionGeneration: number, event: AndroidNativeEvent): Promise<void> {
@@ -642,8 +661,14 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
       case "xt:android-native-error":
         void reportNativeError(sessionGeneration, event)
         break
+      case "xt:android-native-channel-changed":
+        if (event.payload.channelId) {
+          callbacks.onLiveChannelChanged?.(event.payload.channelId, event.payload.channelName || "")
+        }
+        break
       case "xt:android-native-finished":
         report({ state: event.payload.completed ? "ended" : "idle", positionSeconds: 0 })
+        callbacks.onFinished?.(event.payload.finalChannelId ?? null)
         finishAndEndSession()
         callbacks.onSessionEnded()
         break
@@ -658,7 +683,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
   }
 
   return {
-    async play(descriptor: CastDescriptorV1): Promise<boolean> {
+    async play(descriptor: CastDescriptorV1, options?: ReceiverPlayOptions): Promise<boolean> {
       isLive = descriptor.isLive
       activeSrc = descriptor.src
       activeUserAgent = descriptor.headers?.userAgent ?? null
@@ -670,6 +695,11 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
       const sessionGeneration = ++generation
       const contentKey = `${descriptor.isLive ? RECEIVER_LIVE_CONTENT_KEY : RECEIVER_VOD_CONTENT_KEY}-${sessionGeneration}`
       activeContentKey = contentKey
+      const requestedLiveContext = options?.liveContext ?? null
+      const liveContext = descriptor.isLive && requestedLiveContext && requestedLiveContext.channels.length > 0
+        ? requestedLiveContext
+        : null
+      liveChannelIds = liveContext ? new Set(liveContext.channels.map((channel) => String(channel.id))) : null
       unsubscribe = subscribeAndroidNativeEvents((event) => handleEvent(sessionGeneration, event))
       report({ state: "loading", positionSeconds: 0, durationSeconds: knownDurationSeconds })
 
@@ -678,10 +708,10 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
       const launched = descriptor.isLive
         ? launchAndroidNativeLive({
             contentKey,
-            channels: [
-              { id: RECEIVER_LIVE_CHANNEL_ID, name: descriptor.title, streamUrl: descriptor.src, ua, referer },
-            ],
-            initialChannelId: RECEIVER_LIVE_CHANNEL_ID,
+            channels: liveContext
+              ? liveContext.channels
+              : [{ id: RECEIVER_LIVE_CHANNEL_ID, name: descriptor.title, streamUrl: descriptor.src, ua, referer }],
+            initialChannelId: liveContext ? liveContext.initialChannelId : RECEIVER_LIVE_CHANNEL_ID,
             defaultUa: ua,
             defaultReferer: referer,
           })

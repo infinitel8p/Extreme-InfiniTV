@@ -90,6 +90,10 @@ interface AndroidReceiverKeepAliveBridge {
   stop?: () => boolean
 }
 
+interface AndroidLogBridge {
+  shareNewestLog?: (logDirPath: string) => boolean
+}
+
 interface AndroidCastMediaBridge {
   update?: (
     title: string,
@@ -146,6 +150,7 @@ declare global {
     AndroidNsd?: AndroidNsdBridge
     AndroidReceiverKeepAlive?: AndroidReceiverKeepAliveBridge
     AndroidCastMedia?: AndroidCastMediaBridge
+    AndroidLog?: AndroidLogBridge
     /** Called from MainActivity on PiP enter to promote the playing video into HTML5 fullscreen. */
     __xtPipFullscreen?: () => void
     /** Called from MainActivity on PiP exit; undoes __xtPipFullscreen if it succeeded. */

@@ -1,0 +1,296 @@
+---
+import { ClientRouter } from "astro:transitions"
+import {
+  IconHome,
+  IconDeviceTv,
+  IconMovie,
+  IconStack2,
+  IconSearch,
+  IconDownload,
+  IconSettings,
+  IconCast,
+} from "@tabler/icons-svelte"
+import pkg from "../../package.json"
+import { CLASSIC_ROUTE_TABLE, tvNavActiveHref } from "@/scripts/lib/tv-routes"
+import "@/styles/global.css"
+import "@/styles/tv.css"
+
+interface Props {
+  pageTitle: string
+  view: string
+}
+const { pageTitle, view } = Astro.props
+const documentTitle = `${pageTitle} | Extreme InfiniTV`
+
+const path = Astro.url.pathname.replace(/\/$/, "") || "/tv"
+const activeNavHref = tvNavActiveHref(path)
+
+const navItems = [
+  { href: "/tv",           key: "nav.home",      label: "Home",      Icon: IconHome },
+  { href: "/tv/live",      key: "nav.livetv",    label: "Live TV",   Icon: IconDeviceTv },
+  { href: "/tv/movies",    key: "nav.movies",    label: "Movies",    Icon: IconMovie },
+  { href: "/tv/series",    key: "nav.series",    label: "Series",    Icon: IconStack2 },
+  { href: "/tv/search",    key: "nav.search",    label: "Search",    Icon: IconSearch },
+  { href: "/tv/downloads", key: "nav.downloads", label: "Downloads", Icon: IconDownload },
+  { href: "/tv/settings",  key: "nav.settings",  label: "Settings",  Icon: IconSettings },
+]
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{documentTitle}</title>
+    <meta name="x-app-version" content={pkg.version} />
+    <ClientRouter />
+    <script is:inline define:vars={{ classicRouteTable: CLASSIC_ROUTE_TABLE }}>
+      (function () {
+        document.documentElement.dataset.tvUi = "1"
+
+        var isTv = false
+        try {
+          if (new URLSearchParams(location.search).get("tv") === "1") localStorage.setItem("xt_force_tv", "1")
+          isTv =
+            localStorage.getItem("xt_is_tv") === "1" ||
+            (window.AndroidDeviceInfo && window.AndroidDeviceInfo.isTv && window.AndroidDeviceInfo.isTv() === true) ||
+            localStorage.getItem("xt_force_tv") === "1"
+        } catch (e) {}
+        if (!isTv) {
+          // Mirrors classicRouteFor in tv-routes.ts
+          var classicPath = location.pathname.replace(/\/+$/, "")
+          if (classicPath === "") classicPath = "/"
+          var classicTarget = classicRouteTable[classicPath] || "/"
+          if (classicTarget === "/movies/detail" || classicTarget === "/series/detail" || classicTarget === "/search") {
+            classicTarget += location.search
+          }
+          location.replace(classicTarget)
+          return
+        }
+        document.documentElement.dataset.tv = "1"
+
+        try {
+          if (
+            localStorage.getItem("xt_receiver_mode") === "1" &&
+            localStorage.getItem("xt_receiver_boot") === "1" &&
+            sessionStorage.getItem("xt_receiver_exited") !== "1"
+          ) {
+            location.replace("/receiver")
+            return
+          }
+        } catch (e) {}
+
+        try {
+          var fontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1")
+          if (!isFinite(fontScale) || fontScale < 0.75 || fontScale > 2) fontScale = 1
+          document.documentElement.style.setProperty("--xt-font-scale", String(fontScale))
+
+          if (localStorage.getItem("xt_perf_mode") === "1") {
+            document.documentElement.setAttribute("data-perf-mode", "on")
+          }
+
+          var densityMap = { compact: 0.75, comfortable: 1.3 }
+          var densityName = localStorage.getItem("xt_density")
+          if (densityName && densityMap[densityName]) {
+            document.documentElement.style.setProperty("--xt-density", String(densityMap[densityName]))
+            document.documentElement.setAttribute("data-density", densityName)
+          }
+
+          if (localStorage.getItem("xt_tv_overscan_auto") === "1") {
+            localStorage.removeItem("xt_tv_overscan")
+            localStorage.removeItem("xt_tv_overscan_auto")
+          }
+          var overscan = parseFloat(localStorage.getItem("xt_tv_overscan") || "")
+          if (!isFinite(overscan) || overscan < 0 || overscan > 8) overscan = 0
+          if (overscan > 0) {
+            document.documentElement.style.setProperty("--xt-tv-overscan", String(overscan))
+            document.documentElement.setAttribute("data-tv-overscan", "")
+          }
+        } catch (e) {}
+
+        try {
+          var storedThemeRaw = localStorage.getItem("xt_theme")
+          if (storedThemeRaw === null) document.documentElement.style.colorScheme = "dark"
+          else if (storedThemeRaw === "light") document.documentElement.style.colorScheme = "light"
+          else if (storedThemeRaw === "dark") document.documentElement.style.colorScheme = "dark"
+        } catch (e) {}
+
+        try {
+          var KNOWN_LOCALES = ["en","es","de","fr","pt-BR","it","ru","zh","ja","tr","ar","ur","nl","hi","id","pl"]
+          var RTL_LOCALES = ["ar","ur"]
+          var storedLocale = localStorage.getItem("xt_locale") || ""
+          if (storedLocale && KNOWN_LOCALES.indexOf(storedLocale) !== -1) {
+            document.documentElement.setAttribute("lang", storedLocale)
+            document.documentElement.setAttribute(
+              "dir",
+              RTL_LOCALES.indexOf(storedLocale) !== -1 ? "rtl" : "ltr"
+            )
+          }
+
+          if (storedLocale && storedLocale !== "en") {
+            var rawMessages = localStorage.getItem("xt_locale_messages_v3")
+            if (rawMessages) {
+              var cached = JSON.parse(rawMessages)
+              if (cached && cached.code === storedLocale && cached.messages) {
+                var msgs = cached.messages
+                var translateEl = function (el) {
+                  if (!el || el.nodeType !== 1) return
+                  var textKey = el.getAttribute("data-i18n")
+                  if (textKey && msgs[textKey] != null) el.textContent = msgs[textKey]
+                  var htmlKey = el.getAttribute("data-i18n-html")
+                  if (htmlKey && msgs[htmlKey] != null) el.innerHTML = msgs[htmlKey]
+                  var attrSpec = el.getAttribute("data-i18n-attr")
+                  if (attrSpec) {
+                    var pairs = attrSpec.split(";")
+                    for (var pi = 0; pi < pairs.length; pi++) {
+                      var parts = pairs[pi].split(":")
+                      var attrName = (parts[0] || "").trim()
+                      var attrKey = (parts[1] || "").trim()
+                      if (attrName && attrKey && msgs[attrKey] != null) {
+                        el.setAttribute(attrName, msgs[attrKey])
+                      }
+                    }
+                  }
+                }
+                var i18nObserver = new MutationObserver(function (mutations) {
+                  for (var mi = 0; mi < mutations.length; mi++) {
+                    var added = mutations[mi].addedNodes
+                    for (var ai = 0; ai < added.length; ai++) {
+                      var node = added[ai]
+                      if (node.nodeType !== 1) continue
+                      if (
+                        node.hasAttribute("data-i18n") ||
+                        node.hasAttribute("data-i18n-html") ||
+                        node.hasAttribute("data-i18n-attr")
+                      ) {
+                        translateEl(node)
+                      }
+                      var matches = node.querySelectorAll
+                        ? node.querySelectorAll("[data-i18n], [data-i18n-html], [data-i18n-attr]")
+                        : null
+                      if (matches) {
+                        for (var qi = 0; qi < matches.length; qi++) translateEl(matches[qi])
+                      }
+                    }
+                  }
+                })
+                i18nObserver.observe(document.documentElement, { childList: true, subtree: true })
+                document.addEventListener("DOMContentLoaded", function () {
+                  i18nObserver.disconnect()
+                })
+              }
+            }
+          }
+        } catch (e) {}
+      })()
+    </script>
+  </head>
+
+  <body class="bg-bg text-fg h-dvh overflow-hidden">
+    <div class="relative flex h-full">
+      <nav
+        id="tv-nav"
+        transition:persist="tv-nav"
+        aria-label="Main"
+        data-i18n-attr="aria-label:sidebar.mainLabel"
+        class="relative z-40 shrink-0 w-[5.5rem]">
+        <div
+          class="group/rail tv-rail-surface absolute inset-y-0 left-0 flex w-[5.5rem] flex-col gap-1
+                 overflow-y-auto overflow-x-hidden bg-bg
+                 p-3 outline-none transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]
+                 focus-within:w-[17rem] focus-within:shadow-[8px_0_24px_-12px_rgba(0,0,0,0.6)]">
+          <div class="flex flex-1 flex-col gap-1">
+            {navItems.map(({ href, key, label, Icon }) => {
+              const active = activeNavHref === href
+              return (
+                <a
+                  href={href}
+                  data-tv-nav-item
+                  data-tv-nav-active={active ? "true" : "false"}
+                  aria-current={active ? "page" : undefined}
+                  aria-label={label}
+                  data-i18n-attr={`aria-label:${key}`}
+                  class="group/item relative flex min-h-14 w-full items-center justify-center gap-4
+                         rounded-2xl px-0 text-fg-2 outline-none transition-colors tv-focus-inset
+                         group-focus-within/rail:justify-start group-focus-within/rail:px-4
+                         hover:bg-surface-2 hover:text-fg
+                         focus-visible:text-fg
+                         data-[tv-nav-active=true]:bg-surface-2 data-[tv-nav-active=true]:text-fg">
+                  <span
+                    aria-hidden="true"
+                    class="absolute left-0 top-2 bottom-2 w-1 rounded-full bg-accent opacity-0
+                           transition-opacity group-data-[tv-nav-active=true]/item:opacity-100
+                           group-focus-visible/item:opacity-0!"></span>
+                  <Icon
+                    aria-hidden="true"
+                    stroke={1.75}
+                    class="size-6 shrink-0 text-fg-3 group-data-[tv-nav-active=true]/item:text-accent"
+                  />
+                  <span data-i18n={key} class="hidden truncate text-base font-medium group-focus-within/rail:inline">
+                    {label}
+                  </span>
+                </a>
+              )
+            })}
+          </div>
+
+          <div class="flex flex-col gap-1 border-t border-line pt-2">
+            <button
+              type="button"
+              id="tv-nav-playlist-btn"
+              data-tv-nav-item
+              aria-label="Playlist"
+              data-i18n-attr="aria-label:tv.nav.playlist"
+              class="flex min-h-14 w-full items-center justify-center gap-4 rounded-2xl px-0
+                     text-fg-2 outline-none transition-colors tv-focus-inset
+                     group-focus-within/rail:justify-start group-focus-within/rail:px-4
+                     hover:bg-surface-2 hover:text-fg
+                     focus-visible:text-fg">
+              <span
+                id="tv-nav-playlist-mark"
+                aria-hidden="true"
+                class="inline-flex size-8 shrink-0 items-center justify-center rounded-lg
+                       bg-surface-2 text-sm font-semibold uppercase">?</span>
+              <span
+                id="tv-nav-playlist-title"
+                class="hidden truncate text-base font-medium group-focus-within/rail:inline"
+                data-i18n="tv.nav.playlist">Playlist</span>
+            </button>
+            <a
+              href="/receiver"
+              data-astro-reload
+              data-tv-nav-item
+              aria-label="Cast to this TV"
+              data-i18n-attr="aria-label:tv.nav.cast"
+              class="flex min-h-14 w-full items-center justify-center gap-4 rounded-2xl px-0
+                     text-fg-2 outline-none transition-colors tv-focus-inset
+                     group-focus-within/rail:justify-start group-focus-within/rail:px-4
+                     hover:bg-surface-2 hover:text-fg
+                     focus-visible:text-fg">
+              <IconCast aria-hidden="true" stroke={1.75} class="size-6 shrink-0 text-fg-3" />
+              <span
+                class="hidden truncate text-base font-medium group-focus-within/rail:inline"
+                data-i18n="tv.nav.cast">Cast to this TV</span>
+            </a>
+          </div>
+        </div>
+      </nav>
+
+      <main id="tv-main" data-tv-view={view} class="flex-1 min-w-0 min-h-0 overflow-hidden">
+        <slot />
+      </main>
+
+      <div id="tv-player-host" transition:persist="tv-player-host" class="hidden fixed inset-0 z-50 bg-black"></div>
+    </div>
+
+    <script>
+      import "@/scripts/spatial-navigation"
+      import { bootTvShell } from "@/scripts/tv/shell"
+
+      if (!(window as any).__xtTvShellBooted) {
+        ;(window as any).__xtTvShellBooted = true
+        bootTvShell()
+      }
+    </script>
+  </body>
+</html>

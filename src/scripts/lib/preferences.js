@@ -520,7 +520,7 @@ export function getFavorites(playlistId, kind) {
   return e ? e[favKey(kind)] : new Set()
 }
 
-/** @param {string} playlistId @param {"live"|"vod"} kind @param {number} id */
+/** @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {number} id */
 export function isFavorite(playlistId, kind, id) {
   const e = cache.get(playlistId)
   return !!e && e[favKey(kind)].has(id)
