@@ -31,10 +31,6 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
               localStorage.setItem("xt_perf_mode", "1");
               localStorage.setItem("xt_perf_mode_auto", "1");
             }
-            if (localStorage.getItem("xt_tv_overscan") === null) {
-              localStorage.setItem("xt_tv_overscan", "4");
-              localStorage.setItem("xt_tv_overscan_auto", "1");
-            }
             if (localStorage.getItem("xt_receiver_mode") === null) {
               localStorage.setItem("xt_receiver_mode", "1");
               localStorage.setItem("xt_receiver_mode_auto", "1");
@@ -57,6 +53,10 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
           document.documentElement.setAttribute("data-perf-mode", "on");
         }
 
+        if (localStorage.getItem("xt_tv_overscan_auto") === "1") {
+          localStorage.removeItem("xt_tv_overscan");
+          localStorage.removeItem("xt_tv_overscan_auto");
+        }
         var overscan = parseFloat(localStorage.getItem("xt_tv_overscan") || "");
         if (!isFinite(overscan) || overscan < 0 || overscan > 8) overscan = 0;
         if (overscan > 0) {

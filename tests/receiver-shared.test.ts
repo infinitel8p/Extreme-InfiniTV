@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { rankReceiverIps } from "../src/scripts/lib/receiver-shared"
+import { pairableReceiverIps, rankReceiverIps } from "../src/scripts/lib/receiver-shared"
 
 describe("rankReceiverIps", () => {
   it("puts 192.168.x before 10.x before 172.16-31.x before public IPv4", () => {
@@ -39,5 +39,29 @@ describe("rankReceiverIps", () => {
     const ips = ["8.8.8.8", "192.168.1.5"]
     rankReceiverIps(ips)
     expect(ips).toEqual(["8.8.8.8", "192.168.1.5"])
+  })
+})
+
+describe("pairableReceiverIps", () => {
+  it("drops IPv6 addresses the add-device form would reject", () => {
+    expect(pairableReceiverIps(["fd12:3456::1", "192.168.1.5", "2001:db8::42"])).toEqual(["192.168.1.5"])
+  })
+
+  it("keeps the IPv4 ranking", () => {
+    expect(pairableReceiverIps(["2001:db8::42", "8.8.8.8", "192.168.1.5"])).toEqual([
+      "192.168.1.5",
+      "8.8.8.8",
+    ])
+  })
+
+  it("falls back to IPv6 when there is no IPv4 address at all", () => {
+    expect(pairableReceiverIps(["2001:db8::42", "fd12:3456::1"])).toEqual([
+      "2001:db8::42",
+      "fd12:3456::1",
+    ])
+  })
+
+  it("returns an empty array for an empty input", () => {
+    expect(pairableReceiverIps([])).toEqual([])
   })
 })

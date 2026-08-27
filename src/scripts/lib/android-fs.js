@@ -105,10 +105,29 @@ export async function createPublicDownloadFile(filename, ext) {
   )
 }
 
+/** Fire OS (and some TV builds) ship no SAF DocumentsUI, so ACTION_OPEN_DOCUMENT_TREE resolves to nothing. */
+export class NoDirectoryPickerError extends Error {
+  constructor() {
+    super("This device has no directory picker")
+    this.name = "NoDirectoryPickerError"
+  }
+}
+
+function isMissingPickerError(err) {
+  const message = String((err && err.message) || err || "")
+  return /no activity found|activitynotfoundexception|open_document_tree/i.test(message)
+}
+
 export async function pickDirectory() {
   const m = await mod()
   if (!m) throw new Error("Android FS plugin not available")
-  const uri = await m.AndroidFs.showOpenDirPicker()
+  let uri
+  try {
+    uri = await m.AndroidFs.showOpenDirPicker()
+  } catch (e) {
+    if (isMissingPickerError(e)) throw new NoDirectoryPickerError()
+    throw e
+  }
   if (!uri) return null
   try {
     await m.AndroidFs.persistPickerUriPermission(uri)

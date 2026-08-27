@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "Couldn't restore backup",
   "settings.toast.scanFail": "Couldn't scan folder",
   "settings.toast.pickFolderFail": "Couldn't open folder picker",
+  "settings.toast.noFolderPicker": "This device has no folder picker",
+  "settings.toast.noFolderPickerHint": "Downloads are saved to the Downloads folder instead.",
   "settings.toast.pickFileFail": "Couldn't open file picker",
   "settings.toast.imported": "Imported {count} downloads",
   "settings.toast.checkConnLogin": "Check your connection or login.",

@@ -94,11 +94,11 @@ export const HUB_STRIP_CATALOG = Object.freeze([
 ])
 
 export const DEFAULT_HUB_STRIPS = Object.freeze([
-  "continue-watching",
   "favorites",
+  "continue-watching",
   "watchlist",
-  "because-watched",
   "recently-added",
+  "because-watched",
 ])
 export const PROGRESS_RETENTION_VALUES = [30, 90, 180, 0]
 export const DEFAULT_PROGRESS_RETENTION_DAYS = 90

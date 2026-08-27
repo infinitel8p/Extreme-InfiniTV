@@ -2,4 +2,11 @@
 <resources>
     <string name="xt_channels_title">Kanallar</string>
     <string name="native_player_unsupported_stream">Bu kanal yerel oynatıcıda oynatılamıyor</string>
+    <string name="xt_video_settings_title">Oynatıcı ayarları</string>
+    <string name="xt_video_display_mode">Görüntü modu</string>
+    <string name="xt_video_display_fit">Sığdır</string>
+    <string name="xt_video_display_zoom">Ekranı doldur</string>
+    <string name="xt_video_display_stretch">Uzat</string>
+    <string name="xt_video_playback_speed">Oynatma hızı</string>
+    <string name="xt_video_speed_normal">Normal</string>
 </resources>

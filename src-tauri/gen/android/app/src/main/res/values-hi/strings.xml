@@ -2,4 +2,11 @@
 <resources>
     <string name="xt_channels_title">चैनल</string>
     <string name="native_player_unsupported_stream">इस चैनल को नेटिव प्लेयर में नहीं चलाया जा सकता</string>
+    <string name="xt_video_settings_title">प्लेयर सेटिंग्स</string>
+    <string name="xt_video_display_mode">डिस्प्ले मोड</string>
+    <string name="xt_video_display_fit">फ़िट</string>
+    <string name="xt_video_display_zoom">स्क्रीन भरें</string>
+    <string name="xt_video_display_stretch">खींचें</string>
+    <string name="xt_video_playback_speed">प्लेबैक गति</string>
+    <string name="xt_video_speed_normal">सामान्य</string>
 </resources>

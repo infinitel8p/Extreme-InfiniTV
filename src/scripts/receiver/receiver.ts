@@ -34,7 +34,7 @@ import {
 import {
   formatReceiverAddress,
   formatReceiverPairCode,
-  rankReceiverIps,
+  pairableReceiverIps,
   type ReceiverStatus,
 } from "@/scripts/lib/receiver-shared.js"
 import { advertiseReceiver } from "@/scripts/lib/receiver-discovery.js"
@@ -152,7 +152,7 @@ function renderStatus(status: ReceiverStatus): void {
     readyBadgeEl?.classList.remove("hidden")
     readyBadgeEl?.classList.add("inline-flex")
   }
-  const ips = rankReceiverIps(status.ips || [])
+  const ips = pairableReceiverIps(status.ips || [])
   if (ips.length > 0) latestPrimaryAddress = formatReceiverAddress(ips[0], status.port)
   if (addressesEl && ips.length > 0) {
     addressesEl.textContent = ""

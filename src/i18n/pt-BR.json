@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "Não foi possível restaurar o backup",
   "settings.toast.scanFail": "Não foi possível escanear a pasta",
   "settings.toast.pickFolderFail": "Não foi possível abrir o seletor de pastas",
+  "settings.toast.noFolderPicker": "Este dispositivo não tem seletor de pastas",
+  "settings.toast.noFolderPickerHint": "Os downloads são salvos na pasta Downloads.",
   "settings.toast.pickFileFail": "Não foi possível abrir o seletor de arquivos",
   "settings.toast.imported": "{count} downloads importados",
   "settings.toast.checkConnLogin": "Verifique sua conexão ou login.",

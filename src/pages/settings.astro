@@ -4278,11 +4278,21 @@ const navStructure: NavSection[] = [
           }
         }
       } catch (e) {
-        log.error("Pick folder failed:", e)
-        toastError(t("settings.toast.pickFolderFail"), {
-          description: (e && e.message) || String(e) || "See console.",
-          duration: 7000,
-        })
+        if (e && e.name === "NoDirectoryPickerError") {
+          // Nothing to pick with, but the public Downloads folder still works.
+          if (dirPickBtn) dirPickBtn.disabled = true
+          toast({
+            title: t("settings.toast.noFolderPicker"),
+            description: t("settings.toast.noFolderPickerHint"),
+            duration: 7000,
+          })
+        } else {
+          log.error("Pick folder failed:", e)
+          toastError(t("settings.toast.pickFolderFail"), {
+            description: (e && e.message) || String(e) || "See console.",
+            duration: 7000,
+          })
+        }
       } finally {
         setLoading(dirPickBtn, false)
       }

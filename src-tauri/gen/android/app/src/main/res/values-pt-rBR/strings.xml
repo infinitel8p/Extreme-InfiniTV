@@ -2,4 +2,11 @@
 <resources>
     <string name="xt_channels_title">Canais</string>
     <string name="native_player_unsupported_stream">Não é possível reproduzir este canal no player nativo</string>
+    <string name="xt_video_settings_title">Configurações do player</string>
+    <string name="xt_video_display_mode">Modo de exibição</string>
+    <string name="xt_video_display_fit">Ajustar</string>
+    <string name="xt_video_display_zoom">Preencher a tela</string>
+    <string name="xt_video_display_stretch">Esticar</string>
+    <string name="xt_video_playback_speed">Velocidade de reprodução</string>
+    <string name="xt_video_speed_normal">Normal</string>
 </resources>

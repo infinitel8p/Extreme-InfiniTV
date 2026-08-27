@@ -2,4 +2,11 @@
 <resources>
     <string name="xt_channels_title">Chaînes</string>
     <string name="native_player_unsupported_stream">Impossible de lire cette chaîne dans le lecteur natif</string>
+    <string name="xt_video_settings_title">Paramètres du lecteur</string>
+    <string name="xt_video_display_mode">Mode d\'affichage</string>
+    <string name="xt_video_display_fit">Ajuster</string>
+    <string name="xt_video_display_zoom">Remplir l\'écran</string>
+    <string name="xt_video_display_stretch">Étirer</string>
+    <string name="xt_video_playback_speed">Vitesse de lecture</string>
+    <string name="xt_video_speed_normal">Normale</string>
 </resources>

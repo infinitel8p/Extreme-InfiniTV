@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "Tidak dapat memulihkan cadangan",
   "settings.toast.scanFail": "Tidak dapat memindai folder",
   "settings.toast.pickFolderFail": "Tidak dapat membuka pemilih folder",
+  "settings.toast.noFolderPicker": "Perangkat ini tidak memiliki pemilih folder",
+  "settings.toast.noFolderPickerHint": "Unduhan disimpan di folder Download.",
   "settings.toast.pickFileFail": "Tidak dapat membuka pemilih file",
   "settings.toast.imported": "Mengimpor {count} unduhan",
   "settings.toast.checkConnLogin": "Periksa koneksi atau login Anda.",

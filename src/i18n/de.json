@@ -851,6 +851,8 @@
   "settings.toast.backupRestoreFail": "Sicherung konnte nicht wiederhergestellt werden",
   "settings.toast.scanFail": "Ordner konnte nicht gescannt werden",
   "settings.toast.pickFolderFail": "Ordnerauswahl konnte nicht geöffnet werden",
+  "settings.toast.noFolderPicker": "Dieses Gerät hat keine Ordnerauswahl",
+  "settings.toast.noFolderPickerHint": "Downloads werden stattdessen im Ordner „Downloads“ gespeichert.",
   "settings.toast.pickFileFail": "Dateiauswahl konnte nicht geöffnet werden",
   "settings.toast.imported": "{count} Downloads importiert",
   "settings.toast.checkConnLogin": "Prüfe deine Verbindung oder Anmeldedaten.",
