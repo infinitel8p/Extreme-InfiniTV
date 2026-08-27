@@ -212,15 +212,16 @@ const navItems = [
                   title={label}
                   data-i18n-attr={`aria-label:${key};title:${key}`}
                   class="group/item relative flex min-h-14 w-full items-center justify-center gap-4
-                         rounded-2xl px-0 text-fg-2 outline-none transition-colors
+                         rounded-2xl px-0 text-fg-2 outline-none transition-colors tv-focus-inset
                          group-focus-within/rail:justify-start group-focus-within/rail:px-4
                          hover:bg-surface-2 hover:text-fg
-                         focus-visible:bg-surface-2 focus-visible:text-fg
+                         focus-visible:text-fg
                          data-[tv-nav-active=true]:bg-surface-2 data-[tv-nav-active=true]:text-fg">
                   <span
                     aria-hidden="true"
                     class="absolute left-0 top-2 bottom-2 w-1 rounded-full bg-accent opacity-0
-                           transition-opacity group-data-[tv-nav-active=true]/item:opacity-100"></span>
+                           transition-opacity group-data-[tv-nav-active=true]/item:opacity-100
+                           group-focus-visible/item:opacity-0!"></span>
                   <Icon
                     aria-hidden="true"
                     stroke={1.75}
@@ -242,10 +243,10 @@ const navItems = [
               aria-label="Playlist"
               data-i18n-attr="aria-label:tv.nav.playlist"
               class="flex min-h-14 w-full items-center justify-center gap-4 rounded-2xl px-0
-                     text-fg-2 outline-none transition-colors
+                     text-fg-2 outline-none transition-colors tv-focus-inset
                      group-focus-within/rail:justify-start group-focus-within/rail:px-4
                      hover:bg-surface-2 hover:text-fg
-                     focus-visible:bg-surface-2 focus-visible:text-fg">
+                     focus-visible:text-fg">
               <span
                 id="tv-nav-playlist-mark"
                 aria-hidden="true"
@@ -263,10 +264,10 @@ const navItems = [
               aria-label="Cast to this TV"
               data-i18n-attr="aria-label:tv.nav.cast"
               class="flex min-h-14 w-full items-center justify-center gap-4 rounded-2xl px-0
-                     text-fg-2 outline-none transition-colors
+                     text-fg-2 outline-none transition-colors tv-focus-inset
                      group-focus-within/rail:justify-start group-focus-within/rail:px-4
                      hover:bg-surface-2 hover:text-fg
-                     focus-visible:bg-surface-2 focus-visible:text-fg">
+                     focus-visible:text-fg">
               <IconCast aria-hidden="true" stroke={1.75} class="size-6 shrink-0 text-fg-3" />
               <span
                 class="hidden truncate text-base font-medium group-focus-within/rail:inline"

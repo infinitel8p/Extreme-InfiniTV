@@ -42,7 +42,7 @@ export function createRail(options: RailOptions): RailHandle {
   const scroller = document.createElement("div")
   scroller.className = "overflow-hidden py-[var(--tv-focus-pad)] -my-[var(--tv-focus-pad)]"
   const track = document.createElement("div")
-  track.className = "flex gap-5 px-12 py-1"
+  track.className = "flex items-start gap-5 px-12 py-1"
   scroller.appendChild(track)
 
   el.append(head, scroller)

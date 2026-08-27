@@ -407,7 +407,7 @@ function scheduleIdle(fn: () => void): void {
 const view: TvView = {
   mount(root: HTMLElement, _ctx: TvViewContext) {
     const scroller = document.createElement("div")
-    scroller.className = "h-full overflow-hidden py-[var(--tv-focus-pad)]"
+    scroller.className = "h-full overflow-hidden"
     const track = document.createElement("div")
     track.className = "flex flex-col gap-10 pb-20"
     scroller.appendChild(track)
@@ -430,7 +430,12 @@ const view: TvView = {
     function ensureInitialFocus(): void {
       if (initialFocusApplied) return
       const activeElement = document.activeElement
-      if (activeElement && activeElement !== document.body && root.contains(activeElement)) {
+      // The nav rail and open dialogs count as "the user already moved on".
+      const userHasFocus =
+        activeElement instanceof HTMLElement &&
+        activeElement !== document.body &&
+        (root.contains(activeElement) || !!activeElement.closest("#tv-nav, dialog[open]"))
+      if (userHasFocus) {
         initialFocusApplied = true
         return
       }

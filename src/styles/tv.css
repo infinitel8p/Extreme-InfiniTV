@@ -2,7 +2,7 @@
 
 html[data-tv-ui] {
   font-size: calc(1.15rem * var(--xt-font-scale, 1));
-  /* Buffer so focus-visible outlines/rings aren't clipped by ancestor overflow:hidden/auto. */
+  /* Room for the .tv-focus-card 1.05 scale to not clip against overflow:hidden ancestors. */
   --tv-focus-pad: 0.875rem;
 }
 
@@ -20,10 +20,53 @@ html[data-tauri-desktop][data-tv-overscan] body {
   );
 }
 
-/* Higher specificity than global.css's html[data-tv] rule so it wins regardless of CSS order. */
+/* Kills global.css's classic html[data-tv] outline ring so exactly one ring (below) ever shows. */
+/* Same [data-tv-ui][data-tv] double-attribute + tag-list shape as that rule, so specificity always wins. */
 html[data-tv-ui][data-tv] :is(a, button, summary, input, textarea, select, [tabindex]):focus-visible {
-  outline: 4px solid var(--color-accent);
-  outline-offset: 3px;
+  outline: none;
+  box-shadow: none;
+}
+
+/* Never clips against overflow:hidden ancestors; drawn inside the element's own box. */
+html[data-tv-ui][data-tv] .tv-focus-inset {
+  outline: none;
+}
+html[data-tv-ui][data-tv] .tv-focus-inset:focus-visible {
+  background: var(--color-surface-3);
+  box-shadow: inset 0 0 0 3px var(--color-accent);
+}
+
+/* Poster / live-tile cards: the ring lives on [data-poster-wrap], never on the title below it. */
+html[data-tv-ui][data-tv] .tv-focus-card {
+  outline: none;
+  will-change: transform;
+}
+html[data-tv-ui][data-tv] .tv-focus-card:focus-visible {
+  transform: scale(1.05);
+}
+/* ::after (not box-shadow on the wrap) so the ring paints above the full-bleed <img>, not under it. */
+html[data-tv-ui][data-tv] .tv-focus-card:focus-visible [data-poster-wrap]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 3px var(--color-accent);
+  pointer-events: none;
+}
+html[data-tv-ui][data-tv] .tv-focus-card:focus-visible .tv-card-title {
+  color: var(--color-fg);
+}
+
+/* Extra clip beyond overflow:hidden so anti-aliased poster corners never show a bleed speck. */
+/* Radii mirror Tailwind's rounded-lg/xl/2xl - pick the variant matching the element's own radius. */
+html[data-tv-ui] .tv-clip-round-lg {
+  clip-path: inset(0 round 0.5rem);
+}
+html[data-tv-ui] .tv-clip-round {
+  clip-path: inset(0 round 0.75rem);
+}
+html[data-tv-ui] .tv-clip-round-2xl {
+  clip-path: inset(0 round 1rem);
 }
 
 /* focus.ts keepFocusedInView() toggles this class before translating the track. */

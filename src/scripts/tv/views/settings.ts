@@ -610,7 +610,7 @@ const view: TvView = {
       const closeButton = document.createElement("button")
       closeButton.type = "button"
       closeButton.dataset.role = "close"
-      closeButton.className = "rounded-lg p-2 text-fg-3 hover:bg-surface-2 hover:text-fg"
+      closeButton.className = "rounded-lg p-2 text-fg-3 outline-none tv-focus-inset hover:bg-surface-2 hover:text-fg"
       const closeIcon = document.createElement("span")
       closeIcon.className = "inline-flex text-base"
       closeIcon.innerHTML = ICON_X
@@ -620,7 +620,7 @@ const view: TvView = {
 
       const listEl = document.createElement("div")
       listEl.dataset.role = "list"
-      listEl.className = "flex max-h-[45vh] flex-col overflow-y-auto p-[var(--tv-focus-pad)]"
+      listEl.className = "flex max-h-[45vh] flex-col overflow-y-auto p-2"
 
       const footer = document.createElement("div")
       footer.className = "border-t border-line p-2"
@@ -628,7 +628,7 @@ const view: TvView = {
       addLink.href = "/tv/login"
       addLink.className =
         "flex min-h-11 items-center gap-2.5 rounded-xl px-4 py-2.5 text-sm font-medium text-accent outline-none " +
-        "hover:bg-surface-2 focus-visible:bg-surface-2"
+        "hover:bg-surface-2 tv-focus-inset"
       const addIcon = document.createElement("span")
       addIcon.className = "inline-flex text-base"
       addIcon.innerHTML = ICON_PLAYLIST_ADD
@@ -707,7 +707,7 @@ const view: TvView = {
       const scroller = document.createElement("div")
       scroller.id = SETTINGS_SECTION_ID
       // overflow-hidden: keepFocusedInView owns the scrolling, so no native scrollbar.
-      scroller.className = "mt-6 min-h-0 flex-1 overflow-hidden p-[var(--tv-focus-pad)] -mx-[var(--tv-focus-pad)]"
+      scroller.className = "mt-6 min-h-0 flex-1 overflow-hidden"
 
       list = createSettingsList({ focusSectionId: "tv-settings-rows" })
       scroller.appendChild(list.el)

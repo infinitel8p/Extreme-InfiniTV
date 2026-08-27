@@ -40,7 +40,7 @@ interface Refs {
 }
 
 const TV_INPUT_CLASS =
-  "min-h-[3.75rem] w-full rounded-2xl border border-line bg-surface-2 px-5 text-lg text-fg placeholder:text-fg-3 outline-none transition-colors focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+  "min-h-[3.75rem] w-full rounded-2xl border border-line bg-surface-2 px-5 text-lg text-fg placeholder:text-fg-3 outline-none tv-focus-inset"
 
 const TV_LABEL_CLASS = "text-sm font-semibold uppercase tracking-wider text-fg-3"
 
@@ -134,7 +134,7 @@ function buildMarkup(): string {
                 <input data-role="password" data-focus-key="field:password" type="password"
                        class="${TV_INPUT_CLASS} flex-1" />
                 <button type="button" data-role="toggle-password" data-focus-key="toggle-password"
-                        class="shrink-0 min-h-[3.75rem] rounded-2xl border border-line px-5 text-base text-fg-2 outline-none transition-colors hover:bg-surface-2 focus-visible:border-accent">
+                        class="shrink-0 min-h-[3.75rem] rounded-2xl border border-line px-5 text-base text-fg-2 outline-none transition-colors hover:bg-surface-2 tv-focus-inset">
                   <span data-role="toggle-password-label" data-i18n="tv.login.action.showPassword">Show</span>
                 </button>
               </div>
@@ -230,10 +230,10 @@ const view: TvView = {
 
     function paintMethodButtons(): void {
       refs.methodXtream.className =
-        "flex min-h-[3.75rem] flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors " +
+        "flex min-h-[3.75rem] flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors tv-focus-inset " +
         (method === "xtream" ? ACTIVE_METHOD_CLASS : IDLE_METHOD_CLASS)
       refs.methodM3u.className =
-        "flex min-h-[3.75rem] flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors " +
+        "flex min-h-[3.75rem] flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors tv-focus-inset " +
         (method === "m3u" ? ACTIVE_METHOD_CLASS : IDLE_METHOD_CLASS)
       refs.methodXtream.setAttribute("aria-selected", String(method === "xtream"))
       refs.methodM3u.setAttribute("aria-selected", String(method === "m3u"))

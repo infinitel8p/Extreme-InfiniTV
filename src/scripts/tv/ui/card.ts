@@ -34,9 +34,7 @@ export function cardFocusKey(railId: string, kind: CardKind, id: string | number
   return `${railId}:${kind}:${id}`
 }
 
-const CARD_FOCUS_CLASSES =
-  "group outline-none transition-transform focus-visible:ring-4 focus-visible:ring-accent " +
-  "focus-visible:ring-offset-4 focus-visible:ring-offset-bg focus-visible:scale-[1.04]"
+const CARD_FOCUS_CLASSES = "self-start outline-none transition-transform tv-focus-card"
 
 function createPosterCard(item: PosterCardItem): HTMLAnchorElement {
   const card = document.createElement("a")
@@ -46,7 +44,8 @@ function createPosterCard(item: PosterCardItem): HTMLAnchorElement {
   card.className = `flex w-[11.5rem] shrink-0 flex-col gap-2 rounded-xl ${CARD_FOCUS_CLASSES}`
 
   const posterWrap = document.createElement("div")
-  posterWrap.className = "relative aspect-[2/3] w-full overflow-hidden rounded-xl bg-surface-2"
+  posterWrap.dataset.posterWrap = "1"
+  posterWrap.className = "relative aspect-[2/3] w-full overflow-hidden rounded-xl tv-clip-round bg-black/40"
 
   if (item.posterUrl) {
     const img = document.createElement("img")
@@ -71,7 +70,7 @@ function createPosterCard(item: PosterCardItem): HTMLAnchorElement {
   }
 
   const title = document.createElement("div")
-  title.className = "truncate text-sm font-medium text-fg"
+  title.className = "tv-card-title truncate text-sm font-medium text-fg-2"
   title.textContent = item.name
 
   const meta = document.createElement("div")
@@ -90,7 +89,8 @@ function createLiveCard(item: LiveCardItem): HTMLButtonElement {
   card.className = `flex w-[17rem] shrink-0 flex-col gap-2 rounded-xl text-left ${CARD_FOCUS_CLASSES}`
 
   const tileWrap = document.createElement("div")
-  tileWrap.className = "relative aspect-video w-full overflow-hidden rounded-xl bg-surface-2"
+  tileWrap.dataset.posterWrap = "1"
+  tileWrap.className = "relative aspect-video w-full overflow-hidden rounded-xl tv-clip-round bg-black/40"
 
   if (item.logoUrl) {
     const backdrop = document.createElement("img")
@@ -117,7 +117,7 @@ function createLiveCard(item: LiveCardItem): HTMLButtonElement {
   card.appendChild(tileWrap)
 
   const title = document.createElement("div")
-  title.className = "truncate text-sm font-medium text-fg"
+  title.className = "tv-card-title truncate text-sm font-medium text-fg-2"
   title.textContent = item.name
 
   const meta = document.createElement("div")

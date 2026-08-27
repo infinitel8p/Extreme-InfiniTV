@@ -116,12 +116,12 @@ const view: TvView = {
 
     const seasonsSection = document.createElement("section")
     seasonsSection.id = SEASONS_FOCUS_SECTION_ID
-    seasonsSection.className = "flex gap-2 overflow-x-auto px-[var(--tv-focus-pad)]"
+    seasonsSection.className = "flex gap-2 overflow-x-auto"
     seasonsSection.hidden = true
 
     const episodesScroller = document.createElement("div")
     episodesScroller.id = EPISODES_FOCUS_SECTION_ID
-    episodesScroller.className = "overflow-hidden p-[var(--tv-focus-pad)] -m-[var(--tv-focus-pad)]"
+    episodesScroller.className = "overflow-hidden"
     const episodesTrack = document.createElement("div")
     episodesTrack.className = "flex flex-col gap-2"
     episodesScroller.appendChild(episodesTrack)
@@ -359,17 +359,17 @@ const view: TvView = {
       button.type = "button"
       button.dataset.focusKey = episodeFocusKey(entry.season, entry.episodeNum)
       button.className =
-        "group relative flex items-center gap-4 rounded-xl p-3 text-left outline-none transition-colors " +
-        "hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:ring-4 focus-visible:ring-accent"
+        "relative flex items-center gap-4 rounded-xl p-3 text-left outline-none transition-colors " +
+        "hover:bg-surface-2 tv-focus-inset"
 
       const thumbWrap = document.createElement("div")
-      thumbWrap.className = "relative aspect-video w-40 shrink-0 overflow-hidden rounded-lg bg-surface-3"
+      thumbWrap.className = "relative aspect-video w-40 shrink-0 overflow-hidden rounded-lg tv-clip-round-lg bg-black/40"
       if (entry.thumbUrl) {
         const img = document.createElement("img")
         img.alt = ""
         img.loading = "lazy"
         img.decoding = "async"
-        img.className = "block h-full w-full object-cover"
+        img.className = "block h-full w-full rounded-lg object-cover"
         thumbWrap.appendChild(img)
         mountCachedImage(img, entry.thumbUrl, "poster")
       }
@@ -421,8 +421,7 @@ const view: TvView = {
         chip.dataset.focusKey = `season:${seasonNumber}`
         const active = seasonNumber === currentSeason
         chip.className =
-          "shrink-0 rounded-full border px-4 py-2 text-sm font-medium outline-none transition-colors " +
-          "focus-visible:ring-4 focus-visible:ring-accent " +
+          "shrink-0 rounded-full border px-4 py-2 text-sm font-medium outline-none transition-colors tv-focus-inset " +
           (active ? "border-accent text-accent" : "border-line text-fg-2 hover:text-fg")
         chip.textContent = t("series.season", { n: seasonNumber })
         chip.setAttribute("aria-current", String(active))

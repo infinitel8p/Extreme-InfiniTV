@@ -99,7 +99,7 @@ function buildThumb(logoUrl: string | null | undefined): HTMLSpanElement {
   const box = document.createElement("span")
   box.setAttribute("aria-hidden", "true")
   box.className =
-    "grid aspect-video h-16 shrink-0 place-items-center overflow-hidden rounded-lg bg-surface-2 ring-1 ring-inset ring-line"
+    "grid aspect-video h-16 shrink-0 place-items-center overflow-hidden rounded-lg tv-clip-round-lg bg-black/40 ring-1 ring-inset ring-line"
   if (logoUrl) {
     const img = document.createElement("img")
     img.alt = ""
@@ -199,7 +199,7 @@ const view: TvView = {
       dialog.innerHTML = `
         <div class="flex items-center justify-between gap-4 border-b border-line px-5 py-4">
           <h2 data-role="title" class="min-w-0 flex-1 truncate text-base font-semibold"></h2>
-          <button type="button" data-role="close" class="rounded-lg p-2 text-fg-3 hover:bg-surface-2 hover:text-fg" aria-label="${t("common.close")}">
+          <button type="button" data-role="close" class="rounded-lg p-2 text-fg-3 outline-none tv-focus-inset hover:bg-surface-2 hover:text-fg" aria-label="${t("common.close")}">
             <span class="inline-flex text-base">${ICON_X}</span>
           </button>
         </div>
@@ -250,7 +250,7 @@ const view: TvView = {
           button.type = "button"
           button.className =
             "flex min-h-11 items-center rounded-xl px-4 text-start text-sm outline-none transition-colors " +
-            "hover:bg-surface-2 focus-visible:bg-surface-2" +
+            "hover:bg-surface-2 tv-focus-inset" +
             (action.destructive ? " text-bad" : "")
           button.textContent = action.label
           button.addEventListener("click", () => {
@@ -278,7 +278,7 @@ const view: TvView = {
       playButton.dataset.focusKey = `dl:${item.id}`
       playButton.className =
         "flex min-h-[5.5rem] min-w-0 flex-1 items-center gap-4 rounded-xl px-3 py-2 text-start outline-none " +
-        "hover:bg-surface-2 focus-visible:bg-surface-2"
+        "hover:bg-surface-2 tv-focus-inset"
 
       const thumbSlot = buildThumb(item.source?.logo)
       const thumbImg = thumbSlot.querySelector<HTMLImageElement>("img")
@@ -333,7 +333,7 @@ const view: TvView = {
       menuButton.setAttribute("aria-label", t("tv.downloads.moreAria", { title: item.title }))
       menuButton.className =
         "grid shrink-0 place-items-center rounded-xl p-3 text-fg-3 outline-none transition-colors " +
-        "hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg"
+        "hover:bg-surface-2 hover:text-fg focus-visible:text-fg tv-focus-inset"
       menuButton.innerHTML = `<span class="inline-flex text-base">${ICON_DOTS}</span>`
       menuButton.addEventListener("click", () => openActionSheet(currentItem(item.id) || item))
       refs.el.appendChild(menuButton)
@@ -453,12 +453,12 @@ const view: TvView = {
         <div class="flex h-full flex-col gap-6">
           <header class="flex shrink-0 flex-col gap-1">
             <div class="flex items-baseline gap-3">
-              <h1 tabindex="0" data-tv-autofocus class="text-3xl font-semibold text-fg outline-none" data-role="heading"></h1>
+              <h1 tabindex="0" data-tv-autofocus class="rounded-lg text-3xl font-semibold text-fg outline-none tv-focus-inset" data-role="heading"></h1>
               <span data-role="count" class="text-sm text-fg-3"></span>
             </div>
             <p data-role="folder" class="hidden text-sm text-fg-3"></p>
           </header>
-          <div data-role="scroller" class="min-h-0 flex-1 overflow-hidden p-[var(--tv-focus-pad)] -mx-[var(--tv-focus-pad)]">
+          <div data-role="scroller" class="min-h-0 flex-1 overflow-hidden">
             <div data-role="list" class="flex flex-col gap-1"></div>
             <p data-role="empty" class="hidden flex-col items-center gap-1 px-4 py-16 text-center"></p>
           </div>

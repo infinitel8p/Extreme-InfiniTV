@@ -5,6 +5,7 @@ import { t } from "@/scripts/lib/i18n"
 import { registerFocusSection } from "@/scripts/tv/focus"
 
 const ACTIONS_FOCUS_SECTION_ID = "tv-detail-actions"
+const DESCRIPTION_FOCUS_SECTION_ID = "tv-detail-description"
 
 export interface DetailHero {
   backdropUrl: string | null
@@ -44,8 +45,7 @@ const RATING_STAR_SVG =
 
 const ACTION_BASE_CLASS =
   "inline-flex h-14 shrink-0 items-center gap-2 rounded-2xl px-6 text-base font-semibold outline-none " +
-  "transition-transform focus-visible:ring-4 focus-visible:ring-accent focus-visible:ring-offset-4 " +
-  "focus-visible:ring-offset-bg focus-visible:scale-[1.04] disabled:opacity-40"
+  "tv-focus-inset disabled:opacity-40"
 
 function actionVariantClass(action: DetailAction): string {
   if (action.primary) return "bg-accent text-bg hover:opacity-90"
@@ -70,6 +70,7 @@ function buildActionButton(action: DetailAction): HTMLButtonElement {
   }
 
   const labelEl = document.createElement("span")
+  if (action.primary) labelEl.className = "max-w-[26rem] truncate"
   labelEl.textContent = action.label
   button.appendChild(labelEl)
 
@@ -134,13 +135,14 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   chipsRow.className = "flex flex-wrap items-center gap-2"
 
   const descriptionWrap = document.createElement("div")
+  descriptionWrap.id = DESCRIPTION_FOCUS_SECTION_ID
   descriptionWrap.className = "flex flex-col items-start gap-1"
   const descriptionEl = document.createElement("p")
   descriptionEl.className = "line-clamp-4 max-w-2xl text-fg-2"
   const moreButton = document.createElement("button")
   moreButton.type = "button"
   moreButton.className =
-    "rounded text-sm font-medium text-accent outline-none hover:underline focus-visible:ring-1 focus-visible:ring-accent"
+    "rounded px-1 -mx-1 text-sm font-medium text-accent outline-none hover:underline tv-focus-inset"
   moreButton.hidden = true
   let descriptionExpanded = false
   moreButton.addEventListener("click", () => {
@@ -155,7 +157,7 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   heroSection.append(heroSkeleton, backdropWrap, gradientLeft, gradientBottom, heroContent)
 
   const actionsSkeleton = document.createElement("div")
-  actionsSkeleton.className = "flex gap-3 px-2"
+  actionsSkeleton.className = "flex flex-wrap gap-3 px-2"
   actionsSkeleton.append(
     buildSkeletonBlock("h-14 w-32"),
     buildSkeletonBlock("h-14 w-14"),
@@ -164,7 +166,7 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
 
   const actionsRow = document.createElement("div")
   actionsRow.id = "tv-detail-actions"
-  actionsRow.className = "flex gap-3 px-2"
+  actionsRow.className = "flex flex-wrap gap-3 px-2"
 
   const sections = document.createElement("div")
   sections.className = "flex flex-col gap-10"
@@ -172,7 +174,27 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   el.append(heroSection, actionsSkeleton, actionsRow, sections)
   root.appendChild(el)
 
-  const unregisterActionsSection = registerFocusSection(ACTIONS_FOCUS_SECTION_ID, actionsRow)
+  const unregisterActionsSection = registerFocusSection(ACTIONS_FOCUS_SECTION_ID, actionsRow, {
+    leaveFor: { up: `@${DESCRIPTION_FOCUS_SECTION_ID}` },
+  })
+  const unregisterDescriptionSection = registerFocusSection(DESCRIPTION_FOCUS_SECTION_ID, descriptionWrap, {
+    enterTo: "default-element",
+    defaultElement: `#${DESCRIPTION_FOCUS_SECTION_ID} button`,
+  })
+
+  function pageScroller(): HTMLElement | null {
+    for (let element: HTMLElement | null = el; element; element = element.parentElement) {
+      if (element.scrollHeight > element.clientHeight + 1) return element
+    }
+    return null
+  }
+
+  // Native focus-scroll leaves the hero above the viewport; the action row is the way back to it.
+  function onActionsFocusIn(): void {
+    const scroller = pageScroller()
+    if (scroller && scroller.scrollTop !== 0) scroller.scrollTop = 0
+  }
+  actionsRow.addEventListener("focusin", onActionsFocusIn)
 
   function setBackdrop(backdropUrl: string | null, posterUrl: string | null): void {
     backdropWrap.replaceChildren()
@@ -247,7 +269,9 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   setSkeleton(true)
 
   function destroy(): void {
+    actionsRow.removeEventListener("focusin", onActionsFocusIn)
     unregisterActionsSection()
+    unregisterDescriptionSection()
     el.remove()
   }
 

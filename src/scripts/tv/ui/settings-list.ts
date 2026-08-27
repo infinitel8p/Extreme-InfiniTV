@@ -22,11 +22,18 @@ export interface SettingsListHandle {
   destroy(): void
 }
 
-function togglePillClass(on: boolean): string {
-  return (
-    "shrink-0 rounded-full border px-3 py-1 text-xs font-medium " +
-    (on ? "border-accent/40 bg-accent-soft text-accent" : "border-line bg-surface-2 text-fg-3")
-  )
+function buildSwitch(checked: boolean): HTMLSpanElement {
+  const track = document.createElement("span")
+  track.setAttribute("aria-hidden", "true")
+  track.className =
+    "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors " +
+    (checked ? "bg-accent" : "bg-surface-3")
+  const knob = document.createElement("span")
+  knob.className =
+    "inline-block size-5 rounded-full bg-white shadow transition-transform " +
+    (checked ? "translate-x-5" : "translate-x-0.5")
+  track.appendChild(knob)
+  return track
 }
 
 function buildRow(row: SettingsRow): HTMLButtonElement {
@@ -37,7 +44,7 @@ function buildRow(row: SettingsRow): HTMLButtonElement {
   button.disabled = !!row.disabled
   button.className =
     "flex min-h-[4.5rem] w-full items-center gap-4 rounded-xl px-4 text-start outline-none " +
-    "hover:bg-surface-2 focus-visible:bg-surface-2 disabled:pointer-events-none disabled:opacity-40"
+    "hover:bg-surface-2 tv-focus-inset disabled:pointer-events-none disabled:opacity-40"
 
   if (row.icon) {
     const iconMark = document.createElement("span")
@@ -55,10 +62,7 @@ function buildRow(row: SettingsRow): HTMLButtonElement {
   if (row.kind === "toggle") {
     button.setAttribute("role", "switch")
     button.setAttribute("aria-checked", String(!!row.checked))
-    const pill = document.createElement("span")
-    pill.className = togglePillClass(!!row.checked)
-    pill.textContent = row.checked ? t("tv.settings.toggleOn") : t("tv.settings.toggleOff")
-    button.appendChild(pill)
+    button.appendChild(buildSwitch(!!row.checked))
   } else if (row.value) {
     const value = document.createElement("span")
     value.className = "max-w-[45%] shrink-0 truncate text-sm text-fg-3"
@@ -147,7 +151,7 @@ function buildChoiceOption(option: ChoiceOption, isSelected: boolean, dialog: HT
   button.dataset.focusKey = `choice:${option.id}`
   button.className =
     "flex w-full flex-col gap-0.5 rounded-xl px-4 py-2.5 text-start outline-none " +
-    "hover:bg-surface-2 focus-visible:bg-surface-2"
+    "hover:bg-surface-2 tv-focus-inset"
   if (isSelected) button.dataset.selected = "true"
 
   const labelLine = document.createElement("span")
@@ -194,7 +198,7 @@ function ensureChoiceDialog(): HTMLDialogElement {
   const closeButton = document.createElement("button")
   closeButton.type = "button"
   closeButton.dataset.role = "close"
-  closeButton.className = "rounded-lg p-2 text-fg-3 hover:bg-surface-2 hover:text-fg"
+  closeButton.className = "rounded-lg p-2 text-fg-3 outline-none tv-focus-inset hover:bg-surface-2 hover:text-fg"
   const closeIcon = document.createElement("span")
   closeIcon.className = "inline-flex text-base"
   closeIcon.innerHTML = ICON_X
@@ -203,7 +207,7 @@ function ensureChoiceDialog(): HTMLDialogElement {
 
   const list = document.createElement("div")
   list.dataset.role = "list"
-  list.className = "flex max-h-[55vh] flex-col overflow-y-auto p-[var(--tv-focus-pad)]"
+  list.className = "flex max-h-[55vh] flex-col overflow-y-auto p-2"
 
   dialog.append(header, list)
   document.body.appendChild(dialog)

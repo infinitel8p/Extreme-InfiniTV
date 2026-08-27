@@ -27,7 +27,7 @@ export interface HeroHandle {
 export function createHero(root: HTMLElement): HeroHandle {
   const section = document.createElement("section")
   section.className =
-    "relative h-[38vh] min-h-[22rem] w-full shrink-0 overflow-hidden rounded-2xl bg-surface-2"
+    "relative h-[38vh] min-h-[22rem] w-full shrink-0 overflow-hidden rounded-2xl tv-clip-round-2xl bg-black/40"
 
   const backdropWrap = document.createElement("div")
   backdropWrap.className = "absolute inset-0"
@@ -104,9 +104,7 @@ export function createHero(root: HTMLElement): HeroHandle {
     if (cta.autofocus) ctaEl.dataset.tvAutofocus = ""
     ctaEl.className =
       "mt-2 inline-flex w-fit items-center gap-2 rounded-xl bg-accent px-6 py-3 text-base " +
-      "font-semibold text-bg outline-none transition-transform focus-visible:ring-4 " +
-      "focus-visible:ring-accent focus-visible:ring-offset-4 focus-visible:ring-offset-bg " +
-      "focus-visible:scale-[1.04]"
+      "font-semibold text-bg outline-none tv-focus-inset"
     ctaEl.textContent = cta.label
     textBlock.appendChild(ctaEl)
   }

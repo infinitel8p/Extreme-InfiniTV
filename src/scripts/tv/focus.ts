@@ -8,10 +8,36 @@ interface FocusSectionOpts {
   defaultElement?: string
 }
 
+export const NAV_SECTION_ID = "tv-nav"
+const MAIN_SECTION_ID = "main"
+
+let mainSectionConfig: Record<string, unknown> | null = null
+
 function ensureElementId(root: HTMLElement, prefix: string): string {
   if (root.id) return root.id
   root.id = `${prefix}-${Math.random().toString(36).slice(2, 9)}`
   return root.id
+}
+
+/**
+ * (Re)registers the catch-all "main" section. Kept last in the polyfill's section
+ * order, since getSectionId assigns an element to the first matching section and
+ * "main" matches everything a view section matches.
+ */
+export function registerMainFocusSection(config: Record<string, unknown>): void {
+  mainSectionConfig = { ...config, id: MAIN_SECTION_ID }
+  moveMainSectionLast()
+}
+
+function moveMainSectionLast(): void {
+  const spatialNav = window.SpatialNavigation
+  if (!spatialNav || !mainSectionConfig) return
+  try {
+    spatialNav.remove(MAIN_SECTION_ID)
+  } catch {}
+  try {
+    spatialNav.add({ ...mainSectionConfig })
+  } catch {}
 }
 
 /** Registers a spatial-nav section scoped to `root`'s descendants. Returns an unregister fn. */
@@ -30,11 +56,12 @@ export function registerFocusSection(
     spatialNav.add({
       id,
       selector,
-      enterTo: opts.enterTo || "default-element",
+      enterTo: opts.enterTo || "last-focused",
       restrict: opts.restrict,
-      leaveFor: opts.leaveFor,
+      leaveFor: { left: `@${NAV_SECTION_ID}`, ...opts.leaveFor },
       defaultElement: opts.defaultElement || selector,
     })
+    moveMainSectionLast()
     spatialNav.makeFocusable?.()
   } catch {
     return () => {}
@@ -71,8 +98,15 @@ export function keepFocusedInView(scroller: HTMLElement, axis: "x" | "y", offset
   const track = scroller.firstElementChild as HTMLElement | null
   if (!track) return () => {}
 
-  if (getComputedStyle(track).position === "static") {
-    track.classList.add("tv-keep-in-view-track")
+  let trackPositioned = false
+
+  // Deferred: getComputedStyle reports nothing while the track is still detached,
+  // and an unpositioned track lets the offsetParent walk escape past it.
+  function ensureTrackPositioned(): void {
+    if (trackPositioned) return
+    trackPositioned = true
+    const position = getComputedStyle(track!).position
+    if (position === "static" || !position) track!.classList.add("tv-keep-in-view-track")
   }
 
   // clientWidth/Height counts the scroller's padding, but the track only fills its content box.
@@ -83,17 +117,24 @@ export function keepFocusedInView(scroller: HTMLElement, axis: "x" | "y", offset
     return start + end
   }
 
+  function trackPaddingStart(): number {
+    const styles = getComputedStyle(track!)
+    return parseFloat(axis === "x" ? styles.paddingLeft : styles.paddingTop) || 0
+  }
+
   function onFocusIn(event: FocusEvent): void {
     const target = event.target
     if (!(target instanceof HTMLElement) || !track!.contains(target)) return
+    ensureTrackPositioned()
 
     const scrollerSize =
       (axis === "x" ? scroller.clientWidth : scroller.clientHeight) - paddingAlongAxis()
     const trackSize = axis === "x" ? track!.scrollWidth : track!.scrollHeight
     const maxShift = Math.max(0, trackSize - scrollerSize)
 
-    const targetOffset = offsetFromTrack(target, track!, axis)
-    const next = clamp(offsetPx - targetOffset, -maxShift, 0)
+    // Measured from the track's content-box start, so the first item rests at 0.
+    const targetOffset = offsetFromTrack(target, track!, axis) - trackPaddingStart()
+    const next = -clamp(targetOffset - offsetPx, 0, maxShift)
 
     // Native focus-scroll / wheel would stack on top of the transform.
     if (axis === "x") scroller.scrollLeft = 0

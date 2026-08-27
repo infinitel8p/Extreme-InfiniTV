@@ -82,18 +82,18 @@ function buildShellMarkup(): string {
   return `
     <div class="grid h-full grid-cols-[16rem_minmax(0,1fr)_26rem] gap-6">
       <nav data-role="groups-col" class="flex min-h-0 flex-col overflow-hidden">
-        <div data-role="groups-scroller" class="min-h-0 flex-1 overflow-hidden p-[var(--tv-focus-pad)]">
+        <div data-role="groups-scroller" class="min-h-0 flex-1 overflow-hidden p-2">
           <div data-role="groups-track" class="flex flex-col gap-1"></div>
         </div>
       </nav>
 
-      <div data-role="channels-col" class="flex min-h-0 flex-col overflow-hidden pt-[var(--tv-focus-pad)] px-[var(--tv-focus-pad)]">
-        <div class="mb-3 flex shrink-0 items-center gap-2 rounded-lg bg-surface-2 px-3 focus-within:ring-1 focus-within:ring-accent">
+      <div data-role="channels-col" class="flex min-h-0 flex-col overflow-hidden pt-2 px-2">
+        <div class="mb-3 flex shrink-0 items-center gap-2 rounded-lg bg-surface-2 px-3">
           <span class="shrink-0 text-fg-3" aria-hidden="true">${ICON_SEARCH}</span>
           <input data-role="search" type="search" autocomplete="off" spellcheck="false"
-                 class="min-h-11 w-full bg-transparent text-sm outline-none placeholder:text-fg-3" />
+                 class="min-h-11 w-full rounded-lg bg-transparent text-sm outline-none tv-focus-inset placeholder:text-fg-3" />
         </div>
-        <div data-role="channels-scroller" class="min-h-0 flex-1 overflow-hidden py-[var(--tv-focus-pad)]">
+        <div data-role="channels-scroller" class="min-h-0 flex-1 overflow-hidden py-2">
           <div data-role="channels-track" class="flex flex-col gap-1"></div>
         </div>
         <p data-role="channels-status" class="hidden shrink-0 pt-3 text-center text-sm text-fg-3" role="status"></p>
@@ -102,7 +102,7 @@ function buildShellMarkup(): string {
       <div data-role="guide-col" class="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-surface">
         <header data-role="guide-header" class="hidden shrink-0 items-center gap-3 border-b border-line p-4"></header>
         <div data-role="guide-scroller" class="min-h-0 flex-1 overflow-hidden">
-          <div data-role="guide-track" class="flex flex-col gap-1 p-[var(--tv-focus-pad)]"></div>
+          <div data-role="guide-track" class="flex flex-col gap-1 p-2"></div>
         </div>
       </div>
     </div>
@@ -172,7 +172,7 @@ function buildGroupButton(group: CastChannelGroup, isActive: boolean): HTMLButto
   button.dataset.active = isActive ? "true" : "false"
   button.className =
     "group/grp relative flex min-h-12 w-full items-center gap-3 rounded-xl px-4 text-start outline-none " +
-    "transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 data-[active=true]:bg-surface-2 data-[active=true]:text-fg"
+    "transition-colors hover:bg-surface-2 tv-focus-inset data-[active=true]:bg-surface-2 data-[active=true]:text-fg"
 
   const accentBar = document.createElement("span")
   accentBar.setAttribute("aria-hidden", "true")
@@ -196,7 +196,7 @@ function buildChannelRow(channel: LiveChannel, index: number, isPlaying: boolean
   row.type = "button"
   row.className =
     "channel-row grid min-h-[4.5rem] w-full grid-cols-[3.25rem_4rem_minmax(0,1fr)] items-center gap-3 rounded-xl px-3 py-2 " +
-    "text-start outline-none hover:bg-surface-2 focus-visible:bg-surface-2"
+    "text-start outline-none hover:bg-surface-2 tv-focus-inset"
   row.dataset.focusKey = `ch:${channel.id}`
   row.dataset.channelId = String(channel.id)
   if (isPlaying) row.dataset.nowPlaying = "true"
@@ -370,7 +370,7 @@ const view: TvView = {
       row.type = "button"
       row.className =
         "relative flex min-h-14 w-full flex-col gap-1 rounded-lg px-3 py-2 text-start outline-none " +
-        "hover:bg-surface-2 focus-visible:bg-surface-2" +
+        "hover:bg-surface-2 tv-focus-inset" +
         (isPast && !canReplay && !isCurrent ? " text-fg-3" : "")
 
       const topLine = document.createElement("span")

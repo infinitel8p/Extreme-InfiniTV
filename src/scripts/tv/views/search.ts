@@ -84,7 +84,7 @@ function metaForCatalogRow(row: CatalogRow, kind: "vod" | "series"): string {
 const view: TvView = {
   mount(root: HTMLElement, ctx: TvViewContext) {
     const scroller = document.createElement("div")
-    scroller.className = "h-full overflow-hidden py-[var(--tv-focus-pad)]"
+    scroller.className = "h-full overflow-hidden"
     const track = document.createElement("div")
     track.className = "flex flex-col gap-8 pt-8 pb-20"
     scroller.appendChild(track)
@@ -93,8 +93,7 @@ const view: TvView = {
     const inputWrap = document.createElement("div")
     inputWrap.className = "px-12"
     const inputBox = document.createElement("div")
-    inputBox.className =
-      "flex h-[3.75rem] items-center gap-3 rounded-2xl bg-surface-2 px-5 transition-shadow focus-within:ring-2 focus-within:ring-accent"
+    inputBox.className = "flex h-[3.75rem] items-center gap-3 rounded-2xl bg-surface-2 px-5"
     const searchIcon = document.createElement("span")
     searchIcon.setAttribute("aria-hidden", "true")
     searchIcon.className = "shrink-0 text-fg-3"
@@ -105,7 +104,8 @@ const view: TvView = {
     inputEl.spellcheck = false
     inputEl.dataset.tvAutofocus = ""
     inputEl.dataset.focusKey = "search:input"
-    inputEl.className = "min-w-0 flex-1 bg-transparent text-lg text-fg outline-none placeholder:text-fg-3"
+    inputEl.className =
+      "h-full min-w-0 flex-1 rounded-2xl bg-transparent text-lg text-fg outline-none tv-focus-inset placeholder:text-fg-3"
     inputBox.append(searchIcon, inputEl)
     inputWrap.appendChild(inputBox)
 
@@ -119,7 +119,8 @@ const view: TvView = {
     const recentClear = document.createElement("button")
     recentClear.type = "button"
     recentClear.dataset.focusKey = "search:recent:clear"
-    recentClear.className = "rounded-lg px-2 py-1 text-sm text-fg-3 outline-none transition-colors hover:text-fg focus-visible:text-fg"
+    recentClear.className =
+      "rounded-lg px-2 py-1 text-sm text-fg-3 outline-none transition-colors hover:text-fg focus-visible:text-fg tv-focus-inset"
     recentHead.append(recentHeading, recentClear)
     const recentTrack = document.createElement("div")
     recentTrack.className = "flex flex-wrap gap-2"
@@ -186,7 +187,7 @@ const view: TvView = {
         chip.dataset.focusKey = `search:recent:${recent.text}`
         chip.className =
           "inline-flex min-h-11 items-center rounded-full border border-line bg-surface px-4 text-sm text-fg-2 outline-none " +
-          "transition-colors hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent"
+          "transition-colors hover:bg-surface-2 tv-focus-inset"
         chip.textContent = recent.text
         chip.addEventListener("click", () => selectRecentChip(recent.text))
         recentTrack.appendChild(chip)

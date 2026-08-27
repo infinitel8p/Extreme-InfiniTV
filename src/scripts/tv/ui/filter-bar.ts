@@ -7,10 +7,11 @@ import { ICON_CHEVRON_DOWN, ICON_CHECK, ICON_SEARCH } from "@/scripts/lib/icons"
 
 const QUERY_DEBOUNCE_MS = 150
 
-const CHIP_CLASS =
-  "flex h-[3.25rem] items-center gap-2 rounded-full bg-surface-2 px-5 text-sm font-medium text-fg outline-none " +
-  "transition-transform focus-visible:ring-4 focus-visible:ring-accent focus-visible:ring-offset-4 " +
-  "focus-visible:ring-offset-bg focus-visible:scale-[1.04]"
+const CHIP_BASE_CLASS =
+  "flex h-[3.25rem] items-center gap-2 rounded-full px-5 text-sm font-medium outline-none tv-focus-inset"
+const CHIP_CLASS = `${CHIP_BASE_CLASS} bg-surface-2 text-fg`
+const HIDE_WATCHED_OFF_CLASS = `${CHIP_BASE_CLASS} border border-line text-fg-2`
+const HIDE_WATCHED_ON_CLASS = `${CHIP_BASE_CLASS} border border-accent bg-accent/15 text-accent`
 
 export interface FilterOption {
   value: string
@@ -54,7 +55,7 @@ function ensureOptionsDialog(): HTMLDialogElement {
     "m-auto max-h-[70vh] w-[26rem] max-w-[90vw] rounded-2xl border border-line bg-surface p-0 text-fg backdrop:bg-black/70"
   dialog.innerHTML =
     '<div class="border-b border-line px-6 py-4"><h2 id="tv-filter-options-title" class="text-lg font-semibold"></h2></div>' +
-    '<div id="tv-filter-options-list" class="flex max-h-[55vh] flex-col overflow-y-auto p-[var(--tv-focus-pad)]"></div>'
+    '<div id="tv-filter-options-list" class="flex max-h-[55vh] flex-col overflow-y-auto p-2"></div>'
   document.body.appendChild(dialog)
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.close()
@@ -86,7 +87,7 @@ export function openTvOptionsDialog(params: OpenOptionsDialogParams): void {
       row.dataset.focusKey = `tv-filter-option:${option.value}`
       row.className =
         "flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left text-sm outline-none " +
-        "hover:bg-surface-2 focus-visible:bg-surface-2 " +
+        "hover:bg-surface-2 tv-focus-inset " +
         (isSelected ? "text-accent" : "text-fg")
 
       const left = document.createElement("span")
@@ -154,24 +155,21 @@ export function createFilterBar(options: FilterBarOptions): FilterBarHandle {
   hideWatchedChip.type = "button"
   hideWatchedChip.dataset.focusKey = "filter:hideWatched"
   hideWatchedChip.setAttribute("role", "checkbox")
-  hideWatchedChip.className = CHIP_CLASS
-  const hideWatchedCheck = document.createElement("span")
-  hideWatchedCheck.className = "shrink-0 text-accent opacity-0 transition-opacity"
-  hideWatchedCheck.innerHTML = ICON_CHECK
+  hideWatchedChip.className = HIDE_WATCHED_OFF_CLASS
   const hideWatchedLabelEl = document.createElement("span")
   hideWatchedLabelEl.textContent = options.hideWatchedLabel
-  hideWatchedChip.append(hideWatchedCheck, hideWatchedLabelEl)
+  hideWatchedChip.append(hideWatchedLabelEl)
   hideWatchedChip.addEventListener("click", () => options.onToggleHideWatched())
 
   const searchWrap = document.createElement("label")
-  searchWrap.className = `${CHIP_CLASS} min-w-[16rem] flex-1 cursor-text`
+  searchWrap.className = "flex h-[3.25rem] min-w-[16rem] flex-1 cursor-text items-center gap-2 rounded-full bg-surface-2 px-5"
   const searchIcon = document.createElement("span")
   searchIcon.className = "shrink-0 text-fg-3"
   searchIcon.innerHTML = ICON_SEARCH
   const searchInput = document.createElement("input")
   searchInput.type = "search"
   searchInput.dataset.focusKey = "filter:query"
-  searchInput.className = "w-full bg-transparent text-fg outline-none placeholder:text-fg-3"
+  searchInput.className = "h-full w-full rounded-full bg-transparent text-fg outline-none tv-focus-inset placeholder:text-fg-3"
   if (options.searchPlaceholder) searchInput.placeholder = options.searchPlaceholder
   searchWrap.append(searchIcon, searchInput)
 
@@ -189,7 +187,18 @@ export function createFilterBar(options: FilterBarOptions): FilterBarHandle {
     categoryLabelEl.textContent = labels.categoryLabel
     sortLabelEl.textContent = labels.sortLabel
     hideWatchedChip.setAttribute("aria-checked", String(state.hideWatched))
-    hideWatchedCheck.style.opacity = state.hideWatched ? "1" : "0"
+    hideWatchedChip.setAttribute("aria-pressed", String(state.hideWatched))
+    hideWatchedChip.className = state.hideWatched ? HIDE_WATCHED_ON_CLASS : HIDE_WATCHED_OFF_CLASS
+    const existingCheck = hideWatchedChip.querySelector("[data-role=check]")
+    if (state.hideWatched && !existingCheck) {
+      const check = document.createElement("span")
+      check.dataset.role = "check"
+      check.className = "shrink-0"
+      check.innerHTML = ICON_CHECK
+      hideWatchedChip.prepend(check)
+    } else if (!state.hideWatched && existingCheck) {
+      existingCheck.remove()
+    }
     if (state.query != null && searchInput.value !== state.query) searchInput.value = state.query
   }
 

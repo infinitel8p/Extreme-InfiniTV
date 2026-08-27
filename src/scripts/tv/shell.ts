@@ -6,6 +6,9 @@ import { mountBackHandler } from "@/scripts/lib/back-handler"
 import { mountTvInputGuard } from "@/scripts/lib/tv-input-guard"
 import { initConnectivity } from "@/scripts/lib/connectivity.js"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav"
+import { initUiSounds } from "@/scripts/lib/ui-sounds"
+import { initHaptics } from "@/scripts/lib/haptics"
+import { registerMainFocusSection, NAV_SECTION_ID } from "@/scripts/tv/focus"
 import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
 import { renderPlaylistRow } from "@/scripts/lib/playlist-rows.js"
 import { ICON_X } from "@/scripts/lib/icons"
@@ -109,24 +112,65 @@ function isNavigableElement(elem: Element): boolean {
   return true
 }
 
+const VERTICAL_KEYS: Record<string, true> = { ArrowUp: true, ArrowDown: true, PageUp: true, PageDown: true }
+let verticalMovePending = false
+
+function mountNavDirectionGuard(): void {
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      verticalMovePending = !!VERTICAL_KEYS[event.key]
+    },
+    true
+  )
+}
+
+// Up/Down must never jump sideways into the nav; only Left may enter it.
+function isNavigableNavItem(elem: Element): boolean {
+  if (verticalMovePending && !document.activeElement?.closest("#tv-nav")) return false
+  return isNavigableElement(elem)
+}
+
+let lastMainFocused: HTMLElement | null = null
+
+// Each view section keeps its own last-focused element, so "@main" alone can't
+// resume where the user left the page when they come back out of the nav.
+function mountNavReturnMemory(): void {
+  document.addEventListener("focusin", (event) => {
+    const target = event.target
+    if (!(target instanceof HTMLElement) || target.closest("#tv-nav")) return
+    if (!document.getElementById("tv-main")?.contains(target)) return
+    lastMainFocused = target
+  })
+
+  document.addEventListener("sn:willmove", (event) => {
+    const detail = (event as CustomEvent).detail
+    if (!detail || detail.direction !== "right" || detail.sectionId !== NAV_SECTION_ID) return
+    const target = lastMainFocused
+    if (!target || !target.isConnected || (target.offsetWidth <= 0 && target.offsetHeight <= 0)) return
+    event.preventDefault()
+    target.focus()
+  })
+}
+
 function initSpatialNavForMain(): void {
   const spatialNav = window.SpatialNavigation
   if (!spatialNav) return
   spatialNav.init()
   // Registered before "main": the polyfill assigns an element to the first matching section.
   spatialNav.add({
-    id: "tv-nav",
+    id: NAV_SECTION_ID,
     selector: "#tv-nav [data-tv-nav-item]",
     restrict: "self-only",
     enterTo: "last-focused",
     leaveFor: { right: "@main", left: "", up: "", down: "" },
-    navigableFilter: isNavigableElement,
+    navigableFilter: isNavigableNavItem,
   })
-  spatialNav.add({
-    id: "main",
+  // Registered through focus.ts so every later view section stays ahead of it.
+  registerMainFocusSection({
     selector:
       "a, button, summary, input, textarea, [contenteditable='true'], select, [tabindex]:not([tabindex='-1'])",
-    leaveFor: { up: "", down: "" },
+    leaveFor: { left: `@${NAV_SECTION_ID}`, up: "", down: "" },
     navigableFilter: (elem: Element) => {
       if (elem.closest("#tv-nav")) return false
       return isNavigableElement(elem)
@@ -297,6 +341,10 @@ export function bootTvShell(): void {
   mountBackHandler()
   mountTvInputGuard()
   initConnectivity()
+  initUiSounds()
+  initHaptics()
+  mountNavDirectionGuard()
+  mountNavReturnMemory()
   initSpatialNavForMain()
   mountRootAttributeCarryOver()
   mountAmbientHandoffRefresh()
