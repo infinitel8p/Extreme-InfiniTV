@@ -25,6 +25,9 @@ import {
   setTvOverscan,
   TV_OVERSCAN_EVENT,
   TV_OVERSCAN_VALUES,
+  getAccent,
+  setAccent,
+  ACCENT_PRESETS,
 } from "@/scripts/lib/app-settings.js"
 import { getOffsetSetting, setOffsetSetting } from "@/scripts/lib/epg-data.js"
 import { checkForUpdate, isPlayStoreInstall, getPlayStoreUrl, getCurrentAppVersion } from "@/scripts/lib/update-check"
@@ -79,6 +82,10 @@ function themeLabelKey(theme: string): string {
   if (theme === "light") return "settings.theme.light"
   if (theme === "dark") return "settings.theme.dark"
   return "settings.theme.system"
+}
+
+function accentLabelKey(accent: string): string {
+  return `settings.accent.${accent}`
 }
 
 // Mirrors settings.astro's commitTheme(), minus the view-transition sweep.
@@ -163,6 +170,19 @@ const view: TvView = {
         value: t(themeLabelKey(readTheme())),
         kind: "choice",
         onActivate: () => void pickTheme(),
+      })
+
+      const effectiveAccentId =
+        typeof activeEntry?.accent === "string" && ACCENT_PRESETS.includes(activeEntry.accent)
+          ? activeEntry.accent
+          : getAccent()
+      rows.push({
+        id: "accent",
+        icon: ICON_PALETTE,
+        label: t("tv.settings.accent"),
+        value: t(accentLabelKey(effectiveAccentId)),
+        kind: "choice",
+        onActivate: () => void pickAccent(),
       })
 
       rows.push({
@@ -309,6 +329,22 @@ const view: TvView = {
       })
       if (!picked) return
       applyTheme(picked)
+      void renderRows()
+    }
+
+    async function pickAccent(): Promise<void> {
+      const options: ChoiceOption[] = ACCENT_PRESETS.map((id: string) => ({
+        id,
+        label: t(accentLabelKey(id)),
+        swatch: `var(--accent-swatch-${id})`,
+      }))
+      const picked = await openChoiceDialog({
+        title: t("tv.settings.accent"),
+        selectedId: getAccent(),
+        options,
+      })
+      if (!picked) return
+      setAccent(picked)
       void renderRows()
     }
 

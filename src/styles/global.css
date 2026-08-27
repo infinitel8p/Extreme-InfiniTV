@@ -134,6 +134,7 @@ html.xt-theme-switching::view-transition-new(root) {
     /* - accent: a single soft fuchsia - */
     --color-accent:      light-dark(oklch(0.50 0.20 330), oklch(0.78 0.15 330));
     --color-accent-soft: light-dark(oklch(0.50 0.20 330 / 0.12), oklch(0.78 0.15 330 / 0.18));
+    --color-on-accent:   white;
 
     /* - semantic states - */
     --color-ok:   light-dark(oklch(0.5  0.12 160), oklch(0.79 0.13 160));
@@ -166,6 +167,12 @@ html.xt-theme-switching::view-transition-new(root) {
     --accent-swatch-cyan:    light-dark(oklch(0.50 0.20 210), oklch(0.78 0.15 210));
     --accent-swatch-blue:    light-dark(oklch(0.50 0.20 250), oklch(0.78 0.15 250));
     --accent-swatch-violet:  light-dark(oklch(0.50 0.20 295), oklch(0.78 0.15 295));
+    --accent-swatch-gold:    light-dark(oklch(0.55 0.15 85 ), oklch(0.85 0.16 90 ));
+    --accent-swatch-lime:    light-dark(oklch(0.50 0.19 130), oklch(0.82 0.20 130));
+    --accent-swatch-teal:    light-dark(oklch(0.50 0.13 185), oklch(0.80 0.13 185));
+    --accent-swatch-silver:  light-dark(oklch(0.45 0.01 260), oklch(0.80 0.01 260));
+    /* Light theme "white" would vanish on the light bg, so it goes dark instead. */
+    --accent-swatch-white:   light-dark(oklch(0.30 0.005 260), oklch(0.97 0 0));
 }
 
 :root[data-accent="rose"] {
@@ -197,6 +204,39 @@ html.xt-theme-switching::view-transition-new(root) {
     --xt-tint-hue: 295;
     --color-accent:      var(--accent-swatch-violet);
     --color-accent-soft: light-dark(oklch(0.50 0.20 295 / 0.12), oklch(0.78 0.15 295 / 0.18));
+}
+:root[data-accent="gold"] {
+    --xt-tint-hue: 85;
+    --color-accent:      var(--accent-swatch-gold);
+    --color-accent-soft: light-dark(oklch(0.55 0.15 85 / 0.12), oklch(0.85 0.16 90 / 0.18));
+    /* Yellow-gold is too light in both themes for white text. */
+    --color-on-accent:   var(--color-bg);
+}
+:root[data-accent="lime"] {
+    --xt-tint-hue: 130;
+    --color-accent:      var(--accent-swatch-lime);
+    --color-accent-soft: light-dark(oklch(0.50 0.19 130 / 0.12), oklch(0.82 0.20 130 / 0.18));
+    /* Light-theme lime is dark enough for white text; dark-theme lime isn't. */
+    --color-on-accent:   light-dark(white, var(--color-bg));
+}
+:root[data-accent="teal"] {
+    --xt-tint-hue: 185;
+    --color-accent:      var(--accent-swatch-teal);
+    --color-accent-soft: light-dark(oklch(0.50 0.13 185 / 0.12), oklch(0.80 0.13 185 / 0.18));
+    /* Light-theme teal is dark enough for white text; dark-theme teal isn't. */
+    --color-on-accent:   light-dark(white, var(--color-bg));
+}
+:root[data-accent="silver"] {
+    --xt-tint-hue: 260;
+    --color-accent:      var(--accent-swatch-silver);
+    --color-accent-soft: light-dark(oklch(0.45 0.01 260 / 0.12), oklch(0.80 0.01 260 / 0.18));
+    --color-on-accent:   var(--color-bg);
+}
+:root[data-accent="white"] {
+    --xt-tint-hue: 260;
+    --color-accent:      var(--accent-swatch-white);
+    --color-accent-soft: light-dark(oklch(0.30 0.005 260 / 0.12), oklch(0.97 0 0 / 0.18));
+    --color-on-accent:   var(--color-bg);
 }
 
 :root,

@@ -125,6 +125,7 @@ export interface ChoiceOption {
   id: string
   label: string
   description?: string
+  swatch?: string
 }
 
 export interface ChoiceDialogOptions {
@@ -156,6 +157,13 @@ function buildChoiceOption(option: ChoiceOption, isSelected: boolean, dialog: HT
 
   const labelLine = document.createElement("span")
   labelLine.className = "flex items-center gap-2 text-sm"
+  if (option.swatch) {
+    const dot = document.createElement("span")
+    dot.setAttribute("aria-hidden", "true")
+    dot.className = "size-3 shrink-0 rounded-full"
+    dot.style.background = option.swatch
+    labelLine.appendChild(dot)
+  }
   const labelText = document.createElement("span")
   labelText.className = "min-w-0 flex-1 truncate"
   labelText.textContent = option.label

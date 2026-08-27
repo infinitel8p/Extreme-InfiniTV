@@ -8,6 +8,7 @@ import { initConnectivity } from "@/scripts/lib/connectivity.js"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav"
 import { initUiSounds } from "@/scripts/lib/ui-sounds"
 import { initHaptics } from "@/scripts/lib/haptics"
+import { initPlaylistAccent } from "@/scripts/lib/playlist-accent"
 import { registerMainFocusSection, NAV_SECTION_ID } from "@/scripts/tv/focus"
 import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
 import { renderPlaylistRow } from "@/scripts/lib/playlist-rows.js"
@@ -356,6 +357,7 @@ export function bootTvShell(): void {
   initConnectivity()
   initUiSounds()
   initHaptics()
+  initPlaylistAccent()
   mountNavDirectionGuard()
   mountNavReturnMemory()
   initSpatialNavForMain()
