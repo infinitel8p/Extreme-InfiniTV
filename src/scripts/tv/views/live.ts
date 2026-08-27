@@ -16,7 +16,7 @@ import {
   getViewSort,
 } from "@/scripts/lib/preferences.js"
 import { buildCastChannelGroups, searchCastChannels, type CastChannelGroup } from "@/scripts/lib/tv-cast-channel-list"
-import { getProgrammesSync, loadProgrammes, effectiveTvgId, EPG_LOADED_EVENT } from "@/scripts/lib/epg-data.js"
+import { getProgrammesSync, loadProgrammes, effectiveTvgId, EPG_LOADED_EVENT, EPG_OFFSET_EVENT } from "@/scripts/lib/epg-data.js"
 import { computeNowNext, programmesForDay, type Programme } from "@/scripts/lib/now-next"
 import { openProgrammeDialog } from "@/scripts/lib/programme-dialog.js"
 import { debounce } from "@/scripts/lib/debounce"
@@ -504,6 +504,7 @@ const view: TvView = {
       })
 
       document.addEventListener(EPG_LOADED_EVENT, onEpgLoaded)
+      document.addEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
       document.addEventListener(LOCALE_EVENT, applyLocale)
       tickTimer = setInterval(tick, TICK_INTERVAL_MS)
     }
@@ -512,6 +513,15 @@ const view: TvView = {
       const detail = (event as CustomEvent).detail
       if (detail?.playlistId && detail.playlistId !== state.playlistId) return
       tick()
+    }
+
+    function onEpgOffsetChanged(event: Event): void {
+      const detail = (event as CustomEvent).detail
+      if (!detail || detail.playlistId !== state.playlistId) return
+      void resolvePlaylistCreds(state.playlistId).then((creds) => {
+        if (!creds || state.destroyed) return
+        return loadProgrammes(state.playlistId, creds, { force: true })
+      })
     }
 
     async function boot(): Promise<void> {
@@ -560,6 +570,7 @@ const view: TvView = {
       if (tickTimer) clearInterval(tickTimer)
       observer?.disconnect()
       document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
+      document.removeEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
       document.removeEventListener(LOCALE_EVENT, applyLocale)
       for (const unsub of unsubs) unsub()
       root.replaceChildren()

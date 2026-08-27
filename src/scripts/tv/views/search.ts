@@ -14,9 +14,14 @@ import { readCachedLiveChannels, ensureOverridesReady } from "@/scripts/lib/live
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
 import { kindLabel } from "@/scripts/lib/kinds.ts"
 import { ICON_SEARCH } from "@/scripts/lib/icons.js"
+import { getActiveLocale } from "@/scripts/lib/i18n"
+import { getLanguageGroupingEnabled, getContentLanguage, LANGUAGE_GROUPING_EVENT, CONTENT_LANGUAGE_EVENT } from "@/scripts/lib/app-settings.js"
+import { buildGroupingIndex, collapseIntoDisplayGroups, type CatalogGroupingIndex } from "@/scripts/lib/language-groups.ts"
+import { effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
+import { buildLanguageChips, setLanguageChipsOffset } from "@/scripts/lib/entry-card.ts"
 import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
 import { createRail, type RailHandle } from "@/scripts/tv/ui/rail"
-import { formatCardMeta, type LiveCardItem, type PosterCardItem } from "@/scripts/tv/ui/card"
+import { formatCardMeta, type CardItem, type LiveCardItem, type PosterCardItem } from "@/scripts/tv/ui/card"
 import { playLive, type TvLiveChannel } from "@/scripts/tv/playback"
 
 // Matches catalog.js's CATALOG_WARMED_EVENT - kept as a string so this view doesn't
@@ -35,6 +40,63 @@ interface CatalogRow {
   rating?: unknown
   year?: string | number | null
   norm?: string
+  tmdb?: number | null
+}
+
+interface ChipInfoRecord {
+  tags: string[]
+  variantCount: number
+  displayTag: string | null
+}
+
+function toGroupableEntries(rows: CatalogRow[]): { id: number; name: string; year?: string; tmdb?: number | null }[] {
+  return rows.map((row) => ({
+    id: Number(row.id),
+    name: row.name || "",
+    year: row.year != null ? String(row.year) : undefined,
+    tmdb: row.tmdb ?? null,
+  }))
+}
+
+// Collapses ranked matches down to one card per title group, keeping rank order; chip info keyed by display row id.
+function collapseRankedMatches<T extends CatalogRow & { norm: string }>(
+  matches: T[],
+  groupingIndex: CatalogGroupingIndex,
+  preferredTags: string[]
+): { rows: T[]; chipInfoById: Map<number, ChipInfoRecord> } {
+  if (!getLanguageGroupingEnabled()) return { rows: matches, chipInfoById: new Map() }
+  const groups = collapseIntoDisplayGroups(
+    matches.map((row) => ({ ...row, id: Number(row.id) })),
+    groupingIndex,
+    preferredTags
+  )
+  const rows = groups.map((group) => matches.find((row) => Number(row.id) === group.displayEntry.id) || group.displayEntry) as T[]
+  const chipInfoById = new Map<number, ChipInfoRecord>()
+  for (const group of groups) {
+    if (group.tags.length < 2 && group.globalEntryIds.length < 2) continue
+    chipInfoById.set(group.displayEntry.id, {
+      tags: group.tags,
+      variantCount: group.globalEntryIds.length,
+      displayTag: groupingIndex.tagByEntryId.get(group.displayEntry.id) ?? null,
+    })
+  }
+  return { rows, chipInfoById }
+}
+
+// Result rails render synchronously (no row-windowing), so decorating after setItems is a one-shot pass.
+function decorateRailChips(rail: RailHandle, items: CardItem[], chipInfoById: Map<number, ChipInfoRecord>): void {
+  const cards = rail.el.querySelectorAll<HTMLElement>("[data-focus-key]")
+  cards.forEach((card, index) => {
+    const item = items[index]
+    const info = item && chipInfoById.get(Number(item.id))
+    if (!info) return
+    const posterWrap = card.querySelector<HTMLElement>("[data-poster-wrap]")
+    if (!posterWrap) return
+    const chip = buildLanguageChips(info.tags, info.variantCount, getActiveLocale(), info.displayTag)
+    if (!chip) return
+    posterWrap.appendChild(chip)
+    setLanguageChipsOffset(posterWrap, false)
+  })
 }
 
 interface LiveRow extends CatalogRow {
@@ -153,6 +215,8 @@ const view: TvView = {
     let channels: Array<LiveRow & { norm: string }> = []
     let movies: Array<CatalogRow & { norm: string }> = []
     let series: Array<CatalogRow & { norm: string }> = []
+    let moviesGroupingIndex: CatalogGroupingIndex = buildGroupingIndex([])
+    let seriesGroupingIndex: CatalogGroupingIndex = buildGroupingIndex([])
     let recentSearches: Array<{ text: string; ts: number }> = []
     let indexReady = false
     let isWarming = false
@@ -277,12 +341,19 @@ const view: TvView = {
 
       const tokens = normalize(trimmed).split(" ").filter(Boolean)
       const channelMatches = rankRows(channels, tokens)
-      const movieMatches = rankRows(movies, tokens)
-      const seriesMatches = rankRows(series, tokens)
+      const preferredTags = effectivePreferredTags(getContentLanguage(), getActiveLocale())
+      const movieCollapsed = collapseRankedMatches(rankRows(movies, tokens), moviesGroupingIndex, preferredTags)
+      const seriesCollapsed = collapseRankedMatches(rankRows(series, tokens), seriesGroupingIndex, preferredTags)
+      const movieMatches = movieCollapsed.rows
+      const seriesMatches = seriesCollapsed.rows
 
       channelsRail.setItems(channelMatches.map((channel) => toLiveCardItem(channel, channelMatches)))
-      moviesRail.setItems(movieMatches.map((movie) => toPosterCardItem(movie, "vod")))
-      seriesRail.setItems(seriesMatches.map((row) => toPosterCardItem(row, "series")))
+      const movieItems = movieMatches.map((movie) => toPosterCardItem(movie, "vod"))
+      const seriesItems = seriesMatches.map((row) => toPosterCardItem(row, "series"))
+      moviesRail.setItems(movieItems)
+      seriesRail.setItems(seriesItems)
+      decorateRailChips(moviesRail, movieItems, movieCollapsed.chipInfoById)
+      decorateRailChips(seriesRail, seriesItems, seriesCollapsed.chipInfoById)
 
       const totalMatches = channelMatches.length + movieMatches.length + seriesMatches.length
       if (totalMatches > 0) setStatus("")
@@ -302,6 +373,8 @@ const view: TvView = {
       channels = (readCachedLiveChannels(activePlaylistId) as LiveRow[]).map(withNorm)
       movies = ((getCached(activePlaylistId, "vod")?.data || []) as CatalogRow[]).map(withNorm)
       series = ((getCached(activePlaylistId, "series")?.data || []) as CatalogRow[]).map(withNorm)
+      moviesGroupingIndex = buildGroupingIndex(toGroupableEntries(movies))
+      seriesGroupingIndex = buildGroupingIndex(toGroupableEntries(series))
       indexReady = true
     }
 
@@ -376,6 +449,10 @@ const view: TvView = {
       runSearch(inputEl.value)
     }
 
+    function onLanguageSettingsChanged(): void {
+      runSearch(inputEl.value)
+    }
+
     async function onActiveChanged(): Promise<void> {
       const active = await getActiveEntry()
       if (destroyed) return
@@ -427,6 +504,8 @@ const view: TvView = {
     document.addEventListener(EVT_SEARCH_RECENT_CHANGED, onRecentChanged)
     document.addEventListener(LOCALE_EVENT, onLocaleChanged)
     document.addEventListener("xt:active-changed", onActiveChanged)
+    document.addEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
+    document.addEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
 
     void init()
 
@@ -437,6 +516,8 @@ const view: TvView = {
       document.removeEventListener(EVT_SEARCH_RECENT_CHANGED, onRecentChanged)
       document.removeEventListener(LOCALE_EVENT, onLocaleChanged)
       document.removeEventListener("xt:active-changed", onActiveChanged)
+      document.removeEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
+      document.removeEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
       channelsRail?.destroy()
       moviesRail?.destroy()
       seriesRail?.destroy()

@@ -170,6 +170,56 @@ export function pickPreferredEntryId(
   return pickLowestQualityInBucket(entryIds, qualityRankByEntryId)
 }
 
+export interface DisplayGroup<T> {
+  key: string
+  entries: T[]
+  tags: string[]
+  globalEntryIds: number[]
+  displayEntry: T
+}
+
+/** Collapses grouped entries down to one display entry per group, picking the variant matching preferredTags. */
+export function collapseIntoDisplayGroups<T extends { id: number }>(
+  entries: T[],
+  groupingIndex: CatalogGroupingIndex,
+  preferredTags: string[]
+): DisplayGroup<T>[] {
+  const groupOrder: string[] = []
+  const survivorsByKey = new Map<string, T[]>()
+  for (const entry of entries) {
+    const groupKey = groupingIndex.keyByEntryId.get(entry.id) ?? `e:${entry.id}`
+    let survivors = survivorsByKey.get(groupKey)
+    if (!survivors) {
+      survivors = []
+      survivorsByKey.set(groupKey, survivors)
+      groupOrder.push(groupKey)
+    }
+    survivors.push(entry)
+  }
+
+  const displayGroups: DisplayGroup<T>[] = []
+  for (const groupKey of groupOrder) {
+    const survivors = survivorsByKey.get(groupKey)!
+    const globalInfo = groupingIndex.groupsByKey.get(groupKey)
+    const ownTag = groupingIndex.tagByEntryId.get(survivors[0].id) ?? null
+    const tags = globalInfo ? globalInfo.tags : ownTag ? [ownTag] : []
+    const globalEntryIds = globalInfo ? globalInfo.entryIds : [survivors[0].id]
+
+    const survivorIds = survivors.map((entry) => entry.id)
+    const displayEntryId = pickPreferredEntryId(
+      survivorIds,
+      groupingIndex.tagByEntryId,
+      preferredTags,
+      groupingIndex.qualityRankByEntryId
+    )
+    const displayEntry = survivors.find((entry) => entry.id === displayEntryId) || survivors[0]
+
+    displayGroups.push({ key: groupKey, entries: survivors, tags, globalEntryIds, displayEntry })
+  }
+
+  return displayGroups
+}
+
 export function groupPassesLanguageFilter(tags: string[], selected: string): boolean {
   if (!selected) return true
   if (!tags.length) return true

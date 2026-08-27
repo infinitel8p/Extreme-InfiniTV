@@ -2,7 +2,7 @@
 // category/genre + query + hide-watched + sort filtering, row-windowed grid.
 
 import type { TvView, TvViewContext } from "@/scripts/tv/router"
-import { t, LOCALE_EVENT } from "@/scripts/lib/i18n"
+import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
 import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
 import { ensureVod, ensureSeries, CATALOG_WARMED_EVENT } from "@/scripts/lib/catalog.js"
 import { getCached, hydrate as hydrateCache, CACHE_REVALIDATED_EVENT } from "@/scripts/lib/cache.js"
@@ -20,8 +20,22 @@ import {
 } from "@/scripts/lib/preferences.js"
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
 import { CANONICAL_GENRES, type GenreId } from "@/scripts/lib/genres.ts"
-import { isTmdbActive } from "@/scripts/lib/app-settings.js"
+import {
+  isTmdbActive,
+  getLanguageGroupingEnabled,
+  getContentLanguage,
+  LANGUAGE_GROUPING_EVENT,
+  CONTENT_LANGUAGE_EVENT,
+} from "@/scripts/lib/app-settings.js"
 import { filterAndSortEntries, type GridFilterState } from "@/scripts/lib/tv-grid-filter"
+import {
+  buildGroupingIndex,
+  collapseIntoDisplayGroups,
+  type CatalogGroupingIndex,
+  type DisplayGroup,
+} from "@/scripts/lib/language-groups.ts"
+import { parseNamePrefix, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
+import { buildLanguageChips, LANGUAGE_CHIPS_CLASS } from "@/scripts/lib/entry-card.ts"
 import { createFilterBar, openTvOptionsDialog, type FilterOption } from "@/scripts/tv/ui/filter-bar"
 import { createGrid } from "@/scripts/tv/ui/grid"
 import { formatCardMeta, type PosterCardItem } from "@/scripts/tv/ui/card"
@@ -104,6 +118,9 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       let genreSets: Map<GenreId, Set<number>> | null = null
       let loadGeneration = 0
       let filterState: GridFilterState = { category: null, query: "", hideWatched: false, sort: "default" }
+      let groupingIndex: CatalogGroupingIndex = buildGroupingIndex([])
+      let displayedRows: CatalogRow[] = []
+      let chipInfoByRowId = new Map<number, { tags: string[]; variantCount: number; displayTag: string | null }>()
 
       const wrap = document.createElement("div")
       wrap.className = "flex h-full flex-col gap-4"
@@ -144,6 +161,40 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
 
       wrap.append(headingRow, filterBar.el, grid.el)
       root.appendChild(wrap)
+
+      // Grid rows mount lazily (row-windowing); a chip is appended as each card's row enters the DOM.
+      function decorateCardChips(cardEl: HTMLElement): void {
+        const indexStr = cardEl.dataset.gridIndex
+        if (indexStr == null) return
+        const row = displayedRows[Number(indexStr)]
+        if (!row) return
+        const info = chipInfoByRowId.get(row.id)
+        if (!info) return
+        const posterWrap = cardEl.querySelector<HTMLElement>("[data-poster-wrap]")
+        if (!posterWrap || posterWrap.querySelector(`.${LANGUAGE_CHIPS_CLASS}`)) return
+        const chip = buildLanguageChips(info.tags, info.variantCount, getActiveLocale(), info.displayTag)
+        if (chip) posterWrap.appendChild(chip)
+      }
+
+      const chipObserver = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+          for (const node of mutation.addedNodes) {
+            if (!(node instanceof HTMLElement)) continue
+            if (node.matches("[data-grid-index]")) decorateCardChips(node)
+            node.querySelectorAll<HTMLElement>("[data-grid-index]").forEach(decorateCardChips)
+          }
+        }
+      })
+      chipObserver.observe(grid.el, { childList: true, subtree: true })
+
+      function toGroupableEntries(rows: CatalogRow[]): { id: number; name: string; year?: string; tmdb?: number | null }[] {
+        return rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          year: row.year != null ? String(row.year) : undefined,
+          tmdb: row.tmdb ?? null,
+        }))
+      }
 
       function persistState(): void {
         if (!activePlaylistId) return
@@ -215,7 +266,11 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       }
 
       function toCardItem(row: CatalogRow): PosterCardItem {
-        const name = row.name || t(config.fallbackTitleKey, { id: row.id })
+        const chipInfo = chipInfoByRowId.get(row.id)
+        // Strip the tag prefix (redundant once the language shows as a chip) only when 2+ languages are grouped.
+        const stripPrefix = chipInfo && chipInfo.tags.length >= 2 && chipInfo.displayTag
+        const displayName = stripPrefix ? parseNamePrefix(row.name).rest : row.name
+        const name = displayName || t(config.fallbackTitleKey, { id: row.id })
         return {
           railId: `tv-${kind}-grid`,
           kind,
@@ -229,10 +284,10 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         }
       }
 
-      function updateHeading(shownCount: number): void {
+      function updateHeading(shownCount: number, totalCount: number): void {
         heading.textContent = t(config.titleKey)
-        countEl.textContent = allRows.length
-          ? t(config.ofKey, { shown: shownCount.toLocaleString(), total: allRows.length.toLocaleString() })
+        countEl.textContent = totalCount
+          ? t(config.ofKey, { shown: shownCount.toLocaleString(), total: totalCount.toLocaleString() })
           : ""
       }
 
@@ -264,13 +319,45 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
           const emptyMessage = !activeCreds?.user || !activeCreds?.pass
             ? t(config.requiresXtreamKey)
             : t(config.emptyKey)
+          displayedRows = []
+          chipInfoByRowId = new Map()
           grid.setEntries([], emptyMessage)
-          updateHeading(0)
+          updateHeading(0, 0)
           return
         }
         const filtered = filterAndSortEntries(allRows, filterState, { categoryMatcher, isWatched, normalize })
-        grid.setEntries(filtered.map(toCardItem), t(config.noResultsCategoryKey))
-        updateHeading(filtered.length)
+
+        const languageGroupingEnabled = getLanguageGroupingEnabled()
+        let rows = filtered
+        const nextChipInfoByRowId = new Map<number, { tags: string[]; variantCount: number; displayTag: string | null }>()
+
+        if (languageGroupingEnabled) {
+          const preferredTags = effectivePreferredTags(getContentLanguage(), getActiveLocale())
+          const groups = collapseIntoDisplayGroups(filtered, groupingIndex, preferredTags)
+          const groupByDisplayId = new Map<number, DisplayGroup<CatalogRow>>(
+            groups.map((group) => [group.displayEntry.id, group])
+          )
+          rows = filterAndSortEntries(
+            groups.map((group) => group.displayEntry),
+            { category: null, query: "", hideWatched: false, sort: filterState.sort },
+            { categoryMatcher: () => true, isWatched: () => false, normalize }
+          )
+          for (const row of rows) {
+            const group = groupByDisplayId.get(row.id)
+            if (!group) continue
+            nextChipInfoByRowId.set(row.id, {
+              tags: group.tags,
+              variantCount: group.globalEntryIds.length,
+              displayTag: groupingIndex.tagByEntryId.get(row.id) ?? null,
+            })
+          }
+        }
+
+        displayedRows = rows
+        chipInfoByRowId = nextChipInfoByRowId
+        grid.setEntries(rows.map(toCardItem), t(config.noResultsCategoryKey))
+        const totalCount = languageGroupingEnabled ? groupingIndex.groupsByKey.size : allRows.length
+        updateHeading(rows.length, totalCount)
         ensureInitialGridFocus()
       }
 
@@ -333,6 +420,11 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         })
       }
 
+      function setAllRows(rows: CatalogRow[]): void {
+        allRows = rows
+        groupingIndex = buildGroupingIndex(toGroupableEntries(rows))
+      }
+
       async function refreshGenreSets(playlistId: string): Promise<void> {
         if (!playlistId) return
         try {
@@ -354,7 +446,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         if (destroyed || generation !== loadGeneration) return
         const hit = getCached(playlistId, kind)
         if (hit?.data?.length) {
-          allRows = hit.data
+          setAllRows(hit.data)
           applyFilter()
         } else {
           grid.setLoading()
@@ -362,7 +454,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
 
         if (!activeCreds?.user || !activeCreds?.pass) {
           if (!hit?.data?.length) {
-            allRows = []
+            setAllRows([])
             applyFilter()
           }
           return
@@ -371,7 +463,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         try {
           const data = await config.ensure(activeCreds, playlistId)
           if (destroyed || generation !== loadGeneration) return
-          allRows = data
+          setAllRows(data)
           applyFilter()
         } catch {
           // Cache-first paint already rendered whatever we had; a failed refresh stays silent.
@@ -383,7 +475,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         if (!detail || detail.playlistId !== activePlaylistId) return
         const hit = getCached(activePlaylistId, kind)
         if (hit?.data) {
-          allRows = hit.data
+          setAllRows(hit.data)
           applyFilter()
         }
       }
@@ -393,9 +485,13 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         if (!detail || detail.entryId !== activePlaylistId || detail.kind !== kind) return
         const hit = getCached(activePlaylistId, kind)
         if (hit?.data) {
-          allRows = hit.data
+          setAllRows(hit.data)
           applyFilter()
         }
+      }
+
+      function onLanguageSettingsChanged(): void {
+        applyFilter()
       }
 
       function onGenreIndexChanged(event: Event): void {
@@ -430,6 +526,8 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       document.addEventListener("xt:progress-changed", onProgressChanged)
       document.addEventListener(LOCALE_EVENT, onLocaleChanged)
       document.addEventListener("xt:active-changed", onActiveChanged)
+      document.addEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
+      document.addEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
 
       async function init(): Promise<void> {
         heading.textContent = t(config.titleKey)
@@ -438,9 +536,9 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
 
         if (!active) {
           activePlaylistId = ""
-          allRows = []
+          setAllRows([])
           grid.setEntries([])
-          updateHeading(0)
+          updateHeading(0, 0)
           return
         }
 
@@ -471,6 +569,9 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         document.removeEventListener("xt:progress-changed", onProgressChanged)
         document.removeEventListener(LOCALE_EVENT, onLocaleChanged)
         document.removeEventListener("xt:active-changed", onActiveChanged)
+        document.removeEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
+        document.removeEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
+        chipObserver.disconnect()
         grid.destroy()
         filterBar.destroy()
         wrap.remove()

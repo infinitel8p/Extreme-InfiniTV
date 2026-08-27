@@ -28,8 +28,13 @@ import {
   getAccent,
   setAccent,
   ACCENT_PRESETS,
+  getLanguageGroupingEnabled,
+  setLanguageGroupingEnabled,
+  getContentLanguage,
+  setContentLanguage,
 } from "@/scripts/lib/app-settings.js"
 import { getOffsetSetting, setOffsetSetting } from "@/scripts/lib/epg-data.js"
+import { LANGUAGE_TOKENS, languageTagLabel } from "@/scripts/lib/language-tags.ts"
 import { checkForUpdate, isPlayStoreInstall, getPlayStoreUrl, getCurrentAppVersion } from "@/scripts/lib/update-check"
 import { openExternal } from "@/scripts/lib/external-link"
 import { collectDiagnosticBundle } from "@/scripts/lib/diagnostic-bundle"
@@ -55,6 +60,7 @@ import {
   ICON_PLAYLIST_ADD,
   ICON_PALETTE,
   ICON_TEXT_SIZE,
+  ICON_LANGUAGE,
 } from "@/scripts/lib/icons"
 
 const SETTINGS_SECTION_ID = "tv-settings"
@@ -201,6 +207,27 @@ const view: TvView = {
         value: languageValueLabel(),
         kind: "choice",
         onActivate: () => void pickLanguage(),
+      })
+
+      rows.push({
+        id: "lang-grouping",
+        icon: ICON_LANGUAGE,
+        label: t("settings.langGrouping.title"),
+        kind: "toggle",
+        checked: getLanguageGroupingEnabled(),
+        onActivate: () => {
+          setLanguageGroupingEnabled(!getLanguageGroupingEnabled())
+          void renderRows()
+        },
+      })
+
+      rows.push({
+        id: "content-language",
+        icon: ICON_LANGUAGE,
+        label: t("settings.contentLang.title"),
+        value: contentLanguageValueLabel(),
+        kind: "choice",
+        onActivate: () => void pickContentLanguage(),
       })
 
       rows.push({
@@ -378,6 +405,33 @@ const view: TvView = {
       })
       if (!picked) return
       await setLocale(picked === "__system" ? null : picked)
+      void renderRows()
+    }
+
+    function contentLanguageValueLabel(): string {
+      const tag = getContentLanguage()
+      if (!tag) return t("settings.contentLang.auto")
+      const locale = getActiveLocale()
+      const label = languageTagLabel(tag, locale)
+      return `${label} (${tag})`
+    }
+
+    async function pickContentLanguage(): Promise<void> {
+      const locale = getActiveLocale()
+      const options: ChoiceOption[] = [
+        { id: "", label: t("settings.contentLang.auto") },
+        ...Object.keys(LANGUAGE_TOKENS)
+          .map((tag) => ({ tag, label: languageTagLabel(tag, locale) }))
+          .sort((first, second) => first.label.localeCompare(second.label, locale))
+          .map((entry) => ({ id: entry.tag, label: `${entry.label} (${entry.tag})` })),
+      ]
+      const picked = await openChoiceDialog({
+        title: t("settings.contentLang.title"),
+        selectedId: getContentLanguage(),
+        options,
+      })
+      if (picked == null) return
+      setContentLanguage(picked)
       void renderRows()
     }
 

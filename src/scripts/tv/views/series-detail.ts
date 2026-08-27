@@ -39,7 +39,7 @@ import {
   type DetailHeroFields,
 } from "@/scripts/tv/detail-enrich.ts"
 import { isGenericEpisodeTitle } from "@/scripts/lib/episode-title.ts"
-import { isTmdbActive } from "@/scripts/lib/app-settings.js"
+import { isTmdbActive, LANGUAGE_GROUPING_EVENT, CONTENT_LANGUAGE_EVENT } from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating, ratingSortValue, formatPaddedHms } from "@/scripts/lib/format.ts"
 import { parseNamePrefix, languageTagLabel, prefixQualityTokens } from "@/scripts/lib/language-tags.ts"
 import { playEpisode } from "@/scripts/tv/playback"
@@ -53,6 +53,8 @@ import { ICON_PLAYER_PLAY, ICON_DOWNLOAD, ICON_CHECK } from "@/scripts/lib/icons
 import { toast } from "@/scripts/lib/toast"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog"
 import { log } from "@/scripts/lib/log"
+import { renderLanguagePills } from "@/scripts/lib/detail-chrome.ts"
+import { createGroupingIndexMemo, type GroupableEntry } from "@/scripts/lib/language-groups.ts"
 
 const RESUME_MIN_SECONDS = 30
 const SIMILAR_LIMIT = 20
@@ -60,6 +62,7 @@ const SIMILAR_FOCUS_SECTION_ID = "tv-detail-similar"
 const SEASONS_FOCUS_SECTION_ID = "tv-detail-seasons"
 const EPISODES_FOCUS_SECTION_ID = "tv-detail-episodes"
 const EPISODES_VERTICAL_OFFSET_REM = 10
+const LANGUAGE_VARIANTS_FOCUS_SECTION_ID = "tv-detail-language-variants"
 
 const ICON_BOOKMARK_OUTLINE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -125,6 +128,13 @@ const view: TvView = {
 
     const chrome = createDetailChrome(root)
 
+    const languageVariantsRow = document.createElement("div")
+    languageVariantsRow.id = LANGUAGE_VARIANTS_FOCUS_SECTION_ID
+    languageVariantsRow.hidden = true
+    languageVariantsRow.setAttribute("aria-label", t("detail.lang.title"))
+    languageVariantsRow.className = "flex flex-wrap gap-2"
+    const getGroupingIndexFor = createGroupingIndexMemo()
+
     const seasonsSection = document.createElement("section")
     seasonsSection.id = SEASONS_FOCUS_SECTION_ID
     seasonsSection.className = "flex gap-2 overflow-x-auto"
@@ -140,8 +150,12 @@ const view: TvView = {
     const similarRail = createRail({ title: t("tv.detail.similar"), focusSectionId: SIMILAR_FOCUS_SECTION_ID })
     similarRail.setLoading()
 
-    chrome.sections.append(seasonsSection, episodesScroller, similarRail.el)
+    chrome.sections.append(languageVariantsRow, seasonsSection, episodesScroller, similarRail.el)
 
+    const unregisterLanguageVariantsSection = registerFocusSection(
+      LANGUAGE_VARIANTS_FOCUS_SECTION_ID,
+      languageVariantsRow
+    )
     const unregisterSeasonsSection = registerFocusSection(SEASONS_FOCUS_SECTION_ID, seasonsSection, {
       enterTo: "last-focused",
     })
@@ -171,6 +185,7 @@ const view: TvView = {
     let focusedDeepLinkOnce = deepLinkSeason == null
     let focusedPrimaryOnce = false
     let focusPlaced = false
+    let lastLanguageVariantsCatalog: CatalogRow[] = []
 
     function stubName(): string {
       return t("list.seriesFallback", { id: seriesId })
@@ -637,6 +652,26 @@ const view: TvView = {
       if (currentSeason != null) void enrichSeasonFromTvdb(currentSeason)
     }
 
+    function renderLanguageVariants(catalog: CatalogRow[]): void {
+      lastLanguageVariantsCatalog = catalog
+      if (!series) return
+      const groupable: GroupableEntry[] = catalog.map((row) => ({
+        id: Number(row.id),
+        name: row.name,
+        year: row.year || undefined,
+        tmdb: row.tmdb ?? null,
+      }))
+      renderLanguagePills({
+        langsEl: languageVariantsRow,
+        item: { id: Number(series.id), name: series.name },
+        kind: "series",
+        activePlaylistId,
+        catalog: groupable,
+        getGroupingIndexFor,
+        detailHrefBase: "/tv/series/detail",
+      })
+    }
+
     async function loadSimilar(): Promise<void> {
       if (!series || !activePlaylistId) return
       const currentSeries = series
@@ -650,6 +685,7 @@ const view: TvView = {
         }
       }
       if (destroyed) return
+      renderLanguageVariants(catalog)
       const candidates = catalog
         .filter((row) => row.id !== currentSeries.id && (!currentSeries.category || row.category === currentSeries.category))
         .sort((left, right) => ratingSortValue(right.rating) - ratingSortValue(left.rating))
@@ -697,6 +733,11 @@ const view: TvView = {
       renderSeasons()
       renderEpisodes()
       renderActions()
+      renderLanguageVariants(lastLanguageVariantsCatalog)
+    }
+
+    function onLanguageSettingsChanged(): void {
+      renderLanguageVariants(lastLanguageVariantsCatalog)
     }
 
     document.addEventListener("xt:favorites-changed", onFavoritesChanged)
@@ -705,6 +746,8 @@ const view: TvView = {
     document.addEventListener(DOWNLOADS_LIST_EVENT, onDownloadsChanged)
     document.addEventListener(DOWNLOAD_PROGRESS_EVENT, onDownloadsChanged)
     document.addEventListener(LOCALE_EVENT, onLocaleChanged)
+    document.addEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
+    document.addEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
 
     async function boot(): Promise<void> {
       if (!seriesId) {
@@ -757,6 +800,7 @@ const view: TvView = {
 
       chrome.setSkeleton(false)
       renderHero()
+      renderLanguageVariants(cachedCatalog)
       void loadSimilar()
       void refreshNextUp()
 
@@ -791,6 +835,9 @@ const view: TvView = {
       document.removeEventListener(DOWNLOADS_LIST_EVENT, onDownloadsChanged)
       document.removeEventListener(DOWNLOAD_PROGRESS_EVENT, onDownloadsChanged)
       document.removeEventListener(LOCALE_EVENT, onLocaleChanged)
+      document.removeEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
+      document.removeEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
+      unregisterLanguageVariantsSection()
       unregisterSeasonsSection()
       unregisterEpisodesSection()
       unregisterKeepInView()

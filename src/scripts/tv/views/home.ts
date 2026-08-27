@@ -1,5 +1,5 @@
 import type { TvView, TvViewContext } from "@/scripts/tv/router"
-import { t, LOCALE_EVENT } from "@/scripts/lib/i18n"
+import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
 import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
 import {
   ensureLoaded as ensurePrefsLoaded,
@@ -10,9 +10,23 @@ import {
 } from "@/scripts/lib/preferences.js"
 import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import { readCachedLiveChannels, ensureOverridesReady } from "@/scripts/lib/live-catalog.ts"
-import { getHubStrips, HUB_STRIPS_EVENT } from "@/scripts/lib/app-settings.js"
+import {
+  getHubStrips,
+  HUB_STRIPS_EVENT,
+  getLanguageGroupingEnabled,
+  LANGUAGE_GROUPING_EVENT,
+  CONTENT_LANGUAGE_EVENT,
+} from "@/scripts/lib/app-settings.js"
 import { kindLabel } from "@/scripts/lib/kinds.ts"
-import { loadProgrammes, getProgrammesSync, getNowNextForChannel, EPG_LOADED_EVENT } from "@/scripts/lib/epg-data.js"
+import { createGroupingIndexMemo, type CatalogGroupingIndex } from "@/scripts/lib/language-groups.ts"
+import { buildLanguageChips, setLanguageChipsOffset } from "@/scripts/lib/entry-card.ts"
+import {
+  loadProgrammes,
+  getProgrammesSync,
+  getNowNextForChannel,
+  EPG_LOADED_EVENT,
+  EPG_OFFSET_EVENT,
+} from "@/scripts/lib/epg-data.js"
 import { debounce } from "@/scripts/lib/debounce.ts"
 import { formatTimeRange } from "@/scripts/lib/now-next"
 import { keepFocusedInView } from "@/scripts/tv/focus"
@@ -47,6 +61,7 @@ interface CatalogRow {
   rating?: unknown
   year?: string | number | null
   added?: number
+  tmdb?: number | null
 }
 
 interface LiveChannelRow {
@@ -79,6 +94,88 @@ const RAIL_TITLE_KEY: Record<string, string> = {
 
 function metaForCatalogEntry(entry: CatalogRow | undefined): string {
   return entry ? formatCardMeta(entry.year, entry.rating) : ""
+}
+
+interface ChipInfoRecord {
+  tags: string[]
+  variantCount: number
+  displayTag: string | null
+}
+
+type GroupableRow = { id: number; name: string; year?: string; tmdb?: number | null }
+
+const getVodGroupingIndexFor = createGroupingIndexMemo()
+const getSeriesGroupingIndexFor = createGroupingIndexMemo()
+
+function toGroupableEntries(rows: CatalogRow[]): GroupableRow[] {
+  return rows.map((row) => ({
+    id: Number(row.id),
+    name: row.name || "",
+    year: row.year != null ? String(row.year) : undefined,
+    tmdb: row.tmdb ?? null,
+  }))
+}
+
+// Keyed by the raw catalog array's own reference, so repeated calls within one rebuild
+// (and across rebuilds until the cache updates) reuse the same mapped array the memo keys on.
+let vodGroupableCacheRef: CatalogRow[] | null = null
+let vodGroupableCache: GroupableRow[] = []
+let seriesGroupableCacheRef: CatalogRow[] | null = null
+let seriesGroupableCache: GroupableRow[] = []
+
+function groupableEntriesFor(kind: "vod" | "series", rows: CatalogRow[]): GroupableRow[] {
+  if (kind === "vod") {
+    if (vodGroupableCacheRef !== rows) {
+      vodGroupableCacheRef = rows
+      vodGroupableCache = toGroupableEntries(rows)
+    }
+    return vodGroupableCache
+  }
+  if (seriesGroupableCacheRef !== rows) {
+    seriesGroupableCacheRef = rows
+    seriesGroupableCache = toGroupableEntries(rows)
+  }
+  return seriesGroupableCache
+}
+
+function chipInfoForEntry(
+  kind: "vod" | "series",
+  entryId: number,
+  playlistId: string,
+  catalog: CatalogRow[]
+): ChipInfoRecord | undefined {
+  if (!getLanguageGroupingEnabled() || !catalog.length) return undefined
+  const groupable = groupableEntriesFor(kind, catalog)
+  const groupingIndex: CatalogGroupingIndex =
+    kind === "vod" ? getVodGroupingIndexFor(playlistId, groupable) : getSeriesGroupingIndexFor(playlistId, groupable)
+  const groupKey = groupingIndex.keyByEntryId.get(entryId)
+  const groupInfo = groupKey ? groupingIndex.groupsByKey.get(groupKey) : null
+  if (!groupInfo || groupInfo.entryIds.length < 2) return undefined
+  return {
+    tags: groupInfo.tags,
+    variantCount: groupInfo.entryIds.length,
+    displayTag: groupingIndex.tagByEntryId.get(entryId) ?? null,
+  }
+}
+
+// The home rails render synchronously (no row-windowing), so decorating after setItems is a one-shot pass.
+function decorateRailChips(
+  rail: RailHandle,
+  items: CardItem[],
+  chipInfoByFocusKey: Map<string, ChipInfoRecord>
+): void {
+  const cards = rail.el.querySelectorAll<HTMLElement>("[data-focus-key]")
+  cards.forEach((card, index) => {
+    const item = items[index]
+    const info = item && chipInfoByFocusKey.get(cardFocusKey(item.railId, item.kind as CardKind, item.id))
+    if (!info) return
+    const posterWrap = card.querySelector<HTMLElement>("[data-poster-wrap]")
+    if (!posterWrap) return
+    const chip = buildLanguageChips(info.tags, info.variantCount, getActiveLocale(), info.displayTag)
+    if (!chip) return
+    posterWrap.appendChild(chip)
+    setLanguageChipsOffset(posterWrap, false)
+  })
 }
 
 function currentProgrammeFor(
@@ -217,7 +314,8 @@ function buildFavoritesItems(
   railTitle: string,
   filterKind: string,
   playlistId: string,
-  heroBuilders: Map<string, () => HeroItem>
+  heroBuilders: Map<string, () => HeroItem>,
+  chipInfoByFocusKey: Map<string, ChipInfoRecord>
 ): CardItem[] {
   const raw = (getGlobalFavorites(playlistId) as Array<{ kind: "live" | "vod" | "series"; id: number }>).filter(
     (entry) => filterKind === "all" || entry.kind === filterKind
@@ -225,12 +323,10 @@ function buildFavoritesItems(
   const liveById = new Map<number, LiveChannelRow>(
     (readCachedLiveChannels(playlistId) as LiveChannelRow[]).map((channel) => [Number(channel.id), channel])
   )
-  const vodById = new Map<number, CatalogRow>(
-    ((getCached(playlistId, "vod")?.data || []) as CatalogRow[]).map((movie) => [Number(movie.id), movie])
-  )
-  const seriesById = new Map<number, CatalogRow>(
-    ((getCached(playlistId, "series")?.data || []) as CatalogRow[]).map((series) => [Number(series.id), series])
-  )
+  const vodRows = (getCached(playlistId, "vod")?.data || []) as CatalogRow[]
+  const seriesRows = (getCached(playlistId, "series")?.data || []) as CatalogRow[]
+  const vodById = new Map<number, CatalogRow>(vodRows.map((movie) => [Number(movie.id), movie]))
+  const seriesById = new Map<number, CatalogRow>(seriesRows.map((series) => [Number(series.id), series]))
 
   const items: CardItem[] = []
   for (const fav of raw.slice(0, RAIL_ITEM_LIMIT)) {
@@ -288,6 +384,8 @@ function buildFavoritesItems(
         window.location.href = href
       },
     }))
+    const chipInfo = chipInfoForEntry(fav.kind, Number(fav.id), playlistId, fav.kind === "vod" ? vodRows : seriesRows)
+    if (chipInfo) chipInfoByFocusKey.set(cardFocusKey(railId, fav.kind as CardKind, fav.id), chipInfo)
   }
   return items
 }
@@ -297,15 +395,14 @@ function buildWatchlistItems(
   railTitle: string,
   filterKind: string,
   playlistId: string,
-  heroBuilders: Map<string, () => HeroItem>
+  heroBuilders: Map<string, () => HeroItem>,
+  chipInfoByFocusKey: Map<string, ChipInfoRecord>
 ): CardItem[] {
   const kinds: Array<"vod" | "series"> = filterKind === "all" ? ["vod", "series"] : [filterKind as "vod" | "series"]
-  const vodById = new Map<number, CatalogRow>(
-    ((getCached(playlistId, "vod")?.data || []) as CatalogRow[]).map((movie) => [Number(movie.id), movie])
-  )
-  const seriesById = new Map<number, CatalogRow>(
-    ((getCached(playlistId, "series")?.data || []) as CatalogRow[]).map((series) => [Number(series.id), series])
-  )
+  const vodRows = (getCached(playlistId, "vod")?.data || []) as CatalogRow[]
+  const seriesRows = (getCached(playlistId, "series")?.data || []) as CatalogRow[]
+  const vodById = new Map<number, CatalogRow>(vodRows.map((movie) => [Number(movie.id), movie]))
+  const seriesById = new Map<number, CatalogRow>(seriesRows.map((series) => [Number(series.id), series]))
 
   const rows: Array<{ kind: "vod" | "series"; id: number; ts: number; meta: WatchlistRowMeta }> = []
   for (const kind of kinds) {
@@ -347,6 +444,8 @@ function buildWatchlistItems(
         window.location.href = href
       },
     }))
+    const chipInfo = chipInfoForEntry(row.kind, row.id, playlistId, row.kind === "vod" ? vodRows : seriesRows)
+    if (chipInfo) chipInfoByFocusKey.set(cardFocusKey(railId, row.kind, row.id), chipInfo)
   }
   return items
 }
@@ -356,7 +455,8 @@ function buildRecentlyAddedItems(
   railTitle: string,
   filterKind: string,
   playlistId: string,
-  heroBuilders: Map<string, () => HeroItem>
+  heroBuilders: Map<string, () => HeroItem>,
+  chipInfoByFocusKey: Map<string, ChipInfoRecord>
 ): CardItem[] {
   const wantVod = filterKind === "all" || filterKind === "vod"
   const wantSeries = filterKind === "all" || filterKind === "series"
@@ -401,6 +501,13 @@ function buildRecentlyAddedItems(
         window.location.href = href
       },
     }))
+    const chipInfo = chipInfoForEntry(
+      entry.kind,
+      Number(entry.row.id),
+      playlistId,
+      entry.kind === "vod" ? vodRows : seriesRows
+    )
+    if (chipInfo) chipInfoByFocusKey.set(cardFocusKey(railId, entry.kind, entry.row.id), chipInfo)
   }
   return items
 }
@@ -409,17 +516,18 @@ function buildItemsForStrip(
   strip: HubStrip,
   railTitle: string,
   playlistId: string,
-  heroBuilders: Map<string, () => HeroItem>
+  heroBuilders: Map<string, () => HeroItem>,
+  chipInfoByFocusKey: Map<string, ChipInfoRecord>
 ): CardItem[] {
   switch (strip.type) {
     case "continue-watching":
       return buildContinueWatchingItems(strip.id, railTitle, playlistId, heroBuilders)
     case "favorites":
-      return buildFavoritesItems(strip.id, railTitle, strip.kind, playlistId, heroBuilders)
+      return buildFavoritesItems(strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey)
     case "watchlist":
-      return buildWatchlistItems(strip.id, railTitle, strip.kind, playlistId, heroBuilders)
+      return buildWatchlistItems(strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey)
     case "recently-added":
-      return buildRecentlyAddedItems(strip.id, railTitle, strip.kind, playlistId, heroBuilders)
+      return buildRecentlyAddedItems(strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey)
     default:
       return []
   }
@@ -552,8 +660,10 @@ const view: TvView = {
         if (!rail) continue
         const titleKey = RAIL_TITLE_KEY[strip.id]
         const railTitle = titleKey ? t(titleKey) : strip.id
-        const items = buildItemsForStrip(strip, railTitle, activePlaylistId, nextHeroBuilders)
+        const chipInfoByFocusKey = new Map<string, ChipInfoRecord>()
+        const items = buildItemsForStrip(strip, railTitle, activePlaylistId, nextHeroBuilders, chipInfoByFocusKey)
         rail.setItems(items)
+        decorateRailChips(rail, items, chipInfoByFocusKey)
         if (items.length && !firstFocusKey) {
           firstFocusKey = cardFocusKey(strip.id, items[0].kind, items[0].id)
         }
@@ -578,6 +688,14 @@ const view: TvView = {
       void rebuildAllRails()
     }
 
+    function onEpgOffsetChanged(event: Event): void {
+      const detail = (event as CustomEvent).detail
+      if (!activeCreds || !detail || detail.playlistId !== activePlaylistId) return
+      void loadProgrammes(activePlaylistId, activeCreds, { force: true }).then(() => {
+        if (!destroyed) void rebuildAllRails()
+      })
+    }
+
     function onHubStripsChanged(): void {
       strips = (getHubStrips() as HubStrip[]).filter((strip) => strip.type !== "because-watched")
       initRailSkeletons()
@@ -593,7 +711,10 @@ const view: TvView = {
     document.addEventListener("xt:favorites-changed", onCatalogChanged)
     document.addEventListener("xt:watchlist-changed", onCatalogChanged)
     document.addEventListener("xt:progress-changed", onCatalogChanged)
+    document.addEventListener(LANGUAGE_GROUPING_EVENT, onCatalogChanged)
+    document.addEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
     document.addEventListener(EPG_LOADED_EVENT, onCatalogChanged)
+    document.addEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
     document.addEventListener(HUB_STRIPS_EVENT, onHubStripsChanged)
     document.addEventListener(LOCALE_EVENT, onLocaleChanged)
 
@@ -644,7 +765,10 @@ const view: TvView = {
       document.removeEventListener("xt:favorites-changed", onCatalogChanged)
       document.removeEventListener("xt:watchlist-changed", onCatalogChanged)
       document.removeEventListener("xt:progress-changed", onCatalogChanged)
+      document.removeEventListener(LANGUAGE_GROUPING_EVENT, onCatalogChanged)
+      document.removeEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
       document.removeEventListener(EPG_LOADED_EVENT, onCatalogChanged)
+      document.removeEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
       document.removeEventListener(HUB_STRIPS_EVENT, onHubStripsChanged)
       document.removeEventListener(LOCALE_EVENT, onLocaleChanged)
       track.removeEventListener("focusin", onFocusIn)

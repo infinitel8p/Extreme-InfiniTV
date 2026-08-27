@@ -27,7 +27,7 @@ import {
 import { resolveTmdbId, fetchMovieEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
 import { parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
 import { fillHeroGaps, heroFieldsNeedFill, resolveTvdbFallback, type DetailHeroFields } from "@/scripts/tv/detail-enrich.ts"
-import { isTmdbActive } from "@/scripts/lib/app-settings.js"
+import { isTmdbActive, LANGUAGE_GROUPING_EVENT, CONTENT_LANGUAGE_EVENT } from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating, parseHmsToSeconds, ratingSortValue } from "@/scripts/lib/format.ts"
 import { parseNamePrefix, languageTagLabel, prefixQualityTokens } from "@/scripts/lib/language-tags.ts"
 import { buildMovieStreamUrl } from "@/scripts/lib/stream-urls.ts"
@@ -40,11 +40,15 @@ import { ICON_PLAYER_PLAY, ICON_DOWNLOAD } from "@/scripts/lib/icons"
 import { toast } from "@/scripts/lib/toast"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog"
 import { log } from "@/scripts/lib/log"
+import { renderLanguagePills } from "@/scripts/lib/detail-chrome.ts"
+import { createGroupingIndexMemo, type GroupableEntry } from "@/scripts/lib/language-groups.ts"
+import { registerFocusSection } from "@/scripts/tv/focus"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const RESUME_MIN_SECONDS = 30
 const SIMILAR_LIMIT = 20
 const SIMILAR_FOCUS_SECTION_ID = "tv-detail-similar"
+const LANGUAGE_VARIANTS_FOCUS_SECTION_ID = "tv-detail-language-variants"
 
 const ICON_BOOKMARK_OUTLINE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -89,6 +93,19 @@ const view: TvView = {
     const wantsAutoplay = ctx.url.searchParams.get("autoplay") === "1"
 
     const chrome = createDetailChrome(root)
+
+    const languageVariantsRow = document.createElement("div")
+    languageVariantsRow.id = LANGUAGE_VARIANTS_FOCUS_SECTION_ID
+    languageVariantsRow.hidden = true
+    languageVariantsRow.setAttribute("aria-label", t("detail.lang.title"))
+    languageVariantsRow.className = "flex flex-wrap gap-2"
+    chrome.sections.appendChild(languageVariantsRow)
+    const unregisterLanguageVariantsSection = registerFocusSection(
+      LANGUAGE_VARIANTS_FOCUS_SECTION_ID,
+      languageVariantsRow
+    )
+    const getGroupingIndexFor = createGroupingIndexMemo()
+
     const similarRail = createRail({ title: t("tv.detail.similar"), focusSectionId: SIMILAR_FOCUS_SECTION_ID })
     chrome.sections.appendChild(similarRail.el)
     similarRail.setLoading()
@@ -107,6 +124,7 @@ const view: TvView = {
     let heroYearText = ""
     let enrichRequestId = 0
     let focusedPrimaryOnce = false
+    let lastLanguageVariantsCatalog: CatalogRow[] = []
 
     function stubName(): string {
       return t("list.movieFallback", { id: movieId })
@@ -370,6 +388,26 @@ const view: TvView = {
       renderHero()
     }
 
+    function renderLanguageVariants(catalog: CatalogRow[]): void {
+      lastLanguageVariantsCatalog = catalog
+      if (!movie) return
+      const groupable: GroupableEntry[] = catalog.map((row) => ({
+        id: Number(row.id),
+        name: row.name,
+        year: row.year || undefined,
+        tmdb: row.tmdb ?? null,
+      }))
+      renderLanguagePills({
+        langsEl: languageVariantsRow,
+        item: { id: Number(movie.id), name: movie.name },
+        kind: "vod",
+        activePlaylistId,
+        catalog: groupable,
+        getGroupingIndexFor,
+        detailHrefBase: "/tv/movies/detail",
+      })
+    }
+
     async function loadSimilar(): Promise<void> {
       if (!movie || !activePlaylistId) return
       const currentMovie = movie
@@ -383,6 +421,7 @@ const view: TvView = {
         }
       }
       if (destroyed) return
+      renderLanguageVariants(catalog)
       const candidates = catalog
         .filter((row) => row.id !== currentMovie.id && (!currentMovie.category || row.category === currentMovie.category))
         .sort((left, right) => ratingSortValue(right.rating) - ratingSortValue(left.rating))
@@ -426,6 +465,11 @@ const view: TvView = {
     function onLocaleChanged(): void {
       renderHero()
       renderActions()
+      renderLanguageVariants(lastLanguageVariantsCatalog)
+    }
+
+    function onLanguageSettingsChanged(): void {
+      renderLanguageVariants(lastLanguageVariantsCatalog)
     }
 
     document.addEventListener("xt:favorites-changed", onFavoritesChanged)
@@ -434,6 +478,8 @@ const view: TvView = {
     document.addEventListener(DOWNLOADS_LIST_EVENT, onDownloadsChanged)
     document.addEventListener(DOWNLOAD_PROGRESS_EVENT, onDownloadsChanged)
     document.addEventListener(LOCALE_EVENT, onLocaleChanged)
+    document.addEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
+    document.addEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
 
     async function boot(): Promise<void> {
       if (!movieId) {
@@ -487,6 +533,7 @@ const view: TvView = {
       chrome.setSkeleton(false)
       renderHero()
       renderActions()
+      renderLanguageVariants(cachedCatalog)
       void loadSimilar()
 
       if (wantsAutoplay) void startPlayback(0)
@@ -525,6 +572,9 @@ const view: TvView = {
       document.removeEventListener(DOWNLOADS_LIST_EVENT, onDownloadsChanged)
       document.removeEventListener(DOWNLOAD_PROGRESS_EVENT, onDownloadsChanged)
       document.removeEventListener(LOCALE_EVENT, onLocaleChanged)
+      document.removeEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
+      document.removeEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
+      unregisterLanguageVariantsSection()
       similarRail.destroy()
       chrome.destroy()
     }
