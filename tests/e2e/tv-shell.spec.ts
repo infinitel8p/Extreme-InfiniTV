@@ -4,9 +4,76 @@ import { test, expect, type Page } from "@playwright/test"
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { inflateSync } from "node:zlib"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const playlistText = readFileSync(join(here, "../visual/fixtures/playlist.m3u"), "utf8")
+
+// Minimal 8-bit non-interlaced PNG decoder, just enough to read Playwright screenshot pixels.
+function paethPredictor(a: number, b: number, c: number): number {
+  const p = a + b - c
+  const pa = Math.abs(p - a)
+  const pb = Math.abs(p - b)
+  const pc = Math.abs(p - c)
+  if (pa <= pb && pa <= pc) return a
+  if (pb <= pc) return b
+  return c
+}
+
+function decodePng(buffer: Buffer): { width: number; height: number; getPixel(x: number, y: number): [number, number, number] } {
+  let offset = 8
+  let width = 0
+  let height = 0
+  let colorType = 0
+  const idatChunks: Buffer[] = []
+  while (offset < buffer.length) {
+    const length = buffer.readUInt32BE(offset)
+    const type = buffer.toString("ascii", offset + 4, offset + 8)
+    const data = buffer.subarray(offset + 8, offset + 8 + length)
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0)
+      height = data.readUInt32BE(4)
+      colorType = data.readUInt8(9)
+    } else if (type === "IDAT") {
+      idatChunks.push(data)
+    } else if (type === "IEND") {
+      break
+    }
+    offset += 12 + length
+  }
+  const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : 1
+  const raw = inflateSync(Buffer.concat(idatChunks))
+  const stride = width * channels
+  const pixels = Buffer.alloc(height * stride)
+  let rawOffset = 0
+  for (let y = 0; y < height; y++) {
+    const filterType = raw[rawOffset]
+    rawOffset += 1
+    const rowStart = y * stride
+    const prevRowStart = (y - 1) * stride
+    for (let x = 0; x < stride; x++) {
+      const rawByte = raw[rawOffset + x]
+      const a = x >= channels ? pixels[rowStart + x - channels] : 0
+      const b = y > 0 ? pixels[prevRowStart + x] : 0
+      const c = y > 0 && x >= channels ? pixels[prevRowStart + x - channels] : 0
+      let value = rawByte
+      if (filterType === 1) value = rawByte + a
+      else if (filterType === 2) value = rawByte + b
+      else if (filterType === 3) value = rawByte + Math.floor((a + b) / 2)
+      else if (filterType === 4) value = rawByte + paethPredictor(a, b, c)
+      pixels[rowStart + x] = value & 0xff
+    }
+    rawOffset += stride
+  }
+  return {
+    width,
+    height,
+    getPixel(x, y) {
+      const idx = y * stride + x * channels
+      return [pixels[idx], pixels[idx + 1] ?? pixels[idx], pixels[idx + 2] ?? pixels[idx]]
+    },
+  }
+}
 
 const RAIL_ITEMS = "#tv-nav [data-tv-nav-item]"
 const SETTINGS_ROWS = "#tv-settings-rows [data-focus-key]"
@@ -491,4 +558,127 @@ test("Up from an episode row back to the actions brings the hero title into view
   })
   expect(heroVisible.top).toBeGreaterThanOrEqual(0)
   expect(heroVisible.bottom).toBeLessThanOrEqual(heroVisible.viewport)
+})
+
+test("the search input wrapper shows exactly one inset focus ring", async ({ page }) => {
+  await page.setViewportSize(TV_VIEWPORT)
+  await mockProvider(page)
+  await seedTvState(page)
+  await page.goto("/tv/search")
+  await page.waitForSelector('[data-focus-key="search:input"]')
+
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>('[data-focus-key="search:input"]')?.focus()
+  })
+
+  const rings = await page.evaluate(() => {
+    const input = document.querySelector<HTMLInputElement>('[data-focus-key="search:input"]')!
+    const wrapper = input.parentElement!
+    return {
+      inputBoxShadow: getComputedStyle(input).boxShadow,
+      inputOutline: getComputedStyle(input).outlineStyle,
+      wrapperBoxShadow: getComputedStyle(wrapper).boxShadow,
+    }
+  })
+  expect(rings.inputBoxShadow).toBe("none")
+  expect(rings.inputOutline).toBe("none")
+  expect(rings.wrapperBoxShadow).toContain("inset")
+})
+
+test("a focused rail card never sits left of its rail heading", async ({ page }) => {
+  await page.setViewportSize(TV_VIEWPORT)
+  await mockProvider(page)
+  await seedTvState(page, seedTvContent)
+  await page.goto("/tv")
+  await page.waitForSelector(RAIL_ITEMS)
+  await seedCatalogCache(page)
+  await page.goto("/tv")
+  await waitForHomeRails(page)
+
+  const firstCardKeys = await railFirstCardKeys(page)
+  expect(firstCardKeys.length).toBeGreaterThan(0)
+
+  for (const focusKey of firstCardKeys) {
+    await focusByKey(page, focusKey)
+    const edges = await page.evaluate((key) => {
+      const card = document.querySelector<HTMLElement>(`[data-focus-key="${key}"]`)!
+      const rail = card.closest("section")!
+      const heading = rail.querySelector("h2")!
+      return {
+        cardLeft: card.getBoundingClientRect().left,
+        headingLeft: heading.getBoundingClientRect().left,
+      }
+    }, focusKey)
+    expect(edges.cardLeft, `focused card ${focusKey} sits left of its rail heading`).toBeGreaterThanOrEqual(
+      edges.headingLeft
+    )
+  }
+})
+
+test("Up from the first rail card reaches the hero, Enter activates it", async ({ page }) => {
+  await page.setViewportSize(TV_VIEWPORT)
+  await mockProvider(page)
+  await seedTvState(page, seedTvContent)
+  await page.goto("/tv")
+  await page.waitForSelector(RAIL_ITEMS)
+  await seedCatalogCache(page)
+  await page.goto("/tv")
+  await waitForHomeRails(page)
+
+  const firstCardKeys = await railFirstCardKeys(page)
+  await focusByKey(page, firstCardKeys[0])
+  await page.keyboard.press("ArrowUp")
+
+  const focusedKey = await page.evaluate(() => document.activeElement?.getAttribute("data-focus-key") || "")
+  expect(focusedKey).toBe("hero")
+
+  const beforeUrl = page.url()
+  await page.keyboard.press("Enter")
+  await page.waitForFunction((prev) => location.href !== prev, beforeUrl)
+  expect(page.url()).not.toBe(beforeUrl)
+})
+
+test("a white poster never bleeds a light pixel outside the rounded card corner", async ({ page }) => {
+  await page.setViewportSize(TV_VIEWPORT)
+  await mockProvider(page)
+  await seedTvState(page, seedTvContent)
+  await page.goto("/tv")
+  await page.waitForSelector(RAIL_ITEMS)
+
+  const whitePosterDataUrl = await page.evaluate(() => {
+    const canvas = document.createElement("canvas")
+    canvas.width = 200
+    canvas.height = 300
+    const ctx = canvas.getContext("2d")!
+    ctx.fillStyle = "#ffffff"
+    ctx.fillRect(0, 0, 200, 300)
+    return canvas.toDataURL("image/png")
+  })
+  await page.evaluate((dataUrl) => {
+    ;(window as unknown as { __xtTvFixtures: any }).__xtTvFixtures.movies[0].logo = dataUrl
+  }, whitePosterDataUrl)
+  await seedCatalogCache(page)
+  await page.goto("/tv")
+  await waitForHomeRails(page)
+
+  const wrapLocator = page.locator('[data-focus-key$=":vod:1"] [data-poster-wrap]').first()
+  await wrapLocator.waitFor()
+  await wrapLocator.locator("img").evaluate(
+    (img: HTMLImageElement) => (img.complete ? undefined : new Promise((resolve) => (img.onload = resolve)))
+  )
+
+  const screenshot = await wrapLocator.screenshot()
+  const decoded = decodePng(screenshot)
+  const inset = 1
+  const corners: Array<[number, number]> = [
+    [inset, inset],
+    [decoded.width - 1 - inset, inset],
+    [inset, decoded.height - 1 - inset],
+    [decoded.width - 1 - inset, decoded.height - 1 - inset],
+  ]
+  for (const [x, y] of corners) {
+    const [r, g, b] = decoded.getPixel(x, y)
+    const isLightBleed = r > 200 && g > 200 && b > 200
+    expect(isLightBleed, `corner pixel (${x},${y}) is a light bleed outside the rounded shape`).toBe(false)
+  }
 })

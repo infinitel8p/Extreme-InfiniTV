@@ -162,14 +162,15 @@ export function createFilterBar(options: FilterBarOptions): FilterBarHandle {
   hideWatchedChip.addEventListener("click", () => options.onToggleHideWatched())
 
   const searchWrap = document.createElement("label")
-  searchWrap.className = "flex h-[3.25rem] min-w-[16rem] flex-1 cursor-text items-center gap-2 rounded-full bg-surface-2 px-5"
+  searchWrap.className =
+    "flex h-[3.25rem] min-w-[16rem] flex-1 cursor-text items-center gap-2 rounded-full bg-surface-2 px-5 tv-focus-inset-within"
   const searchIcon = document.createElement("span")
   searchIcon.className = "shrink-0 text-fg-3"
   searchIcon.innerHTML = ICON_SEARCH
   const searchInput = document.createElement("input")
   searchInput.type = "search"
   searchInput.dataset.focusKey = "filter:query"
-  searchInput.className = "h-full w-full rounded-full bg-transparent text-fg outline-none tv-focus-inset placeholder:text-fg-3"
+  searchInput.className = "h-full w-full rounded-full bg-transparent text-fg outline-none placeholder:text-fg-3"
   if (options.searchPlaceholder) searchInput.placeholder = options.searchPlaceholder
   searchWrap.append(searchIcon, searchInput)
 

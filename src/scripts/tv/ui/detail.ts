@@ -91,7 +91,7 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   el.className = "flex flex-col gap-8 pb-20"
 
   const heroSection = document.createElement("section")
-  heroSection.className = "relative min-h-[28rem] w-full overflow-hidden rounded-2xl bg-surface-2"
+  heroSection.className = "relative min-h-[28rem] w-full overflow-hidden rounded-2xl tv-clip-round-2xl bg-surface-2"
 
   const heroSkeleton = document.createElement("div")
   heroSkeleton.className = "flex h-full items-end gap-8 p-10"
@@ -120,7 +120,7 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   heroContent.className = "relative flex h-full items-end gap-8 p-10"
 
   const posterWrap = document.createElement("div")
-  posterWrap.className = "aspect-[2/3] w-56 shrink-0 overflow-hidden rounded-xl bg-surface-3 shadow-lg"
+  posterWrap.className = "aspect-[2/3] w-56 shrink-0 overflow-hidden rounded-xl tv-clip-round bg-surface-3 shadow-lg"
 
   const textBlock = document.createElement("div")
   textBlock.className = "flex max-w-3xl flex-1 flex-col gap-3"

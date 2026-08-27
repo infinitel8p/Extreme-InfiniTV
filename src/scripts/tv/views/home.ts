@@ -11,15 +11,21 @@ import {
 import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import { readCachedLiveChannels, ensureOverridesReady } from "@/scripts/lib/live-catalog.ts"
 import { getHubStrips, HUB_STRIPS_EVENT } from "@/scripts/lib/app-settings.js"
-import { fmtImdbRating } from "@/scripts/lib/format.ts"
 import { kindLabel } from "@/scripts/lib/kinds.ts"
 import { loadProgrammes, getProgrammesSync, getNowNextForChannel, EPG_LOADED_EVENT } from "@/scripts/lib/epg-data.js"
 import { debounce } from "@/scripts/lib/debounce.ts"
 import { formatTimeRange } from "@/scripts/lib/now-next"
 import { keepFocusedInView } from "@/scripts/tv/focus"
-import { createHero, type HeroItem } from "@/scripts/tv/ui/hero"
+import { createHero, HERO_FOCUS_KEY, type HeroItem } from "@/scripts/tv/ui/hero"
 import { createRail, type RailHandle } from "@/scripts/tv/ui/rail"
-import { cardFocusKey, type CardItem, type CardKind, type PosterCardItem, type LiveCardItem } from "@/scripts/tv/ui/card"
+import {
+  cardFocusKey,
+  formatCardMeta,
+  type CardItem,
+  type CardKind,
+  type PosterCardItem,
+  type LiveCardItem,
+} from "@/scripts/tv/ui/card"
 
 // Literal so this cache-only page never statically imports catalog.js
 const CATALOG_WARMED_EVENT = "xt:catalog-warmed"
@@ -72,12 +78,7 @@ const RAIL_TITLE_KEY: Record<string, string> = {
 }
 
 function metaForCatalogEntry(entry: CatalogRow | undefined): string {
-  if (!entry) return ""
-  const bits: string[] = []
-  if (entry.year) bits.push(String(entry.year))
-  const rating = fmtImdbRating(entry.rating)
-  if (rating) bits.push(rating)
-  return bits.join(" · ")
+  return entry ? formatCardMeta(entry.year, entry.rating) : ""
 }
 
 function currentProgrammeFor(
@@ -98,7 +99,14 @@ function buildLiveHeroItem(
 ): HeroItem {
   const current = channel ? currentProgrammeFor(channel, playlistId) : null
   if (!current) {
-    return { eyebrow: railTitle, title: item.name, meta: kindLabel("live"), imageUrl: item.logoUrl, imageKind: "logo" }
+    return {
+      eyebrow: railTitle,
+      title: item.name,
+      meta: kindLabel("live"),
+      imageUrl: item.logoUrl,
+      imageKind: "logo",
+      onActivate: item.onActivate,
+    }
   }
   const percent =
     current.stop > current.start
@@ -111,7 +119,12 @@ function buildLiveHeroItem(
     progressPercent: percent,
     imageUrl: item.logoUrl,
     imageKind: "logo",
+    onActivate: item.onActivate,
   }
+}
+
+function resumeHeroMeta(percent: number): string {
+  return percent < 1 ? t("hub.strip.continueWatching") : t("tv.home.resumeAt", { percent: Math.round(percent) })
 }
 
 function buildContinueWatchingItems(
@@ -133,12 +146,13 @@ function buildContinueWatchingItems(
       const movie = vodById.get(Number(row.id))
       const name = row.name || movie?.name || t("list.movieFallback", { id: row.id })
       const posterUrl = row.logo || movie?.logo || null
+      const href = `/tv/movies/detail?id=${encodeURIComponent(String(row.id))}&autoplay=1`
       const item: PosterCardItem = {
         railId,
         kind: "vod",
         id: row.id,
         name,
-        href: `/tv/movies/detail?id=${encodeURIComponent(String(row.id))}&autoplay=1`,
+        href,
         posterUrl,
         meta: kindLabel("vod"),
         ariaLabel: t("tv.aria.resume", { name }),
@@ -148,10 +162,13 @@ function buildContinueWatchingItems(
       heroBuilders.set(cardFocusKey(railId, "vod", row.id), () => ({
         eyebrow: railTitle,
         title: name,
-        meta: t("tv.home.resumeAt", { percent: Math.round(percent) }),
+        meta: resumeHeroMeta(percent),
         progressPercent: percent,
         imageUrl: posterUrl,
         imageKind: "poster",
+        onActivate: () => {
+          window.location.href = href
+        },
       }))
       continue
     }
@@ -182,10 +199,13 @@ function buildContinueWatchingItems(
     heroBuilders.set(cardFocusKey(railId, "episode", row.id), () => ({
       eyebrow: railTitle,
       title: name,
-      meta: t("tv.home.resumeAt", { percent: Math.round(percent) }),
+      meta: resumeHeroMeta(percent),
       progressPercent: percent,
       imageUrl: posterUrl,
       imageKind: "poster",
+      onActivate: () => {
+        window.location.href = href
+      },
     }))
   }
 
@@ -254,7 +274,7 @@ function buildFavoritesItems(
       name,
       href,
       posterUrl,
-      meta: kindLabel(fav.kind),
+      meta: metaForCatalogEntry(lookup),
       ariaLabel: t("tv.aria.open", { name }),
     }
     items.push(item)
@@ -264,6 +284,9 @@ function buildFavoritesItems(
       meta: metaForCatalogEntry(lookup),
       imageUrl: posterUrl,
       imageKind: "poster",
+      onActivate: () => {
+        window.location.href = href
+      },
     }))
   }
   return items
@@ -310,7 +333,7 @@ function buildWatchlistItems(
       name,
       href,
       posterUrl,
-      meta: kindLabel(row.kind),
+      meta: metaForCatalogEntry(lookup),
       ariaLabel: t("tv.aria.open", { name }),
     }
     items.push(item)
@@ -320,6 +343,9 @@ function buildWatchlistItems(
       meta: metaForCatalogEntry(lookup),
       imageUrl: posterUrl,
       imageKind: "poster",
+      onActivate: () => {
+        window.location.href = href
+      },
     }))
   }
   return items
@@ -361,7 +387,7 @@ function buildRecentlyAddedItems(
       name,
       href,
       posterUrl,
-      meta: metaForCatalogEntry(entry.row) || kindLabel(entry.kind),
+      meta: metaForCatalogEntry(entry.row),
       ariaLabel: t("tv.aria.open", { name }),
     }
     items.push(item)
@@ -371,6 +397,9 @@ function buildRecentlyAddedItems(
       meta: metaForCatalogEntry(entry.row),
       imageUrl: posterUrl,
       imageKind: "poster",
+      onActivate: () => {
+        window.location.href = href
+      },
     }))
   }
   return items
@@ -440,7 +469,8 @@ const view: TvView = {
         return
       }
       const target =
-        root.querySelector<HTMLElement>("[data-tv-autofocus]") || track.querySelector<HTMLElement>("[data-focus-key]")
+        root.querySelector<HTMLElement>("[data-tv-autofocus]") ||
+        track.querySelector<HTMLElement>(`[data-focus-key]:not([data-focus-key="${HERO_FOCUS_KEY}"])`)
       if (!target) return
       target.focus()
       window.SpatialNavigation?.makeFocusable?.()
@@ -461,7 +491,8 @@ const view: TvView = {
       const target = event.target
       if (!(target instanceof HTMLElement)) return
       const focusKeyEl = target.closest<HTMLElement>("[data-focus-key]")
-      if (focusKeyEl) onFocusInDebounced(focusKeyEl)
+      // Focusing the hero itself must never change what it shows.
+      if (focusKeyEl && focusKeyEl.dataset.focusKey !== HERO_FOCUS_KEY) onFocusInDebounced(focusKeyEl)
     }
     track.addEventListener("focusin", onFocusIn)
 

@@ -2,8 +2,8 @@
 
 html[data-tv-ui] {
   font-size: calc(1.15rem * var(--xt-font-scale, 1));
-  /* Room for the .tv-focus-card 1.05 scale to not clip against overflow:hidden ancestors. */
-  --tv-focus-pad: 0.875rem;
+  /* Ring is inset, so no scale headroom is needed. */
+  --tv-focus-pad: 0;
 }
 
 /* Mirrors the overscan padding Layout.astro / ReceiverLayout.astro apply to their own body. */
@@ -36,13 +36,21 @@ html[data-tv-ui][data-tv] .tv-focus-inset:focus-visible {
   box-shadow: inset 0 0 0 3px var(--color-accent);
 }
 
+/* Icon+input wrappers: the ring lives on the wrapper via :focus-within, not on the input itself. */
+html[data-tv-ui][data-tv] .tv-focus-inset-within {
+  outline: none;
+}
+html[data-tv-ui][data-tv] .tv-focus-inset-within:focus-within {
+  background: var(--color-surface-3);
+  box-shadow: inset 0 0 0 3px var(--color-accent);
+}
+html[data-tv-ui][data-tv] .tv-focus-inset-within input {
+  outline: none;
+}
+
 /* Poster / live-tile cards: the ring lives on [data-poster-wrap], never on the title below it. */
 html[data-tv-ui][data-tv] .tv-focus-card {
   outline: none;
-  will-change: transform;
-}
-html[data-tv-ui][data-tv] .tv-focus-card:focus-visible {
-  transform: scale(1.05);
 }
 /* ::after (not box-shadow on the wrap) so the ring paints above the full-bleed <img>, not under it. */
 html[data-tv-ui][data-tv] .tv-focus-card:focus-visible [data-poster-wrap]::after {

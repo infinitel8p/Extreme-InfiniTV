@@ -21,11 +21,10 @@ import {
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
 import { CANONICAL_GENRES, type GenreId } from "@/scripts/lib/genres.ts"
 import { isTmdbActive } from "@/scripts/lib/app-settings.js"
-import { fmtImdbRating } from "@/scripts/lib/format.ts"
 import { filterAndSortEntries, type GridFilterState } from "@/scripts/lib/tv-grid-filter"
 import { createFilterBar, openTvOptionsDialog, type FilterOption } from "@/scripts/tv/ui/filter-bar"
 import { createGrid } from "@/scripts/tv/ui/grid"
-import type { PosterCardItem } from "@/scripts/tv/ui/card"
+import { formatCardMeta, type PosterCardItem } from "@/scripts/tv/ui/card"
 
 type CatalogKind = "vod" | "series"
 
@@ -217,10 +216,6 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
 
       function toCardItem(row: CatalogRow): PosterCardItem {
         const name = row.name || t(config.fallbackTitleKey, { id: row.id })
-        const metaParts: string[] = []
-        if (row.year) metaParts.push(String(row.year))
-        const rating = fmtImdbRating(row.rating)
-        if (rating) metaParts.push(rating)
         return {
           railId: `tv-${kind}-grid`,
           kind,
@@ -228,7 +223,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
           name,
           href: config.detailHref(row.id),
           posterUrl: row.logo || null,
-          meta: metaParts.join(" · "),
+          meta: formatCardMeta(row.year, row.rating),
           ariaLabel: t("tv.aria.open", { name }),
           progressPercent: vodProgressPercent(row.id),
         }

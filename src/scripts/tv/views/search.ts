@@ -12,12 +12,11 @@ import {
 import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import { readCachedLiveChannels, ensureOverridesReady } from "@/scripts/lib/live-catalog.ts"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
-import { fmtImdbRating } from "@/scripts/lib/format.ts"
 import { kindLabel } from "@/scripts/lib/kinds.ts"
 import { ICON_SEARCH } from "@/scripts/lib/icons.js"
 import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
 import { createRail, type RailHandle } from "@/scripts/tv/ui/rail"
-import type { LiveCardItem, PosterCardItem } from "@/scripts/tv/ui/card"
+import { formatCardMeta, type LiveCardItem, type PosterCardItem } from "@/scripts/tv/ui/card"
 import { playLive, type TvLiveChannel } from "@/scripts/tv/playback"
 
 // Matches catalog.js's CATALOG_WARMED_EVENT - kept as a string so this view doesn't
@@ -73,12 +72,8 @@ function rankRows<T extends { norm: string }>(rows: T[], tokens: string[]): T[] 
   return scored.slice(0, RESULT_CAP).map((entry) => entry.row)
 }
 
-function metaForCatalogRow(row: CatalogRow, kind: "vod" | "series"): string {
-  const bits: string[] = []
-  if (row.year) bits.push(String(row.year))
-  const rating = fmtImdbRating(row.rating)
-  if (rating) bits.push(rating)
-  return bits.join(" · ") || kindLabel(kind)
+function metaForCatalogRow(row: CatalogRow): string {
+  return formatCardMeta(row.year, row.rating)
 }
 
 const view: TvView = {
@@ -93,7 +88,7 @@ const view: TvView = {
     const inputWrap = document.createElement("div")
     inputWrap.className = "px-12"
     const inputBox = document.createElement("div")
-    inputBox.className = "flex h-[3.75rem] items-center gap-3 rounded-2xl bg-surface-2 px-5"
+    inputBox.className = "flex h-[3.75rem] items-center gap-3 rounded-2xl bg-surface-2 px-5 tv-focus-inset-within"
     const searchIcon = document.createElement("span")
     searchIcon.setAttribute("aria-hidden", "true")
     searchIcon.className = "shrink-0 text-fg-3"
@@ -105,7 +100,7 @@ const view: TvView = {
     inputEl.dataset.tvAutofocus = ""
     inputEl.dataset.focusKey = "search:input"
     inputEl.className =
-      "h-full min-w-0 flex-1 rounded-2xl bg-transparent text-lg text-fg outline-none tv-focus-inset placeholder:text-fg-3"
+      "h-full min-w-0 flex-1 rounded-2xl bg-transparent text-lg text-fg outline-none placeholder:text-fg-3"
     inputBox.append(searchIcon, inputEl)
     inputWrap.appendChild(inputBox)
 
@@ -251,7 +246,7 @@ const view: TvView = {
         name,
         href,
         posterUrl: row.logo || null,
-        meta: metaForCatalogRow(row, kind),
+        meta: metaForCatalogRow(row),
         ariaLabel: t("tv.aria.open", { name }),
       }
     }

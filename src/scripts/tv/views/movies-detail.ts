@@ -32,7 +32,7 @@ import { buildMovieStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { playVod } from "@/scripts/tv/playback"
 import { createDetailChrome, type DetailAction } from "@/scripts/tv/ui/detail"
 import { createRail } from "@/scripts/tv/ui/rail"
-import type { PosterCardItem } from "@/scripts/tv/ui/card"
+import { formatCardMeta, type PosterCardItem } from "@/scripts/tv/ui/card"
 import { STAR_OUTLINE, STAR_FILLED, BOOKMARK_FILLED } from "@/scripts/lib/entry-card.ts"
 import { ICON_PLAYER_PLAY, ICON_DOWNLOAD } from "@/scripts/lib/icons"
 import { toast } from "@/scripts/lib/toast"
@@ -361,7 +361,7 @@ const view: TvView = {
         name: row.name,
         href: `/tv/movies/detail?id=${encodeURIComponent(String(row.id))}`,
         posterUrl: row.logo,
-        meta: [row.year, fmtImdbRating(row.rating)].filter(Boolean).join(" · "),
+        meta: formatCardMeta(row.year, row.rating),
         ariaLabel: t("tv.aria.open", { name: row.name }),
       }))
       similarRail.setItems(items)

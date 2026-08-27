@@ -37,7 +37,7 @@ function buildLogoChip(logoUrl: string | null | undefined, widthClass: string): 
   const chip = document.createElement("span")
   chip.setAttribute("aria-hidden", "true")
   chip.className =
-    `grid aspect-video shrink-0 place-items-center overflow-hidden rounded-lg tv-clip-round-lg bg-surface-2 ring-1 ring-inset ring-line ${widthClass}`
+    `grid aspect-video shrink-0 place-items-center overflow-hidden rounded-lg tv-clip-round-lg bg-surface-2 p-2 ring-1 ring-inset ring-line ${widthClass}`
   if (logoUrl) chip.appendChild(buildImg(logoUrl, "h-full w-full object-contain"))
   return chip
 }

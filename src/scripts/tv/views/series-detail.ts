@@ -34,7 +34,7 @@ import { parseNamePrefix, languageTagLabel, prefixQualityTokens } from "@/script
 import { playEpisode } from "@/scripts/tv/playback"
 import { createDetailChrome, type DetailAction } from "@/scripts/tv/ui/detail"
 import { createRail } from "@/scripts/tv/ui/rail"
-import type { PosterCardItem } from "@/scripts/tv/ui/card"
+import { formatCardMeta, type PosterCardItem } from "@/scripts/tv/ui/card"
 import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
 import { STAR_OUTLINE, STAR_FILLED, BOOKMARK_FILLED } from "@/scripts/lib/entry-card.ts"
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
@@ -369,7 +369,7 @@ const view: TvView = {
         img.alt = ""
         img.loading = "lazy"
         img.decoding = "async"
-        img.className = "block h-full w-full rounded-lg object-cover"
+        img.className = "block h-full w-full object-cover"
         thumbWrap.appendChild(img)
         mountCachedImage(img, entry.thumbUrl, "poster")
       }
@@ -562,7 +562,7 @@ const view: TvView = {
         name: row.name,
         href: `/tv/series/detail?id=${encodeURIComponent(String(row.id))}`,
         posterUrl: row.logo,
-        meta: [row.year, fmtImdbRating(row.rating)].filter(Boolean).join(" · "),
+        meta: formatCardMeta(row.year, row.rating),
         ariaLabel: t("tv.aria.open", { name: row.name }),
       }))
       similarRail.setItems(items)

@@ -2,6 +2,7 @@
 
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { makeFallback } from "@/scripts/lib/entry-card.ts"
+import { fmtImdbRating } from "@/scripts/lib/format.ts"
 
 export type CardKind = "vod" | "series" | "episode" | "live"
 
@@ -34,7 +35,14 @@ export function cardFocusKey(railId: string, kind: CardKind, id: string | number
   return `${railId}:${kind}:${id}`
 }
 
-const CARD_FOCUS_CLASSES = "self-start outline-none transition-transform tv-focus-card"
+/** Shared movies/series card meta line: "year · rating", either half omitted when absent. */
+export function formatCardMeta(year: unknown, rating: unknown): string {
+  const yearText = String(year ?? "").match(/\d{4}/)?.[0] || ""
+  const ratingText = fmtImdbRating(rating)
+  return [yearText, ratingText].filter(Boolean).join(" · ")
+}
+
+const CARD_FOCUS_CLASSES = "self-start outline-none tv-focus-card"
 
 function createPosterCard(item: PosterCardItem): HTMLAnchorElement {
   const card = document.createElement("a")
@@ -74,7 +82,7 @@ function createPosterCard(item: PosterCardItem): HTMLAnchorElement {
   title.textContent = item.name
 
   const meta = document.createElement("div")
-  meta.className = "truncate text-xs text-fg-3"
+  meta.className = "min-h-4 truncate text-xs text-fg-3"
   meta.textContent = item.meta
 
   card.append(posterWrap, title, meta)

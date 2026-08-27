@@ -1,6 +1,10 @@
 // Shared TV home hero band: left-aligned text over a right-weighted backdrop.
 
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
+import { registerFocusSection } from "@/scripts/tv/focus"
+
+const HERO_FOCUS_SECTION_ID = "tv-home-hero"
+export const HERO_FOCUS_KEY = "hero"
 
 export interface HeroCta {
   href: string
@@ -16,6 +20,8 @@ export interface HeroItem {
   imageUrl?: string | null
   imageKind?: "poster" | "logo"
   cta?: HeroCta
+  /** Enter/OK on the hero itself when there's no `cta` (poster items navigate, live items tune in). */
+  onActivate?: () => void
 }
 
 export interface HeroHandle {
@@ -56,9 +62,17 @@ export function createHero(root: HTMLElement): HeroHandle {
 
   let ctaEl: HTMLAnchorElement | null = null
 
+  const activateButton = document.createElement("button")
+  activateButton.type = "button"
+  activateButton.dataset.focusKey = HERO_FOCUS_KEY
+  activateButton.className = "absolute inset-0 z-10 rounded-2xl outline-none tv-focus-inset"
+  activateButton.hidden = true
+
   textBlock.append(eyebrow, title, meta, progressTrack)
-  section.append(backdropWrap, gradientLeft, gradientBottom, textBlock)
+  section.append(backdropWrap, gradientLeft, gradientBottom, textBlock, activateButton)
   root.appendChild(section)
+
+  const unregisterHeroSection = registerFocusSection(HERO_FOCUS_SECTION_ID, section)
 
   function setBackdrop(imageUrl: string | null | undefined, imageKind: "poster" | "logo" | undefined): void {
     backdropWrap.replaceChildren()
@@ -109,6 +123,18 @@ export function createHero(root: HTMLElement): HeroHandle {
     textBlock.appendChild(ctaEl)
   }
 
+  function setActivate(item: HeroItem): void {
+    if (item.cta || !item.onActivate) {
+      activateButton.hidden = true
+      activateButton.onclick = null
+      return
+    }
+    const onActivate = item.onActivate
+    activateButton.hidden = false
+    activateButton.setAttribute("aria-label", item.title)
+    activateButton.onclick = () => onActivate()
+  }
+
   function show(item: HeroItem): void {
     eyebrow.textContent = item.eyebrow
     title.textContent = item.title
@@ -121,6 +147,7 @@ export function createHero(root: HTMLElement): HeroHandle {
     }
     setBackdrop(item.imageUrl, item.imageKind)
     setCta(item.cta)
+    setActivate(item)
   }
 
   function clear(): void {
@@ -130,9 +157,12 @@ export function createHero(root: HTMLElement): HeroHandle {
     progressTrack.hidden = true
     backdropWrap.replaceChildren()
     setCta(undefined)
+    activateButton.hidden = true
+    activateButton.onclick = null
   }
 
   function destroy(): void {
+    unregisterHeroSection()
     section.remove()
   }
 

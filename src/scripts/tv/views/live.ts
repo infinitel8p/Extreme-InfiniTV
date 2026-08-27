@@ -83,10 +83,10 @@ function buildShellMarkup(): string {
       </nav>
 
       <div data-role="channels-col" class="flex min-h-0 flex-col overflow-hidden pt-2 px-2">
-        <div class="mb-3 flex min-h-[3.25rem] shrink-0 items-center gap-2 rounded-2xl bg-surface-2 px-4">
+        <div class="mb-3 flex min-h-[3.25rem] shrink-0 items-center gap-2 rounded-2xl bg-surface-2 px-4 tv-focus-inset-within">
           <span class="shrink-0 text-fg-3" aria-hidden="true">${ICON_SEARCH}</span>
           <input data-role="search" type="search" autocomplete="off" spellcheck="false"
-                 class="w-full rounded-2xl bg-transparent text-sm outline-none tv-focus-inset placeholder:text-fg-3" />
+                 class="w-full rounded-2xl bg-transparent text-sm outline-none placeholder:text-fg-3" />
         </div>
         <div data-role="channels-scroller" class="min-h-0 flex-1 overflow-hidden py-2">
           <div data-role="channels-track" class="flex flex-col gap-3"></div>
