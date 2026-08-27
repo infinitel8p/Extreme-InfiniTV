@@ -78,6 +78,12 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+/** Converts a design-canvas rem value to CSS px at the current (viewport-scaled) root font size. */
+export function remPx(rem: number): number {
+  const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+  return rem * rootFontSize
+}
+
 function reduceMotionActive(): boolean {
   return (
     document.documentElement.getAttribute("data-perf-mode") === "on" ||
@@ -93,8 +99,12 @@ function offsetFromTrack(target: HTMLElement, track: HTMLElement, axis: "x" | "y
   return offset
 }
 
-/** Translates `scroller`'s first child so the focused descendant sits `offsetPx` from the leading edge. */
-export function keepFocusedInView(scroller: HTMLElement, axis: "x" | "y", offsetPx: number): () => void {
+/** Translates `scroller`'s first child so the focused descendant sits `offset` from the leading edge. */
+export function keepFocusedInView(
+  scroller: HTMLElement,
+  axis: "x" | "y",
+  offset: number | (() => number)
+): () => void {
   const track = scroller.firstElementChild as HTMLElement | null
   if (!track) return () => {}
 
@@ -134,6 +144,7 @@ export function keepFocusedInView(scroller: HTMLElement, axis: "x" | "y", offset
 
     // Measured from the track's content-box start, so the first item rests at 0.
     const targetOffset = offsetFromTrack(target, track!, axis) - trackPaddingStart()
+    const offsetPx = typeof offset === "function" ? offset() : offset
     const next = -clamp(targetOffset - offsetPx, 0, maxShift)
 
     // Native focus-scroll / wheel would stack on top of the transform.

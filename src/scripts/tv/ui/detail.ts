@@ -36,15 +36,15 @@ export interface DetailChromeHandle {
   destroy(): void
 }
 
-const CHIP_CLASS = "rounded-full border border-line px-2.5 py-1 text-sm text-fg-2"
+const CHIP_CLASS = "rounded-full border border-line px-2 py-0.5 text-xs text-fg-2"
 const RATING_CHIP_CLASS =
-  "inline-flex items-center gap-1 rounded-full border border-accent/50 px-2.5 py-1 text-sm font-medium text-accent"
+  "inline-flex items-center gap-1 rounded-full border border-accent/50 px-2 py-0.5 text-xs font-medium text-accent"
 const RATING_STAR_SVG =
   '<svg viewBox="0 0 24 24" width="0.9em" height="0.9em" fill="currentColor" aria-hidden="true">' +
   '<path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"/></svg>'
 
 const ACTION_BASE_CLASS =
-  "inline-flex h-14 shrink-0 items-center gap-2 rounded-2xl px-6 text-base font-semibold outline-none " +
+  "inline-flex min-h-11 shrink-0 items-center gap-2 rounded-2xl px-4 text-sm font-semibold outline-none " +
   "tv-focus-inset disabled:opacity-40"
 
 function actionVariantClass(action: DetailAction): string {
@@ -64,13 +64,13 @@ function buildActionButton(action: DetailAction): HTMLButtonElement {
 
   if (action.icon) {
     const iconWrap = document.createElement("span")
-    iconWrap.className = "inline-flex text-xl"
+    iconWrap.className = "inline-flex text-base"
     iconWrap.innerHTML = action.icon
     button.appendChild(iconWrap)
   }
 
   const labelEl = document.createElement("span")
-  if (action.primary) labelEl.className = "max-w-[26rem] truncate"
+  if (action.primary) labelEl.className = "max-w-[20rem] truncate"
   labelEl.textContent = action.label
   button.appendChild(labelEl)
 
@@ -88,22 +88,22 @@ function buildSkeletonBlock(className: string): HTMLDivElement {
 
 export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   const el = document.createElement("div")
-  el.className = "flex flex-col gap-8 pb-20"
+  el.className = "flex flex-col gap-6 pb-10"
 
   const heroSection = document.createElement("section")
-  heroSection.className = "relative isolate min-h-[28rem] w-full overflow-hidden rounded-2xl bg-black/40"
+  heroSection.className = "relative isolate min-h-[18rem] w-full overflow-hidden rounded-2xl bg-black/40"
 
   const heroSkeleton = document.createElement("div")
-  heroSkeleton.className = "flex h-full items-end gap-8 p-10"
+  heroSkeleton.className = "flex h-full items-end gap-6 p-6"
   heroSkeleton.append(
-    buildSkeletonBlock("aspect-[2/3] w-56 shrink-0"),
+    buildSkeletonBlock("aspect-[2/3] w-44 shrink-0"),
     (() => {
       const column = document.createElement("div")
       column.className = "flex flex-1 flex-col gap-3"
       column.append(
-        buildSkeletonBlock("h-10 w-2/3"),
-        buildSkeletonBlock("h-5 w-1/3"),
-        buildSkeletonBlock("h-20 w-full")
+        buildSkeletonBlock("h-8 w-2/3"),
+        buildSkeletonBlock("h-4 w-1/3"),
+        buildSkeletonBlock("h-16 w-full")
       )
       return column
     })()
@@ -117,19 +117,19 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   gradientBottom.className = "absolute inset-0 bg-gradient-to-t from-bg/50 via-transparent to-transparent"
 
   const heroContent = document.createElement("div")
-  heroContent.className = "relative flex h-full items-end gap-8 p-10"
+  heroContent.className = "relative flex h-full items-end gap-6 p-6"
 
   const posterWrap = document.createElement("div")
-  posterWrap.className = "isolate aspect-[2/3] w-56 shrink-0 overflow-hidden rounded-xl bg-black/40 shadow-lg"
+  posterWrap.className = "isolate aspect-[2/3] w-44 shrink-0 overflow-hidden rounded-xl bg-black/40 shadow-lg"
 
   const textBlock = document.createElement("div")
-  textBlock.className = "flex max-w-3xl flex-1 flex-col gap-3"
+  textBlock.className = "flex max-w-2xl flex-1 flex-col gap-2"
 
   const titleEl = document.createElement("h1")
-  titleEl.className = "line-clamp-2 text-4xl font-semibold text-fg"
+  titleEl.className = "line-clamp-2 text-2xl font-semibold text-fg"
 
   const subtitleEl = document.createElement("p")
-  subtitleEl.className = "text-base text-fg-2"
+  subtitleEl.className = "text-sm text-fg-2"
 
   const chipsRow = document.createElement("div")
   chipsRow.className = "flex flex-wrap items-center gap-2"
@@ -138,7 +138,7 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   descriptionWrap.id = DESCRIPTION_FOCUS_SECTION_ID
   descriptionWrap.className = "flex flex-col items-start gap-1"
   const descriptionEl = document.createElement("p")
-  descriptionEl.className = "line-clamp-4 max-w-2xl text-fg-2"
+  descriptionEl.className = "line-clamp-3 max-w-xl text-sm text-fg-2"
   const moreButton = document.createElement("button")
   moreButton.type = "button"
   moreButton.className =
@@ -147,7 +147,7 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   let descriptionExpanded = false
   moreButton.addEventListener("click", () => {
     descriptionExpanded = !descriptionExpanded
-    descriptionEl.classList.toggle("line-clamp-4", !descriptionExpanded)
+    descriptionEl.classList.toggle("line-clamp-3", !descriptionExpanded)
     moreButton.textContent = descriptionExpanded ? t("tv.detail.less") : t("tv.detail.more")
   })
   descriptionWrap.append(descriptionEl, moreButton)
@@ -159,9 +159,9 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   const actionsSkeleton = document.createElement("div")
   actionsSkeleton.className = "flex flex-wrap gap-3 px-2"
   actionsSkeleton.append(
-    buildSkeletonBlock("h-14 w-32"),
-    buildSkeletonBlock("h-14 w-14"),
-    buildSkeletonBlock("h-14 w-14")
+    buildSkeletonBlock("h-11 w-28"),
+    buildSkeletonBlock("h-11 w-11"),
+    buildSkeletonBlock("h-11 w-11")
   )
 
   const actionsRow = document.createElement("div")
@@ -169,7 +169,7 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   actionsRow.className = "flex flex-wrap gap-3 px-2"
 
   const sections = document.createElement("div")
-  sections.className = "flex flex-col gap-10"
+  sections.className = "flex flex-col gap-6"
 
   el.append(heroSection, actionsSkeleton, actionsRow, sections)
   root.appendChild(el)
@@ -245,7 +245,7 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
     }
 
     descriptionExpanded = false
-    descriptionEl.classList.add("line-clamp-4")
+    descriptionEl.classList.add("line-clamp-3")
     descriptionEl.textContent = hero.description
     moreButton.textContent = t("tv.detail.more")
     // Only offer the toggle once the paragraph is tall enough to actually clip.

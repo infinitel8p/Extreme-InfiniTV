@@ -43,7 +43,7 @@ function buildRow(row: SettingsRow): HTMLButtonElement {
   button.dataset.rowId = row.id
   button.disabled = !!row.disabled
   button.className =
-    "flex min-h-[4.5rem] w-full items-center gap-4 rounded-xl px-4 text-start outline-none " +
+    "flex min-h-[3.5rem] w-full items-center gap-4 rounded-xl px-4 text-start outline-none " +
     "hover:bg-surface-2 tv-focus-inset disabled:pointer-events-none disabled:opacity-40"
 
   if (row.icon) {

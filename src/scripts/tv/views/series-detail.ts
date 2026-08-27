@@ -46,7 +46,7 @@ import { playEpisode } from "@/scripts/tv/playback"
 import { createDetailChrome, type DetailAction } from "@/scripts/tv/ui/detail"
 import { createRail } from "@/scripts/tv/ui/rail"
 import { formatCardMeta, type PosterCardItem } from "@/scripts/tv/ui/card"
-import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
 import { STAR_OUTLINE, STAR_FILLED, BOOKMARK_FILLED } from "@/scripts/lib/entry-card.ts"
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { ICON_PLAYER_PLAY, ICON_DOWNLOAD, ICON_CHECK } from "@/scripts/lib/icons"
@@ -59,7 +59,7 @@ const SIMILAR_LIMIT = 20
 const SIMILAR_FOCUS_SECTION_ID = "tv-detail-similar"
 const SEASONS_FOCUS_SECTION_ID = "tv-detail-seasons"
 const EPISODES_FOCUS_SECTION_ID = "tv-detail-episodes"
-const EPISODES_VERTICAL_OFFSET_PX = 160
+const EPISODES_VERTICAL_OFFSET_REM = 10
 
 const ICON_BOOKMARK_OUTLINE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
@@ -148,7 +148,7 @@ const view: TvView = {
     const unregisterEpisodesSection = registerFocusSection(EPISODES_FOCUS_SECTION_ID, episodesScroller, {
       enterTo: "last-focused",
     })
-    const unregisterKeepInView = keepFocusedInView(episodesScroller, "y", EPISODES_VERTICAL_OFFSET_PX)
+    const unregisterKeepInView = keepFocusedInView(episodesScroller, "y", () => remPx(EPISODES_VERTICAL_OFFSET_REM))
 
     let destroyed = false
     let activePlaylistId = ""
@@ -375,11 +375,11 @@ const view: TvView = {
       button.type = "button"
       button.dataset.focusKey = episodeFocusKey(entry.season, entry.episodeNum)
       button.className =
-        "relative flex items-center gap-4 rounded-xl p-3 text-left outline-none transition-colors " +
+        "relative flex min-h-[4.5rem] items-center gap-3 rounded-xl p-2 text-left outline-none transition-colors " +
         "hover:bg-surface-2 tv-focus-inset"
 
       const thumbWrap = document.createElement("div")
-      thumbWrap.className = "relative isolate aspect-video w-40 shrink-0 overflow-hidden rounded-lg bg-black/40"
+      thumbWrap.className = "relative isolate aspect-video w-28 shrink-0 overflow-hidden rounded-lg bg-black/40"
       if (entry.thumbUrl) {
         const img = document.createElement("img")
         img.alt = ""
@@ -412,10 +412,10 @@ const view: TvView = {
       const textWrap = document.createElement("div")
       textWrap.className = "min-w-0 flex-1"
       const titleEl = document.createElement("div")
-      titleEl.className = "truncate text-base font-medium text-fg"
+      titleEl.className = "truncate text-sm font-medium text-fg"
       titleEl.textContent = `E${entry.episodeNum} · ${entry.title || t("series.episode.fallback", { n: entry.episodeNum })}`
       const metaEl = document.createElement("div")
-      metaEl.className = "truncate text-sm text-fg-3"
+      metaEl.className = "truncate text-xs text-fg-3"
       metaEl.textContent = entry.durationText
       textWrap.append(titleEl, metaEl)
 
@@ -437,7 +437,7 @@ const view: TvView = {
         chip.dataset.focusKey = `season:${seasonNumber}`
         const active = seasonNumber === currentSeason
         chip.className =
-          "shrink-0 rounded-full border px-4 py-2 text-sm font-medium outline-none transition-colors tv-focus-inset " +
+          "shrink-0 rounded-full border min-h-9 px-3 py-1.5 text-sm font-medium outline-none transition-colors tv-focus-inset " +
           (active ? "border-accent text-accent" : "border-line text-fg-2 hover:text-fg")
         chip.textContent = t("series.season", { n: seasonNumber })
         chip.setAttribute("aria-current", String(active))

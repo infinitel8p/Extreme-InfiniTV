@@ -40,7 +40,7 @@ interface Refs {
 }
 
 const TV_INPUT_CLASS =
-  "min-h-[3.75rem] w-full rounded-2xl border border-line bg-surface-2 px-5 text-lg text-fg placeholder:text-fg-3 outline-none tv-focus-inset"
+  "min-h-11 w-full rounded-2xl border border-line bg-surface-2 px-5 text-base text-fg placeholder:text-fg-3 outline-none tv-focus-inset"
 
 const TV_LABEL_CLASS = "text-sm font-semibold uppercase tracking-wider text-fg-3"
 
@@ -85,28 +85,28 @@ function describeM3UResult(result: M3UTestResult): string {
 function buildMarkup(): string {
   return `
     <div class="flex h-full items-center justify-center overflow-y-auto">
-      <div class="mx-auto flex w-full max-w-3xl flex-col gap-7 py-6">
+      <div class="mx-auto flex w-full max-w-2xl flex-col gap-5 py-4">
         <header class="flex flex-col gap-2">
-          <h1 data-i18n="login.title.add" class="text-4xl font-semibold text-fg">Add a playlist</h1>
-          <p data-i18n="tv.login.subtitle" class="text-lg text-fg-3">
+          <h1 data-i18n="login.title.add" class="text-2xl font-semibold text-fg">Add a playlist</h1>
+          <p data-i18n="tv.login.subtitle" class="text-sm text-fg-3">
             Paste a playlist link, or enter your provider's details below.
           </p>
         </header>
 
         <div role="tablist" class="grid grid-cols-2 gap-2 rounded-2xl border border-line bg-surface p-1.5">
           <button type="button" data-role="method-xtream" role="tab" data-focus-key="method:xtream"
-                  class="flex min-h-[3.75rem] flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors">
+                  class="flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors">
             <span data-i18n="login.tab.subscription" class="text-base font-medium">I have a subscription</span>
             <span data-i18n="login.tab.subscription.sub" class="text-xs font-medium uppercase tracking-wider opacity-70">Xtream Codes</span>
           </button>
           <button type="button" data-role="method-m3u" role="tab" data-focus-key="method:m3u"
-                  class="flex min-h-[3.75rem] flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors">
+                  class="flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors">
             <span data-i18n="login.tab.url" class="text-base font-medium">I have a playlist URL</span>
             <span data-i18n="login.tab.url.sub" class="text-xs font-medium uppercase tracking-wider opacity-70">M3U / M3U8</span>
           </button>
         </div>
 
-        <form data-role="form" class="flex flex-col gap-6" autocomplete="off">
+        <form data-role="form" class="flex flex-col gap-4" autocomplete="off">
           <label class="flex flex-col gap-2">
             <span data-i18n="tv.login.field.pasteLink" class="${TV_LABEL_CLASS}">Paste a playlist link</span>
             <input data-role="paste" data-tv-autofocus data-focus-key="paste" type="text"
@@ -116,7 +116,7 @@ function buildMarkup(): string {
                    class="${TV_INPUT_CLASS}" />
           </label>
 
-          <div data-role="xtream-fields" class="flex flex-col gap-6">
+          <div data-role="xtream-fields" class="flex flex-col gap-4">
             <label class="flex flex-col gap-2">
               <span data-i18n="login.field.serverUrl" class="${TV_LABEL_CLASS}">Server URL</span>
               <input data-role="server-url" data-focus-key="field:serverUrl" type="text"
@@ -134,14 +134,14 @@ function buildMarkup(): string {
                 <input data-role="password" data-focus-key="field:password" type="password"
                        class="${TV_INPUT_CLASS} flex-1" />
                 <button type="button" data-role="toggle-password" data-focus-key="toggle-password"
-                        class="shrink-0 min-h-[3.75rem] rounded-2xl border border-line px-5 text-base text-fg-2 outline-none transition-colors hover:bg-surface-2 tv-focus-inset">
+                        class="shrink-0 min-h-11 rounded-2xl border border-line px-5 text-base text-fg-2 outline-none transition-colors hover:bg-surface-2 tv-focus-inset">
                   <span data-role="toggle-password-label" data-i18n="tv.login.action.showPassword">Show</span>
                 </button>
               </div>
             </label>
           </div>
 
-          <div data-role="m3u-fields" class="hidden flex-col gap-6">
+          <div data-role="m3u-fields" class="hidden flex-col gap-4">
             <label class="flex flex-col gap-2">
               <span data-i18n="login.field.playlistUrl" class="${TV_LABEL_CLASS}">Playlist URL</span>
               <input data-role="m3u-url" data-focus-key="field:m3uUrl" type="text"
@@ -164,16 +164,16 @@ function buildMarkup(): string {
                    placeholder="e.g. Living room TV" class="${TV_INPUT_CLASS}" />
           </label>
 
-          <p data-role="status" class="hidden rounded-2xl border px-5 py-3.5 text-base leading-relaxed"
+          <p data-role="status" class="hidden rounded-2xl border px-4 py-2.5 text-sm leading-relaxed"
              role="status" aria-live="polite"></p>
 
           <div class="flex items-center justify-end gap-3 pt-2">
             <button type="button" data-role="cancel" data-focus-key="cancel"
-                    class="btn min-h-[3.75rem] px-7 text-base">
+                    class="btn min-h-11 px-7 text-base">
               <span data-i18n="common.cancel">Cancel</span>
             </button>
             <button type="submit" data-role="connect" data-focus-key="connect"
-                    class="btn-primary min-h-[3.75rem] px-8 text-base">
+                    class="btn-primary min-h-11 px-8 text-base">
               <span data-role="connect-label" data-i18n="tv.login.action.connect">Connect</span>
             </button>
           </div>
@@ -230,10 +230,10 @@ const view: TvView = {
 
     function paintMethodButtons(): void {
       refs.methodXtream.className =
-        "flex min-h-[3.75rem] flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors tv-focus-inset " +
+        "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors tv-focus-inset " +
         (method === "xtream" ? ACTIVE_METHOD_CLASS : IDLE_METHOD_CLASS)
       refs.methodM3u.className =
-        "flex min-h-[3.75rem] flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors tv-focus-inset " +
+        "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors tv-focus-inset " +
         (method === "m3u" ? ACTIVE_METHOD_CLASS : IDLE_METHOD_CLASS)
       refs.methodXtream.setAttribute("aria-selected", String(method === "xtream"))
       refs.methodM3u.setAttribute("aria-selected", String(method === "m3u"))
@@ -252,14 +252,14 @@ const view: TvView = {
 
     function clearStatus(): void {
       refs.statusEl.classList.add("hidden")
-      refs.statusEl.className = "hidden rounded-2xl border px-5 py-3.5 text-base leading-relaxed"
+      refs.statusEl.className = "hidden rounded-2xl border px-4 py-2.5 text-sm leading-relaxed"
       refs.statusEl.textContent = ""
     }
 
     function setStatus(kind: keyof typeof STATUS_PALETTE, message: string): void {
       refs.statusEl.classList.remove("hidden")
       refs.statusEl.className =
-        "rounded-2xl border px-5 py-3.5 text-base leading-relaxed " + (STATUS_PALETTE[kind] || STATUS_PALETTE.busy)
+        "rounded-2xl border px-4 py-2.5 text-sm leading-relaxed " + (STATUS_PALETTE[kind] || STATUS_PALETTE.busy)
       refs.statusEl.textContent = message
     }
 

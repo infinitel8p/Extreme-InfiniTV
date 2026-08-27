@@ -44,6 +44,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
       )
     }
     <script is:inline>
+      document.documentElement.dataset.receiverUi = "1";
       try {
         var fontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1");
         if (!isFinite(fontScale) || fontScale < 0.75 || fontScale > 2) fontScale = 1;
@@ -152,8 +153,14 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
 </html>
 
 <style is:global>
+  /* Design canvas is 60rem x 33.75rem; root font size scales that canvas to fill the viewport. */
+  html[data-receiver-ui] {
+    font-size: max(12px, calc(min(100vw / 60, 100vh / 33.75) * var(--xt-font-scale, 1)));
+  }
+
+  /* px, not rem: this is a native OS titlebar height, not part of the scaled canvas. */
   html[data-tauri-desktop] {
-    --xt-titlebar-h: 2.25rem;
+    --xt-titlebar-h: 36px;
   }
   html[data-tauri-desktop] body {
     padding-top: var(--xt-titlebar-h);
@@ -163,6 +170,19 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   }
   html[data-tauri-desktop][data-fullscreen] #xt-titlebar {
     display: none !important;
+  }
+
+  /* Shared TitleBar.astro is sized in rem for the unscaled app; pin it to its native px size here too. */
+  html[data-receiver-ui] #xt-titlebar {
+    height: 36px;
+  }
+  html[data-receiver-ui] #xt-titlebar > div:first-child {
+    gap: 8px;
+    padding-inline: 12px;
+    font-size: 12px;
+  }
+  html[data-receiver-ui] #xt-titlebar button {
+    width: 46px;
   }
 
   /* Same overscan padding Layout.astro applies to its own body. */

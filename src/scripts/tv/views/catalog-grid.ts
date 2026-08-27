@@ -106,14 +106,14 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       let filterState: GridFilterState = { category: null, query: "", hideWatched: false, sort: "default" }
 
       const wrap = document.createElement("div")
-      wrap.className = "flex h-full flex-col gap-6"
+      wrap.className = "flex h-full flex-col gap-4"
 
       const headingRow = document.createElement("div")
       headingRow.className = "flex items-baseline gap-4"
       const heading = document.createElement("h1")
-      heading.className = "text-3xl font-semibold text-fg"
+      heading.className = "text-xl font-semibold text-fg"
       const countEl = document.createElement("span")
-      countEl.className = "text-base text-fg-3 tabular-nums"
+      countEl.className = "text-sm text-fg-3 tabular-nums"
       headingRow.append(heading, countEl)
 
       const filterBar = createFilterBar({

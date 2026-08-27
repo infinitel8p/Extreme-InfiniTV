@@ -1,10 +1,10 @@
 // Shared TV home rail: header + horizontal card track with spatial-nav focus memory.
 
 import { t } from "@/scripts/lib/i18n"
-import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
 import { createCard, type CardItem } from "./card"
 
-const RAIL_LEFT_OFFSET_PX = 48
+const RAIL_LEFT_OFFSET_REM = 1
 const SKELETON_COUNT = 6
 
 export interface RailOptions {
@@ -21,7 +21,7 @@ export interface RailHandle {
 
 function buildSkeletonCard(): HTMLDivElement {
   const skeleton = document.createElement("div")
-  skeleton.className = "aspect-[2/3] w-[11.5rem] shrink-0 animate-pulse rounded-xl bg-surface-2"
+  skeleton.className = "aspect-[2/3] w-[9.5rem] shrink-0 animate-pulse rounded-xl bg-surface-2"
   return skeleton
 }
 
@@ -31,9 +31,9 @@ export function createRail(options: RailOptions): RailHandle {
   el.hidden = true
 
   const head = document.createElement("div")
-  head.className = "flex items-baseline justify-between gap-4 px-12"
+  head.className = "flex items-baseline justify-between gap-4"
   const heading = document.createElement("h2")
-  heading.className = "text-xl font-semibold text-fg"
+  heading.className = "text-lg font-semibold text-fg"
   heading.textContent = options.title
   const count = document.createElement("span")
   count.className = "text-sm text-fg-3 tabular-nums"
@@ -42,7 +42,7 @@ export function createRail(options: RailOptions): RailHandle {
   const scroller = document.createElement("div")
   scroller.className = "overflow-hidden py-[var(--tv-focus-pad)] -my-[var(--tv-focus-pad)]"
   const track = document.createElement("div")
-  track.className = "flex items-start gap-5 px-12 py-1"
+  track.className = "flex items-start gap-4 py-1"
   scroller.appendChild(track)
 
   el.append(head, scroller)
@@ -51,7 +51,7 @@ export function createRail(options: RailOptions): RailHandle {
     enterTo: "last-focused",
     restrict: "self-first",
   })
-  const unregisterKeepInView = keepFocusedInView(scroller, "x", RAIL_LEFT_OFFSET_PX)
+  const unregisterKeepInView = keepFocusedInView(scroller, "x", () => remPx(RAIL_LEFT_OFFSET_REM))
 
   function setLoading(): void {
     el.hidden = false

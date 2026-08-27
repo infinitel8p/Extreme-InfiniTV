@@ -1,7 +1,8 @@
 /* TV-only rules for /tv/*: root type scale, overscan padding, focus ring, keepFocusedInView transform. */
 
+/* Design canvas is 60rem x 33.75rem; root font size scales that canvas to fill the viewport. */
 html[data-tv-ui] {
-  font-size: calc(1.15rem * var(--xt-font-scale, 1));
+  font-size: max(12px, calc(min(100vw / 60, 100vh / 33.75) * var(--xt-font-scale, 1)));
   /* Ring is inset, so no scale headroom is needed. */
   --tv-focus-pad: 0;
 }
@@ -81,4 +82,9 @@ html[data-tv-ui][data-tv] .tv-focus-card:focus-visible .tv-card-title {
 /* focus.ts keepFocusedInView() adds this so a static track becomes its children's offsetParent. */
 .tv-keep-in-view-track {
   position: relative;
+}
+
+/* live.ts's ResizeObserver toggles this once the channel column has room for the "next" title. */
+html[data-tv-ui] [data-live-wide="true"] [data-role="next"] {
+  display: block;
 }

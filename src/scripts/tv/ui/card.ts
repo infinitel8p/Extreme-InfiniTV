@@ -49,7 +49,7 @@ function createPosterCard(item: PosterCardItem): HTMLAnchorElement {
   card.href = item.href
   card.dataset.focusKey = cardFocusKey(item.railId, item.kind, item.id)
   card.setAttribute("aria-label", item.ariaLabel)
-  card.className = `flex w-[11.5rem] shrink-0 flex-col gap-2 rounded-xl ${CARD_FOCUS_CLASSES}`
+  card.className = `flex w-[9.5rem] shrink-0 flex-col gap-2 rounded-xl ${CARD_FOCUS_CLASSES}`
 
   const posterWrap = document.createElement("div")
   posterWrap.dataset.posterWrap = "1"
@@ -94,7 +94,7 @@ function createLiveCard(item: LiveCardItem): HTMLButtonElement {
   card.type = "button"
   card.dataset.focusKey = cardFocusKey(item.railId, item.kind, item.id)
   card.setAttribute("aria-label", item.ariaLabel)
-  card.className = `flex w-[11.5rem] shrink-0 flex-col gap-2 rounded-xl text-left ${CARD_FOCUS_CLASSES}`
+  card.className = `flex w-[9.5rem] shrink-0 flex-col gap-2 rounded-xl text-left ${CARD_FOCUS_CLASSES}`
 
   const tileWrap = document.createElement("div")
   tileWrap.dataset.posterWrap = "1"

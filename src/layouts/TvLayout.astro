@@ -193,12 +193,12 @@ const navItems = [
         transition:persist="tv-nav"
         aria-label="Main"
         data-i18n-attr="aria-label:sidebar.mainLabel"
-        class="relative z-40 shrink-0 w-[5.5rem]">
+        class="relative z-40 shrink-0 w-[4.5rem]">
         <div
-          class="group/rail tv-rail-surface absolute inset-y-0 left-0 flex w-[5.5rem] flex-col gap-1
+          class="group/rail tv-rail-surface absolute inset-y-0 left-0 flex w-[4.5rem] flex-col gap-1
                  overflow-y-auto overflow-x-hidden bg-bg
-                 p-3 outline-none transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]
-                 focus-within:w-[17rem] focus-within:shadow-[8px_0_24px_-12px_rgba(0,0,0,0.6)]">
+                 p-2 outline-none transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]
+                 focus-within:w-[14rem] focus-within:shadow-[8px_0_24px_-12px_rgba(0,0,0,0.6)]">
           <div class="flex flex-1 flex-col gap-1">
             {navItems.map(({ href, key, label, Icon }) => {
               const active = activeNavHref === href
@@ -210,7 +210,7 @@ const navItems = [
                   aria-current={active ? "page" : undefined}
                   aria-label={label}
                   data-i18n-attr={`aria-label:${key}`}
-                  class="group/item relative flex min-h-14 w-full items-center justify-center gap-4
+                  class="group/item relative flex min-h-8 w-full items-center justify-center gap-4
                          rounded-2xl px-0 text-fg-2 outline-none transition-colors tv-focus-inset
                          group-focus-within/rail:justify-start group-focus-within/rail:px-4
                          hover:bg-surface-2 hover:text-fg
@@ -234,14 +234,14 @@ const navItems = [
             })}
           </div>
 
-          <div class="flex flex-col gap-1 border-t border-line pt-2">
+          <div class="flex flex-col gap-1 border-t border-line pt-1">
             <button
               type="button"
               id="tv-nav-playlist-btn"
               data-tv-nav-item
               aria-label="Playlist"
               data-i18n-attr="aria-label:tv.nav.playlist"
-              class="flex min-h-14 w-full items-center justify-center gap-4 rounded-2xl px-0
+              class="flex min-h-8 w-full items-center justify-center gap-4 rounded-2xl px-0
                      text-fg-2 outline-none transition-colors tv-focus-inset
                      group-focus-within/rail:justify-start group-focus-within/rail:px-4
                      hover:bg-surface-2 hover:text-fg
@@ -249,7 +249,7 @@ const navItems = [
               <span
                 id="tv-nav-playlist-mark"
                 aria-hidden="true"
-                class="inline-flex size-8 shrink-0 items-center justify-center rounded-lg
+                class="inline-flex size-7 shrink-0 items-center justify-center rounded-lg
                        bg-surface-2 text-sm font-semibold uppercase">?</span>
               <span
                 id="tv-nav-playlist-title"
@@ -262,7 +262,7 @@ const navItems = [
               data-tv-nav-item
               aria-label="Cast to this TV"
               data-i18n-attr="aria-label:tv.nav.cast"
-              class="flex min-h-14 w-full items-center justify-center gap-4 rounded-2xl px-0
+              class="flex min-h-8 w-full items-center justify-center gap-4 rounded-2xl px-0
                      text-fg-2 outline-none transition-colors tv-focus-inset
                      group-focus-within/rail:justify-start group-focus-within/rail:px-4
                      hover:bg-surface-2 hover:text-fg

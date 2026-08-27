@@ -1,7 +1,7 @@
 // Live TV: groups | channels | programme guide, three spatial-nav columns.
 import type { TvView, TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n"
-import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
 import { getActiveEntry } from "@/scripts/lib/creds.js"
 import { resolvePlaylistCreds } from "@/scripts/lib/tv-cast-live.js"
 import { readCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
@@ -40,8 +40,10 @@ const GUIDE_DEBOUNCE_MS = 120
 const TICK_INTERVAL_MS = 60_000
 const SKELETON_ROW_COUNT = 8
 const LAST_CHANNEL_KEY = "xt_tv_last_channel"
-const GROUPS_KEEP_IN_VIEW_OFFSET = 120
-const GUIDE_KEEP_IN_VIEW_OFFSET = 140
+const GROUPS_KEEP_IN_VIEW_REM = 7.5
+const GUIDE_KEEP_IN_VIEW_REM = 8.75
+// Below this the "next" title column would crowd out the channel name; live-row.ts owns the CSS toggle.
+const NEXT_TITLE_MIN_COLUMN_REM = 26
 
 interface ViewState {
   playlistId: string
@@ -74,7 +76,7 @@ interface Refs {
 
 function buildShellMarkup(): string {
   return `
-    <div class="grid h-full grid-cols-[14rem_minmax(0,1fr)_30rem] gap-6">
+    <div class="grid h-full grid-cols-[10rem_minmax(0,1fr)_14rem] gap-4">
       <nav data-role="groups-col" class="flex min-h-0 flex-col overflow-hidden">
         <p data-role="groups-heading" class="shrink-0 px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-fg-3"></p>
         <div data-role="groups-scroller" class="min-h-0 flex-1 overflow-hidden">
@@ -83,20 +85,20 @@ function buildShellMarkup(): string {
       </nav>
 
       <div data-role="channels-col" class="flex min-h-0 flex-col overflow-hidden pt-2 px-2">
-        <div class="mb-3 flex min-h-[3.25rem] shrink-0 items-center gap-2 rounded-2xl bg-surface-2 px-4 tv-focus-inset-within">
+        <div class="mb-3 flex min-h-10 shrink-0 items-center gap-2 rounded-2xl bg-surface-2 px-4 tv-focus-inset-within">
           <span class="shrink-0 text-fg-3" aria-hidden="true">${ICON_SEARCH}</span>
           <input data-role="search" type="search" autocomplete="off" spellcheck="false"
                  class="w-full rounded-2xl bg-transparent text-sm outline-none placeholder:text-fg-3" />
         </div>
         <div data-role="channels-scroller" class="min-h-0 flex-1 overflow-hidden py-2">
-          <div data-role="channels-track" class="flex flex-col gap-3"></div>
+          <div data-role="channels-track" class="flex flex-col gap-2"></div>
         </div>
         <p data-role="channels-status" class="hidden shrink-0 pt-3 text-center text-sm text-fg-3" role="status"></p>
       </div>
 
       <div data-role="guide-col" class="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-surface">
         <div data-role="guide-scroller" class="min-h-0 flex-1 overflow-hidden">
-          <div data-role="guide-track" class="flex flex-col gap-1 p-4"></div>
+          <div data-role="guide-track" class="flex flex-col gap-1 p-3"></div>
         </div>
       </div>
     </div>
@@ -463,10 +465,22 @@ const view: TvView = {
         })
       )
 
-      const channelsColumnHeight = refs.channelsScroller.clientHeight || window.innerHeight
-      unsubs.push(keepFocusedInView(refs.groupsScroller, "y", GROUPS_KEEP_IN_VIEW_OFFSET))
-      unsubs.push(keepFocusedInView(refs.channelsScroller, "y", Math.round(channelsColumnHeight * 0.35)))
-      unsubs.push(keepFocusedInView(refs.guideScroller, "y", GUIDE_KEEP_IN_VIEW_OFFSET))
+      unsubs.push(keepFocusedInView(refs.groupsScroller, "y", () => remPx(GROUPS_KEEP_IN_VIEW_REM)))
+      unsubs.push(
+        keepFocusedInView(refs.channelsScroller, "y", () =>
+          Math.round((refs!.channelsScroller.clientHeight || window.innerHeight) * 0.35)
+        )
+      )
+      unsubs.push(keepFocusedInView(refs.guideScroller, "y", () => remPx(GUIDE_KEEP_IN_VIEW_REM)))
+
+      if (typeof ResizeObserver === "function") {
+        const channelsResizeObserver = new ResizeObserver((entries) => {
+          const width = entries[0]?.contentRect.width ?? 0
+          refs!.channelsCol.dataset.liveWide = width >= remPx(NEXT_TITLE_MIN_COLUMN_REM) ? "true" : "false"
+        })
+        channelsResizeObserver.observe(refs.channelsCol)
+        unsubs.push(() => channelsResizeObserver.disconnect())
+      }
 
       if (typeof IntersectionObserver !== "undefined") {
         observer = new IntersectionObserver(

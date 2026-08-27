@@ -8,7 +8,7 @@ import { ICON_CHEVRON_DOWN, ICON_CHECK, ICON_SEARCH } from "@/scripts/lib/icons"
 const QUERY_DEBOUNCE_MS = 150
 
 const CHIP_BASE_CLASS =
-  "flex h-[3.25rem] items-center gap-2 rounded-full px-5 text-sm font-medium outline-none tv-focus-inset"
+  "flex min-h-10 items-center gap-2 rounded-full px-4 text-sm font-medium outline-none tv-focus-inset"
 const CHIP_CLASS = `${CHIP_BASE_CLASS} bg-surface-2 text-fg`
 const HIDE_WATCHED_OFF_CLASS = `${CHIP_BASE_CLASS} border border-line text-fg-2`
 const HIDE_WATCHED_ON_CLASS = `${CHIP_BASE_CLASS} border border-accent bg-accent/15 text-accent`
@@ -163,7 +163,7 @@ export function createFilterBar(options: FilterBarOptions): FilterBarHandle {
 
   const searchWrap = document.createElement("label")
   searchWrap.className =
-    "flex h-[3.25rem] min-w-[16rem] flex-1 cursor-text items-center gap-2 rounded-full bg-surface-2 px-5 tv-focus-inset-within"
+    "flex min-h-10 min-w-[14rem] flex-1 cursor-text items-center gap-2 rounded-full bg-surface-2 px-4 tv-focus-inset-within"
   const searchIcon = document.createElement("span")
   searchIcon.className = "shrink-0 text-fg-3"
   searchIcon.innerHTML = ICON_SEARCH

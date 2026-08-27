@@ -1,7 +1,7 @@
 // Downloads: one vertical list of active + finished downloads, action sheet for pause/resume/retry/remove.
 import type { TvView, TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n"
-import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
 import {
   listDownloads,
   pauseDownload,
@@ -22,7 +22,7 @@ import { ICON_X, ICON_DOTS } from "@/scripts/lib/icons.ts"
 
 const SKELETON_ROW_COUNT = 4
 const REPAINT_THROTTLE_MS = 250
-const LIST_KEEP_IN_VIEW_OFFSET = 140
+const LIST_KEEP_IN_VIEW_REM = 8.75
 
 function statusSortOrder(status: string): number {
   switch (status) {
@@ -99,7 +99,7 @@ function buildThumb(logoUrl: string | null | undefined): HTMLSpanElement {
   const box = document.createElement("span")
   box.setAttribute("aria-hidden", "true")
   box.className =
-    "grid isolate aspect-video h-16 shrink-0 place-items-center overflow-hidden rounded-lg bg-black/40 ring-1 ring-inset ring-line"
+    "grid isolate aspect-video h-12 shrink-0 place-items-center overflow-hidden rounded-lg bg-black/40 ring-1 ring-inset ring-line"
   if (logoUrl) {
     const img = document.createElement("img")
     img.alt = ""
@@ -116,9 +116,9 @@ function buildThumb(logoUrl: string | null | undefined): HTMLSpanElement {
 function buildSkeletonRow(): HTMLDivElement {
   const row = document.createElement("div")
   row.setAttribute("aria-hidden", "true")
-  row.className = "flex min-h-[5.5rem] items-center gap-4 rounded-xl px-3 py-2"
+  row.className = "flex min-h-[3.5rem] items-center gap-4 rounded-xl px-3 py-2"
   const thumb = document.createElement("span")
-  thumb.className = "aspect-video h-16 shrink-0 animate-pulse rounded-lg bg-surface-2"
+  thumb.className = "aspect-video h-12 shrink-0 animate-pulse rounded-lg bg-surface-2"
   const text = document.createElement("span")
   text.className = "flex min-w-0 flex-1 flex-col gap-2"
   const line1 = document.createElement("span")
@@ -271,13 +271,13 @@ const view: TvView = {
     function buildRow(item: DownloadItem): RowRefs {
       const row = document.createElement("div")
       row.dataset.id = item.id
-      row.className = "flex min-h-[5.5rem] items-center gap-2 rounded-xl"
+      row.className = "flex min-h-[3.5rem] items-center gap-2 rounded-xl"
 
       const playButton = document.createElement("button")
       playButton.type = "button"
       playButton.dataset.focusKey = `dl:${item.id}`
       playButton.className =
-        "flex min-h-[5.5rem] min-w-0 flex-1 items-center gap-4 rounded-xl px-3 py-2 text-start outline-none " +
+        "flex min-h-[3.5rem] min-w-0 flex-1 items-center gap-4 rounded-xl px-3 py-2 text-start outline-none " +
         "hover:bg-surface-2 tv-focus-inset"
 
       const thumbSlot = buildThumb(item.source?.logo)
@@ -287,7 +287,7 @@ const view: TvView = {
       textCol.className = "flex min-w-0 flex-1 flex-col gap-1"
 
       const titleEl = document.createElement("span")
-      titleEl.className = "truncate text-base font-medium text-fg"
+      titleEl.className = "truncate text-sm font-medium text-fg"
 
       const subtitleEl = document.createElement("span")
       subtitleEl.className = "truncate text-sm text-fg-3"
@@ -453,7 +453,7 @@ const view: TvView = {
         <div class="flex h-full flex-col gap-6">
           <header class="flex shrink-0 flex-col gap-1">
             <div class="flex items-baseline gap-3">
-              <h1 tabindex="0" data-tv-autofocus class="rounded-lg text-3xl font-semibold text-fg outline-none tv-focus-inset" data-role="heading"></h1>
+              <h1 tabindex="0" data-tv-autofocus class="rounded-lg text-xl font-semibold text-fg outline-none tv-focus-inset" data-role="heading"></h1>
               <span data-role="count" class="text-sm text-fg-3"></span>
             </div>
             <p data-role="folder" class="hidden text-sm text-fg-3"></p>
@@ -491,7 +491,7 @@ const view: TvView = {
           enterTo: "last-focused",
         })
       )
-      if (scrollerEl) unsubs.push(keepFocusedInView(scrollerEl, "y", LIST_KEEP_IN_VIEW_OFFSET))
+      if (scrollerEl) unsubs.push(keepFocusedInView(scrollerEl, "y", () => remPx(LIST_KEEP_IN_VIEW_REM)))
 
       document.addEventListener(DOWNLOADS_LIST_EVENT, onDownloadsListEvent)
       document.addEventListener(DOWNLOAD_PROGRESS_EVENT, onDownloadProgressEvent)

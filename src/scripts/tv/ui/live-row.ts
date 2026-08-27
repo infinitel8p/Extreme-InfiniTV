@@ -68,11 +68,11 @@ export function buildGroupButton(group: CastChannelGroup, isActive: boolean): HT
 export function buildChannelRowSkeleton(): HTMLDivElement {
   const row = document.createElement("div")
   row.setAttribute("aria-hidden", "true")
-  row.className = "grid min-h-[5.5rem] grid-cols-[2.5rem_7rem_minmax(0,1fr)] items-center gap-4 rounded-2xl bg-surface px-3 py-2"
+  row.className = "grid min-h-[4rem] grid-cols-[2rem_5rem_minmax(0,1fr)] items-center gap-3 rounded-2xl bg-surface px-3 py-2"
   const number = document.createElement("span")
-  number.className = "h-4 w-6 animate-pulse justify-self-end rounded bg-surface-2"
+  number.className = "h-4 w-5 animate-pulse justify-self-end rounded bg-surface-2"
   const logo = document.createElement("span")
-  logo.className = "aspect-video w-28 animate-pulse rounded-xl bg-surface-2"
+  logo.className = "aspect-video w-20 animate-pulse rounded-xl bg-surface-2"
   const text = document.createElement("span")
   text.className = "flex min-w-0 flex-col justify-center gap-2"
   const line1 = document.createElement("span")
@@ -88,7 +88,7 @@ export function buildChannelRow(channel: LiveChannel, index: number, isPlaying: 
   const row = document.createElement("button")
   row.type = "button"
   row.className =
-    "group/row relative grid min-h-[5.5rem] w-full grid-cols-[2.5rem_7rem_minmax(0,1fr)] items-center gap-4 " +
+    "group/row relative grid min-h-[4rem] w-full grid-cols-[2rem_5rem_minmax(0,1fr)] items-center gap-3 " +
     "rounded-2xl bg-surface px-3 py-2 text-start outline-none hover:bg-surface-2 tv-focus-inset " +
     "data-[now-playing=true]:bg-surface-2"
   row.dataset.focusKey = `ch:${channel.id}`
@@ -102,11 +102,11 @@ export function buildChannelRow(channel: LiveChannel, index: number, isPlaying: 
   row.appendChild(accentBar)
 
   const number = document.createElement("span")
-  number.className = "w-10 text-right text-sm tabular-nums text-fg-3"
+  number.className = "w-8 text-right text-sm tabular-nums text-fg-3"
   number.textContent = String(channel.chno ?? index + 1)
   row.appendChild(number)
 
-  row.appendChild(buildLogoTile(channel.logo, "w-28"))
+  row.appendChild(buildLogoTile(channel.logo, "w-20"))
 
   const textCol = document.createElement("span")
   textCol.className = "flex min-w-0 items-center gap-4"
@@ -139,7 +139,7 @@ export function buildChannelRow(channel: LiveChannel, index: number, isPlaying: 
 
   const nextLine = document.createElement("span")
   nextLine.dataset.role = "next"
-  nextLine.className = "hidden max-w-[10rem] shrink-0 truncate text-sm text-fg-3 min-[1500px]:block"
+  nextLine.className = "hidden max-w-[10rem] shrink-0 truncate text-sm text-fg-3"
   textCol.appendChild(nextLine)
 
   row.appendChild(textCol)
@@ -161,7 +161,7 @@ export function buildGuideHero(
   currentProgress: number
 ): HTMLDivElement {
   const hero = document.createElement("div")
-  hero.className = "relative isolate min-h-[14rem] overflow-hidden rounded-2xl bg-black/40 p-6"
+  hero.className = "relative isolate min-h-[10rem] overflow-hidden rounded-2xl bg-black/40 p-4"
 
   hero.appendChild(buildHeroBackdrop(channel.logo))
   const darken = document.createElement("span")
@@ -175,27 +175,27 @@ export function buildGuideHero(
   const identity = document.createElement("div")
   identity.className = "flex items-center gap-3"
   const name = document.createElement("span")
-  name.className = "min-w-0 truncate text-base font-semibold text-fg"
+  name.className = "min-w-0 truncate text-sm font-semibold text-fg"
   name.textContent = channel.name
-  identity.append(buildLogoChip(channel.logo, "w-24"), name)
+  identity.append(buildLogoChip(channel.logo, "w-16"), name)
   content.appendChild(identity)
 
   if (status === "loading") {
     const line1 = document.createElement("span")
-    line1.className = "h-6 w-2/3 max-w-sm animate-pulse rounded bg-surface-2"
+    line1.className = "h-5 w-2/3 max-w-sm animate-pulse rounded bg-surface-2"
     const line2 = document.createElement("span")
     line2.className = "h-4 w-1/3 max-w-xs animate-pulse rounded bg-surface-2"
     content.append(line1, line2)
   } else if (current) {
     const title = document.createElement("p")
-    title.className = "line-clamp-2 text-xl font-semibold text-fg"
+    title.className = "line-clamp-2 text-lg font-semibold text-fg"
     title.textContent = current.title
     content.appendChild(title)
 
     const timeRow = document.createElement("div")
     timeRow.className = "flex flex-col gap-1.5"
     const time = document.createElement("span")
-    time.className = "text-sm tabular-nums text-fg-2"
+    time.className = "text-xs tabular-nums text-fg-2"
     time.textContent = formatTimeRange(current.start, current.stop, getActiveLocale())
     const track = document.createElement("span")
     track.className = "block h-1 w-full max-w-xs overflow-hidden rounded-full bg-surface-3"
@@ -208,7 +208,7 @@ export function buildGuideHero(
 
     if (current.desc) {
       const desc = document.createElement("p")
-      desc.className = "line-clamp-3 text-sm text-fg-2"
+      desc.className = "line-clamp-2 text-xs text-fg-2"
       desc.textContent = current.desc
       content.appendChild(desc)
     }
@@ -262,7 +262,7 @@ export function buildGuideRow(
     (isPast && !canReplay ? " opacity-60" : "")
 
   const time = document.createElement("span")
-  time.className = "w-32 shrink-0 whitespace-nowrap text-xs tabular-nums text-fg-3"
+  time.className = "w-24 shrink-0 whitespace-nowrap text-xs tabular-nums text-fg-3"
   time.textContent = formatTimeRange(programme.start, programme.stop, getActiveLocale())
   row.appendChild(time)
 

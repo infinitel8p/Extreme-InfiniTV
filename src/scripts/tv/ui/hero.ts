@@ -33,7 +33,7 @@ export interface HeroHandle {
 export function createHero(root: HTMLElement): HeroHandle {
   const section = document.createElement("section")
   section.className =
-    "relative isolate h-[38vh] min-h-[22rem] w-full shrink-0 overflow-hidden rounded-2xl bg-black/40"
+    "relative isolate h-[40vh] min-h-[13rem] w-full shrink-0 overflow-hidden rounded-2xl bg-black/40"
 
   const backdropWrap = document.createElement("div")
   backdropWrap.className = "absolute inset-0"
@@ -44,17 +44,17 @@ export function createHero(root: HTMLElement): HeroHandle {
   gradientBottom.className = "absolute inset-0 bg-gradient-to-t from-bg/40 via-transparent to-transparent"
 
   const textBlock = document.createElement("div")
-  textBlock.className = "relative flex h-full max-w-2xl flex-col justify-end gap-3 p-12"
+  textBlock.className = "relative flex h-full max-w-xl flex-col justify-end gap-2 p-6"
 
   const eyebrow = document.createElement("p")
-  eyebrow.className = "text-sm font-semibold uppercase tracking-wide text-accent"
+  eyebrow.className = "text-xs font-semibold uppercase tracking-wide text-accent"
   const title = document.createElement("h1")
-  title.className = "line-clamp-2 text-4xl font-semibold text-fg"
+  title.className = "line-clamp-2 text-3xl font-semibold text-fg"
   const meta = document.createElement("p")
-  meta.className = "text-base text-fg-2"
+  meta.className = "text-sm text-fg-2"
 
   const progressTrack = document.createElement("div")
-  progressTrack.className = "mt-1 h-1.5 w-64 max-w-full overflow-hidden rounded-full bg-white/15"
+  progressTrack.className = "mt-1 h-1.5 w-48 max-w-full overflow-hidden rounded-full bg-white/15"
   progressTrack.hidden = true
   const progressFill = document.createElement("div")
   progressFill.className = "h-full rounded-full bg-accent"
@@ -117,7 +117,7 @@ export function createHero(root: HTMLElement): HeroHandle {
     ctaEl.href = cta.href
     if (cta.autofocus) ctaEl.dataset.tvAutofocus = ""
     ctaEl.className =
-      "mt-2 inline-flex w-fit items-center gap-2 rounded-xl bg-accent px-6 py-3 text-base " +
+      "mt-2 inline-flex min-h-11 w-fit items-center gap-2 rounded-xl bg-accent px-5 text-sm " +
       "font-semibold text-bg outline-none tv-focus-inset"
     ctaEl.textContent = cta.label
     textBlock.appendChild(ctaEl)

@@ -2,7 +2,7 @@
 import type { TvView, TvViewContext } from "@/scripts/tv/router"
 import { navigate } from "astro:transitions/client"
 import { t, LOCALE_EVENT, getActiveLocale, getAvailableLocales, setLocale } from "@/scripts/lib/i18n"
-import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
 import { getEntries, getActiveEntry, isTauri } from "@/scripts/lib/creds.js"
 import { renderPlaylistRow, getPlaylistListEmptyCopy } from "@/scripts/lib/playlist-rows.js"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav"
@@ -55,16 +55,16 @@ import {
 } from "@/scripts/lib/icons"
 
 const SETTINGS_SECTION_ID = "tv-settings"
-const KEEP_IN_VIEW_OFFSET = 120
+const KEEP_IN_VIEW_REM = 7.5
 
 const THEME_KEY = "xt_theme"
 const FONT_SCALE_KEY = "xt_font_scale"
 const FONT_SCALE_PRESETS: Array<{ value: number; labelKey: string }> = [
-  { value: 0.875, labelKey: "settings.fontScale.small" },
-  { value: 1, labelKey: "settings.fontScale.default" },
-  { value: 1.125, labelKey: "settings.fontScale.medium" },
-  { value: 1.25, labelKey: "settings.fontScale.large" },
-  { value: 1.5, labelKey: "settings.fontScale.xlarge" },
+  { value: 0.875, labelKey: "tv.settings.interfaceSize.smaller" },
+  { value: 1, labelKey: "tv.settings.interfaceSize.default" },
+  { value: 1.125, labelKey: "tv.settings.interfaceSize.medium" },
+  { value: 1.25, labelKey: "tv.settings.interfaceSize.large" },
+  { value: 1.5, labelKey: "tv.settings.interfaceSize.largest" },
 ]
 
 function readTheme(): string {
@@ -103,7 +103,7 @@ function readFontScale(): number {
 
 function fontScaleLabelKey(scale: number): string {
   const preset = FONT_SCALE_PRESETS.find((entry) => Math.abs(entry.value - scale) < 0.001)
-  return preset?.labelKey || "settings.fontScale.default"
+  return preset?.labelKey || "tv.settings.interfaceSize.default"
 }
 
 function applyFontScale(scale: number): void {
@@ -166,12 +166,12 @@ const view: TvView = {
       })
 
       rows.push({
-        id: "text-size",
+        id: "interface-size",
         icon: ICON_TEXT_SIZE,
-        label: t("tv.settings.textSize"),
+        label: t("tv.settings.interfaceSize"),
         value: t(fontScaleLabelKey(readFontScale())),
         kind: "choice",
-        onActivate: () => void pickTextSize(),
+        onActivate: () => void pickInterfaceSize(),
       })
 
       rows.push({
@@ -312,13 +312,13 @@ const view: TvView = {
       void renderRows()
     }
 
-    async function pickTextSize(): Promise<void> {
+    async function pickInterfaceSize(): Promise<void> {
       const options: ChoiceOption[] = FONT_SCALE_PRESETS.map((preset) => ({
         id: String(preset.value),
         label: t(preset.labelKey),
       }))
       const picked = await openChoiceDialog({
-        title: t("tv.settings.textSize"),
+        title: t("tv.settings.interfaceSize"),
         selectedId: String(readFontScale()),
         options,
       })
@@ -701,13 +701,13 @@ const view: TvView = {
       root.replaceChildren()
 
       const heading = document.createElement("h1")
-      heading.className = "text-2xl font-semibold text-fg"
+      heading.className = "text-xl font-semibold text-fg"
       heading.textContent = t("nav.settings")
 
       const scroller = document.createElement("div")
       scroller.id = SETTINGS_SECTION_ID
       // overflow-hidden: keepFocusedInView owns the scrolling, so no native scrollbar.
-      scroller.className = "mt-6 min-h-0 flex-1 overflow-hidden"
+      scroller.className = "mt-4 min-h-0 flex-1 overflow-hidden"
 
       list = createSettingsList({ focusSectionId: "tv-settings-rows" })
       scroller.appendChild(list.el)
@@ -718,7 +718,7 @@ const view: TvView = {
       root.appendChild(wrap)
 
       unsubs.push(registerFocusSection(SETTINGS_SECTION_ID, scroller, { enterTo: "last-focused" }))
-      unsubs.push(keepFocusedInView(scroller, "y", KEEP_IN_VIEW_OFFSET))
+      unsubs.push(keepFocusedInView(scroller, "y", () => remPx(KEEP_IN_VIEW_REM)))
 
       document.addEventListener(LOCALE_EVENT, onRefreshEvent)
       document.addEventListener("xt:active-changed", onRefreshEvent)

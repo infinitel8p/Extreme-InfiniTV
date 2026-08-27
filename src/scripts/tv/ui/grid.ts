@@ -3,16 +3,16 @@
 // rows spatial-nav can't yet see in the DOM.
 
 import { rowWindow, rowOf } from "@/scripts/lib/tv-grid-filter"
-import { registerFocusSection, keepFocusedInView, resetKeepInView } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView, resetKeepInView, remPx } from "@/scripts/tv/focus"
 import { createCard, type PosterCardItem } from "./card"
 
 const OVERSCAN_ROWS = 2
-const CARD_WIDTH_PX = 184 // 11.5rem
-const ROW_GAP_PX = 20 // gap-5
-const FALLBACK_ROW_HEIGHT_PX = 352 // 22rem
+const CARD_WIDTH_REM = 9.5
+const ROW_GAP_REM = 1 // gap-4
+const FALLBACK_ROW_HEIGHT_REM = 18.5
 const MIN_COLUMNS = 4
 const SKELETON_COUNT = 18
-const SCROLL_OFFSET_PX = 24
+const SCROLL_OFFSET_REM = 1.5
 
 export interface GridOptions {
   focusSectionId: string
@@ -30,7 +30,7 @@ export interface GridHandle {
 
 function buildSkeletonCard(): HTMLDivElement {
   const skeleton = document.createElement("div")
-  skeleton.className = "aspect-[2/3] w-[11.5rem] animate-pulse rounded-xl bg-surface-2"
+  skeleton.className = "aspect-[2/3] w-[9.5rem] animate-pulse rounded-xl bg-surface-2"
   return skeleton
 }
 
@@ -49,12 +49,12 @@ export function createGrid(options: GridOptions): GridHandle {
     enterTo: "last-focused",
     restrict: "self-first",
   })
-  const unregisterKeepInView = keepFocusedInView(scroller, "y", SCROLL_OFFSET_PX)
+  const unregisterKeepInView = keepFocusedInView(scroller, "y", () => remPx(SCROLL_OFFSET_REM))
 
   let items: PosterCardItem[] = []
   const fixedColumns = options.columns || 0
   let columns = fixedColumns || 6
-  let rowHeightPx = FALLBACK_ROW_HEIGHT_PX
+  let rowHeightPx = remPx(FALLBACK_ROW_HEIGHT_REM)
   let rowHeightMeasured = false
   let focusedRow = 0
   let lastFocusedIndex: number | null = null
@@ -69,7 +69,7 @@ export function createGrid(options: GridOptions): GridHandle {
     // el, not scroller: scroller's own width is inflated by the focus-pad negative margin.
     const width = el.clientWidth || 0
     if (!width) return columns
-    return Math.max(MIN_COLUMNS, Math.floor(width / (CARD_WIDTH_PX + ROW_GAP_PX)))
+    return Math.max(MIN_COLUMNS, Math.floor(width / (remPx(CARD_WIDTH_REM) + remPx(ROW_GAP_REM))))
   }
 
   function totalRows(): number {
@@ -89,7 +89,7 @@ export function createGrid(options: GridOptions): GridHandle {
     const firstCard = track.querySelector<HTMLElement>("[data-grid-index]")
     if (!firstCard) return
     rowHeightMeasured = true
-    const measured = firstCard.offsetHeight + ROW_GAP_PX
+    const measured = firstCard.offsetHeight + remPx(ROW_GAP_REM)
     if (measured > 0 && measured !== rowHeightPx) {
       rowHeightPx = measured
       setTrackHeight()
@@ -99,7 +99,7 @@ export function createGrid(options: GridOptions): GridHandle {
 
   function buildRow(rowIndex: number): HTMLElement {
     const rowEl = document.createElement("div")
-    rowEl.className = "absolute inset-x-0 flex gap-5"
+    rowEl.className = "absolute inset-x-0 flex gap-4"
     rowEl.style.top = `${rowIndex * rowHeightPx}px`
     rowEl.dataset.gridRow = String(rowIndex)
     const start = rowIndex * columns
@@ -266,8 +266,8 @@ export function createGrid(options: GridOptions): GridHandle {
     lastFocusedIndex = null
     resetTrackForRows()
     track.style.height = ""
-    track.className = "grid gap-5"
-    track.style.gridTemplateColumns = `repeat(${computeColumns()}, 11.5rem)`
+    track.className = "grid gap-4"
+    track.style.gridTemplateColumns = `repeat(${computeColumns()}, 9.5rem)`
     track.replaceChildren()
     for (let i = 0; i < SKELETON_COUNT; i++) track.appendChild(buildSkeletonCard())
   }

@@ -81,14 +81,13 @@ const view: TvView = {
     const scroller = document.createElement("div")
     scroller.className = "h-full overflow-hidden"
     const track = document.createElement("div")
-    track.className = "flex flex-col gap-8 pt-8 pb-20"
+    track.className = "flex flex-col gap-6 pt-2 pb-10"
     scroller.appendChild(track)
     root.appendChild(scroller)
 
     const inputWrap = document.createElement("div")
-    inputWrap.className = "px-12"
     const inputBox = document.createElement("div")
-    inputBox.className = "flex h-[3.75rem] items-center gap-3 rounded-2xl bg-surface-2 px-5 tv-focus-inset-within"
+    inputBox.className = "flex min-h-11 items-center gap-3 rounded-2xl bg-surface-2 px-5 tv-focus-inset-within"
     const searchIcon = document.createElement("span")
     searchIcon.setAttribute("aria-hidden", "true")
     searchIcon.className = "shrink-0 text-fg-3"
@@ -100,12 +99,12 @@ const view: TvView = {
     inputEl.dataset.tvAutofocus = ""
     inputEl.dataset.focusKey = "search:input"
     inputEl.className =
-      "h-full min-w-0 flex-1 rounded-2xl bg-transparent text-lg text-fg outline-none placeholder:text-fg-3"
+      "h-full min-w-0 flex-1 rounded-2xl bg-transparent text-base text-fg outline-none placeholder:text-fg-3"
     inputBox.append(searchIcon, inputEl)
     inputWrap.appendChild(inputBox)
 
     const recentWrap = document.createElement("div")
-    recentWrap.className = "flex flex-col gap-2 px-12"
+    recentWrap.className = "flex flex-col gap-2"
     recentWrap.hidden = true
     const recentHead = document.createElement("div")
     recentHead.className = "flex items-center justify-between gap-3"
@@ -122,7 +121,7 @@ const view: TvView = {
     recentWrap.append(recentHead, recentTrack)
 
     const statusEl = document.createElement("p")
-    statusEl.className = "px-12 text-fg-3"
+    statusEl.className = "text-fg-3"
     statusEl.hidden = true
 
     track.append(inputWrap, recentWrap, statusEl)
