@@ -26,7 +26,7 @@ function buildImg(logoUrl: string, className: string): HTMLImageElement {
 function buildLogoTile(logoUrl: string | null | undefined, widthClass: string): HTMLSpanElement {
   const tile = document.createElement("span")
   tile.setAttribute("aria-hidden", "true")
-  tile.className = `relative aspect-video shrink-0 overflow-hidden rounded-xl tv-clip-round bg-black/40 ${widthClass}`
+  tile.className = `relative isolate aspect-video shrink-0 overflow-hidden rounded-xl bg-black/40 ${widthClass}`
   if (!logoUrl) return tile
   tile.appendChild(buildImg(logoUrl, "absolute inset-0 h-full w-full scale-110 object-cover opacity-50 blur-xl saturate-150"))
   tile.appendChild(buildImg(logoUrl, "absolute inset-0 m-auto max-h-[65%] max-w-[65%] object-contain"))
@@ -37,7 +37,7 @@ function buildLogoChip(logoUrl: string | null | undefined, widthClass: string): 
   const chip = document.createElement("span")
   chip.setAttribute("aria-hidden", "true")
   chip.className =
-    `grid aspect-video shrink-0 place-items-center overflow-hidden rounded-lg tv-clip-round-lg bg-surface-2 p-2 ring-1 ring-inset ring-line ${widthClass}`
+    `grid isolate aspect-video shrink-0 place-items-center overflow-hidden rounded-lg bg-black/40 p-2 ring-1 ring-inset ring-line ${widthClass}`
   if (logoUrl) chip.appendChild(buildImg(logoUrl, "h-full w-full object-contain"))
   return chip
 }
@@ -161,7 +161,7 @@ export function buildGuideHero(
   currentProgress: number
 ): HTMLDivElement {
   const hero = document.createElement("div")
-  hero.className = "relative min-h-[14rem] overflow-hidden rounded-2xl tv-clip-round-2xl bg-black/40 p-6"
+  hero.className = "relative isolate min-h-[14rem] overflow-hidden rounded-2xl bg-black/40 p-6"
 
   hero.appendChild(buildHeroBackdrop(channel.logo))
   const darken = document.createElement("span")

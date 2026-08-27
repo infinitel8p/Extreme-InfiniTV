@@ -33,7 +33,7 @@ export interface HeroHandle {
 export function createHero(root: HTMLElement): HeroHandle {
   const section = document.createElement("section")
   section.className =
-    "relative h-[38vh] min-h-[22rem] w-full shrink-0 overflow-hidden rounded-2xl tv-clip-round-2xl bg-black/40"
+    "relative isolate h-[38vh] min-h-[22rem] w-full shrink-0 overflow-hidden rounded-2xl bg-black/40"
 
   const backdropWrap = document.createElement("div")
   backdropWrap.className = "absolute inset-0"
@@ -65,7 +65,7 @@ export function createHero(root: HTMLElement): HeroHandle {
   const activateButton = document.createElement("button")
   activateButton.type = "button"
   activateButton.dataset.focusKey = HERO_FOCUS_KEY
-  activateButton.className = "absolute inset-0 z-10 rounded-2xl outline-none tv-focus-inset"
+  activateButton.className = "absolute inset-0 z-10 rounded-2xl outline-none tv-focus-ring"
   activateButton.hidden = true
 
   textBlock.append(eyebrow, title, meta, progressTrack)

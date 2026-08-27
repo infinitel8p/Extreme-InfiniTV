@@ -1,8 +1,9 @@
 // TV shell: the rail owns its own spatial-nav section, focus restore survives async views,
 // and runtime <html> attributes survive a ClientRouter swap.
-import { test, expect, type Page } from "@playwright/test"
+import { test, expect, type Page, type Locator } from "@playwright/test"
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
+import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { inflateSync } from "node:zlib"
 
@@ -73,6 +74,106 @@ function decodePng(buffer: Buffer): { width: number; height: number; getPixel(x:
       return [pixels[idx], pixels[idx + 1] ?? pixels[idx], pixels[idx + 2] ?? pixels[idx]]
     },
   }
+}
+
+type DecodedPng = ReturnType<typeof decodePng>
+type Rgb = [number, number, number]
+
+function luma([r, g, b]: Rgb): number {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+function cornerPoints(decoded: DecodedPng, inset: number): Array<[number, number]> {
+  return [
+    [inset, inset],
+    [decoded.width - 1 - inset, inset],
+    [inset, decoded.height - 1 - inset],
+    [decoded.width - 1 - inset, decoded.height - 1 - inset],
+  ]
+}
+
+/** The bug repro: a hairline arc lighter than the page background just outside the rounded shape. */
+function assertNoCornerBleed(decoded: DecodedPng, backgroundRgb: Rgb, tolerance = 24): void {
+  const backgroundLuma = luma(backgroundRgb)
+  for (const [x, y] of cornerPoints(decoded, 1)) {
+    const bleed = luma(decoded.getPixel(x, y)) - backgroundLuma
+    expect(bleed, `corner (${x},${y}) is ${bleed.toFixed(1)} lighter than the page background`).toBeLessThanOrEqual(
+      tolerance
+    )
+  }
+}
+
+/** Confirms the clip radius itself still shows content near the corner, not an over-clipped blank. */
+function assertCornersStillRounded(
+  decoded: DecodedPng,
+  radiusPx: number,
+  isContentPixel: (pixel: Rgb) => boolean
+): void {
+  const inset = Math.max(6, Math.round(radiusPx * 1.6))
+  for (const [x, y] of cornerPoints(decoded, inset)) {
+    expect(isContentPixel(decoded.getPixel(x, y)), `(${x},${y}) should still show clipped content`).toBe(true)
+  }
+}
+
+async function pageBackgroundRgb(page: Page): Promise<Rgb> {
+  return page.evaluate(() => {
+    const probe = document.createElement("div")
+    probe.style.cssText = "position:fixed;inset:0;z-index:-1;background:var(--color-bg)"
+    document.body.appendChild(probe)
+    const resolved = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    const match = resolved.match(/[\d.]+/g) || ["0", "0", "0"]
+    return [Number(match[0]), Number(match[1]), Number(match[2])] as Rgb
+  })
+}
+
+async function solidColorDataUrl(page: Page, hex: string, width = 200, height = 300): Promise<string> {
+  return page.evaluate(
+    ({ hex, width, height }) => {
+      const canvas = document.createElement("canvas")
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext("2d")!
+      ctx.fillStyle = hex
+      ctx.fillRect(0, 0, width, height)
+      return canvas.toDataURL("image/png")
+    },
+    { hex, width, height }
+  )
+}
+
+/** Overwrites already-mounted <img> src attributes and waits for each to finish loading. */
+async function forceImageSrc(images: Locator, dataUrl: string): Promise<void> {
+  const count = await images.count()
+  for (let index = 0; index < count; index++) {
+    await images.nth(index).evaluate((element: HTMLImageElement, url: string) => {
+      element.src = url
+      return element.complete ? undefined : new Promise((resolve) => {
+        element.onload = resolve
+        element.onerror = resolve
+      })
+    }, dataUrl)
+  }
+}
+
+async function saveZoomedCorner(
+  page: Page,
+  locator: Locator,
+  filename: string,
+  corner: "tl" | "tr" | "bl" | "br"
+): Promise<void> {
+  await locator.scrollIntoViewIfNeeded()
+  const box = await locator.boundingBox()
+  if (!box) throw new Error(`no bounding box to screenshot for ${filename}`)
+  const size = 28
+  const viewport = page.viewportSize()
+  const maxX = viewport ? viewport.width - size : Infinity
+  const maxY = viewport ? viewport.height - size : Infinity
+  const rawX = corner === "tl" || corner === "bl" ? box.x : box.x + box.width - size
+  const rawY = corner === "tl" || corner === "tr" ? box.y : box.y + box.height - size
+  const x = Math.min(Math.max(rawX, 0), Math.max(maxX, 0))
+  const y = Math.min(Math.max(rawY, 0), Math.max(maxY, 0))
+  await page.screenshot({ path: join(tmpdir(), filename), clip: { x, y, width: size, height: size }, scale: "device" })
 }
 
 const RAIL_ITEMS = "#tv-nav [data-tv-nav-item]"
@@ -371,14 +472,19 @@ test("Right leaves the rail into the page, Left returns to the rail", async ({ p
 
 test("focus restore waits for an asynchronously populated view", async ({ page }) => {
   await mockProvider(page)
-  await seedTvState(page, () => {
-    try {
-      sessionStorage.setItem("xt_tv_focus:/tv/live", "ch:4")
-    } catch {}
-  })
+  await seedTvState(page)
 
   await page.goto("/tv/live")
-  await expect(page.locator('[data-focus-key="ch:4"]')).toBeFocused({ timeout: 5000 })
+  await expect(page.locator('[data-focus-key="ch:4"]')).toBeVisible()
+  await focusByKey(page, "ch:4")
+  await expect(page.locator('[data-focus-key="ch:4"]')).toBeFocused()
+
+  // Only a Back swap restores the stored key; leave via the rail, then come back.
+  await railInto(page, "/tv")
+  await page.waitForSelector(RAIL_ITEMS)
+
+  await page.goBack()
+  await expect(page.locator('[data-focus-key="ch:4"]')).toBeFocused({ timeout: 2500 })
   expect(await page.locator(CHANNEL_ROWS).count()).toBeGreaterThan(4)
 })
 
@@ -638,47 +744,124 @@ test("Up from the first rail card reaches the hero, Enter activates it", async (
   expect(page.url()).not.toBe(beforeUrl)
 })
 
-test("a white poster never bleeds a light pixel outside the rounded card corner", async ({ page }) => {
+async function setupPosterCard(page: Page, hex: string): Promise<Locator> {
   await page.setViewportSize(TV_VIEWPORT)
   await mockProvider(page)
   await seedTvState(page, seedTvContent)
   await page.goto("/tv")
   await page.waitForSelector(RAIL_ITEMS)
 
-  const whitePosterDataUrl = await page.evaluate(() => {
-    const canvas = document.createElement("canvas")
-    canvas.width = 200
-    canvas.height = 300
-    const ctx = canvas.getContext("2d")!
-    ctx.fillStyle = "#ffffff"
-    ctx.fillRect(0, 0, 200, 300)
-    return canvas.toDataURL("image/png")
-  })
-  await page.evaluate((dataUrl) => {
-    ;(window as unknown as { __xtTvFixtures: any }).__xtTvFixtures.movies[0].logo = dataUrl
-  }, whitePosterDataUrl)
+  const dataUrl = await solidColorDataUrl(page, hex)
+  await page.evaluate((url) => {
+    ;(window as unknown as { __xtTvFixtures: any }).__xtTvFixtures.movies[0].logo = url
+  }, dataUrl)
   await seedCatalogCache(page)
   await page.goto("/tv")
   await waitForHomeRails(page)
 
-  const wrapLocator = page.locator('[data-focus-key$=":vod:1"] [data-poster-wrap]').first()
-  await wrapLocator.waitFor()
-  await wrapLocator.locator("img").evaluate(
-    (img: HTMLImageElement) => (img.complete ? undefined : new Promise((resolve) => (img.onload = resolve)))
-  )
+  const wrap = page.locator('[data-focus-key$=":vod:1"] [data-poster-wrap]').first()
+  await wrap.waitFor()
+  await forceImageSrc(wrap.locator("img"), dataUrl)
+  return wrap
+}
 
-  const screenshot = await wrapLocator.screenshot()
-  const decoded = decodePng(screenshot)
-  const inset = 1
-  const corners: Array<[number, number]> = [
-    [inset, inset],
-    [decoded.width - 1 - inset, inset],
-    [inset, decoded.height - 1 - inset],
-    [decoded.width - 1 - inset, decoded.height - 1 - inset],
-  ]
-  for (const [x, y] of corners) {
-    const [r, g, b] = decoded.getPixel(x, y)
-    const isLightBleed = r > 200 && g > 200 && b > 200
-    expect(isLightBleed, `corner pixel (${x},${y}) is a light bleed outside the rounded shape`).toBe(false)
+async function setupFavoriteLiveTile(page: Page, hex: string): Promise<Locator> {
+  await page.setViewportSize(TV_VIEWPORT)
+  await mockProvider(page)
+  await seedTvState(page, seedTvContent)
+  await page.goto("/tv")
+  await waitForHomeRails(page)
+
+  const wrap = page.locator('[data-focus-key="favorites:live:1"] [data-poster-wrap]').first()
+  await wrap.waitFor()
+  const dataUrl = await solidColorDataUrl(page, hex, 256, 256)
+  await forceImageSrc(wrap.locator("img"), dataUrl)
+  return wrap
+}
+
+async function setupHomeHero(page: Page, hex: string, focusHero: boolean): Promise<Locator> {
+  await page.setViewportSize(TV_VIEWPORT)
+  await mockProvider(page)
+  await seedTvState(page, seedTvContent)
+  await page.goto("/tv")
+  await waitForHomeRails(page)
+
+  await focusByKey(page, "favorites:live:1")
+  await page.waitForTimeout(150)
+  const hero = page.locator('[data-focus-key="hero"]').locator("xpath=ancestor::section[1]")
+  const dataUrl = await solidColorDataUrl(page, hex, 256, 256)
+  await forceImageSrc(hero.locator("img"), dataUrl)
+
+  if (focusHero) {
+    await page.keyboard.press("ArrowUp")
+    await expect(page.locator('[data-focus-key="hero"]')).toBeFocused()
   }
+  return hero
+}
+
+test("a white poster never bleeds a light pixel outside the rounded card corner", async ({ page, browser }) => {
+  const wrap = await setupPosterCard(page, "#ffffff")
+  const backgroundRgb = await pageBackgroundRgb(page)
+  const decoded = decodePng(await wrap.screenshot())
+  assertNoCornerBleed(decoded, backgroundRgb)
+
+  const radiusPx = await wrap.evaluate((el) => parseFloat(getComputedStyle(el).borderTopLeftRadius))
+  const backgroundLuma = luma(backgroundRgb)
+  assertCornersStillRounded(decoded, radiusPx, (pixel) => luma(pixel) - backgroundLuma > 60)
+
+  const zoomContext = await browser.newContext({ viewport: TV_VIEWPORT, deviceScaleFactor: 4 })
+  const zoomPage = await zoomContext.newPage()
+  await saveZoomedCorner(zoomPage, await setupPosterCard(zoomPage, "#ffffff"), "tv-corner-white-poster.png", "bl")
+  await zoomContext.close()
+})
+
+test("a dark poster never bleeds a lighter halo outside the rounded card corner", async ({ page, browser }) => {
+  const wrap = await setupPosterCard(page, "#0b0d12")
+  const backgroundRgb = await pageBackgroundRgb(page)
+  const decoded = decodePng(await wrap.screenshot())
+  assertNoCornerBleed(decoded, backgroundRgb)
+
+  const zoomContext = await browser.newContext({ viewport: TV_VIEWPORT, deviceScaleFactor: 4 })
+  const zoomPage = await zoomContext.newPage()
+  await saveZoomedCorner(zoomPage, await setupPosterCard(zoomPage, "#0b0d12"), "tv-corner-dark-poster.png", "bl")
+  await zoomContext.close()
+})
+
+test("a favorites live tile's blurred logo backdrop never bleeds at its rounded corners", async ({
+  page,
+  browser,
+}) => {
+  const wrap = await setupFavoriteLiveTile(page, "#ffffff")
+  const backgroundRgb = await pageBackgroundRgb(page)
+  const decoded = decodePng(await wrap.screenshot())
+  // Blur's own edge-fade dims the backdrop near the box edge, so only the bleed check applies here.
+  assertNoCornerBleed(decoded, backgroundRgb)
+
+  const zoomContext = await browser.newContext({ viewport: TV_VIEWPORT, deviceScaleFactor: 4 })
+  const zoomPage = await zoomContext.newPage()
+  await saveZoomedCorner(zoomPage, await setupFavoriteLiveTile(zoomPage, "#ffffff"), "tv-corner-live-tile.png", "bl")
+  await zoomContext.close()
+})
+
+test("the home hero never bleeds at its rounded corners, focused or not, and its overlay stays transparent", async ({
+  page,
+  browser,
+}) => {
+  const heroUnfocused = await setupHomeHero(page, "#ffffff", false)
+  const backgroundRgb = await pageBackgroundRgb(page)
+  assertNoCornerBleed(decodePng(await heroUnfocused.screenshot()), backgroundRgb)
+
+  await page.keyboard.press("ArrowUp")
+  await expect(page.locator('[data-focus-key="hero"]')).toBeFocused()
+  const overlayBackground = await page
+    .locator('[data-focus-key="hero"]')
+    .evaluate((el) => getComputedStyle(el).backgroundColor)
+  expect(overlayBackground).toBe("rgba(0, 0, 0, 0)")
+  assertNoCornerBleed(decodePng(await heroUnfocused.screenshot()), backgroundRgb)
+
+  const zoomContext = await browser.newContext({ viewport: TV_VIEWPORT, deviceScaleFactor: 4 })
+  const zoomPage = await zoomContext.newPage()
+  await saveZoomedCorner(zoomPage, await setupHomeHero(zoomPage, "#ffffff", false), "tv-corner-hero-unfocused.png", "tr")
+  await saveZoomedCorner(zoomPage, await setupHomeHero(zoomPage, "#ffffff", true), "tv-corner-hero-focused.png", "tr")
+  await zoomContext.close()
 })

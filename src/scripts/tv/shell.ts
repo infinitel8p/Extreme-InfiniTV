@@ -221,6 +221,8 @@ function focusKeyStorageKey(): string {
 const RESTORE_FOCUS_WAIT_MS = 2500
 
 let cancelRestoreWait: (() => void) | null = null
+// Initial full loads never see a swap event, so they count as forward.
+let lastSwapDirection = "forward"
 
 function stopRestoreWait(): void {
   const cancel = cancelRestoreWait
@@ -243,6 +245,15 @@ function restoreFocus(): void {
   const main = document.getElementById("tv-main")
   if (!main) return
   stopRestoreWait()
+
+  // Focus memory is a Back affordance; a forward visit always starts at the view's default.
+  if (lastSwapDirection !== "back") {
+    try {
+      sessionStorage.removeItem(focusKeyStorageKey())
+    } catch {}
+    focusFirstAvailable(main)
+    return
+  }
 
   let storedKey = ""
   try {
@@ -314,11 +325,13 @@ function mountRootAttributeCarryOver(): void {
 }
 
 function mountFocusMemory(): void {
-  document.addEventListener("astro:before-swap", () => {
+  document.addEventListener("astro:before-swap", (event) => {
+    lastSwapDirection = event.direction
     stopRestoreWait()
     const active = document.activeElement
     const focusKeyEl = active instanceof Element ? active.closest<HTMLElement>("[data-focus-key]") : null
-    if (!focusKeyEl) return
+    // Leaving via the rail must not overwrite a still-useful key.
+    if (!focusKeyEl || !document.getElementById("tv-main")?.contains(focusKeyEl)) return
     try {
       sessionStorage.setItem(focusKeyStorageKey(), focusKeyEl.dataset.focusKey || "")
     } catch {}

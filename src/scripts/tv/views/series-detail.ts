@@ -379,7 +379,7 @@ const view: TvView = {
         "hover:bg-surface-2 tv-focus-inset"
 
       const thumbWrap = document.createElement("div")
-      thumbWrap.className = "relative aspect-video w-40 shrink-0 overflow-hidden rounded-lg tv-clip-round-lg bg-black/40"
+      thumbWrap.className = "relative isolate aspect-video w-40 shrink-0 overflow-hidden rounded-lg bg-black/40"
       if (entry.thumbUrl) {
         const img = document.createElement("img")
         img.alt = ""

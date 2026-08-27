@@ -99,7 +99,7 @@ function buildThumb(logoUrl: string | null | undefined): HTMLSpanElement {
   const box = document.createElement("span")
   box.setAttribute("aria-hidden", "true")
   box.className =
-    "grid aspect-video h-16 shrink-0 place-items-center overflow-hidden rounded-lg tv-clip-round-lg bg-black/40 ring-1 ring-inset ring-line"
+    "grid isolate aspect-video h-16 shrink-0 place-items-center overflow-hidden rounded-lg bg-black/40 ring-1 ring-inset ring-line"
   if (logoUrl) {
     const img = document.createElement("img")
     img.alt = ""

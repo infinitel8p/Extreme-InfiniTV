@@ -53,7 +53,7 @@ function createPosterCard(item: PosterCardItem): HTMLAnchorElement {
 
   const posterWrap = document.createElement("div")
   posterWrap.dataset.posterWrap = "1"
-  posterWrap.className = "relative aspect-[2/3] w-full overflow-hidden rounded-xl tv-clip-round bg-black/40"
+  posterWrap.className = "relative isolate aspect-[2/3] w-full overflow-hidden rounded-xl bg-black/40"
 
   if (item.posterUrl) {
     const img = document.createElement("img")
@@ -98,7 +98,7 @@ function createLiveCard(item: LiveCardItem): HTMLButtonElement {
 
   const tileWrap = document.createElement("div")
   tileWrap.dataset.posterWrap = "1"
-  tileWrap.className = "relative aspect-[2/3] w-full overflow-hidden rounded-xl tv-clip-round bg-black/40"
+  tileWrap.className = "relative isolate aspect-[2/3] w-full overflow-hidden rounded-xl bg-black/40"
 
   if (item.logoUrl) {
     const backdrop = document.createElement("img")

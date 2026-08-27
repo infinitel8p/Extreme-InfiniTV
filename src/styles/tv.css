@@ -36,6 +36,14 @@ html[data-tv-ui][data-tv] .tv-focus-inset:focus-visible {
   box-shadow: inset 0 0 0 3px var(--color-accent);
 }
 
+/* Transparent overlay buttons on top of imagery: ring only, never a background fill. */
+html[data-tv-ui][data-tv] .tv-focus-ring {
+  outline: none;
+}
+html[data-tv-ui][data-tv] .tv-focus-ring:focus-visible {
+  box-shadow: inset 0 0 0 3px var(--color-accent);
+}
+
 /* Icon+input wrappers: the ring lives on the wrapper via :focus-within, not on the input itself. */
 html[data-tv-ui][data-tv] .tv-focus-inset-within {
   outline: none;
@@ -63,18 +71,6 @@ html[data-tv-ui][data-tv] .tv-focus-card:focus-visible [data-poster-wrap]::after
 }
 html[data-tv-ui][data-tv] .tv-focus-card:focus-visible .tv-card-title {
   color: var(--color-fg);
-}
-
-/* Extra clip beyond overflow:hidden so anti-aliased poster corners never show a bleed speck. */
-/* Radii mirror Tailwind's rounded-lg/xl/2xl - pick the variant matching the element's own radius. */
-html[data-tv-ui] .tv-clip-round-lg {
-  clip-path: inset(0 round 0.5rem);
-}
-html[data-tv-ui] .tv-clip-round {
-  clip-path: inset(0 round 0.75rem);
-}
-html[data-tv-ui] .tv-clip-round-2xl {
-  clip-path: inset(0 round 1rem);
 }
 
 /* focus.ts keepFocusedInView() toggles this class before translating the track. */
