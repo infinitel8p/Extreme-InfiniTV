@@ -3,7 +3,7 @@
 // rows spatial-nav can't yet see in the DOM.
 
 import { rowWindow, rowOf } from "@/scripts/lib/tv-grid-filter"
-import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView, resetKeepInView } from "@/scripts/tv/focus"
 import { createCard, type PosterCardItem } from "./card"
 
 const OVERSCAN_ROWS = 2
@@ -261,6 +261,7 @@ export function createGrid(options: GridOptions): GridHandle {
   function setLoading(): void {
     mountedRows.forEach((rowEl) => rowEl.remove())
     mountedRows.clear()
+    resetKeepInView(scroller)
     items = []
     lastFocusedIndex = null
     resetTrackForRows()
@@ -281,8 +282,12 @@ export function createGrid(options: GridOptions): GridHandle {
   }
 
   function setEntries(nextItems: PosterCardItem[], emptyMessage?: string): void {
+    const heldFocus = scroller.contains(document.activeElement)
+    const previousIndex = currentFocusedIndex()
     mountedRows.forEach((rowEl) => rowEl.remove())
     mountedRows.clear()
+    // Rows are re-laid out from the top, so a leftover offset would hide row 0.
+    resetKeepInView(scroller)
     items = nextItems
     columns = computeColumns()
     focusedRow = 0
@@ -301,6 +306,8 @@ export function createGrid(options: GridOptions): GridHandle {
     const firstCard = track.querySelector<HTMLElement>("[data-grid-index]")
     if (firstCard) firstCard.dataset.tvAutofocus = ""
     window.SpatialNavigation?.makeFocusable?.()
+    // The rebuild just dropped the focused card to <body>; put focus back where it was.
+    if (heldFocus) focusIndex(previousIndex ?? 0)
   }
 
   function destroy(): void {

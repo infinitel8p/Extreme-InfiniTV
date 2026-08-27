@@ -886,7 +886,6 @@ export function getUiSoundsEnabled() {
   const raw = readLS(KEY_UI_SOUNDS, "")
   if (raw === "1") return true
   if (raw === "0") return false
-  if (getPerfMode()) return false
   try {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return false
   } catch {

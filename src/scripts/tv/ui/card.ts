@@ -1,4 +1,4 @@
-// Shared TV home-rail card: 2:3 poster for VOD/series/episode, 16:9 tile for live.
+// Shared TV home-rail card: 2:3 poster footprint for VOD/series/episode/live.
 
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { makeFallback } from "@/scripts/lib/entry-card.ts"
@@ -86,11 +86,11 @@ function createLiveCard(item: LiveCardItem): HTMLButtonElement {
   card.type = "button"
   card.dataset.focusKey = cardFocusKey(item.railId, item.kind, item.id)
   card.setAttribute("aria-label", item.ariaLabel)
-  card.className = `flex w-[17rem] shrink-0 flex-col gap-2 rounded-xl text-left ${CARD_FOCUS_CLASSES}`
+  card.className = `flex w-[11.5rem] shrink-0 flex-col gap-2 rounded-xl text-left ${CARD_FOCUS_CLASSES}`
 
   const tileWrap = document.createElement("div")
   tileWrap.dataset.posterWrap = "1"
-  tileWrap.className = "relative aspect-video w-full overflow-hidden rounded-xl tv-clip-round bg-black/40"
+  tileWrap.className = "relative aspect-[2/3] w-full overflow-hidden rounded-xl tv-clip-round bg-black/40"
 
   if (item.logoUrl) {
     const backdrop = document.createElement("img")

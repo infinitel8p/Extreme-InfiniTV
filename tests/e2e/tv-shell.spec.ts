@@ -154,6 +154,74 @@ async function seedCatalogCache(page: Page) {
   })
 }
 
+// Enough series for several grid rows, so a one-row scroll offset is measurable.
+async function seedSeriesGridCache(page: Page, count: number) {
+  await page.evaluate(async (total) => {
+    const shows = Array.from({ length: total }, (_, index) => ({
+      id: 2000 + index,
+      name: `Grid Show ${index + 1}`,
+      logo: null,
+      year: String(2000 + (index % 20)),
+      rating: "6.0",
+      category: "Drama",
+      added: 1700000000 - index,
+      tmdb: null,
+      genre: "Drama",
+    }))
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("xt_cache", 4)
+      request.onupgradeneeded = () => {
+        const database = request.result
+        const store = database.objectStoreNames.contains("entries")
+          ? request.transaction!.objectStore("entries")
+          : database.createObjectStore("entries")
+        if (!store.indexNames.contains("fetchedAt")) store.createIndex("fetchedAt", "fetchedAt")
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction("entries", "readwrite")
+      tx.objectStore("entries").put(
+        { data: shows, fetchedAt: Date.now(), ttl: 7 * 24 * 60 * 60 * 1000 },
+        "xt_cache:fixture:series"
+      )
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+  }, count)
+}
+
+function gridGeometry(page: Page) {
+  return page.evaluate(() => {
+    const row0 = document.querySelector<HTMLElement>('[data-grid-row="0"]')
+    const track = row0?.parentElement || null
+    const scroller = track?.parentElement || null
+    const active = document.activeElement
+    const activeCard = active instanceof HTMLElement ? active.closest<HTMLElement>("[data-grid-index]") : null
+    const scrollerRect = scroller?.getBoundingClientRect()
+    return {
+      transform: track?.style.transform || "",
+      row0Top: row0 ? Math.round(row0.getBoundingClientRect().top) : null,
+      contentTop:
+        scroller && scrollerRect
+          ? Math.round(scrollerRect.top + (parseFloat(getComputedStyle(scroller).paddingTop) || 0))
+          : null,
+      contentBottom: scrollerRect ? Math.round(scrollerRect.bottom) : null,
+      activeIndex: activeCard?.dataset.gridIndex ?? null,
+      activeTop: activeCard ? Math.round(activeCard.getBoundingClientRect().top) : null,
+      columns: document.querySelectorAll('[data-grid-row="0"] [data-grid-index]').length,
+    }
+  })
+}
+
+async function railInto(page: Page, href: string) {
+  await page.evaluate((target) => {
+    document.querySelector<HTMLAnchorElement>(`#tv-nav a[href="${target}"]`)?.click()
+  }, href)
+  await page.waitForFunction((target) => location.pathname.replace(/[/]$/, "") === target, href)
+}
+
 // Rails rebuild on catalog / EPG events; assertions must run after the card set settles.
 async function waitForHomeRails(page: Page) {
   await page.waitForSelector("[data-tv-view-root] [data-focus-key]")
@@ -337,6 +405,57 @@ test("a rail's first card rests at translate 0 when entered", async ({ page }) =
     expect(resting.transform, `rail ${focusKey} was translated on entry`).toMatch(/translateX\(0px\)|^$/)
     expect(resting.cardLeft, `rail ${focusKey} first card is clipped`).toBe(resting.contentLeft)
   }
+})
+
+test("the series grid opens at row 0 with the first card focused", async ({ page }) => {
+  await page.setViewportSize(TV_VIEWPORT)
+  await mockProvider(page)
+  await seedTvState(page)
+  await page.goto("/tv")
+  await page.waitForSelector(RAIL_ITEMS)
+  await seedSeriesGridCache(page, 60)
+  await page.goto("/tv")
+  await page.waitForSelector(RAIL_ITEMS)
+
+  await railInto(page, "/tv/series")
+  await page.waitForSelector('[data-grid-row="1"]')
+  await page.waitForTimeout(1500)
+
+  const grid = await gridGeometry(page)
+  expect(grid.columns).toBeGreaterThan(1)
+  expect(grid.activeIndex, "the first card should hold focus once the catalog lands").toBe("0")
+  expect(grid.row0Top, "row 0 is clipped above the grid").toBeGreaterThanOrEqual((grid.contentTop || 0) - 1)
+  expect(grid.transform).toMatch(/translateY\(0px\)|^$/)
+})
+
+// A rebuild used to drop the restored card's focus while keeping its scroll offset.
+test("returning to the series grid never leaves it scrolled with nothing focused", async ({ page }) => {
+  await page.setViewportSize(TV_VIEWPORT)
+  await mockProvider(page)
+  await seedTvState(page)
+  await page.goto("/tv")
+  await page.waitForSelector(RAIL_ITEMS)
+  await seedSeriesGridCache(page, 60)
+
+  await page.goto("/tv/series")
+  await page.waitForSelector('[data-grid-row="1"]')
+  await page.waitForTimeout(1500)
+  const columns = (await gridGeometry(page)).columns
+  await page.evaluate((index) => {
+    document.querySelector<HTMLElement>(`[data-grid-index="${index}"]`)?.focus()
+  }, columns + 1)
+  await page.waitForTimeout(300)
+
+  await railInto(page, "/tv")
+  await page.waitForTimeout(900)
+  await railInto(page, "/tv/series")
+  await page.waitForSelector('[data-grid-row="1"]')
+  await page.waitForTimeout(1500)
+
+  const grid = await gridGeometry(page)
+  expect(grid.activeIndex, "no grid card holds focus after the return").not.toBeNull()
+  expect(grid.activeTop).toBeGreaterThanOrEqual((grid.contentTop || 0) - 1)
+  expect(grid.activeTop).toBeLessThan(grid.contentBottom || 0)
 })
 
 test("Up from an episode row back to the actions brings the hero title into view", async ({ page }) => {

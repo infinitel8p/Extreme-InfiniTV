@@ -241,6 +241,29 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
           : ""
       }
 
+      let initialFocusApplied = false
+      let userInteracted = false
+      const noteInteraction = (): void => {
+        userInteracted = true
+      }
+      window.addEventListener("keydown", noteInteraction, true)
+      window.addEventListener("pointerdown", noteInteraction, true)
+
+      // The catalog lands after the shell's restoreFocus parked focus on the filter bar; claim it once.
+      function ensureInitialGridFocus(): void {
+        if (initialFocusApplied || userInteracted) return
+        const active = document.activeElement
+        if (active instanceof HTMLElement && (grid.el.contains(active) || active.closest("#tv-nav, dialog[open]"))) {
+          initialFocusApplied = true
+          return
+        }
+        const target = grid.el.querySelector<HTMLElement>("[data-tv-autofocus]")
+        if (!target) return
+        initialFocusApplied = true
+        target.focus()
+        window.SpatialNavigation?.makeFocusable?.()
+      }
+
       function applyFilter(): void {
         if (!allRows.length) {
           const emptyMessage = !activeCreds?.user || !activeCreds?.pass
@@ -253,6 +276,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         const filtered = filterAndSortEntries(allRows, filterState, { categoryMatcher, isWatched, normalize })
         grid.setEntries(filtered.map(toCardItem), t(config.noResultsCategoryKey))
         updateHeading(filtered.length)
+        ensureInitialGridFocus()
       }
 
       function buildCategoryOptions(): FilterOption[] {
@@ -444,6 +468,8 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
 
       return () => {
         destroyed = true
+        window.removeEventListener("keydown", noteInteraction, true)
+        window.removeEventListener("pointerdown", noteInteraction, true)
         document.removeEventListener(CATALOG_WARMED_EVENT, onCatalogWarmed)
         document.removeEventListener(CACHE_REVALIDATED_EVENT, onCacheRevalidated)
         document.removeEventListener(GENRE_INDEX_EVENT, onGenreIndexChanged)

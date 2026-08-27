@@ -149,3 +149,13 @@ export function keepFocusedInView(scroller: HTMLElement, axis: "x" | "y", offset
     scroller.removeEventListener("focusin", onFocusIn)
   }
 }
+
+/** Drops a `keepFocusedInView` scroller's offset. Call whenever its content is rebuilt from the top. */
+export function resetKeepInView(scroller: HTMLElement): void {
+  const track = scroller.firstElementChild as HTMLElement | null
+  if (!track) return
+  track.classList.remove("tv-keep-in-view-animated")
+  track.style.transform = ""
+  scroller.scrollLeft = 0
+  scroller.scrollTop = 0
+}
