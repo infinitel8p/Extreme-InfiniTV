@@ -35,6 +35,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -73,6 +74,9 @@ class VideoActivity : AppCompatActivity() {
     const val MODE_LIVE = "live"
 
     private const val PROGRESS_INTERVAL_MS = 2_000L
+    // DefaultTimeBar defaults to a 20-step key increment, so a 100-minute movie steps 5
+    // minutes per D-pad press; pin a fixed 15s step instead.
+    private const val TIME_BAR_KEY_INCREMENT_MS = 15_000L
 
     private const val PREF_PLAYER = "xt_native_player"
     private const val KEY_DISPLAY_MODE = "displayMode"
@@ -172,6 +176,8 @@ class VideoActivity : AppCompatActivity() {
     channelUpButton = playerView?.findViewById(R.id.tv_channel_up)
     muteButton = playerView?.findViewById(R.id.tv_mute_button)
     volumeSeekBar = playerView?.findViewById(R.id.tv_volume_seekbar)
+    playerView?.findViewById<DefaultTimeBar>(androidx.media3.ui.R.id.exo_progress)
+      ?.setKeyTimeIncrement(TIME_BAR_KEY_INCREMENT_MS)
     setupCustomControls()
     applyDisplayMode(storedDisplayMode())
 

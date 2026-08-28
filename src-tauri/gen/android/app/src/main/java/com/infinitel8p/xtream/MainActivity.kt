@@ -1880,6 +1880,9 @@ class CastMediaBridge(
 
 class MainActivity : TauriActivity() {
 
+  // Wry's own OnBackPressedCallback registers after ours and would win the LIFO dispatch otherwise.
+  override val handleBackNavigation = false
+
   private var fullscreenView: View? = null
   private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
   private var originalSystemUi: Int = 0
