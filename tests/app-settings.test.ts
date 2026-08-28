@@ -23,6 +23,24 @@ const localStorageMock: Storage = {
   },
 }
 
+const sessionStorageStore = new Map<string, string>()
+const sessionStorageMock: Storage = {
+  getItem: (key) => (sessionStorageStore.has(key) ? sessionStorageStore.get(key)! : null),
+  setItem: (key, value) => {
+    sessionStorageStore.set(key, String(value))
+  },
+  removeItem: (key) => {
+    sessionStorageStore.delete(key)
+  },
+  clear: () => {
+    sessionStorageStore.clear()
+  },
+  key: (index) => Array.from(sessionStorageStore.keys())[index] ?? null,
+  get length() {
+    return sessionStorageStore.size
+  },
+}
+
 function setUserAgent(userAgent: string) {
   Object.defineProperty(navigator, "userAgent", {
     configurable: true,
@@ -36,7 +54,9 @@ const MACOS_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
 beforeEach(() => {
   vi.resetModules()
   vi.stubGlobal("localStorage", localStorageMock)
+  vi.stubGlobal("sessionStorage", sessionStorageMock)
   localStorageStore.clear()
+  sessionStorageStore.clear()
 })
 
 afterEach(() => {
@@ -218,6 +238,68 @@ describe("content language", () => {
       document.removeEventListener(CONTENT_LANGUAGE_EVENT, listener)
     }
     expect(received).toEqual(["FR", ""])
+  })
+})
+
+describe("resolveAccentRoll (pure)", () => {
+  it("reuses a cached roll when it's still a valid preset", async () => {
+    const { resolveAccentRoll } = await import("@/scripts/lib/app-settings.js")
+    expect(resolveAccentRoll("cyan", ["fuchsia", "cyan", "blue"])).toBe("cyan")
+  })
+
+  it("rolls a new pick from the presets when there's no cached roll", async () => {
+    const { resolveAccentRoll } = await import("@/scripts/lib/app-settings.js")
+    const presets = ["fuchsia", "cyan", "blue"]
+    expect(presets).toContain(resolveAccentRoll("", presets))
+  })
+
+  it("rerolls when the cached value isn't a known preset", async () => {
+    const { resolveAccentRoll } = await import("@/scripts/lib/app-settings.js")
+    const presets = ["fuchsia", "cyan", "blue"]
+    expect(presets).toContain(resolveAccentRoll("not-a-real-color", presets))
+  })
+})
+
+describe("accent (random sentinel)", () => {
+  it("getAccent accepts the random sentinel as a valid stored value", async () => {
+    const { getAccent, setAccent, ACCENT_RANDOM_ID } = await import("@/scripts/lib/app-settings.js")
+    setAccent(ACCENT_RANDOM_ID)
+    expect(getAccent()).toBe(ACCENT_RANDOM_ID)
+  })
+
+  it("setAccent applies a resolved preset to data-accent, never the literal 'random'", async () => {
+    const { setAccent, ACCENT_PRESETS, ACCENT_RANDOM_ID, resolveAccentForDisplay } =
+      await import("@/scripts/lib/app-settings.js")
+    setAccent(ACCENT_RANDOM_ID)
+    expect(ACCENT_PRESETS).toContain(resolveAccentForDisplay(ACCENT_RANDOM_ID))
+    expect(document.documentElement.getAttribute("data-accent")).not.toBe(ACCENT_RANDOM_ID)
+  })
+
+  it("resolveAccentForDisplay caches the roll across calls within the same session", async () => {
+    const { setAccent, resolveAccentForDisplay, ACCENT_RANDOM_ID } = await import("@/scripts/lib/app-settings.js")
+    setAccent(ACCENT_RANDOM_ID)
+    const firstRoll = resolveAccentForDisplay(ACCENT_RANDOM_ID)
+    const secondRoll = resolveAccentForDisplay(ACCENT_RANDOM_ID)
+    expect(secondRoll).toBe(firstRoll)
+  })
+
+  it("resolveAccentForDisplay passes non-random values through unchanged", async () => {
+    const { resolveAccentForDisplay } = await import("@/scripts/lib/app-settings.js")
+    expect(resolveAccentForDisplay("cyan")).toBe("cyan")
+  })
+
+  it("clearAccentRoll clears the cache so the next resolve rerolls", async () => {
+    const { resolveAccentForDisplay, clearAccentRoll, ACCENT_RANDOM_ID } = await import("@/scripts/lib/app-settings.js")
+    resolveAccentForDisplay(ACCENT_RANDOM_ID)
+    expect(sessionStorage.getItem("xt_accent_roll")).not.toBeNull()
+    clearAccentRoll()
+    expect(sessionStorage.getItem("xt_accent_roll")).toBeNull()
+  })
+
+  it("falls back to fuchsia for a bogus stored accent value", async () => {
+    localStorage.setItem("xt_accent", "not-a-real-color")
+    const { getAccent } = await import("@/scripts/lib/app-settings.js")
+    expect(getAccent()).toBe("fuchsia")
   })
 })
 

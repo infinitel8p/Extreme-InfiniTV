@@ -50,6 +50,9 @@ export const PERF_MODE_EVENT = "xt:perf-mode-changed"
 export const CONTENT_LANGUAGE_EVENT = "xt:content-language-changed"
 export const ACCENT_EVENT = "xt:accent-changed"
 export const ACCENT_PRESETS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet", "gold", "lime", "teal", "silver", "white"]
+export const ACCENT_RANDOM_ID = "random"
+export const ACCENT_RANDOM_SWATCH = "conic-gradient(red, orange, yellow, green, cyan, blue, magenta, red)"
+const ACCENT_ROLL_KEY = "xt_accent_roll"
 export const DENSITY_EVENT = "xt:density-changed"
 export const DENSITY_PRESETS = { compact: 0.75, cozy: 1, comfortable: 1.3 }
 export const PROGRESS_RETENTION_EVENT = "xt:progress-retention-changed"
@@ -269,15 +272,50 @@ export function setPerfMode(on) {
 // Accent color
 export function getAccent() {
   const stored = readLS(KEY_ACCENT, "")
-  return ACCENT_PRESETS.includes(stored) ? stored : "fuchsia"
+  return stored === ACCENT_RANDOM_ID || ACCENT_PRESETS.includes(stored) ? stored : "fuchsia"
+}
+
+/** Picks a roll from `presets`, reusing `cachedRoll` when it's still a valid pick. */
+export function resolveAccentRoll(cachedRoll, presets) {
+  if (typeof cachedRoll === "string" && presets.includes(cachedRoll)) return cachedRoll
+  return presets[Math.floor(Math.random() * presets.length)]
+}
+
+export function clearAccentRoll() {
+  try {
+    sessionStorage.removeItem(ACCENT_ROLL_KEY)
+  } catch {
+    // Private mode etc.: next resolve just rerolls.
+  }
+}
+
+/** Resolves "random" to a preset pick cached for the rest of the session; other values pass through. */
+export function resolveAccentForDisplay(accentId) {
+  if (accentId !== ACCENT_RANDOM_ID) return accentId
+  let cachedRoll = ""
+  try {
+    cachedRoll = sessionStorage.getItem(ACCENT_ROLL_KEY) || ""
+  } catch {
+    /* private mode etc. */
+  }
+  const roll = resolveAccentRoll(cachedRoll, ACCENT_PRESETS)
+  try {
+    sessionStorage.setItem(ACCENT_ROLL_KEY, roll)
+  } catch {
+    /* roll just won't be stable across this page's reloads */
+  }
+  return roll
 }
 
 export function setAccent(accentId) {
-  const normalized = ACCENT_PRESETS.includes(accentId) ? accentId : "fuchsia"
+  const normalized =
+    accentId === ACCENT_RANDOM_ID || ACCENT_PRESETS.includes(accentId) ? accentId : "fuchsia"
   writeLS(KEY_ACCENT, normalized === "fuchsia" ? "" : normalized)
+  if (normalized === ACCENT_RANDOM_ID) clearAccentRoll()
   if (typeof document !== "undefined") {
-    if (normalized === "fuchsia") document.documentElement.removeAttribute("data-accent")
-    else document.documentElement.setAttribute("data-accent", normalized)
+    const effective = resolveAccentForDisplay(normalized)
+    if (effective === "fuchsia") document.documentElement.removeAttribute("data-accent")
+    else document.documentElement.setAttribute("data-accent", effective)
     document.dispatchEvent(
       new CustomEvent(ACCENT_EVENT, { detail: { value: normalized } })
     )

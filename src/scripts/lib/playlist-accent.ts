@@ -2,7 +2,12 @@
 // Cached to xt_accent_active: Tauri entries live in plugin-store, so the cache is
 // the pre-paint script's only synchronous signal.
 
-import { ACCENT_PRESETS, ACCENT_EVENT, getAccent } from "@/scripts/lib/app-settings.js"
+import {
+  ACCENT_PRESETS,
+  ACCENT_EVENT,
+  getAccent,
+  resolveAccentForDisplay,
+} from "@/scripts/lib/app-settings.js"
 import { getActiveEntry } from "@/scripts/lib/creds.js"
 
 const ACTIVE_ACCENT_CACHE_KEY = "xt_accent_active"
@@ -30,7 +35,7 @@ export async function applyEffectiveAccent(): Promise<void> {
     typeof activeEntry?.accent === "string" && ACCENT_PRESETS.includes(activeEntry.accent)
       ? activeEntry.accent
       : ""
-  const effectiveAccent = overrideAccent || getAccent()
+  const effectiveAccent = overrideAccent || resolveAccentForDisplay(getAccent())
   if (typeof document !== "undefined") {
     if (effectiveAccent === "fuchsia") document.documentElement.removeAttribute("data-accent")
     else document.documentElement.setAttribute("data-accent", effectiveAccent)

@@ -233,9 +233,18 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         if (currentTheme === "light") document.documentElement.style.colorScheme = "light";
         else if (currentTheme === "dark") document.documentElement.style.colorScheme = "dark";
 
-        var KNOWN_ACCENTS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"];
+        var KNOWN_ACCENTS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet", "gold", "lime", "teal", "silver", "white"];
         var storedAccent = localStorage.getItem("xt_accent") || "";
-        if (storedAccent && storedAccent !== "fuchsia" && KNOWN_ACCENTS.indexOf(storedAccent) !== -1) {
+        if (storedAccent === "random") {
+          // Same sessionStorage key as app-settings.js's resolveAccentForDisplay, so both agree.
+          var resolvedRandomAccent = "";
+          try { resolvedRandomAccent = sessionStorage.getItem("xt_accent_roll") || ""; } catch (e) {}
+          if (!resolvedRandomAccent || KNOWN_ACCENTS.indexOf(resolvedRandomAccent) === -1) {
+            resolvedRandomAccent = KNOWN_ACCENTS[Math.floor(Math.random() * KNOWN_ACCENTS.length)];
+            try { sessionStorage.setItem("xt_accent_roll", resolvedRandomAccent); } catch (e) {}
+          }
+          if (resolvedRandomAccent !== "fuchsia") document.documentElement.setAttribute("data-accent", resolvedRandomAccent);
+        } else if (storedAccent && storedAccent !== "fuchsia" && KNOWN_ACCENTS.indexOf(storedAccent) !== -1) {
           document.documentElement.setAttribute("data-accent", storedAccent);
         }
         // Per-playlist override cache (playlist-accent.ts) wins over xt_accent.

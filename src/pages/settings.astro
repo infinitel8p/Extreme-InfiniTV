@@ -47,6 +47,7 @@ import {
   IconActivity,
   IconDeviceTv,
   IconCast,
+  IconArrowsShuffle,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
@@ -365,6 +366,10 @@ const navStructure: NavSection[] = [
                     </button>
                     <button type="button" role="radio" data-accent-value="white" aria-checked="false" data-i18n-attr="title:settings.accent.white;aria-label:settings.accent.white" title="White" aria-label="White" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-white)">
                       <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="random" aria-checked="false" data-i18n-attr="title:settings.accent.random;aria-label:settings.accent.random" title="Random" aria-label="Random" class="accent-btn btn group relative size-11 p-0">
+                      <span class="size-5 rounded-full bg-[conic-gradient(red,orange,yellow,green,cyan,blue,magenta,red)] group-aria-checked:ring-2 group-aria-checked:ring-fg/50 group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                      <IconArrowsShuffle aria-hidden="true" stroke={2.5} size={12} class="absolute inset-0 m-auto text-white mix-blend-difference pointer-events-none" />
                     </button>
                   </div>
                   <p id="settings-accent-override-hint" data-i18n="settings.accent.overrideHint" class="hidden text-xs text-fg-3 text-right">
