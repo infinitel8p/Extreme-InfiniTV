@@ -3,7 +3,7 @@ import type { TvView, TvViewContext } from "@/scripts/tv/router"
 import { t, applyI18nDOM, LOCALE_EVENT } from "@/scripts/lib/i18n"
 import { navigate } from "astro:transitions/client"
 import { addEntry, getEntries, resolveServerScheme, resolveM3UScheme } from "@/scripts/lib/creds.js"
-import { parsePlaylistLink } from "@/scripts/lib/playlist-link"
+import { parsePlaylistLinks, type ParsedXtreamCandidate } from "@/scripts/lib/playlist-link"
 import { toastSuccess, toastWarn } from "@/scripts/lib/toast"
 
 type Method = "xtream" | "m3u"
@@ -25,6 +25,7 @@ interface Refs {
   methodXtream: HTMLButtonElement
   methodM3u: HTMLButtonElement
   pasteInput: HTMLInputElement
+  mirrorHint: HTMLElement
   xtreamFields: HTMLElement
   serverUrlInput: HTMLInputElement
   usernameInput: HTMLInputElement
@@ -94,7 +95,7 @@ function buildMarkup(): string {
         </header>
 
         <div role="tablist" class="grid grid-cols-2 gap-2 rounded-2xl border border-line bg-surface p-1.5">
-          <button type="button" data-role="method-xtream" role="tab" data-focus-key="method:xtream"
+          <button type="button" data-role="method-xtream" role="tab" data-focus-key="method:xtream" data-tv-autofocus
                   class="flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors">
             <span data-i18n="login.tab.subscription" class="text-base font-medium">I have a subscription</span>
             <span data-i18n="login.tab.subscription.sub" class="text-xs font-medium uppercase tracking-wider opacity-70">Xtream Codes</span>
@@ -109,11 +110,12 @@ function buildMarkup(): string {
         <form data-role="form" class="flex flex-col gap-4" autocomplete="off">
           <label class="flex flex-col gap-2">
             <span data-i18n="tv.login.field.pasteLink" class="${TV_LABEL_CLASS}">Paste a playlist link</span>
-            <input data-role="paste" data-tv-autofocus data-focus-key="paste" type="text"
+            <input data-role="paste" data-focus-key="paste" type="text"
                    autocapitalize="off" spellcheck="false" inputmode="url"
                    data-i18n-attr="placeholder:tv.login.field.pasteLink.placeholder"
                    placeholder="http://provider.com/get.php?username=...&password=..."
                    class="${TV_INPUT_CLASS}" />
+            <p data-role="mirror-hint" class="hidden text-sm text-fg-3"></p>
           </label>
 
           <div data-role="xtream-fields" class="flex flex-col gap-4">
@@ -169,11 +171,11 @@ function buildMarkup(): string {
 
           <div class="flex items-center justify-end gap-3 pt-2">
             <button type="button" data-role="cancel" data-focus-key="cancel"
-                    class="btn min-h-11 px-7 text-base">
+                    class="btn min-h-11 px-7 text-base tv-focus-inset">
               <span data-i18n="common.cancel">Cancel</span>
             </button>
             <button type="submit" data-role="connect" data-focus-key="connect"
-                    class="btn-primary min-h-11 px-8 text-base">
+                    class="btn-primary min-h-11 px-8 text-base tv-focus-inset">
               <span data-role="connect-label" data-i18n="tv.login.action.connect">Connect</span>
             </button>
           </div>
@@ -190,6 +192,7 @@ function collectRefs(root: HTMLElement): Refs {
     methodXtream: query("method-xtream"),
     methodM3u: query("method-m3u"),
     pasteInput: query("paste"),
+    mirrorHint: query("mirror-hint"),
     xtreamFields: query("xtream-fields"),
     serverUrlInput: query("server-url"),
     usernameInput: query("username"),
@@ -227,6 +230,7 @@ const view: TvView = {
     let busy = false
     let destroyed = false
     let cancelAllowed = false
+    let pendingMirrors: ParsedXtreamCandidate[] = []
 
     function paintMethodButtons(): void {
       refs.methodXtream.className =
@@ -287,18 +291,37 @@ const view: TvView = {
       refs.cancelBtn.disabled = next || !cancelAllowed
     }
 
+    function updateMirrorHint(): void {
+      if (pendingMirrors.length > 0) {
+        refs.mirrorHint.textContent = t("tv.login.field.pasteLink.mirrorsDetected", {
+          count: String(pendingMirrors.length),
+        })
+        refs.mirrorHint.classList.remove("hidden")
+      } else {
+        refs.mirrorHint.classList.add("hidden")
+        refs.mirrorHint.textContent = ""
+      }
+    }
+
     function onPasteInput(): void {
-      const parsed = parsePlaylistLink(refs.pasteInput.value)
-      if (!parsed) return
+      const parsed = parsePlaylistLinks(refs.pasteInput.value)
+      pendingMirrors = []
+      if (!parsed) {
+        updateMirrorHint()
+        return
+      }
       if (parsed.type === "xtream") {
         setMethod("xtream")
-        refs.serverUrlInput.value = parsed.serverUrl
-        refs.usernameInput.value = parsed.username
-        refs.passwordInput.value = parsed.password
+        const [primary, ...mirrors] = parsed.entries
+        refs.serverUrlInput.value = primary.serverUrl
+        refs.usernameInput.value = primary.username
+        refs.passwordInput.value = primary.password
+        pendingMirrors = mirrors
       } else {
         setMethod("m3u")
         refs.m3uUrlInput.value = parsed.url
       }
+      updateMirrorHint()
     }
 
     function togglePasswordVisibility(): void {
@@ -336,6 +359,7 @@ const view: TvView = {
         serverUrl: resolved.serverUrl,
         username,
         password,
+        mirrors: pendingMirrors,
       })
       if (destroyed) return
       if (result.status === "expired" || result.status === "inactive") {
@@ -403,6 +427,7 @@ const view: TvView = {
 
     function onLocaleChanged(): void {
       applyI18nDOM(root)
+      updateMirrorHint()
     }
 
     refs.methodXtream.addEventListener("click", () => setMethod("xtream"))
