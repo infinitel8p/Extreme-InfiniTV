@@ -28,6 +28,8 @@ import {
   getAccent,
   setAccent,
   ACCENT_PRESETS,
+  ACCENT_RANDOM_ID,
+  ACCENT_RANDOM_SWATCH,
   getLanguageGroupingEnabled,
   setLanguageGroupingEnabled,
   getContentLanguage,
@@ -61,6 +63,7 @@ import {
   ICON_PALETTE,
   ICON_TEXT_SIZE,
   ICON_LANGUAGE,
+  ICON_ARROWS_SHUFFLE,
 } from "@/scripts/lib/icons"
 
 const SETTINGS_SECTION_ID = "tv-settings"
@@ -365,6 +368,12 @@ const view: TvView = {
         label: t(accentLabelKey(id)),
         swatch: `var(--accent-swatch-${id})`,
       }))
+      options.push({
+        id: ACCENT_RANDOM_ID,
+        label: t(accentLabelKey(ACCENT_RANDOM_ID)),
+        swatch: ACCENT_RANDOM_SWATCH,
+        icon: ICON_ARROWS_SHUFFLE,
+      })
       const picked = await openChoiceDialog({
         title: t("tv.settings.accent"),
         selectedId: getAccent(),
@@ -700,7 +709,8 @@ const view: TvView = {
       const closeButton = document.createElement("button")
       closeButton.type = "button"
       closeButton.dataset.role = "close"
-      closeButton.className = "rounded-lg p-2 text-fg-3 outline-none tv-focus-inset hover:bg-surface-2 hover:text-fg"
+      closeButton.className =
+        "inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-fg-3 outline-none tv-focus-inset hover:bg-surface-2 hover:text-fg"
       const closeIcon = document.createElement("span")
       closeIcon.className = "inline-flex text-base"
       closeIcon.innerHTML = ICON_X
@@ -834,7 +844,13 @@ const view: TvView = {
       document.removeEventListener(TV_OVERSCAN_EVENT, onRefreshEvent)
       for (const unsub of unsubs) unsub()
       list?.destroy()
+      try {
+        playlistsDialogEl?.close()
+      } catch {}
       playlistsDialogEl?.remove()
+      try {
+        deviceNameDialogEl?.close()
+      } catch {}
       deviceNameDialogEl?.remove()
       root.replaceChildren()
     }

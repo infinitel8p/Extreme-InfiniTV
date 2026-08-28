@@ -106,7 +106,7 @@ function buildThumb(logoUrl: string | null | undefined): HTMLSpanElement {
     img.loading = "lazy"
     img.decoding = "async"
     img.referrerPolicy = "no-referrer"
-    img.className = "h-full w-full object-contain"
+    img.className = "h-full w-full min-h-0 min-w-0 object-contain"
     mountCachedImage(img, logoUrl, "poster")
     box.appendChild(img)
   }
@@ -199,7 +199,7 @@ const view: TvView = {
       dialog.innerHTML = `
         <div class="flex items-center justify-between gap-4 border-b border-line px-5 py-4">
           <h2 data-role="title" class="min-w-0 flex-1 truncate text-base font-semibold"></h2>
-          <button type="button" data-role="close" class="rounded-lg p-2 text-fg-3 outline-none tv-focus-inset hover:bg-surface-2 hover:text-fg" aria-label="${t("common.close")}">
+          <button type="button" data-role="close" class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-fg-3 outline-none tv-focus-inset hover:bg-surface-2 hover:text-fg" aria-label="${t("common.close")}">
             <span class="inline-flex text-base">${ICON_X}</span>
           </button>
         </div>
@@ -357,7 +357,7 @@ const view: TvView = {
           img.loading = "lazy"
           img.decoding = "async"
           img.referrerPolicy = "no-referrer"
-          img.className = "h-full w-full object-contain"
+          img.className = "h-full w-full min-h-0 min-w-0 object-contain"
           mountCachedImage(img, logoUrl, "poster")
           refs.thumbSlot.appendChild(img)
           refs.thumbImg = img
@@ -523,6 +523,9 @@ const view: TvView = {
       document.removeEventListener(THROUGHPUT_EVENT, onThroughputEvent)
       document.removeEventListener(LOCALE_EVENT, applyLocale)
       for (const unsub of unsubs) unsub()
+      try {
+        actionDialog?.close()
+      } catch {}
       actionDialog?.remove()
       rowsById.clear()
       root.replaceChildren()

@@ -126,6 +126,7 @@ export interface ChoiceOption {
   label: string
   description?: string
   swatch?: string
+  icon?: string
 }
 
 export interface ChoiceDialogOptions {
@@ -164,6 +165,13 @@ function buildChoiceOption(option: ChoiceOption, isSelected: boolean, dialog: HT
     dot.style.background = option.swatch
     labelLine.appendChild(dot)
   }
+  if (option.icon) {
+    const icon = document.createElement("span")
+    icon.setAttribute("aria-hidden", "true")
+    icon.className = "shrink-0 text-fg-3"
+    icon.innerHTML = option.icon
+    labelLine.appendChild(icon)
+  }
   const labelText = document.createElement("span")
   labelText.className = "min-w-0 flex-1 truncate"
   labelText.textContent = option.label
@@ -192,7 +200,7 @@ function buildChoiceOption(option: ChoiceOption, isSelected: boolean, dialog: HT
 }
 
 function ensureChoiceDialog(): HTMLDialogElement {
-  if (choiceDialogEl) return choiceDialogEl
+  if (choiceDialogEl?.isConnected) return choiceDialogEl
   const dialog = document.createElement("dialog")
   dialog.id = CHOICE_DIALOG_ID
   dialog.className =
@@ -206,7 +214,8 @@ function ensureChoiceDialog(): HTMLDialogElement {
   const closeButton = document.createElement("button")
   closeButton.type = "button"
   closeButton.dataset.role = "close"
-  closeButton.className = "rounded-lg p-2 text-fg-3 outline-none tv-focus-inset hover:bg-surface-2 hover:text-fg"
+  closeButton.className =
+    "inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-fg-3 outline-none tv-focus-inset hover:bg-surface-2 hover:text-fg"
   const closeIcon = document.createElement("span")
   closeIcon.className = "inline-flex text-base"
   closeIcon.innerHTML = ICON_X

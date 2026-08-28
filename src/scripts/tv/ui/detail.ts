@@ -88,10 +88,11 @@ function buildSkeletonBlock(className: string): HTMLDivElement {
 
 export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   const el = document.createElement("div")
-  el.className = "flex flex-col gap-6 pb-10"
+  el.className = "flex flex-col gap-6 pb-20"
 
   const heroSection = document.createElement("section")
-  heroSection.className = "relative isolate min-h-[18rem] w-full overflow-hidden rounded-2xl bg-black/40"
+  heroSection.className =
+    "relative isolate min-h-[18rem] w-full overflow-hidden rounded-2xl bg-black/40 tv-edge-mask"
 
   const heroSkeleton = document.createElement("div")
   heroSkeleton.className = "flex h-full items-end gap-6 p-6"
@@ -204,10 +205,14 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
     img.alt = ""
     img.loading = "lazy"
     img.decoding = "async"
-    img.className = backdropUrl
-      ? "absolute inset-0 h-full w-full object-cover"
-      : "absolute inset-0 h-full w-full scale-110 object-cover opacity-50 blur-3xl saturate-150"
     backdropWrap.appendChild(img)
+    if (backdropUrl) {
+      // Full-bleed, unblurred: "poster"'s 576px cache class is too soft here, so skip it.
+      img.className = "absolute inset-0 h-full w-full object-cover"
+      img.src = backdropUrl
+      return
+    }
+    img.className = "absolute inset-0 h-full w-full scale-125 object-cover opacity-50 blur-3xl saturate-150"
     mountCachedImage(img, imageUrl, "poster")
   }
 

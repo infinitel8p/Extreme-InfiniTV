@@ -238,7 +238,11 @@ function handleReport(partial: ReceiverStatePartial): void {
     currentPlaybackState = partial.state
     setKeepScreenOn(partial.state === "playing" || partial.state === "loading" || partial.state === "buffering")
   }
-  if (typeof partial.positionSeconds === "number") currentPositionSeconds = partial.positionSeconds
+  // idle/error report a reset-to-zero position from teardown, not a real playback
+  // position; keeping the last tick lets handleSessionEnded's own write below persist it.
+  if (typeof partial.positionSeconds === "number" && partial.state !== "idle" && partial.state !== "error") {
+    currentPositionSeconds = partial.positionSeconds
+  }
   const durationSeconds = normalizeReportedDuration(partial.durationSeconds)
   if (durationSeconds !== undefined) currentKnownDurationSeconds = durationSeconds
   activeProgressTarget?.writer.observe({

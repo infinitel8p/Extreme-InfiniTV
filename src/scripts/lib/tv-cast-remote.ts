@@ -99,7 +99,7 @@ function buildSkeleton(dialog: HTMLDialogElement): void {
 
       <header class="relative shrink-0 flex items-start gap-3 ps-4 pe-2 pb-3 pt-[calc(1rem+env(safe-area-inset-top,0px))] short-viewport:pb-2 short-viewport:pt-[calc(0.5rem+env(safe-area-inset-top,0px))]">
         <span data-role="artwork" class="grid size-14 shrink-0 place-items-center overflow-hidden rounded-lg bg-surface-2 text-fg-3 ring-1 ring-inset ring-line short-viewport:size-11">
-          <img data-role="artwork-img" alt="" class="hidden h-full w-full object-contain" />
+          <img data-role="artwork-img" alt="" class="hidden h-full w-full min-h-0 min-w-0 object-contain" />
           <span data-role="artwork-fallback" aria-hidden="true">${ICON_DEVICE_TV}</span>
         </span>
         <div class="flex min-w-0 flex-1 flex-col gap-0.5 pt-0.5">

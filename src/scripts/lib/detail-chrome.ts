@@ -12,7 +12,7 @@ import {
 } from "@/scripts/lib/language-tags.ts"
 import { getContentLanguage, getLanguageGroupingEnabled } from "@/scripts/lib/app-settings.js"
 import { getGroupLanguages } from "@/scripts/lib/preferences.js"
-import type { CatalogGroupingIndex, GroupableEntry } from "@/scripts/lib/language-groups.ts"
+import type { CatalogGroupingIndex, GroupableRow } from "@/scripts/lib/language-groups.ts"
 
 // ----------------------------
 // Navigation / skeleton
@@ -324,11 +324,11 @@ export function renderSimilarRail(opts: {
 // Language pills
 // ----------------------------
 
-export type GroupingIndexLookup = (playlistId: string | null, catalog: GroupableEntry[]) => CatalogGroupingIndex
+export type GroupingIndexLookup = (playlistId: string | null, catalog: GroupableRow[]) => CatalogGroupingIndex
 
 export function groupKeyForCatalog(
   activePlaylistId: string,
-  catalog: GroupableEntry[] | undefined,
+  catalog: GroupableRow[] | undefined,
   getGroupingIndexFor: GroupingIndexLookup
 ): ((entry: { id: string | number }) => string) | undefined {
   if (!activePlaylistId || !catalog?.length) return undefined
@@ -342,7 +342,7 @@ export function renderLanguagePills(opts: {
   item: { id: number; name: string } | null
   kind: EntryKind
   activePlaylistId: string
-  catalog: GroupableEntry[] | undefined
+  catalog: GroupableRow[] | undefined
   getGroupingIndexFor: GroupingIndexLookup
   detailHrefBase: string
 }): void {
@@ -366,8 +366,9 @@ export function renderLanguagePills(opts: {
   const groupEntryIdSet = new Set(groupInfo.entryIds)
   const nameByEntryId = new Map<number, string>()
   for (const entry of catalog) {
-    if (!groupEntryIdSet.has(entry.id)) continue
-    nameByEntryId.set(entry.id, entry.name)
+    const entryId = Number(entry.id)
+    if (!groupEntryIdSet.has(entryId)) continue
+    nameByEntryId.set(entryId, entry.name || "")
     if (nameByEntryId.size === groupEntryIdSet.size) break
   }
 

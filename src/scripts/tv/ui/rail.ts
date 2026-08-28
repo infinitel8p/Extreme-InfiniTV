@@ -2,6 +2,7 @@
 
 import { t } from "@/scripts/lib/i18n"
 import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
+import { releaseCachedImages } from "@/scripts/lib/img-cache.ts"
 import { createCard, type CardItem } from "./card"
 
 const RAIL_LEFT_OFFSET_REM = 1
@@ -56,11 +57,13 @@ export function createRail(options: RailOptions): RailHandle {
   function setLoading(): void {
     el.hidden = false
     count.textContent = ""
+    releaseCachedImages(track)
     track.replaceChildren()
     for (let i = 0; i < SKELETON_COUNT; i++) track.appendChild(buildSkeletonCard())
   }
 
   function setItems(items: CardItem[]): void {
+    releaseCachedImages(track)
     if (!items.length) {
       el.hidden = true
       track.replaceChildren()
@@ -73,6 +76,7 @@ export function createRail(options: RailOptions): RailHandle {
   }
 
   function destroy(): void {
+    releaseCachedImages(track)
     unregisterSection()
     unregisterKeepInView()
     el.remove()

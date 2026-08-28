@@ -463,7 +463,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
   refresh.type = "button"
   refresh.textContent = t("settings.health.refresh")
   refresh.className =
-    "inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg px-2.5 py-1 text-2xs text-fg-2 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+    "inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-line bg-bg h-8 px-3 text-xs text-fg-2 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
   refresh.addEventListener("click", async (ev) => {
     ev.stopPropagation()
     refresh.setAttribute("disabled", "")
@@ -557,7 +557,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
   }
 
   const footer = document.createElement("div")
-  footer.className = "mt-3 flex items-center justify-between gap-2 flex-wrap"
+  footer.className = "mt-3 flex flex-wrap items-center gap-2"
   const footerLeft = document.createElement("div")
   footerLeft.className = "inline-flex items-center gap-2"
   footerLeft.appendChild(refresh)
@@ -566,7 +566,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
 
   if (isCompact) {
     const actions = document.createElement("div")
-    actions.className = "inline-flex items-center gap-1"
+    actions.className = "ms-auto inline-flex items-center gap-2"
 
     const edit = document.createElement("a")
     edit.href = editHrefFor(entry)

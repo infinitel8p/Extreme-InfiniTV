@@ -1,5 +1,5 @@
 // TV search: one input feeding three ranked rails (channels, movies, series).
-import type { TvView, TvViewContext } from "@/scripts/tv/router"
+import { nextPaint, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n"
 import { getActiveEntry } from "@/scripts/lib/creds.js"
 import {
@@ -16,7 +16,7 @@ import { kindLabel } from "@/scripts/lib/kinds.ts"
 import { ICON_SEARCH } from "@/scripts/lib/icons.js"
 import { getActiveLocale } from "@/scripts/lib/i18n"
 import { getLanguageGroupingEnabled, getContentLanguage, LANGUAGE_GROUPING_EVENT, CONTENT_LANGUAGE_EVENT } from "@/scripts/lib/app-settings.js"
-import { buildGroupingIndex, collapseIntoDisplayGroups, type CatalogGroupingIndex } from "@/scripts/lib/language-groups.ts"
+import { getSharedGroupingIndex, collapseIntoDisplayGroups, type CatalogGroupingIndex } from "@/scripts/lib/language-groups.ts"
 import { effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
 import { buildLanguageChips, setLanguageChipsOffset } from "@/scripts/lib/entry-card.ts"
 import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
@@ -49,22 +49,15 @@ interface ChipInfoRecord {
   displayTag: string | null
 }
 
-function toGroupableEntries(rows: CatalogRow[]): { id: number; name: string; year?: string; tmdb?: number | null }[] {
-  return rows.map((row) => ({
-    id: Number(row.id),
-    name: row.name || "",
-    year: row.year != null ? String(row.year) : undefined,
-    tmdb: row.tmdb ?? null,
-  }))
-}
-
 // Collapses ranked matches down to one card per title group, keeping rank order; chip info keyed by display row id.
+// The index is resolved lazily so a grouping-off run never pays for building one.
 function collapseRankedMatches<T extends CatalogRow & { norm: string }>(
   matches: T[],
-  groupingIndex: CatalogGroupingIndex,
+  resolveGroupingIndex: () => CatalogGroupingIndex,
   preferredTags: string[]
 ): { rows: T[]; chipInfoById: Map<number, ChipInfoRecord> } {
   if (!getLanguageGroupingEnabled()) return { rows: matches, chipInfoById: new Map() }
+  const groupingIndex = resolveGroupingIndex()
   const groups = collapseIntoDisplayGroups(
     matches.map((row) => ({ ...row, id: Number(row.id) })),
     groupingIndex,
@@ -120,8 +113,14 @@ function toTvLiveChannel(row: LiveRow & { norm: string }): TvLiveChannel {
   }
 }
 
-function withNorm<T extends { name?: string; category?: string | null; norm?: string }>(row: T): T & { norm: string } {
-  return { ...row, norm: row.norm || normalize(`${row.name || ""} ${row.category || ""}`) }
+// Cached rows already carry `norm`; fill the odd gap in place rather than copying a whole catalog.
+function withNorms<T extends { name?: string; category?: string | null; norm?: string }>(
+  rows: T[]
+): Array<T & { norm: string }> {
+  for (const row of rows) {
+    if (!row.norm) row.norm = normalize(`${row.name || ""} ${row.category || ""}`)
+  }
+  return rows as Array<T & { norm: string }>
 }
 
 function rankRows<T extends { norm: string }>(rows: T[], tokens: string[]): T[] {
@@ -215,8 +214,6 @@ const view: TvView = {
     let channels: Array<LiveRow & { norm: string }> = []
     let movies: Array<CatalogRow & { norm: string }> = []
     let series: Array<CatalogRow & { norm: string }> = []
-    let moviesGroupingIndex: CatalogGroupingIndex = buildGroupingIndex([])
-    let seriesGroupingIndex: CatalogGroupingIndex = buildGroupingIndex([])
     let recentSearches: Array<{ text: string; ts: number }> = []
     let indexReady = false
     let isWarming = false
@@ -342,8 +339,8 @@ const view: TvView = {
       const tokens = normalize(trimmed).split(" ").filter(Boolean)
       const channelMatches = rankRows(channels, tokens)
       const preferredTags = effectivePreferredTags(getContentLanguage(), getActiveLocale())
-      const movieCollapsed = collapseRankedMatches(rankRows(movies, tokens), moviesGroupingIndex, preferredTags)
-      const seriesCollapsed = collapseRankedMatches(rankRows(series, tokens), seriesGroupingIndex, preferredTags)
+      const movieCollapsed = collapseRankedMatches(rankRows(movies, tokens), () => getSharedGroupingIndex(movies), preferredTags)
+      const seriesCollapsed = collapseRankedMatches(rankRows(series, tokens), () => getSharedGroupingIndex(series), preferredTags)
       const movieMatches = movieCollapsed.rows
       const seriesMatches = seriesCollapsed.rows
 
@@ -370,12 +367,27 @@ const view: TvView = {
     }
 
     function rebuildIndex(): void {
-      channels = (readCachedLiveChannels(activePlaylistId) as LiveRow[]).map(withNorm)
-      movies = ((getCached(activePlaylistId, "vod")?.data || []) as CatalogRow[]).map(withNorm)
-      series = ((getCached(activePlaylistId, "series")?.data || []) as CatalogRow[]).map(withNorm)
-      moviesGroupingIndex = buildGroupingIndex(toGroupableEntries(movies))
-      seriesGroupingIndex = buildGroupingIndex(toGroupableEntries(series))
+      channels = withNorms(readCachedLiveChannels(activePlaylistId) as LiveRow[])
+      movies = withNorms((getCached(activePlaylistId, "vod")?.data || []) as CatalogRow[])
+      series = withNorms((getCached(activePlaylistId, "series")?.data || []) as CatalogRow[])
       indexReady = true
+    }
+
+    // Grouping a full catalog is a multi-second task on a TV; do it while idle so the first query doesn't wait.
+    function prewarmGroupingIndexes(): void {
+      if (!getLanguageGroupingEnabled()) return
+      const schedule =
+        typeof window.requestIdleCallback === "function"
+          ? (fn: () => void) => window.requestIdleCallback(fn, { timeout: 6000 })
+          : (fn: () => void) => setTimeout(fn, 1200)
+      const pending = [movies, series]
+      const warmNext = (): void => {
+        const rows = pending.shift()
+        if (destroyed || !rows) return
+        if (rows.length) getSharedGroupingIndex(rows)
+        schedule(warmNext)
+      }
+      schedule(warmNext)
     }
 
     function scheduleWarmupIfCold(): void {
@@ -482,6 +494,10 @@ const view: TvView = {
       refreshRecentSearches()
       runSearch(inputEl.value)
 
+      // The input has to be usable before the catalog read; both resolve from memory otherwise.
+      await nextPaint()
+      if (destroyed) return
+
       await Promise.allSettled([
         hydrateCache(activePlaylistId, "live"),
         hydrateCache(activePlaylistId, "m3u"),
@@ -495,6 +511,7 @@ const view: TvView = {
       rebuildIndex()
       scheduleWarmupIfCold()
       runSearch(inputEl.value)
+      prewarmGroupingIndexes()
     }
 
     inputEl.addEventListener("input", () => scheduleSearch(inputEl.value))

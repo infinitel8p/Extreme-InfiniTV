@@ -153,9 +153,9 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
 </html>
 
 <style is:global>
-  /* Design canvas is 60rem x 33.75rem; root font size scales that canvas to fill the viewport. */
+  /* Design canvas is 40rem x 22.5rem; root font size scales that canvas to fill the viewport. */
   html[data-receiver-ui] {
-    font-size: max(12px, calc(min(100vw / 60, 100vh / 33.75) * var(--xt-font-scale, 1)));
+    font-size: max(12px, calc(min(100vw / 40, 100vh / 22.5) * var(--xt-font-scale, 1)));
   }
 
   /* px, not rem: this is a native OS titlebar height, not part of the scaled canvas. */

@@ -10,6 +10,14 @@ export interface GroupableEntry {
   tmdb?: number | null
 }
 
+// Cached catalog rows go in as-is (ids and years arrive as strings or numbers), so no view has to copy them.
+export interface GroupableRow {
+  id: number | string
+  name?: string | null
+  year?: string | number | null
+  tmdb?: number | null
+}
+
 export interface GroupInfo {
   key: string
   entryIds: number[]
@@ -30,12 +38,17 @@ interface EntryMeta {
   titleKey: string
 }
 
-function computeTitleKey(entry: GroupableEntry): string {
+function computeTitleKey(
+  entry: GroupableRow,
+  entryId: number,
+  name: string,
+  prefix: { tag: string | null; rest: string }
+): string {
   // Strip the prefix via parseNamePrefix first: it handles compound prefixes ("4K-FR - ") that cleanProviderTitle's regex does not.
-  const { tag, rest } = parseNamePrefix(entry.name)
-  const { variants, year } = cleanProviderTitle(tag != null ? rest : entry.name)
+  const { tag, rest } = prefix
+  const { variants, year } = cleanProviderTitle(tag != null ? rest : name)
   const normalizedTitle = normalize(variants[0] || "")
-  if (!normalizedTitle) return `e:${entry.id}`
+  if (!normalizedTitle) return `e:${entryId}`
   const resolvedYear = year != null ? String(year) : entry.year || ""
   return `${normalizedTitle}|${resolvedYear}`
 }
@@ -52,7 +65,7 @@ function distinctTagsInOrder(entryIds: number[], tagByEntryId: Map<number, strin
   return tags
 }
 
-export function buildGroupingIndex(entries: GroupableEntry[]): CatalogGroupingIndex {
+export function buildGroupingIndex(entries: GroupableRow[]): CatalogGroupingIndex {
   const keyByEntryId = new Map<number, string>()
   const tagByEntryId = new Map<number, string | null>()
   const groupsByKey = new Map<string, GroupInfo>()
@@ -63,18 +76,21 @@ export function buildGroupingIndex(entries: GroupableEntry[]): CatalogGroupingIn
   const titleKeyToTmdbKeys = new Map<string, Set<string>>()
 
   for (const entry of entries) {
-    const tag = parseNamePrefix(entry.name).tag
+    const entryId = Number(entry.id)
+    const name = entry.name || ""
+    const prefix = parseNamePrefix(name)
+    const tag = prefix.tag
     const tmdbNumber = Number(entry.tmdb)
     const tmdbKey = tmdbNumber > 0 ? `t:${tmdbNumber}` : null
-    const titleKey = computeTitleKey(entry)
-    metaByEntryId.set(entry.id, { tag, tmdbKey, titleKey })
-    tagByEntryId.set(entry.id, tag)
-    qualityRankByEntryId.set(entry.id, prefixQualityTokens(entry.name).length)
+    const titleKey = computeTitleKey(entry, entryId, name, prefix)
+    metaByEntryId.set(entryId, { tag, tmdbKey, titleKey })
+    tagByEntryId.set(entryId, tag)
+    qualityRankByEntryId.set(entryId, prefixQualityTokens(name).length)
 
     if (!tmdbKey) continue
     const tmdbBucket = tmdbGroupEntryIds.get(tmdbKey)
-    if (tmdbBucket) tmdbBucket.push(entry.id)
-    else tmdbGroupEntryIds.set(tmdbKey, [entry.id])
+    if (tmdbBucket) tmdbBucket.push(entryId)
+    else tmdbGroupEntryIds.set(tmdbKey, [entryId])
 
     const bridgedTmdbKeys = titleKeyToTmdbKeys.get(titleKey)
     if (bridgedTmdbKeys) bridgedTmdbKeys.add(tmdbKey)
@@ -228,14 +244,28 @@ export function groupPassesLanguageFilter(tags: string[], selected: string): boo
 
 // Grouping a catalog is expensive (~800ms at 176k rows), so memoize per playlist and catalog reference.
 export function createGroupingIndexMemo() {
-  let cache: { playlistId: string | null; catalogRef: GroupableEntry[]; index: CatalogGroupingIndex } | null = null
+  let cache: { playlistId: string | null; catalogRef: GroupableRow[]; index: CatalogGroupingIndex } | null = null
 
-  return function getGroupingIndexFor(playlistId: string | null, catalog: GroupableEntry[]): CatalogGroupingIndex {
+  return function getGroupingIndexFor(playlistId: string | null, catalog: GroupableRow[]): CatalogGroupingIndex {
     if (cache && cache.playlistId === playlistId && cache.catalogRef === catalog) {
       return cache.index
     }
-    const index = buildGroupingIndex(catalog)
+    const index = getSharedGroupingIndex(catalog)
     cache = { playlistId, catalogRef: catalog, index }
     return index
   }
+}
+
+const sharedIndexByRows = new WeakMap<object, CatalogGroupingIndex>()
+
+/**
+ * One index per catalog array identity, shared across views and navigations. The cached catalog
+ * array is the key, so a refresh that replaces it drops the stale index with it.
+ */
+export function getSharedGroupingIndex(rows: GroupableRow[]): CatalogGroupingIndex {
+  const cached = sharedIndexByRows.get(rows)
+  if (cached) return cached
+  const index = buildGroupingIndex(rows)
+  sharedIndexByRows.set(rows, index)
+  return index
 }

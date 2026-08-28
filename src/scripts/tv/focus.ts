@@ -99,6 +99,13 @@ function offsetFromTrack(target: HTMLElement, track: HTMLElement, axis: "x" | "y
   return offset
 }
 
+const keepInViewRefreshers = new WeakMap<HTMLElement, () => void>()
+
+/** Re-applies a `keepFocusedInView` offset after its track's contents shifted under the focus. */
+export function refreshKeepInView(scroller: HTMLElement): void {
+  keepInViewRefreshers.get(scroller)?.()
+}
+
 /** Translates `scroller`'s first child so the focused descendant sits `offset` from the leading edge. */
 export function keepFocusedInView(
   scroller: HTMLElement,
@@ -132,9 +139,7 @@ export function keepFocusedInView(
     return parseFloat(axis === "x" ? styles.paddingLeft : styles.paddingTop) || 0
   }
 
-  function onFocusIn(event: FocusEvent): void {
-    const target = event.target
-    if (!(target instanceof HTMLElement) || !track!.contains(target)) return
+  function position(target: HTMLElement, animate: boolean): void {
     ensureTrackPositioned()
 
     const scrollerSize =
@@ -151,13 +156,24 @@ export function keepFocusedInView(
     if (axis === "x") scroller.scrollLeft = 0
     else scroller.scrollTop = 0
 
-    track!.classList.toggle("tv-keep-in-view-animated", !reduceMotionActive())
+    track!.classList.toggle("tv-keep-in-view-animated", animate && !reduceMotionActive())
     track!.style.transform = axis === "x" ? `translateX(${next}px)` : `translateY(${next}px)`
   }
 
+  function onFocusIn(event: FocusEvent): void {
+    const target = event.target
+    if (!(target instanceof HTMLElement) || !track!.contains(target)) return
+    position(target, true)
+  }
+
   scroller.addEventListener("focusin", onFocusIn)
+  keepInViewRefreshers.set(scroller, () => {
+    const active = document.activeElement
+    if (active instanceof HTMLElement && track!.contains(active)) position(active, false)
+  })
   return () => {
     scroller.removeEventListener("focusin", onFocusIn)
+    keepInViewRefreshers.delete(scroller)
   }
 }
 

@@ -3,6 +3,8 @@
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { makeFallback } from "@/scripts/lib/entry-card.ts"
 import { fmtImdbRating } from "@/scripts/lib/format.ts"
+import { attachLongPress } from "@/scripts/tv/long-press.ts"
+import { navigate } from "astro:transitions/client"
 
 export type CardKind = "vod" | "series" | "episode" | "live"
 
@@ -19,6 +21,10 @@ export interface PosterCardItem extends CardItemBase {
   meta: string
   ariaLabel: string
   progressPercent?: number | null
+  /** When set, activation resumes playback instead of the default href navigation. */
+  onActivate?: () => void
+  /** When set, a D-pad hold or touch long-press opens an action sheet instead of activating. */
+  onLongPress?: () => void
 }
 
 export interface LiveCardItem extends CardItemBase {
@@ -27,9 +33,15 @@ export interface LiveCardItem extends CardItemBase {
   nowTitle: string
   ariaLabel: string
   onActivate: () => void
+  onLongPress?: () => void
 }
 
 export type CardItem = PosterCardItem | LiveCardItem
+
+export interface CardRenderOptions {
+  /** Grid rows size cards to fill the column track instead of a fixed rail width. */
+  fill?: boolean
+}
 
 export function cardFocusKey(railId: string, kind: CardKind, id: string | number): string {
   return `${railId}:${kind}:${id}`
@@ -44,16 +56,45 @@ export function formatCardMeta(year: unknown, rating: unknown): string {
 
 const CARD_FOCUS_CLASSES = "self-start outline-none tv-focus-card"
 
-function createPosterCard(item: PosterCardItem): HTMLAnchorElement {
+/** Wires activation (click/Enter) and, when given, a long-press action sheet trigger. */
+function wireCardActivation(
+  card: HTMLElement,
+  href: string | null,
+  onActivate: (() => void) | undefined,
+  onLongPress: (() => void) | undefined
+): void {
+  // Must stay a ClientRouter navigation: a full load skips the swap events focus memory rides on.
+  const activate = onActivate ?? (href ? () => { void navigate(href) } : undefined)
+  if (onLongPress) {
+    attachLongPress<HTMLElement>({
+      container: card,
+      targetSelector: "[data-focus-key]",
+      resolveTarget: () => card,
+      onActivate: () => activate?.(),
+      onLongPress,
+    })
+    return
+  }
+  if (onActivate) {
+    card.addEventListener("click", (event) => {
+      event.preventDefault()
+      onActivate()
+    })
+  }
+}
+
+function createPosterCard(item: PosterCardItem, options?: CardRenderOptions): HTMLAnchorElement {
   const card = document.createElement("a")
   card.href = item.href
   card.dataset.focusKey = cardFocusKey(item.railId, item.kind, item.id)
   card.setAttribute("aria-label", item.ariaLabel)
-  card.className = `flex w-[9.5rem] shrink-0 flex-col gap-2 rounded-xl ${CARD_FOCUS_CLASSES}`
+  const widthClass = options?.fill ? "w-full" : "w-[9.5rem] shrink-0"
+  card.className = `flex ${widthClass} flex-col gap-2 rounded-xl ${CARD_FOCUS_CLASSES}`
 
   const posterWrap = document.createElement("div")
   posterWrap.dataset.posterWrap = "1"
-  posterWrap.className = "relative isolate aspect-[2/3] w-full overflow-hidden rounded-xl bg-black/40"
+  posterWrap.className =
+    "relative isolate aspect-[2/3] w-full overflow-hidden rounded-xl bg-black/40 tv-edge-mask"
 
   if (item.posterUrl) {
     const img = document.createElement("img")
@@ -86,19 +127,22 @@ function createPosterCard(item: PosterCardItem): HTMLAnchorElement {
   meta.textContent = item.meta
 
   card.append(posterWrap, title, meta)
+  wireCardActivation(card, item.href, item.onActivate, item.onLongPress)
   return card
 }
 
-function createLiveCard(item: LiveCardItem): HTMLButtonElement {
+function createLiveCard(item: LiveCardItem, options?: CardRenderOptions): HTMLButtonElement {
   const card = document.createElement("button")
   card.type = "button"
   card.dataset.focusKey = cardFocusKey(item.railId, item.kind, item.id)
   card.setAttribute("aria-label", item.ariaLabel)
-  card.className = `flex w-[9.5rem] shrink-0 flex-col gap-2 rounded-xl text-left ${CARD_FOCUS_CLASSES}`
+  const widthClass = options?.fill ? "w-full" : "w-[9.5rem] shrink-0"
+  card.className = `flex ${widthClass} flex-col gap-2 rounded-xl text-left ${CARD_FOCUS_CLASSES}`
 
   const tileWrap = document.createElement("div")
   tileWrap.dataset.posterWrap = "1"
-  tileWrap.className = "relative isolate aspect-[2/3] w-full overflow-hidden rounded-xl bg-black/40"
+  tileWrap.className =
+    "relative isolate aspect-[2/3] w-full overflow-hidden rounded-xl bg-black/40 tv-edge-mask"
 
   if (item.logoUrl) {
     const backdrop = document.createElement("img")
@@ -107,7 +151,7 @@ function createLiveCard(item: LiveCardItem): HTMLButtonElement {
     backdrop.loading = "lazy"
     backdrop.decoding = "async"
     backdrop.className =
-      "absolute inset-0 h-full w-full scale-110 object-cover opacity-50 blur-2xl saturate-150"
+      "absolute inset-0 h-full w-full scale-125 object-cover opacity-50 blur-2xl saturate-150"
     tileWrap.appendChild(backdrop)
     mountCachedImage(backdrop, item.logoUrl, "logo")
 
@@ -133,10 +177,10 @@ function createLiveCard(item: LiveCardItem): HTMLButtonElement {
   meta.textContent = item.nowTitle
 
   card.append(title, meta)
-  card.addEventListener("click", () => item.onActivate())
+  wireCardActivation(card, null, item.onActivate, item.onLongPress)
   return card
 }
 
-export function createCard(item: CardItem): HTMLAnchorElement | HTMLButtonElement {
-  return item.kind === "live" ? createLiveCard(item) : createPosterCard(item)
+export function createCard(item: CardItem, options?: CardRenderOptions): HTMLAnchorElement | HTMLButtonElement {
+  return item.kind === "live" ? createLiveCard(item, options) : createPosterCard(item, options)
 }

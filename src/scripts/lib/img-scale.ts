@@ -1,8 +1,8 @@
 // Pure sizing/URL helpers for the downscale-and-cache image pipeline.
 
-export type ImgKind = "logo" | "poster"
+export type ImgKind = "logo" | "poster" | "backdrop"
 
-export const IMG_KIND_MAX_DIM: Record<ImgKind, number> = { logo: 128, poster: 576 }
+export const IMG_KIND_MAX_DIM: Record<ImgKind, number> = { logo: 128, poster: 576, backdrop: 1280 }
 
 export function scaleToFit(
   width: number,

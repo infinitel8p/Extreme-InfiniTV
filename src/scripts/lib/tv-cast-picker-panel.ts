@@ -182,7 +182,7 @@ export function mountCastPickerPanel(
         img.loading = "lazy"
         img.decoding = "async"
         img.referrerPolicy = "no-referrer"
-        img.className = "h-full w-full object-contain"
+        img.className = "h-full w-full min-h-0 min-w-0 object-contain"
         img.onerror = () => {
           img.remove()
           if (item.logoLookup) requestLogoFallback(logoBox, item.logoLookup)

@@ -1,7 +1,7 @@
 // Boots the /tv/* shell: i18n, back handling, spatial nav, the rail's active state + playlist dialog, per-route focus memory, and the view router.
 
 import { navigate } from "astro:transitions/client"
-import { initI18n, t, LOCALE_EVENT } from "@/scripts/lib/i18n"
+import { initI18n, t, LOCALE_EVENT, applyI18nDOM } from "@/scripts/lib/i18n"
 import { mountBackHandler } from "@/scripts/lib/back-handler"
 import { mountTvInputGuard } from "@/scripts/lib/tv-input-guard"
 import { initConnectivity } from "@/scripts/lib/connectivity.js"
@@ -12,9 +12,10 @@ import { initPlaylistAccent } from "@/scripts/lib/playlist-accent"
 import { registerMainFocusSection, NAV_SECTION_ID } from "@/scripts/tv/focus"
 import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
 import { renderPlaylistRow } from "@/scripts/lib/playlist-rows.js"
-import { ICON_X } from "@/scripts/lib/icons"
+import { ICON_X, ICON_PLAYLIST_ADD } from "@/scripts/lib/icons"
 import { mountTvRouter, TV_VIEW_MOUNTED_EVENT } from "@/scripts/tv/router"
 import { tvNavActiveHref } from "@/scripts/lib/tv-routes"
+import { mountTvWarmupIndicator } from "@/scripts/tv/ui/warmup-indicator"
 
 function syncNavActiveState(): void {
   const activeHref = tvNavActiveHref(location.pathname)
@@ -46,7 +47,7 @@ async function refreshPlaylistNavLabel(): Promise<void> {
 let playlistDialogEl: HTMLDialogElement | null = null
 
 function ensurePlaylistDialog(): HTMLDialogElement {
-  if (playlistDialogEl) return playlistDialogEl
+  if (playlistDialogEl?.isConnected) return playlistDialogEl
   const dialog = document.createElement("dialog")
   dialog.id = "tv-playlist-dialog"
   dialog.className =
@@ -54,13 +55,20 @@ function ensurePlaylistDialog(): HTMLDialogElement {
   dialog.innerHTML = `
     <div class="flex items-center justify-between gap-4 border-b border-line px-6 py-4">
       <h2 class="text-lg font-semibold" data-i18n="tv.playlist.switchTitle">Switch playlist</h2>
-      <button type="button" id="tv-playlist-dialog-close" class="rounded-lg p-2 text-fg-3 hover:bg-surface-2 hover:text-fg" aria-label="Close" data-i18n-attr="aria-label:common.close">
+      <button type="button" id="tv-playlist-dialog-close" class="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-fg-3 outline-none tv-focus-inset hover:bg-surface-2 hover:text-fg" aria-label="Close" data-i18n-attr="aria-label:common.close">
         <span class="inline-flex text-base">${ICON_X}</span>
       </button>
     </div>
     <div id="tv-playlist-dialog-list" class="flex max-h-[55vh] flex-col overflow-y-auto p-2"></div>
+    <div class="border-t border-line p-2">
+      <a href="/tv/login" class="flex min-h-11 items-center gap-2.5 rounded-xl px-4 py-2.5 text-sm font-medium text-accent outline-none hover:bg-surface-2 tv-focus-inset">
+        <span class="inline-flex text-base">${ICON_PLAYLIST_ADD}</span>
+        <span data-i18n="playlist.addCta"></span>
+      </a>
+    </div>
   `
   document.body.appendChild(dialog)
+  applyI18nDOM(dialog)
   dialog.querySelector("#tv-playlist-dialog-close")?.addEventListener("click", () => dialog.close())
   attachDialogSpatialNav(dialog)
   playlistDialogEl = dialog
@@ -198,6 +206,24 @@ function mountAmbientHandoffRefresh(): void {
 }
 
 // astro:prefetch requires the `prefetch` config flag, which is off here.
+// Views schedule their own warmup on mount, but a deep link straight into a
+// view that doesn't (live, downloads, settings...) would otherwise never hydrate.
+function scheduleBackgroundWarmup(): void {
+  const idle = (fn: () => void) =>
+    typeof window.requestIdleCallback === "function"
+      ? window.requestIdleCallback(fn, { timeout: 2000 })
+      : setTimeout(fn, 500)
+  idle(() => {
+    import("@/scripts/lib/creds.js")
+      .then(({ getActiveEntry }) => getActiveEntry())
+      .then((entry) => {
+        if (!entry?._id) return
+        return import("@/scripts/lib/catalog.js").then((mod) => mod.warmupActive(entry._id))
+      })
+      .catch(() => {})
+  })
+}
+
 function mountPrefetchOnFocus(): void {
   const prefetched = new Set<string>()
   document.addEventListener("focusin", (event) => {
@@ -325,6 +351,17 @@ function mountRootAttributeCarryOver(): void {
   })
 }
 
+// Link-driven navigation from inside an open dialog must close it, not leave it stuck open.
+function mountCloseDialogsOnSwap(): void {
+  document.addEventListener("astro:before-swap", () => {
+    for (const dialog of document.querySelectorAll<HTMLDialogElement>("dialog[open]")) {
+      try {
+        dialog.close()
+      } catch {}
+    }
+  })
+}
+
 function mountFocusMemory(): void {
   document.addEventListener("astro:before-swap", (event) => {
     lastSwapDirection = event.direction
@@ -366,6 +403,9 @@ export function bootTvShell(): void {
   mountNavSync()
   mountNavPlaylistDialog()
   mountPrefetchOnFocus()
+  mountCloseDialogsOnSwap()
   mountFocusMemory()
+  mountTvWarmupIndicator()
+  scheduleBackgroundWarmup()
   mountTvRouter()
 }

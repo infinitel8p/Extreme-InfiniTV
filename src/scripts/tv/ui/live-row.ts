@@ -3,6 +3,7 @@ import { t, getActiveLocale } from "@/scripts/lib/i18n"
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { formatTimeRange, type Programme } from "@/scripts/lib/now-next"
 import { channelSupportsCatchup, isCatchupPlayable, type CatchupCapableChannel } from "@/scripts/lib/catchup.ts"
+import { STAR_OUTLINE, STAR_FILLED } from "@/scripts/lib/entry-card.ts"
 import type { CastChannel, CastChannelGroup } from "@/scripts/lib/tv-cast-channel-list"
 
 export interface LiveChannel extends CastChannel, CatchupCapableChannel {
@@ -26,10 +27,11 @@ function buildImg(logoUrl: string, className: string): HTMLImageElement {
 function buildLogoTile(logoUrl: string | null | undefined, widthClass: string): HTMLSpanElement {
   const tile = document.createElement("span")
   tile.setAttribute("aria-hidden", "true")
-  tile.className = `relative isolate aspect-video shrink-0 overflow-hidden rounded-xl bg-black/40 ${widthClass}`
+  tile.className =
+    `relative isolate aspect-video shrink-0 overflow-hidden rounded-xl bg-black/40 tv-edge-mask ${widthClass}`
   if (!logoUrl) return tile
-  tile.appendChild(buildImg(logoUrl, "absolute inset-0 h-full w-full scale-110 object-cover opacity-50 blur-xl saturate-150"))
-  tile.appendChild(buildImg(logoUrl, "absolute inset-0 m-auto max-h-[65%] max-w-[65%] object-contain"))
+  tile.appendChild(buildImg(logoUrl, "absolute inset-0 h-full w-full scale-125 object-cover opacity-25 blur-xl saturate-150"))
+  tile.appendChild(buildImg(logoUrl, "absolute inset-0 m-auto max-h-[75%] max-w-[75%] object-contain"))
   return tile
 }
 
@@ -37,8 +39,9 @@ function buildLogoChip(logoUrl: string | null | undefined, widthClass: string): 
   const chip = document.createElement("span")
   chip.setAttribute("aria-hidden", "true")
   chip.className =
-    `grid isolate aspect-video shrink-0 place-items-center overflow-hidden rounded-lg bg-black/40 p-2 ring-1 ring-inset ring-line ${widthClass}`
-  if (logoUrl) chip.appendChild(buildImg(logoUrl, "h-full w-full object-contain"))
+    `relative grid isolate aspect-video shrink-0 place-items-center overflow-hidden rounded-lg bg-black/40 p-2 ring-1 ring-inset ring-line tv-edge-mask ${widthClass}`
+  // min-0: without it the grid track grows to the logo's intrinsic size and h-full/w-full clip it.
+  if (logoUrl) chip.appendChild(buildImg(logoUrl, "h-full w-full min-h-0 min-w-0 object-contain"))
   return chip
 }
 
@@ -84,7 +87,7 @@ export function buildChannelRowSkeleton(): HTMLDivElement {
   return row
 }
 
-export function buildChannelRow(channel: LiveChannel, index: number, isPlaying: boolean): HTMLButtonElement {
+export function buildChannelRow(channel: LiveChannel, index: number, isPlaying: boolean, favorite: boolean): HTMLButtonElement {
   const row = document.createElement("button")
   row.type = "button"
   row.className =
@@ -119,11 +122,16 @@ export function buildChannelRow(channel: LiveChannel, index: number, isPlaying: 
   const nameText = document.createElement("span")
   nameText.className = "min-w-0 truncate text-base font-semibold text-fg"
   nameText.textContent = channel.name
+  const favStar = document.createElement("span")
+  favStar.dataset.role = "fav"
+  favStar.setAttribute("aria-hidden", "true")
+  favStar.className = `shrink-0 text-xs text-accent${favorite ? "" : " hidden"}`
+  favStar.innerHTML = STAR_FILLED
   const playingPill = document.createElement("span")
   playingPill.className =
     "hidden shrink-0 rounded-full bg-accent/15 px-2 py-0.5 text-2xs font-medium text-accent group-data-[now-playing=true]/row:inline-flex"
   playingPill.textContent = t("cast.remote.statePlaying")
-  nameLine.append(nameText, playingPill)
+  nameLine.append(nameText, favStar, playingPill)
 
   const nowLine = document.createElement("span")
   nowLine.dataset.role = "now"
@@ -150,7 +158,7 @@ function buildHeroBackdrop(logoUrl: string | null | undefined): HTMLSpanElement 
   const wrap = document.createElement("span")
   wrap.setAttribute("aria-hidden", "true")
   wrap.className = "absolute inset-0 overflow-hidden"
-  if (logoUrl) wrap.appendChild(buildImg(logoUrl, "h-full w-full scale-110 object-cover opacity-35 blur-3xl saturate-150"))
+  if (logoUrl) wrap.appendChild(buildImg(logoUrl, "h-full w-full scale-125 object-cover opacity-35 blur-3xl saturate-150"))
   return wrap
 }
 
@@ -158,10 +166,12 @@ export function buildGuideHero(
   channel: LiveChannel,
   status: GuideStatus,
   current: Programme | null,
-  currentProgress: number
+  currentProgress: number,
+  favorite: boolean,
+  onToggleFavorite: () => void
 ): HTMLDivElement {
   const hero = document.createElement("div")
-  hero.className = "relative isolate min-h-[10rem] overflow-hidden rounded-2xl bg-black/40 p-4"
+  hero.className = "relative isolate min-h-[10rem] overflow-hidden rounded-2xl bg-black/40 p-4 tv-edge-mask"
 
   hero.appendChild(buildHeroBackdrop(channel.logo))
   const darken = document.createElement("span")
@@ -175,9 +185,22 @@ export function buildGuideHero(
   const identity = document.createElement("div")
   identity.className = "flex items-center gap-3"
   const name = document.createElement("span")
-  name.className = "min-w-0 truncate text-sm font-semibold text-fg"
+  name.className = "min-w-0 flex-1 truncate text-sm font-semibold text-fg"
   name.textContent = channel.name
-  identity.append(buildLogoChip(channel.logo, "w-16"), name)
+  const favButton = document.createElement("button")
+  favButton.type = "button"
+  favButton.dataset.focusKey = `guide-fav:${channel.id}`
+  favButton.setAttribute("aria-label", t(favorite ? "detail.action.removeFavorite" : "detail.action.addFavorite"))
+  favButton.setAttribute("aria-pressed", String(favorite))
+  favButton.className =
+    "flex size-9 shrink-0 items-center justify-center rounded-lg outline-none tv-focus-inset transition-colors " +
+    (favorite ? "text-accent hover:bg-surface-2" : "text-fg-3 hover:bg-surface-2 hover:text-fg")
+  favButton.innerHTML = `<span class="inline-flex text-base">${favorite ? STAR_FILLED : STAR_OUTLINE}</span>`
+  favButton.addEventListener("click", (event) => {
+    event.stopPropagation()
+    onToggleFavorite()
+  })
+  identity.append(buildLogoChip(channel.logo, "w-16"), name, favButton)
   content.appendChild(identity)
 
   if (status === "loading") {

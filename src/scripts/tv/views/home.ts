@@ -1,4 +1,5 @@
 import type { TvView, TvViewContext } from "@/scripts/tv/router"
+import { navigate } from "astro:transitions/client"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
 import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
 import {
@@ -7,6 +8,8 @@ import {
   getGlobalFavorites,
   getFavoriteMeta,
   getWatchlist,
+  clearProgress,
+  getRecents,
 } from "@/scripts/lib/preferences.js"
 import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import { readCachedLiveChannels, ensureOverridesReady } from "@/scripts/lib/live-catalog.ts"
@@ -40,13 +43,24 @@ import {
   type PosterCardItem,
   type LiveCardItem,
 } from "@/scripts/tv/ui/card"
+import { resumeContinueWatchingRow, type ContinueWatchingRow } from "@/scripts/tv/resume-playback.ts"
+import { createActionSheet, type ActionSheetHandle, type ActionSheetItem } from "@/scripts/tv/ui/action-sheet.ts"
+import { buildCatalogMenuActions } from "@/scripts/tv/rail-card-menu.ts"
+import { backdropFromInfoPayload } from "@/scripts/lib/backdrop.ts"
+import { requestVodInfo } from "@/scripts/lib/vod-info.ts"
+import { requestSeriesInfo } from "@/scripts/lib/series-seasons.ts"
 
 // Literal so this cache-only page never statically imports catalog.js
 const CATALOG_WARMED_EVENT = "xt:catalog-warmed"
+const CATALOG_WARMING_START_EVENT = "xt:catalog-warming-start"
+const CATALOG_WARMING_PROGRESS_EVENT = "xt:catalog-warming-progress"
 
 const RAIL_ITEM_LIMIT = 20
 const HERO_FOCUS_DEBOUNCE_MS = 80
 const VERTICAL_OFFSET_RATIO = 0.4
+const CONTINUE_WATCHING_LIVE_CHANNEL_LIMIT = 5
+const CONTINUE_WATCHING_LIVE_CHANNEL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+const HERO_ROTATION_INTERVAL_MS = 10000
 
 interface HubStrip {
   id: string
@@ -138,6 +152,18 @@ function groupableEntriesFor(kind: "vod" | "series", rows: CatalogRow[]): Groupa
   return seriesGroupableCache
 }
 
+/** One pass over a catalog collecting only the ids a rail needs, instead of indexing all of it. */
+function pickRowsById<T extends { id: number | string }>(rows: T[], wanted: Set<number>): Map<number, T> {
+  const picked = new Map<number, T>()
+  if (!wanted.size) return picked
+  for (const row of rows) {
+    const id = Number(row.id)
+    if (wanted.has(id) && !picked.has(id)) picked.set(id, row)
+    if (picked.size === wanted.size) break
+  }
+  return picked
+}
+
 function chipInfoForEntry(
   kind: "vod" | "series",
   entryId: number,
@@ -224,19 +250,153 @@ function resumeHeroMeta(percent: number): string {
   return percent < 1 ? t("hub.strip.continueWatching") : t("tv.home.resumeAt", { percent: Math.round(percent) })
 }
 
+function resumeOrNavigate(playlistId: string, row: ContinueWatchingRow, href: string): void {
+  void resumeContinueWatchingRow(playlistId, row).then((started) => {
+    if (!started) void navigate(href)
+  })
+}
+
+function continueWatchingMenuActions(
+  playlistId: string,
+  progressKind: "vod" | "episode",
+  progressId: string | number,
+  resumeRow: ContinueWatchingRow,
+  href: string
+): ActionSheetItem[] {
+  return [
+    { label: t("detail.action.continue"), onSelect: () => resumeOrNavigate(playlistId, resumeRow, href) },
+    { label: t("list.menu.open"), onSelect: () => { void navigate(href) } },
+    {
+      label: t("list.menu.removeContinueWatching"),
+      onSelect: () => clearProgress(playlistId, progressKind, progressId),
+    },
+  ]
+}
+
+type BackdropKind = "vod" | "series"
+
+function backdropCacheKind(kind: BackdropKind, id: string | number): string {
+  return kind === "vod" ? `vod_info_${id}` : `series_info_${id}`
+}
+
+function cachedBackdropUrl(playlistId: string, kind: BackdropKind, id: string | number): string | null {
+  const hit = getCached(playlistId, backdropCacheKind(kind, id))
+  return hit ? backdropFromInfoPayload(hit.data) : null
+}
+
+function requestBackdropInfo(playlistId: string, kind: BackdropKind, id: string | number): Promise<any> {
+  return kind === "vod" ? requestVodInfo(playlistId, id) : requestSeriesInfo(playlistId, id)
+}
+
+/**
+ * Cache-first hero image: a real backdrop when the vod_info/series_info entry is
+ * already cached, poster otherwise. On a cache miss this also kicks off a lazy,
+ * throttled info fetch and calls onResolved(focusKey) once it lands so the caller
+ * can re-show the hero - guarded by comparing focusKey against whatever the hero
+ * is showing at that moment, so a stale resolve after the hero moved on is a no-op.
+ */
+function heroBackdropImage(
+  playlistId: string,
+  kind: BackdropKind,
+  id: string | number,
+  posterUrl: string | null,
+  focusKey: string,
+  onResolved: (focusKey: string) => void
+): { imageUrl: string | null; imageKind: "backdrop" | "poster" } {
+  const cachedUrl = cachedBackdropUrl(playlistId, kind, id)
+  if (cachedUrl) return { imageUrl: cachedUrl, imageKind: "backdrop" }
+  void requestBackdropInfo(playlistId, kind, id).then((data) => {
+    if (data && backdropFromInfoPayload(data)) onResolved(focusKey)
+  })
+  return { imageUrl: posterUrl, imageKind: "poster" }
+}
+
+interface LiveRecentEntry {
+  id: number
+  name?: string
+  logo?: string | null
+  ts?: number
+}
+
+type MergedContinueWatchingRow =
+  | { source: "progress"; row: any; ts: number }
+  | { source: "live"; row: LiveRecentEntry; ts: number }
+
+/**
+ * Continue-watching rows (`updatedAt`) and live recents (`ts`) both carry a real
+ * epoch-ms timestamp, so the merge is a plain recency sort across all three kinds.
+ * Live channels get their own tighter retention (last 5, max 7 days old) before
+ * merging in - movies/episodes keep whatever the progress-retention setting allows.
+ */
+function mergeContinueWatchingRows(progressRows: any[], liveRecents: LiveRecentEntry[]): MergedContinueWatchingRow[] {
+  const cutoffMs = Date.now() - CONTINUE_WATCHING_LIVE_CHANNEL_MAX_AGE_MS
+  const recentLiveChannels = liveRecents
+    .filter((row) => (row.ts || 0) >= cutoffMs)
+    .slice(0, CONTINUE_WATCHING_LIVE_CHANNEL_LIMIT)
+
+  const merged: MergedContinueWatchingRow[] = [
+    ...progressRows.map((row) => ({ source: "progress" as const, row, ts: row.updatedAt || 0 })),
+    ...recentLiveChannels.map((row) => ({ source: "live" as const, row, ts: row.ts || 0 })),
+  ]
+  merged.sort((a, b) => b.ts - a.ts)
+  return merged.slice(0, RAIL_ITEM_LIMIT)
+}
+
 function buildContinueWatchingItems(
   railId: string,
   railTitle: string,
   playlistId: string,
-  heroBuilders: Map<string, () => HeroItem>
+  heroBuilders: Map<string, () => HeroItem>,
+  actionSheet: ActionSheetHandle,
+  onBackdropResolved: (focusKey: string) => void
 ): CardItem[] {
-  const vodById = new Map<number, CatalogRow>(
-    ((getCached(playlistId, "vod")?.data || []) as CatalogRow[]).map((movie) => [Number(movie.id), movie])
+  const progressRows = getContinueWatching(playlistId, RAIL_ITEM_LIMIT) as any[]
+  const liveRecents = getRecents(playlistId, "live") as LiveRecentEntry[]
+  const merged = mergeContinueWatchingRows(progressRows, liveRecents)
+
+  const wantedVodIds = new Set<number>(
+    merged.filter((entry) => entry.source === "progress" && entry.row.kind === "vod").map((entry) => Number(entry.row.id))
   )
-  const rows = getContinueWatching(playlistId, RAIL_ITEM_LIMIT) as any[]
+  const vodById = pickRowsById((getCached(playlistId, "vod")?.data || []) as CatalogRow[], wantedVodIds)
+  const wantedLiveIds = new Set<number>(
+    merged.filter((entry): entry is { source: "live"; row: LiveRecentEntry; ts: number } => entry.source === "live")
+      .map((entry) => Number(entry.row.id))
+  )
+  const liveById = wantedLiveIds.size
+    ? pickRowsById(readCachedLiveChannels(playlistId) as LiveChannelRow[], wantedLiveIds)
+    : new Map<number, LiveChannelRow>()
   const items: CardItem[] = []
 
-  for (const row of rows) {
+  for (const entry of merged) {
+    if (entry.source === "live") {
+      const recent = entry.row
+      const channel = liveById.get(Number(recent.id))
+      const name = channel?.name || recent.name || kindLabel("live")
+      const logoUrl = channel?.logo ?? recent.logo ?? null
+      const href = `/tv/live?channel=${encodeURIComponent(String(recent.id))}`
+      const item: LiveCardItem = {
+        railId,
+        kind: "live",
+        id: recent.id,
+        name,
+        logoUrl,
+        nowTitle: channel ? currentProgrammeFor(channel, playlistId)?.title || "" : "",
+        ariaLabel: t("tv.aria.watch", { name }),
+        onActivate: () => {
+          void navigate(href)
+        },
+        onLongPress: () =>
+          actionSheet.open(
+            name,
+            buildCatalogMenuActions({ kind: "live", id: recent.id, name, logo: logoUrl, playlistId, href })
+          ),
+      }
+      items.push(item)
+      heroBuilders.set(cardFocusKey(railId, "live", recent.id), () => buildLiveHeroItem(railTitle, item, channel, playlistId))
+      continue
+    }
+
+    const row = entry.row
     const percent = row.duration > 0 ? Math.max(0, Math.min(100, (row.position / row.duration) * 100)) : 0
 
     if (row.kind === "vod") {
@@ -244,6 +404,9 @@ function buildContinueWatchingItems(
       const name = row.name || movie?.name || t("list.movieFallback", { id: row.id })
       const posterUrl = row.logo || movie?.logo || null
       const href = `/tv/movies/detail?id=${encodeURIComponent(String(row.id))}&autoplay=1`
+      const resumeRow: ContinueWatchingRow = { kind: "vod", id: row.id, position: row.position, name, logo: posterUrl }
+      const openMenu = () =>
+        actionSheet.open(name, continueWatchingMenuActions(playlistId, "vod", row.id, resumeRow, href))
       const item: PosterCardItem = {
         railId,
         kind: "vod",
@@ -254,19 +417,24 @@ function buildContinueWatchingItems(
         meta: kindLabel("vod"),
         ariaLabel: t("tv.aria.resume", { name }),
         progressPercent: percent,
+        onActivate: () => resumeOrNavigate(playlistId, resumeRow, href),
+        onLongPress: openMenu,
       }
       items.push(item)
-      heroBuilders.set(cardFocusKey(railId, "vod", row.id), () => ({
-        eyebrow: railTitle,
-        title: name,
-        meta: resumeHeroMeta(percent),
-        progressPercent: percent,
-        imageUrl: posterUrl,
-        imageKind: "poster",
-        onActivate: () => {
-          window.location.href = href
-        },
-      }))
+      const vodFocusKey = cardFocusKey(railId, "vod", row.id)
+      heroBuilders.set(vodFocusKey, () => {
+        const backdrop = heroBackdropImage(playlistId, "vod", row.id, posterUrl, vodFocusKey, onBackdropResolved)
+        return {
+          eyebrow: railTitle,
+          title: name,
+          meta: resumeHeroMeta(percent),
+          progressPercent: percent,
+          imageUrl: backdrop.imageUrl,
+          imageKind: backdrop.imageKind,
+          ariaLabel: t("tv.aria.resume", { name }),
+          onActivate: () => resumeOrNavigate(playlistId, resumeRow, href),
+        }
+      })
       continue
     }
 
@@ -281,6 +449,16 @@ function buildContinueWatchingItems(
           `&season=${encodeURIComponent(String(row.season ?? ""))}` +
           `&episode=${encodeURIComponent(String(row.episodeNum ?? ""))}`
         : "#"
+    const resumeRow: ContinueWatchingRow = {
+      kind: "episode",
+      id: row.id,
+      seriesId: row.seriesId,
+      seriesName: row.seriesName,
+      seriesLogo: posterUrl,
+      name: row.episodeTitle,
+    }
+    const openMenu = () =>
+      actionSheet.open(name, continueWatchingMenuActions(playlistId, "episode", row.id, resumeRow, href))
     const item: PosterCardItem = {
       railId,
       kind: "episode",
@@ -291,19 +469,27 @@ function buildContinueWatchingItems(
       meta: row.seriesName ? `${row.seriesName} · ${tag}` : tag,
       ariaLabel: t("tv.aria.resume", { name }),
       progressPercent: percent,
+      onActivate: () => resumeOrNavigate(playlistId, resumeRow, href),
+      onLongPress: openMenu,
     }
     items.push(item)
-    heroBuilders.set(cardFocusKey(railId, "episode", row.id), () => ({
-      eyebrow: railTitle,
-      title: name,
-      meta: resumeHeroMeta(percent),
-      progressPercent: percent,
-      imageUrl: posterUrl,
-      imageKind: "poster",
-      onActivate: () => {
-        window.location.href = href
-      },
-    }))
+    const episodeFocusKey = cardFocusKey(railId, "episode", row.id)
+    heroBuilders.set(episodeFocusKey, () => {
+      const backdrop =
+        row.seriesId != null
+          ? heroBackdropImage(playlistId, "series", row.seriesId, posterUrl, episodeFocusKey, onBackdropResolved)
+          : { imageUrl: posterUrl, imageKind: "poster" as const }
+      return {
+        eyebrow: railTitle,
+        title: name,
+        meta: resumeHeroMeta(percent),
+        progressPercent: percent,
+        imageUrl: backdrop.imageUrl,
+        imageKind: backdrop.imageKind,
+        ariaLabel: t("tv.aria.resume", { name }),
+        onActivate: () => resumeOrNavigate(playlistId, resumeRow, href),
+      }
+    })
   }
 
   return items
@@ -315,26 +501,33 @@ function buildFavoritesItems(
   filterKind: string,
   playlistId: string,
   heroBuilders: Map<string, () => HeroItem>,
-  chipInfoByFocusKey: Map<string, ChipInfoRecord>
+  chipInfoByFocusKey: Map<string, ChipInfoRecord>,
+  actionSheet: ActionSheetHandle,
+  onBackdropResolved: (focusKey: string) => void
 ): CardItem[] {
   const raw = (getGlobalFavorites(playlistId) as Array<{ kind: "live" | "vod" | "series"; id: number }>).filter(
     (entry) => filterKind === "all" || entry.kind === filterKind
   )
-  const liveById = new Map<number, LiveChannelRow>(
-    (readCachedLiveChannels(playlistId) as LiveChannelRow[]).map((channel) => [Number(channel.id), channel])
-  )
+  const shown = raw.slice(0, RAIL_ITEM_LIMIT)
+  const wantedIds = (wantedKind: string) =>
+    new Set<number>(shown.filter((entry) => entry.kind === wantedKind).map((entry) => Number(entry.id)))
   const vodRows = (getCached(playlistId, "vod")?.data || []) as CatalogRow[]
   const seriesRows = (getCached(playlistId, "series")?.data || []) as CatalogRow[]
-  const vodById = new Map<number, CatalogRow>(vodRows.map((movie) => [Number(movie.id), movie]))
-  const seriesById = new Map<number, CatalogRow>(seriesRows.map((series) => [Number(series.id), series]))
+  const liveWanted = wantedIds("live")
+  const liveById = liveWanted.size
+    ? pickRowsById(readCachedLiveChannels(playlistId) as LiveChannelRow[], liveWanted)
+    : new Map<number, LiveChannelRow>()
+  const vodById = pickRowsById(vodRows, wantedIds("vod"))
+  const seriesById = pickRowsById(seriesRows, wantedIds("series"))
 
   const items: CardItem[] = []
-  for (const fav of raw.slice(0, RAIL_ITEM_LIMIT)) {
+  for (const fav of shown) {
     if (fav.kind === "live") {
       const channel = liveById.get(Number(fav.id))
       const meta = getFavoriteMeta(playlistId, "live", fav.id)
       const name = meta?.name || channel?.name || kindLabel("live")
       const logoUrl = meta?.logo ?? channel?.logo ?? null
+      const href = `/tv/live?channel=${encodeURIComponent(String(fav.id))}`
       const item: LiveCardItem = {
         railId,
         kind: "live",
@@ -344,8 +537,13 @@ function buildFavoritesItems(
         nowTitle: channel ? currentProgrammeFor(channel, playlistId)?.title || "" : "",
         ariaLabel: t("tv.aria.watch", { name }),
         onActivate: () => {
-          window.location.href = `/tv/live?channel=${encodeURIComponent(String(fav.id))}`
+          void navigate(href)
         },
+        onLongPress: () =>
+          actionSheet.open(
+            name,
+            buildCatalogMenuActions({ kind: "live", id: fav.id, name, logo: logoUrl, playlistId, href })
+          ),
       }
       items.push(item)
       heroBuilders.set(cardFocusKey(railId, "live", fav.id), () =>
@@ -372,18 +570,27 @@ function buildFavoritesItems(
       posterUrl,
       meta: metaForCatalogEntry(lookup),
       ariaLabel: t("tv.aria.open", { name }),
+      onLongPress: () =>
+        actionSheet.open(
+          name,
+          buildCatalogMenuActions({ kind: fav.kind, id: fav.id, name, logo: posterUrl, playlistId, href })
+        ),
     }
     items.push(item)
-    heroBuilders.set(cardFocusKey(railId, fav.kind as CardKind, fav.id), () => ({
-      eyebrow: railTitle,
-      title: name,
-      meta: metaForCatalogEntry(lookup),
-      imageUrl: posterUrl,
-      imageKind: "poster",
-      onActivate: () => {
-        window.location.href = href
-      },
-    }))
+    const favFocusKey = cardFocusKey(railId, fav.kind as CardKind, fav.id)
+    heroBuilders.set(favFocusKey, () => {
+      const backdrop = heroBackdropImage(playlistId, fav.kind, fav.id, posterUrl, favFocusKey, onBackdropResolved)
+      return {
+        eyebrow: railTitle,
+        title: name,
+        meta: metaForCatalogEntry(lookup),
+        imageUrl: backdrop.imageUrl,
+        imageKind: backdrop.imageKind,
+        onActivate: () => {
+          void navigate(href)
+        },
+      }
+    })
     const chipInfo = chipInfoForEntry(fav.kind, Number(fav.id), playlistId, fav.kind === "vod" ? vodRows : seriesRows)
     if (chipInfo) chipInfoByFocusKey.set(cardFocusKey(railId, fav.kind as CardKind, fav.id), chipInfo)
   }
@@ -396,13 +603,13 @@ function buildWatchlistItems(
   filterKind: string,
   playlistId: string,
   heroBuilders: Map<string, () => HeroItem>,
-  chipInfoByFocusKey: Map<string, ChipInfoRecord>
+  chipInfoByFocusKey: Map<string, ChipInfoRecord>,
+  actionSheet: ActionSheetHandle,
+  onBackdropResolved: (focusKey: string) => void
 ): CardItem[] {
   const kinds: Array<"vod" | "series"> = filterKind === "all" ? ["vod", "series"] : [filterKind as "vod" | "series"]
   const vodRows = (getCached(playlistId, "vod")?.data || []) as CatalogRow[]
   const seriesRows = (getCached(playlistId, "series")?.data || []) as CatalogRow[]
-  const vodById = new Map<number, CatalogRow>(vodRows.map((movie) => [Number(movie.id), movie]))
-  const seriesById = new Map<number, CatalogRow>(seriesRows.map((series) => [Number(series.id), series]))
 
   const rows: Array<{ kind: "vod" | "series"; id: number; ts: number; meta: WatchlistRowMeta }> = []
   for (const kind of kinds) {
@@ -413,8 +620,14 @@ function buildWatchlistItems(
   }
   rows.sort((left, right) => right.ts - left.ts)
 
+  const shown = rows.slice(0, RAIL_ITEM_LIMIT)
+  const wantedIds = (wantedKind: "vod" | "series") =>
+    new Set<number>(shown.filter((row) => row.kind === wantedKind).map((row) => row.id))
+  const vodById = pickRowsById(vodRows, wantedIds("vod"))
+  const seriesById = pickRowsById(seriesRows, wantedIds("series"))
+
   const items: CardItem[] = []
-  for (const row of rows.slice(0, RAIL_ITEM_LIMIT)) {
+  for (const row of shown) {
     const lookup = row.kind === "vod" ? vodById.get(row.id) : seriesById.get(row.id)
     const fallbackKey = row.kind === "vod" ? "list.movieFallback" : "list.seriesFallback"
     const name = row.meta?.name || lookup?.name || t(fallbackKey, { id: row.id })
@@ -432,22 +645,50 @@ function buildWatchlistItems(
       posterUrl,
       meta: metaForCatalogEntry(lookup),
       ariaLabel: t("tv.aria.open", { name }),
+      onLongPress: () =>
+        actionSheet.open(
+          name,
+          buildCatalogMenuActions({ kind: row.kind, id: row.id, name, logo: posterUrl, playlistId, href, includeWatchlist: true })
+        ),
     }
     items.push(item)
-    heroBuilders.set(cardFocusKey(railId, row.kind, row.id), () => ({
-      eyebrow: railTitle,
-      title: name,
-      meta: metaForCatalogEntry(lookup),
-      imageUrl: posterUrl,
-      imageKind: "poster",
-      onActivate: () => {
-        window.location.href = href
-      },
-    }))
+    const watchlistFocusKey = cardFocusKey(railId, row.kind, row.id)
+    heroBuilders.set(watchlistFocusKey, () => {
+      const backdrop = heroBackdropImage(playlistId, row.kind, row.id, posterUrl, watchlistFocusKey, onBackdropResolved)
+      return {
+        eyebrow: railTitle,
+        title: name,
+        meta: metaForCatalogEntry(lookup),
+        imageUrl: backdrop.imageUrl,
+        imageKind: backdrop.imageKind,
+        onActivate: () => {
+          void navigate(href)
+        },
+      }
+    })
     const chipInfo = chipInfoForEntry(row.kind, row.id, playlistId, row.kind === "vod" ? vodRows : seriesRows)
     if (chipInfo) chipInfoByFocusKey.set(cardFocusKey(railId, row.kind, row.id), chipInfo)
   }
   return items
+}
+
+interface NewestEntry {
+  kind: "vod" | "series"
+  row: CatalogRow
+  ts: number
+}
+
+/** Keeps the RAIL_ITEM_LIMIT newest rows in one pass; sorting a 20k catalog for 20 cards was the mount cost. */
+function collectNewest(rows: CatalogRow[], kind: "vod" | "series", newest: NewestEntry[]): void {
+  for (const row of rows) {
+    const ts = row?.added || 0
+    if (!row?.id || ts <= 0) continue
+    if (newest.length === RAIL_ITEM_LIMIT && ts <= newest[newest.length - 1].ts) continue
+    let index = newest.length
+    while (index > 0 && newest[index - 1].ts < ts) index--
+    newest.splice(index, 0, { kind, row, ts })
+    if (newest.length > RAIL_ITEM_LIMIT) newest.pop()
+  }
 }
 
 function buildRecentlyAddedItems(
@@ -456,23 +697,21 @@ function buildRecentlyAddedItems(
   filterKind: string,
   playlistId: string,
   heroBuilders: Map<string, () => HeroItem>,
-  chipInfoByFocusKey: Map<string, ChipInfoRecord>
+  chipInfoByFocusKey: Map<string, ChipInfoRecord>,
+  actionSheet: ActionSheetHandle,
+  onBackdropResolved: (focusKey: string) => void
 ): CardItem[] {
   const wantVod = filterKind === "all" || filterKind === "vod"
   const wantSeries = filterKind === "all" || filterKind === "series"
   const vodRows = wantVod ? ((getCached(playlistId, "vod")?.data || []) as CatalogRow[]) : []
   const seriesRows = wantSeries ? ((getCached(playlistId, "series")?.data || []) as CatalogRow[]) : []
 
-  const merged: Array<{ kind: "vod" | "series"; row: CatalogRow; ts: number }> = [
-    ...vodRows.filter((row) => row?.id && (row.added || 0) > 0).map((row) => ({ kind: "vod" as const, row, ts: row.added || 0 })),
-    ...seriesRows
-      .filter((row) => row?.id && (row.added || 0) > 0)
-      .map((row) => ({ kind: "series" as const, row, ts: row.added || 0 })),
-  ]
-  merged.sort((left, right) => right.ts - left.ts)
+  const newest: Array<{ kind: "vod" | "series"; row: CatalogRow; ts: number }> = []
+  collectNewest(vodRows, "vod", newest)
+  collectNewest(seriesRows, "series", newest)
 
   const items: CardItem[] = []
-  for (const entry of merged.slice(0, RAIL_ITEM_LIMIT)) {
+  for (const entry of newest) {
     const fallbackKey = entry.kind === "vod" ? "list.movieFallback" : "list.seriesFallback"
     const name = entry.row.name || t(fallbackKey, { id: entry.row.id })
     const posterUrl = entry.row.logo || null
@@ -489,18 +728,35 @@ function buildRecentlyAddedItems(
       posterUrl,
       meta: metaForCatalogEntry(entry.row),
       ariaLabel: t("tv.aria.open", { name }),
+      onLongPress: () =>
+        actionSheet.open(
+          name,
+          buildCatalogMenuActions({
+            kind: entry.kind,
+            id: entry.row.id,
+            name,
+            logo: posterUrl,
+            playlistId,
+            href,
+            includeWatchlist: true,
+          })
+        ),
     }
     items.push(item)
-    heroBuilders.set(cardFocusKey(railId, entry.kind, entry.row.id), () => ({
-      eyebrow: railTitle,
-      title: name,
-      meta: metaForCatalogEntry(entry.row),
-      imageUrl: posterUrl,
-      imageKind: "poster",
-      onActivate: () => {
-        window.location.href = href
-      },
-    }))
+    const recentFocusKey = cardFocusKey(railId, entry.kind, entry.row.id)
+    heroBuilders.set(recentFocusKey, () => {
+      const backdrop = heroBackdropImage(playlistId, entry.kind, entry.row.id, posterUrl, recentFocusKey, onBackdropResolved)
+      return {
+        eyebrow: railTitle,
+        title: name,
+        meta: metaForCatalogEntry(entry.row),
+        imageUrl: backdrop.imageUrl,
+        imageKind: backdrop.imageKind,
+        onActivate: () => {
+          void navigate(href)
+        },
+      }
+    })
     const chipInfo = chipInfoForEntry(
       entry.kind,
       Number(entry.row.id),
@@ -517,20 +773,42 @@ function buildItemsForStrip(
   railTitle: string,
   playlistId: string,
   heroBuilders: Map<string, () => HeroItem>,
-  chipInfoByFocusKey: Map<string, ChipInfoRecord>
+  chipInfoByFocusKey: Map<string, ChipInfoRecord>,
+  actionSheet: ActionSheetHandle,
+  onBackdropResolved: (focusKey: string) => void
 ): CardItem[] {
   switch (strip.type) {
     case "continue-watching":
-      return buildContinueWatchingItems(strip.id, railTitle, playlistId, heroBuilders)
+      return buildContinueWatchingItems(strip.id, railTitle, playlistId, heroBuilders, actionSheet, onBackdropResolved)
     case "favorites":
-      return buildFavoritesItems(strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey)
+      return buildFavoritesItems(
+        strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey, actionSheet, onBackdropResolved
+      )
     case "watchlist":
-      return buildWatchlistItems(strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey)
+      return buildWatchlistItems(
+        strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey, actionSheet, onBackdropResolved
+      )
     case "recently-added":
-      return buildRecentlyAddedItems(strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey)
+      return buildRecentlyAddedItems(
+        strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey, actionSheet, onBackdropResolved
+      )
     default:
       return []
   }
+}
+
+function computeStrips(): HubStrip[] {
+  return (getHubStrips() as HubStrip[]).filter((strip) => strip.type !== "because-watched")
+}
+
+// Fisher-Yates, matching the because-watched strip's "randomize once, then cycle" pool philosophy.
+function shuffle<T>(items: T[]): T[] {
+  const shuffled = items.slice()
+  for (let index = shuffled.length - 1; index > 0; index--) {
+    const swapIndex = Math.floor(Math.random() * (index + 1))
+    ;[shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]]
+  }
+  return shuffled
 }
 
 function scheduleIdle(fn: () => void): void {
@@ -552,6 +830,7 @@ const view: TvView = {
 
     const hero = createHero(track)
     const railHandles = new Map<string, RailHandle>()
+    const actionSheet: ActionSheetHandle = createActionSheet("tv-home-actions-dialog")
     let heroBuilders = new Map<string, () => HeroItem>()
     let strips: HubStrip[] = []
     let heroInitialized = false
@@ -562,6 +841,11 @@ const view: TvView = {
     let epgRequested = false
     let warmupScheduled = false
     let initialFocusApplied = false
+    let heroRotationPool: string[] = []
+    let heroRotationIndex = -1
+    let heroRotationSeeded = false
+    let heroRotationTimer: ReturnType<typeof setInterval> | null = null
+    let isRailCardFocused = false
 
     // Async data lands after the shell's mount-time restoreFocus already ran; grab focus once ourselves.
     function ensureInitialFocus(): void {
@@ -591,18 +875,58 @@ const view: TvView = {
       if (builder) hero.show(builder())
     }
 
+    // A lazy backdrop fetch landing after focus moved elsewhere must not repaint the hero.
+    function onBackdropResolved(focusKey: string): void {
+      if (destroyed || lastFocusKey !== focusKey) return
+      updateHeroForFocusKey(focusKey)
+    }
+
+    // Idle-content rotation: ticks only while nothing in the rails holds focus (initial
+    // mount, focus on the nav rail, focus on the hero itself). A focused rail card pauses
+    // it and drives the hero itself, same as before this rotation existed.
+    function tickHeroRotation(): void {
+      if (isRailCardFocused || heroRotationPool.length < 2) return
+      for (let attempt = 0; attempt < heroRotationPool.length; attempt++) {
+        heroRotationIndex = (heroRotationIndex + 1) % heroRotationPool.length
+        const key = heroRotationPool[heroRotationIndex]
+        if (heroBuilders.has(key)) {
+          updateHeroForFocusKey(key)
+          return
+        }
+      }
+    }
+
+    function stopHeroRotation(): void {
+      if (!heroRotationTimer) return
+      clearInterval(heroRotationTimer)
+      heroRotationTimer = null
+    }
+
+    function startHeroRotation(): void {
+      if (heroRotationTimer || heroRotationPool.length < 2) return
+      heroRotationTimer = setInterval(tickHeroRotation, HERO_ROTATION_INTERVAL_MS)
+    }
+
+    function applyHeroRotationState(): void {
+      if (isRailCardFocused) stopHeroRotation()
+      else startHeroRotation()
+    }
+
     const onFocusInDebounced = debounce((focusKeyEl: HTMLElement) => {
       updateHeroForFocusKey(focusKeyEl.dataset.focusKey || "")
     }, HERO_FOCUS_DEBOUNCE_MS)
 
     function onFocusIn(event: FocusEvent): void {
       const target = event.target
-      if (!(target instanceof HTMLElement)) return
-      const focusKeyEl = target.closest<HTMLElement>("[data-focus-key]")
-      // Focusing the hero itself must never change what it shows.
-      if (focusKeyEl && focusKeyEl.dataset.focusKey !== HERO_FOCUS_KEY) onFocusInDebounced(focusKeyEl)
+      const focusKeyEl = target instanceof HTMLElement ? target.closest<HTMLElement>("[data-focus-key]") : null
+      // Focusing the hero itself, or anything outside the rail track (e.g. the nav rail),
+      // counts as idle - only a focused rail card drives the hero directly.
+      const isTrackCard = !!focusKeyEl && track.contains(focusKeyEl) && focusKeyEl.dataset.focusKey !== HERO_FOCUS_KEY
+      isRailCardFocused = isTrackCard
+      applyHeroRotationState()
+      if (isTrackCard) onFocusInDebounced(focusKeyEl!)
     }
-    track.addEventListener("focusin", onFocusIn)
+    document.addEventListener("focusin", onFocusIn)
 
     const offsetPx = Math.round(root.clientHeight * VERTICAL_OFFSET_RATIO) || 240
     const unregisterKeepInView = keepFocusedInView(scroller, "y", offsetPx)
@@ -653,6 +977,7 @@ const view: TvView = {
     async function rebuildAllRails(): Promise<void> {
       if (destroyed || !activePlaylistId) return
       const nextHeroBuilders = new Map<string, () => HeroItem>()
+      const rotationCandidates: string[] = []
       let firstFocusKey: string | null = null
 
       for (const strip of strips) {
@@ -661,17 +986,36 @@ const view: TvView = {
         const titleKey = RAIL_TITLE_KEY[strip.id]
         const railTitle = titleKey ? t(titleKey) : strip.id
         const chipInfoByFocusKey = new Map<string, ChipInfoRecord>()
-        const items = buildItemsForStrip(strip, railTitle, activePlaylistId, nextHeroBuilders, chipInfoByFocusKey)
+        const items = buildItemsForStrip(
+          strip, railTitle, activePlaylistId, nextHeroBuilders, chipInfoByFocusKey, actionSheet, onBackdropResolved
+        )
         rail.setItems(items)
         decorateRailChips(rail, items, chipInfoByFocusKey)
         if (items.length && !firstFocusKey) {
           firstFocusKey = cardFocusKey(strip.id, items[0].kind, items[0].id)
+        }
+        // Hero rotation pool: continue-watching's movies/episodes (its newest entry too,
+        // even when that's a live channel - the "last watched channel" exception) plus
+        // whatever's in the recently-added rail(s). No other live channels ever qualify.
+        if (strip.type === "continue-watching") {
+          items.forEach((item, index) => {
+            if (item.kind !== "live" || index === 0) rotationCandidates.push(cardFocusKey(strip.id, item.kind, item.id))
+          })
+        } else if (strip.type === "recently-added") {
+          for (const item of items) rotationCandidates.push(cardFocusKey(strip.id, item.kind, item.id))
         }
       }
 
       heroBuilders = nextHeroBuilders
       applyAutofocusMarker(firstFocusKey)
       ensureInitialFocus()
+
+      if (!heroRotationSeeded && rotationCandidates.length) {
+        heroRotationPool = shuffle(rotationCandidates)
+        heroRotationIndex = -1
+        heroRotationSeeded = true
+      }
+      applyHeroRotationState()
 
       if (!heroInitialized) {
         heroInitialized = true
@@ -697,7 +1041,7 @@ const view: TvView = {
     }
 
     function onHubStripsChanged(): void {
-      strips = (getHubStrips() as HubStrip[]).filter((strip) => strip.type !== "because-watched")
+      strips = computeStrips()
       initRailSkeletons()
       void rebuildAllRails()
     }
@@ -711,6 +1055,7 @@ const view: TvView = {
     document.addEventListener("xt:favorites-changed", onCatalogChanged)
     document.addEventListener("xt:watchlist-changed", onCatalogChanged)
     document.addEventListener("xt:progress-changed", onCatalogChanged)
+    document.addEventListener("xt:recents-changed", onCatalogChanged)
     document.addEventListener(LANGUAGE_GROUPING_EVENT, onCatalogChanged)
     document.addEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
     document.addEventListener(EPG_LOADED_EVENT, onCatalogChanged)
@@ -740,20 +1085,45 @@ const view: TvView = {
       await ensurePrefsLoaded()
       if (destroyed) return
 
-      strips = (getHubStrips() as HubStrip[]).filter((strip) => strip.type !== "because-watched")
+      strips = computeStrips()
       initRailSkeletons()
 
+      // catalog.js's own warmup events never cover this step: a cold-memory,
+      // warm-IndexedDB reload spends its slow time right here, inside hydrateCache,
+      // before warmupActive (scheduled idle, after first paint) ever runs.
+      const catalogWasHot =
+        !!getCached(activePlaylistId, "vod") &&
+        !!getCached(activePlaylistId, "series") &&
+        (!!getCached(activePlaylistId, "live") || !!getCached(activePlaylistId, "m3u"))
+      if (!catalogWasHot) {
+        document.dispatchEvent(
+          new CustomEvent(CATALOG_WARMING_START_EVENT, {
+            detail: { playlistId: activePlaylistId, kinds: ["live", "vod", "series"] },
+          })
+        )
+      }
+      const reportHydrated = (kind: string) => {
+        if (catalogWasHot) return
+        document.dispatchEvent(
+          new CustomEvent(CATALOG_WARMING_PROGRESS_EVENT, {
+            detail: { playlistId: activePlaylistId, kind, status: "done" },
+          })
+        )
+      }
+
       await Promise.allSettled([
-        hydrateCache(activePlaylistId, "vod"),
-        hydrateCache(activePlaylistId, "series"),
-        hydrateCache(activePlaylistId, "live"),
-        hydrateCache(activePlaylistId, "m3u"),
+        hydrateCache(activePlaylistId, "vod").finally(() => reportHydrated("vod")),
+        hydrateCache(activePlaylistId, "series").finally(() => reportHydrated("series")),
+        Promise.allSettled([hydrateCache(activePlaylistId, "live"), hydrateCache(activePlaylistId, "m3u")]).finally(() =>
+          reportHydrated("live")
+        ),
       ])
       if (destroyed) return
       await ensureOverridesReady()
       if (destroyed) return
 
       await rebuildAllRails()
+      if (!catalogWasHot) document.dispatchEvent(new CustomEvent(CATALOG_WARMED_EVENT, { detail: { playlistId: activePlaylistId } }))
       scheduleWarmup()
     }
 
@@ -765,15 +1135,18 @@ const view: TvView = {
       document.removeEventListener("xt:favorites-changed", onCatalogChanged)
       document.removeEventListener("xt:watchlist-changed", onCatalogChanged)
       document.removeEventListener("xt:progress-changed", onCatalogChanged)
+      document.removeEventListener("xt:recents-changed", onCatalogChanged)
       document.removeEventListener(LANGUAGE_GROUPING_EVENT, onCatalogChanged)
       document.removeEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
       document.removeEventListener(EPG_LOADED_EVENT, onCatalogChanged)
       document.removeEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
       document.removeEventListener(HUB_STRIPS_EVENT, onHubStripsChanged)
       document.removeEventListener(LOCALE_EVENT, onLocaleChanged)
-      track.removeEventListener("focusin", onFocusIn)
+      document.removeEventListener("focusin", onFocusIn)
+      stopHeroRotation()
       destroyRails()
       hero.destroy()
+      actionSheet.destroy()
       unregisterKeepInView()
       scroller.remove()
     }

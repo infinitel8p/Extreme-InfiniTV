@@ -18,10 +18,12 @@ export interface HeroItem {
   meta: string
   progressPercent?: number | null
   imageUrl?: string | null
-  imageKind?: "poster" | "logo"
+  imageKind?: "poster" | "logo" | "backdrop"
   cta?: HeroCta
   /** Enter/OK on the hero itself when there's no `cta` (poster items navigate, live items tune in). */
   onActivate?: () => void
+  /** Accessible name for the activation button; falls back to `title` when absent. */
+  ariaLabel?: string
 }
 
 export interface HeroHandle {
@@ -33,7 +35,7 @@ export interface HeroHandle {
 export function createHero(root: HTMLElement): HeroHandle {
   const section = document.createElement("section")
   section.className =
-    "relative isolate h-[40vh] min-h-[13rem] w-full shrink-0 overflow-hidden rounded-2xl bg-black/40"
+    "relative isolate h-[40vh] min-h-[13rem] w-full shrink-0 overflow-hidden rounded-2xl bg-black/40 tv-edge-mask"
 
   const backdropWrap = document.createElement("div")
   backdropWrap.className = "absolute inset-0"
@@ -74,7 +76,7 @@ export function createHero(root: HTMLElement): HeroHandle {
 
   const unregisterHeroSection = registerFocusSection(HERO_FOCUS_SECTION_ID, section)
 
-  function setBackdrop(imageUrl: string | null | undefined, imageKind: "poster" | "logo" | undefined): void {
+  function setBackdrop(imageUrl: string | null | undefined, imageKind: "poster" | "logo" | "backdrop" | undefined): void {
     backdropWrap.replaceChildren()
     if (!imageUrl) return
     if (imageKind === "logo") {
@@ -84,9 +86,10 @@ export function createHero(root: HTMLElement): HeroHandle {
       blurred.loading = "lazy"
       blurred.decoding = "async"
       blurred.className =
-        "absolute inset-0 h-full w-full scale-110 object-cover opacity-40 blur-3xl saturate-150"
+        "absolute inset-0 h-full w-full scale-125 object-cover opacity-40 blur-3xl saturate-150"
       backdropWrap.appendChild(blurred)
-      mountCachedImage(blurred, imageUrl, "logo")
+      // "logo" cache class (128px) stretched full-band looked blocky; blur hides "poster"'s softness fine.
+      mountCachedImage(blurred, imageUrl, "poster")
 
       const contained = document.createElement("img")
       contained.alt = ""
@@ -98,13 +101,15 @@ export function createHero(root: HTMLElement): HeroHandle {
       mountCachedImage(contained, imageUrl, "logo")
       return
     }
+    // Real backdrop art is a landscape source; caching it at the poster's 576px
+    // cap would blur it stretched across the full-width band.
     const img = document.createElement("img")
     img.alt = ""
     img.loading = "lazy"
     img.decoding = "async"
     img.className = "absolute inset-0 h-full w-full object-cover"
     backdropWrap.appendChild(img)
-    mountCachedImage(img, imageUrl, "poster")
+    mountCachedImage(img, imageUrl, imageKind === "backdrop" ? "backdrop" : "poster")
   }
 
   function setCta(cta: HeroCta | undefined): void {
@@ -131,7 +136,7 @@ export function createHero(root: HTMLElement): HeroHandle {
     }
     const onActivate = item.onActivate
     activateButton.hidden = false
-    activateButton.setAttribute("aria-label", item.title)
+    activateButton.setAttribute("aria-label", item.ariaLabel || item.title)
     activateButton.onclick = () => onActivate()
   }
 

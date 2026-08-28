@@ -1,6 +1,6 @@
 // Android TV movie detail view (route: /tv/movies/detail?id=<vod_id>).
 
-import type { TvView, TvViewContext } from "@/scripts/tv/router"
+import { nextPaint, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
 import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
 import { getCached, setCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
@@ -40,8 +40,8 @@ import { ICON_PLAYER_PLAY, ICON_DOWNLOAD } from "@/scripts/lib/icons"
 import { toast } from "@/scripts/lib/toast"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog"
 import { log } from "@/scripts/lib/log"
-import { renderLanguagePills } from "@/scripts/lib/detail-chrome.ts"
-import { createGroupingIndexMemo, type GroupableEntry } from "@/scripts/lib/language-groups.ts"
+import { renderLanguagePills, type GroupingIndexLookup } from "@/scripts/lib/detail-chrome.ts"
+import { getSharedGroupingIndex } from "@/scripts/lib/language-groups.ts"
 import { registerFocusSection } from "@/scripts/tv/focus"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -104,7 +104,7 @@ const view: TvView = {
       LANGUAGE_VARIANTS_FOCUS_SECTION_ID,
       languageVariantsRow
     )
-    const getGroupingIndexFor = createGroupingIndexMemo()
+    const getGroupingIndexFor: GroupingIndexLookup = (_playlistId, catalog) => getSharedGroupingIndex(catalog)
 
     const similarRail = createRail({ title: t("tv.detail.similar"), focusSectionId: SIMILAR_FOCUS_SECTION_ID })
     chrome.sections.appendChild(similarRail.el)
@@ -391,18 +391,12 @@ const view: TvView = {
     function renderLanguageVariants(catalog: CatalogRow[]): void {
       lastLanguageVariantsCatalog = catalog
       if (!movie) return
-      const groupable: GroupableEntry[] = catalog.map((row) => ({
-        id: Number(row.id),
-        name: row.name,
-        year: row.year || undefined,
-        tmdb: row.tmdb ?? null,
-      }))
       renderLanguagePills({
         langsEl: languageVariantsRow,
         item: { id: Number(movie.id), name: movie.name },
         kind: "vod",
         activePlaylistId,
-        catalog: groupable,
+        catalog,
         getGroupingIndexFor,
         detailHrefBase: "/tv/movies/detail",
       })
@@ -533,10 +527,13 @@ const view: TvView = {
       chrome.setSkeleton(false)
       renderHero()
       renderActions()
-      renderLanguageVariants(cachedCatalog)
-      void loadSimilar()
 
       if (wantsAutoplay) void startPlayback(0)
+
+      // Language pills and the similar rail both walk the whole catalog; the hero must be on screen first.
+      void nextPaint().then(() => {
+        if (!destroyed) void loadSimilar()
+      })
 
       const requestId = ++enrichRequestId
       await hydrateCache(activePlaylistId, `vod_info_${movieId}`)

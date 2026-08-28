@@ -1,6 +1,6 @@
 // Android TV series detail view (route: /tv/series/detail?id=<series_id>&season=&episode=).
 
-import type { TvView, TvViewContext } from "@/scripts/tv/router"
+import { nextPaint, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
 import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
 import { getCached } from "@/scripts/lib/cache.js"
@@ -53,8 +53,8 @@ import { ICON_PLAYER_PLAY, ICON_DOWNLOAD, ICON_CHECK } from "@/scripts/lib/icons
 import { toast } from "@/scripts/lib/toast"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog"
 import { log } from "@/scripts/lib/log"
-import { renderLanguagePills } from "@/scripts/lib/detail-chrome.ts"
-import { createGroupingIndexMemo, type GroupableEntry } from "@/scripts/lib/language-groups.ts"
+import { renderLanguagePills, type GroupingIndexLookup } from "@/scripts/lib/detail-chrome.ts"
+import { getSharedGroupingIndex } from "@/scripts/lib/language-groups.ts"
 
 const RESUME_MIN_SECONDS = 30
 const SIMILAR_LIMIT = 20
@@ -133,7 +133,7 @@ const view: TvView = {
     languageVariantsRow.hidden = true
     languageVariantsRow.setAttribute("aria-label", t("detail.lang.title"))
     languageVariantsRow.className = "flex flex-wrap gap-2"
-    const getGroupingIndexFor = createGroupingIndexMemo()
+    const getGroupingIndexFor: GroupingIndexLookup = (_playlistId, catalog) => getSharedGroupingIndex(catalog)
 
     const seasonsSection = document.createElement("section")
     seasonsSection.id = SEASONS_FOCUS_SECTION_ID
@@ -655,18 +655,12 @@ const view: TvView = {
     function renderLanguageVariants(catalog: CatalogRow[]): void {
       lastLanguageVariantsCatalog = catalog
       if (!series) return
-      const groupable: GroupableEntry[] = catalog.map((row) => ({
-        id: Number(row.id),
-        name: row.name,
-        year: row.year || undefined,
-        tmdb: row.tmdb ?? null,
-      }))
       renderLanguagePills({
         langsEl: languageVariantsRow,
         item: { id: Number(series.id), name: series.name },
         kind: "series",
         activePlaylistId,
-        catalog: groupable,
+        catalog,
         getGroupingIndexFor,
         detailHrefBase: "/tv/series/detail",
       })
@@ -800,9 +794,12 @@ const view: TvView = {
 
       chrome.setSkeleton(false)
       renderHero()
-      renderLanguageVariants(cachedCatalog)
-      void loadSimilar()
       void refreshNextUp()
+
+      // Language pills and the similar rail both walk the whole catalog; the hero must be on screen first.
+      void nextPaint().then(() => {
+        if (!destroyed) void loadSimilar()
+      })
 
       const requestId = ++enrichRequestId
       const cachedInfo = getCached(activePlaylistId, `series_info_${seriesId}`)?.data

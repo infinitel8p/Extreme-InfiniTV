@@ -353,7 +353,15 @@ async function handleVisible(img: HTMLImageElement, url: string, kind: ImgKind):
     return
   }
   img.src = url
-  scheduleBackgroundFill(cacheKey, url, kind, () => img.isConnected)
+  // WeakRef, not the element: a queued fill can wait out several navigations, and a
+  // captured <img> pins the whole detached view it belongs to until the queue drains.
+  const imgRef = typeof WeakRef === "function" ? new WeakRef(img) : null
+  scheduleBackgroundFill(
+    cacheKey,
+    url,
+    kind,
+    imgRef ? () => imgRef.deref()?.isConnected === true : () => img.isConnected
+  )
 }
 
 /** Fetch (or serve cached) `url`, downscale to `kind`'s bucket, and mount it once visible. */
@@ -379,6 +387,25 @@ export function mountCachedImage(img: HTMLImageElement, url: string, kind: ImgKi
   }
   pendingParams.set(img, { url, kind })
   observer.observe(img)
+}
+
+/**
+ * Detaches every cached <img> under `root` from the shared observer and drops its src.
+ * An observed target is a strong root, so one unreleased <img> pins its whole detached tree.
+ */
+export function releaseCachedImages(root: ParentNode | HTMLImageElement | null | undefined): void {
+  if (!root) return
+  const release = (img: HTMLImageElement): void => {
+    sharedObserver?.unobserve(img)
+    pendingParams.delete(img)
+    img.removeAttribute("src")
+    img.removeAttribute("srcset")
+  }
+  if (root instanceof HTMLImageElement) {
+    release(root)
+    return
+  }
+  for (const img of root.querySelectorAll<HTMLImageElement>("img")) release(img)
 }
 
 export interface CachedImgParams {

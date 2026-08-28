@@ -1,7 +1,8 @@
 // Live TV: groups | channels | programme guide, three spatial-nav columns.
 import type { TvView, TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n"
-import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView, refreshKeepInView, remPx } from "@/scripts/tv/focus"
+import { releaseCachedImages } from "@/scripts/lib/img-cache.ts"
 import { getActiveEntry } from "@/scripts/lib/creds.js"
 import { resolvePlaylistCreds } from "@/scripts/lib/tv-cast-live.js"
 import { readCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
@@ -9,6 +10,8 @@ import { ensureLive } from "@/scripts/lib/catalog.js"
 import {
   ensureLoaded as ensurePreferencesLoaded,
   getFavorites,
+  isFavorite,
+  toggleFavorite,
   getHiddenCategories,
   getAllowedCategories,
   getCategoryMode,
@@ -22,6 +25,8 @@ import { openProgrammeDialog } from "@/scripts/lib/programme-dialog.js"
 import { debounce } from "@/scripts/lib/debounce"
 import { ICON_SEARCH } from "@/scripts/lib/icons.js"
 import { playLive, playCatchup } from "@/scripts/tv/playback"
+import { attachLongPress, type LongPressHandle } from "@/scripts/tv/long-press.ts"
+import { createActionSheet, type ActionSheetHandle } from "@/scripts/tv/ui/action-sheet.ts"
 import {
   type LiveChannel,
   type GuideStatus,
@@ -35,6 +40,9 @@ import {
 } from "@/scripts/tv/ui/live-row"
 
 const RENDER_CHUNK = 40
+// Rows past this are dropped from the DOM as the D-pad walks on; a 10k-channel group
+// would otherwise end up fully mounted (~25 nodes plus 2 logo <img> per row).
+const MAX_RENDERED_ROWS = 160
 const SEARCH_DEBOUNCE_MS = 140
 const GUIDE_DEBOUNCE_MS = 120
 const TICK_INTERVAL_MS = 60_000
@@ -42,6 +50,8 @@ const SKELETON_ROW_COUNT = 8
 const LAST_CHANNEL_KEY = "xt_tv_last_channel"
 const GROUPS_KEEP_IN_VIEW_REM = 7.5
 const GUIDE_KEEP_IN_VIEW_REM = 8.75
+const LONG_PRESS_HOLD_MS = 650
+const FAVORITES_CHANGED_EVENT = "xt:favorites-changed"
 // Below this the "next" title column would crowd out the channel name; live-row.ts owns the CSS toggle.
 const NEXT_TITLE_MIN_COLUMN_REM = 26
 
@@ -53,6 +63,7 @@ interface ViewState {
   activeGroupKey: string
   displayed: LiveChannel[]
   searchQuery: string
+  firstRendered: number
   rendered: number
   playingChannelId: string | null
   guideChannel: LiveChannel | null
@@ -133,6 +144,7 @@ const view: TvView = {
       activeGroupKey: "",
       displayed: [],
       searchQuery: "",
+      firstRendered: 0,
       rendered: 0,
       playingChannelId: null,
       guideChannel: null,
@@ -143,6 +155,8 @@ const view: TvView = {
     let refs: Refs | null = null
     let observer: IntersectionObserver | null = null
     let tickTimer: ReturnType<typeof setInterval> | null = null
+    const actionSheet: ActionSheetHandle = createActionSheet("tv-live-channel-actions-dialog")
+    let longPress: LongPressHandle | null = null
 
     try {
       state.playingChannelId = sessionStorage.getItem(LAST_CHANNEL_KEY)
@@ -164,40 +178,86 @@ const view: TvView = {
       if (progressFill) progressFill.style.width = current ? `${current.progress * 100}%` : "0%"
     }
 
+    function buildRowsFragment(start: number, end: number): DocumentFragment {
+      const programmes = getProgrammesSync(state.playlistId)?.programmes ?? null
+      const fragment = document.createDocumentFragment()
+      for (let index = start; index < end; index++) {
+        const channel = state.displayed[index]
+        const row = buildChannelRow(channel, index, String(channel.id) === state.playingChannelId, channelFavorite(channel))
+        paintChannelRow(row, channel, programmes)
+        fragment.appendChild(row)
+      }
+      return fragment
+    }
+
+    function dropRow(row: HTMLElement): void {
+      releaseCachedImages(row)
+      row.remove()
+    }
+
+    function trimRenderedRows(from: "head" | "tail"): void {
+      if (!refs) return
+      let excess = state.rendered - state.firstRendered - MAX_RENDERED_ROWS
+      if (excess <= 0) return
+      const rows = Array.from(refs.channelsTrack.querySelectorAll<HTMLElement>("[data-channel-id]"))
+      const ordered = from === "head" ? rows : rows.reverse()
+      for (const row of ordered) {
+        if (excess <= 0 || row.contains(document.activeElement)) break
+        dropRow(row)
+        excess--
+        if (from === "head") state.firstRendered++
+        else state.rendered--
+      }
+      refreshKeepInView(refs.channelsScroller)
+    }
+
+    function observeSentinel(): void {
+      observer?.disconnect()
+      if (!refs || state.rendered >= state.displayed.length) return
+      const sentinel = refs.channelsTrack.querySelector('[data-role="channels-sentinel"]')
+      if (sentinel) observer?.observe(sentinel)
+    }
+
     function renderChannelChunk(): void {
       if (!refs) return
       const items = state.displayed
       if (state.rendered >= items.length) return
-      const programmes = getProgrammesSync(state.playlistId)?.programmes ?? null
-      const fragment = document.createDocumentFragment()
       const end = Math.min(state.rendered + RENDER_CHUNK, items.length)
-      for (let index = state.rendered; index < end; index++) {
-        const channel = items[index]
-        const row = buildChannelRow(channel, index, String(channel.id) === state.playingChannelId)
-        paintChannelRow(row, channel, programmes)
-        fragment.appendChild(row)
-      }
+      const fragment = buildRowsFragment(state.rendered, end)
       state.rendered = end
       const sentinel = refs.channelsTrack.querySelector('[data-role="channels-sentinel"]')
       if (sentinel) refs.channelsTrack.insertBefore(fragment, sentinel)
       else refs.channelsTrack.appendChild(fragment)
       if (state.rendered >= items.length) sentinel?.remove()
-      observer?.disconnect()
-      if (refs && state.rendered < items.length) {
-        const nextSentinel = refs.channelsTrack.querySelector('[data-role="channels-sentinel"]')
-        if (nextSentinel) observer?.observe(nextSentinel)
-      }
+      trimRenderedRows("head")
+      observeSentinel()
     }
 
-    function renderChannelList(items: LiveChannel[]): void {
+    function renderPreviousChunk(): void {
+      if (!refs || state.firstRendered <= 0) return
+      const start = Math.max(0, state.firstRendered - RENDER_CHUNK)
+      const fragment = buildRowsFragment(start, state.firstRendered)
+      state.firstRendered = start
+      refs.channelsTrack.insertBefore(fragment, refs.channelsTrack.firstChild)
+      trimRenderedRows("tail")
+      refreshKeepInView(refs.channelsScroller)
+      window.SpatialNavigation?.makeFocusable?.()
+    }
+
+    function renderChannelList(items: LiveChannel[], startIndex = 0): void {
       if (!refs) return
       state.displayed = items
-      state.rendered = 0
+      const target = Math.max(0, Math.min(startIndex, Math.max(0, items.length - 1)))
+      state.firstRendered = Math.max(0, target - Math.floor(MAX_RENDERED_ROWS / 2))
+      state.rendered = state.firstRendered
       const sentinel = document.createElement("div")
       sentinel.dataset.role = "channels-sentinel"
       sentinel.className = "h-4"
+      releaseCachedImages(refs.channelsTrack)
       refs.channelsTrack.replaceChildren(sentinel)
-      renderChannelChunk()
+      do {
+        renderChannelChunk()
+      } while (state.rendered <= target && state.rendered < items.length)
       refs.channelsScroller.scrollTop = 0
       refs.channelsStatus.classList.toggle("hidden", items.length > 0)
       refs.channelsStatus.textContent = items.length
@@ -260,6 +320,7 @@ const view: TvView = {
     function renderGuide(channel: LiveChannel | null): void {
       if (!refs) return
       state.guideChannel = channel
+      releaseCachedImages(refs.guideTrack)
       refs.guideTrack.replaceChildren()
       if (!channel) return
 
@@ -274,7 +335,11 @@ const view: TvView = {
         : null
 
       const status: GuideStatus = !epgState ? "loading" : rows.length ? "ready" : "empty"
-      refs.guideTrack.appendChild(buildGuideHero(channel, status, currentFull, nowNext.current?.progress ?? 0))
+      refs.guideTrack.appendChild(
+        buildGuideHero(channel, status, currentFull, nowNext.current?.progress ?? 0, channelFavorite(channel), () =>
+          toggleChannelFavorite(channel)
+        )
+      )
 
       if (status === "loading") {
         const skeletons = document.createDocumentFragment()
@@ -316,6 +381,45 @@ const view: TvView = {
       )
     }
 
+    function channelFavorite(channel: LiveChannel): boolean {
+      return state.playlistId ? isFavorite(state.playlistId, "live", channel.id) : false
+    }
+
+    function toggleChannelFavorite(channel: LiveChannel): void {
+      if (!state.playlistId) return
+      toggleFavorite(state.playlistId, "live", channel.id, {
+        name: channel.name || "",
+        logo: channel.logo || null,
+      })
+    }
+
+    function applyFavoriteChange(channelId: string, favorite: boolean): void {
+      if (!refs) return
+      const row = refs.channelsTrack.querySelector<HTMLElement>(`[data-channel-id="${CSS.escape(channelId)}"]`)
+      row?.querySelector<HTMLElement>('[data-role="fav"]')?.classList.toggle("hidden", !favorite)
+      if (state.guideChannel && String(state.guideChannel.id) === channelId) {
+        renderGuide(state.guideChannel)
+        refs.guideTrack.querySelector<HTMLElement>(`[data-focus-key="guide-fav:${channelId}"]`)?.focus()
+      }
+    }
+
+    function onFavoritesChangedEvent(event: Event): void {
+      const detail = (event as CustomEvent).detail
+      if (!detail || detail.playlistId !== state.playlistId || detail.kind !== "live") return
+      applyFavoriteChange(String(detail.id), !!detail.isFav)
+    }
+
+    function openChannelActionSheet(channel: LiveChannel): void {
+      const favorite = channelFavorite(channel)
+      actionSheet.open(channel.name, [
+        { label: t("stream.menu.play"), onSelect: () => activateChannel(channel) },
+        {
+          label: t(favorite ? "list.menu.favoriteRemove" : "list.menu.favoriteAdd"),
+          onSelect: () => toggleChannelFavorite(channel),
+        },
+      ])
+    }
+
     const runSearch = debounce((query: string) => {
       state.searchQuery = query
       if (!query) {
@@ -331,27 +435,23 @@ const view: TvView = {
       if (target?.dataset.groupKey) selectGroup(target.dataset.groupKey, { focus: true })
     }
 
-    function onChannelsClick(event: Event): void {
-      const target = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-channel-id]")
-      const channelId = target?.dataset.channelId
-      const channel = channelId ? state.channelById.get(channelId) : null
-      if (channel) activateChannel(channel)
-    }
-
     function onChannelsFocusIn(event: FocusEvent): void {
       if (!refs) return
       const row = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-channel-id]")
       if (!row) return
       const rows = refs.channelsTrack.querySelectorAll("[data-channel-id]")
       if (rows[rows.length - 1] === row) renderChannelChunk()
+      else if (rows[0] === row) renderPreviousChunk()
       if (row.dataset.channelId) scheduleGuideUpdate(row.dataset.channelId)
     }
 
     function focusChannelRow(channelId: string): void {
       if (!refs) return
       let row = refs.channelsTrack.querySelector<HTMLElement>(`[data-channel-id="${CSS.escape(channelId)}"]`)
-      while (!row && state.rendered < state.displayed.length) {
-        renderChannelChunk()
+      if (!row) {
+        const index = state.displayed.findIndex((candidate) => String(candidate.id) === channelId)
+        if (index < 0) return
+        renderChannelList(state.displayed, index)
         row = refs.channelsTrack.querySelector<HTMLElement>(`[data-channel-id="${CSS.escape(channelId)}"]`)
       }
       row?.focus()
@@ -492,7 +592,14 @@ const view: TvView = {
       }
 
       refs.groupsTrack.addEventListener("click", onGroupsClick)
-      refs.channelsTrack.addEventListener("click", onChannelsClick)
+      longPress = attachLongPress<LiveChannel>({
+        container: refs.channelsTrack,
+        targetSelector: "[data-channel-id]",
+        resolveTarget: (row) => (row.dataset.channelId ? (state.channelById.get(row.dataset.channelId) ?? null) : null),
+        onActivate: activateChannel,
+        onLongPress: openChannelActionSheet,
+        holdMs: LONG_PRESS_HOLD_MS,
+      })
       refs.channelsScroller.addEventListener("focusin", onChannelsFocusIn)
       refs.search.addEventListener("input", () => runSearch(refs!.search.value.trim()))
       refs.search.addEventListener("keydown", (event) => {
@@ -506,6 +613,7 @@ const view: TvView = {
       document.addEventListener(EPG_LOADED_EVENT, onEpgLoaded)
       document.addEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
       document.addEventListener(LOCALE_EVENT, applyLocale)
+      document.addEventListener(FAVORITES_CHANGED_EVENT, onFavoritesChangedEvent)
       tickTimer = setInterval(tick, TICK_INTERVAL_MS)
     }
 
@@ -568,12 +676,20 @@ const view: TvView = {
     return () => {
       state.destroyed = true
       if (tickTimer) clearInterval(tickTimer)
+      longPress?.destroy()
       observer?.disconnect()
       document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
       document.removeEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
       document.removeEventListener(LOCALE_EVENT, applyLocale)
+      document.removeEventListener(FAVORITES_CHANGED_EVENT, onFavoritesChangedEvent)
       for (const unsub of unsubs) unsub()
+      actionSheet.destroy()
+      releaseCachedImages(root)
       root.replaceChildren()
+      state.channels = []
+      state.channelById = new Map()
+      state.groups = []
+      state.displayed = []
     }
   },
 }

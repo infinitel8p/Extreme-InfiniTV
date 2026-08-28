@@ -48,7 +48,7 @@ export interface FilterBarHandle {
 let optionsDialog: HTMLDialogElement | null = null
 
 function ensureOptionsDialog(): HTMLDialogElement {
-  if (optionsDialog) return optionsDialog
+  if (optionsDialog?.isConnected) return optionsDialog
   const dialog = document.createElement("dialog")
   dialog.id = "tv-filter-options-dialog"
   dialog.className =
