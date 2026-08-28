@@ -5,6 +5,7 @@ import { getEffectiveReceiverDeviceName, getReceiverEngine, getReceiverId } from
 import { applyStreamHeaders } from "@/scripts/lib/stream-headers"
 import { validateCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
 import { t, initI18n } from "@/scripts/lib/i18n.js"
+import { suppressLaunchChime } from "@/scripts/lib/ui-sounds"
 import { log, redactUrl } from "@/scripts/lib/log.js"
 import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
 import { getActiveEntry } from "@/scripts/lib/creds.js"
@@ -40,6 +41,10 @@ import {
 import { advertiseReceiver } from "@/scripts/lib/receiver-discovery.js"
 
 void initI18n()
+
+// Reaching the receiver screen already counts as the app being up, so a later
+// exit landing on /tv must not replay the boot chime.
+suppressLaunchChime()
 
 const isKioskBuild = import.meta.env.PUBLIC_APP_MODE === "receiver"
 

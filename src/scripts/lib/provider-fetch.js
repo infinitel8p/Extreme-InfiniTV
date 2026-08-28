@@ -46,6 +46,27 @@ function timeoutReason() {
   return new DOMException("The operation timed out.", "TimeoutError")
 }
 
+// plugin-http cancels the Rust body from its own abort listener without catching the invoke, so our
+// request timeout firing after a drained body rejects for a resource id Rust had already freed.
+const PLUGIN_FREED_RESOURCE = /^the resource id \d+ is invalid\.?$/i
+
+export function isPluginCleanupNoise(reason) {
+  const message = typeof reason === "string" ? reason : String(reason?.message ?? "")
+  return PLUGIN_FREED_RESOURCE.test(message.trim())
+}
+
+let cleanupNoiseFilterInstalled = false
+function installCleanupNoiseFilter() {
+  if (cleanupNoiseFilterInstalled || !isTauri || typeof window === "undefined") return
+  cleanupNoiseFilterInstalled = true
+  window.addEventListener("unhandledrejection", (event) => {
+    if (!isPluginCleanupNoise(event.reason)) return
+    event.preventDefault()
+    log.log("[xt:net] ignored plugin-http cleanup rejection:", String(event.reason?.message || event.reason))
+  })
+}
+installCleanupNoiseFilter()
+
 function asAbortError(error, signal) {
   if (typeof DOMException === "undefined") return error
   if (error instanceof DOMException) return error

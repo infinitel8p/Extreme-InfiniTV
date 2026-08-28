@@ -132,8 +132,12 @@ const FAILURE_MESSAGE_KEYS: Partial<Record<StartFailureKind, string>> = {
 const DEAD_VIDEO_CHECK_MS = 6000
 const DEAD_VIDEO_RECHECK_MS = 4000
 const DEAD_VIDEO_MIN_PLAYED_S = 3
-// A descriptor that never reaches "playing" in this long is a stuck load, not a slow one.
+// This long without a sign of load progress is a stuck load, not a slow one.
 const LOADING_TIMEOUT_MS = 30000
+// An MP4 with a tail moov box fires no media event until it parses, which can mean the whole file.
+const VOD_LOADING_TIMEOUT_MS = 90000
+const LOADING_MAX_WAIT_MS = 180000
+const LOAD_PROGRESS_EVENTS = ["progress", "loadedmetadata", "loadeddata", "canplay", "seeked"]
 const ERROR_HIDE_MS = 10000
 const TITLE_HIDE_MS = 5000
 
@@ -159,6 +163,7 @@ export function createEmbeddedReceiverEngine(
   let errorHideTimer: ReturnType<typeof setTimeout> | null = null
   let deadVideoTimer: ReturnType<typeof setTimeout> | null = null
   let loadingTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+  let lastLoadProgressAt = 0
 
   function getMediaElementFor(handle: VjsLikeHandle | null): HTMLVideoElement | null {
     return handle?.getMediaElement?.() ?? dom.videoEl
@@ -341,12 +346,23 @@ export function createEmbeddedReceiverEngine(
 
   function armLoadingWatchdog(handle: VjsLikeHandle): void {
     clearLoadingWatchdog()
-    loadingTimeoutTimer = setTimeout(() => {
+    const armedAt = Date.now()
+    const silenceWindowMs = currentIsLive ? LOADING_TIMEOUT_MS : VOD_LOADING_TIMEOUT_MS
+    lastLoadProgressAt = armedAt
+    const check = () => {
       loadingTimeoutTimer = null
       if (activeHandle !== handle || currentPlaybackState === "playing") return
+      const sinceProgress = Date.now() - lastLoadProgressAt
+      const sinceArmed = Date.now() - armedAt
+      if (sinceProgress < silenceWindowMs && sinceArmed < LOADING_MAX_WAIT_MS) {
+        const wait = Math.min(silenceWindowMs - sinceProgress, LOADING_MAX_WAIT_MS - sinceArmed)
+        loadingTimeoutTimer = setTimeout(check, Math.max(wait, 0))
+        return
+      }
       log.warn("[xt:receiver] stream never reached playing state within timeout")
       void handleError("timeout")
-    }, LOADING_TIMEOUT_MS)
+    }
+    loadingTimeoutTimer = setTimeout(check, silenceWindowMs)
   }
 
   function teardownInternal(notify: boolean): void {
@@ -396,6 +412,9 @@ export function createEmbeddedReceiverEngine(
       teardownInternal(true)
     })
     handle.on("error", () => void handleError())
+    for (const event of LOAD_PROGRESS_EVENTS) {
+      handle.on(event, () => { lastLoadProgressAt = Date.now() })
+    }
     handle.on("timeupdate", () => {
       const now = Date.now()
       if (now - lastTimeReportAt < 1000) return
@@ -666,12 +685,17 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
           callbacks.onLiveChannelChanged?.(event.payload.channelId, event.payload.channelName || "")
         }
         break
-      case "xt:android-native-finished":
-        report({ state: event.payload.completed ? "ended" : "idle", positionSeconds: 0 })
+      case "xt:android-native-finished": {
+        // Back-outs omit positionSeconds so the last progress tick survives the exit write.
+        const finishedPositionSeconds = event.payload.completed
+          ? Math.max(0, Math.floor((event.payload.finalPosMs || 0) / 1000))
+          : undefined
+        report({ state: event.payload.completed ? "ended" : "idle", positionSeconds: finishedPositionSeconds })
         callbacks.onFinished?.(event.payload.finalChannelId ?? null)
         finishAndEndSession()
         callbacks.onSessionEnded()
         break
+      }
       case "xt:android-native-volume":
         knownVolume = normalizeReportedVolume(event.payload.volume) ?? knownVolume
         knownMuted = event.payload.muted ?? knownMuted

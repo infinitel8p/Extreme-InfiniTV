@@ -160,6 +160,39 @@ describe("providerFetch abort classification on the tauri transport", () => {
   })
 })
 
+// plugin-http cancels the Rust request/body resources from its own abort listener without catching
+// the invoke, so our request timeout firing after a drained response spammed the console with
+// "Uncaught (in promise) The resource id N is invalid." for a resource Rust had already freed.
+describe("plugin cleanup noise", () => {
+  it("recognizes only the freed-resource-id rejection", async () => {
+    const { isPluginCleanupNoise } = await loadProviderFetch(false)
+    expect(isPluginCleanupNoise(new Error("The resource id 3628484489 is invalid."))).toBe(true)
+    expect(isPluginCleanupNoise("The resource id 12 is invalid")).toBe(true)
+    expect(isPluginCleanupNoise(new Error("Request canceled"))).toBe(false)
+    expect(isPluginCleanupNoise(new Error("resource id 12 is invalid, and so is the request"))).toBe(false)
+    expect(isPluginCleanupNoise(null)).toBe(false)
+  })
+
+  it("swallows that rejection on the tauri transport only", async () => {
+    await loadProviderFetch(true)
+    const noise = new PromiseRejectionEvent("unhandledrejection", {
+      promise: Promise.reject(new Error("The resource id 42 is invalid.")).catch(() => {}) as Promise<never>,
+      reason: new Error("The resource id 42 is invalid."),
+      cancelable: true,
+    })
+    window.dispatchEvent(noise)
+    expect(noise.defaultPrevented).toBe(true)
+
+    const real = new PromiseRejectionEvent("unhandledrejection", {
+      promise: Promise.resolve() as Promise<never>,
+      reason: new TypeError("Failed to fetch"),
+      cancelable: true,
+    })
+    window.dispatchEvent(real)
+    expect(real.defaultPrevented).toBe(false)
+  })
+})
+
 describe("retry interaction", () => {
   it("gives up immediately on a caller abort routed through the tauri transport", async () => {
     const controller = new AbortController()
