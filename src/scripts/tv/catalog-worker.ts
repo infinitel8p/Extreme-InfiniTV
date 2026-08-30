@@ -3,6 +3,7 @@
 
 import { filterAndSortIndexes, type GridFilterEntry, type GridFilterState } from "@/scripts/lib/tv-grid-filter"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.ts"
+import { isTrustedWorkerMessage } from "@/scripts/lib/worker-origin.ts"
 
 // Duplicated from lib/genre-index.ts (which pulls in document/IndexedDB-dependent
 // modules that don't run in a worker) - keep this literal in sync with that one.
@@ -83,6 +84,7 @@ const post = (message: CatalogFilterWorkerResponse): void =>
   (self as unknown as Worker).postMessage(message, [message.indexes.buffer])
 
 self.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
+  if (!isTrustedWorkerMessage(event)) return
   const message = event.data
   if (!message) return
 

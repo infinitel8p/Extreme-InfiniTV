@@ -3,6 +3,7 @@
 // the markup with a small scanner; tests assert parity with epg-data.js.
 
 import { EPG_PAST_WINDOW_MS } from "@/scripts/lib/epg-constants.ts"
+import { isTrustedWorkerMessage } from "@/scripts/lib/worker-origin.ts"
 
 type Programme = { start: number; stop: number; title: string; desc: string; catchupId?: string }
 
@@ -984,7 +985,7 @@ export function handleWorkerRequest(
 const post = (msg: WorkerResponse) => (self as unknown as Worker).postMessage(msg)
 
 self.addEventListener("message", (event: MessageEvent<WorkerRequest>) => {
-  // No origin check: only the owner can post here, and dropping a message would hang the sender.
+  if (!isTrustedWorkerMessage(event)) return
   const request = event.data || ({} as WorkerRequest)
   const result = handleWorkerRequest(request)
   if (result === null) return

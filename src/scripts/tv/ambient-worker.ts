@@ -1,6 +1,7 @@
 // Runs the ambient dominant-colour sample off the main thread.
 
 import { dominantColor, type RgbColor } from "@/scripts/lib/ambient-math"
+import { isTrustedWorkerMessage } from "@/scripts/lib/worker-origin.ts"
 
 const SAMPLE_MAX_DIM = 48
 
@@ -40,6 +41,7 @@ function sampleBitmap(bitmap: ImageBitmap): RgbColor | null {
 }
 
 self.addEventListener("message", (event: MessageEvent<IncomingMessage>) => {
+  if (!isTrustedWorkerMessage(event)) return
   const message = event.data
   if (!message) return
   try {
