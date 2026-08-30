@@ -1233,6 +1233,7 @@ async function populateSimilarRail(requestId) {
 // Playback
 // ----------------------------
 let vjs = null
+let focusKeeperCleanup: (() => void) | null = null
 let seriesInsights = null
 
 const inlineTrailer = createInlineTrailer({
@@ -1409,7 +1410,7 @@ async function ensureEmbeddedPlayer(backend) {
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
   if (mounted.backend === "videojs") {
-    attachPlayerFocusKeeper(vjs)
+    focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
   return vjs
@@ -1482,7 +1483,7 @@ function retirePreviousPlayback() {
 
 async function playEpisode(episode, options = {}) {
   if (!series || !episode) return
-  if (isTauri && isCastRoutingActive()) {
+  if (isTauri && isCastRoutingActive() && !options.forceLocal) {
     const title = episodeCastTitle(episode)
     await routePlayToCast({
       contentTitle: title || null,
@@ -1492,6 +1493,7 @@ async function playEpisode(episode, options = {}) {
         try { vjs?.reset?.() } catch {}
         retirePreviousPlayback()
       },
+      restoreLocal: () => { void playEpisode(episode, { forceLocal: true }) },
       seriesContext: activePlaylistId
         ? {
             playlistId: activePlaylistId,
@@ -1756,6 +1758,9 @@ const externalBtnHandle = setupExternalPlayerButton(
       try { vjs?.pause?.() } catch {}
       try { vjs?.reset?.() } catch {}
       retirePreviousPlayback()
+    },
+    restoreLocal() {
+      if (currentEpisode) playEpisode(currentEpisode)
     },
     afterLaunch() {
       pushEpisodePresence(currentEpisode)
@@ -2111,6 +2116,10 @@ async function boot() {
   seasonEnrichRequestId++
   try {
     vjs?.pause?.()
+    if (focusKeeperCleanup) {
+      focusKeeperCleanup()
+      focusKeeperCleanup = null
+    }
     await vjs?.dispose?.()
   } catch {}
   vjs = null

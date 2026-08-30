@@ -1061,7 +1061,7 @@ export function openCastRemote(): void {
     const ok = await castNeighbor(direction)
     setBusy(false)
     if (!ok) toast({ title: t("cast.toast.failed", { device: currentSession.deviceName }) })
-    button.disabled = false
+    applyAvailability(refs, await resolveNeighborAvailability(currentSession))
   }
 
   function onSeekPointerDown(): void {

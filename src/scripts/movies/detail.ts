@@ -698,6 +698,7 @@ function syncResumeUI() {
 // Playback
 // ----------------------------
 let vjs = null
+let focusKeeperCleanup: (() => void) | null = null
 let movieInsights = null
 
 const inlineTrailer = createInlineTrailer({
@@ -850,7 +851,7 @@ async function ensureEmbeddedPlayer(backend) {
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
   if (mounted.backend === "videojs") {
-    attachPlayerFocusKeeper(vjs)
+    focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
   return vjs
@@ -873,7 +874,7 @@ function retirePreviousPlayback() {
 
 async function startPlayback(options = {}) {
   if (!movie) return
-  if (isTauri && isCastRoutingActive()) {
+  if (isTauri && isCastRoutingActive() && !options.forceLocal) {
     const title = movie.name || ""
     await routePlayToCast({
       contentTitle: title || null,
@@ -884,6 +885,7 @@ async function startPlayback(options = {}) {
         try { vjs?.reset?.() } catch {}
         retirePreviousPlayback()
       },
+      restoreLocal: () => { void startPlayback({ forceLocal: true }) },
       buildDescriptor: async () => {
         let src = null
         try {
@@ -1132,6 +1134,9 @@ const externalBtnHandle = setupExternalPlayerButton(
       try { vjs?.pause?.() } catch {}
       try { vjs?.reset?.() } catch {}
       retirePreviousPlayback()
+    },
+    restoreLocal() {
+      startPlayback()
     },
     afterLaunch() {
       pushMoviePresence()
@@ -1424,6 +1429,10 @@ async function boot() {
   const enrichRequestIdForThisBoot = ++enrichRequestId
   try {
     vjs?.pause?.()
+    if (focusKeeperCleanup) {
+      focusKeeperCleanup()
+      focusKeeperCleanup = null
+    }
     await vjs?.dispose?.()
   } catch {}
   vjs = null

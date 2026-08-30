@@ -294,10 +294,25 @@ function baseUrl(host: string, port: number): string {
 /** Thrown only for a connection-level failure (refused/timeout/DNS); never for an HTTP response. */
 class HostUnreachableError extends Error {}
 
-async function fetchFromHost(url: string, init: RequestInit & { logKind?: string }): Promise<Response> {
+function isTimeoutError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false
+  const name = (err as { name?: unknown }).name
+  return name === "TimeoutError" || name === "AbortError"
+}
+
+/**
+ * `allowTimeoutFallback: false` keeps a timeout from walking to the next host: for a
+ * non-idempotent POST (/play, /pair) the first host may have already acted on the request.
+ */
+async function fetchFromHost(
+  url: string,
+  init: RequestInit & { logKind?: string },
+  opts: { allowTimeoutFallback?: boolean } = {}
+): Promise<Response> {
   try {
     return await providerFetch(url, init)
   } catch (err) {
+    if (opts.allowTimeoutFallback === false && isTimeoutError(err)) throw err
     throw new HostUnreachableError(err instanceof Error ? err.message : String(err))
   }
 }
@@ -412,7 +427,7 @@ export async function probeTvDevice(
   host: string,
   port: number,
   hosts?: string[]
-): Promise<{ v: number; app: string; name: string } | null> {
+): Promise<{ v: number; app: string; name: string; id?: string } | null> {
   const candidates = candidateHostOrder(hosts && hosts.length ? hosts : [host])
   for (const candidate of candidates) {
     try {
@@ -432,7 +447,7 @@ export async function probeTvDevice(
       ) {
         continue
       }
-      return { v: data.v, app: data.app, name: data.name }
+      return { v: data.v, app: data.app, name: data.name, id: typeof data.id === "string" && data.id ? data.id : undefined }
     } catch {
       continue
     }
@@ -476,13 +491,17 @@ export async function pairTvDevice(params: {
   let winningHost: string
   try {
     const walked = await walkHosts(hosts, (host) =>
-      fetchFromHost(`${baseUrl(host, params.port)}/pair`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ v: 1, code: params.code, deviceName: senderDeviceName() }),
-        signal: AbortSignal.timeout(8000),
-        logKind: "other",
-      })
+      fetchFromHost(
+        `${baseUrl(host, params.port)}/pair`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ v: 1, code: params.code, deviceName: senderDeviceName() }),
+          signal: AbortSignal.timeout(8000),
+          logKind: "other",
+        },
+        { allowTimeoutFallback: false }
+      )
     )
     response = walked.result
     winningHost = walked.host
@@ -490,6 +509,7 @@ export async function pairTvDevice(params: {
     throw new Error("unreachable")
   }
   if (response.status === 403) throw new Error("badCode")
+  if (response.status === 429) throw new Error("rateLimited")
   if (!response.ok) throw new Error("unreachable")
 
   const data = await response.json().catch(() => null)
@@ -518,16 +538,21 @@ async function postDeviceAction(
   device: TvDevice,
   path: string,
   body: unknown,
-  timeoutMs: number
+  timeoutMs: number,
+  allowTimeoutFallback = true
 ): Promise<void> {
   await withHostFallback(device, async (host) => {
-    const response = await fetchFromHost(`${baseUrl(host, device.port)}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-XT-Key": device.key },
-      body: JSON.stringify(body ?? {}),
-      signal: AbortSignal.timeout(timeoutMs),
-      logKind: "other",
-    })
+    const response = await fetchFromHost(
+      `${baseUrl(host, device.port)}${path}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-XT-Key": device.key },
+        body: JSON.stringify(body ?? {}),
+        signal: AbortSignal.timeout(timeoutMs),
+        logKind: "other",
+      },
+      { allowTimeoutFallback }
+    )
     if (response.status === 401 || response.status === 403) {
       throw new CastAuthError("unauthorized")
     }
@@ -638,7 +663,8 @@ export async function castPlay(
     src: redactUrl(descriptor.src),
   })
   try {
-    await postDeviceAction(device, "/play", descriptor, 8000)
+    // A duplicate /play on the same request would restart the receiver's engine mid-play.
+    await postDeviceAction(device, "/play", descriptor, 8000, false)
   } finally {
     castPlayInFlight -= 1
     lastCastPlayAtMs = Date.now()
@@ -1051,6 +1077,8 @@ export interface PlayOnTvOptions {
     | CastUncastableScheme
   /** Return false when nothing was actually released, to skip the provider-slot wait. */
   stopLocal?: () => boolean | void
+  /** Cast failed after stopLocal already tore down playback: remount locally so the player isn't left blank. */
+  restoreLocal?: () => void
   contentTitle?: string | null
   quiet?: boolean
   contentHref?: string | null
@@ -1171,6 +1199,8 @@ async function castToDevice(
     }
     return true
   } catch (err) {
+    // Don't restore over a session a concurrent retry already established.
+    const shouldRestoreLocal = !getCastSession()
     if (err instanceof CastAuthError) {
       toast({
         title: t("cast.toast.authFailed", { device: device.name }),
@@ -1181,10 +1211,12 @@ async function castToDevice(
           },
         },
       })
+      if (shouldRestoreLocal) options.restoreLocal?.()
       return false
     }
     log.warn("[xt:tv-cast] playOnTv failed:", err)
     toast({ title: t("cast.toast.failed", { device: device.name }) })
+    if (shouldRestoreLocal) options.restoreLocal?.()
     return false
   }
 }
@@ -1365,6 +1397,7 @@ export interface CastLiveChannelParams {
   headers?: CastDescriptorV1["headers"]
   preferNativeHls?: boolean
   stopLocal?: () => boolean | void
+  restoreLocal?: () => void
   contentHref?: string | null
   liveContext?: CastSession["liveContext"]
 }
@@ -1377,6 +1410,7 @@ export function castLiveChannelToTv(params: CastLiveChannelParams): () => void {
       contentTitle: params.contentTitle,
       contentHref: params.contentHref ?? (channelId ? `/livetv?channel=${channelId}` : "/livetv"),
       stopLocal: params.stopLocal,
+      restoreLocal: params.restoreLocal,
       liveContext: params.liveContext,
       holdsProviderConnection: true,
       buildDescriptor: () => {

@@ -141,6 +141,9 @@ export function createCastProgressRecorder(): CastProgressRecorder {
   let currentKey: string | null = null
   let lastWriteAtMs = 0
   let lastObserved: { session: CastSession; state: CastState } | null = null
+  // The receiver strips durationSeconds from its terminal "ended" report; without this the
+  // last frame of a session is silently dropped instead of marking the item completed.
+  let lastKnownDurationSeconds: number | null = null
 
   function writeCurrent(): void {
     if (!lastObserved) return
@@ -152,6 +155,7 @@ export function createCastProgressRecorder(): CastProgressRecorder {
     currentKey = null
     lastWriteAtMs = 0
     lastObserved = null
+    lastKnownDurationSeconds = null
   }
 
   return {
@@ -166,12 +170,20 @@ export function createCastProgressRecorder(): CastProgressRecorder {
       if (currentKey != null && currentKey !== key) {
         writeCurrent()
         lastWriteAtMs = 0
+        lastKnownDurationSeconds = null
       }
       currentKey = key
-      lastObserved = { session, state }
-      if (!hasSanePlaybackPosition(state)) return
+      if (typeof state.durationSeconds === "number" && Number.isFinite(state.durationSeconds) && state.durationSeconds > 0) {
+        lastKnownDurationSeconds = state.durationSeconds
+      }
+      const effectiveState =
+        state.durationSeconds == null && isTerminalCastStateValue(state.state) && lastKnownDurationSeconds != null
+          ? { ...state, durationSeconds: lastKnownDurationSeconds }
+          : state
+      lastObserved = { session, state: effectiveState }
+      if (!hasSanePlaybackPosition(effectiveState)) return
       const nowMs = Date.now()
-      if (isTerminalCastStateValue(state.state) || !shouldThrottleWrite(nowMs, lastWriteAtMs)) {
+      if (isTerminalCastStateValue(effectiveState.state) || !shouldThrottleWrite(nowMs, lastWriteAtMs)) {
         lastWriteAtMs = nowMs
         writeCurrent()
       }

@@ -51,6 +51,8 @@ export interface EscapeHatchHooks {
   beforeLaunch?(kind: ButtonKind): void
   /** Fires past every cancellable chooser, right before launch: drop local playback and its recovery machinery here. */
   releaseLocal?(kind: ButtonKind): void
+  /** Launch failed after releaseLocal: remount local playback. */
+  restoreLocal?(kind: ButtonKind): void
   afterLaunch?(kind: ButtonKind): void
 }
 
@@ -170,6 +172,13 @@ export function setupExternalPlayerButton(
         log.warn("[xt:external-btn] releaseLocal threw:", err)
       }
     }
+    const restoreLocal = (launchedKind: ButtonKind) => {
+      try {
+        hooks.restoreLocal?.(launchedKind)
+      } catch (err) {
+        log.warn("[xt:external-btn] restoreLocal threw:", err)
+      }
+    }
     try {
       hooks.beforeLaunch?.(kind)
     } catch (err) {
@@ -194,6 +203,7 @@ export function setupExternalPlayerButton(
           notifyLaunched(kind)
         } catch (err) {
           surfaceAndroidHandoffError(err, kind)
+          restoreLocal(kind)
         }
         return
       }
@@ -235,6 +245,7 @@ export function setupExternalPlayerButton(
             notifyLaunched("system")
           } catch (err) {
             surfaceAndroidHandoffError(err, "system")
+            restoreLocal("system")
           }
           return
         }
@@ -272,6 +283,7 @@ export function setupExternalPlayerButton(
         notifyLaunched("system")
       } catch (err) {
         surfaceAndroidHandoffError(err, "system")
+        restoreLocal("system")
       }
       return
     }
@@ -300,6 +312,7 @@ export function setupExternalPlayerButton(
       notifyLaunched(desktopKind)
     } catch (err) {
       surfaceLaunchError(err, desktopKind)
+      restoreLocal(desktopKind)
     }
   }
 

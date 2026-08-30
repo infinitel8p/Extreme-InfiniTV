@@ -76,6 +76,8 @@ let errorToastShown = false
 let suppressPollPositionUntil = 0
 let morePanelObserver: MutationObserver | null = null
 let logSnapshotInFlight = false
+// Tracked locally so an empty/failed fetch (never cached) still backs off for the interval.
+let lastLogSnapshotAttemptAtMs = 0
 let stopArmed = false
 let stopArmTimeout: ReturnType<typeof setTimeout> | null = null
 let lastAnnouncedPlaybackState: string | null = null
@@ -644,8 +646,11 @@ function onPillHoverOrFocus(): void {
 
 function refreshReceiverLogSnapshotIfStale(session: CastSession, device: TvDevice): void {
   if (logSnapshotInFlight) return
+  const nowMs = Date.now()
+  if (nowMs - lastLogSnapshotAttemptAtMs < LOG_SNAPSHOT_INTERVAL_MS) return
   const snapshotAt = getReceiverLogSnapshotAt(session.deviceName)
-  if (snapshotAt != null && Date.now() - snapshotAt < LOG_SNAPSHOT_INTERVAL_MS) return
+  if (snapshotAt != null && nowMs - snapshotAt < LOG_SNAPSHOT_INTERVAL_MS) return
+  lastLogSnapshotAttemptAtMs = nowMs
   logSnapshotInFlight = true
   void fetchReceiverLogs(device)
     .then((text) => {

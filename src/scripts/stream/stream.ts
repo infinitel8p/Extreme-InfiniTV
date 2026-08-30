@@ -902,6 +902,7 @@ function openChannelMenu(channel, anchor, point) {
           headers: streamHeadersById.get(channel.id) || undefined,
           preferNativeHls: isNativeHlsFallbackChannel(channel.id),
           stopLocal: releaseLocalPlaybackForHandoff,
+          restoreLocal: () => { void play(channel.id, channel.name, "user") },
           liveContext: liveContextForChannelId(channel.id),
         })()
       })
@@ -1536,7 +1537,10 @@ function maybeAutoplayFromUrl() {
   if (!Number.isFinite(id) || id == null) return
   autoplayConsumed = true
   const ch = all.find((c) => c.id === id)
-  if (!ch) return
+  if (!ch) {
+    toast({ title: t("stream.toast.channelUnavailable") })
+    return
+  }
   // Strip the deep-link params so refresh doesn't re-trigger.
   try {
     const url = new URL(window.location.href)
@@ -2794,6 +2798,7 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
           headers: streamHeadersById.get(streamId) || undefined,
           preferNativeHls: isNativeHlsFallbackChannel(streamId),
           stopLocal: releaseLocalPlaybackForHandoff,
+          restoreLocal: () => { void play(streamId, name, "user") },
           liveContext: liveContextForChannelId(streamId),
         })()
       })
@@ -3721,6 +3726,9 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
       },
       releaseLocal: () => {
         releaseLocalPlaybackForHandoff()
+      },
+      restoreLocal: () => {
+        play(ctx.streamId, ctx.name)
       },
       afterLaunch: (kind) => {
         const channel = all.find((entry) => entry.id === ctx.streamId)
@@ -4925,6 +4933,9 @@ function appendExternalLaunchButton(parent, streamId, src, name) {
     },
     releaseLocal: () => {
       releaseLocalPlaybackForHandoff()
+    },
+    restoreLocal: () => {
+      play(streamId, name, "user")
     },
     afterLaunch: (kind) => {
       const channel = all.find((entry) => entry.id === streamId)

@@ -369,7 +369,7 @@ export function openTvDevicePicker(
 
     // Same receiver as a discovered entry when the mDNS ids match, else when any known host overlaps.
     function isSameReceiver(device: TvDevice, receiver: DiscoveredReceiver): boolean {
-      if (device.id && receiver.id) return device.id === receiver.id
+      if (device.id && receiver.id && device.id === receiver.id) return true
       if (device.port !== receiver.port) return false
       const deviceHosts = device.hosts?.length ? device.hosts : [device.host]
       const receiverHosts = receiver.hosts?.length ? receiver.hosts : [receiver.host]
@@ -549,7 +549,12 @@ export function openTvDevicePicker(
         submitBtn.disabled = false
         delete submitBtn.dataset.loading
         const message = err instanceof Error ? err.message : ""
-        formError.textContent = message === "badCode" ? t("cast.pair.badCode") : t("cast.pair.unreachable")
+        formError.textContent =
+          message === "badCode"
+            ? t("cast.pair.badCode")
+            : message === "rateLimited"
+              ? t("cast.pair.rateLimited")
+              : t("cast.pair.unreachable")
         formError.classList.remove("hidden")
       }
     }

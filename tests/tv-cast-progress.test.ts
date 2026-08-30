@@ -188,9 +188,18 @@ describe("createCastProgressRecorder", () => {
     await vi.waitFor(() => expect(setProgressMock).toHaveBeenCalledTimes(2))
   })
 
-  it("marks the vod completed on an ended frame", async () => {
+  it("marks the vod completed on an ended frame that carries a duration", async () => {
     const recorder = createCastProgressRecorder()
     recorder.observe(vodSession(), stateAt(1195, { state: "ended" }))
+    await vi.waitFor(() => expect(markCompletedMock).toHaveBeenCalledTimes(1))
+    expect(markCompletedMock).toHaveBeenCalledWith("playlist-1", "vod", "123", { duration: 1200 })
+  })
+
+  it("marks the vod completed on an ended frame that omits duration, reusing the last known one", async () => {
+    const recorder = createCastProgressRecorder()
+    recorder.observe(vodSession(), stateAt(30))
+    await vi.waitFor(() => expect(setProgressMock).toHaveBeenCalledTimes(1))
+    recorder.observe(vodSession(), { state: "ended", positionSeconds: 1195 })
     await vi.waitFor(() => expect(markCompletedMock).toHaveBeenCalledTimes(1))
     expect(markCompletedMock).toHaveBeenCalledWith("playlist-1", "vod", "123", { duration: 1200 })
   })

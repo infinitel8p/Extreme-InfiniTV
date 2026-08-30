@@ -12,6 +12,7 @@ import {
   saveTvDevice,
   listTvDevices,
   castPause,
+  castPlay,
   castSetVolume,
   fetchCastState,
   fetchCastStateWithFallback,
@@ -21,6 +22,7 @@ import {
   CastAuthError,
   type TvDevice,
 } from "@/scripts/lib/tv-cast"
+import type { CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
 
 // Node 24+ ships an experimental native `localStorage`/`sessionStorage` that shadows
 // jsdom's; stub both with one in-memory Storage implementation (same pattern as
@@ -121,6 +123,28 @@ describe("postDeviceAction host fallback (via castPause)", () => {
     providerFetchMock.mockResolvedValue(jsonResponse(401, { error: "unauthorized" }))
 
     await expect(castPause(device)).rejects.toBeInstanceOf(CastAuthError)
+    expect(providerFetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("castPlay does not walk on a /play timeout", () => {
+  const descriptor: CastDescriptorV1 = {
+    v: 1,
+    src: "http://example.com/stream.m3u8",
+    mime: "application/x-mpegURL",
+    isLive: true,
+    title: "Test Channel",
+  }
+
+  it("throws instead of re-posting /play to the next host, since the first host may have already acted on it", async () => {
+    const device = makeDevice()
+    saveTvDevice(device)
+    providerFetchMock.mockImplementation((url: string) => {
+      if (url.includes(HOST_A)) return Promise.reject(new DOMException("timed out", "TimeoutError"))
+      return Promise.resolve(jsonResponse(200, { ok: true }))
+    })
+
+    await expect(castPlay(device, descriptor)).rejects.toThrow()
     expect(providerFetchMock).toHaveBeenCalledTimes(1)
   })
 })
@@ -244,5 +268,17 @@ describe("pairTvDevice host fallback", () => {
     expect(device.host).toBe(HOST_B)
     expect(device.hosts).toEqual([HOST_A, HOST_B])
     expect(device.pinnedHostIndex).toBe(1)
+  })
+
+  it("does not re-post /pair to the next host on a timeout, since a rotated/locked code could otherwise result", async () => {
+    providerFetchMock.mockImplementation((url: string) => {
+      if (url.includes(HOST_A)) return Promise.reject(new DOMException("timed out", "TimeoutError"))
+      return Promise.resolve(jsonResponse(200, { key: "new-key", name: "Living Room TV" }))
+    })
+
+    await expect(
+      pairTvDevice({ host: HOST_A, port: 8765, code: "123456", hosts: [HOST_A, HOST_B] })
+    ).rejects.toThrow("unreachable")
+    expect(providerFetchMock).toHaveBeenCalledTimes(1)
   })
 })
