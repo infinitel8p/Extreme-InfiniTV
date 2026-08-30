@@ -8,7 +8,13 @@ vi.mock("@/scripts/lib/i18n.js", () => ({
   getActiveLocale: vi.fn(() => "en"),
 }))
 
-import { createSubtitleManager, createNativeTrackRegistrar, pickAutoCaptionTrack } from "../src/scripts/lib/subtitle-tracks"
+import {
+  createSubtitleManager,
+  createNativeTrackRegistrar,
+  pickAutoCaptionTrack,
+  createHlsSubtitleSource,
+  attachArtplayerHlsSubtitleControl,
+} from "../src/scripts/lib/subtitle-tracks"
 import type { MkvCue, MkvSubtitleSession, MkvSubtitleTrackInfo } from "../src/scripts/lib/vod-proxy"
 import { getCaptionsAutoEnabled } from "@/scripts/lib/app-settings.js"
 import { getActiveLocale } from "@/scripts/lib/i18n.js"
@@ -623,5 +629,193 @@ describe("captions auto-on", () => {
     const showing = video.tracks.filter((track) => track.mode === "showing")
     expect(showing).toHaveLength(1)
     expect(showing[0]!.language).toBe("fr")
+  })
+})
+
+function createFakeHls(initialTracks: any[], initialTrack: number, initialDisplay: boolean) {
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>()
+  return {
+    subtitleTracks: initialTracks,
+    subtitleTrack: initialTrack,
+    subtitleDisplay: initialDisplay,
+    on(event: string, fn: (...args: unknown[]) => void) {
+      if (!listeners.has(event)) listeners.set(event, new Set())
+      listeners.get(event)!.add(fn)
+    },
+    off(event: string, fn: (...args: unknown[]) => void) {
+      listeners.get(event)?.delete(fn)
+    },
+    emit(event: string) {
+      for (const listener of listeners.get(event) ?? []) listener()
+    },
+  }
+}
+
+describe("createHlsSubtitleSource", () => {
+  it("reports no active track when subtitleDisplay is off (manifest default, off by default)", () => {
+    const hls = createFakeHls([{ id: 0, name: "English", lang: "en" }], 0, false)
+    const source = createHlsSubtitleSource(hls)
+    expect(source.list()).toEqual([{ id: "0", label: "English", active: false }])
+  })
+
+  it("flags the selected track active once subtitleDisplay is on", () => {
+    const hls = createFakeHls(
+      [
+        { id: 0, name: "English", lang: "en" },
+        { id: 1, name: "German", lang: "de" },
+      ],
+      1,
+      true,
+    )
+    const source = createHlsSubtitleSource(hls)
+    expect(source.list()).toEqual([
+      { id: "0", label: "English", active: false },
+      { id: "1", label: "German", active: true },
+    ])
+  })
+
+  it("select(id) sets hls.subtitleTrack and turns subtitleDisplay on", () => {
+    const hls = createFakeHls(
+      [
+        { id: 0, name: "English", lang: "en" },
+        { id: 1, name: "German", lang: "de" },
+      ],
+      -1,
+      false,
+    )
+    const source = createHlsSubtitleSource(hls)
+    source.select("1")
+    expect(hls.subtitleTrack).toBe(1)
+    expect(hls.subtitleDisplay).toBe(true)
+  })
+
+  it("select(null) turns subtitles off (-1 and subtitleDisplay false)", () => {
+    const hls = createFakeHls([{ id: 0, name: "English", lang: "en" }], 0, true)
+    const source = createHlsSubtitleSource(hls)
+    source.select(null)
+    expect(hls.subtitleTrack).toBe(-1)
+    expect(hls.subtitleDisplay).toBe(false)
+  })
+
+  it("falls back to the language code, then a positional label, when no name is set", () => {
+    const hls = createFakeHls(
+      [
+        { id: 0, lang: "en" },
+        { id: 1 },
+      ],
+      0,
+      false,
+    )
+    const source = createHlsSubtitleSource(hls)
+    expect(source.list().map((track) => track.label)).toEqual(["en", "player.subtitles 2"])
+  })
+
+  it("subscribe() fires on subtitle-track update and switch events", () => {
+    const hls = createFakeHls([{ id: 0, name: "English", lang: "en" }], 0, false)
+    const source = createHlsSubtitleSource(hls)
+    const listener = vi.fn()
+    source.subscribe(listener)
+    hls.emit("hlsSubtitleTracksUpdated")
+    expect(listener).toHaveBeenCalledTimes(1)
+    hls.emit("hlsSubtitleTrackSwitch")
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+
+  it("unsubscribe stops further notifications", () => {
+    const hls = createFakeHls([{ id: 0, name: "English", lang: "en" }], 0, false)
+    const source = createHlsSubtitleSource(hls)
+    const listener = vi.fn()
+    const unsubscribe = source.subscribe(listener)
+    unsubscribe()
+    hls.emit("hlsSubtitleTracksUpdated")
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it("dispose() removes the hls event listeners", () => {
+    const hls = createFakeHls([{ id: 0, name: "English", lang: "en" }], 0, false)
+    const source = createHlsSubtitleSource(hls)
+    const listener = vi.fn()
+    source.subscribe(listener)
+    source.dispose()
+    hls.emit("hlsSubtitleTracksUpdated")
+    expect(listener).not.toHaveBeenCalled()
+  })
+})
+
+describe("attachArtplayerHlsSubtitleControl", () => {
+  function createFakeArt() {
+    return {
+      isReady: true,
+      controls: { add: vi.fn(), remove: vi.fn() },
+      on: vi.fn(),
+    }
+  }
+
+  function createFakeSource(tracks: { id: string; label: string; active: boolean }[]) {
+    return {
+      list: () => tracks,
+      select: vi.fn(),
+      subscribe: () => () => {},
+      dispose: vi.fn(),
+    }
+  }
+
+  it("adds an Off entry selected by default alongside the renditions", () => {
+    const art = createFakeArt()
+    const control = attachArtplayerHlsSubtitleControl(art, (key) => key)
+    control.setSource(createFakeSource([{ id: "0", label: "English", active: false }]) as any)
+    const selector = art.controls.add.mock.calls[0][0].selector
+    expect(selector).toEqual([
+      { html: "player.subtitles.off", value: null, default: true },
+      { html: "English", value: "0", default: false },
+    ])
+  })
+
+  it("marks the active rendition as the selector default instead of Off", () => {
+    const art = createFakeArt()
+    const control = attachArtplayerHlsSubtitleControl(art, (key) => key)
+    control.setSource(createFakeSource([{ id: "0", label: "English", active: true }]) as any)
+    const selector = art.controls.add.mock.calls[0][0].selector
+    expect(selector[0]).toEqual({ html: "player.subtitles.off", value: null, default: false })
+    expect(selector[1]).toEqual({ html: "English", value: "0", default: true })
+  })
+
+  it("onSelect forwards the picked id, or null for Off, to the source", () => {
+    const art = createFakeArt()
+    const control = attachArtplayerHlsSubtitleControl(art, (key) => key)
+    const source = createFakeSource([{ id: "0", label: "English", active: false }])
+    control.setSource(source as any)
+    const onSelect = art.controls.add.mock.calls[0][0].onSelect
+    onSelect({ html: "English", value: "0" })
+    expect(source.select).toHaveBeenCalledWith("0")
+    onSelect({ html: "player.subtitles.off", value: null })
+    expect(source.select).toHaveBeenCalledWith(null)
+  })
+
+  it("does not add a control when there are no subtitle renditions", () => {
+    const art = createFakeArt()
+    const control = attachArtplayerHlsSubtitleControl(art, (key) => key)
+    control.setSource(createFakeSource([]) as any)
+    expect(art.controls.add).not.toHaveBeenCalled()
+  })
+
+  it("disposes the previous source when a new one is set", () => {
+    const art = createFakeArt()
+    const control = attachArtplayerHlsSubtitleControl(art, (key) => key)
+    const firstSource = createFakeSource([{ id: "0", label: "English", active: false }])
+    const secondSource = createFakeSource([{ id: "0", label: "German", active: false }])
+    control.setSource(firstSource as any)
+    control.setSource(secondSource as any)
+    expect(firstSource.dispose).toHaveBeenCalledTimes(1)
+    expect(secondSource.dispose).not.toHaveBeenCalled()
+  })
+
+  it("disposes the active source on dispose()", () => {
+    const art = createFakeArt()
+    const control = attachArtplayerHlsSubtitleControl(art, (key) => key)
+    const source = createFakeSource([{ id: "0", label: "English", active: false }])
+    control.setSource(source as any)
+    control.dispose()
+    expect(source.dispose).toHaveBeenCalledTimes(1)
   })
 })

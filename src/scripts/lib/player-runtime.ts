@@ -11,6 +11,8 @@ import {
   createSubtitleManager,
   createNativeTrackRegistrar,
   createVideoJsTrackRegistrar,
+  createHlsSubtitleSource,
+  attachArtplayerHlsSubtitleControl,
 } from "@/scripts/lib/subtitle-tracks.js"
 import {
   createHlsAudioSource,
@@ -1215,7 +1217,8 @@ function attachHlsToVideo(
     return
   }
   log.info(`[xt:player] hls transport=hls.js loader=${isTauri ? "tauri-http" : "xhr"}`)
-  const hlsConfig: Record<string, unknown> = { enableWorker: true }
+  // Off by default: a manifest's DEFAULT=YES rendition would otherwise render unasked.
+  const hlsConfig: Record<string, unknown> = { enableWorker: true, subtitleDisplay: false }
   if (isTauri) {
     hlsConfig.loader = createTauriHlsLoaderClass(authorization, authorizedOrigin)
   } else if (authorization) {
@@ -2225,6 +2228,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   function loadDashIntoVideo(video: HTMLVideoElement, url: string, drm: DrmOptions | null) {
     destroyArtEngines()
     audioControl.setSource(null)
+    hlsSubtitleControl.setSource(null)
     attachShaka(
       video,
       url,
@@ -2268,6 +2272,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       pendingPreferNativeHls,
     )
     audioControl.setSource(activeHls ? createHlsAudioSource(activeHls as any) : null)
+    hlsSubtitleControl.setSource(activeHls ? createHlsSubtitleSource(activeHls as any) : null)
   }
 
   // On a fatal mpegts error, a .ts URL may actually serve (or redirect to) an
@@ -2382,11 +2387,13 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     onTracksReady: (tracks, activeIndex) => installSubtitleControl(tracks, activeIndex),
   })
   const audioControl = attachArtplayerAudioControl(art, t)
+  const hlsSubtitleControl = attachArtplayerHlsSubtitleControl(art, t)
 
   art.on("destroy", () => {
     destroyArtEngines()
     subtitleManager.detach()
     audioControl.dispose()
+    hlsSubtitleControl.dispose()
   })
 
   function removeSubtitleControl(): void {
@@ -2458,6 +2465,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       if (isDashSource(drm, src, type)) {
         setSubtitleSource(null)
         audioControl.setSource(null)
+        hlsSubtitleControl.setSource(null)
         art.type = "mpd"
         art.url = src
         return
@@ -2472,6 +2480,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         usesCallerSuppliedTracks ? subtitles?.mkvSession ?? null : null,
       )
       audioControl.setSource(usesCallerSuppliedTracks ? pendingAudioSource : null)
+      // Reset here; loadHlsIntoVideo re-populates it once hls.js attaches.
+      hlsSubtitleControl.setSource(null)
       if (hint === "hls") {
         art.type = "m3u8"
         art.url = src
@@ -2535,6 +2545,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       destroyArtEngines()
       setSubtitleSource(null)
       audioControl.setSource(null)
+      hlsSubtitleControl.setSource(null)
       art.url = ""
     },
     dispose() {
