@@ -39,50 +39,76 @@ function scoreMatch(norm: string, tokens: string[]): number {
   return score
 }
 
+/**
+ * Same pipeline as `filterAndSortEntries`, returned as original-array indexes so callers (worker,
+ * main thread) can share it without copying entry objects. Works on index numbers throughout: a
+ * 180k-row catalog would otherwise allocate a wrapper object per row on every keystroke.
+ */
+export function filterAndSortIndexes<T extends GridFilterEntry>(
+  entries: T[],
+  state: GridFilterState,
+  ctx: GridFilterContext<T>
+): Uint32Array {
+  const queryNorm = ctx.normalize(state.query || "")
+  const tokens = queryNorm.length ? queryNorm.split(" ").filter(Boolean) : []
+  const isSorted = state.sort === "added" || state.sort === "rating" || state.sort === "az"
+
+  if (!state.category && !state.hideWatched && !tokens.length && !isSorted) {
+    const identity = new Uint32Array(entries.length)
+    for (let index = 0; index < entries.length; index++) identity[index] = index
+    return identity
+  }
+
+  const candidates: number[] = []
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]
+    if (state.category && !ctx.categoryMatcher(entry, state.category)) continue
+    if (state.hideWatched && ctx.isWatched(entry)) continue
+    candidates.push(index)
+  }
+
+  let scoreByIndex: Map<number, number> | null = null
+  if (tokens.length) {
+    scoreByIndex = new Map()
+    let kept = 0
+    for (const index of candidates) {
+      const score = scoreMatch(entries[index].norm || "", tokens)
+      if (score <= 0) continue
+      scoreByIndex.set(index, score)
+      candidates[kept++] = index
+    }
+    candidates.length = kept
+  }
+
+  if (state.sort === "added") {
+    candidates.sort((first, second) => (entries[second].added || 0) - (entries[first].added || 0))
+  } else if (state.sort === "rating") {
+    candidates.sort((first, second) => {
+      const delta = ratingSortValue(entries[second].rating) - ratingSortValue(entries[first].rating)
+      if (delta !== 0) return delta
+      return (entries[first].name || "").localeCompare(entries[second].name || "", "en", { sensitivity: "base" })
+    })
+  } else if (state.sort === "az") {
+    candidates.sort((first, second) =>
+      (entries[first].name || "").localeCompare(entries[second].name || "", "en", { sensitivity: "base" })
+    )
+  } else if (scoreByIndex) {
+    const scores = scoreByIndex
+    candidates.sort((first, second) => (scores.get(second) || 0) - (scores.get(first) || 0))
+  }
+
+  return Uint32Array.from(candidates)
+}
+
 export function filterAndSortEntries<T extends GridFilterEntry>(
   entries: T[],
   state: GridFilterState,
   ctx: GridFilterContext<T>
 ): T[] {
-  let out = state.category
-    ? entries.filter((entry) => ctx.categoryMatcher(entry, state.category as string))
-    : entries.slice()
-
-  if (state.hideWatched) out = out.filter((entry) => !ctx.isWatched(entry))
-
-  const queryNorm = ctx.normalize(state.query || "")
-  const tokens = queryNorm.length ? queryNorm.split(" ").filter(Boolean) : []
-  let scoreById: Map<T["id"], number> | null = null
-  if (tokens.length) {
-    scoreById = new Map()
-    const scored: T[] = []
-    for (const entry of out) {
-      const score = scoreMatch(entry.norm || "", tokens)
-      if (score > 0) {
-        scored.push(entry)
-        scoreById.set(entry.id, score)
-      }
-    }
-    out = scored
-  }
-
-  const sorted = out.slice()
-  if (state.sort === "added") {
-    sorted.sort((first, second) => (second.added || 0) - (first.added || 0))
-  } else if (state.sort === "rating") {
-    sorted.sort((first, second) => {
-      const delta = ratingSortValue(second.rating) - ratingSortValue(first.rating)
-      if (delta !== 0) return delta
-      return (first.name || "").localeCompare(second.name || "", "en", { sensitivity: "base" })
-    })
-  } else if (state.sort === "az") {
-    sorted.sort((first, second) => (first.name || "").localeCompare(second.name || "", "en", { sensitivity: "base" }))
-  } else if (scoreById) {
-    const scores = scoreById
-    sorted.sort((first, second) => (scores.get(second.id) || 0) - (scores.get(first.id) || 0))
-  }
-
-  return sorted
+  const indexes = filterAndSortIndexes(entries, state, ctx)
+  const out: T[] = new Array(indexes.length)
+  for (let i = 0; i < indexes.length; i++) out[i] = entries[indexes[i]]
+  return out
 }
 
 /** Inclusive start, exclusive end - clamped to `[0, totalRows]`. */

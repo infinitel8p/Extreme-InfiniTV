@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest"
-import { filterAndSortEntries, rowWindow, rowOf, type GridFilterState } from "@/scripts/lib/tv-grid-filter"
+import {
+  filterAndSortEntries,
+  filterAndSortIndexes,
+  rowWindow,
+  rowOf,
+  type GridFilterState,
+} from "@/scripts/lib/tv-grid-filter"
 
 interface Entry {
   id: number
@@ -104,6 +110,34 @@ describe("filterAndSortEntries", () => {
     const entries = makeEntries()
     const snapshot = entries.map((entry) => entry.id)
     filterAndSortEntries(entries, baseState({ sort: "az" }), baseCtx)
+    expect(entries.map((entry) => entry.id)).toEqual(snapshot)
+  })
+})
+
+describe("filterAndSortIndexes", () => {
+  it("returns indexes into the original array matching filterAndSortEntries", () => {
+    const entries = makeEntries()
+    const state = baseState({ sort: "rating" })
+    const indexes = filterAndSortIndexes(entries, state, baseCtx)
+    const byIndex = Array.from(indexes).map((index) => entries[index])
+    expect(byIndex).toEqual(filterAndSortEntries(entries, state, baseCtx))
+  })
+
+  it("keeps indexes relative to the untouched input array after filtering", () => {
+    const entries = makeEntries()
+    const indexes = filterAndSortIndexes(entries, baseState({ category: "Comedy" }), baseCtx)
+    expect(Array.from(indexes)).toEqual([1, 3])
+  })
+
+  it("returns an empty array when nothing matches", () => {
+    const indexes = filterAndSortIndexes(makeEntries(), baseState({ query: "nope" }), baseCtx)
+    expect(indexes.length).toBe(0)
+  })
+
+  it("does not mutate the input array", () => {
+    const entries = makeEntries()
+    const snapshot = entries.map((entry) => entry.id)
+    filterAndSortIndexes(entries, baseState({ sort: "az" }), baseCtx)
     expect(entries.map((entry) => entry.id)).toEqual(snapshot)
   })
 })

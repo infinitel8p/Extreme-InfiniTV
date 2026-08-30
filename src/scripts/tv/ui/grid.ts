@@ -5,15 +5,21 @@
 import { rowWindow, rowOf } from "@/scripts/lib/tv-grid-filter"
 import { releaseCachedImages } from "@/scripts/lib/img-cache.ts"
 import { registerFocusSection, keepFocusedInView, resetKeepInView, remPx } from "@/scripts/tv/focus"
-import { createCard, type PosterCardItem } from "./card"
+import { motionAllowed, startViewTransitionSafe, TV_EASE, heavyEffectsAllowed, memoryConservative } from "@/scripts/tv/motion"
+import { createCard, keepCardMediaDecoded, type PosterCardItem } from "./card"
 
-const OVERSCAN_ROWS = 2
+const OVERSCAN_ROWS_FULL = 2
+// Lite keeps only the visible rows mounted - no extra rows held resident off-screen.
+const OVERSCAN_ROWS_LITE = 0
 const CARD_WIDTH_REM = 9.5
 const ROW_GAP_REM = 1 // gap-4
 const FALLBACK_ROW_HEIGHT_REM = 18.5
 const MIN_COLUMNS = 4
 const SKELETON_COUNT = 18
 const SCROLL_OFFSET_REM = 1.5
+const MAX_NAMED_TRANSITIONS = 48
+// Each named element is its own snapshot texture; lite keeps only the root crossfade.
+const MAX_NAMED_TRANSITIONS_LITE = 0
 
 export interface GridOptions {
   focusSectionId: string
@@ -26,12 +32,19 @@ export interface GridOptions {
 export interface GridSource {
   count: number
   itemAt(index: number): PosterCardItem
+  /** Cheap `${kind}:${id}` lookup for reuse/reconcile; falls back to itemAt(index) when absent. */
+  keyAt?(index: number): string
+}
+
+export interface GridSetEntriesOptions {
+  /** false skips the View Transition entirely - used by prepaint, which must never animate. */
+  animate?: boolean
 }
 
 export interface GridHandle {
   el: HTMLElement
   setLoading(): void
-  setEntries(source: GridSource, emptyMessage?: string): void
+  setEntries(source: GridSource, emptyMessage?: string, options?: GridSetEntriesOptions): void
   destroy(): void
 }
 
@@ -43,7 +56,36 @@ function buildSkeletonCard(): HTMLDivElement {
   return skeleton
 }
 
+function entryKeyOf(source: GridSource, index: number): string {
+  if (source.keyAt) return source.keyAt(index)
+  const item = source.itemAt(index)
+  return `${item.kind}:${item.id}`
+}
+
+function cardSignatureOf(item: PosterCardItem): string {
+  return [item.href, item.name, item.meta, item.posterUrl ?? "", item.progressPercent ?? ""].join("")
+}
+
+function sanitizeViewTransitionName(key: string): string {
+  return key.replace(/[^a-zA-Z0-9_-]/g, "-")
+}
+
+let viewTransitionStyleInjected = false
+
+function ensureViewTransitionStyle(): void {
+  if (viewTransitionStyleInjected || typeof document === "undefined") return
+  viewTransitionStyleInjected = true
+  const style = document.createElement("style")
+  style.textContent = `
+::view-transition-group(*) { animation-duration: 320ms; animation-timing-function: ${TV_EASE}; }
+::view-transition-old(*), ::view-transition-new(*) { animation-duration: 200ms; animation-timing-function: ${TV_EASE}; }
+`
+  document.head.appendChild(style)
+}
+
 export function createGrid(options: GridOptions): GridHandle {
+  ensureViewTransitionStyle()
+
   const el = document.createElement("div")
   el.className = "min-h-0 flex-1"
 
@@ -65,12 +107,24 @@ export function createGrid(options: GridOptions): GridHandle {
   let columns = fixedColumns || 6
   let rowHeightPx = remPx(FALLBACK_ROW_HEIGHT_REM)
   let rowHeightMeasured = false
+  let rowHeightMeasurePending = false
   let focusedRow = 0
   let lastFocusedIndex: number | null = null
   const mountedRows = new Map<number, HTMLElement>()
 
+  // Measured on demand and refreshed before a render pass, so the View Transition callback
+  // (which must run and settle in one frame) never forces a synchronous layout read itself.
+  let cachedFocusPadPx = 0
+  let cachedScrollerHeight = 0
+
+  function measureLayoutMetrics(): void {
+    cachedFocusPadPx = parseFloat(getComputedStyle(scroller).paddingTop) || 0
+    cachedScrollerHeight = scroller.clientHeight
+  }
+  measureLayoutMetrics()
+
   function focusPadPx(): number {
-    return parseFloat(getComputedStyle(scroller).paddingTop) || 0
+    return cachedFocusPadPx
   }
 
   function computeColumns(): number {
@@ -93,7 +147,7 @@ export function createGrid(options: GridOptions): GridHandle {
     for (const [rowIndex, rowEl] of mountedRows) rowEl.style.top = `${rowIndex * rowHeightPx}px`
   }
 
-  function measureRowHeight(force = false): void {
+  function measureRowHeightNow(force: boolean): void {
     if (rowHeightMeasured && !force) return
     const firstCard = track.querySelector<HTMLElement>("[data-grid-index]")
     if (!firstCard) return
@@ -106,7 +160,18 @@ export function createGrid(options: GridOptions): GridHandle {
     }
   }
 
-  function buildRow(rowIndex: number): HTMLElement {
+  // Deferred to a rAF so the layout read never lands in the same task as the row mount.
+  function scheduleRowHeightMeasure(force = false): void {
+    if (rowHeightMeasured && !force) return
+    if (rowHeightMeasurePending) return
+    rowHeightMeasurePending = true
+    requestAnimationFrame(() => {
+      rowHeightMeasurePending = false
+      measureRowHeightNow(force)
+    })
+  }
+
+  function buildRow(rowIndex: number, reusePool?: Map<string, HTMLElement>): HTMLElement {
     const rowEl = document.createElement("div")
     rowEl.className = "absolute inset-x-0 grid gap-4"
     rowEl.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`
@@ -115,7 +180,21 @@ export function createGrid(options: GridOptions): GridHandle {
     const start = rowIndex * columns
     const end = Math.min(source.count, start + columns)
     for (let index = start; index < end; index++) {
-      const card = createCard(source.itemAt(index), { fill: true }) as HTMLElement
+      const item = source.itemAt(index)
+      const key = source.keyAt ? source.keyAt(index) : `${item.kind}:${item.id}`
+      const signature = cardSignatureOf(item)
+      const reused = reusePool?.get(key)
+      let card: HTMLElement
+      if (reused && reused.dataset.cardSignature === signature) {
+        card = reused
+        reusePool!.delete(key)
+        // Detaching/reattaching a lazy <img> re-queues its load/decode; force it to repaint now.
+        keepCardMediaDecoded(card)
+      } else {
+        card = createCard(item, { fill: true }) as HTMLElement
+        card.dataset.entryKey = key
+        card.dataset.cardSignature = signature
+      }
       card.dataset.gridIndex = String(index)
       rowEl.appendChild(card)
     }
@@ -123,13 +202,13 @@ export function createGrid(options: GridOptions): GridHandle {
   }
 
   function visibleRowCount(): number {
-    const availableHeight = (scroller.clientHeight || rowHeightPx) - focusPadPx() * 2
+    const availableHeight = (cachedScrollerHeight || rowHeightPx) - focusPadPx() * 2
     return Math.max(1, Math.ceil(availableHeight / rowHeightPx))
   }
 
-  function mountRow(rowIndex: number): void {
+  function mountRow(rowIndex: number, reusePool?: Map<string, HTMLElement>): void {
     if (mountedRows.has(rowIndex)) return
-    const rowEl = buildRow(rowIndex)
+    const rowEl = buildRow(rowIndex, reusePool)
     track.appendChild(rowEl)
     mountedRows.set(rowIndex, rowEl)
   }
@@ -150,24 +229,25 @@ export function createGrid(options: GridOptions): GridHandle {
     }
   }
 
-  function renderWindow(): void {
+  function renderWindow(reusePool?: Map<string, HTMLElement>): void {
     const rows = totalRows()
-    const { start, end } = rowWindow(rows, focusedRow, visibleRowCount(), OVERSCAN_ROWS)
-    for (let rowIndex = start; rowIndex < end; rowIndex++) mountRow(rowIndex)
+    const overscanRows = memoryConservative() ? OVERSCAN_ROWS_LITE : OVERSCAN_ROWS_FULL
+    const { start, end } = rowWindow(rows, focusedRow, visibleRowCount(), overscanRows)
+    for (let rowIndex = start; rowIndex < end; rowIndex++) mountRow(rowIndex, reusePool)
     pruneRowsOutsideWindow(start, end)
-    measureRowHeight()
+    scheduleRowHeightMeasure()
   }
 
-  function focusIndex(index: number): void {
+  function focusIndex(index: number, reusePool?: Map<string, HTMLElement>): void {
     if (!source.count) return
     const clamped = Math.max(0, Math.min(source.count - 1, index))
     const targetRow = rowOf(clamped, columns)
     focusedRow = targetRow
-    mountRow(targetRow)
+    mountRow(targetRow, reusePool)
     const target = track.querySelector<HTMLElement>(`[data-grid-index="${clamped}"]`)
     target?.focus()
     if (target) lastFocusedIndex = clamped
-    renderWindow()
+    renderWindow(reusePool)
   }
 
   function currentFocusedIndex(): number | null {
@@ -177,6 +257,23 @@ export function createGrid(options: GridOptions): GridHandle {
     if (indexStr == null) return null
     const index = Number(indexStr)
     return Number.isFinite(index) ? index : null
+  }
+
+  // Scans outward from `nearIndex`: a survivor usually lands at or near its old slot, and every
+  // probe builds a key string, so a 180k-row catalog makes a front-to-back scan expensive.
+  function findIndexByKey(targetSource: GridSource, key: string, nearIndex: number): number | null {
+    const total = targetSource.count
+    if (total <= 0) return null
+    const start = Math.max(0, Math.min(nearIndex, total - 1))
+    if (entryKeyOf(targetSource, start) === key) return start
+    for (let offset = 1; offset < total; offset++) {
+      const before = start - offset
+      const after = start + offset
+      if (before < 0 && after >= total) break
+      if (before >= 0 && entryKeyOf(targetSource, before) === key) return before
+      if (after < total && entryKeyOf(targetSource, after) === key) return after
+    }
+    return null
   }
 
   function onKeyDown(event: KeyboardEvent): void {
@@ -240,31 +337,53 @@ export function createGrid(options: GridOptions): GridHandle {
   }
   scroller.addEventListener("focusin", onFocusIn)
 
+  // Pulls every currently attached card out of its row (without releasing its image)
+  // so a reslot/reconcile pass can reuse the ones whose entry survives.
+  function detachReusableCards(): Map<string, HTMLElement> {
+    const pool = new Map<string, HTMLElement>()
+    for (const [rowIndex, rowEl] of Array.from(mountedRows)) {
+      for (const card of Array.from(rowEl.children) as HTMLElement[]) {
+        const key = card.dataset.entryKey
+        if (key) pool.set(key, card)
+      }
+      rowEl.remove()
+      mountedRows.delete(rowIndex)
+    }
+    return pool
+  }
+
+  function releasePool(pool: Map<string, HTMLElement>): void {
+    for (const card of pool.values()) releaseCachedImages(card)
+    pool.clear()
+  }
+
   let resizeObserver: ResizeObserver | null = null
   if (typeof ResizeObserver === "function") {
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
     resizeObserver = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
+        measureLayoutMetrics()
         if (!source.count) return
         const nextColumns = computeColumns()
         // Cards fill the row width, so even an unchanged column count needs a
         // row-height remeasure - the container width (and thus card height) moved.
         if (nextColumns === columns) {
-          measureRowHeight(true)
+          scheduleRowHeightMeasure(true)
           return
         }
         const focusedIndex = currentFocusedIndex()
         columns = nextColumns
-        clearMountedRows()
+        const reusePool = detachReusableCards()
         rowHeightMeasured = false
         setTrackHeight()
         if (focusedIndex != null) {
-          focusIndex(Math.max(0, Math.min(source.count - 1, focusedIndex)))
+          focusIndex(Math.max(0, Math.min(source.count - 1, focusedIndex)), reusePool)
         } else {
           focusedRow = 0
-          renderWindow()
+          renderWindow(reusePool)
         }
+        releasePool(reusePool)
       }, 120)
     })
     resizeObserver.observe(el)
@@ -306,36 +425,103 @@ export function createGrid(options: GridOptions): GridHandle {
     track.appendChild(empty)
   }
 
-  function setEntries(nextSource: GridSource, emptyMessage?: string): void {
-    const heldFocus = scroller.contains(document.activeElement)
-    const previousIndex = currentFocusedIndex()
-    clearMountedRows()
+  // Names the mounted cards that survive into `nextSource` so the view transition can
+  // slide them to their new slot instead of cross-fading; capped so a huge reflow just
+  // falls back to a plain fade for anything beyond the cap.
+  function nameSurvivorCards(nextSource: GridSource): HTMLElement[] {
+    const cap = heavyEffectsAllowed() ? MAX_NAMED_TRANSITIONS : MAX_NAMED_TRANSITIONS_LITE
+    if (cap <= 0 || !motionAllowed() || !mountedRows.size) return []
+    const survivorKeys = new Set<string>()
+    for (let index = 0; index < nextSource.count; index++) survivorKeys.add(entryKeyOf(nextSource, index))
+
+    const named: HTMLElement[] = []
+    for (const rowEl of mountedRows.values()) {
+      for (const card of Array.from(rowEl.children) as HTMLElement[]) {
+        if (named.length >= cap) return named
+        const key = card.dataset.entryKey
+        if (!key || !survivorKeys.has(key)) continue
+        card.style.viewTransitionName = `tv-card-${sanitizeViewTransitionName(key)}`
+        named.push(card)
+      }
+    }
+    return named
+  }
+
+  function clearViewTransitionNames(cards: HTMLElement[]): void {
+    for (const card of cards) card.style.viewTransitionName = ""
+  }
+
+  function applyEntries(
+    nextSource: GridSource,
+    emptyMessage: string | undefined,
+    heldFocus: boolean,
+    previousIndex: number | null,
+    previousKey: string | null
+  ): void {
+    const reusePool = detachReusableCards()
     // Rows are re-laid out from the top, so a leftover offset would hide row 0.
     resetKeepInView(scroller)
     source = nextSource
     columns = computeColumns()
-    focusedRow = 0
     lastFocusedIndex = source.count ? 0 : null
     rowHeightMeasured = false
 
     if (!source.count) {
+      releasePool(reusePool)
       releaseCachedImages(track)
       track.replaceChildren()
+      focusedRow = 0
       renderEmpty(emptyMessage)
       return
     }
 
     resetTrackForRows()
     // setLoading()'s skeleton tiles are flow children, never tracked in mountedRows,
-    // so clearMountedRows() above leaves them behind under the absolute row layout.
+    // so detachReusableCards() above leaves them behind under the absolute row layout.
     track.replaceChildren()
     setTrackHeight()
-    renderWindow()
+
+    let restoreIndex: number | null = null
+    if (heldFocus) {
+      const survivorIndex = previousKey ? findIndexByKey(source, previousKey, previousIndex ?? 0) : null
+      restoreIndex = Math.max(0, Math.min(source.count - 1, survivorIndex ?? previousIndex ?? 0))
+      focusedRow = rowOf(restoreIndex, columns)
+    } else {
+      focusedRow = 0
+    }
+
+    renderWindow(reusePool)
+    releasePool(reusePool)
+
     const firstCard = track.querySelector<HTMLElement>("[data-grid-index]")
     if (firstCard) firstCard.dataset.tvAutofocus = ""
     window.SpatialNavigation?.makeFocusable?.()
     // The rebuild just dropped the focused card to <body>; put focus back where it was.
-    if (heldFocus) focusIndex(previousIndex ?? 0)
+    if (heldFocus && restoreIndex != null) focusIndex(restoreIndex)
+  }
+
+  async function performSetEntries(nextSource: GridSource, emptyMessage: string | undefined, animate: boolean): Promise<void> {
+    const heldFocus = scroller.contains(document.activeElement)
+    const previousIndex = currentFocusedIndex()
+    const previousKey = previousIndex != null && source.count ? entryKeyOf(source, previousIndex) : null
+    // Measured now, outside any View Transition callback, so the callback itself never
+    // forces a synchronous layout read while the browser is mid-capture.
+    measureLayoutMetrics()
+
+    if (!animate) {
+      applyEntries(nextSource, emptyMessage, heldFocus, previousIndex, previousKey)
+      return
+    }
+
+    const namedCards = nameSurvivorCards(nextSource)
+    await startViewTransitionSafe(() => {
+      applyEntries(nextSource, emptyMessage, heldFocus, previousIndex, previousKey)
+    })
+    clearViewTransitionNames(namedCards)
+  }
+
+  function setEntries(nextSource: GridSource, emptyMessage?: string, options?: GridSetEntriesOptions): void {
+    void performSetEntries(nextSource, emptyMessage, options?.animate ?? true)
   }
 
   function destroy(): void {

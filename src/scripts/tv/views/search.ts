@@ -11,12 +11,19 @@ import {
 } from "@/scripts/lib/preferences.js"
 import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
 import { readCachedLiveChannels, ensureOverridesReady } from "@/scripts/lib/live-catalog.ts"
-import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
+import { normalize } from "@/scripts/lib/text.js"
+import { searchCatalog, SYNC_THRESHOLD } from "@/scripts/tv/catalog-filter-client"
 import { kindLabel } from "@/scripts/lib/kinds.ts"
 import { ICON_SEARCH } from "@/scripts/lib/icons.js"
 import { getActiveLocale } from "@/scripts/lib/i18n"
 import { getLanguageGroupingEnabled, getContentLanguage, LANGUAGE_GROUPING_EVENT, CONTENT_LANGUAGE_EVENT } from "@/scripts/lib/app-settings.js"
-import { getSharedGroupingIndex, collapseIntoDisplayGroups, type CatalogGroupingIndex } from "@/scripts/lib/language-groups.ts"
+import {
+  getSharedGroupingIndex,
+  collapseIntoDisplayGroups,
+  isLanguageGroupingExplicitlyEnabled,
+  type CatalogGroupingIndex,
+} from "@/scripts/lib/language-groups.ts"
+import { memoryConservative } from "@/scripts/tv/motion"
 import { effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
 import { buildLanguageChips, setLanguageChipsOffset } from "@/scripts/lib/entry-card.ts"
 import { registerFocusSection, keepFocusedInView } from "@/scripts/tv/focus"
@@ -28,9 +35,14 @@ import { playLive, type TvLiveChannel } from "@/scripts/tv/playback"
 // statically import the whole fetch stack just to know when it's stale.
 const CATALOG_WARMED_EVENT = "xt:catalog-warmed"
 
-const SEARCH_DEBOUNCE_MS = 200
+const SEARCH_DEBOUNCE_MS = 120
 const MIN_QUERY_LENGTH = 2
 const RESULT_CAP = 30
+
+// Lite tier skips the multi-map grouping index unless the user explicitly opted in.
+function languageGroupingAllowed(): boolean {
+  return memoryConservative() ? isLanguageGroupingExplicitlyEnabled() : getLanguageGroupingEnabled()
+}
 
 interface CatalogRow {
   id: number | string
@@ -56,7 +68,7 @@ function collapseRankedMatches<T extends CatalogRow & { norm: string }>(
   resolveGroupingIndex: () => CatalogGroupingIndex,
   preferredTags: string[]
 ): { rows: T[]; chipInfoById: Map<number, ChipInfoRecord> } {
-  if (!getLanguageGroupingEnabled()) return { rows: matches, chipInfoById: new Map() }
+  if (!languageGroupingAllowed()) return { rows: matches, chipInfoById: new Map() }
   const groupingIndex = resolveGroupingIndex()
   const groups = collapseIntoDisplayGroups(
     matches.map((row) => ({ ...row, id: Number(row.id) })),
@@ -121,16 +133,6 @@ function withNorms<T extends { name?: string; category?: string | null; norm?: s
     if (!row.norm) row.norm = normalize(`${row.name || ""} ${row.category || ""}`)
   }
   return rows as Array<T & { norm: string }>
-}
-
-function rankRows<T extends { norm: string }>(rows: T[], tokens: string[]): T[] {
-  const scored: Array<{ row: T; score: number }> = []
-  for (const row of rows) {
-    const score = scoreNormMatch(row.norm, tokens)
-    if (score > 0) scored.push({ row, score })
-  }
-  scored.sort((left, right) => right.score - left.score)
-  return scored.slice(0, RESULT_CAP).map((entry) => entry.row)
 }
 
 function metaForCatalogRow(row: CatalogRow): string {
@@ -220,6 +222,8 @@ const view: TvView = {
     let warmupRequested = false
     let currentQuery = ""
     let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+    let searchGeneration = 0
+    let sessionStarted = false
 
     function commitCurrentSearch(): void {
       if (currentQuery) pushRecentSearch(activePlaylistId, currentQuery)
@@ -256,7 +260,7 @@ const view: TvView = {
       }
       inputEl.value = text
       syncUrlQuery(text)
-      runSearch(text)
+      void runSearch(text)
     }
 
     function syncUrlQuery(value: string): void {
@@ -311,7 +315,13 @@ const view: TvView = {
       }
     }
 
-    function runSearch(rawValue: string): void {
+    function isSmallCatalog(): boolean {
+      return channels.length < SYNC_THRESHOLD && movies.length < SYNC_THRESHOLD && series.length < SYNC_THRESHOLD
+    }
+
+    // Fires all three kinds in parallel and lets each rail update as its own result lands,
+    // rather than waiting for the slowest; a generation guard drops stale replies.
+    async function runSearch(rawValue: string): Promise<void> {
       if (!channelsRail || !moviesRail || !seriesRail) return
       const trimmed = rawValue.trim()
       currentQuery = trimmed
@@ -321,6 +331,7 @@ const view: TvView = {
       if (showRecent) renderRecentChips()
 
       if (trimmed.length < MIN_QUERY_LENGTH) {
+        searchGeneration++
         channelsRail.setItems([])
         moviesRail.setItems([])
         seriesRail.setItems([])
@@ -329,6 +340,7 @@ const view: TvView = {
       }
 
       if (!indexReady) {
+        searchGeneration++
         channelsRail.setLoading()
         moviesRail.setLoading()
         seriesRail.setLoading()
@@ -336,25 +348,48 @@ const view: TvView = {
         return
       }
 
-      const tokens = normalize(trimmed).split(" ").filter(Boolean)
-      const channelMatches = rankRows(channels, tokens)
+      const generation = ++searchGeneration
       const preferredTags = effectivePreferredTags(getContentLanguage(), getActiveLocale())
-      const movieCollapsed = collapseRankedMatches(rankRows(movies, tokens), () => getSharedGroupingIndex(movies), preferredTags)
-      const seriesCollapsed = collapseRankedMatches(rankRows(series, tokens), () => getSharedGroupingIndex(series), preferredTags)
-      const movieMatches = movieCollapsed.rows
-      const seriesMatches = seriesCollapsed.rows
+      const catalogPrefix = `search:${activePlaylistId}`
+      const resolvedKinds = new Set<"live" | "vod" | "series">()
+      let totalMatches = 0
 
-      channelsRail.setItems(channelMatches.map((channel) => toLiveCardItem(channel, channelMatches)))
-      const movieItems = movieMatches.map((movie) => toPosterCardItem(movie, "vod"))
-      const seriesItems = seriesMatches.map((row) => toPosterCardItem(row, "series"))
-      moviesRail.setItems(movieItems)
-      seriesRail.setItems(seriesItems)
-      decorateRailChips(moviesRail, movieItems, movieCollapsed.chipInfoById)
-      decorateRailChips(seriesRail, seriesItems, seriesCollapsed.chipInfoById)
+      const noteResolved = (kind: "live" | "vod" | "series", count: number): void => {
+        if (generation !== searchGeneration) return
+        resolvedKinds.add(kind)
+        totalMatches += count
+        if (totalMatches > 0) setStatus("")
+        else if (resolvedKinds.size === 3) {
+          setStatus(isWarming ? t("search.loadingCatalog") : t("search.noResults", { query: trimmed }))
+        }
+      }
 
-      const totalMatches = channelMatches.length + movieMatches.length + seriesMatches.length
-      if (totalMatches > 0) setStatus("")
-      else setStatus(isWarming ? t("search.loadingCatalog") : t("search.noResults", { query: trimmed }))
+      searchCatalog(`${catalogPrefix}:live`, channels, trimmed, RESULT_CAP).then((indexes) => {
+        if (generation !== searchGeneration || indexes === null) return
+        const channelMatches = Array.from(indexes, (index) => channels[index])
+        channelsRail!.setItems(channelMatches.map((channel) => toLiveCardItem(channel, channelMatches)))
+        noteResolved("live", channelMatches.length)
+      })
+
+      searchCatalog(`${catalogPrefix}:vod`, movies, trimmed, RESULT_CAP).then((indexes) => {
+        if (generation !== searchGeneration || indexes === null) return
+        const rankedMovies = Array.from(indexes, (index) => movies[index])
+        const movieCollapsed = collapseRankedMatches(rankedMovies, () => getSharedGroupingIndex(movies), preferredTags)
+        const movieItems = movieCollapsed.rows.map((movie) => toPosterCardItem(movie, "vod"))
+        moviesRail!.setItems(movieItems)
+        decorateRailChips(moviesRail!, movieItems, movieCollapsed.chipInfoById)
+        noteResolved("vod", movieCollapsed.rows.length)
+      })
+
+      searchCatalog(`${catalogPrefix}:series`, series, trimmed, RESULT_CAP).then((indexes) => {
+        if (generation !== searchGeneration || indexes === null) return
+        const rankedSeries = Array.from(indexes, (index) => series[index])
+        const seriesCollapsed = collapseRankedMatches(rankedSeries, () => getSharedGroupingIndex(series), preferredTags)
+        const seriesItems = seriesCollapsed.rows.map((row) => toPosterCardItem(row, "series"))
+        seriesRail!.setItems(seriesItems)
+        decorateRailChips(seriesRail!, seriesItems, seriesCollapsed.chipInfoById)
+        noteResolved("series", seriesCollapsed.rows.length)
+      })
     }
 
     function scheduleSearch(value: string): void {
@@ -362,8 +397,32 @@ const view: TvView = {
       searchDebounceTimer = setTimeout(() => {
         searchDebounceTimer = null
         syncUrlQuery(value)
-        runSearch(value)
+        void runSearch(value)
       }, SEARCH_DEBOUNCE_MS)
+    }
+
+    // First keystroke of a session skips the debounce when catalogs are small enough that a
+    // worker round trip isn't needed; later keystrokes in the same session still debounce.
+    function onInputChanged(value: string): void {
+      const trimmed = value.trim()
+      if (searchDebounceTimer) {
+        clearTimeout(searchDebounceTimer)
+        searchDebounceTimer = null
+      }
+      if (trimmed.length < MIN_QUERY_LENGTH) {
+        sessionStarted = false
+        syncUrlQuery(value)
+        void runSearch(value)
+        return
+      }
+      if (!sessionStarted && isSmallCatalog()) {
+        sessionStarted = true
+        syncUrlQuery(value)
+        void runSearch(value)
+        return
+      }
+      sessionStarted = true
+      scheduleSearch(value)
     }
 
     function rebuildIndex(): void {
@@ -375,7 +434,7 @@ const view: TvView = {
 
     // Grouping a full catalog is a multi-second task on a TV; do it while idle so the first query doesn't wait.
     function prewarmGroupingIndexes(): void {
-      if (!getLanguageGroupingEnabled()) return
+      if (!languageGroupingAllowed()) return
       const schedule =
         typeof window.requestIdleCallback === "function"
           ? (fn: () => void) => window.requestIdleCallback(fn, { timeout: 6000 })
@@ -404,7 +463,7 @@ const view: TvView = {
       isWarming = false
       if (!activePlaylistId) return
       rebuildIndex()
-      runSearch(inputEl.value)
+      void runSearch(inputEl.value)
     }
 
     function renderCentered(message: string, linkHref?: string, linkLabel?: string): void {
@@ -451,18 +510,18 @@ const view: TvView = {
       moviesRail = null
       seriesRail = null
       createRails()
-      runSearch(inputEl.value)
+      void runSearch(inputEl.value)
     }
 
     function onRecentChanged(event: Event): void {
       const detail = (event as CustomEvent).detail
       if (detail?.playlistId !== activePlaylistId) return
       refreshRecentSearches()
-      runSearch(inputEl.value)
+      void runSearch(inputEl.value)
     }
 
     function onLanguageSettingsChanged(): void {
-      runSearch(inputEl.value)
+      void runSearch(inputEl.value)
     }
 
     async function onActiveChanged(): Promise<void> {
@@ -471,7 +530,7 @@ const view: TvView = {
       activePlaylistId = active?._id || ""
       refreshRecentSearches()
       rebuildIndex()
-      runSearch(inputEl.value)
+      void runSearch(inputEl.value)
     }
 
     async function init(): Promise<void> {
@@ -492,7 +551,7 @@ const view: TvView = {
       await ensurePrefsLoaded()
       if (destroyed) return
       refreshRecentSearches()
-      runSearch(inputEl.value)
+      void runSearch(inputEl.value)
 
       // The input has to be usable before the catalog read; both resolve from memory otherwise.
       await nextPaint()
@@ -510,11 +569,11 @@ const view: TvView = {
 
       rebuildIndex()
       scheduleWarmupIfCold()
-      runSearch(inputEl.value)
+      void runSearch(inputEl.value)
       prewarmGroupingIndexes()
     }
 
-    inputEl.addEventListener("input", () => scheduleSearch(inputEl.value))
+    inputEl.addEventListener("input", () => onInputChanged(inputEl.value))
     recentClear.addEventListener("click", () => clearRecentSearches(activePlaylistId))
 
     document.addEventListener(CATALOG_WARMED_EVENT, onCatalogWarmed)
