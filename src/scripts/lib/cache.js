@@ -1,5 +1,6 @@
 // IndexedDB-backed catalog cache with in-memory hydration layer
 import { log } from "@/scripts/lib/log.js"
+import { createTimedIdbOpener } from "@/scripts/lib/idb-open.ts"
 
 const PREFIX = "xt_cache:"
 const DB_NAME = "xt_cache"
@@ -23,71 +24,27 @@ const _mem = new Map()
 // ---------------------------------------------------------------------------
 // IndexedDB layer
 // ---------------------------------------------------------------------------
-/** @type {Promise<IDBDatabase>|null} */
-let _dbPromise = null
-const DB_OPEN_TIMEOUT_MS = 3000
+const idbOpener = createTimedIdbOpener({
+  name: DB_NAME,
+  version: DB_VERSION,
+  logTag: "xt:cache",
+  upgrade(db, event) {
+    let store
+    if (!db.objectStoreNames.contains(STORE)) {
+      store = db.createObjectStore(STORE)
+    } else {
+      store = event.target.transaction.objectStore(STORE)
+      if (event.oldVersion < 3) store.clear()
+    }
+    // Lets pruneOldEntries read fetchedAt off the index instead of deserializing every record's payload.
+    if (!store.indexNames.contains(FETCHED_AT_INDEX)) {
+      store.createIndex(FETCHED_AT_INDEX, FETCHED_AT_INDEX)
+    }
+  },
+})
 
-// Raced against a timeout so a wedged/blocked open doesn't hang every cache read.
 function openDB() {
-  if (_dbPromise) return _dbPromise
-  if (typeof indexedDB === "undefined") {
-    return Promise.reject(new Error("IndexedDB unavailable"))
-  }
-  let settled = false
-  const open = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = (event) => {
-      const db = req.result
-      let store
-      if (!db.objectStoreNames.contains(STORE)) {
-        store = db.createObjectStore(STORE)
-      } else {
-        store = req.transaction.objectStore(STORE)
-        if (event.oldVersion < 3) store.clear()
-      }
-      // Lets pruneOldEntries read fetchedAt off the index instead of deserializing every record's payload.
-      if (!store.indexNames.contains(FETCHED_AT_INDEX)) {
-        store.createIndex(FETCHED_AT_INDEX, FETCHED_AT_INDEX)
-      }
-    }
-    req.onsuccess = () => {
-      settled = true
-      const db = req.result
-      // Another document upgrading the schema needs this connection closed.
-      db.onversionchange = () => {
-        try { db.close() } catch {}
-        _dbPromise = null
-      }
-      resolve(db)
-    }
-    req.onerror = () => {
-      settled = true
-      reject(req.error)
-    }
-    // Per spec `blocked` doesn't abort the request; it still resolves later.
-    req.onblocked = () => {
-      log.warn("[xt:cache] open blocked by another connection, waiting")
-    }
-  })
-  const raced = Promise.race([
-    open,
-    new Promise((resolve) =>
-      setTimeout(() => {
-        if (!settled) log.warn("[xt:cache] IDB open timed out, caching disabled for this page")
-        resolve(null)
-      }, DB_OPEN_TIMEOUT_MS)
-    ),
-  ])
-  open.then(
-    (db) => {
-      if (_dbPromise === raced) _dbPromise = Promise.resolve(db)
-    },
-    () => {
-      if (_dbPromise === raced) _dbPromise = null
-    }
-  )
-  _dbPromise = raced
-  return raced
+  return idbOpener.open()
 }
 
 async function idbGet(key) {

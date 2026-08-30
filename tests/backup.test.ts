@@ -84,6 +84,7 @@ vi.mock("@/scripts/lib/app-settings.js", () => ({
   getAccent: () => settingsState.accent,
   setAccent: (accent: string) => { settingsState.accent = accent },
   ACCENT_PRESETS: ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"],
+  ACCENT_RANDOM_ID: "random",
   getDensity: () => settingsState.density,
   setDensity: (density: string) => { settingsState.density = density },
   DENSITY_PRESETS: { compact: 0.75, cozy: 1, comfortable: 1.3 },
@@ -445,6 +446,16 @@ describe("importAll", () => {
     expect(settingsState.density).toBe("comfortable")
     expect(settingsState.uiSounds).toBe(false)
     expect(settingsState.hubStripIds).toEqual(["favorites", "watchlist"])
+  })
+
+  it("round-trips the random accent sentinel", async () => {
+    settingsState.accent = "random"
+    const snapshot = await exportAll()
+    settingsState.accent = "fuchsia"
+
+    await importAll(snapshot)
+
+    expect(settingsState.accent).toBe("random")
   })
 
   it("round-trips the language group through the i18n setter", async () => {

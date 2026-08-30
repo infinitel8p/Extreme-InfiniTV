@@ -2,6 +2,7 @@ import { log } from "@/scripts/lib/log.js"
 import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 import { LANGUAGE_TOKENS } from "@/scripts/lib/language-tags.ts"
+import { compareVersions } from "@/scripts/lib/version-compare.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
@@ -919,7 +920,7 @@ export function setUpdateChannel(channel) {
 
 export const UI_SOUNDS_EVENT = "xt:ui-sounds-changed"
 
-/** UI sounds: default on; untouched setting stays quiet for reduced-motion or perf-mode users. */
+/** UI sounds: default on; untouched setting stays quiet for reduced-motion users. */
 export function getUiSoundsEnabled() {
   const raw = readLS(KEY_UI_SOUNDS, "")
   if (raw === "1") return true
@@ -1104,6 +1105,36 @@ export function setTmdbApiKey(key) {
     new CustomEvent(TMDB_SETTINGS_EVENT, { detail: { key: "apiKey" } })
   )
 }
+
+// Pre-1.9 stored "off" as "" (default-off semantics); the toggle flipped to
+// default-on with "" meaning on, which is also what a 1.9 explicit-enable
+// writes - so the off-rewrite below only applies pre-1.9 installs.
+const KEY_TMDB_ENABLED_MIGRATED = "xt_tmdb_enabled_v2"
+// Captured before whats-new.ts (async, splash-gated) can bump the marker.
+const lastSeenVersionAtLoad = (() => {
+  try {
+    return localStorage.getItem("xt_last_seen_version")
+  } catch {
+    return null
+  }
+})()
+;(function migrateTmdbEnabledLegacy() {
+  try {
+    if (localStorage.getItem(KEY_TMDB_ENABLED_MIGRATED) === "1") return
+    const raw = localStorage.getItem(KEY_TMDB_ENABLED)
+    // Compare release cores only: a 1.9.0-beta install is not "pre-1.9".
+    const lastSeenCore = lastSeenVersionAtLoad ? lastSeenVersionAtLoad.split(/[-+]/)[0] : null
+    const isPre19 = !lastSeenCore || compareVersions(lastSeenCore, "1.9.0") < 0
+    if (raw === "1") {
+      localStorage.setItem(KEY_TMDB_ENABLED, "")
+    } else if (isPre19 && raw !== "0" && (localStorage.getItem(KEY_TMDB_KEY) || "").trim()) {
+      localStorage.setItem(KEY_TMDB_ENABLED, "0")
+    }
+    localStorage.setItem(KEY_TMDB_ENABLED_MIGRATED, "1")
+  } catch (migrationError) {
+    log.error("[xt:settings] tmdb-enabled migration failed:", migrationError)
+  }
+})()
 
 // Defaults on: the toggle only matters once a key is set (see isTmdbActive).
 export function getTmdbEnabled() {

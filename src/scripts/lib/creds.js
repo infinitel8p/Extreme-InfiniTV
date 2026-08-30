@@ -73,7 +73,7 @@ function getStore() {
         )
         return null
       })
-    storePromise = Promise.race([
+    const raced = Promise.race([
       load,
       new Promise((resolve) =>
         setTimeout(() => {
@@ -82,6 +82,10 @@ function getStore() {
         }, STORE_LOAD_TIMEOUT_MS)
       ),
     ])
+    load.then((store) => {
+      if (storePromise === raced) storePromise = Promise.resolve(store)
+    })
+    storePromise = raced
   }
   return storePromise
 }
@@ -438,7 +442,8 @@ export async function addEntry(partial) {
   }
   if (pendingLocalContent !== null) {
     const { setLocalContent } = await import("./local-content.js")
-    await setLocalContent(entry._id, pendingLocalContent)
+    const saved = await setLocalContent(entry._id, pendingLocalContent)
+    if (!saved) throw new Error("Failed to save local playlist content.")
   }
   const next = {
     entries: [...s.entries, entry],
@@ -522,7 +527,8 @@ export async function updateEntry(id, patch) {
   })
   if (pendingLocalContent !== null) {
     const { setLocalContent } = await import("./local-content.js")
-    await setLocalContent(id, pendingLocalContent)
+    const saved = await setLocalContent(id, pendingLocalContent)
+    if (!saved) throw new Error("Failed to save local playlist content.")
   }
   await writeRaw({ ...s, entries: next })
   const { invalidateEntry } = await import("./cache.js")

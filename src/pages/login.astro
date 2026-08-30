@@ -1744,6 +1744,9 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 			}
 
 			location.href = editing ? "/" : "/livetv";
+		} catch (error) {
+			log.warn("[xt:login] save failed:", error);
+			showStatus("unavailable", t("login.error.localSaveFailed"));
 		} finally {
 			saveBtn.disabled = false;
 		}

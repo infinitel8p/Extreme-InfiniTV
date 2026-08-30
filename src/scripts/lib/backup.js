@@ -45,6 +45,7 @@ import {
   getAccent,
   setAccent,
   ACCENT_PRESETS,
+  ACCENT_RANDOM_ID,
   getDensity,
   setDensity,
   DENSITY_PRESETS,
@@ -202,8 +203,11 @@ export async function exportAll() {
   for (const entry of entries) {
     if (!entry?._id) continue
     if (entry.type === "local-m3u" || entry.type === "custom") {
-      const text = await getLocalContent(entry._id)
-      if (typeof text === "string" && text) localContent[entry._id] = text
+      const text = await getLocalContent(entry._id, { waitForOpen: true })
+      if (text === null) {
+        throw new Error(`Failed to read local content for playlist "${entry._id}".`)
+      }
+      if (text) localContent[entry._id] = text
     }
     const offset = getOffsetSetting(entry._id)
     if (typeof offset === "number") epgOffsets[entry._id] = offset
@@ -446,7 +450,10 @@ export async function importAll(blob) {
         else writeRawLS(KEY_FONT_SCALE, String(display.fontScale))
         summary.appSettings++
       }
-      if (typeof display.accent === "string" && ACCENT_PRESETS.includes(display.accent)) {
+      if (
+        typeof display.accent === "string" &&
+        (display.accent === ACCENT_RANDOM_ID || ACCENT_PRESETS.includes(display.accent))
+      ) {
         setAccent(display.accent)
         summary.appSettings++
       }

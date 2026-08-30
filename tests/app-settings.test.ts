@@ -418,3 +418,48 @@ describe("TMDb / TVDB enrichment toggles", () => {
     expect(isEnrichmentActive()).toBe(false)
   })
 })
+
+describe("TMDb enabled legacy migration", () => {
+  it("migrates a legacy off value (empty string) with a stored key to explicit off", async () => {
+    localStorage.setItem("xt_tmdb_enabled", "")
+    localStorage.setItem("xt_tmdb_key", "abc123")
+    const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTmdbEnabled()).toBe(false)
+    expect(localStorage.getItem("xt_tmdb_enabled")).toBe("0")
+    expect(localStorage.getItem("xt_tmdb_enabled_v2")).toBe("1")
+  })
+
+  it("migrates a legacy on value (\"1\") to the new on representation", async () => {
+    localStorage.setItem("xt_tmdb_enabled", "1")
+    const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTmdbEnabled()).toBe(true)
+    expect(localStorage.getItem("xt_tmdb_enabled")).toBe("")
+  })
+
+  it("leaves a legacy off value alone when no key is stored", async () => {
+    localStorage.setItem("xt_tmdb_enabled", "")
+    const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTmdbEnabled()).toBe(true)
+  })
+
+  it("does not re-run once the marker is set, even across a fresh module load", async () => {
+    localStorage.setItem("xt_tmdb_enabled", "")
+    localStorage.setItem("xt_tmdb_key", "abc123")
+    const first = await import("@/scripts/lib/app-settings.js")
+    expect(first.getTmdbEnabled()).toBe(false)
+
+    vi.resetModules()
+    const second = await import("@/scripts/lib/app-settings.js")
+    expect(second.getTmdbEnabled()).toBe(false)
+  })
+
+  it("leaves a 1.9-beta explicit enable alone (last seen version >= 1.9.0)", async () => {
+    localStorage.setItem("xt_last_seen_version", "1.9.0-beta.3")
+    localStorage.setItem("xt_tmdb_enabled", "")
+    localStorage.setItem("xt_tmdb_key", "abc123")
+    const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTmdbEnabled()).toBe(true)
+    expect(localStorage.getItem("xt_tmdb_enabled")).toBe("")
+    expect(localStorage.getItem("xt_tmdb_enabled_v2")).toBe("1")
+  })
+})

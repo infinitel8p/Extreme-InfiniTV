@@ -1023,9 +1023,18 @@ async function paintSeries(data, fromCache, age) {
   // upstream, so any previously cached fully-watched verdict is stale - drop it
   // and let the scheduled recompute below actually rescan.
   if (!fromCache) fullyWatchedCacheByPlaylistId.delete(activePlaylistId)
-  // Paint immediately with whatever's cached (or nothing) so the fully-watched
-  // scan never blocks first paint; the idle recompute below reconciles it.
-  fullyWatchedSeriesIds = fullyWatchedCacheByPlaylistId.get(activePlaylistId) ?? new Set()
+  // Paint immediately with whatever's cached so the fully-watched scan never
+  // blocks first paint; the idle recompute below reconciles it. On a cache
+  // miss with hide-watched on, await the scan instead so watched cards never
+  // flash in and get pulled a moment later.
+  const cachedFullyWatched = fullyWatchedCacheByPlaylistId.get(activePlaylistId)
+  if (cachedFullyWatched) {
+    fullyWatchedSeriesIds = cachedFullyWatched
+  } else if (getHideWatched(activePlaylistId, "series")) {
+    await recomputeFullyWatched()
+  } else {
+    fullyWatchedSeriesIds = new Set()
+  }
   applyFilter()
   scheduleFullyWatchedRecompute()
 }

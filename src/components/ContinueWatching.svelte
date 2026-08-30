@@ -78,8 +78,10 @@
     }
   }
 
-  function buildLiveEntry(recent, liveById) {
+  function buildLiveEntry(recent, liveById, liveCacheAvailable) {
     const channel = liveById.get(Number(recent.id))
+    // Hidden-channel recents miss the live lookup once the catalog is cached.
+    const unavailable = !channel && !!liveCacheAvailable
     return {
       kind: "live",
       id: String(recent.id),
@@ -89,6 +91,7 @@
       href: `/livetv?channel=${encodeURIComponent(recent.id)}`,
       percent: 0,
       hasProgress: false,
+      unavailable,
     }
   }
 
@@ -99,6 +102,7 @@
     const vodById = new Map(vodList.map((movie) => [Number(movie.id), movie]))
     const liveList = readCachedLiveChannels(playlistId)
     const liveById = new Map(liveList.map((channel) => [Number(channel.id), channel]))
+    const liveCacheAvailable = hasCachedLiveChannels(playlistId)
 
     const progress = getContinueWatching(playlistId, STRIP_LIMIT).map((row) => ({
       ts: row.updatedAt || 0,
@@ -109,7 +113,7 @@
       .filter((row) => (row.ts || 0) >= liveCutoff)
       .map((row) => ({
         ts: row.ts || 0,
-        built: buildLiveEntry(row, liveById),
+        built: buildLiveEntry(row, liveById, liveCacheAvailable),
       }))
 
     const merged = [...progress, ...recents].sort((left, right) => right.ts - left.ts)
@@ -193,9 +197,11 @@
           style:--enter-delay={Math.min(idx, 6) * 28 + "ms"}>
           <a
             href={entry.href}
+            onclick={(event) => { if (entry.unavailable) event.preventDefault() }}
             aria-label={entry.kind === "live"
               ? `Watch ${entry.name}`
               : `Resume ${entry.name}`}
+            aria-disabled={entry.unavailable}
             use:hubCardMenu={{
               kind: entry.kind,
               id: entry.id,
@@ -211,7 +217,8 @@
                    hover:ring-[3px] hover:ring-accent
                    outline-none focus-visible:ring-1 focus-visible:ring-accent
                    hover:transform-[translateY(-2px)]
-                   focus-visible:transform-[translateY(-2px)]">
+                   focus-visible:transform-[translateY(-2px)]"
+            class:opacity-50={entry.unavailable}>
             <div class="cw-poster aspect-2/3 w-full overflow-hidden bg-surface-2 relative">
               {#if entry.logo}
                 {#if entry.kind === "live"}

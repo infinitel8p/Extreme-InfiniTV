@@ -144,13 +144,16 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
             sessionStorage.getItem("xt_receiver_exited") !== "1" &&
             location.pathname !== "/receiver"
           ) {
+            window.__xtReceiverBooting = true;
             location.replace("/receiver");
           }
         } catch (e) {}
 
         // TV safe-area inset
         if (localStorage.getItem("xt_tv_overscan_auto") === "1") {
-          localStorage.removeItem("xt_tv_overscan");
+          if (localStorage.getItem("xt_tv_overscan") === "4") {
+            localStorage.removeItem("xt_tv_overscan");
+          }
           localStorage.removeItem("xt_tv_overscan_auto");
         }
         var overscan = parseFloat(localStorage.getItem("xt_tv_overscan") || "");
@@ -277,7 +280,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
     </script>
     <script is:inline define:vars={{ tvRouteTable: TV_ROUTE_TABLE, appMode }}>
       try {
-        if (appMode !== "receiver" && document.documentElement.dataset.tv === "1") {
+        if (!window.__xtReceiverBooting && appMode !== "receiver" && document.documentElement.dataset.tv === "1") {
           var tvRedirectPath = location.pathname.replace(/\/+$/, "");
           if (tvRedirectPath === "") tvRedirectPath = "/";
           var tvRedirectTarget = tvRouteTable[tvRedirectPath];
@@ -378,7 +381,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
       <Sidebar />
       <div
         class="flex-1 min-w-0 min-h-0 flex flex-col order-first md:order-0
-                overflow-x-clip overflow-y-auto"
+                overflow-x-clip overflow-y-auto custom-scroll"
       >
         <slot />
       </div>
@@ -1079,11 +1082,11 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
             import("@/scripts/lib/receiver-discovery.js"),
           ])
         if (getReceiverModeEnabled()) {
-          invoke<{ name: string; port?: number }>("receiver_start", {
+          invoke<{ name: string; port?: number; id?: string }>("receiver_start", {
             name: getEffectiveReceiverDeviceName() || undefined,
           })
             .then((status) => {
-              if (status.port !== undefined) advertiseReceiver(status.name, status.port)
+              if (status.port !== undefined) advertiseReceiver(status.name, status.port, status.id)
               if ((window as any).AndroidReceiverKeepAlive) {
                 import("@/scripts/lib/receiver-keep-alive").then(({ startReceiverKeepAlive }) => {
                   startReceiverKeepAlive(status.name)

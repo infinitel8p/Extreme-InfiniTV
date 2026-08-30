@@ -42,6 +42,9 @@
   function buildEntry(playlistId, { kind, id }, lookups) {
     const meta = getFavoriteMeta(playlistId, kind, id)
     const item = lookups[kind]?.get(Number(id))
+    // Hidden-channel favorites and unresolved custom-playlist channels both
+    // miss the live lookup once the catalog is cached - can't tune either.
+    const unavailable = kind === "live" && !item && !!lookups.liveCacheAvailable
     const isStoredNameFallback = !!meta?.name && isKindFallbackName(kind, id, meta.name)
     const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
     // `kindLabel(kind)` here is build-time fallback for items without meta;
@@ -68,7 +71,7 @@
     } else if (kind === "series") {
       href = `/series/detail?id=${encodeURIComponent(id)}`
     }
-    return { kind, id, name, logo, href }
+    return { kind, id, name, logo, href, unavailable }
   }
 
   function buildLookupsFromCache(playlistId) {
@@ -85,6 +88,7 @@
           series,
         ])
       ),
+      liveCacheAvailable: hasCachedLiveChannels(playlistId),
     }
   }
 
@@ -188,7 +192,9 @@
         <li class="fav-item shrink-0 snap-start" data-kind={entry.kind} style:--enter-delay={Math.min(idx, 8) * 28 + "ms"}>
           <a
             href={entry.href}
+            onclick={(event) => { if (entry.unavailable) event.preventDefault() }}
             aria-label={tr("favorites.itemAriaLabel", { name: entry.name })}
+            aria-disabled={entry.unavailable}
             use:hubCardMenu={{
               kind: entry.kind,
               id: entry.id,
@@ -202,7 +208,8 @@
                    hover:ring-[3px] hover:ring-accent
                    outline-none focus-visible:ring-1 focus-visible:ring-accent
                    hover:transform-[translateY(-2px)]
-                   focus-visible:transform-[translateY(-2px)]">
+                   focus-visible:transform-[translateY(-2px)]"
+            class:opacity-50={entry.unavailable}>
             <div class="fav-thumb w-full aspect-2-3 overflow-hidden bg-surface-2 relative">
               {#if entry.logo}
                 {#if entry.kind === "live"}

@@ -80,7 +80,7 @@
     const titleById = new Map(playlists.map((entry) => [entry.id, entry.title]))
 
     const buildEntries = () => {
-      /** @type {Map<string, { live: Map<number, any>, vod: Map<number, any>, series: Map<number, any> }>} */
+      /** @type {Map<string, { live: Map<number, any>, vod: Map<number, any>, series: Map<number, any>, liveCacheAvailable: boolean }>} */
       const lookups = new Map()
       for (const playlistId of needed.keys()) {
         lookups.set(playlistId, {
@@ -99,12 +99,17 @@
               item,
             ])
           ),
+          liveCacheAvailable: hasCachedLiveChannels(playlistId),
         })
       }
 
       entries = raw.map((row) => {
         const meta = getFavoriteMeta(row.playlistId, row.kind, row.id)
-        const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
+        const rowLookups = lookups.get(row.playlistId)
+        const item = rowLookups?.[row.kind]?.get(Number(row.id))
+        // Hidden-channel favorites and unresolved custom-playlist channels both
+        // miss the live lookup once the catalog is cached - can't tune either.
+        const unavailable = row.kind === "live" && !item && !!rowLookups?.liveCacheAvailable
         const isStoredNameFallback = !!meta?.name && isKindFallbackName(row.kind, row.id, meta.name)
         const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
         const name = effectiveStoredName || item?.name || `${kindLabel(row.kind)} ${row.id}`
@@ -131,6 +136,7 @@
           logo,
           href: buildHref(row.kind, row.id),
           isCrossPlaylist: row.playlistId !== activePlaylistId,
+          unavailable,
         }
       })
     }
@@ -171,6 +177,10 @@
   }
 
   async function openCard(event, entry) {
+    if (entry.unavailable) {
+      event.preventDefault()
+      return
+    }
     if (!entry.isCrossPlaylist) return
     event.preventDefault()
     await openEntry(entry)
@@ -304,11 +314,13 @@
         onclick={(event) => openCard(event, entry)}
         use:favoriteCardMenu={entry}
         aria-label={tr("favorites.cardAriaLabel", { name: entry.name, playlist: entry.playlistTitle })}
+        aria-disabled={entry.unavailable}
         class="fav-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line
                transition-[transform,box-shadow] duration-150
                hover:ring-1 hover:ring-accent hover:transform-[translateY(-2px)]
-               outline-none focus-visible:ring-1 focus-visible:ring-accent focus-visible:transform-[translateY(-2px)]">
+               outline-none focus-visible:ring-1 focus-visible:ring-accent focus-visible:transform-[translateY(-2px)]"
+        class:opacity-50={entry.unavailable}>
         <div class="aspect-2/3 w-full bg-surface-2 overflow-hidden relative">
           {#if entry.logo}
             {#if entry.kind === "live"}

@@ -63,7 +63,7 @@ function getStore() {
         )
         return null
       })
-    storePromise = Promise.race([
+    const raced = Promise.race([
       load,
       new Promise((resolve) =>
         setTimeout(() => {
@@ -72,6 +72,10 @@ function getStore() {
         }, STORE_LOAD_TIMEOUT_MS)
       ),
     ])
+    load.then((store) => {
+      if (storePromise === raced) storePromise = Promise.resolve(store)
+    })
+    storePromise = raced
   }
   return storePromise
 }
@@ -120,13 +124,19 @@ async function readRaw() {
   return null
 }
 
+// Browsers silently drop cookies over ~4KB; skip the mirror rather than write a truncated one.
+const COOKIE_MIRROR_MAX_BYTES = 3500
+
 async function writeRaw(data) {
   const json = JSON.stringify(data)
   try {
     localStorage.setItem(STORAGE_KEY, json)
-    setCookie(STORAGE_KEY, json)
+    if (json.length <= COOKIE_MIRROR_MAX_BYTES) setCookie(STORAGE_KEY, json)
   } catch (writeError) {
     log.error("[xt:prefs] localStorage/cookie write failed:", writeError)
+    // Drop any stale copy so readRaw falls through to the plugin store below
+    // instead of replaying an outdated blob on the next launch.
+    try { localStorage.removeItem(STORAGE_KEY) } catch {}
   }
   const store = await getStore()
   if (store) {
@@ -1483,8 +1493,12 @@ export function countChannelOverrides(playlistId) {
 export function setChannelOverride(playlistId, key, patch) {
   if (!playlistId || !key || !patch) return
   const entry = getOrCreate(playlistId)
-  const merged = { ...(entry.channelOv[key] || {}) }
+  const existing = entry.channelOv[key] || {}
+  const merged = { ...existing }
   for (const [field, value] of Object.entries(patch)) {
+    // A stored srcName/srcTvgId is the original identity - never overwritten by a
+    // later patch, which may have been derived from the already-renamed channel.
+    if ((field === "srcName" || field === "srcTvgId") && existing[field]) continue
     if (value == null || value === "" || value === false) delete merged[field]
     else merged[field] = value
   }
@@ -1506,8 +1520,10 @@ export function setChannelOverrides(playlistId, patches) {
   let changed = 0
   for (const { key, patch } of patches) {
     if (!key || !patch) continue
-    const merged = { ...(entry.channelOv[key] || {}) }
+    const existing = entry.channelOv[key] || {}
+    const merged = { ...existing }
     for (const [field, value] of Object.entries(patch)) {
+      if ((field === "srcName" || field === "srcTvgId") && existing[field]) continue
       if (value == null || value === "" || value === false) delete merged[field]
       else merged[field] = value
     }

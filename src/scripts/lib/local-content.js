@@ -7,6 +7,7 @@
 // localStorage mirror in creds.js.
 
 import { log } from "@/scripts/lib/log.js"
+import { createTimedIdbOpener } from "@/scripts/lib/idb-open.ts"
 
 const DB_NAME = "xt_local_content"
 const DB_VERSION = 1
@@ -26,39 +27,24 @@ export function utf8ByteLength(text) {
   return bytes
 }
 
-/** @type {Promise<IDBDatabase>|null} */
-let dbPromise = null
+const idbOpener = createTimedIdbOpener({
+  name: DB_NAME,
+  version: DB_VERSION,
+  logTag: "xt:local-content",
+  upgrade(db) {
+    if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
+  },
+})
 
+// Raced against a timeout so a wedged/blocked open doesn't hang a local-m3u read.
 function openDB() {
-  if (dbPromise) return dbPromise
-  if (typeof indexedDB === "undefined") {
-    return Promise.reject(new Error("IndexedDB unavailable"))
-  }
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = () => {
-      const db = req.result
-      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
-    }
-    req.onsuccess = () => {
-      const db = req.result
-      // Another document upgrading the schema needs this connection closed.
-      db.onversionchange = () => {
-        try { db.close() } catch {}
-        dbPromise = null
-      }
-      resolve(db)
-    }
-    req.onerror = () => reject(req.error)
-    // Per spec `blocked` doesn't abort the request; it still resolves later.
-    req.onblocked = () => {
-      log.warn("[xt:local-content] open blocked by another connection, waiting")
-    }
-  })
-  dbPromise.catch(() => {
-    dbPromise = null
-  })
-  return dbPromise
+  return idbOpener.open()
+}
+
+// Writes must never drop a local playlist body, so this awaits the real open
+// however long it takes instead of racing a timeout.
+function openDBForWrite() {
+  return idbOpener.openUnraced()
 }
 
 /**
@@ -84,7 +70,8 @@ export async function setLocalContent(entryId, text) {
     return false
   }
   try {
-    const db = await openDB()
+    const db = await openDBForWrite()
+    if (!db) return false
     await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).put(value, entryId)
@@ -104,12 +91,15 @@ export async function setLocalContent(entryId, text) {
  * no stored content, or null when IDB itself is unavailable / threw.
  *
  * @param {string} entryId
+ * @param {{ waitForOpen?: boolean }} [opts] waitForOpen awaits the un-raced
+ *   open instead of the timed one, for callers that must not miss content.
  * @returns {Promise<string|null>}
  */
-export async function getLocalContent(entryId) {
+export async function getLocalContent(entryId, opts = {}) {
   if (!entryId) return ""
   try {
-    const db = await openDB()
+    const db = opts.waitForOpen ? await openDBForWrite() : await openDB()
+    if (!db) return null
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readonly")
       const req = tx.objectStore(STORE).get(entryId)
@@ -129,7 +119,8 @@ export async function getLocalContent(entryId) {
 export async function deleteLocalContent(entryId) {
   if (!entryId) return
   try {
-    const db = await openDB()
+    const db = await openDBForWrite()
+    if (!db) return
     await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).delete(entryId)
