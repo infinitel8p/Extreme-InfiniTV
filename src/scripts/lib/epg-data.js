@@ -317,6 +317,9 @@ function getXmlWorker() {
 // never load. Budgeted per megabyte so a big feed on a slow device isn't cut off early.
 const XML_WORKER_TIMEOUT_MIN_MS = 20_000
 const XML_WORKER_TIMEOUT_PER_MB_MS = 4_000
+// Streamed now-next budgets bytesTransferred on raw bytes; a .gz body is smaller
+// on the wire than what it inflates to, so scale the budget for those feeds.
+const GZIP_TIMEOUT_BUDGET_MULTIPLIER = 8
 
 export function xmlWorkerTimeoutMs(xmlLength) {
   const megabytes = Math.max(0, Number(xmlLength) || 0) / (1024 * 1024)
@@ -496,17 +499,18 @@ async function streamNowNextFromUrl(url, nowMs, feedId) {
   const id = ++xmlWorkerSeq
   let bytesTransferred = 0
   let sessionStarted = false
+  let isGzipFeed = false
 
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
     if (!sessionStarted) {
       sessionStarted = true
-      const gzip = detectGzip(url, value, {
+      isGzipFeed = detectGzip(url, value, {
         contentType: response.headers?.get?.("content-type") || "",
         contentDisposition: response.headers?.get?.("content-disposition") || "",
       })
-      worker.postMessage({ id, type: "begin", mode: "now-next", feedId, nowMs, gzip })
+      worker.postMessage({ id, type: "begin", mode: "now-next", feedId, nowMs, gzip: isGzipFeed })
     }
     bytesTransferred += value.byteLength
     const bytes = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength)
@@ -519,11 +523,16 @@ async function streamNowNextFromUrl(url, nowMs, feedId) {
   worker.postMessage({ id, type: "end", feedId })
 
   const reply = await new Promise((resolve) => {
+    // bytesTransferred is compressed size for a gzip feed; the budget is computed
+    // on raw bytes, so scale it up rather than cut a big feed off mid-inflate.
+    const budgetMs = xmlWorkerTimeoutMs(bytesTransferred) * (isGzipFeed ? GZIP_TIMEOUT_BUDGET_MULTIPLIER : 1)
     const timer = setTimeout(() => {
       xmlWorkerPending.delete(id)
-      retireXmlWorker()
+      // A slow feed, not necessarily a wedged worker - release it for reuse rather
+      // than disabling the worker for the rest of the page.
+      releaseXmlWorker()
       resolve(null)
-    }, xmlWorkerTimeoutMs(bytesTransferred))
+    }, budgetMs)
     xmlWorkerPending.set(id, {
       resolve: (data) => {
         clearTimeout(timer)

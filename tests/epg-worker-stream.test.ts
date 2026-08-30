@@ -198,6 +198,53 @@ describe("streaming programmesFor: replays the retained (compressed) chunks", ()
     })) as StreamReply
     expect(reply.noFeed).toBe(true)
   })
+
+  it("keeps multiple sources' retained feeds alive at once (multi-playlist channel focus)", async () => {
+    const xml = buildXml()
+    const bytes = new TextEncoder().encode(xml)
+    await driveStream([bytes], { gzip: false, feedId: "multi-feed-a", id: 10 })
+    await driveStream([bytes], { gzip: false, feedId: "multi-feed-b", id: 11 })
+
+    const replyA = (await handleWorkerRequest({
+      id: 12,
+      type: "programmesFor",
+      feedId: "multi-feed-a",
+      tvgId: "news-one",
+    })) as StreamReply
+    const replyB = (await handleWorkerRequest({
+      id: 13,
+      type: "programmesFor",
+      feedId: "multi-feed-b",
+      tvgId: "sports-one",
+    })) as StreamReply
+
+    expect(replyA.programmes).toEqual(extractChannelProgrammes(xml, "news-one"))
+    expect(replyB.programmes).toEqual(extractChannelProgrammes(xml, "sports-one"))
+  })
+
+  it("evicts only the oldest retained feed once the cap is exceeded", async () => {
+    const xml = buildXml()
+    const bytes = new TextEncoder().encode(xml)
+    for (const feedId of ["cap-a", "cap-b", "cap-c", "cap-d"]) {
+      await driveStream([bytes], { gzip: false, feedId, id: 20 })
+    }
+
+    const evicted = (await handleWorkerRequest({
+      id: 21,
+      type: "programmesFor",
+      feedId: "cap-a",
+      tvgId: "news-one",
+    })) as StreamReply
+    const stillRetained = (await handleWorkerRequest({
+      id: 22,
+      type: "programmesFor",
+      feedId: "cap-d",
+      tvgId: "news-one",
+    })) as StreamReply
+
+    expect(evicted.noFeed).toBe(true)
+    expect(stillRetained.programmes).toEqual(extractChannelProgrammes(xml, "news-one"))
+  })
 })
 
 describe("streaming now-next scan: carry-buffer overflow guard", () => {

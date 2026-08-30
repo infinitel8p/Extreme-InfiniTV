@@ -76,7 +76,12 @@ export function enrichmentNeedsFill(enrichment: TmdbTitleEnrichment | null): boo
   )
 }
 
-/** Per-field fill, so TMDb stays authoritative and TheTVDB only covers its gaps. */
+// TVDB cast entries are all stamped tmdbPersonId 0, so a real id means TMDb-sourced.
+function hasTmdbCastIds(enrichment: TmdbTitleEnrichment): boolean {
+  return enrichment.cast.some((member) => member.tmdbPersonId > 0)
+}
+
+/** Per-field fill; the side with real TMDb cast ids wins cast and genres (localized). */
 export function mergeTitleEnrichment(
   primary: TmdbTitleEnrichment | null,
   fallback: TmdbTitleEnrichment | null
@@ -87,6 +92,19 @@ export function mergeTitleEnrichment(
   const preferFallbackOverview =
     (!primary.overview || primary.overviewIsFallback === true) && Boolean(fallback.overview)
   return {
+  const cast = hasTmdbCastIds(primary)
+    ? primary.cast
+    : hasTmdbCastIds(fallback)
+      ? fallback.cast
+      : primary.cast.length > 0
+        ? primary.cast
+        : fallback.cast
+  const genres =
+    hasTmdbCastIds(fallback) && fallback.genres.length > 0
+      ? fallback.genres
+      : primary.genres.length > 0
+        ? primary.genres
+        : fallback.genres
     ...primary,
     posterUrl: primary.posterUrl || fallback.posterUrl,
     backdropUrl: primary.backdropUrl || fallback.backdropUrl,
@@ -95,9 +113,9 @@ export function mergeTitleEnrichment(
     overviewIsFallback: preferFallbackOverview ? false : primary.overviewIsFallback,
     director: primary.director || fallback.director,
     directorPersonId: primary.director ? primary.directorPersonId : fallback.directorPersonId,
-    cast: primary.cast.length > 0 ? primary.cast : fallback.cast,
+    cast,
     recommendations: primary.recommendations.length > 0 ? primary.recommendations : fallback.recommendations,
-    genres: primary.genres.length > 0 ? primary.genres : fallback.genres,
+    genres,
     tagline: primary.tagline || fallback.tagline,
     year: primary.year ?? fallback.year,
     voteAverage: primary.voteAverage > 0 ? primary.voteAverage : fallback.voteAverage,
@@ -119,12 +137,34 @@ function fetchOnce(path: string): Promise<Response> {
 
 async function fetchWithRetry(path: string): Promise<Response> {
   const response = await fetchOnce(path)
+// Session-only: a confirmed 429 backs off every further proxy call for a bit,
+// and a failed path gets a short memo so a burst of callers (e.g. ambient)
+// doesn't keep re-hitting an endpoint that just failed.
+let rateLimitedUntilMs = 0
+const FAILED_PATH_MEMO_MS = 30_000
+const failedPathUntilMs = new Map<string, number>()
+
+function markRateLimited(waitMs: number): void {
+  rateLimitedUntilMs = Math.max(rateLimitedUntilMs, Date.now() + waitMs)
+}
+
+/** Test-only: clears the module-level rate-limit and failure memo between cases. */
+export function resetTvdbProxyRateLimitForTests(): void {
+  rateLimitedUntilMs = 0
+  failedPathUntilMs.clear()
+}
+
   if (response.status !== 429) return response
   const retryAfterSeconds = Number(response.headers.get("Retry-After"))
   const waitMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : 1000
-  if (waitMs > MAX_RETRY_WAIT_MS) return response
+  if (waitMs > MAX_RETRY_WAIT_MS) {
+    markRateLimited(waitMs)
+    return response
+  }
   await new Promise((resolve) => setTimeout(resolve, waitMs))
-  return fetchOnce(path)
+  const retried = await fetchOnce(path)
+  if (retried.status === 429) markRateLimited(waitMs)
+  return retried
 }
 
 async function fetchEnvelope<T>(
@@ -136,9 +176,20 @@ async function fetchEnvelope<T>(
   try {
     const result = await cachedFetch(CACHE_ENTRY_ID, cacheKind, ttlMs, async () => {
       const response = await fetchWithRetry(path)
-      if (!response.ok) throw new Error(`tvdb proxy ${response.status}`)
+      if (!response.ok) {
+        failedPathUntilMs.set(path, Date.now() + FAILED_PATH_MEMO_MS)
+        throw new Error(`tvdb proxy ${response.status}`)
+      }
+      const now = Date.now()
+      if (now < rateLimitedUntilMs) throw new Error("tvdb proxy rate limited, cooling down")
+      const failedUntil = failedPathUntilMs.get(path)
+      if (failedUntil && now < failedUntil) throw new Error("tvdb proxy path recently failed")
       const envelope = await response.json()
-      if (envelope?.v !== TVDB_CONTRACT_VERSION) throw new Error("tvdb contract mismatch")
+      if (envelope?.v !== TVDB_CONTRACT_VERSION) {
+        failedPathUntilMs.set(path, Date.now() + FAILED_PATH_MEMO_MS)
+        throw new Error("tvdb contract mismatch")
+      }
+      failedPathUntilMs.delete(path)
       // A null payload is a real answer, so it caches too.
       return { data: (envelope.data ?? null) as T | null }
     })

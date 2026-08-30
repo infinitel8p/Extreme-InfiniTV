@@ -6,7 +6,6 @@ import { tmdbLanguageFor } from "@/scripts/lib/tmdb.ts"
 import {
   fetchMovieEnrichment,
   fetchSeriesEnrichment,
-  getCachedTitleEnrichment,
   resolveTmdbId,
   type CachedProviderInfo,
   type TmdbKind,
@@ -33,9 +32,11 @@ function tmdbKindFor(kind: EnrichmentKind): TmdbKind {
   return kind === "movie" ? "vod" : "series"
 }
 
-// Mirrors tmdb-enrich.ts's private tmdbDetailCacheKind so both sides share one entry.
-function detailCacheKind(kind: EnrichmentKind, tmdbId: number, language: string): string {
-  return kind === "series" ? `tmdb_series_${tmdbId}:${language}:v3` : `tmdb_movie_${tmdbId}:${language}:v3`
+// Its own namespace: the merged TVDB+TMDb record must never collide with
+// tmdb-enrich.ts's pristine tmdb_movie/series cache, or disabling TVDB later
+// would keep serving TVDB-tainted data for the rest of the TTL.
+function enrichedDetailCacheKind(kind: EnrichmentKind, tmdbId: number, language: string): string {
+  return `enriched_${kind}_${tmdbId}:${language}:v1`
 }
 
 // Mirrors resolveTmdbId's match-cache key format.
@@ -104,7 +105,7 @@ function persistEnrichment(params: {
 }): void {
   const { kind, playlistId, itemId, language, tmdbId, tvdbId, enrichment } = params
   if (tmdbId != null) {
-    setCached(CACHE_ENTRY_ID, detailCacheKind(kind, tmdbId, language), enrichment, DETAIL_TTL_MS)
+    setCached(CACHE_ENTRY_ID, enrichedDetailCacheKind(kind, tmdbId, language), enrichment, DETAIL_TTL_MS)
     setCached(CACHE_ENTRY_ID, matchCacheKind(kind, playlistId, itemId, language), { tmdbId }, MATCH_TTL_MS)
     return
   }
@@ -155,9 +156,15 @@ export async function resolveTitleEnrichmentDetailed(
   const merged = mergeTitleEnrichment(tvdbResult?.enrichment ?? null, tmdbResult ?? null)
   if (!merged) return null
 
+  // TMDb genres are localized to the active language; prefer them whenever TMDb has any.
+  const enrichment =
+    tmdbResult?.genres && tmdbResult.genres.length > 0
+      ? { ...merged, genres: tmdbResult.genres }
+      : merged
+
   const tvdbId = tvdbResult?.tvdbId ?? null
-  persistEnrichment({ kind, playlistId, itemId, language, tmdbId, tvdbId, enrichment: merged })
-  return { enrichment: merged, tmdbId, tvdbId }
+  persistEnrichment({ kind, playlistId, itemId, language, tmdbId, tvdbId, enrichment })
+  return { enrichment, tmdbId, tvdbId }
 }
 
 /** TVDB-first; TMDb (when active) only gap-fills what TVDB left empty. */
@@ -174,7 +181,7 @@ export interface PeekedTitleEnrichment {
   tvdbId: number | null
 }
 
-/** Cache-only peek: today's tmdbId-keyed cache, then the tvdb-only namespace, with the resolved id. */
+/** Cache-only peek: the merged enriched cache first, then the tvdb-only namespace, with the resolved id. */
 export async function peekTitleEnrichmentDetailed(
   kind: EnrichmentKind,
   playlistId: string,
@@ -182,12 +189,17 @@ export async function peekTitleEnrichmentDetailed(
 ): Promise<PeekedTitleEnrichment | null> {
   const language = tmdbLanguageFor(getActiveLocale())
 
-  const viaTmdbId = await getCachedTitleEnrichment(tmdbKindFor(kind), playlistId, itemId)
-  if (viaTmdbId) {
-    const matchKind = matchCacheKind(kind, playlistId, itemId, language)
-    await hydrate(CACHE_ENTRY_ID, matchKind)
-    const match = getCached(CACHE_ENTRY_ID, matchKind)
-    return { enrichment: viaTmdbId, tmdbId: normalizeTmdbId(match?.data?.tmdbId), tvdbId: null }
+  const tmdbMatchKind = matchCacheKind(kind, playlistId, itemId, language)
+  await hydrate(CACHE_ENTRY_ID, tmdbMatchKind)
+  const tmdbMatch = getCached(CACHE_ENTRY_ID, tmdbMatchKind)
+  const matchedTmdbId = normalizeTmdbId(tmdbMatch?.data?.tmdbId)
+  if (matchedTmdbId != null) {
+    const detailKind = enrichedDetailCacheKind(kind, matchedTmdbId, language)
+    await hydrate(CACHE_ENTRY_ID, detailKind)
+    const detail = getCached(CACHE_ENTRY_ID, detailKind)
+    if (detail && !detail.stale) {
+      return { enrichment: detail.data as TmdbTitleEnrichment, tmdbId: matchedTmdbId, tvdbId: null }
+    }
   }
 
   const matchKind = tvdbMatchCacheKind(kind, playlistId, itemId, language)

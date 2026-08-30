@@ -704,9 +704,26 @@ interface StreamSession {
 
 const streamSessions = new Map<string, StreamSession>()
 
-// Roughly 20-40MB off-heap for a big feed - fine. Replayed (re-decompressed +
-// re-scanned) per programmesFor call instead of ever materializing full text.
-let retainedStreamFeed: { feedId: string; gzip: boolean; chunks: ArrayBuffer[] } | null = null
+interface RetainedStreamFeed {
+  feedId: string
+  gzip: boolean
+  chunks: ArrayBuffer[]
+}
+
+// Roughly 20-40MB off-heap per big feed - fine, bounded to a few sources.
+// Replayed (re-decompressed + re-scanned) per programmesFor call instead of
+// ever materializing full text. Map preserves insertion order for LRU eviction.
+const RETAINED_STREAM_FEED_CAP = 3
+const retainedStreamFeeds = new Map<string, RetainedStreamFeed>()
+
+function retainStreamFeed(feed: RetainedStreamFeed): void {
+  retainedStreamFeeds.delete(feed.feedId)
+  retainedStreamFeeds.set(feed.feedId, feed)
+  if (retainedStreamFeeds.size > RETAINED_STREAM_FEED_CAP) {
+    const oldestFeedId = retainedStreamFeeds.keys().next().value
+    if (oldestFeedId !== undefined) retainedStreamFeeds.delete(oldestFeedId)
+  }
+}
 
 function beginStream(request: StreamBeginRequest): void {
   const session: StreamSession = {
@@ -826,7 +843,7 @@ async function endStream(session: StreamSession): Promise<{
   const programmes = slotsToNowNextMap(session.slots)
   const hasExplicitTimezones = session.tz.timestamps > 0 && session.tz.suffixed > session.tz.timestamps / 2
 
-  retainedStreamFeed = { feedId: session.feedId, gzip: session.gzip, chunks: session.chunks }
+  retainStreamFeed({ feedId: session.feedId, gzip: session.gzip, chunks: session.chunks })
   return { programmes, channelNames: session.channelNames, hasExplicitTimezones }
 }
 
@@ -947,7 +964,8 @@ export function handleWorkerRequest(
         const programmes = extractChannelProgrammes(retainedFeed.xml, request.tvgId, request.window)
         return { id, programmes }
       }
-      if (retainedStreamFeed && retainedStreamFeed.feedId === request.feedId) {
+      const retainedStreamFeed = retainedStreamFeeds.get(request.feedId)
+      if (retainedStreamFeed) {
         return streamExtractChannelProgrammes(retainedStreamFeed, request.tvgId, request.window).then(
           (programmes) => ({ id, programmes }),
           (error) => toErrorResponse(id, error)

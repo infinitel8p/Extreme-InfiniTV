@@ -18,7 +18,10 @@ export const TV_EPG_SOURCE_CHANGED_EVENT = "xt:tv-epg-source-changed"
 
 const SHORT_EPG_DEAD_KEY_PREFIX = "xt_short_epg_dead:"
 const SHORT_EPG_DEAD_TTL_MS = 7 * 24 * 60 * 60 * 1000
-const SHORT_EPG_EMPTY_STREAK_THRESHOLD = 3
+// A handful of EPG-less channels (24/7, radio, VOD-as-live) in one mounted group
+// must not demote a healthy provider - require a real sample and an actual ratio.
+const SHORT_EPG_SAMPLE_MIN = 8
+const SHORT_EPG_EMPTY_RATIO_THRESHOLD = 0.9
 
 /** True when the provider's short-EPG endpoint was empirically empty within the last 7 days. */
 export function shortEpgIsDead(playlistId: string): boolean {
@@ -54,31 +57,49 @@ function clearShortEpgDead(playlistId: string): void {
   } catch {}
 }
 
-const shortEpgEmptyStreamIds = new Map<string, Set<string>>()
+interface ShortEpgSample {
+  emptyIds: Set<string>
+  nonEmptyIds: Set<string>
+}
+
+const shortEpgSamples = new Map<string, ShortEpgSample>()
+
+function shortEpgSampleFor(playlistId: string): ShortEpgSample {
+  let sample = shortEpgSamples.get(playlistId)
+  if (!sample) {
+    sample = { emptyIds: new Set(), nonEmptyIds: new Set() }
+    shortEpgSamples.set(playlistId, sample)
+  }
+  return sample
+}
 
 /**
- * 3 distinct stream ids resolving empty (endpoint reachable, zero listings) with no
- * non-empty result in between marks the playlist's short-EPG dead; a later non-empty
- * result clears it. Failures never reach here - only classified fetch successes do.
+ * Tracks distinct empty vs non-empty stream ids per playlist (endpoint reachable,
+ * zero listings counts as empty). Marks the playlist's short-EPG dead once at least
+ * SHORT_EPG_SAMPLE_MIN distinct ids were sampled and SHORT_EPG_EMPTY_RATIO_THRESHOLD
+ * of them are empty; a later non-empty result clears an existing dead marker.
+ * Failures never reach here - only classified fetch successes do.
  */
 export function recordShortEpgOutcome(
   playlistId: string,
   streamId: string | number,
   outcome: "empty" | "nonEmpty"
 ): void {
+  const sample = shortEpgSampleFor(playlistId)
+  const id = String(streamId)
   if (outcome === "nonEmpty") {
-    shortEpgEmptyStreamIds.delete(playlistId)
+    sample.nonEmptyIds.add(id)
+    sample.emptyIds.delete(id)
     clearShortEpgDead(playlistId)
     return
   }
-  let streamIds = shortEpgEmptyStreamIds.get(playlistId)
-  if (!streamIds) {
-    streamIds = new Set()
-    shortEpgEmptyStreamIds.set(playlistId, streamIds)
-  }
-  streamIds.add(String(streamId))
-  if (streamIds.size >= SHORT_EPG_EMPTY_STREAK_THRESHOLD && !shortEpgIsDead(playlistId)) {
-    shortEpgEmptyStreamIds.delete(playlistId)
+  sample.emptyIds.add(id)
+  sample.nonEmptyIds.delete(id)
+  const totalSampled = sample.emptyIds.size + sample.nonEmptyIds.size
+  if (totalSampled < SHORT_EPG_SAMPLE_MIN) return
+  const emptyRatio = sample.emptyIds.size / totalSampled
+  if (emptyRatio >= SHORT_EPG_EMPTY_RATIO_THRESHOLD && !shortEpgIsDead(playlistId)) {
+    shortEpgSamples.delete(playlistId)
     markShortEpgDead(playlistId)
   }
 }

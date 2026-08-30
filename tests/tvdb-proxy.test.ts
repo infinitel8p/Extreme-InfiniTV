@@ -22,6 +22,7 @@ import {
   findTvdbTitle,
   mergeTitleEnrichment,
   parseProviderTmdbId,
+  resetTvdbProxyRateLimitForTests,
   tvdbEnrichment,
   tvdbTitleToEnrichment,
 } from "@/scripts/lib/tvdb-proxy"
@@ -32,6 +33,7 @@ function jsonResponse(body: unknown, ok = true, status = 200) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetTvdbProxyRateLimitForTests()
   cachedFetchMock.mockImplementation(async (_id, _kind, _ttl, fetcher) => ({
     data: await fetcher(),
     stale: false,
@@ -118,6 +120,25 @@ describe("429 rate limiting", () => {
 
   it("gives up without retrying when Retry-After exceeds the bounded wait", async () => {
     providerFetchMock.mockResolvedValue(rateLimited("30"))
+    expect(await fetchTvdbTitle(1, "series")).toBeNull()
+    expect(providerFetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("backs off every further call once a 429 sets the cooldown", async () => {
+    providerFetchMock.mockResolvedValue(rateLimited("30"))
+    expect(await fetchTvdbTitle(1, "series")).toBeNull()
+    expect(providerFetchMock).toHaveBeenCalledTimes(1)
+
+    // A different id/kind would normally be a distinct request; the cooldown blocks it too.
+    expect(await fetchTvdbTitle(2, "movie")).toBeNull()
+    expect(providerFetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("memoizes a failed path briefly so a repeat call doesn't re-hit it", async () => {
+    providerFetchMock.mockResolvedValue(jsonResponse({}, false, 502))
+    expect(await fetchTvdbTitle(1, "series")).toBeNull()
+    expect(providerFetchMock).toHaveBeenCalledTimes(1)
+
     expect(await fetchTvdbTitle(1, "series")).toBeNull()
     expect(providerFetchMock).toHaveBeenCalledTimes(1)
   })
@@ -400,6 +421,22 @@ describe("failure is not a no-match", () => {
       .mockResolvedValueOnce(jsonResponse({ v: 1, data: { tvdbId: 7, title: "Found", cast: [], genres: [] } }))
     const result = await tvdbEnrichment(65942, "series", { name: "Breaking Bad" })
     expect(result?.enrichment.title).toBe("Found")
+
+  it("prefers the side with real TMDb cast ids for cast and genres, even as the fallback", () => {
+    const tvdbPrimary = {
+      ...tvdb,
+      cast: [{ name: "TVDB Actor", character: "Role", profilePath: null, tmdbPersonId: 0 }],
+      genres: ["Animation"],
+    }
+    const tmdbFallback = {
+      ...tmdb,
+      cast: [{ name: "TMDb Actor", character: "Role", profilePath: "https://tmdb/a", tmdbPersonId: 42 }],
+      genres: ["Drama"],
+    }
+    const merged = mergeTitleEnrichment(tvdbPrimary, tmdbFallback)!
+    expect(merged.cast).toEqual(tmdbFallback.cast)
+    expect(merged.genres).toEqual(["Drama"])
+  })
     expect(result?.tvdbId).toBe(7)
   })
 })

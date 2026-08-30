@@ -30,12 +30,10 @@ vi.mock("@/scripts/lib/tmdb.ts", () => ({ tmdbLanguageFor: () => "en-US" }))
 
 const fetchMovieEnrichmentMock = vi.fn()
 const fetchSeriesEnrichmentMock = vi.fn()
-const getCachedTitleEnrichmentMock = vi.fn()
 const resolveTmdbIdMock = vi.fn()
 vi.mock("@/scripts/lib/tmdb-enrich.ts", () => ({
   fetchMovieEnrichment: (...args: unknown[]) => fetchMovieEnrichmentMock(...args),
   fetchSeriesEnrichment: (...args: unknown[]) => fetchSeriesEnrichmentMock(...args),
-  getCachedTitleEnrichment: (...args: unknown[]) => getCachedTitleEnrichmentMock(...args),
   resolveTmdbId: (...args: unknown[]) => resolveTmdbIdMock(...args),
 }))
 
@@ -118,7 +116,7 @@ describe("resolveTitleEnrichment", () => {
     expect(result?.director).toBe("Someone")
     expect(setCachedMock).toHaveBeenCalledWith(
       "tmdb",
-      "tmdb_movie_65942:en-US:v3",
+      "enriched_movie_65942:en-US:v1",
       expect.anything(),
       expect.any(Number)
     )
@@ -196,17 +194,17 @@ describe("resolveTitleEnrichment", () => {
 })
 
 describe("peekTitleEnrichment", () => {
-  it("delegates to the legacy tmdbId-keyed cache first", async () => {
+  it("delegates to the merged enriched cache first, via the tmdb match cache", async () => {
     const cached = makeEnrichment({ title: "Cached" })
-    getCachedTitleEnrichmentMock.mockResolvedValue(cached)
+    cacheStore.set("tmdb:tmdb_match_vod_p1_i1:en-US", { data: { tmdbId: 65942 }, stale: false })
+    cacheStore.set("tmdb:enriched_movie_65942:en-US:v1", { data: cached, stale: false })
 
     const result = await peekTitleEnrichment("movie", "p1", "i1")
 
-    expect(result).toBe(cached)
+    expect(result).toEqual(cached)
   })
 
   it("falls back to the tvdb-only namespace via its own match cache", async () => {
-    getCachedTitleEnrichmentMock.mockResolvedValue(null)
     const tvdbOnly = makeEnrichment({ title: "TVDB only" })
     cacheStore.set("tmdb:tvdb_match_movie_p1_i1:en-US", { data: { tvdbId: 99 }, stale: false })
     cacheStore.set("tmdb:tvdb_movie_99:en-US:v1", { data: tvdbOnly, stale: false })
@@ -217,24 +215,22 @@ describe("peekTitleEnrichment", () => {
   })
 
   it("returns null when neither namespace has anything cached", async () => {
-    getCachedTitleEnrichmentMock.mockResolvedValue(null)
     expect(await peekTitleEnrichment("movie", "p1", "i1")).toBeNull()
   })
 })
 
 describe("peekTitleEnrichmentDetailed", () => {
-  it("surfaces the tmdbId alongside the legacy cache hit", async () => {
+  it("surfaces the tmdbId alongside the enriched cache hit", async () => {
     const cached = makeEnrichment({ title: "Cached" })
-    getCachedTitleEnrichmentMock.mockResolvedValue(cached)
     cacheStore.set("tmdb:tmdb_match_vod_p1_i1:en-US", { data: { tmdbId: 65942 }, stale: false })
 
+    cacheStore.set("tmdb:enriched_movie_65942:en-US:v1", { data: cached, stale: false })
     const result = await peekTitleEnrichmentDetailed("movie", "p1", "i1")
 
     expect(result).toEqual({ enrichment: cached, tmdbId: 65942, tvdbId: null })
   })
 
   it("surfaces the tvdbId when only the tvdb-only namespace has a hit", async () => {
-    getCachedTitleEnrichmentMock.mockResolvedValue(null)
     const tvdbOnly = makeEnrichment({ title: "TVDB only" })
     cacheStore.set("tmdb:tvdb_match_movie_p1_i1:en-US", { data: { tvdbId: 99 }, stale: false })
     cacheStore.set("tmdb:tvdb_movie_99:en-US:v1", { data: tvdbOnly, stale: false })
@@ -281,9 +277,28 @@ describe("resolveTitleEnrichmentDetailed", () => {
   })
 })
 
+  it("prefers TMDb's localized genres even when TMDb has no billed cast", async () => {
+    tvdbEnrichmentMock.mockResolvedValue({
+      enrichment: makeEnrichment({ genres: ["Drama"] }),
+      tvdbId: 42,
+    })
+    resolveTmdbIdMock.mockResolvedValue(65942)
+    fetchMovieEnrichmentMock.mockResolvedValue(
+      makeEnrichment({ tmdbId: 65942, genres: ["Action"], cast: [] })
+    )
+
+    const result = await resolveTitleEnrichmentDetailed({
+      kind: "movie",
+      playlistId: "p1",
+      itemId: "i1",
+      name: "X",
+    })
+
+    expect(result?.enrichment.genres).toEqual(["Action"])
+  })
+
 describe("peekEarlyTitleEnrichment", () => {
   it("combines the cached enrichment with the provider info probe", async () => {
-    getCachedTitleEnrichmentMock.mockResolvedValue(null)
     const tvdbOnly = makeEnrichment({ title: "TVDB only" })
     cacheStore.set("tmdb:tvdb_match_movie_p1_i1:en-US", { data: { tvdbId: 99 }, stale: false })
     cacheStore.set("tmdb:tvdb_movie_99:en-US:v1", { data: tvdbOnly, stale: false })
@@ -298,8 +313,6 @@ describe("peekEarlyTitleEnrichment", () => {
   })
 
   it("returns nulls when nothing is cached", async () => {
-    getCachedTitleEnrichmentMock.mockResolvedValue(null)
-
     const result = await peekEarlyTitleEnrichment("movie", "p1", "i1", "p1", "vod_info_i1")
 
     expect(result).toEqual({ enrichment: null, tmdbId: null, tvdbId: null, providerInfo: null })

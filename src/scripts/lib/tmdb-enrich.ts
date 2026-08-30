@@ -291,7 +291,7 @@ export async function fetchMovieEnrichment(tmdbId: number): Promise<TmdbTitleEnr
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_movie_${tmdbId}:${language}:v3`
+  const cacheKind = `tmdb_movie_${tmdbId}:${language}:v4`
   try {
     const result = await cachedFetch(TMDB_CACHE_ENTRY_ID, cacheKind, TMDB_DETAIL_TTL_MS, async () => {
       const bundle = await tmdbMovieBundle(apiKey, tmdbId, language)
@@ -309,7 +309,7 @@ export async function fetchSeriesEnrichment(tmdbId: number): Promise<TmdbTitleEn
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_series_${tmdbId}:${language}:v3`
+  const cacheKind = `tmdb_series_${tmdbId}:${language}:v4`
   try {
     const result = await cachedFetch(TMDB_CACHE_ENTRY_ID, cacheKind, TMDB_DETAIL_TTL_MS, async () => {
       const bundle = await tmdbTvBundle(apiKey, tmdbId, language)
@@ -471,6 +471,10 @@ export interface SeasonEnrichmentOptions {
 export async function fetchSeasonEnrichment(
   tmdbId: number,
   seasonNumber: number,
+// Escapes cachedFetch without persisting: an empty providerSeasons shape (e.g. series
+// info not loaded yet) must not stamp a permanent "unmappable" answer for this tmdbId.
+class SeasonShapeUnavailable extends Error {}
+
   options?: SeasonEnrichmentOptions
 ): Promise<TmdbSeasonEnrichment | null> {
   if (!isTmdbActive()) return null
@@ -488,6 +492,7 @@ export async function fetchSeasonEnrichment(
       const episodes = await mapSeasonThroughEpisodeGroup(
         apiKey,
         tmdbId,
+      if (!options?.providerSeasons?.length) throw new SeasonShapeUnavailable()
         seasonNumber,
         language,
         options?.providerSeasons
@@ -500,6 +505,7 @@ export async function fetchSeasonEnrichment(
     log.warn("[xt:tmdb] fetchSeasonEnrichment failed:", tmdbId, seasonNumber, error)
     return null
   }
+    if (error instanceof SeasonShapeUnavailable) return { episodes: [] }
 }
 
 export interface TmdbPersonTitleOut {
@@ -570,7 +576,7 @@ export interface CachedTmdbEnrichment {
 }
 
 function tmdbDetailCacheKind(kind: TmdbKind, tmdbId: number, language: string): string {
-  return kind === "series" ? `tmdb_series_${tmdbId}:${language}:v3` : `tmdb_movie_${tmdbId}:${language}:v3`
+  return kind === "series" ? `tmdb_series_${tmdbId}:${language}:v4` : `tmdb_movie_${tmdbId}:${language}:v4`
 }
 
 /** Cache-only lookup, no isTmdbActive() gate: reading cache is harmless even with TMDb disabled. */

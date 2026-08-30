@@ -84,19 +84,20 @@ describe("toXtreamCreds", () => {
 })
 
 describe("short-EPG dead-marker state machine", () => {
-  it("marks a playlist dead after 3 distinct stream ids resolve empty and dispatches the change event once", async () => {
+  it("marks a playlist dead once 8 distinct stream ids all resolve empty and dispatches the change event once", async () => {
     const { recordShortEpgOutcome, shortEpgIsDead, TV_EPG_SOURCE_CHANGED_EVENT } = await import(
       "../src/scripts/tv/epg-source"
     )
     const onChanged = vi.fn()
     document.addEventListener(TV_EPG_SOURCE_CHANGED_EVENT, onChanged)
 
-    recordShortEpgOutcome("p1", 1, "empty")
-    recordShortEpgOutcome("p1", 2, "empty")
+    for (let streamId = 1; streamId <= 7; streamId++) {
+      recordShortEpgOutcome("p1", streamId, "empty")
+    }
     expect(shortEpgIsDead("p1")).toBe(false)
     expect(onChanged).not.toHaveBeenCalled()
 
-    recordShortEpgOutcome("p1", 3, "empty")
+    recordShortEpgOutcome("p1", 8, "empty")
     expect(shortEpgIsDead("p1")).toBe(true)
     expect(onChanged).toHaveBeenCalledTimes(1)
     expect((onChanged.mock.calls[0][0] as CustomEvent).detail).toEqual({
@@ -104,7 +105,7 @@ describe("short-EPG dead-marker state machine", () => {
       source: "xmltv-now-next",
     })
 
-    recordShortEpgOutcome("p1", 4, "empty")
+    recordShortEpgOutcome("p1", 9, "empty")
     expect(onChanged).toHaveBeenCalledTimes(1)
 
     document.removeEventListener(TV_EPG_SOURCE_CHANGED_EVENT, onChanged)
@@ -112,41 +113,46 @@ describe("short-EPG dead-marker state machine", () => {
 
   it("the same stream id repeating empty never counts as distinct", async () => {
     const { recordShortEpgOutcome, shortEpgIsDead } = await import("../src/scripts/tv/epg-source")
-    recordShortEpgOutcome("p1", 1, "empty")
-    recordShortEpgOutcome("p1", 1, "empty")
-    recordShortEpgOutcome("p1", 1, "empty")
+    for (let attempt = 0; attempt < 8; attempt++) {
+      recordShortEpgOutcome("p1", 1, "empty")
+    }
     expect(shortEpgIsDead("p1")).toBe(false)
   })
 
-  it("an interleaved non-empty result resets the streak", async () => {
+  it("a non-empty result lowers the ratio instead of wiping the sample outright", async () => {
     const { recordShortEpgOutcome, shortEpgIsDead } = await import("../src/scripts/tv/epg-source")
-    recordShortEpgOutcome("p1", 1, "empty")
-    recordShortEpgOutcome("p1", 2, "empty")
-    recordShortEpgOutcome("p1", 3, "nonEmpty")
-    recordShortEpgOutcome("p1", 4, "empty")
-    recordShortEpgOutcome("p1", 5, "empty")
+    for (let streamId = 1; streamId <= 7; streamId++) {
+      recordShortEpgOutcome("p1", streamId, "empty")
+    }
+    recordShortEpgOutcome("p1", 8, "nonEmpty")
+    // 7 empty / 8 sampled = 87.5%, below the 90% threshold.
     expect(shortEpgIsDead("p1")).toBe(false)
 
-    recordShortEpgOutcome("p1", 6, "empty")
+    recordShortEpgOutcome("p1", 9, "empty")
+    // 8 empty / 9 sampled = 88.9%, still below.
+    expect(shortEpgIsDead("p1")).toBe(false)
+
+    recordShortEpgOutcome("p1", 10, "empty")
+    // 9 empty / 10 sampled = 90%, meets the threshold.
     expect(shortEpgIsDead("p1")).toBe(true)
   })
 
   it("a later non-empty result clears an existing dead marker", async () => {
     const { recordShortEpgOutcome, shortEpgIsDead } = await import("../src/scripts/tv/epg-source")
-    recordShortEpgOutcome("p1", 1, "empty")
-    recordShortEpgOutcome("p1", 2, "empty")
-    recordShortEpgOutcome("p1", 3, "empty")
+    for (let streamId = 1; streamId <= 8; streamId++) {
+      recordShortEpgOutcome("p1", streamId, "empty")
+    }
     expect(shortEpgIsDead("p1")).toBe(true)
 
-    recordShortEpgOutcome("p1", 4, "nonEmpty")
+    recordShortEpgOutcome("p1", 9, "nonEmpty")
     expect(shortEpgIsDead("p1")).toBe(false)
   })
 
   it("tracks each playlist independently", async () => {
     const { recordShortEpgOutcome, shortEpgIsDead } = await import("../src/scripts/tv/epg-source")
-    recordShortEpgOutcome("p1", 1, "empty")
-    recordShortEpgOutcome("p1", 2, "empty")
-    recordShortEpgOutcome("p1", 3, "empty")
+    for (let streamId = 1; streamId <= 8; streamId++) {
+      recordShortEpgOutcome("p1", streamId, "empty")
+    }
     expect(shortEpgIsDead("p1")).toBe(true)
     expect(shortEpgIsDead("p2")).toBe(false)
   })
@@ -170,9 +176,9 @@ describe("short-EPG dead-marker state machine", () => {
     })
     expect(freshModule.tvEpgSource(creds)).toBe("short-epg")
 
-    freshModule.recordShortEpgOutcome("p1", 1, "empty")
-    freshModule.recordShortEpgOutcome("p1", 2, "empty")
-    freshModule.recordShortEpgOutcome("p1", 3, "empty")
+    for (let streamId = 1; streamId <= 8; streamId++) {
+      freshModule.recordShortEpgOutcome("p1", streamId, "empty")
+    }
     expect(freshModule.tvEpgSource(creds)).toBe("xmltv-now-next")
   })
 })
@@ -189,11 +195,12 @@ describe("tvShortEpgCache empirical-emptiness wiring", () => {
     await cache.getNowNext(creds, 1) // failure - never counted
     expect(shortEpgIsDead("p1")).toBe(false)
 
-    await cache.getNowNext(creds, 2)
-    await cache.getNowNext(creds, 3)
+    for (let streamId = 2; streamId <= 8; streamId++) {
+      await cache.getNowNext(creds, streamId)
+    }
     expect(shortEpgIsDead("p1")).toBe(false)
 
-    await cache.getNowNext(creds, 4)
+    await cache.getNowNext(creds, 9)
     expect(shortEpgIsDead("p1")).toBe(true)
   })
 })
