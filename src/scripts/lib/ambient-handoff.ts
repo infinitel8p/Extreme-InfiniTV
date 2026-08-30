@@ -5,12 +5,12 @@ import { getUserAgent } from "@/scripts/lib/app-settings.js"
 import { log } from "@/scripts/lib/log.js"
 
 const HANDOFF_FILENAME = "ambient-screensaver.json"
-const HANDOFF_VERSION = 1
+const HANDOFF_VERSION = 2
 const HANDOFF_ENTRY_CAP = 50
 const HANDOFF_FRESH_MS = 6 * 60 * 60 * 1000
 
 export interface AmbientHandoffPayload {
-  v: 1
+  v: 2
   at: number
   ua: string | null
   entries: AmbientEntry[]
@@ -33,6 +33,7 @@ export function isHandoffFresh(parsed: unknown, now: number, ttlMs: number): boo
   if (!parsed || typeof parsed !== "object") return false
   const at = (parsed as Record<string, unknown>).at
   if (typeof at !== "number") return false
+  if ((parsed as Record<string, unknown>).v !== HANDOFF_VERSION) return false
   return now - at < ttlMs
 }
 

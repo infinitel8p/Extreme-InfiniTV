@@ -164,38 +164,6 @@ export function createHero(root: HTMLElement): HeroHandle {
     layer.className = "absolute inset-0"
     layer.style.opacity = "0"
 
-    if (imageKind === "banner") {
-      const images: HTMLImageElement[] = []
-      if (effectTier() === "full") {
-        const blurred = document.createElement("img")
-        blurred.alt = ""
-        blurred.setAttribute("aria-hidden", "true")
-        blurred.loading = "lazy"
-        blurred.decoding = "async"
-        blurred.dataset.backdropUrl = imageUrl
-        blurred.className = "absolute inset-0 h-full w-full scale-125 object-cover opacity-40 blur-3xl saturate-150"
-        layer.appendChild(blurred)
-        mountCachedImage(blurred, imageUrl, "backdrop")
-        images.push(blurred)
-      } else {
-        const flat = document.createElement("div")
-        flat.className = "absolute inset-0 bg-surface-2"
-        layer.appendChild(flat)
-      }
-
-      const contained = document.createElement("img")
-      contained.alt = ""
-      contained.loading = "lazy"
-      contained.decoding = "async"
-      contained.dataset.backdropUrl = imageUrl
-      contained.className = "absolute right-0 top-1/2 max-h-[70%] max-w-[60%] -translate-y-1/2 object-contain"
-      layer.appendChild(contained)
-      mountCachedImage(contained, imageUrl, "backdrop")
-      images.push(contained)
-      // No Ken Burns on banners: realBackdropImg stays null.
-      return { layer, images, realBackdropImg: null }
-    }
-
     if (imageKind === "logo") {
       const images: HTMLImageElement[] = []
       if (effectTier() === "full") {
@@ -236,10 +204,15 @@ export function createHero(root: HTMLElement): HeroHandle {
     img.loading = "lazy"
     img.decoding = "async"
     img.dataset.backdropUrl = imageUrl
-    img.className = "absolute inset-0 h-full w-full object-cover"
+    // Banner's right edge carries the baked-in title art; left crop hides under the text gradient.
+    img.className =
+      imageKind === "banner"
+        ? "absolute inset-0 h-full w-full object-cover object-right"
+        : "absolute inset-0 h-full w-full object-cover"
     layer.appendChild(img)
-    mountCachedImage(img, imageUrl, imageKind === "backdrop" ? "backdrop" : "poster")
-    return { layer, images: [img], realBackdropImg: img }
+    mountCachedImage(img, imageUrl, imageKind === "poster" ? "poster" : "backdrop")
+    // Banners are small sources upscaled ~3x; Ken Burns' extra scale compounds the softness.
+    return { layer, images: [img], realBackdropImg: imageKind === "banner" ? null : img }
   }
 
   function setBackdrop(

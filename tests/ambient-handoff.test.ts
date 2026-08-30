@@ -19,7 +19,7 @@ function makeEntry(overrides: Partial<AmbientEntry> = {}): AmbientEntry {
 describe("buildAmbientHandoff", () => {
   it("stamps the version and timestamp", () => {
     const payload = buildAmbientHandoff([makeEntry()], null, 12345)
-    expect(payload.v).toBe(1)
+    expect(payload.v).toBe(2)
     expect(payload.at).toBe(12345)
   })
 
@@ -50,11 +50,11 @@ describe("buildAmbientHandoff", () => {
 
 describe("isHandoffFresh", () => {
   it("is fresh when written within the ttl", () => {
-    expect(isHandoffFresh({ at: 1000 }, 2000, 5000)).toBe(true)
+    expect(isHandoffFresh({ v: 2, at: 1000 }, 2000, 5000)).toBe(true)
   })
 
   it("is stale once the ttl has elapsed", () => {
-    expect(isHandoffFresh({ at: 1000 }, 7000, 5000)).toBe(false)
+    expect(isHandoffFresh({ v: 2, at: 1000 }, 7000, 5000)).toBe(false)
   })
 
   it("is not fresh for null", () => {
@@ -62,11 +62,19 @@ describe("isHandoffFresh", () => {
   })
 
   it("is not fresh when the at field is missing", () => {
-    expect(isHandoffFresh({}, 2000, 5000)).toBe(false)
+    expect(isHandoffFresh({ v: 2 }, 2000, 5000)).toBe(false)
   })
 
   it("is not fresh for a malformed value", () => {
     expect(isHandoffFresh("not-an-object", 2000, 5000)).toBe(false)
-    expect(isHandoffFresh({ at: "1000" }, 2000, 5000)).toBe(false)
+    expect(isHandoffFresh({ v: 2, at: "1000" }, 2000, 5000)).toBe(false)
+  })
+
+  it("is not fresh when the version is outdated", () => {
+    expect(isHandoffFresh({ v: 1, at: 1000 }, 2000, 5000)).toBe(false)
+  })
+
+  it("is not fresh when the version is missing", () => {
+    expect(isHandoffFresh({ at: 1000 }, 2000, 5000)).toBe(false)
   })
 })
