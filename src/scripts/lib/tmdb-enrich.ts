@@ -165,6 +165,8 @@ export interface TmdbTitleEnrichment {
   posterUrl: string | null
   backdropUrl: string | null
   logoUrl: string | null
+  /** TheTVDB-only artwork (the TV home hero band); TMDb never supplies one. */
+  bannerUrl: string | null
   director: string | null
   directorPersonId: number | null
   cast: TmdbCastMemberOut[]
@@ -242,6 +244,7 @@ function mapBundleToEnrichment(
     posterUrl: tmdbImageUrl(bundle.poster_path, TMDB_POSTER_SIZE),
     backdropUrl: tmdbImageUrl(bundle.backdrop_path, TMDB_BACKDROP_SIZE),
     logoUrl: tmdbImageUrl(pickTmdbLogo(bundle.images?.logos, preferredLang), TMDB_LOGO_SIZE),
+    bannerUrl: null,
     director: directorEntry?.name ?? null,
     directorPersonId: directorEntry?.tmdbPersonId ?? null,
     cast: extractCast(bundle.credits).map((member) => ({
@@ -468,13 +471,13 @@ export interface SeasonEnrichmentOptions {
   providerSeasons?: ProviderSeason[]
 }
 
-export async function fetchSeasonEnrichment(
-  tmdbId: number,
-  seasonNumber: number,
 // Escapes cachedFetch without persisting: an empty providerSeasons shape (e.g. series
 // info not loaded yet) must not stamp a permanent "unmappable" answer for this tmdbId.
 class SeasonShapeUnavailable extends Error {}
 
+export async function fetchSeasonEnrichment(
+  tmdbId: number,
+  seasonNumber: number,
   options?: SeasonEnrichmentOptions
 ): Promise<TmdbSeasonEnrichment | null> {
   if (!isTmdbActive()) return null
@@ -489,10 +492,10 @@ class SeasonShapeUnavailable extends Error {}
         // 404 is authoritative - TMDb has no such season number, so try the group mapping.
         if (!(error instanceof TmdbHttpError) || error.status !== 404) throw error
       }
+      if (!options?.providerSeasons?.length) throw new SeasonShapeUnavailable()
       const episodes = await mapSeasonThroughEpisodeGroup(
         apiKey,
         tmdbId,
-      if (!options?.providerSeasons?.length) throw new SeasonShapeUnavailable()
         seasonNumber,
         language,
         options?.providerSeasons
@@ -502,10 +505,10 @@ class SeasonShapeUnavailable extends Error {}
     })
     return result.data
   } catch (error) {
+    if (error instanceof SeasonShapeUnavailable) return { episodes: [] }
     log.warn("[xt:tmdb] fetchSeasonEnrichment failed:", tmdbId, seasonNumber, error)
     return null
   }
-    if (error instanceof SeasonShapeUnavailable) return { episodes: [] }
 }
 
 export interface TmdbPersonTitleOut {

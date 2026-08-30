@@ -41,8 +41,9 @@ export function tvdbTitleToEnrichment(title: TvdbTitle, tmdbId: number): TmdbTit
     overview: title.overview,
     posterUrl: title.posterUrl,
     backdropUrl: title.backdropUrl,
-    // ?? tolerates an envelope from a worker deploy that predates logoUrl.
+    // ?? tolerates an envelope from a worker deploy that predates logoUrl/bannerUrl.
     logoUrl: title.logoUrl ?? null,
+    bannerUrl: title.bannerUrl ?? null,
     director: null,
     directorPersonId: null,
     // No TMDb person id, so the card renders non-interactive.
@@ -91,7 +92,6 @@ export function mergeTitleEnrichment(
   // A TMDb overview flagged as fallback is untranslated, so a localized one wins.
   const preferFallbackOverview =
     (!primary.overview || primary.overviewIsFallback === true) && Boolean(fallback.overview)
-  return {
   const cast = hasTmdbCastIds(primary)
     ? primary.cast
     : hasTmdbCastIds(fallback)
@@ -105,10 +105,12 @@ export function mergeTitleEnrichment(
       : primary.genres.length > 0
         ? primary.genres
         : fallback.genres
+  return {
     ...primary,
     posterUrl: primary.posterUrl || fallback.posterUrl,
     backdropUrl: primary.backdropUrl || fallback.backdropUrl,
     logoUrl: primary.logoUrl || fallback.logoUrl,
+    bannerUrl: primary.bannerUrl || fallback.bannerUrl,
     overview: preferFallbackOverview ? fallback.overview : primary.overview,
     overviewIsFallback: preferFallbackOverview ? false : primary.overviewIsFallback,
     director: primary.director || fallback.director,
@@ -135,8 +137,6 @@ function fetchOnce(path: string): Promise<Response> {
   })
 }
 
-async function fetchWithRetry(path: string): Promise<Response> {
-  const response = await fetchOnce(path)
 // Session-only: a confirmed 429 backs off every further proxy call for a bit,
 // and a failed path gets a short memo so a burst of callers (e.g. ambient)
 // doesn't keep re-hitting an endpoint that just failed.
@@ -154,6 +154,8 @@ export function resetTvdbProxyRateLimitForTests(): void {
   failedPathUntilMs.clear()
 }
 
+async function fetchWithRetry(path: string): Promise<Response> {
+  const response = await fetchOnce(path)
   if (response.status !== 429) return response
   const retryAfterSeconds = Number(response.headers.get("Retry-After"))
   const waitMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : 1000
@@ -175,15 +177,15 @@ async function fetchEnvelope<T>(
   if (!getTvdbEnabled()) return FAILED
   try {
     const result = await cachedFetch(CACHE_ENTRY_ID, cacheKind, ttlMs, async () => {
+      const now = Date.now()
+      if (now < rateLimitedUntilMs) throw new Error("tvdb proxy rate limited, cooling down")
+      const failedUntil = failedPathUntilMs.get(path)
+      if (failedUntil && now < failedUntil) throw new Error("tvdb proxy path recently failed")
       const response = await fetchWithRetry(path)
       if (!response.ok) {
         failedPathUntilMs.set(path, Date.now() + FAILED_PATH_MEMO_MS)
         throw new Error(`tvdb proxy ${response.status}`)
       }
-      const now = Date.now()
-      if (now < rateLimitedUntilMs) throw new Error("tvdb proxy rate limited, cooling down")
-      const failedUntil = failedPathUntilMs.get(path)
-      if (failedUntil && now < failedUntil) throw new Error("tvdb proxy path recently failed")
       const envelope = await response.json()
       if (envelope?.v !== TVDB_CONTRACT_VERSION) {
         failedPathUntilMs.set(path, Date.now() + FAILED_PATH_MEMO_MS)

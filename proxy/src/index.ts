@@ -18,6 +18,7 @@ import {
 import {
   filterTrending,
   findByTmdbId,
+  getBannerArtworkTypeId,
   getClearLogoArtworkTypeId,
   getExtendedRecord,
   getSeasonEpisodesCached,
@@ -134,8 +135,11 @@ async function buildTitle(request: TvdbRequest, env: TvdbEnv): Promise<CachedPay
     const extended = await getExtendedRecord(env, request.kind, candidateId)
     // The wrapper carries no source marker, so only the extended record can prove it.
     if (!recordCarriesTmdbId(extended, request.tmdbId)) continue
-    const logoArtworkTypeId = await getClearLogoArtworkTypeId(env, request.kind)
-    const normalized = normalizeTitle(extended, request.language, request.kind, logoArtworkTypeId)
+    const [logoArtworkTypeId, bannerArtworkTypeId] = await Promise.all([
+      getClearLogoArtworkTypeId(env, request.kind),
+      getBannerArtworkTypeId(env, request.kind),
+    ])
+    const normalized = normalizeTitle(extended, request.language, request.kind, logoArtworkTypeId, bannerArtworkTypeId)
     if (!normalized) continue
     title = normalized
     tvdbId = candidateId
@@ -182,8 +186,11 @@ async function buildFind(request: TvdbRequest, env: TvdbEnv): Promise<CachedPayl
   const tvdbId = pickSearchMatch(results, request.kind, request.year, request.query)
   if (tvdbId == null) return { storedAt: now, ttl: TTL_NEGATIVE, data: null }
   const extended = await getExtendedRecord(env, request.kind, tvdbId)
-  const logoArtworkTypeId = await getClearLogoArtworkTypeId(env, request.kind)
-  const title = normalizeTitle(extended, request.language, request.kind, logoArtworkTypeId)
+  const [logoArtworkTypeId, bannerArtworkTypeId] = await Promise.all([
+    getClearLogoArtworkTypeId(env, request.kind),
+    getBannerArtworkTypeId(env, request.kind),
+  ])
+  const title = normalizeTitle(extended, request.language, request.kind, logoArtworkTypeId, bannerArtworkTypeId)
   if (!title) return { storedAt: now, ttl: TTL_NEGATIVE, data: null }
   const translation = await getTranslation(env, request.kind, tvdbId, request.language).catch(() => null)
   return { storedAt: now, ttl: TTL_TITLE, data: applyTvdbTranslation(title, translation) }

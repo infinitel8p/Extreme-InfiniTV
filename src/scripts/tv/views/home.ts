@@ -69,6 +69,7 @@ import {
 import { createActionSheet, type ActionSheetHandle, type ActionSheetItem } from "@/scripts/tv/ui/action-sheet.ts"
 import { buildCatalogMenuActions } from "@/scripts/tv/rail-card-menu.ts"
 import { backdropFromInfoPayload } from "@/scripts/lib/backdrop.ts"
+import { peekTitleEnrichment } from "@/scripts/lib/enrichment.ts"
 import { requestVodInfo } from "@/scripts/lib/vod-info.ts"
 import { requestSeriesInfo } from "@/scripts/lib/series-seasons.ts"
 
@@ -265,9 +266,9 @@ function continueWatchingMenuActions(
   resumeRow: ContinueWatchingRow,
   href: string
 ): ActionSheetItem[] {
-  return [
   // "Open" should not autoplay, unlike the row's own tap-to-resume href.
   const openHref = href.replace(/[?&]autoplay=1\b/, "")
+  return [
     { label: t("detail.action.continue"), onSelect: () => resumeOrNavigate(playlistId, resumeRow, href) },
     { label: t("list.menu.open"), onSelect: () => { void navigate(openHref) } },
     {
@@ -293,12 +294,39 @@ function requestBackdropInfo(playlistId: string, kind: BackdropKind, id: string 
   return kind === "vod" ? requestVodInfo(playlistId, id) : requestSeriesInfo(playlistId, id)
 }
 
+// Cache-only (peekTitleEnrichment never fetches), keyed across the view's lifetime so
+// a card revisited later reads the already-resolved banner synchronously.
+const bannerUrlByKey = new Map<string, string | null>()
+
+function bannerCacheKey(playlistId: string, kind: BackdropKind, id: string | number): string {
+  return `${playlistId}:${kind}:${id}`
+}
+
+function ensureBannerLookup(
+  playlistId: string,
+  kind: BackdropKind,
+  id: string | number,
+  focusKey: string,
+  onResolved: (focusKey: string) => void
+): void {
+  const key = bannerCacheKey(playlistId, kind, id)
+  if (bannerUrlByKey.has(key)) return
+  bannerUrlByKey.set(key, null)
+  void peekTitleEnrichment(kind === "vod" ? "movie" : "series", playlistId, String(id)).then((enrichment) => {
+    const bannerUrl = enrichment?.bannerUrl ?? null
+    if (!bannerUrl) return
+    bannerUrlByKey.set(key, bannerUrl)
+    onResolved(focusKey)
+  })
+}
+
 /**
- * Cache-first hero image: a real backdrop when the vod_info/series_info entry is
- * already cached, poster otherwise. On a cache miss this also kicks off a lazy,
- * throttled info fetch and calls onResolved(focusKey) once it lands so the caller
- * can re-show the hero - guarded by comparing focusKey against whatever the hero
- * is showing at that moment, so a stale resolve after the hero moved on is a no-op.
+ * Cache-first hero image: a TVDB banner first, a real backdrop when the vod_info/
+ * series_info entry is already cached, poster otherwise. On a cache miss this also
+ * kicks off a lazy, throttled info fetch and calls onResolved(focusKey) once it
+ * lands so the caller can re-show the hero - guarded by comparing focusKey against
+ * whatever the hero is showing at that moment, so a stale resolve after the hero
+ * moved on is a no-op.
  */
 function heroBackdropImage(
   playlistId: string,
@@ -307,7 +335,10 @@ function heroBackdropImage(
   posterUrl: string | null,
   focusKey: string,
   onResolved: (focusKey: string) => void
-): { imageUrl: string | null; imageKind: "backdrop" | "poster" } {
+): { imageUrl: string | null; imageKind: "banner" | "backdrop" | "poster" } {
+  ensureBannerLookup(playlistId, kind, id, focusKey, onResolved)
+  const bannerUrl = bannerUrlByKey.get(bannerCacheKey(playlistId, kind, id))
+  if (bannerUrl) return { imageUrl: bannerUrl, imageKind: "banner" }
   const cachedUrl = cachedBackdropUrl(playlistId, kind, id)
   if (cachedUrl) return { imageUrl: cachedUrl, imageKind: "backdrop" }
   void requestBackdropInfo(playlistId, kind, id).then((data) => {
@@ -931,6 +962,8 @@ const view: TvView = {
     const openedEntry = takeLastOpenedEntry()
     let openedEntryHandled = false
     let firstHeroItem: HeroItem | null = null
+    let anyItems = false
+    let renderedRailWithItems = false
 
     for (const strip of strips.slice(0, PREPAINT_RAIL_LIMIT)) {
       const railTitle = t(RAIL_TITLE_KEY[strip.id])
@@ -948,9 +981,11 @@ const view: TvView = {
         railHandles.set(strip.id, rail)
         continue
       }
+      anyItems = true
       // Prepaint is always the first couple of rails, always above the fold.
       const eagerHere = !renderedRailWithItems || heavyEffectsAllowed() ? eagerCardCount() : 0
       rail.setItems(items, { eagerCount: eagerHere })
+      renderedRailWithItems = true
       decorateRailChips(rail, items, chipInfoByFocusKey)
       track.appendChild(rail.el)
       railHandles.set(strip.id, rail)
@@ -967,8 +1002,6 @@ const view: TvView = {
       hero.destroy()
       actionSheet.destroy()
       return false
-    let anyItems = false
-    let renderedRailWithItems = false
     }
     hero.show(firstHeroItem || { eyebrow: t("welcome.eyebrow"), title: t("welcome.heading"), meta: "" })
     root.appendChild(scroller)
@@ -983,11 +1016,9 @@ const view: TvView = {
 
     const scroller = prepainted?.scroller ?? document.createElement("div")
     scroller.className = "h-full overflow-hidden px-[var(--tv-focus-pad)] -mx-[var(--tv-focus-pad)]"
-      anyItems = true
     const track = prepainted?.track ?? document.createElement("div")
     track.className = "flex flex-col gap-10 pb-20"
     if (!prepainted) {
-      renderedRailWithItems = true
       scroller.appendChild(track)
       root.appendChild(scroller)
     }

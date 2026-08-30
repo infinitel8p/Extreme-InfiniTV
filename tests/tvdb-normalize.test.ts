@@ -138,6 +138,7 @@ describe("normalizeTitle", () => {
       posterUrl: null,
       backdropUrl: null,
       logoUrl: null,
+      bannerUrl: null,
       cast: [],
       genres: [],
       year: null,
@@ -166,6 +167,28 @@ describe("normalizeTitle", () => {
 
   it("does not match a differently-typed artwork against the logo type id", () => {
     expect(normalizeTitle(REZERO, "eng", "series", 23)!.logoUrl).toBeNull()
+  })
+
+  it("leaves bannerUrl null when no banner artwork type id is given", () => {
+    const withBannerArtwork = {
+      ...REZERO,
+      artworks: [...REZERO.artworks!, { image: "https://artworks.thetvdb.com/banner.png", type: 30, score: 5 }],
+    }
+    expect(normalizeTitle(withBannerArtwork, "eng", "series")!.bannerUrl).toBeNull()
+  })
+
+  it("picks the banner artwork by the resolved type id", () => {
+    const withBannerArtwork = {
+      ...REZERO,
+      artworks: [...REZERO.artworks!, { image: "https://artworks.thetvdb.com/banner.png", type: 30, score: 5 }],
+    }
+    expect(normalizeTitle(withBannerArtwork, "eng", "series", null, 30)!.bannerUrl).toBe(
+      "https://artworks.thetvdb.com/banner.png"
+    )
+  })
+
+  it("does not match a differently-typed artwork against the banner type id", () => {
+    expect(normalizeTitle(REZERO, "eng", "series", null, 30)!.bannerUrl).toBeNull()
   })
 })
 

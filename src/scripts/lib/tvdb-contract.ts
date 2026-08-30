@@ -22,6 +22,7 @@ export interface TvdbTitle {
   posterUrl: string | null
   backdropUrl: string | null
   logoUrl: string | null
+  bannerUrl: string | null
   cast: TvdbCastMember[]
   genres: string[]
   year: number | null

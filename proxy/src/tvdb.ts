@@ -141,6 +141,19 @@ export async function getClearLogoArtworkTypeId(env: TvdbEnv, kind: TvdbKind): P
   return Number.isInteger(id) && id > 0 ? id : null
 }
 
+/** Resolves the numeric Banner artwork-type id by name instead of guessing it. */
+export async function getBannerArtworkTypeId(env: TvdbEnv, kind: TvdbKind): Promise<number | null> {
+  const recordType = kind === "movie" ? "movie" : "series"
+  const types = await getArtworkTypes(env).catch(() => null)
+  const match = (types || []).find(
+    (type) =>
+      String(type?.recordType ?? "").toLowerCase() === recordType &&
+      String(type?.name ?? "").toLowerCase() === "banner"
+  )
+  const id = Number(match?.id)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
 export async function getExtendedRecord(
   env: TvdbEnv,
   kind: TvdbKind,

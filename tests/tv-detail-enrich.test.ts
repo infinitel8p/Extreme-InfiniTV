@@ -11,6 +11,7 @@ function makeEnrichment(overrides: Partial<TmdbTitleEnrichment> = {}): TmdbTitle
     posterUrl: "https://example.com/poster.jpg",
     backdropUrl: "https://example.com/backdrop.jpg",
     logoUrl: null,
+    bannerUrl: null,
     director: null,
     directorPersonId: null,
     cast: [],

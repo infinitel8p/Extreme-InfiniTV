@@ -180,6 +180,7 @@ describe("tvdbTitleToEnrichment", () => {
     posterUrl: "https://artworks.thetvdb.com/p.jpg",
     backdropUrl: "https://artworks.thetvdb.com/b.jpg",
     logoUrl: null,
+    bannerUrl: null,
     cast: [{ name: "Yusuke Kobayashi", character: "Subaru", profileUrl: "https://artworks.thetvdb.com/a.jpg" }],
     genres: ["Animation"],
     year: 2016,
@@ -208,6 +209,16 @@ describe("tvdbTitleToEnrichment", () => {
   it("carries a resolved logo artwork through", () => {
     const enrichment = tvdbTitleToEnrichment({ ...title, logoUrl: "https://artworks.thetvdb.com/logo.png" }, 1)
     expect(enrichment.logoUrl).toBe("https://artworks.thetvdb.com/logo.png")
+  })
+
+  it("carries a resolved banner artwork through", () => {
+    const enrichment = tvdbTitleToEnrichment({ ...title, bannerUrl: "https://artworks.thetvdb.com/banner.png" }, 1)
+    expect(enrichment.bannerUrl).toBe("https://artworks.thetvdb.com/banner.png")
+  })
+
+  it("defaults bannerUrl to null for an envelope from before it existed", () => {
+    const enrichment = tvdbTitleToEnrichment(title, 1)
+    expect(enrichment.bannerUrl).toBeNull()
   })
 })
 
@@ -282,6 +293,7 @@ describe("enrichmentNeedsFill", () => {
     posterUrl: "https://p",
     backdropUrl: "https://b",
     logoUrl: null,
+    bannerUrl: null,
     director: null,
     directorPersonId: null,
     cast: [{ name: "A", character: "C", profilePath: null, tmdbPersonId: 1 }],
@@ -326,6 +338,7 @@ describe("mergeTitleEnrichment", () => {
     posterUrl: null,
     backdropUrl: "https://tmdb/b",
     logoUrl: "https://tmdb/logo",
+    bannerUrl: null,
     director: "Someone",
     directorPersonId: 5,
     cast: [],
@@ -343,6 +356,7 @@ describe("mergeTitleEnrichment", () => {
     posterUrl: "https://tvdb/p",
     backdropUrl: "https://tvdb/b",
     logoUrl: null,
+    bannerUrl: "https://tvdb/banner",
     director: null,
     directorPersonId: null,
     cast: [{ name: "Actor", character: "Role", profilePath: null, tmdbPersonId: 0 }],
@@ -361,6 +375,8 @@ describe("mergeTitleEnrichment", () => {
     expect(merged.trailerYoutubeKey).toBe("dQw4w9WgXcQ")
     expect(merged.voteAverage).toBe(8.4)
     expect(merged.year).toBe(2016)
+    // TMDb never carries a banner, so TheTVDB's is the only candidate.
+    expect(merged.bannerUrl).toBe("https://tvdb/banner")
   })
 
   it("never lets the fallback overwrite a value TMDb has", () => {
@@ -405,22 +421,6 @@ describe("mergeTitleEnrichment", () => {
   it("returns null when neither side has anything", () => {
     expect(mergeTitleEnrichment(null, null)).toBeNull()
   })
-})
-
-describe("failure is not a no-match", () => {
-  it("does not fall through to a name search when the id lookup errors", async () => {
-    providerFetchMock.mockRejectedValue(new Error("network blip"))
-    expect(await tvdbEnrichment(65942, "series", { name: "Breaking Bad" })).toBeNull()
-    // One attempt only: a blip must not stamp another work's artwork on this id.
-    expect(providerFetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  it("still falls through when the id lookup definitively has no match", async () => {
-    providerFetchMock
-      .mockResolvedValueOnce(jsonResponse({ v: 1, data: null }))
-      .mockResolvedValueOnce(jsonResponse({ v: 1, data: { tvdbId: 7, title: "Found", cast: [], genres: [] } }))
-    const result = await tvdbEnrichment(65942, "series", { name: "Breaking Bad" })
-    expect(result?.enrichment.title).toBe("Found")
 
   it("prefers the side with real TMDb cast ids for cast and genres, even as the fallback", () => {
     const tvdbPrimary = {
@@ -437,6 +437,22 @@ describe("failure is not a no-match", () => {
     expect(merged.cast).toEqual(tmdbFallback.cast)
     expect(merged.genres).toEqual(["Drama"])
   })
+})
+
+describe("failure is not a no-match", () => {
+  it("does not fall through to a name search when the id lookup errors", async () => {
+    providerFetchMock.mockRejectedValue(new Error("network blip"))
+    expect(await tvdbEnrichment(65942, "series", { name: "Breaking Bad" })).toBeNull()
+    // One attempt only: a blip must not stamp another work's artwork on this id.
+    expect(providerFetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("still falls through when the id lookup definitively has no match", async () => {
+    providerFetchMock
+      .mockResolvedValueOnce(jsonResponse({ v: 1, data: null }))
+      .mockResolvedValueOnce(jsonResponse({ v: 1, data: { tvdbId: 7, title: "Found", cast: [], genres: [] } }))
+    const result = await tvdbEnrichment(65942, "series", { name: "Breaking Bad" })
+    expect(result?.enrichment.title).toBe("Found")
     expect(result?.tvdbId).toBe(7)
   })
 })

@@ -53,7 +53,8 @@ export interface TvdbRawEpisode {
   aired?: string | null
 }
 
-// Per /artwork/types: 1/16 are Banners and 3/15 Backgrounds, so match per kind.
+// Per /artwork/types: 3/15 are Backgrounds, so match per kind. Clearlogo and Banner
+// ids are resolved dynamically instead (see getClearLogoArtworkTypeId / getBannerArtworkTypeId).
 const ARTWORK_TYPES = {
   series: { poster: 2, background: 3 },
   movie: { poster: 14, background: 15 },
@@ -137,7 +138,8 @@ export function normalizeTitle(
   record: TvdbRawSeriesRecord | null | undefined,
   language: string,
   kind: TvdbKind,
-  logoArtworkTypeId?: number | null
+  logoArtworkTypeId?: number | null,
+  bannerArtworkTypeId?: number | null
 ): TvdbTitle | null {
   const tvdbId = Number(record?.id)
   if (!record || !Number.isInteger(tvdbId) || tvdbId <= 0) return null
@@ -149,6 +151,7 @@ export function normalizeTitle(
     posterUrl: pickArtwork(record.artworks, types.poster) ?? imageUrl(record.image),
     backdropUrl: pickArtwork(record.artworks, types.background),
     logoUrl: logoArtworkTypeId ? pickArtwork(record.artworks, logoArtworkTypeId) : null,
+    bannerUrl: bannerArtworkTypeId ? pickArtwork(record.artworks, bannerArtworkTypeId) : null,
     cast: normalizeCast(record.characters),
     genres: (record.genres || []).map((genre) => cleanText(genre?.name)).filter((name) => name !== ""),
     year: parseYear(record),

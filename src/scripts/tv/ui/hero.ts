@@ -27,7 +27,7 @@ export interface HeroItem {
   meta: string
   progressPercent?: number | null
   imageUrl?: string | null
-  imageKind?: "poster" | "logo" | "backdrop"
+  imageKind?: "poster" | "logo" | "backdrop" | "banner"
   cta?: HeroCta
   /** Enter/OK on the hero itself when there's no `cta` (poster items navigate, live items tune in). */
   onActivate?: () => void
@@ -158,11 +158,43 @@ export function createHero(root: HTMLElement): HeroHandle {
 
   function buildBackdropLayer(
     imageUrl: string,
-    imageKind: "poster" | "logo" | "backdrop" | undefined
+    imageKind: "poster" | "logo" | "backdrop" | "banner" | undefined
   ): { layer: HTMLDivElement; images: HTMLImageElement[]; realBackdropImg: HTMLImageElement | null } {
     const layer = document.createElement("div")
     layer.className = "absolute inset-0"
     layer.style.opacity = "0"
+
+    if (imageKind === "banner") {
+      const images: HTMLImageElement[] = []
+      if (effectTier() === "full") {
+        const blurred = document.createElement("img")
+        blurred.alt = ""
+        blurred.setAttribute("aria-hidden", "true")
+        blurred.loading = "lazy"
+        blurred.decoding = "async"
+        blurred.dataset.backdropUrl = imageUrl
+        blurred.className = "absolute inset-0 h-full w-full scale-125 object-cover opacity-40 blur-3xl saturate-150"
+        layer.appendChild(blurred)
+        mountCachedImage(blurred, imageUrl, "backdrop")
+        images.push(blurred)
+      } else {
+        const flat = document.createElement("div")
+        flat.className = "absolute inset-0 bg-surface-2"
+        layer.appendChild(flat)
+      }
+
+      const contained = document.createElement("img")
+      contained.alt = ""
+      contained.loading = "lazy"
+      contained.decoding = "async"
+      contained.dataset.backdropUrl = imageUrl
+      contained.className = "absolute right-0 top-1/2 max-h-[70%] max-w-[60%] -translate-y-1/2 object-contain"
+      layer.appendChild(contained)
+      mountCachedImage(contained, imageUrl, "backdrop")
+      images.push(contained)
+      // No Ken Burns on banners: realBackdropImg stays null.
+      return { layer, images, realBackdropImg: null }
+    }
 
     if (imageKind === "logo") {
       const images: HTMLImageElement[] = []
@@ -210,7 +242,10 @@ export function createHero(root: HTMLElement): HeroHandle {
     return { layer, images: [img], realBackdropImg: img }
   }
 
-  function setBackdrop(imageUrl: string | null | undefined, imageKind: "poster" | "logo" | "backdrop" | undefined): void {
+  function setBackdrop(
+    imageUrl: string | null | undefined,
+    imageKind: "poster" | "logo" | "backdrop" | "banner" | undefined
+  ): void {
     const key = backdropKeyFor(imageUrl, imageKind)
     if (key === currentBackdropKey) return
     currentBackdropKey = key
@@ -221,7 +256,9 @@ export function createHero(root: HTMLElement): HeroHandle {
       clearAmbient(section)
       return
     }
-    void applyAmbient(section, imageUrl, { kind: imageKind === "backdrop" ? "backdrop" : "poster" })
+    void applyAmbient(section, imageUrl, {
+      kind: imageKind === "backdrop" || imageKind === "banner" ? "backdrop" : "poster",
+    })
 
     if (!motionAllowed()) {
       for (const layer of Array.from(backdropWrap.children) as HTMLElement[]) removeLayer(layer)

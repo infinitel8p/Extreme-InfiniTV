@@ -73,6 +73,7 @@ function makeEnrichment(overrides: Partial<TmdbTitleEnrichment> = {}): TmdbTitle
     posterUrl: null,
     backdropUrl: null,
     logoUrl: null,
+    bannerUrl: null,
     director: null,
     directorPersonId: null,
     cast: [],
@@ -223,8 +224,8 @@ describe("peekTitleEnrichmentDetailed", () => {
   it("surfaces the tmdbId alongside the enriched cache hit", async () => {
     const cached = makeEnrichment({ title: "Cached" })
     cacheStore.set("tmdb:tmdb_match_vod_p1_i1:en-US", { data: { tmdbId: 65942 }, stale: false })
-
     cacheStore.set("tmdb:enriched_movie_65942:en-US:v1", { data: cached, stale: false })
+
     const result = await peekTitleEnrichmentDetailed("movie", "p1", "i1")
 
     expect(result).toEqual({ enrichment: cached, tmdbId: 65942, tvdbId: null })
@@ -275,7 +276,6 @@ describe("resolveTitleEnrichmentDetailed", () => {
 
     expect(result).toBeNull()
   })
-})
 
   it("prefers TMDb's localized genres even when TMDb has no billed cast", async () => {
     tvdbEnrichmentMock.mockResolvedValue({
@@ -296,6 +296,7 @@ describe("resolveTitleEnrichmentDetailed", () => {
 
     expect(result?.enrichment.genres).toEqual(["Action"])
   })
+})
 
 describe("peekEarlyTitleEnrichment", () => {
   it("combines the cached enrichment with the provider info probe", async () => {
