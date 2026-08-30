@@ -84,14 +84,15 @@ export function createHero(root: HTMLElement): HeroHandle {
 
   const gradientLeft = document.createElement("div")
   gradientLeft.className = "absolute inset-0"
-  // The via-stop carries the ambient tint; both anchors stay fixed so an unresolved
-  // ambient colour (transparent, the registered default) renders identically to before.
+  // Tint blends into an opaque bg first, so the alpha ramp matches the pre-ambient gradient exactly.
   gradientLeft.style.backgroundImage =
-    "linear-gradient(to right, var(--color-bg), color-mix(in oklab, var(--color-bg) 82%, var(--tv-ambient-soft)), transparent)"
+    "linear-gradient(to right, var(--color-bg), " +
+    "color-mix(in oklab, color-mix(in oklab, var(--color-bg), var(--tv-ambient, var(--color-bg)) 20%) 75%, transparent), " +
+    "transparent)"
   const gradientBottom = document.createElement("div")
   gradientBottom.className = "absolute inset-0"
   gradientBottom.style.backgroundImage =
-    "linear-gradient(to top, color-mix(in oklab, var(--color-bg) 40%, transparent), var(--tv-ambient-soft), transparent)"
+    "linear-gradient(to top, color-mix(in oklab, var(--color-bg) 40%, transparent), var(--tv-ambient-soft, transparent), transparent)"
 
   const textBlock = document.createElement("div")
   textBlock.className = "relative flex h-full max-w-xl flex-col justify-end gap-2 p-6"

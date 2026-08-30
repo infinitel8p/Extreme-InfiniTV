@@ -123,13 +123,15 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   backdropWrap.style.viewTransitionName = "tv-detail-backdrop"
   const gradientLeft = document.createElement("div")
   gradientLeft.className = "absolute inset-0"
-  // Via-stop carries the ambient tint; anchors stay fixed so an unset ambient renders as before.
+  // Tint blends into an opaque bg first, so the alpha ramp matches the pre-ambient gradient exactly.
   gradientLeft.style.backgroundImage =
-    "linear-gradient(to right, var(--color-bg), color-mix(in oklab, var(--color-bg) 82%, var(--tv-ambient-soft)), transparent)"
+    "linear-gradient(to right, var(--color-bg), " +
+    "color-mix(in oklab, color-mix(in oklab, var(--color-bg), var(--tv-ambient, var(--color-bg)) 20%) 70%, transparent), " +
+    "transparent)"
   const gradientBottom = document.createElement("div")
   gradientBottom.className = "absolute inset-0"
   gradientBottom.style.backgroundImage =
-    "linear-gradient(to top, color-mix(in oklab, var(--color-bg) 50%, transparent), var(--tv-ambient-soft), transparent)"
+    "linear-gradient(to top, color-mix(in oklab, var(--color-bg) 50%, transparent), var(--tv-ambient-soft, transparent), transparent)"
 
   const heroContent = document.createElement("div")
   heroContent.className = "relative flex h-full items-end gap-6 p-6"
