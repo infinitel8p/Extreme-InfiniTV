@@ -13,12 +13,16 @@ import {
   type TvdbSeason,
   type TvdbSeasonOrder,
   type TvdbTitle,
+  type TvdbTrendingEntry,
 } from "@/scripts/lib/tvdb-contract"
 
 const PROXY_BASE = "https://xt-tvdb-proxy.infinitel8p.com"
 const CACHE_ENTRY_ID = "tvdb"
 const TTL_MS = 7 * 24 * 60 * 60 * 1000
+const TRENDING_TTL_MS = 24 * 60 * 60 * 1000
 const REQUEST_TIMEOUT_MS = 8_000
+// Bounds a single 429 retry: a longer reset isn't worth stalling the page for.
+const MAX_RETRY_WAIT_MS = 3_000
 
 /** The provider's own id, so a lookup needs no TMDb key. */
 export function parseProviderTmdbId(record: unknown): number | null {
@@ -37,7 +41,8 @@ export function tvdbTitleToEnrichment(title: TvdbTitle, tmdbId: number): TmdbTit
     overview: title.overview,
     posterUrl: title.posterUrl,
     backdropUrl: title.backdropUrl,
-    logoUrl: null,
+    // ?? tolerates an envelope from a worker deploy that predates logoUrl.
+    logoUrl: title.logoUrl ?? null,
     director: null,
     directorPersonId: null,
     // No TMDb person id, so the card renders non-interactive.
@@ -85,10 +90,15 @@ export function mergeTitleEnrichment(
     ...primary,
     posterUrl: primary.posterUrl || fallback.posterUrl,
     backdropUrl: primary.backdropUrl || fallback.backdropUrl,
+    logoUrl: primary.logoUrl || fallback.logoUrl,
     overview: preferFallbackOverview ? fallback.overview : primary.overview,
     overviewIsFallback: preferFallbackOverview ? false : primary.overviewIsFallback,
+    director: primary.director || fallback.director,
+    directorPersonId: primary.director ? primary.directorPersonId : fallback.directorPersonId,
     cast: primary.cast.length > 0 ? primary.cast : fallback.cast,
+    recommendations: primary.recommendations.length > 0 ? primary.recommendations : fallback.recommendations,
     genres: primary.genres.length > 0 ? primary.genres : fallback.genres,
+    tagline: primary.tagline || fallback.tagline,
     year: primary.year ?? fallback.year,
     voteAverage: primary.voteAverage > 0 ? primary.voteAverage : fallback.voteAverage,
     trailerYoutubeKey: primary.trailerYoutubeKey || fallback.trailerYoutubeKey,
@@ -100,14 +110,32 @@ type ProxyResult<T> = { ok: true; data: T | null } | { ok: false; data: null }
 
 const FAILED: ProxyResult<never> = { ok: false, data: null }
 
-async function fetchEnvelope<T>(path: string, cacheKind: string): Promise<ProxyResult<T>> {
+function fetchOnce(path: string): Promise<Response> {
+  return providerFetch(`${PROXY_BASE}${path}`, {
+    logKind: "api",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  })
+}
+
+async function fetchWithRetry(path: string): Promise<Response> {
+  const response = await fetchOnce(path)
+  if (response.status !== 429) return response
+  const retryAfterSeconds = Number(response.headers.get("Retry-After"))
+  const waitMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : 1000
+  if (waitMs > MAX_RETRY_WAIT_MS) return response
+  await new Promise((resolve) => setTimeout(resolve, waitMs))
+  return fetchOnce(path)
+}
+
+async function fetchEnvelope<T>(
+  path: string,
+  cacheKind: string,
+  ttlMs: number = TTL_MS
+): Promise<ProxyResult<T>> {
   if (!getTvdbEnabled()) return FAILED
   try {
-    const result = await cachedFetch(CACHE_ENTRY_ID, cacheKind, TTL_MS, async () => {
-      const response = await providerFetch(`${PROXY_BASE}${path}`, {
-        logKind: "api",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      })
+    const result = await cachedFetch(CACHE_ENTRY_ID, cacheKind, ttlMs, async () => {
+      const response = await fetchWithRetry(path)
       if (!response.ok) throw new Error(`tvdb proxy ${response.status}`)
       const envelope = await response.json()
       if (envelope?.v !== TVDB_CONTRACT_VERSION) throw new Error("tvdb contract mismatch")
@@ -130,6 +158,17 @@ export async function fetchTvdbTitle(tmdbId: number, kind: TvdbKind): Promise<Tv
   return result.data
 }
 
+/** Keyless-fallback trending pool, intersected with the library by ambient-trending.ts. */
+export async function fetchTvdbTrending(kind: TvdbKind): Promise<TvdbTrendingEntry[]> {
+  const language = tvdbLanguageFor(getActiveLocale())
+  const result = await fetchEnvelope<TvdbTrendingEntry[]>(
+    `/v1/trending?kind=${kind}&lang=${language}`,
+    `tvdb_trending_${kind}:${language}`,
+    TRENDING_TTL_MS
+  )
+  return result.data ?? []
+}
+
 /** For entries the provider ships no tmdb id for. */
 export async function findTvdbTitle(
   name: string,
@@ -137,18 +176,22 @@ export async function findTvdbTitle(
   year?: number | null
 ): Promise<TvdbTitle | null> {
   // Provider names carry prefixes and tags ("DE - ... (2016) (JP)") that wreck a search.
+  // Same 3-variant fallback the TMDb matcher uses (tmdb-enrich.ts resolveTmdbIdUncached).
   const { variants, year: titleYear } = cleanProviderTitle(name)
-  const query = variants[0] || name
-  const normalized = normalizeSearchName(query)
-  if (!normalized) return null
   const effectiveYear = Number.isInteger(year) && year ? year : titleYear
   const language = tvdbLanguageFor(getActiveLocale())
   const yearParam = effectiveYear ? `&year=${effectiveYear}` : ""
-  const result = await fetchEnvelope<TvdbTitle>(
-    `/v1/find?name=${encodeURIComponent(query)}&kind=${kind}${yearParam}&lang=${language}`,
-    `tvdb_find_${kind}_${hashName(normalized)}_${effectiveYear ?? "any"}:${language}`
-  )
-  return result.data
+
+  for (const query of variants.slice(0, 3)) {
+    const normalized = normalizeSearchName(query)
+    if (!normalized) continue
+    const result = await fetchEnvelope<TvdbTitle>(
+      `/v1/find?name=${encodeURIComponent(query)}&kind=${kind}${yearParam}&lang=${language}`,
+      `tvdb_find_${kind}_${hashName(normalized)}_${effectiveYear ?? "any"}:${language}`
+    )
+    if (result.data) return result.data
+  }
+  return null
 }
 
 export interface TvdbEnrichmentResult {

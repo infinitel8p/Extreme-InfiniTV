@@ -136,7 +136,8 @@ function normalizeCast(characters: TvdbRawCharacter[] | null | undefined): TvdbC
 export function normalizeTitle(
   record: TvdbRawSeriesRecord | null | undefined,
   language: string,
-  kind: TvdbKind
+  kind: TvdbKind,
+  logoArtworkTypeId?: number | null
 ): TvdbTitle | null {
   const tvdbId = Number(record?.id)
   if (!record || !Number.isInteger(tvdbId) || tvdbId <= 0) return null
@@ -147,6 +148,7 @@ export function normalizeTitle(
     overview: cleanText(record.overview),
     posterUrl: pickArtwork(record.artworks, types.poster) ?? imageUrl(record.image),
     backdropUrl: pickArtwork(record.artworks, types.background),
+    logoUrl: logoArtworkTypeId ? pickArtwork(record.artworks, logoArtworkTypeId) : null,
     cast: normalizeCast(record.characters),
     genres: (record.genres || []).map((genre) => cleanText(genre?.name)).filter((name) => name !== ""),
     year: parseYear(record),

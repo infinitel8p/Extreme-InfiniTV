@@ -137,12 +137,35 @@ describe("normalizeTitle", () => {
       overview: "",
       posterUrl: null,
       backdropUrl: null,
+      logoUrl: null,
       cast: [],
       genres: [],
       year: null,
       status: "unknown",
       trailerYoutubeKey: null,
     })
+  })
+
+  it("leaves logoUrl null when no logo artwork type id is given", () => {
+    const withLogoArtwork = {
+      ...REZERO,
+      artworks: [...REZERO.artworks!, { image: "https://artworks.thetvdb.com/logo.png", type: 23, score: 5 }],
+    }
+    expect(normalizeTitle(withLogoArtwork, "eng", "series")!.logoUrl).toBeNull()
+  })
+
+  it("picks the clearlogo artwork by the resolved type id", () => {
+    const withLogoArtwork = {
+      ...REZERO,
+      artworks: [...REZERO.artworks!, { image: "https://artworks.thetvdb.com/logo.png", type: 23, score: 5 }],
+    }
+    expect(normalizeTitle(withLogoArtwork, "eng", "series", 23)!.logoUrl).toBe(
+      "https://artworks.thetvdb.com/logo.png"
+    )
+  })
+
+  it("does not match a differently-typed artwork against the logo type id", () => {
+    expect(normalizeTitle(REZERO, "eng", "series", 23)!.logoUrl).toBeNull()
   })
 })
 

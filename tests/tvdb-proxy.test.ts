@@ -96,6 +96,33 @@ describe("fetchTvdbTitle", () => {
   })
 })
 
+function rateLimited(retryAfter: string) {
+  return { ok: false, status: 429, headers: { get: () => retryAfter }, json: async () => ({}) }
+}
+
+describe("429 rate limiting", () => {
+  it("retries once after a short Retry-After and returns the fresh answer", async () => {
+    vi.useFakeTimers()
+    try {
+      providerFetchMock
+        .mockResolvedValueOnce(rateLimited("1"))
+        .mockResolvedValueOnce(jsonResponse({ v: 1, data: { tvdbId: 1, title: "X" } }))
+      const pending = fetchTvdbTitle(1, "series")
+      await vi.advanceTimersByTimeAsync(1000)
+      expect((await pending)?.title).toBe("X")
+      expect(providerFetchMock).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("gives up without retrying when Retry-After exceeds the bounded wait", async () => {
+    providerFetchMock.mockResolvedValue(rateLimited("30"))
+    expect(await fetchTvdbTitle(1, "series")).toBeNull()
+    expect(providerFetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe("fetchTvdbSeason", () => {
   it("defaults to the official ordering", async () => {
     providerFetchMock.mockResolvedValue(
@@ -131,6 +158,7 @@ describe("tvdbTitleToEnrichment", () => {
     overview: "Plot",
     posterUrl: "https://artworks.thetvdb.com/p.jpg",
     backdropUrl: "https://artworks.thetvdb.com/b.jpg",
+    logoUrl: null,
     cast: [{ name: "Yusuke Kobayashi", character: "Subaru", profileUrl: "https://artworks.thetvdb.com/a.jpg" }],
     genres: ["Animation"],
     year: 2016,
@@ -155,6 +183,11 @@ describe("tvdbTitleToEnrichment", () => {
     expect(member.profilePath).toBe("https://artworks.thetvdb.com/a.jpg")
     expect(member.tmdbPersonId).toBeFalsy()
   })
+
+  it("carries a resolved logo artwork through", () => {
+    const enrichment = tvdbTitleToEnrichment({ ...title, logoUrl: "https://artworks.thetvdb.com/logo.png" }, 1)
+    expect(enrichment.logoUrl).toBe("https://artworks.thetvdb.com/logo.png")
+  })
 })
 
 describe("findTvdbTitle", () => {
@@ -176,6 +209,23 @@ describe("findTvdbTitle", () => {
   it("skips the request entirely for an unusable name", async () => {
     expect(await findTvdbTitle("!", "series")).toBeNull()
     expect(providerFetchMock).not.toHaveBeenCalled()
+  })
+
+  it("tries the next cleaned variant when an earlier one comes up empty", async () => {
+    providerFetchMock
+      .mockResolvedValueOnce(jsonResponse({ v: 1, data: null }))
+      .mockResolvedValueOnce(jsonResponse({ v: 1, data: null }))
+      .mockResolvedValueOnce(jsonResponse({ v: 1, data: { tvdbId: 9, title: "Found" } }))
+    const title = await findTvdbTitle("DE - Breaking Bad (2008) [Extra]", "series", 2008)
+    expect(title?.title).toBe("Found")
+    expect(providerFetchMock.mock.calls.length).toBeGreaterThan(1)
+    expect(providerFetchMock.mock.calls.length).toBeLessThanOrEqual(3)
+  })
+
+  it("gives up after the same 3 variants the TMDb matcher tries", async () => {
+    providerFetchMock.mockResolvedValue(jsonResponse({ v: 1, data: null }))
+    expect(await findTvdbTitle("DE - Breaking Bad (2008) [Extra]", "series", 2008)).toBeNull()
+    expect(providerFetchMock.mock.calls.length).toBeLessThanOrEqual(3)
   })
 })
 
@@ -300,6 +350,19 @@ describe("mergeTitleEnrichment", () => {
     expect(merged.genres).toEqual(["Drama"])
     expect(merged.logoUrl).toBe("https://tmdb/logo")
     expect(merged.director).toBe("Someone")
+    expect(merged.tagline).toBe("A tagline")
+    expect(merged.recommendations).toHaveLength(1)
+  })
+
+  it("fills logoUrl, director, tagline and recommendations when the primary is missing them", () => {
+    // Reversed roles: this is the shape resolveTitleEnrichment uses (TVDB
+    // primary/base, TMDb fallback/gap-fill).
+    const primary = { ...tvdb, logoUrl: null, director: null, directorPersonId: null, tagline: null, recommendations: [] }
+    const fallback = tmdb
+    const merged = mergeTitleEnrichment(primary, fallback)!
+    expect(merged.logoUrl).toBe("https://tmdb/logo")
+    expect(merged.director).toBe("Someone")
+    expect(merged.directorPersonId).toBe(5)
     expect(merged.tagline).toBe("A tagline")
     expect(merged.recommendations).toHaveLength(1)
   })

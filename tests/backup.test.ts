@@ -27,6 +27,7 @@ let settingsState: any = {
   playerReuse: { mpv: false, vlc: false },
   tmdbKey: "",
   tmdbEnabled: false,
+  tvdbEnabled: true,
   perfMode: false,
   accent: "fuchsia",
   density: "cozy",
@@ -76,6 +77,8 @@ vi.mock("@/scripts/lib/app-settings.js", () => ({
   setTmdbApiKey: (key: string) => { settingsState.tmdbKey = key },
   getTmdbEnabled: () => settingsState.tmdbEnabled,
   setTmdbEnabled: (enabled: boolean) => { settingsState.tmdbEnabled = enabled },
+  getTvdbEnabled: () => settingsState.tvdbEnabled,
+  setTvdbEnabled: (enabled: boolean) => { settingsState.tvdbEnabled = enabled },
   getPerfMode: () => settingsState.perfMode,
   setPerfMode: (on: boolean) => { settingsState.perfMode = on },
   getAccent: () => settingsState.accent,
@@ -225,6 +228,7 @@ beforeEach(() => {
     playerReuse: { mpv: false, vlc: false },
     tmdbKey: "",
     tmdbEnabled: false,
+    tvdbEnabled: true,
     perfMode: false,
     accent: "fuchsia",
     density: "cozy",
@@ -291,6 +295,14 @@ describe("exportAll", () => {
 
     expect(snapshot.appSettings.tmdbKey).toBe("abc123")
     expect(snapshot.appSettings.tmdbEnabled).toBe(true)
+  })
+
+  it("includes the TVDb enabled flag", async () => {
+    settingsState.tvdbEnabled = false
+
+    const snapshot = (await exportAll()) as any
+
+    expect(snapshot.appSettings.tvdbEnabled).toBe(false)
   })
 
   it("includes the display/UX group", async () => {
@@ -376,6 +388,30 @@ describe("importAll", () => {
     expect(settingsState.tmdbKey).toBe("abc123")
     expect(settingsState.tmdbEnabled).toBe(true)
     expect(summary.appSettings).toBeGreaterThan(0)
+  })
+
+  it("round-trips the TVDb enabled flag through export then import", async () => {
+    settingsState.tvdbEnabled = false
+    const snapshot = await exportAll()
+    settingsState.tvdbEnabled = true
+
+    await importAll(snapshot)
+
+    expect(settingsState.tvdbEnabled).toBe(false)
+  })
+
+  it("leaves the TVDb flag untouched when an old backup lacks it", async () => {
+    settingsState.tvdbEnabled = true
+
+    await importAll({
+      format: "extreme-infinitv-backup",
+      version: 1,
+      creds: { entries: [], selectedId: "" },
+      prefs: {},
+      appSettings: { tmdbKey: "" },
+    })
+
+    expect(settingsState.tvdbEnabled).toBe(true)
   })
 
   it("clears the TMDb key when the backup carries an empty string", async () => {

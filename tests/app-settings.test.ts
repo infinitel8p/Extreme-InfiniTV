@@ -344,3 +344,77 @@ describe("language grouping", () => {
     expect(received).toEqual([false, true])
   })
 })
+
+describe("TMDb / TVDB enrichment toggles", () => {
+  it("TMDb defaults to enabled (unset means on)", async () => {
+    const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTmdbEnabled()).toBe(true)
+  })
+
+  it("TMDb stores nothing when explicitly enabled", async () => {
+    const { setTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    setTmdbEnabled(true)
+    expect(localStorage.getItem("xt_tmdb_enabled")).toBe(null)
+  })
+
+  it("TMDb writes an explicit off flag", async () => {
+    const { getTmdbEnabled, setTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    setTmdbEnabled(false)
+    expect(localStorage.getItem("xt_tmdb_enabled")).toBe("0")
+    expect(getTmdbEnabled()).toBe(false)
+  })
+
+  it("TVDB defaults to enabled (unset means on)", async () => {
+    const { getTvdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTvdbEnabled()).toBe(true)
+  })
+
+  it("TVDB writes an explicit off flag", async () => {
+    const { getTvdbEnabled, setTvdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    setTvdbEnabled(false)
+    expect(localStorage.getItem("xt_tvdb_enabled")).toBe("0")
+    expect(getTvdbEnabled()).toBe(false)
+  })
+
+  it("setTvdbEnabled fires TMDB_SETTINGS_EVENT with a tvdbEnabled key", async () => {
+    const { TMDB_SETTINGS_EVENT, setTvdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    const received: Array<{ key: string; value: boolean }> = []
+    const listener = (event: Event) => {
+      received.push((event as CustomEvent).detail)
+    }
+    document.addEventListener(TMDB_SETTINGS_EVENT, listener)
+    try {
+      setTvdbEnabled(false)
+    } finally {
+      document.removeEventListener(TMDB_SETTINGS_EVENT, listener)
+    }
+    expect(received).toEqual([{ key: "tvdbEnabled", value: false }])
+  })
+
+  it("isTmdbActive requires both the toggle and a key", async () => {
+    const { isTmdbActive, setTmdbEnabled, setTmdbApiKey } = await import("@/scripts/lib/app-settings.js")
+    expect(isTmdbActive()).toBe(false)
+    setTmdbApiKey("abc123")
+    expect(isTmdbActive()).toBe(true)
+    setTmdbEnabled(false)
+    expect(isTmdbActive()).toBe(false)
+  })
+
+  it("isEnrichmentActive is true when only TVDB is on", async () => {
+    const { isEnrichmentActive } = await import("@/scripts/lib/app-settings.js")
+    expect(isEnrichmentActive()).toBe(true)
+  })
+
+  it("isEnrichmentActive is true when TVDB is off but TMDb is active", async () => {
+    const { isEnrichmentActive, setTvdbEnabled, setTmdbApiKey } = await import("@/scripts/lib/app-settings.js")
+    setTvdbEnabled(false)
+    setTmdbApiKey("abc123")
+    expect(isEnrichmentActive()).toBe(true)
+  })
+
+  it("isEnrichmentActive is false when both sources are off", async () => {
+    const { isEnrichmentActive, setTvdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    setTvdbEnabled(false)
+    expect(isEnrichmentActive()).toBe(false)
+  })
+})

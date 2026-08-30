@@ -38,6 +38,8 @@ import {
   setTmdbApiKey,
   getTmdbEnabled,
   setTmdbEnabled,
+  getTvdbEnabled,
+  setTvdbEnabled,
   getPerfMode,
   setPerfMode,
   getAccent,
@@ -240,6 +242,7 @@ export async function exportAll() {
       },
       tmdbKey: getTmdbApiKey(),
       tmdbEnabled: getTmdbEnabled(),
+      tvdbEnabled: getTvdbEnabled(),
       display: {
         theme: readRawLS(KEY_THEME) || "system",
         fontScale: getFontScale(),
@@ -425,6 +428,10 @@ export async function importAll(blob) {
     }
     if (typeof b.appSettings.tmdbEnabled === "boolean") {
       setTmdbEnabled(b.appSettings.tmdbEnabled)
+      summary.appSettings++
+    }
+    if (typeof b.appSettings.tvdbEnabled === "boolean") {
+      setTvdbEnabled(b.appSettings.tvdbEnabled)
       summary.appSettings++
     }
 

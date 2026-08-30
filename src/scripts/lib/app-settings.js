@@ -1105,12 +1105,13 @@ export function setTmdbApiKey(key) {
   )
 }
 
+// Defaults on: the toggle only matters once a key is set (see isTmdbActive).
 export function getTmdbEnabled() {
-  return readLS(KEY_TMDB_ENABLED, "") === "1"
+  return readLS(KEY_TMDB_ENABLED, "") !== "0"
 }
 
 export function setTmdbEnabled(enabled) {
-  writeLS(KEY_TMDB_ENABLED, enabled ? "1" : "")
+  writeLS(KEY_TMDB_ENABLED, enabled ? "" : "0")
   document.dispatchEvent(
     new CustomEvent(TMDB_SETTINGS_EVENT, { detail: { key: "enabled", value: !!enabled } })
   )
@@ -1123,8 +1124,15 @@ export function getTvdbEnabled() {
 
 export function setTvdbEnabled(enabled) {
   writeLS(KEY_TVDB_ENABLED, enabled ? "" : "0")
+  document.dispatchEvent(
+    new CustomEvent(TMDB_SETTINGS_EVENT, { detail: { key: "tvdbEnabled", value: !!enabled } })
+  )
 }
 
 export function isTmdbActive() {
   return getTmdbEnabled() && !!getTmdbApiKey()
+}
+
+export function isEnrichmentActive() {
+  return getTvdbEnabled() || isTmdbActive()
 }

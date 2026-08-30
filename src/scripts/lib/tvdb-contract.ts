@@ -21,6 +21,7 @@ export interface TvdbTitle {
   overview: string
   posterUrl: string | null
   backdropUrl: string | null
+  logoUrl: string | null
   cast: TvdbCastMember[]
   genres: string[]
   year: number | null
@@ -50,8 +51,20 @@ export interface TvdbEnvelope<T> {
   data: T | null
 }
 
+export interface TvdbTrendingEntry {
+  tvdbId: number
+  /** Present only when the upstream filter record happens to carry a TMDb remote id. */
+  tmdbId?: number
+  name: string
+  year: number | null
+  posterUrl: string | null
+  backdropUrl?: string | null
+  score: number
+}
+
 export type TvdbTitleResponse = TvdbEnvelope<TvdbTitle>
 export type TvdbSeasonResponse = TvdbEnvelope<TvdbSeason>
+export type TvdbTrendingResponse = TvdbEnvelope<TvdbTrendingEntry[]>
 
 export function isTvdbKind(value: unknown): value is TvdbKind {
   return typeof value === "string" && (TVDB_KINDS as readonly string[]).includes(value)
