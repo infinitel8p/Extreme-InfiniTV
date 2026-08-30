@@ -160,7 +160,7 @@ test.describe("TV settings: language grouping / audio language / EPG time zone",
 
     await groupingRow.click()
     await expect(groupingRow).toHaveAttribute("aria-checked", "true")
-    expect(await page.evaluate(() => localStorage.getItem("xt_lang_grouping") || "")).toBe("")
+    expect(await page.evaluate(() => localStorage.getItem("xt_lang_grouping"))).toBe("1")
 
     const contentLangRow = page.locator('[data-row-id="content-language"]')
     await expect(contentLangRow).toBeVisible()

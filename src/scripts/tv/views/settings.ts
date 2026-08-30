@@ -37,6 +37,8 @@ import {
 } from "@/scripts/lib/app-settings.js"
 import { getOffsetSetting, setOffsetSetting } from "@/scripts/lib/epg-data.js"
 import { LANGUAGE_TOKENS, languageTagLabel } from "@/scripts/lib/language-tags.ts"
+import { isLanguageGroupingExplicitlyEnabled } from "@/scripts/lib/language-groups.ts"
+import { memoryConservative } from "@/scripts/tv/motion"
 import { checkForUpdate, isPlayStoreInstall, getPlayStoreUrl, getCurrentAppVersion } from "@/scripts/lib/update-check"
 import { openExternal } from "@/scripts/lib/external-link"
 import { collectDiagnosticBundle } from "@/scripts/lib/diagnostic-bundle"
@@ -142,6 +144,11 @@ function shareLogsAvailable(): boolean {
   return typeof window.AndroidLog?.shareNewestLog === "function"
 }
 
+// Lite tier skips the multi-map grouping index unless the user explicitly opted in.
+function languageGroupingAllowed(): boolean {
+  return memoryConservative() ? isLanguageGroupingExplicitlyEnabled() : getLanguageGroupingEnabled()
+}
+
 const view: TvView = {
   mount(root: HTMLElement, _ctx: TvViewContext) {
     const state = {
@@ -217,9 +224,9 @@ const view: TvView = {
         icon: ICON_LANGUAGE,
         label: t("settings.langGrouping.title"),
         kind: "toggle",
-        checked: getLanguageGroupingEnabled(),
+        checked: languageGroupingAllowed(),
         onActivate: () => {
-          setLanguageGroupingEnabled(!getLanguageGroupingEnabled())
+          setLanguageGroupingEnabled(!languageGroupingAllowed())
           void renderRows()
         },
       })

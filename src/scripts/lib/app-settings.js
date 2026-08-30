@@ -1087,7 +1087,7 @@ export function getLanguageGroupingEnabled() {
 }
 
 export function setLanguageGroupingEnabled(enabled) {
-  writeLS(KEY_LANGUAGE_GROUPING, enabled ? "" : "0")
+  writeLS(KEY_LANGUAGE_GROUPING, enabled ? "1" : "0")
   document.dispatchEvent(
     new CustomEvent(LANGUAGE_GROUPING_EVENT, { detail: { value: !!enabled } })
   )

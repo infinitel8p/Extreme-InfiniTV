@@ -322,10 +322,10 @@ describe("language grouping", () => {
     expect(getLanguageGroupingEnabled()).toBe(true)
   })
 
-  it("stores nothing in localStorage when enabled", async () => {
+  it("stores '1' in localStorage when enabled", async () => {
     const { setLanguageGroupingEnabled } = await import("@/scripts/lib/app-settings.js")
     setLanguageGroupingEnabled(true)
-    expect(localStorage.getItem("xt_lang_grouping")).toBe(null)
+    expect(localStorage.getItem("xt_lang_grouping")).toBe("1")
   })
 
   it("fires LANGUAGE_GROUPING_EVENT on document with the correct detail.value", async () => {
