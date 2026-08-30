@@ -330,6 +330,11 @@ async function init(): Promise<void> {
     if (enabled) {
       invoke<ReceiverStatus>("receiver_start", { name: getEffectiveReceiverDeviceName() || undefined })
         .then((status) => {
+          if (!getReceiverModeEnabled()) {
+            // Toggled off while the start was in flight.
+            invoke("receiver_stop").catch((err) => log.warn("[settings:receiver] receiver_stop failed:", err))
+            return
+          }
           renderStatus(status)
           startReceiverKeepAlive(status.name)
           if (status.port !== undefined) {

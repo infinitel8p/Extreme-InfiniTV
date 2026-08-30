@@ -158,6 +158,9 @@ export function createEmbeddedReceiverEngine(
   let tearingDown = false
   let errorReported = false
   let lastTimeReportAt = 0
+  // Guards a stale async handleError from clobbering a newer session.
+  let playGeneration = 0
+  let pendingResumeCleanup: (() => void) | null = null
 
   let titleHideTimer: ReturnType<typeof setTimeout> | null = null
   let errorHideTimer: ReturnType<typeof setTimeout> | null = null
@@ -277,13 +280,14 @@ export function createEmbeddedReceiverEngine(
     clearDeadVideoWatchdog()
     clearLoadingWatchdog()
     const handleAtFailure = activeHandle
+    const generationAtFailure = playGeneration
     const described = describePlaybackError(context)
     const refined = await refineParseFailureKey(described.messageKey, {
       src: currentSrc,
       userAgent: currentUserAgent,
     })
-    // A new play() during the probe owns the screen; painting this error would clobber it.
-    if (activeHandle !== handleAtFailure) return
+    // A newer play()/teardown already owns the screen by now.
+    if (activeHandle !== handleAtFailure || playGeneration !== generationAtFailure) return
     const message = t(refined.messageKey)
     const verdictPart = refined.verdict && refined.verdict !== "inconclusive" ? `probe ${refined.verdict}` : null
     const technical = [described.technical, verdictPart].filter(Boolean).join("; ") || null
@@ -365,12 +369,15 @@ export function createEmbeddedReceiverEngine(
     loadingTimeoutTimer = setTimeout(check, silenceWindowMs)
   }
 
-  function teardownInternal(notify: boolean): void {
+  function teardownInternal(notify: boolean, options?: { reportIdle?: boolean }): void {
     tearingDown = true
+    playGeneration++
     if (titleHideTimer) clearTimeout(titleHideTimer)
     if (errorHideTimer) clearTimeout(errorHideTimer)
     clearDeadVideoWatchdog()
     clearLoadingWatchdog()
+    pendingResumeCleanup?.()
+    pendingResumeCleanup = null
     try { activeHandle?.pause() } catch {}
     try { activeHandle?.reset?.() } catch {}
     dom.playerViewEl?.classList.add("hidden")
@@ -380,8 +387,8 @@ export function createEmbeddedReceiverEngine(
     dom.pausedEl?.classList.add("hidden")
     dom.idleEl?.classList.remove("hidden")
     knownDurationSeconds = undefined
-    report({ state: "idle", positionSeconds: 0 })
-    tearingDown = false
+    // No positionSeconds: reportState keeps the last real position.
+    if (options?.reportIdle ?? true) report({ state: "idle" })
     if (notify) callbacks.onSessionEnded()
   }
 
@@ -409,7 +416,8 @@ export function createEmbeddedReceiverEngine(
     })
     handle.on("ended", () => {
       report({ state: "ended" })
-      teardownInternal(true)
+      // Already reported terminal state above; a trailing idle would erase it for poll-mode senders.
+      teardownInternal(true, { reportIdle: false })
     })
     handle.on("error", () => void handleError())
     for (const event of LOAD_PROGRESS_EVENTS) {
@@ -445,9 +453,12 @@ export function createEmbeddedReceiverEngine(
 
   return {
     async play(descriptor: CastDescriptorV1): Promise<boolean> {
+      const attemptGeneration = ++playGeneration
       tearingDown = false
       clearDeadVideoWatchdog()
       clearLoadingWatchdog()
+      if (errorHideTimer) clearTimeout(errorHideTimer)
+      errorHideTimer = null
       errorReported = false
       currentTitle = descriptor.title
       currentMime = descriptor.mime
@@ -462,6 +473,8 @@ export function createEmbeddedReceiverEngine(
 
       const handle = await ensurePlayer()
       if (!handle) return false
+      // Another play()/teardown claimed the engine while mounting.
+      if (attemptGeneration !== playGeneration) return false
       activeHandle = handle
 
       handle.src({
@@ -475,13 +488,17 @@ export function createEmbeddedReceiverEngine(
       })
       armLoadingWatchdog(handle)
 
+      pendingResumeCleanup?.()
+      pendingResumeCleanup = null
       if (!descriptor.isLive && (descriptor.resumeSeconds ?? 0) > 5) {
         const resumeSeconds = descriptor.resumeSeconds!
-        getMediaElementFor(handle)?.addEventListener(
-          "loadedmetadata",
-          () => { handle.currentTime?.(resumeSeconds) },
-          { once: true }
-        )
+        const resumeMediaEl = getMediaElementFor(handle)
+        const onLoadedMetadata = () => {
+          pendingResumeCleanup = null
+          handle.currentTime?.(resumeSeconds)
+        }
+        resumeMediaEl?.addEventListener("loadedmetadata", onLoadedMetadata, { once: true })
+        pendingResumeCleanup = () => resumeMediaEl?.removeEventListener("loadedmetadata", onLoadedMetadata)
       }
 
       playWhenReady(handle, {
@@ -714,7 +731,12 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
       errorReported = false
       // Seeded from the sender's metadata so the first report already carries a range.
       knownDurationSeconds = descriptor.isLive ? undefined : normalizeReportedDuration(descriptor.durationSeconds)
-      const sessionStarted = window.AndroidVideo?.receiverSessionStart?.() ?? false
+      let sessionStarted = false
+      try {
+        sessionStarted = window.AndroidVideo?.receiverSessionStart?.() ?? false
+      } catch (err) {
+        log.warn("[xt:receiver] receiverSessionStart threw:", err)
+      }
       if (!sessionStarted) return false
       const sessionGeneration = ++generation
       const contentKey = `${descriptor.isLive ? RECEIVER_LIVE_CONTENT_KEY : RECEIVER_VOD_CONTENT_KEY}-${sessionGeneration}`
@@ -791,7 +813,8 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
     },
 
     teardown(): void {
-      report({ state: "idle", positionSeconds: 0 })
+      // No positionSeconds: reportState keeps the last real position.
+      report({ state: "idle" })
       finishAndEndSession()
     },
   }

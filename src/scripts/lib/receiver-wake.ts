@@ -19,6 +19,11 @@ export function receiverWakeAvailable(): boolean {
   }
 }
 
+/** True whenever the bridge exists at all, even if it currently reports itself unsupported. */
+export function receiverWakeBridgePresent(): boolean {
+  return !!bridge()
+}
+
 // True only when the app really came forward: Android 10+ can only post a tap-to-open notification.
 export function wakeReceiverApp(): boolean {
   try {

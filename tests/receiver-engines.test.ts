@@ -1,12 +1,114 @@
-import { describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   clampReceiverVolume,
+  createEmbeddedReceiverEngine,
   durationSecondsFromMs,
   mapNativeErrorCode,
   normalizeReportedDuration,
   normalizeReportedVolume,
+  type EmbeddedEngineDom,
 } from "../src/scripts/receiver/engines"
 import { httpStatusFromErrorDetail, isConnectionLimitStatus } from "../src/scripts/lib/codec-hints"
+import type { CastDescriptorV1 } from "../src/scripts/lib/tv-cast-descriptor"
+
+vi.mock("@/scripts/lib/i18n.js", () => ({ t: (key: string) => key }))
+
+type MountResult = { kind: "embedded"; handle: FakeEmbeddedHandle } | null
+let pendingMount: { resolve: (result: MountResult) => void } | null = null
+
+vi.mock("@/scripts/lib/player-runtime", () => ({
+  mountPlayer: () => new Promise<MountResult>((resolve) => { pendingMount = { resolve } }),
+  playWhenReady: () => {},
+}))
+
+/** A function boundary so TS re-checks pendingMount instead of keeping it narrowed to its last assignment. */
+function takePendingMountResolve(): (result: MountResult) => void {
+  const resolve = pendingMount?.resolve
+  if (!resolve) throw new Error("expected a pending mountPlayer() call")
+  pendingMount = null
+  return resolve
+}
+
+class FakeClassList {
+  private classes = new Set<string>()
+  add(...names: string[]): void {
+    for (const name of names) this.classes.add(name)
+  }
+  remove(...names: string[]): void {
+    for (const name of names) this.classes.delete(name)
+  }
+  toggle(name: string, force?: boolean): void {
+    if (force ?? !this.classes.has(name)) this.classes.add(name)
+    else this.classes.delete(name)
+  }
+  contains(name: string): boolean {
+    return this.classes.has(name)
+  }
+}
+
+class FakeElement {
+  classList = new FakeClassList()
+  textContent = ""
+  offsetWidth = 0
+  focus(): void {}
+}
+
+class FakeEmbeddedHandle {
+  srcCalls: unknown[] = []
+  private handlers = new Map<string, Array<() => void>>()
+  on(type: string, handler: () => void): void {
+    const forType = this.handlers.get(type) || []
+    forType.push(handler)
+    this.handlers.set(type, forType)
+  }
+  src(options: unknown): void {
+    this.srcCalls.push(options)
+  }
+  pause(): void {}
+  reset(): void {}
+  duration(): number {
+    return 0
+  }
+  currentTime(): void {}
+  muted(): void {}
+  getMediaElement(): null {
+    return null
+  }
+  codecInfo(): { videoCodec: null; audioCodec: null; errorDetail: null } {
+    return { videoCodec: null, audioCodec: null, errorDetail: null }
+  }
+}
+
+function fakeElement(): HTMLElement {
+  return new FakeElement() as unknown as HTMLElement
+}
+
+function embeddedDom(playerViewEl: HTMLElement): EmbeddedEngineDom {
+  return {
+    idleEl: fakeElement(),
+    playerViewEl,
+    videoEl: fakeElement() as unknown as HTMLVideoElement,
+    titleWrapEl: fakeElement(),
+    titleEl: fakeElement(),
+    loadingEl: fakeElement(),
+    loadingTitleEl: fakeElement(),
+    pausedEl: fakeElement(),
+    errorEl: fakeElement(),
+    errorMessageEl: fakeElement(),
+    errorCountdownEl: fakeElement(),
+    errorRetryEl: fakeElement(),
+  }
+}
+
+function liveDescriptor(title: string): CastDescriptorV1 {
+  return {
+    v: 1,
+    src: `http://tv.example/live/user/pass/${title}.m3u8`,
+    mime: "application/x-mpegURL",
+    isLive: true,
+    title,
+  } as CastDescriptorV1
+}
 
 describe("mapNativeErrorCode", () => {
   it("maps decoder/decoding/DRM codes to the video codec message", () => {
@@ -149,5 +251,55 @@ describe("normalizeReportedVolume", () => {
     expect(normalizeReportedVolume(Number.NaN)).toBeUndefined()
     expect(normalizeReportedVolume(null)).toBeUndefined()
     expect(normalizeReportedVolume(undefined)).toBeUndefined()
+  })
+})
+
+describe("createEmbeddedReceiverEngine play() staleness", () => {
+  beforeEach(() => {
+    pendingMount = null
+  })
+
+  it("does not resume a play() that was superseded by a teardown during its mount", async () => {
+    const playerViewEl = fakeElement()
+    const dom = embeddedDom(playerViewEl)
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+
+    const firstPlay = engine.play(liveDescriptor("A"))
+    await Promise.resolve()
+    const resolveMount = takePendingMountResolve()
+
+    engine.teardown()
+
+    const handle = new FakeEmbeddedHandle()
+    resolveMount({ kind: "embedded", handle })
+    const firstResult = await firstPlay
+
+    expect(firstResult).toBe(false)
+    expect(handle.srcCalls).toHaveLength(0)
+    expect(playerViewEl.classList.contains("hidden")).toBe(true)
+  })
+
+  it("does not resume a play() that was superseded by a second play() during its mount", async () => {
+    const playerViewEl = fakeElement()
+    const dom = embeddedDom(playerViewEl)
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+
+    const firstPlay = engine.play(liveDescriptor("A"))
+    await Promise.resolve()
+    const resolveFirstMount = takePendingMountResolve()
+
+    const secondPlay = engine.play(liveDescriptor("B"))
+    await Promise.resolve()
+    const resolveSecondMount = takePendingMountResolve()
+
+    const firstHandle = new FakeEmbeddedHandle()
+    resolveFirstMount({ kind: "embedded", handle: firstHandle })
+    expect(await firstPlay).toBe(false)
+    expect(firstHandle.srcCalls).toHaveLength(0)
+
+    const secondHandle = new FakeEmbeddedHandle()
+    resolveSecondMount({ kind: "embedded", handle: secondHandle })
+    expect(await secondPlay).toBe(true)
+    expect(secondHandle.srcCalls).toHaveLength(1)
   })
 })

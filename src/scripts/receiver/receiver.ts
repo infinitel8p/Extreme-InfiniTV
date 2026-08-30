@@ -12,7 +12,7 @@ import { getActiveEntry } from "@/scripts/lib/creds.js"
 import { isTvDevice } from "@/scripts/lib/tv-detect"
 import { mountReceiverAmbient, type ReceiverAmbient } from "@/scripts/receiver/ambient"
 import { startReceiverKeepAlive, stopReceiverKeepAlive } from "@/scripts/lib/receiver-keep-alive"
-import { receiverWakeAvailable, wakeReceiverApp } from "@/scripts/lib/receiver-wake"
+import { receiverWakeAvailable, receiverWakeBridgePresent, wakeReceiverApp } from "@/scripts/lib/receiver-wake"
 import { startReceiverLogStream, stopReceiverLogStream } from "@/scripts/lib/receiver-log-stream"
 import { setKeepScreenOn } from "@/scripts/lib/keep-screen-on"
 import {
@@ -45,6 +45,18 @@ void initI18n()
 // Reaching the receiver screen already counts as the app being up, so a later
 // exit landing on /tv must not replay the boot chime.
 suppressLaunchChime()
+
+// Scopes MainActivity's onPause() WebView keep-resumed workaround to this page being visible,
+// instead of the whole app lifetime once receiver mode is enabled.
+function setReceiverPageForeground(active: boolean): void {
+  try {
+    ;(window as any).AndroidReceiverKeepAlive?.setReceiverPageForeground?.(active)
+  } catch (err) {
+    log.warn("[xt:receiver] setReceiverPageForeground failed:", err)
+  }
+}
+
+setReceiverPageForeground(true)
 
 const isKioskBuild = import.meta.env.PUBLIC_APP_MODE === "receiver"
 
@@ -246,17 +258,17 @@ function reportState(partial: ReceiverStatePartial): void {
   if (typeof partial.volume === "number") lastKnownVolume = partial.volume
   if (typeof partial.muted === "boolean") lastKnownMuted = partial.muted
   const reportedState = partial.state ?? currentPlaybackState
-  // Natural end has no explicit "stop" action to reset /state server-side, so clear it here.
-  const isTerminalReport = reportedState === "ended" || reportedState === "idle"
-  if (isTerminalReport) {
+  // "ended" keeps duration/title for poll-mode senders; only idle clears them.
+  const isIdleReport = reportedState === "idle"
+  if (isIdleReport) {
     currentTitle = ""
     lastKnownDurationSeconds = undefined
   }
   const payload = {
     state: reportedState,
-    positionSeconds: partial.positionSeconds ?? lastKnownPositionSeconds,
-    durationSeconds: isTerminalReport ? undefined : (durationSeconds ?? lastKnownDurationSeconds),
-    title: isTerminalReport ? undefined : (currentTitle || undefined),
+    positionSeconds: partial.positionSeconds ?? (isIdleReport ? 0 : lastKnownPositionSeconds),
+    durationSeconds: isIdleReport ? undefined : (durationSeconds ?? lastKnownDurationSeconds),
+    title: isIdleReport ? undefined : (currentTitle || undefined),
     error: partial.error,
     volume: partial.volume ?? lastKnownVolume,
     muted: partial.muted ?? lastKnownMuted,
@@ -308,6 +320,25 @@ async function startWithEngine(
 }
 
 let lastPlayPayload: unknown = null
+let playInFlight = 0
+
+function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__)
+}
+
+// No wake bridge on desktop; bring the window forward ourselves.
+async function bringDesktopWindowForward(): Promise<void> {
+  if (!isTauriRuntime()) return
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window")
+    const current = getCurrentWindow()
+    await current.unminimize()
+    await current.show()
+    await current.setFocus()
+  } catch (err) {
+    log.warn("[xt:receiver] bringing window forward failed:", err)
+  }
+}
 
 async function onPlay(rawDescriptor: unknown): Promise<void> {
   lastPlayPayload = rawDescriptor
@@ -321,51 +352,67 @@ async function onPlay(rawDescriptor: unknown): Promise<void> {
   // Native playback backgrounds this WebView, so only a hidden idle receiver needs waking;
   // rejecting mid-session would break episode auto-advance.
   if (document.visibilityState !== "visible" && !activeEngine) {
-    const woke = wakeReceiverApp()
-    if (!woke || !receiverWakeAvailable()) {
-      log.warn("[xt:receiver] play rejected: app is backgrounded and could not be woken")
-      reportState({ state: "error", error: "app-not-foreground", positionSeconds: 0 })
-      return
+    if (receiverWakeBridgePresent()) {
+      const woke = receiverWakeAvailable() && wakeReceiverApp()
+      if (!woke) {
+        log.warn("[xt:receiver] play rejected: app is backgrounded and could not be woken")
+        reportState({ state: "error", error: "app-not-foreground", positionSeconds: 0 })
+        return
+      }
+    } else {
+      await bringDesktopWindowForward()
     }
   }
 
-  activeEngine?.teardown()
-  activeEngine = null
+  playInFlight++
+  const generationAtStart = playGeneration
+  try {
+    activeEngine?.teardown()
+    activeEngine = null
 
-  currentTitle = descriptor.title
-  currentIsLive = descriptor.isLive
-  lastKnownDurationSeconds = descriptor.isLive ? undefined : normalizeReportedDuration(descriptor.durationSeconds)
-  ambient?.noteCastDescriptor({ title: descriptor.title, logo: descriptor.logo })
+    currentTitle = descriptor.title
+    currentIsLive = descriptor.isLive
+    lastKnownDurationSeconds = descriptor.isLive ? undefined : normalizeReportedDuration(descriptor.durationSeconds)
+    ambient?.noteCastDescriptor({ title: descriptor.title, logo: descriptor.logo })
 
-  await applyStreamHeaders(
-    descriptor.headers
-      ? { userAgent: descriptor.headers.userAgent ?? null, referer: descriptor.headers.referer ?? null }
-      : null
-  )
+    await applyStreamHeaders(
+      descriptor.headers
+        ? { userAgent: descriptor.headers.userAgent ?? null, referer: descriptor.headers.referer ?? null }
+        : null
+    )
 
-  const enginePreference = getReceiverEngine() as ReceiverEnginePreference
-  const engine = selectEngine(engineRegistry, descriptor, enginePreference)
-  log.info("[xt:receiver] play", {
-    engine: engine === androidNativeEngine ? "android-native" : "embedded",
-    enginePref: enginePreference,
-    isLive: descriptor.isLive,
-    mime: descriptor.mime,
-    drm: descriptor.drm?.drmScheme ?? null,
-    ua: descriptor.headers?.userAgent ? "set" : "none",
-    preferNativeHls: descriptor.preferNativeHls ?? false,
-    resumeSeconds: descriptor.resumeSeconds ?? 0,
-    src: redactUrl(descriptor.src),
-  })
+    const enginePreference = getReceiverEngine() as ReceiverEnginePreference
+    const engine = selectEngine(engineRegistry, descriptor, enginePreference)
+    log.info("[xt:receiver] play", {
+      engine: engine === androidNativeEngine ? "android-native" : "embedded",
+      enginePref: enginePreference,
+      isLive: descriptor.isLive,
+      mime: descriptor.mime,
+      drm: descriptor.drm?.drmScheme ?? null,
+      ua: descriptor.headers?.userAgent ? "set" : "none",
+      preferNativeHls: descriptor.preferNativeHls ?? false,
+      resumeSeconds: descriptor.resumeSeconds ?? 0,
+      src: redactUrl(descriptor.src),
+    })
 
-  const { started } = await playWithFallback(engineRegistry, descriptor, {
-    preference: enginePreference,
-    start: startWithEngine,
-    onFallback: () => log.warn("[xt:receiver] native playback unavailable, falling back to embedded playback"),
-  })
-  if (started) return
+    const { started } = await playWithFallback(engineRegistry, descriptor, {
+      preference: enginePreference,
+      start: startWithEngine,
+      onFallback: () => log.warn("[xt:receiver] native playback unavailable, falling back to embedded playback"),
+    })
+    if (started) return
 
-  log.error("[xt:receiver] no engine could start playback")
-  reportState({ state: "error", error: "player-unavailable", positionSeconds: 0 })
+    log.error("[xt:receiver] no engine could start playback")
+    reportState({ state: "error", error: "player-unavailable", positionSeconds: 0 })
+  } catch (err) {
+    if (generationAtStart !== playGeneration) return
+    log.error("[xt:receiver] play threw unexpectedly:", err)
+    embeddedEngine.teardown()
+    activeEngine = null
+    reportState({ state: "error", error: "play-failed", positionSeconds: 0 })
+  } finally {
+    playInFlight--
+  }
 }
 
 let playGeneration = 0
@@ -402,7 +449,7 @@ function onControl(payload: ReceiverControlPayload | undefined): void {
 }
 
 function isPlayerActive(): boolean {
-  if (activeEngine) return true
+  if (activeEngine || playInFlight > 0) return true
   return !!playerViewEl && !playerViewEl.classList.contains("hidden")
 }
 
@@ -444,6 +491,7 @@ document.addEventListener("keydown", (event) => {
 
 function exitReceiver(): void {
   setKeepScreenOn(false)
+  setReceiverPageForeground(false)
   // The native engine plays in a separate activity that outlives this page.
   activeEngine?.teardown()
   activeEngine = null
@@ -452,7 +500,10 @@ function exitReceiver(): void {
   window.location.href = isTvDevice() ? "/tv" : "/"
 }
 
-window.addEventListener("pagehide", () => setKeepScreenOn(false))
+window.addEventListener("pagehide", () => {
+  setKeepScreenOn(false)
+  setReceiverPageForeground(false)
+})
 
 if (isKioskBuild) {
   exitBtn?.classList.add("hidden")

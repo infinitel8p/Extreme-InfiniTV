@@ -20,6 +20,8 @@ const PUSHED_MANIFEST_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const IDLE_TIMEOUT_MS = 90_000
 const HOLD_MS = 25_000
 const MANIFEST_REFRESH_MS = 30 * 60 * 1000
+// Shorter than MANIFEST_REFRESH_MS so the library can warm up sooner.
+const EMPTY_RETRY_MS = 5 * 60 * 1000
 const MAX_ARTWORK_FAILURES = 2
 const BURN_IN_INTERVAL_MS = 5 * 60 * 1000
 const BURN_IN_MAX_PX = 8
@@ -311,7 +313,8 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
 
   async function ensureManifestFresh(): Promise<void> {
     const now = Date.now()
-    if (manifestEntries.length > 0 && now - lastManifestFetchAt < MANIFEST_REFRESH_MS) return
+    const freshnessWindowMs = manifestEntries.length > 0 ? MANIFEST_REFRESH_MS : EMPTY_RETRY_MS
+    if (now - lastManifestFetchAt < freshnessWindowMs) return
     lastManifestFetchAt = now
     libraryEntriesCache = await fetchLibraryEntries()
     recomputeManifestEntries()
