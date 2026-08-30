@@ -796,6 +796,7 @@ class NsdBridge(private val activity: TauriActivity) {
 
   private val lock = Any()
   private var registrationListener: NsdManager.RegistrationListener? = null
+  private var requestedServiceName: String? = null
   private var advertisedServiceName: String? = null
   @Volatile private var lastAdvertiseState: String = "off"
 
@@ -827,6 +828,7 @@ class NsdBridge(private val activity: TauriActivity) {
       val listener = object : NsdManager.RegistrationListener {
         override fun onServiceRegistered(info: NsdServiceInfo) {
           Log.d(TAG, "advertise registered: ${info.serviceName}")
+          advertisedServiceName = info.serviceName
           lastAdvertiseState = "registered"
         }
         override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {
@@ -842,6 +844,7 @@ class NsdBridge(private val activity: TauriActivity) {
         }
       }
       registrationListener = listener
+      requestedServiceName = serviceName
       advertisedServiceName = serviceName
       try {
         manager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener)
@@ -859,6 +862,7 @@ class NsdBridge(private val activity: TauriActivity) {
     synchronized(lock) {
       registrationListener?.let { unregisterLocked(manager, it) }
       registrationListener = null
+      requestedServiceName = null
       advertisedServiceName = null
       lastAdvertiseState = "off"
     }
@@ -882,7 +886,7 @@ class NsdBridge(private val activity: TauriActivity) {
           Log.d(TAG, "discovery started")
         }
         override fun onServiceFound(info: NsdServiceInfo) {
-          if (info.serviceName == advertisedServiceName) return
+          if (info.serviceName == advertisedServiceName || info.serviceName == requestedServiceName) return
           enqueueResolve(manager, info)
         }
         override fun onServiceLost(info: NsdServiceInfo) {
@@ -1054,9 +1058,14 @@ class NsdBridge(private val activity: TauriActivity) {
 // Starts/stops ReceiverForegroundService, which holds the wake lock + Wi-Fi
 // lock keeping the receiver's HTTP server alive while the app is backgrounded.
 class ReceiverKeepAliveBridge(private val activity: MainActivity) {
+  companion object {
+    private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 4303
+  }
+
   @JavascriptInterface
   fun start(deviceName: String): Boolean {
     return try {
+      requestNotificationPermissionIfNeeded()
       val intent = Intent(activity, ReceiverForegroundService::class.java)
         .setAction(ReceiverForegroundService.ACTION_START)
         .putExtra(ReceiverForegroundService.EXTRA_DEVICE_NAME, deviceName)
@@ -1073,6 +1082,26 @@ class ReceiverKeepAliveBridge(private val activity: MainActivity) {
     }
   }
 
+  // The wake/status-poll notifications (ReceiverWakeBridge) need POST_NOTIFICATIONS
+  // too, but that permission was only ever requested from the cast-media path.
+  private fun requestNotificationPermissionIfNeeded() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    if (ActivityCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) ==
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
+    try {
+      ActivityCompat.requestPermissions(
+        activity,
+        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+        NOTIFICATION_PERMISSION_REQUEST_CODE
+      )
+    } catch (error: Throwable) {
+      Log.w("ReceiverKeepAlive", "requestPermissions failed", error)
+    }
+  }
+
   @JavascriptInterface
   fun stop(): Boolean {
     activity.receiverModeActive = false
@@ -1086,6 +1115,13 @@ class ReceiverKeepAliveBridge(private val activity: MainActivity) {
       Log.w("ReceiverKeepAlive", "stop failed", error)
       false
     }
+  }
+
+  // Scopes onPause()'s WebView keep-resumed workaround to when /receiver is actually visible,
+  // rather than for the app's whole lifetime once receiver mode is enabled.
+  @JavascriptInterface
+  fun setReceiverPageForeground(active: Boolean) {
+    activity.receiverPageForeground = active
   }
 }
 
@@ -1599,12 +1635,16 @@ class CastMediaBridge(
     private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 4302
     private const val ACTION_CAST_MEDIA = "com.infinitel8p.xtream.CAST_MEDIA_ACTION"
     private const val EXTRA_ACTION = "action"
+    private const val MAX_ARTWORK_BYTES = 5 * 1024 * 1024
+    private const val ARTWORK_TARGET_PX = 512
   }
 
   private var mediaSession: MediaSessionCompat? = null
   private var receiverRegistered = false
   @Volatile
   private var lastArtworkUrl: String? = null
+  @Volatile
+  private var lastArtworkBitmap: Bitmap? = null
   private val artworkGeneration = AtomicInteger(0)
 
   private val actionReceiver = object : BroadcastReceiver() {
@@ -1624,20 +1664,24 @@ class CastMediaBridge(
     hasPrev: Boolean,
     artworkUrl: String,
   ) {
+    val trimmedArtwork = artworkUrl.trim()
+    val unchangedArtwork = trimmedArtwork.isNotEmpty() && trimmedArtwork == lastArtworkUrl
+    val cachedArtwork = if (unchangedArtwork) lastArtworkBitmap else null
     activity.runOnUiThread {
       val session = ensureMediaSession()
       session.isActive = true
-      session.setMetadata(buildMetadata(title, deviceName, null))
+      session.setMetadata(buildMetadata(title, deviceName, cachedArtwork))
       session.setPlaybackState(buildPlaybackState(isPlaying, hasNext, hasPrev))
-      postNotification(title, deviceName, isLive, isPlaying, hasNext, hasPrev, session, null)
+      postNotification(title, deviceName, isLive, isPlaying, hasNext, hasPrev, session, cachedArtwork)
     }
-    val trimmedArtwork = artworkUrl.trim()
     if (trimmedArtwork.isEmpty()) {
       lastArtworkUrl = null
+      lastArtworkBitmap = null
       return
     }
-    if (trimmedArtwork == lastArtworkUrl) return
+    if (unchangedArtwork) return
     lastArtworkUrl = trimmedArtwork
+    lastArtworkBitmap = null
     loadArtwork(trimmedArtwork, title, deviceName, isLive, isPlaying, hasNext, hasPrev)
   }
 
@@ -1646,6 +1690,7 @@ class CastMediaBridge(
     activity.runOnUiThread {
       artworkGeneration.incrementAndGet()
       lastArtworkUrl = null
+      lastArtworkBitmap = null
       NotificationManagerCompat.from(activity).cancel(NOTIFICATION_ID)
       mediaSession?.isActive = false
       mediaSession?.release()
@@ -1831,11 +1876,7 @@ class CastMediaBridge(
     val generation = artworkGeneration.incrementAndGet()
     Thread {
       val bitmap = try {
-        URL(url).openConnection().run {
-          connectTimeout = 4000
-          readTimeout = 4000
-          getInputStream().use { BitmapFactory.decodeStream(it) }
-        }
+        decodeScaledArtwork(url)
       } catch (error: Throwable) {
         Log.w(TAG, "artwork fetch failed: $error")
         null
@@ -1844,10 +1885,54 @@ class CastMediaBridge(
       activity.runOnUiThread {
         val session = mediaSession
         if (generation != artworkGeneration.get() || session == null) return@runOnUiThread
+        lastArtworkBitmap = bitmap
         session.setMetadata(buildMetadata(title, deviceName, bitmap))
         postNotification(title, deviceName, isLive, isPlaying, hasNext, hasPrev, session, bitmap)
       }
     }.start()
+  }
+
+  // Reads bounded bytes then two-pass decodes so a 4K poster never lands as a
+  // full-resolution bitmap in the MediaSession bundle on a low-RAM TV.
+  private fun decodeScaledArtwork(url: String): Bitmap? {
+    val connection = URL(url).openConnection().apply {
+      connectTimeout = 4000
+      readTimeout = 4000
+    }
+    if (connection.contentLengthLong > MAX_ARTWORK_BYTES) return null
+    val bytes = connection.getInputStream().use { readBoundedBytes(it, MAX_ARTWORK_BYTES) } ?: return null
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    val options = BitmapFactory.Options().apply {
+      inSampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, ARTWORK_TARGET_PX)
+    }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+  }
+
+  private fun readBoundedBytes(input: java.io.InputStream, maxBytes: Int): ByteArray? {
+    val output = ByteArrayOutputStream()
+    val chunk = ByteArray(8192)
+    var total = 0
+    while (true) {
+      val read = input.read(chunk)
+      if (read == -1) break
+      total += read
+      if (total > maxBytes) return null
+      output.write(chunk, 0, read)
+    }
+    return output.toByteArray()
+  }
+
+  private fun computeInSampleSize(width: Int, height: Int, targetPx: Int): Int {
+    var sampleSize = 1
+    var currentWidth = width
+    var currentHeight = height
+    while (currentWidth / 2 >= targetPx && currentHeight / 2 >= targetPx) {
+      currentWidth /= 2
+      currentHeight /= 2
+      sampleSize *= 2
+    }
+    return sampleSize
   }
 
   private fun dispatchAction(action: String) {
@@ -1913,6 +1998,10 @@ class MainActivity : TauriActivity() {
   // Set by ReceiverKeepAliveBridge.start()/stop() while the receiver HTTP server is running
   @Volatile
   var receiverModeActive: Boolean = false
+
+  // Set by ReceiverKeepAliveBridge.setReceiverPageForeground() while /receiver is the visible page
+  @Volatile
+  var receiverPageForeground: Boolean = false
 
   private val rendererRecreating = AtomicBoolean(false)
 
@@ -2222,7 +2311,7 @@ class MainActivity : TauriActivity() {
   override fun onPause() {
     super.onPause()
     // Same wry WebView-pause behavior as the PiP fix above; keep it alive so xt:receiver-play can still fire.
-    if (receiverSessionActive || receiverModeActive) hostedWebView?.onResume()
+    if (receiverSessionActive || receiverPageForeground) hostedWebView?.onResume()
   }
 
   // Tear down the throwaway sniffer WebView instead of leaving the remote page running until its timeout.
@@ -2232,6 +2321,17 @@ class MainActivity : TauriActivity() {
     snifferBridge?.activityDestroyed()
     nsdBridge?.activityDestroyed()
     castMediaBridge?.activityDestroyed()
+    if (isFinishing && receiverModeActive) {
+      receiverModeActive = false
+      try {
+        startService(
+          Intent(this, ReceiverForegroundService::class.java)
+            .setAction(ReceiverForegroundService.ACTION_STOP)
+        )
+      } catch (error: Throwable) {
+        Log.w("ReceiverKeepAlive", "stop on destroy failed", error)
+      }
+    }
     super.onDestroy()
   }
 

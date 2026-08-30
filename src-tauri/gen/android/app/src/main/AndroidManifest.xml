@@ -35,6 +35,9 @@
             <data android:scheme="https" />
             <data android:mimeType="application/vnd.apple.mpegurl" />
         </intent>
+        <intent>
+            <action android:name="android.settings.DREAM_SETTINGS" />
+        </intent>
     </queries>
 
     <!-- Features -->

@@ -1093,6 +1093,8 @@ object EventQueue {
     return when (type) {
       "xt:android-native-progress" ->
         lastPayload.optString("contentKey") == payload.optString("contentKey")
+      "xt:android-native-volume" ->
+        lastPayload.optString("contentKey") == payload.optString("contentKey")
       "xt:android-native-channel-changed" ->
         lastPayload.optString("channelId") == payload.optString("channelId")
       else -> false
