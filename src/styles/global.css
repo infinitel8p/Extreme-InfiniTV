@@ -297,32 +297,53 @@ input[type="search"]::-webkit-search-decoration {
 /* ────────────────────────────── */
 /* Scrollbar styling              */
 /* ────────────────────────────── */
-* {
+/* TV shell: every scroll surface gets the thin styled bar, not just opt-in ones. */
+html[data-tv="1"] * {
     scrollbar-width: thin;
     scrollbar-color: var(--color-line) transparent;
 }
 
-*::-webkit-scrollbar {
+html[data-tv="1"] *::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
-*::-webkit-scrollbar-thumb {
+html[data-tv="1"] *::-webkit-scrollbar-thumb {
     background: var(--color-line);
     border-radius: 9999px;
 }
 
-*::-webkit-scrollbar-thumb:hover {
+html[data-tv="1"] *::-webkit-scrollbar-thumb:hover {
     background: var(--color-fg-3);
 }
 
-*::-webkit-scrollbar-track {
+html[data-tv="1"] *::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.custom-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb {
+    background: var(--color-line);
+    border-radius: 9999px;
+}
+
+.custom-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--color-fg-3);
+}
+
+.custom-scroll::-webkit-scrollbar-track {
     background: transparent;
 }
 
 .custom-scroll {
     scroll-padding-block: 0.75rem;
     scroll-padding-inline: 0.5rem;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
     scrollbar-gutter: stable;
 }
 

@@ -315,6 +315,9 @@ export function createGrid(options: GridOptions): GridHandle {
     }
     next = Math.max(0, Math.min(source.count - 1, next))
     if (next === currentIndex) return
+    // Bail so spatial nav can move focus out of the grid at this edge.
+    const isRowMove = event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "PageDown" || event.key === "PageUp"
+    if (isRowMove && rowOf(next, columns) === rowOf(currentIndex, columns)) return
     event.preventDefault()
     event.stopPropagation()
     focusIndex(next)

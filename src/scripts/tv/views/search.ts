@@ -268,7 +268,7 @@ const view: TvView = {
         const url = new URL(window.location.href)
         if (value) url.searchParams.set("q", value)
         else url.searchParams.delete("q")
-        window.history.replaceState({}, "", url.toString())
+        window.history.replaceState(window.history.state, "", url.toString())
       } catch {}
     }
 

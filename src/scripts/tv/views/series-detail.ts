@@ -505,6 +505,10 @@ const view: TvView = {
     }
 
     function renderEpisodes(): void {
+      const focused = document.activeElement
+      const previouslyFocusedKey =
+        focused instanceof HTMLElement && episodesTrack.contains(focused) ? focused.dataset.focusKey : null
+
       episodesTrack.replaceChildren()
       const seasonEpisodes = episodesForCurrentSeason()
       if (!seasonEpisodes.length) {
@@ -515,6 +519,10 @@ const view: TvView = {
         return
       }
       for (const entry of seasonEpisodes) episodesTrack.appendChild(buildEpisodeButton(entry))
+
+      if (previouslyFocusedKey) {
+        episodesTrack.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(previouslyFocusedKey)}"]`)?.focus()
+      }
 
       if (!focusedDeepLinkOnce && deepLinkSeason != null && currentSeason === deepLinkSeason) {
         focusedDeepLinkOnce = true

@@ -82,6 +82,8 @@ function markup(): string {
 }
 
 function reveal(el: HTMLElement): void {
+  // A re-reveal mid-exit must win over the stale animation's hide.
+  for (const animation of el.getAnimations()) animation.cancel()
   const wasHidden = el.hidden
   el.hidden = false
   if (!wasHidden || !motionAllowed()) return
@@ -108,7 +110,6 @@ function conceal(el: HTMLElement): void {
     { duration: PANEL_ANIMATE_MS, easing: TV_EASE }
   )
   animation.onfinish = () => { el.hidden = true }
-  animation.oncancel = () => { el.hidden = true }
 }
 
 function setProgressFill(fill: HTMLElement, progress: number): void {

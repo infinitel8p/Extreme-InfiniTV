@@ -62,7 +62,11 @@ const GUIDE_DEBOUNCE_MS = 60
 const TICK_INTERVAL_MS = 60_000
 const EPG_GUARD_TIMEOUT_MS = 4000
 const SKELETON_ROW_COUNT = 8
-const LAST_CHANNEL_KEY = "xt_tv_last_channel"
+const LAST_CHANNEL_KEY_PREFIX = "xt_tv_last_channel"
+
+function lastChannelStorageKey(playlistId: string): string {
+  return `${LAST_CHANNEL_KEY_PREFIX}:${playlistId}`
+}
 const GROUPS_KEEP_IN_VIEW_REM = 7.5
 const CHANNELS_KEEP_IN_VIEW_FRACTION = 0.35
 const GUIDE_KEEP_IN_VIEW_REM = 8.75
@@ -192,10 +196,6 @@ const view: TvView = {
     let xtreamCreds: XtreamCreds | null = null
     const shortEpgCache = tvShortEpgCache()
     const shortEpgRowNowNext = new Map<string, ShortEpgNowNext>()
-
-    try {
-      state.playingChannelId = sessionStorage.getItem(LAST_CHANNEL_KEY)
-    } catch {}
 
     function startOfToday(): number {
       const date = new Date()
@@ -409,7 +409,7 @@ const view: TvView = {
     function setPlayingChannel(channelId: string, _channelName?: string): void {
       state.playingChannelId = channelId
       try {
-        sessionStorage.setItem(LAST_CHANNEL_KEY, channelId)
+        sessionStorage.setItem(lastChannelStorageKey(state.playlistId), channelId)
       } catch {}
       channelRows?.forEachMountedRow((rowEl) => {
         if (rowEl.dataset.channelKey === channelId) rowEl.dataset.nowPlaying = "true"
@@ -714,6 +714,9 @@ const view: TvView = {
         return
       }
       state.playlistId = activeEntry._id
+      try {
+        state.playingChannelId = sessionStorage.getItem(lastChannelStorageKey(state.playlistId))
+      } catch {}
       const creds = await resolvePlaylistCreds(state.playlistId)
       if (state.destroyed) return
       xtreamCreds = creds ? toXtreamCreds(state.playlistId, creds) : null

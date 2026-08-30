@@ -116,6 +116,29 @@ const navItems = [
         } catch (e) {}
 
         try {
+          var KNOWN_ACCENTS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet", "gold", "lime", "teal", "silver", "white"]
+          var storedAccent = localStorage.getItem("xt_accent") || ""
+          if (storedAccent === "random") {
+            // Same sessionStorage key as app-settings.js's resolveAccentForDisplay, so both agree.
+            var resolvedRandomAccent = ""
+            try { resolvedRandomAccent = sessionStorage.getItem("xt_accent_roll") || "" } catch (e) {}
+            if (!resolvedRandomAccent || KNOWN_ACCENTS.indexOf(resolvedRandomAccent) === -1) {
+              resolvedRandomAccent = KNOWN_ACCENTS[Math.floor(Math.random() * KNOWN_ACCENTS.length)]
+              try { sessionStorage.setItem("xt_accent_roll", resolvedRandomAccent) } catch (e) {}
+            }
+            if (resolvedRandomAccent !== "fuchsia") document.documentElement.setAttribute("data-accent", resolvedRandomAccent)
+          } else if (storedAccent && storedAccent !== "fuchsia" && KNOWN_ACCENTS.indexOf(storedAccent) !== -1) {
+            document.documentElement.setAttribute("data-accent", storedAccent)
+          }
+          // Per-playlist override cache (playlist-accent.ts) wins over xt_accent.
+          var activeAccentOverride = localStorage.getItem("xt_accent_active") || ""
+          if (activeAccentOverride && KNOWN_ACCENTS.indexOf(activeAccentOverride) !== -1) {
+            if (activeAccentOverride === "fuchsia") document.documentElement.removeAttribute("data-accent")
+            else document.documentElement.setAttribute("data-accent", activeAccentOverride)
+          }
+        } catch (e) {}
+
+        try {
           var KNOWN_LOCALES = ["en","es","de","fr","pt-BR","it","ru","zh","ja","tr","ar","ur","nl","hi","id","pl"]
           var RTL_LOCALES = ["ar","ur"]
           var storedLocale = localStorage.getItem("xt_locale") || ""
@@ -195,10 +218,11 @@ const navItems = [
         data-i18n-attr="aria-label:sidebar.mainLabel"
         class="relative z-40 shrink-0 w-[5rem]">
         <div
-          class="group/rail tv-rail-surface absolute inset-y-0 left-0 flex w-[5rem] flex-col gap-1.5
+          class="group/rail tv-rail-surface absolute inset-y-0 start-0 flex w-[5rem] flex-col gap-1.5
                  overflow-y-auto overflow-x-hidden bg-bg
                  p-2 outline-none transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]
-                 focus-within:w-[15rem] focus-within:shadow-[8px_0_24px_-12px_rgba(0,0,0,0.6)]">
+                 focus-within:w-[15rem] focus-within:shadow-[8px_0_24px_-12px_rgba(0,0,0,0.6)]
+                 rtl:focus-within:shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.6)]">
           <div class="flex flex-1 flex-col gap-1.5">
             {navItems.map(({ href, key, label, Icon }) => {
               const active = activeNavHref === href
@@ -218,7 +242,7 @@ const navItems = [
                          data-[tv-nav-active=true]:bg-surface-2 data-[tv-nav-active=true]:text-fg">
                   <span
                     aria-hidden="true"
-                    class="absolute left-0 top-2 bottom-2 w-1 rounded-full bg-accent opacity-0
+                    class="absolute start-0 top-2 bottom-2 w-1 rounded-full bg-accent opacity-0
                            transition-opacity group-data-[tv-nav-active=true]/item:opacity-100
                            group-focus-visible/item:opacity-0!"></span>
                   <Icon

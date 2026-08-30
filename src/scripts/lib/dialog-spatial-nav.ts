@@ -112,14 +112,24 @@ export function attachDialogSpatialNav(
     // A page swap while the dialog is open never fires "close"; unregister explicitly.
     document.addEventListener("astro:before-swap", unregister)
 
-    if (dlg.hasAttribute("open")) registerWithFocus()
+    // A body swap that drops the dialog never calls the returned cleanup.
+    const afterSwapCleanup = (): void => {
+        if (dlg.isConnected) return
+        cleanup()
+    }
+    document.addEventListener("astro:after-swap", afterSwapCleanup)
 
-    return () => {
+    const cleanup = (): void => {
         observer.disconnect()
         dlg.removeEventListener("close", unregister)
         document.removeEventListener("astro:before-swap", unregister)
+        document.removeEventListener("astro:after-swap", afterSwapCleanup)
         unregister()
     }
+
+    if (dlg.hasAttribute("open")) registerWithFocus()
+
+    return cleanup
 }
 
 interface PopoverOpts {

@@ -133,8 +133,11 @@ let zapDigits = ""
 let zapIdleTimer: ReturnType<typeof setTimeout> | null = null
 let registryInstance: EngineRegistry | null = null
 let activeEngine: ReceiverEngine | null = null
+let startingEngine: ReceiverEngine | null = null
+let startingGeneration: number | null = null
 let lastPlayAttempt: (() => Promise<boolean>) | null = null
 let focusedElementBeforePlayback: HTMLElement | null = null
+let focusedKeyBeforePlayback: string | null = null
 let currentEvents: TvPlaybackEvents | null = null
 let currentIsLive = false
 let currentPlaybackState: ReceiverPlaybackState = "idle"
@@ -144,6 +147,15 @@ let activeProgressTarget: ActiveProgressTarget | null = null
 let activeLiveTarget: ActiveLiveTarget | null = null
 let sessionErrorToasted = false
 let embeddedPresentationActive = false
+let playGeneration = 0
+
+function beginPlayAttempt(): number {
+  return ++playGeneration
+}
+
+function isStalePlayAttempt(generation: number): boolean {
+  return generation !== playGeneration
+}
 
 function isEmbeddedActive(): boolean {
   return !!activeEngine && !!registryInstance && activeEngine === registryInstance.embedded
@@ -193,6 +205,23 @@ function appendZapDigit(digit: string): void {
   zapIdleTimer = setTimeout(commitZap, ZAP_IDLE_COMMIT_MS)
 }
 
+// Cancels a play attempt that is still mounting (no activeEngine yet), so BACK during the gap works.
+function cancelStartingPlayback(): void {
+  playGeneration++
+  startingEngine?.teardown()
+  startingEngine = null
+  startingGeneration = null
+  currentEvents = null
+  activeProgressTarget = null
+  activeLiveTarget = null
+  embeddedPresentationActive = false
+  currentIsLive = false
+  cancelZap()
+  osd?.hideAll()
+  ensureDom().playerViewEl?.classList.add("hidden")
+  restoreFocusAfterPlayback()
+}
+
 function handleKeydown(event: KeyboardEvent): void {
   const key = event.key
   // Zapping stays live through the mount gap, when the player is on screen but has no engine yet.
@@ -200,6 +229,12 @@ function handleKeydown(event: KeyboardEvent): void {
     event.preventDefault()
     event.stopImmediatePropagation()
     appendZapDigit(key)
+    return
+  }
+  if (!activeEngine && (startingEngine || embeddedPresentationActive) && (key === "Escape" || key === "GoBack" || key === "BrowserBack")) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    cancelStartingPlayback()
     return
   }
   if (!activeEngine) return
@@ -312,9 +347,15 @@ function ensureDom(): EmbeddedEngineDom {
 
   document.addEventListener("keydown", handleKeydown, true)
   registerBackInterceptor(() => {
-    if (!activeEngine) return false
-    stopPlayback()
-    return true
+    if (activeEngine) {
+      stopPlayback()
+      return true
+    }
+    if (startingEngine || embeddedPresentationActive) {
+      cancelStartingPlayback()
+      return true
+    }
+    return false
   })
 
   return playerDom
@@ -350,11 +391,22 @@ function handleReport(partial: ReceiverStatePartial): void {
 
 function restoreFocusAfterPlayback(): void {
   const target = focusedElementBeforePlayback
+  const key = focusedKeyBeforePlayback
   focusedElementBeforePlayback = null
-  if (target && document.contains(target)) target.focus()
+  focusedKeyBeforePlayback = null
+  if (target && document.contains(target)) {
+    target.focus()
+    return
+  }
+  if (!key) return
+  document.querySelector<HTMLElement>(`#tv-main [data-focus-key="${CSS.escape(key)}"]`)?.focus()
 }
 
 function handleSessionEnded(): void {
+  // A mid-resolve attempt has already claimed the next generation; don't bump past it.
+  if (startingEngine !== null || activeEngine !== null) playGeneration++
+  startingEngine = null
+  startingGeneration = null
   if (activeProgressTarget && currentPlaybackState !== "ended" && currentPositionSeconds > 0) {
     activeProgressTarget.writer.observe({
       state: "paused",
@@ -403,8 +455,18 @@ const engineCallbacks: ReceiverEngineCallbacks = {
 function ensureRegistry(): EngineRegistry {
   if (registryInstance) return registryInstance
   const dom = ensureDom()
-  const embedded = createEmbeddedReceiverEngine(dom, engineCallbacks)
-  const native = androidNativePlayerAvailable ? createAndroidNativeReceiverEngine(engineCallbacks) : null
+  // Singleton engines: only the owning attempt's reports count.
+  const embedded: ReceiverEngine = createEmbeddedReceiverEngine(dom, {
+    ...engineCallbacks,
+    report: (partial) => { if (embedded === activeEngine || embedded === startingEngine) handleReport(partial) },
+  })
+  let native: ReceiverEngine | null = null
+  if (androidNativePlayerAvailable) {
+    native = createAndroidNativeReceiverEngine({
+      ...engineCallbacks,
+      report: (partial) => { if (native === activeEngine || native === startingEngine) handleReport(partial) },
+    })
+  }
   registryInstance = { embedded, native }
   return registryInstance
 }
@@ -430,12 +492,30 @@ interface StartSessionInput {
   playOptions?: ReceiverPlayOptions
 }
 
-async function startSession(descriptor: CastDescriptorV1, session: StartSessionInput): Promise<boolean> {
+let startChain: Promise<void> = Promise.resolve()
+
+/** Serializes runStartSession so two overlapping starts never mount the shared engine at once. */
+function startSession(descriptor: CastDescriptorV1, session: StartSessionInput): Promise<boolean> {
+  const generation = playGeneration
+  const run = startChain.then(() => {
+    if (isStalePlayAttempt(generation)) return false
+    return runStartSession(descriptor, session)
+  })
+  startChain = run.then(() => undefined, () => undefined)
+  return run
+}
+
+async function runStartSession(descriptor: CastDescriptorV1, session: StartSessionInput): Promise<boolean> {
   const registry = ensureRegistry()
+  const generation = playGeneration
   focusedElementBeforePlayback = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  focusedKeyBeforePlayback = focusedElementBeforePlayback?.closest<HTMLElement>("[data-focus-key]")?.dataset.focusKey ?? null
 
   activeEngine?.teardown()
   activeEngine = null
+  startingEngine?.teardown()
+  startingEngine = null
+  startingGeneration = null
   cancelZap()
   currentEvents = session.events
   activeProgressTarget = session.progressTarget ?? null
@@ -455,18 +535,55 @@ async function startSession(descriptor: CastDescriptorV1, session: StartSessionI
     if (currentIsLive) showLiveBannerForCurrentChannel()
   }
 
-  const { started } = await playWithFallback(registry, descriptor, {
-    preference,
-    start: async (engine, candidateDescriptor, playOptions) => {
-      const success = await engine.play(candidateDescriptor, playOptions)
-      if (success) activeEngine = engine
-      return success
-    },
-    playOptions: session.playOptions,
-    onFallback: () => log.warn("[xt:tv-playback] native playback unavailable, falling back to embedded playback"),
-  })
+  let started = false
+  try {
+    started = (await playWithFallback(registry, descriptor, {
+      preference,
+      start: async (engine, candidateDescriptor, playOptions) => {
+        if (isStalePlayAttempt(generation)) return false
+        startingEngine = engine
+        startingGeneration = generation
+        const success = await engine.play(candidateDescriptor, playOptions)
+        const stillOwnsStarting = startingEngine === engine && startingGeneration === generation
+        if (isStalePlayAttempt(generation)) {
+          if (success && stillOwnsStarting) {
+            // Orphaned: no newer attempt claimed this instance, so make it the controllable one.
+            activeEngine = engine
+          } else if (success && engine !== activeEngine) {
+            engine.teardown()
+          }
+          if (stillOwnsStarting) {
+            startingEngine = null
+            startingGeneration = null
+          }
+          return false
+        }
+        if (success) activeEngine = engine
+        if (stillOwnsStarting) {
+          startingEngine = null
+          startingGeneration = null
+        }
+        return success
+      },
+      playOptions: session.playOptions,
+      onFallback: () => {
+        if (!isStalePlayAttempt(generation)) {
+          log.warn("[xt:tv-playback] native playback unavailable, falling back to embedded playback")
+        }
+      },
+    })).started
+  } catch (err) {
+    // Catch here so the cleanup below still resets embeddedPresentationActive.
+    log.warn("[xt:tv-playback] play failed:", err)
+  }
+  if (isStalePlayAttempt(generation)) return false
   if (started) return true
 
+  // Not stale, so a leftover startingEngine (e.g. from a throw) is ours to clear.
+  const danglingEngine = startingEngine as ReceiverEngine | null
+  danglingEngine?.teardown()
+  startingEngine = null
+  startingGeneration = null
   currentEvents = null
   activeProgressTarget = null
   activeLiveTarget = null
@@ -505,13 +622,16 @@ export function isPlaybackActive(): boolean {
 }
 
 export function stopPlayback(): void {
+  playGeneration++
   activeEngine?.control("stop")
 }
 
 export async function playLive(input: TvPlayLiveInput, events: TvPlaybackEvents = {}): Promise<boolean> {
   lastPlayAttempt = () => playLive(input, events)
+  const generation = beginPlayAttempt()
   return guardPlayback(async () => {
     const resolved = await resolveLiveChannelCastDescriptor(input.playlistId, input.channel.id)
+    if (isStalePlayAttempt(generation)) return false
     if (!resolved) return failPlayback()
 
     pushRecent(
@@ -523,6 +643,7 @@ export async function playLive(input: TvPlayLiveInput, events: TvPlaybackEvents 
     )
 
     const siblingInputs = await Promise.all(input.siblings.map((sibling) => resolveSiblingChannel(input.playlistId, sibling)))
+    if (isStalePlayAttempt(generation)) return false
     const liveContextResult = siblingsToLiveContext(siblingInputs, {
       id: input.channel.id,
       name: input.channel.name || "",
@@ -559,8 +680,10 @@ export async function playLive(input: TvPlayLiveInput, events: TvPlaybackEvents 
 
 export async function playVod(input: TvPlayVodInput, events: TvPlaybackEvents = {}): Promise<boolean> {
   lastPlayAttempt = () => playVod(input, events)
+  const generation = beginPlayAttempt()
   return guardPlayback(async () => {
     const creds = await resolvePlaylistCreds(input.playlistId)
+    if (isStalePlayAttempt(generation)) return false
     if (!creds?.host || !creds.user || !creds.pass) return failPlayback()
     const src = buildMovieStreamUrl(creds, input.movieId, input.containerExt ?? null)
     if (!isCastableSrc(src)) return failPlayback()
@@ -593,8 +716,10 @@ export async function playVod(input: TvPlayVodInput, events: TvPlaybackEvents = 
 
 export async function playEpisode(input: TvPlayEpisodeInput, events: TvPlaybackEvents = {}): Promise<boolean> {
   lastPlayAttempt = () => playEpisode(input, events)
+  const generation = beginPlayAttempt()
   return guardPlayback(async () => {
     const creds = await resolvePlaylistCreds(input.playlistId)
+    if (isStalePlayAttempt(generation)) return false
     if (!creds?.host || !creds.user || !creds.pass) return failPlayback()
     const src = buildSeriesStreamUrl(creds, input.episodeId, input.containerExt ?? null)
     if (!isCastableSrc(src)) return failPlayback()
@@ -633,8 +758,10 @@ export async function playEpisode(input: TvPlayEpisodeInput, events: TvPlaybackE
 
 export async function playCatchup(input: TvPlayCatchupInput, events: TvPlaybackEvents = {}): Promise<boolean> {
   lastPlayAttempt = () => playCatchup(input, events)
+  const generation = beginPlayAttempt()
   return guardPlayback(async () => {
     const creds = await resolvePlaylistCreds(input.playlistId)
+    if (isStalePlayAttempt(generation)) return false
     if (!creds?.host || !creds.user || !creds.pass) return failPlayback()
 
     const descriptor = await resolveCatchupCastDescriptor({
@@ -653,6 +780,7 @@ export async function playCatchup(input: TvPlayCatchupInput, events: TvPlaybackE
       logo: input.logo,
       headers: input.headers,
     })
+    if (isStalePlayAttempt(generation)) return false
     if (!descriptor) return failPlayback()
 
     return startSession(descriptor, { events })

@@ -558,7 +558,16 @@ const view: TvView = {
       renderHero()
       renderActions()
 
-      if (wantsAutoplay) void startPlayback(0)
+      if (wantsAutoplay) {
+        const cachedVodInfo = getCached(activePlaylistId, `vod_info_${movieId}`)?.data as any
+        const cachedExt = cachedVodInfo?.movie_data?.container_extension || cachedVodInfo?.info?.container_extension
+        if (typeof cachedExt === "string" && cachedExt) {
+          containerExt = cachedExt.replace(/^\.+/, "").toLowerCase() || "mp4"
+        }
+        const savedProgress = getProgress(activePlaylistId, "vod", movieId)
+        const canResumeAutoplay = !!savedProgress && !savedProgress.completed && savedProgress.position > RESUME_MIN_SECONDS
+        void startPlayback(canResumeAutoplay ? savedProgress.position : 0)
+      }
 
       // Language pills and the similar rail both walk the whole catalog; the hero must be on screen first.
       void nextPaint().then(() => {

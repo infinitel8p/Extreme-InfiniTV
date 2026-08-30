@@ -287,8 +287,16 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   }
 
   function setActions(actions: DetailAction[]): void {
+    const focused = document.activeElement
+    const previouslyFocusedKey =
+      focused instanceof HTMLElement && actionsRow.contains(focused) ? focused.dataset.focusKey : null
+
     actionsRow.replaceChildren()
     for (const action of actions) actionsRow.appendChild(buildActionButton(action))
+
+    if (previouslyFocusedKey) {
+      actionsRow.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(previouslyFocusedKey)}"]`)?.focus()
+    }
   }
 
   function setSkeleton(on: boolean): void {

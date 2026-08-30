@@ -266,8 +266,10 @@ function continueWatchingMenuActions(
   href: string
 ): ActionSheetItem[] {
   return [
+  // "Open" should not autoplay, unlike the row's own tap-to-resume href.
+  const openHref = href.replace(/[?&]autoplay=1\b/, "")
     { label: t("detail.action.continue"), onSelect: () => resumeOrNavigate(playlistId, resumeRow, href) },
-    { label: t("list.menu.open"), onSelect: () => { void navigate(href) } },
+    { label: t("list.menu.open"), onSelect: () => { void navigate(openHref) } },
     {
       label: t("list.menu.removeContinueWatching"),
       onSelect: () => clearProgress(playlistId, progressKind, progressId),
@@ -940,11 +942,14 @@ const view: TvView = {
         strip, railTitle, playlistId, heroBuilders, backdropRefs, chipInfoByFocusKey, actionSheet, () => {}, () => {}
       )
       if (!items.length) {
-        rail.destroy()
+        // Keep the (hidden) rail in DOM order so a later mount can unhide it in place.
+        rail.setItems([])
+        track.appendChild(rail.el)
+        railHandles.set(strip.id, rail)
         continue
       }
       // Prepaint is always the first couple of rails, always above the fold.
-      const eagerHere = railHandles.size === 0 || heavyEffectsAllowed() ? eagerCardCount() : 0
+      const eagerHere = !renderedRailWithItems || heavyEffectsAllowed() ? eagerCardCount() : 0
       rail.setItems(items, { eagerCount: eagerHere })
       decorateRailChips(rail, items, chipInfoByFocusKey)
       track.appendChild(rail.el)
@@ -956,10 +961,14 @@ const view: TvView = {
       }
     }
 
-    if (!railHandles.size) {
+    if (!anyItems) {
+      for (const rail of railHandles.values()) rail.destroy()
+      railHandles.clear()
       hero.destroy()
       actionSheet.destroy()
       return false
+    let anyItems = false
+    let renderedRailWithItems = false
     }
     hero.show(firstHeroItem || { eyebrow: t("welcome.eyebrow"), title: t("welcome.heading"), meta: "" })
     root.appendChild(scroller)
@@ -974,9 +983,11 @@ const view: TvView = {
 
     const scroller = prepainted?.scroller ?? document.createElement("div")
     scroller.className = "h-full overflow-hidden px-[var(--tv-focus-pad)] -mx-[var(--tv-focus-pad)]"
+      anyItems = true
     const track = prepainted?.track ?? document.createElement("div")
     track.className = "flex flex-col gap-10 pb-20"
     if (!prepainted) {
+      renderedRailWithItems = true
       scroller.appendChild(track)
       root.appendChild(scroller)
     }

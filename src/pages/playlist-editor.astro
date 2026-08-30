@@ -119,7 +119,7 @@ import {
 
           <div
             id="editor-source-list"
-            class="relative flex-1 min-h-64 overflow-y-auto rounded-xl border border-line bg-bg">
+            class="relative flex-1 min-h-64 overflow-y-auto custom-scroll rounded-xl border border-line bg-bg">
             <div id="editor-source-spacer" class="relative w-full"></div>
             <div id="editor-source-viewport" class="absolute inset-x-0 top-0"></div>
             <p id="editor-source-empty" class="hidden p-6 text-center text-sm text-fg-3"></p>
@@ -150,7 +150,7 @@ import {
           id="editor-playlist-pane"
           class="rounded-2xl border border-line bg-surface p-4 flex flex-col gap-3 min-h-0">
           <h2 data-i18n="editor.yourPlaylist" class="text-sm font-semibold">Your playlist</h2>
-          <div id="editor-groups" class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4 pr-1"></div>
+          <div id="editor-groups" class="flex-1 min-h-0 overflow-y-auto custom-scroll flex flex-col gap-4 pr-1"></div>
           <p
             id="editor-empty-state"
             class="hidden text-sm text-fg-3 text-center py-10"
@@ -201,7 +201,7 @@ import {
     aria-labelledby="editor-add-url-title"
     class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
       w-[min(30rem,calc(100vw-2rem))] max-h-[min(85dvh,42rem)] open:flex flex-col overflow-hidden backdrop:bg-black/60">
-    <form method="dialog" class="flex flex-col flex-auto min-h-0 p-5 gap-4 overflow-y-auto">
+    <form method="dialog" class="flex flex-col flex-auto min-h-0 p-5 gap-4 overflow-y-auto custom-scroll">
       <div class="flex flex-col gap-1">
         <h2 id="editor-add-url-title" data-i18n="editor.addUrlDialogTitle" class="text-base font-semibold">
           Add by URL
@@ -295,7 +295,7 @@ import {
     aria-labelledby="editor-channel-edit-title"
     class="fixed inset-0 m-auto rounded-2xl border border-line bg-surface text-fg p-0
       w-[min(26rem,calc(100vw-2rem))] max-h-[min(85dvh,44rem)] open:flex flex-col overflow-hidden backdrop:bg-black/60">
-    <form method="dialog" class="flex flex-col flex-auto min-h-0 gap-4 p-5 overflow-y-auto">
+    <form method="dialog" class="flex flex-col flex-auto min-h-0 gap-4 p-5 overflow-y-auto custom-scroll">
       <h2 id="editor-channel-edit-title" data-i18n="editor.editDetailsTitle" class="text-base font-semibold">
         Channel details
       </h2>

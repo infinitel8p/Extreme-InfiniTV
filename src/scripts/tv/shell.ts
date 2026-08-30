@@ -167,20 +167,22 @@ function initSpatialNavForMain(): void {
   const spatialNav = window.SpatialNavigation
   if (!spatialNav) return
   spatialNav.init()
+  // The rail sits at the inline-start edge in both directions, so BACK/FORWARD swap under RTL.
+  const isRtl = document.documentElement.dir === "rtl"
   // Registered before "main": the polyfill assigns an element to the first matching section.
   spatialNav.add({
     id: NAV_SECTION_ID,
     selector: "#tv-nav [data-tv-nav-item]",
     restrict: "self-only",
     enterTo: "last-focused",
-    leaveFor: { right: "@main", left: "", up: "", down: "" },
+    leaveFor: isRtl ? { left: "@main", right: "", up: "", down: "" } : { right: "@main", left: "", up: "", down: "" },
     navigableFilter: isNavigableNavItem,
   })
   // Registered through focus.ts so every later view section stays ahead of it.
   registerMainFocusSection({
     selector:
       "a, button, summary, input, textarea, [contenteditable='true'], select, [tabindex]:not([tabindex='-1'])",
-    leaveFor: { left: `@${NAV_SECTION_ID}`, up: "", down: "" },
+    leaveFor: isRtl ? { right: `@${NAV_SECTION_ID}`, up: "", down: "" } : { left: `@${NAV_SECTION_ID}`, up: "", down: "" },
     navigableFilter: (elem: Element) => {
       if (elem.closest("#tv-nav")) return false
       return isNavigableElement(elem)
