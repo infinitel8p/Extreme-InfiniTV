@@ -345,10 +345,12 @@ export function renderLanguagePills(opts: {
   catalog: GroupableRow[] | undefined
   getGroupingIndexFor: GroupingIndexLookup
   detailHrefBase: string
+  groupingAllowed?: boolean
 }): void {
   const { langsEl, item, kind, activePlaylistId, catalog, getGroupingIndexFor, detailHrefBase } = opts
+  const groupingAllowed = opts.groupingAllowed ?? getLanguageGroupingEnabled()
   if (!langsEl || !item || !activePlaylistId || !catalog?.length) return
-  if (!getLanguageGroupingEnabled() || !getGroupLanguages(activePlaylistId, kind)) {
+  if (!groupingAllowed || !getGroupLanguages(activePlaylistId, kind)) {
     langsEl.setAttribute("hidden", "")
     langsEl.replaceChildren()
     return

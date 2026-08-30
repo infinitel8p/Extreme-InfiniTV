@@ -256,6 +256,17 @@ export function createGroupingIndexMemo() {
   }
 }
 
+const LANGUAGE_GROUPING_KEY = "xt_lang_grouping"
+
+/** True only when the user explicitly opted in, distinct from the feature's default-on state. */
+export function isLanguageGroupingExplicitlyEnabled(): boolean {
+  try {
+    return localStorage.getItem(LANGUAGE_GROUPING_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
 const sharedIndexByRows = new WeakMap<object, CatalogGroupingIndex>()
 
 /**
