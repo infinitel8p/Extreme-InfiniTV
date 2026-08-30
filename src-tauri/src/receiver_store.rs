@@ -47,27 +47,52 @@ fn is_valid_device(device: &PairedDevice) -> bool {
     is_valid_key(&device.key) && device.device_name.chars().count() <= MAX_DEVICE_NAME_LEN
 }
 
+fn parse_store_file(contents: &str) -> Result<Vec<PairedDevice>, serde_json::Error> {
+    let file = serde_json::from_str::<StoreFile>(contents)?;
+    Ok(if file.v == 1 { file.devices.into_iter().filter(is_valid_device).collect() } else { Vec::new() })
+}
+
 /// Tolerant parse: corrupt JSON or an unknown schema version yields an empty list.
 pub fn parse_devices(contents: &str) -> Vec<PairedDevice> {
-    match serde_json::from_str::<StoreFile>(contents) {
-        Ok(file) if file.v == 1 => file.devices.into_iter().filter(is_valid_device).collect(),
-        _ => Vec::new(),
+    parse_store_file(contents).unwrap_or_default()
+}
+
+fn quarantine_corrupt_file(path: &Path) {
+    let corrupt_path = path.with_extension("json.corrupt");
+    if let Err(error) = std::fs::rename(path, &corrupt_path) {
+        log::warn!("[receiver] failed to quarantine corrupt store {}: {error}", path.display());
     }
 }
 
 pub fn load(config_dir: &Path) -> Vec<PairedDevice> {
-    match std::fs::read_to_string(config_dir.join(STORE_FILE_NAME)) {
-        Ok(contents) => parse_devices(&contents),
-        Err(_) => Vec::new(),
+    let path = config_dir.join(STORE_FILE_NAME);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => {
+            log::warn!("[receiver] failed to read {}: {error}", path.display());
+            return Vec::new();
+        }
+    };
+    match parse_store_file(&contents) {
+        Ok(devices) => devices,
+        Err(error) => {
+            log::warn!("[receiver] {} is corrupt ({error}), quarantining", path.display());
+            quarantine_corrupt_file(&path);
+            Vec::new()
+        }
     }
 }
 
+/// Temp file + rename: a crash mid-write can't truncate the store.
 pub fn save(config_dir: &Path, id: &str, devices: &[PairedDevice]) -> std::io::Result<()> {
     std::fs::create_dir_all(config_dir)?;
     let file = StoreFile { v: 1, id: Some(id.to_string()), devices: devices.to_vec() };
     let contents = serde_json::to_string(&file)
         .unwrap_or_else(|_| format!(r#"{{"v":1,"id":"{id}","devices":[]}}"#));
-    std::fs::write(config_dir.join(STORE_FILE_NAME), contents)
+    let temp_path = config_dir.join(format!("{STORE_FILE_NAME}.tmp"));
+    std::fs::write(&temp_path, contents)?;
+    std::fs::rename(&temp_path, config_dir.join(STORE_FILE_NAME))
 }
 
 /// Loads the persisted receiver id, generating and persisting one on first run.
@@ -167,6 +192,26 @@ mod tests {
         let devices = parse_devices(&contents);
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].device_name, name);
+    }
+
+    #[test]
+    fn load_quarantines_a_corrupt_store_and_returns_empty() {
+        let dir = std::env::temp_dir().join(format!("xt-receiver-store-corrupt-{}", generate_receiver_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(STORE_FILE_NAME), "not json").unwrap();
+
+        let devices = load(&dir);
+
+        assert_eq!(devices, Vec::new());
+        assert!(!dir.join(STORE_FILE_NAME).exists());
+        assert!(dir.join("receiver.json.corrupt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_returns_empty_without_a_warning_when_the_file_is_missing() {
+        let dir = std::env::temp_dir().join(format!("xt-receiver-store-missing-{}", generate_receiver_id()));
+        assert_eq!(load(&dir), Vec::new());
     }
 
     #[test]

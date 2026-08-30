@@ -74,6 +74,8 @@ dependencies = [
  "discord-rich-presence",
  "futures-util",
  "gethostname",
+ "hyper",
+ "hyper-util",
  "if-addrs",
  "log",
  "mdns-sd",

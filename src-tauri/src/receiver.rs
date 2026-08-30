@@ -28,6 +28,10 @@ const PAIR_MAX_FAILURES: u8 = 5;
 const PAIR_LOCKOUT: Duration = Duration::from_secs(60);
 const PAIR_MIN_INTERVAL: Duration = Duration::from_millis(750);
 
+// LAN-only and unauthenticated below /pair: bounds half-open-connection exhaustion.
+const MAX_CONCURRENT_CONNECTIONS: usize = 32;
+const CONNECTION_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_URL_LEN: usize = 8 * 1024;
 const MAX_TITLE_LEN: usize = 512;
@@ -216,7 +220,6 @@ fn evaluate_pair_attempt(pairing: &mut PairingState, submitted: &str, now: Insta
     if let Some(locked_until) = pairing.locked_until {
         if now < locked_until {
             let retry_after_secs = locked_until.saturating_duration_since(now).as_secs().max(1);
-            pairing.last_attempt_at = Some(now);
             return PairOutcome::RateLimited { retry_after_secs };
         }
     }
@@ -225,7 +228,6 @@ fn evaluate_pair_attempt(pairing: &mut PairingState, submitted: &str, now: Insta
         let elapsed = now.saturating_duration_since(last_attempt_at);
         if elapsed < PAIR_MIN_INTERVAL {
             let retry_after_secs = PAIR_MIN_INTERVAL.saturating_sub(elapsed).as_secs().max(1);
-            pairing.last_attempt_at = Some(now);
             return PairOutcome::RateLimited { retry_after_secs };
         }
     }
@@ -485,8 +487,9 @@ fn spawn_ip_watcher(app: AppHandle) {
                 .unwrap_or_else(|poison| poison.into_inner())
                 .as_ref()
                 .map(|handle| handle.port);
+            // Keep watching even while stopped: receiver_start never re-spawns a second watcher.
             let Some(port) = port else {
-                break;
+                continue;
             };
 
             let current = local_ips();
@@ -508,7 +511,6 @@ fn spawn_ip_watcher(app: AppHandle) {
             readvertise_mdns(&state, &name);
             ReceiverEvents::status(&app, build_status_json(&shared, Some(port)));
         }
-        shared.ip_watcher_running.store(false, Ordering::SeqCst);
     });
 }
 
@@ -611,33 +613,33 @@ fn local_ips() -> Vec<String> {
 /// All usable addresses across every adapter (not just the default route), so a VPN tunnel
 /// doesn't hide the LAN address the mobile app actually needs to reach. Android included: an
 /// active VPN there makes the default route the tunnel, which no sender on the LAN can reach.
+// Listener is IPv4-only, so never advertise IPv6.
 #[cfg(not(target_os = "ios"))]
 fn local_ips() -> Vec<String> {
     let default_route = default_route_ip();
-    let mut candidates: std::collections::HashSet<std::net::IpAddr> = if_addrs::get_if_addrs()
+    let mut interfaces: Vec<if_addrs::Interface> = if_addrs::get_if_addrs()
         .map(|interfaces| {
             interfaces
                 .into_iter()
                 .filter(is_advertisable_interface)
-                .map(|interface| interface.ip())
+                .filter(|interface| interface.ip().is_ipv4() && is_usable_mdns_addr(&interface.ip()))
                 .collect()
         })
         .unwrap_or_default();
-    candidates.retain(is_usable_mdns_addr);
 
-    let mut ranked: Vec<std::net::IpAddr> = candidates.into_iter().collect();
-    // Total order: HashSet-order ties made the same address set re-advertise every 15s.
-    ranked.sort_by(|left, right| {
-        mdns_addr_rank(right)
-            .cmp(&mdns_addr_rank(left))
+    // Total order: unstable ties made the same address set re-advertise every 15s.
+    interfaces.sort_by(|left, right| {
+        mdns_addr_rank(&right.ip(), Some(right))
+            .cmp(&mdns_addr_rank(&left.ip(), Some(left)))
             .then_with(|| {
-                let left_is_default_route = default_route == Some(*left);
-                let right_is_default_route = default_route == Some(*right);
+                let left_is_default_route = default_route == Some(left.ip());
+                let right_is_default_route = default_route == Some(right.ip());
                 right_is_default_route.cmp(&left_is_default_route)
             })
-            .then_with(|| left.cmp(right))
+            .then_with(|| left.ip().cmp(&right.ip()))
     });
-    ranked.into_iter().map(|ip| ip.to_string()).collect()
+    let ranked: Vec<std::net::IpAddr> = interfaces.iter().map(|interface| interface.ip()).collect();
+    dedupe_ips(&ranked).into_iter().map(|ip| ip.to_string()).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -897,7 +899,8 @@ const DISCOVER_MAX_TIMEOUT_MS: u64 = 10_000;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn strip_mdns_service_suffix(fullname: &str) -> String {
     let suffix = format!(".{MDNS_SERVICE_TYPE}");
-    fullname.strip_suffix(suffix.as_str()).unwrap_or(fullname).to_string()
+    let stripped = fullname.strip_suffix(suffix.as_str()).unwrap_or(fullname);
+    stripped.chars().take(receiver_store::MAX_DEVICE_NAME_LEN).collect()
 }
 
 /// Rejects loopback/link-local/VPN candidates: a tunnel address is reachable only from this host.
@@ -922,11 +925,42 @@ fn is_usable_mdns_addr(ip: &std::net::IpAddr) -> bool {
     }
 }
 
-// Shared by desktop mDNS resolution and the sweep fallback (which also runs on Android).
+// Names seen on Hyper-V/WSL/VirtualBox/VMware/VPN adapters; a substring match is best-effort.
 #[cfg(not(target_os = "ios"))]
-fn mdns_addr_rank(ip: &std::net::IpAddr) -> u8 {
+const VIRTUAL_ADAPTER_NAME_HINTS: [&str; 8] =
+    ["vethernet", "wsl", "virtualbox", "vmware", "protonvpn", "wireguard", "tap", "hyper-v"];
+
+/// Docker/VPN (172.16-31.x) and VirtualBox host-only (192.168.56.x).
+#[cfg(not(target_os = "ios"))]
+fn is_demoted_ipv4_range(v4: &std::net::Ipv4Addr) -> bool {
+    let octets = v4.octets();
+    (octets[0] == 172 && (16..=31).contains(&octets[1]))
+        || (octets[0] == 192 && octets[1] == 168 && octets[2] == 56)
+}
+
+#[cfg(not(target_os = "ios"))]
+fn interface_looks_virtual(interface: &if_addrs::Interface) -> bool {
+    let is_slash_32 = matches!(&interface.addr, if_addrs::IfAddr::V4(v4) if v4.prefixlen == 32);
+    let lower_name = interface.name.to_lowercase();
+    is_slash_32 || VIRTUAL_ADAPTER_NAME_HINTS.iter().any(|hint| lower_name.contains(hint))
+}
+
+/// Shared by desktop mDNS resolution and the sweep fallback (which also runs on Android).
+/// `interface` demotes virtual/VPN adapters when advertising our own addresses; discovery
+/// ranking of a remote host's addresses has no owning interface, so it passes `None`.
+#[cfg(not(target_os = "ios"))]
+fn mdns_addr_rank(ip: &std::net::IpAddr, interface: Option<&if_addrs::Interface>) -> u8 {
+    let demoted = interface.is_some_and(|interface| {
+        interface_looks_virtual(interface) || matches!(ip, std::net::IpAddr::V4(v4) if is_demoted_ipv4_range(v4))
+    });
     match ip {
-        std::net::IpAddr::V4(v4) if v4.is_private() => 2,
+        std::net::IpAddr::V4(v4) if v4.is_private() => {
+            if demoted {
+                1
+            } else {
+                2
+            }
+        }
         std::net::IpAddr::V4(_) => 1,
         std::net::IpAddr::V6(_) => 0,
     }
@@ -936,7 +970,7 @@ fn mdns_addr_rank(ip: &std::net::IpAddr) -> u8 {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[allow(dead_code)] // superseded by rank_discovered_hosts in receiver_discover; kept + tested for the subnet-unaware fallback shape
 fn best_mdns_addr(candidates: &[std::net::IpAddr]) -> Option<std::net::IpAddr> {
-    candidates.iter().copied().filter(is_usable_mdns_addr).max_by_key(mdns_addr_rank)
+    candidates.iter().copied().filter(is_usable_mdns_addr).max_by_key(|ip| mdns_addr_rank(ip, None))
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -967,10 +1001,10 @@ fn shares_subnet_with_any_interface(candidate: &std::net::IpAddr, interfaces: &[
     })
 }
 
-/// (same-subnet bonus, address-family rank): a subnet match outranks private-v4 > public-v4 > v6.
+/// (same-subnet bonus, address-family rank): a subnet match outranks private-v4 over public-v4.
 #[cfg(not(target_os = "ios"))]
 fn discovery_addr_rank(ip: &std::net::IpAddr, interfaces: &[if_addrs::Interface]) -> (u8, u8) {
-    (u8::from(shares_subnet_with_any_interface(ip, interfaces)), mdns_addr_rank(ip))
+    (u8::from(shares_subnet_with_any_interface(ip, interfaces)), mdns_addr_rank(ip, None))
 }
 
 /// A receiver too old to return its id from /info gets a synthetic one, which the identity key
@@ -997,13 +1031,15 @@ fn collapse_synthetic_id_entries(entries: &mut std::collections::HashMap<String,
     }
 }
 
-/// Ranks a resolved service's usable addresses, best first.
+/// Ranks a resolved service's usable addresses, best first. IPv6 is excluded: the server only
+/// ever binds an IPv4 listener, so an advertised v6 address is never actually reachable.
 #[cfg(not(target_os = "ios"))]
 fn rank_discovered_hosts(
     addresses: impl IntoIterator<Item = std::net::IpAddr>,
     interfaces: &[if_addrs::Interface],
 ) -> Vec<std::net::IpAddr> {
-    let mut ranked: Vec<std::net::IpAddr> = addresses.into_iter().filter(is_usable_mdns_addr).collect();
+    let mut ranked: Vec<std::net::IpAddr> =
+        addresses.into_iter().filter(is_usable_mdns_addr).filter(std::net::IpAddr::is_ipv4).collect();
     ranked.sort_by(|left, right| discovery_addr_rank(right, interfaces).cmp(&discovery_addr_rank(left, interfaces)));
     ranked
 }
@@ -1104,6 +1140,9 @@ const SWEEP_CONNECT_TIMEOUT: Duration = Duration::from_millis(400);
 const SWEEP_REQUEST_TIMEOUT: Duration = Duration::from_millis(1500);
 #[cfg(not(target_os = "ios"))]
 const SWEEP_CONCURRENCY: usize = 128;
+/// A real /info reply is a few hundred bytes; a hostile host streaming past this is rejected.
+#[cfg(not(target_os = "ios"))]
+const MAX_SWEEP_RESPONSE_BYTES: usize = 4096;
 
 /// Hosts in one interface's subnet, clamped to /24 max width, excluding network/broadcast/self.
 #[cfg(not(target_os = "ios"))]
@@ -1180,18 +1219,33 @@ async fn probe_sweep_host(client: reqwest::Client, ip: std::net::Ipv4Addr, port:
     if !matches!(connect, Ok(Ok(_))) {
         return None;
     }
-    let response = client
+    let mut response = client
         .get(format!("http://{ip}:{port}/info"))
         .timeout(SWEEP_REQUEST_TIMEOUT)
         .send()
         .await
         .ok()?;
-    let info: SweepInfoResponse = response.json().await.ok()?;
+    if response.content_length().is_some_and(|length| length > MAX_SWEEP_RESPONSE_BYTES as u64) {
+        return None;
+    }
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await.ok()? {
+            Some(chunk) => {
+                body.extend_from_slice(&chunk);
+                if body.len() > MAX_SWEEP_RESPONSE_BYTES {
+                    return None;
+                }
+            }
+            None => break,
+        }
+    }
+    let info: SweepInfoResponse = serde_json::from_slice(&body).ok()?;
     if info.v != PROTOCOL_VERSION || info.app.as_deref() != Some("extreme-infinitv") {
         return None;
     }
     Some(ResolvedEvent {
-        name: info.name.unwrap_or_default(),
+        name: info.name.unwrap_or_default().chars().take(receiver_store::MAX_DEVICE_NAME_LEN).collect(),
         port,
         // Its own id merges this probe with the mDNS resolve; without one (older receivers) a
         // synthetic per-ip id still keeps same-name receivers distinct.
@@ -1545,13 +1599,54 @@ async fn spawn_server(
     let ctx = Arc::new(ServerCtx { shared, events, port, config_dir, log_dir, shutdown_rx: shutdown_rx.clone() });
     let router = build_router(ctx);
 
-    let mut graceful_shutdown_rx = shutdown_rx;
+    let mut accept_shutdown_rx = shutdown_rx;
     tauri::async_runtime::spawn(async move {
-        let serve = axum::serve(listener, router).with_graceful_shutdown(async move {
-            let _ = graceful_shutdown_rx.changed().await;
-        });
-        if let Err(error) = serve.await {
-            log::warn!("[receiver] server exited: {error}");
+        // A manual accept loop (rather than axum::serve) so every connection gets a header-read
+        // timeout: axum::serve never installs a hyper timer, so hyper's own defaults are inert.
+        let connection_limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let stream = match accepted {
+                        Ok((stream, _remote_addr)) => stream,
+                        Err(error) => {
+                            log::debug!("[receiver] accept failed: {error}");
+                            // Non-transient errors (fd exhaustion) would busy-spin without a backoff.
+                            if !matches!(
+                                error.kind(),
+                                std::io::ErrorKind::ConnectionRefused
+                                    | std::io::ErrorKind::ConnectionAborted
+                                    | std::io::ErrorKind::ConnectionReset
+                            ) {
+                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            }
+                            continue;
+                        }
+                    };
+                    let Ok(permit) = connection_limit.clone().try_acquire_owned() else {
+                        // At the connection cap: refuse rather than queue unboundedly.
+                        continue;
+                    };
+                    let tower_service = router.clone();
+                    tokio::task::spawn(async move {
+                        let _permit = permit;
+                        let io = hyper_util::rt::TokioIo::new(stream);
+                        let hyper_service = hyper_util::service::TowerToHyperService::new(tower_service);
+                        let connection = hyper::server::conn::http1::Builder::new()
+                            .timer(hyper_util::rt::TokioTimer::new())
+                            .header_read_timeout(CONNECTION_HEADER_READ_TIMEOUT)
+                            .serve_connection(io, hyper_service)
+                            .with_upgrades();
+                        if let Err(error) = connection.await {
+                            log::debug!("[receiver] connection closed: {error}");
+                        }
+                    });
+                }
+                changed = accept_shutdown_rx.changed() => {
+                    let _ = changed;
+                    break;
+                }
+            }
         }
     });
 
@@ -1678,13 +1773,15 @@ async fn handle_pair(State(ctx): State<Arc<ServerCtx>>, Json(body): Json<PairReq
                 evict_oldest_if_over_capacity(&mut devices);
                 devices.clone()
             };
-            if let Err(error) = persist_devices(ctx.config_dir.clone(), receiver_id, devices_snapshot).await {
+            if let Err(error) =
+                persist_devices(ctx.config_dir.clone(), receiver_id.clone(), devices_snapshot).await
+            {
                 log::warn!("[receiver] failed to persist paired device: {error}");
             }
             ctx.events.paired(json!({"deviceName": bounded_name}));
             ctx.events.status(build_status_json(&ctx.shared, Some(ctx.port)));
             let receiver_name = ctx.shared.name.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
-            (StatusCode::OK, Json(json!({"key": key, "name": receiver_name}))).into_response()
+            (StatusCode::OK, Json(json!({"key": key, "name": receiver_name, "id": receiver_id}))).into_response()
         }
         PairOutcome::BadCode => {
             if code_regenerated {
@@ -1757,7 +1854,9 @@ async fn handle_play(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_
     let Ok(parsed_src) = tauri::Url::parse(&body.src) else {
         return bad_request_response("invalidSrc");
     };
-    if parsed_src.scheme() != "http" && parsed_src.scheme() != "https" {
+    let scheme = parsed_src.scheme();
+    let scheme_ok = scheme == "http" || scheme == "https" || (body.is_live && scheme == "rtsp");
+    if !scheme_ok {
         return bad_request_response("invalidSrc");
     }
     if body.mime.as_deref().unwrap_or("").is_empty() {
@@ -2071,10 +2170,11 @@ async fn handle_events(
     if find_device_by_key(&ctx, key).is_none() {
         return unauthorized_response();
     }
-    ws.on_upgrade(move |socket| handle_socket(socket, ctx))
+    let key = key.to_string();
+    ws.on_upgrade(move |socket| handle_socket(socket, ctx, key))
 }
 
-async fn handle_socket(mut socket: WebSocket, ctx: Arc<ServerCtx>) {
+async fn handle_socket(mut socket: WebSocket, ctx: Arc<ServerCtx>, key: String) {
     let mut broadcast_rx = ctx.shared.broadcast.subscribe();
     let mut shutdown_rx = ctx.shutdown_rx.clone();
 
@@ -2100,6 +2200,10 @@ async fn handle_socket(mut socket: WebSocket, ctx: Arc<ServerCtx>) {
     loop {
         tokio::select! {
             received = broadcast_rx.recv() => {
+                if find_device_by_key(&ctx, &key).is_none() {
+                    let _ = socket.send(Message::Close(None)).await;
+                    break;
+                }
                 match received {
                     Ok(state_json) => {
                         if socket.send(Message::Text(state_json.into())).await.is_err() {
@@ -2205,11 +2309,14 @@ mod tests {
         let mut pairing = PairingState::new();
         let now = Instant::now();
         evaluate_pair_attempt(&mut pairing, "wrong-code", now);
+        let last_attempt_at_before = pairing.last_attempt_at;
         let outcome = evaluate_pair_attempt(&mut pairing, "wrong-code", now + Duration::from_millis(1));
         match outcome {
             PairOutcome::RateLimited { retry_after_secs } => assert!(retry_after_secs >= 1),
             other => panic!("expected RateLimited, got {other:?}"),
         }
+        // A rejected attempt must not refresh the timestamp, or a noisy client starves everyone.
+        assert_eq!(pairing.last_attempt_at, last_attempt_at_before);
     }
 
     #[test]
@@ -2343,8 +2450,13 @@ mod tests {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn test_interface_v4(ip: &str, prefixlen: u8) -> if_addrs::Interface {
+        test_interface_v4_named("test0", ip, prefixlen)
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn test_interface_v4_named(name: &str, ip: &str, prefixlen: u8) -> if_addrs::Interface {
         if_addrs::Interface {
-            name: "test0".to_string(),
+            name: name.to_string(),
             addr: if_addrs::IfAddr::V4(if_addrs::Ifv4Addr {
                 ip: ip.parse().unwrap(),
                 netmask: std::net::Ipv4Addr::new(255, 255, 255, 0),
@@ -2357,6 +2469,39 @@ mod tests {
             #[cfg(windows)]
             adapter_name: String::new(),
         }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_addr_rank_demotes_a_slash_32_tunnel_interface() {
+        let lan = test_interface_v4("192.168.1.20", 24);
+        let tunnel = test_interface_v4("10.8.0.5", 32);
+        assert!(mdns_addr_rank(&lan.ip(), Some(&lan)) > mdns_addr_rank(&tunnel.ip(), Some(&tunnel)));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_addr_rank_demotes_named_virtual_adapters() {
+        let lan = test_interface_v4("192.168.1.20", 24);
+        let hyperv = test_interface_v4_named("vEthernet (WSL)", "172.28.16.1", 20);
+        assert!(mdns_addr_rank(&lan.ip(), Some(&lan)) > mdns_addr_rank(&hyperv.ip(), Some(&hyperv)));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_addr_rank_demotes_docker_and_virtualbox_default_subnets() {
+        let lan = test_interface_v4("192.168.1.20", 24);
+        let docker = test_interface_v4("172.20.0.5", 16);
+        let virtualbox = test_interface_v4("192.168.56.10", 24);
+        assert!(mdns_addr_rank(&lan.ip(), Some(&lan)) > mdns_addr_rank(&docker.ip(), Some(&docker)));
+        assert!(mdns_addr_rank(&lan.ip(), Some(&lan)) > mdns_addr_rank(&virtualbox.ip(), Some(&virtualbox)));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_addr_rank_does_not_demote_without_an_owning_interface() {
+        let tunnel_like: std::net::IpAddr = "10.8.0.5".parse().unwrap();
+        assert_eq!(mdns_addr_rank(&tunnel_like, None), 2);
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2375,6 +2520,15 @@ mod tests {
             #[cfg(windows)]
             adapter_name: String::new(),
         }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn strip_mdns_service_suffix_bounds_an_oversized_name() {
+        let oversized = "a".repeat(receiver_store::MAX_DEVICE_NAME_LEN + 10);
+        let fullname = format!("{oversized}.{MDNS_SERVICE_TYPE}");
+        let stripped = strip_mdns_service_suffix(&fullname);
+        assert_eq!(stripped.chars().count(), receiver_store::MAX_DEVICE_NAME_LEN);
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2417,7 +2571,7 @@ mod tests {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[test]
-    fn rank_discovered_hosts_falls_back_to_private_then_public_then_v6_without_a_subnet_match() {
+    fn rank_discovered_hosts_falls_back_to_private_then_public_without_a_subnet_match() {
         let interfaces = vec![test_interface_v4("192.168.1.5", 24)];
         let addresses: Vec<std::net::IpAddr> = vec![
             "2001:db8::1".parse().unwrap(),
@@ -2427,22 +2581,18 @@ mod tests {
         let ranked = rank_discovered_hosts(addresses, &interfaces);
         assert_eq!(
             ranked,
-            vec![
-                "10.0.0.5".parse::<std::net::IpAddr>().unwrap(),
-                "203.0.113.5".parse().unwrap(),
-                "2001:db8::1".parse().unwrap(),
-            ]
+            vec!["10.0.0.5".parse::<std::net::IpAddr>().unwrap(), "203.0.113.5".parse().unwrap()]
         );
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[test]
-    fn rank_discovered_hosts_prefers_a_v6_subnet_match_too() {
+    fn rank_discovered_hosts_excludes_ipv6_even_with_a_subnet_match() {
         let interfaces = vec![test_interface_v6("2001:db8:1::5", 64)];
         let addresses: Vec<std::net::IpAddr> =
             vec!["192.168.1.20".parse().unwrap(), "2001:db8:1::9999".parse().unwrap()];
         let ranked = rank_discovered_hosts(addresses, &interfaces);
-        assert_eq!(ranked[0], "2001:db8:1::9999".parse::<std::net::IpAddr>().unwrap());
+        assert_eq!(ranked, vec!["192.168.1.20".parse::<std::net::IpAddr>().unwrap()]);
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2782,6 +2932,59 @@ mod tests {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[tokio::test]
+    async fn probe_sweep_host_rejects_an_oversized_response_body() {
+        let oversized_name = "a".repeat(MAX_SWEEP_RESPONSE_BYTES);
+        let body =
+            json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": oversized_name}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        assert!(probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port).await.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    async fn spawn_chunked_oversized_responder() -> (u16, tokio::sync::oneshot::Sender<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind must succeed");
+        let port = listener.local_addr().unwrap().port();
+        let router = axum::Router::new().route(
+            "/info",
+            get(|| async {
+                // No Content-Length: forces the caller to bound the body while streaming.
+                let chunk = Bytes::from(vec![b'a'; MAX_SWEEP_RESPONSE_BYTES + 1]);
+                let stream = futures_util::stream::iter(vec![Ok::<_, std::io::Error>(chunk)]);
+                axum::body::Body::from_stream(stream)
+            }),
+        );
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
+        });
+        (port, shutdown_tx)
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_rejects_an_oversized_chunked_response_without_content_length() {
+        let (port, _shutdown) = spawn_chunked_oversized_responder().await;
+        assert!(probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port).await.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_truncates_an_oversized_name() {
+        let oversized_name = "a".repeat(receiver_store::MAX_DEVICE_NAME_LEN + 10);
+        let body = json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": oversized_name}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        let event = probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port)
+            .await
+            .expect("a valid /info response must be accepted");
+        assert_eq!(event.name.chars().count(), receiver_store::MAX_DEVICE_NAME_LEN);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
     async fn probe_sweep_host_returns_none_quickly_on_connection_refused() {
         let closed_port = {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3038,6 +3241,7 @@ mod tests {
 
         *shared.pairing.lock().unwrap() = Some(PairingState::new());
         *shared.name.lock().unwrap() = "Test Receiver".to_string();
+        *shared.receiver_id.lock().unwrap() = "test-receiver-id".to_string();
 
         let (port, shutdown) =
             start_server("127.0.0.1", 0, 1, shared.clone(), events, config_dir.clone(), log_dir.clone())
@@ -3092,6 +3296,8 @@ mod tests {
         let key = paired_body["key"].as_str().unwrap().to_string();
         // /pair must return the receiver's own name, not the submitted device name.
         assert_eq!(paired_body["name"], "Test Receiver");
+        // /pair must return the same id /info does, so a sender can match discovery to a pairing.
+        assert_eq!(paired_body["id"], "test-receiver-id");
         assert_eq!(server.collector.paired.lock().unwrap().len(), 1);
 
         let play_response = server
@@ -3255,6 +3461,46 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bad_mime.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_play_accepts_rtsp_only_when_live() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let rtsp_live = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({
+                "v": PROTOCOL_VERSION,
+                "src": "rtsp://example.test:554/stream",
+                "mime": "application/x-rtsp",
+                "isLive": true,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rtsp_live.status(), StatusCode::OK);
+
+        let rtsp_not_live = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({
+                "v": PROTOCOL_VERSION,
+                "src": "rtsp://example.test:554/stream",
+                "mime": "application/x-rtsp",
+                "isLive": false,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rtsp_not_live.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
