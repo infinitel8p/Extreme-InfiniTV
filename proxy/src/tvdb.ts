@@ -85,6 +85,62 @@ export async function searchByName(
   return getJson<Array<Record<string, unknown>>>(env, `/search?${params}`)
 }
 
+export interface TvdbFilterRecord {
+  id?: number | null
+  name?: string | null
+  image?: string | null
+  year?: string | number | null
+  score?: number | null
+  remoteIds?: Array<{ id?: string | number | null; sourceName?: string | null }> | null
+}
+
+/** Base records only, no translations query - one score-desc page per year for /v1/trending. */
+export async function filterTrending(
+  env: TvdbEnv,
+  kind: TvdbKind,
+  year: number,
+  language: string
+): Promise<TvdbFilterRecord[] | null> {
+  const collection = kind === "movie" ? "movies" : "series"
+  const params = new URLSearchParams({
+    sort: "score",
+    sortType: "desc",
+    year: String(year),
+    country: "usa",
+    lang: language,
+  })
+  return getJson<TvdbFilterRecord[]>(env, `/${collection}/filter?${params}`)
+}
+
+export interface TvdbArtworkTypeRecord {
+  id?: number | null
+  name?: string | null
+  recordType?: string | null
+}
+
+// Ids drift by catalog, never by request; per-isolate so concurrent lookups share one call.
+let artworkTypesPromise: Promise<TvdbArtworkTypeRecord[] | null> | null = null
+
+function getArtworkTypes(env: TvdbEnv): Promise<TvdbArtworkTypeRecord[] | null> {
+  if (!artworkTypesPromise) {
+    artworkTypesPromise = getJson<TvdbArtworkTypeRecord[]>(env, "/artwork/types")
+  }
+  return artworkTypesPromise
+}
+
+/** Resolves the numeric Clearlogo artwork-type id by name instead of guessing it. */
+export async function getClearLogoArtworkTypeId(env: TvdbEnv, kind: TvdbKind): Promise<number | null> {
+  const recordType = kind === "movie" ? "movie" : "series"
+  const types = await getArtworkTypes(env).catch(() => null)
+  const match = (types || []).find(
+    (type) =>
+      String(type?.recordType ?? "").toLowerCase() === recordType &&
+      String(type?.name ?? "").toLowerCase() === "clearlogo"
+  )
+  const id = Number(match?.id)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
 export async function getExtendedRecord(
   env: TvdbEnv,
   kind: TvdbKind,
