@@ -1794,6 +1794,7 @@
   "tv.home.liveNow": "現在: {title} · {range}",
   "tv.live.noGuide": "このチャンネルの番組表はありません。",
   "tv.player.unavailable": "再生を開始できませんでした。",
+  "tv.osd.channelNotFound": "チャンネルなし",
   "tv.login.subtitle": "プレイリストのリンクを貼り付けるか、下にプロバイダーの情報を入力してください。",
   "tv.login.field.pasteLink": "プレイリストのリンクを貼り付け",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",

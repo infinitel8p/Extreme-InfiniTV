@@ -1794,6 +1794,7 @@
   "tv.home.liveNow": "现在：{title} · {range}",
   "tv.live.noGuide": "此频道暂无节目指南。",
   "tv.player.unavailable": "无法开始播放。",
+  "tv.osd.channelNotFound": "无此频道",
   "tv.login.subtitle": "粘贴播放列表链接，或在下方输入服务商信息。",
   "tv.login.field.pasteLink": "粘贴播放列表链接",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",

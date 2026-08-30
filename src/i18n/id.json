@@ -1794,6 +1794,7 @@
   "tv.home.liveNow": "Sekarang: {title} · {range}",
   "tv.live.noGuide": "Tidak ada panduan acara untuk saluran ini.",
   "tv.player.unavailable": "Tidak dapat memulai pemutaran.",
+  "tv.osd.channelNotFound": "Tidak ada saluran",
   "tv.login.subtitle": "Tempel tautan playlist, atau masukkan detail penyedia Anda di bawah.",
   "tv.login.field.pasteLink": "Tempel tautan playlist",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",

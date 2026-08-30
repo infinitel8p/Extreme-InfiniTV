@@ -1794,6 +1794,7 @@
   "tv.home.liveNow": "الآن: {title} · {range}",
   "tv.live.noGuide": "لا يوجد دليل برامج لهذه القناة.",
   "tv.player.unavailable": "تعذّر بدء التشغيل.",
+  "tv.osd.channelNotFound": "لا توجد قناة",
   "tv.login.subtitle": "الصق رابط قائمة تشغيل، أو أدخل بيانات مزوّدك أدناه.",
   "tv.login.field.pasteLink": "الصق رابط قائمة تشغيل",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",

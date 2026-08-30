@@ -1794,6 +1794,7 @@
   "tv.home.liveNow": "Сейчас: {title} · {range}",
   "tv.live.noGuide": "Для этого канала нет программы.",
   "tv.player.unavailable": "Не удалось начать воспроизведение.",
+  "tv.osd.channelNotFound": "Нет канала",
   "tv.login.subtitle": "Вставьте ссылку на плейлист или введите данные провайдера ниже.",
   "tv.login.field.pasteLink": "Вставьте ссылку на плейлист",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",

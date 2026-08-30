@@ -12,6 +12,7 @@ import {
 } from "@/scripts/receiver/engines"
 import {
   playWithFallback,
+  selectEngine,
   type EngineRegistry,
   type ReceiverEnginePreference,
 } from "@/scripts/receiver/engine-select"
@@ -42,10 +43,14 @@ import {
   type SiblingChannelInput,
   type ThrottledProgressWriter,
 } from "@/scripts/tv/playback-progress"
+import { createOsd, type OsdHandle, type OsdLiveChannel } from "@/scripts/tv/ui/osd"
+import { resolveZapTarget } from "@/scripts/tv/osd-zap"
 
 const PROGRESS_WRITE_INTERVAL_MS = 5000
 const SEEK_STEP_SECONDS = 10
-const SEEK_FLASH_HIDE_MS = 900
+const ZAP_IDLE_COMMIT_MS = 1500
+// Guards against a runaway digit buffer; no real channel list needs more than this many digits.
+const ZAP_MAX_DIGITS = 6
 
 export interface TvLiveChannel {
   id: string | number
@@ -56,6 +61,7 @@ export interface TvLiveChannel {
   referer?: string | null
   tvgId?: string | null
   tvgShift?: number | null
+  chno?: number | null
 }
 
 export interface TvPlayLiveInput {
@@ -117,11 +123,14 @@ interface ActiveLiveTarget {
   initialChannelId: string
   currentChannelId: string
   siblingsById: Map<string, { name: string; logo: string | null }>
+  channels: TvLiveChannel[]
+  channelInfo: OsdLiveChannel
 }
 
 let playerDom: EmbeddedEngineDom | null = null
-let seekFlashEl: HTMLElement | null = null
-let seekFlashTimer: ReturnType<typeof setTimeout> | null = null
+let osd: OsdHandle | null = null
+let zapDigits = ""
+let zapIdleTimer: ReturnType<typeof setTimeout> | null = null
 let registryInstance: EngineRegistry | null = null
 let activeEngine: ReceiverEngine | null = null
 let lastPlayAttempt: (() => Promise<boolean>) | null = null
@@ -134,31 +143,110 @@ let currentKnownDurationSeconds: number | undefined
 let activeProgressTarget: ActiveProgressTarget | null = null
 let activeLiveTarget: ActiveLiveTarget | null = null
 let sessionErrorToasted = false
+let embeddedPresentationActive = false
 
-function showSeekFlash(deltaSeconds: number): void {
-  if (!seekFlashEl) return
-  seekFlashEl.textContent = (deltaSeconds > 0 ? "+" : "-") + Math.abs(deltaSeconds) + "s"
-  seekFlashEl.classList.remove("hidden")
-  if (seekFlashTimer) clearTimeout(seekFlashTimer)
-  seekFlashTimer = setTimeout(() => seekFlashEl?.classList.add("hidden"), SEEK_FLASH_HIDE_MS)
+function isEmbeddedActive(): boolean {
+  return !!activeEngine && !!registryInstance && activeEngine === registryInstance.embedded
+}
+
+function showLiveBannerForCurrentChannel(): void {
+  if (!activeLiveTarget) return
+  osd?.showLiveBanner(activeLiveTarget.playlistId, activeLiveTarget.channelInfo)
+}
+
+function clearZapIdleTimer(): void {
+  if (zapIdleTimer) {
+    clearTimeout(zapIdleTimer)
+    zapIdleTimer = null
+  }
+}
+
+function cancelZap(): void {
+  clearZapIdleTimer()
+  zapDigits = ""
+  osd?.hideZap()
+}
+
+function commitZap(): void {
+  clearZapIdleTimer()
+  const digits = zapDigits
+  zapDigits = ""
+  if (!digits || !activeLiveTarget) return
+  const resolved = resolveZapTarget(digits, activeLiveTarget.channels)
+  if (!resolved) {
+    osd?.showZapMiss(digits)
+    return
+  }
+  osd?.hideZap()
+  const events = currentEvents ?? {}
+  void playLive(
+    { playlistId: activeLiveTarget.playlistId, channel: resolved, siblings: activeLiveTarget.channels },
+    events
+  )
+}
+
+function appendZapDigit(digit: string): void {
+  osd?.hideLiveBanner()
+  zapDigits = (zapDigits + digit).slice(-ZAP_MAX_DIGITS)
+  osd?.showZapDigits(zapDigits)
+  clearZapIdleTimer()
+  zapIdleTimer = setTimeout(commitZap, ZAP_IDLE_COMMIT_MS)
 }
 
 function handleKeydown(event: KeyboardEvent): void {
+  const key = event.key
+  // Zapping stays live through the mount gap, when the player is on screen but has no engine yet.
+  if (!activeEngine && embeddedPresentationActive && currentIsLive && /^[0-9]$/.test(key)) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    appendZapDigit(key)
+    return
+  }
   if (!activeEngine) return
   if (document.activeElement === playerDom?.errorRetryEl) return
-  const key = event.key
+  const embeddedLive = isEmbeddedActive() && currentIsLive
+
+  if (embeddedLive && /^[0-9]$/.test(key)) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    appendZapDigit(key)
+    return
+  }
+  if (embeddedLive && zapDigits && (key === "Enter" || key === " ")) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    commitZap()
+    return
+  }
+  if (embeddedLive && zapDigits && (key === "Escape" || key === "GoBack" || key === "BrowserBack")) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    cancelZap()
+    return
+  }
   if (key === "Enter" || key === " " || key === "MediaPlayPause") {
     event.preventDefault()
     event.stopImmediatePropagation()
     activeEngine.control(currentPlaybackState === "paused" ? "resume" : "pause")
+    if (isEmbeddedActive()) {
+      if (currentIsLive) showLiveBannerForCurrentChannel()
+      else osd?.showVodScrub(currentPositionSeconds, currentKnownDurationSeconds)
+    }
     return
   }
   if (!currentIsLive && (key === "ArrowLeft" || key === "ArrowRight")) {
     event.preventDefault()
     event.stopImmediatePropagation()
     const delta = key === "ArrowLeft" ? -SEEK_STEP_SECONDS : SEEK_STEP_SECONDS
-    activeEngine.control("seek", Math.max(0, currentPositionSeconds + delta))
-    showSeekFlash(delta)
+    const target = Math.max(0, currentPositionSeconds + delta)
+    activeEngine.control("seek", target)
+    if (isEmbeddedActive()) osd?.showVodScrub(target, currentKnownDurationSeconds, delta)
+    return
+  }
+  if (embeddedLive && !zapDigits && (key === "ArrowUp" || key === "ArrowDown")) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    showLiveBannerForCurrentChannel()
     return
   }
   if (key === "Escape" || key === "GoBack" || key === "BrowserBack") {
@@ -190,7 +278,6 @@ function ensureDom(): EmbeddedEngineDom {
         </svg>
       </div>
     </div>
-    <div id="tv-player-seek-flash" class="hidden absolute bottom-10 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-5 py-2 text-lg tabular-nums text-white/90"></div>
     <div id="tv-player-error" class="hidden absolute inset-0 flex items-center justify-center px-6">
       <div class="flex max-w-md flex-col items-center gap-3 rounded-2xl border border-line bg-surface p-8 text-center">
         <p id="tv-player-error-title" class="text-xl font-semibold text-fg"></p>
@@ -206,7 +293,7 @@ function ensureDom(): EmbeddedEngineDom {
   if (errorRetryEl) errorRetryEl.textContent = t("receiver.error.retry")
   errorRetryEl?.addEventListener("click", () => { void lastPlayAttempt?.() })
 
-  seekFlashEl = host.querySelector<HTMLElement>("#tv-player-seek-flash")
+  osd = createOsd(host)
 
   playerDom = {
     idleEl: null,
@@ -278,10 +365,13 @@ function handleSessionEnded(): void {
   activeEngine = null
   activeProgressTarget = null
   activeLiveTarget = null
+  embeddedPresentationActive = false
   currentIsLive = false
   currentPlaybackState = "idle"
   currentKnownDurationSeconds = undefined
   setKeepScreenOn(false)
+  cancelZap()
+  osd?.hideAll()
   const events = currentEvents
   currentEvents = null
   restoreFocusAfterPlayback()
@@ -346,6 +436,7 @@ async function startSession(descriptor: CastDescriptorV1, session: StartSessionI
 
   activeEngine?.teardown()
   activeEngine = null
+  cancelZap()
   currentEvents = session.events
   activeProgressTarget = session.progressTarget ?? null
   activeLiveTarget = session.liveTarget ?? null
@@ -355,8 +446,17 @@ async function startSession(descriptor: CastDescriptorV1, session: StartSessionI
   currentKnownDurationSeconds = undefined
   sessionErrorToasted = false
 
+  const preference = getReceiverEngine() as ReceiverEnginePreference
+  // The embedded engine only unhides the host once artplayer/hls.js have mounted, which is seconds
+  // on a TV: reveal up front so the tune shows its loading state and banner right away.
+  if (selectEngine(registry, descriptor, preference) === registry.embedded) {
+    embeddedPresentationActive = true
+    ensureDom().playerViewEl?.classList.remove("hidden")
+    if (currentIsLive) showLiveBannerForCurrentChannel()
+  }
+
   const { started } = await playWithFallback(registry, descriptor, {
-    preference: getReceiverEngine() as ReceiverEnginePreference,
+    preference,
     start: async (engine, candidateDescriptor, playOptions) => {
       const success = await engine.play(candidateDescriptor, playOptions)
       if (success) activeEngine = engine
@@ -370,6 +470,9 @@ async function startSession(descriptor: CastDescriptorV1, session: StartSessionI
   currentEvents = null
   activeProgressTarget = null
   activeLiveTarget = null
+  embeddedPresentationActive = false
+  osd?.hideAll()
+  ensureDom().playerViewEl?.classList.add("hidden")
   restoreFocusAfterPlayback()
   return failPlayback()
 }
@@ -425,18 +528,32 @@ export async function playLive(input: TvPlayLiveInput, events: TvPlaybackEvents 
       name: input.channel.name || "",
     })
 
+    const siblingIndex = input.siblings.findIndex((candidate) => String(candidate.id) === String(input.channel.id))
+    const channelNumber = input.channel.chno ?? (siblingIndex >= 0 ? siblingIndex + 1 : null)
+
     const liveTarget: ActiveLiveTarget = {
       playlistId: input.playlistId,
       initialChannelId: String(input.channel.id),
       currentChannelId: String(input.channel.id),
       siblingsById: new Map(siblingInputs.map((channel) => [String(channel.id), { name: channel.name, logo: channel.logo ?? null }])),
+      channels: input.siblings,
+      channelInfo: {
+        id: input.channel.id,
+        name: input.channel.name || resolved.channel?.name || "",
+        logo: input.channel.logo ?? resolved.channel?.logo ?? null,
+        number: channelNumber,
+        tvgId: input.channel.tvgId ?? null,
+        tvgShift: input.channel.tvgShift ?? null,
+      },
     }
 
-    return startSession(resolved.descriptor, {
+    const started = await startSession(resolved.descriptor, {
       events,
       liveTarget,
       playOptions: liveContextResult ? { liveContext: liveContextResult } : undefined,
     })
+    if (started && isEmbeddedActive() && !osd?.liveBannerVisible()) showLiveBannerForCurrentChannel()
+    return started
   })
 }
 

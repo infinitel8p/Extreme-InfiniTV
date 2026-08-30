@@ -1794,6 +1794,7 @@
   "tv.home.liveNow": "Şimdi: {title} · {range}",
   "tv.live.noGuide": "Bu kanal için yayın rehberi yok.",
   "tv.player.unavailable": "Oynatma başlatılamadı.",
+  "tv.osd.channelNotFound": "Kanal yok",
   "tv.login.subtitle": "Bir oynatma listesi bağlantısı yapıştırın veya aşağıya sağlayıcı bilgilerinizi girin.",
   "tv.login.field.pasteLink": "Oynatma listesi bağlantısı yapıştırın",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",

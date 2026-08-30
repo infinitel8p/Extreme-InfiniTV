@@ -1794,6 +1794,7 @@
   "tv.home.liveNow": "अभी: {title} · {range}",
   "tv.live.noGuide": "इस चैनल के लिए कोई प्रोग्राम गाइड नहीं।",
   "tv.player.unavailable": "प्लेबैक शुरू नहीं हो सका।",
+  "tv.osd.channelNotFound": "कोई चैनल नहीं",
   "tv.login.subtitle": "प्लेलिस्ट लिंक पेस्ट करें, या नीचे अपने प्रदाता का विवरण दर्ज करें।",
   "tv.login.field.pasteLink": "प्लेलिस्ट लिंक पेस्ट करें",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",

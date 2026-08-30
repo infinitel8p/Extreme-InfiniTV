@@ -1794,6 +1794,7 @@
   "tv.home.liveNow": "Ahora: {title} · {range}",
   "tv.live.noGuide": "No hay guía para este canal.",
   "tv.player.unavailable": "No se pudo iniciar la reproducción.",
+  "tv.osd.channelNotFound": "Sin canal",
   "tv.login.subtitle": "Pega un enlace de la lista, o introduce los datos de tu proveedor a continuación.",
   "tv.login.field.pasteLink": "Pega un enlace de lista",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",

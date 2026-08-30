@@ -1794,6 +1794,7 @@
   "tv.home.liveNow": "Now: {title} · {range}",
   "tv.live.noGuide": "No programme guide for this channel.",
   "tv.player.unavailable": "Couldn't start playback.",
+  "tv.osd.channelNotFound": "No channel",
   "tv.login.subtitle": "Paste a playlist link, or enter your provider's details below.",
   "tv.login.field.pasteLink": "Paste a playlist link",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
