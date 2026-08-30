@@ -1,7 +1,7 @@
 // Live TV: groups | channels | programme guide, three spatial-nav columns.
 import type { TvView, TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n"
-import { registerFocusSection, keepFocusedInView, refreshKeepInView, remPx } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
 import { releaseCachedImages } from "@/scripts/lib/img-cache.ts"
 import { getActiveEntry } from "@/scripts/lib/creds.js"
 import { resolvePlaylistCreds } from "@/scripts/lib/tv-cast-live.js"
@@ -19,41 +19,61 @@ import {
   getViewSort,
 } from "@/scripts/lib/preferences.js"
 import { buildCastChannelGroups, searchCastChannels, type CastChannelGroup } from "@/scripts/lib/tv-cast-channel-list"
-import { getProgrammesSync, loadProgrammes, effectiveTvgId, EPG_LOADED_EVENT, EPG_OFFSET_EVENT } from "@/scripts/lib/epg-data.js"
-import { computeNowNext, programmesForDay, type Programme } from "@/scripts/lib/now-next"
+import {
+  getProgrammesSync,
+  loadProgrammes,
+  getProgrammesForChannel,
+  effectiveTvgId,
+  EPG_LOADED_EVENT,
+  EPG_OFFSET_EVENT,
+} from "@/scripts/lib/epg-data.js"
+import { epgLoadWindow, epgLoadMode, EPG_NOW_NEXT_REFRESH_MS } from "@/scripts/tv/motion"
+import { computeNowNext, programmesForDay, type Programme, type NowNextSlot } from "@/scripts/lib/now-next"
+import {
+  tvEpgSource,
+  toXtreamCreds,
+  tvShortEpgCache,
+  shortEpgNowNextSlot,
+  shortEpgToGuideProgrammes,
+  nowNextFromProgrammes,
+  TV_EPG_SOURCE_CHANGED_EVENT,
+  type TvEpgSource,
+} from "@/scripts/tv/epg-source"
+import type { XtreamCreds, ShortEpgNowNext } from "@/scripts/lib/short-epg.ts"
 import { openProgrammeDialog } from "@/scripts/lib/programme-dialog.js"
 import { debounce } from "@/scripts/lib/debounce"
 import { ICON_SEARCH } from "@/scripts/lib/icons.js"
 import { playLive, playCatchup } from "@/scripts/tv/playback"
 import { attachLongPress, type LongPressHandle } from "@/scripts/tv/long-press.ts"
 import { createActionSheet, type ActionSheetHandle } from "@/scripts/tv/ui/action-sheet.ts"
+import { createVirtualRows, type VirtualRowsHandle } from "@/scripts/tv/ui/virtual-rows"
 import {
   type LiveChannel,
   type GuideStatus,
   buildGroupButton,
   buildChannelRowSkeleton,
   buildChannelRow,
-  buildGuideHero,
-  buildUpNextHeading,
-  buildGuideRowSkeleton,
-  buildGuideRow,
+  createGuidePanel,
+  type GuidePanelHandle,
 } from "@/scripts/tv/ui/live-row"
 
-const RENDER_CHUNK = 40
-// Rows past this are dropped from the DOM as the D-pad walks on; a 10k-channel group
-// would otherwise end up fully mounted (~25 nodes plus 2 logo <img> per row).
-const MAX_RENDERED_ROWS = 160
 const SEARCH_DEBOUNCE_MS = 140
-const GUIDE_DEBOUNCE_MS = 120
+const GUIDE_DEBOUNCE_MS = 60
 const TICK_INTERVAL_MS = 60_000
+const EPG_GUARD_TIMEOUT_MS = 4000
 const SKELETON_ROW_COUNT = 8
 const LAST_CHANNEL_KEY = "xt_tv_last_channel"
 const GROUPS_KEEP_IN_VIEW_REM = 7.5
+const CHANNELS_KEEP_IN_VIEW_FRACTION = 0.35
 const GUIDE_KEEP_IN_VIEW_REM = 8.75
 const LONG_PRESS_HOLD_MS = 650
 const FAVORITES_CHANGED_EVENT = "xt:favorites-changed"
+const CHANNEL_ROW_FALLBACK_HEIGHT_REM = 4.5
+const CHANNEL_ROW_GAP_REM = 0.5
+const CHANNEL_ROW_OVERSCAN = 6
 // Below this the "next" title column would crowd out the channel name; live-row.ts owns the CSS toggle.
 const NEXT_TITLE_MIN_COLUMN_REM = 26
+const GUIDE_DAY_CACHE_MAX = 10
 
 interface ViewState {
   playlistId: string
@@ -63,10 +83,9 @@ interface ViewState {
   activeGroupKey: string
   displayed: LiveChannel[]
   searchQuery: string
-  firstRendered: number
-  rendered: number
   playingChannelId: string | null
   guideChannel: LiveChannel | null
+  epgResolved: boolean
   destroyed: boolean
 }
 
@@ -102,7 +121,7 @@ function buildShellMarkup(): string {
                  class="w-full rounded-2xl bg-transparent text-sm outline-none placeholder:text-fg-3" />
         </div>
         <div data-role="channels-scroller" class="min-h-0 flex-1 overflow-hidden py-2">
-          <div data-role="channels-track" class="flex flex-col gap-2"></div>
+          <div data-role="channels-track" class="relative flex flex-col gap-2"></div>
         </div>
         <p data-role="channels-status" class="hidden shrink-0 pt-3 text-center text-sm text-fg-3" role="status"></p>
       </div>
@@ -144,19 +163,35 @@ const view: TvView = {
       activeGroupKey: "",
       displayed: [],
       searchQuery: "",
-      firstRendered: 0,
-      rendered: 0,
       playingChannelId: null,
       guideChannel: null,
+      epgResolved: false,
       destroyed: false,
     }
 
     const unsubs: Array<() => void> = []
     let refs: Refs | null = null
-    let observer: IntersectionObserver | null = null
+    let channelRows: VirtualRowsHandle<LiveChannel> | null = null
+    let guidePanel: GuidePanelHandle | null = null
     let tickTimer: ReturnType<typeof setInterval> | null = null
+    let epgGuardTimer: ReturnType<typeof setTimeout> | null = null
     const actionSheet: ActionSheetHandle = createActionSheet("tv-live-channel-actions-dialog")
     let longPress: LongPressHandle | null = null
+
+    // now-next mode: today's full lineup for the guided channel is fetched on demand
+    // (the shared EPG state only carries the airing + upcoming programme) and kept
+    // for the last few focused channels; cleared on teardown and on periodic refresh.
+    const epgMode = epgLoadMode()
+    const dayProgrammesCache = new Map<string, Programme[]>()
+    const fetchingDayProgrammes = new Set<string>()
+    let epgRefreshTimer: ReturnType<typeof setInterval> | null = null
+
+    // Memory-conservative TVs on an Xtream playlist read from the per-channel short-EPG
+    // client instead of the bulk XMLTV feed; resolved once creds are known, in boot().
+    let epgSource: TvEpgSource = "xmltv-full"
+    let xtreamCreds: XtreamCreds | null = null
+    const shortEpgCache = tvShortEpgCache()
+    const shortEpgRowNowNext = new Map<string, ShortEpgNowNext>()
 
     try {
       state.playingChannelId = sessionStorage.getItem(LAST_CHANNEL_KEY)
@@ -172,93 +207,38 @@ const view: TvView = {
       const nowLine = row.querySelector<HTMLElement>('[data-role="now"]')
       const nextLine = row.querySelector<HTMLElement>('[data-role="next"]')
       const progressFill = row.querySelector<HTMLElement>('[data-role="progress"]')
-      const { current, next } = computeNowNext(programmes, channel, state.playlistId)
+      const { current, next } =
+        epgSource === "short-epg"
+          ? shortEpgNowNextSlot(shortEpgRowNowNext.get(String(channel.id)) ?? null)
+          : computeNowNext(programmes, channel, state.playlistId)
       if (nowLine) nowLine.textContent = current?.title || ""
       if (nextLine) nextLine.textContent = next?.title || ""
-      if (progressFill) progressFill.style.width = current ? `${current.progress * 100}%` : "0%"
+      if (progressFill) progressFill.style.transform = `scaleX(${current ? current.progress : 0})`
     }
 
-    function buildRowsFragment(start: number, end: number): DocumentFragment {
+    function requestShortEpgRowNowNext(channel: LiveChannel): void {
+      if (!xtreamCreds) return
+      const key = String(channel.id)
+      void shortEpgCache.getNowNext(xtreamCreds, channel.id).then((nowNext) => {
+        if (state.destroyed || !nowNext) return
+        shortEpgRowNowNext.set(key, nowNext)
+        const rowEl = channelRows?.rowForKey(key)
+        if (rowEl) paintChannelRow(rowEl, channel, null)
+      })
+    }
+
+    function buildAndPaintChannelRow(channel: LiveChannel, index: number): HTMLElement {
       const programmes = getProgrammesSync(state.playlistId)?.programmes ?? null
-      const fragment = document.createDocumentFragment()
-      for (let index = start; index < end; index++) {
-        const channel = state.displayed[index]
-        const row = buildChannelRow(channel, index, String(channel.id) === state.playingChannelId, channelFavorite(channel))
-        paintChannelRow(row, channel, programmes)
-        fragment.appendChild(row)
-      }
-      return fragment
-    }
-
-    function dropRow(row: HTMLElement): void {
-      releaseCachedImages(row)
-      row.remove()
-    }
-
-    function trimRenderedRows(from: "head" | "tail"): void {
-      if (!refs) return
-      let excess = state.rendered - state.firstRendered - MAX_RENDERED_ROWS
-      if (excess <= 0) return
-      const rows = Array.from(refs.channelsTrack.querySelectorAll<HTMLElement>("[data-channel-id]"))
-      const ordered = from === "head" ? rows : rows.reverse()
-      for (const row of ordered) {
-        if (excess <= 0 || row.contains(document.activeElement)) break
-        dropRow(row)
-        excess--
-        if (from === "head") state.firstRendered++
-        else state.rendered--
-      }
-      refreshKeepInView(refs.channelsScroller)
-    }
-
-    function observeSentinel(): void {
-      observer?.disconnect()
-      if (!refs || state.rendered >= state.displayed.length) return
-      const sentinel = refs.channelsTrack.querySelector('[data-role="channels-sentinel"]')
-      if (sentinel) observer?.observe(sentinel)
-    }
-
-    function renderChannelChunk(): void {
-      if (!refs) return
-      const items = state.displayed
-      if (state.rendered >= items.length) return
-      const end = Math.min(state.rendered + RENDER_CHUNK, items.length)
-      const fragment = buildRowsFragment(state.rendered, end)
-      state.rendered = end
-      const sentinel = refs.channelsTrack.querySelector('[data-role="channels-sentinel"]')
-      if (sentinel) refs.channelsTrack.insertBefore(fragment, sentinel)
-      else refs.channelsTrack.appendChild(fragment)
-      if (state.rendered >= items.length) sentinel?.remove()
-      trimRenderedRows("head")
-      observeSentinel()
-    }
-
-    function renderPreviousChunk(): void {
-      if (!refs || state.firstRendered <= 0) return
-      const start = Math.max(0, state.firstRendered - RENDER_CHUNK)
-      const fragment = buildRowsFragment(start, state.firstRendered)
-      state.firstRendered = start
-      refs.channelsTrack.insertBefore(fragment, refs.channelsTrack.firstChild)
-      trimRenderedRows("tail")
-      refreshKeepInView(refs.channelsScroller)
-      window.SpatialNavigation?.makeFocusable?.()
+      const row = buildChannelRow(channel, index, String(channel.id) === state.playingChannelId, channelFavorite(channel))
+      paintChannelRow(row, channel, programmes)
+      if (epgSource === "short-epg") requestShortEpgRowNowNext(channel)
+      return row
     }
 
     function renderChannelList(items: LiveChannel[], startIndex = 0): void {
       if (!refs) return
       state.displayed = items
-      const target = Math.max(0, Math.min(startIndex, Math.max(0, items.length - 1)))
-      state.firstRendered = Math.max(0, target - Math.floor(MAX_RENDERED_ROWS / 2))
-      state.rendered = state.firstRendered
-      const sentinel = document.createElement("div")
-      sentinel.dataset.role = "channels-sentinel"
-      sentinel.className = "h-4"
-      releaseCachedImages(refs.channelsTrack)
-      refs.channelsTrack.replaceChildren(sentinel)
-      do {
-        renderChannelChunk()
-      } while (state.rendered <= target && state.rendered < items.length)
-      refs.channelsScroller.scrollTop = 0
+      channelRows?.setItems(items, startIndex)
       refs.channelsStatus.classList.toggle("hidden", items.length > 0)
       refs.channelsStatus.textContent = items.length
         ? ""
@@ -288,7 +268,7 @@ const view: TvView = {
         button.dataset.active = button.dataset.groupKey === key ? "true" : "false"
       }
       renderChannelList(group.channels)
-      if (options.focus) refs.channelsTrack.querySelector<HTMLElement>("[data-channel-id]")?.focus()
+      if (options.focus) channelRows?.focusIndex(0)
     }
 
     function onGuideReplay(channel: LiveChannel, programme: Programme, rawStart: number, rawStop: number): void {
@@ -317,44 +297,98 @@ const view: TvView = {
       })
     }
 
-    function renderGuide(channel: LiveChannel | null): void {
-      if (!refs) return
-      state.guideChannel = channel
-      releaseCachedImages(refs.guideTrack)
-      refs.guideTrack.replaceChildren()
-      if (!channel) return
+    function todayWindow(): { fromMs: number; toMs: number } {
+      const fromMs = startOfToday()
+      return { fromMs, toMs: fromMs + 24 * 60 * 60 * 1000 }
+    }
 
-      const epgState = getProgrammesSync(state.playlistId)
-      const tvgId = epgState ? effectiveTvgId(channel, state.playlistId) : null
-      const dayProgrammes = epgState && tvgId ? epgState.programmes.get(tvgId) : undefined
-      const rows = programmesForDay(dayProgrammes, startOfToday())
-      const nowMs = Date.now()
-      const nowNext = epgState ? computeNowNext(epgState.programmes, channel, state.playlistId, nowMs) : { current: null, next: null }
+    function rememberDayProgrammes(tvgId: string, programmes: Programme[]): void {
+      dayProgrammesCache.delete(tvgId)
+      dayProgrammesCache.set(tvgId, programmes)
+      if (dayProgrammesCache.size > GUIDE_DAY_CACHE_MAX) {
+        const oldest = dayProgrammesCache.keys().next().value
+        if (oldest !== undefined) dayProgrammesCache.delete(oldest)
+      }
+    }
+
+    // now-next mode's shared EPG state has no full-day array to read - fetch it per
+    // channel and repaint once it lands. The result is cached (and repaints the
+    // guide) even if focus moved on meanwhile, since it's cheap to keep around.
+    function requestDayProgrammes(channel: LiveChannel, tvgId: string): void {
+      if (fetchingDayProgrammes.has(tvgId)) return
+      fetchingDayProgrammes.add(tvgId)
+      void getProgrammesForChannel(state.playlistId, tvgId, todayWindow()).then((programmes) => {
+        fetchingDayProgrammes.delete(tvgId)
+        if (state.destroyed) return
+        rememberDayProgrammes(tvgId, programmes)
+        if (state.guideChannel === channel) renderGuide(channel, false)
+      })
+    }
+
+    function paintGuide(channel: LiveChannel, rows: Programme[], nowNext: NowNextSlot, nowMs: number, pending: boolean, animate: boolean): void {
       const currentFull = nowNext.current
         ? (rows.find((row) => row.start === nowNext.current!.start && row.stop === nowNext.current!.stop) ?? null)
         : null
+      const status: GuideStatus = rows.length ? "ready" : pending ? "loading" : "empty"
+      const upcoming = currentFull ? rows.filter((row) => row !== currentFull) : rows
 
-      const status: GuideStatus = !epgState ? "loading" : rows.length ? "ready" : "empty"
-      refs.guideTrack.appendChild(
-        buildGuideHero(channel, status, currentFull, nowNext.current?.progress ?? 0, channelFavorite(channel), () =>
-          toggleChannelFavorite(channel)
-        )
-      )
+      guidePanel!.update({
+        channel,
+        status,
+        current: currentFull,
+        currentProgress: nowNext.current?.progress ?? 0,
+        favorite: channelFavorite(channel),
+        upcoming,
+        nowMs,
+        animate,
+      })
+    }
 
-      if (status === "loading") {
-        const skeletons = document.createDocumentFragment()
-        for (let i = 0; i < 3; i++) skeletons.appendChild(buildGuideRowSkeleton())
-        refs.guideTrack.appendChild(skeletons)
-        return // EPG_LOADED_EVENT repaints once the background load lands
+    // short-epg mode has no bulk XMLTV state at all - the day timeline and the now/next
+    // slot both come from the per-channel Xtream client, cached and refetched like above.
+    function requestShortEpgDayProgrammes(channel: LiveChannel, key: string): void {
+      if (fetchingDayProgrammes.has(key) || !xtreamCreds) return
+      fetchingDayProgrammes.add(key)
+      void shortEpgCache.getProgrammes(xtreamCreds, channel.id).then((rows) => {
+        fetchingDayProgrammes.delete(key)
+        if (state.destroyed) return
+        const mapped = rows ? programmesForDay(shortEpgToGuideProgrammes(rows), startOfToday()) : []
+        rememberDayProgrammes(key, mapped)
+        if (state.guideChannel === channel) renderGuide(channel, false)
+      })
+    }
+
+    function renderGuide(channel: LiveChannel | null, animate = true): void {
+      if (!guidePanel || !channel) return
+      state.guideChannel = channel
+
+      if (epgSource === "short-epg") {
+        const key = String(channel.id)
+        const cachedDay = dayProgrammesCache.get(key)
+        if (!cachedDay) requestShortEpgDayProgrammes(channel, key)
+        const nowMs = Date.now()
+        const nowNext: NowNextSlot = cachedDay ? nowNextFromProgrammes(cachedDay, nowMs) : { current: null, next: null }
+        paintGuide(channel, cachedDay ?? [], nowNext, nowMs, !cachedDay, animate)
+        return
       }
 
-      const upcoming = currentFull ? rows.filter((row) => row !== currentFull) : rows
-      if (!upcoming.length) return
+      const epgState = getProgrammesSync(state.playlistId)
+      const tvgId = epgState ? effectiveTvgId(channel, state.playlistId) : null
+      const nowMs = Date.now()
+      const nowNext: NowNextSlot = epgState
+        ? computeNowNext(epgState.programmes, channel, state.playlistId, nowMs)
+        : { current: null, next: null }
 
-      refs.guideTrack.appendChild(buildUpNextHeading())
-      const fragment = document.createDocumentFragment()
-      for (const programme of upcoming) fragment.appendChild(buildGuideRow(channel, programme, nowMs, onGuideReplay, onGuideDetails))
-      refs.guideTrack.appendChild(fragment)
+      if (epgMode === "now-next") {
+        const cachedDay = tvgId ? dayProgrammesCache.get(tvgId) : undefined
+        if (!cachedDay && tvgId) requestDayProgrammes(channel, tvgId)
+        paintGuide(channel, cachedDay ?? [], nowNext, nowMs, !cachedDay, animate)
+        return
+      }
+
+      const dayProgrammes = epgState && tvgId ? epgState.programmes.get(tvgId) : undefined
+      const rows = programmesForDay(dayProgrammes, startOfToday())
+      paintGuide(channel, rows, nowNext, nowMs, !state.epgResolved, animate)
     }
 
     const scheduleGuideUpdate = debounce((channelId: string) => {
@@ -362,16 +396,25 @@ const view: TvView = {
       if (channel) renderGuide(channel)
     }, GUIDE_DEBOUNCE_MS)
 
+    function markEpgResolved(): void {
+      if (state.destroyed || state.epgResolved) return
+      state.epgResolved = true
+      if (epgGuardTimer) {
+        clearTimeout(epgGuardTimer)
+        epgGuardTimer = null
+      }
+      if (state.guideChannel) renderGuide(state.guideChannel, false)
+    }
+
     function setPlayingChannel(channelId: string, _channelName?: string): void {
       state.playingChannelId = channelId
       try {
         sessionStorage.setItem(LAST_CHANNEL_KEY, channelId)
       } catch {}
-      if (!refs) return
-      for (const row of refs.channelsTrack.querySelectorAll<HTMLElement>("[data-channel-id]")) {
-        if (row.dataset.channelId === channelId) row.dataset.nowPlaying = "true"
-        else delete row.dataset.nowPlaying
-      }
+      channelRows?.forEachMountedRow((rowEl) => {
+        if (rowEl.dataset.channelKey === channelId) rowEl.dataset.nowPlaying = "true"
+        else delete rowEl.dataset.nowPlaying
+      })
     }
 
     function activateChannel(channel: LiveChannel): void {
@@ -394,12 +437,10 @@ const view: TvView = {
     }
 
     function applyFavoriteChange(channelId: string, favorite: boolean): void {
-      if (!refs) return
-      const row = refs.channelsTrack.querySelector<HTMLElement>(`[data-channel-id="${CSS.escape(channelId)}"]`)
+      const row = channelRows?.rowForKey(channelId) ?? null
       row?.querySelector<HTMLElement>('[data-role="fav"]')?.classList.toggle("hidden", !favorite)
       if (state.guideChannel && String(state.guideChannel.id) === channelId) {
-        renderGuide(state.guideChannel)
-        refs.guideTrack.querySelector<HTMLElement>(`[data-focus-key="guide-fav:${channelId}"]`)?.focus()
+        renderGuide(state.guideChannel, false)
       }
     }
 
@@ -436,35 +477,24 @@ const view: TvView = {
     }
 
     function onChannelsFocusIn(event: FocusEvent): void {
-      if (!refs) return
-      const row = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-channel-id]")
-      if (!row) return
-      const rows = refs.channelsTrack.querySelectorAll("[data-channel-id]")
-      if (rows[rows.length - 1] === row) renderChannelChunk()
-      else if (rows[0] === row) renderPreviousChunk()
-      if (row.dataset.channelId) scheduleGuideUpdate(row.dataset.channelId)
+      const row = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-channel-key]")
+      if (row?.dataset.channelKey) scheduleGuideUpdate(row.dataset.channelKey)
     }
 
     function focusChannelRow(channelId: string): void {
-      if (!refs) return
-      let row = refs.channelsTrack.querySelector<HTMLElement>(`[data-channel-id="${CSS.escape(channelId)}"]`)
-      if (!row) {
-        const index = state.displayed.findIndex((candidate) => String(candidate.id) === channelId)
-        if (index < 0) return
-        renderChannelList(state.displayed, index)
-        row = refs.channelsTrack.querySelector<HTMLElement>(`[data-channel-id="${CSS.escape(channelId)}"]`)
-      }
-      row?.focus()
+      channelRows?.focusKey(channelId)
     }
 
     function tick(): void {
-      if (state.destroyed || !refs) return
-      const programmes = getProgrammesSync(state.playlistId)?.programmes ?? null
-      for (const row of refs.channelsTrack.querySelectorAll<HTMLElement>("[data-channel-id]")) {
-        const channel = row.dataset.channelId ? state.channelById.get(row.dataset.channelId) : null
-        if (channel) paintChannelRow(row, channel, programmes)
+      if (state.destroyed) return
+      if (epgSource === "short-epg") {
+        // The shared cache only re-fetches an entry whose TTL has actually expired.
+        channelRows?.forEachMountedRow((_rowEl, channel) => requestShortEpgRowNowNext(channel))
+      } else {
+        const programmes = getProgrammesSync(state.playlistId)?.programmes ?? null
+        channelRows?.forEachMountedRow((rowEl, channel) => paintChannelRow(rowEl, channel, programmes))
       }
-      if (state.guideChannel) renderGuide(state.guideChannel)
+      if (state.guideChannel) renderGuide(state.guideChannel, false)
     }
 
     function applyLocale(): void {
@@ -505,10 +535,27 @@ const view: TvView = {
     }
 
     async function ensureEpgInBackground(): Promise<void> {
+      if (epgSource === "short-epg") return
       if (getProgrammesSync(state.playlistId)) return
       const creds = await resolvePlaylistCreds(state.playlistId)
       if (!creds || state.destroyed) return
-      await loadProgrammes(state.playlistId, creds)
+      await loadProgrammes(state.playlistId, creds, { window: epgLoadWindow(), epgMode })
+    }
+
+    // now-next mode bakes "now" into the parse at load time, so unlike full mode it
+    // needs an active refresh to notice a programme ending - see motion.ts.
+    function startEpgRefreshTimer(): void {
+      if (epgRefreshTimer || epgMode !== "now-next" || epgSource === "short-epg") return
+      epgRefreshTimer = setInterval(() => {
+        void resolvePlaylistCreds(state.playlistId).then((creds) => {
+          if (!creds || state.destroyed) return
+          return loadProgrammes(state.playlistId, creds, { force: true, window: epgLoadWindow(), epgMode }).then(() => {
+            if (state.destroyed) return
+            dayProgrammesCache.clear()
+            tick()
+          })
+        })
+      }, EPG_NOW_NEXT_REFRESH_MS)
     }
 
     function renderCentered(message: string, linkHref?: string, linkLabel?: string): void {
@@ -568,10 +615,27 @@ const view: TvView = {
       unsubs.push(keepFocusedInView(refs.groupsScroller, "y", () => remPx(GROUPS_KEEP_IN_VIEW_REM)))
       unsubs.push(
         keepFocusedInView(refs.channelsScroller, "y", () =>
-          Math.round((refs!.channelsScroller.clientHeight || window.innerHeight) * 0.35)
+          Math.round((refs!.channelsScroller.clientHeight || window.innerHeight) * CHANNELS_KEEP_IN_VIEW_FRACTION)
         )
       )
       unsubs.push(keepFocusedInView(refs.guideScroller, "y", () => remPx(GUIDE_KEEP_IN_VIEW_REM)))
+
+      channelRows = createVirtualRows<LiveChannel>({
+        scroller: refs.channelsScroller,
+        track: refs.channelsTrack,
+        fallbackRowHeightPx: remPx(CHANNEL_ROW_FALLBACK_HEIGHT_REM) + remPx(CHANNEL_ROW_GAP_REM),
+        rowGapPx: remPx(CHANNEL_ROW_GAP_REM),
+        overscan: CHANNEL_ROW_OVERSCAN,
+        keyOf: (channel) => String(channel.id),
+        buildRow: buildAndPaintChannelRow,
+        onRowUnmount: releaseCachedImages,
+      })
+
+      guidePanel = createGuidePanel(refs.guideTrack, {
+        onToggleFavorite: toggleChannelFavorite,
+        onReplay: onGuideReplay,
+        onDetails: onGuideDetails,
+      })
 
       if (typeof ResizeObserver === "function") {
         const channelsResizeObserver = new ResizeObserver((entries) => {
@@ -582,20 +646,11 @@ const view: TvView = {
         unsubs.push(() => channelsResizeObserver.disconnect())
       }
 
-      if (typeof IntersectionObserver !== "undefined") {
-        observer = new IntersectionObserver(
-          (entries) => {
-            if (entries.some((entry) => entry.isIntersecting)) renderChannelChunk()
-          },
-          { root: refs.channelsScroller, rootMargin: "200px" }
-        )
-      }
-
       refs.groupsTrack.addEventListener("click", onGroupsClick)
       longPress = attachLongPress<LiveChannel>({
         container: refs.channelsTrack,
-        targetSelector: "[data-channel-id]",
-        resolveTarget: (row) => (row.dataset.channelId ? (state.channelById.get(row.dataset.channelId) ?? null) : null),
+        targetSelector: "[data-channel-key]",
+        resolveTarget: (row) => (row.dataset.channelKey ? (state.channelById.get(row.dataset.channelKey) ?? null) : null),
         onActivate: activateChannel,
         onLongPress: openChannelActionSheet,
         holdMs: LONG_PRESS_HOLD_MS,
@@ -612,6 +667,7 @@ const view: TvView = {
 
       document.addEventListener(EPG_LOADED_EVENT, onEpgLoaded)
       document.addEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
+      document.addEventListener(TV_EPG_SOURCE_CHANGED_EVENT, onEpgSourceChanged)
       document.addEventListener(LOCALE_EVENT, applyLocale)
       document.addEventListener(FAVORITES_CHANGED_EVENT, onFavoritesChangedEvent)
       tickTimer = setInterval(tick, TICK_INTERVAL_MS)
@@ -620,15 +676,33 @@ const view: TvView = {
     function onEpgLoaded(event: Event): void {
       const detail = (event as CustomEvent).detail
       if (detail?.playlistId && detail.playlistId !== state.playlistId) return
+      markEpgResolved()
       tick()
     }
 
+    // The provider's short-EPG endpoint proved empirically empty - switch to the
+    // streaming XMLTV path exactly as if it had won at boot.
+    function onEpgSourceChanged(event: Event): void {
+      const detail = (event as CustomEvent).detail
+      if (epgSource !== "short-epg" || !detail || detail.playlistId !== state.playlistId) return
+      epgSource = detail.source
+      dayProgrammesCache.clear()
+      void ensureEpgInBackground()
+      startEpgRefreshTimer()
+    }
+
     function onEpgOffsetChanged(event: Event): void {
+      if (epgSource === "short-epg") return
       const detail = (event as CustomEvent).detail
       if (!detail || detail.playlistId !== state.playlistId) return
       void resolvePlaylistCreds(state.playlistId).then((creds) => {
         if (!creds || state.destroyed) return
-        return loadProgrammes(state.playlistId, creds, { force: true })
+        return loadProgrammes(state.playlistId, creds, { force: true, window: epgLoadWindow(), epgMode }).then(() => {
+          if (state.destroyed) return
+          // Cached day arrays carry the old offset baked into start/stop - drop them.
+          dayProgrammesCache.clear()
+          tick()
+        })
       })
     }
 
@@ -640,6 +714,10 @@ const view: TvView = {
         return
       }
       state.playlistId = activeEntry._id
+      const creds = await resolvePlaylistCreds(state.playlistId)
+      if (state.destroyed) return
+      xtreamCreds = creds ? toXtreamCreds(state.playlistId, creds) : null
+      epgSource = tvEpgSource(xtreamCreds)
       renderShell()
 
       const channels = await loadChannels(state.playlistId)
@@ -651,6 +729,9 @@ const view: TvView = {
         renderCentered(t("cast.remote.channelsEmpty"))
         return
       }
+
+      releaseCachedImages(refs!.channelsTrack)
+      refs!.channelsTrack.replaceChildren()
 
       state.groups = await buildGroups()
       if (state.destroyed || !refs) return
@@ -666,9 +747,11 @@ const view: TvView = {
       selectGroup(initialGroupKey)
 
       if (requestedChannel) focusChannelRow(String(requestedChannel.id))
-      else refs.channelsTrack.querySelector<HTMLElement>("[data-channel-id]")?.focus()
+      else channelRows?.focusIndex(0)
 
-      void ensureEpgInBackground()
+      epgGuardTimer = setTimeout(markEpgResolved, EPG_GUARD_TIMEOUT_MS)
+      void ensureEpgInBackground().then(markEpgResolved)
+      startEpgRefreshTimer()
     }
 
     void boot()
@@ -676,10 +759,17 @@ const view: TvView = {
     return () => {
       state.destroyed = true
       if (tickTimer) clearInterval(tickTimer)
+      if (epgGuardTimer) clearTimeout(epgGuardTimer)
+      if (epgRefreshTimer) clearInterval(epgRefreshTimer)
+      dayProgrammesCache.clear()
+      fetchingDayProgrammes.clear()
+      shortEpgRowNowNext.clear()
       longPress?.destroy()
-      observer?.disconnect()
+      channelRows?.destroy()
+      guidePanel?.destroy()
       document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
       document.removeEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
+      document.removeEventListener(TV_EPG_SOURCE_CHANGED_EVENT, onEpgSourceChanged)
       document.removeEventListener(LOCALE_EVENT, applyLocale)
       document.removeEventListener(FAVORITES_CHANGED_EVENT, onFavoritesChangedEvent)
       for (const unsub of unsubs) unsub()
