@@ -21,7 +21,7 @@ import {
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
 import { CANONICAL_GENRES, type GenreId } from "@/scripts/lib/genres.ts"
 import {
-  isTmdbActive,
+  isEnrichmentActive,
   getLanguageGroupingEnabled,
   getContentLanguage,
   LANGUAGE_GROUPING_EVENT,
@@ -496,10 +496,10 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         const options: FilterOption[] = [{ value: "", label: t("list.allCategories") }]
 
         if (genreSets) {
-          const tmdbActive = isTmdbActive()
+          const enrichmentActive = isEnrichmentActive()
           for (const genre of CANONICAL_GENRES) {
             const count = genreSets.get(genre.id)?.size || 0
-            if (!tmdbActive && count === 0) continue
+            if (!enrichmentActive && count === 0) continue
             options.push({ value: GENRE_CAT_PREFIX + genre.id, label: t(genre.labelKey), count })
           }
         }

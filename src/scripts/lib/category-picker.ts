@@ -38,7 +38,7 @@ import {
   getGenreIndex,
   type GenreIndex,
 } from "@/scripts/lib/genre-index.ts"
-import { isTmdbActive } from "@/scripts/lib/app-settings.js"
+import { isEnrichmentActive } from "@/scripts/lib/app-settings.js"
 
 const CAT_FAVORITES = "__favorites__"
 const CAT_RECENTS = "__recents__"
@@ -435,11 +435,11 @@ export function mountCategoryPicker(
     frag.appendChild(addRow("", t("list.allCategories"), null, ""))
 
     if (genreKind) {
-      const tmdbActive = isTmdbActive()
+      const enrichmentActive = isEnrichmentActive()
       const genreEntries = CANONICAL_GENRES.map((genre) => ({
         genre,
         count: genreIndexSnapshot?.sets.get(genre.id)?.size || 0,
-      })).filter((entry) => tmdbActive || entry.count > 0)
+      })).filter((entry) => enrichmentActive || entry.count > 0)
 
       if (genreEntries.length) {
         const header = document.createElement("div")
@@ -462,7 +462,7 @@ export function mountCategoryPicker(
             classified: genreIndexSnapshot.classifiedCount.toLocaleString(),
             total: genreIndexSnapshot.totalCount.toLocaleString(),
           })
-          if (!tmdbActive) {
+          if (!enrichmentActive) {
             const hint = document.createElement("div")
             hint.className = "mt-0.5"
             hint.textContent = t("genres.coverageHint")

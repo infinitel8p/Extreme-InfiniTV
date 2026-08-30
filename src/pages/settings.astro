@@ -79,7 +79,7 @@ const navStructure: NavSection[] = [
     { id: "card-network",          labelKey: "settings.network.title", label: "Network" },
     { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
     { id: "card-casting",          labelKey: "settings.casting.title", label: "Casting", conditional: true },
-    { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "TMDb metadata" },
+    { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "Metadata enrichment" },
     { id: "card-net-log",          labelKey: "settings.netLog.title",  label: "Network log", conditional: true },
   ]},
   { id: "settings-library", labelKey: "settings.group.library", label: "Library", cards: [
@@ -1317,10 +1317,10 @@ const navStructure: NavSection[] = [
             <span class="icon-mark">
               <IconMovie aria-hidden="true" stroke={2} />
             </span>
-            <h3 data-i18n="settings.tmdb.title" class="text-base font-semibold">TMDb metadata</h3>
+            <h3 data-i18n="settings.tmdb.title" class="text-base font-semibold">Metadata enrichment</h3>
           </div>
           <p data-i18n="settings.tmdb.helper" class="settings-surface__helper text-xs text-fg-3">
-            Enrich movies and series with better posters, cast, trailers, and similar titles from The Movie Database.
+            TheTVDB works out of the box for posters, cast, and episode details. Add a TMDb key to also unlock trailers and similar titles.
           </p>
           <div class="settings-rows">
 
@@ -1343,6 +1343,20 @@ const navStructure: NavSection[] = [
                   <button type="button" data-tvdb="off" aria-pressed="false" data-i18n="settings.tmdb.off" class="tvdb-enabled-btn btn">Off</button>
                 </div>
               </div>
+              <script is:inline>
+                try {
+                  var tvdbEnabledRaw = localStorage.getItem("xt_tvdb_enabled");
+                  var tvdbEnabledOn = tvdbEnabledRaw !== "0";
+                  var tvdbEnabledGroup = document.getElementById("settings-tvdb-enabled");
+                  if (tvdbEnabledGroup) {
+                    var tvdbEnabledBtns = tvdbEnabledGroup.querySelectorAll(".tvdb-enabled-btn");
+                    for (var vIdx = 0; vIdx < tvdbEnabledBtns.length; vIdx++) {
+                      var tvdbEnabledBtnOn = tvdbEnabledBtns[vIdx].getAttribute("data-tvdb") === "on";
+                      tvdbEnabledBtns[vIdx].setAttribute("aria-pressed", tvdbEnabledBtnOn === tvdbEnabledOn ? "true" : "false");
+                    }
+                  }
+                } catch (e) {}
+              </script>
             </div>
 
             <!-- Enable enrichment -->
@@ -1350,7 +1364,7 @@ const navStructure: NavSection[] = [
               <div class="settings-row__text">
                 <h3 data-i18n="settings.tmdb.enable" class="text-sm font-medium leading-snug">Enable enrichment</h3>
                 <p data-i18n="settings.tmdb.privacy" class="text-xs text-fg-3">
-                  When enabled, the titles you open are sent to TMDB for matching.
+                  Optional: adds trailers, cast, and similar titles once you add a TMDB key below. Titles you open are sent to TMDB for matching.
                 </p>
               </div>
               <div class="settings-row__control">
@@ -1367,7 +1381,7 @@ const navStructure: NavSection[] = [
               <script is:inline>
                 try {
                   var tmdbEnabledRaw = localStorage.getItem("xt_tmdb_enabled");
-                  var tmdbEnabledOn = tmdbEnabledRaw === "1";
+                  var tmdbEnabledOn = tmdbEnabledRaw !== "0";
                   var tmdbEnabledGroup = document.getElementById("settings-tmdb-enabled");
                   if (tmdbEnabledGroup) {
                     var tmdbEnabledBtns = tmdbEnabledGroup.querySelectorAll(".tmdb-enabled-btn");
