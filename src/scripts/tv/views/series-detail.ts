@@ -27,20 +27,17 @@ import {
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
-import { resolveTmdbId, fetchSeriesEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
 import { parseProviderTmdbId, type TvdbSeasonRef } from "@/scripts/lib/tvdb-proxy.ts"
+import { resolveTitleEnrichmentDetailed } from "@/scripts/lib/enrichment.ts"
 import type { TvdbEpisode } from "@/scripts/lib/tvdb-contract"
 import {
   fillHeroGaps,
-  heroFieldsNeedFill,
-  resolveTvdbFallback,
   resolveTvdbSeason,
   patchEpisodeFromTvdb,
   type DetailHeroFields,
 } from "@/scripts/tv/detail-enrich.ts"
 import { isGenericEpisodeTitle } from "@/scripts/lib/episode-title.ts"
 import {
-  isTmdbActive,
   LANGUAGE_GROUPING_EVENT,
   CONTENT_LANGUAGE_EVENT,
   getLanguageGroupingEnabled,
@@ -605,28 +602,6 @@ const view: TvView = {
       heroYearText = fields.yearText
     }
 
-    async function enrichFromTmdb(requestId: number): Promise<void> {
-      if (!series || !activePlaylistId || !isTmdbActive()) return
-      try {
-        const tmdbId = await resolveTmdbId(activePlaylistId, "series", {
-          id: series.id,
-          name: series.name,
-          year: series.year || null,
-          providerTmdbId: series.tmdb,
-        })
-        if (requestId !== enrichRequestId) return
-        resolvedTmdbId = tmdbId
-        if (!tmdbId) return
-        const enrichment = await fetchSeriesEnrichment(tmdbId)
-        if (requestId !== enrichRequestId || !enrichment) return
-        applyHeroFields(fillHeroGaps(currentHeroFields(), enrichment))
-        if (!series.logo && enrichment.posterUrl) series.logo = enrichment.posterUrl
-        renderHero()
-      } catch (err) {
-        log.warn("[xt:tv-series-detail] TMDb enrichment failed:", err)
-      }
-    }
-
     function episodeNeedsTvdbFill(entry: EpisodeRow): boolean {
       const fallbackTitle = t("series.episode.fallback", { n: entry.episodeNum })
       return isGenericEpisodeTitle(entry.title, { seriesName: series?.name, fallbackTitle }) || !entry.thumbUrl || !entry.plot
@@ -671,22 +646,31 @@ const view: TvView = {
     }
 
     // No isTmdbActive() gate: the TheTVDB proxy enriches without a user key.
-    async function enrichFromTvdb(requestId: number): Promise<void> {
+    async function enrichHero(requestId: number): Promise<void> {
       if (!series || !activePlaylistId) return
       const info = seriesInfoRaw?.info || {}
-      providerTmdbIdForTvdb = resolvedTmdbId ?? parseProviderTmdbId(info) ?? series.tmdb ?? null
-
-      if (heroFieldsNeedFill(currentHeroFields())) {
-        const filled = await resolveTvdbFallback(providerTmdbIdForTvdb, "series", {
+      const providerTmdbId = parseProviderTmdbId(info) ?? series.tmdb ?? null
+      providerTmdbIdForTvdb = providerTmdbId
+      try {
+        const details = await resolveTitleEnrichmentDetailed({
+          kind: "series",
+          playlistId: activePlaylistId,
+          itemId: String(series.id),
           name: series.name,
           year: parseInt(String(series.year), 10) || null,
+          providerTmdbId,
         })
-        if (requestId === enrichRequestId && filled) {
-          resolvedTvdbId = filled.tvdbId
-          applyHeroFields(fillHeroGaps(currentHeroFields(), filled.enrichment))
-          if (!series.logo && filled.enrichment.posterUrl) series.logo = filled.enrichment.posterUrl
+        if (requestId !== enrichRequestId) return
+        resolvedTmdbId = details?.tmdbId ?? null
+        resolvedTvdbId = details?.tvdbId ?? null
+        const enrichment = details?.enrichment ?? null
+        if (enrichment) {
+          applyHeroFields(fillHeroGaps(currentHeroFields(), enrichment))
+          if (!series.logo && enrichment.posterUrl) series.logo = enrichment.posterUrl
           renderHero()
         }
+      } catch (err) {
+        log.warn("[xt:tv-series-detail] enrichment failed:", err)
       }
       if (requestId !== enrichRequestId) return
       if (currentSeason != null) void enrichSeasonFromTvdb(currentSeason)
@@ -860,9 +844,7 @@ const view: TvView = {
       // touching them here keeps their cache warm for the neighbor-episode helpers.
       void loadSeriesEpisodes(activePlaylistId, seriesId)
 
-      await enrichFromTmdb(requestId)
-      if (destroyed || requestId !== enrichRequestId) return
-      void enrichFromTvdb(requestId)
+      await enrichHero(requestId)
     }
 
     void boot()

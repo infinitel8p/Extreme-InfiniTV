@@ -24,11 +24,10 @@ import {
   DOWNLOADS_LIST_EVENT,
   DOWNLOAD_PROGRESS_EVENT,
 } from "@/scripts/lib/downloads.js"
-import { resolveTmdbId, fetchMovieEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
 import { parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
-import { fillHeroGaps, heroFieldsNeedFill, resolveTvdbFallback, type DetailHeroFields } from "@/scripts/tv/detail-enrich.ts"
+import { resolveTitleEnrichment } from "@/scripts/lib/enrichment.ts"
+import { fillHeroGaps, type DetailHeroFields } from "@/scripts/tv/detail-enrich.ts"
 import {
-  isTmdbActive,
   LANGUAGE_GROUPING_EVENT,
   CONTENT_LANGUAGE_EVENT,
   getLanguageGroupingEnabled,
@@ -391,41 +390,29 @@ const view: TvView = {
       heroYearText = fields.yearText
     }
 
-    async function enrichFromTmdb(requestId: number): Promise<void> {
-      if (!movie || !activePlaylistId || !isTmdbActive()) return
+    // No isTmdbActive() gate: the TheTVDB proxy enriches without a user key.
+    async function enrichHero(requestId: number): Promise<void> {
+      if (!movie || !activePlaylistId) return
+      const data = vodInfoRaw
+      const movieData = data?.movie_data || data?.info || data || {}
+      const info = data?.info || data?.movie_data || {}
+      const providerTmdbId = parseProviderTmdbId(info) ?? parseProviderTmdbId(movieData) ?? movie.tmdb ?? null
       try {
-        const tmdbId = await resolveTmdbId(activePlaylistId, "vod", {
-          id: movie.id,
+        const enrichment = await resolveTitleEnrichment({
+          kind: "movie",
+          playlistId: activePlaylistId,
+          itemId: String(movie.id),
           name: movie.name,
-          year: movie.year || null,
-          providerTmdbId: movie.tmdb,
+          year: parseInt(String(movie.year), 10) || null,
+          providerTmdbId,
         })
-        if (requestId !== enrichRequestId || !tmdbId) return
-        const enrichment = await fetchMovieEnrichment(tmdbId)
         if (requestId !== enrichRequestId || !enrichment) return
         applyHeroFields(fillHeroGaps(currentHeroFields(), enrichment))
         if (!movie.logo && enrichment.posterUrl) movie.logo = enrichment.posterUrl
         renderHero()
       } catch (err) {
-        log.warn("[xt:tv-movie-detail] TMDb enrichment failed:", err)
+        log.warn("[xt:tv-movie-detail] enrichment failed:", err)
       }
-    }
-
-    // No isTmdbActive() gate: the TheTVDB proxy enriches without a user key.
-    async function enrichFromTvdb(requestId: number): Promise<void> {
-      if (!movie || !activePlaylistId || !heroFieldsNeedFill(currentHeroFields())) return
-      const data = vodInfoRaw
-      const movieData = data?.movie_data || data?.info || data || {}
-      const info = data?.info || data?.movie_data || {}
-      const providerTmdbId = parseProviderTmdbId(info) ?? parseProviderTmdbId(movieData) ?? movie.tmdb ?? null
-      const filled = await resolveTvdbFallback(providerTmdbId, "movie", {
-        name: movie.name,
-        year: parseInt(String(movie.year), 10) || null,
-      })
-      if (requestId !== enrichRequestId || !filled) return
-      applyHeroFields(fillHeroGaps(currentHeroFields(), filled.enrichment))
-      if (!movie.logo && filled.enrichment.posterUrl) movie.logo = filled.enrichment.posterUrl
-      renderHero()
     }
 
     function renderLanguageVariants(catalog: CatalogRow[]): void {
@@ -597,9 +584,7 @@ const view: TvView = {
         }
       }
 
-      await enrichFromTmdb(requestId)
-      if (destroyed || requestId !== enrichRequestId) return
-      void enrichFromTvdb(requestId)
+      await enrichHero(requestId)
     }
 
     void boot()

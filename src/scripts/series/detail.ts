@@ -68,22 +68,11 @@ import {
   getContentLanguage,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
-import {
-  resolveTmdbId,
-  fetchSeriesEnrichment,
-  fetchSeasonEnrichment,
-  peekEarlyDetailData,
-  peekCachedSeasonEnrichment,
-} from "@/scripts/lib/tmdb-enrich.ts"
+import { fetchSeasonEnrichment, peekCachedSeasonEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
+import { resolveTitleEnrichmentDetailed, peekEarlyTitleEnrichment } from "@/scripts/lib/enrichment.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
 import { providerSeasonsFromEpisodeMap } from "@/scripts/lib/tmdb-season-map.ts"
-import {
-  enrichmentNeedsFill,
-  fetchTvdbSeason,
-  parseProviderTmdbId,
-  mergeTitleEnrichment,
-  tvdbEnrichment,
-} from "@/scripts/lib/tvdb-proxy.ts"
+import { enrichmentNeedsFill, fetchTvdbSeason, parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
 import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
@@ -1149,38 +1138,22 @@ async function enrichSeriesDetailFromTmdb(requestId) {
   const info = seriesInfoRaw?.info || {}
   const providerTmdbId = parseProviderTmdbId(info)
 
-  // A null from resolveTmdbId means TMDb validated the id as absent, so it must
-  // not be revived; the name search is the correct next step.
-  const tmdbId = isTmdbActive()
-    ? await resolveTmdbId(activePlaylistId, "series", {
-        id: series.id,
-        name: series.name,
-        year: series.year || info.releaseDate || info.releasedate || info.year || null,
-        providerTmdbId,
-      })
-    : providerTmdbId
+  const details = await resolveTitleEnrichmentDetailed({
+    kind: "series",
+    playlistId: activePlaylistId,
+    itemId: String(series.id),
+    name: series.name,
+    year: parseInt(String(series.year || info.releaseDate || info.releasedate || info.year), 10) || null,
+    providerTmdbId,
+  })
   if (requestId !== enrichRequestId) return false
 
-  resolvedTmdbId = tmdbId
-  // The current season already rendered without a tmdbId, so back-fill it now.
+  resolvedTmdbId = details?.tmdbId ?? null
+  resolvedTvdbId = details?.tvdbId ?? null
+  // The current season already rendered without an id to key on, so back-fill it now.
   refreshSeasonEnrichment()
 
-  const tmdbEnrichment = tmdbId ? await fetchSeriesEnrichment(tmdbId) : null
-  // TMDb stays authoritative; TheTVDB is only called when something is missing.
-  let enrichment = tmdbEnrichment
-  if (enrichmentNeedsFill(tmdbEnrichment)) {
-    const filled = await tvdbEnrichment(tmdbId, "series", {
-      name: series.name,
-      year: parseInt(String(series.year), 10) || null,
-    })
-    if (filled) {
-      resolvedTvdbId = filled.tvdbId
-      enrichment = mergeTitleEnrichment(tmdbEnrichment, filled.enrichment)
-      // A name match resolves no tmdb id, so seasons could not run until now.
-      if (!tmdbId) refreshSeasonEnrichment()
-    }
-  }
-  if (requestId !== enrichRequestId) return false
+  const enrichment = details?.enrichment ?? null
   if (!enrichment) {
     settleHero()
     return false
@@ -2209,13 +2182,8 @@ async function boot() {
 
   // Both probes are network-free (hydrate + memory read) and run under one bound,
   // so a cold IDB read can never delay first paint past the shared timeout.
-  const { enrichment: earlyEnrichment, providerInfo: earlyProviderInfo } = await peekEarlyDetailData(
-    active._id,
-    "series",
-    series.id,
-    active._id,
-    `series_info_${seriesId}`
-  )
+  const { enrichment: earlyEnrichment, tmdbId: earlyTmdbId, tvdbId: earlyTvdbId, providerInfo: earlyProviderInfo } =
+    await peekEarlyTitleEnrichment("series", active._id, String(series.id), active._id, `series_info_${seriesId}`)
   if (enrichRequestIdForThisBoot !== enrichRequestId) return
 
   let providerInfoReady = false
@@ -2228,13 +2196,14 @@ async function boot() {
   }
 
   if (earlyEnrichment) {
-    resolvedTmdbId = earlyEnrichment.tmdbId
-    applyEnrichmentPatch(earlyEnrichment.enrichment)
+    resolvedTmdbId = earlyTmdbId
+    resolvedTvdbId = earlyTvdbId
+    applyEnrichmentPatch(earlyEnrichment)
     settleHero()
     earlyEnrichmentHandled = true
-    earlyEnrichmentNeedsFill = enrichmentNeedsFill(earlyEnrichment.enrichment)
-    if (earlyEnrichment.enrichment.recommendations?.length) {
-      const matches = matchRecommendationsToCatalog(earlyEnrichment.enrichment.recommendations, list?.data || [], {
+    earlyEnrichmentNeedsFill = enrichmentNeedsFill(earlyEnrichment)
+    if (earlyEnrichment.recommendations?.length) {
+      const matches = matchRecommendationsToCatalog(earlyEnrichment.recommendations, list?.data || [], {
         mediaType: "tv",
         limit: 12,
         sourcePrefix: parseNamePrefix(series.name).tag,
@@ -2247,8 +2216,8 @@ async function boot() {
       }
     }
     const seasonNumber = toIndex(currentSeason)
-    if (seasonNumber != null) {
-      const seasonEnrichment = await peekCachedSeasonEnrichment(earlyEnrichment.tmdbId, seasonNumber)
+    if (seasonNumber != null && earlyTmdbId != null) {
+      const seasonEnrichment = await peekCachedSeasonEnrichment(earlyTmdbId, seasonNumber)
       if (enrichRequestIdForThisBoot === enrichRequestId && seasonEnrichment?.episodes?.length) {
         patchSeasonEpisodes(seasonEnrichment.episodes)
       }
@@ -2311,11 +2280,11 @@ async function boot() {
         // applySeriesInfo rebuilds meta text and episode rows, wiping the merge; reassert it.
         // settleHero() is a no-op once already settled, so this never repaints with a different image.
         if (earlyEnrichmentHandled) {
-          applyEnrichmentPatch(earlyEnrichment.enrichment)
+          applyEnrichmentPatch(earlyEnrichment)
           settleHero()
           const seasonNumber = toIndex(currentSeason)
-          if (seasonNumber != null) {
-            const seasonEnrichment = await peekCachedSeasonEnrichment(earlyEnrichment.tmdbId, seasonNumber)
+          if (seasonNumber != null && earlyTmdbId != null) {
+            const seasonEnrichment = await peekCachedSeasonEnrichment(earlyTmdbId, seasonNumber)
             if (seasonEnrichment?.episodes?.length) patchSeasonEpisodes(seasonEnrichment.episodes)
           }
         }

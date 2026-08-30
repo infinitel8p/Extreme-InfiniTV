@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest"
-import {
-  fillHeroGaps,
-  heroFieldsNeedFill,
-  patchEpisodeFromTvdb,
-  type DetailHeroFields,
-} from "@/scripts/tv/detail-enrich"
+import { fillHeroGaps, patchEpisodeFromTvdb, type DetailHeroFields } from "@/scripts/tv/detail-enrich"
 import type { TmdbTitleEnrichment } from "@/scripts/lib/tmdb-enrich"
 import type { TvdbEpisode } from "@/scripts/lib/tvdb-contract"
 
@@ -69,23 +64,6 @@ describe("fillHeroGaps", () => {
     expect(result.ratingText).toBe("")
     expect(result.yearText).toBe("")
     expect(result.overview).toBe("TheTVDB overview")
-  })
-})
-
-describe("heroFieldsNeedFill", () => {
-  it("is true when any field is empty", () => {
-    expect(heroFieldsNeedFill(emptyFields())).toBe(true)
-  })
-
-  it("is false once every field is set", () => {
-    const fields: DetailHeroFields = {
-      backdropUrl: "url",
-      overview: "text",
-      genres: "Drama",
-      ratingText: "7.0",
-      yearText: "2020",
-    }
-    expect(heroFieldsNeedFill(fields)).toBe(false)
   })
 })
 

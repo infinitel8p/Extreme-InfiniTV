@@ -1,7 +1,6 @@
 // Shared TheTVDB gap-fill helpers for the Android TV movie/series detail views.
-// TV ships no TMDb key, so TheTVDB (keyless) is the only enrichment source there.
-import { tvdbEnrichment, fetchTvdbSeason, type TvdbSeasonRef, type TvdbEnrichmentResult } from "@/scripts/lib/tvdb-proxy.ts"
-import type { TvdbKind, TvdbEpisode } from "@/scripts/lib/tvdb-contract"
+import { fetchTvdbSeason, type TvdbSeasonRef } from "@/scripts/lib/tvdb-proxy.ts"
+import type { TvdbEpisode } from "@/scripts/lib/tvdb-contract"
 import type { TmdbTitleEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
 import { fmtImdbRating } from "@/scripts/lib/format.ts"
 import { log } from "@/scripts/lib/log"
@@ -14,7 +13,7 @@ export interface DetailHeroFields {
   yearText: string
 }
 
-/** Only fills gaps still empty after the provider/TMDb pass; never overwrites an existing value. */
+/** Only fills gaps still empty after the resolveTitleEnrichment pass; never overwrites an existing value. */
 export function fillHeroGaps(current: DetailHeroFields, enrichment: TmdbTitleEnrichment | null): DetailHeroFields {
   if (!enrichment) return current
   return {
@@ -23,24 +22,6 @@ export function fillHeroGaps(current: DetailHeroFields, enrichment: TmdbTitleEnr
     genres: current.genres || (enrichment.genres.length ? enrichment.genres.join(", ") : ""),
     ratingText: current.ratingText || (enrichment.voteAverage ? fmtImdbRating(enrichment.voteAverage) : ""),
     yearText: current.yearText || (enrichment.year ? String(enrichment.year) : ""),
-  }
-}
-
-export function heroFieldsNeedFill(fields: DetailHeroFields): boolean {
-  return !fields.backdropUrl || !fields.overview || !fields.genres || !fields.ratingText || !fields.yearText
-}
-
-/** No isTmdbActive() gate: the TheTVDB proxy enriches without a user key. */
-export async function resolveTvdbFallback(
-  tmdbId: number | null,
-  kind: TvdbKind,
-  fallback: { name: string; year: number | null }
-): Promise<TvdbEnrichmentResult | null> {
-  try {
-    return await tvdbEnrichment(tmdbId, kind, fallback)
-  } catch (error) {
-    log.warn("[xt:tv-detail] TheTVDB title enrichment failed:", kind, error)
-    return null
   }
 }
 

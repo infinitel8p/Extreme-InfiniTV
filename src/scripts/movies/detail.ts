@@ -65,15 +65,10 @@ import {
   getContentLanguage,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
-import { resolveTmdbId, fetchMovieEnrichment, peekEarlyDetailData } from "@/scripts/lib/tmdb-enrich.ts"
+import { resolveTitleEnrichment, peekEarlyTitleEnrichment } from "@/scripts/lib/enrichment.ts"
 import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
-import {
-  enrichmentNeedsFill,
-  mergeTitleEnrichment,
-  parseProviderTmdbId,
-  tvdbEnrichment,
-} from "@/scripts/lib/tvdb-proxy.ts"
+import { enrichmentNeedsFill, parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
@@ -564,28 +559,14 @@ async function enrichMovieDetailFromTmdb(requestId) {
   const info = data?.info || data?.movie_data || {}
   const providerTmdbId = parseProviderTmdbId(info) ?? parseProviderTmdbId(movieData)
 
-  // A null from resolveTmdbId means TMDb validated the id as absent, so it must
-  // not be revived; the name search is the correct next step.
-  const tmdbId = isTmdbActive()
-    ? await resolveTmdbId(activePlaylistId, "vod", {
-        id: movie.id,
-        name: movie.name,
-        year: movie.year || movieData.releasedate || movieData.year || info.year || null,
-        providerTmdbId,
-      })
-    : providerTmdbId
-  if (requestId !== enrichRequestId) return false
-
-  const tmdbEnrichmentResult = tmdbId ? await fetchMovieEnrichment(tmdbId) : null
-  // TMDb stays authoritative; TheTVDB is only called when something is missing.
-  let enrichment = tmdbEnrichmentResult
-  if (enrichmentNeedsFill(tmdbEnrichmentResult)) {
-    const filled = await tvdbEnrichment(tmdbId, "movie", {
-      name: movie.name,
-      year: parseInt(String(movie.year), 10) || null,
-    })
-    if (filled) enrichment = mergeTitleEnrichment(tmdbEnrichmentResult, filled.enrichment)
-  }
+  const enrichment = await resolveTitleEnrichment({
+    kind: "movie",
+    playlistId: activePlaylistId,
+    itemId: String(movie.id),
+    name: movie.name,
+    year: parseInt(String(movie.year || movieData.releasedate || movieData.year || info.year), 10) || null,
+    providerTmdbId,
+  })
   if (requestId !== enrichRequestId) return false
   if (!enrichment) {
     settleHero()
@@ -1514,10 +1495,10 @@ async function boot() {
 
   // Both probes are network-free (hydrate + memory read) and run under one bound,
   // so a cold IDB read can never delay first paint past the shared timeout.
-  const { enrichment: earlyEnrichment, providerInfo: earlyProviderInfo } = await peekEarlyDetailData(
+  const { enrichment: earlyEnrichment, providerInfo: earlyProviderInfo } = await peekEarlyTitleEnrichment(
+    "movie",
     active._id,
-    "vod",
-    movie.id,
+    String(movie.id),
     active._id,
     `vod_info_${movieId}`
   )
@@ -1530,12 +1511,12 @@ async function boot() {
   }
 
   if (earlyEnrichment) {
-    applyEnrichmentPatch(earlyEnrichment.enrichment)
+    applyEnrichmentPatch(earlyEnrichment)
     settleHero()
     earlyEnrichmentHandled = true
-    earlyEnrichmentNeedsFill = enrichmentNeedsFill(earlyEnrichment.enrichment)
-    if (earlyEnrichment.enrichment.recommendations?.length) {
-      const matches = matchRecommendationsToCatalog(earlyEnrichment.enrichment.recommendations, list?.data || [], {
+    earlyEnrichmentNeedsFill = enrichmentNeedsFill(earlyEnrichment)
+    if (earlyEnrichment.recommendations?.length) {
+      const matches = matchRecommendationsToCatalog(earlyEnrichment.recommendations, list?.data || [], {
         mediaType: "movie",
         limit: 12,
         sourcePrefix: parseNamePrefix(movie.name).tag,
@@ -1579,7 +1560,7 @@ async function boot() {
         // applyVodInfo resets the provider-derived fields the merge already backfilled; reassert it.
         // settleHero() is a no-op once already settled, so this never repaints with a different image.
         if (earlyEnrichmentHandled) {
-          applyEnrichmentPatch(earlyEnrichment.enrichment)
+          applyEnrichmentPatch(earlyEnrichment)
           settleHero()
         }
         hideDetailSkeleton()
