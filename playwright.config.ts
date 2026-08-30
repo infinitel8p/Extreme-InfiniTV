@@ -40,9 +40,22 @@ export default defineConfig({
     {
       name: "e2e",
       testDir: "tests/e2e",
+      testIgnore: "**/tv-motion/**",
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1300, height: 850 },
+      },
+    },
+    {
+      name: "tv-motion",
+      testDir: "tests/e2e/tv-motion",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1920, height: 1080 },
+        deviceScaleFactor: 1,
+        contextOptions: { reducedMotion: "no-preference" },
+        video: "retain-on-failure",
+        trace: "retain-on-failure",
       },
     },
   ],
