@@ -15,8 +15,9 @@ function candidate(overrides: Partial<AmbientCandidate> = {}): AmbientCandidate 
 const noShuffle = () => 0
 
 describe("assembleAmbientEntries", () => {
-  it("orders tiers watching > recent > recommended > catalog", () => {
+  it("orders tiers trending > watching > recent > recommended > catalog", () => {
     const result = assembleAmbientEntries({
+      trending: [candidate({ id: "0", title: "Trending" })],
       watching: [candidate({ id: "1", title: "Watching" })],
       recent: [candidate({ id: "2", title: "Recent" })],
       recommended: [candidate({ id: "3", title: "Recommended" })],
@@ -24,12 +25,43 @@ describe("assembleAmbientEntries", () => {
       limit: 50,
       random: noShuffle,
     })
-    expect(result.map((entry) => entry.tier)).toEqual(["watching", "recent", "recommended", "catalog"])
-    expect(result.map((entry) => entry.title)).toEqual(["Watching", "Recent", "Recommended", "Catalog"])
+    expect(result.map((entry) => entry.tier)).toEqual([
+      "recommended",
+      "watching",
+      "recent",
+      "recommended",
+      "catalog",
+    ])
+    expect(result.map((entry) => entry.title)).toEqual([
+      "Trending",
+      "Watching",
+      "Recent",
+      "Recommended",
+      "Catalog",
+    ])
+  })
+
+  it("tops up from the existing tiers when the trending intersection is thin", () => {
+    const catalog = Array.from({ length: 5 }, (_, index) =>
+      candidate({ id: `catalog-${index}`, title: `Catalog ${index}` })
+    )
+    const result = assembleAmbientEntries({
+      trending: [candidate({ id: "trending-1", title: "Trending" })],
+      watching: [],
+      recent: [],
+      recommended: [],
+      catalog,
+      limit: 4,
+      random: noShuffle,
+    })
+    expect(result).toHaveLength(4)
+    expect(result[0].title).toBe("Trending")
+    expect(result.slice(1).every((entry) => entry.tier === "catalog")).toBe(true)
   })
 
   it("dedupes by kind+id, keeping the highest tier's data", () => {
     const result = assembleAmbientEntries({
+      trending: [],
       watching: [candidate({ id: "1", title: "Same Movie", posterUrl: "watching-poster.jpg" })],
       recent: [],
       recommended: [],
@@ -44,6 +76,7 @@ describe("assembleAmbientEntries", () => {
 
   it("drops entries with no artwork at all", () => {
     const result = assembleAmbientEntries({
+      trending: [],
       watching: [],
       recent: [],
       recommended: [],
@@ -59,6 +92,7 @@ describe("assembleAmbientEntries", () => {
 
   it("drops entries with an empty title", () => {
     const result = assembleAmbientEntries({
+      trending: [],
       watching: [],
       recent: [],
       recommended: [],
@@ -74,6 +108,7 @@ describe("assembleAmbientEntries", () => {
       candidate({ id: String(index), title: `Title ${index}` })
     )
     const result = assembleAmbientEntries({
+      trending: [],
       watching: [],
       recent: [],
       recommended: [],
@@ -87,6 +122,7 @@ describe("assembleAmbientEntries", () => {
   it("shuffles recent/recommended/catalog deterministically with an injected random", () => {
     const catalog = [candidate({ id: "a" }), candidate({ id: "b" }), candidate({ id: "c" })]
     const result = assembleAmbientEntries({
+      trending: [],
       watching: [],
       recent: [],
       recommended: [],
@@ -97,9 +133,11 @@ describe("assembleAmbientEntries", () => {
     expect(result.map((entry) => entry.id)).toEqual(["b", "c", "a"])
   })
 
-  it("keeps watching in input order (no shuffle applied)", () => {
+  it("keeps watching and trending in input order (no shuffle applied)", () => {
+    const trending = [candidate({ id: "x" }), candidate({ id: "y" })]
     const watching = [candidate({ id: "a" }), candidate({ id: "b" }), candidate({ id: "c" })]
     const result = assembleAmbientEntries({
+      trending,
       watching,
       recent: [],
       recommended: [],
@@ -107,7 +145,7 @@ describe("assembleAmbientEntries", () => {
       limit: 50,
       random: () => 0.99,
     })
-    expect(result.map((entry) => entry.id)).toEqual(["a", "b", "c"])
+    expect(result.map((entry) => entry.id)).toEqual(["x", "y", "a", "b", "c"])
   })
 })
 
@@ -137,36 +175,52 @@ vi.mock("@/scripts/lib/cache.js", () => ({
 }))
 
 let tmdbActive = false
+let enrichmentActive = false
 let resolvedTmdbId: number | null = 7
 let fetchedBackdrop: string | null = "http://img/backdrop.jpg"
 let inFlightFetches = 0
 let peakInFlightFetches = 0
 const resolveCalls: Array<{ kind: string; name: string; providerTmdbId: unknown; year: unknown }> = []
+let trendingTmdbItems: any[] = []
+let trendingTvdbEntries: any[] = []
+let trendingShouldThrow = false
 
 vi.mock("@/scripts/lib/app-settings.js", () => ({
   isTmdbActive: () => tmdbActive,
+  isEnrichmentActive: () => enrichmentActive,
   ACCENT_PRESETS: ["fuchsia"],
 }))
 
 vi.mock("@/scripts/lib/tmdb-enrich.ts", () => ({
   getCachedTitleEnrichment: async () => null,
-  resolveTmdbId: async (_playlistId: string, kind: string, providerEntry: any) => {
+}))
+
+vi.mock("@/scripts/lib/enrichment.ts", () => ({
+  resolveTitleEnrichment: async (request: any) => {
     resolveCalls.push({
-      kind,
-      name: providerEntry.name,
-      providerTmdbId: providerEntry.providerTmdbId,
-      year: providerEntry.year,
+      kind: request.kind,
+      name: request.name,
+      providerTmdbId: request.providerTmdbId,
+      year: request.year,
     })
-    return resolvedTmdbId
-  },
-  fetchMovieEnrichment: async () => {
+    if (resolvedTmdbId == null) return null
     inFlightFetches++
     peakInFlightFetches = Math.max(peakInFlightFetches, inFlightFetches)
     await new Promise((resolve) => setTimeout(resolve, 1))
     inFlightFetches--
-    return { backdropUrl: fetchedBackdrop }
+    return fetchedBackdrop ? { backdropUrl: fetchedBackdrop } : null
   },
-  fetchSeriesEnrichment: async () => ({ backdropUrl: fetchedBackdrop }),
+}))
+
+vi.mock("@/scripts/lib/tmdb.ts", () => ({
+  tmdbTrending: async (_kind: string) => trendingTmdbItems,
+}))
+
+vi.mock("@/scripts/lib/tvdb-proxy.ts", () => ({
+  fetchTvdbTrending: async (_kind: string) => {
+    if (trendingShouldThrow) throw new Error("tvdb proxy down")
+    return trendingTvdbEntries
+  },
 }))
 
 import {
@@ -182,11 +236,15 @@ beforeEach(() => {
   watchedSignals = []
   cachedByKind = { vod: [], series: [] }
   tmdbActive = false
+  enrichmentActive = false
   resolvedTmdbId = 7
   fetchedBackdrop = "http://img/backdrop.jpg"
   inFlightFetches = 0
   peakInFlightFetches = 0
   resolveCalls.length = 0
+  trendingTmdbItems = []
+  trendingTvdbEntries = []
+  trendingShouldThrow = false
 })
 
 describe("buildAmbientManifest backdrop fetching", () => {
@@ -203,8 +261,8 @@ describe("buildAmbientManifest backdrop fetching", () => {
     }
   }
 
-  it("leaves entries bare when TMDb is not active", async () => {
-    tmdbActive = false
+  it("leaves entries bare when enrichment is not active", async () => {
+    enrichmentActive = false
     seedCatalog(3)
     const result = await buildAmbientManifest("pl1")
     expect(result.length).toBeGreaterThan(0)
@@ -213,22 +271,22 @@ describe("buildAmbientManifest backdrop fetching", () => {
   })
 
   it("fills a backdrop for every entry the cache peek left bare", async () => {
-    tmdbActive = true
+    enrichmentActive = true
     seedCatalog(3)
     const result = await buildAmbientManifest("pl1")
     expect(result.length).toBeGreaterThan(0)
     expect(result.every((entry) => entry.backdropUrl === "http://img/backdrop.jpg")).toBe(true)
   })
 
-  it("passes the catalog row's tmdb id and year through to the match", async () => {
-    tmdbActive = true
+  it("passes the catalog row's tmdb id and year through to the facade", async () => {
+    enrichmentActive = true
     seedCatalog(1)
     await buildAmbientManifest("pl1")
-    expect(resolveCalls[0]).toMatchObject({ kind: "vod", name: "Movie 1", providerTmdbId: 500, year: 2020 })
+    expect(resolveCalls[0]).toMatchObject({ kind: "movie", name: "Movie 1", providerTmdbId: 500, year: 2020 })
   })
 
   it("keeps the poster untouched when no backdrop comes back", async () => {
-    tmdbActive = true
+    enrichmentActive = true
     fetchedBackdrop = null
     seedCatalog(2)
     const result = await buildAmbientManifest("pl1")
@@ -237,7 +295,7 @@ describe("buildAmbientManifest backdrop fetching", () => {
   })
 
   it("skips the detail fetch when no tmdb id resolves", async () => {
-    tmdbActive = true
+    enrichmentActive = true
     resolvedTmdbId = null
     seedCatalog(2)
     const result = await buildAmbientManifest("pl1")
@@ -246,11 +304,11 @@ describe("buildAmbientManifest backdrop fetching", () => {
   })
 
   it("bounds concurrent detail fetches", async () => {
-    tmdbActive = true
+    enrichmentActive = true
     seedCatalog(30)
     await buildAmbientManifest("pl1")
     expect(peakInFlightFetches).toBeGreaterThan(0)
-    expect(peakInFlightFetches).toBeLessThanOrEqual(6)
+    expect(peakInFlightFetches).toBeLessThanOrEqual(3)
   })
 })
 
@@ -326,5 +384,27 @@ describe("buildAmbientManifest", () => {
 
     const result = await buildAmbientManifest("pl1", { limit: 4 })
     expect(result).toHaveLength(4)
+  })
+
+  it("puts a trending-matched title ahead of the catalog fallback", async () => {
+    cachedByKind.vod = [
+      { id: 1, name: "Trending Movie", logo: "trending.jpg", tmdb: 900 },
+      { id: 2, name: "Other Movie", logo: "other.jpg" },
+    ]
+    tmdbActive = true
+    trendingTmdbItems = [{ tmdbId: 900, name: "Trending Movie", year: null, posterUrl: null, backdropUrl: null }]
+
+    const result = await buildAmbientManifest("pl1")
+    expect(result[0]).toMatchObject({ id: "1", title: "Trending Movie" })
+  })
+
+  it("falls back to the existing tiers when the trending fetch throws", async () => {
+    cachedByKind.vod = [{ id: 1, name: "Only In Catalog", logo: "only.jpg" }]
+    tmdbActive = false
+    trendingShouldThrow = true
+
+    const result = await buildAmbientManifest("pl1")
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ kind: "vod", id: "1", title: "Only In Catalog", tier: "catalog" })
   })
 })

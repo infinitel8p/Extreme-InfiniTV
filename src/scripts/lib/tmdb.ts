@@ -281,6 +281,53 @@ export async function tmdbDiscoverByGenre(
   }
 }
 
+export interface TmdbTrendingItem {
+  tmdbId: number
+  name: string
+  year: number | null
+  posterUrl: string | null
+  backdropUrl: string | null
+}
+
+interface TmdbTrendingResult {
+  id: number
+  title?: string
+  name?: string
+  release_date?: string
+  first_air_date?: string
+  poster_path?: string | null
+  backdrop_path?: string | null
+}
+
+interface TmdbTrendingResponse {
+  results?: TmdbTrendingResult[]
+}
+
+export async function tmdbTrending(
+  kind: "vod" | "series",
+  window: "day" | "week" = "week"
+): Promise<TmdbTrendingItem[]> {
+  if (!isTmdbActive()) return []
+  const apiKey = getTmdbApiKey()
+  const path = kind === "vod" ? `/trending/movie/${window}` : `/trending/tv/${window}`
+  try {
+    const data = await tmdbFetch<TmdbTrendingResponse>(apiKey, path, {})
+    return (data.results || []).map((result) => {
+      const releaseDate = (kind === "vod" ? result.release_date : result.first_air_date) || ""
+      return {
+        tmdbId: result.id,
+        name: (kind === "vod" ? result.title : result.name) || "",
+        year: releaseDate ? Number(releaseDate.slice(0, 4)) : null,
+        posterUrl: tmdbImageUrl(result.poster_path, TMDB_POSTER_SIZE),
+        backdropUrl: tmdbImageUrl(result.backdrop_path, TMDB_BACKDROP_SIZE),
+      }
+    })
+  } catch (error) {
+    log.warn("[xt:tmdb] tmdbTrending failed:", kind, window, error)
+    return []
+  }
+}
+
 export async function tmdbSearchPerson(query: string): Promise<TmdbPersonResult[]> {
   const trimmed = query.trim()
   if (!trimmed || !isTmdbActive()) return []

@@ -4,19 +4,18 @@ import { getCached, getCachedByKindPrefix, hydrate } from "@/scripts/lib/cache.j
 import { pickBecauseSeedPool, buildBecauseRow } from "@/scripts/lib/because-watched.ts"
 import type { LocalSimilarCandidate } from "@/scripts/lib/similar-local.ts"
 import { sanitizeProviderBackdropUrl } from "@/scripts/lib/morph-detail.ts"
-import {
-  getCachedTitleEnrichment,
-  resolveTmdbId,
-  fetchMovieEnrichment,
-  fetchSeriesEnrichment,
-} from "@/scripts/lib/tmdb-enrich.ts"
-import { isTmdbActive } from "@/scripts/lib/app-settings.js"
+import { getCachedTitleEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
+import { resolveTitleEnrichment } from "@/scripts/lib/enrichment.ts"
+import { tmdbTrending } from "@/scripts/lib/tmdb.ts"
+import { fetchTvdbTrending } from "@/scripts/lib/tvdb-proxy.ts"
+import { matchTrendingToCatalog, type TrendingCandidate } from "@/scripts/lib/ambient-trending.ts"
+import { isEnrichmentActive, isTmdbActive } from "@/scripts/lib/app-settings.js"
 import { log } from "@/scripts/lib/log.js"
 
 const DEFAULT_LIMIT = 50
 const RECOMMENDED_SEED_COUNT = 3
 const RECOMMENDED_PICKS_PER_SEED = 6
-const BACKDROP_FETCH_CONCURRENCY = 6
+const BACKDROP_FETCH_CONCURRENCY = 3
 
 export type AmbientTier = "watching" | "recent" | "recommended" | "catalog"
 
@@ -33,6 +32,7 @@ export interface AmbientEntry {
 export type AmbientCandidate = Omit<AmbientEntry, "tier">
 
 export interface AssembleAmbientEntriesInput {
+  trending: AmbientCandidate[]
   watching: AmbientCandidate[]
   recent: AmbientCandidate[]
   recommended: AmbientCandidate[]
@@ -55,7 +55,7 @@ function shuffle<T>(items: T[], random: () => number): T[] {
 }
 
 export function assembleAmbientEntries(input: AssembleAmbientEntriesInput): AmbientEntry[] {
-  const { watching, recent, recommended, catalog, limit, random } = input
+  const { trending, watching, recent, recommended, catalog, limit, random } = input
   const seenKeys = new Set<string>()
   const entries: AmbientEntry[] = []
 
@@ -71,6 +71,9 @@ export function assembleAmbientEntries(input: AssembleAmbientEntriesInput): Ambi
     }
   }
 
+  // Trending order already carries meaning (score rank), so it isn't shuffled.
+  // Tagged "recommended": the wire tier set is fixed by the receiver's sanitizer.
+  addFromTier(trending, "recommended")
   addFromTier(watching, "watching")
   addFromTier(shuffle(recent, random), "recent")
   addFromTier(shuffle(recommended, random), "recommended")
@@ -99,6 +102,11 @@ function catalogRowTitle(row: CatalogRow | undefined): string {
 
 function catalogRowPoster(row: CatalogRow | undefined): string | null {
   return row?.logo || null
+}
+
+function catalogRowYear(row: CatalogRow | undefined): number | null {
+  const parsed = Number(row?.year)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 async function loadCatalog(playlistId: string, kind: "vod" | "series"): Promise<CatalogRow[]> {
@@ -275,6 +283,49 @@ function collectCatalogCandidates(vodRows: CatalogRow[], seriesRows: CatalogRow[
   ]
 }
 
+/** TMDb when its key is active, else the keyless TVDB proxy - never both. */
+async function fetchTrendingPool(kind: "vod" | "series"): Promise<TrendingCandidate[]> {
+  if (isTmdbActive()) {
+    const items = await tmdbTrending(kind)
+    return items.map((item) => ({ tmdbId: item.tmdbId, name: item.name, year: item.year }))
+  }
+  const entries = await fetchTvdbTrending(kind === "vod" ? "movie" : "series")
+  return entries.map((entry) => ({ tmdbId: entry.tmdbId ?? null, name: entry.name, year: entry.year }))
+}
+
+// Trending must never block the manifest: any failure here just yields an empty
+// pool, and the caller falls through to the existing watching/recent/catalog tiers.
+async function collectTrendingCandidates(
+  vodRows: CatalogRow[],
+  seriesRows: CatalogRow[]
+): Promise<AmbientCandidate[]> {
+  try {
+    const [moviePool, seriesPool] = await Promise.all([fetchTrendingPool("vod"), fetchTrendingPool("series")])
+    const matchedMovies = matchTrendingToCatalog(moviePool, vodRows)
+    const matchedSeries = matchTrendingToCatalog(seriesPool, seriesRows)
+
+    const toCandidate = (kind: "vod" | "series", row: CatalogRow): AmbientCandidate => ({
+      kind,
+      id: String(row.id),
+      title: catalogRowTitle(row),
+      posterUrl: catalogRowPoster(row),
+      backdropUrl: null,
+      logoUrl: null,
+    })
+
+    const interleaved: AmbientCandidate[] = []
+    const maxLength = Math.max(matchedMovies.length, matchedSeries.length)
+    for (let index = 0; index < maxLength; index++) {
+      if (matchedMovies[index]) interleaved.push(toCandidate("vod", matchedMovies[index]))
+      if (matchedSeries[index]) interleaved.push(toCandidate("series", matchedSeries[index]))
+    }
+    return interleaved
+  } catch (error) {
+    log.warn("[xt:ambient] trending selection failed:", error)
+    return []
+  }
+}
+
 // Xtream vod/series info responses both nest the real payload under `info`
 // (movies also accept `movie_data`); `backdrop_path` is a string on movies,
 // an array on series.
@@ -304,15 +355,14 @@ async function fetchBackdrop(
   entry: AmbientEntry,
   catalogRow: CatalogRow | undefined
 ): Promise<string | null> {
-  const tmdbId = await resolveTmdbId(playlistId, entry.kind, {
-    id: entry.id,
+  const enrichment = await resolveTitleEnrichment({
+    kind: entry.kind === "series" ? "series" : "movie",
+    playlistId,
+    itemId: entry.id,
     name: catalogRow?.name || entry.title,
-    year: catalogRow?.year ?? null,
+    year: catalogRowYear(catalogRow),
     providerTmdbId: catalogRow?.tmdb ?? null,
   })
-  if (!tmdbId) return null
-  const enrichment =
-    entry.kind === "series" ? await fetchSeriesEnrichment(tmdbId) : await fetchMovieEnrichment(tmdbId)
   return enrichment?.backdropUrl || null
 }
 
@@ -324,7 +374,7 @@ async function fillMissingBackdrops(
   vodById: Map<string, CatalogRow>,
   seriesById: Map<string, CatalogRow>
 ): Promise<AmbientEntry[]> {
-  if (!isTmdbActive()) return entries
+  if (!isEnrichmentActive()) return entries
   const pending = entries.filter((entry) => !entry.backdropUrl)
   if (!pending.length) return entries
 
@@ -387,12 +437,14 @@ export async function buildAmbientManifest(
   const vodById = indexCatalogById(vodRows)
   const seriesById = indexCatalogById(seriesRows)
 
+  const trending = await collectTrendingCandidates(vodRows, seriesRows)
   const watching = collectWatchingCandidates(playlistId, vodById, seriesById)
   const recent = collectRecentCandidates(playlistId, vodById, seriesById)
   const recommended = await collectRecommendedCandidates(playlistId, vodRows, seriesRows)
   const catalog = collectCatalogCandidates(vodRows, seriesRows)
 
   const assembled = assembleAmbientEntries({
+    trending,
     watching,
     recent,
     recommended,
