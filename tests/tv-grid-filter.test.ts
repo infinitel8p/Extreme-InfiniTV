@@ -148,11 +148,11 @@ describe("rowWindow", () => {
   })
 
   it("clamps the end at totalRows near the bottom", () => {
-    expect(rowWindow(10, 9, 3, 2)).toEqual({ start: 7, end: 10 })
+    expect(rowWindow(10, 9, 3, 2)).toEqual({ start: 5, end: 10 })
   })
 
   it("windows around a focused row in the middle", () => {
-    expect(rowWindow(100, 50, 3, 2)).toEqual({ start: 48, end: 55 })
+    expect(rowWindow(100, 50, 3, 2)).toEqual({ start: 46, end: 55 })
   })
 
   it("returns an empty window for zero rows", () => {
@@ -160,8 +160,18 @@ describe("rowWindow", () => {
   })
 
   it("clamps an out-of-range focused row", () => {
-    expect(rowWindow(5, 99, 3, 2)).toEqual({ start: 2, end: 5 })
+    expect(rowWindow(5, 99, 3, 2)).toEqual({ start: 0, end: 5 })
     expect(rowWindow(5, -3, 3, 2)).toEqual({ start: 0, end: 5 })
+  })
+
+  it("still mounts a row above the focused one with zero overscan when 2+ rows are visible", () => {
+    // keepFocusedInView can anchor the focused row a few px below the viewport's top edge, so
+    // the row above it can be partially visible - losing it would show a blank strip while scrolling.
+    expect(rowWindow(20, 5, 2, 0)).toEqual({ start: 4, end: 7 })
+  })
+
+  it("mounts no extra leading row when only one row is visible", () => {
+    expect(rowWindow(20, 5, 1, 0)).toEqual({ start: 5, end: 6 })
   })
 })
 

@@ -11,9 +11,10 @@ import { createCard, keepCardMediaDecoded, type PosterCardItem } from "./card"
 const OVERSCAN_ROWS_FULL = 2
 // Lite keeps only the visible rows mounted - no extra rows held resident off-screen.
 const OVERSCAN_ROWS_LITE = 0
-const CARD_WIDTH_REM = 9.5
+// 6 columns at the 960x540 design canvas, so a row is short enough to leave the next one peeking.
+const CARD_WIDTH_REM = 7.25
 const ROW_GAP_REM = 1 // gap-4
-const FALLBACK_ROW_HEIGHT_REM = 18.5
+const FALLBACK_ROW_HEIGHT_REM = 16
 const MIN_COLUMNS = 4
 const SKELETON_COUNT = 18
 const SCROLL_OFFSET_REM = 1.5

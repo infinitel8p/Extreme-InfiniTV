@@ -120,8 +120,12 @@ export function rowWindow(
 ): { start: number; end: number } {
   if (totalRows <= 0) return { start: 0, end: 0 }
   const clampedFocusedRow = Math.min(Math.max(focusedRow, 0), totalRows - 1)
-  const start = Math.max(0, clampedFocusedRow - overscanRows)
-  const end = Math.min(totalRows, clampedFocusedRow + Math.max(1, visibleRows) + overscanRows)
+  const clampedVisibleRows = Math.max(1, visibleRows)
+  // The keep-in-view scroll can anchor the focused row anywhere inside the viewport (not just its
+  // top), so a row above it can be partially visible with zero overscan - same bound as below it.
+  const leadingRows = clampedVisibleRows - 1
+  const start = Math.max(0, clampedFocusedRow - leadingRows - overscanRows)
+  const end = Math.min(totalRows, clampedFocusedRow + clampedVisibleRows + overscanRows)
   return { start, end }
 }
 
