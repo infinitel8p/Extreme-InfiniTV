@@ -10,6 +10,7 @@ import { initUiSounds } from "@/scripts/lib/ui-sounds"
 import { initHaptics } from "@/scripts/lib/haptics"
 import { initPlaylistAccent } from "@/scripts/lib/playlist-accent"
 import { registerMainFocusSection, NAV_SECTION_ID } from "@/scripts/tv/focus"
+import { mountTvFocusGlide } from "@/scripts/tv/focus-glide"
 import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
 import { renderPlaylistRow } from "@/scripts/lib/playlist-rows.js"
 import { ICON_X, ICON_PLAYLIST_ADD } from "@/scripts/lib/icons"
@@ -241,8 +242,12 @@ function mountPrefetchOnFocus(): void {
   })
 }
 
+// A view's async mount can land after a Back press already moved `location`, so the key
+// follows the route that actually mounted rather than the URL of the moment.
+let mountedRoutePath = location.pathname
+
 function focusKeyStorageKey(): string {
-  return `xt_tv_focus:${location.pathname}`
+  return `xt_tv_focus:${mountedRoutePath}`
 }
 
 const RESTORE_FOCUS_WAIT_MS = 2500
@@ -375,7 +380,8 @@ function mountFocusMemory(): void {
     } catch {}
   })
 
-  document.addEventListener(TV_VIEW_MOUNTED_EVENT, () => {
+  document.addEventListener(TV_VIEW_MOUNTED_EVENT, (event) => {
+    mountedRoutePath = (event as CustomEvent).detail?.path || location.pathname
     restoreFocus()
     const active = document.activeElement
     if (!active || active === document.body) {
@@ -398,6 +404,7 @@ export function bootTvShell(): void {
   mountNavDirectionGuard()
   mountNavReturnMemory()
   initSpatialNavForMain()
+  mountTvFocusGlide()
   mountRootAttributeCarryOver()
   mountAmbientHandoffRefresh()
   mountNavSync()
