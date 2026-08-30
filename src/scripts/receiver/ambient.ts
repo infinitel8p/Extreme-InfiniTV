@@ -482,15 +482,24 @@ export function mountReceiverAmbient(deps: ReceiverAmbientDeps): ReceiverAmbient
     }
 
     if (dom.logoEl && dom.titleEl) {
+      const logoEl = dom.logoEl
+      const titleEl = dom.titleEl
       if (entry.logoUrl) {
-        dom.logoEl.src = entry.logoUrl
-        dom.logoEl.classList.remove("hidden")
-        dom.titleEl.classList.add("hidden")
+        logoEl.onerror = () => {
+          logoEl.classList.add("hidden")
+          logoEl.removeAttribute("src")
+          titleEl.classList.remove("hidden")
+          titleEl.textContent = entry.title
+        }
+        logoEl.src = entry.logoUrl
+        logoEl.classList.remove("hidden")
+        titleEl.classList.add("hidden")
       } else {
-        dom.logoEl.classList.add("hidden")
-        dom.logoEl.removeAttribute("src")
-        dom.titleEl.classList.remove("hidden")
-        dom.titleEl.textContent = entry.title
+        logoEl.onerror = null
+        logoEl.classList.add("hidden")
+        logoEl.removeAttribute("src")
+        titleEl.classList.remove("hidden")
+        titleEl.textContent = entry.title
       }
     }
   }

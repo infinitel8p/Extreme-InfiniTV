@@ -4,7 +4,7 @@ import { getCached, getCachedByKindPrefix, hydrate } from "@/scripts/lib/cache.j
 import { pickBecauseSeedPool, buildBecauseRow } from "@/scripts/lib/because-watched.ts"
 import type { LocalSimilarCandidate } from "@/scripts/lib/similar-local.ts"
 import { sanitizeProviderBackdropUrl } from "@/scripts/lib/morph-detail.ts"
-import { getCachedTitleEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
+import { getCachedTitleEnrichment, type TmdbTitleEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
 import { resolveTitleEnrichment } from "@/scripts/lib/enrichment.ts"
 import { tmdbTrending } from "@/scripts/lib/tmdb.ts"
 import { fetchTvdbTrending } from "@/scripts/lib/tvdb-proxy.ts"
@@ -16,6 +16,8 @@ const DEFAULT_LIMIT = 50
 const RECOMMENDED_SEED_COUNT = 3
 const RECOMMENDED_PICKS_PER_SEED = 6
 const BACKDROP_FETCH_CONCURRENCY = 3
+// A cold library with nothing cached yet must not fire one TVDB/TMDb call per entry.
+const MAX_ARTWORK_FETCHES = 24
 
 export type AmbientTier = "watching" | "recent" | "recommended" | "catalog"
 
@@ -350,12 +352,12 @@ async function providerBackdropsFor(
   return backdropById
 }
 
-async function fetchBackdrop(
+async function fetchArtwork(
   playlistId: string,
   entry: AmbientEntry,
   catalogRow: CatalogRow | undefined
-): Promise<string | null> {
-  const enrichment = await resolveTitleEnrichment({
+): Promise<TmdbTitleEnrichment | null> {
+  return resolveTitleEnrichment({
     kind: entry.kind === "series" ? "series" : "movie",
     playlistId,
     itemId: entry.id,
@@ -363,38 +365,43 @@ async function fetchBackdrop(
     year: catalogRowYear(catalogRow),
     providerTmdbId: catalogRow?.tmdb ?? null,
   })
-  return enrichment?.backdropUrl || null
 }
 
 // The cache peek only sees titles some other screen already opened, so a manifest
 // built from recommendations and catalog picks comes back almost entirely bare.
-async function fillMissingBackdrops(
+async function fillMissingArtwork(
   playlistId: string,
   entries: AmbientEntry[],
   vodById: Map<string, CatalogRow>,
   seriesById: Map<string, CatalogRow>
 ): Promise<AmbientEntry[]> {
   if (!isEnrichmentActive()) return entries
-  const pending = entries.filter((entry) => !entry.backdropUrl)
+  const pending = entries
+    .filter((entry) => !entry.backdropUrl || !entry.logoUrl)
+    .slice(0, MAX_ARTWORK_FETCHES)
   if (!pending.length) return entries
 
-  const filled = new Map<AmbientEntry, string>()
+  const filled = new Map<AmbientEntry, { backdropUrl?: string; logoUrl?: string }>()
   let cursor = 0
   async function worker(): Promise<void> {
     while (cursor < pending.length) {
       const entry = pending[cursor++]
       const byId = entry.kind === "vod" ? vodById : seriesById
-      const backdropUrl = await fetchBackdrop(playlistId, entry, byId.get(entry.id))
-      if (backdropUrl) filled.set(entry, backdropUrl)
+      const enrichment = await fetchArtwork(playlistId, entry, byId.get(entry.id))
+      if (!enrichment) continue
+      const patch: { backdropUrl?: string; logoUrl?: string } = {}
+      if (!entry.backdropUrl && enrichment.backdropUrl) patch.backdropUrl = enrichment.backdropUrl
+      if (!entry.logoUrl && enrichment.logoUrl) patch.logoUrl = enrichment.logoUrl
+      if (patch.backdropUrl || patch.logoUrl) filled.set(entry, patch)
     }
   }
   await Promise.all(
     Array.from({ length: Math.min(BACKDROP_FETCH_CONCURRENCY, pending.length) }, () => worker())
   )
-  log.info(`[xt:ambient] backdrop fetch: ${filled.size}/${pending.length} resolved`)
+  log.info(`[xt:ambient] artwork fetch: ${filled.size}/${pending.length} resolved`)
   return entries.map((entry) => {
-    const backdropUrl = filled.get(entry)
-    return backdropUrl ? { ...entry, backdropUrl } : entry
+    const patch = filled.get(entry)
+    return patch ? { ...entry, ...patch } : entry
   })
 }
 
@@ -454,5 +461,5 @@ export async function buildAmbientManifest(
   })
 
   const upgraded = await upgradeArtwork(playlistId, assembled)
-  return fillMissingBackdrops(playlistId, upgraded, vodById, seriesById)
+  return fillMissingArtwork(playlistId, upgraded, vodById, seriesById)
 }

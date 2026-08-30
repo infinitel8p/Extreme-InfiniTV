@@ -178,6 +178,7 @@ let tmdbActive = false
 let enrichmentActive = false
 let resolvedTmdbId: number | null = 7
 let fetchedBackdrop: string | null = "http://img/backdrop.jpg"
+let fetchedLogo: string | null = null
 let inFlightFetches = 0
 let peakInFlightFetches = 0
 const resolveCalls: Array<{ kind: string; name: string; providerTmdbId: unknown; year: unknown }> = []
@@ -208,7 +209,7 @@ vi.mock("@/scripts/lib/enrichment.ts", () => ({
     peakInFlightFetches = Math.max(peakInFlightFetches, inFlightFetches)
     await new Promise((resolve) => setTimeout(resolve, 1))
     inFlightFetches--
-    return fetchedBackdrop ? { backdropUrl: fetchedBackdrop } : null
+    return fetchedBackdrop || fetchedLogo ? { backdropUrl: fetchedBackdrop, logoUrl: fetchedLogo } : null
   },
 }))
 
@@ -239,6 +240,7 @@ beforeEach(() => {
   enrichmentActive = false
   resolvedTmdbId = 7
   fetchedBackdrop = "http://img/backdrop.jpg"
+  fetchedLogo = null
   inFlightFetches = 0
   peakInFlightFetches = 0
   resolveCalls.length = 0
@@ -301,6 +303,15 @@ describe("buildAmbientManifest backdrop fetching", () => {
     const result = await buildAmbientManifest("pl1")
     expect(result.every((entry) => entry.backdropUrl === null)).toBe(true)
     expect(peakInFlightFetches).toBe(0)
+  })
+
+  it("fills a logo alongside the backdrop when the resolved enrichment carries one", async () => {
+    enrichmentActive = true
+    fetchedLogo = "http://img/logo.png"
+    seedCatalog(1)
+    const result = await buildAmbientManifest("pl1")
+    expect(result[0].logoUrl).toBe("http://img/logo.png")
+    expect(result[0].backdropUrl).toBe("http://img/backdrop.jpg")
   })
 
   it("bounds concurrent detail fetches", async () => {
