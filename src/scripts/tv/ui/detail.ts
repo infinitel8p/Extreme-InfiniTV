@@ -3,6 +3,7 @@
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { t } from "@/scripts/lib/i18n"
 import { registerFocusSection } from "@/scripts/tv/focus"
+import { applyAmbient, clearAmbient } from "@/scripts/tv/ambient-color"
 
 const ACTIONS_FOCUS_SECTION_ID = "tv-detail-actions"
 const DESCRIPTION_FOCUS_SECTION_ID = "tv-detail-description"
@@ -86,7 +87,14 @@ function buildSkeletonBlock(className: string): HTMLDivElement {
   return block
 }
 
+// Prepaint and mount both call createDetailChrome on the same root; reusing the handle
+// avoids double-building the DOM and lets mount hydrate what prepaint already painted.
+const chromeByRoot = new WeakMap<HTMLElement, DetailChromeHandle>()
+
 export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
+  const existing = chromeByRoot.get(root)
+  if (existing) return existing
+
   const el = document.createElement("div")
   el.className = "flex flex-col gap-6 pb-20"
 
@@ -112,16 +120,26 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
 
   const backdropWrap = document.createElement("div")
   backdropWrap.className = "absolute inset-0"
+  backdropWrap.style.viewTransitionName = "tv-detail-backdrop"
   const gradientLeft = document.createElement("div")
-  gradientLeft.className = "absolute inset-0 bg-gradient-to-r from-bg via-bg/70 to-transparent"
+  gradientLeft.className = "absolute inset-0"
+  // Via-stop carries the ambient tint; anchors stay fixed so an unset ambient renders as before.
+  gradientLeft.style.backgroundImage =
+    "linear-gradient(to right, var(--color-bg), color-mix(in oklab, var(--color-bg) 82%, var(--tv-ambient-soft)), transparent)"
   const gradientBottom = document.createElement("div")
-  gradientBottom.className = "absolute inset-0 bg-gradient-to-t from-bg/50 via-transparent to-transparent"
+  gradientBottom.className = "absolute inset-0"
+  gradientBottom.style.backgroundImage =
+    "linear-gradient(to top, color-mix(in oklab, var(--color-bg) 50%, transparent), var(--tv-ambient-soft), transparent)"
 
   const heroContent = document.createElement("div")
   heroContent.className = "relative flex h-full items-end gap-6 p-6"
 
   const posterWrap = document.createElement("div")
-  posterWrap.className = "isolate aspect-[2/3] w-44 shrink-0 overflow-hidden rounded-xl bg-black/40 shadow-lg"
+  posterWrap.className = "isolate aspect-[2/3] w-44 shrink-0 overflow-hidden rounded-xl bg-black/40"
+  posterWrap.style.viewTransitionName = "tv-active-poster"
+  // Same dark drop shadow as shadow-lg, plus a soft glow lit by the artwork's ambient colour.
+  posterWrap.style.boxShadow =
+    "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1), 0 24px 60px -24px var(--tv-ambient-glow)"
 
   const textBlock = document.createElement("div")
   textBlock.className = "flex max-w-2xl flex-1 flex-col gap-2"
@@ -197,9 +215,16 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
   }
   actionsRow.addEventListener("focusin", onActionsFocusIn)
 
+  let currentAmbientUrl: string | null = null
+
   function setBackdrop(backdropUrl: string | null, posterUrl: string | null): void {
     backdropWrap.replaceChildren()
     const imageUrl = backdropUrl || posterUrl
+    if (imageUrl !== currentAmbientUrl) {
+      currentAmbientUrl = imageUrl
+      if (imageUrl) void applyAmbient(heroSection, imageUrl, { kind: backdropUrl ? "backdrop" : "poster" })
+      else clearAmbient(heroSection)
+    }
     if (!imageUrl) return
     const img = document.createElement("img")
     img.alt = ""
@@ -273,12 +298,26 @@ export function createDetailChrome(root: HTMLElement): DetailChromeHandle {
 
   setSkeleton(true)
 
+  // Frees "tv-active-poster" once this arrival's own transition is done, so a similar-rail
+  // card activated later (or a subsequent back navigation) can claim the name next.
+  function clearPosterMorphName(): void {
+    requestAnimationFrame(() => {
+      posterWrap.style.viewTransitionName = ""
+    })
+  }
+  document.addEventListener("astro:page-load", clearPosterMorphName, { once: true })
+
   function destroy(): void {
+    document.removeEventListener("astro:page-load", clearPosterMorphName)
     actionsRow.removeEventListener("focusin", onActionsFocusIn)
     unregisterActionsSection()
     unregisterDescriptionSection()
+    clearAmbient(heroSection)
+    chromeByRoot.delete(root)
     el.remove()
   }
 
-  return { el, setHero, setActions, setSkeleton, sections, destroy }
+  const handle: DetailChromeHandle = { el, setHero, setActions, setSkeleton, sections, destroy }
+  chromeByRoot.set(root, handle)
+  return handle
 }

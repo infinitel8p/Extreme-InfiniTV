@@ -1,6 +1,6 @@
 // Android TV movie detail view (route: /tv/movies/detail?id=<vod_id>).
 
-import { nextPaint, type TvView, type TvViewContext } from "@/scripts/tv/router"
+import { nextPaint, markLastOpenedEntry, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
 import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
 import { getCached, setCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
@@ -27,7 +27,12 @@ import {
 import { resolveTmdbId, fetchMovieEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
 import { parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
 import { fillHeroGaps, heroFieldsNeedFill, resolveTvdbFallback, type DetailHeroFields } from "@/scripts/tv/detail-enrich.ts"
-import { isTmdbActive, LANGUAGE_GROUPING_EVENT, CONTENT_LANGUAGE_EVENT } from "@/scripts/lib/app-settings.js"
+import {
+  isTmdbActive,
+  LANGUAGE_GROUPING_EVENT,
+  CONTENT_LANGUAGE_EVENT,
+  getLanguageGroupingEnabled,
+} from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating, parseHmsToSeconds, ratingSortValue } from "@/scripts/lib/format.ts"
 import { parseNamePrefix, languageTagLabel, prefixQualityTokens } from "@/scripts/lib/language-tags.ts"
 import { buildMovieStreamUrl } from "@/scripts/lib/stream-urls.ts"
@@ -41,8 +46,9 @@ import { toast } from "@/scripts/lib/toast"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog"
 import { log } from "@/scripts/lib/log"
 import { renderLanguagePills, type GroupingIndexLookup } from "@/scripts/lib/detail-chrome.ts"
-import { getSharedGroupingIndex } from "@/scripts/lib/language-groups.ts"
+import { getSharedGroupingIndex, isLanguageGroupingExplicitlyEnabled } from "@/scripts/lib/language-groups.ts"
 import { registerFocusSection } from "@/scripts/tv/focus"
+import { memoryConservative } from "@/scripts/tv/motion"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const RESUME_MIN_SECONDS = 30
@@ -87,7 +93,41 @@ function fmtDuration(value: string): string {
   return hours > 0 ? `${hours}h ${String(minutes).padStart(2, "0")}m` : `${minutes} min`
 }
 
+// Set once boot() resolves a playlist; lets prepaint read the cache synchronously on a later visit.
+let lastKnownPlaylistId = ""
+
+function stubHero(row: CatalogRow) {
+  const languageTag = parseNamePrefix(row.name).tag
+  const languageLabel = languageTag ? languageTagLabel(languageTag, getActiveLocale()) : ""
+  const qualityLabel = prefixQualityTokens(row.name).join(" ")
+  return {
+    backdropUrl: null,
+    posterUrl: row.logo,
+    title: row.name,
+    subtitle: String(row.year || ""),
+    metaChips: [languageLabel, qualityLabel],
+    description: row.plot || t("detail.noDescription"),
+    rating: fmtImdbRating(row.rating) || null,
+  }
+}
+
+function languageGroupingAllowed(): boolean {
+  return memoryConservative() ? isLanguageGroupingExplicitlyEnabled() : getLanguageGroupingEnabled()
+}
+
 const view: TvView = {
+  prepaint(root: HTMLElement, url: URL): boolean {
+    const movieId = Number(url.searchParams.get("id") || "0")
+    if (!movieId || !lastKnownPlaylistId) return false
+    const cachedCatalog = (getCached(lastKnownPlaylistId, "vod")?.data || []) as CatalogRow[]
+    const catalogRow = cachedCatalog.find((row) => Number(row.id) === movieId)
+    if (!catalogRow) return false
+    markLastOpenedEntry({ kind: "vod", id: movieId })
+    const chrome = createDetailChrome(root)
+    chrome.setSkeleton(false)
+    chrome.setHero(stubHero(catalogRow))
+    return true
+  },
   mount(root: HTMLElement, ctx: TvViewContext) {
     const movieId = Number(ctx.url.searchParams.get("id") || "0")
     const wantsAutoplay = ctx.url.searchParams.get("autoplay") === "1"
@@ -399,6 +439,7 @@ const view: TvView = {
         catalog,
         getGroupingIndexFor,
         detailHrefBase: "/tv/movies/detail",
+        groupingAllowed: languageGroupingAllowed(),
       })
     }
 
@@ -488,6 +529,7 @@ const view: TvView = {
         })
         return
       }
+      markLastOpenedEntry({ kind: "vod", id: movieId })
 
       const active = await getActiveEntry()
       if (destroyed) return
@@ -505,6 +547,7 @@ const view: TvView = {
       }
 
       activePlaylistId = active._id
+      lastKnownPlaylistId = activePlaylistId
       await ensurePrefsLoaded()
       creds = await loadCreds()
       if (destroyed) return

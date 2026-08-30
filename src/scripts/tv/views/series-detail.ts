@@ -1,6 +1,6 @@
 // Android TV series detail view (route: /tv/series/detail?id=<series_id>&season=&episode=).
 
-import { nextPaint, type TvView, type TvViewContext } from "@/scripts/tv/router"
+import { nextPaint, markLastOpenedEntry, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
 import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
 import { getCached } from "@/scripts/lib/cache.js"
@@ -39,7 +39,12 @@ import {
   type DetailHeroFields,
 } from "@/scripts/tv/detail-enrich.ts"
 import { isGenericEpisodeTitle } from "@/scripts/lib/episode-title.ts"
-import { isTmdbActive, LANGUAGE_GROUPING_EVENT, CONTENT_LANGUAGE_EVENT } from "@/scripts/lib/app-settings.js"
+import {
+  isTmdbActive,
+  LANGUAGE_GROUPING_EVENT,
+  CONTENT_LANGUAGE_EVENT,
+  getLanguageGroupingEnabled,
+} from "@/scripts/lib/app-settings.js"
 import { fmtImdbRating, ratingSortValue, formatPaddedHms } from "@/scripts/lib/format.ts"
 import { parseNamePrefix, languageTagLabel, prefixQualityTokens } from "@/scripts/lib/language-tags.ts"
 import { playEpisode } from "@/scripts/tv/playback"
@@ -54,7 +59,8 @@ import { toast } from "@/scripts/lib/toast"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog"
 import { log } from "@/scripts/lib/log"
 import { renderLanguagePills, type GroupingIndexLookup } from "@/scripts/lib/detail-chrome.ts"
-import { getSharedGroupingIndex } from "@/scripts/lib/language-groups.ts"
+import { getSharedGroupingIndex, isLanguageGroupingExplicitlyEnabled } from "@/scripts/lib/language-groups.ts"
+import { memoryConservative } from "@/scripts/tv/motion"
 
 const RESUME_MIN_SECONDS = 30
 const SIMILAR_LIMIT = 20
@@ -120,7 +126,41 @@ function collectRawEpisodes(seriesInfo: any): any[] {
   return []
 }
 
+// Set once boot() resolves a playlist; lets prepaint read the cache synchronously on a later visit.
+let lastKnownPlaylistId = ""
+
+function stubHero(row: CatalogRow) {
+  const languageTag = parseNamePrefix(row.name).tag
+  const languageLabel = languageTag ? languageTagLabel(languageTag, getActiveLocale()) : ""
+  const qualityLabel = prefixQualityTokens(row.name).join(" ")
+  return {
+    backdropUrl: null,
+    posterUrl: row.logo,
+    title: row.name,
+    subtitle: [row.year, row.genre].filter(Boolean).join(" · "),
+    metaChips: [languageLabel, qualityLabel],
+    description: row.plot || t("detail.noDescription"),
+    rating: fmtImdbRating(row.rating) || null,
+  }
+}
+
+function languageGroupingAllowed(): boolean {
+  return memoryConservative() ? isLanguageGroupingExplicitlyEnabled() : getLanguageGroupingEnabled()
+}
+
 const view: TvView = {
+  prepaint(root: HTMLElement, url: URL): boolean {
+    const seriesId = Number(url.searchParams.get("id") || "0")
+    if (!seriesId || !lastKnownPlaylistId) return false
+    const cachedCatalog = (getCached(lastKnownPlaylistId, "series")?.data || []) as CatalogRow[]
+    const catalogRow = cachedCatalog.find((row) => Number(row.id) === seriesId)
+    if (!catalogRow) return false
+    markLastOpenedEntry({ kind: "series", id: seriesId })
+    const chrome = createDetailChrome(root)
+    chrome.setSkeleton(false)
+    chrome.setHero(stubHero(catalogRow))
+    return true
+  },
   mount(root: HTMLElement, ctx: TvViewContext) {
     const seriesId = Number(ctx.url.searchParams.get("id") || "0")
     const deepLinkSeason = parseDeepLinkNumber(ctx.url.searchParams.get("season"))
@@ -663,6 +703,7 @@ const view: TvView = {
         catalog,
         getGroupingIndexFor,
         detailHrefBase: "/tv/series/detail",
+        groupingAllowed: languageGroupingAllowed(),
       })
     }
 
@@ -756,6 +797,7 @@ const view: TvView = {
         })
         return
       }
+      markLastOpenedEntry({ kind: "series", id: seriesId })
 
       const active = await getActiveEntry()
       if (destroyed) return
@@ -773,6 +815,7 @@ const view: TvView = {
       }
 
       activePlaylistId = active._id
+      lastKnownPlaylistId = activePlaylistId
       await ensurePrefsLoaded()
       creds = await loadCreds()
       if (destroyed) return
