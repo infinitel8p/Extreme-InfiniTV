@@ -1,4 +1,4 @@
-import type { TvView, TvViewContext } from "@/scripts/tv/router"
+import { takeLastOpenedEntry, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { navigate } from "astro:transitions/client"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
 import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
@@ -21,7 +21,11 @@ import {
   CONTENT_LANGUAGE_EVENT,
 } from "@/scripts/lib/app-settings.js"
 import { kindLabel } from "@/scripts/lib/kinds.ts"
-import { createGroupingIndexMemo, type CatalogGroupingIndex } from "@/scripts/lib/language-groups.ts"
+import {
+  createGroupingIndexMemo,
+  isLanguageGroupingExplicitlyEnabled,
+  type CatalogGroupingIndex,
+} from "@/scripts/lib/language-groups.ts"
 import { buildLanguageChips, setLanguageChipsOffset } from "@/scripts/lib/entry-card.ts"
 import {
   loadProgrammes,
@@ -30,20 +34,38 @@ import {
   EPG_LOADED_EVENT,
   EPG_OFFSET_EVENT,
 } from "@/scripts/lib/epg-data.js"
+import {
+  tvEpgSource,
+  toXtreamCreds,
+  tvShortEpgCache,
+  shortEpgNowNextSlot,
+  TV_EPG_SOURCE_CHANGED_EVENT,
+  type TvEpgSource,
+} from "@/scripts/tv/epg-source"
+import type { XtreamCreds, ShortEpgNowNext } from "@/scripts/lib/short-epg.ts"
 import { debounce } from "@/scripts/lib/debounce.ts"
 import { formatTimeRange } from "@/scripts/lib/now-next"
 import { keepFocusedInView } from "@/scripts/tv/focus"
-import { createHero, HERO_FOCUS_KEY, type HeroItem } from "@/scripts/tv/ui/hero"
+import { createHero, HERO_FOCUS_KEY, type HeroItem, type HeroHandle } from "@/scripts/tv/ui/hero"
 import { createRail, type RailHandle } from "@/scripts/tv/ui/rail"
 import {
   cardFocusKey,
   formatCardMeta,
+  nameReturningCard,
   type CardItem,
   type CardKind,
   type PosterCardItem,
   type LiveCardItem,
 } from "@/scripts/tv/ui/card"
 import { resumeContinueWatchingRow, type ContinueWatchingRow } from "@/scripts/tv/resume-playback.ts"
+import { neighboursOf, warmImageUrl } from "@/scripts/tv/prefetch"
+import {
+  heavyEffectsAllowed,
+  memoryConservative,
+  epgLoadWindow,
+  epgLoadMode,
+  EPG_NOW_NEXT_REFRESH_MS,
+} from "@/scripts/tv/motion"
 import { createActionSheet, type ActionSheetHandle, type ActionSheetItem } from "@/scripts/tv/ui/action-sheet.ts"
 import { buildCatalogMenuActions } from "@/scripts/tv/rail-card-menu.ts"
 import { backdropFromInfoPayload } from "@/scripts/lib/backdrop.ts"
@@ -61,6 +83,10 @@ const VERTICAL_OFFSET_RATIO = 0.4
 const CONTINUE_WATCHING_LIVE_CHANNEL_LIMIT = 5
 const CONTINUE_WATCHING_LIVE_CHANNEL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const HERO_ROTATION_INTERVAL_MS = 10000
+const HERO_BACKDROP_PREFETCH_RADIUS = 1
+const RAIL_IMAGE_WARM_COUNT = 8
+const RAIL_EAGER_CARD_COUNT = 8
+const RAIL_EAGER_FOLD_VIEWPORTS = 1.5
 
 interface HubStrip {
   id: string
@@ -116,40 +142,12 @@ interface ChipInfoRecord {
   displayTag: string | null
 }
 
-type GroupableRow = { id: number; name: string; year?: string; tmdb?: number | null }
-
 const getVodGroupingIndexFor = createGroupingIndexMemo()
 const getSeriesGroupingIndexFor = createGroupingIndexMemo()
 
-function toGroupableEntries(rows: CatalogRow[]): GroupableRow[] {
-  return rows.map((row) => ({
-    id: Number(row.id),
-    name: row.name || "",
-    year: row.year != null ? String(row.year) : undefined,
-    tmdb: row.tmdb ?? null,
-  }))
-}
-
-// Keyed by the raw catalog array's own reference, so repeated calls within one rebuild
-// (and across rebuilds until the cache updates) reuse the same mapped array the memo keys on.
-let vodGroupableCacheRef: CatalogRow[] | null = null
-let vodGroupableCache: GroupableRow[] = []
-let seriesGroupableCacheRef: CatalogRow[] | null = null
-let seriesGroupableCache: GroupableRow[] = []
-
-function groupableEntriesFor(kind: "vod" | "series", rows: CatalogRow[]): GroupableRow[] {
-  if (kind === "vod") {
-    if (vodGroupableCacheRef !== rows) {
-      vodGroupableCacheRef = rows
-      vodGroupableCache = toGroupableEntries(rows)
-    }
-    return vodGroupableCache
-  }
-  if (seriesGroupableCacheRef !== rows) {
-    seriesGroupableCacheRef = rows
-    seriesGroupableCache = toGroupableEntries(rows)
-  }
-  return seriesGroupableCache
+// Lite tier skips the multi-map grouping index unless the user explicitly opted in.
+function languageGroupingAllowed(): boolean {
+  return memoryConservative() ? isLanguageGroupingExplicitlyEnabled() : getLanguageGroupingEnabled()
 }
 
 /** One pass over a catalog collecting only the ids a rail needs, instead of indexing all of it. */
@@ -170,10 +168,11 @@ function chipInfoForEntry(
   playlistId: string,
   catalog: CatalogRow[]
 ): ChipInfoRecord | undefined {
-  if (!getLanguageGroupingEnabled() || !catalog.length) return undefined
-  const groupable = groupableEntriesFor(kind, catalog)
+  if (!languageGroupingAllowed() || !catalog.length) return undefined
+  // The raw cached rows are already GroupableRow-shaped; mapping them made a second full copy
+  // of the catalog and a second index, both keyed off that copy.
   const groupingIndex: CatalogGroupingIndex =
-    kind === "vod" ? getVodGroupingIndexFor(playlistId, groupable) : getSeriesGroupingIndexFor(playlistId, groupable)
+    kind === "vod" ? getVodGroupingIndexFor(playlistId, catalog) : getSeriesGroupingIndexFor(playlistId, catalog)
   const groupKey = groupingIndex.keyByEntryId.get(entryId)
   const groupInfo = groupKey ? groupingIndex.groupsByKey.get(groupKey) : null
   if (!groupInfo || groupInfo.entryIds.length < 2) return undefined
@@ -208,6 +207,9 @@ function currentProgrammeFor(
   channel: LiveChannelRow,
   playlistId: string
 ): { title: string; start: number; stop: number } | null {
+  if (liveEpgSource === "short-epg") {
+    return shortEpgNowNextSlot(liveNowNextCache.get(liveNowNextCacheKey(playlistId, channel.id)) ?? null).current
+  }
   const state = getProgrammesSync(playlistId)
   if (!state) return null
   const { current } = getNowNextForChannel(state.programmes, channel, playlistId)
@@ -274,6 +276,7 @@ function continueWatchingMenuActions(
 }
 
 type BackdropKind = "vod" | "series"
+type BackdropRef = { kind: BackdropKind; id: string | number }
 
 function backdropCacheKind(kind: BackdropKind, id: string | number): string {
   return kind === "vod" ? `vod_info_${id}` : `series_info_${id}`
@@ -347,8 +350,10 @@ function buildContinueWatchingItems(
   railTitle: string,
   playlistId: string,
   heroBuilders: Map<string, () => HeroItem>,
+  backdropRefs: Map<string, BackdropRef>,
   actionSheet: ActionSheetHandle,
-  onBackdropResolved: (focusKey: string) => void
+  onBackdropResolved: (focusKey: string) => void,
+  onLiveNowNextResolved: (focusKey: string) => void
 ): CardItem[] {
   const progressRows = getContinueWatching(playlistId, RAIL_ITEM_LIMIT) as any[]
   const liveRecents = getRecents(playlistId, "live") as LiveRecentEntry[]
@@ -392,7 +397,11 @@ function buildContinueWatchingItems(
           ),
       }
       items.push(item)
-      heroBuilders.set(cardFocusKey(railId, "live", recent.id), () => buildLiveHeroItem(railTitle, item, channel, playlistId))
+      const liveFocusKey = cardFocusKey(railId, "live", recent.id)
+      heroBuilders.set(liveFocusKey, () => buildLiveHeroItem(railTitle, item, channel, playlistId))
+      if (channel && liveEpgSource === "short-epg") {
+        requestLiveNowNext(channel, playlistId, liveFocusKey, onLiveNowNextResolved)
+      }
       continue
     }
 
@@ -422,6 +431,7 @@ function buildContinueWatchingItems(
       }
       items.push(item)
       const vodFocusKey = cardFocusKey(railId, "vod", row.id)
+      backdropRefs.set(vodFocusKey, { kind: "vod", id: row.id })
       heroBuilders.set(vodFocusKey, () => {
         const backdrop = heroBackdropImage(playlistId, "vod", row.id, posterUrl, vodFocusKey, onBackdropResolved)
         return {
@@ -474,6 +484,7 @@ function buildContinueWatchingItems(
     }
     items.push(item)
     const episodeFocusKey = cardFocusKey(railId, "episode", row.id)
+    if (row.seriesId != null) backdropRefs.set(episodeFocusKey, { kind: "series", id: row.seriesId })
     heroBuilders.set(episodeFocusKey, () => {
       const backdrop =
         row.seriesId != null
@@ -501,9 +512,11 @@ function buildFavoritesItems(
   filterKind: string,
   playlistId: string,
   heroBuilders: Map<string, () => HeroItem>,
+  backdropRefs: Map<string, BackdropRef>,
   chipInfoByFocusKey: Map<string, ChipInfoRecord>,
   actionSheet: ActionSheetHandle,
-  onBackdropResolved: (focusKey: string) => void
+  onBackdropResolved: (focusKey: string) => void,
+  onLiveNowNextResolved: (focusKey: string) => void
 ): CardItem[] {
   const raw = (getGlobalFavorites(playlistId) as Array<{ kind: "live" | "vod" | "series"; id: number }>).filter(
     (entry) => filterKind === "all" || entry.kind === filterKind
@@ -546,9 +559,11 @@ function buildFavoritesItems(
           ),
       }
       items.push(item)
-      heroBuilders.set(cardFocusKey(railId, "live", fav.id), () =>
-        buildLiveHeroItem(railTitle, item, channel, playlistId)
-      )
+      const liveFocusKey = cardFocusKey(railId, "live", fav.id)
+      heroBuilders.set(liveFocusKey, () => buildLiveHeroItem(railTitle, item, channel, playlistId))
+      if (channel && liveEpgSource === "short-epg") {
+        requestLiveNowNext(channel, playlistId, liveFocusKey, onLiveNowNextResolved)
+      }
       continue
     }
 
@@ -578,6 +593,7 @@ function buildFavoritesItems(
     }
     items.push(item)
     const favFocusKey = cardFocusKey(railId, fav.kind as CardKind, fav.id)
+    backdropRefs.set(favFocusKey, { kind: fav.kind, id: fav.id })
     heroBuilders.set(favFocusKey, () => {
       const backdrop = heroBackdropImage(playlistId, fav.kind, fav.id, posterUrl, favFocusKey, onBackdropResolved)
       return {
@@ -603,6 +619,7 @@ function buildWatchlistItems(
   filterKind: string,
   playlistId: string,
   heroBuilders: Map<string, () => HeroItem>,
+  backdropRefs: Map<string, BackdropRef>,
   chipInfoByFocusKey: Map<string, ChipInfoRecord>,
   actionSheet: ActionSheetHandle,
   onBackdropResolved: (focusKey: string) => void
@@ -653,6 +670,7 @@ function buildWatchlistItems(
     }
     items.push(item)
     const watchlistFocusKey = cardFocusKey(railId, row.kind, row.id)
+    backdropRefs.set(watchlistFocusKey, { kind: row.kind, id: row.id })
     heroBuilders.set(watchlistFocusKey, () => {
       const backdrop = heroBackdropImage(playlistId, row.kind, row.id, posterUrl, watchlistFocusKey, onBackdropResolved)
       return {
@@ -697,6 +715,7 @@ function buildRecentlyAddedItems(
   filterKind: string,
   playlistId: string,
   heroBuilders: Map<string, () => HeroItem>,
+  backdropRefs: Map<string, BackdropRef>,
   chipInfoByFocusKey: Map<string, ChipInfoRecord>,
   actionSheet: ActionSheetHandle,
   onBackdropResolved: (focusKey: string) => void
@@ -744,6 +763,7 @@ function buildRecentlyAddedItems(
     }
     items.push(item)
     const recentFocusKey = cardFocusKey(railId, entry.kind, entry.row.id)
+    backdropRefs.set(recentFocusKey, { kind: entry.kind, id: entry.row.id })
     heroBuilders.set(recentFocusKey, () => {
       const backdrop = heroBackdropImage(playlistId, entry.kind, entry.row.id, posterUrl, recentFocusKey, onBackdropResolved)
       return {
@@ -773,24 +793,32 @@ function buildItemsForStrip(
   railTitle: string,
   playlistId: string,
   heroBuilders: Map<string, () => HeroItem>,
+  backdropRefs: Map<string, BackdropRef>,
   chipInfoByFocusKey: Map<string, ChipInfoRecord>,
   actionSheet: ActionSheetHandle,
-  onBackdropResolved: (focusKey: string) => void
+  onBackdropResolved: (focusKey: string) => void,
+  onLiveNowNextResolved: (focusKey: string) => void
 ): CardItem[] {
   switch (strip.type) {
     case "continue-watching":
-      return buildContinueWatchingItems(strip.id, railTitle, playlistId, heroBuilders, actionSheet, onBackdropResolved)
+      return buildContinueWatchingItems(
+        strip.id, railTitle, playlistId, heroBuilders, backdropRefs, actionSheet, onBackdropResolved,
+        onLiveNowNextResolved
+      )
     case "favorites":
       return buildFavoritesItems(
-        strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey, actionSheet, onBackdropResolved
+        strip.id, railTitle, strip.kind, playlistId, heroBuilders, backdropRefs, chipInfoByFocusKey, actionSheet,
+        onBackdropResolved, onLiveNowNextResolved
       )
     case "watchlist":
       return buildWatchlistItems(
-        strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey, actionSheet, onBackdropResolved
+        strip.id, railTitle, strip.kind, playlistId, heroBuilders, backdropRefs, chipInfoByFocusKey, actionSheet,
+        onBackdropResolved
       )
     case "recently-added":
       return buildRecentlyAddedItems(
-        strip.id, railTitle, strip.kind, playlistId, heroBuilders, chipInfoByFocusKey, actionSheet, onBackdropResolved
+        strip.id, railTitle, strip.kind, playlistId, heroBuilders, backdropRefs, chipInfoByFocusKey, actionSheet,
+        onBackdropResolved
       )
     default:
       return []
@@ -811,6 +839,18 @@ function shuffle<T>(items: T[]): T[] {
   return shuffled
 }
 
+/** Eager posters are resident decoded bitmaps; lite never eager-loads any. */
+function eagerCardCount(): number {
+  return memoryConservative() ? 0 : RAIL_EAGER_CARD_COUNT
+}
+
+/** New cards get an eager poster load when the rail sits within RAIL_EAGER_FOLD_VIEWPORTS of the top. */
+function railEagerCount(rail: RailHandle, viewportHeight: number): number {
+  if (memoryConservative()) return 0
+  const top = rail.el.getBoundingClientRect().top
+  return top <= viewportHeight * RAIL_EAGER_FOLD_VIEWPORTS ? eagerCardCount() : 0
+}
+
 function scheduleIdle(fn: () => void): void {
   if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
     window.requestIdleCallback(fn, { timeout: 2000 })
@@ -819,19 +859,133 @@ function scheduleIdle(fn: () => void): void {
   }
 }
 
+const PREPAINT_RAIL_LIMIT = 2
+
+// Set once init() finishes a rail build; lets prepaint read the cache synchronously on a later visit.
+let lastWarmPlaylistId = ""
+
+// Memory-conservative TVs on an Xtream playlist resolve live-card now/next off the
+// per-channel short-EPG client instead of the bulk XMLTV feed; set once per init().
+let liveEpgSource: TvEpgSource = "xmltv-full"
+let liveEpgCreds: XtreamCreds | null = null
+const liveNowNextCache = new Map<string, ShortEpgNowNext>()
+
+function liveNowNextCacheKey(playlistId: string, channelId: number | string): string {
+  return `${playlistId}:${channelId}`
+}
+
+function requestLiveNowNext(
+  channel: LiveChannelRow,
+  playlistId: string,
+  focusKey: string,
+  onResolved: (focusKey: string) => void
+): void {
+  if (!liveEpgCreds) return
+  void tvShortEpgCache().getNowNext(liveEpgCreds, channel.id).then((nowNext) => {
+    if (!nowNext) return
+    liveNowNextCache.set(liveNowNextCacheKey(playlistId, channel.id), nowNext)
+    onResolved(focusKey)
+  })
+}
+
+interface PrepaintedHome {
+  root: HTMLElement
+  scroller: HTMLElement
+  track: HTMLElement
+  hero: HeroHandle
+  actionSheet: ActionSheetHandle
+  railHandles: Map<string, RailHandle>
+}
+let prepaintedHome: PrepaintedHome | null = null
+
+function discardPrepaintedHome(): void {
+  const stale = prepaintedHome
+  if (!stale) return
+  prepaintedHome = null
+  for (const rail of stale.railHandles.values()) rail.destroy()
+  stale.railHandles.clear()
+  stale.hero.destroy()
+  stale.actionSheet.destroy()
+  stale.scroller.remove()
+}
+
 const view: TvView = {
-  mount(root: HTMLElement, _ctx: TvViewContext) {
+  releasePrepaint: discardPrepaintedHome,
+  prepaint(root: HTMLElement): boolean {
+    if (!lastWarmPlaylistId) return false
+    const playlistId = lastWarmPlaylistId
+    const strips = computeStrips().filter((strip) => RAIL_TITLE_KEY[strip.id])
+    if (!strips.length) return false
+
     const scroller = document.createElement("div")
     scroller.className = "h-full overflow-hidden"
     const track = document.createElement("div")
     track.className = "flex flex-col gap-10 pb-20"
     scroller.appendChild(track)
-    root.appendChild(scroller)
 
     const hero = createHero(track)
-    const railHandles = new Map<string, RailHandle>()
     const actionSheet: ActionSheetHandle = createActionSheet("tv-home-actions-dialog")
+    const railHandles = new Map<string, RailHandle>()
+    const openedEntry = takeLastOpenedEntry()
+    let openedEntryHandled = false
+    let firstHeroItem: HeroItem | null = null
+
+    for (const strip of strips.slice(0, PREPAINT_RAIL_LIMIT)) {
+      const railTitle = t(RAIL_TITLE_KEY[strip.id])
+      const rail = createRail({ title: railTitle, focusSectionId: `tv-home-rail:${strip.id}` })
+      const heroBuilders = new Map<string, () => HeroItem>()
+      const backdropRefs = new Map<string, BackdropRef>()
+      const chipInfoByFocusKey = new Map<string, ChipInfoRecord>()
+      const items = buildItemsForStrip(
+        strip, railTitle, playlistId, heroBuilders, backdropRefs, chipInfoByFocusKey, actionSheet, () => {}, () => {}
+      )
+      if (!items.length) {
+        rail.destroy()
+        continue
+      }
+      // Prepaint is always the first couple of rails, always above the fold.
+      const eagerHere = railHandles.size === 0 || heavyEffectsAllowed() ? eagerCardCount() : 0
+      rail.setItems(items, { eagerCount: eagerHere })
+      decorateRailChips(rail, items, chipInfoByFocusKey)
+      track.appendChild(rail.el)
+      railHandles.set(strip.id, rail)
+
+      if (!firstHeroItem) firstHeroItem = heroBuilders.get(cardFocusKey(strip.id, items[0].kind, items[0].id))?.() ?? null
+      if (openedEntry && !openedEntryHandled && nameReturningCard(rail.el, `${openedEntry.kind}:${openedEntry.id}`)) {
+        openedEntryHandled = true
+      }
+    }
+
+    if (!railHandles.size) {
+      hero.destroy()
+      actionSheet.destroy()
+      return false
+    }
+    hero.show(firstHeroItem || { eyebrow: t("welcome.eyebrow"), title: t("welcome.heading"), meta: "" })
+    root.appendChild(scroller)
+
+    prepaintedHome = { root, scroller, track, hero, actionSheet, railHandles }
+    return true
+  },
+  mount(root: HTMLElement, _ctx: TvViewContext) {
+    const prepainted = prepaintedHome && prepaintedHome.root === root ? prepaintedHome : null
+    if (prepainted) prepaintedHome = null
+    else discardPrepaintedHome()
+
+    const scroller = prepainted?.scroller ?? document.createElement("div")
+    scroller.className = "h-full overflow-hidden"
+    const track = prepainted?.track ?? document.createElement("div")
+    track.className = "flex flex-col gap-10 pb-20"
+    if (!prepainted) {
+      scroller.appendChild(track)
+      root.appendChild(scroller)
+    }
+
+    const hero = prepainted?.hero ?? createHero(track)
+    const railHandles = new Map<string, RailHandle>(prepainted?.railHandles)
+    const actionSheet: ActionSheetHandle = prepainted?.actionSheet ?? createActionSheet("tv-home-actions-dialog")
     let heroBuilders = new Map<string, () => HeroItem>()
+    let heroBackdropRefs = new Map<string, BackdropRef>()
     let strips: HubStrip[] = []
     let heroInitialized = false
     let lastFocusKey: string | null = null
@@ -839,6 +993,7 @@ const view: TvView = {
     let activePlaylistId = ""
     let activeCreds: { host: string; port: string; user: string; pass: string } | null = null
     let epgRequested = false
+    let epgRefreshTimer: ReturnType<typeof setInterval> | null = null
     let warmupScheduled = false
     let initialFocusApplied = false
     let heroRotationPool: string[] = []
@@ -881,6 +1036,19 @@ const view: TvView = {
       updateHeroForFocusKey(focusKey)
     }
 
+    // Patches the rail card's now-playing text in place - a full rail rebuild for one
+    // resolved short-EPG fetch would be the "bulk loop" this wiring is meant to avoid.
+    function onLiveNowNextResolved(focusKey: string): void {
+      if (destroyed) return
+      const channelId = focusKey.split(":").pop()
+      const meta = track.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(focusKey)}"] [data-card-meta]`)
+      if (meta && channelId) {
+        const slot = shortEpgNowNextSlot(liveNowNextCache.get(liveNowNextCacheKey(activePlaylistId, channelId)) ?? null)
+        meta.textContent = slot.current?.title || ""
+      }
+      if (lastFocusKey === focusKey) updateHeroForFocusKey(focusKey)
+    }
+
     // Idle-content rotation: ticks only while nothing in the rails holds focus (initial
     // mount, focus on the nav rail, focus on the hero itself). A focused rail card pauses
     // it and drives the hero itself, same as before this rotation existed.
@@ -902,8 +1070,11 @@ const view: TvView = {
       heroRotationTimer = null
     }
 
+    // Always restarts the countdown so a late focus swap can't make it fire moments later.
+    // Lite skips the timer entirely - idle rotation would keep decoding full-size backdrops.
     function startHeroRotation(): void {
-      if (heroRotationTimer || heroRotationPool.length < 2) return
+      stopHeroRotation()
+      if (memoryConservative() || heroRotationPool.length < 2) return
       heroRotationTimer = setInterval(tickHeroRotation, HERO_ROTATION_INTERVAL_MS)
     }
 
@@ -924,7 +1095,43 @@ const view: TvView = {
       const isTrackCard = !!focusKeyEl && track.contains(focusKeyEl) && focusKeyEl.dataset.focusKey !== HERO_FOCUS_KEY
       isRailCardFocused = isTrackCard
       applyHeroRotationState()
-      if (isTrackCard) onFocusInDebounced(focusKeyEl!)
+      if (isTrackCard) {
+        onFocusInDebounced(focusKeyEl!)
+        // Lite tier skips backdrop warming and cross-rail warming entirely; the rail's own
+        // same-rail neighbour poster warm-up (rail.ts) is cheap enough to keep either way.
+        if (heavyEffectsAllowed()) {
+          prefetchNeighbourHeroBackdrops(focusKeyEl!)
+          warmAdjacentRailImages(focusKeyEl!)
+        }
+      }
+    }
+
+    // Only warms a backdrop already sitting in the vod_info/series_info cache - never a fresh fetch.
+    function prefetchNeighbourHeroBackdrops(focusedCard: HTMLElement): void {
+      const railTrack = focusedCard.closest<HTMLElement>("[data-rail-track]")
+      if (!railTrack) return
+      for (const neighbour of neighboursOf(railTrack, focusedCard, HERO_BACKDROP_PREFETCH_RADIUS)) {
+        const ref = heroBackdropRefs.get(neighbour.dataset.focusKey || "")
+        if (!ref) continue
+        warmImageUrl(cachedBackdropUrl(activePlaylistId, ref.kind, ref.id))
+      }
+    }
+
+    function stripIndexForCard(card: HTMLElement): number {
+      return strips.findIndex((strip) => railHandles.get(strip.id)?.el.contains(card))
+    }
+
+    // The next ArrowDown/Up shows the rail above/below before its own images finish decoding
+    // otherwise, since it only starts loading once its cards actually enter the viewport.
+    function warmAdjacentRailImages(focusedCard: HTMLElement): void {
+      const index = stripIndexForCard(focusedCard)
+      if (index < 0) return
+      for (const neighbourIndex of [index - 1, index + 1]) {
+        const rail = strips[neighbourIndex] && railHandles.get(strips[neighbourIndex].id)
+        if (!rail) continue
+        const cards = rail.el.querySelectorAll<HTMLElement>("[data-prefetch-url]")
+        for (let i = 0; i < cards.length && i < RAIL_IMAGE_WARM_COUNT; i++) warmImageUrl(cards[i].dataset.prefetchUrl)
+      }
     }
     document.addEventListener("focusin", onFocusIn)
 
@@ -944,9 +1151,10 @@ const view: TvView = {
       railHandles.clear()
     }
 
-    function initRailSkeletons(): void {
-      destroyRails()
+    function initRailSkeletons(preserveExisting = false): void {
+      if (!preserveExisting) destroyRails()
       for (const strip of strips) {
+        if (preserveExisting && railHandles.has(strip.id)) continue
         const titleKey = RAIL_TITLE_KEY[strip.id]
         if (!titleKey) continue
         const rail = createRail({ title: t(titleKey), focusSectionId: `tv-home-rail:${strip.id}` })
@@ -956,12 +1164,31 @@ const view: TvView = {
       }
     }
 
+    // now-next mode bakes "now" into the parse at load time, so unlike full mode it
+    // needs an active refresh to notice a programme ending - see motion.ts.
+    function startEpgRefreshTimer(): void {
+      if (epgRefreshTimer || epgLoadMode() !== "now-next" || liveEpgSource === "short-epg") return
+      epgRefreshTimer = setInterval(() => {
+        if (!activeCreds) return
+        void loadProgrammes(activePlaylistId, activeCreds, {
+          force: true,
+          window: epgLoadWindow(),
+          epgMode: epgLoadMode(),
+        }).then(() => {
+          if (!destroyed) void rebuildAllRails()
+        })
+      }, EPG_NOW_NEXT_REFRESH_MS)
+    }
+
     function maybeLoadEpg(): void {
-      if (!activeCreds || epgRequested) return
+      if (liveEpgSource === "short-epg" || !activeCreds || epgRequested) return
       const hasLiveCard = [...heroBuilders.keys()].some((key) => key.includes(":live:"))
       if (!hasLiveCard) return
       epgRequested = true
-      void loadProgrammes(activePlaylistId, activeCreds).catch(() => {})
+      void loadProgrammes(activePlaylistId, activeCreds, { window: epgLoadWindow(), epgMode: epgLoadMode() }).catch(
+        () => {}
+      )
+      startEpgRefreshTimer()
     }
 
     function scheduleWarmup(): void {
@@ -977,8 +1204,10 @@ const view: TvView = {
     async function rebuildAllRails(): Promise<void> {
       if (destroyed || !activePlaylistId) return
       const nextHeroBuilders = new Map<string, () => HeroItem>()
+      const nextBackdropRefs = new Map<string, BackdropRef>()
       const rotationCandidates: string[] = []
       let firstFocusKey: string | null = null
+      const viewportHeight = root.clientHeight || window.innerHeight
 
       for (const strip of strips) {
         const rail = railHandles.get(strip.id)
@@ -987,9 +1216,10 @@ const view: TvView = {
         const railTitle = titleKey ? t(titleKey) : strip.id
         const chipInfoByFocusKey = new Map<string, ChipInfoRecord>()
         const items = buildItemsForStrip(
-          strip, railTitle, activePlaylistId, nextHeroBuilders, chipInfoByFocusKey, actionSheet, onBackdropResolved
+          strip, railTitle, activePlaylistId, nextHeroBuilders, nextBackdropRefs, chipInfoByFocusKey, actionSheet,
+          onBackdropResolved, onLiveNowNextResolved
         )
-        rail.setItems(items)
+        rail.setItems(items, { eagerCount: railEagerCount(rail, viewportHeight) })
         decorateRailChips(rail, items, chipInfoByFocusKey)
         if (items.length && !firstFocusKey) {
           firstFocusKey = cardFocusKey(strip.id, items[0].kind, items[0].id)
@@ -1007,6 +1237,7 @@ const view: TvView = {
       }
 
       heroBuilders = nextHeroBuilders
+      heroBackdropRefs = nextBackdropRefs
       applyAutofocusMarker(firstFocusKey)
       ensureInitialFocus()
 
@@ -1032,10 +1263,24 @@ const view: TvView = {
       void rebuildAllRails()
     }
 
+    // The provider's short-EPG endpoint proved empirically empty - switch to the
+    // streaming XMLTV path exactly as if it had won at boot.
+    function onEpgSourceChanged(event: Event): void {
+      const detail = (event as CustomEvent).detail
+      if (liveEpgSource !== "short-epg" || !detail || detail.playlistId !== activePlaylistId) return
+      liveEpgSource = detail.source
+      maybeLoadEpg()
+    }
+
     function onEpgOffsetChanged(event: Event): void {
+      if (liveEpgSource === "short-epg") return
       const detail = (event as CustomEvent).detail
       if (!activeCreds || !detail || detail.playlistId !== activePlaylistId) return
-      void loadProgrammes(activePlaylistId, activeCreds, { force: true }).then(() => {
+      void loadProgrammes(activePlaylistId, activeCreds, {
+        force: true,
+        window: epgLoadWindow(),
+        epgMode: epgLoadMode(),
+      }).then(() => {
         if (!destroyed) void rebuildAllRails()
       })
     }
@@ -1060,6 +1305,7 @@ const view: TvView = {
     document.addEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
     document.addEventListener(EPG_LOADED_EVENT, onCatalogChanged)
     document.addEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
+    document.addEventListener(TV_EPG_SOURCE_CHANGED_EVENT, onEpgSourceChanged)
     document.addEventListener(HUB_STRIPS_EVENT, onHubStripsChanged)
     document.addEventListener(LOCALE_EVENT, onLocaleChanged)
 
@@ -1081,12 +1327,14 @@ const view: TvView = {
       activePlaylistId = active._id
       activeCreds = await loadCreds()
       if (destroyed) return
+      liveEpgCreds = activeCreds ? toXtreamCreds(activePlaylistId, activeCreds) : null
+      liveEpgSource = tvEpgSource(liveEpgCreds)
 
       await ensurePrefsLoaded()
       if (destroyed) return
 
       strips = computeStrips()
-      initRailSkeletons()
+      initRailSkeletons(!!prepainted)
 
       // catalog.js's own warmup events never cover this step: a cold-memory,
       // warm-IndexedDB reload spends its slow time right here, inside hydrateCache,
@@ -1123,6 +1371,7 @@ const view: TvView = {
       if (destroyed) return
 
       await rebuildAllRails()
+      lastWarmPlaylistId = activePlaylistId
       if (!catalogWasHot) document.dispatchEvent(new CustomEvent(CATALOG_WARMED_EVENT, { detail: { playlistId: activePlaylistId } }))
       scheduleWarmup()
     }
@@ -1131,6 +1380,7 @@ const view: TvView = {
 
     return () => {
       destroyed = true
+      if (epgRefreshTimer) clearInterval(epgRefreshTimer)
       document.removeEventListener(CATALOG_WARMED_EVENT, onCatalogChanged)
       document.removeEventListener("xt:favorites-changed", onCatalogChanged)
       document.removeEventListener("xt:watchlist-changed", onCatalogChanged)
@@ -1140,6 +1390,7 @@ const view: TvView = {
       document.removeEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
       document.removeEventListener(EPG_LOADED_EVENT, onCatalogChanged)
       document.removeEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)
+      document.removeEventListener(TV_EPG_SOURCE_CHANGED_EVENT, onEpgSourceChanged)
       document.removeEventListener(HUB_STRIPS_EVENT, onHubStripsChanged)
       document.removeEventListener(LOCALE_EVENT, onLocaleChanged)
       document.removeEventListener("focusin", onFocusIn)
