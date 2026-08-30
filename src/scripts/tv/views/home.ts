@@ -918,7 +918,7 @@ const view: TvView = {
     if (!strips.length) return false
 
     const scroller = document.createElement("div")
-    scroller.className = "h-full overflow-hidden"
+    scroller.className = "h-full overflow-hidden px-[var(--tv-focus-pad)] -mx-[var(--tv-focus-pad)]"
     const track = document.createElement("div")
     track.className = "flex flex-col gap-10 pb-20"
     scroller.appendChild(track)
@@ -973,7 +973,7 @@ const view: TvView = {
     else discardPrepaintedHome()
 
     const scroller = prepainted?.scroller ?? document.createElement("div")
-    scroller.className = "h-full overflow-hidden"
+    scroller.className = "h-full overflow-hidden px-[var(--tv-focus-pad)] -mx-[var(--tv-focus-pad)]"
     const track = prepainted?.track ?? document.createElement("div")
     track.className = "flex flex-col gap-10 pb-20"
     if (!prepainted) {

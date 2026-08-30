@@ -54,7 +54,7 @@ export function createRail(options: RailOptions): RailHandle {
   head.append(heading, count)
 
   const scroller = document.createElement("div")
-  scroller.className = "overflow-hidden py-[var(--tv-focus-pad)] -my-[var(--tv-focus-pad)]"
+  scroller.className = "overflow-hidden p-[var(--tv-focus-pad)] -m-[var(--tv-focus-pad)]"
   const track = document.createElement("div")
   track.dataset.railTrack = "1"
   track.className = "flex items-start gap-4 py-1"

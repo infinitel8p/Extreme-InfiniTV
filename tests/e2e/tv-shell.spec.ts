@@ -569,10 +569,11 @@ test("a rail's first card rests at translate 0 when entered", async ({ page }) =
       const track = card.parentElement!
       const scroller = track.parentElement!
       const trackPad = parseFloat(getComputedStyle(track).paddingLeft) || 0
+      const scrollerPad = parseFloat(getComputedStyle(scroller).paddingLeft) || 0
       return {
         transform: track.style.transform,
         cardLeft: Math.round(card.getBoundingClientRect().left),
-        contentLeft: Math.round(scroller.getBoundingClientRect().left + trackPad),
+        contentLeft: Math.round(scroller.getBoundingClientRect().left + scrollerPad + trackPad),
       }
     }, focusKey)
     expect(resting.transform, `rail ${focusKey} was translated on entry`).toMatch(/translateX\(0px\)|^$/)
