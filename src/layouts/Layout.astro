@@ -1031,10 +1031,14 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   async function pushIdlePresence() {
     if (onLogin()) return
     try {
-      const [{ setIdleRichPresence }, { getActiveEntry }] = await Promise.all([
+      const [{ setIdleRichPresence }, { getActiveEntry }, { getCastSession }] = await Promise.all([
         import("@/scripts/lib/discord-rpc.js"),
         import("@/scripts/lib/creds.js"),
+        import("@/scripts/lib/tv-cast.js"),
       ])
+      // A cast keeps playing across navigations; its presence outranks browsing.
+      const casting = getCastSession()
+      if (casting && !casting.connectedOnly) return
       const active = await getActiveEntry()
       setIdleRichPresence({
         playlistId: active?._id || "",
