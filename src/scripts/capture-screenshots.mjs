@@ -6,6 +6,8 @@
 //   pnpm screenshots --device=Desktop
 //   pnpm screenshots --route=/livetv
 //   pnpm screenshots --theme=light
+//   pnpm screenshots --tv               # capture the /tv/* Android TV browse UI (Android-TV device only)
+//   pnpm screenshots --tv --route=/tv/live
 //
 // Credentials come from `.env.screenshots` (gitignored) or env vars:
 //   SCREENSHOT_URL=http://localhost:4321
@@ -51,6 +53,9 @@ const DEVICES = {
 
 const ROUTES = ["/", "/livetv", "/movies", "/series", "/favorites", "/recently-added", "/epg", "/search", "/downloads", "/settings"]
 const WELCOME_ROUTES = ["/"]
+const TV_ROUTES = ["/tv", "/tv/live", "/tv/movies", "/tv/series", "/tv/search", "/tv/downloads", "/tv/settings"]
+// Matches TV_VIEW_MOUNTED_EVENT in src/scripts/tv/router.ts.
+const TV_VIEW_MOUNTED_EVENT = "xt:tv-view-mounted"
 
 function loadDotEnv() {
   const file = path.join(ROOT, ".env.screenshots")
@@ -301,7 +306,67 @@ async function reachable(url) {
   }
 }
 
-async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, seed, theme, slugSuffix = "", redactions = [], snapshot = null, displayName = "Demo provider") {
+async function focusTvContentAwayFromRail(page) {
+  await page.evaluate(() => {
+    try {
+      const main = document.getElementById("tv-main")
+      const focusable = main
+        ? main.querySelector('a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')
+        : null
+      if (focusable) {
+        focusable.focus()
+      } else if (document.activeElement && document.activeElement.blur) {
+        document.activeElement.blur()
+      }
+    } catch {}
+  }).catch(() => {})
+}
+
+// Nav rail animates 5rem -> 15rem on focus-within; #tv-nav itself never resizes, so its
+// own width is the settled target for the inner div the animation runs on.
+async function waitForTvNavRailSettled(page) {
+  await page.evaluate(() => {
+    return new Promise((resolve) => {
+      const nav = document.getElementById("tv-nav")
+      const rail = nav ? nav.querySelector(":scope > div") : null
+      if (!nav || !rail) {
+        resolve()
+        return
+      }
+      const restWidth = nav.offsetWidth
+      const deadline = performance.now() + 2000
+      let previousWidth = null
+      const step = () => {
+        const width = rail.offsetWidth
+        const settled = previousWidth !== null && width === previousWidth && Math.abs(width - restWidth) < 2
+        previousWidth = width
+        if (settled || performance.now() >= deadline) {
+          resolve()
+          return
+        }
+        requestAnimationFrame(step)
+      }
+      requestAnimationFrame(step)
+    })
+  }).catch(() => {})
+}
+
+async function railStillFocused(page) {
+  return page
+    .evaluate(() => {
+      const nav = document.getElementById("tv-nav")
+      return !!(nav && nav.contains(document.activeElement))
+    })
+    .catch(() => false)
+}
+
+async function settleTvNavFocus(page) {
+  await focusTvContentAwayFromRail(page)
+  await waitForTvNavRailSettled(page)
+  if (await railStillFocused(page)) await focusTvContentAwayFromRail(page)
+}
+
+async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, seed, theme, slugSuffix = "", redactions = [], snapshot = null, displayName = "Demo provider", tvMode = false) {
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: viewport.deviceScaleFactor,
@@ -313,7 +378,7 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
 
   const appVersion = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")).version || "0.0.0"
 
-  await context.addInitScript(({ seed, theme, snapshot, displayName, appVersion }) => {
+  await context.addInitScript(({ seed, theme, snapshot, displayName, appVersion, tvMode }) => {
     try {
       if (snapshot) {
         for (const [key, value] of Object.entries(snapshot)) {
@@ -337,11 +402,23 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
       localStorage.setItem("xt_theme", theme)
       // suppress the "What's new" modal a fresh profile would otherwise show
       localStorage.setItem("xt_last_seen_version", appVersion)
+      if (tvMode) {
+        // keeps TvLayout's pre-paint check on /tv instead of redirecting to the classic route
+        localStorage.setItem("xt_is_tv", "1")
+        localStorage.setItem("xt_force_tv", "1")
+      }
     } catch {}
     try {
       sessionStorage.setItem("xt_splash_done", "1")
     } catch {}
-  }, { seed, theme, snapshot, displayName, appVersion })
+  }, { seed, theme, snapshot, displayName, appVersion, tvMode })
+
+  if (tvMode) {
+    await context.addInitScript((eventName) => {
+      window.__xtTvViewMounted = false
+      document.addEventListener(eventName, () => { window.__xtTvViewMounted = true })
+    }, TV_VIEW_MOUNTED_EVENT)
+  }
 
   const page = await context.newPage()
 
@@ -359,6 +436,20 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
     }
     // pre-seeded splash stays in the DOM as display:none, so hidden not detached
     await page.waitForSelector("#xt-app-splash", { state: "hidden", timeout: 10_000 }).catch(() => {})
+    if (tvMode) {
+      const viewMounted = await page
+        .waitForFunction(() => window.__xtTvViewMounted === true, undefined, { timeout: 15_000 })
+        .then(() => true, () => false)
+      if (!viewMounted) {
+        await page
+          .waitForFunction(() => {
+            const main = document.getElementById("tv-main")
+            return !!main && main.children.length > 0
+          }, undefined, { timeout: 5_000 })
+          .catch(() => {})
+      }
+      await settleTvNavFocus(page)
+    }
     // Catalog warming kicks in on idle after load (a fresh context has an
     // empty cache); if the strip appears, hold the shot until it is gone.
     const warmingStrip = page.locator(".warming-strip")
@@ -402,16 +493,19 @@ async function main() {
     process.exit(1)
   }
 
+  const tvMode = args.tv === "true"
   const deviceFilter = args.device
   const routeFilter = args.route
-  const devices = Object.entries(DEVICES).filter(([name]) => !deviceFilter || name.toLowerCase() === deviceFilter.toLowerCase())
-  const routes = ROUTES.filter((r) => !routeFilter || r === routeFilter)
+  const routePool = tvMode ? TV_ROUTES : ROUTES
+  const deviceEntries = tvMode && !deviceFilter ? [["Android-TV", DEVICES["Android-TV"]]] : Object.entries(DEVICES)
+  const devices = deviceEntries.filter(([name]) => !deviceFilter || name.toLowerCase() === deviceFilter.toLowerCase())
+  const routes = routePool.filter((route) => !routeFilter || route === routeFilter)
   if (devices.length === 0) {
     console.error(`No device matched --device=${deviceFilter}. Known: ${Object.keys(DEVICES).join(", ")}`)
     process.exit(1)
   }
   if (routes.length === 0) {
-    console.error(`No route matched --route=${routeFilter}. Known: ${ROUTES.join(", ")}`)
+    console.error(`No route matched --route=${routeFilter}. Known: ${routePool.join(", ")}`)
     process.exit(1)
   }
 
@@ -442,7 +536,7 @@ async function main() {
   }
 
   const hasState = Boolean(snapshot || seed)
-  const welcomeRoutes = hasState ? WELCOME_ROUTES.filter((route) => !routeFilter || route === routeFilter) : []
+  const welcomeRoutes = hasState && !tvMode ? WELCOME_ROUTES.filter((route) => !routeFilter || route === routeFilter) : []
   const redactionsEnabled = args.redact !== "false" && process.env.XT_REDACT !== "false"
   const redactions = redactionsEnabled ? buildRedactions(snapshot) : []
 
@@ -459,9 +553,9 @@ async function main() {
   try {
     for (const [name, viewport] of devices) {
       console.log(`> ${name} (${viewport.width}x${viewport.height})`)
-      await captureForDevice(browser, name, viewport, routes, baseUrl, seed, theme, "", redactions, snapshot, displayName)
+      await captureForDevice(browser, name, viewport, routes, baseUrl, seed, theme, "", redactions, snapshot, displayName, tvMode)
       if (welcomeRoutes.length > 0) {
-        await captureForDevice(browser, name, viewport, welcomeRoutes, baseUrl, null, theme, "-welcome", redactions, null, displayName)
+        await captureForDevice(browser, name, viewport, welcomeRoutes, baseUrl, null, theme, "-welcome", redactions, null, displayName, tvMode)
       }
     }
   } finally {

@@ -847,6 +847,9 @@ jobs:
       - name: Setup Microsoft Store CLI
         if: env.HAS_MSSTORE_SECRET == 'true'
         uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+        with:
+          # 0.4.x still fails the Azure blob upload at 0% (0.4.1 fixed a different crash)
+          version: v0.3.9
 
       # msstore-cli stores credentials via libsecret, which needs a running
       # Secret Service (gnome-keyring on a D-Bus session bus) that headless
