@@ -73,11 +73,11 @@
 | <img src="docs/screenshots/Desktop/livetv.png" alt="Live TV channel list with inline EPG showing now/next programmes"/> | <img src="docs/screenshots/Desktop/movies.png" alt="Movies poster grid with category filtering"/> | <img src="docs/screenshots/Desktop/series.png" alt="Series detail view with seasons and episodes"/> |
 | <img src="docs/screenshots/Desktop/epg.png" alt="Full XMLTV schedule grid for the EPG page"/> | <img src="docs/screenshots/Desktop/settings.png" alt="Settings page with playlists, display, network, and downloads"/> | <img src="docs/screenshots/Desktop/favorites.png" alt="Favorites page showing the cross-playlist union of starred items"/> |
 
-**Android TV (10-foot UI, D-pad focus)**
+**Android TV (dedicated 10-foot interface, D-pad focus)**
 
 | | | |
 |---|---|---|
-| <img src="docs/screenshots/Android-TV/home.png" alt="Extreme InfiniTV home screen on Android TV"/> | <img src="docs/screenshots/Android-TV/livetv.png" alt="Live TV on Android TV with D-pad focus on the channel list"/> | <img src="docs/screenshots/Android-TV/movies.png" alt="Movies poster grid on Android TV"/> |
+| <img src="docs/screenshots/Android-TV/tv.png" alt="Android TV home screen with an artwork hero and a favorites rail"/> | <img src="docs/screenshots/Android-TV/tv-live.png" alt="Live TV on Android TV with channel tiles and a programme panel"/> | <img src="docs/screenshots/Android-TV/tv-movies.png" alt="Movies grid on the Android TV interface with ratings and language pills"/> |
 
 **Phone (portrait, touch)**
 
