@@ -72,7 +72,8 @@ const CHANNELS_KEEP_IN_VIEW_FRACTION = 0.35
 const GUIDE_KEEP_IN_VIEW_REM = 8.75
 const LONG_PRESS_HOLD_MS = 650
 const FAVORITES_CHANGED_EVENT = "xt:favorites-changed"
-const CHANNEL_ROW_FALLBACK_HEIGHT_REM = 4.5
+// Matches live-row.ts's min-h-[4rem] row, so the initial estimate never overshoots.
+const CHANNEL_ROW_FALLBACK_HEIGHT_REM = 4
 const CHANNEL_ROW_GAP_REM = 0.5
 const CHANNEL_ROW_OVERSCAN = 6
 // Below this the "next" title column would crowd out the channel name; live-row.ts owns the CSS toggle.
@@ -482,7 +483,7 @@ const view: TvView = {
     }
 
     function focusChannelRow(channelId: string): void {
-      channelRows?.focusKey(channelId)
+      if (!channelRows?.focusKey(channelId)) channelRows?.focusIndex(0)
     }
 
     function tick(): void {

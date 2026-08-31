@@ -8,7 +8,15 @@
 // in lazily via dynamic import the first time renderMarkdown() is called.
 // Until then no page bundle that imports this module pays for them.
 
+import type {
+  Tokens,
+  TokenizerAndRendererExtension,
+  TokenizerThis,
+  RendererThis,
+} from "marked"
 import { compareVersions } from "@/scripts/lib/version-compare.js"
+import { escapeHtml } from "@/scripts/lib/format.js"
+import { t } from "@/scripts/lib/i18n.js"
 
 const CACHE_KEY = "xt_changelog_cache"
 const CACHE_TTL_MS = 60 * 60 * 1000
@@ -106,6 +114,65 @@ const ALLOWED_ATTR = [
   "title", "type", "width",
 ]
 
+export type AlertType = "note" | "tip" | "important" | "warning" | "caution"
+
+interface AlertToken extends Tokens.Generic {
+  type: "alert"
+  alertType: AlertType
+}
+
+const ALERT_MARKER_RE = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i
+
+export function matchAlertMarker(line: string): AlertType | null {
+  const match = ALERT_MARKER_RE.exec(line.trim())
+  return match ? (match[1].toLowerCase() as AlertType) : null
+}
+
+function alertTokenizer(
+  this: TokenizerThis,
+  src: string
+): AlertToken | undefined {
+  const quoteMatch = /^(?: {0,3}>[^\n]*(?:\n|$))+/.exec(src)
+  if (!quoteMatch) return undefined
+  const lines = quoteMatch[0]
+    .replace(/\n$/, "")
+    .split("\n")
+    .map((line) => line.replace(/^ {0,3}>\s?/, ""))
+  const alertType = matchAlertMarker(lines[0] ?? "")
+  if (!alertType) return undefined
+
+  const wasTop = this.lexer.state.top
+  this.lexer.state.top = true
+  const tokens: Tokens.Generic[] = []
+  this.lexer.blockTokens(lines.slice(1).join("\n"), tokens)
+  this.lexer.state.top = wasTop
+
+  return { type: "alert", raw: quoteMatch[0], alertType, tokens }
+}
+
+function alertRenderer(this: RendererThis, token: Tokens.Generic): string {
+  const alertToken = token as AlertToken
+  const title = escapeHtml(t(`changelog.alert.${alertToken.alertType}`))
+  const body = this.parser.parse(alertToken.tokens ?? [])
+  return (
+    `<div class="xt-alert xt-alert--${alertToken.alertType}">` +
+    `<p class="xt-alert__title">${title}</p>` +
+    `<div class="xt-alert__body">${body}</div>` +
+    `</div>`
+  )
+}
+
+// GitHub-style `> [!NOTE]` callouts; falls through to a plain blockquote
+// when the first line inside isn't one of the five recognized markers.
+export function createAlertExtension(): TokenizerAndRendererExtension {
+  return {
+    name: "alert",
+    level: "block",
+    tokenizer: alertTokenizer,
+    renderer: alertRenderer,
+  }
+}
+
 // Lazy singleton: first call to renderMarkdown() triggers the dynamic
 // imports + one-time configuration; later calls reuse the same modules.
 let markdownPipeline:
@@ -124,6 +191,7 @@ function loadMarkdownPipeline() {
     const marked = markedMod.marked
     const DOMPurify = purifyMod.default
     marked.setOptions({ gfm: true, breaks: false })
+    marked.use({ extensions: [createAlertExtension()] })
     DOMPurify.addHook("afterSanitizeAttributes", (node) => {
       if (
         node instanceof Element &&

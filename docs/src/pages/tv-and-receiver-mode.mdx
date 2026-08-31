@@ -29,7 +29,7 @@ If you install the normal mobile APK (`Extreme-InfiniTV.apk`, or the versioned A
 
 Sign in with the remote's on-screen keyboard, or paste a playlist link on the login screen and it fills in the server/username/password (or M3U URL) for you. Pushing credentials over from your phone is planned but not built yet. A few things are deliberately off this surface to keep it usable from the couch - the playlist editor, channel overrides, category management, external players, and a handful of other desktop/mobile-only settings stay on the phone/desktop app.
 
-The dedicated TV build from the Play Store stays receiver-only; it never gets this browse UI. To get it on a TV, sideload the mobile APK instead - the same "Sideloading on Fire TV" instructions below work on any Android TV device, not just Fire TV.
+The dedicated TV build from the Play Store stays receiver-only; it never gets this browse UI. To get it on a TV, sideload the mobile APK instead - the same "Installing on Fire TV" instructions below work on any Android TV device, not just Fire TV.
 
 On this install, receiver mode itself and whether it starts on boot are both toggles in the **TV receiver** section of the **Casting** card, under **Settings > Network**:
 
@@ -52,10 +52,15 @@ Sender and TV need to be on the same network. On the sender, open the **Play on 
 
 While a cast is running, the pill at the bottom of the sender opens the remote: play/pause, seek, volume, and what's on now and next. The remote also lets you switch what is playing without leaving it: for a live channel, **Channels** (or <kbd>C</kbd>) browses the playlist by group, following the same visibility and sort settings as the Live TV page; for a series, the same spot becomes **Episodes** and browses by season. The search box spans everything from either level.
 
-## Sideloading on Fire TV
+## Installing on Fire TV
 
-Fire TV doesn't have the receiver build on the Play Store. Sideload it with the [AFTVnews Downloader](https://www.aftvnews.com/downloader/) app using this stable URL, which always points at the latest release:
+Fire TV isn't on the Play Store, so the way in is sideloading with the [AFTVnews Downloader](https://www.aftvnews.com/downloader/) app: install Downloader from the Fire TV app store, open it, and enter one of these codes in its URL field.
 
-```
-https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest/download/Extreme-InfiniTV-receiver.apk
-```
+- **`8281651`** (short URL `aftv.news/8281651`) - the full app (`Extreme-InfiniTV.apk`), with the browse UI described above. This is what you want if you're setting the TV up as a normal client.
+- **`1317634`** (short URL `aftv.news/1317634`) - the receiver-only kiosk build (`Extreme-InfiniTV-receiver.apk`). No browse UI, no exit; it just sits on the pairing screen waiting for a cast.
+
+<Callout type="note">
+  Picking the wrong one is the most common mix-up here: the receiver build can only be cast to, not browsed. If you want Home, Live TV, Movies, Series, and the rest on the TV itself, use `8281651`.
+</Callout>
+
+Both codes always point at the current stable release, so they keep working after updates. `adb install Extreme-InfiniTV.apk` (or `-receiver.apk`) works the same way on any Android TV device if you'd rather sideload without Downloader.

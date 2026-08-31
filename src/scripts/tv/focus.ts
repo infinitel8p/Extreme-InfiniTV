@@ -99,11 +99,11 @@ function offsetFromTrack(target: HTMLElement, track: HTMLElement, axis: "x" | "y
   return offset
 }
 
-const keepInViewRefreshers = new WeakMap<HTMLElement, () => void>()
+const keepInViewRefreshers = new WeakMap<HTMLElement, (target?: HTMLElement | null) => void>()
 
 /** Re-applies a `keepFocusedInView` offset after its track's contents shifted under the focus. */
-export function refreshKeepInView(scroller: HTMLElement): void {
-  keepInViewRefreshers.get(scroller)?.()
+export function refreshKeepInView(scroller: HTMLElement, target?: HTMLElement | null): void {
+  keepInViewRefreshers.get(scroller)?.(target)
 }
 
 /** Translates `scroller`'s first child so the focused descendant sits `offset` from the leading edge. */
@@ -167,9 +167,10 @@ export function keepFocusedInView(
   }
 
   scroller.addEventListener("focusin", onFocusIn)
-  keepInViewRefreshers.set(scroller, () => {
-    const active = document.activeElement
-    if (active instanceof HTMLElement && track!.contains(active)) position(active, false)
+  keepInViewRefreshers.set(scroller, (target) => {
+    // A caller-supplied target wins over DOM focus, which may sit elsewhere.
+    const anchor = target && track!.contains(target) ? target : document.activeElement
+    if (anchor instanceof HTMLElement && track!.contains(anchor)) position(anchor, false)
   })
   return () => {
     scroller.removeEventListener("focusin", onFocusIn)

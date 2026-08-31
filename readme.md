@@ -125,8 +125,17 @@
 | Linux (any distro, portable) | `.AppImage` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | In-app auto-updater |
 | Raspberry Pi 4 / 5 (64-bit OS) | `sudo snap install extreme-infinitv`, or arm64 `.deb` / `.AppImage` from [Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) | Snap Store / in-app (AppImage) |
 | Android phone / tablet | [Google Play](https://play.google.com/store/apps/details?id=com.infinitel8p.xtream) | Play Store |
-| Android TV | Same APK, sideload via ADB or use Play Store on supported devices | Play Store |
+| Android TV / Fire TV | [AFTVnews Downloader](https://www.aftvnews.com/downloader/) (see below), or Play Store on supported devices | Manual / Play Store |
 | Web preview | Build with `pnpm build` and serve `dist/` (no auto-update, no native features) | Manual |
+
+### Android TV / Fire TV
+
+Sideload with the [AFTVnews Downloader](https://www.aftvnews.com/downloader/) app. Open it, enter one of the codes below in the URL field, and install:
+
+- **`8281651`** (or `aftv.news/8281651`) - the full app, with the TV browse UI (Home, Live TV, Movies, Series, Search, Downloads, Settings). This is what most TV users want.
+- **`1317634`** (or `aftv.news/1317634`) - the receiver-only kiosk build. No browse UI; it boots straight into a pairing screen and only accepts casts from your phone or desktop.
+
+Both codes always resolve to the current stable release, so they keep working across updates. ADB (`adb install Extreme-InfiniTV.apk`) works too if you'd rather skip Downloader.
 
 ### via winget
 

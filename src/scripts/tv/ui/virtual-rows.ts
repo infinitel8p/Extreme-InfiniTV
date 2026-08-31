@@ -78,15 +78,16 @@ export function createVirtualRows<T>(options: VirtualRowsOptions<T>): VirtualRow
 
   function measureRowHeight(force = false): void {
     if (rowHeightMeasured && !force) return
-    const firstRow = options.track.querySelector<HTMLElement>(`[${INDEX_ATTR}]`)
-    if (!firstRow) return
+    // Anchors by focused index, not DOM focus, which may sit outside this list.
+    const focusedRow = mountedRows.get(focusedIndex)
+    if (!focusedRow) return
     rowHeightMeasured = true
-    const measured = firstRow.getBoundingClientRect().height + (options.rowGapPx ?? 0)
+    const measured = focusedRow.getBoundingClientRect().height + (options.rowGapPx ?? 0)
     if (measured > 0 && Math.abs(measured - rowHeightPx) > 0.5) {
       rowHeightPx = measured
       setTrackHeight()
       repositionMountedRows()
-      refreshKeepInView(options.scroller)
+      refreshKeepInView(options.scroller, focusedRow)
     }
   }
 
@@ -154,7 +155,7 @@ export function createVirtualRows<T>(options: VirtualRowsOptions<T>): VirtualRow
     const rowEl = mountedRows.get(clamped)
     rowEl?.focus()
     if (rowEl) lastFocusedIndex = clamped
-    refreshKeepInView(options.scroller)
+    refreshKeepInView(options.scroller, rowEl)
   }
 
   function indexForKey(key: string): number {

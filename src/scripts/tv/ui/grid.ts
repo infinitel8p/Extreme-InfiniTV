@@ -4,7 +4,7 @@
 
 import { rowWindow, rowOf } from "@/scripts/lib/tv-grid-filter"
 import { releaseCachedImages } from "@/scripts/lib/img-cache.ts"
-import { registerFocusSection, keepFocusedInView, resetKeepInView, remPx } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView, resetKeepInView, remPx, refreshKeepInView } from "@/scripts/tv/focus"
 import { motionAllowed, startViewTransitionSafe, TV_EASE, heavyEffectsAllowed, memoryConservative } from "@/scripts/tv/motion"
 import { createCard, keepCardMediaDecoded, type PosterCardItem } from "./card"
 
@@ -158,6 +158,8 @@ export function createGrid(options: GridOptions): GridHandle {
       rowHeightPx = measured
       setTrackHeight()
       repositionMountedRows()
+      // Anchors by focused row, not DOM focus, which may sit outside the grid.
+      refreshKeepInView(scroller, mountedRows.get(focusedRow) ?? null)
     }
   }
 
