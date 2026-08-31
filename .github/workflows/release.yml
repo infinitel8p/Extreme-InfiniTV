@@ -171,7 +171,7 @@ jobs:
         continue-on-error: true
         uses: actions/ai-inference@v3
         with:
-          model: claude-sonnet-4.5
+          model: ""
           system-prompt: |
             You write user-facing release notes for "Extreme InfiniTV", an IPTV
             player built with Astro + Svelte 5 and Tauri 2. It ships on
@@ -247,6 +247,10 @@ jobs:
             ${{ steps.gather.outputs.log }}
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
+
+      - name: Warn when AI notes failed
+        if: steps.ai.outcome == 'failure'
+        run: echo "::warning::AI release notes step failed; falling back to GitHub's generated notes. Re-run with ACTIONS_STEP_DEBUG=true for the Copilot CLI stderr."
 
       - id: create
         uses: actions/github-script@v8
