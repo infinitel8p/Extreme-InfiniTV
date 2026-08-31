@@ -51,21 +51,56 @@ import {
 			<WelcomeCard />
 		</section>
 
+		<section
+			id="hub-marquee"
+			class="hub-marquee"
+			aria-labelledby="hub-marquee-title"
+			hidden>
+			<div class="hub-marquee__art" aria-hidden="true">
+				<div class="hub-marquee__img" data-role="art"></div>
+				<div class="hub-marquee__img" data-role="art-alt"></div>
+				<div class="hub-marquee__poster" data-role="poster"></div>
+				<div class="hub-marquee__poster" data-role="poster-alt"></div>
+				<div class="hub-marquee__scrim"></div>
+			</div>
+			<a class="hub-marquee__link" data-role="hero-link" href="/"></a>
+			<p
+				id="hero-eyebrow"
+				class="hub-marquee__greeting tabular-nums"
+				aria-hidden="true">
+			</p>
+			<div class="hub-marquee__body">
+				<p class="hub-marquee__kicker">
+					<span class="hub-marquee__eyebrow" data-role="eyebrow"></span>
+					<span class="hub-marquee__rating" data-role="rating" hidden>
+						<svg viewBox="0 0 24 24" width="0.85em" height="0.85em" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">
+							<path d="M12 17.75l-6.18 3.25 1.18-6.88L2 9.25l6.91-1L12 2l3.09 6.25 6.91 1-5 4.87 1.18 6.88z"></path>
+						</svg>
+						<span data-role="rating-value"></span>
+					</span>
+				</p>
+				<h2 id="hub-marquee-title" class="hub-marquee__title" data-role="title"></h2>
+				<p class="hub-marquee__meta" data-role="meta"></p>
+				<div class="hub-marquee__progress" data-role="progress" hidden>
+					<span data-role="progress-fill"></span>
+				</div>
+				<a class="hub-marquee__cta btn-primary" data-role="cta" href="/">
+					<span data-role="cta-label"></span>
+				</a>
+			</div>
+		</section>
+
 		<nav
 			id="hub-tiles"
 			aria-label="Browse" data-i18n-attr="aria-label:aria.browse"
-			class="grid gap-3 sm:gap-4 shrink-0
-				grid-cols-1
-				landscape:grid-cols-[2fr_1fr] landscape:grid-rows-2
-				lg:grid-cols-[2fr_1fr] lg:grid-rows-2">
+			class="grid gap-3 sm:gap-4 shrink-0">
 			<a
 				href="/livetv"
 				aria-label="Watch Live TV" data-i18n-attr="aria-label:aria.watchLiveTv"
 				style="animation-delay: 50ms;"
-				class="tile-enter lg:row-span-2 landscape:row-span-2 group relative flex flex-col justify-between
+				class="tile-enter group relative flex flex-col justify-between
 					rounded-2xl border border-line bg-surface
-					p-6 sm:p-8 lg:p-12
-					min-h-56 landscape:min-h-0 lg:min-h-0 overflow-hidden
+					overflow-hidden
 					transition-[transform,border-color,background-color] duration-300 ease-out
 					hover:border-accent hover:bg-surface-2
 					focus-visible:bg-surface-2
@@ -75,31 +110,25 @@ import {
 					id="livetv-tile-art"
 					class="tile-art pointer-events-none"
 					aria-hidden="true"></div>
-				<div class="relative flex items-start justify-between gap-4 z-10">
+				<div class="relative flex items-start gap-4 z-10">
 					<IconDeviceTv
 						aria-hidden="true"
 						stroke={1}
-						class="size-12 sm:size-16 lg:size-24 text-fg-3 shrink-0 transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent"
+						class="size-9 sm:size-10 lg:size-12 text-fg-3 shrink-0 transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent"
 					/>
-					<p
-						id="hero-eyebrow"
-						class="font-sans text-eyebrow font-medium uppercase text-fg-3 text-right pt-2 tabular-nums"
-						aria-hidden="true">
-					</p>
 				</div>
-				<div class="relative mt-auto pt-6 z-10">
+				<div class="relative mt-auto pt-4 z-10">
 					<h2
 						data-i18n="nav.livetv"
-						class="font-semibold tracking-[-0.02em] leading-[0.92] text-fg
-							group-hover:text-accent group-focus-visible:text-accent
-							transition-colors duration-200 ms-[-0.05em]"
-						style="font-size: clamp(3rem, 6vw + 1.5rem, 8.5rem);">
+						class="text-2xl sm:text-3xl lg:text-5xl font-semibold tracking-[-0.02em] leading-[0.95]
+							text-fg group-hover:text-accent group-focus-visible:text-accent
+							transition-colors duration-200 ms-[-0.05em]">
 						Live TV
 					</h2>
 					<p
 						id="livetv-tile-sub"
 						data-i18n="hub.tile.livetv.sub"
-						class="mt-4 sm:mt-5 text-sm sm:text-base text-fg-2 max-w-md font-sans tracking-tight truncate">
+						class="mt-1.5 text-sm text-fg-2 font-sans tracking-tight truncate">
 						Channels, and what's on right now.
 					</p>
 				</div>
@@ -111,8 +140,6 @@ import {
 				style="animation-delay: 150ms;"
 				class="tile-enter group relative overflow-hidden flex flex-col justify-between
 					rounded-2xl border border-line bg-surface
-					p-5 sm:p-6
-					min-h-28 landscape:min-h-0 lg:min-h-0
 					transition-[transform,border-color,background-color] duration-300 ease-out
 					hover:border-accent hover:bg-surface-2
 					focus-visible:bg-surface-2
@@ -145,8 +172,6 @@ import {
 				style="animation-delay: 250ms;"
 				class="tile-enter group relative overflow-hidden flex flex-col justify-between
 					rounded-2xl border border-line bg-surface
-					p-5 sm:p-6
-					min-h-28 landscape:min-h-0 lg:min-h-0
 					transition-[transform,border-color,background-color] duration-300 ease-out
 					hover:border-accent hover:bg-surface-2
 					focus-visible:bg-surface-2
@@ -188,9 +213,304 @@ import {
 	.tile-enter {
 		animation: tile-enter 500ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
 	}
-	html[data-first-run="true"] #hub-tiles {
+	html[data-first-run="true"] #hub-tiles,
+	html[data-first-run="true"] #hub-marquee {
 		display: none;
 	}
+
+	/* ── Ambient marquee ─────────────────────────────────────── */
+
+	.hub-marquee {
+		--hub-pad-x: clamp(1.25rem, 3vw, 2.75rem);
+		--hub-pad-y: clamp(1.25rem, 2.5vw, 2rem);
+		position: relative;
+		display: none;
+		flex-direction: column;
+		overflow: hidden;
+		border-radius: var(--radius-2xl, 1rem);
+		border: 1px solid var(--color-line);
+		background: var(--color-surface);
+		height: clamp(15rem, 34vh, 26rem);
+		isolation: isolate;
+	}
+	#hub-marquee:not([hidden]) {
+		display: flex;
+	}
+	.hub-marquee[data-loading] .hub-marquee__body,
+	.hub-marquee[data-loading] .hub-marquee__greeting {
+		visibility: hidden;
+	}
+	.hub-marquee[data-loading]::after {
+		content: "";
+		position: absolute;
+		inset-inline-start: var(--hub-pad-x);
+		inset-block-end: var(--hub-pad-y);
+		width: min(22rem, 55%);
+		height: 3.5rem;
+		border-radius: 0.5rem;
+		background: color-mix(in oklab, var(--color-fg) 7%, transparent);
+		animation: hub-skeleton 1400ms ease-in-out infinite;
+	}
+	@keyframes hub-skeleton {
+		50% { opacity: 0.45; }
+	}
+	html[data-perf-mode="on"] .hub-marquee[data-loading]::after {
+		animation: none;
+	}
+	#hub-tiles {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		grid-template-rows: auto;
+	}
+	#hub-tiles > a {
+		grid-row: auto;
+		min-height: 0;
+		padding: 1.25rem 1.5rem;
+	}
+	#hub-tiles svg {
+		width: 1.75rem;
+		height: 1.75rem;
+	}
+	.hub-marquee__art {
+		position: absolute;
+		inset: 0;
+		z-index: 0;
+	}
+	/* Providers give posters, not backdrops. Blur one to fill the band, then
+	   set the sharp poster over it at its own aspect. */
+	.hub-marquee__img {
+		position: absolute;
+		inset: -12%;
+		background-size: cover;
+		background-position: center 30%;
+		filter: blur(44px) saturate(1.15) brightness(0.55);
+		opacity: 0;
+		transform: scale(1.06);
+		transition:
+			opacity 700ms cubic-bezier(0.16, 1, 0.3, 1),
+			transform 700ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	.hub-marquee__img[data-on] {
+		opacity: 1;
+		animation: hub-kenburns 32s ease-in-out infinite alternate;
+	}
+	/* A backdrop is the artwork - full bleed and sharp. The blur is only for the
+	   poster/logo fallback, which would smear if stretched across the band. */
+	.hub-marquee__img[data-portrait="false"] {
+		inset: 0;
+		filter: none;
+		background-position: center 28%;
+	}
+	@keyframes hub-kenburns {
+		from { transform: scale(1.06) translate3d(0, 0, 0); }
+		to { transform: scale(1.14) translate3d(-1.5%, -1%, 0); }
+	}
+	/* Poster and logo fallbacks sit on a plate over the blurred bed. */
+	.hub-marquee__poster {
+		position: absolute;
+		inset-block: 0;
+		inset-inline-end: clamp(1rem, 5vw, 5rem);
+		aspect-ratio: 2 / 3;
+		background-size: cover;
+		background-position: center;
+		border-radius: 0.75rem;
+		opacity: 0;
+		transform: translateY(1.5rem) scale(0.97);
+		transition:
+			opacity 800ms cubic-bezier(0.16, 1, 0.3, 1) 120ms,
+			transform 800ms cubic-bezier(0.16, 1, 0.3, 1) 120ms;
+		box-shadow:
+			0 1.5rem 3rem -1rem rgb(0 0 0 / 0.65),
+			0 0 0 1px color-mix(in oklab, var(--color-fg) 10%, transparent);
+		margin-block: clamp(0.75rem, 2.5vh, 2rem);
+	}
+	.hub-marquee__poster[data-on] {
+		opacity: 1;
+		transform: translateY(0) scale(1);
+	}
+	/* Channel logos are transparent artwork, not a photo - never crop or frame them. */
+	.hub-marquee__poster[data-kind="logo"] {
+		aspect-ratio: 1 / 1;
+		background-size: contain;
+		background-repeat: no-repeat;
+		background-color: transparent;
+		border-radius: 0;
+		box-shadow: none;
+		margin-block: clamp(1.25rem, 4vh, 3rem);
+	}
+
+	.hub-marquee__scrim {
+		position: absolute;
+		inset: 0;
+		background:
+			linear-gradient(to right, var(--color-surface) 10%, color-mix(in oklab, var(--color-surface) 60%, transparent) 44%, transparent 66%),
+			linear-gradient(to top, color-mix(in oklab, var(--color-surface) 88%, transparent), transparent 62%),
+			radial-gradient(120% 100% at 82% 30%, var(--xt-hub-ambient-soft, transparent), transparent 70%);
+	}
+	.hub-marquee__art:has(.hub-marquee__img[data-portrait="false"]) .hub-marquee__scrim {
+		background:
+			linear-gradient(to right, var(--color-surface) 8%, color-mix(in oklab, var(--color-surface) 82%, transparent) 42%, color-mix(in oklab, var(--color-surface) 25%, transparent) 84%),
+			linear-gradient(to top, color-mix(in oklab, var(--color-surface) 92%, transparent), transparent 68%),
+			radial-gradient(120% 100% at 82% 30%, var(--xt-hub-ambient-soft, transparent), transparent 70%);
+	}
+	.hub-marquee__body[data-swapping] {
+		opacity: 0;
+	}
+	.hub-marquee__body {
+		position: relative;
+		z-index: 1;
+		transition: opacity 160ms cubic-bezier(0.16, 1, 0.3, 1);
+		display: flex;
+		flex: 1 1 auto;
+		flex-direction: column;
+		align-items: flex-start;
+		justify-content: flex-end;
+		gap: 0.5rem;
+		padding: 0 var(--hub-pad-x) var(--hub-pad-y);
+		max-width: min(38rem, 68%);
+		/* Clicks fall through to the hero link; the CTA opts back in. */
+		pointer-events: none;
+	}
+	.hub-marquee__body > * {
+		max-width: 100%;
+	}
+	.hub-marquee__greeting {
+		position: relative;
+		z-index: 1;
+		flex: none;
+		padding: var(--hub-pad-y) var(--hub-pad-x) 0;
+		font-size: 0.75rem;
+		font-weight: 400;
+		letter-spacing: 0;
+		color: var(--color-fg-3);
+		pointer-events: none;
+	}
+	.hub-marquee__kicker {
+		display: flex;
+		align-items: center;
+		gap: 0.625rem;
+	}
+	.hub-marquee__rating {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		border-radius: 0.375rem;
+		padding: 0.125rem 0.375rem;
+		background: color-mix(in oklab, var(--color-fg) 10%, transparent);
+		font-size: var(--text-2xs, 0.6875rem);
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		color: var(--color-fg-2);
+	}
+	.hub-marquee__rating svg {
+		color: var(--color-accent);
+	}
+	.hub-marquee__eyebrow {
+		font-size: var(--text-eyebrow, 0.6875rem);
+		font-weight: 600;
+		letter-spacing: 0.12em;
+		text-transform: uppercase;
+		/* Ambient drives atmosphere only - text and progress keep the brand accent,
+		   which stays AA in both themes. */
+		color: var(--color-accent);
+	}
+	.hub-marquee__title {
+		font-size: clamp(1.6rem, 2.8vw + 0.7rem, 3.25rem);
+		font-weight: 600;
+		letter-spacing: -0.025em;
+		line-height: 1.02;
+		margin-inline-start: -0.04em;
+		text-wrap: balance;
+		/* Two lines, always - a long title must not resize the band mid-rotation. */
+		display: -webkit-box;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		overflow: hidden;
+	}
+	.hub-marquee__meta {
+		font-size: 0.875rem;
+		color: var(--color-fg-2);
+	}
+	.hub-marquee__progress {
+		width: min(20rem, 100%);
+		height: 3px;
+		border-radius: 999px;
+		background: color-mix(in oklab, var(--color-fg) 18%, transparent);
+		overflow: hidden;
+		margin-top: 0.25rem;
+	}
+	.hub-marquee__progress > span {
+		display: block;
+		height: 100%;
+		width: 0%;
+		border-radius: inherit;
+		background: var(--color-accent);
+		transition: width 600ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	.hub-marquee__cta {
+		margin-top: 0.75rem;
+		pointer-events: auto;
+	}
+
+	.hub-marquee__link {
+		position: absolute;
+		inset: 0;
+		z-index: 1;
+		border-radius: inherit;
+	}
+	.hub-marquee:hover,
+	.hub-marquee:focus-within {
+		border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-line));
+	}
+	.hub-marquee:hover .hub-marquee__poster[data-on] {
+		transform: translateY(-0.25rem) scale(1.015);
+	}
+
+	/* The hub takes on the colour of what you are about to watch. */
+	.hub-ambient-wash {
+		position: fixed;
+		inset: 0;
+		z-index: -1;
+		pointer-events: none;
+		opacity: 0;
+		background: radial-gradient(
+			90% 60% at 50% 0%,
+			var(--xt-hub-ambient-glow, transparent),
+			transparent 72%
+		);
+		transition: opacity 900ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	.hub-ambient-wash[data-on] {
+		opacity: 1;
+	}
+
+	/* Scroll-driven recede: the marquee sinks as the strips come up. */
+	@supports (animation-timeline: view()) {
+		@media (prefers-reduced-motion: no-preference) {
+			html:not([data-perf-mode="on"]) .hub-marquee__body {
+				animation: hub-marquee-recede linear both;
+				animation-timeline: view();
+				animation-range: exit -10% exit 70%;
+			}
+		}
+	}
+	@keyframes hub-marquee-recede {
+		to {
+			opacity: 0.15;
+			transform: translateY(-1.5rem);
+		}
+	}
+
+	@media (max-width: 640px) {
+		.hub-marquee__poster { display: none; }
+		.hub-marquee__body { max-width: 100%; }
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.hub-marquee__img[data-on] { animation: none; }
+		.hub-marquee__poster { transition: none; }
+	}
+	html[data-perf-mode="on"] .hub-marquee__img[data-on] { animation: none; }
 	html[data-first-run="true"] #welcome {
 		display: flex;
 	}
@@ -205,15 +525,9 @@ import {
 	import { readCachedLiveChannels } from "@/scripts/lib/live-catalog.ts";
 	import { getRecents, ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js";
 	import { getProgrammesSync, getNowNextForChannel, loadProgrammes } from "@/scripts/lib/epg-data.js";
+	import { debounce } from "@/scripts/lib/debounce.ts";
 
 	const eyebrow = document.getElementById("hero-eyebrow");
-	let heroChannelCount = 0;
-	const setHeroChannelCount = (count) => {
-		const next = Number.isFinite(count) ? Math.max(0, count) : 0;
-		if (next === heroChannelCount) return;
-		heroChannelCount = next;
-		window.__refreshHeroEyebrow?.();
-	};
 	if (eyebrow) {
 		const greet = (hour) => {
 			if (hour < 5) return t("hub.greeting.night");
@@ -228,11 +542,7 @@ import {
 				hour: "numeric",
 				minute: "2-digit",
 			}).format(now);
-			const parts = [greet(now.getHours()), time];
-			if (heroChannelCount > 0) {
-				parts.push(t("hub.channelCount", { count: heroChannelCount.toLocaleString() }));
-			}
-			eyebrow.textContent = parts.join(" · ");
+			eyebrow.textContent = `${greet(now.getHours())} · ${time}`;
 		};
 		update();
 		setInterval(update, 30_000);
@@ -266,6 +576,27 @@ import {
 	const liveTileSub = document.getElementById("livetv-tile-sub");
 	const moviesTileArt = document.getElementById("movies-tile-art");
 	const seriesTileArt = document.getElementById("series-tile-art");
+
+	let marquee = null;
+	let marqueeGeneration = 0;
+
+	async function setupMarquee(playlistId) {
+		const section = document.getElementById("hub-marquee");
+		if (!section) return;
+		const generation = ++marqueeGeneration;
+		marquee?.destroy();
+		marquee = null;
+		try {
+			const { buildMarqueePool, mountMarquee, showMarqueeSkeleton } =
+				await import("@/scripts/hub/marquee.ts");
+			if (generation === marqueeGeneration) showMarqueeSkeleton(section);
+			const pool = await buildMarqueePool(playlistId);
+			if (generation !== marqueeGeneration) return;
+			marquee = mountMarquee(section, playlistId, pool);
+		} catch (err) {
+			log.warn("[hub] marquee failed:", err);
+		}
+	}
 
 	const rotators = [];
 	function stopRotator() {
@@ -344,6 +675,7 @@ import {
 				if (picks.length) startRotator(seriesTileArt, picks);
 			}
 			await setupLiveSignals(active);
+			await setupMarquee(active._id);
 		} catch (e) {
 			log.warn("[hub] setupTileArt failed:", e);
 		}
@@ -354,7 +686,6 @@ import {
 		await ensurePrefsLoaded();
 		const recents = getRecents(active._id, "live") || [];
 		const live = readCachedLiveChannels(active._id);
-		setHeroChannelCount(live.length);
 		const liveById = new Map(live.map((c) => [Number(c.id), c]));
 		let lastChannel = null;
 		if (recents.length) {
@@ -419,11 +750,27 @@ import {
 		return d.innerHTML;
 	}
 
+	async function setupMarqueeEarly() {
+		try {
+			const active = await getActiveEntry();
+			if (active) await setupMarquee(active._id);
+		} catch (err) {
+			log.warn("[hub] early marquee failed:", err);
+		}
+	}
+
 	if (typeof window !== "undefined") {
+		// The hero reads cached data only, so it must not wait on catalog hydration.
+		setupMarqueeEarly();
+		// A big provider takes minutes to warm, so rebuild as each catalog lands
+		// rather than only once at the end.
+		const rebuild = debounce(setupTileArt, 400);
 		window.requestIdleCallback
 			? window.requestIdleCallback(setupTileArt, { timeout: 1500 })
 			: setTimeout(setupTileArt, 400);
 		document.addEventListener("xt:active-changed", setupTileArt);
 		document.addEventListener("xt:catalog-warmed", setupTileArt);
+		document.addEventListener("xt:cache-revalidated", rebuild);
+		document.addEventListener("xt:catalog-warming-progress", rebuild);
 	}
 </script>
