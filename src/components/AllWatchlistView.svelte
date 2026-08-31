@@ -54,10 +54,13 @@
     return `/series/detail?id=${encodeURIComponent(id)}`
   }
 
+  let reloadGeneration = 0
+
   async function reload() {
+    const generation = ++reloadGeneration
     await ensurePrefsLoaded()
-    const allEntries = await getEntries()
-    const active = await getActiveEntry()
+    const [allEntries, active] = await Promise.all([getEntries(), getActiveEntry()])
+    if (generation !== reloadGeneration) return
     activePlaylistId = active?._id || ""
     playlists = allEntries.map((entry) => ({
       id: entry._id,
@@ -71,64 +74,79 @@
       kinds.add(row.kind)
       needed.set(row.playlistId, kinds)
     }
-    await Promise.all(
-      [...needed].flatMap(([playlistId, kinds]) =>
-        [...kinds].map((kind) => hydrateCache(playlistId, kind))
-      )
-    )
+    const titleById = new Map(playlists.map((entry) => [entry.id, entry.title]))
 
-    /** @type {Map<string, { vod: Map<number, any>, series: Map<number, any> }>} */
-    const lookups = new Map()
-    for (const playlistId of needed.keys()) {
-      lookups.set(playlistId, {
-        vod: new Map(
-          (getCached(playlistId, "vod")?.data || []).map((item) => [
-            Number(item.id),
-            item,
-          ])
-        ),
-        series: new Map(
-          (getCached(playlistId, "series")?.data || []).map((item) => [
-            Number(item.id),
-            item,
-          ])
-        ),
+    const buildEntries = () => {
+      /** @type {Map<string, { vod: Map<number, any>, series: Map<number, any> }>} */
+      const lookups = new Map()
+      for (const playlistId of needed.keys()) {
+        lookups.set(playlistId, {
+          vod: new Map(
+            (getCached(playlistId, "vod")?.data || []).map((item) => [
+              Number(item.id),
+              item,
+            ])
+          ),
+          series: new Map(
+            (getCached(playlistId, "series")?.data || []).map((item) => [
+              Number(item.id),
+              item,
+            ])
+          ),
+        })
+      }
+
+      entries = raw.map((row) => {
+        const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
+        const isStoredNameFallback = !!row.name && isKindFallbackName(row.kind, row.id, row.name)
+        const effectiveStoredName = isStoredNameFallback ? "" : row.name
+        const name = effectiveStoredName || item?.name || `${kindLabel(row.kind)} ${row.id}`
+        const logo = row.logo ?? item?.logo ?? null
+        // Lazily backfill stored meta so cross-playlist clicks still have name
+        // and poster even when the source catalog cache later expires.
+        if (!effectiveStoredName && !row.logo && (item?.name || item?.logo)) {
+          setWatchlistMeta(row.playlistId, row.kind, row.id, {
+            name: item.name || "",
+            logo: item.logo || null,
+          })
+        } else if (isStoredNameFallback && item?.name) {
+          setWatchlistMeta(row.playlistId, row.kind, row.id, {
+            name: item.name,
+            logo: row.logo ?? item?.logo ?? null,
+          })
+        }
+        return {
+          playlistId: row.playlistId,
+          playlistTitle: titleById.get(row.playlistId) || "Removed playlist",
+          kind: row.kind,
+          id: Number(row.id),
+          ts: row.ts,
+          name,
+          logo,
+          href: buildHref(row.kind, row.id),
+          isCrossPlaylist: row.playlistId !== activePlaylistId,
+        }
       })
     }
 
-    const titleById = new Map(playlists.map((entry) => [entry.id, entry.title]))
-    entries = raw.map((row) => {
-      const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
-      const isStoredNameFallback = !!row.name && isKindFallbackName(row.kind, row.id, row.name)
-      const effectiveStoredName = isStoredNameFallback ? "" : row.name
-      const name = effectiveStoredName || item?.name || `${kindLabel(row.kind)} ${row.id}`
-      const logo = row.logo ?? item?.logo ?? null
-      // Lazily backfill stored meta so cross-playlist clicks still have name
-      // and poster even when the source catalog cache later expires.
-      if (!effectiveStoredName && !row.logo && (item?.name || item?.logo)) {
-        setWatchlistMeta(row.playlistId, row.kind, row.id, {
-          name: item.name || "",
-          logo: item.logo || null,
-        })
-      } else if (isStoredNameFallback && item?.name) {
-        setWatchlistMeta(row.playlistId, row.kind, row.id, {
-          name: item.name,
-          logo: row.logo ?? item?.logo ?? null,
-        })
-      }
-      return {
-        playlistId: row.playlistId,
-        playlistTitle: titleById.get(row.playlistId) || "Removed playlist",
-        kind: row.kind,
-        id: Number(row.id),
-        ts: row.ts,
-        name,
-        logo,
-        href: buildHref(row.kind, row.id),
-        isCrossPlaylist: row.playlistId !== activePlaylistId,
-      }
-    })
-    loading = false
+    const hydrations = [...needed].flatMap(([playlistId, kinds]) =>
+      [...kinds].map((kind) => hydrateCache(playlistId, kind))
+    )
+    const allCached = raw.every((row) => !!getCached(row.playlistId, row.kind))
+
+    if (allCached) {
+      // Paint from memory now; hydration below only refreshes stale rows.
+      buildEntries()
+      loading = false
+      void Promise.allSettled(hydrations).then(() => {
+        if (generation === reloadGeneration) buildEntries()
+      }).catch(() => {})
+    } else {
+      await Promise.allSettled(hydrations)
+      if (generation !== reloadGeneration) return
+      buildEntries()
+      loading = false
+    }
   }
 
   async function openCard(event, entry) {
@@ -217,7 +235,7 @@
 
 {#if visible.length}
   <section
-    class="flex-1 min-h-0 overflow-auto custom-scroll
+    class="fav-grid flex-1 min-h-0 overflow-auto custom-scroll
            grid gap-3 sm:gap-4
            grid-cols-[repeat(auto-fill,minmax(8rem,1fr))]
            sm:grid-cols-[repeat(auto-fill,minmax(10rem,1fr))]

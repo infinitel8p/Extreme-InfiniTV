@@ -1,0 +1,22 @@
+name = "xt-tvdb-proxy"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+
+# Without this a fresh deploy only publishes to *.workers.dev, while the client
+# hardcodes this hostname. Must stay above the tables: TOML runs a table until
+# the next header, so a top-level key below one is parsed into it.
+routes = [{ pattern = "xt-tvdb-proxy.infinitel8p.com", custom_domain = true }]
+
+# Holds the bearer token only: valid a month, so ~1 write against KV's 1k/day.
+[[kv_namespaces]]
+binding = "TVDB_TOKEN"
+id = "25c8bcd9c77a4750a59c0b74db41df95"
+
+# Durable cross-colo cache. Optional - the Worker falls back to the Cache API
+# alone when unbound.
+# [[r2_buckets]]
+# binding = "TVDB_CACHE"
+# bucket_name = "xt-tvdb-cache"
+
+[observability]
+enabled = true

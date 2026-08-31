@@ -10,8 +10,7 @@ export async function injectVersion() {
     if (!badge) return
 
     try {
-        const version = await getVersion()
-        const name = await getName()
+        const [version, name] = await Promise.all([getVersion(), getName()])
         badge.textContent = `${name} v${version}`
     } catch (e) {
         log.error('Could not get app version:', e)

@@ -86,6 +86,15 @@ export async function playUiSound(kind: UiSoundKind): Promise<boolean> {
   return true
 }
 
+/** Marks the boot chime as already used this session without playing it. */
+export function suppressLaunchChime(): void {
+  try {
+    sessionStorage.setItem(LAUNCH_CHIME_FLAG, "1")
+  } catch {
+    /* ignore */
+  }
+}
+
 function isVideoPlaying(): boolean {
   const videoElements = document.querySelectorAll("video")
   for (const videoElement of videoElements) {

@@ -1,4 +1,4 @@
-import { loadCreds, getActiveEntry } from "./lib/creds.js"
+import { entryToCreds, getActiveEntry } from "./lib/creds.js"
 import { ensureUserInfo, getExpirationMsSync } from "./lib/account-info.js"
 import { t, initI18n } from "./lib/i18n.js"
 
@@ -60,15 +60,38 @@ function renderTargets(
     }
 }
 
+function renderExpiration(targets: NodeListOf<HTMLElement>, expDateMs: number): void {
+    const formatted = new Date(expDateMs).toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+    })
+    renderTargets(targets, formatted, { expDateMs })
+}
+
 export async function injectExpirationDate(): Promise<void> {
     const targets = document.querySelectorAll<HTMLElement>("[data-account-expiration]")
     if (!targets.length) return
 
-    await initI18n()
-    const creds = await loadCreds()
-    const active = await getActiveEntry()
+    const [, active] = await Promise.all([initI18n(), getActiveEntry()])
+    const creds = entryToCreds(active)
     if (!active || !creds.host || !creds.user || !creds.pass) {
         renderTargets(targets, null)
+        return
+    }
+
+    const cachedExpDateMs = getExpirationMsSync(active._id)
+    if (cachedExpDateMs != null) {
+        renderExpiration(targets, cachedExpDateMs)
+        // Refresh in the background; getExpirationMsSync may have a newer value after this resolves.
+        ensureUserInfo(creds, active._id)
+            .then(() => {
+                const refreshedExpDateMs = getExpirationMsSync(active._id)
+                if (refreshedExpDateMs != null) renderExpiration(targets, refreshedExpDateMs)
+            })
+            .catch(() => {})
         return
     }
 
@@ -78,12 +101,5 @@ export async function injectExpirationDate(): Promise<void> {
         renderTargets(targets, null)
         return
     }
-    const formatted = new Date(expDateMs).toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-    })
-    renderTargets(targets, formatted, { expDateMs })
+    renderExpiration(targets, expDateMs)
 }

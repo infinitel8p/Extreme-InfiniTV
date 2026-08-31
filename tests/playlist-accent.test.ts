@@ -3,27 +3,34 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 
-const localStorageStore = new Map<string, string>()
-const localStorageMock: Storage = {
-  getItem: (key) => (localStorageStore.has(key) ? localStorageStore.get(key)! : null),
-  setItem: (key, value) => {
-    localStorageStore.set(key, String(value))
-  },
-  removeItem: (key) => {
-    localStorageStore.delete(key)
-  },
-  clear: () => {
-    localStorageStore.clear()
-  },
-  key: (index) => Array.from(localStorageStore.keys())[index] ?? null,
-  get length() {
-    return localStorageStore.size
-  },
+function makeMemoryStorage(): Storage {
+  const store = new Map<string, string>()
+  return {
+    getItem: (key) => (store.has(key) ? store.get(key)! : null),
+    setItem: (key, value) => {
+      store.set(key, String(value))
+    },
+    removeItem: (key) => {
+      store.delete(key)
+    },
+    clear: () => {
+      store.clear()
+    },
+    key: (index) => Array.from(store.keys())[index] ?? null,
+    get length() {
+      return store.size
+    },
+  }
 }
+
+const localStorageMock = makeMemoryStorage()
+const sessionStorageMock = makeMemoryStorage()
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", localStorageMock)
-  localStorageStore.clear()
+  vi.stubGlobal("sessionStorage", sessionStorageMock)
+  localStorageMock.clear()
+  sessionStorageMock.clear()
   document.documentElement.removeAttribute("data-accent")
 })
 
@@ -38,11 +45,23 @@ vi.mock("@/scripts/lib/creds.js", () => ({
   getActiveEntry: async () => activeEntry,
 }))
 
-vi.mock("@/scripts/lib/app-settings.js", () => ({
-  ACCENT_PRESETS: ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"],
-  ACCENT_EVENT: "xt:accent-changed",
-  getAccent: () => globalAccent,
-}))
+vi.mock("@/scripts/lib/app-settings.js", () => {
+  const presets = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"]
+  return {
+    ACCENT_PRESETS: presets,
+    ACCENT_EVENT: "xt:accent-changed",
+    getAccent: () => globalAccent,
+    resolveAccentForDisplay: (accentId: string) => {
+      if (accentId !== "random") return accentId
+      const cached = sessionStorage.getItem("xt_accent_roll") || ""
+      const roll = presets.includes(cached) ? cached : presets[1]
+      sessionStorage.setItem("xt_accent_roll", roll)
+      return roll
+    },
+  }
+})
+
+const PRESETS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"]
 
 import { resolveEffectiveAccent, applyEffectiveAccent } from "@/scripts/lib/playlist-accent.ts"
 
@@ -112,5 +131,19 @@ describe("applyEffectiveAccent", () => {
     globalAccent = "fuchsia"
     await applyEffectiveAccent()
     expect(localStorage.getItem("xt_accent")).toBeNull()
+  })
+
+  it("resolves a random global accent to a rolled preset, not the literal id", async () => {
+    activeEntry = null
+    globalAccent = "random"
+    await applyEffectiveAccent()
+    expect(PRESETS).toContain(document.documentElement.getAttribute("data-accent"))
+  })
+
+  it("lets a valid per-playlist override win over a random global accent", async () => {
+    activeEntry = { accent: "cyan" }
+    globalAccent = "random"
+    await applyEffectiveAccent()
+    expect(document.documentElement.getAttribute("data-accent")).toBe("cyan")
   })
 })

@@ -270,7 +270,7 @@ function ensureDialog(): HTMLDialogElement {
                  hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent"></button>
       </header>
       <div data-role="list" class="flex flex-col gap-2 overflow-y-auto custom-scroll min-h-0"></div>
-      <footer class="flex items-center gap-2 pt-1 shrink-0">
+      <footer class="flex items-center justify-end gap-2 pt-1 shrink-0">
         <button type="button" data-role="copy" class="btn"></button>
       </footer>
     </div>

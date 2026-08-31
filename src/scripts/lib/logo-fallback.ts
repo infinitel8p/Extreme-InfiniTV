@@ -9,6 +9,7 @@ import {
   type LogoApiRecord,
   type LogoIndex,
 } from "./logo-fallback-match.ts"
+import { createTimedIdbOpener } from "./idb-open.ts"
 
 const LOGOS_URL = "https://iptv-org.github.io/api/logos.json"
 const TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -26,33 +27,24 @@ interface StoredLogos {
   fetchedAt: number
 }
 
-let dbPromise: Promise<IDBDatabase> | null = null
+const idbOpener = createTimedIdbOpener({
+  name: DB_NAME,
+  version: DB_VERSION,
+  logTag: "xt:logo-fallback",
+  upgrade(db) {
+    if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
+  },
+})
 
-function openDB(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise
-  if (typeof indexedDB === "undefined") {
-    return Promise.reject(new Error("IndexedDB unavailable"))
-  }
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = () => {
-      const db = req.result
-      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
-    }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-    req.onblocked = () => reject(new Error("IDB blocked"))
-  })
-  dbPromise.catch(() => {
-    dbPromise = null
-  })
-  return dbPromise
+function openDB(): Promise<IDBDatabase | null> {
+  return idbOpener.open()
 }
 
 async function idbGetLogos(): Promise<StoredLogos | null> {
   if (typeof indexedDB === "undefined") return null
   try {
     const db = await openDB()
+    if (!db) return null
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readonly")
       const req = tx.objectStore(STORE).get(RECORD_KEY)
@@ -69,6 +61,7 @@ async function idbPutLogos(value: StoredLogos): Promise<void> {
   if (typeof indexedDB === "undefined") return
   try {
     const db = await openDB()
+    if (!db) return
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).put(value, RECORD_KEY)

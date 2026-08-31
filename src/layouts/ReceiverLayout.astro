@@ -1,0 +1,201 @@
+---
+import TitleBar from "@/components/TitleBar.astro"
+import WindowResizeEdges from "@/components/WindowResizeEdges.astro"
+import "../styles/global.css"
+
+interface Props {
+  pageTitle?: string
+}
+const { pageTitle } = Astro.props
+const documentTitle = pageTitle
+  ? `${pageTitle} | Extreme InfiniTV`
+  : "Extreme InfiniTV"
+const appMode = import.meta.env.PUBLIC_APP_MODE || ""
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>{documentTitle}</title>
+    {
+      appMode === "receiver" && (
+        <script is:inline>
+          // kiosk build boots straight here, so TV defaults are written here, not Layout
+          try {
+            if (localStorage.getItem("xt_perf_mode") === null) {
+              localStorage.setItem("xt_perf_mode", "1");
+              localStorage.setItem("xt_perf_mode_auto", "1");
+            }
+            if (localStorage.getItem("xt_receiver_mode") === null) {
+              localStorage.setItem("xt_receiver_mode", "1");
+              localStorage.setItem("xt_receiver_mode_auto", "1");
+            }
+            if (localStorage.getItem("xt_receiver_boot") === null) {
+              localStorage.setItem("xt_receiver_boot", "1");
+              localStorage.setItem("xt_receiver_boot_auto", "1");
+            }
+          } catch (e) {}
+        </script>
+      )
+    }
+    <script is:inline>
+      document.documentElement.dataset.receiverUi = "1";
+      try {
+        var fontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1");
+        if (!isFinite(fontScale) || fontScale < 0.75 || fontScale > 2) fontScale = 1;
+        document.documentElement.style.setProperty("--xt-font-scale", String(fontScale));
+
+        if (localStorage.getItem("xt_perf_mode") === "1") {
+          document.documentElement.setAttribute("data-perf-mode", "on");
+        }
+        if (localStorage.getItem("xt_is_tv") === "1") document.documentElement.dataset.tv = "1";
+
+        if (localStorage.getItem("xt_tv_overscan_auto") === "1") {
+          localStorage.removeItem("xt_tv_overscan");
+          localStorage.removeItem("xt_tv_overscan_auto");
+        }
+        var overscan = parseFloat(localStorage.getItem("xt_tv_overscan") || "");
+        if (!isFinite(overscan) || overscan < 0 || overscan > 8) overscan = 0;
+        if (overscan > 0) {
+          document.documentElement.style.setProperty("--xt-tv-overscan", String(overscan));
+          document.documentElement.setAttribute("data-tv-overscan", "");
+        }
+
+        var KNOWN_LOCALES = ["en","es","de","fr","pt-BR","it","ru","zh","ja","tr","ar","ur","nl","hi","id","pl"];
+        var RTL_LOCALES = ["ar","ur"];
+        var storedLocale = localStorage.getItem("xt_locale") || "";
+        if (storedLocale && KNOWN_LOCALES.indexOf(storedLocale) !== -1) {
+          document.documentElement.setAttribute("lang", storedLocale);
+          document.documentElement.setAttribute(
+            "dir",
+            RTL_LOCALES.indexOf(storedLocale) !== -1 ? "rtl" : "ltr"
+          );
+        }
+
+        // Translate [data-i18n*] elements before first paint
+        if (storedLocale && storedLocale !== "en") {
+          var rawMessages = localStorage.getItem("xt_locale_messages_v3");
+          if (rawMessages) {
+            var cached = JSON.parse(rawMessages);
+            if (cached && cached.code === storedLocale && cached.messages) {
+              var msgs = cached.messages;
+              var translateEl = function (el) {
+                if (!el || el.nodeType !== 1) return;
+                var textKey = el.getAttribute("data-i18n");
+                if (textKey && msgs[textKey] != null) el.textContent = msgs[textKey];
+                var htmlKey = el.getAttribute("data-i18n-html");
+                if (htmlKey && msgs[htmlKey] != null) el.innerHTML = msgs[htmlKey];
+                var attrSpec = el.getAttribute("data-i18n-attr");
+                if (attrSpec) {
+                  var pairs = attrSpec.split(";");
+                  for (var pi = 0; pi < pairs.length; pi++) {
+                    var parts = pairs[pi].split(":");
+                    var attrName = (parts[0] || "").trim();
+                    var attrKey = (parts[1] || "").trim();
+                    if (attrName && attrKey && msgs[attrKey] != null) {
+                      el.setAttribute(attrName, msgs[attrKey]);
+                    }
+                  }
+                }
+              };
+              var i18nObserver = new MutationObserver(function (mutations) {
+                for (var mi = 0; mi < mutations.length; mi++) {
+                  var added = mutations[mi].addedNodes;
+                  for (var ai = 0; ai < added.length; ai++) {
+                    var node = added[ai];
+                    if (node.nodeType !== 1) continue;
+                    if (
+                      node.hasAttribute("data-i18n") ||
+                      node.hasAttribute("data-i18n-html") ||
+                      node.hasAttribute("data-i18n-attr")
+                    ) {
+                      translateEl(node);
+                    }
+                    var matches = node.querySelectorAll
+                      ? node.querySelectorAll("[data-i18n], [data-i18n-html], [data-i18n-attr]")
+                      : null;
+                    if (matches) {
+                      for (var qi = 0; qi < matches.length; qi++) translateEl(matches[qi]);
+                    }
+                  }
+                }
+              });
+              i18nObserver.observe(document.documentElement, { childList: true, subtree: true });
+              document.addEventListener("DOMContentLoaded", function () {
+                i18nObserver.disconnect();
+              });
+            }
+          }
+        }
+
+        // Video-first surface: always dark
+        document.documentElement.style.colorScheme = "dark";
+
+        var uaPlatform = (navigator.userAgent || "").toLowerCase();
+        var hasTauri = !!window.__TAURI_INTERNALS__ || !!window.__TAURI__;
+        if (hasTauri && uaPlatform.indexOf("android") === -1) {
+          document.documentElement.setAttribute("data-tauri-desktop", "1");
+        }
+      } catch (e) {}
+    </script>
+  </head>
+
+  <body class="antialiased bg-bg text-fg h-dvh overflow-hidden">
+    <TitleBar />
+    <WindowResizeEdges />
+    <slot />
+  </body>
+</html>
+
+<style is:global>
+  /* Design canvas is 40rem x 22.5rem; root font size scales that canvas to fill the viewport. */
+  html[data-receiver-ui] {
+    font-size: max(12px, calc(min(100vw / 40, 100vh / 22.5) * var(--xt-font-scale, 1)));
+  }
+
+  /* px, not rem: this is a native OS titlebar height, not part of the scaled canvas. */
+  html[data-tauri-desktop] {
+    --xt-titlebar-h: 36px;
+  }
+  html[data-tauri-desktop] body {
+    padding-top: var(--xt-titlebar-h);
+  }
+  html[data-tauri-desktop][data-fullscreen] {
+    --xt-titlebar-h: 0px;
+  }
+  html[data-tauri-desktop][data-fullscreen] #xt-titlebar {
+    display: none !important;
+  }
+
+  /* Shared TitleBar.astro is sized in rem for the unscaled app; pin it to its native px size here too. */
+  html[data-receiver-ui] #xt-titlebar {
+    height: 36px;
+  }
+  html[data-receiver-ui] #xt-titlebar > div:first-child {
+    gap: 8px;
+    padding-inline: 12px;
+    font-size: 12px;
+  }
+  html[data-receiver-ui] #xt-titlebar button {
+    width: 46px;
+  }
+
+  /* Same overscan padding Layout.astro applies to its own body. */
+  html[data-tv-overscan] body {
+    padding-top: calc(var(--xt-titlebar-h, 0px) + max(
+      env(safe-area-inset-top),
+      calc(var(--xt-tv-overscan, 0) * 1vh)
+    ));
+    padding-right: max(
+      env(safe-area-inset-right),
+      calc(var(--xt-tv-overscan, 0) * 1vw)
+    );
+    padding-bottom: calc(var(--xt-tv-overscan, 0) * 1vh);
+    padding-left: calc(var(--xt-tv-overscan, 0) * 1vw);
+  }
+</style>

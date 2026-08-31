@@ -38,6 +38,7 @@ import {
 import { buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { t } from "@/scripts/lib/i18n.js"
 import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
+import { applyLiveOverrides } from "@/scripts/lib/live-catalog.ts"
 import { log } from "@/scripts/lib/log.js"
 
 export const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
@@ -167,7 +168,12 @@ export async function buildCustomSourcePools(doc, opts = {}) {
       if (!sourceEntry || sourceEntry.type === "custom") return
       let channels
       try {
-        channels = await ensureLive(entryToCreds(sourceEntry), sourceEntryId, opts)
+        // includeHidden: hiding a channel in its provider playlist must not orphan
+        // a custom playlist that curated it.
+        channels = await ensureLive(entryToCreds(sourceEntry), sourceEntryId, {
+          ...opts,
+          includeHidden: true,
+        })
       } catch (err) {
         log.warn("[xt:catalog] custom playlist source hydration failed:", sourceEntryId, err?.message || err)
         return
@@ -250,7 +256,7 @@ export async function ensureLive(creds, playlistId, opts = {}) {
       : parsed?.streams || parsed?.results || []
     return mapXtreamLiveRows(arr, catMap)
   }), { force: !!opts.force })
-  return data || []
+  return applyLiveOverrides(data || [], playlistId, isM3U, opts)
 }
 
 // ---------------------------------------------------------------------------

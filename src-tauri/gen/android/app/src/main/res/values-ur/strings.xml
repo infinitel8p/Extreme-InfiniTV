@@ -2,4 +2,11 @@
 <resources>
     <string name="xt_channels_title">چینلز</string>
     <string name="native_player_unsupported_stream">یہ چینل نیٹو پلیئر میں نہیں چل سکتا</string>
+    <string name="xt_video_settings_title">پلیئر کی ترتیبات</string>
+    <string name="xt_video_display_mode">ڈسپلے موڈ</string>
+    <string name="xt_video_display_fit">فٹ</string>
+    <string name="xt_video_display_zoom">اسکرین بھریں</string>
+    <string name="xt_video_display_stretch">کھینچیں</string>
+    <string name="xt_video_playback_speed">پلے بیک کی رفتار</string>
+    <string name="xt_video_speed_normal">عام</string>
 </resources>

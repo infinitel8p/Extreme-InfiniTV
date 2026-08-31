@@ -117,79 +117,89 @@
 			const maxBtn = titlebar.querySelector<HTMLButtonElement>(
 				'[data-action="maximize"]',
 			);
-			(async () => {
-				try {
-					const mod = await import("@tauri-apps/api/window");
-					const win = mod.getCurrentWindow();
 
-					const syncMaximizeState = async () => {
-						try {
-							const maximized = await win.isMaximized();
-							titlebar.toggleAttribute(
-								"data-maximized",
-								maximized,
-							);
-							if (maxBtn) {
-								maxBtn.setAttribute(
-									"aria-label",
-									maximized ? "Restore" : "Maximize",
-								);
-							}
-						} catch {}
-					};
-					const syncFullscreenState = async () => {
-						try {
-							const fs = await win.isFullscreen();
-							document.documentElement.toggleAttribute(
-								"data-fullscreen",
-								fs,
-							);
-						} catch {}
-					};
-					syncMaximizeState();
-					syncFullscreenState();
-					win.onResized(() => {
-						syncMaximizeState();
-						syncFullscreenState();
-					});
-
-					titlebar.addEventListener("click", async (event) => {
-						const btn = (
-							event.target as HTMLElement
-						).closest<HTMLButtonElement>("[data-action]");
-						if (!btn) return;
-						const action = btn.dataset.action;
-						try {
-							if (action === "minimize") await win.minimize();
-							else if (action === "maximize") {
-								await win.toggleMaximize();
-								syncMaximizeState();
-							} else if (action === "close") await win.close();
-						} catch (err) {
-							console.warn(
-								"[xt:titlebar] action failed:",
-								action,
-								err,
-							);
-						}
-					});
-
-					// Double-click on the drag region toggles maximize (Windows convention).
-					titlebar.addEventListener("dblclick", async (event) => {
-						const target = event.target as HTMLElement;
-						if (target.closest("[data-action]")) return;
-						try {
-							await win.toggleMaximize();
-							syncMaximizeState();
-						} catch {}
-					});
-				} catch (err) {
+			// Started unawaited so click/dblclick listeners attach synchronously below.
+			const windowModule = import("@tauri-apps/api/window")
+				.then((mod) => mod.getCurrentWindow())
+				.catch((err) => {
 					console.warn(
 						"[xt:titlebar] window API import failed:",
 						err,
 					);
+					return null;
+				});
+
+			const syncMaximizeState = async () => {
+				try {
+					const win = await windowModule;
+					if (!win) return;
+					const maximized = await win.isMaximized();
+					titlebar.toggleAttribute("data-maximized", maximized);
+					if (maxBtn) {
+						maxBtn.setAttribute(
+							"aria-label",
+							maximized ? "Restore" : "Maximize",
+						);
+					}
+				} catch {}
+			};
+			const syncFullscreenState = async () => {
+				try {
+					const win = await windowModule;
+					if (!win) return;
+					const fs = await win.isFullscreen();
+					document.documentElement.toggleAttribute(
+						"data-fullscreen",
+						fs,
+					);
+					try {
+						sessionStorage.setItem("xt_fullscreen", fs ? "1" : "0");
+					} catch {}
+				} catch {}
+			};
+			syncMaximizeState();
+			syncFullscreenState();
+			windowModule.then((win) => {
+				win?.onResized(() => {
+					syncMaximizeState();
+					syncFullscreenState();
+				});
+			});
+
+			titlebar.addEventListener("click", async (event) => {
+				const btn = (
+					event.target as HTMLElement
+				).closest<HTMLButtonElement>("[data-action]");
+				if (!btn) return;
+				const action = btn.dataset.action;
+				try {
+					const win = await windowModule;
+					if (!win) return;
+					if (action === "minimize") await win.minimize();
+					else if (action === "maximize") {
+						await win.toggleMaximize();
+						syncMaximizeState();
+					} else if (action === "close") await win.close();
+				} catch (err) {
+					console.warn(
+						"[xt:titlebar] action failed:",
+						action,
+						err,
+					);
 				}
-			})();
+			});
+
+			// Double-click on the drag region toggles maximize (Windows convention).
+			titlebar.addEventListener("dblclick", async (event) => {
+				const target = event.target as HTMLElement;
+				if (target.closest("[data-action]")) return;
+				try {
+					const win = await windowModule;
+					if (!win) return;
+					await win.toggleMaximize();
+					syncMaximizeState();
+				} catch {}
+			});
 		}
 	}
 </script>

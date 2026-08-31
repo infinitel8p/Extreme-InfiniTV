@@ -202,6 +202,7 @@ import {
 	import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js";
 	import { getEntries, getActiveEntry, loadCreds } from "@/scripts/lib/creds.js";
 	import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js";
+	import { readCachedLiveChannels } from "@/scripts/lib/live-catalog.ts";
 	import { getRecents, ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js";
 	import { getProgrammesSync, getNowNextForChannel, loadProgrammes } from "@/scripts/lib/epg-data.js";
 
@@ -352,7 +353,7 @@ import {
 		if (!liveTileArt || !liveTileSub) return;
 		await ensurePrefsLoaded();
 		const recents = getRecents(active._id, "live") || [];
-		const live = (getCached(active._id, "live")?.data || getCached(active._id, "m3u")?.data || []);
+		const live = readCachedLiveChannels(active._id);
 		setHeroChannelCount(live.length);
 		const liveById = new Map(live.map((c) => [Number(c.id), c]));
 		let lastChannel = null;

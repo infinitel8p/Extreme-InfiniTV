@@ -1,0 +1,536 @@
+// TV receiver screen: pairing idle view + remote-controlled playback.
+import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
+import { getEffectiveReceiverDeviceName, getReceiverEngine, getReceiverId } from "@/scripts/lib/app-settings.js"
+import { applyStreamHeaders } from "@/scripts/lib/stream-headers"
+import { validateCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
+import { t, initI18n } from "@/scripts/lib/i18n.js"
+import { suppressLaunchChime } from "@/scripts/lib/ui-sounds"
+import { log, redactUrl } from "@/scripts/lib/log.js"
+import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
+import { getActiveEntry } from "@/scripts/lib/creds.js"
+import { isTvDevice } from "@/scripts/lib/tv-detect"
+import { mountReceiverAmbient, type ReceiverAmbient } from "@/scripts/receiver/ambient"
+import { startReceiverKeepAlive, stopReceiverKeepAlive } from "@/scripts/lib/receiver-keep-alive"
+import { receiverWakeAvailable, receiverWakeBridgePresent, wakeReceiverApp } from "@/scripts/lib/receiver-wake"
+import { startReceiverLogStream, stopReceiverLogStream } from "@/scripts/lib/receiver-log-stream"
+import { setKeepScreenOn } from "@/scripts/lib/keep-screen-on"
+import {
+  createAndroidNativeReceiverEngine,
+  createEmbeddedReceiverEngine,
+  normalizeReportedDuration,
+  type ReceiverControlAction,
+  type ReceiverEngine,
+  type ReceiverEngineCallbacks,
+  type ReceiverPlaybackState,
+  type ReceiverPlayOptions,
+  type ReceiverStatePartial,
+} from "@/scripts/receiver/engines"
+import {
+  playWithFallback,
+  selectEngine,
+  type EngineRegistry,
+  type ReceiverEnginePreference,
+} from "@/scripts/receiver/engine-select"
+import {
+  formatReceiverAddress,
+  formatReceiverPairCode,
+  pairableReceiverIps,
+  type ReceiverStatus,
+} from "@/scripts/lib/receiver-shared.js"
+import { advertiseReceiver } from "@/scripts/lib/receiver-discovery.js"
+
+void initI18n()
+
+// Reaching the receiver screen already counts as the app being up, so a later
+// exit landing on /tv must not replay the boot chime.
+suppressLaunchChime()
+
+// Scopes MainActivity's onPause() WebView keep-resumed workaround to this page being visible,
+// instead of the whole app lifetime once receiver mode is enabled.
+function setReceiverPageForeground(active: boolean): void {
+  try {
+    ;(window as any).AndroidReceiverKeepAlive?.setReceiverPageForeground?.(active)
+  } catch (err) {
+    log.warn("[xt:receiver] setReceiverPageForeground failed:", err)
+  }
+}
+
+setReceiverPageForeground(true)
+
+const isKioskBuild = import.meta.env.PUBLIC_APP_MODE === "receiver"
+
+interface ReceiverPlayPayload {
+  descriptor: unknown
+  deviceName?: string
+}
+
+interface ReceiverControlPayload {
+  action: ReceiverControlAction | "volume"
+  seconds?: number
+  level?: number
+  muted?: boolean
+  deviceName?: string
+}
+
+const PENDING_PLAY_KEY = "xt_receiver_pending_play"
+const OLED_NUDGE_INTERVAL_MS = 5 * 60 * 1000
+const OLED_NUDGE_MAX_PX = 8
+
+const idleEl = document.getElementById("receiver-idle")
+const deviceNameEl = document.getElementById("receiver-device-name")
+const readyBadgeEl = document.getElementById("receiver-ready")
+const addressesEl = document.getElementById("receiver-addresses")
+const pairCodeEl = document.getElementById("receiver-pair-code")
+const pairedFlashEl = document.getElementById("receiver-paired-flash")
+const exitBtn = document.getElementById("receiver-exit")
+const playerViewEl = document.getElementById("receiver-player")
+const videoEl = document.getElementById("receiver-video") as HTMLVideoElement | null
+const titleWrapEl = document.getElementById("receiver-title-wrap")
+const titleEl = document.getElementById("receiver-title")
+const loadingEl = document.getElementById("receiver-loading")
+const loadingTitleEl = document.getElementById("receiver-loading-title")
+const pausedEl = document.getElementById("receiver-paused")
+const seekFlashEl = document.getElementById("receiver-seek-flash")
+const errorEl = document.getElementById("receiver-error")
+const errorMessageEl = document.getElementById("receiver-error-message")
+const errorCountdownEl = document.getElementById("receiver-error-countdown")
+const errorRetryEl = document.getElementById("receiver-error-retry")
+
+let currentTitle = ""
+let currentIsLive = false
+let currentPlaybackState: ReceiverPlaybackState = "idle"
+let lastKnownPositionSeconds = 0
+let lastKnownDurationSeconds: number | undefined
+let lastKnownVolume: number | undefined
+let lastKnownMuted: boolean | undefined
+
+let statusRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let pairedFlashTimer: ReturnType<typeof setTimeout> | null = null
+let seekFlashTimer: ReturnType<typeof setTimeout> | null = null
+
+let ambient: ReceiverAmbient | null = null
+let latestPrimaryAddress = ""
+let latestPairCode = ""
+
+async function getActivePlaylistId(): Promise<string | null> {
+  try {
+    const entry = await getActiveEntry()
+    return entry?._id ?? null
+  } catch {
+    return null
+  }
+}
+
+function mountAmbient(): void {
+  if (ambient) return
+  ambient = mountReceiverAmbient({
+    dom: {
+      root: document.getElementById("receiver-ambient"),
+      idleEl,
+      layerA: document.getElementById("receiver-ambient-layer-a"),
+      layerB: document.getElementById("receiver-ambient-layer-b"),
+      posterEl: document.getElementById("receiver-ambient-poster") as HTMLImageElement | null,
+      logoEl: document.getElementById("receiver-ambient-logo") as HTMLImageElement | null,
+      titleEl: document.getElementById("receiver-ambient-title"),
+      addressEl: document.getElementById("receiver-ambient-address"),
+      codeEl: document.getElementById("receiver-ambient-code"),
+      foregroundEl: document.getElementById("receiver-ambient-foreground"),
+      brandEl: document.getElementById("receiver-ambient-brand"),
+      brandMarkEl: document.getElementById("receiver-ambient-brand-mark"),
+      lockupEl: document.getElementById("receiver-ambient-lockup"),
+      clockEl: document.getElementById("receiver-ambient-clock"),
+    },
+    getPlaylistId: getActivePlaylistId,
+  })
+  ambient.setPairingInfo(latestPrimaryAddress, latestPairCode)
+  ambient.notifyPlaybackState(currentPlaybackState)
+}
+
+function syncReceiverKeepAlive(status: ReceiverStatus): void {
+  if (status.enabled && status.name) {
+    startReceiverKeepAlive(status.name)
+    // Mirror this page's log to whoever casts here - a TV has no console to read it on.
+    startReceiverLogStream()
+  } else {
+    stopReceiverKeepAlive()
+    stopReceiverLogStream()
+  }
+}
+
+function renderStatus(status: ReceiverStatus): void {
+  syncReceiverKeepAlive(status)
+  if (statusRefreshTimer) {
+    clearTimeout(statusRefreshTimer)
+    statusRefreshTimer = null
+  }
+  if (status.name) {
+    if (deviceNameEl) deviceNameEl.textContent = status.name
+    readyBadgeEl?.classList.remove("hidden")
+    readyBadgeEl?.classList.add("inline-flex")
+  }
+  const ips = pairableReceiverIps(status.ips || [])
+  if (ips.length > 0) latestPrimaryAddress = formatReceiverAddress(ips[0], status.port)
+  if (addressesEl && ips.length > 0) {
+    addressesEl.textContent = ""
+    const primary = document.createElement("div")
+    primary.textContent = formatReceiverAddress(ips[0], status.port)
+    addressesEl.appendChild(primary)
+    if (ips.length > 1) {
+      const alternates = document.createElement("div")
+      alternates.className = "mt-2 max-w-2xl text-sm font-normal tracking-normal text-fg-3"
+      alternates.textContent = t("receiver.idle.alsoReachable", {
+        list: ips.slice(1).map((ip) => formatReceiverAddress(ip, status.port)).join("  ·  "),
+      })
+      addressesEl.appendChild(alternates)
+    }
+  }
+  latestPairCode = formatReceiverPairCode(status.pairCode)
+  if (pairCodeEl) pairCodeEl.textContent = latestPairCode
+  ambient?.setPairingInfo(latestPrimaryAddress, latestPairCode)
+  const expiresIn = status.pairCodeExpiresInSeconds
+  if (typeof expiresIn === "number" && expiresIn > 0) {
+    statusRefreshTimer = setTimeout(() => { void refreshStatus() }, (expiresIn + 1) * 1000)
+  }
+}
+
+async function refreshStatus(): Promise<void> {
+  try {
+    const status = await invoke<ReceiverStatus>("receiver_status")
+    renderStatus(status)
+  } catch (err) {
+    log.warn("[xt:receiver] receiver_status refresh failed:", err)
+  }
+}
+
+async function startReceiver(): Promise<void> {
+  const name = getEffectiveReceiverDeviceName() || undefined
+  try {
+    const status = await invoke<ReceiverStatus>("receiver_start", { name })
+    renderStatus(status)
+    if (status.port !== undefined) advertiseReceiver(status.name, status.port, getReceiverId())
+    return
+  } catch (err) {
+    log.warn("[xt:receiver] receiver_start failed:", err)
+  }
+  try {
+    const status = await invoke<ReceiverStatus>("receiver_status")
+    renderStatus(status)
+  } catch (err) {
+    log.warn("[xt:receiver] receiver_status failed:", err)
+  }
+}
+
+function showPairedFlash(deviceName: string): void {
+  if (!pairedFlashEl) return
+  pairedFlashEl.textContent = t("receiver.idle.paired", { deviceName })
+  pairedFlashEl.classList.remove("hidden")
+  if (pairedFlashTimer) clearTimeout(pairedFlashTimer)
+  pairedFlashTimer = setTimeout(() => { pairedFlashEl?.classList.add("hidden") }, 4000)
+}
+
+function showSeekFlash(deltaSeconds: number): void {
+  if (!seekFlashEl) return
+  seekFlashEl.textContent = (deltaSeconds > 0 ? "+" : "-") + Math.abs(deltaSeconds) + "s"
+  seekFlashEl.classList.remove("hidden")
+  if (seekFlashTimer) clearTimeout(seekFlashTimer)
+  seekFlashTimer = setTimeout(() => seekFlashEl.classList.add("hidden"), 900)
+}
+
+function reportState(partial: ReceiverStatePartial): void {
+  if (partial.state && partial.state !== currentPlaybackState) {
+    log.info("[xt:receiver] state", {
+      from: currentPlaybackState,
+      to: partial.state,
+      position: partial.positionSeconds ?? lastKnownPositionSeconds,
+      error: partial.error ?? null,
+    })
+  }
+  if (partial.state) {
+    currentPlaybackState = partial.state
+    ambient?.notifyPlaybackState(partial.state)
+    setKeepScreenOn(partial.state === "playing" || partial.state === "loading" || partial.state === "buffering")
+  }
+  if (typeof partial.positionSeconds === "number") lastKnownPositionSeconds = partial.positionSeconds
+  // The server replaces the whole report, so a partial one must not drop a duration the player already knows.
+  const durationSeconds = normalizeReportedDuration(partial.durationSeconds)
+  if (durationSeconds !== undefined) lastKnownDurationSeconds = durationSeconds
+  if (typeof partial.volume === "number") lastKnownVolume = partial.volume
+  if (typeof partial.muted === "boolean") lastKnownMuted = partial.muted
+  const reportedState = partial.state ?? currentPlaybackState
+  // "ended" keeps duration/title for poll-mode senders; only idle clears them.
+  const isIdleReport = reportedState === "idle"
+  if (isIdleReport) {
+    currentTitle = ""
+    lastKnownDurationSeconds = undefined
+  }
+  const payload = {
+    state: reportedState,
+    positionSeconds: partial.positionSeconds ?? (isIdleReport ? 0 : lastKnownPositionSeconds),
+    durationSeconds: isIdleReport ? undefined : (durationSeconds ?? lastKnownDurationSeconds),
+    title: isIdleReport ? undefined : (currentTitle || undefined),
+    error: partial.error,
+    volume: partial.volume ?? lastKnownVolume,
+    muted: partial.muted ?? lastKnownMuted,
+  }
+  void invoke("receiver_report_state", { payload }).catch((err) => {
+    log.warn("[xt:receiver] receiver_report_state failed:", err)
+  })
+}
+
+let activeEngine: ReceiverEngine | null = null
+
+const engineCallbacks: ReceiverEngineCallbacks = {
+  report: reportState,
+  onSessionEnded: () => { activeEngine = null },
+}
+
+const embeddedEngine = createEmbeddedReceiverEngine(
+  {
+    idleEl,
+    playerViewEl,
+    videoEl,
+    titleWrapEl,
+    titleEl,
+    loadingEl,
+    loadingTitleEl,
+    pausedEl,
+    errorEl,
+    errorMessageEl,
+    errorCountdownEl,
+    errorRetryEl,
+  },
+  engineCallbacks,
+)
+
+const androidNativeEngine = androidNativePlayerAvailable
+  ? createAndroidNativeReceiverEngine(engineCallbacks)
+  : null
+
+const engineRegistry: EngineRegistry = { embedded: embeddedEngine, native: androidNativeEngine }
+
+async function startWithEngine(
+  engine: ReceiverEngine,
+  descriptor: CastDescriptorV1,
+  playOptions?: ReceiverPlayOptions,
+): Promise<boolean> {
+  const started = await engine.play(descriptor, playOptions)
+  if (started) activeEngine = engine
+  return started
+}
+
+let lastPlayPayload: unknown = null
+let playInFlight = 0
+
+function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && (!!window.__TAURI_INTERNALS__ || !!window.__TAURI__)
+}
+
+// No wake bridge on desktop; bring the window forward ourselves.
+async function bringDesktopWindowForward(): Promise<void> {
+  if (!isTauriRuntime()) return
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window")
+    const current = getCurrentWindow()
+    await current.unminimize()
+    await current.show()
+    await current.setFocus()
+  } catch (err) {
+    log.warn("[xt:receiver] bringing window forward failed:", err)
+  }
+}
+
+async function onPlay(rawDescriptor: unknown): Promise<void> {
+  lastPlayPayload = rawDescriptor
+  const descriptor = validateCastDescriptor(rawDescriptor)
+  if (!descriptor) {
+    log.warn("[xt:receiver] play rejected: descriptor failed validation")
+    reportState({ state: "error", error: "bad-descriptor", positionSeconds: 0 })
+    return
+  }
+
+  // Native playback backgrounds this WebView, so only a hidden idle receiver needs waking;
+  // rejecting mid-session would break episode auto-advance.
+  if (document.visibilityState !== "visible" && !activeEngine) {
+    if (receiverWakeBridgePresent()) {
+      const woke = receiverWakeAvailable() && wakeReceiverApp()
+      if (!woke) {
+        log.warn("[xt:receiver] play rejected: app is backgrounded and could not be woken")
+        reportState({ state: "error", error: "app-not-foreground", positionSeconds: 0 })
+        return
+      }
+    } else {
+      await bringDesktopWindowForward()
+    }
+  }
+
+  playInFlight++
+  const generationAtStart = playGeneration
+  try {
+    activeEngine?.teardown()
+    activeEngine = null
+
+    currentTitle = descriptor.title
+    currentIsLive = descriptor.isLive
+    lastKnownDurationSeconds = descriptor.isLive ? undefined : normalizeReportedDuration(descriptor.durationSeconds)
+    ambient?.noteCastDescriptor({ title: descriptor.title, logo: descriptor.logo })
+
+    await applyStreamHeaders(
+      descriptor.headers
+        ? { userAgent: descriptor.headers.userAgent ?? null, referer: descriptor.headers.referer ?? null }
+        : null
+    )
+
+    const enginePreference = getReceiverEngine() as ReceiverEnginePreference
+    const engine = selectEngine(engineRegistry, descriptor, enginePreference)
+    log.info("[xt:receiver] play", {
+      engine: engine === androidNativeEngine ? "android-native" : "embedded",
+      enginePref: enginePreference,
+      isLive: descriptor.isLive,
+      mime: descriptor.mime,
+      drm: descriptor.drm?.drmScheme ?? null,
+      ua: descriptor.headers?.userAgent ? "set" : "none",
+      preferNativeHls: descriptor.preferNativeHls ?? false,
+      resumeSeconds: descriptor.resumeSeconds ?? 0,
+      src: redactUrl(descriptor.src),
+    })
+
+    const { started } = await playWithFallback(engineRegistry, descriptor, {
+      preference: enginePreference,
+      start: startWithEngine,
+      onFallback: () => log.warn("[xt:receiver] native playback unavailable, falling back to embedded playback"),
+    })
+    if (started) return
+
+    log.error("[xt:receiver] no engine could start playback")
+    reportState({ state: "error", error: "player-unavailable", positionSeconds: 0 })
+  } catch (err) {
+    if (generationAtStart !== playGeneration) return
+    log.error("[xt:receiver] play threw unexpectedly:", err)
+    embeddedEngine.teardown()
+    activeEngine = null
+    reportState({ state: "error", error: "play-failed", positionSeconds: 0 })
+  } finally {
+    playInFlight--
+  }
+}
+
+let playGeneration = 0
+let playChain: Promise<void> = Promise.resolve()
+
+/** Serialized: activeEngine is set only after play() resolves, so concurrent plays double-mount. */
+function enqueuePlay(rawDescriptor: unknown): void {
+  const generation = ++playGeneration
+  playChain = playChain
+    .then(() => (generation === playGeneration ? onPlay(rawDescriptor) : undefined))
+    .catch((err) => log.warn("[xt:receiver] play failed:", err))
+}
+
+function consumePendingPlay(): void {
+  try {
+    const raw = sessionStorage.getItem(PENDING_PLAY_KEY)
+    if (!raw) return
+    sessionStorage.removeItem(PENDING_PLAY_KEY)
+    enqueuePlay(JSON.parse(raw))
+  } catch (err) {
+    log.warn("[xt:receiver] pending play parse failed:", err)
+  }
+}
+
+function onControl(payload: ReceiverControlPayload | undefined): void {
+  if (!payload) return
+  if (payload.action === "volume") {
+    if (typeof payload.level === "number" && typeof payload.muted === "boolean") {
+      activeEngine?.setVolume(payload.level, payload.muted)
+    }
+    return
+  }
+  activeEngine?.control(payload.action, payload.seconds)
+}
+
+function isPlayerActive(): boolean {
+  if (activeEngine || playInFlight > 0) return true
+  return !!playerViewEl && !playerViewEl.classList.contains("hidden")
+}
+
+errorRetryEl?.addEventListener("click", () => {
+  if (lastPlayPayload == null) return
+  enqueuePlay(lastPlayPayload)
+})
+
+document.addEventListener("keydown", (event) => {
+  // Let the focused retry button handle its own Enter/Space activation.
+  if (document.activeElement === errorRetryEl) return
+  const key = event.key
+  if (isPlayerActive()) {
+    if (key === "Enter" || key === " " || key === "MediaPlayPause") {
+      event.preventDefault()
+      if (!activeEngine) return
+      activeEngine.control(currentPlaybackState === "paused" ? "resume" : "pause")
+      return
+    }
+    if (!currentIsLive && (key === "ArrowLeft" || key === "ArrowRight")) {
+      event.preventDefault()
+      if (!activeEngine) return
+      const delta = key === "ArrowLeft" ? -10 : 10
+      activeEngine.control("seek", Math.max(0, lastKnownPositionSeconds + delta))
+      showSeekFlash(delta)
+      return
+    }
+    if (key === "Escape" || key === "GoBack" || key === "BrowserBack") {
+      event.preventDefault()
+      activeEngine?.control("stop")
+    }
+    return
+  }
+  if ((key === "Escape" || key === "GoBack" || key === "BrowserBack") && !isKioskBuild) {
+    event.preventDefault()
+    exitReceiver()
+  }
+})
+
+function exitReceiver(): void {
+  setKeepScreenOn(false)
+  setReceiverPageForeground(false)
+  // The native engine plays in a separate activity that outlives this page.
+  activeEngine?.teardown()
+  activeEngine = null
+  // Server keeps running in the background; only auto-boot-in is suppressed.
+  try { sessionStorage.setItem("xt_receiver_exited", "1") } catch {}
+  window.location.href = isTvDevice() ? "/tv" : "/"
+}
+
+window.addEventListener("pagehide", () => {
+  setKeepScreenOn(false)
+  setReceiverPageForeground(false)
+})
+
+if (isKioskBuild) {
+  exitBtn?.classList.add("hidden")
+} else {
+  exitBtn?.addEventListener("click", () => exitReceiver())
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches
+}
+
+setInterval(() => {
+  if (!idleEl || idleEl.classList.contains("hidden")) return
+  if (document.documentElement.dataset.perfMode === "on" || prefersReducedMotion()) return
+  const dx = Math.round((Math.random() - 0.5) * 2 * OLED_NUDGE_MAX_PX)
+  const dy = Math.round((Math.random() - 0.5) * 2 * OLED_NUDGE_MAX_PX)
+  idleEl.style.transform = `translate(${dx}px, ${dy}px)`
+}, OLED_NUDGE_INTERVAL_MS)
+
+// Mounted synchronously (no receiver-status dependency) so no pushed manifest/cast event is dropped.
+mountAmbient()
+
+void listen<ReceiverStatus>("xt:receiver-status", (event) => renderStatus(event.payload))
+void listen<{ deviceName: string }>("xt:receiver-paired", (event) => showPairedFlash(event.payload?.deviceName || ""))
+void listen<ReceiverPlayPayload>("xt:receiver-play", (event) => enqueuePlay(event.payload?.descriptor))
+void listen<ReceiverControlPayload>("xt:receiver-control", (event) => onControl(event.payload))
+void listen<{ entries: unknown }>("xt:receiver-ambient", (event) => ambient?.notePushedManifest(event.payload?.entries))
+
+void startReceiver()
+consumePendingPlay()

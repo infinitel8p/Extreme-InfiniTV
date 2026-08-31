@@ -1,10 +1,12 @@
 // IndexedDB-backed catalog cache with in-memory hydration layer
 import { log } from "@/scripts/lib/log.js"
+import { createTimedIdbOpener } from "@/scripts/lib/idb-open.ts"
 
 const PREFIX = "xt_cache:"
 const DB_NAME = "xt_cache"
-const DB_VERSION = 3
+const DB_VERSION = 4
 const STORE = "entries"
+const FETCHED_AT_INDEX = "fetchedAt"
 const META_LS_KEY = "xt_cache_meta" // legacy; kept only for clean-up.
 const EVT_REVALIDATED = "xt:cache-revalidated"
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000 // 30d
@@ -22,37 +24,33 @@ const _mem = new Map()
 // ---------------------------------------------------------------------------
 // IndexedDB layer
 // ---------------------------------------------------------------------------
-/** @type {Promise<IDBDatabase>|null} */
-let _dbPromise = null
+const idbOpener = createTimedIdbOpener({
+  name: DB_NAME,
+  version: DB_VERSION,
+  logTag: "xt:cache",
+  upgrade(db, event) {
+    let store
+    if (!db.objectStoreNames.contains(STORE)) {
+      store = db.createObjectStore(STORE)
+    } else {
+      store = event.target.transaction.objectStore(STORE)
+      if (event.oldVersion < 3) store.clear()
+    }
+    // Lets pruneOldEntries read fetchedAt off the index instead of deserializing every record's payload.
+    if (!store.indexNames.contains(FETCHED_AT_INDEX)) {
+      store.createIndex(FETCHED_AT_INDEX, FETCHED_AT_INDEX)
+    }
+  },
+})
 
 function openDB() {
-  if (_dbPromise) return _dbPromise
-  if (typeof indexedDB === "undefined") {
-    return Promise.reject(new Error("IndexedDB unavailable"))
-  }
-  _dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = (event) => {
-      const db = req.result
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE)
-      } else if (event.oldVersion < 3) {
-        req.transaction.objectStore(STORE).clear()
-      }
-    }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-    req.onblocked = () => reject(new Error("IDB blocked"))
-  })
-  _dbPromise.catch(() => {
-    _dbPromise = null
-  })
-  return _dbPromise
+  return idbOpener.open()
 }
 
 async function idbGet(key) {
   try {
     const db = await openDB()
+    if (!db) return null
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readonly")
       const req = tx.objectStore(STORE).get(key)
@@ -67,6 +65,7 @@ async function idbGet(key) {
 async function idbPut(key, value) {
   try {
     const db = await openDB()
+    if (!db) return false
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).put(value, key)
@@ -89,6 +88,7 @@ async function idbPut(key, value) {
 async function idbDelete(key) {
   try {
     const db = await openDB()
+    if (!db) return false
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).delete(key)
@@ -107,6 +107,7 @@ async function idbDelete(key) {
 async function idbAllKeys() {
   try {
     const db = await openDB()
+    if (!db) return []
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readonly")
       const req = tx.objectStore(STORE).getAllKeys()
@@ -121,6 +122,7 @@ async function idbAllKeys() {
 async function idbDeleteWhere(prefix) {
   try {
     const db = await openDB()
+    if (!db) return 0
     const keys = await idbAllKeys()
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readwrite")
@@ -144,9 +146,38 @@ async function idbDeleteWhere(prefix) {
   }
 }
 
+// Walks the fetchedAt index with a key-only cursor, never touching the record
+// values, so pruning stale entries doesn't deserialize multi-MB catalog payloads.
+async function idbStaleKeysBefore(cutoff) {
+  try {
+    const db = await openDB()
+    if (!db) return []
+    return await new Promise((resolve) => {
+      const tx = db.transaction(STORE, "readonly")
+      const index = tx.objectStore(STORE).index(FETCHED_AT_INDEX)
+      const req = index.openKeyCursor(IDBKeyRange.upperBound(cutoff))
+      const staleKeys = []
+      req.onsuccess = () => {
+        const cursor = req.result
+        if (!cursor) {
+          resolve(staleKeys)
+          return
+        }
+        staleKeys.push(cursor.primaryKey)
+        cursor.continue()
+      }
+      req.onerror = () => resolve(staleKeys)
+    })
+  } catch (e) {
+    log.warn("[xt:cache] idbStaleKeysBefore threw", e)
+    return []
+  }
+}
+
 async function idbClearAll() {
   try {
     const db = await openDB()
+    if (!db) return false
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).clear()
@@ -176,17 +207,13 @@ async function pruneOldEntries() {
     let lastPrune = 0
     try { lastPrune = Number(localStorage.getItem(PRUNE_SENTINEL_KEY)) || 0 } catch {}
     if (Date.now() - lastPrune < PRUNE_INTERVAL_MS) return
-    const keys = await idbAllKeys()
+    const staleKeys = await idbStaleKeysBefore(Date.now() - MAX_AGE_MS)
     let removed = 0
-    for (const key of keys) {
+    for (const key of staleKeys) {
       if (typeof key !== "string" || !key.startsWith(PREFIX)) continue
-      const value = await idbGet(key)
-      const fetchedAt = value?.fetchedAt || 0
-      if (fetchedAt && Date.now() - fetchedAt > MAX_AGE_MS) {
-        await idbDelete(key)
-        _mem.delete(key)
-        removed++
-      }
+      await idbDelete(key)
+      _mem.delete(key)
+      removed++
     }
     try { localStorage.setItem(PRUNE_SENTINEL_KEY, String(Date.now())) } catch {}
     if (removed > 0) log.log("[xt:cache] pruned", removed, "stale entries (>30d)")
@@ -268,6 +295,7 @@ export async function getCachedByKindPrefix(entryId, kindPrefix) {
   }
   try {
     const db = await openDB()
+    if (!db) return [...byKind].map(([kind, data]) => ({ kind, data }))
     const idbResults = await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readonly")
       const range = IDBKeyRange.bound(prefix, prefix + "￿")

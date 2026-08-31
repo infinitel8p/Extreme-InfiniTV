@@ -17,6 +17,7 @@
   } from "@/scripts/lib/app-settings.js"
   import {
     detectPlayer,
+    discoverExternalPlayers,
     externalPlayersAvailable,
     PlayerNotConfiguredError,
   } from "@/scripts/lib/player-runtime.ts"
@@ -67,6 +68,7 @@
   let notFoundLabel = $state(label("notFound", "Not found"))
   let browseLabel = $state(label("browse", "Browse…"))
   let detectLabel = $state(label("detect", "Detect"))
+  let autoDetectLabel = $state(label("autoDetect", "Auto-detect"))
   let advancedLabel = $state(label("advanced", "Advanced"))
   let extraArgsLabel = $state(label("extraArgs", "Extra arguments (one per line)"))
   let externalPrefLabel = $state(label("externalPref.label", "Preferred external player"))
@@ -132,6 +134,7 @@
     notFoundLabel = label("notFound", "Not found")
     browseLabel = label("browse", "Browse…")
     detectLabel = label("detect", "Detect")
+    autoDetectLabel = label("autoDetect", "Auto-detect")
     advancedLabel = label("advanced", "Advanced")
     extraArgsLabel = label("extraArgs", "Extra arguments (one per line)")
     externalPrefLabel = label("externalPref.label", "Preferred external player")
@@ -197,6 +200,28 @@
     }
   }
 
+  let autoDetecting = $state({ mpv: false, vlc: false })
+  let discoveryRan = false
+
+  async function autoDetectFor(kind) {
+    autoDetecting[kind] = true
+    try {
+      const discovered = await discoverExternalPlayers()
+      const candidate = (discovered[kind] || [])[0] || ""
+      if (!candidate) {
+        const playerName = kind.toUpperCase()
+        toastError(
+          label("autoDetectNotFound", `Couldn't find ${playerName} automatically.`, { player: playerName }),
+        )
+        return
+      }
+      onPathChange(kind, candidate)
+      await detectFor(kind, candidate)
+    } finally {
+      autoDetecting[kind] = false
+    }
+  }
+
   async function detectFor(kind, candidatePath) {
     if (!candidatePath) {
       surfaceLaunchError(new PlayerNotConfiguredError(kind), kind)
@@ -223,10 +248,20 @@
     backend = getPlayerBackend()
   }
 
+  async function autoFillEmptyPaths() {
+    if (discoveryRan || !isDesktopTauriEnv || sandboxed) return
+    if (pathMpv && pathVlc) return
+    discoveryRan = true
+    const discovered = await discoverExternalPlayers()
+    if (!pathMpv && discovered.mpv[0]) onPathChange("mpv", discovered.mpv[0])
+    if (!pathVlc && discovered.vlc[0]) onPathChange("vlc", discovered.vlc[0])
+  }
+
   onMount(() => {
     document.addEventListener(LOCALE_EVENT, refreshLabels)
     document.addEventListener(PLAYER_BACKEND_EVENT, onBackendEvent)
     refreshLabels()
+    autoFillEmptyPaths()
     return () => {
       document.removeEventListener(LOCALE_EVENT, refreshLabels)
       document.removeEventListener(PLAYER_BACKEND_EVENT, onBackendEvent)
@@ -426,6 +461,11 @@
           />
           <button type="button" class="btn" onclick={() => browseFor("mpv")}>{browseLabel}</button>
           <button type="button" class="btn" onclick={() => detectFor("mpv", pathMpv)}>{detectLabel}</button>
+          <button
+            type="button"
+            class="btn"
+            disabled={autoDetecting.mpv}
+            onclick={() => autoDetectFor("mpv")}>{autoDetectLabel}</button>
         </div>
       </label>
 
@@ -478,6 +518,11 @@
           />
           <button type="button" class="btn" onclick={() => browseFor("vlc")}>{browseLabel}</button>
           <button type="button" class="btn" onclick={() => detectFor("vlc", pathVlc)}>{detectLabel}</button>
+          <button
+            type="button"
+            class="btn"
+            disabled={autoDetecting.vlc}
+            onclick={() => autoDetectFor("vlc")}>{autoDetectLabel}</button>
         </div>
       </label>
 

@@ -32,18 +32,27 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
-reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
 rand = "0.9"
+gethostname = "1.1"
 futures-util = "0.3"
 bytes = "1"
+axum = { version = "0.8", features = ["ws"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+tokio = { version = "1", features = ["net", "sync", "time", "macros"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 discord-rich-presence = "0.2"
 tauri-plugin-window-state = "2"
-axum = "0.8"
-tokio = { version = "1", features = ["net", "sync", "io-util", "time", "macros", "process", "fs"] }
+tokio = { version = "1", features = ["io-util", "process", "fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
+mdns-sd = "0.21"
+
+# Also used on Android by the receiver_discover subnet sweep fallback (no mDNS there).
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+if-addrs = "0.15"
 
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-android-fs = { version = "=28.1.0", features = [] }

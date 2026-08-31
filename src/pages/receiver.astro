@@ -1,0 +1,308 @@
+---
+import ReceiverLayout from "@/layouts/ReceiverLayout.astro"
+---
+
+<ReceiverLayout pageTitle="Receiver">
+	<div class="relative h-full w-full">
+		<main
+			id="receiver-idle"
+			class="xt-receiver-view relative h-full w-full grid grid-rows-[1fr_auto_1fr] p-3 sm:p-4 lg:p-5 transition-transform duration-[2000ms] ease-linear">
+
+			<div class="self-start flex items-center gap-1.5 text-left">
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					viewBox="8 58 224 124"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"
+					class="h-3.5 w-auto shrink-0 text-accent">
+					<path fill="none" stroke="currentColor" stroke-width="20" d="M65.6 70.2 A50 50 0 1 1 20.2 115.6" />
+					<circle fill="currentColor" cx="34.6" cy="84.6" r="9" />
+					<circle fill="none" stroke="currentColor" stroke-width="20" cx="170" cy="120" r="50" />
+					<rect fill="currentColor" x="146.5" y="94" width="13" height="52" rx="6.5" />
+					<rect fill="currentColor" x="164.5" y="102" width="13" height="36" rx="6.5" />
+					<rect fill="currentColor" x="182.5" y="110" width="13" height="20" rx="6.5" />
+				</svg>
+				<h1 id="receiver-device-name" class="text-[0.5625rem] sm:text-[0.625rem] font-medium text-fg-2">
+					<span id="receiver-name-skel" class="skel inline-block h-3 w-22 rounded-[0.1875rem] align-middle"></span>
+				</h1>
+				<span id="receiver-ready" class="hidden items-center gap-1 text-[0.4375rem] text-fg-3">
+					<span class="size-1 rounded-full bg-ok"></span>
+					<span data-i18n="receiver.idle.ready">Ready to pair</span>
+				</span>
+			</div>
+
+			<div class="grid place-items-center">
+				<div class="flex flex-col items-center text-center">
+					<span data-i18n="receiver.idle.addressLabel" class="text-[0.4375rem] font-semibold uppercase text-fg-3">Address</span>
+					<div id="receiver-addresses" class="mt-1 flex flex-col gap-0.5 text-[1.5rem] font-semibold leading-tight tabular-nums text-fg">
+						<span id="receiver-address-skel" class="skel inline-block h-5 w-36 rounded"></span>
+					</div>
+
+					<span data-i18n="receiver.idle.codeLabel" class="mt-4 sm:mt-5 text-[0.4375rem] font-semibold uppercase text-fg-3">Pair code</span>
+					<span
+						id="receiver-pair-code"
+						class="mt-1 text-[3.375rem] font-semibold leading-none tracking-[0.3em] tabular-nums text-accent">------</span>
+
+					<p data-i18n="receiver.idle.hint" class="mt-4 max-w-[18rem] text-[0.5rem] lg:text-[0.5625rem] text-fg-2">
+						On your phone or computer, choose Play on TV, then add this device with the address and code above.
+					</p>
+				</div>
+			</div>
+
+			<div class="self-end flex items-end justify-between gap-2 flex-wrap">
+				<button
+					id="receiver-exit"
+					type="button"
+					data-i18n="receiver.idle.exit"
+					class="inline-flex min-h-5.5 items-center rounded-md px-1.5 py-1 text-[0.4375rem] text-fg-3 transition-colors hover:bg-surface hover:text-fg">Exit receiver</button>
+
+				<div class="ml-auto flex items-center gap-1.5 rounded-lg border border-line bg-surface p-1.25 text-left">
+					<div class="shrink-0 rounded-md bg-white p-1">
+						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 41 41" shape-rendering="crispEdges" aria-hidden="true" class="block size-10">
+							<path fill="#ffffff" d="M0 0h41v41H0z"/><path stroke="#000000" d="M4 4.5h7m2 0h1m4 0h1m1 0h1m1 0h3m2 0h1m2 0h7M4 5.5h1m5 0h1m2 0h2m1 0h1m2 0h1m2 0h1m2 0h1m4 0h1m5 0h1M4 6.5h1m1 0h3m1 0h1m1 0h4m2 0h2m3 0h4m3 0h1m1 0h3m1 0h1M4 7.5h1m1 0h3m1 0h1m1 0h2m1 0h1m6 0h2m1 0h2m1 0h1m1 0h1m1 0h3m1 0h1M4 8.5h1m1 0h3m1 0h1m1 0h5m1 0h3m3 0h4m2 0h1m1 0h3m1 0h1M4 9.5h1m5 0h1m1 0h1m2 0h1m5 0h1m1 0h1m4 0h1m1 0h1m5 0h1M4 10.5h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7M12 11.5h1m1 0h2m4 0h1m1 0h4m1 0h1M4 12.5h1m1 0h5m2 0h1m1 0h1m1 0h1m2 0h2m1 0h1m3 0h1m2 0h5M6 13.5h1m1 0h2m1 0h3m1 0h1m1 0h1m3 0h5m1 0h1m2 0h2m1 0h4M6 14.5h2m2 0h1m5 0h4m1 0h1m2 0h3m1 0h3m1 0h1m1 0h2M5 15.5h2m4 0h1m3 0h3m1 0h4m2 0h1m2 0h2m2 0h3M5 16.5h6m1 0h1m2 0h2m1 0h1m1 0h1m2 0h7m1 0h3m2 0h1M6 17.5h1m1 0h2m3 0h4m2 0h1m1 0h2m3 0h2m3 0h1m1 0h4M4 18.5h1m1 0h1m1 0h3m1 0h2m5 0h2m1 0h1m1 0h1m2 0h2m3 0h2M4 19.5h1m1 0h2m1 0h1m1 0h1m2 0h2m1 0h1m1 0h1m5 0h1m2 0h3m2 0h2M7 20.5h1m1 0h5m1 0h3m1 0h1m1 0h1m4 0h4m1 0h3m2 0h1M4 21.5h2m3 0h1m2 0h1m1 0h5m1 0h1m1 0h4m1 0h1m2 0h2m1 0h4M4 22.5h2m1 0h2m1 0h4m2 0h1m1 0h3m1 0h1m1 0h1m1 0h1m1 0h3m1 0h2M4 23.5h1m1 0h2m8 0h2m1 0h2m2 0h3m3 0h1m1 0h5M5 24.5h1m1 0h1m1 0h4m1 0h1m3 0h2m2 0h2m1 0h1m2 0h2m1 0h3m1 0h1M4 25.5h2m10 0h6m2 0h2m1 0h1m2 0h1m3 0h1m1 0h1M4 26.5h1m1 0h3m1 0h1m1 0h1m1 0h1m1 0h1m2 0h1m1 0h1m4 0h2m5 0h1M4 27.5h1m3 0h2m1 0h4m5 0h1m1 0h6m1 0h2m1 0h5M4 28.5h1m3 0h1m1 0h1m4 0h1m5 0h1m1 0h1m2 0h1m1 0h5m2 0h2M12 29.5h2m1 0h3m2 0h4m3 0h2m3 0h1m1 0h1M4 30.5h7m2 0h1m2 0h1m1 0h2m1 0h1m2 0h1m1 0h3m1 0h1m1 0h1m1 0h2M4 31.5h1m5 0h1m1 0h1m6 0h4m1 0h1m2 0h2m3 0h5M4 32.5h1m1 0h3m1 0h1m1 0h3m1 0h2m1 0h2m2 0h4m1 0h6m1 0h2M4 33.5h1m1 0h3m1 0h1m1 0h1m2 0h5m1 0h2m4 0h3m2 0h3m1 0h1M4 34.5h1m1 0h3m1 0h1m1 0h3m2 0h1m1 0h2m1 0h1m1 0h1m3 0h2m1 0h2M4 35.5h1m5 0h1m2 0h2m4 0h1m5 0h2m2 0h2m1 0h3M4 36.5h7m1 0h2m3 0h5m4 0h3m1 0h2m3 0h1"/>
+						</svg>
+					</div>
+					<div class="flex flex-col gap-0.25">
+						<p data-i18n="receiver.idle.getAppTitle" class="text-[0.4375rem] font-semibold text-fg">Don't have the app?</p>
+						<p data-i18n="receiver.idle.getAppHint" class="text-[0.375rem] text-fg-3 max-w-[8rem]">Scan to get Extreme InfiniTV for phone and desktop</p>
+						<p class="text-[0.375rem] text-fg-3">github.com/infinitel8p/Extreme-InfiniTV</p>
+					</div>
+				</div>
+			</div>
+		</main>
+
+		<section
+			id="receiver-ambient"
+			data-active="false"
+			aria-hidden="true"
+			data-i18n-attr="aria-label:receiver.ambient.label"
+			class="xt-receiver-ambient fixed inset-0 z-20 overflow-hidden bg-black">
+			<div id="receiver-ambient-layer-a" class="xt-ambient-layer absolute inset-0 bg-cover bg-center"></div>
+			<div id="receiver-ambient-layer-b" class="xt-ambient-layer absolute inset-0 bg-cover bg-center"></div>
+			<div class="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent"></div>
+
+			<div
+				id="receiver-ambient-topbar"
+				class="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between p-4 sm:p-6">
+				<div id="receiver-ambient-lockup" class="flex items-center gap-1">
+					<svg
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="8 58 224 124"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						aria-hidden="true"
+						class="h-4 sm:h-5 w-auto text-[#ec92e5]">
+						<path fill="none" stroke="currentColor" stroke-width="20" d="M65.6 70.2 A50 50 0 1 1 20.2 115.6" />
+						<circle fill="currentColor" cx="34.6" cy="84.6" r="9" />
+						<circle fill="none" stroke="currentColor" stroke-width="20" cx="170" cy="120" r="50" />
+						<rect fill="currentColor" x="146.5" y="94" width="13" height="52" rx="6.5" />
+						<rect fill="currentColor" x="164.5" y="102" width="13" height="36" rx="6.5" />
+						<rect fill="currentColor" x="182.5" y="110" width="13" height="20" rx="6.5" />
+					</svg>
+					<p class="text-[0.625rem] sm:text-xs font-semibold tracking-[-0.02em]">
+						<span class="text-white">Infini</span><span class="font-extrabold text-[#ec92e5] tracking-[0.04em]">TV</span>
+					</p>
+				</div>
+				<span id="receiver-ambient-clock" class="text-[0.9375rem] font-medium tabular-nums text-white/80 [text-shadow:0_2px_16px_rgb(0_0_0/0.6)]"></span>
+			</div>
+
+			<div
+				id="receiver-ambient-brand"
+				class="hidden absolute inset-0 z-10 flex items-center justify-center transition-transform duration-[2000ms] ease-linear">
+				<div class="flex flex-col items-center gap-2">
+					<svg
+						id="receiver-ambient-brand-mark"
+						xmlns="http://www.w3.org/2000/svg"
+						viewBox="8 58 224 124"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						aria-hidden="true"
+						class="xt-ambient-brand-mark h-8 sm:h-10 w-auto text-[#ec92e5]">
+						<path fill="none" stroke="currentColor" stroke-width="20" d="M65.6 70.2 A50 50 0 1 1 20.2 115.6" />
+						<circle fill="currentColor" cx="34.6" cy="84.6" r="9" />
+						<circle fill="none" stroke="currentColor" stroke-width="20" cx="170" cy="120" r="50" />
+						<rect fill="currentColor" x="146.5" y="94" width="13" height="52" rx="6.5" />
+						<rect fill="currentColor" x="164.5" y="102" width="13" height="36" rx="6.5" />
+						<rect fill="currentColor" x="182.5" y="110" width="13" height="20" rx="6.5" />
+					</svg>
+					<p class="text-xs sm:text-[0.9375rem] font-semibold tracking-[-0.02em]">
+						<span class="text-white">Infini</span><span class="font-extrabold text-[#ec92e5] tracking-[0.04em]">TV</span>
+					</p>
+				</div>
+			</div>
+
+			<div
+				id="receiver-ambient-right"
+				class="absolute right-4 sm:right-7 bottom-4 sm:bottom-7 flex flex-col items-center gap-2">
+				<img
+					id="receiver-ambient-poster"
+					alt=""
+					class="hidden max-h-[13.5rem] w-auto aspect-[2/3] rounded-md object-cover shadow-2xl shadow-black/60" />
+				<div class="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/15 bg-black/40 px-2 py-1.25 text-[0.4375rem] text-white/70 backdrop-blur-sm">
+					<span id="receiver-ambient-address" class="tabular-nums"></span>
+					<span aria-hidden="true" class="text-white/30">·</span>
+					<span id="receiver-ambient-code" class="tabular-nums tracking-widest text-white/90"></span>
+				</div>
+			</div>
+
+			<div
+				id="receiver-ambient-foreground"
+				class="absolute inset-x-0 bottom-0 flex items-end p-4 sm:p-6 transition-transform duration-2000 ease-linear">
+				<div class="flex min-w-0 flex-col gap-1">
+					<img id="receiver-ambient-logo" alt="" class="hidden max-h-[3.6rem] max-w-[16rem] object-contain drop-shadow-lg" />
+					<p
+						id="receiver-ambient-title"
+						class="hidden max-w-[24rem] text-[0.9375rem] sm:text-lg font-semibold text-white [text-shadow:0_2px_16px_rgb(0_0_0/0.6)]"></p>
+				</div>
+			</div>
+		</section>
+
+		<div
+			id="receiver-paired-flash"
+			class="hidden xt-receiver-flash fixed left-1/2 -translate-x-1/2 rounded-full border border-accent/40 bg-accent-soft px-3 py-1.5 text-[0.5rem] text-fg"></div>
+
+		<div id="receiver-player" class="xt-receiver-view hidden absolute inset-0 bg-black">
+			<video id="receiver-video" class="h-full w-full" playsinline></video>
+
+			<div
+				id="receiver-title-wrap"
+				class="pointer-events-none absolute inset-x-0 top-0 pt-[var(--xt-titlebar-h,0px)] bg-gradient-to-b from-black/70 via-black/35 to-transparent pb-5 opacity-0 transition-opacity duration-500">
+				<div id="receiver-title" class="px-3 pt-2.5 text-[0.625rem] sm:text-xs font-medium text-white/95"></div>
+			</div>
+
+			<div id="receiver-loading" class="hidden absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-black/40">
+				<div class="size-5 rounded-full border-2 border-white/20 border-t-white/90 animate-spin motion-reduce:animate-none" aria-hidden="true"></div>
+				<p id="receiver-loading-title" data-i18n="receiver.loading" class="max-w-[16rem] px-3 text-center text-[0.5625rem] text-white/85">Loading…</p>
+			</div>
+
+			<div id="receiver-paused" class="hidden absolute inset-0 flex items-center justify-center">
+				<div class="flex size-12 items-center justify-center rounded-full bg-black/50">
+					<svg viewBox="0 0 24 24" class="size-5 text-white/90" aria-hidden="true">
+						<rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="currentColor"/>
+						<rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="currentColor"/>
+					</svg>
+				</div>
+			</div>
+
+			<div id="receiver-seek-flash" class="hidden absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-2.5 py-1 text-[0.5625rem] tabular-nums text-white/90"></div>
+
+			<div id="receiver-error" class="hidden absolute inset-0 flex items-center justify-center px-3">
+				<div class="flex max-w-[14rem] flex-col items-center gap-1.5 rounded-lg border border-line bg-surface p-4 text-center">
+					<p data-i18n="receiver.error.title" class="text-[0.625rem] font-semibold text-fg">Playback failed</p>
+					<p id="receiver-error-message" class="text-[0.5rem] text-fg-3"></p>
+					<p data-i18n="receiver.error.returning" class="text-[0.4375rem] text-fg-3">Returning to the pairing screen…</p>
+					<div class="mt-0.5 h-0.25 w-full overflow-hidden rounded bg-line">
+						<div id="receiver-error-countdown" class="h-full w-full origin-left bg-accent"></div>
+					</div>
+					<button
+						id="receiver-error-retry"
+						type="button"
+						data-i18n="receiver.error.retry"
+						class="mt-1 inline-flex min-h-5.5 items-center justify-center rounded-md bg-fg px-2.5 py-1 text-[0.4375rem] font-semibold text-bg transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface">Try again</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script>
+		import "../scripts/receiver/receiver.ts";
+	</script>
+</ReceiverLayout>
+
+<style>
+	.xt-receiver-view {
+		animation: xt-receiver-fade-in 300ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	@keyframes xt-receiver-fade-in {
+		from { opacity: 0; }
+		to { opacity: 1; }
+	}
+
+	#receiver-idle {
+		transition: transform 2000ms linear, opacity 600ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	#receiver-idle[data-ambient-active="true"] {
+		opacity: 0;
+		pointer-events: none;
+	}
+
+	.xt-receiver-ambient {
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 600ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	.xt-receiver-ambient[data-active="true"] {
+		opacity: 1;
+		pointer-events: auto;
+	}
+
+	.xt-ambient-layer {
+		opacity: 0;
+		transform: scale(1);
+		transition: opacity 1200ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	.xt-ambient-layer.xt-ambient-layer-visible {
+		opacity: 1;
+	}
+	.xt-ambient-layer.xt-ambient-kenburns {
+		animation: xt-ambient-kenburns 25s linear forwards;
+	}
+	@keyframes xt-ambient-kenburns {
+		from { transform: scale(1); }
+		to { transform: scale(1.06); }
+	}
+	.xt-ambient-brand-mark.xt-ambient-brand-breathe {
+		animation: xt-ambient-brand-breathe 6s ease-in-out infinite;
+	}
+	@keyframes xt-ambient-brand-breathe {
+		0%, 100% { opacity: 0.85; transform: scale(1); }
+		50% { opacity: 1; transform: scale(1.05); }
+	}
+	/* Ambient artwork is full-bleed (fixed, ignores body overscan padding); keep its UI in the safe area. */
+	html[data-tv-overscan] #receiver-ambient-foreground {
+		padding-right: calc(1.5rem + var(--xt-tv-overscan, 0) * 1vw);
+		padding-bottom: calc(1.5rem + var(--xt-tv-overscan, 0) * 1vh);
+		padding-left: calc(1.5rem + var(--xt-tv-overscan, 0) * 1vw);
+	}
+	html[data-tv-overscan] #receiver-ambient-right {
+		right: calc(1.75rem + var(--xt-tv-overscan, 0) * 1vw);
+		bottom: calc(1.75rem + var(--xt-tv-overscan, 0) * 1vh);
+	}
+	html[data-tv-overscan] #receiver-ambient-topbar {
+		padding-top: calc(1.5rem + var(--xt-tv-overscan, 0) * 1vh);
+		padding-right: calc(1.5rem + var(--xt-tv-overscan, 0) * 1vw);
+		padding-left: calc(1.5rem + var(--xt-tv-overscan, 0) * 1vw);
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		#receiver-idle,
+		.xt-receiver-ambient,
+		.xt-ambient-layer,
+		#receiver-ambient-brand {
+			transition: none;
+		}
+		.xt-ambient-layer.xt-ambient-kenburns,
+		.xt-ambient-brand-mark.xt-ambient-brand-breathe {
+			animation: none;
+		}
+	}
+
+	.xt-receiver-flash {
+		top: calc(max(0.75rem, env(safe-area-inset-top, 0px)) + var(--xt-titlebar-h, 0px) + var(--xt-tv-overscan, 0) * 1vh);
+		z-index: 10001;
+		animation: xt-receiver-flash-in 360ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+	@keyframes xt-receiver-flash-in {
+		from { opacity: 0; transform: translate(-50%, -8px); }
+		to { opacity: 1; transform: translate(-50%, 0); }
+	}
+
+	.receiver-countdown-run {
+		animation: xt-receiver-countdown 10s linear forwards;
+	}
+	@keyframes xt-receiver-countdown {
+		from { transform: scaleX(1); }
+		to { transform: scaleX(0); }
+	}
+</style>

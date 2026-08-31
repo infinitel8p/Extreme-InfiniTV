@@ -6,8 +6,11 @@ import { log } from "@/scripts/lib/log.js"
 import {
   loadCreds,
   getActiveEntry,
+  isTauri,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { isCastRoutingActive, routePlayToCast, castXtreamEpisodeToTv } from "@/scripts/lib/tv-cast.js"
+import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
 import { ensureSeries } from "@/scripts/lib/catalog.js"
 import {
@@ -26,6 +29,7 @@ import {
   setVideoScaleOverride,
   clearAllVideoScaleOverrides,
   CHANNEL_VIDEO_SCALE_CHANGED_EVENT,
+  getSeriesProgressSummary,
 } from "@/scripts/lib/preferences.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import {
@@ -57,20 +61,18 @@ import {
 import {
   getAndroidNativePlayerEnabled,
   getPlayerBackend,
+  DEFAULT_PLAYER_BACKEND,
   getVideoScale,
   setVideoScale,
   isTmdbActive,
   getContentLanguage,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
-import {
-  resolveTmdbId,
-  fetchSeriesEnrichment,
-  fetchSeasonEnrichment,
-  peekEarlyDetailData,
-  peekCachedSeasonEnrichment,
-} from "@/scripts/lib/tmdb-enrich.ts"
+import { fetchSeasonEnrichment, peekCachedSeasonEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
+import { resolveTitleEnrichmentDetailed, peekEarlyTitleEnrichment } from "@/scripts/lib/enrichment.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
+import { providerSeasonsFromEpisodeMap } from "@/scripts/lib/tmdb-season-map.ts"
+import { enrichmentNeedsFill, fetchTvdbSeason, parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
 import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
@@ -105,7 +107,8 @@ import {
   subscribeExternalPlayerExit,
 } from "@/scripts/lib/player-runtime.ts"
 import { toast } from "@/scripts/lib/toast.js"
-import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
+import { setupExternalPlayerButton, surfaceLaunchErrorFallback } from "@/scripts/lib/external-player-button.ts"
+import { setupPlayOnTvButton } from "@/scripts/lib/play-on-tv-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
@@ -167,6 +170,7 @@ let tabsStaggered = false
 let episodesStaggered = false
 let externalPresenceActive = false
 let resolvedTmdbId = null
+let resolvedTvdbId = null
 let enrichRequestId = 0
 let seriesCatalogPromise = null
 let seasonEnrichRequestId = 0
@@ -178,18 +182,32 @@ let heroPosterUrl = null
 let heroTmdbBackdropUrl = null
 let heroProviderBackdropUrl = null
 let heroSettled = false
+let paintedHeroPosterUrl = null
 let earlyEnrichmentHandled = false
+let earlyEnrichmentNeedsFill = false
 let earlyEnrichmentPopulatedSimilar = false
+let providerPlotApplied = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 
-// Paints the hero exactly once per boot, at whichever point the caller has decided
-// enough is known: immediately when TMDb is inactive or already cache-warm, or after
-// the TMDb enrichment attempt settles (resolved, resolved-null, or failed) otherwise.
+// Paints the hero once, at whichever point the caller decided enough is known.
 function settleHero() {
   if (heroSettled) return
   heroSettled = true
+  paintedHeroPosterUrl = heroPosterUrl
   posterEl?.classList.remove("skel")
+  paintHeroOn(posterEl, {
+    name: series?.name || "",
+    posterUrl: heroPosterUrl,
+    backdropUrls: [heroProviderBackdropUrl, heroTmdbBackdropUrl],
+  })
+}
+
+// Enrichment can land after the hero settled (no TMDb key, or a warm-cache paint),
+// so repaint when it actually brought better artwork.
+function repaintHeroIfArtworkChanged() {
+  if (!heroSettled || heroPosterUrl === paintedHeroPosterUrl) return
+  paintedHeroPosterUrl = heroPosterUrl
   paintHeroOn(posterEl, {
     name: series?.name || "",
     posterUrl: heroPosterUrl,
@@ -271,6 +289,32 @@ function openEpisodeMenu(ep, anchor, point) {
     "aria-label",
     t("list.menu.ariaFor", { name: episodeMenuTitle(ep) || t("list.fallbackTitle") })
   )
+
+  if (isTauri && activePlaylistId && series) {
+    const saved = getProgress(activePlaylistId, "episode", ep.id)
+    const resumeSeconds = saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+    const durationSeconds = episodeDurationSeconds(ep)
+    menu.appendChild(
+      makeEpisodeMenuItem(
+        t("cast.menu.playOnTv"),
+        castXtreamEpisodeToTv({
+          creds,
+          playlistId: activePlaylistId,
+          seriesId: series.id,
+          episodeId: ep.id,
+          containerExt: ep.container_extension,
+          season: Number(ep.season || currentSeason) || 0,
+          episodeNum: Number(ep.episode_num) || 0,
+          title: episodeCastTitle(ep),
+          logo: series.logo || null,
+          resumeSeconds,
+          durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
+          contentHref: `/series/detail?id=${series.id}`,
+          src: ep._directUrl || undefined,
+        })
+      )
+    )
+  }
 
   const watchedOn = activePlaylistId ? isCompleted(activePlaylistId, "episode", ep.id) : false
   menu.appendChild(
@@ -663,6 +707,8 @@ function renderEpisodes() {
     episodeList.appendChild(row)
   }
   if (eps.length) episodesStaggered = true
+  defaultPlayEpisode = pickDefaultPlayEpisode()
+  playTvBtnHandle?.refresh()
   try { window.SpatialNavigation?.makeFocusable?.() } catch {}
   refreshSeasonEnrichment().catch((err) => {
     log.warn("[xt:series-detail] season tmdb enrichment failed:", err)
@@ -772,6 +818,7 @@ function applySeriesInfo(data) {
   metaSeasonsText = seasons.length ? `${seasons.length} season${seasons.length > 1 ? "s" : ""}` : ""
   renderMetaLine()
   if (activePlaylistId) noteDetailGenres(activePlaylistId, "series", seriesId, genre)
+  providerPlotApplied = Boolean(plot.trim())
   if (plotEl) {
     plotEl.textContent = plot || (cast ? t("series.castPrefix", { cast }) : t("detail.noDescription"))
   }
@@ -870,6 +917,7 @@ function renderFactsColumn() {
 // ----------------------------
 function resetTmdbEnrichmentUI() {
   resolvedTmdbId = null
+  resolvedTvdbId = null
   if (directorEl) {
     directorEl.textContent = ""
     directorEl.setAttribute("hidden", "")
@@ -982,12 +1030,28 @@ function patchSeasonEpisodes(episodes) {
 // Re-run on every episode render (initial paint, season switch, up-next), since rows are rebuilt each time.
 async function refreshSeasonEnrichment() {
   const requestId = ++seasonEnrichRequestId
-  if (!isTmdbActive() || !resolvedTmdbId || !activePlaylistId) return
+  if (!activePlaylistId) return
+  if (!resolvedTmdbId && !resolvedTvdbId) return
   const seasonNumber = toIndex(currentSeason)
   if (seasonNumber == null) return
-  const season = await fetchSeasonEnrichment(resolvedTmdbId, seasonNumber)
-  if (requestId !== seasonEnrichRequestId || !season?.episodes?.length) return
-  patchSeasonEpisodes(season.episodes)
+
+  if (isTmdbActive() && resolvedTmdbId) {
+    const season = await fetchSeasonEnrichment(resolvedTmdbId, seasonNumber, {
+      providerSeasons: providerSeasonsFromEpisodeMap(episodesByKey),
+    })
+    if (requestId !== seasonEnrichRequestId) return
+    if (season?.episodes?.length) {
+      patchSeasonEpisodes(season.episodes)
+      return
+    }
+  }
+  // TheTVDB models broadcast seasons that TMDb files as one flat run.
+  const tvdbSeason = await fetchTvdbSeason(
+    { tvdbId: resolvedTvdbId, tmdbId: resolvedTvdbId ? null : resolvedTmdbId },
+    seasonNumber
+  )
+  if (requestId !== seasonEnrichRequestId || !tvdbSeason?.episodes.length) return
+  patchSeasonEpisodes(tvdbSeason.episodes)
 }
 
 // A deep link boots from a stub series, so take the fields only the catalog row carries.
@@ -1043,7 +1107,8 @@ function applyEnrichmentPatch(enrichment) {
     heroTmdbBackdropUrl = enrichment.backdropUrl
     if (!heroProviderBackdropUrl) setAmbient(enrichment.backdropUrl)
   }
-  if (enrichment.overview && plotEl) plotEl.textContent = enrichment.overview
+  if (enrichment.overview && plotEl && (!enrichment.overviewIsFallback || !providerPlotApplied))
+    plotEl.textContent = enrichment.overview
   if (enrichment.director) patchDirector(enrichment.director, enrichment.directorPersonId)
   if (enrichment.tagline) patchTagline(enrichment.tagline)
   patchGenreFromEnrichment(enrichment.genres)
@@ -1054,11 +1119,13 @@ function applyEnrichmentPatch(enrichment) {
     trailerBtn?.removeAttribute("hidden")
   }
   if (enrichment.cast?.length) renderCast(enrichment.cast)
+  repaintHeroIfArtworkChanged()
 }
 
 // Returns whether the similar rail was populated from TMDb recommendations.
 async function enrichSeriesDetailFromTmdb(requestId) {
-  if (!isTmdbActive() || !series || !activePlaylistId) {
+  // No isTmdbActive() gate: the TheTVDB proxy enriches without a user key.
+  if (!series || !activePlaylistId) {
     settleHero()
     return false
   }
@@ -1069,26 +1136,24 @@ async function enrichSeriesDetailFromTmdb(requestId) {
   }
 
   const info = seriesInfoRaw?.info || {}
-  const providerTmdbId = Number(info.tmdb || info.tmdb_id) || null
+  const providerTmdbId = parseProviderTmdbId(info)
 
-  const tmdbId = await resolveTmdbId(activePlaylistId, "series", {
-    id: series.id,
+  const details = await resolveTitleEnrichmentDetailed({
+    kind: "series",
+    playlistId: activePlaylistId,
+    itemId: String(series.id),
     name: series.name,
-    year: series.year || info.releaseDate || info.releasedate || info.year || null,
+    year: parseInt(String(series.year || info.releaseDate || info.releasedate || info.year), 10) || null,
     providerTmdbId,
   })
   if (requestId !== enrichRequestId) return false
-  if (tmdbId == null) {
-    settleHero()
-    return false
-  }
 
-  resolvedTmdbId = tmdbId
-  // The current season already rendered without a tmdbId, so back-fill it now.
+  resolvedTmdbId = details?.tmdbId ?? null
+  resolvedTvdbId = details?.tvdbId ?? null
+  // The current season already rendered without an id to key on, so back-fill it now.
   refreshSeasonEnrichment()
 
-  const enrichment = await fetchSeriesEnrichment(tmdbId)
-  if (requestId !== enrichRequestId) return false
+  const enrichment = details?.enrichment ?? null
   if (!enrichment) {
     settleHero()
     return false
@@ -1148,7 +1213,15 @@ async function populateSimilarRail(requestId) {
   // boot() already merged a cache-warm enrichment into the first paint; only the
   // local-similar fallback (when TMDb had no catalog-matching recommendations) is left.
   if (earlyEnrichmentHandled) {
-    if (!earlyEnrichmentPopulatedSimilar) await populateLocalSimilarRail(requestId)
+    // The warm paint came from the TMDb cache alone, so it may still have gaps.
+    let refilledSimilar = false
+    if (earlyEnrichmentNeedsFill) {
+      earlyEnrichmentNeedsFill = false
+      refilledSimilar = await enrichSeriesDetailFromTmdb(requestId)
+    }
+    if (!earlyEnrichmentPopulatedSimilar && !refilledSimilar) {
+      await populateLocalSimilarRail(requestId)
+    }
     return
   }
   const populatedFromTmdb = await enrichSeriesDetailFromTmdb(requestId)
@@ -1160,6 +1233,7 @@ async function populateSimilarRail(requestId) {
 // Playback
 // ----------------------------
 let vjs = null
+let focusKeeperCleanup: (() => void) | null = null
 let seriesInsights = null
 
 const inlineTrailer = createInlineTrailer({
@@ -1186,6 +1260,8 @@ function getSeriesInsights() {
 }
 let progressListenersBound = false
 let currentEpisode = null
+/** Resume-or-first-episode pick, kept fresh so "Play on TV" works before any local playback starts. */
+let defaultPlayEpisode = null
 let pipBtnBound = false
 let scaleBtnBound = false
 let statsBtnBound = false
@@ -1202,7 +1278,10 @@ let qualityChipDetach = null
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 
-const vodPlaybackToasts = createVodPlaybackToasts(() => externalBtnHandle?.refresh())
+const vodPlaybackToasts = createVodPlaybackToasts(() => {
+  externalBtnHandle?.refresh()
+  playTvBtnHandle?.refresh()
+})
 
 function setupPipButton(player) {
   const pipBtn = document.getElementById("series-detail-pip")
@@ -1307,6 +1386,14 @@ function progressExtrasFor(ep) {
   }
 }
 
+/** "<Series> · S<n>E<n> · <Episode>", the shared cast title format for series playback. */
+function episodeCastTitle(ep) {
+  const seasonNum = ep.season || currentSeason
+  const epNum = ep.episode_num
+  const sxe = seasonNum && epNum ? `S${seasonNum}E${epNum}` : ""
+  return [series?.name || "", sxe, ep.title || ""].filter(Boolean).join(" · ")
+}
+
 async function ensureEmbeddedPlayer(backend) {
   if (vjs) return vjs
   const videoEl = document.getElementById("series-player")
@@ -1323,7 +1410,7 @@ async function ensureEmbeddedPlayer(backend) {
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
   if (mounted.backend === "videojs") {
-    attachPlayerFocusKeeper(vjs)
+    focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
   return vjs
@@ -1340,6 +1427,34 @@ function markNowPlayingEpisode(epId) {
       delete row.dataset.nowPlaying
     }
   }
+}
+
+function findEpisodeById(episodeId) {
+  if (!episodesByKey) return null
+  for (const episodesInSeason of Object.values(episodesByKey)) {
+    const match = (episodesInSeason || []).find((ep) => Number(ep.id) === Number(episodeId))
+    if (match) return match
+  }
+  return null
+}
+
+/** Mirrors the poster-badge "resume next episode" pick, falling back to the first episode overall. */
+function pickDefaultPlayEpisode() {
+  if (!episodesByKey) return null
+  if (activePlaylistId && series) {
+    const summary = getSeriesProgressSummary(activePlaylistId, series.id)
+    const resumeEpisode = summary?.lastEpisodeId != null ? findEpisodeById(summary.lastEpisodeId) : null
+    if (resumeEpisode) {
+      if (!summary.lastWatched?.completed) return resumeEpisode
+      return findNextEpisode(resumeEpisode)?.episode || resumeEpisode
+    }
+  }
+  const seasonKeys = Object.keys(episodesByKey).sort((a, b) => Number(a) - Number(b))
+  for (const seasonKey of seasonKeys) {
+    const episodesInSeason = episodesByKey[seasonKey] || []
+    if (episodesInSeason.length) return episodesInSeason[0]
+  }
+  return null
 }
 
 // The remuxed TS pipe has no intrinsic duration; get_series_info's episode.info.duration_secs is
@@ -1368,6 +1483,43 @@ function retirePreviousPlayback() {
 
 async function playEpisode(episode, options = {}) {
   if (!series || !episode) return
+  if (isTauri && isCastRoutingActive() && !options.forceLocal) {
+    const title = episodeCastTitle(episode)
+    await routePlayToCast({
+      contentTitle: title || null,
+      contentHref: `/series/detail?id=${series.id}`,
+      stopLocal: () => {
+        try { vjs?.pause?.() } catch {}
+        try { vjs?.reset?.() } catch {}
+        retirePreviousPlayback()
+      },
+      restoreLocal: () => { void playEpisode(episode, { forceLocal: true }) },
+      seriesContext: activePlaylistId
+        ? {
+            playlistId: activePlaylistId,
+            seriesId: String(series.id),
+            season: Number(episode.season || currentSeason) || 0,
+            episodeNum: Number(episode.episode_num) || 0,
+          }
+        : undefined,
+      buildDescriptor: () => {
+        const src = buildEpisodeStreamUrl(episode)
+        if (!src || !isCastableSrc(src)) return null
+        const saved = activePlaylistId ? getProgress(activePlaylistId, "episode", episode.id) : null
+        const resumeSeconds =
+          saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+        const durationSeconds = episodeDurationSeconds(episode)
+        return buildVodCastDescriptor({
+          src,
+          title,
+          logo: series?.logo || undefined,
+          resumeSeconds,
+          durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
+        })
+      },
+    })
+    return
+  }
   inlineTrailer.close()
   const requestId = ++playRequestId
   const src = episode?._directUrl
@@ -1403,6 +1555,7 @@ async function playEpisode(episode, options = {}) {
 
   currentEpisode = episode
   externalBtnHandle?.refresh()
+  playTvBtnHandle?.refresh()
 
   const localSrc = await getLocalPlayableSrc(src)
   const playSrc = localSrc || src
@@ -1448,7 +1601,7 @@ async function playEpisode(episode, options = {}) {
     if (launched) return
   }
 
-  const backend = getPlayerBackend()
+  let backend = getPlayerBackend()
 
   if (backend === "mpv" || backend === "vlc") {
     try {
@@ -1456,10 +1609,11 @@ async function playEpisode(episode, options = {}) {
       await launchExternalPlayback(backend, externalSrc, resumePos)
       pushEpisodePresence(episode)
       externalPresenceActive = true
+      return
     } catch (err) {
-      surfaceLaunchError(err, backend)
+      surfaceLaunchErrorFallback(err, backend, "[xt:series-detail]")
+      backend = DEFAULT_PLAYER_BACKEND
     }
-    return
   }
 
   await mountVodPlayback({
@@ -1599,9 +1753,67 @@ const externalBtnHandle = setupExternalPlayerButton(
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}
     },
+    releaseLocal() {
+      // Same release the cast handoff does: a paused mount can still hold the provider connection.
+      try { vjs?.pause?.() } catch {}
+      try { vjs?.reset?.() } catch {}
+      retirePreviousPlayback()
+    },
+    restoreLocal() {
+      if (currentEpisode) playEpisode(currentEpisode)
+    },
     afterLaunch() {
       pushEpisodePresence(currentEpisode)
       externalPresenceActive = true
+    },
+  }
+)
+
+const playTvBtnHandle = setupPlayOnTvButton(
+  document.getElementById("series-detail-play-tv"),
+  {
+    getSrcBuilder() {
+      const episode = currentEpisode || defaultPlayEpisode
+      return episode ? (c) => buildEpisodeStreamUrl(episode, c) : null
+    },
+    getSrc() {
+      const episode = currentEpisode || defaultPlayEpisode
+      return episode ? buildEpisodeStreamUrl(episode) || null : null
+    },
+    getTitle() {
+      const episode = currentEpisode || defaultPlayEpisode
+      return episode ? episodeCastTitle(episode) || null : series?.name || null
+    },
+    getLogo() {
+      return series?.logo || null
+    },
+    getResumeSeconds() {
+      const episode = currentEpisode || defaultPlayEpisode
+      if (!activePlaylistId || !episode) return 0
+      const saved = getProgress(activePlaylistId, "episode", episode.id)
+      if (!saved || saved.completed) return 0
+      return saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+    },
+    getDurationSeconds() {
+      const episode = currentEpisode || defaultPlayEpisode
+      if (!episode) return undefined
+      const seconds = episodeDurationSeconds(episode)
+      return seconds > 0 ? seconds : undefined
+    },
+    getCastContext() {
+      const episode = currentEpisode || defaultPlayEpisode
+      if (!activePlaylistId || !series || !episode) return null
+      return {
+        seriesContext: {
+          playlistId: activePlaylistId,
+          seriesId: String(series.id),
+          season: Number(episode.season || currentSeason) || 0,
+          episodeNum: Number(episode.episode_num) || 0,
+        },
+      }
+    },
+    beforeCast() {
+      try { vjs?.pause?.() } catch {}
     },
   }
 )
@@ -1904,6 +2116,10 @@ async function boot() {
   seasonEnrichRequestId++
   try {
     vjs?.pause?.()
+    if (focusKeeperCleanup) {
+      focusKeeperCleanup()
+      focusKeeperCleanup = null
+    }
     await vjs?.dispose?.()
   } catch {}
   vjs = null
@@ -1927,6 +2143,7 @@ async function boot() {
   showDetailSkeleton()
   if (metaEl) metaEl.textContent = ""
   if (plotEl) plotEl.textContent = ""
+  providerPlotApplied = false
   if (titleEl) titleEl.textContent = ""
   if (langsEl) {
     langsEl.setAttribute("hidden", "")
@@ -1974,13 +2191,8 @@ async function boot() {
 
   // Both probes are network-free (hydrate + memory read) and run under one bound,
   // so a cold IDB read can never delay first paint past the shared timeout.
-  const { enrichment: earlyEnrichment, providerInfo: earlyProviderInfo } = await peekEarlyDetailData(
-    active._id,
-    "series",
-    series.id,
-    active._id,
-    `series_info_${seriesId}`
-  )
+  const { enrichment: earlyEnrichment, tmdbId: earlyTmdbId, tvdbId: earlyTvdbId, providerInfo: earlyProviderInfo } =
+    await peekEarlyTitleEnrichment("series", active._id, String(series.id), active._id, `series_info_${seriesId}`)
   if (enrichRequestIdForThisBoot !== enrichRequestId) return
 
   let providerInfoReady = false
@@ -1993,12 +2205,14 @@ async function boot() {
   }
 
   if (earlyEnrichment) {
-    resolvedTmdbId = earlyEnrichment.tmdbId
-    applyEnrichmentPatch(earlyEnrichment.enrichment)
+    resolvedTmdbId = earlyTmdbId
+    resolvedTvdbId = earlyTvdbId
+    applyEnrichmentPatch(earlyEnrichment)
     settleHero()
     earlyEnrichmentHandled = true
-    if (earlyEnrichment.enrichment.recommendations?.length) {
-      const matches = matchRecommendationsToCatalog(earlyEnrichment.enrichment.recommendations, list?.data || [], {
+    earlyEnrichmentNeedsFill = enrichmentNeedsFill(earlyEnrichment)
+    if (earlyEnrichment.recommendations?.length) {
+      const matches = matchRecommendationsToCatalog(earlyEnrichment.recommendations, list?.data || [], {
         mediaType: "tv",
         limit: 12,
         sourcePrefix: parseNamePrefix(series.name).tag,
@@ -2011,8 +2225,8 @@ async function boot() {
       }
     }
     const seasonNumber = toIndex(currentSeason)
-    if (seasonNumber != null) {
-      const seasonEnrichment = await peekCachedSeasonEnrichment(earlyEnrichment.tmdbId, seasonNumber)
+    if (seasonNumber != null && earlyTmdbId != null) {
+      const seasonEnrichment = await peekCachedSeasonEnrichment(earlyTmdbId, seasonNumber)
       if (enrichRequestIdForThisBoot === enrichRequestId && seasonEnrichment?.episodes?.length) {
         patchSeasonEpisodes(seasonEnrichment.episodes)
       }
@@ -2075,11 +2289,11 @@ async function boot() {
         // applySeriesInfo rebuilds meta text and episode rows, wiping the merge; reassert it.
         // settleHero() is a no-op once already settled, so this never repaints with a different image.
         if (earlyEnrichmentHandled) {
-          applyEnrichmentPatch(earlyEnrichment.enrichment)
+          applyEnrichmentPatch(earlyEnrichment)
           settleHero()
           const seasonNumber = toIndex(currentSeason)
-          if (seasonNumber != null) {
-            const seasonEnrichment = await peekCachedSeasonEnrichment(earlyEnrichment.tmdbId, seasonNumber)
+          if (seasonNumber != null && earlyTmdbId != null) {
+            const seasonEnrichment = await peekCachedSeasonEnrichment(earlyTmdbId, seasonNumber)
             if (seasonEnrichment?.episodes?.length) patchSeasonEpisodes(seasonEnrichment.episodes)
           }
         }

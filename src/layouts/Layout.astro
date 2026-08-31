@@ -4,6 +4,7 @@ import TitleBar from "@/components/TitleBar.astro"
 import WindowResizeEdges from "@/components/WindowResizeEdges.astro"
 import CatalogWarmingIndicator from "@/components/CatalogWarmingIndicator.svelte"
 import pkg from "../../package.json"
+import { TV_ROUTE_TABLE } from "@/scripts/lib/tv-routes"
 import "../styles/global.css"
 
 interface Props {
@@ -14,6 +15,7 @@ const { pageTitle, showVersion = true } = Astro.props
 const documentTitle = pageTitle
   ? `${pageTitle} | Extreme InfiniTV`
   : "Extreme InfiniTV"
+const appMode = import.meta.env.PUBLIC_APP_MODE || ""
 ---
 
 <!doctype html>
@@ -31,10 +33,22 @@ const documentTitle = pageTitle
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta property="og:title" content="Extreme InfiniTV" />
     <meta property="og:image" content="https://raw.githubusercontent.com/infinitel8p/Extreme-InfiniTV/refs/heads/main/src-tauri/icons/logos/icon-1024.png" />
+    {
+      appMode === "receiver" && (
+        <script is:inline>
+          if (location.pathname !== "/receiver") location.replace("/receiver")
+        </script>
+      )
+    }
     <script is:inline>
       try {
         if (sessionStorage.getItem("xt_splash_done") === "1") {
           document.documentElement.setAttribute("data-splash-done", "");
+        }
+      } catch (e) {}
+      try {
+        if (localStorage.getItem("xt_is_tv") === "1") {
+          document.documentElement.dataset.tv = "1";
         }
       } catch (e) {}
       try {
@@ -49,6 +63,10 @@ const documentTitle = pageTitle
           var hasTauri = !!window.__TAURI_INTERNALS__ || !!window.__TAURI__;
           if (hasTauri && uaPlatform.indexOf("android") === -1) {
             document.documentElement.setAttribute("data-tauri-desktop", "1");
+            // Mirrors TitleBar's async isFullscreen() check to avoid a layout flash on nav.
+            if (sessionStorage.getItem("xt_fullscreen") === "1") {
+              document.documentElement.setAttribute("data-fullscreen", "");
+            }
           }
         } catch (e) {}
         var cw = parseFloat(localStorage.getItem("xt_channels_w") || "");
@@ -64,10 +82,12 @@ const documentTitle = pageTitle
         if (localStorage.getItem("xt_sidebar_collapsed") === "1") {
           document.documentElement.setAttribute("data-sidebar-collapsed", "");
         }
-        // Auto-enable perf mode on TV / Leanback devices
+        // Auto-enable perf mode + receiver mode + receiver boot on TV / Leanback devices
         var perfStored = localStorage.getItem("xt_perf_mode");
-        if (perfStored === null) {
-          var isTvDevice = false;
+        var receiverStored = localStorage.getItem("xt_receiver_mode");
+        var receiverBootStored = localStorage.getItem("xt_receiver_boot");
+        var isTvDevice = false;
+        if (perfStored === null || receiverStored === null || receiverBootStored === null) {
           try {
             if (window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function") {
               isTvDevice = !!window.AndroidDeviceInfo.isTv();
@@ -94,38 +114,50 @@ const documentTitle = pageTitle
               }
             } catch (e) {}
           }
-          if (isTvDevice) {
-            localStorage.setItem("xt_perf_mode", "1");
-            localStorage.setItem("xt_perf_mode_auto", "1");
-            perfStored = "1";
-          }
+        }
+        if (isTvDevice) {
+          document.documentElement.dataset.tv = "1";
+          localStorage.setItem("xt_is_tv", "1");
+        }
+        if (perfStored === null && isTvDevice) {
+          localStorage.setItem("xt_perf_mode", "1");
+          localStorage.setItem("xt_perf_mode_auto", "1");
+          perfStored = "1";
         }
         if (perfStored === "1") {
           document.documentElement.setAttribute("data-perf-mode", "on");
         }
+        if (receiverStored === null && isTvDevice) {
+          localStorage.setItem("xt_receiver_mode", "1");
+          localStorage.setItem("xt_receiver_mode_auto", "1");
+        }
+        if (receiverBootStored === null && isTvDevice) {
+          localStorage.setItem("xt_receiver_boot", "1");
+          localStorage.setItem("xt_receiver_boot_auto", "1");
+        }
+
+        // Boot straight into the receiver screen when enabled, unless the user exited it this session
+        try {
+          if (
+            localStorage.getItem("xt_receiver_mode") === "1" &&
+            localStorage.getItem("xt_receiver_boot") === "1" &&
+            sessionStorage.getItem("xt_receiver_exited") !== "1" &&
+            location.pathname !== "/receiver"
+          ) {
+            window.__xtReceiverBooting = true;
+            location.replace("/receiver");
+          }
+        } catch (e) {}
 
         // TV safe-area inset
-        var overscanStored = localStorage.getItem("xt_tv_overscan");
-        var overscan = parseFloat(overscanStored || "");
-        if (!isFinite(overscan) || overscan < 0 || overscan > 8) {
-          if (overscanStored === null) {
-            var overscanIsTv = false;
-            try {
-              if (window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function") {
-                overscanIsTv = !!window.AndroidDeviceInfo.isTv();
-              }
-            } catch (e) {}
-            if (overscanIsTv) {
-              overscan = 4;
-              localStorage.setItem("xt_tv_overscan", "4");
-              localStorage.setItem("xt_tv_overscan_auto", "1");
-            } else {
-              overscan = 0;
-            }
-          } else {
-            overscan = 0;
+        if (localStorage.getItem("xt_tv_overscan_auto") === "1") {
+          if (localStorage.getItem("xt_tv_overscan") === "4") {
+            localStorage.removeItem("xt_tv_overscan");
           }
+          localStorage.removeItem("xt_tv_overscan_auto");
         }
+        var overscan = parseFloat(localStorage.getItem("xt_tv_overscan") || "");
+        if (!isFinite(overscan) || overscan < 0 || overscan > 8) overscan = 0;
         if (overscan > 0) {
           document.documentElement.style.setProperty("--xt-tv-overscan", String(overscan));
           document.documentElement.setAttribute("data-tv-overscan", "");
@@ -204,9 +236,18 @@ const documentTitle = pageTitle
         if (currentTheme === "light") document.documentElement.style.colorScheme = "light";
         else if (currentTheme === "dark") document.documentElement.style.colorScheme = "dark";
 
-        var KNOWN_ACCENTS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"];
+        var KNOWN_ACCENTS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet", "gold", "lime", "teal", "silver", "white"];
         var storedAccent = localStorage.getItem("xt_accent") || "";
-        if (storedAccent && storedAccent !== "fuchsia" && KNOWN_ACCENTS.indexOf(storedAccent) !== -1) {
+        if (storedAccent === "random") {
+          // Same sessionStorage key as app-settings.js's resolveAccentForDisplay, so both agree.
+          var resolvedRandomAccent = "";
+          try { resolvedRandomAccent = sessionStorage.getItem("xt_accent_roll") || ""; } catch (e) {}
+          if (!resolvedRandomAccent || KNOWN_ACCENTS.indexOf(resolvedRandomAccent) === -1) {
+            resolvedRandomAccent = KNOWN_ACCENTS[Math.floor(Math.random() * KNOWN_ACCENTS.length)];
+            try { sessionStorage.setItem("xt_accent_roll", resolvedRandomAccent); } catch (e) {}
+          }
+          if (resolvedRandomAccent !== "fuchsia") document.documentElement.setAttribute("data-accent", resolvedRandomAccent);
+        } else if (storedAccent && storedAccent !== "fuchsia" && KNOWN_ACCENTS.indexOf(storedAccent) !== -1) {
           document.documentElement.setAttribute("data-accent", storedAccent);
         }
         // Per-playlist override cache (playlist-accent.ts) wins over xt_accent.
@@ -235,6 +276,26 @@ const documentTitle = pageTitle
           });
         }
         window.__applyAndroidStatusBar = applyAndroidStatusBar;
+      } catch (e) {}
+    </script>
+    <script is:inline define:vars={{ tvRouteTable: TV_ROUTE_TABLE, appMode }}>
+      try {
+        if (!window.__xtReceiverBooting && appMode !== "receiver" && document.documentElement.dataset.tv === "1") {
+          var tvRedirectPath = location.pathname.replace(/\/+$/, "");
+          if (tvRedirectPath === "") tvRedirectPath = "/";
+          var tvRedirectTarget = tvRouteTable[tvRedirectPath];
+          if (tvRedirectTarget && tvRedirectPath.indexOf("/tv") !== 0) {
+            // Mirrors tvRouteFor's query-preserving target set in tv-routes.ts
+            if (
+              tvRedirectTarget === "/tv/movies/detail" ||
+              tvRedirectTarget === "/tv/series/detail" ||
+              tvRedirectTarget === "/tv/search"
+            ) {
+              tvRedirectTarget += location.search;
+            }
+            location.replace(tvRedirectTarget);
+          }
+        }
       } catch (e) {}
     </script>
   </head>
@@ -320,7 +381,7 @@ const documentTitle = pageTitle
       <Sidebar />
       <div
         class="flex-1 min-w-0 min-h-0 flex flex-col order-first md:order-0
-                overflow-x-clip overflow-y-auto"
+                overflow-x-clip overflow-y-auto custom-scroll"
       >
         <slot />
       </div>
@@ -792,17 +853,28 @@ const documentTitle = pageTitle
   import { initI18n } from "@/scripts/lib/i18n.js"
   import { initConnectivity } from "@/scripts/lib/connectivity.js"
   import { initTrayHandler } from "@/scripts/lib/tray-handler"
+  import { initTvCastPill } from "@/scripts/lib/tv-cast-pill"
   import { initWhatsNew } from "@/scripts/lib/whats-new"
   import { mountCompositingTrialPrompt } from "@/scripts/lib/compositing"
   import { initUiSounds } from "@/scripts/lib/ui-sounds"
   import { initHaptics } from "@/scripts/lib/haptics"
   import { initPlaylistAccent } from "@/scripts/lib/playlist-accent"
   import { logSessionSnapshot } from "@/scripts/lib/diagnostic-snapshot"
+  import { mountBackHandler } from "@/scripts/lib/back-handler"
+  import { mountTvInputGuard } from "@/scripts/lib/tv-input-guard"
+  import { isTvDevice } from "@/scripts/lib/tv-detect"
   initI18n()
   initConnectivity()
   initUiSounds()
   initHaptics()
   initPlaylistAccent()
+  // Heals installs that predate the xt_is_tv seed: the pre-paint stamp needs the stored flag.
+  if (isTvDevice()) {
+    document.documentElement.dataset.tv = "1"
+    try { localStorage.setItem("xt_is_tv", "1") } catch {}
+  }
+  mountBackHandler()
+  mountTvInputGuard()
 
   // Waits for idle rather than competing with first paint; short timeout plus the pagehide
   // flush in diagnostic-snapshot.ts means a fast navigation still gets logged.
@@ -917,8 +989,26 @@ const documentTitle = pageTitle
   initFocusGlide()
   initKeyboardHelp()
   initTrayHandler()
+  initTvCastPill()
   initWhatsNew()
   mountCompositingTrialPrompt()
+
+  // Safety net for full-app-on-TV users who never open /receiver.
+  if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
+    setTimeout(() => {
+      let isAndroidTv = false
+      try {
+        isAndroidTv = !!(window as any).AndroidDeviceInfo?.isTv?.()
+      } catch {}
+      if (!isAndroidTv) return
+      Promise.all([
+        import("@/scripts/lib/ambient-handoff"),
+        import("@/scripts/lib/account-info.js"),
+      ]).then(([{ maybeRefreshAmbientHandoff }, { getActivePlaylistIdSync }]) => {
+        void maybeRefreshAmbientHandoff(() => getActivePlaylistIdSync() || null)
+      })
+    }, 60_000)
+  }
 
   // -----------------------------------------------------------------------
   // Discord idle presence: push "Browsing the catalog" on every page load
@@ -965,6 +1055,50 @@ const documentTitle = pageTitle
     })()
   }
 
+  // TV receiver mode: auto-start the local pairing server, and hop to the
+  // receiver screen whenever a paired sender pushes a play command.
+  if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
+    ;(async () => {
+      try {
+        // Registered first: this listener is the primary input path on TV devices.
+        const { listen } = await import("@tauri-apps/api/event")
+        await listen<{ descriptor: unknown }>("xt:receiver-play", (event) => {
+          try {
+            if (document.visibilityState !== "visible") {
+              import("@/scripts/lib/receiver-wake").then(({ wakeReceiverApp }) => wakeReceiverApp()).catch(() => {})
+            }
+            sessionStorage.setItem(
+              "xt_receiver_pending_play",
+              JSON.stringify(event.payload?.descriptor)
+            )
+          } catch {}
+          location.href = "/receiver"
+        })
+
+        const [{ invoke }, { getReceiverModeEnabled, getEffectiveReceiverDeviceName }, { advertiseReceiver }] =
+          await Promise.all([
+            import("@tauri-apps/api/core"),
+            import("@/scripts/lib/app-settings.js"),
+            import("@/scripts/lib/receiver-discovery.js"),
+          ])
+        if (getReceiverModeEnabled()) {
+          invoke<{ name: string; port?: number; id?: string }>("receiver_start", {
+            name: getEffectiveReceiverDeviceName() || undefined,
+          })
+            .then((status) => {
+              if (status.port !== undefined) advertiseReceiver(status.name, status.port, status.id)
+              if ((window as any).AndroidReceiverKeepAlive) {
+                import("@/scripts/lib/receiver-keep-alive").then(({ startReceiverKeepAlive }) => {
+                  startReceiverKeepAlive(status.name)
+                })
+              }
+            })
+            .catch(() => {})
+        }
+      } catch {}
+    })()
+  }
+
   let lastPruneAt = 0
   const PRUNE_THROTTLE_MS = 5_000
   async function pruneDownloadsIfStale() {
@@ -996,6 +1130,22 @@ const documentTitle = pageTitle
         id: "main",
         selector:
           "a, button, summary, input, textarea, [contenteditable='true'], select, [tabindex]:not([tabindex='-1'])",
+        // Reject fullscreen-occluded, inert, offscreen-parked, invisible, or faded-out player-chrome targets
+        navigableFilter: (elem: Element) => {
+          const fullscreenEl = document.fullscreenElement
+          if (fullscreenEl && !fullscreenEl.contains(elem)) return false
+          if (elem.closest("[inert]")) return false
+          const rect = elem.getBoundingClientRect()
+          if (rect.right <= 0 || rect.bottom <= 0) return false
+          if (getComputedStyle(elem).visibility !== "visible") return false
+          const playerChrome = elem.closest(
+            ".vjs-control-bar, .vjs-volume-vertical, .vjs-menu"
+          )
+          if (playerChrome && parseFloat(getComputedStyle(playerChrome).opacity) === 0) {
+            return false
+          }
+          return true
+        },
       })
       sn.makeFocusable()
     }

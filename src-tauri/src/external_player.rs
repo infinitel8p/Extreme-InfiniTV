@@ -11,7 +11,7 @@
 //   "TIMEOUT:..."     - detect mode hit the 2s budget without exiting
 //   "OTHER:..."       - anything else
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -21,7 +21,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::async_runtime::Mutex as AsyncMutex;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -34,6 +34,8 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const DETECT_TIMEOUT_MS: u64 = 2000;
 const DETECT_POLL_INTERVAL_MS: u64 = 25;
+#[cfg(target_os = "windows")]
+const REGISTRY_QUERY_TIMEOUT_MS: u64 = 1000;
 #[cfg(unix)]
 const IPC_WRITE_TIMEOUT_MS: u64 = 1500;
 #[cfg(windows)]
@@ -730,6 +732,37 @@ fn write_and_read_reply(pipe: &mut std::fs::File, payload: &[u8]) -> Result<Vec<
     }
 }
 
+// "stop" rather than "quit": releases the provider connection but keeps the reuse slot valid.
+fn build_mpv_stop() -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(&json!({ "command": ["stop"] })).unwrap_or_else(|_| Vec::new());
+    bytes.push(b'\n');
+    bytes
+}
+
+fn send_mpv_stop(endpoint: &str) -> Result<(), String> {
+    let payload = build_mpv_stop();
+
+    #[cfg(unix)]
+    {
+        let mut stream = open_mpv_socket(endpoint).map_err(|e| format!("IPC:{e}"))?;
+        let reply = write_and_read_reply(&mut stream, &payload)?;
+        if let Some(err) = first_mpv_error(&reply) {
+            return Err(format!("IPC:mpv replied {err}"));
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        let mut pipe = open_mpv_pipe(endpoint).map_err(|e| format!("IPC:{e}"))?;
+        let reply = write_and_read_reply(&mut pipe, &payload)?;
+        if let Some(err) = first_mpv_error(&reply) {
+            return Err(format!("IPC:mpv replied {err}"));
+        }
+        Ok(())
+    }
+}
+
 fn send_mpv_loadfile(
     endpoint: &str,
     url: &str,
@@ -780,8 +813,281 @@ fn send_mpv_loadfile(
 }
 
 // ---------------------------------------------------------------------------
+// Player discovery
+// ---------------------------------------------------------------------------
+// No registry crate in Cargo.toml; Windows lookup shells out to reg.exe instead.
+
+#[derive(Debug, Default, Serialize)]
+pub struct DiscoveredPlayers {
+    pub mpv: Vec<String>,
+    pub vlc: Vec<String>,
+}
+
+fn dedupe_preserve_order(candidates: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|candidate| seen.insert(candidate.clone()))
+        .collect()
+}
+
+/// mpv's .com variant is a console wrapper; the .exe is the real player.
+fn prefer_exe_over_com(candidates: Vec<String>) -> Vec<String> {
+    let (exe, other): (Vec<String>, Vec<String>) = candidates
+        .into_iter()
+        .partition(|candidate| candidate.to_ascii_lowercase().ends_with(".exe"));
+    let mut ordered = exe;
+    ordered.extend(other);
+    ordered
+}
+
+fn filter_existing(candidates: Vec<String>) -> Vec<String> {
+    candidates
+        .into_iter()
+        .filter(|candidate| Path::new(candidate).exists())
+        .collect()
+}
+
+fn build_path_candidates(dirs: &[String], binary_names: &[&str]) -> Vec<String> {
+    let mut candidates = Vec::new();
+    for dir in dirs {
+        for name in binary_names {
+            candidates.push(Path::new(dir).join(name).to_string_lossy().into_owned());
+        }
+    }
+    candidates
+}
+
+fn path_env_dirs() -> Vec<String> {
+    match std::env::var_os("PATH") {
+        Some(path_value) => std::env::split_paths(&path_value)
+            .map(|dir| dir.to_string_lossy().into_owned())
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_reg_query(key_path: &str) -> Option<String> {
+    let mut cmd = Command::new("reg");
+    cmd.args(["query", key_path, "/ve"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().ok()?;
+    let started = Instant::now();
+    let budget = Duration::from_millis(REGISTRY_QUERY_TIMEOUT_MS);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let output = child.wait_with_output().ok()?;
+                return status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned());
+            }
+            Ok(None) => {
+                if started.elapsed() >= budget {
+                    let _ = child.kill();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(DETECT_POLL_INTERVAL_MS));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Parses a `reg query ... /ve` default-value line (`(Default)  REG_SZ  <value>`).
+#[allow(dead_code)]
+fn parse_reg_query_default_value(output: &str) -> Option<String> {
+    for line in output.lines() {
+        if let Some(index) = line.find("REG_SZ") {
+            let value = line[index + "REG_SZ".len()..].trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// App Paths keys hold a full exe path already; the plain VLC key holds the install dir.
+#[allow(dead_code)]
+fn normalize_vlc_registry_value(value: &str) -> String {
+    let trimmed = value.trim_matches('"');
+    if trimmed.to_ascii_lowercase().ends_with(".exe") {
+        trimmed.to_string()
+    } else {
+        Path::new(trimmed).join("vlc.exe").to_string_lossy().into_owned()
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_vlc_registry_candidates() -> Vec<String> {
+    [
+        r"HKLM\SOFTWARE\VideoLAN\VLC",
+        r"HKLM\SOFTWARE\WOW6432Node\VideoLAN\VLC",
+        r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\vlc.exe",
+    ]
+    .into_iter()
+    .filter_map(|key| run_reg_query(key).and_then(|output| parse_reg_query_default_value(&output)))
+    .map(|value| normalize_vlc_registry_value(&value))
+    .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_vlc_static_candidates() -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Ok(program_files) = std::env::var("ProgramFiles") {
+        candidates.push(format!(r"{program_files}\VideoLAN\VLC\vlc.exe"));
+    }
+    if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
+        candidates.push(format!(r"{program_files_x86}\VideoLAN\VLC\vlc.exe"));
+    }
+    candidates
+}
+
+#[cfg(target_os = "windows")]
+fn windows_mpv_static_candidates() -> Vec<String> {
+    let mut candidates = vec![
+        r"C:\ProgramData\chocolatey\lib\mpvio.install\tools\mpv.exe".to_string(),
+        r"C:\ProgramData\chocolatey\bin\mpv.exe".to_string(),
+    ];
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        candidates.push(format!(r"{local_app_data}\Microsoft\WinGet\Links\mpv.exe"));
+    }
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        candidates.push(format!(r"{user_profile}\scoop\shims\mpv.exe"));
+        candidates.push(format!(r"{user_profile}\scoop\apps\mpv\current\mpv.exe"));
+    }
+    if let Ok(program_files) = std::env::var("ProgramFiles") {
+        candidates.push(format!(r"{program_files}\mpv\mpv.exe"));
+    }
+    candidates
+}
+
+#[cfg(target_os = "windows")]
+fn discover_vlc_candidates() -> Vec<String> {
+    let mut candidates = windows_vlc_registry_candidates();
+    candidates.extend(windows_vlc_static_candidates());
+    candidates.extend(build_path_candidates(&path_env_dirs(), &["vlc.exe"]));
+    filter_existing(dedupe_preserve_order(candidates))
+}
+
+#[cfg(target_os = "windows")]
+fn discover_mpv_candidates() -> Vec<String> {
+    let mut candidates = windows_mpv_static_candidates();
+    candidates.extend(build_path_candidates(&path_env_dirs(), &["mpv.exe", "mpv.com"]));
+    let candidates = prefer_exe_over_com(dedupe_preserve_order(candidates));
+    filter_existing(candidates)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_vlc_static_candidates() -> Vec<String> {
+    let mut candidates = vec!["/Applications/VLC.app/Contents/MacOS/VLC".to_string()];
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(format!("{home}/Applications/VLC.app/Contents/MacOS/VLC"));
+    }
+    candidates
+}
+
+#[cfg(target_os = "macos")]
+fn discover_vlc_candidates() -> Vec<String> {
+    let mut candidates = macos_vlc_static_candidates();
+    candidates.extend(build_path_candidates(&path_env_dirs(), &["vlc"]));
+    filter_existing(dedupe_preserve_order(candidates))
+}
+
+#[cfg(target_os = "macos")]
+fn discover_mpv_candidates() -> Vec<String> {
+    let mut candidates = vec![
+        "/opt/homebrew/bin/mpv".to_string(),
+        "/usr/local/bin/mpv".to_string(),
+        "/Applications/mpv.app/Contents/MacOS/mpv".to_string(),
+    ];
+    candidates.extend(build_path_candidates(&path_env_dirs(), &["mpv"]));
+    filter_existing(dedupe_preserve_order(candidates))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_static_candidates(binary_name: &str) -> Vec<String> {
+    let mut candidates = vec![
+        format!("/usr/bin/{binary_name}"),
+        format!("/usr/local/bin/{binary_name}"),
+        format!("/snap/bin/{binary_name}"),
+    ];
+    if binary_name == "vlc" {
+        candidates.push("/var/lib/flatpak/exports/bin/org.videolan.VLC".to_string());
+        if let Ok(home) = std::env::var("HOME") {
+            candidates.push(format!("{home}/.local/share/flatpak/exports/bin/org.videolan.VLC"));
+        }
+    }
+    candidates
+}
+
+#[cfg(target_os = "linux")]
+fn discover_vlc_candidates() -> Vec<String> {
+    let mut candidates = linux_static_candidates("vlc");
+    candidates.extend(build_path_candidates(&path_env_dirs(), &["vlc"]));
+    filter_existing(dedupe_preserve_order(candidates))
+}
+
+#[cfg(target_os = "linux")]
+fn discover_mpv_candidates() -> Vec<String> {
+    let mut candidates = linux_static_candidates("mpv");
+    candidates.extend(build_path_candidates(&path_env_dirs(), &["mpv"]));
+    filter_existing(dedupe_preserve_order(candidates))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn discover_vlc_candidates() -> Vec<String> {
+    Vec::new()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn discover_mpv_candidates() -> Vec<String> {
+    Vec::new()
+}
+
+fn discover_external_players_sync() -> DiscoveredPlayers {
+    DiscoveredPlayers {
+        mpv: discover_mpv_candidates(),
+        vlc: discover_vlc_candidates(),
+    }
+}
+
+#[tauri::command]
+pub async fn discover_external_players() -> DiscoveredPlayers {
+    tauri::async_runtime::spawn_blocking(discover_external_players_sync)
+        .await
+        .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
+/// Releases a running player's hold on the stream without closing it; only mpv can, so VLC reports false.
+#[tauri::command]
+pub async fn stop_external_player(
+    state: State<'_, ExternalPlayerState>,
+    kind: String,
+) -> Result<bool, String> {
+    if kind != "mpv" {
+        return Ok(false);
+    }
+    let Some(slot) = state.get(&kind) else {
+        return Ok(false);
+    };
+    match send_mpv_stop(&slot.endpoint) {
+        Ok(()) => Ok(true),
+        Err(error) => {
+            // A dead socket means the player is gone, which is the outcome we wanted anyway.
+            state.drop_slot(&kind);
+            log::warn!("[external-player] mpv stop failed, dropping reuse slot: {error}");
+            Ok(false)
+        }
+    }
+}
+
 /// `"snap"` / `"flatpak"` when the app is sandboxed, `None` elsewhere.
 #[tauri::command]
 pub fn sandbox_runtime() -> Option<String> {
@@ -967,6 +1273,15 @@ fn extract_arg(args: &[String], prefix: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_mpv_stop_is_a_newline_terminated_stop_command() {
+        let payload = build_mpv_stop();
+        assert_eq!(payload.last(), Some(&b'\n'));
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&payload[..payload.len() - 1]).expect("valid json");
+        assert_eq!(parsed["command"][0], "stop");
+    }
 
     #[test]
     fn augment_mpv_strips_existing_ipc_server() {
@@ -1304,5 +1619,85 @@ mod tests {
         assert!(state.mark_watched_pid("mpv", 111));
         state.clear_watched_pid("mpv", 222);
         assert!(!state.mark_watched_pid("mpv", 111));
+    }
+
+    #[test]
+    fn dedupe_preserve_order_keeps_first_occurrence_only() {
+        let candidates = vec![
+            "/usr/bin/vlc".to_string(),
+            "/usr/local/bin/vlc".to_string(),
+            "/usr/bin/vlc".to_string(),
+        ];
+        let out = dedupe_preserve_order(candidates);
+        assert_eq!(out, vec!["/usr/bin/vlc".to_string(), "/usr/local/bin/vlc".to_string()]);
+    }
+
+    #[test]
+    fn prefer_exe_over_com_moves_exe_entries_first() {
+        let candidates = vec![
+            r"C:\tools\mpv.com".to_string(),
+            r"C:\tools\other.txt".to_string(),
+            r"C:\tools\mpv.exe".to_string(),
+        ];
+        let out = prefer_exe_over_com(candidates);
+        assert_eq!(out[0], r"C:\tools\mpv.exe");
+        assert!(out.contains(&r"C:\tools\mpv.com".to_string()));
+        assert!(out.contains(&r"C:\tools\other.txt".to_string()));
+    }
+
+    #[test]
+    fn prefer_exe_over_com_is_case_insensitive() {
+        let candidates = vec![r"C:\tools\mpv.COM".to_string(), r"C:\tools\mpv.EXE".to_string()];
+        let out = prefer_exe_over_com(candidates);
+        assert_eq!(out[0], r"C:\tools\mpv.EXE");
+    }
+
+    #[test]
+    fn build_path_candidates_joins_every_dir_with_every_name() {
+        let dirs = vec!["/usr/bin".to_string(), "/opt/bin".to_string()];
+        let out = build_path_candidates(&dirs, &["mpv", "mpv.com"]);
+        assert_eq!(out.len(), 4);
+        assert!(out.contains(&Path::new("/usr/bin").join("mpv").to_string_lossy().into_owned()));
+        assert!(out.contains(&Path::new("/opt/bin").join("mpv.com").to_string_lossy().into_owned()));
+    }
+
+    #[test]
+    fn filter_existing_keeps_only_real_files() {
+        let bogus = format!("{}-definitely-not-here.xyz", file!());
+        let out = filter_existing(vec![file!().to_string(), bogus]);
+        assert_eq!(out, vec![file!().to_string()]);
+    }
+
+    #[test]
+    fn parse_reg_query_default_value_extracts_trailing_path() {
+        let output = "HKEY_LOCAL_MACHINE\\SOFTWARE\\VideoLAN\\VLC\r\n    (Default)    REG_SZ    C:\\Program Files\\VideoLAN\\VLC\\vlc.exe\r\n\r\n";
+        let value = parse_reg_query_default_value(output).expect("value must parse");
+        assert_eq!(value, r"C:\Program Files\VideoLAN\VLC\vlc.exe");
+    }
+
+    #[test]
+    fn parse_reg_query_default_value_returns_none_when_no_reg_sz_line() {
+        let output = "ERROR: The system was unable to find the specified registry key.\r\n";
+        assert!(parse_reg_query_default_value(output).is_none());
+    }
+
+    #[test]
+    fn normalize_vlc_registry_value_keeps_full_exe_path_as_is() {
+        let value = normalize_vlc_registry_value(r"G:\VLC\vlc.exe");
+        assert_eq!(value, r"G:\VLC\vlc.exe");
+    }
+
+    #[test]
+    fn normalize_vlc_registry_value_appends_exe_to_install_dir() {
+        let value = normalize_vlc_registry_value(r"C:\Program Files\VideoLAN\VLC");
+        assert_eq!(value, Path::new(r"C:\Program Files\VideoLAN\VLC\vlc.exe").to_string_lossy());
+    }
+
+    #[test]
+    fn discover_external_players_sync_returns_only_existing_paths() {
+        let discovered = discover_external_players_sync();
+        for path in discovered.mpv.iter().chain(discovered.vlc.iter()) {
+            assert!(Path::new(path).exists(), "returned path must exist: {path}");
+        }
     }
 }

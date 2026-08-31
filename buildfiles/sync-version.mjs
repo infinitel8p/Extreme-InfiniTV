@@ -17,10 +17,11 @@
 // without it, the generator falls back to its own semver-derived formula and
 // silently discards this script's versionCode.
 //
-// versionCode follows Tauri's own semver-derived formula so local Android
-// builds match what CI produces from a clean checkout:
-//   versionCode = (major * 1_000_000 + minor * 1_000 + patch) * 100 + 90
-// Rev slots: 1-89 beta, 90 stable, 95 TV.
+// versionCode packs the semver into decimal fields with a 4-digit slot:
+//   versionCode = major * 1e8 + minor * 1e6 + patch * 1e4 + slot
+// Slots: 1-4499 phone beta, 4501-8999 TV beta (ordinal + 4500),
+// 9000 phone stable, 9500 TV stable (gradle adds 500 on XTREAM_TV_BUILD).
+// Caps: major <= 20 (Play's 2.1e9 limit), minor/patch <= 99.
 
 import { readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
@@ -39,11 +40,15 @@ const pkgPath = path.join(ROOT, "package.json")
 const tauriConfPath = path.join(ROOT, "src-tauri", "tauri.conf.json")
 const androidPath = path.join(ROOT, "src-tauri", "gen", "android", "app", "tauri.properties")
 
+const [major, minor, patch] = version.split("-")[0].split(".").map(Number)
+if (major > 20 || minor > 99 || patch > 99) {
+  console.error(`Version ${version} exceeds the versionCode field caps (major <= 20, minor/patch <= 99)`)
+  process.exit(1)
+}
+const versionCode = major * 100_000_000 + minor * 1_000_000 + patch * 10_000 + 9000
+
 patchJsonVersion(pkgPath, "package.json")
 patchJsonVersion(tauriConfPath, "src-tauri/tauri.conf.json")
-
-const [major, minor, patch] = version.split("-")[0].split(".").map(Number)
-const versionCode = (major * 1_000_000 + minor * 1_000 + patch) * 100 + 90
 
 patchTauriConfVersionCode(tauriConfPath, versionCode)
 

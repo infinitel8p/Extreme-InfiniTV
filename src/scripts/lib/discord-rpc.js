@@ -32,6 +32,33 @@ async function getInvoke() {
   return invokePromise
 }
 
+// Discord not running is the normal case, not a fault. The per-page-load latch below spans one
+// navigation only (Astro is an MPA), so warning on it buried real errors in the app log.
+const DISCORD_ABSENT_PATTERNS = [/IPC connect failed/i, /Broken pipe/i, /Connection refused/i]
+
+const ABSENT_NOTED_KEY = "xt_discord_absent_noted"
+
+function firstAbsenceThisSession() {
+  try {
+    if (sessionStorage.getItem(ABSENT_NOTED_KEY)) return false
+    sessionStorage.setItem(ABSENT_NOTED_KEY, "1")
+    return true
+  } catch {
+    return true
+  }
+}
+
+function logPresenceFailure(label, error) {
+  const message = String(error?.message || error || "")
+  if (DISCORD_ABSENT_PATTERNS.some((pattern) => pattern.test(message))) {
+    if (firstAbsenceThisSession()) {
+      log.info("[xt:discord] rich presence unavailable - Discord is not running:", message)
+    }
+    return
+  }
+  log.warn(`[xt:discord] ${label}:`, error)
+}
+
 const PROMO_BUTTONS = [
   { label: "Get Extreme InfiniTV", url: "https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest" },
   { label: "View on GitHub", url: "https://github.com/infinitel8p/Extreme-InfiniTV" },
@@ -100,7 +127,7 @@ export async function setRichPresence(payload) {
     lastFailureLogged = false
   } catch (error) {
     if (!lastFailureLogged) {
-      log.warn("[xt:discord] set_activity failed:", error)
+      logPresenceFailure("set_activity failed", error)
       lastFailureLogged = true
     }
     lastSignature = ""
@@ -186,7 +213,7 @@ export async function setIdleRichPresence(opts) {
     lastFailureLogged = false
   } catch (error) {
     if (!lastFailureLogged) {
-      log.warn("[xt:discord] idle set_activity failed:", error)
+      logPresenceFailure("idle set_activity failed", error)
       lastFailureLogged = true
     }
     lastSignature = ""

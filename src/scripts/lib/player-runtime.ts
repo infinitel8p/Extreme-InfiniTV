@@ -11,6 +11,8 @@ import {
   createSubtitleManager,
   createNativeTrackRegistrar,
   createVideoJsTrackRegistrar,
+  createHlsSubtitleSource,
+  attachArtplayerHlsSubtitleControl,
 } from "@/scripts/lib/subtitle-tracks.js"
 import {
   createHlsAudioSource,
@@ -256,12 +258,26 @@ export function classifyError(raw: unknown, kind: ExternalPlayerKind, path: stri
   return new PlayerLaunchError(msg, code, kind, path)
 }
 
+/** MPV has no Android build, so an mpv backend hands off to the system chooser there. */
+export function androidHandoffKindFor(kind: ExternalPlayerKind): AndroidHandoffKind {
+  return kind === "vlc" ? "vlc" : "system"
+}
+
 export function getExternalLauncher(kind: ExternalPlayerKind): ExternalLauncher {
   const path = getPlayerPath(kind)
   return {
     kind,
     path,
     async launch(src, options = {}) {
+      // A desktop-only backend can reach Android through a restored backup; Intent handoff
+      // is the only external path there, and it needs no configured binary path.
+      if (androidExternalAvailable) {
+        await getAndroidHandoffLauncher(androidHandoffKindFor(kind)).launch(src, {
+          userAgent: options.userAgent ?? null,
+          referer: options.referer ?? null,
+        })
+        return { pid: 0, reused: false }
+      }
       if (!path) throw new PlayerNotConfiguredError(kind)
       const invoke = await getInvoke()
       if (!invoke) {
@@ -574,6 +590,21 @@ export async function openStreamInAndroidPackage(
       "OTHER",
       "system",
     )
+  }
+}
+
+export async function discoverExternalPlayers(): Promise<{ mpv: string[]; vlc: string[] }> {
+  const invoke = await getInvoke()
+  if (!invoke) return { mpv: [], vlc: [] }
+  try {
+    const result = (await invoke("discover_external_players", {})) as {
+      mpv?: string[]
+      vlc?: string[]
+    }
+    return { mpv: result?.mpv || [], vlc: result?.vlc || [] }
+  } catch (error) {
+    log.warn("[xt:player] discover_external_players failed:", error)
+    return { mpv: [], vlc: [] }
   }
 }
 
@@ -1186,7 +1217,8 @@ function attachHlsToVideo(
     return
   }
   log.info(`[xt:player] hls transport=hls.js loader=${isTauri ? "tauri-http" : "xhr"}`)
-  const hlsConfig: Record<string, unknown> = { enableWorker: true }
+  // Off by default: a manifest's DEFAULT=YES rendition would otherwise render unasked.
+  const hlsConfig: Record<string, unknown> = { enableWorker: true, subtitleDisplay: false }
   if (isTauri) {
     hlsConfig.loader = createTauriHlsLoaderClass(authorization, authorizedOrigin)
   } else if (authorization) {
@@ -1272,7 +1304,9 @@ function attachHlsToVideo(
       return
     }
     if (!codecState.errorDetail && data?.details) {
-      codecState.errorDetail = String(data.details)
+      // hls.js keeps the response code out of `details`; callers need it to spot a provider refusal.
+      const status = data?.response?.code
+      codecState.errorDetail = status ? `${data.details} (HTTP ${status})` : String(data.details)
     }
     const ErrorTypes = Hls.ErrorTypes
     if (data.type === ErrorTypes.NETWORK_ERROR && netRecover < 2) {
@@ -2194,6 +2228,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   function loadDashIntoVideo(video: HTMLVideoElement, url: string, drm: DrmOptions | null) {
     destroyArtEngines()
     audioControl.setSource(null)
+    hlsSubtitleControl.setSource(null)
     attachShaka(
       video,
       url,
@@ -2237,6 +2272,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       pendingPreferNativeHls,
     )
     audioControl.setSource(activeHls ? createHlsAudioSource(activeHls as any) : null)
+    hlsSubtitleControl.setSource(activeHls ? createHlsSubtitleSource(activeHls as any) : null)
   }
 
   // On a fatal mpegts error, a .ts URL may actually serve (or redirect to) an
@@ -2351,11 +2387,13 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     onTracksReady: (tracks, activeIndex) => installSubtitleControl(tracks, activeIndex),
   })
   const audioControl = attachArtplayerAudioControl(art, t)
+  const hlsSubtitleControl = attachArtplayerHlsSubtitleControl(art, t)
 
   art.on("destroy", () => {
     destroyArtEngines()
     subtitleManager.detach()
     audioControl.dispose()
+    hlsSubtitleControl.dispose()
   })
 
   function removeSubtitleControl(): void {
@@ -2427,6 +2465,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       if (isDashSource(drm, src, type)) {
         setSubtitleSource(null)
         audioControl.setSource(null)
+        hlsSubtitleControl.setSource(null)
         art.type = "mpd"
         art.url = src
         return
@@ -2441,6 +2480,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         usesCallerSuppliedTracks ? subtitles?.mkvSession ?? null : null,
       )
       audioControl.setSource(usesCallerSuppliedTracks ? pendingAudioSource : null)
+      // Reset here; loadHlsIntoVideo re-populates it once hls.js attaches.
+      hlsSubtitleControl.setSource(null)
       if (hint === "hls") {
         art.type = "m3u8"
         art.url = src
@@ -2504,6 +2545,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       destroyArtEngines()
       setSubtitleSource(null)
       audioControl.setSource(null)
+      hlsSubtitleControl.setSource(null)
       art.url = ""
     },
     dispose() {
@@ -3002,6 +3044,17 @@ export async function mountPlayer(
     kind: "embedded",
     backend: "artplayer",
     handle,
+  }
+}
+
+/** Asks a running external player to let go of the stream without closing it; only mpv can, so VLC resolves false. */
+export async function stopExternalPlayback(kind: string): Promise<boolean> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    return (await invoke("stop_external_player", { kind })) === true
+  } catch (err) {
+    log.warn("[xt:player] stop_external_player failed:", err)
+    return false
   }
 }
 

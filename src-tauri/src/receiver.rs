@@ -1,0 +1,4119 @@
+// TV receiver mode: LAN HTTP+WebSocket server other app instances pair with and send play/transport commands to.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use axum::body::Bytes;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{DefaultBodyLimit, Query, State};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::Json;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::{broadcast, watch};
+
+use crate::receiver_store::{self, PairedDevice};
+
+const RECEIVER_PORT: u16 = 47815;
+const PORT_ATTEMPTS: u16 = 5;
+const PROTOCOL_VERSION: u32 = 1;
+
+const PAIR_CODE_TTL: Duration = Duration::from_secs(120);
+const PAIR_MAX_FAILURES: u8 = 5;
+const PAIR_LOCKOUT: Duration = Duration::from_secs(60);
+const PAIR_MIN_INTERVAL: Duration = Duration::from_millis(750);
+
+// LAN-only and unauthenticated below /pair: bounds half-open-connection exhaustion.
+const MAX_CONCURRENT_CONNECTIONS: usize = 32;
+const CONNECTION_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+const MAX_BODY_BYTES: usize = 64 * 1024;
+const MAX_URL_LEN: usize = 8 * 1024;
+const MAX_TITLE_LEN: usize = 512;
+const MAX_MIME_LEN: usize = 256;
+const MAX_DRM_JSON_BYTES: usize = 16 * 1024;
+const MAX_LOG_TAIL_BYTES: usize = 64 * 1024;
+/// Session-log ring bounds; the byte cap stops one pathological line from eating the buffer.
+const MAX_LOG_RING_LINES: usize = 500;
+const MAX_LOG_LINE_BYTES: usize = 2 * 1024;
+const MAX_LOG_LINES_PER_CALL: usize = 64;
+
+const PLAY_EVENT: &str = "xt:receiver-play";
+const CONTROL_EVENT: &str = "xt:receiver-control";
+const STATUS_EVENT: &str = "xt:receiver-status";
+const PAIRED_EVENT: &str = "xt:receiver-paired";
+const AMBIENT_EVENT: &str = "xt:receiver-ambient";
+
+const MAX_AMBIENT_ENTRIES: usize = 50;
+const MAX_AMBIENT_ID_LEN: usize = 256;
+const ALLOWED_AMBIENT_KINDS: [&str; 2] = ["vod", "series"];
+const ALLOWED_AMBIENT_TIERS: [&str; 4] = ["watching", "recent", "recommended", "catalog"];
+
+const ALLOWED_PLAYBACK_STATES: [&str; 7] =
+    ["idle", "loading", "buffering", "playing", "paused", "ended", "error"];
+
+const AUTH_HEADER: &str = "x-xt-key";
+
+// ---------------------------------------------------------------------------
+// Event emitter abstraction (testable without a Tauri AppHandle)
+// ---------------------------------------------------------------------------
+
+pub trait ReceiverEvents: Send + Sync + 'static {
+    fn play(&self, payload: Value);
+    fn control(&self, payload: Value);
+    fn status(&self, payload: Value);
+    fn paired(&self, payload: Value);
+    fn ambient(&self, payload: Value);
+}
+
+impl ReceiverEvents for AppHandle {
+    fn play(&self, payload: Value) {
+        let _ = self.emit(PLAY_EVENT, payload);
+    }
+    fn control(&self, payload: Value) {
+        let _ = self.emit(CONTROL_EVENT, payload);
+    }
+    fn status(&self, payload: Value) {
+        let _ = self.emit(STATUS_EVENT, payload);
+    }
+    fn paired(&self, payload: Value) {
+        let _ = self.emit(PAIRED_EVENT, payload);
+    }
+    fn ambient(&self, payload: Value) {
+        let _ = self.emit(AMBIENT_EVENT, payload);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackReport {
+    pub state: String,
+    #[serde(default)]
+    pub position_seconds: f64,
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub volume: Option<f64>,
+    #[serde(default)]
+    pub muted: Option<bool>,
+}
+
+impl Default for PlaybackReport {
+    fn default() -> Self {
+        Self {
+            state: "idle".to_string(),
+            position_seconds: 0.0,
+            duration_seconds: None,
+            title: None,
+            error: None,
+            volume: None,
+            muted: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PairingState {
+    code: String,
+    expires_at: Instant,
+    failed_attempts: u8,
+    locked_until: Option<Instant>,
+    last_attempt_at: Option<Instant>,
+}
+
+impl PairingState {
+    fn new() -> Self {
+        Self {
+            code: generate_pair_code(),
+            expires_at: Instant::now() + PAIR_CODE_TTL,
+            failed_attempts: 0,
+            locked_until: None,
+            last_attempt_at: None,
+        }
+    }
+}
+
+struct ReceiverShared {
+    pairing: Mutex<Option<PairingState>>,
+    devices: Mutex<Vec<PairedDevice>>,
+    playback: Mutex<PlaybackReport>,
+    name: Mutex<String>,
+    ips: Mutex<Vec<String>>,
+    receiver_id: Mutex<String>,
+    broadcast: broadcast::Sender<String>,
+    // Session log the receiver page feeds us: live stream to the sender plus mid-session backlog.
+    log_ring: Mutex<std::collections::VecDeque<String>>,
+    ip_watcher_running: AtomicBool,
+}
+
+impl ReceiverShared {
+    fn new() -> Self {
+        let (broadcast, _receiver) = broadcast::channel(16);
+        Self {
+            pairing: Mutex::new(None),
+            devices: Mutex::new(Vec::new()),
+            playback: Mutex::new(PlaybackReport::default()),
+            name: Mutex::new(String::new()),
+            ips: Mutex::new(Vec::new()),
+            receiver_id: Mutex::new(String::new()),
+            broadcast,
+            log_ring: Mutex::new(std::collections::VecDeque::new()),
+            ip_watcher_running: AtomicBool::new(false),
+        }
+    }
+}
+
+struct ServerHandle {
+    port: u16,
+    shutdown: watch::Sender<bool>,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+struct MdnsHandle {
+    daemon: mdns_sd::ServiceDaemon,
+    fullname: String,
+}
+
+pub struct ReceiverState {
+    shared: Arc<ReceiverShared>,
+    server: Mutex<Option<ServerHandle>>,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    mdns: Mutex<Option<MdnsHandle>>,
+}
+
+impl Default for ReceiverState {
+    fn default() -> Self {
+        Self {
+            shared: Arc::new(ReceiverShared::new()),
+            server: Mutex::new(None),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            mdns: Mutex::new(None),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pairing state machine (pure, unit-testable)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+enum PairOutcome {
+    Paired,
+    BadCode,
+    RateLimited { retry_after_secs: u64 },
+}
+
+fn evaluate_pair_attempt(pairing: &mut PairingState, submitted: &str, now: Instant) -> PairOutcome {
+    if let Some(locked_until) = pairing.locked_until {
+        if now < locked_until {
+            let retry_after_secs = locked_until.saturating_duration_since(now).as_secs().max(1);
+            return PairOutcome::RateLimited { retry_after_secs };
+        }
+    }
+
+    if let Some(last_attempt_at) = pairing.last_attempt_at {
+        let elapsed = now.saturating_duration_since(last_attempt_at);
+        if elapsed < PAIR_MIN_INTERVAL {
+            let retry_after_secs = PAIR_MIN_INTERVAL.saturating_sub(elapsed).as_secs().max(1);
+            return PairOutcome::RateLimited { retry_after_secs };
+        }
+    }
+
+    pairing.last_attempt_at = Some(now);
+
+    if now >= pairing.expires_at {
+        pairing.code = generate_pair_code();
+        pairing.expires_at = now + PAIR_CODE_TTL;
+        pairing.failed_attempts = 0;
+        pairing.locked_until = None;
+        return PairOutcome::BadCode;
+    }
+
+    if submitted != pairing.code {
+        pairing.failed_attempts += 1;
+        if pairing.failed_attempts >= PAIR_MAX_FAILURES {
+            pairing.code = generate_pair_code();
+            pairing.expires_at = now + PAIR_CODE_TTL;
+            pairing.failed_attempts = 0;
+            pairing.locked_until = Some(now + PAIR_LOCKOUT);
+        }
+        return PairOutcome::BadCode;
+    }
+
+    // Single-use: a matched code is immediately replaced.
+    pairing.code = generate_pair_code();
+    pairing.expires_at = now + PAIR_CODE_TTL;
+    pairing.failed_attempts = 0;
+    pairing.locked_until = None;
+    PairOutcome::Paired
+}
+
+fn maybe_regenerate_expired_code(pairing_slot: &mut Option<PairingState>) -> bool {
+    let Some(pairing) = pairing_slot.as_mut() else {
+        return false;
+    };
+    if Instant::now() < pairing.expires_at {
+        return false;
+    }
+    pairing.code = generate_pair_code();
+    pairing.expires_at = Instant::now() + PAIR_CODE_TTL;
+    pairing.failed_attempts = 0;
+    pairing.locked_until = None;
+    true
+}
+
+fn generate_pair_code() -> String {
+    format!("{:06}", rand::rng().random_range(0..1_000_000u32))
+}
+
+fn resolve_device_name(name: &str, fallback: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.chars().take(receiver_store::MAX_DEVICE_NAME_LEN).collect()
+    }
+}
+
+/// None for blank or "localhost", which gethostname returns on containers/CI and Android.
+#[cfg(not(target_os = "android"))]
+fn usable_hostname(hostname: &str) -> Option<String> {
+    let trimmed = hostname.trim().trim_end_matches('.');
+    let suffix_start = trimmed.len().saturating_sub(".local".len());
+    let stripped = if trimmed.is_char_boundary(suffix_start) && trimmed[suffix_start..].eq_ignore_ascii_case(".local") {
+        trimmed[..suffix_start].trim()
+    } else {
+        trimmed
+    };
+    if stripped.is_empty() || stripped.eq_ignore_ascii_case("localhost") {
+        None
+    } else {
+        Some(stripped.to_string())
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn system_hostname() -> String {
+    gethostname::gethostname().to_string_lossy().into_owned()
+}
+
+// Android hostnames are useless (always "localhost"); the JS side supplies the real device name.
+#[cfg(target_os = "android")]
+fn default_receiver_name() -> String {
+    "Extreme InfiniTV".to_string()
+}
+
+#[cfg(not(target_os = "android"))]
+fn default_receiver_name() -> String {
+    usable_hostname(&system_hostname()).unwrap_or_else(|| "Extreme InfiniTV".to_string())
+}
+
+/// Sender-side device-name lookup: the OS hostname, or "" when unusable (Android has no bridge here).
+#[tauri::command]
+pub fn device_hostname() -> String {
+    #[cfg(target_os = "android")]
+    {
+        String::new()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        usable_hostname(&system_hostname()).unwrap_or_default()
+    }
+}
+
+fn generate_device_key() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+// ---------------------------------------------------------------------------
+// mDNS / DNS-SD advertising (desktop only; Android uses NsdManager instead)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const MDNS_SERVICE_TYPE: &str = "_xtream-recv._tcp.local.";
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const MDNS_LABEL_MAX_LEN: usize = 63;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn mdns_instance_name(raw: &str) -> String {
+    let cleaned: String = raw.chars().filter(|ch| *ch != '.' && !ch.is_control()).collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        "Extreme InfiniTV".to_string()
+    } else {
+        trimmed.chars().take(MDNS_LABEL_MAX_LEN).collect()
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn mdns_host_label(instance_name: &str) -> String {
+    let label: String = instance_name
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    let trimmed = label.trim_matches('-');
+    if trimmed.is_empty() {
+        "xtream-receiver".to_string()
+    } else {
+        trimmed.chars().take(MDNS_LABEL_MAX_LEN).collect()
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn register_mdns_service(name: &str, port: u16, receiver_id: &str) -> Option<(mdns_sd::ServiceDaemon, String)> {
+    let daemon = match mdns_sd::ServiceDaemon::new() {
+        Ok(daemon) => daemon,
+        Err(error) => {
+            log::warn!("[receiver] mdns daemon start failed: {error}");
+            return None;
+        }
+    };
+
+    let instance_name = mdns_instance_name(name);
+    let host_name = format!("{}.local.", mdns_host_label(&instance_name));
+    let advertised_ips = local_ips();
+    log::info!("[receiver] advertising mdns on ips: {}", advertised_ips.join(", "));
+    // addr_auto adds every interface's address on register (mdns-sd's register_service), on top
+    // of the explicit list below, not instead of it - the two are additive, not a fallback pair.
+    let service_info = mdns_sd::ServiceInfo::new(
+        MDNS_SERVICE_TYPE,
+        &instance_name,
+        &host_name,
+        advertised_ips.join(",").as_str(),
+        port,
+        &[("v", "1"), ("id", receiver_id)][..],
+    )
+    .map(mdns_sd::ServiceInfo::enable_addr_auto);
+    let service_info = match service_info {
+        Ok(info) => info,
+        Err(error) => {
+            log::warn!("[receiver] mdns service info build failed: {error}");
+            let _ = daemon.shutdown();
+            return None;
+        }
+    };
+
+    let fullname = service_info.get_fullname().to_string();
+    if let Err(error) = daemon.register(service_info) {
+        log::warn!("[receiver] mdns register failed: {error}");
+        let _ = daemon.shutdown();
+        return None;
+    }
+    Some((daemon, fullname))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn advertise_mdns(state: &ReceiverState, name: &str, port: u16) {
+    let mut mdns_guard = state.mdns.lock().unwrap_or_else(|poison| poison.into_inner());
+    if mdns_guard.is_some() {
+        return;
+    }
+    let receiver_id = state.shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    if let Some((daemon, fullname)) = register_mdns_service(name, port, &receiver_id) {
+        *mdns_guard = Some(MdnsHandle { daemon, fullname });
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn advertise_mdns(_state: &ReceiverState, _name: &str, _port: u16) {}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn unadvertise_mdns(state: &ReceiverState) {
+    let handle = state.mdns.lock().unwrap_or_else(|poison| poison.into_inner()).take();
+    if let Some(handle) = handle {
+        let _ = handle.daemon.unregister(&handle.fullname);
+        let _ = handle.daemon.shutdown();
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn unadvertise_mdns(_state: &ReceiverState) {}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn readvertise_mdns(state: &ReceiverState, name: &str) {
+    let port = state
+        .server
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .map(|handle| handle.port);
+    let Some(port) = port else {
+        return;
+    };
+    unadvertise_mdns(state);
+    advertise_mdns(state, name, port);
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn readvertise_mdns(_state: &ReceiverState, _name: &str) {}
+
+const IP_WATCH_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Wi-Fi roams, VPNs and docks change our addresses while the receiver stays up; without this the
+/// advertised records and the status IPs both go stale until the user toggles receiver mode.
+fn spawn_ip_watcher(app: AppHandle) {
+    let shared = {
+        let state = app.state::<ReceiverState>();
+        if state.shared.ip_watcher_running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        state.shared.clone()
+    };
+
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(IP_WATCH_INTERVAL).await;
+
+            let state = app.state::<ReceiverState>();
+            let port = state
+                .server
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .as_ref()
+                .map(|handle| handle.port);
+            // Keep watching even while stopped: receiver_start never re-spawns a second watcher.
+            let Some(port) = port else {
+                continue;
+            };
+
+            let current = local_ips();
+            let changed = {
+                let mut ips = shared.ips.lock().unwrap_or_else(|poison| poison.into_inner());
+                if *ips == current {
+                    false
+                } else {
+                    *ips = current.clone();
+                    true
+                }
+            };
+            if !changed {
+                continue;
+            }
+
+            let name = shared.name.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+            log::info!("[receiver] addresses changed, re-advertising on: {}", current.join(", "));
+            readvertise_mdns(&state, &name);
+            ReceiverEvents::status(&app, build_status_json(&shared, Some(port)));
+        }
+    });
+}
+
+fn evict_oldest_if_over_capacity(devices: &mut Vec<PairedDevice>) {
+    while devices.len() > receiver_store::MAX_PAIRED_DEVICES {
+        let Some(oldest_index) = devices
+            .iter()
+            .enumerate()
+            .min_by(|(_, left), (_, right)| left.created_at.cmp(&right.created_at))
+            .map(|(index, _)| index)
+        else {
+            break;
+        };
+        devices.remove(oldest_index);
+    }
+}
+
+async fn load_devices(config_dir: std::path::PathBuf) -> Vec<PairedDevice> {
+    tauri::async_runtime::spawn_blocking(move || receiver_store::load(&config_dir))
+        .await
+        .unwrap_or_default()
+}
+
+async fn ensure_receiver_id(config_dir: std::path::PathBuf) -> String {
+    tauri::async_runtime::spawn_blocking(move || receiver_store::ensure_id(&config_dir))
+        .await
+        .unwrap_or_else(|_| receiver_store::generate_receiver_id())
+}
+
+// Callers clone the device list and drop the mutex guard before awaiting this.
+async fn persist_devices(
+    config_dir: std::path::PathBuf,
+    receiver_id: String,
+    devices: Vec<PairedDevice>,
+) -> std::io::Result<()> {
+    tauri::async_runtime::spawn_blocking(move || receiver_store::save(&config_dir, &receiver_id, &devices))
+        .await
+        .unwrap_or_else(|join_error| Err(std::io::Error::other(join_error.to_string())))
+}
+
+// ---------------------------------------------------------------------------
+// Status JSON shared by the Tauri commands and the axum handlers
+// ---------------------------------------------------------------------------
+
+fn build_status_json(shared: &Arc<ReceiverShared>, port: Option<u16>) -> Value {
+    let name = shared.name.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    let pairing = shared.pairing.lock().unwrap_or_else(|poison| poison.into_inner());
+    let (pair_code, pair_code_expires_in_seconds) = match pairing.as_ref() {
+        Some(pairing) => (
+            Some(pairing.code.clone()),
+            Some(pairing.expires_at.saturating_duration_since(Instant::now()).as_secs()),
+        ),
+        None => (None, None),
+    };
+    drop(pairing);
+
+    let devices = shared.devices.lock().unwrap_or_else(|poison| poison.into_inner());
+    let paired_devices: Vec<Value> = devices
+        .iter()
+        .map(|device| {
+            json!({
+                "key": device.key,
+                "deviceName": device.device_name,
+                "createdAt": device.created_at,
+            })
+        })
+        .collect();
+
+    let ips = shared.ips.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    let receiver_id = shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+
+    json!({
+        "enabled": port.is_some(),
+        "port": port,
+        "ips": ips,
+        "name": name,
+        "id": receiver_id,
+        "pairCode": pair_code,
+        "pairCodeExpiresInSeconds": pair_code_expires_in_seconds,
+        "pairedDevices": paired_devices,
+    })
+}
+
+/// Std-only UDP-connect trick: no packet is sent, just resolves which local interface
+/// would route toward the internet. On an active VPN this is the tunnel, not the LAN.
+fn default_route_ip() -> Option<std::net::IpAddr> {
+    use std::net::UdpSocket;
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect(("8.8.8.8", 80)).ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+}
+
+// iOS only: the default-route probe is the sole signal there.
+#[cfg(target_os = "ios")]
+fn local_ips() -> Vec<String> {
+    default_route_ip().map(|ip| vec![ip.to_string()]).unwrap_or_default()
+}
+
+/// All usable addresses across every adapter (not just the default route), so a VPN tunnel
+/// doesn't hide the LAN address the mobile app actually needs to reach. Android included: an
+/// active VPN there makes the default route the tunnel, which no sender on the LAN can reach.
+// Listener is IPv4-only, so never advertise IPv6.
+#[cfg(not(target_os = "ios"))]
+fn local_ips() -> Vec<String> {
+    let default_route = default_route_ip();
+    let mut interfaces: Vec<if_addrs::Interface> = if_addrs::get_if_addrs()
+        .map(|interfaces| {
+            interfaces
+                .into_iter()
+                .filter(is_advertisable_interface)
+                .filter(|interface| interface.ip().is_ipv4() && is_usable_mdns_addr(&interface.ip()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Total order: unstable ties made the same address set re-advertise every 15s.
+    interfaces.sort_by(|left, right| {
+        mdns_addr_rank(&right.ip(), Some(right))
+            .cmp(&mdns_addr_rank(&left.ip(), Some(left)))
+            .then_with(|| {
+                let left_is_default_route = default_route == Some(left.ip());
+                let right_is_default_route = default_route == Some(right.ip());
+                right_is_default_route.cmp(&left_is_default_route)
+            })
+            .then_with(|| left.ip().cmp(&right.ip()))
+    });
+    let ranked: Vec<std::net::IpAddr> = interfaces.iter().map(|interface| interface.ip()).collect();
+    dedupe_ips(&ranked).into_iter().map(|ip| ip.to_string()).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Tauri commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn receiver_start(
+    app: AppHandle,
+    state: tauri::State<'_, ReceiverState>,
+    name: Option<String>,
+) -> Result<Value, String> {
+    let config_dir = app.path().app_config_dir().map_err(|error| format!("OTHER:{error}"))?;
+    let log_dir = app.path().app_log_dir().unwrap_or_default();
+
+    let already_running = state
+        .server
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .is_some();
+
+    if !already_running {
+        let devices = load_devices(config_dir.clone()).await;
+        *state.shared.devices.lock().unwrap_or_else(|poison| poison.into_inner()) = devices;
+
+        let receiver_id = ensure_receiver_id(config_dir.clone()).await;
+        *state.shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()) = receiver_id;
+
+        let trimmed_name = name.unwrap_or_default();
+        let resolved_name = if trimmed_name.trim().is_empty() {
+            default_receiver_name()
+        } else {
+            trimmed_name.trim().to_string()
+        };
+        *state.shared.name.lock().unwrap_or_else(|poison| poison.into_inner()) = resolved_name.clone();
+
+        *state.shared.pairing.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(PairingState::new());
+        *state.shared.ips.lock().unwrap_or_else(|poison| poison.into_inner()) = local_ips();
+
+        let events: Arc<dyn ReceiverEvents> = Arc::new(app.clone());
+        ensure_server_started(&state, events, config_dir, log_dir).await?;
+
+        let port = state
+            .server
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_ref()
+            .map(|handle| handle.port);
+        if let Some(port) = port {
+            advertise_mdns(&state, &resolved_name, port);
+            spawn_ip_watcher(app.clone());
+        }
+    }
+
+    let port = state
+        .server
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .map(|handle| handle.port);
+    Ok(build_status_json(&state.shared, port))
+}
+
+#[tauri::command]
+pub async fn receiver_stop(app: AppHandle, state: tauri::State<'_, ReceiverState>) -> Result<(), String> {
+    let handle = state
+        .server
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take();
+    if let Some(handle) = handle {
+        let _ = handle.shutdown.send(true);
+    }
+    unadvertise_mdns(&state);
+    *state.shared.pairing.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
+    *state.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner()) = PlaybackReport::default();
+    state.shared.ips.lock().unwrap_or_else(|poison| poison.into_inner()).clear();
+
+    let status = build_status_json(&state.shared, None);
+    let events: Arc<dyn ReceiverEvents> = Arc::new(app);
+    events.status(status);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn receiver_status(app: AppHandle, state: tauri::State<'_, ReceiverState>) -> Value {
+    let port = state
+        .server
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .map(|handle| handle.port);
+
+    let regenerated = if port.is_some() {
+        let mut pairing = state.shared.pairing.lock().unwrap_or_else(|poison| poison.into_inner());
+        maybe_regenerate_expired_code(&mut pairing)
+    } else {
+        false
+    };
+
+    let status = build_status_json(&state.shared, port);
+    if regenerated {
+        let events: Arc<dyn ReceiverEvents> = Arc::new(app);
+        events.status(status.clone());
+    }
+    status
+}
+
+#[tauri::command]
+pub fn receiver_regenerate_code(app: AppHandle, state: tauri::State<'_, ReceiverState>) -> Value {
+    *state.shared.pairing.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(PairingState::new());
+
+    let port = state
+        .server
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .map(|handle| handle.port);
+    let status = build_status_json(&state.shared, port);
+    let events: Arc<dyn ReceiverEvents> = Arc::new(app);
+    events.status(status.clone());
+    status
+}
+
+#[tauri::command]
+pub fn receiver_set_name(app: AppHandle, state: tauri::State<'_, ReceiverState>, name: String) -> Value {
+    let resolved_name = resolve_device_name(&name, &default_receiver_name());
+    *state.shared.name.lock().unwrap_or_else(|poison| poison.into_inner()) = resolved_name.clone();
+    readvertise_mdns(&state, &resolved_name);
+
+    let port = state
+        .server
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .map(|handle| handle.port);
+    let status = build_status_json(&state.shared, port);
+    let events: Arc<dyn ReceiverEvents> = Arc::new(app);
+    events.status(status.clone());
+    status
+}
+
+#[tauri::command]
+pub async fn receiver_revoke_device(
+    app: AppHandle,
+    state: tauri::State<'_, ReceiverState>,
+    key: String,
+) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|error| format!("OTHER:{error}"))?;
+    let receiver_id = state.shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    let devices_snapshot = {
+        let mut devices = state.shared.devices.lock().unwrap_or_else(|poison| poison.into_inner());
+        devices.retain(|device| device.key != key);
+        devices.clone()
+    };
+    persist_devices(config_dir, receiver_id, devices_snapshot).await.map_err(|error| format!("OTHER:{error}"))?;
+
+    let port = state
+        .server
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .map(|handle| handle.port);
+    let status = build_status_json(&state.shared, port);
+    let events: Arc<dyn ReceiverEvents> = Arc::new(app);
+    events.status(status);
+    Ok(())
+}
+
+/// Frame the sender recognizes as a log batch; state frames stay bare JSON for cross-version compat.
+fn log_frame(lines: &[String]) -> Option<String> {
+    if lines.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&serde_json::json!({ "kind": "log", "lines": lines })).ok()
+}
+
+/// Caps count and per-line length, and drops blanks, before anything reaches the ring or the wire.
+fn sanitize_log_lines(lines: Vec<String>) -> Vec<String> {
+    lines
+        .into_iter()
+        .take(MAX_LOG_LINES_PER_CALL)
+        .map(|line| line.chars().take(MAX_LOG_LINE_BYTES).collect::<String>())
+        .filter(|line| !line.trim().is_empty())
+        .collect()
+}
+
+/// Appends to the ring, evicting oldest first so a long session keeps its most recent history.
+fn push_log_lines(ring: &mut std::collections::VecDeque<String>, lines: &[String]) {
+    for line in lines {
+        if ring.len() >= MAX_LOG_RING_LINES {
+            ring.pop_front();
+        }
+        ring.push_back(line.clone());
+    }
+}
+
+#[tauri::command]
+pub fn receiver_log_lines(state: tauri::State<'_, ReceiverState>, lines: Vec<String>) -> Result<(), String> {
+    let bounded = sanitize_log_lines(lines);
+    if bounded.is_empty() {
+        return Ok(());
+    }
+    {
+        let mut ring = state.shared.log_ring.lock().unwrap_or_else(|poison| poison.into_inner());
+        push_log_lines(&mut ring, &bounded);
+    }
+    if let Some(frame) = log_frame(&bounded) {
+        let _ = state.shared.broadcast.send(frame);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn receiver_report_state(state: tauri::State<'_, ReceiverState>, payload: PlaybackReport) -> Result<(), String> {
+    if !ALLOWED_PLAYBACK_STATES.contains(&payload.state.as_str()) {
+        return Err(format!("OTHER:invalid playback state '{}'", payload.state));
+    }
+    let serialized = {
+        let mut playback = state.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner());
+        let bounded = PlaybackReport {
+            state: payload.state,
+            position_seconds: payload.position_seconds,
+            duration_seconds: payload.duration_seconds,
+            title: payload.title.map(|title| title.chars().take(MAX_TITLE_LEN).collect()),
+            error: payload.error.map(|error| error.chars().take(MAX_TITLE_LEN).collect()),
+            // A report omitting the level must not wipe what /volume or an earlier report set.
+            volume: payload.volume.or(playback.volume),
+            muted: payload.muted.or(playback.muted),
+        };
+        let serialized = serde_json::to_string(&bounded).map_err(|error| format!("OTHER:{error}"))?;
+        *playback = bounded;
+        serialized
+    };
+    let _ = state.shared.broadcast.send(serialized);
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredReceiver {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub hosts: Vec<String>,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const DISCOVER_DEFAULT_TIMEOUT_MS: u64 = 3000;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const DISCOVER_MIN_TIMEOUT_MS: u64 = 500;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const DISCOVER_MAX_TIMEOUT_MS: u64 = 10_000;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn strip_mdns_service_suffix(fullname: &str) -> String {
+    let suffix = format!(".{MDNS_SERVICE_TYPE}");
+    let stripped = fullname.strip_suffix(suffix.as_str()).unwrap_or(fullname);
+    stripped.chars().take(receiver_store::MAX_DEVICE_NAME_LEN).collect()
+}
+
+/// Rejects loopback/link-local/VPN candidates: a tunnel address is reachable only from this host.
+#[cfg(not(target_os = "ios"))]
+fn is_advertisable_interface(interface: &if_addrs::Interface) -> bool {
+    !interface.is_p2p
+}
+
+/// Order-preserving dedupe, so a logged address list reads as the set that was actually learned.
+fn dedupe_ips(ips: &[std::net::IpAddr]) -> Vec<std::net::IpAddr> {
+    let mut seen = std::collections::HashSet::new();
+    ips.iter().filter(|ip| seen.insert(**ip)).copied().collect()
+}
+
+fn is_usable_mdns_addr(ip: &std::net::IpAddr) -> bool {
+    if ip.is_loopback() || ip.is_unspecified() {
+        return false;
+    }
+    match ip {
+        std::net::IpAddr::V4(v4) => !v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) != 0xfe80,
+    }
+}
+
+// Names seen on Hyper-V/WSL/VirtualBox/VMware/VPN adapters; a substring match is best-effort.
+#[cfg(not(target_os = "ios"))]
+const VIRTUAL_ADAPTER_NAME_HINTS: [&str; 8] =
+    ["vethernet", "wsl", "virtualbox", "vmware", "protonvpn", "wireguard", "tap", "hyper-v"];
+
+/// Docker/VPN (172.16-31.x) and VirtualBox host-only (192.168.56.x).
+#[cfg(not(target_os = "ios"))]
+fn is_demoted_ipv4_range(v4: &std::net::Ipv4Addr) -> bool {
+    let octets = v4.octets();
+    (octets[0] == 172 && (16..=31).contains(&octets[1]))
+        || (octets[0] == 192 && octets[1] == 168 && octets[2] == 56)
+}
+
+#[cfg(not(target_os = "ios"))]
+fn interface_looks_virtual(interface: &if_addrs::Interface) -> bool {
+    let is_slash_32 = matches!(&interface.addr, if_addrs::IfAddr::V4(v4) if v4.prefixlen == 32);
+    let lower_name = interface.name.to_lowercase();
+    is_slash_32 || VIRTUAL_ADAPTER_NAME_HINTS.iter().any(|hint| lower_name.contains(hint))
+}
+
+/// Shared by desktop mDNS resolution and the sweep fallback (which also runs on Android).
+/// `interface` demotes virtual/VPN adapters when advertising our own addresses; discovery
+/// ranking of a remote host's addresses has no owning interface, so it passes `None`.
+#[cfg(not(target_os = "ios"))]
+fn mdns_addr_rank(ip: &std::net::IpAddr, interface: Option<&if_addrs::Interface>) -> u8 {
+    let demoted = interface.is_some_and(|interface| {
+        interface_looks_virtual(interface) || matches!(ip, std::net::IpAddr::V4(v4) if is_demoted_ipv4_range(v4))
+    });
+    match ip {
+        std::net::IpAddr::V4(v4) if v4.is_private() => {
+            if demoted {
+                1
+            } else {
+                2
+            }
+        }
+        std::net::IpAddr::V4(_) => 1,
+        std::net::IpAddr::V6(_) => 0,
+    }
+}
+
+/// Picks the best address for a resolved service: private IPv4 first, then any IPv4, then IPv6.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[allow(dead_code)] // superseded by rank_discovered_hosts in receiver_discover; kept + tested for the subnet-unaware fallback shape
+fn best_mdns_addr(candidates: &[std::net::IpAddr]) -> Option<std::net::IpAddr> {
+    candidates.iter().copied().filter(is_usable_mdns_addr).max_by_key(|ip| mdns_addr_rank(ip, None))
+}
+
+#[cfg(not(target_os = "ios"))]
+fn same_subnet_v4(local: std::net::Ipv4Addr, candidate: std::net::Ipv4Addr, prefixlen: u8) -> bool {
+    if prefixlen == 0 || prefixlen > 32 {
+        return false;
+    }
+    let mask = u32::MAX << (32 - u32::from(prefixlen));
+    (u32::from(local) & mask) == (u32::from(candidate) & mask)
+}
+
+// if-addrs has no reliable cross-platform IPv6 prefix length; same-/64 is the closest cheap proxy.
+#[cfg(not(target_os = "ios"))]
+fn same_subnet_v6(local: std::net::Ipv6Addr, candidate: std::net::Ipv6Addr) -> bool {
+    local.segments()[..4] == candidate.segments()[..4]
+}
+
+#[cfg(not(target_os = "ios"))]
+fn shares_subnet_with_any_interface(candidate: &std::net::IpAddr, interfaces: &[if_addrs::Interface]) -> bool {
+    interfaces.iter().any(|interface| match (&interface.addr, candidate) {
+        (if_addrs::IfAddr::V4(local), std::net::IpAddr::V4(candidate_v4)) => {
+            same_subnet_v4(local.ip, *candidate_v4, local.prefixlen)
+        }
+        (if_addrs::IfAddr::V6(local), std::net::IpAddr::V6(candidate_v6)) => {
+            same_subnet_v6(local.ip, *candidate_v6)
+        }
+        _ => false,
+    })
+}
+
+/// (same-subnet bonus, address-family rank): a subnet match outranks private-v4 over public-v4.
+#[cfg(not(target_os = "ios"))]
+fn discovery_addr_rank(ip: &std::net::IpAddr, interfaces: &[if_addrs::Interface]) -> (u8, u8) {
+    (u8::from(shares_subnet_with_any_interface(ip, interfaces)), mdns_addr_rank(ip, None))
+}
+
+/// A receiver too old to return its id from /info gets a synthetic one, which the identity key
+/// can't match to that receiver's mDNS resolve. A shared address settles it.
+#[cfg(not(target_os = "ios"))]
+fn collapse_synthetic_id_entries(entries: &mut std::collections::HashMap<String, DiscoveryEntry>) {
+    let synthetic_keys: Vec<String> =
+        entries.keys().filter(|key| key.starts_with("id:sweep:")).cloned().collect();
+    for synthetic_key in synthetic_keys {
+        let Some(synthetic) = entries.get(&synthetic_key) else { continue };
+        let host_key = entries
+            .iter()
+            .find(|(key, candidate)| {
+                *key != &synthetic_key
+                    && candidate.port == synthetic.port
+                    && !candidate.addresses.is_disjoint(&synthetic.addresses)
+            })
+            .map(|(key, _)| key.clone());
+        let Some(host_key) = host_key else { continue };
+        let Some(synthetic) = entries.remove(&synthetic_key) else { continue };
+        if let Some(host) = entries.get_mut(&host_key) {
+            host.addresses.extend(synthetic.addresses);
+        }
+    }
+}
+
+/// Ranks a resolved service's usable addresses, best first. IPv6 is excluded: the server only
+/// ever binds an IPv4 listener, so an advertised v6 address is never actually reachable.
+#[cfg(not(target_os = "ios"))]
+fn rank_discovered_hosts(
+    addresses: impl IntoIterator<Item = std::net::IpAddr>,
+    interfaces: &[if_addrs::Interface],
+) -> Vec<std::net::IpAddr> {
+    let mut ranked: Vec<std::net::IpAddr> =
+        addresses.into_iter().filter(is_usable_mdns_addr).filter(std::net::IpAddr::is_ipv4).collect();
+    ranked.sort_by(|left, right| discovery_addr_rank(right, interfaces).cmp(&discovery_addr_rank(left, interfaces)));
+    ranked
+}
+
+#[cfg(not(target_os = "ios"))]
+fn discovery_identity_key(name: &str, port: u16, id: Option<&str>) -> String {
+    match id {
+        Some(id) if !id.is_empty() => format!("id:{id}"),
+        _ => format!("np:{name}:{port}"),
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+struct ResolvedEvent {
+    name: String,
+    port: u16,
+    id: Option<String>,
+    addresses: Vec<std::net::IpAddr>,
+}
+
+#[cfg(not(target_os = "ios"))]
+struct DiscoveryEntry {
+    name: String,
+    port: u16,
+    id: Option<String>,
+    addresses: std::collections::HashSet<std::net::IpAddr>,
+}
+
+#[cfg(not(target_os = "ios"))]
+fn join_ips(ips: &[std::net::IpAddr]) -> String {
+    ips.iter().map(|ip| ip.to_string()).collect::<Vec<_>>().join(", ")
+}
+
+/// Merges resolved-service events into one entry per identity (mDNS id when present, else
+/// name+port), unioning addresses across repeat events for the same identity.
+#[cfg(not(target_os = "ios"))]
+fn merge_resolved_events(
+    events: Vec<ResolvedEvent>,
+    interfaces: &[if_addrs::Interface],
+) -> Vec<DiscoveredReceiver> {
+    let mut entries: std::collections::HashMap<String, DiscoveryEntry> = std::collections::HashMap::new();
+    // mdns-sd re-reports a service as records arrive, so a loopback-only event is a normal
+    // partial: warn at the end, only for identities nothing usable ever arrived for.
+    let mut address_less: Vec<(String, String, u16, String)> = Vec::new();
+    for event in events {
+        let usable: Vec<std::net::IpAddr> = event.addresses.iter().copied().filter(is_usable_mdns_addr).collect();
+        let key = discovery_identity_key(&event.name, event.port, event.id.as_deref());
+        if usable.is_empty() {
+            address_less.push((key, event.name, event.port, join_ips(&dedupe_ips(&event.addresses))));
+            continue;
+        }
+        let entry = entries.entry(key).or_insert_with(|| DiscoveryEntry {
+            name: event.name.clone(),
+            port: event.port,
+            id: None,
+            addresses: std::collections::HashSet::new(),
+        });
+        entry.name = event.name;
+        entry.port = event.port;
+        if entry.id.is_none() {
+            entry.id = event.id;
+        }
+        entry.addresses.extend(usable);
+    }
+
+    for (key, name, port, addresses) in address_less {
+        if entries.contains_key(&key) {
+            log::debug!("[receiver] discover partial event for {name} port={port}: [{addresses}]");
+        } else {
+            log::warn!("[receiver] discover dropped {name} port={port}: no usable address in [{addresses}]");
+        }
+    }
+
+    collapse_synthetic_id_entries(&mut entries);
+
+    entries
+        .into_values()
+        .map(|entry| {
+            let hosts: Vec<String> =
+                rank_discovered_hosts(entry.addresses, interfaces).into_iter().map(|ip| ip.to_string()).collect();
+            let host = hosts.first().cloned().unwrap_or_default();
+            DiscoveredReceiver { name: entry.name, host, port: entry.port, id: entry.id, hosts }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Unicast subnet sweep fallback (VPN split-tunnels and multicast-hostile LANs kill mDNS; also Android's only fallback below NsdManager)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_os = "ios"))]
+const SWEEP_CANDIDATE_CAP: usize = 1024;
+#[cfg(not(target_os = "ios"))]
+const SWEEP_BUDGET: Duration = Duration::from_millis(4000);
+#[cfg(not(target_os = "ios"))]
+const SWEEP_CONNECT_TIMEOUT: Duration = Duration::from_millis(400);
+#[cfg(not(target_os = "ios"))]
+const SWEEP_REQUEST_TIMEOUT: Duration = Duration::from_millis(1500);
+#[cfg(not(target_os = "ios"))]
+const SWEEP_CONCURRENCY: usize = 128;
+/// A real /info reply is a few hundred bytes; a hostile host streaming past this is rejected.
+#[cfg(not(target_os = "ios"))]
+const MAX_SWEEP_RESPONSE_BYTES: usize = 4096;
+
+/// Hosts in one interface's subnet, clamped to /24 max width, excluding network/broadcast/self.
+#[cfg(not(target_os = "ios"))]
+fn sweep_hosts_for_interface(ip: std::net::Ipv4Addr, netmask: std::net::Ipv4Addr) -> Vec<std::net::Ipv4Addr> {
+    if ip.is_loopback() || ip.is_link_local() || !ip.is_private() {
+        return Vec::new();
+    }
+    let prefixlen = u32::from(netmask).count_ones().max(24);
+    if prefixlen >= 32 {
+        return Vec::new();
+    }
+    let mask = u32::MAX << (32 - prefixlen);
+    let network = u32::from(ip) & mask;
+    let broadcast = network | !mask;
+    let own = u32::from(ip);
+
+    let mut hosts = Vec::new();
+    let mut host = network + 1;
+    while host < broadcast {
+        // Only this interface's own address is excluded, not every local address.
+        if host != own {
+            hosts.push(std::net::Ipv4Addr::from(host));
+        }
+        host += 1;
+    }
+    hosts
+}
+
+/// Candidate hosts to unicast-probe, deduped across interfaces and capped.
+#[cfg(not(target_os = "ios"))]
+fn sweep_candidates_v4(interface_subnets: &[(std::net::Ipv4Addr, std::net::Ipv4Addr)]) -> Vec<std::net::Ipv4Addr> {
+    let mut seen = std::collections::HashSet::new();
+    let mut candidates = Vec::new();
+    for &(ip, netmask) in interface_subnets {
+        for host in sweep_hosts_for_interface(ip, netmask) {
+            if candidates.len() >= SWEEP_CANDIDATE_CAP {
+                return candidates;
+            }
+            if seen.insert(host) {
+                candidates.push(host);
+            }
+        }
+    }
+    candidates
+}
+
+#[cfg(not(target_os = "ios"))]
+fn sweep_candidates_from_interfaces(interfaces: &[if_addrs::Interface]) -> Vec<std::net::Ipv4Addr> {
+    let subnets: Vec<(std::net::Ipv4Addr, std::net::Ipv4Addr)> = interfaces
+        .iter()
+        .filter_map(|interface| match &interface.addr {
+            if_addrs::IfAddr::V4(v4) => Some((v4.ip, v4.netmask)),
+            _ => None,
+        })
+        .collect();
+    sweep_candidates_v4(&subnets)
+}
+
+#[cfg(not(target_os = "ios"))]
+#[derive(Debug, Deserialize)]
+struct SweepInfoResponse {
+    v: u32,
+    #[serde(default)]
+    app: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[cfg(not(target_os = "ios"))]
+async fn probe_sweep_host(client: reqwest::Client, ip: std::net::Ipv4Addr, port: u16) -> Option<ResolvedEvent> {
+    let connect = tokio::time::timeout(SWEEP_CONNECT_TIMEOUT, tokio::net::TcpStream::connect((ip, port))).await;
+    if !matches!(connect, Ok(Ok(_))) {
+        return None;
+    }
+    let mut response = client
+        .get(format!("http://{ip}:{port}/info"))
+        .timeout(SWEEP_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .ok()?;
+    if response.content_length().is_some_and(|length| length > MAX_SWEEP_RESPONSE_BYTES as u64) {
+        return None;
+    }
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await.ok()? {
+            Some(chunk) => {
+                body.extend_from_slice(&chunk);
+                if body.len() > MAX_SWEEP_RESPONSE_BYTES {
+                    return None;
+                }
+            }
+            None => break,
+        }
+    }
+    let info: SweepInfoResponse = serde_json::from_slice(&body).ok()?;
+    if info.v != PROTOCOL_VERSION || info.app.as_deref() != Some("extreme-infinitv") {
+        return None;
+    }
+    Some(ResolvedEvent {
+        name: info.name.unwrap_or_default().chars().take(receiver_store::MAX_DEVICE_NAME_LEN).collect(),
+        port,
+        // Its own id merges this probe with the mDNS resolve; without one (older receivers) a
+        // synthetic per-ip id still keeps same-name receivers distinct.
+        id: info
+            .id
+            .filter(|id| !id.is_empty())
+            .or_else(|| Some(format!("sweep:{ip}"))),
+        addresses: vec![std::net::IpAddr::V4(ip)],
+    })
+}
+
+/// Probes every candidate for a bare /info, since multicast is blocked but unicast still reaches it.
+#[cfg(not(target_os = "ios"))]
+async fn sweep_subnets(interfaces: &[if_addrs::Interface]) -> Vec<DiscoveredReceiver> {
+    let candidates = sweep_candidates_from_interfaces(interfaces);
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    log::info!("[receiver] discover sweep probing {} hosts", candidates.len());
+
+    let client = reqwest::Client::new();
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(SWEEP_CONCURRENCY));
+    let mut join_set = tokio::task::JoinSet::new();
+    for ip in candidates {
+        let client = client.clone();
+        let semaphore = semaphore.clone();
+        join_set.spawn(async move {
+            let _permit = semaphore.acquire_owned().await.ok();
+            probe_sweep_host(client, ip, RECEIVER_PORT).await
+        });
+    }
+
+    let deadline = tokio::time::Instant::now() + SWEEP_BUDGET;
+    let mut events = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, join_set.join_next()).await {
+            Ok(Some(Ok(Some(event)))) => events.push(event),
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    join_set.abort_all();
+
+    let discovered = merge_resolved_events(events, interfaces);
+    for entry in &discovered {
+        log::info!("[receiver] discover sweep found {} at {}:{}", entry.name, entry.host, entry.port);
+    }
+    discovered
+}
+
+// ---------------------------------------------------------------------------
+// Known-host fast path (probes already-paired devices directly; a hit skips the sweep entirely)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_os = "ios"))]
+const KNOWN_HOST_PROBE_CAP: usize = 8;
+
+/// "host" or "host:port", defaulting to RECEIVER_PORT. Non-IPv4 / malformed entries are dropped.
+#[cfg(not(target_os = "ios"))]
+fn parse_known_host_entry(entry: &str) -> Option<(std::net::Ipv4Addr, u16)> {
+    let trimmed = entry.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(ip) = trimmed.parse::<std::net::Ipv4Addr>() {
+        return Some((ip, RECEIVER_PORT));
+    }
+    let (host_part, port_part) = trimmed.rsplit_once(':')?;
+    let ip = host_part.parse::<std::net::Ipv4Addr>().ok()?;
+    let port = port_part.parse::<u16>().ok()?;
+    Some((ip, port))
+}
+
+#[cfg(not(target_os = "ios"))]
+fn parse_known_hosts(entries: &[String]) -> Vec<(std::net::Ipv4Addr, u16)> {
+    entries.iter().filter_map(|entry| parse_known_host_entry(entry)).take(KNOWN_HOST_PROBE_CAP).collect()
+}
+
+/// Probes every known host concurrently via the same /info check the sweep uses.
+#[cfg(not(target_os = "ios"))]
+async fn probe_known_hosts(entries: Vec<(std::net::Ipv4Addr, u16)>) -> Vec<ResolvedEvent> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let client = reqwest::Client::new();
+    let mut join_set = tokio::task::JoinSet::new();
+    for (ip, port) in entries {
+        let client = client.clone();
+        join_set.spawn(async move { probe_sweep_host(client, ip, port).await });
+    }
+    let mut events = Vec::new();
+    while let Some(result) = join_set.join_next().await {
+        if let Ok(Some(event)) = result {
+            events.push(event);
+        }
+    }
+    events
+}
+
+// ---------------------------------------------------------------------------
+// Sweep rate limiting (a known-host miss still shouldn't sweep on every discover call)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_os = "ios"))]
+const SWEEP_MIN_INTERVAL: Duration = Duration::from_secs(60);
+
+#[cfg(not(target_os = "ios"))]
+static LAST_SWEEP_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Pure so the rate-limit decision is testable without sleeping.
+#[cfg(not(target_os = "ios"))]
+fn sweep_allowed(now: Instant, last_swept_at: Option<Instant>, force_sweep: bool) -> bool {
+    if force_sweep {
+        return true;
+    }
+    match last_swept_at {
+        None => true,
+        Some(last) => now.saturating_duration_since(last) >= SWEEP_MIN_INTERVAL,
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+async fn sweep_subnets_rate_limited(interfaces: &[if_addrs::Interface], force_sweep: bool) -> Vec<DiscoveredReceiver> {
+    let now = Instant::now();
+    let previous = {
+        let mut last_swept_at = LAST_SWEEP_AT.lock().unwrap_or_else(|poison| poison.into_inner());
+        let previous = *last_swept_at;
+        if sweep_allowed(now, previous, force_sweep) {
+            *last_swept_at = Some(now);
+        }
+        previous
+    };
+    if !sweep_allowed(now, previous, force_sweep) {
+        let elapsed_secs = previous.map(|instant| now.saturating_duration_since(instant).as_secs()).unwrap_or(0);
+        log::info!(
+            "[receiver] discover sweep skipped: last sweep was {elapsed_secs}s ago, minimum interval is {}s",
+            SWEEP_MIN_INTERVAL.as_secs()
+        );
+        return Vec::new();
+    }
+    sweep_subnets(interfaces).await
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[tauri::command]
+pub async fn receiver_discover(
+    timeout_ms: Option<u64>,
+    known_hosts: Option<Vec<String>>,
+    force_sweep: Option<bool>,
+) -> Result<Vec<DiscoveredReceiver>, String> {
+    let clamped_timeout = timeout_ms
+        .unwrap_or(DISCOVER_DEFAULT_TIMEOUT_MS)
+        .clamp(DISCOVER_MIN_TIMEOUT_MS, DISCOVER_MAX_TIMEOUT_MS);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(clamped_timeout);
+
+    log::info!("[receiver] discover browsing {MDNS_SERVICE_TYPE}, timeout={clamped_timeout}ms");
+
+    let known_host_entries = parse_known_hosts(&known_hosts.unwrap_or_default());
+    let known_host_probe = tauri::async_runtime::spawn(probe_known_hosts(known_host_entries));
+
+    let daemon = mdns_sd::ServiceDaemon::new().map_err(|error| format!("OTHER:mdns daemon start failed: {error}"))?;
+    let events = daemon
+        .browse(MDNS_SERVICE_TYPE)
+        .map_err(|error| format!("OTHER:mdns browse failed: {error}"))?;
+
+    let mut resolved_events = Vec::new();
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let Ok(Ok(event)) = tokio::time::timeout(remaining, events.recv_async()).await else {
+            break;
+        };
+        let mdns_sd::ServiceEvent::ServiceResolved(resolved) = event else {
+            continue;
+        };
+        let addresses: Vec<std::net::IpAddr> =
+            resolved.get_addresses().iter().map(mdns_sd::ScopedIp::to_ip_addr).collect();
+        let id = resolved.get_property_val_str("id").map(str::to_string).filter(|id| !id.is_empty());
+        let event = ResolvedEvent {
+            name: strip_mdns_service_suffix(resolved.get_fullname()),
+            port: resolved.get_port(),
+            id,
+            addresses,
+        };
+        // mdns_sd re-reports the same addresses as records arrive; unfiltered they crowd the log.
+        log::info!(
+            "[receiver] discover resolved {} port={} host={} addrs=[{}]",
+            event.name,
+            event.port,
+            resolved.get_hostname(),
+            join_ips(&dedupe_ips(&event.addresses))
+        );
+        resolved_events.push(event);
+    }
+
+    let _ = daemon.stop_browse(MDNS_SERVICE_TYPE);
+    let _ = daemon.shutdown();
+
+    let known_host_events = known_host_probe.await.unwrap_or_default();
+    for event in &known_host_events {
+        log::info!("[receiver] discover known-host hit {} at {}", event.name, join_ips(&event.addresses));
+    }
+    resolved_events.extend(known_host_events);
+
+    let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
+    let mut discovered = merge_resolved_events(resolved_events, &interfaces);
+    for entry in &discovered {
+        log::info!(
+            "[receiver] discover kept {} at {}:{} hosts=[{}]",
+            entry.name,
+            entry.host,
+            entry.port,
+            entry.hosts.join(", ")
+        );
+    }
+    if discovered.is_empty() {
+        discovered = sweep_subnets_rate_limited(&interfaces, force_sweep.unwrap_or(false)).await;
+    }
+    log::info!("[receiver] discover complete, found={}", discovered.len());
+    Ok(discovered)
+}
+
+// Android advertises/discovers via NsdManager, not Rust mDNS; the known-host probe and sweep are
+// its only fallback. timeout_ms is ignored here - the subnet sweep runs its own fixed budget.
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn receiver_discover(
+    _timeout_ms: Option<u64>,
+    known_hosts: Option<Vec<String>>,
+    force_sweep: Option<bool>,
+) -> Result<Vec<DiscoveredReceiver>, String> {
+    let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
+    let known_host_entries = parse_known_hosts(&known_hosts.unwrap_or_default());
+    let known_host_events = probe_known_hosts(known_host_entries).await;
+    let mut discovered = merge_resolved_events(known_host_events, &interfaces);
+    if discovered.is_empty() {
+        log::info!("[receiver] discover sweeping subnets (android)");
+        discovered = sweep_subnets_rate_limited(&interfaces, force_sweep.unwrap_or(false)).await;
+    }
+    log::info!("[receiver] discover complete, found={}", discovered.len());
+    Ok(discovered)
+}
+
+#[cfg(target_os = "ios")]
+#[tauri::command]
+pub async fn receiver_discover(
+    _timeout_ms: Option<u64>,
+    _known_hosts: Option<Vec<String>>,
+    _force_sweep: Option<bool>,
+) -> Result<Vec<DiscoveredReceiver>, String> {
+    Ok(Vec::new())
+}
+
+/// Best-effort teardown for app-exit paths; the async graceful-shutdown drives itself off the watch signal.
+pub fn shutdown(state: &ReceiverState) {
+    let handle = state
+        .server
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take();
+    if let Some(handle) = handle {
+        let _ = handle.shutdown.send(true);
+    }
+    unadvertise_mdns(state);
+}
+
+// ---------------------------------------------------------------------------
+// Server lifecycle
+// ---------------------------------------------------------------------------
+
+struct ServerCtx {
+    shared: Arc<ReceiverShared>,
+    events: Arc<dyn ReceiverEvents>,
+    port: u16,
+    config_dir: std::path::PathBuf,
+    log_dir: std::path::PathBuf,
+    shutdown_rx: watch::Receiver<bool>,
+}
+
+async fn ensure_server_started(
+    state: &ReceiverState,
+    events: Arc<dyn ReceiverEvents>,
+    config_dir: std::path::PathBuf,
+    log_dir: std::path::PathBuf,
+) -> Result<(), String> {
+    {
+        let guard = state.server.lock().unwrap_or_else(|poison| poison.into_inner());
+        if guard.is_some() {
+            return Ok(());
+        }
+    }
+
+    let (port, shutdown) = start_server(
+        "0.0.0.0",
+        RECEIVER_PORT,
+        PORT_ATTEMPTS,
+        state.shared.clone(),
+        events,
+        config_dir,
+        log_dir,
+    )
+    .await
+    .map_err(|error| format!("OTHER:failed to start receiver server: {error}"))?;
+
+    let mut guard = state.server.lock().unwrap_or_else(|poison| poison.into_inner());
+    if guard.is_some() {
+        // Lost a startup race against a concurrent receiver_start call; drop the spare listener.
+        let _ = shutdown.send(true);
+        return Ok(());
+    }
+    *guard = Some(ServerHandle { port, shutdown });
+    Ok(())
+}
+
+async fn start_server(
+    bind_addr: &str,
+    base_port: u16,
+    port_attempts: u16,
+    shared: Arc<ReceiverShared>,
+    events: Arc<dyn ReceiverEvents>,
+    config_dir: std::path::PathBuf,
+    log_dir: std::path::PathBuf,
+) -> std::io::Result<(u16, watch::Sender<bool>)> {
+    let mut last_error = None;
+    for offset in 0..port_attempts.max(1) {
+        match tokio::net::TcpListener::bind((bind_addr, base_port.wrapping_add(offset))).await {
+            Ok(listener) => return spawn_server(listener, shared, events, config_dir, log_dir).await,
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| std::io::Error::new(std::io::ErrorKind::AddrInUse, "unable to bind receiver server")))
+}
+
+async fn spawn_server(
+    listener: tokio::net::TcpListener,
+    shared: Arc<ReceiverShared>,
+    events: Arc<dyn ReceiverEvents>,
+    config_dir: std::path::PathBuf,
+    log_dir: std::path::PathBuf,
+) -> std::io::Result<(u16, watch::Sender<bool>)> {
+    let port = listener.local_addr()?.port();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let ctx = Arc::new(ServerCtx { shared, events, port, config_dir, log_dir, shutdown_rx: shutdown_rx.clone() });
+    let router = build_router(ctx);
+
+    let mut accept_shutdown_rx = shutdown_rx;
+    tauri::async_runtime::spawn(async move {
+        // A manual accept loop (rather than axum::serve) so every connection gets a header-read
+        // timeout: axum::serve never installs a hyper timer, so hyper's own defaults are inert.
+        let connection_limit = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let stream = match accepted {
+                        Ok((stream, _remote_addr)) => stream,
+                        Err(error) => {
+                            log::debug!("[receiver] accept failed: {error}");
+                            // Non-transient errors (fd exhaustion) would busy-spin without a backoff.
+                            if !matches!(
+                                error.kind(),
+                                std::io::ErrorKind::ConnectionRefused
+                                    | std::io::ErrorKind::ConnectionAborted
+                                    | std::io::ErrorKind::ConnectionReset
+                            ) {
+                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            }
+                            continue;
+                        }
+                    };
+                    let Ok(permit) = connection_limit.clone().try_acquire_owned() else {
+                        // At the connection cap: refuse rather than queue unboundedly.
+                        continue;
+                    };
+                    let tower_service = router.clone();
+                    tokio::task::spawn(async move {
+                        let _permit = permit;
+                        let io = hyper_util::rt::TokioIo::new(stream);
+                        let hyper_service = hyper_util::service::TowerToHyperService::new(tower_service);
+                        let connection = hyper::server::conn::http1::Builder::new()
+                            .timer(hyper_util::rt::TokioTimer::new())
+                            .header_read_timeout(CONNECTION_HEADER_READ_TIMEOUT)
+                            .serve_connection(io, hyper_service)
+                            .with_upgrades();
+                        if let Err(error) = connection.await {
+                            log::debug!("[receiver] connection closed: {error}");
+                        }
+                    });
+                }
+                changed = accept_shutdown_rx.changed() => {
+                    let _ = changed;
+                    break;
+                }
+            }
+        }
+    });
+
+    Ok((port, shutdown_tx))
+}
+
+fn build_router(ctx: Arc<ServerCtx>) -> axum::Router {
+    axum::Router::new()
+        .route("/info", get(handle_info))
+        .route("/pair", post(handle_pair))
+        .route("/play", post(handle_play))
+        .route("/ambient", post(handle_ambient))
+        .route("/pause", post(handle_pause))
+        .route("/resume", post(handle_resume))
+        .route("/stop", post(handle_stop))
+        .route("/seek", post(handle_seek))
+        .route("/volume", post(handle_volume))
+        .route("/state", get(handle_state))
+        .route("/logs", get(handle_logs))
+        .route("/events", get(handle_events))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .with_state(ctx)
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (byte_left, byte_right) in left.iter().zip(right.iter()) {
+        diff |= byte_left ^ byte_right;
+    }
+    diff == 0
+}
+
+fn find_device_by_key(ctx: &ServerCtx, key: &str) -> Option<String> {
+    let devices = ctx.shared.devices.lock().unwrap_or_else(|poison| poison.into_inner());
+    devices
+        .iter()
+        .find(|device| constant_time_eq(device.key.as_bytes(), key.as_bytes()))
+        .map(|device| device.device_name.clone())
+}
+
+fn authenticate(ctx: &ServerCtx, headers: &HeaderMap) -> Option<String> {
+    let key = headers.get(AUTH_HEADER)?.to_str().ok()?;
+    find_device_by_key(ctx, key)
+}
+
+fn unauthorized_response() -> Response {
+    (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response()
+}
+
+fn bad_request_response(reason: &str) -> Response {
+    (StatusCode::BAD_REQUEST, Json(json!({"error": reason}))).into_response()
+}
+
+fn is_http_url(value: &str) -> bool {
+    tauri::Url::parse(value).is_ok_and(|url| url.scheme() == "http" || url.scheme() == "https")
+}
+
+fn broadcast_playback(ctx: &ServerCtx) {
+    let playback = ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    if let Ok(serialized) = serde_json::to_string(&playback) {
+        let _ = ctx.shared.broadcast.send(serialized);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Route handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_info(State(ctx): State<Arc<ServerCtx>>) -> Response {
+    let name = ctx.shared.name.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    // The id mirrors the mDNS TXT record so a probe and a browse resolve to one identity.
+    let id = ctx.shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    Json(json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": name, "id": id})).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PairRequest {
+    v: u32,
+    code: String,
+    #[serde(default)]
+    device_name: Option<String>,
+}
+
+async fn handle_pair(State(ctx): State<Arc<ServerCtx>>, Json(body): Json<PairRequest>) -> Response {
+    if body.v != PROTOCOL_VERSION {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "unsupportedVersion", "supported": PROTOCOL_VERSION})),
+        )
+            .into_response();
+    }
+
+    let bounded_name = resolve_device_name(&body.device_name.unwrap_or_default(), "Unknown device");
+
+    let now = Instant::now();
+    let (outcome, code_regenerated) = {
+        let mut pairing_guard = ctx.shared.pairing.lock().unwrap_or_else(|poison| poison.into_inner());
+        let pairing = pairing_guard.get_or_insert_with(PairingState::new);
+        let code_before = pairing.code.clone();
+        let outcome = evaluate_pair_attempt(pairing, body.code.trim(), now);
+        (outcome, pairing.code != code_before)
+    };
+
+    match outcome {
+        PairOutcome::Paired => {
+            let key = generate_device_key();
+            let device = PairedDevice {
+                key: key.clone(),
+                device_name: bounded_name.clone(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            let receiver_id = ctx.shared.receiver_id.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+            let devices_snapshot = {
+                let mut devices = ctx.shared.devices.lock().unwrap_or_else(|poison| poison.into_inner());
+                devices.push(device);
+                evict_oldest_if_over_capacity(&mut devices);
+                devices.clone()
+            };
+            if let Err(error) =
+                persist_devices(ctx.config_dir.clone(), receiver_id.clone(), devices_snapshot).await
+            {
+                log::warn!("[receiver] failed to persist paired device: {error}");
+            }
+            ctx.events.paired(json!({"deviceName": bounded_name}));
+            ctx.events.status(build_status_json(&ctx.shared, Some(ctx.port)));
+            let receiver_name = ctx.shared.name.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+            (StatusCode::OK, Json(json!({"key": key, "name": receiver_name, "id": receiver_id}))).into_response()
+        }
+        PairOutcome::BadCode => {
+            if code_regenerated {
+                ctx.events.status(build_status_json(&ctx.shared, Some(ctx.port)));
+            }
+            (StatusCode::FORBIDDEN, Json(json!({"error": "badCode"}))).into_response()
+        }
+        PairOutcome::RateLimited { retry_after_secs } => {
+            if code_regenerated {
+                ctx.events.status(build_status_json(&ctx.shared, Some(ctx.port)));
+            }
+            let mut response =
+                (StatusCode::TOO_MANY_REQUESTS, Json(json!({"error": "rateLimited"}))).into_response();
+            if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+                response.headers_mut().insert(axum::http::header::RETRY_AFTER, value);
+            }
+            response
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct PlayHeaders {
+    #[serde(default)]
+    user_agent: Option<String>,
+    #[serde(default)]
+    referer: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlayRequest {
+    v: u32,
+    src: String,
+    #[serde(default)]
+    mime: Option<String>,
+    is_live: bool,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    logo: Option<String>,
+    #[serde(default)]
+    drm: Option<Value>,
+    #[serde(default)]
+    headers: Option<PlayHeaders>,
+    #[serde(default)]
+    resume_seconds: Option<f64>,
+    #[serde(default)]
+    duration_seconds: Option<f64>,
+    #[serde(default)]
+    timeline_offset_seconds: Option<f64>,
+    #[serde(default)]
+    prefer_native_hls: Option<bool>,
+}
+
+async fn handle_play(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_body: Bytes) -> Response {
+    let Some(device_name) = authenticate(&ctx, &headers) else {
+        return unauthorized_response();
+    };
+    let Ok(mut body) = serde_json::from_slice::<PlayRequest>(&raw_body) else {
+        return bad_request_response("badRequest");
+    };
+    if body.v != PROTOCOL_VERSION {
+        return bad_request_response("unsupportedVersion");
+    }
+    if body.src.len() > MAX_URL_LEN {
+        return bad_request_response("srcTooLong");
+    }
+    let Ok(parsed_src) = tauri::Url::parse(&body.src) else {
+        return bad_request_response("invalidSrc");
+    };
+    let scheme = parsed_src.scheme();
+    let scheme_ok = scheme == "http" || scheme == "https" || (body.is_live && scheme == "rtsp");
+    if !scheme_ok {
+        return bad_request_response("invalidSrc");
+    }
+    if body.mime.as_deref().unwrap_or("").is_empty() {
+        return bad_request_response("missingMime");
+    }
+    if body.mime.as_deref().is_some_and(|mime| mime.len() > MAX_MIME_LEN) {
+        return bad_request_response("mimeTooLong");
+    }
+    if body.title.as_deref().is_some_and(|title| title.len() > MAX_TITLE_LEN) {
+        return bad_request_response("titleTooLong");
+    }
+    if body.logo.as_deref().is_some_and(|logo| logo.len() > MAX_URL_LEN) {
+        return bad_request_response("logoTooLong");
+    }
+    if let Some(play_headers) = &body.headers {
+        if play_headers.user_agent.as_deref().is_some_and(|value| value.len() > MAX_TITLE_LEN)
+            || play_headers.referer.as_deref().is_some_and(|value| value.len() > MAX_URL_LEN)
+        {
+            return bad_request_response("headerTooLong");
+        }
+    }
+    if let Some(drm) = &body.drm {
+        let serialized_len = serde_json::to_string(drm).map(|value| value.len()).unwrap_or(0);
+        if serialized_len > MAX_DRM_JSON_BYTES {
+            return bad_request_response("drmTooLarge");
+        }
+    }
+
+    // Advisory fields: drop rather than reject on bad values.
+    if body.resume_seconds.is_some_and(|value| !value.is_finite() || value < 0.0) {
+        body.resume_seconds = None;
+    }
+    if body.duration_seconds.is_some_and(|value| !value.is_finite() || value < 0.0) {
+        body.duration_seconds = None;
+    }
+    if body.timeline_offset_seconds.is_some_and(|value| !value.is_finite() || value < 0.0) {
+        body.timeline_offset_seconds = None;
+    }
+    if let Some(logo) = body.logo.as_deref() {
+        if !is_http_url(logo) {
+            body.logo = None;
+        }
+    }
+
+    {
+        let mut playback = ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner());
+        let previous_volume = playback.volume;
+        let previous_muted = playback.muted;
+        *playback = PlaybackReport {
+            state: "loading".to_string(),
+            position_seconds: 0.0,
+            duration_seconds: body.duration_seconds,
+            title: body.title.clone(),
+            error: None,
+            volume: previous_volume,
+            muted: previous_muted,
+        };
+    }
+    broadcast_playback(&ctx);
+
+    let descriptor = serde_json::to_value(&body).unwrap_or_else(|_| json!({}));
+    ctx.events.play(json!({"descriptor": descriptor, "deviceName": device_name}));
+
+    (StatusCode::OK, Json(json!({"ok": true}))).into_response()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AmbientPushEntry {
+    kind: String,
+    id: String,
+    title: String,
+    #[serde(default)]
+    poster_url: Option<String>,
+    #[serde(default)]
+    backdrop_url: Option<String>,
+    #[serde(default)]
+    logo_url: Option<String>,
+    tier: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AmbientPushRequest {
+    v: u32,
+    entries: Vec<AmbientPushEntry>,
+}
+
+fn sanitize_ambient_url(value: Option<String>) -> Option<String> {
+    let value = value?;
+    if value.len() > MAX_URL_LEN || !is_http_url(&value) {
+        return None;
+    }
+    Some(value)
+}
+
+/// Drops an entry outright on a bad kind/title/id or when no artwork url survives sanitization;
+/// an unknown tier falls back to "catalog" rather than dropping the entry.
+fn sanitize_ambient_entry(entry: AmbientPushEntry) -> Option<AmbientPushEntry> {
+    if !ALLOWED_AMBIENT_KINDS.contains(&entry.kind.as_str()) {
+        return None;
+    }
+    let id = entry.id.trim();
+    if id.is_empty() || id.chars().count() > MAX_AMBIENT_ID_LEN {
+        return None;
+    }
+    let title = entry.title.trim();
+    if title.is_empty() || title.chars().count() > MAX_TITLE_LEN {
+        return None;
+    }
+    let poster_url = sanitize_ambient_url(entry.poster_url);
+    let backdrop_url = sanitize_ambient_url(entry.backdrop_url);
+    let logo_url = sanitize_ambient_url(entry.logo_url);
+    if poster_url.is_none() && backdrop_url.is_none() && logo_url.is_none() {
+        return None;
+    }
+    let tier = if ALLOWED_AMBIENT_TIERS.contains(&entry.tier.as_str()) {
+        entry.tier
+    } else {
+        "catalog".to_string()
+    };
+    Some(AmbientPushEntry { kind: entry.kind, id: id.to_string(), title: title.to_string(), poster_url, backdrop_url, logo_url, tier })
+}
+
+async fn handle_ambient(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_body: Bytes) -> Response {
+    let Some(device_name) = authenticate(&ctx, &headers) else {
+        return unauthorized_response();
+    };
+    let Ok(mut body) = serde_json::from_slice::<AmbientPushRequest>(&raw_body) else {
+        return bad_request_response("badRequest");
+    };
+    if body.v != PROTOCOL_VERSION {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "unsupportedVersion", "supported": PROTOCOL_VERSION})),
+        )
+            .into_response();
+    }
+    body.entries.truncate(MAX_AMBIENT_ENTRIES);
+    let sanitized: Vec<AmbientPushEntry> = body.entries.into_iter().filter_map(sanitize_ambient_entry).collect();
+
+    let entries = serde_json::to_value(&sanitized).unwrap_or_else(|_| json!([]));
+    ctx.events.ambient(json!({"entries": entries, "deviceName": device_name}));
+
+    (StatusCode::OK, Json(json!({"ok": true, "accepted": sanitized.len()}))).into_response()
+}
+
+async fn handle_transport(ctx: Arc<ServerCtx>, headers: HeaderMap, action: &'static str) -> Response {
+    let Some(device_name) = authenticate(&ctx, &headers) else {
+        return unauthorized_response();
+    };
+    ctx.events.control(json!({"action": action, "deviceName": device_name}));
+    if action == "stop" {
+        *ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner()) = PlaybackReport::default();
+        broadcast_playback(&ctx);
+    }
+    (StatusCode::OK, Json(json!({"ok": true}))).into_response()
+}
+
+async fn handle_pause(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap) -> Response {
+    handle_transport(ctx, headers, "pause").await
+}
+
+async fn handle_resume(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap) -> Response {
+    handle_transport(ctx, headers, "resume").await
+}
+
+async fn handle_stop(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap) -> Response {
+    handle_transport(ctx, headers, "stop").await
+}
+
+#[derive(Debug, Deserialize)]
+struct SeekRequest {
+    // Option, not f64: NaN/Infinity round-trip through JSON as `null`, which must still be rejected.
+    seconds: Option<f64>,
+}
+
+async fn handle_seek(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_body: Bytes) -> Response {
+    let Some(device_name) = authenticate(&ctx, &headers) else {
+        return unauthorized_response();
+    };
+    let Ok(body) = serde_json::from_slice::<SeekRequest>(&raw_body) else {
+        return bad_request_response("badRequest");
+    };
+    let Some(seconds) = body.seconds else {
+        return bad_request_response("invalidSeconds");
+    };
+    if !seconds.is_finite() || seconds < 0.0 {
+        return bad_request_response("invalidSeconds");
+    }
+    ctx.events.control(json!({"action": "seek", "seconds": seconds, "deviceName": device_name}));
+    (StatusCode::OK, Json(json!({"ok": true}))).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct VolumeRequest {
+    // Option, not f64: NaN/Infinity round-trip through JSON as `null`, which must still be rejected.
+    level: Option<f64>,
+    muted: bool,
+}
+
+async fn handle_volume(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap, raw_body: Bytes) -> Response {
+    let Some(device_name) = authenticate(&ctx, &headers) else {
+        return unauthorized_response();
+    };
+    let Ok(body) = serde_json::from_slice::<VolumeRequest>(&raw_body) else {
+        return bad_request_response("badRequest");
+    };
+    let Some(level) = body.level else {
+        return bad_request_response("invalidLevel");
+    };
+    if !level.is_finite() || !(0.0..=1.0).contains(&level) {
+        return bad_request_response("invalidLevel");
+    }
+    ctx.events.control(json!({"action": "volume", "level": level, "muted": body.muted, "deviceName": device_name}));
+    {
+        let mut playback = ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner());
+        playback.volume = Some(level);
+        playback.muted = Some(body.muted);
+    }
+    broadcast_playback(&ctx);
+    (StatusCode::OK, Json(json!({"ok": true}))).into_response()
+}
+
+async fn handle_state(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap) -> Response {
+    if authenticate(&ctx, &headers).is_none() {
+        return unauthorized_response();
+    }
+    let playback = ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+    Json(playback).into_response()
+}
+
+async fn handle_logs(State(ctx): State<Arc<ServerCtx>>, headers: HeaderMap) -> Response {
+    if authenticate(&ctx, &headers).is_none() {
+        return unauthorized_response();
+    }
+    let log_dir = ctx.log_dir.clone();
+    let text = tauri::async_runtime::spawn_blocking(move || newest_log_tail(&log_dir)).await.unwrap_or_default();
+    (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], text).into_response()
+}
+
+fn newest_log_tail(log_dir: &std::path::Path) -> String {
+    let Ok(entries) = std::fs::read_dir(log_dir) else {
+        return String::new();
+    };
+    let logs: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("log"))
+        .filter_map(|entry| entry.metadata().and_then(|metadata| metadata.modified()).ok().map(|modified| (modified, entry.path())))
+        .collect();
+    // Newest of *our* day-stamped files first: the newest .log outright can be a foreign log.
+    let newest_log = newest_by_modified(&logs, true).or_else(|| newest_by_modified(&logs, false));
+    let Some(newest_log) = newest_log else {
+        return String::new();
+    };
+    read_tail_bytes(&newest_log, MAX_LOG_TAIL_BYTES)
+        .map(|bytes| tail_as_utf8(&bytes, MAX_LOG_TAIL_BYTES))
+        .unwrap_or_default()
+}
+
+/// Newest path by mtime, optionally restricted to the `app-*.log` files our log plugin writes.
+fn newest_by_modified(
+    logs: &[(std::time::SystemTime, std::path::PathBuf)],
+    ours_only: bool,
+) -> Option<std::path::PathBuf> {
+    logs.iter()
+        .filter(|(_, path)| !ours_only || is_app_log_name(path))
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path.clone())
+}
+
+fn is_app_log_name(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("app-"))
+}
+
+/// Reads at most the last `max_bytes`; with KeepAll rotation the file can dwarf the tail.
+fn read_tail_bytes(path: &std::path::Path, max_bytes: usize) -> std::io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let start = len.saturating_sub(max_bytes as u64);
+    if start > 0 {
+        file.seek(SeekFrom::Start(start))?;
+    }
+    let mut bytes = Vec::with_capacity(max_bytes.min(len as usize));
+    file.take(max_bytes as u64).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn tail_as_utf8(bytes: &[u8], max_bytes: usize) -> String {
+    let tail_start = bytes.len().saturating_sub(max_bytes);
+    let tail = String::from_utf8_lossy(&bytes[tail_start..]);
+    if tail_start == 0 {
+        return tail.into_owned();
+    }
+    match tail.find('\n') {
+        Some(index) => tail[index + 1..].to_string(),
+        None => String::new(),
+    }
+}
+
+async fn handle_events(
+    State(ctx): State<Arc<ServerCtx>>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let key = query.get("key").map(String::as_str).unwrap_or_default();
+    if find_device_by_key(&ctx, key).is_none() {
+        return unauthorized_response();
+    }
+    let key = key.to_string();
+    ws.on_upgrade(move |socket| handle_socket(socket, ctx, key))
+}
+
+async fn handle_socket(mut socket: WebSocket, ctx: Arc<ServerCtx>, key: String) {
+    let mut broadcast_rx = ctx.shared.broadcast.subscribe();
+    let mut shutdown_rx = ctx.shutdown_rx.clone();
+
+    let initial_state = {
+        let playback = ctx.shared.playback.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+        serde_json::to_string(&playback).unwrap_or_default()
+    };
+    if socket.send(Message::Text(initial_state.into())).await.is_err() {
+        return;
+    }
+
+    // Backlog first: the interesting part is usually logged before the sender connects.
+    let backlog: Vec<String> = {
+        let ring = ctx.shared.log_ring.lock().unwrap_or_else(|poison| poison.into_inner());
+        ring.iter().cloned().collect()
+    };
+    if let Some(frame) = log_frame(&backlog) {
+        if socket.send(Message::Text(frame.into())).await.is_err() {
+            return;
+        }
+    }
+
+    loop {
+        tokio::select! {
+            received = broadcast_rx.recv() => {
+                if find_device_by_key(&ctx, &key).is_none() {
+                    let _ = socket.send(Message::Close(None)).await;
+                    break;
+                }
+                match received {
+                    Ok(state_json) => {
+                        if socket.send(Message::Text(state_json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            changed = shutdown_rx.changed() => {
+                if changed.is_ok() {
+                    let _ = socket.send(Message::Close(None)).await;
+                }
+                break;
+            }
+            incoming = socket.recv() => {
+                match incoming {
+                    Some(Ok(_)) => continue,
+                    _ => break,
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    // ---------------------------------------------------------------------
+    // Pairing state machine
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn evaluate_pair_attempt_pairs_on_the_correct_code() {
+        let mut pairing = PairingState::new();
+        let code = pairing.code.clone();
+        let outcome = evaluate_pair_attempt(&mut pairing, &code, Instant::now());
+        assert_eq!(outcome, PairOutcome::Paired);
+    }
+
+    #[test]
+    fn evaluate_pair_attempt_codes_are_single_use() {
+        let mut pairing = PairingState::new();
+        let code = pairing.code.clone();
+        let now = Instant::now();
+        assert_eq!(evaluate_pair_attempt(&mut pairing, &code, now), PairOutcome::Paired);
+        let later = now + PAIR_MIN_INTERVAL + Duration::from_millis(1);
+        assert_eq!(evaluate_pair_attempt(&mut pairing, &code, later), PairOutcome::BadCode);
+    }
+
+    #[test]
+    fn evaluate_pair_attempt_wrong_code_increments_failures() {
+        let mut pairing = PairingState::new();
+        let now = Instant::now();
+        assert_eq!(evaluate_pair_attempt(&mut pairing, "000000", now), PairOutcome::BadCode);
+        assert_eq!(pairing.failed_attempts, 1);
+    }
+
+    #[test]
+    fn evaluate_pair_attempt_locks_out_after_max_failures() {
+        let mut pairing = PairingState::new();
+        let mut now = Instant::now();
+        for _ in 0..PAIR_MAX_FAILURES {
+            evaluate_pair_attempt(&mut pairing, "wrong-code", now);
+            now += PAIR_MIN_INTERVAL + Duration::from_millis(1);
+        }
+        assert!(pairing.locked_until.is_some());
+        match evaluate_pair_attempt(&mut pairing, "wrong-code", now) {
+            PairOutcome::RateLimited { retry_after_secs } => assert!(retry_after_secs > 0),
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn evaluate_pair_attempt_lockout_expiry_allows_another_attempt() {
+        let mut pairing = PairingState::new();
+        let mut now = Instant::now();
+        for _ in 0..PAIR_MAX_FAILURES {
+            evaluate_pair_attempt(&mut pairing, "wrong-code", now);
+            now += PAIR_MIN_INTERVAL + Duration::from_millis(1);
+        }
+        assert!(pairing.locked_until.is_some());
+        let after_lockout = now + PAIR_LOCKOUT + Duration::from_millis(1);
+        let code = pairing.code.clone();
+        assert_eq!(evaluate_pair_attempt(&mut pairing, &code, after_lockout), PairOutcome::Paired);
+    }
+
+    #[test]
+    fn evaluate_pair_attempt_ttl_expiry_regenerates_the_code() {
+        let mut pairing = PairingState::new();
+        let stale_code = pairing.code.clone();
+        let after_ttl = Instant::now() + PAIR_CODE_TTL + Duration::from_millis(1);
+        let outcome = evaluate_pair_attempt(&mut pairing, &stale_code, after_ttl);
+        assert_eq!(outcome, PairOutcome::BadCode);
+        assert_ne!(pairing.code, stale_code);
+    }
+
+    #[test]
+    fn evaluate_pair_attempt_min_interval_floor_rate_limits_rapid_attempts() {
+        let mut pairing = PairingState::new();
+        let now = Instant::now();
+        evaluate_pair_attempt(&mut pairing, "wrong-code", now);
+        let last_attempt_at_before = pairing.last_attempt_at;
+        let outcome = evaluate_pair_attempt(&mut pairing, "wrong-code", now + Duration::from_millis(1));
+        match outcome {
+            PairOutcome::RateLimited { retry_after_secs } => assert!(retry_after_secs >= 1),
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+        // A rejected attempt must not refresh the timestamp, or a noisy client starves everyone.
+        assert_eq!(pairing.last_attempt_at, last_attempt_at_before);
+    }
+
+    #[test]
+    fn resolve_device_name_falls_back_when_blank() {
+        assert_eq!(resolve_device_name("   ", "Extreme InfiniTV"), "Extreme InfiniTV");
+        assert_eq!(resolve_device_name("", "Extreme InfiniTV"), "Extreme InfiniTV");
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn default_receiver_name_is_never_blank() {
+        let name = default_receiver_name();
+        assert!(!name.is_empty());
+        assert!(!name.to_ascii_lowercase().ends_with(".local"), "unexpected mDNS suffix in {name}");
+    }
+
+    #[test]
+    fn usable_mdns_addr_rejects_link_local_v6() {
+        let link_local: std::net::IpAddr = "fe80::75b5:1a9f:336:d8b5".parse().unwrap();
+        let global_v6: std::net::IpAddr = "2001:db8::1".parse().unwrap();
+        let private_v4: std::net::IpAddr = "192.168.178.27".parse().unwrap();
+        assert!(!is_usable_mdns_addr(&link_local));
+        assert!(is_usable_mdns_addr(&global_v6));
+        assert!(is_usable_mdns_addr(&private_v4));
+    }
+
+    #[test]
+    fn usable_hostname_rejects_blank_and_localhost() {
+        assert_eq!(usable_hostname(""), None);
+        assert_eq!(usable_hostname("   "), None);
+        assert_eq!(usable_hostname("localhost"), None);
+        assert_eq!(usable_hostname("LOCALHOST"), None);
+    }
+
+    #[test]
+    fn usable_hostname_trims_and_keeps_a_real_name() {
+        assert_eq!(usable_hostname("  living-room-pc  "), Some("living-room-pc".to_string()));
+    }
+
+    #[test]
+    fn usable_hostname_strips_the_macos_mdns_suffix() {
+        assert_eq!(usable_hostname("MacBook-Pro-von-Ludo.local"), Some("MacBook-Pro-von-Ludo".to_string()));
+        assert_eq!(usable_hostname("MacBook-Pro-von-Ludo.local."), Some("MacBook-Pro-von-Ludo".to_string()));
+        assert_eq!(usable_hostname("Mac.LOCAL"), Some("Mac".to_string()));
+        assert_eq!(usable_hostname("localhost.local"), None);
+        assert_eq!(usable_hostname(".local"), None);
+    }
+
+    #[test]
+    fn usable_hostname_keeps_names_that_merely_contain_local() {
+        assert_eq!(usable_hostname("local-tv"), Some("local-tv".to_string()));
+        assert_eq!(usable_hostname("DESKTOP-ANRA73S"), Some("DESKTOP-ANRA73S".to_string()));
+        assert_eq!(usable_hostname("wohnzimmer-übertragung"), Some("wohnzimmer-übertragung".to_string()));
+    }
+
+    #[test]
+    fn resolve_device_name_trims_and_bounds_to_char_count() {
+        assert_eq!(resolve_device_name("  Living Room TV  ", "Extreme InfiniTV"), "Living Room TV");
+        let oversized = "\u{00fc}".repeat(receiver_store::MAX_DEVICE_NAME_LEN + 10);
+        let resolved = resolve_device_name(&oversized, "Extreme InfiniTV");
+        assert_eq!(resolved.chars().count(), receiver_store::MAX_DEVICE_NAME_LEN);
+    }
+
+    // ---------------------------------------------------------------------
+    // mDNS advertising (desktop only)
+    // ---------------------------------------------------------------------
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_instance_name_strips_dots_and_control_chars() {
+        assert_eq!(mdns_instance_name("  Living Room TV  "), "Living Room TV");
+        assert_eq!(mdns_instance_name("a.b.c"), "abc");
+        assert_eq!(mdns_instance_name("bad\u{0007}name"), "badname");
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_instance_name_falls_back_when_blank() {
+        assert_eq!(mdns_instance_name(""), "Extreme InfiniTV");
+        assert_eq!(mdns_instance_name("   "), "Extreme InfiniTV");
+        assert_eq!(mdns_instance_name("..."), "Extreme InfiniTV");
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_instance_name_bounds_to_max_label_length() {
+        let oversized = "a".repeat(MDNS_LABEL_MAX_LEN + 20);
+        assert_eq!(mdns_instance_name(&oversized).chars().count(), MDNS_LABEL_MAX_LEN);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_host_label_falls_back_when_no_alphanumeric_chars() {
+        assert_eq!(mdns_host_label("!!!"), "xtream-receiver");
+        assert_eq!(mdns_host_label("Living Room TV"), "Living-Room-TV");
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn best_mdns_addr_prefers_private_ipv4_over_public_ipv4_and_ipv6() {
+        let candidates: Vec<std::net::IpAddr> = vec![
+            "203.0.113.5".parse().unwrap(),
+            "192.168.1.20".parse().unwrap(),
+            "2001:db8::1".parse().unwrap(),
+        ];
+        assert_eq!(best_mdns_addr(&candidates), Some("192.168.1.20".parse().unwrap()));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn best_mdns_addr_falls_back_to_public_ipv4_then_ipv6() {
+        let public_ipv4: Vec<std::net::IpAddr> =
+            vec!["203.0.113.5".parse().unwrap(), "2001:db8::1".parse().unwrap()];
+        assert_eq!(best_mdns_addr(&public_ipv4), Some("203.0.113.5".parse().unwrap()));
+
+        let ipv6_only: Vec<std::net::IpAddr> = vec!["2001:db8::1".parse().unwrap()];
+        assert_eq!(best_mdns_addr(&ipv6_only), Some("2001:db8::1".parse().unwrap()));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn best_mdns_addr_filters_loopback_unspecified_and_link_local() {
+        let candidates: Vec<std::net::IpAddr> = vec![
+            "127.0.0.1".parse().unwrap(),
+            "0.0.0.0".parse().unwrap(),
+            "169.254.1.5".parse().unwrap(),
+            "::1".parse().unwrap(),
+        ];
+        assert_eq!(best_mdns_addr(&candidates), None);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn test_interface_v4(ip: &str, prefixlen: u8) -> if_addrs::Interface {
+        test_interface_v4_named("test0", ip, prefixlen)
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn test_interface_v4_named(name: &str, ip: &str, prefixlen: u8) -> if_addrs::Interface {
+        if_addrs::Interface {
+            name: name.to_string(),
+            addr: if_addrs::IfAddr::V4(if_addrs::Ifv4Addr {
+                ip: ip.parse().unwrap(),
+                netmask: std::net::Ipv4Addr::new(255, 255, 255, 0),
+                prefixlen,
+                broadcast: None,
+            }),
+            index: None,
+            oper_status: if_addrs::IfOperStatus::Up,
+            is_p2p: false,
+            #[cfg(windows)]
+            adapter_name: String::new(),
+        }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_addr_rank_demotes_a_slash_32_tunnel_interface() {
+        let lan = test_interface_v4("192.168.1.20", 24);
+        let tunnel = test_interface_v4("10.8.0.5", 32);
+        assert!(mdns_addr_rank(&lan.ip(), Some(&lan)) > mdns_addr_rank(&tunnel.ip(), Some(&tunnel)));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_addr_rank_demotes_named_virtual_adapters() {
+        let lan = test_interface_v4("192.168.1.20", 24);
+        let hyperv = test_interface_v4_named("vEthernet (WSL)", "172.28.16.1", 20);
+        assert!(mdns_addr_rank(&lan.ip(), Some(&lan)) > mdns_addr_rank(&hyperv.ip(), Some(&hyperv)));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_addr_rank_demotes_docker_and_virtualbox_default_subnets() {
+        let lan = test_interface_v4("192.168.1.20", 24);
+        let docker = test_interface_v4("172.20.0.5", 16);
+        let virtualbox = test_interface_v4("192.168.56.10", 24);
+        assert!(mdns_addr_rank(&lan.ip(), Some(&lan)) > mdns_addr_rank(&docker.ip(), Some(&docker)));
+        assert!(mdns_addr_rank(&lan.ip(), Some(&lan)) > mdns_addr_rank(&virtualbox.ip(), Some(&virtualbox)));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn mdns_addr_rank_does_not_demote_without_an_owning_interface() {
+        let tunnel_like: std::net::IpAddr = "10.8.0.5".parse().unwrap();
+        assert_eq!(mdns_addr_rank(&tunnel_like, None), 2);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn test_interface_v6(ip: &str, prefixlen: u8) -> if_addrs::Interface {
+        if_addrs::Interface {
+            name: "test0".to_string(),
+            addr: if_addrs::IfAddr::V6(if_addrs::Ifv6Addr {
+                ip: ip.parse().unwrap(),
+                netmask: std::net::Ipv6Addr::UNSPECIFIED,
+                prefixlen,
+                broadcast: None,
+            }),
+            index: None,
+            oper_status: if_addrs::IfOperStatus::Up,
+            is_p2p: false,
+            #[cfg(windows)]
+            adapter_name: String::new(),
+        }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn strip_mdns_service_suffix_bounds_an_oversized_name() {
+        let oversized = "a".repeat(receiver_store::MAX_DEVICE_NAME_LEN + 10);
+        let fullname = format!("{oversized}.{MDNS_SERVICE_TYPE}");
+        let stripped = strip_mdns_service_suffix(&fullname);
+        assert_eq!(stripped.chars().count(), receiver_store::MAX_DEVICE_NAME_LEN);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn same_subnet_v4_matches_within_the_masked_prefix() {
+        let local: std::net::Ipv4Addr = "192.168.1.5".parse().unwrap();
+        assert!(same_subnet_v4(local, "192.168.1.20".parse().unwrap(), 24));
+        assert!(!same_subnet_v4(local, "192.168.2.20".parse().unwrap(), 24));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn same_subnet_v4_rejects_zero_and_oversized_prefixlen() {
+        let local: std::net::Ipv4Addr = "192.168.1.5".parse().unwrap();
+        let candidate: std::net::Ipv4Addr = "192.168.1.20".parse().unwrap();
+        assert!(!same_subnet_v4(local, candidate, 0));
+        assert!(!same_subnet_v4(local, candidate, 33));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn same_subnet_v6_compares_the_top_64_bits_only() {
+        let local: std::net::Ipv6Addr = "2001:db8:1::1".parse().unwrap();
+        assert!(same_subnet_v6(local, "2001:db8:1::9999".parse().unwrap()));
+        assert!(!same_subnet_v6(local, "2001:db8:2::1".parse().unwrap()));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn rank_discovered_hosts_prefers_a_same_subnet_address_over_any_other() {
+        let interfaces = vec![test_interface_v4("192.168.1.5", 24)];
+        let addresses: Vec<std::net::IpAddr> = vec![
+            "203.0.113.5".parse().unwrap(),
+            "192.168.1.20".parse().unwrap(),
+            "10.0.0.5".parse().unwrap(),
+        ];
+        let ranked = rank_discovered_hosts(addresses, &interfaces);
+        assert_eq!(ranked[0], "192.168.1.20".parse::<std::net::IpAddr>().unwrap());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn rank_discovered_hosts_falls_back_to_private_then_public_without_a_subnet_match() {
+        let interfaces = vec![test_interface_v4("192.168.1.5", 24)];
+        let addresses: Vec<std::net::IpAddr> = vec![
+            "2001:db8::1".parse().unwrap(),
+            "203.0.113.5".parse().unwrap(),
+            "10.0.0.5".parse().unwrap(),
+        ];
+        let ranked = rank_discovered_hosts(addresses, &interfaces);
+        assert_eq!(
+            ranked,
+            vec!["10.0.0.5".parse::<std::net::IpAddr>().unwrap(), "203.0.113.5".parse().unwrap()]
+        );
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn rank_discovered_hosts_excludes_ipv6_even_with_a_subnet_match() {
+        let interfaces = vec![test_interface_v6("2001:db8:1::5", 64)];
+        let addresses: Vec<std::net::IpAddr> =
+            vec!["192.168.1.20".parse().unwrap(), "2001:db8:1::9999".parse().unwrap()];
+        let ranked = rank_discovered_hosts(addresses, &interfaces);
+        assert_eq!(ranked, vec!["192.168.1.20".parse::<std::net::IpAddr>().unwrap()]);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn discovery_identity_key_prefers_id_over_name_and_port() {
+        assert_eq!(discovery_identity_key("Living Room", 47815, Some("abc123")), "id:abc123");
+        assert_eq!(discovery_identity_key("Living Room", 47815, None), "np:Living Room:47815");
+        assert_eq!(discovery_identity_key("Living Room", 47815, Some("")), "np:Living Room:47815");
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_dedupes_by_id_and_unions_addresses_across_events() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["10.0.0.20".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].id.as_deref(), Some("abc123"));
+        assert_eq!(discovered[0].hosts.len(), 2);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_dedupes_by_name_and_port_when_id_is_missing() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Old Firmware TV".to_string(),
+                port: 47815,
+                id: None,
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Old Firmware TV".to_string(),
+                port: 47815,
+                id: None,
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 1);
+        assert!(discovered[0].id.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_keeps_distinct_identities_separate() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Bedroom".to_string(),
+                port: 47815,
+                id: Some("def456".to_string()),
+                addresses: vec!["192.168.1.21".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 2);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_drops_events_with_no_usable_address() {
+        let events = vec![ResolvedEvent {
+            name: "Living Room".to_string(),
+            port: 47815,
+            id: None,
+            addresses: vec!["127.0.0.1".parse().unwrap()],
+        }];
+        assert!(merge_resolved_events(events, &[]).is_empty());
+    }
+
+    // A known-host probe and an mDNS resolve for one TV listed it twice in the picker.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_merges_a_probe_carrying_the_receivers_own_id() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap(), "10.0.0.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 1, "the probe must merge into the mdns identity, not add an entry");
+        assert_eq!(discovered[0].hosts.len(), 2);
+    }
+
+    // An older receiver returns no id from /info, so its probe carries a synthetic one.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_collapses_a_synthetic_id_sharing_an_address_with_a_real_one() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap(), "10.0.0.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("sweep:192.168.1.20".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 1, "a probe of an older receiver must not add a second entry");
+        assert_eq!(discovered[0].id.as_deref(), Some("abc123"));
+    }
+
+    // Two receivers on one host would share no address, so a real second device must survive.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_keeps_a_synthetic_id_that_shares_no_address() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Bedroom".to_string(),
+                port: 47815,
+                id: Some("sweep:192.168.1.21".to_string()),
+                addresses: vec!["192.168.1.21".parse().unwrap()],
+            },
+        ];
+        assert_eq!(merge_resolved_events(events, &[]).len(), 2);
+    }
+
+    // mdns-sd re-reports a service as records arrive: the loopback-only first event is a partial.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn merge_resolved_events_keeps_an_identity_whose_first_event_had_only_loopback() {
+        let events = vec![
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["127.0.0.1".parse().unwrap()],
+            },
+            ResolvedEvent {
+                name: "Living Room".to_string(),
+                port: 47815,
+                id: Some("abc123".to_string()),
+                addresses: vec!["192.168.1.20".parse().unwrap()],
+            },
+        ];
+        let discovered = merge_resolved_events(events, &[]);
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].host, "192.168.1.20");
+    }
+
+    // ---------------------------------------------------------------------
+    // Unicast subnet sweep candidate enumeration
+    // ---------------------------------------------------------------------
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_hosts_for_interface_covers_a_slash_24_excluding_network_broadcast_and_self() {
+        let hosts = sweep_hosts_for_interface("192.168.1.5".parse().unwrap(), "255.255.255.0".parse().unwrap());
+        assert_eq!(hosts.len(), 253);
+        assert!(!hosts.contains(&"192.168.1.0".parse().unwrap()));
+        assert!(!hosts.contains(&"192.168.1.255".parse().unwrap()));
+        assert!(!hosts.contains(&"192.168.1.5".parse().unwrap()));
+        assert!(hosts.contains(&"192.168.1.1".parse().unwrap()));
+        assert!(hosts.contains(&"192.168.1.254".parse().unwrap()));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_hosts_for_interface_clamps_a_slash_16_down_to_the_containing_slash_24() {
+        let hosts = sweep_hosts_for_interface("10.20.30.5".parse().unwrap(), "255.255.0.0".parse().unwrap());
+        assert_eq!(hosts.len(), 253);
+        assert!(hosts.iter().all(|host| { let octets = host.octets(); octets[0] == 10 && octets[1] == 20 && octets[2] == 30 }));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_hosts_for_interface_slash_25_stays_narrower_than_the_slash_24_clamp() {
+        let hosts = sweep_hosts_for_interface("192.168.1.0".parse().unwrap(), "255.255.255.128".parse().unwrap());
+        assert_eq!(hosts.len(), 126);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_hosts_for_interface_slash_31_point_to_point_link_yields_no_candidates() {
+        let hosts = sweep_hosts_for_interface("192.168.1.0".parse().unwrap(), "255.255.255.254".parse().unwrap());
+        assert!(hosts.is_empty());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_hosts_for_interface_rejects_public_loopback_and_link_local_addresses() {
+        assert!(sweep_hosts_for_interface("8.8.8.8".parse().unwrap(), "255.255.255.0".parse().unwrap()).is_empty());
+        assert!(sweep_hosts_for_interface("127.0.0.1".parse().unwrap(), "255.0.0.0".parse().unwrap()).is_empty());
+        assert!(sweep_hosts_for_interface("169.254.1.5".parse().unwrap(), "255.255.0.0".parse().unwrap()).is_empty());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_candidates_v4_dedupes_addresses_shared_across_interfaces() {
+        // Each interface excludes only its own address, so the union covers the full range.
+        let subnets = vec![
+            ("192.168.1.5".parse().unwrap(), "255.255.255.0".parse().unwrap()),
+            ("192.168.1.6".parse().unwrap(), "255.255.255.0".parse().unwrap()),
+        ];
+        let candidates = sweep_candidates_v4(&subnets);
+        assert_eq!(candidates.len(), 254);
+        assert!(candidates.contains(&"192.168.1.5".parse().unwrap()));
+        assert!(candidates.contains(&"192.168.1.6".parse().unwrap()));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_candidates_v4_caps_the_total_across_many_distinct_subnets() {
+        let subnets: Vec<(std::net::Ipv4Addr, std::net::Ipv4Addr)> = (0..10u8)
+            .map(|third_octet| (std::net::Ipv4Addr::new(10, 0, third_octet, 1), "255.255.255.0".parse().unwrap()))
+            .collect();
+        let candidates = sweep_candidates_v4(&subnets);
+        assert_eq!(candidates.len(), SWEEP_CANDIDATE_CAP);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_candidates_from_interfaces_ignores_ipv6_interfaces() {
+        let interfaces = vec![test_interface_v6("2001:db8:1::5", 64)];
+        assert!(sweep_candidates_from_interfaces(&interfaces).is_empty());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    async fn spawn_static_info_responder(body: String) -> (u16, tokio::sync::oneshot::Sender<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind must succeed");
+        let port = listener.local_addr().unwrap().port();
+        let router = axum::Router::new().route(
+            "/info",
+            get(move || {
+                let body = body.clone();
+                async move { body }
+            }),
+        );
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
+        });
+        (port, shutdown_tx)
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_accepts_a_valid_response_and_derives_a_synthetic_id() {
+        let body = json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": "Living Room"}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        let event = probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port)
+            .await
+            .expect("a valid /info response must be accepted");
+        assert_eq!(event.name, "Living Room");
+        assert_eq!(event.id.as_deref(), Some("sweep:127.0.0.1"));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_prefers_the_receivers_own_id_over_the_synthetic_one() {
+        let body =
+            json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": "Living Room", "id": "abc123"})
+                .to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        let event = probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port)
+            .await
+            .expect("a valid /info response must be accepted");
+        assert_eq!(event.id.as_deref(), Some("abc123"));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_ignores_an_empty_id_from_an_older_receiver() {
+        let body =
+            json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": "Living Room", "id": ""}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        let event = probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port)
+            .await
+            .expect("a valid /info response must be accepted");
+        assert_eq!(event.id.as_deref(), Some("sweep:127.0.0.1"));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_rejects_a_protocol_version_mismatch() {
+        let body = json!({"v": PROTOCOL_VERSION + 1, "app": "extreme-infinitv", "name": "Living Room"}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        assert!(probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port).await.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_rejects_an_app_mismatch() {
+        let body = json!({"v": PROTOCOL_VERSION, "app": "some-other-app", "name": "Living Room"}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        assert!(probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port).await.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_rejects_a_non_json_body() {
+        let (port, _shutdown) = spawn_static_info_responder("not json".to_string()).await;
+        assert!(probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port).await.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_rejects_an_oversized_response_body() {
+        let oversized_name = "a".repeat(MAX_SWEEP_RESPONSE_BYTES);
+        let body =
+            json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": oversized_name}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        assert!(probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port).await.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    async fn spawn_chunked_oversized_responder() -> (u16, tokio::sync::oneshot::Sender<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind must succeed");
+        let port = listener.local_addr().unwrap().port();
+        let router = axum::Router::new().route(
+            "/info",
+            get(|| async {
+                // No Content-Length: forces the caller to bound the body while streaming.
+                let chunk = Bytes::from(vec![b'a'; MAX_SWEEP_RESPONSE_BYTES + 1]);
+                let stream = futures_util::stream::iter(vec![Ok::<_, std::io::Error>(chunk)]);
+                axum::body::Body::from_stream(stream)
+            }),
+        );
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
+        });
+        (port, shutdown_tx)
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_rejects_an_oversized_chunked_response_without_content_length() {
+        let (port, _shutdown) = spawn_chunked_oversized_responder().await;
+        assert!(probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port).await.is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_truncates_an_oversized_name() {
+        let oversized_name = "a".repeat(receiver_store::MAX_DEVICE_NAME_LEN + 10);
+        let body = json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": oversized_name}).to_string();
+        let (port, _shutdown) = spawn_static_info_responder(body).await;
+        let event = probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), port)
+            .await
+            .expect("a valid /info response must be accepted");
+        assert_eq!(event.name.chars().count(), receiver_store::MAX_DEVICE_NAME_LEN);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_sweep_host_returns_none_quickly_on_connection_refused() {
+        let closed_port = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let started = std::time::Instant::now();
+        let result = probe_sweep_host(reqwest::Client::new(), "127.0.0.1".parse().unwrap(), closed_port).await;
+        assert!(result.is_none());
+        // Must bail at the connect timeout, not fall through to the (much longer) request timeout.
+        assert!(started.elapsed() < SWEEP_CONNECT_TIMEOUT + Duration::from_millis(600));
+    }
+
+    // -----------------------------------------------------------------
+    // Known-host fast path
+    // -----------------------------------------------------------------
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn parse_known_host_entry_accepts_a_bare_host() {
+        let (ip, port) = parse_known_host_entry("192.168.1.50").expect("bare host must parse");
+        assert_eq!(ip, "192.168.1.50".parse::<std::net::Ipv4Addr>().unwrap());
+        assert_eq!(port, RECEIVER_PORT);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn parse_known_host_entry_accepts_a_host_with_an_explicit_port() {
+        let (ip, port) = parse_known_host_entry("192.168.1.50:47816").expect("host:port must parse");
+        assert_eq!(ip, "192.168.1.50".parse::<std::net::Ipv4Addr>().unwrap());
+        assert_eq!(port, 47816);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn parse_known_host_entry_rejects_malformed_entries() {
+        assert!(parse_known_host_entry("").is_none());
+        assert!(parse_known_host_entry("   ").is_none());
+        assert!(parse_known_host_entry("not-a-host").is_none());
+        assert!(parse_known_host_entry("192.168.1.50:not-a-port").is_none());
+        assert!(parse_known_host_entry("192.168.1.50:99999").is_none());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn parse_known_hosts_drops_malformed_entries_and_keeps_the_rest() {
+        let parsed = parse_known_hosts(&["192.168.1.50".to_string(), "not-a-host".to_string(), "192.168.1.51:47816".to_string()]);
+        assert_eq!(parsed, vec![("192.168.1.50".parse().unwrap(), RECEIVER_PORT), ("192.168.1.51".parse().unwrap(), 47816)]);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn parse_known_hosts_caps_at_the_probe_limit() {
+        let entries: Vec<String> = (0..20u8).map(|third_octet| format!("192.168.1.{third_octet}")).collect();
+        assert_eq!(parse_known_hosts(&entries).len(), KNOWN_HOST_PROBE_CAP);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_known_hosts_finds_a_reachable_entry_and_ignores_an_unreachable_one() {
+        let body = json!({"v": PROTOCOL_VERSION, "app": "extreme-infinitv", "name": "Known Host"}).to_string();
+        let (reachable_port, _shutdown) = spawn_static_info_responder(body).await;
+        let unreachable_port = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let events =
+            probe_known_hosts(vec![("127.0.0.1".parse().unwrap(), reachable_port), ("127.0.0.1".parse().unwrap(), unreachable_port)])
+                .await;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name, "Known Host");
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn probe_known_hosts_returns_empty_for_no_entries() {
+        assert!(probe_known_hosts(Vec::new()).await.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // Sweep rate limiting
+    // -----------------------------------------------------------------
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_allowed_when_never_swept_before() {
+        assert!(sweep_allowed(Instant::now(), None, false));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_allowed_blocks_a_sweep_inside_the_minimum_interval() {
+        let last_swept_at = Instant::now();
+        let now = last_swept_at + Duration::from_secs(1);
+        assert!(!sweep_allowed(now, Some(last_swept_at), false));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_allowed_permits_a_sweep_once_the_minimum_interval_has_passed() {
+        let last_swept_at = Instant::now();
+        let now = last_swept_at + SWEEP_MIN_INTERVAL;
+        assert!(sweep_allowed(now, Some(last_swept_at), false));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn sweep_allowed_force_bypasses_the_minimum_interval() {
+        let last_swept_at = Instant::now();
+        let now = last_swept_at + Duration::from_secs(1);
+        assert!(sweep_allowed(now, Some(last_swept_at), true));
+    }
+
+    // Must advertise a real interface address: mdns-sd only puts an address record on an
+    // interface whose subnet contains it, so a TEST-NET IP is announced on no interface at all.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn mdns_self_discovery_finds_the_advertised_receiver() {
+        let Some(advertised_ip) = local_ips().into_iter().next() else {
+            return;
+        };
+        // Multi-homed hosts can't self-discover over mDNS; asserting through that is a permanent false alarm.
+        if same_subnet_ipv4_interface_count() > 1 {
+            eprintln!("skipping mdns self-discovery: more than one IPv4 interface on the same subnet");
+            return;
+        }
+        let port = 47_900;
+        let name = format!("Test Receiver {}", generate_device_key());
+        let instance_name = mdns_instance_name(&name);
+        let host_name = format!("{}.local.", mdns_host_label(&instance_name));
+
+        let daemon = mdns_sd::ServiceDaemon::new().expect("mdns daemon must start");
+        let service_info = mdns_sd::ServiceInfo::new(
+            MDNS_SERVICE_TYPE,
+            &instance_name,
+            &host_name,
+            advertised_ip.as_str(),
+            port,
+            &[("v", "1"), ("id", "self-discovery-test-id")][..],
+        )
+        .expect("service info must build");
+        let fullname = service_info.get_fullname().to_string();
+        daemon.register(service_info).expect("mdns register must succeed");
+
+        let discovered = receiver_discover(Some(4000), None, None).await.expect("discover must succeed");
+
+        let _ = daemon.unregister(&fullname);
+        let _ = daemon.shutdown();
+
+        let matches: Vec<_> = discovered.iter().filter(|receiver| receiver.port == port).collect();
+        assert_eq!(matches.len(), 1, "expected exactly one entry for the advertised receiver");
+        assert_eq!(matches[0].id.as_deref(), Some("self-discovery-test-id"));
+        assert!(matches[0].hosts.contains(&advertised_ip), "hosts {:?} must include {advertised_ip}", matches[0].hosts);
+        assert_eq!(matches[0].host, matches[0].hosts[0]);
+        assert_eq!(matches[0].name, instance_name);
+    }
+
+    #[test]
+    fn maybe_regenerate_expired_code_leaves_a_fresh_code_untouched() {
+        let mut slot = Some(PairingState::new());
+        assert!(!maybe_regenerate_expired_code(&mut slot));
+    }
+
+    #[test]
+    fn playback_report_deserializes_with_only_state_and_position() {
+        let report: PlaybackReport =
+            serde_json::from_value(json!({"state": "playing", "positionSeconds": 12.5})).unwrap();
+        assert_eq!(report.state, "playing");
+        assert_eq!(report.position_seconds, 12.5);
+        assert!(report.duration_seconds.is_none());
+        assert!(report.title.is_none());
+        assert!(report.error.is_none());
+    }
+
+    #[test]
+    fn playback_report_deserializes_with_only_state() {
+        let report: PlaybackReport = serde_json::from_value(json!({"state": "idle"})).unwrap();
+        assert_eq!(report.state, "idle");
+        assert_eq!(report.position_seconds, 0.0);
+    }
+
+    // ---------------------------------------------------------------------
+    // End-to-end HTTP + WS server
+    // ---------------------------------------------------------------------
+
+    struct CollectorEvents {
+        play: StdMutex<Vec<Value>>,
+        control: StdMutex<Vec<Value>>,
+        status: StdMutex<Vec<Value>>,
+        paired: StdMutex<Vec<Value>>,
+        ambient: StdMutex<Vec<Value>>,
+    }
+
+    impl CollectorEvents {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                play: StdMutex::new(Vec::new()),
+                control: StdMutex::new(Vec::new()),
+                status: StdMutex::new(Vec::new()),
+                paired: StdMutex::new(Vec::new()),
+                ambient: StdMutex::new(Vec::new()),
+            })
+        }
+    }
+
+    impl ReceiverEvents for CollectorEvents {
+        fn play(&self, payload: Value) {
+            self.play.lock().unwrap().push(payload);
+        }
+        fn control(&self, payload: Value) {
+            self.control.lock().unwrap().push(payload);
+        }
+        fn status(&self, payload: Value) {
+            self.status.lock().unwrap().push(payload);
+        }
+        fn paired(&self, payload: Value) {
+            self.paired.lock().unwrap().push(payload);
+        }
+        fn ambient(&self, payload: Value) {
+            self.ambient.lock().unwrap().push(payload);
+        }
+    }
+
+    struct TestServer {
+        base_url: String,
+        collector: Arc<CollectorEvents>,
+        shared: Arc<ReceiverShared>,
+        client: reqwest::Client,
+        config_dir: std::path::PathBuf,
+        log_dir: std::path::PathBuf,
+        _shutdown: watch::Sender<bool>,
+    }
+
+    impl TestServer {
+        async fn pair(&self, code: &str, device_name: &str) -> reqwest::Response {
+            self.client
+                .post(format!("{}/pair", self.base_url))
+                .json(&json!({"v": PROTOCOL_VERSION, "code": code, "deviceName": device_name}))
+                .send()
+                .await
+                .expect("pair request must succeed")
+        }
+    }
+
+    async fn start_test_server() -> TestServer {
+        start_test_server_with_log_dir(std::env::temp_dir().join(format!("xt-receiver-test-logs-{}", generate_device_key())))
+            .await
+    }
+
+    async fn start_test_server_with_log_dir(log_dir: std::path::PathBuf) -> TestServer {
+        let shared = Arc::new(ReceiverShared::new());
+        let collector = CollectorEvents::new();
+        let events: Arc<dyn ReceiverEvents> = collector.clone();
+        let config_dir = std::env::temp_dir().join(format!("xt-receiver-test-{}", generate_device_key()));
+
+        *shared.pairing.lock().unwrap() = Some(PairingState::new());
+        *shared.name.lock().unwrap() = "Test Receiver".to_string();
+        *shared.receiver_id.lock().unwrap() = "test-receiver-id".to_string();
+
+        let (port, shutdown) =
+            start_server("127.0.0.1", 0, 1, shared.clone(), events, config_dir.clone(), log_dir.clone())
+                .await
+                .expect("test server must bind");
+
+        TestServer {
+            base_url: format!("http://127.0.0.1:{port}"),
+            collector,
+            shared,
+            client: reqwest::Client::new(),
+            config_dir,
+            log_dir,
+            _shutdown: shutdown,
+        }
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            let _ = self._shutdown.send(true);
+            let _ = std::fs::remove_dir_all(&self.config_dir);
+            let _ = std::fs::remove_dir_all(&self.log_dir);
+        }
+    }
+
+    #[tokio::test]
+    async fn receiver_http_end_to_end() {
+        let server = start_test_server().await;
+
+        let info: Value = server
+            .client
+            .get(format!("{}/info", server.base_url))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(info["v"], PROTOCOL_VERSION);
+        assert_eq!(info["app"], "extreme-infinitv");
+
+        let failed_pair = server.pair("000000", "Test device").await;
+        assert_eq!(failed_pair.status(), StatusCode::FORBIDDEN);
+
+        // Clears the per-attempt debounce floor so the next call isn't itself rate-limited.
+        tokio::time::sleep(PAIR_MIN_INTERVAL + Duration::from_millis(50)).await;
+
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let paired_response = server.pair(&code, "Test device").await;
+        assert_eq!(paired_response.status(), StatusCode::OK);
+        let paired_body: Value = paired_response.json().await.unwrap();
+        let key = paired_body["key"].as_str().unwrap().to_string();
+        // /pair must return the receiver's own name, not the submitted device name.
+        assert_eq!(paired_body["name"], "Test Receiver");
+        // /pair must return the same id /info does, so a sender can match discovery to a pairing.
+        assert_eq!(paired_body["id"], "test-receiver-id");
+        assert_eq!(server.collector.paired.lock().unwrap().len(), 1);
+
+        let play_response = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({
+                "v": PROTOCOL_VERSION,
+                "src": "https://example.test/stream.m3u8",
+                "mime": "application/vnd.apple.mpegurl",
+                "isLive": true,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(play_response.status(), StatusCode::OK);
+        assert_eq!(server.collector.play.lock().unwrap().len(), 1);
+
+        let state_response = server
+            .client
+            .get(format!("{}/state", server.base_url))
+            .header("X-XT-Key", &key)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(state_response.status(), StatusCode::OK);
+        let state_body: PlaybackReport = state_response.json().await.unwrap();
+        assert_eq!(state_body.state, "loading");
+
+        let unauthorized_state = server
+            .client
+            .get(format!("{}/state", server.base_url))
+            .header("X-XT-Key", "not-a-real-key")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unauthorized_state.status(), StatusCode::UNAUTHORIZED);
+
+        let seek_response = server
+            .client
+            .post(format!("{}/seek", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"seconds": 30.0}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(seek_response.status(), StatusCode::OK);
+        assert_eq!(server.collector.control.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_pair_emits_status_when_code_regenerates_on_lockout() {
+        let server = start_test_server().await;
+        let stale_code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+
+        for _ in 0..PAIR_MAX_FAILURES {
+            let response = server.pair("000000", "Test device").await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            tokio::time::sleep(PAIR_MIN_INTERVAL + Duration::from_millis(50)).await;
+        }
+
+        let regenerated_code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        assert_ne!(regenerated_code, stale_code);
+        assert!(!server.collector.status.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn receiver_http_rejects_invalid_play_requests() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let bad_scheme = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"v": PROTOCOL_VERSION, "src": "ftp://example.test/stream.m3u8", "isLive": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bad_scheme.status(), StatusCode::BAD_REQUEST);
+
+        let oversized_src = "https://example.test/".to_string() + &"a".repeat(MAX_URL_LEN);
+        let too_long = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"v": PROTOCOL_VERSION, "src": oversized_src, "isLive": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(too_long.status(), StatusCode::BAD_REQUEST);
+
+        let oversized_title = "a".repeat(MAX_TITLE_LEN + 1);
+        let bad_title = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({
+                "v": PROTOCOL_VERSION,
+                "src": "https://example.test/stream.m3u8",
+                "mime": "application/vnd.apple.mpegurl",
+                "isLive": true,
+                "title": oversized_title,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bad_title.status(), StatusCode::BAD_REQUEST);
+
+        let missing_mime = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"v": PROTOCOL_VERSION, "src": "https://example.test/stream.m3u8", "isLive": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(missing_mime.status(), StatusCode::BAD_REQUEST);
+
+        let empty_mime = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({
+                "v": PROTOCOL_VERSION,
+                "src": "https://example.test/stream.m3u8",
+                "isLive": true,
+                "mime": "",
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(empty_mime.status(), StatusCode::BAD_REQUEST);
+
+        let wrong_version = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"v": 2, "src": "https://example.test/stream.m3u8", "isLive": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(wrong_version.status(), StatusCode::BAD_REQUEST);
+
+        let oversized_mime = "a".repeat(MAX_MIME_LEN + 1);
+        let bad_mime = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({
+                "v": PROTOCOL_VERSION,
+                "src": "https://example.test/stream.m3u8",
+                "isLive": true,
+                "mime": oversized_mime,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bad_mime.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_play_accepts_rtsp_only_when_live() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let rtsp_live = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({
+                "v": PROTOCOL_VERSION,
+                "src": "rtsp://example.test:554/stream",
+                "mime": "application/x-rtsp",
+                "isLive": true,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rtsp_live.status(), StatusCode::OK);
+
+        let rtsp_not_live = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({
+                "v": PROTOCOL_VERSION,
+                "src": "rtsp://example.test:554/stream",
+                "mime": "application/x-rtsp",
+                "isLive": false,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rtsp_not_live.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_play_drops_bad_advisory_fields_instead_of_rejecting() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({
+                "v": PROTOCOL_VERSION,
+                "src": "https://example.test/stream.m3u8",
+                "mime": "application/vnd.apple.mpegurl",
+                "isLive": true,
+                "resumeSeconds": -5.0,
+                "logo": "not-a-url",
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let play_events = server.collector.play.lock().unwrap();
+        let descriptor = &play_events.last().unwrap()["descriptor"];
+        assert!(descriptor["resumeSeconds"].is_null());
+        assert!(descriptor["logo"].is_null());
+    }
+
+    #[tokio::test]
+    async fn receiver_http_play_authenticates_before_parsing_the_body() {
+        let server = start_test_server().await;
+
+        let response = server
+            .client
+            .post(format!("{}/play", server.base_url))
+            .header("X-XT-Key", "not-a-real-key")
+            .body("not json")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ---------------------------------------------------------------------
+    // Ambient manifest push
+    // ---------------------------------------------------------------------
+
+    fn ambient_entry(overrides: impl FnOnce(&mut AmbientPushEntry)) -> AmbientPushEntry {
+        let mut entry = AmbientPushEntry {
+            kind: "vod".to_string(),
+            id: "1".to_string(),
+            title: "Some Movie".to_string(),
+            poster_url: Some("https://example.test/poster.jpg".to_string()),
+            backdrop_url: None,
+            logo_url: None,
+            tier: "catalog".to_string(),
+        };
+        overrides(&mut entry);
+        entry
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_keeps_a_valid_entry() {
+        let sanitized = sanitize_ambient_entry(ambient_entry(|_| {}));
+        assert!(sanitized.is_some());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_drops_an_unknown_kind() {
+        assert!(sanitize_ambient_entry(ambient_entry(|entry| entry.kind = "channel".to_string())).is_none());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_drops_a_blank_title() {
+        assert!(sanitize_ambient_entry(ambient_entry(|entry| entry.title = "   ".to_string())).is_none());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_drops_a_blank_id() {
+        assert!(sanitize_ambient_entry(ambient_entry(|entry| entry.id = "".to_string())).is_none());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_nulls_a_non_http_url_but_keeps_the_entry_alive_with_another() {
+        let sanitized = sanitize_ambient_entry(ambient_entry(|entry| {
+            entry.poster_url = Some("javascript:alert(1)".to_string());
+            entry.backdrop_url = Some("https://example.test/backdrop.jpg".to_string());
+        }))
+        .unwrap();
+        assert!(sanitized.poster_url.is_none());
+        assert_eq!(sanitized.backdrop_url, Some("https://example.test/backdrop.jpg".to_string()));
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_drops_when_every_url_fails_sanitization() {
+        let dropped = sanitize_ambient_entry(ambient_entry(|entry| entry.poster_url = Some("not-a-url".to_string())));
+        assert!(dropped.is_none());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_drops_an_oversized_url() {
+        let oversized = format!("https://example.test/{}", "a".repeat(MAX_URL_LEN));
+        let dropped = sanitize_ambient_entry(ambient_entry(|entry| entry.poster_url = Some(oversized)));
+        assert!(dropped.is_none());
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_falls_back_to_catalog_tier_for_an_unknown_tier() {
+        let sanitized = sanitize_ambient_entry(ambient_entry(|entry| entry.tier = "trending".to_string())).unwrap();
+        assert_eq!(sanitized.tier, "catalog");
+    }
+
+    #[test]
+    fn sanitize_ambient_entry_keeps_every_known_tier() {
+        for tier in ALLOWED_AMBIENT_TIERS {
+            let sanitized = sanitize_ambient_entry(ambient_entry(|entry| entry.tier = tier.to_string())).unwrap();
+            assert_eq!(sanitized.tier, tier);
+        }
+    }
+
+    #[tokio::test]
+    async fn receiver_http_ambient_requires_auth() {
+        let server = start_test_server().await;
+        let response = server
+            .client
+            .post(format!("{}/ambient", server.base_url))
+            .json(&json!({"v": PROTOCOL_VERSION, "entries": []}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_ambient_rejects_the_wrong_protocol_version() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = server
+            .client
+            .post(format!("{}/ambient", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"v": 2, "entries": []}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body, json!({"error": "unsupportedVersion", "supported": PROTOCOL_VERSION}));
+    }
+
+    #[tokio::test]
+    async fn receiver_http_ambient_accepts_a_manifest_and_emits_the_sanitized_entries() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = server
+            .client
+            .post(format!("{}/ambient", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({
+                "v": PROTOCOL_VERSION,
+                "entries": [
+                    {
+                        "kind": "vod",
+                        "id": "1",
+                        "title": "Some Movie",
+                        "posterUrl": "https://example.test/poster.jpg",
+                        "tier": "recent",
+                    },
+                    {
+                        "kind": "unknown-kind",
+                        "id": "2",
+                        "title": "Dropped",
+                        "posterUrl": "https://example.test/poster2.jpg",
+                        "tier": "recent",
+                    },
+                ],
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["accepted"], 1);
+
+        let ambient_events = server.collector.ambient.lock().unwrap();
+        let entries = ambient_events.last().unwrap()["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["id"], "1");
+    }
+
+    #[tokio::test]
+    async fn receiver_http_ambient_truncates_a_manifest_over_the_entry_cap() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let entries: Vec<Value> = (0..(MAX_AMBIENT_ENTRIES + 10))
+            .map(|index| {
+                json!({
+                    "kind": "vod",
+                    "id": index.to_string(),
+                    "title": format!("Movie {index}"),
+                    "posterUrl": "https://example.test/poster.jpg",
+                    "tier": "catalog",
+                })
+            })
+            .collect();
+
+        let response = server
+            .client
+            .post(format!("{}/ambient", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"v": PROTOCOL_VERSION, "entries": entries}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["accepted"], MAX_AMBIENT_ENTRIES);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_rejects_invalid_seek_requests() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let nan_seek = server
+            .client
+            .post(format!("{}/seek", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"seconds": f64::NAN}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(nan_seek.status(), StatusCode::BAD_REQUEST);
+
+        let negative_seek = server
+            .client
+            .post(format!("{}/seek", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"seconds": -1.0}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(negative_seek.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_volume_authenticates_before_parsing_the_body() {
+        let server = start_test_server().await;
+
+        let response = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", "not-a-real-key")
+            .body("not json")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_rejects_invalid_volume_requests() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let missing_field = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"level": 0.5}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(missing_field.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(missing_field.json::<Value>().await.unwrap()["error"], "badRequest");
+
+        let out_of_range = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"level": 1.5, "muted": false}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(out_of_range.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(out_of_range.json::<Value>().await.unwrap()["error"], "invalidLevel");
+
+        let nan_level = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"level": f64::NAN, "muted": false}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(nan_level.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(nan_level.json::<Value>().await.unwrap()["error"], "invalidLevel");
+
+        let non_json = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", &key)
+            .body("not json")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(non_json.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(non_json.json::<Value>().await.unwrap()["error"], "badRequest");
+    }
+
+    #[tokio::test]
+    async fn receiver_http_volume_accepts_a_valid_request_and_echoes_it() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = server
+            .client
+            .post(format!("{}/volume", server.base_url))
+            .header("X-XT-Key", &key)
+            .json(&json!({"level": 0.4, "muted": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let control_events = server.collector.control.lock().unwrap();
+        let last_event = control_events.last().unwrap();
+        assert_eq!(last_event["action"], "volume");
+        assert_eq!(last_event["level"], 0.4);
+        assert_eq!(last_event["muted"], true);
+        drop(control_events);
+
+        let state_response = server
+            .client
+            .get(format!("{}/state", server.base_url))
+            .header("X-XT-Key", &key)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(state_response.status(), StatusCode::OK);
+        let state_body: PlaybackReport = state_response.json().await.unwrap();
+        assert_eq!(state_body.volume, Some(0.4));
+        assert_eq!(state_body.muted, Some(true));
+    }
+
+    #[tokio::test]
+    async fn receiver_http_logs_requires_auth() {
+        let server = start_test_server().await;
+        let response = server.client.get(format!("{}/logs", server.base_url)).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn receiver_http_logs_returns_empty_body_when_log_dir_is_missing() {
+        let server = start_test_server().await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = server.client.get(format!("{}/logs", server.base_url)).header("X-XT-Key", &key).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn receiver_http_logs_returns_the_newest_log_file_tail() {
+        let log_dir = std::env::temp_dir().join(format!("xt-receiver-test-logs-{}", generate_device_key()));
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(log_dir.join("app-2026-01-01.log"), "stale entry\n").unwrap();
+        std::fs::write(log_dir.join("not-a-log.txt"), "should never appear\n").unwrap();
+        // Newest-file selection is by mtime; the sleep keeps write order unambiguous on any filesystem clock.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        std::fs::write(log_dir.join("app-2026-01-02.log"), "line one\nline two\n").unwrap();
+
+        let server = start_test_server_with_log_dir(log_dir).await;
+        let code = server.shared.pairing.lock().unwrap().as_ref().unwrap().code.clone();
+        let key = server.pair(&code, "Test device").await.json::<Value>().await.unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let response = server.client.get(format!("{}/logs", server.base_url)).header("X-XT-Key", &key).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text().await.unwrap(), "line one\nline two\n");
+    }
+
+    #[test]
+    fn tail_as_utf8_returns_the_whole_input_when_under_the_cap() {
+        assert_eq!(tail_as_utf8(b"hello world", 1024), "hello world");
+    }
+
+    #[test]
+    fn tail_as_utf8_caps_and_starts_on_a_whole_line() {
+        let bytes = b"AAAAAAAAAA\nBBBBBBBBBB\nCCCCCCCCCC\n";
+        assert_eq!(tail_as_utf8(bytes, 15), "CCCCCCCCCC\n");
+    }
+
+    #[test]
+    fn evict_oldest_if_over_capacity_keeps_at_most_max_devices() {
+        let mut devices: Vec<PairedDevice> = Vec::new();
+        let total = receiver_store::MAX_PAIRED_DEVICES + 3;
+        for index in 0..total {
+            devices.push(PairedDevice {
+                key: format!("{index:032x}"),
+                device_name: format!("device-{index}"),
+                created_at: format!("2026-01-01T00:{index:02}:00+00:00"),
+            });
+            evict_oldest_if_over_capacity(&mut devices);
+        }
+        assert_eq!(devices.len(), receiver_store::MAX_PAIRED_DEVICES);
+        assert!(!devices.iter().any(|device| device.device_name == "device-0"));
+    }
+
+    // ---------------------------------------------------------------------
+    // Log tail
+    // ---------------------------------------------------------------------
+
+    fn write_log(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, body).expect("write log fixture");
+        path
+    }
+
+    /// How many of these /24s appear more than once, i.e. how many interfaces share a subnet.
+    fn count_shared_subnets(subnets: &[[u8; 3]]) -> usize {
+        subnets
+            .iter()
+            .filter(|subnet| subnets.iter().filter(|other| other == subnet).count() > 1)
+            .count()
+    }
+
+    fn same_subnet_ipv4_interface_count() -> usize {
+        let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
+        let subnets: Vec<[u8; 3]> = interfaces
+            .iter()
+            .filter(|interface| !interface.is_loopback())
+            .filter_map(|interface| match interface.ip() {
+                std::net::IpAddr::V4(v4) if !v4.is_link_local() => {
+                    let octets = v4.octets();
+                    Some([octets[0], octets[1], octets[2]])
+                }
+                _ => None,
+            })
+            .collect();
+        count_shared_subnets(&subnets)
+    }
+
+    #[test]
+    fn count_shared_subnets_spots_a_multi_homed_lan() {
+        // Wi-Fi + Ethernet on one subnet: the setup that breaks local mDNS self-discovery.
+        assert_eq!(count_shared_subnets(&[[192, 168, 178], [192, 168, 178]]), 2);
+        // One LAN address plus a VPN on its own subnet is fine.
+        assert_eq!(count_shared_subnets(&[[192, 168, 178], [10, 2, 0]]), 0);
+        assert_eq!(count_shared_subnets(&[[192, 168, 178]]), 0);
+        assert_eq!(count_shared_subnets(&[]), 0);
+    }
+
+    #[test]
+    fn dedupe_ips_keeps_first_occurrence_order() {
+        let ips: Vec<std::net::IpAddr> = ["192.168.1.2", "::1", "192.168.1.2", "192.168.1.3", "::1"]
+            .iter()
+            .map(|text| text.parse().expect("parse ip"))
+            .collect();
+        let deduped = dedupe_ips(&ips);
+        assert_eq!(deduped.len(), 3);
+        assert_eq!(deduped[0].to_string(), "192.168.1.2");
+        assert_eq!(deduped[1].to_string(), "::1");
+        assert_eq!(deduped[2].to_string(), "192.168.1.3");
+    }
+
+
+    // ---------------------------------------------------------------------
+    // Session log ring
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn sanitize_log_lines_drops_blanks_and_caps_the_batch() {
+        let lines = vec!["  ".to_string(), "kept".to_string(), String::new(), "also".to_string()];
+        assert_eq!(sanitize_log_lines(lines), vec!["kept".to_string(), "also".to_string()]);
+
+        let many: Vec<String> = (0..MAX_LOG_LINES_PER_CALL + 10).map(|index| format!("line-{index}")).collect();
+        assert_eq!(sanitize_log_lines(many).len(), MAX_LOG_LINES_PER_CALL);
+    }
+
+    #[test]
+    fn sanitize_log_lines_truncates_one_pathological_line() {
+        let long = "x".repeat(MAX_LOG_LINE_BYTES * 2);
+        let sanitized = sanitize_log_lines(vec![long]);
+        assert_eq!(sanitized[0].chars().count(), MAX_LOG_LINE_BYTES);
+    }
+
+    #[test]
+    fn push_log_lines_evicts_the_oldest_once_full() {
+        let mut ring = std::collections::VecDeque::new();
+        let lines: Vec<String> = (0..MAX_LOG_RING_LINES + 5).map(|index| format!("line-{index}")).collect();
+        push_log_lines(&mut ring, &lines);
+        assert_eq!(ring.len(), MAX_LOG_RING_LINES);
+        assert_eq!(ring.front().map(String::as_str), Some("line-5"));
+        assert_eq!(ring.back().map(String::as_str), Some(format!("line-{}", MAX_LOG_RING_LINES + 4).as_str()));
+    }
+
+    #[test]
+    fn log_frame_is_a_kinded_envelope_and_empty_batches_send_nothing() {
+        let frame = log_frame(&["one".to_string(), "two".to_string()]).expect("frame");
+        let parsed: serde_json::Value = serde_json::from_str(&frame).expect("valid json");
+        assert_eq!(parsed["kind"], "log");
+        assert_eq!(parsed["lines"][0], "one");
+        assert_eq!(parsed["lines"][1], "two");
+        assert!(log_frame(&[]).is_none());
+    }
+
+    #[test]
+    fn local_ips_returns_a_deterministic_order() {
+        // An unstable order made every 15s tick look like an address change.
+        let first = local_ips();
+        for _ in 0..8 {
+            assert_eq!(local_ips(), first, "local_ips must be deterministic for one address set");
+        }
+
+        // No VPN/point-to-point address may be advertised: only this host can reach it.
+        let p2p: Vec<String> = if_addrs::get_if_addrs()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|interface| interface.is_p2p)
+            .map(|interface| interface.ip().to_string())
+            .collect();
+        for address in &p2p {
+            assert!(!first.contains(address), "advertised a point-to-point address: {address}");
+        }
+        eprintln!("local_ips={first:?} excluded_p2p={p2p:?}");
+    }
+
+    #[test]
+    fn read_tail_bytes_returns_only_the_tail_of_a_larger_file() {
+        let dir = std::env::temp_dir().join(format!("xt-log-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = write_log(&dir, "app-2026-01-01.log", "0123456789ABCDEF");
+        let tail = read_tail_bytes(&path, 6).expect("read tail");
+        assert_eq!(tail, b"ABCDEF");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_tail_bytes_returns_the_whole_file_when_it_is_shorter_than_the_cap() {
+        let dir = std::env::temp_dir().join(format!("xt-log-short-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = write_log(&dir, "app-2026-01-01.log", "short");
+        assert_eq!(read_tail_bytes(&path, 4096).expect("read tail"), b"short");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn newest_log_tail_prefers_our_app_log_over_a_newer_foreign_log() {
+        let dir = std::env::temp_dir().join(format!("xt-log-pick-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        write_log(&dir, "app-2026-01-01.log", "ours\n");
+        // Written second, so it is the newest .log in the directory.
+        write_log(&dir, "webview.log", "theirs\n");
+        assert_eq!(newest_log_tail(&dir), "ours\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn newest_log_tail_falls_back_to_any_log_when_we_wrote_none() {
+        let dir = std::env::temp_dir().join(format!("xt-log-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        write_log(&dir, "webview.log", "theirs\n");
+        assert_eq!(newest_log_tail(&dir), "theirs\n");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn newest_log_tail_is_empty_for_a_directory_with_no_logs() {
+        let dir = std::env::temp_dir().join(format!("xt-log-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        write_log(&dir, "notes.txt", "not a log");
+        assert_eq!(newest_log_tail(&dir), "");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+

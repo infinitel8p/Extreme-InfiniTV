@@ -1,0 +1,818 @@
+package com.infinitel8p.xtream
+
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
+import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Outline
+import android.graphics.Typeface
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.service.dreams.DreamService
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
+import android.util.Log
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.view.ViewOutlineProvider
+import android.view.animation.AnimationUtils
+import android.view.animation.LinearInterpolator
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextClock
+import android.widget.TextView
+import coil.ImageLoader
+import coil.disk.DiskCache
+import coil.request.Disposable
+import coil.request.ImageRequest
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.tan
+import kotlin.random.Random
+
+/**
+ * System screensaver (Settings > Display > Screen saver). Rotates
+ * posters/backdrops from a manifest the web app writes to dataDir; falls
+ * back to a bouncing brand mark when offline or once every entry fails.
+ */
+class XtreamDreamService : DreamService() {
+
+  companion object {
+    private const val TAG = "XtreamDream"
+    private const val MANIFEST_FILE_NAME = "ambient-screensaver.json"
+    private const val INTRO_DURATION_MS = 2_000L
+    private const val CROSSFADE_DURATION_MS = 900L
+    private const val MIN_HOLD_MS = 20_000L
+    private const val MAX_HOLD_MS = 30_000L
+    private const val KEN_BURNS_TARGET_SCALE = 1.08f
+    private const val MAX_FAILURES_PER_ENTRY = 2
+    private const val OVERLAY_HEIGHT_FRACTION = 0.16f
+    private const val OVERLAY_NUDGE_PX = 8
+    private const val POSTER_CARD_HEIGHT_FRACTION = 0.58f
+    private const val POSTER_CARD_ASPECT_WIDTH_OVER_HEIGHT = 2f / 3f
+    private const val POSTER_CARD_CORNER_RADIUS_DP = 12f
+    private const val POSTER_CARD_ELEVATION_DP = 12f
+    private const val BRAND_ALPHA = 0.4f
+    private const val BRAND_FALLBACK_ALPHA = 1f
+    private const val BRAND_BOUNCE_MIN_CROSSING_MS = 8_000f
+    private const val BRAND_BOUNCE_MAX_CROSSING_MS = 12_000f
+    private const val BRAND_BOUNCE_MIN_ANGLE_DEG = 25f
+    private const val BRAND_BOUNCE_MAX_ANGLE_DEG = 65f
+    private const val BRAND_BOUNCE_FRAME_CAP_MS = 64L
+    private const val BRAND_BOUNCE_MEASURE_RETRY_MS = 100L
+    private const val BRAND_BOUNCE_MEASURE_MAX_RETRIES = 20
+    private const val FALLBACK_REFRESH_INTERVAL_MS = 5 * 60_000L
+    private const val DISK_CACHE_MAX_BYTES = 64L * 1024 * 1024
+    private val URL_IN_TEXT = Regex("""\w+://\S+""")
+    private const val MAX_LOGGED_MESSAGE_CHARS = 160
+
+    @Volatile
+    private var activeDream: XtreamDreamService? = null
+
+    // Activity window flags can't dismiss a running dream, so cast playback asks the dream to end itself.
+    @JvmStatic
+    fun dismissActiveDream(): Boolean {
+      val dream = activeDream ?: return false
+      dream.mainHandler.post {
+        try {
+          dream.wakeUp()
+        } catch (error: Throwable) {
+          Log.w(TAG, "wakeUp failed: $error")
+          try { dream.finish() } catch (fallbackError: Throwable) { Log.w(TAG, "finish failed: $fallbackError") }
+        }
+      }
+      return true
+    }
+  }
+
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private val pendingRunnables = mutableListOf<Runnable>()
+
+  private var imageLoader: ImageLoader? = null
+  private var posterDisposable: Disposable? = null
+  private var logoDisposable: Disposable? = null
+  private var posterCardDisposable: Disposable? = null
+
+  private var rootView: FrameLayout? = null
+  private var frontLayer: ImageView? = null
+  private var backLayer: ImageView? = null
+  private var overlayContainer: FrameLayout? = null
+  private var overlayLogo: ImageView? = null
+  private var overlayTitle: TextView? = null
+  private var posterCardView: ImageView? = null
+  private var brandMark: View? = null
+  private var topBarLockup: View? = null
+  private var clockView: TextClock? = null
+
+  private var activeEntries: MutableList<DreamEntry> = mutableListOf()
+  private var userAgent: String? = null
+  private var currentIndex = -1
+  private val failureCounts = HashMap<String, Int>()
+
+  private var kenBurnsAnimator: AnimatorSet? = null
+  private var brandBounceAnimator: ValueAnimator? = null
+  private var fallbackActive = false
+  private var dreaming = false
+
+  override fun onAttachedToWindow() {
+    super.onAttachedToWindow()
+    activeDream = this
+    isInteractive = false
+    isFullscreen = true
+    isScreenBright = true
+    buildViews()
+  }
+
+  override fun onDreamingStarted() {
+    super.onDreamingStarted()
+    Log.d(TAG, "onDreamingStarted")
+    dreaming = true
+    Thread {
+      val data = readManifest()
+      // A CEC wake can stop the dream before this lands; without the flag it rebuilds the ImageLoader.
+      mainHandler.post { if (dreaming) onManifestLoaded(data) }
+    }.start()
+  }
+
+  override fun onDreamingStopped() {
+    super.onDreamingStopped()
+    teardown()
+  }
+
+  override fun onDetachedFromWindow() {
+    teardown()
+    super.onDetachedFromWindow()
+  }
+
+  // ---------------------------------------------------------------------
+  // View setup
+  // ---------------------------------------------------------------------
+
+  private fun buildViews() {
+    val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+
+    val back = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f }
+    val front = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f }
+    root.addView(back, matchParentParams())
+    root.addView(front, matchParentParams())
+
+    val scrim = View(this).apply {
+      background = GradientDrawable(
+        GradientDrawable.Orientation.TOP_BOTTOM,
+        intArrayOf(Color.TRANSPARENT, Color.argb(179, 0, 0, 0))
+      )
+    }
+    root.addView(scrim, matchParentParams())
+
+    val displayMetrics = resources.displayMetrics
+    val overlayMaxHeightPx = (displayMetrics.heightPixels * OVERLAY_HEIGHT_FRACTION).toInt()
+    val overlayMarginPx = (24 * displayMetrics.density).toInt()
+
+    val logo = ImageView(this).apply {
+      scaleType = ImageView.ScaleType.FIT_START
+      adjustViewBounds = true
+      maxHeight = overlayMaxHeightPx
+      visibility = View.GONE
+    }
+    val title = TextView(this).apply {
+      setTextColor(Color.WHITE)
+      textSize = 28f
+      setTypeface(typeface, Typeface.BOLD)
+      setShadowLayer(6f, 0f, 2f, Color.argb(200, 0, 0, 0))
+      visibility = View.GONE
+    }
+    val overlay = FrameLayout(this).apply {
+      addView(logo, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+      addView(title, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+    root.addView(
+      overlay,
+      FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+        gravity = Gravity.BOTTOM or Gravity.START
+        leftMargin = overlayMarginPx
+        bottomMargin = overlayMarginPx
+      }
+    )
+
+    val posterCardHeightPx = (displayMetrics.heightPixels * POSTER_CARD_HEIGHT_FRACTION).toInt()
+    val posterCardWidthPx = (posterCardHeightPx * POSTER_CARD_ASPECT_WIDTH_OVER_HEIGHT).toInt()
+    val posterCardCornerRadiusPx = POSTER_CARD_CORNER_RADIUS_DP * displayMetrics.density
+    val posterCard = ImageView(this).apply {
+      scaleType = ImageView.ScaleType.CENTER_CROP
+      visibility = View.GONE
+      elevation = POSTER_CARD_ELEVATION_DP * displayMetrics.density
+      clipToOutline = true
+      outlineProvider = object : ViewOutlineProvider() {
+        override fun getOutline(view: View, outline: Outline) {
+          outline.setRoundRect(0, 0, view.width, view.height, posterCardCornerRadiusPx)
+        }
+      }
+    }
+    root.addView(
+      posterCard,
+      FrameLayout.LayoutParams(posterCardWidthPx, posterCardHeightPx).apply {
+        gravity = Gravity.BOTTOM or Gravity.END
+        rightMargin = overlayMarginPx
+        bottomMargin = overlayMarginPx
+      }
+    )
+
+    val lockupIconHeightPx = (40 * displayMetrics.density).toInt()
+    val lockupIconWidthPx = lockupIconHeightPx * 224 / 124
+    val lockupIcon = ImageView(this).apply {
+      setImageResource(R.drawable.ic_brand_mark)
+      imageTintList = ColorStateList.valueOf(getColor(R.color.xt_brand_rose))
+    }
+    val lockupWordmark = TextView(this).apply {
+      text = buildBrandWordmark()
+      textSize = 22f
+      typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+    }
+    val lockup = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      addView(lockupIcon, LinearLayout.LayoutParams(lockupIconWidthPx, lockupIconHeightPx))
+      addView(
+        lockupWordmark,
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+          marginStart = (8 * displayMetrics.density).toInt()
+        }
+      )
+    }
+    root.addView(
+      lockup,
+      FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+        gravity = Gravity.TOP or Gravity.START
+        leftMargin = overlayMarginPx
+        topMargin = overlayMarginPx
+      }
+    )
+
+    val clock = SafeTextClock(this).apply {
+      setTextColor(Color.argb(204, 255, 255, 255))
+      textSize = 32f
+      setShadowLayer(6f, 0f, 2f, Color.argb(200, 0, 0, 0))
+    }
+    root.addView(
+      clock,
+      FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+        gravity = Gravity.TOP or Gravity.END
+        rightMargin = overlayMarginPx
+        topMargin = overlayMarginPx
+      }
+    )
+
+    val brandIcon = ImageView(this).apply {
+      setImageResource(R.drawable.ic_brand_mark)
+      imageTintList = ColorStateList.valueOf(getColor(R.color.xt_brand_rose))
+    }
+    val brandWordmark = TextView(this).apply {
+      text = buildBrandWordmark()
+      textSize = 24f
+      typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+      gravity = Gravity.CENTER
+    }
+    val brand = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      gravity = Gravity.CENTER
+      alpha = 0f
+      visibility = View.GONE
+      addView(brandIcon, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+      addView(
+        brandWordmark,
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+          topMargin = (16 * displayMetrics.density).toInt()
+        }
+      )
+    }
+    root.addView(
+      brand,
+      FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+        gravity = Gravity.CENTER
+      }
+    )
+
+    rootView = root
+    backLayer = back
+    frontLayer = front
+    overlayContainer = overlay
+    overlayLogo = logo
+    overlayTitle = title
+    posterCardView = posterCard
+    brandMark = brand
+    topBarLockup = lockup
+    clockView = clock
+    setContentView(root)
+  }
+
+  private fun matchParentParams() =
+    FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+
+  private fun buildBrandWordmark(): CharSequence {
+    val text = "InfiniTV"
+    val tvStart = text.length - 2
+    return SpannableString(text).apply {
+      setSpan(ForegroundColorSpan(Color.WHITE), 0, tvStart, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+      setSpan(ForegroundColorSpan(getColor(R.color.xt_brand_rose)), tvStart, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+      setSpan(StyleSpan(Typeface.BOLD), tvStart, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Manifest
+  // ---------------------------------------------------------------------
+
+  private fun readManifest(): DreamData {
+    return try {
+      val file = File(dataDir, MANIFEST_FILE_NAME)
+      if (!file.exists()) return DreamData(0L, null, emptyList())
+      DreamManifest.parse(file.readText())
+    } catch (error: Throwable) {
+      Log.w(TAG, "readManifest failed: $error")
+      DreamData(0L, null, emptyList())
+    }
+  }
+
+  private fun onManifestLoaded(data: DreamData) {
+    val renderable = data.entries.filter { it.posterUrl != null || it.backdropUrl != null }
+    activeEntries = renderable.toMutableList()
+    userAgent = data.ua
+    logManifestSummary(data, renderable)
+    imageLoader = buildImageLoader()
+
+    hideLockup()
+    brandMark?.visibility = View.VISIBLE
+    brandMark?.animate()?.alpha(BRAND_ALPHA)?.setDuration(CROSSFADE_DURATION_MS)?.start()
+    postDelayed(INTRO_DURATION_MS) {
+      if (activeEntries.isEmpty()) {
+        startBrandFallback()
+      } else {
+        brandMark?.animate()?.alpha(0f)?.setDuration(CROSSFADE_DURATION_MS)?.withEndAction {
+          brandMark?.visibility = View.GONE
+        }?.start()
+        showLockup()
+        showNextEntry()
+      }
+    }
+  }
+
+  private fun logManifestSummary(data: DreamData, renderable: List<DreamEntry>) {
+    val posterCount = renderable.count { it.posterUrl != null }
+    val backdropCount = renderable.count { it.backdropUrl != null }
+    val sample = renderable.firstNotNullOfOrNull { it.backdropUrl ?: it.posterUrl }
+    Log.d(
+      TAG,
+      "manifest loaded: entries=${renderable.size}/${data.entries.size} poster=$posterCount backdrop=$backdropCount " +
+        "sample=${redactUrl(sample)} ua=${if (data.ua != null) "set" else "none"} ageMs=${System.currentTimeMillis() - data.at}",
+    )
+  }
+
+  private fun hideLockup() {
+    topBarLockup?.visibility = View.GONE
+  }
+
+  private fun showLockup() {
+    topBarLockup?.visibility = View.VISIBLE
+  }
+
+  private fun buildImageLoader(): ImageLoader {
+    return ImageLoader.Builder(this)
+      .diskCache {
+        DiskCache.Builder()
+          .directory(File(cacheDir, "dream_images"))
+          .maxSizeBytes(DISK_CACHE_MAX_BYTES)
+          .build()
+      }
+      .respectCacheHeaders(false)
+      .bitmapConfig(Bitmap.Config.RGB_565)
+      .build()
+  }
+
+  // ---------------------------------------------------------------------
+  // Rotation
+  // ---------------------------------------------------------------------
+
+  private fun showNextEntry() {
+    if (activeEntries.isEmpty()) {
+      startBrandFallback()
+      return
+    }
+    if (currentIndex >= activeEntries.size) currentIndex = -1
+    currentIndex = (currentIndex + 1) % activeEntries.size
+    val entry = activeEntries[currentIndex]
+    val imageUrl = entry.backdropUrl ?: entry.posterUrl
+    if (imageUrl == null) {
+      onEntryFailed(entry, null, null)
+      return
+    }
+    loadEntryImage(entry, imageUrl, isBackdrop = entry.backdropUrl != null)
+  }
+
+  private fun loadEntryImage(entry: DreamEntry, imageUrl: String, isBackdrop: Boolean) {
+    val loader = imageLoader ?: return
+    val back = backLayer ?: return
+    back.scaleX = 1f
+    back.scaleY = 1f
+    val displayMetrics = resources.displayMetrics
+    val requestBuilder = ImageRequest.Builder(this)
+      .data(imageUrl)
+      .size(displayMetrics.widthPixels, displayMetrics.heightPixels)
+      .target(onSuccess = { drawable -> onEntryImageReady(entry, drawable, isBackdrop) })
+      .listener(onError = { _, result -> onEntryFailed(entry, imageUrl, result.throwable) })
+    userAgent?.takeIf { it.isNotBlank() }?.let { requestBuilder.setHeader("User-Agent", it) }
+    posterDisposable?.dispose()
+    posterDisposable = loader.enqueue(requestBuilder.build())
+  }
+
+  private fun onEntryImageReady(entry: DreamEntry, drawable: Drawable, isBackdrop: Boolean) {
+    val front = frontLayer ?: return
+    val back = backLayer ?: return
+    back.setImageDrawable(drawable)
+    failureCounts.remove(entry.id)
+
+    val holdMs = Random.nextLong(MIN_HOLD_MS, MAX_HOLD_MS + 1)
+    back.animate().alpha(1f).setDuration(CROSSFADE_DURATION_MS).start()
+    front.animate().alpha(0f).setDuration(CROSSFADE_DURATION_MS).start()
+
+    kenBurnsAnimator?.cancel()
+    kenBurnsAnimator = if (isBackdrop) {
+      AnimatorSet().apply {
+        playTogether(
+          ObjectAnimator.ofFloat(back, "scaleX", 1f, KEN_BURNS_TARGET_SCALE),
+          ObjectAnimator.ofFloat(back, "scaleY", 1f, KEN_BURNS_TARGET_SCALE),
+        )
+        duration = holdMs
+        start()
+      }
+    } else {
+      null
+    }
+
+    frontLayer = back
+    backLayer = front
+    updateOverlay(entry)
+    updatePosterCard(entry)
+    nudgeOverlay()
+    scheduleNextEntry(holdMs)
+  }
+
+  private fun onEntryFailed(entry: DreamEntry, imageUrl: String?, error: Throwable?) {
+    val failures = (failureCounts[entry.id] ?: 0) + 1
+    failureCounts[entry.id] = failures
+    Log.w(
+      TAG,
+      "entry ${entry.id} failed (${failures}/$MAX_FAILURES_PER_ENTRY) url=${redactUrl(imageUrl)} cause=${describeError(error)}",
+    )
+    if (failures >= MAX_FAILURES_PER_ENTRY) {
+      activeEntries.removeAll { it.id == entry.id }
+      failureCounts.remove(entry.id)
+    }
+    if (activeEntries.isEmpty()) {
+      startBrandFallback()
+    } else {
+      showNextEntry()
+    }
+  }
+
+  private fun scheduleNextEntry(holdMs: Long) {
+    postDelayed(holdMs) { showNextEntry() }
+  }
+
+  private fun updateOverlay(entry: DreamEntry) {
+    val logo = overlayLogo ?: return
+    val title = overlayTitle ?: return
+    val logoUrl = entry.logoUrl
+    if (logoUrl.isNullOrBlank()) {
+      logo.visibility = View.GONE
+      title.visibility = View.VISIBLE
+      title.text = entry.title
+      return
+    }
+    val loader = imageLoader ?: return
+    logoDisposable?.dispose()
+    val requestBuilder = ImageRequest.Builder(this)
+      .data(logoUrl)
+      .target(
+        onSuccess = { drawable ->
+          logo.setImageDrawable(drawable)
+          logo.visibility = View.VISIBLE
+          title.visibility = View.GONE
+        },
+      )
+      .listener(
+        onError = { _, result ->
+          Log.w(TAG, "logo ${entry.id} failed url=${redactUrl(logoUrl)} cause=${describeError(result.throwable)}")
+          logo.visibility = View.GONE
+          title.visibility = View.VISIBLE
+          title.text = entry.title
+        },
+      )
+    userAgent?.takeIf { it.isNotBlank() }?.let { requestBuilder.setHeader("User-Agent", it) }
+    logoDisposable = loader.enqueue(requestBuilder.build())
+  }
+
+  private fun updatePosterCard(entry: DreamEntry) {
+    val card = posterCardView ?: return
+    val posterUrl = entry.posterUrl
+    if (posterUrl.isNullOrBlank()) {
+      posterCardDisposable?.dispose()
+      card.visibility = View.GONE
+      return
+    }
+    val loader = imageLoader ?: return
+    posterCardDisposable?.dispose()
+    val requestBuilder = ImageRequest.Builder(this)
+      .data(posterUrl)
+      .target(
+        onSuccess = { drawable ->
+          card.setImageDrawable(drawable)
+          card.visibility = View.VISIBLE
+        },
+      )
+      .listener(
+        onError = { _, result ->
+          Log.w(TAG, "poster ${entry.id} failed url=${redactUrl(posterUrl)} cause=${describeError(result.throwable)}")
+          card.visibility = View.GONE
+        },
+      )
+    userAgent?.takeIf { it.isNotBlank() }?.let { requestBuilder.setHeader("User-Agent", it) }
+    posterCardDisposable = loader.enqueue(requestBuilder.build())
+  }
+
+  // Small position shift each swap so the overlay never burns the same pixels in.
+  private fun nudgeOverlay() {
+    val overlay = overlayContainer ?: return
+    overlay.translationX = Random.nextInt(-OVERLAY_NUDGE_PX, OVERLAY_NUDGE_PX + 1).toFloat()
+    overlay.translationY = Random.nextInt(-OVERLAY_NUDGE_PX, OVERLAY_NUDGE_PX + 1).toFloat()
+  }
+
+  // ---------------------------------------------------------------------
+  // Brand fallback
+  // ---------------------------------------------------------------------
+
+  private fun startBrandFallback() {
+    if (fallbackActive) return
+    fallbackActive = true
+    Log.d(TAG, "no artwork available, showing brand fallback")
+    hideLockup()
+    frontLayer?.animate()?.alpha(0f)?.setDuration(CROSSFADE_DURATION_MS)?.start()
+    backLayer?.animate()?.alpha(0f)?.setDuration(CROSSFADE_DURATION_MS)?.start()
+    overlayContainer?.visibility = View.GONE
+    posterCardView?.visibility = View.GONE
+    kenBurnsAnimator?.cancel()
+    kenBurnsAnimator = null
+
+    val brand = brandMark ?: return
+    brand.visibility = View.VISIBLE
+    brand.animate().alpha(BRAND_FALLBACK_ALPHA).setDuration(CROSSFADE_DURATION_MS).start()
+    startBrandBounce(brand, attempt = 0)
+    scheduleFallbackRefresh()
+  }
+
+  // Constant-velocity DVD-logo bounce off the visible bounds; retries until the mark is measured.
+  private fun startBrandBounce(brand: View, attempt: Int) {
+    if (!fallbackActive) return
+    val root = rootView ?: return
+    if (brand.width == 0 || brand.height == 0 || root.width == 0 || root.height == 0) {
+      if (attempt >= BRAND_BOUNCE_MEASURE_MAX_RETRIES) return
+      postDelayed(BRAND_BOUNCE_MEASURE_RETRY_MS) { startBrandBounce(brand, attempt + 1) }
+      return
+    }
+
+    val maxX = ((root.width - brand.width) / 2f).coerceAtLeast(0f)
+    val maxY = ((root.height - brand.height) / 2f).coerceAtLeast(0f)
+    val crossingMs = BRAND_BOUNCE_MIN_CROSSING_MS +
+      Random.nextFloat() * (BRAND_BOUNCE_MAX_CROSSING_MS - BRAND_BOUNCE_MIN_CROSSING_MS)
+    val angleRad = (BRAND_BOUNCE_MIN_ANGLE_DEG +
+      Random.nextFloat() * (BRAND_BOUNCE_MAX_ANGLE_DEG - BRAND_BOUNCE_MIN_ANGLE_DEG)) * PI.toFloat() / 180f
+    val horizontalSpeed = root.width / crossingMs
+    var velocityX = horizontalSpeed * if (Random.nextBoolean()) 1f else -1f
+    var velocityY = horizontalSpeed * tan(angleRad) * if (Random.nextBoolean()) 1f else -1f
+    var positionX = brand.translationX.coerceIn(-maxX, maxX)
+    var positionY = brand.translationY.coerceIn(-maxY, maxY)
+    var lastFrameMs = AnimationUtils.currentAnimationTimeMillis()
+
+    brandBounceAnimator?.cancel()
+    brandBounceAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+      duration = 1_000L
+      repeatCount = ValueAnimator.INFINITE
+      interpolator = LinearInterpolator()
+      addUpdateListener {
+        val nowMs = AnimationUtils.currentAnimationTimeMillis()
+        val deltaMs = (nowMs - lastFrameMs).coerceIn(0L, BRAND_BOUNCE_FRAME_CAP_MS)
+        lastFrameMs = nowMs
+        positionX += velocityX * deltaMs
+        positionY += velocityY * deltaMs
+        if (positionX <= -maxX) {
+          positionX = -maxX
+          velocityX = abs(velocityX)
+        } else if (positionX >= maxX) {
+          positionX = maxX
+          velocityX = -abs(velocityX)
+        }
+        if (positionY <= -maxY) {
+          positionY = -maxY
+          velocityY = abs(velocityY)
+        } else if (positionY >= maxY) {
+          positionY = maxY
+          velocityY = -abs(velocityY)
+        }
+        brand.translationX = positionX
+        brand.translationY = positionY
+      }
+      start()
+    }
+  }
+
+  // Polls the manifest while the brand fallback is showing so a background
+  // catalog refresh can hand rotation back its artwork without restarting the dream.
+  private fun scheduleFallbackRefresh() {
+    postDelayed(FALLBACK_REFRESH_INTERVAL_MS) {
+      if (!fallbackActive) return@postDelayed
+      Thread {
+        val data = readManifest()
+        mainHandler.post { onFallbackRefreshResult(data) }
+      }.start()
+    }
+  }
+
+  private fun onFallbackRefreshResult(data: DreamData) {
+    if (!fallbackActive) return
+    val renderable = data.entries.filter { it.posterUrl != null || it.backdropUrl != null }
+    if (renderable.isEmpty()) {
+      scheduleFallbackRefresh()
+      return
+    }
+    activeEntries = renderable.toMutableList()
+    userAgent = data.ua
+    Log.d(TAG, "artwork available again, leaving brand fallback")
+    endBrandFallback()
+    showNextEntry()
+  }
+
+  private fun endBrandFallback() {
+    fallbackActive = false
+    brandBounceAnimator?.cancel()
+    brandBounceAnimator = null
+    val brand = brandMark
+    brand?.animate()?.alpha(0f)?.setDuration(CROSSFADE_DURATION_MS)?.withEndAction {
+      brand.visibility = View.GONE
+    }?.start()
+    overlayContainer?.visibility = View.VISIBLE
+    showLockup()
+  }
+
+  // ---------------------------------------------------------------------
+  // Diagnostics
+  // ---------------------------------------------------------------------
+
+  // Logs stay credential-free: scheme + host only, never a path or query.
+  private fun redactUrl(url: String?): String {
+    if (url.isNullOrBlank()) return "none"
+    val uri = try { Uri.parse(url) } catch (error: Throwable) { null }
+    val scheme = uri?.scheme ?: return "unparseable(len=${url.length})"
+    val host = uri.host ?: return "$scheme://?"
+    return "$scheme://$host"
+  }
+
+  private fun describeError(error: Throwable?): String {
+    if (error == null) return "unknown"
+    val message = error.message?.let { URL_IN_TEXT.replace(it) { match -> redactUrl(match.value) } } ?: "no message"
+    return "${error.javaClass.simpleName}: ${message.take(MAX_LOGGED_MESSAGE_CHARS)}"
+  }
+
+  // ---------------------------------------------------------------------
+  // Teardown
+  // ---------------------------------------------------------------------
+
+  private fun postDelayed(delayMs: Long, action: () -> Unit) {
+    val runnable = Runnable(action)
+    pendingRunnables.add(runnable)
+    mainHandler.postDelayed(runnable, delayMs)
+  }
+
+  private fun teardown() {
+    dreaming = false
+    if (activeDream === this) activeDream = null
+    pendingRunnables.forEach { mainHandler.removeCallbacks(it) }
+    pendingRunnables.clear()
+    kenBurnsAnimator?.cancel()
+    kenBurnsAnimator = null
+    brandBounceAnimator?.cancel()
+    brandBounceAnimator = null
+    posterDisposable?.dispose()
+    logoDisposable?.dispose()
+    posterCardDisposable?.dispose()
+    posterDisposable = null
+    logoDisposable = null
+    posterCardDisposable = null
+    imageLoader?.shutdown()
+    imageLoader = null
+    fallbackActive = false
+    currentIndex = -1
+    failureCounts.clear()
+    activeEntries = mutableListOf()
+    frontLayer = null
+    backLayer = null
+    overlayContainer = null
+    overlayLogo = null
+    overlayTitle = null
+    posterCardView = null
+    brandMark = null
+    topBarLockup = null
+    clockView = null
+    rootView = null
+  }
+}
+
+data class DreamEntry(
+  val kind: String,
+  val id: String,
+  val title: String,
+  val posterUrl: String?,
+  val backdropUrl: String?,
+  val logoUrl: String?,
+  val tier: String,
+)
+
+data class DreamData(
+  val at: Long,
+  val ua: String?,
+  val entries: List<DreamEntry>,
+)
+
+// Pure, JVM-testable manifest parser: tolerant of any malformed shape, skips bad entries.
+object DreamManifest {
+  private const val MAX_ENTRIES = 50
+  private val VALID_KINDS = setOf("vod", "series")
+  private val HTTP_URL = Regex("^https?://", RegexOption.IGNORE_CASE)
+
+  fun parse(json: String): DreamData {
+    return try {
+      val root = JSONObject(json)
+      val at = root.optLong("at", 0L)
+      val ua = root.stringOrNull("ua")
+      val entriesArray = root.optJSONArray("entries") ?: JSONArray()
+      val entries = ArrayList<DreamEntry>()
+      for (i in 0 until entriesArray.length()) {
+        if (entries.size >= MAX_ENTRIES) break
+        val obj = entriesArray.optJSONObject(i) ?: continue
+        val entry = parseEntry(obj) ?: continue
+        entries.add(entry)
+      }
+      DreamData(at, ua, entries)
+    } catch (error: Throwable) {
+      Log.w("XtreamDream", "manifest parse failed: $error")
+      DreamData(0L, null, emptyList())
+    }
+  }
+
+  private fun parseEntry(obj: JSONObject): DreamEntry? {
+    val kind = obj.stringOrNull("kind")
+    val id = obj.stringOrNull("id")
+    val title = obj.stringOrNull("title")
+    if (kind == null || kind !in VALID_KINDS || id == null || title == null) return null
+    return DreamEntry(
+      kind = kind,
+      id = id,
+      title = title,
+      posterUrl = obj.urlOrNull("posterUrl"),
+      backdropUrl = obj.urlOrNull("backdropUrl"),
+      logoUrl = obj.urlOrNull("logoUrl"),
+      tier = obj.stringOrNull("tier") ?: "",
+    )
+  }
+
+  // Android's optString coerces a JSON null to the literal "null"; isNull is the only safe gate.
+  private fun JSONObject.stringOrNull(key: String): String? {
+    if (isNull(key)) return null
+    return optString(key).trim().takeIf { it.isNotEmpty() }
+  }
+
+  private fun JSONObject.urlOrNull(key: String): String? =
+    stringOrNull(key)?.takeIf { HTTP_URL.containsMatchIn(it) }
+}
+
+// TextClock.onDetachedFromWindow() unregisters a receiver it may never have registered; on a
+// DreamService context that throws IllegalArgumentException and takes the whole process down.
+private class SafeTextClock(context: Context) : TextClock(context) {
+  override fun onDetachedFromWindow() {
+    try {
+      super.onDetachedFromWindow()
+    } catch (_: IllegalArgumentException) {
+    }
+  }
+}

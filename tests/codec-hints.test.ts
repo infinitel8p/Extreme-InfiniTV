@@ -603,3 +603,45 @@ describe("chooseBlackFrameRecovery", () => {
     ).toBe("panel")
   })
 })
+
+describe("classifyStartFailure connection-limit verdict", () => {
+  const base = { deviceHevc: true, nameHint: false }
+
+  it("names a provider refusal instead of shrugging with \"unknown\"", () => {
+    expect(
+      classifyStartFailure({ ...base, errorDetail: "manifestLoadError (HTTP 458)" })
+    ).toEqual({ kind: "connection-limit", codec: null })
+  })
+
+  it("reads the refusal out of a shaka error payload", () => {
+    expect(
+      classifyStartFailure({
+        ...base,
+        errorDetail: 'shaka:network:1001 ["http://host/live/u/p/1.m3u8",509,"",{},1]',
+      })
+    ).toEqual({ kind: "connection-limit", codec: null })
+  })
+
+  it("outranks a codec guess, since a refused stream never reached a decoder", () => {
+    expect(
+      classifyStartFailure({
+        ...base,
+        videoCodec: "hvc1.1.6.L120.90",
+        deviceHevc: false,
+        errorDetail: "manifestLoadError (HTTP 429)",
+      })
+    ).toEqual({ kind: "connection-limit", codec: null })
+  })
+
+  it("leaves other HTTP failures to the existing classification", () => {
+    expect(classifyStartFailure({ ...base, errorDetail: "manifestLoadError (HTTP 404)" }).kind).toBe("unknown")
+    expect(classifyStartFailure({ ...base, errorDetail: "manifestLoadError (HTTP 500)" }).kind).toBe("unknown")
+  })
+
+  it("still classifies a genuine codec failure when no status is present", () => {
+    expect(
+      classifyStartFailure({ ...base, audioCodec: "ac-3", errorDetail: "bufferAddCodecError" }).kind
+    ).toBe("audio")
+  })
+})
+

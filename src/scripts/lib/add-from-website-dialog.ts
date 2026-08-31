@@ -216,7 +216,7 @@ type Phase =
   | { kind: "progress"; stage: "loading" | "waiting" }
   | { kind: "results"; candidates: SniffCandidate[] }
   | { kind: "name"; candidate: SniffCandidate; name: string; favicon: string | null }
-  | { kind: "failure"; reason: "empty" | "drm" }
+  | { kind: "failure"; reason: "empty" | "drm" | "launch" }
 
 function headerHtml(): string {
   return `
@@ -372,7 +372,12 @@ function renderPhase(
     `
   }
 
-  const message = phase.reason === "drm" ? t("sniffer.error.drm") : t("sniffer.error.empty")
+  const message =
+    phase.reason === "drm"
+      ? t("sniffer.error.drm")
+      : phase.reason === "launch"
+        ? t("sniffer.error.launch")
+        : t("sniffer.error.empty")
   return `
     <div class="flex flex-col flex-auto min-h-0 overflow-y-auto p-5 sm:p-6 gap-5">
       ${headerHtml()}
@@ -557,7 +562,8 @@ export function openAddFromWebsiteDialog(): Promise<void> {
       } catch (err) {
         if (resolved) return
         log.warn("[xt:sniffer] sniffPage threw:", err)
-        phase = { kind: "failure", reason: "empty" }
+        // The page never loaded, so "no stream found" would be a lie.
+        phase = { kind: "failure", reason: "launch" }
       }
       render()
       if (phase.kind === "results") kickoffQualityEnrichment(phase.candidates)

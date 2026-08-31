@@ -9,6 +9,7 @@ import {
   IMG_KIND_MAX_DIM,
   type ImgKind,
 } from "@/scripts/lib/img-scale"
+import { createTimedIdbOpener } from "@/scripts/lib/idb-open.ts"
 
 const DB_NAME = "xt_img_cache"
 const DB_VERSION = 1
@@ -19,33 +20,24 @@ interface StoredImage {
   cachedAt: number
 }
 
-let dbPromise: Promise<IDBDatabase> | null = null
+const idbOpener = createTimedIdbOpener({
+  name: DB_NAME,
+  version: DB_VERSION,
+  logTag: "xt:img-cache",
+  upgrade(db) {
+    if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
+  },
+})
 
-function openDb(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise
-  if (typeof indexedDB === "undefined") {
-    return Promise.reject(new Error("IndexedDB unavailable"))
-  }
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = () => {
-      const db = req.result
-      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE)
-    }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error)
-    req.onblocked = () => reject(new Error("IDB blocked"))
-  })
-  dbPromise.catch(() => {
-    dbPromise = null
-  })
-  return dbPromise
+function openDb(): Promise<IDBDatabase | null> {
+  return idbOpener.open()
 }
 
 async function idbGet(key: string): Promise<StoredImage | null> {
   if (typeof indexedDB === "undefined") return null
   try {
     const db = await openDb()
+    if (!db) return null
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, "readonly")
       const req = tx.objectStore(STORE).get(key)
@@ -62,6 +54,7 @@ async function idbPut(key: string, value: StoredImage): Promise<void> {
   if (typeof indexedDB === "undefined") return
   try {
     const db = await openDb()
+    if (!db) return
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).put(value, key)
@@ -77,6 +70,7 @@ async function idbPut(key: string, value: StoredImage): Promise<void> {
 async function idbAllKeys(): Promise<string[]> {
   try {
     const db = await openDb()
+    if (!db) return []
     return await new Promise((resolve) => {
       const tx = db.transaction(STORE, "readonly")
       const req = tx.objectStore(STORE).getAllKeys()
@@ -92,6 +86,7 @@ async function idbAllKeys(): Promise<string[]> {
 async function idbClear(): Promise<void> {
   try {
     const db = await openDb()
+    if (!db) return
     await new Promise<void>((resolve) => {
       const tx = db.transaction(STORE, "readwrite")
       tx.objectStore(STORE).clear()
@@ -107,6 +102,7 @@ async function idbClear(): Promise<void> {
 async function idbPruneExpired(maxAgeMs: number): Promise<string[]> {
   try {
     const db = await openDb()
+    if (!db) return []
     return await new Promise<string[]>((resolve) => {
       const cutoff = Date.now() - maxAgeMs
       const deletedKeys: string[] = []
@@ -315,7 +311,15 @@ async function handleVisible(img: HTMLImageElement, url: string, kind: ImgKind):
     return
   }
   img.src = url
-  scheduleBackgroundFill(cacheKey, url, kind, () => img.isConnected)
+  // WeakRef, not the element: a queued fill can wait out several navigations, and a
+  // captured <img> pins the whole detached view it belongs to until the queue drains.
+  const imgRef = typeof WeakRef === "function" ? new WeakRef(img) : null
+  scheduleBackgroundFill(
+    cacheKey,
+    url,
+    kind,
+    imgRef ? () => imgRef.deref()?.isConnected === true : () => img.isConnected
+  )
 }
 
 /** Fetch (or serve cached) `url`, downscale to `kind`'s bucket, and mount it once visible. */
@@ -341,6 +345,25 @@ export function mountCachedImage(img: HTMLImageElement, url: string, kind: ImgKi
   }
   pendingParams.set(img, { url, kind })
   observer.observe(img)
+}
+
+/**
+ * Detaches every cached <img> under `root` from the shared observer and drops its src.
+ * An observed target is a strong root, so one unreleased <img> pins its whole detached tree.
+ */
+export function releaseCachedImages(root: ParentNode | HTMLImageElement | null | undefined): void {
+  if (!root) return
+  const release = (img: HTMLImageElement): void => {
+    sharedObserver?.unobserve(img)
+    pendingParams.delete(img)
+    img.removeAttribute("src")
+    img.removeAttribute("srcset")
+  }
+  if (root instanceof HTMLImageElement) {
+    release(root)
+    return
+  }
+  for (const img of root.querySelectorAll<HTMLImageElement>("img")) release(img)
 }
 
 export interface CachedImgParams {

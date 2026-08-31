@@ -52,16 +52,40 @@ export const LOCAL_M3U_SCHEME = "xt-local://"
 export const CUSTOM_PLAYLIST_SCHEME = "xt-custom://"
 
 let storePromise = null
+const STORE_LOAD_TIMEOUT_MS = 3000
+
+// Raced against a timeout: a wedged IPC load must not hang every creds read
+// behind the cached promise - localStorage stays in sync and covers the page.
 function getStore() {
   if (!isTauri) return Promise.resolve(null)
   if (!storePromise) {
-    storePromise = Store.load(".xtream.creds.json").catch((e) => {
-      log.error(
-        "[xt:creds] plugin-store unavailable, falling back to localStorage:",
-        e
-      )
-      return null
+    let settled = false
+    const load = Store.load(".xtream.creds.json")
+      .then((store) => {
+        settled = true
+        return store
+      })
+      .catch((e) => {
+        settled = true
+        log.error(
+          "[xt:creds] plugin-store unavailable, falling back to localStorage:",
+          e
+        )
+        return null
+      })
+    const raced = Promise.race([
+      load,
+      new Promise((resolve) =>
+        setTimeout(() => {
+          if (!settled) log.warn("[xt:creds] plugin-store load timed out, using localStorage for this page")
+          resolve(null)
+        }, STORE_LOAD_TIMEOUT_MS)
+      ),
+    ])
+    load.then((store) => {
+      if (storePromise === raced) storePromise = Promise.resolve(store)
     })
+    storePromise = raced
   }
   return storePromise
 }
@@ -129,7 +153,9 @@ export function xtreamCandidatesFor(entry) {
   }
   if (Array.isArray(entry.mirrors)) {
     for (const mirror of entry.mirrors) {
-      if (!mirror?.serverUrl || !mirror?.username || !mirror?.password) continue
+      if (!mirror?.serverUrl) continue
+      // Mirrors stored before sanitizeMirrors validated credentials can still be broken.
+      if (!isUsableCredential(mirror.username) || !isUsableCredential(mirror.password)) continue
       out.push({
         host: mirror.serverUrl,
         port: "",
@@ -194,6 +220,11 @@ function sanitizeAccentOverride(value) {
   return typeof value === "string" && ACCENT_PRESETS.includes(value) ? value : ""
 }
 
+// Xtream credentials ride in URL path segments, so interior whitespace can never authenticate.
+function isUsableCredential(value) {
+  return typeof value === "string" && value.length > 0 && !/\s/.test(value)
+}
+
 function sanitizeMirrors(mirrors) {
   if (!Array.isArray(mirrors)) return []
   const out = []
@@ -204,8 +235,12 @@ function sanitizeMirrors(mirrors) {
       ? mirror.serverUrl.trim().replace(/\/+$/, "")
       : ""
     const username = typeof mirror.username === "string" ? mirror.username.trim() : ""
-    const password = typeof mirror.password === "string" ? mirror.password : ""
-    if (!serverUrl || !username || !password) continue
+    const password = typeof mirror.password === "string" ? mirror.password.trim() : ""
+    if (!serverUrl) continue
+    if (!isUsableCredential(username) || !isUsableCredential(password)) {
+      log.warn("[xt:creds] dropping mirror with unusable credentials:", hostnameFrom(serverUrl))
+      continue
+    }
     if (!/^https?:\/\//i.test(serverUrl)) continue
     const key = JSON.stringify([serverUrl, username, password])
     if (seen.has(key)) continue
@@ -407,7 +442,8 @@ export async function addEntry(partial) {
   }
   if (pendingLocalContent !== null) {
     const { setLocalContent } = await import("./local-content.js")
-    await setLocalContent(entry._id, pendingLocalContent)
+    const saved = await setLocalContent(entry._id, pendingLocalContent)
+    if (!saved) throw new Error("Failed to save local playlist content.")
   }
   const next = {
     entries: [...s.entries, entry],
@@ -491,7 +527,8 @@ export async function updateEntry(id, patch) {
   })
   if (pendingLocalContent !== null) {
     const { setLocalContent } = await import("./local-content.js")
-    await setLocalContent(id, pendingLocalContent)
+    const saved = await setLocalContent(id, pendingLocalContent)
+    if (!saved) throw new Error("Failed to save local playlist content.")
   }
   await writeRaw({ ...s, entries: next })
   const { invalidateEntry } = await import("./cache.js")

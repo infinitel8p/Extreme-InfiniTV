@@ -5,8 +5,11 @@ import {
   loadCreds,
   getActiveEntry,
   fmtBase,
+  isTauri,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { isCastRoutingActive, routePlayToCast } from "@/scripts/lib/tv-cast.js"
+import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
 import { ensureVod } from "@/scripts/lib/catalog.js"
 import {
@@ -55,15 +58,17 @@ import {
 import {
   getAndroidNativePlayerEnabled,
   getPlayerBackend,
+  DEFAULT_PLAYER_BACKEND,
   getVideoScale,
   setVideoScale,
   isTmdbActive,
   getContentLanguage,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
-import { resolveTmdbId, fetchMovieEnrichment, peekEarlyDetailData } from "@/scripts/lib/tmdb-enrich.ts"
+import { resolveTitleEnrichment, peekEarlyTitleEnrichment } from "@/scripts/lib/enrichment.ts"
 import { noteDetailGenres } from "@/scripts/lib/genre-index.ts"
 import { matchRecommendationsToCatalog } from "@/scripts/lib/tmdb-match.ts"
+import { enrichmentNeedsFill, parseProviderTmdbId } from "@/scripts/lib/tvdb-proxy.ts"
 import { pickLocalSimilar, parseProviderPeople } from "@/scripts/lib/similar-local.ts"
 import { createGroupingIndexMemo } from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
@@ -96,7 +101,8 @@ import {
   subscribeExternalPlayerExit,
 } from "@/scripts/lib/player-runtime.ts"
 import { toast } from "@/scripts/lib/toast.js"
-import { setupExternalPlayerButton, surfaceLaunchError } from "@/scripts/lib/external-player-button.ts"
+import { setupExternalPlayerButton, surfaceLaunchErrorFallback } from "@/scripts/lib/external-player-button.ts"
+import { setupPlayOnTvButton } from "@/scripts/lib/play-on-tv-button.ts"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
 import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
@@ -162,8 +168,11 @@ let heroPosterUrl = null
 let heroBackdropUrl = null
 let heroProviderBackdropUrl = null
 let heroSettled = false
+let paintedHeroPosterUrl = null
 let earlyEnrichmentHandled = false
+let earlyEnrichmentNeedsFill = false
 let earlyEnrichmentPopulatedSimilar = false
+let providerPlotApplied = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 
@@ -173,7 +182,20 @@ const setAmbient = (url) => setAmbientOn(ambientEl, url)
 function settleHero() {
   if (heroSettled) return
   heroSettled = true
+  paintedHeroPosterUrl = heroPosterUrl
   posterEl?.classList.remove("skel")
+  paintHeroOn(posterEl, {
+    name: movie?.name || "",
+    posterUrl: heroPosterUrl,
+    backdropUrls: [heroProviderBackdropUrl, heroBackdropUrl],
+  })
+}
+
+// Enrichment can land after the hero settled (no TMDb key, or a warm-cache paint),
+// so repaint when it actually brought better artwork.
+function repaintHeroIfArtworkChanged() {
+  if (!heroSettled || heroPosterUrl === paintedHeroPosterUrl) return
+  paintedHeroPosterUrl = heroPosterUrl
   paintHeroOn(posterEl, {
     name: movie?.name || "",
     posterUrl: heroPosterUrl,
@@ -277,6 +299,7 @@ function applyVodInfo(data) {
   detailSrcBuilder = builder
   applyDownloadState()
   externalBtnHandle?.refresh()
+  playTvBtnHandle?.refresh()
 
   const year = movieData.releasedate || movieData.year || info.year || ""
   const durationSecs = Number(movieData.duration_secs || info.duration_secs || 0)
@@ -300,6 +323,7 @@ function applyVodInfo(data) {
   metaRatingText = fmtImdbRating(rating)
   renderMetaLine()
   if (activePlaylistId) noteDetailGenres(activePlaylistId, "vod", movieId, genre)
+  providerPlotApplied = Boolean(plot.trim())
   if (plotEl) plotEl.textContent = plot || t("detail.noDescription")
 
   trailerUrl = youtubeUrlFromTrailer(
@@ -502,7 +526,8 @@ function applyEnrichmentPatch(enrichment) {
     heroBackdropUrl = enrichment.backdropUrl
     if (!heroProviderBackdropUrl) setAmbient(enrichment.backdropUrl)
   }
-  if (enrichment.overview && plotEl) plotEl.textContent = enrichment.overview
+  if (enrichment.overview && plotEl && (!enrichment.overviewIsFallback || !providerPlotApplied))
+    plotEl.textContent = enrichment.overview
   if (enrichment.director) patchDirector(enrichment.director, enrichment.directorPersonId)
   if (enrichment.tagline) patchTagline(enrichment.tagline)
   patchGenreFromEnrichment(enrichment.genres)
@@ -513,11 +538,13 @@ function applyEnrichmentPatch(enrichment) {
     trailerBtn?.removeAttribute("hidden")
   }
   if (enrichment.cast?.length) renderCast(enrichment.cast)
+  repaintHeroIfArtworkChanged()
 }
 
 // Returns whether the similar rail was populated from TMDb recommendations.
 async function enrichMovieDetailFromTmdb(requestId) {
-  if (!isTmdbActive() || !movie || !activePlaylistId) {
+  // No isTmdbActive() gate: the TheTVDB proxy enriches without a user key.
+  if (!movie || !activePlaylistId) {
     settleHero()
     return false
   }
@@ -530,21 +557,16 @@ async function enrichMovieDetailFromTmdb(requestId) {
   const data = vodInfoRaw
   const movieData = data?.movie_data || data?.info || data || {}
   const info = data?.info || data?.movie_data || {}
-  const providerTmdbId = Number(info.tmdb_id || movieData.tmdb_id) || null
+  const providerTmdbId = parseProviderTmdbId(info) ?? parseProviderTmdbId(movieData)
 
-  const tmdbId = await resolveTmdbId(activePlaylistId, "vod", {
-    id: movie.id,
+  const enrichment = await resolveTitleEnrichment({
+    kind: "movie",
+    playlistId: activePlaylistId,
+    itemId: String(movie.id),
     name: movie.name,
-    year: movie.year || movieData.releasedate || movieData.year || info.year || null,
+    year: parseInt(String(movie.year || movieData.releasedate || movieData.year || info.year), 10) || null,
     providerTmdbId,
   })
-  if (requestId !== enrichRequestId) return false
-  if (tmdbId == null) {
-    settleHero()
-    return false
-  }
-
-  const enrichment = await fetchMovieEnrichment(tmdbId)
   if (requestId !== enrichRequestId) return false
   if (!enrichment) {
     settleHero()
@@ -609,7 +631,15 @@ async function populateSimilarRail(requestId) {
   // boot() already merged a cache-warm enrichment into the first paint; only the
   // local-similar fallback (when TMDb had no catalog-matching recommendations) is left.
   if (earlyEnrichmentHandled) {
-    if (!earlyEnrichmentPopulatedSimilar) await populateLocalSimilarRail(requestId)
+    // The warm paint came from the TMDb cache alone, so it may still have gaps.
+    let refilledSimilar = false
+    if (earlyEnrichmentNeedsFill) {
+      earlyEnrichmentNeedsFill = false
+      refilledSimilar = await enrichMovieDetailFromTmdb(requestId)
+    }
+    if (!earlyEnrichmentPopulatedSimilar && !refilledSimilar) {
+      await populateLocalSimilarRail(requestId)
+    }
     return
   }
   const populatedFromTmdb = await enrichMovieDetailFromTmdb(requestId)
@@ -668,6 +698,7 @@ function syncResumeUI() {
 // Playback
 // ----------------------------
 let vjs = null
+let focusKeeperCleanup: (() => void) | null = null
 let movieInsights = null
 
 const inlineTrailer = createInlineTrailer({
@@ -709,7 +740,10 @@ let qualityChipDetach = null
 const RESUME_MIN_SECONDS = 30
 const RESUME_MAX_FRACTION = 0.95
 
-const vodPlaybackToasts = createVodPlaybackToasts(() => externalBtnHandle?.refresh())
+const vodPlaybackToasts = createVodPlaybackToasts(() => {
+  externalBtnHandle?.refresh()
+  playTvBtnHandle?.refresh()
+})
 
 function setupPipButton(player) {
   const pipBtn = document.getElementById("movie-detail-pip")
@@ -817,7 +851,7 @@ async function ensureEmbeddedPlayer(backend) {
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
   if (mounted.backend === "videojs") {
-    attachPlayerFocusKeeper(vjs)
+    focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
   return vjs
@@ -840,6 +874,41 @@ function retirePreviousPlayback() {
 
 async function startPlayback(options = {}) {
   if (!movie) return
+  if (isTauri && isCastRoutingActive() && !options.forceLocal) {
+    const title = movie.name || ""
+    await routePlayToCast({
+      contentTitle: title || null,
+      contentHref: `/movies/detail?id=${movie.id}`,
+      vodContext: activePlaylistId ? { playlistId: activePlaylistId, vodId: String(movie.id) } : undefined,
+      stopLocal: () => {
+        try { vjs?.pause?.() } catch {}
+        try { vjs?.reset?.() } catch {}
+        retirePreviousPlayback()
+      },
+      restoreLocal: () => { void startPlayback({ forceLocal: true }) },
+      buildDescriptor: async () => {
+        let src = null
+        try {
+          src = detailSrcBuilder ? await resolveStreamUrl(detailSrcBuilder) : detailSrc || null
+        } catch (err) {
+          log.warn("[xt:movie-detail] failed to resolve cast stream url:", err)
+        }
+        if (!src || !isCastableSrc(src)) return null
+        const saved = activePlaylistId ? getProgress(activePlaylistId, "vod", movie.id) : null
+        const resumeSeconds =
+          saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+        const durationSeconds = knownVodDurationSeconds()
+        return buildVodCastDescriptor({
+          src,
+          title,
+          logo: movie.logo || undefined,
+          resumeSeconds,
+          durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
+        })
+      },
+    })
+    return
+  }
   inlineTrailer.close()
   const requestId = ++playRequestId
 
@@ -909,7 +978,7 @@ async function startPlayback(options = {}) {
     if (launched) return
   }
 
-  const backend = getPlayerBackend()
+  let backend = getPlayerBackend()
 
   if (backend === "mpv" || backend === "vlc") {
     try {
@@ -917,10 +986,11 @@ async function startPlayback(options = {}) {
       await launchExternalPlayback(backend, externalSrc, resumePos)
       pushMoviePresence()
       externalPresenceActive = true
+      return
     } catch (err) {
-      surfaceLaunchError(err, backend)
+      surfaceLaunchErrorFallback(err, backend, "[xt:movie-detail]")
+      backend = DEFAULT_PLAYER_BACKEND
     }
-    return
   }
 
   await mountVodPlayback({
@@ -1059,9 +1129,53 @@ const externalBtnHandle = setupExternalPlayerButton(
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}
     },
+    releaseLocal() {
+      // Same release the cast handoff does: a paused mount can still hold the provider connection.
+      try { vjs?.pause?.() } catch {}
+      try { vjs?.reset?.() } catch {}
+      retirePreviousPlayback()
+    },
+    restoreLocal() {
+      startPlayback()
+    },
     afterLaunch() {
       pushMoviePresence()
       externalPresenceActive = true
+    },
+  }
+)
+
+const playTvBtnHandle = setupPlayOnTvButton(
+  document.getElementById("movie-detail-play-tv"),
+  {
+    getSrcBuilder() {
+      return detailSrcBuilder
+    },
+    getSrc() {
+      return detailSrc || null
+    },
+    getTitle() {
+      return movie?.name || null
+    },
+    getLogo() {
+      return movie?.logo || null
+    },
+    getResumeSeconds() {
+      if (!activePlaylistId || !movie) return 0
+      const saved = getProgress(activePlaylistId, "vod", movie.id)
+      if (!saved || saved.completed) return 0
+      return saved.position > RESUME_MIN_SECONDS ? saved.position : 0
+    },
+    getDurationSeconds() {
+      const seconds = knownVodDurationSeconds()
+      return seconds > 0 ? seconds : undefined
+    },
+    getCastContext() {
+      if (!activePlaylistId || !movie) return null
+      return { vodContext: { playlistId: activePlaylistId, vodId: String(movie.id) } }
+    },
+    beforeCast() {
+      try { vjs?.pause?.() } catch {}
     },
   }
 )
@@ -1315,6 +1429,10 @@ async function boot() {
   const enrichRequestIdForThisBoot = ++enrichRequestId
   try {
     vjs?.pause?.()
+    if (focusKeeperCleanup) {
+      focusKeeperCleanup()
+      focusKeeperCleanup = null
+    }
     await vjs?.dispose?.()
   } catch {}
   vjs = null
@@ -1334,6 +1452,7 @@ async function boot() {
   showDetailSkeleton()
   if (metaEl) metaEl.textContent = ""
   if (plotEl) plotEl.textContent = ""
+  providerPlotApplied = false
   if (titleEl) titleEl.textContent = ""
   if (langsEl) {
     langsEl.setAttribute("hidden", "")
@@ -1380,14 +1499,15 @@ async function boot() {
     detailSrc = dl.url
     applyDownloadState()
     externalBtnHandle?.refresh()
+    playTvBtnHandle?.refresh()
   }
 
   // Both probes are network-free (hydrate + memory read) and run under one bound,
   // so a cold IDB read can never delay first paint past the shared timeout.
-  const { enrichment: earlyEnrichment, providerInfo: earlyProviderInfo } = await peekEarlyDetailData(
+  const { enrichment: earlyEnrichment, providerInfo: earlyProviderInfo } = await peekEarlyTitleEnrichment(
+    "movie",
     active._id,
-    "vod",
-    movie.id,
+    String(movie.id),
     active._id,
     `vod_info_${movieId}`
   )
@@ -1400,11 +1520,12 @@ async function boot() {
   }
 
   if (earlyEnrichment) {
-    applyEnrichmentPatch(earlyEnrichment.enrichment)
+    applyEnrichmentPatch(earlyEnrichment)
     settleHero()
     earlyEnrichmentHandled = true
-    if (earlyEnrichment.enrichment.recommendations?.length) {
-      const matches = matchRecommendationsToCatalog(earlyEnrichment.enrichment.recommendations, list?.data || [], {
+    earlyEnrichmentNeedsFill = enrichmentNeedsFill(earlyEnrichment)
+    if (earlyEnrichment.recommendations?.length) {
+      const matches = matchRecommendationsToCatalog(earlyEnrichment.recommendations, list?.data || [], {
         mediaType: "movie",
         limit: 12,
         sourcePrefix: parseNamePrefix(movie.name).tag,
@@ -1448,7 +1569,7 @@ async function boot() {
         // applyVodInfo resets the provider-derived fields the merge already backfilled; reassert it.
         // settleHero() is a no-op once already settled, so this never repaints with a different image.
         if (earlyEnrichmentHandled) {
-          applyEnrichmentPatch(earlyEnrichment.enrichment)
+          applyEnrichmentPatch(earlyEnrichment)
           settleHero()
         }
         hideDetailSkeleton()

@@ -141,16 +141,22 @@ function writePersistedLocale(code: string | null): void {
   }
 }
 
-function writeCachedMessages(code: string, messages: LocaleMessages): void {
+function writeCachedMessages(
+  code: string,
+  messages: LocaleMessages,
+  serializedMessages?: string
+): void {
   try {
     if (typeof localStorage === "undefined") return
     if (code === "en") {
       localStorage.removeItem(LOCALE_MESSAGES_STORAGE_KEY)
       return
     }
+    // Reuse the caller's stringified messages instead of re-serializing them
+    const messagesJson = serializedMessages ?? JSON.stringify(messages)
     localStorage.setItem(
       LOCALE_MESSAGES_STORAGE_KEY,
-      JSON.stringify({ code, messages })
+      `{"code":${JSON.stringify(code)},"messages":${messagesJson}}`
     )
   } catch {
     /* ignore quota / privacy-mode errors */
@@ -309,10 +315,11 @@ async function refreshSeededLocale(): Promise<void> {
     // resurrect the stale snapshot.
     cache.set(code, fresh)
     const staleMessages = seededMessages
-    const changed = !staleMessages || JSON.stringify(fresh) !== JSON.stringify(staleMessages)
+    const freshMessagesJson = JSON.stringify(fresh)
+    const changed = !staleMessages || freshMessagesJson !== JSON.stringify(staleMessages)
     if (changed && code === activeCode) {
       activeMessages = fresh
-      writeCachedMessages(code, fresh)
+      writeCachedMessages(code, fresh, freshMessagesJson)
       if (typeof document !== "undefined") {
         applyI18nDOM()
         document.dispatchEvent(new CustomEvent(LOCALE_CHANGED_EVENT, { detail: { code } }))

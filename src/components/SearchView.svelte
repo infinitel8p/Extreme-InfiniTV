@@ -13,6 +13,7 @@
     EVT_SEARCH_RECENT_CHANGED,
   } from "@/scripts/lib/preferences.js"
   import { warmupActive } from "@/scripts/lib/catalog.js"
+  import { readCachedLiveChannels, hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
   import {
     loadProgrammes,
     getProgrammesSync,
@@ -28,6 +29,7 @@
   } from "@/scripts/lib/series-seasons.ts"
   import { searchPeople } from "@/scripts/lib/person-search.ts"
   import { resolvePersonTitleIds } from "@/scripts/lib/person-filter.ts"
+  import { isTvDevice } from "@/scripts/lib/tv-detect"
 
   /** @type {{ focusOnMount?: boolean }} */
   let { focusOnMount = false } = $props()
@@ -58,6 +60,8 @@
 
   /** @type {"all"|"live"|"vod"|"series"|"epg"|"actors"} */
   let kindFilter = $state("all")
+  /** @type {Array<"all"|"live"|"vod"|"series"|"actors"|"epg">} */
+  const kindOptions = ["all", "live", "vod", "series", "actors", "epg"]
   let query = $state(initialFromUrl)
   let queryDebounced = $state(initialFromUrl)
   let _queryTimer = null
@@ -138,8 +142,12 @@
     return `${wk} ${time}`
   }
 
+  let loadIndexGeneration = 0
+
   async function loadIndex(opts = {}) {
-    const active = await getActiveEntry()
+    const generation = ++loadIndexGeneration
+    const [active] = await Promise.all([getActiveEntry(), ensurePrefsLoaded()])
+    if (generation !== loadIndexGeneration) return
     if (!active) {
       allItems = []
       activePlaylistId = ""
@@ -149,113 +157,129 @@
     }
     if (active._id !== activePlaylistId) seasonCounts = {}
     activePlaylistId = active._id
-    await ensurePrefsLoaded()
     refreshRecentSearches()
-    await Promise.all([
+
+    const buildIndex = async () => {
+      const liveData = readCachedLiveChannels(active._id)
+      const vodData = getCached(active._id, "vod")?.data || []
+      const seriesData = getCached(active._id, "series")?.data || []
+      rawVodData = vodData
+      rawSeriesData = seriesData
+
+      const cold =
+        !liveData.length && !vodData.length && !seriesData.length
+      if (cold && opts.warm !== false) {
+        isWarming = true
+        warmupActive(active._id).then(() => {
+          isWarming = false
+          if (generation === loadIndexGeneration) loadIndex({ warm: false })
+        })
+      }
+
+      const items = []
+      for (const channel of liveData) {
+        items.push({
+          kind: "live",
+          id: Number(channel.id),
+          name: channel.name || "",
+          logo: channel.logo || null,
+          subtitle: `${fmtChannelIdentity(channel.chno, channel.id)} · ${channel.category || "Live"}`,
+          href: buildHref("live", channel.id),
+          norm: channel.norm || normalize(`${channel.name || ""} ${channel.category || ""}`),
+        })
+      }
+      for (const movie of vodData) {
+        items.push({
+          kind: "vod",
+          id: Number(movie.id),
+          name: movie.name || "",
+          logo: movie.logo || null,
+          subtitle: movie.year ? `Movie · ${movie.year}` : "Movie",
+          href: buildHref("vod", movie.id),
+          norm: movie.norm || normalize(`${movie.name || ""} ${movie.category || ""}`),
+        })
+      }
+      for (const series of seriesData) {
+        items.push({
+          kind: "series",
+          id: Number(series.id),
+          name: series.name || "",
+          logo: series.logo || null,
+          year: series.year || "",
+          genre: series.category || "",
+          subtitle: series.year ? `Series · ${series.year}` : "Series",
+          href: buildHref("series", series.id),
+          norm: series.norm || normalize(`${series.name || ""} ${series.category || ""}`),
+        })
+      }
+
+      const epgState = getProgrammesSync(active._id)
+      const hasTvgChannels = liveData.some((channel) => channel.tvgId)
+      if (hasTvgChannels && !epgState && opts.warmEpg !== false) {
+        try {
+          const creds = await loadCreds()
+          if (generation !== loadIndexGeneration) return
+          if (creds?.host) loadProgrammes(active._id, creds).catch(() => {})
+        } catch {}
+      }
+      if (epgState?.programmes?.size) {
+        const now = Date.now()
+        const HORIZON = now + 36 * 60 * 60 * 1000
+        const HARD_CAP = 5000
+        let epgCount = 0
+        outer: for (const channel of liveData) {
+          if (!channel.tvgId) continue
+          const programmes = epgState.programmes.get(
+            String(channel.tvgId).toLowerCase()
+          )
+          if (!programmes || !programmes.length) continue
+          const channelName = channel.name || ""
+          const channelLogo = channel.logo || null
+          for (const programme of programmes) {
+            if (programme.stop <= now) continue
+            if (programme.start > HORIZON) break
+            const isLive = programme.start <= now && now < programme.stop
+            const when = isLive ? "Live now" : fmtProgrammeStart(programme.start)
+            items.push({
+              kind: "epg",
+              id: `${channel.id}:${programme.start}`,
+              name: programme.title || "Untitled",
+              logo: channelLogo,
+              subtitle: `${channelName} · ${when}`,
+              href: buildHref("live", channel.id),
+              norm: normalize(`${programme.title || ""} ${channelName}`),
+            })
+            epgCount++
+            if (epgCount >= HARD_CAP) break outer
+          }
+        }
+      }
+
+      allItems = items
+    }
+
+    const hydrations = [
       hydrateCache(active._id, "live"),
       hydrateCache(active._id, "m3u"),
       hydrateCache(active._id, "vod"),
       hydrateCache(active._id, "series"),
-    ])
+    ]
+    const allCached =
+      hasCachedLiveChannels(active._id) &&
+      !!getCached(active._id, "vod") &&
+      !!getCached(active._id, "series")
 
-    const liveData =
-      getCached(active._id, "live")?.data ||
-      getCached(active._id, "m3u")?.data ||
-      []
-    const vodData = getCached(active._id, "vod")?.data || []
-    const seriesData = getCached(active._id, "series")?.data || []
-    rawVodData = vodData
-    rawSeriesData = seriesData
-
-    const cold =
-      !liveData.length && !vodData.length && !seriesData.length
-    if (cold && opts.warm !== false) {
-      isWarming = true
-      warmupActive(active._id).then(() => {
-        isWarming = false
-        loadIndex({ warm: false })
+    if (allCached) {
+      // Build from memory now; hydration below only refreshes stale data.
+      await buildIndex()
+      void Promise.allSettled(hydrations).then(() => {
+        if (generation === loadIndexGeneration) buildIndex()
       })
+    } else {
+      await Promise.allSettled(hydrations)
+      if (generation !== loadIndexGeneration) return
+      await buildIndex()
     }
-
-    const items = []
-    for (const channel of liveData) {
-      items.push({
-        kind: "live",
-        id: Number(channel.id),
-        name: channel.name || "",
-        logo: channel.logo || null,
-        subtitle: `${fmtChannelIdentity(channel.chno, channel.id)} · ${channel.category || "Live"}`,
-        href: buildHref("live", channel.id),
-        norm: channel.norm || normalize(`${channel.name || ""} ${channel.category || ""}`),
-      })
-    }
-    for (const movie of vodData) {
-      items.push({
-        kind: "vod",
-        id: Number(movie.id),
-        name: movie.name || "",
-        logo: movie.logo || null,
-        subtitle: movie.year ? `Movie · ${movie.year}` : "Movie",
-        href: buildHref("vod", movie.id),
-        norm: movie.norm || normalize(`${movie.name || ""} ${movie.category || ""}`),
-      })
-    }
-    for (const series of seriesData) {
-      items.push({
-        kind: "series",
-        id: Number(series.id),
-        name: series.name || "",
-        logo: series.logo || null,
-        year: series.year || "",
-        genre: series.category || "",
-        subtitle: series.year ? `Series · ${series.year}` : "Series",
-        href: buildHref("series", series.id),
-        norm: series.norm || normalize(`${series.name || ""} ${series.category || ""}`),
-      })
-    }
-
-    const epgState = getProgrammesSync(active._id)
-    const hasTvgChannels = liveData.some((channel) => channel.tvgId)
-    if (hasTvgChannels && !epgState && opts.warmEpg !== false) {
-      try {
-        const creds = await loadCreds()
-        if (creds?.host) loadProgrammes(active._id, creds).catch(() => {})
-      } catch {}
-    }
-    if (epgState?.programmes?.size) {
-      const now = Date.now()
-      const HORIZON = now + 36 * 60 * 60 * 1000
-      const HARD_CAP = 5000
-      let epgCount = 0
-      outer: for (const channel of liveData) {
-        if (!channel.tvgId) continue
-        const programmes = epgState.programmes.get(
-          String(channel.tvgId).toLowerCase()
-        )
-        if (!programmes || !programmes.length) continue
-        const channelName = channel.name || ""
-        const channelLogo = channel.logo || null
-        for (const programme of programmes) {
-          if (programme.stop <= now) continue
-          if (programme.start > HORIZON) break
-          const isLive = programme.start <= now && now < programme.stop
-          const when = isLive ? "Live now" : fmtProgrammeStart(programme.start)
-          items.push({
-            kind: "epg",
-            id: `${channel.id}:${programme.start}`,
-            name: programme.title || "Untitled",
-            logo: channelLogo,
-            subtitle: `${channelName} · ${when}`,
-            href: buildHref("live", channel.id),
-            norm: normalize(`${programme.title || ""} ${channelName}`),
-          })
-          epgCount++
-          if (epgCount >= HARD_CAP) break outer
-        }
-      }
-    }
-
-    allItems = items
   }
 
   function syncUrl(queryValue) {
@@ -490,6 +514,7 @@
   }
 
   function onKey(ev) {
+    if (isTvDevice()) return
     const onInput = document.activeElement === inputEl
     const inRecentSection = !!recentSectionEl?.contains(document.activeElement)
     if (onInput && personMode && ev.key === "Backspace" && !query) {
@@ -628,7 +653,7 @@
     </div>
 
     <div class="flex items-center gap-1 overflow-x-auto custom-scroll -mx-1 px-1">
-      {#each /** @type {const} */ (["all", "live", "vod", "series", "actors", "epg"]) as kindOption}
+      {#each kindOptions as kindOption}
         <button
           type="button"
           onclick={() => (kindFilter = kindOption)}

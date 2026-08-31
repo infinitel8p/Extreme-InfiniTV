@@ -3,6 +3,7 @@ import {
   buildGroupingIndex,
   pickPreferredEntryId,
   groupPassesLanguageFilter,
+  collapseIntoDisplayGroups,
   type GroupableEntry,
 } from "@/scripts/lib/language-groups.ts"
 
@@ -243,6 +244,63 @@ describe("pickPreferredEntryId", () => {
       [91, "DE"],
     ])
     expect(pickPreferredEntryId([90, 91], bothDe, ["DE"])).toBe(90)
+  })
+})
+
+describe("collapseIntoDisplayGroups", () => {
+  it("collapses language variants of the same title into one display group", () => {
+    const entries: GroupableEntry[] = [
+      { id: 1, name: "EN - Project Hail Mary (2026)", tmdb: 12345 },
+      { id: 2, name: "DE - Project Hail Mary (2026)", tmdb: 12345 },
+    ]
+    const index = buildGroupingIndex(entries)
+    const groups = collapseIntoDisplayGroups(entries, index, ["EN"])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].globalEntryIds.sort()).toEqual([1, 2])
+    expect(groups[0].tags).toEqual(["EN", "DE"])
+    expect(groups[0].displayEntry.id).toBe(1)
+  })
+
+  it("picks the preferred-language variant as the display entry", () => {
+    const entries: GroupableEntry[] = [
+      { id: 1, name: "EN - Project Hail Mary (2026)", tmdb: 12345 },
+      { id: 2, name: "DE - Project Hail Mary (2026)", tmdb: 12345 },
+    ]
+    const index = buildGroupingIndex(entries)
+    const groups = collapseIntoDisplayGroups(entries, index, ["DE", "EN"])
+    expect(groups[0].displayEntry.id).toBe(2)
+  })
+
+  it("falls back to the first preferred tag with a match, then untagged, then the first entry", () => {
+    const entries: GroupableEntry[] = [
+      { id: 1, name: "EN - Chapter Two (2019)" },
+      { id: 2, name: "IT - Chapter Two (2019)" },
+    ]
+    const index = buildGroupingIndex(entries)
+    const groups = collapseIntoDisplayGroups(entries, index, ["FR", "IT"])
+    expect(groups[0].displayEntry.id).toBe(2)
+  })
+
+  it("keeps every entry as its own group when nothing shares a group key", () => {
+    const entries: GroupableEntry[] = [
+      { id: 1, name: "Alpha (2020)" },
+      { id: 2, name: "Beta (2021)" },
+    ]
+    const index = buildGroupingIndex(entries)
+    const groups = collapseIntoDisplayGroups(entries, index, [])
+    expect(groups).toHaveLength(2)
+    expect(groups.map((group) => group.displayEntry.id)).toEqual([1, 2])
+  })
+
+  it("preserves the order groups first appear in the input", () => {
+    const entries: GroupableEntry[] = [
+      { id: 3, name: "DE - Zeta (2020)", tmdb: 7 },
+      { id: 1, name: "Alpha (2020)" },
+      { id: 4, name: "EN - Zeta (2020)", tmdb: 7 },
+    ]
+    const index = buildGroupingIndex(entries)
+    const groups = collapseIntoDisplayGroups(entries, index, [])
+    expect(groups.map((group) => group.key)).toEqual([index.keyByEntryId.get(3), "e:1"])
   })
 })
 

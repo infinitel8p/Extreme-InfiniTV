@@ -11,6 +11,7 @@ import {
   defineRelativeTimestampOffset,
   manifestKindFromExtension,
   shouldPreferNativeHls,
+  androidHandoffKindFor,
 } from "../src/scripts/lib/player-runtime"
 
 const SRC = "https://example.com/live/u/p/1.m3u8"
@@ -333,5 +334,15 @@ describe("shouldPreferNativeHls", () => {
 
   it("never prefers native when the element cannot play HLS natively", () => {
     expect(shouldPreferNativeHls({ isMacOS: true, isTauri: false, canPlayNativeHls: false })).toBe(false)
+  })
+})
+
+describe("androidHandoffKindFor", () => {
+  it("keeps a vlc backend on VLC", () => {
+    expect(androidHandoffKindFor("vlc")).toBe("vlc")
+  })
+
+  it("routes mpv to the system chooser, since MPV has no Android build", () => {
+    expect(androidHandoffKindFor("mpv")).toBe("system")
   })
 })

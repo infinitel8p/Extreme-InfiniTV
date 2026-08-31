@@ -1,5 +1,6 @@
 import { selectEntry, removeEntry, loadCreds, getActiveEntry } from "./creds.js"
-import { getNewestCacheTime, getCached } from "./cache.js"
+import { getNewestCacheTime } from "./cache.js"
+import { readCachedLiveChannels } from "./live-catalog.ts"
 import { buildLiveStreamUrl } from "./stream-urls.ts"
 import {
   ICON_TRASH,
@@ -60,9 +61,7 @@ async function exportEntryM3U(entry) {
 /** First cached channel's stream URL, so "Run diagnostic" can probe playback without an extra catalog fetch. Checks "live" then falls back to "m3u", same as playlist-health.ts. */
 function resolveSampleStreamUrl(entry) {
   try {
-    const live = getCached(entry._id, "live")
-    const hit = live && Array.isArray(live.data) && live.data.length ? live : getCached(entry._id, "m3u")
-    const firstChannel = Array.isArray(hit?.data) ? hit.data[0] : null
+    const firstChannel = readCachedLiveChannels(entry._id)[0] || null
     if (!firstChannel) return null
     if (typeof firstChannel.url === "string" && firstChannel.url) return firstChannel.url
     if (firstChannel.id != null && entry.type === "xtream") {
@@ -464,7 +463,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
   refresh.type = "button"
   refresh.textContent = t("settings.health.refresh")
   refresh.className =
-    "inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg px-2.5 py-1 text-2xs text-fg-2 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
+    "inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-line bg-bg h-8 px-3 text-xs text-fg-2 hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent transition-colors"
   refresh.addEventListener("click", async (ev) => {
     ev.stopPropagation()
     refresh.setAttribute("disabled", "")
@@ -558,7 +557,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
   }
 
   const footer = document.createElement("div")
-  footer.className = "mt-3 flex items-center justify-between gap-2 flex-wrap"
+  footer.className = "mt-3 flex flex-wrap items-center gap-2"
   const footerLeft = document.createElement("div")
   footerLeft.className = "inline-flex items-center gap-2"
   footerLeft.appendChild(refresh)
@@ -567,7 +566,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
 
   if (isCompact) {
     const actions = document.createElement("div")
-    actions.className = "inline-flex items-center gap-1"
+    actions.className = "ms-auto inline-flex items-center gap-2"
 
     const edit = document.createElement("a")
     edit.href = editHrefFor(entry)

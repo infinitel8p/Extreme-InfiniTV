@@ -6,8 +6,11 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebSettings
@@ -33,6 +36,8 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.Bitmap
 import android.net.Uri
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.util.Base64
 import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
@@ -50,6 +55,22 @@ import androidx.annotation.RequiresApi
 import app.tauri.plugin.PluginManager
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import android.graphics.BitmapFactory
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import java.net.URL
 
 @RequiresApi(Build.VERSION_CODES.O)
 private class RenderGoneGuardingClient(
@@ -118,6 +139,47 @@ class WebSettingsBridge(
     val target = if (ua.isNullOrEmpty()) defaultUa else ua
     activity.runOnUiThread {
       webViewRef()?.settings?.userAgentString = target
+    }
+  }
+}
+
+// JS focus() alone doesn't summon the IME in an Android WebView; needs an explicit showSoftInput.
+class ImeBridge(
+  private val activity: TauriActivity,
+  private val webViewRef: () -> WebView?,
+) {
+  @JavascriptInterface
+  fun show() {
+    activity.runOnUiThread {
+      try {
+        val webView = webViewRef() ?: return@runOnUiThread
+        // No requestFocus here: it resets the WebView's DOM focus to the first anchor.
+        // Delay past the WebView's InputConnection rebuild; flag 0 = explicit request, SHOW_IMPLICIT gets ignored on TVs.
+        webView.postDelayed({
+          try {
+            val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            if (!imm.showSoftInput(webView, 0)) {
+              Log.w("xtream-rs", "AndroidIme.show: showSoftInput returned false")
+            }
+          } catch (e: Throwable) {
+            Log.w("xtream-rs", "AndroidIme.show failed: $e")
+          }
+        }, 80L)
+      } catch (e: Throwable) {
+        Log.w("xtream-rs", "AndroidIme.show failed: $e")
+      }
+    }
+  }
+
+  @JavascriptInterface
+  fun hide() {
+    activity.runOnUiThread {
+      try {
+        val imm = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(webViewRef()?.windowToken, 0)
+      } catch (e: Throwable) {
+        Log.w("xtream-rs", "AndroidIme.hide failed: $e")
+      }
     }
   }
 }
@@ -217,6 +279,55 @@ class DeviceInfoBridge(private val activity: TauriActivity) {
 
   @JavascriptInterface
   fun getPackageName(): String = activity.packageName
+
+  @JavascriptInterface
+  fun getDeviceName(): String {
+    return try {
+      val name = Settings.Global.getString(activity.contentResolver, Settings.Global.DEVICE_NAME)
+      if (!name.isNullOrBlank()) name else Build.MODEL ?: ""
+    } catch (e: Throwable) {
+      Build.MODEL ?: ""
+    }
+  }
+}
+
+// System screensaver handoff: Settings > Display > Screen saver has no API to preselect
+// an entry, so this only opens the picker; the user still has to choose XtreamDreamService.
+class ScreensaverBridge(private val activity: TauriActivity) {
+  @JavascriptInterface
+  fun isDreamSettingsAvailable(): Boolean {
+    return try {
+      resolveDreamSettingsActivity() != null
+    } catch (e: Throwable) {
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun openDreamSettings(): Boolean {
+    if (resolveDreamSettingsActivity() == null) return false
+    val intent = Intent(Settings.ACTION_DREAM_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    activity.runOnUiThread {
+      try {
+        activity.startActivity(intent)
+      } catch (e: ActivityNotFoundException) {
+        Log.w("xtream-rs", "openDreamSettings startActivity threw: $e")
+      } catch (e: Throwable) {
+        Log.w("xtream-rs", "openDreamSettings launch threw: $e")
+      }
+    }
+    return true
+  }
+
+  private fun resolveDreamSettingsActivity(): ResolveInfo? {
+    val intent = Intent(Settings.ACTION_DREAM_SETTINGS)
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      activity.packageManager.resolveActivity(intent, PackageManager.ResolveInfoFlags.of(0))
+    } else {
+      @Suppress("DEPRECATION")
+      activity.packageManager.resolveActivity(intent, 0)
+    }
+  }
 }
 
 // {dataDir}/logs isn't a declared FileProvider root, so the newest log file is copied to the cache dir first and shared from there.
@@ -664,6 +775,446 @@ class PipBridge(private val activity: TauriActivity) {
   }
 }
 
+// Receiver auto-discovery via mDNS/DNS-SD. Advertise runs on a receiving device,
+// startDiscovery/drainDiscovered on a sender looking for one. NsdManager only
+// allows one resolveService in flight, so found services queue and resolve one at a time.
+class NsdBridge(private val activity: TauriActivity) {
+  companion object {
+    private const val TAG = "AndroidNsd"
+    private const val SERVICE_TYPE = "_xtream-recv._tcp."
+    private const val MAX_SERVICE_NAME_LEN = 63
+  }
+
+  private val nsdManager: NsdManager? by lazy {
+    try {
+      activity.getSystemService(Context.NSD_SERVICE) as? NsdManager
+    } catch (error: Throwable) {
+      Log.w(TAG, "getSystemService(NSD_SERVICE) failed", error)
+      null
+    }
+  }
+
+  private val lock = Any()
+  private var registrationListener: NsdManager.RegistrationListener? = null
+  private var requestedServiceName: String? = null
+  private var advertisedServiceName: String? = null
+  @Volatile private var lastAdvertiseState: String = "off"
+
+  private var discoveryListener: NsdManager.DiscoveryListener? = null
+  private var resolving = false
+  private val resolveQueue = ArrayDeque<NsdServiceInfo>()
+  private val discovered = mutableListOf<String>()
+  private val seenKeys = mutableSetOf<String>()
+
+  @JavascriptInterface
+  fun isSupported(): Boolean = nsdManager != null
+
+  @JavascriptInterface
+  fun advertise(name: String?, port: Int, id: String?) {
+    val manager = nsdManager ?: return
+    val serviceName = (name?.trim().orEmpty()).take(MAX_SERVICE_NAME_LEN).ifEmpty { "xtream" }
+    synchronized(lock) {
+      registrationListener?.let { unregisterLocked(manager, it) }
+      registrationListener = null
+      lastAdvertiseState = "pending"
+      val serviceInfo = NsdServiceInfo().apply {
+        this.serviceName = serviceName
+        this.serviceType = SERVICE_TYPE
+        this.port = port
+        if (!id.isNullOrEmpty()) {
+          setAttribute("id", id)
+        }
+      }
+      val listener = object : NsdManager.RegistrationListener {
+        override fun onServiceRegistered(info: NsdServiceInfo) {
+          Log.d(TAG, "advertise registered: ${info.serviceName}")
+          advertisedServiceName = info.serviceName
+          lastAdvertiseState = "registered"
+        }
+        override fun onRegistrationFailed(info: NsdServiceInfo, errorCode: Int) {
+          Log.w(TAG, "advertise registration failed: $errorCode")
+          lastAdvertiseState = "failed:$errorCode"
+          synchronized(lock) { if (registrationListener === this) registrationListener = null }
+        }
+        override fun onServiceUnregistered(info: NsdServiceInfo) {
+          Log.d(TAG, "advertise unregistered: ${info.serviceName}")
+        }
+        override fun onUnregistrationFailed(info: NsdServiceInfo, errorCode: Int) {
+          Log.w(TAG, "advertise unregistration failed: $errorCode")
+        }
+      }
+      registrationListener = listener
+      requestedServiceName = serviceName
+      advertisedServiceName = serviceName
+      try {
+        manager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, listener)
+      } catch (error: Throwable) {
+        Log.w(TAG, "registerService threw", error)
+        lastAdvertiseState = "failed:exception"
+        registrationListener = null
+      }
+    }
+  }
+
+  @JavascriptInterface
+  fun stopAdvertise() {
+    val manager = nsdManager ?: return
+    synchronized(lock) {
+      registrationListener?.let { unregisterLocked(manager, it) }
+      registrationListener = null
+      requestedServiceName = null
+      advertisedServiceName = null
+      lastAdvertiseState = "off"
+    }
+  }
+
+  @JavascriptInterface
+  fun advertiseState(): String = lastAdvertiseState
+
+  @JavascriptInterface
+  fun startDiscovery() {
+    val manager = nsdManager ?: return
+    synchronized(lock) {
+      discoveryListener?.let { stopDiscoveryLocked(manager, it) }
+      discoveryListener = null
+      discovered.clear()
+      seenKeys.clear()
+      resolveQueue.clear()
+      resolving = false
+      val listener = object : NsdManager.DiscoveryListener {
+        override fun onDiscoveryStarted(serviceType: String) {
+          Log.d(TAG, "discovery started")
+        }
+        override fun onServiceFound(info: NsdServiceInfo) {
+          if (info.serviceName == advertisedServiceName || info.serviceName == requestedServiceName) return
+          enqueueResolve(manager, info)
+        }
+        override fun onServiceLost(info: NsdServiceInfo) {
+          Log.d(TAG, "service lost: ${info.serviceName}")
+        }
+        override fun onDiscoveryStopped(serviceType: String) {
+          Log.d(TAG, "discovery stopped")
+        }
+        override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+          Log.w(TAG, "start discovery failed: $errorCode")
+          synchronized(lock) { if (discoveryListener === this) discoveryListener = null }
+        }
+        override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+          Log.w(TAG, "stop discovery failed: $errorCode")
+        }
+      }
+      discoveryListener = listener
+      try {
+        manager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+      } catch (error: Throwable) {
+        Log.w(TAG, "discoverServices threw", error)
+        discoveryListener = null
+      }
+    }
+  }
+
+  @JavascriptInterface
+  fun stopDiscovery() {
+    val manager = nsdManager ?: return
+    synchronized(lock) {
+      discoveryListener?.let { stopDiscoveryLocked(manager, it) }
+      discoveryListener = null
+      resolveQueue.clear()
+      resolving = false
+    }
+  }
+
+  @JavascriptInterface
+  fun drainDiscovered(): String {
+    synchronized(lock) {
+      if (discovered.isEmpty()) return "[]"
+      val joined = discovered.joinToString(",")
+      discovered.clear()
+      return "[$joined]"
+    }
+  }
+
+  private fun unregisterLocked(manager: NsdManager, listener: NsdManager.RegistrationListener) {
+    try {
+      manager.unregisterService(listener)
+    } catch (error: Throwable) {
+      Log.w(TAG, "unregisterService threw", error)
+    }
+  }
+
+  private fun stopDiscoveryLocked(manager: NsdManager, listener: NsdManager.DiscoveryListener) {
+    try {
+      manager.stopServiceDiscovery(listener)
+    } catch (error: Throwable) {
+      Log.w(TAG, "stopServiceDiscovery threw", error)
+    }
+  }
+
+  private fun enqueueResolve(manager: NsdManager, info: NsdServiceInfo) {
+    synchronized(lock) {
+      resolveQueue.add(info)
+      if (!resolving) {
+        resolving = true
+        resolveNextLocked(manager)
+      }
+    }
+  }
+
+  private fun resolveNextLocked(manager: NsdManager) {
+    val next = resolveQueue.removeFirstOrNull()
+    if (next == null) {
+      resolving = false
+      return
+    }
+    val listener = object : NsdManager.ResolveListener {
+      override fun onResolveFailed(info: NsdServiceInfo, errorCode: Int) {
+        Log.w(TAG, "resolve failed for ${info.serviceName}: $errorCode")
+        synchronized(lock) { resolveNextLocked(manager) }
+      }
+      override fun onServiceResolved(info: NsdServiceInfo) {
+        addResolved(info)
+        synchronized(lock) { resolveNextLocked(manager) }
+      }
+    }
+    try {
+      manager.resolveService(next, listener)
+    } catch (error: Throwable) {
+      Log.w(TAG, "resolveService threw", error)
+      resolveNextLocked(manager)
+    }
+  }
+
+  private fun addResolved(info: NsdServiceInfo) {
+    val hosts = resolvedHostAddresses(info)
+    if (hosts.isEmpty()) return
+    val host = hosts.first()
+    val port = info.port
+    val id = readTxtAttribute(info, "id")
+    val key = if (id != null) "id:$id" else "$host:$port"
+    synchronized(lock) {
+      if (!seenKeys.add(key)) return
+      val hostsJson = hosts.joinToString(",") { "\"${escapeJson(it)}\"" }
+      val idJson = id?.let { ",\"id\":\"${escapeJson(it)}\"" } ?: ""
+      discovered.add(
+        "{\"name\":\"${escapeJson(info.serviceName ?: "")}\"," +
+          "\"host\":\"${escapeJson(host)}\"," +
+          "\"port\":$port," +
+          "\"hosts\":[$hostsJson]" +
+          "$idJson}"
+      )
+    }
+  }
+
+  // API 34+ can report multiple resolved addresses (IPv4 first); older resolveService only ever gave one.
+  private fun resolvedHostAddresses(info: NsdServiceInfo): List<String> {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      val addresses = info.hostAddresses
+      val ipv4 = addresses.filterIsInstance<java.net.Inet4Address>().mapNotNull { it.hostAddress }
+      val ipv6 = addresses.filter { it !is java.net.Inet4Address }.mapNotNull { it.hostAddress }
+      val ordered = ipv4 + ipv6
+      if (ordered.isNotEmpty()) return ordered
+    }
+    return info.host?.hostAddress?.let { listOf(it) } ?: emptyList()
+  }
+
+  private fun readTxtAttribute(info: NsdServiceInfo, key: String): String? {
+    return try {
+      info.attributes[key]?.let { String(it, Charsets.UTF_8) }
+    } catch (error: Throwable) {
+      Log.w(TAG, "reading txt attribute '$key' threw", error)
+      null
+    }
+  }
+
+  private fun escapeJson(value: String): String {
+    val out = StringBuilder(value.length + 2)
+    for (ch in value) {
+      when {
+        ch == '\\' -> out.append("\\\\")
+        ch == '"' -> out.append("\\\"")
+        ch.code < 0x20 -> out.append(String.format("\\u%04x", ch.code))
+        else -> out.append(ch)
+      }
+    }
+    return out.toString()
+  }
+
+  // Called from MainActivity.onDestroy so registration/discovery listeners never leak.
+  fun activityDestroyed() {
+    val manager = nsdManager
+    synchronized(lock) {
+      if (manager != null) {
+        registrationListener?.let { unregisterLocked(manager, it) }
+        discoveryListener?.let { stopDiscoveryLocked(manager, it) }
+      }
+      registrationListener = null
+      discoveryListener = null
+      resolveQueue.clear()
+      resolving = false
+    }
+  }
+}
+
+// Starts/stops ReceiverForegroundService, which holds the wake lock + Wi-Fi
+// lock keeping the receiver's HTTP server alive while the app is backgrounded.
+class ReceiverKeepAliveBridge(private val activity: MainActivity) {
+  companion object {
+    private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 4303
+  }
+
+  @JavascriptInterface
+  fun start(deviceName: String): Boolean {
+    return try {
+      requestNotificationPermissionIfNeeded()
+      val intent = Intent(activity, ReceiverForegroundService::class.java)
+        .setAction(ReceiverForegroundService.ACTION_START)
+        .putExtra(ReceiverForegroundService.EXTRA_DEVICE_NAME, deviceName)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        activity.startForegroundService(intent)
+      } else {
+        activity.startService(intent)
+      }
+      activity.receiverModeActive = true
+      true
+    } catch (error: Throwable) {
+      Log.w("ReceiverKeepAlive", "start failed", error)
+      false
+    }
+  }
+
+  // The wake/status-poll notifications (ReceiverWakeBridge) need POST_NOTIFICATIONS
+  // too, but that permission was only ever requested from the cast-media path.
+  private fun requestNotificationPermissionIfNeeded() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    if (ActivityCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) ==
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
+    try {
+      ActivityCompat.requestPermissions(
+        activity,
+        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+        NOTIFICATION_PERMISSION_REQUEST_CODE
+      )
+    } catch (error: Throwable) {
+      Log.w("ReceiverKeepAlive", "requestPermissions failed", error)
+    }
+  }
+
+  @JavascriptInterface
+  fun stop(): Boolean {
+    activity.receiverModeActive = false
+    return try {
+      activity.startService(
+        Intent(activity, ReceiverForegroundService::class.java)
+          .setAction(ReceiverForegroundService.ACTION_STOP)
+      )
+      true
+    } catch (error: Throwable) {
+      Log.w("ReceiverKeepAlive", "stop failed", error)
+      false
+    }
+  }
+
+  // Scopes onPause()'s WebView keep-resumed workaround to when /receiver is actually visible,
+  // rather than for the app's whole lifetime once receiver mode is enabled.
+  @JavascriptInterface
+  fun setReceiverPageForeground(active: Boolean) {
+    activity.receiverPageForeground = active
+  }
+}
+
+// A cast POST arriving while the WebView is backgrounded can only foreground the app on Android 9 and older.
+// On Android 10+ background activity starts are blocked, so we post a tap-to-open notification instead.
+class ReceiverWakeBridge(private val activity: MainActivity) {
+  companion object {
+    private const val TAG = "AndroidReceiverWake"
+    private const val CHANNEL_ID = "receiver_wake"
+    private const val NOTIFICATION_ID = 4401
+  }
+
+  @JavascriptInterface
+  fun isSupported(): Boolean {
+    return try {
+      if (!NotificationManagerCompat.from(activity).areNotificationsEnabled()) return false
+      true
+    } catch (error: Throwable) {
+      Log.w(TAG, "isSupported failed", error)
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun wake(): Boolean {
+    return try {
+      XtreamDreamService.dismissActiveDream()
+      val intent = wakeIntent()
+      // Q+ can only be offered a tap-to-open notification, so wake() reports false there.
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        postWakeNotification(intent)
+        return false
+      }
+      activity.startActivity(intent)
+      true
+    } catch (error: Throwable) {
+      Log.w(TAG, "wake failed", error)
+      false
+    }
+  }
+
+  private fun wakeIntent(): Intent =
+    Intent(activity, MainActivity::class.java)
+      .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+
+  private fun postWakeNotification(intent: Intent) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+      ActivityCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) !=
+        PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
+    ensureNotificationChannel()
+    val pendingIntent = PendingIntent.getActivity(activity, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+    val notification = NotificationCompat.Builder(activity, CHANNEL_ID)
+      .setSmallIcon(R.drawable.ic_brand_mark)
+      .setContentTitle(activity.getString(R.string.receiver_wake_notification_title))
+      .setContentText(activity.getString(R.string.receiver_wake_notification_text))
+      .setPriority(NotificationCompat.PRIORITY_HIGH)
+      .setCategory(NotificationCompat.CATEGORY_EVENT)
+      .setOngoing(false)
+      .setAutoCancel(true)
+      .setContentIntent(pendingIntent)
+      .build()
+    try {
+      NotificationManagerCompat.from(activity).notify(NOTIFICATION_ID, notification)
+    } catch (error: SecurityException) {
+      Log.w(TAG, "notify blocked by SecurityException", error)
+    }
+  }
+
+  fun clearWakeNotification() {
+    try {
+      NotificationManagerCompat.from(activity).cancel(NOTIFICATION_ID)
+    } catch (error: Throwable) {
+      Log.w(TAG, "cancel failed", error)
+    }
+  }
+
+  private fun ensureNotificationChannel() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val manager = activity.getSystemService(NotificationManager::class.java) ?: return
+    if (manager.getNotificationChannel(CHANNEL_ID) != null) return
+    manager.createNotificationChannel(
+      NotificationChannel(
+        CHANNEL_ID,
+        activity.getString(R.string.receiver_wake_notification_channel),
+        NotificationManager.IMPORTANCE_HIGH
+      )
+    )
+  }
+}
+
 /**
  * Bridge for the native ExoPlayer-backed VideoActivity. Opt-in path (Settings:
  * "Use native Android video player"). JS calls one of launchVod / launchLive
@@ -671,8 +1222,16 @@ class PipBridge(private val activity: TauriActivity) {
  * progress / channel-changed / finished events written by VideoActivity into
  * SharedPreferences; MainActivity.onResume also drains and dispatches them as
  * DOM CustomEvents on the WebView automatically.
+ *
+ * receiverSessionStart/-End/-Control/-Volume back the TV receiver mode: while a cast
+ * session is playing through VideoActivity, events are pushed straight into
+ * the WebView instead of waiting for the SharedPreferences drain, and remote
+ * control commands route to NativePlayerControl instead of a fresh Intent.
  */
-class AndroidVideoBridge(private val activity: android.app.Activity) {
+class AndroidVideoBridge(
+  private val activity: MainActivity,
+  private val hostedWebViewRef: () -> WebView?,
+) {
   @JavascriptInterface
   fun isSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
 
@@ -719,10 +1278,86 @@ class AndroidVideoBridge(private val activity: android.app.Activity) {
     return EventQueue.drain(activity)
   }
 
+  @JavascriptInterface
+  fun receiverSessionStart(): Boolean {
+    activity.receiverSessionActive = true
+    EventQueue.pushListener = { type, payload ->
+      val webView = hostedWebViewRef()
+      if (webView == null) {
+        false
+      } else {
+        val script = dispatchScript(type, payload)
+        activity.runOnUiThread { webView.evaluateJavascript(script, null) }
+        true
+      }
+    }
+    return true
+  }
+
+  @JavascriptInterface
+  fun receiverSessionEnd() {
+    activity.receiverSessionActive = false
+    EventQueue.pushListener = null
+    if (NativePlayerControl.isActive()) NativePlayerControl.finishPlayback()
+    setKeepScreenOn(false)
+  }
+
+  @JavascriptInterface
+  fun setTvOverscan(percent: Int) {
+    TvOverscanState.percent = percent.coerceIn(0, 8)
+  }
+
+  @JavascriptInterface
+  fun setKeepScreenOn(enabled: Boolean) {
+    activity.runOnUiThread {
+      if (enabled) {
+        activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (XtreamDreamService.dismissActiveDream()) {
+          Log.d("AndroidVideoBridge", "dismissed active dream for receiver playback")
+        }
+      } else {
+        activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      }
+    }
+  }
+
+  @JavascriptInterface
+  fun receiverControl(action: String, positionMs: Long): Boolean {
+    val wasActive = NativePlayerControl.isActive()
+    when (action) {
+      "pause" -> NativePlayerControl.setPlayWhenReady(false)
+      "resume" -> NativePlayerControl.setPlayWhenReady(true)
+      "seek" -> NativePlayerControl.seekToMs(positionMs)
+      "stop" -> NativePlayerControl.finishPlayback()
+    }
+    return wasActive
+  }
+
+  @JavascriptInterface
+  fun receiverVolume(level: Double, muted: Boolean): Boolean {
+    val wasActive = NativePlayerControl.isActive()
+    NativePlayerControl.setVolume(level.toFloat(), muted)
+    return wasActive
+  }
+
+  // Mirrors MainActivity.drainAndDispatchVideoEvents' escaping approach for a single event.
+  private fun dispatchScript(type: String, payload: JSONObject): String {
+    val entry = JSONObject().put("type", type).put("payload", payload)
+    return """
+      (function(){
+        try {
+          var evt = $entry;
+          document.dispatchEvent(new CustomEvent(evt.type, { detail: evt.payload }));
+        } catch (_) {}
+      })();
+    """.trimIndent()
+  }
+
   private fun tryLaunch(mode: String, configure: (android.content.Intent) -> Unit): Boolean {
     return try {
       val intent = android.content.Intent(activity, VideoActivity::class.java)
       intent.putExtra(VideoActivity.EXTRA_MODE, mode)
+      intent.putExtra(VideoActivity.EXTRA_TV_OVERSCAN_PERCENT, TvOverscanState.percent)
       configure(intent)
       activity.runOnUiThread {
         try {
@@ -986,7 +1621,352 @@ class SnifferBridge(
   }
 }
 
+// Sender-side "casting to <TV>" media notification: MediaSessionCompat + NotificationCompat.MediaStyle,
+// so playback can be controlled from the shade without reopening the app. Notification action taps and
+// hardware media-button presses both funnel into dispatchAction(), which forwards to JS as xt:cast-media-action.
+class CastMediaBridge(
+  private val activity: TauriActivity,
+  private val hostedWebViewRef: () -> WebView?,
+) {
+  companion object {
+    private const val TAG = "AndroidCastMedia"
+    private const val CHANNEL_ID = "cast_media"
+    private const val NOTIFICATION_ID = 4301
+    private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 4302
+    private const val ACTION_CAST_MEDIA = "com.infinitel8p.xtream.CAST_MEDIA_ACTION"
+    private const val EXTRA_ACTION = "action"
+    private const val MAX_ARTWORK_BYTES = 5 * 1024 * 1024
+    private const val ARTWORK_TARGET_PX = 512
+  }
+
+  private var mediaSession: MediaSessionCompat? = null
+  private var receiverRegistered = false
+  @Volatile
+  private var lastArtworkUrl: String? = null
+  @Volatile
+  private var lastArtworkBitmap: Bitmap? = null
+  private val artworkGeneration = AtomicInteger(0)
+
+  private val actionReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+      val action = intent.getStringExtra(EXTRA_ACTION) ?: return
+      dispatchAction(action)
+    }
+  }
+
+  @JavascriptInterface
+  fun update(
+    title: String,
+    deviceName: String,
+    isPlaying: Boolean,
+    isLive: Boolean,
+    hasNext: Boolean,
+    hasPrev: Boolean,
+    artworkUrl: String,
+  ) {
+    val trimmedArtwork = artworkUrl.trim()
+    val unchangedArtwork = trimmedArtwork.isNotEmpty() && trimmedArtwork == lastArtworkUrl
+    val cachedArtwork = if (unchangedArtwork) lastArtworkBitmap else null
+    activity.runOnUiThread {
+      val session = ensureMediaSession()
+      session.isActive = true
+      session.setMetadata(buildMetadata(title, deviceName, cachedArtwork))
+      session.setPlaybackState(buildPlaybackState(isPlaying, hasNext, hasPrev))
+      postNotification(title, deviceName, isLive, isPlaying, hasNext, hasPrev, session, cachedArtwork)
+    }
+    if (trimmedArtwork.isEmpty()) {
+      lastArtworkUrl = null
+      lastArtworkBitmap = null
+      return
+    }
+    if (unchangedArtwork) return
+    lastArtworkUrl = trimmedArtwork
+    lastArtworkBitmap = null
+    loadArtwork(trimmedArtwork, title, deviceName, isLive, isPlaying, hasNext, hasPrev)
+  }
+
+  @JavascriptInterface
+  fun clear() {
+    activity.runOnUiThread {
+      artworkGeneration.incrementAndGet()
+      lastArtworkUrl = null
+      lastArtworkBitmap = null
+      NotificationManagerCompat.from(activity).cancel(NOTIFICATION_ID)
+      mediaSession?.isActive = false
+      mediaSession?.release()
+      mediaSession = null
+    }
+  }
+
+  private fun ensureMediaSession(): MediaSessionCompat {
+    mediaSession?.let { return it }
+    ensureReceiverRegistered()
+    val contentIntent = PendingIntent.getActivity(
+      activity,
+      0,
+      Intent(activity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+      PendingIntent.FLAG_IMMUTABLE
+    )
+    val session = MediaSessionCompat(activity, TAG).apply {
+      setSessionActivity(contentIntent)
+      setCallback(object : MediaSessionCompat.Callback() {
+        override fun onPlay() = dispatchAction("resume")
+        override fun onPause() = dispatchAction("pause")
+        override fun onSkipToNext() = dispatchAction("next")
+        override fun onSkipToPrevious() = dispatchAction("prev")
+        override fun onStop() = dispatchAction("stop")
+      })
+    }
+    mediaSession = session
+    return session
+  }
+
+  private fun ensureReceiverRegistered() {
+    if (receiverRegistered) return
+    try {
+      ContextCompat.registerReceiver(
+        activity,
+        actionReceiver,
+        IntentFilter(ACTION_CAST_MEDIA),
+        ContextCompat.RECEIVER_NOT_EXPORTED
+      )
+      receiverRegistered = true
+    } catch (error: Throwable) {
+      Log.w(TAG, "registerReceiver failed", error)
+    }
+  }
+
+  private fun ensureNotificationPermission(): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+    if (ActivityCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) ==
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      return true
+    }
+    try {
+      ActivityCompat.requestPermissions(
+        activity,
+        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+        NOTIFICATION_PERMISSION_REQUEST_CODE
+      )
+    } catch (error: Throwable) {
+      Log.w(TAG, "requestPermissions failed", error)
+    }
+    return false
+  }
+
+  private fun ensureNotificationChannel() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val manager = activity.getSystemService(NotificationManager::class.java) ?: return
+    if (manager.getNotificationChannel(CHANNEL_ID) != null) return
+    manager.createNotificationChannel(
+      NotificationChannel(
+        CHANNEL_ID,
+        activity.getString(R.string.cast_media_notification_channel),
+        NotificationManager.IMPORTANCE_LOW
+      )
+    )
+  }
+
+  private fun buildMetadata(title: String, deviceName: String, artwork: Bitmap?): MediaMetadataCompat {
+    val builder = MediaMetadataCompat.Builder()
+      .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
+      .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, deviceName)
+    if (artwork != null) builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artwork)
+    return builder.build()
+  }
+
+  private fun buildPlaybackState(isPlaying: Boolean, hasNext: Boolean, hasPrev: Boolean): PlaybackStateCompat {
+    var actions = PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP
+    if (hasNext) actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+    if (hasPrev) actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+    val state = if (isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+    return PlaybackStateCompat.Builder()
+      .setActions(actions)
+      .setState(state, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, if (isPlaying) 1f else 0f)
+      .build()
+  }
+
+  private fun buildAction(action: String, iconRes: Int, label: String): NotificationCompat.Action {
+    val intent = Intent(ACTION_CAST_MEDIA).apply {
+      setPackage(activity.packageName)
+      putExtra(EXTRA_ACTION, action)
+    }
+    val pendingIntent = PendingIntent.getBroadcast(
+      activity,
+      action.hashCode(),
+      intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+    return NotificationCompat.Action.Builder(iconRes, label, pendingIntent).build()
+  }
+
+  private fun postNotification(
+    title: String,
+    deviceName: String,
+    isLive: Boolean,
+    isPlaying: Boolean,
+    hasNext: Boolean,
+    hasPrev: Boolean,
+    session: MediaSessionCompat,
+    artwork: Bitmap?,
+  ) {
+    if (!ensureNotificationPermission()) return
+    ensureNotificationChannel()
+    val contentIntent = PendingIntent.getActivity(
+      activity,
+      0,
+      Intent(activity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+      PendingIntent.FLAG_IMMUTABLE
+    )
+    val builder = NotificationCompat.Builder(activity, CHANNEL_ID)
+      .setSmallIcon(R.drawable.ic_brand_mark)
+      .setContentTitle(title)
+      .setContentText(if (isLive) "$deviceName · ${activity.getString(R.string.cast_media_live_suffix)}" else deviceName)
+      .setContentIntent(contentIntent)
+      .setOngoing(isPlaying)
+      .setOnlyAlertOnce(true)
+      .setPriority(NotificationCompat.PRIORITY_LOW)
+      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+    if (artwork != null) builder.setLargeIcon(artwork)
+
+    val compactIndices = mutableListOf<Int>()
+    var actionCount = 0
+    if (hasPrev) {
+      builder.addAction(buildAction("prev", R.drawable.ic_notif_skip_previous, activity.getString(R.string.cast_media_previous)))
+      compactIndices.add(actionCount)
+      actionCount++
+    }
+    builder.addAction(
+      buildAction(
+        if (isPlaying) "pause" else "resume",
+        if (isPlaying) R.drawable.ic_notif_pause else R.drawable.ic_notif_play,
+        activity.getString(if (isPlaying) R.string.cast_media_pause else R.string.cast_media_resume)
+      )
+    )
+    compactIndices.add(actionCount)
+    actionCount++
+    if (hasNext) {
+      builder.addAction(buildAction("next", R.drawable.ic_notif_skip_next, activity.getString(R.string.cast_media_next)))
+      compactIndices.add(actionCount)
+    }
+
+    builder.setStyle(
+      androidx.media.app.NotificationCompat.MediaStyle()
+        .setMediaSession(session.sessionToken)
+        .setShowActionsInCompactView(*compactIndices.toIntArray())
+    )
+
+    try {
+      NotificationManagerCompat.from(activity).notify(NOTIFICATION_ID, builder.build())
+    } catch (error: SecurityException) {
+      Log.w(TAG, "notify blocked by SecurityException: $error")
+    }
+  }
+
+  private fun loadArtwork(
+    url: String,
+    title: String,
+    deviceName: String,
+    isLive: Boolean,
+    isPlaying: Boolean,
+    hasNext: Boolean,
+    hasPrev: Boolean,
+  ) {
+    val generation = artworkGeneration.incrementAndGet()
+    Thread {
+      val bitmap = try {
+        decodeScaledArtwork(url)
+      } catch (error: Throwable) {
+        Log.w(TAG, "artwork fetch failed: $error")
+        null
+      }
+      if (bitmap == null || generation != artworkGeneration.get()) return@Thread
+      activity.runOnUiThread {
+        val session = mediaSession
+        if (generation != artworkGeneration.get() || session == null) return@runOnUiThread
+        lastArtworkBitmap = bitmap
+        session.setMetadata(buildMetadata(title, deviceName, bitmap))
+        postNotification(title, deviceName, isLive, isPlaying, hasNext, hasPrev, session, bitmap)
+      }
+    }.start()
+  }
+
+  // Reads bounded bytes then two-pass decodes so a 4K poster never lands as a
+  // full-resolution bitmap in the MediaSession bundle on a low-RAM TV.
+  private fun decodeScaledArtwork(url: String): Bitmap? {
+    val connection = URL(url).openConnection().apply {
+      connectTimeout = 4000
+      readTimeout = 4000
+    }
+    if (connection.contentLengthLong > MAX_ARTWORK_BYTES) return null
+    val bytes = connection.getInputStream().use { readBoundedBytes(it, MAX_ARTWORK_BYTES) } ?: return null
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    val options = BitmapFactory.Options().apply {
+      inSampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, ARTWORK_TARGET_PX)
+    }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+  }
+
+  private fun readBoundedBytes(input: java.io.InputStream, maxBytes: Int): ByteArray? {
+    val output = ByteArrayOutputStream()
+    val chunk = ByteArray(8192)
+    var total = 0
+    while (true) {
+      val read = input.read(chunk)
+      if (read == -1) break
+      total += read
+      if (total > maxBytes) return null
+      output.write(chunk, 0, read)
+    }
+    return output.toByteArray()
+  }
+
+  private fun computeInSampleSize(width: Int, height: Int, targetPx: Int): Int {
+    var sampleSize = 1
+    var currentWidth = width
+    var currentHeight = height
+    while (currentWidth / 2 >= targetPx && currentHeight / 2 >= targetPx) {
+      currentWidth /= 2
+      currentHeight /= 2
+      sampleSize *= 2
+    }
+    return sampleSize
+  }
+
+  private fun dispatchAction(action: String) {
+    val webView = hostedWebViewRef() ?: return
+    val script = """
+      (function(){
+        try {
+          document.dispatchEvent(new CustomEvent('xt:cast-media-action', { detail: { action: ${JSONObject.quote(action)} } }));
+        } catch (_) {}
+      })();
+    """.trimIndent()
+    activity.runOnUiThread { webView.evaluateJavascript(script, null) }
+  }
+
+  // Called from MainActivity.onDestroy so the notification/session/receiver never outlive the activity.
+  fun activityDestroyed() {
+    if (receiverRegistered) {
+      try {
+        activity.unregisterReceiver(actionReceiver)
+      } catch (error: Throwable) {
+        Log.w(TAG, "unregisterReceiver failed", error)
+      }
+      receiverRegistered = false
+    }
+    NotificationManagerCompat.from(activity).cancel(NOTIFICATION_ID)
+    mediaSession?.release()
+    mediaSession = null
+  }
+}
+
 class MainActivity : TauriActivity() {
+
+  // Wry's own OnBackPressedCallback registers after ours and would win the LIFO dispatch otherwise.
+  override val handleBackNavigation = false
 
   private var fullscreenView: View? = null
   private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
@@ -998,16 +1978,52 @@ class MainActivity : TauriActivity() {
   // Cached so onDestroy() can tear down the throwaway sniffer WebView if it's still running.
   private var snifferBridge: SnifferBridge? = null
 
+  // Cached so onDestroy() can unregister/stop NSD listeners.
+  private var nsdBridge: NsdBridge? = null
+
+  // Cached so onDestroy() can cancel the cast media notification + release its session.
+  private var castMediaBridge: CastMediaBridge? = null
+
+  // Cached so onResume() can clear the wake notification once the app is actually up.
+  private var receiverWakeBridge: ReceiverWakeBridge? = null
+
   // Set by PipBridge.setAutoEnter() whenever a <video> starts/stops playing
   @Volatile
   var autoEnterPipEnabled: Boolean = false
+
+  // Set by AndroidVideoBridge.receiverSessionStart()/receiverSessionEnd() while a TV-receiver cast plays through VideoActivity
+  @Volatile
+  var receiverSessionActive: Boolean = false
+
+  // Set by ReceiverKeepAliveBridge.start()/stop() while the receiver HTTP server is running
+  @Volatile
+  var receiverModeActive: Boolean = false
+
+  // Set by ReceiverKeepAliveBridge.setReceiverPageForeground() while /receiver is the visible page
+  @Volatile
+  var receiverPageForeground: Boolean = false
 
   private val rendererRecreating = AtomicBoolean(false)
 
   companion object {
     private const val RENDER_GONE_REPEAT_WINDOW_MS = 60_000L
+    // Frees the back guard if the WebView dies before evaluateJavascript answers.
+    private const val BACK_JS_TIMEOUT_MS = 1_500L
     @Volatile
     private var lastRenderGoneAt: Long = 0L
+  }
+
+  // Some WebViews emit no DOM event for DPAD_CENTER on inputmode="none" inputs, so the
+  // TV input guard's OK-to-edit hook is fed from here; buttons still activate natively.
+  override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
+      try {
+        hostedWebView?.evaluateJavascript("window.__xtRemoteOk && window.__xtRemoteOk()", null)
+      } catch (e: Throwable) {
+        Log.w("xtream-rs", "remote ok forward failed: $e")
+      }
+    }
+    return super.dispatchKeyEvent(event)
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -1025,16 +2041,42 @@ class MainActivity : TauriActivity() {
     // singleton's lateinit still points at the dead activity.
     bindPluginManagerLaunchers()
 
-    // Back button exits fullscreen first, then falls back to default behavior.
+    // Back button order: exit fullscreen, page-level JS handler, WebView history, app exit.
     onBackPressedDispatcher.addCallback(
       this,
       object : OnBackPressedCallback(true) {
+        private var awaitingJsBack = false
+
         override fun handleOnBackPressed() {
           if (fullscreenView != null) {
             (hostedWebView?.webChromeClient as? WebChromeClient)?.onHideCustomView()
-          } else {
+            return
+          }
+          val webView = hostedWebView
+          if (webView == null) {
             isEnabled = false
             onBackPressedDispatcher.onBackPressed()
+            isEnabled = true
+            return
+          }
+          // isEnabled only flips inside the callback, so a second press mid-round-trip would pop twice.
+          if (awaitingJsBack) return
+          awaitingJsBack = true
+          val releaseGuard = Runnable { awaitingJsBack = false }
+          webView.postDelayed(releaseGuard, BACK_JS_TIMEOUT_MS)
+          webView.evaluateJavascript(
+            "window.__xtHandleBack ? String(window.__xtHandleBack()) : \"false\""
+          ) { result ->
+            webView.removeCallbacks(releaseGuard)
+            awaitingJsBack = false
+            if (result == "true" || result == "\"true\"") return@evaluateJavascript
+            if (webView.canGoBack()) {
+              webView.goBack()
+            } else {
+              isEnabled = false
+              onBackPressedDispatcher.onBackPressed()
+              isEnabled = true
+            }
           }
         }
       }
@@ -1118,12 +2160,24 @@ class MainActivity : TauriActivity() {
     webView.addJavascriptInterface(StatusBarBridge(this), "AndroidStatusBar")
     webView.addJavascriptInterface(DeviceInfoBridge(this), "AndroidDeviceInfo")
     webView.addJavascriptInterface(LogShareBridge(this), "AndroidLog")
+    webView.addJavascriptInterface(ScreensaverBridge(this), "AndroidScreensaver")
     webView.addJavascriptInterface(IntentBridge(this), "AndroidIntent")
-    webView.addJavascriptInterface(AndroidVideoBridge(this), "AndroidVideo")
+    webView.addJavascriptInterface(AndroidVideoBridge(this, { hostedWebView }), "AndroidVideo")
     webView.addJavascriptInterface(HapticsBridge(this, { hostedWebView }), "AndroidHaptics")
+    webView.addJavascriptInterface(ImeBridge(this, { hostedWebView }), "AndroidIme")
     val sniffer = SnifferBridge(this, { hostedWebView })
     snifferBridge = sniffer
     webView.addJavascriptInterface(sniffer, "AndroidSniffer")
+    val nsd = NsdBridge(this)
+    nsdBridge = nsd
+    webView.addJavascriptInterface(nsd, "AndroidNsd")
+    webView.addJavascriptInterface(ReceiverKeepAliveBridge(this), "AndroidReceiverKeepAlive")
+    val receiverWake = ReceiverWakeBridge(this)
+    webView.addJavascriptInterface(receiverWake, "AndroidReceiverWake")
+    receiverWakeBridge = receiverWake
+    val castMedia = CastMediaBridge(this, { hostedWebView })
+    castMediaBridge = castMedia
+    webView.addJavascriptInterface(castMedia, "AndroidCastMedia")
     webView.addJavascriptInterface(
       WebSettingsBridge(this, { hostedWebView }, webView.settings.userAgentString),
       "AndroidWebSettings"
@@ -1251,11 +2305,33 @@ class MainActivity : TauriActivity() {
   override fun onResume() {
     super.onResume()
     drainAndDispatchVideoEvents()
+    receiverWakeBridge?.clearWakeNotification()
+  }
+
+  override fun onPause() {
+    super.onPause()
+    // Same wry WebView-pause behavior as the PiP fix above; keep it alive so xt:receiver-play can still fire.
+    if (receiverSessionActive || receiverPageForeground) hostedWebView?.onResume()
   }
 
   // Tear down the throwaway sniffer WebView instead of leaving the remote page running until its timeout.
   override fun onDestroy() {
+    // Closes over this activity's WebView, so a recreate() would leave it swallowing every receiver event.
+    if (receiverSessionActive) EventQueue.pushListener = null
     snifferBridge?.activityDestroyed()
+    nsdBridge?.activityDestroyed()
+    castMediaBridge?.activityDestroyed()
+    if (isFinishing && receiverModeActive) {
+      receiverModeActive = false
+      try {
+        startService(
+          Intent(this, ReceiverForegroundService::class.java)
+            .setAction(ReceiverForegroundService.ACTION_STOP)
+        )
+      } catch (error: Throwable) {
+        Log.w("ReceiverKeepAlive", "stop on destroy failed", error)
+      }
+    }
     super.onDestroy()
   }
 

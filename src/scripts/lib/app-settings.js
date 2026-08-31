@@ -2,6 +2,7 @@ import { log } from "@/scripts/lib/log.js"
 import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 import { LANGUAGE_TOKENS } from "@/scripts/lib/language-tags.ts"
+import { compareVersions } from "@/scripts/lib/version-compare.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
@@ -35,7 +36,13 @@ const KEY_MONO_AUDIO = "xt_mono_audio"
 const KEY_CAPTIONS_AUTO = "xt_captions_auto"
 const KEY_TMDB_KEY = "xt_tmdb_key"
 const KEY_TMDB_ENABLED = "xt_tmdb_enabled"
+const KEY_TVDB_ENABLED = "xt_tvdb_enabled"
 const KEY_DEV_MODE = "xt_dev_mode"
+const KEY_RECEIVER_MODE = "xt_receiver_mode"
+const KEY_RECEIVER_BOOT = "xt_receiver_boot"
+const KEY_RECEIVER_NAME = "xt_receiver_name"
+const KEY_RECEIVER_ENGINE = "xt_receiver_engine"
+const KEY_RECEIVER_ID = "xt_receiver_id"
 const KEY_CONTENT_LANGUAGE = "xt_content_lang"
 const KEY_LANGUAGE_GROUPING = "xt_lang_grouping"
 const EVT_CHANGED = "xt:settings-changed"
@@ -43,7 +50,10 @@ const EVT_CHANGED = "xt:settings-changed"
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
 export const CONTENT_LANGUAGE_EVENT = "xt:content-language-changed"
 export const ACCENT_EVENT = "xt:accent-changed"
-export const ACCENT_PRESETS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet"]
+export const ACCENT_PRESETS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet", "gold", "lime", "teal", "silver", "white"]
+export const ACCENT_RANDOM_ID = "random"
+export const ACCENT_RANDOM_SWATCH = "conic-gradient(red, orange, yellow, green, cyan, blue, magenta, red)"
+const ACCENT_ROLL_KEY = "xt_accent_roll"
 export const DENSITY_EVENT = "xt:density-changed"
 export const DENSITY_PRESETS = { compact: 0.75, cozy: 1, comfortable: 1.3 }
 export const PROGRESS_RETENTION_EVENT = "xt:progress-retention-changed"
@@ -88,11 +98,11 @@ export const HUB_STRIP_CATALOG = Object.freeze([
 ])
 
 export const DEFAULT_HUB_STRIPS = Object.freeze([
-  "continue-watching",
   "favorites",
+  "continue-watching",
   "watchlist",
-  "because-watched",
   "recently-added",
+  "because-watched",
 ])
 export const PROGRESS_RETENTION_VALUES = [30, 90, 180, 0]
 export const DEFAULT_PROGRESS_RETENTION_DAYS = 90
@@ -263,15 +273,50 @@ export function setPerfMode(on) {
 // Accent color
 export function getAccent() {
   const stored = readLS(KEY_ACCENT, "")
-  return ACCENT_PRESETS.includes(stored) ? stored : "fuchsia"
+  return stored === ACCENT_RANDOM_ID || ACCENT_PRESETS.includes(stored) ? stored : "fuchsia"
+}
+
+/** Picks a roll from `presets`, reusing `cachedRoll` when it's still a valid pick. */
+export function resolveAccentRoll(cachedRoll, presets) {
+  if (typeof cachedRoll === "string" && presets.includes(cachedRoll)) return cachedRoll
+  return presets[Math.floor(Math.random() * presets.length)]
+}
+
+export function clearAccentRoll() {
+  try {
+    sessionStorage.removeItem(ACCENT_ROLL_KEY)
+  } catch {
+    // Private mode etc.: next resolve just rerolls.
+  }
+}
+
+/** Resolves "random" to a preset pick cached for the rest of the session; other values pass through. */
+export function resolveAccentForDisplay(accentId) {
+  if (accentId !== ACCENT_RANDOM_ID) return accentId
+  let cachedRoll = ""
+  try {
+    cachedRoll = sessionStorage.getItem(ACCENT_ROLL_KEY) || ""
+  } catch {
+    /* private mode etc. */
+  }
+  const roll = resolveAccentRoll(cachedRoll, ACCENT_PRESETS)
+  try {
+    sessionStorage.setItem(ACCENT_ROLL_KEY, roll)
+  } catch {
+    /* roll just won't be stable across this page's reloads */
+  }
+  return roll
 }
 
 export function setAccent(accentId) {
-  const normalized = ACCENT_PRESETS.includes(accentId) ? accentId : "fuchsia"
+  const normalized =
+    accentId === ACCENT_RANDOM_ID || ACCENT_PRESETS.includes(accentId) ? accentId : "fuchsia"
   writeLS(KEY_ACCENT, normalized === "fuchsia" ? "" : normalized)
+  if (normalized === ACCENT_RANDOM_ID) clearAccentRoll()
   if (typeof document !== "undefined") {
-    if (normalized === "fuchsia") document.documentElement.removeAttribute("data-accent")
-    else document.documentElement.setAttribute("data-accent", normalized)
+    const effective = resolveAccentForDisplay(normalized)
+    if (effective === "fuchsia") document.documentElement.removeAttribute("data-accent")
+    else document.documentElement.setAttribute("data-accent", effective)
     document.dispatchEvent(
       new CustomEvent(ACCENT_EVENT, { detail: { value: normalized } })
     )
@@ -875,12 +920,11 @@ export function setUpdateChannel(channel) {
 
 export const UI_SOUNDS_EVENT = "xt:ui-sounds-changed"
 
-/** UI sounds: default on; untouched setting stays quiet for reduced-motion or perf-mode users. */
+/** UI sounds: default on; untouched setting stays quiet for reduced-motion users. */
 export function getUiSoundsEnabled() {
   const raw = readLS(KEY_UI_SOUNDS, "")
   if (raw === "1") return true
   if (raw === "0") return false
-  if (getPerfMode()) return false
   try {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return false
   } catch {
@@ -938,6 +982,80 @@ export function setDevModeEnabled(enabled) {
   )
 }
 
+export const RECEIVER_MODE_EVENT = "xt:receiver-mode-changed"
+
+/** TV receiver mode: default off. */
+export function getReceiverModeEnabled() {
+  return readLS(KEY_RECEIVER_MODE, "") === "1"
+}
+
+export function setReceiverModeEnabled(enabled) {
+  writeLS(KEY_RECEIVER_MODE, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(RECEIVER_MODE_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const RECEIVER_BOOT_EVENT = "xt:receiver-boot-changed"
+
+/** Boot straight into the receiver screen on launch: default off. */
+export function getReceiverBootEnabled() {
+  return readLS(KEY_RECEIVER_BOOT, "") === "1"
+}
+
+export function setReceiverBootEnabled(enabled) {
+  writeLS(KEY_RECEIVER_BOOT, enabled ? "1" : "")
+  document.dispatchEvent(
+    new CustomEvent(RECEIVER_BOOT_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export function getReceiverDeviceName() {
+  return readLS(KEY_RECEIVER_NAME, "")
+}
+
+export function setReceiverDeviceName(name) {
+  writeLS(KEY_RECEIVER_NAME, name || "")
+}
+
+function generateReceiverId() {
+  const bytes = new Uint8Array(16)
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(bytes)
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256)
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+/** Persistent per-install receiver id for the Android NSD TXT record; generated once. */
+export function getReceiverId() {
+  const stored = readLS(KEY_RECEIVER_ID, "")
+  if (stored) return stored
+  const generated = generateReceiverId()
+  writeLS(KEY_RECEIVER_ID, generated)
+  return generated
+}
+
+/** Falls back to the Android device name when no custom name is set; "" lets Rust use the hostname. */
+export function getEffectiveReceiverDeviceName() {
+  const stored = getReceiverDeviceName()
+  if (stored) return stored
+  try {
+    const bridge = typeof window !== "undefined" ? window.AndroidDeviceInfo : undefined
+    const deviceName = bridge?.getDeviceName?.()
+    return typeof deviceName === "string" ? deviceName.trim() : ""
+  } catch {
+    return ""
+  }
+}
+
+export const RECEIVER_ENGINE_VALUES = ["auto", "embedded", "native"]
+export const DEFAULT_RECEIVER_ENGINE = "auto"
+
+// Android TV receiver playback engine override. No Settings UI yet.
+export function getReceiverEngine() {
+  const raw = readLS(KEY_RECEIVER_ENGINE, "")
+  return RECEIVER_ENGINE_VALUES.includes(raw) ? raw : DEFAULT_RECEIVER_ENGINE
+}
+
 export const CAPTIONS_AUTO_EVENT = "xt:captions-auto-changed"
 
 /** Captions on by default: default off. */
@@ -969,7 +1087,7 @@ export function getLanguageGroupingEnabled() {
 }
 
 export function setLanguageGroupingEnabled(enabled) {
-  writeLS(KEY_LANGUAGE_GROUPING, enabled ? "" : "0")
+  writeLS(KEY_LANGUAGE_GROUPING, enabled ? "1" : "0")
   document.dispatchEvent(
     new CustomEvent(LANGUAGE_GROUPING_EVENT, { detail: { value: !!enabled } })
   )
@@ -988,17 +1106,64 @@ export function setTmdbApiKey(key) {
   )
 }
 
+// Pre-1.9 stored "off" as "" (default-off semantics); the toggle flipped to
+// default-on with "" meaning on, which is also what a 1.9 explicit-enable
+// writes - so the off-rewrite below only applies pre-1.9 installs.
+const KEY_TMDB_ENABLED_MIGRATED = "xt_tmdb_enabled_v2"
+// Captured before whats-new.ts (async, splash-gated) can bump the marker.
+const lastSeenVersionAtLoad = (() => {
+  try {
+    return localStorage.getItem("xt_last_seen_version")
+  } catch {
+    return null
+  }
+})()
+;(function migrateTmdbEnabledLegacy() {
+  try {
+    if (localStorage.getItem(KEY_TMDB_ENABLED_MIGRATED) === "1") return
+    const raw = localStorage.getItem(KEY_TMDB_ENABLED)
+    // Compare release cores only: a 1.9.0-beta install is not "pre-1.9".
+    const lastSeenCore = lastSeenVersionAtLoad ? lastSeenVersionAtLoad.split(/[-+]/)[0] : null
+    const isPre19 = !lastSeenCore || compareVersions(lastSeenCore, "1.9.0") < 0
+    if (raw === "1") {
+      localStorage.setItem(KEY_TMDB_ENABLED, "")
+    } else if (isPre19 && raw !== "0" && (localStorage.getItem(KEY_TMDB_KEY) || "").trim()) {
+      localStorage.setItem(KEY_TMDB_ENABLED, "0")
+    }
+    localStorage.setItem(KEY_TMDB_ENABLED_MIGRATED, "1")
+  } catch (migrationError) {
+    log.error("[xt:settings] tmdb-enabled migration failed:", migrationError)
+  }
+})()
+
+// Defaults on: the toggle only matters once a key is set (see isTmdbActive).
 export function getTmdbEnabled() {
-  return readLS(KEY_TMDB_ENABLED, "") === "1"
+  return readLS(KEY_TMDB_ENABLED, "") !== "0"
 }
 
 export function setTmdbEnabled(enabled) {
-  writeLS(KEY_TMDB_ENABLED, enabled ? "1" : "")
+  writeLS(KEY_TMDB_ENABLED, enabled ? "" : "0")
   document.dispatchEvent(
     new CustomEvent(TMDB_SETTINGS_EVENT, { detail: { key: "enabled", value: !!enabled } })
   )
 }
 
+// Defaults on: it needs no key, so it is the only enrichment most users get.
+export function getTvdbEnabled() {
+  return readLS(KEY_TVDB_ENABLED, "") !== "0"
+}
+
+export function setTvdbEnabled(enabled) {
+  writeLS(KEY_TVDB_ENABLED, enabled ? "" : "0")
+  document.dispatchEvent(
+    new CustomEvent(TMDB_SETTINGS_EVENT, { detail: { key: "tvdbEnabled", value: !!enabled } })
+  )
+}
+
 export function isTmdbActive() {
   return getTmdbEnabled() && !!getTmdbApiKey()
+}
+
+export function isEnrichmentActive() {
+  return getTvdbEnabled() || isTmdbActive()
 }

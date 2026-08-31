@@ -34,6 +34,8 @@ function makeSectionHandle(opts: SectionOpts) {
     const register = () => {
         const SN = window.SpatialNavigation
         if (!SN || registered) return
+        // A body swap can destroy an open dialog without firing its close event, leaking the section id.
+        try { SN.remove(opts.id) } catch {}
         try {
             SN.add({
                 id: opts.id,
@@ -97,7 +99,7 @@ export function attachDialogSpatialNav(
                     ? document.querySelector<HTMLElement>(opts.defaultElement)
                     : null) ||
                 dlg.querySelector<HTMLElement>(selector)
-            target?.focus?.()
+            target?.focus?.({ focusVisible: true })
         }
     }
 
@@ -107,14 +109,27 @@ export function attachDialogSpatialNav(
     })
     observer.observe(dlg, { attributes: true, attributeFilter: ["open"] })
     dlg.addEventListener("close", unregister)
+    // A page swap while the dialog is open never fires "close"; unregister explicitly.
+    document.addEventListener("astro:before-swap", unregister)
+
+    // A body swap that drops the dialog never calls the returned cleanup.
+    const afterSwapCleanup = (): void => {
+        if (dlg.isConnected) return
+        cleanup()
+    }
+    document.addEventListener("astro:after-swap", afterSwapCleanup)
+
+    const cleanup = (): void => {
+        observer.disconnect()
+        dlg.removeEventListener("close", unregister)
+        document.removeEventListener("astro:before-swap", unregister)
+        document.removeEventListener("astro:after-swap", afterSwapCleanup)
+        unregister()
+    }
 
     if (dlg.hasAttribute("open")) registerWithFocus()
 
-    return () => {
-        observer.disconnect()
-        dlg.removeEventListener("close", unregister)
-        unregister()
-    }
+    return cleanup
 }
 
 interface PopoverOpts {

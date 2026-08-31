@@ -1,0 +1,241 @@
+/* TV-only rules for /tv/*: root type scale, overscan padding, focus ring, keepFocusedInView transform. */
+
+/* Design canvas is 60rem x 33.75rem; root font size scales that canvas to fill the viewport. */
+html[data-tv-ui] {
+  font-size: max(12px, calc(min(100vw / 60, 100vh / 33.75) * var(--xt-font-scale, 1)));
+  /* Cards scale up on focus; padding keeps that headroom from clipping against scroller overflow. */
+  --tv-focus-pad: 0.45rem;
+}
+
+/* Mirrors the overscan padding Layout.astro / ReceiverLayout.astro apply to their own body. */
+html[data-tv-overscan] body {
+  padding-top: max(env(safe-area-inset-top), calc(var(--xt-tv-overscan, 0) * 1vh));
+  padding-right: max(env(safe-area-inset-right), calc(var(--xt-tv-overscan, 0) * 1vw));
+  padding-bottom: calc(var(--xt-tv-overscan, 0) * 1vh);
+  padding-left: calc(var(--xt-tv-overscan, 0) * 1vw);
+}
+html[data-tauri-desktop][data-tv-overscan] body {
+  padding-top: max(
+    env(safe-area-inset-top),
+    calc(var(--xt-titlebar-h, 0px) + var(--xt-tv-overscan, 0) * 1vh)
+  );
+}
+
+/* Kills global.css's classic html[data-tv] outline ring so exactly one ring (below) ever shows. */
+/* Same [data-tv-ui][data-tv] double-attribute + tag-list shape as that rule, so specificity always wins. */
+html[data-tv-ui][data-tv] :is(a, button, summary, input, textarea, select, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Never clips against overflow:hidden ancestors; drawn inside the element's own box. */
+html[data-tv-ui][data-tv] .tv-focus-inset {
+  outline: none;
+}
+html[data-tv-ui][data-tv] .tv-focus-inset:focus-visible {
+  background: var(--color-surface-3);
+  box-shadow: inset 0 0 0 3px var(--color-accent);
+}
+
+/* Transparent overlay buttons on top of imagery: ring only, never a background fill. */
+html[data-tv-ui][data-tv] .tv-focus-ring {
+  outline: none;
+}
+html[data-tv-ui][data-tv] .tv-focus-ring:focus-visible {
+  box-shadow: inset 0 0 0 3px var(--color-accent);
+}
+
+/* Icon+input wrappers: the ring lives on the wrapper via :focus-within, not on the input itself. */
+html[data-tv-ui][data-tv] .tv-focus-inset-within {
+  outline: none;
+}
+html[data-tv-ui][data-tv] .tv-focus-inset-within:focus-within {
+  background: var(--color-surface-3);
+  box-shadow: inset 0 0 0 3px var(--color-accent);
+}
+html[data-tv-ui][data-tv] .tv-focus-inset-within input {
+  outline: none;
+}
+
+/* Poster / live-tile cards: the ring lives on [data-poster-wrap], never on the title below it. */
+html[data-tv-ui][data-tv] .tv-focus-card {
+  outline: none;
+}
+/* ::after (not box-shadow on the wrap) so the ring paints above the full-bleed <img>, not under it. */
+html[data-tv-ui][data-tv] .tv-focus-card:focus-visible [data-poster-wrap]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 3px var(--color-accent);
+  pointer-events: none;
+}
+html[data-tv-ui][data-tv] .tv-focus-card:focus-visible .tv-card-title {
+  color: var(--color-fg);
+}
+
+/* Card lift on focus; will-change only while focused, transition stays declared so blur eases back too. */
+html[data-tv-ui][data-tv] .tv-focus-card [data-poster-wrap] {
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+html[data-tv-ui][data-tv] .tv-focus-card:focus-visible [data-poster-wrap] {
+  will-change: transform;
+  transform: scale(1.04);
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-tv-ui][data-tv] .tv-focus-card [data-poster-wrap] {
+    transition: none;
+  }
+}
+
+/* focus-glide.ts's ring replaces these while it tracks; exactly one ring shows at a time. */
+html[data-tv-ui][data-tv][data-tv-glide="1"] .tv-focus-card:focus-visible [data-poster-wrap]::after {
+  box-shadow: none;
+}
+html[data-tv-ui][data-tv][data-tv-glide="1"] .tv-focus-inset:focus-visible,
+html[data-tv-ui][data-tv][data-tv-glide="1"] .tv-focus-ring:focus-visible {
+  box-shadow: none;
+}
+
+/* Masks the WebView rounded-clip antialiasing seam on artwork tiles. */
+html[data-tv-ui] .tv-edge-mask::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--color-bg);
+}
+
+/* focus.ts keepFocusedInView() toggles this class before translating the track. */
+.tv-keep-in-view-animated {
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* focus.ts keepFocusedInView() adds this so a static track becomes its children's offsetParent. */
+.tv-keep-in-view-track {
+  position: relative;
+}
+
+/* live.ts's ResizeObserver toggles this once the channel column has room for the "next" title. */
+html[data-tv-ui] [data-live-wide="true"] [data-role="next"] {
+  display: block;
+}
+
+/* warmup-indicator.ts's corner pill: pulsing dot while lib/catalog.js is still warming. */
+#tv-warmup-indicator .tv-warmup-dot[data-state="pending"] {
+  animation: tv-warmup-pulse 1.4s ease-in-out infinite;
+}
+@keyframes tv-warmup-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #tv-warmup-indicator .tv-warmup-dot[data-state="pending"] {
+    animation: none;
+  }
+}
+
+/* focus-glide.ts mounts one instance; JS drives left/top/width/height/border-radius per frame. */
+#tv-focus-glide {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 45;
+  box-sizing: border-box;
+  pointer-events: none;
+  opacity: 0;
+  border: 3px solid var(--color-accent);
+  box-shadow:
+    0 0 0 1px var(--color-bg),
+    0 12px 40px -16px color-mix(in oklab, var(--color-accent) 55%, transparent);
+  transition: opacity 120ms ease;
+}
+#tv-focus-glide[data-visible="true"] {
+  opacity: 1;
+}
+
+/* Shared TV cross-fade layer (e.g. hero backdrop swap). */
+html[data-tv-ui] .tv-fade-layer {
+  transition: opacity 480ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Shared TV overlay panel: enters via @starting-style, exits via the [hidden] attribute. */
+html[data-tv-ui] .tv-osd-panel {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    display 240ms allow-discrete;
+}
+html[data-tv-ui] .tv-osd-panel[hidden] {
+  opacity: 0;
+  transform: translateY(0.75rem);
+}
+@starting-style {
+  html[data-tv-ui] .tv-osd-panel:not([hidden]) {
+    opacity: 0;
+    transform: translateY(0.75rem);
+  }
+}
+
+/* Astro ClientRouter view-transition timing, scoped to the TV shell only. */
+html[data-tv-ui]::view-transition-group(*) {
+  animation-duration: 320ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Root crossfade runs a touch faster on TV than the shared 360ms default. */
+html[data-tv-ui]::view-transition-old(root),
+html[data-tv-ui]::view-transition-new(root) {
+  animation-duration: 260ms;
+}
+
+/* Card -> detail poster morph (card.ts activation, ui/detail.ts hero, list prepaint on back nav). */
+html[data-tv-ui]::view-transition-group(tv-active-poster) {
+  animation-duration: 420ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+html[data-tv-ui]::view-transition-old(tv-active-poster),
+html[data-tv-ui]::view-transition-new(tv-active-poster) {
+  height: 100%;
+  object-fit: cover;
+  mix-blend-mode: normal;
+}
+/* Detail hero backdrop: new content fades in, never crossfades against a same-named old one. */
+html[data-tv-ui]::view-transition-old(tv-detail-backdrop) {
+  animation: none;
+  opacity: 0;
+}
+html[data-tv-ui]::view-transition-new(tv-detail-backdrop) {
+  animation: tv-detail-backdrop-in 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes tv-detail-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-tv-ui] .tv-fade-layer,
+  html[data-tv-ui] .tv-osd-panel {
+    transition: none;
+  }
+  html[data-tv-ui]::view-transition-group(*) {
+    animation: none;
+  }
+  html[data-tv-ui]::view-transition-new(tv-detail-backdrop) {
+    animation: none;
+  }
+}
+html[data-tv-ui][data-perf-mode="on"] .tv-fade-layer,
+html[data-tv-ui][data-perf-mode="on"] .tv-osd-panel {
+  transition: none;
+}
+html[data-tv-ui][data-perf-mode="on"]::view-transition-group(*) {
+  animation: none;
+}
+html[data-tv-ui][data-perf-mode="on"]::view-transition-new(tv-detail-backdrop) {
+  animation: none;
+}

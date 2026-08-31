@@ -62,8 +62,12 @@
       : `/series/detail?id=${encodeURIComponent(id)}`
   }
 
+  let reloadGeneration = 0
+
   async function reload() {
+    const generation = ++reloadGeneration
     const active = await getActiveEntry()
+    if (generation !== reloadGeneration) return
     if (!active) {
       merged = []
       activePlaylistId = ""
@@ -71,20 +75,39 @@
       return
     }
     activePlaylistId = active._id
-    await Promise.all([
+
+    const buildMerged = () => {
+      const vod = (getCached(active._id, "vod")?.data || [])
+        .filter((item) => item && item.id && (item.added || 0) > 0)
+        .map((item) => ({ ts: Number(item.added) || 0, kind: "vod", item }))
+      const series = (getCached(active._id, "series")?.data || [])
+        .filter((item) => item && item.id && (item.added || 0) > 0)
+        .map((item) => ({ ts: Number(item.added) || 0, kind: "series", item }))
+      merged = [...vod, ...series].sort(
+        (firstRow, secondRow) => secondRow.ts - firstRow.ts
+      )
+    }
+
+    const hydrations = [
       hydrateCache(active._id, "vod"),
       hydrateCache(active._id, "series"),
-    ])
-    const vod = (getCached(active._id, "vod")?.data || [])
-      .filter((item) => item && item.id && (item.added || 0) > 0)
-      .map((item) => ({ ts: Number(item.added) || 0, kind: "vod", item }))
-    const series = (getCached(active._id, "series")?.data || [])
-      .filter((item) => item && item.id && (item.added || 0) > 0)
-      .map((item) => ({ ts: Number(item.added) || 0, kind: "series", item }))
-    merged = [...vod, ...series].sort(
-      (firstRow, secondRow) => secondRow.ts - firstRow.ts
-    )
-    loading = false
+    ]
+    const allCached =
+      !!getCached(active._id, "vod") && !!getCached(active._id, "series")
+
+    if (allCached) {
+      // Paint from memory now; hydration below only refreshes stale rows.
+      buildMerged()
+      loading = false
+      void Promise.allSettled(hydrations).then(() => {
+        if (generation === reloadGeneration) buildMerged()
+      }).catch(() => {})
+    } else {
+      await Promise.allSettled(hydrations)
+      if (generation !== reloadGeneration) return
+      buildMerged()
+      loading = false
+    }
     if (!merged.length) {
       // Cache may be cold - kick a warmup so the catalog populates.
       warmupActive().catch(() => {})

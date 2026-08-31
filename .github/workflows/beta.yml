@@ -7,7 +7,8 @@ name: Beta
 # Versioning: X.Y.Z-beta.<ordinal>, where X.Y.Z is the stable core version read
 # from package.json (any existing "-..." suffix is stripped first) and <ordinal>
 # counts this base version's beta tags. The same ordinal forms the Android
-# versionCode's last two digits, so release name and Play upload stay in sync.
+# versionCode's slot digits (TV AAB = ordinal + 4500), so release name and Play
+# upload stay in sync.
 # The tag is pushed eagerly, before any build, so failed runs still advance the
 # count. (1.8.0 only: names keep the legacy GITHUB_RUN_NUMBER suffix, see meta.)
 #
@@ -18,9 +19,10 @@ name: Beta
 #  macOS        *.dmg (universal, unsigned) - install manually from GitHub;
 #               Gatekeeper needs right-click-Open or `xattr -d com.apple.quarantine`
 #               on first launch
-#  Android      *.apk (universal, signed); also builds a signed AAB and
-#               publishes it to the Play open testing track when
-#               PLAY_SERVICE_ACCOUNT_JSON is set (see release.yml)
+#  Android      *.apk (universal, signed); also builds signed AABs (mobile + TV)
+#               and publishes them to the Play open testing tracks (beta /
+#               tv:beta) when PLAY_SERVICE_ACCOUNT_JSON is set; the TV upload
+#               additionally needs the repo variable PLAY_TV_TRACKS_READY=true
 #
 # Uses the same repo secrets as release.yml (see that file for the list).
 
@@ -47,6 +49,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
       version_code: ${{ steps.meta.outputs.version_code }}
+      tv_version_code: ${{ steps.meta.outputs.tv_version_code }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -64,11 +67,16 @@ jobs:
           # ls-remote emits an extra `^{}` peeled line per annotated tag - exclude those.
           EXISTING=$(git ls-remote --tags origin "refs/tags/v${BASE}-beta.*" | grep -v '\^{}' | wc -l || true)
           ORDINAL=$(( EXISTING + 1 ))
-          if [ "$ORDINAL" -gt 89 ]; then
-            ORDINAL=89
+          if [ "$ORDINAL" -gt 4499 ]; then
+            ORDINAL=4499
           fi
           IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
-          VERSION_CODE=$(( (10#$MAJOR * 1000000 + 10#$MINOR * 1000 + 10#$PATCH) * 100 + ORDINAL ))
+          if (( 10#$MAJOR > 20 || 10#$MINOR > 99 || 10#$PATCH > 99 )); then
+            echo "::error::Version $BASE exceeds the versionCode field caps (major <= 20, minor/patch <= 99)"
+            exit 1
+          fi
+          VERSION_CODE=$(( 10#$MAJOR * 100000000 + 10#$MINOR * 1000000 + 10#$PATCH * 10000 + ORDINAL ))
+          TV_VERSION_CODE=$(( VERSION_CODE + 4500 ))
 
           # Legacy guard: 1.8.0 shipped run-number-named betas (v1.8.0-beta.94), and the
           # beta update channel ranks prerelease suffixes numerically, so renaming that
@@ -83,6 +91,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "tv_version_code=$TV_VERSION_CODE" >> "$GITHUB_OUTPUT"
 
           PREV=$(git tag --sort=-creatordate | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
           echo "prev_tag=$PREV" >> "$GITHUB_OUTPUT"
@@ -95,6 +104,7 @@ jobs:
           TAG: ${{ steps.meta.outputs.tag }}
           PREV_TAG: ${{ steps.meta.outputs.prev_tag }}
           VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          TV_VERSION_CODE: ${{ steps.meta.outputs.tv_version_code }}
         run: |
           set -euo pipefail
           SHORT_SHA=$(git rev-parse --short HEAD)
@@ -104,7 +114,7 @@ jobs:
           {
             echo "Automated beta build from [\`${BRANCH_NAME}\`](${REPO_URL}/tree/${BRANCH_NAME}) @ [\`${SHORT_SHA}\`](${REPO_URL}/commit/${GITHUB_SHA})."
             echo
-            echo "Android versionCode: \`${VERSION_CODE}\`"
+            echo "Android versionCode: \`${VERSION_CODE}\` (TV: \`${TV_VERSION_CODE}\`)"
             echo
             if [ -n "$PREV_TAG" ]; then
               echo "### Commits since [\`${PREV_TAG}\`](${REPO_URL}/releases/tag/${PREV_TAG})"
@@ -298,6 +308,7 @@ jobs:
           releaseId: ${{ needs.create-beta-release.outputs.release_id }}
           args: ${{ matrix.args }}
           updaterJsonPreferNsis: true
+          retryAttempts: 2
 
   build-android:
     needs: create-beta-release
@@ -383,6 +394,17 @@ jobs:
           cp "$APK" "$OUT/Extreme InfiniTV_${VERSION}.apk"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
 
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=$(gh release view ${{ needs.create-beta-release.outputs.release_id }} --json tagName -q .tagName 2>/dev/null \
+            || gh api repos/${{ github.repository }}/releases/${{ needs.create-beta-release.outputs.release_id }} --jq .tag_name)
+          gh release upload "$TAG" \
+            "${{ steps.collect.outputs.out }}/"*.apk \
+            --clobber
+
       - name: Build signed AAB (mobile)
         if: env.HAS_PLAY_SECRET == 'true'
         env:
@@ -405,8 +427,59 @@ jobs:
             find src-tauri/gen/android/app/build/outputs -type f
             exit 1
           fi
-          echo "aab=$AAB" >> "$GITHUB_OUTPUT"
+          # Copied out: the TV build below writes the same path.
+          OUT="$RUNNER_TEMP/android-aab"
+          mkdir -p "$OUT"
+          cp "$AAB" "$OUT/mobile-release.aab"
+          echo "aab=$OUT/mobile-release.aab" >> "$GITHUB_OUTPUT"
 
+      # Same build with leanback required + its own versionCode slot.
+      - name: Set TV beta versionCode
+        if: env.HAS_PLAY_SECRET == 'true'
+        shell: bash
+        run: echo "XTREAM_VERSION_CODE_OVERRIDE=${{ needs.create-beta-release.outputs.tv_version_code }}" >> "$GITHUB_ENV"
+
+      - name: Build signed Android TV AAB
+        if: env.HAS_PLAY_SECRET == 'true'
+        env:
+          XTREAM_TV_BUILD: "true"
+          PUBLIC_APP_MODE: "receiver"
+          XTREAM_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          XTREAM_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          XTREAM_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.13846066
+          XT_SKIP_FFMPEG_SIDECAR: "1"
+        run: pnpm tauri android build --aab
+
+      - name: Locate signed TV AAB
+        id: locate-tv-aab
+        if: env.HAS_PLAY_SECRET == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Newest match = the TV AAB we just built (it overwrote the mobile one).
+          AAB=$(find src-tauri/gen/android/app/build/outputs/bundle -name "*release*.aab" -printf '%T@\t%p\n' | sort -rn | head -1 | cut -f2-)
+          if [ -z "$AAB" ]; then
+            echo "::error::Could not locate signed Android TV AAB after build"
+            find src-tauri/gen/android/app/build/outputs/bundle -type f
+            exit 1
+          fi
+          OUT="$RUNNER_TEMP/android-aab"
+          mkdir -p "$OUT"
+          cp "$AAB" "$OUT/tv-release.aab"
+          echo "aab=$OUT/tv-release.aab" >> "$GITHUB_OUTPUT"
+
+      # Bootstrap-only: the manual Play Console upload that unlocks the TV form
+      # factor needs this artifact; once PLAY_TV_TRACKS_READY is set it stops.
+      - name: Upload TV AAB workflow artifact
+        if: env.HAS_PLAY_SECRET == 'true' && vars.PLAY_TV_TRACKS_READY != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tv-aab
+          path: ${{ steps.locate-tv-aab.outputs.aab }}
+          if-no-files-found: error
+
+      # Play uploads last: a rejected submission must not cost the APK or the AABs.
       - name: Publish beta AAB to Play open testing track
         if: env.HAS_PLAY_SECRET == 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
@@ -417,16 +490,17 @@ jobs:
           track: beta
           status: completed
 
-      - name: Upload to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TAG=$(gh release view ${{ needs.create-beta-release.outputs.release_id }} --json tagName -q .tagName 2>/dev/null \
-            || gh api repos/${{ github.repository }}/releases/${{ needs.create-beta-release.outputs.release_id }} --jq .tag_name)
-          gh release upload "$TAG" \
-            "${{ steps.collect.outputs.out }}/"*.apk \
-            --clobber
+      # Needs the dedicated Android TV tracks in Play Console; flip the repo
+      # variable PLAY_TV_TRACKS_READY to "true" once the form factor is active.
+      - name: Publish beta TV AAB to Play TV open testing track
+        if: env.HAS_PLAY_SECRET == 'true' && vars.PLAY_TV_TRACKS_READY == 'true'
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.infinitel8p.xtream
+          releaseFiles: ${{ steps.locate-tv-aab.outputs.aab }}
+          track: tv:beta
+          status: completed
 
   # Publishing only after desktop builds guarantees latest.json exists before beta clients can see the new tag; the APK may attach a few minutes later, which is fine.
   publish-beta:

@@ -1,0 +1,43 @@
+---
+layout: ../layouts/DocsLayout.astro
+title: "Metadata sources"
+description: "Where posters, plots and episode details come from, and what leaves your device."
+lede: "Extreme InfiniTV enriches your provider's catalogue from two sources. TheTVDB works out of the box; TMDB needs a free key you supply."
+---
+
+## The two sources
+
+Your provider supplies the catalogue - channel names, stream URLs, and whatever plots and posters it happens to carry. That varies enormously between providers, and for series it is often missing entirely past the first season.
+
+Two metadata sources fill the gaps:
+
+| Source | Needs a key | Covers |
+|---|---|---|
+| **TheTVDB** | No | Posters, backdrops, cast, plots, episode titles and stills, correct season splits |
+| **TMDB** | Yes, free | The same, plus trailers, similar titles, cast pages and genre discovery |
+
+TheTVDB is reached through a small proxy we host, so no key or account is needed on your side. TMDB is used directly from the app with a key you add in **Settings → TMDb metadata**.
+
+When both are available, TMDB answers first and TheTVDB fills what it can't. With no TMDB key, TheTVDB covers everything on its own.
+
+## Why seasons sometimes disagree
+
+TMDB occasionally files an entire multi-season run as one long season. Anime gets this treatment often - a show that aired as three separate seasons ends up as a single 85-episode "Season 1". Your provider splits it the normal way, so asking TMDB for "season 2" returns nothing at all.
+
+The app handles this in two steps. It first tries TMDB's own [episode groups](https://developer.themoviedb.org/reference/tv-series-episode-groups), which are the community's record of the real broadcast boundaries, and matches them against your provider's season sizes. A group is only accepted when every season count lines up exactly, because a near-miss would attach the wrong episode's plot and image. If no group fits, it falls back to TheTVDB, which models broadcast seasons directly.
+
+## What leaves your device
+
+Only the title being looked up.
+
+For TheTVDB, the app sends the TMDB id your provider already publishes for that title - or, when the provider doesn't publish one, the title name and year - to our proxy, which forwards it to TheTVDB and caches the answer. No account identifier, no playlist details, no credentials, and nothing about what you actually watch. Responses are cached both on the proxy and on your device, so repeat visits usually send nothing at all.
+
+For TMDB, the request goes from your device straight to TMDB with your own key. It never passes through our infrastructure.
+
+Both can be turned off. TheTVDB is on by default and needs no key, so switching it off is a deliberate choice: **Settings -> TMDb metadata -> TheTVDB metadata**. TMDB only runs once you add a key. With both off, you see exactly what your provider supplies and nothing leaves your device for metadata.
+
+## Attribution
+
+Metadata provided by [TheTVDB](https://www.thetvdb.com/). Please consider [adding missing information or subscribing](https://www.thetvdb.com/subscribe).
+
+This application uses [TMDB](https://www.themoviedb.org/) and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.

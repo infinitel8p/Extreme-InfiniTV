@@ -8,6 +8,7 @@ export const TMDB_POSTER_SIZE = "w500"
 export const TMDB_BACKDROP_SIZE = "w1280"
 export const TMDB_PROFILE_SIZE = "w185"
 export const TMDB_STILL_SIZE = "w300"
+export const TMDB_LOGO_SIZE = "w500"
 
 export class TmdbHttpError extends Error {
   status: number
@@ -77,6 +78,17 @@ export interface TmdbSearchResult {
   overview?: string
 }
 
+export interface TmdbLogo {
+  file_path: string
+  iso_639_1: string | null
+  vote_average?: number
+  vote_count?: number
+}
+
+export interface TmdbImagesResponse {
+  logos?: TmdbLogo[]
+}
+
 export interface TmdbBundle {
   id: number
   title?: string
@@ -89,6 +101,7 @@ export interface TmdbBundle {
   credits?: TmdbCredits
   videos?: TmdbVideosResponse
   recommendations?: { results?: TmdbSearchResult[] }
+  images?: TmdbImagesResponse
 }
 
 export interface TmdbSeasonEpisode {
@@ -100,6 +113,35 @@ export interface TmdbSeasonEpisode {
 
 export interface TmdbSeasonResponse {
   episodes?: TmdbSeasonEpisode[]
+}
+
+export interface TmdbEpisodeGroupSummary {
+  id: string
+  name?: string
+  type?: number
+  group_count?: number
+  episode_count?: number
+}
+
+export interface TmdbEpisodeGroupsResponse {
+  results?: TmdbEpisodeGroupSummary[]
+}
+
+export interface TmdbEpisodeGroupEpisode {
+  season_number?: number
+  episode_number?: number
+  order?: number
+}
+
+export interface TmdbEpisodeGroupPart {
+  name?: string
+  order?: number
+  episodes?: TmdbEpisodeGroupEpisode[]
+}
+
+export interface TmdbEpisodeGroupResponse {
+  id?: string
+  groups?: TmdbEpisodeGroupPart[]
 }
 
 function isBearerKey(key: string): boolean {
@@ -239,6 +281,53 @@ export async function tmdbDiscoverByGenre(
   }
 }
 
+export interface TmdbTrendingItem {
+  tmdbId: number
+  name: string
+  year: number | null
+  posterUrl: string | null
+  backdropUrl: string | null
+}
+
+interface TmdbTrendingResult {
+  id: number
+  title?: string
+  name?: string
+  release_date?: string
+  first_air_date?: string
+  poster_path?: string | null
+  backdrop_path?: string | null
+}
+
+interface TmdbTrendingResponse {
+  results?: TmdbTrendingResult[]
+}
+
+export async function tmdbTrending(
+  kind: "vod" | "series",
+  window: "day" | "week" = "week"
+): Promise<TmdbTrendingItem[]> {
+  if (!isTmdbActive()) return []
+  const apiKey = getTmdbApiKey()
+  const path = kind === "vod" ? `/trending/movie/${window}` : `/trending/tv/${window}`
+  try {
+    const data = await tmdbFetch<TmdbTrendingResponse>(apiKey, path, {})
+    return (data.results || []).map((result) => {
+      const releaseDate = (kind === "vod" ? result.release_date : result.first_air_date) || ""
+      return {
+        tmdbId: result.id,
+        name: (kind === "vod" ? result.title : result.name) || "",
+        year: releaseDate ? Number(releaseDate.slice(0, 4)) : null,
+        posterUrl: tmdbImageUrl(result.poster_path, TMDB_POSTER_SIZE),
+        backdropUrl: tmdbImageUrl(result.backdrop_path, TMDB_BACKDROP_SIZE),
+      }
+    })
+  } catch (error) {
+    log.warn("[xt:tmdb] tmdbTrending failed:", kind, window, error)
+    return []
+  }
+}
+
 export async function tmdbSearchPerson(query: string): Promise<TmdbPersonResult[]> {
   const trimmed = query.trim()
   if (!trimmed || !isTmdbActive()) return []
@@ -260,13 +349,20 @@ export async function tmdbSearchPerson(query: string): Promise<TmdbPersonResult[
   }
 }
 
+function includeImageLanguageFor(language?: string): string {
+  const primarySubtag = (language || "").split("-")[0].toLowerCase()
+  const tags = primarySubtag && primarySubtag !== "en" ? [primarySubtag, "en"] : ["en"]
+  return [...tags, "null"].join(",")
+}
+
 export async function tmdbMovieBundle(
   key: string,
   tmdbId: number,
   language?: string
 ): Promise<TmdbBundle> {
   return tmdbFetch<TmdbBundle>(key, `/movie/${tmdbId}`, {
-    append_to_response: "credits,videos,recommendations",
+    append_to_response: "credits,videos,recommendations,images",
+    include_image_language: includeImageLanguageFor(language),
     language,
   })
 }
@@ -277,7 +373,8 @@ export async function tmdbTvBundle(
   language?: string
 ): Promise<TmdbBundle> {
   return tmdbFetch<TmdbBundle>(key, `/tv/${tmdbId}`, {
-    append_to_response: "credits,videos,recommendations",
+    append_to_response: "credits,videos,recommendations,images",
+    include_image_language: includeImageLanguageFor(language),
     language,
   })
 }
@@ -289,6 +386,21 @@ export async function tmdbTvSeason(
   language?: string
 ): Promise<TmdbSeasonResponse> {
   return tmdbFetch<TmdbSeasonResponse>(key, `/tv/${tmdbId}/season/${seasonNumber}`, { language })
+}
+
+// Index only - no language, since the parts are consumed for episode numbering.
+export async function tmdbTvEpisodeGroups(
+  key: string,
+  tmdbId: number
+): Promise<TmdbEpisodeGroupsResponse> {
+  return tmdbFetch<TmdbEpisodeGroupsResponse>(key, `/tv/${tmdbId}/episode_groups`, {})
+}
+
+export async function tmdbEpisodeGroup(
+  key: string,
+  groupId: string
+): Promise<TmdbEpisodeGroupResponse> {
+  return tmdbFetch<TmdbEpisodeGroupResponse>(key, `/tv/episode_group/${groupId}`, {})
 }
 
 export async function tmdbPersonCredits(

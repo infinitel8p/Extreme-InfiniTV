@@ -6,9 +6,13 @@ import {
   recentLogFileNames,
   tailLogBytes,
   decodeLogTail,
+  allocateLogTailBudget,
   withTimeout,
+  sanitizeDeviceNameForFilename,
   type BundleInput,
   type PlaylistSummary,
+  type ReceiverLogResult,
+  type LogInventoryItem,
 } from "@/scripts/lib/diagnostic-bundle.js"
 
 const SECRET_PASS = "secret-pass"
@@ -249,6 +253,166 @@ describe("buildBundleManifest", () => {
     const manifest = buildBundleManifest(baseBundleInput())
     const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
     expect(readme).not.toContain("diagnostic-result.json")
+  })
+
+  it("adds a receiver-logs entry for a fetched device", () => {
+    const receiverLogs: ReceiverLogResult[] = [
+      { deviceName: "Living Room TV", host: "192.168.1.50", status: "fetched", text: "line one\nline two\n" },
+    ]
+    const manifest = buildBundleManifest(baseBundleInput({ receiverLogs }))
+    const entry = manifest.find((file) => file.name === "receiver-logs/Living-Room-TV.log")
+    expect(entry?.text).toBe("line one\nline two\n")
+  })
+
+  it("adds a receiver-logs snapshot entry with a captured-at header", () => {
+    const receiverLogs: ReceiverLogResult[] = [
+      {
+        deviceName: "Bedroom TV",
+        host: "192.168.1.51",
+        status: "snapshot",
+        text: "old error line\n",
+        snapshotAt: "2026-03-15T10:00:00.000Z",
+      },
+    ]
+    const manifest = buildBundleManifest(baseBundleInput({ receiverLogs }))
+    const entry = manifest.find((file) => file.name === "receiver-logs/Bedroom-TV-snapshot.log")
+    expect(entry?.text).toContain("2026-03-15T10:00:00.000Z")
+    expect(entry?.text).toContain("old error line")
+  })
+
+  it("adds no file for an unreachable device but still notes it in the README", () => {
+    const receiverLogs: ReceiverLogResult[] = [
+      { deviceName: "Kitchen TV", host: "192.168.1.52", status: "unreachable" },
+    ]
+    const manifest = buildBundleManifest(baseBundleInput({ receiverLogs }))
+    expect(manifest.some((file) => file.name.startsWith("receiver-logs/"))).toBe(false)
+    const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
+    expect(readme).toContain("Kitchen TV: unreachable")
+  })
+
+  it("redacts a credential pattern inside a receiver log tail", () => {
+    const receiverLogs: ReceiverLogResult[] = [
+      {
+        deviceName: "Living Room TV",
+        host: "192.168.1.50",
+        status: "fetched",
+        text: "fetching http://joe:hunter2@host.example/list.m3u",
+      },
+    ]
+    const manifest = buildBundleManifest(baseBundleInput({ receiverLogs }))
+    const entry = manifest.find((file) => file.name === "receiver-logs/Living-Room-TV.log")
+    expect(entry?.text).not.toContain("hunter2")
+  })
+
+  it("omits the receiver-cast section from the README when there are no devices", () => {
+    const manifest = buildBundleManifest(baseBundleInput())
+    const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
+    expect(readme).not.toContain("Receiver-cast devices")
+  })
+
+  it("marks a truncated log tail with the omitted byte count", () => {
+    const manifest = buildBundleManifest(
+      baseBundleInput({
+        logFiles: [
+          {
+            name: "app-2026-03-15.log",
+            text: "tail lines",
+            sizeBytes: 2 * 1024 * 1024,
+            includedBytes: 512 * 1024,
+            modifiedAt: "2026-03-15T09:00:00.000Z",
+          },
+        ],
+      })
+    )
+    const logFile = manifest.find((file) => file.name === "logs/app-2026-03-15.log")
+    expect(logFile?.text).toContain("omitted")
+    expect(logFile?.text).toContain("2026-03-15T09:00:00.000Z")
+    expect(logFile?.text).toContain("tail lines")
+  })
+
+  it("marks an untruncated log tail as the complete file", () => {
+    const manifest = buildBundleManifest(
+      baseBundleInput({
+        logFiles: [
+          { name: "app-2026-03-15.log", text: "all of it", sizeBytes: 9, includedBytes: 9 },
+        ],
+      })
+    )
+    const logFile = manifest.find((file) => file.name === "logs/app-2026-03-15.log")
+    expect(logFile?.text).toContain("complete file")
+    expect(logFile?.text).not.toContain("omitted")
+  })
+
+  it("writes an inventory listing every file found, attached or not", () => {
+    const logInventory: LogInventoryItem[] = [
+      { name: "app-2026-03-15.log", sizeBytes: 1024, modifiedAt: "2026-03-15T09:00:00.000Z", state: "full" },
+      { name: "app-2026-03-01.log", sizeBytes: 4096, modifiedAt: "2026-03-01T09:00:00.000Z", state: "omitted" },
+    ]
+    const manifest = buildBundleManifest(
+      baseBundleInput({
+        logFiles: [{ name: "app-2026-03-15.log", text: "hello", sizeBytes: 1024, includedBytes: 1024 }],
+        logInventory,
+      })
+    )
+    const inventory = manifest.find((file) => file.name === "logs/INVENTORY.txt")?.text ?? ""
+    expect(inventory).toContain("app-2026-03-15.log")
+    expect(inventory).toContain("app-2026-03-01.log")
+    expect(inventory).toContain("omitted")
+    const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
+    expect(readme).toContain("logs/INVENTORY.txt")
+  })
+
+  it("adds no inventory file when nothing was enumerated", () => {
+    const manifest = buildBundleManifest(baseBundleInput({ logInventory: [] }))
+    expect(manifest.some((file) => file.name === "logs/INVENTORY.txt")).toBe(false)
+  })
+})
+
+describe("allocateLogTailBudget", () => {
+  it("gives the newest file its full per-file allowance", () => {
+    expect(allocateLogTailBudget([900, 900], 500, 5000, 100)).toEqual([500, 500])
+  })
+
+  it("charges a small file only its own size", () => {
+    expect(allocateLogTailBudget([10, 20], 500, 5000, 5)).toEqual([10, 20])
+  })
+
+  it("stops allocating once the total budget is spent", () => {
+    expect(allocateLogTailBudget([500, 500, 500], 500, 1000, 100)).toEqual([500, 500, 0])
+  })
+
+  it("hands out the remainder when it still clears the minimum chunk", () => {
+    expect(allocateLogTailBudget([500, 500], 500, 700, 100)).toEqual([500, 200])
+  })
+
+  it("skips a file when the leftover budget is below the minimum chunk", () => {
+    expect(allocateLogTailBudget([500, 500], 500, 550, 100)).toEqual([500, 0])
+  })
+
+  it("treats a negative or zero size as no allowance", () => {
+    expect(allocateLogTailBudget([0, -5, 10], 500, 5000, 1)).toEqual([0, 0, 10])
+  })
+
+  it("returns an empty list for no files", () => {
+    expect(allocateLogTailBudget([])).toEqual([])
+  })
+})
+
+describe("sanitizeDeviceNameForFilename", () => {
+  it("keeps alphanumerics and collapses everything else to a dash", () => {
+    expect(sanitizeDeviceNameForFilename("Living Room TV", "192.168.1.50")).toBe("Living-Room-TV")
+  })
+
+  it("keeps underscores and existing dashes", () => {
+    expect(sanitizeDeviceNameForFilename("tv_1-main", "192.168.1.50")).toBe("tv_1-main")
+  })
+
+  it("falls back to the host when the name sanitizes to nothing", () => {
+    expect(sanitizeDeviceNameForFilename("!!!", "192.168.1.50")).toBe("192-168-1-50")
+  })
+
+  it("falls back to 'device' when both name and host sanitize to nothing", () => {
+    expect(sanitizeDeviceNameForFilename("!!!", "!!!")).toBe("device")
   })
 })
 

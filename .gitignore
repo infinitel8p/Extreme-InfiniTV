@@ -57,3 +57,9 @@ tests/visual/**/*-darwin.png
 
 # snap packaging: CI drops the release .deb here before building
 packaging/snap/local/
+
+# Cloudflare Worker local secrets and build output
+proxy/.dev.vars
+proxy/node_modules/
+proxy/.wrangler/
+proxy/worker-configuration.d.ts

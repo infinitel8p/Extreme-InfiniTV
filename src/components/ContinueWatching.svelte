@@ -13,6 +13,7 @@
     clearRecent,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+  import { readCachedLiveChannels, hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
   const STRIP_LIMIT = 8
@@ -77,8 +78,10 @@
     }
   }
 
-  function buildLiveEntry(recent, liveById) {
+  function buildLiveEntry(recent, liveById, liveCacheAvailable) {
     const channel = liveById.get(Number(recent.id))
+    // Hidden-channel recents miss the live lookup once the catalog is cached.
+    const unavailable = !channel && !!liveCacheAvailable
     return {
       kind: "live",
       id: String(recent.id),
@@ -88,46 +91,55 @@
       href: `/livetv?channel=${encodeURIComponent(recent.id)}`,
       percent: 0,
       hasProgress: false,
+      unavailable,
     }
   }
 
+  let reloadGeneration = 0
+
+  function buildEntries(playlistId) {
+    const vodList = getCached(playlistId, "vod")?.data || []
+    const vodById = new Map(vodList.map((movie) => [Number(movie.id), movie]))
+    const liveList = readCachedLiveChannels(playlistId)
+    const liveById = new Map(liveList.map((channel) => [Number(channel.id), channel]))
+    const liveCacheAvailable = hasCachedLiveChannels(playlistId)
+
+    const progress = getContinueWatching(playlistId, STRIP_LIMIT).map((row) => ({
+      ts: row.updatedAt || 0,
+      built: buildProgressEntry(row, vodById),
+    }))
+    const liveCutoff = Date.now() - LIVE_TTL_MS
+    const recents = getRecents(playlistId, "live")
+      .filter((row) => (row.ts || 0) >= liveCutoff)
+      .map((row) => ({
+        ts: row.ts || 0,
+        built: buildLiveEntry(row, liveById, liveCacheAvailable),
+      }))
+
+    const merged = [...progress, ...recents].sort((left, right) => right.ts - left.ts)
+    return merged.slice(0, STRIP_LIMIT).map((row) => row.built)
+  }
+
   async function reload() {
-    const active = await getActiveEntry()
+    const generation = ++reloadGeneration
+    const [active] = await Promise.all([getActiveEntry(), ensurePrefsLoaded()])
+    if (generation !== reloadGeneration) return
     if (!active) {
       entries = []
       activePlaylistId = ""
       return
     }
     activePlaylistId = active._id
-    await ensurePrefsLoaded()
-    await Promise.all([
+    // Paint from what's cached in memory first, upgrade after hydration.
+    entries = buildEntries(active._id)
+    void Promise.allSettled([
       hydrateCache(active._id, "vod"),
       hydrateCache(active._id, "live"),
       hydrateCache(active._id, "m3u"),
-    ])
-
-    const vodList = getCached(active._id, "vod")?.data || []
-    const vodById = new Map(vodList.map((movie) => [Number(movie.id), movie]))
-    const liveList =
-      getCached(active._id, "live")?.data ||
-      getCached(active._id, "m3u")?.data ||
-      []
-    const liveById = new Map(liveList.map((channel) => [Number(channel.id), channel]))
-
-    const progress = getContinueWatching(active._id, STRIP_LIMIT).map((row) => ({
-      ts: row.updatedAt || 0,
-      built: buildProgressEntry(row, vodById),
-    }))
-    const liveCutoff = Date.now() - LIVE_TTL_MS
-    const recents = getRecents(active._id, "live")
-      .filter((row) => (row.ts || 0) >= liveCutoff)
-      .map((row) => ({
-        ts: row.ts || 0,
-        built: buildLiveEntry(row, liveById),
-      }))
-
-    const merged = [...progress, ...recents].sort((left, right) => right.ts - left.ts)
-    entries = merged.slice(0, STRIP_LIMIT).map((row) => row.built)
+    ]).then(() => {
+      if (generation !== reloadGeneration) return
+      entries = buildEntries(active._id)
+    }).catch(() => {})
   }
 
   function dismiss(event, entry) {
@@ -185,9 +197,11 @@
           style:--enter-delay={Math.min(idx, 6) * 28 + "ms"}>
           <a
             href={entry.href}
+            onclick={(event) => { if (entry.unavailable) event.preventDefault() }}
             aria-label={entry.kind === "live"
               ? `Watch ${entry.name}`
               : `Resume ${entry.name}`}
+            aria-disabled={entry.unavailable}
             use:hubCardMenu={{
               kind: entry.kind,
               id: entry.id,
@@ -203,7 +217,8 @@
                    hover:ring-[3px] hover:ring-accent
                    outline-none focus-visible:ring-1 focus-visible:ring-accent
                    hover:transform-[translateY(-2px)]
-                   focus-visible:transform-[translateY(-2px)]">
+                   focus-visible:transform-[translateY(-2px)]"
+            class:opacity-50={entry.unavailable}>
             <div class="cw-poster aspect-2/3 w-full overflow-hidden bg-surface-2 relative">
               {#if entry.logo}
                 {#if entry.kind === "live"}

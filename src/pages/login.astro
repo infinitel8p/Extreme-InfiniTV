@@ -157,6 +157,21 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 						<button type="button" role="radio" data-accent-value="violet" aria-checked="false" data-i18n-attr="title:settings.accent.violet;aria-label:settings.accent.violet" title="Violet" aria-label="Violet" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-violet)">
 							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
 						</button>
+						<button type="button" role="radio" data-accent-value="gold" aria-checked="false" data-i18n-attr="title:settings.accent.gold;aria-label:settings.accent.gold" title="Gold" aria-label="Gold" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-gold)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+						<button type="button" role="radio" data-accent-value="lime" aria-checked="false" data-i18n-attr="title:settings.accent.lime;aria-label:settings.accent.lime" title="Lime" aria-label="Lime" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-lime)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+						<button type="button" role="radio" data-accent-value="teal" aria-checked="false" data-i18n-attr="title:settings.accent.teal;aria-label:settings.accent.teal" title="Teal" aria-label="Teal" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-teal)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+						<button type="button" role="radio" data-accent-value="silver" aria-checked="false" data-i18n-attr="title:settings.accent.silver;aria-label:settings.accent.silver" title="Silver" aria-label="Silver" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-silver)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
+						<button type="button" role="radio" data-accent-value="white" aria-checked="false" data-i18n-attr="title:settings.accent.white;aria-label:settings.accent.white" title="White" aria-label="White" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-white)">
+							<span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+						</button>
 					</div>
 					<span data-i18n="login.field.accent.helper" class="text-xs text-fg-3 leading-relaxed">
 						Overrides the app's accent color while this playlist is active.
@@ -243,7 +258,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 						<button
 							id="mirrorsAddBtn"
 							type="button"
-							class="self-start inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg px-3 py-1.5 text-sm text-fg-2
+							class="self-end inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg px-3 py-1.5 text-sm text-fg-2
 								hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
 							<IconPlus aria-hidden="true" stroke={2} class="size-3.5" />
 							<span data-i18n="login.mirrors.add">Add backup domain</span>
@@ -424,7 +439,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 					</div>
 
 					<div class="flex flex-col gap-2">
-						<div class="flex flex-wrap items-center gap-2">
+						<div class="flex flex-wrap items-center justify-end gap-2">
 							<button
 								id="epgAddBtn"
 								type="button"
@@ -494,7 +509,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				<button
 					id="diagnostic-run-btn"
 					type="button"
-					class="self-start inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg px-3.5 py-2 min-h-10 text-xs text-fg-2
+					class="self-end inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg px-3.5 py-2 min-h-10 text-xs text-fg-2
 						hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:border-accent transition-colors">
 					<span data-i18n="diagnostic.runFull">Run full diagnostic</span>
 				</button>
@@ -520,7 +535,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 					id="saveBtn"
 					type="submit"
 					data-i18n="login.action.save"
-					class="btn-primary ml-auto">
+					class="btn-primary ms-auto">
 					Save and continue
 				</button>
 			</div>
@@ -997,18 +1012,13 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 			target.badge.textContent = t("login.epg.sourceFetching");
 		}
 
-		const results = await Promise.all(
-			targets.map((target) =>
-				testEpgSource(target.url, { signal }).then((res) => ({ target, res }))
-			)
-		);
-
-		if (signal.aborted) return;
-
+		// Each probe applies its own badge as soon as it lands, independently of
+		// how long (or whether) the others take. allSettled just waits for all
+		// of them to be done before the summary below.
 		let okCount = 0;
 		let errCount = 0;
-		for (const { target, res } of results) {
-			if (!target.badge) continue;
+		function applyEpgProbeResult(target, res) {
+			if (signal.aborted || !target.badge) return;
 			target.badge.classList.remove("text-fg-3", "text-bad", "text-good", "text-warn");
 			target.badge.removeAttribute("data-i18n");
 			if (res.ok) {
@@ -1027,6 +1037,16 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				});
 			}
 		}
+
+		await Promise.allSettled(
+			targets.map((target) =>
+				testEpgSource(target.url, { signal })
+					.catch((err) => ({ ok: false, error: String(err?.message || err || "Unknown error") }))
+					.then((res) => applyEpgProbeResult(target, res))
+			)
+		);
+
+		if (signal.aborted) return;
 
 		if (epgTestBtn) {
 			epgTestBtn.disabled = false;
@@ -1390,6 +1410,19 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 		return 0;
 	}
 
+	// Every candidate's scheme needs resolving on its own merits (primary and
+	// each mirror are independent servers), so we still await all of them -
+	// but a single rejection must not take the others down with it.
+	function safeResolveServerScheme(candidate) {
+		return resolveServerScheme(candidate).catch((error) => ({
+			serverUrl: candidate.serverUrl,
+			scheme: "http",
+			swapped: false,
+			originalScheme: null,
+			test: { status: "unavailable", reason: "unknown", raw: String(error?.message || error) },
+		}));
+	}
+
 	testBtn.addEventListener("click", async () => {
 		testBtn.disabled = true;
 		try {
@@ -1414,7 +1447,7 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				showStatus("busy", t("login.status.testing"));
 				const resolveds = await Promise.all(
 					candidates.map((cand) =>
-						resolveServerScheme({
+						safeResolveServerScheme({
 							serverUrl: cand.serverUrl,
 							username: cand.username,
 							password: cand.password,
@@ -1603,8 +1636,8 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 				showStatus("busy", t("login.status.testing"));
 				const rawMirrors = readMirrorsFromForm();
 				const allResolveds = await Promise.all([
-					resolveServerScheme({ serverUrl: rawServerUrl, username, password }),
-					...rawMirrors.map((mirror) => resolveServerScheme(mirror)),
+					safeResolveServerScheme({ serverUrl: rawServerUrl, username, password }),
+					...rawMirrors.map((mirror) => safeResolveServerScheme(mirror)),
 				]);
 				const primaryResolved = allResolveds[0];
 				const mirrorResolveds = allResolveds.slice(1);
@@ -1711,6 +1744,9 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 			}
 
 			location.href = editing ? "/" : "/livetv";
+		} catch (error) {
+			log.warn("[xt:login] save failed:", error);
+			showStatus("unavailable", t("login.error.localSaveFailed"));
 		} finally {
 			saveBtn.disabled = false;
 		}

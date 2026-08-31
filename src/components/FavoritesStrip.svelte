@@ -13,6 +13,7 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+  import { readCachedLiveChannels, hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
   import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
@@ -41,6 +42,9 @@
   function buildEntry(playlistId, { kind, id }, lookups) {
     const meta = getFavoriteMeta(playlistId, kind, id)
     const item = lookups[kind]?.get(Number(id))
+    // Hidden-channel favorites and unresolved custom-playlist channels both
+    // miss the live lookup once the catalog is cached - can't tune either.
+    const unavailable = kind === "live" && !item && !!lookups.liveCacheAvailable
     const isStoredNameFallback = !!meta?.name && isKindFallbackName(kind, id, meta.name)
     const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
     // `kindLabel(kind)` here is build-time fallback for items without meta;
@@ -67,28 +71,13 @@
     } else if (kind === "series") {
       href = `/series/detail?id=${encodeURIComponent(id)}`
     }
-    return { kind, id, name, logo, href }
+    return { kind, id, name, logo, href, unavailable }
   }
 
-  async function rebuildLookups(playlistId) {
-    if (!playlistId) {
-      lookups = null
-      lookupsForPlaylistId = ""
-      return
-    }
-    await Promise.all([
-      hydrateCache(playlistId, "live"),
-      hydrateCache(playlistId, "m3u"),
-      hydrateCache(playlistId, "vod"),
-      hydrateCache(playlistId, "series"),
-    ])
-    lookups = {
+  function buildLookupsFromCache(playlistId) {
+    return {
       live: new Map(
-        (
-          getCached(playlistId, "live")?.data ||
-          getCached(playlistId, "m3u")?.data ||
-          []
-        ).map((channel) => [Number(channel.id), channel])
+        readCachedLiveChannels(playlistId).map((channel) => [Number(channel.id), channel])
       ),
       vod: new Map(
         (getCached(playlistId, "vod")?.data || []).map((movie) => [Number(movie.id), movie])
@@ -99,26 +88,46 @@
           series,
         ])
       ),
+      liveCacheAvailable: hasCachedLiveChannels(playlistId),
     }
-    lookupsForPlaylistId = playlistId
   }
 
+  function buildEntries(playlistId) {
+    const raw = getGlobalFavorites(playlistId)
+    const filtered = filterKind === "all" ? raw : raw.filter((row) => row.kind === filterKind)
+    return filtered.map((entry) => buildEntry(playlistId, entry, lookups || {})).slice(0, 12)
+  }
+
+  let reloadGeneration = 0
+
   async function reload() {
-    const active = await getActiveEntry()
+    const generation = ++reloadGeneration
+    const [active] = await Promise.all([getActiveEntry(), ensurePrefsLoaded()])
+    if (generation !== reloadGeneration) return
     if (!active) {
       entries = []
       activePlaylistId = ""
       lookups = null
+      lookupsForPlaylistId = ""
       return
     }
     activePlaylistId = active._id
-    await ensurePrefsLoaded()
     if (lookupsForPlaylistId !== active._id || !lookups) {
-      await rebuildLookups(active._id)
+      // Paint with whatever's cached in memory now, hydration upgrades after.
+      lookups = buildLookupsFromCache(active._id)
+      lookupsForPlaylistId = active._id
+      void Promise.allSettled([
+        hydrateCache(active._id, "live"),
+        hydrateCache(active._id, "m3u"),
+        hydrateCache(active._id, "vod"),
+        hydrateCache(active._id, "series"),
+      ]).then(() => {
+        if (generation !== reloadGeneration) return
+        lookups = buildLookupsFromCache(active._id)
+        entries = buildEntries(active._id)
+      }).catch(() => {})
     }
-    const raw = getGlobalFavorites(active._id)
-    const filtered = filterKind === "all" ? raw : raw.filter((row) => row.kind === filterKind)
-    entries = filtered.map((entry) => buildEntry(active._id, entry, lookups || {})).slice(0, 12)
+    entries = buildEntries(active._id)
   }
 
   onMount(() => {
@@ -183,7 +192,9 @@
         <li class="fav-item shrink-0 snap-start" data-kind={entry.kind} style:--enter-delay={Math.min(idx, 8) * 28 + "ms"}>
           <a
             href={entry.href}
+            onclick={(event) => { if (entry.unavailable) event.preventDefault() }}
             aria-label={tr("favorites.itemAriaLabel", { name: entry.name })}
+            aria-disabled={entry.unavailable}
             use:hubCardMenu={{
               kind: entry.kind,
               id: entry.id,
@@ -197,7 +208,8 @@
                    hover:ring-[3px] hover:ring-accent
                    outline-none focus-visible:ring-1 focus-visible:ring-accent
                    hover:transform-[translateY(-2px)]
-                   focus-visible:transform-[translateY(-2px)]">
+                   focus-visible:transform-[translateY(-2px)]"
+            class:opacity-50={entry.unavailable}>
             <div class="fav-thumb w-full aspect-2-3 overflow-hidden bg-surface-2 relative">
               {#if entry.logo}
                 {#if entry.kind === "live"}

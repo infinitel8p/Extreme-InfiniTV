@@ -49,6 +49,10 @@ export interface EscapeHatchHooks {
   getResumeSeconds?(): number
   getTitle?(): string | null | undefined
   beforeLaunch?(kind: ButtonKind): void
+  /** Fires past every cancellable chooser, right before launch: drop local playback and its recovery machinery here. */
+  releaseLocal?(kind: ButtonKind): void
+  /** Launch failed after releaseLocal: remount local playback. */
+  restoreLocal?(kind: ButtonKind): void
   afterLaunch?(kind: ButtonKind): void
 }
 
@@ -161,6 +165,20 @@ export function setupExternalPlayerButton(
         log.warn("[xt:external-btn] afterLaunch threw:", err)
       }
     }
+    const releaseLocal = (launchedKind: ButtonKind) => {
+      try {
+        hooks.releaseLocal?.(launchedKind)
+      } catch (err) {
+        log.warn("[xt:external-btn] releaseLocal threw:", err)
+      }
+    }
+    const restoreLocal = (launchedKind: ButtonKind) => {
+      try {
+        hooks.restoreLocal?.(launchedKind)
+      } catch (err) {
+        log.warn("[xt:external-btn] restoreLocal threw:", err)
+      }
+    }
     try {
       hooks.beforeLaunch?.(kind)
     } catch (err) {
@@ -175,6 +193,7 @@ export function setupExternalPlayerButton(
           title: t("settings.playback.launching", { player: "VLC" }) || "Launching VLC…",
           duration: 2000,
         })
+        releaseLocal(kind)
         try {
           await launcher.launch(src, {
             userAgent: headers?.userAgent ?? null,
@@ -184,6 +203,7 @@ export function setupExternalPlayerButton(
           notifyLaunched(kind)
         } catch (err) {
           surfaceAndroidHandoffError(err, kind)
+          restoreLocal(kind)
         }
         return
       }
@@ -213,6 +233,7 @@ export function setupExternalPlayerButton(
               }) || `Launching ${stillInstalled.label || stillInstalled.pkg}…`,
             duration: 2000,
           })
+          releaseLocal("system")
           try {
             await openStreamInAndroidPackage(stillInstalled.pkg, src, {
               activity: stillInstalled.activity || remembered.activity || null,
@@ -224,6 +245,7 @@ export function setupExternalPlayerButton(
             notifyLaunched("system")
           } catch (err) {
             surfaceAndroidHandoffError(err, "system")
+            restoreLocal("system")
           }
           return
         }
@@ -249,6 +271,7 @@ export function setupExternalPlayerButton(
           `Launching ${pickedApp.label || pickedApp.pkg}…`,
         duration: 2000,
       })
+      releaseLocal("system")
       try {
         await openStreamInAndroidPackage(pickedApp.pkg, src, {
           activity: pickedApp.activity || null,
@@ -260,6 +283,7 @@ export function setupExternalPlayerButton(
         notifyLaunched("system")
       } catch (err) {
         surfaceAndroidHandoffError(err, "system")
+        restoreLocal("system")
       }
       return
     }
@@ -282,11 +306,13 @@ export function setupExternalPlayerButton(
         `Launching ${desktopKind.toUpperCase()}…`,
       duration: 2000,
     })
+    releaseLocal(desktopKind)
     try {
       await launcher.launch(src, opts)
       notifyLaunched(desktopKind)
     } catch (err) {
       surfaceLaunchError(err, desktopKind)
+      restoreLocal(desktopKind)
     }
   }
 
@@ -335,6 +361,26 @@ export function surfaceAndroidHandoffError(err: unknown, kind: AndroidHandoffKin
   log.error("[xt:external-btn] android handoff threw:", err)
   const playerName = kind === "vlc" ? "VLC" : "external player"
   toastError(`Couldn't open in ${playerName}.`)
+}
+
+/** Same log detail as surfaceLaunchError, but a single toast that playback continues embedded instead of the failed-launch copy. */
+export function surfaceLaunchErrorFallback(err: unknown, kind: ExternalPlayerKind, logTag: string): void {
+  const playerName = kind.toUpperCase()
+  if (err instanceof PlayerNotConfiguredError) {
+    log.warn(`${logTag} ${playerName} not configured, falling back to embedded playback`)
+  } else if (err instanceof AndroidHandoffError) {
+    log.warn(`${logTag} android handoff failed (${err.code}), falling back to embedded playback`)
+    surfaceAndroidHandoffError(err, err.kind)
+    return
+  } else if (err instanceof PlayerLaunchError) {
+    log.warn(`${logTag} ${playerName} launch failed, falling back to embedded playback:`, err.message)
+  } else {
+    log.error(`${logTag} ${playerName} launch threw, falling back to embedded playback:`, err)
+  }
+  toastError(
+    t("settings.playback.launchFallback", { player: playerName }) ||
+      `Couldn't start ${playerName}. Playing in the app instead.`,
+  )
 }
 
 export function surfaceLaunchError(err: unknown, kind: ExternalPlayerKind): void {

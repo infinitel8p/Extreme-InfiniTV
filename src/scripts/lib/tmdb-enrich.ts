@@ -13,6 +13,8 @@ import {
   tmdbMovieBundle,
   tmdbTvBundle,
   tmdbTvSeason,
+  tmdbTvEpisodeGroups,
+  tmdbEpisodeGroup,
   tmdbSearchMovie,
   tmdbSearchTv,
   tmdbPersonCredits,
@@ -23,13 +25,23 @@ import {
   TMDB_BACKDROP_SIZE,
   TMDB_PROFILE_SIZE,
   TMDB_STILL_SIZE,
+  TMDB_LOGO_SIZE,
   type TmdbBundle,
   type TmdbSearchResult,
   type TmdbPersonCreditItem,
+  type TmdbLogo,
 } from "@/scripts/lib/tmdb.ts"
 import { cleanProviderTitle, pickTmdbMatch } from "@/scripts/lib/tmdb-match.ts"
+import {
+  alignEpisodeGroup,
+  providerSeasonFingerprint,
+  refsForSeason,
+  usableProviderSeasons,
+  type MappedSeason,
+  type ProviderSeason,
+} from "@/scripts/lib/tmdb-season-map.ts"
 
-const TMDB_MATCH_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const TMDB_MATCH_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const TMDB_DETAIL_TTL_MS = 30 * 24 * 60 * 60 * 1000
 // TMDb data is playlist-independent, so every playlist shares one cache namespace.
 const TMDB_CACHE_ENTRY_ID = "tmdb"
@@ -45,6 +57,10 @@ export interface ProviderEntry {
 
 function mediaTypeFor(kind: TmdbKind): "movie" | "tv" {
   return kind === "series" ? "tv" : "movie"
+}
+
+function primaryLangSubtag(language: string): string {
+  return language.split("-")[0].toLowerCase()
 }
 
 function parseYearField(yearField?: number | string | null): number | null {
@@ -148,6 +164,9 @@ export interface TmdbTitleEnrichment {
   overview: string
   posterUrl: string | null
   backdropUrl: string | null
+  logoUrl: string | null
+  /** TheTVDB-only artwork (the TV home hero band); TMDb never supplies one. */
+  bannerUrl: string | null
   director: string | null
   directorPersonId: number | null
   cast: TmdbCastMemberOut[]
@@ -157,6 +176,30 @@ export interface TmdbTitleEnrichment {
   genres: string[]
   tagline: string | null
   year: number | null
+  overviewIsFallback?: boolean
+}
+
+/** Ranks TMDb title logos by language match, then rating; excludes SVGs (not raster-displayable here). */
+export function pickTmdbLogo(logos: TmdbLogo[] | undefined, preferredLang: string): string | null {
+  const candidates = (logos || []).filter((logo) => !logo.file_path.endsWith(".svg"))
+  if (!candidates.length) return null
+
+  function langRank(logo: TmdbLogo): number {
+    if (logo.iso_639_1 === preferredLang) return 0
+    if (logo.iso_639_1 === "en") return 1
+    if (logo.iso_639_1 === null) return 2
+    return 3
+  }
+
+  const best = candidates.slice().sort((firstLogo, secondLogo) => {
+    const rankDiff = langRank(firstLogo) - langRank(secondLogo)
+    if (rankDiff !== 0) return rankDiff
+    const voteAverageDiff = (secondLogo.vote_average || 0) - (firstLogo.vote_average || 0)
+    if (voteAverageDiff !== 0) return voteAverageDiff
+    return (secondLogo.vote_count || 0) - (firstLogo.vote_count || 0)
+  })[0]
+
+  return best.file_path
 }
 
 const YEAR_MIN = 1900
@@ -180,7 +223,8 @@ type TmdbBundleWithTagline = TmdbBundle & {
 function mapBundleToEnrichment(
   bundle: TmdbBundleWithTagline,
   tmdbId: number,
-  mediaType: "movie" | "tv"
+  mediaType: "movie" | "tv",
+  preferredLang: string
 ): TmdbTitleEnrichment {
   const recommendations = (bundle.recommendations?.results || []).slice(0, 12).map((item) => ({
     tmdbId: item.id,
@@ -199,6 +243,8 @@ function mapBundleToEnrichment(
     overview: bundle.overview || "",
     posterUrl: tmdbImageUrl(bundle.poster_path, TMDB_POSTER_SIZE),
     backdropUrl: tmdbImageUrl(bundle.backdrop_path, TMDB_BACKDROP_SIZE),
+    logoUrl: tmdbImageUrl(pickTmdbLogo(bundle.images?.logos, preferredLang), TMDB_LOGO_SIZE),
+    bannerUrl: null,
     director: directorEntry?.name ?? null,
     directorPersonId: directorEntry?.tmdbPersonId ?? null,
     cast: extractCast(bundle.credits).map((member) => ({
@@ -236,6 +282,7 @@ async function fillEnglishTextFallback(
       ...enrichment,
       overview: enrichment.overview || bundle.overview || "",
       tagline: enrichment.tagline || bundle.tagline || null,
+      overviewIsFallback: !enrichment.overview && Boolean(bundle.overview),
     }
   } catch (error) {
     log.warn("[xt:tmdb] en-US text fallback failed:", mediaType, tmdbId, error)
@@ -247,11 +294,11 @@ export async function fetchMovieEnrichment(tmdbId: number): Promise<TmdbTitleEnr
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_movie_${tmdbId}:${language}`
+  const cacheKind = `tmdb_movie_${tmdbId}:${language}:v4`
   try {
     const result = await cachedFetch(TMDB_CACHE_ENTRY_ID, cacheKind, TMDB_DETAIL_TTL_MS, async () => {
       const bundle = await tmdbMovieBundle(apiKey, tmdbId, language)
-      const enrichment = mapBundleToEnrichment(bundle, tmdbId, "movie")
+      const enrichment = mapBundleToEnrichment(bundle, tmdbId, "movie", primaryLangSubtag(language))
       return fillEnglishTextFallback(apiKey, "movie", tmdbId, language, enrichment)
     })
     return result.data
@@ -265,11 +312,11 @@ export async function fetchSeriesEnrichment(tmdbId: number): Promise<TmdbTitleEn
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_series_${tmdbId}:${language}`
+  const cacheKind = `tmdb_series_${tmdbId}:${language}:v4`
   try {
     const result = await cachedFetch(TMDB_CACHE_ENTRY_ID, cacheKind, TMDB_DETAIL_TTL_MS, async () => {
       const bundle = await tmdbTvBundle(apiKey, tmdbId, language)
-      const enrichment = mapBundleToEnrichment(bundle, tmdbId, "tv")
+      const enrichment = mapBundleToEnrichment(bundle, tmdbId, "tv", primaryLangSubtag(language))
       return fillEnglishTextFallback(apiKey, "tv", tmdbId, language, enrichment)
     })
     return result.data
@@ -318,28 +365,147 @@ async function fillEnglishSeasonFallback(
   }
 }
 
+async function fetchTmdbSeasonEpisodes(
+  apiKey: string,
+  tmdbId: number,
+  seasonNumber: number,
+  language: string
+): Promise<TmdbSeasonEpisodeOut[]> {
+  const season = await tmdbTvSeason(apiKey, tmdbId, seasonNumber, language)
+  const episodes = (season.episodes || []).map((episode) => ({
+    episodeNumber: episode.episode_number,
+    name: episode.name || "",
+    overview: episode.overview || "",
+    stillUrl: tmdbImageUrl(episode.still_path, TMDB_STILL_SIZE),
+  }))
+  return fillEnglishSeasonFallback(apiKey, tmdbId, seasonNumber, language, episodes)
+}
+
+// Cached in TMDb space so one fetch serves every provider season mapped onto it.
+async function cachedTmdbSeasonEpisodes(
+  apiKey: string,
+  tmdbId: number,
+  seasonNumber: number,
+  language: string
+): Promise<TmdbSeasonEpisodeOut[]> {
+  const result = await cachedFetch(
+    TMDB_CACHE_ENTRY_ID,
+    `tmdb_tvseason_${tmdbId}_${seasonNumber}:${language}`,
+    TMDB_DETAIL_TTL_MS,
+    () => fetchTmdbSeasonEpisodes(apiKey, tmdbId, seasonNumber, language)
+  )
+  return result.data
+}
+
+// Cached per series+season-shape, so the group search runs once for all seasons.
+async function resolveSeasonMap(
+  apiKey: string,
+  tmdbId: number,
+  providerSeasons: ProviderSeason[]
+): Promise<MappedSeason[] | null> {
+  const fingerprint = providerSeasonFingerprint(providerSeasons)
+  if (!fingerprint) return null
+  const result = await cachedFetch(
+    TMDB_CACHE_ENTRY_ID,
+    `tmdb_seasonmap_${tmdbId}_${fingerprint}`,
+    TMDB_DETAIL_TTL_MS,
+    async () => {
+      const groups = (await tmdbTvEpisodeGroups(apiKey, tmdbId)).results || []
+      const seasonCount = usableProviderSeasons(providerSeasons).length
+      for (const group of groups) {
+        if (!group.id || (group.group_count ?? 0) < seasonCount) continue
+        const detail = await tmdbEpisodeGroup(apiKey, group.id)
+        const parts = (detail.groups || []).map((part) => ({
+          name: part.name,
+          order: part.order,
+          episodes: (part.episodes || [])
+            .filter((episode) => episode.season_number != null && episode.episode_number != null)
+            .map((episode) => ({
+              seasonNumber: Number(episode.season_number),
+              episodeNumber: Number(episode.episode_number),
+            })),
+        }))
+        const aligned = alignEpisodeGroup(parts, providerSeasons)
+        if (aligned) {
+          log.info("[xt:tmdb] season map resolved", {
+            tmdbId,
+            group: group.name || group.id,
+            seasons: aligned.length,
+          })
+          return { mapped: aligned }
+        }
+      }
+      log.info("[xt:tmdb] no episode group matches the provider season shape", { tmdbId, fingerprint })
+      return { mapped: null }
+    }
+  )
+  return result.data.mapped
+}
+
+async function mapSeasonThroughEpisodeGroup(
+  apiKey: string,
+  tmdbId: number,
+  seasonNumber: number,
+  language: string,
+  providerSeasons?: ProviderSeason[]
+): Promise<TmdbSeasonEpisodeOut[]> {
+  if (!providerSeasons?.length) return []
+  const mapped = await resolveSeasonMap(apiKey, tmdbId, providerSeasons)
+  if (!mapped) return []
+  const refs = refsForSeason(mapped, seasonNumber)
+  if (refs.length === 0) return []
+  const bySeason = new Map<number, Map<number, TmdbSeasonEpisodeOut>>()
+  for (const tmdbSeason of new Set(refs.map((ref) => ref.seasonNumber))) {
+    const episodes = await cachedTmdbSeasonEpisodes(apiKey, tmdbId, tmdbSeason, language)
+    bySeason.set(tmdbSeason, new Map(episodes.map((episode) => [episode.episodeNumber, episode])))
+  }
+  const renumbered: TmdbSeasonEpisodeOut[] = []
+  for (const ref of refs) {
+    const episode = bySeason.get(ref.seasonNumber)?.get(ref.episodeNumber)
+    if (episode) renumbered.push({ ...episode, episodeNumber: ref.providerEpisodeNumber })
+  }
+  return renumbered
+}
+
+export interface SeasonEnrichmentOptions {
+  providerSeasons?: ProviderSeason[]
+}
+
+// Escapes cachedFetch without persisting: an empty providerSeasons shape (e.g. series
+// info not loaded yet) must not stamp a permanent "unmappable" answer for this tmdbId.
+class SeasonShapeUnavailable extends Error {}
+
 export async function fetchSeasonEnrichment(
   tmdbId: number,
-  seasonNumber: number
+  seasonNumber: number,
+  options?: SeasonEnrichmentOptions
 ): Promise<TmdbSeasonEnrichment | null> {
   if (!isTmdbActive()) return null
   const apiKey = getTmdbApiKey()
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_season_${tmdbId}_${seasonNumber}:${language}`
+  const cacheKind = `tmdb_season_${tmdbId}_${seasonNumber}:${language}:v2`
   try {
     const result = await cachedFetch(TMDB_CACHE_ENTRY_ID, cacheKind, TMDB_DETAIL_TTL_MS, async () => {
-      const season = await tmdbTvSeason(apiKey, tmdbId, seasonNumber, language)
-      const episodes = (season.episodes || []).map((episode) => ({
-        episodeNumber: episode.episode_number,
-        name: episode.name || "",
-        overview: episode.overview || "",
-        stillUrl: tmdbImageUrl(episode.still_path, TMDB_STILL_SIZE),
-      }))
-      const filledEpisodes = await fillEnglishSeasonFallback(apiKey, tmdbId, seasonNumber, language, episodes)
-      return { episodes: filledEpisodes }
+      try {
+        return { episodes: await fetchTmdbSeasonEpisodes(apiKey, tmdbId, seasonNumber, language) }
+      } catch (error) {
+        // 404 is authoritative - TMDb has no such season number, so try the group mapping.
+        if (!(error instanceof TmdbHttpError) || error.status !== 404) throw error
+      }
+      if (!options?.providerSeasons?.length) throw new SeasonShapeUnavailable()
+      const episodes = await mapSeasonThroughEpisodeGroup(
+        apiKey,
+        tmdbId,
+        seasonNumber,
+        language,
+        options?.providerSeasons
+      )
+      // Empty is cached on purpose: an unmappable season must not refetch on every render.
+      return { episodes }
     })
     return result.data
   } catch (error) {
+    if (error instanceof SeasonShapeUnavailable) return { episodes: [] }
     log.warn("[xt:tmdb] fetchSeasonEnrichment failed:", tmdbId, seasonNumber, error)
     return null
   }
@@ -412,6 +578,23 @@ export interface CachedTmdbEnrichment {
   enrichment: TmdbTitleEnrichment
 }
 
+function tmdbDetailCacheKind(kind: TmdbKind, tmdbId: number, language: string): string {
+  return kind === "series" ? `tmdb_series_${tmdbId}:${language}:v4` : `tmdb_movie_${tmdbId}:${language}:v4`
+}
+
+/** Cache-only lookup, no isTmdbActive() gate: reading cache is harmless even with TMDb disabled. */
+export async function getCachedTitleEnrichment(
+  kind: TmdbKind,
+  playlistId: string,
+  itemId: string
+): Promise<TmdbTitleEnrichment | null> {
+  const language = tmdbLanguageFor(getActiveLocale())
+  const matchCacheKind = `tmdb_match_${kind}_${playlistId}_${itemId}:${language}`
+  const match = await peekFreshCache<{ tmdbId: number | null }>(matchCacheKind)
+  if (!match?.tmdbId) return null
+  return peekFreshCache<TmdbTitleEnrichment>(tmdbDetailCacheKind(kind, match.tmdbId, language))
+}
+
 // Unbounded: callers combine this with other probes under one shared withProbeTimeout window.
 async function peekCachedEnrichmentRaw(
   playlistId: string,
@@ -423,8 +606,7 @@ async function peekCachedEnrichmentRaw(
   const matchCacheKind = `tmdb_match_${kind}_${playlistId}_${mediaId}:${language}`
   const match = await peekFreshCache<{ tmdbId: number | null }>(matchCacheKind)
   if (!match?.tmdbId) return null
-  const detailCacheKind =
-    kind === "series" ? `tmdb_series_${match.tmdbId}:${language}` : `tmdb_movie_${match.tmdbId}:${language}`
+  const detailCacheKind = tmdbDetailCacheKind(kind, match.tmdbId, language)
   const enrichment = await peekFreshCache<TmdbTitleEnrichment>(detailCacheKind)
   return enrichment ? { tmdbId: match.tmdbId, enrichment } : null
 }
@@ -436,7 +618,7 @@ export async function peekCachedSeasonEnrichment(
 ): Promise<TmdbSeasonEnrichment | null> {
   if (!isTmdbActive()) return null
   const language = tmdbLanguageFor(getActiveLocale())
-  const cacheKind = `tmdb_season_${tmdbId}_${seasonNumber}:${language}`
+  const cacheKind = `tmdb_season_${tmdbId}_${seasonNumber}:${language}:v2`
   return withProbeTimeout(peekFreshCache<TmdbSeasonEnrichment>(cacheKind), null)
 }
 

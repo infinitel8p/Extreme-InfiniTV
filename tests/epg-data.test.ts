@@ -761,6 +761,83 @@ describe("parseXmlTv: DOCTYPE handling", () => {
   })
 })
 
+describe("parseXmlTv: optional window narrows the parse (memory-conservative TV path)", () => {
+  function formatXmlTvDate(ms: number): string {
+    const date = new Date(ms)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    return (
+      `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
+      `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`
+    )
+  }
+
+  const hour = 60 * 60 * 1000
+  const now = Date.now()
+
+  function buildXml(): string {
+    const programme = (title: string, startOffsetHours: number, stopOffsetHours: number) =>
+      `<programme start="${formatXmlTvDate(now + startOffsetHours * hour)}" ` +
+      `stop="${formatXmlTvDate(now + stopOffsetHours * hour)}" channel="win">` +
+      `<title>${title}</title></programme>`
+    return (
+      `<?xml version="1.0"?><tv><channel id="win"><display-name>Win</display-name></channel>` +
+      programme("Fully Before", -5, -3) +
+      programme("Straddles Past Boundary", -3, -1) +
+      programme("Fully Inside", 1, 2) +
+      programme("Straddles Future Boundary", 9, 11) +
+      programme("Fully After", 15, 16) +
+      `</tv>`
+    )
+  }
+
+  const window = { fromMs: now - 2 * hour, toMs: now + 10 * hour }
+  const xml = buildXml()
+
+  it("keeps only programmes overlapping the window, dropping ones fully before or after it", () => {
+    const titles = parseXmlTv(xml, window).programmes.get("win")?.map((entry) => entry.title)
+    expect(titles).toEqual(["Straddles Past Boundary", "Fully Inside", "Straddles Future Boundary"])
+  })
+
+  it("worker scanner agrees with the DOM parser on the same window", () => {
+    const titles = parseXmlTvWorker(xml, window).programmes.get("win")?.map((entry) => entry.title)
+    expect(titles).toEqual(["Straddles Past Boundary", "Fully Inside", "Straddles Future Boundary"])
+  })
+
+  it("keeps every programme when no window is passed, matching today's default behaviour", () => {
+    const withoutWindow = parseXmlTv(xml).programmes.get("win")?.map((entry) => entry.title)
+    expect(withoutWindow).toEqual([
+      "Fully Before",
+      "Straddles Past Boundary",
+      "Fully Inside",
+      "Straddles Future Boundary",
+      "Fully After",
+    ])
+  })
+
+  it("worker scanner also keeps every programme when no window is passed", () => {
+    const withoutWindow = parseXmlTvWorker(xml).programmes.get("win")?.map((entry) => entry.title)
+    expect(withoutWindow).toEqual([
+      "Fully Before",
+      "Straddles Past Boundary",
+      "Fully Inside",
+      "Straddles Future Boundary",
+      "Fully After",
+    ])
+  })
+
+  it("only narrows the default window, never widens it beyond the 36h future cap", () => {
+    const wideWindow = { fromMs: now - 30 * 24 * hour, toMs: now + 30 * 24 * hour }
+    const titles = parseXmlTv(xml, wideWindow).programmes.get("win")?.map((entry) => entry.title)
+    expect(titles).toEqual([
+      "Fully Before",
+      "Straddles Past Boundary",
+      "Fully Inside",
+      "Straddles Future Boundary",
+      "Fully After",
+    ])
+  })
+})
+
 describe("buildChannelNameIndex + findInChannelNameIndex: O(1) lookup", () => {
   const channelNames = new Map([
     ["bbc1.uk", "BBC One"],

@@ -12,6 +12,7 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached } from "@/scripts/lib/cache.js"
+  import { readCachedLiveChannels, hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
   import { kindLabelPlural, KIND_ORDER } from "@/scripts/lib/kinds.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
   import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
@@ -71,11 +72,7 @@
     }
     lookups = {
       live: new Map(
-        (
-          getCached(playlistId, "live")?.data ||
-          getCached(playlistId, "m3u")?.data ||
-          []
-        ).map((channel) => [Number(channel.id), channel])
+        readCachedLiveChannels(playlistId).map((channel) => [Number(channel.id), channel])
       ),
       vod: new Map(
         (getCached(playlistId, "vod")?.data || []).map((movie) => [

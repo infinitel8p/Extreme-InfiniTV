@@ -11,10 +11,12 @@
     <color name="splash_bg">#FFF8FAFC</color>
 
     <!-- Brand accent -->
-    <color name="xt_accent">#FFCF1F8B</color>
+    <color name="xt_accent">#FFEC92E5</color>
+    <color name="xt_brand_rose">#FFEC92E5</color>
     <color name="xt_overlay_scrim">#B3000000</color>
     <color name="xt_row_bg">#FF0F0F11</color>
-    <color name="xt_row_bg_selected">#33CF1F8B</color>
+    <color name="xt_row_bg_selected">#33EC92E5</color>
+    <color name="xt_row_bg_active">#59EC92E5</color>
     <color name="xt_row_text">#FFF5F5F7</color>
     <color name="xt_row_text_dim">#FFA1A1AA</color>
 </resources>

@@ -144,6 +144,19 @@ export async function getLocalDownloadPath(remoteUrl) {
 }
 
 /**
+ * Android-only: raw content:// URI string for a completed local download,
+ * for callers that hand it directly to a native player (Media3 accepts
+ * content:// URIs, unlike the http-only override MainActivity applies).
+ */
+export async function getAndroidLocalUri(remoteUrl) {
+  if (!AFs.isAndroidFsActive()) return null
+  const path = await findCompletedDownloadPath(remoteUrl)
+  if (!path || !AFs.isAndroidUri(path)) return null
+  if (typeof path === "string") return path
+  return typeof path.uri === "string" ? path.uri : null
+}
+
+/**
  * Android-only: if the remote URL has a completed local download, hand the
  * file off to the system "Open with..." chooser via Intent.ACTION_VIEW.
  * In-WebView local playback isn't viable on Android (tauri#12019, custom

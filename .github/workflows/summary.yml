@@ -20,7 +20,7 @@ jobs:
 
       - name: Run AI inference
         id: inference
-        uses: actions/ai-inference@v1
+        uses: actions/ai-inference@v3
         with:
           model: claude-sonnet-4.5
           prompt: |

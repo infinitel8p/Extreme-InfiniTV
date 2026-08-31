@@ -5,6 +5,7 @@ import { log } from "@/scripts/lib/log.js"
 import {
   loadCreds,
   getActiveEntry,
+  isTauri,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
@@ -29,6 +30,7 @@ import {
   getHideWatched,
   getLanguageFilter,
   getGroupLanguages,
+  getProgress,
 } from "@/scripts/lib/preferences.js"
 import { mountCategoryPicker, genreLabelForCategory } from "@/scripts/lib/category-picker.ts"
 import { GENRE_CAT_PREFIX, GENRE_INDEX_EVENT, getGenreIndex, ensureGenreBoost } from "@/scripts/lib/genre-index.ts"
@@ -47,6 +49,7 @@ import {
   STAR_FILLED,
 } from "@/scripts/lib/entry-card.js"
 import { buildMovieStreamUrl } from "@/scripts/lib/stream-urls.ts"
+import { castXtreamVodToTv } from "@/scripts/lib/tv-cast.ts"
 import { buildGroupingIndex, pickPreferredEntryId, groupPassesLanguageFilter } from "@/scripts/lib/language-groups.ts"
 import { parseNamePrefix, languageTagLabel, effectivePreferredTags } from "@/scripts/lib/language-tags.ts"
 import { getContentLanguage, getLanguageGroupingEnabled } from "@/scripts/lib/app-settings.js"
@@ -218,6 +221,18 @@ async function ensureVodCategoryMap() {
 // ----------------------------
 const PAGE_SIZE = 200
 const AUTO_LOAD_CAP = 1500
+// Matches the resume threshold on /movies/detail.
+const RESUME_MIN_SECONDS = 30
+
+/** Resume/duration for a cast descriptor, from saved progress. */
+function vodCastResume(vodId) {
+  const saved = activePlaylistId ? getProgress(activePlaylistId, "vod", vodId) : null
+  if (!saved || saved.completed) return {}
+  return {
+    resumeSeconds: saved.position > RESUME_MIN_SECONDS ? saved.position : 0,
+    durationSeconds: saved.duration > 0 ? saved.duration : undefined,
+  }
+}
 /** @type {IntersectionObserver|null} */
 let infiniteObs = null
 let renderedCount = 0
@@ -290,6 +305,17 @@ function makeCard(group, idx) {
             const containerExt = (entry as any).container_extension || null
             return buildMovieStreamUrl(creds, entry.id, containerExt)
           },
+          onPlayOnTv: isTauri && creds.host && creds.user && creds.pass
+            ? castXtreamVodToTv({
+                creds,
+                playlistId: activePlaylistId,
+                vodId: entry.id,
+                containerExt: (entry as any).container_extension || null,
+                title: entry.name || null,
+                logo: entry.logo || undefined,
+                ...vodCastResume(entry.id),
+              })
+            : undefined,
           favoriteActive: () => groupHasFavorite(activePlaylistId, "vod", group),
           onToggleFavorite: (currentlyFavorited) => {
             toggleGroupFavorite(activePlaylistId, "vod", group, entry, currentlyFavorited)

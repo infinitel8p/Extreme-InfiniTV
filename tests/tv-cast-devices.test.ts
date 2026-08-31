@@ -1,0 +1,456 @@
+/**
+ * @vitest-environment jsdom
+ */
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import {
+  listTvDevices,
+  saveTvDevice,
+  removeTvDevice,
+  touchTvDevice,
+  validateDeviceInput,
+  getCastSession,
+  setCastSession,
+  updateCastSession,
+  clearCastSession,
+  cacheReceiverLogSnapshot,
+  getReceiverLogSnapshots,
+  getReceiverLogSnapshotAt,
+  candidateHostOrder,
+  formatHostForUrl,
+  isLinkLocalHost,
+  buildLiveCastContext,
+  TV_DEVICES_EVENT,
+  CAST_SESSION_EVENT,
+  type TvDevice,
+  type CastSession,
+} from "@/scripts/lib/tv-cast"
+
+// Node 24+ ships an experimental native `localStorage`/`sessionStorage` that shadows
+// jsdom's; stub both with one in-memory Storage implementation (same pattern as
+// tests/net-log.test.ts) so writes and reads land in a single consistent store.
+class MemoryStorage {
+  private store = new Map<string, string>()
+
+  get length(): number {
+    return this.store.size
+  }
+  getItem(key: string): string | null {
+    return this.store.has(key) ? this.store.get(key)! : null
+  }
+  setItem(key: string, value: string): void {
+    this.store.set(key, String(value))
+  }
+  removeItem(key: string): void {
+    this.store.delete(key)
+  }
+  clear(): void {
+    this.store.clear()
+  }
+  key(index: number): string | null {
+    return Array.from(this.store.keys())[index] ?? null
+  }
+}
+
+const memoryLocalStorage = new MemoryStorage()
+const memorySessionStorage = new MemoryStorage()
+
+beforeEach(() => {
+  vi.stubGlobal("Storage", MemoryStorage)
+  vi.stubGlobal("localStorage", memoryLocalStorage as unknown as Storage)
+  vi.stubGlobal("sessionStorage", memorySessionStorage as unknown as Storage)
+  memoryLocalStorage.clear()
+  memorySessionStorage.clear()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+function makeDevice(overrides: Partial<TvDevice> = {}): TvDevice {
+  return {
+    id: "device-1",
+    name: "Living Room TV",
+    host: "192.168.1.50",
+    port: 8765,
+    key: "secret-key",
+    createdAt: 1000,
+    lastSeenAt: 1000,
+    ...overrides,
+  }
+}
+
+describe("tv device store", () => {
+  it("round-trips a saved device", () => {
+    saveTvDevice(makeDevice())
+    expect(listTvDevices()).toEqual([makeDevice()])
+  })
+
+  it("upserts by id instead of duplicating", () => {
+    saveTvDevice(makeDevice())
+    saveTvDevice(makeDevice({ name: "Bedroom TV", lastSeenAt: 2000 }))
+    const devices = listTvDevices()
+    expect(devices).toHaveLength(1)
+    expect(devices[0].name).toBe("Bedroom TV")
+  })
+
+  it("keeps distinct ids as separate entries", () => {
+    saveTvDevice(makeDevice({ id: "device-1" }))
+    saveTvDevice(makeDevice({ id: "device-2", name: "Kitchen TV" }))
+    expect(listTvDevices()).toHaveLength(2)
+  })
+
+  it("removes a device by id", () => {
+    saveTvDevice(makeDevice({ id: "device-1" }))
+    saveTvDevice(makeDevice({ id: "device-2", name: "Kitchen TV" }))
+    removeTvDevice("device-1")
+    const devices = listTvDevices()
+    expect(devices).toHaveLength(1)
+    expect(devices[0].id).toBe("device-2")
+  })
+
+  it("bumps lastSeenAt on touch", () => {
+    saveTvDevice(makeDevice({ lastSeenAt: 1000 }))
+    const before = Date.now()
+    touchTvDevice("device-1")
+    const devices = listTvDevices()
+    expect(devices[0].lastSeenAt).toBeGreaterThanOrEqual(before)
+  })
+
+  it("no-ops touch for an unknown id", () => {
+    saveTvDevice(makeDevice())
+    touchTvDevice("does-not-exist")
+    expect(listTvDevices()).toEqual([makeDevice()])
+  })
+
+  it("dispatches TV_DEVICES_EVENT on save, remove, and touch", () => {
+    const listener = vi.fn()
+    document.addEventListener(TV_DEVICES_EVENT, listener)
+    saveTvDevice(makeDevice())
+    touchTvDevice("device-1")
+    removeTvDevice("device-1")
+    document.removeEventListener(TV_DEVICES_EVENT, listener)
+    expect(listener).toHaveBeenCalledTimes(3)
+  })
+
+  it("tolerantly drops corrupt entries and recovers from invalid JSON", () => {
+    localStorage.setItem("xt_tv_devices", "{not json")
+    expect(listTvDevices()).toEqual([])
+
+    localStorage.setItem(
+      "xt_tv_devices",
+      JSON.stringify([makeDevice(), { id: "bad", name: "missing fields" }, "not an object", null])
+    )
+    expect(listTvDevices()).toEqual([makeDevice()])
+  })
+
+  it("returns an empty list when storage holds a non-array value", () => {
+    localStorage.setItem("xt_tv_devices", JSON.stringify({ not: "an array" }))
+    expect(listTvDevices()).toEqual([])
+  })
+
+  it("round-trips hosts and pinnedHostIndex when present", () => {
+    const device = makeDevice({ hosts: ["192.168.1.50", "10.0.0.5"], pinnedHostIndex: 1 })
+    saveTvDevice(device)
+    expect(listTvDevices()).toEqual([device])
+  })
+
+  it("drops an entry whose hosts array contains a non-string", () => {
+    localStorage.setItem(
+      "xt_tv_devices",
+      JSON.stringify([{ ...makeDevice(), hosts: ["192.168.1.50", 123] }])
+    )
+    expect(listTvDevices()).toEqual([])
+  })
+})
+
+describe("candidateHostOrder", () => {
+  it("returns an empty list for no hosts", () => {
+    expect(candidateHostOrder([])).toEqual([])
+  })
+
+  it("defaults to the first host when no pin is set", () => {
+    expect(candidateHostOrder(["192.168.1.50", "10.0.0.5"])).toEqual(["192.168.1.50", "10.0.0.5"])
+  })
+
+  it("puts the pinned host first, keeping the rest in order", () => {
+    expect(candidateHostOrder(["192.168.1.50", "10.0.0.5", "203.0.113.5"], 2)).toEqual([
+      "203.0.113.5",
+      "192.168.1.50",
+      "10.0.0.5",
+    ])
+  })
+
+  it("falls back to the first host for an out-of-range pin", () => {
+    expect(candidateHostOrder(["192.168.1.50", "10.0.0.5"], 5)).toEqual(["192.168.1.50", "10.0.0.5"])
+    expect(candidateHostOrder(["192.168.1.50", "10.0.0.5"], -1)).toEqual(["192.168.1.50", "10.0.0.5"])
+  })
+
+  it("drops link-local hosts from the walk order", () => {
+    expect(candidateHostOrder(["192.168.1.50", "fe80::1", "10.0.0.5"])).toEqual(["192.168.1.50", "10.0.0.5"])
+  })
+
+  it("keeps pinned-first ordering after filtering link-local hosts", () => {
+    expect(candidateHostOrder(["fe80::1", "192.168.1.50", "10.0.0.5"], 2)).toEqual(["10.0.0.5", "192.168.1.50"])
+  })
+
+  it("returns the unfiltered ordered list when every host is link-local", () => {
+    expect(candidateHostOrder(["fe80::1", "169.254.1.5"])).toEqual(["fe80::1", "169.254.1.5"])
+  })
+})
+
+describe("validateDeviceInput", () => {
+  it.each([
+    ["192.168.1.50", 8765, "123456", true],
+    ["living-room-tv.local", 8765, "654321", true],
+    ["http://192.168.1.50", 8765, "123456", false],
+    ["192.168.1.50/pair", 8765, "123456", false],
+    ["192.168.1.50 ", 8765, "123456", true],
+    ["", 8765, "123456", false],
+  ])("host=%s port=%s code=%s -> ok=%s", (host, port, code, expectedOk) => {
+    const result = validateDeviceInput({ host, port, code })
+    expect(result.ok).toBe(expectedOk)
+    if (!expectedOk) expect((result as { reason: string }).reason).toBe("host")
+  })
+
+  it.each([
+    [0, false],
+    [65536, false],
+    [-1, false],
+    [1, true],
+    [65535, true],
+    [8765, true],
+  ])("port=%s -> ok=%s", (port, expectedOk) => {
+    const result = validateDeviceInput({ host: "192.168.1.50", port, code: "123456" })
+    expect(result.ok).toBe(expectedOk)
+    if (!expectedOk) expect((result as { reason: string }).reason).toBe("port")
+  })
+
+  it("rejects a non-numeric port string", () => {
+    const result = validateDeviceInput({ host: "192.168.1.50", port: "not-a-port", code: "123456" })
+    expect(result).toEqual({ ok: false, reason: "port" })
+  })
+
+  it("accepts a numeric port passed as a string", () => {
+    const result = validateDeviceInput({ host: "192.168.1.50", port: "8765", code: "123456" })
+    expect(result).toEqual({ ok: true, host: "192.168.1.50", port: 8765, code: "123456" })
+  })
+
+  it.each([
+    ["12345", false],
+    ["1234567", false],
+    ["abcdef", false],
+    ["12a456", false],
+    ["123456", true],
+  ])("code=%s -> ok=%s", (code, expectedOk) => {
+    const result = validateDeviceInput({ host: "192.168.1.50", port: 8765, code })
+    expect(result.ok).toBe(expectedOk)
+    if (!expectedOk) expect((result as { reason: string }).reason).toBe("code")
+  })
+})
+
+describe("cast session store", () => {
+  function makeSession(overrides: Partial<CastSession> = {}): CastSession {
+    return {
+      deviceId: "device-1",
+      deviceName: "Living Room TV",
+      host: "192.168.1.50",
+      port: 8765,
+      key: "secret-key",
+      title: "Channel One",
+      isLive: true,
+      startedAt: 1000,
+      ...overrides,
+    }
+  }
+
+  it("returns null when no session is stored", () => {
+    expect(getCastSession()).toBeNull()
+  })
+
+  it("round-trips a session", () => {
+    setCastSession(makeSession())
+    expect(getCastSession()).toEqual(makeSession())
+  })
+
+  it("patches an existing session, including the dismissed flag", () => {
+    setCastSession(makeSession())
+    updateCastSession({ dismissed: true })
+    expect(getCastSession()).toEqual(makeSession({ dismissed: true }))
+  })
+
+  it("round-trips hosts and pinnedHostIndex when present", () => {
+    const session = makeSession({ hosts: ["192.168.1.50", "10.0.0.5"], pinnedHostIndex: 1 })
+    setCastSession(session)
+    expect(getCastSession()).toEqual(session)
+  })
+
+  it("round-trips logo, liveContext, and seriesContext when present", () => {
+    const session = makeSession({
+      logo: "https://example.com/logo.png",
+      liveContext: { playlistId: "playlist-1", channelIds: ["10", "11", "12"], index: 1 },
+    })
+    setCastSession(session)
+    expect(getCastSession()).toEqual(session)
+
+    const seriesSession = makeSession({
+      seriesContext: { playlistId: "playlist-1", seriesId: "500", season: 2, episodeNum: 5 },
+    })
+    setCastSession(seriesSession)
+    expect(getCastSession()).toEqual(seriesSession)
+  })
+
+  it("no-ops an update when there is no active session", () => {
+    updateCastSession({ dismissed: true })
+    expect(getCastSession()).toBeNull()
+  })
+
+  it("clears the session", () => {
+    setCastSession(makeSession())
+    clearCastSession()
+    expect(getCastSession()).toBeNull()
+  })
+
+  it("dispatches CAST_SESSION_EVENT on set, update, and clear", () => {
+    const listener = vi.fn()
+    document.addEventListener(CAST_SESSION_EVENT, listener)
+    setCastSession(makeSession())
+    updateCastSession({ dismissed: true })
+    clearCastSession()
+    document.removeEventListener(CAST_SESSION_EVENT, listener)
+    expect(listener).toHaveBeenCalledTimes(3)
+  })
+
+  it("tolerantly returns null for corrupt session JSON", () => {
+    sessionStorage.setItem("xt_cast_session", "{not json")
+    expect(getCastSession()).toBeNull()
+  })
+})
+
+describe("receiver log snapshots", () => {
+  it("returns an empty object when nothing is cached", () => {
+    expect(getReceiverLogSnapshots()).toEqual({})
+  })
+
+  it("caches and returns a snapshot by device name", () => {
+    cacheReceiverLogSnapshot("Living Room TV", "boom at line 12\n")
+    const snapshots = getReceiverLogSnapshots()
+    expect(snapshots["Living Room TV"].text).toBe("boom at line 12\n")
+    expect(typeof snapshots["Living Room TV"].at).toBe("string")
+  })
+
+  it("keeps snapshots for distinct devices separately", () => {
+    cacheReceiverLogSnapshot("Living Room TV", "first")
+    cacheReceiverLogSnapshot("Bedroom TV", "second")
+    const snapshots = getReceiverLogSnapshots()
+    expect(snapshots["Living Room TV"].text).toBe("first")
+    expect(snapshots["Bedroom TV"].text).toBe("second")
+  })
+
+  it("overwrites a prior snapshot for the same device", () => {
+    cacheReceiverLogSnapshot("Living Room TV", "first")
+    cacheReceiverLogSnapshot("Living Room TV", "second")
+    expect(getReceiverLogSnapshots()["Living Room TV"].text).toBe("second")
+  })
+
+  it("caps a snapshot at 64 KiB", () => {
+    const oversized = "a".repeat(70 * 1024)
+    cacheReceiverLogSnapshot("Living Room TV", oversized)
+    const text = getReceiverLogSnapshots()["Living Room TV"].text
+    expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(64 * 1024)
+  })
+
+  it("falls back to an in-memory cache when localStorage.setItem throws", () => {
+    const setItemSpy = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new Error("quota exceeded")
+    })
+    cacheReceiverLogSnapshot("Living Room TV", "still visible")
+    setItemSpy.mockRestore()
+    expect(getReceiverLogSnapshots()["Living Room TV"].text).toBe("still visible")
+  })
+
+  it("round-trips through localStorage and exposes the snapshot timestamp", () => {
+    cacheReceiverLogSnapshot("Living Room TV", "log tail")
+    expect(localStorage.getItem("xt_receiver_log_snapshot_v1")).toContain("log tail")
+    const at = getReceiverLogSnapshotAt("Living Room TV")
+    expect(at).not.toBeNull()
+    expect(at).toBe(Date.parse(getReceiverLogSnapshots()["Living Room TV"].at))
+  })
+
+  it("returns null for a device with no cached snapshot", () => {
+    expect(getReceiverLogSnapshotAt("Unknown TV")).toBeNull()
+  })
+})
+
+describe("formatHostForUrl", () => {
+  it("leaves a plain IPv4 address unchanged", () => {
+    expect(formatHostForUrl("192.168.1.50")).toBe("192.168.1.50")
+  })
+
+  it("leaves a hostname unchanged", () => {
+    expect(formatHostForUrl("living-room-tv.local")).toBe("living-room-tv.local")
+  })
+
+  it("brackets a raw IPv6 address", () => {
+    expect(formatHostForUrl("fe80::1")).toBe("[fe80::1]")
+  })
+
+  it("leaves an already-bracketed IPv6 address unchanged", () => {
+    expect(formatHostForUrl("[fe80::1]")).toBe("[fe80::1]")
+  })
+})
+
+describe("buildLiveCastContext", () => {
+  it("returns undefined when the channel isn't in the list", () => {
+    expect(buildLiveCastContext("playlist-1", ["1", "2", "3"], "9")).toBeUndefined()
+  })
+
+  it("returns the full list and index when under the cap", () => {
+    expect(buildLiveCastContext("playlist-1", ["1", "2", "3"], "2")).toEqual({
+      playlistId: "playlist-1",
+      channelIds: ["1", "2", "3"],
+      index: 1,
+    })
+  })
+
+  it("windows to 500 ids centered on the channel when over the cap", () => {
+    const channelIds = Array.from({ length: 1000 }, (_, index) => String(index))
+    const result = buildLiveCastContext("playlist-1", channelIds, "500")!
+    expect(result.channelIds).toHaveLength(500)
+    expect(result.channelIds[result.index]).toBe("500")
+    expect(result.channelIds[0]).toBe("250")
+  })
+
+  it("clamps the window at the start of the list", () => {
+    const channelIds = Array.from({ length: 1000 }, (_, index) => String(index))
+    const result = buildLiveCastContext("playlist-1", channelIds, "10")!
+    expect(result.channelIds).toHaveLength(500)
+    expect(result.channelIds[0]).toBe("0")
+    expect(result.channelIds[result.index]).toBe("10")
+  })
+
+  it("clamps the window at the end of the list", () => {
+    const channelIds = Array.from({ length: 1000 }, (_, index) => String(index))
+    const result = buildLiveCastContext("playlist-1", channelIds, "995")!
+    expect(result.channelIds).toHaveLength(500)
+    expect(result.channelIds[result.channelIds.length - 1]).toBe("999")
+    expect(result.channelIds[result.index]).toBe("995")
+  })
+})
+
+describe("isLinkLocalHost", () => {
+  it.each([
+    ["fe80::1", true],
+    ["FE80::1", true],
+    ["fe9d::abcd", true],
+    ["feaf::1", true],
+    ["febf::1", true],
+    ["[fe80::1]", true],
+    ["2a02:1234::1", false],
+    ["fdd0::1", false],
+    ["169.254.1.5", true],
+    ["192.168.178.42", false],
+    ["living-room-tv.local", false],
+  ])("host=%s -> linkLocal=%s", (host, expected) => {
+    expect(isLinkLocalHost(host)).toBe(expected)
+  })
+})

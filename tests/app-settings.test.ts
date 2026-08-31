@@ -23,6 +23,24 @@ const localStorageMock: Storage = {
   },
 }
 
+const sessionStorageStore = new Map<string, string>()
+const sessionStorageMock: Storage = {
+  getItem: (key) => (sessionStorageStore.has(key) ? sessionStorageStore.get(key)! : null),
+  setItem: (key, value) => {
+    sessionStorageStore.set(key, String(value))
+  },
+  removeItem: (key) => {
+    sessionStorageStore.delete(key)
+  },
+  clear: () => {
+    sessionStorageStore.clear()
+  },
+  key: (index) => Array.from(sessionStorageStore.keys())[index] ?? null,
+  get length() {
+    return sessionStorageStore.size
+  },
+}
+
 function setUserAgent(userAgent: string) {
   Object.defineProperty(navigator, "userAgent", {
     configurable: true,
@@ -36,7 +54,9 @@ const MACOS_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
 beforeEach(() => {
   vi.resetModules()
   vi.stubGlobal("localStorage", localStorageMock)
+  vi.stubGlobal("sessionStorage", sessionStorageMock)
   localStorageStore.clear()
+  sessionStorageStore.clear()
 })
 
 afterEach(() => {
@@ -221,6 +241,68 @@ describe("content language", () => {
   })
 })
 
+describe("resolveAccentRoll (pure)", () => {
+  it("reuses a cached roll when it's still a valid preset", async () => {
+    const { resolveAccentRoll } = await import("@/scripts/lib/app-settings.js")
+    expect(resolveAccentRoll("cyan", ["fuchsia", "cyan", "blue"])).toBe("cyan")
+  })
+
+  it("rolls a new pick from the presets when there's no cached roll", async () => {
+    const { resolveAccentRoll } = await import("@/scripts/lib/app-settings.js")
+    const presets = ["fuchsia", "cyan", "blue"]
+    expect(presets).toContain(resolveAccentRoll("", presets))
+  })
+
+  it("rerolls when the cached value isn't a known preset", async () => {
+    const { resolveAccentRoll } = await import("@/scripts/lib/app-settings.js")
+    const presets = ["fuchsia", "cyan", "blue"]
+    expect(presets).toContain(resolveAccentRoll("not-a-real-color", presets))
+  })
+})
+
+describe("accent (random sentinel)", () => {
+  it("getAccent accepts the random sentinel as a valid stored value", async () => {
+    const { getAccent, setAccent, ACCENT_RANDOM_ID } = await import("@/scripts/lib/app-settings.js")
+    setAccent(ACCENT_RANDOM_ID)
+    expect(getAccent()).toBe(ACCENT_RANDOM_ID)
+  })
+
+  it("setAccent applies a resolved preset to data-accent, never the literal 'random'", async () => {
+    const { setAccent, ACCENT_PRESETS, ACCENT_RANDOM_ID, resolveAccentForDisplay } =
+      await import("@/scripts/lib/app-settings.js")
+    setAccent(ACCENT_RANDOM_ID)
+    expect(ACCENT_PRESETS).toContain(resolveAccentForDisplay(ACCENT_RANDOM_ID))
+    expect(document.documentElement.getAttribute("data-accent")).not.toBe(ACCENT_RANDOM_ID)
+  })
+
+  it("resolveAccentForDisplay caches the roll across calls within the same session", async () => {
+    const { setAccent, resolveAccentForDisplay, ACCENT_RANDOM_ID } = await import("@/scripts/lib/app-settings.js")
+    setAccent(ACCENT_RANDOM_ID)
+    const firstRoll = resolveAccentForDisplay(ACCENT_RANDOM_ID)
+    const secondRoll = resolveAccentForDisplay(ACCENT_RANDOM_ID)
+    expect(secondRoll).toBe(firstRoll)
+  })
+
+  it("resolveAccentForDisplay passes non-random values through unchanged", async () => {
+    const { resolveAccentForDisplay } = await import("@/scripts/lib/app-settings.js")
+    expect(resolveAccentForDisplay("cyan")).toBe("cyan")
+  })
+
+  it("clearAccentRoll clears the cache so the next resolve rerolls", async () => {
+    const { resolveAccentForDisplay, clearAccentRoll, ACCENT_RANDOM_ID } = await import("@/scripts/lib/app-settings.js")
+    resolveAccentForDisplay(ACCENT_RANDOM_ID)
+    expect(sessionStorage.getItem("xt_accent_roll")).not.toBeNull()
+    clearAccentRoll()
+    expect(sessionStorage.getItem("xt_accent_roll")).toBeNull()
+  })
+
+  it("falls back to fuchsia for a bogus stored accent value", async () => {
+    localStorage.setItem("xt_accent", "not-a-real-color")
+    const { getAccent } = await import("@/scripts/lib/app-settings.js")
+    expect(getAccent()).toBe("fuchsia")
+  })
+})
+
 describe("language grouping", () => {
   it("defaults to enabled", async () => {
     const { getLanguageGroupingEnabled } = await import("@/scripts/lib/app-settings.js")
@@ -240,10 +322,10 @@ describe("language grouping", () => {
     expect(getLanguageGroupingEnabled()).toBe(true)
   })
 
-  it("stores nothing in localStorage when enabled", async () => {
+  it("stores '1' in localStorage when enabled", async () => {
     const { setLanguageGroupingEnabled } = await import("@/scripts/lib/app-settings.js")
     setLanguageGroupingEnabled(true)
-    expect(localStorage.getItem("xt_lang_grouping")).toBe(null)
+    expect(localStorage.getItem("xt_lang_grouping")).toBe("1")
   })
 
   it("fires LANGUAGE_GROUPING_EVENT on document with the correct detail.value", async () => {
@@ -260,5 +342,124 @@ describe("language grouping", () => {
       document.removeEventListener(LANGUAGE_GROUPING_EVENT, listener)
     }
     expect(received).toEqual([false, true])
+  })
+})
+
+describe("TMDb / TVDB enrichment toggles", () => {
+  it("TMDb defaults to enabled (unset means on)", async () => {
+    const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTmdbEnabled()).toBe(true)
+  })
+
+  it("TMDb stores nothing when explicitly enabled", async () => {
+    const { setTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    setTmdbEnabled(true)
+    expect(localStorage.getItem("xt_tmdb_enabled")).toBe(null)
+  })
+
+  it("TMDb writes an explicit off flag", async () => {
+    const { getTmdbEnabled, setTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    setTmdbEnabled(false)
+    expect(localStorage.getItem("xt_tmdb_enabled")).toBe("0")
+    expect(getTmdbEnabled()).toBe(false)
+  })
+
+  it("TVDB defaults to enabled (unset means on)", async () => {
+    const { getTvdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTvdbEnabled()).toBe(true)
+  })
+
+  it("TVDB writes an explicit off flag", async () => {
+    const { getTvdbEnabled, setTvdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    setTvdbEnabled(false)
+    expect(localStorage.getItem("xt_tvdb_enabled")).toBe("0")
+    expect(getTvdbEnabled()).toBe(false)
+  })
+
+  it("setTvdbEnabled fires TMDB_SETTINGS_EVENT with a tvdbEnabled key", async () => {
+    const { TMDB_SETTINGS_EVENT, setTvdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    const received: Array<{ key: string; value: boolean }> = []
+    const listener = (event: Event) => {
+      received.push((event as CustomEvent).detail)
+    }
+    document.addEventListener(TMDB_SETTINGS_EVENT, listener)
+    try {
+      setTvdbEnabled(false)
+    } finally {
+      document.removeEventListener(TMDB_SETTINGS_EVENT, listener)
+    }
+    expect(received).toEqual([{ key: "tvdbEnabled", value: false }])
+  })
+
+  it("isTmdbActive requires both the toggle and a key", async () => {
+    const { isTmdbActive, setTmdbEnabled, setTmdbApiKey } = await import("@/scripts/lib/app-settings.js")
+    expect(isTmdbActive()).toBe(false)
+    setTmdbApiKey("abc123")
+    expect(isTmdbActive()).toBe(true)
+    setTmdbEnabled(false)
+    expect(isTmdbActive()).toBe(false)
+  })
+
+  it("isEnrichmentActive is true when only TVDB is on", async () => {
+    const { isEnrichmentActive } = await import("@/scripts/lib/app-settings.js")
+    expect(isEnrichmentActive()).toBe(true)
+  })
+
+  it("isEnrichmentActive is true when TVDB is off but TMDb is active", async () => {
+    const { isEnrichmentActive, setTvdbEnabled, setTmdbApiKey } = await import("@/scripts/lib/app-settings.js")
+    setTvdbEnabled(false)
+    setTmdbApiKey("abc123")
+    expect(isEnrichmentActive()).toBe(true)
+  })
+
+  it("isEnrichmentActive is false when both sources are off", async () => {
+    const { isEnrichmentActive, setTvdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    setTvdbEnabled(false)
+    expect(isEnrichmentActive()).toBe(false)
+  })
+})
+
+describe("TMDb enabled legacy migration", () => {
+  it("migrates a legacy off value (empty string) with a stored key to explicit off", async () => {
+    localStorage.setItem("xt_tmdb_enabled", "")
+    localStorage.setItem("xt_tmdb_key", "abc123")
+    const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTmdbEnabled()).toBe(false)
+    expect(localStorage.getItem("xt_tmdb_enabled")).toBe("0")
+    expect(localStorage.getItem("xt_tmdb_enabled_v2")).toBe("1")
+  })
+
+  it("migrates a legacy on value (\"1\") to the new on representation", async () => {
+    localStorage.setItem("xt_tmdb_enabled", "1")
+    const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTmdbEnabled()).toBe(true)
+    expect(localStorage.getItem("xt_tmdb_enabled")).toBe("")
+  })
+
+  it("leaves a legacy off value alone when no key is stored", async () => {
+    localStorage.setItem("xt_tmdb_enabled", "")
+    const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTmdbEnabled()).toBe(true)
+  })
+
+  it("does not re-run once the marker is set, even across a fresh module load", async () => {
+    localStorage.setItem("xt_tmdb_enabled", "")
+    localStorage.setItem("xt_tmdb_key", "abc123")
+    const first = await import("@/scripts/lib/app-settings.js")
+    expect(first.getTmdbEnabled()).toBe(false)
+
+    vi.resetModules()
+    const second = await import("@/scripts/lib/app-settings.js")
+    expect(second.getTmdbEnabled()).toBe(false)
+  })
+
+  it("leaves a 1.9-beta explicit enable alone (last seen version >= 1.9.0)", async () => {
+    localStorage.setItem("xt_last_seen_version", "1.9.0-beta.3")
+    localStorage.setItem("xt_tmdb_enabled", "")
+    localStorage.setItem("xt_tmdb_key", "abc123")
+    const { getTmdbEnabled } = await import("@/scripts/lib/app-settings.js")
+    expect(getTmdbEnabled()).toBe(true)
+    expect(localStorage.getItem("xt_tmdb_enabled")).toBe("")
+    expect(localStorage.getItem("xt_tmdb_enabled_v2")).toBe("1")
   })
 })

@@ -62,17 +62,8 @@
     return { kind, id, name, logo, href }
   }
 
-  async function rebuildLookups(playlistId) {
-    if (!playlistId) {
-      lookups = null
-      lookupsForPlaylistId = ""
-      return
-    }
-    await Promise.all([
-      hydrateCache(playlistId, "vod"),
-      hydrateCache(playlistId, "series"),
-    ])
-    lookups = {
+  function buildLookupsFromCache(playlistId) {
+    return {
       vod: new Map(
         (getCached(playlistId, "vod")?.data || []).map((movie) => [Number(movie.id), movie])
       ),
@@ -83,29 +74,16 @@
         ])
       ),
     }
-    lookupsForPlaylistId = playlistId
   }
 
-  async function reload() {
-    const active = await getActiveEntry()
-    if (!active) {
-      entries = []
-      activePlaylistId = ""
-      lookups = null
-      return
-    }
-    activePlaylistId = active._id
-    await ensurePrefsLoaded()
-    if (lookupsForPlaylistId !== active._id || !lookups) {
-      await rebuildLookups(active._id)
-    }
+  function buildEntries(playlistId) {
     /** @type {Array<{ kind: "vod"|"series", id: number, ts: number, meta: any }>} */
     const merged = []
     const kindsToLoad = /** @type {Array<"vod"|"series">} */ (
       filterKind === "all" ? ["vod", "series"] : [filterKind]
     )
     for (const kind of kindsToLoad) {
-      const bag = getWatchlist(active._id, kind)
+      const bag = getWatchlist(playlistId, kind)
       for (const [stringId, meta] of Object.entries(bag)) {
         merged.push({
           kind,
@@ -116,11 +94,41 @@
       }
     }
     merged.sort((left, right) => right.ts - left.ts)
-    entries = merged
+    return merged
       .slice(0, 12)
       .map((row) =>
-        buildEntry(active._id, row.kind, row.id, row.meta, lookups || {})
+        buildEntry(playlistId, row.kind, row.id, row.meta, lookups || {})
       )
+  }
+
+  let reloadGeneration = 0
+
+  async function reload() {
+    const generation = ++reloadGeneration
+    const [active] = await Promise.all([getActiveEntry(), ensurePrefsLoaded()])
+    if (generation !== reloadGeneration) return
+    if (!active) {
+      entries = []
+      activePlaylistId = ""
+      lookups = null
+      lookupsForPlaylistId = ""
+      return
+    }
+    activePlaylistId = active._id
+    if (lookupsForPlaylistId !== active._id || !lookups) {
+      // Paint with whatever's cached in memory now, hydration upgrades after.
+      lookups = buildLookupsFromCache(active._id)
+      lookupsForPlaylistId = active._id
+      void Promise.allSettled([
+        hydrateCache(active._id, "vod"),
+        hydrateCache(active._id, "series"),
+      ]).then(() => {
+        if (generation !== reloadGeneration) return
+        lookups = buildLookupsFromCache(active._id)
+        entries = buildEntries(active._id)
+      }).catch(() => {})
+    }
+    entries = buildEntries(active._id)
   }
 
   onMount(() => {

@@ -12,6 +12,13 @@
    contents don't fit. */
 @custom-variant landscape-phone (@media (orientation: landscape) and (max-height: 500px));
 
+/* Short viewport: any window too low to afford a tall panel header, which
+   covers landscape phones and small desktop windows alike. Gated on height
+   only, so it fires wherever vertical space is the constraint. Used by the
+   cast remote to tighten its spacing and lay its footer actions side by
+   side instead of stacked. */
+@custom-variant short-viewport (@media (max-height: 600px));
+
 /* True when the sidebar is at its full lg+ width: viewport is lg+ and the
    rail hasn't been manually collapsed. Mirrors --breakpoint-lg (64em). */
 @custom-variant rail-expanded {
@@ -127,6 +134,7 @@ html.xt-theme-switching::view-transition-new(root) {
     /* - accent: a single soft fuchsia - */
     --color-accent:      light-dark(oklch(0.50 0.20 330), oklch(0.78 0.15 330));
     --color-accent-soft: light-dark(oklch(0.50 0.20 330 / 0.12), oklch(0.78 0.15 330 / 0.18));
+    --color-on-accent:   white;
 
     /* - semantic states - */
     --color-ok:   light-dark(oklch(0.5  0.12 160), oklch(0.79 0.13 160));
@@ -159,6 +167,12 @@ html.xt-theme-switching::view-transition-new(root) {
     --accent-swatch-cyan:    light-dark(oklch(0.50 0.20 210), oklch(0.78 0.15 210));
     --accent-swatch-blue:    light-dark(oklch(0.50 0.20 250), oklch(0.78 0.15 250));
     --accent-swatch-violet:  light-dark(oklch(0.50 0.20 295), oklch(0.78 0.15 295));
+    --accent-swatch-gold:    light-dark(oklch(0.55 0.15 85 ), oklch(0.85 0.16 90 ));
+    --accent-swatch-lime:    light-dark(oklch(0.50 0.19 130), oklch(0.82 0.20 130));
+    --accent-swatch-teal:    light-dark(oklch(0.50 0.13 185), oklch(0.80 0.13 185));
+    --accent-swatch-silver:  light-dark(oklch(0.45 0.01 260), oklch(0.80 0.01 260));
+    /* Light theme "white" would vanish on the light bg, so it goes dark instead. */
+    --accent-swatch-white:   light-dark(oklch(0.30 0.005 260), oklch(0.97 0 0));
 }
 
 :root[data-accent="rose"] {
@@ -190,6 +204,39 @@ html.xt-theme-switching::view-transition-new(root) {
     --xt-tint-hue: 295;
     --color-accent:      var(--accent-swatch-violet);
     --color-accent-soft: light-dark(oklch(0.50 0.20 295 / 0.12), oklch(0.78 0.15 295 / 0.18));
+}
+:root[data-accent="gold"] {
+    --xt-tint-hue: 85;
+    --color-accent:      var(--accent-swatch-gold);
+    --color-accent-soft: light-dark(oklch(0.55 0.15 85 / 0.12), oklch(0.85 0.16 90 / 0.18));
+    /* Yellow-gold is too light in both themes for white text. */
+    --color-on-accent:   var(--color-bg);
+}
+:root[data-accent="lime"] {
+    --xt-tint-hue: 130;
+    --color-accent:      var(--accent-swatch-lime);
+    --color-accent-soft: light-dark(oklch(0.50 0.19 130 / 0.12), oklch(0.82 0.20 130 / 0.18));
+    /* Light-theme lime is dark enough for white text; dark-theme lime isn't. */
+    --color-on-accent:   light-dark(white, var(--color-bg));
+}
+:root[data-accent="teal"] {
+    --xt-tint-hue: 185;
+    --color-accent:      var(--accent-swatch-teal);
+    --color-accent-soft: light-dark(oklch(0.50 0.13 185 / 0.12), oklch(0.80 0.13 185 / 0.18));
+    /* Light-theme teal is dark enough for white text; dark-theme teal isn't. */
+    --color-on-accent:   light-dark(white, var(--color-bg));
+}
+:root[data-accent="silver"] {
+    --xt-tint-hue: 260;
+    --color-accent:      var(--accent-swatch-silver);
+    --color-accent-soft: light-dark(oklch(0.45 0.01 260 / 0.12), oklch(0.80 0.01 260 / 0.18));
+    --color-on-accent:   var(--color-bg);
+}
+:root[data-accent="white"] {
+    --xt-tint-hue: 260;
+    --color-accent:      var(--accent-swatch-white);
+    --color-accent-soft: light-dark(oklch(0.30 0.005 260 / 0.12), oklch(0.97 0 0 / 0.18));
+    --color-on-accent:   var(--color-bg);
 }
 
 :root,
@@ -248,8 +295,32 @@ input[type="search"]::-webkit-search-decoration {
 }
 
 /* ────────────────────────────── */
-/* Custom scrollbar styling       */
+/* Scrollbar styling              */
 /* ────────────────────────────── */
+/* TV shell: every scroll surface gets the thin styled bar, not just opt-in ones. */
+html[data-tv="1"] * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+}
+
+html[data-tv="1"] *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+html[data-tv="1"] *::-webkit-scrollbar-thumb {
+    background: var(--color-line);
+    border-radius: 9999px;
+}
+
+html[data-tv="1"] *::-webkit-scrollbar-thumb:hover {
+    background: var(--color-fg-3);
+}
+
+html[data-tv="1"] *::-webkit-scrollbar-track {
+    background: transparent;
+}
+
 .custom-scroll::-webkit-scrollbar {
     width: 8px;
     height: 8px;
@@ -299,6 +370,12 @@ input[type="search"]::-webkit-search-decoration {
 
 .vjs-control-bar {
     background: rgba(0, 0, 0, 0.6);
+}
+
+/* Keep the control bar clear of TV overscan while fullscreen */
+html[data-tv-overscan] :fullscreen .vjs-control-bar {
+    margin-inline: calc(var(--xt-tv-overscan, 0) * 1vw);
+    margin-bottom: calc(var(--xt-tv-overscan, 0) * 1vh);
 }
 
 .vjs-play-progress,
@@ -712,6 +789,30 @@ dialog[open] .xt-wn-section {
 /* ────────────────────────────── */
 /* Virtualised channel list       */
 /* ────────────────────────────── */
+/* Cast remote ambient wash: the artwork's own colours, blurred out behind it, so the
+   panel picks up the mood of what is playing. Masked to fade before the control deck
+   and kept cheap in perf mode, where a large blurred layer is the expensive part. */
+.xt-cast-wash {
+    background-size: cover;
+    background-position: center;
+    filter: blur(64px) saturate(180%);
+    transform: scale(1.35);
+    transform-origin: center top;
+    opacity: 0;
+    transition: opacity 420ms cubic-bezier(0.16, 1, 0.3, 1);
+    mask-image: radial-gradient(115% 62% at 50% 16%, #000 0%, #000 30%, transparent 72%);
+    -webkit-mask-image: radial-gradient(115% 62% at 50% 16%, #000 0%, #000 30%, transparent 72%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .xt-cast-wash { transition: none; }
+}
+
+:root[data-perf-mode="on"] .xt-cast-wash {
+    filter: blur(32px);
+    transform: none;
+}
+
 .channel-row {
     content-visibility: auto;
     contain-intrinsic-size: calc(4.25rem * var(--xt-density, 1));
@@ -2150,13 +2251,13 @@ html[data-density="comfortable"] :is(#movie-grid, #series-grid) { gap: 1.5rem; }
     .settings-seg > .btn:last-of-type:nth-of-type(odd) {
         grid-column: span 2;
     }
-    /* Action buttons go full width; segs and swatch groups keep their grid */
+    /* Action buttons go full width; segs and deeper composite widgets don't */
     .settings-row:not(summary) .settings-row__control > :not([role="radiogroup"]) {
         width: 100%;
         flex-wrap: wrap;
     }
     .settings-row:not(summary) .settings-row__control > .btn,
-    .settings-row:not(summary) .settings-row__control :not([role="radiogroup"]) > .btn {
+    .settings-row:not(summary) .settings-row__control > :not([role="radiogroup"]) > .btn {
         flex: 1 1 100%;
         width: 100%;
         justify-content: flex-start;
@@ -2993,6 +3094,30 @@ html[data-perf-mode="on"] *::after {
 
 html[data-perf-mode="on"] * {
     will-change: auto !important;
+}
+
+/* -------------------------------------------------------------------------
+ * TV: perf mode hides .xt-focus-glide, so D-pad focus needs its own ring.
+ * -------------------------------------------------------------------------*/
+html[data-tv] :is(a, button, summary, input, textarea, select, [tabindex]):focus-visible {
+    outline: 3px solid var(--color-accent);
+    outline-offset: 2px;
+}
+
+/* TV: compact hero so the poster grid below fits above the fold. */
+html[data-tv] .route-hero--tv-compact .route-hero__title {
+    font-size: clamp(1.6875rem, 1.21875vw + 0.515625rem, 2.0625rem);
+}
+html[data-tv] .route-hero--tv-compact .route-hero__sub {
+    display: none;
+}
+
+/* Keep a focused/scrolled card fully in view instead of stopping mid-card. */
+.fav-grid {
+    scroll-padding-block: 12px;
+}
+.fav-card {
+    scroll-margin-block: 12px;
 }
 
 html[data-perf-mode="on"] [data-modal-ambient] {

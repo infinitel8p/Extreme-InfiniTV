@@ -5,7 +5,7 @@ import { createZip } from "@/scripts/lib/zip-writer.js"
 import { getNetworkLog } from "@/scripts/lib/net-log.js"
 import { redactUrl } from "@/scripts/lib/log.js"
 import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
-import { sanitizeFilename } from "@/scripts/lib/format.js"
+import { sanitizeFilename, fmtBytes } from "@/scripts/lib/format.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -68,13 +68,53 @@ export function summarizePlaylists(entries: unknown[], activeId: string | null):
   }
 }
 
+export interface ReceiverLogResult {
+  deviceName: string
+  host: string
+  /** "fetched" = live /logs tail, "streamed" = session pushed over /events, "snapshot" = older cached tail. */
+  status: "fetched" | "streamed" | "snapshot" | "unreachable"
+  text?: string
+  snapshotAt?: string
+  streamedText?: string
+  streamedAt?: string
+}
+
+export interface LogFileTail {
+  name: string
+  text: string
+  sizeBytes?: number
+  includedBytes?: number
+  modifiedAt?: string | null
+}
+
+export interface LogInventoryItem {
+  name: string
+  sizeBytes: number
+  modifiedAt: string | null
+  state: "full" | "truncated" | "omitted" | "unreadable"
+}
+
+export interface LogCollection {
+  files: LogFileTail[]
+  inventory: LogInventoryItem[]
+}
+
 export interface BundleInput {
   createdAt: Date
   snapshot: unknown
   networkLog: unknown
   playlists: PlaylistSummary
   diagnosticResult: unknown | null
-  logFiles: { name: string; text: string }[]
+  logFiles: LogFileTail[]
+  logInventory?: LogInventoryItem[]
+  receiverLogs?: ReceiverLogResult[]
+}
+
+export function sanitizeDeviceNameForFilename(deviceName: string, host: string): string {
+  const cleanedName = deviceName.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "")
+  if (cleanedName) return cleanedName
+  const cleanedHost = host.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "")
+  return cleanedHost || "device"
 }
 
 function buildReadme(input: BundleInput): string {
@@ -98,13 +138,77 @@ function buildReadme(input: BundleInput): string {
     lines.push("- diagnostic-result.json: the most recent connection diagnostic run.")
   }
   for (const logFile of input.logFiles) {
-    lines.push(`- logs/${logFile.name}: tail of the app log file, redacted.`)
+    lines.push(`- logs/${logFile.name}: ${describeLogTail(logFile)}, redacted.`)
+  }
+  if ((input.logInventory ?? []).length > 0) {
+    lines.push("- logs/INVENTORY.txt: every log file on the device, and what made it into this zip.")
+  }
+  const receiverLogs = input.receiverLogs ?? []
+  for (const result of receiverLogs) {
+    const safeName = sanitizeDeviceNameForFilename(result.deviceName, result.host)
+    if (result.status === "fetched" && result.text) {
+      lines.push(`- receiver-logs/${safeName}.log: log tail fetched live from ${result.deviceName}.`)
+    } else if (result.status === "streamed" && result.text) {
+      lines.push(`- receiver-logs/${safeName}-session.log: log streamed from ${result.deviceName} while casting.`)
+    } else if (result.status === "snapshot" && result.text) {
+      lines.push(`- receiver-logs/${safeName}-snapshot.log: cached log tail from ${result.deviceName} (receiver was unreachable during export).`)
+    }
+    if (result.status === "fetched" && result.streamedText) {
+      lines.push(`- receiver-logs/${safeName}-session.log: log streamed from ${result.deviceName} while casting.`)
+    }
+  }
+  if (receiverLogs.length > 0) {
+    lines.push("")
+    lines.push("Receiver-cast devices:")
+    for (const result of receiverLogs) {
+      lines.push(`- ${result.deviceName}: ${result.status}`)
+    }
   }
   return lines.join("\n")
 }
 
 function toRedactedJson(value: unknown): string {
   return redactUrl(JSON.stringify(value, null, 2))
+}
+
+function wasLogTailTruncated(logFile: LogFileTail): boolean {
+  return (
+    typeof logFile.sizeBytes === "number" &&
+    typeof logFile.includedBytes === "number" &&
+    logFile.includedBytes < logFile.sizeBytes
+  )
+}
+
+function describeLogTail(logFile: LogFileTail): string {
+  if (!wasLogTailTruncated(logFile)) return "complete app log file"
+  return `last ${fmtBytes(logFile.includedBytes)} of a ${fmtBytes(logFile.sizeBytes)} app log file`
+}
+
+// Without this header a 512 KB tail is indistinguishable from a short complete log.
+function logFileHeader(logFile: LogFileTail): string {
+  const stamp = logFile.modifiedAt ? ` last written ${logFile.modifiedAt}` : ""
+  if (!wasLogTailTruncated(logFile)) return `=== ${logFile.name}: complete file${stamp} ===\n`
+  const omitted = (logFile.sizeBytes ?? 0) - (logFile.includedBytes ?? 0)
+  return (
+    `=== ${logFile.name}: last ${fmtBytes(logFile.includedBytes)} of ${fmtBytes(logFile.sizeBytes)},` +
+    ` ${fmtBytes(omitted)} of earlier lines omitted${stamp} ===\n`
+  )
+}
+
+function buildLogInventory(input: BundleInput): string {
+  const inventory = input.logInventory ?? []
+  const lines = [
+    "App log files found on the device, newest first.",
+    `Bundle caps: ${RECENT_LOG_FILE_COUNT} files, ${fmtBytes(LOG_TAIL_MAX_BYTES)} per file, ${fmtBytes(LOG_TAILS_TOTAL_MAX_BYTES)} total.`,
+    "Files marked omitted are still on the device but were not attached.",
+    "",
+  ]
+  for (const item of inventory) {
+    lines.push(
+      `${item.state.padEnd(10)} ${fmtBytes(item.sizeBytes).padStart(10)}  ${item.modifiedAt ?? "unknown mtime"}  ${item.name}`
+    )
+  }
+  return lines.join("\n")
 }
 
 export function buildBundleManifest(input: BundleInput): { name: string; text: string }[] {
@@ -117,7 +221,32 @@ export function buildBundleManifest(input: BundleInput): { name: string; text: s
     files.push({ name: "diagnostic-result.json", text: toRedactedJson(input.diagnosticResult) })
   }
   for (const logFile of input.logFiles) {
-    files.push({ name: `logs/${logFile.name}`, text: redactUrl(logFile.text) })
+    files.push({ name: `logs/${logFile.name}`, text: logFileHeader(logFile) + redactUrl(logFile.text) })
+  }
+  if ((input.logInventory ?? []).length > 0) {
+    files.push({ name: "logs/INVENTORY.txt", text: buildLogInventory(input) })
+  }
+  for (const result of input.receiverLogs ?? []) {
+    const safeName = sanitizeDeviceNameForFilename(result.deviceName, result.host)
+    if (result.text) {
+      if (result.status === "fetched") {
+        files.push({ name: `receiver-logs/${safeName}.log`, text: redactUrl(result.text) })
+      } else if (result.status === "streamed") {
+        const header = `Streamed over /events while casting, last line ${result.streamedAt ?? "unknown time"}\n`
+        files.push({ name: `receiver-logs/${safeName}-session.log`, text: redactUrl(header + result.text) })
+      } else if (result.status === "snapshot") {
+        const header = `Captured ${result.snapshotAt ?? "unknown time"} (receiver unreachable during export)\n`
+        files.push({ name: `receiver-logs/${safeName}-snapshot.log`, text: redactUrl(header + result.text) })
+      }
+    }
+    // A live tail covers only the last 64 KB, so keep the streamed session alongside it.
+    if (result.status === "fetched" && result.streamedText) {
+      const header = `Streamed over /events while casting, last line ${result.streamedAt ?? "unknown time"}\n`
+      files.push({
+        name: `receiver-logs/${safeName}-session.log`,
+        text: redactUrl(header + result.streamedText),
+      })
+    }
   }
   return files
 }
@@ -200,74 +329,191 @@ function detectIsTauriRuntime(): boolean {
   )
 }
 
-function detectIsAndroidRuntime(): boolean {
-  return typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent || "")
-}
-
-const LOG_FILE_NAME_PATTERN = /^app-\d{4}-\d{2}-\d{2}\.log$/
+// Any log in the app's own log dir: day-stamped names, plugin-log's size-rotation
+// suffixes (app-<day>_<stamp>.log[.bak]), and the pre-day-stamp "<app name>.log".
+const LOG_FILE_NAME_PATTERN = /^[^/\\]+\.log(?:\.bak)?$/
 const LOG_TAIL_MAX_BYTES = 512 * 1024
-const RECENT_LOG_FILE_COUNT = 2
+const LOG_TAILS_TOTAL_MAX_BYTES = 4 * 1024 * 1024
+const LOG_TAIL_MIN_BYTES = 16 * 1024
+const RECENT_LOG_FILE_COUNT = 14
 
-async function tailOf(bytes: Uint8Array): Promise<string> {
-  const truncated = bytes.length > LOG_TAIL_MAX_BYTES
-  return decodeLogTail(tailLogBytes(bytes, LOG_TAIL_MAX_BYTES), truncated)
+// Newest file gets its full per-file allowance; older ones share what's left of the total.
+export function allocateLogTailBudget(
+  sizes: number[],
+  perFileMax: number = LOG_TAIL_MAX_BYTES,
+  totalMax: number = LOG_TAILS_TOTAL_MAX_BYTES,
+  minChunk: number = LOG_TAIL_MIN_BYTES
+): number[] {
+  let remaining = totalMax
+  return sizes.map((size) => {
+    if (remaining < minChunk) return 0
+    const allowance = Math.min(Math.max(0, size), perFileMax, remaining)
+    remaining -= allowance
+    return allowance
+  })
 }
 
-// Directory enumeration is allowed here (fs:allow-read-dir on desktop, denied on Android).
-async function readDesktopLogTails(): Promise<{ name: string; text: string }[]> {
-  const { appLogDir, join } = await import("@tauri-apps/api/path")
-  const { readDir, readFile } = await import("@tauri-apps/plugin-fs")
-  const logDir = await appLogDir()
-  const dirEntries = await readDir(logDir)
-  const candidateNames = dirEntries
+interface LogDirEntry {
+  name: string
+  sizeBytes: number
+  modifiedAt: Date | null
+}
+
+// mtime, not name: the day stamp is fixed at process start, so a session running past
+// midnight keeps appending to its start-day file.
+function sortLogEntriesNewestFirst(entries: LogDirEntry[]): LogDirEntry[] {
+  return [...entries].sort(
+    (left, right) => (right.modifiedAt?.getTime() ?? 0) - (left.modifiedAt?.getTime() ?? 0)
+  )
+}
+
+async function statLogFile(logDir: string, name: string): Promise<LogDirEntry> {
+  const { join } = await import("@tauri-apps/api/path")
+  const { stat } = await import("@tauri-apps/plugin-fs")
+  try {
+    const info = await stat(await join(logDir, name))
+    return { name, sizeBytes: info.size ?? 0, modifiedAt: info.mtime ?? null }
+  } catch {
+    return { name, sizeBytes: 0, modifiedAt: null }
+  }
+}
+
+async function listLogDirEntries(logDir: string): Promise<LogDirEntry[]> {
+  const { readDir } = await import("@tauri-apps/plugin-fs")
+  const names = (await readDir(logDir))
+    .filter((entry) => entry.isFile !== false)
     .map((entry) => entry.name)
     .filter((name): name is string => typeof name === "string" && LOG_FILE_NAME_PATTERN.test(name))
-    .sort()
-    .reverse()
-    .slice(0, RECENT_LOG_FILE_COUNT)
-
-  const tails: { name: string; text: string }[] = []
-  for (const name of candidateNames) {
-    try {
-      const bytes = await readFile(await join(logDir, name))
-      tails.push({ name, text: await tailOf(bytes) })
-    } catch {
-      /* one unreadable log file shouldn't drop the rest */
-    }
-  }
-  return tails
+  const entries: LogDirEntry[] = []
+  for (const name of names) entries.push(await statLogFile(logDir, name))
+  return sortLogEntriesNewestFirst(entries)
 }
 
-// No directory listing on Android - probe the candidate names one by one instead.
-async function readAndroidLogTails(): Promise<{ name: string; text: string }[]> {
-  const { appLogDir, join } = await import("@tauri-apps/api/path")
-  const { readFile, exists } = await import("@tauri-apps/plugin-fs")
-  const logDir = await appLogDir()
-
-  const tails: { name: string; text: string }[] = []
+// Fallback for a build whose ACL lacks fs:allow-read-dir: guess the day-stamped names.
+async function probeLogDirEntries(logDir: string): Promise<LogDirEntry[]> {
+  const { join } = await import("@tauri-apps/api/path")
+  const { exists } = await import("@tauri-apps/plugin-fs")
+  const entries: LogDirEntry[] = []
   for (const name of recentLogFileNames(new Date(), RECENT_LOG_FILE_COUNT)) {
     try {
-      const path = await join(logDir, name)
-      if (!(await exists(path))) continue
-      const bytes = await readFile(path)
-      tails.push({ name, text: await tailOf(bytes) })
+      if (!(await exists(await join(logDir, name)))) continue
     } catch {
-      /* one missing/unreadable candidate shouldn't drop the rest */
+      continue
     }
+    entries.push(await statLogFile(logDir, name))
   }
-  return tails
+  return sortLogEntriesNewestFirst(entries)
 }
 
-async function readRecentLogTails(): Promise<{ name: string; text: string }[]> {
-  if (!detectIsTauriRuntime()) return []
-  if (detectIsAndroidRuntime()) return readAndroidLogTails()
-  return readDesktopLogTails()
+async function collectLogTails(): Promise<LogCollection> {
+  const { appLogDir, join } = await import("@tauri-apps/api/path")
+  const { readFile } = await import("@tauri-apps/plugin-fs")
+  const logDir = await appLogDir()
+
+  let entries: LogDirEntry[]
+  try {
+    entries = await listLogDirEntries(logDir)
+  } catch {
+    entries = await probeLogDirEntries(logDir)
+  }
+
+  const candidates = entries.slice(0, RECENT_LOG_FILE_COUNT)
+  const allowances = allocateLogTailBudget(candidates.map((entry) => entry.sizeBytes))
+  const files: LogFileTail[] = []
+  const inventory: LogInventoryItem[] = []
+
+  for (let index = 0; index < candidates.length; index++) {
+    const entry = candidates[index]
+    const modifiedAt = entry.modifiedAt ? entry.modifiedAt.toISOString() : null
+    const allowance = allowances[index] ?? 0
+    if (allowance <= 0) {
+      inventory.push({ name: entry.name, sizeBytes: entry.sizeBytes, modifiedAt, state: "omitted" })
+      continue
+    }
+    try {
+      const bytes = await readFile(await join(logDir, entry.name))
+      const truncated = bytes.length > allowance
+      files.push({
+        name: entry.name,
+        text: decodeLogTail(tailLogBytes(bytes, allowance), truncated),
+        sizeBytes: bytes.length,
+        includedBytes: truncated ? allowance : bytes.length,
+        modifiedAt,
+      })
+      inventory.push({
+        name: entry.name,
+        sizeBytes: bytes.length,
+        modifiedAt,
+        state: truncated ? "truncated" : "full",
+      })
+    } catch {
+      inventory.push({ name: entry.name, sizeBytes: entry.sizeBytes, modifiedAt, state: "unreadable" })
+    }
+  }
+
+  for (const entry of entries.slice(RECENT_LOG_FILE_COUNT)) {
+    inventory.push({
+      name: entry.name,
+      sizeBytes: entry.sizeBytes,
+      modifiedAt: entry.modifiedAt ? entry.modifiedAt.toISOString() : null,
+      state: "omitted",
+    })
+  }
+
+  return { files, inventory }
+}
+
+async function readLogCollection(): Promise<LogCollection> {
+  if (!detectIsTauriRuntime()) return { files: [], inventory: [] }
+  return collectLogTails()
+}
+
+const RECEIVER_LOGS_TIMEOUT_MS = 7000
+
+// A stale/unreachable receiver falls back to its last error-time snapshot, if any.
+async function collectReceiverLogs(): Promise<ReceiverLogResult[]> {
+  const { listTvDevices, fetchReceiverLogs, getReceiverLogSnapshots } = await import("@/scripts/lib/tv-cast.js")
+  const devices = listTvDevices()
+  if (devices.length === 0) return []
+
+  const snapshots = getReceiverLogSnapshots()
+  const settled = await Promise.allSettled(devices.map((device) => fetchReceiverLogs(device)))
+
+  return devices.map((device, index) => {
+    const outcome = settled[index]
+    const text = outcome.status === "fulfilled" ? outcome.value : null
+    const snapshot = snapshots[device.name]
+    const streamed = snapshot?.source === "stream" ? snapshot : null
+
+    if (text) {
+      return {
+        deviceName: device.name,
+        host: device.host,
+        status: "fetched" as const,
+        text,
+        ...(streamed ? { streamedText: streamed.text, streamedAt: streamed.at } : {}),
+      }
+    }
+    if (streamed?.text) {
+      return {
+        deviceName: device.name,
+        host: device.host,
+        status: "streamed" as const,
+        text: streamed.text,
+        streamedAt: streamed.at,
+      }
+    }
+    if (snapshot?.text) {
+      return { deviceName: device.name, host: device.host, status: "snapshot" as const, text: snapshot.text, snapshotAt: snapshot.at }
+    }
+    return { deviceName: device.name, host: device.host, status: "unreachable" as const }
+  })
 }
 
 export async function collectDiagnosticBundle(): Promise<CollectedBundle> {
   const createdAt = new Date()
 
-  const [snapshot, networkLog, playlists, diagnosticResult, logFiles] = await Promise.all([
+  const [snapshot, networkLog, playlists, diagnosticResult, logCollection, receiverLogs] = await Promise.all([
     withTimeout(
       safeAsync<unknown>(async () => {
         const { collectSessionSnapshot } = await import("@/scripts/lib/diagnostic-snapshot.js")
@@ -300,13 +546,27 @@ export async function collectDiagnosticBundle(): Promise<CollectedBundle> {
       null
     ),
     withTimeout(
-      safeAsync<{ name: string; text: string }[]>(() => readRecentLogTails(), []),
+      safeAsync<LogCollection>(() => readLogCollection(), { files: [], inventory: [] }),
       LOG_TAILS_TIMEOUT_MS,
+      { files: [], inventory: [] }
+    ),
+    withTimeout(
+      safeAsync<ReceiverLogResult[]>(() => collectReceiverLogs(), []),
+      RECEIVER_LOGS_TIMEOUT_MS,
       []
     ),
   ])
 
-  const manifest = buildBundleManifest({ createdAt, snapshot, networkLog, playlists, diagnosticResult, logFiles })
+  const manifest = buildBundleManifest({
+    createdAt,
+    snapshot,
+    networkLog,
+    playlists,
+    diagnosticResult,
+    logFiles: logCollection.files,
+    logInventory: logCollection.inventory,
+    receiverLogs,
+  })
   const textEncoder = new TextEncoder()
   const bytes = createZip(
     manifest.map((file) => ({ name: file.name, data: textEncoder.encode(file.text), modifiedAt: createdAt }))

@@ -46,6 +46,9 @@
   <a href="https://dev.infinitel8p.com/Extreme-InfiniTV/">
     <img src="https://img.shields.io/badge/Docs-dev.infinitel8p.com-a855f7?logo=gitbook&logoColor=white" alt="Documentation"/>
   </a>
+  <a href="https://discord.gg/GH5V3AkzfA">
+    <img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white" alt="Join the Extreme InfiniTV Discord server"/>
+  </a>
   <a href="https://github.com/infinitel8p/Extreme-InfiniTV/issues">
     <img src="https://img.shields.io/github/issues/infinitel8p/Extreme-InfiniTV?logo=github&color=a855f7" alt="Issues"/>
   </a>
@@ -107,7 +110,7 @@
 - **Self-updating desktop builds** (Windows NSIS and Linux AppImage) via the Tauri updater, signed with minisign and served from GitHub Releases, with stable and beta channels and a "What's new" dialog after each update.
 - **Backup and restore.** Export playlists, preferences, and settings as one file and import them on another device.
 - **Offline-friendly persistence.** Credentials and preferences live in the OS app-data dir on Tauri builds, with a localStorage / cookie fallback on the web build; clear your viewing history from Settings at any time.
-- **No tracking, no ads, no telemetry by default.** The app collects nothing about you or your viewing habits. The only outbound metadata lookup is the optional TMDB enrichment above, off by default and using your own API key when you turn it on.
+- **No tracking, no ads, no telemetry.** The app collects nothing about you or your viewing habits. Outbound metadata lookups are limited to TheTVDB artwork and episode details (keyless, can be turned off in Settings) and the optional TMDB enrichment above with your own API key.
 
 ## Install
 
@@ -163,6 +166,12 @@ XTREAM_HMR_HOST=192.168.1.50 pnpm dev
 ```
 
 Tests run with Vitest (`pnpm test`); ~55 suites in `tests/` cover the parsers, serializers, catch-up math, codec hints, custom playlists, backup, and the playback proxies. Lint with ESLint flat config (`pnpm lint` / `pnpm lint:fix`); no Prettier. TypeScript is in strict mode (`tsconfig.json` extends `astro/tsconfigs/strict`); the `@/*` alias maps to `src/*`.
+
+## Community
+
+- **[Discord](https://discord.gg/GH5V3AkzfA)** - chat, help, and beta feedback.
+- **[GitHub Discussions](https://github.com/infinitel8p/Extreme-InfiniTV/discussions)** - questions and feature ideas.
+- **[Issues](https://github.com/infinitel8p/Extreme-InfiniTV/issues)** - bug reports.
 
 ## Credits
 

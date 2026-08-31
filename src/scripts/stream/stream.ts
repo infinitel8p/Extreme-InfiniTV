@@ -29,7 +29,15 @@ import {
   setVideoScaleOverride,
   clearAllVideoScaleOverrides,
   CHANNEL_VIDEO_SCALE_CHANGED_EVENT,
+  getChannelOverrides,
+  setChannelOverride,
+  CHANNEL_OVERRIDES_CHANGED_EVENT,
 } from "@/scripts/lib/preferences.js"
+import {
+  applyChannelOverrides,
+  resolveOverrideKey,
+  overrideIdentity,
+} from "@/scripts/lib/channel-overrides.ts"
 import { mountCategoryPicker } from "@/scripts/lib/category-picker.ts"
 import { sortChannelsForView } from "@/scripts/lib/channel-sort.ts"
 import { fmtChannelIdentity, formatBehindLive } from "@/scripts/lib/format.ts"
@@ -84,6 +92,7 @@ import {
   getExternalLauncher,
   isMacOS,
   isTauri,
+  stopExternalPlayback,
   subscribeExternalPlayerExit,
 } from "@/scripts/lib/player-runtime.ts"
 import {
@@ -92,6 +101,7 @@ import {
   getUserAgent,
   getExternalPlayerPref,
   EXTERNAL_PLAYER_BACKENDS,
+  DEFAULT_PLAYER_BACKEND,
   getVideoScale,
   setVideoScale,
   VIDEO_SCALE_EVENT,
@@ -105,6 +115,7 @@ import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/vide
 import {
   setupExternalPlayerButton,
   surfaceLaunchError,
+  surfaceLaunchErrorFallback,
   type ExternalPlayerButtonHandle,
 } from "@/scripts/lib/external-player-button.js"
 import { ICON_EXTERNAL_LINK, ICON_ALERT_TRIANGLE, ICON_DOTS, ICON_CHECK } from "@/scripts/lib/icons.js"
@@ -121,6 +132,7 @@ import {
   EPG_LOADED_EVENT,
   EPG_OFFSET_EVENT,
 } from "@/scripts/lib/epg-data.js"
+import { computeNowNext, formatTimeRange } from "@/scripts/lib/now-next.ts"
 import { setRichPresence, clearRichPresence } from "@/scripts/lib/discord-rpc.js"
 import { maybeB64ToUtf8, escapeHtml } from "@/scripts/lib/b64-utf8.ts"
 import {
@@ -131,6 +143,11 @@ import {
   XTREAM_STREAM_PROFILE,
 } from "@/scripts/lib/catchup.ts"
 import { resolveCatchupSrc } from "@/scripts/lib/catchup-resolve.ts"
+import {
+  computeCatchupTimeline,
+  catchupMimeForKindHint,
+  resolveCatchupCastDescriptor,
+} from "@/scripts/lib/tv-cast-catchup.ts"
 import {
   clampSeekTarget,
   adjustTargetForGranularity,
@@ -145,6 +162,7 @@ import { decodedFrameCount, droppedFrameCount } from "@/scripts/lib/player-telem
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { isAutomaticRetuneReason } from "@/scripts/lib/stream-health.ts"
 import { attachQualityChip } from "@/scripts/lib/quality-badge.ts"
+import { isCastRoutingActive, routePlayToCast, buildLiveCastContext, CAST_SUPERSEDED, castUncastableScheme } from "@/scripts/lib/tv-cast.ts"
 
 const CHANNELS_TTL_MS = 24 * 60 * 60 * 1000
 // One "page" of the side EPG panel's past window; the "Load earlier" button loads another, up to a 7-day cap.
@@ -263,7 +281,10 @@ const epgDayIndicator = document.getElementById("epg-day-indicator")
 let activePlaylistId = ""
 let activePlaylistTitle = ""
 let activeTuningTransition: any = null
-let externalPresenceActive = false
+// Guards every implicit local restart: nothing may remount behind MPV/VLC and take its provider connection.
+let externalPlaybackActive = false
+// Which player holds it, so a handoff can ask that one to let the stream go.
+let externalPlaybackKind = null
 
 // The inline script in livetv.astro sets data-first-run optimistically from
 // localStorage["xt_playlists"]. On Tauri builds the real entry list lives in
@@ -288,7 +309,8 @@ document.addEventListener("xt:entries-updated", () => {
 
 document.addEventListener("xt:active-changed", () => {
   clearRichPresence().catch(() => {})
-  externalPresenceActive = false
+  externalPlaybackActive = false
+  externalPlaybackKind = null
   reconcileFirstRun()
   loadChannels()
 })
@@ -301,8 +323,9 @@ document.addEventListener("xt:cache-revalidated", (e) => {
 })
 
 subscribeExternalPlayerExit(() => {
-  if (!externalPresenceActive) return
-  externalPresenceActive = false
+  if (!externalPlaybackActive) return
+  externalPlaybackActive = false
+  externalPlaybackKind = null
 })
 
 document.addEventListener("xt:channel-epg-changed", (e) => {
@@ -405,8 +428,18 @@ const STAR_FILLED =
 // ----------------------------
 /** @type {Array<{ id: number, name: string, category?: string, logo?: string | null, norm:string }>} */
 let all = []
+let channelsAreM3U = false
+let providerChannels = []
+let lastPaintMeta = { fromCache: false, age: 0 }
 /** @type {Array<typeof all[number]>} */
 let filtered = []
+
+/** Ordered-channel-list cast context for the given channel, from the currently rendered list. */
+function liveContextForChannelId(channelId) {
+  if (!activePlaylistId) return undefined
+  const channelIds = filtered.map((channel) => String(channel.id))
+  return buildLiveCastContext(activePlaylistId, channelIds, String(channelId))
+}
 
 const picker = mountCategoryPicker({
   kind: "live",
@@ -494,24 +527,12 @@ function mountVirtualList(items) {
   renderVirtual()
 }
 
-function fmtNowTimeRange(start, stop) {
-  try {
-    const fmt = new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    })
-    return `${fmt.format(start)}–${fmt.format(stop)}`
-  } catch {
-    return ""
-  }
-}
-
 function paintNowSlot(slot, playBtn, ch) {
   if (!slot) return
   slot.replaceChildren()
   const state = activePlaylistId ? getProgrammesSync(activePlaylistId) : null
   if (!state) return
-  const { current, next } = getNowNextForChannel(state.programmes, ch, activePlaylistId)
+  const { current, next } = computeNowNext(state.programmes, ch, activePlaylistId)
   if (!current && !next) return
 
   if (current) {
@@ -524,12 +545,7 @@ function paintNowSlot(slot, playBtn, ch) {
     bar.className = "channel-now-bar"
     bar.setAttribute("aria-hidden", "true")
     const fill = document.createElement("i")
-    const span = current.stop - current.start
-    const pct =
-      span > 0
-        ? Math.max(0, Math.min(100, ((Date.now() - current.start) / span) * 100))
-        : 0
-    fill.style.width = `${pct}%`
+    fill.style.width = `${current.progress * 100}%`
     bar.appendChild(fill)
     slot.appendChild(bar)
   } else if (next) {
@@ -542,10 +558,10 @@ function paintNowSlot(slot, playBtn, ch) {
   if (playBtn) {
     const parts = [ch.name || ""]
     if (current) {
-      parts.push(`Now: ${current.title} (${fmtNowTimeRange(current.start, current.stop)})`)
+      parts.push(`Now: ${current.title} (${formatTimeRange(current.start, current.stop)})`)
     }
     if (next) {
-      parts.push(`Next: ${next.title} (${fmtNowTimeRange(next.start, next.stop)})`)
+      parts.push(`Next: ${next.title} (${formatTimeRange(next.start, next.stop)})`)
     }
     playBtn.title = parts.filter(Boolean).join("\n")
   }
@@ -785,6 +801,9 @@ function openChannelDiagnostic(channel) {
 
 let channelMenuEl = null
 const CHANNEL_MENU_ID = "xt-channel-menu"
+const MENU_ITEM_CLASS =
+  "w-full text-left px-3 py-2 min-h-11 flex items-center rounded-lg text-sm " +
+  "hover:bg-surface-2 focus:bg-surface-2 outline-none"
 const channelMenuSpatialNav = attachPopoverSpatialNav({
   id: `${CHANNEL_MENU_ID}-section`,
   selector: `#${CHANNEL_MENU_ID} [role="menuitem"]`,
@@ -826,7 +845,7 @@ function openChannelMenu(channel, anchor, point) {
   playItem.type = "button"
   playItem.setAttribute("role", "menuitem")
   playItem.className =
-    "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+    MENU_ITEM_CLASS
   playItem.textContent = t("stream.menu.play")
   playItem.addEventListener("click", () => {
     closeChannelMenu()
@@ -837,7 +856,7 @@ function openChannelMenu(channel, anchor, point) {
   testItem.type = "button"
   testItem.setAttribute("role", "menuitem")
   testItem.className =
-    "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+    MENU_ITEM_CLASS
   testItem.textContent = t("stream.menu.test")
   testItem.addEventListener("click", () => {
     closeChannelMenu()
@@ -848,7 +867,7 @@ function openChannelMenu(channel, anchor, point) {
   copyItem.type = "button"
   copyItem.setAttribute("role", "menuitem")
   copyItem.className =
-    "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+    MENU_ITEM_CLASS
   copyItem.textContent = t("stream.menu.copy")
   copyItem.addEventListener("click", async () => {
     const url = buildChannelStreamUrl(channel)
@@ -863,6 +882,73 @@ function openChannelMenu(channel, anchor, point) {
     }
   })
 
+  let playOnTvItem = null
+  if (isTauri) {
+    playOnTvItem = document.createElement("button")
+    playOnTvItem.type = "button"
+    playOnTvItem.setAttribute("role", "menuitem")
+    playOnTvItem.className =
+      MENU_ITEM_CLASS
+    playOnTvItem.textContent = t("cast.menu.playOnTv")
+    playOnTvItem.addEventListener("click", () => {
+      closeChannelMenu()
+      import("@/scripts/lib/tv-cast.ts").then(({ castLiveChannelToTv }) => {
+        castLiveChannelToTv({
+          contentTitle: channel.name || null,
+          title: channel.name || "",
+          logo: channel.logo || undefined,
+          buildSrc: () => buildChannelStreamUrl(channel),
+          drm: streamDrmById.get(channel.id) || undefined,
+          headers: streamHeadersById.get(channel.id) || undefined,
+          preferNativeHls: isNativeHlsFallbackChannel(channel.id),
+          stopLocal: releaseLocalPlaybackForHandoff,
+          restoreLocal: () => { void play(channel.id, channel.name, "user") },
+          liveContext: liveContextForChannelId(channel.id),
+        })()
+      })
+    })
+  }
+
+  // Custom playlists curate their own names/logos in the editor - one source of truth.
+  // No derivable key means an override could not be stored, so don't offer the action.
+  const editable =
+    !isCustomHost(creds.host) && !channel.unresolved && !!resolveOverrideKey(channel, channelsAreM3U)
+  let editItem = null
+  let hideItem = null
+  if (editable) {
+    editItem = document.createElement("button")
+    editItem.type = "button"
+    editItem.setAttribute("role", "menuitem")
+    editItem.className =
+      MENU_ITEM_CLASS
+    editItem.textContent = t("stream.menu.editChannel")
+    editItem.addEventListener("click", async () => {
+      closeChannelMenu()
+      const { openChannelEditDialog } = await import("@/scripts/lib/channel-edit-dialog.ts")
+      // The row carries the overlay, so the provider's own values come from the
+      // untouched list - otherwise the dialog would show an edit as the original.
+      const provider = providerChannels.find((row) => row.id === channel.id) || channel
+      await openChannelEditDialog({
+        playlistId: activePlaylistId,
+        channel,
+        isM3U: channelsAreM3U,
+        providerName: provider.name || "",
+        providerLogo: provider.logo || null,
+      })
+    })
+
+    hideItem = document.createElement("button")
+    hideItem.type = "button"
+    hideItem.setAttribute("role", "menuitem")
+    hideItem.className =
+      MENU_ITEM_CLASS
+    hideItem.textContent = t("stream.menu.hideChannel")
+    hideItem.addEventListener("click", () => {
+      closeChannelMenu()
+      hideChannelWithUndo(channel)
+    })
+  }
+
   const customSource = buildCustomSourceForChannel(channel)
   let addToCustomItem = null
   if (customSource) {
@@ -870,7 +956,7 @@ function openChannelMenu(channel, anchor, point) {
     addToCustomItem.type = "button"
     addToCustomItem.setAttribute("role", "menuitem")
     addToCustomItem.className =
-      "w-full text-left px-3 py-2 rounded-lg text-sm hover:bg-surface-2 focus:bg-surface-2 outline-none"
+      MENU_ITEM_CLASS
     addToCustomItem.textContent = t("stream.menu.addToCustom")
     addToCustomItem.addEventListener("click", () => {
       closeChannelMenu()
@@ -883,7 +969,23 @@ function openChannelMenu(channel, anchor, point) {
     })
   }
 
-  menu.append(playItem, testItem, copyItem, ...(addToCustomItem ? [addToCustomItem] : []))
+  let separator = null
+  if (editItem || hideItem) {
+    separator = document.createElement("div")
+    separator.setAttribute("role", "separator")
+    separator.className = "my-1 h-px bg-line"
+  }
+
+  menu.append(
+    playItem,
+    testItem,
+    copyItem,
+    ...(playOnTvItem ? [playOnTvItem] : []),
+    ...(addToCustomItem ? [addToCustomItem] : []),
+    ...(separator ? [separator] : []),
+    ...(editItem ? [editItem] : []),
+    ...(hideItem ? [hideItem] : [])
+  )
   document.body.appendChild(menu)
 
   const margin = 8
@@ -913,6 +1015,34 @@ function openChannelMenu(channel, anchor, point) {
   listEl?.addEventListener("scroll", closeChannelMenu, { passive: true })
 
   testItem.focus({ preventScroll: true })
+}
+
+// Covers every write path: the dialog, the quick hide, and both undo toasts.
+document.addEventListener(CHANNEL_OVERRIDES_CHANGED_EVENT, () => repaintAfterOverrideChange())
+
+/** Re-runs the overlay over the last painted provider list; no refetch. */
+function repaintAfterOverrideChange() {
+  if (!providerChannels.length) return
+  paintChannels(providerChannels, lastPaintMeta.fromCache, lastPaintMeta.age, channelsAreM3U)
+}
+
+function hideChannelWithUndo(channel) {
+  const key = resolveOverrideKey(channel, channelsAreM3U)
+  if (!key || !activePlaylistId) return
+  const identity = overrideIdentity(channel)
+  setChannelOverride(activePlaylistId, key, {
+    hidden: true,
+    srcName: identity.srcName,
+    srcTvgId: identity.srcTvgId,
+  })
+  toast({
+    title: t("stream.toast.channelHidden", { name: channel.name || "" }),
+    duration: 6000,
+    action: {
+      label: t("common.undo"),
+      onClick: () => setChannelOverride(activePlaylistId, key, { hidden: false }),
+    },
+  })
 }
 
 const LONG_PRESS_MS = 500
@@ -1150,8 +1280,11 @@ document.addEventListener("keydown", (e) => {
     case " ":
     case "spacebar": {
       e.preventDefault()
-      if (vjs.paused()) vjs.play()?.catch(() => {})
-      else vjs.pause()
+      if (vjs.paused()) {
+        if (!isCastRoutingActive() && !externalPlaybackActive) vjs.play()?.catch(() => {})
+      } else {
+        vjs.pause()
+      }
       return
     }
     case "m": {
@@ -1175,6 +1308,7 @@ document.addEventListener("keydown", (e) => {
       const channel = all.find((entry) => entry.id === currentlyPlayingId)
       const isArchiveChannel = channel ? channelSupportsCatchup(channel) : false
       if (catchupSession || isArchiveChannel) {
+        if (isCastRoutingActive() || externalPlaybackActive) return
         // Fast-forward at the live edge with nothing pending must not start a session.
         if (!catchupSession && deltaMs > 0 && pendingSeekTargetUtcMs == null) return
         const nowUtcMs = Date.now()
@@ -1221,6 +1355,20 @@ function scheduleApplyFilter() {
     _applyFilterScheduled = false
     applyFilter()
   })
+}
+
+function renderListStatus(shownCount) {
+  if (!listStatus) return
+  // Only the overlay removes rows, so the difference is exactly the hidden count.
+  const hiddenCount = Math.max(0, providerChannels.length - all.length)
+  const head =
+    shownCount === all.length
+      ? `${all.length.toLocaleString()} channels`
+      : `${shownCount.toLocaleString()} of ${all.length.toLocaleString()} channels`
+  listStatus.textContent =
+    head +
+    (hiddenCount ? ` · ${t("stream.hiddenCount", { n: hiddenCount.toLocaleString() })}` : "") +
+    (lastPaintMeta.fromCache ? ` · cached, ${fmtAge(lastPaintMeta.age)}` : "")
 }
 
 const applyFilter = () => {
@@ -1287,7 +1435,7 @@ const applyFilter = () => {
     : "default"
   out = sortChannelsForView(out, sortMode, scoreById)
 
-  listStatus.textContent = `${out.length.toLocaleString()} of ${all.length.toLocaleString()} channels`
+  renderListStatus(out.length)
   mountVirtualList(out)
 }
 
@@ -1343,11 +1491,13 @@ function fmtAge(ms) {
   return `${d}d ago`
 }
 
-function paintChannels(data, fromCache, age) {
-  all = data
-  listStatus.textContent =
-    `${all.length.toLocaleString()} channels` +
-    (fromCache ? ` · cached, ${fmtAge(age)}` : "")
+function paintChannels(data, fromCache, age, isM3U = false) {
+  channelsAreM3U = isM3U
+  // Kept unoverridden so an edit can be re-overlaid without refetching.
+  providerChannels = Array.isArray(data) ? data : []
+  lastPaintMeta = { fromCache, age }
+  all = applyChannelOverrides(providerChannels, getChannelOverrides(activePlaylistId), { isM3U })
+  renderListStatus(all.length)
   picker.rerender()
   applyFilter()
   maybeAutoplayFromUrl()
@@ -1387,7 +1537,10 @@ function maybeAutoplayFromUrl() {
   if (!Number.isFinite(id) || id == null) return
   autoplayConsumed = true
   const ch = all.find((c) => c.id === id)
-  if (!ch) return
+  if (!ch) {
+    toast({ title: t("stream.toast.channelUnavailable") })
+    return
+  }
   // Strip the deep-link params so refresh doesn't re-trigger.
   try {
     const url = new URL(window.location.href)
@@ -1445,21 +1598,35 @@ async function loadChannels() {
   activePlaylistId = active._id
   activePlaylistTitle = active.title || ""
 
-  await ensurePrefsLoaded()
-  syncSortControl()
-  await Promise.all([
-    hydrateCache(active._id, "live"),
-    hydrateCache(active._id, "m3u"),
+  const prefsReady = ensurePrefsLoaded()
+  const liveHydrated = hydrateCache(active._id, "live")
+  const m3uHydrated = hydrateCache(active._id, "m3u")
+
+  // Paint from whichever kind resolves first - a playlist only ever hits one.
+  let painted = false
+  const paintFromCacheOnceReady = async (hydratePromise, kind) => {
+    await hydratePromise
+    await prefsReady
+    if (painted) return
+    const hit = getCached(active._id, kind)
+    if (!hit) return
+    painted = true
+    if (kind === "m3u") indexDirectUrls(hit.data)
+    else directUrlById = new Map()
+    paintChannels(hit.data, true, hit.age, kind === "m3u")
+  }
+  await Promise.allSettled([
+    paintFromCacheOnceReady(liveHydrated, "live"),
+    paintFromCacheOnceReady(m3uHydrated, "m3u"),
   ])
+
+  await prefsReady
+  syncSortControl()
 
   const liveHit = getCached(active._id, "live")
   const m3uHit = getCached(active._id, "m3u")
   const hit = liveHit || m3uHit
-  if (hit) {
-    if (m3uHit) indexDirectUrls(hit.data)
-    else directUrlById = new Map()
-    paintChannels(hit.data, true, hit.age)
-  } else {
+  if (!hit) {
     listStatus.textContent = t("stream.loading")
     if (!viewport?.querySelector("[data-skeleton]")) renderChannelSkeletons()
   }
@@ -1468,6 +1635,13 @@ async function loadChannels() {
   if (!creds.host) {
     if (!hit) showEmptyState()
     return
+  }
+  if (hit && !painted) {
+    // A background cache write can land here after the paint race above missed it.
+    if (liveHit) directUrlById = new Map()
+    else indexDirectUrls(hit.data)
+    paintChannels(hit.data, true, hit.age, !liveHit)
+    painted = true
   }
   if (hit) return // cache already painted; nothing else to do.
 
@@ -1478,7 +1652,7 @@ async function loadChannels() {
         const data = await ensureLive(creds, active._id)
         indexDirectUrls(data)
         categoryMap = null
-        paintChannels(data, false, 0)
+        paintChannels(data, false, 0, true)
         return
       }
       const { data, fromCache, age } = await cachedFetch(
@@ -1504,7 +1678,7 @@ async function loadChannels() {
           localStorage.setItem(`xt_m3u_epg:${active._id}`, m3uEpgUrls.join(","))
         } catch {}
       }
-      paintChannels(data, fromCache, age)
+      paintChannels(data, fromCache, age, true)
       return
     }
 
@@ -1562,7 +1736,7 @@ async function loadChannels() {
     )
     directUrlById = new Map()
     log.log("[xt:livetv] cachedFetch returned len=", data?.length ?? 0, "fromCache=", fromCache)
-    paintChannels(data, fromCache, age)
+    paintChannels(data, fromCache, age, false)
     log.log("[xt:livetv] paintChannels done")
   } catch (e) {
     log.error("[xt:livetv] loadChannels threw:", e)
@@ -2081,6 +2255,7 @@ async function mountEmbeddedPlayer(backend, opts) {
       : Date.now()
   })
   vjs.on("play", () => {
+    if (isCastRoutingActive() || externalPlaybackActive) return
     if (pausedAtAbsUtcMs == null) return
     const pausedAbsUtcMs = pausedAtAbsUtcMs
     pausedAtAbsUtcMs = null
@@ -2134,6 +2309,7 @@ async function mountEmbeddedPlayer(backend, opts) {
       const seqAtRetry = ctx.seq
       setTimeout(() => {
         if (seqAtRetry !== playSeq) return
+        if (isCastRoutingActive() || externalPlaybackActive) return
         if (retryCatchupSession(ctx, { automatic: true })) return
         if (!ctx.isLive) {
           // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
@@ -2608,6 +2784,28 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
   })
   items.push(healthItem)
 
+  if (isTauri) {
+    const playOnTvItem = makeMoreMenuItem(t("cast.menu.playOnTv"))
+    playOnTvItem.addEventListener("click", () => {
+      closeCurrentMoreMenu()
+      import("@/scripts/lib/tv-cast.ts").then(({ castLiveChannelToTv }) => {
+        castLiveChannelToTv({
+          contentTitle: name || null,
+          title: name || "",
+          logo: channel?.logo || undefined,
+          buildSrc: () => (channel ? buildChannelStreamUrl(channel) : null),
+          drm: streamDrmById.get(streamId) || undefined,
+          headers: streamHeadersById.get(streamId) || undefined,
+          preferNativeHls: isNativeHlsFallbackChannel(streamId),
+          stopLocal: releaseLocalPlaybackForHandoff,
+          restoreLocal: () => { void play(streamId, name, "user") },
+          liveContext: liveContextForChannelId(streamId),
+        })()
+      })
+    })
+    items.push(playOnTvItem)
+  }
+
   return items
 }
 
@@ -2806,6 +3004,7 @@ const liveStallRetuneCounts = new Map()
 
 // Shared by the stall sentinel (event-driven) and the progress watch (frozen currentTime).
 function performStallRetune(trigger) {
+  if (isCastRoutingActive() || externalPlaybackActive) return
   const ctx = lastPlayContext
   if (!ctx || !vjs) return
   log.warn("[xt:livetv] stalled - re-tuning", { streamId: ctx.streamId, trigger })
@@ -3400,6 +3599,8 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
     })
   } else if (failure.kind === "parse") {
     reason = t("stream.failure.parseFailed")
+  } else if (failure.kind === "connection-limit") {
+    reason = t("stream.failure.connectionLimit")
   } else {
     reason = t("stream.error.checkConnection")
   }
@@ -3523,10 +3724,17 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
       beforeLaunch: () => {
         hidePlaybackFailurePanel()
       },
-      afterLaunch: () => {
+      releaseLocal: () => {
+        releaseLocalPlaybackForHandoff()
+      },
+      restoreLocal: () => {
+        play(ctx.streamId, ctx.name)
+      },
+      afterLaunch: (kind) => {
         const channel = all.find((entry) => entry.id === ctx.streamId)
         pushDiscordPresence(channel || { id: ctx.streamId, name: ctx.name }, "live")
-        externalPresenceActive = true
+        externalPlaybackActive = true
+        externalPlaybackKind = kind
       },
     })
   }
@@ -3557,7 +3765,8 @@ function runScanLineSweep() {
 
 window.addEventListener("pagehide", () => {
   clearRichPresence().catch(() => {})
-  externalPresenceActive = false
+  externalPlaybackActive = false
+  externalPlaybackKind = null
   void stopAudioTranscode()
 })
 
@@ -3673,6 +3882,36 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
   return launched
 }
 
+/** Releases the local player + recovery machinery so nothing re-mounts and steals the provider connection back. */
+function releaseLocalPlaybackForHandoff() {
+  // False lets channel-to-channel casting skip the slot-settle wait.
+  const heldProviderConnection = !!lastPlayContext || externalPlaybackActive
+  // Ask the external player to let go, or the receiver is the second connection again.
+  if (externalPlaybackKind) {
+    const kind = externalPlaybackKind
+    externalPlaybackKind = null
+    externalPlaybackActive = false
+    void stopExternalPlayback(kind).then((released) => {
+      if (!released) {
+        log.warn("[xt:livetv] external player kept the stream open - it may still hold the provider connection", { player: kind })
+      }
+    })
+  }
+  suppressPauseTrackingUntilMs = Date.now() + 500
+  if (qualityChipDetach) {
+    qualityChipDetach()
+    qualityChipDetach = null
+  }
+  try { vjs?.pause?.() } catch {}
+  try { vjs?.reset?.() } catch {}
+  clearStallSentinel()
+  clearDeadVideoWatchdog()
+  clearDeadAudioWatchdog()
+  hidePlaybackFailurePanel()
+  lastPlayContext = null
+  return heldProviderConnection
+}
+
 async function play(streamId, name, reason = "user") {
   // Every tune's trigger reaches the log file, so sessions reconstruct from it.
   log.info("[xt:livetv] tune", { streamId, name: name || null, reason })
@@ -3684,9 +3923,40 @@ async function play(streamId, name, reason = "user") {
   const targetChannel = all.find((channel) => channel.id === streamId)
   if (targetChannel?.unresolved) {
     void stopAudioTranscode()
+    log.warn("[xt:livetv] channel unresolved - source playlist no longer has it", { streamId })
     toastError(t("stream.error.cantPlay", { channel: name || targetChannel.name || `#${streamId}` }), {
       description: t("stream.error.checkConnection"),
     })
+    return
+  }
+  if (isTauri && isCastRoutingActive()) {
+    if (reason !== "user" && reason !== "channel-key") {
+      log.info("[xt:livetv] skipping local mount - cast session active", { reason })
+      return
+    }
+    const routed = await routePlayToCast({
+      contentTitle: name || null,
+      quiet: true,
+      stopLocal: releaseLocalPlaybackForHandoff,
+      liveContext: liveContextForChannelId(streamId),
+      holdsProviderConnection: true,
+      buildDescriptor: async () => {
+        const { isCastableSrc, buildLiveCastDescriptor } = await import("@/scripts/lib/tv-cast-descriptor")
+        const liveSrc = targetChannel ? buildChannelStreamUrl(targetChannel) : null
+        if (!liveSrc) return null
+        if (!isCastableSrc(liveSrc, { live: true })) return castUncastableScheme(liveSrc)
+        return buildLiveCastDescriptor({
+          src: liveSrc,
+          title: name || "",
+          logo: targetChannel?.logo || undefined,
+          drm: streamDrmById.get(streamId) || undefined,
+          headers: streamHeadersById.get(streamId) || undefined,
+          preferNativeHls: isNativeHlsFallbackChannel(streamId),
+        })
+      },
+    })
+    // Cast session owns playback now - never fall through to a local mount.
+    if (routed) setNowPlaying(streamId)
     return
   }
   hidePlaybackFailurePanel()
@@ -3744,7 +4014,8 @@ async function play(streamId, name, reason = "user") {
           await launchExternalLive(externalKind, src, channelHeaders)
           showExternalPlayerEmptyState(externalKind, name)
           pushDiscordPresence(channel || { id: streamId, name }, "live")
-          externalPresenceActive = true
+          externalPlaybackActive = true
+          externalPlaybackKind = externalKind
         } catch (err) {
           surfaceLaunchError(err, externalKind)
         }
@@ -3755,6 +4026,7 @@ async function play(streamId, name, reason = "user") {
         return
       }
       const scheme = (src.split("://")[0] || "").toLowerCase()
+      log.warn("[xt:livetv] scheme needs an external player", { streamId, scheme })
       toastError(
         t("stream.error.schemeUnsupported", { scheme }) ||
           `Can't play "${scheme}://" streams in the embedded player. Set up MPV or VLC in Settings → Playback.`
@@ -3847,7 +4119,7 @@ async function play(streamId, name, reason = "user") {
     swapState()
   }
 
-  const backend = getPlayerBackend()
+  let backend = getPlayerBackend()
   const channelHeaders = streamHeadersById.get(streamId) || null
   const channelDrm = streamDrmById.get(streamId) || null
 
@@ -3857,12 +4129,14 @@ async function play(streamId, name, reason = "user") {
       await launchExternalLive(backend, src, channelHeaders)
       showExternalPlayerEmptyState(backend, name)
       pushDiscordPresence(channel || { id: streamId, name }, "live")
-      externalPresenceActive = true
+      externalPlaybackActive = true
+      externalPlaybackKind = backend
+      paintEpgSidePanel(streamId)
+      return
     } catch (err) {
-      surfaceLaunchError(err, backend)
+      surfaceLaunchErrorFallback(err, backend, "[xt:livetv]")
+      backend = DEFAULT_PLAYER_BACKEND
     }
-    paintEpgSidePanel(streamId)
-    return
   }
 
   resetEmptyState()
@@ -3986,7 +4260,8 @@ async function play(streamId, name, reason = "user") {
   armStartWedgeWatch()
   applyVideoScale()
   pushDiscordPresence(channel || { id: streamId, name }, "live")
-  externalPresenceActive = false
+  externalPlaybackActive = false
+  externalPlaybackKind = null
 
   paintEpgSidePanel(streamId)
 }
@@ -4126,12 +4401,6 @@ function resolveProgrammeWindowAt(channel, atUtcMs) {
 /** Resolve + mount a catch-up/timeshift source for `channel`'s programme window, optionally seeking to `seekSeconds` once metadata loads. */
 async function playCatchup(channel, opts) {
   if (!currentEl || !channel || !activePlaylistId) return false
-  // Catch-up remounts the <video> without a quality chip - detach the
-  // live one so its listeners don't leak onto a removed element.
-  if (qualityChipDetach) {
-    qualityChipDetach()
-    qualityChipDetach = null
-  }
   if (channel.unresolved) {
     toastError(t("stream.error.cantPlay", { channel: channel.name || `#${channel.id}` }), {
       description: t("stream.error.checkConnection"),
@@ -4149,6 +4418,51 @@ async function playCatchup(channel, opts) {
   const catchupId = opts?.catchupId || resolveProgrammeCatchupIdAt(channel, startUtcMs)
   let title = opts?.title || ""
   if (!Number.isFinite(startUtcMs) || !Number.isFinite(stopUtcMs) || stopUtcMs <= startUtcMs) return false
+  if (!title && kind === "timeshift") title = resolveProgrammeTitleAt(channel, startUtcMs)
+
+  // Shared with the local path below - only one branch runs per call, so a single
+  // increment here keeps the counter coherent between cast and local requests.
+  const requestSeq = ++catchupRequestSeq
+
+  if (isCastRoutingActive()) {
+    const routed = await routePlayToCast({
+      contentTitle: title || channel.name || null,
+      quiet: true,
+      stopLocal: releaseLocalPlaybackForHandoff,
+      liveContext: liveContextForChannelId(channel.id),
+      holdsProviderConnection: true,
+      buildDescriptor: async () => {
+        const descriptor = await resolveCatchupCastDescriptor({
+          playlistId: activePlaylistId,
+          creds,
+          channel,
+          startUtcMs,
+          stopUtcMs,
+          catchupId,
+          kind,
+          timelineStartUtcMs: opts?.timelineStartUtcMs ?? null,
+          timelineStopUtcMs: opts?.timelineStopUtcMs ?? null,
+          timeshiftAnchorWindow: kind === "timeshift" ? resolveProgrammeWindowAt(channel, startUtcMs) : null,
+          seekSeconds,
+          title: title || channel.name || "",
+          logo: channel.logo || undefined,
+          headers: streamHeadersById.get(channel.id) || undefined,
+        })
+        // A newer play()/playCatchup() call took over while the descriptor was resolving - superseded, not failed.
+        if (requestSeq !== catchupRequestSeq) return CAST_SUPERSEDED
+        return descriptor
+      },
+    })
+    if (routed && requestSeq === catchupRequestSeq) setNowPlaying(channel.id)
+    return routed
+  }
+
+  // Catch-up remounts the <video> without a quality chip - detach the
+  // live one so its listeners don't leak onto a removed element.
+  if (qualityChipDetach) {
+    qualityChipDetach()
+    qualityChipDetach = null
+  }
 
   const backend = getPlayerBackend()
   if (backend === "mpv" || backend === "vlc") {
@@ -4173,7 +4487,6 @@ async function playCatchup(channel, opts) {
 
   // Resolving the archive URL can take several seconds (probing candidate
   // wire formats) - give the same tuning feedback the live path shows.
-  const myRequest = ++catchupRequestSeq
   showTuningOverlay(channel.logo ? safeHttpUrl(channel.logo) : null, CATCHUP_TUNING_MAX_MS)
 
   const resolution = await resolveCatchupSrc(activePlaylistId, creds, {
@@ -4184,7 +4497,7 @@ async function playCatchup(channel, opts) {
   })
   // A newer play()/playCatchup() call has since taken over - bail without
   // touching whatever it's already showing.
-  if (myRequest !== catchupRequestSeq) {
+  if (requestSeq !== catchupRequestSeq) {
     return false
   }
   if (!resolution) {
@@ -4193,25 +4506,28 @@ async function playCatchup(channel, opts) {
     return false
   }
 
-  if (!title && kind === "timeshift") title = resolveProgrammeTitleAt(channel, startUtcMs)
-  const mountedStartUtcMs = resolution.effectiveStartUtcMs
-
-  // Full-programme span (TiviMate-style bar) only for non-terminating streams still mid-broadcast; terminating archives end exactly at the requested stop, so they keep the elapsed-so-far span.
-  let timelineStopUtcMs = opts?.timelineStopUtcMs ?? null
-  if (timelineStopUtcMs == null && !resolution.profile.terminates) {
-    const anchorWindow = kind === "programme" ? { startUtcMs, stopUtcMs } : resolveProgrammeWindowAt(channel, startUtcMs)
-    if (anchorWindow && anchorWindow.stopUtcMs > Date.now()) {
-      if (opts?.timelineStartUtcMs == null) timelineStartUtcMs = anchorWindow.startUtcMs
-      timelineStopUtcMs = anchorWindow.stopUtcMs
-    }
-  }
+  const timeline = computeCatchupTimeline({
+    kind,
+    startUtcMs,
+    stopUtcMs,
+    effectiveStartUtcMs: resolution.effectiveStartUtcMs,
+    timelineStartUtcMs,
+    timelineStartUtcMsWasExplicit: opts?.timelineStartUtcMs != null,
+    timelineStopUtcMsOverride: opts?.timelineStopUtcMs ?? null,
+    profileTerminates: resolution.profile.terminates,
+    timeshiftAnchorWindow: kind === "timeshift" ? resolveProgrammeWindowAt(channel, startUtcMs) : null,
+    seekSeconds,
+  })
+  const mountedStartUtcMs = timeline.mountedStartUtcMs
+  timelineStartUtcMs = timeline.timelineStartUtcMs
+  const timelineStopUtcMs = timeline.timelineStopUtcMs
 
   resetEmptyState()
   document.getElementById("player")?.removeAttribute("hidden")
 
   const player = await ensureEmbeddedPlayer(backend, { liveui: false })
   // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
-  if (myRequest !== catchupRequestSeq) {
+  if (requestSeq !== catchupRequestSeq) {
     return false
   }
   if (!player) {
@@ -4243,7 +4559,7 @@ async function playCatchup(channel, opts) {
   paintEpgSidePanel(channel.id)
 
   const seq = ++playSeq
-  const mime = resolution.kindHint === "hls" ? "application/x-mpegURL" : "video/mp2t"
+  const mime = catchupMimeForKindHint(resolution.kindHint)
   lastPlayContext = {
     streamId: channel.id,
     name: channel.name,
@@ -4273,12 +4589,7 @@ async function playCatchup(channel, opts) {
     catchupEndedHandler = null
   }
 
-  // Mounted stream lands at [offset, span] on the [timelineStart, stop] timeline so position/duration stay 1:1 across remounts.
-  const timelineOffsetSeconds = Math.max(0, (mountedStartUtcMs - timelineStartUtcMs) / 1000)
-  const timelineSpanSeconds = timelineStopUtcMs != null
-    ? Math.max(1, Math.round((timelineStopUtcMs - timelineStartUtcMs) / 1000))
-    : Math.max(1, Math.round((Math.min(stopUtcMs, Date.now()) - timelineStartUtcMs) / 1000))
-  const initialPositionSeconds = Math.max(0, (startUtcMs - timelineStartUtcMs) / 1000 + seekSeconds)
+  const { timelineOffsetSeconds, timelineSpanSeconds, initialPositionSeconds } = timeline
   if (initialPositionSeconds > 0.05) {
     catchupLoadedMetadataHandler = () => {
       markProgrammaticCatchupSeek()
@@ -4620,10 +4931,22 @@ function appendExternalLaunchButton(parent, streamId, src, name) {
       suppressPauseTrackingUntilMs = Date.now() + 500
       try { vjs?.pause?.() } catch {}
     },
-    afterLaunch: () => {
+    releaseLocal: () => {
+      releaseLocalPlaybackForHandoff()
+    },
+    restoreLocal: () => {
+      play(streamId, name, "user")
+    },
+    afterLaunch: (kind) => {
       const channel = all.find((entry) => entry.id === streamId)
       pushDiscordPresence(channel || { id: streamId, name }, "live")
-      externalPresenceActive = true
+      externalPlaybackActive = true
+      externalPlaybackKind = kind
+      // The embedded surface is empty now; show the "Now playing in <PLAYER>" state instead.
+      if (kind === "mpv" || kind === "vlc") {
+        document.getElementById("player")?.setAttribute("hidden", "")
+        showExternalPlayerEmptyState(kind, name)
+      }
     },
   })
 }
@@ -4858,7 +5181,12 @@ async function loadEPG(streamId) {
       .join("")
     updateEpgDayIndicator()
   } catch (e) {
-    log.error(e)
+    // A channel switch aborts this fetch mid-body; that's expected, not a failure to report.
+    if (epgListChannelId !== streamId) {
+      log.warn("[xt:livetv] short-EPG fetch superseded by a newer channel", { streamId, error: e })
+      return
+    }
+    log.error("[xt:livetv] short-EPG fetch failed", { streamId, error: e })
     epgList.innerHTML = `<div class="text-bad">Failed to load EPG.</div>`
     if (epgDayIndicator) epgDayIndicator.textContent = ""
   }

@@ -28,6 +28,11 @@ export const ICON_PENCIL = wrap(
 
 export const ICON_CHECK = wrap('<path d="M5 12l5 5l10 -10" />')
 
+export const ICON_COPY = wrap(
+  '<path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666" />' +
+    '<path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1" />'
+)
+
 export const ICON_SPARKLES = wrap(
   '<path d="M16 18a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2z" />' +
     '<path d="M16 6a2 2 0 0 1 2 2a2 2 0 0 1 2 -2a2 2 0 0 1 -2 -2a2 2 0 0 1 -2 2z" />' +
@@ -146,4 +151,107 @@ export const ICON_REFRESH = wrap(
 export const ICON_USER = wrap(
   '<path d="M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0" />' +
     '<path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />'
+)
+
+export const ICON_DEVICE_TV = wrap(
+  '<path d="M3 9a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v9a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2l0 -9" />' +
+    '<path d="M16 3l-4 4l-4 -4" />'
+)
+
+export const ICON_PLAYER_PLAY = wrap('<path d="M7 4v16l13 -8l-13 -8" />')
+
+export const ICON_PLAYER_PAUSE = wrap(
+  '<path d="M6 6a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1l0 -12" />' +
+    '<path d="M14 6a1 1 0 0 1 1 -1h2a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1l0 -12" />'
+)
+
+export const ICON_PLAYER_STOP = wrap(
+  '<path d="M5 7a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2l0 -10" />'
+)
+
+export const ICON_REWIND_BACKWARD_30 = wrap(
+  '<path d="M19.007 16.466a6 6 0 0 0 -4.007 -10.466h-11" />' +
+    '<path d="M12 15.5v3a1.5 1.5 0 0 0 3 0v-3a1.5 1.5 0 0 0 -3 0" />' +
+    '<path d="M6 14h1.5a1.5 1.5 0 0 1 0 3h-.5h.5a1.5 1.5 0 0 1 0 3h-1.5" />' +
+    '<path d="M7 9l-3 -3l3 -3" />'
+)
+
+export const ICON_REWIND_FORWARD_30 = wrap(
+  '<path d="M5.007 16.478a6 6 0 0 1 3.993 -10.478h11" />' +
+    '<path d="M15 15.5v3a1.5 1.5 0 0 0 3 0v-3a1.5 1.5 0 0 0 -3 0" />' +
+    '<path d="M17 9l3 -3l-3 -3" />' +
+    '<path d="M9 14h1.5a1.5 1.5 0 0 1 0 3h-.5h.5a1.5 1.5 0 0 1 0 3h-1.5" />'
+)
+
+export const ICON_REWIND_BACKWARD_10 = wrap(
+  '<path d="M7 9l-3 -3l3 -3" />' +
+    '<path d="M15.997 17.918a6.002 6.002 0 0 0 -.997 -11.918h-11" />' +
+    '<path d="M6 14v6" />' +
+    '<path d="M9 15.5v3a1.5 1.5 0 0 0 3 0v-3a1.5 1.5 0 0 0 -3 0" />'
+)
+
+export const ICON_REWIND_FORWARD_10 = wrap(
+  '<path d="M17 9l3 -3l-3 -3" />' +
+    '<path d="M8 17.918a5.997 5.997 0 0 1 -5 -5.918a6 6 0 0 1 6 -6h11" />' +
+    '<path d="M12 14v6" />' +
+    '<path d="M15 15.5v3a1.5 1.5 0 0 0 3 0v-3a1.5 1.5 0 0 0 -3 0" />'
+)
+
+export const ICON_VOLUME = wrap(
+  '<path d="M15 8a5 5 0 0 1 0 8" />' +
+    '<path d="M6 15h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l3.5 -4.5a.8 .8 0 0 1 1.5 .5v14a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5" />'
+)
+
+export const ICON_VOLUME_OFF = wrap(
+  '<path d="M15 8a5 5 0 0 1 1.912 4.934m-1.377 2.602a5 5 0 0 1 -.535 .464" />' +
+    '<path d="M17.7 5a9 9 0 0 1 2.362 11.086m-1.676 2.299a9 9 0 0 1 -.686 .615" />' +
+    '<path d="M9.069 5.054l.431 -.554a.8 .8 0 0 1 1.5 .5v2m0 4v8a.8 .8 0 0 1 -1.5 .5l-3.5 -4.5h-2a1 1 0 0 1 -1 -1v-4a1 1 0 0 1 1 -1h2l1.294 -1.664" />' +
+    '<path d="M3 3l18 18" />'
+)
+
+export const ICON_PLAYER_TRACK_NEXT = wrap(
+  '<path d="M3 5v14l8 -7l-8 -7" />' + '<path d="M14 5v14l8 -7l-8 -7" />'
+)
+
+export const ICON_ARROW_LEFT = wrap('<path d="M5 12l14 0" /><path d="M5 12l6 6" /><path d="M5 12l6 -6" />')
+
+export const ICON_SEARCH = wrap(
+  '<path d="M10 10m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0" />' + '<path d="M21 21l-6 -6" />'
+)
+
+export const ICON_STAR = wrap(
+  '<path d="M12 17.75l-6.172 3.245l1.179 -6.873l-5 -4.867l6.9 -1l3.086 -6.253l3.086 6.253l6.9 1l-5 4.867l1.179 6.873z" />'
+)
+
+export const ICON_LIST_DETAILS = wrap(
+  '<path d="M13 5h8" /><path d="M13 9h5" /><path d="M13 15h8" /><path d="M13 19h5" />' +
+    '<path d="M3 4m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z" />' +
+    '<path d="M3 14m0 1a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v4a1 1 0 0 1 -1 1h-4a1 1 0 0 1 -1 -1z" />'
+)
+
+export const ICON_PLAYER_TRACK_PREV = wrap(
+  '<path d="M21 5v14l-8 -7l8 -7" />' + '<path d="M10 5v14l-8 -7l8 -7" />'
+)
+
+export const ICON_PALETTE = wrap(
+  '<path d="M12 21a9 9 0 0 1 0 -18c4.97 0 9 3.582 9 8c0 1.06 -.474 2.078 -1.318 2.828c-.844 .75 -1.989 1.172 -3.182 1.172h-2.5a2 2 0 0 0 -1 3.75a1.3 1.3 0 0 1 -1 2.25" />' +
+    '<path d="M7.5 10.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M11.5 7.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />' +
+    '<path d="M15.5 10.5a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />'
+)
+
+export const ICON_TEXT_SIZE = wrap(
+  '<path d="M3 7v-2h13v2" />' +
+    '<path d="M10 5v14" />' +
+    '<path d="M12 19h-4" />' +
+    '<path d="M15 13v-1h6v1" />' +
+    '<path d="M18 12v7" />' +
+    '<path d="M17 19h2" />'
+)
+
+export const ICON_ARROWS_SHUFFLE = wrap(
+  '<path d="M18 4l3 3l-3 3" />' +
+    '<path d="M18 20l3 -3l-3 -3" />' +
+    '<path d="M3 7h3a5 5 0 0 1 5 5a5 5 0 0 0 5 5h5" />' +
+    '<path d="M21 7h-5a4.978 4.978 0 0 0 -3 1m-4 8a4.984 4.984 0 0 1 -3 1h-3" />'
 )

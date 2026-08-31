@@ -23,6 +23,7 @@ import {
   IconWifi,
   IconFilter,
   IconStar,
+  IconPencil,
   IconArchive,
   IconFileZip,
   IconDatabase,
@@ -44,10 +45,14 @@ import {
   IconEye,
   IconEyeOff,
   IconActivity,
+  IconDeviceTv,
+  IconCast,
+  IconArrowsShuffle,
 } from "@tabler/icons-svelte"
 import HiddenCategoriesEditor from "@/components/HiddenCategoriesEditor.svelte"
 import LocalePicker from "@/components/LocalePicker.svelte"
 import FavoritesReorder from "@/components/FavoritesReorder.svelte"
+import ChannelOverridesEditor from "@/components/ChannelOverridesEditor.svelte"
 import HubStripsEditor from "@/components/HubStripsEditor.svelte"
 import PlayerPicker from "@/components/PlayerPicker.svelte"
 import TvOverscanCard from "@/components/TvOverscanCard.svelte"
@@ -73,7 +78,8 @@ const navStructure: NavSection[] = [
   { id: "settings-network", labelKey: "settings.group.network", label: "Network", cards: [
     { id: "card-network",          labelKey: "settings.network.title", label: "Network" },
     { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
-    { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "TMDb metadata" },
+    { id: "card-casting",          labelKey: "settings.casting.title", label: "Casting", conditional: true },
+    { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "Metadata enrichment" },
     { id: "card-net-log",          labelKey: "settings.netLog.title",  label: "Network log", conditional: true },
   ]},
   { id: "settings-library", labelKey: "settings.group.library", label: "Library", cards: [
@@ -345,6 +351,25 @@ const navStructure: NavSection[] = [
                     </button>
                     <button type="button" role="radio" data-accent-value="violet" aria-checked="false" data-i18n-attr="title:settings.accent.violet;aria-label:settings.accent.violet" title="Violet" aria-label="Violet" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-violet)">
                       <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="gold" aria-checked="false" data-i18n-attr="title:settings.accent.gold;aria-label:settings.accent.gold" title="Gold" aria-label="Gold" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-gold)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="lime" aria-checked="false" data-i18n-attr="title:settings.accent.lime;aria-label:settings.accent.lime" title="Lime" aria-label="Lime" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-lime)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="teal" aria-checked="false" data-i18n-attr="title:settings.accent.teal;aria-label:settings.accent.teal" title="Teal" aria-label="Teal" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-teal)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="silver" aria-checked="false" data-i18n-attr="title:settings.accent.silver;aria-label:settings.accent.silver" title="Silver" aria-label="Silver" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-silver)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="white" aria-checked="false" data-i18n-attr="title:settings.accent.white;aria-label:settings.accent.white" title="White" aria-label="White" class="accent-btn btn group size-11 p-0" style="--swatch: var(--accent-swatch-white)">
+                      <span class="size-5 rounded-full bg-(--swatch) group-aria-checked:ring-2 group-aria-checked:ring-(--swatch) group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" role="radio" data-accent-value="random" aria-checked="false" data-i18n-attr="title:settings.accent.random;aria-label:settings.accent.random" title="Random" aria-label="Random" class="accent-btn btn group relative size-11 p-0">
+                      <span class="size-5 rounded-full bg-[conic-gradient(red,orange,yellow,green,cyan,blue,magenta,red)] group-aria-checked:ring-2 group-aria-checked:ring-fg/50 group-aria-checked:ring-offset-2 group-aria-checked:ring-offset-surface" aria-hidden="true"></span>
+                      <IconArrowsShuffle aria-hidden="true" stroke={2.5} size={12} class="absolute inset-0 m-auto text-white mix-blend-difference pointer-events-none" />
                     </button>
                   </div>
                   <p id="settings-accent-override-hint" data-i18n="settings.accent.overrideHint" class="hidden text-xs text-fg-3 text-right">
@@ -1058,25 +1083,288 @@ const navStructure: NavSection[] = [
           </div>
         </div>
 
+        <!-- Surface: Casting, unhidden by receiver-card.ts / play-on-tv-card.ts -->
+        <div id="card-casting" data-settings-item class="settings-surface icon-mark-host hidden scroll-mt-6 lg:scroll-mt-20">
+          <div class="settings-surface__header">
+            <span class="icon-mark">
+              <IconCast aria-hidden="true" stroke={2} />
+            </span>
+            <h3 data-i18n="settings.casting.title" class="text-base font-semibold">Casting</h3>
+          </div>
+          <div class="settings-rows">
+
+            <!-- TV receiver: desktop-only, unhidden by receiver-card.ts -->
+            <details id="card-tv-receiver" data-settings-item class="hidden group scroll-mt-6 lg:scroll-mt-20">
+              <summary class="settings-row cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span class="settings-row__text">
+                  <h3 class="text-sm font-medium leading-snug">
+                    <IconDeviceTv aria-hidden="true" stroke={2} class="size-4 text-fg-3 inline-block align-[-2px] me-1.5" />
+                    <span data-i18n="settings.receiver.title">TV receiver</span>
+                    <span id="receiver-live-badge" class="hidden ms-2 items-center gap-1.5 align-middle rounded-full bg-accent-soft px-2 py-0.5 text-2xs font-semibold text-accent">
+                      <span class="size-1.5 rounded-full bg-ok"></span>
+                      <span data-i18n="settings.receiver.on">On</span>
+                    </span>
+                  </h3>
+                  <span id="receiver-summary-helper" data-i18n="settings.receiver.helperLong" class="text-xs text-fg-3 line-clamp-1 block">
+                    Let other devices running Extreme InfiniTV send playback to this one over your local network.
+                  </span>
+                  <span id="receiver-summary-status" class="hidden text-xs text-fg-3 line-clamp-1 block"></span>
+                </span>
+                <span class="settings-row__control">
+                  <IconChevronDown aria-hidden="true" stroke={2} class="size-4 text-fg-3 transition-transform group-open:rotate-180" />
+                </span>
+              </summary>
+              <div class="px-5 sm:px-6 pb-4 pt-1 flex flex-col gap-3">
+
+                <div data-settings-item class="settings-row">
+                  <div class="settings-row__text">
+                    <h3 data-i18n="settings.receiver.label" class="text-sm font-medium leading-snug">Allow casting to this device</h3>
+                  </div>
+                  <div class="settings-row__control">
+                    <div
+                      id="receiver-mode-toggle"
+                      class="settings-seg"
+                      role="radiogroup"
+                      aria-label="Allow casting to this device"
+                      data-i18n-attr="aria-label:settings.receiver.label">
+                      <button type="button" role="radio" data-receiver="on"  aria-checked="false" data-i18n="settings.receiver.on"  class="receiver-mode-btn btn">On</button>
+                      <button type="button" role="radio" data-receiver="off" aria-checked="false" data-i18n="settings.receiver.off" class="receiver-mode-btn btn">Off</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div data-settings-item class="settings-row">
+                  <div class="settings-row__text">
+                    <h3 data-i18n="settings.receiver.deviceName" class="text-sm font-medium leading-snug">Device name</h3>
+                    <p data-i18n="settings.receiver.deviceNameHelper" class="text-xs text-fg-3">Shown on the pairing screen and in other devices' cast menus.</p>
+                  </div>
+                  <div class="settings-row__control w-full @2xl:w-72">
+                    <input
+                      id="receiver-device-name-input"
+                      type="text"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="This device's name"
+                      data-i18n-attr="placeholder:settings.receiver.deviceNamePlaceholder"
+                      class="field-input"
+                    />
+                  </div>
+                </div>
+
+                <div id="receiver-status-block" class="hidden flex-col gap-3">
+
+                  <div data-settings-item class="settings-row settings-row--stack gap-1.5">
+                    <p id="receiver-status-line" class="inline-flex items-center gap-2 text-sm text-fg">
+                      <span class="size-2 rounded-full bg-ok"></span>
+                      <span id="receiver-status-line-text"></span>
+                    </p>
+                    <p id="receiver-discoverable-line" class="hidden text-xs text-fg-3"></p>
+                  </div>
+
+                  <div id="receiver-firewall-warning" data-settings-item class="hidden flex-col gap-2 rounded-xl border border-warn/35 bg-warn/10 px-4 py-3">
+                    <p class="inline-flex items-center gap-2 text-sm font-medium text-warn">
+                      <IconAlertTriangle aria-hidden="true" stroke={2} class="size-4 flex-none" />
+                      <span id="receiver-firewall-warning-title" data-i18n="settings.receiver.firewall.title">Windows Firewall may be blocking this</span>
+                    </p>
+                    <p id="receiver-firewall-warning-body" data-i18n="settings.receiver.firewall.body" class="text-xs text-warn/90">
+                      Other devices on your network may not be able to reach this receiver. Add a firewall rule to allow it.
+                    </p>
+                    <button id="receiver-firewall-allow-btn" type="button" data-settings-item class="btn self-start">
+                      <span data-i18n="settings.receiver.firewall.allow">Allow through firewall</span>
+                    </button>
+                  </div>
+
+                  <div data-settings-item class="settings-row">
+                    <div class="settings-row__text">
+                      <h3 data-i18n="settings.receiver.addressLabel" class="text-sm font-medium leading-snug">Address</h3>
+                    </div>
+                    <div class="settings-row__control">
+                      <div id="receiver-addresses-list" class="flex flex-wrap items-center justify-end gap-1.5"></div>
+                    </div>
+                  </div>
+
+                  <div data-settings-item class="settings-row">
+                    <div class="settings-row__text">
+                      <h3 data-i18n="settings.receiver.code" class="text-sm font-medium leading-snug">Pair code</h3>
+                    </div>
+                    <div class="settings-row__control flex-wrap justify-end">
+                      <div id="receiver-pair-code-display" class="text-3xl tracking-[0.3em] tabular-nums text-fg-3 font-semibold select-none"></div>
+                      <button
+                        id="receiver-code-reveal"
+                        type="button"
+                        class="btn flex-none w-11 justify-center p-0"
+                        aria-label="Show pair code"
+                        data-i18n-attr="aria-label:settings.receiver.showCode">
+                        <IconEye aria-hidden="true" class="btn-icon" data-receiver-reveal-icon="show" />
+                        <IconEyeOff aria-hidden="true" class="btn-icon hidden" data-receiver-reveal-icon="hide" />
+                      </button>
+                      <button id="receiver-regenerate-btn" type="button" data-settings-item class="btn">
+                        <IconRefresh aria-hidden="true" class="btn-icon" />
+                        <span data-i18n="settings.receiver.regenerate">Regenerate code</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div data-settings-item class="settings-row settings-row--stack">
+                    <div class="settings-row__text">
+                      <h3 data-i18n="settings.receiver.pairedDevices" class="text-sm font-medium leading-snug">Paired devices</h3>
+                    </div>
+                    <div class="settings-row__control w-full flex-col items-stretch gap-1">
+                      <div id="receiver-paired-list" class="flex flex-col divide-y divide-line/60 rounded-xl border border-line bg-bg overflow-hidden"></div>
+                      <p id="receiver-no-devices" data-i18n="settings.receiver.noDevices" class="px-4 py-4 text-xs text-fg-3 hidden">No devices have paired yet. Pair one by choosing Play on TV on your phone or computer.</p>
+                    </div>
+                  </div>
+
+                  <button id="receiver-open-screen" type="button" data-settings-item class="btn-primary self-end">
+                    <IconExternalLink aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="settings.receiver.openScreen">Open receiver screen</span>
+                  </button>
+
+                </div>
+
+                <div data-settings-item class="settings-row mt-1 border-t border-line-soft pt-4">
+                  <div class="settings-row__text">
+                    <h3 data-i18n="settings.receiver.boot.title" class="text-sm font-medium leading-snug">Start on receiver screen</h3>
+                    <p data-i18n="settings.receiver.boot.helper" class="text-xs text-fg-3">
+                      Start the app on the pairing screen, like a dedicated receiver. Exit it anytime; it returns on the next launch.
+                    </p>
+                  </div>
+                  <div class="settings-row__control">
+                    <div
+                      id="receiver-boot-toggle"
+                      class="settings-seg"
+                      role="radiogroup"
+                      aria-label="Start on receiver screen"
+                      data-i18n-attr="aria-label:settings.receiver.boot.label">
+                      <button type="button" role="radio" data-receiver-boot="on"  aria-checked="false" data-i18n="settings.receiver.boot.on"  class="receiver-boot-btn btn">On</button>
+                      <button type="button" role="radio" data-receiver-boot="off" aria-checked="false" data-i18n="settings.receiver.boot.off" class="receiver-boot-btn btn">Off</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="settings-receiver-screensaver-hint" data-settings-item class="settings-row hidden">
+                  <div class="settings-row__text">
+                    <h3 data-i18n="settings.receiver.screensaver.title" class="text-sm font-medium leading-snug">Screensaver</h3>
+                    <p data-i18n="settings.receiver.screensaver.helper" class="text-xs text-fg-3">
+                      Select Extreme InfiniTV as the system screensaver to see artwork from your library while idle.
+                    </p>
+                  </div>
+                  <div class="settings-row__control">
+                    <button id="settings-receiver-screensaver-open" type="button" data-settings-item class="btn">
+                      <span data-i18n="settings.receiver.screensaver.open">Open screensaver settings</span>
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            </details>
+
+            <!-- Play on TV: desktop + Android, unhidden by play-on-tv-card.ts -->
+            <details id="card-play-on-tv" data-settings-item class="hidden group scroll-mt-6 lg:scroll-mt-20">
+              <summary class="settings-row cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+                <span class="settings-row__text">
+                  <h3 class="text-sm font-medium leading-snug">
+                    <IconCast aria-hidden="true" stroke={2} class="size-4 text-fg-3 inline-block align-[-2px] me-1.5" />
+                    <span data-i18n="settings.playOnTv.title">Play on TV</span>
+                    <span id="play-on-tv-live-badge" class="hidden ms-2 items-center gap-1.5 align-middle rounded-full bg-accent-soft px-2 py-0.5 text-2xs font-semibold text-accent">
+                      <span class="size-1.5 rounded-full bg-ok"></span>
+                      <span data-i18n="settings.playOnTv.badgeCasting">Casting</span>
+                    </span>
+                  </h3>
+                  <span id="play-on-tv-summary-helper" data-i18n="settings.playOnTv.helper" class="text-xs text-fg-3 line-clamp-1 block">
+                    Pair TVs on your network. While casting, play actions go to the TV.
+                  </span>
+                  <span id="play-on-tv-summary-status" class="hidden text-xs text-fg-3 line-clamp-1 block"></span>
+                </span>
+                <span class="settings-row__control">
+                  <IconChevronDown aria-hidden="true" stroke={2} class="size-4 text-fg-3 transition-transform group-open:rotate-180" />
+                </span>
+              </summary>
+              <div class="px-5 sm:px-6 pb-4 pt-1 flex flex-col gap-3">
+
+                <div id="play-on-tv-session" class="hidden items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent-soft px-4 py-3">
+                  <div class="flex flex-col min-w-0">
+                    <span id="play-on-tv-session-line" class="text-sm font-medium truncate"></span>
+                    <span id="play-on-tv-session-title" class="text-xs text-fg-3 truncate"></span>
+                  </div>
+                  <button id="play-on-tv-stop" type="button" class="btn flex-none" data-i18n="settings.playOnTv.stopCasting">Stop casting</button>
+                </div>
+
+                <div data-settings-item class="settings-row settings-row--stack">
+                  <div class="settings-row__text">
+                    <h3 data-i18n="settings.playOnTv.devices" class="text-sm font-medium leading-snug">Paired TVs</h3>
+                  </div>
+                  <div class="settings-row__control w-full flex-col items-stretch gap-1">
+                    <div id="play-on-tv-list" class="flex flex-col divide-y divide-line/60 rounded-xl border border-line bg-bg overflow-hidden"></div>
+                    <p id="play-on-tv-empty" data-i18n="settings.playOnTv.noDevices" class="px-4 py-4 text-xs text-fg-3 hidden">No TVs paired yet. On the TV, open Settings, TV receiver and allow casting, then add it here.</p>
+                  </div>
+                </div>
+
+                <button id="play-on-tv-add" type="button" data-settings-item class="btn-primary self-end">
+                  <IconPlus aria-hidden="true" class="btn-icon" />
+                  <span data-i18n="settings.playOnTv.addDevice">Add a TV</span>
+                </button>
+
+              </div>
+            </details>
+
+          </div>
+        </div>
+
         <!-- Surface: TMDb metadata enrichment -->
         <div id="card-tmdb" data-settings-item class="settings-surface icon-mark-host scroll-mt-6 lg:scroll-mt-20">
           <div class="settings-surface__header">
             <span class="icon-mark">
               <IconMovie aria-hidden="true" stroke={2} />
             </span>
-            <h3 data-i18n="settings.tmdb.title" class="text-base font-semibold">TMDb metadata</h3>
+            <h3 data-i18n="settings.tmdb.title" class="text-base font-semibold">Metadata enrichment</h3>
           </div>
           <p data-i18n="settings.tmdb.helper" class="settings-surface__helper text-xs text-fg-3">
-            Enrich movies and series with better posters, cast, trailers, and similar titles from The Movie Database.
+            TheTVDB works out of the box for posters, cast, and episode details. Add a TMDb key to also unlock trailers and similar titles.
           </p>
           <div class="settings-rows">
+
+            <!-- TheTVDB enrichment: separate service, so it gets its own opt-out. -->
+            <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.tvdb.enable" class="text-sm font-medium leading-snug">TheTVDB metadata</h3>
+                <p data-i18n="settings.tmdb.tvdbPrivacy" class="text-xs text-fg-3">
+                  Titles you open are sent to TheTVDB through our proxy to look up artwork and episode details. No account or key is needed.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-tvdb-enabled"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="TheTVDB metadata"
+                  data-i18n-attr="aria-label:settings.tvdb.enable">
+                  <button type="button" data-tvdb="on"  aria-pressed="false" data-i18n="settings.tmdb.on"  class="tvdb-enabled-btn btn">On</button>
+                  <button type="button" data-tvdb="off" aria-pressed="false" data-i18n="settings.tmdb.off" class="tvdb-enabled-btn btn">Off</button>
+                </div>
+              </div>
+              <script is:inline>
+                try {
+                  var tvdbEnabledRaw = localStorage.getItem("xt_tvdb_enabled");
+                  var tvdbEnabledOn = tvdbEnabledRaw !== "0";
+                  var tvdbEnabledGroup = document.getElementById("settings-tvdb-enabled");
+                  if (tvdbEnabledGroup) {
+                    var tvdbEnabledBtns = tvdbEnabledGroup.querySelectorAll(".tvdb-enabled-btn");
+                    for (var vIdx = 0; vIdx < tvdbEnabledBtns.length; vIdx++) {
+                      var tvdbEnabledBtnOn = tvdbEnabledBtns[vIdx].getAttribute("data-tvdb") === "on";
+                      tvdbEnabledBtns[vIdx].setAttribute("aria-pressed", tvdbEnabledBtnOn === tvdbEnabledOn ? "true" : "false");
+                    }
+                  }
+                } catch (e) {}
+              </script>
+            </div>
 
             <!-- Enable enrichment -->
             <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
               <div class="settings-row__text">
                 <h3 data-i18n="settings.tmdb.enable" class="text-sm font-medium leading-snug">Enable enrichment</h3>
                 <p data-i18n="settings.tmdb.privacy" class="text-xs text-fg-3">
-                  When enabled, the titles you open are sent to TMDB for matching.
+                  Optional: adds trailers, cast, and similar titles once you add a TMDB key below. Titles you open are sent to TMDB for matching.
                 </p>
               </div>
               <div class="settings-row__control">
@@ -1093,7 +1381,7 @@ const navStructure: NavSection[] = [
               <script is:inline>
                 try {
                   var tmdbEnabledRaw = localStorage.getItem("xt_tmdb_enabled");
-                  var tmdbEnabledOn = tmdbEnabledRaw === "1";
+                  var tmdbEnabledOn = tmdbEnabledRaw !== "0";
                   var tmdbEnabledGroup = document.getElementById("settings-tmdb-enabled");
                   if (tmdbEnabledGroup) {
                     var tmdbEnabledBtns = tmdbEnabledGroup.querySelectorAll(".tmdb-enabled-btn");
@@ -1245,6 +1533,28 @@ const navStructure: NavSection[] = [
           </summary>
           <div class="px-5 sm:px-6 pb-5 sm:pb-6 pt-1">
             <HiddenCategoriesEditor client:load />
+          </div>
+        </details>
+
+        <!-- Channel overrides (rename / logo / number / hidden) -->
+        <details id="card-channel-overrides" data-settings-item class="settings-surface icon-mark-host group scroll-mt-6 lg:scroll-mt-20">
+          <summary class="settings-surface__header flex-wrap pb-5 sm:pb-6 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
+            <span class="flex items-center gap-3 min-w-0 w-full">
+              <span class="icon-mark">
+                <IconPencil aria-hidden="true" stroke={2} />
+              </span>
+              <h3 data-i18n="settings.channelOverrides.title" class="text-base font-semibold">Channel edits</h3>
+              <span class="ms-auto shrink-0">
+                <IconChevronDown aria-hidden="true" stroke={2} class="size-4 text-fg-3 transition-transform group-open:rotate-180" />
+              </span>
+            </span>
+            <span data-i18n="settings.channelOverrides.helperLong" class="text-xs text-fg-3 block mt-1.5">
+              Custom names, logos and numbers you set from a channel's right-click menu on Live TV,
+              plus the channels you hid. Provider data is never changed, so any edit can be reset.
+            </span>
+          </summary>
+          <div class="px-5 sm:px-6 pb-5 sm:pb-6 pt-1">
+            <ChannelOverridesEditor client:load />
           </div>
         </details>
 
@@ -1805,6 +2115,29 @@ const navStructure: NavSection[] = [
               <p data-i18n="settings.licenses.uiNotice" class="text-xs text-fg-3">App framework and icon set.</p>
             </div>
 
+            <!-- Metadata attribution: wording is required by each provider's terms. -->
+            <div class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">TheTVDB</span>
+                <span data-i18n="settings.licenses.metadataTag" class="text-2xs uppercase tracking-wide text-fg-3 shrink-0 ms-3">Metadata</span>
+              </div>
+              <p class="text-xs text-fg-3">
+                Metadata provided by <a href="https://www.thetvdb.com/" data-external class="underline hover:text-fg">TheTVDB</a>.
+                Please consider <a href="https://www.thetvdb.com/subscribe" data-external class="underline hover:text-fg">adding missing information or subscribing</a>.
+              </p>
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <div class="flex items-baseline justify-between">
+                <span class="text-sm font-medium text-fg">TMDB</span>
+                <span data-i18n="settings.licenses.metadataTag" class="text-2xs uppercase tracking-wide text-fg-3 shrink-0 ms-3">Metadata</span>
+              </div>
+              <p class="text-xs text-fg-3">
+                This application uses <a href="https://www.themoviedb.org/" data-external class="underline hover:text-fg">TMDB</a>
+                and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.
+              </p>
+            </div>
+
           </div>
         </details>
       </div>
@@ -1884,6 +2217,26 @@ const navStructure: NavSection[] = [
               Usernames, passwords and tokens are stripped out. Server names can still appear, so review the file before posting it publicly.
             </p>
             <span id="settings-export-diagnostics-msg" aria-live="polite" class="text-xs text-fg-3 break-all transition-opacity duration-300 empty:hidden mt-1 block"></span>
+          </div>
+
+          <div data-settings-item class="settings-row mt-1 border-t border-line-soft pt-4">
+            <div class="settings-row__text">
+              <h3 data-i18n="settings.help.discordTitle" class="text-sm font-medium leading-snug">Discord community</h3>
+              <p data-i18n="settings.help.discordHelper" class="text-xs text-fg-3">
+                Questions, feedback, and beta chat - come say hi.
+              </p>
+            </div>
+            <div class="settings-row__control">
+              <a
+                href="https://discord.gg/GH5V3AkzfA"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-external
+                class="btn justify-center">
+                <IconBrandDiscord aria-hidden="true" class="btn-icon" />
+                <span data-i18n="settings.help.discordJoin">Join</span>
+              </a>
+            </div>
           </div>
         </div>
 
@@ -2166,6 +2519,8 @@ const navStructure: NavSection[] = [
       setTmdbApiKey,
       getTmdbEnabled,
       setTmdbEnabled,
+      getTvdbEnabled,
+      setTvdbEnabled,
     } from "@/scripts/lib/app-settings.js"
     import { validateTmdbKey } from "@/scripts/lib/tmdb.ts"
     import { bindExternalLinks } from "@/scripts/lib/external-link.js"
@@ -2457,8 +2812,11 @@ const navStructure: NavSection[] = [
       successTimers.set(btn, timer)
     }
 
+    let playlistsRenderGeneration = 0
+
     async function renderPlaylists() {
       if (!playlistsEl) return
+      const generation = ++playlistsRenderGeneration
       const [entries, active] = await Promise.all([
         getEntries(),
         getActiveEntry(),
@@ -2470,29 +2828,36 @@ const navStructure: NavSection[] = [
         return
       }
 
-      await Promise.all(
-        entries.flatMap((e) => [
-          hydrateCache(e._id, "live"),
-          hydrateCache(e._id, "m3u"),
-          hydrateCache(e._id, "vod"),
-          hydrateCache(e._id, "series"),
-        ])
-      )
-
-      const frag = document.createDocumentFragment()
-      for (const e of entries) {
-        frag.appendChild(
-          renderPlaylistRow({
-            entry: e,
-            isActive: active?._id === e._id,
-            density: "full",
-          })
-        )
+      const buildRows = () => {
+        const frag = document.createDocumentFragment()
+        for (const entry of entries) {
+          frag.appendChild(
+            renderPlaylistRow({
+              entry,
+              isActive: active?._id === entry._id,
+              density: "full",
+            })
+          )
+        }
+        playlistsEl.replaceChildren(frag)
       }
-      playlistsEl.replaceChildren(frag)
+
+      // Rows paint from memory immediately; hydration only refreshes counts.
+      buildRows()
 
       if (active) refreshBtn?.classList.remove("hidden")
       else refreshBtn?.classList.add("hidden")
+
+      void Promise.allSettled(
+        entries.flatMap((entry) => [
+          hydrateCache(entry._id, "live"),
+          hydrateCache(entry._id, "m3u"),
+          hydrateCache(entry._id, "vod"),
+          hydrateCache(entry._id, "series"),
+        ])
+      ).then(() => {
+        if (generation === playlistsRenderGeneration) buildRows()
+      })
     }
 
     async function syncCache() {
@@ -3967,11 +4332,21 @@ const navStructure: NavSection[] = [
           }
         }
       } catch (e) {
-        log.error("Pick folder failed:", e)
-        toastError(t("settings.toast.pickFolderFail"), {
-          description: (e && e.message) || String(e) || "See console.",
-          duration: 7000,
-        })
+        if (e && e.name === "NoDirectoryPickerError") {
+          // Nothing to pick with, but the public Downloads folder still works.
+          if (dirPickBtn) dirPickBtn.disabled = true
+          toast({
+            title: t("settings.toast.noFolderPicker"),
+            description: t("settings.toast.noFolderPickerHint"),
+            duration: 7000,
+          })
+        } else {
+          log.error("Pick folder failed:", e)
+          toastError(t("settings.toast.pickFolderFail"), {
+            description: (e && e.message) || String(e) || "See console.",
+            duration: 7000,
+          })
+        }
       } finally {
         setLoading(dirPickBtn, false)
       }
@@ -4201,43 +4576,54 @@ const navStructure: NavSection[] = [
       isTauri &&
       /Linux/i.test(navigator.userAgent || "") &&
       !/Android/i.test(navigator.userAgent || "")
-    const storeBuild = await isStoreBuild()
     const playStoreInstall = isPlayStoreInstall()
     // Snap/Flatpak: store owns updates, same as MS Store.
     const sandboxed = isLinuxDesktop ? sandboxRuntimeSync() : null
-    const noInAppUpdate = storeBuild || !!sandboxed
-    // Linux falls back to the GitHub check below if `check()` throws (non-AppImage installs).
-    const canUseTauriUpdater = (isWindowsDesktop && !storeBuild) || (isLinuxDesktop && !sandboxed)
+    // Resolved below; checkViaGithub/checkForUpdates close over these.
+    let storeBuild = false
+    let canUseTauriUpdater = false
 
     if (updateChannelSelectEl) updateChannelSelectEl.value = getUpdateChannel()
-    if (noInAppUpdate) updateChannelRowEl?.setAttribute("hidden", "")
-
     if (autoUpdateSelectEl) autoUpdateSelectEl.value = getAutoUpdateEnabled() ? "on" : "off"
-    if (!canUseTauriUpdater) autoUpdateRowEl?.setAttribute("hidden", "")
 
     if (updateCurrentEl) {
-      try {
-        const { getVersion } = await import("@tauri-apps/api/app")
-        updateCurrentEl.textContent = await getVersion()
-      } catch {
-        const tag = document.querySelector(
-          'meta[name="x-app-version"]'
-        )?.getAttribute("content")
-        updateCurrentEl.textContent = tag || "-"
-      }
+      import("@tauri-apps/api/app")
+        .then(({ getVersion }) => getVersion())
+        .then((version) => {
+          updateCurrentEl.textContent = version
+        })
+        .catch(() => {
+          const tag = document.querySelector(
+            'meta[name="x-app-version"]'
+          )?.getAttribute("content")
+          updateCurrentEl.textContent = tag || "-"
+        })
     }
 
-    if (!canUseTauriUpdater) {
-      updateManualOnlyEl?.removeAttribute("hidden")
-      // data-i18n stays in sync with locale changes; textContent updates it immediately.
-      if (updateGetLabelEl && storeBuild) {
-        updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromStore")
-        updateGetLabelEl.textContent = t("settings.update.getFromStore")
-      } else if (updateGetLabelEl && playStoreInstall) {
-        updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromPlay")
-        updateGetLabelEl.textContent = t("settings.update.getFromPlay")
+    // Off the top-level await chain: a stuck isStoreBuild() IPC must not block this script.
+    const updaterConfigReady = (async () => {
+      storeBuild = await isStoreBuild()
+      const noInAppUpdate = storeBuild || !!sandboxed
+      // Linux falls back to the GitHub check below if `check()` throws (non-AppImage installs).
+      canUseTauriUpdater = (isWindowsDesktop && !storeBuild) || (isLinuxDesktop && !sandboxed)
+
+      if (noInAppUpdate) updateChannelRowEl?.setAttribute("hidden", "")
+      if (!canUseTauriUpdater) autoUpdateRowEl?.setAttribute("hidden", "")
+
+      if (!canUseTauriUpdater) {
+        updateManualOnlyEl?.removeAttribute("hidden")
+        // data-i18n stays in sync with locale changes; textContent updates it immediately.
+        if (updateGetLabelEl && storeBuild) {
+          updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromStore")
+          updateGetLabelEl.textContent = t("settings.update.getFromStore")
+        } else if (updateGetLabelEl && playStoreInstall) {
+          updateGetLabelEl.setAttribute("data-i18n", "settings.update.getFromPlay")
+          updateGetLabelEl.textContent = t("settings.update.getFromPlay")
+        }
       }
-    }
+
+      checkForUpdates()
+    })().catch(() => {})
 
     let pendingUpdate = null
     // "plugin": pendingUpdate is a @tauri-apps/plugin-updater Update object.
@@ -4420,6 +4806,8 @@ const navStructure: NavSection[] = [
     }
 
     async function checkForUpdates() {
+      // Give the store-build detection a moment; degrades to the GitHub path if it's still stuck.
+      await Promise.race([updaterConfigReady, new Promise((resolve) => setTimeout(resolve, 2000))])
       if (updateMsgEl) updateMsgEl.textContent = t("settings.update.checking")
       setUpdateState("checking")
       updateCheckBtn?.setAttribute("disabled", "")
@@ -4580,8 +4968,6 @@ const navStructure: NavSection[] = [
       setAutoUpdateEnabled(autoUpdateSelectEl.value === "on")
     })
 
-    checkForUpdates()
-
     // -------------------------------------------------------------------
     // Discord Rich Presence
     // -------------------------------------------------------------------
@@ -4704,6 +5090,25 @@ const navStructure: NavSection[] = [
       if (!btn) return
       setTmdbEnabled(btn.getAttribute("data-tmdb") === "on")
       syncTmdbEnabled()
+    })
+
+    const tvdbEnabledGroup = document.getElementById("settings-tvdb-enabled")
+
+    function syncTvdbEnabled() {
+      if (!tvdbEnabledGroup) return
+      const enabled = getTvdbEnabled()
+      for (const btn of tvdbEnabledGroup.querySelectorAll(".tvdb-enabled-btn")) {
+        const isOn = btn.getAttribute("data-tvdb") === "on"
+        btn.setAttribute("aria-pressed", isOn === enabled ? "true" : "false")
+      }
+    }
+    syncTvdbEnabled()
+
+    tvdbEnabledGroup?.addEventListener("click", (event) => {
+      const btn = /** @type {HTMLElement} */ (event.target).closest(".tvdb-enabled-btn")
+      if (!btn) return
+      setTvdbEnabled(btn.getAttribute("data-tvdb") === "on")
+      syncTvdbEnabled()
     })
 
     function syncTmdbTestDisabled() {
@@ -5307,6 +5712,22 @@ const navStructure: NavSection[] = [
         window.setTimeout(release, SAFETY_MS)
       }
 
+      // D-pad activation leaves focus in the nav rail otherwise, so the next
+      // press yanks the page back before the user can act on the section.
+      function focusScrolledTarget(target: HTMLElement, event: Event) {
+        const detail = (event as MouseEvent).detail ?? 0
+        if (detail !== 0 && document.documentElement.dataset.tv !== "1") return
+        const focusable = target.querySelector<HTMLElement>(
+          "a, button, input, select, textarea, [tabindex]:not([tabindex='-1'])"
+        )
+        if (focusable) {
+          focusable.focus({ preventScroll: true })
+          return
+        }
+        target.setAttribute("tabindex", "-1")
+        target.focus({ preventScroll: true })
+      }
+
       for (const link of links) {
         link.addEventListener("click", (event) => {
           const targetId = link.getAttribute("href")?.replace("#", "")
@@ -5322,6 +5743,7 @@ const navStructure: NavSection[] = [
           setActiveCard(firstCard?.id ?? "")
           writeHash(targetId)
           target.scrollIntoView({ behavior: "smooth", block: "start" })
+          focusScrolledTarget(target, event)
           armScrollUnlock()
         })
       }
@@ -5345,6 +5767,7 @@ const navStructure: NavSection[] = [
           if (cardEl instanceof HTMLDetailsElement) cardEl.open = true
           writeHash(cardId)
           cardEl.scrollIntoView({ behavior: "smooth", block: "start" })
+          focusScrolledTarget(cardEl, event)
           armScrollUnlock()
         })
       }
@@ -5386,5 +5809,13 @@ const navStructure: NavSection[] = [
 
   <script>
     import "@/scripts/settings/settings_search.ts"
+  </script>
+
+  <script>
+    import "@/scripts/settings/receiver-card.ts"
+  </script>
+
+  <script>
+    import "@/scripts/settings/play-on-tv-card.ts"
   </script>
 </Layout>

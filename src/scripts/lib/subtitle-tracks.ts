@@ -3,6 +3,8 @@ import { log } from "@/scripts/lib/log.js"
 import { t, getActiveLocale } from "@/scripts/lib/i18n.js"
 import { getCaptionsAutoEnabled } from "@/scripts/lib/app-settings.js"
 import { toastError } from "@/scripts/lib/toast.js"
+import { escapeHtml } from "@/scripts/lib/format.js"
+import { ICON_BADGE_CC } from "@/scripts/lib/icons.js"
 import {
   isMp4SubtitleCapableUrl,
   openMp4SubtitleSession,
@@ -481,6 +483,166 @@ export function createVideoJsTrackRegistrar(player: any): SubtitleRegistrar {
     },
     trackListTarget() {
       return (player.textTracks?.() ?? null) as EventTarget | null
+    },
+  }
+}
+
+export interface EmbeddedHlsSubtitleTrack {
+  id: string
+  label: string
+  active: boolean
+}
+
+export interface HlsSubtitleSource {
+  list(): EmbeddedHlsSubtitleTrack[]
+  /** null selects "Off" (hls.subtitleTrack = -1). */
+  select(id: string | null): void
+  subscribe(listener: () => void): () => void
+  dispose(): void
+}
+
+function hlsSubtitleTrackLabel(track: any, index: number): string {
+  const name = typeof track?.name === "string" ? track.name.trim() : ""
+  if (name) return name
+  const language = typeof track?.lang === "string" ? track.lang.trim() : ""
+  return language || `${t("player.subtitles")} ${index + 1}`
+}
+
+/** hls.js emits DEFAULT=YES manifest renditions with subtitleTrack >= 0; subtitleDisplay:false keeps them hidden until picked here. */
+export function createHlsSubtitleSource(hls: any): HlsSubtitleSource {
+  const listeners = new Set<() => void>()
+
+  function rawTracks(): any[] {
+    return hls.subtitleTracks ?? []
+  }
+
+  function activeId(): string | null {
+    if (!hls.subtitleDisplay || hls.subtitleTrack < 0) return null
+    const track = rawTracks()[hls.subtitleTrack]
+    return track ? String(track.id ?? hls.subtitleTrack) : null
+  }
+
+  function notify(): void {
+    for (const listener of listeners) listener()
+  }
+
+  hls.on("hlsSubtitleTracksUpdated", notify)
+  hls.on("hlsSubtitleTrackSwitch", notify)
+
+  return {
+    list() {
+      const currentActiveId = activeId()
+      return rawTracks().map((track, index) => {
+        const id = String(track.id ?? index)
+        return { id, label: hlsSubtitleTrackLabel(track, index), active: id === currentActiveId }
+      })
+    },
+    select(id) {
+      try {
+        if (id === null) {
+          hls.subtitleTrack = -1
+          hls.subtitleDisplay = false
+          return
+        }
+        const index = rawTracks().findIndex((track, trackIndex) => String(track.id ?? trackIndex) === id)
+        if (index < 0) return
+        hls.subtitleTrack = index
+        hls.subtitleDisplay = true
+      } catch {}
+    },
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    dispose() {
+      hls.off("hlsSubtitleTracksUpdated", notify)
+      hls.off("hlsSubtitleTrackSwitch", notify)
+      listeners.clear()
+    },
+  }
+}
+
+export function attachArtplayerHlsSubtitleControl(
+  art: any,
+  translate: (key: string) => string,
+): { setSource(source: HlsSubtitleSource | null): void; dispose(): void } {
+  let activeSource: HlsSubtitleSource | null = null
+  let unsubscribe: (() => void) | null = null
+  let readyHandlerBound = false
+
+  const controlIcon = ICON_BADGE_CC.replace(
+    "<svg ",
+    '<svg style="fill:none;width:22px;height:22px" ',
+  ).replace('aria-hidden="true"', `role="img" aria-label="${escapeHtml(translate("player.subtitles"))}"`)
+
+  function removeControl(): void {
+    try { art.controls.remove("xtSubtitles") } catch {}
+  }
+
+  function addControl(): void {
+    const tracks = activeSource?.list() ?? []
+    if (!tracks.length) return
+    const hasActiveTrack = tracks.some((track) => track.active)
+    try {
+      art.controls.add({
+        name: "xtSubtitles",
+        position: "right",
+        index: 5,
+        html: controlIcon,
+        selector: [
+          { html: escapeHtml(translate("player.subtitles.off")), value: null, default: !hasActiveTrack },
+          ...tracks.map((track) => ({
+            html: escapeHtml(track.label),
+            value: track.id,
+            default: track.active,
+          })),
+        ],
+        onSelect(item: { html: string; value: unknown }) {
+          activeSource?.select(typeof item.value === "string" ? item.value : null)
+          return item.html
+        },
+      })
+    } catch {}
+  }
+
+  function rebuild(): void {
+    removeControl()
+    const tracks = activeSource?.list() ?? []
+    if (!tracks.length) return
+    if (art.isReady) {
+      addControl()
+      return
+    }
+    if (readyHandlerBound) return
+    readyHandlerBound = true
+    art.on("ready", addControl)
+  }
+
+  return {
+    setSource(source) {
+      unsubscribe?.()
+      unsubscribe = null
+      const previousSource = activeSource
+      activeSource = source
+      if (previousSource && previousSource !== source) {
+        try { previousSource.dispose() } catch {}
+      }
+      if (!source) {
+        removeControl()
+        return
+      }
+      rebuild()
+      unsubscribe = source.subscribe(rebuild)
+    },
+    dispose() {
+      unsubscribe?.()
+      unsubscribe = null
+      const previousSource = activeSource
+      activeSource = null
+      if (previousSource) {
+        try { previousSource.dispose() } catch {}
+      }
+      removeControl()
     },
   }
 }

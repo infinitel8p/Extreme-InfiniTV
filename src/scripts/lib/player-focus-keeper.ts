@@ -40,6 +40,10 @@ export function attachPlayerFocusKeeper(vjs: VjsLike | null | undefined): () => 
         vjs.userActive(true)
     }
 
+    const wakeControlBar = () => {
+        playerEl.dispatchEvent(new Event("mousemove", { bubbles: true }))
+    }
+
     // Video.js stopPropagation()s every non-Tab keydown, so the spatial-nav
     // polyfill's window-level listener never sees arrows once focus is in
     // the player. Capture phase runs before video.js gets the event.
@@ -57,9 +61,31 @@ export function attachPlayerFocusKeeper(vjs: VjsLike | null | undefined): () => 
         }
     }
 
+    // In fullscreen the polyfill's window listener still fires, but video.js's
+    // control bar stays hidden unless something resets its user-activity timer.
+    const onFullscreenKeydown = (e: KeyboardEvent) => {
+        if (!document.fullscreenElement?.contains(playerEl)) return
+        if (!ARROW_DIRECTIONS[e.key] && e.key !== "Enter") return
+        wakeControlBar()
+    }
+
+    // The first D-pad press after entering fullscreen can land on page chrome
+    // hidden under the fullscreen top layer; pull focus into the player instead.
+    const onDocumentFullscreenChange = () => {
+        const fullscreenEl = document.fullscreenElement
+        if (!fullscreenEl || !fullscreenEl.contains(playerEl)) return
+        if (playerEl.contains(document.activeElement)) return
+        const target =
+            playerEl.querySelector<HTMLElement>(".vjs-control-bar button") || playerEl
+        target.focus({ preventScroll: true })
+        wakeControlBar()
+    }
+
     playerEl.addEventListener("focusin", onFocusIn)
     playerEl.addEventListener("focusout", onFocusOut as EventListener)
     playerEl.addEventListener("keydown", onArrowCapture as EventListener, true)
+    window.addEventListener("keydown", onFullscreenKeydown, true)
+    document.addEventListener("fullscreenchange", onDocumentFullscreenChange)
     vjs.on("fullscreenchange", onFullscreenChange)
 
     return () => {
@@ -67,6 +93,8 @@ export function attachPlayerFocusKeeper(vjs: VjsLike | null | undefined): () => 
         playerEl.removeEventListener("focusin", onFocusIn)
         playerEl.removeEventListener("focusout", onFocusOut as EventListener)
         playerEl.removeEventListener("keydown", onArrowCapture as EventListener, true)
+        window.removeEventListener("keydown", onFullscreenKeydown, true)
+        document.removeEventListener("fullscreenchange", onDocumentFullscreenChange)
         try { vjs.off("fullscreenchange", onFullscreenChange) } catch {}
     }
 }

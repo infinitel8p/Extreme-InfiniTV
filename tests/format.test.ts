@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest"
-import { formatBehindLive, formatPaddedHms, parseHmsToSeconds, ratingSortValue } from "../src/scripts/lib/format"
+import {
+  formatBehindLive,
+  formatElapsedSinceStart,
+  formatPaddedHms,
+  parseHmsToSeconds,
+  ratingSortValue,
+} from "../src/scripts/lib/format"
 
 describe("formatBehindLive", () => {
   it("renders zero as 0:00", () => {
@@ -39,6 +45,24 @@ describe("formatPaddedHms", () => {
   it("clamps negative or non-finite totals to 00:00", () => {
     expect(formatPaddedHms(-5)).toBe("00:00")
     expect(formatPaddedHms(NaN)).toBe("00:00")
+  })
+})
+
+describe("formatElapsedSinceStart", () => {
+  it("renders seconds under a minute", () => {
+    expect(formatElapsedSinceStart(0, 45_000)).toBe("0:45")
+  })
+
+  it("renders minutes and seconds under an hour", () => {
+    expect(formatElapsedSinceStart(0, 754_000)).toBe("12:34")
+  })
+
+  it("renders hours, minutes, and seconds from an hour up", () => {
+    expect(formatElapsedSinceStart(0, 3_723_000)).toBe("1:02:03")
+  })
+
+  it("clamps a negative delta (clock skew) to 0:00", () => {
+    expect(formatElapsedSinceStart(10_000, 0)).toBe("0:00")
   })
 })
 

@@ -355,7 +355,7 @@ async function onSourceChange(): Promise<void> {
     return
   }
   try {
-    const channels = await ensureLive(entryToCreds(sourceEntry), sourceEntry._id)
+    const channels = await ensureLive(entryToCreds(sourceEntry), sourceEntry._id, { includeHidden: true })
     if (selectedSourceEntryId !== requestedSourceEntryId) return
     allSourceChannels = channels || []
   } catch (err) {

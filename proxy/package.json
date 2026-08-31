@@ -1,0 +1,11 @@
+{
+  "name": "xt-tvdb-proxy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "check": "wrangler types && tsc --noEmit && wrangler deploy --dry-run --outdir=.wrangler/dry-run"
+  }
+}

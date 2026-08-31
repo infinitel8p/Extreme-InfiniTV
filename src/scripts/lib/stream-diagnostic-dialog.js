@@ -77,7 +77,7 @@ function ensureDialog() {
         <button
           data-role="rerun"
           type="button"
-          class="btn ml-auto">
+          class="btn ms-auto">
           ${escapeHtml(t("streamTest.runAgain"))}
         </button>
       </footer>

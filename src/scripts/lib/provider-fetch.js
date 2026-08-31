@@ -28,13 +28,62 @@ async function getTauriFetch() {
   return tauriFetchPromise
 }
 
-async function nativeFetch(url, init, u, callerSignal) {
+// tauri-plugin-http reports an abort as a plain Error, without the name retry.ts and
+// provider-error.js key on, so an abort would read as a network fault on the desktop transport.
+const PLUGIN_ABORT_MESSAGES = [/request canceled/i, /resource id \d+ is invalid/i]
+
+export function isAbortLikeError(error, signal) {
+  if (!error) return false
+  const name = error.name || ""
+  if (name === "AbortError" || name === "TimeoutError") return true
+  if (!signal?.aborted) return false
+  const message = String(error.message || error)
+  return PLUGIN_ABORT_MESSAGES.some((pattern) => pattern.test(message))
+}
+
+function timeoutReason() {
+  if (typeof DOMException === "undefined") return new Error("The operation timed out.")
+  return new DOMException("The operation timed out.", "TimeoutError")
+}
+
+// plugin-http cancels the Rust body from its own abort listener without catching the invoke, so our
+// request timeout firing after a drained body rejects for a resource id Rust had already freed.
+const PLUGIN_FREED_RESOURCE = /^the resource id \d+ is invalid\.?$/i
+
+export function isPluginCleanupNoise(reason) {
+  const message = typeof reason === "string" ? reason : String(reason?.message ?? "")
+  return PLUGIN_FREED_RESOURCE.test(message.trim())
+}
+
+let cleanupNoiseFilterInstalled = false
+function installCleanupNoiseFilter() {
+  if (cleanupNoiseFilterInstalled || !isTauri || typeof window === "undefined") return
+  cleanupNoiseFilterInstalled = true
+  window.addEventListener("unhandledrejection", (event) => {
+    if (!isPluginCleanupNoise(event.reason)) return
+    event.preventDefault()
+    log.log("[xt:net] ignored plugin-http cleanup rejection:", String(event.reason?.message || event.reason))
+  })
+}
+installCleanupNoiseFilter()
+
+function asAbortError(error, signal) {
+  if (typeof DOMException === "undefined") return error
+  if (error instanceof DOMException) return error
+  const timedOut = signal?.reason?.name === "TimeoutError"
+  return new DOMException(
+    timedOut ? "The operation timed out." : "The operation was aborted.",
+    timedOut ? "TimeoutError" : "AbortError"
+  )
+}
+
+async function nativeFetch(url, init, u, abortSignal) {
   try {
     const r = await fetch(url, init)
     log.log(`[xt:net] native ok ${r.status}`, u)
     return r
   } catch (e) {
-    if (!callerSignal?.aborted) {
+    if (!abortSignal?.aborted) {
       log.error("[xt:net] native fetch failed", { url: u, error: e })
     }
     throw e
@@ -153,22 +202,28 @@ export async function providerFetch(url, init = {}) {
       callInit.signal = AbortSignal.timeout(timeoutMs)
     } else if (typeof AbortController !== "undefined") {
       const controller = new AbortController()
-      setTimeout(() => controller.abort(), timeoutMs)
+      // Reason must name the timeout, so this path classifies like AbortSignal.timeout's does.
+      setTimeout(() => controller.abort(timeoutReason()), timeoutMs)
       callInit.signal = controller.signal
     }
   }
+  // Our own timeout aborts as hard as the caller's; every abort check below must see both.
+  const abortSignal = callerSignal || callInit.signal
 
   const useTauri = isTauri
 
   if (!useTauri) {
     log.log(`[xt:net] native start`, u)
     try {
-      const r = await nativeFetch(requestUrl, callInit, u, callerSignal)
+      const r = await nativeFetch(requestUrl, callInit, u, abortSignal)
       noteSuccess(r.status, context)
       return r
     } catch (e) {
-      if (!callerSignal?.aborted) noteFailure(e, context)
-      else noteAborted(context)
+      if (isAbortLikeError(e, abortSignal)) {
+        noteAborted(context)
+        throw asAbortError(e, abortSignal)
+      }
+      noteFailure(e, context)
       throw e
     }
   }
@@ -177,12 +232,15 @@ export async function providerFetch(url, init = {}) {
   if (!tauriFetch) {
     log.log(`[xt:net] native start (no plugin-http)`, u)
     try {
-      const r = await nativeFetch(requestUrl, callInit, u, callerSignal)
+      const r = await nativeFetch(requestUrl, callInit, u, abortSignal)
       noteSuccess(r.status, context)
       return r
     } catch (e) {
-      if (!callerSignal?.aborted) noteFailure(e, context)
-      else noteAborted(context)
+      if (isAbortLikeError(e, abortSignal)) {
+        noteAborted(context)
+        throw asAbortError(e, abortSignal)
+      }
+      noteFailure(e, context)
       throw e
     }
   }
@@ -198,9 +256,10 @@ export async function providerFetch(url, init = {}) {
     noteSuccess(r.status, context)
     return r
   } catch (e) {
-    if (callerSignal?.aborted) {
+    // An abort is final: a native retry on an already-dead signal cannot succeed.
+    if (isAbortLikeError(e, abortSignal)) {
       noteAborted(context)
-      throw e
+      throw asAbortError(e, abortSignal)
     }
     context.transport = "tauri-fallback"
     log.warn(
@@ -208,12 +267,15 @@ export async function providerFetch(url, init = {}) {
       String(e?.message || e)
     )
     try {
-      const r = await nativeFetch(requestUrl, callInit, u, callerSignal)
+      const r = await nativeFetch(requestUrl, callInit, u, abortSignal)
       noteSuccess(r.status, context)
       return r
     } catch (e2) {
-      if (!callerSignal?.aborted) noteFailure(e2, context)
-      else noteAborted(context)
+      if (isAbortLikeError(e2, abortSignal)) {
+        noteAborted(context)
+        throw asAbortError(e2, abortSignal)
+      }
+      noteFailure(e2, context)
       throw e2
     }
   }

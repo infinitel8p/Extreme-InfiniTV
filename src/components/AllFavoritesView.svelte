@@ -12,6 +12,7 @@
     setFavoriteMeta,
   } from "@/scripts/lib/preferences.js"
   import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js"
+  import { readCachedLiveChannels, hasCachedLiveChannels } from "@/scripts/lib/live-catalog.ts"
   import { kindLabel, isKindFallbackName, KIND_ICON_SVG } from "@/scripts/lib/kinds.js"
   import { cachedImg } from "@/scripts/lib/img-cache.ts"
 
@@ -55,10 +56,13 @@
     return `/series/detail?id=${encodeURIComponent(id)}`
   }
 
+  let reloadGeneration = 0
+
   async function reload() {
+    const generation = ++reloadGeneration
     await ensurePrefsLoaded()
-    const allEntries = await getEntries()
-    const active = await getActiveEntry()
+    const [allEntries, active] = await Promise.all([getEntries(), getActiveEntry()])
+    if (generation !== reloadGeneration) return
     activePlaylistId = active?._id || ""
     playlists = allEntries.map((entry) => ({
       id: entry._id,
@@ -73,83 +77,151 @@
       if (row.kind === "live") kinds.add("m3u")
       needed.set(row.playlistId, kinds)
     }
-    await Promise.all(
-      [...needed].flatMap(([playlistId, kinds]) =>
-        [...kinds].map((kind) => hydrateCache(playlistId, kind))
-      )
-    )
+    const titleById = new Map(playlists.map((entry) => [entry.id, entry.title]))
 
-    /** @type {Map<string, { live: Map<number, any>, vod: Map<number, any>, series: Map<number, any> }>} */
-    const lookups = new Map()
-    for (const playlistId of needed.keys()) {
-      lookups.set(playlistId, {
-        live: new Map(
-          (
-            getCached(playlistId, "live")?.data ||
-            getCached(playlistId, "m3u")?.data ||
-            []
-          ).map((item) => [Number(item.id), item])
-        ),
-        vod: new Map(
-          (getCached(playlistId, "vod")?.data || []).map((item) => [
-            Number(item.id),
-            item,
-          ])
-        ),
-        series: new Map(
-          (getCached(playlistId, "series")?.data || []).map((item) => [
-            Number(item.id),
-            item,
-          ])
-        ),
+    const buildEntries = () => {
+      /** @type {Map<string, { live: Map<number, any>, vod: Map<number, any>, series: Map<number, any>, liveCacheAvailable: boolean }>} */
+      const lookups = new Map()
+      for (const playlistId of needed.keys()) {
+        lookups.set(playlistId, {
+          live: new Map(
+            readCachedLiveChannels(playlistId).map((item) => [Number(item.id), item])
+          ),
+          vod: new Map(
+            (getCached(playlistId, "vod")?.data || []).map((item) => [
+              Number(item.id),
+              item,
+            ])
+          ),
+          series: new Map(
+            (getCached(playlistId, "series")?.data || []).map((item) => [
+              Number(item.id),
+              item,
+            ])
+          ),
+          liveCacheAvailable: hasCachedLiveChannels(playlistId),
+        })
+      }
+
+      entries = raw.map((row) => {
+        const meta = getFavoriteMeta(row.playlistId, row.kind, row.id)
+        const rowLookups = lookups.get(row.playlistId)
+        const item = rowLookups?.[row.kind]?.get(Number(row.id))
+        // Hidden-channel favorites and unresolved custom-playlist channels both
+        // miss the live lookup once the catalog is cached - can't tune either.
+        const unavailable = row.kind === "live" && !item && !!rowLookups?.liveCacheAvailable
+        const isStoredNameFallback = !!meta?.name && isKindFallbackName(row.kind, row.id, meta.name)
+        const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
+        const name = effectiveStoredName || item?.name || `${kindLabel(row.kind)} ${row.id}`
+        const logo = meta?.logo ?? item?.logo ?? null
+        // Lazily backfill meta so cross-playlist clicks still have name + logo
+        // even when the source catalog cache later expires.
+        if (!meta && (item?.name || item?.logo)) {
+          setFavoriteMeta(row.playlistId, row.kind, row.id, {
+            name: item.name || "",
+            logo: item.logo || null,
+          })
+        } else if (isStoredNameFallback && item?.name) {
+          setFavoriteMeta(row.playlistId, row.kind, row.id, {
+            name: item.name,
+            logo: meta?.logo ?? item?.logo ?? null,
+          })
+        }
+        return {
+          playlistId: row.playlistId,
+          playlistTitle: titleById.get(row.playlistId) || "Removed playlist",
+          kind: row.kind,
+          id: Number(row.id),
+          name,
+          logo,
+          href: buildHref(row.kind, row.id),
+          isCrossPlaylist: row.playlistId !== activePlaylistId,
+          unavailable,
+        }
       })
     }
 
-    const titleById = new Map(playlists.map((entry) => [entry.id, entry.title]))
-    entries = raw.map((row) => {
-      const meta = getFavoriteMeta(row.playlistId, row.kind, row.id)
-      const item = lookups.get(row.playlistId)?.[row.kind]?.get(Number(row.id))
-      const isStoredNameFallback = !!meta?.name && isKindFallbackName(row.kind, row.id, meta.name)
-      const effectiveStoredName = isStoredNameFallback ? "" : meta?.name
-      const name = effectiveStoredName || item?.name || `${kindLabel(row.kind)} ${row.id}`
-      const logo = meta?.logo ?? item?.logo ?? null
-      // Lazily backfill meta so cross-playlist clicks still have name + logo
-      // even when the source catalog cache later expires.
-      if (!meta && (item?.name || item?.logo)) {
-        setFavoriteMeta(row.playlistId, row.kind, row.id, {
-          name: item.name || "",
-          logo: item.logo || null,
-        })
-      } else if (isStoredNameFallback && item?.name) {
-        setFavoriteMeta(row.playlistId, row.kind, row.id, {
-          name: item.name,
-          logo: meta?.logo ?? item?.logo ?? null,
-        })
+    const hydrations = [...needed].flatMap(([playlistId, kinds]) =>
+      [...kinds].map((kind) => hydrateCache(playlistId, kind))
+    )
+    const allCached = raw.every((row) =>
+      row.kind === "live"
+        ? hasCachedLiveChannels(row.playlistId)
+        : !!getCached(row.playlistId, row.kind)
+    )
+
+    if (allCached) {
+      // Paint from memory now; hydration below only refreshes stale rows.
+      buildEntries()
+      loading = false
+      void Promise.allSettled(hydrations).then(() => {
+        if (generation === reloadGeneration) buildEntries()
+      }).catch(() => {})
+    } else {
+      await Promise.allSettled(hydrations)
+      if (generation !== reloadGeneration) return
+      buildEntries()
+      loading = false
+    }
+  }
+
+  async function openEntry(entry) {
+    if (entry.isCrossPlaylist) {
+      try {
+        await selectEntry(entry.playlistId)
+      } catch (err) {
+        log.error("[xt:favorites] selectEntry failed:", err)
       }
-      return {
-        playlistId: row.playlistId,
-        playlistTitle: titleById.get(row.playlistId) || "Removed playlist",
-        kind: row.kind,
-        id: Number(row.id),
-        name,
-        logo,
-        href: buildHref(row.kind, row.id),
-        isCrossPlaylist: row.playlistId !== activePlaylistId,
-      }
-    })
-    loading = false
+    }
+    window.location.href = entry.href
   }
 
   async function openCard(event, entry) {
-    if (!entry.isCrossPlaylist) return
-    // Cross-playlist click
-    event.preventDefault()
-    try {
-      await selectEntry(entry.playlistId)
-    } catch (err) {
-      log.error("[xt:favorites] selectEntry failed:", err)
+    if (entry.unavailable) {
+      event.preventDefault()
+      return
     }
-    window.location.href = entry.href
+    if (!entry.isCrossPlaylist) return
+    event.preventDefault()
+    await openEntry(entry)
+  }
+
+  // Svelte action: right-click / long-press "Remove from favorites" menu.
+  function favoriteCardMenu(node, entry) {
+    let current = entry
+    let attached = false
+    let destroyed = false
+
+    function open(anchor, point) {
+      if (destroyed) return
+      import("@/scripts/lib/poster-menu").then(({ openPosterMenu }) => {
+        if (destroyed) return
+        openPosterMenu({
+          kind: current.kind,
+          entry: { id: current.id, name: current.name, logo: current.logo },
+          activePlaylistId: current.playlistId,
+          anchor,
+          point,
+          onOpen: () => openEntry(current),
+        })
+      })
+    }
+
+    function attach() {
+      if (attached || destroyed) return
+      attached = true
+      import("@/scripts/lib/poster-menu").then(({ attachPosterContextMenu }) => {
+        if (destroyed) return
+        attachPosterContextMenu(node, open)
+      })
+    }
+
+    attach()
+
+    return {
+      update(next) { current = next },
+      destroy() { destroyed = true },
+    }
   }
 
   function setFilter(next) {
@@ -229,7 +301,7 @@
 
 {#if visible.length}
   <section
-    class="flex-1 min-h-0 overflow-auto custom-scroll
+    class="fav-grid flex-1 min-h-0 overflow-auto custom-scroll
            grid gap-3 sm:gap-4
            grid-cols-[repeat(auto-fill,minmax(8rem,1fr))]
            sm:grid-cols-[repeat(auto-fill,minmax(10rem,1fr))]
@@ -240,12 +312,15 @@
       <a
         href={entry.href}
         onclick={(event) => openCard(event, entry)}
+        use:favoriteCardMenu={entry}
         aria-label={tr("favorites.cardAriaLabel", { name: entry.name, playlist: entry.playlistTitle })}
+        aria-disabled={entry.unavailable}
         class="fav-card group relative rounded-xl overflow-hidden bg-surface-2
                ring-1 ring-line
                transition-[transform,box-shadow] duration-150
                hover:ring-1 hover:ring-accent hover:transform-[translateY(-2px)]
-               outline-none focus-visible:ring-1 focus-visible:ring-accent focus-visible:transform-[translateY(-2px)]">
+               outline-none focus-visible:ring-1 focus-visible:ring-accent focus-visible:transform-[translateY(-2px)]"
+        class:opacity-50={entry.unavailable}>
         <div class="aspect-2/3 w-full bg-surface-2 overflow-hidden relative">
           {#if entry.logo}
             {#if entry.kind === "live"}
