@@ -48,6 +48,7 @@ interface CatalogRow {
   logo?: string | null
   year?: string | number | null
   rating?: string | number | null
+  category?: string | null
 }
 
 interface ProgressRow {
@@ -78,6 +79,11 @@ function timeLeft(positionSeconds: number, durationSeconds: number): string {
 
 function metaFor(row: CatalogRow | undefined): string {
   return row?.year ? String(row.year) : ""
+}
+
+/** Favourites already know they're favourites; show what the title is instead. */
+function genreEyebrow(row: CatalogRow | undefined): string {
+  return (row?.category || "").trim()
 }
 
 function ratingFor(row: CatalogRow | undefined): string {
@@ -184,7 +190,7 @@ function favouriteItems(
     if (!row?.name) continue
     out.push({
       key: `fav:${kind}:${favourite.id}`,
-      eyebrow: t("nav.favorites"),
+      eyebrow: genreEyebrow(row),
       title: cleanTitle(row.name),
       meta: metaFor(row),
       rating: ratingFor(row),
@@ -207,7 +213,7 @@ function recentlyAddedItems(vod: CatalogRow[]): MarqueeItem[] {
     .slice(0, 4)
     .map((row) => ({
       key: `new:${row.id}`,
-      eyebrow: t("nav.recentlyAdded"),
+      eyebrow: t("hub.marquee.new"),
       title: cleanTitle(row.name!),
       meta: metaFor(row),
       rating: ratingFor(row),
@@ -392,9 +398,12 @@ export function mountMarquee(
   const progress = query<HTMLElement>("progress")
   const cta = query<HTMLAnchorElement>("cta")
 
+  const dots = section.querySelector<HTMLElement>('[data-role="dots"]')
   let index = 0
   let timer: ReturnType<typeof setInterval> | null = null
   let paused = false
+  // WCAG 2.2.2: picking a title is the mechanism that stops the rotation.
+  let stopped = false
 
   function show(item: MarqueeItem): void {
     query("eyebrow").textContent = item.eyebrow
@@ -416,6 +425,9 @@ export function mountMarquee(
       const width = Math.max(item.percent, 1.5)
       query<HTMLSpanElement>("progress-fill").style.width = `${width.toFixed(1)}%`
     }
+
+    const eyebrowEl = query("eyebrow")
+    eyebrowEl.hidden = !item.eyebrow
 
     link.href = item.detailHref
     link.setAttribute("aria-label", item.title)
@@ -464,7 +476,8 @@ export function mountMarquee(
   const body = section.querySelector<HTMLElement>(".hub-marquee__body")
 
   function goTo(next: number): void {
-    index = next
+    index = ((next % pool.length) + pool.length) % pool.length
+    syncDots()
     if (!body) {
       show(pool[index])
       return
@@ -477,12 +490,98 @@ export function mountMarquee(
   }
 
   function advance(): void {
-    if (paused || document.hidden || pool.length < 2) return
-    goTo((index + 1) % pool.length)
+    if (paused || stopped || document.hidden || pool.length < 2) return
+    goTo(index + 1)
   }
 
+  function stopRotation(): void {
+    stopped = true
+    if (timer) {
+      clearInterval(timer)
+      timer = null
+    }
+  }
+
+  function syncDots(): void {
+    if (!dots) return
+    for (const [dotIndex, dot] of [...dots.children].entries()) {
+      const current = dotIndex === index
+      dot.setAttribute("aria-current", String(current))
+      ;(dot as HTMLButtonElement).tabIndex = current ? 0 : -1
+    }
+  }
+
+  function buildDots(): void {
+    if (!dots || pool.length < 2) return
+    dots.replaceChildren(
+      ...pool.map((item, dotIndex) => {
+        const dot = document.createElement("button")
+        dot.type = "button"
+        dot.className = "hub-marquee__dot"
+        dot.setAttribute(
+          "aria-label",
+          t("hub.marquee.showItem", { n: String(dotIndex + 1), total: String(pool.length), title: item.title })
+        )
+        dot.addEventListener("click", () => {
+          stopRotation()
+          goTo(dotIndex)
+          dot.focus()
+        })
+        return dot
+      })
+    )
+    dots.addEventListener("keydown", (ev) => {
+      if (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft") return
+      ev.preventDefault()
+      stopRotation()
+      goTo(index + (ev.key === "ArrowRight" ? 1 : -1))
+      ;(dots.children[index] as HTMLElement | undefined)?.focus()
+    })
+    dots.hidden = false
+    syncDots()
+  }
+
+  // Touch has no hover to pause with, so a swipe is the transport control there.
+  function bindSwipe(): (() => void) | null {
+    if (pool.length < 2) return null
+    let startX = 0
+    let startY = 0
+    let tracking = false
+    const onStart = (ev: PointerEvent) => {
+      if (ev.pointerType === "mouse") return
+      tracking = true
+      startX = ev.clientX
+      startY = ev.clientY
+    }
+    const onEnd = (ev: PointerEvent) => {
+      if (!tracking) return
+      tracking = false
+      const dx = ev.clientX - startX
+      if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(ev.clientY - startY)) return
+      ev.preventDefault()
+      // pointerup's preventDefault doesn't reliably cancel the click, and the
+      // whole band is a link - swallow the one that follows a swipe.
+      section.addEventListener("click", (click) => {
+        click.preventDefault()
+        click.stopPropagation()
+      }, { capture: true, once: true })
+      stopRotation()
+      goTo(index + (dx < 0 ? 1 : -1))
+    }
+    section.addEventListener("pointerdown", onStart)
+    section.addEventListener("pointerup", onEnd)
+    section.addEventListener("pointercancel", () => (tracking = false))
+    return () => {
+      section.removeEventListener("pointerdown", onStart)
+      section.removeEventListener("pointerup", onEnd)
+    }
+  }
+
+  buildDots()
   show(pool[0])
+  syncDots()
   section.hidden = false
+  const unbindSwipe = bindSwipe()
 
   const pause = () => {
     paused = true
@@ -500,6 +599,9 @@ export function mountMarquee(
   return {
     destroy(): void {
       if (timer) clearInterval(timer)
+      unbindSwipe?.()
+      dots?.replaceChildren()
+      if (dots) dots.hidden = true
       section.removeEventListener("pointerenter", pause)
       section.removeEventListener("pointerleave", resume)
       section.removeEventListener("focusin", pause)

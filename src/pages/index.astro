@@ -64,11 +64,13 @@ import {
 				<div class="hub-marquee__scrim"></div>
 			</div>
 			<a class="hub-marquee__link" data-role="hero-link" href="/"></a>
-			<p
-				id="hero-eyebrow"
-				class="hub-marquee__greeting tabular-nums"
-				aria-hidden="true">
-			</p>
+			<div class="hub-marquee__skeleton" aria-hidden="true">
+				<span class="hub-marquee__skel-eyebrow"></span>
+				<span class="hub-marquee__skel-title"></span>
+				<span class="hub-marquee__skel-title hub-marquee__skel-title--short"></span>
+				<span class="hub-marquee__skel-meta"></span>
+				<span class="hub-marquee__skel-cta"></span>
+			</div>
 			<div class="hub-marquee__body">
 				<p class="hub-marquee__kicker">
 					<span class="hub-marquee__eyebrow" data-role="eyebrow"></span>
@@ -87,6 +89,13 @@ import {
 				<a class="hub-marquee__cta btn-primary" data-role="cta" href="/">
 					<span data-role="cta-label"></span>
 				</a>
+			</div>
+			<div
+				class="hub-marquee__dots"
+				data-role="dots"
+				aria-label="Featured titles"
+				data-i18n-attr="aria-label:hub.marquee.featured"
+				hidden>
 			</div>
 		</section>
 
@@ -120,7 +129,7 @@ import {
 				<div class="relative mt-auto pt-4 z-10">
 					<h2
 						data-i18n="nav.livetv"
-						class="text-2xl sm:text-3xl lg:text-5xl font-semibold tracking-[-0.02em] leading-[0.95]
+						class="text-xl sm:text-2xl lg:text-3xl font-semibold tracking-[-0.02em] leading-[1.05]
 							text-fg group-hover:text-accent group-focus-visible:text-accent
 							transition-colors duration-200 ms-[-0.05em]">
 						Live TV
@@ -128,7 +137,7 @@ import {
 					<p
 						id="livetv-tile-sub"
 						data-i18n="hub.tile.livetv.sub"
-						class="mt-1.5 text-sm text-fg-2 font-sans tracking-tight truncate">
+						class="mt-1.5 text-sm text-fg-2 font-sans tracking-tight line-clamp-2">
 						Channels, and what's on right now.
 					</p>
 				</div>
@@ -155,12 +164,12 @@ import {
 					class="relative z-10 size-9 sm:size-10 lg:size-12 text-fg-3 transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent"
 				/>
 				<div class="relative z-10 mt-auto pt-4">
-					<h2 data-i18n="nav.movies" class="text-2xl sm:text-3xl lg:text-5xl font-semibold tracking-[-0.02em] leading-[0.95]
+					<h2 data-i18n="nav.movies" class="text-xl sm:text-2xl lg:text-3xl font-semibold tracking-[-0.02em] leading-[1.05]
 						text-fg group-hover:text-accent group-focus-visible:text-accent
 						transition-colors duration-200 ms-[-0.05em]">
 						Movies
 					</h2>
-					<p data-i18n="hub.tile.movies.sub" class="mt-1.5 text-sm text-fg-2">
+					<p data-i18n="hub.tile.movies.sub" class="mt-1.5 text-sm text-fg-2 line-clamp-2">
 						Browse the library.
 					</p>
 				</div>
@@ -187,12 +196,12 @@ import {
 					class="relative z-10 size-9 sm:size-10 lg:size-12 text-fg-3 transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent"
 				/>
 				<div class="relative z-10 mt-auto pt-4">
-					<h2 data-i18n="nav.series" class="text-2xl sm:text-3xl lg:text-5xl font-semibold tracking-[-0.02em] leading-[0.95]
+					<h2 data-i18n="nav.series" class="text-xl sm:text-2xl lg:text-3xl font-semibold tracking-[-0.02em] leading-[1.05]
 						text-fg group-hover:text-accent group-focus-visible:text-accent
 						transition-colors duration-200 ms-[-0.05em]">
 						Series
 					</h2>
-					<p data-i18n="hub.tile.series.sub" class="mt-1.5 text-sm text-fg-2">
+					<p data-i18n="hub.tile.series.sub" class="mt-1.5 text-sm text-fg-2 line-clamp-2">
 						Shows and full seasons.
 					</p>
 				</div>
@@ -223,39 +232,59 @@ import {
 	.hub-marquee {
 		--hub-pad-x: clamp(1.25rem, 3vw, 2.75rem);
 		--hub-pad-y: clamp(1.25rem, 2.5vw, 2rem);
+		--hub-title-size: clamp(1.9rem, 3.4vw + 0.5rem, 3.75rem);
+		--hub-title-line: calc(var(--hub-title-size) * 1.02);
+		--hub-scrim: oklch(0.16 0.014 255);
+		--hub-ink: oklch(0.97 0.005 250);
+		--hub-ink-2: oklch(0.82 0.011 250);
 		position: relative;
 		display: none;
 		flex-direction: column;
 		overflow: hidden;
 		border-radius: var(--radius-2xl, 1rem);
 		border: 1px solid var(--color-line);
-		background: var(--color-surface);
-		height: clamp(15rem, 34vh, 26rem);
+		background: var(--hub-scrim);
+		height: clamp(16rem, 40vh, 28rem);
 		isolation: isolate;
 	}
 	#hub-marquee:not([hidden]) {
 		display: flex;
 	}
 	.hub-marquee[data-loading] .hub-marquee__body,
-	.hub-marquee[data-loading] .hub-marquee__greeting {
+	.hub-marquee[data-loading] .hub-marquee__dots {
 		visibility: hidden;
 	}
-	.hub-marquee[data-loading]::after {
-		content: "";
+	.hub-marquee__skeleton {
+		display: none;
 		position: absolute;
-		inset-inline-start: var(--hub-pad-x);
+		z-index: 1;
+		inset-inline: var(--hub-pad-x);
 		inset-block-end: var(--hub-pad-y);
-		width: min(22rem, 55%);
-		height: 3.5rem;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.5rem;
+		max-width: min(38rem, 68%);
+	}
+	.hub-marquee[data-loading] .hub-marquee__skeleton {
+		display: flex;
+	}
+	.hub-marquee__skeleton > span {
 		border-radius: 0.5rem;
-		background: color-mix(in oklab, var(--color-fg) 7%, transparent);
+		background: color-mix(in oklab, var(--hub-ink) 9%, transparent);
 		animation: hub-skeleton 1400ms ease-in-out infinite;
 	}
+	/* Mirrors the real stack: eyebrow, two title lines, meta, CTA. */
+	.hub-marquee__skel-eyebrow { width: 9rem; height: 0.75rem; }
+	.hub-marquee__skel-title { width: 100%; height: var(--hub-title-line); }
+	.hub-marquee__skel-title--short { width: 62%; }
+	.hub-marquee__skel-meta { width: 11rem; height: 0.875rem; margin-top: 0.25rem; }
+	.hub-marquee__skel-cta { width: 7.5rem; height: 2.5rem; border-radius: 0.75rem; margin-top: 0.75rem; }
 	@keyframes hub-skeleton {
 		50% { opacity: 0.45; }
 	}
-	html[data-perf-mode="on"] .hub-marquee[data-loading]::after {
-		animation: none;
+	html[data-perf-mode="on"] .hub-marquee__skeleton > span { animation: none; }
+	@media (prefers-reduced-motion: reduce) {
+		.hub-marquee__skeleton > span { animation: none; }
 	}
 	#hub-tiles {
 		grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -264,7 +293,7 @@ import {
 	#hub-tiles > a {
 		grid-row: auto;
 		min-height: 0;
-		padding: 1.25rem 1.5rem;
+		padding: clamp(0.875rem, 2.5vw, 1.25rem) clamp(0.875rem, 3vw, 1.5rem);
 	}
 	#hub-tiles svg {
 		width: 1.75rem;
@@ -282,7 +311,7 @@ import {
 		inset: -12%;
 		background-size: cover;
 		background-position: center 30%;
-		filter: blur(44px) saturate(1.15) brightness(0.55);
+		filter: blur(56px) saturate(1.15) brightness(0.42);
 		opacity: 0;
 		transform: scale(1.06);
 		transition:
@@ -297,7 +326,7 @@ import {
 	   poster/logo fallback, which would smear if stretched across the band. */
 	.hub-marquee__img[data-portrait="false"] {
 		inset: 0;
-		filter: none;
+		filter: brightness(0.5) saturate(1.05);
 		background-position: center 28%;
 	}
 	@keyframes hub-kenburns {
@@ -320,8 +349,8 @@ import {
 			transform 800ms cubic-bezier(0.16, 1, 0.3, 1) 120ms;
 		box-shadow:
 			0 1.5rem 3rem -1rem rgb(0 0 0 / 0.65),
-			0 0 0 1px color-mix(in oklab, var(--color-fg) 10%, transparent);
-		margin-block: clamp(0.75rem, 2.5vh, 2rem);
+			0 0 0 1px color-mix(in oklab, var(--hub-ink) 14%, transparent);
+		margin-block: clamp(0.75rem, 2.5vh, 2rem) calc(clamp(0.75rem, 2.5vh, 2rem) + 2rem);
 	}
 	.hub-marquee__poster[data-on] {
 		opacity: 1;
@@ -335,21 +364,23 @@ import {
 		background-color: transparent;
 		border-radius: 0;
 		box-shadow: none;
-		margin-block: clamp(1.25rem, 4vh, 3rem);
+		margin-block: clamp(1.25rem, 4vh, 3rem) calc(clamp(1.25rem, 4vh, 3rem) + 2rem);
 	}
 
+	/* The copy sits bottom-left in a 38rem column, so the scrim is an ellipse
+	   anchored there rather than a full-width veil over artwork nobody covers. */
 	.hub-marquee__scrim {
 		position: absolute;
 		inset: 0;
 		background:
-			linear-gradient(to right, var(--color-surface) 10%, color-mix(in oklab, var(--color-surface) 60%, transparent) 44%, transparent 66%),
-			linear-gradient(to top, color-mix(in oklab, var(--color-surface) 88%, transparent), transparent 62%),
+			radial-gradient(120% 130% at 0% 100%, var(--hub-scrim) 30%, color-mix(in oklab, var(--hub-scrim) 84%, transparent) 56%, transparent 86%),
+			linear-gradient(to top, color-mix(in oklab, var(--hub-scrim) 72%, transparent), transparent 58%),
 			radial-gradient(120% 100% at 82% 30%, var(--xt-hub-ambient-soft, transparent), transparent 70%);
 	}
 	.hub-marquee__art:has(.hub-marquee__img[data-portrait="false"]) .hub-marquee__scrim {
 		background:
-			linear-gradient(to right, var(--color-surface) 8%, color-mix(in oklab, var(--color-surface) 82%, transparent) 42%, color-mix(in oklab, var(--color-surface) 25%, transparent) 84%),
-			linear-gradient(to top, color-mix(in oklab, var(--color-surface) 92%, transparent), transparent 68%),
+			radial-gradient(115% 128% at 0% 100%, var(--hub-scrim) 28%, color-mix(in oklab, var(--hub-scrim) 82%, transparent) 54%, transparent 84%),
+			linear-gradient(to top, color-mix(in oklab, var(--hub-scrim) 68%, transparent), transparent 56%),
 			radial-gradient(120% 100% at 82% 30%, var(--xt-hub-ambient-soft, transparent), transparent 70%);
 	}
 	.hub-marquee__body[data-swapping] {
@@ -373,17 +404,6 @@ import {
 	.hub-marquee__body > * {
 		max-width: 100%;
 	}
-	.hub-marquee__greeting {
-		position: relative;
-		z-index: 1;
-		flex: none;
-		padding: var(--hub-pad-y) var(--hub-pad-x) 0;
-		font-size: 0.75rem;
-		font-weight: 400;
-		letter-spacing: 0;
-		color: var(--color-fg-3);
-		pointer-events: none;
-	}
 	.hub-marquee__kicker {
 		display: flex;
 		align-items: center;
@@ -395,26 +415,27 @@ import {
 		gap: 0.25rem;
 		border-radius: 0.375rem;
 		padding: 0.125rem 0.375rem;
-		background: color-mix(in oklab, var(--color-fg) 10%, transparent);
+		background: color-mix(in oklab, var(--hub-ink) 16%, transparent);
 		font-size: var(--text-2xs, 0.6875rem);
 		font-weight: 600;
 		font-variant-numeric: tabular-nums;
-		color: var(--color-fg-2);
+		color: var(--hub-ink);
 	}
 	.hub-marquee__rating svg {
-		color: var(--color-accent);
+		color: oklch(0.85 0.13 330);
 	}
 	.hub-marquee__eyebrow {
 		font-size: var(--text-eyebrow, 0.6875rem);
 		font-weight: 600;
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
-		/* Ambient drives atmosphere only - text and progress keep the brand accent,
-		   which stays AA in both themes. */
-		color: var(--color-accent);
+		/* The band is a fixed dark surface, so the accent is pinned rather than
+		   following the theme; lifted past the dark-theme value to clear AA at 11px. */
+		color: oklch(0.85 0.13 330);
 	}
 	.hub-marquee__title {
-		font-size: clamp(1.6rem, 2.8vw + 0.7rem, 3.25rem);
+		color: var(--hub-ink);
+		font-size: var(--hub-title-size);
 		font-weight: 600;
 		letter-spacing: -0.025em;
 		line-height: 1.02;
@@ -429,13 +450,13 @@ import {
 	}
 	.hub-marquee__meta {
 		font-size: 0.875rem;
-		color: var(--color-fg-2);
+		color: var(--hub-ink-2);
 	}
 	.hub-marquee__progress {
 		width: min(20rem, 100%);
-		height: 3px;
+		height: 5px;
 		border-radius: 999px;
-		background: color-mix(in oklab, var(--color-fg) 18%, transparent);
+		background: color-mix(in oklab, var(--hub-ink) 25%, transparent);
 		overflow: hidden;
 		margin-top: 0.25rem;
 	}
@@ -444,12 +465,14 @@ import {
 		height: 100%;
 		width: 0%;
 		border-radius: inherit;
-		background: var(--color-accent);
+		background: oklch(0.78 0.15 330);
 		transition: width 600ms cubic-bezier(0.16, 1, 0.3, 1);
 	}
 	.hub-marquee__cta {
 		margin-top: 0.75rem;
 		pointer-events: auto;
+		background: var(--hub-ink);
+		color: var(--hub-scrim);
 	}
 
 	.hub-marquee__link {
@@ -501,9 +524,43 @@ import {
 		}
 	}
 
-	@media (max-width: 640px) {
+	@media (max-height: 560px) {
 		.hub-marquee__poster { display: none; }
-		.hub-marquee__body { max-width: 100%; }
+	}
+
+	/* Phone portrait: the band is too narrow for a side-anchored scrim, so the
+	   artwork takes the top and the copy sits under a bottom-up wash. */
+	@media (max-width: 640px) {
+		.hub-marquee {
+			height: clamp(16rem, 33vh, 22rem);
+			--hub-title-size: clamp(1.75rem, 7vw, 2.25rem);
+		}
+		.hub-marquee__scrim,
+		.hub-marquee__art:has(.hub-marquee__img[data-portrait="false"]) .hub-marquee__scrim {
+			background:
+				linear-gradient(to top, var(--hub-scrim) 32%, color-mix(in oklab, var(--hub-scrim) 90%, transparent) 60%, color-mix(in oklab, var(--hub-scrim) 60%, transparent) 78%, transparent 96%),
+				radial-gradient(120% 80% at 50% 0%, var(--xt-hub-ambient-soft, transparent), transparent 70%);
+		}
+		.hub-marquee__poster {
+			inset-block: 0 auto;
+			inset-inline-end: var(--hub-pad-x);
+			height: 52%;
+			margin-block: var(--hub-pad-y) 0;
+		}
+		.hub-marquee__poster[data-kind="logo"] {
+			height: 34%;
+			margin-block: var(--hub-pad-y) 0;
+		}
+		.hub-marquee__body,
+		.hub-marquee__skeleton {
+			max-width: 100%;
+		}
+		.hub-marquee__body {
+			padding-block-end: calc(var(--hub-pad-y) + 2.5rem);
+		}
+		.hub-marquee__skeleton {
+			inset-block-end: calc(var(--hub-pad-y) + 2.5rem);
+		}
 	}
 
 	@media (prefers-reduced-motion: reduce) {
@@ -519,36 +576,13 @@ import {
 <script>
 	import "../scripts/updater-startup.js";
 	import { log } from "@/scripts/lib/log.js";
-	import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js";
+	import { t } from "@/scripts/lib/i18n.js";
 	import { getEntries, getActiveEntry, loadCreds } from "@/scripts/lib/creds.js";
 	import { getCached, hydrate as hydrateCache } from "@/scripts/lib/cache.js";
 	import { readCachedLiveChannels } from "@/scripts/lib/live-catalog.ts";
 	import { getRecents, ensureLoaded as ensurePrefsLoaded } from "@/scripts/lib/preferences.js";
 	import { getProgrammesSync, getNowNextForChannel, loadProgrammes } from "@/scripts/lib/epg-data.js";
 	import { debounce } from "@/scripts/lib/debounce.ts";
-
-	const eyebrow = document.getElementById("hero-eyebrow");
-	if (eyebrow) {
-		const greet = (hour) => {
-			if (hour < 5) return t("hub.greeting.night");
-			if (hour < 12) return t("hub.greeting.morning");
-			if (hour < 18) return t("hub.greeting.afternoon");
-			if (hour < 22) return t("hub.greeting.evening");
-			return t("hub.greeting.night");
-		};
-		const update = () => {
-			const now = new Date();
-			const time = new Intl.DateTimeFormat(undefined, {
-				hour: "numeric",
-				minute: "2-digit",
-			}).format(now);
-			eyebrow.textContent = `${greet(now.getHours())} · ${time}`;
-		};
-		update();
-		setInterval(update, 30_000);
-		window.__refreshHeroEyebrow = update;
-		document.addEventListener(LOCALE_EVENT, update);
-	}
 
 	async function reconcileFirstRun() {
 		const entries = await getEntries();

@@ -2848,8 +2848,9 @@ html.xt-glide-tracking :is(a, button, input, textarea, select, summary, [tabinde
     z-index: 0;
     overflow: hidden;
     pointer-events: none;
-    -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 75%);
-    mask-image: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 75%);
+    /* Clear well above the heading block so per-tile artwork can't shift its contrast. */
+    -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 55%);
+    mask-image: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 55%);
 }
 .tile-art__layer {
     position: absolute;
@@ -2876,6 +2877,64 @@ html.xt-glide-tracking :is(a, button, input, textarea, select, summary, [tabinde
 @media (prefers-reduced-motion: reduce) {
     .tile-art__layer {
         transition: none;
+    }
+}
+
+/* ────────────────────────────── */
+/* Hub marquee dots (built in JS) */
+/* ────────────────────────────── */
+.hub-marquee__dots {
+    position: absolute;
+    z-index: 2;
+    inset-inline-end: var(--hub-pad-x);
+    inset-block-end: var(--hub-pad-y);
+    display: flex;
+    align-items: center;
+}
+.hub-marquee__dots[hidden] {
+    display: none;
+}
+.hub-marquee__dot {
+    width: 1.75rem;
+    height: 2.75rem;
+    display: grid;
+    place-items: center;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    outline: none;
+    border-radius: 0.5rem;
+}
+.hub-marquee__dot::before {
+    content: "";
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--hub-ink) 50%, transparent);
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.3);
+    transition:
+        background-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+        width 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.hub-marquee__dot:hover::before {
+    background: color-mix(in oklab, var(--hub-ink) 75%, transparent);
+}
+.hub-marquee__dot[aria-current="true"]::before {
+    width: 1.25rem;
+    background: oklch(0.78 0.15 330);
+}
+.hub-marquee__dot:focus-visible {
+    box-shadow: 0 0 0 2px oklch(0.78 0.15 330);
+}
+@media (prefers-reduced-motion: reduce) {
+    .hub-marquee__dot::before { transition: none; }
+}
+html[data-perf-mode="on"] .hub-marquee__dot::before { transition: none; }
+@media (max-width: 640px) {
+    .hub-marquee__dots {
+        inset-inline: var(--hub-pad-x) auto;
+        inset-block-end: calc(var(--hub-pad-y) / 2);
+        margin-inline-start: -0.75rem;
     }
 }
 
