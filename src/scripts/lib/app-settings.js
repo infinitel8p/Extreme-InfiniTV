@@ -45,6 +45,7 @@ const KEY_RECEIVER_ENGINE = "xt_receiver_engine"
 const KEY_RECEIVER_ID = "xt_receiver_id"
 const KEY_CONTENT_LANGUAGE = "xt_content_lang"
 const KEY_LANGUAGE_GROUPING = "xt_lang_grouping"
+const KEY_SEARCH_VIEW = "xt_search_view"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -67,6 +68,8 @@ export const VIDEO_SCALE_EVENT = "xt:video-scale-changed"
 export const UPDATE_CHANNEL_EVENT = "xt:update-channel-changed"
 export const AUTO_UPDATE_EVENT = "xt:auto-update-changed"
 export const LANGUAGE_GROUPING_EVENT = "xt:language-grouping-changed"
+export const SEARCH_VIEW_EVENT = "xt:search-view-changed"
+export const SEARCH_VIEW_MODES = ["cards", "list"]
 export const UPDATE_CHANNELS = ["stable", "beta"]
 export const DEFAULT_UPDATE_CHANNEL = "stable"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
@@ -1090,6 +1093,19 @@ export function setLanguageGroupingEnabled(enabled) {
   writeLS(KEY_LANGUAGE_GROUPING, enabled ? "1" : "0")
   document.dispatchEvent(
     new CustomEvent(LANGUAGE_GROUPING_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export function getSearchView() {
+  const stored = readLS(KEY_SEARCH_VIEW, "")
+  return SEARCH_VIEW_MODES.includes(stored) ? stored : "cards"
+}
+
+export function setSearchView(mode) {
+  const normalized = SEARCH_VIEW_MODES.includes(mode) ? mode : "cards"
+  writeLS(KEY_SEARCH_VIEW, normalized === "cards" ? "" : normalized)
+  document.dispatchEvent(
+    new CustomEvent(SEARCH_VIEW_EVENT, { detail: { value: normalized } })
   )
 }
 
