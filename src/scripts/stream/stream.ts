@@ -309,6 +309,7 @@ document.addEventListener("xt:entries-updated", () => {
 
 document.addEventListener("xt:active-changed", () => {
   clearRichPresence().catch(() => {})
+  resetDiscordPresenceTracking()
   externalPlaybackActive = false
   externalPlaybackKind = null
   reconcileFirstRun()
@@ -333,6 +334,7 @@ document.addEventListener("xt:channel-epg-changed", (e) => {
   if (!detail || detail.playlistId !== activePlaylistId) return
   ensureEpgLoaded()
   refreshNowSlots()
+  refreshDiscordPresenceProgramme()
   if (
     currentlyPlayingId &&
     detail.channelId != null &&
@@ -348,6 +350,7 @@ document.addEventListener(EPG_LOADED_EVENT, (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
   refreshNowSlots()
+  refreshDiscordPresenceProgramme()
   // For M3U sources the side panel can't use get_short_epg; it pulls from
   // the just-loaded XMLTV state. Refresh it now that data is available.
   if (currentlyPlayingId && hasDirectUrl(currentlyPlayingId)) {
@@ -3765,20 +3768,32 @@ function runScanLineSweep() {
 
 window.addEventListener("pagehide", () => {
   clearRichPresence().catch(() => {})
+  resetDiscordPresenceTracking()
   externalPlaybackActive = false
   externalPlaybackKind = null
   void stopAudioTranscode()
 })
 
+let presenceChannelId = null
+let presenceStartedAtMs = 0
+let presenceProgrammeTitle = ""
+
+function currentProgrammeTitle(channel) {
+  if (!activePlaylistId || !channel) return ""
+  const state = getProgrammesSync(activePlaylistId)
+  if (!state) return ""
+  const { current } = getNowNextForChannel(state.programmes, channel, activePlaylistId)
+  return current?.title || ""
+}
+
 function pushDiscordPresence(channel, kind) {
   if (!activePlaylistId || !channel) return
   const safeLogo = channel.logo ? safeHttpUrl(channel.logo) : null
-  let stateLine = ""
-  const state = getProgrammesSync(activePlaylistId)
-  if (state) {
-    const { current } = getNowNextForChannel(state.programmes, channel, activePlaylistId)
-    if (current?.title) stateLine = current.title
-  }
+  const stateLine = currentProgrammeTitle(channel)
+  // Same channel keeps its tune-time stamp so a programme rollover doesn't reset Discord's elapsed timer.
+  if (presenceChannelId !== channel.id) presenceStartedAtMs = Date.now()
+  presenceChannelId = channel.id
+  presenceProgrammeTitle = stateLine
   setRichPresence({
     playlistId: activePlaylistId,
     details: `Watching ${channel.name || `Channel ${channel.id}`}`,
@@ -3787,8 +3802,23 @@ function pushDiscordPresence(channel, kind) {
     largeText: activePlaylistTitle || "Extreme InfiniTV",
     smallImage: "live",
     smallText: "Live",
-    startTimestamp: Date.now(),
+    startTimestamp: presenceStartedAtMs,
   })
+}
+
+function resetDiscordPresenceTracking() {
+  presenceChannelId = null
+  presenceStartedAtMs = 0
+  presenceProgrammeTitle = ""
+}
+
+/** Re-push presence when the live programme rolled over under a still-playing channel. */
+function refreshDiscordPresenceProgramme() {
+  if (presenceChannelId == null || catchupSession) return
+  const channel = all.find((entry) => entry.id === presenceChannelId)
+  if (!channel) return
+  if (currentProgrammeTitle(channel) === presenceProgrammeTitle) return
+  pushDiscordPresence(channel, "live")
 }
 
 function pickConfiguredExternal() {
@@ -5552,6 +5582,8 @@ setInterval(() => {
   if (!activePlaylistId) return
   if (!getProgrammesSync(activePlaylistId)) return
   refreshNowSlots()
+  refreshDiscordPresenceProgramme()
+  if (radioModeChannelId != null) paintRadioNowPlaying(radioModeChannelId)
 }, 60 * 1000)
 
 // Window resize (incl. maximize) changes the 0.84vw root font-size and
