@@ -3,9 +3,12 @@ layout: ../layouts/DocsLayout.astro
 title: "Troubleshooting"
 description: "Test a stream, fix EPG offsets, recover from a failed login."
 lede: "Most playback problems come down to one of three things: the provider, the network, or the User-Agent. Here's how to find out which."
+icon: "lifebuoy"
+cardOrder: 12
 ---
 
 import Callout from "../components/Callout.astro"
+import Shot from "../components/Shot.astro"
 
 ## A stream won't play
 
@@ -14,6 +17,17 @@ Right-click the channel (or movie / episode) and pick **Test stream**. The dialo
 - **Reachable but won't play** - the in-app player can't decode the codec. Open it in MPV or VLC instead. See [External players](./external-players/).
 - **403 or 401 response** - your provider is blocking you based on your User-Agent. Open **Settings > Network** and pick a different UA preset (VLC media player, Kodi, OTT Navigator, and Samsung Smart TV cover the common cases). A 401 can also mean the stream needs HTTP Basic auth - if your provider gave you a `user:pass@` URL, make sure you pasted it intact, credentials included.
 - **Connection failed entirely** - the server is down, your network is blocking it, or the URL has changed. Check the provider's status page or contact support.
+
+<Shot
+  src="Desktop/settings-network"
+  alt="The Network card in Settings, showing the User-Agent preset dropdown and the custom User-Agent field"
+  caption="Settings > Network - where the 403 fix lives."
+  zoom="#card-network"
+  markers={[
+    { at: "#ua-preset", note: "Try VLC media player first; it is the one most providers accept." },
+    { at: "#ua-custom", note: "If your provider named a specific User-Agent, paste it here - it overrides the preset." },
+  ]}
+/>
 
 ## No sound, or "unsupported audio format"
 
@@ -83,7 +97,7 @@ Downloads pick back up from where they left off when you restart the app. If one
 
 ## "TMDB rejected this key" or "Couldn't reach TMDB"
 
-These come from **Test key** in **Settings > Network > TMDb metadata**:
+These come from **Test key** in **Settings > Network > Metadata enrichment**:
 
 - **TMDB rejected this key** - the key or token itself is wrong, expired, or has extra spaces. Copy it again from themoviedb.org and paste it fresh.
 - **Couldn't reach TMDB** - a network problem, not the key. Check your connection and try again in a moment.
@@ -99,17 +113,27 @@ Some Linux GPU drivers (Raspberry Pi's V3D, Nvidia's proprietary driver, and mos
 - Do not set `WEBKIT_DISABLE_DMABUF_RENDERER=1` on a Raspberry Pi yourself: on WebKitGTK 2.52 it fixes the garbled screen but crashes on every page navigation. Only `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` is safe there.
 - If the app won't get far enough to reach Settings, run it once with `--safe-rendering` on the command line - this immediately resets the saved setting to Safe (picking the correct variable for your hardware) before anything else runs.
 
+## MKV or AVI file won't play
+
+- **MKV**: on Windows, the app plays it directly and automatically retries through its bundled FFmpeg if a particular file won't decode. On macOS and Linux, MKV always goes through that same automatic fix. If FFmpeg isn't available, or the fix still can't play the file, you'll see a message that the built-in player can't play it on this platform - open it in MPV or VLC instead. See [Audio formats & silent channels](./audio-formats/) for checking FFmpeg status, and [External players](./external-players/) for the fallback.
+- **AVI**: not supported by the built-in player on any platform - it always needs an external player.
+
 ## Sending useful bug reports
 
 On Android, **Settings > Data > Storage > Share logs** shares the newest log file from your device. On desktop, **Settings > Data > Storage > Open log folder** opens the folder with the daily log files. Attach the log to a [GitHub issue](https://github.com/infinitel8p/Extreme-InfiniTV/issues/new/choose). Logs have credentials and stream URLs redacted automatically.
 
 Each launch also writes a one-line snapshot near the top of the log: app version, platform, player backend, and a handful of settings that affect playback (performance mode, network timeout, FFmpeg availability, and similar) plus your playlist count and active playlist's type. It never includes your server, username, or password - only the setting names and values that help narrow down a bug.
 
-## MKV or AVI file won't play
-
-- **MKV**: on Windows, the app plays it directly and automatically retries through its bundled FFmpeg if a particular file won't decode. On macOS and Linux, MKV always goes through that same automatic fix. If FFmpeg isn't available, or the fix still can't play the file, you'll see a message that the built-in player can't play it on this platform - open it in MPV or VLC instead. See [Audio formats & silent channels](./audio-formats/) for checking FFmpeg status, and [External players](./external-players/) for the fallback.
-- **AVI**: not supported by the built-in player on any platform - it always needs an external player.
-
 ## Start fresh
+
+<Shot
+  src="Desktop/settings-storage"
+  alt="The Storage card in Settings showing cache size, Clear cache, and Clear viewing history"
+  caption="The Storage card in Settings: cache size at a glance, plus Clear cache and Clear viewing history."
+  zoom="#card-storage"
+  markers={[
+    { at: "#settings-clear-cache", note: "Drops the cached channel, movie and series lists. Playlists, favorites and recents survive - try this before anything more drastic." },
+  ]}
+/>
 
 If you want to wipe everything and start over, open **Settings > Danger zone > Reset everything**. This clears your playlists, favorites, watch history, and cache. Downloaded files stay on disk - you can delete them manually if you don't need them.

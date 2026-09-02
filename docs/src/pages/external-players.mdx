@@ -3,9 +3,12 @@ layout: ../layouts/DocsLayout.astro
 title: "External players"
 description: "Hand off playback to MPV, VLC, or any installed Android video app."
 lede: "When the built-in player can't handle a stream, send it to MPV, VLC, or any video app you already use."
+icon: "external"
+cardOrder: 9
 ---
 
 import Callout from "../components/Callout.astro"
+import Shot from "../components/Shot.astro"
 
 The built-in player works for most streams. If a channel won't play, or you'd rather watch in MPV or VLC, hand the stream off to an external player. When a stream's audio format can't be decoded in-app (AC-3 / Dolby Digital is the usual case), the app says so and offers the external-player handoff right in the error message.
 
@@ -41,7 +44,7 @@ If something goes wrong, the toast tells you what failed:
 
 ## Android
 
-Tap **Open in player...** on any movie, episode, or Live TV channel. A picker shows every installed app that can play the stream. Pick one and it starts playing. Tick **Always use this app** in the picker to skip it next time; clear the remembered choice under **Settings > Watching > Default external player** whenever you want to pick again.
+Tap **Open in player…** on any movie, episode, or Live TV channel. A picker shows every installed app that can play the stream. Pick one and it starts playing. Tick **Always use this app** in the picker to skip it next time; clear the remembered choice under **Settings > Watching > Default external player** whenever you want to pick again.
 
 If your provider needs a specific User-Agent or Referer per channel, the app passes those to the target player. Players that read these (VLC, MX Player, Just Player) will use them; others fall back to their own defaults.
 
@@ -75,6 +78,8 @@ The **Downloads** page lets you queue movies and series episodes for offline pla
 - **Android** opens the file in your default video app (the in-app player can't play local files on Android right now).
 
 You can still hand off remote streams from the detail dialog if you'd rather use MPV, VLC, or another player.
+
+<Shot src="Desktop/downloads" alt="The Downloads page with active and completed downloads" caption="Downloads: completed items play locally, in the app or in your chosen player." />
 
 ## When to use which
 
