@@ -1,4 +1,23 @@
 {
+  "app": {
+    "windows": [
+      {
+        "title": "Extreme InfiniTV",
+        "width": 1300,
+        "height": 850,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "focus": true,
+        "visible": false,
+        "decorations": false,
+        "dragDropEnabled": false,
+        "transparent": true
+      }
+    ]
+  },
   "bundle": {
     "externalBin": ["binaries/infinitv-ffmpeg"],
     "windows": {

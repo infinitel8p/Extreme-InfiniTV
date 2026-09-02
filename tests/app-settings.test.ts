@@ -107,6 +107,43 @@ describe("downloadDirMatchesPlatform", () => {
   })
 })
 
+describe("getPlayerBackend (mpv-embedded clamp)", () => {
+  afterEach(() => {
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+  })
+
+  it("clamps mpv-embedded to default outside Tauri", async () => {
+    setUserAgent(WINDOWS_UA)
+    localStorage.setItem("xt_player_backend", "mpv-embedded")
+    const { getPlayerBackend, DEFAULT_PLAYER_BACKEND } = await import("@/scripts/lib/app-settings.js")
+    expect(getPlayerBackend()).toBe(DEFAULT_PLAYER_BACKEND)
+  })
+
+  it("clamps mpv-embedded to default on non-Windows desktop", async () => {
+    setUserAgent(MACOS_UA)
+    ;(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {}
+    localStorage.setItem("xt_player_backend", "mpv-embedded")
+    const { getPlayerBackend, DEFAULT_PLAYER_BACKEND } = await import("@/scripts/lib/app-settings.js")
+    expect(getPlayerBackend()).toBe(DEFAULT_PLAYER_BACKEND)
+  })
+
+  it("keeps mpv-embedded on Windows desktop", async () => {
+    setUserAgent(WINDOWS_UA)
+    ;(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {}
+    localStorage.setItem("xt_player_backend", "mpv-embedded")
+    const { getPlayerBackend } = await import("@/scripts/lib/app-settings.js")
+    expect(getPlayerBackend()).toBe("mpv-embedded")
+  })
+
+  it("leaves storage untouched when clamping", async () => {
+    setUserAgent(MACOS_UA)
+    localStorage.setItem("xt_player_backend", "mpv-embedded")
+    const { getPlayerBackend } = await import("@/scripts/lib/app-settings.js")
+    getPlayerBackend()
+    expect(localStorage.getItem("xt_player_backend")).toBe("mpv-embedded")
+  })
+})
+
 describe("getDownloadDir", () => {
   it("self-heals a Windows path poisoned into localStorage on macOS", async () => {
     setUserAgent(MACOS_UA)

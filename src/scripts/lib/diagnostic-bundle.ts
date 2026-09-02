@@ -330,8 +330,9 @@ function detectIsTauriRuntime(): boolean {
 }
 
 // Any log in the app's own log dir: day-stamped names, plugin-log's size-rotation
-// suffixes (app-<day>_<stamp>.log[.bak]), and the pre-day-stamp "<app name>.log".
-const LOG_FILE_NAME_PATTERN = /^[^/\\]+\.log(?:\.bak)?$/
+// suffixes (app-<day>_<stamp>.log[.bak]), the pre-day-stamp "<app name>.log", and
+// mpv-embed.log (mpv-embedded backend writes its own log into the same dir).
+export const LOG_FILE_NAME_PATTERN = /^[^/\\]+\.log(?:\.bak)?$/
 const LOG_TAIL_MAX_BYTES = 512 * 1024
 const LOG_TAILS_TOTAL_MAX_BYTES = 4 * 1024 * 1024
 const LOG_TAIL_MIN_BYTES = 16 * 1024

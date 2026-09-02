@@ -95,7 +95,11 @@ import {
   isTauri,
   stopExternalPlayback,
   subscribeExternalPlayerExit,
+  isNativeVideoBackend,
+  canSwapToMpvEmbedded,
+  shouldOfferMpvEmbeddedFix,
 } from "@/scripts/lib/player-runtime.ts"
+import { mpvEmbeddedAvailable } from "@/scripts/lib/mpv-embedded.ts"
 import {
   getPlayerBackend,
   getPlayerPath,
@@ -366,7 +370,7 @@ document.addEventListener(EPG_OFFSET_EVENT, (e) => {
   ensureEpgLoaded()
 })
 
-const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null), () => vjs)
 
 function resolveVideoScaleMode() {
   if (activePlaylistId && currentlyPlayingId != null) {
@@ -1785,6 +1789,47 @@ const audioProxyBypassSet = new Set()
 // Streams already auto-attempted through the proxy on a start failure this session - a start failure is a one-shot try, not a retry loop.
 const audioProxyAutoAttemptedSet = new Set()
 
+// Embedded mpv backend availability - desktop only, cached at boot like audioProxyAvailable above.
+let mpvEmbeddedFixAvailable = false
+const mpvEmbeddedProbe = mpvEmbeddedAvailable()
+  .then((available) => {
+    mpvEmbeddedFixAvailable = available
+    return available
+  })
+  .catch(() => false)
+
+// Per-channel memory: a channel that once needed mpv to decode retunes there directly next time.
+const MPV_EMBEDDED_FIX_KEY_PREFIX = "xt_mpv_embedded_fix:"
+
+function readMpvEmbeddedFixChannels(playlistId) {
+  if (!playlistId) return []
+  try {
+    const raw = localStorage.getItem(MPV_EMBEDDED_FIX_KEY_PREFIX + playlistId)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.map(String) : []
+  } catch {
+    return []
+  }
+}
+
+function rememberMpvEmbeddedFixChannel(playlistId, channelKey) {
+  if (!playlistId || !channelKey) return
+  const current = readMpvEmbeddedFixChannels(playlistId)
+  if (current.includes(channelKey)) return
+  try {
+    localStorage.setItem(
+      MPV_EMBEDDED_FIX_KEY_PREFIX + playlistId,
+      JSON.stringify([...current, channelKey])
+    )
+  } catch {}
+}
+
+function isMpvEmbeddedFixChannel(playlistId, channelKey) {
+  if (!playlistId || !channelKey) return false
+  return readMpvEmbeddedFixChannels(playlistId).includes(channelKey)
+}
+
 // Per-channel budget for black-screen native re-tunes (macOS GDR latch retries).
 const nativeRelatchAttempts = new Map()
 
@@ -2183,6 +2228,8 @@ async function mountEmbeddedPlayer(backend, opts) {
       playbackRateMenuButton: !wantLiveUi,
       fullscreenToggle: true,
     },
+    userAgent: opts.userAgent ?? null,
+    referer: opts.referer ?? null,
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
@@ -2197,7 +2244,7 @@ async function mountEmbeddedPlayer(backend, opts) {
 
   vjs.on("playing", () => {
     {
-      const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      const mediaEl = mediaElementOf(vjs)
       log.info("[xt:livetv] playing", {
         streamId: lastPlayContext?.streamId ?? null,
         t: Math.round((mediaEl?.currentTime || 0) * 10) / 10,
@@ -2250,7 +2297,7 @@ async function mountEmbeddedPlayer(backend, opts) {
   vjs.on("pause", () => {
     if (Date.now() < suppressPauseTrackingUntilMs) return
     if (!lastPlayContext?.started) return
-    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const mediaEl = mediaElementOf(vjs)
     // The browser fires pause right before ended - don't record that as a user pause.
     if (mediaEl?.ended) return
     pausedWasLive = !catchupSession
@@ -2265,7 +2312,7 @@ async function mountEmbeddedPlayer(backend, opts) {
     pausedAtAbsUtcMs = null
     const channel = all.find((entry) => entry.id === (catchupSession?.channelId ?? currentlyPlayingId))
     if (!channel) return
-    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const mediaEl = mediaElementOf(vjs)
     const currentTimeSeconds = vjs.currentTime?.() || 0
     let bufferedAheadMs = 0
     const buffered = mediaEl?.buffered
@@ -2355,6 +2402,12 @@ let radioIcyAbort: AbortController | null = null
 
 function getPlayerWrap(): HTMLElement | null {
   return document.getElementById("player-wrap")
+}
+
+// getMediaElement() is authoritative even when null (mpv-embedded has no real <video>).
+function mediaElementOf(handle) {
+  if (handle && typeof handle.getMediaElement === "function") return handle.getMediaElement()
+  return getPlayerWrap()?.querySelector("video") ?? null
 }
 
 function fmtElapsed(totalSeconds: number): string {
@@ -3086,7 +3139,7 @@ function progressWatchTick() {
     progressFrozenTicks = 0
     return
   }
-  const mediaEl = vjs.getMediaElement?.() ?? wrap.querySelector("video")
+  const mediaEl = mediaElementOf(vjs)
   if (!mediaEl || mediaEl.paused || mediaEl.ended || mediaEl.readyState < 2) {
     progressFrozenTicks = 0
     return
@@ -3175,6 +3228,8 @@ function clearStartWedgeWatch() {
 
 function armStartWedgeWatch() {
   clearStartWedgeWatch()
+  // The wedge is a Chromium MSE bug; mpv has its own demuxer and never hits it.
+  if (isNativeVideoBackend(embeddedPlayerBackend)) return
   const ctx = lastPlayContext
   if (!ctx || !ctx.isLive || ctx.audioProxied) return
   const seqAtArm = ctx.seq
@@ -3191,7 +3246,7 @@ function armStartWedgeWatch() {
       clearStartWedgeWatch()
       return
     }
-    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const mediaEl = mediaElementOf(vjs)
     if (!mediaEl || mediaEl.paused || mediaEl.ended) return
     const audioCodec = vjs?.codecInfo?.()?.audioCodec
     // A flagged engine wedges MPEG audio deterministically - codec alone convicts.
@@ -3390,7 +3445,9 @@ function canUseAudioProxy(ctx) {
     !audioProxyBypassSet.has(ctx.streamId) &&
     // The proxy pipes the fetched body into ffmpeg's mpegts demuxer; an HLS
     // playlist URL feeds it playlist text and dies instantly. Raw TS only.
-    !isHlsSource(ctx?.src)
+    !isHlsSource(ctx?.src) &&
+    // mpv decodes AC-3/E-AC-3/MP2/DTS natively - the ffmpeg proxy is pointless there.
+    !isNativeVideoBackend(embeddedPlayerBackend)
   )
 }
 
@@ -3428,6 +3485,8 @@ function handleAudioProxyError(payload) {
 
 function armDeadAudioWatchdog() {
   clearDeadAudioWatchdog()
+  // mpv decodes AC-3/E-AC-3/MP2/DTS natively; there's no MSE audio track to go silent.
+  if (isNativeVideoBackend(embeddedPlayerBackend)) return
   const ctx = lastPlayContext
   if (!ctx) return
   if (ctx.audioProxied) return
@@ -3653,11 +3712,16 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   // a decode failure needs the external player, a network blip needs retry.
   const builtinCantDecode =
     failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio"
-  const hevcInstall = failure.kind === "hevc" && isWindowsDesktop()
+  // WebView2's HEVC extension is irrelevant to mpv, which decodes HEVC on its own.
+  const hevcInstall =
+    failure.kind === "hevc" && isWindowsDesktop() && !isNativeVideoBackend(embeddedPlayerBackend)
   const audioProxyEligible = failure.kind === "audio" && canUseAudioProxy(ctx)
+  const mpvFixEligible =
+    !!ctx.isLive && shouldOfferMpvEmbeddedFix(failure.kind, embeddedPlayerBackend, mpvEmbeddedFixAvailable)
   const externalAvailable = externalPlayersAvailable || androidExternalAvailable
   let primaryKind = "retry"
   if (hevcInstall) primaryKind = "hevc"
+  else if (mpvFixEligible) primaryKind = "mpvFix"
   else if (audioProxyEligible) primaryKind = "audioFix"
   else if (builtinCantDecode && externalAvailable) primaryKind = "external"
 
@@ -3687,6 +3751,19 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
         hidePlaybackFailurePanel()
         play(ctx.streamId, ctx.name)
       }
+    })
+  }
+
+  let mpvFixBtn = null
+  if (mpvFixEligible) {
+    mpvFixBtn = document.createElement("button")
+    mpvFixBtn.type = "button"
+    mpvFixBtn.className = primaryKind === "mpvFix" ? primaryClass : secondaryClass
+    mpvFixBtn.textContent = t("stream.mpvFix.action")
+    mpvFixBtn.addEventListener("click", () => {
+      hidePlaybackFailurePanel()
+      rememberMpvEmbeddedFixChannel(activePlaylistId, String(ctx.streamId))
+      void play(ctx.streamId, ctx.name, "auto:mpv-fix")
     })
   }
 
@@ -3746,10 +3823,11 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   // Primary leads; retry is always offered as the fallback.
   const orderedButtons = []
   if (primaryKind === "hevc" && hevcBtn) orderedButtons.push(hevcBtn)
+  else if (primaryKind === "mpvFix" && mpvFixBtn) orderedButtons.push(mpvFixBtn)
   else if (primaryKind === "audioFix" && audioFixBtn) orderedButtons.push(audioFixBtn)
   else if (primaryKind === "external" && extBtn) orderedButtons.push(extBtn)
   else orderedButtons.push(retryBtn)
-  for (const btn of [hevcBtn, audioFixBtn, extBtn, retryBtn]) {
+  for (const btn of [hevcBtn, mpvFixBtn, audioFixBtn, extBtn, retryBtn]) {
     if (btn && !orderedButtons.includes(btn)) orderedButtons.push(btn)
   }
   for (const btn of orderedButtons) actions.appendChild(btn)
@@ -4151,7 +4229,18 @@ async function play(streamId, name, reason = "user") {
     swapState()
   }
 
+  await mpvEmbeddedProbe
+  if (myRequest !== catchupRequestSeq) return
+
   let backend = getPlayerBackend()
+  if (
+    canSwapToMpvEmbedded(backend, mpvEmbeddedFixAvailable) &&
+    isMpvEmbeddedFixChannel(activePlaylistId, String(streamId))
+  ) {
+    backend = "mpv-embedded"
+  }
+  // Persisted setting can name mpv-embedded even when mpv itself isn't available.
+  if (backend === "mpv-embedded" && !mpvEmbeddedFixAvailable) backend = "artplayer"
   const channelHeaders = streamHeadersById.get(streamId) || null
   const channelDrm = streamDrmById.get(streamId) || null
 
@@ -4190,6 +4279,7 @@ async function play(streamId, name, reason = "user") {
 
   const wantsAudioProxyFix = audioProxyOneShotFixSet.has(streamId)
   const useAudioProxy =
+    !isNativeVideoBackend(backend) &&
     audioProxyAvailable &&
     !audioProxyBypassSet.has(streamId) &&
     (wantsAudioProxyFix || isAudioTranscodeChannel(activePlaylistId, String(streamId)))
@@ -4221,7 +4311,10 @@ async function play(streamId, name, reason = "user") {
     void stopAudioTranscode()
   }
 
-  const player = await ensureEmbeddedPlayer(backend)
+  const player = await ensureEmbeddedPlayer(backend, {
+    userAgent: channelHeaders?.userAgent || getUserAgent() || null,
+    referer: channelHeaders?.referer || null,
+  })
   // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
   if (myRequest !== catchupRequestSeq) {
     return
@@ -4274,7 +4367,7 @@ async function play(streamId, name, reason = "user") {
       const errorName = err?.name || String(err)
       const write = errorName === "AbortError" ? log.debug : log.info
       write("[xt:livetv] initial play() rejected - re-arming on canplay", { streamId, error: errorName })
-      const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      const mediaEl = mediaElementOf(player)
       if (!mediaEl) return
       const resume = () => {
         mediaEl.removeEventListener("canplay", resume)
@@ -4557,7 +4650,12 @@ async function playCatchup(channel, opts) {
   resetEmptyState()
   document.getElementById("player")?.removeAttribute("hidden")
 
-  const player = await ensureEmbeddedPlayer(backend, { liveui: false })
+  const channelHeaders = streamHeadersById.get(channel.id) || null
+  const player = await ensureEmbeddedPlayer(backend, {
+    liveui: false,
+    userAgent: channelHeaders?.userAgent || getUserAgent() || null,
+    referer: channelHeaders?.referer || null,
+  })
   // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
   if (requestSeq !== catchupRequestSeq) {
     return false
@@ -4713,7 +4811,7 @@ async function playCatchup(channel, opts) {
       const errorName = err?.name || String(err)
       const write = errorName === "AbortError" ? log.debug : log.info
       write("[xt:livetv] initial play() rejected - re-arming on canplay", { streamId, error: errorName })
-      const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      const mediaEl = mediaElementOf(player)
       if (!mediaEl) return
       const resume = () => {
         mediaEl.removeEventListener("canplay", resume)
@@ -4744,7 +4842,7 @@ function attachCatchupSeekInterceptor(player, seq) {
     catchupSeekingEl = null
     catchupSeekingHandler = null
   }
-  const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+  const mediaEl = mediaElementOf(player)
   if (!mediaEl) return
   catchupSeekingHandler = () => {
     if (seq !== playSeq || !catchupSession) return
@@ -4852,7 +4950,7 @@ async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
 
   // forceRemount: resume-after-long-pause must rebuild the connection even when the paused position still sits at a buffered edge.
   if (!seekOpts.forceRemount && catchupSession && catchupSession.channelId === channel.id && vjs) {
-    const videoEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const videoEl = mediaElementOf(vjs)
     const buffered = videoEl?.buffered
     if (buffered) {
       const relSeconds = (clamped.targetUtcMs - catchupSession.timelineStartUtcMs) / 1000

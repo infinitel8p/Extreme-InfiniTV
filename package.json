@@ -22,7 +22,8 @@
     "msix": "node ./buildfiles/make-msix-template.mjs",
     "msix:ci": "node ./buildfiles/make-msix-ci.mjs",
     "sync-version": "node ./buildfiles/sync-version.mjs",
-    "fetch-ffmpeg": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs"
+    "fetch-ffmpeg": "node ./src/scripts/ensure-ffmpeg-sidecar.mjs",
+    "fetch-mpv": "node ./src/scripts/ensure-mpv-runtime.mjs"
   },
   "dependencies": {
     "@astrojs/svelte": "^9.0.1",

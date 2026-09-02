@@ -24,6 +24,9 @@ mod http_range;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod matroska;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod mpv_embed;
+
 mod receiver;
 
 mod receiver_store;
@@ -239,10 +242,18 @@ pub fn run() {
         .manage(audio_proxy::AudioProxyState::default())
         .manage(discord::RpcState::default())
         .manage(external_player::ExternalPlayerState::default())
+        .manage(mpv_embed::MpvEmbedState::default())
         .manage(updater::PendingUpdateState::default())
         .manage(sniffer::SnifferState::default())
         .manage(vod_audio_proxy::VodAudioProxyState::default())
         .manage(vod_proxy::VodProxyState::default())
+        .on_page_load(|webview, payload| {
+            // The frontend's unload-time teardown invoke() dies with the discarded document.
+            if payload.event() == tauri::webview::PageLoadEvent::Started && webview.label() == "main" {
+                use tauri::Manager;
+                mpv_embed::on_main_page_navigation(webview.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             audio_proxy::audio_transcode_available,
             audio_proxy::register_audio_transcode,
@@ -263,6 +274,19 @@ pub fn run() {
             firewall::receiver_firewall_allow,
             hevc_extension::install_appx_package,
             hevc_extension::is_store_build,
+            mpv_embed::mpv_embed_available,
+            mpv_embed::mpv_embed_start,
+            mpv_embed::mpv_embed_load,
+            mpv_embed::mpv_embed_command,
+            mpv_embed::mpv_embed_set_property,
+            mpv_embed::mpv_embed_get_property,
+            mpv_embed::mpv_embed_set_bounds,
+            mpv_embed::mpv_embed_set_visible,
+            mpv_embed::mpv_embed_stop,
+            mpv_embed::mpv_embed_shutdown,
+            mpv_embed::mpv_embed_status,
+            mpv_embed::mpv_embed_pip_enter,
+            mpv_embed::mpv_embed_pip_exit,
             receiver::receiver_start,
             receiver::receiver_stop,
             receiver::receiver_status,
@@ -361,6 +385,7 @@ pub fn run() {
             use tauri::Manager;
             audio_proxy::shutdown(&_app_handle.state::<audio_proxy::AudioProxyState>());
             vod_audio_proxy::shutdown(&_app_handle.state::<vod_audio_proxy::VodAudioProxyState>());
+            mpv_embed::shutdown(&_app_handle.state::<mpv_embed::MpvEmbedState>());
         }
         if let tauri::RunEvent::Exit = _event {
             use tauri::Manager;

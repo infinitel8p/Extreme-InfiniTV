@@ -15,10 +15,20 @@ vi.mock("@/scripts/lib/i18n.js", () => ({ t: (key: string) => key }))
 
 type MountResult = { kind: "embedded"; handle: FakeEmbeddedHandle } | null
 let pendingMount: { resolve: (result: MountResult) => void } | null = null
+let requestedMountBackend: string | null = null
 
 vi.mock("@/scripts/lib/player-runtime", () => ({
-  mountPlayer: () => new Promise<MountResult>((resolve) => { pendingMount = { resolve } }),
+  mountPlayer: (_videoEl: unknown, backend: string) => {
+    requestedMountBackend = backend
+    return new Promise<MountResult>((resolve) => { pendingMount = { resolve } })
+  },
   playWhenReady: () => {},
+}))
+
+let mockPlayerBackend = "artplayer"
+
+vi.mock("@/scripts/lib/app-settings.js", () => ({
+  getPlayerBackend: () => mockPlayerBackend,
 }))
 
 let mockDnsProxyAvailable = false
@@ -261,6 +271,25 @@ describe("normalizeReportedVolume", () => {
     expect(normalizeReportedVolume(Number.NaN)).toBeUndefined()
     expect(normalizeReportedVolume(null)).toBeUndefined()
     expect(normalizeReportedVolume(undefined)).toBeUndefined()
+  })
+})
+
+describe("createEmbeddedReceiverEngine backend downgrade", () => {
+  beforeEach(() => {
+    pendingMount = null
+    requestedMountBackend = null
+    mockPlayerBackend = "artplayer"
+  })
+
+  it("downgrades mpv-embedded to artplayer, like the mpv/vlc external backends", async () => {
+    mockPlayerBackend = "mpv-embedded"
+    const dom = embeddedDom(fakeElement())
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+
+    void engine.play(liveDescriptor("A"))
+    await Promise.resolve()
+
+    expect(requestedMountBackend).toBe("artplayer")
   })
 })
 

@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { attachQualityChip, qualityLabel } from "../src/scripts/lib/quality-badge"
+import { attachQualityChip, qualityLabel, resolveQualityDimensions } from "../src/scripts/lib/quality-badge"
 
 describe("qualityLabel", () => {
   it("returns null for missing or invalid dimensions", () => {
@@ -202,5 +202,56 @@ describe("attachQualityChip", () => {
     // Listeners removed: further events must not resurrect the chip.
     video.dispatchEvent(new Event("resize"))
     expect(wrap.querySelector("[data-quality-chip]")).toBeNull()
+  })
+
+  it("falls back to engineStats dimensions when there is no media element (mpv-embedded)", () => {
+    const wrap = document.createElement("div")
+    document.body.appendChild(wrap)
+    const listeners = new Map<string, (...args: unknown[]) => void>()
+    const handle = {
+      engineStats: () => ({ videoWidth: 1920, videoHeight: 1080 }),
+      on: (event: string, fn: (...args: unknown[]) => void) => listeners.set(event, fn),
+      off: (event: string) => listeners.delete(event),
+    }
+    attachQualityChip(wrap, handle, { visibleMs: 1000 })
+    expect(wrap.querySelector("[data-quality-chip]")?.textContent).toBe("1080p")
+
+    listeners.get("resize")?.()
+    expect(wrap.querySelector("[data-quality-chip]")?.textContent).toBe("1080p")
+  })
+
+  it("returns a no-op detach for an mpv-style handle with neither a media element nor engineStats", () => {
+    const wrap = document.createElement("div")
+    const detach = attachQualityChip(wrap, { on: () => {} })
+    expect(() => detach()).not.toThrow()
+    expect(wrap.querySelector("[data-quality-chip]")).toBeNull()
+  })
+})
+
+describe("resolveQualityDimensions", () => {
+  function makeVideo(width: number, height: number): HTMLVideoElement {
+    const video = document.createElement("video")
+    Object.defineProperty(video, "videoWidth", { value: width, configurable: true })
+    Object.defineProperty(video, "videoHeight", { value: height, configurable: true })
+    return video
+  }
+
+  it("prefers the media element's decoded dimensions when present", () => {
+    const video = makeVideo(1280, 720)
+    expect(resolveQualityDimensions({ engineStats: () => ({ videoWidth: 1920, videoHeight: 1080 }) }, video)).toEqual({
+      width: 1280,
+      height: 720,
+    })
+  })
+
+  it("falls back to engineStats when there is no media element", () => {
+    expect(resolveQualityDimensions({ engineStats: () => ({ videoWidth: 1920, videoHeight: 1080 }) }, null)).toEqual({
+      width: 1920,
+      height: 1080,
+    })
+  })
+
+  it("returns nulls when neither source has dimensions", () => {
+    expect(resolveQualityDimensions({}, null)).toEqual({ width: null, height: null })
   })
 })

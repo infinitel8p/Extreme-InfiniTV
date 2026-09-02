@@ -80,6 +80,14 @@ Some channels use the HEVC (H.265) codec, which not every device can decode:
 - **Windows**: the app detects the missing codec and offers a one-click install of Microsoft's **HEVC Video Extensions** (a small download; the Microsoft Store build deep-links to the Store instead). Restart playback after the install finishes.
 - **Other platforms**: if the device can't decode HEVC in the app, hand the stream off to an external player - see [External players](./external-players/). Channels the app knows are HEVC show an **HEVC** badge in the Live TV list, and **Test stream** reports when HEVC support is the problem.
 
+## Switched to "mpv (embedded)" but nothing plays
+
+This Windows-only, experimental player needs mpv already installed on your machine - the app doesn't bundle a copy yet, so if it can't find one, nothing plays after you switch to it.
+
+- Confirm mpv is actually installed and works on its own - opening a terminal and running `mpv --version` is the quickest check.
+- If mpv isn't installed, that's the whole problem - the switch itself takes effect immediately, on the next thing you play, with no restart needed.
+- If you'd rather not install mpv, switch back to one of the built-in engines (ArtPlayer, Video.js, or Shaka Player) in **Settings > Watching > Playback**, or use the separate MPV handoff instead. See [External players](./external-players/).
+
 ## A stream works in VLC but not the in-app player (Android)
 
 Some providers gate channels behind a specific User-Agent. The in-app player respects per-channel User-Agents on Android, but not every channel sets one correctly. Try a custom UA in **Settings > Network** (the **Custom** field overrides the preset) - your provider can tell you which value to use.

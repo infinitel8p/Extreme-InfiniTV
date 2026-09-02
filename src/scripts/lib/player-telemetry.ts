@@ -1,6 +1,6 @@
 // Normalized engine telemetry for hls.js / shaka / mpegts.js / native <video>.
 
-export type EngineKind = "hls.js" | "shaka" | "mpegts.js" | "native"
+export type EngineKind = "hls.js" | "shaka" | "mpegts.js" | "native" | "mpv"
 
 export interface EngineStats {
   engine: EngineKind | null

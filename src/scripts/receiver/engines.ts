@@ -186,7 +186,10 @@ export function createEmbeddedReceiverEngine(
   let lastLoadProgressAt = 0
 
   function getMediaElementFor(handle: VjsLikeHandle | null): HTMLVideoElement | null {
-    return handle?.getMediaElement?.() ?? dom.videoEl
+    // A handle that defines getMediaElement() is authoritative, even when it returns
+    // null (mpv-embedded has no <video> in play) - don't report stats off dom.videoEl instead.
+    if (handle && typeof handle.getMediaElement === "function") return handle.getMediaElement()
+    return dom.videoEl
   }
 
   // Backends answer 0 for unknown; reporting 0 would pin the remote's scrubber range at zero.
@@ -457,7 +460,9 @@ export function createEmbeddedReceiverEngine(
     if (mounted?.kind === "embedded") return mounted.handle
     if (!dom.videoEl) return null
     let backend = getPlayerBackend()
-    if (backend === "mpv" || backend === "vlc") backend = "artplayer"
+    // mpv-embedded mounts a local control bar (mpv-controls.ts) meant for on-device
+    // input; the receiver is remote-controlled only, so it downgrades like mpv/vlc.
+    if (backend === "mpv" || backend === "vlc" || backend === "mpv-embedded") backend = "artplayer"
     const result = await mountPlayer(dom.videoEl, backend, { autoplay: true })
     if (result.kind !== "embedded") {
       log.warn("[xt:receiver] mountPlayer returned an external backend; receiver requires embedded playback")

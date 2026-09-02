@@ -117,8 +117,15 @@ export const NETWORK_TIMEOUT_EVENT = "xt:network-timeout-changed"
 export const DNS_EVENT = "xt:dns-changed"
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 1
 export const MAX_DOWNLOAD_CONCURRENCY = 4
-export const PLAYER_BACKENDS = ["artplayer", "videojs", "shaka", "mpv", "vlc"]
+export const PLAYER_BACKENDS = ["artplayer", "videojs", "shaka", "mpv-embedded", "mpv", "vlc"]
 export const DEFAULT_PLAYER_BACKEND = "artplayer"
+
+// mpv-embedded only ships on Windows desktop (Rust commands + sidecar are Windows-only).
+export function isWindowsDesktopSync() {
+  if (typeof window === "undefined") return false
+  const isTauriRuntime = !!window.__TAURI_INTERNALS__ || !!window.__TAURI__
+  return isTauriRuntime && /Windows/i.test(navigator.userAgent || "")
+}
 export const EXTERNAL_PLAYER_BACKENDS = ["mpv", "vlc"]
 export const EXTERNAL_PLAYER_PREF_VALUES = ["mpv", "vlc", "ask"]
 export const UA_PRESETS = [
@@ -755,6 +762,10 @@ export function getPlayerBackend() {
   const backend = PLAYER_BACKENDS.includes(raw) ? raw : DEFAULT_PLAYER_BACKEND
   // Clamp mpv/vlc pick to default when sandboxed; storage stays untouched.
   if (EXTERNAL_PLAYER_BACKENDS.includes(backend) && sandboxRuntimeSync()) {
+    return DEFAULT_PLAYER_BACKEND
+  }
+  // Clamp mpv-embedded to default off Windows desktop; storage stays untouched.
+  if (backend === "mpv-embedded" && !isWindowsDesktopSync()) {
     return DEFAULT_PLAYER_BACKEND
   }
   return backend

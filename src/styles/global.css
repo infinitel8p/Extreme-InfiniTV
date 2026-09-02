@@ -2632,6 +2632,48 @@ html[data-density="comfortable"] :is(#movie-grid, #series-grid) { gap: 1.5rem; }
     }
 }
 
+.mpv-embed-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 35;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.4rem 0.85rem;
+    border-radius: 9999px;
+    background: color-mix(in oklch, var(--color-bg) 70%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-line) 90%, transparent);
+    color: var(--color-fg);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    backdrop-filter: blur(12px);
+    pointer-events: none;
+    animation: buffering-chip-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.mpv-embed-loading::before {
+    content: "";
+    display: inline-block;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 9999px;
+    margin-inline-end: 0.45rem;
+    background: var(--color-accent);
+    vertical-align: 0;
+    animation: buffering-chip-dot 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+[data-perf-mode="on"] .mpv-embed-loading,
+[data-perf-mode="on"] .mpv-embed-loading::before {
+    animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .mpv-embed-loading,
+    .mpv-embed-loading::before {
+        animation: none;
+    }
+}
+
 .quality-chip {
     position: absolute;
     top: 0.75rem;
@@ -3303,3 +3345,175 @@ html.xt-pip-active body [data-xt-pip-fill] {
     display: block !important;
 }
 
+/* ────────────────────────────── */
+/* Native video hole (embedded mpv) */
+/* ────────────────────────────── */
+/* mpv paints below the webview; opaque layers over its rect need a rounded
+   hole. Never clip an element with children - only a childless ::before
+   paints it, via a box-shadow spread that naturally follows border-radius. */
+html[data-native-video="on"] body,
+html[data-native-video="on"] .xt-video-hole {
+    background: transparent;
+}
+html[data-native-video="on"] body:not(:has(.xt-video-hole))::before,
+html[data-native-video="on"] .xt-video-hole::before {
+    content: "";
+    position: fixed;
+    left: var(--xt-video-x, 0px);
+    top: var(--xt-video-y, 0px);
+    width: var(--xt-video-w, 0px);
+    height: var(--xt-video-h, 0px);
+    border-radius: var(--xt-video-r, 0px);
+    box-shadow: 0 0 0 100vmax var(--xt-video-hole-color, var(--color-bg));
+    pointer-events: none;
+    z-index: -1;
+}
+html[data-native-video="on"] .xt-video-hole {
+    --xt-video-hole-color: var(--color-surface);
+}
+html[data-native-video="on"] #player-wrap,
+html[data-native-video="on"] #movie-detail-player-wrap,
+html[data-native-video="on"] #series-detail-player-wrap,
+html[data-native-video="on"] #receiver-player {
+    background: transparent;
+}
+
+/* ────────────────────────────── */
+/* Embedded mpv control bar       */
+/* ────────────────────────────── */
+/* mpv paints below the webview and draws no chrome of its own - this bar is
+   the only playback UI. Stays dark in both themes (cinematic surface exception). */
+.mpv-controls {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem 1rem;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0) 100%);
+    color: #fff;
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1), transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.mpv-controls[data-visible="false"] {
+    opacity: 0;
+    transform: translateY(0.5rem);
+    pointer-events: none;
+}
+[data-perf-mode="on"] .mpv-controls {
+    transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .mpv-controls {
+        transition: none;
+    }
+}
+
+.mpv-controls__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: 9999px;
+    border: none;
+    background: transparent;
+    color: #fff;
+    cursor: pointer;
+    transition: background-color 150ms;
+}
+.mpv-controls__btn:hover,
+.mpv-controls__btn:focus-visible {
+    background: rgba(255, 255, 255, 0.14);
+}
+.mpv-controls__btn:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+.mpv-controls__btn:active {
+    transform: scale(0.94);
+}
+.mpv-controls__btn[hidden] {
+    display: none;
+}
+[data-perf-mode="on"] .mpv-controls__btn {
+    transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .mpv-controls__btn {
+        transition: none;
+    }
+}
+
+/* Custom range track: layered track/buffered/played divs behind a transparent,
+   appearance-reset <input type="range"> so native keyboard and drag handling
+   still apply while the visuals stay in one shared skin. */
+.mpv-controls__slider {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: 20px;
+}
+.mpv-controls__track,
+.mpv-controls__fill {
+    position: absolute;
+    inset-inline-start: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 4px;
+    width: 0;
+    border-radius: 9999px;
+    pointer-events: none;
+}
+.mpv-controls__track {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.2);
+}
+.mpv-controls__fill {
+    background: var(--color-accent);
+}
+.mpv-controls__fill--buffered {
+    background: rgba(255, 255, 255, 0.35);
+}
+.mpv-controls__range {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    cursor: pointer;
+}
+.mpv-controls__range::-webkit-slider-runnable-track {
+    background: transparent;
+    height: 4px;
+}
+.mpv-controls__range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    border-radius: 9999px;
+    background: var(--color-accent);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.mpv-controls__range::-moz-range-track {
+    background: transparent;
+    height: 4px;
+}
+.mpv-controls__range::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: none;
+    border-radius: 9999px;
+    background: var(--color-accent);
+}
+.mpv-controls__range:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+}

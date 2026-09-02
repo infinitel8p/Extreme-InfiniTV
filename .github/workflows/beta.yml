@@ -167,6 +167,7 @@ jobs:
             args: "--bundles nsis"
             rust-targets: ""
             sidecar-asset: ffmpeg-x86_64-pc-windows-msvc.exe
+            mpv-sidecar-asset: mpv-x86_64-pc-windows-msvc.exe
           - os: ubuntu-22.04
             args: "--bundles appimage"
             rust-targets: ""
@@ -296,6 +297,17 @@ jobs:
           if [ "${{ matrix.os }}" != "windows-latest" ]; then
             chmod +x "src-tauri/binaries/$DEST"
           fi
+
+      # mpv sidecar binaries come from the "mpv Runtime" workflow's rolling
+      # mpv-runtime-v1 prerelease, not built here. Windows only.
+      # The fetch retries so a same-push runtime rebuild can finish publishing.
+      - name: Fetch mpv runtime
+        if: matrix.os == 'windows-latest'
+        uses: ./.github/actions/fetch-mpv-sidecar
+        with:
+          asset: ${{ matrix.mpv-sidecar-asset }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          poll: "true"
 
       - run: pnpm sync-version ${{ needs.create-beta-release.outputs.version }}
 

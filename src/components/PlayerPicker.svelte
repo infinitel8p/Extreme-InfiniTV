@@ -14,6 +14,7 @@
     PLAYER_BACKENDS,
     PLAYER_BACKEND_EVENT,
     EXTERNAL_PLAYER_PREF_VALUES,
+    isWindowsDesktopSync,
   } from "@/scripts/lib/app-settings.js"
   import {
     detectPlayer,
@@ -48,6 +49,8 @@
   let externalPref = $state(getExternalPlayerPref())
   // externalPlayersAvailable already reflects sandbox state.
   const sandboxed = isDesktopTauriEnv && !externalPlayersAvailable
+  // mpv-embedded only ships on Windows desktop (Rust commands + sidecar are Windows-only).
+  const mpvEmbeddedAvailable = isDesktopTauriEnv && isWindowsDesktopSync()
 
   let titleLabel = $state(label("title", "Playback"))
   let videojsLabel = $state(label("backend.videojs", "Video.js"))
@@ -55,12 +58,14 @@
   let artplayerLabel = $state(label("backend.artplayer", "ArtPlayer (default)"))
   let shakaLabel = $state(label("backend.shaka", "Shaka Player"))
   let shakaHelper = $state(label("backend.shakaHelper", "Google's streaming player with strong DASH and DRM support."))
-  let mpvLabel = $state(label("backend.mpv", "MPV (external)"))
+  let mpvLabel = $state(label("backend.mpv", "MPV (separate window)"))
   let vlcLabel = $state(label("backend.vlc", "VLC (external)"))
+  let mpvEmbeddedLabel = $state(label("backend.mpvEmbedded", "mpv (embedded, experimental)"))
   let artplayerHelper = $state(label("backend.artplayerHelper", "Lightweight HTML5 player powered by ArtPlayer + hls.js."))
   let artplayerAndroidHelper = $state(label("backend.artplayerAndroidHelper", "Not supported on Android - Video.js is used instead."))
   let mpvHelper = $state(label("backend.mpvHelper", "Best for 4K and HDR."))
   let vlcHelper = $state(label("backend.vlcHelper", "Plays almost any format."))
+  let mpvEmbeddedHelper = $state(label("backend.mpvEmbeddedHelper", "Plays almost any format in-app. Requires a restart to switch."))
   let pathLabel = $state(label("pathLabel", "Path"))
   let readyLabel = $state(label("ready", "Ready"))
   let activeLabel = $state(label("active", "Active"))
@@ -121,12 +126,14 @@
     artplayerLabel = label("backend.artplayer", "ArtPlayer (default)")
     shakaLabel = label("backend.shaka", "Shaka Player")
     shakaHelper = label("backend.shakaHelper", "Google's streaming player with strong DASH and DRM support.")
-    mpvLabel = label("backend.mpv", "MPV (external)")
+    mpvLabel = label("backend.mpv", "MPV (separate window)")
     vlcLabel = label("backend.vlc", "VLC (external)")
+    mpvEmbeddedLabel = label("backend.mpvEmbedded", "mpv (embedded, experimental)")
     artplayerHelper = label("backend.artplayerHelper", "Lightweight HTML5 player powered by ArtPlayer + hls.js.")
     artplayerAndroidHelper = label("backend.artplayerAndroidHelper", "Not supported on Android - Video.js is used instead.")
     mpvHelper = label("backend.mpvHelper", "Best for 4K and HDR.")
     vlcHelper = label("backend.vlcHelper", "Plays almost any format.")
+    mpvEmbeddedHelper = label("backend.mpvEmbeddedHelper", "Plays almost any format in-app. Requires a restart to switch.")
     pathLabel = label("pathLabel", "Path")
     readyLabel = label("ready", "Ready")
     activeLabel = label("active", "Active")
@@ -332,6 +339,28 @@
         <span class="active-pill" aria-hidden="true">{activeLabel}</span>
       {/if}
     </label>
+
+    {#if mpvEmbeddedAvailable}
+    <label class="player-row">
+      <input
+        type="radio"
+        name="player-backend"
+        value="mpv-embedded"
+        checked={backend === "mpv-embedded"}
+        onchange={onBackendChange}
+        aria-labelledby="playback-mpv-embedded-title"
+        aria-describedby="playback-mpv-embedded-helper"
+        class="mt-0.5"
+      />
+      <span class="flex flex-col gap-0.5 min-w-0 flex-1">
+        <span id="playback-mpv-embedded-title" class="player-row__title">{mpvEmbeddedLabel}</span>
+        <span id="playback-mpv-embedded-helper" class="text-xs text-fg-3">{mpvEmbeddedHelper}</span>
+      </span>
+      {#if backend === "mpv-embedded"}
+        <span class="active-pill" aria-hidden="true">{activeLabel}</span>
+      {/if}
+    </label>
+    {/if}
 
     {#if externalPlayersAvailable && !sandboxed}
     <label class="player-row">

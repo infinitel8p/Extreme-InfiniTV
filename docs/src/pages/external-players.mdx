@@ -12,7 +12,21 @@ import Shot from "../components/Shot.astro"
 
 The built-in player works for most streams. If a channel won't play, or you'd rather watch in MPV or VLC, hand the stream off to an external player. When a stream's audio format can't be decoded in-app (AC-3 / Dolby Digital is the usual case), the app says so and offers the external-player handoff right in the error message.
 
-Everything playback-related lives in **Settings > Watching > Playback**: the built-in player engine (ArtPlayer by default, with Video.js and Shaka Player as alternatives), the external player paths, and the option to make MPV or VLC the default way every stream opens.
+Everything playback-related lives in **Settings > Watching > Playback**: the built-in player engine (ArtPlayer by default, with Video.js, Shaka Player, and an experimental in-app mpv on Windows as alternatives), the external player paths, and the option to make MPV or VLC the default way every stream opens.
+
+## In-app mpv (Windows, experimental)
+
+Windows has a fourth engine choice in **Settings > Watching > Playback**, listed as **mpv (embedded, experimental)** next to ArtPlayer, Video.js, and Shaka Player. Pick it and mpv plays every stream right inside the app, instead of handing off to a separate window.
+
+mpv decodes formats natively that the built-in players can't: AC-3, E-AC-3, MP2, and DTS audio, and HEVC (H.265) video, among others. Channels or movies that would otherwise need the audio fix, the Windows HEVC extension, or an external player just play.
+
+It's experimental and Windows-only for now - macOS and Linux aren't supported yet. The default player is unchanged, so nothing switches unless you pick it yourself, and the switch takes effect the next time you start playback - no restart needed.
+
+It also needs mpv already installed on your machine today - the app doesn't bundle a copy yet. If mpv is installed the normal way, so it's on your system PATH, the app finds it automatically; get it from [mpv.io](https://mpv.io) or your package manager if you don't already have it.
+
+<Callout type="note">
+  This is different from **MPV (separate window)** further down the same list - that one hands the stream off to MPV running in its own window outside the app. The in-app option plays inside Extreme InfiniTV itself.
+</Callout>
 
 ## Desktop (Windows / macOS / Linux)
 

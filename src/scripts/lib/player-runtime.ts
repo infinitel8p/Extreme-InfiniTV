@@ -4,6 +4,7 @@ import { log, redactUrl } from "@/scripts/lib/log.js"
 import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
 import { splitUrlAuth } from "@/scripts/lib/url-auth.js"
 import { clearKeyAvailable, isParseFailureDetail } from "@/scripts/lib/codec-hints"
+import type { StartFailureKind } from "@/scripts/lib/codec-hints"
 import { t } from "@/scripts/lib/i18n.js"
 import { escapeHtml } from "@/scripts/lib/format.js"
 import { ICON_BADGE_CC } from "@/scripts/lib/icons.js"
@@ -27,9 +28,10 @@ import {
   getPlayerExtraArgs,
   getPlayerReuseInstance,
   getUserAgent,
+  getNetworkTimeoutSeconds,
   EXTERNAL_PLAYER_BACKENDS,
 } from "@/scripts/lib/app-settings.js"
-import { bindMonoAudio, noteMonoSourceChange } from "@/scripts/lib/audio-effects.js"
+import { bindMonoAudio, bindMonoAudioMpv, noteMonoSourceChange } from "@/scripts/lib/audio-effects.js"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 import {
   createPlaybackTelemetry,
@@ -41,9 +43,11 @@ import {
 import { dnsProxyAvailable, ensureDnsProxy, cachedDnsProxyBase } from "@/scripts/lib/dns-proxy.ts"
 import { wrapProxyUrlKeepingUserinfo, unwrapProxyUrl } from "@/scripts/lib/dns-proxy-url.ts"
 import type { DnsServer } from "@/scripts/lib/dns-config.ts"
+import { isNativeVideoBackend } from "@/scripts/lib/player-backend.ts"
+import type { PlayerBackend, ExternalPlayerKind } from "@/scripts/lib/player-backend.ts"
 
-export type PlayerBackend = "videojs" | "artplayer" | "shaka" | "mpv" | "vlc"
-export type ExternalPlayerKind = "mpv" | "vlc"
+export type { PlayerBackend, ExternalPlayerKind }
+export { isNativeVideoBackend }
 
 export const RESUME_MIN_SECONDS_DEFAULT = 5
 
@@ -68,6 +72,8 @@ export interface VjsLikeHandle {
   pause(): void
   paused?(): boolean
   muted?(value?: boolean): boolean | void
+  /** Normalized 0..1, matching the native `<video>` element's `volume`. */
+  volume?(value?: number): number | void
   reset?(): void
   dispose?(): void | Promise<void>
   duration?(): number
@@ -91,6 +97,7 @@ export interface VjsLikeHandle {
   engineStats?(): EngineStats | null
   /** Subscribes to engine lifecycle events (variant switches, errors, recoveries) for a stream-health log. */
   onEngineEvent?(listener: (event: EngineEvent) => void): () => void
+  setProperty?(name: string, value: unknown): Promise<void>
 }
 
 export interface ExternalLaunchOptions {
@@ -110,7 +117,7 @@ export interface ExternalLauncher {
 }
 
 export type Mounted =
-  | { kind: "embedded"; backend: "videojs" | "artplayer" | "shaka"; handle: VjsLikeHandle }
+  | { kind: "embedded"; backend: "videojs" | "artplayer" | "shaka" | "mpv-embedded"; handle: VjsLikeHandle }
   | { kind: "external"; backend: ExternalPlayerKind; launcher: ExternalLauncher }
 
 export interface MountOptions {
@@ -123,6 +130,8 @@ export interface MountOptions {
   pictureInPictureToggle?: boolean
   controlBar?: Record<string, unknown>
   html5?: Record<string, unknown>
+  userAgent?: string | null
+  referer?: string | null
 }
 
 export const isTauri =
@@ -215,7 +224,7 @@ function wrapForDnsProxySync(url: string): string {
 }
 
 // External-player DNS-proxy wrap; re-embeds userinfo for MPV/VLC basic auth.
-async function wrapForDnsProxyExternal(url: string): Promise<string> {
+export async function wrapForDnsProxyExternal(url: string): Promise<string> {
   if (!dnsProxyAvailable() || !cachedGetActiveDnsOverride) return url
   let override: DnsServer | null = null
   try {
@@ -3088,6 +3097,44 @@ function wireMonoAudioDisposal(handle: VjsLikeHandle): void {
   }
 }
 
+function wireMonoAudioDisposalMpv(handle: VjsLikeHandle): void {
+  const disposeMonoAudio = bindMonoAudioMpv(handle)
+  const originalDispose = handle.dispose?.bind(handle)
+  handle.dispose = () => {
+    disposeMonoAudio()
+    return originalDispose?.()
+  }
+}
+
+function dispatchPlayerFallback(requested: PlayerBackend, used: PlayerBackend): void {
+  try {
+    document.dispatchEvent(new CustomEvent("xt:player-fallback", { detail: { requested, used } }))
+  } catch {}
+}
+
+/** Pure backend-availability decision, unit-testable without the platform probes it's normally fed. */
+export function resolveBackendFrom(
+  backend: PlayerBackend,
+  context: { isAndroid: boolean; mpvAvailable: boolean; externalAvailable: boolean },
+): PlayerBackend {
+  if (backend === "artplayer" && context.isAndroid) return "videojs"
+  if (backend === "mpv-embedded" && !context.mpvAvailable) return "artplayer"
+  if ((backend === "mpv" || backend === "vlc") && !context.externalAvailable) return "artplayer"
+  return backend
+}
+
+/** The backend mountPlayer will actually mount, after platform-availability fallbacks. */
+export async function resolveEffectiveBackend(
+  backend: PlayerBackend = getPlayerBackend() as PlayerBackend,
+): Promise<PlayerBackend> {
+  let mpvAvailable = false
+  if (backend === "mpv-embedded") {
+    const { mpvEmbeddedAvailable } = await import("@/scripts/lib/mpv-embedded.ts")
+    mpvAvailable = await mpvEmbeddedAvailable()
+  }
+  return resolveBackendFrom(backend, { isAndroid, mpvAvailable, externalAvailable: externalPlayersAvailable })
+}
+
 // ---------------------------------------------------------------------------
 // Mount entry point
 // ---------------------------------------------------------------------------
@@ -3097,19 +3144,30 @@ export async function mountPlayer(
   options: MountOptions = {},
 ): Promise<Mounted> {
   await ensurePlaybackDnsReady()
-  if (backend === "artplayer" && isAndroid) backend = "videojs"
-  if (backend === "mpv" || backend === "vlc") {
-    if (!externalPlayersAvailable) {
-      log.warn(`[xt:player] external backend "${backend}" requested but not available; falling back to artplayer`)
-      try {
-        document.dispatchEvent(
-          new CustomEvent("xt:player-fallback", {
-            detail: { requested: backend, used: "artplayer" },
-          }),
-        )
-      } catch {}
-      return mountPlayer(videoEl, "artplayer", options)
+  const requestedBackend = backend
+  backend = await resolveEffectiveBackend(backend)
+  if (backend !== requestedBackend) {
+    log.warn(`[xt:player] backend "${requestedBackend}" unavailable; falling back to "${backend}"`)
+    dispatchPlayerFallback(requestedBackend, backend)
+  }
+  if (backend === "mpv-embedded") {
+    const { createMpvEmbeddedHandle } = await import("@/scripts/lib/mpv-embedded.ts")
+    const container = videoEl.parentElement ?? videoEl
+    const handle = await createMpvEmbeddedHandle(container, {
+      userAgent: options.userAgent || getUserAgent() || DEFAULT_BROWSER_UA,
+      referer: options.referer ?? null,
+      networkTimeoutSeconds: getNetworkTimeoutSeconds(),
+      videoElement: videoEl,
+    })
+    if (handle) {
+      wireMonoAudioDisposalMpv(handle)
+      return { kind: "embedded", backend: "mpv-embedded", handle }
     }
+    log.warn(`[xt:player] embedded mpv requested but unavailable; falling back to artplayer`)
+    dispatchPlayerFallback(backend, "artplayer")
+    return mountPlayer(videoEl, "artplayer", options)
+  }
+  if (backend === "mpv" || backend === "vlc") {
     return {
       kind: "external",
       backend,
@@ -3157,6 +3215,24 @@ export async function stopExternalPlayback(kind: string): Promise<boolean> {
 
 export function isExternalBackend(backend: PlayerBackend): boolean {
   return EXTERNAL_PLAYER_BACKENDS.includes(backend as ExternalPlayerKind)
+}
+
+/** True when the current backend could still hand off to embedded mpv (not already mpv, not an external launcher). */
+export function canSwapToMpvEmbedded(
+  backend: PlayerBackend | string | null | undefined,
+  mpvAvailable: boolean
+): boolean {
+  return mpvAvailable && !isNativeVideoBackend(backend) && !isExternalBackend(backend as PlayerBackend)
+}
+
+/** hevc/codec verdicts are exactly what mpv's native decoder answers that MSE can't. */
+export function shouldOfferMpvEmbeddedFix(
+  failureKind: StartFailureKind | string | null | undefined,
+  backend: PlayerBackend | string | null | undefined,
+  mpvAvailable: boolean
+): boolean {
+  if (failureKind !== "hevc" && failureKind !== "codec") return false
+  return canSwapToMpvEmbedded(backend, mpvAvailable)
 }
 
 export interface PlayWhenReadyOptions {

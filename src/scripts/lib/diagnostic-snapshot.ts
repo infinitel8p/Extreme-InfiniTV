@@ -49,6 +49,8 @@ export interface SessionSnapshotInputs {
   vodAudioRemuxAvailable: boolean | null
   customFfmpegPathConfigured: boolean | null
   playerBackend: string | null
+  mpvBinaryResolved: boolean | null
+  mpvSessionActive: boolean | null
   perfMode: boolean | null
   perfModeAuto: boolean | null
   tvDevice: boolean | null
@@ -78,6 +80,8 @@ export interface SessionSnapshot {
   vodAudioRemuxAvailable: boolean | null
   customFfmpegPathConfigured: boolean | null
   playerBackend: string | null
+  mpvBinaryResolved: boolean | null
+  mpvSessionActive: boolean | null
   perfMode: boolean | null
   perfModeAuto: boolean | null
   tvDevice: boolean | null
@@ -127,6 +131,8 @@ export function buildSessionSnapshot(inputs: SessionSnapshotInputs): SessionSnap
     vodAudioRemuxAvailable: inputs.vodAudioRemuxAvailable,
     customFfmpegPathConfigured: inputs.customFfmpegPathConfigured,
     playerBackend: inputs.playerBackend,
+    mpvBinaryResolved: inputs.mpvBinaryResolved,
+    mpvSessionActive: inputs.mpvSessionActive,
     perfMode: inputs.perfMode,
     perfModeAuto: inputs.perfModeAuto,
     tvDevice: inputs.tvDevice,
@@ -211,9 +217,25 @@ function detectTvDevice(): boolean | null {
   return !!bridge.isTv()
 }
 
+// Reuses the existing mpv-embed commands; reports resolution/activity as booleans,
+// never the resolved binary path, since a PATH-derived path can embed the OS username.
+async function peekMpvEmbedStatus(): Promise<{ binaryResolved: boolean | null; sessionActive: boolean | null }> {
+  if (!detectIsTauri() || detectIsAndroid()) return { binaryResolved: null, sessionActive: null }
+  const { invoke } = await import("@tauri-apps/api/core")
+  const [availability, status] = await Promise.all([
+    safeAsync(() => invoke("mpv_embed_available") as Promise<{ supported: boolean }>, null),
+    safeAsync(() => invoke("mpv_embed_status") as Promise<{ running: boolean }>, null),
+  ])
+  return {
+    binaryResolved: availability ? availability.supported : null,
+    sessionActive: status ? status.running : null,
+  }
+}
+
 async function gatherInputs(): Promise<SessionSnapshotInputs> {
   const entries = await safeAsync(() => getEntries(), null)
   const activeEntry = await safeAsync(() => getActiveEntry(), null)
+  const mpvEmbedStatus = await safeAsync(peekMpvEmbedStatus, { binaryResolved: null, sessionActive: null })
 
   return {
     appVersion: await safeAsync(() => getCurrentAppVersion(), null),
@@ -236,6 +258,8 @@ async function gatherInputs(): Promise<SessionSnapshotInputs> {
     vodAudioRemuxAvailable: safeSync(peekVodAudioRemuxAvailable, null),
     customFfmpegPathConfigured: safeSync(() => !!getFfmpegPath(), null),
     playerBackend: safeSync(() => getPlayerBackend(), null),
+    mpvBinaryResolved: mpvEmbedStatus.binaryResolved,
+    mpvSessionActive: mpvEmbedStatus.sessionActive,
     perfMode: safeSync(() => getPerfMode(), null),
     perfModeAuto: safeSync(() => localStorage.getItem("xt_perf_mode_auto") === "1", null),
     tvDevice: safeSync(detectTvDevice, null),

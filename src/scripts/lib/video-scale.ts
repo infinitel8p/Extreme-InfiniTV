@@ -1,8 +1,4 @@
-// Embedded-player display mode: fit (backend default), fill, zoom, or
-// a forced 16:9 / 4:3 box. All three embedded backends (videojs, artplayer,
-// shaka) end up with a plain <video> inside the container `mountPlayer` hands
-// back via `handle.el()`. Geometry is applied through an injected stylesheet
-// rather than inline styles so backends can't clobber it (see below).
+// Embedded-player display mode (fit/fill/zoom/16:9/4:3) via an injected stylesheet.
 
 export type VideoScaleMode = "fit" | "fill" | "zoom" | "16:9" | "4:3"
 
@@ -57,6 +53,25 @@ function ratioForMode(mode: VideoScaleMode): number | null {
   return null
 }
 
+export interface MpvVideoScaleProperties {
+  panscan: number
+  videoUnscaled: boolean
+  videoAspectOverride: string
+}
+
+/**
+ * mpv's renderer already fills the exact container rect (see mpv-embedded.ts's bounds
+ * push), so "fit" is mpv's own default framing: panscan crops fill/zoom to remove
+ * letterboxing, and video-aspect-override reproduces a forced 16:9/4:3 box.
+ */
+export function mpvPropertiesForVideoScale(mode: VideoScaleMode): MpvVideoScaleProperties {
+  const defaults: MpvVideoScaleProperties = { panscan: 0, videoUnscaled: false, videoAspectOverride: "no" }
+  if (mode === "fill" || mode === "zoom") return { ...defaults, panscan: 1 }
+  if (mode === "16:9") return { ...defaults, videoAspectOverride: "16:9" }
+  if (mode === "4:3") return { ...defaults, videoAspectOverride: "4:3" }
+  return defaults
+}
+
 // Backends (artplayer especially) re-apply their own inline styles on the
 // <video> at arbitrary times (fullscreen enter/exit, debounced resize), so we
 // drive geometry from an injected stylesheet whose !important rules beat those
@@ -91,8 +106,13 @@ export interface VideoScaleController {
   dispose(): void
 }
 
+export interface MpvVideoScaleHandle {
+  setProperty?(name: string, value: unknown): Promise<void>
+}
+
 export function createVideoScaleController(
   getContainer: () => HTMLElement | null,
+  getHandle?: () => MpvVideoScaleHandle | null | undefined,
 ): VideoScaleController {
   let resizeObserver: ResizeObserver | null = null
   let observedBlock: HTMLElement | null = null
@@ -128,6 +148,16 @@ export function createVideoScaleController(
   function apply(mode: VideoScaleMode): void {
     const container = getContainer()
     if (!container) return
+
+    const setProperty = getHandle?.()?.setProperty
+    if (setProperty) {
+      const properties = mpvPropertiesForVideoScale(mode)
+      void setProperty("panscan", properties.panscan)
+      void setProperty("video-unscaled", properties.videoUnscaled)
+      void setProperty("video-aspect-override", properties.videoAspectOverride)
+      return
+    }
+
     ensureStyleInjected()
     clear(container)
 

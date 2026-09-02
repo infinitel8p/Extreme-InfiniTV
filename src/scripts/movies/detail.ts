@@ -64,6 +64,7 @@ import {
   setVideoScale,
   isTmdbActive,
   getContentLanguage,
+  getUserAgent,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
 import { resolveTitleEnrichment, peekEarlyTitleEnrichment } from "@/scripts/lib/enrichment.ts"
@@ -759,7 +760,7 @@ function setupPipButton(player) {
   pipBtn.addEventListener("click", () => togglePip(player))
 }
 
-const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null), () => vjs)
 
 function resolveVideoScaleMode() {
   if (activePlaylistId && movie) {
@@ -848,6 +849,7 @@ async function ensureEmbeddedPlayer(backend) {
     autoplay: false,
     aspectRatio: "16:9",
     pictureInPictureToggle: !hasNativePipBridge,
+    userAgent: getUserAgent() || null,
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle

@@ -67,6 +67,7 @@ import {
   setVideoScale,
   isTmdbActive,
   getContentLanguage,
+  getUserAgent,
   VIDEO_SCALE_EVENT,
 } from "@/scripts/lib/app-settings.js"
 import { fetchSeasonEnrichment, peekCachedSeasonEnrichment } from "@/scripts/lib/tmdb-enrich.ts"
@@ -1299,7 +1300,7 @@ function setupPipButton(player) {
 
 // One display-mode override per series (not per episode) - same mounted
 // player and container across episode changes.
-const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null), () => vjs)
 
 function resolveVideoScaleMode() {
   if (activePlaylistId && series) {
@@ -1407,6 +1408,7 @@ async function ensureEmbeddedPlayer(backend) {
     autoplay: false,
     aspectRatio: "16:9",
     pictureInPictureToggle: !hasNativePipBridge,
+    userAgent: getUserAgent() || null,
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle

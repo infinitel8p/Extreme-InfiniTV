@@ -430,6 +430,7 @@ jobs:
             args: ""
             rust-targets: ""
             sidecar-asset: ffmpeg-x86_64-pc-windows-msvc.exe
+            mpv-sidecar-asset: mpv-x86_64-pc-windows-msvc.exe
           - os: macos-latest
             args: "--target universal-apple-darwin"
             rust-targets: "aarch64-apple-darwin x86_64-apple-darwin"
@@ -442,6 +443,7 @@ jobs:
             args: "--bundles nsis"
             rust-targets: ""
             sidecar-asset: ffmpeg-aarch64-pc-windows-msvc.exe
+            mpv-sidecar-asset: mpv-aarch64-pc-windows-msvc.exe
           - os: ubuntu-22.04-arm
             args: ""
             rust-targets: ""
@@ -533,6 +535,15 @@ jobs:
           if [[ "${{ matrix.os }}" != windows-* ]]; then
             chmod +x "src-tauri/binaries/$DEST"
           fi
+
+      # mpv sidecar binaries come from the "mpv Runtime" workflow's rolling
+      # mpv-runtime-v1 prerelease, not built here. Windows only.
+      - name: Fetch mpv runtime
+        if: startsWith(matrix.os, 'windows')
+        uses: ./.github/actions/fetch-mpv-sidecar
+        with:
+          asset: ${{ matrix.mpv-sidecar-asset }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:

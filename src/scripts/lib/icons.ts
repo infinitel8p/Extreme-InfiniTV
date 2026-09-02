@@ -255,3 +255,17 @@ export const ICON_ARROWS_SHUFFLE = wrap(
     '<path d="M3 7h3a5 5 0 0 1 5 5a5 5 0 0 0 5 5h5" />' +
     '<path d="M21 7h-5a4.978 4.978 0 0 0 -3 1m-4 8a4.984 4.984 0 0 1 -3 1h-3" />'
 )
+
+export const ICON_MAXIMIZE = wrap(
+  '<path d="M4 8v-2a2 2 0 0 1 2 -2h2" />' +
+    '<path d="M4 16v2a2 2 0 0 0 2 2h2" />' +
+    '<path d="M16 4h2a2 2 0 0 1 2 2v2" />' +
+    '<path d="M16 20h2a2 2 0 0 0 2 -2v-2" />'
+)
+
+export const ICON_MINIMIZE = wrap(
+  '<path d="M15 19v-2a2 2 0 0 1 2 -2h2" />' +
+    '<path d="M15 5v2a2 2 0 0 0 2 2h2" />' +
+    '<path d="M5 15h2a2 2 0 0 1 2 2v2" />' +
+    '<path d="M5 9h2a2 2 0 0 0 2 -2v-2" />'
+)
