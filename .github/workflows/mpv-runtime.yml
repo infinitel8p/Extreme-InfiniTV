@@ -96,9 +96,11 @@ jobs:
       - name: Verify standalone binary
         shell: pwsh
         run: |
-          & "$PWD\stage\mpv-x86_64-pc-windows-msvc.exe" --version
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::mpv.exe --version failed"
+          # GUI-subsystem exe: pwsh won't wait for it and leaves $LASTEXITCODE null.
+          $mpv = Start-Process -FilePath "$PWD\stage\mpv-x86_64-pc-windows-msvc.exe" -ArgumentList "--version" -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\mpv-version.txt"
+          Get-Content "$env:RUNNER_TEMP\mpv-version.txt"
+          if ($mpv.ExitCode -ne 0) {
+            Write-Host "::error::mpv.exe --version failed with exit code $($mpv.ExitCode)"
             exit 1
           }
 
@@ -106,7 +108,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          MPV_VERSION="$(./stage/mpv-x86_64-pc-windows-msvc.exe --version | head -n1)"
+          MPV_VERSION="$(head -n1 "$RUNNER_TEMP/mpv-version.txt")"
           {
             echo "mpv version: ${MPV_VERSION}"
             echo "source: https://github.com/${MPV_WINBUILD_REPO}/releases/tag/${MPV_WINBUILD_TAG}"
@@ -145,9 +147,11 @@ jobs:
       - name: Verify standalone binary
         shell: pwsh
         run: |
-          & "$PWD\stage\mpv-aarch64-pc-windows-msvc.exe" --version
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::mpv.exe --version failed"
+          # GUI-subsystem exe: pwsh won't wait for it and leaves $LASTEXITCODE null.
+          $mpv = Start-Process -FilePath "$PWD\stage\mpv-aarch64-pc-windows-msvc.exe" -ArgumentList "--version" -NoNewWindow -Wait -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\mpv-version.txt"
+          Get-Content "$env:RUNNER_TEMP\mpv-version.txt"
+          if ($mpv.ExitCode -ne 0) {
+            Write-Host "::error::mpv.exe --version failed with exit code $($mpv.ExitCode)"
             exit 1
           }
 
@@ -155,7 +159,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          MPV_VERSION="$(./stage/mpv-aarch64-pc-windows-msvc.exe --version | head -n1)"
+          MPV_VERSION="$(head -n1 "$RUNNER_TEMP/mpv-version.txt")"
           {
             echo "mpv version: ${MPV_VERSION}"
             echo "source: https://github.com/${MPV_WINBUILD_REPO}/releases/tag/${MPV_WINBUILD_TAG}"
