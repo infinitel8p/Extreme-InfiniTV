@@ -106,6 +106,14 @@ android {
 
     buildFeatures { buildConfig = true }
 
+    packaging {
+        // dnsjava registers JVM-only name-service SPIs that Android has no interface for.
+        resources.excludes += setOf(
+            "META-INF/services/java.net.spi.InetAddressResolverProvider",
+            "META-INF/services/sun.net.spi.nameservice.NameServiceDescriptor",
+        )
+    }
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
