@@ -3,7 +3,7 @@ import type { TvView, TvViewContext } from "@/scripts/tv/router"
 import { navigate } from "astro:transitions/client"
 import { t, LOCALE_EVENT, getActiveLocale, getAvailableLocales, setLocale } from "@/scripts/lib/i18n"
 import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
-import { getEntries, getActiveEntry, isTauri } from "@/scripts/lib/creds.js"
+import { getEntries, getActiveEntry, loadCreds, isLocalM3UHost, isCustomHost, isTauri } from "@/scripts/lib/creds.js"
 import { renderPlaylistRow, getPlaylistListEmptyCopy } from "@/scripts/lib/playlist-rows.js"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog"
@@ -34,8 +34,20 @@ import {
   setLanguageGroupingEnabled,
   getContentLanguage,
   setContentLanguage,
+  getGlobalDns,
+  setGlobalDns,
 } from "@/scripts/lib/app-settings.js"
 import { getOffsetSetting, setOffsetSetting } from "@/scripts/lib/epg-data.js"
+import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
+import { dnsProxyAvailable } from "@/scripts/lib/dns-proxy.ts"
+import {
+  runDnsCheck,
+  describeDnsError,
+  formatDnsOutcome,
+  dnsOutcomeTone,
+  dnsShortLabel,
+  hostnameOf,
+} from "@/scripts/lib/dns-test.ts"
 import { LANGUAGE_TOKENS, languageTagLabel } from "@/scripts/lib/language-tags.ts"
 import { isLanguageGroupingExplicitlyEnabled } from "@/scripts/lib/language-groups.ts"
 import { memoryConservative } from "@/scripts/tv/motion"
@@ -161,6 +173,7 @@ const view: TvView = {
     let list: SettingsListHandle | null = null
     let playlistsDialogEl: HTMLDialogElement | null = null
     let deviceNameDialogEl: HTMLDialogElement | null = null
+    let dnsDialogEl: HTMLDialogElement | null = null
 
     async function renderRows(): Promise<void> {
       if (state.destroyed || !list) return
@@ -249,6 +262,17 @@ const view: TvView = {
         disabled: !state.playlistId,
         onActivate: () => void pickEpgOffset(),
       })
+
+      if (dnsProxyAvailable()) {
+        rows.push({
+          id: "dns",
+          icon: ICON_WORLD,
+          label: t("settings.network.dnsLabel"),
+          value: dnsShortLabel(getGlobalDns()) || t("dns.notSet"),
+          kind: "action",
+          onActivate: () => openDnsDialog(),
+        })
+      }
 
       const overscan = getTvOverscan()
       rows.push({
@@ -544,6 +568,137 @@ const view: TvView = {
         input.placeholder = t("settings.receiver.deviceNamePlaceholder")
       }
       if (cancelButton) cancelButton.textContent = t("common.cancel")
+      if (saveButton) saveButton.textContent = t("common.save")
+      if (!dialog.open && typeof dialog.showModal === "function") dialog.showModal()
+    }
+
+    function setDnsStatus(status: HTMLElement, tone: "text-bad" | "text-warn" | "text-good", message: string): void {
+      status.classList.remove("hidden", "text-bad", "text-warn", "text-good", "text-fg-3")
+      status.classList.add(tone)
+      status.textContent = message
+    }
+
+    async function testDnsDialogInput(dialog: HTMLDialogElement): Promise<void> {
+      const input = dialog.querySelector<HTMLInputElement>('[data-role="input"]')
+      const status = dialog.querySelector<HTMLElement>('[data-role="status"]')
+      const testButton = dialog.querySelector<HTMLButtonElement>('[data-role="test"]')
+      if (!input || !status || !testButton) return
+      const server = parseDnsServer(input.value.trim())
+      if (!server) {
+        setDnsStatus(status, "text-bad", t("dns.invalid"))
+        return
+      }
+      const creds = await loadCreds()
+      if (state.destroyed) return
+      const rawHost = creds?.host || ""
+      if (!rawHost || isLocalM3UHost(rawHost) || isCustomHost(rawHost)) {
+        setDnsStatus(status, "text-bad", t("dns.noActivePlaylist"))
+        return
+      }
+      testButton.disabled = true
+      testButton.textContent = t("dns.testing")
+      try {
+        const outcome = await runDnsCheck(server, hostnameOf(rawHost), rawHost)
+        if (state.destroyed) return
+        setDnsStatus(status, dnsOutcomeTone(outcome) === "good" ? "text-good" : "text-warn", formatDnsOutcome(outcome))
+      } catch (error) {
+        if (state.destroyed) return
+        setDnsStatus(status, "text-bad", describeDnsError(error))
+      } finally {
+        if (!state.destroyed) {
+          testButton.disabled = false
+          testButton.textContent = t("dns.test")
+        }
+      }
+    }
+
+    function ensureDnsDialog(): HTMLDialogElement {
+      if (dnsDialogEl) return dnsDialogEl
+      const dialog = document.createElement("dialog")
+      dialog.id = "tv-settings-dns-dialog"
+      dialog.className =
+        "m-auto w-[26rem] max-w-[90vw] rounded-2xl border border-line bg-surface p-6 text-fg backdrop:bg-black/70"
+
+      const heading = document.createElement("h2")
+      heading.dataset.role = "title"
+      heading.className = "text-lg font-semibold"
+
+      const input = document.createElement("input")
+      input.type = "text"
+      input.dataset.role = "input"
+      input.autocapitalize = "off"
+      input.spellcheck = false
+      input.inputMode = "url"
+      input.className = "field-input font-mono mt-4 w-full"
+
+      const status = document.createElement("p")
+      status.dataset.role = "status"
+      status.setAttribute("role", "status")
+      status.setAttribute("aria-live", "polite")
+      status.className = "hidden mt-2 text-sm"
+
+      const actions = document.createElement("div")
+      actions.className = "mt-4 flex justify-end gap-2"
+      const cancelButton = document.createElement("button")
+      cancelButton.type = "button"
+      cancelButton.dataset.role = "cancel"
+      cancelButton.className = "btn"
+      const testButton = document.createElement("button")
+      testButton.type = "button"
+      testButton.dataset.role = "test"
+      testButton.className = "btn"
+      const saveButton = document.createElement("button")
+      saveButton.type = "button"
+      saveButton.dataset.role = "save"
+      saveButton.className = "btn-primary"
+      actions.append(cancelButton, testButton, saveButton)
+
+      dialog.append(heading, input, status, actions)
+      document.body.appendChild(dialog)
+
+      cancelButton.addEventListener("click", () => dialog.close())
+      testButton.addEventListener("click", () => void testDnsDialogInput(dialog))
+      saveButton.addEventListener("click", () => {
+        const raw = input.value.trim()
+        if (!raw) {
+          setGlobalDns(null)
+          dialog.close()
+          void renderRows()
+          return
+        }
+        if (!parseDnsServer(raw)) {
+          setDnsStatus(status, "text-bad", t("dns.invalid"))
+          return
+        }
+        setGlobalDns(raw)
+        dialog.close()
+        void renderRows()
+      })
+      attachDialogSpatialNav(dialog, { defaultElement: `#${dialog.id} [data-role="input"]` })
+
+      dnsDialogEl = dialog
+      return dialog
+    }
+
+    function openDnsDialog(): void {
+      const dialog = ensureDnsDialog()
+      const heading = dialog.querySelector<HTMLElement>('[data-role="title"]')
+      const input = dialog.querySelector<HTMLInputElement>('[data-role="input"]')
+      const status = dialog.querySelector<HTMLElement>('[data-role="status"]')
+      const cancelButton = dialog.querySelector<HTMLElement>('[data-role="cancel"]')
+      const testButton = dialog.querySelector<HTMLElement>('[data-role="test"]')
+      const saveButton = dialog.querySelector<HTMLElement>('[data-role="save"]')
+      if (heading) heading.textContent = t("dns.label")
+      if (input) {
+        input.value = getGlobalDns() || ""
+        input.placeholder = t("dns.placeholder")
+      }
+      if (status) {
+        status.classList.add("hidden")
+        status.textContent = ""
+      }
+      if (cancelButton) cancelButton.textContent = t("common.cancel")
+      if (testButton) testButton.textContent = t("dns.test")
       if (saveButton) saveButton.textContent = t("common.save")
       if (!dialog.open && typeof dialog.showModal === "function") dialog.showModal()
     }
@@ -859,6 +1014,10 @@ const view: TvView = {
         deviceNameDialogEl?.close()
       } catch {}
       deviceNameDialogEl?.remove()
+      try {
+        dnsDialogEl?.close()
+      } catch {}
+      dnsDialogEl?.remove()
       root.replaceChildren()
     }
   },

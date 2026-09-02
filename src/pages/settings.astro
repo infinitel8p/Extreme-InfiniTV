@@ -1001,6 +1001,43 @@ const navStructure: NavSection[] = [
               </div>
             </div>
 
+            <!-- Custom DNS server: global default, per-playlist overrides live on
+                 the entry (set from /login). Disabled on the web build - the
+                 Rust DNS proxy backs the Test probe and isn't available there. -->
+            <div data-settings-item class="settings-row settings-row--stack scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.network.dnsLabel" class="text-sm font-medium leading-snug">DNS server</h3>
+                <p data-i18n="settings.network.dnsHelper" class="text-xs text-fg-3">
+                  Also used for metadata, logos and update checks. A DNS server set on a playlist overrides this for that playlist.
+                </p>
+              </div>
+              <div class="settings-row__control w-full flex-col items-stretch gap-1">
+                <div class="flex gap-2">
+                  <input
+                    id="settings-dns"
+                    type="text"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="1.1.1.1 or https://dnsforge.de/dns-query"
+                    data-i18n-attr="placeholder:dns.placeholder"
+                    class="field-input font-mono flex-1 min-w-0"
+                  />
+                  <button id="dns-test" type="button" class="btn justify-center">
+                    <span data-i18n="dns.test">Test</span>
+                  </button>
+                  <button id="dns-save" type="button" class="btn justify-center">
+                    <IconDeviceFloppy aria-hidden="true" class="btn-icon" />
+                    <span data-i18n="common.save">Save</span>
+                  </button>
+                </div>
+                <span
+                  id="dns-msg"
+                  role="status"
+                  aria-live="polite"
+                  class="text-xs text-fg-3 transition-opacity duration-300 empty:hidden"></span>
+              </div>
+            </div>
+
             <!-- Request timeout -->
             <div data-settings-item class="settings-row scroll-mt-6 lg:scroll-mt-20">
               <div class="settings-row__text">
@@ -2414,7 +2451,12 @@ const navStructure: NavSection[] = [
       isTauri,
       loadCreds,
       addEntry,
+      isLocalM3UHost,
+      isCustomHost,
     } from "@/scripts/lib/creds.js"
+    import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
+    import { dnsProxyAvailable } from "@/scripts/lib/dns-proxy.ts"
+    import { runDnsCheck, describeDnsError, formatDnsOutcome, dnsOutcomeTone, hostnameOf } from "@/scripts/lib/dns-test.ts"
     import {
       getNewestCacheTimeAsync,
       getCacheSizeAsync,
@@ -2478,6 +2520,8 @@ const navStructure: NavSection[] = [
       setProgressRetentionDays,
       getNetworkTimeoutSeconds,
       setNetworkTimeoutSeconds,
+      getGlobalDns,
+      setGlobalDns,
       getUpdateChannel,
       setUpdateChannel,
       getAutoUpdateEnabled,
@@ -4173,6 +4217,112 @@ const navStructure: NavSection[] = [
     })
 
     // ---------------------------------------------------------------------
+    // Custom DNS server: global default, tested against the active
+    // playlist's host. Per-playlist overrides are set from /login.
+    // ---------------------------------------------------------------------
+    const dnsInputEl = /** @type {HTMLInputElement|null} */ (
+      document.getElementById("settings-dns")
+    )
+    const dnsTestBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("dns-test"))
+    const dnsTestBtnLabel = dnsTestBtn?.querySelector("span")
+    const dnsSaveBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById("dns-save"))
+    const dnsMsgEl = document.getElementById("dns-msg")
+
+    if (dnsInputEl) dnsInputEl.value = getGlobalDns() || ""
+    dnsInputEl?.setAttribute("aria-describedby", "dns-msg")
+
+    function setDnsMessage(text, tone) {
+      if (!dnsMsgEl) return
+      dnsMsgEl.classList.remove("text-bad", "text-good", "text-warn", "text-fg-3")
+      dnsMsgEl.classList.add(
+        tone === "bad" ? "text-bad" : tone === "good" ? "text-good" : tone === "warn" ? "text-warn" : "text-fg-3"
+      )
+      dnsMsgEl.textContent = text || ""
+    }
+
+    function validateDnsInput() {
+      const raw = (dnsInputEl?.value || "").trim()
+      if (!raw || parseDnsServer(raw)) {
+        dnsInputEl?.removeAttribute("aria-invalid")
+        return true
+      }
+      setDnsMessage(t("dns.invalid"), "bad")
+      dnsInputEl?.setAttribute("aria-invalid", "true")
+      return false
+    }
+
+    function refreshDnsSaveAvailability() {
+      if (!dnsSaveBtn) return
+      dnsSaveBtn.disabled = (dnsInputEl?.value || "").trim() === (getGlobalDns() || "")
+    }
+
+    /** Active playlist's host, or null for local/custom entries with no remote host. */
+    async function activePlaylistDnsHost() {
+      const active = await getActiveEntry()
+      if (!active) return null
+      const creds = await loadCreds()
+      if (!creds?.host || isLocalM3UHost(creds.host) || isCustomHost(creds.host)) return null
+      const host = hostnameOf(creds.host)
+      return host ? { host, probeUrl: creds.host } : null
+    }
+
+    if (!dnsProxyAvailable()) {
+      if (dnsInputEl) dnsInputEl.readOnly = true
+      dnsTestBtn?.setAttribute("disabled", "")
+      dnsSaveBtn?.setAttribute("disabled", "")
+      setDnsMessage(t("dns.webUnavailable"), "")
+    } else {
+      refreshDnsSaveAvailability()
+      dnsInputEl?.addEventListener("blur", validateDnsInput)
+
+      const initialTarget = await activePlaylistDnsHost()
+      if (dnsTestBtn) dnsTestBtn.disabled = !initialTarget
+      if (!initialTarget) setDnsMessage(t("dns.noActivePlaylist"), "")
+
+      dnsInputEl?.addEventListener("input", () => {
+        refreshDnsSaveAvailability()
+        setDnsMessage(initialTarget ? "" : t("dns.noActivePlaylist"), "")
+        dnsInputEl?.removeAttribute("aria-invalid")
+      })
+
+      dnsSaveBtn?.addEventListener("click", () => {
+        if (!validateDnsInput()) return
+        const raw = (dnsInputEl?.value || "").trim()
+        setGlobalDns(raw || null)
+        if (dnsInputEl) dnsInputEl.value = getGlobalDns() || ""
+        refreshDnsSaveAvailability()
+        setDnsMessage(t("dns.saved"), "good")
+        flashSuccess(dnsSaveBtn)
+      })
+
+      dnsTestBtn?.addEventListener("click", async () => {
+        if (!validateDnsInput()) return
+        const raw = (dnsInputEl?.value || "").trim()
+        const server = parseDnsServer(raw)
+        if (!server) {
+          setDnsMessage(t("dns.invalid"), "bad")
+          return
+        }
+        const target = await activePlaylistDnsHost()
+        if (!target) {
+          setDnsMessage(t("dns.noActivePlaylist"), "bad")
+          return
+        }
+        dnsTestBtn.disabled = true
+        if (dnsTestBtnLabel) dnsTestBtnLabel.textContent = t("dns.testing")
+        try {
+          const outcome = await runDnsCheck(server, target.host, target.probeUrl)
+          setDnsMessage(formatDnsOutcome(outcome), dnsOutcomeTone(outcome))
+        } catch (error) {
+          setDnsMessage(describeDnsError(error), "bad")
+        } finally {
+          if (dnsTestBtnLabel) dnsTestBtnLabel.textContent = t("dns.test")
+          dnsTestBtn.disabled = !(await activePlaylistDnsHost())
+        }
+      })
+    }
+
+    // ---------------------------------------------------------------------
     // Network timeout: how long providerFetch waits before aborting. The
     // setting is read on every fetch, so the change takes effect on the
     // next catalog refresh without a reload.
@@ -5182,6 +5332,7 @@ const navStructure: NavSection[] = [
 
     const NET_LOG_RENDER_CAP = 100
     const NET_LOG_BADGE = "shrink-0 px-2 py-0.5 rounded-full text-2xs font-medium bg-surface-2 text-fg-3 uppercase tracking-wide"
+    const NET_LOG_BADGE_VALUE = NET_LOG_BADGE.replace(" uppercase", "")
 
     function netLogTone(entry) {
       if (entry.outcome === "error") return "bad"
@@ -5229,6 +5380,15 @@ const navStructure: NavSection[] = [
       transportBadge.textContent = entry.transport
 
       metaRow.append(time, method, status, duration, kindBadge, transportBadge)
+
+      if (entry.dns) {
+        const dnsBadge = document.createElement("span")
+        dnsBadge.className = NET_LOG_BADGE_VALUE
+        dnsBadge.textContent = entry.dns
+        dnsBadge.title = entry.dns
+        metaRow.appendChild(dnsBadge)
+      }
+
       row.appendChild(metaRow)
 
       const url = document.createElement("div")

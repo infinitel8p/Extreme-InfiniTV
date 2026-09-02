@@ -17,6 +17,7 @@ import {
   xtreamCandidatesFor,
   getMirrorPin,
   setMirrorPin,
+  getEntryDnsOverride,
 } from "@/scripts/lib/creds.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { getNetworkTimeoutSeconds } from "@/scripts/lib/app-settings.js"
@@ -83,6 +84,7 @@ export async function xtreamApiFetch(action, params = {}, opts = {}) {
   if (!entry || !candidates.length) {
     throw new Error("xtreamApiFetch: no active Xtream playlist")
   }
+  if (fetchOpts.dns === undefined) fetchOpts.dns = getEntryDnsOverride(entry)
 
   const startIndex = Math.min(getMirrorPin(entry._id), candidates.length - 1)
 

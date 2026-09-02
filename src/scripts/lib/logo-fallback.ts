@@ -2,6 +2,7 @@
 
 import { log } from "./log.ts"
 import { safeHttpUrl } from "./creds.js"
+import { providerFetch } from "./provider-fetch.js"
 import {
   buildLogoIndex,
   pickBestLogos,
@@ -99,7 +100,11 @@ async function fetchAndIndex(): Promise<LogoIndex | null> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   try {
-    const response = await fetch(LOGOS_URL, { signal: controller.signal })
+    const response = await providerFetch(LOGOS_URL, {
+      signal: controller.signal,
+      logKind: "api",
+      dns: "global",
+    })
     if (!response.ok) throw new Error(`logos.json fetch failed: ${response.status}`)
     const records: LogoApiRecord[] = await response.json()
     const pairs = pickBestLogos(records)

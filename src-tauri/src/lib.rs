@@ -7,6 +7,8 @@ mod compositing;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod discord;
 
+mod dns_proxy;
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod external_player;
 
@@ -215,7 +217,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(warmup::WarmupState::default())
-        .manage(receiver::ReceiverState::default());
+        .manage(receiver::ReceiverState::default())
+        .manage(dns_proxy::DnsProxyState::default());
 
     #[cfg(not(target_os = "ios"))]
     let builder = builder.plugin(build_log_plugin().build());
@@ -249,6 +252,9 @@ pub fn run() {
             discord::discord_set_activity,
             discord::discord_clear,
             discord::discord_disconnect,
+            dns_proxy::dns_proxy_register,
+            dns_proxy::dns_proxy_unregister,
+            dns_proxy::dns_resolve_test,
             external_player::launch_external_player,
             external_player::stop_external_player,
             external_player::sandbox_runtime,
@@ -294,6 +300,9 @@ pub fn run() {
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        dns_proxy::dns_proxy_register,
+        dns_proxy::dns_proxy_unregister,
+        dns_proxy::dns_resolve_test,
         receiver::receiver_start,
         receiver::receiver_stop,
         receiver::receiver_status,

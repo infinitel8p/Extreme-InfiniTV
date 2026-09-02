@@ -7,6 +7,7 @@ import {
   loadCreds,
   getActiveEntry,
   isTauri,
+  getActiveDnsOverrideAsync,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
 import { isCastRoutingActive, routePlayToCast, castXtreamEpisodeToTv } from "@/scripts/lib/tv-cast.js"
@@ -1502,20 +1503,22 @@ async function playEpisode(episode, options = {}) {
             episodeNum: Number(episode.episode_num) || 0,
           }
         : undefined,
-      buildDescriptor: () => {
+      buildDescriptor: async () => {
         const src = buildEpisodeStreamUrl(episode)
         if (!src || !isCastableSrc(src)) return null
         const saved = activePlaylistId ? getProgress(activePlaylistId, "episode", episode.id) : null
         const resumeSeconds =
           saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
         const durationSeconds = episodeDurationSeconds(episode)
-        return buildVodCastDescriptor({
+        const descriptor = buildVodCastDescriptor({
           src,
           title,
           logo: series?.logo || undefined,
           resumeSeconds,
           durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
         })
+        descriptor.dns = (await getActiveDnsOverrideAsync())?.raw ?? null
+        return descriptor
       },
     })
     return
@@ -1581,6 +1584,8 @@ async function playEpisode(episode, options = {}) {
     getAndroidNativePlayerEnabled() &&
     activePlaylistId
   ) {
+    const nativeDns = (await getActiveDnsOverrideAsync())?.raw ?? null
+    if (requestId !== playRequestId) return
     const launched = launchAndroidNativeVodWithProgress({
       playlistId: activePlaylistId,
       contentKey: `ep:${episode.id}`,
@@ -1590,6 +1595,7 @@ async function playEpisode(episode, options = {}) {
       title: `${series?.name || ""} - S${episode.season || currentSeason}E${episode.episode_num || "?"}`,
       posterUrl: series?.logo || "",
       startMs: Math.max(0, resumePos) * 1000,
+      dns: nativeDns,
       progressExtras: progressExtrasFor(episode),
       onCompleted: () => {
         // Trigger the same Up Next overlay the WebView player path uses.

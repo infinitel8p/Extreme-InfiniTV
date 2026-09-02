@@ -134,6 +134,7 @@ function fetchOnce(path: string): Promise<Response> {
   return providerFetch(`${PROXY_BASE}${path}`, {
     logKind: "api",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    dns: "global",
   })
 }
 

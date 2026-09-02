@@ -3,6 +3,7 @@ import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 import { LANGUAGE_TOKENS } from "@/scripts/lib/language-tags.ts"
 import { compareVersions } from "@/scripts/lib/version-compare.ts"
+import { normalizeDnsInput } from "@/scripts/lib/dns-config.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
@@ -46,6 +47,7 @@ const KEY_RECEIVER_ID = "xt_receiver_id"
 const KEY_CONTENT_LANGUAGE = "xt_content_lang"
 const KEY_LANGUAGE_GROUPING = "xt_lang_grouping"
 const KEY_SEARCH_VIEW = "xt_search_view"
+const KEY_DNS = "xt_dns"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -112,6 +114,7 @@ export const DEFAULT_PROGRESS_RETENTION_DAYS = 90
 export const NETWORK_TIMEOUT_VALUES = [20, 45, 90, 180]
 export const DEFAULT_NETWORK_TIMEOUT_SECONDS = 20
 export const NETWORK_TIMEOUT_EVENT = "xt:network-timeout-changed"
+export const DNS_EVENT = "xt:dns-changed"
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 1
 export const MAX_DOWNLOAD_CONCURRENCY = 4
 export const PLAYER_BACKENDS = ["artplayer", "videojs", "shaka", "mpv", "vlc"]
@@ -656,6 +659,21 @@ export function setNetworkTimeoutSeconds(seconds) {
   if (typeof document !== "undefined") {
     document.dispatchEvent(
       new CustomEvent(NETWORK_TIMEOUT_EVENT, { detail: { value: normalised } })
+    )
+  }
+}
+
+// Global default DNS server, overridden per-playlist via creds.js's `dns` field.
+export function getGlobalDns() {
+  return readLS(KEY_DNS, "") || null
+}
+
+export function setGlobalDns(value) {
+  const normalized = value ? normalizeDnsInput(String(value)) : null
+  writeLS(KEY_DNS, normalized || "")
+  if (typeof document !== "undefined") {
+    document.dispatchEvent(
+      new CustomEvent(DNS_EVENT, { detail: { value: normalized } })
     )
   }
 }

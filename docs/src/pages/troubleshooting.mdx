@@ -53,6 +53,7 @@ The Xtream sign-in failed. Most common causes:
 - **Region-locked.** The provider sees your IP from a region they don't serve.
 - **Wrong embedded credentials.** For `user:pass@` M3U URLs, the embedded credentials must be correct. Special characters are handled automatically (percent-encoded forms also work).
 - **CORS (web version only).** For `user:pass@` M3U URLs in the browser, the server must also allow cross-origin requests with an Authorization header. The desktop and Android apps are not affected.
+- **Needs a specific DNS server.** If the provider's welcome message mentions a DNS server, or the hostname works on mobile data but not on your home Wi-Fi, set it under the login form's DNS server disclosure and press Test. See [Custom DNS server](./playlists/#custom-dns-server).
 
 <Callout type="tip">
   Not sure if your provider gave you an Xtream login or an M3U URL? Paste whatever you have into the Server URL field. The app figures out the format automatically.

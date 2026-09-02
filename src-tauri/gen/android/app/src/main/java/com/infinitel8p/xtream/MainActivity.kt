@@ -1244,6 +1244,7 @@ class AndroidVideoBridge(
     title: String,
     posterUrl: String,
     startMs: Long,
+    dns: String,
   ): Boolean {
     return tryLaunch(VideoActivity.MODE_VOD) { intent ->
       intent.putExtra(VideoActivity.EXTRA_URL, url)
@@ -1253,6 +1254,7 @@ class AndroidVideoBridge(
       intent.putExtra(VideoActivity.EXTRA_REFERER, referer)
       intent.putExtra(VideoActivity.EXTRA_TITLE, title)
       intent.putExtra(VideoActivity.EXTRA_POSTER, posterUrl)
+      intent.putExtra(VideoActivity.EXTRA_DNS, dns)
     }
   }
 
@@ -1263,6 +1265,7 @@ class AndroidVideoBridge(
     initialChannelId: String,
     ua: String,
     referer: String,
+    dns: String,
   ): Boolean {
     NativePlayerPayload.setChannels(channelsJson)
     return tryLaunch(VideoActivity.MODE_LIVE) { intent ->
@@ -1270,6 +1273,7 @@ class AndroidVideoBridge(
       intent.putExtra(VideoActivity.EXTRA_CONTENT_KEY, contentKey)
       intent.putExtra(VideoActivity.EXTRA_UA, ua)
       intent.putExtra(VideoActivity.EXTRA_REFERER, referer)
+      intent.putExtra(VideoActivity.EXTRA_DNS, dns)
     }
   }
 

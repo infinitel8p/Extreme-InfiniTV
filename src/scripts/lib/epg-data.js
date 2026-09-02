@@ -6,6 +6,7 @@ import {
   isLikelyM3USource,
   getEntries,
   entryToCreds,
+  getPlaylistDnsOverride,
 } from "@/scripts/lib/creds.js"
 import { loadCustomDoc } from "@/scripts/lib/custom-playlist.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
@@ -444,9 +445,9 @@ async function requestProgrammesFor(feedId, tvgId, window) {
 }
 
 /** Forces a fresh (non-conditional) fetch so the body is always present, unlike a 304. */
-async function refetchFeedXml(url) {
+async function refetchFeedXml(url, dns) {
   try {
-    const result = await retryWithBackoff(() => fetchEpgConditional(url, null))
+    const result = await retryWithBackoff(() => fetchEpgConditional(url, null, dns))
     if (result.notModified || !result.xml) return null
     return result.xml
   } catch (err) {
@@ -467,9 +468,10 @@ async function refetchFeedXml(url) {
  * @param {string} url
  * @param {number} nowMs
  * @param {string} feedId
+ * @param {import("./dns-config.ts").DnsServer | null} [dns]
  */
-async function streamNowNextFromUrl(url, nowMs, feedId) {
-  const init = { forceTauri: true, logKind: "epg" }
+async function streamNowNextFromUrl(url, nowMs, feedId, dns) {
+  const init = { forceTauri: true, logKind: "epg", dns }
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
     init.signal = AbortSignal.timeout(90_000)
   }
@@ -547,7 +549,7 @@ async function streamNowNextFromUrl(url, nowMs, feedId) {
 
   if (!reply) {
     log.warn("[xt:epg-data] now-next streaming worker parse unavailable, refetching for main-thread fallback")
-    const xml = await refetchFeedXml(url)
+    const xml = await refetchFeedXml(url, dns)
     if (!xml) throw new Error("Empty EPG response")
     return reduceToNowNext(parseXmlTv(xml), nowMs)
   }
@@ -585,12 +587,13 @@ export async function getProgrammesForChannel(playlistId, tvgId, window) {
   const state = playlistId ? memCache.get(playlistId) : null
   if (!state || state.epgMode !== "now-next" || !tvgId) return []
   const normalizedTvgId = String(tvgId).toLowerCase()
+  const dns = await getPlaylistDnsOverride(playlistId)
 
   for (const feed of state.nowNextFeeds || []) {
     let reply = await requestProgrammesFor(feed.feedId, normalizedTvgId, window)
     if (reply.noFeed) {
       try {
-        await retryWithBackoff(() => streamNowNextFromUrl(feed.url, Date.now(), feed.feedId))
+        await retryWithBackoff(() => streamNowNextFromUrl(feed.url, Date.now(), feed.feedId, dns))
       } catch (err) {
         log.warn("[xt:epg-data] programmesFor re-stream failed:", err?.message || err)
         continue
@@ -1048,11 +1051,11 @@ async function readResponseAsXml(url, response) {
  * surface a clearer error than the bare `TypeError: Failed to fetch` the
  * browser emits in that case.
  */
-async function fetchEpgConditional(url, meta) {
+async function fetchEpgConditional(url, meta, dns) {
   const headers = {}
   if (meta?.lastModified) headers["If-Modified-Since"] = meta.lastModified
   if (meta?.etag) headers["If-None-Match"] = meta.etag
-  const init = { forceTauri: true, logKind: "epg" }
+  const init = { forceTauri: true, logKind: "epg", dns }
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
     init.signal = AbortSignal.timeout(90_000)
   }
@@ -1120,9 +1123,10 @@ function epgWindowsMatch(cachedWindow, requestedWindow) {
  * @param {EpgWindow} [window]
  * @param {EpgMode} [epgMode]
  * @param {number} [nowMs] - now-next mode only: reference instant for picking current/next
+ * @param {import("./dns-config.ts").DnsServer | null} [dns]
  * @returns {Promise<{ programmes: Map<string, any[]>, channelNames: Map<string, string>, count: number, cached: boolean, hasExplicitTimezones: boolean }>}
  */
-async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, nowMs) {
+async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, nowMs, dns) {
   const hash = urlHash(src.url)
   const kind = cacheKindFor(src.url)
 
@@ -1132,7 +1136,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
     // rather than going through the conditional-GET + per-URL cache path.
     // Streamed straight into the worker (see streamNowNextFromUrl) so the
     // decompressed feed never exists as a single string on the main thread.
-    const parsed = await retryWithBackoff(() => streamNowNextFromUrl(src.url, nowMs, hash))
+    const parsed = await retryWithBackoff(() => streamNowNextFromUrl(src.url, nowMs, hash, dns))
     return {
       programmes: parsed.programmes,
       channelNames: parsed.channelNames,
@@ -1143,7 +1147,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
   }
 
   const result = await retryWithBackoff(() =>
-    fetchEpgConditional(src.url, httpMeta[hash])
+    fetchEpgConditional(src.url, httpMeta[hash], dns)
   )
 
   if (result.notModified) {
@@ -1169,7 +1173,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
     // Drop the stale validator and force a fresh fetch.
     delete httpMeta[hash]
     const fresh = await retryWithBackoff(() =>
-      fetchEpgConditional(src.url, null)
+      fetchEpgConditional(src.url, null, dns)
     )
     if (fresh.notModified || !fresh.xml) {
       throw new Error("304 with no cached body and no fresh payload")
@@ -1301,6 +1305,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
 
   const promise = (async () => {
     try {
+      const dns = await getPlaylistDnsOverride(playlistId)
       const sources = await buildEpgUrls(creds, playlistId)
       if (!sources.length) {
         // No EPG configured (M3U with no x-tvg-url and no override). Nothing
@@ -1330,7 +1335,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
       const nowMsForScan = epgMode === "now-next" ? Date.now() - nowNextOffsetGuess * 60 * 1000 : Date.now()
 
       const fetchResults = await Promise.allSettled(
-        sources.map((src) => fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, nowMsForScan))
+        sources.map((src) => fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, nowMsForScan, dns))
       )
 
       for (let i = 0; i < sources.length; i++) {

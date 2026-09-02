@@ -37,6 +37,7 @@ describe("launchAndroidNativeVod", () => {
       title: string,
       posterUrl: string,
       startMs: number,
+      dns: string,
     ) => boolean
     const launchVod = vi.fn<LaunchVodFn>(() => true)
     ;(window as any).AndroidVideo = {
@@ -53,6 +54,7 @@ describe("launchAndroidNativeVod", () => {
       title: "A Movie",
       posterUrl: "https://poster",
       startMs: 12345,
+      dns: "1.1.1.1",
     })
     expect(ok).toBe(true)
     expect(launchVod).toHaveBeenCalledWith(
@@ -63,7 +65,16 @@ describe("launchAndroidNativeVod", () => {
       "A Movie",
       "https://poster",
       12345,
+      "1.1.1.1",
     )
+  })
+
+  it("forwards an empty dns string when none is provided", async () => {
+    const launchVod = vi.fn<(...args: unknown[]) => boolean>(() => true)
+    ;(window as any).AndroidVideo = { launchVod }
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    mod.launchAndroidNativeVod({ contentKey: "k", url: "u" })
+    expect(launchVod.mock.calls[0]?.[7]).toBe("")
   })
 
   it("clamps a negative startMs to 0", async () => {
@@ -75,6 +86,7 @@ describe("launchAndroidNativeVod", () => {
       title: string,
       posterUrl: string,
       startMs: number,
+      dns: string,
     ) => boolean
     const launchVod = vi.fn<LaunchVodFn>(() => true)
     ;(window as any).AndroidVideo = { launchVod }
@@ -102,6 +114,7 @@ describe("launchAndroidNativeLive", () => {
       initialChannelId: string,
       ua: string,
       referer: string,
+      dns: string,
     ) => boolean
     const launchLive = vi.fn<LaunchLiveFn>(() => true)
     ;(window as any).AndroidVideo = { launchLive, launchVod: vi.fn() }
@@ -119,6 +132,19 @@ describe("launchAndroidNativeLive", () => {
     const parsed = JSON.parse(json)
     expect(parsed).toHaveLength(2)
     expect(parsed[0].name).toBe("A")
+  })
+
+  it("forwards a dns override to the bridge", async () => {
+    const launchLive = vi.fn<(...args: unknown[]) => boolean>(() => true)
+    ;(window as any).AndroidVideo = { launchLive, launchVod: vi.fn() }
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    mod.launchAndroidNativeLive({
+      contentKey: "live:1",
+      channels: [{ id: 1, name: "A", streamUrl: "https://x/a.m3u8" }],
+      initialChannelId: "1",
+      dns: "1.1.1.1:5353",
+    })
+    expect(launchLive.mock.calls[0]?.[5]).toBe("1.1.1.1:5353")
   })
 })
 

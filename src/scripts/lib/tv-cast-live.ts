@@ -11,6 +11,7 @@ import {
   type CastSession,
 } from "@/scripts/lib/tv-cast.js"
 import { isCastableSrc, buildLiveCastDescriptor, type CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor.js"
+import { getPlaylistDnsOverride } from "@/scripts/lib/creds.js"
 
 export interface CastLiveChannelOptions {
   /** Channel ids of the list the channel was picked from, used when the session context has to be rebuilt. */
@@ -88,12 +89,14 @@ export async function resolveLiveChannelCastDescriptor(
           }
         : undefined
 
+    const dns = (await getPlaylistDnsOverride(playlistId))?.raw ?? null
     const descriptor = buildLiveCastDescriptor({
       src,
       title: channel.name || "",
       logo: channel.logo || undefined,
       drm,
       headers,
+      dns,
     })
     return { channel, descriptor }
   } catch (err) {

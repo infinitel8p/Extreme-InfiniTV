@@ -38,6 +38,9 @@ import {
   type PlaybackTelemetry,
   type ResolvedEngine,
 } from "@/scripts/lib/player-telemetry.js"
+import { dnsProxyAvailable, ensureDnsProxy, cachedDnsProxyBase } from "@/scripts/lib/dns-proxy.ts"
+import { wrapProxyUrlKeepingUserinfo, unwrapProxyUrl } from "@/scripts/lib/dns-proxy-url.ts"
+import type { DnsServer } from "@/scripts/lib/dns-config.ts"
 
 export type PlayerBackend = "videojs" | "artplayer" | "shaka" | "mpv" | "vlc"
 export type ExternalPlayerKind = "mpv" | "vlc"
@@ -94,8 +97,6 @@ export interface ExternalLaunchOptions {
   userAgent?: string | null
   referer?: string | null
   resumeSeconds?: number
-  /** Localised "Couldn't launch <player>" toast title; caller-provided so we don't depend on i18n here. */
-  // (not a function dep on purpose; toast wiring is at the call site)
 }
 
 export interface ExternalLauncher {
@@ -154,6 +155,84 @@ export const androidExternalAvailable =
   isAndroid &&
   typeof window !== "undefined" &&
   !!(window as any).AndroidIntent
+
+// Dynamic import dodges a static import cycle with creds.js.
+let cachedGetActiveDnsOverride: (() => DnsServer | null) | null = null
+type CredsDnsModule = { ensureDnsProxyReady: () => Promise<unknown> } | null
+let credsDnsModule: Promise<CredsDnsModule> | null = null
+if (isTauri) {
+  credsDnsModule = import("@/scripts/lib/creds.js")
+    .then((mod) => {
+      cachedGetActiveDnsOverride = mod.getActiveDnsOverride as (() => DnsServer | null)
+      return mod as unknown as CredsDnsModule
+    })
+    .catch((error) => {
+      log.warn("[xt:player] creds.js import for dns override failed:", error)
+      return null
+    })
+}
+
+/** Awaits the active playlist's proxy session so the first sync src() wrap already has one. */
+export async function ensurePlaybackDnsReady(): Promise<void> {
+  if (!credsDnsModule || !dnsProxyAvailable()) return
+  try {
+    const mod = await credsDnsModule
+    await mod?.ensureDnsProxyReady()
+  } catch (error) {
+    log.warn("[xt:player] dns proxy warm failed:", error)
+  }
+}
+
+// creds.js warms the proxy session on active-playlist changes; this set only
+// tracks sessions that still raced ahead of that, so the diagnosis is greppable.
+const warnedDirectDnsSessions = new Set<string>()
+
+// Wraps via an existing proxy session; else registers one for next time.
+function wrapForDnsProxySync(url: string): string {
+  if (!dnsProxyAvailable() || !cachedGetActiveDnsOverride) return url
+  let override: DnsServer | null = null
+  try {
+    override = cachedGetActiveDnsOverride()
+  } catch {
+    return url
+  }
+  if (!override) return url
+  const sessionKey = `dns:${override.raw}`
+  const base = cachedDnsProxyBase(sessionKey)
+  if (base) {
+    try {
+      return wrapProxyUrlKeepingUserinfo(base, url)
+    } catch {
+      return url
+    }
+  }
+  if (!warnedDirectDnsSessions.has(sessionKey)) {
+    warnedDirectDnsSessions.add(sessionKey)
+    log.warn("[xt:player] dns proxy not ready yet, first request went direct:", sessionKey)
+  }
+  void ensureDnsProxy(sessionKey, override)
+  return url
+}
+
+// External-player DNS-proxy wrap; re-embeds userinfo for MPV/VLC basic auth.
+async function wrapForDnsProxyExternal(url: string): Promise<string> {
+  if (!dnsProxyAvailable() || !cachedGetActiveDnsOverride) return url
+  let override: DnsServer | null = null
+  try {
+    override = cachedGetActiveDnsOverride()
+  } catch {
+    return url
+  }
+  if (!override) return url
+  const sessionKey = `dns:${override.raw}`
+  const base = await ensureDnsProxy(sessionKey, override)
+  if (!base) return url
+  try {
+    return wrapProxyUrlKeepingUserinfo(base, url)
+  } catch {
+    return url
+  }
+}
 
 let invokePromise: Promise<((cmd: string, args: unknown) => Promise<unknown>) | null> | null = null
 async function getInvoke() {
@@ -288,16 +367,17 @@ export function getExternalLauncher(kind: ExternalPlayerKind): ExternalLauncher 
           path,
         )
       }
+      const playbackSrc = await wrapForDnsProxyExternal(src)
       const args = buildArgsFor(kind, {
-        src,
+        src: playbackSrc,
         userAgent: options.userAgent ?? getUserAgent() ?? null,
         referer: options.referer ?? null,
         resumeSeconds: options.resumeSeconds,
         extraArgs: getPlayerExtraArgs(kind),
       })
       const reuse = getPlayerReuseInstance(kind)
-        ? { kind, enabled: true, url: src }
-        : { kind, enabled: false, url: src }
+        ? { kind, enabled: true, url: playbackSrc }
+        : { kind, enabled: false, url: playbackSrc }
       try {
         const result = (await invoke("launch_external_player", {
           path,
@@ -469,7 +549,7 @@ export function getAndroidHandoffLauncher(kind: AndroidHandoffKind): AndroidHand
       if (kind === "vlc") return isVlcInstalledOnAndroid()
       return true
     },
-    async launch(src, options = {}) {
+    async launch(rawSrc, options = {}) {
       const bridge = androidIntent()
       if (!bridge) {
         throw new AndroidHandoffError(
@@ -478,6 +558,7 @@ export function getAndroidHandoffLauncher(kind: AndroidHandoffKind): AndroidHand
           kind,
         )
       }
+      const src = await wrapForDnsProxyExternal(rawSrc)
       const mime = options.mime || androidMimeForUrl(src)
       const userAgent = options.userAgent || getUserAgent() || ""
       const referer = options.referer || ""
@@ -553,7 +634,7 @@ export interface AndroidPackageLaunchOptions extends AndroidHandoffOptions {
 
 export async function openStreamInAndroidPackage(
   pkg: string,
-  src: string,
+  rawSrc: string,
   options: AndroidPackageLaunchOptions = {},
 ): Promise<void> {
   const bridge = androidIntent()
@@ -564,6 +645,7 @@ export async function openStreamInAndroidPackage(
       "system",
     )
   }
+  const src = await wrapForDnsProxyExternal(rawSrc)
   const mime = options.mime || androidMimeForUrl(src)
   const userAgent = options.userAgent || getUserAgent() || ""
   const referer = options.referer || ""
@@ -955,10 +1037,12 @@ function createTauriStreamLoaderClass(mpegts: any) {
   }
 }
 
+// requestUrl may be a DNS-proxy loopback URL (nested manifest/segment requests rewritten by the
+// proxy); unwrap it back to the real upstream URL before comparing, since authorizedOrigin is real.
 function matchesAuthorizedOrigin(requestUrl: string, authorizedOrigin: string | null): boolean {
   if (!authorizedOrigin) return false
   try {
-    return new URL(requestUrl).origin === authorizedOrigin
+    return new URL(unwrapProxyUrl(requestUrl)).origin === authorizedOrigin
   } catch {
     return false
   }
@@ -1184,13 +1268,14 @@ function attachHlsToVideo(
     try { existing.destroy() } catch {}
     active.set(null)
   }
-  // Native <video src> cannot carry a header, so those paths pass the
-  // original url through as best-effort; the hls.js paths get the split form.
   const { url: cleanUrl, authorization } = splitUrlAuth(url)
   let authorizedOrigin: string | null = null
   if (authorization) {
     try { authorizedOrigin = new URL(cleanUrl).origin } catch {}
   }
+  const playbackUrl = wrapForDnsProxySync(cleanUrl)
+  // hls.js gets auth via header; a native <video src> can carry the userinfo itself.
+  const nativeUrl = wrapForDnsProxySync(url)
   const canPlayNativeHls = !!video.canPlayType("application/vnd.apple.mpegurl")
   // forceNative: this channel's audio (AC-3) cannot decode in this WebView's MSE.
   const preferNative =
@@ -1203,8 +1288,8 @@ function attachHlsToVideo(
         ? "[xt:player] hls transport=native (AC-3 audio fallback): MSE has no AC-3 decoder here"
         : "[xt:player] hls transport=native (macOS AVFoundation): no custom headers, no codec telemetry"
     )
-    noteMonoSourceChange(video, url)
-    setNativeSrc(video, url)
+    noteMonoSourceChange(video, nativeUrl)
+    setNativeSrc(video, nativeUrl)
     return
   }
   if (!Hls.isSupported()) {
@@ -1212,8 +1297,8 @@ function attachHlsToVideo(
       log.warn("[xt:player] hls.js unsupported and no native HLS; fallback to <video src>")
     }
     log.info("[xt:player] hls transport=native (hls.js unsupported)")
-    noteMonoSourceChange(video, url)
-    setNativeSrc(video, url)
+    noteMonoSourceChange(video, nativeUrl)
+    setNativeSrc(video, nativeUrl)
     return
   }
   log.info(`[xt:player] hls transport=hls.js loader=${isTauri ? "tauri-http" : "xhr"}`)
@@ -1327,7 +1412,7 @@ function attachHlsToVideo(
     telemetry?.emit("fatal", String(data?.details || "hls fatal error"))
     onGiveUp()
   })
-  hls.loadSource(cleanUrl)
+  hls.loadSource(playbackUrl)
   hls.attachMedia(video)
   active.set(hls)
 }
@@ -1420,6 +1505,7 @@ async function attachShaka(
   }
   const player = new shaka.Player()
   const handle = { destroy: () => { void player.destroy() }, player }
+  const playbackUrl = wrapForDnsProxySync(cleanUrl)
   configureShakaDrmAndAuth(player, clearKeys, authorization, cleanUrl)
   const fail = (raw: any) => {
     if (!isCurrent()) return
@@ -1444,7 +1530,7 @@ async function attachShaka(
       try { player.destroy() } catch {}
       return
     }
-    await player.load(cleanUrl)
+    await player.load(playbackUrl)
     if (!isCurrent()) {
       try { player.destroy() } catch {}
       return
@@ -1534,6 +1620,7 @@ async function attachMpegts(
   let offsetWrapTimer: ReturnType<typeof setInterval> | null = null
 
   const { url: cleanUrl, authorization } = splitUrlAuth(url)
+  const playbackUrl = wrapForDnsProxySync(cleanUrl)
 
   const teardown = () => {
     if (durationRetryTimer) {
@@ -1641,7 +1728,7 @@ async function attachMpegts(
         }
       } catch {}
     }
-    const mediaDataSource: Record<string, unknown> = { type: "mpegts", isLive, url: cleanUrl }
+    const mediaDataSource: Record<string, unknown> = { type: "mpegts", isLive, url: playbackUrl }
     if (!isLive && Number.isFinite(durationSeconds) && (durationSeconds as number) > 0) {
       mediaDataSource.duration = Math.round((durationSeconds as number) * 1000)
     }
@@ -1872,13 +1959,13 @@ async function mountVideoJs(
       return
     }
     destroyHls()
-    player.src({ src, type: "application/x-mpegURL" })
+    player.src({ src: wrapForDnsProxySync(src), type: "application/x-mpegURL" })
   }
 
   async function loadHlsViaHlsJs(src: string) {
     destroyHls()
     if (!getUnderlyingVideo()) {
-      player.src({ src, type: "application/x-mpegURL" })
+      player.src({ src: wrapForDnsProxySync(src), type: "application/x-mpegURL" })
       return
     }
     try {
@@ -1891,7 +1978,7 @@ async function mountVideoJs(
       try { player.reset() } catch {}
       const video = getUnderlyingVideo()
       if (!video) {
-        player.src({ src, type: "application/x-mpegURL" })
+        player.src({ src: wrapForDnsProxySync(src), type: "application/x-mpegURL" })
         return
       }
       attachHlsToVideo(
@@ -1916,7 +2003,7 @@ async function mountVideoJs(
       try { player.hasStarted?.(true) } catch {}
     } catch (err) {
       log.warn("[xt:player] hls.js attach failed, falling back to VHS:", err)
-      player.src({ src, type: "application/x-mpegURL" })
+      player.src({ src: wrapForDnsProxySync(src), type: "application/x-mpegURL" })
     }
   }
 
@@ -1924,8 +2011,9 @@ async function mountVideoJs(
     destroyMpegts()
     destroyHls()
     destroyShaka()
-    noteMonoSourceChange(videoEl, src)
-    player.src({ src, type: type || "video/mp4" })
+    const playbackSrc = wrapForDnsProxySync(src)
+    noteMonoSourceChange(videoEl, playbackSrc)
+    player.src({ src: playbackSrc, type: type || "video/mp4" })
   }
 
   async function recoverFailedTs(src: string, detail: string) {
@@ -2363,8 +2451,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
           return
         }
         if (!handle) {
-          noteMonoSourceChange(video, url)
-          setNativeSrc(video, url)
+          const playbackUrl = wrapForDnsProxySync(url)
+          noteMonoSourceChange(video, playbackUrl)
+          setNativeSrc(video, playbackUrl)
           return
         }
         activeMpegts = handle
@@ -2495,8 +2584,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       if (hint === "native") {
         art.type = ""
         // artplayer's default (non-customType) handling sets el.src directly.
-        noteMonoSourceChange(art.video ?? null, src)
-        art.url = src
+        const playbackSrc = wrapForDnsProxySync(src)
+        noteMonoSourceChange(art.video ?? null, playbackSrc)
+        art.url = playbackSrc
         return
       }
       // Unknown - wait for the probe before loading anything so we don't
@@ -2507,8 +2597,13 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
           if (pendingSrc !== src) return
           pendingUsesCallerSuppliedTracks = kind === "ts" || kind === "native"
           art.type = kind === "dash" ? "mpd" : kind === "ts" ? "ts" : kind === "native" ? "" : "m3u8"
-          if (kind === "native") noteMonoSourceChange(art.video ?? null, src)
-          art.url = src
+          if (kind === "native") {
+            const playbackSrc = wrapForDnsProxySync(src)
+            noteMonoSourceChange(art.video ?? null, playbackSrc)
+            art.url = playbackSrc
+          } else {
+            art.url = src
+          }
           if (kind === "ts" || kind === "native") audioControl.setSource(pendingAudioSource)
           if ((kind === "ts" || kind === "native") && subtitles) {
             setSubtitleSource(subtitles.sourceUrl, type, subtitles?.mkvSession ?? null)
@@ -2749,10 +2844,11 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
       setNativeControls(false)
       setShakaSeekBar(true)
       player.getNetworkingEngine()?.clearAllRequestFilters()
+      const playbackUrl = wrapForDnsProxySync(cleanUrl)
       configureShakaDrmAndAuth(player, clearKeys, authorization, cleanUrl)
       // Shaka can fall back to src= for non-MSE-able content, setting el.src directly.
-      noteMonoSourceChange(video, cleanUrl)
-      await player.load(cleanUrl, null, mimeTypeHint || undefined)
+      noteMonoSourceChange(video, playbackUrl)
+      await player.load(playbackUrl, null, mimeTypeHint || undefined)
       if (pendingSrc !== src) return
       consumePlayIntent()
       const track = player.getVariantTracks?.().find((variant: any) => variant.active)
@@ -3000,6 +3096,7 @@ export async function mountPlayer(
   backend: PlayerBackend = getPlayerBackend(),
   options: MountOptions = {},
 ): Promise<Mounted> {
+  await ensurePlaybackDnsReady()
   if (backend === "artplayer" && isAndroid) backend = "videojs"
   if (backend === "mpv" || backend === "vlc") {
     if (!externalPlayersAvailable) {

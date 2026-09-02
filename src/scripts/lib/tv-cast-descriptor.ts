@@ -14,6 +14,7 @@ export interface CastDescriptorV1 {
   durationSeconds?: number
   timelineOffsetSeconds?: number
   preferNativeHls?: boolean
+  dns?: string | null
 }
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "tauri.localhost"])
@@ -52,6 +53,7 @@ interface BuildLiveCastDescriptorInput {
   drm?: CastDescriptorV1["drm"]
   headers?: CastDescriptorV1["headers"]
   preferNativeHls?: boolean
+  dns?: string | null
 }
 
 export function buildLiveCastDescriptor(input: BuildLiveCastDescriptorInput): CastDescriptorV1 {
@@ -66,6 +68,7 @@ export function buildLiveCastDescriptor(input: BuildLiveCastDescriptorInput): Ca
   if (input.drm !== undefined) descriptor.drm = input.drm
   if (input.headers !== undefined) descriptor.headers = input.headers
   if (input.preferNativeHls !== undefined) descriptor.preferNativeHls = input.preferNativeHls
+  if (input.dns !== undefined) descriptor.dns = input.dns
   return descriptor
 }
 
@@ -75,6 +78,7 @@ interface BuildVodCastDescriptorInput {
   logo?: string
   resumeSeconds?: number
   durationSeconds?: number
+  dns?: string | null
 }
 
 export function buildVodCastDescriptor(input: BuildVodCastDescriptorInput): CastDescriptorV1 {
@@ -90,6 +94,7 @@ export function buildVodCastDescriptor(input: BuildVodCastDescriptorInput): Cast
   if (resumeSeconds !== undefined) descriptor.resumeSeconds = resumeSeconds
   const durationSeconds = clampNonNegativeFinite(input.durationSeconds)
   if (durationSeconds !== undefined) descriptor.durationSeconds = durationSeconds
+  if (input.dns !== undefined) descriptor.dns = input.dns
   return descriptor
 }
 
@@ -102,6 +107,7 @@ interface BuildCatchupCastDescriptorInput {
   resumeSeconds?: number
   durationSeconds?: number
   timelineOffsetSeconds?: number
+  dns?: string | null
 }
 
 export function buildCatchupCastDescriptor(input: BuildCatchupCastDescriptorInput): CastDescriptorV1 {
@@ -120,6 +126,7 @@ export function buildCatchupCastDescriptor(input: BuildCatchupCastDescriptorInpu
   if (durationSeconds !== undefined) descriptor.durationSeconds = durationSeconds
   const timelineOffsetSeconds = clampNonNegativeFinite(input.timelineOffsetSeconds)
   if (timelineOffsetSeconds !== undefined) descriptor.timelineOffsetSeconds = timelineOffsetSeconds
+  if (input.dns !== undefined) descriptor.dns = input.dns
   return descriptor
 }
 
@@ -191,6 +198,9 @@ export function validateCastDescriptor(value: unknown): CastDescriptorV1 | null 
   if (timelineOffsetSeconds !== undefined) descriptor.timelineOffsetSeconds = timelineOffsetSeconds
 
   if (typeof source.preferNativeHls === "boolean") descriptor.preferNativeHls = source.preferNativeHls
+
+  if (typeof source.dns === "string" && source.dns.length <= 512) descriptor.dns = source.dns
+  else if (source.dns === null) descriptor.dns = null
 
   return descriptor
 }

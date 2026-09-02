@@ -11,6 +11,9 @@ import { getPlayerBackend } from "@/scripts/lib/app-settings.js"
 import type { CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
 import { t } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
+import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
+import { dnsProxyAvailable, ensureDnsProxy } from "@/scripts/lib/dns-proxy.ts"
+import { wrapProxyUrl } from "@/scripts/lib/dns-proxy-url.ts"
 import { decodedFrameCount } from "@/scripts/lib/player-telemetry.js"
 import {
   classifyStartFailure,
@@ -140,6 +143,20 @@ const LOADING_MAX_WAIT_MS = 180000
 const LOAD_PROGRESS_EVENTS = ["progress", "loadedmetadata", "loadeddata", "canplay", "seeked"]
 const ERROR_HIDE_MS = 10000
 const TITLE_HIDE_MS = 5000
+
+// The sender's descriptor is authoritative here, not the receiver's own active-playlist DNS override.
+async function resolveDescriptorDnsSrc(descriptor: CastDescriptorV1): Promise<string> {
+  if (!descriptor.dns || !dnsProxyAvailable()) return descriptor.src
+  const server = parseDnsServer(descriptor.dns)
+  if (!server) return descriptor.src
+  try {
+    const base = await ensureDnsProxy(`dns:${server.raw}`, server)
+    return base ? wrapProxyUrl(base, descriptor.src) : descriptor.src
+  } catch (err) {
+    log.warn("[xt:receiver] dns proxy wrap failed, using raw src:", err)
+    return descriptor.src
+  }
+}
 
 export function createEmbeddedReceiverEngine(
   dom: EmbeddedEngineDom,
@@ -477,8 +494,11 @@ export function createEmbeddedReceiverEngine(
       if (attemptGeneration !== playGeneration) return false
       activeHandle = handle
 
+      const playbackSrc = await resolveDescriptorDnsSrc(descriptor)
+      if (attemptGeneration !== playGeneration) return false
+
       handle.src({
-        src: descriptor.src,
+        src: playbackSrc,
         type: descriptor.mime,
         drm: descriptor.drm ?? null,
         isLive: descriptor.isLive,
@@ -751,6 +771,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
 
       const ua = descriptor.headers?.userAgent || ""
       const referer = descriptor.headers?.referer || ""
+      const dns = descriptor.dns ?? null
       const launched = descriptor.isLive
         ? launchAndroidNativeLive({
             contentKey,
@@ -760,6 +781,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
             initialChannelId: liveContext ? liveContext.initialChannelId : RECEIVER_LIVE_CHANNEL_ID,
             defaultUa: ua,
             defaultReferer: referer,
+            dns,
           })
         : launchAndroidNativeVod({
             contentKey,
@@ -768,6 +790,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
             referer,
             title: descriptor.title,
             startMs: Math.max(0, Math.floor((descriptor.resumeSeconds || 0) * 1000)),
+            dns,
           })
 
       if (!launched) {

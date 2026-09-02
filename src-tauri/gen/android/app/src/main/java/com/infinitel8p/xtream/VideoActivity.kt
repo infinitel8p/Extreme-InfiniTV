@@ -28,8 +28,10 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -39,6 +41,8 @@ import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
@@ -64,6 +68,7 @@ class VideoActivity : AppCompatActivity() {
     const val EXTRA_URL = "url"
     const val EXTRA_UA = "ua"
     const val EXTRA_REFERER = "referer"
+    const val EXTRA_DNS = "dns"
     const val EXTRA_TITLE = "title"
     const val EXTRA_POSTER = "posterUrl"
     const val EXTRA_START_MS = "startMs"
@@ -113,6 +118,7 @@ class VideoActivity : AppCompatActivity() {
   private var contentKey: String = ""
   private var defaultUa: String = ""
   private var defaultReferer: String = ""
+  private var defaultDns: String = ""
   private var initialTitle: String = ""
   private var posterUrl: String = ""
   private var resumeMs: Long = 0L
@@ -335,6 +341,7 @@ class VideoActivity : AppCompatActivity() {
     contentKey = intent.getStringExtra(EXTRA_CONTENT_KEY) ?: ""
     defaultUa = intent.getStringExtra(EXTRA_UA) ?: ""
     defaultReferer = intent.getStringExtra(EXTRA_REFERER) ?: ""
+    defaultDns = intent.getStringExtra(EXTRA_DNS) ?: ""
     initialTitle = intent.getStringExtra(EXTRA_TITLE) ?: ""
     posterUrl = intent.getStringExtra(EXTRA_POSTER) ?: ""
     resumeMs = intent.getLongExtra(EXTRA_START_MS, 0L)
@@ -507,7 +514,7 @@ class VideoActivity : AppCompatActivity() {
   private fun initializePlayer() {
     val view = playerView ?: return
     val player = ExoPlayer.Builder(this)
-      .setMediaSourceFactory(buildMediaSourceFactory(defaultUa, defaultReferer))
+      .setMediaSourceFactory(buildMediaSourceFactory(defaultUa, defaultReferer, defaultDns))
       .build()
     exoPlayer = player
     view.player = player
@@ -617,14 +624,27 @@ class VideoActivity : AppCompatActivity() {
     return 0
   }
 
-  private fun buildMediaSourceFactory(ua: String, referer: String): MediaSource.Factory {
-    val httpFactory = DefaultHttpDataSource.Factory()
-      .setAllowCrossProtocolRedirects(true)
-    if (ua.isNotBlank()) httpFactory.setUserAgent(ua)
-    if (referer.isNotBlank()) {
-      httpFactory.setDefaultRequestProperties(mapOf("Referer" to referer))
+  private fun buildMediaSourceFactory(ua: String, referer: String, dns: String): MediaSource.Factory {
+    val dataSourceFactory: DataSource.Factory = if (dns.isBlank()) {
+      val httpFactory = DefaultHttpDataSource.Factory()
+        .setAllowCrossProtocolRedirects(true)
+      if (ua.isNotBlank()) httpFactory.setUserAgent(ua)
+      if (referer.isNotBlank()) httpFactory.setDefaultRequestProperties(mapOf("Referer" to referer))
+      httpFactory
+    } else {
+      // OkHttp follows cross-protocol redirects by default, matching DefaultHttpDataSource above.
+      val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .dns(CustomDns.build(dns))
+        .build()
+      val okHttpFactory = OkHttpDataSource.Factory(client)
+      if (ua.isNotBlank()) okHttpFactory.setUserAgent(ua)
+      if (referer.isNotBlank()) okHttpFactory.setDefaultRequestProperties(mapOf("Referer" to referer))
+      okHttpFactory
     }
-    return DefaultMediaSourceFactory(this).setDataSourceFactory(httpFactory)
+    return DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory)
   }
 
   private fun buildMediaItem(url: String, title: String, poster: String): MediaItem {
@@ -804,7 +824,7 @@ class VideoActivity : AppCompatActivity() {
     val ua = channel.ua.ifBlank { defaultUa }
     val ref = channel.referer.ifBlank { defaultReferer }
     try {
-      val factory = buildMediaSourceFactory(ua, ref)
+      val factory = buildMediaSourceFactory(ua, ref, defaultDns)
       val item = buildMediaItem(channel.streamUrl, channel.name, channel.logo)
       val src = factory.createMediaSource(item)
       player.setMediaSource(src)

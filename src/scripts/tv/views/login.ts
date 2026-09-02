@@ -4,6 +4,7 @@ import { t, applyI18nDOM, LOCALE_EVENT } from "@/scripts/lib/i18n"
 import { navigate } from "astro:transitions/client"
 import { addEntry, getEntries, resolveServerScheme, resolveM3UScheme } from "@/scripts/lib/creds.js"
 import { parsePlaylistLinks, type ParsedXtreamCandidate } from "@/scripts/lib/playlist-link"
+import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
 import { toastSuccess, toastWarn } from "@/scripts/lib/toast"
 
 type Method = "xtream" | "m3u"
@@ -34,6 +35,7 @@ interface Refs {
   m3uFields: HTMLElement
   m3uUrlInput: HTMLInputElement
   epgUrlInput: HTMLInputElement
+  dnsInput: HTMLInputElement
   nameInput: HTMLInputElement
   statusEl: HTMLElement
   cancelBtn: HTMLButtonElement
@@ -160,6 +162,15 @@ function buildMarkup(): string {
           </div>
 
           <label class="flex flex-col gap-2">
+            <span data-i18n="dns.label" class="${TV_LABEL_CLASS}">DNS server</span>
+            <input data-role="dns" data-focus-key="field:dns" type="text"
+                   autocapitalize="off" spellcheck="false" inputmode="url"
+                   data-i18n-attr="placeholder:dns.placeholder"
+                   placeholder="1.1.1.1 or https://dnsforge.de/dns-query"
+                   class="${TV_INPUT_CLASS} font-mono" />
+          </label>
+
+          <label class="flex flex-col gap-2">
             <span data-i18n="login.field.title" class="${TV_LABEL_CLASS}">Title</span>
             <input data-role="name" data-focus-key="field:name" type="text"
                    data-i18n-attr="placeholder:login.field.title.placeholder"
@@ -201,6 +212,7 @@ function collectRefs(root: HTMLElement): Refs {
     m3uFields: query("m3u-fields"),
     m3uUrlInput: query("m3u-url"),
     epgUrlInput: query("epg-url"),
+    dnsInput: query("dns"),
     nameInput: query("name"),
     statusEl: query("status"),
     cancelBtn: query("cancel"),
@@ -281,6 +293,7 @@ const view: TvView = {
         refs.passwordInput,
         refs.m3uUrlInput,
         refs.epgUrlInput,
+        refs.dnsInput,
         refs.nameInput,
         refs.methodXtream,
         refs.methodM3u,
@@ -338,13 +351,14 @@ const view: TvView = {
       const serverUrl = refs.serverUrlInput.value.trim()
       const username = refs.usernameInput.value.trim()
       const password = refs.passwordInput.value.trim()
+      const dns = refs.dnsInput.value.trim() || undefined
       if (!serverUrl || !username || !password) {
         setStatus("unavailable", t("login.status.allRequired"))
         focusFirstField()
         return
       }
       setStatus("busy", t("login.status.testing"))
-      const resolved = await resolveServerScheme({ serverUrl, username, password })
+      const resolved = await resolveServerScheme({ serverUrl, username, password, dns })
       if (destroyed) return
       if (resolved.serverUrl !== serverUrl) refs.serverUrlInput.value = resolved.serverUrl
       const result = resolved.test as XtreamTestResult
@@ -360,6 +374,7 @@ const view: TvView = {
         username,
         password,
         mirrors: pendingMirrors,
+        dns,
       })
       if (destroyed) return
       if (result.status === "expired" || result.status === "inactive") {
@@ -372,13 +387,14 @@ const view: TvView = {
 
     async function connectM3U(): Promise<void> {
       const rawUrl = refs.m3uUrlInput.value.trim()
+      const dns = refs.dnsInput.value.trim() || undefined
       if (!rawUrl) {
         setStatus("unavailable", t("login.status.enterM3uUrl"))
         focusFirstField()
         return
       }
       setStatus("busy", t("login.status.fetching"))
-      const resolved = await resolveM3UScheme(rawUrl)
+      const resolved = await resolveM3UScheme(rawUrl, { dns })
       if (destroyed) return
       if (resolved.url !== rawUrl) refs.m3uUrlInput.value = resolved.url
       const result = resolved.test as M3UTestResult
@@ -392,6 +408,7 @@ const view: TvView = {
         title: refs.nameInput.value.trim(),
         url: resolved.url,
         epgUrl: refs.epgUrlInput.value.trim(),
+        dns,
       })
       if (destroyed) return
       toastSuccess(t("tv.login.toast.saved", { title: entry.title }))
@@ -401,6 +418,12 @@ const view: TvView = {
     async function onConnect(event: Event): Promise<void> {
       event.preventDefault()
       if (busy) return
+      const rawDns = refs.dnsInput.value.trim()
+      if (rawDns && !parseDnsServer(rawDns)) {
+        setStatus("unavailable", t("dns.invalid"))
+        refs.dnsInput.focus()
+        return
+      }
       setBusy(true)
       try {
         if (method === "xtream") await connectXtream()

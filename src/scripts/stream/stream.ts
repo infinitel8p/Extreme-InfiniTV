@@ -10,6 +10,7 @@ import {
   isLocalM3UHost,
   isCustomHost,
   readLocalM3UContent,
+  getActiveDnsOverrideAsync,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
@@ -3903,6 +3904,7 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
     initialChannelId: String(initialStreamId),
     defaultUa: getUserAgent() || "",
     programmes,
+    dns: (await getActiveDnsOverrideAsync())?.raw ?? null,
   })
   if (launched && activePlaylistId) {
     pushRecent(activePlaylistId, "live", initialStreamId, initialName,

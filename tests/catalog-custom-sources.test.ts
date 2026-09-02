@@ -56,6 +56,7 @@ vi.mock("@/scripts/lib/creds.js", () => ({
   isLocalM3UHost: () => false,
   isCustomHost: (host: string) => String(host).startsWith("xt-custom://"),
   readLocalM3UContent: async () => "",
+  getEntryDnsOverride: () => null,
 }))
 
 vi.mock("@/scripts/lib/cache.js", () => ({

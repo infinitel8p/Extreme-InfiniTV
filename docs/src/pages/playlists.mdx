@@ -68,6 +68,24 @@ For M3U playlists, the app also picks up EPG sources the playlist itself already
   caption="The programme guide, fed by the EPG source of the active playlist. Click a programme for details; the day arrows and Now move along the timeline."
 />
 
+### Custom DNS server
+
+Also in the advanced options, next to the backup domains field, is a **DNS server** disclosure. Set it if your provider's hostname only resolves through their own DNS, or through a resolver your ISP doesn't offer - some providers list a DNS server right in their welcome message. It also works with a privacy-focused resolver like `dnsforge.de` if that's what you'd rather use.
+
+- An IPv4 or IPv6 address, with an optional port (defaults to `53`).
+- A DNS-over-HTTPS URL, for example `https://dnsforge.de/dns-query`.
+- Leave it empty to use your system's own resolver.
+
+Press **Test** to check the server before saving. It runs two steps: it resolves the playlist's hostname through the DNS server you entered, then requests that address to confirm it actually answers. A pass reads "Resolved to 1.2.3.4 in 5 ms. The server answered through it."; if the name resolves but the address stays silent, the result says so, which usually means the resolver handed back a stale address. The value is saved per playlist and applies to sign-in, catalog, EPG, images, and playback, including MPV and VLC; **Settings > Network** also has a global default DNS server that applies when a playlist doesn't set its own. Casting a stream carries the DNS setting along, so a receiver on a current version resolves the same way - older receivers fall back to their own system DNS.
+
+The global default reaches further than a per-playlist value: it also covers the app's own lookups that belong to no playlist, such as metadata (TheTVDB, TMDb), the iptv-org logo fallback, and update checks. Set it there if you want everything the app requests to go through one resolver, a Pi-hole for example. Artwork the app hasn't cached yet is still loaded by the WebView on first display, which always uses your system resolver, so a resolver-level block is only complete when it also covers the device.
+
+<Callout type="note">
+  Not available in the browser (web) build - the DNS fields are read-only there with a hint.
+</Callout>
+
+On Android TV the same settings are under **Settings > DNS server** for the global default, and there is a **DNS server** field on the add-playlist screen for a per-playlist one. A playlist that carries its own DNS server shows it on its row in the playlist switcher and in **Settings > Playlists**.
+
 ### Personalize a playlist
 
 Still in the login screen's advanced options, you can give a playlist a **Name**, an **Emoji**, and an **Accent color**. The emoji replaces the type badge next to that playlist wherever it's listed, and the accent color overrides the app's accent while that playlist is active - handy for telling accounts apart at a glance.

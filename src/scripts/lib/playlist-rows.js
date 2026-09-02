@@ -10,6 +10,7 @@ import {
   ICON_DOWNLOAD,
 } from "./icons.js"
 import { escapeHtml, fmtAge } from "./format.js"
+import { dnsShortLabel } from "./dns-test.ts"
 import { t } from "./i18n.js"
 import { redactUrl, log } from "./log.js"
 import { confirmDialog } from "./confirm-dialog.ts"
@@ -114,6 +115,7 @@ export function renderPlaylistRow({
 }) {
   const isCompact = density === "compact"
   const ageLabel = fmtAge(getNewestCacheTime(entry._id))
+  const dnsLabel = entry.dns ? dnsShortLabel(entry.dns) : null
 
   // Outer wrapper holds the visible row + the (initially hidden)
   // expandable health panel beneath it. Caller appends `outer` and gets
@@ -183,9 +185,24 @@ export function renderPlaylistRow({
           ? `<span class="truncate text-2xs text-fg-3 font-mono">${escapeHtml(subtitle)}</span>`
           : ""
       }
-      <span class="truncate text-2xs text-fg-3 ${
-        ageLabel ? "tabular-nums" : "italic"
-      }">${ageLabel ? `Updated ${ageLabel}` : "Not loaded yet"}</span>
+      <span class="flex items-center gap-1.5 min-w-0">
+        <span class="min-w-0 truncate text-2xs text-fg-3 ${isCompact ? "" : "shrink-0"} ${
+          ageLabel ? "tabular-nums" : "italic"
+        }"${
+          isCompact && dnsLabel ? ` title="${escapeHtml(entry.dns)}"` : ""
+        }">${ageLabel ? `Updated ${ageLabel}` : "Not loaded yet"}${
+          isCompact && dnsLabel ? ` · ${escapeHtml(t("dns.chip", { server: dnsLabel }))}` : ""
+        }</span>
+        ${
+          !isCompact && dnsLabel
+            ? `<span class="min-w-0 truncate rounded-md ring-1 ring-line bg-surface-2 text-fg-3 text-2xs px-1.5 font-mono" title="${escapeHtml(
+                entry.dns
+              )}" aria-label="${escapeHtml(t("dns.chipAria", { server: dnsLabel }))}">${escapeHtml(
+                t("dns.chip", { server: dnsLabel })
+              )}</span>`
+            : ""
+        }
+      </span>
     </span>
     ${
       isActive
@@ -531,6 +548,7 @@ function paintPlaylistHealthInto(panel, entry, opts = {}) {
             disableProviderEpg: entry.disableProviderEpg,
             liveContainer: entry.liveContainer,
             type: entry.type,
+            dns: entry.dns,
           },
           sampleStreamUrl: resolveSampleStreamUrl(entry) || undefined,
         }

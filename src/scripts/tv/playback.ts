@@ -26,6 +26,7 @@ import {
   resolveLiveChannelCastDescriptor,
   resolvePlaylistCreds,
 } from "@/scripts/lib/tv-cast-live.js"
+import { getActiveDnsOverrideAsync } from "@/scripts/lib/creds.js"
 import { resolveCatchupCastDescriptor } from "@/scripts/lib/tv-cast-catchup.ts"
 import type { CatchupRequestChannel } from "@/scripts/lib/catchup-resolve.ts"
 import { buildMovieStreamUrl, buildSeriesStreamUrl } from "@/scripts/lib/stream-urls.ts"
@@ -695,6 +696,7 @@ export async function playVod(input: TvPlayVodInput, events: TvPlaybackEvents = 
       resumeSeconds: input.resumeSeconds,
       durationSeconds: input.durationSeconds,
     })
+    descriptor.dns = (await getActiveDnsOverrideAsync())?.raw ?? null
 
     const progressTarget: ActiveProgressTarget = {
       writer: createThrottledProgressWriter({
@@ -730,6 +732,7 @@ export async function playEpisode(input: TvPlayEpisodeInput, events: TvPlaybackE
       logo: input.logo ?? undefined,
       resumeSeconds: input.resumeSeconds,
     })
+    descriptor.dns = (await getActiveDnsOverrideAsync())?.raw ?? null
 
     const progressExtras = {
       seriesId: input.seriesId,

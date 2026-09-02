@@ -11,6 +11,7 @@ import {
   isLocalM3UHost,
   isCustomHost,
   buildApiUrl,
+  getEntryDnsOverride,
 } from "@/scripts/lib/creds.js"
 import { hydrate, getCached, setCached, invalidateCustomDependents, hasInflightFetch } from "@/scripts/lib/cache.js"
 import {
@@ -74,6 +75,7 @@ export interface WarmupJobSpec {
   force: boolean
   timeoutMs: number
   kinds: WarmupKindSpec[]
+  dns: string | null
 }
 
 interface WarmupKindStatus {
@@ -147,6 +149,7 @@ export interface BuildSpecInput {
   source:
     | { type: "xtream"; candidates: XtreamCandidateInput[]; startIndex: number }
     | { type: "m3u"; url: string }
+  dns?: string | null
 }
 
 const CATEGORY_ACTION: Record<WarmupKindName, string> = {
@@ -213,7 +216,7 @@ export function buildWarmupSpec(input: BuildSpecInput): WarmupJobSpec {
     }
   }
 
-  return { playlistId: input.playlistId, force: input.force, timeoutMs, kinds }
+  return { playlistId: input.playlistId, force: input.force, timeoutMs, kinds, dns: input.dns ?? null }
 }
 
 // ---------------------------------------------------------------------------
@@ -829,7 +832,8 @@ export async function warmupActiveNative(
     const timeoutSeconds = getNetworkTimeoutSeconds()
     const userAgent = getUserAgent() || DEFAULT_BROWSER_UA
     const source = buildSourceInput(entry, creds, isM3U)
-    const spec = buildWarmupSpec({ playlistId, force, timeoutSeconds, userAgent, kinds: plan.nativeKinds, source })
+    const dns = getEntryDnsOverride(entry)?.raw ?? null
+    const spec = buildWarmupSpec({ playlistId, force, timeoutSeconds, userAgent, kinds: plan.nativeKinds, source, dns })
 
     const { job, coveredKinds } = await startOrJoinNativeJob(playlistId, spec, plan.nativeKinds, context)
 
@@ -961,7 +965,8 @@ export async function retryKindNative(playlistId: string, kind: WarmupKindName):
     const timeoutSeconds = getNetworkTimeoutSeconds()
     const userAgent = getUserAgent() || DEFAULT_BROWSER_UA
     const source = buildSourceInput(entry, creds, isM3U)
-    const spec = buildWarmupSpec({ playlistId, force: true, timeoutSeconds, userAgent, kinds: [kind], source })
+    const dns = getEntryDnsOverride(entry)?.raw ?? null
+    const spec = buildWarmupSpec({ playlistId, force: true, timeoutSeconds, userAgent, kinds: [kind], source, dns })
     const context: IngestContext = { pid: playlistId, isM3U, entry, sourceUrl: creds.host }
 
     const { job, coveredKinds } = await startOrJoinNativeJob(playlistId, spec, [kind], context)

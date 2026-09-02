@@ -115,7 +115,7 @@ export async function ensureHevcDecodable(options?: { generic?: boolean }): Prom
 
 async function downloadAndVerify(): Promise<string> {
   const { providerFetch } = await import("@/scripts/lib/provider-fetch.js")
-  const response = await providerFetch(APPX_URL, { logKind: "update" })
+  const response = await providerFetch(APPX_URL, { logKind: "update", dns: "global" })
   if (!response.ok) throw new Error(`download HTTP ${response.status}`)
   const buffer = await response.arrayBuffer()
   if ((await sha256Hex(buffer)) !== APPX_SHA256) throw new Error("HASH_MISMATCH")

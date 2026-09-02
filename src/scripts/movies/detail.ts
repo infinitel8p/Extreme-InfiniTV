@@ -6,6 +6,7 @@ import {
   getActiveEntry,
   fmtBase,
   isTauri,
+  getActiveDnsOverrideAsync,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
 import { isCastRoutingActive, routePlayToCast } from "@/scripts/lib/tv-cast.js"
@@ -898,13 +899,15 @@ async function startPlayback(options = {}) {
         const resumeSeconds =
           saved && !saved.completed && saved.position > RESUME_MIN_SECONDS ? saved.position : 0
         const durationSeconds = knownVodDurationSeconds()
-        return buildVodCastDescriptor({
+        const descriptor = buildVodCastDescriptor({
           src,
           title,
           logo: movie.logo || undefined,
           resumeSeconds,
           durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
         })
+        descriptor.dns = (await getActiveDnsOverrideAsync())?.raw ?? null
+        return descriptor
       },
     })
     return
@@ -964,6 +967,8 @@ async function startPlayback(options = {}) {
     getAndroidNativePlayerEnabled() &&
     activePlaylistId
   ) {
+    const nativeDns = (await getActiveDnsOverrideAsync())?.raw ?? null
+    if (requestId !== playRequestId) return
     const launched = launchAndroidNativeVodWithProgress({
       playlistId: activePlaylistId,
       contentKey: `vod:${movie.id}`,
@@ -973,6 +978,7 @@ async function startPlayback(options = {}) {
       title: movie.name,
       posterUrl: movie.logo || "",
       startMs: Math.max(0, resumePos) * 1000,
+      dns: nativeDns,
       progressExtras: { title: movie.name, logo: movie.logo || null },
     })
     if (launched) return

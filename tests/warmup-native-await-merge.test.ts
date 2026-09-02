@@ -55,6 +55,7 @@ vi.mock("@/scripts/lib/creds.js", () => ({
   isLocalM3UHost: () => false,
   isCustomHost: () => false,
   buildApiUrl: (candidate: { host: string }, action: string) => `${candidate.host}/player_api.php?action=${action}`,
+  getEntryDnsOverride: () => null,
 }))
 
 vi.mock("@/scripts/lib/cache.js", () => ({

@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::dns_proxy;
+
 const PROGRESS_EVENT: &str = "xt:warmup-progress";
 const KIND_DONE_EVENT: &str = "xt:warmup-kind-done";
 const KIND_ERROR_EVENT: &str = "xt:warmup-kind-error";
@@ -38,6 +40,8 @@ pub struct WarmupJobSpec {
     force: bool,
     timeout_ms: u64,
     kinds: Vec<WarmupKindSpec>,
+    #[serde(default)]
+    dns: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -496,13 +500,20 @@ fn delete_staged_files(files: &[StagedFile]) {
 // HTTP (redirect handling duplicated from audio_proxy.rs: desktop-only, can't import)
 // ---------------------------------------------------------------------------
 
-fn build_http_client(timeout_ms: u64) -> reqwest::Client {
-    reqwest::Client::builder()
+async fn build_http_client(timeout_ms: u64, dns_server: Option<&str>) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_millis(timeout_ms))
-        .read_timeout(Duration::from_millis(timeout_ms))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .read_timeout(Duration::from_millis(timeout_ms));
+    if let Some(raw) = dns_server {
+        match dns_proxy::build_resolver_for_raw(raw).await {
+            Ok(resolver) => builder = builder.dns_resolver(resolver),
+            Err(error) => {
+                log::warn!("[warmup] failed to build dns resolver for {raw}: {error}, using default resolver");
+            }
+        }
+    }
+    builder.build().unwrap_or_else(|_| reqwest::Client::new())
 }
 
 fn is_same_origin(original_url: &str, candidate_url: &str) -> bool {
@@ -563,7 +574,7 @@ async fn fetch_following_redirects(
 // ---------------------------------------------------------------------------
 
 async fn run_job(job: Arc<WarmupJob>, spec: WarmupJobSpec, events: Arc<dyn WarmupEvents>) {
-    let client = build_http_client(spec.timeout_ms);
+    let client = build_http_client(spec.timeout_ms, spec.dns.as_deref()).await;
     let kind_futures = spec.kinds.into_iter().enumerate().map(|(kind_index, kind_spec)| {
         run_kind(job.clone(), kind_spec, kind_index, client.clone(), events.clone())
     });
@@ -877,6 +888,20 @@ mod tests {
         assert_eq!(spec.kinds[0].steps[0].candidates.len(), 2);
         assert_eq!(spec.kinds[0].steps[0].candidates[0].mirror_index, 0);
         assert_eq!(spec.kinds[1].kind, WarmupKind::Vod);
+        assert_eq!(spec.dns, None);
+    }
+
+    #[test]
+    fn spec_deserializes_the_optional_dns_field() {
+        let payload = json!({
+            "playlistId": "pl-1",
+            "force": false,
+            "timeoutMs": 8000,
+            "kinds": [],
+            "dns": "1.1.1.1",
+        });
+        let spec: WarmupJobSpec = serde_json::from_value(payload).expect("spec must deserialize");
+        assert_eq!(spec.dns, Some("1.1.1.1".to_string()));
     }
 
     #[test]

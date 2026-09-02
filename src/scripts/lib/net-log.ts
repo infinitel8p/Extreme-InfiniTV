@@ -17,6 +17,7 @@ export interface NetLogEntry {
   ok: boolean
   outcome: NetLogOutcome
   error?: string
+  dns?: string
 }
 
 export interface NetworkLogSnapshot {
@@ -36,6 +37,7 @@ export interface NetLogInput {
   status?: number | null
   outcome?: NetLogOutcome
   error?: unknown
+  dns?: string
 }
 
 export const NET_LOG_CAPACITY = 200
@@ -87,6 +89,7 @@ export function makeNetLogEntry(input: NetLogInput, seq: number): NetLogEntry {
     outcome,
   }
   if (hasError) entry.error = redactUrl(stringifyError(input.error)).slice(0, ERROR_MAX_LENGTH)
+  if (input.dns) entry.dns = input.dns
   return entry
 }
 
