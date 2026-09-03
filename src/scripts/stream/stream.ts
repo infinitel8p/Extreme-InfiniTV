@@ -117,6 +117,7 @@ import {
 } from "@/scripts/lib/app-settings.js"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
+import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
 import {
   setupExternalPlayerButton,
   surfaceLaunchError,
@@ -1768,6 +1769,18 @@ let playerInsights = null
 // Detach for the auto-hiding quality chip overlaid on the player edge - rebuilt every tune.
 let qualityChipDetach = null
 
+// Live TV has no persistent subtitle-delay button (it lives in the "more" menu instead) - this
+// detached element is only ever clicked programmatically to reuse the shared dialog controller.
+const subtitleDelayProxyBtn = document.createElement("button")
+const subtitleDelayController = createSubtitleDelayController({
+  dialogId: "stream-subtitle-delay-dialog",
+  button: subtitleDelayProxyBtn,
+  nudge: (deltaSeconds) => vjs?.subtitleDelay?.(deltaSeconds),
+  getMediaElement: () => mediaElementOf(vjs),
+})
+subtitleDelayController.setup()
+document.addEventListener("keydown", (event) => subtitleDelayController.handleKeydown(event))
+
 function getPlayerInsights() {
   if (!playerInsights) {
     playerInsights = attachPlayerInsights({
@@ -2236,7 +2249,8 @@ async function mountEmbeddedPlayer(backend, opts) {
   embeddedPlayerBackend = mounted.backend
   embeddedPlayerLiveUi = wantLiveUi
 
-  if (mounted.backend === "videojs") {
+  // videojs's own DOM plus mpv's control bar both need the D-pad focus kept inside the player.
+  if (mounted.backend === "videojs" || (mounted.backend === "mpv-embedded" && typeof vjs.userActive === "function")) {
     focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
@@ -2323,6 +2337,10 @@ async function mountEmbeddedPlayer(backend, opts) {
           break
         }
       }
+    } else if (typeof vjs.engineStats === "function") {
+      // No <video> element to read .buffered from (e.g. mpv-embedded) - engine stats carry the same figure.
+      const bufferedAheadSeconds = vjs.engineStats()?.bufferedAheadSeconds
+      if (typeof bufferedAheadSeconds === "number") bufferedAheadMs = Math.max(0, bufferedAheadSeconds * 1000)
     }
     const action = resumeAction({
       pausedAbsUtcMs,
@@ -2840,6 +2858,16 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
     insights.openHealthDialog()
   })
   items.push(healthItem)
+
+  // Mirrors the detail pages' subtitle-delay button: only offered while a subtitle track is showing.
+  if (vjs?.subtitleDelay?.(0) != null) {
+    const subtitleDelayItem = makeMoreMenuItem(t("detail.subtitleDelay"))
+    subtitleDelayItem.addEventListener("click", () => {
+      closeCurrentMoreMenu()
+      subtitleDelayProxyBtn.click()
+    })
+    items.push(subtitleDelayItem)
+  }
 
   if (isTauri) {
     const playOnTvItem = makeMoreMenuItem(t("cast.menu.playOnTv"))
@@ -3634,21 +3662,28 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   if (!playerWrap) return
 
   const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
-  const failure = classifyStartFailure({
-    videoCodec: info.videoCodec,
-    audioCodec: info.audioCodec,
-    errorDetail:
-      info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
-    nameHint: hasHevcNameHint(ctx.name),
-    deviceHevc: deviceSupportsHevc(),
-    audioClockWedge: !!ctx.audioClockWedge,
-  })
+  // mpv-embedded prefixes tell us more than a codec guess ever could - skip the heuristics for them.
+  const mpvErrorDetail = typeof info.errorDetail === "string" ? info.errorDetail : ""
+  const isOfflinePlaceholder = mpvErrorDetail.startsWith("OFFLINE_PLACEHOLDER")
+  const failure = isOfflinePlaceholder
+    ? { kind: "offline-placeholder", codec: null }
+    : classifyStartFailure({
+        videoCodec: info.videoCodec,
+        audioCodec: info.audioCodec,
+        errorDetail:
+          info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
+        nameHint: hasHevcNameHint(ctx.name),
+        deviceHevc: deviceSupportsHevc(),
+        audioClockWedge: !!ctx.audioClockWedge,
+      })
   log.log("[xt:livetv] start failure classified:", failure.kind, {
     videoCodec: info.videoCodec,
     errorDetail: info.errorDetail,
   })
   let reason
-  if (failure.kind === "hevc") {
+  if (failure.kind === "offline-placeholder") {
+    reason = t("stream.failure.offlinePlaceholder")
+  } else if (failure.kind === "hevc") {
     reason = failure.codec
       ? t("stream.failure.hevcConfirmed")
       : t("stream.error.hevcHint")
@@ -3835,6 +3870,15 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   panel.appendChild(actions)
   playerWrap.appendChild(panel)
 }
+
+// The mpv control bar's own inline error row dispatches this on the player container.
+document.getElementById("player-wrap")?.addEventListener("xt:mpv-retry", () => {
+  const ctx = lastPlayContext
+  if (!ctx) return
+  hidePlaybackFailurePanel()
+  if (retryCatchupSession(ctx)) return
+  play(ctx.streamId, ctx.name)
+})
 
 function runScanLineSweep() {
   const playerWrap = document.getElementById("player")?.parentElement
@@ -4954,10 +4998,22 @@ async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
   if (!seekOpts.forceRemount && catchupSession && catchupSession.channelId === channel.id && vjs) {
     const videoEl = mediaElementOf(vjs)
     const buffered = videoEl?.buffered
+    const relSeconds = (clamped.targetUtcMs - catchupSession.timelineStartUtcMs) / 1000
     if (buffered) {
-      const relSeconds = (clamped.targetUtcMs - catchupSession.timelineStartUtcMs) / 1000
       for (let i = 0; i < buffered.length; i++) {
         if (relSeconds >= buffered.start(i) - 1 && relSeconds <= buffered.end(i) + 1) {
+          markProgrammaticCatchupSeek()
+          try { vjs.currentTime(Math.max(0, relSeconds)) } catch {}
+          return
+        }
+      }
+    } else if (typeof vjs.engineStats === "function") {
+      // No <video> element to read .buffered from (e.g. mpv-embedded) - derive the buffered window from engine stats instead.
+      const stats = vjs.engineStats()
+      if (stats && typeof stats.bufferedAheadSeconds === "number") {
+        const currentTimeSeconds = vjs.currentTime?.() || 0
+        const bufferedEndSeconds = currentTimeSeconds + stats.bufferedAheadSeconds
+        if (relSeconds >= currentTimeSeconds - 1 && relSeconds <= bufferedEndSeconds + 1) {
           markProgrammaticCatchupSeek()
           try { vjs.currentTime(Math.max(0, relSeconds)) } catch {}
           return

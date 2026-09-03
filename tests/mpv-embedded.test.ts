@@ -7,6 +7,11 @@ import {
   boundsEqual,
   liveEofReloadDelayMs,
   NATIVE_BOUNDS_INFLATE_CSS_PX,
+  isWithinOfflinePlaceholderWindow,
+  OFFLINE_PLACEHOLDER_WINDOW_MS,
+  classifyMpvNetworkError,
+  clampPlaybackRate,
+  sumDroppedFrames,
 } from "../src/scripts/lib/mpv-embedded"
 
 describe("cssRectToPhysicalBounds", () => {
@@ -270,8 +275,42 @@ describe("deriveEvents", () => {
     expect(deriveEvents({ pausedForCache: false }, { pausedForCache: true })).toEqual(["waiting"])
   })
 
-  it("fires waiting when seeking transitions from undefined to true", () => {
-    expect(deriveEvents({}, { seeking: true })).toEqual(["waiting"])
+  it("fires waiting and seeking when seeking transitions from undefined to true", () => {
+    expect(deriveEvents({}, { seeking: true })).toEqual(["waiting", "seeking"])
+  })
+
+  it("fires seeked when seeking transitions back to false", () => {
+    expect(deriveEvents({ seeking: true }, { seeking: false })).toEqual(["seeked"])
+  })
+
+  it("does not fire seeking/seeked when the seeking state is unchanged", () => {
+    expect(deriveEvents({ seeking: true }, { seeking: true })).toEqual([])
+    expect(deriveEvents({ seeking: false }, { seeking: false })).toEqual([])
+  })
+
+  it("fires play when pause transitions from true to false", () => {
+    expect(deriveEvents({ pause: true }, { pause: false })).toEqual(["play"])
+  })
+
+  it("does not fire play on the first-ever unpaused state (no prior pause: true)", () => {
+    expect(deriveEvents({}, { pause: false })).toEqual([])
+  })
+
+  it("fires volumechange when volume or mute changes", () => {
+    expect(deriveEvents({ volume: 50 }, { volume: 80 })).toEqual(["volumechange"])
+    expect(deriveEvents({ mute: false }, { mute: true })).toEqual(["volumechange"])
+  })
+
+  it("does not fire volumechange when volume/mute are unchanged", () => {
+    expect(deriveEvents({ volume: 50, mute: false }, { volume: 50, mute: false })).toEqual([])
+  })
+
+  it("fires durationchange when duration changes", () => {
+    expect(deriveEvents({ duration: 60 }, { duration: 90 })).toEqual(["durationchange"])
+  })
+
+  it("fires ratechange when speed changes", () => {
+    expect(deriveEvents({ speed: 1 }, { speed: 1.5 })).toEqual(["ratechange"])
   })
 
   it("does not repeat waiting when pausedForCache stays true across updates", () => {
@@ -295,13 +334,13 @@ describe("deriveEvents", () => {
   it("can fire multiple events for one merged update, in a stable order", () => {
     expect(
       deriveEvents({ seeking: false, timePos: 5 }, { seeking: true, timePos: 6 }),
-    ).toEqual(["waiting", "timeupdate"])
+    ).toEqual(["waiting", "seeking", "timeupdate"])
   })
 
-  it("fires playing and no pause event on resume from a caller-driven unpause", () => {
+  it("fires playing and play, but no pause event, on resume from a caller-driven unpause", () => {
     expect(
       deriveEvents({ coreIdle: true, pause: true }, { coreIdle: false, pause: false }),
-    ).toEqual(["playing"])
+    ).toEqual(["playing", "play"])
   })
 })
 
@@ -322,5 +361,78 @@ describe("liveEofReloadDelayMs", () => {
   it("returns null for a non-positive attempt", () => {
     expect(liveEofReloadDelayMs(0)).toBe(null)
     expect(liveEofReloadDelayMs(-1)).toBe(null)
+  })
+})
+
+describe("isWithinOfflinePlaceholderWindow", () => {
+  it("is true for a live source that hit EOF just after playback restarted", () => {
+    expect(isWithinOfflinePlaceholderWindow(true, 0)).toBe(true)
+    expect(isWithinOfflinePlaceholderWindow(true, OFFLINE_PLACEHOLDER_WINDOW_MS - 1)).toBe(true)
+  })
+
+  it("is false once the window has elapsed", () => {
+    expect(isWithinOfflinePlaceholderWindow(true, OFFLINE_PLACEHOLDER_WINDOW_MS)).toBe(false)
+    expect(isWithinOfflinePlaceholderWindow(true, OFFLINE_PLACEHOLDER_WINDOW_MS + 5000)).toBe(false)
+  })
+
+  it("is false for a non-live source regardless of elapsed time", () => {
+    expect(isWithinOfflinePlaceholderWindow(false, 0)).toBe(false)
+  })
+
+  it("is false when no playback-restart has been observed yet", () => {
+    expect(isWithinOfflinePlaceholderWindow(true, null)).toBe(false)
+  })
+})
+
+describe("classifyMpvNetworkError", () => {
+  it("passes through a null detail", () => {
+    expect(classifyMpvNetworkError(null)).toBe(null)
+  })
+
+  it("prefixes NETWORK: for connectivity-looking error text", () => {
+    expect(classifyMpvNetworkError("Connection timed out")).toBe("NETWORK:Connection timed out")
+    expect(classifyMpvNetworkError("connection refused")).toBe("NETWORK:connection refused")
+    expect(classifyMpvNetworkError("Failed to resolve hostname")).toBe("NETWORK:Failed to resolve hostname")
+    expect(classifyMpvNetworkError("HTTP error 404")).toBe("NETWORK:HTTP error 404")
+  })
+
+  it("leaves unrelated error text untouched", () => {
+    expect(classifyMpvNetworkError("Unsupported codec")).toBe("Unsupported codec")
+  })
+})
+
+describe("clampPlaybackRate", () => {
+  it("passes through a rate already within range", () => {
+    expect(clampPlaybackRate(1)).toBe(1)
+    expect(clampPlaybackRate(2)).toBe(2)
+  })
+
+  it("clamps below 0.25 up to 0.25", () => {
+    expect(clampPlaybackRate(0)).toBe(0.25)
+    expect(clampPlaybackRate(-1)).toBe(0.25)
+  })
+
+  it("clamps above 4 down to 4", () => {
+    expect(clampPlaybackRate(10)).toBe(4)
+  })
+
+  it("falls back to 1 for a non-finite rate", () => {
+    expect(clampPlaybackRate(NaN)).toBe(1)
+    expect(clampPlaybackRate(Infinity)).toBe(1)
+  })
+})
+
+describe("sumDroppedFrames", () => {
+  it("sums both counters when present", () => {
+    expect(sumDroppedFrames(3, 2)).toBe(5)
+  })
+
+  it("treats a missing counter as 0", () => {
+    expect(sumDroppedFrames(3, undefined)).toBe(3)
+    expect(sumDroppedFrames(undefined, 2)).toBe(2)
+  })
+
+  it("returns null when neither counter is present", () => {
+    expect(sumDroppedFrames(undefined, undefined)).toBe(null)
   })
 })

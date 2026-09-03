@@ -294,6 +294,7 @@ pub fn run() {
             mpv_embed::mpv_embed_pip_enter,
             mpv_embed::mpv_embed_pip_exit,
             mpv_embed::mpv_embed_window_fullscreen,
+            mpv_embed::mpv_embed_screenshot,
             receiver::receiver_start,
             receiver::receiver_stop,
             receiver::receiver_status,

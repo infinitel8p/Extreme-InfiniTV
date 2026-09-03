@@ -74,10 +74,14 @@ export interface VjsLikeHandle {
   muted?(value?: boolean): boolean | void
   /** Normalized 0..1, matching the native `<video>` element's `volume`. */
   volume?(value?: number): number | void
+  /** Clamped 0.25-4; omit `value` to read the current rate. */
+  playbackRate?(value?: number): number | void
   reset?(): void
   dispose?(): void | Promise<void>
   duration?(): number
   currentTime?(value?: number): number
+  /** Whether the current source is live (vs. a finite/seekable catch-up mount). */
+  isLive?(): boolean
   on(event: string, fn: (...args: unknown[]) => void): void
   off?(event: string, fn: (...args: unknown[]) => void): void
   one?(event: string, fn: (...args: unknown[]) => void): void
@@ -86,6 +90,11 @@ export interface VjsLikeHandle {
   requestFullscreen?(): Promise<void> | void
   isFullscreen?(): boolean
   exitFullscreen?(): void
+  /** Saves the current frame to disk and resolves the saved file path, or null on failure. */
+  screenshot?(): Promise<string | null>
+  requestPip?(): Promise<void> | void
+  exitPip?(): Promise<void> | void
+  isPip?(): boolean
   userActive?(active: boolean): void
   /** What we learned about the current stream - feeds failure classification. */
   codecInfo?(): PlaybackCodecInfo

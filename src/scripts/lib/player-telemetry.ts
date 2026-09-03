@@ -16,6 +16,11 @@ export interface EngineStats {
   droppedFrames: number | null
   totalFrames: number | null
   stalls: number | null
+  containerFps?: number | null
+  videoFormat?: string | null
+  audioFormat?: string | null
+  audioChannelCount?: number | null
+  hwdec?: string | null
 }
 
 export type EngineEventKind = "variant" | "engine-error" | "fatal" | "engine-switch" | "recover"

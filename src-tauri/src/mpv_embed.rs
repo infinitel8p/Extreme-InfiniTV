@@ -1,6 +1,11 @@
 // Embedded mpv player: persistent JSON-IPC session over a named pipe, Windows-only for now.
 // mpv is a direct --wid child of the main window (a grandchild's swapchain gets DWM-clipped
-// by the WebView2 sibling); we never resize it and place the picture via video-margin-ratio.
+// by the WebView2 sibling); we never resize it under the main window, only place the picture
+// via video-zoom/pan. A single SurfaceState (Hidden/Embedded/Fullscreen/Pip), derived purely
+// from the frontend's desired visible/bounds/fullscreen/pip record, is applied by the one
+// `apply_surface` function (parent, size, z-order, pointer mode, placement, visibility, in
+// that order) so every command funnels through the same code path instead of scattered
+// per-command Win32 calls.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -45,15 +50,19 @@ use windows::Win32::Graphics::Gdi::{
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
+use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, EnumChildWindows, GetClientRect, GetWindowLongPtrW,
     GetWindowRect, GetWindowThreadProcessId, IsWindow, IsZoomed, RegisterClassExW, SendMessageW, SetParent,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GWL_STYLE,
-    HTCAPTION, HWND_BOTTOM, SC_MAXIMIZE, SC_RESTORE, SW_HIDE, SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WM_CLOSE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_SYSCOMMAND,
-    WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_NOACTIVATE,
-    WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_POPUP,
-    WS_THICKFRAME, WS_VISIBLE,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GWL_STYLE, HTBOTTOM,
+    HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_BOTTOM,
+    SC_MAXIMIZE, SC_RESTORE, SW_HIDE, SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, WM_CLOSE, WM_KEYDOWN, WM_MOVE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_SIZE, WM_SIZING,
+    WM_SYSCOMMAND, WMSZ_BOTTOM,
+    WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT,
+    WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
 };
 
 #[cfg(target_os = "windows")]
@@ -97,6 +106,18 @@ const OBSERVED_PROPERTIES: &[&str] = &[
     "dwidth",
     "dheight",
     "panscan",
+    "speed",
+    "volume",
+    "mute",
+    "container-fps",
+    "decoder-frame-drop-count",
+    "demuxer-cache-time",
+    "video-format",
+    "audio-params/format",
+    "audio-params/channel-count",
+    "video-params/pixelformat",
+    "file-format",
+    "seekable",
 ];
 
 // ---------------------------------------------------------------------------
@@ -121,6 +142,47 @@ pub struct Bounds {
     pub height: i32,
     #[serde(default)]
     pub radius: i32,
+}
+
+/// PiP popup rect in screen px; also `mpv_embed_status.pipRect` and the `xt:mpv-surface` payload.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PipGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+/// The single owner of mpv's native surface: where it's parented and whether it's shown.
+/// Precedence when deriving from frontend intent: PiP wins, then fullscreen, then embedded.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SurfaceState {
+    Hidden,
+    Embedded,
+    Fullscreen,
+    Pip,
+}
+
+fn derive_surface_state(visible: bool, fullscreen: bool, pip_active: bool) -> SurfaceState {
+    if pip_active {
+        SurfaceState::Pip
+    } else if fullscreen {
+        SurfaceState::Fullscreen
+    } else if visible {
+        SurfaceState::Embedded
+    } else {
+        SurfaceState::Hidden
+    }
+}
+
+fn surface_state_name(state: SurfaceState) -> &'static str {
+    match state {
+        SurfaceState::Hidden => "hidden",
+        SurfaceState::Embedded => "embedded",
+        SurfaceState::Fullscreen => "fullscreen",
+        SurfaceState::Pip => "pip",
+    }
 }
 
 /// mpv's `video-zoom` (log2 scale) and `video-pan-x/y` (fraction of the scaled size).
@@ -219,6 +281,8 @@ pub struct MpvEmbedStatus {
     pub session_id: Option<String>,
     pub pid: Option<u32>,
     pub pip_active: bool,
+    pub surface: String,
+    pub pip_rect: Option<PipGeometry>,
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +294,8 @@ pub struct MpvEmbedStatus {
 pub struct MpvEmbedState {
     session: Mutex<Option<Arc<MpvSession>>>,
     fullscreen: Mutex<Option<SavedWindowState>>,
+    // Reused (clamped to the work area) on the next PiP enter; process lifetime only.
+    last_pip_rect: Mutex<Option<PipGeometry>>,
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -252,7 +318,7 @@ struct MpvSession {
     pid: u32,
     parent_hwnd: isize,
     mpv_hwnd: Mutex<Option<isize>>,
-    desired: DesiredState,
+    target: SurfaceTarget,
     video_metrics: Mutex<VideoMetrics>,
     placement_tx: tokio::sync::watch::Sender<()>,
     ipc: Arc<MpvIpcClient>,
@@ -260,7 +326,8 @@ struct MpvSession {
     kill_notify: Notify,
     torn_down: AtomicBool,
     reader_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
-    pip: Mutex<Option<isize>>,
+    // The popup HWND once created; distinct from `target.pip`, which is its desired geometry.
+    pip_hwnd: Mutex<Option<isize>>,
 }
 
 #[cfg(target_os = "windows")]
@@ -279,17 +346,24 @@ struct VideoMetrics {
     panscan: f64,
 }
 
-/// Bounds/visibility requested by the frontend; also what PiP exit restores to.
+/// The frontend's desired surface state; `derive_surface_state` turns this into a `SurfaceState`.
 #[cfg(target_os = "windows")]
-struct DesiredState {
-    bounds: Mutex<Option<Bounds>>,
+struct SurfaceTarget {
     visible: AtomicBool,
+    bounds: Mutex<Option<Bounds>>,
+    fullscreen: AtomicBool,
+    pip: Mutex<Option<PipGeometry>>,
 }
 
 #[cfg(target_os = "windows")]
-impl DesiredState {
+impl SurfaceTarget {
     fn new(initial_bounds: Bounds, initial_visible: bool) -> Self {
-        Self { bounds: Mutex::new(Some(initial_bounds)), visible: AtomicBool::new(initial_visible) }
+        Self {
+            visible: AtomicBool::new(initial_visible),
+            bounds: Mutex::new(Some(initial_bounds)),
+            fullscreen: AtomicBool::new(false),
+            pip: Mutex::new(None),
+        }
     }
 
     fn set_bounds(&self, bounds: Bounds) {
@@ -307,6 +381,23 @@ impl DesiredState {
 
     fn visible(&self) -> bool {
         self.visible.load(Ordering::SeqCst)
+    }
+
+    fn set_fullscreen(&self, fullscreen: bool) {
+        self.fullscreen.store(fullscreen, Ordering::SeqCst);
+    }
+
+    fn fullscreen(&self) -> bool {
+        self.fullscreen.load(Ordering::SeqCst)
+    }
+
+    fn set_pip(&self, pip: Option<PipGeometry>) {
+        let mut guard = self.pip.lock().unwrap_or_else(|poison| poison.into_inner());
+        *guard = pip;
+    }
+
+    fn pip(&self) -> Option<PipGeometry> {
+        *self.pip.lock().unwrap_or_else(|poison| poison.into_inner())
     }
 }
 
@@ -491,6 +582,14 @@ fn camel_prop_name(mpv_name: &str) -> &str {
         "track-list" => "trackList",
         "media-title" => "mediaTitle",
         "sub-delay" => "subDelay",
+        "container-fps" => "containerFps",
+        "decoder-frame-drop-count" => "decoderFrameDropCount",
+        "demuxer-cache-time" => "demuxerCacheTime",
+        "video-format" => "videoFormat",
+        "audio-params/format" => "audioFormat",
+        "audio-params/channel-count" => "audioChannelCount",
+        "video-params/pixelformat" => "pixelFormat",
+        "file-format" => "fileFormat",
         other => other,
     }
 }
@@ -533,7 +632,7 @@ fn record_property_change(
     }
 }
 
-// Updates the metrics the placement task reads and wakes it, unless PiP owns placement for now.
+// Updates the metrics apply_surface reads and wakes the surface task to recompute placement.
 #[cfg(target_os = "windows")]
 fn update_video_metrics(session: &Arc<MpvSession>, name: &str, value: &Value) {
     {
@@ -545,9 +644,7 @@ fn update_video_metrics(session: &Arc<MpvSession>, name: &str, value: &Value) {
             _ => {}
         }
     }
-    if !pip_active(session) {
-        let _ = session.placement_tx.send(());
-    }
+    let _ = session.placement_tx.send(());
 }
 
 #[cfg(target_os = "windows")]
@@ -601,7 +698,7 @@ fn build_mpv_embed_args(wid: isize, pipe_name: &str, log_file: &str) -> Vec<Stri
         "--idle=yes".to_string(),
         "--force-window=immediate".to_string(),
         "--keep-open=yes".to_string(),
-        "--no-osc".to_string(),
+        "--osc=yes".to_string(),
         "--osd-level=0".to_string(),
         "--no-input-default-bindings".to_string(),
         "--input-vo-keyboard=no".to_string(),
@@ -612,6 +709,13 @@ fn build_mpv_embed_args(wid: isize, pipe_name: &str, log_file: &str) -> Vec<Stri
         "--msg-level=all=warn".to_string(),
         format!("--log-file={log_file}"),
         "--no-config".to_string(),
+        "--hwdec=auto-safe".to_string(),
+        "--audio-client-name=Extreme InfiniTV".to_string(),
+        "--screenshot-format=png".to_string(),
+        "--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5".to_string(),
+        "--cache=yes".to_string(),
+        "--demuxer-max-bytes=150MiB".to_string(),
+        "--demuxer-readahead-secs=20".to_string(),
     ]
 }
 
@@ -821,8 +925,8 @@ fn should_keep_polling(torn_down: bool, elapsed: Duration, budget: Duration) -> 
 async fn watch_for_mpv_window(session: Arc<MpvSession>) {
     let start = Instant::now();
     while should_keep_polling(session.torn_down.load(Ordering::SeqCst), start.elapsed(), MPV_WINDOW_POLL_BUDGET) {
-        if let Some(surface_value) = resolve_mpv_window(&session) {
-            set_window_visibility(surface_value, session.desired.visible());
+        if resolve_mpv_window(&session).is_some() {
+            let _ = session.placement_tx.send(());
             return;
         }
         tokio::time::sleep(MPV_WINDOW_POLL_INTERVAL).await;
@@ -840,42 +944,65 @@ fn set_window_visibility(hwnd_value: isize, visible: bool) {
     }
 }
 
-/// Records the requested bounds and, outside PiP, wakes the placement task.
-#[cfg(target_os = "windows")]
-fn record_and_apply_bounds(session: &Arc<MpvSession>, bounds: Bounds) -> Result<(), String> {
-    session.desired.set_bounds(bounds);
-    // A scroll-driven bounds push must not yank the video back into the page while PiP owns it.
-    if pip_active(session) {
-        return Ok(());
-    }
-    let _ = session.placement_tx.send(());
-    Ok(())
-}
-
-type PlacementInputs = (Bounds, i32, i32, Option<f64>, Option<f64>, f64);
-
-fn placement_inputs_unchanged(cached: Option<PlacementInputs>, inputs: PlacementInputs) -> bool {
-    cached == Some(inputs)
-}
-
-// A miss here is cosmetic: the next set_visible/set_bounds call (or PiP) retries the lookup.
-#[cfg(target_os = "windows")]
-fn record_and_apply_visible(session: &Arc<MpvSession>, visible: bool) {
-    session.desired.set_visible(visible);
-    if pip_active(session) {
-        return;
-    }
-    log::debug!("[mpv-embed] session {} applying visible={visible}", session.session_id);
-    if let Some(surface_value) = resolve_mpv_window(session) {
-        set_window_visibility(surface_value, visible);
-    }
-}
-
 #[cfg(target_os = "windows")]
 fn client_size(hwnd: HWND) -> Option<(i32, i32)> {
     let mut rect = RECT::default();
     unsafe { GetClientRect(hwnd, &mut rect) }.ok()?;
     Some((rect.right - rect.left, rect.bottom - rect.top))
+}
+
+#[cfg(target_os = "windows")]
+fn position_surface(hwnd_value: isize, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
+    let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
+    unsafe { SetWindowPos(hwnd, None, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE) }
+        .map_err(|error| format!("OTHER:{error}"))
+}
+
+/// The Win32 half of `apply_surface`: reparent, fill the parent's client rect, z-order,
+/// visibility. Runs on the main thread; mpv's own window ops otherwise hang from a worker thread.
+#[cfg(target_os = "windows")]
+fn apply_surface_win32(
+    main_hwnd_value: isize,
+    surface_value: isize,
+    state: SurfaceState,
+    pip_hwnd_value: Option<isize>,
+) -> Result<(), String> {
+    match state {
+        SurfaceState::Pip => {
+            let pip_hwnd_value =
+                pip_hwnd_value.ok_or_else(|| "OTHER:pip surface state with no popup window".to_string())?;
+            let pip_hwnd = HWND(pip_hwnd_value as *mut core::ffi::c_void);
+            reparent_child(surface_value, pip_hwnd)?;
+            if let Some((client_width, client_height)) = client_size(pip_hwnd) {
+                let inset = PIP_RESIZE_BORDER;
+                let width = (client_width - inset * 2).max(1);
+                let height = (client_height - inset * 2).max(1);
+                position_surface(surface_value, inset, inset, width, height)?;
+            }
+            set_window_visibility(surface_value, true);
+        }
+        SurfaceState::Hidden | SurfaceState::Embedded | SurfaceState::Fullscreen => {
+            let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
+            reparent_child(surface_value, main_hwnd)?;
+            if let Some((client_width, client_height)) = client_size(main_hwnd) {
+                position_surface(surface_value, 0, 0, client_width, client_height)?;
+            }
+            send_to_bottom(surface_value);
+            set_window_visibility(surface_value, !matches!(state, SurfaceState::Hidden));
+        }
+    }
+    Ok(())
+}
+
+// mpv's own OSC needs the mouse in PiP; everywhere else the page draws its own controls.
+#[cfg(target_os = "windows")]
+async fn apply_pointer_mode(ipc: &MpvIpcClient, in_pip: bool) -> Result<(), String> {
+    let cursor = if in_pip { "yes" } else { "no" };
+    ipc.send_request(json!({ "command": ["set_property", "input-cursor", cursor] }), MPV_IPC_TIMEOUT).await?;
+    let osc_visibility = if in_pip { "auto" } else { "never" };
+    ipc.send_request(json!({ "command": ["script-message", "osc-visibility", osc_visibility] }), MPV_IPC_TIMEOUT)
+        .await?;
+    Ok(())
 }
 
 // Zeroed once at session start: placement uses video-zoom/video-pan-* exclusively from then on.
@@ -913,30 +1040,80 @@ async fn apply_placement(ipc: &MpvIpcClient, placement: VideoPlacement) -> Resul
     Ok(())
 }
 
-/// One task per session; a rapid burst of triggers (bounds, resize, mpv metrics) collapses to
-/// the latest inputs. Holds a `Weak` ref so it can't keep the session alive by itself: once the
-/// session drops, `placement_tx` closes, `changed()` errors, and the loop ends on its own.
 #[cfg(target_os = "windows")]
-async fn run_placement_updates(session: Weak<MpvSession>, mut trigger_rx: tokio::sync::watch::Receiver<()>) {
-    let mut last_applied: Option<PlacementInputs> = None;
+fn emit_surface_event(app: &AppHandle, session: &MpvSession, state: SurfaceState) {
+    let bounds = session
+        .target
+        .bounds()
+        .map(|bounds| json!({ "x": bounds.x, "y": bounds.y, "width": bounds.width, "height": bounds.height }));
+    let pip = session.target.pip().map(|pip| json!(pip));
+    let _ = app.emit(
+        "xt:mpv-surface",
+        json!({ "sessionId": session.session_id, "state": surface_state_name(state), "bounds": bounds, "pip": pip }),
+    );
+    // Kept alongside xt:mpv-surface for frontend code that only listens for the PiP toggle.
+    let _ = app.emit(
+        "xt:mpv-pip-changed",
+        json!({ "sessionId": session.session_id, "active": matches!(state, SurfaceState::Pip) }),
+    );
+}
+
+/// The single place that computes and applies mpv's surface: parent, size, z-order, pointer
+/// mode, zoom/pan placement, visibility, in that order (pointer mode and placement are IPC and
+/// run after the Win32 part, on whichever thread called this). No-ops until mpv's window exists;
+/// `watch_for_mpv_window` wakes `placement_tx` once it is found, which reaches this too.
+#[cfg(target_os = "windows")]
+async fn apply_surface(app: &AppHandle, session: &Arc<MpvSession>) -> Result<(), String> {
+    let Some(surface_value) = resolve_mpv_window(session) else {
+        return Ok(());
+    };
+    let pip_hwnd_value = *session.pip_hwnd.lock().unwrap_or_else(|poison| poison.into_inner());
+    let state = derive_surface_state(session.target.visible(), session.target.fullscreen(), pip_hwnd_value.is_some());
+    let main_hwnd_value = session.parent_hwnd;
+
+    run_on_main_thread_and_wait(app, move || {
+        apply_surface_win32(main_hwnd_value, surface_value, state, pip_hwnd_value)
+    })
+    .await??;
+
+    let ipc_for_pointer_mode = session.ipc.clone();
+    let session_id_for_log = session.session_id.clone();
+    let in_pip = matches!(state, SurfaceState::Pip);
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = apply_pointer_mode(&ipc_for_pointer_mode, in_pip).await {
+            log::warn!("[mpv-embed] session {session_id_for_log} failed to apply pointer mode: {error}");
+        }
+    });
+
+    let placement = if in_pip {
+        VideoPlacement::CENTERED
+    } else {
+        let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
+        match (session.target.bounds(), client_size(main_hwnd)) {
+            (Some(bounds), Some((client_width, client_height))) => {
+                let metrics = session.video_metrics();
+                placement_for_bounds(bounds, client_width, client_height, metrics.dwidth, metrics.dheight, metrics.panscan)
+            }
+            _ => VideoPlacement::CENTERED,
+        }
+    };
+    if let Err(error) = apply_placement(&session.ipc, placement).await {
+        log::warn!("[mpv-embed] session {} failed to apply video placement: {error}", session.session_id);
+    }
+
+    emit_surface_event(app, session, state);
+    Ok(())
+}
+
+/// One task per session, woken by bounds/visibility/fullscreen/PiP/resize/video-metric changes.
+/// Holds a `Weak` ref so it can't keep the session alive by itself: once the session drops,
+/// `placement_tx` closes, `changed()` errors, and the loop ends on its own.
+#[cfg(target_os = "windows")]
+async fn run_surface_updates(app: AppHandle, session: Weak<MpvSession>, mut trigger_rx: tokio::sync::watch::Receiver<()>) {
     while trigger_rx.changed().await.is_ok() {
         let Some(session) = session.upgrade() else { return };
-        if pip_active(&session) {
-            continue;
-        }
-        let Some(bounds) = session.desired.bounds() else { continue };
-        let parent = HWND(session.parent_hwnd as *mut core::ffi::c_void);
-        let Some((client_width, client_height)) = client_size(parent) else { continue };
-        let metrics = session.video_metrics();
-        let inputs = (bounds, client_width, client_height, metrics.dwidth, metrics.dheight, metrics.panscan);
-        if placement_inputs_unchanged(last_applied, inputs) {
-            continue;
-        }
-        let placement = placement_for_bounds(bounds, client_width, client_height, metrics.dwidth, metrics.dheight, metrics.panscan);
-        log::debug!("[mpv-embed] session {} applying placement {placement:?} for bounds {bounds:?}", session.session_id);
-        match apply_placement(&session.ipc, placement).await {
-            Ok(()) => last_applied = Some(inputs),
-            Err(error) => log::warn!("[mpv-embed] session {} failed to apply video placement: {error}", session.session_id),
+        if let Err(error) = apply_surface(&app, &session).await {
+            log::warn!("[mpv-embed] session {} failed to apply surface: {error}", session.session_id);
         }
     }
 }
@@ -946,9 +1123,12 @@ async fn run_placement_updates(session: Weak<MpvSession>, mut trigger_rx: tokio:
 // ---------------------------------------------------------------------------
 
 const PIP_DEFAULT_WIDTH: i32 = 360;
-const PIP_MIN_WIDTH: i32 = 160;
+const PIP_MIN_WIDTH: i32 = 200;
 const PIP_MARGIN: i32 = 24;
 const PIP_DEFAULT_ASPECT: (f64, f64) = (16.0, 9.0);
+// Also mpv's inset from the popup edges, so the border strip (not covered by mpv) can be
+// hit-tested for resize; see apply_surface_win32's Pip branch.
+const PIP_RESIZE_BORDER: i32 = 8;
 #[cfg(target_os = "windows")]
 const PIP_CLASS_NAME: &str = "XtreamMpvPip";
 
@@ -971,19 +1151,27 @@ fn aspect_from_dimensions(width: Option<f64>, height: Option<f64>) -> Option<(f6
 }
 
 /// Default geometry: fixed width clamped to the work area, aspect-derived height, bottom-right corner.
-fn pip_default_geometry(aspect: Option<(f64, f64)>, work_area: WorkArea) -> Bounds {
+fn pip_default_geometry(aspect: Option<(f64, f64)>, work_area: WorkArea) -> PipGeometry {
     let (aspect_width, aspect_height) =
         aspect.filter(|(width, height)| *width > 0.0 && *height > 0.0).unwrap_or(PIP_DEFAULT_ASPECT);
     let max_width = (work_area.width - PIP_MARGIN * 2).max(PIP_MIN_WIDTH);
     let width = PIP_DEFAULT_WIDTH.min(max_width);
     let height = ((width as f64) * aspect_height / aspect_width).round() as i32;
-    Bounds {
+    PipGeometry {
         x: work_area.x + work_area.width - width - PIP_MARGIN,
         y: work_area.y + work_area.height - height - PIP_MARGIN,
         width,
         height,
-        radius: 0,
     }
+}
+
+// Reused (not recomputed from scratch) so the popup reopens where the user last left it.
+fn clamp_pip_geometry(rect: PipGeometry, work_area: WorkArea) -> PipGeometry {
+    let width = rect.width.max(PIP_MIN_WIDTH).min(work_area.width.max(PIP_MIN_WIDTH));
+    let height = rect.height.max(1).min(work_area.height.max(1));
+    let max_x = (work_area.x + work_area.width - width).max(work_area.x);
+    let max_y = (work_area.y + work_area.height - height).max(work_area.y);
+    PipGeometry { x: rect.x.clamp(work_area.x, max_x), y: rect.y.clamp(work_area.y, max_y), width, height }
 }
 
 fn should_enter_pip(currently_active: bool) -> bool {
@@ -996,7 +1184,7 @@ fn should_exit_pip(currently_active: bool) -> bool {
 
 #[cfg(target_os = "windows")]
 fn pip_active(session: &MpvSession) -> bool {
-    session.pip.lock().unwrap_or_else(|poison| poison.into_inner()).is_some()
+    session.pip_hwnd.lock().unwrap_or_else(|poison| poison.into_inner()).is_some()
 }
 
 #[cfg(target_os = "windows")]
@@ -1004,12 +1192,146 @@ fn wide_null(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-// Whole-surface drag (HTCAPTION) plus double-click / close both requesting a PiP exit, since
-// mpv's own window covers the client area and the popup has no title bar of its own to click.
+// mpv's own window covers everything but an 8px border strip (see PIP_RESIZE_BORDER), so this
+// only ever runs for points in that strip: classify by proximity to each edge for resize, and
+// fall back to HTCAPTION (drag-move) for the top-left corner leftover once inset from an edge.
+#[cfg(target_os = "windows")]
+fn pip_hit_test(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    let x = (lparam.0 & 0xFFFF) as i16 as i32;
+    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+        return LRESULT(HTCAPTION as isize);
+    }
+    let border = PIP_RESIZE_BORDER;
+    let left = x < rect.left + border;
+    let right = x >= rect.right - border;
+    let top = y < rect.top + border;
+    let bottom = y >= rect.bottom - border;
+    let code = if left && top {
+        HTTOPLEFT
+    } else if right && top {
+        HTTOPRIGHT
+    } else if left && bottom {
+        HTBOTTOMLEFT
+    } else if right && bottom {
+        HTBOTTOMRIGHT
+    } else if left {
+        HTLEFT
+    } else if right {
+        HTRIGHT
+    } else if top {
+        HTTOP
+    } else if bottom {
+        HTBOTTOM
+    } else {
+        HTCAPTION
+    };
+    LRESULT(code as isize)
+}
+
+// Only one session/popup exists at a time, so the current video's aspect can be read straight
+// off the global session lookup instead of threading per-window state through the wndproc.
+#[cfg(target_os = "windows")]
+fn current_pip_aspect() -> (f64, f64) {
+    let Some(app) = APP_HANDLE_FOR_PIP.get() else { return PIP_DEFAULT_ASPECT };
+    let embed_state = app.state::<MpvEmbedState>();
+    let session = {
+        let guard = embed_state.session.lock().unwrap_or_else(|poison| poison.into_inner());
+        guard.as_ref().cloned()
+    };
+    let Some(session) = session else { return PIP_DEFAULT_ASPECT };
+    let metrics = session.video_metrics();
+    aspect_from_dimensions(metrics.dwidth, metrics.dheight).unwrap_or(PIP_DEFAULT_ASPECT)
+}
+
+// WM_SIZING's lParam points at the proposed window rect (screen coordinates); mutating it here
+// is how Win32 expects the aspect lock to be applied before the resize actually takes effect.
+#[cfg(target_os = "windows")]
+fn pip_apply_aspect_lock(wparam: WPARAM, lparam: LPARAM) {
+    let Some(rect) = (unsafe { (lparam.0 as *mut RECT).as_mut() }) else { return };
+    let (aspect_w, aspect_h) = current_pip_aspect();
+    let edge = wparam.0 as u32;
+    let mut width = (rect.right - rect.left).max(PIP_MIN_WIDTH);
+    let height;
+    if matches!(edge, WMSZ_TOP | WMSZ_BOTTOM) {
+        height = (rect.bottom - rect.top).max((PIP_MIN_WIDTH as f64 * aspect_h / aspect_w).round() as i32);
+        width = (height as f64 * aspect_w / aspect_h).round() as i32;
+    } else {
+        height = (width as f64 * aspect_h / aspect_w).round() as i32;
+    }
+    if matches!(edge, WMSZ_LEFT | WMSZ_TOPLEFT | WMSZ_BOTTOMLEFT) {
+        rect.left = rect.right - width;
+    } else {
+        rect.right = rect.left + width;
+    }
+    if matches!(edge, WMSZ_TOP | WMSZ_TOPLEFT | WMSZ_TOPRIGHT) {
+        rect.top = rect.bottom - height;
+    } else {
+        rect.bottom = rect.top + height;
+    }
+}
+
+// Resizes/moves mpv's child to match, updates the desired PiP geometry, and re-emits the surface
+// event, all directly (already on the main thread inside the wndproc; no need to hop again).
+#[cfg(target_os = "windows")]
+fn pip_on_resized(hwnd: HWND) {
+    let Some(app) = APP_HANDLE_FOR_PIP.get() else { return };
+    let embed_state = app.state::<MpvEmbedState>();
+    let session = {
+        let guard = embed_state.session.lock().unwrap_or_else(|poison| poison.into_inner());
+        guard.as_ref().cloned()
+    };
+    let Some(session) = session else { return };
+    if !pip_active(&session) {
+        return;
+    }
+    let mut client_rect = RECT::default();
+    let mut window_rect = RECT::default();
+    if unsafe { GetClientRect(hwnd, &mut client_rect) }.is_err()
+        || unsafe { GetWindowRect(hwnd, &mut window_rect) }.is_err()
+    {
+        return;
+    }
+    if let Some(surface_value) = resolve_mpv_window(&session) {
+        let inset = PIP_RESIZE_BORDER;
+        let width = (client_rect.right - client_rect.left - inset * 2).max(1);
+        let height = (client_rect.bottom - client_rect.top - inset * 2).max(1);
+        let _ = position_surface(surface_value, inset, inset, width, height);
+    }
+    let geometry = PipGeometry {
+        x: window_rect.left,
+        y: window_rect.top,
+        width: window_rect.right - window_rect.left,
+        height: window_rect.bottom - window_rect.top,
+    };
+    session.target.set_pip(Some(geometry));
+    {
+        let mut last = embed_state.last_pip_rect.lock().unwrap_or_else(|poison| poison.into_inner());
+        *last = Some(geometry);
+    }
+    emit_surface_event(app, &session, SurfaceState::Pip);
+}
+
+// Resize handles on the border, drag-move (HTCAPTION) on whatever the border leaves over,
+// aspect-locked resizing, live child resize on WM_SIZE/WM_MOVE, and every exit affordance
+// (Escape, double-click, close, Alt+F4) funneled through the one exit request.
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn pip_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
-        WM_NCHITTEST => LRESULT(HTCAPTION as isize),
+        WM_NCHITTEST => pip_hit_test(hwnd, lparam),
+        WM_SIZING => {
+            pip_apply_aspect_lock(wparam, lparam);
+            LRESULT(1)
+        }
+        WM_SIZE | WM_MOVE => {
+            pip_on_resized(hwnd);
+            LRESULT(0)
+        }
+        WM_KEYDOWN if wparam.0 as u32 == VK_ESCAPE.0 as u32 => {
+            request_pip_exit_from_wndproc();
+            LRESULT(0)
+        }
         WM_NCLBUTTONDBLCLK | WM_CLOSE => {
             request_pip_exit_from_wndproc();
             LRESULT(0)
@@ -1067,21 +1389,23 @@ fn work_area_for_window(hwnd: HWND) -> WorkArea {
     }
 }
 
+// Resizable, so no WS_THICKFRAME (would need WM_NCCALCSIZE to hide its frame); hit-testing is
+// manual instead (see pip_hit_test). No WS_EX_NOACTIVATE: the popup must take focus for Escape.
 #[cfg(target_os = "windows")]
-fn create_pip_window(owner: HWND, bounds: &Bounds) -> Result<isize, String> {
+fn create_pip_window(owner: HWND, geometry: &PipGeometry) -> Result<isize, String> {
     ensure_pip_class_registered();
     let class_name = wide_null(PIP_CLASS_NAME);
     let instance = unsafe { GetModuleHandleW(None) }.map(HINSTANCE::from).unwrap_or(HINSTANCE(std::ptr::null_mut()));
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             PCWSTR(class_name.as_ptr()),
             PCWSTR::null(),
-            WS_POPUP | WS_VISIBLE,
-            bounds.x,
-            bounds.y,
-            bounds.width,
-            bounds.height,
+            WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN,
+            geometry.x,
+            geometry.y,
+            geometry.width,
+            geometry.height,
             Some(owner),
             None,
             Some(instance),
@@ -1089,7 +1413,6 @@ fn create_pip_window(owner: HWND, bounds: &Bounds) -> Result<isize, String> {
         )
     }
     .map_err(|error| format!("OTHER:{error}"))?;
-    apply_clip_children(hwnd);
     Ok(hwnd.0 as isize)
 }
 
@@ -1111,73 +1434,31 @@ fn reparent_child(hwnd_value: isize, new_parent: HWND) -> Result<(), String> {
     Ok(())
 }
 
-// The reparented window keeps mpv's --wid resize hook, which still targets the main window,
-// so it will not auto-fit the PiP popup; one manual resize is needed to place it there.
+/// Reparents mpv's window back to the main window (idempotent teardown hook), destroys the
+/// popup if any, and marks the session hidden; scheduled on the main thread so it is safe to
+/// call from contexts that cannot await (navigation, teardown, app exit).
 #[cfg(target_os = "windows")]
-fn fill_pip_child(hwnd_value: isize, width: i32, height: i32) {
-    let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
-    if let Err(error) = unsafe { SetWindowPos(hwnd, None, 0, 0, width, height, SWP_NOZORDER | SWP_NOACTIVATE) } {
-        log::warn!("[mpv-embed] failed to fit the mpv window into the PiP window: {error}");
-    }
-}
-
-// mpv's window covers the whole popup client area and would eat the drag/close hit-testing.
-#[cfg(target_os = "windows")]
-fn set_click_through(hwnd_value: isize, enabled: bool) {
-    let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
-    unsafe {
-        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let updated =
-            if enabled { current | (WS_EX_TRANSPARENT.0 as isize) } else { current & !(WS_EX_TRANSPARENT.0 as isize) };
-        if updated != current {
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, updated);
+fn schedule_surface_teardown(app: &AppHandle, session: &MpvSession) {
+    session.target.set_visible(false);
+    session.target.set_pip(None);
+    let pip_hwnd_value = session.pip_hwnd.lock().unwrap_or_else(|poison| poison.into_inner()).take();
+    if let Some(surface_value) = resolve_mpv_window(session) {
+        let main_hwnd_value = session.parent_hwnd;
+        if let Err(error) = app.run_on_main_thread(move || {
+            let _ = apply_surface_win32(main_hwnd_value, surface_value, SurfaceState::Hidden, None);
+            if let Some(pip_hwnd_value) = pip_hwnd_value {
+                destroy_pip_window(pip_hwnd_value);
+            }
+        }) {
+            log::warn!("[mpv-embed] failed to schedule surface teardown: {error}");
+        }
+    } else if let Some(pip_hwnd_value) = pip_hwnd_value {
+        let app = app.clone();
+        if let Err(error) = app.run_on_main_thread(move || destroy_pip_window(pip_hwnd_value)) {
+            log::warn!("[mpv-embed] failed to schedule PiP teardown: {error}");
         }
     }
-}
-
-// Runs entirely on the main thread: creating, reparenting, and showing all touch window state
-// the popup's owning thread must pump, which a Tokio worker thread never does.
-#[cfg(target_os = "windows")]
-fn enter_pip_on_main_thread(main_hwnd_value: isize, surface_value: isize, geometry: Bounds) -> Result<isize, String> {
-    let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
-    let pip_hwnd_value = create_pip_window(main_hwnd, &geometry)?;
-    let pip_hwnd = HWND(pip_hwnd_value as *mut core::ffi::c_void);
-    if let Err(error) = reparent_child(surface_value, pip_hwnd) {
-        destroy_pip_window(pip_hwnd_value);
-        return Err(error);
-    }
-    fill_pip_child(surface_value, geometry.width, geometry.height);
-    set_click_through(surface_value, true);
-    set_window_visibility(surface_value, true);
-    Ok(pip_hwnd_value)
-}
-
-#[cfg(target_os = "windows")]
-fn exit_pip_on_main_thread(main_hwnd_value: isize, surface_value: Option<isize>, pip_hwnd_value: isize) {
-    if let Some(surface_value) = surface_value {
-        let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
-        if let Err(error) = reparent_child(surface_value, main_hwnd) {
-            log::warn!("[mpv-embed] failed to reparent the mpv window back to the main window: {error}");
-        }
-        send_to_bottom(surface_value);
-        set_click_through(surface_value, false);
-    }
-    destroy_pip_window(pip_hwnd_value);
-}
-
-/// Idempotent teardown hook: safe to call whether or not the session is in PiP.
-#[cfg(target_os = "windows")]
-fn destroy_pip_window_if_active(app: &AppHandle, session: &MpvSession) {
-    let pip_hwnd_value = session.pip.lock().unwrap_or_else(|poison| poison.into_inner()).take();
-    let Some(pip_hwnd_value) = pip_hwnd_value else { return };
-    let surface_value = resolve_mpv_window(session);
-    let main_hwnd_value = session.parent_hwnd;
-    if let Err(error) =
-        app.run_on_main_thread(move || exit_pip_on_main_thread(main_hwnd_value, surface_value, pip_hwnd_value))
-    {
-        log::warn!("[mpv-embed] failed to schedule PiP teardown: {error}");
-    }
-    let _ = app.emit("xt:mpv-pip-changed", json!({ "sessionId": session.session_id, "active": false }));
+    emit_surface_event(app, session, SurfaceState::Hidden);
 }
 
 #[cfg(target_os = "windows")]
@@ -1186,42 +1467,38 @@ async fn pip_enter(app: AppHandle, state: State<'_, MpvEmbedState>, session_id: 
     if !should_enter_pip(pip_active(&session)) {
         return Ok(());
     }
-    let surface_value =
-        resolve_mpv_window(&session).ok_or_else(|| "NOT_FOUND:mpv surface window not ready".to_string())?;
+    resolve_mpv_window(&session).ok_or_else(|| "NOT_FOUND:mpv surface window not ready".to_string())?;
     let main_window = app.get_webview_window("main").ok_or_else(|| "OTHER:main window unavailable".to_string())?;
     // HWND is not Send, so only its raw value may stay alive across the awaits below.
     let main_hwnd_value = main_window.hwnd().map_err(|error| format!("OTHER:{error}"))?.0 as isize;
-
-    let width = session
-        .ipc
-        .send_request(json!({ "command": ["get_property", "width"] }), MPV_IPC_TIMEOUT)
-        .await
-        .ok()
-        .and_then(|value| value.as_f64());
-    let height = session
-        .ipc
-        .send_request(json!({ "command": ["get_property", "height"] }), MPV_IPC_TIMEOUT)
-        .await
-        .ok()
-        .and_then(|value| value.as_f64());
     let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
-    let geometry = pip_default_geometry(aspect_from_dimensions(width, height), work_area_for_window(main_hwnd));
+    let work_area = work_area_for_window(main_hwnd);
 
-    let pip_hwnd_value =
-        run_on_main_thread_and_wait(&app, move || enter_pip_on_main_thread(main_hwnd_value, surface_value, geometry))
-            .await??;
+    let last_rect = *state.last_pip_rect.lock().unwrap_or_else(|poison| poison.into_inner());
+    let geometry = match last_rect {
+        Some(rect) => clamp_pip_geometry(rect, work_area),
+        None => {
+            let metrics = session.video_metrics();
+            pip_default_geometry(aspect_from_dimensions(metrics.dwidth, metrics.dheight), work_area)
+        }
+    };
 
-    // Zeroed so mpv draws across the whole popup instead of a placement sized for the main window.
-    if let Err(error) = apply_placement(&session.ipc, VideoPlacement::CENTERED).await {
-        log::warn!("[mpv-embed] session {} failed to reset video placement for PiP: {error}", session.session_id);
-    }
+    let pip_hwnd_value = run_on_main_thread_and_wait(&app, move || {
+        create_pip_window(HWND(main_hwnd_value as *mut core::ffi::c_void), &geometry)
+    })
+    .await??;
 
     {
-        let mut guard = session.pip.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut guard = session.pip_hwnd.lock().unwrap_or_else(|poison| poison.into_inner());
         *guard = Some(pip_hwnd_value);
     }
-    let _ = app.emit("xt:mpv-pip-changed", json!({ "sessionId": session_id, "active": true }));
-    Ok(())
+    session.target.set_pip(Some(geometry));
+    {
+        let mut last = state.last_pip_rect.lock().unwrap_or_else(|poison| poison.into_inner());
+        *last = Some(geometry);
+    }
+
+    apply_surface(&app, &session).await
 }
 
 #[cfg(target_os = "windows")]
@@ -1230,36 +1507,13 @@ async fn pip_exit(app: AppHandle, state: State<'_, MpvEmbedState>, session_id: S
     if !should_exit_pip(pip_active(&session)) {
         return Ok(());
     }
-    let pip_hwnd_value = session.pip.lock().unwrap_or_else(|poison| poison.into_inner()).take();
-    let Some(pip_hwnd_value) = pip_hwnd_value else { return Ok(()) };
+    session.target.set_pip(None);
+    apply_surface(&app, &session).await?;
 
-    let surface_value = resolve_mpv_window(&session);
-    let main_hwnd_value = session.parent_hwnd;
-    if let Err(error) = run_on_main_thread_and_wait(&app, move || {
-        exit_pip_on_main_thread(main_hwnd_value, surface_value, pip_hwnd_value)
-    })
-    .await
-    {
-        log::warn!("[mpv-embed] session {} failed to exit PiP on the main thread: {error}", session.session_id);
+    let pip_hwnd_value = session.pip_hwnd.lock().unwrap_or_else(|poison| poison.into_inner()).take();
+    if let Some(pip_hwnd_value) = pip_hwnd_value {
+        run_on_main_thread_and_wait(&app, move || destroy_pip_window(pip_hwnd_value)).await?;
     }
-    if let Some(surface_value) = surface_value {
-        if let Some(bounds) = session.desired.bounds() {
-            let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
-            if let Some((client_width, client_height)) = client_size(main_hwnd) {
-                let metrics = session.video_metrics();
-                let placement =
-                    placement_for_bounds(bounds, client_width, client_height, metrics.dwidth, metrics.dheight, metrics.panscan);
-                if let Err(error) = apply_placement(&session.ipc, placement).await {
-                    log::warn!(
-                        "[mpv-embed] session {} failed to restore video placement after PiP exit: {error}",
-                        session.session_id
-                    );
-                }
-            }
-        }
-        set_window_visibility(surface_value, session.desired.visible());
-    }
-    let _ = app.emit("xt:mpv-pip-changed", json!({ "sessionId": session_id, "active": false }));
     Ok(())
 }
 
@@ -1382,8 +1636,20 @@ fn apply_window_fullscreen(app: &AppHandle, enabled: bool) -> Result<(), String>
 async fn set_window_fullscreen(app: AppHandle, enabled: bool) -> Result<(), String> {
     let app_for_main_thread = app.clone();
     run_on_main_thread_and_wait(&app, move || apply_window_fullscreen(&app_for_main_thread, enabled)).await??;
-    // The client size just changed; placement depends on it, so recompute against the new size.
-    wake_placement_task(&app);
+    let state = app.state::<MpvEmbedState>();
+    let session = {
+        let guard = state.session.lock().unwrap_or_else(|poison| poison.into_inner());
+        guard.as_ref().cloned()
+    };
+    if let Some(session) = session {
+        session.target.set_fullscreen(enabled);
+        if let Err(error) = apply_surface(&app, &session).await {
+            log::warn!(
+                "[mpv-embed] session {} failed to apply surface after fullscreen toggle: {error}",
+                session.session_id
+            );
+        }
+    }
     Ok(())
 }
 
@@ -1451,14 +1717,8 @@ async fn teardown_current_session(app: &AppHandle, state: &MpvEmbedState) {
     }
 }
 
-/// Reparents mpv's window out of PiP (if active) and hides it, all before any teardown IPC.
-#[cfg(target_os = "windows")]
-fn hide_surface_for_navigation(app: &AppHandle, session: &Arc<MpvSession>) {
-    destroy_pip_window_if_active(app, session);
-    record_and_apply_visible(session, false);
-}
-
-// Hides synchronously: the frontend's unload-time invoke() dies with the discarded document.
+// Hides synchronously, all before any teardown IPC: the frontend's unload-time invoke() dies
+// with the discarded document, so this cannot wait on anything past the main thread schedule.
 #[cfg(target_os = "windows")]
 pub fn on_main_page_navigation(app: &AppHandle) {
     let state = app.state::<MpvEmbedState>();
@@ -1467,7 +1727,7 @@ pub fn on_main_page_navigation(app: &AppHandle) {
         guard.as_ref().cloned()
     };
     let Some(session) = session else { return };
-    hide_surface_for_navigation(app, &session);
+    schedule_surface_teardown(app, &session);
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app_handle.state::<MpvEmbedState>();
@@ -1479,24 +1739,21 @@ pub fn on_main_page_navigation(app: &AppHandle) {
 pub fn on_main_page_navigation(_app: &AppHandle) {}
 
 // Placement is computed against the parent client size, so a change to it with no bounds
-// change still needs a recompute; send wakes the placement task with no payload of its own.
+// change still needs a recompute; send wakes run_surface_updates with no payload of its own.
 #[cfg(target_os = "windows")]
-fn wake_placement_task(app: &AppHandle) {
+fn wake_surface_task(app: &AppHandle) {
     let state = app.state::<MpvEmbedState>();
     let session = {
         let guard = state.session.lock().unwrap_or_else(|poison| poison.into_inner());
         guard.as_ref().cloned()
     };
     let Some(session) = session else { return };
-    if pip_active(&session) {
-        return;
-    }
     let _ = session.placement_tx.send(());
 }
 
 #[cfg(target_os = "windows")]
 pub fn on_main_window_resized(app: &AppHandle) {
-    wake_placement_task(app);
+    wake_surface_task(app);
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1505,7 +1762,7 @@ pub fn on_main_window_resized(_app: &AppHandle) {}
 /// Kills the child, or wakes `run_exit_watch` to do it; `finish_exit` stays the only emitter.
 #[cfg(target_os = "windows")]
 async fn teardown_session(app: &AppHandle, session: &Arc<MpvSession>) {
-    destroy_pip_window_if_active(app, session);
+    schedule_surface_teardown(app, session);
     session.kill_notify.notify_one();
     if let Ok(mut guard) = session.child.try_lock() {
         if let Some(mut child) = guard.take() {
@@ -1560,7 +1817,7 @@ fn finish_exit(
     if session.torn_down.swap(true, Ordering::SeqCst) {
         return;
     }
-    destroy_pip_window_if_active(app, session);
+    schedule_surface_teardown(app, session);
     session.ipc.fail_all_pending();
     {
         let mut guard = state.session.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -1669,7 +1926,7 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
         pid,
         parent_hwnd: parent_value,
         mpv_hwnd: Mutex::new(None),
-        desired: DesiredState::new(bounds, true),
+        target: SurfaceTarget::new(bounds, true),
         video_metrics: Mutex::new(VideoMetrics::default()),
         placement_tx,
         ipc: ipc.clone(),
@@ -1677,7 +1934,7 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
         kill_notify: Notify::new(),
         torn_down: AtomicBool::new(false),
         reader_task: Mutex::new(None),
-        pip: Mutex::new(None),
+        pip_hwnd: Mutex::new(None),
     });
 
     let reader_handle = tauri::async_runtime::spawn(run_reader(
@@ -1696,10 +1953,14 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
     if let Err(error) = initialize_video_placement(&session.ipc).await {
         log::warn!("[mpv-embed] session {session_id} failed to initialize video placement: {error}");
     }
+    let osc_hide = json!({ "command": ["script-message", "osc-visibility", "never"] });
+    if let Err(error) = session.ipc.send_request(osc_hide, MPV_IPC_TIMEOUT).await {
+        log::warn!("[mpv-embed] session {session_id} failed to hide the OSC by default: {error}");
+    }
 
     // Weak: this task must not keep the session alive, or placement_tx (owned by the session)
     // could never drop to close the channel and let the loop end.
-    tauri::async_runtime::spawn(run_placement_updates(Arc::downgrade(&session), placement_rx));
+    tauri::async_runtime::spawn(run_surface_updates(app.clone(), Arc::downgrade(&session), placement_rx));
     let _ = session.placement_tx.send(());
 
     tauri::async_runtime::spawn(watch_for_mpv_window(session.clone()));
@@ -1722,19 +1983,39 @@ async fn start_session(_app: AppHandle, _state: State<'_, MpvEmbedState>, _bound
 fn status_impl(state: &MpvEmbedState) -> MpvEmbedStatus {
     let guard = state.session.lock().unwrap_or_else(|poison| poison.into_inner());
     match guard.as_ref() {
-        Some(session) => MpvEmbedStatus {
-            running: true,
-            session_id: Some(session.session_id.clone()),
-            pid: Some(session.pid),
-            pip_active: pip_active(session),
+        Some(session) => {
+            let in_pip = pip_active(session);
+            let surface = derive_surface_state(session.target.visible(), session.target.fullscreen(), in_pip);
+            MpvEmbedStatus {
+                running: true,
+                session_id: Some(session.session_id.clone()),
+                pid: Some(session.pid),
+                pip_active: in_pip,
+                surface: surface_state_name(surface).to_string(),
+                pip_rect: session.target.pip(),
+            }
+        }
+        None => MpvEmbedStatus {
+            running: false,
+            session_id: None,
+            pid: None,
+            pip_active: false,
+            surface: surface_state_name(SurfaceState::Hidden).to_string(),
+            pip_rect: None,
         },
-        None => MpvEmbedStatus { running: false, session_id: None, pid: None, pip_active: false },
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 fn status_impl(_state: &MpvEmbedState) -> MpvEmbedStatus {
-    MpvEmbedStatus { running: false, session_id: None, pid: None, pip_active: false }
+    MpvEmbedStatus {
+        running: false,
+        session_id: None,
+        pid: None,
+        pip_active: false,
+        surface: surface_state_name(SurfaceState::Hidden).to_string(),
+        pip_rect: None,
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1906,7 +2187,9 @@ pub fn mpv_embed_set_bounds(state: State<'_, MpvEmbedState>, session_id: String,
 #[cfg(target_os = "windows")]
 fn set_bounds_impl(state: State<'_, MpvEmbedState>, session_id: String, bounds: Bounds) -> Result<(), String> {
     let session = get_session(&state, &session_id)?;
-    record_and_apply_bounds(&session, bounds)
+    session.target.set_bounds(bounds);
+    let _ = session.placement_tx.send(());
+    Ok(())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1922,7 +2205,8 @@ pub fn mpv_embed_set_visible(state: State<'_, MpvEmbedState>, session_id: String
 #[cfg(target_os = "windows")]
 fn set_visible_impl(state: State<'_, MpvEmbedState>, session_id: String, visible: bool) -> Result<(), String> {
     let session = get_session(&state, &session_id)?;
-    record_and_apply_visible(&session, visible);
+    session.target.set_visible(visible);
+    let _ = session.placement_tx.send(());
     Ok(())
 }
 
@@ -1954,6 +2238,32 @@ async fn pip_exit(_app: AppHandle, _state: State<'_, MpvEmbedState>, _session_id
 #[tauri::command]
 pub async fn mpv_embed_window_fullscreen(app: AppHandle, enabled: bool) -> Result<(), String> {
     set_window_fullscreen(app, enabled).await
+}
+
+#[tauri::command]
+pub async fn mpv_embed_screenshot(app: AppHandle, state: State<'_, MpvEmbedState>, session_id: String) -> Result<String, String> {
+    take_screenshot(app, state, session_id).await
+}
+
+#[cfg(target_os = "windows")]
+async fn take_screenshot(app: AppHandle, state: State<'_, MpvEmbedState>, session_id: String) -> Result<String, String> {
+    let session = get_session(&state, &session_id)?;
+    let picture_dir = app.path().picture_dir().map_err(|error| format!("OTHER:{error}"))?;
+    let target_dir = picture_dir.join("Extreme InfiniTV");
+    std::fs::create_dir_all(&target_dir).map_err(|error| format!("OTHER:{error}"))?;
+    let stamp = chrono::Local::now().format("%Y-%m-%d %H-%M-%S");
+    let path_string = target_dir.join(format!("Screenshot {stamp}.png")).to_string_lossy().into_owned();
+    external_player::validate_arg(&path_string, "screenshot path")?;
+    session
+        .ipc
+        .send_request(json!({ "command": ["screenshot-to-file", path_string, "video"] }), MPV_IPC_TIMEOUT)
+        .await?;
+    Ok(path_string)
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn take_screenshot(_app: AppHandle, _state: State<'_, MpvEmbedState>, _session_id: String) -> Result<String, String> {
+    Err(platform_unsupported())
 }
 
 #[tauri::command]
@@ -2008,7 +2318,7 @@ pub fn shutdown(app: &AppHandle, state: &MpvEmbedState) {
         guard.take()
     };
     let Some(session) = session else { return };
-    destroy_pip_window_if_active(app, &session);
+    schedule_surface_teardown(app, &session);
     session.torn_down.store(true, Ordering::SeqCst);
     session.kill_notify.notify_one();
     if let Ok(mut guard) = session.child.try_lock() {
@@ -2044,7 +2354,7 @@ mod tests {
                 "--idle=yes".to_string(),
                 "--force-window=immediate".to_string(),
                 "--keep-open=yes".to_string(),
-                "--no-osc".to_string(),
+                "--osc=yes".to_string(),
                 "--osd-level=0".to_string(),
                 "--no-input-default-bindings".to_string(),
                 "--input-vo-keyboard=no".to_string(),
@@ -2055,6 +2365,13 @@ mod tests {
                 "--msg-level=all=warn".to_string(),
                 r"--log-file=C:\logs\mpv-embed.log".to_string(),
                 "--no-config".to_string(),
+                "--hwdec=auto-safe".to_string(),
+                "--audio-client-name=Extreme InfiniTV".to_string(),
+                "--screenshot-format=png".to_string(),
+                "--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5".to_string(),
+                "--cache=yes".to_string(),
+                "--demuxer-max-bytes=150MiB".to_string(),
+                "--demuxer-readahead-secs=20".to_string(),
             ]
         );
     }
@@ -2266,6 +2583,18 @@ mod tests {
             ("dwidth", "dwidth"),
             ("dheight", "dheight"),
             ("panscan", "panscan"),
+            ("speed", "speed"),
+            ("volume", "volume"),
+            ("mute", "mute"),
+            ("container-fps", "containerFps"),
+            ("decoder-frame-drop-count", "decoderFrameDropCount"),
+            ("demuxer-cache-time", "demuxerCacheTime"),
+            ("video-format", "videoFormat"),
+            ("audio-params/format", "audioFormat"),
+            ("audio-params/channel-count", "audioChannelCount"),
+            ("video-params/pixelformat", "pixelFormat"),
+            ("file-format", "fileFormat"),
+            ("seekable", "seekable"),
         ];
         assert_eq!(expected.len(), OBSERVED_PROPERTIES.len());
         for (mpv_name, camel_name) in expected {
@@ -2354,34 +2683,48 @@ mod tests {
     }
 
     #[test]
-    fn placement_inputs_unchanged_matches_identical_inputs() {
-        let bounds = Bounds { x: 10, y: 20, width: 640, height: 360, radius: 8 };
-        let inputs = (bounds, 1000, 700, Some(1600.0), Some(900.0), 0.0);
-        assert!(placement_inputs_unchanged(Some(inputs), inputs));
+    fn derive_surface_state_pip_wins_over_everything() {
+        assert_eq!(derive_surface_state(true, true, true), SurfaceState::Pip);
+        assert_eq!(derive_surface_state(false, false, true), SurfaceState::Pip);
     }
 
     #[test]
-    fn placement_inputs_unchanged_rejects_a_changed_bounds_field() {
-        let cached = Bounds { x: 10, y: 20, width: 640, height: 360, radius: 8 };
-        let incoming = Bounds { x: 11, y: 20, width: 640, height: 360, radius: 8 };
-        let cached_inputs = (cached, 1000, 700, Some(1600.0), Some(900.0), 0.0);
-        let incoming_inputs = (incoming, 1000, 700, Some(1600.0), Some(900.0), 0.0);
-        assert!(!placement_inputs_unchanged(Some(cached_inputs), incoming_inputs));
+    fn derive_surface_state_fullscreen_wins_over_embedded() {
+        assert_eq!(derive_surface_state(true, true, false), SurfaceState::Fullscreen);
     }
 
     #[test]
-    fn placement_inputs_unchanged_rejects_a_changed_video_size() {
-        let bounds = Bounds { x: 10, y: 20, width: 640, height: 360, radius: 8 };
-        let cached_inputs = (bounds, 1000, 700, Some(1600.0), Some(900.0), 0.0);
-        let incoming_inputs = (bounds, 1000, 700, Some(1280.0), Some(720.0), 0.0);
-        assert!(!placement_inputs_unchanged(Some(cached_inputs), incoming_inputs));
+    fn derive_surface_state_visible_without_fullscreen_or_pip_is_embedded() {
+        assert_eq!(derive_surface_state(true, false, false), SurfaceState::Embedded);
     }
 
     #[test]
-    fn placement_inputs_unchanged_rejects_no_cache() {
-        let bounds = Bounds { x: 10, y: 20, width: 640, height: 360, radius: 8 };
-        let inputs = (bounds, 1000, 700, Some(1600.0), Some(900.0), 0.0);
-        assert!(!placement_inputs_unchanged(None, inputs));
+    fn derive_surface_state_defaults_to_hidden() {
+        assert_eq!(derive_surface_state(false, false, false), SurfaceState::Hidden);
+    }
+
+    #[test]
+    fn clamp_pip_geometry_leaves_a_rect_already_inside_the_work_area_alone() {
+        let work_area = WorkArea { x: 0, y: 0, width: 1920, height: 1080 };
+        let rect = PipGeometry { x: 100, y: 100, width: 360, height: 202 };
+        assert_eq!(clamp_pip_geometry(rect, work_area), rect);
+    }
+
+    #[test]
+    fn clamp_pip_geometry_pulls_an_off_screen_rect_back_into_the_work_area() {
+        let work_area = WorkArea { x: 0, y: 0, width: 1920, height: 1080 };
+        let rect = PipGeometry { x: -50, y: 2000, width: 360, height: 202 };
+        let clamped = clamp_pip_geometry(rect, work_area);
+        assert_eq!(clamped.x, 0);
+        assert_eq!(clamped.y, 1080 - 202);
+    }
+
+    #[test]
+    fn clamp_pip_geometry_shrinks_a_rect_wider_than_the_work_area() {
+        let work_area = WorkArea { x: 0, y: 0, width: 300, height: 1080 };
+        let rect = PipGeometry { x: 0, y: 0, width: 900, height: 506 };
+        let clamped = clamp_pip_geometry(rect, work_area);
+        assert_eq!(clamped.width, 300);
     }
 
     #[test]
@@ -2401,17 +2744,24 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn desired_state_round_trips_bounds_and_visibility() {
+    fn surface_target_round_trips_bounds_visible_fullscreen_and_pip() {
         let initial = Bounds { x: 0, y: 0, width: 100, height: 100, radius: 0 };
-        let state = DesiredState::new(initial, true);
-        assert_eq!(state.bounds(), Some(initial));
-        assert!(state.visible());
+        let target = SurfaceTarget::new(initial, true);
+        assert_eq!(target.bounds(), Some(initial));
+        assert!(target.visible());
+        assert!(!target.fullscreen());
+        assert_eq!(target.pip(), None);
 
         let updated = Bounds { x: 10, y: 20, width: 640, height: 360, radius: 12 };
-        state.set_bounds(updated);
-        state.set_visible(false);
-        assert_eq!(state.bounds(), Some(updated));
-        assert!(!state.visible());
+        let pip = PipGeometry { x: 5, y: 6, width: 360, height: 202 };
+        target.set_bounds(updated);
+        target.set_visible(false);
+        target.set_fullscreen(true);
+        target.set_pip(Some(pip));
+        assert_eq!(target.bounds(), Some(updated));
+        assert!(!target.visible());
+        assert!(target.fullscreen());
+        assert_eq!(target.pip(), Some(pip));
     }
 
     #[cfg(target_os = "windows")]

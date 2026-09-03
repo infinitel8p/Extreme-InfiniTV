@@ -82,11 +82,11 @@ Some channels use the HEVC (H.265) codec, which not every device can decode:
 
 ## Switched to "mpv (embedded)" but nothing plays
 
-This Windows-only, experimental player needs mpv already installed on your machine - the app doesn't bundle a copy yet, so if it can't find one, nothing plays after you switch to it.
+This Windows-only player ships bundled with the app, so there's normally nothing to install.
 
-- Confirm mpv is actually installed and works on its own - opening a terminal and running `mpv --version` is the quickest check.
-- If mpv isn't installed, that's the whole problem - the switch itself takes effect immediately, on the next thing you play, with no restart needed.
-- If you'd rather not install mpv, switch back to one of the built-in engines (ArtPlayer, Video.js, or Shaka Player) in **Settings > Watching > Playback**, or use the separate MPV handoff instead. See [External players](./external-players/).
+- Open **Settings > Help > Export diagnostics**. The bundle includes `mpv-embed.log` (and `mpv-embed.prev.log` from the previous session), mpv's own log of what it tried to do.
+- The failure panel now names the mpv binary it tried to start, which is usually enough to spot the problem - for example, a stray file next to the app winning over the bundled copy.
+- If you'd rather not dig into it, switch back to one of the built-in engines (ArtPlayer, Video.js, or Shaka Player) in **Settings > Watching > Playback**, or use the separate MPV handoff instead. See [External players](./external-players/).
 
 ## A stream works in VLC but not the in-app player (Android)
 

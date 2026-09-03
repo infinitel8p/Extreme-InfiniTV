@@ -107,6 +107,7 @@ import {
   mountPlayer,
   getExternalLauncher,
   subscribeExternalPlayerExit,
+  isNativeVideoBackend,
 } from "@/scripts/lib/player-runtime.ts"
 import { toast } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchErrorFallback } from "@/scripts/lib/external-player-button.ts"
@@ -1236,7 +1237,16 @@ async function populateSimilarRail(requestId) {
 // ----------------------------
 let vjs = null
 let focusKeeperCleanup: (() => void) | null = null
+let embeddedPlayerBackend = null
 let seriesInsights = null
+const heroWrap = document.getElementById("series-detail-hero")
+
+// Pins the player container in place while the embedded mpv window plays underneath it - see mpv-embedded.ts.
+function updateStickyPlayer() {
+  if (!heroWrap) return
+  if (vjs && isNativeVideoBackend(embeddedPlayerBackend)) heroWrap.dataset.stickyPlayer = "on"
+  else delete heroWrap.dataset.stickyPlayer
+}
 
 const inlineTrailer = createInlineTrailer({
   wrapEl: document.getElementById("series-detail-trailer-wrap"),
@@ -1412,10 +1422,13 @@ async function ensureEmbeddedPlayer(backend) {
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
-  if (mounted.backend === "videojs") {
+  embeddedPlayerBackend = mounted.backend
+  if (mounted.backend === "videojs" || (mounted.backend === "mpv-embedded" && typeof vjs.userActive === "function")) {
     focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
+  updateStickyPlayer()
+  vjs.el()?.addEventListener?.("xt:mpv-retry", () => { if (currentEpisode) playEpisode(currentEpisode) })
   return vjs
 }
 
@@ -1482,6 +1495,7 @@ function retirePreviousPlayback() {
   stallWatchdogDetach = null
   qualityChipDetach?.()
   qualityChipDetach = null
+  updateStickyPlayer()
 }
 
 async function playEpisode(episode, options = {}) {
@@ -1648,6 +1662,13 @@ async function playEpisode(episode, options = {}) {
       setupStatsButton()
       setupHealthButton()
       subtitleDelayController.setup()
+      // mpv-only signals the generic remux-failure classifier below doesn't recognize.
+      player.one?.("error", () => {
+        const errorDetail = player.codecInfo?.()?.errorDetail
+        if (typeof errorDetail !== "string") return
+        if (errorDetail.startsWith("OFFLINE_PLACEHOLDER")) vodPlaybackToasts.showOfflinePlaceholderToast()
+        else if (errorDetail.startsWith("NETWORK:")) vodPlaybackToasts.showNetworkErrorToast()
+      })
     },
     applyVideoScale,
     toasts: vodPlaybackToasts,

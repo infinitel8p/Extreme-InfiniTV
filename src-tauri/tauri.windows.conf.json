@@ -19,7 +19,7 @@
     ]
   },
   "bundle": {
-    "externalBin": ["binaries/infinitv-ffmpeg"],
+    "externalBin": ["binaries/infinitv-ffmpeg", "binaries/infinitv-mpv"],
     "windows": {
       "nsis": {
         "installerHooks": "windows/firewall-hooks.nsh"

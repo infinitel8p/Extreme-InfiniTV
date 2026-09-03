@@ -1,9 +1,10 @@
 // Crawls the built docs as GitHub Pages serves them and reports unresolved internal links.
 import { readFileSync, readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { BASE } from "../site-base.mjs"
 
-const DIST = new URL("../dist/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1").replace(/\/$/, "")
+const DIST = fileURLToPath(new URL("../dist/", import.meta.url)).replace(/[\\/]$/, "")
 
 function htmlFiles(dir, out = []) {
   for (const name of readdirSync(dir)) {

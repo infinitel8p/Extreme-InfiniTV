@@ -3,7 +3,11 @@ import {
   seekFraction,
   seekTargetFromFraction,
   isSeekableContent,
+  seekTooltipTime,
   nextAutoHideState,
+  PLAYBACK_RATES,
+  formatPlaybackRate,
+  mpvHotkeyAction,
   type AutoHideState,
 } from "../src/scripts/lib/mpv-controls"
 
@@ -115,5 +119,78 @@ describe("nextAutoHideState", () => {
   it("never hides on timeout while a control has focus", () => {
     const focused: AutoHideState = { visible: true, focused: true, paused: false }
     expect(nextAutoHideState(focused, "timeout")).toBe(focused)
+  })
+
+  it("flips visibility on toggle regardless of paused/focused", () => {
+    const visible: AutoHideState = { visible: true, focused: false, paused: true }
+    expect(nextAutoHideState(visible, "toggle")).toEqual({ visible: false, focused: false, paused: true })
+    const hidden: AutoHideState = { visible: false, focused: false, paused: false }
+    expect(nextAutoHideState(hidden, "toggle")).toEqual({ visible: true, focused: false, paused: false })
+  })
+})
+
+describe("seekTooltipTime", () => {
+  it("formats the midpoint of a known duration", () => {
+    expect(seekTooltipTime(0.5, 120)).toBe("01:00")
+  })
+
+  it("formats an hour-plus duration with the hours segment", () => {
+    expect(seekTooltipTime(1, 3660)).toBe("1:01:00")
+  })
+
+  it("clamps an out-of-range fraction before formatting", () => {
+    expect(seekTooltipTime(1.5, 60)).toBe("01:00")
+    expect(seekTooltipTime(-0.5, 60)).toBe("00:00")
+  })
+})
+
+describe("PLAYBACK_RATES / formatPlaybackRate", () => {
+  it("offers the expected fixed set of speeds", () => {
+    expect(PLAYBACK_RATES).toEqual([0.5, 0.75, 1, 1.25, 1.5, 2])
+  })
+
+  it("formats a rate with an x suffix", () => {
+    expect(formatPlaybackRate(1)).toBe("1x")
+    expect(formatPlaybackRate(1.5)).toBe("1.5x")
+    expect(formatPlaybackRate(0.5)).toBe("0.5x")
+  })
+})
+
+describe("mpvHotkeyAction", () => {
+  it("maps space to toggle-play", () => {
+    expect(mpvHotkeyAction({ key: " ", isSeekable: true })).toBe("toggle-play")
+  })
+
+  it("maps ArrowLeft/ArrowRight to seeking only when seekable", () => {
+    expect(mpvHotkeyAction({ key: "ArrowLeft", isSeekable: true })).toBe("seek-back")
+    expect(mpvHotkeyAction({ key: "ArrowRight", isSeekable: true })).toBe("seek-forward")
+    expect(mpvHotkeyAction({ key: "ArrowLeft", isSeekable: false })).toBeNull()
+    expect(mpvHotkeyAction({ key: "ArrowRight", isSeekable: false })).toBeNull()
+  })
+
+  it("maps ArrowUp/ArrowDown to volume regardless of seekability", () => {
+    expect(mpvHotkeyAction({ key: "ArrowUp", isSeekable: false })).toBe("volume-up")
+    expect(mpvHotkeyAction({ key: "ArrowDown", isSeekable: false })).toBe("volume-down")
+  })
+
+  it("maps letter keys case-insensitively", () => {
+    expect(mpvHotkeyAction({ key: "f", isSeekable: false })).toBe("toggle-fullscreen")
+    expect(mpvHotkeyAction({ key: "F", isSeekable: false })).toBe("toggle-fullscreen")
+    expect(mpvHotkeyAction({ key: "m", isSeekable: false })).toBe("toggle-mute")
+    expect(mpvHotkeyAction({ key: "M", isSeekable: false })).toBe("toggle-mute")
+    expect(mpvHotkeyAction({ key: "p", isSeekable: false })).toBe("toggle-pip")
+    expect(mpvHotkeyAction({ key: "P", isSeekable: false })).toBe("toggle-pip")
+    expect(mpvHotkeyAction({ key: "s", isSeekable: false })).toBe("screenshot")
+    expect(mpvHotkeyAction({ key: "S", isSeekable: false })).toBe("screenshot")
+  })
+
+  it("ignores modified keystrokes", () => {
+    expect(mpvHotkeyAction({ key: " ", isSeekable: true, ctrlKey: true })).toBeNull()
+    expect(mpvHotkeyAction({ key: "f", isSeekable: true, metaKey: true })).toBeNull()
+    expect(mpvHotkeyAction({ key: "m", isSeekable: true, altKey: true })).toBeNull()
+  })
+
+  it("returns null for unmapped keys", () => {
+    expect(mpvHotkeyAction({ key: "q", isSeekable: true })).toBeNull()
   })
 })
