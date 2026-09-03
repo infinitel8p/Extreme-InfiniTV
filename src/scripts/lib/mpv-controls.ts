@@ -266,7 +266,8 @@ export function mountMpvControls(
   // Only place the control bar can learn a load's isLive - the handle itself has no getter for it.
   const originalSrc = handle.src.bind(handle)
   handle.src = (opts) => {
-    latestIsLive = opts.isLive
+    // isLive defaults to true per the src() contract; only an explicit false means seekable.
+    latestIsLive = opts.isLive !== false
     seekDragging = false
     originalSrc(opts)
     updatePlaybackUi()

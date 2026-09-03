@@ -254,6 +254,12 @@ pub fn run() {
                 mpv_embed::on_main_page_navigation(webview.app_handle());
             }
         })
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Resized(_)) {
+                use tauri::Manager;
+                mpv_embed::on_main_window_resized(window.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             audio_proxy::audio_transcode_available,
             audio_proxy::register_audio_transcode,

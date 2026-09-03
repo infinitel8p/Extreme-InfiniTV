@@ -4261,7 +4261,8 @@ async function play(streamId, name, reason = "user") {
   }
 
   resetEmptyState()
-  document.getElementById("player")?.removeAttribute("hidden")
+  // The mpv-embedded handle owns the element's hidden state; a native <video> must never show.
+  if (!isNativeVideoBackend(backend)) document.getElementById("player")?.removeAttribute("hidden")
   if (channel?.isRadio || isAudioOnlyChannel(streamId)) {
     // Both triggers hide the video element, so record which one fired - a stale
     // manual override is otherwise indistinguishable from a broken video track.
@@ -4355,6 +4356,7 @@ async function play(streamId, name, reason = "user") {
     player.src({
       src: mountSrc,
       type: mountMime,
+      isLive: true,
       drm: audioProxied ? null : channelDrm,
       preferNativeHls: isNativeHlsFallbackChannel(streamId),
     })
@@ -4648,7 +4650,7 @@ async function playCatchup(channel, opts) {
   const timelineStopUtcMs = timeline.timelineStopUtcMs
 
   resetEmptyState()
-  document.getElementById("player")?.removeAttribute("hidden")
+  if (!isNativeVideoBackend(backend)) document.getElementById("player")?.removeAttribute("hidden")
 
   const channelHeaders = streamHeadersById.get(channel.id) || null
   const player = await ensureEmbeddedPlayer(backend, {

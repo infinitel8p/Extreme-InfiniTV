@@ -135,17 +135,23 @@ function parseCssRadiusPx(radius: string | number | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+// Overhang hides the anti-aliased hole edge; the webview is opaque outside it.
+export const NATIVE_BOUNDS_INFLATE_CSS_PX = 1
+
 export function cssRectToPhysicalBounds(
   rect: { x: number; y: number; width: number; height: number; radius?: string | number },
   devicePixelRatio: number,
+  inflateCssPx = 0,
 ): Bounds {
   const ratio = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1
+  const radiusCssPx = parseCssRadiusPx(rect.radius)
+  const inflatedRadiusCssPx = inflateCssPx > 0 && radiusCssPx > 0 ? radiusCssPx + inflateCssPx : radiusCssPx
   return {
-    x: Math.round(rect.x * ratio),
-    y: Math.round(rect.y * ratio),
-    width: Math.round(rect.width * ratio),
-    height: Math.round(rect.height * ratio),
-    radius: Math.round(parseCssRadiusPx(rect.radius) * ratio),
+    x: Math.round((rect.x - inflateCssPx) * ratio),
+    y: Math.round((rect.y - inflateCssPx) * ratio),
+    width: Math.round((rect.width + inflateCssPx * 2) * ratio),
+    height: Math.round((rect.height + inflateCssPx * 2) * ratio),
+    radius: Math.round(inflatedRadiusCssPx * ratio),
   }
 }
 
@@ -212,6 +218,14 @@ export function buildLoadOptions(input: BuildLoadOptionsInput): LoadOptions {
         ? (input.networkTimeoutSeconds as number)
         : null,
   }
+}
+
+// Xtream providers keep counting the previous connection for ~15-20s after a switch.
+const LIVE_EOF_RELOAD_DELAYS_MS = [1000, 2000, 4000, 8000, 15000]
+
+/** Backoff delay before a live-EOF reload attempt; null once retries are exhausted. */
+export function liveEofReloadDelayMs(attempt: number): number | null {
+  return LIVE_EOF_RELOAD_DELAYS_MS[attempt - 1] ?? null
 }
 
 /** Synthetic DOM-ish event names to fire for a props transition (prop-derived events only). */
@@ -319,6 +333,16 @@ export async function createMpvEmbeddedHandle(
   const videoElement = options.videoElement ?? null
   const videoWasHidden = videoElement?.hidden ?? false
   if (videoElement) videoElement.hidden = true
+  container.dataset.mpvEmbedded = "on"
+
+  // A page tune can re-show the <video> after mount; keep it hidden for as long as this handle lives.
+  const videoHiddenObserver =
+    videoElement && typeof MutationObserver !== "undefined" ? new MutationObserver(() => {
+      if (!videoElement.hidden) videoElement.hidden = true
+    }) : null
+  if (videoElement && videoHiddenObserver) {
+    videoHiddenObserver.observe(videoElement, { attributes: true, attributeFilter: ["hidden"] })
+  }
 
   const loadingIndicator = document.createElement("div")
   loadingIndicator.className = "mpv-embed-loading"
@@ -329,8 +353,10 @@ export async function createMpvEmbeddedHandle(
   container.appendChild(loadingIndicator)
 
   function abort(): null {
+    videoHiddenObserver?.disconnect()
     loadingIndicator.remove()
     if (videoElement) videoElement.hidden = videoWasHidden
+    delete container.dataset.mpvEmbedded
     return null
   }
 
@@ -350,7 +376,11 @@ export async function createMpvEmbeddedHandle(
 
   let sessionId: string
   try {
-    const initialBounds = cssRectToPhysicalBounds(cssRectOf(container), window.devicePixelRatio || 1)
+    const initialBounds = cssRectToPhysicalBounds(
+      cssRectOf(container),
+      window.devicePixelRatio || 1,
+      NATIVE_BOUNDS_INFLATE_CSS_PX,
+    )
     const startResult = (await invoke("mpv_embed_start", { bounds: initialBounds })) as MpvEmbedStartResult
     if (!startResult?.sessionId) throw new Error("mpv_embed_start returned an unexpected shape")
     sessionId = startResult.sessionId
@@ -372,6 +402,7 @@ export async function createMpvEmbeddedHandle(
   let firstFrameRevealed = false
   let hasLoadedSource = false
   let loadGeneration = 0
+  let surfaceVisible = false
   function clearLoadingIndicator(): void {
     if (firstFrameRevealed) return
     firstFrameRevealed = true
@@ -384,12 +415,14 @@ export async function createMpvEmbeddedHandle(
   }
   // First-frame signal for a channel switch: reveal the surface and drop the spinner together.
   function revealSurface(): void {
+    surfaceVisible = true
     if (firstFrameRevealed) return
     clearLoadingIndicator()
     resetBoundsCache()
     void invoke("mpv_embed_set_visible", { sessionId, visible: true }).catch((err: unknown) => {
       log.warn("[xt:mpv-embed] mpv_embed_set_visible(true) failed:", err)
     })
+    log.log("[xt:mpv-embed] bounds", { sessionId, reveal: true })
     scheduleBoundsPush()
   }
   emitter.on("playing", revealSurface)
@@ -412,12 +445,72 @@ export async function createMpvEmbeddedHandle(
     })
   }
 
+  // --keep-open=yes pauses on live EOF instead of erroring; reload is the recovery.
+  interface LastLoadRequest {
+    url: string
+    loadOptions: LoadOptions
+  }
+  let lastLoadRequest: LastLoadRequest | null = null
+  let srcLoadInFlight = false
+  let liveEofRetryCount = 0
+  let liveEofReloadTimer: ReturnType<typeof setTimeout> | null = null
+  let liveEofStableTimer: ReturnType<typeof setTimeout> | null = null
+
+  function clearLiveEofTimers(): void {
+    if (liveEofReloadTimer != null) {
+      clearTimeout(liveEofReloadTimer)
+      liveEofReloadTimer = null
+    }
+    if (liveEofStableTimer != null) {
+      clearTimeout(liveEofStableTimer)
+      liveEofStableTimer = null
+    }
+  }
+
+  function reloadLastLiveSource(): void {
+    if (!lastLoadRequest || disposed) return
+    pauseState = false
+    void invoke("mpv_embed_load", {
+      sessionId,
+      url: lastLoadRequest.url,
+      options: lastLoadRequest.loadOptions,
+    }).catch((err: unknown) => {
+      log.warn("[xt:mpv-embed] live EOF reload failed:", err)
+    })
+  }
+
+  function attemptLiveEofReload(): boolean {
+    if (!lastLoadRequest?.loadOptions.isLive) return false
+    if (srcLoadInFlight) return false
+    if (liveEofReloadTimer != null) return true
+    const delay = liveEofReloadDelayMs(liveEofRetryCount + 1)
+    if (delay == null) return false
+    liveEofRetryCount += 1
+    emitter.emit("waiting")
+    liveEofReloadTimer = setTimeout(() => {
+      liveEofReloadTimer = null
+      reloadLastLiveSource()
+    }, delay)
+    return true
+  }
+
+  // 30s of stable playback after a reload forgives past retries.
+  function scheduleLiveEofRetryReset(): void {
+    if (liveEofStableTimer != null) clearTimeout(liveEofStableTimer)
+    liveEofStableTimer = setTimeout(() => {
+      liveEofStableTimer = null
+      liveEofRetryCount = 0
+    }, 30_000)
+  }
+
   function applyStateUpdate(patch: MpvProps): void {
     const previous = props
     props = { ...props, ...patch }
     if (typeof props.pause === "boolean") pauseState = props.pause
     for (const eventName of deriveEvents(previous, props)) emitter.emit(eventName)
     if (sawFileLoaded && previous.coreIdle !== false && props.coreIdle === false) revealSurface()
+    // --keep-open=yes means a live EOF never emits end-file, only this property flip.
+    if (previous.eofReached !== true && props.eofReached === true) attemptLiveEofReload()
   }
 
   function handleMpvEvent(payload: MpvEventPayload): void {
@@ -425,8 +518,15 @@ export async function createMpvEmbeddedHandle(
     if (payload.kind === "file-loaded") {
       sawFileLoaded = true
       emitter.emit("loadedmetadata")
+      // mpv briefly reports the keep-open pause state right after loadfile.
+      if (pauseState === false) void setProperty("pause", false)
+    } else if (payload.kind === "playback-restart") {
+      revealSurface()
+      scheduleLiveEofRetryReset()
+      if (props.pause !== true) emitter.emit("playing")
     } else if (payload.kind === "end-file") {
       if (payload.reason === "eof") {
+        if (attemptLiveEofReload()) return
         emitter.emit("ended")
       } else if (payload.reason === "error") {
         lastErrorDetail = payload.detail || payload.reason || null
@@ -454,12 +554,17 @@ export async function createMpvEmbeddedHandle(
   })
 
   // See native-video-hole-contract.md: the webview must cut a transparent hole for the video below it.
+  // Owner stamp: a stale handle's dispose() can't clear a hole it no longer owns.
   function clearNativeVideoHole(): void {
-    document.documentElement.removeAttribute("data-native-video")
+    if (document.documentElement.getAttribute("data-native-video-owner") === sessionId) {
+      document.documentElement.removeAttribute("data-native-video")
+      document.documentElement.removeAttribute("data-native-video-owner")
+    }
     resetBoundsCache()
   }
   function publishNativeVideoHole(cssRect: { x: number; y: number; width: number; height: number; radius?: string }): void {
     document.documentElement.setAttribute("data-native-video", "on")
+    document.documentElement.setAttribute("data-native-video-owner", sessionId)
     const vars = cssRectToNativeVideoHoleVars(cssRect)
     for (const [property, value] of Object.entries(vars)) {
       document.documentElement.style.setProperty(property, value)
@@ -485,13 +590,17 @@ export async function createMpvEmbeddedHandle(
     const cssRect = cssRectOf(container)
     if (cssRect.width <= 0 || cssRect.height <= 0) return
     const cssBounds = cssRectToPhysicalBounds(cssRect, 1)
-    if (!boundsEqual(cssBounds, lastCssBounds)) {
-      lastCssBounds = cssBounds
+    const boundsChanged = !boundsEqual(cssBounds, lastCssBounds)
+    lastCssBounds = cssBounds
+    const holeOwnedByAnotherSession =
+      document.documentElement.getAttribute("data-native-video-owner") !== sessionId
+    if (surfaceVisible && (boundsChanged || holeOwnedByAnotherSession)) {
       publishNativeVideoHole(cssRect)
     }
-    const bounds = cssRectToPhysicalBounds(cssRect, window.devicePixelRatio || 1)
+    const bounds = cssRectToPhysicalBounds(cssRect, window.devicePixelRatio || 1, NATIVE_BOUNDS_INFLATE_CSS_PX)
     if (boundsEqual(bounds, lastPushedBounds)) return
     lastPushedBounds = bounds
+    log.log("[xt:mpv-embed] bounds", { sessionId, bounds })
     void invoke("mpv_embed_set_bounds", { sessionId, bounds }).catch((err: unknown) => {
       log.warn("[xt:mpv-embed] mpv_embed_set_bounds failed:", err)
     })
@@ -524,7 +633,13 @@ export async function createMpvEmbeddedHandle(
 
   // Sole choke point for stop-on-navigate; a surviving mini-player changes only this.
   function stopPlaybackOnNavigate(): void {
+    surfaceVisible = false
+    clearLiveEofTimers()
     clearNativeVideoHole()
+    if (windowFullscreenSet) {
+      windowFullscreenSet = false
+      void setWindowFullscreen(false)
+    }
     void invoke("mpv_embed_set_visible", { sessionId, visible: false }).catch((err: unknown) => {
       log.warn("[xt:mpv-embed] mpv_embed_set_visible(false) failed:", err)
     })
@@ -535,10 +650,27 @@ export async function createMpvEmbeddedHandle(
   window.addEventListener("pagehide", stopPlaybackOnNavigate)
   window.addEventListener("beforeunload", stopPlaybackOnNavigate)
 
+  // Element fullscreen only covers the webview; the OS window keeps its own state.
+  let windowFullscreenSet = false
+  async function setWindowFullscreen(fullscreen: boolean): Promise<void> {
+    if (!isTauri) return
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window")
+      await getCurrentWindow().setFullscreen(fullscreen)
+    } catch (err) {
+      log.warn("[xt:mpv-embed] setFullscreen failed:", err)
+    }
+  }
+
   // Fullscreen resizes the container without a scroll or resize event on it.
   function handleFullscreenChange(): void {
     resetBoundsCache()
     scheduleBoundsPush()
+    // Catches Escape, which exits fullscreen without going through our exitFullscreen().
+    if (windowFullscreenSet && document.fullscreenElement !== container) {
+      windowFullscreenSet = false
+      void setWindowFullscreen(false)
+    }
   }
   document.addEventListener("fullscreenchange", handleFullscreenChange)
 
@@ -594,9 +726,12 @@ export async function createMpvEmbeddedHandle(
   const handle: VjsLikeHandle = {
     src(opts) {
       lastErrorDetail = null
+      clearLiveEofTimers()
+      liveEofRetryCount = 0
       if (hasLoadedSource) {
         showLoadingIndicator()
         emitter.emit("emptied")
+        surfaceVisible = false
         clearNativeVideoHole()
         void invoke("mpv_embed_set_visible", { sessionId, visible: false }).catch((err: unknown) => {
           log.warn("[xt:mpv-embed] mpv_embed_set_visible(false) failed:", err)
@@ -613,19 +748,35 @@ export async function createMpvEmbeddedHandle(
       })
       const generation = ++loadGeneration
       const requestedSrc = opts.src
+      srcLoadInFlight = true
       void (async () => {
         // mpv does its own HTTP; only the userinfo-carrying external wrap applies here.
         const playbackUrl = await wrapForDnsProxyExternal(requestedSrc)
         if (generation !== loadGeneration) return
+        lastLoadRequest = { url: playbackUrl, loadOptions }
         await invoke("mpv_embed_load", { sessionId, url: playbackUrl, options: loadOptions })
-      })().catch((err: unknown) => {
-        log.warn("[xt:mpv-embed] mpv_embed_load failed:", err)
-        lastErrorDetail = err instanceof Error ? err.message : String(err)
-        emitter.emit("error")
-      })
+      })()
+        .catch((err: unknown) => {
+          log.warn("[xt:mpv-embed] mpv_embed_load failed:", err)
+          lastErrorDetail = err instanceof Error ? err.message : String(err)
+          emitter.emit("error")
+        })
+        .finally(() => {
+          if (generation === loadGeneration) srcLoadInFlight = false
+        })
     },
     play() {
       pauseState = false
+      if ((props.eofReached === true || props.idleActive === true) && lastLoadRequest) {
+        if (lastLoadRequest.loadOptions.isLive) {
+          reloadLastLiveSource()
+          return Promise.resolve()
+        }
+        // A reload here would replay from the remembered resume position, not the start.
+        return invoke("mpv_embed_command", { sessionId, args: ["seek", "0", "absolute"] })
+          .catch((err: unknown) => log.warn("[xt:mpv-embed] restart seek failed:", err))
+          .then(() => setProperty("pause", false))
+      }
       return setProperty("pause", false)
     },
     pause() {
@@ -672,13 +823,18 @@ export async function createMpvEmbeddedHandle(
       return null
     },
     requestFullscreen() {
-      return container.requestFullscreen?.()
+      const result = container.requestFullscreen?.()
+      windowFullscreenSet = true
+      void setWindowFullscreen(true)
+      return result
     },
     isFullscreen() {
       return document.fullscreenElement === container
     },
     exitFullscreen() {
       if (document.fullscreenElement === container) void document.exitFullscreen()
+      windowFullscreenSet = false
+      void setWindowFullscreen(false)
     },
     codecInfo(): PlaybackCodecInfo {
       return {
@@ -717,9 +873,17 @@ export async function createMpvEmbeddedHandle(
     },
     dispose() {
       disposed = true
+      surfaceVisible = false
+      clearLiveEofTimers()
       clearLoadingIndicator()
       clearNativeVideoHole()
+      if (windowFullscreenSet) {
+        windowFullscreenSet = false
+        void setWindowFullscreen(false)
+      }
+      videoHiddenObserver?.disconnect()
       if (videoElement) videoElement.hidden = videoWasHidden
+      delete container.dataset.mpvEmbedded
       emitter.clear()
       engineEventListeners.clear()
       try { unlistenState() } catch (err) { log.warn("[xt:mpv-embed] unlisten state failed:", err) }

@@ -5,6 +5,8 @@ import {
   deriveEvents,
   buildLoadOptions,
   boundsEqual,
+  liveEofReloadDelayMs,
+  NATIVE_BOUNDS_INFLATE_CSS_PX,
 } from "../src/scripts/lib/mpv-embedded"
 
 describe("cssRectToPhysicalBounds", () => {
@@ -108,6 +110,34 @@ describe("cssRectToPhysicalBounds", () => {
     expect(
       cssRectToPhysicalBounds({ x: 0, y: 0, width: 100, height: 100, radius: "" }, 2),
     ).toEqual({ x: 0, y: 0, width: 200, height: 200, radius: 0 })
+  })
+
+  it("inflates the rect on every side by the given CSS px amount before scaling", () => {
+    expect(
+      cssRectToPhysicalBounds({ x: 10, y: 20, width: 300, height: 200 }, 1, 1),
+    ).toEqual({ x: 9, y: 19, width: 302, height: 202, radius: 0 })
+    expect(
+      cssRectToPhysicalBounds({ x: 10, y: 20, width: 300, height: 200 }, 2, NATIVE_BOUNDS_INFLATE_CSS_PX),
+    ).toEqual({ x: 18, y: 38, width: 604, height: 404, radius: 0 })
+  })
+
+  it("grows a positive radius by the inflate amount, but leaves a zero radius alone", () => {
+    expect(
+      cssRectToPhysicalBounds({ x: 0, y: 0, width: 100, height: 100, radius: "8px" }, 1, 1),
+    ).toEqual({ x: -1, y: -1, width: 102, height: 102, radius: 9 })
+    expect(
+      cssRectToPhysicalBounds({ x: 0, y: 0, width: 100, height: 100 }, 1, 1),
+    ).toEqual({ x: -1, y: -1, width: 102, height: 102, radius: 0 })
+  })
+
+  it("defaults to no inflation when the parameter is omitted", () => {
+    expect(cssRectToPhysicalBounds({ x: 10, y: 20, width: 300, height: 200 }, 1)).toEqual({
+      x: 10,
+      y: 20,
+      width: 300,
+      height: 200,
+      radius: 0,
+    })
   })
 })
 
@@ -272,5 +302,25 @@ describe("deriveEvents", () => {
     expect(
       deriveEvents({ coreIdle: true, pause: true }, { coreIdle: false, pause: false }),
     ).toEqual(["playing"])
+  })
+})
+
+describe("liveEofReloadDelayMs", () => {
+  it("backs off 1s, 2s, 4s, 8s, then 15s across the five allowed attempts", () => {
+    expect(liveEofReloadDelayMs(1)).toBe(1000)
+    expect(liveEofReloadDelayMs(2)).toBe(2000)
+    expect(liveEofReloadDelayMs(3)).toBe(4000)
+    expect(liveEofReloadDelayMs(4)).toBe(8000)
+    expect(liveEofReloadDelayMs(5)).toBe(15000)
+  })
+
+  it("returns null once the retry budget is exhausted", () => {
+    expect(liveEofReloadDelayMs(6)).toBe(null)
+    expect(liveEofReloadDelayMs(10)).toBe(null)
+  })
+
+  it("returns null for a non-positive attempt", () => {
+    expect(liveEofReloadDelayMs(0)).toBe(null)
+    expect(liveEofReloadDelayMs(-1)).toBe(null)
   })
 })

@@ -3377,6 +3377,21 @@ html[data-native-video="on"] #series-detail-player-wrap,
 html[data-native-video="on"] #receiver-player {
     background: transparent;
 }
+html[data-native-video="on"] [data-modal-ambient] {
+    visibility: hidden;
+}
+/* Fullscreen: UA ::backdrop is opaque black and the page paints over the transparent root. */
+html[data-native-video="on"] :fullscreen::backdrop {
+    background: transparent;
+}
+html[data-native-video="on"]:has(:fullscreen) body > :not(dialog) {
+    visibility: hidden;
+}
+html[data-native-video="on"] :fullscreen {
+    visibility: visible;
+    background: transparent;
+    border-radius: 0;
+}
 
 /* ────────────────────────────── */
 /* Embedded mpv control bar       */
