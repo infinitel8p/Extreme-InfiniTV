@@ -20,6 +20,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.OnBackPressedCallback
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.app.PictureInPictureParams
 import android.util.Log
 import android.util.Rational
@@ -1974,7 +1976,6 @@ class MainActivity : TauriActivity() {
 
   private var fullscreenView: View? = null
   private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
-  private var originalSystemUi: Int = 0
 
   // Cached so the back-press handler can call onHideCustomView without re-walking the view tree.
   private var hostedWebView: WebView? = null
@@ -2247,7 +2248,6 @@ class MainActivity : TauriActivity() {
           fullscreenCallback = callback
 
           val decor = window.decorView as FrameLayout
-          originalSystemUi = decor.systemUiVisibility
           decor.addView(
             view,
             FrameLayout.LayoutParams(
@@ -2255,21 +2255,31 @@ class MainActivity : TauriActivity() {
               ViewGroup.LayoutParams.MATCH_PARENT
             )
           )
-          decor.systemUiVisibility =
-            (View.SYSTEM_UI_FLAG_FULLSCREEN
-              or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-              or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY)
+          applyImmersiveBars(true)
         }
       },
       onHide = {
         val decor = window.decorView as FrameLayout
         fullscreenView?.let { decor.removeView(it) }
-        decor.systemUiVisibility = originalSystemUi
+        applyImmersiveBars(false)
         fullscreenCallback?.onCustomViewHidden()
         fullscreenView = null
         fullscreenCallback = null
       }
     )
+  }
+
+  // Legacy systemUiVisibility flags are ignored by HyperOS once the insets controller is in use.
+  private fun applyImmersiveBars(hidden: Boolean) {
+    val controller = WindowCompat.getInsetsController(window, window.decorView)
+    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    if (hidden) controller.hide(WindowInsetsCompat.Type.systemBars())
+    else controller.show(WindowInsetsCompat.Type.systemBars())
+  }
+
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    if (hasFocus && fullscreenView != null) applyImmersiveBars(true)
   }
 
   override fun onUserLeaveHint() {
@@ -2303,6 +2313,7 @@ class MainActivity : TauriActivity() {
       hostedWebView?.evaluateJavascript("window.__xtPipFullscreen?.()", null)
     } else {
       hostedWebView?.evaluateJavascript("window.__xtPipExitFullscreen?.()", null)
+      if (fullscreenView != null) applyImmersiveBars(true)
     }
   }
 

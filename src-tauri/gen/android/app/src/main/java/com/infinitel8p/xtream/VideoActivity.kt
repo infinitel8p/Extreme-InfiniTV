@@ -20,6 +20,9 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -167,6 +170,7 @@ class VideoActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_video)
+    applyImmersiveBars()
 
     playerView = findViewById(R.id.player_view)
     // A focused PlayerView swallows D-pad into media3's show-controller path and derails
@@ -505,6 +509,18 @@ class VideoActivity : AppCompatActivity() {
     if (Build.VERSION.SDK_INT in Build.VERSION_CODES.O..Build.VERSION_CODES.R) {
       enterPipNow()
     }
+  }
+
+  // windowFullscreen alone is ignored by HyperOS; hide at runtime as well.
+  private fun applyImmersiveBars() {
+    val controller = WindowCompat.getInsetsController(window, window.decorView)
+    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    controller.hide(WindowInsetsCompat.Type.systemBars())
+  }
+
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    if (hasFocus) applyImmersiveBars()
   }
 
   // ---------------------------------------------------------------------
@@ -951,6 +967,7 @@ class VideoActivity : AppCompatActivity() {
       hideChannelOverlay()
     } else {
       controls.useController = true
+      applyImmersiveBars()
     }
   }
 }
