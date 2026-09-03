@@ -54,12 +54,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, EnumChildWindows, GetClientRect, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, IsWindow, IsZoomed, RegisterClassExW, SendMessageW, SetParent,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GWL_STYLE, HTBOTTOM,
-    HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_BOTTOM,
-    SC_MAXIMIZE, SC_RESTORE, SW_HIDE, SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, WM_CLOSE, WM_KEYDOWN, WM_MOVE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_SIZE, WM_SIZING,
-    WM_SYSCOMMAND, WMSZ_BOTTOM,
+    GetWindowRect, GetWindowThreadProcessId, IsWindow, IsZoomed, NCCALCSIZE_PARAMS, RegisterClassExW,
+    SendMessageW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
+    GWL_STYLE, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
+    HWND_BOTTOM, SC_MAXIMIZE, SC_RESTORE, SW_HIDE, SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, WM_CLOSE, WM_KEYDOWN, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK,
+    WM_SIZE, WM_SIZING, WM_SYSCOMMAND, WMSZ_BOTTOM,
     WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT,
     WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
@@ -328,6 +328,9 @@ struct MpvSession {
     reader_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     // The popup HWND once created; distinct from `target.pip`, which is its desired geometry.
     pip_hwnd: Mutex<Option<isize>>,
+    // Serializes a whole apply_surface call against concurrent applies (see pip_exit).
+    surface_lock: tokio::sync::Mutex<()>,
+    last_applied: Mutex<Option<SurfaceSnapshot>>,
 }
 
 #[cfg(target_os = "windows")]
@@ -339,11 +342,29 @@ impl MpvSession {
 
 /// Latest `dwidth`/`dheight`/`panscan` observed from mpv; feeds `placement_for_bounds`.
 #[cfg(target_os = "windows")]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct VideoMetrics {
     dwidth: Option<f64>,
     dheight: Option<f64>,
     panscan: f64,
+}
+
+/// Everything an `apply_surface` call depends on, so a no-op call can be skipped entirely.
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SurfaceSnapshot {
+    state: SurfaceState,
+    bounds: Option<Bounds>,
+    pip: Option<PipGeometry>,
+    client_size: Option<(i32, i32)>,
+    pip_hwnd: Option<isize>,
+    surface_hwnd: isize,
+    metrics: VideoMetrics,
+}
+
+#[cfg(target_os = "windows")]
+fn surface_snapshot_matches(previous: &Option<SurfaceSnapshot>, current: &SurfaceSnapshot) -> bool {
+    previous.as_ref() == Some(current)
 }
 
 /// The frontend's desired surface state; `derive_surface_state` turns this into a `SurfaceState`.
@@ -913,6 +934,7 @@ fn resolve_mpv_window(session: &MpvSession) -> Option<isize> {
     send_to_bottom(found);
     let mut cached = session.mpv_hwnd.lock().unwrap_or_else(|poison| poison.into_inner());
     *cached = Some(found);
+    *session.last_applied.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
     Some(found)
 }
 
@@ -973,11 +995,9 @@ fn apply_surface_win32(
                 pip_hwnd_value.ok_or_else(|| "OTHER:pip surface state with no popup window".to_string())?;
             let pip_hwnd = HWND(pip_hwnd_value as *mut core::ffi::c_void);
             reparent_child(surface_value, pip_hwnd)?;
+            // The border is non-client area (WM_NCCALCSIZE), so the client rect is the video rect.
             if let Some((client_width, client_height)) = client_size(pip_hwnd) {
-                let inset = PIP_RESIZE_BORDER;
-                let width = (client_width - inset * 2).max(1);
-                let height = (client_height - inset * 2).max(1);
-                position_surface(surface_value, inset, inset, width, height)?;
+                position_surface(surface_value, 0, 0, client_width.max(1), client_height.max(1))?;
             }
             set_window_visibility(surface_value, true);
         }
@@ -1061,15 +1081,40 @@ fn emit_surface_event(app: &AppHandle, session: &MpvSession, state: SurfaceState
 /// The single place that computes and applies mpv's surface: parent, size, z-order, pointer
 /// mode, zoom/pan placement, visibility, in that order (pointer mode and placement are IPC and
 /// run after the Win32 part, on whichever thread called this). No-ops until mpv's window exists;
-/// `watch_for_mpv_window` wakes `placement_tx` once it is found, which reaches this too.
+/// `watch_for_mpv_window` wakes `placement_tx` once it is found, which reaches this too. Skips
+/// all Win32/IPC work when nothing changed since the last apply.
 #[cfg(target_os = "windows")]
 async fn apply_surface(app: &AppHandle, session: &Arc<MpvSession>) -> Result<(), String> {
+    let _surface_guard = session.surface_lock.lock().await;
+    apply_surface_locked(app, session).await
+}
+
+/// `apply_surface`'s body, assuming `surface_lock` is already held (see `pip_exit`).
+#[cfg(target_os = "windows")]
+async fn apply_surface_locked(app: &AppHandle, session: &Arc<MpvSession>) -> Result<(), String> {
     let Some(surface_value) = resolve_mpv_window(session) else {
         return Ok(());
     };
     let pip_hwnd_value = *session.pip_hwnd.lock().unwrap_or_else(|poison| poison.into_inner());
     let state = derive_surface_state(session.target.visible(), session.target.fullscreen(), pip_hwnd_value.is_some());
     let main_hwnd_value = session.parent_hwnd;
+    let bounds = session.target.bounds();
+    let metrics = session.video_metrics();
+    let read_hwnd_value = if matches!(state, SurfaceState::Pip) { pip_hwnd_value } else { Some(main_hwnd_value) };
+    let client_size_read = read_hwnd_value.and_then(|value| client_size(HWND(value as *mut core::ffi::c_void)));
+
+    let snapshot = SurfaceSnapshot {
+        state,
+        bounds,
+        pip: session.target.pip(),
+        client_size: client_size_read,
+        pip_hwnd: pip_hwnd_value,
+        surface_hwnd: surface_value,
+        metrics,
+    };
+    if surface_snapshot_matches(&session.last_applied.lock().unwrap_or_else(|poison| poison.into_inner()), &snapshot) {
+        return Ok(());
+    }
 
     run_on_main_thread_and_wait(app, move || {
         apply_surface_win32(main_hwnd_value, surface_value, state, pip_hwnd_value)
@@ -1089,9 +1134,8 @@ async fn apply_surface(app: &AppHandle, session: &Arc<MpvSession>) -> Result<(),
         VideoPlacement::CENTERED
     } else {
         let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
-        match (session.target.bounds(), client_size(main_hwnd)) {
+        match (bounds, client_size(main_hwnd)) {
             (Some(bounds), Some((client_width, client_height))) => {
-                let metrics = session.video_metrics();
                 placement_for_bounds(bounds, client_width, client_height, metrics.dwidth, metrics.dheight, metrics.panscan)
             }
             _ => VideoPlacement::CENTERED,
@@ -1102,6 +1146,7 @@ async fn apply_surface(app: &AppHandle, session: &Arc<MpvSession>) -> Result<(),
     }
 
     emit_surface_event(app, session, state);
+    *session.last_applied.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(snapshot);
     Ok(())
 }
 
@@ -1126,8 +1171,7 @@ const PIP_DEFAULT_WIDTH: i32 = 360;
 const PIP_MIN_WIDTH: i32 = 200;
 const PIP_MARGIN: i32 = 24;
 const PIP_DEFAULT_ASPECT: (f64, f64) = (16.0, 9.0);
-// Also mpv's inset from the popup edges, so the border strip (not covered by mpv) can be
-// hit-tested for resize; see apply_surface_win32's Pip branch.
+// Non-client resize border reserved via WM_NCCALCSIZE, so mpv's client rect fills the rest.
 const PIP_RESIZE_BORDER: i32 = 8;
 #[cfg(target_os = "windows")]
 const PIP_CLASS_NAME: &str = "XtreamMpvPip";
@@ -1230,6 +1274,23 @@ fn pip_hit_test(hwnd: HWND, lparam: LPARAM) -> LRESULT {
     LRESULT(code as isize)
 }
 
+// wParam TRUE carries an NCCALCSIZE_PARAMS, FALSE a plain RECT; shrink either by the border.
+#[cfg(target_os = "windows")]
+fn pip_calc_client_rect(wparam: WPARAM, lparam: LPARAM) {
+    let border = PIP_RESIZE_BORDER;
+    let rect = if wparam.0 != 0 {
+        let Some(params) = (unsafe { (lparam.0 as *mut NCCALCSIZE_PARAMS).as_mut() }) else { return };
+        &mut params.rgrc[0]
+    } else {
+        let Some(rect) = (unsafe { (lparam.0 as *mut RECT).as_mut() }) else { return };
+        rect
+    };
+    rect.left += border;
+    rect.top += border;
+    rect.right -= border;
+    rect.bottom -= border;
+}
+
 // Only one session/popup exists at a time, so the current video's aspect can be read straight
 // off the global session lookup instead of threading per-window state through the wndproc.
 #[cfg(target_os = "windows")]
@@ -1251,15 +1312,20 @@ fn current_pip_aspect() -> (f64, f64) {
 fn pip_apply_aspect_lock(wparam: WPARAM, lparam: LPARAM) {
     let Some(rect) = (unsafe { (lparam.0 as *mut RECT).as_mut() }) else { return };
     let (aspect_w, aspect_h) = current_pip_aspect();
+    let border = PIP_RESIZE_BORDER;
     let edge = wparam.0 as u32;
-    let mut width = (rect.right - rect.left).max(PIP_MIN_WIDTH);
-    let height;
+    let min_client_width = (PIP_MIN_WIDTH - border * 2).max(1);
+    let mut client_width = (rect.right - rect.left - border * 2).max(min_client_width);
+    let client_height;
     if matches!(edge, WMSZ_TOP | WMSZ_BOTTOM) {
-        height = (rect.bottom - rect.top).max((PIP_MIN_WIDTH as f64 * aspect_h / aspect_w).round() as i32);
-        width = (height as f64 * aspect_w / aspect_h).round() as i32;
+        let min_client_height = (min_client_width as f64 * aspect_h / aspect_w).round() as i32;
+        client_height = (rect.bottom - rect.top - border * 2).max(min_client_height.max(1));
+        client_width = (client_height as f64 * aspect_w / aspect_h).round() as i32;
     } else {
-        height = (width as f64 * aspect_h / aspect_w).round() as i32;
+        client_height = (client_width as f64 * aspect_h / aspect_w).round() as i32;
     }
+    let width = client_width + border * 2;
+    let height = client_height + border * 2;
     if matches!(edge, WMSZ_LEFT | WMSZ_TOPLEFT | WMSZ_BOTTOMLEFT) {
         rect.left = rect.right - width;
     } else {
@@ -1294,10 +1360,9 @@ fn pip_on_resized(hwnd: HWND) {
         return;
     }
     if let Some(surface_value) = resolve_mpv_window(&session) {
-        let inset = PIP_RESIZE_BORDER;
-        let width = (client_rect.right - client_rect.left - inset * 2).max(1);
-        let height = (client_rect.bottom - client_rect.top - inset * 2).max(1);
-        let _ = position_surface(surface_value, inset, inset, width, height);
+        let width = (client_rect.right - client_rect.left).max(1);
+        let height = (client_rect.bottom - client_rect.top).max(1);
+        let _ = position_surface(surface_value, 0, 0, width, height);
     }
     let geometry = PipGeometry {
         x: window_rect.left,
@@ -1320,6 +1385,10 @@ fn pip_on_resized(hwnd: HWND) {
 unsafe extern "system" fn pip_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_NCHITTEST => pip_hit_test(hwnd, lparam),
+        WM_NCCALCSIZE => {
+            pip_calc_client_rect(wparam, lparam);
+            LRESULT(0)
+        }
         WM_SIZING => {
             pip_apply_aspect_lock(wparam, lparam);
             LRESULT(1)
@@ -1389,8 +1458,8 @@ fn work_area_for_window(hwnd: HWND) -> WorkArea {
     }
 }
 
-// Resizable, so no WS_THICKFRAME (would need WM_NCCALCSIZE to hide its frame); hit-testing is
-// manual instead (see pip_hit_test). No WS_EX_NOACTIVATE: the popup must take focus for Escape.
+// WS_THICKFRAME + WM_NCCALCSIZE reserve the border; hit-testing stays manual (see pip_hit_test).
+// No WS_EX_NOACTIVATE: the popup must take focus for Escape.
 #[cfg(target_os = "windows")]
 fn create_pip_window(owner: HWND, geometry: &PipGeometry) -> Result<isize, String> {
     ensure_pip_class_registered();
@@ -1401,7 +1470,7 @@ fn create_pip_window(owner: HWND, geometry: &PipGeometry) -> Result<isize, Strin
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             PCWSTR(class_name.as_ptr()),
             PCWSTR::null(),
-            WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN,
+            WS_POPUP | WS_THICKFRAME | WS_VISIBLE | WS_CLIPCHILDREN,
             geometry.x,
             geometry.y,
             geometry.width,
@@ -1441,6 +1510,7 @@ fn reparent_child(hwnd_value: isize, new_parent: HWND) -> Result<(), String> {
 fn schedule_surface_teardown(app: &AppHandle, session: &MpvSession) {
     session.target.set_visible(false);
     session.target.set_pip(None);
+    *session.last_applied.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
     let pip_hwnd_value = session.pip_hwnd.lock().unwrap_or_else(|poison| poison.into_inner()).take();
     if let Some(surface_value) = resolve_mpv_window(session) {
         let main_hwnd_value = session.parent_hwnd;
@@ -1507,10 +1577,14 @@ async fn pip_exit(app: AppHandle, state: State<'_, MpvEmbedState>, session_id: S
     if !should_exit_pip(pip_active(&session)) {
         return Ok(());
     }
-    session.target.set_pip(None);
-    apply_surface(&app, &session).await?;
-
-    let pip_hwnd_value = session.pip_hwnd.lock().unwrap_or_else(|poison| poison.into_inner()).take();
+    // Locked: a concurrent apply must not reparent mpv into a popup about to be destroyed.
+    let pip_hwnd_value = {
+        let _surface_guard = session.surface_lock.lock().await;
+        session.target.set_pip(None);
+        let pip_hwnd_value = session.pip_hwnd.lock().unwrap_or_else(|poison| poison.into_inner()).take();
+        apply_surface_locked(&app, &session).await?;
+        pip_hwnd_value
+    };
     if let Some(pip_hwnd_value) = pip_hwnd_value {
         run_on_main_thread_and_wait(&app, move || destroy_pip_window(pip_hwnd_value)).await?;
     }
@@ -1643,6 +1717,7 @@ async fn set_window_fullscreen(app: AppHandle, enabled: bool) -> Result<(), Stri
     };
     if let Some(session) = session {
         session.target.set_fullscreen(enabled);
+        *session.last_applied.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
         if let Err(error) = apply_surface(&app, &session).await {
             log::warn!(
                 "[mpv-embed] session {} failed to apply surface after fullscreen toggle: {error}",
@@ -1935,6 +2010,8 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
         torn_down: AtomicBool::new(false),
         reader_task: Mutex::new(None),
         pip_hwnd: Mutex::new(None),
+        surface_lock: tokio::sync::Mutex::new(()),
+        last_applied: Mutex::new(None),
     });
 
     let reader_handle = tauri::async_runtime::spawn(run_reader(
@@ -2762,6 +2839,26 @@ mod tests {
         assert!(!target.visible());
         assert!(target.fullscreen());
         assert_eq!(target.pip(), Some(pip));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn surface_snapshot_matches_is_true_only_for_an_identical_previous_snapshot() {
+        let snapshot = SurfaceSnapshot {
+            state: SurfaceState::Embedded,
+            bounds: Some(Bounds { x: 0, y: 0, width: 100, height: 100, radius: 0 }),
+            pip: None,
+            client_size: Some((640, 360)),
+            pip_hwnd: None,
+            surface_hwnd: 42,
+            metrics: VideoMetrics::default(),
+        };
+        assert!(!surface_snapshot_matches(&None, &snapshot));
+        assert!(surface_snapshot_matches(&Some(snapshot), &snapshot));
+
+        let mut changed = snapshot;
+        changed.client_size = Some((1280, 720));
+        assert!(!surface_snapshot_matches(&Some(snapshot), &changed));
     }
 
     #[cfg(target_os = "windows")]

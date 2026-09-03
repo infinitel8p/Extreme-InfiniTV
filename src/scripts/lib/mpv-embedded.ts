@@ -691,11 +691,12 @@ export async function createMpvEmbeddedHandle(
   // See native-video-hole-contract.md: the webview must cut a transparent hole for the video below it.
   // Owner stamp: a stale handle's dispose() can't clear a hole it no longer owns.
   function clearNativeVideoHole(): void {
+    // Resetting on an already-closed hole re-pushes bounds and loops through xt:mpv-surface.
     if (document.documentElement.getAttribute("data-native-video-owner") === sessionId) {
       document.documentElement.removeAttribute("data-native-video")
       document.documentElement.removeAttribute("data-native-video-owner")
+      resetBoundsCache()
     }
-    resetBoundsCache()
   }
   function publishNativeVideoHole(cssRect: { x: number; y: number; width: number; height: number; radius?: string }): void {
     document.documentElement.setAttribute("data-native-video", "on")
