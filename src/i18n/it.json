@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "Ritardo sottotitoli {value}",
   "player.audio": "Audio",
   "player.audio.switchFailed": "Impossibile cambiare la traccia audio - tornato all'audio originale",
+  "player.pip.playingInPip": "Riproduzione in Picture-in-Picture",
   "player.stats.title": "Statistiche di riproduzione",
   "player.stats.on": "Statistiche di riproduzione attive",
   "player.stats.off": "Statistiche di riproduzione disattivate",

@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "字幕の遅延 {value}",
   "player.audio": "音声",
   "player.audio.switchFailed": "音声トラックを切り替えられませんでした - 元の音声に戻しました",
+  "player.pip.playingInPip": "ピクチャー イン ピクチャーで再生中",
   "player.stats.title": "再生統計",
   "player.stats.on": "再生統計をオンにしました",
   "player.stats.off": "再生統計をオフにしました",

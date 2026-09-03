@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 #[cfg(target_os = "windows")]
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 #[cfg(target_os = "windows")]
 use std::collections::HashMap;
@@ -18,7 +18,7 @@ use std::process::Stdio;
 #[cfg(target_os = "windows")]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(target_os = "windows")]
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 #[cfg(target_os = "windows")]
 use std::time::Instant;
 
@@ -47,10 +47,13 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, EnumChildWindows, GetClientRect, GetWindowLongPtrW,
-    GetWindowThreadProcessId, IsWindow, RegisterClassExW, SetParent, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, CS_HREDRAW, CS_VREDRAW, GWL_STYLE, HWND_BOTTOM, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+    GetWindowRect, GetWindowThreadProcessId, IsWindow, IsZoomed, RegisterClassExW, SendMessageW, SetParent,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE, GWL_STYLE,
+    HTCAPTION, HWND_BOTTOM, SC_MAXIMIZE, SC_RESTORE, SW_HIDE, SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WM_CLOSE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_SYSCOMMAND,
+    WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_NOACTIVATE,
+    WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_POPUP,
+    WS_THICKFRAME, WS_VISIBLE,
 };
 
 #[cfg(target_os = "windows")]
@@ -63,6 +66,8 @@ const MPV_IPC_TIMEOUT: Duration = Duration::from_secs(5);
 const MPV_WINDOW_POLL_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(target_os = "windows")]
 const MPV_WINDOW_POLL_BUDGET: Duration = Duration::from_secs(30);
+#[cfg(target_os = "windows")]
+const MAIN_THREAD_CALL_TIMEOUT: Duration = Duration::from_secs(5);
 
 const TIME_POS_MIN_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -89,6 +94,9 @@ const OBSERVED_PROPERTIES: &[&str] = &[
     "sub-delay",
     "aid",
     "sid",
+    "dwidth",
+    "dheight",
+    "panscan",
 ];
 
 // ---------------------------------------------------------------------------
@@ -115,34 +123,78 @@ pub struct Bounds {
     pub radius: i32,
 }
 
-/// mpv's `video-margin-ratio-*` insets, each a fraction of the window's client size.
+/// mpv's `video-zoom` (log2 scale) and `video-pan-x/y` (fraction of the scaled size).
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct VideoMargins {
-    left: f64,
-    right: f64,
-    top: f64,
-    bottom: f64,
+struct VideoPlacement {
+    zoom: f64,
+    pan_x: f64,
+    pan_y: f64,
 }
 
-impl VideoMargins {
-    const ZERO: VideoMargins = VideoMargins { left: 0.0, right: 0.0, top: 0.0, bottom: 0.0 };
+impl VideoPlacement {
+    const CENTERED: VideoPlacement = VideoPlacement { zoom: 0.0, pan_x: 0.0, pan_y: 0.0 };
 }
 
-/// Places `bounds` inside a `client_width` x `client_height` window as inset ratios.
-fn margins_for_bounds(bounds: Bounds, client_width: i32, client_height: i32) -> VideoMargins {
-    if client_width <= 0 || client_height <= 0 {
-        return VideoMargins::ZERO;
+// mpv's contain-fit of (src_w, src_h) into (box_w, box_h), blended toward cover by `panscan`.
+// Mirrors mpv's aspect_calc_panscan (video/out/aspect.c) for a square-pixel monitor, no `unscaled`.
+fn panscan_fit(src_w: f64, src_h: f64, box_w: f64, box_h: f64, panscan: f64) -> (f64, f64) {
+    if src_w <= 0.0 || src_h <= 0.0 || box_w <= 0.0 || box_h <= 0.0 {
+        return (box_w.max(0.0), box_h.max(0.0));
     }
-    let width = client_width as f64;
-    let height = client_height as f64;
-    let left = (bounds.x as f64 / width).clamp(0.0, 1.0);
-    let top = (bounds.y as f64 / height).clamp(0.0, 1.0);
-    let right = ((width - (bounds.x as f64 + bounds.width as f64)) / width).clamp(0.0, 1.0);
-    let bottom = ((height - (bounds.y as f64 + bounds.height as f64)) / height).clamp(0.0, 1.0);
-    if left + right >= 1.0 || top + bottom >= 1.0 {
-        return VideoMargins::ZERO;
+    let mut fit_w = box_w;
+    let mut fit_h = box_w / src_w * src_h;
+    if fit_h > box_h {
+        fit_h = box_h;
+        fit_w = box_h / src_h * src_w;
     }
-    VideoMargins { left, right, top, bottom }
+    let mut panscan_area = box_h - fit_h;
+    let (mut factor_w, mut factor_h) = (fit_w / fit_h.max(1.0), 1.0);
+    if panscan_area == 0.0 {
+        panscan_area = box_w - fit_w;
+        factor_w = 1.0;
+        factor_h = fit_h / fit_w.max(1.0);
+    }
+    (fit_w + panscan_area * panscan * factor_w, fit_h + panscan_area * panscan * factor_h)
+}
+
+/// Keeps the video at the size it would render at (dw, dh) inside `bounds`, centered on that
+/// box, and lets the window clip it instead of shrinking it to fit (unlike margin ratios, which
+/// can only describe a box inside the window and so shrink the picture once `bounds` scrolls off).
+fn placement_for_bounds(
+    bounds: Bounds,
+    client_width: i32,
+    client_height: i32,
+    video_dw: Option<f64>,
+    video_dh: Option<f64>,
+    panscan: f64,
+) -> VideoPlacement {
+    if client_width <= 0 || client_height <= 0 || bounds.width <= 0 || bounds.height <= 0 {
+        return VideoPlacement::CENTERED;
+    }
+    let client_w = client_width as f64;
+    let client_h = client_height as f64;
+    let box_w = bounds.width as f64;
+    let box_h = bounds.height as f64;
+    // No video loaded yet: assume the box's own aspect so the black surface still lands in it.
+    let (src_w, src_h) = match (video_dw, video_dh) {
+        (Some(dw), Some(dh)) if dw > 0.0 && dh > 0.0 => (dw, dh),
+        _ => (box_w, box_h),
+    };
+
+    let (scaled_w, scaled_h) = panscan_fit(src_w, src_h, box_w, box_h, panscan);
+    let (base_w, base_h) = panscan_fit(src_w, src_h, client_w, client_h, panscan);
+    if scaled_w <= 0.0 || scaled_h <= 0.0 || base_w <= 0.0 || base_h <= 0.0 {
+        return VideoPlacement::CENTERED;
+    }
+
+    // Aspect is preserved by panscan_fit, so scaled_h/base_h gives the same ratio; either works.
+    let zoom = (scaled_w / base_w).log2();
+    let center_x = bounds.x as f64 + box_w / 2.0;
+    let center_y = bounds.y as f64 + box_h / 2.0;
+    let pan_x = (center_x - client_w / 2.0) / scaled_w;
+    let pan_y = (center_y - client_h / 2.0) / scaled_h;
+
+    VideoPlacement { zoom: zoom.clamp(-20.0, 20.0), pan_x: pan_x.clamp(-3.0, 3.0), pan_y: pan_y.clamp(-3.0, 3.0) }
 }
 
 #[derive(Debug, Serialize)]
@@ -177,11 +229,22 @@ pub struct MpvEmbedStatus {
 #[derive(Default)]
 pub struct MpvEmbedState {
     session: Mutex<Option<Arc<MpvSession>>>,
+    fullscreen: Mutex<Option<SavedWindowState>>,
 }
 
 #[cfg(not(target_os = "windows"))]
 #[derive(Default)]
 pub struct MpvEmbedState;
+
+/// Window state saved on entering native fullscreen, restored on exit.
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy)]
+struct SavedWindowState {
+    style: isize,
+    ex_style: isize,
+    rect: RECT,
+    maximized: bool,
+}
 
 #[cfg(target_os = "windows")]
 struct MpvSession {
@@ -190,13 +253,30 @@ struct MpvSession {
     parent_hwnd: isize,
     mpv_hwnd: Mutex<Option<isize>>,
     desired: DesiredState,
-    margin_tx: tokio::sync::watch::Sender<Option<Bounds>>,
+    video_metrics: Mutex<VideoMetrics>,
+    placement_tx: tokio::sync::watch::Sender<()>,
     ipc: Arc<MpvIpcClient>,
     child: tokio::sync::Mutex<Option<Child>>,
     kill_notify: Notify,
     torn_down: AtomicBool,
     reader_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pip: Mutex<Option<isize>>,
+}
+
+#[cfg(target_os = "windows")]
+impl MpvSession {
+    fn video_metrics(&self) -> VideoMetrics {
+        *self.video_metrics.lock().unwrap_or_else(|poison| poison.into_inner())
+    }
+}
+
+/// Latest `dwidth`/`dheight`/`panscan` observed from mpv; feeds `placement_for_bounds`.
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, Default)]
+struct VideoMetrics {
+    dwidth: Option<f64>,
+    dheight: Option<f64>,
+    panscan: f64,
 }
 
 /// Bounds/visibility requested by the frontend; also what PiP exit restores to.
@@ -346,7 +426,7 @@ fn is_retryable_pipe_error(error: &std::io::Error) -> bool {
 #[cfg(target_os = "windows")]
 async fn run_reader(
     app: AppHandle,
-    session_id: String,
+    session: Arc<MpvSession>,
     mut reader: BufReader<ReadHalf<NamedPipeClient>>,
     ipc: Arc<MpvIpcClient>,
     emit_state: Arc<PropertyEmitState>,
@@ -366,7 +446,7 @@ async fn run_reader(
                         let _ = sender.send(value);
                     }
                 }
-                MpvIpcFrame::Event(value) => handle_mpv_event(&app, &session_id, &emit_state, &value),
+                MpvIpcFrame::Event(value) => handle_mpv_event(&app, &session, &emit_state, &value),
                 MpvIpcFrame::Unknown => {}
             },
         }
@@ -453,13 +533,33 @@ fn record_property_change(
     }
 }
 
+// Updates the metrics the placement task reads and wakes it, unless PiP owns placement for now.
 #[cfg(target_os = "windows")]
-fn handle_mpv_event(app: &AppHandle, session_id: &str, emit_state: &PropertyEmitState, parsed: &Value) {
+fn update_video_metrics(session: &Arc<MpvSession>, name: &str, value: &Value) {
+    {
+        let mut metrics = session.video_metrics.lock().unwrap_or_else(|poison| poison.into_inner());
+        match name {
+            "dwidth" => metrics.dwidth = value.as_f64(),
+            "dheight" => metrics.dheight = value.as_f64(),
+            "panscan" => metrics.panscan = value.as_f64().unwrap_or(0.0),
+            _ => {}
+        }
+    }
+    if !pip_active(session) {
+        let _ = session.placement_tx.send(());
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn handle_mpv_event(app: &AppHandle, session: &Arc<MpvSession>, emit_state: &PropertyEmitState, parsed: &Value) {
     let event_name = parsed.get("event").and_then(Value::as_str).unwrap_or("");
     if event_name == "property-change" {
         let Some(name) = parsed.get("name").and_then(Value::as_str) else { return };
         let value = parsed.get("data").cloned().unwrap_or(Value::Null);
-        record_property_change(app, session_id, emit_state, name, value);
+        if matches!(name, "dwidth" | "dheight" | "panscan") {
+            update_video_metrics(session, name, &value);
+        }
+        record_property_change(app, &session.session_id, emit_state, name, value);
         return;
     }
     let kind = match event_name {
@@ -475,7 +575,7 @@ fn handle_mpv_event(app: &AppHandle, session_id: &str, emit_state: &PropertyEmit
         .map(str::to_string);
     let _ = app.emit(
         "xt:mpv-event",
-        json!({ "sessionId": session_id, "kind": kind, "reason": reason, "detail": detail }),
+        json!({ "sessionId": session.session_id, "kind": kind, "reason": reason, "detail": detail }),
     );
 }
 
@@ -740,7 +840,7 @@ fn set_window_visibility(hwnd_value: isize, visible: bool) {
     }
 }
 
-/// Records the requested bounds and, outside PiP, pushes them to the margin-update task.
+/// Records the requested bounds and, outside PiP, wakes the placement task.
 #[cfg(target_os = "windows")]
 fn record_and_apply_bounds(session: &Arc<MpvSession>, bounds: Bounds) -> Result<(), String> {
     session.desired.set_bounds(bounds);
@@ -748,12 +848,14 @@ fn record_and_apply_bounds(session: &Arc<MpvSession>, bounds: Bounds) -> Result<
     if pip_active(session) {
         return Ok(());
     }
-    let _ = session.margin_tx.send(Some(bounds));
+    let _ = session.placement_tx.send(());
     Ok(())
 }
 
-fn margin_inputs_unchanged(cached: Option<(Bounds, i32, i32)>, bounds: Bounds, client_width: i32, client_height: i32) -> bool {
-    cached == Some((bounds, client_width, client_height))
+type PlacementInputs = (Bounds, i32, i32, Option<f64>, Option<f64>, f64);
+
+fn placement_inputs_unchanged(cached: Option<PlacementInputs>, inputs: PlacementInputs) -> bool {
+    cached == Some(inputs)
 }
 
 // A miss here is cosmetic: the next set_visible/set_bounds call (or PiP) retries the lookup.
@@ -776,41 +878,65 @@ fn client_size(hwnd: HWND) -> Option<(i32, i32)> {
     Some((rect.right - rect.left, rect.bottom - rect.top))
 }
 
+// Zeroed once at session start: placement uses video-zoom/video-pan-* exclusively from then on.
 #[cfg(target_os = "windows")]
-async fn apply_margins(ipc: &MpvIpcClient, margins: VideoMargins) -> Result<(), String> {
-    for (name, value) in [
-        ("video-margin-ratio-left", margins.left),
-        ("video-margin-ratio-right", margins.right),
-        ("video-margin-ratio-top", margins.top),
-        ("video-margin-ratio-bottom", margins.bottom),
-    ] {
-        ipc.send_request(json!({ "command": ["set_property", name, value] }), MPV_IPC_TIMEOUT).await?;
-    }
+async fn initialize_video_placement(ipc: &MpvIpcClient) -> Result<(), String> {
+    let (margin_left, margin_right, margin_top, margin_bottom, align_x, align_y) = tokio::join!(
+        ipc.send_request(json!({ "command": ["set_property", "video-margin-ratio-left", 0.0] }), MPV_IPC_TIMEOUT),
+        ipc.send_request(json!({ "command": ["set_property", "video-margin-ratio-right", 0.0] }), MPV_IPC_TIMEOUT),
+        ipc.send_request(json!({ "command": ["set_property", "video-margin-ratio-top", 0.0] }), MPV_IPC_TIMEOUT),
+        ipc.send_request(json!({ "command": ["set_property", "video-margin-ratio-bottom", 0.0] }), MPV_IPC_TIMEOUT),
+        ipc.send_request(json!({ "command": ["set_property", "video-align-x", 0.0] }), MPV_IPC_TIMEOUT),
+        ipc.send_request(json!({ "command": ["set_property", "video-align-y", 0.0] }), MPV_IPC_TIMEOUT),
+    );
+    margin_left?;
+    margin_right?;
+    margin_top?;
+    margin_bottom?;
+    align_x?;
+    align_y?;
     Ok(())
 }
 
-/// One task per session; a rapid burst of bounds pushes collapses to just the latest value.
-/// Exits on its own once `margin_tx` (owned by the session) drops and closes the channel.
 #[cfg(target_os = "windows")]
-async fn run_margin_updates(
-    ipc: Arc<MpvIpcClient>,
-    session_id: String,
-    parent_hwnd: isize,
-    mut margin_rx: tokio::sync::watch::Receiver<Option<Bounds>>,
-) {
-    let mut last_applied: Option<(Bounds, i32, i32)> = None;
-    while margin_rx.changed().await.is_ok() {
-        let Some(bounds) = *margin_rx.borrow_and_update() else { continue };
-        let parent = HWND(parent_hwnd as *mut core::ffi::c_void);
-        let Some((client_width, client_height)) = client_size(parent) else { continue };
-        if margin_inputs_unchanged(last_applied, bounds, client_width, client_height) {
+// send_request releases the writer lock right after its own write, before awaiting the reply,
+// so joining three calls costs one write burst plus the slowest reply instead of three round trips.
+async fn apply_placement(ipc: &MpvIpcClient, placement: VideoPlacement) -> Result<(), String> {
+    let (zoom, pan_x, pan_y) = tokio::join!(
+        ipc.send_request(json!({ "command": ["set_property", "video-zoom", placement.zoom] }), MPV_IPC_TIMEOUT),
+        ipc.send_request(json!({ "command": ["set_property", "video-pan-x", placement.pan_x] }), MPV_IPC_TIMEOUT),
+        ipc.send_request(json!({ "command": ["set_property", "video-pan-y", placement.pan_y] }), MPV_IPC_TIMEOUT),
+    );
+    zoom?;
+    pan_x?;
+    pan_y?;
+    Ok(())
+}
+
+/// One task per session; a rapid burst of triggers (bounds, resize, mpv metrics) collapses to
+/// the latest inputs. Holds a `Weak` ref so it can't keep the session alive by itself: once the
+/// session drops, `placement_tx` closes, `changed()` errors, and the loop ends on its own.
+#[cfg(target_os = "windows")]
+async fn run_placement_updates(session: Weak<MpvSession>, mut trigger_rx: tokio::sync::watch::Receiver<()>) {
+    let mut last_applied: Option<PlacementInputs> = None;
+    while trigger_rx.changed().await.is_ok() {
+        let Some(session) = session.upgrade() else { return };
+        if pip_active(&session) {
             continue;
         }
-        let margins = margins_for_bounds(bounds, client_width, client_height);
-        log::debug!("[mpv-embed] session {session_id} applying margins {margins:?} for bounds {bounds:?}");
-        match apply_margins(&ipc, margins).await {
-            Ok(()) => last_applied = Some((bounds, client_width, client_height)),
-            Err(error) => log::warn!("[mpv-embed] session {session_id} failed to apply video margins: {error}"),
+        let Some(bounds) = session.desired.bounds() else { continue };
+        let parent = HWND(session.parent_hwnd as *mut core::ffi::c_void);
+        let Some((client_width, client_height)) = client_size(parent) else { continue };
+        let metrics = session.video_metrics();
+        let inputs = (bounds, client_width, client_height, metrics.dwidth, metrics.dheight, metrics.panscan);
+        if placement_inputs_unchanged(last_applied, inputs) {
+            continue;
+        }
+        let placement = placement_for_bounds(bounds, client_width, client_height, metrics.dwidth, metrics.dheight, metrics.panscan);
+        log::debug!("[mpv-embed] session {} applying placement {placement:?} for bounds {bounds:?}", session.session_id);
+        match apply_placement(&session.ipc, placement).await {
+            Ok(()) => last_applied = Some(inputs),
+            Err(error) => log::warn!("[mpv-embed] session {} failed to apply video placement: {error}", session.session_id),
         }
     }
 }
@@ -825,6 +951,10 @@ const PIP_MARGIN: i32 = 24;
 const PIP_DEFAULT_ASPECT: (f64, f64) = (16.0, 9.0);
 #[cfg(target_os = "windows")]
 const PIP_CLASS_NAME: &str = "XtreamMpvPip";
+
+// The wndproc has no AppHandle of its own; set once, from the main thread, in start_session.
+#[cfg(target_os = "windows")]
+static APP_HANDLE_FOR_PIP: OnceLock<AppHandle> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct WorkArea {
@@ -874,9 +1004,33 @@ fn wide_null(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+// Whole-surface drag (HTCAPTION) plus double-click / close both requesting a PiP exit, since
+// mpv's own window covers the client area and the popup has no title bar of its own to click.
 #[cfg(target_os = "windows")]
-unsafe extern "system" fn passthrough_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+unsafe extern "system" fn pip_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    match msg {
+        WM_NCHITTEST => LRESULT(HTCAPTION as isize),
+        WM_NCLBUTTONDBLCLK | WM_CLOSE => {
+            request_pip_exit_from_wndproc();
+            LRESULT(0)
+        }
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+// Fire-and-forget: the wndproc runs on the main thread and must not block it awaiting pip_exit.
+#[cfg(target_os = "windows")]
+fn request_pip_exit_from_wndproc() {
+    let Some(app) = APP_HANDLE_FOR_PIP.get().cloned() else { return };
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<MpvEmbedState>();
+        let session_id = {
+            let guard = state.session.lock().unwrap_or_else(|poison| poison.into_inner());
+            guard.as_ref().map(|session| session.session_id.clone())
+        };
+        let Some(session_id) = session_id else { return };
+        let _ = pip_exit(app.clone(), state, session_id).await;
+    });
 }
 
 #[cfg(target_os = "windows")]
@@ -888,7 +1042,7 @@ fn ensure_pip_class_registered() {
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(passthrough_wnd_proc),
+            lpfnWndProc: Some(pip_wnd_proc),
             hInstance: instance,
             lpszClassName: PCWSTR(class_name.as_ptr()),
             ..Default::default()
@@ -947,15 +1101,6 @@ fn destroy_pip_window(hwnd_value: isize) {
     }
 }
 
-/// Idempotent teardown hook: safe to call whether or not the session is in PiP.
-#[cfg(target_os = "windows")]
-fn destroy_pip_window_if_active(session: &MpvSession) {
-    let pip_hwnd_value = session.pip.lock().unwrap_or_else(|poison| poison.into_inner()).take();
-    if let Some(value) = pip_hwnd_value {
-        destroy_pip_window(value);
-    }
-}
-
 #[cfg(target_os = "windows")]
 fn reparent_child(hwnd_value: isize, new_parent: HWND) -> Result<(), String> {
     let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
@@ -974,6 +1119,65 @@ fn fill_pip_child(hwnd_value: isize, width: i32, height: i32) {
     if let Err(error) = unsafe { SetWindowPos(hwnd, None, 0, 0, width, height, SWP_NOZORDER | SWP_NOACTIVATE) } {
         log::warn!("[mpv-embed] failed to fit the mpv window into the PiP window: {error}");
     }
+}
+
+// mpv's window covers the whole popup client area and would eat the drag/close hit-testing.
+#[cfg(target_os = "windows")]
+fn set_click_through(hwnd_value: isize, enabled: bool) {
+    let hwnd = HWND(hwnd_value as *mut core::ffi::c_void);
+    unsafe {
+        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let updated =
+            if enabled { current | (WS_EX_TRANSPARENT.0 as isize) } else { current & !(WS_EX_TRANSPARENT.0 as isize) };
+        if updated != current {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, updated);
+        }
+    }
+}
+
+// Runs entirely on the main thread: creating, reparenting, and showing all touch window state
+// the popup's owning thread must pump, which a Tokio worker thread never does.
+#[cfg(target_os = "windows")]
+fn enter_pip_on_main_thread(main_hwnd_value: isize, surface_value: isize, geometry: Bounds) -> Result<isize, String> {
+    let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
+    let pip_hwnd_value = create_pip_window(main_hwnd, &geometry)?;
+    let pip_hwnd = HWND(pip_hwnd_value as *mut core::ffi::c_void);
+    if let Err(error) = reparent_child(surface_value, pip_hwnd) {
+        destroy_pip_window(pip_hwnd_value);
+        return Err(error);
+    }
+    fill_pip_child(surface_value, geometry.width, geometry.height);
+    set_click_through(surface_value, true);
+    set_window_visibility(surface_value, true);
+    Ok(pip_hwnd_value)
+}
+
+#[cfg(target_os = "windows")]
+fn exit_pip_on_main_thread(main_hwnd_value: isize, surface_value: Option<isize>, pip_hwnd_value: isize) {
+    if let Some(surface_value) = surface_value {
+        let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
+        if let Err(error) = reparent_child(surface_value, main_hwnd) {
+            log::warn!("[mpv-embed] failed to reparent the mpv window back to the main window: {error}");
+        }
+        send_to_bottom(surface_value);
+        set_click_through(surface_value, false);
+    }
+    destroy_pip_window(pip_hwnd_value);
+}
+
+/// Idempotent teardown hook: safe to call whether or not the session is in PiP.
+#[cfg(target_os = "windows")]
+fn destroy_pip_window_if_active(app: &AppHandle, session: &MpvSession) {
+    let pip_hwnd_value = session.pip.lock().unwrap_or_else(|poison| poison.into_inner()).take();
+    let Some(pip_hwnd_value) = pip_hwnd_value else { return };
+    let surface_value = resolve_mpv_window(session);
+    let main_hwnd_value = session.parent_hwnd;
+    if let Err(error) =
+        app.run_on_main_thread(move || exit_pip_on_main_thread(main_hwnd_value, surface_value, pip_hwnd_value))
+    {
+        log::warn!("[mpv-embed] failed to schedule PiP teardown: {error}");
+    }
+    let _ = app.emit("xt:mpv-pip-changed", json!({ "sessionId": session.session_id, "active": false }));
 }
 
 #[cfg(target_os = "windows")]
@@ -1003,26 +1207,25 @@ async fn pip_enter(app: AppHandle, state: State<'_, MpvEmbedState>, session_id: 
     let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
     let geometry = pip_default_geometry(aspect_from_dimensions(width, height), work_area_for_window(main_hwnd));
 
-    let pip_hwnd_value = create_pip_window(main_hwnd, &geometry)?;
-    let pip_hwnd = HWND(pip_hwnd_value as *mut core::ffi::c_void);
-    if let Err(error) = reparent_child(surface_value, pip_hwnd) {
-        destroy_pip_window(pip_hwnd_value);
-        return Err(error);
-    }
-    fill_pip_child(surface_value, geometry.width, geometry.height);
-    // Zeroed so mpv draws across the whole popup instead of an inset sized for the main window.
-    if let Err(error) = apply_margins(&session.ipc, VideoMargins::ZERO).await {
-        log::warn!("[mpv-embed] session {} failed to zero video margins for PiP: {error}", session.session_id);
-    }
-    set_window_visibility(surface_value, true);
+    let pip_hwnd_value =
+        run_on_main_thread_and_wait(&app, move || enter_pip_on_main_thread(main_hwnd_value, surface_value, geometry))
+            .await??;
 
-    let mut guard = session.pip.lock().unwrap_or_else(|poison| poison.into_inner());
-    *guard = Some(pip_hwnd_value);
+    // Zeroed so mpv draws across the whole popup instead of a placement sized for the main window.
+    if let Err(error) = apply_placement(&session.ipc, VideoPlacement::CENTERED).await {
+        log::warn!("[mpv-embed] session {} failed to reset video placement for PiP: {error}", session.session_id);
+    }
+
+    {
+        let mut guard = session.pip.lock().unwrap_or_else(|poison| poison.into_inner());
+        *guard = Some(pip_hwnd_value);
+    }
+    let _ = app.emit("xt:mpv-pip-changed", json!({ "sessionId": session_id, "active": true }));
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-async fn pip_exit(state: State<'_, MpvEmbedState>, session_id: String) -> Result<(), String> {
+async fn pip_exit(app: AppHandle, state: State<'_, MpvEmbedState>, session_id: String) -> Result<(), String> {
     let session = get_session(&state, &session_id)?;
     if !should_exit_pip(pip_active(&session)) {
         return Ok(());
@@ -1030,18 +1233,25 @@ async fn pip_exit(state: State<'_, MpvEmbedState>, session_id: String) -> Result
     let pip_hwnd_value = session.pip.lock().unwrap_or_else(|poison| poison.into_inner()).take();
     let Some(pip_hwnd_value) = pip_hwnd_value else { return Ok(()) };
 
-    let main_hwnd = HWND(session.parent_hwnd as *mut core::ffi::c_void);
-    if let Some(surface_value) = resolve_mpv_window(&session) {
-        if let Err(error) = reparent_child(surface_value, main_hwnd) {
-            log::warn!("[mpv-embed] failed to reparent the mpv window back to the main window: {error}");
-        }
-        send_to_bottom(surface_value);
+    let surface_value = resolve_mpv_window(&session);
+    let main_hwnd_value = session.parent_hwnd;
+    if let Err(error) = run_on_main_thread_and_wait(&app, move || {
+        exit_pip_on_main_thread(main_hwnd_value, surface_value, pip_hwnd_value)
+    })
+    .await
+    {
+        log::warn!("[mpv-embed] session {} failed to exit PiP on the main thread: {error}", session.session_id);
+    }
+    if let Some(surface_value) = surface_value {
         if let Some(bounds) = session.desired.bounds() {
+            let main_hwnd = HWND(main_hwnd_value as *mut core::ffi::c_void);
             if let Some((client_width, client_height)) = client_size(main_hwnd) {
-                let margins = margins_for_bounds(bounds, client_width, client_height);
-                if let Err(error) = apply_margins(&session.ipc, margins).await {
+                let metrics = session.video_metrics();
+                let placement =
+                    placement_for_bounds(bounds, client_width, client_height, metrics.dwidth, metrics.dheight, metrics.panscan);
+                if let Err(error) = apply_placement(&session.ipc, placement).await {
                     log::warn!(
-                        "[mpv-embed] session {} failed to restore video margins after PiP exit: {error}",
+                        "[mpv-embed] session {} failed to restore video placement after PiP exit: {error}",
                         session.session_id
                     );
                 }
@@ -1049,8 +1259,138 @@ async fn pip_exit(state: State<'_, MpvEmbedState>, session_id: String) -> Result
         }
         set_window_visibility(surface_value, session.desired.visible());
     }
-    destroy_pip_window(pip_hwnd_value);
+    let _ = app.emit("xt:mpv-pip-changed", json!({ "sessionId": session_id, "active": false }));
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Native fullscreen (tao's set_fullscreen leaves a maximized window at its restored size)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+async fn run_on_main_thread_and_wait<T, F>(app: &AppHandle, task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (sender, receiver) = oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = sender.send(task());
+    })
+    .map_err(|error| format!("OTHER:{error}"))?;
+    tokio::time::timeout(MAIN_THREAD_CALL_TIMEOUT, receiver)
+        .await
+        .map_err(|_| "TIMEOUT:main-thread call did not complete".to_string())?
+        .map_err(|_| "OTHER:main-thread call dropped".to_string())
+}
+
+// Chromium's HWNDMessageHandler::SetFullscreen mask: drop the frame, keep client-area chrome.
+#[cfg(target_os = "windows")]
+fn fullscreen_style_bits(style: isize) -> isize {
+    style & !((WS_CAPTION.0 as isize) | (WS_THICKFRAME.0 as isize))
+}
+
+#[cfg(target_os = "windows")]
+fn fullscreen_ex_style_bits(ex_style: isize) -> isize {
+    ex_style
+        & !((WS_EX_DLGMODALFRAME.0 as isize)
+            | (WS_EX_WINDOWEDGE.0 as isize)
+            | (WS_EX_CLIENTEDGE.0 as isize)
+            | (WS_EX_STATICEDGE.0 as isize))
+}
+
+/// Idempotent: a second enter (state already saved) is a no-op.
+#[cfg(target_os = "windows")]
+fn enter_window_fullscreen(hwnd: HWND, state: &MpvEmbedState) -> Result<(), String> {
+    let mut guard = state.fullscreen.lock().unwrap_or_else(|poison| poison.into_inner());
+    if guard.is_some() {
+        return Ok(());
+    }
+    let maximized = unsafe { IsZoomed(hwnd) }.as_bool();
+    if maximized {
+        unsafe { SendMessageW(hwnd, WM_SYSCOMMAND, Some(WPARAM(SC_RESTORE as usize)), Some(LPARAM(0))) };
+    }
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let mut rect = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut rect) }.map_err(|error| format!("OTHER:{error}"))?;
+
+    unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, fullscreen_style_bits(style)) };
+    unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, fullscreen_ex_style_bits(ex_style)) };
+
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    let mut monitor_info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    if !unsafe { GetMonitorInfoW(monitor, &mut monitor_info) }.as_bool() {
+        return Err("OTHER:failed to read monitor info".to_string());
+    }
+    let monitor_rect = monitor_info.rcMonitor;
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            monitor_rect.left,
+            monitor_rect.top,
+            monitor_rect.right - monitor_rect.left,
+            monitor_rect.bottom - monitor_rect.top,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
+    }
+    .map_err(|error| format!("OTHER:{error}"))?;
+
+    *guard = Some(SavedWindowState { style, ex_style, rect, maximized });
+    Ok(())
+}
+
+/// Idempotent: a second exit (nothing saved) is a no-op.
+#[cfg(target_os = "windows")]
+fn exit_window_fullscreen(hwnd: HWND, state: &MpvEmbedState) -> Result<(), String> {
+    let mut guard = state.fullscreen.lock().unwrap_or_else(|poison| poison.into_inner());
+    let Some(saved) = guard.take() else { return Ok(()) };
+    unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, saved.style) };
+    unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, saved.ex_style) };
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            saved.rect.left,
+            saved.rect.top,
+            saved.rect.right - saved.rect.left,
+            saved.rect.bottom - saved.rect.top,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
+    }
+    .map_err(|error| format!("OTHER:{error}"))?;
+    if saved.maximized {
+        unsafe { SendMessageW(hwnd, WM_SYSCOMMAND, Some(WPARAM(SC_MAXIMIZE as usize)), Some(LPARAM(0))) };
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn apply_window_fullscreen(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let main_window = app.get_webview_window("main").ok_or_else(|| "OTHER:main window unavailable".to_string())?;
+    let hwnd = main_window.hwnd().map_err(|error| format!("OTHER:{error}"))?;
+    let state = app.state::<MpvEmbedState>();
+    if enabled {
+        enter_window_fullscreen(hwnd, &state)
+    } else {
+        exit_window_fullscreen(hwnd, &state)
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn set_window_fullscreen(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let app_for_main_thread = app.clone();
+    run_on_main_thread_and_wait(&app, move || apply_window_fullscreen(&app_for_main_thread, enabled)).await??;
+    // The client size just changed; placement depends on it, so recompute against the new size.
+    wake_placement_task(&app);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn set_window_fullscreen(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let main_window = app.get_webview_window("main").ok_or_else(|| "OTHER:main window unavailable".to_string())?;
+    main_window.set_fullscreen(enabled).map_err(|error| format!("OTHER:{error}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1113,17 +1453,8 @@ async fn teardown_current_session(app: &AppHandle, state: &MpvEmbedState) {
 
 /// Reparents mpv's window out of PiP (if active) and hides it, all before any teardown IPC.
 #[cfg(target_os = "windows")]
-fn hide_surface_for_navigation(session: &Arc<MpvSession>) {
-    let pip_hwnd_value = session.pip.lock().unwrap_or_else(|poison| poison.into_inner()).take();
-    if let Some(pip_hwnd_value) = pip_hwnd_value {
-        let main_hwnd = HWND(session.parent_hwnd as *mut core::ffi::c_void);
-        if let Some(surface_value) = resolve_mpv_window(session) {
-            if let Err(error) = reparent_child(surface_value, main_hwnd) {
-                log::warn!("[mpv-embed] failed to reparent the mpv window before navigation teardown: {error}");
-            }
-        }
-        destroy_pip_window(pip_hwnd_value);
-    }
+fn hide_surface_for_navigation(app: &AppHandle, session: &Arc<MpvSession>) {
+    destroy_pip_window_if_active(app, session);
     record_and_apply_visible(session, false);
 }
 
@@ -1136,7 +1467,7 @@ pub fn on_main_page_navigation(app: &AppHandle) {
         guard.as_ref().cloned()
     };
     let Some(session) = session else { return };
-    hide_surface_for_navigation(&session);
+    hide_surface_for_navigation(app, &session);
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app_handle.state::<MpvEmbedState>();
@@ -1147,10 +1478,10 @@ pub fn on_main_page_navigation(app: &AppHandle) {
 #[cfg(not(target_os = "windows"))]
 pub fn on_main_page_navigation(_app: &AppHandle) {}
 
-// Margins are ratios of the parent client size, so a resize with no bounds change still
-// needs a recompute; send_modify wakes the margin task without changing the stored bounds.
+// Placement is computed against the parent client size, so a change to it with no bounds
+// change still needs a recompute; send wakes the placement task with no payload of its own.
 #[cfg(target_os = "windows")]
-pub fn on_main_window_resized(app: &AppHandle) {
+fn wake_placement_task(app: &AppHandle) {
     let state = app.state::<MpvEmbedState>();
     let session = {
         let guard = state.session.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -1160,7 +1491,12 @@ pub fn on_main_window_resized(app: &AppHandle) {
     if pip_active(&session) {
         return;
     }
-    session.margin_tx.send_modify(|_| {});
+    let _ = session.placement_tx.send(());
+}
+
+#[cfg(target_os = "windows")]
+pub fn on_main_window_resized(app: &AppHandle) {
+    wake_placement_task(app);
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1169,7 +1505,7 @@ pub fn on_main_window_resized(_app: &AppHandle) {}
 /// Kills the child, or wakes `run_exit_watch` to do it; `finish_exit` stays the only emitter.
 #[cfg(target_os = "windows")]
 async fn teardown_session(app: &AppHandle, session: &Arc<MpvSession>) {
-    destroy_pip_window_if_active(session);
+    destroy_pip_window_if_active(app, session);
     session.kill_notify.notify_one();
     if let Ok(mut guard) = session.child.try_lock() {
         if let Some(mut child) = guard.take() {
@@ -1224,7 +1560,7 @@ fn finish_exit(
     if session.torn_down.swap(true, Ordering::SeqCst) {
         return;
     }
-    destroy_pip_window_if_active(session);
+    destroy_pip_window_if_active(app, session);
     session.ipc.fail_all_pending();
     {
         let mut guard = state.session.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -1255,6 +1591,7 @@ async fn read_child_stderr_head(child: &mut Child) -> Option<String> {
 
 #[cfg(target_os = "windows")]
 async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: Bounds) -> Result<MpvEmbedSession, String> {
+    let _ = APP_HANDLE_FOR_PIP.set(app.clone());
     let mpv_path = resolve_mpv_binary().ok_or_else(|| "NOT_FOUND:no mpv binary resolved".to_string())?;
 
     let main_window = app
@@ -1325,7 +1662,7 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
         closed: AtomicBool::new(false),
     });
     let emit_state = Arc::new(PropertyEmitState::new());
-    let (margin_tx, margin_rx) = tokio::sync::watch::channel::<Option<Bounds>>(None);
+    let (placement_tx, placement_rx) = tokio::sync::watch::channel::<()>(());
 
     let session = Arc::new(MpvSession {
         session_id: session_id.clone(),
@@ -1333,7 +1670,8 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
         parent_hwnd: parent_value,
         mpv_hwnd: Mutex::new(None),
         desired: DesiredState::new(bounds, true),
-        margin_tx,
+        video_metrics: Mutex::new(VideoMetrics::default()),
+        placement_tx,
         ipc: ipc.clone(),
         child: tokio::sync::Mutex::new(Some(child)),
         kill_notify: Notify::new(),
@@ -1344,7 +1682,7 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
 
     let reader_handle = tauri::async_runtime::spawn(run_reader(
         app.clone(),
-        session_id.clone(),
+        session.clone(),
         BufReader::new(read_half),
         ipc.clone(),
         emit_state,
@@ -1355,10 +1693,14 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
     }
 
     register_observed_properties(&session).await;
+    if let Err(error) = initialize_video_placement(&session.ipc).await {
+        log::warn!("[mpv-embed] session {session_id} failed to initialize video placement: {error}");
+    }
 
-    // Self-cleaning: exits once `margin_tx` (owned by the session) drops and closes the channel.
-    tauri::async_runtime::spawn(run_margin_updates(ipc, session_id.clone(), parent_value, margin_rx));
-    let _ = session.margin_tx.send(Some(bounds));
+    // Weak: this task must not keep the session alive, or placement_tx (owned by the session)
+    // could never drop to close the channel and let the loop end.
+    tauri::async_runtime::spawn(run_placement_updates(Arc::downgrade(&session), placement_rx));
+    let _ = session.placement_tx.send(());
 
     tauri::async_runtime::spawn(watch_for_mpv_window(session.clone()));
     tauri::async_runtime::spawn(run_exit_watch(app.clone(), session.clone()));
@@ -1600,13 +1942,18 @@ async fn pip_enter(_app: AppHandle, _state: State<'_, MpvEmbedState>, _session_i
 }
 
 #[tauri::command]
-pub async fn mpv_embed_pip_exit(state: State<'_, MpvEmbedState>, session_id: String) -> Result<(), String> {
-    pip_exit(state, session_id).await
+pub async fn mpv_embed_pip_exit(app: AppHandle, state: State<'_, MpvEmbedState>, session_id: String) -> Result<(), String> {
+    pip_exit(app, state, session_id).await
 }
 
 #[cfg(not(target_os = "windows"))]
-async fn pip_exit(_state: State<'_, MpvEmbedState>, _session_id: String) -> Result<(), String> {
+async fn pip_exit(_app: AppHandle, _state: State<'_, MpvEmbedState>, _session_id: String) -> Result<(), String> {
     Err(platform_unsupported())
+}
+
+#[tauri::command]
+pub async fn mpv_embed_window_fullscreen(app: AppHandle, enabled: bool) -> Result<(), String> {
+    set_window_fullscreen(app, enabled).await
 }
 
 #[tauri::command]
@@ -1655,13 +2002,13 @@ pub fn mpv_embed_status(state: State<'_, MpvEmbedState>) -> MpvEmbedStatus {
 
 /// Best-effort teardown for app-exit paths that can't await; uses `try_lock`.
 #[cfg(target_os = "windows")]
-pub fn shutdown(state: &MpvEmbedState) {
+pub fn shutdown(app: &AppHandle, state: &MpvEmbedState) {
     let session = {
         let mut guard = state.session.lock().unwrap_or_else(|poison| poison.into_inner());
         guard.take()
     };
     let Some(session) = session else { return };
-    destroy_pip_window_if_active(&session);
+    destroy_pip_window_if_active(app, &session);
     session.torn_down.store(true, Ordering::SeqCst);
     session.kill_notify.notify_one();
     if let Ok(mut guard) = session.child.try_lock() {
@@ -1680,7 +2027,7 @@ pub fn shutdown(state: &MpvEmbedState) {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn shutdown(_state: &MpvEmbedState) {}
+pub fn shutdown(_app: &AppHandle, _state: &MpvEmbedState) {}
 
 #[cfg(test)]
 mod tests {
@@ -1916,6 +2263,9 @@ mod tests {
             ("sub-delay", "subDelay"),
             ("aid", "aid"),
             ("sid", "sid"),
+            ("dwidth", "dwidth"),
+            ("dheight", "dheight"),
+            ("panscan", "panscan"),
         ];
         assert_eq!(expected.len(), OBSERVED_PROPERTIES.len());
         for (mpv_name, camel_name) in expected {
@@ -1948,59 +2298,90 @@ mod tests {
         assert!(candidates.is_empty());
     }
 
-    #[test]
-    fn margins_for_bounds_centers_a_box_inside_the_window() {
-        let margins = margins_for_bounds(Bounds { x: 100, y: 100, width: 800, height: 800, radius: 0 }, 1000, 1000);
-        assert_eq!(margins, VideoMargins { left: 0.1, right: 0.1, top: 0.1, bottom: 0.1 });
+    fn assert_close(actual: f64, expected: f64) {
+        assert!((actual - expected).abs() < 1e-6, "expected {expected}, got {actual}");
     }
 
     #[test]
-    fn margins_for_bounds_zeroes_out_a_box_touching_every_edge() {
-        let margins = margins_for_bounds(Bounds { x: 0, y: 0, width: 1000, height: 700, radius: 0 }, 1000, 700);
-        assert_eq!(margins, VideoMargins::ZERO);
+    fn placement_for_bounds_centers_a_box_inside_the_window() {
+        let bounds = Bounds { x: 400, y: 225, width: 800, height: 450, radius: 0 };
+        let placement = placement_for_bounds(bounds, 1600, 900, Some(1600.0), Some(900.0), 0.0);
+        assert_close(placement.zoom, -1.0);
+        assert_close(placement.pan_x, 0.0);
+        assert_close(placement.pan_y, 0.0);
     }
 
     #[test]
-    fn margins_for_bounds_clamps_a_box_extending_off_the_left_edge() {
-        let margins = margins_for_bounds(Bounds { x: -50, y: 0, width: 200, height: 700, radius: 0 }, 1000, 700);
-        assert_eq!(margins, VideoMargins { left: 0.0, right: 0.85, top: 0.0, bottom: 0.0 });
+    fn placement_for_bounds_pans_toward_a_box_in_the_top_left_corner() {
+        let bounds = Bounds { x: 0, y: 0, width: 800, height: 450, radius: 0 };
+        let placement = placement_for_bounds(bounds, 1600, 900, Some(1600.0), Some(900.0), 0.0);
+        assert_close(placement.zoom, -1.0);
+        assert_close(placement.pan_x, -0.5);
+        assert_close(placement.pan_y, -0.5);
     }
 
     #[test]
-    fn margins_for_bounds_falls_back_to_zero_for_an_oversized_box() {
-        let margins = margins_for_bounds(Bounds { x: -100, y: -100, width: 1400, height: 1000, radius: 0 }, 1000, 700);
-        assert_eq!(margins, VideoMargins::ZERO);
+    fn placement_for_bounds_keeps_zoom_unchanged_when_the_box_scrolls_off_the_top() {
+        let bounds = Bounds { x: 400, y: -225, width: 800, height: 450, radius: 0 };
+        let placement = placement_for_bounds(bounds, 1600, 900, Some(1600.0), Some(900.0), 0.0);
+        assert_close(placement.zoom, -1.0);
+        assert_close(placement.pan_x, 0.0);
+        assert_close(placement.pan_y, -1.0);
     }
 
     #[test]
-    fn margins_for_bounds_falls_back_to_zero_for_a_degenerate_client_rect() {
-        let margins = margins_for_bounds(Bounds { x: 0, y: 0, width: 100, height: 100, radius: 0 }, 0, 700);
-        assert_eq!(margins, VideoMargins::ZERO);
+    fn placement_for_bounds_covers_the_box_at_panscan_one() {
+        let bounds = Bounds { x: 600, y: 250, width: 400, height: 400, radius: 0 };
+        let placement = placement_for_bounds(bounds, 1600, 900, Some(1600.0), Some(900.0), 1.0);
+        assert_close(placement.zoom, (4.0_f64 / 9.0).log2());
+        assert_close(placement.pan_x, 0.0);
+        assert_close(placement.pan_y, 0.0);
     }
 
     #[test]
-    fn margin_inputs_unchanged_matches_identical_bounds_and_client_size() {
+    fn placement_for_bounds_falls_back_to_the_box_aspect_when_video_dims_are_unknown() {
+        let bounds = Bounds { x: 400, y: 450, width: 200, height: 100, radius: 0 };
+        let placement = placement_for_bounds(bounds, 1000, 1000, None, None, 0.0);
+        assert_close(placement.zoom, 0.2_f64.log2());
+        assert_close(placement.pan_x, 0.0);
+        assert_close(placement.pan_y, 0.0);
+    }
+
+    #[test]
+    fn placement_for_bounds_centers_on_a_degenerate_client_rect() {
+        let bounds = Bounds { x: 0, y: 0, width: 100, height: 100, radius: 0 };
+        assert_eq!(placement_for_bounds(bounds, 0, 700, Some(16.0), Some(9.0), 0.0), VideoPlacement::CENTERED);
+    }
+
+    #[test]
+    fn placement_inputs_unchanged_matches_identical_inputs() {
         let bounds = Bounds { x: 10, y: 20, width: 640, height: 360, radius: 8 };
-        assert!(margin_inputs_unchanged(Some((bounds, 1000, 700)), bounds, 1000, 700));
+        let inputs = (bounds, 1000, 700, Some(1600.0), Some(900.0), 0.0);
+        assert!(placement_inputs_unchanged(Some(inputs), inputs));
     }
 
     #[test]
-    fn margin_inputs_unchanged_rejects_a_changed_bounds_field() {
+    fn placement_inputs_unchanged_rejects_a_changed_bounds_field() {
         let cached = Bounds { x: 10, y: 20, width: 640, height: 360, radius: 8 };
         let incoming = Bounds { x: 11, y: 20, width: 640, height: 360, radius: 8 };
-        assert!(!margin_inputs_unchanged(Some((cached, 1000, 700)), incoming, 1000, 700));
+        let cached_inputs = (cached, 1000, 700, Some(1600.0), Some(900.0), 0.0);
+        let incoming_inputs = (incoming, 1000, 700, Some(1600.0), Some(900.0), 0.0);
+        assert!(!placement_inputs_unchanged(Some(cached_inputs), incoming_inputs));
     }
 
     #[test]
-    fn margin_inputs_unchanged_rejects_a_changed_client_size() {
+    fn placement_inputs_unchanged_rejects_a_changed_video_size() {
         let bounds = Bounds { x: 10, y: 20, width: 640, height: 360, radius: 8 };
-        assert!(!margin_inputs_unchanged(Some((bounds, 1000, 700)), bounds, 1000, 800));
+        let cached_inputs = (bounds, 1000, 700, Some(1600.0), Some(900.0), 0.0);
+        let incoming_inputs = (bounds, 1000, 700, Some(1280.0), Some(720.0), 0.0);
+        assert!(!placement_inputs_unchanged(Some(cached_inputs), incoming_inputs));
     }
 
     #[test]
-    fn margin_inputs_unchanged_rejects_no_cache() {
+    fn placement_inputs_unchanged_rejects_no_cache() {
         let bounds = Bounds { x: 10, y: 20, width: 640, height: 360, radius: 8 };
-        assert!(!margin_inputs_unchanged(None, bounds, 1000, 700));
+        let inputs = (bounds, 1000, 700, Some(1600.0), Some(900.0), 0.0);
+        assert!(!placement_inputs_unchanged(None, inputs));
     }
 
     #[test]
@@ -2031,6 +2412,30 @@ mod tests {
         state.set_visible(false);
         assert_eq!(state.bounds(), Some(updated));
         assert!(!state.visible());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn fullscreen_style_bits_drops_the_caption_and_thick_frame() {
+        let style = (WS_CAPTION.0 | WS_THICKFRAME.0 | 0x1000_0000) as isize;
+        assert_eq!(fullscreen_style_bits(style), 0x1000_0000);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn fullscreen_style_bits_leaves_unrelated_bits_untouched() {
+        assert_eq!(fullscreen_style_bits(0x1000_0000), 0x1000_0000);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn fullscreen_ex_style_bits_drops_the_frame_edge_bits() {
+        let ex_style = (WS_EX_DLGMODALFRAME.0
+            | WS_EX_WINDOWEDGE.0
+            | WS_EX_CLIENTEDGE.0
+            | WS_EX_STATICEDGE.0
+            | 0x1000_0000) as isize;
+        assert_eq!(fullscreen_ex_style_bits(ex_style), 0x1000_0000);
     }
 
     #[test]

@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "Subtitle delay {value}",
   "player.audio": "Audio",
   "player.audio.switchFailed": "Couldn't switch audio track - returned to the original audio",
+  "player.pip.playingInPip": "Playing in Picture-in-Picture",
   "player.stats.title": "Playback stats",
   "player.stats.on": "Playback stats on",
   "player.stats.off": "Playback stats off",

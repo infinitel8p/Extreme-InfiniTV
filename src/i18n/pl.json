@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "Opóźnienie napisów {value}",
   "player.audio": "Audio",
   "player.audio.switchFailed": "Nie udało się przełączyć ścieżki dźwiękowej - powrócono do oryginalnego dźwięku",
+  "player.pip.playingInPip": "Odtwarzanie w trybie obraz w obrazie",
   "player.stats.title": "Statystyki odtwarzania",
   "player.stats.on": "Statystyki odtwarzania włączone",
   "player.stats.off": "Statystyki odtwarzania wyłączone",

@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "Retraso de subtítulos {value}",
   "player.audio": "Audio",
   "player.audio.switchFailed": "No se pudo cambiar la pista de audio - se volvió al audio original",
+  "player.pip.playingInPip": "Reproduciendo en imagen en imagen",
   "player.stats.title": "Estadísticas de reproducción",
   "player.stats.on": "Estadísticas de reproducción activadas",
   "player.stats.off": "Estadísticas de reproducción desactivadas",

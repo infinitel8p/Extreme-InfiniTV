@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "Untertitel-Verzögerung {value}",
   "player.audio": "Audio",
   "player.audio.switchFailed": "Audiospur konnte nicht gewechselt werden - zurück zum Original-Audio gewechselt",
+  "player.pip.playingInPip": "Wiedergabe im Bild-in-Bild-Modus",
   "player.stats.title": "Wiedergabestatistik",
   "player.stats.on": "Wiedergabestatistik an",
   "player.stats.off": "Wiedergabestatistik aus",

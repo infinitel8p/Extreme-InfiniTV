@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "Penundaan subtitel {value}",
   "player.audio": "Audio",
   "player.audio.switchFailed": "Tidak dapat mengganti track audio - beralih kembali ke audio asli",
+  "player.pip.playingInPip": "Sedang diputar dalam gambar dalam gambar",
   "player.stats.title": "Statistik pemutaran",
   "player.stats.on": "Statistik pemutaran aktif",
   "player.stats.off": "Statistik pemutaran nonaktif",

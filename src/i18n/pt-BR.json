@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "Atraso de legendas {value}",
   "player.audio": "Áudio",
   "player.audio.switchFailed": "Não foi possível trocar a faixa de áudio - voltou para o áudio original",
+  "player.pip.playingInPip": "Reproduzindo em Picture-in-Picture",
   "player.stats.title": "Estatísticas de reprodução",
   "player.stats.on": "Estatísticas de reprodução ativadas",
   "player.stats.off": "Estatísticas de reprodução desativadas",

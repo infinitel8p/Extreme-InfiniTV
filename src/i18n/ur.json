@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "سب ٹائٹلز کی تاخیر {value}",
   "player.audio": "آڈیو",
   "player.audio.switchFailed": "آڈیو ٹریک تبدیل نہیں ہو سکا - اصل آڈیو پر واپس آ گئے",
+  "player.pip.playingInPip": "پکچر اِن پکچر میں چل رہا ہے",
   "player.stats.title": "پلے بیک اعداد و شمار",
   "player.stats.on": "پلے بیک اعداد و شمار آن کر دیے گئے",
   "player.stats.off": "پلے بیک اعداد و شمار بند کر دیے گئے",

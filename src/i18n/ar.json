@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "تأخير الترجمة {value}",
   "player.audio": "الصوت",
   "player.audio.switchFailed": "تعذّر تبديل مسار الصوت - تم الرجوع إلى الصوت الأصلي",
+  "player.pip.playingInPip": "قيد التشغيل في وضع صورة داخل صورة",
   "player.stats.title": "إحصاءات التشغيل",
   "player.stats.on": "تم تفعيل إحصاءات التشغيل",
   "player.stats.off": "تم إيقاف إحصاءات التشغيل",

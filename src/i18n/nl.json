@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "Ondertitelvertraging {value}",
   "player.audio": "Audio",
   "player.audio.switchFailed": "Kon audiospoor niet wisselen - teruggeschakeld naar de originele audio",
+  "player.pip.playingInPip": "Bezig met afspelen in beeld-in-beeld",
   "player.stats.title": "Afspeelstatistieken",
   "player.stats.on": "Afspeelstatistieken aan",
   "player.stats.off": "Afspeelstatistieken uit",

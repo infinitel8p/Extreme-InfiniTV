@@ -293,6 +293,7 @@ pub fn run() {
             mpv_embed::mpv_embed_status,
             mpv_embed::mpv_embed_pip_enter,
             mpv_embed::mpv_embed_pip_exit,
+            mpv_embed::mpv_embed_window_fullscreen,
             receiver::receiver_start,
             receiver::receiver_stop,
             receiver::receiver_status,
@@ -391,7 +392,7 @@ pub fn run() {
             use tauri::Manager;
             audio_proxy::shutdown(&_app_handle.state::<audio_proxy::AudioProxyState>());
             vod_audio_proxy::shutdown(&_app_handle.state::<vod_audio_proxy::VodAudioProxyState>());
-            mpv_embed::shutdown(&_app_handle.state::<mpv_embed::MpvEmbedState>());
+            mpv_embed::shutdown(_app_handle, &_app_handle.state::<mpv_embed::MpvEmbedState>());
         }
         if let tauri::RunEvent::Exit = _event {
             use tauri::Manager;

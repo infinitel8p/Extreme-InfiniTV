@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "उपशीर्षक विलंब {value}",
   "player.audio": "ऑडियो",
   "player.audio.switchFailed": "ऑडियो ट्रैक बदला नहीं जा सका - मूल ऑडियो पर वापस स्विच किया गया",
+  "player.pip.playingInPip": "पिक्चर-इन-पिक्चर में चल रहा है",
   "player.stats.title": "प्लेबैक आँकड़े",
   "player.stats.on": "प्लेबैक आँकड़े चालू",
   "player.stats.off": "प्लेबैक आँकड़े बंद",

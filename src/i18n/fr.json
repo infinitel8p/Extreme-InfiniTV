@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "Décalage des sous-titres {value}",
   "player.audio": "Audio",
   "player.audio.switchFailed": "Échec du changement de piste audio - retour à l'audio d'origine",
+  "player.pip.playingInPip": "Lecture en Picture-in-Picture",
   "player.stats.title": "Statistiques de lecture",
   "player.stats.on": "Statistiques de lecture activées",
   "player.stats.off": "Statistiques de lecture désactivées",

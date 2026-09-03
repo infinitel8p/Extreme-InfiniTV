@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "Altyazı gecikmesi {value}",
   "player.audio": "Ses",
   "player.audio.switchFailed": "Ses parçası değiştirilemedi - orijinal sese geri dönüldü",
+  "player.pip.playingInPip": "Görüntü içinde görüntüde oynatılıyor",
   "player.stats.title": "Oynatma istatistikleri",
   "player.stats.on": "Oynatma istatistikleri açık",
   "player.stats.off": "Oynatma istatistikleri kapalı",

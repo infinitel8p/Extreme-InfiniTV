@@ -1640,6 +1640,7 @@
   "player.subtitleDelay": "字幕延迟 {value}",
   "player.audio": "音频",
   "player.audio.switchFailed": "无法切换音轨 - 已切换回原始音频",
+  "player.pip.playingInPip": "正在画中画播放",
   "player.stats.title": "播放统计",
   "player.stats.on": "播放统计已开启",
   "player.stats.off": "播放统计已关闭",

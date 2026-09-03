@@ -14,6 +14,7 @@ commands.allow = [
     "mpv_embed_set_visible",
     "mpv_embed_pip_enter",
     "mpv_embed_pip_exit",
+    "mpv_embed_window_fullscreen",
     "mpv_embed_stop",
     "mpv_embed_shutdown",
     "mpv_embed_status",

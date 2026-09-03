@@ -79,6 +79,11 @@ interface MpvExitedEventPayload {
   detail?: string | null
 }
 
+interface MpvPipChangedEventPayload {
+  sessionId: string
+  active: boolean
+}
+
 interface MpvEmbedAvailabilityResult {
   supported: boolean
   reason: string | null
@@ -222,6 +227,9 @@ export function buildLoadOptions(input: BuildLoadOptionsInput): LoadOptions {
 
 // Xtream providers keep counting the previous connection for ~15-20s after a switch.
 const LIVE_EOF_RELOAD_DELAYS_MS = [1000, 2000, 4000, 8000, 15000]
+
+// The OS window resize on entering/leaving fullscreen lands async, after the page's own re-layout.
+export const FULLSCREEN_SETTLE_DELAYS_MS = [50, 200, 500, 1000]
 
 /** Backoff delay before a live-EOF reload attempt; null once retries are exhausted. */
 export function liveEofReloadDelayMs(attempt: number): number | null {
@@ -527,7 +535,13 @@ export async function createMpvEmbeddedHandle(
     } else if (payload.kind === "end-file") {
       if (payload.reason === "eof") {
         if (attemptLiveEofReload()) return
-        emitter.emit("ended")
+        if (lastLoadRequest?.loadOptions.isLive) {
+          lastErrorDetail = "live stream ended (provider EOF)"
+          emitEngineEvent("engine-error", lastErrorDetail)
+          emitter.emit("error")
+        } else {
+          emitter.emit("ended")
+        }
       } else if (payload.reason === "error") {
         lastErrorDetail = payload.detail || payload.reason || null
         emitter.emit("error")
@@ -543,6 +557,24 @@ export async function createMpvEmbeddedHandle(
     emitEngineEvent("fatal", lastErrorDetail)
   }
 
+  // Rust owns opening/closing the native PiP window; here we just cover the transparent hole.
+  function handleMpvPipChanged(payload: MpvPipChangedEventPayload): void {
+    if (payload.sessionId !== sessionId) return
+    if (payload.active) {
+      surfaceVisible = false
+      clearNativeVideoHole()
+      loadingIndicator.textContent = t("player.pip.playingInPip")
+      if (!loadingIndicator.isConnected) container.appendChild(loadingIndicator)
+    } else {
+      loadingIndicator.remove()
+      loadingIndicator.textContent = t("common.loading")
+      surfaceVisible = true
+      resetBoundsCache()
+      pushBounds()
+      scheduleFullscreenSettlePushes()
+    }
+  }
+
   const unlistenState = await listen<MpvStateEventPayload>("xt:mpv-state", (event) => {
     if (event.payload?.sessionId === sessionId) applyStateUpdate(event.payload.props || {})
   })
@@ -551,6 +583,9 @@ export async function createMpvEmbeddedHandle(
   })
   const unlistenExited = await listen<MpvExitedEventPayload>("xt:mpv-exited", (event) => {
     if (event.payload) handleMpvExited(event.payload)
+  })
+  const unlistenPipChanged = await listen<MpvPipChangedEventPayload>("xt:mpv-pip-changed", (event) => {
+    if (event.payload) handleMpvPipChanged(event.payload)
   })
 
   // See native-video-hole-contract.md: the webview must cut a transparent hole for the video below it.
@@ -610,10 +645,15 @@ export async function createMpvEmbeddedHandle(
     typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => scheduleBoundsPush()) : null
   resizeObserver?.observe(container)
   window.addEventListener("resize", scheduleBoundsPush)
+  // A synchronous push keeps the native window in the scroll paint, not a frame behind it.
+  function handleScroll(): void {
+    pushBounds()
+    scheduleBoundsPush()
+  }
   // Scoped to ancestors that can actually move the container, not every scrollable descendant on the page.
   const scrollableAncestors = collectScrollableAncestors(container)
-  window.addEventListener("scroll", scheduleBoundsPush, { passive: true })
-  for (const ancestor of scrollableAncestors) ancestor.addEventListener("scroll", scheduleBoundsPush, { passive: true })
+  window.addEventListener("scroll", handleScroll, { passive: true })
+  for (const ancestor of scrollableAncestors) ancestor.addEventListener("scroll", handleScroll, { passive: true })
 
   // dppx media queries fire once per crossing, so the listener must re-register at the new ratio.
   let dprMediaQuery: MediaQueryList | null = null
@@ -655,17 +695,33 @@ export async function createMpvEmbeddedHandle(
   async function setWindowFullscreen(fullscreen: boolean): Promise<void> {
     if (!isTauri) return
     try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window")
-      await getCurrentWindow().setFullscreen(fullscreen)
+      await invoke("mpv_embed_window_fullscreen", { enabled: fullscreen })
     } catch (err) {
       log.warn("[xt:mpv-embed] setFullscreen failed:", err)
     }
+  }
+
+  // The OS window settles asynchronously; keep re-pushing bounds until layout catches up.
+  let fullscreenSettleTimers: ReturnType<typeof setTimeout>[] = []
+  function clearFullscreenSettleTimers(): void {
+    for (const timer of fullscreenSettleTimers) clearTimeout(timer)
+    fullscreenSettleTimers = []
+  }
+  function scheduleFullscreenSettlePushes(): void {
+    clearFullscreenSettleTimers()
+    fullscreenSettleTimers = FULLSCREEN_SETTLE_DELAYS_MS.map((delay) =>
+      setTimeout(() => {
+        resetBoundsCache()
+        pushBounds()
+      }, delay),
+    )
   }
 
   // Fullscreen resizes the container without a scroll or resize event on it.
   function handleFullscreenChange(): void {
     resetBoundsCache()
     scheduleBoundsPush()
+    scheduleFullscreenSettlePushes()
     // Catches Escape, which exits fullscreen without going through our exitFullscreen().
     if (windowFullscreenSet && document.fullscreenElement !== container) {
       windowFullscreenSet = false
@@ -875,6 +931,7 @@ export async function createMpvEmbeddedHandle(
       disposed = true
       surfaceVisible = false
       clearLiveEofTimers()
+      clearFullscreenSettleTimers()
       clearLoadingIndicator()
       clearNativeVideoHole()
       if (windowFullscreenSet) {
@@ -889,10 +946,11 @@ export async function createMpvEmbeddedHandle(
       try { unlistenState() } catch (err) { log.warn("[xt:mpv-embed] unlisten state failed:", err) }
       try { unlistenEvent() } catch (err) { log.warn("[xt:mpv-embed] unlisten event failed:", err) }
       try { unlistenExited() } catch (err) { log.warn("[xt:mpv-embed] unlisten exited failed:", err) }
+      try { unlistenPipChanged() } catch (err) { log.warn("[xt:mpv-embed] unlisten pip-changed failed:", err) }
       resizeObserver?.disconnect()
       window.removeEventListener("resize", scheduleBoundsPush)
-      window.removeEventListener("scroll", scheduleBoundsPush)
-      for (const ancestor of scrollableAncestors) ancestor.removeEventListener("scroll", scheduleBoundsPush)
+      window.removeEventListener("scroll", handleScroll)
+      for (const ancestor of scrollableAncestors) ancestor.removeEventListener("scroll", handleScroll)
       window.removeEventListener("pagehide", stopPlaybackOnNavigate)
       window.removeEventListener("beforeunload", stopPlaybackOnNavigate)
       document.removeEventListener("fullscreenchange", handleFullscreenChange)
