@@ -44,8 +44,13 @@ use windows::core::{BOOL, PCWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{ERROR_PIPE_BUSY, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 #[cfg(target_os = "windows")]
+use windows::Win32::Graphics::Dwm::{
+    DwmSetWindowAttribute, DWMNCRENDERINGPOLICY, DWMNCRP_DISABLED, DWMWA_NCRENDERING_POLICY,
+};
+#[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    ExcludeClipRect, FillRect, GetMonitorInfoW, GetStockObject, GetWindowDC, MonitorFromWindow, ReleaseDC,
+    BLACK_BRUSH, HBRUSH, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -58,8 +63,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SendMessageW, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, GWL_EXSTYLE,
     GWL_STYLE, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
     HWND_BOTTOM, SC_MAXIMIZE, SC_RESTORE, SW_HIDE, SW_SHOWNA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, WM_CLOSE, WM_KEYDOWN, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDBLCLK,
-    WM_SIZE, WM_SIZING, WM_SYSCOMMAND, WMSZ_BOTTOM,
+    SWP_NOSIZE, SWP_NOZORDER, WM_CLOSE, WM_KEYDOWN, WM_MOVE, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCHITTEST,
+    WM_NCLBUTTONDBLCLK, WM_NCPAINT, WM_SIZE, WM_SIZING, WM_SYSCOMMAND, WMSZ_BOTTOM,
     WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT,
     WNDCLASSEXW, WS_CAPTION, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
@@ -720,6 +725,7 @@ fn build_mpv_embed_args(wid: isize, pipe_name: &str, log_file: &str) -> Vec<Stri
         "--force-window=immediate".to_string(),
         "--keep-open=yes".to_string(),
         "--osc=yes".to_string(),
+        "--script-opts=osc-idlescreen=no,osc-visibility=never".to_string(),
         "--osd-level=0".to_string(),
         "--no-input-default-bindings".to_string(),
         "--input-vo-keyboard=no".to_string(),
@@ -1175,6 +1181,11 @@ const PIP_DEFAULT_ASPECT: (f64, f64) = (16.0, 9.0);
 const PIP_RESIZE_BORDER: i32 = 8;
 #[cfg(target_os = "windows")]
 const PIP_CLASS_NAME: &str = "XtreamMpvPip";
+// Undocumented, no windows-crate constants; DefWindowProc would otherwise draw a system frame.
+#[cfg(target_os = "windows")]
+const WM_NCUAHDRAWCAPTION: u32 = 0x00AE;
+#[cfg(target_os = "windows")]
+const WM_NCUAHDRAWFRAME: u32 = 0x00AF;
 
 // The wndproc has no AppHandle of its own; set once, from the main thread, in start_session.
 #[cfg(target_os = "windows")]
@@ -1194,13 +1205,16 @@ fn aspect_from_dimensions(width: Option<f64>, height: Option<f64>) -> Option<(f6
     Some((width, height))
 }
 
-/// Default geometry: fixed width clamped to the work area, aspect-derived height, bottom-right corner.
+/// Default geometry: fixed width clamped to the work area, aspect-derived height off the client
+/// width (the video sits inside the border, see PIP_RESIZE_BORDER), bottom-right corner.
 fn pip_default_geometry(aspect: Option<(f64, f64)>, work_area: WorkArea) -> PipGeometry {
     let (aspect_width, aspect_height) =
         aspect.filter(|(width, height)| *width > 0.0 && *height > 0.0).unwrap_or(PIP_DEFAULT_ASPECT);
     let max_width = (work_area.width - PIP_MARGIN * 2).max(PIP_MIN_WIDTH);
     let width = PIP_DEFAULT_WIDTH.min(max_width);
-    let height = ((width as f64) * aspect_height / aspect_width).round() as i32;
+    let client_width = width - PIP_RESIZE_BORDER * 2;
+    let client_height = ((client_width as f64) * aspect_height / aspect_width).round() as i32;
+    let height = client_height + PIP_RESIZE_BORDER * 2;
     PipGeometry {
         x: work_area.x + work_area.width - width - PIP_MARGIN,
         y: work_area.y + work_area.height - height - PIP_MARGIN,
@@ -1289,6 +1303,26 @@ fn pip_calc_client_rect(wparam: WPARAM, lparam: LPARAM) {
     rect.top += border;
     rect.right -= border;
     rect.bottom -= border;
+}
+
+// DWM non-client rendering is disabled for this class, so WM_NCPAINT owns the border strip.
+#[cfg(target_os = "windows")]
+fn pip_paint_frame(hwnd: HWND) {
+    let mut window_rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut window_rect) }.is_err() {
+        return;
+    }
+    let width = window_rect.right - window_rect.left;
+    let height = window_rect.bottom - window_rect.top;
+    let border = PIP_RESIZE_BORDER;
+    let full_rect = RECT { left: 0, top: 0, right: width, bottom: height };
+    let client_rect = RECT { left: border, top: border, right: width - border, bottom: height - border };
+    let hdc = unsafe { GetWindowDC(Some(hwnd)) };
+    unsafe {
+        ExcludeClipRect(hdc, client_rect.left, client_rect.top, client_rect.right, client_rect.bottom);
+        FillRect(hdc, &full_rect, HBRUSH(GetStockObject(BLACK_BRUSH).0));
+        ReleaseDC(Some(hwnd), hdc);
+    }
 }
 
 // Only one session/popup exists at a time, so the current video's aspect can be read straight
@@ -1389,6 +1423,12 @@ unsafe extern "system" fn pip_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
             pip_calc_client_rect(wparam, lparam);
             LRESULT(0)
         }
+        WM_NCPAINT => {
+            pip_paint_frame(hwnd);
+            LRESULT(0)
+        }
+        WM_NCACTIVATE => LRESULT(1),
+        WM_NCUAHDRAWCAPTION | WM_NCUAHDRAWFRAME => LRESULT(0),
         WM_SIZING => {
             pip_apply_aspect_lock(wparam, lparam);
             LRESULT(1)
@@ -1435,6 +1475,7 @@ fn ensure_pip_class_registered() {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(pip_wnd_proc),
             hInstance: instance,
+            hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
             lpszClassName: PCWSTR(class_name.as_ptr()),
             ..Default::default()
         };
@@ -1482,6 +1523,27 @@ fn create_pip_window(owner: HWND, geometry: &PipGeometry) -> Result<isize, Strin
         )
     }
     .map_err(|error| format!("OTHER:{error}"))?;
+    // Own the frame ourselves: DWM's default non-client rendering paints a system frame.
+    let policy = DWMNCRP_DISABLED;
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY,
+            &policy as *const DWMNCRENDERINGPOLICY as *const core::ffi::c_void,
+            std::mem::size_of::<DWMNCRENDERINGPOLICY>() as u32,
+        )
+    };
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
+    };
     Ok(hwnd.0 as isize)
 }
 
@@ -2432,6 +2494,7 @@ mod tests {
                 "--force-window=immediate".to_string(),
                 "--keep-open=yes".to_string(),
                 "--osc=yes".to_string(),
+                "--script-opts=osc-idlescreen=no,osc-visibility=never".to_string(),
                 "--osd-level=0".to_string(),
                 "--no-input-default-bindings".to_string(),
                 "--input-vo-keyboard=no".to_string(),
@@ -2901,8 +2964,9 @@ mod tests {
     fn pip_default_geometry_uses_the_default_aspect_when_none_observed() {
         let work_area = WorkArea { x: 0, y: 0, width: 1920, height: 1080 };
         let bounds = pip_default_geometry(None, work_area);
+        let client_width = PIP_DEFAULT_WIDTH - PIP_RESIZE_BORDER * 2;
         assert_eq!(bounds.width, PIP_DEFAULT_WIDTH);
-        assert_eq!(bounds.height, (PIP_DEFAULT_WIDTH as f64 * 9.0 / 16.0).round() as i32);
+        assert_eq!(bounds.height, (client_width as f64 * 9.0 / 16.0).round() as i32 + PIP_RESIZE_BORDER * 2);
         assert_eq!(bounds.x, 1920 - PIP_DEFAULT_WIDTH - PIP_MARGIN);
         assert_eq!(bounds.y, 1080 - bounds.height - PIP_MARGIN);
     }
@@ -2911,8 +2975,9 @@ mod tests {
     fn pip_default_geometry_follows_the_observed_video_aspect_ratio() {
         let work_area = WorkArea { x: 0, y: 0, width: 1920, height: 1080 };
         let bounds = pip_default_geometry(Some((4.0, 3.0)), work_area);
+        let client_width = PIP_DEFAULT_WIDTH - PIP_RESIZE_BORDER * 2;
         assert_eq!(bounds.width, PIP_DEFAULT_WIDTH);
-        assert_eq!(bounds.height, (PIP_DEFAULT_WIDTH as f64 * 3.0 / 4.0).round() as i32);
+        assert_eq!(bounds.height, (client_width as f64 * 3.0 / 4.0).round() as i32 + PIP_RESIZE_BORDER * 2);
     }
 
     #[test]
