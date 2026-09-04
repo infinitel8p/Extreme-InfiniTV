@@ -123,6 +123,8 @@ const OBSERVED_PROPERTIES: &[&str] = &[
     "video-params/pixelformat",
     "file-format",
     "seekable",
+    "demuxer-cache-state",
+    "stream-record",
 ];
 
 // ---------------------------------------------------------------------------
@@ -137,6 +139,7 @@ pub struct LoadOptions {
     pub start_seconds: Option<f64>,
     pub is_live: bool,
     pub network_timeout_seconds: Option<f64>,
+    pub media_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -336,6 +339,8 @@ struct MpvSession {
     // Serializes a whole apply_surface call against concurrent applies (see pip_exit).
     surface_lock: tokio::sync::Mutex<()>,
     last_applied: Mutex<Option<SurfaceSnapshot>>,
+    // ffmpeg's HTTP status from its log-message text, parsed for the following end-file event.
+    last_http_status: Mutex<Option<u16>>,
 }
 
 #[cfg(target_os = "windows")]
@@ -579,6 +584,7 @@ async fn run_reader(
 struct PropertyEmitState {
     pending: Mutex<HashMap<String, Value>>,
     last_time_pos_emit: Mutex<Instant>,
+    trailing_flush_scheduled: AtomicBool,
 }
 
 #[cfg(target_os = "windows")]
@@ -587,6 +593,7 @@ impl PropertyEmitState {
         Self {
             pending: Mutex::new(HashMap::new()),
             last_time_pos_emit: Mutex::new(Instant::now() - TIME_POS_MIN_INTERVAL),
+            trailing_flush_scheduled: AtomicBool::new(false),
         }
     }
 }
@@ -616,6 +623,7 @@ fn camel_prop_name(mpv_name: &str) -> &str {
         "audio-params/channel-count" => "audioChannelCount",
         "video-params/pixelformat" => "pixelFormat",
         "file-format" => "fileFormat",
+        "stream-record" => "streamRecord",
         other => other,
     }
 }
@@ -624,27 +632,47 @@ fn should_flush_time_pos(elapsed_since_last: Duration) -> bool {
     elapsed_since_last >= TIME_POS_MIN_INTERVAL
 }
 
+/// Remaining wait before a throttled update that just missed the window is due to flush.
+fn trailing_flush_delay(elapsed_since_last: Duration) -> Duration {
+    TIME_POS_MIN_INTERVAL.saturating_sub(elapsed_since_last)
+}
+
 #[cfg(target_os = "windows")]
 fn record_property_change(
     app: &AppHandle,
     session_id: &str,
-    emit_state: &PropertyEmitState,
+    emit_state: &Arc<PropertyEmitState>,
     mpv_name: &str,
     value: Value,
 ) {
-    let camel = camel_prop_name(mpv_name).to_string();
-    let mut pending = emit_state.pending.lock().unwrap_or_else(|poison| poison.into_inner());
-    pending.insert(camel, value);
+    record_property_change_with_camel(app, session_id, emit_state, camel_prop_name(mpv_name), value, mpv_name == "time-pos");
+}
 
-    let should_flush = if mpv_name == "time-pos" {
+// Shared by record_property_change and the demuxer-cache-state -> cacheRangeStart/End split.
+#[cfg(target_os = "windows")]
+fn record_property_change_with_camel(
+    app: &AppHandle,
+    session_id: &str,
+    emit_state: &Arc<PropertyEmitState>,
+    camel_name: &str,
+    value: Value,
+    throttled: bool,
+) {
+    let mut pending = emit_state.pending.lock().unwrap_or_else(|poison| poison.into_inner());
+    pending.insert(camel_name.to_string(), value);
+
+    let mut pending_delay: Option<Duration> = None;
+    let should_flush = if throttled {
         let mut last = emit_state
             .last_time_pos_emit
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if should_flush_time_pos(last.elapsed()) {
+        let elapsed = last.elapsed();
+        if should_flush_time_pos(elapsed) {
             *last = Instant::now();
             true
         } else {
+            pending_delay = Some(trailing_flush_delay(elapsed));
             false
         }
     } else {
@@ -655,7 +683,53 @@ fn record_property_change(
         let props: HashMap<String, Value> = std::mem::take(&mut *pending);
         drop(pending);
         let _ = app.emit("xt:mpv-state", json!({ "sessionId": session_id, "props": props }));
+        return;
     }
+    drop(pending);
+    if let Some(delay) = pending_delay {
+        schedule_trailing_flush(app, session_id, emit_state, delay);
+    }
+}
+
+// Ensures a throttled update with no follow-up still reaches the frontend instead of sitting stuck.
+#[cfg(target_os = "windows")]
+fn schedule_trailing_flush(app: &AppHandle, session_id: &str, emit_state: &Arc<PropertyEmitState>, delay: Duration) {
+    if emit_state.trailing_flush_scheduled.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let app = app.clone();
+    let session_id = session_id.to_string();
+    let emit_state = emit_state.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(delay).await;
+        emit_state.trailing_flush_scheduled.store(false, Ordering::Release);
+        let mut pending = emit_state.pending.lock().unwrap_or_else(|poison| poison.into_inner());
+        if pending.is_empty() {
+            return;
+        }
+        let props: HashMap<String, Value> = std::mem::take(&mut *pending);
+        drop(pending);
+        let _ = app.emit("xt:mpv-state", json!({ "sessionId": session_id, "props": props }));
+    });
+}
+
+/// Min start / max end across mpv's `demuxer-cache-state` `seekable-ranges`.
+fn cache_range_from_state(state: &Value) -> (Value, Value) {
+    let Some(ranges) = state.get("seekable-ranges").and_then(Value::as_array).filter(|ranges| !ranges.is_empty())
+    else {
+        return (Value::Null, Value::Null);
+    };
+    let mut min_start: Option<f64> = None;
+    let mut max_end: Option<f64> = None;
+    for range in ranges {
+        if let Some(start) = range.get("start").and_then(Value::as_f64) {
+            min_start = Some(min_start.map_or(start, |current| current.min(start)));
+        }
+        if let Some(end) = range.get("end").and_then(Value::as_f64) {
+            max_end = Some(max_end.map_or(end, |current| current.max(end)));
+        }
+    }
+    (min_start.map_or(Value::Null, |value| json!(value)), max_end.map_or(Value::Null, |value| json!(value)))
 }
 
 // Updates the metrics apply_surface reads and wakes the surface task to recompute placement.
@@ -674,7 +748,7 @@ fn update_video_metrics(session: &Arc<MpvSession>, name: &str, value: &Value) {
 }
 
 #[cfg(target_os = "windows")]
-fn handle_mpv_event(app: &AppHandle, session: &Arc<MpvSession>, emit_state: &PropertyEmitState, parsed: &Value) {
+fn handle_mpv_event(app: &AppHandle, session: &Arc<MpvSession>, emit_state: &Arc<PropertyEmitState>, parsed: &Value) {
     let event_name = parsed.get("event").and_then(Value::as_str).unwrap_or("");
     if event_name == "property-change" {
         let Some(name) = parsed.get("name").and_then(Value::as_str) else { return };
@@ -682,9 +756,23 @@ fn handle_mpv_event(app: &AppHandle, session: &Arc<MpvSession>, emit_state: &Pro
         if matches!(name, "dwidth" | "dheight" | "panscan") {
             update_video_metrics(session, name, &value);
         }
+        if name == "demuxer-cache-state" {
+            let (range_start, range_end) = cache_range_from_state(&value);
+            record_property_change_with_camel(app, &session.session_id, emit_state, "cacheRangeStart", range_start, true);
+            record_property_change_with_camel(app, &session.session_id, emit_state, "cacheRangeEnd", range_end, true);
+            return;
+        }
         record_property_change(app, &session.session_id, emit_state, name, value);
         return;
     }
+    if event_name == "log-message" {
+        if let Some(status) = parsed.get("text").and_then(Value::as_str).and_then(parse_http_status_from_log) {
+            *session.last_http_status.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(status);
+        }
+    } else if event_name == "start-file" {
+        *session.last_http_status.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
+    }
+
     let kind = match event_name {
         "file-loaded" | "end-file" | "playback-restart" | "start-file" => event_name,
         "log-message" => "log",
@@ -696,10 +784,12 @@ fn handle_mpv_event(app: &AppHandle, session: &Arc<MpvSession>, emit_state: &Pro
         .and_then(Value::as_str)
         .or_else(|| parsed.get("file_error").and_then(Value::as_str))
         .map(str::to_string);
-    let _ = app.emit(
-        "xt:mpv-event",
-        json!({ "sessionId": session.session_id, "kind": kind, "reason": reason, "detail": detail }),
-    );
+    let mut payload = json!({ "sessionId": session.session_id, "kind": kind, "reason": reason, "detail": detail });
+    if kind == "end-file" {
+        let http_status = *session.last_http_status.lock().unwrap_or_else(|poison| poison.into_inner());
+        payload["httpStatus"] = json!(http_status);
+    }
+    let _ = app.emit("xt:mpv-event", payload);
 }
 
 #[cfg(target_os = "windows")]
@@ -717,8 +807,87 @@ async fn register_observed_properties(session: &Arc<MpvSession>) {
 // mpv argv / loadfile options (pure)
 // ---------------------------------------------------------------------------
 
-fn build_mpv_embed_args(wid: isize, pipe_name: &str, log_file: &str) -> Vec<String> {
-    vec![
+/// Optional session-start tuning passed from the frontend; every field defaults when absent.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MpvEmbedStartConfig {
+    pub hwdec: Option<String>,
+    pub quality: Option<String>,
+    pub extra_args: Option<Vec<String>>,
+}
+
+const ALLOWED_HWDEC_VALUES: &[&str] = &["auto-safe", "auto", "auto-copy", "no"];
+
+fn resolve_hwdec(hwdec: Option<&str>) -> &str {
+    hwdec.filter(|value| ALLOWED_HWDEC_VALUES.contains(value)).unwrap_or("auto-safe")
+}
+
+fn quality_profile_args(quality: Option<&str>) -> Vec<String> {
+    match quality {
+        Some("performance") => vec![
+            "--scale=bilinear".to_string(),
+            "--cscale=bilinear".to_string(),
+            "--dscale=bilinear".to_string(),
+            "--dither=no".to_string(),
+            "--deband=no".to_string(),
+            "--interpolation=no".to_string(),
+            "--hdr-compute-peak=no".to_string(),
+        ],
+        Some("quality") => vec![
+            "--profile=high-quality".to_string(),
+            "--deband=yes".to_string(),
+            "--hdr-compute-peak=yes".to_string(),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+// mpv options a user-supplied extra arg must never touch: our own wiring, IPC/log, filesystem writes.
+const EXTRA_ARG_BLOCKLIST: &[&str] = &[
+    "vo", "wid", "input-ipc-server", "osc", "script-opts", "script-opts-append", "script-opts-add",
+    "script-opts-remove", "idle", "keep-open", "force-window", "input-default-bindings", "input-vo-keyboard",
+    "input-cursor", "input-media-keys", "log-file", "config", "config-dir", "msg-level", "load-scripts",
+    "scripts", "scripts-append", "script", "terminal", "really-quiet", "quiet", "ytdl", "ontop", "fullscreen",
+    "fs", "geometry", "autofit", "autofit-larger", "autofit-smaller", "border", "title", "force-media-title",
+    "input-terminal", "gpu-context", "include", "input-conf", "stream-record", "stream-dump", "o", "of",
+    "record-file", "dump-stats",
+];
+
+fn extra_mpv_arg_option_name(entry: &str) -> Option<&str> {
+    let after_prefix = entry.strip_prefix("--")?;
+    let name = after_prefix.split('=').next().unwrap_or(after_prefix);
+    Some(name.strip_prefix("no-").unwrap_or(name))
+}
+
+/// Sanitizes user-supplied extra mpv args: `--`-only, no control chars, blocklisted options dropped.
+pub fn sanitize_extra_mpv_args(args: &[String]) -> Vec<String> {
+    let mut sanitized: Vec<String> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    for raw_entry in args {
+        let entry = raw_entry.trim();
+        if !entry.starts_with("--") {
+            continue;
+        }
+        if entry.contains(['\n', '\r', '\t', '\0']) {
+            continue;
+        }
+        let Some(option_name) = extra_mpv_arg_option_name(entry) else { continue };
+        if EXTRA_ARG_BLOCKLIST.contains(&option_name.to_ascii_lowercase().as_str()) {
+            continue;
+        }
+        match names.iter().position(|name| name == option_name) {
+            Some(existing_index) => sanitized[existing_index] = entry.to_string(),
+            None => {
+                names.push(option_name.to_string());
+                sanitized.push(entry.to_string());
+            }
+        }
+    }
+    sanitized
+}
+
+fn build_mpv_embed_args(wid: isize, pipe_name: &str, log_file: &str, config: &MpvEmbedStartConfig) -> Vec<String> {
+    let mut args = vec![
         format!("--wid={wid}"),
         format!("--input-ipc-server={pipe_name}"),
         "--idle=yes".to_string(),
@@ -736,14 +905,24 @@ fn build_mpv_embed_args(wid: isize, pipe_name: &str, log_file: &str) -> Vec<Stri
         "--msg-level=all=warn".to_string(),
         format!("--log-file={log_file}"),
         "--no-config".to_string(),
-        "--hwdec=auto-safe".to_string(),
+        format!("--hwdec={}", resolve_hwdec(config.hwdec.as_deref())),
         "--audio-client-name=Extreme InfiniTV".to_string(),
         "--screenshot-format=png".to_string(),
         "--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5".to_string(),
         "--cache=yes".to_string(),
         "--demuxer-max-bytes=150MiB".to_string(),
         "--demuxer-readahead-secs=20".to_string(),
-    ]
+        "--demuxer-max-back-bytes=150MiB".to_string(),
+        "--ytdl=no".to_string(),
+        "--audio-fallback-to-null=yes".to_string(),
+        "--input-media-keys=no".to_string(),
+        "--video-sync=display-resample".to_string(),
+    ];
+    args.extend(quality_profile_args(config.quality.as_deref()));
+    if let Some(extra_args) = config.extra_args.as_deref() {
+        args.extend(sanitize_extra_mpv_args(extra_args));
+    }
+    args
 }
 
 fn percent_encode_value(value: &str) -> String {
@@ -757,6 +936,9 @@ fn build_loadfile_options(options: &LoadOptions) -> Option<String> {
     }
     if let Some(referer) = options.referer.as_deref().filter(|value| !value.is_empty()) {
         entries.push(format!("referrer={}", percent_encode_value(referer)));
+    }
+    if let Some(media_title) = options.media_title.as_deref().filter(|value| !value.is_empty()) {
+        entries.push(format!("force-media-title={}", percent_encode_value(media_title)));
     }
     if !options.is_live {
         if let Some(start_seconds) = options.start_seconds.filter(|value| *value > 0.0) {
@@ -784,6 +966,24 @@ fn build_loadfile_command(url: &str, options: &LoadOptions, use_index_form: bool
 
 fn is_invalid_parameter_reply(error: &str) -> bool {
     error.ends_with("invalid parameter")
+}
+
+// Matches ffmpeg's two log phrasings for a failed HTTP fetch ("HTTP error 404", "Server returned 403").
+fn parse_http_status_from_log(text: &str) -> Option<u16> {
+    let lower = text.to_ascii_lowercase();
+    for marker in ["http error ", "server returned "] {
+        if let Some(after_marker) = lower.find(marker).map(|index| &lower[index + marker.len()..]) {
+            let digits: String = after_marker.chars().take_while(|character| character.is_ascii_digit()).collect();
+            if digits.len() == 3 {
+                if let Ok(status) = digits.parse::<u16>() {
+                    if (400..=599).contains(&status) {
+                        return Some(status);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 // mpv issue 10189: an invalid wid makes mpv spawn a detached window instead of embedding.
@@ -1984,7 +2184,12 @@ async fn read_child_stderr_head(child: &mut Child) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: Bounds) -> Result<MpvEmbedSession, String> {
+async fn start_session(
+    app: AppHandle,
+    state: State<'_, MpvEmbedState>,
+    bounds: Bounds,
+    config: MpvEmbedStartConfig,
+) -> Result<MpvEmbedSession, String> {
     let _ = APP_HANDLE_FOR_PIP.set(app.clone());
     let mpv_path = resolve_mpv_binary().ok_or_else(|| "NOT_FOUND:no mpv binary resolved".to_string())?;
 
@@ -2001,7 +2206,7 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
     let session_id = generate_session_id();
     let pipe_name = pick_embed_pipe();
     let log_file = mpv_embed_log_path(&app);
-    let args = build_mpv_embed_args(parent_value, &pipe_name, &log_file);
+    let args = build_mpv_embed_args(parent_value, &pipe_name, &log_file, &config);
 
     let mut command = TokioCommand::new(&mpv_path);
     command
@@ -2074,6 +2279,7 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
         pip_hwnd: Mutex::new(None),
         surface_lock: tokio::sync::Mutex::new(()),
         last_applied: Mutex::new(None),
+        last_http_status: Mutex::new(None),
     });
 
     let reader_handle = tauri::async_runtime::spawn(run_reader(
@@ -2089,6 +2295,10 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
     }
 
     register_observed_properties(&session).await;
+    let request_log_messages = json!({ "command": ["request_log_messages", "warn"] });
+    if let Err(error) = session.ipc.send_request(request_log_messages, MPV_IPC_TIMEOUT).await {
+        log::warn!("[mpv-embed] session {session_id} failed to request log messages: {error}");
+    }
     if let Err(error) = initialize_video_placement(&session.ipc).await {
         log::warn!("[mpv-embed] session {session_id} failed to initialize video placement: {error}");
     }
@@ -2114,7 +2324,12 @@ async fn start_session(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: 
 }
 
 #[cfg(not(target_os = "windows"))]
-async fn start_session(_app: AppHandle, _state: State<'_, MpvEmbedState>, _bounds: Bounds) -> Result<MpvEmbedSession, String> {
+async fn start_session(
+    _app: AppHandle,
+    _state: State<'_, MpvEmbedState>,
+    _bounds: Bounds,
+    _config: MpvEmbedStartConfig,
+) -> Result<MpvEmbedSession, String> {
     Err(platform_unsupported())
 }
 
@@ -2182,8 +2397,13 @@ pub async fn mpv_embed_available() -> MpvEmbedAvailability {
 }
 
 #[tauri::command]
-pub async fn mpv_embed_start(app: AppHandle, state: State<'_, MpvEmbedState>, bounds: Bounds) -> Result<MpvEmbedSession, String> {
-    start_session(app, state, bounds).await
+pub async fn mpv_embed_start(
+    app: AppHandle,
+    state: State<'_, MpvEmbedState>,
+    bounds: Bounds,
+    config: Option<MpvEmbedStartConfig>,
+) -> Result<MpvEmbedSession, String> {
+    start_session(app, state, bounds, config.unwrap_or_default()).await
 }
 
 #[tauri::command]
@@ -2484,7 +2704,12 @@ mod tests {
 
     #[test]
     fn build_mpv_embed_args_matches_the_documented_pipeline() {
-        let args = build_mpv_embed_args(12345, r"\\.\pipe\xt-mpv-embed-1", r"C:\logs\mpv-embed.log");
+        let args = build_mpv_embed_args(
+            12345,
+            r"\\.\pipe\xt-mpv-embed-1",
+            r"C:\logs\mpv-embed.log",
+            &MpvEmbedStartConfig::default(),
+        );
         assert_eq!(
             args,
             vec![
@@ -2512,12 +2737,142 @@ mod tests {
                 "--cache=yes".to_string(),
                 "--demuxer-max-bytes=150MiB".to_string(),
                 "--demuxer-readahead-secs=20".to_string(),
+                "--demuxer-max-back-bytes=150MiB".to_string(),
+                "--ytdl=no".to_string(),
+                "--audio-fallback-to-null=yes".to_string(),
+                "--input-media-keys=no".to_string(),
+                "--video-sync=display-resample".to_string(),
             ]
         );
     }
 
+    #[test]
+    fn build_mpv_embed_args_falls_back_to_auto_safe_hwdec_for_an_unknown_value() {
+        let config = MpvEmbedStartConfig { hwdec: Some("bogus".to_string()), ..Default::default() };
+        let args = build_mpv_embed_args(1, "pipe", "log", &config);
+        assert!(args.contains(&"--hwdec=auto-safe".to_string()));
+    }
+
+    #[test]
+    fn build_mpv_embed_args_accepts_each_allowed_hwdec_value() {
+        for value in ALLOWED_HWDEC_VALUES {
+            let config = MpvEmbedStartConfig { hwdec: Some(value.to_string()), ..Default::default() };
+            let args = build_mpv_embed_args(1, "pipe", "log", &config);
+            assert!(args.contains(&format!("--hwdec={value}")));
+        }
+    }
+
+    #[test]
+    fn build_mpv_embed_args_appends_the_performance_quality_profile() {
+        let config = MpvEmbedStartConfig { quality: Some("performance".to_string()), ..Default::default() };
+        let args = build_mpv_embed_args(1, "pipe", "log", &config);
+        for flag in [
+            "--scale=bilinear",
+            "--cscale=bilinear",
+            "--dscale=bilinear",
+            "--dither=no",
+            "--deband=no",
+            "--interpolation=no",
+            "--hdr-compute-peak=no",
+        ] {
+            assert!(args.contains(&flag.to_string()), "missing {flag}");
+        }
+    }
+
+    #[test]
+    fn build_mpv_embed_args_appends_the_quality_profile() {
+        let config = MpvEmbedStartConfig { quality: Some("quality".to_string()), ..Default::default() };
+        let args = build_mpv_embed_args(1, "pipe", "log", &config);
+        for flag in ["--profile=high-quality", "--deband=yes", "--hdr-compute-peak=yes"] {
+            assert!(args.contains(&flag.to_string()), "missing {flag}");
+        }
+    }
+
+    #[test]
+    fn build_mpv_embed_args_appends_nothing_for_an_unknown_quality_value() {
+        let base = build_mpv_embed_args(1, "pipe", "log", &MpvEmbedStartConfig::default());
+        let config = MpvEmbedStartConfig { quality: Some("bogus".to_string()), ..Default::default() };
+        assert_eq!(build_mpv_embed_args(1, "pipe", "log", &config), base);
+    }
+
+    #[test]
+    fn build_mpv_embed_args_appends_sanitized_extra_args_last() {
+        let config = MpvEmbedStartConfig {
+            quality: Some("performance".to_string()),
+            extra_args: Some(vec!["--hwdec=no".to_string()]),
+            ..Default::default()
+        };
+        let args = build_mpv_embed_args(1, "pipe", "log", &config);
+        assert_eq!(args.last(), Some(&"--hwdec=no".to_string()));
+    }
+
+    #[test]
+    fn sanitize_extra_mpv_args_drops_blocklisted_options_including_the_no_form() {
+        let args = sanitize_extra_mpv_args(&["--osc=no".to_string(), "--no-osc".to_string(), "--wid=1".to_string()]);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn sanitize_extra_mpv_args_drops_entries_not_starting_with_dash_dash() {
+        let args = sanitize_extra_mpv_args(&["hwdec=no".to_string(), "-hwdec=no".to_string()]);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn sanitize_extra_mpv_args_drops_newline_injection() {
+        let args = sanitize_extra_mpv_args(&["--deband=yes\n--wid=1".to_string()]);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn sanitize_extra_mpv_args_keeps_a_well_formed_entry() {
+        let args = sanitize_extra_mpv_args(&["--deband=yes".to_string()]);
+        assert_eq!(args, vec!["--deband=yes".to_string()]);
+    }
+
+    #[test]
+    fn sanitize_extra_mpv_args_keeps_the_last_duplicate_and_preserves_order() {
+        let args = sanitize_extra_mpv_args(&[
+            "--deband=yes".to_string(),
+            "--panscan=1".to_string(),
+            "--deband=no".to_string(),
+        ]);
+        assert_eq!(args, vec!["--deband=no".to_string(), "--panscan=1".to_string()]);
+    }
+
+    #[test]
+    fn sanitize_extra_mpv_args_drops_include() {
+        let args = sanitize_extra_mpv_args(&["--include=x.conf".to_string()]);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn sanitize_extra_mpv_args_drops_input_conf() {
+        let args = sanitize_extra_mpv_args(&["--input-conf=x".to_string()]);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn sanitize_extra_mpv_args_drops_stream_record() {
+        let args = sanitize_extra_mpv_args(&["--stream-record=x.ts".to_string()]);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn sanitize_extra_mpv_args_drops_blocklisted_options_case_insensitively() {
+        let args = sanitize_extra_mpv_args(&["--VO=gpu".to_string()]);
+        assert!(args.is_empty());
+    }
+
     fn empty_options() -> LoadOptions {
-        LoadOptions { user_agent: None, referer: None, start_seconds: None, is_live: false, network_timeout_seconds: None }
+        LoadOptions {
+            user_agent: None,
+            referer: None,
+            start_seconds: None,
+            is_live: false,
+            network_timeout_seconds: None,
+            media_title: None,
+        }
     }
 
     #[test]
@@ -2566,6 +2921,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_http_status_from_log_matches_the_http_error_phrasing() {
+        assert_eq!(parse_http_status_from_log("HTTP error 404 Not Found"), Some(404));
+    }
+
+    #[test]
+    fn parse_http_status_from_log_matches_the_server_returned_phrasing() {
+        assert_eq!(parse_http_status_from_log("[ffmpeg] Server returned 403 Forbidden"), Some(403));
+    }
+
+    #[test]
+    fn parse_http_status_from_log_returns_none_for_unrelated_text() {
+        assert_eq!(parse_http_status_from_log("Opening connection to example.test"), None);
+    }
+
+    #[test]
     fn build_loadfile_options_percent_encodes_user_agent_and_referer() {
         let options = LoadOptions {
             user_agent: Some("Mozilla/5.0, extra".to_string()),
@@ -2607,6 +2977,13 @@ mod tests {
     fn build_loadfile_options_ignores_a_zero_or_negative_network_timeout() {
         let options = LoadOptions { network_timeout_seconds: Some(0.0), ..empty_options() };
         assert_eq!(build_loadfile_options(&options), None);
+    }
+
+    #[test]
+    fn build_loadfile_options_includes_the_percent_encoded_media_title() {
+        let options = LoadOptions { media_title: Some("Channel, One".to_string()), ..empty_options() };
+        let opts = build_loadfile_options(&options).expect("options string");
+        assert!(opts.contains(&format!("force-media-title=%{}%Channel, One", "Channel, One".len())));
     }
 
     #[test]
@@ -2696,6 +3073,31 @@ mod tests {
     }
 
     #[test]
+    fn trailing_flush_delay_returns_the_remaining_throttle_window() {
+        assert_eq!(trailing_flush_delay(Duration::from_millis(100)), Duration::from_millis(150));
+        assert_eq!(trailing_flush_delay(Duration::from_millis(250)), Duration::ZERO);
+        assert_eq!(trailing_flush_delay(Duration::from_millis(500)), Duration::ZERO);
+    }
+
+    #[test]
+    fn cache_range_from_state_returns_the_min_start_and_max_end_across_ranges() {
+        let state = json!({ "seekable-ranges": [{ "start": 10.0, "end": 20.0 }, { "start": 5.0, "end": 30.0 }] });
+        assert_eq!(cache_range_from_state(&state), (json!(5.0), json!(30.0)));
+    }
+
+    #[test]
+    fn cache_range_from_state_returns_nulls_for_an_empty_ranges_array() {
+        let state = json!({ "seekable-ranges": [] });
+        assert_eq!(cache_range_from_state(&state), (Value::Null, Value::Null));
+    }
+
+    #[test]
+    fn cache_range_from_state_returns_nulls_when_the_key_is_missing() {
+        let state = json!({});
+        assert_eq!(cache_range_from_state(&state), (Value::Null, Value::Null));
+    }
+
+    #[test]
     fn camel_prop_name_covers_every_observed_property() {
         let expected: &[(&str, &str)] = &[
             ("pause", "pause"),
@@ -2735,6 +3137,8 @@ mod tests {
             ("video-params/pixelformat", "pixelFormat"),
             ("file-format", "fileFormat"),
             ("seekable", "seekable"),
+            ("demuxer-cache-state", "demuxer-cache-state"),
+            ("stream-record", "streamRecord"),
         ];
         assert_eq!(expected.len(), OBSERVED_PROPERTIES.len());
         for (mpv_name, camel_name) in expected {

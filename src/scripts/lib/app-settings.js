@@ -21,6 +21,9 @@ const KEY_PLAYER_ARGS_MPV = "xt_player_args_mpv"
 const KEY_PLAYER_ARGS_VLC = "xt_player_args_vlc"
 const KEY_PLAYER_REUSE_MPV = "xt_player_reuse_mpv"
 const KEY_PLAYER_REUSE_VLC = "xt_player_reuse_vlc"
+const KEY_MPV_HWDEC = "xt_mpv_hwdec"
+const KEY_MPV_QUALITY = "xt_mpv_quality"
+const KEY_MPV_EXTRA_ARGS = "xt_mpv_extra_args"
 const KEY_FFMPEG_PATH = "xt_ffmpeg_path"
 const KEY_EXTERNAL_PLAYER_PREF = "xt_external_player_pref"
 const KEY_CLOSE_TO_TRAY = "xt_close_to_tray"
@@ -873,6 +876,62 @@ export function setExternalPlayerPref(pref) {
   document.dispatchEvent(
     new CustomEvent(EVT_CHANGED, { detail: { key: "externalPlayerPref" } })
   )
+}
+
+// ---------------------------------------------------------------------------
+// Embedded mpv playback options (Windows desktop only)
+// ---------------------------------------------------------------------------
+export const MPV_HWDEC_MODES = ["auto-safe", "auto", "auto-copy", "no"]
+export const MPV_QUALITY_PROFILES = ["default", "performance", "quality"]
+export const MPV_SETTINGS_EVENT = "xt:mpv-settings-changed"
+
+export function getMpvHwdec() {
+  const raw = readLS(KEY_MPV_HWDEC, "")
+  return MPV_HWDEC_MODES.includes(raw) ? raw : "auto-safe"
+}
+
+export function setMpvHwdec(mode) {
+  const next = MPV_HWDEC_MODES.includes(mode) ? mode : "auto-safe"
+  writeLS(KEY_MPV_HWDEC, next === "auto-safe" ? "" : next)
+  document.dispatchEvent(
+    new CustomEvent(MPV_SETTINGS_EVENT, { detail: { key: "hwdec", value: next } })
+  )
+}
+
+export function getMpvQuality() {
+  const raw = readLS(KEY_MPV_QUALITY, "")
+  return MPV_QUALITY_PROFILES.includes(raw) ? raw : "default"
+}
+
+export function setMpvQuality(profile) {
+  const next = MPV_QUALITY_PROFILES.includes(profile) ? profile : "default"
+  writeLS(KEY_MPV_QUALITY, next === "default" ? "" : next)
+  document.dispatchEvent(
+    new CustomEvent(MPV_SETTINGS_EVENT, { detail: { key: "quality", value: next } })
+  )
+}
+
+export function getMpvExtraArgsText() {
+  return readLS(KEY_MPV_EXTRA_ARGS, "")
+}
+
+export function setMpvExtraArgsText(text) {
+  writeLS(KEY_MPV_EXTRA_ARGS, text || "")
+  document.dispatchEvent(
+    new CustomEvent(MPV_SETTINGS_EVENT, { detail: { key: "extraArgs" } })
+  )
+}
+
+export function getMpvExtraArgs() {
+  return getMpvExtraArgsText()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("--"))
+}
+
+/** Shape consumed by the Rust `mpv_embed_start` command's `config` argument. */
+export function getMpvStartConfig() {
+  return { hwdec: getMpvHwdec(), quality: getMpvQuality(), extraArgs: getMpvExtraArgs() }
 }
 
 // Global default display mode (fit/fill/zoom/16:9/4:3) for the embedded

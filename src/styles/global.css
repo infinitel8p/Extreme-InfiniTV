@@ -3536,6 +3536,74 @@ html[data-native-video="on"] :fullscreen {
 .mpv-controls__btn--pressed {
     background: rgba(255, 255, 255, 0.22);
 }
+.mpv-controls__btn--recording {
+    color: #f87171;
+}
+
+.mpv-controls__live-badge {
+    min-height: 44px;
+    padding-inline: 0.4rem;
+    border: none;
+    border-radius: 9999px;
+    background: transparent;
+    cursor: default;
+    transition: color 150ms;
+}
+.mpv-controls__live-badge[aria-disabled="false"] {
+    cursor: pointer;
+}
+.mpv-controls__live-badge[aria-disabled="false"]:hover,
+.mpv-controls__live-badge[aria-disabled="false"]:focus-visible {
+    color: var(--color-accent);
+}
+.mpv-controls__live-badge:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+}
+.mpv-controls__live-badge[hidden] {
+    display: none;
+}
+[data-perf-mode="on"] .mpv-controls__live-badge {
+    transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .mpv-controls__live-badge {
+        transition: none;
+    }
+}
+
+.mpv-controls__rec-readout {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding-inline: 0.35rem;
+    color: #f87171;
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.mpv-controls__rec-readout[hidden] {
+    display: none;
+}
+.mpv-controls__rec-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 9999px;
+    background: #f87171;
+    animation: mpv-rec-pulse 1.4s ease-in-out infinite;
+}
+@keyframes mpv-rec-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+[data-perf-mode="on"] .mpv-controls__rec-dot {
+    animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .mpv-controls__rec-dot {
+        animation: none;
+    }
+}
 
 .mpv-controls__buffer-bar {
     position: absolute;
@@ -3651,12 +3719,15 @@ html[data-native-video="on"] :fullscreen {
     flex-direction: column;
     gap: 0.75rem;
     min-width: 12rem;
+    max-height: min(70vh, 26rem);
     padding: 0.65rem;
     border-radius: 0.85rem;
     background: rgba(20, 20, 24, 0.92);
     border: 1px solid rgba(255, 255, 255, 0.12);
     backdrop-filter: blur(14px);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 .mpv-controls__popover[hidden] {
     display: none;
@@ -3667,6 +3738,12 @@ html[data-native-video="on"] :fullscreen {
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: rgba(255, 255, 255, 0.6);
+}
+.mpv-controls__popover-subtitle {
+    margin-top: 0.5rem;
+    font-size: 0.68rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.55);
 }
 .mpv-controls__popover-options {
     display: flex;

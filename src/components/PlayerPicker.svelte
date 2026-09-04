@@ -11,9 +11,17 @@
     setPlayerReuseInstance,
     getExternalPlayerPref,
     setExternalPlayerPref,
+    getMpvHwdec,
+    setMpvHwdec,
+    getMpvQuality,
+    setMpvQuality,
+    getMpvExtraArgsText,
+    setMpvExtraArgsText,
     PLAYER_BACKENDS,
     PLAYER_BACKEND_EVENT,
     EXTERNAL_PLAYER_PREF_VALUES,
+    MPV_HWDEC_MODES,
+    MPV_QUALITY_PROFILES,
     isWindowsDesktopSync,
   } from "@/scripts/lib/app-settings.js"
   import {
@@ -47,6 +55,9 @@
   let statusMpv = $state(readDetectStatus("mpv"))
   let statusVlc = $state(readDetectStatus("vlc"))
   let externalPref = $state(getExternalPlayerPref())
+  let mpvHwdec = $state(getMpvHwdec())
+  let mpvQuality = $state(getMpvQuality())
+  let mpvExtraArgsText = $state(getMpvExtraArgsText())
   // externalPlayersAvailable already reflects sandbox state.
   const sandboxed = isDesktopTauriEnv && !externalPlayersAvailable
   // mpv-embedded only ships on Windows desktop (Rust commands + sidecar are Windows-only).
@@ -80,6 +91,22 @@
   let externalPrefHelper = $state(label("externalPref.helper", "Which player the 'Open in…' button uses when both MPV and VLC are set."))
   let externalPrefAskLabel = $state(label("externalPref.ask", "Ask each time"))
   let sandboxNoteLabel = $state(label("sandboxNote", "External players (MPV/VLC) aren't available in Snap or Flatpak installs."))
+  let mpvOptionsTitleLabel = $state(label("backend.mpvOptions.title", "Embedded mpv options"))
+  let mpvOptionsAppliesNextStartLabel = $state(label("backend.mpvOptions.appliesNextStart", "Applied when playback next starts."))
+  let mpvHwdecLabel = $state(label("backend.mpvOptions.hwdec.label", "Hardware decoding"))
+  let mpvHwdecHelperLabel = $state(label("backend.mpvOptions.hwdec.helper", "Turn off if video stutters or shows artefacts on this PC."))
+  let mpvHwdecAutoSafeLabel = $state(label("backend.mpvOptions.hwdec.autoSafe", "Auto (safe)"))
+  let mpvHwdecAutoLabel = $state(label("backend.mpvOptions.hwdec.auto", "Auto"))
+  let mpvHwdecAutoCopyLabel = $state(label("backend.mpvOptions.hwdec.autoCopy", "Auto (copy)"))
+  let mpvHwdecOffLabel = $state(label("backend.mpvOptions.hwdec.off", "Off"))
+  let mpvQualityLabel = $state(label("backend.mpvOptions.quality.label", "Quality profile"))
+  let mpvQualityHelperLabel = $state(label("backend.mpvOptions.quality.helper", "Performance lowers scaling quality for weak GPUs. Quality enables high-quality scaling and HDR peak detection."))
+  let mpvQualityDefaultLabel = $state(label("backend.mpvOptions.quality.default", "Default"))
+  let mpvQualityPerformanceLabel = $state(label("backend.mpvOptions.quality.performance", "Performance"))
+  let mpvQualityQualityLabel = $state(label("backend.mpvOptions.quality.quality", "Quality"))
+  let mpvExtraArgsLabel = $state(label("backend.mpvOptions.extraArgs.label", "Extra mpv options"))
+  let mpvExtraArgsHelperLabel = $state(label("backend.mpvOptions.extraArgs.helper", "One option per line, e.g. --deband=yes. Options that would break embedding (--vo, --wid, --osc, IPC, scripts) are ignored."))
+  let mpvExtraArgsPlaceholderLabel = $state(label("backend.mpvOptions.extraArgs.placeholder", "--deband=yes"))
 
   function label(suffix, fallback, params) {
     const key = `settings.playback.${suffix}`
@@ -148,6 +175,22 @@
     externalPrefHelper = label("externalPref.helper", "Which player the 'Open in…' button uses when both MPV and VLC are set.")
     externalPrefAskLabel = label("externalPref.ask", "Ask each time")
     sandboxNoteLabel = label("sandboxNote", "External players (MPV/VLC) aren't available in Snap or Flatpak installs.")
+    mpvOptionsTitleLabel = label("backend.mpvOptions.title", "Embedded mpv options")
+    mpvOptionsAppliesNextStartLabel = label("backend.mpvOptions.appliesNextStart", "Applied when playback next starts.")
+    mpvHwdecLabel = label("backend.mpvOptions.hwdec.label", "Hardware decoding")
+    mpvHwdecHelperLabel = label("backend.mpvOptions.hwdec.helper", "Turn off if video stutters or shows artefacts on this PC.")
+    mpvHwdecAutoSafeLabel = label("backend.mpvOptions.hwdec.autoSafe", "Auto (safe)")
+    mpvHwdecAutoLabel = label("backend.mpvOptions.hwdec.auto", "Auto")
+    mpvHwdecAutoCopyLabel = label("backend.mpvOptions.hwdec.autoCopy", "Auto (copy)")
+    mpvHwdecOffLabel = label("backend.mpvOptions.hwdec.off", "Off")
+    mpvQualityLabel = label("backend.mpvOptions.quality.label", "Quality profile")
+    mpvQualityHelperLabel = label("backend.mpvOptions.quality.helper", "Performance lowers scaling quality for weak GPUs. Quality enables high-quality scaling and HDR peak detection.")
+    mpvQualityDefaultLabel = label("backend.mpvOptions.quality.default", "Default")
+    mpvQualityPerformanceLabel = label("backend.mpvOptions.quality.performance", "Performance")
+    mpvQualityQualityLabel = label("backend.mpvOptions.quality.quality", "Quality")
+    mpvExtraArgsLabel = label("backend.mpvOptions.extraArgs.label", "Extra mpv options")
+    mpvExtraArgsHelperLabel = label("backend.mpvOptions.extraArgs.helper", "One option per line, e.g. --deband=yes. Options that would break embedding (--vo, --wid, --osc, IPC, scripts) are ignored.")
+    mpvExtraArgsPlaceholderLabel = label("backend.mpvOptions.extraArgs.placeholder", "--deband=yes")
   }
 
   function onBackendChange(event) {
@@ -184,6 +227,23 @@
     if (!EXTERNAL_PLAYER_PREF_VALUES.includes(value)) return
     externalPref = value
     setExternalPlayerPref(value)
+  }
+
+  function onMpvHwdecChange(value) {
+    if (!MPV_HWDEC_MODES.includes(value)) return
+    mpvHwdec = value
+    setMpvHwdec(value)
+  }
+
+  function onMpvQualityChange(value) {
+    if (!MPV_QUALITY_PROFILES.includes(value)) return
+    mpvQuality = value
+    setMpvQuality(value)
+  }
+
+  function onMpvExtraArgsChange(value) {
+    mpvExtraArgsText = value
+    setMpvExtraArgsText(value)
   }
 
   async function browseFor(kind) {
@@ -360,6 +420,113 @@
         <span class="active-pill" aria-hidden="true">{activeLabel}</span>
       {/if}
     </label>
+
+    {#if backend === "mpv-embedded"}
+      <div class="player-config">
+        <p class="text-eyebrow font-medium uppercase text-fg-2">{mpvOptionsTitleLabel}</p>
+
+        <fieldset class="flex flex-col gap-2">
+          <legend class="text-eyebrow font-medium uppercase text-fg-3">{mpvHwdecLabel}</legend>
+          <p class="text-xs text-fg-3">{mpvHwdecHelperLabel}</p>
+          <div class="flex flex-wrap gap-2">
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-hwdec"
+                value="auto-safe"
+                checked={mpvHwdec === "auto-safe"}
+                onchange={() => onMpvHwdecChange("auto-safe")}
+              />
+              <span>{mpvHwdecAutoSafeLabel}</span>
+            </label>
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-hwdec"
+                value="auto"
+                checked={mpvHwdec === "auto"}
+                onchange={() => onMpvHwdecChange("auto")}
+              />
+              <span>{mpvHwdecAutoLabel}</span>
+            </label>
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-hwdec"
+                value="auto-copy"
+                checked={mpvHwdec === "auto-copy"}
+                onchange={() => onMpvHwdecChange("auto-copy")}
+              />
+              <span>{mpvHwdecAutoCopyLabel}</span>
+            </label>
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-hwdec"
+                value="no"
+                checked={mpvHwdec === "no"}
+                onchange={() => onMpvHwdecChange("no")}
+              />
+              <span>{mpvHwdecOffLabel}</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="flex flex-col gap-2">
+          <legend class="text-eyebrow font-medium uppercase text-fg-3">{mpvQualityLabel}</legend>
+          <p class="text-xs text-fg-3">{mpvQualityHelperLabel}</p>
+          <div class="flex flex-wrap gap-2">
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-quality"
+                value="default"
+                checked={mpvQuality === "default"}
+                onchange={() => onMpvQualityChange("default")}
+              />
+              <span>{mpvQualityDefaultLabel}</span>
+            </label>
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-quality"
+                value="performance"
+                checked={mpvQuality === "performance"}
+                onchange={() => onMpvQualityChange("performance")}
+              />
+              <span>{mpvQualityPerformanceLabel}</span>
+            </label>
+            <label class="pref-option">
+              <input
+                type="radio"
+                name="mpv-quality"
+                value="quality"
+                checked={mpvQuality === "quality"}
+                onchange={() => onMpvQualityChange("quality")}
+              />
+              <span>{mpvQualityQualityLabel}</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <label class="flex flex-col gap-1.5">
+          <span class="text-eyebrow font-medium uppercase text-fg-3">{mpvExtraArgsLabel}</span>
+          <textarea
+            rows="3"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder={mpvExtraArgsPlaceholderLabel}
+            value={mpvExtraArgsText}
+            onchange={(event) => onMpvExtraArgsChange(event.target.value)}
+            onblur={(event) => onMpvExtraArgsChange(event.target.value)}
+            class="field-input font-mono"
+          ></textarea>
+          <span class="text-xs text-fg-3">{mpvExtraArgsHelperLabel}</span>
+        </label>
+
+        <p class="text-xs text-fg-3">{mpvOptionsAppliesNextStartLabel}</p>
+      </div>
+    {/if}
     {/if}
 
     {#if externalPlayersAvailable && !sandboxed}

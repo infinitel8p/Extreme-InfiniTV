@@ -112,6 +112,7 @@ import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dial
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { createVodPlaybackToasts } from "@/scripts/lib/vod-playback-toasts.ts"
 import { mountVodPlayback } from "@/scripts/lib/vod-mount.ts"
+import { parseHttpStatusPrefix } from "@/scripts/lib/mpv-embedded.ts"
 
 const VOD_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -1027,6 +1028,7 @@ async function startPlayback(options = {}) {
     savedProgress: saved,
     resumePos,
     nameHintSource: movie.name,
+    title: movie.name,
     posterEl,
     playerWrap,
     videoElementId: "movie-player",
@@ -1043,7 +1045,9 @@ async function startPlayback(options = {}) {
       player.one?.("error", () => {
         const errorDetail = player.codecInfo?.()?.errorDetail
         if (typeof errorDetail !== "string") return
+        const httpStatus = parseHttpStatusPrefix(errorDetail)
         if (errorDetail.startsWith("OFFLINE_PLACEHOLDER")) vodPlaybackToasts.showOfflinePlaceholderToast()
+        else if (httpStatus != null) vodPlaybackToasts.showHttpErrorToast(httpStatus)
         else if (errorDetail.startsWith("NETWORK:")) vodPlaybackToasts.showNetworkErrorToast()
       })
     },

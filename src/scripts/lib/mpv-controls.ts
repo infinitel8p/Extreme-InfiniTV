@@ -1,12 +1,14 @@
 // HTML control bar for mpv-embedded: mpv draws no chrome of its own. Desktop only, mounted by mpv-embedded.ts.
 
 import { t } from "@/scripts/lib/i18n.js"
-import { escapeHtml, formatPaddedHms } from "@/scripts/lib/format.js"
+import { escapeHtml, formatPaddedHms, formatElapsedSinceStart } from "@/scripts/lib/format.js"
 import { mpvTrackChoiceAvailable } from "@/scripts/lib/mpv-tracks.js"
+import { toastSuccess, toastError } from "@/scripts/lib/toast.js"
 import { log } from "@/scripts/lib/log.js"
 import {
   ICON_PLAYER_PLAY,
   ICON_PLAYER_PAUSE,
+  ICON_PLAYER_STOP,
   ICON_VOLUME,
   ICON_VOLUME_OFF,
   ICON_BADGE_CC,
@@ -15,6 +17,7 @@ import {
   ICON_MINIMIZE,
 } from "@/scripts/lib/icons.js"
 import type { VjsLikeHandle } from "@/scripts/lib/player-runtime.js"
+import type { MpvSubtitleStyle } from "@/scripts/lib/mpv-embedded.js"
 
 // Local icons: this file doesn't own icons.ts, so PiP/camera/gear are kept here (same Tabler outline style).
 const wrapIcon = (paths: string): string =>
@@ -44,9 +47,14 @@ const ICON_SETTINGS = wrapIcon(
     '<path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" />'
 )
 
+const ICON_RECORD_DOT =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="currentColor" /></svg>'
+
 const DEFAULT_AUTO_HIDE_MS = 3000
 const SINGLE_CLICK_DELAY_MS = 250
 const SCREENSHOT_FEEDBACK_MS = 250
+const LIVE_BEHIND_THRESHOLD_SECONDS = 3
+const AUDIO_DELAY_STEP_SECONDS = 0.05
 
 export function seekFraction(currentTimeSeconds: number, durationSeconds: number): number {
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return 0
@@ -69,6 +77,32 @@ export function isSeekableContent(isLiveHint: boolean | undefined, durationSecon
 /** Formatted clock time for a seek-bar hover tooltip at a given fraction of the timeline. */
 export function seekTooltipTime(fraction: number, durationSeconds: number): string {
   return formatPaddedHms(seekTargetFromFraction(fraction, durationSeconds))
+}
+
+export interface MpvLiveWindow {
+  start: number
+  end: number
+  position: number
+}
+
+/** Fraction of the live demuxer window the current position sits at; a degenerate window pins to the live edge. */
+export function liveWindowFraction(window: MpvLiveWindow): number {
+  const span = window.end - window.start
+  if (!Number.isFinite(span) || span <= 0) return 1
+  return Math.min(1, Math.max(0, (window.position - window.start) / span))
+}
+
+/** Inverse of liveWindowFraction: maps a seek-bar fraction back onto absolute mpv time within the window. */
+export function liveWindowTargetFromFraction(fraction: number, window: MpvLiveWindow): number {
+  const span = window.end - window.start
+  if (!Number.isFinite(span) || span <= 0) return window.end
+  return window.start + Math.min(1, Math.max(0, fraction)) * span
+}
+
+/** "-mm:ss" (or "-h:mm:ss") behind-live label; clamps a negative or non-finite delta to the live edge. */
+export function formatBehindLive(secondsBehind: number): string {
+  const clamped = Number.isFinite(secondsBehind) ? Math.max(0, secondsBehind) : 0
+  return `-${formatPaddedHms(clamped)}`
 }
 
 export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const
@@ -121,15 +155,17 @@ export interface MpvHotkeyInput {
   metaKey?: boolean
   altKey?: boolean
   isSeekable: boolean
+  hasLiveWindow?: boolean
 }
 
-/** Pure keymap for in-player hotkeys; ArrowLeft/Right only resolve when the content is seekable (VOD). */
+/** Pure keymap for in-player hotkeys; ArrowLeft/Right resolve on VOD (seekable) or live with a demuxer window. */
 export function mpvHotkeyAction(input: MpvHotkeyInput): MpvHotkeyAction | null {
   if (input.ctrlKey || input.metaKey || input.altKey) return null
   const key = input.key
   if (key === " " || key === "Spacebar") return "toggle-play"
-  if (key === "ArrowLeft") return input.isSeekable ? "seek-back" : null
-  if (key === "ArrowRight") return input.isSeekable ? "seek-forward" : null
+  const canSeek = input.isSeekable || !!input.hasLiveWindow
+  if (key === "ArrowLeft") return canSeek ? "seek-back" : null
+  if (key === "ArrowRight") return canSeek ? "seek-forward" : null
   if (key === "ArrowUp") return "volume-up"
   if (key === "ArrowDown") return "volume-down"
   const lower = key.toLowerCase()
@@ -152,6 +188,31 @@ export interface MpvControlsOptions {
   getTrackList?: () => unknown
 }
 
+const SUBTITLE_SIZE_OPTIONS: Array<{ value: MpvSubtitleStyle["size"]; labelKey: string }> = [
+  { value: "small", labelKey: "player.mpv.subtitleStyle.sizeSmall" },
+  { value: "normal", labelKey: "player.mpv.subtitleStyle.sizeNormal" },
+  { value: "large", labelKey: "player.mpv.subtitleStyle.sizeLarge" },
+  { value: "xlarge", labelKey: "player.mpv.subtitleStyle.sizeXLarge" },
+]
+const SUBTITLE_POSITION_OPTIONS: Array<{ value: MpvSubtitleStyle["position"]; labelKey: string }> = [
+  { value: "bottom", labelKey: "player.mpv.subtitleStyle.positionBottom" },
+  { value: "raised", labelKey: "player.mpv.subtitleStyle.positionRaised" },
+]
+const SUBTITLE_COLOR_OPTIONS: Array<{ value: MpvSubtitleStyle["color"]; labelKey: string }> = [
+  { value: "white", labelKey: "player.mpv.subtitleStyle.colorWhite" },
+  { value: "yellow", labelKey: "player.mpv.subtitleStyle.colorYellow" },
+]
+
+function radioOptionsHtml(options: Array<{ value: string; labelKey: string }>, dataRole: string): string {
+  return options
+    .map(
+      ({ value, labelKey }) =>
+        `<button type="button" class="mpv-controls__popover-option" role="radio" aria-checked="false"
+      data-role="${dataRole}" data-value="${value}">${escapeHtml(t(labelKey))}</button>`,
+    )
+    .join("")
+}
+
 function markup(): string {
   const speedOptionsHtml = PLAYBACK_RATES.map((rate) => {
     const label = formatPlaybackRate(rate)
@@ -159,6 +220,9 @@ function markup(): string {
       data-role="speed-btn" data-rate="${rate}"
       aria-label="${escapeHtml(t("player.controls.speedOption", { value: label }))}">${label}</button>`
   }).join("")
+  const substyleSizeHtml = radioOptionsHtml(SUBTITLE_SIZE_OPTIONS, "substyle-size-btn")
+  const substylePositionHtml = radioOptionsHtml(SUBTITLE_POSITION_OPTIONS, "substyle-position-btn")
+  const substyleColorHtml = radioOptionsHtml(SUBTITLE_COLOR_OPTIONS, "substyle-color-btn")
 
   return `
     <div class="mpv-controls__buffer-bar" data-role="buffer-bar" role="status"
@@ -178,16 +242,21 @@ function markup(): string {
     <div class="flex items-center gap-1">
       <button type="button" class="mpv-controls__btn text-xl" data-role="play-pause"></button>
       <span class="inline-flex items-center gap-1 px-1 text-xs font-medium tabular-nums text-white/85" data-role="time" hidden>
-        <span data-role="elapsed">0:00</span><span aria-hidden="true">/</span><span data-role="duration">0:00</span>
+        <span data-role="elapsed">0:00</span><span aria-hidden="true" data-role="time-sep">/</span><span data-role="duration">0:00</span>
       </span>
-      <span class="inline-flex items-center gap-1.5 px-1 text-xs font-semibold tracking-wide text-white/90" data-role="live-badge" hidden>
+      <button type="button" class="mpv-controls__live-badge inline-flex items-center gap-1.5 px-1 text-xs font-semibold tracking-wide text-white/90"
+        data-role="live-badge" aria-disabled="true" hidden>
         <span class="size-1.5 rounded-full bg-accent" aria-hidden="true"></span>${escapeHtml(t("player.controls.live"))}
+      </button>
+      <span class="mpv-controls__rec-readout" data-role="rec-readout" hidden>
+        <span class="mpv-controls__rec-dot" aria-hidden="true"></span><span data-role="rec-time">0:00</span>
       </span>
       <span class="grow"></span>
       <button type="button" class="mpv-controls__btn text-lg" data-role="subtitles"
         aria-label="${escapeHtml(t("player.subtitles"))}" title="${escapeHtml(t("player.subtitles"))}" hidden>${ICON_BADGE_CC}</button>
       <button type="button" class="mpv-controls__btn text-lg" data-role="audio"
         aria-label="${escapeHtml(t("player.audio"))}" title="${escapeHtml(t("player.audio"))}" hidden>${ICON_LANGUAGE}</button>
+      <button type="button" class="mpv-controls__btn text-lg" data-role="record" aria-pressed="false" hidden></button>
       <div class="relative" data-role="settings-wrap">
         <button type="button" class="mpv-controls__btn text-lg" data-role="settings" aria-haspopup="true" aria-expanded="false"
           aria-label="${escapeHtml(t("player.controls.settings"))}" title="${escapeHtml(t("player.controls.settings"))}">${ICON_SETTINGS}</button>
@@ -206,6 +275,28 @@ function markup(): string {
               <span data-role="subdelay-value">+0.0s</span>
               <button type="button" class="mpv-controls__btn" data-role="subdelay-plus"
                 aria-label="${escapeHtml(t("player.controls.subtitleDelayLater"))}" title="${escapeHtml(t("player.controls.subtitleDelayLater"))}">+</button>
+            </div>
+          </div>
+          <div data-role="subtitle-style-section" hidden>
+            <div class="mpv-controls__popover-title" data-role="substyle-title">${escapeHtml(t("player.mpv.subtitleStyle.title"))}</div>
+            <div class="mpv-controls__popover-subtitle">${escapeHtml(t("player.mpv.subtitleStyle.size"))}</div>
+            <div class="mpv-controls__popover-options" data-role="substyle-size-options" role="radiogroup"
+              aria-label="${escapeHtml(t("player.mpv.subtitleStyle.size"))}">${substyleSizeHtml}</div>
+            <div class="mpv-controls__popover-subtitle">${escapeHtml(t("player.mpv.subtitleStyle.position"))}</div>
+            <div class="mpv-controls__popover-options" data-role="substyle-position-options" role="radiogroup"
+              aria-label="${escapeHtml(t("player.mpv.subtitleStyle.position"))}">${substylePositionHtml}</div>
+            <div class="mpv-controls__popover-subtitle">${escapeHtml(t("player.mpv.subtitleStyle.color"))}</div>
+            <div class="mpv-controls__popover-options" data-role="substyle-color-options" role="radiogroup"
+              aria-label="${escapeHtml(t("player.mpv.subtitleStyle.color"))}">${substyleColorHtml}</div>
+          </div>
+          <div data-role="audiodelay-section" hidden>
+            <div class="mpv-controls__popover-title" data-role="audiodelay-title">${escapeHtml(t("player.mpv.audioDelay.label"))}</div>
+            <div class="mpv-controls__popover-row">
+              <button type="button" class="mpv-controls__btn" data-role="audiodelay-minus"
+                aria-label="${escapeHtml(t("player.mpv.audioDelay.label"))}">-</button>
+              <span data-role="audiodelay-value">0 ms</span>
+              <button type="button" class="mpv-controls__btn" data-role="audiodelay-plus"
+                aria-label="${escapeHtml(t("player.mpv.audioDelay.label"))}">+</button>
             </div>
           </div>
         </div>
@@ -261,7 +352,11 @@ export function mountMpvControls(
   const timeEl = query("time")
   const elapsedEl = query("elapsed")
   const durationEl = query("duration")
-  const liveBadge = query("live-badge")
+  const timeSepEl = query("time-sep")
+  const liveBadge = query<HTMLButtonElement>("live-badge")
+  const recordBtn = query<HTMLButtonElement>("record")
+  const recReadout = query("rec-readout")
+  const recTimeEl = query("rec-time")
   const seekWrap = query("seek-wrap")
   const seekBuffered = query("seek-buffered")
   const seekFill = query("seek-fill")
@@ -284,6 +379,14 @@ export function mountMpvControls(
   const subDelayValueEl = query("subdelay-value")
   const subDelayMinusBtn = query<HTMLButtonElement>("subdelay-minus")
   const subDelayPlusBtn = query<HTMLButtonElement>("subdelay-plus")
+  const subtitleStyleSection = query<HTMLElement>("subtitle-style-section")
+  const substyleSizeOptions = query<HTMLElement>("substyle-size-options")
+  const substylePositionOptions = query<HTMLElement>("substyle-position-options")
+  const substyleColorOptions = query<HTMLElement>("substyle-color-options")
+  const audioDelaySection = query<HTMLElement>("audiodelay-section")
+  const audioDelayValueEl = query("audiodelay-value")
+  const audioDelayMinusBtn = query<HTMLButtonElement>("audiodelay-minus")
+  const audioDelayPlusBtn = query<HTMLButtonElement>("audiodelay-plus")
 
   errorRetryBtn.textContent = t("common.retry")
 
@@ -294,8 +397,14 @@ export function mountMpvControls(
   if (typeof handle.requestPip !== "function") pipBtn.hidden = true
   const speedAvailable = typeof handle.playbackRate === "function"
   const subtitleDelayCapable = typeof handle.subtitleDelay === "function"
+  const subtitleStyleCapable = typeof handle.subtitleStyle === "function"
+  const audioDelayCapable = typeof handle.audioDelay === "function"
+  const recordingAvailable = typeof handle.startRecording === "function" && typeof handle.stopRecording === "function"
   speedSection.hidden = !speedAvailable
-  if (!speedAvailable && !subtitleDelayCapable) settingsBtn.hidden = true
+  subtitleStyleSection.hidden = !subtitleStyleCapable
+  audioDelaySection.hidden = !audioDelayCapable
+  if (!speedAvailable && !subtitleDelayCapable && !subtitleStyleCapable && !audioDelayCapable) settingsBtn.hidden = true
+  if (!recordingAvailable) recordBtn.hidden = true
 
   function updateTrackButtonsUi(): void {
     const trackList = options.getTrackList?.() ?? null
@@ -309,6 +418,11 @@ export function mountMpvControls(
   let latestIsLive: boolean | undefined
   let seekDragging = false
   let externalActive = false
+  let recordingStartedAt: number | null = null
+  let recTimer: ReturnType<typeof setInterval> | null = null
+  let lastRecordingUiState: { isLive: boolean; recording: boolean } | null = null
+  let lastRecordingPath: string | null = null
+  let recordingStopPending = false
 
   function applyHideState(): void {
     const visible = hideState.visible || externalActive
@@ -335,6 +449,11 @@ export function mountMpvControls(
 
   function currentIsLiveHint(): boolean | undefined {
     return handle.isLive ? handle.isLive() : latestIsLive
+  }
+
+  function currentLiveWindow(): MpvLiveWindow | null {
+    if (currentIsLiveHint() !== true) return null
+    return handle.liveWindow?.() ?? null
   }
 
   function updatePlayPauseUi(): void {
@@ -399,15 +518,115 @@ export function mountMpvControls(
     if (offset != null) subDelayValueEl.textContent = formatSubDelay(offset)
   }
 
+  function updateSubtitleStyleUi(): void {
+    if (!subtitleStyleCapable) return
+    const style = handle.subtitleStyle?.()
+    if (!style) return
+    setRadioGroupChecked(substyleSizeOptions, style.size)
+    setRadioGroupChecked(substylePositionOptions, style.position)
+    setRadioGroupChecked(substyleColorOptions, style.color)
+  }
+
+  function setRadioGroupChecked(groupEl: HTMLElement, activeValue: string): void {
+    for (const btn of groupEl.querySelectorAll<HTMLButtonElement>('button[role="radio"]')) {
+      btn.setAttribute("aria-checked", String(btn.dataset.value === activeValue))
+    }
+  }
+
+  function updateAudioDelayUi(overrideSeconds?: number): void {
+    if (!audioDelayCapable) return
+    const current = overrideSeconds ?? handle.audioDelay?.() ?? 0
+    audioDelayValueEl.textContent = t("player.mpv.audioDelay.value", { ms: String(Math.round(current * 1000)) })
+  }
+
+  function updateLiveBadgeUi(isLive: boolean): void {
+    liveBadge.hidden = !isLive
+    if (!isLive) return
+    const behind = handle.behindLiveSeconds?.() ?? null
+    const isBehind = behind != null && behind > LIVE_BEHIND_THRESHOLD_SECONDS
+    liveBadge.setAttribute("aria-disabled", String(!isBehind))
+    if (isBehind) {
+      liveBadge.textContent = t("player.mpv.live.behind", { time: formatBehindLive(behind) })
+    } else {
+      liveBadge.innerHTML = `<span class="size-1.5 rounded-full bg-accent" aria-hidden="true"></span>${escapeHtml(t("player.controls.live"))}`
+    }
+  }
+
+  function updateRecordingUi(): void {
+    if (!recordingAvailable) return
+    const isLive = currentIsLiveHint() === true
+    const recordingPath = isLive ? (handle.recordingPath?.() ?? null) : null
+    const recording = recordingPath != null
+    if (recording) lastRecordingPath = recordingPath
+    if (lastRecordingUiState?.isLive === isLive && lastRecordingUiState.recording === recording) {
+      if (recording) updateRecTimeReadout()
+      return
+    }
+    lastRecordingUiState = { isLive, recording }
+    recordBtn.hidden = !isLive
+    if (!isLive) {
+      recReadout.hidden = true
+      if (recTimer) {
+        clearInterval(recTimer)
+        recTimer = null
+      }
+      recordingStartedAt = null
+      return
+    }
+    recordBtn.setAttribute("aria-pressed", String(recording))
+    recordBtn.innerHTML = recording ? ICON_PLAYER_STOP : ICON_RECORD_DOT
+    recordBtn.classList.toggle("mpv-controls__btn--recording", recording)
+    const label = t(recording ? "player.mpv.record.stop" : "player.mpv.record.start")
+    recordBtn.setAttribute("aria-label", label)
+    recordBtn.title = label
+    recReadout.hidden = !recording
+    if (!recording) {
+      recordingStartedAt = null
+      if (recTimer) {
+        clearInterval(recTimer)
+        recTimer = null
+      }
+      return
+    }
+    if (recordingStartedAt == null) recordingStartedAt = Date.now()
+    updateRecTimeReadout()
+    if (!recTimer) recTimer = setInterval(updateRecTimeReadout, 1000)
+  }
+
+  function updateRecTimeReadout(): void {
+    if (recordingStartedAt == null) return
+    const elapsed = formatElapsedSinceStart(recordingStartedAt, Date.now())
+    recTimeEl.textContent = elapsed
+    recReadout.setAttribute("aria-label", `${t("player.mpv.record.recording")} ${elapsed}`)
+  }
+
   function updatePlaybackUi(): void {
     if (seekDragging) return
+    const isLive = currentIsLiveHint() === true
+    updateLiveBadgeUi(isLive)
+    updateRecordingUi()
+    const liveWindow = currentLiveWindow()
     const duration = handle.duration?.() ?? NaN
-    const seekable = isSeekableContent(currentIsLiveHint(), duration)
-    seekWrap.hidden = !seekable
-    timeEl.hidden = !seekable
-    liveBadge.hidden = seekable
-    if (!seekable) return
+    const seekableVod = !liveWindow && isSeekableContent(currentIsLiveHint(), duration)
+    const showSeekBar = seekableVod || !!liveWindow
+    seekWrap.hidden = !showSeekBar
+    timeEl.hidden = !showSeekBar
+    if (!showSeekBar) return
 
+    if (liveWindow) {
+      timeSepEl.hidden = true
+      durationEl.hidden = true
+      const behind = handle.behindLiveSeconds?.() ?? Math.max(0, liveWindow.end - liveWindow.position)
+      elapsedEl.textContent = formatBehindLive(behind)
+      const fraction = liveWindowFraction(liveWindow)
+      seekInput.value = String(Math.round(fraction * 1000))
+      seekFill.style.width = `${fraction * 100}%`
+      seekBuffered.style.width = "100%"
+      return
+    }
+
+    timeSepEl.hidden = false
+    durationEl.hidden = false
     const currentTime = handle.currentTime?.() ?? 0
     elapsedEl.textContent = formatPaddedHms(currentTime)
     durationEl.textContent = formatPaddedHms(duration)
@@ -482,7 +701,38 @@ export function mountMpvControls(
     }
   }
 
+  async function toggleRecording(): Promise<void> {
+    if (!handle.startRecording || !handle.stopRecording) return
+    const recording = (handle.recordingPath?.() ?? null) != null
+    recordBtn.disabled = true
+    try {
+      if (recording) {
+        const path = handle.recordingPath?.() ?? null
+        recordingStopPending = true
+        await handle.stopRecording()
+        if (path) toastSuccess(t("player.mpv.record.stopped", { path }))
+      } else {
+        const path = await handle.startRecording()
+        toastSuccess(t("player.mpv.record.started", { path }))
+      }
+    } catch (err) {
+      log.warn("[xt:mpv-controls] recording toggle failed:", err)
+      toastError(t("player.mpv.record.failed"))
+    } finally {
+      recordBtn.disabled = false
+      recordingStopPending = false
+      updateRecordingUi()
+    }
+    dispatch("activity")
+  }
+
   function seekByDelta(deltaSeconds: number): void {
+    const liveWindow = currentLiveWindow()
+    if (liveWindow) {
+      const current = handle.currentTime?.() ?? liveWindow.position
+      handle.currentTime?.(current + deltaSeconds)
+      return
+    }
     const duration = handle.duration?.() ?? NaN
     if (!isSeekableContent(currentIsLiveHint(), duration)) return
     const current = handle.currentTime?.() ?? 0
@@ -522,6 +772,7 @@ export function mountMpvControls(
       metaKey: event.metaKey,
       altKey: event.altKey,
       isSeekable: isSeekableContent(currentIsLiveHint(), duration),
+      hasLiveWindow: !!currentLiveWindow(),
     })
     if (!action) return
     event.preventDefault()
@@ -533,6 +784,12 @@ export function mountMpvControls(
   fullscreenBtn.addEventListener("click", toggleFullscreen)
   pipBtn.addEventListener("click", togglePip)
   screenshotBtn.addEventListener("click", () => void takeScreenshot())
+  recordBtn.addEventListener("click", () => void toggleRecording())
+  liveBadge.addEventListener("click", () => {
+    if (liveBadge.getAttribute("aria-disabled") === "true") return
+    handle.seekLive?.()
+    dispatch("activity")
+  })
   document.addEventListener("fullscreenchange", updateFullscreenUi)
 
   volumeInput.addEventListener("input", () => {
@@ -545,16 +802,33 @@ export function mountMpvControls(
   })
 
   seekInput.addEventListener("input", () => {
+    const liveWindow = currentLiveWindow()
+    if (!liveWindow && !isSeekableContent(currentIsLiveHint(), handle.duration?.() ?? NaN)) return
     seekDragging = true
-    const duration = handle.duration?.() ?? NaN
     const previewFraction = Number(seekInput.value) / 1000
-    elapsedEl.textContent = formatPaddedHms(seekTargetFromFraction(previewFraction, duration))
+    if (liveWindow) {
+      const target = liveWindowTargetFromFraction(previewFraction, liveWindow)
+      elapsedEl.textContent = formatBehindLive(liveWindow.end - target)
+    } else {
+      const duration = handle.duration?.() ?? NaN
+      elapsedEl.textContent = formatPaddedHms(seekTargetFromFraction(previewFraction, duration))
+    }
     seekFill.style.width = `${previewFraction * 100}%`
     dispatch("activity")
   })
   seekInput.addEventListener("change", () => {
-    const duration = handle.duration?.() ?? NaN
-    handle.currentTime?.(seekTargetFromFraction(Number(seekInput.value) / 1000, duration))
+    const liveWindow = currentLiveWindow()
+    if (!liveWindow && !isSeekableContent(currentIsLiveHint(), handle.duration?.() ?? NaN)) {
+      seekDragging = false
+      return
+    }
+    const fraction = Number(seekInput.value) / 1000
+    if (liveWindow) {
+      handle.currentTime?.(liveWindowTargetFromFraction(fraction, liveWindow))
+    } else {
+      const duration = handle.duration?.() ?? NaN
+      handle.currentTime?.(seekTargetFromFraction(fraction, duration))
+    }
     seekDragging = false
     updatePlaybackUi()
   })
@@ -563,13 +837,19 @@ export function mountMpvControls(
   function updateSeekTooltip(event: PointerEvent): void {
     if (event.pointerType && event.pointerType !== "mouse") return
     const rect = seekWrap.getBoundingClientRect()
+    const liveWindow = currentLiveWindow()
     const duration = handle.duration?.() ?? NaN
-    if (rect.width <= 0 || !isSeekableContent(currentIsLiveHint(), duration)) {
+    if (rect.width <= 0 || (!liveWindow && !isSeekableContent(currentIsLiveHint(), duration))) {
       seekTooltipEl.hidden = true
       return
     }
     const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
-    seekTooltipEl.textContent = seekTooltipTime(fraction, duration)
+    if (liveWindow) {
+      const target = liveWindowTargetFromFraction(fraction, liveWindow)
+      seekTooltipEl.textContent = formatBehindLive(liveWindow.end - target)
+    } else {
+      seekTooltipEl.textContent = seekTooltipTime(fraction, duration)
+    }
     seekTooltipEl.style.left = `${fraction * 100}%`
     seekTooltipEl.hidden = false
   }
@@ -601,6 +881,8 @@ export function mountMpvControls(
   function openSettingsPopover(): void {
     updateSpeedOptionsUi()
     updateSubtitleDelayUi()
+    updateSubtitleStyleUi()
+    updateAudioDelayUi()
     settingsPopover.hidden = false
     settingsBtn.setAttribute("aria-expanded", "true")
     dispatch("activity")
@@ -639,6 +921,32 @@ export function mountMpvControls(
     if (next != null) subDelayValueEl.textContent = formatSubDelay(next)
     dispatch("activity")
   })
+  function onSubtitleStyleOptionClick(event: MouseEvent, patch: (value: string) => Partial<MpvSubtitleStyle>): void {
+    const btn = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-value]")
+    if (!btn?.dataset.value || !handle.subtitleStyle) return
+    handle.subtitleStyle(patch(btn.dataset.value))
+    updateSubtitleStyleUi()
+    dispatch("activity")
+  }
+  substyleSizeOptions.addEventListener("click", (event) =>
+    onSubtitleStyleOptionClick(event, (value) => ({ size: value as MpvSubtitleStyle["size"] })),
+  )
+  substylePositionOptions.addEventListener("click", (event) =>
+    onSubtitleStyleOptionClick(event, (value) => ({ position: value as MpvSubtitleStyle["position"] })),
+  )
+  substyleColorOptions.addEventListener("click", (event) =>
+    onSubtitleStyleOptionClick(event, (value) => ({ color: value as MpvSubtitleStyle["color"] })),
+  )
+  audioDelayMinusBtn.addEventListener("click", () => {
+    const next = handle.audioDelay?.(-AUDIO_DELAY_STEP_SECONDS)
+    updateAudioDelayUi(next)
+    dispatch("activity")
+  })
+  audioDelayPlusBtn.addEventListener("click", () => {
+    const next = handle.audioDelay?.(AUDIO_DELAY_STEP_SECONDS)
+    updateAudioDelayUi(next)
+    dispatch("activity")
+  })
 
   function onPlaying(): void {
     updatePlayPauseUi()
@@ -649,6 +957,9 @@ export function mountMpvControls(
   function onPause(): void {
     updatePlayPauseUi()
     dispatch("pause")
+  }
+  function onCacheChange(): void {
+    updatePlaybackUi()
   }
   function onTimeupdate(): void {
     updatePlaybackUi()
@@ -688,11 +999,20 @@ export function mountMpvControls(
   function onUserActive(...args: unknown[]): void {
     setExternalActive(args[0] === true)
   }
+  function onRecordingChange(): void {
+    const wasRecording = lastRecordingUiState?.recording === true
+    const isRecordingNow = (handle.recordingPath?.() ?? null) != null
+    if (wasRecording && !isRecordingNow && !recordingStopPending && lastRecordingPath) {
+      toastSuccess(t("player.mpv.record.stopped", { path: lastRecordingPath }))
+    }
+    updateRecordingUi()
+  }
 
   handle.on("playing", onPlaying)
   handle.on("play", onPlaying)
   handle.on("pause", onPause)
   handle.on("timeupdate", onTimeupdate)
+  handle.on("cachechange", onCacheChange)
   handle.on("loadedmetadata", onLoadedMetadata)
   handle.on("waiting", onWaiting)
   handle.on("seeking", onSeeking)
@@ -704,6 +1024,7 @@ export function mountMpvControls(
   handle.on("error", onError)
   handle.on("trackschanged", onTracksChanged)
   handle.on("useractive", onUserActive)
+  handle.on("recordingchange", onRecordingChange)
 
   // Only place the control bar can learn a load's isLive - the handle itself has no getter for it.
   const originalSrc = handle.src.bind(handle)
@@ -785,17 +1106,21 @@ export function mountMpvControls(
   updateTrackButtonsUi()
   updateSpeedOptionsUi()
   updateSubtitleDelayUi()
+  updateSubtitleStyleUi()
+  updateAudioDelayUi()
   applyHideState()
 
   return () => {
     clearClickTimer()
     if (screenshotFeedbackTimer) clearTimeout(screenshotFeedbackTimer)
     if (hideTimer) clearTimeout(hideTimer)
+    if (recTimer) clearInterval(recTimer)
     closeSettingsPopover(false)
     handle.off?.("playing", onPlaying)
     handle.off?.("play", onPlaying)
     handle.off?.("pause", onPause)
     handle.off?.("timeupdate", onTimeupdate)
+    handle.off?.("cachechange", onCacheChange)
     handle.off?.("loadedmetadata", onLoadedMetadata)
     handle.off?.("waiting", onWaiting)
     handle.off?.("seeking", onSeeking)
@@ -807,6 +1132,7 @@ export function mountMpvControls(
     handle.off?.("error", onError)
     handle.off?.("trackschanged", onTracksChanged)
     handle.off?.("useractive", onUserActive)
+    handle.off?.("recordingchange", onRecordingChange)
     document.removeEventListener("fullscreenchange", updateFullscreenUi)
     document.removeEventListener("keydown", onDocumentKeydown)
     container.removeEventListener("pointermove", onActivity)

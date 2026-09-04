@@ -19,6 +19,8 @@ export interface VodPlaybackToasts {
   showOfflinePlaceholderToast(): void
   /** mpv reported a NETWORK: error with no more specific classification available. */
   showNetworkErrorToast(): void
+  /** mpv reported an HTTP 400-599 status for the load; 401/403/404/5xx get specific copy, other 4xx fall back to the network toast. */
+  showHttpErrorToast(status: number): void
 }
 
 /** refreshExternalButton runs after every toast so the escape-hatch button reflects the failure. */
@@ -70,6 +72,18 @@ export function createVodPlaybackToasts(refreshExternalButton: () => void): VodP
     refreshExternalButton()
   }
 
+  function showHttpErrorToast(status: number) {
+    if (status === 401) toastError(t("player.error.http401"))
+    else if (status === 403) toastError(t("player.error.http403"))
+    else if (status === 404) toastError(t("player.error.http404"))
+    else if (status >= 500 && status <= 599) toastError(t("player.error.http5xx"))
+    else {
+      showNetworkErrorToast()
+      return
+    }
+    refreshExternalButton()
+  }
+
   return {
     showContainerUnsupportedToast,
     showFormatUnsupportedToast,
@@ -78,5 +92,6 @@ export function createVodPlaybackToasts(refreshExternalButton: () => void): VodP
     showAudioUnsupportedToast,
     showOfflinePlaceholderToast,
     showNetworkErrorToast,
+    showHttpErrorToast,
   }
 }

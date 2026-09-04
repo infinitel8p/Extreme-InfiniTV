@@ -120,6 +120,7 @@ import { attachPosterContextMenu } from "@/scripts/lib/poster-menu.ts"
 import { attachPlayerInsights } from "@/scripts/lib/player-stats.ts"
 import { createVodPlaybackToasts } from "@/scripts/lib/vod-playback-toasts.ts"
 import { mountVodPlayback } from "@/scripts/lib/vod-mount.ts"
+import { parseHttpStatusPrefix } from "@/scripts/lib/mpv-embedded.ts"
 
 const SERIES_INFO_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -1650,6 +1651,7 @@ async function playEpisode(episode, options = {}) {
     savedProgress: saved,
     resumePos,
     nameHintSource: episode.title || series?.name,
+    title: `${series?.name || ""} - S${episode.season || currentSeason}E${episode.episode_num || "?"}${episode.title ? ` - ${episode.title}` : ""}`,
     posterEl,
     playerWrap,
     videoElementId: "series-player",
@@ -1666,7 +1668,9 @@ async function playEpisode(episode, options = {}) {
       player.one?.("error", () => {
         const errorDetail = player.codecInfo?.()?.errorDetail
         if (typeof errorDetail !== "string") return
+        const httpStatus = parseHttpStatusPrefix(errorDetail)
         if (errorDetail.startsWith("OFFLINE_PLACEHOLDER")) vodPlaybackToasts.showOfflinePlaceholderToast()
+        else if (httpStatus != null) vodPlaybackToasts.showHttpErrorToast(httpStatus)
         else if (errorDetail.startsWith("NETWORK:")) vodPlaybackToasts.showNetworkErrorToast()
       })
     },

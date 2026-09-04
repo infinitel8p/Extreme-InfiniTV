@@ -10,8 +10,19 @@ import {
   isWithinOfflinePlaceholderWindow,
   OFFLINE_PLACEHOLDER_WINDOW_MS,
   classifyMpvNetworkError,
+  classifyMpvEndFileError,
+  parseHttpStatusPrefix,
   clampPlaybackRate,
   sumDroppedFrames,
+  shouldReloadForStall,
+  LIVE_STALL_THRESHOLD_MS,
+  shouldIgnoreEofAfterLiveSeek,
+  LIVE_SEEK_EOF_GRACE_MS,
+  subtitleStyleToMpvProperties,
+  parseSubtitleStyle,
+  DEFAULT_MPV_SUBTITLE_STYLE,
+  clampAudioDelaySeconds,
+  recordingFileName,
 } from "../src/scripts/lib/mpv-embedded"
 
 describe("cssRectToPhysicalBounds", () => {
@@ -204,6 +215,7 @@ describe("buildLoadOptions", () => {
       startSeconds: null,
       isLive: true,
       networkTimeoutSeconds: null,
+      mediaTitle: null,
     })
   })
 
@@ -216,7 +228,14 @@ describe("buildLoadOptions", () => {
       startSeconds: null,
       isLive: true,
       networkTimeoutSeconds: null,
+      mediaTitle: null,
     })
+  })
+
+  it("trims mediaTitle and defaults an empty or missing one to null", () => {
+    expect(buildLoadOptions({ mediaTitle: "  BBC One  " }).mediaTitle).toBe("BBC One")
+    expect(buildLoadOptions({ mediaTitle: "   " }).mediaTitle).toBe(null)
+    expect(buildLoadOptions({ mediaTitle: null }).mediaTitle).toBe(null)
   })
 
   it("carries a positive networkTimeoutSeconds through", () => {
@@ -342,6 +361,34 @@ describe("deriveEvents", () => {
       deriveEvents({ coreIdle: true, pause: true }, { coreIdle: false, pause: false }),
     ).toEqual(["playing", "play"])
   })
+
+  it("fires recordingchange when streamRecord changes", () => {
+    expect(deriveEvents({ streamRecord: "" }, { streamRecord: "C:\\recordings\\live.ts" })).toEqual([
+      "recordingchange",
+    ])
+    expect(deriveEvents({ streamRecord: "C:\\recordings\\live.ts" }, { streamRecord: "" })).toEqual([
+      "recordingchange",
+    ])
+  })
+
+  it("does not fire recordingchange when streamRecord is unchanged", () => {
+    expect(deriveEvents({ streamRecord: "" }, { streamRecord: "" })).toEqual([])
+  })
+
+  it("fires cachechange when the cache range moves while timePos is frozen (paused live)", () => {
+    expect(deriveEvents({ timePos: 10, cacheRangeEnd: 30 }, { timePos: 10, cacheRangeEnd: 32 })).toEqual([
+      "cachechange",
+    ])
+    expect(deriveEvents({ timePos: 10, cacheRangeStart: 0 }, { timePos: 10, cacheRangeStart: 2 })).toEqual([
+      "cachechange",
+    ])
+  })
+
+  it("does not fire cachechange when the cache range is unchanged", () => {
+    expect(deriveEvents({ cacheRangeStart: 0, cacheRangeEnd: 30 }, { cacheRangeStart: 0, cacheRangeEnd: 30 })).toEqual(
+      [],
+    )
+  })
 })
 
 describe("liveEofReloadDelayMs", () => {
@@ -398,6 +445,156 @@ describe("classifyMpvNetworkError", () => {
 
   it("leaves unrelated error text untouched", () => {
     expect(classifyMpvNetworkError("Unsupported codec")).toBe("Unsupported codec")
+  })
+})
+
+describe("parseHttpStatusPrefix", () => {
+  it("reads the status code off a HTTP_STATUS: prefixed detail", () => {
+    expect(parseHttpStatusPrefix("HTTP_STATUS:403:server refused connection")).toBe(403)
+  })
+
+  it("returns null for a non-prefixed or null detail", () => {
+    expect(parseHttpStatusPrefix("connection refused")).toBe(null)
+    expect(parseHttpStatusPrefix(null)).toBe(null)
+  })
+})
+
+describe("classifyMpvEndFileError", () => {
+  it("prefixes HTTP_STATUS: when a 4xx/5xx status is given", () => {
+    expect(classifyMpvEndFileError("server refused connection", 403)).toBe(
+      "HTTP_STATUS:403:server refused connection",
+    )
+  })
+
+  it("falls back to NETWORK: classification when there is no status", () => {
+    expect(classifyMpvEndFileError("connection timed out", null)).toBe("NETWORK:connection timed out")
+  })
+
+  it("round-trips through parseHttpStatusPrefix", () => {
+    const classified = classifyMpvEndFileError("forbidden", 403)
+    expect(parseHttpStatusPrefix(classified)).toBe(403)
+  })
+})
+
+describe("shouldIgnoreEofAfterLiveSeek", () => {
+  it("is false when no live seek has happened", () => {
+    expect(shouldIgnoreEofAfterLiveSeek(true, null, LIVE_SEEK_EOF_GRACE_MS)).toBe(false)
+  })
+
+  it("is true within the grace window after a live seek", () => {
+    expect(shouldIgnoreEofAfterLiveSeek(true, 0, LIVE_SEEK_EOF_GRACE_MS)).toBe(true)
+    expect(shouldIgnoreEofAfterLiveSeek(true, LIVE_SEEK_EOF_GRACE_MS - 1, LIVE_SEEK_EOF_GRACE_MS)).toBe(true)
+  })
+
+  it("is false once the grace window has elapsed", () => {
+    expect(shouldIgnoreEofAfterLiveSeek(true, LIVE_SEEK_EOF_GRACE_MS, LIVE_SEEK_EOF_GRACE_MS)).toBe(false)
+  })
+
+  it("is false for a non-live source regardless of elapsed time", () => {
+    expect(shouldIgnoreEofAfterLiveSeek(false, 0, LIVE_SEEK_EOF_GRACE_MS)).toBe(false)
+  })
+})
+
+describe("shouldReloadForStall", () => {
+  const baseInput = {
+    isLive: true,
+    paused: false,
+    hasPlaybackRestarted: true,
+    reloadInFlight: false,
+    msSinceProgress: LIVE_STALL_THRESHOLD_MS,
+    thresholdMs: LIVE_STALL_THRESHOLD_MS,
+  }
+
+  it("is true once the stall threshold is reached on a playing live source", () => {
+    expect(shouldReloadForStall(baseInput)).toBe(true)
+  })
+
+  it("is false below the threshold", () => {
+    expect(shouldReloadForStall({ ...baseInput, msSinceProgress: LIVE_STALL_THRESHOLD_MS - 1 })).toBe(false)
+  })
+
+  it("is false for a non-live source, paused, not-yet-restarted, or an in-flight reload", () => {
+    expect(shouldReloadForStall({ ...baseInput, isLive: false })).toBe(false)
+    expect(shouldReloadForStall({ ...baseInput, paused: true })).toBe(false)
+    expect(shouldReloadForStall({ ...baseInput, hasPlaybackRestarted: false })).toBe(false)
+    expect(shouldReloadForStall({ ...baseInput, reloadInFlight: true })).toBe(false)
+  })
+})
+
+describe("subtitleStyleToMpvProperties", () => {
+  it("maps the default style", () => {
+    expect(subtitleStyleToMpvProperties(DEFAULT_MPV_SUBTITLE_STYLE)).toEqual({
+      "sub-scale": 1,
+      "sub-pos": 100,
+      "sub-color": "#FFFFFF",
+    })
+  })
+
+  it("maps every size/position/color combination", () => {
+    expect(subtitleStyleToMpvProperties({ size: "small", position: "raised", color: "yellow" })).toEqual({
+      "sub-scale": 0.8,
+      "sub-pos": 80,
+      "sub-color": "#FFFF00",
+    })
+    expect(subtitleStyleToMpvProperties({ size: "xlarge", position: "bottom", color: "white" })).toEqual({
+      "sub-scale": 1.5,
+      "sub-pos": 100,
+      "sub-color": "#FFFFFF",
+    })
+  })
+})
+
+describe("parseSubtitleStyle", () => {
+  it("defaults on a null or empty value", () => {
+    expect(parseSubtitleStyle(null)).toEqual(DEFAULT_MPV_SUBTITLE_STYLE)
+    expect(parseSubtitleStyle("")).toEqual(DEFAULT_MPV_SUBTITLE_STYLE)
+  })
+
+  it("defaults on invalid JSON or an unrecognized field value", () => {
+    expect(parseSubtitleStyle("not json")).toEqual(DEFAULT_MPV_SUBTITLE_STYLE)
+    expect(parseSubtitleStyle(JSON.stringify({ size: "huge", position: "bottom", color: "white" }))).toEqual(
+      DEFAULT_MPV_SUBTITLE_STYLE,
+    )
+  })
+
+  it("round-trips a valid persisted style", () => {
+    const style = { size: "large", position: "raised", color: "yellow" } as const
+    expect(parseSubtitleStyle(JSON.stringify(style))).toEqual(style)
+  })
+})
+
+describe("clampAudioDelaySeconds", () => {
+  it("rounds to the nearest 0.05s", () => {
+    expect(clampAudioDelaySeconds(0.12)).toBe(0.1)
+    expect(clampAudioDelaySeconds(0.13)).toBe(0.15)
+  })
+
+  it("clamps to +-5s", () => {
+    expect(clampAudioDelaySeconds(10)).toBe(5)
+    expect(clampAudioDelaySeconds(-10)).toBe(-5)
+  })
+
+  it("falls back to 0 for a non-finite value", () => {
+    expect(clampAudioDelaySeconds(NaN)).toBe(0)
+  })
+})
+
+describe("recordingFileName", () => {
+  const date = new Date(2026, 8, 4, 13, 5, 9)
+
+  it("sanitizes a title and appends a timestamp", () => {
+    expect(recordingFileName("BBC One: HD?", date)).toBe("BBC-One-HD-20260904-130509.ts")
+  })
+
+  it("falls back to \"recording\" for a null or empty title", () => {
+    expect(recordingFileName(null, date)).toBe("recording-20260904-130509.ts")
+    expect(recordingFileName("   ", date)).toBe("recording-20260904-130509.ts")
+  })
+
+  it("caps the sanitized title at 80 characters", () => {
+    const longTitle = "a".repeat(200)
+    const result = recordingFileName(longTitle, date)
+    expect(result).toBe(`${"a".repeat(80)}-20260904-130509.ts`)
   })
 })
 

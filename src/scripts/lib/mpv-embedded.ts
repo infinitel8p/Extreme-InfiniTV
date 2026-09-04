@@ -4,6 +4,7 @@ import { log } from "@/scripts/lib/log.js"
 import { t, getActiveLocale } from "@/scripts/lib/i18n"
 import { toastError, toastSuccess } from "@/scripts/lib/toast.js"
 import { wrapForDnsProxyExternal } from "@/scripts/lib/player-runtime.js"
+import { getMpvStartConfig, getDownloadDir } from "@/scripts/lib/app-settings.js"
 import { mountMpvControls } from "@/scripts/lib/mpv-controls.js"
 import { openMpvTrackDialog } from "@/scripts/lib/mpv-track-dialog.js"
 import { parseMpvAudioTracks, parseMpvSubtitleTracks, isMpvSubtitleActive } from "@/scripts/lib/mpv-tracks.js"
@@ -26,6 +27,7 @@ export interface LoadOptions {
   startSeconds: number | null
   isLive: boolean
   networkTimeoutSeconds: number | null
+  mediaTitle: string | null
 }
 
 export interface MpvEmbeddedCreateOptions {
@@ -56,6 +58,9 @@ export interface MpvProps {
   audioCodecName?: string
   trackList?: unknown
   mediaTitle?: string
+  streamRecord?: string
+  cacheRangeStart?: number | null
+  cacheRangeEnd?: number | null
   subDelay?: number
   aid?: unknown
   sid?: unknown
@@ -85,6 +90,8 @@ interface MpvEventPayload {
   kind: MpvEventKind
   reason?: string | null
   detail?: string | null
+  /** HTTP status ffmpeg logged, only set alongside an "end-file" kind. */
+  httpStatus?: number | null
 }
 
 interface MpvExitedEventPayload {
@@ -227,6 +234,7 @@ export interface BuildLoadOptionsInput {
   userAgent?: string | null
   referer?: string | null
   networkTimeoutSeconds?: number | null
+  mediaTitle?: string | null
 }
 
 export function buildLoadOptions(input: BuildLoadOptionsInput): LoadOptions {
@@ -245,6 +253,7 @@ export function buildLoadOptions(input: BuildLoadOptionsInput): LoadOptions {
       Number.isFinite(input.networkTimeoutSeconds) && (input.networkTimeoutSeconds as number) > 0
         ? (input.networkTimeoutSeconds as number)
         : null,
+    mediaTitle: input.mediaTitle?.trim() || null,
   }
 }
 
@@ -267,12 +276,42 @@ export function isWithinOfflinePlaceholderWindow(isLive: boolean, msSincePlaybac
   return isLive && msSincePlaybackRestart != null && msSincePlaybackRestart < OFFLINE_PLACEHOLDER_WINDOW_MS
 }
 
+export const LIVE_SEEK_EOF_GRACE_MS = OFFLINE_PLACEHOLDER_WINDOW_MS
+
+/** Whether an EOF this soon after a live seek should be ignored rather than reloaded or classified. */
+export function shouldIgnoreEofAfterLiveSeek(
+  isLive: boolean,
+  msSinceLiveSeek: number | null,
+  graceMs: number,
+): boolean {
+  return isLive && msSinceLiveSeek != null && msSinceLiveSeek < graceMs
+}
+
 const NETWORK_ERROR_PATTERN = /(timed out|connection|refused|resolve|http)/i
 
 /** Prefixes a mpv end-file error detail with `NETWORK:` when it looks connectivity-related. */
 export function classifyMpvNetworkError(detail: string | null): string | null {
   if (!detail) return detail
   return NETWORK_ERROR_PATTERN.test(detail) ? `NETWORK:${detail}` : detail
+}
+
+const HTTP_STATUS_PREFIX_PATTERN = /^HTTP_STATUS:(\d{3}):/
+
+/** Reads the status code off a `HTTP_STATUS:<code>:<detail>` prefixed detail. */
+export function parseHttpStatusPrefix(detail: string | null): number | null {
+  if (!detail) return null
+  const match = HTTP_STATUS_PREFIX_PATTERN.exec(detail)
+  if (!match) return null
+  const code = Number(match[1])
+  return Number.isFinite(code) ? code : null
+}
+
+/** Prefixes the HTTP status when logged, else classifies as a network error. */
+export function classifyMpvEndFileError(detail: string | null, httpStatus: number | null | undefined): string | null {
+  if (typeof httpStatus === "number" && httpStatus >= 400 && httpStatus <= 599) {
+    return `HTTP_STATUS:${httpStatus}:${detail ?? ""}`
+  }
+  return classifyMpvNetworkError(detail)
 }
 
 export function clampPlaybackRate(rate: number): number {
@@ -284,6 +323,99 @@ export function clampPlaybackRate(rate: number): number {
 export function sumDroppedFrames(frameDropCount?: number, decoderFrameDropCount?: number): number | null {
   if (typeof frameDropCount !== "number" && typeof decoderFrameDropCount !== "number") return null
   return (frameDropCount ?? 0) + (decoderFrameDropCount ?? 0)
+}
+
+/** No progress for this long on a live source (and playback already started once) means a reload is due. */
+export const LIVE_STALL_THRESHOLD_MS = 10_000
+
+export interface StallCheckInput {
+  isLive: boolean
+  paused: boolean
+  hasPlaybackRestarted: boolean
+  reloadInFlight: boolean
+  msSinceProgress: number
+  thresholdMs: number
+}
+
+export function shouldReloadForStall(input: StallCheckInput): boolean {
+  if (!input.isLive || input.paused || !input.hasPlaybackRestarted || input.reloadInFlight) return false
+  return input.msSinceProgress >= input.thresholdMs
+}
+
+export interface MpvSubtitleStyle {
+  size: "small" | "normal" | "large" | "xlarge"
+  position: "bottom" | "raised"
+  color: "white" | "yellow"
+}
+
+export const DEFAULT_MPV_SUBTITLE_STYLE: MpvSubtitleStyle = { size: "normal", position: "bottom", color: "white" }
+
+const SUBTITLE_SIZES: MpvSubtitleStyle["size"][] = ["small", "normal", "large", "xlarge"]
+const SUBTITLE_POSITIONS: MpvSubtitleStyle["position"][] = ["bottom", "raised"]
+const SUBTITLE_COLORS: MpvSubtitleStyle["color"][] = ["white", "yellow"]
+
+const SUB_SCALE_BY_SIZE: Record<MpvSubtitleStyle["size"], number> = { small: 0.8, normal: 1, large: 1.25, xlarge: 1.5 }
+const SUB_POS_BY_POSITION: Record<MpvSubtitleStyle["position"], number> = { bottom: 100, raised: 80 }
+const SUB_COLOR_BY_COLOR: Record<MpvSubtitleStyle["color"], string> = { white: "#FFFFFF", yellow: "#FFFF00" }
+
+/** Maps a subtitle style to the mpv properties that render it. */
+export function subtitleStyleToMpvProperties(
+  style: MpvSubtitleStyle,
+): { "sub-scale": number; "sub-pos": number; "sub-color": string } {
+  return {
+    "sub-scale": SUB_SCALE_BY_SIZE[style.size] ?? SUB_SCALE_BY_SIZE.normal,
+    "sub-pos": SUB_POS_BY_POSITION[style.position] ?? SUB_POS_BY_POSITION.bottom,
+    "sub-color": SUB_COLOR_BY_COLOR[style.color] ?? SUB_COLOR_BY_COLOR.white,
+  }
+}
+
+/** Parses a `xt_mpv_sub_style` localStorage value, falling back to defaults for anything invalid. */
+export function parseSubtitleStyle(raw: string | null): MpvSubtitleStyle {
+  if (!raw) return { ...DEFAULT_MPV_SUBTITLE_STYLE }
+  try {
+    const parsed = JSON.parse(raw)
+    return {
+      size: SUBTITLE_SIZES.includes(parsed?.size) ? parsed.size : DEFAULT_MPV_SUBTITLE_STYLE.size,
+      position: SUBTITLE_POSITIONS.includes(parsed?.position) ? parsed.position : DEFAULT_MPV_SUBTITLE_STYLE.position,
+      color: SUBTITLE_COLORS.includes(parsed?.color) ? parsed.color : DEFAULT_MPV_SUBTITLE_STYLE.color,
+    }
+  } catch {
+    return { ...DEFAULT_MPV_SUBTITLE_STYLE }
+  }
+}
+
+export const SUBTITLE_STYLE_STORAGE_KEY = "xt_mpv_sub_style"
+
+const AUDIO_DELAY_LIMIT_SECONDS = 5
+const AUDIO_DELAY_ROUNDING_STEP = 0.05
+
+/** Adjusts an audio-delay offset by a delta, rounded to 0.05s and clamped to +-5s. */
+export function clampAudioDelaySeconds(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  const stepped = Math.round(value / AUDIO_DELAY_ROUNDING_STEP) * AUDIO_DELAY_ROUNDING_STEP
+  const clamped = Math.min(AUDIO_DELAY_LIMIT_SECONDS, Math.max(-AUDIO_DELAY_LIMIT_SECONDS, stepped))
+  return Math.round(clamped * 100) / 100
+}
+
+const RECORDING_NAME_MAX_LENGTH = 80
+const RECORDING_NAME_UNSAFE_CHARS = /[\\/:*?"<>|]/g
+
+function formatRecordingTimestamp(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0")
+  const datePart = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+  const timePart = `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  return `${datePart}-${timePart}`
+}
+
+/** Builds a filesystem-safe recording file name from a title (or "recording") and a timestamp. */
+export function recordingFileName(title: string | null, date: Date): string {
+  const sanitized = (title || "")
+    .trim()
+    .replace(RECORDING_NAME_UNSAFE_CHARS, "")
+    .replace(/\s+/g, "-")
+    .slice(0, RECORDING_NAME_MAX_LENGTH)
+  const base = sanitized || "recording"
+  return `${base}-${formatRecordingTimestamp(date)}.ts`
 }
 
 /** Synthetic DOM-ish event names to fire for a props transition (prop-derived events only). */
@@ -325,6 +457,12 @@ export function deriveEvents(previousProps: MpvProps | null, nextProps: MpvProps
     events.push("timeupdate")
   }
   if (
+    (typeof nextProps.cacheRangeStart === "number" && nextProps.cacheRangeStart !== previous.cacheRangeStart) ||
+    (typeof nextProps.cacheRangeEnd === "number" && nextProps.cacheRangeEnd !== previous.cacheRangeEnd)
+  ) {
+    events.push("cachechange")
+  }
+  if (
     (typeof nextProps.width === "number" || typeof nextProps.height === "number") &&
     (nextProps.width !== previous.width || nextProps.height !== previous.height)
   ) {
@@ -332,6 +470,9 @@ export function deriveEvents(previousProps: MpvProps | null, nextProps: MpvProps
   }
   if (nextProps.trackList !== previous.trackList) {
     events.push("trackschanged")
+  }
+  if (typeof nextProps.streamRecord === "string" && nextProps.streamRecord !== previous.streamRecord) {
+    events.push("recordingchange")
   }
   return events
 }
@@ -373,6 +514,22 @@ function createEmitter() {
     listeners.clear()
   }
   return { on, off, one, emit, clear }
+}
+
+function readPersistedSubtitleStyle(): string | null {
+  try {
+    return localStorage.getItem(SUBTITLE_STYLE_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function persistSubtitleStyle(style: MpvSubtitleStyle): void {
+  try {
+    localStorage.setItem(SUBTITLE_STYLE_STORAGE_KEY, JSON.stringify(style))
+  } catch (err) {
+    log.warn("[xt:mpv-embed] failed to persist subtitle style:", err)
+  }
 }
 
 function cssRectOf(
@@ -460,7 +617,10 @@ export async function createMpvEmbeddedHandle(
       window.devicePixelRatio || 1,
       NATIVE_BOUNDS_INFLATE_CSS_PX,
     )
-    const startResult = (await invoke("mpv_embed_start", { bounds: initialBounds })) as MpvEmbedStartResult
+    const startResult = (await invoke("mpv_embed_start", {
+      bounds: initialBounds,
+      config: getMpvStartConfig(),
+    })) as MpvEmbedStartResult
     if (!startResult?.sessionId) throw new Error("mpv_embed_start returned an unexpected shape")
     sessionId = startResult.sessionId
   } catch (err) {
@@ -476,6 +636,9 @@ export async function createMpvEmbeddedHandle(
   let localVolume = 1
   let lastErrorDetail: string | null = null
   let disposed = false
+  let currentMediaTitle: string | null = null
+  let currentAudioDelay = 0
+  let currentSubtitleStyle: MpvSubtitleStyle = parseSubtitleStyle(readPersistedSubtitleStyle())
 
   let hasLoadedSource = false
   let loadGeneration = 0
@@ -563,6 +726,53 @@ export async function createMpvEmbeddedHandle(
     }
   }
 
+  let lastLiveSeekAt: number | null = null
+  let lastProgressAt = Date.now()
+  let liveStallTimer: ReturnType<typeof setInterval> | null = null
+  let liveStallToastShown = false
+
+  function noteProgress(): void {
+    lastProgressAt = Date.now()
+    liveStallToastShown = false
+  }
+
+  function clearLiveStallWatchdog(): void {
+    if (liveStallTimer != null) {
+      clearInterval(liveStallTimer)
+      liveStallTimer = null
+    }
+    liveStallToastShown = false
+  }
+
+  function tickLiveStallWatchdog(): void {
+    if (disposed) return
+    const stalled = shouldReloadForStall({
+      isLive: lastLoadRequest?.loadOptions.isLive ?? false,
+      paused: pauseState,
+      hasPlaybackRestarted: lastPlaybackRestartAt != null,
+      reloadInFlight: liveEofReloadTimer != null,
+      msSinceProgress: Date.now() - lastProgressAt,
+      thresholdMs: LIVE_STALL_THRESHOLD_MS,
+    })
+    if (!stalled) return
+    log.warn("[xt:mpv-embed] live stream stalled, reloading", { sessionId })
+    emitEngineEvent("recover", "live stall")
+    if (!liveStallToastShown) {
+      liveStallToastShown = true
+      toastError(t("player.mpv.live.stalled"))
+    }
+    if (!attemptLiveEofReload()) {
+      lastErrorDetail = "live stream stalled"
+      emitEngineEvent("engine-error", lastErrorDetail)
+      emitter.emit("error")
+    }
+  }
+
+  function ensureLiveStallWatchdog(): void {
+    if (liveStallTimer != null) return
+    liveStallTimer = setInterval(tickLiveStallWatchdog, 1000)
+  }
+
   function reloadLastLiveSource(): void {
     if (!lastLoadRequest || disposed) return
     pauseState = false
@@ -606,6 +816,15 @@ export async function createMpvEmbeddedHandle(
 
   // Single funnel for both eof signals (end-file/eof and the keep-open eof-reached flip).
   function handleEofSignal(): boolean {
+    if (
+      shouldIgnoreEofAfterLiveSeek(
+        lastLoadRequest?.loadOptions.isLive ?? false,
+        lastLiveSeekAt != null ? Date.now() - lastLiveSeekAt : null,
+        LIVE_SEEK_EOF_GRACE_MS,
+      )
+    ) {
+      return true
+    }
     if (isOfflinePlaceholderEof()) {
       lastErrorDetail = "OFFLINE_PLACEHOLDER"
       emitEngineEvent("engine-error", lastErrorDetail)
@@ -628,6 +847,12 @@ export async function createMpvEmbeddedHandle(
     if (typeof props.pause === "boolean") pauseState = props.pause
     if (typeof props.volume === "number") localVolume = props.volume / 100
     if (typeof props.mute === "boolean") localMuted = props.mute
+    if (
+      (typeof props.timePos === "number" && props.timePos !== previous.timePos) ||
+      (typeof props.cacheRangeEnd === "number" && props.cacheRangeEnd !== previous.cacheRangeEnd)
+    ) {
+      noteProgress()
+    }
     for (const eventName of deriveEvents(previous, props)) emitter.emit(eventName)
     // --keep-open=yes means a live EOF never emits end-file, only this property flip.
     if (previous.eofReached !== true && props.eofReached === true) handleEofSignal()
@@ -642,6 +867,7 @@ export async function createMpvEmbeddedHandle(
       if (pauseState === false) void setProperty("pause", false)
     } else if (payload.kind === "playback-restart") {
       lastPlaybackRestartAt = Date.now()
+      noteProgress()
       setRevealed(true)
       scheduleLiveEofRetryReset()
       if (props.pause !== true) emitter.emit("playing")
@@ -650,7 +876,7 @@ export async function createMpvEmbeddedHandle(
         if (!handleEofSignal()) emitter.emit("ended")
       } else if (payload.reason === "error") {
         const detail = payload.detail || payload.reason || null
-        lastErrorDetail = classifyMpvNetworkError(detail)
+        lastErrorDetail = classifyMpvEndFileError(detail, payload.httpStatus)
         emitter.emit("error")
         emitEngineEvent("engine-error", payload.detail || "mpv end-file error")
       }
@@ -831,6 +1057,11 @@ export async function createMpvEmbeddedHandle(
   // Matches every other backend: subtitles start off, mpv's own auto-selection would turn them on.
   void setProperty("sid", "no")
 
+  function applySubtitleStyleProperties(style: MpvSubtitleStyle): void {
+    for (const [name, value] of Object.entries(subtitleStyleToMpvProperties(style))) void setProperty(name, value)
+  }
+  applySubtitleStyleProperties(currentSubtitleStyle)
+
   async function openAudioTrackMenu(): Promise<void> {
     const tracks = parseMpvAudioTracks(props.trackList, props.aid, getActiveLocale())
     if (!tracks.length) return
@@ -873,12 +1104,40 @@ export async function createMpvEmbeddedHandle(
     void setProperty("sid", picked.id === null ? "no" : Number(picked.id))
   }
 
+  function isLiveSession(): boolean {
+    return lastLoadRequest?.loadOptions.isLive ?? true
+  }
+
+  function computeLiveWindow(): { start: number; end: number; position: number } | null {
+    if (!isLiveSession()) return null
+    const start = props.cacheRangeStart
+    const end = props.cacheRangeEnd
+    if (typeof start !== "number" || typeof end !== "number" || !Number.isFinite(start) || !Number.isFinite(end)) {
+      return null
+    }
+    if (end - start < 2) return null
+    const position = typeof props.timePos === "number" ? props.timePos : end
+    return { start, end, position }
+  }
+
+  function seekAbsolute(target: number): void {
+    void invoke("mpv_embed_command", { sessionId, args: ["seek", String(target), "absolute"] }).catch(
+      (err: unknown) => log.warn("[xt:mpv-embed] seek command failed:", err),
+    )
+  }
+
   const handle: VjsLikeHandle = {
     src(opts) {
       lastErrorDetail = null
       clearLiveEofTimers()
       liveEofRetryCount = 0
       lastPlaybackRestartAt = null
+      lastLiveSeekAt = null
+      noteProgress()
+      currentMediaTitle = opts.title?.trim() || null
+      currentAudioDelay = 0
+      void setProperty("audio-delay", 0)
+      void setProperty("stream-record", "")
       if (hasLoadedSource) {
         emitter.emit("emptied")
         setRevealed(false)
@@ -892,7 +1151,10 @@ export async function createMpvEmbeddedHandle(
         userAgent: options.userAgent,
         referer: options.referer,
         networkTimeoutSeconds: options.networkTimeoutSeconds,
+        mediaTitle: opts.title,
       })
+      if (loadOptions.isLive) ensureLiveStallWatchdog()
+      else clearLiveStallWatchdog()
       const generation = ++loadGeneration
       const requestedSrc = opts.src
       srcLoadInFlight = true
@@ -955,13 +1217,35 @@ export async function createMpvEmbeddedHandle(
     },
     currentTime(value) {
       if (value === undefined) return props.timePos ?? 0
-      void invoke("mpv_embed_command", { sessionId, args: ["seek", String(value), "absolute"] }).catch(
-        (err: unknown) => log.warn("[xt:mpv-embed] seek command failed:", err),
-      )
-      return value
+      let target = value
+      const liveWindow = computeLiveWindow()
+      if (liveWindow) {
+        target = Math.min(liveWindow.end, Math.max(liveWindow.start, value))
+        lastLiveSeekAt = Date.now()
+      }
+      seekAbsolute(target)
+      return target
     },
     isLive() {
-      return lastLoadRequest?.loadOptions.isLive ?? true
+      return isLiveSession()
+    },
+    liveWindow() {
+      return computeLiveWindow()
+    },
+    behindLiveSeconds() {
+      const liveWindow = computeLiveWindow()
+      if (!liveWindow) return null
+      return Math.max(0, liveWindow.end - liveWindow.position)
+    },
+    seekLive() {
+      const liveWindow = computeLiveWindow()
+      if (!liveWindow) return
+      lastLiveSeekAt = Date.now()
+      seekAbsolute(Math.max(liveWindow.start, liveWindow.end - 0.5))
+      if (pauseState) {
+        pauseState = false
+        void setProperty("pause", false)
+      }
     },
     // No-op: mpv exposes its own tracks via track-list/aid, picked from the "Audio tracks" menu.
     setAudioSource() {},
@@ -1046,6 +1330,34 @@ export async function createMpvEmbeddedHandle(
       void setProperty("sub-delay", next)
       return next
     },
+    async startRecording() {
+      const { join, videoDir } = await import("@tauri-apps/api/path")
+      const dir = getDownloadDir() || (await videoDir())
+      const path = await join(dir, recordingFileName(currentMediaTitle, new Date()))
+      await setProperty("stream-record", path)
+      return path
+    },
+    async stopRecording() {
+      await setProperty("stream-record", "")
+    },
+    recordingPath() {
+      return props.streamRecord ? props.streamRecord : null
+    },
+    subtitleStyle(patch) {
+      if (patch) {
+        currentSubtitleStyle = { ...currentSubtitleStyle, ...patch }
+        persistSubtitleStyle(currentSubtitleStyle)
+        applySubtitleStyleProperties(currentSubtitleStyle)
+      }
+      return currentSubtitleStyle
+    },
+    audioDelay(deltaSeconds) {
+      if (deltaSeconds !== undefined) {
+        currentAudioDelay = clampAudioDelaySeconds(currentAudioDelay + deltaSeconds)
+        void setProperty("audio-delay", currentAudioDelay)
+      }
+      return currentAudioDelay
+    },
     engineStats(): EngineStats {
       return {
         engine: null,
@@ -1075,6 +1387,8 @@ export async function createMpvEmbeddedHandle(
     dispose() {
       disposed = true
       clearLiveEofTimers()
+      clearLiveStallWatchdog()
+      void setProperty("stream-record", "")
       clearFullscreenSettleTimers()
       clearNativeVideoHole()
       if (windowFullscreenSet) {

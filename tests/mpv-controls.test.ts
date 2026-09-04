@@ -8,7 +8,11 @@ import {
   PLAYBACK_RATES,
   formatPlaybackRate,
   mpvHotkeyAction,
+  liveWindowFraction,
+  liveWindowTargetFromFraction,
+  formatBehindLive,
   type AutoHideState,
+  type MpvLiveWindow,
 } from "../src/scripts/lib/mpv-controls"
 
 describe("seekFraction", () => {
@@ -173,6 +177,16 @@ describe("mpvHotkeyAction", () => {
     expect(mpvHotkeyAction({ key: "ArrowDown", isSeekable: false })).toBe("volume-down")
   })
 
+  it("maps ArrowLeft/ArrowRight to seeking on live with a demuxer window", () => {
+    expect(mpvHotkeyAction({ key: "ArrowLeft", isSeekable: false, hasLiveWindow: true })).toBe("seek-back")
+    expect(mpvHotkeyAction({ key: "ArrowRight", isSeekable: false, hasLiveWindow: true })).toBe("seek-forward")
+  })
+
+  it("still blocks ArrowLeft/ArrowRight on live with no window", () => {
+    expect(mpvHotkeyAction({ key: "ArrowLeft", isSeekable: false, hasLiveWindow: false })).toBeNull()
+    expect(mpvHotkeyAction({ key: "ArrowRight", isSeekable: false })).toBeNull()
+  })
+
   it("maps letter keys case-insensitively", () => {
     expect(mpvHotkeyAction({ key: "f", isSeekable: false })).toBe("toggle-fullscreen")
     expect(mpvHotkeyAction({ key: "F", isSeekable: false })).toBe("toggle-fullscreen")
@@ -192,5 +206,82 @@ describe("mpvHotkeyAction", () => {
 
   it("returns null for unmapped keys", () => {
     expect(mpvHotkeyAction({ key: "q", isSeekable: true })).toBeNull()
+  })
+})
+
+describe("liveWindowFraction", () => {
+  it("maps a position at the window start to 0", () => {
+    const window: MpvLiveWindow = { start: 100, end: 400, position: 100 }
+    expect(liveWindowFraction(window)).toBe(0)
+  })
+
+  it("maps a position at the window end to 1", () => {
+    const window: MpvLiveWindow = { start: 100, end: 400, position: 400 }
+    expect(liveWindowFraction(window)).toBe(1)
+  })
+
+  it("maps the midpoint of the window to 0.5", () => {
+    const window: MpvLiveWindow = { start: 0, end: 60, position: 30 }
+    expect(liveWindowFraction(window)).toBe(0.5)
+  })
+
+  it("clamps a position outside the window", () => {
+    expect(liveWindowFraction({ start: 0, end: 60, position: -10 })).toBe(0)
+    expect(liveWindowFraction({ start: 0, end: 60, position: 90 })).toBe(1)
+  })
+
+  it("pins a degenerate window to the live edge", () => {
+    expect(liveWindowFraction({ start: 60, end: 60, position: 60 })).toBe(1)
+    expect(liveWindowFraction({ start: 60, end: 40, position: 50 })).toBe(1)
+  })
+
+  it("pins to the live edge when the window bounds are NaN", () => {
+    expect(liveWindowFraction({ start: NaN, end: 60, position: 30 })).toBe(1)
+    expect(liveWindowFraction({ start: 0, end: NaN, position: 30 })).toBe(1)
+    expect(liveWindowFraction({ start: NaN, end: NaN, position: NaN })).toBe(1)
+  })
+})
+
+describe("liveWindowTargetFromFraction", () => {
+  it("maps 0 and 1 to the window bounds", () => {
+    const window: MpvLiveWindow = { start: 100, end: 400, position: 250 }
+    expect(liveWindowTargetFromFraction(0, window)).toBe(100)
+    expect(liveWindowTargetFromFraction(1, window)).toBe(400)
+  })
+
+  it("maps 0.5 to the midpoint of the window", () => {
+    const window: MpvLiveWindow = { start: 0, end: 60, position: 0 }
+    expect(liveWindowTargetFromFraction(0.5, window)).toBe(30)
+  })
+
+  it("clamps a fraction outside 0..1", () => {
+    const window: MpvLiveWindow = { start: 0, end: 60, position: 0 }
+    expect(liveWindowTargetFromFraction(1.5, window)).toBe(60)
+    expect(liveWindowTargetFromFraction(-0.5, window)).toBe(0)
+  })
+
+  it("falls back to the window end for a degenerate window", () => {
+    expect(liveWindowTargetFromFraction(0.5, { start: 60, end: 60, position: 60 })).toBe(60)
+  })
+
+  it("round-trips with liveWindowFraction", () => {
+    const window: MpvLiveWindow = { start: 10, end: 130, position: 70 }
+    const fraction = liveWindowFraction(window)
+    expect(liveWindowTargetFromFraction(fraction, window)).toBe(70)
+  })
+})
+
+describe("formatBehindLive", () => {
+  it("formats seconds behind live with a leading minus", () => {
+    expect(formatBehindLive(83)).toBe("-01:23")
+  })
+
+  it("formats an hour-plus delta with the hours segment", () => {
+    expect(formatBehindLive(3660)).toBe("-1:01:00")
+  })
+
+  it("clamps a negative or non-finite delta to the live edge", () => {
+    expect(formatBehindLive(-5)).toBe("-00:00")
+    expect(formatBehindLive(NaN)).toBe("-00:00")
   })
 })

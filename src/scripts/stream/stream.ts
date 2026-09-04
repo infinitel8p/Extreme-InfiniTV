@@ -99,7 +99,7 @@ import {
   canSwapToMpvEmbedded,
   shouldOfferMpvEmbeddedFix,
 } from "@/scripts/lib/player-runtime.ts"
-import { mpvEmbeddedAvailable } from "@/scripts/lib/mpv-embedded.ts"
+import { mpvEmbeddedAvailable, parseHttpStatusPrefix } from "@/scripts/lib/mpv-embedded.ts"
 import {
   getPlayerBackend,
   getPlayerPath,
@@ -2401,6 +2401,7 @@ async function mountEmbeddedPlayer(backend, opts) {
             type: ctx.mime || "application/x-mpegURL",
             isLive: ctx.isLive ?? true,
             preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
+            title: ctx.name,
           })
           vjs.play().catch(() => {})
         } catch {}
@@ -3120,6 +3121,7 @@ function performStallRetune(trigger) {
       type: ctx.mime || "application/x-mpegURL",
       isLive: ctx.isLive ?? true,
       preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
+      title: ctx.name,
     })
     vjs.play().catch((err) => {
       log.info("[xt:livetv] stall-retune play() rejected", { streamId: ctx.streamId, error: err?.name || String(err) })
@@ -3665,6 +3667,7 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   // mpv-embedded prefixes tell us more than a codec guess ever could - skip the heuristics for them.
   const mpvErrorDetail = typeof info.errorDetail === "string" ? info.errorDetail : ""
   const isOfflinePlaceholder = mpvErrorDetail.startsWith("OFFLINE_PLACEHOLDER")
+  const httpStatus = parseHttpStatusPrefix(mpvErrorDetail)
   const failure = isOfflinePlaceholder
     ? { kind: "offline-placeholder", codec: null }
     : classifyStartFailure({
@@ -3683,6 +3686,14 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   let reason
   if (failure.kind === "offline-placeholder") {
     reason = t("stream.failure.offlinePlaceholder")
+  } else if (httpStatus === 401) {
+    reason = t("player.error.http401")
+  } else if (httpStatus === 403) {
+    reason = t("player.error.http403")
+  } else if (httpStatus === 404) {
+    reason = t("player.error.http404")
+  } else if (httpStatus != null && httpStatus >= 500 && httpStatus <= 599) {
+    reason = t("player.error.http5xx")
   } else if (failure.kind === "hevc") {
     reason = failure.codec
       ? t("stream.failure.hevcConfirmed")
@@ -4403,6 +4414,7 @@ async function play(streamId, name, reason = "user") {
       isLive: true,
       drm: audioProxied ? null : channelDrm,
       preferNativeHls: isNativeHlsFallbackChannel(streamId),
+      title: name,
     })
   } catch {}
   const playResult = player.play?.()
@@ -4846,6 +4858,7 @@ async function playCatchup(channel, opts) {
     isLive: false,
     durationSeconds: timelineSpanSeconds,
     timelineOffsetSeconds,
+    title: title || channel.name,
   })
   attachCatchupSeekInterceptor(player, seq)
   armLiveEdgeTracking(channel)

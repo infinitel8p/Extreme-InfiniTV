@@ -45,6 +45,7 @@ import { wrapProxyUrlKeepingUserinfo, unwrapProxyUrl } from "@/scripts/lib/dns-p
 import type { DnsServer } from "@/scripts/lib/dns-config.ts"
 import { isNativeVideoBackend } from "@/scripts/lib/player-backend.ts"
 import type { PlayerBackend, ExternalPlayerKind } from "@/scripts/lib/player-backend.ts"
+import type { MpvSubtitleStyle } from "@/scripts/lib/mpv-embedded.ts"
 
 export type { PlayerBackend, ExternalPlayerKind }
 export { isNativeVideoBackend }
@@ -64,8 +65,8 @@ export interface DrmOptions {
 }
 
 export interface VjsLikeHandle {
-  /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. `durationSeconds` seeds duration when the container reports none (raw TS); `timelineOffsetSeconds` places a mid-programme remount on its timeline. `subtitles` opts a progressive MP4 source into embedded tx3g-subtitle extraction, or a `mkvSession` into push-mode subtitles from the MKV tee-proxy. `audio` backs track switching for engines with none (mpegts.js/native). */
-  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string; mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null } | null; audio?: AudioTrackSource | null; preferNativeHls?: boolean }): void
+  /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. `durationSeconds` seeds duration when the container reports none (raw TS); `timelineOffsetSeconds` places a mid-programme remount on its timeline. `subtitles` opts a progressive MP4 source into embedded tx3g-subtitle extraction, or a `mkvSession` into push-mode subtitles from the MKV tee-proxy. `audio` backs track switching for engines with none (mpegts.js/native). `title` is a display title (e.g. channel/movie/episode name); ignored by backends that don't surface one. */
+  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string; mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null } | null; audio?: AudioTrackSource | null; preferNativeHls?: boolean; title?: string }): void
   /** Wires a caller-supplied audio track source into the current mount without remounting; a no-op on engines/mounts that don't use caller-supplied tracks (e.g. hls.js/shaka, which source their own). Lets background VOD audio-track discovery attach a switcher after the source is already playing. */
   setAudioSource?(source: AudioTrackSource | null): void
   play(): Promise<unknown> | void
@@ -82,6 +83,12 @@ export interface VjsLikeHandle {
   currentTime?(value?: number): number
   /** Whether the current source is live (vs. a finite/seekable catch-up mount). */
   isLive?(): boolean
+  /** Live rewind window bounds and current position (seconds); null unless live and the window is usable. */
+  liveWindow?(): { start: number; end: number; position: number } | null
+  /** Seconds behind the live edge; null when there is no usable live window. */
+  behindLiveSeconds?(): number | null
+  /** Seeks to the live edge and resumes if paused. */
+  seekLive?(): void
   on(event: string, fn: (...args: unknown[]) => void): void
   off?(event: string, fn: (...args: unknown[]) => void): void
   one?(event: string, fn: (...args: unknown[]) => void): void
@@ -107,6 +114,16 @@ export interface VjsLikeHandle {
   /** Subscribes to engine lifecycle events (variant switches, errors, recoveries) for a stream-health log. */
   onEngineEvent?(listener: (event: EngineEvent) => void): () => void
   setProperty?(name: string, value: unknown): Promise<void>
+  /** Starts recording the current live source to disk; resolves the saved file path. */
+  startRecording?(): Promise<string>
+  /** Stops an in-progress recording. */
+  stopRecording?(): Promise<void>
+  /** Path of the file currently being recorded, or null when not recording. */
+  recordingPath?(): string | null
+  /** Reads the persisted subtitle style, optionally applying and persisting a patch first. */
+  subtitleStyle?(patch?: Partial<MpvSubtitleStyle>): MpvSubtitleStyle
+  /** Reads the current audio-delay offset (seconds); an optional delta adjusts and persists it for the session. */
+  audioDelay?(deltaSeconds?: number): number
 }
 
 export interface ExternalLaunchOptions {

@@ -52,6 +52,8 @@ export interface VodMountOptions {
   resumePos: number
   /** Name searched for an HEVC hint when no codec is reported (movie name / episode title). */
   nameHintSource: string
+  /** Display title carried into the mpv-embedded media flyout (movie name / "series - S01E01 - episode"). */
+  title: string
   posterEl: HTMLElement | null
   playerWrap: HTMLElement | null
   videoElementId: string
@@ -319,6 +321,7 @@ export async function mountVodPlayback(options: VodMountOptions): Promise<void> 
       isLive: false,
       subtitles: { sourceUrl: playSrc, mkvSession: preparedPlayback.mkvSession },
       audio: initialAudioSource,
+      title: options.title,
     })
   }
 
