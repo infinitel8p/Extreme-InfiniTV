@@ -4,7 +4,9 @@ import { navigate } from "astro:transitions/client"
 import { t, LOCALE_EVENT, getActiveLocale, getAvailableLocales, setLocale } from "@/scripts/lib/i18n"
 import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
 import { getEntries, getActiveEntry, loadCreds, isLocalM3UHost, isCustomHost, isTauri } from "@/scripts/lib/creds.js"
-import { renderPlaylistRow, getPlaylistListEmptyCopy } from "@/scripts/lib/playlist-rows.js"
+import { getPlaylistListEmptyCopy } from "@/scripts/lib/playlist-rows.js"
+import { renderTvPlaylistRow } from "@/scripts/tv/ui/playlist-row"
+import { createActionSheet, type ActionSheetHandle } from "@/scripts/tv/ui/action-sheet"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav"
 import { confirmDialog } from "@/scripts/lib/confirm-dialog"
 import {
@@ -172,6 +174,7 @@ const view: TvView = {
     const unsubs: Array<() => void> = []
     let list: SettingsListHandle | null = null
     let playlistsDialogEl: HTMLDialogElement | null = null
+    let playlistActionSheet: ActionSheetHandle | null = null
     let deviceNameDialogEl: HTMLDialogElement | null = null
     let dnsDialogEl: HTMLDialogElement | null = null
 
@@ -908,8 +911,14 @@ const view: TvView = {
       return dialog
     }
 
+    function ensurePlaylistActionSheet(): ActionSheetHandle {
+      if (!playlistActionSheet) playlistActionSheet = createActionSheet("tv-settings-playlist-actions")
+      return playlistActionSheet
+    }
+
     async function openPlaylistsDialog(): Promise<void> {
       const dialog = ensurePlaylistsDialog()
+      const actionSheet = ensurePlaylistActionSheet()
       const heading = dialog.querySelector<HTMLElement>('[data-role="title"]')
       const closeButton = dialog.querySelector<HTMLElement>('[data-role="close"]')
       const addLabel = dialog.querySelector<HTMLElement>('[data-role="add-label"]')
@@ -917,7 +926,9 @@ const view: TvView = {
       if (closeButton) closeButton.setAttribute("aria-label", t("common.close"))
       if (addLabel) addLabel.textContent = t("playlist.addCta")
       const listEl = dialog.querySelector<HTMLElement>('[data-role="list"]')
-      if (listEl) {
+
+      async function renderList(): Promise<void> {
+        if (!listEl) return
         const [entries, active] = await Promise.all([getEntries(), getActiveEntry()])
         listEl.replaceChildren()
         if (!entries.length) {
@@ -925,13 +936,13 @@ const view: TvView = {
           empty.className = "px-4 py-4 text-xs text-fg-3"
           empty.textContent = getPlaylistListEmptyCopy()
           listEl.appendChild(empty)
+          return
         }
         for (const entry of entries) {
           listEl.appendChild(
-            renderPlaylistRow({
+            renderTvPlaylistRow({
               entry,
               isActive: active?._id === entry._id,
-              density: "compact",
               onAfterSelect: async () => {
                 dialog.close()
                 try {
@@ -940,12 +951,44 @@ const view: TvView = {
                   location.reload()
                 }
               },
-              onAfterRemove: () => void openPlaylistsDialog(),
+              onAfterChange: (changedEntryId, change) => renderListAndRefocus(changedEntryId, change),
+              actionSheet,
+              onBeforeNavigate: () => dialog.close(),
             })
           )
         }
       }
+
+      async function renderListAndRefocus(changedEntryId: string, change: "refresh" | "remove"): Promise<void> {
+        if (!listEl) return
+        const rowsBefore = Array.from(listEl.querySelectorAll<HTMLElement>("[data-entry-id]"))
+        const removedIndex = rowsBefore.findIndex((row) => row.dataset.entryId === changedEntryId)
+        void renderRows()
+        await renderList()
+        if (change === "refresh") {
+          const row = listEl.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(changedEntryId)}"]`)
+          const target = row?.querySelector<HTMLElement>('[data-role="main"]')
+          if (target) {
+            target.focus()
+            return
+          }
+        }
+        const rowsAfter = Array.from(listEl.querySelectorAll<HTMLElement>("[data-entry-id]"))
+        const successorRow = rowsAfter[Math.min(removedIndex, rowsAfter.length - 1)]
+        const successorTarget = successorRow?.querySelector<HTMLElement>('[data-role="main"]')
+        if (successorTarget) {
+          successorTarget.focus()
+          return
+        }
+        dialog.querySelector<HTMLElement>('a[href="/tv/login"]')?.focus()
+      }
+
+      await renderList()
       if (!dialog.open && typeof dialog.showModal === "function") dialog.showModal()
+      const focusTarget =
+        listEl?.querySelector<HTMLElement>('[data-tv-row-active="true"]') ||
+        listEl?.querySelector<HTMLElement>('[data-role="main"]')
+      focusTarget?.focus()
     }
 
     function onRefreshEvent(): void {
@@ -1010,6 +1053,7 @@ const view: TvView = {
         playlistsDialogEl?.close()
       } catch {}
       playlistsDialogEl?.remove()
+      playlistActionSheet?.destroy()
       try {
         deviceNameDialogEl?.close()
       } catch {}

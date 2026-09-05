@@ -289,7 +289,8 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
             if (
               tvRedirectTarget === "/tv/movies/detail" ||
               tvRedirectTarget === "/tv/series/detail" ||
-              tvRedirectTarget === "/tv/search"
+              tvRedirectTarget === "/tv/search" ||
+              tvRedirectTarget === "/tv/login"
             ) {
               tvRedirectTarget += location.search;
             }

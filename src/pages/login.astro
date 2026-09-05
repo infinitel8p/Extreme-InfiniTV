@@ -1908,9 +1908,16 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 	});
 
 	// ---- Boot: prefill for editing, or default to "add Xtream" ----
+	let editNotFound = false;
 	if (editingId) {
-		const entries = await getEntries();
-		editing = entries.find((e) => e._id === editingId) || null;
+		try {
+			const entries = await getEntries();
+			editing = entries.find((e) => e._id === editingId) || null;
+		} catch (error) {
+			log.warn("[xt:login] failed to load entries for edit:", error);
+			editing = null;
+		}
+		editNotFound = !editing;
 	}
 	if (editing) {
 		pageTitle.removeAttribute("data-i18n");
@@ -1986,6 +1993,9 @@ import { IconArrowLeft, IconChevronDown, IconPlus } from "@tabler/icons-svelte";
 		showStatus("info", t("login.status.demoPrefilled"));
 	} else {
 		setMode("xtream");
+	}
+	if (editNotFound) {
+		showStatus("unavailable", t("login.status.editNotFound"));
 	}
 	refreshDnsTestAvailability();
 </script>

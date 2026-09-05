@@ -61,7 +61,12 @@ const navItems = [
           var classicPath = location.pathname.replace(/\/+$/, "")
           if (classicPath === "") classicPath = "/"
           var classicTarget = classicRouteTable[classicPath] || "/"
-          if (classicTarget === "/movies/detail" || classicTarget === "/series/detail" || classicTarget === "/search") {
+          if (
+            classicTarget === "/movies/detail" ||
+            classicTarget === "/series/detail" ||
+            classicTarget === "/search" ||
+            classicTarget === "/login"
+          ) {
             classicTarget += location.search
           }
           location.replace(classicTarget)

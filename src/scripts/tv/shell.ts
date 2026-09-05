@@ -12,7 +12,9 @@ import { initPlaylistAccent } from "@/scripts/lib/playlist-accent"
 import { registerMainFocusSection, NAV_SECTION_ID } from "@/scripts/tv/focus"
 import { mountTvFocusGlide } from "@/scripts/tv/focus-glide"
 import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
-import { renderPlaylistRow } from "@/scripts/lib/playlist-rows.js"
+import { getPlaylistListEmptyCopy } from "@/scripts/lib/playlist-rows.js"
+import { renderTvPlaylistRow } from "@/scripts/tv/ui/playlist-row"
+import { createActionSheet, type ActionSheetHandle } from "@/scripts/tv/ui/action-sheet"
 import { ICON_X, ICON_PLAYLIST_ADD } from "@/scripts/lib/icons"
 import { mountTvRouter, TV_VIEW_MOUNTED_EVENT } from "@/scripts/tv/router"
 import { tvNavActiveHref } from "@/scripts/lib/tv-routes"
@@ -76,18 +78,34 @@ function ensurePlaylistDialog(): HTMLDialogElement {
   return dialog
 }
 
+let playlistActionSheet: ActionSheetHandle | null = null
+
+function ensurePlaylistActionSheet(): ActionSheetHandle {
+  if (!playlistActionSheet) playlistActionSheet = createActionSheet("tv-playlist-actions")
+  return playlistActionSheet
+}
+
 async function openPlaylistDialog(): Promise<void> {
   const dialog = ensurePlaylistDialog()
   const listEl = dialog.querySelector<HTMLElement>("#tv-playlist-dialog-list")
-  if (listEl) {
+  const actionSheet = ensurePlaylistActionSheet()
+
+  async function renderList(): Promise<void> {
+    if (!listEl) return
     listEl.replaceChildren()
     const [entries, active] = await Promise.all([getEntries(), getActiveEntry()])
+    if (!entries.length) {
+      const empty = document.createElement("p")
+      empty.className = "px-4 py-4 text-xs text-fg-3"
+      empty.textContent = getPlaylistListEmptyCopy()
+      listEl.appendChild(empty)
+      return
+    }
     for (const entry of entries) {
       listEl.appendChild(
-        renderPlaylistRow({
+        renderTvPlaylistRow({
           entry,
           isActive: active?._id === entry._id,
-          density: "compact",
           onAfterSelect: async () => {
             dialog.close()
             try {
@@ -96,11 +114,43 @@ async function openPlaylistDialog(): Promise<void> {
               location.reload()
             }
           },
+          onAfterChange: (changedEntryId, change) => renderListAndRefocus(changedEntryId, change),
+          actionSheet,
+          onBeforeNavigate: () => dialog.close(),
         })
       )
     }
   }
+
+  async function renderListAndRefocus(changedEntryId: string, change: "refresh" | "remove"): Promise<void> {
+    if (!listEl) return
+    const rowsBefore = Array.from(listEl.querySelectorAll<HTMLElement>("[data-entry-id]"))
+    const removedIndex = rowsBefore.findIndex((row) => row.dataset.entryId === changedEntryId)
+    await renderList()
+    if (change === "refresh") {
+      const row = listEl.querySelector<HTMLElement>(`[data-entry-id="${CSS.escape(changedEntryId)}"]`)
+      const target = row?.querySelector<HTMLElement>('[data-role="main"]')
+      if (target) {
+        target.focus()
+        return
+      }
+    }
+    const rowsAfter = Array.from(listEl.querySelectorAll<HTMLElement>("[data-entry-id]"))
+    const successorRow = rowsAfter[Math.min(removedIndex, rowsAfter.length - 1)]
+    const successorTarget = successorRow?.querySelector<HTMLElement>('[data-role="main"]')
+    if (successorTarget) {
+      successorTarget.focus()
+      return
+    }
+    dialog.querySelector<HTMLElement>("a[href='/tv/login']")?.focus()
+  }
+
+  await renderList()
   if (typeof dialog.showModal === "function") dialog.showModal()
+  const focusTarget =
+    listEl?.querySelector<HTMLElement>('[data-tv-row-active="true"]') ||
+    listEl?.querySelector<HTMLElement>('[data-role="main"]')
+  focusTarget?.focus()
 }
 
 function mountNavPlaylistDialog(): void {
