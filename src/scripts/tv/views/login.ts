@@ -46,6 +46,7 @@ interface Refs {
   connectLabel: HTMLElement
   statusEl: HTMLElement
   cancelBtn: HTMLButtonElement
+  saveAnywayBtn: HTMLButtonElement
   connectBtn: HTMLButtonElement
 }
 
@@ -201,6 +202,10 @@ function buildMarkup(): string {
                     class="btn min-h-11 px-7 text-base tv-focus-inset">
               <span data-i18n="common.cancel">Cancel</span>
             </button>
+            <button type="button" data-role="save-anyway" data-focus-key="save-anyway"
+                    class="btn min-h-11 px-7 text-base tv-focus-inset hidden">
+              <span data-i18n="tv.login.action.saveAnyway">Save anyway</span>
+            </button>
             <button type="submit" data-role="connect" data-focus-key="connect"
                     class="btn-primary min-h-11 px-8 text-base tv-focus-inset">
               <span data-role="connect-label" data-i18n="tv.login.action.connect">Connect</span>
@@ -238,6 +243,7 @@ function collectRefs(root: HTMLElement): Refs {
     connectLabel: query("connect-label"),
     statusEl: query("status"),
     cancelBtn: query("cancel"),
+    saveAnywayBtn: query("save-anyway"),
     connectBtn: query("connect"),
   }
 }
@@ -294,6 +300,7 @@ const view: TvView = {
       refs.statusEl.classList.add("hidden")
       refs.statusEl.className = "hidden rounded-2xl border px-4 py-2.5 text-sm leading-relaxed"
       refs.statusEl.textContent = ""
+      hideSaveAnywayButton()
     }
 
     function setStatus(kind: keyof typeof STATUS_PALETTE, message: string): void {
@@ -322,10 +329,19 @@ const view: TvView = {
         refs.methodXtream,
         refs.methodM3u,
         refs.connectBtn,
+        refs.saveAnywayBtn,
       ]) {
         el.disabled = next
       }
       refs.cancelBtn.disabled = next || !cancelAllowed
+    }
+
+    function hideSaveAnywayButton(): void {
+      refs.saveAnywayBtn.classList.add("hidden")
+    }
+
+    function showSaveAnywayButton(): void {
+      refs.saveAnywayBtn.classList.remove("hidden")
     }
 
     function updateMirrorHint(): void {
@@ -381,6 +397,7 @@ const view: TvView = {
         focusFirstField()
         return
       }
+      hideSaveAnywayButton()
       setStatus("busy", t("login.status.testing"))
       const resolved = await resolveServerScheme({ serverUrl, username, password, dns })
       if (destroyed) return
@@ -388,6 +405,7 @@ const view: TvView = {
       const result = resolved.test as XtreamTestResult
       if (result.status === "unavailable") {
         setStatus("unavailable", describeXtreamResult(result))
+        showSaveAnywayButton()
         focusFirstField()
         return
       }
@@ -433,6 +451,7 @@ const view: TvView = {
         focusFirstField()
         return
       }
+      hideSaveAnywayButton()
       setStatus("busy", t("login.status.fetching"))
       const resolved = await resolveM3UScheme(rawUrl, { dns })
       if (destroyed) return
@@ -440,6 +459,7 @@ const view: TvView = {
       const result = resolved.test as M3UTestResult
       if (result.status !== "active") {
         setStatus("unavailable", describeM3UResult(result))
+        showSaveAnywayButton()
         focusFirstField()
         return
       }
@@ -469,6 +489,110 @@ const view: TvView = {
       if (destroyed) return
       toastSuccess(t("tv.login.toast.saved", { title: entry.title }))
       await navigate("/tv", { history: "replace" })
+    }
+
+    async function saveWithoutTest(): Promise<void> {
+      const dns = refs.dnsInput.value.trim() || undefined
+      if (method === "xtream") {
+        const serverUrl = refs.serverUrlInput.value.trim()
+        const username = refs.usernameInput.value.trim()
+        const password = refs.passwordInput.value.trim()
+        if (!serverUrl || !username || !password) {
+          setStatus("unavailable", t("login.status.allRequired"))
+          focusFirstField()
+          return
+        }
+        const resolved = await resolveServerScheme({ serverUrl, username, password, dns })
+        if (destroyed) return
+        if (resolved.serverUrl !== serverUrl) refs.serverUrlInput.value = resolved.serverUrl
+        const titleValue = refs.nameInput.value.trim()
+        const editingXtreamEntry = editingEntry
+        if (editingXtreamEntry) {
+          const patch: Record<string, unknown> = { serverUrl: resolved.serverUrl, username, password, dns }
+          if (titleValue) patch.title = titleValue
+          await updateEntry(editingXtreamEntry._id, patch)
+          if (destroyed) return
+          const savedTitle = titleValue || editingXtreamEntry.title
+          toastWarn(t("tv.login.toast.updated", { title: savedTitle }), {
+            description: t("tv.login.toast.savedUntested"),
+          })
+          await leaveEditMode()
+          return
+        }
+        const entry = await addEntry({
+          type: "xtream",
+          title: titleValue,
+          serverUrl: resolved.serverUrl,
+          username,
+          password,
+          mirrors: pendingMirrors,
+          dns,
+        })
+        if (destroyed) return
+        toastWarn(t("tv.login.toast.saved", { title: entry.title }), {
+          description: t("tv.login.toast.savedUntested"),
+        })
+        await navigate("/tv", { history: "replace" })
+        return
+      }
+
+      const rawUrl = refs.m3uUrlInput.value.trim()
+      if (!rawUrl) {
+        setStatus("unavailable", t("login.status.enterM3uUrl"))
+        focusFirstField()
+        return
+      }
+      const resolved = await resolveM3UScheme(rawUrl, { dns })
+      if (destroyed) return
+      if (resolved.url !== rawUrl) refs.m3uUrlInput.value = resolved.url
+      const titleValue = refs.nameInput.value.trim()
+      const epgUrl = refs.epgUrlInput.value.trim()
+      const editingM3uEntry = editingEntry
+      if (editingM3uEntry) {
+        const patch: Record<string, unknown> = { url: resolved.url, epgUrl, dns }
+        if (titleValue) patch.title = titleValue
+        await updateEntry(editingM3uEntry._id, patch)
+        if (destroyed) return
+        if ((editingM3uEntry.epgUrl || "") !== epgUrl || editingM3uEntry.url !== resolved.url) {
+          const { invalidateEpgPlaylist } = await import("@/scripts/lib/epg-data.js")
+          invalidateEpgPlaylist(editingM3uEntry._id)
+        }
+        toastWarn(t("tv.login.toast.updated", { title: titleValue || editingM3uEntry.title }), {
+          description: t("tv.login.toast.savedUntested"),
+        })
+        await leaveEditMode()
+        return
+      }
+      const entry = await addEntry({
+        type: "m3u",
+        title: titleValue,
+        url: resolved.url,
+        epgUrl,
+        dns,
+      })
+      if (destroyed) return
+      toastWarn(t("tv.login.toast.saved", { title: entry.title }), {
+        description: t("tv.login.toast.savedUntested"),
+      })
+      await navigate("/tv", { history: "replace" })
+    }
+
+    async function onSaveAnywayClick(): Promise<void> {
+      if (busy) return
+      const rawDns = refs.dnsInput.value.trim()
+      if (rawDns && !parseDnsServer(rawDns)) {
+        setStatus("unavailable", t("dns.invalid"))
+        refs.dnsInput.focus()
+        return
+      }
+      setBusy(true)
+      try {
+        await saveWithoutTest()
+      } catch (error) {
+        if (!destroyed) setStatus("unavailable", describeSaveError(error))
+      } finally {
+        if (!destroyed) setBusy(false)
+      }
     }
 
     async function saveTitleOnly(): Promise<void> {
@@ -637,7 +761,9 @@ const view: TvView = {
     refs.pasteInput.addEventListener("input", onPasteInput)
     refs.togglePasswordBtn.addEventListener("click", togglePasswordVisibility)
     refs.cancelBtn.addEventListener("click", () => void onCancelClick())
+    refs.saveAnywayBtn.addEventListener("click", () => void onSaveAnywayClick())
     refs.form.addEventListener("submit", (event) => void onConnect(event))
+    refs.form.addEventListener("input", hideSaveAnywayButton)
     document.addEventListener(LOCALE_EVENT, onLocaleChanged)
 
     paintMethodButtons()
