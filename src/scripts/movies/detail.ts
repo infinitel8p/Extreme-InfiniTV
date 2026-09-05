@@ -9,6 +9,8 @@ import {
   getActiveDnsOverrideAsync,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { isProviderRejection } from "@/scripts/lib/stream-reject.ts"
+import { createMirrorHopper } from "@/scripts/lib/vod-mirror-hop.ts"
 import { isCastRoutingActive, routePlayToCast } from "@/scripts/lib/tv-cast.js"
 import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
@@ -892,6 +894,7 @@ function retirePreviousPlayback() {
 
 async function startPlayback(options = {}) {
   if (!movie) return
+  const mirrorHopsUsed = options.mirrorHopsUsed || 0
   if (isTauri && isCastRoutingActive() && !options.forceLocal) {
     const title = movie.name || ""
     await routePlayToCast({
@@ -932,6 +935,17 @@ async function startPlayback(options = {}) {
   inlineTrailer.close()
   const requestId = ++playRequestId
 
+  const tryMirrorHop = createMirrorHopper({
+    buildUrl: detailSrcBuilder,
+    isCurrent: () => requestId === playRequestId,
+    logTag: "[xt:movie-detail]",
+    hopsUsed: mirrorHopsUsed,
+    onHop: (url, hopsUsed) => {
+      retirePreviousPlayback()
+      startPlayback({ isAutomaticRetry: true, mirrorHopsUsed: hopsUsed, overrideSrc: url })
+    },
+  })
+
   // detailSrc may not be ready yet if the network fetch is in flight.
   let waited = 0
   while (!detailSrc && waited < 4000) {
@@ -943,8 +957,11 @@ async function startPlayback(options = {}) {
     return
   }
 
-  // Probe the URL against the configured backup domains
-  if (detailSrcBuilder) {
+  if (options.overrideSrc) {
+    // Already probed by the mirror hop - re-resolving could re-pin back to the primary.
+    detailSrc = options.overrideSrc
+  } else if (detailSrcBuilder) {
+    // Probe the URL against the configured backup domains
     const resolved = await resolveStreamUrl(detailSrcBuilder)
     if (resolved) detailSrc = resolved
   }
@@ -1042,10 +1059,15 @@ async function startPlayback(options = {}) {
       setupHealthButton()
       subtitleDelayController.setup()
       // mpv-only signals the generic remux-failure classifier below doesn't recognize.
-      player.one?.("error", () => {
+      player.one?.("error", async () => {
         const errorDetail = player.codecInfo?.()?.errorDetail
         if (typeof errorDetail !== "string") return
         const httpStatus = parseHttpStatusPrefix(errorDetail)
+        if (isProviderRejection({ errorDetail, httpStatus })) {
+          const hopped = await tryMirrorHop({ errorDetail, httpStatus })
+          if (requestId !== playRequestId) return
+          if (hopped) return
+        }
         if (errorDetail.startsWith("OFFLINE_PLACEHOLDER")) vodPlaybackToasts.showOfflinePlaceholderToast()
         else if (httpStatus != null) vodPlaybackToasts.showHttpErrorToast(httpStatus)
         else if (errorDetail.startsWith("NETWORK:")) vodPlaybackToasts.showNetworkErrorToast()
@@ -1062,6 +1084,7 @@ async function startPlayback(options = {}) {
       retirePreviousPlayback()
       startPlayback({ isAutomaticRetry: true })
     },
+    tryMirrorHop,
     beginInsightsSession: (isAutomaticRetry) => {
       if (isAutomaticRetry) getMovieInsights().record("fallback", "auto:mkv-remux-fallback")
       else getMovieInsights().startSession({ label: movie.name })

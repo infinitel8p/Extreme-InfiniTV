@@ -12,7 +12,8 @@ import {
   readLocalM3UContent,
   getActiveDnsOverrideAsync,
 } from "@/scripts/lib/creds.js"
-import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { xtreamApiFetch, resolveStreamUrl, advanceMirror } from "@/scripts/lib/xtream-api.js"
+import { isProviderRejection, shouldRepinMirror } from "@/scripts/lib/stream-reject.ts"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
 import { debounce } from "@/scripts/lib/debounce.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
@@ -2108,6 +2109,91 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
   }
 }
 
+/** Re-srcs the current mount from ctx; shared by the same-src retry, the mirror hop, and the stall retune. */
+function remountFromContext(ctx) {
+  try {
+    vjs.reset?.()
+    vjs.src({
+      src: ctx.src,
+      type: ctx.mime || "application/x-mpegURL",
+      isLive: ctx.isLive ?? true,
+      drm: ctx.drm ?? null,
+      preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
+      title: ctx.name,
+    })
+    vjs.play().catch((err) => {
+      log.info("[xt:livetv] remount play() rejected", { streamId: ctx.streamId, error: err?.name || String(err) })
+    })
+  } catch {}
+}
+
+/** Same-src retry (or give-up) path used once a provider-rejection mirror hop isn't possible or has run out. */
+function scheduleSameSrcRetry(ctx) {
+  if (!ctx.retried) {
+    ctx.retried = true
+    const seqAtRetry = ctx.seq
+    setTimeout(() => {
+      if (seqAtRetry !== playSeq) return
+      if (isCastRoutingActive() || externalPlaybackActive) return
+      if (retryCatchupSession(ctx, { automatic: true })) return
+      if (!ctx.isLive) {
+        // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
+        giveUpOnPlayback(ctx)
+        return
+      }
+      if (ctx.audioProxied) {
+        retuneProxiedAudioMount(ctx)
+        return
+      }
+      // The same demuxer on the same container fails the same way; escalate to the verdict instead.
+      if (isParseFailureDetail(vjs?.codecInfo?.()?.errorDetail)) {
+        giveUpOnPlayback(ctx)
+        return
+      }
+      remountFromContext(ctx)
+    }, ERROR_AUTO_RETRY_MS)
+    return
+  }
+  giveUpOnPlayback(ctx)
+}
+
+/**
+ * A live Xtream tune got a provider rejection (401/403/407/429/connection-limit).
+ * Hops to the next configured mirror instead of retrying the same dead source, up
+ * to one hop per configured candidate. Falls back to the same-src retry when no
+ * hop is possible or none of the remaining mirrors answer. Memoized on ctx so a
+ * second "error" event for the same rejection (shaka/mpv can emit more than one)
+ * shares this attempt instead of racing a second hop.
+ */
+function tryMirrorHopOnLiveError(ctx, rejection) {
+  if (ctx.mirrorHopPromise) return ctx.mirrorHopPromise
+  ctx.mirrorHopPromise = (async () => {
+    const seqAtRejection = ctx.seq
+    const repin = shouldRepinMirror(rejection)
+    const nextUrl = await advanceMirror(
+      (candidate) => buildDirectLiveUrl(ctx.streamId, candidate),
+      { hopsUsed: ctx.mirrorHops ?? 0, repin }
+    )
+    // A cast/external handoff doesn't bump playSeq, so re-check both right before the remount.
+    if (seqAtRejection !== playSeq || isCastRoutingActive() || externalPlaybackActive) return
+    if (!nextUrl) {
+      scheduleSameSrcRetry(ctx)
+      return
+    }
+    ctx.mirrorHops = (ctx.mirrorHops ?? 0) + 1
+    ctx.src = nextUrl
+    log.warn("[xt:livetv] provider rejection - hopping to next mirror", {
+      streamId: ctx.streamId,
+      hop: ctx.mirrorHops,
+    })
+    remountFromContext(ctx)
+  })().finally(() => {
+    // Release the guard so a rejection from the hopped mirror can hop again.
+    ctx.mirrorHopPromise = null
+  })
+  return ctx.mirrorHopPromise
+}
+
 /** Shared "nothing left to try" path for a play attempt: native handoff, failure panel, or a generic toast, depending on how far playback got. */
 function giveUpOnPlayback(ctx) {
   hideTuningOverlay()
@@ -2373,42 +2459,20 @@ async function mountEmbeddedPlayer(backend, opts) {
     // Stops a timer armed by an earlier "playing" from firing against the mount we're replacing.
     clearDeadVideoWatchdog()
     clearDeadAudioWatchdog()
-    if (!ctx.retried) {
-      ctx.retried = true
-      const seqAtRetry = ctx.seq
-      setTimeout(() => {
-        if (seqAtRetry !== playSeq) return
-        if (isCastRoutingActive() || externalPlaybackActive) return
-        if (retryCatchupSession(ctx, { automatic: true })) return
-        if (!ctx.isLive) {
-          // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
-          giveUpOnPlayback(ctx)
-          return
-        }
-        if (ctx.audioProxied) {
-          retuneProxiedAudioMount(ctx)
-          return
-        }
-        // The same demuxer on the same container fails the same way; escalate to the verdict instead.
-        if (isParseFailureDetail(vjs?.codecInfo?.()?.errorDetail)) {
-          giveUpOnPlayback(ctx)
-          return
-        }
-        try {
-          vjs.reset?.()
-          vjs.src({
-            src: ctx.src,
-            type: ctx.mime || "application/x-mpegURL",
-            isLive: ctx.isLive ?? true,
-            preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
-            title: ctx.name,
-          })
-          vjs.play().catch(() => {})
-        } catch {}
-      }, ERROR_AUTO_RETRY_MS)
+
+    const errorDetail = vjs?.codecInfo?.()?.errorDetail ?? null
+    const httpStatus = parseHttpStatusPrefix(errorDetail)
+    const canTryMirrorHop =
+      ctx.isLive &&
+      !ctx.audioProxied &&
+      !isCastRoutingActive() &&
+      !externalPlaybackActive &&
+      isProviderRejection({ errorDetail, httpStatus })
+    if (canTryMirrorHop) {
+      void tryMirrorHopOnLiveError(ctx, { errorDetail, httpStatus })
       return
     }
-    giveUpOnPlayback(ctx)
+    scheduleSameSrcRetry(ctx)
   })
 
   return vjs
@@ -3114,19 +3178,7 @@ function performStallRetune(trigger) {
     giveUpOnPlayback(ctx)
     return
   }
-  try {
-    vjs.reset?.()
-    vjs.src({
-      src: ctx.src,
-      type: ctx.mime || "application/x-mpegURL",
-      isLive: ctx.isLive ?? true,
-      preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
-      title: ctx.name,
-    })
-    vjs.play().catch((err) => {
-      log.info("[xt:livetv] stall-retune play() rejected", { streamId: ctx.streamId, error: err?.name || String(err) })
-    })
-  } catch {}
+  remountFromContext(ctx)
 }
 
 function armStallSentinel() {
@@ -4395,6 +4447,8 @@ async function play(streamId, name, reason = "user") {
     isLive: true,
     audioProxied,
     audioProxySessionId,
+    mirrorHops: 0,
+    drm: audioProxied ? null : channelDrm,
   }
   // An "auto:*" reason is a recovery re-invocation of the same tune, not a new one - keep it in the same session.
   if (isAutomaticRetuneReason(reason)) {

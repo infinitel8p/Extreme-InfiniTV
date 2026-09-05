@@ -10,6 +10,8 @@ import {
   getActiveDnsOverrideAsync,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { isProviderRejection } from "@/scripts/lib/stream-reject.ts"
+import { createMirrorHopper } from "@/scripts/lib/vod-mirror-hop.ts"
 import { isCastRoutingActive, routePlayToCast, castXtreamEpisodeToTv } from "@/scripts/lib/tv-cast.js"
 import { isCastableSrc, buildVodCastDescriptor } from "@/scripts/lib/tv-cast-descriptor.js"
 import { getCached, setCached } from "@/scripts/lib/cache.js"
@@ -1501,6 +1503,7 @@ function retirePreviousPlayback() {
 
 async function playEpisode(episode, options = {}) {
   if (!series || !episode) return
+  const mirrorHopsUsed = options.mirrorHopsUsed || 0
   if (isTauri && isCastRoutingActive() && !options.forceLocal) {
     const title = episodeCastTitle(episode)
     await routePlayToCast({
@@ -1542,9 +1545,27 @@ async function playEpisode(episode, options = {}) {
   }
   inlineTrailer.close()
   const requestId = ++playRequestId
-  const src = episode?._directUrl
-    ? buildEpisodeStreamUrl(episode)
-    : await resolveStreamUrl((c) => buildEpisodeStreamUrl(episode, c))
+  const episodeSrcBuilder = episode?._directUrl
+    ? null
+    : (candidate) => buildEpisodeStreamUrl(episode, candidate)
+
+  const tryMirrorHop = createMirrorHopper({
+    buildUrl: episodeSrcBuilder,
+    isCurrent: () => requestId === playRequestId,
+    logTag: "[xt:series-detail]",
+    hopsUsed: mirrorHopsUsed,
+    onHop: (url, hopsUsed) => {
+      retirePreviousPlayback()
+      playEpisode(episode, { isAutomaticRetry: true, mirrorHopsUsed: hopsUsed, overrideSrc: url })
+    },
+  })
+
+  // Already probed by the mirror hop - re-resolving could re-pin back to the primary.
+  const src = options.overrideSrc
+    ? options.overrideSrc
+    : episode?._directUrl
+      ? buildEpisodeStreamUrl(episode)
+      : await resolveStreamUrl((c) => buildEpisodeStreamUrl(episode, c))
   if (!src) return
   if (requestId !== playRequestId) return
   // Ahead of every await that can register a proxy/remux session for this run.
@@ -1665,10 +1686,15 @@ async function playEpisode(episode, options = {}) {
       setupHealthButton()
       subtitleDelayController.setup()
       // mpv-only signals the generic remux-failure classifier below doesn't recognize.
-      player.one?.("error", () => {
+      player.one?.("error", async () => {
         const errorDetail = player.codecInfo?.()?.errorDetail
         if (typeof errorDetail !== "string") return
         const httpStatus = parseHttpStatusPrefix(errorDetail)
+        if (isProviderRejection({ errorDetail, httpStatus })) {
+          const hopped = await tryMirrorHop({ errorDetail, httpStatus })
+          if (requestId !== playRequestId) return
+          if (hopped) return
+        }
         if (errorDetail.startsWith("OFFLINE_PLACEHOLDER")) vodPlaybackToasts.showOfflinePlaceholderToast()
         else if (httpStatus != null) vodPlaybackToasts.showHttpErrorToast(httpStatus)
         else if (errorDetail.startsWith("NETWORK:")) vodPlaybackToasts.showNetworkErrorToast()
@@ -1685,6 +1711,7 @@ async function playEpisode(episode, options = {}) {
       retirePreviousPlayback()
       playEpisode(currentEpisode, { isAutomaticRetry: true })
     },
+    tryMirrorHop,
     beginInsightsSession: (isAutomaticRetry) => {
       if (isAutomaticRetry) getSeriesInsights().record("fallback", "auto:mkv-remux-fallback")
       else getSeriesInsights().startSession({ label: [series?.name, episode.title].filter(Boolean).join(" - ") })

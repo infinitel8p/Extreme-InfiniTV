@@ -2,6 +2,11 @@
 // channel name ("HEVC", "H.265", "x265", and the occasional "HVEC" typo).
 // The embedded player decodes via MSE, which only supports HEVC when the
 // platform ships a licensed decoder - so these channels usually need MPV/VLC.
+import {
+  CONNECTION_LIMIT_STATUSES,
+  parseHttpStatusFromDetail,
+} from "@/scripts/lib/stream-reject.ts"
+
 const HEVC_NAME_RX = /(?:\bhevc\b|\bhvec\b|\bh\.?\s?265\b|\bx\.?265\b)/i
 
 export function hasHevcNameHint(name: string | null | undefined): boolean {
@@ -36,19 +41,14 @@ export function findHevcInCodecList(codecs: string | null | undefined): string |
 
 export type StartFailureKind = "hevc" | "codec" | "audio" | "parse" | "connection-limit" | "unknown"
 
-// Connection-cap refusals: 458 is Xtream Codes' own code, 429/509 come from nginx-fronted panels.
-const CONNECTION_LIMIT_STATUSES = new Set([429, 458, 509])
+export { CONNECTION_LIMIT_STATUSES }
 
 export function isConnectionLimitStatus(status: number | null | undefined): boolean {
   return typeof status === "number" && CONNECTION_LIMIT_STATUSES.has(status)
 }
 
 /** Pulls an HTTP status out of an engine error string (shaka reports it inside its error data). */
-export function httpStatusFromErrorDetail(detail: string | null | undefined): number | null {
-  if (!detail) return null
-  const status = /\bHTTP (\d{3})\b/.exec(detail) || /shaka:network:1001\s+\[[^,]*,\s*(\d{3})/.exec(detail)
-  return status ? Number(status[1]) : null
-}
+export const httpStatusFromErrorDetail = parseHttpStatusFromDetail
 
 export interface StartFailureVerdict {
   kind: StartFailureKind
