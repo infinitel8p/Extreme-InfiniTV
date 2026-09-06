@@ -2186,6 +2186,7 @@ function tryMirrorHopOnLiveError(ctx, rejection) {
       streamId: ctx.streamId,
       hop: ctx.mirrorHops,
     })
+    log.debug("[xt:livetv] mirror hop", `channel=${ctx.streamId} hop=${ctx.mirrorHops} reason=${rejection?.errorDetail || rejection?.httpStatus || "unknown"}`)
     remountFromContext(ctx)
   })().finally(() => {
     // Release the guard so a rejection from the hopped mirror can hop again.
@@ -2356,6 +2357,9 @@ async function mountEmbeddedPlayer(backend, opts) {
     }
     ensureProgressWatch()
     if (lastPlayContext) {
+      if (!lastPlayContext.started && lastPlayContext.startedAtMs != null) {
+        log.debug("[xt:livetv] first frame", `channel=${lastPlayContext.streamId} elapsedMs=${Math.round(performance.now() - lastPlayContext.startedAtMs)}`)
+      }
       lastPlayContext.started = true
       if (lastPlayContext.audioProxied) {
         rememberAudioTranscodeChannel(activePlaylistId, String(lastPlayContext.streamId))
@@ -4091,6 +4095,7 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
     programmes,
     dns: (await getActiveDnsOverrideAsync())?.raw ?? null,
   })
+  log.debug("[xt:livetv] external handoff", `target=android-native channel=${initialStreamId} launched=${launched}`)
   if (launched && activePlaylistId) {
     pushRecent(activePlaylistId, "live", initialStreamId, initialName,
       all.find((entry) => entry.id === initialStreamId)?.logo || null)
@@ -4350,6 +4355,8 @@ async function play(streamId, name, reason = "user") {
   if (backend === "mpv-embedded" && !mpvEmbeddedFixAvailable) backend = "artplayer"
   const channelHeaders = streamHeadersById.get(streamId) || null
   const channelDrm = streamDrmById.get(streamId) || null
+  const tuneStartedAtMs = performance.now()
+  log.debug("[xt:livetv] tune start", `channel=${streamId} backend=${backend} container=${creds.liveContainer || "m3u8"} mode=live external=${backend === "mpv" || backend === "vlc"}`)
 
   if (backend === "mpv" || backend === "vlc") {
     void stopAudioTranscode()
@@ -4449,6 +4456,7 @@ async function play(streamId, name, reason = "user") {
     audioProxySessionId,
     mirrorHops: 0,
     drm: audioProxied ? null : channelDrm,
+    startedAtMs: tuneStartedAtMs,
   }
   // An "auto:*" reason is a recovery re-invocation of the same tune, not a new one - keep it in the same session.
   if (isAutomaticRetuneReason(reason)) {
@@ -4702,6 +4710,8 @@ async function playCatchup(channel, opts) {
   }
 
   const backend = getPlayerBackend()
+  const catchupTuneStartedAtMs = performance.now()
+  log.debug("[xt:livetv] tune start", `channel=${channel.id} backend=${backend} mode=catchup kind=${kind} external=${backend === "mpv" || backend === "vlc"}`)
   if (backend === "mpv" || backend === "vlc") {
     toastError(kind === "timeshift" ? t("timeshift.seekFailed") : t("catchup.failed"))
     return false
@@ -4814,6 +4824,7 @@ async function playCatchup(channel, opts) {
     audioClockWedge: false,
     mime,
     isLive: false,
+    startedAtMs: catchupTuneStartedAtMs,
   }
   getPlayerInsights().startSession({ label: channel.name, seq })
   hideBufferingChip()

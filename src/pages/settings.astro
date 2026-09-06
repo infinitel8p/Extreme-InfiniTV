@@ -80,6 +80,7 @@ const navStructure: NavSection[] = [
     { id: "discord-rpc-section",   labelKey: "settings.discord.title", label: "Discord Rich Presence", conditional: true },
     { id: "card-casting",          labelKey: "settings.casting.title", label: "Casting", conditional: true },
     { id: "card-tmdb",             labelKey: "settings.tmdb.title",    label: "Metadata enrichment" },
+    { id: "row-verbose-log",       labelKey: "settings.verboseLog.title", label: "Verbose logging", conditional: true },
     { id: "card-net-log",          labelKey: "settings.netLog.title",  label: "Network log", conditional: true },
   ]},
   { id: "settings-library", labelKey: "settings.group.library", label: "Library", cards: [
@@ -1080,6 +1081,28 @@ const navStructure: NavSection[] = [
                   data-i18n-attr="aria-label:settings.devMode.label">
                   <button type="button" role="radio" data-dev="on"  aria-checked="false" data-i18n="settings.devMode.on"  class="dev-mode-btn btn">On</button>
                   <button type="button" role="radio" data-dev="off" aria-checked="false" data-i18n="settings.devMode.off" class="dev-mode-btn btn">Off</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Verbose logging: dev-mode gated, writes detailed activity to the app log -->
+            <div id="row-verbose-log" data-settings-item class="settings-row hidden scroll-mt-6 lg:scroll-mt-20">
+              <div class="settings-row__text">
+                <h3 data-i18n="settings.verboseLog.title" class="text-sm font-medium leading-snug">Verbose logging</h3>
+                <p id="settings-verbose-log-helper" data-i18n="settings.verboseLog.helper" class="text-xs text-fg-3">
+                  Writes detailed EPG, catalog, playback and network activity to the app log file, with credentials removed. Attach the log to a bug report via Share logs or the diagnostic bundle. Turn it off when you're done: the log grows quickly.
+                </p>
+              </div>
+              <div class="settings-row__control">
+                <div
+                  id="settings-verbose-log"
+                  class="settings-seg"
+                  role="radiogroup"
+                  aria-label="Verbose logging"
+                  aria-describedby="settings-verbose-log-helper"
+                  data-i18n-attr="aria-label:settings.verboseLog.label">
+                  <button type="button" role="radio" data-verbose="on"  aria-checked="false" data-i18n="settings.verboseLog.on"  class="verbose-log-btn btn">On</button>
+                  <button type="button" role="radio" data-verbose="off" aria-checked="false" data-i18n="settings.verboseLog.off" class="verbose-log-btn btn">Off</button>
                 </div>
               </div>
             </div>
@@ -2537,6 +2560,9 @@ const navStructure: NavSection[] = [
       getDevModeEnabled,
       setDevModeEnabled,
       DEV_MODE_EVENT,
+      getVerboseLogEnabled,
+      setVerboseLogEnabled,
+      VERBOSE_LOG_EVENT,
     } from "@/scripts/lib/app-settings.js"
     import { playUiSound } from "@/scripts/lib/ui-sounds.ts"
     import { hapticsAvailable, performHaptic } from "@/scripts/lib/haptics.ts"
@@ -4358,6 +4384,7 @@ const navStructure: NavSection[] = [
     }
     function applyDevModeVisibility() {
       document.getElementById("card-net-log")?.classList.toggle("hidden", !getDevModeEnabled())
+      document.getElementById("row-verbose-log")?.classList.toggle("hidden", !getDevModeEnabled())
     }
     devModeGroup?.addEventListener("click", (event) => {
       const target = /** @type {HTMLElement} */ (event.target)
@@ -4370,9 +4397,34 @@ const navStructure: NavSection[] = [
     document.addEventListener(DEV_MODE_EVENT, () => {
       syncDevModeButtons()
       applyDevModeVisibility()
+      syncVerboseLogButtons()
     })
     syncDevModeButtons()
     applyDevModeVisibility()
+
+    // ---------------------------------------------------------------------
+    // Verbose logging: writes detailed activity to the app log file. Only
+    // shown while Developer mode is on; turning Developer mode off also
+    // turns verbose logging off (handled in setDevModeEnabled).
+    // ---------------------------------------------------------------------
+    const verboseLogGroup = document.getElementById("settings-verbose-log")
+    function syncVerboseLogButtons() {
+      const current = getVerboseLogEnabled()
+      for (const btn of verboseLogGroup?.querySelectorAll(".verbose-log-btn") || []) {
+        btn.setAttribute("aria-checked", String((btn.dataset.verbose === "on") === current))
+      }
+    }
+    verboseLogGroup?.addEventListener("click", (event) => {
+      const target = /** @type {HTMLElement} */ (event.target)
+      const btn = target.closest(".verbose-log-btn")
+      if (!btn) return
+      setVerboseLogEnabled(btn.dataset.verbose === "on")
+      syncVerboseLogButtons()
+    })
+    document.addEventListener(VERBOSE_LOG_EVENT, () => {
+      syncVerboseLogButtons()
+    })
+    syncVerboseLogButtons()
 
     // ---------------------------------------------------------------------
     // Downloads folder

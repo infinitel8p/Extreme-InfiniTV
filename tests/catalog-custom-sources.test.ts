@@ -100,7 +100,7 @@ vi.mock("@/scripts/lib/provider-fetch.js", () => ({
 vi.mock("@/scripts/lib/account-info.js", () => ({ ensureUserInfo: async () => null }))
 vi.mock("@/scripts/lib/i18n.js", () => ({ t: (key: string) => key }))
 vi.mock("@/scripts/lib/log.js", () => ({
-  log: { log: () => {}, warn: () => {}, error: () => {}, info: () => {} },
+  log: { log: () => {}, warn: () => {}, error: () => {}, info: () => {}, debug: () => {} },
   redactUrl: (value: string) => value,
 }))
 

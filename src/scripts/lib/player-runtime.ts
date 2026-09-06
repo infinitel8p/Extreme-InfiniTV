@@ -3181,6 +3181,7 @@ function wireMonoAudioDisposalMpv(handle: VjsLikeHandle): void {
 }
 
 function dispatchPlayerFallback(requested: PlayerBackend, used: PlayerBackend): void {
+  log.debug("[xt:player] backend fallback", `requested=${requested} used=${used}`)
   try {
     document.dispatchEvent(new CustomEvent("xt:player-fallback", { detail: { requested, used } }))
   } catch {}

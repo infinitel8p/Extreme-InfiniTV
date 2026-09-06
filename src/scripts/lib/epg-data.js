@@ -135,6 +135,7 @@ export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl, customSourceUr
     }
   }
 
+  log.debug("[xt:epg-data] epg urls resolved", `count=${out.length} providerEpg=${skipAuto ? "off" : "on"} customUrls=${customSourceUrls.length}`)
   return out
 }
 
@@ -406,6 +407,7 @@ export async function parseXmlTvBytesOffMain(buffer, gzip, window) {
     if (window && !xmlWorkerPending.size) releaseXmlWorker()
   }
   if (reply.error) throw new Error(reply.error)
+  log.debug("[xt:epg-data] parse bytes worker ok", `bytes=${buffer.byteLength} gzip=${!!gzip}`)
   return {
     programmes: new Map(reply.programmes),
     channelNames: new Map(reply.channelNames || []),
@@ -599,6 +601,7 @@ async function streamNowNextFromUrl(url, nowMs, feedId, dns) {
     return reduceToNowNext(parseXmlTv(xml), nowMs)
   }
   if (reply.error) throw new Error(reply.error)
+  log.debug("[xt:epg-data] now-next streaming worker ok", `bytes=${bytesTransferred} gzip=${isGzipFeed}`)
   return {
     programmes: new Map(reply.programmes),
     channelNames: new Map(reply.channelNames || []),
@@ -637,6 +640,7 @@ export async function getProgrammesForChannel(playlistId, tvgId, window) {
   for (const feed of state.nowNextFeeds || []) {
     let reply = await requestProgrammesFor(feed.feedId, normalizedTvgId, window)
     if (reply.noFeed) {
+      log.debug("[xt:epg-data] now-next feed refetch", `id=${playlistId} tvgId=${normalizedTvgId} feedId=${feed.feedId}`)
       try {
         await retryWithBackoff(() => streamNowNextFromUrl(feed.url, Date.now(), feed.feedId, dns))
       } catch (err) {
@@ -1208,6 +1212,7 @@ function epgWindowsMatch(cachedWindow, requestedWindow) {
 async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, nowMs, dns) {
   const hash = urlHash(src.url)
   const kind = cacheKindFor(src.url)
+  const sourceStartedAt = performance.now()
 
   if (epgMode === "now-next") {
     // Time-sensitive result: a cached parse from even a few minutes ago would
@@ -1216,10 +1221,12 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
     // Streamed straight into the worker (see streamNowNextFromUrl) so the
     // decompressed feed never exists as a single string on the main thread.
     const parsed = await retryWithBackoff(() => streamNowNextFromUrl(src.url, nowMs, hash, dns))
+    const count = countProgrammes(parsed.programmes)
+    log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=miss parser=streaming fetchMs=${Math.round(performance.now() - sourceStartedAt)} programmes=${count} channels=${parsed.channelNames.size}`)
     return {
       programmes: parsed.programmes,
       channelNames: parsed.channelNames,
-      count: countProgrammes(parsed.programmes),
+      count,
       cached: false,
       hasExplicitTimezones: parsed.hasExplicitTimezones,
     }
@@ -1240,10 +1247,12 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
       // (drift by offsetMin) on every 304-served load.
       const programmes = cloneProgrammeEntries(hit.data.entries)
       const channelNames = new Map(hit.data.channelNames || [])
+      const count = countProgrammes(programmes)
+      log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=hit parser=cache fetchMs=${Math.round(performance.now() - sourceStartedAt)} programmes=${count} channels=${channelNames.size}`)
       return {
         programmes,
         channelNames,
-        count: countProgrammes(programmes),
+        count,
         cached: true,
         hasExplicitTimezones: !!hit.data.hasExplicitTimezones,
       }
@@ -1251,13 +1260,17 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
     // 304 but no cached parsed payload survived (TTL expired, IDB pruned).
     // Drop the stale validator and force a fresh fetch.
     delete httpMeta[hash]
+    const freshFetchStartedAt = performance.now()
     const fresh = await retryWithBackoff(() =>
       fetchEpgConditional(src.url, null, dns)
     )
     if (fresh.notModified || !fresh.buffer) {
       throw new Error("304 with no cached body and no fresh payload")
     }
+    const fetchMs = Math.round(performance.now() - freshFetchStartedAt)
+    const parseStartedAt = performance.now()
     const parsed = await parseXmlTvBytesOffMain(fresh.buffer, fresh.gzip, window)
+    const parseMs = Math.round(performance.now() - parseStartedAt)
     const entries = Array.from(parsed.programmes.entries())
     try {
       cacheSet(
@@ -1280,16 +1293,21 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
     }
 
     const programmes = cloneProgrammeEntries(entries)
+    const count = countProgrammes(programmes)
+    log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=stale parser=off-main bytes=${fresh.buffer.byteLength} gzip=${!!fresh.gzip} fetchMs=${fetchMs} parseMs=${parseMs} programmes=${count} channels=${parsed.channelNames.size}`)
     return {
       programmes,
       channelNames: parsed.channelNames,
-      count: countProgrammes(programmes),
+      count,
       cached: false,
       hasExplicitTimezones: parsed.hasExplicitTimezones,
     }
   }
 
+  const parseStartedAt = performance.now()
   const parsed = await parseXmlTvBytesOffMain(result.buffer, result.gzip, window)
+  const parseMs = Math.round(performance.now() - parseStartedAt)
+  const fetchMs = Math.round(parseStartedAt - sourceStartedAt)
   const entries = Array.from(parsed.programmes.entries())
   try {
     cacheSet(
@@ -1312,10 +1330,12 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
   }
 
   const programmes = cloneProgrammeEntries(entries)
+  const count = countProgrammes(programmes)
+  log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=miss parser=off-main bytes=${result.buffer.byteLength} gzip=${!!result.gzip} fetchMs=${fetchMs} parseMs=${parseMs} programmes=${count} channels=${parsed.channelNames.size}`)
   return {
     programmes,
     channelNames: parsed.channelNames,
-    count: countProgrammes(programmes),
+    count,
     cached: false,
     hasExplicitTimezones: parsed.hasExplicitTimezones,
   }
@@ -1365,6 +1385,8 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
   if (!playlistId || !creds?.host) return null
   const window = opts.window || null
   const epgMode = opts.epgMode === "now-next" ? "now-next" : "full"
+  const loadStartedAt = performance.now()
+  log.debug("[xt:epg-data] loadProgrammes start", `id=${playlistId} mode=${epgMode} window=${window ? `${window.fromMs}-${window.toMs}` : "none"}`)
 
   if (!opts.force) {
     const hit = memCache.get(playlistId)
@@ -1402,6 +1424,8 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
       const channelNameMaps = []
       // See resolveAutoOffsetMin: any explicit-tz source skips inference to avoid double-shifting correct-UTC programmes.
       let anySourceHasExplicitTimezones = false
+      let okSourceCount = 0
+      let failedSourceCount = 0
 
       const setting = getOffsetSetting(playlistId)
       const offsetIsAuto = setting === "auto"
@@ -1426,6 +1450,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
           programmeMaps.push(programmes)
           channelNameMaps.push(channelNames)
           if (hasExplicitTimezones) anySourceHasExplicitTimezones = true
+          okSourceCount++
           statuses.push({
             url: src.url,
             source: src.source,
@@ -1436,6 +1461,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
           })
         } else {
           const err = result.reason
+          failedSourceCount++
           log.warn(
             `[xt:epg-data] source failed (${src.source}):`,
             err?.message || err
@@ -1502,6 +1528,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
           detail: { playlistId, offsetMin, offsetIsAuto },
         })
       )
+      log.debug("[xt:epg-data] loadProgrammes done", `id=${playlistId} sources=${sources.length} ok=${okSourceCount} failed=${failedSourceCount} totalMs=${Math.round(performance.now() - loadStartedAt)} programmes=${programmes.size} channels=${channelNames.size}`)
       return state
     } catch (e) {
       log.warn("[xt:epg-data] load failed:", e)

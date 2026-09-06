@@ -494,9 +494,11 @@ function loadVodCatalog() {
   const cached = getCached(activePlaylistId, "vod")?.data
   if (cached?.length) return Promise.resolve(cached)
   if (!vodCatalogPromise) {
+    const catalogLoadStartedAtMs = performance.now()
     vodCatalogPromise = ensureVod(creds, activePlaylistId)
       .then((catalog) => {
         adoptCatalogRow(catalog)
+        log.debug("[xt:movie-detail] vod catalog loaded", `items=${catalog.length} ms=${Math.round(performance.now() - catalogLoadStartedAtMs)}`)
         return catalog
       })
       .catch((err) => {
@@ -1019,6 +1021,7 @@ async function startPlayback(options = {}) {
   }
 
   let backend = getPlayerBackend()
+  log.debug("[xt:movie-detail] playback source", `id=${movie.id} source=${localSrc ? "local" : "remote"} backend=${backend}`)
 
   if (backend === "mpv" || backend === "vlc") {
     try {
@@ -1615,11 +1618,14 @@ async function boot() {
   // Refresh from network when reachable. The provider info cache has no TTL gate here -
   // this always runs, matching the existing offline/SWR behavior for this endpoint.
   if (creds.host && creds.user && creds.pass) {
+    const vodInfoFetchStartedAtMs = performance.now()
+    log.debug("[xt:movie-detail] vod info fetch start", `id=${movieId}`)
     try {
       const r = await xtreamApiFetch("get_vod_info", { vod_id: String(movieId) })
       if (!r.ok) throw new Error(await r.text())
       const data = await r.json()
       setCached(active._id, `vod_info_${movieId}`, data, VOD_INFO_TTL_MS)
+      log.debug("[xt:movie-detail] vod info fetch end", `id=${movieId} ok=true ms=${Math.round(performance.now() - vodInfoFetchStartedAtMs)}`)
       if (enrichRequestIdForThisBoot === enrichRequestId) {
         applyVodInfo(data)
         // applyVodInfo resets the provider-derived fields the merge already backfilled; reassert it.
@@ -1631,6 +1637,7 @@ async function boot() {
         hideDetailSkeleton()
       }
     } catch (e) {
+      log.debug("[xt:movie-detail] vod info fetch end", `id=${movieId} ok=false ms=${Math.round(performance.now() - vodInfoFetchStartedAtMs)}`)
       log.error("[xt:movie-detail] info fetch failed:", e)
       if (!providerInfoReady && enrichRequestIdForThisBoot === enrichRequestId) {
         if (plotEl) {

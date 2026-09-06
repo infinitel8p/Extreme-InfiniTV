@@ -1,4 +1,4 @@
-import { log } from "@/scripts/lib/log.js"
+import { log, setVerboseLogging } from "@/scripts/lib/log.js"
 import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 import { LANGUAGE_TOKENS } from "@/scripts/lib/language-tags.ts"
@@ -42,6 +42,7 @@ const KEY_TMDB_KEY = "xt_tmdb_key"
 const KEY_TMDB_ENABLED = "xt_tmdb_enabled"
 const KEY_TVDB_ENABLED = "xt_tvdb_enabled"
 const KEY_DEV_MODE = "xt_dev_mode"
+const KEY_VERBOSE_LOG = "xt_verbose_log"
 const KEY_RECEIVER_MODE = "xt_receiver_mode"
 const KEY_RECEIVER_BOOT = "xt_receiver_boot"
 const KEY_RECEIVER_NAME = "xt_receiver_name"
@@ -1069,8 +1070,24 @@ export function getDevModeEnabled() {
 
 export function setDevModeEnabled(enabled) {
   writeLS(KEY_DEV_MODE, enabled ? "1" : "")
+  if (!enabled && getVerboseLogEnabled()) setVerboseLogEnabled(false)
   document.dispatchEvent(
     new CustomEvent(DEV_MODE_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const VERBOSE_LOG_EVENT = "xt:verbose-log-changed"
+
+/** Verbose logging: default off. */
+export function getVerboseLogEnabled() {
+  return readLS(KEY_VERBOSE_LOG, "") === "1"
+}
+
+export function setVerboseLogEnabled(enabled) {
+  writeLS(KEY_VERBOSE_LOG, enabled ? "1" : "")
+  setVerboseLogging(!!enabled)
+  document.dispatchEvent(
+    new CustomEvent(VERBOSE_LOG_EVENT, { detail: { value: !!enabled } })
   )
 }
 

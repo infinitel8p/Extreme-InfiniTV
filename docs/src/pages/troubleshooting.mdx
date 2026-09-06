@@ -133,6 +133,14 @@ On Android, **Settings > Data > Storage > Share logs** shares the newest log fil
 
 Each launch also writes a one-line snapshot near the top of the log: app version, platform, player backend, and a handful of settings that affect playback (performance mode, network timeout, FFmpeg availability, and similar) plus your playlist count and active playlist's type. It never includes your server, username, or password - only the setting names and values that help narrow down a bug.
 
+## Verbose logging for bug reports
+
+For issues that are hard to pin down from a plain log, turn on verbose logging before you reproduce the problem. Open **Settings > Network > Developer mode** and turn it On; a **Verbose logging** row appears below it - turn that on too. It records EPG source fetch and parse timings, catalog loading, channel tunes and player fallbacks, movie and series detail requests, and one line per network request (kind, method, status, duration, URL) with credentials removed, each line carrying a timestamp. It writes to the same app log file that **Open log folder** (desktop) and **Share logs** (Android) reach in **Settings > Data > Storage**, and the same files Export diagnostics includes. It works on Windows, Linux, macOS, and Android; on the web build it only affects the browser console.
+
+1. Reproduce the problem - for example open the EPG or switch channels.
+2. Share the log or the bundle in the GitHub issue.
+3. Turn Verbose logging Off when done - the log grows quickly. Files older than 14 days are removed automatically.
+
 ## Start fresh
 
 <Shot

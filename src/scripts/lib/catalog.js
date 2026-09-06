@@ -204,6 +204,7 @@ async function fetchCustomLiveChannels(playlistId, opts = {}) {
 }
 
 export async function ensureLive(creds, playlistId, opts = {}) {
+  const ensureStartedAt = performance.now()
   const isM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
   const kind = isM3U ? "m3u" : "live"
   if (isTauri) {
@@ -217,7 +218,8 @@ export async function ensureLive(creds, playlistId, opts = {}) {
   const entryForPlaylist = (await getEntries()).find((entry) => entry._id === playlistId)
   const dns = opts.dns !== undefined ? opts.dns : getEntryDnsOverride(entryForPlaylist)
   const onBytes = makeBytesEmitter(playlistId, "live")
-  const { data } = await cachedFetch(playlistId, kind, CHANNELS_TTL_MS, () => retryWithBackoff(async () => {
+  let liveCategoryCount = null
+  const { data, fromCache, stale } = await cachedFetch(playlistId, kind, CHANNELS_TTL_MS, () => retryWithBackoff(async () => {
     if (isM3U) {
       if (isCustomHost(creds.host)) {
         return fetchCustomLiveChannels(playlistId, opts)
@@ -249,12 +251,15 @@ export async function ensureLive(creds, playlistId, opts = {}) {
       )
     }
     const catMap = await fetchLiveCategoryMap(playlistId, dns)
+    liveCategoryCount = catMap.size
     const r = await xtreamApiFetch("get_live_streams", {}, { entryId: playlistId, dns })
     const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `live_streams ${r.status}`)
     return ingestXtreamBytes("live", bytes, Array.from(catMap))
   }), { force: !!opts.force })
-  return applyLiveOverrides(data || [], playlistId, isM3U, opts)
+  const result = applyLiveOverrides(data || [], playlistId, isM3U, opts)
+  log.debug("[xt:catalog] ensureLive done", `id=${playlistId} source=${fromCache ? (stale ? "idb-cache-stale" : "idb-cache") : "network"} items=${result.length} categories=${liveCategoryCount ?? "n/a"} ms=${Math.round(performance.now() - ensureStartedAt)}`)
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +277,7 @@ async function fetchVodCategoryMap(dns) {
 
 export async function ensureVod(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
+  const ensureStartedAt = performance.now()
   if (isTauri) {
     try {
       const { awaitNativeKind } = await import("@/scripts/lib/warmup-native.ts")
@@ -283,18 +289,22 @@ export async function ensureVod(creds, playlistId, opts = {}) {
   const entryForPlaylist = (await getEntries()).find((entry) => entry._id === playlistId)
   const dns = opts.dns !== undefined ? opts.dns : getEntryDnsOverride(entryForPlaylist)
   const onBytes = makeBytesEmitter(playlistId, "vod")
+  let vodCategoryCount = null
   const fetcher = () => retryWithBackoff(async () => {
     const catMap = await fetchVodCategoryMap(dns)
+    vodCategoryCount = catMap.size
     const r = await xtreamApiFetch("get_vod_streams", {}, { dns })
     const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `vod_streams ${r.status}`)
     return ingestXtreamBytes("vod", bytes, Array.from(catMap))
   })
-  const { data } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, fetcher, { force: !!opts.force })
+  const { data, fromCache, stale } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, fetcher, { force: !!opts.force })
   if (!opts.force && rowsNeedTmdbBackfill(data)) {
     triggerTmdbBackfillOnce(playlistId, "vod", VOD_TTL_MS, fetcher)
   }
-  return data || []
+  const result = data || []
+  log.debug("[xt:catalog] ensureVod done", `id=${playlistId} source=${fromCache ? (stale ? "idb-cache-stale" : "idb-cache") : "network"} items=${result.length} categories=${vodCategoryCount ?? "n/a"} ms=${Math.round(performance.now() - ensureStartedAt)}`)
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +322,7 @@ async function fetchSeriesCategoryMap(dns) {
 
 export async function ensureSeries(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
+  const ensureStartedAt = performance.now()
   if (isTauri) {
     try {
       const { awaitNativeKind } = await import("@/scripts/lib/warmup-native.ts")
@@ -323,18 +334,22 @@ export async function ensureSeries(creds, playlistId, opts = {}) {
   const entryForPlaylist = (await getEntries()).find((entry) => entry._id === playlistId)
   const dns = opts.dns !== undefined ? opts.dns : getEntryDnsOverride(entryForPlaylist)
   const onBytes = makeBytesEmitter(playlistId, "series")
+  let seriesCategoryCount = null
   const fetcher = () => retryWithBackoff(async () => {
     const catMap = await fetchSeriesCategoryMap(dns)
+    seriesCategoryCount = catMap.size
     const r = await xtreamApiFetch("get_series", {}, { dns })
     const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `series ${r.status}`)
     return ingestXtreamBytes("series", bytes, Array.from(catMap))
   })
-  const { data } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, fetcher, { force: !!opts.force })
+  const { data, fromCache, stale } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, fetcher, { force: !!opts.force })
   if (!opts.force && (rowsNeedTmdbBackfill(data) || rowsNeedGenreBackfill(data))) {
     triggerTmdbBackfillOnce(playlistId, "series", SERIES_TTL_MS, fetcher)
   }
-  return data || []
+  const result = data || []
+  log.debug("[xt:catalog] ensureSeries done", `id=${playlistId} source=${fromCache ? (stale ? "idb-cache-stale" : "idb-cache") : "network"} items=${result.length} categories=${seriesCategoryCount ?? "n/a"} ms=${Math.round(performance.now() - ensureStartedAt)}`)
+  return result
 }
 
 const inflight = new Map()
@@ -365,6 +380,8 @@ export async function warmupActive(playlistId, opts = {}) {
   if (!opts.force && inflight.has(pid)) return inflight.get(pid)
 
   const run = (async () => {
+    const warmupStartedAt = performance.now()
+    log.debug("[xt:catalog] warmup start", `id=${pid} kinds=live,vod,series path=${isTauri ? "native" : "js"}`)
     if (isTauri) {
       try {
         const { warmupActiveNative } = await import("@/scripts/lib/warmup-native.ts")
@@ -441,6 +458,7 @@ export async function warmupActive(playlistId, opts = {}) {
     await userInfoPromise
     if (force) await invalidateCustomDependents(pid)
     dispatch(EVT_WARMED, { playlistId: pid, errors })
+    log.debug("[xt:catalog] warmup done", `id=${pid} totalMs=${Math.round(performance.now() - warmupStartedAt)} live=${live.length} vod=${vod.length} series=${series.length} failed=${Object.keys(errors).join(",") || "none"}`)
     return { live, vod, series, errors }
   })()
     .finally(() => {

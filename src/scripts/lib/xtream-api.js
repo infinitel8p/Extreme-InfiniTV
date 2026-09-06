@@ -116,6 +116,7 @@ export async function xtreamApiFetch(action, params = {}, opts = {}) {
             noticeFailover()
           }
         }
+        log.debug("[xt:xtream-api] mirror resolved", `action=${action} index=${index}/${candidates.length} host=${creds.host} attempts=${offset + 1}`)
         setMirrorPin(entry._id, index)
         allFailedAt.delete(entry._id)
         return response
@@ -226,6 +227,7 @@ export async function advanceMirror(buildUrl, { hopsUsed = 0, repin = true } = {
   const found = await probeCandidateRing(candidates, buildUrl, startIndex, 1)
   if (!found) return null
 
+  log.debug("[xt:xtream-api] mirror hop resolved", `from=${startIndex} to=${found.index}/${candidates.length} hopsUsed=${hopsUsed} repin=${repin}`)
   if (repin) {
     log.warn(`[xt:api] provider rejection: advancing from candidate ${startIndex} to ${found.index}`)
     setMirrorPin(entry._id, found.index)
@@ -275,6 +277,7 @@ export async function resolveStreamUrl(buildUrl) {
   const found = await probeCandidateRing(candidates, buildUrl, startIndex, 0)
   if (!found) return buildUrl(candidates[startIndex])
 
+  log.debug("[xt:xtream-api] stream mirror resolved", `index=${found.index}/${candidates.length} host=${candidates[found.index]?.host} changed=${found.index !== startIndex}`)
   if (found.index !== startIndex) {
     log.warn(`[xt:api] stream probe: candidate ${startIndex} dead, switching to ${found.index}`)
     if (!failoverNoticed.has(entry._id)) {

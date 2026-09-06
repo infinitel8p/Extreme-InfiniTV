@@ -1646,6 +1646,7 @@ async function playEpisode(episode, options = {}) {
   }
 
   let backend = getPlayerBackend()
+  log.debug("[xt:series-detail] playback source", `id=${episode.id} source=${localSrc ? "local" : "remote"} backend=${backend}`)
 
   if (backend === "mpv" || backend === "vlc") {
     try {
@@ -2336,6 +2337,8 @@ async function boot() {
 
   let infoOk = providerInfoReady
   if (creds.host && creds.user && creds.pass) {
+    const seriesInfoFetchStartedAtMs = performance.now()
+    log.debug("[xt:series-detail] series info fetch start", `id=${seriesId}`)
     try {
       const r = await xtreamApiFetch("get_series_info", {
         series_id: String(seriesId),
@@ -2344,6 +2347,10 @@ async function boot() {
       if (!r.ok) throw new Error(await r.text())
       const data = await r.json()
       setCached(active._id, `series_info_${seriesId}`, data, SERIES_INFO_TTL_MS)
+      log.debug(
+        "[xt:series-detail] series info fetch end",
+        `id=${seriesId} ok=true ms=${Math.round(performance.now() - seriesInfoFetchStartedAtMs)} seasons=${Array.isArray(data?.seasons) ? data.seasons.length : "unknown"}`
+      )
       if (enrichRequestIdForThisBoot === enrichRequestId) {
         applySeriesInfo(data)
         // applySeriesInfo rebuilds meta text and episode rows, wiping the merge; reassert it.
@@ -2361,6 +2368,7 @@ async function boot() {
       }
       infoOk = true
     } catch (e) {
+      log.debug("[xt:series-detail] series info fetch end", `id=${seriesId} ok=false ms=${Math.round(performance.now() - seriesInfoFetchStartedAtMs)}`)
       log.error("[xt:series-detail] info fetch failed:", e)
       if (!providerInfoReady && enrichRequestIdForThisBoot === enrichRequestId) {
         if (plotEl) {

@@ -68,6 +68,13 @@ fn log_line_prefix(
     )
 }
 
+// Rust crates stay at Info; webview lines (target "webview" or "webview:<location>") also pass when the
+// frontend's verbose logging is on, since fern's level_for only splits targets on "::" and can't scope to it.
+#[cfg(not(target_os = "ios"))]
+fn is_loggable(metadata: &log::Metadata) -> bool {
+    metadata.level() <= log::Level::Info || metadata.target().starts_with(tauri_plugin_log::WEBVIEW_TARGET)
+}
+
 // The Stdout target also covers Android release builds; tauri-plugin-log routes it to logcat there, not just the debug-only terminal.
 #[cfg(not(target_os = "ios"))]
 fn build_log_plugin() -> tauri_plugin_log::Builder {
@@ -84,29 +91,29 @@ fn build_log_plugin() -> tauri_plugin_log::Builder {
                 log_line_prefix(&chrono::Utc::now().with_timezone(&offset), record.target(), record.level());
             out.finish(format_args!("{prefix}{message}"))
         })
-        .level(log::LevelFilter::Info)
+        .level(log::LevelFilter::Debug)
         .max_file_size(50_000_000)
         .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
         .clear_targets()
-        .target(tauri_plugin_log::Target::new(
-            tauri_plugin_log::TargetKind::LogDir {
+        .target(
+            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                 file_name: Some(format!("app-{day}")),
-            },
-        ));
+            })
+            .filter(is_loggable),
+        );
     if cfg!(debug_assertions) || cfg!(target_os = "android") {
-        log_builder = log_builder.target(tauri_plugin_log::Target::new(
-            tauri_plugin_log::TargetKind::Stdout,
-        ));
+        log_builder = log_builder.target(
+            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout).filter(is_loggable),
+        );
     }
     log_builder
 }
 
-// KeepSome only prunes the active day-stamped file's prefix, never prior days, and Android lacks desktop's manual "Open log folder" cleanup.
-#[cfg(target_os = "android")]
+// Verbose logging can grow the log folder quickly, and KeepSome only prunes the active day-stamped
+// file's prefix, never prior days, so age-based pruning removes anything older than this instead.
 const LOG_RETENTION_DAYS: u64 = 14;
 
-#[cfg(target_os = "android")]
-fn prune_old_android_logs(app: &tauri::App) {
+fn prune_old_logs(app: &tauri::App) {
     use tauri::Manager;
 
     let log_dir = match app.path().app_log_dir() {
@@ -359,8 +366,7 @@ pub fn run() {
         .setup(|app| {
             install_panic_hook();
             log_session_banner(app);
-            #[cfg(target_os = "android")]
-            prune_old_android_logs(app);
+            prune_old_logs(app);
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             external_player::sweep_orphan_mpv_sockets();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
