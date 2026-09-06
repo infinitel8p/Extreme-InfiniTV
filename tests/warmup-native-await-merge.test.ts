@@ -40,6 +40,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     }
     if (command === "warmup_status") return statusQueue.shift() ?? null
     if (command === "warmup_read_staged") return "[]"
+    if (command === "warmup_read_staged_bytes") return new TextEncoder().encode("[]").buffer
     return null
   },
 }))
@@ -85,6 +86,11 @@ vi.mock("@/scripts/lib/catalog-mappers.js", () => ({
   mapXtreamLiveRows: () => [],
   mapXtreamVodRows: () => [],
   mapXtreamSeriesRows: () => [],
+  unwrapRows: (parsed: unknown, arrayKey: string) => {
+    if (Array.isArray(parsed)) return parsed
+    const obj = parsed as Record<string, unknown> | null
+    return (obj?.[arrayKey] as unknown[]) || (obj?.results as unknown[]) || []
+  },
 }))
 
 vi.mock("@/scripts/lib/account-info.js", () => ({ ensureUserInfo: async () => null }))

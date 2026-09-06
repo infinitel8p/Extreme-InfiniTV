@@ -157,7 +157,17 @@ export function createOsd(host: HTMLElement): OsdHandle {
   let vodFlashTimer: ReturnType<typeof setTimeout> | null = null
   let liveState: { playlistId: string; channel: OsdLiveChannel } | null = null
   let paintedLogoUrl: string | null = null
+  const SHORT_EPG_BANNER_CACHE_CAP = 64
   const shortEpgBannerCache = new Map<string, ShortEpgNowNext>()
+
+  function cacheShortEpgBanner(key: string, nowNext: ShortEpgNowNext): void {
+    shortEpgBannerCache.delete(key)
+    shortEpgBannerCache.set(key, nowNext)
+    if (shortEpgBannerCache.size > SHORT_EPG_BANNER_CACHE_CAP) {
+      const oldestKey = shortEpgBannerCache.keys().next().value
+      if (oldestKey !== undefined) shortEpgBannerCache.delete(oldestKey)
+    }
+  }
 
   function paintLogo(url: string | null | undefined, name: string): void {
     if (url) {
@@ -192,7 +202,7 @@ export function createOsd(host: HTMLElement): OsdHandle {
       if (tvEpgSource(xtreamCreds) !== "short-epg") return
       void tvShortEpgCache().getNowNext(xtreamCreds, channel.id).then((nowNext) => {
         if (!nowNext) return
-        shortEpgBannerCache.set(`${playlistId}:${channel.id}`, nowNext)
+        cacheShortEpgBanner(`${playlistId}:${channel.id}`, nowNext)
         if (liveState?.playlistId === playlistId && String(liveState.channel.id) === String(channel.id)) {
           paintLiveBanner()
         }

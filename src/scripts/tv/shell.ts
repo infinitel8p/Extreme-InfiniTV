@@ -10,6 +10,7 @@ import { initUiSounds } from "@/scripts/lib/ui-sounds"
 import { initHaptics } from "@/scripts/lib/haptics"
 import { initPlaylistAccent } from "@/scripts/lib/playlist-accent"
 import { registerMainFocusSection, NAV_SECTION_ID } from "@/scripts/tv/focus"
+import { isElementVisibleForNav } from "@/scripts/lib/nav-visibility"
 import { mountTvFocusGlide } from "@/scripts/tv/focus-glide"
 import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
 import { getPlaylistListEmptyCopy } from "@/scripts/lib/playlist-rows.js"
@@ -19,6 +20,7 @@ import { ICON_X, ICON_PLAYLIST_ADD } from "@/scripts/lib/icons"
 import { mountTvRouter, TV_VIEW_MOUNTED_EVENT } from "@/scripts/tv/router"
 import { tvNavActiveHref } from "@/scripts/lib/tv-routes"
 import { mountTvWarmupIndicator } from "@/scripts/tv/ui/warmup-indicator"
+import { mountRootFontSizeSync } from "@/scripts/tv/root-font-size"
 
 function syncNavActiveState(): void {
   const activeHref = tvNavActiveHref(location.pathname)
@@ -166,10 +168,7 @@ function isNavigableElement(elem: Element): boolean {
   const fullscreenEl = document.fullscreenElement
   if (fullscreenEl && !fullscreenEl.contains(elem)) return false
   if (elem.closest("[inert]")) return false
-  const rect = elem.getBoundingClientRect()
-  if (rect.right <= 0 || rect.bottom <= 0) return false
-  if (getComputedStyle(elem).visibility !== "visible") return false
-  return true
+  return isElementVisibleForNav(elem)
 }
 
 const VERTICAL_KEYS: Record<string, true> = { ArrowUp: true, ArrowDown: true, PageUp: true, PageDown: true }
@@ -274,23 +273,6 @@ function scheduleBackgroundWarmup(): void {
         return import("@/scripts/lib/catalog.js").then((mod) => mod.warmupActive(entry._id))
       })
       .catch(() => {})
-  })
-}
-
-function mountPrefetchOnFocus(): void {
-  const prefetched = new Set<string>()
-  document.addEventListener("focusin", (event) => {
-    const target = event.target
-    if (!(target instanceof Element)) return
-    const anchor = target.closest<HTMLAnchorElement>("a[href^='/tv']")
-    if (!anchor || !anchor.href || prefetched.has(anchor.href)) return
-    prefetched.add(anchor.href)
-    try {
-      const link = document.createElement("link")
-      link.rel = "prefetch"
-      link.href = anchor.href
-      document.head.appendChild(link)
-    } catch {}
   })
 }
 
@@ -446,6 +428,7 @@ function mountFocusMemory(): void {
 }
 
 export function bootTvShell(): void {
+  mountRootFontSizeSync()
   void initI18n()
   mountBackHandler()
   mountTvInputGuard()
@@ -461,7 +444,6 @@ export function bootTvShell(): void {
   mountAmbientHandoffRefresh()
   mountNavSync()
   mountNavPlaylistDialog()
-  mountPrefetchOnFocus()
   mountCloseDialogsOnSwap()
   mountFocusMemory()
   mountTvWarmupIndicator()

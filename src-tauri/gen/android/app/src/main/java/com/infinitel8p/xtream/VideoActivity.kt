@@ -355,6 +355,23 @@ class VideoActivity : AppCompatActivity() {
     if (mode == MODE_LIVE) {
       val json = NativePlayerPayload.takeChannels() ?: "[]"
       channels = ChannelLite.parseList(json)
+      // A non-empty payload that parsed to zero channels means ChannelLite.parseList's own
+      // catch swallowed a malformed JSON blob - surface it instead of silently starting
+      // native playback with an empty channel list.
+      if (channels.isEmpty() && json != "[]") {
+        Log.w(TAG, "channel list parse yielded zero channels for a non-empty payload")
+        EventQueue.append(
+          this,
+          "xt:android-native-error",
+          JSONObject().apply {
+            put("contentKey", contentKey)
+            put("code", "CHANNEL_LIST_PARSE_FAILED")
+            put("message", "native channel list parse failed or was empty")
+          }
+        )
+        finish()
+        return
+      }
       val initialId = intent.getStringExtra(EXTRA_INITIAL_CHANNEL_ID)
       currentChannelIndex = channels.indexOfFirst { it.id == initialId }
         .takeIf { it >= 0 } ?: 0
@@ -1032,6 +1049,10 @@ object NativePlayerPayload {
     val payload = pendingChannelsJson
     pendingChannelsJson = null
     return payload
+  }
+
+  fun clearChannels() {
+    pendingChannelsJson = null
   }
 }
 

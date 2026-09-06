@@ -81,6 +81,22 @@ function isLocaleCode(code: string): code is LocaleCode {
 const LOCALE_STORAGE_KEY = "xt_locale"
 // Bumped from v2 to v3 in 1.6.0 to invalidate stale pre-paint caches
 const LOCALE_MESSAGES_STORAGE_KEY = "xt_locale_messages_v3"
+// Small pre-paint-only subset for TvLayout.astro's static nav markup, so its inline <head>
+// script parses a handful of keys instead of the full locale blob. Keep this list in sync
+// with the data-i18n / data-i18n-attr keys in TvLayout.astro that render before hydration.
+const LOCALE_PREPAINT_STORAGE_KEY = "xt_locale_prepaint"
+const PREPAINT_KEYS = [
+  "sidebar.mainLabel",
+  "nav.home",
+  "nav.livetv",
+  "nav.movies",
+  "nav.series",
+  "nav.search",
+  "nav.downloads",
+  "nav.settings",
+  "tv.nav.playlist",
+  "tv.nav.cast",
+] as const
 const LOCALE_CHANGED_EVENT = "xt:locale-changed"
 
 const cache = new Map<string, LocaleMessages>()
@@ -163,6 +179,27 @@ function writeCachedMessages(
   }
 }
 
+function writePrepaintMessages(code: string, messages: LocaleMessages): void {
+  try {
+    if (typeof localStorage === "undefined") return
+    if (code === "en") {
+      localStorage.removeItem(LOCALE_PREPAINT_STORAGE_KEY)
+      return
+    }
+    const subset: Record<string, string> = {}
+    for (const key of PREPAINT_KEYS) {
+      const value = messages[key]
+      if (value != null) subset[key] = value
+    }
+    localStorage.setItem(
+      LOCALE_PREPAINT_STORAGE_KEY,
+      `{"code":${JSON.stringify(code)},"messages":${JSON.stringify(subset)}}`
+    )
+  } catch {
+    /* ignore quota / privacy-mode errors */
+  }
+}
+
 function readCachedMessages(): { code: LocaleCode; messages: LocaleMessages } | null {
   try {
     if (typeof localStorage === "undefined") return null
@@ -231,6 +268,7 @@ export async function setLocale(input: string | null): Promise<void> {
   activeCode = code
   activeMessages = cache.get(code)!
   writeCachedMessages(code, activeMessages)
+  writePrepaintMessages(code, activeMessages)
   const matchesAutoDetect = code === detectLocale() && !readPersistedLocale()
   writePersistedLocale(matchesAutoDetect ? null : code)
   if (typeof document !== "undefined") {
@@ -320,6 +358,7 @@ async function refreshSeededLocale(): Promise<void> {
     if (changed && code === activeCode) {
       activeMessages = fresh
       writeCachedMessages(code, fresh, freshMessagesJson)
+      writePrepaintMessages(code, fresh)
       if (typeof document !== "undefined") {
         applyI18nDOM()
         document.dispatchEvent(new CustomEvent(LOCALE_CHANGED_EVENT, { detail: { code } }))

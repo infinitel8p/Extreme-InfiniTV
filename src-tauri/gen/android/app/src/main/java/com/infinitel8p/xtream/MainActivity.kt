@@ -1,5 +1,7 @@
 package com.infinitel8p.xtream
 
+import android.app.ActivityManager
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.os.Bundle
 import android.os.VibrationEffect
@@ -264,6 +266,18 @@ class DeviceInfoBridge(private val activity: TauriActivity) {
 
   @JavascriptInterface
   fun isTv(): Boolean = isLeanback() || isTelevisionUiMode()
+
+  // Feeds motion.ts's classifyEffectTier: below ~256MB signals a low-end TV box even when
+  // navigator.deviceMemory (Chromium WebView) doesn't reliably report one.
+  @JavascriptInterface
+  fun getMemoryClass(): Int {
+    return try {
+      val manager = activity.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+      manager.memoryClass
+    } catch (e: Throwable) {
+      0
+    }
+  }
 
   @JavascriptInterface
   fun getInstallSource(): String {
@@ -1270,13 +1284,16 @@ class AndroidVideoBridge(
     dns: String,
   ): Boolean {
     NativePlayerPayload.setChannels(channelsJson)
-    return tryLaunch(VideoActivity.MODE_LIVE) { intent ->
+    val launched = tryLaunch(VideoActivity.MODE_LIVE) { intent ->
       intent.putExtra(VideoActivity.EXTRA_INITIAL_CHANNEL_ID, initialChannelId)
       intent.putExtra(VideoActivity.EXTRA_CONTENT_KEY, contentKey)
       intent.putExtra(VideoActivity.EXTRA_UA, ua)
       intent.putExtra(VideoActivity.EXTRA_REFERER, referer)
       intent.putExtra(VideoActivity.EXTRA_DNS, dns)
     }
+    // The Activity never started to consume it - don't leave a stale payload for a later launch.
+    if (!launched) NativePlayerPayload.clearChannels()
+    return launched
   }
 
   @JavascriptInterface
@@ -2327,6 +2344,19 @@ class MainActivity : TauriActivity() {
     super.onPause()
     // Same wry WebView-pause behavior as the PiP fix above; keep it alive so xt:receiver-play can still fire.
     if (receiverSessionActive || receiverPageForeground) hostedWebView?.onResume()
+  }
+
+  // Android memory pressure: release resident image/ambient/enrichment caches before the OS
+  // starts killing background processes, and let the WebView drop its own HTTP cache.
+  override fun onTrimMemory(level: Int) {
+    super.onTrimMemory(level)
+    if (level < ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) return
+    val webView = hostedWebView ?: return
+    webView.clearCache(false)
+    val script = """
+      document.dispatchEvent(new CustomEvent('xt:memory-pressure', { detail: { level: $level } }));
+    """.trimIndent()
+    webView.post { webView.evaluateJavascript(script, null) }
   }
 
   // Tear down the throwaway sniffer WebView instead of leaving the remote page running until its timeout.

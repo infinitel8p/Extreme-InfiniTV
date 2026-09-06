@@ -131,6 +131,12 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
   // Set once init() resolves a playlist; lets prepaint read the cache synchronously on a later visit.
   let lastKnownPlaylistId = ""
   let prepaintedGrid: { root: HTMLElement; wrap: HTMLElement; grid: GridHandle } | null = null
+  // Indirection so both createGrid() call sites (prepaint and mount) share one hook even though
+  // the decorator itself only exists once mount() builds its language-chip state.
+  let onCardMountedHandler: ((cardEl: HTMLElement) => void) | null = null
+  function onCardMounted(cardEl: HTMLElement): void {
+    onCardMountedHandler?.(cardEl)
+  }
 
   function discardPrepaint(): void {
     const stale = prepaintedGrid
@@ -149,7 +155,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
 
       const wrap = document.createElement("div")
       wrap.className = "flex h-full flex-col gap-4"
-      const grid = createGrid({ focusSectionId: `tv-${kind}-grid`, railId: `tv-${kind}-grid` })
+      const grid = createGrid({ focusSectionId: `tv-${kind}-grid`, railId: `tv-${kind}-grid`, onCardMounted })
       const firstWindow = rows.slice(0, PREPAINT_ROW_LIMIT)
       grid.setEntries({
         count: firstWindow.length,
@@ -191,6 +197,8 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       let filterState: GridFilterState = { category: null, query: "", hideWatched: false, sort: "default" }
       let displayedRows: CatalogRow[] = []
       let chipInfoByRowId = new Map<number, { tags: string[]; variantCount: number; displayTag: string | null }>()
+      // Keyed by allRows identity so a dialog reopen on an unchanged catalog skips the O(n) count pass.
+      const categoryOptionsCache = new WeakMap<CatalogRow[], FilterOption[]>()
 
       const adopted = prepaintedGrid && prepaintedGrid.root === root ? prepaintedGrid : null
       if (adopted) prepaintedGrid = null
@@ -228,7 +236,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         },
       })
 
-      const grid = adopted?.grid ?? createGrid({ focusSectionId: `tv-${kind}-grid`, railId: `tv-${kind}-grid` })
+      const grid = adopted?.grid ?? createGrid({ focusSectionId: `tv-${kind}-grid`, railId: `tv-${kind}-grid`, onCardMounted })
 
       const actionSheet: ActionSheetHandle = createActionSheet(`tv-${kind}-grid-actions-dialog`)
 
@@ -257,7 +265,8 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         grid.setLoading()
       }
 
-      // Grid rows mount lazily (row-windowing); a chip is appended as each card's row enters the DOM.
+      // Grid rows mount lazily (row-windowing); a chip is appended as each card mounts, via the
+      // grid's own onCardMounted hook instead of a subtree MutationObserver over the whole grid.
       function decorateCardChips(cardEl: HTMLElement): void {
         const indexStr = cardEl.dataset.gridIndex
         if (indexStr == null) return
@@ -270,17 +279,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         const chip = buildLanguageChips(info.tags, info.variantCount, getActiveLocale(), info.displayTag)
         if (chip) posterWrap.appendChild(chip)
       }
-
-      const chipObserver = new MutationObserver((mutations) => {
-        for (const mutation of mutations) {
-          for (const node of mutation.addedNodes) {
-            if (!(node instanceof HTMLElement)) continue
-            if (node.matches("[data-grid-index]")) decorateCardChips(node)
-            node.querySelectorAll<HTMLElement>("[data-grid-index]").forEach(decorateCardChips)
-          }
-        }
-      })
-      chipObserver.observe(grid.el, { childList: true, subtree: true })
+      onCardMountedHandler = decorateCardChips
 
       function persistState(): void {
         if (!activePlaylistId) return
@@ -398,7 +397,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         if (!target) return
         initialFocusApplied = true
         target.focus()
-        window.SpatialNavigation?.makeFocusable?.()
+        window.SpatialNavigation?.makeFocusable?.(`tv-${kind}-grid`)
       }
 
       function catalogId(): string {
@@ -484,6 +483,9 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       }
 
       function buildCategoryOptions(): FilterOption[] {
+        const cached = categoryOptionsCache.get(allRows)
+        if (cached) return cached
+
         const counts = new Map<string, number>()
         for (const row of allRows) {
           const name = (row.category || "").trim() || t("list.uncategorized")
@@ -505,6 +507,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         }
 
         for (const name of names) options.push({ value: name, label: name, count: counts.get(name) || 0 })
+        categoryOptionsCache.set(allRows, options)
         return options
       }
 
@@ -561,6 +564,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
           const index = await getGenreIndex(playlistId, kind)
           if (destroyed || playlistId !== activePlaylistId) return
           genreSets = index.sets
+          categoryOptionsCache.delete(allRows)
         } catch {
           return
         }
@@ -633,6 +637,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
       }
 
       function onLocaleChanged(): void {
+        categoryOptionsCache.delete(allRows)
         filterBar.setState(
           { hideWatched: filterState.hideWatched, query: filterState.query },
           { categoryLabel: categoryLabel(), sortLabel: sortLabel() }
@@ -705,7 +710,7 @@ export function createCatalogGridView(kind: CatalogKind): TvView {
         document.removeEventListener("xt:active-changed", onActiveChanged)
         document.removeEventListener(LANGUAGE_GROUPING_EVENT, onLanguageSettingsChanged)
         document.removeEventListener(CONTENT_LANGUAGE_EVENT, onLanguageSettingsChanged)
-        chipObserver.disconnect()
+        if (onCardMountedHandler === decorateCardChips) onCardMountedHandler = null
         grid.destroy()
         filterBar.destroy()
         actionSheet.destroy()

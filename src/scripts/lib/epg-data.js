@@ -19,6 +19,7 @@ import {
 import { getChannelEpgOverride } from "@/scripts/lib/preferences.js"
 import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
 import { EPG_PAST_WINDOW_MS } from "@/scripts/lib/epg-constants.ts"
+import { NAME_COLLATOR } from "@/scripts/lib/catalog-mappers.js"
 
 const FRESH_MS = 60 * 60 * 1000
 const TZ_KEY_PREFIX = "xt_epg_offset:"
@@ -369,6 +370,50 @@ export async function parseXmlTvOffMain(xml, window) {
 }
 
 /**
+ * Bytes-transferring twin of parseXmlTvOffMain: `buffer` is handed to the worker as a
+ * transferable, which decodes (gzip-inflating if needed) and parses there, so the
+ * decompressed XML text never exists as a whole string on the main thread. On a worker
+ * timeout/error this can't fall back to a main-thread reparse - `buffer` was already
+ * transferred (detached) - so it rethrows instead; callers already sit behind
+ * retryWithBackoff at the fetch layer.
+ *
+ * @param {ArrayBuffer} buffer
+ * @param {boolean} gzip
+ * @param {EpgWindow} [window]
+ */
+export async function parseXmlTvBytesOffMain(buffer, gzip, window) {
+  const worker = getXmlWorker()
+  if (!worker) {
+    const xml = await decodeXmlBytes(buffer, gzip)
+    return parseXmlTv(xml, window)
+  }
+  const id = ++xmlWorkerSeq
+  const timeoutMs = xmlWorkerTimeoutMs(buffer.byteLength)
+  let reply
+  let timer = null
+  try {
+    reply = await new Promise((resolve, reject) => {
+      xmlWorkerPending.set(id, { resolve, reject })
+      timer = setTimeout(() => {
+        xmlWorkerPending.delete(id)
+        retireXmlWorker()
+        reject(new Error(`worker did not reply within ${timeoutMs}ms`))
+      }, timeoutMs)
+      worker.postMessage({ id, type: "parseBytes", bytes: buffer, gzip, window }, [buffer])
+    })
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (window && !xmlWorkerPending.size) releaseXmlWorker()
+  }
+  if (reply.error) throw new Error(reply.error)
+  return {
+    programmes: new Map(reply.programmes),
+    channelNames: new Map(reply.channelNames || []),
+    hasExplicitTimezones: !!reply.hasExplicitTimezones,
+  }
+}
+
+/**
  * Fire-and-await one worker request without the auto-release-after-windowed-parse
  * behavior `parseXmlTvOffMain` has - now-next mode keeps the worker (and its
  * retained feed text) alive on purpose. Resolves to null on any failure so
@@ -448,8 +493,8 @@ async function requestProgrammesFor(feedId, tvgId, window) {
 async function refetchFeedXml(url, dns) {
   try {
     const result = await retryWithBackoff(() => fetchEpgConditional(url, null, dns))
-    if (result.notModified || !result.xml) return null
-    return result.xml
+    if (result.notModified || !result.buffer) return null
+    return decodeXmlBytes(result.buffer, result.gzip)
   } catch (err) {
     log.warn("[xt:epg-data] programmesFor refetch failed:", err?.message || err)
     return null
@@ -762,19 +807,40 @@ export function getNowNext(programmes, tvgId, atMs = Date.now()) {
   return getNowNextFromArray(arr, atMs)
 }
 
+// Keyed by the source array's own identity (which only changes on a fresh EPG fetch/parse) and
+// then by shift hours, so a channel row re-rendered every tick never re-maps the same programmes
+// twice. The inner map stays tiny in practice (one shift value per tvgId) but is capped anyway.
+const shiftedProgrammesCache = new WeakMap()
+const SHIFT_CACHE_CAP_PER_ARRAY = 4
+
 /** Shifted copy of a channel's programmes; `rawStart`/`rawStop` keep the true XMLTV time for catch-up. */
 export function shiftChannelProgrammes(programmes, tvgShiftHours) {
   if (!programmes || !programmes.length) return programmes || []
   const hours = Number(tvgShiftHours)
   if (!Number.isFinite(hours) || hours === 0) return programmes
+
+  let byShift = shiftedProgrammesCache.get(programmes)
+  if (!byShift) {
+    byShift = new Map()
+    shiftedProgrammesCache.set(programmes, byShift)
+  }
+  const cached = byShift.get(hours)
+  if (cached) return cached
+
   const shiftMs = hours * 60 * 60 * 1000
-  return programmes.map((programme) => ({
+  const shifted = programmes.map((programme) => ({
     ...programme,
     start: programme.start + shiftMs,
     stop: programme.stop + shiftMs,
     rawStart: programme.start,
     rawStop: programme.stop,
   }))
+  if (byShift.size >= SHIFT_CACHE_CAP_PER_ARRAY) {
+    const oldestKey = byShift.keys().next().value
+    if (oldestKey !== undefined) byShift.delete(oldestKey)
+  }
+  byShift.set(hours, shifted)
+  return shifted
 }
 
 /** Like `getNowNext`, but resolves tvg-id + tvg-shift first (catch-up math calls `getNowNext` directly). */
@@ -1012,19 +1078,10 @@ export function detectGzip(url, bytes, headers = {}) {
   )
 }
 
-async function readResponseAsXml(url, response) {
-  // Read body to a buffer first so we can sniff magic bytes regardless of
-  // what the server claims via headers - some upstreams send gzip without
-  // any of: Content-Encoding, Content-Type matching gzip, or `.gz` URL ext.
-  // The 1F 8B prefix is the only fully reliable signal.
-  const buffer = await response.arrayBuffer()
+/** Decodes (gzip-inflating first when needed) a raw XMLTV byte buffer to text. */
+async function decodeXmlBytes(buffer, gzip) {
   const bytes = new Uint8Array(buffer)
-  const looksGzipped = detectGzip(url, bytes, {
-    contentType: response.headers?.get?.("content-type") || "",
-    contentDisposition: response.headers?.get?.("content-disposition") || "",
-  })
-
-  if (!looksGzipped) return new TextDecoder("utf-8").decode(bytes)
+  if (!gzip) return new TextDecoder("utf-8").decode(bytes)
   if (typeof DecompressionStream !== "function") {
     throw new Error(
       "This browser/WebView can't decompress gzipped EPG payloads. Try a provider that serves plain XML."
@@ -1038,6 +1095,25 @@ async function readResponseAsXml(url, response) {
   })
   const decompressed = sourceStream.pipeThrough(new DecompressionStream("gzip"))
   return new Response(decompressed).text()
+}
+
+// Read body to a buffer first so gzip can be sniffed by magic bytes regardless of what the
+// server claims via headers - some upstreams send gzip without any of: Content-Encoding,
+// Content-Type matching gzip, or a `.gz` URL extension. The 1F 8B prefix is the only fully
+// reliable signal.
+async function readResponseAsBytes(url, response) {
+  const buffer = await response.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+  const gzip = detectGzip(url, bytes, {
+    contentType: response.headers?.get?.("content-type") || "",
+    contentDisposition: response.headers?.get?.("content-disposition") || "",
+  })
+  return { buffer, gzip }
+}
+
+async function readResponseAsXml(url, response) {
+  const { buffer, gzip } = await readResponseAsBytes(url, response)
+  return decodeXmlBytes(buffer, gzip)
 }
 
 /**
@@ -1080,10 +1156,13 @@ async function fetchEpgConditional(url, meta, dns) {
       `EPG ${response.status} ${response.statusText}`
     )
   }
-  const xml = await readResponseAsXml(url, response)
+  // Bytes, not decoded text: the caller transfers this straight to the parse worker
+  // (parseXmlTvBytesOffMain) so the decompressed XML never exists as a whole string here.
+  const { buffer, gzip } = await readResponseAsBytes(url, response)
   return {
     notModified: false,
-    xml,
+    buffer,
+    gzip,
     lastModified: response.headers?.get?.("last-modified") || null,
     etag: response.headers?.get?.("etag") || null,
   }
@@ -1175,10 +1254,10 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
     const fresh = await retryWithBackoff(() =>
       fetchEpgConditional(src.url, null, dns)
     )
-    if (fresh.notModified || !fresh.xml) {
+    if (fresh.notModified || !fresh.buffer) {
       throw new Error("304 with no cached body and no fresh payload")
     }
-    const parsed = await parseXmlTvOffMain(fresh.xml, window)
+    const parsed = await parseXmlTvBytesOffMain(fresh.buffer, fresh.gzip, window)
     const entries = Array.from(parsed.programmes.entries())
     try {
       cacheSet(
@@ -1210,7 +1289,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
     }
   }
 
-  const parsed = await parseXmlTvOffMain(result.xml, window)
+  const parsed = await parseXmlTvBytesOffMain(result.buffer, result.gzip, window)
   const entries = Array.from(parsed.programmes.entries())
   try {
     cacheSet(
@@ -1766,9 +1845,7 @@ export function getAvailableEpgChannels(playlistId) {
       count: programmes.length,
     })
   }
-  out.sort((first, second) =>
-    first.name.localeCompare(second.name, "en", { sensitivity: "base" })
-  )
+  out.sort((first, second) => NAME_COLLATOR.compare(first.name, second.name))
   availableEpgCache.set(playlistId, { fetchedAt: state.fetchedAt, entries: out })
   return out
 }

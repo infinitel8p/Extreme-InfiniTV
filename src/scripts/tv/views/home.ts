@@ -1,7 +1,7 @@
 import { takeLastOpenedEntry, type TvView, type TvViewContext } from "@/scripts/tv/router"
 import { navigate } from "astro:transitions/client"
 import { t, LOCALE_EVENT, getActiveLocale } from "@/scripts/lib/i18n"
-import { getActiveEntry, loadCreds } from "@/scripts/lib/creds.js"
+import { getActiveEntry, loadCreds, isLikelyM3USource } from "@/scripts/lib/creds.js"
 import {
   ensureLoaded as ensurePrefsLoaded,
   getContinueWatching,
@@ -58,12 +58,13 @@ import {
   type LiveCardItem,
 } from "@/scripts/tv/ui/card"
 import { resumeContinueWatchingRow, type ContinueWatchingRow } from "@/scripts/tv/resume-playback.ts"
-import { neighboursOf, warmImageUrl } from "@/scripts/tv/prefetch"
+import { isPlaybackActive } from "@/scripts/tv/playback.ts"
+import { neighboursOf, warmImageUrl, warmCachedImageUrl } from "@/scripts/tv/prefetch"
+import type { ImgKind } from "@/scripts/lib/img-scale.ts"
 import {
   heavyEffectsAllowed,
   memoryConservative,
   epgLoadWindow,
-  epgLoadMode,
   EPG_NOW_NEXT_REFRESH_MS,
 } from "@/scripts/tv/motion"
 import { createActionSheet, type ActionSheetHandle, type ActionSheetItem } from "@/scripts/tv/ui/action-sheet.ts"
@@ -85,7 +86,7 @@ const CONTINUE_WATCHING_LIVE_CHANNEL_LIMIT = 5
 const CONTINUE_WATCHING_LIVE_CHANNEL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const HERO_ROTATION_INTERVAL_MS = 10000
 const HERO_BACKDROP_PREFETCH_RADIUS = 1
-const RAIL_IMAGE_WARM_COUNT = 8
+const RAIL_IMAGE_WARM_COUNT = 4
 const RAIL_EAGER_CARD_COUNT = 8
 const RAIL_EAGER_FOLD_VIEWPORTS = 1.5
 
@@ -151,14 +152,47 @@ function languageGroupingAllowed(): boolean {
   return memoryConservative() ? isLanguageGroupingExplicitlyEnabled() : getLanguageGroupingEnabled()
 }
 
-/** One pass over a catalog collecting only the ids a rail needs, instead of indexing all of it. */
+// The first grouping-index build is the expensive one (~800ms at 176k rows per
+// language-groups.ts); on the full tier it's deferred to idle after first paint instead
+// of blocking the initial mount, and callers re-decorate once it's ready. Module-level
+// (not per mount) since the built index itself is memoized across mounts by catalog identity.
+let languageGroupingWarmed = false
+let languageGroupingWarmupScheduled = false
+
+function ensureLanguageGroupingWarmupScheduled(onReady: () => void): void {
+  if (languageGroupingWarmed || languageGroupingWarmupScheduled) return
+  languageGroupingWarmupScheduled = true
+  scheduleIdle(() => {
+    languageGroupingWarmed = true
+    onReady()
+  })
+}
+
+// One id->row index per catalog array identity, shared by every rail builder in a
+// rebuild instead of each one rescanning the same cached catalog array on its own.
+// A cache refresh replaces the array reference, so a stale index drops with it.
+const rowIndexByCatalog = new WeakMap<object, Map<number, unknown>>()
+
+function rowIndexFor<T extends { id: number | string }>(rows: T[]): Map<number, T> {
+  const cached = rowIndexByCatalog.get(rows)
+  if (cached) return cached as Map<number, T>
+  const index = new Map<number, T>()
+  for (const row of rows) {
+    const id = Number(row.id)
+    if (!index.has(id)) index.set(id, row)
+  }
+  rowIndexByCatalog.set(rows, index)
+  return index
+}
+
+/** Picks only the ids a rail needs out of a catalog's id index. */
 function pickRowsById<T extends { id: number | string }>(rows: T[], wanted: Set<number>): Map<number, T> {
   const picked = new Map<number, T>()
   if (!wanted.size) return picked
-  for (const row of rows) {
-    const id = Number(row.id)
-    if (wanted.has(id) && !picked.has(id)) picked.set(id, row)
-    if (picked.size === wanted.size) break
+  const index = rowIndexFor(rows)
+  for (const id of wanted) {
+    const row = index.get(id)
+    if (row) picked.set(id, row)
   }
   return picked
 }
@@ -170,6 +204,9 @@ function chipInfoForEntry(
   catalog: CatalogRow[]
 ): ChipInfoRecord | undefined {
   if (!languageGroupingAllowed() || !catalog.length) return undefined
+  // On the full tier the first build is deferred to idle (see ensureLanguageGroupingWarmupScheduled)
+  // instead of paying it on the initial mount; the lite tier's rare explicit opt-in stays immediate.
+  if (heavyEffectsAllowed() && !languageGroupingWarmed) return undefined
   // The raw cached rows are already GroupableRow-shaped; mapping them made a second full copy
   // of the catalog and a second index, both keyed off that copy.
   const groupingIndex: CatalogGroupingIndex =
@@ -253,7 +290,12 @@ function resumeHeroMeta(percent: number): string {
   return percent < 1 ? t("hub.strip.continueWatching") : t("tv.home.resumeAt", { percent: Math.round(percent) })
 }
 
+// Tracked so a mounted home view can tell a progress tick for the row it just resumed
+// apart from an unrelated one, while a playback session elsewhere is still active.
+let lastResumeTarget: { playlistId: string; kind: "vod" | "episode"; id: string | number } | null = null
+
 function resumeOrNavigate(playlistId: string, row: ContinueWatchingRow, href: string): void {
+  lastResumeTarget = { playlistId, kind: row.kind, id: row.id }
   void resumeContinueWatchingRow(playlistId, row).then((started) => {
     if (!started) void navigate(href)
   })
@@ -290,8 +332,30 @@ function cachedBackdropUrl(playlistId: string, kind: BackdropKind, id: string | 
   return hit ? backdropFromInfoPayload(hit.data) : null
 }
 
-function requestBackdropInfo(playlistId: string, kind: BackdropKind, id: string | number): Promise<any> {
-  return kind === "vod" ? requestVodInfo(playlistId, id) : requestSeriesInfo(playlistId, id)
+function requestBackdropInfo(
+  playlistId: string,
+  kind: BackdropKind,
+  id: string | number,
+  signal?: AbortSignal
+): Promise<any> {
+  // requestSeriesInfo has no abort parameter yet - series hero fetches aren't cancellable.
+  return kind === "vod" ? requestVodInfo(playlistId, id, signal) : requestSeriesInfo(playlistId, id)
+}
+
+// One AbortController per hero "generation" (a focusKey becoming the hero's current
+// backdrop target); a later generation aborts whichever info fetch the previous one
+// started instead of letting a stale response race a since-moved-on hero.
+let heroGenerationFocusKey: string | null = null
+let heroGenerationController: AbortController | null = null
+
+function heroSignalFor(focusKey: string): AbortSignal | undefined {
+  if (typeof AbortController === "undefined") return undefined
+  if (heroGenerationFocusKey !== focusKey || !heroGenerationController) {
+    heroGenerationController?.abort()
+    heroGenerationController = new AbortController()
+    heroGenerationFocusKey = focusKey
+  }
+  return heroGenerationController.signal
 }
 
 // Cache-only (peekTitleEnrichment never fetches), keyed across the view's lifetime so
@@ -341,7 +405,7 @@ function heroBackdropImage(
   if (bannerUrl) return { imageUrl: bannerUrl, imageKind: "banner" }
   const cachedUrl = cachedBackdropUrl(playlistId, kind, id)
   if (cachedUrl) return { imageUrl: cachedUrl, imageKind: "backdrop" }
-  void requestBackdropInfo(playlistId, kind, id).then((data) => {
+  void requestBackdropInfo(playlistId, kind, id, heroSignalFor(focusKey)).then((data) => {
     if (data && backdropFromInfoPayload(data)) onResolved(focusKey)
   })
   return { imageUrl: posterUrl, imageKind: "poster" }
@@ -877,10 +941,11 @@ function eagerCardCount(): number {
   return memoryConservative() ? 0 : RAIL_EAGER_CARD_COUNT
 }
 
-/** New cards get an eager poster load when the rail sits within RAIL_EAGER_FOLD_VIEWPORTS of the top. */
-function railEagerCount(rail: RailHandle, viewportHeight: number): number {
+/** New cards get an eager poster load when the rail sits within RAIL_EAGER_FOLD_VIEWPORTS of the top.
+ *  `top` is measured once per rail before any of the rebuild loop's writes, so this never forces a
+ *  layout mid-loop against a track already mutated by an earlier rail's `setItems`. */
+function railEagerCount(top: number, viewportHeight: number): number {
   if (memoryConservative()) return 0
-  const top = rail.el.getBoundingClientRect().top
   return top <= viewportHeight * RAIL_EAGER_FOLD_VIEWPORTS ? eagerCardCount() : 0
 }
 
@@ -919,6 +984,16 @@ function requestLiveNowNext(
     liveNowNextCache.set(liveNowNextCacheKey(playlistId, channel.id), nowNext)
     onResolved(focusKey)
   })
+}
+
+/** Bounds the two cache-only maps above; a stale entry just re-resolves lazily. */
+function clearHomeBackdropCaches(): void {
+  bannerUrlByKey.clear()
+  liveNowNextCache.clear()
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("xt:active-changed", clearHomeBackdropCaches)
 }
 
 interface PrepaintedHome {
@@ -1043,6 +1118,54 @@ const view: TvView = {
     let heroRotationSeeded = false
     let heroRotationTimer: ReturnType<typeof setInterval> | null = null
     let isRailCardFocused = false
+    let rebuildTimer: ReturnType<typeof setTimeout> | null = null
+    let rebuildIdleHandle: number | null = null
+    let hasRebuiltOnce = false
+
+    const REBUILD_DEBOUNCE_MS = 250
+
+    function cancelScheduledRebuild(): void {
+      if (rebuildTimer) {
+        clearTimeout(rebuildTimer)
+        rebuildTimer = null
+      }
+      if (rebuildIdleHandle !== null) {
+        if (typeof window !== "undefined" && typeof window.cancelIdleCallback === "function") {
+          window.cancelIdleCallback(rebuildIdleHandle)
+        }
+        rebuildIdleHandle = null
+      }
+    }
+
+    function runRebuildWhenIdle(): void {
+      if (destroyed) return
+      // A background playback session may still be feeding this mounted view progress
+      // ticks; defer rather than drop the rebuild, and re-check once it settles.
+      if (isPlaybackActive()) {
+        rebuildTimer = setTimeout(runRebuildWhenIdle, REBUILD_DEBOUNCE_MS)
+        return
+      }
+      const run = () => {
+        rebuildIdleHandle = null
+        if (!destroyed) void rebuildAllRails()
+      }
+      if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+        rebuildIdleHandle = window.requestIdleCallback(run, { timeout: 500 })
+      } else {
+        rebuildTimer = setTimeout(run, 0)
+      }
+    }
+
+    // Coalesces bursts of catalog/favorites/watchlist/EPG events into one rebuild
+    // instead of one rebuild per event.
+    function scheduleRebuildAllRails(): void {
+      if (destroyed) return
+      if (rebuildTimer) clearTimeout(rebuildTimer)
+      rebuildTimer = setTimeout(() => {
+        rebuildTimer = null
+        runRebuildWhenIdle()
+      }, REBUILD_DEBOUNCE_MS)
+    }
 
     // Async data lands after the shell's mount-time restoreFocus already ran; grab focus once ourselves.
     function ensureInitialFocus(): void {
@@ -1062,7 +1185,15 @@ const view: TvView = {
         track.querySelector<HTMLElement>(`[data-focus-key]:not([data-focus-key="${HERO_FOCUS_KEY}"])`)
       if (!target) return
       target.focus()
-      window.SpatialNavigation?.makeFocusable?.()
+      // A rail card's focus key is `${railId}:${kind}:${id}` (contains a colon); falls back to
+      // a full rescan for the hero's plain "hero" key or anything else unexpected.
+      const focusKey = target.dataset.focusKey || ""
+      const focusedRailId = focusKey.includes(":") ? focusKey.split(":")[0] : undefined
+      try {
+        window.SpatialNavigation?.makeFocusable?.(focusedRailId ? `tv-home-rail:${focusedRailId}` : undefined)
+      } catch {
+        window.SpatialNavigation?.makeFocusable?.()
+      }
       initialFocusApplied = true
     }
 
@@ -1096,6 +1227,7 @@ const view: TvView = {
     // it and drives the hero itself, same as before this rotation existed.
     function tickHeroRotation(): void {
       if (isRailCardFocused || heroRotationPool.length < 2) return
+      if (document.hidden || isPlaybackActive()) return
       for (let attempt = 0; attempt < heroRotationPool.length; attempt++) {
         heroRotationIndex = (heroRotationIndex + 1) % heroRotationPool.length
         const key = heroRotationPool[heroRotationIndex]
@@ -1117,6 +1249,7 @@ const view: TvView = {
     function startHeroRotation(): void {
       stopHeroRotation()
       if (memoryConservative() || heroRotationPool.length < 2) return
+      if (document.hidden || isPlaybackActive()) return
       heroRotationTimer = setInterval(tickHeroRotation, HERO_ROTATION_INTERVAL_MS)
     }
 
@@ -1125,8 +1258,23 @@ const view: TvView = {
       else startHeroRotation()
     }
 
+    // Backgrounded (document.hidden) or an active playback session both count as "not
+    // idle" - resuming re-evaluates through the normal isRailCardFocused-driven path.
+    function onVisibilityChange(): void {
+      applyHeroRotationState()
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange)
+
+    // Hero-update and both prefetch passes ride the same 80ms settle - a fast key-repeat
+    // burst across several cards would otherwise fire the prefetch pair once per card.
     const onFocusInDebounced = debounce((focusKeyEl: HTMLElement) => {
       updateHeroForFocusKey(focusKeyEl.dataset.focusKey || "")
+      // Lite tier skips backdrop warming and cross-rail warming entirely; the rail's own
+      // same-rail neighbour poster warm-up (rail.ts) is cheap enough to keep either way.
+      if (heavyEffectsAllowed()) {
+        prefetchNeighbourHeroBackdrops(focusKeyEl)
+        warmAdjacentRailImages(focusKeyEl)
+      }
     }, HERO_FOCUS_DEBOUNCE_MS)
 
     function onFocusIn(event: FocusEvent): void {
@@ -1137,15 +1285,7 @@ const view: TvView = {
       const isTrackCard = !!focusKeyEl && track.contains(focusKeyEl) && focusKeyEl.dataset.focusKey !== HERO_FOCUS_KEY
       isRailCardFocused = isTrackCard
       applyHeroRotationState()
-      if (isTrackCard) {
-        onFocusInDebounced(focusKeyEl!)
-        // Lite tier skips backdrop warming and cross-rail warming entirely; the rail's own
-        // same-rail neighbour poster warm-up (rail.ts) is cheap enough to keep either way.
-        if (heavyEffectsAllowed()) {
-          prefetchNeighbourHeroBackdrops(focusKeyEl!)
-          warmAdjacentRailImages(focusKeyEl!)
-        }
-      }
+      if (isTrackCard) onFocusInDebounced(focusKeyEl!)
     }
 
     // Only warms a backdrop already sitting in the vod_info/series_info cache - never a fresh fetch.
@@ -1172,7 +1312,11 @@ const view: TvView = {
         const rail = strips[neighbourIndex] && railHandles.get(strips[neighbourIndex].id)
         if (!rail) continue
         const cards = rail.el.querySelectorAll<HTMLElement>("[data-prefetch-url]")
-        for (let i = 0; i < cards.length && i < RAIL_IMAGE_WARM_COUNT; i++) warmImageUrl(cards[i].dataset.prefetchUrl)
+        for (let i = 0; i < cards.length && i < RAIL_IMAGE_WARM_COUNT; i++) {
+          const card = cards[i]
+          const kind: ImgKind = card.dataset.focusKey?.includes(":live:") ? "logo" : "poster"
+          warmCachedImageUrl(card.dataset.prefetchUrl, kind)
+        }
       }
     }
     document.addEventListener("focusin", onFocusIn)
@@ -1206,18 +1350,20 @@ const view: TvView = {
       }
     }
 
-    // now-next mode bakes "now" into the parse at load time, so unlike full mode it
-    // needs an active refresh to notice a programme ending - see motion.ts.
+    // Home only ever needs current/next per live card, never the full day's schedule, so
+    // it always requests now-next mode - on every tier, not just the lite one epgLoadMode()
+    // would gate it to. now-next bakes "now" into the parse at load time, so (unlike full
+    // mode) it needs an active refresh to notice a programme ending.
     function startEpgRefreshTimer(): void {
-      if (epgRefreshTimer || epgLoadMode() !== "now-next" || liveEpgSource === "short-epg") return
+      if (epgRefreshTimer || liveEpgSource === "short-epg") return
       epgRefreshTimer = setInterval(() => {
         if (!activeCreds) return
         void loadProgrammes(activePlaylistId, activeCreds, {
           force: true,
           window: epgLoadWindow(),
-          epgMode: epgLoadMode(),
+          epgMode: "now-next",
         }).then(() => {
-          if (!destroyed) void rebuildAllRails()
+          if (!destroyed) scheduleRebuildAllRails()
         })
       }, EPG_NOW_NEXT_REFRESH_MS)
     }
@@ -1227,7 +1373,7 @@ const view: TvView = {
       const hasLiveCard = [...heroBuilders.keys()].some((key) => key.includes(":live:"))
       if (!hasLiveCard) return
       epgRequested = true
-      void loadProgrammes(activePlaylistId, activeCreds, { window: epgLoadWindow(), epgMode: epgLoadMode() }).catch(
+      void loadProgrammes(activePlaylistId, activeCreds, { window: epgLoadWindow(), epgMode: "now-next" }).catch(
         () => {}
       )
       startEpgRefreshTimer()
@@ -1243,6 +1389,13 @@ const view: TvView = {
       })
     }
 
+    // DOM focus-key signature of a rail's already-rendered cards, in order.
+    function renderedFocusKeys(rail: RailHandle): string {
+      return Array.from(rail.el.querySelectorAll<HTMLElement>("[data-focus-key]"))
+        .map((card) => card.dataset.focusKey || "")
+        .join(",")
+    }
+
     async function rebuildAllRails(): Promise<void> {
       if (destroyed || !activePlaylistId) return
       const nextHeroBuilders = new Map<string, () => HeroItem>()
@@ -1250,6 +1403,17 @@ const view: TvView = {
       const rotationCandidates: string[] = []
       let firstFocusKey: string | null = null
       const viewportHeight = root.clientHeight || window.innerHeight
+      // The very first rebuild after a prepaint would otherwise re-render the same rails
+      // prepaint() just built with identical data - skip the write when nothing changed.
+      const skipUnchangedWrites = !hasRebuiltOnce && !!prepainted
+
+      // One measurement pass for every rail before any of them get a new setItems() write -
+      // interleaving reads and writes per rail forces a layout flush on each iteration.
+      const railTopById = new Map<string, number>()
+      for (const strip of strips) {
+        const rail = railHandles.get(strip.id)
+        if (rail) railTopById.set(strip.id, rail.el.getBoundingClientRect().top)
+      }
 
       for (const strip of strips) {
         const rail = railHandles.get(strip.id)
@@ -1261,7 +1425,12 @@ const view: TvView = {
           strip, railTitle, activePlaylistId, nextHeroBuilders, nextBackdropRefs, chipInfoByFocusKey, actionSheet,
           onBackdropResolved, onLiveNowNextResolved
         )
-        rail.setItems(items, { eagerCount: railEagerCount(rail, viewportHeight) })
+        const itemFocusKeys = items.map((item) => cardFocusKey(strip.id, item.kind, item.id)).join(",")
+        const skipWrite = skipUnchangedWrites && itemFocusKeys === renderedFocusKeys(rail)
+        if (!skipWrite) {
+          const top = railTopById.get(strip.id) ?? 0
+          rail.setItems(items, { eagerCount: railEagerCount(top, viewportHeight) })
+        }
         decorateRailChips(rail, items, chipInfoByFocusKey)
         if (items.length && !firstFocusKey) {
           firstFocusKey = cardFocusKey(strip.id, items[0].kind, items[0].id)
@@ -1299,10 +1468,29 @@ const view: TvView = {
       }
 
       maybeLoadEpg()
+      hasRebuiltOnce = true
     }
 
     function onCatalogChanged(): void {
-      void rebuildAllRails()
+      scheduleRebuildAllRails()
+    }
+
+    // A progress tick for the row this same mount just resumed into playback is expected
+    // noise, not a signal anything else changed - skip it instead of coalescing it in.
+    function onProgressChanged(event: Event): void {
+      const detail = (event as CustomEvent).detail
+      if (
+        isPlaybackActive() &&
+        lastResumeTarget &&
+        detail &&
+        detail.playlistId === lastResumeTarget.playlistId &&
+        detail.kind === lastResumeTarget.kind &&
+        String(detail.id) === String(lastResumeTarget.id)
+      ) {
+        lastResumeTarget = null
+        return
+      }
+      scheduleRebuildAllRails()
     }
 
     // The provider's short-EPG endpoint proved empirically empty - switch to the
@@ -1321,27 +1509,27 @@ const view: TvView = {
       void loadProgrammes(activePlaylistId, activeCreds, {
         force: true,
         window: epgLoadWindow(),
-        epgMode: epgLoadMode(),
+        epgMode: "now-next",
       }).then(() => {
-        if (!destroyed) void rebuildAllRails()
+        if (!destroyed) scheduleRebuildAllRails()
       })
     }
 
     function onHubStripsChanged(): void {
       strips = computeStrips()
       initRailSkeletons()
-      void rebuildAllRails()
+      scheduleRebuildAllRails()
     }
 
     function onLocaleChanged(): void {
       initRailSkeletons()
-      void rebuildAllRails()
+      scheduleRebuildAllRails()
     }
 
     document.addEventListener(CATALOG_WARMED_EVENT, onCatalogChanged)
     document.addEventListener("xt:favorites-changed", onCatalogChanged)
     document.addEventListener("xt:watchlist-changed", onCatalogChanged)
-    document.addEventListener("xt:progress-changed", onCatalogChanged)
+    document.addEventListener("xt:progress-changed", onProgressChanged)
     document.addEventListener("xt:recents-changed", onCatalogChanged)
     document.addEventListener(LANGUAGE_GROUPING_EVENT, onCatalogChanged)
     document.addEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
@@ -1401,12 +1589,13 @@ const view: TvView = {
         )
       }
 
+      // A given playlist only ever populates one of these two cache kinds - hydrating
+      // both on every load is one wasted IndexedDB round-trip per boot.
+      const isM3U = !!activeCreds && isLikelyM3USource(activeCreds.host, activeCreds.user, activeCreds.pass)
       await Promise.allSettled([
         hydrateCache(activePlaylistId, "vod").finally(() => reportHydrated("vod")),
         hydrateCache(activePlaylistId, "series").finally(() => reportHydrated("series")),
-        Promise.allSettled([hydrateCache(activePlaylistId, "live"), hydrateCache(activePlaylistId, "m3u")]).finally(() =>
-          reportHydrated("live")
-        ),
+        hydrateCache(activePlaylistId, isM3U ? "m3u" : "live").finally(() => reportHydrated("live")),
       ])
       if (destroyed) return
       await ensureOverridesReady()
@@ -1416,6 +1605,11 @@ const view: TvView = {
       lastWarmPlaylistId = activePlaylistId
       if (!catalogWasHot) document.dispatchEvent(new CustomEvent(CATALOG_WARMED_EVENT, { detail: { playlistId: activePlaylistId } }))
       scheduleWarmup()
+      if (heavyEffectsAllowed()) {
+        ensureLanguageGroupingWarmupScheduled(() => {
+          if (!destroyed) scheduleRebuildAllRails()
+        })
+      }
     }
 
     void init()
@@ -1423,10 +1617,11 @@ const view: TvView = {
     return () => {
       destroyed = true
       if (epgRefreshTimer) clearInterval(epgRefreshTimer)
+      cancelScheduledRebuild()
       document.removeEventListener(CATALOG_WARMED_EVENT, onCatalogChanged)
       document.removeEventListener("xt:favorites-changed", onCatalogChanged)
       document.removeEventListener("xt:watchlist-changed", onCatalogChanged)
-      document.removeEventListener("xt:progress-changed", onCatalogChanged)
+      document.removeEventListener("xt:progress-changed", onProgressChanged)
       document.removeEventListener("xt:recents-changed", onCatalogChanged)
       document.removeEventListener(LANGUAGE_GROUPING_EVENT, onCatalogChanged)
       document.removeEventListener(CONTENT_LANGUAGE_EVENT, onCatalogChanged)
@@ -1436,12 +1631,16 @@ const view: TvView = {
       document.removeEventListener(HUB_STRIPS_EVENT, onHubStripsChanged)
       document.removeEventListener(LOCALE_EVENT, onLocaleChanged)
       document.removeEventListener("focusin", onFocusIn)
+      document.removeEventListener("visibilitychange", onVisibilityChange)
       stopHeroRotation()
       destroyRails()
       hero.destroy()
       actionSheet.destroy()
       unregisterKeepInView()
       scroller.remove()
+      // A prepainted next visit re-resolves these lazily; unbounded growth across many
+      // playlist-less navigations isn't worth keeping the last mount's resolved banners for.
+      if (!prepaintedHome) clearHomeBackdropCaches()
     }
   },
 }

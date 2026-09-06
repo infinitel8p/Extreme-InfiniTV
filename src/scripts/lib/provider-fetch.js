@@ -140,6 +140,53 @@ export async function streamingText(response, onProgress) {
   return result
 }
 
+/**
+ * Same streaming contract as `streamingText`, but accumulates raw bytes and returns
+ * an exact-length transferable ArrayBuffer instead of decoding to a string - lets a
+ * caller hand the body straight to a Worker without a multi-MB string ever existing
+ * on the main thread.
+ *
+ * @param {Response} response
+ * @param {(received: number, total: number) => void} [onProgress]
+ * @returns {Promise<ArrayBuffer>}
+ */
+export async function streamingBytes(response, onProgress) {
+  const total = Number(response.headers?.get?.("content-length")) || 0
+  const body = response.body
+  if (!body || typeof body.getReader !== "function") {
+    const buffer = await response.arrayBuffer()
+    if (onProgress) {
+      try { onProgress(buffer.byteLength, total) } catch {}
+    }
+    return buffer
+  }
+  const reader = body.getReader()
+  const chunks = []
+  let received = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && value.byteLength) {
+        received += value.byteLength
+        chunks.push(value)
+        if (onProgress) {
+          try { onProgress(received, total) } catch {}
+        }
+      }
+    }
+  } finally {
+    try { reader.releaseLock() } catch {}
+  }
+  const merged = new Uint8Array(received)
+  let offset = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return merged.buffer
+}
+
 function defaultTimeoutMs() {
   return getNetworkTimeoutSeconds() * 1000
 }

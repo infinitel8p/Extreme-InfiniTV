@@ -27,12 +27,8 @@ import {
   CATALOG_WARMING_PROGRESS_EVENT,
   CATALOG_WARMING_BYTES_EVENT,
 } from "@/scripts/lib/catalog.js"
-import {
-  parseCategoriesToMap,
-  mapXtreamLiveRows,
-  mapXtreamVodRows,
-  mapXtreamSeriesRows,
-} from "@/scripts/lib/catalog-mappers.js"
+import { parseCategoriesToMap } from "@/scripts/lib/catalog-mappers.js"
+import { ingestXtreamBytes } from "@/scripts/lib/catalog-ingest-client.ts"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
 import { getUserAgent, getNetworkTimeoutSeconds } from "@/scripts/lib/app-settings.js"
 import { DEFAULT_BROWSER_UA } from "@/scripts/lib/provider-fetch.js"
@@ -303,10 +299,18 @@ interface IngestContext {
   sourceUrl: string
 }
 
-function unwrapRows(parsed: unknown, arrayKey: "streams" | "movies" | "series"): unknown[] {
-  if (Array.isArray(parsed)) return parsed
-  const obj = parsed as Record<string, unknown> | null
-  return (obj?.[arrayKey] as unknown[]) || (obj?.results as unknown[]) || []
+/** Reads a staged file as bytes via the zero-copy IPC response, falling back to the
+ *  string command (older Rust build, or a test mock without the bytes command). */
+async function readStagedBytes(jobId: string, jobKind: WarmupKindName, step: string): Promise<ArrayBuffer> {
+  const { invoke } = await import("@tauri-apps/api/core")
+  try {
+    const result = await invoke("warmup_read_staged_bytes", { jobId, kind: jobKind, step })
+    if (result instanceof ArrayBuffer) return result
+  } catch (err) {
+    log.warn("[xt:warmup-native] bytes staged read failed, falling back to string:", err)
+  }
+  const text = await invoke<string>("warmup_read_staged", { jobId, kind: jobKind, step })
+  return new TextEncoder().encode(text).buffer
 }
 
 async function ingestKind(
@@ -348,22 +352,18 @@ async function ingestKind(
   setMirrorPin(context.pid, winningMirrorIndex)
   const categoriesFile = fileFor("categories")
   const streamsFile = fileFor("streams")
+  // Categories are small; keep them on the plain string read. The streams file is the
+  // multi-MB one - read as bytes and hand off to the ingest worker, same as catalog.js.
   const categoriesRaw = categoriesFile ? JSON.parse(await readStaged(categoriesFile.step)) : []
   const categoryMap = parseCategoriesToMap(categoriesRaw)
-  const streamsRaw = streamsFile ? JSON.parse(await readStaged(streamsFile.step)) : null
-
-  if (jobKind === "live") {
-    const rows = mapXtreamLiveRows(unwrapRows(streamsRaw, "streams"), categoryMap)
-    setCached(context.pid, "live", rows, CHANNELS_TTL_MS)
-    return rows
+  if (!streamsFile) {
+    setCached(context.pid, cacheKind, [], CHANNELS_TTL_MS)
+    return []
   }
-  if (jobKind === "vod") {
-    const rows = mapXtreamVodRows(unwrapRows(streamsRaw, "movies"), categoryMap)
-    setCached(context.pid, "vod", rows, VOD_TTL_MS)
-    return rows
-  }
-  const rows = mapXtreamSeriesRows(unwrapRows(streamsRaw, "series"), categoryMap)
-  setCached(context.pid, "series", rows, SERIES_TTL_MS)
+  const streamsBuf = await readStagedBytes(jobId, jobKind, streamsFile.step)
+  const rows = await ingestXtreamBytes(jobKind, streamsBuf, Array.from(categoryMap))
+  const ttl = jobKind === "live" ? CHANNELS_TTL_MS : jobKind === "vod" ? VOD_TTL_MS : SERIES_TTL_MS
+  setCached(context.pid, cacheKind, rows, ttl)
   return rows
 }
 

@@ -75,6 +75,7 @@ interface AndroidIntentBridge {
 
 interface AndroidDeviceInfoBridge {
   isTv?: () => boolean
+  getMemoryClass?: () => number
 }
 
 interface AndroidImeBridge {

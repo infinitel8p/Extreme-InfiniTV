@@ -22,14 +22,13 @@ import {
   type CastDescriptorV1,
 } from "@/scripts/lib/tv-cast-descriptor"
 import {
-  resolveChannelSrc,
   resolveLiveChannelCastDescriptor,
   resolvePlaylistCreds,
 } from "@/scripts/lib/tv-cast-live.js"
 import { getActiveDnsOverrideAsync } from "@/scripts/lib/creds.js"
 import { resolveCatchupCastDescriptor } from "@/scripts/lib/tv-cast-catchup.ts"
 import type { CatchupRequestChannel } from "@/scripts/lib/catchup-resolve.ts"
-import { buildMovieStreamUrl, buildSeriesStreamUrl } from "@/scripts/lib/stream-urls.ts"
+import { buildMovieStreamUrl, buildSeriesStreamUrl, buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { markCompleted, pushRecent, setProgress } from "@/scripts/lib/preferences.js"
 import { getReceiverEngine } from "@/scripts/lib/app-settings.js"
 import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
@@ -52,6 +51,13 @@ const SEEK_STEP_SECONDS = 10
 const ZAP_IDLE_COMMIT_MS = 1500
 // Guards against a runaway digit buffer; no real channel list needs more than this many digits.
 const ZAP_MAX_DIGITS = 6
+const RETRY_BASE_DISABLE_MS = 2000
+const RETRY_MAX_DISABLE_MS = 16000
+
+/** Escalating backoff for the retry button: 2s, 4s, 8s, 16s (capped) per consecutive failure of the same descriptor. */
+export function retryDisableMsForStreak(failureStreak: number): number {
+  return Math.min(RETRY_BASE_DISABLE_MS * 2 ** Math.max(0, failureStreak), RETRY_MAX_DISABLE_MS)
+}
 
 export interface TvLiveChannel {
   id: string | number
@@ -69,6 +75,8 @@ export interface TvPlayLiveInput {
   playlistId: string
   channel: TvLiveChannel
   siblings: TvLiveChannel[]
+  /** Identifies the siblings list's source group so the resolution cache can key on it; optional for callers with no stable group (e.g. search results). */
+  groupKey?: string | null
 }
 
 export interface TvPlayVodInput {
@@ -137,6 +145,9 @@ let activeEngine: ReceiverEngine | null = null
 let startingEngine: ReceiverEngine | null = null
 let startingGeneration: number | null = null
 let lastPlayAttempt: (() => Promise<boolean>) | null = null
+// Identifies what lastPlayAttempt targets, so the retry button's backoff can tell a
+// repeat failure against the same descriptor from a fresh one (see retryDisableMsForStreak).
+let lastPlayAttemptKey: string | null = null
 let focusedElementBeforePlayback: HTMLElement | null = null
 let focusedKeyBeforePlayback: string | null = null
 let currentEvents: TvPlaybackEvents | null = null
@@ -149,6 +160,34 @@ let activeLiveTarget: ActiveLiveTarget | null = null
 let sessionErrorToasted = false
 let embeddedPresentationActive = false
 let playGeneration = 0
+// Consecutive-failure streak for the retry button's escalating backoff, keyed to whatever
+// lastPlayAttemptKey last errored - reset once a different descriptor starts or succeeds.
+let retryFailureKey: string | null = null
+let retryFailureStreak = 0
+let retryReenableTimer: ReturnType<typeof setTimeout> | null = null
+
+// Re-enables the retry button and drops its backoff timer immediately - called whenever
+// a fresh play attempt targets a different descriptor, so its disabled state never outlives
+// the failure that caused it.
+function clearRetryButtonDisable(): void {
+  if (retryReenableTimer) {
+    clearTimeout(retryReenableTimer)
+    retryReenableTimer = null
+  }
+  if (playerDom?.errorRetryEl) setRetryCooldown(playerDom.errorRetryEl, false)
+}
+
+// aria-disabled keeps D-pad focus on the button during the cooldown; a real `disabled` would blur it and strand focus.
+function setRetryCooldown(button: HTMLButtonElement, active: boolean): void {
+  if (active) button.setAttribute("aria-disabled", "true")
+  else button.removeAttribute("aria-disabled")
+}
+
+function setLastPlayAttempt(attempt: () => Promise<boolean>, key: string): void {
+  if (key !== lastPlayAttemptKey) clearRetryButtonDisable()
+  lastPlayAttempt = attempt
+  lastPlayAttemptKey = key
+}
 
 function beginPlayAttempt(): number {
   return ++playGeneration
@@ -318,7 +357,7 @@ function ensureDom(): EmbeddedEngineDom {
       <div class="flex max-w-md flex-col items-center gap-3 rounded-2xl border border-line bg-surface p-8 text-center">
         <p id="tv-player-error-title" class="text-xl font-semibold text-fg"></p>
         <p id="tv-player-error-message" class="text-base text-fg-3"></p>
-        <button id="tv-player-error-retry" type="button" class="mt-2 inline-flex min-h-11 items-center justify-center rounded-xl bg-fg px-5 py-2 text-sm font-semibold text-bg transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"></button>
+        <button id="tv-player-error-retry" type="button" class="mt-2 inline-flex min-h-11 items-center justify-center rounded-xl bg-fg px-5 py-2 text-sm font-semibold text-bg transition-opacity hover:opacity-90 aria-disabled:cursor-default aria-disabled:opacity-40 aria-disabled:hover:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface"></button>
       </div>
     </div>
   `
@@ -327,7 +366,17 @@ function ensureDom(): EmbeddedEngineDom {
   if (errorTitleEl) errorTitleEl.textContent = t("receiver.error.title")
   const errorRetryEl = host.querySelector<HTMLButtonElement>("#tv-player-error-retry")
   if (errorRetryEl) errorRetryEl.textContent = t("receiver.error.retry")
-  errorRetryEl?.addEventListener("click", () => { void lastPlayAttempt?.() })
+  errorRetryEl?.addEventListener("click", () => {
+    if (errorRetryEl.getAttribute("aria-disabled") === "true") return
+    const disableMs = retryDisableMsForStreak(retryFailureStreak)
+    setRetryCooldown(errorRetryEl, true)
+    if (retryReenableTimer) clearTimeout(retryReenableTimer)
+    retryReenableTimer = setTimeout(() => {
+      setRetryCooldown(errorRetryEl, false)
+      retryReenableTimer = null
+    }, disableMs)
+    void lastPlayAttempt?.()
+  })
 
   osd = createOsd(host)
 
@@ -387,6 +436,13 @@ function handleReport(partial: ReceiverStatePartial): void {
       sessionErrorToasted = true
       toast({ title: t("receiver.error.title"), variant: "error" })
     }
+  }
+  if (partial.state === "error" && lastPlayAttemptKey) {
+    retryFailureStreak = lastPlayAttemptKey === retryFailureKey ? retryFailureStreak + 1 : 1
+    retryFailureKey = lastPlayAttemptKey
+  } else if (partial.state === "playing" && lastPlayAttemptKey && lastPlayAttemptKey === retryFailureKey) {
+    retryFailureKey = null
+    retryFailureStreak = 0
   }
 }
 
@@ -595,10 +651,18 @@ async function runStartSession(descriptor: CastDescriptorV1, session: StartSessi
   return failPlayback()
 }
 
-async function resolveSiblingChannel(playlistId: string, channel: TvLiveChannel): Promise<SiblingChannelInput> {
+// Playlist creds are resolved once per playLive() call (see playLive) and threaded through
+// here, instead of every sibling in the window re-fetching them via resolveChannelSrc.
+async function resolveSiblingStreamUrl(channel: TvLiveChannel, creds: any | null): Promise<string | null> {
+  if (channel.url) return channel.url
+  if (!creds?.host || !creds.user || !creds.pass) return null
+  return buildLiveStreamUrl(creds, String(channel.id), creds.liveContainer || null)
+}
+
+async function resolveSiblingChannel(channel: TvLiveChannel, creds: any | null): Promise<SiblingChannelInput> {
   let streamUrl: string | null = null
   try {
-    streamUrl = await resolveChannelSrc(playlistId, channel, String(channel.id))
+    streamUrl = await resolveSiblingStreamUrl(channel, creds)
   } catch (err) {
     log.warn("[xt:tv-playback] sibling channel resolution failed:", channel.id, err)
   }
@@ -612,6 +676,25 @@ async function resolveSiblingChannel(playlistId: string, channel: TvLiveChannel)
     tvgId: channel.tvgId ?? null,
     tvgShift: channel.tvgShift ?? null,
   }
+}
+
+// Reuses the resolved sibling list (creds fetch + per-channel URL build) across repeat
+// playLive() calls for the same (playlistId, groupKey) as long as the exact same siblings
+// array is handed back in - e.g. a retry, or a native-engine fallback to embedded for the
+// same tune. Cleared whenever the underlying catalog or active playlist could have changed.
+interface SiblingResolutionCacheEntry {
+  siblingsRef: TvLiveChannel[]
+  resolved: SiblingChannelInput[]
+}
+const siblingResolutionCache = new Map<string, SiblingResolutionCacheEntry>()
+
+function siblingResolutionCacheKey(playlistId: string, groupKey: string | null | undefined): string {
+  return `${playlistId}::${groupKey ?? ""}`
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("xt:catalog-warmed", () => siblingResolutionCache.clear())
+  document.addEventListener("xt:active-changed", () => siblingResolutionCache.clear())
 }
 
 export function tvPlaybackAvailable(): boolean {
@@ -628,7 +711,7 @@ export function stopPlayback(): void {
 }
 
 export async function playLive(input: TvPlayLiveInput, events: TvPlaybackEvents = {}): Promise<boolean> {
-  lastPlayAttempt = () => playLive(input, events)
+  setLastPlayAttempt(() => playLive(input, events), `live:${input.playlistId}:${input.channel.id}`)
   const generation = beginPlayAttempt()
   return guardPlayback(async () => {
     const resolved = await resolveLiveChannelCastDescriptor(input.playlistId, input.channel.id)
@@ -643,7 +726,17 @@ export async function playLive(input: TvPlayLiveInput, events: TvPlaybackEvents 
       input.channel.logo || resolved.channel?.logo || null
     )
 
-    const siblingInputs = await Promise.all(input.siblings.map((sibling) => resolveSiblingChannel(input.playlistId, sibling)))
+    const cacheKey = siblingResolutionCacheKey(input.playlistId, input.groupKey)
+    const cachedResolution = siblingResolutionCache.get(cacheKey)
+    let siblingInputs: SiblingChannelInput[]
+    if (cachedResolution && cachedResolution.siblingsRef === input.siblings) {
+      siblingInputs = cachedResolution.resolved
+    } else {
+      const siblingCreds = await resolvePlaylistCreds(input.playlistId)
+      if (isStalePlayAttempt(generation)) return false
+      siblingInputs = await Promise.all(input.siblings.map((sibling) => resolveSiblingChannel(sibling, siblingCreds)))
+      siblingResolutionCache.set(cacheKey, { siblingsRef: input.siblings, resolved: siblingInputs })
+    }
     if (isStalePlayAttempt(generation)) return false
     const liveContextResult = siblingsToLiveContext(siblingInputs, {
       id: input.channel.id,
@@ -680,7 +773,7 @@ export async function playLive(input: TvPlayLiveInput, events: TvPlaybackEvents 
 }
 
 export async function playVod(input: TvPlayVodInput, events: TvPlaybackEvents = {}): Promise<boolean> {
-  lastPlayAttempt = () => playVod(input, events)
+  setLastPlayAttempt(() => playVod(input, events), `vod:${input.playlistId}:${input.movieId}`)
   const generation = beginPlayAttempt()
   return guardPlayback(async () => {
     const creds = await resolvePlaylistCreds(input.playlistId)
@@ -717,7 +810,7 @@ export async function playVod(input: TvPlayVodInput, events: TvPlaybackEvents = 
 }
 
 export async function playEpisode(input: TvPlayEpisodeInput, events: TvPlaybackEvents = {}): Promise<boolean> {
-  lastPlayAttempt = () => playEpisode(input, events)
+  setLastPlayAttempt(() => playEpisode(input, events), `episode:${input.playlistId}:${input.episodeId}`)
   const generation = beginPlayAttempt()
   return guardPlayback(async () => {
     const creds = await resolvePlaylistCreds(input.playlistId)
@@ -760,7 +853,10 @@ export async function playEpisode(input: TvPlayEpisodeInput, events: TvPlaybackE
 }
 
 export async function playCatchup(input: TvPlayCatchupInput, events: TvPlaybackEvents = {}): Promise<boolean> {
-  lastPlayAttempt = () => playCatchup(input, events)
+  setLastPlayAttempt(
+    () => playCatchup(input, events),
+    `catchup:${input.playlistId}:${input.catchupId ?? input.channel.id}:${input.startUtcMs}`
+  )
   const generation = beginPlayAttempt()
   return guardPlayback(async () => {
     const creds = await resolvePlaylistCreds(input.playlistId)

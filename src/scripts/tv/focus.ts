@@ -1,5 +1,7 @@
 // Spatial-nav section helpers for TV views built on top of spatial-navigation.js.
 
+import { motionAllowed } from "@/scripts/tv/motion"
+
 interface FocusSectionOpts {
   selector?: string
   enterTo?: "last-focused" | "default-element"
@@ -12,12 +14,6 @@ export const NAV_SECTION_ID = "tv-nav"
 const MAIN_SECTION_ID = "main"
 
 let mainSectionConfig: Record<string, unknown> | null = null
-
-function ensureElementId(root: HTMLElement, prefix: string): string {
-  if (root.id) return root.id
-  root.id = `${prefix}-${Math.random().toString(36).slice(2, 9)}`
-  return root.id
-}
 
 /**
  * (Re)registers the catch-all "main" section. Kept last in the polyfill's section
@@ -49,20 +45,22 @@ export function registerFocusSection(
   const spatialNav = window.SpatialNavigation
   if (!spatialNav) return () => {}
 
-  const rootId = ensureElementId(root, "tv-focus-section")
-  const selector = opts.selector || `#${rootId} :is(a, button, [tabindex]:not([tabindex="-1"]), input, select, textarea)`
+  // `root` scopes the selector's querySelectorAll instead of a `#some-id` prefix, so the
+  // catch-all "main" section can also tell (and drop) elements a rooted section already owns.
+  const selector = opts.selector || `:is(a, button, [tabindex]:not([tabindex="-1"]), input, select, textarea)`
 
   try {
     spatialNav.add({
       id,
       selector,
+      root,
       enterTo: opts.enterTo || "last-focused",
       restrict: opts.restrict,
       leaveFor: { left: `@${NAV_SECTION_ID}`, ...opts.leaveFor },
       defaultElement: opts.defaultElement || selector,
     })
     moveMainSectionLast()
-    spatialNav.makeFocusable?.()
+    spatialNav.makeFocusable?.(id)
   } catch {
     return () => {}
   }
@@ -78,17 +76,25 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
+// Root font size is viewport-derived (see tv.css), so it only ever changes on resize.
+let cachedRootFontSizePx: number | null = null
+
+if (typeof window !== "undefined") {
+  window.addEventListener("resize", () => {
+    cachedRootFontSizePx = null
+  })
+}
+
 /** Converts a design-canvas rem value to CSS px at the current (viewport-scaled) root font size. */
 export function remPx(rem: number): number {
-  const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
-  return rem * rootFontSize
+  if (cachedRootFontSizePx == null) {
+    cachedRootFontSizePx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+  }
+  return rem * cachedRootFontSizePx
 }
 
 function reduceMotionActive(): boolean {
-  return (
-    document.documentElement.getAttribute("data-perf-mode") === "on" ||
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  )
+  return !motionAllowed()
 }
 
 function offsetFromTrack(target: HTMLElement, track: HTMLElement, axis: "x" | "y"): number {
@@ -100,10 +106,16 @@ function offsetFromTrack(target: HTMLElement, track: HTMLElement, axis: "x" | "y
 }
 
 const keepInViewRefreshers = new WeakMap<HTMLElement, (target?: HTMLElement | null) => void>()
+const keepInViewInvalidators = new WeakMap<HTMLElement, () => void>()
 
 /** Re-applies a `keepFocusedInView` offset after its track's contents shifted under the focus. */
 export function refreshKeepInView(scroller: HTMLElement, target?: HTMLElement | null): void {
   keepInViewRefreshers.get(scroller)?.(target)
+}
+
+/** Drops `keepFocusedInView`'s cached padding/scroll-size reads. Call after a resize or `setItems`. */
+export function invalidateKeepInViewLayout(scroller: HTMLElement): void {
+  keepInViewInvalidators.get(scroller)?.()
 }
 
 /** Translates `scroller`'s first child so the focused descendant sits `offset` from the leading edge. */
@@ -126,26 +138,49 @@ export function keepFocusedInView(
     if (position === "static" || !position) track!.classList.add("tv-keep-in-view-track")
   }
 
+  // Cached across calls (each one otherwise forces a style recalc); cleared by
+  // invalidateKeepInViewLayout() when the scroller/track size or padding can have changed.
+  let cachedScrollerPaddingPx: number | null = null
+  let cachedTrackPaddingStartPx: number | null = null
+  let cachedScrollerSizePx: number | null = null
+  let cachedTrackSizePx: number | null = null
+
+  function invalidateMetrics(): void {
+    cachedScrollerPaddingPx = null
+    cachedTrackPaddingStartPx = null
+    cachedScrollerSizePx = null
+    cachedTrackSizePx = null
+  }
+
   // clientWidth/Height counts the scroller's padding, but the track only fills its content box.
   function paddingAlongAxis(): number {
-    const styles = getComputedStyle(scroller)
-    const start = parseFloat(axis === "x" ? styles.paddingLeft : styles.paddingTop) || 0
-    const end = parseFloat(axis === "x" ? styles.paddingRight : styles.paddingBottom) || 0
-    return start + end
+    if (cachedScrollerPaddingPx == null) {
+      const styles = getComputedStyle(scroller)
+      const start = parseFloat(axis === "x" ? styles.paddingLeft : styles.paddingTop) || 0
+      const end = parseFloat(axis === "x" ? styles.paddingRight : styles.paddingBottom) || 0
+      cachedScrollerPaddingPx = start + end
+    }
+    return cachedScrollerPaddingPx
   }
 
   function trackPaddingStart(): number {
-    const styles = getComputedStyle(track!)
-    return parseFloat(axis === "x" ? styles.paddingLeft : styles.paddingTop) || 0
+    if (cachedTrackPaddingStartPx == null) {
+      const styles = getComputedStyle(track!)
+      cachedTrackPaddingStartPx = parseFloat(axis === "x" ? styles.paddingLeft : styles.paddingTop) || 0
+    }
+    return cachedTrackPaddingStartPx
   }
 
   function position(target: HTMLElement, animate: boolean): void {
     ensureTrackPositioned()
 
-    const scrollerSize =
-      (axis === "x" ? scroller.clientWidth : scroller.clientHeight) - paddingAlongAxis()
-    const trackSize = axis === "x" ? track!.scrollWidth : track!.scrollHeight
-    const maxShift = Math.max(0, trackSize - scrollerSize)
+    if (cachedScrollerSizePx == null) {
+      cachedScrollerSizePx = (axis === "x" ? scroller.clientWidth : scroller.clientHeight) - paddingAlongAxis()
+    }
+    if (cachedTrackSizePx == null) {
+      cachedTrackSizePx = axis === "x" ? track!.scrollWidth : track!.scrollHeight
+    }
+    const maxShift = Math.max(0, cachedTrackSizePx - cachedScrollerSizePx)
 
     // Measured from the track's content-box start, so the first item rests at 0.
     const targetOffset = offsetFromTrack(target, track!, axis) - trackPaddingStart()
@@ -172,9 +207,11 @@ export function keepFocusedInView(
     const anchor = target && track!.contains(target) ? target : document.activeElement
     if (anchor instanceof HTMLElement && track!.contains(anchor)) position(anchor, false)
   })
+  keepInViewInvalidators.set(scroller, invalidateMetrics)
   return () => {
     scroller.removeEventListener("focusin", onFocusIn)
     keepInViewRefreshers.delete(scroller)
+    keepInViewInvalidators.delete(scroller)
   }
 }
 
@@ -186,4 +223,5 @@ export function resetKeepInView(scroller: HTMLElement): void {
   track.style.transform = ""
   scroller.scrollLeft = 0
   scroller.scrollTop = 0
+  invalidateKeepInViewLayout(scroller)
 }

@@ -20,15 +20,14 @@ import {
 import { normalize } from "@/scripts/lib/text.js"
 import {
   parseCategoriesToMap,
-  mapXtreamLiveRows,
-  mapXtreamVodRows,
-  mapXtreamSeriesRows,
   rowsNeedTmdbBackfill,
   rowsNeedGenreBackfill,
 } from "@/scripts/lib/catalog-mappers.js"
 import { triggerTmdbBackfillOnce } from "@/scripts/lib/tmdb-backfill.ts"
-import { providerFetch, streamingText } from "@/scripts/lib/provider-fetch.js"
+import { providerFetch, streamingText, streamingBytes } from "@/scripts/lib/provider-fetch.js"
+import { ingestXtreamBytes } from "@/scripts/lib/catalog-ingest-client.ts"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
+import { memoryConservative } from "@/scripts/tv/motion.ts"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
 import { parseM3U, isHlsStreamManifest } from "@/scripts/lib/m3u-parser.ts"
 import {
@@ -251,13 +250,9 @@ export async function ensureLive(creds, playlistId, opts = {}) {
     }
     const catMap = await fetchLiveCategoryMap(playlistId, dns)
     const r = await xtreamApiFetch("get_live_streams", {}, { entryId: playlistId, dns })
-    const body = await streamingText(r, onBytes)
+    const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `live_streams ${r.status}`)
-    const parsed = JSON.parse(body)
-    const arr = Array.isArray(parsed)
-      ? parsed
-      : parsed?.streams || parsed?.results || []
-    return mapXtreamLiveRows(arr, catMap)
+    return ingestXtreamBytes("live", bytes, Array.from(catMap))
   }), { force: !!opts.force })
   return applyLiveOverrides(data || [], playlistId, isM3U, opts)
 }
@@ -291,13 +286,9 @@ export async function ensureVod(creds, playlistId, opts = {}) {
   const fetcher = () => retryWithBackoff(async () => {
     const catMap = await fetchVodCategoryMap(dns)
     const r = await xtreamApiFetch("get_vod_streams", {}, { dns })
-    const body = await streamingText(r, onBytes)
+    const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `vod_streams ${r.status}`)
-    const parsed = JSON.parse(body)
-    const arr = Array.isArray(parsed)
-      ? parsed
-      : parsed?.movies || parsed?.results || []
-    return mapXtreamVodRows(arr, catMap)
+    return ingestXtreamBytes("vod", bytes, Array.from(catMap))
   })
   const { data } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, fetcher, { force: !!opts.force })
   if (!opts.force && rowsNeedTmdbBackfill(data)) {
@@ -335,11 +326,9 @@ export async function ensureSeries(creds, playlistId, opts = {}) {
   const fetcher = () => retryWithBackoff(async () => {
     const catMap = await fetchSeriesCategoryMap(dns)
     const r = await xtreamApiFetch("get_series", {}, { dns })
-    const body = await streamingText(r, onBytes)
+    const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `series ${r.status}`)
-    const parsed = JSON.parse(body)
-    const arr = Array.isArray(parsed) ? parsed : parsed?.series || parsed?.results || []
-    return mapXtreamSeriesRows(arr, catMap)
+    return ingestXtreamBytes("series", bytes, Array.from(catMap))
   })
   const { data } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, fetcher, { force: !!opts.force })
   if (!opts.force && (rowsNeedTmdbBackfill(data) || rowsNeedGenreBackfill(data))) {
@@ -430,15 +419,26 @@ export async function warmupActive(playlistId, opts = {}) {
           }
           return []
         })
-    const [live, vod, series] = await Promise.all([
-      wrap("live", () => ensureLive(creds, pid, { force })),
-      wrap("vod", () => ensureVod(creds, pid, { force })),
-      wrap("series", () => ensureSeries(creds, pid, { force })),
-      // user_info comes alongside the catalog so download-concurrency caps
-      // and the expiration banner are populated without waiting for /settings.
-      // Failure is ignored - M3U sources won't have a player_api endpoint.
-      ensureUserInfo(creds, pid, { force }).catch(() => null),
-    ])
+    // user_info comes alongside the catalog so download-concurrency caps and the
+    // expiration banner are populated without waiting for /settings. Kicked off
+    // first, awaited last; failure is ignored - M3U sources have no player_api.
+    const userInfoPromise = ensureUserInfo(creds, pid, { force }).catch(() => null)
+
+    let live, vod, series
+    if (memoryConservative()) {
+      // One kind's worker ingest at a time on a low-memory device instead of three
+      // JSON.parse + map passes racing for the same limited heap.
+      live = await wrap("live", () => ensureLive(creds, pid, { force }))
+      vod = await wrap("vod", () => ensureVod(creds, pid, { force }))
+      series = await wrap("series", () => ensureSeries(creds, pid, { force }))
+    } else {
+      ;[live, vod, series] = await Promise.all([
+        wrap("live", () => ensureLive(creds, pid, { force })),
+        wrap("vod", () => ensureVod(creds, pid, { force })),
+        wrap("series", () => ensureSeries(creds, pid, { force })),
+      ])
+    }
+    await userInfoPromise
     if (force) await invalidateCustomDependents(pid)
     dispatch(EVT_WARMED, { playlistId: pid, errors })
     return { live, vod, series, errors }

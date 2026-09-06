@@ -297,27 +297,45 @@ input[type="search"]::-webkit-search-decoration {
 /* ────────────────────────────── */
 /* Scrollbar styling              */
 /* ────────────────────────────── */
-/* TV shell: every scroll surface gets the thin styled bar, not just opt-in ones. */
-html[data-tv="1"] * {
+/* TV shell: every real scroll surface gets the thin styled bar. Scoped to the Tailwind
+   overflow-*-auto/scroll utilities the TV scrollers actually use (rail/grid tracks scroll via
+   a transform, not native overflow, so they never match) - a universal `*` selector here would
+   force scrollbar style resolution on every element in the TV shell for no visual benefit. */
+html[data-tv="1"] .overflow-y-auto,
+html[data-tv="1"] .overflow-x-auto,
+html[data-tv="1"] .overflow-auto,
+html[data-tv="1"] .overflow-scroll {
     scrollbar-width: thin;
     scrollbar-color: var(--color-line) transparent;
 }
 
-html[data-tv="1"] *::-webkit-scrollbar {
+html[data-tv="1"] .overflow-y-auto::-webkit-scrollbar,
+html[data-tv="1"] .overflow-x-auto::-webkit-scrollbar,
+html[data-tv="1"] .overflow-auto::-webkit-scrollbar,
+html[data-tv="1"] .overflow-scroll::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
-html[data-tv="1"] *::-webkit-scrollbar-thumb {
+html[data-tv="1"] .overflow-y-auto::-webkit-scrollbar-thumb,
+html[data-tv="1"] .overflow-x-auto::-webkit-scrollbar-thumb,
+html[data-tv="1"] .overflow-auto::-webkit-scrollbar-thumb,
+html[data-tv="1"] .overflow-scroll::-webkit-scrollbar-thumb {
     background: var(--color-line);
     border-radius: 9999px;
 }
 
-html[data-tv="1"] *::-webkit-scrollbar-thumb:hover {
+html[data-tv="1"] .overflow-y-auto::-webkit-scrollbar-thumb:hover,
+html[data-tv="1"] .overflow-x-auto::-webkit-scrollbar-thumb:hover,
+html[data-tv="1"] .overflow-auto::-webkit-scrollbar-thumb:hover,
+html[data-tv="1"] .overflow-scroll::-webkit-scrollbar-thumb:hover {
     background: var(--color-fg-3);
 }
 
-html[data-tv="1"] *::-webkit-scrollbar-track {
+html[data-tv="1"] .overflow-y-auto::-webkit-scrollbar-track,
+html[data-tv="1"] .overflow-x-auto::-webkit-scrollbar-track,
+html[data-tv="1"] .overflow-auto::-webkit-scrollbar-track,
+html[data-tv="1"] .overflow-scroll::-webkit-scrollbar-track {
     background: transparent;
 }
 
@@ -1324,7 +1342,12 @@ summary.list-none::-webkit-details-marker {
 .skel::after {
     content: "";
     position: absolute;
-    inset: 0;
+    top: 0;
+    bottom: 0;
+    /* Wider than .skel so a translateX sweep, not a background-position change, moves
+       the highlight band across it - transform/opacity only, no per-frame paint. */
+    left: -60%;
+    right: -60%;
     border-radius: inherit;
     background:
         linear-gradient(
@@ -1335,12 +1358,10 @@ summary.list-none::-webkit-details-marker {
             color-mix(in oklch, var(--color-accent) 10%, transparent) 58%,
             transparent 100%
         );
-    background-size: 240% 100%;
-    background-repeat: no-repeat;
-    background-position: -130% 0;
+    transform: translateX(-40%);
     animation: skel-shimmer 1.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
     animation-delay: var(--skel-delay, 0s);
-    will-change: background-position, opacity;
+    will-change: transform, opacity;
     opacity: 0.95;
     pointer-events: none;
     mix-blend-mode: plus-lighter;
@@ -1349,9 +1370,15 @@ summary.list-none::-webkit-details-marker {
     .skel::after { mix-blend-mode: normal; }
 }
 @keyframes skel-shimmer {
-    0%   { background-position: -130% 0; opacity: 0.4; }
-    50%  {                                opacity: 1;  }
-    100% { background-position: 230% 0;  opacity: 0.4; }
+    0%   { transform: translateX(-40%); opacity: 0.4; }
+    50%  {                              opacity: 1;  }
+    100% { transform: translateX(40%);  opacity: 0.4; }
+}
+/* Static skeleton on the memory-conservative TV tier / perf mode: no shimmer sweep at all. */
+html[data-perf-mode="on"] .skel::after,
+html[data-tv="1"][data-tv-effects="lite"] .skel::after {
+    animation: none;
+    opacity: 0;
 }
 
 /* Card / row entrance for skeleton items */

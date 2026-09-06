@@ -39,6 +39,8 @@ export const ICON_SPARKLES = wrap(
     '<path d="M9 18a6 6 0 0 1 6 -6a6 6 0 0 1 -6 -6a6 6 0 0 1 -6 6a6 6 0 0 1 6 6z" />'
 )
 
+export const ICON_BOLT = wrap('<path d="M13 3l0 7l6 0l-8 11l0 -7l-6 0l8 -11" />')
+
 export const ICON_X = wrap(
   '<path d="M18 6l-12 12" />' + '<path d="M6 6l12 12" />'
 )

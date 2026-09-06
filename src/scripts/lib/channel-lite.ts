@@ -117,3 +117,23 @@ export function serializeChannelsJson(
 ): string {
   return JSON.stringify(serializeChannelsForActivity(channels, options))
 }
+
+/** Half-width of the native sibling window: ~200 channels total around the tuned index. */
+export const NATIVE_SIBLING_WINDOW_RADIUS = 100
+
+/**
+ * Slices `channels` down to a window of `radius * 2 + 1` entries centered on
+ * `currentIndex`. Keeps the native handoff payload (and its per-sibling stream
+ * resolution) bounded on catalogs with thousands of channels. An out-of-range
+ * index falls back to the leading window so a caller that can't locate the
+ * tuned channel still gets a bounded, non-empty slice.
+ */
+export function sliceSiblingWindow<T>(channels: T[], currentIndex: number, radius: number): T[] {
+  if (!channels.length) return []
+  if (currentIndex < 0 || currentIndex >= channels.length) {
+    return channels.slice(0, Math.min(channels.length, radius * 2 + 1))
+  }
+  const start = Math.max(0, currentIndex - radius)
+  const end = Math.min(channels.length, currentIndex + radius + 1)
+  return channels.slice(start, end)
+}

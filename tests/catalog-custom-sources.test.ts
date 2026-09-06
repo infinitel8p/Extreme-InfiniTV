@@ -82,13 +82,19 @@ vi.mock("@/scripts/lib/xtream-api.js", () => ({
       return { ok: true, status: 200, json: async () => [] }
     }
     const body = JSON.stringify(liveStreams)
-    return { ok: true, status: 200, text: async () => body }
+    return {
+      ok: true,
+      status: 200,
+      text: async () => body,
+      arrayBuffer: async () => new TextEncoder().encode(body).buffer,
+    }
   },
 }))
 
 vi.mock("@/scripts/lib/provider-fetch.js", () => ({
   providerFetch: async () => ({ ok: true, status: 200, text: async () => "" }),
   streamingText: async (response: any) => response.text(),
+  streamingBytes: async (response: any) => response.arrayBuffer(),
 }))
 
 vi.mock("@/scripts/lib/account-info.js", () => ({ ensureUserInfo: async () => null }))

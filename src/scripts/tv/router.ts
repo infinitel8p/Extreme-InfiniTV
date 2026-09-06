@@ -202,6 +202,20 @@ function onLinkFocusIn(event: FocusEvent): void {
   if (link) preloadViewForHref(link.href)
 }
 
+// Races requestAnimationFrame against a setTimeout fallback (mirrors nextPaint()) so a
+// hidden/backgrounded document - which never runs rAF - can't leave navigationTransitionActive
+// stuck true and block every later startViewTransitionSafe() call.
+function endNavigationTransitionSoon(): void {
+  let settled = false
+  const done = (): void => {
+    if (settled) return
+    settled = true
+    endNavigationTransition()
+  }
+  requestAnimationFrame(done)
+  setTimeout(done, 250)
+}
+
 export function mountTvRouter(): void {
   document.addEventListener("focusin", onLinkFocusIn)
   // Brackets the whole Astro navigation transition so a view's own prepaint/setEntries
@@ -211,7 +225,7 @@ export function mountTvRouter(): void {
   document.addEventListener("astro:after-swap", prepaintCurrentView)
   document.addEventListener("astro:page-load", () => {
     void mountCurrentView()
-    requestAnimationFrame(endNavigationTransition)
+    endNavigationTransitionSoon()
   })
   // A no-op today (no module is resolved yet on a cold boot) but keeps the hard-load
   // path consistent should a future bfcache-like restore ever warm modules first.

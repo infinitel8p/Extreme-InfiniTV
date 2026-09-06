@@ -864,6 +864,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   import { mountBackHandler } from "@/scripts/lib/back-handler"
   import { mountTvInputGuard } from "@/scripts/lib/tv-input-guard"
   import { isTvDevice } from "@/scripts/lib/tv-detect"
+  import { isElementVisibleForNav } from "@/scripts/lib/nav-visibility"
   initI18n()
   initConnectivity()
   initUiSounds()
@@ -1135,14 +1136,12 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         id: "main",
         selector:
           "a, button, summary, input, textarea, [contenteditable='true'], select, [tabindex]:not([tabindex='-1'])",
-        // Reject fullscreen-occluded, inert, offscreen-parked, invisible, or faded-out player-chrome targets
+        // Reject fullscreen-occluded, inert, invisible, or faded-out player-chrome targets
         navigableFilter: (elem: Element) => {
           const fullscreenEl = document.fullscreenElement
           if (fullscreenEl && !fullscreenEl.contains(elem)) return false
           if (elem.closest("[inert]")) return false
-          const rect = elem.getBoundingClientRect()
-          if (rect.right <= 0 || rect.bottom <= 0) return false
-          if (getComputedStyle(elem).visibility !== "visible") return false
+          if (!isElementVisibleForNav(elem)) return false
           const playerChrome = elem.closest(
             ".vjs-control-bar, .vjs-volume-vertical, .vjs-menu"
           )

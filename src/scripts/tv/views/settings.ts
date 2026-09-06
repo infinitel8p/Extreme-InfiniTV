@@ -3,6 +3,7 @@ import type { TvView, TvViewContext } from "@/scripts/tv/router"
 import { navigate } from "astro:transitions/client"
 import { t, LOCALE_EVENT, getActiveLocale, getAvailableLocales, setLocale } from "@/scripts/lib/i18n"
 import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
+import { applyRootFontSizePx } from "@/scripts/tv/root-font-size"
 import { getEntries, getActiveEntry, loadCreds, isLocalM3UHost, isCustomHost, isTauri } from "@/scripts/lib/creds.js"
 import { getPlaylistListEmptyCopy } from "@/scripts/lib/playlist-rows.js"
 import { renderTvPlaylistRow } from "@/scripts/tv/ui/playlist-row"
@@ -38,6 +39,8 @@ import {
   setContentLanguage,
   getGlobalDns,
   setGlobalDns,
+  getPerfMode,
+  setPerfMode,
 } from "@/scripts/lib/app-settings.js"
 import { getOffsetSetting, setOffsetSetting } from "@/scripts/lib/epg-data.js"
 import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
@@ -52,7 +55,7 @@ import {
 } from "@/scripts/lib/dns-test.ts"
 import { LANGUAGE_TOKENS, languageTagLabel } from "@/scripts/lib/language-tags.ts"
 import { isLanguageGroupingExplicitlyEnabled } from "@/scripts/lib/language-groups.ts"
-import { memoryConservative } from "@/scripts/tv/motion"
+import { memoryConservative, resetEffectTierCache, type EffectTier } from "@/scripts/tv/motion"
 import { checkForUpdate, isPlayStoreInstall, getPlayStoreUrl, getCurrentAppVersion } from "@/scripts/lib/update-check"
 import { openExternal } from "@/scripts/lib/external-link"
 import { collectDiagnosticBundle } from "@/scripts/lib/diagnostic-bundle"
@@ -80,6 +83,8 @@ import {
   ICON_TEXT_SIZE,
   ICON_LANGUAGE,
   ICON_ARROWS_SHUFFLE,
+  ICON_SPARKLES,
+  ICON_BOLT,
 } from "@/scripts/lib/icons"
 
 const SETTINGS_SECTION_ID = "tv-settings"
@@ -140,10 +145,39 @@ function fontScaleLabelKey(scale: number): string {
 
 function applyFontScale(scale: number): void {
   document.documentElement.style.setProperty("--xt-font-scale", String(scale))
+  applyRootFontSizePx()
   try {
     if (scale === 1) localStorage.removeItem(FONT_SCALE_KEY)
     else localStorage.setItem(FONT_SCALE_KEY, String(scale))
   } catch {}
+}
+
+const TV_EFFECTS_KEY = "xt_tv_effects"
+
+/** "" means auto (classifyEffectTier decides); otherwise the user's forced tier. */
+function readVisualEffectsOverride(): "" | EffectTier {
+  try {
+    const stored = localStorage.getItem(TV_EFFECTS_KEY)
+    return stored === "full" || stored === "lite" ? stored : ""
+  } catch {
+    return ""
+  }
+}
+
+function visualEffectsLabelKey(override: "" | EffectTier): string {
+  if (override === "full") return "tv.settings.visualEffects.full"
+  if (override === "lite") return "tv.settings.visualEffects.lite"
+  return "tv.settings.visualEffects.auto"
+}
+
+function applyVisualEffectsOverride(override: "" | EffectTier): void {
+  try {
+    if (override) localStorage.setItem(TV_EFFECTS_KEY, override)
+    else localStorage.removeItem(TV_EFFECTS_KEY)
+  } catch {}
+  // effectTier() is memoized per session; drop the cache so lite/full-gated code and
+  // the html[data-tv-effects] attribute reflect the new override immediately.
+  resetEffectTierCache()
 }
 
 function formatUtcOffset(minutes: number): string {
@@ -285,6 +319,27 @@ const view: TvView = {
         value: overscan > 0 ? `${overscan}%` : t("settings.tvOverscan.off"),
         kind: "choice",
         onActivate: () => void pickOverscan(),
+      })
+
+      rows.push({
+        id: "perf-mode",
+        icon: ICON_BOLT,
+        label: t("settings.perfMode.title"),
+        kind: "toggle",
+        checked: getPerfMode(),
+        onActivate: () => {
+          setPerfMode(!getPerfMode())
+          void renderRows()
+        },
+      })
+
+      rows.push({
+        id: "visual-effects",
+        icon: ICON_SPARKLES,
+        label: t("tv.settings.visualEffects"),
+        value: t(visualEffectsLabelKey(readVisualEffectsOverride())),
+        kind: "choice",
+        onActivate: () => void pickVisualEffects(),
       })
 
       if (isTauri) {
@@ -513,6 +568,22 @@ const view: TvView = {
       })
       if (picked == null) return
       setTvOverscan(Number(picked))
+      void renderRows()
+    }
+
+    async function pickVisualEffects(): Promise<void> {
+      const options: ChoiceOption[] = [
+        { id: "", label: t("tv.settings.visualEffects.auto") },
+        { id: "full", label: t("tv.settings.visualEffects.full") },
+        { id: "lite", label: t("tv.settings.visualEffects.lite") },
+      ]
+      const picked = await openChoiceDialog({
+        title: t("tv.settings.visualEffects"),
+        selectedId: readVisualEffectsOverride(),
+        options,
+      })
+      if (picked == null) return
+      applyVisualEffectsOverride(picked === "full" || picked === "lite" ? picked : "")
       void renderRows()
     }
 

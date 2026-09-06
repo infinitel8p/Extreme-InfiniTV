@@ -29,8 +29,11 @@ import {
   getPlayerReuseInstance,
   getUserAgent,
   getNetworkTimeoutSeconds,
+  getPerfMode,
   EXTERNAL_PLAYER_BACKENDS,
 } from "@/scripts/lib/app-settings.js"
+import { classifyEffectTier } from "@/scripts/tv/motion"
+import { getAndroidMemoryClassMb } from "@/scripts/lib/tv-detect.ts"
 import { bindMonoAudio, bindMonoAudioMpv, noteMonoSourceChange } from "@/scripts/lib/audio-effects.js"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 import {
@@ -1283,6 +1286,28 @@ export function shouldPreferNativeHls(input: {
   return input.isMacOS && !input.isTauri && input.canPlayNativeHls
 }
 
+/**
+ * True on perf mode or the "lite" device tier. Reads classifyEffectTier's pure
+ * classifier directly (not motion.ts's memoized effectTier()/memoryConservative()),
+ * since those stamp `data-tv-effects` on `<html>` as a side effect that this
+ * non-TV-only module shouldn't trigger just by mounting a player.
+ */
+function isMemoryConservativeProfile(): boolean {
+  if (typeof document !== "undefined" && document.documentElement.dataset.perfMode === "on") return true
+  try {
+    if (getPerfMode()) return true
+  } catch {}
+  const nav = typeof navigator === "undefined" ? undefined : (navigator as Navigator & { deviceMemory?: number })
+  return (
+    classifyEffectTier({
+      deviceMemoryGb: nav?.deviceMemory ?? null,
+      hardwareConcurrency: nav?.hardwareConcurrency ?? null,
+      userAgent: nav?.userAgent ?? null,
+      memoryClassMb: getAndroidMemoryClassMb(),
+    }) === "lite"
+  )
+}
+
 // A lost demuxer emits these by the hundred per second; the progress threshold spares streams that error yet still play.
 const PARSE_ERROR_LIMIT = 24
 const PARSE_ERROR_WINDOW_MS = 4000
@@ -1339,6 +1364,17 @@ function attachHlsToVideo(
   log.info(`[xt:player] hls transport=hls.js loader=${isTauri ? "tauri-http" : "xhr"}`)
   // Off by default: a manifest's DEFAULT=YES rendition would otherwise render unasked.
   const hlsConfig: Record<string, unknown> = { enableWorker: true, subtitleDisplay: false }
+  // Bounds the buffer on low-memory/TV tiers: an unbounded back buffer is one of the
+  // WebView OOM crash causes on real TVs and Fire TV sticks over a long live session.
+  if (isMemoryConservativeProfile()) {
+    hlsConfig.backBufferLength = 30
+    hlsConfig.maxBufferLength = 10
+    hlsConfig.maxBufferSize = 12_000_000
+    hlsConfig.maxMaxBufferLength = 30
+    hlsConfig.frontBufferFlushThreshold = 60
+  } else {
+    hlsConfig.backBufferLength = 90
+  }
   if (isTauri) {
     hlsConfig.loader = createTauriHlsLoaderClass(authorization, authorizedOrigin)
   } else if (authorization) {
@@ -1751,7 +1787,14 @@ async function attachMpegts(
     const config: Record<string, unknown> = {}
     if (useTauriLoader) config.customLoader = createTauriStreamLoaderClass(mpegts)
     if (authorization) config.headers = { Authorization: authorization }
-    if (!isLive) {
+    if (isLive) {
+      // A raw-TS live tune otherwise keeps every buffered second alive; bound it so a
+      // long session doesn't grow the SourceBuffer without limit and crash the WebView.
+      config.autoCleanupSourceBuffer = true
+      config.autoCleanupMaxBackwardDuration = 60
+      config.autoCleanupMinBackwardDuration = 30
+      config.liveBufferLatencyChasing = true
+    } else {
       try {
         const hostname = new URL(cleanUrl).hostname
         // Lazy-load aborts kill stateful proxy sessions; auto-cleanup keeps the MSE quota from filling instead.
@@ -2277,10 +2320,7 @@ async function mountVideoJs(
 }
 
 async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions = {}): Promise<VjsLikeHandle> {
-  const [{ default: Artplayer }, { default: Hls }] = await Promise.all([
-    import("artplayer"),
-    import("hls.js"),
-  ])
+  const { default: Artplayer } = await import("artplayer")
 
   const parent = videoEl.parentElement
   if (!parent) {
@@ -2310,6 +2350,9 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   let pendingAudioSource: AudioTrackSource | null = null
   // Whether the current mount is on a path (ts/native) that reads pendingAudioSource at all.
   let pendingUsesCallerSuppliedTracks = false
+  // Resolved lazily, only once the mount actually hits an HLS source - mirrors mountVideoJs's
+  // hlsModPromise so artplayer/mpegts-only channels never pay hls.js's parse/bundle cost.
+  let hlsModPromise: Promise<any> | null = null
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
   function resolveEngine(): ResolvedEngine | null {
     if (activeHls) return { kind: "hls", instance: activeHls }
@@ -2374,12 +2417,17 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   // hls.js attach, shared by the m3u8 customType and the .ts -> HLS recovery
   // path below (some providers' .ts URLs redirect to / serve an HLS playlist,
   // which mpegts.js can't demux).
-  function loadHlsIntoVideo(video: HTMLVideoElement, url: string) {
+  async function loadHlsIntoVideo(video: HTMLVideoElement, url: string): Promise<void> {
     destroyMpegts()
     if (activeShaka) {
       try { activeShaka.destroy() } catch {}
       activeShaka = null
     }
+    if (!hlsModPromise) {
+      hlsModPromise = import("hls.js").then((mod) => (mod as any).default || mod)
+    }
+    const Hls = await hlsModPromise
+    if (pendingSrc !== url) return
     attachHlsToVideo(
       Hls,
       video,
@@ -2412,7 +2460,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
         "[xt:player] .ts source served an HLS playlist - switching to hls.js:",
         redactUrl(url)
       )
-      loadHlsIntoVideo(video, url)
+      void loadHlsIntoVideo(video, url)
       return
     }
     if (pendingSrc !== url) return
@@ -2444,7 +2492,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
     playsInline: true,
     customType: {
       m3u8(video, url) {
-        loadHlsIntoVideo(video, url)
+        void loadHlsIntoVideo(video, url)
       },
       mpd(video, url) {
         loadDashIntoVideo(video, url, pendingDrm)

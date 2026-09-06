@@ -21,6 +21,9 @@
   // - a string "@" to indicate the default section
   var GlobalConfig = {
     selector: "", // can be a valid <extSelector> except "@" syntax.
+    // DOM element a string <selector> is scoped to (querySelectorAll'd from it instead of
+    // document); null means "the whole document", same as before this option existed.
+    root: null,
     straightOnly: false,
     straightOverlapThreshold: 0.5,
     rememberSource: false,
@@ -451,14 +454,14 @@
     return id
   }
 
-  function parseSelector(selector) {
+  function parseSelector(selector, root) {
     var result = []
     try {
       if (selector) {
         if ($) {
           result = $(selector).get()
         } else if (typeof selector === "string") {
-          result = [].slice.call(document.querySelectorAll(selector))
+          result = [].slice.call((root || document).querySelectorAll(selector))
         } else if (typeof selector === "object" && selector.length) {
           result = [].slice.call(selector)
         } else if (typeof selector === "object" && selector.nodeType === 1) {
@@ -471,7 +474,8 @@
     return result
   }
 
-  function matchSelector(elem, selector) {
+  function matchSelector(elem, selector, root) {
+    if (root && !root.contains(elem)) return false
     if ($) {
       return $(elem).is(selector)
     } else if (typeof selector === "string") {
@@ -556,7 +560,7 @@
     }
     if (
       verifySectionSelector &&
-      !matchSelector(elem, _sections[sectionId].selector)
+      !matchSelector(elem, _sections[sectionId].selector, _sections[sectionId].root)
     ) {
       return false
     }
@@ -576,7 +580,7 @@
     for (var id in _sections) {
       if (
         !_sections[id].disabled &&
-        matchSelector(elem, _sections[id].selector)
+        matchSelector(elem, _sections[id].selector, _sections[id].root)
       ) {
         return id
       }
@@ -584,14 +588,17 @@
   }
 
   function getSectionNavigableElements(sectionId) {
-    return parseSelector(_sections[sectionId].selector).filter(function (elem) {
+    var section = _sections[sectionId]
+    return parseSelector(section.selector, section.root).filter(function (elem) {
       return isNavigable(elem, sectionId)
     })
   }
 
   function getSectionDefaultElement(sectionId) {
+    var section = _sections[sectionId]
     var defaultElement = parseSelector(
-      _sections[sectionId].defaultElement
+      section.defaultElement,
+      section.root
     ).find(function (elem) {
       return isNavigable(elem, sectionId, true)
     })
@@ -792,6 +799,42 @@
     return false
   }
 
+  // Candidates from every section that isn't rooted to a specific subtree (root === null,
+  // e.g. a document-wide catch-all like the classic UI's "main" or the TV shell's "main"),
+  // minus whatever a rooted section already claims - a broad unrooted selector otherwise
+  // re-matches the same elements a scoped rail/grid section already returned.
+  function collectOtherNavigableElements(excludeSectionId) {
+    var scopedElements = []
+    var unscopedIds = []
+
+    for (var id in _sections) {
+      if (id === excludeSectionId || _sections[id].disabled) continue
+      if (_sections[id].root) {
+        scopedElements = scopedElements.concat(getSectionNavigableElements(id))
+      } else {
+        unscopedIds.push(id)
+      }
+    }
+
+    if (!unscopedIds.length) return scopedElements
+
+    var scopedSet = scopedElements.length && typeof Set === "function" ? new Set(scopedElements) : null
+
+    var combined = scopedElements
+    for (var i = 0; i < unscopedIds.length; i++) {
+      var unscopedElements = getSectionNavigableElements(unscopedIds[i])
+      if (scopedSet) {
+        unscopedElements = unscopedElements.filter(function (elem) {
+          return !scopedSet.has(elem)
+        })
+      } else if (scopedElements.length) {
+        unscopedElements = exclude(unscopedElements.slice(), scopedElements)
+      }
+      combined = combined.concat(unscopedElements)
+    }
+    return combined
+  }
+
   function focusNext(direction, currentFocusedElement, currentSectionId) {
     var extSelector = currentFocusedElement.getAttribute("data-sn-" + direction)
     if (typeof extSelector === "string") {
@@ -805,21 +848,13 @@
       return true
     }
 
-    var sectionNavigableElements = {}
-    var allNavigableElements = []
-    for (var id in _sections) {
-      sectionNavigableElements[id] = getSectionNavigableElements(id)
-      allNavigableElements = allNavigableElements.concat(
-        sectionNavigableElements[id]
-      )
-    }
-
     var config = extend({}, GlobalConfig, _sections[currentSectionId])
     var next
 
     if (config.restrict == "self-only" || config.restrict == "self-first") {
-      var currentSectionNavigableElements =
-        sectionNavigableElements[currentSectionId]
+      // self-only never looks past its own section; self-first only pays for the
+      // rest of the document when its own section's candidates come up empty.
+      var currentSectionNavigableElements = getSectionNavigableElements(currentSectionId)
 
       next = navigate(
         currentFocusedElement,
@@ -832,7 +867,7 @@
         next = navigate(
           currentFocusedElement,
           direction,
-          exclude(allNavigableElements, currentSectionNavigableElements),
+          collectOtherNavigableElements(currentSectionId),
           config
         )
       }
@@ -840,7 +875,7 @@
       next = navigate(
         currentFocusedElement,
         direction,
-        exclude(allNavigableElements, currentFocusedElement),
+        exclude(collectOtherNavigableElements(), currentFocusedElement),
         config
       )
     }
@@ -1257,7 +1292,7 @@
           section.tabIndexIgnoreList !== undefined
             ? section.tabIndexIgnoreList
             : GlobalConfig.tabIndexIgnoreList
-        parseSelector(section.selector).forEach(function (elem) {
+        parseSelector(section.selector, section.root).forEach(function (elem) {
           if (!matchSelector(elem, tabIndexIgnoreList)) {
             if (!elem.getAttribute("tabindex")) {
               elem.setAttribute("tabindex", "-1")

@@ -424,6 +424,21 @@ pub fn warmup_read_staged(
     std::fs::read_to_string(&path).map_err(|error| format!("OTHER:{error}"))
 }
 
+// Raw-bytes twin of warmup_read_staged: a multi-MB streams file crosses IPC once as
+// bytes instead of once as a UTF-8 string, so the frontend can hand it straight to
+// the catalog ingest worker without a redundant string copy on the main thread.
+#[tauri::command]
+pub fn warmup_read_staged_bytes(
+    state: State<'_, WarmupState>,
+    job_id: String,
+    kind: WarmupKind,
+    step: String,
+) -> Result<tauri::ipc::Response, String> {
+    let path = staged_path(&state, &job_id, kind, &step)?;
+    let bytes = std::fs::read(&path).map_err(|error| format!("OTHER:{error}"))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 // ---------------------------------------------------------------------------
 // Staging
 // ---------------------------------------------------------------------------

@@ -210,7 +210,7 @@ export function createHero(root: HTMLElement): HeroHandle {
         ? "absolute inset-0 h-full w-full object-cover object-right"
         : "absolute inset-0 h-full w-full object-cover"
     layer.appendChild(img)
-    mountCachedImage(img, imageUrl, imageKind === "poster" ? "poster" : "backdrop")
+    mountCachedImage(img, imageUrl, imageKind === "poster" ? "poster" : "backdrop-hero")
     // Banners are small sources upscaled ~3x; Ken Burns' extra scale compounds the softness.
     return { layer, images: [img], realBackdropImg: imageKind === "banner" ? null : img }
   }
@@ -229,8 +229,10 @@ export function createHero(root: HTMLElement): HeroHandle {
       clearAmbient(section)
       return
     }
+    // Matches the cache class buildBackdropLayer actually mounts the image at, so this
+    // samples the same already-downscaled blob instead of triggering a second fetch+decode.
     void applyAmbient(section, imageUrl, {
-      kind: imageKind === "backdrop" || imageKind === "banner" ? "backdrop" : "poster",
+      kind: imageKind === "backdrop" || imageKind === "banner" ? "backdrop-hero" : "poster",
     })
 
     if (!motionAllowed()) {
@@ -254,7 +256,15 @@ export function createHero(root: HTMLElement): HeroHandle {
       const lite = effectTier() !== "full"
       const duration = lite ? BACKDROP_CROSSFADE_MS_LITE : BACKDROP_CROSSFADE_MS
       const fadeIn = layer.animate([{ opacity: 0 }, { opacity: 1 }], { duration, easing: TV_EASE, fill: "forwards" })
-      if (realBackdropImg) startKenBurns(realBackdropImg, layer)
+      if (realBackdropImg) {
+        // Transform (Ken Burns) and opacity (crossfade) compositing together is the
+        // most expensive moment here - start the pan/zoom only once the fade settles.
+        fadeIn.finished
+          .then(() => {
+            if (generation === backdropGeneration) startKenBurns(realBackdropImg, layer)
+          })
+          .catch(() => {})
+      }
       if (lite) {
         // Drops the outgoing layer as soon as the new one is visible instead of
         // running its own fade-out, so the two layers overlap for less time.
