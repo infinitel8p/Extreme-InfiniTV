@@ -276,7 +276,8 @@ export function getPerfMode() {
 }
 
 export function setPerfMode(on) {
-  writeLS(KEY_PERF_MODE, on ? "1" : "")
+  writeLS(KEY_PERF_MODE, on ? "1" : "0")
+  writeLS("xt_perf_mode_auto", "")
   if (typeof document !== "undefined") {
     if (on) document.documentElement.setAttribute("data-perf-mode", "on")
     else document.documentElement.removeAttribute("data-perf-mode")
@@ -1081,7 +1082,8 @@ export function getReceiverModeEnabled() {
 }
 
 export function setReceiverModeEnabled(enabled) {
-  writeLS(KEY_RECEIVER_MODE, enabled ? "1" : "")
+  writeLS(KEY_RECEIVER_MODE, enabled ? "1" : "0")
+  writeLS("xt_receiver_mode_auto", "")
   document.dispatchEvent(
     new CustomEvent(RECEIVER_MODE_EVENT, { detail: { value: !!enabled } })
   )
@@ -1095,7 +1097,8 @@ export function getReceiverBootEnabled() {
 }
 
 export function setReceiverBootEnabled(enabled) {
-  writeLS(KEY_RECEIVER_BOOT, enabled ? "1" : "")
+  writeLS(KEY_RECEIVER_BOOT, enabled ? "1" : "0")
+  writeLS("xt_receiver_boot_auto", "")
   document.dispatchEvent(
     new CustomEvent(RECEIVER_BOOT_EVENT, { detail: { value: !!enabled } })
   )
