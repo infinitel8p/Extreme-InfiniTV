@@ -20,13 +20,16 @@ import { getChannelEpgOverride } from "@/scripts/lib/preferences.js"
 import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
 import { EPG_PAST_WINDOW_MS } from "@/scripts/lib/epg-constants.ts"
 import { NAME_COLLATOR } from "@/scripts/lib/catalog-mappers.js"
+import { getNetworkTimeoutSeconds } from "@/scripts/lib/app-settings.js"
+import { EPG_REUSE_MAX_AGE_MS, programmeHorizonMs, shouldReuseCachedEpg } from "@/scripts/lib/epg-cache-policy.ts"
 
 const FRESH_MS = 60 * 60 * 1000
 const TZ_KEY_PREFIX = "xt_epg_offset:"
 const TZ_INFERRED_KEY_PREFIX = "xt_epg_offset_inferred:"
 const EPG_HTTP_META_PREFIX = "xt_epg_http:"
 const EPG_CACHE_KIND_PREFIX = "epg_parsed"
-const EPG_CACHE_TTL = 4 * 60 * 60 * 1000
+const EPG_CACHE_TTL = EPG_REUSE_MAX_AGE_MS
+const EPG_FETCH_MIN_TIMEOUT_MS = 180_000
 const EVT_LOADED = "xt:epg-loaded"
 const EVT_OFFSET_CHANGED = "xt:epg-offset-changed"
 const EVT_SOURCE_STATUS = "xt:epg-source-status"
@@ -1137,7 +1140,7 @@ async function fetchEpgConditional(url, meta, dns) {
   if (meta?.etag) headers["If-None-Match"] = meta.etag
   const init = { forceTauri: true, logKind: "epg", dns }
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
-    init.signal = AbortSignal.timeout(90_000)
+    init.signal = AbortSignal.timeout(Math.max(EPG_FETCH_MIN_TIMEOUT_MS, getNetworkTimeoutSeconds() * 1000))
   }
   if (Object.keys(headers).length) init.headers = headers
   let response
@@ -1232,29 +1235,43 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
     }
   }
 
+  await cacheHydrate(playlistId, kind)
+  const cachedHit = cacheGet(playlistId, kind)
+  if (cachedHit?.data?.entries && epgWindowsMatch(cachedHit.data.window || null, window || null)) {
+    const horizonMs = Number.isFinite(cachedHit.data.horizonMs)
+      ? cachedHit.data.horizonMs
+      : programmeHorizonMs(cachedHit.data.entries)
+    if (shouldReuseCachedEpg({ fetchedAtMs: cachedHit.fetchedAt, horizonMs, nowMs: Date.now() })) {
+      const { programmes, channelNames, count } = cloneCachedHit(cachedHit)
+      const ageMin = Math.round((Date.now() - cachedHit.fetchedAt) / 60_000)
+      const coverageH = Math.round((horizonMs - Date.now()) / (60 * 60 * 1000))
+      log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=fresh parser=cache ageMin=${ageMin} coverageH=${coverageH} programmes=${count} channels=${channelNames.size}`)
+      return {
+        programmes,
+        channelNames,
+        count,
+        cached: true,
+        hasExplicitTimezones: !!cachedHit.data.hasExplicitTimezones,
+      }
+    }
+  }
+
   const result = await retryWithBackoff(() =>
     fetchEpgConditional(src.url, httpMeta[hash], dns)
   )
 
   if (result.notModified) {
-    await cacheHydrate(playlistId, kind)
-    const hit = cacheGet(playlistId, kind)
     // A cached parse built with a different window than this call needs (e.g. a
     // windowed lite-tier parse vs. an unwindowed one) can't be served as-is.
-    if (hit?.data?.entries && epgWindowsMatch(hit.data.window || null, window || null)) {
-      // Clone cached programmes: applyOffset mutates start/stop in place and the
-      // cache hands out entries by reference, so a shared object would re-shift
-      // (drift by offsetMin) on every 304-served load.
-      const programmes = cloneProgrammeEntries(hit.data.entries)
-      const channelNames = new Map(hit.data.channelNames || [])
-      const count = countProgrammes(programmes)
+    if (cachedHit?.data?.entries && epgWindowsMatch(cachedHit.data.window || null, window || null)) {
+      const { programmes, channelNames, count } = cloneCachedHit(cachedHit)
       log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=hit parser=cache fetchMs=${Math.round(performance.now() - sourceStartedAt)} programmes=${count} channels=${channelNames.size}`)
       return {
         programmes,
         channelNames,
         count,
         cached: true,
-        hasExplicitTimezones: !!hit.data.hasExplicitTimezones,
+        hasExplicitTimezones: !!cachedHit.data.hasExplicitTimezones,
       }
     }
     // 304 but no cached parsed payload survived (TTL expired, IDB pruned).
@@ -1268,6 +1285,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
       throw new Error("304 with no cached body and no fresh payload")
     }
     const fetchMs = Math.round(performance.now() - freshFetchStartedAt)
+    const freshByteLength = fresh.buffer.byteLength
     const parseStartedAt = performance.now()
     const parsed = await parseXmlTvBytesOffMain(fresh.buffer, fresh.gzip, window)
     const parseMs = Math.round(performance.now() - parseStartedAt)
@@ -1281,6 +1299,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
           channelNames: Array.from(parsed.channelNames.entries()),
           hasExplicitTimezones: parsed.hasExplicitTimezones,
           window: window || null,
+          horizonMs: programmeHorizonMs(entries),
         },
         EPG_CACHE_TTL
       )
@@ -1294,7 +1313,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
 
     const programmes = cloneProgrammeEntries(entries)
     const count = countProgrammes(programmes)
-    log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=stale parser=off-main bytes=${fresh.buffer.byteLength} gzip=${!!fresh.gzip} fetchMs=${fetchMs} parseMs=${parseMs} programmes=${count} channels=${parsed.channelNames.size}`)
+    log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=stale parser=off-main bytes=${freshByteLength} gzip=${!!fresh.gzip} fetchMs=${fetchMs} parseMs=${parseMs} programmes=${count} channels=${parsed.channelNames.size}`)
     return {
       programmes,
       channelNames: parsed.channelNames,
@@ -1304,6 +1323,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
     }
   }
 
+  const resultByteLength = result.buffer.byteLength
   const parseStartedAt = performance.now()
   const parsed = await parseXmlTvBytesOffMain(result.buffer, result.gzip, window)
   const parseMs = Math.round(performance.now() - parseStartedAt)
@@ -1318,6 +1338,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
         channelNames: Array.from(parsed.channelNames.entries()),
         hasExplicitTimezones: parsed.hasExplicitTimezones,
         window: window || null,
+        horizonMs: programmeHorizonMs(entries),
       },
       EPG_CACHE_TTL
     )
@@ -1331,7 +1352,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
 
   const programmes = cloneProgrammeEntries(entries)
   const count = countProgrammes(programmes)
-  log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=miss parser=off-main bytes=${result.buffer.byteLength} gzip=${!!result.gzip} fetchMs=${fetchMs} parseMs=${parseMs} programmes=${count} channels=${parsed.channelNames.size}`)
+  log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=miss parser=off-main bytes=${resultByteLength} gzip=${!!result.gzip} fetchMs=${fetchMs} parseMs=${parseMs} programmes=${count} channels=${parsed.channelNames.size}`)
   return {
     programmes,
     channelNames: parsed.channelNames,
@@ -1354,6 +1375,13 @@ function countProgrammes(map) {
   let total = 0
   for (const arr of map.values()) total += arr.length
   return total
+}
+
+// applyOffset mutates start/stop in place; never hand out the cached arrays themselves
+function cloneCachedHit(hit) {
+  const programmes = cloneProgrammeEntries(hit.data.entries)
+  const channelNames = new Map(hit.data.channelNames || [])
+  return { programmes, channelNames, count: countProgrammes(programmes) }
 }
 
 /**

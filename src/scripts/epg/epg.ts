@@ -976,7 +976,7 @@ async function init() {
   showLoadingSkeleton(t("epg.loadingFull"))
   programmes.clear()
   try {
-    const state = await loadProgrammes(activePlaylistId, creds, { force: true })
+    const state = await loadProgrammes(activePlaylistId, creds)
     if (!state) throw new Error("EPG fetch failed")
     for (const [k, v] of state.programmes) programmes.set(k, v)
   } catch (e) {
