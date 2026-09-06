@@ -1788,12 +1788,10 @@ async function attachMpegts(
     if (useTauriLoader) config.customLoader = createTauriStreamLoaderClass(mpegts)
     if (authorization) config.headers = { Authorization: authorization }
     if (isLive) {
-      // A raw-TS live tune otherwise keeps every buffered second alive; bound it so a
-      // long session doesn't grow the SourceBuffer without limit and crash the WebView.
+      // Bound the live SourceBuffer so a long session can't grow it until the WebView dies
       config.autoCleanupSourceBuffer = true
       config.autoCleanupMaxBackwardDuration = 60
       config.autoCleanupMinBackwardDuration = 30
-      config.liveBufferLatencyChasing = true
     } else {
       try {
         const hostname = new URL(cleanUrl).hostname
