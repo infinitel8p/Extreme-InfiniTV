@@ -2,9 +2,11 @@
 import type { TvView, TvViewContext } from "@/scripts/tv/router"
 import { t, applyI18nDOM, LOCALE_EVENT } from "@/scripts/lib/i18n"
 import { navigate } from "astro:transitions/client"
-import { addEntry, getEntries, resolveServerScheme, resolveM3UScheme } from "@/scripts/lib/creds.js"
+import { addEntry, getEntries, resolveServerScheme, resolveM3UScheme, updateEntry } from "@/scripts/lib/creds.js"
 import { parsePlaylistLinks, type ParsedXtreamCandidate } from "@/scripts/lib/playlist-link"
+import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
 import { toastSuccess, toastWarn } from "@/scripts/lib/toast"
+import { classifyError, describeClassifiedError } from "@/scripts/lib/provider-error.js"
 
 type Method = "xtream" | "m3u"
 
@@ -21,9 +23,13 @@ interface M3UTestResult {
 }
 
 interface Refs {
+  titleEl: HTMLElement
+  subtitleEl: HTMLElement
+  methodTablist: HTMLElement
   form: HTMLFormElement
   methodXtream: HTMLButtonElement
   methodM3u: HTMLButtonElement
+  pasteLabel: HTMLElement
   pasteInput: HTMLInputElement
   mirrorHint: HTMLElement
   xtreamFields: HTMLElement
@@ -34,9 +40,13 @@ interface Refs {
   m3uFields: HTMLElement
   m3uUrlInput: HTMLInputElement
   epgUrlInput: HTMLInputElement
+  dnsLabel: HTMLElement
+  dnsInput: HTMLInputElement
   nameInput: HTMLInputElement
+  connectLabel: HTMLElement
   statusEl: HTMLElement
   cancelBtn: HTMLButtonElement
+  saveAnywayBtn: HTMLButtonElement
   connectBtn: HTMLButtonElement
 }
 
@@ -83,18 +93,27 @@ function describeM3UResult(result: M3UTestResult): string {
   return t(reasonKey, result.httpStatus != null ? { status: String(result.httpStatus) } : undefined)
 }
 
+function describeSaveError(error: unknown): string {
+  try {
+    const classified = classifyError({ error })
+    const described = describeClassifiedError(classified)
+    if (described) return described
+  } catch {}
+  return t("login.status.serverUnreachable")
+}
+
 function buildMarkup(): string {
   return `
-    <div class="flex h-full items-center justify-center overflow-y-auto">
-      <div class="mx-auto flex w-full max-w-2xl flex-col gap-5 py-4">
+    <div class="flex h-full justify-center overflow-y-auto">
+      <div class="mx-auto my-auto flex w-full max-w-2xl flex-col gap-5 py-6">
         <header class="flex flex-col gap-2">
-          <h1 data-i18n="login.title.add" class="text-2xl font-semibold text-fg">Add a playlist</h1>
-          <p data-i18n="tv.login.subtitle" class="text-sm text-fg-3">
+          <h1 data-role="title" data-i18n="login.title.add" class="text-2xl font-semibold text-fg">Add a playlist</h1>
+          <p data-role="subtitle" data-i18n="tv.login.subtitle" class="text-sm text-fg-3">
             Paste a playlist link, or enter your provider's details below.
           </p>
         </header>
 
-        <div role="tablist" class="grid grid-cols-2 gap-2 rounded-2xl border border-line bg-surface p-1.5">
+        <div data-role="method-tablist" role="tablist" class="grid grid-cols-2 gap-2 rounded-2xl border border-line bg-surface p-1.5">
           <button type="button" data-role="method-xtream" role="tab" data-focus-key="method:xtream" data-tv-autofocus
                   class="flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl px-4 text-center outline-none transition-colors">
             <span data-i18n="login.tab.subscription" class="text-base font-medium">I have a subscription</span>
@@ -108,7 +127,7 @@ function buildMarkup(): string {
         </div>
 
         <form data-role="form" class="flex flex-col gap-4" autocomplete="off">
-          <label class="flex flex-col gap-2">
+          <label data-role="paste-label" class="flex flex-col gap-2">
             <span data-i18n="tv.login.field.pasteLink" class="${TV_LABEL_CLASS}">Paste a playlist link</span>
             <input data-role="paste" data-focus-key="paste" type="text"
                    autocapitalize="off" spellcheck="false" inputmode="url"
@@ -159,6 +178,15 @@ function buildMarkup(): string {
             </label>
           </div>
 
+          <label data-role="dns-label" class="flex flex-col gap-2">
+            <span data-i18n="dns.label" class="${TV_LABEL_CLASS}">DNS server</span>
+            <input data-role="dns" data-focus-key="field:dns" type="text"
+                   autocapitalize="off" spellcheck="false" inputmode="url"
+                   data-i18n-attr="placeholder:dns.placeholder"
+                   placeholder="1.1.1.1 or https://dnsforge.de/dns-query"
+                   class="${TV_INPUT_CLASS} font-mono" />
+          </label>
+
           <label class="flex flex-col gap-2">
             <span data-i18n="login.field.title" class="${TV_LABEL_CLASS}">Title</span>
             <input data-role="name" data-focus-key="field:name" type="text"
@@ -174,6 +202,10 @@ function buildMarkup(): string {
                     class="btn min-h-11 px-7 text-base tv-focus-inset">
               <span data-i18n="common.cancel">Cancel</span>
             </button>
+            <button type="button" data-role="save-anyway" data-focus-key="save-anyway"
+                    class="btn min-h-11 px-7 text-base tv-focus-inset hidden">
+              <span data-i18n="tv.login.action.saveAnyway">Save anyway</span>
+            </button>
             <button type="submit" data-role="connect" data-focus-key="connect"
                     class="btn-primary min-h-11 px-8 text-base tv-focus-inset">
               <span data-role="connect-label" data-i18n="tv.login.action.connect">Connect</span>
@@ -188,9 +220,13 @@ function buildMarkup(): string {
 function collectRefs(root: HTMLElement): Refs {
   const query = <T extends HTMLElement>(role: string) => root.querySelector<T>(`[data-role="${role}"]`)!
   return {
+    titleEl: query("title"),
+    subtitleEl: query("subtitle"),
+    methodTablist: query("method-tablist"),
     form: query("form"),
     methodXtream: query("method-xtream"),
     methodM3u: query("method-m3u"),
+    pasteLabel: query("paste-label"),
     pasteInput: query("paste"),
     mirrorHint: query("mirror-hint"),
     xtreamFields: query("xtream-fields"),
@@ -201,9 +237,13 @@ function collectRefs(root: HTMLElement): Refs {
     m3uFields: query("m3u-fields"),
     m3uUrlInput: query("m3u-url"),
     epgUrlInput: query("epg-url"),
+    dnsLabel: query("dns-label"),
+    dnsInput: query("dns"),
     nameInput: query("name"),
+    connectLabel: query("connect-label"),
     statusEl: query("status"),
     cancelBtn: query("cancel"),
+    saveAnywayBtn: query("save-anyway"),
     connectBtn: query("connect"),
   }
 }
@@ -220,7 +260,7 @@ const STATUS_PALETTE: Record<string, string> = {
 }
 
 const view: TvView = {
-  mount(root: HTMLElement, _ctx: TvViewContext) {
+  mount(root: HTMLElement, ctx: TvViewContext) {
     root.innerHTML = buildMarkup()
     applyI18nDOM(root)
     const refs = collectRefs(root)
@@ -231,6 +271,8 @@ const view: TvView = {
     let destroyed = false
     let cancelAllowed = false
     let pendingMirrors: ParsedXtreamCandidate[] = []
+    let editingEntry: Record<string, any> | null = null
+    let titleOnlyEdit = false
 
     function paintMethodButtons(): void {
       refs.methodXtream.className =
@@ -258,6 +300,7 @@ const view: TvView = {
       refs.statusEl.classList.add("hidden")
       refs.statusEl.className = "hidden rounded-2xl border px-4 py-2.5 text-sm leading-relaxed"
       refs.statusEl.textContent = ""
+      hideSaveAnywayButton()
     }
 
     function setStatus(kind: keyof typeof STATUS_PALETTE, message: string): void {
@@ -281,14 +324,24 @@ const view: TvView = {
         refs.passwordInput,
         refs.m3uUrlInput,
         refs.epgUrlInput,
+        refs.dnsInput,
         refs.nameInput,
         refs.methodXtream,
         refs.methodM3u,
         refs.connectBtn,
+        refs.saveAnywayBtn,
       ]) {
         el.disabled = next
       }
       refs.cancelBtn.disabled = next || !cancelAllowed
+    }
+
+    function hideSaveAnywayButton(): void {
+      refs.saveAnywayBtn.classList.add("hidden")
+    }
+
+    function showSaveAnywayButton(): void {
+      refs.saveAnywayBtn.classList.remove("hidden")
     }
 
     function updateMirrorHint(): void {
@@ -338,28 +391,48 @@ const view: TvView = {
       const serverUrl = refs.serverUrlInput.value.trim()
       const username = refs.usernameInput.value.trim()
       const password = refs.passwordInput.value.trim()
+      const dns = refs.dnsInput.value.trim() || undefined
       if (!serverUrl || !username || !password) {
         setStatus("unavailable", t("login.status.allRequired"))
         focusFirstField()
         return
       }
+      hideSaveAnywayButton()
       setStatus("busy", t("login.status.testing"))
-      const resolved = await resolveServerScheme({ serverUrl, username, password })
+      const resolved = await resolveServerScheme({ serverUrl, username, password, dns })
       if (destroyed) return
       if (resolved.serverUrl !== serverUrl) refs.serverUrlInput.value = resolved.serverUrl
       const result = resolved.test as XtreamTestResult
       if (result.status === "unavailable") {
         setStatus("unavailable", describeXtreamResult(result))
+        showSaveAnywayButton()
         focusFirstField()
+        return
+      }
+      const titleValue = refs.nameInput.value.trim()
+      const editingXtreamEntry = editingEntry
+      if (editingXtreamEntry) {
+        const patch: Record<string, unknown> = { serverUrl: resolved.serverUrl, username, password, dns }
+        if (titleValue) patch.title = titleValue
+        await updateEntry(editingXtreamEntry._id, patch)
+        if (destroyed) return
+        const savedTitle = titleValue || editingXtreamEntry.title
+        if (result.status === "expired" || result.status === "inactive") {
+          toastWarn(t("tv.login.toast.updated", { title: savedTitle }), { description: describeXtreamResult(result) })
+        } else {
+          toastSuccess(t("tv.login.toast.updated", { title: savedTitle }))
+        }
+        await leaveEditMode()
         return
       }
       const entry = await addEntry({
         type: "xtream",
-        title: refs.nameInput.value.trim(),
+        title: titleValue,
         serverUrl: resolved.serverUrl,
         username,
         password,
         mirrors: pendingMirrors,
+        dns,
       })
       if (destroyed) return
       if (result.status === "expired" || result.status === "inactive") {
@@ -372,48 +445,215 @@ const view: TvView = {
 
     async function connectM3U(): Promise<void> {
       const rawUrl = refs.m3uUrlInput.value.trim()
+      const dns = refs.dnsInput.value.trim() || undefined
       if (!rawUrl) {
         setStatus("unavailable", t("login.status.enterM3uUrl"))
         focusFirstField()
         return
       }
+      hideSaveAnywayButton()
       setStatus("busy", t("login.status.fetching"))
-      const resolved = await resolveM3UScheme(rawUrl)
+      const resolved = await resolveM3UScheme(rawUrl, { dns })
       if (destroyed) return
       if (resolved.url !== rawUrl) refs.m3uUrlInput.value = resolved.url
       const result = resolved.test as M3UTestResult
       if (result.status !== "active") {
         setStatus("unavailable", describeM3UResult(result))
+        showSaveAnywayButton()
         focusFirstField()
+        return
+      }
+      const titleValue = refs.nameInput.value.trim()
+      const epgUrl = refs.epgUrlInput.value.trim()
+      const editingM3uEntry = editingEntry
+      if (editingM3uEntry) {
+        const patch: Record<string, unknown> = { url: resolved.url, epgUrl, dns }
+        if (titleValue) patch.title = titleValue
+        await updateEntry(editingM3uEntry._id, patch)
+        if (destroyed) return
+        if ((editingM3uEntry.epgUrl || "") !== epgUrl || editingM3uEntry.url !== resolved.url) {
+          const { invalidateEpgPlaylist } = await import("@/scripts/lib/epg-data.js")
+          invalidateEpgPlaylist(editingM3uEntry._id)
+        }
+        toastSuccess(t("tv.login.toast.updated", { title: titleValue || editingM3uEntry.title }))
+        await leaveEditMode()
         return
       }
       const entry = await addEntry({
         type: "m3u",
-        title: refs.nameInput.value.trim(),
+        title: titleValue,
         url: resolved.url,
-        epgUrl: refs.epgUrlInput.value.trim(),
+        epgUrl,
+        dns,
       })
       if (destroyed) return
       toastSuccess(t("tv.login.toast.saved", { title: entry.title }))
       await navigate("/tv", { history: "replace" })
     }
 
-    async function onConnect(event: Event): Promise<void> {
-      event.preventDefault()
+    async function saveWithoutTest(): Promise<void> {
+      const dns = refs.dnsInput.value.trim() || undefined
+      if (method === "xtream") {
+        const serverUrl = refs.serverUrlInput.value.trim()
+        const username = refs.usernameInput.value.trim()
+        const password = refs.passwordInput.value.trim()
+        if (!serverUrl || !username || !password) {
+          setStatus("unavailable", t("login.status.allRequired"))
+          focusFirstField()
+          return
+        }
+        const resolved = await resolveServerScheme({ serverUrl, username, password, dns })
+        if (destroyed) return
+        if (resolved.serverUrl !== serverUrl) refs.serverUrlInput.value = resolved.serverUrl
+        const titleValue = refs.nameInput.value.trim()
+        const editingXtreamEntry = editingEntry
+        if (editingXtreamEntry) {
+          const patch: Record<string, unknown> = { serverUrl: resolved.serverUrl, username, password, dns }
+          if (titleValue) patch.title = titleValue
+          await updateEntry(editingXtreamEntry._id, patch)
+          if (destroyed) return
+          const savedTitle = titleValue || editingXtreamEntry.title
+          toastWarn(t("tv.login.toast.updated", { title: savedTitle }), {
+            description: t("tv.login.toast.savedUntested"),
+          })
+          await leaveEditMode()
+          return
+        }
+        const entry = await addEntry({
+          type: "xtream",
+          title: titleValue,
+          serverUrl: resolved.serverUrl,
+          username,
+          password,
+          mirrors: pendingMirrors,
+          dns,
+        })
+        if (destroyed) return
+        toastWarn(t("tv.login.toast.saved", { title: entry.title }), {
+          description: t("tv.login.toast.savedUntested"),
+        })
+        await navigate("/tv", { history: "replace" })
+        return
+      }
+
+      const rawUrl = refs.m3uUrlInput.value.trim()
+      if (!rawUrl) {
+        setStatus("unavailable", t("login.status.enterM3uUrl"))
+        focusFirstField()
+        return
+      }
+      const resolved = await resolveM3UScheme(rawUrl, { dns })
+      if (destroyed) return
+      if (resolved.url !== rawUrl) refs.m3uUrlInput.value = resolved.url
+      const titleValue = refs.nameInput.value.trim()
+      const epgUrl = refs.epgUrlInput.value.trim()
+      const editingM3uEntry = editingEntry
+      if (editingM3uEntry) {
+        const patch: Record<string, unknown> = { url: resolved.url, epgUrl, dns }
+        if (titleValue) patch.title = titleValue
+        await updateEntry(editingM3uEntry._id, patch)
+        if (destroyed) return
+        if ((editingM3uEntry.epgUrl || "") !== epgUrl || editingM3uEntry.url !== resolved.url) {
+          const { invalidateEpgPlaylist } = await import("@/scripts/lib/epg-data.js")
+          invalidateEpgPlaylist(editingM3uEntry._id)
+        }
+        toastWarn(t("tv.login.toast.updated", { title: titleValue || editingM3uEntry.title }), {
+          description: t("tv.login.toast.savedUntested"),
+        })
+        await leaveEditMode()
+        return
+      }
+      const entry = await addEntry({
+        type: "m3u",
+        title: titleValue,
+        url: resolved.url,
+        epgUrl,
+        dns,
+      })
+      if (destroyed) return
+      toastWarn(t("tv.login.toast.saved", { title: entry.title }), {
+        description: t("tv.login.toast.savedUntested"),
+      })
+      await navigate("/tv", { history: "replace" })
+    }
+
+    async function onSaveAnywayClick(): Promise<void> {
       if (busy) return
+      const rawDns = refs.dnsInput.value.trim()
+      if (rawDns && !parseDnsServer(rawDns)) {
+        setStatus("unavailable", t("dns.invalid"))
+        refs.dnsInput.focus()
+        return
+      }
       setBusy(true)
       try {
-        if (method === "xtream") await connectXtream()
-        else await connectM3U()
+        await saveWithoutTest()
       } catch (error) {
-        if (!destroyed) setStatus("unavailable", String((error as Error)?.message || error))
+        if (!destroyed) setStatus("unavailable", describeSaveError(error))
       } finally {
         if (!destroyed) setBusy(false)
       }
     }
 
+    async function saveTitleOnly(): Promise<void> {
+      const editingTitleOnlyEntry = editingEntry
+      if (!editingTitleOnlyEntry) return
+      const titleValue = refs.nameInput.value.trim()
+      const patch: Record<string, unknown> = {}
+      if (titleValue) patch.title = titleValue
+      await updateEntry(editingTitleOnlyEntry._id, patch)
+      if (destroyed) return
+      toastSuccess(t("tv.login.toast.updated", { title: titleValue || editingTitleOnlyEntry.title }))
+      await leaveEditMode()
+    }
+
+    async function onConnect(event: Event): Promise<void> {
+      event.preventDefault()
+      if (busy) return
+      if (editingEntry && titleOnlyEdit) {
+        setBusy(true)
+        try {
+          await saveTitleOnly()
+        } catch (error) {
+          if (!destroyed) setStatus("unavailable", describeSaveError(error))
+        } finally {
+          if (!destroyed) setBusy(false)
+        }
+        return
+      }
+      const rawDns = refs.dnsInput.value.trim()
+      if (rawDns && !parseDnsServer(rawDns)) {
+        setStatus("unavailable", t("dns.invalid"))
+        refs.dnsInput.focus()
+        return
+      }
+      setBusy(true)
+      try {
+        if (method === "xtream") await connectXtream()
+        else await connectM3U()
+      } catch (error) {
+        if (!destroyed) setStatus("unavailable", describeSaveError(error))
+      } finally {
+        if (!destroyed) setBusy(false)
+      }
+    }
+
+    async function leaveEditMode(): Promise<void> {
+      // Astro's router stamps history.state.index; 0 means a cold load, so back() would leave the app.
+      const navigationState = history.state as { index?: number } | null
+      if (navigationState && typeof navigationState.index === "number" && navigationState.index > 0) {
+        history.back()
+        return
+      }
+      await navigate("/tv/settings", { history: "replace" })
+    }
+
     async function onCancelClick(): Promise<void> {
       if (busy) return
+      if (editingEntry) {
+        await leaveEditMode()
+        return
+      }
       const entries = await getEntries()
       if (entries.length) history.back()
     }
@@ -425,9 +665,95 @@ const view: TvView = {
       refs.cancelBtn.disabled = !cancelAllowed
     }
 
+    function applyEditModeTexts(entry: Record<string, any>): void {
+      refs.titleEl.textContent = t("login.title.edit")
+      refs.subtitleEl.textContent =
+        entry.type === "xtream" || entry.type === "m3u"
+          ? t("login.subtitle.edit", { title: entry.title })
+          : t("tv.login.subtitle.titleOnly")
+      refs.connectLabel.textContent = t("login.action.saveEdit")
+    }
+
+    function enterEditMode(entry: Record<string, any>): void {
+      editingEntry = entry
+      cancelAllowed = true
+      refs.cancelBtn.disabled = busy
+      clearStatus()
+
+      refs.titleEl.setAttribute("data-i18n", "login.title.edit")
+      refs.subtitleEl.removeAttribute("data-i18n")
+      refs.subtitleEl.classList.remove("hidden")
+      refs.pasteLabel.classList.add("hidden")
+      refs.mirrorHint.classList.add("hidden")
+      refs.methodTablist.classList.add("hidden")
+      refs.connectLabel.setAttribute("data-i18n", "login.action.saveEdit")
+      applyEditModeTexts(entry)
+
+      refs.nameInput.value = entry.title || ""
+
+      let autofocusTarget: HTMLElement = refs.nameInput
+
+      if (entry.type === "xtream") {
+        titleOnlyEdit = false
+        setMethod("xtream")
+        refs.dnsLabel.classList.remove("hidden")
+        refs.serverUrlInput.value = entry.serverUrl || ""
+        refs.usernameInput.value = entry.username || ""
+        refs.passwordInput.value = entry.password || ""
+        refs.dnsInput.value = entry.dns || ""
+        autofocusTarget = refs.serverUrlInput
+      } else if (entry.type === "m3u") {
+        titleOnlyEdit = false
+        setMethod("m3u")
+        refs.dnsLabel.classList.remove("hidden")
+        refs.m3uUrlInput.value = entry.url || ""
+        refs.epgUrlInput.value = entry.epgUrl || ""
+        refs.dnsInput.value = entry.dns || ""
+        autofocusTarget = refs.m3uUrlInput
+      } else {
+        // local-m3u / custom: only the title is editable here.
+        titleOnlyEdit = true
+        refs.xtreamFields.classList.add("hidden")
+        refs.xtreamFields.classList.remove("flex")
+        refs.m3uFields.classList.add("hidden")
+        refs.m3uFields.classList.remove("flex")
+        refs.dnsLabel.classList.add("hidden")
+      }
+
+      for (const el of root.querySelectorAll<HTMLElement>("[data-tv-autofocus]")) {
+        el.removeAttribute("data-tv-autofocus")
+      }
+      autofocusTarget.setAttribute("data-tv-autofocus", "")
+      autofocusTarget.focus()
+    }
+
+    async function initEditMode(): Promise<void> {
+      const editingId = ctx.url.searchParams.get("edit")
+      if (!editingId) {
+        void initCancelAvailability()
+        return
+      }
+      try {
+        const entries = await getEntries()
+        if (destroyed) return
+        const entry = entries.find((candidate: Record<string, any>) => candidate._id === editingId) || null
+        if (!entry) {
+          setStatus("unavailable", t("login.status.editNotFound"))
+          void initCancelAvailability()
+          return
+        }
+        enterEditMode(entry)
+      } catch {
+        if (destroyed) return
+        setStatus("unavailable", t("login.status.editNotFound"))
+        void initCancelAvailability()
+      }
+    }
+
     function onLocaleChanged(): void {
       applyI18nDOM(root)
       updateMirrorHint()
+      if (editingEntry) applyEditModeTexts(editingEntry)
     }
 
     refs.methodXtream.addEventListener("click", () => setMethod("xtream"))
@@ -435,11 +761,13 @@ const view: TvView = {
     refs.pasteInput.addEventListener("input", onPasteInput)
     refs.togglePasswordBtn.addEventListener("click", togglePasswordVisibility)
     refs.cancelBtn.addEventListener("click", () => void onCancelClick())
+    refs.saveAnywayBtn.addEventListener("click", () => void onSaveAnywayClick())
     refs.form.addEventListener("submit", (event) => void onConnect(event))
+    refs.form.addEventListener("input", hideSaveAnywayButton)
     document.addEventListener(LOCALE_EVENT, onLocaleChanged)
 
     paintMethodButtons()
-    void initCancelAvailability()
+    void initEditMode()
 
     return () => {
       destroyed = true

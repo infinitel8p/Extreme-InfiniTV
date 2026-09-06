@@ -1,5 +1,25 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { shouldTranscodeVodAudio, peekVodAudioRemuxAvailable } from "../src/scripts/lib/vod-audio-proxy"
+
+const invokeCalls: { command: string; args: unknown }[] = []
+const resolveDnsRoutedUrl = vi.fn(async (url: string) => ({ url, server: null }))
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: async (command: string, args: unknown) => {
+    invokeCalls.push({ command, args })
+    if (command === "register_vod_audio_remux") {
+      return { sessionId: "sess", playbackUrl: "http://127.0.0.1:9000/live/sess" }
+    }
+    return null
+  },
+}))
+vi.mock("@/scripts/lib/app-settings.js", () => ({
+  getFfmpegPath: () => null,
+  SETTINGS_EVENT: "xt:settings-changed",
+}))
+vi.mock("@/scripts/lib/provider-fetch.js", () => ({
+  resolveDnsRoutedUrl: (url: string, explicitServer: unknown) => resolveDnsRoutedUrl(url, explicitServer),
+}))
 
 describe("shouldTranscodeVodAudio", () => {
   it("copies plain aac/mp3 codec ids", () => {
@@ -47,5 +67,48 @@ describe("shouldTranscodeVodAudio", () => {
 describe("peekVodAudioRemuxAvailable", () => {
   it("returns synchronously without forcing a probe outside a Tauri desktop context", () => {
     expect(peekVodAudioRemuxAvailable()).toBe(false)
+  })
+})
+
+describe("startVodAudioRemux dns routing", () => {
+  beforeEach(() => {
+    invokeCalls.length = 0
+    resolveDnsRoutedUrl.mockClear()
+    resolveDnsRoutedUrl.mockImplementation(async (url: string) => ({ url, server: null }))
+    vi.resetModules()
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} })
+  })
+
+  it("registers the dns-proxy-routed url returned by resolveDnsRoutedUrl", async () => {
+    const routedUrl = "http://127.0.0.1:9000/tok/https/example.test/movie.mkv"
+    resolveDnsRoutedUrl.mockImplementation(async () => ({
+      url: routedUrl,
+      server: { raw: "1.1.1.1" },
+    }))
+
+    const { startVodAudioRemux } = await import("../src/scripts/lib/vod-audio-proxy")
+    await startVodAudioRemux({
+      url: "https://example.test/movie.mkv",
+      audioStreamIndex: 0,
+      startSeconds: 0,
+      transcodeAudio: false,
+    })
+
+    const call = invokeCalls.find((entry) => entry.command === "register_vod_audio_remux")
+    expect((call?.args as { url?: string })?.url).toBe(routedUrl)
+  })
+
+  it("splits embedded credentials before routing and forwards them as authorization", async () => {
+    const { startVodAudioRemux } = await import("../src/scripts/lib/vod-audio-proxy")
+    await startVodAudioRemux({
+      url: "https://user:pass@example.test/movie.mkv",
+      audioStreamIndex: 0,
+      startSeconds: 0,
+      transcodeAudio: false,
+    })
+
+    expect(resolveDnsRoutedUrl).toHaveBeenCalledWith("https://example.test/movie.mkv", undefined)
+    const call = invokeCalls.find((entry) => entry.command === "register_vod_audio_remux")
+    expect((call?.args as { authorization?: string })?.authorization).toMatch(/^Basic /)
   })
 })

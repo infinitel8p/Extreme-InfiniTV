@@ -4,7 +4,7 @@ import { mountCachedImage, releaseCachedImages } from "@/scripts/lib/img-cache.t
 import { formatTimeRange, type Programme } from "@/scripts/lib/now-next"
 import { channelSupportsCatchup, isCatchupPlayable, type CatchupCapableChannel } from "@/scripts/lib/catchup.ts"
 import { STAR_OUTLINE, STAR_FILLED } from "@/scripts/lib/entry-card.ts"
-import { motionAllowed, TV_EASE } from "@/scripts/tv/motion"
+import { motionAllowed, TV_EASE, effectTier, heavyBlurClass } from "@/scripts/tv/motion"
 import type { CastChannel, CastChannelGroup } from "@/scripts/lib/tv-cast-channel-list"
 
 export interface LiveChannel extends CastChannel, CatchupCapableChannel {
@@ -13,14 +13,14 @@ export interface LiveChannel extends CastChannel, CatchupCapableChannel {
 
 export type GuideStatus = "loading" | "empty" | "ready"
 
-function buildImg(logoUrl: string, className: string): HTMLImageElement {
+function buildImg(logoUrl: string, className: string, mount = true): HTMLImageElement {
   const img = document.createElement("img")
   img.alt = ""
   img.loading = "lazy"
   img.decoding = "async"
   img.referrerPolicy = "no-referrer"
   img.className = className
-  mountCachedImage(img, logoUrl, "logo")
+  if (mount) mountCachedImage(img, logoUrl, "logo")
   return img
 }
 
@@ -31,7 +31,17 @@ function buildLogoTile(logoUrl: string | null | undefined, widthClass: string): 
   tile.className =
     `relative isolate aspect-video shrink-0 overflow-hidden rounded-xl bg-black/40 tv-edge-mask ${widthClass}`
   if (!logoUrl) return tile
-  tile.appendChild(buildImg(logoUrl, "absolute inset-0 h-full w-full scale-125 object-cover opacity-25 blur-xl saturate-150"))
+  const isFullTier = effectTier() === "full"
+  tile.appendChild(
+    buildImg(
+      logoUrl,
+      heavyBlurClass(
+        "absolute inset-0 h-full w-full scale-125 object-cover opacity-25 blur-xl saturate-150",
+        "absolute inset-0 bg-surface-2"
+      ),
+      isFullTier
+    )
+  )
   tile.appendChild(buildImg(logoUrl, "absolute inset-0 m-auto max-h-[75%] max-w-[75%] object-contain"))
   return tile
 }
@@ -178,7 +188,10 @@ function buildBackdropLayer(): HTMLSpanElement {
   img.alt = ""
   img.decoding = "async"
   img.referrerPolicy = "no-referrer"
-  img.className = "h-full w-full scale-125 object-cover opacity-35 blur-3xl saturate-150"
+  img.className = heavyBlurClass(
+    "h-full w-full scale-125 object-cover opacity-35 blur-3xl saturate-150",
+    "h-full w-full bg-surface-2"
+  )
   layer.appendChild(img)
   return layer
 }
@@ -260,6 +273,8 @@ export interface GuidePanelCallbacks {
   onToggleFavorite(channel: LiveChannel): void
   onReplay(channel: LiveChannel, programme: Programme, rawStart: number, rawStop: number): void
   onDetails(channel: LiveChannel, programme: Programme): void
+  /** True while a channel-list nav key is held - suppresses the dip animation and backdrop crossfade. */
+  isNavKeyHeld?(): boolean
 }
 
 export interface GuidePanelUpdate {
@@ -323,6 +338,7 @@ export function createGuidePanel(container: HTMLElement, callbacks: GuidePanelCa
   content.appendChild(programmeBlock)
 
   let activeChannel: LiveChannel | null = null
+  let lastFavorite: boolean | null = null
   favButton.addEventListener("click", (event) => {
     event.stopPropagation()
     if (activeChannel) callbacks.onToggleFavorite(activeChannel)
@@ -403,6 +419,8 @@ export function createGuidePanel(container: HTMLElement, callbacks: GuidePanelCa
   async function swapBackdrop(logoUrl: string | null | undefined, animate: boolean): Promise<void> {
     if (logoUrl === backdropUrl) return
     backdropUrl = logoUrl
+    // Lite tier renders the flat bg-surface-2 panel baked into buildBackdropLayer; no image to fetch.
+    if (effectTier() !== "full") return
     const myGeneration = ++backdropGeneration
     const nextImg = inactiveLayer.querySelector("img") as HTMLImageElement
 
@@ -450,7 +468,10 @@ export function createGuidePanel(container: HTMLElement, callbacks: GuidePanelCa
     favButton.classList.toggle("text-accent", input.favorite)
     favButton.classList.toggle("text-fg-3", !input.favorite)
     favButton.classList.toggle("hover:text-fg", !input.favorite)
-    favButton.innerHTML = `<span class="inline-flex text-base">${input.favorite ? STAR_FILLED : STAR_OUTLINE}</span>`
+    if (input.favorite !== lastFavorite) {
+      favButton.innerHTML = `<span class="inline-flex text-base">${input.favorite ? STAR_FILLED : STAR_OUTLINE}</span>`
+      lastFavorite = input.favorite
+    }
     if (logoImg) {
       releaseCachedImages(logoImg)
       if (input.channel.logo) mountCachedImage(logoImg, input.channel.logo, "logo")
@@ -476,10 +497,11 @@ export function createGuidePanel(container: HTMLElement, callbacks: GuidePanelCa
 
   function update(input: GuidePanelUpdate): void {
     activeChannel = input.channel
-    void swapBackdrop(input.channel.logo, input.animate)
+    const keyHeld = callbacks.isNavKeyHeld?.() ?? false
+    void swapBackdrop(input.channel.logo, input.animate && !keyHeld)
     applyIdentity(input)
 
-    if (!input.animate || !motionAllowed()) {
+    if (!input.animate || !motionAllowed() || keyHeld) {
       applyProgramme(input)
       return
     }

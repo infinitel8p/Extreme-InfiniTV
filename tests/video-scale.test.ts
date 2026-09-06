@@ -1,5 +1,13 @@
-import { describe, it, expect } from "vitest"
-import { normalizeVideoScale, computeForcedRatioBox } from "../src/scripts/lib/video-scale"
+/**
+ * @vitest-environment jsdom
+ */
+import { describe, it, expect, vi } from "vitest"
+import {
+  normalizeVideoScale,
+  computeForcedRatioBox,
+  mpvPropertiesForVideoScale,
+  createVideoScaleController,
+} from "../src/scripts/lib/video-scale"
 
 describe("normalizeVideoScale", () => {
   it("passes through every valid mode", () => {
@@ -87,5 +95,74 @@ describe("computeForcedRatioBox", () => {
       left: 0,
       top: 0,
     })
+  })
+})
+
+describe("mpvPropertiesForVideoScale", () => {
+  it("resets every property for fit", () => {
+    expect(mpvPropertiesForVideoScale("fit")).toEqual({
+      panscan: 0,
+      videoUnscaled: false,
+      videoAspectOverride: "no",
+    })
+  })
+
+  it("crops via panscan for fill and zoom", () => {
+    expect(mpvPropertiesForVideoScale("fill")).toEqual({
+      panscan: 1,
+      videoUnscaled: false,
+      videoAspectOverride: "no",
+    })
+    expect(mpvPropertiesForVideoScale("zoom")).toEqual({
+      panscan: 1,
+      videoUnscaled: false,
+      videoAspectOverride: "no",
+    })
+  })
+
+  it("forces the aspect ratio for 16:9 and 4:3 without cropping", () => {
+    expect(mpvPropertiesForVideoScale("16:9")).toEqual({
+      panscan: 0,
+      videoUnscaled: false,
+      videoAspectOverride: "16:9",
+    })
+    expect(mpvPropertiesForVideoScale("4:3")).toEqual({
+      panscan: 0,
+      videoUnscaled: false,
+      videoAspectOverride: "4:3",
+    })
+  })
+})
+
+describe("createVideoScaleController with a getHandle callback", () => {
+  it("drives mpv properties via setProperty instead of the stylesheet attribute", () => {
+    const container = document.createElement("div")
+    const setProperty = vi.fn().mockResolvedValue(undefined)
+    const controller = createVideoScaleController(() => container, () => ({ setProperty }))
+
+    controller.apply("zoom")
+
+    expect(setProperty).toHaveBeenCalledWith("panscan", 1)
+    expect(setProperty).toHaveBeenCalledWith("video-unscaled", false)
+    expect(setProperty).toHaveBeenCalledWith("video-aspect-override", "no")
+    expect(container.hasAttribute("data-xt-video-scale")).toBe(false)
+  })
+
+  it("falls back to the stylesheet attribute when the handle has no setProperty", () => {
+    const container = document.createElement("div")
+    const controller = createVideoScaleController(() => container, () => ({}))
+
+    controller.apply("fill")
+
+    expect(container.getAttribute("data-xt-video-scale")).toBe("fill")
+  })
+
+  it("falls back to the stylesheet attribute when getHandle is omitted", () => {
+    const container = document.createElement("div")
+    const controller = createVideoScaleController(() => container)
+
+    controller.apply("zoom")
+
+    expect(container.getAttribute("data-xt-video-scale")).toBe("zoom")
   })
 })

@@ -20,6 +20,9 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -28,8 +31,10 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -39,6 +44,8 @@ import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
@@ -64,6 +71,7 @@ class VideoActivity : AppCompatActivity() {
     const val EXTRA_URL = "url"
     const val EXTRA_UA = "ua"
     const val EXTRA_REFERER = "referer"
+    const val EXTRA_DNS = "dns"
     const val EXTRA_TITLE = "title"
     const val EXTRA_POSTER = "posterUrl"
     const val EXTRA_START_MS = "startMs"
@@ -113,6 +121,7 @@ class VideoActivity : AppCompatActivity() {
   private var contentKey: String = ""
   private var defaultUa: String = ""
   private var defaultReferer: String = ""
+  private var defaultDns: String = ""
   private var initialTitle: String = ""
   private var posterUrl: String = ""
   private var resumeMs: Long = 0L
@@ -161,6 +170,7 @@ class VideoActivity : AppCompatActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     setContentView(R.layout.activity_video)
+    applyImmersiveBars()
 
     playerView = findViewById(R.id.player_view)
     // A focused PlayerView swallows D-pad into media3's show-controller path and derails
@@ -335,6 +345,7 @@ class VideoActivity : AppCompatActivity() {
     contentKey = intent.getStringExtra(EXTRA_CONTENT_KEY) ?: ""
     defaultUa = intent.getStringExtra(EXTRA_UA) ?: ""
     defaultReferer = intent.getStringExtra(EXTRA_REFERER) ?: ""
+    defaultDns = intent.getStringExtra(EXTRA_DNS) ?: ""
     initialTitle = intent.getStringExtra(EXTRA_TITLE) ?: ""
     posterUrl = intent.getStringExtra(EXTRA_POSTER) ?: ""
     resumeMs = intent.getLongExtra(EXTRA_START_MS, 0L)
@@ -344,6 +355,23 @@ class VideoActivity : AppCompatActivity() {
     if (mode == MODE_LIVE) {
       val json = NativePlayerPayload.takeChannels() ?: "[]"
       channels = ChannelLite.parseList(json)
+      // A non-empty payload that parsed to zero channels means ChannelLite.parseList's own
+      // catch swallowed a malformed JSON blob - surface it instead of silently starting
+      // native playback with an empty channel list.
+      if (channels.isEmpty() && json != "[]") {
+        Log.w(TAG, "channel list parse yielded zero channels for a non-empty payload")
+        EventQueue.append(
+          this,
+          "xt:android-native-error",
+          JSONObject().apply {
+            put("contentKey", contentKey)
+            put("code", "CHANNEL_LIST_PARSE_FAILED")
+            put("message", "native channel list parse failed or was empty")
+          }
+        )
+        finish()
+        return
+      }
       val initialId = intent.getStringExtra(EXTRA_INITIAL_CHANNEL_ID)
       currentChannelIndex = channels.indexOfFirst { it.id == initialId }
         .takeIf { it >= 0 } ?: 0
@@ -500,6 +528,18 @@ class VideoActivity : AppCompatActivity() {
     }
   }
 
+  // windowFullscreen alone is ignored by HyperOS; hide at runtime as well.
+  private fun applyImmersiveBars() {
+    val controller = WindowCompat.getInsetsController(window, window.decorView)
+    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    controller.hide(WindowInsetsCompat.Type.systemBars())
+  }
+
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    if (hasFocus) applyImmersiveBars()
+  }
+
   // ---------------------------------------------------------------------
   // Player setup
   // ---------------------------------------------------------------------
@@ -507,7 +547,7 @@ class VideoActivity : AppCompatActivity() {
   private fun initializePlayer() {
     val view = playerView ?: return
     val player = ExoPlayer.Builder(this)
-      .setMediaSourceFactory(buildMediaSourceFactory(defaultUa, defaultReferer))
+      .setMediaSourceFactory(buildMediaSourceFactory(defaultUa, defaultReferer, defaultDns))
       .build()
     exoPlayer = player
     view.player = player
@@ -617,14 +657,27 @@ class VideoActivity : AppCompatActivity() {
     return 0
   }
 
-  private fun buildMediaSourceFactory(ua: String, referer: String): MediaSource.Factory {
-    val httpFactory = DefaultHttpDataSource.Factory()
-      .setAllowCrossProtocolRedirects(true)
-    if (ua.isNotBlank()) httpFactory.setUserAgent(ua)
-    if (referer.isNotBlank()) {
-      httpFactory.setDefaultRequestProperties(mapOf("Referer" to referer))
+  private fun buildMediaSourceFactory(ua: String, referer: String, dns: String): MediaSource.Factory {
+    val dataSourceFactory: DataSource.Factory = if (dns.isBlank()) {
+      val httpFactory = DefaultHttpDataSource.Factory()
+        .setAllowCrossProtocolRedirects(true)
+      if (ua.isNotBlank()) httpFactory.setUserAgent(ua)
+      if (referer.isNotBlank()) httpFactory.setDefaultRequestProperties(mapOf("Referer" to referer))
+      httpFactory
+    } else {
+      // OkHttp follows cross-protocol redirects by default, matching DefaultHttpDataSource above.
+      val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .dns(CustomDns.build(dns))
+        .build()
+      val okHttpFactory = OkHttpDataSource.Factory(client)
+      if (ua.isNotBlank()) okHttpFactory.setUserAgent(ua)
+      if (referer.isNotBlank()) okHttpFactory.setDefaultRequestProperties(mapOf("Referer" to referer))
+      okHttpFactory
     }
-    return DefaultMediaSourceFactory(this).setDataSourceFactory(httpFactory)
+    return DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory)
   }
 
   private fun buildMediaItem(url: String, title: String, poster: String): MediaItem {
@@ -804,7 +857,7 @@ class VideoActivity : AppCompatActivity() {
     val ua = channel.ua.ifBlank { defaultUa }
     val ref = channel.referer.ifBlank { defaultReferer }
     try {
-      val factory = buildMediaSourceFactory(ua, ref)
+      val factory = buildMediaSourceFactory(ua, ref, defaultDns)
       val item = buildMediaItem(channel.streamUrl, channel.name, channel.logo)
       val src = factory.createMediaSource(item)
       player.setMediaSource(src)
@@ -931,6 +984,7 @@ class VideoActivity : AppCompatActivity() {
       hideChannelOverlay()
     } else {
       controls.useController = true
+      applyImmersiveBars()
     }
   }
 }
@@ -995,6 +1049,10 @@ object NativePlayerPayload {
     val payload = pendingChannelsJson
     pendingChannelsJson = null
     return payload
+  }
+
+  fun clearChannels() {
+    pendingChannelsJson = null
   }
 }
 

@@ -3,9 +3,12 @@ layout: ../layouts/DocsLayout.astro
 title: "Custom playlists"
 description: "Build your own channel list from channels across your playlists, and pull streams straight from web pages."
 lede: "Pick your favorite channels out of every playlist you own, mix in direct stream links, and keep them all in one list you control."
+icon: "playlist"
+cardOrder: 2
 ---
 
 import Callout from "../components/Callout.astro"
+import Shot from "../components/Shot.astro"
 
 ## What a custom playlist is
 
@@ -18,6 +21,17 @@ Once it exists, a custom playlist behaves like any other playlist: switch to it 
 ## Create one
 
 Open **Settings > Playlists** and pick **New custom playlist** to open the editor. Once it exists, the **Edit** action on its row reopens the editor any time you want to keep working on it.
+
+<Shot
+  src="Desktop/settings-playlists"
+  alt="The Playlists card in Settings with the New custom playlist action below the playlist list"
+  caption="The Playlists card in Settings, with New custom playlist below your existing playlists."
+  zoom="#settings-playlists"
+  markers={[
+    { at: "#settings-new-custom-playlist", note: "Creates an empty custom playlist and opens the editor." },
+    { at: "#settings-playlists-list", note: "The playlists you can pull channels from. A custom playlist references these rather than copying them, so refreshing a source keeps your curation intact." },
+  ]}
+/>
 
 <Callout type="note">
   The editor is built for desktop and tablet first. A custom playlist plays fine on a TV like any other playlist, but building one is much easier with a mouse or touch than with a remote.

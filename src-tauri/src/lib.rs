@@ -7,6 +7,8 @@ mod compositing;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod discord;
 
+mod dns_proxy;
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod external_player;
 
@@ -21,6 +23,9 @@ mod http_range;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod matroska;
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod mpv_embed;
 
 mod receiver;
 
@@ -63,6 +68,13 @@ fn log_line_prefix(
     )
 }
 
+// Rust crates stay at Info; webview lines (target "webview" or "webview:<location>") also pass when the
+// frontend's verbose logging is on, since fern's level_for only splits targets on "::" and can't scope to it.
+#[cfg(not(target_os = "ios"))]
+fn is_loggable(metadata: &log::Metadata) -> bool {
+    metadata.level() <= log::Level::Info || metadata.target().starts_with(tauri_plugin_log::WEBVIEW_TARGET)
+}
+
 // The Stdout target also covers Android release builds; tauri-plugin-log routes it to logcat there, not just the debug-only terminal.
 #[cfg(not(target_os = "ios"))]
 fn build_log_plugin() -> tauri_plugin_log::Builder {
@@ -79,29 +91,29 @@ fn build_log_plugin() -> tauri_plugin_log::Builder {
                 log_line_prefix(&chrono::Utc::now().with_timezone(&offset), record.target(), record.level());
             out.finish(format_args!("{prefix}{message}"))
         })
-        .level(log::LevelFilter::Info)
+        .level(log::LevelFilter::Debug)
         .max_file_size(50_000_000)
         .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
         .clear_targets()
-        .target(tauri_plugin_log::Target::new(
-            tauri_plugin_log::TargetKind::LogDir {
+        .target(
+            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                 file_name: Some(format!("app-{day}")),
-            },
-        ));
+            })
+            .filter(is_loggable),
+        );
     if cfg!(debug_assertions) || cfg!(target_os = "android") {
-        log_builder = log_builder.target(tauri_plugin_log::Target::new(
-            tauri_plugin_log::TargetKind::Stdout,
-        ));
+        log_builder = log_builder.target(
+            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout).filter(is_loggable),
+        );
     }
     log_builder
 }
 
-// KeepSome only prunes the active day-stamped file's prefix, never prior days, and Android lacks desktop's manual "Open log folder" cleanup.
-#[cfg(target_os = "android")]
+// Verbose logging can grow the log folder quickly, and KeepSome only prunes the active day-stamped
+// file's prefix, never prior days, so age-based pruning removes anything older than this instead.
 const LOG_RETENTION_DAYS: u64 = 14;
 
-#[cfg(target_os = "android")]
-fn prune_old_android_logs(app: &tauri::App) {
+fn prune_old_logs(app: &tauri::App) {
     use tauri::Manager;
 
     let log_dir = match app.path().app_log_dir() {
@@ -215,7 +227,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(warmup::WarmupState::default())
-        .manage(receiver::ReceiverState::default());
+        .manage(receiver::ReceiverState::default())
+        .manage(dns_proxy::DnsProxyState::default());
 
     #[cfg(not(target_os = "ios"))]
     let builder = builder.plugin(build_log_plugin().build());
@@ -236,10 +249,24 @@ pub fn run() {
         .manage(audio_proxy::AudioProxyState::default())
         .manage(discord::RpcState::default())
         .manage(external_player::ExternalPlayerState::default())
+        .manage(mpv_embed::MpvEmbedState::default())
         .manage(updater::PendingUpdateState::default())
         .manage(sniffer::SnifferState::default())
         .manage(vod_audio_proxy::VodAudioProxyState::default())
         .manage(vod_proxy::VodProxyState::default())
+        .on_page_load(|webview, payload| {
+            // The frontend's unload-time teardown invoke() dies with the discarded document.
+            if payload.event() == tauri::webview::PageLoadEvent::Started && webview.label() == "main" {
+                use tauri::Manager;
+                mpv_embed::on_main_page_navigation(webview.app_handle());
+            }
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Resized(_)) {
+                use tauri::Manager;
+                mpv_embed::on_main_window_resized(window.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             audio_proxy::audio_transcode_available,
             audio_proxy::register_audio_transcode,
@@ -249,6 +276,9 @@ pub fn run() {
             discord::discord_set_activity,
             discord::discord_clear,
             discord::discord_disconnect,
+            dns_proxy::dns_proxy_register,
+            dns_proxy::dns_proxy_unregister,
+            dns_proxy::dns_resolve_test,
             external_player::launch_external_player,
             external_player::stop_external_player,
             external_player::sandbox_runtime,
@@ -257,6 +287,21 @@ pub fn run() {
             firewall::receiver_firewall_allow,
             hevc_extension::install_appx_package,
             hevc_extension::is_store_build,
+            mpv_embed::mpv_embed_available,
+            mpv_embed::mpv_embed_start,
+            mpv_embed::mpv_embed_load,
+            mpv_embed::mpv_embed_command,
+            mpv_embed::mpv_embed_set_property,
+            mpv_embed::mpv_embed_get_property,
+            mpv_embed::mpv_embed_set_bounds,
+            mpv_embed::mpv_embed_set_visible,
+            mpv_embed::mpv_embed_stop,
+            mpv_embed::mpv_embed_shutdown,
+            mpv_embed::mpv_embed_status,
+            mpv_embed::mpv_embed_pip_enter,
+            mpv_embed::mpv_embed_pip_exit,
+            mpv_embed::mpv_embed_window_fullscreen,
+            mpv_embed::mpv_embed_screenshot,
             receiver::receiver_start,
             receiver::receiver_stop,
             receiver::receiver_status,
@@ -287,6 +332,7 @@ pub fn run() {
             warmup::warmup_cancel,
             warmup::warmup_ack,
             warmup::warmup_read_staged,
+            warmup::warmup_read_staged_bytes,
         ]);
 
     #[cfg(target_os = "android")]
@@ -294,6 +340,9 @@ pub fn run() {
 
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        dns_proxy::dns_proxy_register,
+        dns_proxy::dns_proxy_unregister,
+        dns_proxy::dns_resolve_test,
         receiver::receiver_start,
         receiver::receiver_stop,
         receiver::receiver_status,
@@ -310,14 +359,14 @@ pub fn run() {
         warmup::warmup_cancel,
         warmup::warmup_ack,
         warmup::warmup_read_staged,
+        warmup::warmup_read_staged_bytes,
     ]);
 
     let app = builder
         .setup(|app| {
             install_panic_hook();
             log_session_banner(app);
-            #[cfg(target_os = "android")]
-            prune_old_android_logs(app);
+            prune_old_logs(app);
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             external_player::sweep_orphan_mpv_sockets();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -352,6 +401,7 @@ pub fn run() {
             use tauri::Manager;
             audio_proxy::shutdown(&_app_handle.state::<audio_proxy::AudioProxyState>());
             vod_audio_proxy::shutdown(&_app_handle.state::<vod_audio_proxy::VodAudioProxyState>());
+            mpv_embed::shutdown(_app_handle, &_app_handle.state::<mpv_embed::MpvEmbedState>());
         }
         if let tauri::RunEvent::Exit = _event {
             use tauri::Manager;

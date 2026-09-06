@@ -6,6 +6,7 @@ import {
   makeNetLogEntry,
   pushWithCapacity,
   shouldRecordKind,
+  formatNetLogLine,
   NET_LOG_CAPACITY,
   NET_LOG_EVENT,
 } from "../src/scripts/lib/net-log"
@@ -196,6 +197,36 @@ describe("shouldRecordKind", () => {
   })
 })
 
+describe("formatNetLogLine", () => {
+  it("formats an ok entry as kind method status duration transport url", () => {
+    const entry = makeNetLogEntry({ method: "get", url: "https://x.test/a", kind: "api", transport: "tauri", status: 200 }, 1)
+    expect(formatNetLogLine(entry)).toBe("api GET 200 0ms tauri https://x.test/a")
+  })
+
+  it("appends error= for an error entry", () => {
+    const entry = makeNetLogEntry({ url: "https://x.test/a", error: new Error("boom") }, 1)
+    expect(formatNetLogLine(entry)).toBe("other GET - 0ms native https://x.test/a error=boom")
+  })
+
+  it("appends outcome=aborted for an aborted entry", () => {
+    const entry = makeNetLogEntry({ url: "https://x.test/a", outcome: "aborted" }, 1)
+    expect(formatNetLogLine(entry)).toBe("other GET - 0ms native https://x.test/a outcome=aborted")
+  })
+
+  it("prints - for a null status", () => {
+    const entry = makeNetLogEntry({ url: "https://x.test/a" }, 1)
+    expect(formatNetLogLine(entry)).toContain(" - ")
+  })
+
+  it("redacts credentials from the url", () => {
+    const entry = makeNetLogEntry({ url: "https://x.test/live/alice/hunter2/1.m3u8", status: 200 }, 1)
+    const line = formatNetLogLine(entry)
+    expect(line).not.toContain("alice")
+    expect(line).not.toContain("hunter2")
+    expect(line).toContain("/live/***/***/1.m3u8")
+  })
+})
+
 describe("network log store", () => {
   beforeEach(() => {
     vi.resetModules()
@@ -260,6 +291,33 @@ describe("network log store", () => {
     setNetLogIncludeImages(true)
     recordNetLog({ url: "https://x.test/logo.png", kind: "image", status: 200 })
     expect(getNetworkLog().entries.length).toBe(1)
+  })
+
+  it("mirrors a debug line to a log sink for kind api when verbose logging is on", async () => {
+    const { setVerboseLogging, addLogSink } = await import("../src/scripts/lib/log")
+    const { recordNetLog } = await import("../src/scripts/lib/net-log")
+    setVerboseLogging(true)
+    const sink = vi.fn()
+    const detach = addLogSink(sink)
+    recordNetLog({ url: "https://x.test/api", kind: "api", status: 200 })
+    detach()
+    setVerboseLogging(false)
+    expect(sink).toHaveBeenCalledTimes(1)
+    expect(sink.mock.calls[0][0]).toBe("debug")
+    expect(sink.mock.calls[0][1]).toContain("api GET 200")
+  })
+
+  it("does not mirror a kind image entry when include-images is off, even with verbose logging on", async () => {
+    const { setVerboseLogging, addLogSink } = await import("../src/scripts/lib/log")
+    const { recordNetLog, getNetLogIncludeImages } = await import("../src/scripts/lib/net-log")
+    expect(getNetLogIncludeImages()).toBe(false)
+    setVerboseLogging(true)
+    const sink = vi.fn()
+    const detach = addLogSink(sink)
+    recordNetLog({ url: "https://x.test/logo.png", kind: "image", status: 200 })
+    detach()
+    setVerboseLogging(false)
+    expect(sink).not.toHaveBeenCalled()
   })
 
   it("persists the include-images preference across module reloads", async () => {

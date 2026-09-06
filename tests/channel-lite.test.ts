@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   serializeChannelsForActivity,
   serializeChannelsJson,
+  sliceSiblingWindow,
 } from "@/scripts/lib/channel-lite.js"
 
 const fixedNow = Date.UTC(2026, 4, 17, 12, 0, 0)
@@ -86,6 +87,43 @@ describe("serializeChannelsForActivity", () => {
       { programmes, atMs: fixedNow },
     )
     expect(out[0].nowProgramme).toBe("")
+  })
+})
+
+describe("sliceSiblingWindow", () => {
+  const channels = Array.from({ length: 500 }, (_, index) => index)
+
+  it("returns everything when the list is smaller than the window", () => {
+    expect(sliceSiblingWindow([1, 2, 3], 1, 100)).toEqual([1, 2, 3])
+  })
+
+  it("centers the window on the current index", () => {
+    const windowed = sliceSiblingWindow(channels, 250, 100)
+    expect(windowed).toHaveLength(201)
+    expect(windowed[0]).toBe(150)
+    expect(windowed[windowed.length - 1]).toBe(350)
+  })
+
+  it("clamps the window at the start of the list", () => {
+    const windowed = sliceSiblingWindow(channels, 0, 100)
+    expect(windowed[0]).toBe(0)
+    expect(windowed).toHaveLength(101)
+  })
+
+  it("clamps the window at the end of the list", () => {
+    const windowed = sliceSiblingWindow(channels, 499, 100)
+    expect(windowed[windowed.length - 1]).toBe(499)
+    expect(windowed).toHaveLength(101)
+  })
+
+  it("falls back to the leading window when the index is out of range", () => {
+    const windowed = sliceSiblingWindow(channels, -1, 100)
+    expect(windowed[0]).toBe(0)
+    expect(windowed).toHaveLength(201)
+  })
+
+  it("returns an empty array for an empty list", () => {
+    expect(sliceSiblingWindow([], 0, 100)).toEqual([])
   })
 })
 

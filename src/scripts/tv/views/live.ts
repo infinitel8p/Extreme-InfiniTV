@@ -18,7 +18,9 @@ import {
   getCategorySort,
   getViewSort,
 } from "@/scripts/lib/preferences.js"
-import { buildCastChannelGroups, searchCastChannels, type CastChannelGroup } from "@/scripts/lib/tv-cast-channel-list"
+import { buildCastChannelGroups, type CastChannelGroup } from "@/scripts/lib/tv-cast-channel-list"
+import { searchCatalog } from "@/scripts/tv/catalog-filter-client"
+import { sliceSiblingWindow, NATIVE_SIBLING_WINDOW_RADIUS } from "@/scripts/lib/channel-lite.ts"
 import {
   getProgrammesSync,
   loadProgrammes,
@@ -58,6 +60,7 @@ import {
 } from "@/scripts/tv/ui/live-row"
 
 const SEARCH_DEBOUNCE_MS = 140
+const SEARCH_RESULT_CAP = 500
 const GUIDE_DEBOUNCE_MS = 60
 const TICK_INTERVAL_MS = 60_000
 const EPG_GUARD_TIMEOUT_MS = 4000
@@ -76,6 +79,9 @@ const FAVORITES_CHANGED_EVENT = "xt:favorites-changed"
 const CHANNEL_ROW_FALLBACK_HEIGHT_REM = 4
 const CHANNEL_ROW_GAP_REM = 0.5
 const CHANNEL_ROW_OVERSCAN = 6
+// Matches buildGroupButton's min-h-[3.25rem] button and the track's gap-1.
+const GROUP_ROW_FALLBACK_HEIGHT_REM = 3.25
+const GROUP_ROW_GAP_REM = 0.25
 // Below this the "next" title column would crowd out the channel name; live-row.ts owns the CSS toggle.
 const NEXT_TITLE_MIN_COLUMN_REM = 26
 const GUIDE_DAY_CACHE_MAX = 10
@@ -177,11 +183,16 @@ const view: TvView = {
     const unsubs: Array<() => void> = []
     let refs: Refs | null = null
     let channelRows: VirtualRowsHandle<LiveChannel> | null = null
+    let groupRows: VirtualRowsHandle<CastChannelGroup> | null = null
+    let activeGroupButtonEl: HTMLElement | null = null
     let guidePanel: GuidePanelHandle | null = null
     let tickTimer: ReturnType<typeof setInterval> | null = null
     let epgGuardTimer: ReturnType<typeof setTimeout> | null = null
     const actionSheet: ActionSheetHandle = createActionSheet("tv-live-channel-actions-dialog")
     let longPress: LongPressHandle | null = null
+    // Set from keydown/keyup on the channel list scroller; a held Up/Down/PageUp/PageDown
+    // suppresses the guide's dip animation and backdrop crossfade until the key is released.
+    let navKeyHeld = false
 
     // now-next mode: today's full lineup for the guided channel is fetched on demand
     // (the shared EPG state only carries the airing + upcoming programme) and kept
@@ -250,12 +261,18 @@ const view: TvView = {
 
     function renderGroups(): void {
       if (!refs) return
-      refs.groupsTrack.replaceChildren()
-      const fragment = document.createDocumentFragment()
-      for (const group of state.groups) {
-        fragment.appendChild(buildGroupButton(group, group.key === state.activeGroupKey))
-      }
-      refs.groupsTrack.appendChild(fragment)
+      activeGroupButtonEl = null
+      groupRows?.setItems(state.groups)
+    }
+
+    // Clears only the previously-active button (if still mounted) instead of re-scanning
+    // every group row - the virtual list rebuilds any not-yet-mounted row with the right
+    // state anyway, since buildGroupButton reads state.activeGroupKey live at mount time.
+    function setActiveGroupButton(key: string): void {
+      if (activeGroupButtonEl) activeGroupButtonEl.dataset.active = "false"
+      const nextEl = groupRows?.rowForKey(key) ?? null
+      if (nextEl) nextEl.dataset.active = "true"
+      activeGroupButtonEl = nextEl
     }
 
     function selectGroup(key: string, options: { focus?: boolean } = {}): void {
@@ -265,9 +282,7 @@ const view: TvView = {
       state.activeGroupKey = key
       state.searchQuery = ""
       refs.search.value = ""
-      for (const button of refs.groupsTrack.querySelectorAll<HTMLElement>("[data-group-key]")) {
-        button.dataset.active = button.dataset.groupKey === key ? "true" : "false"
-      }
+      setActiveGroupButton(key)
       renderChannelList(group.channels)
       if (options.focus) channelRows?.focusIndex(0)
     }
@@ -419,8 +434,16 @@ const view: TvView = {
     }
 
     function activateChannel(channel: LiveChannel): void {
+      const currentIndex = state.displayed.findIndex((candidate) => String(candidate.id) === String(channel.id))
+      // state.displayed may have been replaced (e.g. by a search) between the long-press
+      // and the action sheet's Play - fall back to the tuned channel plus the leading
+      // window so it's always present, at index 0.
+      const siblings =
+        currentIndex < 0
+          ? [channel, ...sliceSiblingWindow(state.displayed, currentIndex, NATIVE_SIBLING_WINDOW_RADIUS)]
+          : sliceSiblingWindow(state.displayed, currentIndex, NATIVE_SIBLING_WINDOW_RADIUS)
       void playLive(
-        { playlistId: state.playlistId, channel, siblings: state.displayed },
+        { playlistId: state.playlistId, channel, siblings, groupKey: state.activeGroupKey },
         { onLiveChannelChanged: setPlayingChannel }
       )
     }
@@ -469,7 +492,10 @@ const view: TvView = {
         renderChannelList(group?.channels ?? [])
         return
       }
-      renderChannelList(searchCastChannels(state.channels, query))
+      void searchCatalog(`live:${state.playlistId}`, state.channels, query, SEARCH_RESULT_CAP).then((indexes) => {
+        if (indexes === null || state.searchQuery !== query) return
+        renderChannelList(Array.from(indexes, (index) => state.channels[index]))
+      })
     }, SEARCH_DEBOUNCE_MS)
 
     function onGroupsClick(event: Event): void {
@@ -480,6 +506,16 @@ const view: TvView = {
     function onChannelsFocusIn(event: FocusEvent): void {
       const row = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-channel-key]")
       if (row?.dataset.channelKey) scheduleGuideUpdate(row.dataset.channelKey)
+    }
+
+    const CHANNEL_NAV_KEYS: ReadonlySet<string> = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown"])
+
+    function onChannelsKeyDown(event: KeyboardEvent): void {
+      if (CHANNEL_NAV_KEYS.has(event.key)) navKeyHeld = true
+    }
+
+    function onChannelsKeyUp(event: KeyboardEvent): void {
+      if (CHANNEL_NAV_KEYS.has(event.key)) navKeyHeld = false
     }
 
     function focusChannelRow(channelId: string): void {
@@ -632,10 +668,20 @@ const view: TvView = {
         onRowUnmount: releaseCachedImages,
       })
 
+      groupRows = createVirtualRows<CastChannelGroup>({
+        scroller: refs.groupsScroller,
+        track: refs.groupsTrack,
+        fallbackRowHeightPx: remPx(GROUP_ROW_FALLBACK_HEIGHT_REM) + remPx(GROUP_ROW_GAP_REM),
+        rowGapPx: remPx(GROUP_ROW_GAP_REM),
+        keyOf: (group) => group.key,
+        buildRow: (group) => buildGroupButton(group, group.key === state.activeGroupKey),
+      })
+
       guidePanel = createGuidePanel(refs.guideTrack, {
         onToggleFavorite: toggleChannelFavorite,
         onReplay: onGuideReplay,
         onDetails: onGuideDetails,
+        isNavKeyHeld: () => navKeyHeld,
       })
 
       if (typeof ResizeObserver === "function") {
@@ -657,6 +703,8 @@ const view: TvView = {
         holdMs: LONG_PRESS_HOLD_MS,
       })
       refs.channelsScroller.addEventListener("focusin", onChannelsFocusIn)
+      refs.channelsScroller.addEventListener("keydown", onChannelsKeyDown, true)
+      refs.channelsScroller.addEventListener("keyup", onChannelsKeyUp, true)
       refs.search.addEventListener("input", () => runSearch(refs!.search.value.trim()))
       refs.search.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && refs!.search.value) {
@@ -770,6 +818,7 @@ const view: TvView = {
       shortEpgRowNowNext.clear()
       longPress?.destroy()
       channelRows?.destroy()
+      groupRows?.destroy()
       guidePanel?.destroy()
       document.removeEventListener(EPG_LOADED_EVENT, onEpgLoaded)
       document.removeEventListener(EPG_OFFSET_EVENT, onEpgOffsetChanged)

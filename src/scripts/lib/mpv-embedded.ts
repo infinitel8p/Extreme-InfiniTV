@@ -1,0 +1,1438 @@
+// Frontend client for the embedded mpv Tauri backend (mpv-embed IPC contract). Desktop only.
+
+import { log } from "@/scripts/lib/log.js"
+import { t, getActiveLocale } from "@/scripts/lib/i18n"
+import { toastError, toastSuccess } from "@/scripts/lib/toast.js"
+import { wrapForDnsProxyExternal } from "@/scripts/lib/player-runtime.js"
+import { getMpvStartConfig, getDownloadDir } from "@/scripts/lib/app-settings.js"
+import { mountMpvControls } from "@/scripts/lib/mpv-controls.js"
+import { openMpvTrackDialog } from "@/scripts/lib/mpv-track-dialog.js"
+import { parseMpvAudioTracks, parseMpvSubtitleTracks, isMpvSubtitleActive } from "@/scripts/lib/mpv-tracks.js"
+import { computeMpvSurface } from "@/scripts/lib/mpv-embedded-surface.js"
+import type { MpvSurfaceNativeState, MpvSurfacePlaceholder } from "@/scripts/lib/mpv-embedded-surface.js"
+import type { VjsLikeHandle, PlaybackCodecInfo } from "@/scripts/lib/player-runtime.js"
+import type { EngineEvent, EngineStats } from "@/scripts/lib/player-telemetry.js"
+
+export interface Bounds {
+  x: number
+  y: number
+  width: number
+  height: number
+  radius: number
+}
+
+export interface LoadOptions {
+  userAgent: string | null
+  referer: string | null
+  startSeconds: number | null
+  isLive: boolean
+  networkTimeoutSeconds: number | null
+  mediaTitle: string | null
+}
+
+export interface MpvEmbeddedCreateOptions {
+  userAgent?: string | null
+  referer?: string | null
+  networkTimeoutSeconds?: number | null
+  resumeSeconds?: number
+  videoElement?: HTMLVideoElement | null
+}
+
+export interface MpvProps {
+  pause?: boolean
+  timePos?: number
+  duration?: number
+  coreIdle?: boolean
+  pausedForCache?: boolean
+  seeking?: boolean
+  eofReached?: boolean
+  idleActive?: boolean
+  demuxerCacheDuration?: number
+  videoBitrate?: number
+  hwdecCurrent?: string
+  frameDropCount?: number
+  estimatedVfFps?: number
+  width?: number
+  height?: number
+  videoCodec?: string
+  audioCodecName?: string
+  trackList?: unknown
+  mediaTitle?: string
+  streamRecord?: string
+  cacheRangeStart?: number | null
+  cacheRangeEnd?: number | null
+  subDelay?: number
+  aid?: unknown
+  sid?: unknown
+  speed?: number
+  volume?: number
+  mute?: boolean
+  containerFps?: number
+  decoderFrameDropCount?: number
+  demuxerCacheTime?: number
+  videoFormat?: string
+  audioFormat?: string
+  audioChannelCount?: number
+  pixelFormat?: string
+  fileFormat?: string
+  seekable?: boolean
+}
+
+interface MpvStateEventPayload {
+  sessionId: string
+  props: MpvProps
+}
+
+type MpvEventKind = "file-loaded" | "end-file" | "playback-restart" | "start-file" | "log"
+
+interface MpvEventPayload {
+  sessionId: string
+  kind: MpvEventKind
+  reason?: string | null
+  detail?: string | null
+  /** HTTP status ffmpeg logged, only set alongside an "end-file" kind. */
+  httpStatus?: number | null
+}
+
+interface MpvExitedEventPayload {
+  sessionId: string
+  code: number | null
+  detail?: string | null
+}
+
+interface MpvNativeRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface MpvSurfaceEventPayload {
+  sessionId: string
+  state: MpvSurfaceNativeState
+  bounds: MpvNativeRect | null
+  pip: MpvNativeRect | null
+}
+
+interface MpvEmbedAvailabilityResult {
+  supported: boolean
+  reason: string | null
+  binary: string | null
+}
+
+interface MpvEmbedStartResult {
+  sessionId: string
+  pid: number
+}
+
+// Below this, a resume seek would restart from near-zero rather than actually resuming.
+const RESUME_MIN_SECONDS = 5
+
+// Sentinel dialog item id: never collides with mpv's own numeric track ids.
+const LOAD_SUBTITLE_FILE_ID = "__load-subtitle-file__"
+const SUBTITLE_FILE_EXTENSIONS = ["srt", "ass", "ssa", "vtt", "sub"]
+
+const isTauri =
+  typeof window !== "undefined" &&
+  (!!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__)
+
+const isAndroid =
+  typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent || "")
+
+const mpvEmbeddedPlatformAvailable = isTauri && !isAndroid
+
+let cachedAvailability: Promise<boolean> | null = null
+
+export async function mpvEmbeddedAvailable(): Promise<boolean> {
+  if (!mpvEmbeddedPlatformAvailable) return false
+  if (!cachedAvailability) {
+    cachedAvailability = (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core")
+        const result = (await invoke("mpv_embed_available")) as MpvEmbedAvailabilityResult
+        return !!result?.supported
+      } catch (err) {
+        log.warn("[xt:mpv-embed] mpv_embed_available failed:", err)
+        return false
+      }
+    })()
+  }
+  return cachedAvailability
+}
+
+// Only a trailing "px" unit is trusted; percentages and other units round to no rounding.
+function parseCssRadiusPx(radius: string | number | undefined): number {
+  if (typeof radius === "number") return Number.isFinite(radius) ? radius : 0
+  if (!radius) return 0
+  const match = /^(-?[\d.]+)px$/.exec(radius.trim())
+  if (!match) return 0
+  const parsed = Number(match[1])
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+// Overhang hides the anti-aliased hole edge; the webview is opaque outside it.
+export const NATIVE_BOUNDS_INFLATE_CSS_PX = 1
+
+export function cssRectToPhysicalBounds(
+  rect: { x: number; y: number; width: number; height: number; radius?: string | number },
+  devicePixelRatio: number,
+  inflateCssPx = 0,
+): Bounds {
+  const ratio = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1
+  const radiusCssPx = parseCssRadiusPx(rect.radius)
+  const inflatedRadiusCssPx = inflateCssPx > 0 && radiusCssPx > 0 ? radiusCssPx + inflateCssPx : radiusCssPx
+  return {
+    x: Math.round((rect.x - inflateCssPx) * ratio),
+    y: Math.round((rect.y - inflateCssPx) * ratio),
+    width: Math.round((rect.width + inflateCssPx * 2) * ratio),
+    height: Math.round((rect.height + inflateCssPx * 2) * ratio),
+    radius: Math.round(inflatedRadiusCssPx * ratio),
+  }
+}
+
+export function boundsEqual(left: Bounds | null, right: Bounds | null): boolean {
+  if (left === right) return true
+  if (!left || !right) return false
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height &&
+    left.radius === right.radius
+  )
+}
+
+export interface NativeVideoHoleVars {
+  "--xt-video-x": string
+  "--xt-video-y": string
+  "--xt-video-w": string
+  "--xt-video-h": string
+  "--xt-video-r": string
+}
+
+/** CSS-pixel hole geometry for the transparent webview cutout; see native-video-hole-contract.md. */
+export function cssRectToNativeVideoHoleVars(rect: {
+  x: number
+  y: number
+  width: number
+  height: number
+  radius?: string | number
+}): NativeVideoHoleVars {
+  return {
+    "--xt-video-x": `${rect.x}px`,
+    "--xt-video-y": `${rect.y}px`,
+    "--xt-video-w": `${rect.width}px`,
+    "--xt-video-h": `${rect.height}px`,
+    "--xt-video-r": `${parseCssRadiusPx(rect.radius)}px`,
+  }
+}
+
+export interface BuildLoadOptionsInput {
+  isLive?: boolean
+  timelineOffsetSeconds?: number
+  resumeSeconds?: number
+  userAgent?: string | null
+  referer?: string | null
+  networkTimeoutSeconds?: number | null
+  mediaTitle?: string | null
+}
+
+export function buildLoadOptions(input: BuildLoadOptionsInput): LoadOptions {
+  let startSeconds: number | null = null
+  if (Number.isFinite(input.timelineOffsetSeconds) && (input.timelineOffsetSeconds as number) > 0) {
+    startSeconds = input.timelineOffsetSeconds as number
+  } else if (Number.isFinite(input.resumeSeconds) && (input.resumeSeconds as number) > RESUME_MIN_SECONDS) {
+    startSeconds = input.resumeSeconds as number
+  }
+  return {
+    userAgent: input.userAgent ?? null,
+    referer: input.referer ?? null,
+    startSeconds,
+    isLive: input.isLive !== false,
+    networkTimeoutSeconds:
+      Number.isFinite(input.networkTimeoutSeconds) && (input.networkTimeoutSeconds as number) > 0
+        ? (input.networkTimeoutSeconds as number)
+        : null,
+    mediaTitle: input.mediaTitle?.trim() || null,
+  }
+}
+
+// Xtream providers keep counting the previous connection for ~15-20s after a switch.
+const LIVE_EOF_RELOAD_DELAYS_MS = [1000, 2000, 4000, 8000, 15000]
+
+// The OS window resize on entering/leaving fullscreen lands async, after the page's own re-layout.
+export const FULLSCREEN_SETTLE_DELAYS_MS = [50, 200, 500, 1000]
+
+/** Backoff delay before a live-EOF reload attempt; null once retries are exhausted. */
+export function liveEofReloadDelayMs(attempt: number): number | null {
+  return LIVE_EOF_RELOAD_DELAYS_MS[attempt - 1] ?? null
+}
+
+// A dead channel serves a tiny placeholder file that hits EOF almost immediately; retrying is pointless.
+export const OFFLINE_PLACEHOLDER_WINDOW_MS = 3000
+
+/** Whether an EOF this soon after playback restarted looks like an offline-channel placeholder file. */
+export function isWithinOfflinePlaceholderWindow(isLive: boolean, msSincePlaybackRestart: number | null): boolean {
+  return isLive && msSincePlaybackRestart != null && msSincePlaybackRestart < OFFLINE_PLACEHOLDER_WINDOW_MS
+}
+
+export const LIVE_SEEK_EOF_GRACE_MS = OFFLINE_PLACEHOLDER_WINDOW_MS
+
+/** Whether an EOF this soon after a live seek should be ignored rather than reloaded or classified. */
+export function shouldIgnoreEofAfterLiveSeek(
+  isLive: boolean,
+  msSinceLiveSeek: number | null,
+  graceMs: number,
+): boolean {
+  return isLive && msSinceLiveSeek != null && msSinceLiveSeek < graceMs
+}
+
+const NETWORK_ERROR_PATTERN = /(timed out|connection|refused|resolve|http)/i
+
+/** Prefixes a mpv end-file error detail with `NETWORK:` when it looks connectivity-related. */
+export function classifyMpvNetworkError(detail: string | null): string | null {
+  if (!detail) return detail
+  return NETWORK_ERROR_PATTERN.test(detail) ? `NETWORK:${detail}` : detail
+}
+
+const HTTP_STATUS_PREFIX_PATTERN = /^HTTP_STATUS:(\d{3}):/
+
+/** Reads the status code off a `HTTP_STATUS:<code>:<detail>` prefixed detail. */
+export function parseHttpStatusPrefix(detail: string | null): number | null {
+  if (!detail) return null
+  const match = HTTP_STATUS_PREFIX_PATTERN.exec(detail)
+  if (!match) return null
+  const code = Number(match[1])
+  return Number.isFinite(code) ? code : null
+}
+
+/** Prefixes the HTTP status when logged, else classifies as a network error. */
+export function classifyMpvEndFileError(detail: string | null, httpStatus: number | null | undefined): string | null {
+  if (typeof httpStatus === "number" && httpStatus >= 400 && httpStatus <= 599) {
+    return `HTTP_STATUS:${httpStatus}:${detail ?? ""}`
+  }
+  return classifyMpvNetworkError(detail)
+}
+
+export function clampPlaybackRate(rate: number): number {
+  if (!Number.isFinite(rate)) return 1
+  return Math.min(4, Math.max(0.25, rate))
+}
+
+/** Sums the two dropped-frame counters mpv reports; null when neither is present. */
+export function sumDroppedFrames(frameDropCount?: number, decoderFrameDropCount?: number): number | null {
+  if (typeof frameDropCount !== "number" && typeof decoderFrameDropCount !== "number") return null
+  return (frameDropCount ?? 0) + (decoderFrameDropCount ?? 0)
+}
+
+/** No progress for this long on a live source (and playback already started once) means a reload is due. */
+export const LIVE_STALL_THRESHOLD_MS = 10_000
+
+export interface StallCheckInput {
+  isLive: boolean
+  paused: boolean
+  hasPlaybackRestarted: boolean
+  reloadInFlight: boolean
+  msSinceProgress: number
+  thresholdMs: number
+}
+
+export function shouldReloadForStall(input: StallCheckInput): boolean {
+  if (!input.isLive || input.paused || !input.hasPlaybackRestarted || input.reloadInFlight) return false
+  return input.msSinceProgress >= input.thresholdMs
+}
+
+export interface MpvSubtitleStyle {
+  size: "small" | "normal" | "large" | "xlarge"
+  position: "bottom" | "raised"
+  color: "white" | "yellow"
+}
+
+export const DEFAULT_MPV_SUBTITLE_STYLE: MpvSubtitleStyle = { size: "normal", position: "bottom", color: "white" }
+
+const SUBTITLE_SIZES: MpvSubtitleStyle["size"][] = ["small", "normal", "large", "xlarge"]
+const SUBTITLE_POSITIONS: MpvSubtitleStyle["position"][] = ["bottom", "raised"]
+const SUBTITLE_COLORS: MpvSubtitleStyle["color"][] = ["white", "yellow"]
+
+const SUB_SCALE_BY_SIZE: Record<MpvSubtitleStyle["size"], number> = { small: 0.8, normal: 1, large: 1.25, xlarge: 1.5 }
+const SUB_POS_BY_POSITION: Record<MpvSubtitleStyle["position"], number> = { bottom: 100, raised: 80 }
+const SUB_COLOR_BY_COLOR: Record<MpvSubtitleStyle["color"], string> = { white: "#FFFFFF", yellow: "#FFFF00" }
+
+/** Maps a subtitle style to the mpv properties that render it. */
+export function subtitleStyleToMpvProperties(
+  style: MpvSubtitleStyle,
+): { "sub-scale": number; "sub-pos": number; "sub-color": string } {
+  return {
+    "sub-scale": SUB_SCALE_BY_SIZE[style.size] ?? SUB_SCALE_BY_SIZE.normal,
+    "sub-pos": SUB_POS_BY_POSITION[style.position] ?? SUB_POS_BY_POSITION.bottom,
+    "sub-color": SUB_COLOR_BY_COLOR[style.color] ?? SUB_COLOR_BY_COLOR.white,
+  }
+}
+
+/** Parses a `xt_mpv_sub_style` localStorage value, falling back to defaults for anything invalid. */
+export function parseSubtitleStyle(raw: string | null): MpvSubtitleStyle {
+  if (!raw) return { ...DEFAULT_MPV_SUBTITLE_STYLE }
+  try {
+    const parsed = JSON.parse(raw)
+    return {
+      size: SUBTITLE_SIZES.includes(parsed?.size) ? parsed.size : DEFAULT_MPV_SUBTITLE_STYLE.size,
+      position: SUBTITLE_POSITIONS.includes(parsed?.position) ? parsed.position : DEFAULT_MPV_SUBTITLE_STYLE.position,
+      color: SUBTITLE_COLORS.includes(parsed?.color) ? parsed.color : DEFAULT_MPV_SUBTITLE_STYLE.color,
+    }
+  } catch {
+    return { ...DEFAULT_MPV_SUBTITLE_STYLE }
+  }
+}
+
+export const SUBTITLE_STYLE_STORAGE_KEY = "xt_mpv_sub_style"
+
+const AUDIO_DELAY_LIMIT_SECONDS = 5
+const AUDIO_DELAY_ROUNDING_STEP = 0.05
+
+/** Adjusts an audio-delay offset by a delta, rounded to 0.05s and clamped to +-5s. */
+export function clampAudioDelaySeconds(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  const stepped = Math.round(value / AUDIO_DELAY_ROUNDING_STEP) * AUDIO_DELAY_ROUNDING_STEP
+  const clamped = Math.min(AUDIO_DELAY_LIMIT_SECONDS, Math.max(-AUDIO_DELAY_LIMIT_SECONDS, stepped))
+  return Math.round(clamped * 100) / 100
+}
+
+const RECORDING_NAME_MAX_LENGTH = 80
+const RECORDING_NAME_UNSAFE_CHARS = /[\\/:*?"<>|]/g
+
+function formatRecordingTimestamp(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0")
+  const datePart = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+  const timePart = `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  return `${datePart}-${timePart}`
+}
+
+/** Builds a filesystem-safe recording file name from a title (or "recording") and a timestamp. */
+export function recordingFileName(title: string | null, date: Date): string {
+  const sanitized = (title || "")
+    .trim()
+    .replace(RECORDING_NAME_UNSAFE_CHARS, "")
+    .replace(/\s+/g, "-")
+    .slice(0, RECORDING_NAME_MAX_LENGTH)
+  const base = sanitized || "recording"
+  return `${base}-${formatRecordingTimestamp(date)}.ts`
+}
+
+/** Synthetic DOM-ish event names to fire for a props transition (prop-derived events only). */
+export function deriveEvents(previousProps: MpvProps | null, nextProps: MpvProps): string[] {
+  const previous = previousProps ?? {}
+  const events: string[] = []
+
+  if ((!previous.pausedForCache && nextProps.pausedForCache) || (!previous.seeking && nextProps.seeking)) {
+    events.push("waiting")
+  }
+  if (previous.coreIdle !== false && nextProps.coreIdle === false && nextProps.pause === false) {
+    events.push("playing")
+  }
+  if (previous.pause === true && nextProps.pause === false) {
+    events.push("play")
+  }
+  if (previous.pause !== true && nextProps.pause === true) {
+    events.push("pause")
+  }
+  if (previous.seeking !== true && nextProps.seeking === true) {
+    events.push("seeking")
+  }
+  if (previous.seeking === true && nextProps.seeking !== true) {
+    events.push("seeked")
+  }
+  if (
+    (typeof nextProps.volume === "number" && nextProps.volume !== previous.volume) ||
+    (typeof nextProps.mute === "boolean" && nextProps.mute !== previous.mute)
+  ) {
+    events.push("volumechange")
+  }
+  if (typeof nextProps.duration === "number" && nextProps.duration !== previous.duration) {
+    events.push("durationchange")
+  }
+  if (typeof nextProps.speed === "number" && nextProps.speed !== previous.speed) {
+    events.push("ratechange")
+  }
+  if (typeof nextProps.timePos === "number" && nextProps.timePos !== previous.timePos) {
+    events.push("timeupdate")
+  }
+  if (
+    (typeof nextProps.cacheRangeStart === "number" && nextProps.cacheRangeStart !== previous.cacheRangeStart) ||
+    (typeof nextProps.cacheRangeEnd === "number" && nextProps.cacheRangeEnd !== previous.cacheRangeEnd)
+  ) {
+    events.push("cachechange")
+  }
+  if (
+    (typeof nextProps.width === "number" || typeof nextProps.height === "number") &&
+    (nextProps.width !== previous.width || nextProps.height !== previous.height)
+  ) {
+    events.push("resize")
+  }
+  if (nextProps.trackList !== previous.trackList) {
+    events.push("trackschanged")
+  }
+  if (typeof nextProps.streamRecord === "string" && nextProps.streamRecord !== previous.streamRecord) {
+    events.push("recordingchange")
+  }
+  return events
+}
+
+type SyntheticEventFn = (...args: unknown[]) => void
+
+function createEmitter() {
+  const listeners = new Map<string, Set<SyntheticEventFn>>()
+  function on(event: string, fn: SyntheticEventFn): void {
+    let set = listeners.get(event)
+    if (!set) {
+      set = new Set()
+      listeners.set(event, set)
+    }
+    set.add(fn)
+  }
+  function off(event: string, fn: SyntheticEventFn): void {
+    listeners.get(event)?.delete(fn)
+  }
+  function one(event: string, fn: SyntheticEventFn): void {
+    const wrapped: SyntheticEventFn = (...args) => {
+      off(event, wrapped)
+      fn(...args)
+    }
+    on(event, wrapped)
+  }
+  function emit(event: string, ...args: unknown[]): void {
+    const set = listeners.get(event)
+    if (!set) return
+    for (const fn of Array.from(set)) {
+      try {
+        fn(...args)
+      } catch (err) {
+        log.warn(`[xt:mpv-embed] "${event}" listener threw:`, err)
+      }
+    }
+  }
+  function clear(): void {
+    listeners.clear()
+  }
+  return { on, off, one, emit, clear }
+}
+
+function readPersistedSubtitleStyle(): string | null {
+  try {
+    return localStorage.getItem(SUBTITLE_STYLE_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function persistSubtitleStyle(style: MpvSubtitleStyle): void {
+  try {
+    localStorage.setItem(SUBTITLE_STYLE_STORAGE_KEY, JSON.stringify(style))
+  } catch (err) {
+    log.warn("[xt:mpv-embed] failed to persist subtitle style:", err)
+  }
+}
+
+function cssRectOf(
+  container: HTMLElement,
+): { x: number; y: number; width: number; height: number; radius: string } {
+  const rect = container.getBoundingClientRect()
+  const style = window.getComputedStyle(container)
+  const radius = style.borderRadius || style.borderTopLeftRadius
+  return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, radius }
+}
+
+function isScrollableAncestor(element: HTMLElement): boolean {
+  const style = window.getComputedStyle(element)
+  return (
+    /^(auto|scroll)$/.test(style.overflow) ||
+    /^(auto|scroll)$/.test(style.overflowX) ||
+    /^(auto|scroll)$/.test(style.overflowY)
+  )
+}
+
+// Scrollable descendants elsewhere on the page (channel list) never move the container.
+function collectScrollableAncestors(container: HTMLElement): HTMLElement[] {
+  const ancestors: HTMLElement[] = []
+  let node = container.parentElement
+  while (node) {
+    if (isScrollableAncestor(node)) ancestors.push(node)
+    node = node.parentElement
+  }
+  return ancestors
+}
+
+export async function createMpvEmbeddedHandle(
+  container: HTMLElement,
+  options: MpvEmbeddedCreateOptions = {},
+): Promise<VjsLikeHandle | null> {
+  // Hide the empty <video> and show the spinner before any await, so there is never a bare box.
+  const videoElement = options.videoElement ?? null
+  const videoWasHidden = videoElement?.hidden ?? false
+  if (videoElement) videoElement.hidden = true
+  container.dataset.mpvEmbedded = "on"
+
+  // A page tune can re-show the <video> after mount; keep it hidden for as long as this handle lives.
+  const videoHiddenObserver =
+    videoElement && typeof MutationObserver !== "undefined" ? new MutationObserver(() => {
+      if (!videoElement.hidden) videoElement.hidden = true
+    }) : null
+  if (videoElement && videoHiddenObserver) {
+    videoHiddenObserver.observe(videoElement, { attributes: true, attributeFilter: ["hidden"] })
+  }
+
+  const loadingIndicator = document.createElement("div")
+  loadingIndicator.className = "mpv-embed-loading"
+  loadingIndicator.dataset.mpvEmbedLoading = ""
+  loadingIndicator.setAttribute("role", "status")
+  loadingIndicator.setAttribute("aria-live", "polite")
+  loadingIndicator.textContent = t("common.loading")
+  container.appendChild(loadingIndicator)
+
+  function abort(): null {
+    videoHiddenObserver?.disconnect()
+    loadingIndicator.remove()
+    if (videoElement) videoElement.hidden = videoWasHidden
+    delete container.dataset.mpvEmbedded
+    return null
+  }
+
+  if (!(await mpvEmbeddedAvailable())) return abort()
+
+  let coreModule: typeof import("@tauri-apps/api/core")
+  let eventModule: typeof import("@tauri-apps/api/event")
+  try {
+    coreModule = await import("@tauri-apps/api/core")
+    eventModule = await import("@tauri-apps/api/event")
+  } catch (err) {
+    log.warn("[xt:mpv-embed] Tauri API import failed:", err)
+    return abort()
+  }
+  const { invoke } = coreModule
+  const { listen } = eventModule
+
+  let sessionId: string
+  try {
+    const initialBounds = cssRectToPhysicalBounds(
+      cssRectOf(container),
+      window.devicePixelRatio || 1,
+      NATIVE_BOUNDS_INFLATE_CSS_PX,
+    )
+    const startResult = (await invoke("mpv_embed_start", {
+      bounds: initialBounds,
+      config: getMpvStartConfig(),
+    })) as MpvEmbedStartResult
+    if (!startResult?.sessionId) throw new Error("mpv_embed_start returned an unexpected shape")
+    sessionId = startResult.sessionId
+  } catch (err) {
+    log.warn("[xt:mpv-embed] mpv_embed_start failed:", err)
+    return abort()
+  }
+
+  const emitter = createEmitter()
+  const engineEventListeners = new Set<(event: EngineEvent) => void>()
+  let props: MpvProps = {}
+  let pauseState = false
+  let localMuted = false
+  let localVolume = 1
+  let lastErrorDetail: string | null = null
+  let disposed = false
+  let currentMediaTitle: string | null = null
+  let currentAudioDelay = 0
+  let currentSubtitleStyle: MpvSubtitleStyle = parseSubtitleStyle(readPersistedSubtitleStyle())
+
+  let hasLoadedSource = false
+  let loadGeneration = 0
+
+  // Native surface state reported by Rust, and the reducer's last decision from it.
+  let nativeState: MpvSurfaceNativeState = "hidden"
+  let revealed = false
+  let holeOpen = false
+  // The loading chip is already in the DOM from creation, above; match that as the starting placeholder.
+  let currentPlaceholder: MpvSurfacePlaceholder = "loading"
+
+  function applyPlaceholder(placeholder: MpvSurfacePlaceholder): void {
+    if (placeholder === currentPlaceholder) return
+    currentPlaceholder = placeholder
+    if (placeholder === "none") {
+      loadingIndicator.remove()
+      return
+    }
+    loadingIndicator.textContent = placeholder === "pip" ? t("player.pip.playingInPip") : t("common.loading")
+    if (!loadingIndicator.isConnected) container.appendChild(loadingIndicator)
+  }
+
+  // Sole choke point for hole/placeholder changes: every trigger below just updates state and calls this.
+  function applySurface(): void {
+    const cssRect = cssRectOf(container)
+    const hasValidBounds = cssRect.width > 0 && cssRect.height > 0
+    const loading = hasLoadedSource && !revealed
+    const result = computeMpvSurface({ nativeState, revealed, pageBounds: hasValidBounds, loading })
+    if (result.holeOpen && !holeOpen) resetBoundsCache()
+    holeOpen = result.holeOpen
+    applyPlaceholder(result.placeholder)
+    if (!holeOpen) clearNativeVideoHole()
+    scheduleBoundsPush()
+  }
+
+  // First-frame reveal intent; mpv_embed_set_visible carries it to the native window.
+  function setRevealed(next: boolean): void {
+    if (revealed === next) return
+    revealed = next
+    log.log("[xt:mpv-embed] revealed", { sessionId, next })
+    void invoke("mpv_embed_set_visible", { sessionId, visible: next }).catch((err: unknown) => {
+      log.warn(`[xt:mpv-embed] mpv_embed_set_visible(${next}) failed:`, err)
+    })
+    applySurface()
+  }
+  emitter.on("playing", () => setRevealed(true))
+
+  function emitEngineEvent(kind: EngineEvent["kind"], detail: string): void {
+    const event: EngineEvent = { kind, at: Date.now(), detail }
+    for (const listener of engineEventListeners) {
+      try {
+        listener(event)
+      } catch (err) {
+        log.warn("[xt:mpv-embed] engine event listener threw:", err)
+      }
+    }
+  }
+
+  function setProperty(name: string, value: unknown): Promise<void> {
+    return invoke<void>("mpv_embed_set_property", { sessionId, name, value }).catch((err: unknown) => {
+      log.warn(`[xt:mpv-embed] mpv_embed_set_property(${name}) failed:`, err)
+    })
+  }
+
+  // --keep-open=yes pauses on live EOF instead of erroring; reload is the recovery.
+  interface LastLoadRequest {
+    url: string
+    loadOptions: LoadOptions
+  }
+  let lastLoadRequest: LastLoadRequest | null = null
+  let srcLoadInFlight = false
+  let liveEofRetryCount = 0
+  let liveEofReloadTimer: ReturnType<typeof setTimeout> | null = null
+  let liveEofStableTimer: ReturnType<typeof setTimeout> | null = null
+  let lastPlaybackRestartAt: number | null = null
+
+  function clearLiveEofTimers(): void {
+    if (liveEofReloadTimer != null) {
+      clearTimeout(liveEofReloadTimer)
+      liveEofReloadTimer = null
+    }
+    if (liveEofStableTimer != null) {
+      clearTimeout(liveEofStableTimer)
+      liveEofStableTimer = null
+    }
+  }
+
+  let lastLiveSeekAt: number | null = null
+  let lastProgressAt = Date.now()
+  let liveStallTimer: ReturnType<typeof setInterval> | null = null
+  let liveStallToastShown = false
+
+  function noteProgress(): void {
+    lastProgressAt = Date.now()
+    liveStallToastShown = false
+  }
+
+  function clearLiveStallWatchdog(): void {
+    if (liveStallTimer != null) {
+      clearInterval(liveStallTimer)
+      liveStallTimer = null
+    }
+    liveStallToastShown = false
+  }
+
+  function tickLiveStallWatchdog(): void {
+    if (disposed) return
+    const stalled = shouldReloadForStall({
+      isLive: lastLoadRequest?.loadOptions.isLive ?? false,
+      paused: pauseState,
+      hasPlaybackRestarted: lastPlaybackRestartAt != null,
+      reloadInFlight: liveEofReloadTimer != null,
+      msSinceProgress: Date.now() - lastProgressAt,
+      thresholdMs: LIVE_STALL_THRESHOLD_MS,
+    })
+    if (!stalled) return
+    log.warn("[xt:mpv-embed] live stream stalled, reloading", { sessionId })
+    emitEngineEvent("recover", "live stall")
+    if (!liveStallToastShown) {
+      liveStallToastShown = true
+      toastError(t("player.mpv.live.stalled"))
+    }
+    if (!attemptLiveEofReload()) {
+      lastErrorDetail = "live stream stalled"
+      emitEngineEvent("engine-error", lastErrorDetail)
+      emitter.emit("error")
+    }
+  }
+
+  function ensureLiveStallWatchdog(): void {
+    if (liveStallTimer != null) return
+    liveStallTimer = setInterval(tickLiveStallWatchdog, 1000)
+  }
+
+  function reloadLastLiveSource(): void {
+    if (!lastLoadRequest || disposed) return
+    pauseState = false
+    void invoke("mpv_embed_load", {
+      sessionId,
+      url: lastLoadRequest.url,
+      options: lastLoadRequest.loadOptions,
+    }).catch((err: unknown) => {
+      log.warn("[xt:mpv-embed] live EOF reload failed:", err)
+    })
+  }
+
+  function attemptLiveEofReload(): boolean {
+    if (!lastLoadRequest?.loadOptions.isLive) return false
+    if (srcLoadInFlight) return false
+    if (liveEofReloadTimer != null) return true
+    const delay = liveEofReloadDelayMs(liveEofRetryCount + 1)
+    if (delay == null) return false
+    liveEofRetryCount += 1
+    emitter.emit("waiting")
+    liveEofReloadTimer = setTimeout(() => {
+      liveEofReloadTimer = null
+      reloadLastLiveSource()
+    }, delay)
+    return true
+  }
+
+  // 30s of stable playback after a reload forgives past retries.
+  function scheduleLiveEofRetryReset(): void {
+    if (liveEofStableTimer != null) clearTimeout(liveEofStableTimer)
+    liveEofStableTimer = setTimeout(() => {
+      liveEofStableTimer = null
+      liveEofRetryCount = 0
+    }, 30_000)
+  }
+
+  function isOfflinePlaceholderEof(): boolean {
+    if (lastLoadRequest?.loadOptions.isLive !== true || lastPlaybackRestartAt == null) return false
+    return isWithinOfflinePlaceholderWindow(true, Date.now() - lastPlaybackRestartAt)
+  }
+
+  // Single funnel for both eof signals (end-file/eof and the keep-open eof-reached flip).
+  function handleEofSignal(): boolean {
+    if (
+      shouldIgnoreEofAfterLiveSeek(
+        lastLoadRequest?.loadOptions.isLive ?? false,
+        lastLiveSeekAt != null ? Date.now() - lastLiveSeekAt : null,
+        LIVE_SEEK_EOF_GRACE_MS,
+      )
+    ) {
+      return true
+    }
+    if (isOfflinePlaceholderEof()) {
+      lastErrorDetail = "OFFLINE_PLACEHOLDER"
+      emitEngineEvent("engine-error", lastErrorDetail)
+      emitter.emit("error")
+      return true
+    }
+    if (attemptLiveEofReload()) return true
+    if (lastLoadRequest?.loadOptions.isLive) {
+      lastErrorDetail = "live stream ended (provider EOF)"
+      emitEngineEvent("engine-error", lastErrorDetail)
+      emitter.emit("error")
+      return true
+    }
+    return false
+  }
+
+  function applyStateUpdate(patch: MpvProps): void {
+    const previous = props
+    props = { ...props, ...patch }
+    if (typeof props.pause === "boolean") pauseState = props.pause
+    if (typeof props.volume === "number") localVolume = props.volume / 100
+    if (typeof props.mute === "boolean") localMuted = props.mute
+    if (
+      (typeof props.timePos === "number" && props.timePos !== previous.timePos) ||
+      (typeof props.cacheRangeEnd === "number" && props.cacheRangeEnd !== previous.cacheRangeEnd)
+    ) {
+      noteProgress()
+    }
+    for (const eventName of deriveEvents(previous, props)) emitter.emit(eventName)
+    // --keep-open=yes means a live EOF never emits end-file, only this property flip.
+    if (previous.eofReached !== true && props.eofReached === true) handleEofSignal()
+  }
+
+  function handleMpvEvent(payload: MpvEventPayload): void {
+    if (payload.sessionId !== sessionId) return
+    if (payload.kind === "file-loaded") {
+      emitter.emit("loadedmetadata")
+      emitter.emit("canplay")
+      // mpv briefly reports the keep-open pause state right after loadfile.
+      if (pauseState === false) void setProperty("pause", false)
+    } else if (payload.kind === "playback-restart") {
+      lastPlaybackRestartAt = Date.now()
+      noteProgress()
+      setRevealed(true)
+      scheduleLiveEofRetryReset()
+      if (props.pause !== true) emitter.emit("playing")
+    } else if (payload.kind === "end-file") {
+      if (payload.reason === "eof") {
+        if (!handleEofSignal()) emitter.emit("ended")
+      } else if (payload.reason === "error") {
+        const detail = payload.detail || payload.reason || null
+        lastErrorDetail = classifyMpvEndFileError(detail, payload.httpStatus)
+        emitter.emit("error")
+        emitEngineEvent("engine-error", payload.detail || "mpv end-file error")
+      }
+    }
+  }
+
+  function handleMpvExited(payload: MpvExitedEventPayload): void {
+    if (payload.sessionId !== sessionId) return
+    lastErrorDetail = payload.detail || (payload.code != null ? `mpv exited (code ${payload.code})` : "mpv exited")
+    emitter.emit("error")
+    emitEngineEvent("fatal", lastErrorDetail)
+  }
+
+  // Rust reports every native transition (and once after start); we only translate it into the surface decision.
+  function handleMpvSurface(payload: MpvSurfaceEventPayload): void {
+    if (payload.sessionId !== sessionId) return
+    const previousState = nativeState
+    nativeState = payload.state
+    if (previousState !== nativeState && (nativeState === "embedded" || nativeState === "fullscreen")) {
+      scheduleFullscreenSettlePushes()
+    }
+    applySurface()
+  }
+
+  const unlistenState = await listen<MpvStateEventPayload>("xt:mpv-state", (event) => {
+    if (event.payload?.sessionId === sessionId) applyStateUpdate(event.payload.props || {})
+  })
+  const unlistenEvent = await listen<MpvEventPayload>("xt:mpv-event", (event) => {
+    if (event.payload) handleMpvEvent(event.payload)
+  })
+  const unlistenExited = await listen<MpvExitedEventPayload>("xt:mpv-exited", (event) => {
+    if (event.payload) handleMpvExited(event.payload)
+  })
+  const unlistenSurface = await listen<MpvSurfaceEventPayload>("xt:mpv-surface", (event) => {
+    if (event.payload) handleMpvSurface(event.payload)
+  })
+
+  // See native-video-hole-contract.md: the webview must cut a transparent hole for the video below it.
+  // Owner stamp: a stale handle's dispose() can't clear a hole it no longer owns.
+  function clearNativeVideoHole(): void {
+    // Resetting on an already-closed hole re-pushes bounds and loops through xt:mpv-surface.
+    if (document.documentElement.getAttribute("data-native-video-owner") === sessionId) {
+      document.documentElement.removeAttribute("data-native-video")
+      document.documentElement.removeAttribute("data-native-video-owner")
+      resetBoundsCache()
+    }
+  }
+  function publishNativeVideoHole(cssRect: { x: number; y: number; width: number; height: number; radius?: string }): void {
+    document.documentElement.setAttribute("data-native-video", "on")
+    document.documentElement.setAttribute("data-native-video-owner", sessionId)
+    const vars = cssRectToNativeVideoHoleVars(cssRect)
+    for (const [property, value] of Object.entries(vars)) {
+      document.documentElement.style.setProperty(property, value)
+    }
+  }
+
+  let rafHandle: number | null = null
+  let lastCssBounds: Bounds | null = null
+  let lastPushedBounds: Bounds | null = null
+  function resetBoundsCache(): void {
+    lastCssBounds = null
+    lastPushedBounds = null
+  }
+  function scheduleBoundsPush(): void {
+    if (disposed || rafHandle != null) return
+    rafHandle = requestAnimationFrame(() => {
+      rafHandle = null
+      pushBounds()
+    })
+  }
+  function pushBounds(): void {
+    if (disposed || !container.isConnected) return
+    const cssRect = cssRectOf(container)
+    if (cssRect.width <= 0 || cssRect.height <= 0) return
+    const cssBounds = cssRectToPhysicalBounds(cssRect, 1)
+    const boundsChanged = !boundsEqual(cssBounds, lastCssBounds)
+    lastCssBounds = cssBounds
+    const holeOwnedByAnotherSession =
+      document.documentElement.getAttribute("data-native-video-owner") !== sessionId
+    if (holeOpen && (boundsChanged || holeOwnedByAnotherSession)) {
+      publishNativeVideoHole(cssRect)
+    }
+    const bounds = cssRectToPhysicalBounds(cssRect, window.devicePixelRatio || 1, NATIVE_BOUNDS_INFLATE_CSS_PX)
+    if (boundsEqual(bounds, lastPushedBounds)) return
+    lastPushedBounds = bounds
+    log.log("[xt:mpv-embed] bounds", { sessionId, bounds })
+    void invoke("mpv_embed_set_bounds", { sessionId, bounds }).catch((err: unknown) => {
+      log.warn("[xt:mpv-embed] mpv_embed_set_bounds failed:", err)
+    })
+  }
+
+  const resizeObserver =
+    typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => scheduleBoundsPush()) : null
+  resizeObserver?.observe(container)
+  window.addEventListener("resize", scheduleBoundsPush)
+  // A synchronous push keeps the native window in the scroll paint, not a frame behind it.
+  function handleScroll(): void {
+    pushBounds()
+    scheduleBoundsPush()
+  }
+  // Scoped to ancestors that can actually move the container, not every scrollable descendant on the page.
+  const scrollableAncestors = collectScrollableAncestors(container)
+  window.addEventListener("scroll", handleScroll, { passive: true })
+  for (const ancestor of scrollableAncestors) ancestor.addEventListener("scroll", handleScroll, { passive: true })
+
+  // dppx media queries fire once per crossing, so the listener must re-register at the new ratio.
+  let dprMediaQuery: MediaQueryList | null = null
+  let dprChangeHandler: (() => void) | null = null
+  function watchDevicePixelRatio(): void {
+    const ratio = window.devicePixelRatio || 1
+    dprMediaQuery = window.matchMedia(`(resolution: ${ratio}dppx)`)
+    dprChangeHandler = () => {
+      dprMediaQuery?.removeEventListener("change", dprChangeHandler as () => void)
+      resetBoundsCache()
+      scheduleBoundsPush()
+      watchDevicePixelRatio()
+    }
+    dprMediaQuery.addEventListener("change", dprChangeHandler)
+  }
+  watchDevicePixelRatio()
+
+  // Sole choke point for stop-on-navigate; a surviving mini-player changes only this.
+  function stopPlaybackOnNavigate(): void {
+    clearLiveEofTimers()
+    setRevealed(false)
+    if (windowFullscreenSet) {
+      windowFullscreenSet = false
+      void setWindowFullscreen(false)
+    }
+    void invoke("mpv_embed_stop", { sessionId }).catch((err: unknown) => {
+      log.warn("[xt:mpv-embed] mpv_embed_stop failed:", err)
+    })
+  }
+  window.addEventListener("pagehide", stopPlaybackOnNavigate)
+  window.addEventListener("beforeunload", stopPlaybackOnNavigate)
+
+  // Element fullscreen only covers the webview; the OS window keeps its own state.
+  let windowFullscreenSet = false
+  async function setWindowFullscreen(fullscreen: boolean): Promise<void> {
+    if (!isTauri) return
+    try {
+      await invoke("mpv_embed_window_fullscreen", { enabled: fullscreen })
+    } catch (err) {
+      log.warn("[xt:mpv-embed] setFullscreen failed:", err)
+    }
+  }
+
+  // The OS window settles asynchronously; keep re-pushing bounds until layout catches up.
+  let fullscreenSettleTimers: ReturnType<typeof setTimeout>[] = []
+  function clearFullscreenSettleTimers(): void {
+    for (const timer of fullscreenSettleTimers) clearTimeout(timer)
+    fullscreenSettleTimers = []
+  }
+  function scheduleFullscreenSettlePushes(): void {
+    clearFullscreenSettleTimers()
+    fullscreenSettleTimers = FULLSCREEN_SETTLE_DELAYS_MS.map((delay) =>
+      setTimeout(() => {
+        resetBoundsCache()
+        pushBounds()
+      }, delay),
+    )
+  }
+
+  // Fullscreen resizes the container without a scroll or resize event on it.
+  function handleFullscreenChange(): void {
+    resetBoundsCache()
+    scheduleBoundsPush()
+    scheduleFullscreenSettlePushes()
+    // Catches Escape, which exits fullscreen without going through our exitFullscreen().
+    if (windowFullscreenSet && document.fullscreenElement !== container) {
+      windowFullscreenSet = false
+      void setWindowFullscreen(false)
+    }
+  }
+  document.addEventListener("fullscreenchange", handleFullscreenChange)
+
+  pushBounds()
+  // Matches every other backend: subtitles start off, mpv's own auto-selection would turn them on.
+  void setProperty("sid", "no")
+
+  function applySubtitleStyleProperties(style: MpvSubtitleStyle): void {
+    for (const [name, value] of Object.entries(subtitleStyleToMpvProperties(style))) void setProperty(name, value)
+  }
+  applySubtitleStyleProperties(currentSubtitleStyle)
+
+  async function openAudioTrackMenu(): Promise<void> {
+    const tracks = parseMpvAudioTracks(props.trackList, props.aid, getActiveLocale())
+    if (!tracks.length) return
+    const picked = await openMpvTrackDialog(
+      "audio",
+      tracks.map((track) => ({ id: track.id, label: track.label, active: track.active })),
+    )
+    if (picked?.id != null) void setProperty("aid", Number(picked.id))
+  }
+
+  async function loadExternalSubtitleFile(): Promise<void> {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog")
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Subtitles", extensions: SUBTITLE_FILE_EXTENSIONS }],
+      })
+      if (!picked || typeof picked !== "string") return
+      await invoke("mpv_embed_command", { sessionId, args: ["sub-add", picked, "select"] })
+    } catch (err) {
+      log.warn("[xt:mpv-embed] sub-add failed:", err)
+      toastError(t("player.subtitles.error"))
+    }
+  }
+
+  async function openSubtitleTrackMenu(): Promise<void> {
+    const tracks = parseMpvSubtitleTracks(props.trackList, props.sid, getActiveLocale())
+    const hasActiveTrack = tracks.some((track) => track.active)
+    const picked = await openMpvTrackDialog("subtitles", [
+      { id: null, label: t("player.subtitles.off"), active: !hasActiveTrack },
+      ...tracks.map((track) => ({ id: String(track.id), label: track.label, active: track.active })),
+      { id: LOAD_SUBTITLE_FILE_ID, label: t("player.subtitles.loadFile"), active: false },
+    ])
+    if (!picked) return
+    if (picked.id === LOAD_SUBTITLE_FILE_ID) {
+      void loadExternalSubtitleFile()
+      return
+    }
+    void setProperty("sid", picked.id === null ? "no" : Number(picked.id))
+  }
+
+  function isLiveSession(): boolean {
+    return lastLoadRequest?.loadOptions.isLive ?? true
+  }
+
+  function computeLiveWindow(): { start: number; end: number; position: number } | null {
+    if (!isLiveSession()) return null
+    const start = props.cacheRangeStart
+    const end = props.cacheRangeEnd
+    if (typeof start !== "number" || typeof end !== "number" || !Number.isFinite(start) || !Number.isFinite(end)) {
+      return null
+    }
+    if (end - start < 2) return null
+    const position = typeof props.timePos === "number" ? props.timePos : end
+    return { start, end, position }
+  }
+
+  function seekAbsolute(target: number): void {
+    void invoke("mpv_embed_command", { sessionId, args: ["seek", String(target), "absolute"] }).catch(
+      (err: unknown) => log.warn("[xt:mpv-embed] seek command failed:", err),
+    )
+  }
+
+  const handle: VjsLikeHandle = {
+    src(opts) {
+      lastErrorDetail = null
+      clearLiveEofTimers()
+      liveEofRetryCount = 0
+      lastPlaybackRestartAt = null
+      lastLiveSeekAt = null
+      noteProgress()
+      currentMediaTitle = opts.title?.trim() || null
+      currentAudioDelay = 0
+      void setProperty("audio-delay", 0)
+      void setProperty("stream-record", "")
+      if (hasLoadedSource) {
+        emitter.emit("emptied")
+        setRevealed(false)
+      }
+      hasLoadedSource = true
+      applySurface()
+      const loadOptions = buildLoadOptions({
+        isLive: opts.isLive,
+        timelineOffsetSeconds: opts.timelineOffsetSeconds,
+        resumeSeconds: options.resumeSeconds,
+        userAgent: options.userAgent,
+        referer: options.referer,
+        networkTimeoutSeconds: options.networkTimeoutSeconds,
+        mediaTitle: opts.title,
+      })
+      if (loadOptions.isLive) ensureLiveStallWatchdog()
+      else clearLiveStallWatchdog()
+      const generation = ++loadGeneration
+      const requestedSrc = opts.src
+      srcLoadInFlight = true
+      void (async () => {
+        // mpv does its own HTTP; only the userinfo-carrying external wrap applies here.
+        const playbackUrl = await wrapForDnsProxyExternal(requestedSrc)
+        if (generation !== loadGeneration) return
+        lastLoadRequest = { url: playbackUrl, loadOptions }
+        await invoke("mpv_embed_load", { sessionId, url: playbackUrl, options: loadOptions })
+      })()
+        .catch((err: unknown) => {
+          log.warn("[xt:mpv-embed] mpv_embed_load failed:", err)
+          lastErrorDetail = err instanceof Error ? err.message : String(err)
+          emitter.emit("error")
+        })
+        .finally(() => {
+          if (generation === loadGeneration) srcLoadInFlight = false
+        })
+    },
+    play() {
+      pauseState = false
+      if ((props.eofReached === true || props.idleActive === true) && lastLoadRequest) {
+        if (lastLoadRequest.loadOptions.isLive) {
+          reloadLastLiveSource()
+          return Promise.resolve()
+        }
+        // A reload here would replay from the remembered resume position, not the start.
+        return invoke("mpv_embed_command", { sessionId, args: ["seek", "0", "absolute"] })
+          .catch((err: unknown) => log.warn("[xt:mpv-embed] restart seek failed:", err))
+          .then(() => setProperty("pause", false))
+      }
+      return setProperty("pause", false)
+    },
+    pause() {
+      pauseState = true
+      void setProperty("pause", true)
+    },
+    paused() {
+      return pauseState
+    },
+    muted(value) {
+      if (value === undefined) return localMuted
+      localMuted = value
+      void setProperty("mute", value)
+    },
+    volume(value) {
+      if (value === undefined) return localVolume
+      localVolume = Math.min(1, Math.max(0, value))
+      void setProperty("volume", Math.round(localVolume * 100))
+      return localVolume
+    },
+    playbackRate(value) {
+      if (value === undefined) return typeof props.speed === "number" ? props.speed : 1
+      const clamped = clampPlaybackRate(value)
+      void setProperty("speed", clamped)
+      return clamped
+    },
+    duration() {
+      return props.duration ?? 0
+    },
+    currentTime(value) {
+      if (value === undefined) return props.timePos ?? 0
+      let target = value
+      const liveWindow = computeLiveWindow()
+      if (liveWindow) {
+        target = Math.min(liveWindow.end, Math.max(liveWindow.start, value))
+        lastLiveSeekAt = Date.now()
+      }
+      seekAbsolute(target)
+      return target
+    },
+    isLive() {
+      return isLiveSession()
+    },
+    liveWindow() {
+      return computeLiveWindow()
+    },
+    behindLiveSeconds() {
+      const liveWindow = computeLiveWindow()
+      if (!liveWindow) return null
+      return Math.max(0, liveWindow.end - liveWindow.position)
+    },
+    seekLive() {
+      const liveWindow = computeLiveWindow()
+      if (!liveWindow) return
+      lastLiveSeekAt = Date.now()
+      seekAbsolute(Math.max(liveWindow.start, liveWindow.end - 0.5))
+      if (pauseState) {
+        pauseState = false
+        void setProperty("pause", false)
+      }
+    },
+    // No-op: mpv exposes its own tracks via track-list/aid, picked from the "Audio tracks" menu.
+    setAudioSource() {},
+    setProperty,
+    on: emitter.on,
+    off: emitter.off,
+    one: emitter.one,
+    el() {
+      return container
+    },
+    error() {
+      return lastErrorDetail
+    },
+    getMediaElement() {
+      return null
+    },
+    requestFullscreen() {
+      const result = container.requestFullscreen?.()
+      windowFullscreenSet = true
+      void setWindowFullscreen(true)
+      return result
+    },
+    isFullscreen() {
+      return document.fullscreenElement === container
+    },
+    exitFullscreen() {
+      if (document.fullscreenElement === container) void document.exitFullscreen()
+      windowFullscreenSet = false
+      void setWindowFullscreen(false)
+    },
+    async screenshot() {
+      try {
+        const path = await invoke<string>("mpv_embed_screenshot", { sessionId })
+        if (path) toastSuccess(t("player.mpv.screenshotSaved", { path }))
+        return path ?? null
+      } catch (err) {
+        log.warn("[xt:mpv-embed] screenshot failed:", err)
+        toastError(t("player.mpv.screenshotFailed"))
+        return null
+      }
+    },
+    async requestPip() {
+      try {
+        await invoke("mpv_embed_pip_enter", { sessionId })
+      } catch (err) {
+        log.warn("[xt:mpv-embed] pip enter failed:", err)
+      }
+    },
+    async exitPip() {
+      try {
+        await invoke("mpv_embed_pip_exit", { sessionId })
+      } catch (err) {
+        log.warn("[xt:mpv-embed] pip exit failed:", err)
+      }
+    },
+    isPip() {
+      return nativeState === "pip"
+    },
+    userActive(active) {
+      emitter.emit("useractive", active)
+    },
+    reset() {
+      void invoke("mpv_embed_command", { sessionId, args: ["stop"] }).catch((err: unknown) => {
+        log.warn("[xt:mpv-embed] stop command failed:", err)
+      })
+      lastLoadRequest = null
+      clearLiveEofTimers()
+      liveEofRetryCount = 0
+      setRevealed(false)
+    },
+    codecInfo(): PlaybackCodecInfo {
+      return {
+        videoCodec: props.videoCodec ?? null,
+        audioCodec: props.audioCodecName ?? null,
+        errorDetail: lastErrorDetail,
+      }
+    },
+    subtitleDelay(deltaSeconds) {
+      if (!isMpvSubtitleActive(props.sid)) return null
+      const next = (typeof props.subDelay === "number" ? props.subDelay : 0) + deltaSeconds
+      props = { ...props, subDelay: next }
+      void setProperty("sub-delay", next)
+      return next
+    },
+    async startRecording() {
+      const { join, videoDir } = await import("@tauri-apps/api/path")
+      const dir = getDownloadDir() || (await videoDir())
+      const path = await join(dir, recordingFileName(currentMediaTitle, new Date()))
+      await setProperty("stream-record", path)
+      return path
+    },
+    async stopRecording() {
+      await setProperty("stream-record", "")
+    },
+    recordingPath() {
+      return props.streamRecord ? props.streamRecord : null
+    },
+    subtitleStyle(patch) {
+      if (patch) {
+        currentSubtitleStyle = { ...currentSubtitleStyle, ...patch }
+        persistSubtitleStyle(currentSubtitleStyle)
+        applySubtitleStyleProperties(currentSubtitleStyle)
+      }
+      return currentSubtitleStyle
+    },
+    audioDelay(deltaSeconds) {
+      if (deltaSeconds !== undefined) {
+        currentAudioDelay = clampAudioDelaySeconds(currentAudioDelay + deltaSeconds)
+        void setProperty("audio-delay", currentAudioDelay)
+      }
+      return currentAudioDelay
+    },
+    engineStats(): EngineStats {
+      return {
+        engine: null,
+        declaredBitrateBps: null,
+        measuredBitrateBps: typeof props.videoBitrate === "number" ? props.videoBitrate : null,
+        levelIndex: null,
+        levelCount: null,
+        autoLevel: null,
+        videoWidth: typeof props.width === "number" ? props.width : null,
+        videoHeight: typeof props.height === "number" ? props.height : null,
+        segmentDurationSeconds: null,
+        bufferedAheadSeconds: typeof props.demuxerCacheDuration === "number" ? props.demuxerCacheDuration : null,
+        droppedFrames: sumDroppedFrames(props.frameDropCount, props.decoderFrameDropCount),
+        totalFrames: null,
+        stalls: null,
+        containerFps: typeof props.containerFps === "number" ? props.containerFps : null,
+        videoFormat: typeof props.videoFormat === "string" ? props.videoFormat : null,
+        audioFormat: typeof props.audioFormat === "string" ? props.audioFormat : null,
+        audioChannelCount: typeof props.audioChannelCount === "number" ? props.audioChannelCount : null,
+        hwdec: typeof props.hwdecCurrent === "string" ? props.hwdecCurrent : null,
+      }
+    },
+    onEngineEvent(listener) {
+      engineEventListeners.add(listener)
+      return () => engineEventListeners.delete(listener)
+    },
+    dispose() {
+      disposed = true
+      clearLiveEofTimers()
+      clearLiveStallWatchdog()
+      void setProperty("stream-record", "")
+      clearFullscreenSettleTimers()
+      clearNativeVideoHole()
+      if (windowFullscreenSet) {
+        windowFullscreenSet = false
+        void setWindowFullscreen(false)
+      }
+      videoHiddenObserver?.disconnect()
+      if (videoElement) videoElement.hidden = videoWasHidden
+      loadingIndicator.remove()
+      delete container.dataset.mpvEmbedded
+      emitter.clear()
+      engineEventListeners.clear()
+      try { unlistenState() } catch (err) { log.warn("[xt:mpv-embed] unlisten state failed:", err) }
+      try { unlistenEvent() } catch (err) { log.warn("[xt:mpv-embed] unlisten event failed:", err) }
+      try { unlistenExited() } catch (err) { log.warn("[xt:mpv-embed] unlisten exited failed:", err) }
+      try { unlistenSurface() } catch (err) { log.warn("[xt:mpv-embed] unlisten surface failed:", err) }
+      resizeObserver?.disconnect()
+      window.removeEventListener("resize", scheduleBoundsPush)
+      window.removeEventListener("scroll", handleScroll)
+      for (const ancestor of scrollableAncestors) ancestor.removeEventListener("scroll", handleScroll)
+      window.removeEventListener("pagehide", stopPlaybackOnNavigate)
+      window.removeEventListener("beforeunload", stopPlaybackOnNavigate)
+      document.removeEventListener("fullscreenchange", handleFullscreenChange)
+      if (dprMediaQuery && dprChangeHandler) dprMediaQuery.removeEventListener("change", dprChangeHandler)
+      if (rafHandle != null) {
+        cancelAnimationFrame(rafHandle)
+        rafHandle = null
+      }
+      return invoke<void>("mpv_embed_stop", { sessionId }).catch((err: unknown) => {
+        log.warn("[xt:mpv-embed] mpv_embed_stop failed:", err)
+      })
+    },
+  }
+
+  const teardownControls = mountMpvControls(container, handle, {
+    onAudioTracksClick: () => void openAudioTrackMenu(),
+    onSubtitleTracksClick: () => void openSubtitleTrackMenu(),
+    getTrackList: () => props.trackList,
+  })
+  const originalDispose = handle.dispose?.bind(handle)
+  handle.dispose = () => {
+    teardownControls()
+    return originalDispose?.()
+  }
+
+  return handle
+}

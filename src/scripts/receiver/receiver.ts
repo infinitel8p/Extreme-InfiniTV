@@ -506,7 +506,7 @@ window.addEventListener("pagehide", () => {
 })
 
 if (isKioskBuild) {
-  exitBtn?.classList.add("hidden")
+  exitBtn?.remove()
 } else {
   exitBtn?.addEventListener("click", () => exitReceiver())
 }

@@ -143,3 +143,29 @@ export function bindMonoAudio(handle: MonoAudioHandle): () => void {
     }
   }
 }
+
+// Same L+R average into both channels the Web Audio graph above produces.
+const MONO_AUDIO_FILTER = "lavfi=[pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1]"
+
+interface MpvMonoAudioHandle {
+  on(event: string, fn: (...args: unknown[]) => void): void
+  setProperty?(name: string, value: unknown): Promise<void>
+}
+
+/** mpv-embedded has no media element for `bindMonoAudio`'s WebAudio graph; apply mono via mpv's own `af` instead. */
+export function bindMonoAudioMpv(handle: MpvMonoAudioHandle): () => void {
+  const apply = () => {
+    if (!handle.setProperty) return
+    void handle.setProperty("af", getMonoAudioEnabled() ? MONO_AUDIO_FILTER : "")
+  }
+  try {
+    handle.on("loadedmetadata", apply)
+    handle.on("playing", apply)
+  } catch (err) {
+    log.warn("[xt:audio-effects] failed to bind mpv mount events", err)
+  }
+  document.addEventListener(MONO_AUDIO_EVENT, apply)
+  return () => {
+    document.removeEventListener(MONO_AUDIO_EVENT, apply)
+  }
+}

@@ -1,8 +1,9 @@
-import { log } from "@/scripts/lib/log.js"
+import { log, setVerboseLogging } from "@/scripts/lib/log.js"
 import { normalizeVideoScale } from "@/scripts/lib/video-scale.ts"
 import { sandboxRuntimeSync } from "@/scripts/lib/sandbox.ts"
 import { LANGUAGE_TOKENS } from "@/scripts/lib/language-tags.ts"
 import { compareVersions } from "@/scripts/lib/version-compare.ts"
+import { normalizeDnsInput } from "@/scripts/lib/dns-config.ts"
 
 const KEY_USER_AGENT = "xt_user_agent"
 const KEY_DOWNLOAD_DIR = "xt_download_dir"
@@ -20,6 +21,9 @@ const KEY_PLAYER_ARGS_MPV = "xt_player_args_mpv"
 const KEY_PLAYER_ARGS_VLC = "xt_player_args_vlc"
 const KEY_PLAYER_REUSE_MPV = "xt_player_reuse_mpv"
 const KEY_PLAYER_REUSE_VLC = "xt_player_reuse_vlc"
+const KEY_MPV_HWDEC = "xt_mpv_hwdec"
+const KEY_MPV_QUALITY = "xt_mpv_quality"
+const KEY_MPV_EXTRA_ARGS = "xt_mpv_extra_args"
 const KEY_FFMPEG_PATH = "xt_ffmpeg_path"
 const KEY_EXTERNAL_PLAYER_PREF = "xt_external_player_pref"
 const KEY_CLOSE_TO_TRAY = "xt_close_to_tray"
@@ -38,6 +42,7 @@ const KEY_TMDB_KEY = "xt_tmdb_key"
 const KEY_TMDB_ENABLED = "xt_tmdb_enabled"
 const KEY_TVDB_ENABLED = "xt_tvdb_enabled"
 const KEY_DEV_MODE = "xt_dev_mode"
+const KEY_VERBOSE_LOG = "xt_verbose_log"
 const KEY_RECEIVER_MODE = "xt_receiver_mode"
 const KEY_RECEIVER_BOOT = "xt_receiver_boot"
 const KEY_RECEIVER_NAME = "xt_receiver_name"
@@ -45,6 +50,8 @@ const KEY_RECEIVER_ENGINE = "xt_receiver_engine"
 const KEY_RECEIVER_ID = "xt_receiver_id"
 const KEY_CONTENT_LANGUAGE = "xt_content_lang"
 const KEY_LANGUAGE_GROUPING = "xt_lang_grouping"
+const KEY_SEARCH_VIEW = "xt_search_view"
+const KEY_DNS = "xt_dns"
 const EVT_CHANGED = "xt:settings-changed"
 
 export const PERF_MODE_EVENT = "xt:perf-mode-changed"
@@ -67,6 +74,8 @@ export const VIDEO_SCALE_EVENT = "xt:video-scale-changed"
 export const UPDATE_CHANNEL_EVENT = "xt:update-channel-changed"
 export const AUTO_UPDATE_EVENT = "xt:auto-update-changed"
 export const LANGUAGE_GROUPING_EVENT = "xt:language-grouping-changed"
+export const SEARCH_VIEW_EVENT = "xt:search-view-changed"
+export const SEARCH_VIEW_MODES = ["cards", "list"]
 export const UPDATE_CHANNELS = ["stable", "beta"]
 export const DEFAULT_UPDATE_CHANNEL = "stable"
 export const TV_OVERSCAN_VALUES = [0, 2, 4, 6, 8]
@@ -109,10 +118,18 @@ export const DEFAULT_PROGRESS_RETENTION_DAYS = 90
 export const NETWORK_TIMEOUT_VALUES = [20, 45, 90, 180]
 export const DEFAULT_NETWORK_TIMEOUT_SECONDS = 20
 export const NETWORK_TIMEOUT_EVENT = "xt:network-timeout-changed"
+export const DNS_EVENT = "xt:dns-changed"
 export const DEFAULT_DOWNLOAD_CONCURRENCY = 1
 export const MAX_DOWNLOAD_CONCURRENCY = 4
-export const PLAYER_BACKENDS = ["artplayer", "videojs", "shaka", "mpv", "vlc"]
+export const PLAYER_BACKENDS = ["artplayer", "videojs", "shaka", "mpv-embedded", "mpv", "vlc"]
 export const DEFAULT_PLAYER_BACKEND = "artplayer"
+
+// mpv-embedded only ships on Windows desktop (Rust commands + sidecar are Windows-only).
+export function isWindowsDesktopSync() {
+  if (typeof window === "undefined") return false
+  const isTauriRuntime = !!window.__TAURI_INTERNALS__ || !!window.__TAURI__
+  return isTauriRuntime && /Windows/i.test(navigator.userAgent || "")
+}
 export const EXTERNAL_PLAYER_BACKENDS = ["mpv", "vlc"]
 export const EXTERNAL_PLAYER_PREF_VALUES = ["mpv", "vlc", "ask"]
 export const UA_PRESETS = [
@@ -260,7 +277,8 @@ export function getPerfMode() {
 }
 
 export function setPerfMode(on) {
-  writeLS(KEY_PERF_MODE, on ? "1" : "")
+  writeLS(KEY_PERF_MODE, on ? "1" : "0")
+  writeLS("xt_perf_mode_auto", "")
   if (typeof document !== "undefined") {
     if (on) document.documentElement.setAttribute("data-perf-mode", "on")
     else document.documentElement.removeAttribute("data-perf-mode")
@@ -657,6 +675,21 @@ export function setNetworkTimeoutSeconds(seconds) {
   }
 }
 
+// Global default DNS server, overridden per-playlist via creds.js's `dns` field.
+export function getGlobalDns() {
+  return readLS(KEY_DNS, "") || null
+}
+
+export function setGlobalDns(value) {
+  const normalized = value ? normalizeDnsInput(String(value)) : null
+  writeLS(KEY_DNS, normalized || "")
+  if (typeof document !== "undefined") {
+    document.dispatchEvent(
+      new CustomEvent(DNS_EVENT, { detail: { value: normalized } })
+    )
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Discord Rich Presence
 // ---------------------------------------------------------------------------
@@ -734,6 +767,10 @@ export function getPlayerBackend() {
   const backend = PLAYER_BACKENDS.includes(raw) ? raw : DEFAULT_PLAYER_BACKEND
   // Clamp mpv/vlc pick to default when sandboxed; storage stays untouched.
   if (EXTERNAL_PLAYER_BACKENDS.includes(backend) && sandboxRuntimeSync()) {
+    return DEFAULT_PLAYER_BACKEND
+  }
+  // Clamp mpv-embedded to default off Windows desktop; storage stays untouched.
+  if (backend === "mpv-embedded" && !isWindowsDesktopSync()) {
     return DEFAULT_PLAYER_BACKEND
   }
   return backend
@@ -841,6 +878,62 @@ export function setExternalPlayerPref(pref) {
   document.dispatchEvent(
     new CustomEvent(EVT_CHANGED, { detail: { key: "externalPlayerPref" } })
   )
+}
+
+// ---------------------------------------------------------------------------
+// Embedded mpv playback options (Windows desktop only)
+// ---------------------------------------------------------------------------
+export const MPV_HWDEC_MODES = ["auto-safe", "auto", "auto-copy", "no"]
+export const MPV_QUALITY_PROFILES = ["default", "performance", "quality"]
+export const MPV_SETTINGS_EVENT = "xt:mpv-settings-changed"
+
+export function getMpvHwdec() {
+  const raw = readLS(KEY_MPV_HWDEC, "")
+  return MPV_HWDEC_MODES.includes(raw) ? raw : "auto-safe"
+}
+
+export function setMpvHwdec(mode) {
+  const next = MPV_HWDEC_MODES.includes(mode) ? mode : "auto-safe"
+  writeLS(KEY_MPV_HWDEC, next === "auto-safe" ? "" : next)
+  document.dispatchEvent(
+    new CustomEvent(MPV_SETTINGS_EVENT, { detail: { key: "hwdec", value: next } })
+  )
+}
+
+export function getMpvQuality() {
+  const raw = readLS(KEY_MPV_QUALITY, "")
+  return MPV_QUALITY_PROFILES.includes(raw) ? raw : "default"
+}
+
+export function setMpvQuality(profile) {
+  const next = MPV_QUALITY_PROFILES.includes(profile) ? profile : "default"
+  writeLS(KEY_MPV_QUALITY, next === "default" ? "" : next)
+  document.dispatchEvent(
+    new CustomEvent(MPV_SETTINGS_EVENT, { detail: { key: "quality", value: next } })
+  )
+}
+
+export function getMpvExtraArgsText() {
+  return readLS(KEY_MPV_EXTRA_ARGS, "")
+}
+
+export function setMpvExtraArgsText(text) {
+  writeLS(KEY_MPV_EXTRA_ARGS, text || "")
+  document.dispatchEvent(
+    new CustomEvent(MPV_SETTINGS_EVENT, { detail: { key: "extraArgs" } })
+  )
+}
+
+export function getMpvExtraArgs() {
+  return getMpvExtraArgsText()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("--"))
+}
+
+/** Shape consumed by the Rust `mpv_embed_start` command's `config` argument. */
+export function getMpvStartConfig() {
+  return { hwdec: getMpvHwdec(), quality: getMpvQuality(), extraArgs: getMpvExtraArgs() }
 }
 
 // Global default display mode (fit/fill/zoom/16:9/4:3) for the embedded
@@ -977,8 +1070,24 @@ export function getDevModeEnabled() {
 
 export function setDevModeEnabled(enabled) {
   writeLS(KEY_DEV_MODE, enabled ? "1" : "")
+  if (!enabled && getVerboseLogEnabled()) setVerboseLogEnabled(false)
   document.dispatchEvent(
     new CustomEvent(DEV_MODE_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export const VERBOSE_LOG_EVENT = "xt:verbose-log-changed"
+
+/** Verbose logging: default off. */
+export function getVerboseLogEnabled() {
+  return readLS(KEY_VERBOSE_LOG, "") === "1"
+}
+
+export function setVerboseLogEnabled(enabled) {
+  writeLS(KEY_VERBOSE_LOG, enabled ? "1" : "")
+  setVerboseLogging(!!enabled)
+  document.dispatchEvent(
+    new CustomEvent(VERBOSE_LOG_EVENT, { detail: { value: !!enabled } })
   )
 }
 
@@ -990,7 +1099,8 @@ export function getReceiverModeEnabled() {
 }
 
 export function setReceiverModeEnabled(enabled) {
-  writeLS(KEY_RECEIVER_MODE, enabled ? "1" : "")
+  writeLS(KEY_RECEIVER_MODE, enabled ? "1" : "0")
+  writeLS("xt_receiver_mode_auto", "")
   document.dispatchEvent(
     new CustomEvent(RECEIVER_MODE_EVENT, { detail: { value: !!enabled } })
   )
@@ -1004,7 +1114,8 @@ export function getReceiverBootEnabled() {
 }
 
 export function setReceiverBootEnabled(enabled) {
-  writeLS(KEY_RECEIVER_BOOT, enabled ? "1" : "")
+  writeLS(KEY_RECEIVER_BOOT, enabled ? "1" : "0")
+  writeLS("xt_receiver_boot_auto", "")
   document.dispatchEvent(
     new CustomEvent(RECEIVER_BOOT_EVENT, { detail: { value: !!enabled } })
   )
@@ -1090,6 +1201,19 @@ export function setLanguageGroupingEnabled(enabled) {
   writeLS(KEY_LANGUAGE_GROUPING, enabled ? "1" : "0")
   document.dispatchEvent(
     new CustomEvent(LANGUAGE_GROUPING_EVENT, { detail: { value: !!enabled } })
+  )
+}
+
+export function getSearchView() {
+  const stored = readLS(KEY_SEARCH_VIEW, "")
+  return SEARCH_VIEW_MODES.includes(stored) ? stored : "cards"
+}
+
+export function setSearchView(mode) {
+  const normalized = SEARCH_VIEW_MODES.includes(mode) ? mode : "cards"
+  writeLS(KEY_SEARCH_VIEW, normalized === "cards" ? "" : normalized)
+  document.dispatchEvent(
+    new CustomEvent(SEARCH_VIEW_EVENT, { detail: { value: normalized } })
   )
 }
 

@@ -3,13 +3,54 @@ layout: ../layouts/DocsLayout.astro
 title: "External players"
 description: "Hand off playback to MPV, VLC, or any installed Android video app."
 lede: "When the built-in player can't handle a stream, send it to MPV, VLC, or any video app you already use."
+icon: "external"
+cardOrder: 9
 ---
 
 import Callout from "../components/Callout.astro"
+import Shot from "../components/Shot.astro"
 
 The built-in player works for most streams. If a channel won't play, or you'd rather watch in MPV or VLC, hand the stream off to an external player. When a stream's audio format can't be decoded in-app (AC-3 / Dolby Digital is the usual case), the app says so and offers the external-player handoff right in the error message.
 
-Everything playback-related lives in **Settings > Watching > Playback**: the built-in player engine (ArtPlayer by default, with Video.js and Shaka Player as alternatives), the external player paths, and the option to make MPV or VLC the default way every stream opens.
+Everything playback-related lives in **Settings > Watching > Playback**: the built-in player engine (ArtPlayer by default, with Video.js, Shaka Player, and an in-app mpv on Windows as alternatives), the external player paths, and the option to make MPV or VLC the default way every stream opens.
+
+## In-app mpv (Windows)
+
+Windows has a fourth engine choice in **Settings > Watching > Playback**, listed as **mpv (embedded)** next to ArtPlayer, Video.js, and Shaka Player. Pick it and mpv plays every stream right inside the app, instead of handing off to a separate window.
+
+mpv decodes formats natively that the built-in players can't: AC-3, E-AC-3, MP2, and DTS audio, and HEVC (H.265) video. Channels or movies that would otherwise need the audio fix, the Windows HEVC extension, or an external player just play, and hardware decoding is on automatically.
+
+The app ships its own copy of mpv on Windows, so there's nothing to install - pick the engine and it just works. (If you're running the app from source, `XT_MPV_SIDECAR_PATH` / `XT_MPV_PATH` environment variables or an mpv on your system PATH act as a fallback for development, but a normal install never needs them.)
+
+It's Windows-only for now - macOS and Linux aren't supported yet. The default player is unchanged, so nothing switches unless you pick it yourself, and the switch takes effect the next time you start playback - no restart needed.
+
+<Callout type="note">
+  This is different from **MPV (separate window)** further down the same list - that one hands the stream off to MPV running in its own window outside the app. The in-app option plays inside Extreme InfiniTV itself.
+</Callout>
+
+### Controls
+
+A control bar appears over the video, left to right: play/pause, elapsed/total time (or a **LIVE** badge on a channel), subtitles, audio, a settings button (playback speed 0.5x-2x and subtitle delay), screenshot (saves a PNG to Pictures > Extreme InfiniTV), Picture-in-Picture, mute + volume, and fullscreen. Hover the seek bar for a time tooltip. A single click on the video toggles play/pause; double-click toggles fullscreen.
+
+While the player has focus, the usual keys work: <kbd>Space</kbd> play/pause, <kbd>Left</kbd> / <kbd>Right</kbd> skip 10 seconds (not on live), <kbd>Up</kbd> / <kbd>Down</kbd> volume, <kbd>F</kbd> fullscreen, <kbd>M</kbd> mute, <kbd>P</kbd> Picture-in-Picture, <kbd>S</kbd> screenshot. <kbd>Z</kbd> / <kbd>X</kbd> nudge subtitle delay and <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>S</kbd> opens the playback stats overlay on every player, not just this one - see [Keyboard + D-pad](./keyboard-and-d-pad/).
+
+Fullscreen goes truly fullscreen, taskbar included; <kbd>Esc</kbd> or the button brings it back.
+
+### Picture-in-Picture
+
+The PiP window is a small always-on-top window, not a browser overlay: drag it by its border, resize from any edge or corner (the aspect ratio is kept), and move the mouse over it to bring up mpv's own on-screen controls. <kbd>Esc</kbd>, double-clicking the border, or closing the window returns the video to the app. While it's open, the app shows "Playing in Picture-in-Picture" where the player normally sits.
+
+### Tracks and subtitles
+
+Audio and subtitle tracks come straight from the file or stream itself, including MKV and HLS alternate audio. Subtitles are off by default, same as every other engine. **Load subtitle file** in the subtitles menu accepts SRT, ASS, SSA, VTT, and SUB.
+
+### Live channels
+
+A live stream that hits end-of-file gets reloaded automatically, with a growing delay, up to five attempts. If the provider has genuinely taken the channel offline, you'll see "This channel is currently offline at the provider." instead of an endless retry. Playback starting a few seconds behind live is normal for HLS, not a bug.
+
+<Callout type="note">
+  While a page is actively scrolling, the video can trail a frame behind. On the movie and series detail pages the player stays pinned in place during playback so this never shows up there.
+</Callout>
 
 ## Desktop (Windows / macOS / Linux)
 
@@ -41,7 +82,7 @@ If something goes wrong, the toast tells you what failed:
 
 ## Android
 
-Tap **Open in player...** on any movie, episode, or Live TV channel. A picker shows every installed app that can play the stream. Pick one and it starts playing. Tick **Always use this app** in the picker to skip it next time; clear the remembered choice under **Settings > Watching > Default external player** whenever you want to pick again.
+Tap **Open in player…** on any movie, episode, or Live TV channel. A picker shows every installed app that can play the stream. Pick one and it starts playing. Tick **Always use this app** in the picker to skip it next time; clear the remembered choice under **Settings > Watching > Default external player** whenever you want to pick again.
 
 If your provider needs a specific User-Agent or Referer per channel, the app passes those to the target player. Players that read these (VLC, MX Player, Just Player) will use them; others fall back to their own defaults.
 
@@ -75,6 +116,8 @@ The **Downloads** page lets you queue movies and series episodes for offline pla
 - **Android** opens the file in your default video app (the in-app player can't play local files on Android right now).
 
 You can still hand off remote streams from the detail dialog if you'd rather use MPV, VLC, or another player.
+
+<Shot src="Desktop/downloads" alt="The Downloads page with active and completed downloads" caption="Downloads: completed items play locally, in the app or in your chosen player." />
 
 ## When to use which
 

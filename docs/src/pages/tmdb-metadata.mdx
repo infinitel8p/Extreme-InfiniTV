@@ -3,9 +3,12 @@ layout: ../layouts/DocsLayout.astro
 title: "TMDb metadata"
 description: "Turn on TMDB enrichment for richer cast, director, and similar-titles info on movies and series."
 lede: "An optional, free add-on that pulls cast, director, and similar-title info from The Movie Database. Off by default."
+icon: "search"
+cardOrder: 7
 ---
 
 import Callout from "../components/Callout.astro"
+import Shot from "../components/Shot.astro"
 
 ## What it adds
 
@@ -32,10 +35,20 @@ You'll end up with two credentials on that page: a short **API key (v3 auth)** a
 
 ## Turning it on
 
-1. Open **Settings > Network > TMDb metadata**.
+1. Open **Settings > Network > Metadata enrichment**.
 2. Paste your key or token into the **API key** field.
 3. Press **Test key** to confirm it works.
 4. Switch **Enable enrichment** to **On**.
+
+<Shot
+  src="Desktop/settings-tmdb"
+  alt="The Metadata enrichment card in Settings with the API key field"
+  caption="The Metadata enrichment card in Settings; paste the key and use Test key to check it."
+  zoom="#card-tmdb"
+  markers={[
+    { at: "#settings-tmdb-key", note: "Your TMDb API key or token. It stays on this device." },
+  ]}
+/>
 
 <Callout type="tip">
   The key field is masked by default. Use the eye icon next to it if you need to check what you pasted.

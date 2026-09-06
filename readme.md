@@ -60,7 +60,7 @@
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/Desktop/home.png" alt="Extreme InfiniTV home screen showing Live TV, Movies, and Series tiles with Continue Watching strip" width="780"/>
+  <img src="docs/src/assets/screenshots/Desktop/home.png" alt="Extreme InfiniTV home screen showing Live TV, Movies, and Series tiles with Continue Watching strip" width="780"/>
 </p>
 
 <details>
@@ -70,20 +70,20 @@
 
 | | | |
 |---|---|---|
-| <img src="docs/screenshots/Desktop/livetv.png" alt="Live TV channel list with inline EPG showing now/next programmes"/> | <img src="docs/screenshots/Desktop/movies.png" alt="Movies poster grid with category filtering"/> | <img src="docs/screenshots/Desktop/series.png" alt="Series detail view with seasons and episodes"/> |
-| <img src="docs/screenshots/Desktop/epg.png" alt="Full XMLTV schedule grid for the EPG page"/> | <img src="docs/screenshots/Desktop/settings.png" alt="Settings page with playlists, display, network, and downloads"/> | <img src="docs/screenshots/Desktop/favorites.png" alt="Favorites page showing the cross-playlist union of starred items"/> |
+| <img src="docs/src/assets/screenshots/Desktop/livetv.png" alt="Live TV channel list with inline EPG showing now/next programmes"/> | <img src="docs/src/assets/screenshots/Desktop/movies.png" alt="Movies poster grid with category filtering"/> | <img src="docs/src/assets/screenshots/Desktop/series.png" alt="Series detail view with seasons and episodes"/> |
+| <img src="docs/src/assets/screenshots/Desktop/epg.png" alt="Full XMLTV schedule grid for the EPG page"/> | <img src="docs/src/assets/screenshots/Desktop/settings.png" alt="Settings page with playlists, display, network, and downloads"/> | <img src="docs/src/assets/screenshots/Desktop/favorites.png" alt="Favorites page showing the cross-playlist union of starred items"/> |
 
 **Android TV (dedicated 10-foot interface, D-pad focus)**
 
 | | | |
 |---|---|---|
-| <img src="docs/screenshots/Android-TV/tv.png" alt="Android TV home screen with an artwork hero and a favorites rail"/> | <img src="docs/screenshots/Android-TV/tv-live.png" alt="Live TV on Android TV with channel tiles and a programme panel"/> | <img src="docs/screenshots/Android-TV/tv-movies.png" alt="Movies grid on the Android TV interface with ratings and language pills"/> |
+| <img src="docs/src/assets/screenshots/Android-TV/tv.png" alt="Android TV home screen with an artwork hero and a favorites rail"/> | <img src="docs/src/assets/screenshots/Android-TV/tv-live.png" alt="Live TV on Android TV with channel tiles and a programme panel"/> | <img src="docs/src/assets/screenshots/Android-TV/tv-movies.png" alt="Movies grid on the Android TV interface with ratings and language pills"/> |
 
 **Phone (portrait, touch)**
 
 | | | |
 |---|---|---|
-| <img src="docs/screenshots/Galaxy-S20-Ultra/home.png" alt="Extreme InfiniTV home screen on a phone in portrait" width="240"/> | <img src="docs/screenshots/Galaxy-S20-Ultra/livetv.png" alt="Live TV on a phone with bottom navigation" width="240"/> | <img src="docs/screenshots/Galaxy-S20-Ultra/series.png" alt="Series poster grid on a phone in portrait" width="240"/> |
+| <img src="docs/src/assets/screenshots/Galaxy-S20-Ultra/home.png" alt="Extreme InfiniTV home screen on a phone in portrait" width="240"/> | <img src="docs/src/assets/screenshots/Galaxy-S20-Ultra/livetv.png" alt="Live TV on a phone with bottom navigation" width="240"/> | <img src="docs/src/assets/screenshots/Galaxy-S20-Ultra/series.png" alt="Series poster grid on a phone in portrait" width="240"/> |
 
 </details>
 

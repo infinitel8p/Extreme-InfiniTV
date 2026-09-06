@@ -52,6 +52,8 @@ export interface VodMountOptions {
   resumePos: number
   /** Name searched for an HEVC hint when no codec is reported (movie name / episode title). */
   nameHintSource: string
+  /** Display title carried into the mpv-embedded media flyout (movie name / "series - S01E01 - episode"). */
+  title: string
   posterEl: HTMLElement | null
   playerWrap: HTMLElement | null
   videoElementId: string
@@ -68,6 +70,8 @@ export interface VodMountOptions {
   clearActiveMkvSessionIfMatches(session: { stop(): void } | null | undefined): void
   isStale(): boolean
   retirePreviousPlaybackAndRetryRemux(): void
+  /** Attempts a hop to the next Xtream mirror on a provider rejection; resolves true when a remount is under way. Resolves false for sources with no mirror candidates. */
+  tryMirrorHop?(rejection: { errorDetail?: string | null; httpStatus?: number | null }): Promise<boolean>
   /** Fallback session start on an automatic remux retry vs. a fresh insights session. */
   beginInsightsSession(isAutomaticRetry: boolean): void
   /** Known duration used to seed this mount's audio switcher (movie: cached vod info; episode: the specific episode played). */
@@ -187,7 +191,7 @@ export async function mountVodPlayback(options: VodMountOptions): Promise<void> 
   let bufferedStartError = false
 
   function handleStartError() {
-    handlePlayerStartError({
+    void handlePlayerStartError({
       logTag: options.logTag,
       player: mountedPlayer,
       isStale: options.isStale,
@@ -204,6 +208,7 @@ export async function mountVodPlayback(options: VodMountOptions): Promise<void> 
       handleRemuxFailure,
       retirePreviousPlaybackAndRetryRemux: options.retirePreviousPlaybackAndRetryRemux,
       toasts: options.toasts,
+      tryMirrorHop: options.tryMirrorHop,
     })
   }
 
@@ -319,6 +324,7 @@ export async function mountVodPlayback(options: VodMountOptions): Promise<void> 
       isLive: false,
       subtitles: { sourceUrl: playSrc, mkvSession: preparedPlayback.mkvSession },
       audio: initialAudioSource,
+      title: options.title,
     })
   }
 

@@ -1,11 +1,11 @@
 // Shared TV home rail: header + horizontal card track with spatial-nav focus memory.
 
 import { t } from "@/scripts/lib/i18n"
-import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/focus"
+import { registerFocusSection, keepFocusedInView, remPx, invalidateKeepInViewLayout } from "@/scripts/tv/focus"
 import { releaseCachedImages } from "@/scripts/lib/img-cache.ts"
 import { motionAllowed, TV_EASE, memoryConservative } from "@/scripts/tv/motion"
-import { neighboursOf, warmImageUrl } from "@/scripts/tv/prefetch"
-import { createCard, updateCard, cardEntryKey, type CardItem } from "./card"
+import { warmImageUrl } from "@/scripts/tv/prefetch"
+import { createCard, updateCard, cardEntryKey, registerCardLongPress, type CardItem } from "./card"
 
 const RAIL_LEFT_OFFSET_REM = 1
 const SKELETON_COUNT = 6
@@ -67,15 +67,33 @@ export function createRail(options: RailOptions): RailHandle {
     restrict: "self-first",
   })
   const unregisterKeepInView = keepFocusedInView(scroller, "x", () => remPx(RAIL_LEFT_OFFSET_REM))
+  // One delegated long-press listener set for the whole track instead of one per card.
+  const cardLongPress = registerCardLongPress(track)
 
   let isSkeletonState = false
+
+  // Rebuilt whenever the track's children change, so a focus move looks up its neighbours
+  // by index instead of re-running querySelectorAll + indexOf over the whole track.
+  let cardIndexByElement = new WeakMap<HTMLElement, number>()
+  let orderedCards: HTMLElement[] = []
+
+  function rebuildCardIndex(): void {
+    orderedCards = Array.from(track.children) as HTMLElement[]
+    cardIndexByElement = new WeakMap()
+    orderedCards.forEach((card, index) => cardIndexByElement.set(card, index))
+  }
 
   function onFocusIn(event: FocusEvent): void {
     const target = event.target
     const focusedCard = target instanceof HTMLElement ? target.closest<HTMLElement>("[data-focus-key]") : null
     if (!focusedCard || !track.contains(focusedCard)) return
-    for (const neighbour of neighboursOf(track, focusedCard, PREFETCH_RADIUS)) {
-      warmImageUrl(neighbour.dataset.prefetchUrl)
+    const centerIndex = cardIndexByElement.get(focusedCard)
+    if (centerIndex == null) return
+    for (let offset = 1; offset <= PREFETCH_RADIUS; offset++) {
+      const before = orderedCards[centerIndex - offset]
+      const after = orderedCards[centerIndex + offset]
+      if (before) warmImageUrl(before.dataset.prefetchUrl)
+      if (after) warmImageUrl(after.dataset.prefetchUrl)
     }
   }
   const prefetchOnFocus = !memoryConservative()
@@ -135,6 +153,8 @@ export function createRail(options: RailOptions): RailHandle {
       releaseCachedImages(node)
       node.remove()
     }
+    rebuildCardIndex()
+    invalidateKeepInViewLayout(scroller)
   }
 
   function setItems(items: CardItem[], options?: RailSetItemsOptions): void {
@@ -145,6 +165,8 @@ export function createRail(options: RailOptions): RailHandle {
       releaseCachedImages(track)
       el.hidden = true
       track.replaceChildren()
+      rebuildCardIndex()
+      invalidateKeepInViewLayout(scroller)
       return
     }
     el.hidden = false
@@ -175,6 +197,7 @@ export function createRail(options: RailOptions): RailHandle {
   function destroy(): void {
     if (prefetchOnFocus) scroller.removeEventListener("focusin", onFocusIn)
     releaseCachedImages(track)
+    cardLongPress.destroy()
     unregisterSection()
     unregisterKeepInView()
     el.remove()

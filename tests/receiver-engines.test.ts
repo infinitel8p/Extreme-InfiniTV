@@ -15,10 +15,29 @@ vi.mock("@/scripts/lib/i18n.js", () => ({ t: (key: string) => key }))
 
 type MountResult = { kind: "embedded"; handle: FakeEmbeddedHandle } | null
 let pendingMount: { resolve: (result: MountResult) => void } | null = null
+let requestedMountBackend: string | null = null
 
 vi.mock("@/scripts/lib/player-runtime", () => ({
-  mountPlayer: () => new Promise<MountResult>((resolve) => { pendingMount = { resolve } }),
+  mountPlayer: (_videoEl: unknown, backend: string) => {
+    requestedMountBackend = backend
+    return new Promise<MountResult>((resolve) => { pendingMount = { resolve } })
+  },
   playWhenReady: () => {},
+}))
+
+let mockPlayerBackend = "artplayer"
+
+vi.mock("@/scripts/lib/app-settings.js", () => ({
+  getPlayerBackend: () => mockPlayerBackend,
+}))
+
+let mockDnsProxyAvailable = false
+let mockEnsureDnsProxyBase: string | null = null
+const ensureDnsProxyMock = vi.fn(async (_sessionKey: string, _server: unknown) => mockEnsureDnsProxyBase)
+
+vi.mock("@/scripts/lib/dns-proxy.ts", () => ({
+  dnsProxyAvailable: () => mockDnsProxyAvailable,
+  ensureDnsProxy: (sessionKey: string, server: unknown) => ensureDnsProxyMock(sessionKey, server),
 }))
 
 /** A function boundary so TS re-checks pendingMount instead of keeping it narrowed to its last assignment. */
@@ -100,13 +119,14 @@ function embeddedDom(playerViewEl: HTMLElement): EmbeddedEngineDom {
   }
 }
 
-function liveDescriptor(title: string): CastDescriptorV1 {
+function liveDescriptor(title: string, dns?: string): CastDescriptorV1 {
   return {
     v: 1,
     src: `http://tv.example/live/user/pass/${title}.m3u8`,
     mime: "application/x-mpegURL",
     isLive: true,
     title,
+    dns,
   } as CastDescriptorV1
 }
 
@@ -254,6 +274,25 @@ describe("normalizeReportedVolume", () => {
   })
 })
 
+describe("createEmbeddedReceiverEngine backend downgrade", () => {
+  beforeEach(() => {
+    pendingMount = null
+    requestedMountBackend = null
+    mockPlayerBackend = "artplayer"
+  })
+
+  it("downgrades mpv-embedded to artplayer, like the mpv/vlc external backends", async () => {
+    mockPlayerBackend = "mpv-embedded"
+    const dom = embeddedDom(fakeElement())
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+
+    void engine.play(liveDescriptor("A"))
+    await Promise.resolve()
+
+    expect(requestedMountBackend).toBe("artplayer")
+  })
+})
+
 describe("createEmbeddedReceiverEngine play() staleness", () => {
   beforeEach(() => {
     pendingMount = null
@@ -301,5 +340,56 @@ describe("createEmbeddedReceiverEngine play() staleness", () => {
     resolveSecondMount({ kind: "embedded", handle: secondHandle })
     expect(await secondPlay).toBe(true)
     expect(secondHandle.srcCalls).toHaveLength(1)
+  })
+})
+
+describe("createEmbeddedReceiverEngine play() DNS proxy wrapping", () => {
+  beforeEach(() => {
+    pendingMount = null
+    mockDnsProxyAvailable = false
+    mockEnsureDnsProxyBase = null
+    ensureDnsProxyMock.mockClear()
+  })
+
+  async function playAndMount(descriptor: CastDescriptorV1): Promise<FakeEmbeddedHandle> {
+    const dom = embeddedDom(fakeElement())
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+    const playPromise = engine.play(descriptor)
+    await Promise.resolve()
+    const handle = new FakeEmbeddedHandle()
+    takePendingMountResolve()({ kind: "embedded", handle })
+    await playPromise
+    return handle
+  }
+
+  it("mounts the raw src when the descriptor carries no dns override", async () => {
+    const handle = await playAndMount(liveDescriptor("A"))
+    expect(ensureDnsProxyMock).not.toHaveBeenCalled()
+    expect((handle.srcCalls[0] as { src: string }).src).toBe("http://tv.example/live/user/pass/A.m3u8")
+  })
+
+  it("mounts the raw src when the dns proxy is unavailable on this platform", async () => {
+    mockDnsProxyAvailable = false
+    const handle = await playAndMount(liveDescriptor("A", "1.1.1.1"))
+    expect(ensureDnsProxyMock).not.toHaveBeenCalled()
+    expect((handle.srcCalls[0] as { src: string }).src).toBe("http://tv.example/live/user/pass/A.m3u8")
+  })
+
+  it("wraps the src through the registered proxy base when a dns override resolves", async () => {
+    mockDnsProxyAvailable = true
+    mockEnsureDnsProxyBase = "http://127.0.0.1:5321/abc123"
+    const handle = await playAndMount(liveDescriptor("A", "1.1.1.1"))
+    expect(ensureDnsProxyMock).toHaveBeenCalledWith("dns:1.1.1.1", expect.objectContaining({ raw: "1.1.1.1" }))
+    expect((handle.srcCalls[0] as { src: string }).src).toBe(
+      "http://127.0.0.1:5321/abc123/http/tv.example/live/user/pass/A.m3u8"
+    )
+  })
+
+  it("falls back to the raw src when proxy registration fails", async () => {
+    mockDnsProxyAvailable = true
+    mockEnsureDnsProxyBase = null
+    const handle = await playAndMount(liveDescriptor("A", "1.1.1.1"))
+    expect(ensureDnsProxyMock).toHaveBeenCalled()
+    expect((handle.srcCalls[0] as { src: string }).src).toBe("http://tv.example/live/user/pass/A.m3u8")
   })
 })

@@ -10,8 +10,10 @@ import {
   isLocalM3UHost,
   isCustomHost,
   readLocalM3UContent,
+  getActiveDnsOverrideAsync,
 } from "@/scripts/lib/creds.js"
-import { xtreamApiFetch, resolveStreamUrl } from "@/scripts/lib/xtream-api.js"
+import { xtreamApiFetch, resolveStreamUrl, advanceMirror } from "@/scripts/lib/xtream-api.js"
+import { isProviderRejection, shouldRepinMirror } from "@/scripts/lib/stream-reject.ts"
 import { normalize, scoreNormMatch } from "@/scripts/lib/text.js"
 import { debounce } from "@/scripts/lib/debounce.js"
 import { t, initI18n, getActiveLocale } from "@/scripts/lib/i18n.js"
@@ -94,7 +96,11 @@ import {
   isTauri,
   stopExternalPlayback,
   subscribeExternalPlayerExit,
+  isNativeVideoBackend,
+  canSwapToMpvEmbedded,
+  shouldOfferMpvEmbeddedFix,
 } from "@/scripts/lib/player-runtime.ts"
+import { mpvEmbeddedAvailable, parseHttpStatusPrefix } from "@/scripts/lib/mpv-embedded.ts"
 import {
   getPlayerBackend,
   getPlayerPath,
@@ -112,6 +118,7 @@ import {
 } from "@/scripts/lib/app-settings.js"
 import { createVideoScaleController } from "@/scripts/lib/video-scale.ts"
 import { openVideoScaleDialog, videoScaleModeLabelKey } from "@/scripts/lib/video-scale-dialog.ts"
+import { createSubtitleDelayController } from "@/scripts/lib/subtitle-delay-dialog.ts"
 import {
   setupExternalPlayerButton,
   surfaceLaunchError,
@@ -309,6 +316,7 @@ document.addEventListener("xt:entries-updated", () => {
 
 document.addEventListener("xt:active-changed", () => {
   clearRichPresence().catch(() => {})
+  resetDiscordPresenceTracking()
   externalPlaybackActive = false
   externalPlaybackKind = null
   reconcileFirstRun()
@@ -333,6 +341,7 @@ document.addEventListener("xt:channel-epg-changed", (e) => {
   if (!detail || detail.playlistId !== activePlaylistId) return
   ensureEpgLoaded()
   refreshNowSlots()
+  refreshDiscordPresenceProgramme()
   if (
     currentlyPlayingId &&
     detail.channelId != null &&
@@ -348,6 +357,7 @@ document.addEventListener(EPG_LOADED_EVENT, (e) => {
   const detail = /** @type {CustomEvent} */ (e).detail
   if (!detail || detail.playlistId !== activePlaylistId) return
   refreshNowSlots()
+  refreshDiscordPresenceProgramme()
   // For M3U sources the side panel can't use get_short_epg; it pulls from
   // the just-loaded XMLTV state. Refresh it now that data is available.
   if (currentlyPlayingId && hasDirectUrl(currentlyPlayingId)) {
@@ -362,7 +372,7 @@ document.addEventListener(EPG_OFFSET_EVENT, (e) => {
   ensureEpgLoaded()
 })
 
-const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null))
+const videoScaleController = createVideoScaleController(() => (vjs ? vjs.el() : null), () => vjs)
 
 function resolveVideoScaleMode() {
   if (activePlaylistId && currentlyPlayingId != null) {
@@ -1760,6 +1770,18 @@ let playerInsights = null
 // Detach for the auto-hiding quality chip overlaid on the player edge - rebuilt every tune.
 let qualityChipDetach = null
 
+// Live TV has no persistent subtitle-delay button (it lives in the "more" menu instead) - this
+// detached element is only ever clicked programmatically to reuse the shared dialog controller.
+const subtitleDelayProxyBtn = document.createElement("button")
+const subtitleDelayController = createSubtitleDelayController({
+  dialogId: "stream-subtitle-delay-dialog",
+  button: subtitleDelayProxyBtn,
+  nudge: (deltaSeconds) => vjs?.subtitleDelay?.(deltaSeconds),
+  getMediaElement: () => mediaElementOf(vjs),
+})
+subtitleDelayController.setup()
+document.addEventListener("keydown", (event) => subtitleDelayController.handleKeydown(event))
+
 function getPlayerInsights() {
   if (!playerInsights) {
     playerInsights = attachPlayerInsights({
@@ -1780,6 +1802,47 @@ const audioProxyOneShotFixSet = new Set()
 const audioProxyBypassSet = new Set()
 // Streams already auto-attempted through the proxy on a start failure this session - a start failure is a one-shot try, not a retry loop.
 const audioProxyAutoAttemptedSet = new Set()
+
+// Embedded mpv backend availability - desktop only, cached at boot like audioProxyAvailable above.
+let mpvEmbeddedFixAvailable = false
+const mpvEmbeddedProbe = mpvEmbeddedAvailable()
+  .then((available) => {
+    mpvEmbeddedFixAvailable = available
+    return available
+  })
+  .catch(() => false)
+
+// Per-channel memory: a channel that once needed mpv to decode retunes there directly next time.
+const MPV_EMBEDDED_FIX_KEY_PREFIX = "xt_mpv_embedded_fix:"
+
+function readMpvEmbeddedFixChannels(playlistId) {
+  if (!playlistId) return []
+  try {
+    const raw = localStorage.getItem(MPV_EMBEDDED_FIX_KEY_PREFIX + playlistId)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.map(String) : []
+  } catch {
+    return []
+  }
+}
+
+function rememberMpvEmbeddedFixChannel(playlistId, channelKey) {
+  if (!playlistId || !channelKey) return
+  const current = readMpvEmbeddedFixChannels(playlistId)
+  if (current.includes(channelKey)) return
+  try {
+    localStorage.setItem(
+      MPV_EMBEDDED_FIX_KEY_PREFIX + playlistId,
+      JSON.stringify([...current, channelKey])
+    )
+  } catch {}
+}
+
+function isMpvEmbeddedFixChannel(playlistId, channelKey) {
+  if (!playlistId || !channelKey) return false
+  return readMpvEmbeddedFixChannels(playlistId).includes(channelKey)
+}
 
 // Per-channel budget for black-screen native re-tunes (macOS GDR latch retries).
 const nativeRelatchAttempts = new Map()
@@ -2046,6 +2109,92 @@ const ensureEmbeddedPlayer = async (backend, opts = {}) => {
   }
 }
 
+/** Re-srcs the current mount from ctx; shared by the same-src retry, the mirror hop, and the stall retune. */
+function remountFromContext(ctx) {
+  try {
+    vjs.reset?.()
+    vjs.src({
+      src: ctx.src,
+      type: ctx.mime || "application/x-mpegURL",
+      isLive: ctx.isLive ?? true,
+      drm: ctx.drm ?? null,
+      preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
+      title: ctx.name,
+    })
+    vjs.play().catch((err) => {
+      log.info("[xt:livetv] remount play() rejected", { streamId: ctx.streamId, error: err?.name || String(err) })
+    })
+  } catch {}
+}
+
+/** Same-src retry (or give-up) path used once a provider-rejection mirror hop isn't possible or has run out. */
+function scheduleSameSrcRetry(ctx) {
+  if (!ctx.retried) {
+    ctx.retried = true
+    const seqAtRetry = ctx.seq
+    setTimeout(() => {
+      if (seqAtRetry !== playSeq) return
+      if (isCastRoutingActive() || externalPlaybackActive) return
+      if (retryCatchupSession(ctx, { automatic: true })) return
+      if (!ctx.isLive) {
+        // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
+        giveUpOnPlayback(ctx)
+        return
+      }
+      if (ctx.audioProxied) {
+        retuneProxiedAudioMount(ctx)
+        return
+      }
+      // The same demuxer on the same container fails the same way; escalate to the verdict instead.
+      if (isParseFailureDetail(vjs?.codecInfo?.()?.errorDetail)) {
+        giveUpOnPlayback(ctx)
+        return
+      }
+      remountFromContext(ctx)
+    }, ERROR_AUTO_RETRY_MS)
+    return
+  }
+  giveUpOnPlayback(ctx)
+}
+
+/**
+ * A live Xtream tune got a provider rejection (401/403/407/429/connection-limit).
+ * Hops to the next configured mirror instead of retrying the same dead source, up
+ * to one hop per configured candidate. Falls back to the same-src retry when no
+ * hop is possible or none of the remaining mirrors answer. Memoized on ctx so a
+ * second "error" event for the same rejection (shaka/mpv can emit more than one)
+ * shares this attempt instead of racing a second hop.
+ */
+function tryMirrorHopOnLiveError(ctx, rejection) {
+  if (ctx.mirrorHopPromise) return ctx.mirrorHopPromise
+  ctx.mirrorHopPromise = (async () => {
+    const seqAtRejection = ctx.seq
+    const repin = shouldRepinMirror(rejection)
+    const nextUrl = await advanceMirror(
+      (candidate) => buildDirectLiveUrl(ctx.streamId, candidate),
+      { hopsUsed: ctx.mirrorHops ?? 0, repin }
+    )
+    // A cast/external handoff doesn't bump playSeq, so re-check both right before the remount.
+    if (seqAtRejection !== playSeq || isCastRoutingActive() || externalPlaybackActive) return
+    if (!nextUrl) {
+      scheduleSameSrcRetry(ctx)
+      return
+    }
+    ctx.mirrorHops = (ctx.mirrorHops ?? 0) + 1
+    ctx.src = nextUrl
+    log.warn("[xt:livetv] provider rejection - hopping to next mirror", {
+      streamId: ctx.streamId,
+      hop: ctx.mirrorHops,
+    })
+    log.debug("[xt:livetv] mirror hop", `channel=${ctx.streamId} hop=${ctx.mirrorHops} reason=${rejection?.errorDetail || rejection?.httpStatus || "unknown"}`)
+    remountFromContext(ctx)
+  })().finally(() => {
+    // Release the guard so a rejection from the hopped mirror can hop again.
+    ctx.mirrorHopPromise = null
+  })
+  return ctx.mirrorHopPromise
+}
+
 /** Shared "nothing left to try" path for a play attempt: native handoff, failure panel, or a generic toast, depending on how far playback got. */
 function giveUpOnPlayback(ctx) {
   hideTuningOverlay()
@@ -2179,13 +2328,16 @@ async function mountEmbeddedPlayer(backend, opts) {
       playbackRateMenuButton: !wantLiveUi,
       fullscreenToggle: true,
     },
+    userAgent: opts.userAgent ?? null,
+    referer: opts.referer ?? null,
   })
   if (mounted.kind !== "embedded") return null
   vjs = mounted.handle
   embeddedPlayerBackend = mounted.backend
   embeddedPlayerLiveUi = wantLiveUi
 
-  if (mounted.backend === "videojs") {
+  // videojs's own DOM plus mpv's control bar both need the D-pad focus kept inside the player.
+  if (mounted.backend === "videojs" || (mounted.backend === "mpv-embedded" && typeof vjs.userActive === "function")) {
     focusKeeperCleanup = attachPlayerFocusKeeper(vjs)
   }
   bindAutoPip(vjs)
@@ -2193,7 +2345,7 @@ async function mountEmbeddedPlayer(backend, opts) {
 
   vjs.on("playing", () => {
     {
-      const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      const mediaEl = mediaElementOf(vjs)
       log.info("[xt:livetv] playing", {
         streamId: lastPlayContext?.streamId ?? null,
         t: Math.round((mediaEl?.currentTime || 0) * 10) / 10,
@@ -2205,6 +2357,9 @@ async function mountEmbeddedPlayer(backend, opts) {
     }
     ensureProgressWatch()
     if (lastPlayContext) {
+      if (!lastPlayContext.started && lastPlayContext.startedAtMs != null) {
+        log.debug("[xt:livetv] first frame", `channel=${lastPlayContext.streamId} elapsedMs=${Math.round(performance.now() - lastPlayContext.startedAtMs)}`)
+      }
       lastPlayContext.started = true
       if (lastPlayContext.audioProxied) {
         rememberAudioTranscodeChannel(activePlaylistId, String(lastPlayContext.streamId))
@@ -2246,7 +2401,7 @@ async function mountEmbeddedPlayer(backend, opts) {
   vjs.on("pause", () => {
     if (Date.now() < suppressPauseTrackingUntilMs) return
     if (!lastPlayContext?.started) return
-    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const mediaEl = mediaElementOf(vjs)
     // The browser fires pause right before ended - don't record that as a user pause.
     if (mediaEl?.ended) return
     pausedWasLive = !catchupSession
@@ -2261,7 +2416,7 @@ async function mountEmbeddedPlayer(backend, opts) {
     pausedAtAbsUtcMs = null
     const channel = all.find((entry) => entry.id === (catchupSession?.channelId ?? currentlyPlayingId))
     if (!channel) return
-    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const mediaEl = mediaElementOf(vjs)
     const currentTimeSeconds = vjs.currentTime?.() || 0
     let bufferedAheadMs = 0
     const buffered = mediaEl?.buffered
@@ -2272,6 +2427,10 @@ async function mountEmbeddedPlayer(backend, opts) {
           break
         }
       }
+    } else if (typeof vjs.engineStats === "function") {
+      // No <video> element to read .buffered from (e.g. mpv-embedded) - engine stats carry the same figure.
+      const bufferedAheadSeconds = vjs.engineStats()?.bufferedAheadSeconds
+      if (typeof bufferedAheadSeconds === "number") bufferedAheadMs = Math.max(0, bufferedAheadSeconds * 1000)
     }
     const action = resumeAction({
       pausedAbsUtcMs,
@@ -2304,41 +2463,20 @@ async function mountEmbeddedPlayer(backend, opts) {
     // Stops a timer armed by an earlier "playing" from firing against the mount we're replacing.
     clearDeadVideoWatchdog()
     clearDeadAudioWatchdog()
-    if (!ctx.retried) {
-      ctx.retried = true
-      const seqAtRetry = ctx.seq
-      setTimeout(() => {
-        if (seqAtRetry !== playSeq) return
-        if (isCastRoutingActive() || externalPlaybackActive) return
-        if (retryCatchupSession(ctx, { automatic: true })) return
-        if (!ctx.isLive) {
-          // Retry budget exhausted (or no session to resume) - the archive URL is now stale, so escalate instead of replaying it.
-          giveUpOnPlayback(ctx)
-          return
-        }
-        if (ctx.audioProxied) {
-          retuneProxiedAudioMount(ctx)
-          return
-        }
-        // The same demuxer on the same container fails the same way; escalate to the verdict instead.
-        if (isParseFailureDetail(vjs?.codecInfo?.()?.errorDetail)) {
-          giveUpOnPlayback(ctx)
-          return
-        }
-        try {
-          vjs.reset?.()
-          vjs.src({
-            src: ctx.src,
-            type: ctx.mime || "application/x-mpegURL",
-            isLive: ctx.isLive ?? true,
-            preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
-          })
-          vjs.play().catch(() => {})
-        } catch {}
-      }, ERROR_AUTO_RETRY_MS)
+
+    const errorDetail = vjs?.codecInfo?.()?.errorDetail ?? null
+    const httpStatus = parseHttpStatusPrefix(errorDetail)
+    const canTryMirrorHop =
+      ctx.isLive &&
+      !ctx.audioProxied &&
+      !isCastRoutingActive() &&
+      !externalPlaybackActive &&
+      isProviderRejection({ errorDetail, httpStatus })
+    if (canTryMirrorHop) {
+      void tryMirrorHopOnLiveError(ctx, { errorDetail, httpStatus })
       return
     }
-    giveUpOnPlayback(ctx)
+    scheduleSameSrcRetry(ctx)
   })
 
   return vjs
@@ -2351,6 +2489,12 @@ let radioIcyAbort: AbortController | null = null
 
 function getPlayerWrap(): HTMLElement | null {
   return document.getElementById("player-wrap")
+}
+
+// getMediaElement() is authoritative even when null (mpv-embedded has no real <video>).
+function mediaElementOf(handle) {
+  if (handle && typeof handle.getMediaElement === "function") return handle.getMediaElement()
+  return getPlayerWrap()?.querySelector("video") ?? null
 }
 
 function fmtElapsed(totalSeconds: number): string {
@@ -2784,6 +2928,16 @@ function buildCurrentMoreMenuItems(streamId, channel, src, name): HTMLButtonElem
   })
   items.push(healthItem)
 
+  // Mirrors the detail pages' subtitle-delay button: only offered while a subtitle track is showing.
+  if (vjs?.subtitleDelay?.(0) != null) {
+    const subtitleDelayItem = makeMoreMenuItem(t("detail.subtitleDelay"))
+    subtitleDelayItem.addEventListener("click", () => {
+      closeCurrentMoreMenu()
+      subtitleDelayProxyBtn.click()
+    })
+    items.push(subtitleDelayItem)
+  }
+
   if (isTauri) {
     const playOnTvItem = makeMoreMenuItem(t("cast.menu.playOnTv"))
     playOnTvItem.addEventListener("click", () => {
@@ -3028,18 +3182,7 @@ function performStallRetune(trigger) {
     giveUpOnPlayback(ctx)
     return
   }
-  try {
-    vjs.reset?.()
-    vjs.src({
-      src: ctx.src,
-      type: ctx.mime || "application/x-mpegURL",
-      isLive: ctx.isLive ?? true,
-      preferNativeHls: isNativeHlsFallbackChannel(ctx.streamId),
-    })
-    vjs.play().catch((err) => {
-      log.info("[xt:livetv] stall-retune play() rejected", { streamId: ctx.streamId, error: err?.name || String(err) })
-    })
-  } catch {}
+  remountFromContext(ctx)
 }
 
 function armStallSentinel() {
@@ -3082,7 +3225,7 @@ function progressWatchTick() {
     progressFrozenTicks = 0
     return
   }
-  const mediaEl = vjs.getMediaElement?.() ?? wrap.querySelector("video")
+  const mediaEl = mediaElementOf(vjs)
   if (!mediaEl || mediaEl.paused || mediaEl.ended || mediaEl.readyState < 2) {
     progressFrozenTicks = 0
     return
@@ -3171,6 +3314,8 @@ function clearStartWedgeWatch() {
 
 function armStartWedgeWatch() {
   clearStartWedgeWatch()
+  // The wedge is a Chromium MSE bug; mpv has its own demuxer and never hits it.
+  if (isNativeVideoBackend(embeddedPlayerBackend)) return
   const ctx = lastPlayContext
   if (!ctx || !ctx.isLive || ctx.audioProxied) return
   const seqAtArm = ctx.seq
@@ -3187,7 +3332,7 @@ function armStartWedgeWatch() {
       clearStartWedgeWatch()
       return
     }
-    const mediaEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const mediaEl = mediaElementOf(vjs)
     if (!mediaEl || mediaEl.paused || mediaEl.ended) return
     const audioCodec = vjs?.codecInfo?.()?.audioCodec
     // A flagged engine wedges MPEG audio deterministically - codec alone convicts.
@@ -3386,7 +3531,9 @@ function canUseAudioProxy(ctx) {
     !audioProxyBypassSet.has(ctx.streamId) &&
     // The proxy pipes the fetched body into ffmpeg's mpegts demuxer; an HLS
     // playlist URL feeds it playlist text and dies instantly. Raw TS only.
-    !isHlsSource(ctx?.src)
+    !isHlsSource(ctx?.src) &&
+    // mpv decodes AC-3/E-AC-3/MP2/DTS natively - the ffmpeg proxy is pointless there.
+    !isNativeVideoBackend(embeddedPlayerBackend)
   )
 }
 
@@ -3424,6 +3571,8 @@ function handleAudioProxyError(payload) {
 
 function armDeadAudioWatchdog() {
   clearDeadAudioWatchdog()
+  // mpv decodes AC-3/E-AC-3/MP2/DTS natively; there's no MSE audio track to go silent.
+  if (isNativeVideoBackend(embeddedPlayerBackend)) return
   const ctx = lastPlayContext
   if (!ctx) return
   if (ctx.audioProxied) return
@@ -3571,21 +3720,37 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   if (!playerWrap) return
 
   const info = vjs?.codecInfo?.() || { videoCodec: null, audioCodec: null, errorDetail: null }
-  const failure = classifyStartFailure({
-    videoCodec: info.videoCodec,
-    audioCodec: info.audioCodec,
-    errorDetail:
-      info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
-    nameHint: hasHevcNameHint(ctx.name),
-    deviceHevc: deviceSupportsHevc(),
-    audioClockWedge: !!ctx.audioClockWedge,
-  })
+  // mpv-embedded prefixes tell us more than a codec guess ever could - skip the heuristics for them.
+  const mpvErrorDetail = typeof info.errorDetail === "string" ? info.errorDetail : ""
+  const isOfflinePlaceholder = mpvErrorDetail.startsWith("OFFLINE_PLACEHOLDER")
+  const httpStatus = parseHttpStatusPrefix(mpvErrorDetail)
+  const failure = isOfflinePlaceholder
+    ? { kind: "offline-placeholder", codec: null }
+    : classifyStartFailure({
+        videoCodec: info.videoCodec,
+        audioCodec: info.audioCodec,
+        errorDetail:
+          info.errorDetail || (opts.decodeFailure ? "videoDecodeFailure" : null),
+        nameHint: hasHevcNameHint(ctx.name),
+        deviceHevc: deviceSupportsHevc(),
+        audioClockWedge: !!ctx.audioClockWedge,
+      })
   log.log("[xt:livetv] start failure classified:", failure.kind, {
     videoCodec: info.videoCodec,
     errorDetail: info.errorDetail,
   })
   let reason
-  if (failure.kind === "hevc") {
+  if (failure.kind === "offline-placeholder") {
+    reason = t("stream.failure.offlinePlaceholder")
+  } else if (httpStatus === 401) {
+    reason = t("player.error.http401")
+  } else if (httpStatus === 403) {
+    reason = t("player.error.http403")
+  } else if (httpStatus === 404) {
+    reason = t("player.error.http404")
+  } else if (httpStatus != null && httpStatus >= 500 && httpStatus <= 599) {
+    reason = t("player.error.http5xx")
+  } else if (failure.kind === "hevc") {
     reason = failure.codec
       ? t("stream.failure.hevcConfirmed")
       : t("stream.error.hevcHint")
@@ -3649,11 +3814,16 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   // a decode failure needs the external player, a network blip needs retry.
   const builtinCantDecode =
     failure.kind === "hevc" || failure.kind === "codec" || failure.kind === "audio"
-  const hevcInstall = failure.kind === "hevc" && isWindowsDesktop()
+  // WebView2's HEVC extension is irrelevant to mpv, which decodes HEVC on its own.
+  const hevcInstall =
+    failure.kind === "hevc" && isWindowsDesktop() && !isNativeVideoBackend(embeddedPlayerBackend)
   const audioProxyEligible = failure.kind === "audio" && canUseAudioProxy(ctx)
+  const mpvFixEligible =
+    !!ctx.isLive && shouldOfferMpvEmbeddedFix(failure.kind, embeddedPlayerBackend, mpvEmbeddedFixAvailable)
   const externalAvailable = externalPlayersAvailable || androidExternalAvailable
   let primaryKind = "retry"
   if (hevcInstall) primaryKind = "hevc"
+  else if (mpvFixEligible) primaryKind = "mpvFix"
   else if (audioProxyEligible) primaryKind = "audioFix"
   else if (builtinCantDecode && externalAvailable) primaryKind = "external"
 
@@ -3683,6 +3853,19 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
         hidePlaybackFailurePanel()
         play(ctx.streamId, ctx.name)
       }
+    })
+  }
+
+  let mpvFixBtn = null
+  if (mpvFixEligible) {
+    mpvFixBtn = document.createElement("button")
+    mpvFixBtn.type = "button"
+    mpvFixBtn.className = primaryKind === "mpvFix" ? primaryClass : secondaryClass
+    mpvFixBtn.textContent = t("stream.mpvFix.action")
+    mpvFixBtn.addEventListener("click", () => {
+      hidePlaybackFailurePanel()
+      rememberMpvEmbeddedFixChannel(activePlaylistId, String(ctx.streamId))
+      void play(ctx.streamId, ctx.name, "auto:mpv-fix")
     })
   }
 
@@ -3742,10 +3925,11 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   // Primary leads; retry is always offered as the fallback.
   const orderedButtons = []
   if (primaryKind === "hevc" && hevcBtn) orderedButtons.push(hevcBtn)
+  else if (primaryKind === "mpvFix" && mpvFixBtn) orderedButtons.push(mpvFixBtn)
   else if (primaryKind === "audioFix" && audioFixBtn) orderedButtons.push(audioFixBtn)
   else if (primaryKind === "external" && extBtn) orderedButtons.push(extBtn)
   else orderedButtons.push(retryBtn)
-  for (const btn of [hevcBtn, audioFixBtn, extBtn, retryBtn]) {
+  for (const btn of [hevcBtn, mpvFixBtn, audioFixBtn, extBtn, retryBtn]) {
     if (btn && !orderedButtons.includes(btn)) orderedButtons.push(btn)
   }
   for (const btn of orderedButtons) actions.appendChild(btn)
@@ -3753,6 +3937,15 @@ function showPlaybackFailurePanel(ctx, opts = {}) {
   panel.appendChild(actions)
   playerWrap.appendChild(panel)
 }
+
+// The mpv control bar's own inline error row dispatches this on the player container.
+document.getElementById("player-wrap")?.addEventListener("xt:mpv-retry", () => {
+  const ctx = lastPlayContext
+  if (!ctx) return
+  hidePlaybackFailurePanel()
+  if (retryCatchupSession(ctx)) return
+  play(ctx.streamId, ctx.name)
+})
 
 function runScanLineSweep() {
   const playerWrap = document.getElementById("player")?.parentElement
@@ -3765,20 +3958,32 @@ function runScanLineSweep() {
 
 window.addEventListener("pagehide", () => {
   clearRichPresence().catch(() => {})
+  resetDiscordPresenceTracking()
   externalPlaybackActive = false
   externalPlaybackKind = null
   void stopAudioTranscode()
 })
 
+let presenceChannelId = null
+let presenceStartedAtMs = 0
+let presenceProgrammeTitle = ""
+
+function currentProgrammeTitle(channel) {
+  if (!activePlaylistId || !channel) return ""
+  const state = getProgrammesSync(activePlaylistId)
+  if (!state) return ""
+  const { current } = getNowNextForChannel(state.programmes, channel, activePlaylistId)
+  return current?.title || ""
+}
+
 function pushDiscordPresence(channel, kind) {
   if (!activePlaylistId || !channel) return
   const safeLogo = channel.logo ? safeHttpUrl(channel.logo) : null
-  let stateLine = ""
-  const state = getProgrammesSync(activePlaylistId)
-  if (state) {
-    const { current } = getNowNextForChannel(state.programmes, channel, activePlaylistId)
-    if (current?.title) stateLine = current.title
-  }
+  const stateLine = currentProgrammeTitle(channel)
+  // Same channel keeps its tune-time stamp so a programme rollover doesn't reset Discord's elapsed timer.
+  if (presenceChannelId !== channel.id) presenceStartedAtMs = Date.now()
+  presenceChannelId = channel.id
+  presenceProgrammeTitle = stateLine
   setRichPresence({
     playlistId: activePlaylistId,
     details: `Watching ${channel.name || `Channel ${channel.id}`}`,
@@ -3787,8 +3992,23 @@ function pushDiscordPresence(channel, kind) {
     largeText: activePlaylistTitle || "Extreme InfiniTV",
     smallImage: "live",
     smallText: "Live",
-    startTimestamp: Date.now(),
+    startTimestamp: presenceStartedAtMs,
   })
+}
+
+function resetDiscordPresenceTracking() {
+  presenceChannelId = null
+  presenceStartedAtMs = 0
+  presenceProgrammeTitle = ""
+}
+
+/** Re-push presence when the live programme rolled over under a still-playing channel. */
+function refreshDiscordPresenceProgramme() {
+  if (presenceChannelId == null || catchupSession) return
+  const channel = all.find((entry) => entry.id === presenceChannelId)
+  if (!channel) return
+  if (currentProgrammeTitle(channel) === presenceProgrammeTitle) return
+  pushDiscordPresence(channel, "live")
 }
 
 function pickConfiguredExternal() {
@@ -3873,7 +4093,9 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
     initialChannelId: String(initialStreamId),
     defaultUa: getUserAgent() || "",
     programmes,
+    dns: (await getActiveDnsOverrideAsync())?.raw ?? null,
   })
+  log.debug("[xt:livetv] external handoff", `target=android-native channel=${initialStreamId} launched=${launched}`)
   if (launched && activePlaylistId) {
     pushRecent(activePlaylistId, "live", initialStreamId, initialName,
       all.find((entry) => entry.id === initialStreamId)?.logo || null)
@@ -4119,9 +4341,22 @@ async function play(streamId, name, reason = "user") {
     swapState()
   }
 
+  await mpvEmbeddedProbe
+  if (myRequest !== catchupRequestSeq) return
+
   let backend = getPlayerBackend()
+  if (
+    canSwapToMpvEmbedded(backend, mpvEmbeddedFixAvailable) &&
+    isMpvEmbeddedFixChannel(activePlaylistId, String(streamId))
+  ) {
+    backend = "mpv-embedded"
+  }
+  // Persisted setting can name mpv-embedded even when mpv itself isn't available.
+  if (backend === "mpv-embedded" && !mpvEmbeddedFixAvailable) backend = "artplayer"
   const channelHeaders = streamHeadersById.get(streamId) || null
   const channelDrm = streamDrmById.get(streamId) || null
+  const tuneStartedAtMs = performance.now()
+  log.debug("[xt:livetv] tune start", `channel=${streamId} backend=${backend} container=${creds.liveContainer || "m3u8"} mode=live external=${backend === "mpv" || backend === "vlc"}`)
 
   if (backend === "mpv" || backend === "vlc") {
     void stopAudioTranscode()
@@ -4140,7 +4375,8 @@ async function play(streamId, name, reason = "user") {
   }
 
   resetEmptyState()
-  document.getElementById("player")?.removeAttribute("hidden")
+  // The mpv-embedded handle owns the element's hidden state; a native <video> must never show.
+  if (!isNativeVideoBackend(backend)) document.getElementById("player")?.removeAttribute("hidden")
   if (channel?.isRadio || isAudioOnlyChannel(streamId)) {
     // Both triggers hide the video element, so record which one fired - a stale
     // manual override is otherwise indistinguishable from a broken video track.
@@ -4158,6 +4394,7 @@ async function play(streamId, name, reason = "user") {
 
   const wantsAudioProxyFix = audioProxyOneShotFixSet.has(streamId)
   const useAudioProxy =
+    !isNativeVideoBackend(backend) &&
     audioProxyAvailable &&
     !audioProxyBypassSet.has(streamId) &&
     (wantsAudioProxyFix || isAudioTranscodeChannel(activePlaylistId, String(streamId)))
@@ -4189,7 +4426,10 @@ async function play(streamId, name, reason = "user") {
     void stopAudioTranscode()
   }
 
-  const player = await ensureEmbeddedPlayer(backend)
+  const player = await ensureEmbeddedPlayer(backend, {
+    userAgent: channelHeaders?.userAgent || getUserAgent() || null,
+    referer: channelHeaders?.referer || null,
+  })
   // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
   if (myRequest !== catchupRequestSeq) {
     return
@@ -4214,6 +4454,9 @@ async function play(streamId, name, reason = "user") {
     isLive: true,
     audioProxied,
     audioProxySessionId,
+    mirrorHops: 0,
+    drm: audioProxied ? null : channelDrm,
+    startedAtMs: tuneStartedAtMs,
   }
   // An "auto:*" reason is a recovery re-invocation of the same tune, not a new one - keep it in the same session.
   if (isAutomaticRetuneReason(reason)) {
@@ -4230,8 +4473,10 @@ async function play(streamId, name, reason = "user") {
     player.src({
       src: mountSrc,
       type: mountMime,
+      isLive: true,
       drm: audioProxied ? null : channelDrm,
       preferNativeHls: isNativeHlsFallbackChannel(streamId),
+      title: name,
     })
   } catch {}
   const playResult = player.play?.()
@@ -4242,7 +4487,7 @@ async function play(streamId, name, reason = "user") {
       const errorName = err?.name || String(err)
       const write = errorName === "AbortError" ? log.debug : log.info
       write("[xt:livetv] initial play() rejected - re-arming on canplay", { streamId, error: errorName })
-      const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      const mediaEl = mediaElementOf(player)
       if (!mediaEl) return
       const resume = () => {
         mediaEl.removeEventListener("canplay", resume)
@@ -4465,6 +4710,8 @@ async function playCatchup(channel, opts) {
   }
 
   const backend = getPlayerBackend()
+  const catchupTuneStartedAtMs = performance.now()
+  log.debug("[xt:livetv] tune start", `channel=${channel.id} backend=${backend} mode=catchup kind=${kind} external=${backend === "mpv" || backend === "vlc"}`)
   if (backend === "mpv" || backend === "vlc") {
     toastError(kind === "timeshift" ? t("timeshift.seekFailed") : t("catchup.failed"))
     return false
@@ -4523,9 +4770,14 @@ async function playCatchup(channel, opts) {
   const timelineStopUtcMs = timeline.timelineStopUtcMs
 
   resetEmptyState()
-  document.getElementById("player")?.removeAttribute("hidden")
+  if (!isNativeVideoBackend(backend)) document.getElementById("player")?.removeAttribute("hidden")
 
-  const player = await ensureEmbeddedPlayer(backend, { liveui: false })
+  const channelHeaders = streamHeadersById.get(channel.id) || null
+  const player = await ensureEmbeddedPlayer(backend, {
+    liveui: false,
+    userAgent: channelHeaders?.userAgent || getUserAgent() || null,
+    referer: channelHeaders?.referer || null,
+  })
   // Re-check staleness: the ensureEmbeddedPlayer() await is another window for a newer request to take over.
   if (requestSeq !== catchupRequestSeq) {
     return false
@@ -4572,6 +4824,7 @@ async function playCatchup(channel, opts) {
     audioClockWedge: false,
     mime,
     isLive: false,
+    startedAtMs: catchupTuneStartedAtMs,
   }
   getPlayerInsights().startSession({ label: channel.name, seq })
   hideBufferingChip()
@@ -4670,6 +4923,7 @@ async function playCatchup(channel, opts) {
     isLive: false,
     durationSeconds: timelineSpanSeconds,
     timelineOffsetSeconds,
+    title: title || channel.name,
   })
   attachCatchupSeekInterceptor(player, seq)
   armLiveEdgeTracking(channel)
@@ -4681,7 +4935,7 @@ async function playCatchup(channel, opts) {
       const errorName = err?.name || String(err)
       const write = errorName === "AbortError" ? log.debug : log.info
       write("[xt:livetv] initial play() rejected - re-arming on canplay", { streamId, error: errorName })
-      const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+      const mediaEl = mediaElementOf(player)
       if (!mediaEl) return
       const resume = () => {
         mediaEl.removeEventListener("canplay", resume)
@@ -4712,7 +4966,7 @@ function attachCatchupSeekInterceptor(player, seq) {
     catchupSeekingEl = null
     catchupSeekingHandler = null
   }
-  const mediaEl = player.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+  const mediaEl = mediaElementOf(player)
   if (!mediaEl) return
   catchupSeekingHandler = () => {
     if (seq !== playSeq || !catchupSession) return
@@ -4820,12 +5074,24 @@ async function seekToAbsolute(targetUtcMs, seekOpts = {}) {
 
   // forceRemount: resume-after-long-pause must rebuild the connection even when the paused position still sits at a buffered edge.
   if (!seekOpts.forceRemount && catchupSession && catchupSession.channelId === channel.id && vjs) {
-    const videoEl = vjs.getMediaElement?.() ?? getPlayerWrap()?.querySelector("video")
+    const videoEl = mediaElementOf(vjs)
     const buffered = videoEl?.buffered
+    const relSeconds = (clamped.targetUtcMs - catchupSession.timelineStartUtcMs) / 1000
     if (buffered) {
-      const relSeconds = (clamped.targetUtcMs - catchupSession.timelineStartUtcMs) / 1000
       for (let i = 0; i < buffered.length; i++) {
         if (relSeconds >= buffered.start(i) - 1 && relSeconds <= buffered.end(i) + 1) {
+          markProgrammaticCatchupSeek()
+          try { vjs.currentTime(Math.max(0, relSeconds)) } catch {}
+          return
+        }
+      }
+    } else if (typeof vjs.engineStats === "function") {
+      // No <video> element to read .buffered from (e.g. mpv-embedded) - derive the buffered window from engine stats instead.
+      const stats = vjs.engineStats()
+      if (stats && typeof stats.bufferedAheadSeconds === "number") {
+        const currentTimeSeconds = vjs.currentTime?.() || 0
+        const bufferedEndSeconds = currentTimeSeconds + stats.bufferedAheadSeconds
+        if (relSeconds >= currentTimeSeconds - 1 && relSeconds <= bufferedEndSeconds + 1) {
           markProgrammaticCatchupSeek()
           try { vjs.currentTime(Math.max(0, relSeconds)) } catch {}
           return
@@ -5552,6 +5818,8 @@ setInterval(() => {
   if (!activePlaylistId) return
   if (!getProgrammesSync(activePlaylistId)) return
   refreshNowSlots()
+  refreshDiscordPresenceProgramme()
+  if (radioModeChannelId != null) paintRadioNowPlaying(radioModeChannelId)
 }, 60 * 1000)
 
 // Window resize (incl. maximize) changes the 0.84vw root font-size and

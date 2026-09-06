@@ -3,8 +3,8 @@
 import { mountCachedImage } from "@/scripts/lib/img-cache.ts"
 import { makeFallback } from "@/scripts/lib/entry-card.ts"
 import { fmtImdbRating } from "@/scripts/lib/format.ts"
-import { attachLongPress } from "@/scripts/tv/long-press.ts"
-import { memoryConservative } from "@/scripts/tv/motion"
+import { attachLongPress, type LongPressHandle } from "@/scripts/tv/long-press.ts"
+import { memoryConservative, effectTier, heavyBlurClass } from "@/scripts/tv/motion"
 import { navigate } from "astro:transitions/client"
 
 export type CardKind = "vod" | "series" | "episode" | "live"
@@ -121,7 +121,6 @@ export function keepCardMediaDecoded(card: HTMLElement): void {
   if (memoryConservative()) return
   for (const img of card.querySelectorAll<HTMLImageElement>("img")) {
     img.loading = "eager"
-    img.decoding = "sync"
   }
 }
 
@@ -169,12 +168,19 @@ function wireCardActivation(
 ): void {
   const activate = buildActivate(card, href, onActivate)
   cardBehaviors.set(card, { activate, longPress: onLongPress })
-  attachLongPress<HTMLElement>({
-    container: card,
+}
+
+/**
+ * One delegated long-press listener set for a rail/grid track instead of one per card - each
+ * card only registers its behavior in `cardBehaviors` via `wireCardActivation`/`updateCardBehavior`.
+ */
+export function registerCardLongPress(container: HTMLElement): LongPressHandle {
+  return attachLongPress<HTMLElement>({
+    container,
     targetSelector: "[data-focus-key]",
-    resolveTarget: () => card,
-    onActivate: () => cardBehaviors.get(card)?.activate?.(),
-    onLongPress: () => cardBehaviors.get(card)?.longPress?.(),
+    resolveTarget: (row) => row,
+    onActivate: (card) => cardBehaviors.get(card)?.activate?.(),
+    onLongPress: (card) => cardBehaviors.get(card)?.longPress?.(),
   })
 }
 
@@ -290,8 +296,11 @@ function buildLiveTile(logoUrl: string | null, name: string): HTMLElement[] {
   backdrop.setAttribute("aria-hidden", "true")
   backdrop.loading = "lazy"
   backdrop.decoding = "async"
-  backdrop.className = "absolute inset-0 h-full w-full scale-125 object-cover opacity-50 blur-2xl saturate-150"
-  mountCachedImage(backdrop, logoUrl, "logo")
+  backdrop.className = heavyBlurClass(
+    "absolute inset-0 h-full w-full scale-125 object-cover opacity-50 blur-2xl saturate-150",
+    "absolute inset-0 bg-surface-2"
+  )
+  if (effectTier() === "full") mountCachedImage(backdrop, logoUrl, "logo")
 
   const foreground = document.createElement("img")
   foreground.alt = ""

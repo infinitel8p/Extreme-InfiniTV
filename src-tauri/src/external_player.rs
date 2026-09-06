@@ -219,7 +219,7 @@ pub fn sandbox_bootstrap_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlug
 // ---------------------------------------------------------------------------
 // Spawn helpers (unchanged surface)
 // ---------------------------------------------------------------------------
-fn classify_io_error(err: &std::io::Error) -> String {
+pub(crate) fn classify_io_error(err: &std::io::Error) -> String {
     match err.kind() {
         std::io::ErrorKind::NotFound => format!("NOT_FOUND:{err}"),
         std::io::ErrorKind::PermissionDenied => format!("PERMISSION:{err}"),
@@ -974,7 +974,7 @@ fn discover_vlc_candidates() -> Vec<String> {
 }
 
 #[cfg(target_os = "windows")]
-fn discover_mpv_candidates() -> Vec<String> {
+pub(crate) fn discover_mpv_candidates() -> Vec<String> {
     let mut candidates = windows_mpv_static_candidates();
     candidates.extend(build_path_candidates(&path_env_dirs(), &["mpv.exe", "mpv.com"]));
     let candidates = prefer_exe_over_com(dedupe_preserve_order(candidates));
@@ -998,7 +998,7 @@ fn discover_vlc_candidates() -> Vec<String> {
 }
 
 #[cfg(target_os = "macos")]
-fn discover_mpv_candidates() -> Vec<String> {
+pub(crate) fn discover_mpv_candidates() -> Vec<String> {
     let mut candidates = vec![
         "/opt/homebrew/bin/mpv".to_string(),
         "/usr/local/bin/mpv".to_string(),
@@ -1032,7 +1032,7 @@ fn discover_vlc_candidates() -> Vec<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn discover_mpv_candidates() -> Vec<String> {
+pub(crate) fn discover_mpv_candidates() -> Vec<String> {
     let mut candidates = linux_static_candidates("mpv");
     candidates.extend(build_path_candidates(&path_env_dirs(), &["mpv"]));
     filter_existing(dedupe_preserve_order(candidates))
@@ -1044,7 +1044,7 @@ fn discover_vlc_candidates() -> Vec<String> {
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-fn discover_mpv_candidates() -> Vec<String> {
+pub(crate) fn discover_mpv_candidates() -> Vec<String> {
     Vec::new()
 }
 

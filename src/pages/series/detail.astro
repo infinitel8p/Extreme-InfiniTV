@@ -67,7 +67,7 @@ import {
         </div>
 
         <!-- Hero -->
-        <div class="w-full">
+        <div id="series-detail-hero" class="w-full">
           <div
             id="series-detail-poster"
             class="dt-hero skel aspect-2/3 sm:aspect-video w-full mx-auto overflow-hidden rounded-xl bg-surface-2 ring-1 ring-line
@@ -287,6 +287,15 @@ import {
       </div>
     </div>
   </main>
+
+  <style>
+    /* Keeps the embedded mpv window's hole pinned while the page scrolls - see mpv-embedded.ts. */
+    #series-detail-hero[data-sticky-player="on"] {
+      position: sticky;
+      top: 1rem;
+      z-index: 20;
+    }
+  </style>
 
   <script>
     import "@/scripts/series/detail.ts"

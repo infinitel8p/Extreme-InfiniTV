@@ -74,14 +74,33 @@ function ensureDialog(): HTMLDialogElement | null {
   node.id = DIALOG_ID
   node.setAttribute("aria-labelledby", `${DIALOG_ID}-title`)
   node.className = [
-    "fixed inset-0 sm:inset-y-0 sm:start-auto sm:end-0 m-0",
-    "w-screen sm:w-[26rem] h-dvh sm:h-full max-w-none sm:max-w-[26rem] max-h-none",
+    "fixed inset-0 sm:start-auto sm:end-0 sm:top-[var(--xt-titlebar-h,0px)] sm:bottom-0 m-0 z-[10001]",
+    "w-screen sm:w-[26rem] h-dvh sm:h-auto max-w-none sm:max-w-[26rem] max-h-none",
     "rounded-none sm:rounded-s-2xl border-0 sm:border-s sm:border-line",
     "bg-surface text-fg p-0 open:flex flex-col overflow-hidden backdrop:bg-black/60",
   ].join(" ")
   document.body.appendChild(node)
   dlg = node
   return dlg
+}
+
+const SCRIM_ID = "xt-cast-remote-scrim"
+
+/** Stands in for `::backdrop`, which only renders for modal dialogs. Clears the titlebar so
+    the window controls stay reachable. */
+function mountScrim(onDismiss: () => void): void {
+  if (typeof document === "undefined" || document.getElementById(SCRIM_ID)) return
+  const scrim = document.createElement("div")
+  scrim.id = SCRIM_ID
+  scrim.setAttribute("aria-hidden", "true")
+  scrim.className =
+    "fixed inset-x-0 bottom-0 top-[var(--xt-titlebar-h,0px)] z-[10000] bg-black/60 xt-cast-scrim"
+  scrim.addEventListener("click", onDismiss)
+  document.body.appendChild(scrim)
+}
+
+function unmountScrim(): void {
+  document.getElementById(SCRIM_ID)?.remove()
 }
 
 function formatClock(seconds: number): string {
@@ -1176,6 +1195,10 @@ export function openCastRemote(): void {
     const target = event.target as HTMLElement | null
     const typing = !!target?.closest("input, textarea, select, [contenteditable]")
     const key = event.key.toLowerCase()
+    if (key === "escape" && !dialog.matches(":modal")) {
+      onCancel(event)
+      return
+    }
     if (typing) return
     if (key === " " || key === "k") {
       if (target?.closest("button")) return
@@ -1217,6 +1240,7 @@ export function openCastRemote(): void {
   }
 
   function detach(): void {
+    unmountScrim()
     stopLiveElapsedTicker()
     clearStopArmTimeout()
     channelPanel?.destroy()
@@ -1249,10 +1273,16 @@ export function openCastRemote(): void {
   document.addEventListener(CAST_SESSION_EVENT, onSessionChanged)
   document.addEventListener(LOCALE_EVENT, onLocaleChange)
 
+  const asSidebar = document.documentElement.hasAttribute("data-tauri-desktop")
   try {
-    dialog.showModal()
+    if (asSidebar) {
+      dialog.show()
+      mountScrim(settleClose)
+    } else {
+      dialog.showModal()
+    }
   } catch (err) {
-    log.warn("[xt:tv-cast-remote] showModal failed:", err)
+    log.warn("[xt:tv-cast-remote] open failed:", err)
     detach()
     return
   }

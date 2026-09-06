@@ -26,6 +26,8 @@ const BASE_INPUTS: SessionSnapshotInputs = {
   vodAudioRemuxAvailable: true,
   customFfmpegPathConfigured: false,
   playerBackend: "videojs",
+  mpvBinaryResolved: null,
+  mpvSessionActive: null,
   perfMode: false,
   perfModeAuto: false,
   tvDevice: null,
@@ -103,6 +105,8 @@ describe("buildSessionSnapshot", () => {
       vodAudioRemuxAvailable: null,
       customFfmpegPathConfigured: null,
       playerBackend: null,
+      mpvBinaryResolved: null,
+      mpvSessionActive: null,
       perfMode: null,
       perfModeAuto: null,
       tvDevice: null,
@@ -123,6 +127,16 @@ describe("buildSessionSnapshot", () => {
     expect(Object.keys(snapshot!).sort()).toEqual(
       Object.keys(buildSessionSnapshot(BASE_INPUTS)).sort(),
     )
+  })
+
+  it("carries mpv binary/session state through to the snapshot", () => {
+    const snapshot = buildSessionSnapshot({
+      ...BASE_INPUTS,
+      mpvBinaryResolved: true,
+      mpvSessionActive: true,
+    })
+    expect(snapshot.mpvBinaryResolved).toBe(true)
+    expect(snapshot.mpvSessionActive).toBe(true)
   })
 
   it("never leaks host/username/password from the active playlist entry", () => {

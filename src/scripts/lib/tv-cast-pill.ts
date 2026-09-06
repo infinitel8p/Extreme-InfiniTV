@@ -30,6 +30,7 @@ import {
 } from "@/scripts/lib/tv-cast-state-feed.js"
 import { castNeighbor, createAutoAdvanceTracker, resolveNeighborAvailability, neighborAvailability } from "@/scripts/lib/tv-cast-next.js"
 import { createCastProgressRecorder } from "@/scripts/lib/tv-cast-progress.js"
+import { observeCastPresence, clearCastPresence } from "@/scripts/lib/cast-rich-presence.js"
 import {
   initCastMediaNotificationActions,
   updateCastMediaNotification,
@@ -694,6 +695,7 @@ function onFeedState(state: CastState): void {
   const session = getCastSession()
   if (!session || !pillEl) return
   castProgressRecorder.observe(session, state)
+  observeCastPresence(session, state)
   const device = sessionAsDevice(session)
   refreshReceiverLogSnapshotIfStale(session, device)
   if (state.durationSeconds != null) lastKnownDurationSeconds = state.durationSeconds
@@ -925,6 +927,7 @@ function onPillKeydown(event: KeyboardEvent): void {
 
 function mount(session: CastSession): void {
   if (pillEl) unmount(false)
+  observeCastPresence(session)
   errorToastShown = false
   suppressPollPositionUntil = 0
   lastKnownDurationSeconds = null
@@ -1013,6 +1016,7 @@ function unmount(animate = true): void {
 
 function onSessionChanged(): void {
   const session = getCastSession()
+  if (!session) clearCastPresence()
   if (session && !session.dismissed) {
     if (pillEl) {
       applySessionToPill(pillEl, session)

@@ -6,6 +6,10 @@
 //   pnpm screenshots --device=Desktop
 //   pnpm screenshots --route=/livetv
 //   pnpm screenshots --theme=light
+//   pnpm screenshots --docs             # only the annotated docs shots; leaves store/readme shots alone
+//   pnpm screenshots --device=Desktop --route=/settings --scroll=#card-network --slug=settings-network  # one-off docs shot, named for the page that uses it
+//   pnpm screenshots --wait-for=#list .channel-row     # one-off: hold the shot until this selector is visible
+//   pnpm screenshots --wait-hidden=.warming-strip      # one-off: hold the shot until this selector is hidden or gone
 //   pnpm screenshots --tv               # capture the /tv/* Android TV browse UI (Android-TV device only)
 //   pnpm screenshots --tv --route=/tv/live
 //
@@ -22,7 +26,7 @@
 //   XT_ALLOW_SHORT_REDACTIONS=1          # allow skipping redaction of <4-char credential values instead of aborting
 //   State source precedence: XT_STATE_FILE > .screenshot-state.json > Tauri desktop app state (opt in with XT_TAURI_STATE=true, real credentials otherwise never read)
 //
-// Output: docs/screenshots/<Device>/<route>.png
+// Output: docs/src/assets/screenshots/<Device>/<route>.png, plus a <route>.boxes.json manifest for docs-annotated shots.
 // When credentials are present, additional welcome-state captures are saved
 // alongside the populated ones (e.g. home-welcome.png next to home.png) so
 // the empty-state hub can be showcased too.
@@ -31,7 +35,7 @@
 
 import { chromium } from "playwright"
 import { existsSync, readFileSync } from "node:fs"
-import { mkdir } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -53,6 +57,19 @@ const DEVICES = {
 
 const ROUTES = ["/", "/livetv", "/movies", "/series", "/favorites", "/recently-added", "/epg", "/search", "/downloads", "/settings"]
 const WELCOME_ROUTES = ["/"]
+const WARM_ROUTES = ["/", "/movies", "/series"]
+
+const DOCS_SHOTS = [
+  { slug: "login-xtream", route: "/login" },
+  { slug: "settings-playlists", route: "/settings", scroll: "#settings-playlists" },
+  { slug: "settings-network", route: "/settings", scroll: "#card-network" },
+  { slug: "settings-storage", route: "/settings", scroll: "#card-storage" },
+  { slug: "settings-tmdb", route: "/settings", scroll: "#card-tmdb" },
+  { slug: "settings-categories", route: "/settings", scroll: "#card-categories" },
+  { slug: "home-tour", route: "/" },
+  { slug: "livetv-guide", route: "/livetv", waitFor: "#list .channel-row" },
+]
+
 const TV_ROUTES = ["/tv", "/tv/live", "/tv/movies", "/tv/series", "/tv/search", "/tv/downloads", "/tv/settings"]
 // Matches TV_VIEW_MOUNTED_EVENT in src/scripts/tv/router.ts.
 const TV_VIEW_MOUNTED_EVENT = "xt:tv-view-mounted"
@@ -238,6 +255,29 @@ function buildRedactions(snapshot) {
   return replacements
 }
 
+// Boxes are viewport-normalised so docs annotations re-measure instead of using frozen pixels.
+async function collectBoxes(page) {
+  return page.evaluate(() => {
+    const viewport = { width: window.innerWidth, height: window.innerHeight }
+    const boxes = {}
+    for (const el of document.querySelectorAll("[id]")) {
+      const rect = el.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) continue
+      // Only what the screenshot actually shows is annotatable.
+      if (rect.bottom <= 0 || rect.top >= viewport.height) continue
+      if (rect.right <= 0 || rect.left >= viewport.width) continue
+      const round = (value) => Math.round(value * 10000) / 10000
+      boxes[`#${el.id}`] = {
+        x: round(rect.x / viewport.width),
+        y: round(rect.y / viewport.height),
+        w: round(rect.width / viewport.width),
+        h: round(rect.height / viewport.height),
+      }
+    }
+    return { viewport, boxes }
+  })
+}
+
 async function redactPage(page, redactions) {
   if (!redactions || redactions.length === 0) return
   await page.evaluate((items) => {
@@ -366,7 +406,7 @@ async function settleTvNavFocus(page) {
   if (await railStillFocused(page)) await focusTvContentAwayFromRail(page)
 }
 
-async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, seed, theme, slugSuffix = "", redactions = [], snapshot = null, displayName = "Demo provider", tvMode = false) {
+async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, seed, theme, slugSuffix = "", redactions = [], snapshot = null, displayName = "Demo provider", tvMode = false, scrollTo = null, slugOverride = null, skipRoutes = [], extraShots = [], waitForSelector = null, waitHiddenSelector = null) {
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: viewport.deviceScaleFactor,
@@ -422,7 +462,27 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
 
   const page = await context.newPage()
 
-  for (const route of routes) {
+  const plan = [
+    ...routes.map((route) => ({
+      route,
+      slug: slugOverride,
+      scroll: skipRoutes.includes(route) ? null : scrollTo,
+      waitFor: skipRoutes.includes(route) ? null : waitForSelector,
+      waitHidden: skipRoutes.includes(route) ? null : waitHiddenSelector,
+      skip: skipRoutes.includes(route),
+    })),
+    ...extraShots.map((shot) => ({
+      route: shot.route,
+      slug: shot.slug,
+      scroll: shot.scroll || null,
+      waitFor: shot.waitFor || null,
+      waitHidden: shot.waitHidden || null,
+      skip: false,
+    })),
+  ]
+
+  for (const step of plan) {
+    const { route } = step
     const target = baseUrl.replace(/\/+$/, "") + route
     try {
       await page.goto(target, { waitUntil: "networkidle", timeout: 30_000 })
@@ -453,7 +513,7 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
     // Catalog warming kicks in on idle after load (a fresh context has an
     // empty cache); if the strip appears, hold the shot until it is gone.
     const warmingStrip = page.locator(".warming-strip")
-    const warmingAppearWindowMs = route === routes[0] ? 5_000 : 700
+    const warmingAppearWindowMs = step === plan[0] ? 5_000 : 700
     const warmingVisible = await warmingStrip
       .waitFor({ state: "visible", timeout: warmingAppearWindowMs })
       .then(() => true, () => false)
@@ -461,6 +521,28 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
       await warmingStrip.waitFor({ state: "hidden", timeout: 180_000 }).catch(() => {})
       await page.waitForTimeout(400)
     }
+
+    let contentWaitFailed = false
+    if (step.waitFor) {
+      const appeared = await page
+        .waitForSelector(step.waitFor, { state: "visible", timeout: 240_000 })
+        .then(() => true, () => false)
+      if (!appeared) {
+        console.error(`  x ${deviceName}${route} - ${step.waitFor} never became visible`)
+        contentWaitFailed = true
+      }
+    }
+    if (!contentWaitFailed && step.waitHidden) {
+      const disappeared = await page
+        .waitForSelector(step.waitHidden, { state: "hidden", timeout: 240_000 })
+        .then(() => true, () => false)
+      if (!disappeared) {
+        console.error(`  x ${deviceName}${route} - ${step.waitHidden} never became hidden`)
+        contentWaitFailed = true
+      }
+    }
+    if (contentWaitFailed) continue
+
     await page.evaluate(() => document.fonts.ready).catch(() => {})
     await page.waitForTimeout(1500)
     try {
@@ -472,11 +554,38 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
       console.warn(`  ! ${deviceName}${route} - redaction pass failed: ${err.message}`)
     }
 
-    const outDir = path.join(ROOT, "docs", "screenshots", deviceName)
+    if (step.scroll) {
+      const scrolled = await page.evaluate((selector) => {
+        const el = document.querySelector(selector)
+        if (!el) return false
+        el.scrollIntoView({ block: "center", behavior: "instant" })
+        return true
+      }, step.scroll)
+      if (!scrolled) {
+        console.warn(`  ! ${deviceName}${route} - scroll target ${step.scroll} matched nothing; shooting the top of the page`)
+      }
+      await page.waitForTimeout(500)
+    }
+
+    // Leading warm-up routes go through the whole settle path but are not saved.
+    if (step.skip) {
+      console.log(`  ~ ${deviceName}${route} warmed the catalogue (not saved)`)
+      continue
+    }
+
+    const outDir = path.join(ROOT, "docs", "src", "assets", "screenshots", deviceName)
     await mkdir(outDir, { recursive: true })
-    const file = path.join(outDir, `${slugRoute(route)}${slugSuffix}.png`)
+    const slug = step.slug || `${slugRoute(route)}${slugSuffix}`
+    const file = path.join(outDir, `${slug}.png`)
     await page.screenshot({ path: file, fullPage: false })
     console.log(`  ok ${path.relative(ROOT, file)}`)
+
+    if (step.slug) {
+      const manifest = await collectBoxes(page)
+      const manifestFile = path.join(outDir, `${slug}.boxes.json`)
+      await writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`, "utf8")
+      console.log(`  ok ${path.relative(ROOT, manifestFile)} (${Object.keys(manifest.boxes).length} ids)`)
+    }
   }
 
   await context.close()
@@ -494,12 +603,26 @@ async function main() {
   }
 
   const tvMode = args.tv === "true"
-  const deviceFilter = args.device
+  const docsMode = args.docs === "true"
+  const scrollTo = args.scroll && args.scroll !== "true" ? args.scroll : null
+  const slugOverride = args.slug && args.slug !== "true" ? args.slug : null
+  const waitForArg = args["wait-for"] && args["wait-for"] !== "true" ? args["wait-for"] : null
+  const waitHiddenArg = args["wait-hidden"] && args["wait-hidden"] !== "true" ? args["wait-hidden"] : null
+  const deviceFilter = args.device || (docsMode ? "Desktop" : undefined)
   const routeFilter = args.route
   const routePool = tvMode ? TV_ROUTES : ROUTES
   const deviceEntries = tvMode && !deviceFilter ? [["Android-TV", DEVICES["Android-TV"]]] : Object.entries(DEVICES)
   const devices = deviceEntries.filter(([name]) => !deviceFilter || name.toLowerCase() === deviceFilter.toLowerCase())
-  const routes = routePool.filter((route) => !routeFilter || route === routeFilter)
+  // A --slug run may target any route; warm the catalogue first for a cold cache.
+  const warmFirst = Boolean(slugOverride && routeFilter && !tvMode)
+  const warmRoutes = warmFirst ? WARM_ROUTES.filter((route) => route !== routeFilter) : []
+  const routes = docsMode
+    ? WARM_ROUTES
+    : slugOverride && routeFilter
+      ? [...warmRoutes, routeFilter]
+      : routePool.filter((route) => !routeFilter || route === routeFilter)
+  const docsShots = !tvMode && !routeFilter && !slugOverride ? DOCS_SHOTS : []
+  const skipRoutes = docsMode ? WARM_ROUTES : warmRoutes
   if (devices.length === 0) {
     console.error(`No device matched --device=${deviceFilter}. Known: ${Object.keys(DEVICES).join(", ")}`)
     process.exit(1)
@@ -536,7 +659,7 @@ async function main() {
   }
 
   const hasState = Boolean(snapshot || seed)
-  const welcomeRoutes = hasState && !tvMode ? WELCOME_ROUTES.filter((route) => !routeFilter || route === routeFilter) : []
+  const welcomeRoutes = hasState && !tvMode && !docsMode ? WELCOME_ROUTES.filter((route) => !routeFilter || route === routeFilter) : []
   const redactionsEnabled = args.redact !== "false" && process.env.XT_REDACT !== "false"
   const redactions = redactionsEnabled ? buildRedactions(snapshot) : []
 
@@ -553,7 +676,7 @@ async function main() {
   try {
     for (const [name, viewport] of devices) {
       console.log(`> ${name} (${viewport.width}x${viewport.height})`)
-      await captureForDevice(browser, name, viewport, routes, baseUrl, seed, theme, "", redactions, snapshot, displayName, tvMode)
+      await captureForDevice(browser, name, viewport, routes, baseUrl, seed, theme, "", redactions, snapshot, displayName, tvMode, scrollTo, slugOverride, skipRoutes, name === "Desktop" ? docsShots : [], waitForArg, waitHiddenArg)
       if (welcomeRoutes.length > 0) {
         await captureForDevice(browser, name, viewport, welcomeRoutes, baseUrl, null, theme, "-welcome", redactions, null, displayName, tvMode)
       }

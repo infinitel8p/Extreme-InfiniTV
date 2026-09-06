@@ -289,7 +289,8 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
             if (
               tvRedirectTarget === "/tv/movies/detail" ||
               tvRedirectTarget === "/tv/series/detail" ||
-              tvRedirectTarget === "/tv/search"
+              tvRedirectTarget === "/tv/search" ||
+              tvRedirectTarget === "/tv/login"
             ) {
               tvRedirectTarget += location.search;
             }
@@ -863,6 +864,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   import { mountBackHandler } from "@/scripts/lib/back-handler"
   import { mountTvInputGuard } from "@/scripts/lib/tv-input-guard"
   import { isTvDevice } from "@/scripts/lib/tv-detect"
+  import { isElementVisibleForNav } from "@/scripts/lib/nav-visibility"
   initI18n()
   initConnectivity()
   initUiSounds()
@@ -1031,10 +1033,14 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   async function pushIdlePresence() {
     if (onLogin()) return
     try {
-      const [{ setIdleRichPresence }, { getActiveEntry }] = await Promise.all([
+      const [{ setIdleRichPresence }, { getActiveEntry }, { getCastSession }] = await Promise.all([
         import("@/scripts/lib/discord-rpc.js"),
         import("@/scripts/lib/creds.js"),
+        import("@/scripts/lib/tv-cast.js"),
       ])
+      // A cast keeps playing across navigations; its presence outranks browsing.
+      const casting = getCastSession()
+      if (casting && !casting.connectedOnly) return
       const active = await getActiveEntry()
       setIdleRichPresence({
         playlistId: active?._id || "",
@@ -1130,14 +1136,12 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         id: "main",
         selector:
           "a, button, summary, input, textarea, [contenteditable='true'], select, [tabindex]:not([tabindex='-1'])",
-        // Reject fullscreen-occluded, inert, offscreen-parked, invisible, or faded-out player-chrome targets
+        // Reject fullscreen-occluded, inert, invisible, or faded-out player-chrome targets
         navigableFilter: (elem: Element) => {
           const fullscreenEl = document.fullscreenElement
           if (fullscreenEl && !fullscreenEl.contains(elem)) return false
           if (elem.closest("[inert]")) return false
-          const rect = elem.getBoundingClientRect()
-          if (rect.right <= 0 || rect.bottom <= 0) return false
-          if (getComputedStyle(elem).visibility !== "visible") return false
+          if (!isElementVisibleForNav(elem)) return false
           const playerChrome = elem.closest(
             ".vjs-control-bar, .vjs-volume-vertical, .vjs-menu"
           )

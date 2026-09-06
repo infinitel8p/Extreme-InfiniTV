@@ -12,6 +12,10 @@ import {
   manifestKindFromExtension,
   shouldPreferNativeHls,
   androidHandoffKindFor,
+  isNativeVideoBackend,
+  canSwapToMpvEmbedded,
+  shouldOfferMpvEmbeddedFix,
+  resolveBackendFrom,
 } from "../src/scripts/lib/player-runtime"
 
 const SRC = "https://example.com/live/u/p/1.m3u8"
@@ -344,5 +348,102 @@ describe("androidHandoffKindFor", () => {
 
   it("routes mpv to the system chooser, since MPV has no Android build", () => {
     expect(androidHandoffKindFor("mpv")).toBe("system")
+  })
+})
+
+describe("isNativeVideoBackend", () => {
+  it("is true only for mpv-embedded", () => {
+    expect(isNativeVideoBackend("mpv-embedded")).toBe(true)
+  })
+
+  it("is false for the MSE-based embedded backends and external players", () => {
+    expect(isNativeVideoBackend("videojs")).toBe(false)
+    expect(isNativeVideoBackend("artplayer")).toBe(false)
+    expect(isNativeVideoBackend("shaka")).toBe(false)
+    expect(isNativeVideoBackend("mpv")).toBe(false)
+    expect(isNativeVideoBackend("vlc")).toBe(false)
+  })
+
+  it("is false for null/undefined", () => {
+    expect(isNativeVideoBackend(null)).toBe(false)
+    expect(isNativeVideoBackend(undefined)).toBe(false)
+  })
+})
+
+describe("canSwapToMpvEmbedded", () => {
+  it("is false when mpv is unavailable", () => {
+    expect(canSwapToMpvEmbedded("videojs", false)).toBe(false)
+  })
+
+  it("is false when the backend is already mpv-embedded", () => {
+    expect(canSwapToMpvEmbedded("mpv-embedded", true)).toBe(false)
+  })
+
+  it("is false for external mpv/vlc backends", () => {
+    expect(canSwapToMpvEmbedded("mpv", true)).toBe(false)
+    expect(canSwapToMpvEmbedded("vlc", true)).toBe(false)
+  })
+
+  it("is true for the MSE-based embedded backends when mpv is available", () => {
+    expect(canSwapToMpvEmbedded("videojs", true)).toBe(true)
+    expect(canSwapToMpvEmbedded("artplayer", true)).toBe(true)
+    expect(canSwapToMpvEmbedded("shaka", true)).toBe(true)
+  })
+})
+
+describe("shouldOfferMpvEmbeddedFix", () => {
+  it("is false when mpv is unavailable", () => {
+    expect(shouldOfferMpvEmbeddedFix("hevc", "videojs", false)).toBe(false)
+  })
+
+  it("is false when the backend is already mpv-embedded", () => {
+    expect(shouldOfferMpvEmbeddedFix("codec", "mpv-embedded", true)).toBe(false)
+  })
+
+  it("is false when the verdict is not codec-shaped", () => {
+    expect(shouldOfferMpvEmbeddedFix("audio", "videojs", true)).toBe(false)
+    expect(shouldOfferMpvEmbeddedFix("parse", "videojs", true)).toBe(false)
+    expect(shouldOfferMpvEmbeddedFix("connection-limit", "videojs", true)).toBe(false)
+    expect(shouldOfferMpvEmbeddedFix("unknown", "videojs", true)).toBe(false)
+  })
+
+  it("is true for hevc/codec verdicts when mpv is available and not already active", () => {
+    expect(shouldOfferMpvEmbeddedFix("hevc", "videojs", true)).toBe(true)
+    expect(shouldOfferMpvEmbeddedFix("codec", "shaka", true)).toBe(true)
+  })
+})
+
+describe("resolveBackendFrom", () => {
+  const available = { isAndroid: false, mpvAvailable: true, externalAvailable: true }
+
+  it("swaps artplayer for videojs on Android, regardless of mpv/external availability", () => {
+    expect(resolveBackendFrom("artplayer", { ...available, isAndroid: true })).toBe("videojs")
+  })
+
+  it("leaves artplayer alone off Android", () => {
+    expect(resolveBackendFrom("artplayer", available)).toBe("artplayer")
+  })
+
+  it("swaps mpv-embedded for artplayer when mpv is unavailable", () => {
+    expect(resolveBackendFrom("mpv-embedded", { ...available, mpvAvailable: false })).toBe("artplayer")
+  })
+
+  it("keeps mpv-embedded when mpv is available", () => {
+    expect(resolveBackendFrom("mpv-embedded", available)).toBe("mpv-embedded")
+  })
+
+  it("swaps mpv/vlc for artplayer when external players are unavailable", () => {
+    expect(resolveBackendFrom("mpv", { ...available, externalAvailable: false })).toBe("artplayer")
+    expect(resolveBackendFrom("vlc", { ...available, externalAvailable: false })).toBe("artplayer")
+  })
+
+  it("keeps mpv/vlc when external players are available", () => {
+    expect(resolveBackendFrom("mpv", available)).toBe("mpv")
+    expect(resolveBackendFrom("vlc", available)).toBe("vlc")
+  })
+
+  it("leaves videojs and shaka untouched", () => {
+    expect(resolveBackendFrom("videojs", available)).toBe("videojs")
+    expect(resolveBackendFrom("shaka", available)).toBe("shaka")
   })
 })

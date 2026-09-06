@@ -3,13 +3,29 @@ layout: ../layouts/DocsLayout.astro
 title: "Playlists (Xtream + M3U)"
 description: "Sign in with Xtream Codes credentials or an M3U URL. Add as many playlists as you want."
 lede: "Whatever your provider sent you, paste it into one field. The app figures out the rest."
+icon: "playlist"
+cardOrder: 1
 ---
 
 import Callout from "../components/Callout.astro"
+import Shot from "../components/Shot.astro"
 
 ## Sign in
 
 The login screen has one **Server URL** field plus optional **Username** / **Password**. How you fill it in depends on what your provider gave you.
+
+<Shot
+  src="Desktop/login-xtream"
+  alt="The add-playlist screen with the Xtream tab selected, showing Name, Server URL, Username and Password fields"
+  caption="Add playlist, with the Xtream tab selected."
+  zoom="#playlist-form"
+  markers={[
+    { at: "#tab-xtream", note: "Pick the kind of playlist you have. The form below changes to match; you rarely need to touch this, because pasting a URL switches tabs for you." },
+    { at: "#title", note: "A name for you, not the provider. It labels the playlist switcher and every backup." },
+    { at: "#serverUrl", note: "The one field that matters. Paste whatever your provider sent - host, player_api URL, or .m3u link." },
+    { at: "#username", note: "Xtream only. Leave blank for an M3U URL." },
+  ]}
+/>
 
 ### Xtream Codes
 
@@ -34,7 +50,7 @@ A bare direct stream link works too: paste a single `.m3u8` URL that isn't a pla
 
 ### Playlist file from your device
 
-Got a `.m3u` file instead of a URL? Use **Choose file...** on the login screen to load it straight from your device. The playlist is stored locally, so it keeps working with no server involved.
+Got a `.m3u` file instead of a URL? Use **Choose file…** on the login screen to load it straight from your device. The playlist is stored locally, so it keeps working with no server involved.
 
 <Callout type="note">
   Just want to try the app? The login screen also offers a **Demo (iptv-org)** playlist - a free public playlist you can remove at any time.
@@ -46,6 +62,30 @@ The login screen's advanced options let you attach one or more **EPG URLs** to a
 
 For M3U playlists, the app also picks up EPG sources the playlist itself already points to: if the file lists more than one guide URL (`x-tvg-url`, `tvg-url`, or `url-tvg`, comma-separated), all of them get merged in automatically.
 
+<Shot
+  src="Desktop/epg"
+  alt="The programme guide: channel rows down the left, programmes laid out against a timeline, with category, day and Now controls above"
+  caption="The programme guide, fed by the EPG source of the active playlist. Click a programme for details; the day arrows and Now move along the timeline."
+/>
+
+### Custom DNS server
+
+Also in the advanced options, next to the backup domains field, is a **DNS server** disclosure. Set it if your provider's hostname only resolves through their own DNS, or through a resolver your ISP doesn't offer - some providers list a DNS server right in their welcome message. It also works with a privacy-focused resolver like `dnsforge.de` if that's what you'd rather use.
+
+- An IPv4 or IPv6 address, with an optional port (defaults to `53`).
+- A DNS-over-HTTPS URL, for example `https://dnsforge.de/dns-query`.
+- Leave it empty to use your system's own resolver.
+
+Press **Test** to check the server before saving. It runs two steps: it resolves the playlist's hostname through the DNS server you entered, then requests that address to confirm it actually answers. A pass reads "Resolved to 1.2.3.4 in 5 ms. The server answered through it."; if the name resolves but the address stays silent, the result says so, which usually means the resolver handed back a stale address. The value is saved per playlist and applies to sign-in, catalog, EPG, images, and playback, including MPV and VLC; **Settings > Network** also has a global default DNS server that applies when a playlist doesn't set its own. Casting a stream carries the DNS setting along, so a receiver on a current version resolves the same way - older receivers fall back to their own system DNS.
+
+The global default reaches further than a per-playlist value: it also covers the app's own lookups that belong to no playlist, such as metadata (TheTVDB, TMDb), the iptv-org logo fallback, and update checks. Set it there if you want everything the app requests to go through one resolver, a Pi-hole for example. Artwork the app hasn't cached yet is still loaded by the WebView on first display, which always uses your system resolver, so a resolver-level block is only complete when it also covers the device.
+
+<Callout type="note">
+  Not available in the browser (web) build - the DNS fields are read-only there with a hint.
+</Callout>
+
+On Android TV the same settings are under **Settings > DNS server** for the global default, and there is a **DNS server** field on the add-playlist screen for a per-playlist one. A playlist that carries its own DNS server shows it on its row in the playlist switcher and in **Settings > Playlists**.
+
 ### Personalize a playlist
 
 Still in the login screen's advanced options, you can give a playlist a **Name**, an **Emoji**, and an **Accent color**. The emoji replaces the type badge next to that playlist wherever it's listed, and the accent color overrides the app's accent while that playlist is active - handy for telling accounts apart at a glance.
@@ -54,7 +94,19 @@ Still in the login screen's advanced options, you can give a playlist a **Name**
 
 You can add as many Xtream accounts and M3U URLs as you want. Open **Settings > Playlists** to add, rename, or remove them. Switch the active one from the sidebar.
 
-Favorites, watchlist, recents, and watch progress are tracked **per playlist** so different accounts stay separate. Favorites, Watchlist, and Continue watching also offer a combined view across all your playlists.
+<Shot
+  src="Desktop/settings-playlists"
+  alt="The Playlists card in Settings, listing the saved playlists with per-row actions"
+  caption="The Playlists card in Settings: every saved playlist in one list, with the active one switchable from the sidebar."
+  zoom="#settings-playlists"
+  markers={[
+    { at: "#settings-playlists-list", note: "Every saved playlist. Each row carries its own edit, diagnose, export and remove actions." },
+    { at: "#settings-refresh-active", note: "Re-fetch the active playlist now, rather than waiting for the cache to go stale. Use it after your provider adds channels." },
+    { at: "#settings-new-custom-playlist", note: "Start a custom playlist - a hand-picked channel list assembled from the playlists above." },
+  ]}
+/>
+
+Favorites, watchlist, recents, and watch progress are tracked **per playlist** so different accounts stay separate. Favorites, Watch later, and Continue watching also offer a combined view across all your playlists.
 
 ## Custom playlists
 
@@ -63,6 +115,16 @@ You can also build a channel list of your own: open **Settings > Playlists > New
 ## Hide unwanted categories
 
 Many providers ship hundreds of categories you don't want to see ("Adult", regional channels, dead links). Open **Settings > Library > Categories** (or the filter button on Live TV / Movies / Series) to toggle which ones show up. Hidden categories stay hidden across restarts and are remembered per playlist.
+
+<Shot
+  src="Desktop/settings-categories"
+  alt="The Categories card in Settings"
+  caption="The Categories card in Settings, one picker per content kind."
+  zoom="#card-categories"
+  markers={[
+    { at: "#card-categories", note: "Hidden categories disappear from the pickers and the grids; nothing is deleted from the provider." },
+  ]}
+/>
 
 For M3U playlists, if a channel's `group-title` lists more than one group separated by semicolons, the app puts that channel in every group listed instead of just the first one.
 
@@ -81,6 +143,13 @@ If the EPG (now / next, full schedule) looks off by a few hours, your provider i
 For M3U playlists, if just one or two channels look shifted while the rest are fine, the playlist itself may set a `tvg-shift` on those channels - the app honors it for the guide display automatically, no setting needed.
 
 ## Backup and restore
+
+<Shot
+  src="Desktop/settings-storage"
+  alt="The Backup card in Settings with Export to file and Import from file buttons"
+  caption="The Backup card in Settings: export everything to a file, or restore a previous export."
+  zoom="#card-backup"
+/>
 
 **Settings > Data > Backup** exports a single JSON file containing your playlists, preferences, and app settings. Import it on another device to bring everything across.
 

@@ -61,7 +61,12 @@ const navItems = [
           var classicPath = location.pathname.replace(/\/+$/, "")
           if (classicPath === "") classicPath = "/"
           var classicTarget = classicRouteTable[classicPath] || "/"
-          if (classicTarget === "/movies/detail" || classicTarget === "/series/detail" || classicTarget === "/search") {
+          if (
+            classicTarget === "/movies/detail" ||
+            classicTarget === "/series/detail" ||
+            classicTarget === "/search" ||
+            classicTarget === "/login"
+          ) {
             classicTarget += location.search
           }
           location.replace(classicTarget)
@@ -85,9 +90,53 @@ const navItems = [
           if (!isFinite(fontScale) || fontScale < 0.75 || fontScale > 2) fontScale = 1
           document.documentElement.style.setProperty("--xt-font-scale", String(fontScale))
 
-          if (localStorage.getItem("xt_perf_mode") === "1") {
+          // Mirrors computeRootFontSizePx() in root-font-size.ts (same design canvas: 60rem x
+          // 33.75rem, 12px floor) so the pre-paint value matches what the debounced resize
+          // listener computes once the module boots.
+          var rootFontPx = Math.max(12, Math.min(window.innerWidth / 60, window.innerHeight / 33.75) * fontScale)
+          document.documentElement.style.setProperty("--xt-root-px", rootFontPx + "px")
+
+          var perfStored = localStorage.getItem("xt_perf_mode")
+          if (perfStored === null && isTv) {
+            localStorage.setItem("xt_perf_mode", "1")
+            localStorage.setItem("xt_perf_mode_auto", "1")
+            perfStored = "1"
+          }
+          if (perfStored === "1") {
             document.documentElement.setAttribute("data-perf-mode", "on")
           }
+
+          // Same rule as classifyEffectTier() in motion.ts, so data-tv-effects is stable
+          // before first paint; effectTier() re-derives and re-stamps this at runtime.
+          var forcedEffectTier = localStorage.getItem("xt_tv_effects")
+          var resolvedEffectTier = "full"
+          if (forcedEffectTier === "full" || forcedEffectTier === "lite") {
+            resolvedEffectTier = forcedEffectTier
+          } else {
+            var deviceMemoryGb = navigator.deviceMemory
+            var memoryClassMb = null
+            try {
+              if (window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.getMemoryClass === "function") {
+                var rawMemoryClass = window.AndroidDeviceInfo.getMemoryClass()
+                if (typeof rawMemoryClass === "number" && rawMemoryClass > 0) memoryClassMb = rawMemoryClass
+              }
+            } catch (e) {}
+            var uaLower = (navigator.userAgent || "").toLowerCase()
+            if (typeof deviceMemoryGb === "number" && deviceMemoryGb <= 2) {
+              resolvedEffectTier = "lite"
+            } else if (memoryClassMb !== null && memoryClassMb <= 256) {
+              resolvedEffectTier = "lite"
+            } else if (
+              uaLower.indexOf("android") !== -1 &&
+              typeof navigator.hardwareConcurrency === "number" &&
+              navigator.hardwareConcurrency <= 4
+            ) {
+              resolvedEffectTier = "lite"
+            } else if (uaLower.indexOf("armv7") !== -1 || uaLower.indexOf("armeabi") !== -1) {
+              resolvedEffectTier = "lite"
+            }
+          }
+          document.documentElement.setAttribute("data-tv-effects", resolvedEffectTier)
 
           var densityMap = { compact: 0.75, comfortable: 1.3 }
           var densityName = localStorage.getItem("xt_density")
@@ -150,18 +199,17 @@ const navItems = [
             )
           }
 
+          // Only the small nav aria-label/text subset TvLayout's own static markup needs -
+          // i18n.ts writes this alongside the full xt_locale_messages_v3 blob.
           if (storedLocale && storedLocale !== "en") {
-            var rawMessages = localStorage.getItem("xt_locale_messages_v3")
-            if (rawMessages) {
-              var cached = JSON.parse(rawMessages)
-              if (cached && cached.code === storedLocale && cached.messages) {
-                var msgs = cached.messages
+            var rawPrepaint = localStorage.getItem("xt_locale_prepaint")
+            if (rawPrepaint) {
+              var cachedPrepaint = JSON.parse(rawPrepaint)
+              if (cachedPrepaint && cachedPrepaint.code === storedLocale && cachedPrepaint.messages) {
+                var msgs = cachedPrepaint.messages
                 var translateEl = function (el) {
-                  if (!el || el.nodeType !== 1) return
                   var textKey = el.getAttribute("data-i18n")
                   if (textKey && msgs[textKey] != null) el.textContent = msgs[textKey]
-                  var htmlKey = el.getAttribute("data-i18n-html")
-                  if (htmlKey && msgs[htmlKey] != null) el.innerHTML = msgs[htmlKey]
                   var attrSpec = el.getAttribute("data-i18n-attr")
                   if (attrSpec) {
                     var pairs = attrSpec.split(";")
@@ -175,31 +223,11 @@ const navItems = [
                     }
                   }
                 }
-                var i18nObserver = new MutationObserver(function (mutations) {
-                  for (var mi = 0; mi < mutations.length; mi++) {
-                    var added = mutations[mi].addedNodes
-                    for (var ai = 0; ai < added.length; ai++) {
-                      var node = added[ai]
-                      if (node.nodeType !== 1) continue
-                      if (
-                        node.hasAttribute("data-i18n") ||
-                        node.hasAttribute("data-i18n-html") ||
-                        node.hasAttribute("data-i18n-attr")
-                      ) {
-                        translateEl(node)
-                      }
-                      var matches = node.querySelectorAll
-                        ? node.querySelectorAll("[data-i18n], [data-i18n-html], [data-i18n-attr]")
-                        : null
-                      if (matches) {
-                        for (var qi = 0; qi < matches.length; qi++) translateEl(matches[qi])
-                      }
-                    }
-                  }
-                })
-                i18nObserver.observe(document.documentElement, { childList: true, subtree: true })
+                // The nav markup is already parsed into the DOM by DOMContentLoaded, so one
+                // pass here replaces the parse-time MutationObserver this used to need.
                 document.addEventListener("DOMContentLoaded", function () {
-                  i18nObserver.disconnect()
+                  var matches = document.querySelectorAll("[data-i18n], [data-i18n-attr]")
+                  for (var qi = 0; qi < matches.length; qi++) translateEl(matches[qi])
                 })
               }
             }

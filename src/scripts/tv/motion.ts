@@ -1,4 +1,5 @@
 // Shared motion gate + easing for the TV UI; every WAAPI/View Transition path checks motionAllowed().
+import { getAndroidMemoryClassMb } from "@/scripts/lib/tv-detect.ts"
 
 export const TV_EASE = "cubic-bezier(0.16, 1, 0.3, 1)"
 
@@ -23,17 +24,21 @@ export type EffectTier = "full" | "lite"
 const FORCED_TIER_KEY = "xt_tv_effects"
 const LITE_MEMORY_GB_MAX = 2
 const LITE_ANDROID_CORES_MAX = 4
+const LITE_MEMORY_CLASS_MB_MAX = 256
 
 export interface ClassifyEffectTierInput {
   deviceMemoryGb?: number | null
   hardwareConcurrency?: number | null
   userAgent?: string | null
   forced?: EffectTier | null
+  /** ActivityManager.memoryClass in MB (Android bridge); a hard low-RAM signal `deviceMemory` doesn't catch on WebView. */
+  memoryClassMb?: number | null
 }
 
 export function classifyEffectTier(input: ClassifyEffectTierInput): EffectTier {
   if (input.forced === "full" || input.forced === "lite") return input.forced
   if (input.deviceMemoryGb != null && input.deviceMemoryGb <= LITE_MEMORY_GB_MAX) return "lite"
+  if (input.memoryClassMb != null && input.memoryClassMb <= LITE_MEMORY_CLASS_MB_MAX) return "lite"
   const userAgent = input.userAgent || ""
   const isAndroid = /android/i.test(userAgent)
   if (isAndroid && input.hardwareConcurrency != null && input.hardwareConcurrency <= LITE_ANDROID_CORES_MAX) {
@@ -63,9 +68,21 @@ export function effectTier(): EffectTier {
     hardwareConcurrency: nav?.hardwareConcurrency ?? null,
     userAgent: nav?.userAgent ?? null,
     forced: readForcedEffectTier(),
+    memoryClassMb: getAndroidMemoryClassMb(),
   })
-  if (typeof document !== "undefined") document.documentElement.dataset.tvEffects = cachedEffectTier
+  // Only the TV shell reads data-tv-effects (see global.css); stamping it from the classic
+  // UI too (catalog.js also imports memoryConservative) would apply the TV lite-tier CSS
+  // rule outside the TV shell.
+  if (typeof document !== "undefined" && document.documentElement.dataset.tv === "1") {
+    document.documentElement.dataset.tvEffects = cachedEffectTier
+  }
   return cachedEffectTier
+}
+
+/** Drops the memoized tier so the next effectTier() call re-reads the xt_tv_effects override. */
+export function resetEffectTierCache(): void {
+  cachedEffectTier = null
+  effectTier()
 }
 
 /** Gate for the heavy layers: Ken Burns, ambient colour extraction, wide prefetch. */
@@ -76,6 +93,11 @@ export function heavyEffectsAllowed(): boolean {
 /** Strict memory gate for the lite tier: no eager decodes, no prefetch, no idle timers. */
 export function memoryConservative(): boolean {
   return effectTier() === "lite"
+}
+
+/** className for a JS-built ambient blur layer: heavy blur on the full tier, a flat panel on lite. */
+export function heavyBlurClass(fullClasses: string, liteClasses: string): string {
+  return effectTier() === "full" ? `tv-heavy-blur ${fullClasses}` : liteClasses
 }
 
 const EPG_LITE_PAST_WINDOW_MS = 6 * 60 * 60 * 1000
@@ -121,7 +143,7 @@ export function endNavigationTransition(): void {
 export async function startViewTransitionSafe(update: () => void | Promise<void>): Promise<void> {
   const doc = document as DocumentWithVt
   const canOwnTransition =
-    motionAllowed() &&
+    heavyEffectsAllowed() &&
     typeof doc.startViewTransition === "function" &&
     !navigationTransitionActive &&
     !doc.activeViewTransition

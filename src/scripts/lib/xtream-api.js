@@ -17,6 +17,7 @@ import {
   xtreamCandidatesFor,
   getMirrorPin,
   setMirrorPin,
+  getEntryDnsOverride,
 } from "@/scripts/lib/creds.js"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
 import { getNetworkTimeoutSeconds } from "@/scripts/lib/app-settings.js"
@@ -83,6 +84,7 @@ export async function xtreamApiFetch(action, params = {}, opts = {}) {
   if (!entry || !candidates.length) {
     throw new Error("xtreamApiFetch: no active Xtream playlist")
   }
+  if (fetchOpts.dns === undefined) fetchOpts.dns = getEntryDnsOverride(entry)
 
   const startIndex = Math.min(getMirrorPin(entry._id), candidates.length - 1)
 
@@ -114,6 +116,7 @@ export async function xtreamApiFetch(action, params = {}, opts = {}) {
             noticeFailover()
           }
         }
+        log.debug("[xt:xtream-api] mirror resolved", `action=${action} index=${index}/${candidates.length} host=${creds.host} attempts=${offset + 1}`)
         setMirrorPin(entry._id, index)
         allFailedAt.delete(entry._id)
         return response
@@ -177,6 +180,71 @@ async function probeStreamUrl(url) {
 }
 
 /**
+ * Probes candidates in ring order starting at `startIndex + startOffset`, wrapping, for exactly
+ * `candidates.length - startOffset` steps. Shared by `resolveStreamUrl` (startOffset 0, probes the
+ * pin first) and `advanceMirror` (startOffset 1, skips the pin that just rejected the stream).
+ *
+ * @param {{_id:string}} entry
+ * @param {Array<{host:string,port:string,user:string,pass:string}>} candidates
+ * @param {(creds: {host:string,port:string,user:string,pass:string}) => string} buildUrl
+ * @param {number} startIndex
+ * @param {number} startOffset
+ * @returns {Promise<{index:number,url:string}|null>}
+ */
+async function probeCandidateRing(candidates, buildUrl, startIndex, startOffset) {
+  for (let offset = startOffset; offset < candidates.length; offset++) {
+    const index = (startIndex + offset) % candidates.length
+    const url = buildUrl(candidates[index])
+    if (!url) continue
+    if (await probeStreamUrl(url)) return { index, url }
+  }
+  return null
+}
+
+/**
+ * Force-advance to the next Xtream mirror after a provider rejection mid-play
+ * (401/403/407/429/connection-limit). Unlike `resolveStreamUrl`, this always
+ * probes starting right after the current pin - the pinned candidate is the
+ * one that just rejected the stream, so re-probing it first would waste the
+ * whole retry window.
+ *
+ * @param {(creds: {host:string,port:string,user:string,pass:string}) => string} buildUrl
+ * @param {{hopsUsed?: number, repin?: boolean}} [options] - `hopsUsed` caps the hop at one per
+ *   configured candidate. `repin` (default true) persists the hop for the rest of the session;
+ *   pass false for a rejection scoped to a single channel (e.g. one that only exists on the
+ *   mirror's package) so the rest of the session keeps using the primary.
+ * @returns {Promise<string|null>} The next reachable candidate's URL, or null
+ *   when the entry has fewer than 2 candidates, the hop budget is spent, or
+ *   none of the others are reachable.
+ */
+export async function advanceMirror(buildUrl, { hopsUsed = 0, repin = true } = {}) {
+  const entry = await getActiveEntry()
+  const candidates = xtreamCandidatesFor(entry)
+  if (!entry || candidates.length < 2) return null
+  if (hopsUsed >= candidates.length - 1) return null
+
+  const startIndex = Math.min(getMirrorPin(entry._id), candidates.length - 1)
+  const found = await probeCandidateRing(candidates, buildUrl, startIndex, 1)
+  if (!found) return null
+
+  log.debug("[xt:xtream-api] mirror hop resolved", `from=${startIndex} to=${found.index}/${candidates.length} hopsUsed=${hopsUsed} repin=${repin}`)
+  if (repin) {
+    log.warn(`[xt:api] provider rejection: advancing from candidate ${startIndex} to ${found.index}`)
+    setMirrorPin(entry._id, found.index)
+    verifiedAt.set(entry._id, { index: found.index, at: Date.now() })
+    if (!failoverNoticed.has(entry._id)) {
+      failoverNoticed.add(entry._id)
+      noticeFailover()
+    }
+  } else {
+    log.info(
+      `[xt:api] provider rejection on candidate ${startIndex}: using candidate ${found.index} for this request only`
+    )
+  }
+  return found.url
+}
+
+/**
  * Resolve a stream URL with mirror failover. Probes the URL built from the
  * pinned candidate first, then falls through the remaining mirrors via a
  * cheap ranged GET. Updates the pin when a working candidate is found.
@@ -206,22 +274,18 @@ export async function resolveStreamUrl(buildUrl) {
     return buildUrl(candidates[startIndex])
   }
 
-  for (let offset = 0; offset < candidates.length; offset++) {
-    const index = (startIndex + offset) % candidates.length
-    const url = buildUrl(candidates[index])
-    if (!url) continue
-    if (await probeStreamUrl(url)) {
-      if (index !== startIndex) {
-        log.warn(`[xt:api] stream probe: candidate ${startIndex} dead, switching to ${index}`)
-        if (!failoverNoticed.has(entry._id)) {
-          failoverNoticed.add(entry._id)
-          noticeFailover()
-        }
-      }
-      setMirrorPin(entry._id, index)
-      verifiedAt.set(entry._id, { index, at: Date.now() })
-      return url
+  const found = await probeCandidateRing(candidates, buildUrl, startIndex, 0)
+  if (!found) return buildUrl(candidates[startIndex])
+
+  log.debug("[xt:xtream-api] stream mirror resolved", `index=${found.index}/${candidates.length} host=${candidates[found.index]?.host} changed=${found.index !== startIndex}`)
+  if (found.index !== startIndex) {
+    log.warn(`[xt:api] stream probe: candidate ${startIndex} dead, switching to ${found.index}`)
+    if (!failoverNoticed.has(entry._id)) {
+      failoverNoticed.add(entry._id)
+      noticeFailover()
     }
   }
-  return buildUrl(candidates[startIndex])
+  setMirrorPin(entry._id, found.index)
+  verifiedAt.set(entry._id, { index: found.index, at: Date.now() })
+  return found.url
 }

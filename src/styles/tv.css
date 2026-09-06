@@ -1,8 +1,11 @@
 /* TV-only rules for /tv/*: root type scale, overscan padding, focus ring, keepFocusedInView transform. */
 
-/* Design canvas is 60rem x 33.75rem; root font size scales that canvas to fill the viewport. */
+/* Design canvas is 60rem x 33.75rem; root font size scales that canvas to fill the viewport.
+   --xt-root-px is computed in JS (TvLayout.astro pre-paint + root-font-size.ts's debounced resize
+   listener) so a vw/vh-driven viewport change (e.g. an on-screen keyboard) doesn't relayout every
+   rem-based measurement in the TV UI on its own; the live formula only applies before JS runs. */
 html[data-tv-ui] {
-  font-size: max(12px, calc(min(100vw / 60, 100vh / 33.75) * var(--xt-font-scale, 1)));
+  font-size: var(--xt-root-px, max(12px, calc(min(100vw / 60, 100vh / 33.75) * var(--xt-font-scale, 1))));
   /* Cards scale up on focus; padding keeps that headroom from clipping against scroller overflow. */
   --tv-focus-pad: 0.45rem;
 }
@@ -87,6 +90,16 @@ html[data-tv-ui][data-tv] .tv-focus-card:focus-visible [data-poster-wrap] {
     transition: none;
   }
 }
+/* Perf mode / lite tier: no lift transition, no will-change layer, no scale on focus. */
+html[data-perf-mode="on"][data-tv-ui][data-tv] .tv-focus-card [data-poster-wrap],
+html[data-tv-effects="lite"][data-tv-ui][data-tv] .tv-focus-card [data-poster-wrap] {
+  transition: none;
+}
+html[data-perf-mode="on"][data-tv-ui][data-tv] .tv-focus-card:focus-visible [data-poster-wrap],
+html[data-tv-effects="lite"][data-tv-ui][data-tv] .tv-focus-card:focus-visible [data-poster-wrap] {
+  will-change: auto;
+  transform: none;
+}
 
 /* focus-glide.ts's ring replaces these while it tracks; exactly one ring shows at a time. */
 html[data-tv-ui][data-tv][data-tv-glide="1"] .tv-focus-card:focus-visible [data-poster-wrap]::after {
@@ -136,8 +149,20 @@ html[data-tv-ui] [data-live-wide="true"] [data-role="next"] {
     animation: none;
   }
 }
+html[data-perf-mode="on"] #tv-warmup-indicator .tv-warmup-dot[data-state="pending"],
+html[data-tv-effects="lite"] #tv-warmup-indicator .tv-warmup-dot[data-state="pending"] {
+  animation: none;
+}
 
-/* focus-glide.ts mounts one instance; JS drives left/top/width/height/border-radius per frame. */
+/* Utility for JS-built ambient blur layers (hero.ts/detail.ts/live-row.ts/card.ts): collapses
+   to a flat, unblurred panel on perf mode / the lite tier, even after they've already mounted. */
+html[data-perf-mode="on"] .tv-heavy-blur,
+html[data-tv-effects="lite"] .tv-heavy-blur {
+  filter: none;
+}
+
+/* focus-glide.ts mounts one instance; JS drives width/height/border-radius once per focus hop
+   and only `transform` (translate3d) per animation frame while the ring chases the target. */
 #tv-focus-glide {
   position: fixed;
   left: 0;
@@ -147,13 +172,21 @@ html[data-tv-ui] [data-live-wide="true"] [data-role="next"] {
   pointer-events: none;
   opacity: 0;
   border: 3px solid var(--color-accent);
-  box-shadow:
-    0 0 0 1px var(--color-bg),
-    0 12px 40px -16px color-mix(in oklab, var(--color-accent) 55%, transparent);
+  box-shadow: 0 0 0 1px var(--color-bg);
   transition: opacity 120ms ease;
 }
 #tv-focus-glide[data-visible="true"] {
   opacity: 1;
+}
+/* Blurred spill lives on a non-resizing ::after (matches the parent box via inset:0 in CSS,
+   not JS) so the tinted, expensive-to-repaint shadow never has to move with the parent's size. */
+#tv-focus-glide::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 12px 40px -16px color-mix(in oklab, var(--color-accent) 55%, var(--tv-ambient-glow, transparent));
+  pointer-events: none;
 }
 
 /* Shared TV cross-fade layer (e.g. hero backdrop swap). */

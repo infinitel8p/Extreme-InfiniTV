@@ -11,6 +11,7 @@ interface ShortcutItem {
 }
 interface ShortcutSection {
   title: string
+  note?: string
   items: ShortcutItem[]
 }
 
@@ -53,13 +54,18 @@ function buildSections(): ShortcutSection[] {
     },
     {
       title: t("keyboardHelp.section.player"),
+      note: t("keyboardHelp.note.playerFocus"),
       items: [
         { keys: ["Space"], desc: t("keyboardHelp.desc.playPause") },
         { keys: ["M"], desc: t("keyboardHelp.desc.muteToggle") },
         { keys: ["F"], desc: t("keyboardHelp.desc.fullscreenToggle") },
-        { keys: ["J"], desc: t("keyboardHelp.desc.seekBack") },
-        { keys: ["L"], desc: t("keyboardHelp.desc.seekForward") },
+        // ← / → also drive mpv's own control bar when the embedded player has focus.
+        { keys: ["J", "←"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.seekBack") },
+        { keys: ["L", "→"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.seekForward") },
         { keys: ["Z", "X"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.subtitleDelay") },
+        { keys: ["P"], desc: t("detail.action.pip") },
+        // mpv backend only.
+        { keys: ["S"], desc: t("keyboardHelp.desc.screenshot") },
         { keys: ["Ctrl", "Shift", "S"], desc: t("keyboardHelp.desc.statsOverlay") },
       ],
     },
@@ -128,6 +134,7 @@ function buildDialog(): HTMLDialogElement {
     (section) =>
       '<section class="flex flex-col gap-1.5">' +
       `<h3 class="text-eyebrow font-semibold uppercase tracking-widest text-fg-3">${escapeHtml(section.title)}</h3>` +
+      (section.note ? `<p class="text-2xs text-fg-3 -mt-1">${escapeHtml(section.note)}</p>` : "") +
       `<ul class="flex flex-col divide-y divide-line/60 rounded-xl border border-line/60 bg-bg/50 px-3 py-1">${section.items.map(renderItem).join("")}</ul>` +
       "</section>"
   ).join("")

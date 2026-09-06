@@ -1,14 +1,36 @@
-// Shared PiP toggle for Video.js players. On Tauri Android the WebView
-// can't host Web PiP, so we route through the AndroidPip JS bridge which
-// puts the entire activity into PiP - but only after the player has gone
-// fullscreen, which triggers the WebChromeClient custom view so PiP
-// captures just the video surface. On desktop, falls back to the standard
-// Web Picture-in-Picture API on the underlying <video>.
+// Shared PiP toggle: Web PiP / AndroidPip on a real <video>, native mpv PiP otherwise.
 import { log } from "@/scripts/lib/log.js"
 
+interface MpvEmbedStatus {
+  running: boolean
+  sessionId: string | null
+  pid: number | null
+  pipActive: boolean
+}
+
+async function toggleNativeMpvPip(): Promise<void> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    const status = await invoke<MpvEmbedStatus>("mpv_embed_status")
+    if (!status?.running || !status.sessionId) return
+    const command = status.pipActive ? "mpv_embed_pip_exit" : "mpv_embed_pip_enter"
+    await invoke(command, { sessionId: status.sessionId })
+  } catch (err) {
+    log.warn("[xt:pip] native mpv pip toggle failed:", err)
+  }
+}
+
 export async function togglePip(player: any): Promise<void> {
-  const videoEl = player?.el()?.querySelector("video") as HTMLVideoElement | null
-  if (!videoEl) return
+  // getMediaElement() is authoritative even when null (mpv-embedded has no <video>).
+  const definesMediaElement = typeof player?.getMediaElement === "function"
+  const mediaEl: HTMLVideoElement | null = definesMediaElement
+    ? player.getMediaElement()
+    : (player?.el?.()?.querySelector("video") ?? null)
+
+  if (!mediaEl) {
+    if (definesMediaElement) await toggleNativeMpvPip()
+    return
+  }
 
   if (window.AndroidPip?.toggle) {
     if (window.AndroidPip.isInPip?.()) {
@@ -27,13 +49,13 @@ export async function togglePip(player: any): Promise<void> {
     return
   }
 
-  if (document.pictureInPictureEnabled && !videoEl.disablePictureInPicture) {
+  if (document.pictureInPictureEnabled && !mediaEl.disablePictureInPicture) {
     try {
-      if (document.pictureInPictureElement === videoEl) {
+      if (document.pictureInPictureElement === mediaEl) {
         await document.exitPictureInPicture()
       } else {
-        if (videoEl.readyState < 2) await videoEl.play().catch(() => {})
-        await videoEl.requestPictureInPicture()
+        if (mediaEl.readyState < 2) await mediaEl.play().catch(() => {})
+        await mediaEl.requestPictureInPicture()
       }
     } catch (err) {
       log.warn("[xt:pip] picture-in-picture toggle failed:", err)

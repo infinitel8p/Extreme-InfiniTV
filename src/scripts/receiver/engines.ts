@@ -11,6 +11,9 @@ import { getPlayerBackend } from "@/scripts/lib/app-settings.js"
 import type { CastDescriptorV1 } from "@/scripts/lib/tv-cast-descriptor"
 import { t } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
+import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
+import { dnsProxyAvailable, ensureDnsProxy } from "@/scripts/lib/dns-proxy.ts"
+import { wrapProxyUrl } from "@/scripts/lib/dns-proxy-url.ts"
 import { decodedFrameCount } from "@/scripts/lib/player-telemetry.js"
 import {
   classifyStartFailure,
@@ -141,6 +144,20 @@ const LOAD_PROGRESS_EVENTS = ["progress", "loadedmetadata", "loadeddata", "canpl
 const ERROR_HIDE_MS = 10000
 const TITLE_HIDE_MS = 5000
 
+// The sender's descriptor is authoritative here, not the receiver's own active-playlist DNS override.
+async function resolveDescriptorDnsSrc(descriptor: CastDescriptorV1): Promise<string> {
+  if (!descriptor.dns || !dnsProxyAvailable()) return descriptor.src
+  const server = parseDnsServer(descriptor.dns)
+  if (!server) return descriptor.src
+  try {
+    const base = await ensureDnsProxy(`dns:${server.raw}`, server)
+    return base ? wrapProxyUrl(base, descriptor.src) : descriptor.src
+  } catch (err) {
+    log.warn("[xt:receiver] dns proxy wrap failed, using raw src:", err)
+    return descriptor.src
+  }
+}
+
 export function createEmbeddedReceiverEngine(
   dom: EmbeddedEngineDom,
   callbacks: ReceiverEngineCallbacks,
@@ -169,7 +186,10 @@ export function createEmbeddedReceiverEngine(
   let lastLoadProgressAt = 0
 
   function getMediaElementFor(handle: VjsLikeHandle | null): HTMLVideoElement | null {
-    return handle?.getMediaElement?.() ?? dom.videoEl
+    // A handle that defines getMediaElement() is authoritative, even when it returns
+    // null (mpv-embedded has no <video> in play) - don't report stats off dom.videoEl instead.
+    if (handle && typeof handle.getMediaElement === "function") return handle.getMediaElement()
+    return dom.videoEl
   }
 
   // Backends answer 0 for unknown; reporting 0 would pin the remote's scrubber range at zero.
@@ -440,7 +460,9 @@ export function createEmbeddedReceiverEngine(
     if (mounted?.kind === "embedded") return mounted.handle
     if (!dom.videoEl) return null
     let backend = getPlayerBackend()
-    if (backend === "mpv" || backend === "vlc") backend = "artplayer"
+    // mpv-embedded mounts a local control bar (mpv-controls.ts) meant for on-device
+    // input; the receiver is remote-controlled only, so it downgrades like mpv/vlc.
+    if (backend === "mpv" || backend === "vlc" || backend === "mpv-embedded") backend = "artplayer"
     const result = await mountPlayer(dom.videoEl, backend, { autoplay: true })
     if (result.kind !== "embedded") {
       log.warn("[xt:receiver] mountPlayer returned an external backend; receiver requires embedded playback")
@@ -477,8 +499,11 @@ export function createEmbeddedReceiverEngine(
       if (attemptGeneration !== playGeneration) return false
       activeHandle = handle
 
+      const playbackSrc = await resolveDescriptorDnsSrc(descriptor)
+      if (attemptGeneration !== playGeneration) return false
+
       handle.src({
-        src: descriptor.src,
+        src: playbackSrc,
         type: descriptor.mime,
         drm: descriptor.drm ?? null,
         isLive: descriptor.isLive,
@@ -751,6 +776,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
 
       const ua = descriptor.headers?.userAgent || ""
       const referer = descriptor.headers?.referer || ""
+      const dns = descriptor.dns ?? null
       const launched = descriptor.isLive
         ? launchAndroidNativeLive({
             contentKey,
@@ -760,6 +786,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
             initialChannelId: liveContext ? liveContext.initialChannelId : RECEIVER_LIVE_CHANNEL_ID,
             defaultUa: ua,
             defaultReferer: referer,
+            dns,
           })
         : launchAndroidNativeVod({
             contentKey,
@@ -768,6 +795,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
             referer,
             title: descriptor.title,
             startMs: Math.max(0, Math.floor((descriptor.resumeSeconds || 0) * 1000)),
+            dns,
           })
 
       if (!launched) {

@@ -39,6 +39,8 @@ export const ICON_SPARKLES = wrap(
     '<path d="M9 18a6 6 0 0 1 6 -6a6 6 0 0 1 -6 -6a6 6 0 0 1 -6 6a6 6 0 0 1 6 6z" />'
 )
 
+export const ICON_BOLT = wrap('<path d="M13 3l0 7l6 0l-8 11l0 -7l-6 0l8 -11" />')
+
 export const ICON_X = wrap(
   '<path d="M18 6l-12 12" />' + '<path d="M6 6l12 12" />'
 )
@@ -254,4 +256,18 @@ export const ICON_ARROWS_SHUFFLE = wrap(
     '<path d="M18 20l3 -3l-3 -3" />' +
     '<path d="M3 7h3a5 5 0 0 1 5 5a5 5 0 0 0 5 5h5" />' +
     '<path d="M21 7h-5a4.978 4.978 0 0 0 -3 1m-4 8a4.984 4.984 0 0 1 -3 1h-3" />'
+)
+
+export const ICON_MAXIMIZE = wrap(
+  '<path d="M4 8v-2a2 2 0 0 1 2 -2h2" />' +
+    '<path d="M4 16v2a2 2 0 0 0 2 2h2" />' +
+    '<path d="M16 4h2a2 2 0 0 1 2 2v2" />' +
+    '<path d="M16 20h2a2 2 0 0 0 2 -2v-2" />'
+)
+
+export const ICON_MINIMIZE = wrap(
+  '<path d="M15 19v-2a2 2 0 0 1 2 -2h2" />' +
+    '<path d="M15 5v2a2 2 0 0 0 2 2h2" />' +
+    '<path d="M5 15h2a2 2 0 0 1 2 2v2" />' +
+    '<path d="M5 9h2a2 2 0 0 0 2 -2v-2" />'
 )

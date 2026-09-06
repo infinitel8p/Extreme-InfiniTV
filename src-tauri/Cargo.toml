@@ -41,6 +41,7 @@ axum = { version = "0.8", features = ["ws"] }
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
 tokio = { version = "1", features = ["net", "sync", "time", "macros"] }
+hickory-resolver = { version = "0.25", features = ["https-ring"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
@@ -56,3 +57,6 @@ if-addrs = "0.15"
 
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-android-fs = { version = "=28.1.0", features = [] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_LibraryLoader"] }

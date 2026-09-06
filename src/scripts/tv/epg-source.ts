@@ -151,7 +151,10 @@ export function tvShortEpgCache(): ShortEpgCache {
 }
 
 if (typeof document !== "undefined") {
-  document.addEventListener("xt:active-changed", () => cache.clear())
+  document.addEventListener("xt:active-changed", () => {
+    cache.clear()
+    shortEpgSamples.clear()
+  })
 }
 
 /** Maps a short-EPG now/next payload into the shared NowNextSlot shape rows/guide/OSD render. */

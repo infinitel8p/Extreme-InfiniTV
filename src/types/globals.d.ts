@@ -20,6 +20,7 @@ interface AndroidVideoBridge {
     title: string,
     posterUrl: string,
     startMs: number,
+    dns: string,
   ) => boolean
   launchLive?: (
     contentKey: string,
@@ -27,6 +28,7 @@ interface AndroidVideoBridge {
     initialChannelId: string,
     ua: string,
     referer: string,
+    dns: string,
   ) => boolean
   drainEvents?: () => string
   /** Starts pushing native-player events straight into the WebView instead of the SharedPreferences queue. */
@@ -73,6 +75,7 @@ interface AndroidIntentBridge {
 
 interface AndroidDeviceInfoBridge {
   isTv?: () => boolean
+  getMemoryClass?: () => number
 }
 
 interface AndroidImeBridge {

@@ -6,6 +6,7 @@ import {
   isLikelyM3USource,
   getEntries,
   entryToCreds,
+  getPlaylistDnsOverride,
 } from "@/scripts/lib/creds.js"
 import { loadCustomDoc } from "@/scripts/lib/custom-playlist.ts"
 import { providerFetch } from "@/scripts/lib/provider-fetch.js"
@@ -18,13 +19,17 @@ import {
 import { getChannelEpgOverride } from "@/scripts/lib/preferences.js"
 import { retryWithBackoff, HttpRetryError } from "@/scripts/lib/retry.ts"
 import { EPG_PAST_WINDOW_MS } from "@/scripts/lib/epg-constants.ts"
+import { NAME_COLLATOR } from "@/scripts/lib/catalog-mappers.js"
+import { getNetworkTimeoutSeconds } from "@/scripts/lib/app-settings.js"
+import { EPG_REUSE_MAX_AGE_MS, programmeHorizonMs, shouldReuseCachedEpg } from "@/scripts/lib/epg-cache-policy.ts"
 
 const FRESH_MS = 60 * 60 * 1000
 const TZ_KEY_PREFIX = "xt_epg_offset:"
 const TZ_INFERRED_KEY_PREFIX = "xt_epg_offset_inferred:"
 const EPG_HTTP_META_PREFIX = "xt_epg_http:"
 const EPG_CACHE_KIND_PREFIX = "epg_parsed"
-const EPG_CACHE_TTL = 4 * 60 * 60 * 1000
+const EPG_CACHE_TTL = EPG_REUSE_MAX_AGE_MS
+const EPG_FETCH_MIN_TIMEOUT_MS = 180_000
 const EVT_LOADED = "xt:epg-loaded"
 const EVT_OFFSET_CHANGED = "xt:epg-offset-changed"
 const EVT_SOURCE_STATUS = "xt:epg-source-status"
@@ -133,6 +138,7 @@ export function buildEpgUrlsFromEntry(entry, creds, m3uHeaderUrl, customSourceUr
     }
   }
 
+  log.debug("[xt:epg-data] epg urls resolved", `count=${out.length} providerEpg=${skipAuto ? "off" : "on"} customUrls=${customSourceUrls.length}`)
   return out
 }
 
@@ -368,6 +374,51 @@ export async function parseXmlTvOffMain(xml, window) {
 }
 
 /**
+ * Bytes-transferring twin of parseXmlTvOffMain: `buffer` is handed to the worker as a
+ * transferable, which decodes (gzip-inflating if needed) and parses there, so the
+ * decompressed XML text never exists as a whole string on the main thread. On a worker
+ * timeout/error this can't fall back to a main-thread reparse - `buffer` was already
+ * transferred (detached) - so it rethrows instead; callers already sit behind
+ * retryWithBackoff at the fetch layer.
+ *
+ * @param {ArrayBuffer} buffer
+ * @param {boolean} gzip
+ * @param {EpgWindow} [window]
+ */
+export async function parseXmlTvBytesOffMain(buffer, gzip, window) {
+  const worker = getXmlWorker()
+  if (!worker) {
+    const xml = await decodeXmlBytes(buffer, gzip)
+    return parseXmlTv(xml, window)
+  }
+  const id = ++xmlWorkerSeq
+  const timeoutMs = xmlWorkerTimeoutMs(buffer.byteLength)
+  let reply
+  let timer = null
+  try {
+    reply = await new Promise((resolve, reject) => {
+      xmlWorkerPending.set(id, { resolve, reject })
+      timer = setTimeout(() => {
+        xmlWorkerPending.delete(id)
+        retireXmlWorker()
+        reject(new Error(`worker did not reply within ${timeoutMs}ms`))
+      }, timeoutMs)
+      worker.postMessage({ id, type: "parseBytes", bytes: buffer, gzip, window }, [buffer])
+    })
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (window && !xmlWorkerPending.size) releaseXmlWorker()
+  }
+  if (reply.error) throw new Error(reply.error)
+  log.debug("[xt:epg-data] parse bytes worker ok", `bytes=${buffer.byteLength} gzip=${!!gzip}`)
+  return {
+    programmes: new Map(reply.programmes),
+    channelNames: new Map(reply.channelNames || []),
+    hasExplicitTimezones: !!reply.hasExplicitTimezones,
+  }
+}
+
+/**
  * Fire-and-await one worker request without the auto-release-after-windowed-parse
  * behavior `parseXmlTvOffMain` has - now-next mode keeps the worker (and its
  * retained feed text) alive on purpose. Resolves to null on any failure so
@@ -444,11 +495,11 @@ async function requestProgrammesFor(feedId, tvgId, window) {
 }
 
 /** Forces a fresh (non-conditional) fetch so the body is always present, unlike a 304. */
-async function refetchFeedXml(url) {
+async function refetchFeedXml(url, dns) {
   try {
-    const result = await retryWithBackoff(() => fetchEpgConditional(url, null))
-    if (result.notModified || !result.xml) return null
-    return result.xml
+    const result = await retryWithBackoff(() => fetchEpgConditional(url, null, dns))
+    if (result.notModified || !result.buffer) return null
+    return decodeXmlBytes(result.buffer, result.gzip)
   } catch (err) {
     log.warn("[xt:epg-data] programmesFor refetch failed:", err?.message || err)
     return null
@@ -467,9 +518,10 @@ async function refetchFeedXml(url) {
  * @param {string} url
  * @param {number} nowMs
  * @param {string} feedId
+ * @param {import("./dns-config.ts").DnsServer | null} [dns]
  */
-async function streamNowNextFromUrl(url, nowMs, feedId) {
-  const init = { forceTauri: true, logKind: "epg" }
+async function streamNowNextFromUrl(url, nowMs, feedId, dns) {
+  const init = { forceTauri: true, logKind: "epg", dns }
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
     init.signal = AbortSignal.timeout(90_000)
   }
@@ -547,11 +599,12 @@ async function streamNowNextFromUrl(url, nowMs, feedId) {
 
   if (!reply) {
     log.warn("[xt:epg-data] now-next streaming worker parse unavailable, refetching for main-thread fallback")
-    const xml = await refetchFeedXml(url)
+    const xml = await refetchFeedXml(url, dns)
     if (!xml) throw new Error("Empty EPG response")
     return reduceToNowNext(parseXmlTv(xml), nowMs)
   }
   if (reply.error) throw new Error(reply.error)
+  log.debug("[xt:epg-data] now-next streaming worker ok", `bytes=${bytesTransferred} gzip=${isGzipFeed}`)
   return {
     programmes: new Map(reply.programmes),
     channelNames: new Map(reply.channelNames || []),
@@ -585,12 +638,14 @@ export async function getProgrammesForChannel(playlistId, tvgId, window) {
   const state = playlistId ? memCache.get(playlistId) : null
   if (!state || state.epgMode !== "now-next" || !tvgId) return []
   const normalizedTvgId = String(tvgId).toLowerCase()
+  const dns = await getPlaylistDnsOverride(playlistId)
 
   for (const feed of state.nowNextFeeds || []) {
     let reply = await requestProgrammesFor(feed.feedId, normalizedTvgId, window)
     if (reply.noFeed) {
+      log.debug("[xt:epg-data] now-next feed refetch", `id=${playlistId} tvgId=${normalizedTvgId} feedId=${feed.feedId}`)
       try {
-        await retryWithBackoff(() => streamNowNextFromUrl(feed.url, Date.now(), feed.feedId))
+        await retryWithBackoff(() => streamNowNextFromUrl(feed.url, Date.now(), feed.feedId, dns))
       } catch (err) {
         log.warn("[xt:epg-data] programmesFor re-stream failed:", err?.message || err)
         continue
@@ -759,19 +814,40 @@ export function getNowNext(programmes, tvgId, atMs = Date.now()) {
   return getNowNextFromArray(arr, atMs)
 }
 
+// Keyed by the source array's own identity (which only changes on a fresh EPG fetch/parse) and
+// then by shift hours, so a channel row re-rendered every tick never re-maps the same programmes
+// twice. The inner map stays tiny in practice (one shift value per tvgId) but is capped anyway.
+const shiftedProgrammesCache = new WeakMap()
+const SHIFT_CACHE_CAP_PER_ARRAY = 4
+
 /** Shifted copy of a channel's programmes; `rawStart`/`rawStop` keep the true XMLTV time for catch-up. */
 export function shiftChannelProgrammes(programmes, tvgShiftHours) {
   if (!programmes || !programmes.length) return programmes || []
   const hours = Number(tvgShiftHours)
   if (!Number.isFinite(hours) || hours === 0) return programmes
+
+  let byShift = shiftedProgrammesCache.get(programmes)
+  if (!byShift) {
+    byShift = new Map()
+    shiftedProgrammesCache.set(programmes, byShift)
+  }
+  const cached = byShift.get(hours)
+  if (cached) return cached
+
   const shiftMs = hours * 60 * 60 * 1000
-  return programmes.map((programme) => ({
+  const shifted = programmes.map((programme) => ({
     ...programme,
     start: programme.start + shiftMs,
     stop: programme.stop + shiftMs,
     rawStart: programme.start,
     rawStop: programme.stop,
   }))
+  if (byShift.size >= SHIFT_CACHE_CAP_PER_ARRAY) {
+    const oldestKey = byShift.keys().next().value
+    if (oldestKey !== undefined) byShift.delete(oldestKey)
+  }
+  byShift.set(hours, shifted)
+  return shifted
 }
 
 /** Like `getNowNext`, but resolves tvg-id + tvg-shift first (catch-up math calls `getNowNext` directly). */
@@ -1009,19 +1085,10 @@ export function detectGzip(url, bytes, headers = {}) {
   )
 }
 
-async function readResponseAsXml(url, response) {
-  // Read body to a buffer first so we can sniff magic bytes regardless of
-  // what the server claims via headers - some upstreams send gzip without
-  // any of: Content-Encoding, Content-Type matching gzip, or `.gz` URL ext.
-  // The 1F 8B prefix is the only fully reliable signal.
-  const buffer = await response.arrayBuffer()
+/** Decodes (gzip-inflating first when needed) a raw XMLTV byte buffer to text. */
+async function decodeXmlBytes(buffer, gzip) {
   const bytes = new Uint8Array(buffer)
-  const looksGzipped = detectGzip(url, bytes, {
-    contentType: response.headers?.get?.("content-type") || "",
-    contentDisposition: response.headers?.get?.("content-disposition") || "",
-  })
-
-  if (!looksGzipped) return new TextDecoder("utf-8").decode(bytes)
+  if (!gzip) return new TextDecoder("utf-8").decode(bytes)
   if (typeof DecompressionStream !== "function") {
     throw new Error(
       "This browser/WebView can't decompress gzipped EPG payloads. Try a provider that serves plain XML."
@@ -1037,6 +1104,25 @@ async function readResponseAsXml(url, response) {
   return new Response(decompressed).text()
 }
 
+// Read body to a buffer first so gzip can be sniffed by magic bytes regardless of what the
+// server claims via headers - some upstreams send gzip without any of: Content-Encoding,
+// Content-Type matching gzip, or a `.gz` URL extension. The 1F 8B prefix is the only fully
+// reliable signal.
+async function readResponseAsBytes(url, response) {
+  const buffer = await response.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+  const gzip = detectGzip(url, bytes, {
+    contentType: response.headers?.get?.("content-type") || "",
+    contentDisposition: response.headers?.get?.("content-disposition") || "",
+  })
+  return { buffer, gzip }
+}
+
+async function readResponseAsXml(url, response) {
+  const { buffer, gzip } = await readResponseAsBytes(url, response)
+  return decodeXmlBytes(buffer, gzip)
+}
+
 /**
  * Conditional EPG fetch for a single URL. Returns either { notModified: true }
  * or { notModified: false, xml, lastModified, etag }.
@@ -1048,13 +1134,13 @@ async function readResponseAsXml(url, response) {
  * surface a clearer error than the bare `TypeError: Failed to fetch` the
  * browser emits in that case.
  */
-async function fetchEpgConditional(url, meta) {
+async function fetchEpgConditional(url, meta, dns) {
   const headers = {}
   if (meta?.lastModified) headers["If-Modified-Since"] = meta.lastModified
   if (meta?.etag) headers["If-None-Match"] = meta.etag
-  const init = { forceTauri: true, logKind: "epg" }
+  const init = { forceTauri: true, logKind: "epg", dns }
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
-    init.signal = AbortSignal.timeout(90_000)
+    init.signal = AbortSignal.timeout(Math.max(EPG_FETCH_MIN_TIMEOUT_MS, getNetworkTimeoutSeconds() * 1000))
   }
   if (Object.keys(headers).length) init.headers = headers
   let response
@@ -1077,10 +1163,13 @@ async function fetchEpgConditional(url, meta) {
       `EPG ${response.status} ${response.statusText}`
     )
   }
-  const xml = await readResponseAsXml(url, response)
+  // Bytes, not decoded text: the caller transfers this straight to the parse worker
+  // (parseXmlTvBytesOffMain) so the decompressed XML never exists as a whole string here.
+  const { buffer, gzip } = await readResponseAsBytes(url, response)
   return {
     notModified: false,
-    xml,
+    buffer,
+    gzip,
     lastModified: response.headers?.get?.("last-modified") || null,
     etag: response.headers?.get?.("etag") || null,
   }
@@ -1120,11 +1209,13 @@ function epgWindowsMatch(cachedWindow, requestedWindow) {
  * @param {EpgWindow} [window]
  * @param {EpgMode} [epgMode]
  * @param {number} [nowMs] - now-next mode only: reference instant for picking current/next
+ * @param {import("./dns-config.ts").DnsServer | null} [dns]
  * @returns {Promise<{ programmes: Map<string, any[]>, channelNames: Map<string, string>, count: number, cached: boolean, hasExplicitTimezones: boolean }>}
  */
-async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, nowMs) {
+async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, nowMs, dns) {
   const hash = urlHash(src.url)
   const kind = cacheKindFor(src.url)
+  const sourceStartedAt = performance.now()
 
   if (epgMode === "now-next") {
     // Time-sensitive result: a cached parse from even a few minutes ago would
@@ -1132,49 +1223,72 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
     // rather than going through the conditional-GET + per-URL cache path.
     // Streamed straight into the worker (see streamNowNextFromUrl) so the
     // decompressed feed never exists as a single string on the main thread.
-    const parsed = await retryWithBackoff(() => streamNowNextFromUrl(src.url, nowMs, hash))
+    const parsed = await retryWithBackoff(() => streamNowNextFromUrl(src.url, nowMs, hash, dns))
+    const count = countProgrammes(parsed.programmes)
+    log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=miss parser=streaming fetchMs=${Math.round(performance.now() - sourceStartedAt)} programmes=${count} channels=${parsed.channelNames.size}`)
     return {
       programmes: parsed.programmes,
       channelNames: parsed.channelNames,
-      count: countProgrammes(parsed.programmes),
+      count,
       cached: false,
       hasExplicitTimezones: parsed.hasExplicitTimezones,
     }
   }
 
-  const result = await retryWithBackoff(() =>
-    fetchEpgConditional(src.url, httpMeta[hash])
-  )
-
-  if (result.notModified) {
-    await cacheHydrate(playlistId, kind)
-    const hit = cacheGet(playlistId, kind)
-    // A cached parse built with a different window than this call needs (e.g. a
-    // windowed lite-tier parse vs. an unwindowed one) can't be served as-is.
-    if (hit?.data?.entries && epgWindowsMatch(hit.data.window || null, window || null)) {
-      // Clone cached programmes: applyOffset mutates start/stop in place and the
-      // cache hands out entries by reference, so a shared object would re-shift
-      // (drift by offsetMin) on every 304-served load.
-      const programmes = cloneProgrammeEntries(hit.data.entries)
-      const channelNames = new Map(hit.data.channelNames || [])
+  await cacheHydrate(playlistId, kind)
+  const cachedHit = cacheGet(playlistId, kind)
+  if (cachedHit?.data?.entries && epgWindowsMatch(cachedHit.data.window || null, window || null)) {
+    const horizonMs = Number.isFinite(cachedHit.data.horizonMs)
+      ? cachedHit.data.horizonMs
+      : programmeHorizonMs(cachedHit.data.entries)
+    if (shouldReuseCachedEpg({ fetchedAtMs: cachedHit.fetchedAt, horizonMs, nowMs: Date.now() })) {
+      const { programmes, channelNames, count } = cloneCachedHit(cachedHit)
+      const ageMin = Math.round((Date.now() - cachedHit.fetchedAt) / 60_000)
+      const coverageH = Math.round((horizonMs - Date.now()) / (60 * 60 * 1000))
+      log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=fresh parser=cache ageMin=${ageMin} coverageH=${coverageH} programmes=${count} channels=${channelNames.size}`)
       return {
         programmes,
         channelNames,
-        count: countProgrammes(programmes),
+        count,
         cached: true,
-        hasExplicitTimezones: !!hit.data.hasExplicitTimezones,
+        hasExplicitTimezones: !!cachedHit.data.hasExplicitTimezones,
+      }
+    }
+  }
+
+  const result = await retryWithBackoff(() =>
+    fetchEpgConditional(src.url, httpMeta[hash], dns)
+  )
+
+  if (result.notModified) {
+    // A cached parse built with a different window than this call needs (e.g. a
+    // windowed lite-tier parse vs. an unwindowed one) can't be served as-is.
+    if (cachedHit?.data?.entries && epgWindowsMatch(cachedHit.data.window || null, window || null)) {
+      const { programmes, channelNames, count } = cloneCachedHit(cachedHit)
+      log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=hit parser=cache fetchMs=${Math.round(performance.now() - sourceStartedAt)} programmes=${count} channels=${channelNames.size}`)
+      return {
+        programmes,
+        channelNames,
+        count,
+        cached: true,
+        hasExplicitTimezones: !!cachedHit.data.hasExplicitTimezones,
       }
     }
     // 304 but no cached parsed payload survived (TTL expired, IDB pruned).
     // Drop the stale validator and force a fresh fetch.
     delete httpMeta[hash]
+    const freshFetchStartedAt = performance.now()
     const fresh = await retryWithBackoff(() =>
-      fetchEpgConditional(src.url, null)
+      fetchEpgConditional(src.url, null, dns)
     )
-    if (fresh.notModified || !fresh.xml) {
+    if (fresh.notModified || !fresh.buffer) {
       throw new Error("304 with no cached body and no fresh payload")
     }
-    const parsed = await parseXmlTvOffMain(fresh.xml, window)
+    const fetchMs = Math.round(performance.now() - freshFetchStartedAt)
+    const freshByteLength = fresh.buffer.byteLength
+    const parseStartedAt = performance.now()
+    const parsed = await parseXmlTvBytesOffMain(fresh.buffer, fresh.gzip, window)
+    const parseMs = Math.round(performance.now() - parseStartedAt)
     const entries = Array.from(parsed.programmes.entries())
     try {
       cacheSet(
@@ -1185,6 +1299,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
           channelNames: Array.from(parsed.channelNames.entries()),
           hasExplicitTimezones: parsed.hasExplicitTimezones,
           window: window || null,
+          horizonMs: programmeHorizonMs(entries),
         },
         EPG_CACHE_TTL
       )
@@ -1197,16 +1312,22 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
     }
 
     const programmes = cloneProgrammeEntries(entries)
+    const count = countProgrammes(programmes)
+    log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=stale parser=off-main bytes=${freshByteLength} gzip=${!!fresh.gzip} fetchMs=${fetchMs} parseMs=${parseMs} programmes=${count} channels=${parsed.channelNames.size}`)
     return {
       programmes,
       channelNames: parsed.channelNames,
-      count: countProgrammes(programmes),
+      count,
       cached: false,
       hasExplicitTimezones: parsed.hasExplicitTimezones,
     }
   }
 
-  const parsed = await parseXmlTvOffMain(result.xml, window)
+  const resultByteLength = result.buffer.byteLength
+  const parseStartedAt = performance.now()
+  const parsed = await parseXmlTvBytesOffMain(result.buffer, result.gzip, window)
+  const parseMs = Math.round(performance.now() - parseStartedAt)
+  const fetchMs = Math.round(parseStartedAt - sourceStartedAt)
   const entries = Array.from(parsed.programmes.entries())
   try {
     cacheSet(
@@ -1217,6 +1338,7 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
         channelNames: Array.from(parsed.channelNames.entries()),
         hasExplicitTimezones: parsed.hasExplicitTimezones,
         window: window || null,
+        horizonMs: programmeHorizonMs(entries),
       },
       EPG_CACHE_TTL
     )
@@ -1229,10 +1351,12 @@ async function fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, n
   }
 
   const programmes = cloneProgrammeEntries(entries)
+  const count = countProgrammes(programmes)
+  log.debug("[xt:epg-data] source done", `id=${playlistId} source=${src.source} cache=miss parser=off-main bytes=${resultByteLength} gzip=${!!result.gzip} fetchMs=${fetchMs} parseMs=${parseMs} programmes=${count} channels=${parsed.channelNames.size}`)
   return {
     programmes,
     channelNames: parsed.channelNames,
-    count: countProgrammes(programmes),
+    count,
     cached: false,
     hasExplicitTimezones: parsed.hasExplicitTimezones,
   }
@@ -1251,6 +1375,13 @@ function countProgrammes(map) {
   let total = 0
   for (const arr of map.values()) total += arr.length
   return total
+}
+
+// applyOffset mutates start/stop in place; never hand out the cached arrays themselves
+function cloneCachedHit(hit) {
+  const programmes = cloneProgrammeEntries(hit.data.entries)
+  const channelNames = new Map(hit.data.channelNames || [])
+  return { programmes, channelNames, count: countProgrammes(programmes) }
 }
 
 /**
@@ -1282,6 +1413,8 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
   if (!playlistId || !creds?.host) return null
   const window = opts.window || null
   const epgMode = opts.epgMode === "now-next" ? "now-next" : "full"
+  const loadStartedAt = performance.now()
+  log.debug("[xt:epg-data] loadProgrammes start", `id=${playlistId} mode=${epgMode} window=${window ? `${window.fromMs}-${window.toMs}` : "none"}`)
 
   if (!opts.force) {
     const hit = memCache.get(playlistId)
@@ -1301,6 +1434,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
 
   const promise = (async () => {
     try {
+      const dns = await getPlaylistDnsOverride(playlistId)
       const sources = await buildEpgUrls(creds, playlistId)
       if (!sources.length) {
         // No EPG configured (M3U with no x-tvg-url and no override). Nothing
@@ -1318,6 +1452,8 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
       const channelNameMaps = []
       // See resolveAutoOffsetMin: any explicit-tz source skips inference to avoid double-shifting correct-UTC programmes.
       let anySourceHasExplicitTimezones = false
+      let okSourceCount = 0
+      let failedSourceCount = 0
 
       const setting = getOffsetSetting(playlistId)
       const offsetIsAuto = setting === "auto"
@@ -1330,7 +1466,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
       const nowMsForScan = epgMode === "now-next" ? Date.now() - nowNextOffsetGuess * 60 * 1000 : Date.now()
 
       const fetchResults = await Promise.allSettled(
-        sources.map((src) => fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, nowMsForScan))
+        sources.map((src) => fetchAndParseSource(playlistId, src, httpMeta, window, epgMode, nowMsForScan, dns))
       )
 
       for (let i = 0; i < sources.length; i++) {
@@ -1342,6 +1478,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
           programmeMaps.push(programmes)
           channelNameMaps.push(channelNames)
           if (hasExplicitTimezones) anySourceHasExplicitTimezones = true
+          okSourceCount++
           statuses.push({
             url: src.url,
             source: src.source,
@@ -1352,6 +1489,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
           })
         } else {
           const err = result.reason
+          failedSourceCount++
           log.warn(
             `[xt:epg-data] source failed (${src.source}):`,
             err?.message || err
@@ -1418,6 +1556,7 @@ export async function loadProgrammes(playlistId, creds, opts = {}) {
           detail: { playlistId, offsetMin, offsetIsAuto },
         })
       )
+      log.debug("[xt:epg-data] loadProgrammes done", `id=${playlistId} sources=${sources.length} ok=${okSourceCount} failed=${failedSourceCount} totalMs=${Math.round(performance.now() - loadStartedAt)} programmes=${programmes.size} channels=${channelNames.size}`)
       return state
     } catch (e) {
       log.warn("[xt:epg-data] load failed:", e)
@@ -1761,9 +1900,7 @@ export function getAvailableEpgChannels(playlistId) {
       count: programmes.length,
     })
   }
-  out.sort((first, second) =>
-    first.name.localeCompare(second.name, "en", { sensitivity: "base" })
-  )
+  out.sort((first, second) => NAME_COLLATOR.compare(first.name, second.name))
   availableEpgCache.set(playlistId, { fetchedAt: state.fetchedAt, entries: out })
   return out
 }

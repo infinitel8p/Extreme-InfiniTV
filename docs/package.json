@@ -6,15 +6,17 @@
   "packageManager": "pnpm@10.31.0",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build && pagefind --site dist --output-subdir pagefind",
+    "build": "astro build && node scripts/check-links.mjs && pagefind --site dist --output-subdir pagefind",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "check-links": "node scripts/check-links.mjs"
   },
   "dependencies": {
-    "@astrojs/mdx": "^7.0.7",
+    "@astrojs/mdx": "^7.0.8",
     "@fontsource-variable/geist": "5.2.9",
     "@tailwindcss/vite": "^4.3.3",
-    "astro": "^7.2.4",
+    "astro": "^7.3.1",
+    "sharp": "^0.35.4",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3"
   },

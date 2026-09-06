@@ -9,6 +9,7 @@ import {
   allocateLogTailBudget,
   withTimeout,
   sanitizeDeviceNameForFilename,
+  LOG_FILE_NAME_PATTERN,
   type BundleInput,
   type PlaylistSummary,
   type ReceiverLogResult,
@@ -232,6 +233,23 @@ describe("buildBundleManifest", () => {
     )
     const logFile = manifest.find((file) => file.name === "logs/app-2026-03-15.log")
     expect(logFile?.text).not.toContain("hunter2")
+  })
+
+  it("redacts an Xtream-style credentialed stream URL inside an mpv-embed log tail", () => {
+    const manifest = buildBundleManifest(
+      baseBundleInput({
+        logFiles: [
+          {
+            name: "mpv-embed.log",
+            text: "Playing: http://host.example:8080/live/joe/hunter2/12345.ts",
+          },
+        ],
+      })
+    )
+    const logFile = manifest.find((file) => file.name === "logs/mpv-embed.log")
+    expect(logFile?.text).not.toContain("joe")
+    expect(logFile?.text).not.toContain("hunter2")
+    expect(logFile?.text).toContain("***")
   })
 
   it("mentions every included file in the README", () => {
@@ -571,5 +589,19 @@ describe("decodeLogTail", () => {
     const decoded = decodeLogTail(cut, true)
     expect(decoded).toBe("next line intact")
     expect(decoded).not.toContain("�")
+  })
+})
+
+describe("LOG_FILE_NAME_PATTERN", () => {
+  it("matches mpv-embed.log alongside the other app log names", () => {
+    expect(LOG_FILE_NAME_PATTERN.test("mpv-embed.log")).toBe(true)
+    expect(LOG_FILE_NAME_PATTERN.test("app-2026-03-15.log")).toBe(true)
+    expect(LOG_FILE_NAME_PATTERN.test("app-2026-03-15_1.log.bak")).toBe(true)
+  })
+
+  it("rejects a path outside the flat log directory", () => {
+    expect(LOG_FILE_NAME_PATTERN.test("../mpv-embed.log")).toBe(false)
+    expect(LOG_FILE_NAME_PATTERN.test("sub/mpv-embed.log")).toBe(false)
+    expect(LOG_FILE_NAME_PATTERN.test("mpv-embed.txt")).toBe(false)
   })
 })

@@ -1,5 +1,7 @@
 // Pure filter/sort pipeline + row-window math for the TV movies/series grid.
 
+import { NAME_COLLATOR } from "@/scripts/lib/catalog-mappers.js"
+
 export interface GridFilterState {
   category: string | null
   query: string
@@ -86,12 +88,10 @@ export function filterAndSortIndexes<T extends GridFilterEntry>(
     candidates.sort((first, second) => {
       const delta = ratingSortValue(entries[second].rating) - ratingSortValue(entries[first].rating)
       if (delta !== 0) return delta
-      return (entries[first].name || "").localeCompare(entries[second].name || "", "en", { sensitivity: "base" })
+      return NAME_COLLATOR.compare(entries[first].name || "", entries[second].name || "")
     })
   } else if (state.sort === "az") {
-    candidates.sort((first, second) =>
-      (entries[first].name || "").localeCompare(entries[second].name || "", "en", { sensitivity: "base" })
-    )
+    candidates.sort((first, second) => NAME_COLLATOR.compare(entries[first].name || "", entries[second].name || ""))
   } else if (scoreByIndex) {
     const scores = scoreByIndex
     candidates.sort((first, second) => (scores.get(second) || 0) - (scores.get(first) || 0))

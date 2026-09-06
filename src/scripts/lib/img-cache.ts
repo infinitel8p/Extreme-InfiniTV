@@ -6,10 +6,11 @@ import {
   scaleToFit,
   imgCacheKey,
   isCacheableImageUrl,
-  IMG_KIND_MAX_DIM,
+  imgKindMaxDim,
   type ImgKind,
 } from "@/scripts/lib/img-scale"
 import { createTimedIdbOpener } from "@/scripts/lib/idb-open.ts"
+import { memoryConservative } from "@/scripts/tv/motion"
 
 const DB_NAME = "xt_img_cache"
 const DB_VERSION = 1
@@ -137,6 +138,11 @@ const inFlight = new Map<string, Promise<void>>()
 
 // Bounds live blob URLs; LRU order keeps in-DOM images safe from eviction.
 const MAX_MEMO_ENTRIES = 512
+const MAX_MEMO_ENTRIES_LITE = 128
+
+function maxMemoEntries(): number {
+  return memoryConservative() ? MAX_MEMO_ENTRIES_LITE : MAX_MEMO_ENTRIES
+}
 
 // Reads a memoized object URL and refreshes its recency (Map insertion order).
 function memoGet(cacheKey: string): string | undefined {
@@ -153,7 +159,7 @@ function memoAdopt(cacheKey: string, blob: Blob): string {
   if (existing) return existing
   const objectUrl = URL.createObjectURL(blob)
   objectUrlMemo.set(cacheKey, objectUrl)
-  while (objectUrlMemo.size > MAX_MEMO_ENTRIES) {
+  while (objectUrlMemo.size > maxMemoEntries()) {
     const oldestKey = objectUrlMemo.keys().next().value
     if (oldestKey === undefined) break
     const oldestUrl = objectUrlMemo.get(oldestKey)
@@ -164,10 +170,18 @@ function memoAdopt(cacheKey: string, blob: Blob): string {
 }
 
 const MAX_CONCURRENT = 6
+const MAX_CONCURRENT_LITE = 2
 let runningCount = 0
-const queue: Array<() => void> = []
+// Two queues sharing one concurrency budget: a visible <img> waiting to display never queues
+// behind idle background fills (prefetch/warm), only behind other visible images.
+const foregroundQueue: Array<() => void> = []
+const backgroundQueue: Array<() => void> = []
 
-function runLimited<T>(job: () => Promise<T>): Promise<T> {
+function maxConcurrent(): number {
+  return memoryConservative() ? MAX_CONCURRENT_LITE : MAX_CONCURRENT
+}
+
+function runLimited<T>(job: () => Promise<T>, priority: "foreground" | "background" = "background"): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const run = () => {
       runningCount++
@@ -175,12 +189,12 @@ function runLimited<T>(job: () => Promise<T>): Promise<T> {
         .then(resolve, reject)
         .finally(() => {
           runningCount--
-          const next = queue.shift()
+          const next = foregroundQueue.shift() || backgroundQueue.shift()
           if (next) next()
         })
     }
-    if (runningCount < MAX_CONCURRENT) run()
-    else queue.push(run)
+    if (runningCount < maxConcurrent()) run()
+    else (priority === "foreground" ? foregroundQueue : backgroundQueue).push(run)
   })
 }
 
@@ -250,7 +264,7 @@ async function downscaleBlob(originalBlob: Blob, kind: ImgKind): Promise<Blob> {
     return originalBlob
   }
   try {
-    const targetSize = scaleToFit(bitmap.width, bitmap.height, IMG_KIND_MAX_DIM[kind])
+    const targetSize = scaleToFit(bitmap.width, bitmap.height, imgKindMaxDim(kind, memoryConservative()))
     if (!targetSize) return originalBlob
     const encoded = await encodeDownscaled(bitmap, targetSize.width, targetSize.height)
     return encoded || originalBlob
@@ -259,19 +273,43 @@ async function downscaleBlob(originalBlob: Blob, kind: ImgKind): Promise<Blob> {
   }
 }
 
-// Fetches, downscales and caches `url` without touching any <img>
-async function backgroundFill(cacheKey: string, url: string, kind: ImgKind): Promise<void> {
+// Fetches, downscales and caches `url` without touching any <img>. Feeds `displayImg`
+// (when given) from the same fetched blob so the cold path never issues a second
+// network request for the image it is about to show.
+async function fetchAndCache(
+  cacheKey: string,
+  url: string,
+  kind: ImgKind,
+  displayImg?: HTMLImageElement,
+  stillWanted?: () => boolean
+): Promise<void> {
+  let previewUrl: string | null = null
   try {
     const response = await providerFetch(url, { logKind: "image" })
     if (!response.ok) throw new Error(`fetch failed: ${response.status}`)
     const originalBlob = await response.blob()
+    if (displayImg && (!stillWanted || stillWanted()) && displayImg.isConnected) {
+      previewUrl = URL.createObjectURL(originalBlob)
+      displayImg.src = previewUrl
+    }
     const storedBlob = await downscaleBlob(originalBlob, kind)
     await idbPut(cacheKey, { blob: storedBlob, cachedAt: Date.now() })
-    memoAdopt(cacheKey, storedBlob)
+    const finalUrl = memoAdopt(cacheKey, storedBlob)
+    // Only swap when the img still shows our own preview - a caller may have moved on to a
+    // different image (row recycled) while the fetch and downscale were in flight.
+    if (displayImg?.isConnected && displayImg.src === previewUrl) displayImg.src = finalUrl
   } catch (err) {
     log.warn("[xt:img-cache] background fill failed:", err)
     failedUrls.add(url)
+    if (displayImg?.isConnected && (!stillWanted || stillWanted())) displayImg.src = url
+  } finally {
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
   }
+}
+
+// Fetches, downscales and caches `url` without touching any <img>
+function backgroundFill(cacheKey: string, url: string, kind: ImgKind): Promise<void> {
+  return fetchAndCache(cacheKey, url, kind)
 }
 
 function scheduleBackgroundFill(
@@ -296,6 +334,38 @@ function scheduleBackgroundFill(
   fill.finally(() => inFlight.delete(cacheKey))
 }
 
+// Cold-cache visible path: joins an already in-flight fetch for the same cacheKey instead of
+// starting a second one, otherwise fetches once through the shared limiter and feeds `img`.
+async function fillAndDisplay(
+  img: HTMLImageElement,
+  cacheKey: string,
+  url: string,
+  kind: ImgKind,
+  stillWanted: () => boolean
+): Promise<void> {
+  const existingFill = inFlight.get(cacheKey)
+  if (existingFill) {
+    await existingFill
+    if (stillWanted() && img.isConnected) img.src = memoGet(cacheKey) || url
+    return
+  }
+  // The foreground queue is already saturated - waiting it out would leave the <img> blank
+  // until its turn. Fall back to a native load now and still cache the downscaled variant
+  // in the background for next time, instead of blocking the image on our own queue.
+  if (runningCount >= maxConcurrent()) {
+    img.src = url
+    scheduleBackgroundFill(cacheKey, url, kind, stillWanted)
+    return
+  }
+  const fill = runLimited(
+    () => (stillWanted() ? fetchAndCache(cacheKey, url, kind, img, stillWanted) : Promise.resolve()),
+    "foreground"
+  )
+  inFlight.set(cacheKey, fill)
+  fill.finally(() => inFlight.delete(cacheKey))
+  await fill
+}
+
 async function handleVisible(img: HTMLImageElement, url: string, kind: ImgKind): Promise<void> {
   if (!img.isConnected) return
   schedulePrune()
@@ -306,20 +376,32 @@ async function handleVisible(img: HTMLImageElement, url: string, kind: ImgKind):
     return
   }
   const cached = await idbGet(cacheKey)
+  if (!img.isConnected) return
   if (cached?.blob) {
     img.src = memoAdopt(cacheKey, cached.blob)
     return
   }
-  img.src = url
   // WeakRef, not the element: a queued fill can wait out several navigations, and a
   // captured <img> pins the whole detached view it belongs to until the queue drains.
   const imgRef = typeof WeakRef === "function" ? new WeakRef(img) : null
-  scheduleBackgroundFill(
-    cacheKey,
-    url,
-    kind,
-    imgRef ? () => imgRef.deref()?.isConnected === true : () => img.isConnected
-  )
+  const stillWanted = imgRef ? () => imgRef.deref()?.isConnected === true : () => img.isConnected
+  if (!stillWanted()) return
+  await fillAndDisplay(img, cacheKey, url, kind, stillWanted)
+}
+
+/** Primes the IDB cache entry for `url` without mounting or decoding any <img>. */
+export function warmCachedImage(url: string, kind: ImgKind): void {
+  if (!isCacheableImageUrl(url) || failedUrls.has(url)) return
+  const cacheKey = imgCacheKey(kind, url)
+  if (memoGet(cacheKey)) return
+  void (async () => {
+    const cached = await idbGet(cacheKey)
+    if (cached?.blob) {
+      memoAdopt(cacheKey, cached.blob)
+      return
+    }
+    scheduleBackgroundFill(cacheKey, url, kind, () => true)
+  })()
 }
 
 /** Fetch (or serve cached) `url`, downscale to `kind`'s bucket, and mount it once visible. */
@@ -404,6 +486,28 @@ export async function clearImageCache(): Promise<number> {
   objectUrlMemo.clear()
   failedUrls.clear()
   return removed
+}
+
+/**
+ * Drops the in-memory object-URL memo and failed-URL set on Android memory pressure,
+ * without touching the persisted IndexedDB cache - a cheap release, not a wipe.
+ * Object URLs still displayed by a connected <img> are kept; revoking those would blank
+ * the image currently on screen.
+ */
+function releaseMemoryPressureCache(): void {
+  const displayedUrls = new Set(
+    Array.from(document.querySelectorAll<HTMLImageElement>('img[src^="blob:"]'), (img) => img.src)
+  )
+  for (const [cacheKey, objectUrl] of objectUrlMemo) {
+    if (displayedUrls.has(objectUrl)) continue
+    URL.revokeObjectURL(objectUrl)
+    objectUrlMemo.delete(cacheKey)
+  }
+  failedUrls.clear()
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("xt:memory-pressure", releaseMemoryPressureCache)
 }
 
 // ---------------------------------------------------------------------------

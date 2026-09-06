@@ -57,6 +57,7 @@ export interface VodLaunchOptions {
   title?: string
   posterUrl?: string
   startMs?: number
+  dns?: string | null
 }
 
 export interface LiveLaunchOptions {
@@ -66,6 +67,7 @@ export interface LiveLaunchOptions {
   defaultUa?: string
   defaultReferer?: string
   programmes?: Map<string, Array<{ start: number; stop: number; title: string }>> | null
+  dns?: string | null
 }
 
 const isAndroid =
@@ -104,6 +106,7 @@ export function launchAndroidNativeVod(opts: VodLaunchOptions): boolean {
       opts.title || "",
       opts.posterUrl || "",
       Math.max(0, Math.floor(opts.startMs || 0)),
+      opts.dns || "",
     )
   } catch (err) {
     log.error("[xt:android-video] native VOD launch failed:", redactUrl(opts.url), err)
@@ -131,6 +134,7 @@ export function launchAndroidNativeLive(opts: LiveLaunchOptions): boolean {
       opts.initialChannelId,
       opts.defaultUa || "",
       opts.defaultReferer || "",
+      opts.dns || "",
     )
   } catch (err) {
     log.error("[xt:android-video] native live launch failed:", err)
@@ -224,6 +228,7 @@ export interface NativeVodProgressOptions {
   title?: string
   posterUrl?: string
   startMs?: number
+  dns?: string | null
   progressExtras?: Record<string, unknown>
   onCompleted?: () => void
 }
@@ -257,6 +262,7 @@ export function launchAndroidNativeVodWithProgress(
     title: opts.title,
     posterUrl: opts.posterUrl,
     startMs: opts.startMs,
+    dns: opts.dns,
   })
   if (!launched) unsubscribe()
   return launched

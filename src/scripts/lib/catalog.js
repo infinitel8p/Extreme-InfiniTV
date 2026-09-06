@@ -15,19 +15,19 @@ import {
   getEntries,
   entryToCreds,
   isTauri,
+  getEntryDnsOverride,
 } from "@/scripts/lib/creds.js"
 import { normalize } from "@/scripts/lib/text.js"
 import {
   parseCategoriesToMap,
-  mapXtreamLiveRows,
-  mapXtreamVodRows,
-  mapXtreamSeriesRows,
   rowsNeedTmdbBackfill,
   rowsNeedGenreBackfill,
 } from "@/scripts/lib/catalog-mappers.js"
 import { triggerTmdbBackfillOnce } from "@/scripts/lib/tmdb-backfill.ts"
-import { providerFetch, streamingText } from "@/scripts/lib/provider-fetch.js"
+import { providerFetch, streamingText, streamingBytes } from "@/scripts/lib/provider-fetch.js"
+import { ingestXtreamBytes } from "@/scripts/lib/catalog-ingest-client.ts"
 import { xtreamApiFetch } from "@/scripts/lib/xtream-api.js"
+import { memoryConservative } from "@/scripts/tv/motion.ts"
 import { ensureUserInfo } from "@/scripts/lib/account-info.js"
 import { parseM3U, isHlsStreamManifest } from "@/scripts/lib/m3u-parser.ts"
 import {
@@ -84,8 +84,8 @@ function makeBytesEmitter(playlistId, kind) {
 // ---------------------------------------------------------------------------
 // Live (Xtream + M3U)
 // ---------------------------------------------------------------------------
-async function fetchLiveCategoryMap(playlistId) {
-  const r = await xtreamApiFetch("get_live_categories", {}, { entryId: playlistId })
+async function fetchLiveCategoryMap(playlistId, dns) {
+  const r = await xtreamApiFetch("get_live_categories", {}, { entryId: playlistId, dns })
   if (!r.ok) throw new HttpRetryError(r.status, `live_categories ${r.status}`)
   const data = await r.json().catch((err) => {
     log.warn("[xt:catalog] live categories parse failed:", err?.message || err)
@@ -173,6 +173,7 @@ export async function buildCustomSourcePools(doc, opts = {}) {
         channels = await ensureLive(entryToCreds(sourceEntry), sourceEntryId, {
           ...opts,
           includeHidden: true,
+          dns: getEntryDnsOverride(sourceEntry),
         })
       } catch (err) {
         log.warn("[xt:catalog] custom playlist source hydration failed:", sourceEntryId, err?.message || err)
@@ -203,6 +204,7 @@ async function fetchCustomLiveChannels(playlistId, opts = {}) {
 }
 
 export async function ensureLive(creds, playlistId, opts = {}) {
+  const ensureStartedAt = performance.now()
   const isM3U = isLikelyM3USource(creds.host, creds.user, creds.pass)
   const kind = isM3U ? "m3u" : "live"
   if (isTauri) {
@@ -213,8 +215,11 @@ export async function ensureLive(creds, playlistId, opts = {}) {
       log.warn("[xt:catalog] await native kind failed:", err?.message || err)
     }
   }
+  const entryForPlaylist = (await getEntries()).find((entry) => entry._id === playlistId)
+  const dns = opts.dns !== undefined ? opts.dns : getEntryDnsOverride(entryForPlaylist)
   const onBytes = makeBytesEmitter(playlistId, "live")
-  const { data } = await cachedFetch(playlistId, kind, CHANNELS_TTL_MS, () => retryWithBackoff(async () => {
+  let liveCategoryCount = null
+  const { data, fromCache, stale } = await cachedFetch(playlistId, kind, CHANNELS_TTL_MS, () => retryWithBackoff(async () => {
     if (isM3U) {
       if (isCustomHost(creds.host)) {
         return fetchCustomLiveChannels(playlistId, opts)
@@ -224,7 +229,7 @@ export async function ensureLive(creds, playlistId, opts = {}) {
         text = await readLocalM3UContent(creds.host)
         try { onBytes(text.length, text.length) } catch {}
       } else {
-        const r = await providerFetch(creds.host, { logKind: "playlist" })
+        const r = await providerFetch(creds.host, { logKind: "playlist", dns })
         if (!r.ok) throw new HttpRetryError(r.status, `M3U ${r.status}`)
         text = await streamingText(r, onBytes)
       }
@@ -235,35 +240,33 @@ export async function ensureLive(creds, playlistId, opts = {}) {
           localStorage.setItem(`xt_m3u_epg:${playlistId}`, epgUrls.join(","))
         }
       } catch {}
-      const activeEntry = (await getEntries()).find((entry) => entry._id === playlistId)
       return m3uToChannelList(
         text,
         creds.host,
-        activeEntry?.streamHeaders,
-        activeEntry?.logo,
-        activeEntry?.manifestType,
-        activeEntry?.drmScheme,
-        activeEntry?.licenseKey
+        entryForPlaylist?.streamHeaders,
+        entryForPlaylist?.logo,
+        entryForPlaylist?.manifestType,
+        entryForPlaylist?.drmScheme,
+        entryForPlaylist?.licenseKey
       )
     }
-    const catMap = await fetchLiveCategoryMap(playlistId)
-    const r = await xtreamApiFetch("get_live_streams", {}, { entryId: playlistId })
-    const body = await streamingText(r, onBytes)
+    const catMap = await fetchLiveCategoryMap(playlistId, dns)
+    liveCategoryCount = catMap.size
+    const r = await xtreamApiFetch("get_live_streams", {}, { entryId: playlistId, dns })
+    const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `live_streams ${r.status}`)
-    const parsed = JSON.parse(body)
-    const arr = Array.isArray(parsed)
-      ? parsed
-      : parsed?.streams || parsed?.results || []
-    return mapXtreamLiveRows(arr, catMap)
+    return ingestXtreamBytes("live", bytes, Array.from(catMap))
   }), { force: !!opts.force })
-  return applyLiveOverrides(data || [], playlistId, isM3U, opts)
+  const result = applyLiveOverrides(data || [], playlistId, isM3U, opts)
+  log.debug("[xt:catalog] ensureLive done", `id=${playlistId} source=${fromCache ? (stale ? "idb-cache-stale" : "idb-cache") : "network"} items=${result.length} categories=${liveCategoryCount ?? "n/a"} ms=${Math.round(performance.now() - ensureStartedAt)}`)
+  return result
 }
 
 // ---------------------------------------------------------------------------
 // VOD
 // ---------------------------------------------------------------------------
-async function fetchVodCategoryMap() {
-  const r = await xtreamApiFetch("get_vod_categories")
+async function fetchVodCategoryMap(dns) {
+  const r = await xtreamApiFetch("get_vod_categories", {}, { dns })
   if (!r.ok) throw new HttpRetryError(r.status, `vod_categories ${r.status}`)
   const data = await r.json().catch((err) => {
     log.warn("[xt:catalog] vod categories parse failed:", err?.message || err)
@@ -274,6 +277,7 @@ async function fetchVodCategoryMap() {
 
 export async function ensureVod(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
+  const ensureStartedAt = performance.now()
   if (isTauri) {
     try {
       const { awaitNativeKind } = await import("@/scripts/lib/warmup-native.ts")
@@ -282,30 +286,32 @@ export async function ensureVod(creds, playlistId, opts = {}) {
       log.warn("[xt:catalog] await native kind failed:", err?.message || err)
     }
   }
+  const entryForPlaylist = (await getEntries()).find((entry) => entry._id === playlistId)
+  const dns = opts.dns !== undefined ? opts.dns : getEntryDnsOverride(entryForPlaylist)
   const onBytes = makeBytesEmitter(playlistId, "vod")
+  let vodCategoryCount = null
   const fetcher = () => retryWithBackoff(async () => {
-    const catMap = await fetchVodCategoryMap()
-    const r = await xtreamApiFetch("get_vod_streams")
-    const body = await streamingText(r, onBytes)
+    const catMap = await fetchVodCategoryMap(dns)
+    vodCategoryCount = catMap.size
+    const r = await xtreamApiFetch("get_vod_streams", {}, { dns })
+    const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `vod_streams ${r.status}`)
-    const parsed = JSON.parse(body)
-    const arr = Array.isArray(parsed)
-      ? parsed
-      : parsed?.movies || parsed?.results || []
-    return mapXtreamVodRows(arr, catMap)
+    return ingestXtreamBytes("vod", bytes, Array.from(catMap))
   })
-  const { data } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, fetcher, { force: !!opts.force })
+  const { data, fromCache, stale } = await cachedFetch(playlistId, "vod", VOD_TTL_MS, fetcher, { force: !!opts.force })
   if (!opts.force && rowsNeedTmdbBackfill(data)) {
     triggerTmdbBackfillOnce(playlistId, "vod", VOD_TTL_MS, fetcher)
   }
-  return data || []
+  const result = data || []
+  log.debug("[xt:catalog] ensureVod done", `id=${playlistId} source=${fromCache ? (stale ? "idb-cache-stale" : "idb-cache") : "network"} items=${result.length} categories=${vodCategoryCount ?? "n/a"} ms=${Math.round(performance.now() - ensureStartedAt)}`)
+  return result
 }
 
 // ---------------------------------------------------------------------------
 // Series
 // ---------------------------------------------------------------------------
-async function fetchSeriesCategoryMap() {
-  const r = await xtreamApiFetch("get_series_categories")
+async function fetchSeriesCategoryMap(dns) {
+  const r = await xtreamApiFetch("get_series_categories", {}, { dns })
   if (!r.ok) throw new HttpRetryError(r.status, `series_categories ${r.status}`)
   const data = await r.json().catch((err) => {
     log.warn("[xt:catalog] series categories parse failed:", err?.message || err)
@@ -316,6 +322,7 @@ async function fetchSeriesCategoryMap() {
 
 export async function ensureSeries(creds, playlistId, opts = {}) {
   if (!creds?.user || !creds?.pass) return []
+  const ensureStartedAt = performance.now()
   if (isTauri) {
     try {
       const { awaitNativeKind } = await import("@/scripts/lib/warmup-native.ts")
@@ -324,21 +331,25 @@ export async function ensureSeries(creds, playlistId, opts = {}) {
       log.warn("[xt:catalog] await native kind failed:", err?.message || err)
     }
   }
+  const entryForPlaylist = (await getEntries()).find((entry) => entry._id === playlistId)
+  const dns = opts.dns !== undefined ? opts.dns : getEntryDnsOverride(entryForPlaylist)
   const onBytes = makeBytesEmitter(playlistId, "series")
+  let seriesCategoryCount = null
   const fetcher = () => retryWithBackoff(async () => {
-    const catMap = await fetchSeriesCategoryMap()
-    const r = await xtreamApiFetch("get_series")
-    const body = await streamingText(r, onBytes)
+    const catMap = await fetchSeriesCategoryMap(dns)
+    seriesCategoryCount = catMap.size
+    const r = await xtreamApiFetch("get_series", {}, { dns })
+    const bytes = await streamingBytes(r, onBytes)
     if (!r.ok) throw new HttpRetryError(r.status, `series ${r.status}`)
-    const parsed = JSON.parse(body)
-    const arr = Array.isArray(parsed) ? parsed : parsed?.series || parsed?.results || []
-    return mapXtreamSeriesRows(arr, catMap)
+    return ingestXtreamBytes("series", bytes, Array.from(catMap))
   })
-  const { data } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, fetcher, { force: !!opts.force })
+  const { data, fromCache, stale } = await cachedFetch(playlistId, "series", SERIES_TTL_MS, fetcher, { force: !!opts.force })
   if (!opts.force && (rowsNeedTmdbBackfill(data) || rowsNeedGenreBackfill(data))) {
     triggerTmdbBackfillOnce(playlistId, "series", SERIES_TTL_MS, fetcher)
   }
-  return data || []
+  const result = data || []
+  log.debug("[xt:catalog] ensureSeries done", `id=${playlistId} source=${fromCache ? (stale ? "idb-cache-stale" : "idb-cache") : "network"} items=${result.length} categories=${seriesCategoryCount ?? "n/a"} ms=${Math.round(performance.now() - ensureStartedAt)}`)
+  return result
 }
 
 const inflight = new Map()
@@ -369,6 +380,8 @@ export async function warmupActive(playlistId, opts = {}) {
   if (!opts.force && inflight.has(pid)) return inflight.get(pid)
 
   const run = (async () => {
+    const warmupStartedAt = performance.now()
+    log.debug("[xt:catalog] warmup start", `id=${pid} kinds=live,vod,series path=${isTauri ? "native" : "js"}`)
     if (isTauri) {
       try {
         const { warmupActiveNative } = await import("@/scripts/lib/warmup-native.ts")
@@ -423,17 +436,29 @@ export async function warmupActive(playlistId, opts = {}) {
           }
           return []
         })
-    const [live, vod, series] = await Promise.all([
-      wrap("live", () => ensureLive(creds, pid, { force })),
-      wrap("vod", () => ensureVod(creds, pid, { force })),
-      wrap("series", () => ensureSeries(creds, pid, { force })),
-      // user_info comes alongside the catalog so download-concurrency caps
-      // and the expiration banner are populated without waiting for /settings.
-      // Failure is ignored - M3U sources won't have a player_api endpoint.
-      ensureUserInfo(creds, pid, { force }).catch(() => null),
-    ])
+    // user_info comes alongside the catalog so download-concurrency caps and the
+    // expiration banner are populated without waiting for /settings. Kicked off
+    // first, awaited last; failure is ignored - M3U sources have no player_api.
+    const userInfoPromise = ensureUserInfo(creds, pid, { force }).catch(() => null)
+
+    let live, vod, series
+    if (memoryConservative()) {
+      // One kind's worker ingest at a time on a low-memory device instead of three
+      // JSON.parse + map passes racing for the same limited heap.
+      live = await wrap("live", () => ensureLive(creds, pid, { force }))
+      vod = await wrap("vod", () => ensureVod(creds, pid, { force }))
+      series = await wrap("series", () => ensureSeries(creds, pid, { force }))
+    } else {
+      ;[live, vod, series] = await Promise.all([
+        wrap("live", () => ensureLive(creds, pid, { force })),
+        wrap("vod", () => ensureVod(creds, pid, { force })),
+        wrap("series", () => ensureSeries(creds, pid, { force })),
+      ])
+    }
+    await userInfoPromise
     if (force) await invalidateCustomDependents(pid)
     dispatch(EVT_WARMED, { playlistId: pid, errors })
+    log.debug("[xt:catalog] warmup done", `id=${pid} totalMs=${Math.round(performance.now() - warmupStartedAt)} live=${live.length} vod=${vod.length} series=${series.length} failed=${Object.keys(errors).join(",") || "none"}`)
     return { live, vod, series, errors }
   })()
     .finally(() => {

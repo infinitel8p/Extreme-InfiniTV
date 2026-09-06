@@ -27,12 +27,12 @@ export interface ConfirmDialogOptions {
 }
 
 const BUTTON_CLASS_DEFAULT =
-  "rounded-xl px-4 py-2 text-sm font-semibold bg-accent text-bg " +
+  "rounded-xl px-4 py-2 text-sm font-semibold bg-accent text-bg tv-focus-inset " +
   "hover:opacity-90 focus-visible:opacity-90 focus-visible:outline-none " +
   "focus-visible:ring-1 focus-visible:ring-accent"
 
 const BUTTON_CLASS_DESTRUCTIVE =
-  "rounded-xl px-4 py-2 text-sm font-semibold bg-bad text-bg " +
+  "rounded-xl px-4 py-2 text-sm font-semibold bg-bad text-bg tv-focus-inset " +
   "hover:opacity-90 focus-visible:opacity-90 focus-visible:outline-none " +
   "focus-visible:ring-1 focus-visible:ring-bad"
 
@@ -50,7 +50,7 @@ function ensureDialog(): HTMLDialogElement {
     <div class="flex flex-col gap-4 p-5">
       <div class="flex flex-col gap-1.5">
         <h2 id="${DIALOG_ID}-title" data-role="title" class="text-base font-semibold"></h2>
-        <p data-role="body" class="text-sm text-fg-2"></p>
+        <p data-role="body" class="text-sm text-fg-2 whitespace-pre-line"></p>
         <button
           data-role="link"
           type="button"
@@ -60,7 +60,7 @@ function ensureDialog(): HTMLDialogElement {
         <button
           data-role="cancel"
           type="button"
-          class="rounded-xl border border-line px-4 py-2 text-sm hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent"></button>
+          class="rounded-xl border border-line px-4 py-2 text-sm tv-focus-inset hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:border-accent"></button>
         <button
           data-role="confirm"
           type="button"

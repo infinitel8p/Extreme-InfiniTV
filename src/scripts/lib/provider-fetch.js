@@ -2,9 +2,15 @@ import { log, redactUrl } from "@/scripts/lib/log.js"
 import {
   getUserAgent,
   getNetworkTimeoutSeconds,
+  getGlobalDns,
 } from "@/scripts/lib/app-settings.js"
 import { splitUrlAuth } from "@/scripts/lib/url-auth"
 import { recordNetLog } from "@/scripts/lib/net-log"
+import { dnsProxyAvailable, ensureDnsProxy } from "@/scripts/lib/dns-proxy.ts"
+import { wrapProxyUrl } from "@/scripts/lib/dns-proxy-url.ts"
+import { describeDnsServer, parseDnsServer } from "@/scripts/lib/dns-config.ts"
+// Safe as a static import: creds.js only reaches back to us dynamically.
+import { getActiveDnsOverrideAsync } from "@/scripts/lib/creds.js"
 
 const isTauri =
   typeof window !== "undefined" &&
@@ -134,8 +140,83 @@ export async function streamingText(response, onProgress) {
   return result
 }
 
+/**
+ * Same streaming contract as `streamingText`, but accumulates raw bytes and returns
+ * an exact-length transferable ArrayBuffer instead of decoding to a string - lets a
+ * caller hand the body straight to a Worker without a multi-MB string ever existing
+ * on the main thread.
+ *
+ * @param {Response} response
+ * @param {(received: number, total: number) => void} [onProgress]
+ * @returns {Promise<ArrayBuffer>}
+ */
+export async function streamingBytes(response, onProgress) {
+  const total = Number(response.headers?.get?.("content-length")) || 0
+  const body = response.body
+  if (!body || typeof body.getReader !== "function") {
+    const buffer = await response.arrayBuffer()
+    if (onProgress) {
+      try { onProgress(buffer.byteLength, total) } catch {}
+    }
+    return buffer
+  }
+  const reader = body.getReader()
+  const chunks = []
+  let received = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && value.byteLength) {
+        received += value.byteLength
+        chunks.push(value)
+        if (onProgress) {
+          try { onProgress(received, total) } catch {}
+        }
+      }
+    }
+  } finally {
+    try { reader.releaseLock() } catch {}
+  }
+  const merged = new Uint8Array(received)
+  let offset = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return merged.buffer
+}
+
 function defaultTimeoutMs() {
   return getNetworkTimeoutSeconds() * 1000
+}
+
+// DNS-proxy-wrapped URL for a request; falls back to the original on any failure.
+// explicitServer: undefined -> the active playlist's override, "global" -> the global default
+// (for app-level endpoints that belong to no playlist), null -> direct, a DnsServer -> that server.
+export async function resolveDnsRoutedUrl(requestUrl, explicitServer) {
+  if (!dnsProxyAvailable()) return { url: requestUrl, server: null }
+  let server = explicitServer
+  if (server === "global") {
+    server = parseDnsServer(getGlobalDns())
+  } else if (server === undefined) {
+    try {
+      server = await getActiveDnsOverrideAsync()
+    } catch (e) {
+      log.warn("[xt:net] getActiveDnsOverrideAsync failed:", e)
+      server = null
+    }
+  }
+  if (!server) return { url: requestUrl, server: null }
+  const sessionKey = `dns:${server.raw}`
+  const base = await ensureDnsProxy(sessionKey, server)
+  if (!base) return { url: requestUrl, server: null }
+  try {
+    return { url: wrapProxyUrl(base, requestUrl), server }
+  } catch (e) {
+    log.warn("[xt:net] dns-proxy wrap failed:", e)
+    return { url: requestUrl, server: null }
+  }
 }
 
 // Lightweight provider-fetch statistics
@@ -174,13 +255,16 @@ export async function providerFetch(url, init = {}) {
   // fetch() rejects URLs with embedded credentials; move them to a header.
   const { url: requestUrl, authorization } = splitUrlAuth(String(url))
   const ua = getUserAgent()
+  // The net log always shows the real (unwrapped) URL, never the DNS-proxy loopback form.
   const u = redactUrl(requestUrl).slice(0, 200)
+  const { url: effectiveUrl, server: dnsServer } = await resolveDnsRoutedUrl(requestUrl, init.dns)
   const context = {
     method: String(init.method || "GET"),
     url: u,
     kind: init.logKind || "other",
     startedAt: Date.now(),
     transport: isTauri ? "tauri" : "native",
+    ...(dnsServer ? { dns: describeDnsServer(dnsServer) } : {}),
   }
 
   const callerSignal = init.signal
@@ -189,11 +273,18 @@ export async function providerFetch(url, init = {}) {
   // routing now that Tauri requests always send a browser UA by default.
   delete callInit.forceTauri
   delete callInit.logKind
+  delete callInit.dns
   if (authorization) {
     const mergedHeaders = new Headers(callInit.headers || {})
     if (!mergedHeaders.has("Authorization")) {
       mergedHeaders.set("Authorization", authorization)
     }
+    callInit.headers = mergedHeaders
+  }
+  // Cached catalog/EPG bodies outlive the session, so only media may be rewritten to loopback URLs.
+  if (dnsServer && context.kind !== "media") {
+    const mergedHeaders = new Headers(callInit.headers || {})
+    mergedHeaders.set("x-xt-dns-raw", "1")
     callInit.headers = mergedHeaders
   }
   if (!callerSignal) {
@@ -215,7 +306,7 @@ export async function providerFetch(url, init = {}) {
   if (!useTauri) {
     log.log(`[xt:net] native start`, u)
     try {
-      const r = await nativeFetch(requestUrl, callInit, u, abortSignal)
+      const r = await nativeFetch(effectiveUrl, callInit, u, abortSignal)
       noteSuccess(r.status, context)
       return r
     } catch (e) {
@@ -232,7 +323,7 @@ export async function providerFetch(url, init = {}) {
   if (!tauriFetch) {
     log.log(`[xt:net] native start (no plugin-http)`, u)
     try {
-      const r = await nativeFetch(requestUrl, callInit, u, abortSignal)
+      const r = await nativeFetch(effectiveUrl, callInit, u, abortSignal)
       noteSuccess(r.status, context)
       return r
     } catch (e) {
@@ -251,7 +342,7 @@ export async function providerFetch(url, init = {}) {
   // reqwest default ("reqwest/x.y") never reaches providers that block it.
   headers.set("User-Agent", ua || DEFAULT_BROWSER_UA)
   try {
-    const r = await tauriFetch(requestUrl, { ...callInit, headers })
+    const r = await tauriFetch(effectiveUrl, { ...callInit, headers })
     log.log(`[xt:net] tauri ok ${r.status}`, u)
     noteSuccess(r.status, context)
     return r
@@ -267,7 +358,7 @@ export async function providerFetch(url, init = {}) {
       String(e?.message || e)
     )
     try {
-      const r = await nativeFetch(requestUrl, callInit, u, abortSignal)
+      const r = await nativeFetch(effectiveUrl, callInit, u, abortSignal)
       noteSuccess(r.status, context)
       return r
     } catch (e2) {

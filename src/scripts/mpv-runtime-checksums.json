@@ -1,0 +1,20 @@
+{
+  "tag": "mpv-runtime-v1",
+  "pinnedAt": "2026-09-03",
+  "sidecarBuild": {
+    "mpvVersion": "mpv v0.41.0-1020-g174b638f2 Copyright © 2000-2026 mpv/MPlayer/mplayer2 projects",
+    "sourceUrl": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/tag/20260902",
+    "builtAt": "2026-09-02T23:49:07Z",
+    "workflowCommit": "e0cd2bae4adaafa27cb3430697d1e2841058de68"
+  },
+  "sha256": {
+    "BUILD-INFO-windows-arm64.txt": "9282ccc6cc6d6368c543baea458fb4e570be63695047e6140486757ffe2e3239",
+    "BUILD-INFO-windows.txt": "21ae4cd3a3ff086e9e0b1e950d7179e8e580ce01bbeea5df8bca290d4131c996",
+    "Copyright": "bfe9ee4cceabcb8ecbfadf208d04156f73d801e6a57369a5606bb8341e204a23",
+    "FFmpeg-COPYING.GPLv3.txt": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+    "FFmpeg-LICENSE.txt": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af",
+    "LICENSE.GPL": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6",
+    "mpv-aarch64-pc-windows-msvc.exe": "7d0681de7632c22969fca3b73a6fa2ec100cf250bbb7eb4015264327ec4048d8",
+    "mpv-x86_64-pc-windows-msvc.exe": "e63593c4dc0f743d4c3caf649b8196567a3a4efd1e9a731b3e3aec8c38ea95ab"
+  }
+}

@@ -1,5 +1,5 @@
 // In-memory ring buffer of recent provider HTTP requests, for Settings + bug-report ZIP.
-import { redactUrl } from "@/scripts/lib/log.js"
+import { log, redactUrl, isVerboseLogging } from "@/scripts/lib/log.js"
 
 export type NetLogKind = "api" | "playlist" | "epg" | "image" | "media" | "update" | "other"
 export type NetLogTransport = "native" | "tauri" | "tauri-fallback"
@@ -17,6 +17,7 @@ export interface NetLogEntry {
   ok: boolean
   outcome: NetLogOutcome
   error?: string
+  dns?: string
 }
 
 export interface NetworkLogSnapshot {
@@ -36,6 +37,7 @@ export interface NetLogInput {
   status?: number | null
   outcome?: NetLogOutcome
   error?: unknown
+  dns?: string
 }
 
 export const NET_LOG_CAPACITY = 200
@@ -87,6 +89,7 @@ export function makeNetLogEntry(input: NetLogInput, seq: number): NetLogEntry {
     outcome,
   }
   if (hasError) entry.error = redactUrl(stringifyError(input.error)).slice(0, ERROR_MAX_LENGTH)
+  if (input.dns) entry.dns = input.dns
   return entry
 }
 
@@ -103,6 +106,15 @@ export function pushWithCapacity<T>(entries: T[], entry: T, capacity: number): n
 
 export function shouldRecordKind(kind: NetLogKind, includeImages: boolean): boolean {
   return kind !== "image" || includeImages
+}
+
+/** One-line rendering of a net-log entry, for verbose-log mirroring. */
+export function formatNetLogLine(entry: NetLogEntry): string {
+  let line = `${entry.kind} ${entry.method} ${entry.status ?? "-"} ${entry.durationMs}ms ${entry.transport} ${entry.url}`
+  if (entry.error) line += ` error=${entry.error}`
+  if (entry.outcome === "aborted") line += ` outcome=aborted`
+  if (entry.dns) line += ` dns=${entry.dns}`
+  return line
 }
 
 const store = {
@@ -228,6 +240,8 @@ export function recordNetLog(input: NetLogInput): void {
     const entry = makeNetLogEntry(input, ++store.seq)
     store.dropped += pushWithCapacity(store.entries, entry, NET_LOG_CAPACITY)
     store.recorded++
+    // Kind gating already happened above (the early return skips images unless opted in).
+    if (isVerboseLogging()) log.debug("[xt:net]", formatNetLogLine(entry))
     queueDispatch()
   } catch {}
 }
