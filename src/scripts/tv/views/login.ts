@@ -7,6 +7,9 @@ import { parsePlaylistLinks, type ParsedXtreamCandidate } from "@/scripts/lib/pl
 import { parseDnsServer } from "@/scripts/lib/dns-config.ts"
 import { toastSuccess, toastWarn } from "@/scripts/lib/toast"
 import { classifyError, describeClassifiedError } from "@/scripts/lib/provider-error.js"
+import { ICON_CHEVRON_DOWN, ICON_X } from "@/scripts/lib/icons"
+
+const EPG_URL_RX = /^https?:\/\/[^\s]+$/i
 
 type Method = "xtream" | "m3u"
 
@@ -39,7 +42,18 @@ interface Refs {
   togglePasswordBtn: HTMLButtonElement
   m3uFields: HTMLElement
   m3uUrlInput: HTMLInputElement
+  epgBlock: HTMLElement
+  epgToggleBtn: HTMLButtonElement
+  epgToggleChevron: HTMLElement
+  epgPanelWrap: HTMLElement
+  epgPanel: HTMLElement
   epgUrlInput: HTMLInputElement
+  epgAdditionalList: HTMLElement
+  epgAddBtn: HTMLButtonElement
+  epgDisableRow: HTMLElement
+  epgDisableBtn: HTMLButtonElement
+  epgDisableTrack: HTMLElement
+  epgDisableKnob: HTMLElement
   dnsLabel: HTMLElement
   dnsInput: HTMLInputElement
   nameInput: HTMLInputElement
@@ -170,13 +184,49 @@ function buildMarkup(): string {
                      autocapitalize="off" spellcheck="false" inputmode="url"
                      placeholder="example.com/playlist.m3u8" class="${TV_INPUT_CLASS}" />
             </label>
-            <label class="flex flex-col gap-2">
-              <span data-i18n="login.epg.primaryLabel" class="${TV_LABEL_CLASS}">Primary EPG URL</span>
-              <input data-role="epg-url" data-focus-key="field:epgUrl" type="text"
-                     autocapitalize="off" spellcheck="false" inputmode="url"
-                     data-i18n-attr="placeholder:login.epg.primaryPlaceholder"
-                     placeholder="Leave empty to use the provider's default" class="${TV_INPUT_CLASS}" />
-            </label>
+          </div>
+
+          <div data-role="epg-block" class="flex flex-col gap-2">
+            <button type="button" data-role="epg-toggle" aria-expanded="false" aria-controls="tv-login-epg-panel"
+                    class="flex min-h-11 w-full items-center justify-between gap-3 rounded-xl px-2 -mx-2 text-start outline-none transition-colors hover:bg-surface-2 tv-focus-inset">
+              <span data-i18n="login.epg.advancedToggle" class="${TV_LABEL_CLASS}">Custom EPG sources (optional)</span>
+              <span data-role="epg-toggle-chevron" aria-hidden="true" class="shrink-0 text-fg-3 transition-transform duration-200">${ICON_CHEVRON_DOWN}</span>
+            </button>
+
+            <div data-role="epg-panel-wrap" class="grid grid-rows-[0fr] invisible transition-[grid-template-rows] duration-200 ease-out" inert>
+              <div data-role="epg-panel" id="tv-login-epg-panel" class="flex min-h-0 flex-col gap-4 overflow-hidden">
+                <div class="flex flex-col gap-2">
+                  <input data-role="epg-url" data-focus-key="field:epgUrl" type="text"
+                         autocapitalize="off" spellcheck="false" inputmode="url"
+                         data-i18n-attr="placeholder:login.epg.primaryPlaceholder;aria-label:login.epg.primaryLabel"
+                         aria-label="Primary EPG URL"
+                         placeholder="Leave empty to use the provider's default" class="${TV_INPUT_CLASS}" />
+                  <span data-role="epg-url-error" class="hidden text-sm text-bad" role="alert"></span>
+                  <div data-role="epg-additional-list" class="flex flex-col gap-2"></div>
+                  <button type="button" data-role="epg-add" data-focus-key="epg-add"
+                          class="min-h-11 self-start rounded-xl px-2 text-sm font-medium text-accent outline-none transition-colors hover:bg-surface-2 tv-focus-inset">
+                    <span data-i18n="login.epg.addSource">Add another source</span>
+                  </button>
+                </div>
+
+                <div data-role="epg-disable-row" class="flex flex-col">
+                  <button type="button" data-role="epg-disable" data-focus-key="epg-disable" role="switch" aria-checked="false"
+                          class="flex min-h-11 w-full items-center gap-4 rounded-2xl bg-surface-2 px-5 py-3 text-start outline-none transition-colors hover:bg-surface-3 tv-focus-inset">
+                    <span data-role="epg-disable-track" aria-hidden="true"
+                          class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors bg-surface-3">
+                      <span data-role="epg-disable-knob"
+                            class="inline-block size-5 translate-x-0.5 rounded-full bg-white shadow transition-transform"></span>
+                    </span>
+                    <span class="flex min-w-0 flex-col gap-0.5">
+                      <span data-i18n="login.epg.disableProviderLabel" class="text-sm font-medium text-fg">Don't use the provider's default EPG</span>
+                      <span data-i18n="login.epg.disableProviderHelper" class="text-xs text-fg-3 leading-relaxed">
+                        Skip the auto-detected source. Only the URLs above will be used - lets you verify a custom EPG works on its own.
+                      </span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <label data-role="dns-label" class="flex flex-col gap-2">
@@ -237,7 +287,18 @@ function collectRefs(root: HTMLElement): Refs {
     togglePasswordBtn: query("toggle-password"),
     m3uFields: query("m3u-fields"),
     m3uUrlInput: query("m3u-url"),
+    epgBlock: query("epg-block"),
+    epgToggleBtn: query("epg-toggle"),
+    epgToggleChevron: query("epg-toggle-chevron"),
+    epgPanelWrap: query("epg-panel-wrap"),
+    epgPanel: query("epg-panel"),
     epgUrlInput: query("epg-url"),
+    epgAdditionalList: query("epg-additional-list"),
+    epgAddBtn: query("epg-add"),
+    epgDisableRow: query("epg-disable-row"),
+    epgDisableBtn: query("epg-disable"),
+    epgDisableTrack: query("epg-disable-track"),
+    epgDisableKnob: query("epg-disable-knob"),
     dnsLabel: query("dns-label"),
     dnsInput: query("dns"),
     nameInput: query("name"),
@@ -274,6 +335,9 @@ const view: TvView = {
     let pendingMirrors: ParsedXtreamCandidate[] = []
     let editingEntry: Record<string, any> | null = null
     let titleOnlyEdit = false
+    let epgPanelOpen = false
+    let epgPanelToggleToken = 0
+    let epgDisableChecked = false
 
     function paintMethodButtons(): void {
       refs.methodXtream.className =
@@ -293,8 +357,178 @@ const view: TvView = {
       refs.xtreamFields.classList.toggle("flex", next === "xtream")
       refs.m3uFields.classList.toggle("hidden", next !== "m3u")
       refs.m3uFields.classList.toggle("flex", next === "m3u")
+      refs.epgDisableRow.classList.toggle("hidden", next !== "xtream")
       paintMethodButtons()
       clearStatus()
+    }
+
+    function setEpgPanelOpen(open: boolean): void {
+      epgPanelOpen = open
+      epgPanelToggleToken++
+      const token = epgPanelToggleToken
+      refs.epgToggleBtn.setAttribute("aria-expanded", String(open))
+      refs.epgToggleChevron.classList.toggle("rotate-180", open)
+      if (open) {
+        refs.epgPanelWrap.removeAttribute("inert")
+        refs.epgPanelWrap.classList.remove("invisible", "grid-rows-[0fr]")
+        refs.epgPanelWrap.classList.add("grid-rows-[1fr]")
+        return
+      }
+      refs.epgPanelWrap.classList.remove("grid-rows-[1fr]")
+      refs.epgPanelWrap.classList.add("grid-rows-[0fr]")
+      refs.epgPanelWrap.setAttribute("inert", "")
+      const finalizeClose = () => {
+        if (token !== epgPanelToggleToken) return
+        refs.epgPanelWrap.classList.add("invisible")
+      }
+      refs.epgPanelWrap.addEventListener("transitionend", finalizeClose, { once: true })
+      setTimeout(finalizeClose, 250)
+    }
+
+    function setEpgDisableChecked(checked: boolean): void {
+      epgDisableChecked = checked
+      refs.epgDisableBtn.setAttribute("aria-checked", String(checked))
+      refs.epgDisableTrack.classList.toggle("bg-accent", checked)
+      refs.epgDisableTrack.classList.toggle("bg-surface-3", !checked)
+      refs.epgDisableKnob.classList.toggle("translate-x-5", checked)
+      refs.epgDisableKnob.classList.toggle("translate-x-0.5", !checked)
+    }
+
+    function createEpgAdditionalRow(initialValue: string): HTMLElement {
+      const wrapper = document.createElement("div")
+      wrapper.dataset.role = "epg-additional-row"
+      wrapper.className = "flex flex-col gap-1"
+
+      const row = document.createElement("div")
+      row.className = "flex items-center gap-2"
+
+      const input = document.createElement("input")
+      input.type = "text"
+      input.dataset.role = "epg-additional"
+      input.autocapitalize = "off"
+      input.spellcheck = false
+      input.setAttribute("inputmode", "url")
+      input.placeholder = "https://example.com/epg.xml"
+      input.setAttribute("aria-label", t("login.epg.additionalLabel"))
+      input.setAttribute("data-i18n-attr", "aria-label:login.epg.additionalLabel")
+      input.className = `${TV_INPUT_CLASS} flex-1`
+      input.value = initialValue
+      input.disabled = busy
+
+      const removeBtn = document.createElement("button")
+      removeBtn.type = "button"
+      removeBtn.dataset.role = "epg-remove"
+      removeBtn.setAttribute("aria-label", t("login.epg.removeSource"))
+      removeBtn.setAttribute("data-i18n-attr", "aria-label:login.epg.removeSource")
+      removeBtn.className =
+        "inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-2xl border border-line text-fg-3 outline-none transition-colors hover:bg-bad/10 hover:text-bad tv-focus-inset"
+      removeBtn.innerHTML = ICON_X
+      removeBtn.disabled = busy
+      removeBtn.addEventListener("click", () => {
+        wrapper.remove()
+        refs.epgAddBtn.focus()
+      })
+
+      const errorSpan = document.createElement("span")
+      errorSpan.dataset.role = "epg-row-error"
+      errorSpan.className = "hidden text-sm text-bad"
+      errorSpan.setAttribute("role", "alert")
+
+      row.append(input, removeBtn)
+      wrapper.append(row, errorSpan)
+      return wrapper
+    }
+
+    function addEpgAdditionalRow(initialValue = "", focusNewInput = true): void {
+      const additionalRow = createEpgAdditionalRow(initialValue)
+      refs.epgAdditionalList.appendChild(additionalRow)
+      if (focusNewInput) additionalRow.querySelector<HTMLInputElement>('[data-role="epg-additional"]')?.focus()
+    }
+
+    function readEpgForm(): { epgUrl: string; additionalEpgUrls: string[]; disableProviderEpg: boolean } {
+      const epgUrl = refs.epgUrlInput.value.trim()
+      const additionalEpgUrls: string[] = []
+      for (const input of refs.epgAdditionalList.querySelectorAll<HTMLInputElement>('[data-role="epg-additional"]')) {
+        const value = input.value.trim()
+        if (value) additionalEpgUrls.push(value)
+      }
+      return { epgUrl, additionalEpgUrls, disableProviderEpg: method === "xtream" && epgDisableChecked }
+    }
+
+    function clearEpgErrors(): void {
+      for (const errorEl of refs.epgPanel.querySelectorAll<HTMLElement>(
+        '[data-role="epg-url-error"], [data-role="epg-row-error"]'
+      )) {
+        errorEl.classList.add("hidden")
+        errorEl.textContent = ""
+      }
+    }
+
+    function showEpgUrlError(message: string): void {
+      const errorEl = refs.epgPanel.querySelector<HTMLElement>('[data-role="epg-url-error"]')
+      if (!errorEl) return
+      errorEl.textContent = message
+      errorEl.classList.remove("hidden")
+    }
+
+    function showEpgRowError(input: HTMLInputElement, message: string): void {
+      const errorEl = input
+        .closest<HTMLElement>('[data-role="epg-additional-row"]')
+        ?.querySelector<HTMLElement>('[data-role="epg-row-error"]')
+      if (!errorEl) return
+      errorEl.textContent = message
+      errorEl.classList.remove("hidden")
+    }
+
+    function validateEpgForm(): boolean {
+      clearEpgErrors()
+      const primary = refs.epgUrlInput.value.trim()
+      if (primary && !EPG_URL_RX.test(primary)) {
+        showEpgUrlError(t("login.epg.invalidUrl"))
+        setEpgPanelOpen(true)
+        refs.epgUrlInput.focus()
+        return false
+      }
+      const seen = new Set<string>()
+      if (primary) seen.add(primary)
+      for (const input of refs.epgAdditionalList.querySelectorAll<HTMLInputElement>('[data-role="epg-additional"]')) {
+        const value = input.value.trim()
+        if (!value) continue
+        if (!EPG_URL_RX.test(value)) {
+          showEpgRowError(input, t("login.epg.invalidUrl"))
+          setEpgPanelOpen(true)
+          input.focus()
+          return false
+        }
+        if (seen.has(value)) {
+          showEpgRowError(input, t("login.epg.duplicateUrl"))
+          setEpgPanelOpen(true)
+          input.focus()
+          return false
+        }
+        seen.add(value)
+      }
+      return true
+    }
+
+    function epgConfigChanged(
+      entry: Record<string, any>,
+      next: { epgUrl: string; additionalEpgUrls: string[]; disableProviderEpg: boolean }
+    ): boolean {
+      return (
+        (entry.epgUrl || "") !== next.epgUrl ||
+        JSON.stringify(entry.additionalEpgUrls || []) !== JSON.stringify(next.additionalEpgUrls) ||
+        !!entry.disableProviderEpg !== next.disableProviderEpg
+      )
+    }
+
+    function fillEpgForm(entry: Record<string, any>): void {
+      refs.epgUrlInput.value = entry.epgUrl || ""
+      refs.epgAdditionalList.replaceChildren()
+      const additional = Array.isArray(entry.additionalEpgUrls) ? entry.additionalEpgUrls : []
+      for (const url of additional) addEpgAdditionalRow(url, false)
+      setEpgDisableChecked(!!entry.disableProviderEpg)
+      setEpgPanelOpen(!!entry.epgUrl || additional.length > 0 || !!entry.disableProviderEpg)
     }
 
     function clearStatus(): void {
@@ -325,6 +559,9 @@ const view: TvView = {
         refs.passwordInput,
         refs.m3uUrlInput,
         refs.epgUrlInput,
+        refs.epgToggleBtn,
+        refs.epgAddBtn,
+        refs.epgDisableBtn,
         refs.dnsInput,
         refs.nameInput,
         refs.methodXtream,
@@ -332,6 +569,11 @@ const view: TvView = {
         refs.connectBtn,
         refs.saveAnywayBtn,
       ]) {
+        el.disabled = next
+      }
+      for (const el of refs.epgAdditionalList.querySelectorAll<HTMLInputElement | HTMLButtonElement>(
+        '[data-role="epg-additional"], [data-role="epg-remove"]'
+      )) {
         el.disabled = next
       }
       refs.cancelBtn.disabled = next || !cancelAllowed
@@ -411,12 +653,26 @@ const view: TvView = {
         return
       }
       const titleValue = refs.nameInput.value.trim()
+      const epgForm = readEpgForm()
       const editingXtreamEntry = editingEntry
       if (editingXtreamEntry) {
-        const patch: Record<string, unknown> = { serverUrl: resolved.serverUrl, username, password, dns }
+        const patch: Record<string, unknown> = {
+          serverUrl: resolved.serverUrl,
+          username,
+          password,
+          dns,
+          epgUrl: epgForm.epgUrl,
+          additionalEpgUrls: epgForm.additionalEpgUrls,
+          disableProviderEpg: epgForm.disableProviderEpg,
+        }
         if (titleValue) patch.title = titleValue
+        const epgChanged = epgConfigChanged(editingXtreamEntry, epgForm)
         await updateEntry(editingXtreamEntry._id, patch)
         if (destroyed) return
+        if (epgChanged) {
+          const { invalidateEpgPlaylist } = await import("@/scripts/lib/epg-data.js")
+          invalidateEpgPlaylist(editingXtreamEntry._id)
+        }
         const savedTitle = titleValue || editingXtreamEntry.title
         if (result.status === "expired" || result.status === "inactive") {
           toastWarn(t("tv.login.toast.updated", { title: savedTitle }), { description: describeXtreamResult(result) })
@@ -434,6 +690,9 @@ const view: TvView = {
         password,
         mirrors: pendingMirrors,
         dns,
+        epgUrl: epgForm.epgUrl,
+        additionalEpgUrls: epgForm.additionalEpgUrls,
+        disableProviderEpg: epgForm.disableProviderEpg,
       })
       if (destroyed) return
       if (result.status === "expired" || result.status === "inactive") {
@@ -465,14 +724,20 @@ const view: TvView = {
         return
       }
       const titleValue = refs.nameInput.value.trim()
-      const epgUrl = refs.epgUrlInput.value.trim()
+      const epgForm = readEpgForm()
       const editingM3uEntry = editingEntry
       if (editingM3uEntry) {
-        const patch: Record<string, unknown> = { url: resolved.url, epgUrl, dns }
+        const patch: Record<string, unknown> = {
+          url: resolved.url,
+          epgUrl: epgForm.epgUrl,
+          additionalEpgUrls: epgForm.additionalEpgUrls,
+          dns,
+        }
         if (titleValue) patch.title = titleValue
+        const epgChanged = epgConfigChanged(editingM3uEntry, epgForm) || editingM3uEntry.url !== resolved.url
         await updateEntry(editingM3uEntry._id, patch)
         if (destroyed) return
-        if ((editingM3uEntry.epgUrl || "") !== epgUrl || editingM3uEntry.url !== resolved.url) {
+        if (epgChanged) {
           const { invalidateEpgPlaylist } = await import("@/scripts/lib/epg-data.js")
           invalidateEpgPlaylist(editingM3uEntry._id)
         }
@@ -484,7 +749,8 @@ const view: TvView = {
         type: "m3u",
         title: titleValue,
         url: resolved.url,
-        epgUrl,
+        epgUrl: epgForm.epgUrl,
+        additionalEpgUrls: epgForm.additionalEpgUrls,
         dns,
       })
       if (destroyed) return
@@ -494,6 +760,7 @@ const view: TvView = {
 
     async function saveWithoutTest(): Promise<void> {
       const dns = refs.dnsInput.value.trim() || undefined
+      const epgForm = readEpgForm()
       if (method === "xtream") {
         const serverUrl = refs.serverUrlInput.value.trim()
         const username = refs.usernameInput.value.trim()
@@ -509,10 +776,23 @@ const view: TvView = {
         const titleValue = refs.nameInput.value.trim()
         const editingXtreamEntry = editingEntry
         if (editingXtreamEntry) {
-          const patch: Record<string, unknown> = { serverUrl: resolved.serverUrl, username, password, dns }
+          const patch: Record<string, unknown> = {
+            serverUrl: resolved.serverUrl,
+            username,
+            password,
+            dns,
+            epgUrl: epgForm.epgUrl,
+            additionalEpgUrls: epgForm.additionalEpgUrls,
+            disableProviderEpg: epgForm.disableProviderEpg,
+          }
           if (titleValue) patch.title = titleValue
+          const epgChanged = epgConfigChanged(editingXtreamEntry, epgForm)
           await updateEntry(editingXtreamEntry._id, patch)
           if (destroyed) return
+          if (epgChanged) {
+            const { invalidateEpgPlaylist } = await import("@/scripts/lib/epg-data.js")
+            invalidateEpgPlaylist(editingXtreamEntry._id)
+          }
           const savedTitle = titleValue || editingXtreamEntry.title
           toastWarn(t("tv.login.toast.updated", { title: savedTitle }), {
             description: t("tv.login.toast.savedUntested"),
@@ -528,6 +808,9 @@ const view: TvView = {
           password,
           mirrors: pendingMirrors,
           dns,
+          epgUrl: epgForm.epgUrl,
+          additionalEpgUrls: epgForm.additionalEpgUrls,
+          disableProviderEpg: epgForm.disableProviderEpg,
         })
         if (destroyed) return
         toastWarn(t("tv.login.toast.saved", { title: entry.title }), {
@@ -547,14 +830,19 @@ const view: TvView = {
       if (destroyed) return
       if (resolved.url !== rawUrl) refs.m3uUrlInput.value = resolved.url
       const titleValue = refs.nameInput.value.trim()
-      const epgUrl = refs.epgUrlInput.value.trim()
       const editingM3uEntry = editingEntry
       if (editingM3uEntry) {
-        const patch: Record<string, unknown> = { url: resolved.url, epgUrl, dns }
+        const patch: Record<string, unknown> = {
+          url: resolved.url,
+          epgUrl: epgForm.epgUrl,
+          additionalEpgUrls: epgForm.additionalEpgUrls,
+          dns,
+        }
         if (titleValue) patch.title = titleValue
+        const epgChanged = epgConfigChanged(editingM3uEntry, epgForm) || editingM3uEntry.url !== resolved.url
         await updateEntry(editingM3uEntry._id, patch)
         if (destroyed) return
-        if ((editingM3uEntry.epgUrl || "") !== epgUrl || editingM3uEntry.url !== resolved.url) {
+        if (epgChanged) {
           const { invalidateEpgPlaylist } = await import("@/scripts/lib/epg-data.js")
           invalidateEpgPlaylist(editingM3uEntry._id)
         }
@@ -568,7 +856,8 @@ const view: TvView = {
         type: "m3u",
         title: titleValue,
         url: resolved.url,
-        epgUrl,
+        epgUrl: epgForm.epgUrl,
+        additionalEpgUrls: epgForm.additionalEpgUrls,
         dns,
       })
       if (destroyed) return
@@ -580,6 +869,7 @@ const view: TvView = {
 
     async function onSaveAnywayClick(): Promise<void> {
       if (busy) return
+      if (!validateEpgForm()) return
       const rawDns = refs.dnsInput.value.trim()
       if (rawDns && !parseDnsServer(rawDns)) {
         setStatus("unavailable", t("dns.invalid"))
@@ -622,6 +912,7 @@ const view: TvView = {
         }
         return
       }
+      if (!validateEpgForm()) return
       const rawDns = refs.dnsInput.value.trim()
       if (rawDns && !parseDnsServer(rawDns)) {
         setStatus("unavailable", t("dns.invalid"))
@@ -702,14 +993,15 @@ const view: TvView = {
         refs.usernameInput.value = entry.username || ""
         refs.passwordInput.value = entry.password || ""
         refs.dnsInput.value = entry.dns || ""
+        fillEpgForm(entry)
         autofocusTarget = refs.serverUrlInput
       } else if (entry.type === "m3u") {
         titleOnlyEdit = false
         setMethod("m3u")
         refs.dnsLabel.classList.remove("hidden")
         refs.m3uUrlInput.value = entry.url || ""
-        refs.epgUrlInput.value = entry.epgUrl || ""
         refs.dnsInput.value = entry.dns || ""
+        fillEpgForm(entry)
         autofocusTarget = refs.m3uUrlInput
       } else {
         // local-m3u / custom: only the title is editable here.
@@ -719,6 +1011,7 @@ const view: TvView = {
         refs.m3uFields.classList.add("hidden")
         refs.m3uFields.classList.remove("flex")
         refs.dnsLabel.classList.add("hidden")
+        refs.epgBlock.classList.add("hidden")
       }
 
       for (const el of root.querySelectorAll<HTMLElement>("[data-tv-autofocus]")) {
@@ -761,6 +1054,10 @@ const view: TvView = {
     refs.methodM3u.addEventListener("click", () => setMethod("m3u"))
     refs.pasteInput.addEventListener("input", onPasteInput)
     refs.togglePasswordBtn.addEventListener("click", togglePasswordVisibility)
+    refs.epgToggleBtn.addEventListener("click", () => setEpgPanelOpen(!epgPanelOpen))
+    refs.epgPanel.addEventListener("input", clearEpgErrors)
+    refs.epgAddBtn.addEventListener("click", () => addEpgAdditionalRow(""))
+    refs.epgDisableBtn.addEventListener("click", () => setEpgDisableChecked(!epgDisableChecked))
     refs.cancelBtn.addEventListener("click", () => void onCancelClick())
     refs.saveAnywayBtn.addEventListener("click", () => void onSaveAnywayClick())
     refs.form.addEventListener("submit", (event) => void onConnect(event))
