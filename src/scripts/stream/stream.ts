@@ -22,7 +22,7 @@ import {
   ensureLoaded as ensurePrefsLoaded,
   isFavorite,
   toggleFavorite,
-  getFavorites,
+  getFavoritesOrdered,
   pushRecent,
   getRecents,
   getViewSort,
@@ -408,6 +408,13 @@ document.addEventListener("xt:favorites-changed", (e) => {
   if (picker.getActiveCat() === CAT_FAVORITES) scheduleApplyFilter()
   else renderVirtual()
   picker.refreshPseudoRows()
+})
+
+document.addEventListener("xt:favorites-order-changed", (e) => {
+  const detail = /** @type {CustomEvent} */ (e).detail
+  if (!detail || detail.playlistId !== activePlaylistId) return
+  if (detail.kind !== "live") return
+  if (picker.getActiveCat() === CAT_FAVORITES) scheduleApplyFilter()
 })
 
 document.addEventListener("xt:recents-changed", (e) => {
@@ -1394,8 +1401,13 @@ const applyFilter = () => {
   /** @type {typeof all} */
   let out
   if (activeCat === CAT_FAVORITES && activePlaylistId) {
-    const favs = getFavorites(activePlaylistId, "live")
-    out = all.filter((ch) => favs.has(ch.id))
+    const byId = new Map(all.map((ch) => [ch.id, ch]))
+    const orderedFavIds = getFavoritesOrdered(activePlaylistId, "live")
+    out = []
+    for (const favId of orderedFavIds) {
+      const ch = byId.get(favId)
+      if (ch) out.push(ch)
+    }
   } else if (activeCat === CAT_RECENTS && activePlaylistId) {
     const byId = new Map(all.map((ch) => [ch.id, ch]))
     const recs = getRecents(activePlaylistId, "live")

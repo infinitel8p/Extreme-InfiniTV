@@ -257,9 +257,15 @@ function hydrate(raw) {
     const langFilterRaw = val.langFilter && typeof val.langFilter === "object" ? val.langFilter : {}
     const groupLangsRaw = val.groupLangs && typeof val.groupLangs === "object" ? val.groupLangs : {}
     cache.set(pid, {
-      favLive: new Set(Array.isArray(val.favLive) ? val.favLive : []),
-      favVod: new Set(Array.isArray(val.favVod) ? val.favVod : []),
-      favSeries: new Set(Array.isArray(val.favSeries) ? val.favSeries : []),
+      favLive: new Set(
+        Array.isArray(val.favLive) ? val.favLive.map(normalizeFavoriteId) : []
+      ),
+      favVod: new Set(
+        Array.isArray(val.favVod) ? val.favVod.map(normalizeFavoriteId) : []
+      ),
+      favSeries: new Set(
+        Array.isArray(val.favSeries) ? val.favSeries.map(normalizeFavoriteId) : []
+      ),
       favMetaLive:
         val.favMetaLive && typeof val.favMetaLive === "object"
           ? { ...val.favMetaLive }
@@ -501,6 +507,14 @@ function dispatch(name, detail) {
 // Public API
 // ---------------------------------------------------------------------------
 
+/** @param {number|string} id numeric strings become numbers, other ids pass through */
+function normalizeFavoriteId(id) {
+  if (typeof id !== "string") return id
+  const trimmed = id.trim()
+  if (trimmed !== "" && String(Number(trimmed)) === trimmed) return Number(trimmed)
+  return id
+}
+
 /** @param {"live"|"vod"|"series"} kind */
 function favKey(kind) {
   if (kind === "vod") return "favVod"
@@ -533,7 +547,7 @@ export function getFavorites(playlistId, kind) {
 /** @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {number} id */
 export function isFavorite(playlistId, kind, id) {
   const e = cache.get(playlistId)
-  return !!e && e[favKey(kind)].has(id)
+  return !!e && e[favKey(kind)].has(normalizeFavoriteId(id))
 }
 
 /**
@@ -542,35 +556,37 @@ export function isFavorite(playlistId, kind, id) {
  */
 export function toggleFavorite(playlistId, kind, id, extras) {
   if (!playlistId || id == null) return false
+  const normalizedId = normalizeFavoriteId(id)
   const e = getOrCreate(playlistId)
   const set = e[favKey(kind)]
   const meta = e[favMetaKey(kind)]
   let isFav
-  if (set.has(id)) {
-    set.delete(id)
-    delete meta[String(id)]
+  if (set.has(normalizedId)) {
+    set.delete(normalizedId)
+    delete meta[String(normalizedId)]
     isFav = false
   } else {
-    set.add(id)
+    set.add(normalizedId)
     if (extras && (extras.name || extras.logo !== undefined)) {
-      meta[String(id)] = {
-        name: extras.name || meta[String(id)]?.name || "",
-        logo: extras.logo === undefined ? meta[String(id)]?.logo || null : extras.logo,
+      meta[String(normalizedId)] = {
+        name: extras.name || meta[String(normalizedId)]?.name || "",
+        logo: extras.logo === undefined ? meta[String(normalizedId)]?.logo || null : extras.logo,
       }
     }
     isFav = true
   }
   scheduleSave()
-  dispatch(EVT_FAV_CHANGED, { playlistId, kind, id, isFav })
+  dispatch(EVT_FAV_CHANGED, { playlistId, kind, id: normalizedId, isFav })
   return isFav
 }
 
 export function setFavoriteMeta(playlistId, kind, id, meta) {
   if (!playlistId || id == null) return
+  const normalizedId = normalizeFavoriteId(id)
   const e = cache.get(playlistId)
-  if (!e || !e[favKey(kind)].has(Number(id))) return
+  if (!e || !e[favKey(kind)].has(normalizedId)) return
   const bag = e[favMetaKey(kind)]
-  const k = String(id)
+  const k = String(normalizedId)
   const prev = bag[k] || {}
   const next = {
     name: meta?.name || prev.name || "",
