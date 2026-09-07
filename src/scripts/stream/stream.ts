@@ -2410,6 +2410,12 @@ async function mountEmbeddedPlayer(backend, opts) {
     showBufferingChip()
     armStallSentinel()
   })
+  vjs.on("ended", () => {
+    if (catchupSession || !lastPlayContext?.isLive || !lastPlayContext?.started) return
+    log.warn("[xt:livetv] stream ended by server - re-tuning", { streamId: lastPlayContext.streamId })
+    showBufferingChip()
+    performStallRetune("ended")
+  })
   vjs.on("pause", () => {
     if (Date.now() < suppressPauseTrackingUntilMs) return
     if (!lastPlayContext?.started) return
@@ -3225,6 +3231,7 @@ let progressLastTime = -1
 let progressLastSeq = -1
 let progressFrozenTicks = 0
 let progressTickCount = 0
+let progressIdleReason = null
 
 function progressWatchTick() {
   const ctx = lastPlayContext
@@ -3240,8 +3247,14 @@ function progressWatchTick() {
   const mediaEl = mediaElementOf(vjs)
   if (!mediaEl || mediaEl.paused || mediaEl.ended || mediaEl.readyState < 2) {
     progressFrozenTicks = 0
+    const reason = !mediaEl ? "no-media" : mediaEl.ended ? "ended" : mediaEl.paused ? "paused" : "readyState<2"
+    if (reason !== progressIdleReason) {
+      progressIdleReason = reason
+      log.info("[xt:livetv] heartbeat idle", { streamId: ctx.streamId, reason, readyState: mediaEl?.readyState ?? null })
+    }
     return
   }
+  progressIdleReason = null
   const currentTime = mediaEl.currentTime || 0
   progressTickCount++
   if (progressTickCount % PROGRESS_HEARTBEAT_EVERY_TICKS === 0) {
