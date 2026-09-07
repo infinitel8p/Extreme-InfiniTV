@@ -11,6 +11,7 @@ import {
 } from "@/scripts/lib/img-scale"
 import { createTimedIdbOpener } from "@/scripts/lib/idb-open.ts"
 import { memoryConservative } from "@/scripts/tv/motion"
+import { dominantColor, posterTintCss, type RgbColor } from "@/scripts/lib/ambient-math"
 
 const DB_NAME = "xt_img_cache"
 const DB_VERSION = 1
@@ -19,6 +20,7 @@ const STORE = "images"
 interface StoredImage {
   blob: Blob
   cachedAt: number
+  tint?: RgbColor
 }
 
 const idbOpener = createTimedIdbOpener({
@@ -133,6 +135,7 @@ async function idbPruneExpired(maxAgeMs: number): Promise<string[]> {
 // Module state
 // ---------------------------------------------------------------------------
 const objectUrlMemo = new Map<string, string>()
+const tintMemo = new Map<string, string>()
 const failedUrls = new Set<string>()
 const inFlight = new Map<string, Promise<void>>()
 
@@ -167,6 +170,35 @@ function memoAdopt(cacheKey: string, blob: Blob): string {
     if (oldestUrl) URL.revokeObjectURL(oldestUrl)
   }
   return objectUrl
+}
+
+function rememberTint(cacheKey: string, css: string): void {
+  tintMemo.set(cacheKey, css)
+  while (tintMemo.size > maxMemoEntries()) {
+    const oldestKey = tintMemo.keys().next().value
+    if (oldestKey === undefined) break
+    tintMemo.delete(oldestKey)
+  }
+}
+
+function applyPosterTint(img: HTMLImageElement, css: string): void {
+  const wrap = img.closest<HTMLElement>("[data-poster-wrap]")
+  if (!wrap) return
+  wrap.style.setProperty("--xt-poster-tint", css)
+  wrap.dataset.posterTint = "1"
+}
+
+/** Reads a poster's cached dominant-color tint without fetching or decoding anything. */
+export async function peekPosterTint(url: string | null | undefined): Promise<string | null> {
+  if (!url) return null
+  const cacheKey = imgCacheKey("poster", url)
+  const memoized = tintMemo.get(cacheKey)
+  if (memoized) return memoized
+  const cached = await idbGet(cacheKey)
+  if (!cached?.tint) return null
+  const css = posterTintCss(cached.tint)
+  rememberTint(cacheKey, css)
+  return css
 }
 
 const MAX_CONCURRENT = 6
@@ -256,18 +288,46 @@ async function encodeDownscaled(
   }
 }
 
-async function downscaleBlob(originalBlob: Blob, kind: ImgKind): Promise<Blob> {
+const TINT_SAMPLE_MAX_DIM = 32
+
+function sampleTint(bitmap: ImageBitmap): RgbColor | null {
+  try {
+    const scale = Math.min(1, TINT_SAMPLE_MAX_DIM / Math.max(bitmap.width, bitmap.height))
+    const width = Math.max(1, Math.round(bitmap.width * scale))
+    const height = Math.max(1, Math.round(bitmap.height * scale))
+    let ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null = null
+    if (typeof OffscreenCanvas !== "undefined") {
+      const canvas = new OffscreenCanvas(width, height)
+      ctx = canvas.getContext("2d")
+    }
+    if (!ctx && typeof document !== "undefined") {
+      const canvas = document.createElement("canvas")
+      canvas.width = width
+      canvas.height = height
+      ctx = canvas.getContext("2d")
+    }
+    if (!ctx) return null
+    ctx.drawImage(bitmap, 0, 0, width, height)
+    const { data } = ctx.getImageData(0, 0, width, height)
+    return dominantColor(data, width, height)
+  } catch {
+    return null
+  }
+}
+
+async function downscaleBlob(originalBlob: Blob, kind: ImgKind): Promise<{ blob: Blob; tint: RgbColor | null }> {
   let bitmap: ImageBitmap
   try {
     bitmap = await createImageBitmap(originalBlob)
   } catch {
-    return originalBlob
+    return { blob: originalBlob, tint: null }
   }
   try {
+    const tint = kind === "poster" ? sampleTint(bitmap) : null
     const targetSize = scaleToFit(bitmap.width, bitmap.height, imgKindMaxDim(kind, memoryConservative()))
-    if (!targetSize) return originalBlob
+    if (!targetSize) return { blob: originalBlob, tint }
     const encoded = await encodeDownscaled(bitmap, targetSize.width, targetSize.height)
-    return encoded || originalBlob
+    return { blob: encoded || originalBlob, tint }
   } finally {
     bitmap.close()
   }
@@ -292,8 +352,9 @@ async function fetchAndCache(
       previewUrl = URL.createObjectURL(originalBlob)
       displayImg.src = previewUrl
     }
-    const storedBlob = await downscaleBlob(originalBlob, kind)
-    await idbPut(cacheKey, { blob: storedBlob, cachedAt: Date.now() })
+    const { blob: storedBlob, tint } = await downscaleBlob(originalBlob, kind)
+    await idbPut(cacheKey, { blob: storedBlob, cachedAt: Date.now(), ...(tint ? { tint } : {}) })
+    if (tint) rememberTint(cacheKey, posterTintCss(tint))
     const finalUrl = memoAdopt(cacheKey, storedBlob)
     // Only swap when the img still shows our own preview - a caller may have moved on to a
     // different image (row recycled) while the fetch and downscale were in flight.
@@ -372,12 +433,19 @@ async function handleVisible(img: HTMLImageElement, url: string, kind: ImgKind):
   const cacheKey = imgCacheKey(kind, url)
   const memoized = memoGet(cacheKey)
   if (memoized) {
+    const memoizedTint = tintMemo.get(cacheKey)
+    if (memoizedTint) applyPosterTint(img, memoizedTint)
     img.src = memoized
     return
   }
   const cached = await idbGet(cacheKey)
   if (!img.isConnected) return
   if (cached?.blob) {
+    if (cached.tint) {
+      const css = posterTintCss(cached.tint)
+      rememberTint(cacheKey, css)
+      applyPosterTint(img, css)
+    }
     img.src = memoAdopt(cacheKey, cached.blob)
     return
   }
@@ -413,6 +481,8 @@ export function mountCachedImage(img: HTMLImageElement, url: string, kind: ImgKi
   const cacheKey = imgCacheKey(kind, url)
   const memoized = memoGet(cacheKey)
   if (memoized) {
+    const memoizedTint = tintMemo.get(cacheKey)
+    if (memoizedTint) applyPosterTint(img, memoizedTint)
     img.src = memoized
     return
   }
@@ -484,6 +554,7 @@ export async function clearImageCache(): Promise<number> {
   await idbClear()
   for (const objectUrl of objectUrlMemo.values()) URL.revokeObjectURL(objectUrl)
   objectUrlMemo.clear()
+  tintMemo.clear()
   failedUrls.clear()
   return removed
 }

@@ -201,6 +201,12 @@ function buildPosterImage(posterUrl: string | null, name: string, eager?: boolea
   img.loading = eager ? "eager" : "lazy"
   img.decoding = "async"
   img.className = "block h-full w-full object-cover"
+  const markLoaded = (): void => {
+    const wrap = img.closest<HTMLElement>("[data-poster-wrap]")
+    if (wrap) wrap.dataset.loaded = "true"
+  }
+  img.onload = markLoaded
+  img.onerror = markLoaded
   mountCachedImage(img, posterUrl, "poster")
   return img
 }
@@ -229,8 +235,9 @@ function createPosterCard(item: PosterCardItem, options?: CardRenderOptions): HT
   posterWrap.dataset.posterWrap = "1"
   posterWrap.dataset.imageUrl = item.posterUrl || ""
   posterWrap.className =
-    "relative isolate aspect-[2/3] w-full overflow-hidden rounded-xl bg-black/40 tv-edge-mask"
+    "poster-develop relative isolate aspect-[2/3] w-full overflow-hidden rounded-xl bg-black/40 tv-edge-mask"
   posterWrap.appendChild(buildPosterImage(item.posterUrl, item.name, options?.eager))
+  if (!item.posterUrl) posterWrap.dataset.loaded = "true"
 
   if (item.progressPercent != null && item.progressPercent > 0) {
     posterWrap.appendChild(buildProgressTrack(item.progressPercent))
@@ -261,8 +268,12 @@ function updatePosterCard(card: HTMLAnchorElement, item: PosterCardItem): void {
   const posterWrap = card.querySelector<HTMLElement>("[data-poster-wrap]")
   if (posterWrap && posterWrap.dataset.imageUrl !== (item.posterUrl || "")) {
     posterWrap.dataset.imageUrl = item.posterUrl || ""
+    delete posterWrap.dataset.loaded
+    delete posterWrap.dataset.posterTint
+    posterWrap.style.removeProperty("--xt-poster-tint")
     const progressTrack = posterWrap.querySelector<HTMLElement>("[data-progress-track]")
     posterWrap.replaceChildren(buildPosterImage(item.posterUrl, item.name))
+    if (!item.posterUrl) posterWrap.dataset.loaded = "true"
     if (progressTrack) posterWrap.appendChild(progressTrack)
   }
 

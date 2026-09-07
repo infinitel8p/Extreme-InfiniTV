@@ -1332,49 +1332,24 @@ summary.list-none::-webkit-details-marker {
     position: relative;
     overflow: hidden;
     background-color: var(--color-surface-2);
-    background-image: linear-gradient(
-        135deg,
-        transparent 0%,
-        color-mix(in oklch, var(--color-fg-3) 5%, transparent) 50%,
-        transparent 100%
-    );
 }
 .skel::after {
     content: "";
     position: absolute;
-    top: 0;
-    bottom: 0;
-    /* Wider than .skel so a translateX sweep, not a background-position change, moves
-       the highlight band across it - transform/opacity only, no per-frame paint. */
-    left: -60%;
-    right: -60%;
+    inset: 0;
     border-radius: inherit;
-    background:
-        linear-gradient(
-            110deg,
-            transparent 0%,
-            color-mix(in oklch, var(--color-accent) 10%, transparent) 42%,
-            color-mix(in oklch, var(--color-fg) 22%, transparent) 50%,
-            color-mix(in oklch, var(--color-accent) 10%, transparent) 58%,
-            transparent 100%
-        );
-    transform: translateX(-40%);
-    animation: skel-shimmer 1.8s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+    background: color-mix(in oklch, var(--color-fg) 7%, transparent);
+    opacity: 0;
+    animation: skel-breathe 2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
     animation-delay: var(--skel-delay, 0s);
-    will-change: transform, opacity;
-    opacity: 0.95;
+    will-change: opacity;
     pointer-events: none;
-    mix-blend-mode: plus-lighter;
 }
-@supports not (mix-blend-mode: plus-lighter) {
-    .skel::after { mix-blend-mode: normal; }
+@keyframes skel-breathe {
+    0%, 100% { opacity: 0; }
+    50%      { opacity: 1; }
 }
-@keyframes skel-shimmer {
-    0%   { transform: translateX(-40%); opacity: 0.4; }
-    50%  {                              opacity: 1;  }
-    100% { transform: translateX(40%);  opacity: 0.4; }
-}
-/* Static skeleton on the memory-conservative TV tier / perf mode: no shimmer sweep at all. */
+/* Static skeleton on the memory-conservative TV tier / perf mode: no pulse at all. */
 html[data-perf-mode="on"] .skel::after,
 html[data-tv="1"][data-tv-effects="lite"] .skel::after {
     animation: none;
@@ -1391,7 +1366,7 @@ html[data-tv="1"][data-tv-effects="lite"] .skel::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .skel::after { animation: none; opacity: 0.8; }
+    .skel::after { animation: none; opacity: 0.5; }
     [data-skeleton] { animation: none; }
 }
 
@@ -1404,20 +1379,18 @@ html[data-tv="1"][data-tv-effects="lite"] .skel::after {
     position: absolute;
     inset: 0;
     border-radius: inherit;
-    background: linear-gradient(
-        110deg,
-        transparent 0%,
-        color-mix(in oklch, var(--color-fg-3) 12%, transparent) 50%,
-        transparent 100%
-    );
-    background-size: 220% 100%;
-    background-repeat: no-repeat;
-    background-position: -110% 0;
-    animation: logo-skel-shimmer 1.4s ease-in-out infinite;
+    background: color-mix(in oklch, var(--color-fg) 7%, transparent);
+    opacity: 0;
+    animation: skel-breathe 2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+    animation-delay: var(--skel-delay, 0s);
     pointer-events: none;
 }
 .logo-skel[data-loaded="true"]::after {
     display: none;
+}
+html[data-perf-mode="on"] .logo-skel::after {
+    animation: none;
+    opacity: 0;
 }
 .logo-skel > img {
     opacity: 0;
@@ -1426,13 +1399,38 @@ html[data-tv="1"][data-tv-effects="lite"] .skel::after {
 .logo-skel[data-loaded="true"] > img {
     opacity: 1;
 }
-@keyframes logo-skel-shimmer {
-    0%   { background-position: -110% 0; }
-    100% { background-position: 210% 0; }
+@media (prefers-reduced-motion: reduce) {
+    .logo-skel::after { animation: none; opacity: 0.5; }
+    .logo-skel > img { transition: none; }
+}
+
+[data-poster-tint] {
+    background-color: var(--xt-poster-tint);
+}
+.poster-develop > img {
+    opacity: 0;
+    filter: blur(14px) saturate(0.7);
+    transform: scale(1.05);
+    transition:
+        opacity 320ms cubic-bezier(0.16, 1, 0.3, 1),
+        filter 520ms cubic-bezier(0.16, 1, 0.3, 1),
+        transform 520ms cubic-bezier(0.16, 1, 0.3, 1),
+        scale 300ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition-delay: var(--develop-delay, 0ms);
+}
+.poster-develop[data-loaded="true"] > img {
+    opacity: 1;
+    filter: none;
+    transform: none;
+}
+html[data-perf-mode="on"] .poster-develop > img,
+html[data-tv="1"][data-tv-effects="lite"] .poster-develop > img {
+    filter: none;
+    transform: none;
+    transition-delay: 0ms;
 }
 @media (prefers-reduced-motion: reduce) {
-    .logo-skel::after { animation: none; }
-    .logo-skel > img { transition: none; }
+    .poster-develop > img { filter: none; transform: none; transition: none; }
 }
 
 .channel-now {
@@ -1803,6 +1801,20 @@ html[data-perf-mode="on"] .dt-child-enter { animation: none !important; }
     position: relative;
     isolation: isolate;
 }
+.dt-hero--loading {
+    background-color: var(--xt-poster-tint, var(--color-surface-2));
+}
+.dt-hero--loading::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    z-index: 1;
+    pointer-events: none;
+    background: color-mix(in oklch, var(--color-fg) 7%, transparent);
+    opacity: 0;
+    animation: skel-breathe 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
 [data-hero-blur] {
     position: absolute;
     inset: -8%;
@@ -1844,10 +1856,53 @@ html[data-perf-mode="on"] [data-hero-blur] {
     from { transform: scale(1); }
     to   { transform: scale(1.04); }
 }
+.dt-hero[data-hero-state="pending"] img,
+.dt-hero[data-hero-state="pending"] [data-hero-blur] {
+    opacity: 0;
+}
+.dt-hero[data-hero-state="pending"] img {
+    filter: blur(24px) brightness(0.6) saturate(0.8);
+    scale: 1.06;
+}
+.dt-hero[data-hero-state="done"] img {
+    opacity: 1;
+    filter: none;
+    scale: 1;
+    transition:
+        opacity 500ms cubic-bezier(0.16, 1, 0.3, 1),
+        filter 900ms cubic-bezier(0.16, 1, 0.3, 1),
+        scale 900ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dt-hero[data-hero-state="done"] [data-hero-blur] {
+    opacity: 1;
+    transition: opacity 700ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dt-hero--sheen::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background: linear-gradient(105deg, transparent 38%, color-mix(in oklch, white 16%, transparent) 50%, transparent 62%);
+    mix-blend-mode: screen;
+    transform: translateX(-100%);
+    animation: dt-hero-sheen 1100ms cubic-bezier(0.16, 1, 0.3, 1) 180ms both;
+}
+@keyframes dt-hero-sheen {
+    to { transform: translateX(100%); }
+}
+html[data-perf-mode="on"] .dt-hero--loading::before { animation: none; opacity: 0; }
+html[data-perf-mode="on"] .dt-hero[data-hero-state="pending"] img { filter: none; scale: 1; }
+html[data-perf-mode="on"] .dt-hero[data-hero-state="done"] img { transition: opacity 200ms linear; }
+html[data-perf-mode="on"] .dt-hero--sheen::before { content: none; }
 @media (prefers-reduced-motion: reduce) {
     .dt-hero::after {
         opacity: 0.25;
     }
+    .dt-hero--loading::before { animation: none; opacity: 0.5; }
+    .dt-hero[data-hero-state="pending"] img { filter: none; scale: 1; }
+    .dt-hero[data-hero-state="done"] img { transition: opacity 200ms linear; }
+    .dt-hero--sheen::before { content: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

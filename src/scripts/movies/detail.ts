@@ -51,6 +51,7 @@ import {
   paintHero as paintHeroOn,
   sanitizeProviderBackdropUrl,
 } from "@/scripts/lib/morph-detail.js"
+import { peekPosterTint } from "@/scripts/lib/img-cache.ts"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
@@ -182,6 +183,12 @@ let providerPlotApplied = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 
+function applyHeroTint(url) {
+  peekPosterTint(url).then((css) => {
+    if (css && posterEl && !heroSettled) posterEl.style.setProperty("--xt-poster-tint", css)
+  })
+}
+
 // Paints the hero exactly once per boot, at whichever point the caller has decided
 // enough is known: immediately when TMDb is inactive or already cache-warm, or after
 // the TMDb enrichment attempt settles (resolved, resolved-null, or failed) otherwise.
@@ -189,7 +196,6 @@ function settleHero() {
   if (heroSettled) return
   heroSettled = true
   paintedHeroPosterUrl = heroPosterUrl
-  posterEl?.classList.remove("skel")
   paintHeroOn(posterEl, {
     name: movie?.name || "",
     posterUrl: heroPosterUrl,
@@ -1548,6 +1554,7 @@ async function boot() {
   if (titleEl && movie.name !== stubName) titleEl.textContent = displayTitle(movie.name)
   // Hero stays in its skeleton state - settleHero() below decides when to paint it once.
   heroPosterUrl = movie.logo || null
+  applyHeroTint(heroPosterUrl)
   setAmbient(movie.logo || null)
   syncFavButton()
   syncWatchButton()

@@ -54,6 +54,7 @@ import {
   paintHero as paintHeroOn,
   sanitizeProviderBackdropUrl,
 } from "@/scripts/lib/morph-detail.js"
+import { peekPosterTint } from "@/scripts/lib/img-cache.ts"
 import { attachPlayerFocusKeeper } from "@/scripts/lib/player-focus-keeper.js"
 import { togglePip } from "@/scripts/lib/pip-toggle.js"
 import { bindAutoPip } from "@/scripts/lib/auto-pip.js"
@@ -196,12 +197,17 @@ let providerPlotApplied = false
 
 const setAmbient = (url) => setAmbientOn(ambientEl, url)
 
+function applyHeroTint(url) {
+  peekPosterTint(url).then((css) => {
+    if (css && posterEl && !heroSettled) posterEl.style.setProperty("--xt-poster-tint", css)
+  })
+}
+
 // Paints the hero once, at whichever point the caller decided enough is known.
 function settleHero() {
   if (heroSettled) return
   heroSettled = true
   paintedHeroPosterUrl = heroPosterUrl
-  posterEl?.classList.remove("skel")
   paintHeroOn(posterEl, {
     name: series?.name || "",
     posterUrl: heroPosterUrl,
@@ -2245,6 +2251,7 @@ async function boot() {
   if (titleEl && series.name !== stubName) titleEl.textContent = displayTitle(series.name)
   // Hero stays in its skeleton state - settleHero() below decides when to paint it once.
   heroPosterUrl = series.logo || null
+  applyHeroTint(heroPosterUrl)
   setAmbient(series.logo || null)
   syncFavButton()
   syncWatchButton()
