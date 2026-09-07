@@ -3877,3 +3877,8 @@ html[data-native-video="on"] :fullscreen {
     font-size: 0.8rem;
     font-variant-numeric: tabular-nums;
 }
+
+/* Cast dialogs: top-layer / high-z, so the body-level glide ring can't reach them */
+#tv-cast-remote :is(a, button, input, summary, [tabindex]):focus-visible,
+#tv-device-picker :is(a, button, input, summary, [tabindex]):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+html[data-tv] #xt-cast-pill button:focus-visible { outline-offset: -3px; }

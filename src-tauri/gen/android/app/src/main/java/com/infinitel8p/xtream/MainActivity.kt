@@ -1301,8 +1301,9 @@ class AndroidVideoBridge(
     return EventQueue.drain(activity)
   }
 
+  // channelJson feeds NativeReportMirror so playback keeps reporting once this WebView suspends.
   @JavascriptInterface
-  fun receiverSessionStart(): Boolean {
+  fun receiverSessionStart(channelJson: String): Boolean {
     activity.receiverSessionActive = true
     EventQueue.pushListener = { type, payload ->
       val webView = hostedWebViewRef()
@@ -1314,13 +1315,37 @@ class AndroidVideoBridge(
         true
       }
     }
+    startNativeReportMirrorIfConfigured(channelJson)
     return true
+  }
+
+  private fun startNativeReportMirrorIfConfigured(channelJson: String) {
+    if (channelJson.isBlank()) return
+    try {
+      val channel = JSONObject(channelJson)
+      val port = channel.optInt("port", 0)
+      val token = channel.optString("token")
+      if (port <= 0 || token.isBlank()) return
+      NativeReportMirror.start(
+        NativeReportMirrorConfig(
+          port = port,
+          token = token,
+          generation = channel.optLong("generation"),
+          contentKey = channel.optString("contentKey"),
+          title = channel.optString("title"),
+          isLive = channel.optBoolean("isLive"),
+        )
+      )
+    } catch (error: Throwable) {
+      Log.w("AndroidVideoBridge", "receiverSessionStart channel parse failed: $error")
+    }
   }
 
   @JavascriptInterface
   fun receiverSessionEnd() {
     activity.receiverSessionActive = false
     EventQueue.pushListener = null
+    NativeReportMirror.stop()
     if (NativePlayerControl.isActive()) NativePlayerControl.finishPlayback()
     setKeepScreenOn(false)
   }

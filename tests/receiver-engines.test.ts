@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   clampReceiverVolume,
   createEmbeddedReceiverEngine,
@@ -65,11 +65,13 @@ class FakeClassList {
   }
 }
 
-class FakeElement {
+class FakeElement extends EventTarget {
   classList = new FakeClassList()
   textContent = ""
   offsetWidth = 0
-  focus(): void {}
+  focus(): void {
+    this.dispatchEvent(new Event("focus"))
+  }
 }
 
 class FakeEmbeddedHandle {
@@ -391,5 +393,27 @@ describe("createEmbeddedReceiverEngine play() DNS proxy wrapping", () => {
     const handle = await playAndMount(liveDescriptor("A", "1.1.1.1"))
     expect(ensureDnsProxyMock).toHaveBeenCalled()
     expect((handle.srcCalls[0] as { src: string }).src).toBe("http://tv.example/live/user/pass/A.m3u8")
+  })
+})
+
+describe("createEmbeddedReceiverEngine error auto-hide", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("keeps the auto-hide timer armed after the retry button's initial focus", () => {
+    const dom = embeddedDom(fakeElement())
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+
+    engine.showError("receiver.error.rejected")
+    expect(dom.errorEl?.classList.contains("hidden")).toBe(false)
+
+    vi.advanceTimersByTime(20000)
+
+    expect(dom.errorEl?.classList.contains("hidden")).toBe(true)
   })
 })

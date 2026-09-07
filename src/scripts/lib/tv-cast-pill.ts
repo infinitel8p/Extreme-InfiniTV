@@ -41,6 +41,7 @@ import { toast } from "@/scripts/lib/toast.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
 import { log } from "@/scripts/lib/log.js"
 import { formatElapsedSinceStart, formatPaddedHms } from "@/scripts/lib/format.js"
+import { castErrorToastTitle } from "@/scripts/lib/tv-cast-error-copy.js"
 import {
   ICON_DEVICE_TV,
   ICON_PLAYER_PLAY,
@@ -106,7 +107,8 @@ function formatClock(seconds: number): string {
 
 function positionAboveMobileNav(pill: HTMLElement): void {
   const navElement = document.querySelector<HTMLElement>("[data-mobile-nav]")
-  pill.style.bottom = navElement && navElement.offsetHeight > 0 ? `${navElement.offsetHeight + 12}px` : ""
+  pill.style.bottom =
+    navElement && navElement.offsetHeight > 0 ? `calc(${navElement.offsetHeight}px + 0.75rem)` : ""
 }
 
 function onWindowResize(): void {
@@ -149,7 +151,7 @@ function buildPill(): HTMLElement {
   const textCol = document.createElement("div")
   textCol.dataset.role = "text-col"
   textCol.className =
-    "flex flex-col min-w-0 leading-tight max-w-none overflow-hidden transition-[max-width,opacity] duration-200"
+    "flex flex-col min-w-0 leading-tight max-w-none overflow-hidden transition-[max-width,opacity] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]"
   const deviceNameEl = document.createElement("span")
   deviceNameEl.dataset.role = "device-name"
   deviceNameEl.className = "text-xs text-fg-2 truncate sm:max-w-48 lg:max-w-72"
@@ -246,7 +248,7 @@ function buildPill(): HTMLElement {
   const stopLabel = document.createElement("span")
   stopLabel.dataset.role = "stop-label"
   stopLabel.className =
-    "max-w-0 overflow-hidden whitespace-nowrap text-xs font-semibold transition-[max-width,margin-inline-end] duration-200"
+    "max-w-0 overflow-hidden whitespace-nowrap text-xs font-semibold transition-[max-width,margin-inline-end] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]"
   stopLabel.textContent = t("cast.pill.stopConfirm")
   stopBtn.appendChild(stopLabel)
   stopBtn.addEventListener("blur", () => disarmStopButton(pill))
@@ -257,7 +259,7 @@ function buildPill(): HTMLElement {
   dismissBtn.type = "button"
   dismissBtn.dataset.role = "dismiss"
   dismissBtn.className =
-    "self-stretch -my-2 min-h-11 min-w-11 grid place-items-center rounded-e-full -ml-2 px-3 text-fg-3 " +
+    "self-stretch -my-2 min-h-11 min-w-11 grid place-items-center rounded-e-full -ms-2 px-3 text-fg-3 " +
     "hover:bg-surface-2 hover:text-fg focus-visible:bg-surface-2 focus-visible:text-fg"
   dismissBtn.setAttribute("aria-label", t("cast.pill.dismiss"))
   dismissBtn.title = t("cast.pill.dismiss")
@@ -266,7 +268,9 @@ function buildPill(): HTMLElement {
 
   const progressEl = document.createElement("div")
   progressEl.dataset.role = "progress"
-  progressEl.className = "absolute start-0 bottom-0 h-0.5 bg-accent hidden"
+  progressEl.className =
+    "absolute inset-inline-4 bottom-0.5 h-0.5 w-full origin-[left_center] rtl:origin-[right_center] bg-accent " +
+    "transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] hidden"
   pill.appendChild(progressEl)
 
   const srStatusEl = document.createElement("span")
@@ -280,7 +284,8 @@ function buildPill(): HTMLElement {
 }
 
 function announceStatus(pill: HTMLElement, text: string): void {
-  pill.querySelector<HTMLElement>('[data-role="sr-status"]')!.textContent = text
+  const el = pill.querySelector<HTMLElement>('[data-role="sr-status"]')!
+  if (el.textContent !== text) el.textContent = text
 }
 
 function clearStopArmTimeout(): void {
@@ -410,10 +415,8 @@ function renderChipClock(pill: HTMLElement): void {
 
 function updateTime(pill: HTMLElement, positionSeconds: number, durationSeconds?: number): void {
   const timeEl = pill.querySelector<HTMLElement>('[data-role="time"]')!
-  timeEl.textContent =
-    durationSeconds != null
-      ? `${formatClock(positionSeconds)} / ${formatClock(durationSeconds)}`
-      : formatClock(positionSeconds)
+  const durationText = durationSeconds != null ? formatClock(durationSeconds) : "--:--"
+  timeEl.textContent = `${formatClock(positionSeconds)} / ${durationText}`
   renderChipClock(pill)
 }
 
@@ -423,8 +426,8 @@ function updateProgressBar(pill: HTMLElement, positionSeconds: number, durationS
     progressEl.classList.add("hidden")
     return
   }
-  const pct = Math.min(100, Math.max(0, (positionSeconds / durationSeconds) * 100))
-  progressEl.style.width = `${pct}%`
+  const ratio = Math.min(1, Math.max(0, positionSeconds / durationSeconds))
+  progressEl.style.transform = `scaleX(${ratio})`
   progressEl.classList.remove("hidden")
 }
 
@@ -513,6 +516,8 @@ function renderStatus(pill: HTMLElement, session: CastSession, status: PillStatu
     titleEl.textContent = t("cast.pill.error")
     titleEl.title = t("cast.pill.error")
     for (const button of transportButtons) setRoleHidden(button, true)
+    setRoleHidden(pill.querySelector<HTMLElement>('[data-role="time"]')!, true)
+    pill.querySelector<HTMLElement>('[data-role="progress"]')!.classList.add("hidden")
     resetRetryButton(pill)
     setRoleHidden(retryBtn, false)
     lastAnnouncedPlaybackState = null
@@ -704,9 +709,15 @@ function onFeedState(state: CastState): void {
     stateValue: state.state,
     playRequestedAtMs: session.startedAtMs ?? session.startedAt,
     nowMs: Date.now(),
+    isLive: session.isLive,
   })
   if (loadingStalled) {
-    log.warn("[xt:tv-cast-pill] cast never surfaced past loading on", session.deviceName)
+    log.warn("[xt:tv-cast-pill] cast never surfaced past loading on", session.deviceName, {
+      state: state.state,
+      positionSeconds: state.positionSeconds,
+      elapsedMs: Date.now() - (session.startedAtMs ?? session.startedAt),
+      isLive: session.isLive,
+    })
     renderStatus(pillEl, session, "error")
     toast({ title: t("cast.toast.wakeFailed", { device: session.deviceName }), variant: "error" })
     void fetchReceiverLogs(device).then((text) => {
@@ -739,10 +750,7 @@ function onFeedState(state: CastState): void {
       errorToastShown = true
       log.error("[xt:cast] receiver playback error on", session.deviceName, ":", state.error)
       toast({
-        title:
-          state.error === "app-not-foreground"
-            ? t("cast.toast.wakeFailed", { device: session.deviceName })
-            : t("cast.toast.playbackError", { device: session.deviceName, error: state.error || t("receiver.error.title") }),
+        title: castErrorToastTitle(state.error, session.deviceName, t),
         variant: "error",
       })
       void fetchReceiverLogs(device).then((text) => {
@@ -782,8 +790,10 @@ function onFeedState(state: CastState): void {
 }
 
 function onFeedLost(): void {
+  const session = getCastSession()
   unmount()
   clearCastSession()
+  if (session) toast({ title: t("cast.toast.connectionLost", { device: session.deviceName }), variant: "error" })
 }
 
 function onFeedHealth(health: CastFeedHealth): void {
@@ -895,7 +905,7 @@ function onPillClick(event: Event): void {
     lastKnownPositionSeconds = seekTo
     suppressPollPositionUntil = Date.now() + SEEK_SUPPRESS_MS
     if (!session.isLive) {
-      updateTime(pillEl, seekTo)
+      updateTime(pillEl, seekTo, lastKnownDurationSeconds ?? undefined)
       updateProgressBar(pillEl, seekTo, lastKnownDurationSeconds)
     }
     return
@@ -906,7 +916,7 @@ function onPillClick(event: Event): void {
     lastKnownPositionSeconds = seekTo
     suppressPollPositionUntil = Date.now() + SEEK_SUPPRESS_MS
     if (!session.isLive) {
-      updateTime(pillEl, seekTo)
+      updateTime(pillEl, seekTo, lastKnownDurationSeconds ?? undefined)
       updateProgressBar(pillEl, seekTo, lastKnownDurationSeconds)
     }
     return

@@ -1121,6 +1121,8 @@ object EventQueue {
 
   @Synchronized
   fun append(activity: android.content.Context, type: String, payload: JSONObject) {
+    // Seen regardless of pushListener: MainActivity's WebView is suspended behind VideoActivity.
+    NativeReportMirror.onEvent(type, payload)
     val listener = pushListener
     if (listener != null && listener(type, payload)) return
     try {
