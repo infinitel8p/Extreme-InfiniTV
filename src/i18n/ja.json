@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "テレビでは名前のみ変更できます。",
   "tv.login.field.pasteLink": "プレイリストのリンクを貼り付け",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "サーバーのリンクが複数ありますか？1行に1つずつすべて貼り付けてください。残りはバックアップサーバーになります。",
   "tv.login.field.pasteLink.mirrorsDetected": "バックアップサーバーを{count}件検出しました",
   "tv.login.action.showPassword": "表示",
   "tv.login.action.hidePassword": "非表示",

@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "Auf TV kann nur der Name geändert werden.",
   "tv.login.field.pasteLink": "Playlist-Link einfügen",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "Hast du mehrere Serverlinks? Füge sie alle ein, einen pro Zeile - die übrigen werden als Ausweichserver verwendet.",
   "tv.login.field.pasteLink.mirrorsDetected": "+{count} Ausweichserver erkannt",
   "tv.login.action.showPassword": "Anzeigen",
   "tv.login.action.hidePassword": "Ausblenden",

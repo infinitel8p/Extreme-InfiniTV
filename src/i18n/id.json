@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "Di TV, hanya nama yang bisa diubah.",
   "tv.login.field.pasteLink": "Tempel tautan playlist",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "Punya beberapa tautan server? Tempel semuanya, satu per baris - sisanya akan menjadi server cadangan.",
   "tv.login.field.pasteLink.mirrorsDetected": "+{count} server cadangan terdeteksi",
   "tv.login.action.showPassword": "Tampilkan",
   "tv.login.action.hidePassword": "Sembunyikan",

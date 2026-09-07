@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "Op tv kan alleen de naam worden gewijzigd.",
   "tv.login.field.pasteLink": "Plak een afspeellijstlink",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "Heb je meerdere serverlinks? Plak ze allemaal, één per regel - de rest wordt gebruikt als back-upservers.",
   "tv.login.field.pasteLink.mirrorsDetected": "+{count} back-upservers gedetecteerd",
   "tv.login.action.showPassword": "Tonen",
   "tv.login.action.hidePassword": "Verbergen",

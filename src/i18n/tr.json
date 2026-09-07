@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "TV'de yalnızca ad değiştirilebilir.",
   "tv.login.field.pasteLink": "Oynatma listesi bağlantısı yapıştırın",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "Birden fazla sunucu bağlantınız mı var? Hepsini yapıştırın, her satıra bir tane - kalanlar yedek sunucu olarak kullanılır.",
   "tv.login.field.pasteLink.mirrorsDetected": "+{count} yedek sunucu tespit edildi",
   "tv.login.action.showPassword": "Göster",
   "tv.login.action.hidePassword": "Gizle",

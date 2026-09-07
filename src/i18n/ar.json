@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "يمكن تغيير الاسم فقط على التلفاز.",
   "tv.login.field.pasteLink": "الصق رابط قائمة تشغيل",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "هل لديك عدة روابط خوادم؟ الصقها جميعًا، كل رابط في سطر منفصل - ستصبح الروابط الإضافية خوادم احتياطية.",
   "tv.login.field.pasteLink.mirrorsDetected": "تم اكتشاف {count} خادم احتياطي إضافي",
   "tv.login.action.showPassword": "إظهار",
   "tv.login.action.hidePassword": "إخفاء",

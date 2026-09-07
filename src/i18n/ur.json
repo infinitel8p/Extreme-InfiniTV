@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "ٹی وی پر صرف نام تبدیل کیا جا سکتا ہے۔",
   "tv.login.field.pasteLink": "پلے لسٹ کا لنک پیسٹ کریں",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "کیا آپ کے پاس کئی سرور لنکس ہیں؟ ان سب کو پیسٹ کریں، ہر سطر میں ایک - باقی بیک اپ سرورز بن جائیں گے۔",
   "tv.login.field.pasteLink.mirrorsDetected": "+{count} بیک اپ سرورز کا پتا چلا",
   "tv.login.action.showPassword": "دکھائیں",
   "tv.login.action.hidePassword": "چھپائیں",

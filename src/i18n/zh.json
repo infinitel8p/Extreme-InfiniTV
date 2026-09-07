@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "在电视上只能更改名称。",
   "tv.login.field.pasteLink": "粘贴播放列表链接",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "有多个服务器链接？全部粘贴进去，每行一个 - 其余的将作为备用服务器。",
   "tv.login.field.pasteLink.mirrorsDetected": "已检测到 {count} 个备用服务器",
   "tv.login.action.showPassword": "显示",
   "tv.login.action.hidePassword": "隐藏",

@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "En el televisor solo se puede cambiar el nombre.",
   "tv.login.field.pasteLink": "Pega un enlace de lista",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "¿Tienes varios enlaces de servidor? Pégalos todos, uno por línea - los adicionales pasan a ser servidores de respaldo.",
   "tv.login.field.pasteLink.mirrorsDetected": "+{count} servidores de respaldo detectados",
   "tv.login.action.showPassword": "Mostrar",
   "tv.login.action.hidePassword": "Ocultar",

@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "Only the name can be changed on TV.",
   "tv.login.field.pasteLink": "Paste a playlist link",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "Have several server links? Paste them all, one per line - the extra ones become backup servers.",
   "tv.login.field.pasteLink.mirrorsDetected": "+{count} fallback servers detected",
   "tv.login.action.showPassword": "Show",
   "tv.login.action.hidePassword": "Hide",

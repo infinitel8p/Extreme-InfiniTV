@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "Na telewizorze można zmienić tylko nazwę.",
   "tv.login.field.pasteLink": "Wklej link do playlisty",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "Masz kilka linków do serwera? Wklej je wszystkie, jeden w każdej linii - pozostałe staną się zapasowymi serwerami.",
   "tv.login.field.pasteLink.mirrorsDetected": "Wykryto {count} zapasowe serwery",
   "tv.login.action.showPassword": "Pokaż",
   "tv.login.action.hidePassword": "Ukryj",

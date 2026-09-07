@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "На ТВ можно изменить только имя.",
   "tv.login.field.pasteLink": "Вставьте ссылку на плейлист",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "Есть несколько ссылок на серверы? Вставьте их все, по одной на строку - остальные станут резервными серверами.",
   "tv.login.field.pasteLink.mirrorsDetected": "+{count} резервных сервера обнаружено",
   "tv.login.action.showPassword": "Показывать",
   "tv.login.action.hidePassword": "Скрывать",

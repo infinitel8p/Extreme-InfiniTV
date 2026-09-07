@@ -134,6 +134,7 @@ function buildMarkup(): string {
                    data-i18n-attr="placeholder:tv.login.field.pasteLink.placeholder"
                    placeholder="http://provider.com/get.php?username=...&password=..."
                    class="${TV_INPUT_CLASS}" />
+            <p data-i18n="tv.login.field.pasteLink.multiHint" class="text-sm text-fg-3">Have several server links? Paste them all, one per line - the extra ones become backup servers.</p>
             <p data-role="mirror-hint" class="hidden text-sm text-fg-3"></p>
           </label>
 

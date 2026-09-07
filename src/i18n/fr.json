@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "Sur le téléviseur, seul le nom peut être modifié.",
   "tv.login.field.pasteLink": "Coller un lien de playlist",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "Vous avez plusieurs liens de serveur ? Collez-les tous, un par ligne - les autres deviendront des serveurs de secours.",
   "tv.login.field.pasteLink.mirrorsDetected": "+{count} serveurs de secours détectés",
   "tv.login.action.showPassword": "Afficher",
   "tv.login.action.hidePassword": "Masquer",

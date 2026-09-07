@@ -1928,6 +1928,7 @@
   "tv.login.subtitle.titleOnly": "Na TV, só é possível alterar o nome.",
   "tv.login.field.pasteLink": "Cole um link de lista",
   "tv.login.field.pasteLink.placeholder": "http://provider.com/get.php?username=...&password=...",
+  "tv.login.field.pasteLink.multiHint": "Tem vários links de servidor? Cole todos, um por linha - os demais se tornam servidores de backup.",
   "tv.login.field.pasteLink.mirrorsDetected": "+{count} servidores de backup detectados",
   "tv.login.action.showPassword": "Mostrar",
   "tv.login.action.hidePassword": "Ocultar",
