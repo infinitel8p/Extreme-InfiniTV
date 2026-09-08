@@ -119,27 +119,27 @@ function buildShellMarkup(): string {
   return `
     <div class="grid h-full grid-cols-[10rem_minmax(0,1fr)_14rem] gap-4">
       <nav data-role="groups-col" class="flex min-h-0 flex-col overflow-hidden">
-        <p data-role="groups-heading" class="shrink-0 px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-fg-3"></p>
+        <p data-role="groups-heading" class="mb-3 flex min-h-10 shrink-0 items-center px-3 text-xs font-semibold uppercase tracking-wide text-fg-3"></p>
         <div data-role="groups-scroller" class="min-h-0 flex-1 overflow-hidden">
           <div data-role="groups-track" class="relative flex flex-col gap-1"></div>
         </div>
       </nav>
 
-      <div data-role="channels-col" class="flex min-h-0 flex-col overflow-hidden pt-2 px-2">
+      <div data-role="channels-col" class="flex min-h-0 flex-col overflow-hidden">
         <div class="mb-3 flex min-h-10 shrink-0 items-center gap-2 rounded-2xl bg-surface-2 px-4 tv-focus-inset-within">
           <span class="shrink-0 text-fg-3" aria-hidden="true">${ICON_SEARCH}</span>
           <input data-role="search" type="search" autocomplete="off" spellcheck="false"
                  class="w-full rounded-2xl bg-transparent text-sm outline-none placeholder:text-fg-3" />
         </div>
-        <div data-role="channels-scroller" class="min-h-0 flex-1 overflow-hidden py-2">
-          <div data-role="channels-track" class="relative flex flex-col gap-2"></div>
+        <div data-role="channels-scroller" class="min-h-0 flex-1 overflow-hidden pb-2">
+          <div data-role="channels-track" class="relative flex flex-col gap-1"></div>
         </div>
         <p data-role="channels-status" class="hidden shrink-0 pt-3 text-center text-sm text-fg-3" role="status"></p>
       </div>
 
-      <div data-role="guide-col" class="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-line bg-surface">
+      <div data-role="guide-col" class="flex min-h-0 flex-col overflow-hidden">
         <div data-role="guide-scroller" class="min-h-0 flex-1 overflow-hidden">
-          <div data-role="guide-track" class="flex flex-col gap-1 p-3"></div>
+          <div data-role="guide-track" class="flex flex-col gap-2 pb-3"></div>
         </div>
       </div>
     </div>

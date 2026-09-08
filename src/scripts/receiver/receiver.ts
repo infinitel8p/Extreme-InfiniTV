@@ -526,6 +526,16 @@ document.addEventListener("keydown", (event) => {
     }
     return
   }
+  if (key === "ArrowDown" || key === "ArrowUp" || key === "ArrowLeft" || key === "ArrowRight") {
+    // This page skips the spatial-nav polyfill, so arrow keys must move focus by hand.
+    const errorVisible = !!errorRetryEl?.isConnected && !errorEl?.classList.contains("hidden")
+    const target = errorVisible ? errorRetryEl : (!isKioskBuild && exitBtn?.isConnected ? exitBtn : null)
+    if (target && document.activeElement !== target) {
+      event.preventDefault()
+      target.focus()
+    }
+    return
+  }
   if ((key === "Escape" || key === "GoBack" || key === "BrowserBack") && !isKioskBuild) {
     event.preventDefault()
     exitReceiver()

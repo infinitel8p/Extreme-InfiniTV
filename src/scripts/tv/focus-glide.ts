@@ -20,6 +20,8 @@ const CHASE_TAU_MIN_MS = 22
 const CHASE_TAU_MAX_MS = 45
 const CHASE_TAU_DISTANCE_DIVISOR = 25
 const HIDE_DELAY_MS = 80
+// keepFocusedInView and the card lift move the target for 180ms after focusin.
+const GOAL_TRACK_MS = 400
 // Mirrors tv.css's `#tv-focus-glide` opacity transition duration.
 const CROSS_VIEW_FADE_MS = 120
 // Ambient glow extraction is comparatively expensive; only run it once focus stops hopping.
@@ -31,9 +33,9 @@ let glideEl: HTMLDivElement | null = null
 let reducedMotionQuery: MediaQueryList | null = null
 
 let ringTarget: HTMLElement | null = null
-// The target's box, read once per hop (not re-measured every rAF frame while chasing).
+// The target's box; re-read each frame only while the post-hop transitions can still move it.
 let goal: GlideRect | null = null
-// Ring's animated position only; width/height/radius are sized once per hop (see applySize).
+// Ring's animated position; size follows the goal directly (see applySize).
 let current: { left: number; top: number } | null = null
 let visible = false
 let settledFrames = 0
@@ -42,6 +44,8 @@ let rafId = 0
 let hideTimerId = 0
 let crossViewFadeTimerId = 0
 let ambientGlowTimerId = 0
+let goalTrackUntil = 0
+let appliedSize: { width: number; height: number; radius: number } | null = null
 let previousViewRoot: Element | null = null
 
 const radiusCache = new WeakMap<HTMLElement, number>()
@@ -111,12 +115,16 @@ function readGoal(target: HTMLElement): GlideRect {
   return { left: rect.left, top: rect.top, width: rect.width, height: rect.height, radius: getRadius(target) }
 }
 
-/** Sized once per hop (not per frame) - width/height/radius don't animate, only position does. */
 function applySize(rect: GlideRect): void {
+  const width = Math.round(rect.width)
+  const height = Math.round(rect.height)
+  const radius = Math.round(rect.radius)
+  if (appliedSize && appliedSize.width === width && appliedSize.height === height && appliedSize.radius === radius) return
+  appliedSize = { width, height, radius }
   const element = ensureGlideEl()
-  element.style.width = `${Math.round(rect.width)}px`
-  element.style.height = `${Math.round(rect.height)}px`
-  element.style.borderRadius = `${Math.round(rect.radius)}px`
+  element.style.width = `${width}px`
+  element.style.height = `${height}px`
+  element.style.borderRadius = `${radius}px`
 }
 
 function applyPosition(left: number, top: number): void {
@@ -138,6 +146,8 @@ function hideRing(): void {
   previousViewRoot = null
   settledFrames = 0
   lastFrameTime = 0
+  goalTrackUntil = 0
+  appliedSize = null
   cancelAnimationFrame(rafId)
   rafId = 0
   cancelCrossViewFade()
@@ -175,6 +185,10 @@ function scheduleHide(): void {
   }, HIDE_DELAY_MS)
 }
 
+function armGoalTracking(): void {
+  goalTrackUntil = performance.now() + GOAL_TRACK_MS
+}
+
 /** Shorter tau (faster catch-up) the closer the ring gets, so long and short hops both settle smoothly. */
 function chaseTauMs(remainingPx: number): number {
   return Math.min(CHASE_TAU_MAX_MS, Math.max(CHASE_TAU_MIN_MS, remainingPx / CHASE_TAU_DISTANCE_DIVISOR))
@@ -187,6 +201,11 @@ function stepFollow(now: number): void {
   }
   const dt = lastFrameTime ? now - lastFrameTime : 16
   lastFrameTime = now
+  const trackingGoal = now < goalTrackUntil
+  if (trackingGoal) {
+    goal = readGoal(ringTarget)
+    applySize(goal)
+  }
   const remaining = Math.hypot(goal.left - current.left, goal.top - current.top)
   if (remaining < CHASE_SNAP_EPSILON_PX) {
     current = { left: goal.left, top: goal.top }
@@ -200,7 +219,7 @@ function stepFollow(now: number): void {
   const settledNow =
     Math.abs(goal.left - current.left) < SETTLE_EPSILON_PX && Math.abs(goal.top - current.top) < SETTLE_EPSILON_PX
   settledFrames = settledNow ? settledFrames + 1 : 0
-  if (settledFrames >= SETTLE_FRAMES) {
+  if (settledFrames >= SETTLE_FRAMES && !trackingGoal) {
     rafId = 0
     lastFrameTime = 0
     return
@@ -222,6 +241,7 @@ function snapAcrossView(nextGoal: GlideRect): void {
   if (!motionAllowed()) {
     current = { left: nextGoal.left, top: nextGoal.top }
     applyPosition(current.left, current.top)
+    armGoalTracking()
     startFollowLoop()
     return
   }
@@ -231,6 +251,7 @@ function snapAcrossView(nextGoal: GlideRect): void {
     current = { left: nextGoal.left, top: nextGoal.top }
     applyPosition(current.left, current.top)
     element.dataset.visible = "true"
+    armGoalTracking()
     startFollowLoop()
   }, CROSS_VIEW_FADE_MS)
 }
@@ -249,8 +270,8 @@ function trackTarget(target: HTMLElement): void {
   ringTarget = ring
   const nextGoal = readGoal(ring)
   goal = nextGoal
-  // Sized once per hop; only position glides frame-to-frame (see stepFollow).
   applySize(nextGoal)
+  armGoalTracking()
 
   // First appearance (or after a page swap) snaps in place; a live target glides from its old spot.
   if (!visible || !current) {
@@ -308,10 +329,9 @@ function onPageLoad(): void {
 
 function onWindowResize(): void {
   if (!ringTarget) return
-  // The stored goal isn't re-measured per frame anymore, so a viewport resize needs an
-  // explicit re-read - the target's rect (and thus the ring's fixed size) may have moved.
   goal = readGoal(ringTarget)
   applySize(goal)
+  armGoalTracking()
   startFollowLoop()
 }
 
@@ -342,6 +362,7 @@ function detach(): void {
   hideRing()
   glideEl?.remove()
   glideEl = null
+  appliedSize = null
 }
 
 function syncAttachment(): void {
