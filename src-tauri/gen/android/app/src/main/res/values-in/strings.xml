@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">Saluran</string>
     <string name="native_player_unsupported_stream">Tidak dapat memutar saluran ini di pemutar bawaan</string>
+    <string name="native_player_backup_server">Menyambungkan ulang melalui server cadangan…</string>
+    <string name="native_player_stream_lost">Streaming terputus - tidak dapat tersambung ulang</string>
     <string name="xt_video_settings_title">Pengaturan pemutar</string>
     <string name="xt_video_display_mode">Mode tampilan</string>
     <string name="xt_video_display_fit">Sesuaikan</string>

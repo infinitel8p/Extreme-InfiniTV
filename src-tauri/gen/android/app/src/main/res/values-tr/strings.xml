@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">Kanallar</string>
     <string name="native_player_unsupported_stream">Bu kanal yerel oynatıcıda oynatılamıyor</string>
+    <string name="native_player_backup_server">Yedek sunucu üzerinden yeniden bağlanılıyor…</string>
+    <string name="native_player_stream_lost">Yayın kesildi - yeniden bağlanılamadı</string>
     <string name="xt_video_settings_title">Oynatıcı ayarları</string>
     <string name="xt_video_display_mode">Görüntü modu</string>
     <string name="xt_video_display_fit">Sığdır</string>

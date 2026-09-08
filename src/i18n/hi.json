@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "इनबिल्ट प्लेयर इस चैनल की स्ट्रीम को पढ़ नहीं सका। यह आमतौर पर किसी बाहरी प्लेयर (MPV/VLC) में फिर भी चलता है।",
   "stream.failure.connectionLimit": "आपका प्रदाता अभी एक और स्ट्रीम की अनुमति नहीं दे रहा है। इस खाते पर कुछ और भी चल रहा हो सकता है।",
   "stream.failure.offlinePlaceholder": "यह चैनल फ़िलहाल प्रदाता के यहाँ ऑफ़लाइन है।",
+  "stream.native.lostTitle": "स्ट्रीम खो गई",
+  "stream.native.lostBody": "नेटिव प्लेयर {channel} से दोबारा कनेक्ट नहीं कर सका।",
   "stream.audioFix.action": "ऑडियो ठीक करें",
   "stream.audioFix.fixing": "ऑडियो ठीक हो रहा है…",
   "stream.audioFix.fallback": "ऑडियो ठीक करना विफल रहा - मूल स्ट्रीम पर वापस स्विच किया गया",

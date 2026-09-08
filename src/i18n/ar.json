@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "لم يتمكن المشغل المدمج من قراءة بث هذه القناة. عادةً ما يعمل رغم ذلك في مشغل خارجي (MPV/VLC).",
   "stream.failure.connectionLimit": "لا يسمح مزوّدك ببث آخر في الوقت الحالي. قد يكون هناك شيء آخر قيد التشغيل على هذا الحساب.",
   "stream.failure.offlinePlaceholder": "هذه القناة غير متاحة حاليًا لدى المزوّد.",
+  "stream.native.lostTitle": "فُقد البث",
+  "stream.native.lostBody": "تعذّر على المشغّل الأصلي إعادة الاتصال بـ {channel}.",
   "stream.audioFix.action": "إصلاح الصوت",
   "stream.audioFix.fixing": "جارٍ إصلاح الصوت…",
   "stream.audioFix.fallback": "فشل إصلاح الصوت - تم الرجوع إلى البث الأصلي",

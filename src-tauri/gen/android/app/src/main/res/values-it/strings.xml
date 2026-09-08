@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">Canali</string>
     <string name="native_player_unsupported_stream">Impossibile riprodurre questo canale nel lettore nativo</string>
+    <string name="native_player_backup_server">Riconnessione tramite server di backup…</string>
+    <string name="native_player_stream_lost">Streaming perso - impossibile riconnettersi</string>
     <string name="xt_video_settings_title">Impostazioni del lettore</string>
     <string name="xt_video_display_mode">Modalità di visualizzazione</string>
     <string name="xt_video_display_fit">Adatta</string>

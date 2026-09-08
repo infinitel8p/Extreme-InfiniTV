@@ -86,6 +86,13 @@ class VideoActivity : AppCompatActivity() {
     // minutes per D-pad press; pin a fixed 15s step instead.
     private const val TIME_BAR_KEY_INCREMENT_MS = 15_000L
 
+    // Live retune: same-url backoff, then hop to the next backup url.
+    private val LIVE_RETUNE_BACKOFF_MS = longArrayOf(1_000L, 2_000L, 4_000L)
+    private const val LIVE_RETUNE_SAME_URL_MAX = 2
+    private const val LIVE_RETUNE_TOTAL_MAX = 8
+    private const val LIVE_RETUNE_STABLE_MS = 15_000L
+    private val PROVIDER_REJECTION_STATUSES = setOf(401, 403, 407, 429, 458, 509)
+
     private const val PREF_PLAYER = "xt_native_player"
     private const val KEY_DISPLAY_MODE = "displayMode"
 
@@ -139,6 +146,14 @@ class VideoActivity : AppCompatActivity() {
   private var finishedEmitted = false
   // Records an onPause()-initiated stop so onResume() resumes without overriding a viewer pause.
   private var resumePlaybackOnReturn = false
+
+  private val retuneHandler = Handler(Looper.getMainLooper())
+  private var retuneRunnable: Runnable? = null
+  private var retuneSameUrlAttempts = 0
+  private var retuneTotalAttempts = 0
+  private var retuneCandidateIndex = 0
+  private var retuneStableRunnable: Runnable? = null
+  private var lastRetuneHttpStatus = 0
 
   private val progressHandler = Handler(Looper.getMainLooper())
   private val progressTick = object : Runnable {
@@ -332,6 +347,7 @@ class VideoActivity : AppCompatActivity() {
     super.onNewIntent(intent)
     setIntent(intent)
     progressHandler.removeCallbacks(progressTick)
+    cancelLiveRetune()
     hideChannelOverlay()
     releasePlayer()
     finishedEmitted = false
@@ -353,6 +369,10 @@ class VideoActivity : AppCompatActivity() {
     controllerTitleView?.text = initialTitle
 
     if (mode == MODE_LIVE) {
+      cancelLiveRetune()
+      retuneSameUrlAttempts = 0
+      retuneTotalAttempts = 0
+      retuneCandidateIndex = 0
       val json = NativePlayerPayload.takeChannels() ?: "[]"
       channels = ChannelLite.parseList(json)
       // A non-empty payload that parsed to zero channels means ChannelLite.parseList's own
@@ -483,6 +503,7 @@ class VideoActivity : AppCompatActivity() {
   override fun onPause() {
     super.onPause()
     progressHandler.removeCallbacks(progressTick)
+    cancelLiveRetune()
     // Keep playing if we're transitioning into PiP. Android pauses the
     // Activity briefly during the PiP transition; we only really stop in
     // onStop().
@@ -494,6 +515,7 @@ class VideoActivity : AppCompatActivity() {
 
   override fun onStop() {
     super.onStop()
+    cancelLiveRetune()
     if (!releaseSuppressed && !isInPictureInPictureMode) {
       releasePlayer()
     }
@@ -501,6 +523,7 @@ class VideoActivity : AppCompatActivity() {
 
   override fun onDestroy() {
     progressHandler.removeCallbacks(progressTick)
+    cancelLiveRetune()
     NativePlayerControl.unregister(this)
     releasePlayer()
     if (!finishedEmitted) {
@@ -561,6 +584,12 @@ class VideoActivity : AppCompatActivity() {
     player.addListener(object : Player.Listener {
       override fun onPlayerError(error: PlaybackException) {
         val httpStatus = httpStatusOf(error)
+        if (mode == MODE_LIVE) {
+          val liveContentKey = channels.getOrNull(currentChannelIndex)?.id?.let { "live:$it" } ?: contentKey
+          Log.e(TAG, "playback error ($liveContentKey): ${error.errorCodeName} http=$httpStatus", error)
+          scheduleLiveRetune(httpStatus, error.errorCodeName)
+          return
+        }
         Log.e(TAG, "playback error: ${error.errorCodeName} http=$httpStatus", error)
         EventQueue.append(
           this@VideoActivity,
@@ -597,6 +626,14 @@ class VideoActivity : AppCompatActivity() {
         updateKeepScreenOn(player)
         // STATE_READY knows the timeline; ticks only fire while playing, so report it right away.
         if (state == Player.STATE_READY && mode == MODE_VOD) emitProgress(player)
+        if (state == Player.STATE_READY && mode == MODE_LIVE && player.playWhenReady) {
+          scheduleLiveRetuneStableCheck()
+        }
+        // Provider closed the stream (e.g. connection slot taken elsewhere); mpegts/HLS end
+        // without a PlaybackException, so STATE_ENDED is the only signal we get here.
+        if (state == Player.STATE_ENDED && mode == MODE_LIVE) {
+          scheduleLiveRetune(httpStatus = 0, reason = "ended")
+        }
         if (state == Player.STATE_ENDED && mode == MODE_VOD) {
           finishedEmitted = true
           EventQueue.append(
@@ -836,6 +873,10 @@ class VideoActivity : AppCompatActivity() {
   private fun switchChannelByIndex(newIndex: Int) {
     if (newIndex !in channels.indices) return
     if (newIndex == currentChannelIndex) return
+    cancelLiveRetune()
+    retuneSameUrlAttempts = 0
+    retuneTotalAttempts = 0
+    retuneCandidateIndex = 0
     val previousIndex = currentChannelIndex
     currentChannelIndex = newIndex
     val channel = channels[newIndex]
@@ -852,13 +893,117 @@ class VideoActivity : AppCompatActivity() {
     switchChannelByIndex(next)
   }
 
-  private fun loadChannel(channel: ChannelLite, fireEvent: Boolean): Boolean {
+  // index 0 = the channel's primary url, index n = backupUrls[n - 1]; null past the end.
+  private fun candidateUrl(channel: ChannelLite, index: Int): String? {
+    return if (index <= 0) channel.streamUrl else channel.backupUrls.getOrNull(index - 1)
+  }
+
+  // Retries the current url on backoff, then hops to the next backupUrls candidate; gives up
+  // and finishes the activity after LIVE_RETUNE_TOTAL_MAX attempts or when candidates run out.
+  private fun scheduleLiveRetune(httpStatus: Int, reason: String) {
+    val channel = channels.getOrNull(currentChannelIndex) ?: return
+    if (retuneRunnable != null) return
+    lastRetuneHttpStatus = httpStatus
+    retuneTotalAttempts++
+
+    val rejected = httpStatus in PROVIDER_REJECTION_STATUSES
+    val previousCandidateIndex = retuneCandidateIndex
+    if (rejected || retuneSameUrlAttempts >= LIVE_RETUNE_SAME_URL_MAX) {
+      retuneCandidateIndex++
+      retuneSameUrlAttempts = 0
+    } else {
+      retuneSameUrlAttempts++
+    }
+
+    if (retuneTotalAttempts > LIVE_RETUNE_TOTAL_MAX || candidateUrl(channel, retuneCandidateIndex) == null) {
+      failLiveRetune(channel, reason)
+      return
+    }
+
+    val delay = if (rejected) {
+      300L
+    } else {
+      LIVE_RETUNE_BACKOFF_MS[minOf(retuneSameUrlAttempts - 1, LIVE_RETUNE_BACKOFF_MS.lastIndex).coerceAtLeast(0)]
+    }
+
+    playerView?.setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
+    if (retuneCandidateIndex > previousCandidateIndex && retuneCandidateIndex > 0) {
+      Toast.makeText(this, R.string.native_player_backup_server, Toast.LENGTH_SHORT).show()
+    }
+    Log.i(
+      TAG,
+      "live retune: reason=$reason http=$httpStatus candidate=$retuneCandidateIndex " +
+        "attempt=$retuneTotalAttempts delayMs=$delay"
+    )
+
+    val runnable = Runnable {
+      retuneRunnable = null
+      if (exoPlayer == null) return@Runnable
+      if (channels.getOrNull(currentChannelIndex) !== channel) return@Runnable
+      val url = candidateUrl(channel, retuneCandidateIndex)
+      if (url == null || !loadChannel(channel, fireEvent = false, urlOverride = url)) {
+        scheduleLiveRetune(0, "load-failed")
+      }
+    }
+    retuneRunnable = runnable
+    retuneHandler.postDelayed(runnable, delay)
+  }
+
+  private fun failLiveRetune(channel: ChannelLite, reason: String) {
+    val attempts = retuneTotalAttempts
+    val candidatesTried = minOf(retuneCandidateIndex + 1, 1 + channel.backupUrls.size)
+    val httpStatus = lastRetuneHttpStatus
+    cancelLiveRetune()
+    EventQueue.append(
+      this,
+      "xt:android-native-error",
+      JSONObject().apply {
+        put("contentKey", "live:${channel.id}")
+        put("code", "LIVE_RETUNE_EXHAUSTED")
+        put("message", reason)
+        put("attempts", attempts)
+        put("candidatesTried", candidatesTried)
+        if (httpStatus > 0) put("httpStatus", httpStatus)
+      }
+    )
+    Toast.makeText(this, R.string.native_player_stream_lost, Toast.LENGTH_SHORT).show()
+    Log.w(TAG, "live retune exhausted: reason=$reason attempts=$attempts candidatesTried=$candidatesTried http=$httpStatus")
+    finish()
+  }
+
+  // Resets the same-url backoff once playback has held steady for LIVE_RETUNE_STABLE_MS.
+  private fun scheduleLiveRetuneStableCheck() {
+    if (retuneRunnable == null && retuneTotalAttempts == 0) return
+    if (retuneStableRunnable != null) return
+    val runnable = Runnable {
+      retuneStableRunnable = null
+      if (exoPlayer?.isPlaying == true) {
+        retuneSameUrlAttempts = 0
+        retuneTotalAttempts = 0
+        retuneCandidateIndex = 0
+        playerView?.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+      }
+    }
+    retuneStableRunnable = runnable
+    retuneHandler.postDelayed(runnable, LIVE_RETUNE_STABLE_MS)
+  }
+
+  private fun cancelLiveRetune() {
+    retuneRunnable?.let { retuneHandler.removeCallbacks(it) }
+    retuneRunnable = null
+    retuneStableRunnable?.let { retuneHandler.removeCallbacks(it) }
+    retuneStableRunnable = null
+    playerView?.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+  }
+
+  private fun loadChannel(channel: ChannelLite, fireEvent: Boolean, urlOverride: String? = null): Boolean {
     val player = exoPlayer ?: return false
     val ua = channel.ua.ifBlank { defaultUa }
     val ref = channel.referer.ifBlank { defaultReferer }
+    val url = urlOverride ?: channel.streamUrl
     try {
       val factory = buildMediaSourceFactory(ua, ref, defaultDns)
-      val item = buildMediaItem(channel.streamUrl, channel.name, channel.logo)
+      val item = buildMediaItem(url, channel.name, channel.logo)
       val src = factory.createMediaSource(item)
       player.setMediaSource(src)
       player.prepare()
@@ -1001,6 +1146,7 @@ data class ChannelLite(
   val ua: String,
   val referer: String,
   val nowProgramme: String,
+  val backupUrls: List<String> = emptyList(),
 ) {
   companion object {
     fun parseList(json: String): List<ChannelLite> {
@@ -1016,12 +1162,18 @@ data class ChannelLite(
             ua = obj.optString("ua"),
             referer = obj.optString("referer"),
             nowProgramme = obj.optString("nowProgramme"),
+            backupUrls = parseBackupUrls(obj.optJSONArray("backupUrls")),
           )
         }.filter { it.id.isNotBlank() && it.streamUrl.isNotBlank() }
       } catch (error: Throwable) {
         Log.w("ChannelLite", "parse failed: $error")
         emptyList()
       }
+    }
+
+    private fun parseBackupUrls(arr: JSONArray?): List<String> {
+      if (arr == null) return emptyList()
+      return (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
     }
   }
 }

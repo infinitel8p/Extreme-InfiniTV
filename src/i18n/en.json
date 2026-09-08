@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "The built-in player couldn't read this channel's stream. It usually still plays in an external player (MPV/VLC).",
   "stream.failure.connectionLimit": "Your provider won't allow another stream right now. Something else may still be playing on this account.",
   "stream.failure.offlinePlaceholder": "This channel is currently offline at the provider.",
+  "stream.native.lostTitle": "Stream lost",
+  "stream.native.lostBody": "The native player couldn't reconnect to {channel}.",
   "stream.audioFix.action": "Fix audio",
   "stream.audioFix.fixing": "Fixing audio…",
   "stream.audioFix.fallback": "Audio fix failed - switched back to the original stream",

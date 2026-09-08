@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "El reproductor integrado no pudo leer el flujo de este canal. Normalmente sigue funcionando en un reproductor externo (MPV/VLC).",
   "stream.failure.connectionLimit": "Tu proveedor no permite otra transmisión en este momento. Puede que algo más siga reproduciéndose en esta cuenta.",
   "stream.failure.offlinePlaceholder": "Este canal está actualmente fuera de línea en el proveedor.",
+  "stream.native.lostTitle": "Transmisión perdida",
+  "stream.native.lostBody": "El reproductor nativo no pudo reconectar con {channel}.",
   "stream.audioFix.action": "Corregir audio",
   "stream.audioFix.fixing": "Corrigiendo audio…",
   "stream.audioFix.fallback": "No se pudo corregir el audio - se volvió a la transmisión original",

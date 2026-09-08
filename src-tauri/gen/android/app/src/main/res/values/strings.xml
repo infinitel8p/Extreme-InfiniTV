@@ -6,6 +6,8 @@
     <string name="render_gone_repeat">Display keeps crashing. Restart the app if this continues.</string>
     <string name="xt_channels_title">Channels</string>
     <string name="native_player_unsupported_stream">Can\'t play this channel in the native player</string>
+    <string name="native_player_backup_server">Reconnecting via backup server…</string>
+    <string name="native_player_stream_lost">Stream lost - couldn\'t reconnect</string>
     <string name="dream_label">Extreme InfiniTV</string>
     <string name="receiver_notification_channel">TV receiver</string>
     <string name="receiver_notification_title">TV receiver active</string>

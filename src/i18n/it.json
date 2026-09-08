@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "Il lettore integrato non è riuscito a leggere lo stream di questo canale. Di solito funziona comunque in un lettore esterno (MPV/VLC).",
   "stream.failure.connectionLimit": "Il tuo provider non consente un altro flusso in questo momento. Qualcos'altro potrebbe essere ancora in riproduzione su questo account.",
   "stream.failure.offlinePlaceholder": "Questo canale è attualmente offline presso il provider.",
+  "stream.native.lostTitle": "Flusso perso",
+  "stream.native.lostBody": "Il player nativo non è riuscito a riconnettersi a {channel}.",
   "stream.audioFix.action": "Correggi audio",
   "stream.audioFix.fixing": "Correzione dell'audio…",
   "stream.audioFix.fallback": "Correzione audio non riuscita - tornato allo stream originale",

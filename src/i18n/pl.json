@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "Wbudowany odtwarzacz nie mógł odczytać strumienia tego kanału. Zwykle nadal działa w zewnętrznym odtwarzaczu (MPV/VLC).",
   "stream.failure.connectionLimit": "Twój dostawca nie pozwala teraz na kolejny strumień. Na tym koncie może wciąż działać inne odtwarzanie.",
   "stream.failure.offlinePlaceholder": "Ten kanał jest obecnie offline u dostawcy.",
+  "stream.native.lostTitle": "Utracono strumień",
+  "stream.native.lostBody": "Natywny odtwarzacz nie mógł ponownie połączyć się z {channel}.",
   "stream.audioFix.action": "Napraw dźwięk",
   "stream.audioFix.fixing": "Naprawianie dźwięku…",
   "stream.audioFix.fallback": "Naprawa dźwięku nie powiodła się - przełączono z powrotem na oryginalny stream",

@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">चैनल</string>
     <string name="native_player_unsupported_stream">इस चैनल को नेटिव प्लेयर में नहीं चलाया जा सकता</string>
+    <string name="native_player_backup_server">बैकअप सर्वर के ज़रिए फिर से कनेक्ट किया जा रहा है…</string>
+    <string name="native_player_stream_lost">स्ट्रीम खो गई - फिर से कनेक्ट नहीं हो सका</string>
     <string name="xt_video_settings_title">प्लेयर सेटिंग्स</string>
     <string name="xt_video_display_mode">डिस्प्ले मोड</string>
     <string name="xt_video_display_fit">फ़िट</string>

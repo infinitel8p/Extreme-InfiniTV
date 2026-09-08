@@ -11,6 +11,7 @@ import {
   isCustomHost,
   readLocalM3UContent,
   getActiveDnsOverrideAsync,
+  xtreamCandidatesFor,
 } from "@/scripts/lib/creds.js"
 import { xtreamApiFetch, resolveStreamUrl, advanceMirror } from "@/scripts/lib/xtream-api.js"
 import { isProviderRejection, shouldRepinMirror } from "@/scripts/lib/stream-reject.ts"
@@ -292,6 +293,7 @@ let activeTuningTransition: any = null
 let externalPlaybackActive = false
 // Which player holds it, so a handoff can ask that one to let the stream go.
 let externalPlaybackKind = null
+let nativeLiveHandoffActive = false
 
 // The inline script in livetv.astro sets data-first-run optimistically from
 // localStorage["xt_playlists"]. On Tauri builds the real entry list lives in
@@ -3200,6 +3202,21 @@ function performStallRetune(trigger) {
     giveUpOnPlayback(ctx)
     return
   }
+  if (
+    trigger === "ended" &&
+    stallAttempts >= 2 &&
+    ctx.isLive &&
+    !ctx.audioProxied &&
+    !isCastRoutingActive() &&
+    !externalPlaybackActive
+  ) {
+    log.warn("[xt:livetv] stream ended again after re-tune - trying the next mirror", {
+      streamId: ctx.streamId,
+      attempt: stallAttempts,
+    })
+    void tryMirrorHopOnLiveError(ctx, { failureKind: "ended" })
+    return
+  }
   remountFromContext(ctx)
 }
 
@@ -3235,7 +3252,15 @@ let progressIdleReason = null
 
 function progressWatchTick() {
   const ctx = lastPlayContext
-  if (!ctx || !ctx.isLive || catchupSession || !vjs) {
+  if (!ctx) {
+    progressFrozenTicks = 0
+    if (nativeLiveHandoffActive && progressIdleReason !== "native-handoff") {
+      progressIdleReason = "native-handoff"
+      log.info("[xt:livetv] heartbeat idle", { reason: "native-handoff" })
+    }
+    return
+  }
+  if (!ctx.isLive || catchupSession || !vjs) {
     progressFrozenTicks = 0
     return
   }
@@ -4051,15 +4076,40 @@ function ensureNativeLiveSubscription() {
   if (_nativeLiveSubscribed) return
   _nativeLiveSubscribed = true
   subscribeAndroidNativeEvents((event) => {
-    if (event.type !== "xt:android-native-channel-changed") return
-    const channelId = event.payload?.channelId
-    if (!channelId) return
-    const channel = all.find((entry) => String(entry.id) === String(channelId))
-    if (!channel) return
-    if (activePlaylistId) {
-      pushRecent(activePlaylistId, "live", channel.id, channel.name, channel.logo || null)
+    if (event.type === "xt:android-native-channel-changed") {
+      const channelId = event.payload?.channelId
+      if (!channelId) return
+      const channel = all.find((entry) => String(entry.id) === String(channelId))
+      if (!channel) return
+      if (activePlaylistId) {
+        pushRecent(activePlaylistId, "live", channel.id, channel.name, channel.logo || null)
+      }
+      setNowPlaying(channel.id)
+      return
     }
-    setNowPlaying(channel.id)
+    if (event.type === "xt:android-native-error") {
+      const { code, httpStatus, message } = event.payload || {}
+      const contentKey = event.payload?.contentKey || ""
+      const channelId =
+        event.payload?.channelId || (contentKey.startsWith("live:") ? contentKey.slice(5) : contentKey)
+      const channel = all.find((entry) => String(entry.id) === String(channelId))
+      log.warn("[xt:livetv] native player error", { code, httpStatus, message, channelId })
+      if (code === "LIVE_RETUNE_EXHAUSTED") {
+        toastError(t("stream.native.lostTitle"), {
+          description: t("stream.native.lostBody", {
+            channel: event.payload?.channelName || channel?.name || "",
+          }),
+        })
+        setNowPlaying(null)
+      }
+      return
+    }
+    if (event.type === "xt:android-native-finished") {
+      nativeLiveHandoffActive = false
+      if (event.payload?.mode === "live") {
+        log.info("[xt:livetv] native player finished", { finalChannelId: event.payload?.finalChannelId })
+      }
+    }
   })
 }
 
@@ -4084,12 +4134,16 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
   }
   if (!initialUrl) return false
 
+  const candidates = xtreamCandidatesFor(await getActiveEntry())
+  const hasBackupAccounts = candidates.length > 1
+
   const channelInputs = []
   for (const channel of all) {
     let streamUrl = ""
+    const isDirectUrlChannel = hasDirectUrl(channel.id)
     if (channel.id === initialStreamId) {
       streamUrl = initialUrl
-    } else if (hasDirectUrl(channel.id)) {
+    } else if (isDirectUrlChannel) {
       streamUrl = getDirectUrl(channel.id)
     } else {
       const built = buildDirectLiveUrl(channel.id, creds)
@@ -4097,6 +4151,13 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
     }
     if (!streamUrl) continue
     const headers = streamHeadersById.get(channel.id) || null
+    const backupUrls =
+      hasBackupAccounts && !isDirectUrlChannel
+        ? candidates
+            .map((candidate) => buildDirectLiveUrl(channel.id, candidate))
+            .filter(Boolean)
+            .filter((url) => url !== streamUrl)
+        : []
     channelInputs.push({
       id: String(channel.id),
       name: channel.name || "",
@@ -4105,6 +4166,7 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
       ua: headers?.userAgent || "",
       referer: headers?.referer || "",
       tvgId: channel.tvgId || null,
+      backupUrls,
     })
   }
   if (!channelInputs.length) return false
@@ -4120,11 +4182,19 @@ async function launchNativeLiveSession(initialStreamId, initialName) {
     programmes,
     dns: (await getActiveDnsOverrideAsync())?.raw ?? null,
   })
-  log.debug("[xt:livetv] external handoff", `target=android-native channel=${initialStreamId} launched=${launched}`)
-  if (launched && activePlaylistId) {
-    pushRecent(activePlaylistId, "live", initialStreamId, initialName,
-      all.find((entry) => entry.id === initialStreamId)?.logo || null)
-    setNowPlaying(initialStreamId)
+  log.info("[xt:livetv] external handoff", {
+    target: "android-native",
+    channel: initialStreamId,
+    launched,
+    backups: hasBackupAccounts ? candidates.length - 1 : 0,
+  })
+  if (launched) {
+    nativeLiveHandoffActive = true
+    if (activePlaylistId) {
+      pushRecent(activePlaylistId, "live", initialStreamId, initialName,
+        all.find((entry) => entry.id === initialStreamId)?.logo || null)
+      setNowPlaying(initialStreamId)
+    }
   }
   return launched
 }

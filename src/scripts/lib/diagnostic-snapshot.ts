@@ -15,6 +15,7 @@ import {
   getUpdateChannel,
   getUserAgent,
   getFfmpegPath,
+  getAndroidNativePlayerEnabled,
 } from "@/scripts/lib/app-settings.js"
 import { getActiveLocale } from "@/scripts/lib/i18n.js"
 import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
@@ -60,6 +61,7 @@ export interface SessionSnapshotInputs {
   locale: string | null
   playlistCount: number | null
   activePlaylistEntry: SessionSnapshotPlaylistEntry | null
+  androidNativePlayerEnabled: boolean | null
 }
 
 export interface SessionSnapshot {
@@ -93,6 +95,7 @@ export interface SessionSnapshot {
   activePlaylistType: string | null
   activePlaylistMirrorsConfigured: boolean | null
   activePlaylistLiveContainer: string | null
+  androidNativePlayerEnabled: boolean | null
 }
 
 function derivePlatformFamily(
@@ -149,6 +152,7 @@ export function buildSessionSnapshot(inputs: SessionSnapshotInputs): SessionSnap
       isXtream && typeof activeEntry?.liveContainer === "string"
         ? activeEntry.liveContainer
         : null,
+    androidNativePlayerEnabled: inputs.androidNativePlayerEnabled,
   }
 }
 
@@ -269,6 +273,7 @@ async function gatherInputs(): Promise<SessionSnapshotInputs> {
     locale: safeSync(() => getActiveLocale(), null),
     playlistCount: Array.isArray(entries) ? entries.length : null,
     activePlaylistEntry: activeEntry as SessionSnapshotPlaylistEntry | null,
+    androidNativePlayerEnabled: safeSync(() => getAndroidNativePlayerEnabled(), null),
   }
 }
 

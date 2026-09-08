@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "内置播放器无法读取此频道的流。通常在外部播放器（MPV/VLC）中仍可播放。",
   "stream.failure.connectionLimit": "你的提供商目前不允许再开一路串流。此账号上可能还有其他内容正在播放。",
   "stream.failure.offlinePlaceholder": "该频道目前在提供商处离线。",
+  "stream.native.lostTitle": "流已中断",
+  "stream.native.lostBody": "原生播放器无法重新连接到 {channel}。",
   "stream.audioFix.action": "修复音频",
   "stream.audioFix.fixing": "正在修复音频…",
   "stream.audioFix.fallback": "音频修复失败 - 已切换回原始流",

@@ -25,7 +25,7 @@ import {
   resolveLiveChannelCastDescriptor,
   resolvePlaylistCreds,
 } from "@/scripts/lib/tv-cast-live.js"
-import { getActiveDnsOverrideAsync } from "@/scripts/lib/creds.js"
+import { getActiveDnsOverrideAsync, getEntries, xtreamCandidatesFor } from "@/scripts/lib/creds.js"
 import { resolveCatchupCastDescriptor } from "@/scripts/lib/tv-cast-catchup.ts"
 import type { CatchupRequestChannel } from "@/scripts/lib/catchup-resolve.ts"
 import { buildMovieStreamUrl, buildSeriesStreamUrl, buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
@@ -659,13 +659,47 @@ async function resolveSiblingStreamUrl(channel: TvLiveChannel, creds: any | null
   return buildLiveStreamUrl(creds, String(channel.id), creds.liveContainer || null)
 }
 
-async function resolveSiblingChannel(channel: TvLiveChannel, creds: any | null): Promise<SiblingChannelInput> {
+// Every other xtream candidate for the same entry (mirrors + backup accounts), pinned one excluded.
+async function resolveBackupCreds(playlistId: string, creds: any | null): Promise<any[]> {
+  if (!creds?.host || !creds.user || !creds.pass) return []
+  const entries = await getEntries()
+  const entry = entries.find((candidate: any) => candidate?._id === playlistId)
+  if (!entry) return []
+  return xtreamCandidatesFor(entry).filter(
+    (candidate) => !(candidate.host === creds.host && candidate.user === creds.user && candidate.pass === creds.pass)
+  )
+}
+
+function buildSiblingBackupUrls(
+  channel: TvLiveChannel,
+  backupCreds: any[],
+  primaryStreamUrl: string | null,
+  creds: any | null
+): string[] {
+  if (channel.url || !backupCreds.length) return []
+  const seen = new Set<string>(primaryStreamUrl ? [primaryStreamUrl] : [])
+  const urls: string[] = []
+  for (const candidate of backupCreds) {
+    const url = buildLiveStreamUrl(candidate, String(channel.id), candidate.liveContainer || creds?.liveContainer || null)
+    if (seen.has(url)) continue
+    seen.add(url)
+    urls.push(url)
+  }
+  return urls
+}
+
+async function resolveSiblingChannel(
+  channel: TvLiveChannel,
+  creds: any | null,
+  backupCreds: any[]
+): Promise<SiblingChannelInput> {
   let streamUrl: string | null = null
   try {
     streamUrl = await resolveSiblingStreamUrl(channel, creds)
   } catch (err) {
     log.warn("[xt:tv-playback] sibling channel resolution failed:", channel.id, err)
   }
+  const backupUrls = buildSiblingBackupUrls(channel, backupCreds, streamUrl, creds)
   return {
     id: channel.id,
     name: channel.name || "",
@@ -675,6 +709,7 @@ async function resolveSiblingChannel(channel: TvLiveChannel, creds: any | null):
     referer: channel.referer ?? null,
     tvgId: channel.tvgId ?? null,
     tvgShift: channel.tvgShift ?? null,
+    ...(backupUrls.length ? { backupUrls } : {}),
   }
 }
 
@@ -734,7 +769,11 @@ export async function playLive(input: TvPlayLiveInput, events: TvPlaybackEvents 
     } else {
       const siblingCreds = await resolvePlaylistCreds(input.playlistId)
       if (isStalePlayAttempt(generation)) return false
-      siblingInputs = await Promise.all(input.siblings.map((sibling) => resolveSiblingChannel(sibling, siblingCreds)))
+      const backupCreds = await resolveBackupCreds(input.playlistId, siblingCreds)
+      if (isStalePlayAttempt(generation)) return false
+      siblingInputs = await Promise.all(
+        input.siblings.map((sibling) => resolveSiblingChannel(sibling, siblingCreds, backupCreds))
+      )
       siblingResolutionCache.set(cacheKey, { siblingsRef: input.siblings, resolved: siblingInputs })
     }
     if (isStalePlayAttempt(generation)) return false

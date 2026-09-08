@@ -26,6 +26,25 @@ describe("serializeChannelsForActivity", () => {
     expect(out[0].ua).toBe("")
     expect(out[0].referer).toBe("")
     expect(out[0].nowProgramme).toBe("")
+    expect(out[0].backupUrls).toEqual([])
+  })
+
+  it("dedupes backupUrls and drops the primary streamUrl", () => {
+    const out = serializeChannelsForActivity([
+      {
+        id: 1,
+        name: "A",
+        streamUrl: "https://x/primary.m3u8",
+        backupUrls: [
+          "https://x/mirror1.m3u8",
+          "https://x/primary.m3u8",
+          "https://x/mirror1.m3u8",
+          "",
+          "https://x/mirror2.m3u8",
+        ],
+      },
+    ])
+    expect(out[0].backupUrls).toEqual(["https://x/mirror1.m3u8", "https://x/mirror2.m3u8"])
   })
 
   it("applies defaultUa when channel has none", () => {

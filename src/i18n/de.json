@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "Der integrierte Player konnte den Stream dieses Senders nicht lesen. Meist läuft er trotzdem in einem externen Player (MPV/VLC).",
   "stream.failure.connectionLimit": "Dein Anbieter erlaubt derzeit keinen weiteren Stream. Möglicherweise läuft mit diesem Konto noch etwas anderes.",
   "stream.failure.offlinePlaceholder": "Dieser Sender ist beim Anbieter derzeit offline.",
+  "stream.native.lostTitle": "Stream verloren",
+  "stream.native.lostBody": "Der native Player konnte keine Verbindung zu {channel} wiederherstellen.",
   "stream.audioFix.action": "Ton reparieren",
   "stream.audioFix.fixing": "Ton wird repariert…",
   "stream.audioFix.fallback": "Ton-Reparatur fehlgeschlagen - zurück zum Original-Stream gewechselt",

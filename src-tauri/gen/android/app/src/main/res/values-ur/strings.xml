@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">چینلز</string>
     <string name="native_player_unsupported_stream">یہ چینل نیٹو پلیئر میں نہیں چل سکتا</string>
+    <string name="native_player_backup_server">بیک اپ سرور کے ذریعے دوبارہ رابطہ قائم کیا جا رہا ہے…</string>
+    <string name="native_player_stream_lost">اسٹریم منقطع ہوگئی - دوبارہ رابطہ قائم نہیں ہو سکا</string>
     <string name="xt_video_settings_title">پلیئر کی ترتیبات</string>
     <string name="xt_video_display_mode">ڈسپلے موڈ</string>
     <string name="xt_video_display_fit">فٹ</string>

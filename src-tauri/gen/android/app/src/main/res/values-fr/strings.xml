@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">Chaînes</string>
     <string name="native_player_unsupported_stream">Impossible de lire cette chaîne dans le lecteur natif</string>
+    <string name="native_player_backup_server">Reconnexion via le serveur de secours…</string>
+    <string name="native_player_stream_lost">Flux perdu - impossible de se reconnecter</string>
     <string name="xt_video_settings_title">Paramètres du lecteur</string>
     <string name="xt_video_display_mode">Mode d\'affichage</string>
     <string name="xt_video_display_fit">Ajuster</string>

@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">Каналы</string>
     <string name="native_player_unsupported_stream">Не удалось воспроизвести этот канал в нативном плеере</string>
+    <string name="native_player_backup_server">Повторное подключение через резервный сервер…</string>
+    <string name="native_player_stream_lost">Поток потерян - не удалось переподключиться</string>
     <string name="xt_video_settings_title">Настройки плеера</string>
     <string name="xt_video_display_mode">Режим отображения</string>
     <string name="xt_video_display_fit">По размеру</string>

@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">القنوات</string>
     <string name="native_player_unsupported_stream">تعذّر تشغيل هذه القناة في المشغّل الأصلي</string>
+    <string name="native_player_backup_server">جارٍ إعادة الاتصال عبر خادم احتياطي…</string>
+    <string name="native_player_stream_lost">انقطع البث - تعذّرت إعادة الاتصال</string>
     <string name="xt_video_settings_title">إعدادات المشغّل</string>
     <string name="xt_video_display_mode">وضع العرض</string>
     <string name="xt_video_display_fit">احتواء</string>

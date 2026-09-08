@@ -41,6 +41,7 @@ const BASE_INPUTS: SessionSnapshotInputs = {
     mirrors: [{ serverUrl: "http://mirror.test", username: "bob", password: "hunter2" }],
     liveContainer: "ts",
   },
+  androidNativePlayerEnabled: false,
 }
 
 describe("buildSessionSnapshot", () => {
@@ -52,6 +53,11 @@ describe("buildSessionSnapshot", () => {
     expect(snapshot.activePlaylistType).toBe("xtream")
     expect(snapshot.activePlaylistMirrorsConfigured).toBe(true)
     expect(snapshot.activePlaylistLiveContainer).toBe("ts")
+  })
+
+  it("passes androidNativePlayerEnabled through", () => {
+    const snapshot = buildSessionSnapshot({ ...BASE_INPUTS, androidNativePlayerEnabled: true })
+    expect(snapshot.androidNativePlayerEnabled).toBe(true)
   })
 
   it("builds a macOS snapshot", () => {
@@ -116,6 +122,7 @@ describe("buildSessionSnapshot", () => {
       locale: null,
       playlistCount: null,
       activePlaylistEntry: null,
+      androidNativePlayerEnabled: null,
     }
     let snapshot: ReturnType<typeof buildSessionSnapshot> | null = null
     expect(() => {

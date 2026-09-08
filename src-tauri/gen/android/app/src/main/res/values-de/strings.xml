@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">Sender</string>
     <string name="native_player_unsupported_stream">Dieser Sender kann im nativen Player nicht wiedergegeben werden</string>
+    <string name="native_player_backup_server">Verbindung über Backup-Server wird wiederhergestellt…</string>
+    <string name="native_player_stream_lost">Stream verloren - Verbindung konnte nicht wiederhergestellt werden</string>
     <string name="xt_video_settings_title">Player-Einstellungen</string>
     <string name="xt_video_display_mode">Anzeigemodus</string>
     <string name="xt_video_display_fit">Anpassen</string>

@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "Pemutar bawaan tidak dapat membaca stream saluran ini. Biasanya tetap dapat diputar di pemutar eksternal (MPV/VLC).",
   "stream.failure.connectionLimit": "Penyedia Anda tidak mengizinkan streaming lain saat ini. Mungkin masih ada yang diputar di akun ini.",
   "stream.failure.offlinePlaceholder": "Saluran ini sedang offline di penyedia.",
+  "stream.native.lostTitle": "Streaming terputus",
+  "stream.native.lostBody": "Pemutar native tidak dapat menyambung kembali ke {channel}.",
   "stream.audioFix.action": "Perbaiki audio",
   "stream.audioFix.fixing": "Memperbaiki audio…",
   "stream.audioFix.fallback": "Perbaikan audio gagal - beralih kembali ke stream asli",

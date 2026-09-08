@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "Yerleşik oynatıcı bu kanalın akışını okuyamadı. Genellikle harici bir oynatıcıda (MPV/VLC) yine de oynar.",
   "stream.failure.connectionLimit": "Sağlayıcınız şu anda başka bir akışa izin vermiyor. Bu hesapta başka bir şey oynatılıyor olabilir.",
   "stream.failure.offlinePlaceholder": "Bu kanal şu anda sağlayıcıda çevrimdışı.",
+  "stream.native.lostTitle": "Yayın kayboldu",
+  "stream.native.lostBody": "Yerel oynatıcı {channel} ile yeniden bağlantı kuramadı.",
   "stream.audioFix.action": "Sesi düzelt",
   "stream.audioFix.fixing": "Ses düzeltiliyor…",
   "stream.audioFix.fallback": "Ses düzeltme başarısız - orijinal yayına geri dönüldü",

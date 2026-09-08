@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "内蔵プレーヤーはこのチャンネルのストリームを読み込めませんでした。外部プレーヤー（MPV/VLC）では再生できることがほとんどです。",
   "stream.failure.connectionLimit": "プロバイダーが現在これ以上のストリームを許可していません。このアカウントで他の再生が続いている可能性があります。",
   "stream.failure.offlinePlaceholder": "このチャンネルは現在プロバイダー側でオフラインです。",
+  "stream.native.lostTitle": "ストリームが失われました",
+  "stream.native.lostBody": "ネイティブプレイヤーは{channel}に再接続できませんでした。",
   "stream.audioFix.action": "音声を修正",
   "stream.audioFix.fixing": "音声を修正中…",
   "stream.audioFix.fallback": "音声の修正に失敗しました - 元のストリームに戻しました",

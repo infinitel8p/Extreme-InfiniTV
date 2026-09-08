@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">チャンネル</string>
     <string name="native_player_unsupported_stream">このチャンネルはネイティブプレーヤーで再生できません</string>
+    <string name="native_player_backup_server">バックアップサーバー経由で再接続しています…</string>
+    <string name="native_player_stream_lost">ストリームが切断されました - 再接続できません</string>
     <string name="xt_video_settings_title">プレーヤー設定</string>
     <string name="xt_video_display_mode">表示モード</string>
     <string name="xt_video_display_fit">フィット</string>

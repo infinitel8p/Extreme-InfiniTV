@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "بلٹ ان پلیئر اس چینل کی سٹریم نہیں پڑھ سکا۔ یہ عام طور پر بیرونی پلیئر (MPV/VLC) میں پھر بھی چلتا ہے۔",
   "stream.failure.connectionLimit": "آپ کا مہیا کنندہ اِس وقت ایک اور اسٹریم کی اجازت نہیں دے رہا۔ اس اکاؤنٹ پر کچھ اور بھی چل رہا ہو سکتا ہے۔",
   "stream.failure.offlinePlaceholder": "یہ چینل اس وقت مہیا کنندہ کے ہاں آف لائن ہے۔",
+  "stream.native.lostTitle": "اسٹریم ختم ہو گئی",
+  "stream.native.lostBody": "نیٹو پلیئر {channel} سے دوبارہ رابطہ نہیں کر سکا۔",
   "stream.audioFix.action": "آڈیو ٹھیک کریں",
   "stream.audioFix.fixing": "آڈیو ٹھیک ہو رہا ہے…",
   "stream.audioFix.fallback": "آڈیو ٹھیک کرنا ناکام ہوا - اصل اسٹریم پر واپس چلا گیا",

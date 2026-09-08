@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "Встроенный плеер не смог прочитать поток этого канала. Обычно он всё же воспроизводится во внешнем плеере (MPV/VLC).",
   "stream.failure.connectionLimit": "Провайдер сейчас не разрешает ещё один поток. Возможно, на этом аккаунте что-то ещё воспроизводится.",
   "stream.failure.offlinePlaceholder": "Этот канал сейчас недоступен у провайдера.",
+  "stream.native.lostTitle": "Поток потерян",
+  "stream.native.lostBody": "Нативный плеер не смог переподключиться к {channel}.",
   "stream.audioFix.action": "Исправить звук",
   "stream.audioFix.fixing": "Исправление звука…",
   "stream.audioFix.fallback": "Не удалось исправить звук - возврат к исходному потоку",

@@ -946,6 +946,8 @@
   "stream.failure.parseFailed": "De ingebouwde speler kon de stream van dit kanaal niet lezen. Meestal werkt het wel in een externe speler (MPV/VLC).",
   "stream.failure.connectionLimit": "Je provider staat op dit moment geen extra stream toe. Mogelijk speelt er nog iets anders op dit account.",
   "stream.failure.offlinePlaceholder": "Deze zender is momenteel offline bij de provider.",
+  "stream.native.lostTitle": "Stream verloren",
+  "stream.native.lostBody": "De native speler kon geen verbinding maken met {channel}.",
   "stream.audioFix.action": "Audio herstellen",
   "stream.audioFix.fixing": "Audio herstellen…",
   "stream.audioFix.fallback": "Audio herstellen mislukt - teruggeschakeld naar de originele stream",

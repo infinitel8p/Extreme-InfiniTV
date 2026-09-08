@@ -2,6 +2,8 @@
 <resources>
     <string name="xt_channels_title">Kanalen</string>
     <string name="native_player_unsupported_stream">Kan dit kanaal niet afspelen in de native speler</string>
+    <string name="native_player_backup_server">Opnieuw verbinden via back-upserver…</string>
+    <string name="native_player_stream_lost">Stream verloren - opnieuw verbinden mislukt</string>
     <string name="xt_video_settings_title">Spelerinstellingen</string>
     <string name="xt_video_display_mode">Weergavemodus</string>
     <string name="xt_video_display_fit">Passend</string>
