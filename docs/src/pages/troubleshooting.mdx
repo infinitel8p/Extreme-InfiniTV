@@ -80,6 +80,24 @@ Some channels use the HEVC (H.265) codec, which not every device can decode:
 - **Windows**: the app detects the missing codec and offers a one-click install of Microsoft's **HEVC Video Extensions** (a small download; the Microsoft Store build deep-links to the Store instead). Restart playback after the install finishes.
 - **Other platforms**: if the device can't decode HEVC in the app, hand the stream off to an external player - see [External players](./external-players/). Channels the app knows are HEVC show an **HEVC** badge in the Live TV list, and **Test stream** reports when HEVC support is the problem.
 
+## The app looks unstyled or buttons don't react (old Android System WebView)
+
+Symptom: the app loads but shows plain browser-default HTML instead of its normal look - for example the receiver screen renders as a giant QR code next to a grey "Exit receiver" button that does nothing when pressed.
+
+Cause: the device's Android System WebView is older than Chromium 111, the oldest engine version the app's CSS and scripts support.
+
+To check your version: **Settings > Apps > Show system apps > Android System WebView** - anything below `111` is too old.
+
+The app detects this on launch and shows a dialog with **Get WebView Beta**, **Developer options**, and **Continue anyway**. Other platforms show an inline banner instead.
+
+Fix, especially on Android TV boxes (Ugoos and similar) where Play hides the stable WebView update and there's often no OTA:
+
+1. Install [Android System WebView Beta](https://play.google.com/store/apps/details?id=com.google.android.webview.beta) from the Play Store.
+2. Enable Developer options - on Android TV, go to **Settings > Device Preferences > About** and tap **Build** 7 times.
+3. Go to **Settings > Developer options > WebView implementation** and pick the Beta.
+
+The current WebView package and version are also written to the log's session banner and included in **Settings > Help > Export diagnostics**, useful when confirming the fix or attaching to a bug report.
+
 ## Switched to "mpv (embedded)" but nothing plays
 
 This Windows-only player ships bundled with the app, so there's normally nothing to install.

@@ -15,6 +15,10 @@ import Steps from "../components/Steps.astro"
 
 In receiver mode, the TV sits on an idle screen showing an address and a 6-digit pair code. You do the browsing, searching, and typing on your phone or computer, then choose **Play on TV** and pick that TV. Playback starts there, with transport controls (play/pause, seek, volume) working from the sender.
 
+<Callout type="note">
+  Requires Android 8.0 or newer with Android System WebView 111 or newer. If the receiver or TV browse screen shows unstyled HTML, see [old Android System WebView](./troubleshooting/#the-app-looks-unstyled-or-buttons-dont-react-old-android-system-webview).
+</Callout>
+
 ## The dedicated TV build (kiosk)
 
 The dedicated TV build - what you get from the Google Play listing for Android TV, or the sideloadable `Extreme-InfiniTV-receiver.apk` from [GitHub Releases](https://github.com/infinitel8p/Extreme-InfiniTV/releases/latest) - boots straight into the pairing screen and doesn't include the browse UI at all. There's no exit button, and the back key doesn't leave the receiver screen. That's intentional: this build only does one job.

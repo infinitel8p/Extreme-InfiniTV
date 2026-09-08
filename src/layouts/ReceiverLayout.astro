@@ -1,6 +1,7 @@
 ---
 import TitleBar from "@/components/TitleBar.astro"
 import WindowResizeEdges from "@/components/WindowResizeEdges.astro"
+import WebViewFloorNotice from "@/components/WebViewFloorNotice.astro"
 import "../styles/global.css"
 
 interface Props {
@@ -48,6 +49,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
       try {
         // Video-first surface: always dark
         document.documentElement.style.colorScheme = "dark";
+        document.documentElement.setAttribute("data-theme", "dark");
 
         var fontScale = parseFloat(localStorage.getItem("xt_font_scale") || "1");
         if (!isFinite(fontScale) || fontScale < 0.75 || fontScale > 2) fontScale = 1;
@@ -143,6 +145,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         }
       } catch (e) {}
     </script>
+    <WebViewFloorNotice />
   </head>
 
   <body class="antialiased bg-bg text-fg h-dvh overflow-hidden">

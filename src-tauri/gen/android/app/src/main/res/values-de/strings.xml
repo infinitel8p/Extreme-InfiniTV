@@ -11,4 +11,9 @@
     <string name="xt_video_display_stretch">Strecken</string>
     <string name="xt_video_playback_speed">Wiedergabegeschwindigkeit</string>
     <string name="xt_video_speed_normal">Normal</string>
+    <string name="webview_floor_title">Android System WebView aktualisieren</string>
+    <string name="webview_floor_message">Extreme InfiniTV benötigt Android System WebView %1$d oder neuer. Dieses Gerät hat Version %2$s, daher können Seiten unformatiert erscheinen oder nicht reagieren.\n\nAuf Android TV blendet der Play Store das reguläre WebView-Update aus. Installiere \"Android System WebView Beta\" aus dem Play Store, aktiviere dann die Entwickleroptionen und wähle es unter \"WebView implementation\" aus.</string>
+    <string name="webview_floor_get_beta">WebView Beta laden</string>
+    <string name="webview_floor_developer_options">Entwickleroptionen</string>
+    <string name="webview_floor_continue">Trotzdem fortfahren</string>
 </resources>

@@ -121,9 +121,16 @@ function accentLabelKey(accent: string): string {
 // Mirrors settings.astro's commitTheme(), minus the view-transition sweep.
 function applyTheme(theme: string): void {
   const root = document.documentElement
-  if (theme === "light") root.style.colorScheme = "light"
-  else if (theme === "dark") root.style.colorScheme = "dark"
-  else root.style.colorScheme = ""
+  if (theme === "light") {
+    root.style.colorScheme = "light"
+    root.setAttribute("data-theme", "light")
+  } else if (theme === "dark") {
+    root.style.colorScheme = "dark"
+    root.setAttribute("data-theme", "dark")
+  } else {
+    root.style.colorScheme = ""
+    root.removeAttribute("data-theme")
+  }
   try {
     localStorage.setItem(THEME_KEY, theme)
   } catch {}

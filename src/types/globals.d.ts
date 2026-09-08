@@ -76,6 +76,8 @@ interface AndroidIntentBridge {
 interface AndroidDeviceInfoBridge {
   isTv?: () => boolean
   getMemoryClass?: () => number
+  getWebViewPackageName?: () => string | null
+  getWebViewVersionName?: () => string | null
 }
 
 interface AndroidImeBridge {

@@ -11,4 +11,9 @@
     <string name="xt_video_display_stretch">引き伸ばし</string>
     <string name="xt_video_playback_speed">再生速度</string>
     <string name="xt_video_speed_normal">標準</string>
+    <string name="webview_floor_title">Android System WebView を更新してください</string>
+    <string name="webview_floor_message">Extreme InfiniTV には Android System WebView %1$d 以降が必要です。この端末のバージョンは %2$s のため、ページがスタイルなしで表示されたり反応しなかったりする場合があります。\n\nAndroid TV では、Play ストアが通常の WebView 更新を非表示にしています。Play ストアから \"Android System WebView Beta\" をインストールし、開発者向けオプションを有効にして \"WebView implementation\" でそれを選んでください。</string>
+    <string name="webview_floor_get_beta">WebView Beta を取得</string>
+    <string name="webview_floor_developer_options">開発者向けオプション</string>
+    <string name="webview_floor_continue">このまま続ける</string>
 </resources>

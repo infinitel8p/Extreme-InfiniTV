@@ -6,6 +6,7 @@ import { getNetworkLog } from "@/scripts/lib/net-log.js"
 import { redactUrl } from "@/scripts/lib/log.js"
 import { getEntries, getActiveEntry } from "@/scripts/lib/creds.js"
 import { sanitizeFilename, fmtBytes } from "@/scripts/lib/format.js"
+import { MIN_CHROMIUM_MAJOR } from "@/scripts/lib/webview-floor.js"
 
 type UnknownRecord = Record<string, unknown>
 
@@ -117,6 +118,11 @@ export function sanitizeDeviceNameForFilename(deviceName: string, host: string):
   return cleanedHost || "device"
 }
 
+export function belowChromiumFloorNote(snapshot: unknown): string | null {
+  if (!isRecord(snapshot) || snapshot.belowChromiumFloor !== true) return null
+  return `Engine below the supported floor: this device's browser engine is older than the minimum supported Chromium ${MIN_CHROMIUM_MAJOR}.`
+}
+
 function buildReadme(input: BundleInput): string {
   const lines = [
     "Extreme InfiniTV diagnostic bundle",
@@ -129,11 +135,15 @@ function buildReadme(input: BundleInput): string {
     "",
     `Created: ${input.createdAt.toISOString()}`,
     "",
+  ]
+  const chromiumFloorNote = belowChromiumFloorNote(input.snapshot)
+  if (chromiumFloorNote) lines.push(chromiumFloorNote, "")
+  lines.push(
     "Files included:",
     "- snapshot.json: app version, platform, and playback capability flags.",
     "- network-log.json: recent provider network requests, redacted.",
     "- playlist-summary.json: playlist types and counts, no hosts or credentials.",
-  ]
+  )
   if (input.diagnosticResult != null) {
     lines.push("- diagnostic-result.json: the most recent connection diagnostic run.")
   }

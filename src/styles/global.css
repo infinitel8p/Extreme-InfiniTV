@@ -111,6 +111,14 @@ html.xt-theme-switching::view-transition-new(root) {
     color-scheme: light dark;
 }
 
+/* Forced theme; light-dark() polyfill keys off color-scheme */
+html[data-theme="light"] {
+    color-scheme: light;
+}
+html[data-theme="dark"] {
+    color-scheme: dark;
+}
+
 @theme {
     --breakpoint-sm: 40em;      /* 640px */
     --breakpoint-md: 48em;      /* 768px */

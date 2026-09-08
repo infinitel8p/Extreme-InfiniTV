@@ -11,6 +11,7 @@ import {
   IconCast,
 } from "@tabler/icons-svelte"
 import pkg from "../../package.json"
+import WebViewFloorNotice from "@/components/WebViewFloorNotice.astro"
 import { CLASSIC_ROUTE_TABLE, tvNavActiveHref } from "@/scripts/lib/tv-routes"
 import "@/styles/global.css"
 import "@/styles/tv.css"
@@ -159,9 +160,13 @@ const navItems = [
 
         try {
           var storedThemeRaw = localStorage.getItem("xt_theme")
-          if (storedThemeRaw === null) document.documentElement.style.colorScheme = "dark"
-          else if (storedThemeRaw === "light") document.documentElement.style.colorScheme = "light"
-          else if (storedThemeRaw === "dark") document.documentElement.style.colorScheme = "dark"
+          if (storedThemeRaw === null || storedThemeRaw === "dark") {
+            document.documentElement.style.colorScheme = "dark"
+            document.documentElement.setAttribute("data-theme", "dark")
+          } else if (storedThemeRaw === "light") {
+            document.documentElement.style.colorScheme = "light"
+            document.documentElement.setAttribute("data-theme", "light")
+          }
         } catch (e) {}
 
         try {
@@ -235,6 +240,7 @@ const navItems = [
         } catch (e) {}
       })()
     </script>
+    <WebViewFloorNotice />
   </head>
 
   <body class="bg-bg text-fg h-dvh overflow-hidden">

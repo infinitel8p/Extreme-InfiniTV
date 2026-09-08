@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest"
 import {
   buildSessionSnapshot,
+  resolveChromiumMajor,
   type SessionSnapshotInputs,
 } from "../src/scripts/lib/diagnostic-snapshot"
+import { parseChromiumMajor, isBelowChromiumFloor } from "../src/scripts/lib/webview-floor"
 
 // Baseline inputs representing every field resolved successfully; individual
 // tests override only what they care about.
@@ -42,7 +44,29 @@ const BASE_INPUTS: SessionSnapshotInputs = {
     liveContainer: "ts",
   },
   androidNativePlayerEnabled: false,
+  chromiumMajor: 120,
+  belowChromiumFloor: false,
+  webViewPackage: null,
+  webViewVersion: null,
 }
+
+describe("resolveChromiumMajor", () => {
+  it("prefers the WebView bridge version over the user agent", () => {
+    const userAgent =
+      "Mozilla/5.0 (Linux; Android 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.106 Safari/537.36"
+    expect(resolveChromiumMajor("130.0.6723.107", userAgent)).toBe(130)
+  })
+
+  it("falls back to the user agent when no bridge version is given", () => {
+    const userAgent =
+      "Mozilla/5.0 (Linux; Android 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.106 Safari/537.36"
+    expect(resolveChromiumMajor(null, userAgent)).toBe(83)
+  })
+
+  it("returns null when both the bridge version and the user agent are absent", () => {
+    expect(resolveChromiumMajor(null, null)).toBeNull()
+  })
+})
 
 describe("buildSessionSnapshot", () => {
   it("builds a Windows Tauri desktop snapshot", () => {
@@ -123,6 +147,10 @@ describe("buildSessionSnapshot", () => {
       playlistCount: null,
       activePlaylistEntry: null,
       androidNativePlayerEnabled: null,
+      chromiumMajor: null,
+      belowChromiumFloor: false,
+      webViewPackage: null,
+      webViewVersion: null,
     }
     let snapshot: ReturnType<typeof buildSessionSnapshot> | null = null
     expect(() => {
@@ -168,5 +196,58 @@ describe("buildSessionSnapshot", () => {
     // The only xtream fields that do surface are the boolean/enum shape, not the values above.
     expect(snapshot.activePlaylistMirrorsConfigured).toBe(true)
     expect(snapshot.activePlaylistLiveContainer).toBe("m3u8")
+  })
+
+  it("flags an Android WebView below the Chromium floor", () => {
+    const userAgent =
+      "Mozilla/5.0 (Linux; Android 9; SHIELD Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/83.0.4103.106 Safari/537.36"
+    const snapshot = buildSessionSnapshot({
+      ...BASE_INPUTS,
+      userAgent,
+      chromiumMajor: parseChromiumMajor(userAgent),
+      belowChromiumFloor: isBelowChromiumFloor(userAgent),
+    })
+    expect(snapshot.chromiumMajor).toBe(83)
+    expect(snapshot.belowChromiumFloor).toBe(true)
+  })
+
+  it("does not flag a modern Chromium engine", () => {
+    const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+    const snapshot = buildSessionSnapshot({
+      ...BASE_INPUTS,
+      userAgent,
+      chromiumMajor: parseChromiumMajor(userAgent),
+      belowChromiumFloor: isBelowChromiumFloor(userAgent),
+    })
+    expect(snapshot.chromiumMajor).toBe(120)
+    expect(snapshot.belowChromiumFloor).toBe(false)
+  })
+
+  it("reports no Chromium version on a non-Chromium engine", () => {
+    const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"
+    const snapshot = buildSessionSnapshot({
+      ...BASE_INPUTS,
+      userAgent,
+      chromiumMajor: parseChromiumMajor(userAgent),
+      belowChromiumFloor: isBelowChromiumFloor(userAgent),
+    })
+    expect(snapshot.chromiumMajor).toBeNull()
+    expect(snapshot.belowChromiumFloor).toBe(false)
+  })
+
+  it("carries the Android WebView package/version through when the bridge reports them", () => {
+    const snapshot = buildSessionSnapshot({
+      ...BASE_INPUTS,
+      webViewPackage: "com.google.android.webview",
+      webViewVersion: "83.0.4103.106",
+    })
+    expect(snapshot.webViewPackage).toBe("com.google.android.webview")
+    expect(snapshot.webViewVersion).toBe("83.0.4103.106")
+  })
+
+  it("leaves the WebView package/version null when the bridge is absent", () => {
+    const snapshot = buildSessionSnapshot(BASE_INPUTS)
+    expect(snapshot.webViewPackage).toBeNull()
+    expect(snapshot.webViewVersion).toBeNull()
   })
 })

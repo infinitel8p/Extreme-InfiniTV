@@ -3580,9 +3580,16 @@ const navStructure: NavSection[] = [
       }
     }
     function commitTheme(t) {
-      if (t === "light") document.documentElement.style.colorScheme = "light"
-      else if (t === "dark") document.documentElement.style.colorScheme = "dark"
-      else document.documentElement.style.colorScheme = ""
+      if (t === "light") {
+        document.documentElement.style.colorScheme = "light"
+        document.documentElement.setAttribute("data-theme", "light")
+      } else if (t === "dark") {
+        document.documentElement.style.colorScheme = "dark"
+        document.documentElement.setAttribute("data-theme", "dark")
+      } else {
+        document.documentElement.style.colorScheme = ""
+        document.documentElement.removeAttribute("data-theme")
+      }
       try {
         localStorage.setItem("xt_theme", t)
       } catch {}

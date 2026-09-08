@@ -9,6 +9,7 @@ import {
   allocateLogTailBudget,
   withTimeout,
   sanitizeDeviceNameForFilename,
+  belowChromiumFloorNote,
   LOG_FILE_NAME_PATTERN,
   type BundleInput,
   type PlaylistSummary,
@@ -271,6 +272,20 @@ describe("buildBundleManifest", () => {
     const manifest = buildBundleManifest(baseBundleInput())
     const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
     expect(readme).not.toContain("diagnostic-result.json")
+  })
+
+  it("notes an out-of-support browser engine in the README when the snapshot flags it", () => {
+    const manifest = buildBundleManifest(
+      baseBundleInput({ snapshot: { appVersion: "1.9.0", belowChromiumFloor: true } })
+    )
+    const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
+    expect(readme).toContain("below the supported floor")
+  })
+
+  it("omits the browser engine note when the snapshot doesn't flag it", () => {
+    const manifest = buildBundleManifest(baseBundleInput())
+    const readme = manifest.find((file) => file.name === "README.txt")?.text ?? ""
+    expect(readme).not.toContain("below the supported floor")
   })
 
   it("adds a receiver-logs entry for a fetched device", () => {
@@ -603,5 +618,20 @@ describe("LOG_FILE_NAME_PATTERN", () => {
     expect(LOG_FILE_NAME_PATTERN.test("../mpv-embed.log")).toBe(false)
     expect(LOG_FILE_NAME_PATTERN.test("sub/mpv-embed.log")).toBe(false)
     expect(LOG_FILE_NAME_PATTERN.test("mpv-embed.txt")).toBe(false)
+  })
+})
+
+describe("belowChromiumFloorNote", () => {
+  it("returns null when the snapshot doesn't flag the engine", () => {
+    expect(belowChromiumFloorNote({ belowChromiumFloor: false })).toBeNull()
+    expect(belowChromiumFloorNote({})).toBeNull()
+    expect(belowChromiumFloorNote(null)).toBeNull()
+    expect(belowChromiumFloorNote("not-an-object")).toBeNull()
+  })
+
+  it("returns a note mentioning the Chromium floor when flagged", () => {
+    const note = belowChromiumFloorNote({ belowChromiumFloor: true })
+    expect(note).toContain("below the supported floor")
+    expect(note).toContain("111")
   })
 })

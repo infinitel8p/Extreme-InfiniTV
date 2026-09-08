@@ -3,6 +3,7 @@ import Sidebar from "@/components/Sidebar.astro"
 import TitleBar from "@/components/TitleBar.astro"
 import WindowResizeEdges from "@/components/WindowResizeEdges.astro"
 import CatalogWarmingIndicator from "@/components/CatalogWarmingIndicator.svelte"
+import WebViewFloorNotice from "@/components/WebViewFloorNotice.astro"
 import pkg from "../../package.json"
 import { TV_ROUTE_TABLE } from "@/scripts/lib/tv-routes"
 import "../styles/global.css"
@@ -233,8 +234,13 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         }
 
         var currentTheme = localStorage.getItem("xt_theme") || "system";
-        if (currentTheme === "light") document.documentElement.style.colorScheme = "light";
-        else if (currentTheme === "dark") document.documentElement.style.colorScheme = "dark";
+        if (currentTheme === "light") {
+          document.documentElement.style.colorScheme = "light";
+          document.documentElement.setAttribute("data-theme", "light");
+        } else if (currentTheme === "dark") {
+          document.documentElement.style.colorScheme = "dark";
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
 
         var KNOWN_ACCENTS = ["fuchsia", "rose", "ember", "emerald", "cyan", "blue", "violet", "gold", "lime", "teal", "silver", "white"];
         var storedAccent = localStorage.getItem("xt_accent") || "";
@@ -278,6 +284,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         window.__applyAndroidStatusBar = applyAndroidStatusBar;
       } catch (e) {}
     </script>
+    <WebViewFloorNotice />
     <script is:inline define:vars={{ tvRouteTable: TV_ROUTE_TABLE, appMode }}>
       try {
         if (!window.__xtReceiverBooting && appMode !== "receiver" && document.documentElement.dataset.tv === "1") {
