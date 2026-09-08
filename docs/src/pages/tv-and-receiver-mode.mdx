@@ -50,6 +50,18 @@ On this install, receiver mode itself and whether it starts on boot are both tog
   These two toggles only appear on the mobile build. The dedicated TV build has no Settings screen to toggle them from - it's always on.
 </Callout>
 
+## Choosing the interface
+
+The TV browse UI isn't only for actual TVs. **Settings > Display > Interface** (in the TV browse UI itself: **Settings > Interface**, shown only on devices that aren't real Android TVs) picks which interface runs, regardless of the device:
+
+- **Auto** (default) - follows device detection, same as before.
+- **TV** - forces this TV browse UI on a PC, laptop, tablet, or phone. Useful for projectors, HTPCs, or anyone driving the app with a remote, keyboard, or mouse from the couch.
+- **Desktop** - forces the classic UI, for a device detection wrongly flagged as a TV.
+
+Real Android TV and Fire TV devices always get the TV browse UI, so the setting doesn't appear there. The dedicated receiver kiosk build is unaffected either way.
+
+In TV mode on a desktop, mouse and keyboard both work: the wheel moves focus one row or card at a time (no free scrolling), clicking activates cards and rows, hovering the left rail shows its labels, and playback runs through the same player backend as the classic app - including the embedded mpv engine on Windows, if that's selected in Settings.
+
 ## Switching between the two builds
 
 The receiver build carries a higher internal version number than the mobile build. Installing receiver over mobile works as a normal update, but going the other way - receiver back to mobile - needs an uninstall first, since Android won't let a lower version number install over a higher one.

@@ -13,7 +13,7 @@ import type { CastDescriptorV1 } from "../src/scripts/lib/tv-cast-descriptor"
 
 vi.mock("@/scripts/lib/i18n.js", () => ({ t: (key: string) => key }))
 
-type MountResult = { kind: "embedded"; handle: FakeEmbeddedHandle } | null
+type MountResult = { kind: "embedded"; handle: FakeEmbeddedHandle; backend?: string } | null
 let pendingMount: { resolve: (result: MountResult) => void } | null = null
 let requestedMountBackend: string | null = null
 
@@ -295,6 +295,35 @@ describe("createEmbeddedReceiverEngine backend downgrade", () => {
   })
 })
 
+describe("createEmbeddedReceiverEngine backend reuse", () => {
+  beforeEach(() => {
+    pendingMount = null
+    requestedMountBackend = null
+    mockPlayerBackend = "artplayer"
+  })
+
+  it("reuses the mounted player when the requested backend is unchanged, even if mountPlayer resolved a different backend", async () => {
+    const dom = embeddedDom(fakeElement())
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+
+    const firstPlay = engine.play(liveDescriptor("A"))
+    await Promise.resolve()
+    expect(requestedMountBackend).toBe("artplayer")
+    const handle = new FakeEmbeddedHandle()
+    // Simulates Android's artplayer -> videojs resolution inside mountPlayer.
+    takePendingMountResolve()({ kind: "embedded", handle, backend: "videojs" })
+    expect(await firstPlay).toBe(true)
+
+    requestedMountBackend = null
+    const secondPlay = engine.play(liveDescriptor("B"))
+    expect(await secondPlay).toBe(true)
+
+    expect(requestedMountBackend).toBeNull()
+    expect(pendingMount).toBeNull()
+    expect(handle.srcCalls).toHaveLength(2)
+  })
+})
+
 describe("createEmbeddedReceiverEngine play() staleness", () => {
   beforeEach(() => {
     pendingMount = null
@@ -320,28 +349,26 @@ describe("createEmbeddedReceiverEngine play() staleness", () => {
     expect(playerViewEl.classList.contains("hidden")).toBe(true)
   })
 
-  it("does not resume a play() that was superseded by a second play() during its mount", async () => {
+  it("does not resume a play() that was superseded by a second play() during its mount, and does not mount twice", async () => {
     const playerViewEl = fakeElement()
     const dom = embeddedDom(playerViewEl)
     const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
 
     const firstPlay = engine.play(liveDescriptor("A"))
     await Promise.resolve()
-    const resolveFirstMount = takePendingMountResolve()
+    const resolveMount = takePendingMountResolve()
 
     const secondPlay = engine.play(liveDescriptor("B"))
     await Promise.resolve()
-    const resolveSecondMount = takePendingMountResolve()
 
-    const firstHandle = new FakeEmbeddedHandle()
-    resolveFirstMount({ kind: "embedded", handle: firstHandle })
+    const handle = new FakeEmbeddedHandle()
+    resolveMount({ kind: "embedded", handle, backend: "artplayer" })
     expect(await firstPlay).toBe(false)
-    expect(firstHandle.srcCalls).toHaveLength(0)
+    expect(handle.srcCalls).toHaveLength(0)
 
-    const secondHandle = new FakeEmbeddedHandle()
-    resolveSecondMount({ kind: "embedded", handle: secondHandle })
     expect(await secondPlay).toBe(true)
-    expect(secondHandle.srcCalls).toHaveLength(1)
+    expect(handle.srcCalls).toHaveLength(1)
+    expect(pendingMount).toBeNull()
   })
 })
 

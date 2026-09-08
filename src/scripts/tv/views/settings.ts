@@ -6,6 +6,8 @@ import { registerFocusSection, keepFocusedInView, remPx } from "@/scripts/tv/foc
 import { applyRootFontSizePx } from "@/scripts/tv/root-font-size"
 import { getEntries, getActiveEntry, loadCreds, isLocalM3UHost, isCustomHost, isTauri } from "@/scripts/lib/creds.js"
 import { getPlaylistListEmptyCopy } from "@/scripts/lib/playlist-rows.js"
+import { getUiMode, setUiMode, type UiMode } from "@/scripts/lib/ui-mode"
+import { classicRouteFor } from "@/scripts/lib/tv-routes"
 import { renderTvPlaylistRow } from "@/scripts/tv/ui/playlist-row"
 import { createActionSheet, type ActionSheetHandle } from "@/scripts/tv/ui/action-sheet"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav"
@@ -118,6 +120,12 @@ function accentLabelKey(accent: string): string {
   return `settings.accent.${accent}`
 }
 
+function uiModeLabelKey(mode: UiMode): string {
+  if (mode === "tv") return "settings.uiMode.tv"
+  if (mode === "desktop") return "settings.uiMode.desktop"
+  return "settings.uiMode.auto"
+}
+
 // Mirrors settings.astro's commitTheme(), minus the view-transition sweep.
 function applyTheme(theme: string): void {
   const root = document.documentElement
@@ -185,6 +193,14 @@ function applyVisualEffectsOverride(override: "" | EffectTier): void {
   // effectTier() is memoized per session; drop the cache so lite/full-gated code and
   // the html[data-tv-effects] attribute reflect the new override immediately.
   resetEffectTierCache()
+}
+
+function isRealAndroidTv(): boolean {
+  try {
+    return window.AndroidDeviceInfo?.isTv?.() === true
+  } catch {
+    return false
+  }
 }
 
 function formatUtcOffset(minutes: number): string {
@@ -266,6 +282,17 @@ const view: TvView = {
         kind: "choice",
         onActivate: () => void pickInterfaceSize(),
       })
+
+      if (!isRealAndroidTv()) {
+        rows.push({
+          id: "ui-mode",
+          icon: ICON_DEVICE_TV,
+          label: t("settings.uiMode.label"),
+          value: t(uiModeLabelKey(getUiMode())),
+          kind: "choice",
+          onActivate: () => void pickUiMode(),
+        })
+      }
 
       rows.push({
         id: "language",
@@ -492,6 +519,26 @@ const view: TvView = {
       })
       if (!picked) return
       applyFontScale(parseFloat(picked))
+      void renderRows()
+    }
+
+    async function pickUiMode(): Promise<void> {
+      const picked = await openChoiceDialog({
+        title: t("settings.uiMode.label"),
+        selectedId: getUiMode(),
+        options: [
+          { id: "auto", label: t("settings.uiMode.auto") },
+          { id: "tv", label: t("settings.uiMode.tv") },
+          { id: "desktop", label: t("settings.uiMode.desktop") },
+        ],
+      })
+      if (!picked) return
+      const mode = picked as UiMode
+      setUiMode(mode)
+      if (mode === "desktop" || (mode === "auto" && document.documentElement.dataset.tv !== "1")) {
+        window.location.href = classicRouteFor(location.pathname, location.search) ?? "/"
+        return
+      }
       void renderRows()
     }
 

@@ -2,7 +2,7 @@
 
 import { navigate } from "astro:transitions/client"
 import { initI18n, t, LOCALE_EVENT, applyI18nDOM } from "@/scripts/lib/i18n"
-import { mountBackHandler } from "@/scripts/lib/back-handler"
+import { mountBackHandler, handleBack } from "@/scripts/lib/back-handler"
 import { mountTvInputGuard } from "@/scripts/lib/tv-input-guard"
 import { initConnectivity } from "@/scripts/lib/connectivity.js"
 import { attachDialogSpatialNav } from "@/scripts/lib/dialog-spatial-nav"
@@ -18,7 +18,7 @@ import { renderTvPlaylistRow } from "@/scripts/tv/ui/playlist-row"
 import { createActionSheet, type ActionSheetHandle } from "@/scripts/tv/ui/action-sheet"
 import { ICON_X, ICON_PLAYLIST_ADD } from "@/scripts/lib/icons"
 import { mountTvRouter, TV_VIEW_MOUNTED_EVENT } from "@/scripts/tv/router"
-import { tvNavActiveHref } from "@/scripts/lib/tv-routes"
+import { tvNavActiveHref, normalizePathname } from "@/scripts/lib/tv-routes"
 import { mountTvWarmupIndicator } from "@/scripts/tv/ui/warmup-indicator"
 import { mountRootFontSizeSync } from "@/scripts/tv/root-font-size"
 
@@ -427,10 +427,37 @@ function mountFocusMemory(): void {
   })
 }
 
+const DESKTOP_BACK_KEYS: ReadonlySet<string> = new Set(["Escape", "Backspace", "BrowserBack", "GoBack"])
+
+function isEditableBackTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && !!target.closest("input, textarea, [contenteditable='true'], [contenteditable='']")
+}
+
+// playback.ts owns Escape while the host is visible.
+function isPlayerHostVisible(): boolean {
+  const host = document.getElementById("tv-player-host")
+  return !!host && !host.classList.contains("hidden")
+}
+
+// Real TVs route BACK through MainActivity; this is the desktop keyboard path.
+function mountDesktopBackKey(): void {
+  document.addEventListener("keydown", (event) => {
+    if (document.documentElement.dataset.tv === "1") return
+    if (event.defaultPrevented || !DESKTOP_BACK_KEYS.has(event.key)) return
+    if (isEditableBackTarget(event.target)) return
+    if (event.target instanceof Element && event.target.closest("dialog[open]")) return
+    if (isPlayerHostVisible()) return
+    event.preventDefault()
+    if (handleBack()) return
+    if (normalizePathname(location.pathname) !== "/tv" && history.length > 1) history.back()
+  })
+}
+
 export function bootTvShell(): void {
   mountRootFontSizeSync()
   void initI18n()
   mountBackHandler()
+  mountDesktopBackKey()
   mountTvInputGuard()
   initConnectivity()
   initUiSounds()

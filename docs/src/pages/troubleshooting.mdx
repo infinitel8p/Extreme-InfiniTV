@@ -80,6 +80,10 @@ Some channels use the HEVC (H.265) codec, which not every device can decode:
 - **Windows**: the app detects the missing codec and offers a one-click install of Microsoft's **HEVC Video Extensions** (a small download; the Microsoft Store build deep-links to the Store instead). Restart playback after the install finishes.
 - **Other platforms**: if the device can't decode HEVC in the app, hand the stream off to an external player - see [External players](./external-players/). Channels the app knows are HEVC show an **HEVC** badge in the Live TV list, and **Test stream** reports when HEVC support is the problem.
 
+## The app shows the TV interface on a phone or PC
+
+Device detection can get it wrong, or you may have turned it on yourself. Open **Settings > Display > Interface** and pick **Desktop** to force the classic UI, or **TV** to force the TV browse UI. **Auto** goes back to following device detection. See [Choosing the interface](./tv-and-receiver-mode/#choosing-the-interface).
+
 ## The app looks unstyled or buttons don't react (old Android System WebView)
 
 Symptom: the app loads but shows plain browser-default HTML instead of its normal look - for example the receiver screen renders as a giant QR code next to a grey "Exit receiver" button that does nothing when pressed.

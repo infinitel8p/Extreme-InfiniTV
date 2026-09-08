@@ -24,11 +24,21 @@ export interface OsdHandle {
   showLiveBanner(playlistId: string, channel: OsdLiveChannel): void
   hideLiveBanner(): void
   liveBannerVisible(): boolean
+  /** Restarts the auto-hide timer without repainting; no-op when the banner is hidden. */
+  pokeLiveBanner(): void
   showZapDigits(digits: string): void
   showZapMiss(digits: string): void
   hideZap(): void
   showVodScrub(positionSeconds: number, durationSeconds: number | undefined, flashDeltaSeconds?: number): void
+  vodScrubVisible(): boolean
+  /** Restarts the auto-hide timer without repainting; no-op when the scrub bar is hidden. */
+  pokeVodScrub(): void
   hideAll(): void
+}
+
+export interface OsdOptions {
+  /** Fires with a 0-1 ratio when the VOD scrub bar is clicked/tapped. */
+  onScrubSeek?(ratio: number): void
 }
 
 const LIVE_BANNER_HIDE_MS = 4000
@@ -74,9 +84,11 @@ function markup(): string {
         <span data-role="delta" class="font-semibold text-accent" hidden></span>
         <span data-role="remaining"></span>
       </div>
-      <span data-role="vod-progress-track" class="block h-1 w-full overflow-hidden rounded-full bg-white/20">
-        <span data-role="vod-progress-fill" class="block h-full origin-left rounded-full bg-accent"></span>
-      </span>
+      <div data-role="vod-progress-hit" class="pointer-events-auto -my-5 cursor-pointer py-5">
+        <span data-role="vod-progress-track" class="pointer-events-none block h-1 w-full overflow-hidden rounded-full bg-white/20">
+          <span data-role="vod-progress-fill" class="block h-full origin-left rounded-full bg-accent"></span>
+        </span>
+      </div>
     </div>
   `
 }
@@ -116,7 +128,7 @@ function setProgressFill(fill: HTMLElement, progress: number): void {
   fill.style.transform = `scaleX(${Math.max(0, Math.min(1, progress))})`
 }
 
-export function createOsd(host: HTMLElement): OsdHandle {
+export function createOsd(host: HTMLElement, options: OsdOptions = {}): OsdHandle {
   const wrap = document.createElement("div")
   wrap.innerHTML = markup()
   host.appendChild(wrap)
@@ -143,12 +155,21 @@ export function createOsd(host: HTMLElement): OsdHandle {
   const vodElapsed = query("elapsed")
   const vodRemaining = query("remaining")
   const vodDelta = query("delta")
-  const vodProgressTrack = query("vod-progress-track")
+  const vodProgressHit = query("vod-progress-hit")
   const vodProgressFill = query("vod-progress-fill")
 
   for (const fill of [liveProgressFill, vodProgressFill]) {
     fill.style.transition = motionAllowed() ? `transform ${PANEL_ANIMATE_MS}ms ${TV_EASE}` : "none"
   }
+
+  // Ratio is physical (matches the fill's origin-left scaleX); no RTL mirroring.
+  vodProgressHit.addEventListener("click", (event) => {
+    if (!options.onScrubSeek) return
+    const rect = vodProgressHit.getBoundingClientRect()
+    if (!rect.width) return
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width))
+    options.onScrubSeek(ratio)
+  })
 
   let liveHideTimer: ReturnType<typeof setTimeout> | null = null
   let liveTickTimer: ReturnType<typeof setInterval> | null = null
@@ -262,6 +283,11 @@ export function createOsd(host: HTMLElement): OsdHandle {
     return !liveBanner.hidden
   }
 
+  function pokeLiveBanner(): void {
+    if (!liveState) return
+    restartLiveHideTimer()
+  }
+
   function clearZapMissTimer(): void {
     if (zapMissTimer) { clearTimeout(zapMissTimer); zapMissTimer = null }
   }
@@ -293,7 +319,7 @@ export function createOsd(host: HTMLElement): OsdHandle {
     vodElapsed.textContent = formatPaddedHms(positionSeconds)
     const hasDuration = typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0
     vodRemaining.hidden = !hasDuration
-    vodProgressTrack.hidden = !hasDuration
+    vodProgressHit.hidden = !hasDuration
     if (hasDuration) {
       vodRemaining.textContent = `-${formatPaddedHms(Math.max(0, durationSeconds - positionSeconds))}`
       setProgressFill(vodProgressFill, positionSeconds / durationSeconds)
@@ -312,6 +338,16 @@ export function createOsd(host: HTMLElement): OsdHandle {
     vodHideTimer = setTimeout(() => conceal(vodPanel), VOD_SCRUB_HIDE_MS)
   }
 
+  function vodScrubVisible(): boolean {
+    return !vodPanel.hidden
+  }
+
+  function pokeVodScrub(): void {
+    if (vodPanel.hidden) return
+    if (vodHideTimer) clearTimeout(vodHideTimer)
+    vodHideTimer = setTimeout(() => conceal(vodPanel), VOD_SCRUB_HIDE_MS)
+  }
+
   function hideAll(): void {
     hideLiveBanner()
     hideZap()
@@ -322,5 +358,17 @@ export function createOsd(host: HTMLElement): OsdHandle {
     vodPanel.hidden = true
   }
 
-  return { showLiveBanner, hideLiveBanner, liveBannerVisible, showZapDigits, showZapMiss, hideZap, showVodScrub, hideAll }
+  return {
+    showLiveBanner,
+    hideLiveBanner,
+    liveBannerVisible,
+    pokeLiveBanner,
+    showZapDigits,
+    showZapMiss,
+    hideZap,
+    showVodScrub,
+    vodScrubVisible,
+    pokeVodScrub,
+    hideAll,
+  }
 }

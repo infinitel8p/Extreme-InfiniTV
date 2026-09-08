@@ -247,7 +247,6 @@ export function renderPlaylistRow({
     // Keyboard/D-pad clicks carry detail 0; TV builds always move focus into the panel.
     const isKeyboardActivation =
       ev.detail === 0 ||
-      document.documentElement.dataset.tv === "1" ||
       document.documentElement.dataset.tvUi === "1"
     paintPlaylistHealthInto(panel, entry, {
       isCompact,

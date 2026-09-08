@@ -161,6 +161,8 @@ export interface MountOptions {
   html5?: Record<string, unknown>
   userAgent?: string | null
   referer?: string | null
+  /** mpv-embedded only: mounts its own control bar. Defaults to true. */
+  mpvControls?: boolean
 }
 
 export const isTauri =
@@ -2731,6 +2733,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       destroyArtEngines()
       telemetry.dispose()
       try { art.destroy(false) } catch {}
+      // A remount reuses the caller's videoEl; restore it or the next mount has no parent to attach to.
+      if (container.parentElement) container.parentElement.replaceChild(videoEl, container)
     },
     duration() {
       const dur = art.duration
@@ -3231,6 +3235,7 @@ export async function mountPlayer(
       referer: options.referer ?? null,
       networkTimeoutSeconds: getNetworkTimeoutSeconds(),
       videoElement: videoEl,
+      controls: options.mpvControls,
     })
     if (handle) {
       wireMonoAudioDisposalMpv(handle)

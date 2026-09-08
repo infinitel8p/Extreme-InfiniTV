@@ -445,7 +445,7 @@ async function captureForDevice(browser, deviceName, viewport, routes, baseUrl, 
       if (tvMode) {
         // keeps TvLayout's pre-paint check on /tv instead of redirecting to the classic route
         localStorage.setItem("xt_is_tv", "1")
-        localStorage.setItem("xt_force_tv", "1")
+        localStorage.setItem("xt_ui_mode", "tv")
       }
     } catch {}
     try {

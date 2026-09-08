@@ -131,7 +131,7 @@ export function formatCardMeta(year: unknown, rating: unknown): string {
   return [yearText, ratingText].filter(Boolean).join(" · ")
 }
 
-const CARD_FOCUS_CLASSES = "self-start outline-none tv-focus-card"
+const CARD_FOCUS_CLASSES = "self-start select-none outline-none tv-focus-card"
 
 interface CardBehavior {
   activate?: () => void
@@ -200,6 +200,7 @@ function buildPosterImage(posterUrl: string | null, name: string, eager?: boolea
   img.alt = ""
   img.loading = eager ? "eager" : "lazy"
   img.decoding = "async"
+  img.draggable = false
   img.className = "block h-full w-full object-cover"
   const markLoaded = (): void => {
     const wrap = img.closest<HTMLElement>("[data-poster-wrap]")
@@ -307,6 +308,7 @@ function buildLiveTile(logoUrl: string | null, name: string): HTMLElement[] {
   backdrop.setAttribute("aria-hidden", "true")
   backdrop.loading = "lazy"
   backdrop.decoding = "async"
+  backdrop.draggable = false
   backdrop.className = heavyBlurClass(
     "absolute inset-0 h-full w-full scale-125 object-cover opacity-50 blur-2xl saturate-150",
     "absolute inset-0 bg-surface-2"
@@ -317,6 +319,7 @@ function buildLiveTile(logoUrl: string | null, name: string): HTMLElement[] {
   foreground.alt = ""
   foreground.loading = "lazy"
   foreground.decoding = "async"
+  foreground.draggable = false
   foreground.className = "absolute inset-0 m-auto max-h-[60%] max-w-[60%] object-contain"
   mountCachedImage(foreground, logoUrl, "logo")
 

@@ -6,6 +6,7 @@ import {
   mountPlayer,
   playWhenReady,
   type Mounted,
+  type PlayerBackend,
   type VjsLikeHandle,
 } from "@/scripts/lib/player-runtime"
 import { getPlayerBackend } from "@/scripts/lib/app-settings.js"
@@ -115,6 +116,11 @@ export function normalizeReportedVolume(level: number | null | undefined): numbe
 // Embedded engine: mountPlayer-backed playback inside the receiver page.
 // ---------------------------------------------------------------------
 
+export interface EmbeddedEngineOptions {
+  /** Caller owns input (TV browse UI): mpv-embedded is allowed, no control bar. */
+  localInput?: boolean
+}
+
 export interface EmbeddedEngineDom {
   idleEl: HTMLElement | null
   exitEl?: HTMLElement | null
@@ -169,8 +175,13 @@ async function resolveDescriptorDnsSrc(descriptor: CastDescriptorV1): Promise<st
 export function createEmbeddedReceiverEngine(
   dom: EmbeddedEngineDom,
   callbacks: ReceiverEngineCallbacks,
+  engineOptions: EmbeddedEngineOptions = {},
 ): EmbeddedReceiverEngine {
   let mounted: Mounted | null = null
+  // Backend requested at mount time; mounted.backend may resolve differently (e.g. Android).
+  let mountedRequestedBackend: PlayerBackend | null = null
+  let mountedUserAgent: string | null = null
+  let mountedReferer: string | null = null
   let activeHandle: VjsLikeHandle | null = null
   let mediaListenersWired = false
   let currentTitle = ""
@@ -216,15 +227,20 @@ export function createEmbeddedReceiverEngine(
     const mediaEl = getMediaElementFor(activeHandle)
     const durationSeconds = currentDurationSeconds(partial.durationSeconds)
     if (durationSeconds !== undefined) knownDurationSeconds = durationSeconds
-    // Read live off the media element so even a plain state transition carries a level.
-    const volume = normalizeReportedVolume(partial.volume ?? mediaEl?.volume)
+    // No <video> to read from (mpv-embedded) - fall back to the handle's own reporters.
+    const rawVolume = mediaEl ? mediaEl.volume : activeHandle?.volume?.()
+    const rawMuted = mediaEl ? mediaEl.muted : activeHandle?.muted?.()
+    const positionSeconds = mediaEl
+      ? mediaEl.currentTime
+      : activeHandle?.currentTime?.()
+    const volume = normalizeReportedVolume(partial.volume ?? (typeof rawVolume === "number" ? rawVolume : undefined))
     callbacks.report({
       state: partial.state ?? currentPlaybackState,
-      positionSeconds: partial.positionSeconds ?? mediaEl?.currentTime ?? 0,
+      positionSeconds: partial.positionSeconds ?? positionSeconds ?? 0,
       durationSeconds,
       error: partial.error,
       volume,
-      muted: volume === undefined ? undefined : (partial.muted ?? mediaEl?.muted ?? false),
+      muted: volume === undefined ? undefined : (partial.muted ?? (typeof rawMuted === "boolean" ? rawMuted : false)),
     })
   }
 
@@ -504,27 +520,72 @@ export function createEmbeddedReceiverEngine(
       if (now - lastTimeReportAt < 1000) return
       lastTimeReportAt = now
       const mediaEl = getMediaElementFor(handle)
+      const positionSeconds = mediaEl ? mediaEl.currentTime : handle.currentTime?.()
       report({
         state: currentPlaybackState,
-        positionSeconds: mediaEl?.currentTime ?? 0,
+        positionSeconds: positionSeconds ?? 0,
         durationSeconds: handle.duration?.(),
       })
     })
   }
 
-  async function ensurePlayer(): Promise<VjsLikeHandle | null> {
-    if (mounted?.kind === "embedded") return mounted.handle
+  function wantedBackendFor(descriptor: CastDescriptorV1): PlayerBackend {
+    let backend = getPlayerBackend() as PlayerBackend
+    // Local playback here would be an unattended child process.
+    if (backend === "mpv" || backend === "vlc") backend = "artplayer"
+    // Its own control bar only makes sense when the caller owns input.
+    if (backend === "mpv-embedded" && !engineOptions.localInput) backend = "artplayer"
+    // mpv has no ClearKey support.
+    if (backend === "mpv-embedded" && descriptor.drm) backend = "artplayer"
+    return backend
+  }
+
+  let ensurePlayerInFlight: Promise<VjsLikeHandle | null> | null = null
+
+  async function ensurePlayer(descriptor: CastDescriptorV1): Promise<VjsLikeHandle | null> {
+    if (ensurePlayerInFlight) await ensurePlayerInFlight
+    const run = ensurePlayerOnce(descriptor)
+    ensurePlayerInFlight = run
+    try {
+      return await run
+    } finally {
+      if (ensurePlayerInFlight === run) ensurePlayerInFlight = null
+    }
+  }
+
+  async function ensurePlayerOnce(descriptor: CastDescriptorV1): Promise<VjsLikeHandle | null> {
+    const backend = wantedBackendFor(descriptor)
+    const wantedUserAgent = descriptor.headers?.userAgent ?? null
+    const wantedReferer = descriptor.headers?.referer ?? null
+    // mpv-embedded only takes user-agent/referer at mount time, not per src() load.
+    const settingsChanged =
+      backend === "mpv-embedded" &&
+      (mountedUserAgent !== wantedUserAgent || mountedReferer !== wantedReferer)
+    if (mounted?.kind === "embedded" && mountedRequestedBackend === backend && !settingsChanged) {
+      return mounted.handle
+    }
+    if (mounted?.kind === "embedded") {
+      try { mounted.handle.pause() } catch {}
+      try { mounted.handle.reset?.() } catch {}
+      try { await mounted.handle.dispose?.() } catch {}
+      mounted = null
+      mountedRequestedBackend = null
+      mediaListenersWired = false
+      activeHandle = null
+    }
     if (!dom.videoEl) return null
-    let backend = getPlayerBackend()
-    // mpv-embedded mounts a local control bar (mpv-controls.ts) meant for on-device
-    // input; the receiver is remote-controlled only, so it downgrades like mpv/vlc.
-    if (backend === "mpv" || backend === "vlc" || backend === "mpv-embedded") backend = "artplayer"
-    const result = await mountPlayer(dom.videoEl, backend, { autoplay: true })
+    const mpvOptions = backend === "mpv-embedded"
+      ? { userAgent: wantedUserAgent, referer: wantedReferer, mpvControls: !engineOptions.localInput }
+      : {}
+    const result = await mountPlayer(dom.videoEl, backend, { autoplay: true, ...mpvOptions })
     if (result.kind !== "embedded") {
       log.warn("[xt:receiver] mountPlayer returned an external backend; receiver requires embedded playback")
       return null
     }
     mounted = result
+    mountedRequestedBackend = backend
+    mountedUserAgent = wantedUserAgent
+    mountedReferer = wantedReferer
     wireMediaListeners(result.handle)
     return result.handle
   }
@@ -548,7 +609,19 @@ export function createEmbeddedReceiverEngine(
       report({ state: "loading", positionSeconds: 0 })
       showLoading(true, descriptor.title)
 
-      const handle = await ensurePlayer()
+      let handle: VjsLikeHandle | null
+      try {
+        handle = await ensurePlayer(descriptor)
+      } catch (err) {
+        log.error("[xt:receiver] ensurePlayer failed:", err)
+        if (attemptGeneration !== playGeneration) return false
+        errorReported = true
+        const message = t("receiver.error.generic")
+        const technical = err instanceof Error ? err.message : String(err)
+        presentError(message, () => teardownInternal(true))
+        report({ state: "error", error: `${message} (${technical})`.slice(0, 300), positionSeconds: 0 })
+        return false
+      }
       if (!handle) return false
       // Another play()/teardown claimed the engine while mounting.
       if (attemptGeneration !== playGeneration) return false
@@ -565,6 +638,7 @@ export function createEmbeddedReceiverEngine(
         durationSeconds: descriptor.durationSeconds,
         timelineOffsetSeconds: descriptor.timelineOffsetSeconds,
         preferNativeHls: descriptor.preferNativeHls,
+        title: descriptor.title,
       })
       armLoadingWatchdog(handle)
 
@@ -573,12 +647,25 @@ export function createEmbeddedReceiverEngine(
       if (!descriptor.isLive && (descriptor.resumeSeconds ?? 0) > 5) {
         const resumeSeconds = descriptor.resumeSeconds!
         const resumeMediaEl = getMediaElementFor(handle)
-        const onLoadedMetadata = () => {
-          pendingResumeCleanup = null
-          handle.currentTime?.(resumeSeconds)
+        if (resumeMediaEl) {
+          const onLoadedMetadata = () => {
+            pendingResumeCleanup = null
+            handle.currentTime?.(resumeSeconds)
+          }
+          resumeMediaEl.addEventListener("loadedmetadata", onLoadedMetadata, { once: true })
+          pendingResumeCleanup = () => resumeMediaEl.removeEventListener("loadedmetadata", onLoadedMetadata)
+        } else {
+          // No <video> to listen on (mpv-embedded) - guard against a stale fire with a flag instead.
+          let stale = false
+          const onLoadedMetadata = () => {
+            if (stale) return
+            pendingResumeCleanup = null
+            handle.currentTime?.(resumeSeconds)
+          }
+          if (typeof handle.one === "function") handle.one("loadedmetadata", onLoadedMetadata)
+          else handle.on("loadedmetadata", onLoadedMetadata)
+          pendingResumeCleanup = () => { stale = true }
         }
-        resumeMediaEl?.addEventListener("loadedmetadata", onLoadedMetadata, { once: true })
-        pendingResumeCleanup = () => resumeMediaEl?.removeEventListener("loadedmetadata", onLoadedMetadata)
       }
 
       playWhenReady(handle, {
@@ -617,6 +704,8 @@ export function createEmbeddedReceiverEngine(
       if (mediaEl) {
         mediaEl.volume = clamped
         mediaEl.muted = muted
+      } else {
+        activeHandle?.volume?.(clamped)
       }
       activeHandle?.muted?.(muted)
       report({ volume: clamped, muted })

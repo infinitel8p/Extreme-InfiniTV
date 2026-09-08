@@ -33,16 +33,16 @@ beforeEach(() => {
 
 describe("effectTier / resetEffectTierCache", () => {
   it("honors the xt_tv_effects override and stamps data-tv-effects inside the TV shell", () => {
-    document.documentElement.dataset.tv = "1"
+    document.documentElement.dataset.tvUi = "1"
     localStorage.setItem("xt_tv_effects", "lite")
     resetEffectTierCache()
     expect(effectTier()).toBe("lite")
     expect(document.documentElement.dataset.tvEffects).toBe("lite")
-    delete document.documentElement.dataset.tv
+    delete document.documentElement.dataset.tvUi
   })
 
   it("does not stamp data-tv-effects outside the TV shell", () => {
-    delete document.documentElement.dataset.tv
+    delete document.documentElement.dataset.tvUi
     localStorage.setItem("xt_tv_effects", "lite")
     resetEffectTierCache()
     expect(effectTier()).toBe("lite")

@@ -1359,7 +1359,7 @@ summary.list-none::-webkit-details-marker {
 }
 /* Static skeleton on the memory-conservative TV tier / perf mode: no pulse at all. */
 html[data-perf-mode="on"] .skel::after,
-html[data-tv="1"][data-tv-effects="lite"] .skel::after {
+html[data-tv-ui][data-tv-effects="lite"] .skel::after {
     animation: none;
     opacity: 0;
 }
@@ -1432,7 +1432,7 @@ html[data-perf-mode="on"] .logo-skel::after {
     transform: none;
 }
 html[data-perf-mode="on"] .poster-develop > img,
-html[data-tv="1"][data-tv-effects="lite"] .poster-develop > img {
+html[data-tv-ui][data-tv-effects="lite"] .poster-develop > img {
     filter: none;
     transform: none;
     transition-delay: 0ms;
@@ -3348,7 +3348,7 @@ html[data-perf-mode="on"] * {
 /* -------------------------------------------------------------------------
  * TV: perf mode hides .xt-focus-glide, so D-pad focus needs its own ring.
  * -------------------------------------------------------------------------*/
-html[data-tv] :is(a, button, summary, input, textarea, select, [tabindex]):focus-visible {
+html[data-tv]:not([data-tv-ui]) :is(a, button, summary, input, textarea, select, [tabindex]):focus-visible {
     outline: 3px solid var(--color-accent);
     outline-offset: 2px;
 }
@@ -3464,8 +3464,14 @@ html[data-native-video="on"] .xt-video-hole {
 html[data-native-video="on"] #player-wrap,
 html[data-native-video="on"] #movie-detail-player-wrap,
 html[data-native-video="on"] #series-detail-player-wrap,
-html[data-native-video="on"] #receiver-player {
+html[data-native-video="on"] #receiver-player,
+html[data-native-video="on"] #tv-player-host {
     background: transparent;
+}
+/* TV browse UI: the persistent rail/main sit behind the player host and must not paint over its hole. */
+html[data-native-video="on"]:has(#tv-player-host[data-mpv-embedded]:not(.hidden)) #tv-nav,
+html[data-native-video="on"]:has(#tv-player-host[data-mpv-embedded]:not(.hidden)) #tv-main {
+    visibility: hidden;
 }
 html[data-native-video="on"] [data-modal-ambient] {
     visibility: hidden;

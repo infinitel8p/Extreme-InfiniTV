@@ -87,40 +87,53 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         var perfStored = localStorage.getItem("xt_perf_mode");
         var receiverStored = localStorage.getItem("xt_receiver_mode");
         var receiverBootStored = localStorage.getItem("xt_receiver_boot");
-        var isTvDevice = false;
-        if (perfStored === null || receiverStored === null || receiverBootStored === null) {
+        var realTv = false;
+        try {
+          realTv = !!(window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function" && window.AndroidDeviceInfo.isTv() === true);
+        } catch (e) {}
+        var detectedTv = localStorage.getItem("xt_is_tv") === "1" || realTv;
+        if (!detectedTv && (perfStored === null || receiverStored === null || receiverBootStored === null)) {
           try {
-            if (window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function") {
-              isTvDevice = !!window.AndroidDeviceInfo.isTv();
+            var ua = (navigator.userAgent || "").toLowerCase();
+            if (
+              ua.indexOf(" tv ") !== -1 ||
+              ua.indexOf("smart-tv") !== -1 ||
+              ua.indexOf("smarttv") !== -1 ||
+              ua.indexOf("googletv") !== -1 ||
+              ua.indexOf("appletv") !== -1 ||
+              ua.indexOf("hbbtv") !== -1 ||
+              ua.indexOf("netcast") !== -1 ||
+              ua.indexOf("nettv") !== -1 ||
+              ua.indexOf("aft") !== -1 ||
+              ua.indexOf("crkey") !== -1 ||
+              ua.indexOf("philipstv") !== -1 ||
+              ua.indexOf("bravia") !== -1
+            ) {
+              detectedTv = true;
             }
           } catch (e) {}
-          if (!isTvDevice) {
-            try {
-              var ua = (navigator.userAgent || "").toLowerCase();
-              if (
-                ua.indexOf(" tv ") !== -1 ||
-                ua.indexOf("smart-tv") !== -1 ||
-                ua.indexOf("smarttv") !== -1 ||
-                ua.indexOf("googletv") !== -1 ||
-                ua.indexOf("appletv") !== -1 ||
-                ua.indexOf("hbbtv") !== -1 ||
-                ua.indexOf("netcast") !== -1 ||
-                ua.indexOf("nettv") !== -1 ||
-                ua.indexOf("aft") !== -1 ||
-                ua.indexOf("crkey") !== -1 ||
-                ua.indexOf("philipstv") !== -1 ||
-                ua.indexOf("bravia") !== -1
-              ) {
-                isTvDevice = true;
-              }
-            } catch (e) {}
-          }
         }
-        if (isTvDevice) {
+        if (detectedTv) {
           document.documentElement.dataset.tv = "1";
           localStorage.setItem("xt_is_tv", "1");
         }
-        if (perfStored === null && isTvDevice) {
+
+        // Mirrors resolveUiMode in ui-mode.ts
+        try {
+          if (new URLSearchParams(location.search).get("tv") === "1") localStorage.setItem("xt_ui_mode", "tv");
+        } catch (e) {}
+        try {
+          if (localStorage.getItem("xt_force_tv") === "1" && localStorage.getItem("xt_ui_mode") === null) {
+            localStorage.setItem("xt_ui_mode", "tv");
+          }
+          localStorage.removeItem("xt_force_tv");
+        } catch (e) {}
+        var storedUiMode = localStorage.getItem("xt_ui_mode");
+        var uiMode = (storedUiMode === "tv" || storedUiMode === "desktop") ? storedUiMode : "auto";
+        // Only the redirect below stamps data-tv-ui; TvLayout owns that attribute.
+        window.__xtResolvedTvUi = realTv || uiMode === "tv" || (uiMode === "auto" && detectedTv);
+
+        if (perfStored === null && detectedTv) {
           localStorage.setItem("xt_perf_mode", "1");
           localStorage.setItem("xt_perf_mode_auto", "1");
           perfStored = "1";
@@ -128,11 +141,11 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
         if (perfStored === "1") {
           document.documentElement.setAttribute("data-perf-mode", "on");
         }
-        if (receiverStored === null && isTvDevice) {
+        if (receiverStored === null && detectedTv) {
           localStorage.setItem("xt_receiver_mode", "1");
           localStorage.setItem("xt_receiver_mode_auto", "1");
         }
-        if (receiverBootStored === null && isTvDevice) {
+        if (receiverBootStored === null && detectedTv) {
           localStorage.setItem("xt_receiver_boot", "1");
           localStorage.setItem("xt_receiver_boot_auto", "1");
         }
@@ -287,7 +300,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
     <WebViewFloorNotice />
     <script is:inline define:vars={{ tvRouteTable: TV_ROUTE_TABLE, appMode }}>
       try {
-        if (!window.__xtReceiverBooting && appMode !== "receiver" && document.documentElement.dataset.tv === "1") {
+        if (!window.__xtReceiverBooting && appMode !== "receiver" && window.__xtResolvedTvUi) {
           var tvRedirectPath = location.pathname.replace(/\/+$/, "");
           if (tvRedirectPath === "") tvRedirectPath = "/";
           var tvRedirectTarget = tvRouteTable[tvRedirectPath];
@@ -1005,11 +1018,7 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   // Safety net for full-app-on-TV users who never open /receiver.
   if (window.__TAURI_INTERNALS__ || window.__TAURI__) {
     setTimeout(() => {
-      let isAndroidTv = false
-      try {
-        isAndroidTv = !!(window as any).AndroidDeviceInfo?.isTv?.()
-      } catch {}
-      if (!isAndroidTv) return
+      if (!isTvDevice()) return
       Promise.all([
         import("@/scripts/lib/ambient-handoff"),
         import("@/scripts/lib/account-info.js"),

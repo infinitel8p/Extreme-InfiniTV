@@ -320,6 +320,27 @@ const navStructure: NavSection[] = [
                 </div>
               </div>
 
+              <div id="settings-row-ui-mode" class="settings-row">
+                <div class="settings-row__text">
+                  <span data-i18n="settings.uiMode.label" class="text-sm font-medium leading-snug">Interface</span>
+                  <p data-i18n="settings.uiMode.helper" class="text-xs text-fg-3">
+                    TV is the 10-foot layout for remotes and keyboards, made for projectors and big screens. Auto follows device detection.
+                  </p>
+                </div>
+                <div class="settings-row__control">
+                  <div
+                    id="settings-ui-mode"
+                    class="settings-seg"
+                    role="radiogroup"
+                    data-i18n-attr="aria-label:settings.uiMode.label"
+                    aria-label="Interface">
+                    <button type="button" role="radio" data-ui-mode="auto"    aria-checked="false" data-i18n="settings.uiMode.auto" class="ui-mode-btn btn">Auto</button>
+                    <button type="button" role="radio" data-ui-mode="tv"      aria-checked="false" data-i18n="settings.uiMode.tv" class="ui-mode-btn btn">TV</button>
+                    <button type="button" role="radio" data-ui-mode="desktop" aria-checked="false" data-i18n="settings.uiMode.desktop" class="ui-mode-btn btn">Desktop</button>
+                  </div>
+                </div>
+              </div>
+
               <div class="settings-row">
                 <div class="settings-row__text">
                   <span data-i18n="settings.accent.label" class="text-sm font-medium leading-snug">Accent color</span>
@@ -450,6 +471,21 @@ const navStructure: NavSection[] = [
                     var themeBtns = themeGroup.querySelectorAll(".theme-btn");
                     for (var j = 0; j < themeBtns.length; j++) {
                       themeBtns[j].setAttribute("aria-checked", themeBtns[j].getAttribute("data-theme") === currentTheme ? "true" : "false");
+                    }
+                  }
+                  var uiModeRow = document.getElementById("settings-row-ui-mode");
+                  var isRealAndroidTv = false;
+                  try {
+                    isRealAndroidTv = !!(window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function" && window.AndroidDeviceInfo.isTv() === true);
+                  } catch (e) {}
+                  if (uiModeRow && isRealAndroidTv) uiModeRow.classList.add("hidden");
+                  var currentUiMode = localStorage.getItem("xt_ui_mode");
+                  if (currentUiMode !== "tv" && currentUiMode !== "desktop") currentUiMode = "auto";
+                  var uiModeGroup = document.getElementById("settings-ui-mode");
+                  if (uiModeGroup) {
+                    var uiModeBtns = uiModeGroup.querySelectorAll("[data-ui-mode]");
+                    for (var uiModeIndex = 0; uiModeIndex < uiModeBtns.length; uiModeIndex++) {
+                      uiModeBtns[uiModeIndex].setAttribute("aria-checked", uiModeBtns[uiModeIndex].getAttribute("data-ui-mode") === currentUiMode ? "true" : "false");
                     }
                   }
                   var currentAccent = localStorage.getItem("xt_accent") || "fuchsia";
@@ -2467,6 +2503,8 @@ const navStructure: NavSection[] = [
     import { t, LOCALE_EVENT, getActiveLocale, initI18n } from "@/scripts/lib/i18n.js"
     import { LANGUAGE_TOKENS, languageTagLabel } from "@/scripts/lib/language-tags.ts"
     import { ICON_CHECK } from "@/scripts/lib/icons.ts"
+    import { getUiMode, setUiMode } from "@/scripts/lib/ui-mode.ts"
+    import { tvRouteFor } from "@/scripts/lib/tv-routes.ts"
     import {
       getActiveEntry,
       getEntries,
@@ -3636,6 +3674,29 @@ const navStructure: NavSection[] = [
       applyTheme(btn.dataset.theme || "system", event.clientX, event.clientY)
     })
     syncThemeButtons()
+
+    // ---------------------------------------------------------------------
+    // Interface: TV browse UI vs classic desktop layout, device-local (xt_ui_mode).
+    // ---------------------------------------------------------------------
+    const uiModeGroup = document.getElementById("settings-ui-mode")
+    function syncUiModeButtons() {
+      const current = getUiMode()
+      for (const btn of uiModeGroup?.querySelectorAll("[data-ui-mode]") || []) {
+        btn.setAttribute("aria-checked", String(btn.dataset.uiMode === current))
+      }
+    }
+    uiModeGroup?.addEventListener("click", (event) => {
+      const target = event.target as HTMLElement
+      const btn = target.closest<HTMLElement>("[data-ui-mode]")
+      if (!btn) return
+      const mode = (btn.dataset.uiMode || "auto") as "auto" | "tv" | "desktop"
+      setUiMode(mode)
+      syncUiModeButtons()
+      if (mode === "tv" || (mode === "auto" && document.documentElement.dataset.tv === "1")) {
+        window.location.href = tvRouteFor(location.pathname, location.search) ?? "/tv"
+      }
+    })
+    syncUiModeButtons()
 
     // ---------------------------------------------------------------------
     // Accent color: persisted to xt_accent, applied via `data-accent` on <html>.

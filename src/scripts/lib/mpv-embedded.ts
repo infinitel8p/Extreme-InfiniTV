@@ -36,6 +36,8 @@ export interface MpvEmbeddedCreateOptions {
   networkTimeoutSeconds?: number | null
   resumeSeconds?: number
   videoElement?: HTMLVideoElement | null
+  /** Mounts mpv-controls.ts's own control bar. Defaults to true; false when the caller owns input. */
+  controls?: boolean
 }
 
 export interface MpvProps {
@@ -1423,15 +1425,17 @@ export async function createMpvEmbeddedHandle(
     },
   }
 
-  const teardownControls = mountMpvControls(container, handle, {
-    onAudioTracksClick: () => void openAudioTrackMenu(),
-    onSubtitleTracksClick: () => void openSubtitleTrackMenu(),
-    getTrackList: () => props.trackList,
-  })
-  const originalDispose = handle.dispose?.bind(handle)
-  handle.dispose = () => {
-    teardownControls()
-    return originalDispose?.()
+  if (options.controls ?? true) {
+    const teardownControls = mountMpvControls(container, handle, {
+      onAudioTracksClick: () => void openAudioTrackMenu(),
+      onSubtitleTracksClick: () => void openSubtitleTrackMenu(),
+      getTrackList: () => props.trackList,
+    })
+    const originalDispose = handle.dispose?.bind(handle)
+    handle.dispose = () => {
+      teardownControls()
+      return originalDispose?.()
+    }
   }
 
   return handle

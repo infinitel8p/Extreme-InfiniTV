@@ -73,7 +73,7 @@ export function effectTier(): EffectTier {
   // Only the TV shell reads data-tv-effects (see global.css); stamping it from the classic
   // UI too (catalog.js also imports memoryConservative) would apply the TV lite-tier CSS
   // rule outside the TV shell.
-  if (typeof document !== "undefined" && document.documentElement.dataset.tv === "1") {
+  if (typeof document !== "undefined" && document.documentElement.dataset.tvUi === "1") {
     document.documentElement.dataset.tvEffects = cachedEffectTier
   }
   return cachedEffectTier

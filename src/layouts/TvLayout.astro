@@ -49,14 +49,28 @@ const navItems = [
       (function () {
         document.documentElement.dataset.tvUi = "1"
 
-        var isTv = false
+        var realTv = false
         try {
-          if (new URLSearchParams(location.search).get("tv") === "1") localStorage.setItem("xt_force_tv", "1")
-          isTv =
-            localStorage.getItem("xt_is_tv") === "1" ||
-            (window.AndroidDeviceInfo && window.AndroidDeviceInfo.isTv && window.AndroidDeviceInfo.isTv() === true) ||
-            localStorage.getItem("xt_force_tv") === "1"
+          realTv = !!(window.AndroidDeviceInfo && typeof window.AndroidDeviceInfo.isTv === "function" && window.AndroidDeviceInfo.isTv() === true)
         } catch (e) {}
+        var detectedTv = false
+        try {
+          detectedTv = localStorage.getItem("xt_is_tv") === "1" || realTv
+        } catch (e) {}
+
+        // Mirrors resolveUiMode in ui-mode.ts
+        try {
+          if (new URLSearchParams(location.search).get("tv") === "1") localStorage.setItem("xt_ui_mode", "tv")
+          if (localStorage.getItem("xt_force_tv") === "1" && localStorage.getItem("xt_ui_mode") === null) {
+            localStorage.setItem("xt_ui_mode", "tv")
+          }
+          localStorage.removeItem("xt_force_tv")
+        } catch (e) {}
+        var storedUiMode = null
+        try { storedUiMode = localStorage.getItem("xt_ui_mode") } catch (e) {}
+        var uiMode = (storedUiMode === "tv" || storedUiMode === "desktop") ? storedUiMode : "auto"
+        var isTv = realTv || uiMode === "tv" || (uiMode === "auto" && detectedTv)
+
         if (!isTv) {
           // Mirrors classicRouteFor in tv-routes.ts
           var classicPath = location.pathname.replace(/\/+$/, "")
@@ -73,7 +87,9 @@ const navItems = [
           location.replace(classicTarget)
           return
         }
-        document.documentElement.dataset.tv = "1"
+        if (detectedTv) {
+          document.documentElement.dataset.tv = "1"
+        }
 
         try {
           if (
@@ -98,7 +114,7 @@ const navItems = [
           document.documentElement.style.setProperty("--xt-root-px", rootFontPx + "px")
 
           var perfStored = localStorage.getItem("xt_perf_mode")
-          if (perfStored === null && isTv) {
+          if (perfStored === null && detectedTv) {
             localStorage.setItem("xt_perf_mode", "1")
             localStorage.setItem("xt_perf_mode_auto", "1")
             perfStored = "1"
@@ -250,12 +266,14 @@ const navItems = [
         transition:persist="tv-nav"
         aria-label="Main"
         data-i18n-attr="aria-label:sidebar.mainLabel"
-        class="relative z-40 shrink-0 w-[5rem]">
+        class="relative z-40 shrink-0 w-[5rem] hover:not-focus-within:z-50">
         <div
           class="group/rail tv-rail-surface absolute inset-y-0 start-0 flex w-[5rem] flex-col gap-1.5
                  overflow-y-auto overflow-x-hidden bg-bg
                  p-2 outline-none transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]
+                 hover:w-[15rem] hover:shadow-[8px_0_24px_-12px_rgba(0,0,0,0.6)]
                  focus-within:w-[15rem] focus-within:shadow-[8px_0_24px_-12px_rgba(0,0,0,0.6)]
+                 rtl:hover:shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.6)]
                  rtl:focus-within:shadow-[-8px_0_24px_-12px_rgba(0,0,0,0.6)]">
           <div class="flex flex-1 flex-col gap-1.5">
             {navItems.map(({ href, key, label, Icon }) => {
@@ -270,6 +288,7 @@ const navItems = [
                   data-i18n-attr={`aria-label:${key}`}
                   class="group/item relative flex min-h-11 w-full items-center justify-center gap-4
                          rounded-2xl px-0 text-fg-2 outline-none transition-colors tv-focus-inset
+                         group-hover/rail:justify-start group-hover/rail:px-4
                          group-focus-within/rail:justify-start group-focus-within/rail:px-4
                          hover:bg-surface-2 hover:text-fg
                          focus-visible:text-fg
@@ -284,7 +303,7 @@ const navItems = [
                     stroke={1.75}
                     class="size-6 shrink-0 text-fg-3 group-data-[tv-nav-active=true]/item:text-accent"
                   />
-                  <span data-i18n={key} class="hidden truncate text-base font-medium group-focus-within/rail:inline">
+                  <span data-i18n={key} class="hidden truncate text-base font-medium group-hover/rail:inline group-focus-within/rail:inline">
                     {label}
                   </span>
                 </a>
@@ -301,6 +320,7 @@ const navItems = [
               data-i18n-attr="aria-label:tv.nav.playlist"
               class="flex min-h-11 w-full items-center justify-center gap-4 rounded-2xl px-0
                      text-fg-2 outline-none transition-colors tv-focus-inset
+                     group-hover/rail:justify-start group-hover/rail:px-4
                      group-focus-within/rail:justify-start group-focus-within/rail:px-4
                      hover:bg-surface-2 hover:text-fg
                      focus-visible:text-fg">
@@ -311,7 +331,7 @@ const navItems = [
                        bg-surface-2 text-sm font-semibold uppercase">?</span>
               <span
                 id="tv-nav-playlist-title"
-                class="hidden truncate text-base font-medium group-focus-within/rail:inline"
+                class="hidden truncate text-base font-medium group-hover/rail:inline group-focus-within/rail:inline"
                 data-i18n="tv.nav.playlist">Playlist</span>
             </button>
             <a
@@ -322,12 +342,13 @@ const navItems = [
               data-i18n-attr="aria-label:tv.nav.cast"
               class="flex min-h-11 w-full items-center justify-center gap-4 rounded-2xl px-0
                      text-fg-2 outline-none transition-colors tv-focus-inset
+                     group-hover/rail:justify-start group-hover/rail:px-4
                      group-focus-within/rail:justify-start group-focus-within/rail:px-4
                      hover:bg-surface-2 hover:text-fg
                      focus-visible:text-fg">
               <IconCast aria-hidden="true" stroke={1.75} class="size-6 shrink-0 text-fg-3" />
               <span
-                class="hidden truncate text-base font-medium group-focus-within/rail:inline"
+                class="hidden truncate text-base font-medium group-hover/rail:inline group-focus-within/rail:inline"
                 data-i18n="tv.nav.cast">Cast to this TV</span>
             </a>
           </div>

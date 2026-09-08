@@ -10,6 +10,7 @@ import { log, redactUrl } from "@/scripts/lib/log.js"
 import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
 import { getActiveEntry } from "@/scripts/lib/creds.js"
 import { isTvDevice } from "@/scripts/lib/tv-detect"
+import { getUiMode, resolveUiMode } from "@/scripts/lib/ui-mode"
 import { mountReceiverAmbient, type ReceiverAmbient } from "@/scripts/receiver/ambient"
 import { startReceiverKeepAlive, stopReceiverKeepAlive } from "@/scripts/lib/receiver-keep-alive"
 import { receiverWakeAvailable, receiverWakeBridgePresent, wakeReceiverApp } from "@/scripts/lib/receiver-wake"
@@ -550,7 +551,10 @@ function exitReceiver(): void {
   activeEngine = null
   // Server keeps running in the background; only auto-boot-in is suppressed.
   try { sessionStorage.setItem("xt_receiver_exited", "1") } catch {}
-  window.location.href = isTvDevice() ? "/tv" : "/"
+  let realTv = false
+  try { realTv = window.AndroidDeviceInfo?.isTv?.() === true } catch {}
+  const resolved = resolveUiMode({ stored: getUiMode(), realTv, detectedTv: isTvDevice() })
+  window.location.href = resolved === "tv" ? "/tv" : "/"
 }
 
 window.addEventListener("pagehide", () => {
