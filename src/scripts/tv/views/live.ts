@@ -121,7 +121,7 @@ function buildShellMarkup(): string {
       <nav data-role="groups-col" class="flex min-h-0 flex-col overflow-hidden">
         <p data-role="groups-heading" class="shrink-0 px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-fg-3"></p>
         <div data-role="groups-scroller" class="min-h-0 flex-1 overflow-hidden">
-          <div data-role="groups-track" class="flex flex-col gap-1"></div>
+          <div data-role="groups-track" class="relative flex flex-col gap-1"></div>
         </div>
       </nav>
 
