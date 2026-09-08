@@ -190,6 +190,8 @@ describe("mpvHotkeyAction", () => {
   it("maps letter keys case-insensitively", () => {
     expect(mpvHotkeyAction({ key: "f", isSeekable: false })).toBe("toggle-fullscreen")
     expect(mpvHotkeyAction({ key: "F", isSeekable: false })).toBe("toggle-fullscreen")
+    expect(mpvHotkeyAction({ key: "w", isSeekable: false })).toBe("toggle-web-fullscreen")
+    expect(mpvHotkeyAction({ key: "W", isSeekable: false })).toBe("toggle-web-fullscreen")
     expect(mpvHotkeyAction({ key: "m", isSeekable: false })).toBe("toggle-mute")
     expect(mpvHotkeyAction({ key: "M", isSeekable: false })).toBe("toggle-mute")
     expect(mpvHotkeyAction({ key: "p", isSeekable: false })).toBe("toggle-pip")

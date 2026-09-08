@@ -59,6 +59,8 @@ function buildSections(): ShortcutSection[] {
         { keys: ["Space"], desc: t("keyboardHelp.desc.playPause") },
         { keys: ["M"], desc: t("keyboardHelp.desc.muteToggle") },
         { keys: ["F"], desc: t("keyboardHelp.desc.fullscreenToggle") },
+        // mpv backend only.
+        { keys: ["W"], desc: t("keyboardHelp.desc.webFullscreenToggle") },
         // ← / → also drive mpv's own control bar when the embedded player has focus.
         { keys: ["J", "←"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.seekBack") },
         { keys: ["L", "→"], joiner: t("keyboardHelp.joiner.slash"), desc: t("keyboardHelp.desc.seekForward") },

@@ -1055,6 +1055,27 @@ export async function createMpvEmbeddedHandle(
   }
   document.addEventListener("fullscreenchange", handleFullscreenChange)
 
+  // Web fullscreen: fills the app window via CSS, no Fullscreen API involved.
+  function isWebFullscreenActive(): boolean {
+    return container.dataset.webFullscreen === "true"
+  }
+  function setWebFullscreen(next: boolean): void {
+    if (isWebFullscreenActive() === next) return
+    if (next) container.dataset.webFullscreen = "true"
+    else delete container.dataset.webFullscreen
+    resetBoundsCache()
+    scheduleBoundsPush()
+    emitter.emit("webfullscreenchange")
+  }
+  function handleWebFullscreenKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented) return
+    if (event.key !== "Escape" || !isWebFullscreenActive()) return
+    if (document.fullscreenElement === container) return
+    if (document.querySelector("dialog[open]")) return
+    setWebFullscreen(false)
+  }
+  window.addEventListener("keydown", handleWebFullscreenKeydown)
+
   pushBounds()
   // Matches every other backend: subtitles start off, mpv's own auto-selection would turn them on.
   void setProperty("sid", "no")
@@ -1278,6 +1299,15 @@ export async function createMpvEmbeddedHandle(
       windowFullscreenSet = false
       void setWindowFullscreen(false)
     },
+    requestWebFullscreen() {
+      setWebFullscreen(true)
+    },
+    exitWebFullscreen() {
+      setWebFullscreen(false)
+    },
+    isWebFullscreen() {
+      return isWebFullscreenActive()
+    },
     async screenshot() {
       try {
         const path = await invoke<string>("mpv_embed_screenshot", { sessionId })
@@ -1397,6 +1427,8 @@ export async function createMpvEmbeddedHandle(
         windowFullscreenSet = false
         void setWindowFullscreen(false)
       }
+      delete container.dataset.webFullscreen
+      window.removeEventListener("keydown", handleWebFullscreenKeydown)
       videoHiddenObserver?.disconnect()
       if (videoElement) videoElement.hidden = videoWasHidden
       loadingIndicator.remove()

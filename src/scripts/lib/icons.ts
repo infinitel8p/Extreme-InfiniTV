@@ -271,3 +271,25 @@ export const ICON_MINIMIZE = wrap(
     '<path d="M5 15h2a2 2 0 0 1 2 2v2" />' +
     '<path d="M5 9h2a2 2 0 0 0 2 -2v-2" />'
 )
+
+export const ICON_ARROWS_MAXIMIZE = wrap(
+  '<path d="M16 4l4 0l0 4" />' +
+    '<path d="M14 10l6 -6" />' +
+    '<path d="M8 20l-4 0l0 -4" />' +
+    '<path d="M4 20l6 -6" />' +
+    '<path d="M16 20l4 0l0 -4" />' +
+    '<path d="M14 14l6 6" />' +
+    '<path d="M8 4l-4 0l0 4" />' +
+    '<path d="M4 4l6 6" />'
+)
+
+export const ICON_ARROWS_MINIMIZE = wrap(
+  '<path d="M5 9l4 0l0 -4" />' +
+    '<path d="M3 3l6 6" />' +
+    '<path d="M5 15l4 0l0 4" />' +
+    '<path d="M3 21l6 -6" />' +
+    '<path d="M19 9l-4 0l0 -4" />' +
+    '<path d="M15 9l6 -6" />' +
+    '<path d="M19 15l-4 0l0 4" />' +
+    '<path d="M15 15l6 6" />'
+)

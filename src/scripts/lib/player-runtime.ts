@@ -100,6 +100,10 @@ export interface VjsLikeHandle {
   requestFullscreen?(): Promise<void> | void
   isFullscreen?(): boolean
   exitFullscreen?(): void
+  /** mpv-embedded only: fills the app window, no Fullscreen API. */
+  requestWebFullscreen?(): void
+  exitWebFullscreen?(): void
+  isWebFullscreen?(): boolean
   /** Saves the current frame to disk and resolves the saved file path, or null on failure. */
   screenshot?(): Promise<string | null>
   requestPip?(): Promise<void> | void

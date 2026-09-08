@@ -3489,6 +3489,21 @@ html[data-native-video="on"] :fullscreen {
     border-radius: 0;
 }
 
+/* Web fullscreen: fills the app window without the Fullscreen API. */
+[data-mpv-embedded][data-web-fullscreen="true"] {
+    position: fixed;
+    inset: 0;
+    z-index: 41;
+    border-radius: 0;
+}
+html[data-native-video="on"]:has([data-mpv-embedded][data-web-fullscreen="true"]) body > :not(dialog) {
+    visibility: hidden;
+}
+html[data-native-video="on"] [data-mpv-embedded][data-web-fullscreen="true"] {
+    visibility: visible;
+    background: transparent;
+}
+
 /* ────────────────────────────── */
 /* Embedded mpv control bar       */
 /* ────────────────────────────── */

@@ -15,6 +15,8 @@ import {
   ICON_LANGUAGE,
   ICON_MAXIMIZE,
   ICON_MINIMIZE,
+  ICON_ARROWS_MAXIMIZE,
+  ICON_ARROWS_MINIMIZE,
 } from "@/scripts/lib/icons.js"
 import type { VjsLikeHandle } from "@/scripts/lib/player-runtime.js"
 import type { MpvSubtitleStyle } from "@/scripts/lib/mpv-embedded.js"
@@ -145,6 +147,7 @@ export type MpvHotkeyAction =
   | "volume-up"
   | "volume-down"
   | "toggle-fullscreen"
+  | "toggle-web-fullscreen"
   | "toggle-mute"
   | "toggle-pip"
   | "screenshot"
@@ -170,15 +173,11 @@ export function mpvHotkeyAction(input: MpvHotkeyInput): MpvHotkeyAction | null {
   if (key === "ArrowDown") return "volume-down"
   const lower = key.toLowerCase()
   if (lower === "f") return "toggle-fullscreen"
+  if (lower === "w") return "toggle-web-fullscreen"
   if (lower === "m") return "toggle-mute"
   if (lower === "p") return "toggle-pip"
   if (lower === "s") return "screenshot"
   return null
-}
-
-/** VjsLikeHandle plus a still-speculative flag a backend may set; feature-detected like everything else here. */
-export interface MpvControlsHandle extends VjsLikeHandle {
-  userActiveFlag?: boolean
 }
 
 export interface MpvControlsOptions {
@@ -312,6 +311,7 @@ function markup(): string {
         <input type="range" class="mpv-controls__range" data-role="volume-input" min="0" max="100" step="1" value="100"
           aria-label="${escapeHtml(t("player.controls.volume"))}" />
       </div>
+      <button type="button" class="mpv-controls__btn text-xl" data-role="web-fullscreen"></button>
       <button type="button" class="mpv-controls__btn text-xl" data-role="fullscreen"></button>
     </div>
   `
@@ -334,7 +334,7 @@ function formatSubDelay(offsetSeconds: number): string {
 /** Mounts the control bar into `container` (the player wrap, already `position: relative`). */
 export function mountMpvControls(
   container: HTMLElement,
-  handle: MpvControlsHandle,
+  handle: VjsLikeHandle,
   options: MpvControlsOptions = {},
 ): () => void {
   const bar = document.createElement("div")
@@ -366,6 +366,7 @@ export function mountMpvControls(
   const volumeFill = query("volume-fill")
   const volumeInput = query<HTMLInputElement>("volume-input")
   const fullscreenBtn = query<HTMLButtonElement>("fullscreen")
+  const webFullscreenBtn = query<HTMLButtonElement>("web-fullscreen")
   const subtitlesBtn = query<HTMLButtonElement>("subtitles")
   const audioBtn = query<HTMLButtonElement>("audio")
   const screenshotBtn = query<HTMLButtonElement>("screenshot")
@@ -393,6 +394,7 @@ export function mountMpvControls(
   if (options.onSubtitleTracksClick) subtitlesBtn.addEventListener("click", options.onSubtitleTracksClick)
   if (options.onAudioTracksClick) audioBtn.addEventListener("click", options.onAudioTracksClick)
   if (!handle.requestFullscreen) fullscreenBtn.hidden = true
+  if (!handle.requestWebFullscreen) webFullscreenBtn.hidden = true
   if (typeof handle.screenshot !== "function") screenshotBtn.hidden = true
   if (typeof handle.requestPip !== "function") pipBtn.hidden = true
   const speedAvailable = typeof handle.playbackRate === "function"
@@ -425,13 +427,14 @@ export function mountMpvControls(
   let recordingStopPending = false
 
   function applyHideState(): void {
-    const visible = hideState.visible || externalActive
+    const popoverOpen = !settingsPopover.hidden
+    const visible = hideState.visible || externalActive || popoverOpen
     bar.dataset.visible = String(visible)
     if (hideTimer) {
       clearTimeout(hideTimer)
       hideTimer = null
     }
-    if (visible && !hideState.paused && !hideState.focused && !externalActive) {
+    if (visible && !hideState.paused && !hideState.focused && !externalActive && !popoverOpen) {
       hideTimer = setTimeout(() => dispatch("timeout"), autoHideMs)
     }
   }
@@ -486,6 +489,15 @@ export function mountMpvControls(
     const label = t(fullscreen ? "player.controls.fullscreenExit" : "player.controls.fullscreenEnter")
     fullscreenBtn.setAttribute("aria-label", label)
     fullscreenBtn.title = label
+  }
+
+  function updateWebFullscreenUi(): void {
+    if (webFullscreenBtn.hidden) return
+    const webFullscreen = handle.isWebFullscreen?.() ?? false
+    webFullscreenBtn.innerHTML = webFullscreen ? ICON_ARROWS_MINIMIZE : ICON_ARROWS_MAXIMIZE
+    const label = t(webFullscreen ? "player.controls.webFullscreenExit" : "player.controls.webFullscreenEnter")
+    webFullscreenBtn.setAttribute("aria-label", label)
+    webFullscreenBtn.title = label
   }
 
   function updatePipUi(): void {
@@ -672,6 +684,11 @@ export function mountMpvControls(
     else void handle.requestFullscreen?.()
   }
 
+  function toggleWebFullscreen(): void {
+    if (handle.isWebFullscreen?.()) handle.exitWebFullscreen?.()
+    else handle.requestWebFullscreen?.()
+  }
+
   function toggleMute(): void {
     handle.muted?.(!(handle.muted?.() ?? false))
     updateVolumeUi()
@@ -756,6 +773,7 @@ export function mountMpvControls(
       case "volume-up": adjustVolume(0.05); break
       case "volume-down": adjustVolume(-0.05); break
       case "toggle-fullscreen": toggleFullscreen(); break
+      case "toggle-web-fullscreen": toggleWebFullscreen(); break
       case "toggle-mute": toggleMute(); break
       case "toggle-pip": togglePip(); break
       case "screenshot": void takeScreenshot(); break
@@ -782,6 +800,7 @@ export function mountMpvControls(
   playPauseBtn.addEventListener("click", togglePlayPause)
   muteBtn.addEventListener("click", toggleMute)
   fullscreenBtn.addEventListener("click", toggleFullscreen)
+  webFullscreenBtn.addEventListener("click", toggleWebFullscreen)
   pipBtn.addEventListener("click", togglePip)
   screenshotBtn.addEventListener("click", () => void takeScreenshot())
   recordBtn.addEventListener("click", () => void toggleRecording())
@@ -897,6 +916,7 @@ export function mountMpvControls(
     document.removeEventListener("pointerdown", onOutsidePointerDown, true)
     document.removeEventListener("keydown", onPopoverKeydown, true)
     if (returnFocus) settingsBtn.focus()
+    dispatch("activity")
   }
   settingsBtn.addEventListener("click", () => {
     if (settingsPopover.hidden) openSettingsPopover()
@@ -963,9 +983,6 @@ export function mountMpvControls(
   }
   function onTimeupdate(): void {
     updatePlaybackUi()
-    if (typeof handle.userActiveFlag === "boolean" && handle.userActiveFlag !== externalActive) {
-      setExternalActive(handle.userActiveFlag)
-    }
   }
   function onLoadedMetadata(): void {
     updatePlaybackUi()
@@ -996,8 +1013,10 @@ export function mountMpvControls(
     updateTrackButtonsUi()
     updateSubtitleDelayUi()
   }
+  // Producers pulse true on a timer and never send false: activity, not a sticky pin.
   function onUserActive(...args: unknown[]): void {
-    setExternalActive(args[0] === true)
+    if (args[0] === true) dispatch("activity")
+    else setExternalActive(false)
   }
   function onRecordingChange(): void {
     const wasRecording = lastRecordingUiState?.recording === true
@@ -1025,6 +1044,7 @@ export function mountMpvControls(
   handle.on("trackschanged", onTracksChanged)
   handle.on("useractive", onUserActive)
   handle.on("recordingchange", onRecordingChange)
+  handle.on("webfullscreenchange", updateWebFullscreenUi)
 
   // Only place the control bar can learn a load's isLive - the handle itself has no getter for it.
   const originalSrc = handle.src.bind(handle)
@@ -1093,7 +1113,11 @@ export function mountMpvControls(
   container.addEventListener("click", onContainerClick)
   container.addEventListener("dblclick", onContainerDblClick)
 
-  bar.addEventListener("focusin", () => dispatch("focus"))
+  bar.addEventListener("focusin", (event) => {
+    const focusedEl = event.target as HTMLElement | null
+    const keyboardFocus = focusedEl?.matches?.(":focus-visible") ?? false
+    dispatch(keyboardFocus ? "focus" : "activity")
+  })
   bar.addEventListener("focusout", (event) => {
     if (!bar.contains(event.relatedTarget as Node | null)) dispatch("blur")
   })
@@ -1101,6 +1125,7 @@ export function mountMpvControls(
   updatePlayPauseUi()
   updateVolumeUi()
   updateFullscreenUi()
+  updateWebFullscreenUi()
   updatePipUi()
   updatePlaybackUi()
   updateTrackButtonsUi()
@@ -1112,10 +1137,10 @@ export function mountMpvControls(
 
   return () => {
     clearClickTimer()
+    closeSettingsPopover(false)
     if (screenshotFeedbackTimer) clearTimeout(screenshotFeedbackTimer)
     if (hideTimer) clearTimeout(hideTimer)
     if (recTimer) clearInterval(recTimer)
-    closeSettingsPopover(false)
     handle.off?.("playing", onPlaying)
     handle.off?.("play", onPlaying)
     handle.off?.("pause", onPause)
@@ -1133,6 +1158,7 @@ export function mountMpvControls(
     handle.off?.("trackschanged", onTracksChanged)
     handle.off?.("useractive", onUserActive)
     handle.off?.("recordingchange", onRecordingChange)
+    handle.off?.("webfullscreenchange", updateWebFullscreenUi)
     document.removeEventListener("fullscreenchange", updateFullscreenUi)
     document.removeEventListener("keydown", onDocumentKeydown)
     container.removeEventListener("pointermove", onActivity)
