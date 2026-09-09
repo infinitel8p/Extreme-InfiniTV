@@ -27,6 +27,12 @@ const wrapIcon = (paths: string): string =>
   paths +
   "</svg>"
 
+function isTauriDesktop(): boolean {
+  if (typeof window === "undefined") return false
+  const tauriWindow = window as unknown as Record<string, unknown>
+  return !!(tauriWindow.__TAURI_INTERNALS__ || tauriWindow.__TAURI__)
+}
+
 const ICON_PIP = wrapIcon(
   '<path d="M11 19h-6a2 2 0 0 1 -2 -2v-10a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v4" />' +
     '<path d="M14 15a1 1 0 0 1 1 -1h5a1 1 0 0 1 1 1v3a1 1 0 0 1 -1 1h-5a1 1 0 0 1 -1 -1l0 -3" />'
@@ -498,6 +504,23 @@ export function mountMpvControls(
     const label = t(webFullscreen ? "player.controls.webFullscreenExit" : "player.controls.webFullscreenEnter")
     webFullscreenBtn.setAttribute("aria-label", label)
     webFullscreenBtn.title = label
+  }
+
+  // Web fullscreen hides the custom title bar, leaving the frameless window with no drag handle.
+  let dragStrip: HTMLElement | null = null
+  function syncWebFullscreenDragStrip(): void {
+    if (!isTauriDesktop() || !(handle.isWebFullscreen?.() ?? false)) {
+      dragStrip?.remove()
+      return
+    }
+    if (!dragStrip) {
+      dragStrip = document.createElement("div")
+      dragStrip.className = "absolute top-0 inset-x-0 h-8 z-[39] bg-transparent"
+      dragStrip.dataset.role = "web-fullscreen-drag"
+      dragStrip.setAttribute("data-tauri-drag-region", "")
+      dragStrip.setAttribute("aria-hidden", "true")
+    }
+    if (!dragStrip.isConnected) container.appendChild(dragStrip)
   }
 
   function updatePipUi(): void {
@@ -1018,6 +1041,10 @@ export function mountMpvControls(
     if (args[0] === true) dispatch("activity")
     else setExternalActive(false)
   }
+  function onWebFullscreenChange(): void {
+    updateWebFullscreenUi()
+    syncWebFullscreenDragStrip()
+  }
   function onRecordingChange(): void {
     const wasRecording = lastRecordingUiState?.recording === true
     const isRecordingNow = (handle.recordingPath?.() ?? null) != null
@@ -1044,7 +1071,7 @@ export function mountMpvControls(
   handle.on("trackschanged", onTracksChanged)
   handle.on("useractive", onUserActive)
   handle.on("recordingchange", onRecordingChange)
-  handle.on("webfullscreenchange", updateWebFullscreenUi)
+  handle.on("webfullscreenchange", onWebFullscreenChange)
 
   // Only place the control bar can learn a load's isLive - the handle itself has no getter for it.
   const originalSrc = handle.src.bind(handle)
@@ -1096,8 +1123,15 @@ export function mountMpvControls(
       clickTimer = null
     }
   }
+  // Icon innerHTML swaps detach event.target mid-dispatch; composedPath still holds the bar.
+  function fromPlayerChrome(event: MouseEvent): boolean {
+    const path = event.composedPath?.()
+    if (path?.length) return path.includes(bar) || (dragStrip != null && path.includes(dragStrip))
+    const target = event.target as Node | null
+    return bar.contains(target) || dragStrip?.contains(target) === true
+  }
   function onContainerClick(event: MouseEvent): void {
-    if (bar.contains(event.target as Node | null)) return
+    if (fromPlayerChrome(event)) return
     clearClickTimer()
     clickTimer = setTimeout(() => {
       clickTimer = null
@@ -1106,7 +1140,7 @@ export function mountMpvControls(
     }, SINGLE_CLICK_DELAY_MS)
   }
   function onContainerDblClick(event: MouseEvent): void {
-    if (bar.contains(event.target as Node | null)) return
+    if (fromPlayerChrome(event)) return
     clearClickTimer()
     toggleFullscreen()
   }
@@ -1126,6 +1160,7 @@ export function mountMpvControls(
   updateVolumeUi()
   updateFullscreenUi()
   updateWebFullscreenUi()
+  syncWebFullscreenDragStrip()
   updatePipUi()
   updatePlaybackUi()
   updateTrackButtonsUi()
@@ -1138,6 +1173,7 @@ export function mountMpvControls(
   return () => {
     clearClickTimer()
     closeSettingsPopover(false)
+    dragStrip?.remove()
     if (screenshotFeedbackTimer) clearTimeout(screenshotFeedbackTimer)
     if (hideTimer) clearTimeout(hideTimer)
     if (recTimer) clearInterval(recTimer)
@@ -1158,7 +1194,7 @@ export function mountMpvControls(
     handle.off?.("trackschanged", onTracksChanged)
     handle.off?.("useractive", onUserActive)
     handle.off?.("recordingchange", onRecordingChange)
-    handle.off?.("webfullscreenchange", updateWebFullscreenUi)
+    handle.off?.("webfullscreenchange", onWebFullscreenChange)
     document.removeEventListener("fullscreenchange", updateFullscreenUi)
     document.removeEventListener("keydown", onDocumentKeydown)
     container.removeEventListener("pointermove", onActivity)
