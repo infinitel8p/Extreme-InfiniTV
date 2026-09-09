@@ -693,9 +693,10 @@ function buildFavoritesItems(
     }
     items.push(item)
     const favFocusKey = cardFocusKey(railId, fav.kind as CardKind, fav.id)
+    const favKind = fav.kind
     backdropRefs.set(favFocusKey, { kind: fav.kind, id: fav.id })
     heroBuilders.set(favFocusKey, () => {
-      const backdrop = heroBackdropImage(playlistId, fav.kind, fav.id, posterUrl, favFocusKey, onBackdropResolved)
+      const backdrop = heroBackdropImage(playlistId, favKind, fav.id, posterUrl, favFocusKey, onBackdropResolved)
       return {
         eyebrow: railTitle,
         title: name,

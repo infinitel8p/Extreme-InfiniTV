@@ -29,9 +29,12 @@ import {
 import {
   launchAndroidNativeLive,
   launchAndroidNativeVod,
+  persistNativeTracksEvent,
   subscribeAndroidNativeEvents,
+  tracksLaunchOptionsFor,
   type AndroidNativeEvent,
 } from "@/scripts/lib/android-video-launcher.js"
+import type { TrackMemoryContext } from "@/scripts/lib/track-memory.ts"
 import {
   messageKeyForProbeVerdict,
   probeManifestSource,
@@ -74,6 +77,7 @@ export interface ReceiverLiveContext {
 
 export interface ReceiverPlayOptions {
   liveContext?: ReceiverLiveContext
+  trackMemory?: TrackMemoryContext | null
 }
 
 export interface ReceiverEngine {
@@ -591,7 +595,7 @@ export function createEmbeddedReceiverEngine(
   }
 
   return {
-    async play(descriptor: CastDescriptorV1): Promise<boolean> {
+    async play(descriptor: CastDescriptorV1, options?: ReceiverPlayOptions): Promise<boolean> {
       const attemptGeneration = ++playGeneration
       tearingDown = false
       clearDeadVideoWatchdog()
@@ -639,6 +643,7 @@ export function createEmbeddedReceiverEngine(
         timelineOffsetSeconds: descriptor.timelineOffsetSeconds,
         preferNativeHls: descriptor.preferNativeHls,
         title: descriptor.title,
+        trackMemory: descriptor.isLive ? null : (options?.trackMemory ?? null),
       })
       armLoadingWatchdog(handle)
 
@@ -819,6 +824,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
   let activeContentKey = ""
   // null = synthetic single "cast" channel
   let liveChannelIds: Set<string> | null = null
+  let activeTrackMemory: TrackMemoryContext | null = null
 
   function stopListening(): void {
     unsubscribe?.()
@@ -912,6 +918,9 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
       case "xt:android-native-error":
         void reportNativeError(sessionGeneration, event)
         break
+      case "xt:android-native-tracks":
+        persistNativeTracksEvent(activeTrackMemory, event.payload)
+        break
       case "xt:android-native-channel-changed":
         if (event.payload.channelId) {
           callbacks.onLiveChannelChanged?.(event.payload.channelId, event.payload.channelName || "")
@@ -982,6 +991,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
         ? requestedLiveContext
         : null
       liveChannelIds = liveContext ? new Set(liveContext.channels.map((liveChannel) => String(liveChannel.id))) : null
+      activeTrackMemory = descriptor.isLive ? null : (options?.trackMemory ?? null)
       unsubscribe = subscribeAndroidNativeEvents((event) => handleEvent(sessionGeneration, event))
       // Rust's handle_play already wrote "loading" once the mirror activated above.
       report({ state: "loading", positionSeconds: 0, durationSeconds: knownDurationSeconds })
@@ -1008,6 +1018,7 @@ export function createAndroidNativeReceiverEngine(callbacks: ReceiverEngineCallb
             title: descriptor.title,
             startMs: Math.max(0, Math.floor((descriptor.resumeSeconds || 0) * 1000)),
             dns,
+            tracks: tracksLaunchOptionsFor(activeTrackMemory),
           })
 
       if (!launched) {

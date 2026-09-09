@@ -36,6 +36,11 @@ import {
   handlePlayerStartError,
   attachVodStallWatchdog,
 } from "@/scripts/lib/vod-remux-recovery.ts"
+import {
+  chooseAudioTrackId,
+  rememberAudioTrack,
+  type TrackMemoryContext,
+} from "@/scripts/lib/track-memory.ts"
 
 export interface VodMountOptions {
   logTag: string
@@ -43,6 +48,8 @@ export interface VodMountOptions {
   prematureEndedLogTag: string
   contentId: number
   remuxContentKind: RemuxContentKind
+  /** Overrides the default playlistId/contentId/remuxContentKind track-memory identity. */
+  trackMemory?: TrackMemoryContext | null
   playlistId: string | null
   playSrc: string
   /** Fallback URL for MIME sniffing when the container plan didn't already resolve one. */
@@ -98,6 +105,16 @@ export interface VodMountOptions {
 /** Container plan, player mount, resume-seek, remux/audio-switcher setup, stall watchdog, and progress/ended listeners. */
 export async function mountVodPlayback(options: VodMountOptions): Promise<void> {
   const mountStartedAt = Date.now()
+  const trackMemory: TrackMemoryContext | null =
+    options.trackMemory !== undefined
+      ? options.trackMemory
+      : options.playlistId
+        ? {
+            playlistId: options.playlistId,
+            kind: options.remuxContentKind === "episode" ? "episode" : "vod",
+            id: String(options.contentId),
+          }
+        : null
   const remuxAvailable = await vodAudioRemuxAvailable()
   const remuxContentKey = buildRemuxContentKey(options.remuxContentKind, options.contentId)
   const forceRemux = options.playlistId ? isRemuxPinnedContent(options.playlistId, remuxContentKey) : false
@@ -286,11 +303,43 @@ export async function mountVodPlayback(options: VodMountOptions): Promise<void> 
     })
   }
 
+  // Once per mount: restore applies the first time the switcher's list has a real choice (>1 track).
+  let audioMemoryRestored = false
+
+  function applyAudioMemoryOnce(switcher: VodAudioSwitcher): void {
+    if (audioMemoryRestored) return
+    const list = switcher.source.list()
+    if (list.length < 2) return
+    audioMemoryRestored = true
+    const candidates = list.map((track, index) => ({ id: index, lang: track.language, title: track.label }))
+    const chosenIndex = chooseAudioTrackId(trackMemory, candidates)
+    if (chosenIndex == null) return
+    const chosenTrack = list[chosenIndex]
+    if (chosenTrack && !chosenTrack.active) switcher.source.select(chosenTrack.id)
+  }
+
+  function persistAudioSelection(switcher: VodAudioSwitcher): void {
+    const list = switcher.source.list()
+    const activeIndex = list.findIndex((track) => track.active)
+    if (activeIndex < 0) return
+    const activeTrack = list[activeIndex]!
+    rememberAudioTrack(trackMemory, { id: activeIndex, lang: activeTrack.language, title: activeTrack.label })
+  }
+
+  function wireAudioTrackMemory(switcher: VodAudioSwitcher): void {
+    applyAudioMemoryOnce(switcher)
+    switcher.source.subscribe(() => {
+      applyAudioMemoryOnce(switcher)
+      persistAudioSelection(switcher)
+    })
+  }
+
   if (remuxOwnsInitialMount) {
     // Registers against the synthetic default track now; setTracks delivers the real list with no remount.
     ownAudioSwitcher = buildAudioSwitcher([])
     options.setAudioSwitcher(ownAudioSwitcher)
     initialAudioSource = ownAudioSwitcher.source
+    wireAudioTrackMemory(ownAudioSwitcher)
   }
 
   // Dispose first: stops any remux session before the tee that feeds it goes away.
@@ -325,6 +374,7 @@ export async function mountVodPlayback(options: VodMountOptions): Promise<void> 
       subtitles: { sourceUrl: playSrc, mkvSession: preparedPlayback.mkvSession },
       audio: initialAudioSource,
       title: options.title,
+      trackMemory,
     })
   }
 
@@ -397,6 +447,7 @@ export async function mountVodPlayback(options: VodMountOptions): Promise<void> 
       ownAudioSwitcher = buildAudioSwitcher(audioTracks)
       options.setAudioSwitcher(ownAudioSwitcher)
       mountedPlayer.setAudioSource?.(ownAudioSwitcher.source)
+      wireAudioTrackMemory(ownAudioSwitcher)
     })
   }
 

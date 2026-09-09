@@ -21,8 +21,10 @@ const LANG_FILTER_PATTERN = /^[A-Z0-9+]{0,8}$/
 const RECENT_CAP = 30
 const SEARCH_RECENT_CAP = 10
 const PROGRESS_CAP = 200
+const TRACK_PREFS_CAP = 200
 const DAY_MS = 24 * 60 * 60 * 1000
-const COMPLETED_THRESHOLD = 0.95
+export const COMPLETED_THRESHOLD = 0.95
+export const PROGRESS_COMPLETED_THRESHOLD = COMPLETED_THRESHOLD
 const EVT_FAV_CHANGED = "xt:favorites-changed"
 const EVT_REC_CHANGED = "xt:recents-changed"
 const EVT_PROGRESS_CHANGED = "xt:progress-changed"
@@ -41,6 +43,7 @@ export const EVT_SEARCH_RECENT_CHANGED = "xt:search-recent-changed"
 export const EVT_HIDE_WATCHED_CHANGED = "xt:hide-watched-changed"
 export const EVT_LANG_FILTER_CHANGED = "xt:lang-filter-changed"
 export const EVT_GROUP_LANGS_CHANGED = "xt:group-langs-changed"
+export const TRACK_PREFS_EVENT = "xt:track-prefs-changed"
 
 let storePromise = null
 const STORE_LOAD_TIMEOUT_MS = 3000
@@ -212,6 +215,7 @@ function emptyEntry() {
     searchRecent: [],
     progVod: Object.create(null),
     progEpisode: Object.create(null),
+    trackPrefs: Object.create(null),
     hiddenLive: new Set(),
     hiddenVod: new Set(),
     hiddenSeries: new Set(),
@@ -304,6 +308,10 @@ function hydrate(raw) {
       progEpisode:
         val.progEpisode && typeof val.progEpisode === "object"
           ? { ...val.progEpisode }
+          : Object.create(null),
+      trackPrefs:
+        val.trackPrefs && typeof val.trackPrefs === "object"
+          ? { ...val.trackPrefs }
           : Object.create(null),
       hiddenLive: new Set(
         Array.isArray(val.hiddenLive) ? val.hiddenLive.map(String) : []
@@ -430,6 +438,7 @@ function dehydrate() {
       searchRecent: v.searchRecent,
       progVod: v.progVod,
       progEpisode: v.progEpisode,
+      trackPrefs: v.trackPrefs,
       hiddenLive: [...v.hiddenLive],
       hiddenVod: [...v.hiddenVod],
       hiddenSeries: [...v.hiddenSeries],
@@ -585,14 +594,14 @@ export function getFavorites(playlistId, kind) {
   return e ? e[favKey(kind)] : new Set()
 }
 
-/** @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {number} id */
+/** @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {number|string} id */
 export function isFavorite(playlistId, kind, id) {
   const e = cache.get(playlistId)
   return !!e && e[favKey(kind)].has(normalizeFavoriteId(id))
 }
 
 /**
- * @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {number} id
+ * @param {string} playlistId @param {"live"|"vod"|"series"} kind @param {number|string} id
  * @param {{ name?: string, logo?: string|null }} [extras]
  */
 export function toggleFavorite(playlistId, kind, id, extras) {
@@ -663,7 +672,7 @@ export function getWatchlist(playlistId, kind) {
   return e ? e[key] : {}
 }
 
-/** @param {string} playlistId @param {"vod"|"series"} kind @param {number} id */
+/** @param {string} playlistId @param {"vod"|"series"} kind @param {number|string} id */
 export function isOnWatchlist(playlistId, kind, id) {
   const key = watchKey(kind)
   if (!key) return false
@@ -674,7 +683,7 @@ export function isOnWatchlist(playlistId, kind, id) {
 /**
  * @param {string} playlistId
  * @param {"vod"|"series"} kind
- * @param {number} id
+ * @param {number|string} id
  * @param {{ name?: string, logo?: string|null }} [extras]
  * @returns {boolean} new state (true = on watchlist)
  */
@@ -1054,6 +1063,91 @@ export function clearProgress(playlistId, kind, id) {
   dispatch(EVT_PROGRESS_CHANGED, { playlistId, kind, id, removed: true })
 }
 
+// ---------------------------------------------------------------------------
+// Per-title audio/subtitle track memory
+// ---------------------------------------------------------------------------
+/**
+ * @typedef {{ audioLang: string|null, audioId: number|null, audioTitle: string|null,
+ *   subLang: string|null, subId: number|null, subTitle: string|null,
+ *   subOff: boolean, updatedAt: number }} TrackPrefsEntry
+ */
+
+const TRACK_PREFS_DEFAULTS = {
+  audioLang: null,
+  audioId: null,
+  audioTitle: null,
+  subLang: null,
+  subId: null,
+  subTitle: null,
+  subOff: false,
+}
+
+/** @param {"vod"|"episode"} kind @param {number|string} id */
+function trackPrefsKey(kind, id) {
+  return `${kind}:${id}`
+}
+
+function trackPrefsEqual(a, b) {
+  return (
+    a.audioLang === b.audioLang &&
+    a.audioId === b.audioId &&
+    a.audioTitle === b.audioTitle &&
+    a.subLang === b.subLang &&
+    a.subId === b.subId &&
+    a.subTitle === b.subTitle &&
+    a.subOff === b.subOff
+  )
+}
+
+function trimTrackPrefsBucket(bucket) {
+  const keys = Object.keys(bucket)
+  if (keys.length <= TRACK_PREFS_CAP) return
+  keys.sort((a, b) => (bucket[a].updatedAt || 0) - (bucket[b].updatedAt || 0))
+  const drop = keys.slice(0, keys.length - TRACK_PREFS_CAP)
+  for (const key of drop) delete bucket[key]
+}
+
+/**
+ * @param {string} playlistId @param {"vod"|"episode"} kind @param {number|string} id
+ * @returns {TrackPrefsEntry|null}
+ */
+export function getTrackPrefs(playlistId, kind, id) {
+  if (!playlistId || id == null) return null
+  const entry = cache.get(playlistId)
+  if (!entry) return null
+  return entry.trackPrefs[trackPrefsKey(kind, String(id))] || null
+}
+
+/**
+ * @param {string} playlistId @param {"vod"|"episode"} kind @param {number|string} id
+ * @param {Partial<TrackPrefsEntry>} patch
+ */
+export function setTrackPrefs(playlistId, kind, id, patch) {
+  if (!playlistId || id == null) return
+  const entry = getOrCreate(playlistId)
+  const bucket = entry.trackPrefs
+  const key = trackPrefsKey(kind, String(id))
+  const prev = bucket[key]
+  const merged = { ...TRACK_PREFS_DEFAULTS, ...(prev || {}), ...(patch || {}) }
+  if (prev && trackPrefsEqual(prev, merged)) return
+  bucket[key] = { ...merged, updatedAt: Date.now() }
+  trimTrackPrefsBucket(bucket)
+  scheduleSave()
+  dispatch(TRACK_PREFS_EVENT, { playlistId, kind, id })
+}
+
+/** @param {string} playlistId @param {"vod"|"episode"} kind @param {number|string} id */
+export function clearTrackPrefs(playlistId, kind, id) {
+  if (!playlistId || id == null) return
+  const entry = cache.get(playlistId)
+  if (!entry) return
+  const key = trackPrefsKey(kind, String(id))
+  if (!(key in entry.trackPrefs)) return
+  delete entry.trackPrefs[key]
+  scheduleSave()
+  dispatch(TRACK_PREFS_EVENT, { playlistId, kind, id })
+}
+
 /** @returns {Promise<number>} total items removed */
 export async function clearViewingHistory() {
   await ensureLoaded()
@@ -1065,13 +1159,15 @@ export async function clearViewingHistory() {
       entry.recVod.length +
       entry.recSeries.length +
       Object.keys(entry.progVod).length +
-      Object.keys(entry.progEpisode).length
+      Object.keys(entry.progEpisode).length +
+      Object.keys(entry.trackPrefs).length
     if (!count) continue
     entry.recLive = []
     entry.recVod = []
     entry.recSeries = []
     entry.progVod = Object.create(null)
     entry.progEpisode = Object.create(null)
+    entry.trackPrefs = Object.create(null)
     removed += count
     affectedPlaylistIds.push(playlistId)
   }
@@ -1084,6 +1180,7 @@ export async function clearViewingHistory() {
     }
     for (const kind of ["vod", "episode"]) {
       dispatch(EVT_PROGRESS_CHANGED, { playlistId, kind, removed: true })
+      dispatch(TRACK_PREFS_EVENT, { playlistId, kind, removed: true })
     }
   }
   return removed
@@ -1148,8 +1245,6 @@ export function getWatchedSignals(playlistId, limit = 20) {
   out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
   return out.slice(0, Math.max(0, limit))
 }
-
-export const PROGRESS_COMPLETED_THRESHOLD = COMPLETED_THRESHOLD
 
 /**
  * Roll up per-episode progress for a series. Used by the series poster badge

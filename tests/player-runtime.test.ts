@@ -1,4 +1,10 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi, beforeEach } from "vitest"
+
+vi.mock("@/scripts/lib/track-memory.ts", () => ({
+  chooseSubtitleTrackId: vi.fn(),
+  rememberSubtitleTrack: vi.fn(),
+}))
+
 import {
   buildMpvArgs,
   buildVlcArgs,
@@ -16,7 +22,10 @@ import {
   canSwapToMpvEmbedded,
   shouldOfferMpvEmbeddedFix,
   resolveBackendFrom,
+  createSubtitleTrackMemoryHooks,
 } from "../src/scripts/lib/player-runtime"
+import { chooseSubtitleTrackId, rememberSubtitleTrack } from "@/scripts/lib/track-memory.ts"
+import type { TrackMemoryContext } from "@/scripts/lib/track-memory.ts"
 
 const SRC = "https://example.com/live/u/p/1.m3u8"
 
@@ -183,6 +192,23 @@ describe("buildMpvArgs", () => {
     const args = buildMpvArgs({ src: SRC })
     expect(args.some((arg) => arg.includes("rtsp_transport"))).toBe(false)
   })
+
+  it("passes --alang and --slang when tracks are supplied", () => {
+    const args = buildMpvArgs({ src: SRC, tracks: { audioLang: "de", subLang: "en", subOff: false } })
+    expect(args).toContain("--alang=de")
+    expect(args).toContain("--slang=en")
+  })
+
+  it("passes --sid=no instead of --slang when subOff is true", () => {
+    const args = buildMpvArgs({ src: SRC, tracks: { audioLang: null, subLang: "en", subOff: true } })
+    expect(args).toContain("--sid=no")
+    expect(args.some((arg) => arg.startsWith("--slang="))).toBe(false)
+  })
+
+  it("omits track flags when tracks is absent", () => {
+    const args = buildMpvArgs({ src: SRC })
+    expect(args.some((arg) => arg.startsWith("--alang=") || arg.startsWith("--slang=") || arg === "--sid=no")).toBe(false)
+  })
 })
 
 describe("buildVlcArgs", () => {
@@ -222,6 +248,18 @@ describe("buildVlcArgs", () => {
   it("omits --start-time when resume below threshold", () => {
     const args = buildVlcArgs({ src: SRC, resumeSeconds: 2 })
     expect(args.some((a) => a.startsWith("--start-time="))).toBe(false)
+  })
+
+  it("passes --audio-language and --sub-language when tracks are supplied", () => {
+    const args = buildVlcArgs({ src: SRC, tracks: { audioLang: "de", subLang: "en", subOff: false } })
+    expect(args).toContain("--audio-language=de")
+    expect(args).toContain("--sub-language=en")
+  })
+
+  it("passes --no-spu instead of --sub-language when subOff is true", () => {
+    const args = buildVlcArgs({ src: SRC, tracks: { audioLang: null, subLang: "en", subOff: true } })
+    expect(args).toContain("--no-spu")
+    expect(args.some((a) => a.startsWith("--sub-language="))).toBe(false)
   })
 })
 
@@ -445,5 +483,80 @@ describe("resolveBackendFrom", () => {
   it("leaves videojs and shaka untouched", () => {
     expect(resolveBackendFrom("videojs", available)).toBe("videojs")
     expect(resolveBackendFrom("shaka", available)).toBe("shaka")
+  })
+})
+
+describe("createSubtitleTrackMemoryHooks", () => {
+  const CTX: TrackMemoryContext = { playlistId: "p", kind: "vod", id: "1" }
+  const TRACKS = [
+    { index: 0, label: "English", language: "en" },
+    { index: 1, label: "French", language: "fr" },
+  ]
+
+  // Fake manager mirrors the real one: select() fires onSelectionChanged synchronously.
+  function setup(ctx: TrackMemoryContext | null) {
+    const selectCalls: number[] = []
+    const hooks = createSubtitleTrackMemoryHooks(() => ctx, () => manager)
+    const manager = {
+      select(index: number) {
+        selectCalls.push(index)
+        hooks.onSelectionChanged(index >= 0 ? TRACKS[index]! : null)
+      },
+    }
+    return { hooks, manager, selectCalls }
+  }
+
+  beforeEach(() => {
+    vi.mocked(chooseSubtitleTrackId).mockReset()
+    vi.mocked(rememberSubtitleTrack).mockReset()
+  })
+
+  it("selects a remembered track once without persisting the restore", () => {
+    vi.mocked(chooseSubtitleTrackId).mockReturnValue(1)
+    const { hooks, selectCalls } = setup(CTX)
+    hooks.onTracksReady(TRACKS, -1)
+    expect(selectCalls).toEqual([1])
+    expect(rememberSubtitleTrack).not.toHaveBeenCalled()
+  })
+
+  it("turns subtitles off once when a track is showing and the remembered pick was off", () => {
+    vi.mocked(chooseSubtitleTrackId).mockReturnValue("off")
+    const { hooks, selectCalls } = setup(CTX)
+    hooks.onTracksReady(TRACKS, 0)
+    expect(selectCalls).toEqual([-1])
+    expect(rememberSubtitleTrack).not.toHaveBeenCalled()
+  })
+
+  it("does nothing for an off pick when nothing is already showing", () => {
+    vi.mocked(chooseSubtitleTrackId).mockReturnValue("off")
+    const { hooks, selectCalls } = setup(CTX)
+    hooks.onTracksReady(TRACKS, -1)
+    expect(selectCalls).toEqual([])
+  })
+
+  it("does nothing without a remembered choice", () => {
+    vi.mocked(chooseSubtitleTrackId).mockReturnValue(null)
+    const { hooks, selectCalls } = setup(CTX)
+    hooks.onTracksReady(TRACKS, -1)
+    expect(selectCalls).toEqual([])
+  })
+
+  it("only restores once per load; a later selection change persists", () => {
+    vi.mocked(chooseSubtitleTrackId).mockReturnValue(null)
+    const { hooks, manager } = setup(CTX)
+    hooks.onTracksReady(TRACKS, -1)
+    hooks.onTracksReady(TRACKS, -1)
+    manager.select(0)
+    expect(rememberSubtitleTrack).toHaveBeenCalledTimes(1)
+    expect(rememberSubtitleTrack).toHaveBeenCalledWith(CTX, { id: 0, lang: "en", title: "English" })
+  })
+
+  it("resetForLoad allows one more restore on the next source", () => {
+    vi.mocked(chooseSubtitleTrackId).mockReturnValue(1)
+    const { hooks, selectCalls } = setup(CTX)
+    hooks.onTracksReady(TRACKS, -1)
+    hooks.resetForLoad()
+    hooks.onTracksReady(TRACKS, -1)
+    expect(selectCalls).toEqual([1, 1])
   })
 })

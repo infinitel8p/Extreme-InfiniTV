@@ -1293,6 +1293,21 @@ class AndroidVideoBridge(
     posterUrl: String,
     startMs: Long,
     dns: String,
+  ): Boolean = launchVod(contentKey, url, ua, referer, title, posterUrl, startMs, dns, null, null, false)
+
+  @JavascriptInterface
+  fun launchVod(
+    contentKey: String,
+    url: String,
+    ua: String,
+    referer: String,
+    title: String,
+    posterUrl: String,
+    startMs: Long,
+    dns: String,
+    audioLang: String?,
+    subLang: String?,
+    subEnabled: Boolean,
   ): Boolean {
     return tryLaunch(VideoActivity.MODE_VOD) { intent ->
       intent.putExtra(VideoActivity.EXTRA_URL, url)
@@ -1303,6 +1318,9 @@ class AndroidVideoBridge(
       intent.putExtra(VideoActivity.EXTRA_TITLE, title)
       intent.putExtra(VideoActivity.EXTRA_POSTER, posterUrl)
       intent.putExtra(VideoActivity.EXTRA_DNS, dns)
+      intent.putExtra(VideoActivity.EXTRA_AUDIO_LANG, audioLang ?: "")
+      intent.putExtra(VideoActivity.EXTRA_SUB_LANG, subLang ?: "")
+      intent.putExtra(VideoActivity.EXTRA_SUB_ENABLED, subEnabled)
     }
   }
 

@@ -136,7 +136,7 @@ describe("providerFetch net-log instrumentation", () => {
   })
 
   it("respects logKind and strips it from the init passed to fetch", async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(null, { status: 200 }))
     globalThis.fetch = fetchMock as unknown as typeof fetch
 
     const { providerFetch } = await loadProviderFetch(false)

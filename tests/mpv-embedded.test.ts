@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, afterEach } from "vitest"
 import {
   cssRectToPhysicalBounds,
   cssRectToNativeVideoHoleVars,
@@ -23,7 +23,10 @@ import {
   DEFAULT_MPV_SUBTITLE_STYLE,
   clampAudioDelaySeconds,
   recordingFileName,
+  decideMpvTrackMemoryRestore,
 } from "../src/scripts/lib/mpv-embedded"
+import { rememberAudioTrack, rememberSubtitleTrack, type TrackMemoryContext } from "../src/scripts/lib/track-memory"
+import { clearForPlaylist } from "../src/scripts/lib/preferences.js"
 
 describe("cssRectToPhysicalBounds", () => {
   it("scales a CSS rect by an integer device pixel ratio", () => {
@@ -631,5 +634,46 @@ describe("sumDroppedFrames", () => {
 
   it("returns null when neither counter is present", () => {
     expect(sumDroppedFrames(undefined, undefined)).toBe(null)
+  })
+})
+
+describe("decideMpvTrackMemoryRestore", () => {
+  const ctx: TrackMemoryContext = { playlistId: "playlist-a", kind: "vod", id: "1" }
+
+  afterEach(() => {
+    clearForPlaylist("playlist-a")
+  })
+
+  it("decides nothing with no remembered tracks", () => {
+    const audioTracks = [{ id: 1, lang: "en", title: null }]
+    const subtitleTracks = [{ id: 2, lang: "en", title: null }]
+    expect(decideMpvTrackMemoryRestore(ctx, audioTracks, subtitleTracks)).toEqual({
+      audioId: null,
+      subtitleId: null,
+    })
+  })
+
+  it("picks the audio track matching the remembered language", () => {
+    rememberAudioTrack(ctx, { id: 5, lang: "de", title: "German" })
+    const audioTracks = [
+      { id: 1, lang: "en", title: null },
+      { id: 2, lang: "de", title: null },
+    ]
+    expect(decideMpvTrackMemoryRestore(ctx, audioTracks, [])).toEqual({ audioId: 2, subtitleId: null })
+  })
+
+  it("picks the subtitle track matching the remembered language", () => {
+    rememberSubtitleTrack(ctx, { id: 9, lang: "fr", title: "French" })
+    const subtitleTracks = [
+      { id: 3, lang: "en", title: null },
+      { id: 4, lang: "fr", title: null },
+    ]
+    expect(decideMpvTrackMemoryRestore(ctx, [], subtitleTracks)).toEqual({ audioId: null, subtitleId: 4 })
+  })
+
+  it("leaves subtitleId null when the remembered pick was subtitles off", () => {
+    rememberSubtitleTrack(ctx, null)
+    const subtitleTracks = [{ id: 3, lang: "en", title: null }]
+    expect(decideMpvTrackMemoryRestore(ctx, [], subtitleTracks)).toEqual({ audioId: null, subtitleId: null })
   })
 })

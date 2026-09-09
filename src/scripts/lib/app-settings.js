@@ -762,6 +762,7 @@ export const SETTINGS_EVENT = EVT_CHANGED
 // ---------------------------------------------------------------------------
 // Player backend (desktop only - the picker UI hides on web/Android)
 // ---------------------------------------------------------------------------
+/** @returns {import("./player-backend.ts").PlayerBackend} */
 export function getPlayerBackend() {
   const raw = readLS(KEY_PLAYER_BACKEND, "")
   const backend = PLAYER_BACKENDS.includes(raw) ? raw : DEFAULT_PLAYER_BACKEND
@@ -1243,6 +1244,7 @@ const lastSeenVersionAtLoad = (() => {
   }
 })()
 ;(function migrateTmdbEnabledLegacy() {
+  if (typeof localStorage === "undefined") return
   try {
     if (localStorage.getItem(KEY_TMDB_ENABLED_MIGRATED) === "1") return
     const raw = localStorage.getItem(KEY_TMDB_ENABLED)

@@ -29,7 +29,8 @@ import { getActiveDnsOverrideAsync, getEntries, xtreamCandidatesFor } from "@/sc
 import { resolveCatchupCastDescriptor } from "@/scripts/lib/tv-cast-catchup.ts"
 import type { CatchupRequestChannel } from "@/scripts/lib/catchup-resolve.ts"
 import { buildMovieStreamUrl, buildSeriesStreamUrl, buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
-import { markCompleted, pushRecent, setProgress } from "@/scripts/lib/preferences.js"
+import { markCompleted, pushRecent, setProgress, getTrackPrefs } from "@/scripts/lib/preferences.js"
+import { beginExternalSession } from "@/scripts/lib/external-progress.ts"
 import { getPlayerBackend, getReceiverEngine } from "@/scripts/lib/app-settings.js"
 import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
 import { registerBackInterceptor } from "@/scripts/lib/back-handler"
@@ -188,7 +189,7 @@ function clearRetryButtonDisable(): void {
     clearTimeout(retryReenableTimer)
     retryReenableTimer = null
   }
-  if (playerDom?.errorRetryEl) setRetryCooldown(playerDom.errorRetryEl, false)
+  if (playerDom?.errorRetryEl instanceof HTMLButtonElement) setRetryCooldown(playerDom.errorRetryEl, false)
 }
 
 // aria-disabled keeps D-pad focus on the button during the cooldown; a real `disabled` would blur it and strand focus.
@@ -660,6 +661,13 @@ async function guardPlayback(action: () => Promise<boolean>): Promise<boolean> {
   }
 }
 
+interface ExternalTrackContext {
+  playlistId: string
+  contentKind: "vod" | "episode"
+  contentId: string
+  extras: Record<string, unknown>
+}
+
 interface StartSessionInput {
   events: TvPlaybackEvents
   progressTarget?: ActiveProgressTarget
@@ -667,6 +675,8 @@ interface StartSessionInput {
   playOptions?: ReceiverPlayOptions
   /** False for catch-up: its embedded-only timeline offset has no external-player equivalent. */
   allowExternal?: boolean
+  /** Feeds the mpv external-progress recorder; unset for live/catch-up. */
+  externalTrackContext?: ExternalTrackContext
 }
 
 function setExternalBackHintVisible(visible: boolean): void {
@@ -715,6 +725,7 @@ async function tryStartExternalPlayback(
   descriptor: CastDescriptorV1,
   backend: ExternalPlayerKind,
   generation: number,
+  trackContext?: ExternalTrackContext,
 ): Promise<boolean> {
   const dom = ensureDom()
   const spinnerEl = dom.loadingEl?.querySelector<HTMLElement>("#tv-player-loading-spinner")
@@ -726,11 +737,18 @@ async function tryStartExternalPlayback(
   if (dom.loadingTitleEl) dom.loadingTitleEl.textContent = t("tv.player.externalPlaying", { player: backend.toUpperCase() })
   setExternalBackHintVisible(false)
 
+  const trackPrefs = trackContext
+    ? getTrackPrefs(trackContext.playlistId, trackContext.contentKind, trackContext.contentId)
+    : null
+  let launchResult: { sessionId: string | null; src: string }
   try {
-    await getExternalLauncher(backend).launch(descriptor.src, {
+    launchResult = await getExternalLauncher(backend).launch(descriptor.src, {
       userAgent: descriptor.headers?.userAgent ?? null,
       referer: descriptor.headers?.referer ?? null,
       resumeSeconds: descriptor.resumeSeconds,
+      tracks: trackPrefs
+        ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
+        : null,
     })
   } catch (err) {
     surfaceLaunchErrorFallback(err, backend, "[xt:tv-playback]")
@@ -742,6 +760,18 @@ async function tryStartExternalPlayback(
     void stopExternalPlayback(backend).catch(() => {})
     spinnerEl?.classList.remove("hidden")
     return false
+  }
+  if (launchResult.sessionId && backend === "mpv" && trackContext) {
+    beginExternalSession({
+      sessionId: launchResult.sessionId,
+      kind: "mpv",
+      src: launchResult.src,
+      playlistId: trackContext.playlistId,
+      contentKind: trackContext.contentKind,
+      contentId: trackContext.contentId,
+      extras: trackContext.extras,
+      startedAt: Date.now(),
+    })
   }
   // Loading panel stays up (spinner hidden) as the "playing externally" label - the host has no video otherwise.
   externalPlaybackKind = backend
@@ -802,7 +832,12 @@ async function runStartSession(descriptor: CastDescriptorV1, session: StartSessi
     ? externalPlaybackBackend()
     : null
   if (wantedExternalBackend) {
-    const launched = await tryStartExternalPlayback(descriptor, wantedExternalBackend, generation)
+    const launched = await tryStartExternalPlayback(
+      descriptor,
+      wantedExternalBackend,
+      generation,
+      session.externalTrackContext,
+    )
     if (isStalePlayAttempt(generation)) return false
     if (launched) return true
     // Launch failed - fall through to the normal embedded/native path below.
@@ -1077,7 +1112,17 @@ export async function playVod(input: TvPlayVodInput, events: TvPlaybackEvents = 
       }),
     }
 
-    return startSession(descriptor, { events, progressTarget })
+    return startSession(descriptor, {
+      events,
+      progressTarget,
+      playOptions: { trackMemory: { playlistId: input.playlistId, kind: "vod", id: String(input.movieId) } },
+      externalTrackContext: {
+        playlistId: input.playlistId,
+        contentKind: "vod",
+        contentId: String(input.movieId),
+        extras: { name: input.title, logo: input.logo ?? null },
+      },
+    })
   })
 }
 
@@ -1120,7 +1165,17 @@ export async function playEpisode(input: TvPlayEpisodeInput, events: TvPlaybackE
       }),
     }
 
-    return startSession(descriptor, { events, progressTarget })
+    return startSession(descriptor, {
+      events,
+      progressTarget,
+      playOptions: { trackMemory: { playlistId: input.playlistId, kind: "episode", id: String(input.episodeId) } },
+      externalTrackContext: {
+        playlistId: input.playlistId,
+        contentKind: "episode",
+        contentId: String(input.episodeId),
+        extras: progressExtras,
+      },
+    })
   })
 }
 

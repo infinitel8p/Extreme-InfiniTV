@@ -38,6 +38,9 @@ describe("launchAndroidNativeVod", () => {
       posterUrl: string,
       startMs: number,
       dns: string,
+      audioLang: string | null,
+      subLang: string | null,
+      subEnabled: boolean,
     ) => boolean
     const launchVod = vi.fn<LaunchVodFn>(() => true)
     ;(window as any).AndroidVideo = {
@@ -55,6 +58,7 @@ describe("launchAndroidNativeVod", () => {
       posterUrl: "https://poster",
       startMs: 12345,
       dns: "1.1.1.1",
+      tracks: { audioLang: "de", subLang: "en", subOff: false },
     })
     expect(ok).toBe(true)
     expect(launchVod).toHaveBeenCalledWith(
@@ -66,7 +70,20 @@ describe("launchAndroidNativeVod", () => {
       "https://poster",
       12345,
       "1.1.1.1",
+      "de",
+      "en",
+      true,
     )
+  })
+
+  it("defaults the track args to null/null/false when tracks is absent", async () => {
+    const launchVod = vi.fn<(...args: unknown[]) => boolean>(() => true)
+    ;(window as any).AndroidVideo = { launchVod }
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    mod.launchAndroidNativeVod({ contentKey: "k", url: "u" })
+    expect(launchVod.mock.calls[0]?.[8]).toBeNull()
+    expect(launchVod.mock.calls[0]?.[9]).toBeNull()
+    expect(launchVod.mock.calls[0]?.[10]).toBe(false)
   })
 
   it("forwards an empty dns string when none is provided", async () => {
@@ -182,5 +199,186 @@ describe("subscribeAndroidNativeEvents", () => {
     const mod = await import("@/scripts/lib/android-video-launcher.js")
     const unsubscribe = mod.subscribeAndroidNativeEvents(() => {})
     expect(() => unsubscribe()).not.toThrow()
+  })
+})
+
+describe("tracksLaunchOptionsFor / persistNativeTracksEvent", () => {
+  const localStorageStore = new Map<string, string>()
+  const localStorageMock: Storage = {
+    getItem: (key) => (localStorageStore.has(key) ? localStorageStore.get(key)! : null),
+    setItem: (key, value) => {
+      localStorageStore.set(key, String(value))
+    },
+    removeItem: (key) => {
+      localStorageStore.delete(key)
+    },
+    clear: () => {
+      localStorageStore.clear()
+    },
+    key: (index) => Array.from(localStorageStore.keys())[index] ?? null,
+    get length() {
+      return localStorageStore.size
+    },
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", localStorageMock)
+    localStorageStore.clear()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("returns null for a null context", async () => {
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    expect(mod.tracksLaunchOptionsFor(null)).toBeNull()
+  })
+
+  it("returns null when no prefs are stored for the context", async () => {
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    expect(mod.tracksLaunchOptionsFor({ playlistId: "p1", kind: "vod", id: "9" })).toBeNull()
+  })
+
+  it("reads stored prefs into the launch-options shape", async () => {
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    const prefs = await import("@/scripts/lib/preferences.js")
+    prefs.setTrackPrefs("p1", "vod", "9", { audioLang: "de", subLang: "en", subOff: true })
+    expect(mod.tracksLaunchOptionsFor({ playlistId: "p1", kind: "vod", id: "9" })).toEqual({
+      audioLang: "de",
+      subLang: "en",
+      subOff: true,
+    })
+  })
+
+  it("persists a native-tracks payload with normalized languages", async () => {
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    const prefs = await import("@/scripts/lib/preferences.js")
+    mod.persistNativeTracksEvent(
+      { playlistId: "p1", kind: "episode", id: "5" },
+      { audioLang: "eng", audioLabel: "English", subLang: "ger", subLabel: "German", subOff: false },
+    )
+    expect(prefs.getTrackPrefs("p1", "episode", "5")).toMatchObject({
+      audioLang: "en",
+      audioTitle: "English",
+      subLang: "de",
+      subTitle: "German",
+      subOff: false,
+    })
+  })
+
+  it("is a no-op for a null context", async () => {
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    expect(() => mod.persistNativeTracksEvent(null, { audioLang: "en" })).not.toThrow()
+  })
+})
+
+describe("launchAndroidNativeVodWithProgress track prefs", () => {
+  // preferences.js falls back to localStorage outside Tauri; Node 24's native
+  // localStorage shadows jsdom's, so stub a real in-memory Storage.
+  const localStorageStore = new Map<string, string>()
+  const localStorageMock: Storage = {
+    getItem: (key) => (localStorageStore.has(key) ? localStorageStore.get(key)! : null),
+    setItem: (key, value) => {
+      localStorageStore.set(key, String(value))
+    },
+    removeItem: (key) => {
+      localStorageStore.delete(key)
+    },
+    clear: () => {
+      localStorageStore.clear()
+    },
+    key: (index) => Array.from(localStorageStore.keys())[index] ?? null,
+    get length() {
+      return localStorageStore.size
+    },
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", localStorageMock)
+    localStorageStore.clear()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("passes stored track prefs from getTrackPrefs to the launch call", async () => {
+    const launchVod = vi.fn<(...args: unknown[]) => boolean>(() => true)
+    ;(window as any).AndroidVideo = { launchVod, drainEvents: () => "[]" }
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    const prefs = await import("@/scripts/lib/preferences.js")
+    prefs.setTrackPrefs("playlist-1", "vod", 7, { audioLang: "de", subLang: "en", subOff: false })
+
+    mod.launchAndroidNativeVodWithProgress({
+      playlistId: "playlist-1",
+      contentKey: "vod:7",
+      kind: "vod",
+      id: 7,
+      url: "https://x/a.mp4",
+    })
+
+    expect(launchVod.mock.calls[0]?.[8]).toBe("de")
+    expect(launchVod.mock.calls[0]?.[9]).toBe("en")
+    expect(launchVod.mock.calls[0]?.[10]).toBe(true)
+  })
+
+  it("writes an xt:android-native-tracks event into setTrackPrefs with normalized languages", async () => {
+    const launchVod = vi.fn<(...args: unknown[]) => boolean>(() => true)
+    ;(window as any).AndroidVideo = { launchVod, drainEvents: () => "[]" }
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    const prefs = await import("@/scripts/lib/preferences.js")
+
+    mod.launchAndroidNativeVodWithProgress({
+      playlistId: "playlist-1",
+      contentKey: "vod:7",
+      kind: "vod",
+      id: 7,
+      url: "https://x/a.mp4",
+    })
+
+    document.dispatchEvent(
+      new CustomEvent("xt:android-native-tracks", {
+        detail: {
+          contentKey: "vod:7",
+          audioLang: "eng",
+          audioLabel: "English",
+          subLang: "ger",
+          subLabel: "German",
+          subOff: false,
+        },
+      }),
+    )
+
+    expect(prefs.getTrackPrefs("playlist-1", "vod", 7)).toMatchObject({
+      audioLang: "en",
+      audioTitle: "English",
+      subLang: "de",
+      subTitle: "German",
+      subOff: false,
+    })
+  })
+
+  it("ignores an xt:android-native-tracks event for a different contentKey", async () => {
+    const launchVod = vi.fn<(...args: unknown[]) => boolean>(() => true)
+    ;(window as any).AndroidVideo = { launchVod, drainEvents: () => "[]" }
+    const mod = await import("@/scripts/lib/android-video-launcher.js")
+    const prefs = await import("@/scripts/lib/preferences.js")
+
+    mod.launchAndroidNativeVodWithProgress({
+      playlistId: "playlist-1",
+      contentKey: "vod:7",
+      kind: "vod",
+      id: 7,
+      url: "https://x/a.mp4",
+    })
+
+    document.dispatchEvent(
+      new CustomEvent("xt:android-native-tracks", {
+        detail: { contentKey: "vod:other", audioLang: "en", subOff: true },
+      }),
+    )
+
+    expect(prefs.getTrackPrefs("playlist-1", "vod", 7)).toBeNull()
   })
 })

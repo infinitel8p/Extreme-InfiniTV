@@ -21,6 +21,9 @@ interface AndroidVideoBridge {
     posterUrl: string,
     startMs: number,
     dns: string,
+    audioLang: string | null,
+    subLang: string | null,
+    subEnabled: boolean,
   ) => boolean
   launchLive?: (
     contentKey: string,

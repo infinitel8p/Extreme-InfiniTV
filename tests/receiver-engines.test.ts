@@ -132,6 +132,16 @@ function liveDescriptor(title: string, dns?: string): CastDescriptorV1 {
   } as CastDescriptorV1
 }
 
+function vodDescriptor(title: string): CastDescriptorV1 {
+  return {
+    v: 1,
+    src: `http://tv.example/movie/user/pass/${title}.mp4`,
+    mime: "video/mp4",
+    isLive: false,
+    title,
+  } as CastDescriptorV1
+}
+
 describe("mapNativeErrorCode", () => {
   it("maps decoder/decoding/DRM codes to the video codec message", () => {
     expect(mapNativeErrorCode("ERROR_CODE_DECODING_FAILED")).toBe("receiver.error.videoCodec")
@@ -420,6 +430,43 @@ describe("createEmbeddedReceiverEngine play() DNS proxy wrapping", () => {
     const handle = await playAndMount(liveDescriptor("A", "1.1.1.1"))
     expect(ensureDnsProxyMock).toHaveBeenCalled()
     expect((handle.srcCalls[0] as { src: string }).src).toBe("http://tv.example/live/user/pass/A.m3u8")
+  })
+})
+
+describe("createEmbeddedReceiverEngine play() trackMemory forwarding", () => {
+  beforeEach(() => {
+    pendingMount = null
+  })
+
+  async function playAndMount(
+    descriptor: CastDescriptorV1,
+    playOptions?: Parameters<ReturnType<typeof createEmbeddedReceiverEngine>["play"]>[1],
+  ): Promise<FakeEmbeddedHandle> {
+    const dom = embeddedDom(fakeElement())
+    const engine = createEmbeddedReceiverEngine(dom, { report: () => {}, onSessionEnded: () => {} })
+    const playPromise = engine.play(descriptor, playOptions)
+    await Promise.resolve()
+    const handle = new FakeEmbeddedHandle()
+    takePendingMountResolve()({ kind: "embedded", handle })
+    await playPromise
+    return handle
+  }
+
+  it("forwards trackMemory for a VOD descriptor", async () => {
+    const trackMemory = { playlistId: "p1", kind: "vod" as const, id: "7" }
+    const handle = await playAndMount(vodDescriptor("A"), { trackMemory })
+    expect((handle.srcCalls[0] as { trackMemory: unknown }).trackMemory).toEqual(trackMemory)
+  })
+
+  it("nulls out trackMemory for a live descriptor even if the caller passes one", async () => {
+    const trackMemory = { playlistId: "p1", kind: "vod" as const, id: "7" }
+    const handle = await playAndMount(liveDescriptor("A"), { trackMemory })
+    expect((handle.srcCalls[0] as { trackMemory: unknown }).trackMemory).toBeNull()
+  })
+
+  it("defaults trackMemory to null when no playOptions are passed", async () => {
+    const handle = await playAndMount(vodDescriptor("A"))
+    expect((handle.srcCalls[0] as { trackMemory: unknown }).trackMemory).toBeNull()
   })
 })
 

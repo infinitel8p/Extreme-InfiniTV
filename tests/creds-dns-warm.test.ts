@@ -30,8 +30,8 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-const ensureDnsProxyMock = vi.fn(async () => "http://127.0.0.1:9000/tok")
-const releaseDnsProxyMock = vi.fn(async () => {})
+const ensureDnsProxyMock = vi.fn(async (_sessionKey: string, _server: unknown) => "http://127.0.0.1:9000/tok")
+const releaseDnsProxyMock = vi.fn(async (_sessionKey: string) => {})
 
 vi.mock("@/scripts/lib/dns-proxy.ts", () => ({
   dnsProxyAvailable: () => true,

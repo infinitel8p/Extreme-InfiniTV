@@ -21,6 +21,7 @@ import { mountTvRouter, TV_VIEW_MOUNTED_EVENT } from "@/scripts/tv/router"
 import { tvNavActiveHref, normalizePathname } from "@/scripts/lib/tv-routes"
 import { mountTvWarmupIndicator } from "@/scripts/tv/ui/warmup-indicator"
 import { mountRootFontSizeSync } from "@/scripts/tv/root-font-size"
+import { mountExternalProgressRecorder } from "@/scripts/lib/external-progress"
 
 function syncNavActiveState(): void {
   const activeHref = tvNavActiveHref(location.pathname)
@@ -472,6 +473,7 @@ export function bootTvShell(): void {
   mountDesktopBackKey()
   mountTvInputGuard()
   initConnectivity()
+  mountExternalProgressRecorder()
   initUiSounds()
   initHaptics()
   initPlaylistAccent()

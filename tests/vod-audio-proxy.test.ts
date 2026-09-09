@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { shouldTranscodeVodAudio, peekVodAudioRemuxAvailable } from "../src/scripts/lib/vod-audio-proxy"
+import type { DnsServer } from "../src/scripts/lib/dns-config"
 
 const invokeCalls: { command: string; args: unknown }[] = []
-const resolveDnsRoutedUrl = vi.fn(async (url: string) => ({ url, server: null }))
+const resolveDnsRoutedUrl = vi.fn(
+  async (url: string, _explicitServer?: unknown): Promise<{ url: string; server: DnsServer | null }> => ({
+    url,
+    server: null,
+  })
+)
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: async (command: string, args: unknown) => {
@@ -83,7 +89,7 @@ describe("startVodAudioRemux dns routing", () => {
     const routedUrl = "http://127.0.0.1:9000/tok/https/example.test/movie.mkv"
     resolveDnsRoutedUrl.mockImplementation(async () => ({
       url: routedUrl,
-      server: { raw: "1.1.1.1" },
+      server: { kind: "ip", host: "1.1.1.1", port: 53, raw: "1.1.1.1" },
     }))
 
     const { startVodAudioRemux } = await import("../src/scripts/lib/vod-audio-proxy")

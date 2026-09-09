@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
+import type { DnsServer } from "../src/scripts/lib/dns-config"
 
 const SESSION_ID = "session-abc"
 
@@ -24,7 +25,12 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@/scripts/lib/app-settings.js", () => ({ getUserAgent: () => null }))
 
-const resolveDnsRoutedUrl = vi.fn(async (url: string) => ({ url, server: null }))
+const resolveDnsRoutedUrl = vi.fn(
+  async (url: string, _explicitServer?: unknown): Promise<{ url: string; server: DnsServer | null }> => ({
+    url,
+    server: null,
+  })
+)
 vi.mock("@/scripts/lib/provider-fetch.js", () => ({
   resolveDnsRoutedUrl: (url: string, explicitServer: unknown) => resolveDnsRoutedUrl(url, explicitServer),
 }))
@@ -86,7 +92,7 @@ describe("prepareVodPlayback cue delivery", () => {
     const routedUrl = "http://127.0.0.1:9000/tok/https/example.test/movie.mkv"
     resolveDnsRoutedUrl.mockImplementation(async () => ({
       url: routedUrl,
-      server: { raw: "1.1.1.1" },
+      server: { kind: "ip", host: "1.1.1.1", port: 53, raw: "1.1.1.1" },
     }))
 
     await openSession()

@@ -24,6 +24,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
@@ -75,6 +76,9 @@ class VideoActivity : AppCompatActivity() {
     const val EXTRA_TITLE = "title"
     const val EXTRA_POSTER = "posterUrl"
     const val EXTRA_START_MS = "startMs"
+    const val EXTRA_AUDIO_LANG = "audioLang"
+    const val EXTRA_SUB_LANG = "subLang"
+    const val EXTRA_SUB_ENABLED = "subEnabled"
     const val EXTRA_INITIAL_CHANNEL_ID = "initialChannelId"
     const val EXTRA_TV_OVERSCAN_PERCENT = "tvOverscanPercent"
 
@@ -132,12 +136,24 @@ class VideoActivity : AppCompatActivity() {
   private var initialTitle: String = ""
   private var posterUrl: String = ""
   private var resumeMs: Long = 0L
+  private var audioLangPref: String = ""
+  private var subLangPref: String = ""
+  private var subEnabledPref: Boolean = false
   private var tvOverscanPercent: Int = 0
   private var displayMode: Int = AspectRatioFrameLayout.RESIZE_MODE_FIT
 
   private var channels: List<ChannelLite> = emptyList()
   private var currentChannelIndex: Int = -1
   private var channelAdapter: ChannelListAdapter? = null
+
+  private data class SelectedTracks(
+    val audioLang: String?,
+    val audioLabel: String?,
+    val subLang: String?,
+    val subLabel: String?,
+    val subOff: Boolean,
+  )
+  private var lastEmittedTracks: SelectedTracks? = null
 
   private var overlayVisible = false
   private var controllerVisible = false
@@ -174,6 +190,40 @@ class VideoActivity : AppCompatActivity() {
         put("contentKey", contentKey)
         put("positionMs", player.currentPosition.coerceAtLeast(0))
         if (durationMs != C.TIME_UNSET && durationMs > 0) put("durationMs", durationMs)
+      }
+    )
+  }
+
+  private fun selectedTrackFormat(tracks: Tracks, trackType: Int): Format? {
+    val group = tracks.groups.firstOrNull { it.type == trackType && it.isSelected } ?: return null
+    for (index in 0 until group.length) {
+      if (group.isTrackSelected(index)) return group.getTrackFormat(index)
+    }
+    return null
+  }
+
+  private fun emitTracksIfChanged(tracks: Tracks) {
+    val audioFormat = selectedTrackFormat(tracks, C.TRACK_TYPE_AUDIO)
+    val subFormat = selectedTrackFormat(tracks, C.TRACK_TYPE_TEXT)
+    val current = SelectedTracks(
+      audioLang = audioFormat?.language,
+      audioLabel = audioFormat?.label,
+      subLang = subFormat?.language,
+      subLabel = subFormat?.label,
+      subOff = subFormat == null,
+    )
+    if (current == lastEmittedTracks) return
+    lastEmittedTracks = current
+    EventQueue.append(
+      this,
+      "xt:android-native-tracks",
+      JSONObject().apply {
+        put("contentKey", contentKey)
+        current.audioLang?.let { put("audioLang", it) }
+        current.audioLabel?.let { put("audioLabel", it) }
+        current.subLang?.let { put("subLang", it) }
+        current.subLabel?.let { put("subLabel", it) }
+        put("subOff", current.subOff)
       }
     )
   }
@@ -365,6 +415,9 @@ class VideoActivity : AppCompatActivity() {
     initialTitle = intent.getStringExtra(EXTRA_TITLE) ?: ""
     posterUrl = intent.getStringExtra(EXTRA_POSTER) ?: ""
     resumeMs = intent.getLongExtra(EXTRA_START_MS, 0L)
+    audioLangPref = intent.getStringExtra(EXTRA_AUDIO_LANG) ?: ""
+    subLangPref = intent.getStringExtra(EXTRA_SUB_LANG) ?: ""
+    subEnabledPref = intent.getBooleanExtra(EXTRA_SUB_ENABLED, false)
     applyTvOverscanPadding(intent.getIntExtra(EXTRA_TV_OVERSCAN_PERCENT, 0))
     controllerTitleView?.text = initialTitle
 
@@ -574,12 +627,23 @@ class VideoActivity : AppCompatActivity() {
       .build()
     exoPlayer = player
     view.player = player
+    lastEmittedTracks = null
 
-    // Subs off by default; the controller's CC dialog re-enables the text type on pick.
-    player.trackSelectionParameters = player.trackSelectionParameters
-      .buildUpon()
-      .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-      .build()
+    // VOD restores the remembered audio/subtitle choice; subs stay off unless a prior pick
+    // enabled them. The controller's CC dialog can still override live.
+    val paramsBuilder = player.trackSelectionParameters.buildUpon()
+    if (mode == MODE_VOD) {
+      if (audioLangPref.isNotEmpty()) paramsBuilder.setPreferredAudioLanguage(audioLangPref)
+      if (subEnabledPref) {
+        paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+        if (subLangPref.isNotEmpty()) paramsBuilder.setPreferredTextLanguage(subLangPref)
+      } else {
+        paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+      }
+    } else {
+      paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+    }
+    player.trackSelectionParameters = paramsBuilder.build()
 
     player.addListener(object : Player.Listener {
       override fun onPlayerError(error: PlaybackException) {
@@ -620,6 +684,7 @@ class VideoActivity : AppCompatActivity() {
       // Re-wire after the control view hides trackless buttons, so the chain never points through a GONE view.
       override fun onTracksChanged(tracks: Tracks) {
         playerView?.post { wireControllerFocusChain(mode == MODE_LIVE) }
+        if (mode == MODE_VOD) emitTracksIfChanged(tracks)
       }
 
       override fun onPlaybackStateChanged(state: Int) {

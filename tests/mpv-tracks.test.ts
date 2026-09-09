@@ -4,6 +4,8 @@ import {
   parseMpvSubtitleTracks,
   isMpvSubtitleActive,
   mpvTrackChoiceAvailable,
+  mpvTrackCandidates,
+  mpvNumericId,
 } from "../src/scripts/lib/mpv-tracks"
 
 describe("parseMpvAudioTracks", () => {
@@ -137,5 +139,40 @@ describe("mpvTrackChoiceAvailable", () => {
   it("treats a missing or malformed track-list as no choice", () => {
     expect(mpvTrackChoiceAvailable(null, "audio")).toBe(false)
     expect(mpvTrackChoiceAvailable(undefined, "sub")).toBe(false)
+  })
+})
+
+describe("mpvNumericId", () => {
+  it("passes through a finite number", () => {
+    expect(mpvNumericId(3)).toBe(3)
+  })
+
+  it("parses a numeric string", () => {
+    expect(mpvNumericId("4")).toBe(4)
+  })
+
+  it("returns null for 'no', non-numeric strings, and other types", () => {
+    expect(mpvNumericId("no")).toBeNull()
+    expect(mpvNumericId("")).toBeNull()
+    expect(mpvNumericId(undefined)).toBeNull()
+    expect(mpvNumericId(null)).toBeNull()
+    expect(mpvNumericId(false)).toBeNull()
+  })
+})
+
+describe("mpvTrackCandidates", () => {
+  it("returns raw id/lang/title entries for the requested kind only", () => {
+    const trackList = [
+      { id: 1, type: "audio", lang: "eng", title: "Commentary" },
+      { id: 2, type: "sub", lang: "fre" },
+      { id: 3, type: "video" },
+    ]
+    expect(mpvTrackCandidates(trackList, "audio")).toEqual([{ id: 1, lang: "eng", title: "Commentary" }])
+    expect(mpvTrackCandidates(trackList, "sub")).toEqual([{ id: 2, lang: "fre", title: null }])
+  })
+
+  it("treats a missing or malformed track-list as no candidates", () => {
+    expect(mpvTrackCandidates(null, "audio")).toEqual([])
+    expect(mpvTrackCandidates(undefined, "sub")).toEqual([])
   })
 })

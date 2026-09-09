@@ -49,6 +49,8 @@ import type { DnsServer } from "@/scripts/lib/dns-config.ts"
 import { isNativeVideoBackend } from "@/scripts/lib/player-backend.ts"
 import type { PlayerBackend, ExternalPlayerKind } from "@/scripts/lib/player-backend.ts"
 import type { MpvSubtitleStyle } from "@/scripts/lib/mpv-embedded.ts"
+import type { TrackMemoryContext } from "@/scripts/lib/track-memory.ts"
+import { chooseSubtitleTrackId, rememberSubtitleTrack } from "@/scripts/lib/track-memory.ts"
 
 export type { PlayerBackend, ExternalPlayerKind }
 export { isNativeVideoBackend }
@@ -68,8 +70,8 @@ export interface DrmOptions {
 }
 
 export interface VjsLikeHandle {
-  /** `isLive` defaults to true; pass false for a finite/seekable (catch-up) source. `durationSeconds` seeds duration when the container reports none (raw TS); `timelineOffsetSeconds` places a mid-programme remount on its timeline. `subtitles` opts a progressive MP4 source into embedded tx3g-subtitle extraction, or a `mkvSession` into push-mode subtitles from the MKV tee-proxy. `audio` backs track switching for engines with none (mpegts.js/native). `title` is a display title (e.g. channel/movie/episode name); ignored by backends that don't surface one. */
-  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string; mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null } | null; audio?: AudioTrackSource | null; preferNativeHls?: boolean; title?: string }): void
+  /** Mounts a source; `trackMemory` identifies the title for per-title audio/subtitle track restore+persist. */
+  src(opts: { src: string; type: string; drm?: DrmOptions | null; isLive?: boolean; durationSeconds?: number; timelineOffsetSeconds?: number; subtitles?: { sourceUrl: string; mkvSession?: import("@/scripts/lib/vod-proxy.js").MkvSubtitleSession | null } | null; audio?: AudioTrackSource | null; preferNativeHls?: boolean; title?: string; trackMemory?: TrackMemoryContext | null }): void
   /** Wires a caller-supplied audio track source into the current mount without remounting; a no-op on engines/mounts that don't use caller-supplied tracks (e.g. hls.js/shaka, which source their own). Lets background VOD audio-track discovery attach a switcher after the source is already playing. */
   setAudioSource?(source: AudioTrackSource | null): void
   play(): Promise<unknown> | void
@@ -137,6 +139,7 @@ export interface ExternalLaunchOptions {
   userAgent?: string | null
   referer?: string | null
   resumeSeconds?: number
+  tracks?: { audioLang: string | null; subLang: string | null; subOff: boolean } | null
 }
 
 export interface ExternalLauncher {
@@ -144,7 +147,7 @@ export interface ExternalLauncher {
   launch(
     src: string,
     options?: ExternalLaunchOptions,
-  ): Promise<{ pid: number; reused: boolean }>
+  ): Promise<{ pid: number; reused: boolean; sessionId: string | null; src: string }>
   kind: ExternalPlayerKind
   path: string
 }
@@ -303,6 +306,7 @@ export interface ArgvInput {
   extraArgs?: string[]
   /** Resume threshold; below this we don't pass a seek arg (avoids restart-from-credits glitch). */
   resumeMinSeconds?: number
+  tracks?: { audioLang: string | null; subLang: string | null; subOff: boolean } | null
 }
 
 export function buildMpvArgs(input: ArgvInput): string[] {
@@ -317,6 +321,9 @@ export function buildMpvArgs(input: ArgvInput): string[] {
   if (Number.isFinite(resume) && resume > minResume) {
     out.push(`--start=${Math.floor(resume)}`)
   }
+  if (input.tracks?.audioLang) out.push(`--alang=${input.tracks.audioLang}`)
+  if (input.tracks?.subOff) out.push("--sid=no")
+  else if (input.tracks?.subLang) out.push(`--slang=${input.tracks.subLang}`)
   for (const arg of input.extraArgs || []) {
     if (arg && arg.trim()) out.push(arg)
   }
@@ -336,6 +343,9 @@ export function buildVlcArgs(input: ArgvInput): string[] {
   if (Number.isFinite(resume) && resume > minResume) {
     out.push(`--start-time=${Math.floor(resume)}`)
   }
+  if (input.tracks?.audioLang) out.push(`--audio-language=${input.tracks.audioLang}`)
+  if (input.tracks?.subOff) out.push("--no-spu")
+  else if (input.tracks?.subLang) out.push(`--sub-language=${input.tracks.subLang}`)
   for (const arg of input.extraArgs || []) {
     if (arg && arg.trim()) out.push(arg)
   }
@@ -399,7 +409,7 @@ export function getExternalLauncher(kind: ExternalPlayerKind): ExternalLauncher 
           userAgent: options.userAgent ?? null,
           referer: options.referer ?? null,
         })
-        return { pid: 0, reused: false }
+        return { pid: 0, reused: false, sessionId: null, src }
       }
       if (!path) throw new PlayerNotConfiguredError(kind)
       const invoke = await getInvoke()
@@ -418,18 +428,29 @@ export function getExternalLauncher(kind: ExternalPlayerKind): ExternalLauncher 
         referer: options.referer ?? null,
         resumeSeconds: options.resumeSeconds,
         extraArgs: getPlayerExtraArgs(kind),
+        tracks: options.tracks ?? null,
       })
-      const reuse = getPlayerReuseInstance(kind)
-        ? { kind, enabled: true, url: playbackSrc }
-        : { kind, enabled: false, url: playbackSrc }
+      const reuse = {
+        kind,
+        enabled: getPlayerReuseInstance(kind),
+        url: playbackSrc,
+        alang: options.tracks?.audioLang ?? null,
+        slang: options.tracks?.subLang ?? null,
+        subOff: options.tracks?.subOff ?? false,
+      }
       try {
         const result = (await invoke("launch_external_player", {
           path,
           args,
           mode: "launch",
           reuse,
-        })) as { pid?: number; reused?: boolean }
-        return { pid: Number(result?.pid) || 0, reused: !!result?.reused }
+        })) as { pid?: number; reused?: boolean; sessionId?: string | null }
+        return {
+          pid: Number(result?.pid) || 0,
+          reused: !!result?.reused,
+          sessionId: result?.sessionId ?? null,
+          src: playbackSrc,
+        }
       } catch (raw) {
         throw classifyError(raw, kind, path)
       }
@@ -468,6 +489,66 @@ export function subscribeExternalPlayerExit(
   return () => {
     disposed = true
     try { unlisten?.() } catch (err) { log.warn("[xt:player] unlisten failed:", err) }
+  }
+}
+
+export const EXTERNAL_PLAYER_STATE_EVENT = "xt:external-player-state"
+
+export interface ExternalPlayerStateFrame {
+  sessionId: string
+  kind: "mpv"
+  path: string | null
+  position: number | null
+  duration: number | null
+  audio: { id: number; lang: string | null; title: string | null } | null
+  sub: { id: number; lang: string | null; title: string | null } | null
+  subOff: boolean
+  tracks: Array<{ type: "audio" | "sub"; id: number; lang: string | null; title: string | null; selected: boolean }> | null
+  eof: boolean
+  final: boolean
+}
+
+/** Fires as the launched mpv process reports position/track/eof state. No-op on web/Android. */
+export function subscribeExternalPlayerState(
+  handler: (frame: ExternalPlayerStateFrame) => void,
+): () => void {
+  if (!externalPlayersAvailable) return () => {}
+  let unlisten: (() => void) | null = null
+  let disposed = false
+  void (async () => {
+    try {
+      const { listen } = await import("@tauri-apps/api/event")
+      const stopListening = await listen<ExternalPlayerStateFrame>(
+        EXTERNAL_PLAYER_STATE_EVENT,
+        (event) => {
+          if (event.payload) handler(event.payload)
+        },
+      )
+      if (disposed) stopListening()
+      else unlisten = stopListening
+    } catch (err) {
+      log.warn("[xt:player] failed to subscribe to external-player-state events:", err)
+    }
+  })()
+  return () => {
+    disposed = true
+    try { unlisten?.() } catch (err) { log.warn("[xt:player] unlisten failed:", err) }
+  }
+}
+
+/** Sets an mpv property on a running external session (aid/sid/pause). Swallows failures. */
+export async function setExternalPlayerProperty(
+  kind: ExternalPlayerKind,
+  sessionId: string,
+  name: "aid" | "sid" | "pause",
+  value: unknown,
+): Promise<void> {
+  const invoke = await getInvoke()
+  if (!invoke) return
+  try {
+    await invoke("external_player_set_property", { kind, sessionId, name, value })
+  } catch (err) {
+    log.warn("[xt:player] external_player_set_property failed:", err)
   }
 }
 
@@ -1898,6 +1979,53 @@ async function attachMpegts(
 // ---------------------------------------------------------------------------
 // Embedded mounts
 // ---------------------------------------------------------------------------
+
+type SubtitleTrackInfo = { index: number; label: string; language: string }
+
+// Wires track-memory restore/persist into a mount's subtitle manager callbacks.
+export function createSubtitleTrackMemoryHooks(
+  getContext: () => TrackMemoryContext | null,
+  getManager: () => { select: (index: number) => void },
+) {
+  let suppressPersist = false
+  let restoreAttempted = false
+  return {
+    resetForLoad(): void {
+      restoreAttempted = false
+    },
+    onTracksReady(tracks: SubtitleTrackInfo[], activeIndex: number): void {
+      if (restoreAttempted) return
+      restoreAttempted = true
+      const ctx = getContext()
+      if (!ctx) return
+      const choice = chooseSubtitleTrackId(
+        ctx,
+        tracks.map((track) => ({ id: track.index, lang: track.language || null, title: track.label || null })),
+      )
+      if (choice === "off") {
+        if (activeIndex >= 0) {
+          suppressPersist = true
+          getManager().select(-1)
+          suppressPersist = false
+        }
+        return
+      }
+      if (typeof choice === "number" && choice !== activeIndex) {
+        suppressPersist = true
+        getManager().select(choice)
+        suppressPersist = false
+      }
+    },
+    onSelectionChanged(track: SubtitleTrackInfo | null): void {
+      if (suppressPersist) return
+      rememberSubtitleTrack(
+        getContext(),
+        track ? { id: track.index, lang: track.language || null, title: track.label || null } : null,
+      )
+    },
+  }
+}
+
 async function mountVideoJs(
   videoEl: HTMLVideoElement,
   options: MountOptions,
@@ -1945,6 +2073,7 @@ async function mountVideoJs(
   let pendingAudioSource: AudioTrackSource | null = null
   // Whether the current mount is on a path (ts/native) that reads pendingAudioSource at all.
   let pendingUsesCallerSuppliedTracks = false
+  let trackMemory: TrackMemoryContext | null = null
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
   function resolveEngine(): ResolvedEngine | null {
     if (activeHls) return { kind: "hls", instance: activeHls }
@@ -1957,9 +2086,12 @@ async function mountVideoJs(
     resolveEngine,
     getMediaElement: () => getUnderlyingVideo() ?? videoEl,
   })
+  const subtitleMemoryHooks = createSubtitleTrackMemoryHooks(() => trackMemory, () => subtitleManager)
   const subtitleManager = createSubtitleManager({
     registrar: createVideoJsTrackRegistrar(player),
     getCurrentTime: () => player.currentTime?.() || 0,
+    onTracksReady: (tracks, activeIndex) => subtitleMemoryHooks.onTracksReady(tracks, activeIndex),
+    onSelectionChanged: (track) => subtitleMemoryHooks.onSelectionChanged(track),
   })
   const audioMenu = attachVideoJsAudioMenu(videojs, player)
 
@@ -2165,10 +2297,12 @@ async function mountVideoJs(
   }
 
   const wrapped: VjsLikeHandle = {
-    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, audio }) {
+    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, audio, trackMemory: nextTrackMemory }) {
       pendingSrc = src
       pendingIsLive = isLive ?? true
       pendingDurationSeconds = durationSeconds
+      trackMemory = nextTrackMemory ?? null
+      subtitleMemoryHooks.resetForLoad()
       pendingTimelineOffsetSeconds = timelineOffsetSeconds
       pendingAudioSource = audio ?? null
       codecState.videoCodec = null
@@ -2354,6 +2488,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   let pendingAudioSource: AudioTrackSource | null = null
   // Whether the current mount is on a path (ts/native) that reads pendingAudioSource at all.
   let pendingUsesCallerSuppliedTracks = false
+  let trackMemory: TrackMemoryContext | null = null
   // Resolved lazily, only once the mount actually hits an HLS source - mirrors mountVideoJs's
   // hlsModPromise so artplayer/mpegts-only channels never pay hls.js's parse/bundle cost.
   let hlsModPromise: Promise<any> | null = null
@@ -2557,10 +2692,15 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   if (art.isReady) applyPreload()
   else art.on("ready", applyPreload)
 
+  const subtitleMemoryHooks = createSubtitleTrackMemoryHooks(() => trackMemory, () => subtitleManager)
   const subtitleManager = createSubtitleManager({
     registrar: createNativeTrackRegistrar(() => art.video ?? null),
     getCurrentTime: () => art.currentTime || 0,
-    onTracksReady: (tracks, activeIndex) => installSubtitleControl(tracks, activeIndex),
+    onTracksReady: (tracks, activeIndex) => {
+      installSubtitleControl(tracks, activeIndex)
+      subtitleMemoryHooks.onTracksReady(tracks, activeIndex)
+    },
+    onSelectionChanged: (track) => subtitleMemoryHooks.onSelectionChanged(track),
   })
   const audioControl = attachArtplayerAudioControl(art, t)
   const hlsSubtitleControl = attachArtplayerHlsSubtitleControl(art, t)
@@ -2626,7 +2766,7 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
   }
 
   const handle: VjsLikeHandle = {
-    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, audio, preferNativeHls }) {
+    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, audio, preferNativeHls, trackMemory: nextTrackMemory }) {
       pendingSrc = src
       pendingPreferNativeHls = !!preferNativeHls
       pendingDrm = drm ?? null
@@ -2634,6 +2774,8 @@ async function mountArtPlayer(videoEl: HTMLVideoElement, options: MountOptions =
       pendingDurationSeconds = durationSeconds
       pendingTimelineOffsetSeconds = timelineOffsetSeconds
       pendingAudioSource = audio ?? null
+      trackMemory = nextTrackMemory ?? null
+      subtitleMemoryHooks.resetForLoad()
       codecState.videoCodec = null
       codecState.audioCodec = null
       codecState.errorDetail = null
@@ -2854,6 +2996,7 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   let pendingIsLive = true
   let pendingDurationSeconds: number | undefined
   let pendingTimelineOffsetSeconds: number | undefined
+  let trackMemory: TrackMemoryContext | null = null
   const codecState: PlaybackCodecInfo = { videoCodec: null, audioCodec: null, errorDetail: null }
   // The raw-TS fallback keeps `player` attached-but-unloaded; mpegts, when active, is the real engine.
   function resolveEngine(): ResolvedEngine | null {
@@ -2865,9 +3008,12 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
     resolveEngine,
     getMediaElement: () => video,
   })
+  const subtitleMemoryHooks = createSubtitleTrackMemoryHooks(() => trackMemory, () => subtitleManager)
   const subtitleManager = createSubtitleManager({
     registrar: createNativeTrackRegistrar(() => video),
     getCurrentTime: () => video.currentTime || 0,
+    onTracksReady: (tracks, activeIndex) => subtitleMemoryHooks.onTracksReady(tracks, activeIndex),
+    onSelectionChanged: (track) => subtitleMemoryHooks.onSelectionChanged(track),
   })
 
   function destroyMpegts(): Promise<void> {
@@ -3022,12 +3168,14 @@ async function mountShaka(videoEl: HTMLVideoElement, options: MountOptions = {})
   }
 
   const handle: VjsLikeHandle = {
-    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles }) {
+    src({ src, type, drm, isLive, durationSeconds, timelineOffsetSeconds, subtitles, trackMemory: nextTrackMemory }) {
       pendingSrc = src
       pendingDrm = drm ?? null
       pendingIsLive = isLive ?? true
       pendingDurationSeconds = durationSeconds
       pendingTimelineOffsetSeconds = timelineOffsetSeconds
+      trackMemory = nextTrackMemory ?? null
+      subtitleMemoryHooks.resetForLoad()
       codecState.videoCodec = null
       codecState.audioCodec = null
       codecState.errorDetail = null

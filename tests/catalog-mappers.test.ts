@@ -83,7 +83,7 @@ describe("mapXtreamLiveRows", () => {
       ],
       new Map()
     )
-    expect(rows.map((row) => row.name)).toEqual(["Valid"])
+    expect(rows.map((row: { name: string }) => row.name)).toEqual(["Valid"])
   })
 
   it("coerces tv_archive and tv_archive_duration to numbers", () => {
@@ -120,7 +120,7 @@ describe("mapXtreamVodRows", () => {
       ],
       new Map()
     )
-    expect(rows.map((row) => row.name)).toEqual(["Apple", "banana", "cherry"])
+    expect(rows.map((row: { name: string }) => row.name)).toEqual(["Apple", "banana", "cherry"])
   })
 
   it("defaults added to 0 when missing", () => {
@@ -214,7 +214,7 @@ describe("mapXtreamSeriesRows", () => {
       ],
       new Map()
     )
-    expect(rows.map((row) => row.name)).toEqual(["Apple", "banana"])
+    expect(rows.map((row: { name: string }) => row.name)).toEqual(["Apple", "banana"])
   })
 
   it("resolves category via category_ids[0] fallback then category_id", () => {

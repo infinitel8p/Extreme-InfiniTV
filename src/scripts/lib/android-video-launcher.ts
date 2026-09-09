@@ -16,8 +16,10 @@
 
 import type { ChannelInput } from "@/scripts/lib/channel-lite.js"
 import { serializeChannelsJson } from "@/scripts/lib/channel-lite.js"
-import { setProgress, markCompleted } from "@/scripts/lib/preferences.js"
+import { setProgress, markCompleted, getTrackPrefs, setTrackPrefs } from "@/scripts/lib/preferences.js"
 import { getTvOverscan, TV_OVERSCAN_EVENT } from "@/scripts/lib/app-settings.js"
+import { normalizeLang } from "@/scripts/lib/track-match.js"
+import type { TrackMemoryContext } from "@/scripts/lib/track-memory.ts"
 import { log, redactUrl } from "@/scripts/lib/log.js"
 
 export type AndroidNativeEventType =
@@ -27,6 +29,7 @@ export type AndroidNativeEventType =
   | "xt:android-native-error"
   | "xt:android-native-play-state"
   | "xt:android-native-volume"
+  | "xt:android-native-tracks"
 
 export interface AndroidNativeEvent {
   type: AndroidNativeEventType
@@ -46,6 +49,11 @@ export interface AndroidNativeEvent {
     playing?: boolean
     volume?: number
     muted?: boolean
+    audioLang?: string | null
+    audioLabel?: string | null
+    subLang?: string | null
+    subLabel?: string | null
+    subOff?: boolean
   }
 }
 
@@ -58,6 +66,7 @@ export interface VodLaunchOptions {
   posterUrl?: string
   startMs?: number
   dns?: string | null
+  tracks?: { audioLang: string | null; subLang: string | null; subOff: boolean } | null
 }
 
 export interface LiveLaunchOptions {
@@ -107,6 +116,9 @@ export function launchAndroidNativeVod(opts: VodLaunchOptions): boolean {
       opts.posterUrl || "",
       Math.max(0, Math.floor(opts.startMs || 0)),
       opts.dns || "",
+      opts.tracks?.audioLang ?? null,
+      opts.tracks?.subLang ?? null,
+      opts.tracks ? !opts.tracks.subOff : false,
     )
   } catch (err) {
     log.error("[xt:android-video] native VOD launch failed:", redactUrl(opts.url), err)
@@ -171,6 +183,7 @@ function installListeners(): void {
     "xt:android-native-error",
     "xt:android-native-play-state",
     "xt:android-native-volume",
+    "xt:android-native-tracks",
   ]
   for (const type of types) {
     document.addEventListener(type, (event: Event) => {
@@ -219,6 +232,31 @@ export function subscribeAndroidNativeEvents(callback: Subscriber): () => void {
   }
 }
 
+/** Reads a title's remembered audio/subtitle picks into the shape `launchAndroidNativeVod` expects. */
+export function tracksLaunchOptionsFor(
+  ctx: TrackMemoryContext | null | undefined,
+): VodLaunchOptions["tracks"] {
+  if (!ctx) return null
+  const prefs = getTrackPrefs(ctx.playlistId, ctx.kind, ctx.id)
+  if (!prefs) return null
+  return { audioLang: prefs.audioLang, subLang: prefs.subLang, subOff: prefs.subOff }
+}
+
+/** Persists an `xt:android-native-tracks` event's payload as the title's remembered picks. */
+export function persistNativeTracksEvent(
+  ctx: TrackMemoryContext | null | undefined,
+  payload: AndroidNativeEvent["payload"],
+): void {
+  if (!ctx) return
+  setTrackPrefs(ctx.playlistId, ctx.kind, ctx.id, {
+    audioLang: normalizeLang(payload.audioLang),
+    audioTitle: payload.audioLabel ?? null,
+    subLang: normalizeLang(payload.subLang),
+    subTitle: payload.subLabel ?? null,
+    subOff: !!payload.subOff,
+  })
+}
+
 export interface NativeVodProgressOptions {
   playlistId: string
   contentKey: string
@@ -237,12 +275,16 @@ export function launchAndroidNativeVodWithProgress(
   opts: NativeVodProgressOptions,
 ): boolean {
   const { playlistId, contentKey, kind, id, progressExtras } = opts
+  const trackMemoryCtx: TrackMemoryContext = { playlistId, kind, id: String(id) }
+  const tracks = tracksLaunchOptionsFor(trackMemoryCtx)
   const unsubscribe = subscribeAndroidNativeEvents((event) => {
     if (event.payload?.contentKey !== contentKey) return
     if (event.type === "xt:android-native-progress") {
       const pos = Math.max(0, Math.floor((event.payload.positionMs || 0) / 1000))
       const dur = Math.max(0, Math.floor((event.payload.durationMs || 0) / 1000))
       if (pos > 0) setProgress(playlistId, kind, id, pos, dur, progressExtras)
+    } else if (event.type === "xt:android-native-tracks") {
+      persistNativeTracksEvent(trackMemoryCtx, event.payload)
     } else if (event.type === "xt:android-native-finished") {
       if (event.payload.completed) {
         markCompleted(playlistId, kind, id, {
@@ -263,6 +305,7 @@ export function launchAndroidNativeVodWithProgress(
     posterUrl: opts.posterUrl,
     startMs: opts.startMs,
     dns: opts.dns,
+    tracks,
   })
   if (!launched) unsubscribe()
   return launched

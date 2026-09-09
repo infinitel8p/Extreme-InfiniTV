@@ -8,14 +8,14 @@ export interface MpvSubtitleTrack {
   active: boolean
 }
 
-interface MpvRawTrackEntry {
+export interface MpvRawTrackEntry {
   id: number
   title: string | null
   lang: string | null
 }
 
 // mpv reports ids as numbers over JSON, but tolerate numeric strings too.
-function mpvNumericId(value: unknown): number | null {
+export function mpvNumericId(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value
   if (typeof value === "string" && value.trim() !== "") {
     const parsed = Number(value)
@@ -77,4 +77,9 @@ export function isMpvSubtitleActive(sid: unknown): boolean {
 export function mpvTrackChoiceAvailable(trackList: unknown, kind: "audio" | "sub"): boolean {
   const count = normalizeMpvTrackList(trackList, kind).length
   return kind === "audio" ? count > 1 : count > 0
+}
+
+/** Raw `{id, lang, title}` entries for track-memory matching, unlike the labeled/formatted parse* helpers above. */
+export function mpvTrackCandidates(trackList: unknown, kind: "audio" | "sub"): MpvRawTrackEntry[] {
+  return normalizeMpvTrackList(trackList, kind)
 }

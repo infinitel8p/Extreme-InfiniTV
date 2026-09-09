@@ -885,8 +885,10 @@ const appMode = import.meta.env.PUBLIC_APP_MODE || ""
   import { mountTvInputGuard } from "@/scripts/lib/tv-input-guard"
   import { isTvDevice } from "@/scripts/lib/tv-detect"
   import { isElementVisibleForNav } from "@/scripts/lib/nav-visibility"
+  import { mountExternalProgressRecorder } from "@/scripts/lib/external-progress"
   initI18n()
   initConnectivity()
+  mountExternalProgressRecorder()
   initUiSounds()
   initHaptics()
   initPlaylistAccent()

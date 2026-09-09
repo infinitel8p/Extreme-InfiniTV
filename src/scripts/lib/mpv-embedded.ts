@@ -7,11 +7,19 @@ import { wrapForDnsProxyExternal } from "@/scripts/lib/player-runtime.js"
 import { getMpvStartConfig, getDownloadDir } from "@/scripts/lib/app-settings.js"
 import { mountMpvControls } from "@/scripts/lib/mpv-controls.js"
 import { openMpvTrackDialog } from "@/scripts/lib/mpv-track-dialog.js"
-import { parseMpvAudioTracks, parseMpvSubtitleTracks, isMpvSubtitleActive } from "@/scripts/lib/mpv-tracks.js"
+import {
+  parseMpvAudioTracks,
+  parseMpvSubtitleTracks,
+  isMpvSubtitleActive,
+  mpvNumericId,
+  mpvTrackCandidates,
+} from "@/scripts/lib/mpv-tracks.js"
 import { computeMpvSurface } from "@/scripts/lib/mpv-embedded-surface.js"
 import type { MpvSurfaceNativeState, MpvSurfacePlaceholder } from "@/scripts/lib/mpv-embedded-surface.js"
 import type { VjsLikeHandle, PlaybackCodecInfo } from "@/scripts/lib/player-runtime.js"
 import type { EngineEvent, EngineStats } from "@/scripts/lib/player-telemetry.js"
+import { chooseAudioTrackId, chooseSubtitleTrackId, rememberAudioTrack, rememberSubtitleTrack } from "@/scripts/lib/track-memory.js"
+import type { TrackMemoryContext } from "@/scripts/lib/track-memory.js"
 
 export interface Bounds {
   x: number
@@ -321,6 +329,23 @@ export function classifyMpvEndFileError(detail: string | null, httpStatus: numbe
 export function clampPlaybackRate(rate: number): number {
   if (!Number.isFinite(rate)) return 1
   return Math.min(4, Math.max(0.25, rate))
+}
+
+export interface MpvTrackMemoryDecision {
+  audioId: number | null
+  /** null covers both "no memory" and "remembered off"; mpv already starts with sid=no. */
+  subtitleId: number | null
+}
+
+/** What mpv should switch to on load, given the observed track-list and the title's remembered picks. */
+export function decideMpvTrackMemoryRestore(
+  trackMemory: TrackMemoryContext | null,
+  audioTracks: { id: number; lang: string | null; title: string | null }[],
+  subtitleTracks: { id: number; lang: string | null; title: string | null }[],
+): MpvTrackMemoryDecision {
+  const audioId = audioTracks.length ? chooseAudioTrackId(trackMemory, audioTracks) : null
+  const subtitleChoice = subtitleTracks.length ? chooseSubtitleTrackId(trackMemory, subtitleTracks) : null
+  return { audioId, subtitleId: typeof subtitleChoice === "number" ? subtitleChoice : null }
 }
 
 /** Sums the two dropped-frame counters mpv reports; null when neither is present. */
@@ -646,6 +671,10 @@ export async function createMpvEmbeddedHandle(
 
   let hasLoadedSource = false
   let loadGeneration = 0
+  let currentTrackMemory: TrackMemoryContext | null = null
+  let trackMemoryAppliedForLoad = false
+  // The generation this load's restore is bound to; guards a stale playback-restart from a superseded load.
+  let trackMemoryLoadGeneration = -1
 
   // Native surface state reported by Rust, and the reducer's last decision from it.
   let nativeState: MpvSurfaceNativeState = "hidden"
@@ -845,6 +874,23 @@ export async function createMpvEmbeddedHandle(
     return false
   }
 
+  // Runs once per load generation, on playback-restart once the track list has settled.
+  function applyTrackMemoryRestore(): void {
+    if (trackMemoryAppliedForLoad) return
+    if (trackMemoryLoadGeneration !== loadGeneration) return
+    trackMemoryAppliedForLoad = true
+    if (!Array.isArray(props.trackList) || props.trackList.length === 0) return
+    const decision = decideMpvTrackMemoryRestore(
+      currentTrackMemory,
+      mpvTrackCandidates(props.trackList, "audio"),
+      mpvTrackCandidates(props.trackList, "sub"),
+    )
+    if (decision.audioId != null && decision.audioId !== mpvNumericId(props.aid)) {
+      void setProperty("aid", decision.audioId)
+    }
+    if (decision.subtitleId != null) void setProperty("sid", decision.subtitleId)
+  }
+
   function applyStateUpdate(patch: MpvProps): void {
     const previous = props
     props = { ...props, ...patch }
@@ -874,6 +920,7 @@ export async function createMpvEmbeddedHandle(
       noteProgress()
       setRevealed(true)
       scheduleLiveEofRetryReset()
+      applyTrackMemoryRestore()
       if (props.pause !== true) emitter.emit("playing")
     } else if (payload.kind === "end-file") {
       if (payload.reason === "eof") {
@@ -1117,7 +1164,11 @@ export async function createMpvEmbeddedHandle(
       "audio",
       tracks.map((track) => ({ id: track.id, label: track.label, active: track.active })),
     )
-    if (picked?.id != null) void setProperty("aid", Number(picked.id))
+    if (picked?.id == null) return
+    const pickedId = Number(picked.id)
+    void setProperty("aid", pickedId)
+    const raw = mpvTrackCandidates(props.trackList, "audio").find((entry) => entry.id === pickedId)
+    rememberAudioTrack(currentTrackMemory, raw ? { id: raw.id, lang: raw.lang, title: raw.title } : null)
   }
 
   async function loadExternalSubtitleFile(): Promise<void> {
@@ -1149,7 +1200,15 @@ export async function createMpvEmbeddedHandle(
       void loadExternalSubtitleFile()
       return
     }
-    void setProperty("sid", picked.id === null ? "no" : Number(picked.id))
+    if (picked.id === null) {
+      void setProperty("sid", "no")
+      rememberSubtitleTrack(currentTrackMemory, null)
+      return
+    }
+    const pickedId = Number(picked.id)
+    void setProperty("sid", pickedId)
+    const raw = mpvTrackCandidates(props.trackList, "sub").find((entry) => entry.id === pickedId)
+    rememberSubtitleTrack(currentTrackMemory, raw ? { id: raw.id, lang: raw.lang, title: raw.title } : null)
   }
 
   function isLiveSession(): boolean {
@@ -1183,6 +1242,8 @@ export async function createMpvEmbeddedHandle(
       lastLiveSeekAt = null
       noteProgress()
       currentMediaTitle = opts.title?.trim() || null
+      currentTrackMemory = opts.trackMemory ?? null
+      trackMemoryAppliedForLoad = false
       currentAudioDelay = 0
       void setProperty("audio-delay", 0)
       void setProperty("stream-record", "")
@@ -1204,6 +1265,7 @@ export async function createMpvEmbeddedHandle(
       if (loadOptions.isLive) ensureLiveStallWatchdog()
       else clearLiveStallWatchdog()
       const generation = ++loadGeneration
+      trackMemoryLoadGeneration = generation
       const requestedSrc = opts.src
       srcLoadInFlight = true
       void (async () => {

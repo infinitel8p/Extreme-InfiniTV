@@ -170,28 +170,30 @@ export function createVideoScaleController(
 
     const ratio = ratioForMode(mode)
     if (!ratio) return
-    container.setAttribute(SCALE_ATTR, "ratio")
+    const forcedRatio = ratio
+    const containerEl = container
+    containerEl.setAttribute(SCALE_ATTR, "ratio")
 
     // The forced-ratio box must be measured against the video's actual
     // containing block (its offsetParent), which is the inner backend element
     // that resizes on fullscreen - not necessarily the container el() returns.
     resizeObserver = new ResizeObserver(updateBox)
-    resizeObserver.observe(container)
+    resizeObserver.observe(containerEl)
 
     function updateBox(): void {
-      const video = container.querySelector("video")
+      const video = containerEl.querySelector("video")
       if (!video) return
-      const block = (video.offsetParent as HTMLElement | null) ?? container
-      if (block !== container && block !== observedBlock) {
+      const block = (video.offsetParent as HTMLElement | null) ?? containerEl
+      if (block !== containerEl && block !== observedBlock) {
         if (observedBlock) resizeObserver?.unobserve(observedBlock)
         resizeObserver?.observe(block)
         observedBlock = block
       }
-      const box = computeForcedRatioBox(block.clientWidth, block.clientHeight, ratio)
-      container.style.setProperty("--xt-video-scale-left", `${box.left}px`)
-      container.style.setProperty("--xt-video-scale-top", `${box.top}px`)
-      container.style.setProperty("--xt-video-scale-width", `${box.width}px`)
-      container.style.setProperty("--xt-video-scale-height", `${box.height}px`)
+      const box = computeForcedRatioBox(block.clientWidth, block.clientHeight, forcedRatio)
+      containerEl.style.setProperty("--xt-video-scale-left", `${box.left}px`)
+      containerEl.style.setProperty("--xt-video-scale-top", `${box.top}px`)
+      containerEl.style.setProperty("--xt-video-scale-width", `${box.width}px`)
+      containerEl.style.setProperty("--xt-video-scale-height", `${box.height}px`)
     }
     updateBox()
 

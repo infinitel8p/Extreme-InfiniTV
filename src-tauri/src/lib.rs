@@ -281,6 +281,7 @@ pub fn run() {
             dns_proxy::dns_resolve_test,
             external_player::launch_external_player,
             external_player::stop_external_player,
+            external_player::external_player_set_property,
             external_player::sandbox_runtime,
             external_player::discover_external_players,
             firewall::receiver_firewall_status,

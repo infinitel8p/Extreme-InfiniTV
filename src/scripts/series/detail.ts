@@ -28,6 +28,7 @@ import {
   markCompleted,
   isCompleted,
   clearProgress,
+  getTrackPrefs,
   getVideoScaleOverride,
   setVideoScaleOverride,
   clearAllVideoScaleOverrides,
@@ -112,6 +113,7 @@ import {
   subscribeExternalPlayerExit,
   isNativeVideoBackend,
 } from "@/scripts/lib/player-runtime.ts"
+import { beginExternalSession } from "@/scripts/lib/external-progress.ts"
 import { toast } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchErrorFallback } from "@/scripts/lib/external-player-button.ts"
 import { setupPlayOnTvButton } from "@/scripts/lib/play-on-tv-button.ts"
@@ -1657,7 +1659,7 @@ async function playEpisode(episode, options = {}) {
   if (backend === "mpv" || backend === "vlc") {
     try {
       const externalSrc = (await getLocalDownloadPath(src)) || playSrc
-      await launchExternalPlayback(backend, externalSrc, resumePos)
+      await launchExternalPlayback(backend, externalSrc, resumePos, episode)
       pushEpisodePresence(episode)
       externalPresenceActive = true
       return
@@ -1773,14 +1775,32 @@ function pushEpisodePresence(episode) {
   })
 }
 
-async function launchExternalPlayback(backend, src, resumeSeconds) {
+async function launchExternalPlayback(backend, src, resumeSeconds, episode) {
   const launcher = getExternalLauncher(backend)
   toast({
     title: t("settings.playback.launching", { player: backend.toUpperCase() })
       || `Launching ${backend.toUpperCase()}…`,
     duration: 2000,
   })
-  await launcher.launch(src, { resumeSeconds })
+  const trackPrefs = activePlaylistId ? getTrackPrefs(activePlaylistId, "episode", episode.id) : null
+  const result = await launcher.launch(src, {
+    resumeSeconds,
+    tracks: trackPrefs
+      ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
+      : null,
+  })
+  if (result.sessionId && activePlaylistId && backend === "mpv") {
+    beginExternalSession({
+      sessionId: result.sessionId,
+      kind: "mpv",
+      src: result.src,
+      playlistId: activePlaylistId,
+      contentKind: "episode",
+      contentId: String(episode.id),
+      extras: progressExtrasFor(episode),
+      startedAt: Date.now(),
+    })
+  }
 }
 
 // ----------------------------
@@ -1816,6 +1836,20 @@ const externalBtnHandle = setupExternalPlayerButton(
       const seriesName = series?.name || ""
       const sxe = seasonNum && epNum ? `S${seasonNum}E${epNum}` : ""
       return [seriesName, sxe, episodeTitle].filter(Boolean).join(" · ") || null
+    },
+    getTrackPrefs() {
+      if (!activePlaylistId || !currentEpisode) return null
+      const prefs = getTrackPrefs(activePlaylistId, "episode", currentEpisode.id)
+      return prefs ? { audioLang: prefs.audioLang, subLang: prefs.subLang, subOff: prefs.subOff } : null
+    },
+    getProgressTarget() {
+      if (!activePlaylistId || !currentEpisode) return null
+      return {
+        playlistId: activePlaylistId,
+        kind: "episode",
+        id: String(currentEpisode.id),
+        extras: progressExtrasFor(currentEpisode),
+      }
     },
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}

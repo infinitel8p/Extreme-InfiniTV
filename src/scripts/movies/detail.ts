@@ -26,6 +26,7 @@ import {
   setProgress,
   markCompleted,
   clearProgress,
+  getTrackPrefs,
   getVideoScaleOverride,
   setVideoScaleOverride,
   clearAllVideoScaleOverrides,
@@ -106,6 +107,7 @@ import {
   subscribeExternalPlayerExit,
   isNativeVideoBackend,
 } from "@/scripts/lib/player-runtime.ts"
+import { beginExternalSession } from "@/scripts/lib/external-progress.ts"
 import { toast } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchErrorFallback } from "@/scripts/lib/external-player-button.ts"
 import { setupPlayOnTvButton } from "@/scripts/lib/play-on-tv-button.ts"
@@ -1032,7 +1034,7 @@ async function startPlayback(options = {}) {
   if (backend === "mpv" || backend === "vlc") {
     try {
       const externalSrc = (await getLocalDownloadPath(detailSrc)) || playSrc
-      await launchExternalPlayback(backend, externalSrc, resumePos)
+      await launchExternalPlayback(backend, externalSrc, resumePos, movie.id)
       pushMoviePresence()
       externalPresenceActive = true
       return
@@ -1146,14 +1148,32 @@ function pushMoviePresence() {
   })
 }
 
-async function launchExternalPlayback(backend, src, resumeSeconds) {
+async function launchExternalPlayback(backend, src, resumeSeconds, movieId) {
   const launcher = getExternalLauncher(backend)
   toast({
     title: t("settings.playback.launching", { player: backend.toUpperCase() })
       || `Launching ${backend.toUpperCase()}…`,
     duration: 2000,
   })
-  await launcher.launch(src, { resumeSeconds })
+  const trackPrefs = activePlaylistId ? getTrackPrefs(activePlaylistId, "vod", movieId) : null
+  const result = await launcher.launch(src, {
+    resumeSeconds,
+    tracks: trackPrefs
+      ? { audioLang: trackPrefs.audioLang, subLang: trackPrefs.subLang, subOff: trackPrefs.subOff }
+      : null,
+  })
+  if (result.sessionId && activePlaylistId && backend === "mpv") {
+    beginExternalSession({
+      sessionId: result.sessionId,
+      kind: "mpv",
+      src: result.src,
+      playlistId: activePlaylistId,
+      contentKind: "vod",
+      contentId: String(movieId),
+      extras: { name: movie?.name || "", logo: movie?.logo || null },
+      startedAt: Date.now(),
+    })
+  }
 }
 
 // ----------------------------
@@ -1190,6 +1210,20 @@ const externalBtnHandle = setupExternalPlayerButton(
     },
     getTitle() {
       return movie?.name || null
+    },
+    getTrackPrefs() {
+      if (!activePlaylistId || !movie) return null
+      const prefs = getTrackPrefs(activePlaylistId, "vod", movie.id)
+      return prefs ? { audioLang: prefs.audioLang, subLang: prefs.subLang, subOff: prefs.subOff } : null
+    },
+    getProgressTarget() {
+      if (!activePlaylistId || !movie) return null
+      return {
+        playlistId: activePlaylistId,
+        kind: "vod",
+        id: String(movie.id),
+        extras: { name: movie.name, logo: movie.logo || null },
+      }
     },
     beforeLaunch() {
       try { vjs?.pause?.() } catch {}
