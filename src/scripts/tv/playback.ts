@@ -30,7 +30,7 @@ import { resolveCatchupCastDescriptor } from "@/scripts/lib/tv-cast-catchup.ts"
 import type { CatchupRequestChannel } from "@/scripts/lib/catchup-resolve.ts"
 import { buildMovieStreamUrl, buildSeriesStreamUrl, buildLiveStreamUrl } from "@/scripts/lib/stream-urls.ts"
 import { markCompleted, pushRecent, setProgress, getTrackPrefs } from "@/scripts/lib/preferences.js"
-import { beginExternalSession } from "@/scripts/lib/external-progress.ts"
+import { beginExternalSession, externalSrcKey } from "@/scripts/lib/external-progress.ts"
 import { getPlayerBackend, getReceiverEngine } from "@/scripts/lib/app-settings.js"
 import { androidNativePlayerAvailable } from "@/scripts/lib/android-video-launcher.js"
 import { registerBackInterceptor } from "@/scripts/lib/back-handler"
@@ -765,7 +765,7 @@ async function tryStartExternalPlayback(
     beginExternalSession({
       sessionId: launchResult.sessionId,
       kind: "mpv",
-      src: launchResult.src,
+      srcKey: externalSrcKey(launchResult.src),
       playlistId: trackContext.playlistId,
       contentKind: trackContext.contentKind,
       contentId: trackContext.contentId,

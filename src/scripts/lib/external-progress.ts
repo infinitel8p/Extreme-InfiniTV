@@ -16,13 +16,14 @@ import {
   type ExternalPlayerStateFrame,
 } from "@/scripts/lib/player-runtime.ts"
 
-const SESSION_STORAGE_KEY = "xt_ext_session_v1"
+const SESSION_STORAGE_KEY = "xt_ext_session_v2"
+const LEGACY_SESSION_STORAGE_KEY = "xt_ext_session_v1"
 const STALE_SESSION_MS = 12 * 60 * 60 * 1000
 
 export interface ExternalSession {
   sessionId: string
   kind: "mpv"
-  src: string
+  srcKey: string
   playlistId: string
   contentKind: "vod" | "episode"
   contentId: string
@@ -61,6 +62,17 @@ function stripTrailingSlash(url: string): string {
   return url.endsWith("/") ? url.slice(0, -1) : url
 }
 
+/** Non-cryptographic FNV-1a hash so a session record never carries the credentialed source URL. */
+export function externalSrcKey(url: string): string {
+  const normalized = stripTrailingSlash(url)
+  let hash = 0x811c9dc5
+  for (let i = 0; i < normalized.length; i++) {
+    hash ^= normalized.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0")
+}
+
 /** Pure core: maps one mpv state frame onto preference writes, given the session it belongs to. */
 export function applyExternalFrame(
   session: ExternalSession,
@@ -70,7 +82,7 @@ export function applyExternalFrame(
   if (frame.sessionId !== session.sessionId) return { session, writes: [] }
   if (Date.now() - session.startedAt > STALE_SESSION_MS) return { session, writes: [] }
   // A mismatched path can arrive from a reused mpv instance's stale event; ignore it, don't kill tracking.
-  if (frame.path != null && stripTrailingSlash(frame.path) !== stripTrailingSlash(session.src)) {
+  if (frame.path != null && externalSrcKey(frame.path) !== session.srcKey) {
     return { session, writes: [] }
   }
 
@@ -188,6 +200,9 @@ let mounted = false
 export function mountExternalProgressRecorder(): void {
   if (mounted) return
   mounted = true
+  try {
+    localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY)
+  } catch {}
   if (!externalPlayersAvailable) return
   if (!activeSession) activeSession = readStoredSession()
 

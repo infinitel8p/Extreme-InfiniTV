@@ -107,7 +107,7 @@ import {
   subscribeExternalPlayerExit,
   isNativeVideoBackend,
 } from "@/scripts/lib/player-runtime.ts"
-import { beginExternalSession } from "@/scripts/lib/external-progress.ts"
+import { beginExternalSession, externalSrcKey } from "@/scripts/lib/external-progress.ts"
 import { toast } from "@/scripts/lib/toast.js"
 import { setupExternalPlayerButton, surfaceLaunchErrorFallback } from "@/scripts/lib/external-player-button.ts"
 import { setupPlayOnTvButton } from "@/scripts/lib/play-on-tv-button.ts"
@@ -1166,7 +1166,7 @@ async function launchExternalPlayback(backend, src, resumeSeconds, movieId) {
     beginExternalSession({
       sessionId: result.sessionId,
       kind: "mpv",
-      src: result.src,
+      srcKey: externalSrcKey(result.src),
       playlistId: activePlaylistId,
       contentKind: "vod",
       contentId: String(movieId),

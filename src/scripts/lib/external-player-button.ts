@@ -40,7 +40,7 @@ import { openAndroidPlayerPicker } from "@/scripts/lib/player-picker-dialog.ts"
 import { pickExternalPlayer } from "@/scripts/lib/external-player-choice-dialog.ts"
 import { toast, toastError } from "@/scripts/lib/toast.js"
 import { t, LOCALE_EVENT } from "@/scripts/lib/i18n.js"
-import { beginExternalSession } from "@/scripts/lib/external-progress.ts"
+import { beginExternalSession, externalSrcKey } from "@/scripts/lib/external-progress.ts"
 
 type ButtonKind = ExternalPlayerKind | AndroidHandoffKind
 
@@ -325,7 +325,7 @@ export function setupExternalPlayerButton(
         beginExternalSession({
           sessionId: result.sessionId,
           kind: "mpv",
-          src: result.src,
+          srcKey: externalSrcKey(result.src),
           playlistId: progressTarget.playlistId,
           contentKind: progressTarget.kind,
           contentId: progressTarget.id,

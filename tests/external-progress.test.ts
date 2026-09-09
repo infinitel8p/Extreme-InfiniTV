@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest"
-import { applyExternalFrame, type ExternalSession } from "@/scripts/lib/external-progress"
+import { applyExternalFrame, externalSrcKey, type ExternalSession } from "@/scripts/lib/external-progress"
 import type { ExternalPlayerStateFrame } from "@/scripts/lib/player-runtime"
 
 function baseSession(overrides: Partial<ExternalSession> = {}): ExternalSession {
   return {
     sessionId: "session-1",
     kind: "mpv",
-    src: "https://provider.tld/movie/u/p/123.mp4",
+    srcKey: externalSrcKey("https://provider.tld/movie/u/p/123.mp4"),
     playlistId: "playlist-1",
     contentKind: "vod",
     contentId: "123",
@@ -34,6 +34,20 @@ function baseFrame(overrides: Partial<ExternalPlayerStateFrame> = {}): ExternalP
 }
 
 const noPrefs = { getTrackPrefs: () => null }
+
+describe("externalSrcKey", () => {
+  it("ignores a trailing slash", () => {
+    expect(externalSrcKey("https://provider.tld/movie/u/p/123.mp4/")).toBe(
+      externalSrcKey("https://provider.tld/movie/u/p/123.mp4"),
+    )
+  })
+
+  it("differs for different URLs", () => {
+    expect(externalSrcKey("https://provider.tld/movie/u/p/123.mp4")).not.toBe(
+      externalSrcKey("https://provider.tld/movie/u/p/456.mp4"),
+    )
+  })
+})
 
 describe("applyExternalFrame", () => {
   it("writes progress when position and duration are sane", () => {
@@ -85,7 +99,7 @@ describe("applyExternalFrame", () => {
   })
 
   it("tolerates a trailing-slash-only difference between path and src", () => {
-    const session = baseSession({ src: "https://provider.tld/movie/u/p/123.mp4/" })
+    const session = baseSession({ srcKey: externalSrcKey("https://provider.tld/movie/u/p/123.mp4/") })
     const result = applyExternalFrame(
       session,
       baseFrame({ path: "https://provider.tld/movie/u/p/123.mp4", position: 30, duration: 1200 }),
